@@ -33,31 +33,64 @@ def unique_options(df: pd.DataFrame, col: str):
 
 
 def search_select_filter(label: str, options: list[str], key_prefix: str, max_options: int = 2000):
-    """搜索 + 多选 + 一键全选搜索结果 + 清空"""
+    """视觉一体卡片：搜索 + 多选 + 全选搜索结果 + 清空"""
     q_key = f"{key_prefix}_q"
     ms_key = f"{key_prefix}_ms"
 
-    q = st.sidebar.text_input(f"{label} 搜索", key=q_key, placeholder=f"输入关键词筛选 {label}")
-    q_lower = q.lower().strip()
-    filtered_options = [o for o in options if q_lower in o.lower()] if q_lower else options
-
-    if len(filtered_options) > max_options:
-        st.sidebar.caption(f"匹配项过多，仅显示前 {max_options} 条；请继续缩小关键词。")
-        filtered_options = filtered_options[:max_options]
+    # 统一为字符串，避免混合类型问题
+    options = [str(o) for o in options]
+    all_set = set(options)
 
     if ms_key not in st.session_state:
         st.session_state[ms_key] = []
 
-    # 防止选项变化导致状态非法
-    st.session_state[ms_key] = [x for x in st.session_state[ms_key] if x in filtered_options]
+    # 只按全量 options 校验已选，避免切关键词后丢失选择
+    st.session_state[ms_key] = [x for x in st.session_state[ms_key] if x in all_set]
 
-    c1, c2 = st.sidebar.columns(2)
-    if c1.button("全选搜索结果", key=f"{key_prefix}_sel_all"):
-        st.session_state[ms_key] = filtered_options.copy()
-    if c2.button("清空", key=f"{key_prefix}_clear"):
-        st.session_state[ms_key] = []
+    with st.sidebar.container(border=True):
+        st.markdown(f"**{label}**")
 
-    return st.sidebar.multiselect(label, options=filtered_options, key=ms_key)
+        q = st.text_input(
+            f"{label} 搜索",
+            key=q_key,
+            placeholder=f"输入关键词筛选 {label}",
+            label_visibility="collapsed",
+        )
+        q_lower = q.lower().strip()
+        matched = [o for o in options if q_lower in o.lower()] if q_lower else options
+
+        if len(matched) > max_options:
+            st.caption(f"匹配项过多，仅显示前 {max_options} 条；请继续缩小关键词。")
+            matched = matched[:max_options]
+
+        c1, c2 = st.columns(2)
+        if c1.button("全选搜索结果", key=f"{key_prefix}_sel_all", use_container_width=True):
+            # 与已有选择做并集，并按原 options 顺序输出
+            order = {v: i for i, v in enumerate(options)}
+            union_vals = set(st.session_state[ms_key]).union(matched)
+            st.session_state[ms_key] = sorted(union_vals, key=lambda v: order.get(v, 10**9))
+
+        if c2.button("清空", key=f"{key_prefix}_clear", use_container_width=True):
+            st.session_state[ms_key] = []
+
+        # 显示“已选 + 当前匹配”，保证跨关键词多次选择不丢失
+        shown_options = []
+        seen = set()
+        for x in st.session_state[ms_key] + matched:
+            if x not in seen:
+                shown_options.append(x)
+                seen.add(x)
+
+        selected = st.multiselect(
+            label,
+            options=shown_options,
+            key=ms_key,
+            label_visibility="collapsed",
+            placeholder=f"选择 {label}",
+        )
+        st.caption(f"匹配 {len(matched):,} 项｜已选 {len(selected):,} 项")
+
+    return selected
 
 
 df = load_full_data()
