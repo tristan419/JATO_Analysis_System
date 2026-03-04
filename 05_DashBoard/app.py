@@ -4,7 +4,10 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 
-@st.cache_data
+st.set_page_config(page_title="JATO 数据全量可视化分析", layout="wide")
+
+
+@st.cache_data(show_spinner=False)
 def load_full_data():
     base_dir = Path(__file__).resolve().parents[1]  # JATO_Analysis_System
     parquet_path = base_dir / "04_Processed_data" / "jato_full_archive.parquet"
@@ -15,53 +18,127 @@ def load_full_data():
 
     return pd.read_parquet(parquet_path)
 
+
 def find_col(df: pd.DataFrame, candidates):
-    col_map = {c.lower().strip(): c for c in df.columns}
+    col_map = {str(c).lower().strip(): c for c in df.columns}
     for c in candidates:
-        key = c.lower().strip()
+        key = str(c).lower().strip()
         if key in col_map:
             return col_map[key]
     return None
 
+
+def unique_options(df: pd.DataFrame, col: str):
+    return sorted(df[col].dropna().astype(str).unique().tolist())
+
+
+def search_select_filter(label: str, options: list[str], key_prefix: str, max_options: int = 2000):
+    """搜索 + 多选 + 一键全选搜索结果 + 清空"""
+    q_key = f"{key_prefix}_q"
+    ms_key = f"{key_prefix}_ms"
+
+    q = st.sidebar.text_input(f"{label} 搜索", key=q_key, placeholder=f"输入关键词筛选 {label}")
+    q_lower = q.lower().strip()
+    filtered_options = [o for o in options if q_lower in o.lower()] if q_lower else options
+
+    if len(filtered_options) > max_options:
+        st.sidebar.caption(f"匹配项过多，仅显示前 {max_options} 条；请继续缩小关键词。")
+        filtered_options = filtered_options[:max_options]
+
+    if ms_key not in st.session_state:
+        st.session_state[ms_key] = []
+
+    # 防止选项变化导致状态非法
+    st.session_state[ms_key] = [x for x in st.session_state[ms_key] if x in filtered_options]
+
+    c1, c2 = st.sidebar.columns(2)
+    if c1.button("全选搜索结果", key=f"{key_prefix}_sel_all"):
+        st.session_state[ms_key] = filtered_options.copy()
+    if c2.button("清空", key=f"{key_prefix}_clear"):
+        st.session_state[ms_key] = []
+
+    return st.sidebar.multiselect(label, options=filtered_options, key=ms_key)
+
+
 df = load_full_data()
+
+# 列定位（兼容中英文/大小写）
+country_col = find_col(df, ["国家", "Country", "country"])
+segment_col = find_col(df, ["细分市场（按车长）", "细分市场", "segment"])
+powertrain_col = find_col(df, ["动总规整", "powertrain"])
+make_col = find_col(df, ["Make", "make", "品牌"])
+model_col = find_col(df, ["Model", "model"])
+version_col = find_col(df, ["Version name", "Version Name", "version name", "versionname"])
 
 # --- 侧边栏：全维度筛选 ---
 st.sidebar.header("🎛️ 全维度筛选")
-st.sidebar.caption("支持搜索 + 多选（直接在下拉框中输入关键词）")
+st.sidebar.caption("每个筛选器均支持：搜索 + 多选 + 全选搜索结果")
 
-countries = st.sidebar.multiselect("国家", sorted(df['国家'].dropna().unique().tolist()))
-segments = st.sidebar.multiselect("细分市场", sorted(df['细分市场（按车长）'].dropna().unique().tolist()))
-powertrains = st.sidebar.multiselect("动总规整", sorted(df['动总规整'].dropna().unique().tolist()))
-makes = st.sidebar.multiselect("品牌", sorted(df['Make'].dropna().unique().tolist()))
+if country_col:
+    countries = search_select_filter("国家", unique_options(df, country_col), "country")
+else:
+    countries = []
+    st.sidebar.warning("未找到 国家 字段")
 
-# Model 列
-model_col = find_col(df, ["model", "Model"])
+if segment_col:
+    segments = search_select_filter("细分市场", unique_options(df, segment_col), "segment")
+else:
+    segments = []
+    st.sidebar.warning("未找到 细分市场 字段")
+
+if powertrain_col:
+    powertrains = search_select_filter("动总规整", unique_options(df, powertrain_col), "powertrain")
+else:
+    powertrains = []
+    st.sidebar.warning("未找到 动总规整 字段")
+
+# 先应用通用筛选，再做品牌-Model-Version 级联
+base_df = df.copy()
+if country_col and countries:
+    base_df = base_df[base_df[country_col].astype(str).isin(countries)]
+if segment_col and segments:
+    base_df = base_df[base_df[segment_col].astype(str).isin(segments)]
+if powertrain_col and powertrains:
+    base_df = base_df[base_df[powertrain_col].astype(str).isin(powertrains)]
+
+# 品牌（第一层）
+if make_col:
+    makes = search_select_filter("品牌", unique_options(base_df, make_col), "make")
+else:
+    makes = []
+    st.sidebar.warning("未找到 Make/品牌 字段，已跳过品牌筛选")
+
+# Model（第二层：联动品牌）
 if model_col:
-    model_options = sorted(df[model_col].dropna().astype(str).unique().tolist())
-    selected_models = st.sidebar.multiselect("Model", model_options, default=[])
+    model_base = base_df.copy()
+    if make_col and makes:
+        model_base = model_base[model_base[make_col].astype(str).isin(makes)]
+    selected_models = search_select_filter("Model", unique_options(model_base, model_col), "model")
 else:
     selected_models = []
-    st.sidebar.warning("未找到 'Model' 字段，已跳过 Model 筛选")
+    st.sidebar.warning("未找到 Model 字段，已跳过 Model 筛选")
 
-# Version name 列（新增）
-version_col = find_col(df, ["Version name", "Version Name", "version name", "versionname"])
+# Version name（第三层：联动品牌+Model）
 if version_col:
-    version_options = sorted(df[version_col].dropna().astype(str).unique().tolist())
-    selected_versions = st.sidebar.multiselect("Version name", version_options, default=[])
+    version_base = base_df.copy()
+    if make_col and makes:
+        version_base = version_base[version_base[make_col].astype(str).isin(makes)]
+    if model_col and selected_models:
+        version_base = version_base[version_base[model_col].astype(str).isin(selected_models)]
+    selected_versions = search_select_filter(
+        "Version name",
+        unique_options(version_base, version_col),
+        "version",
+        max_options=1500,
+    )
 else:
     selected_versions = []
-    st.sidebar.warning("未找到 'Version name' 字段，已跳过该筛选")
+    st.sidebar.warning("未找到 Version name 字段，已跳过该筛选")
 
-# 执行动态过滤
-filtered_df = df.copy()
-if countries:
-    filtered_df = filtered_df[filtered_df['国家'].isin(countries)]
-if segments:
-    filtered_df = filtered_df[filtered_df['细分市场（按车长）'].isin(segments)]
-if powertrains:
-    filtered_df = filtered_df[filtered_df['动总规整'].isin(powertrains)]
-if makes:
-    filtered_df = filtered_df[filtered_df['Make'].isin(makes)]
+# 最终过滤
+filtered_df = base_df.copy()
+if make_col and makes:
+    filtered_df = filtered_df[filtered_df[make_col].astype(str).isin(makes)]
 if model_col and selected_models:
     filtered_df = filtered_df[filtered_df[model_col].astype(str).isin(selected_models)]
 if version_col and selected_versions:
@@ -69,26 +146,29 @@ if version_col and selected_versions:
 
 # --- 核心可视化：年度与月度联动 ---
 st.title("🚗 JATO 数据全量可视化分析")
+st.caption(f"当前筛选结果：{len(filtered_df):,} 行")
 
 tab1, tab2 = st.tabs(["📅 年度趋势", "🌙 月度细化"])
 
 with tab1:
     st.subheader("年度对比")
-    year_cols = [c for c in filtered_df.columns if re.fullmatch(r"\d{4}", str(c))]
-    year_cols = sorted(year_cols)
+    year_cols = sorted([c for c in filtered_df.columns if re.fullmatch(r"\d{4}", str(c))])
 
     if not year_cols:
         st.warning("未识别到年度列（如 2023/2024/2025）。")
     else:
         y_data = filtered_df[year_cols].apply(pd.to_numeric, errors="coerce").sum().reset_index()
-        y_data.columns = ['Year', 'Sales']
-        fig_y = px.bar(y_data, x='Year', y='Sales', text_auto='.2s', color='Year')
+        y_data.columns = ["Year", "Sales"]
+        fig_y = px.bar(y_data, x="Year", y="Sales", text_auto=".2s", color="Year")
         st.plotly_chart(fig_y, use_container_width=True)
 
 with tab2:
     st.subheader("月度细化（支持时间轴调整）")
 
-    month_pattern = re.compile(r"^\d{4}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)$", re.IGNORECASE)
+    month_pattern = re.compile(
+        r"^\d{4}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)$",
+        re.IGNORECASE,
+    )
     month_cols = [c for c in filtered_df.columns if month_pattern.match(str(c).strip())]
 
     if not month_cols:
@@ -96,13 +176,11 @@ with tab2:
     else:
         m_data = filtered_df[month_cols].apply(pd.to_numeric, errors="coerce").sum().reset_index()
         m_data.columns = ["Month", "Sales"]
-
-        # 解析 'YYYY Mon' -> datetime
         m_data["Date"] = pd.to_datetime(m_data["Month"], format="%Y %b", errors="coerce")
         m_data = m_data.dropna(subset=["Date"]).sort_values("Date")
 
         if m_data.empty:
-            st.info("当前筛选下无可展示的月度数据。")
+            st.info("当前筛选下无可展示月度数据。")
         else:
             min_d = m_data["Date"].min().date()
             max_d = m_data["Date"].max().date()
@@ -113,12 +191,11 @@ with tab2:
                     "选择时间范围",
                     value=(min_d, max_d),
                     min_value=min_d,
-                    max_value=max_d
+                    max_value=max_d,
                 )
             with c2:
                 axis_level = st.selectbox("时间轴粒度", ["月", "季度", "年"], index=0)
 
-            # 兼容用户只选了一个日期的情况
             if isinstance(date_range, tuple) and len(date_range) == 2:
                 start_d, end_d = date_range
             else:
@@ -126,20 +203,11 @@ with tab2:
 
             p = m_data[(m_data["Date"].dt.date >= start_d) & (m_data["Date"].dt.date <= end_d)].copy()
 
-            # 新增：所选时间段销量总和
-            total_sales = p["Sales"].sum()
-            st.metric("所选时间段销量总和", f"{total_sales:,.0f}")
+            # 时间段销量总和
+            st.metric("所选时间段销量总和", f"{p['Sales'].sum():,.0f}")
 
             freq_map = {"月": "MS", "季度": "QS", "年": "YS"}
-            freq = freq_map[axis_level]
-
-            # 用 resample 保证一定有 Date 列
-            g = (
-                p.set_index("Date")
-                 .resample(freq)["Sales"]
-                 .sum()
-                 .reset_index()
-            )
+            g = p.set_index("Date").resample(freq_map[axis_level])["Sales"].sum().reset_index()
 
             if g.empty:
                 st.info("该时间范围内无数据。")
@@ -147,6 +215,17 @@ with tab2:
                 fig_m = px.line(g, x="Date", y="Sales", markers=True, title=f"{axis_level}度销量趋势")
                 st.plotly_chart(fig_m, use_container_width=True)
 
-# --- 明细数据展示 ---
-with st.expander("🔍 查看全量明细表 (91列全部保留)"):
-    st.dataframe(filtered_df, use_container_width=True)
+# --- 明细数据展示（预览，避免 MessageSizeError）---
+with st.expander("🔍 查看明细表（预览）", expanded=False):
+    preview_rows = st.slider("预览行数", min_value=100, max_value=5000, value=1000, step=100)
+
+    default_cols = [c for c in [country_col, segment_col, powertrain_col, make_col, model_col, version_col] if c]
+    if not default_cols:
+        default_cols = filtered_df.columns[:12].tolist()
+
+    show_cols = st.multiselect("显示列", filtered_df.columns.tolist(), default=default_cols)
+    preview_df = filtered_df[show_cols].head(preview_rows) if show_cols else filtered_df.head(preview_rows)
+
+    st.dataframe(preview_df, use_container_width=True, height=520)
+    if len(filtered_df) > preview_rows:
+        st.info(f"仅显示前 {preview_rows:,} 行，完整结果共 {len(filtered_df):,} 行。")
