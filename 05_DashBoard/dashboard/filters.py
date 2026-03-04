@@ -1,0 +1,197 @@
+import pandas as pd
+import streamlit as st
+
+from .data import apply_filter_rules, dedupe_preserve_order, unique_options
+from .models import ColumnRegistry, FilterSelections
+
+
+def render_search_select_filter(
+    label: str,
+    options: list[str],
+    key_prefix: str,
+    max_options: int = 2000,
+) -> list[str]:
+    """视觉一体卡片：搜索 + 多选 + 全选搜索结果 + 清空。"""
+    query_key = f"{key_prefix}_query"
+    select_key = f"{key_prefix}_selected"
+
+    normalized_options = [str(option) for option in options]
+    option_set = set(normalized_options)
+
+    if select_key not in st.session_state:
+        st.session_state[select_key] = []
+
+    st.session_state[select_key] = [
+        value for value in st.session_state[select_key] if value in option_set
+    ]
+
+    with st.sidebar.container(border=True):
+        st.markdown(f"**{label}**")
+
+        query = st.text_input(
+            f"{label} 搜索",
+            key=query_key,
+            placeholder=f"输入关键词筛选 {label}",
+            label_visibility="collapsed",
+        )
+
+        query_lower = query.lower().strip()
+        if query_lower:
+            matched_options = [
+                option
+                for option in normalized_options
+                if query_lower in option.lower()
+            ]
+        else:
+            matched_options = normalized_options
+
+        if len(matched_options) > max_options:
+            st.caption(f"匹配项过多，仅显示前 {max_options} 条；请继续缩小关键词。")
+            matched_options = matched_options[:max_options]
+
+        action_col_1, action_col_2 = st.columns(2)
+        if action_col_1.button(
+            "全选搜索结果",
+            key=f"{key_prefix}_select_all",
+            use_container_width=True,
+        ):
+            order = {
+                value: idx
+                for idx, value in enumerate(normalized_options)
+            }
+            merged_values = set(st.session_state[select_key]).union(
+                matched_options
+            )
+            st.session_state[select_key] = sorted(
+                merged_values,
+                key=lambda value: order.get(value, len(order)),
+            )
+
+        if action_col_2.button(
+            "清空",
+            key=f"{key_prefix}_clear",
+            use_container_width=True,
+        ):
+            st.session_state[select_key] = []
+
+        shown_options = dedupe_preserve_order(
+            st.session_state[select_key] + matched_options
+        )
+        selected_values = st.multiselect(
+            label,
+            options=shown_options,
+            key=select_key,
+            label_visibility="collapsed",
+            placeholder=f"选择 {label}",
+        )
+        st.caption(
+            f"匹配 {len(matched_options):,} 项｜已选 {len(selected_values):,} 项"
+        )
+
+    return selected_values
+
+
+def render_sidebar_filters(
+    df: pd.DataFrame,
+    columns: ColumnRegistry,
+) -> tuple[pd.DataFrame, FilterSelections]:
+    st.sidebar.header("🎛️ 全维度筛选")
+    st.sidebar.caption("每个筛选器均支持：搜索 + 多选 + 全选搜索结果")
+
+    if columns.country:
+        countries = render_search_select_filter(
+            "国家",
+            unique_options(df, columns.country),
+            "country",
+        )
+    else:
+        countries = []
+        st.sidebar.warning("未找到 国家 字段")
+
+    if columns.segment:
+        segments = render_search_select_filter(
+            "细分市场",
+            unique_options(df, columns.segment),
+            "segment",
+        )
+    else:
+        segments = []
+        st.sidebar.warning("未找到 细分市场 字段")
+
+    if columns.powertrain:
+        powertrains = render_search_select_filter(
+            "动总规整",
+            unique_options(df, columns.powertrain),
+            "powertrain",
+        )
+    else:
+        powertrains = []
+        st.sidebar.warning("未找到 动总规整 字段")
+
+    base_df = apply_filter_rules(
+        df,
+        [
+            (columns.country, countries),
+            (columns.segment, segments),
+            (columns.powertrain, powertrains),
+        ],
+    )
+
+    if columns.make:
+        makes = render_search_select_filter(
+            "品牌",
+            unique_options(base_df, columns.make),
+            "make",
+        )
+    else:
+        makes = []
+        st.sidebar.warning("未找到 Make/品牌 字段，已跳过品牌筛选")
+
+    model_source = apply_filter_rules(base_df, [(columns.make, makes)])
+    if columns.model:
+        models = render_search_select_filter(
+            "Model",
+            unique_options(model_source, columns.model),
+            "model",
+            max_options=800,
+        )
+    else:
+        models = []
+        st.sidebar.warning("未找到 Model 字段，已跳过 Model 筛选")
+
+    version_source = apply_filter_rules(
+        base_df,
+        [
+            (columns.make, makes),
+            (columns.model, models),
+        ],
+    )
+    if columns.version:
+        versions = render_search_select_filter(
+            "Version name",
+            unique_options(version_source, columns.version),
+            "version",
+            max_options=500,
+        )
+    else:
+        versions = []
+        st.sidebar.warning("未找到 Version name 字段，已跳过该筛选")
+
+    filtered_df = apply_filter_rules(
+        base_df,
+        [
+            (columns.make, makes),
+            (columns.model, models),
+            (columns.version, versions),
+        ],
+    )
+
+    selections = FilterSelections(
+        countries=countries,
+        segments=segments,
+        powertrains=powertrains,
+        makes=makes,
+        models=models,
+        versions=versions,
+    )
+    return filtered_df, selections
