@@ -157,9 +157,35 @@ with tab1:
     if not year_cols:
         st.warning("未识别到年度列（如 2023/2024/2025）。")
     else:
-        y_data = filtered_df[year_cols].apply(pd.to_numeric, errors="coerce").sum().reset_index()
-        y_data.columns = ["Year", "Sales"]
-        fig_y = px.bar(y_data, x="Year", y="Sales", text_auto=".2s", color="Year")
+        # Model 有选择 => 每个 Model 一条线；否则显示总计
+        split_by_model = bool(model_col and selected_models)
+
+        if split_by_model:
+            y_long = filtered_df[[model_col] + year_cols].copy()
+            y_long[model_col] = y_long[model_col].astype(str)
+            y_long[year_cols] = y_long[year_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+
+            y_long = y_long.melt(
+                id_vars=[model_col],
+                value_vars=year_cols,
+                var_name="Year",
+                value_name="Sales",
+            )
+            y_plot = y_long.groupby([model_col, "Year"], as_index=False)["Sales"].sum()
+
+            fig_y = px.line(
+                y_plot,
+                x="Year",
+                y="Sales",
+                color=model_col,   # 图例=Model
+                markers=True,
+                title="年度趋势（按 Model）",
+            )
+        else:
+            y_data = filtered_df[year_cols].apply(pd.to_numeric, errors="coerce").sum().reset_index()
+            y_data.columns = ["Year", "Sales"]
+            fig_y = px.bar(y_data, x="Year", y="Sales", text_auto=".2s", color="Year")
+
         st.plotly_chart(fig_y, use_container_width=True)
 
 with tab2:
@@ -174,16 +200,37 @@ with tab2:
     if not month_cols:
         st.warning("未识别到月度列（如 '2024 Jan'）。")
     else:
-        m_data = filtered_df[month_cols].apply(pd.to_numeric, errors="coerce").sum().reset_index()
-        m_data.columns = ["Month", "Sales"]
-        m_data["Date"] = pd.to_datetime(m_data["Month"], format="%Y %b", errors="coerce")
-        m_data = m_data.dropna(subset=["Date"]).sort_values("Date")
+        split_by_model = bool(model_col and selected_models)
 
-        if m_data.empty:
+        if split_by_model:
+            # 每个 Model 一条线
+            m_long = filtered_df[[model_col] + month_cols].copy()
+            m_long[model_col] = m_long[model_col].astype(str)
+            m_long[month_cols] = m_long[month_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+
+            m_long = m_long.melt(
+                id_vars=[model_col],
+                value_vars=month_cols,
+                var_name="Month",
+                value_name="Sales",
+            )
+            series_col = model_col
+        else:
+            # 总计单线
+            m_sum = filtered_df[month_cols].apply(pd.to_numeric, errors="coerce").sum().reset_index()
+            m_sum.columns = ["Month", "Sales"]
+            m_sum["_series"] = "总计"
+            m_long = m_sum
+            series_col = "_series"
+
+        m_long["Date"] = pd.to_datetime(m_long["Month"], format="%Y %b", errors="coerce")
+        m_long = m_long.dropna(subset=["Date"]).sort_values("Date")
+
+        if m_long.empty:
             st.info("当前筛选下无可展示月度数据。")
         else:
-            min_d = m_data["Date"].min().date()
-            max_d = m_data["Date"].max().date()
+            min_d = m_long["Date"].min().date()
+            max_d = m_long["Date"].max().date()
 
             c1, c2 = st.columns([2, 1])
             with c1:
@@ -201,18 +248,30 @@ with tab2:
             else:
                 start_d = end_d = date_range
 
-            p = m_data[(m_data["Date"].dt.date >= start_d) & (m_data["Date"].dt.date <= end_d)].copy()
+            p = m_long[(m_long["Date"].dt.date >= start_d) & (m_long["Date"].dt.date <= end_d)].copy()
 
-            # 时间段销量总和
             st.metric("所选时间段销量总和", f"{p['Sales'].sum():,.0f}")
 
-            freq_map = {"月": "MS", "季度": "QS", "年": "YS"}
-            g = p.set_index("Date").resample(freq_map[axis_level])["Sales"].sum().reset_index()
+            if axis_level == "月":
+                p["Period"] = p["Date"].dt.to_period("M").dt.to_timestamp()
+            elif axis_level == "季度":
+                p["Period"] = p["Date"].dt.to_period("Q").dt.to_timestamp()
+            else:
+                p["Period"] = p["Date"].dt.to_period("Y").dt.to_timestamp()
+
+            g = p.groupby([series_col, "Period"], as_index=False)["Sales"].sum()
 
             if g.empty:
                 st.info("该时间范围内无数据。")
             else:
-                fig_m = px.line(g, x="Date", y="Sales", markers=True, title=f"{axis_level}度销量趋势")
+                fig_m = px.line(
+                    g,
+                    x="Period",
+                    y="Sales",
+                    color=series_col,  # 图例=Model（或总计）
+                    markers=True,
+                    title=f"{axis_level}度销量趋势",
+                )
                 st.plotly_chart(fig_m, use_container_width=True)
 
 # --- 明细数据展示（预览，避免 MessageSizeError）---
