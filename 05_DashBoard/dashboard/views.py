@@ -10,6 +10,16 @@ from .models import ColumnRegistry, FilterSelections
 from .styles import style_figure
 
 
+POWERTRAIN_DISPLAY_ORDER = ["BEV", "MHEV", "PHEV", "ICE", "HEV"]
+POWERTRAIN_COLOR_MAP = {
+    "BEV": "#22C55E",
+    "MHEV": "#F59E0B",
+    "PHEV": "#3B82F6",
+    "ICE": "#9CA3AF",
+    "HEV": "#EAB308",
+}
+
+
 @dataclass(frozen=True)
 class ChartControls:
     chart_mode: str
@@ -28,6 +38,10 @@ def get_group_dimensions(columns: ColumnRegistry) -> dict[str, str]:
         dimensions["动总规整"] = columns.powertrain
     if columns.make:
         dimensions["品牌"] = columns.make
+    if columns.model:
+        dimensions["Model"] = columns.model
+    if columns.version:
+        dimensions["Version name"] = columns.version
     return dimensions
 
 
@@ -60,6 +74,47 @@ def build_color_map(
         value: COLOR_SEQ[idx % len(COLOR_SEQ)]
         for idx, value in enumerate(unique_values)
     }
+
+
+def find_existing_column(
+    df: pd.DataFrame,
+    candidates: list[str],
+) -> str | None:
+    col_map = {str(column).lower().strip(): column for column in df.columns}
+    for candidate in candidates:
+        key = candidate.lower().strip()
+        if key in col_map:
+            return col_map[key]
+    return None
+
+
+def to_numeric_flexible(series: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(series, errors="coerce")
+    if numeric.notna().sum() > 0:
+        return numeric
+
+    extracted = (
+        series.astype("string")
+        .str.replace(",", "", regex=False)
+        .str.extract(r"(-?\d+\.?\d*)")[0]
+    )
+    return pd.to_numeric(extracted, errors="coerce")
+
+
+def prepare_numeric_axis(
+    df: pd.DataFrame,
+    candidates: list[str],
+) -> tuple[str | None, pd.Series]:
+    for candidate in candidates:
+        column = find_existing_column(df, [candidate])
+        if not column:
+            continue
+
+        numeric_series = to_numeric_flexible(df[column])
+        if numeric_series.notna().sum() > 0:
+            return column, numeric_series
+
+    return None, pd.Series(index=df.index, dtype="float64")
 
 
 def apply_top_n_series(
@@ -272,7 +327,9 @@ def render_line_mode_controls(
 
                     group_column = group_dimensions[group_label]
             else:
-                st.caption("切换到“分组”后，可按细分市场/动总规整/品牌分色显示。")
+                st.caption(
+                    "切换到“分组”后，可按细分市场/动总规整/品牌/Model/Version name 分色显示。"
+                )
 
     return ChartControls(
         chart_mode=chart_mode,
@@ -526,85 +583,214 @@ def render_month_tab(
 
 def render_advanced_charts(
     filtered_df: pd.DataFrame,
-    controls: ChartControls,
-    series_order: list[str],
+    columns: ColumnRegistry,
 ) -> None:
     with st.container(border=True):
         st.subheader("增强分析图")
-        analysis_tab_1, analysis_tab_2 = st.tabs(["结构贡献", "季节性热力图"])
+        analysis_tab_1, analysis_tab_2 = st.tabs(["动总分布气泡图", "季节性热力图"])
 
         with analysis_tab_1:
-            if controls.chart_mode != "分组" or not controls.group_column:
-                st.info("切换为“分组”模式后，可查看分组结构贡献分析。")
+            if not columns.model or not columns.powertrain:
+                st.warning("缺少 Model 或 动总规整 字段，无法绘制气泡图。")
             else:
                 year_columns = get_year_columns(filtered_df)
-                if not year_columns:
-                    st.warning("缺少年度列，无法绘制结构贡献图。")
+                month_columns = get_month_columns(filtered_df)
+
+                if year_columns:
+                    sales_ref = filtered_df[year_columns].sum(axis=1)
+                elif month_columns:
+                    sales_ref = filtered_df[month_columns].sum(axis=1)
                 else:
-                    yearly_long = filtered_df[
-                        [controls.group_column] + year_columns
-                    ].copy()
-                    yearly_long["Series"] = normalize_series(
-                        yearly_long[controls.group_column]
-                    )
-                    yearly_long = yearly_long.melt(
-                        id_vars=["Series"],
-                        value_vars=year_columns,
-                        var_name="Year",
-                        value_name="Sales",
-                    )
-                    yearly_long = apply_top_n_series(
-                        yearly_long,
-                        series_order=series_order,
-                        include_others=controls.include_others,
-                    )
+                    sales_ref = pd.Series(1.0, index=filtered_df.index)
 
-                    contribution = (
-                        yearly_long.groupby("Series", as_index=False)["Sales"]
-                        .sum()
-                    )
-                    contribution = sort_with_others_last(contribution)
-                    yearly_trend = yearly_long.groupby(
-                        ["Series", "Year"],
-                        as_index=False,
-                    )["Sales"].sum()
-                    yearly_trend["Year"] = yearly_trend["Year"].astype(str)
-                    color_map = build_color_map(
-                        yearly_trend["Series"],
-                        series_order=series_order,
-                    )
+                length_col, length_values = prepare_numeric_axis(
+                    filtered_df,
+                    ["length (mm)", "车长(mm)", "车长", "length"],
+                )
+                msrp_col, msrp_values = prepare_numeric_axis(
+                    filtered_df,
+                    [
+                        "MSRP规整",
+                        "MSRP including delivery charge",
+                        "MSRP",
+                        "MSRP区间",
+                    ],
+                )
 
-                    contrib_col, trend_col = st.columns(2)
-                    with contrib_col:
-                        fig_bar = px.bar(
-                            contribution,
-                            x="Sales",
-                            y="Series",
-                            orientation="h",
-                            title="分组总贡献（降序）",
-                            color="Series",
-                            color_discrete_map=color_map,
+                if not length_col or not msrp_col:
+                    st.warning("缺少可用的车长或 MSRP 数值列，无法绘制气泡图。")
+                else:
+                    if columns.make:
+                        brand_series = normalize_series(
+                            filtered_df[columns.make]
                         )
-                        st.plotly_chart(
-                            style_figure(fig_bar),
-                            use_container_width=True,
-                            config=PLOT_CONFIG,
+                    else:
+                        brand_series = pd.Series(
+                            "全部品牌",
+                            index=filtered_df.index,
                         )
 
-                    with trend_col:
-                        fig_area = px.area(
-                            yearly_trend,
-                            x="Year",
-                            y="Sales",
-                            color="Series",
-                            title=f"年度结构变化（按{controls.group_label}）",
-                            color_discrete_map=color_map,
+                    bubble_raw = pd.DataFrame(
+                        {
+                            "Model": normalize_series(
+                                filtered_df[columns.model]
+                            ),
+                            "Brand": brand_series,
+                            "Powertrain": normalize_series(
+                                filtered_df[columns.powertrain]
+                            ),
+                            "Length": length_values,
+                            "MSRP": msrp_values,
+                            "Sales": sales_ref,
+                        }
+                    )
+                    bubble_raw = bubble_raw.dropna(
+                        subset=["Length", "MSRP", "Sales"]
+                    )
+                    bubble_raw = bubble_raw[
+                        bubble_raw["Powertrain"].isin(POWERTRAIN_DISPLAY_ORDER)
+                    ]
+
+                    if bubble_raw.empty:
+                        st.info("当前筛选下无 BEV/MHEV/PHEV/ICE/HEV 数据。")
+                    else:
+                        control_col_1, control_col_2 = st.columns([1, 1])
+                        with control_col_1:
+                            top_n_models = int(
+                                st.number_input(
+                                    "Top N Model（气泡图）",
+                                    min_value=5,
+                                    max_value=80,
+                                    value=25,
+                                    step=1,
+                                    key="bubble_top_n_models",
+                                )
+                            )
+
+                        with control_col_2:
+                            facet_by_brand = st.checkbox(
+                                "按品牌分面对比",
+                                value=False,
+                                key="bubble_facet_brand",
+                                disabled=not bool(columns.make),
+                            )
+                            max_brand_facets = int(
+                                st.number_input(
+                                    "最多展示品牌数",
+                                    min_value=2,
+                                    max_value=12,
+                                    value=4,
+                                    step=1,
+                                    key="bubble_facet_brand_top",
+                                    disabled=not facet_by_brand,
+                                )
+                            )
+
+                        model_rank = (
+                            bubble_raw.groupby(
+                                "Model", as_index=False
+                            )["Sales"]
+                            .sum()
+                            .sort_values("Sales", ascending=False)
                         )
-                        st.plotly_chart(
-                            style_figure(fig_area),
-                            use_container_width=True,
-                            config=PLOT_CONFIG,
+                        top_models = set(
+                            model_rank.head(top_n_models)["Model"]
                         )
+                        bubble_raw = bubble_raw[
+                            bubble_raw["Model"].isin(top_models)
+                        ]
+
+                        facet_col = None
+                        category_orders = {
+                            "Powertrain": POWERTRAIN_DISPLAY_ORDER,
+                        }
+                        if facet_by_brand and columns.make:
+                            brand_rank = (
+                                bubble_raw.groupby(
+                                    "Brand", as_index=False
+                                )["Sales"]
+                                .sum()
+                                .sort_values("Sales", ascending=False)
+                            )
+                            selected_brands = (
+                                brand_rank.head(max_brand_facets)["Brand"]
+                                .astype(str)
+                                .tolist()
+                            )
+                            bubble_raw = bubble_raw[
+                                bubble_raw["Brand"].isin(selected_brands)
+                            ]
+                            category_orders["Brand"] = selected_brands
+                            facet_col = "Brand"
+
+                        group_columns = ["Model", "Powertrain"]
+                        if facet_col:
+                            group_columns.append("Brand")
+
+                        bubble_df = bubble_raw.groupby(
+                            group_columns,
+                            as_index=False,
+                        ).agg(
+                            Length=("Length", "median"),
+                            MSRP=("MSRP", "median"),
+                            Sales=("Sales", "sum"),
+                        )
+
+                        if bubble_df.empty:
+                            st.info("当前筛选下无可展示气泡图数据。")
+                        else:
+                            chart_title = "筛选后 Model 动总分布气泡图"
+                            if facet_col:
+                                chart_title = (
+                                    "筛选后 Model 动总分布气泡图（按品牌分面）"
+                                )
+
+                            scatter_kwargs = {}
+                            if facet_col:
+                                scatter_kwargs["facet_col"] = "Brand"
+                                scatter_kwargs["facet_col_wrap"] = 2
+
+                            fig_bubble = px.scatter(
+                                bubble_df,
+                                x="Length",
+                                y="MSRP",
+                                size="Sales",
+                                color="Powertrain",
+                                hover_name="Model",
+                                hover_data={
+                                    "Sales": ":,.0f",
+                                    "Length": ":,.0f",
+                                    "MSRP": ":,.0f",
+                                },
+                                category_orders=category_orders,
+                                color_discrete_map=POWERTRAIN_COLOR_MAP,
+                                title=chart_title,
+                                **scatter_kwargs,
+                            )
+                            if facet_col:
+                                fig_bubble.for_each_annotation(
+                                    lambda annotation: annotation.update(
+                                        text=annotation.text.replace(
+                                            "Brand=", ""
+                                        )
+                                    )
+                                )
+                            fig_bubble = style_figure(fig_bubble)
+                            fig_bubble.update_xaxes(title=f"车长（{length_col}）")
+                            fig_bubble.update_yaxes(title=f"MSRP（{msrp_col}）")
+
+                            if facet_col:
+                                st.caption(
+                                    f"按品牌分面显示前 {max_brand_facets} 个品牌。"
+                                )
+                            st.caption(
+                                "仅显示 BEV/MHEV/PHEV/ICE/HEV；其余动总类型不显示。"
+                            )
+                            st.plotly_chart(
+                                fig_bubble,
+                                use_container_width=True,
+                                config=PLOT_CONFIG,
+                            )
 
         with analysis_tab_2:
             month_columns = get_month_columns(filtered_df)
@@ -746,6 +932,6 @@ def render_dashboard(
     with month_tab:
         render_month_tab(filtered_df, controls, series_order)
 
-    render_advanced_charts(filtered_df, controls, series_order)
+    render_advanced_charts(filtered_df, columns)
 
     render_detail_preview(filtered_df, columns)
