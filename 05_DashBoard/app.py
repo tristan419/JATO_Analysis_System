@@ -94,7 +94,68 @@ def find_col(df: pd.DataFrame, candidates):
 
 
 def unique_options(df: pd.DataFrame, col: str):
-    return sorted(df[col].dropna().astype(str).unique().tolist())
+    return sorted(df[col].dropna().astype(str).unique().tolist())    # ...existing code...
+    MONTH_RE = re.compile(
+        r"^\d{4}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)$",
+        re.IGNORECASE,
+    )
+    
+    @st.cache_resource(show_spinner=False)
+    def load_full_data():
+        base_dir = Path(__file__).resolve().parents[1]
+        parquet_path = base_dir / "04_Processed_data" / "jato_full_archive.parquet"
+        if not parquet_path.exists():
+            st.error(f"未找到数据文件: {parquet_path}")
+            st.stop()
+    
+        df = pd.read_parquet(parquet_path)
+    
+        # 维度列：一次性类型优化
+        dim_cols = ["国家", "细分市场（按车长）", "动总规整", "Make", "Model", "Version name"]
+        for c in dim_cols:
+            if c in df.columns:
+                s = df[c].astype("string")
+                ratio = s.nunique(dropna=True) / max(len(s), 1)
+                df[c] = s.astype("category") if ratio < 0.6 else s
+    
+        # 销量列：一次性数值化（避免图表里重复 to_numeric）
+        year_cols = [c for c in df.columns if re.fullmatch(r"\d{4}", str(c))]
+        month_cols = [c for c in df.columns if MONTH_RE.match(str(c).strip())]
+        for c in year_cols + month_cols:
+            df[c] = pd.to_numeric(df[c], errors="coerce", downcast="float")
+    
+        return df
+    
+    
+    def apply_filters(df: pd.DataFrame, rules: list[tuple[str | None, list[str]]]) -> pd.DataFrame:
+        mask = pd.Series(True, index=df.index)
+        for col, vals in rules:
+            if col and vals:
+                mask &= df[col].isin(vals)
+        return df.loc[mask]
+    # ...existing code...    # ...existing code...
+    base_df = apply_filters(
+        df,
+        [
+            (country_col, countries),
+            (segment_col, segments),
+            (powertrain_col, powertrains),
+        ],
+    )
+    
+    filtered_df = apply_filters(
+        base_df,
+        [
+            (make_col, makes),
+            (model_col, selected_models),
+            (version_col, selected_versions),
+        ],
+    )
+    # ...existing code...    # ...existing code...
+    selected_models = search_select_filter("Model", unique_options(model_base, model_col), "model", max_options=800)
+    # ...existing code...
+    selected_versions = search_select_filter("Version name", unique_options(version_base, version_col), "version", max_options=500)
+    # ...existing code...
 
 
 def search_select_filter(label: str, options: list[str], key_prefix: str, max_options: int = 2000):
