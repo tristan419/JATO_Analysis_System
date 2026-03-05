@@ -2384,92 +2384,167 @@ def render_advanced_charts(
 ) -> None:
     with st.container(border=True):
         st.subheader("增强分析图")
-        (
-            tab_1,
-            tab_2,
-            tab_3,
-            tab_4,
-            tab_5,
-            tab_6,
-            tab_7,
-            tab_8,
-            tab_9,
-        ) = st.tabs(
-            [
-                "动总分布气泡图",
-                "季节性热力图",
-                "价格带迁移图",
-                "尺寸—价格地图",
-                "单位尺寸价格 vs 销量",
-                "动力结构 vs 价格",
-                "销量—价格散点",
-                "尺寸段份额",
-                "估算TCO vs MSRP",
-            ]
+        chart_groups: dict[str, dict[str, object]] = {
+            "market_structure": {
+                "label": "市场结构",
+                "charts": [
+                    "powertrain_bubble",
+                    "seasonality_heatmap",
+                    "segment_share_length",
+                ],
+            },
+            "price_value": {
+                "label": "价格价值",
+                "charts": [
+                    "price_migration",
+                    "length_price_map",
+                    "price_per_meter_sales",
+                    "sales_price_scatter",
+                ],
+            },
+            "powertrain_cost": {
+                "label": "动力成本",
+                "charts": [
+                    "powertrain_price_mix",
+                    "estimated_tco_msrp",
+                ],
+            },
+        }
+
+        chart_registry: dict[str, dict[str, object]] = {
+            "powertrain_bubble": {
+                "label": "动总分布气泡图",
+                "render": lambda: render_chart_powertrain_bubble(
+                    filtered_df,
+                    columns,
+                    time_axis,
+                    global_time_selection,
+                ),
+            },
+            "seasonality_heatmap": {
+                "label": "季节性热力图",
+                "render": lambda: render_chart_seasonality_heatmap(
+                    filtered_df,
+                    time_axis,
+                    global_time_selection,
+                ),
+            },
+            "price_migration": {
+                "label": "价格带迁移图",
+                "render": lambda: render_chart_price_migration(
+                    filtered_df,
+                    columns,
+                    time_axis,
+                    global_time_selection,
+                ),
+            },
+            "length_price_map": {
+                "label": "尺寸—价格地图",
+                "render": lambda: render_chart_length_vs_price_map(
+                    filtered_df,
+                    columns,
+                    time_axis,
+                    global_time_selection,
+                ),
+            },
+            "price_per_meter_sales": {
+                "label": "单位尺寸价格 vs 销量",
+                "render": lambda: render_chart_price_per_meter_vs_sales(
+                    filtered_df,
+                    columns,
+                    time_axis,
+                    global_time_selection,
+                ),
+            },
+            "powertrain_price_mix": {
+                "label": "动力结构 vs 价格",
+                "render": lambda: render_chart_powertrain_vs_price(
+                    filtered_df,
+                    columns,
+                    time_axis,
+                    global_time_selection,
+                ),
+            },
+            "sales_price_scatter": {
+                "label": "销量—价格散点",
+                "render": lambda: render_chart_sales_vs_price_scatter(
+                    filtered_df,
+                    columns,
+                    time_axis,
+                    global_time_selection,
+                ),
+            },
+            "segment_share_length": {
+                "label": "尺寸段份额",
+                "render": lambda: render_chart_segment_share_by_length(
+                    filtered_df,
+                    columns,
+                    time_axis,
+                    global_time_selection,
+                ),
+            },
+            "estimated_tco_msrp": {
+                "label": "估算TCO vs MSRP",
+                "render": lambda: render_chart_estimated_tco_vs_msrp(
+                    filtered_df,
+                    columns,
+                    time_axis,
+                    global_time_selection,
+                ),
+            },
+        }
+
+        group_options = list(chart_groups.keys())
+        group_state_key = "advanced_charts_group"
+        chart_state_key = "advanced_charts_chart"
+
+        if (
+            group_state_key not in st.session_state
+            or st.session_state[group_state_key] not in group_options
+        ):
+            st.session_state[group_state_key] = group_options[0]
+
+        selected_group = st.radio(
+            "业务组",
+            options=group_options,
+            format_func=lambda key: str(chart_groups[key]["label"]),
+            horizontal=True,
+            key=group_state_key,
         )
 
-        with tab_1:
-            render_chart_powertrain_bubble(
-                filtered_df,
-                columns,
-                time_axis,
-                global_time_selection,
+        chart_options = [
+            chart_id
+            for chart_id in chart_groups[selected_group]["charts"]
+            if chart_id in chart_registry
+        ]
+        if not chart_options:
+            st.info("当前业务组暂未配置图表。")
+            return
+
+        if (
+            chart_state_key not in st.session_state
+            or st.session_state[chart_state_key] not in chart_options
+        ):
+            st.session_state[chart_state_key] = chart_options[0]
+
+        selected_chart = st.radio(
+            "分析图",
+            options=chart_options,
+            format_func=lambda key: str(chart_registry[key]["label"]),
+            horizontal=True,
+            key=chart_state_key,
+        )
+
+        st.caption(
+            (
+                f"当前路径：{chart_groups[selected_group]['label']}"
+                f" / {chart_registry[selected_chart]['label']}"
             )
-        with tab_2:
-            render_chart_seasonality_heatmap(
-                filtered_df,
-                time_axis,
-                global_time_selection,
-            )
-        with tab_3:
-            render_chart_price_migration(
-                filtered_df,
-                columns,
-                time_axis,
-                global_time_selection,
-            )
-        with tab_4:
-            render_chart_length_vs_price_map(
-                filtered_df,
-                columns,
-                time_axis,
-                global_time_selection,
-            )
-        with tab_5:
-            render_chart_price_per_meter_vs_sales(
-                filtered_df,
-                columns,
-                time_axis,
-                global_time_selection,
-            )
-        with tab_6:
-            render_chart_powertrain_vs_price(
-                filtered_df,
-                columns,
-                time_axis,
-                global_time_selection,
-            )
-        with tab_7:
-            render_chart_sales_vs_price_scatter(
-                filtered_df,
-                columns,
-                time_axis,
-                global_time_selection,
-            )
-        with tab_8:
-            render_chart_segment_share_by_length(
-                filtered_df,
-                columns,
-                time_axis,
-                global_time_selection,
-            )
-        with tab_9:
-            render_chart_estimated_tco_vs_msrp(
-                filtered_df,
-                columns,
-                time_axis,
-                global_time_selection,
-            )
+        )
+
+        render_func = chart_registry[selected_chart]["render"]
+        if callable(render_func):
+            render_func()
 
 
 def render_detail_preview(
