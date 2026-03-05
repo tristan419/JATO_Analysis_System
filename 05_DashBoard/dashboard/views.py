@@ -557,16 +557,17 @@ def render_line_mode_controls(
 ) -> ChartControls:
     with st.container(border=True):
         st.subheader("折线显示模式")
-        control_col_1, control_col_2 = st.columns([1, 2])
+        mode_col_1, mode_col_2 = st.columns([2, 1])
 
-        with control_col_1:
+        with mode_col_1:
             chart_mode = st.radio(
                 "显示方式",
                 ["总和", "分组"],
                 horizontal=True,
                 key="chart_mode_switch",
-                label_visibility="collapsed",
             )
+
+        with mode_col_2:
             show_line_labels = st.checkbox(
                 "显示折线标签",
                 value=True,
@@ -580,63 +581,66 @@ def render_line_mode_controls(
         include_others = False
         group_dimensions = get_group_dimensions(columns)
 
-        with control_col_2:
-            if chart_mode == "分组":
-                if not group_dimensions:
-                    st.info("缺少可分组字段，已自动切换为总和模式。")
-                    chart_mode = "总和"
-                else:
-                    group_columns = st.columns([2, 1, 1, 1])
-                    (
-                        group_col_1,
-                        group_col_2,
-                        group_col_3,
-                        group_col_4,
-                    ) = group_columns
-
-                    labels = list(group_dimensions.keys())
-                    with group_col_1:
-                        group_label = st.selectbox(
-                            "分组维度",
-                            labels,
-                            key="chart_group_dimension",
-                        )
-
-                    with group_col_2:
-                        top_n_enabled = st.checkbox(
-                            "Top N",
-                            value=True,
-                            key="chart_top_n_enabled",
-                            help="仅显示销量前N的分组，其余合并为“其他”",
-                        )
-
-                    with group_col_3:
-                        top_n = int(
-                            st.number_input(
-                                "N",
-                                min_value=3,
-                                max_value=30,
-                                value=10,
-                                step=1,
-                                key="chart_top_n_value",
-                                disabled=not top_n_enabled,
-                            )
-                        )
-
-                    with group_col_4:
-                        include_others = st.checkbox(
-                            "显示其他",
-                            value=False,
-                            key="chart_include_others",
-                            disabled=not top_n_enabled,
-                            help="关闭后图中隐藏“其他”，但可在明细展开查看。",
-                        )
-
-                    group_column = group_dimensions[group_label]
+        if chart_mode == "分组":
+            if not group_dimensions:
+                st.info("缺少可分组字段，已自动切换为总和模式。")
+                chart_mode = "总和"
             else:
-                st.caption(
-                    "切换到“分组”后，可按细分市场/动总规整/品牌/Model/Version name 分色显示。"
-                )
+                labels = list(group_dimensions.keys())
+                grouped_col_1, grouped_col_2 = st.columns([2, 1])
+
+                with grouped_col_1:
+                    group_label = st.selectbox(
+                        "分组维度",
+                        labels,
+                        key="chart_group_dimension",
+                    )
+
+                with grouped_col_2:
+                    top_n_enabled = st.checkbox(
+                        "启用 Top N",
+                        value=True,
+                        key="chart_top_n_enabled",
+                        help="仅显示销量前 N 的分组，其余可合并为“其他”。",
+                    )
+
+                with st.expander("高级设置（分组）", expanded=False):
+                    if top_n_enabled:
+                        top_n_col_1, top_n_col_2 = st.columns([1, 1])
+                        with top_n_col_1:
+                            top_n = int(
+                                st.number_input(
+                                    "Top N 数量",
+                                    min_value=3,
+                                    max_value=30,
+                                    value=10,
+                                    step=1,
+                                    key="chart_top_n_value",
+                                )
+                            )
+
+                        with top_n_col_2:
+                            include_others = st.checkbox(
+                                "图中显示“其他”",
+                                value=False,
+                                key="chart_include_others",
+                                help=(
+                                    "关闭后图中隐藏“其他”，"
+                                    "但可在明细展开查看。"
+                                ),
+                            )
+                    else:
+                        top_n = 10
+                        include_others = False
+                        st.caption(
+                            "已关闭 Top N：展示全部分组，不合并“其他”。"
+                        )
+
+                group_column = group_dimensions[group_label]
+        else:
+            st.caption(
+                "切换到“分组”后，可按细分市场/动总规整/品牌/Model/Version name 分色显示。"
+            )
 
     return ChartControls(
         chart_mode=chart_mode,
@@ -1199,12 +1203,13 @@ def render_chart_price_migration(
             if ordered_powertrains
             else powertrain_options
         )
-        selected_powertrains = st.multiselect(
-            "动总类型",
-            options=powertrain_options,
-            default=default_powertrains,
-            key="adv_price_migration_powertrain_options",
-        )
+        with st.expander("高级设置", expanded=False):
+            selected_powertrains = st.multiselect(
+                "动总类型",
+                options=powertrain_options,
+                default=default_powertrains,
+                key="adv_price_migration_powertrain_options",
+            )
         if not selected_powertrains:
             st.info("请至少选择一个动总类型。")
             return
@@ -1384,16 +1389,18 @@ def render_chart_length_vs_price_map(
         st.info("当前筛选下无可展示尺寸—价格数据。")
         return
 
-    top_n = int(
-        st.slider(
-            "展示车型数（按销量）",
-            min_value=30,
-            max_value=500,
-            value=180,
-            step=10,
-            key="adv_length_price_topn",
+    top_n = 180
+    with st.expander("高级设置", expanded=False):
+        top_n = int(
+            st.slider(
+                "展示车型数（按销量）",
+                min_value=30,
+                max_value=500,
+                value=top_n,
+                step=10,
+                key="adv_length_price_topn",
+            )
         )
-    )
     aggregate_df = aggregate_df.sort_values(
         "Sales",
         ascending=False,
@@ -1489,16 +1496,18 @@ def render_chart_price_per_meter_vs_sales(
         st.info("当前筛选下无可展示数据。")
         return
 
-    top_n = int(
-        st.slider(
-            "展示车型数（按销量）",
-            min_value=10,
-            max_value=200,
-            value=50,
-            step=5,
-            key="adv_price_per_meter_topn",
+    top_n = 50
+    with st.expander("高级设置", expanded=False):
+        top_n = int(
+            st.slider(
+                "展示车型数（按销量）",
+                min_value=10,
+                max_value=200,
+                value=top_n,
+                step=5,
+                key="adv_price_per_meter_topn",
+            )
         )
-    )
     model_df = model_df.head(top_n)
 
     fig = px.scatter(
@@ -1557,7 +1566,7 @@ def render_chart_powertrain_vs_price(
     if columns.country:
         split_dimensions["国家"] = "Country"
 
-    control_col_1, control_col_2, control_col_3 = st.columns([1, 1, 1])
+    control_col_1, control_col_2 = st.columns([1, 1])
     with control_col_1:
         band_size = int(
             st.slider(
@@ -1581,19 +1590,8 @@ def render_chart_powertrain_vs_price(
 
     split_label: str | None = None
     split_column: str | None = None
-    with control_col_3:
-        if split_enabled and split_dimensions:
-            split_label = st.selectbox(
-                "拆分维度",
-                options=list(split_dimensions.keys()),
-                key="adv_powertrain_price_split_dimension",
-            )
-            split_column = split_dimensions.get(split_label)
-        else:
-            st.caption("拆分维度：关闭")
-
     price_frame = price_frame.copy()
-    if split_enabled and split_column == "Country" and columns.country:
+    if columns.country:
         price_frame["Country"] = normalize_series(
             filtered_df.loc[price_frame.index, columns.country]
         )
@@ -1607,6 +1605,39 @@ def render_chart_powertrain_vs_price(
         st.info("当前筛选下无可用价格带数据。")
         return
 
+    group_count = 6
+    if split_enabled and split_dimensions:
+        with st.expander("高级设置", expanded=False):
+            split_label = st.selectbox(
+                "拆分维度",
+                options=list(split_dimensions.keys()),
+                key="adv_powertrain_price_split_dimension",
+            )
+            split_column = split_dimensions.get(split_label)
+
+            preview_totals = (
+                price_frame.groupby(split_column, as_index=False)["Sales"]
+                .sum()
+                .sort_values("Sales", ascending=False)
+                if split_column
+                else pd.DataFrame()
+            )
+            if preview_totals.empty:
+                st.info("当前筛选下无可拆分数据。")
+                return
+
+            max_groups = min(12, len(preview_totals))
+            group_count = int(
+                st.slider(
+                    "最多拆分组数",
+                    min_value=1,
+                    max_value=max_groups,
+                    value=min(6, max_groups),
+                    step=1,
+                    key="adv_powertrain_price_split_group_count",
+                )
+            )
+
     selected_groups: list[str] | None = None
     if split_enabled and split_column:
         split_totals = (
@@ -1617,18 +1648,6 @@ def render_chart_powertrain_vs_price(
         if split_totals.empty:
             st.info("当前筛选下无可拆分数据。")
             return
-
-        max_groups = min(12, len(split_totals))
-        group_count = int(
-            st.slider(
-                "最多拆分组数",
-                min_value=1,
-                max_value=max_groups,
-                value=min(6, max_groups),
-                step=1,
-                key="adv_powertrain_price_split_group_count",
-            )
-        )
         selected_groups = (
             split_totals.head(group_count)[split_column]
             .astype(str)
@@ -1742,16 +1761,18 @@ def render_chart_sales_vs_price_scatter(
         model_df["Sales"] / segment_total.replace(0, pd.NA)
     ).fillna(0.0) * 100
 
-    top_n = int(
-        st.slider(
-            "展示车型数（按销量）",
-            min_value=30,
-            max_value=500,
-            value=200,
-            step=10,
-            key="adv_sales_price_topn",
+    top_n = 200
+    with st.expander("高级设置", expanded=False):
+        top_n = int(
+            st.slider(
+                "展示车型数（按销量）",
+                min_value=30,
+                max_value=500,
+                value=top_n,
+                step=10,
+                key="adv_sales_price_topn",
+            )
         )
-    )
     model_df = model_df.head(top_n)
 
     fig = px.scatter(
@@ -1804,16 +1825,18 @@ def render_chart_segment_share_by_length(
         st.warning("缺少车长或销量数据，无法绘制尺寸段份额图。")
         return
 
-    band_size = int(
-        st.slider(
-            "尺寸带宽（mm）",
-            min_value=50,
-            max_value=500,
-            value=100,
-            step=50,
-            key="adv_segment_length_band_size",
+    band_size = 100
+    with st.expander("高级设置", expanded=False):
+        band_size = int(
+            st.slider(
+                "尺寸带宽（mm）",
+                min_value=50,
+                max_value=500,
+                value=band_size,
+                step=50,
+                key="adv_segment_length_band_size",
+            )
         )
-    )
     vehicle_df = vehicle_df.copy()
     vehicle_df["LengthBand"], band_order = make_length_bands(
         vehicle_df["Length"],
@@ -1881,8 +1904,7 @@ def render_chart_estimated_tco_vs_msrp(
         st.warning("缺少动总字段，无法按动总估算 TCO。")
         return
 
-    with st.container(border=True):
-        st.caption("估算参数（当前数据无原始TCO字段）")
+    with st.expander("高级设置：估算参数（当前数据无原始TCO字段）", expanded=False):
         p1, p2, p3 = st.columns(3)
         with p1:
             years = st.slider(
@@ -2088,8 +2110,8 @@ def render_chart_powertrain_bubble(
 
     with st.container(border=True):
         st.caption("图表控制")
-        control_col_1, control_col_2 = st.columns([1, 1])
-        with control_col_1:
+        core_col_1, core_col_2, core_col_3 = st.columns([1, 1, 1])
+        with core_col_1:
             top_n_models = int(
                 st.number_input(
                     "Top N Model（气泡图）",
@@ -2101,28 +2123,16 @@ def render_chart_powertrain_bubble(
                 )
             )
 
-        with control_col_2:
+        with core_col_2:
             facet_by_brand = st.checkbox(
                 "按品牌分面对比",
                 value=False,
                 key="bubble_facet_brand",
                 disabled=not bool(columns.make),
             )
-            max_brand_facets = int(
-                st.number_input(
-                    "最多展示品牌数",
-                    min_value=2,
-                    max_value=12,
-                    value=4,
-                    step=1,
-                    key="bubble_facet_brand_top",
-                    disabled=not facet_by_brand,
-                )
-            )
 
-        scale_col_1 = st.columns([1])[0]
         bubble_size_multiplier = 1
-        with scale_col_1:
+        with core_col_3:
             bubble_size_boost = st.checkbox(
                 "气泡倍率放大",
                 value=False,
@@ -2137,36 +2147,53 @@ def render_chart_powertrain_bubble(
                         key="bubble_size_multiplier",
                     )
                 )
-
-        yoy_col_1, yoy_col_2 = st.columns([1, 2])
-        with yoy_col_1:
-            show_yoy_label = st.checkbox(
-                "hover显示YoY",
-                value=True,
-                key="bubble_show_yoy_label",
-            )
-
+        max_brand_facets = 4
+        show_yoy_label = True
         yoy_compare_year: str | None = None
         yoy_base_year: str | None = None
         year_options = [str(year) for year in year_columns]
-        with yoy_col_2:
-            if show_yoy_label:
-                if len(year_options) < 2:
-                    st.warning("年度列不足两年，无法显示 YoY。")
-                    show_yoy_label = False
-                else:
-                    compare_options = year_options[1:]
-                    yoy_compare_year = st.selectbox(
-                        "YoY 年份",
-                        compare_options,
-                        index=len(compare_options) - 1,
-                        key="bubble_yoy_compare_year",
+
+        with st.expander("高级设置", expanded=False):
+            if facet_by_brand:
+                max_brand_facets = int(
+                    st.number_input(
+                        "最多展示品牌数",
+                        min_value=2,
+                        max_value=12,
+                        value=4,
+                        step=1,
+                        key="bubble_facet_brand_top",
                     )
-                    compare_idx = year_options.index(yoy_compare_year)
-                    yoy_base_year = year_options[compare_idx - 1]
-                    st.caption(
-                        f"YoY 基准：{yoy_base_year} → {yoy_compare_year}"
-                    )
+                )
+            else:
+                st.caption("开启“按品牌分面对比”后可设置品牌数。")
+
+            yoy_col_1, yoy_col_2 = st.columns([1, 2])
+            with yoy_col_1:
+                show_yoy_label = st.checkbox(
+                    "hover显示YoY",
+                    value=True,
+                    key="bubble_show_yoy_label",
+                )
+
+            with yoy_col_2:
+                if show_yoy_label:
+                    if len(year_options) < 2:
+                        st.warning("年度列不足两年，无法显示 YoY。")
+                        show_yoy_label = False
+                    else:
+                        compare_options = year_options[1:]
+                        yoy_compare_year = st.selectbox(
+                            "YoY 年份",
+                            compare_options,
+                            index=len(compare_options) - 1,
+                            key="bubble_yoy_compare_year",
+                        )
+                        compare_idx = year_options.index(yoy_compare_year)
+                        yoy_base_year = year_options[compare_idx - 1]
+                        st.caption(
+                            f"YoY 基准：{yoy_base_year} → {yoy_compare_year}"
+                        )
 
     model_rank = (
         bubble_raw.groupby("Model", as_index=False)["Sales"]
@@ -2414,6 +2441,7 @@ def render_advanced_charts(
         chart_registry: dict[str, dict[str, object]] = {
             "powertrain_bubble": {
                 "label": "动总分布气泡图",
+                "help": "看车型在车长-价格平面上的动总分布与销量权重。",
                 "render": lambda: render_chart_powertrain_bubble(
                     filtered_df,
                     columns,
@@ -2423,6 +2451,7 @@ def render_advanced_charts(
             },
             "seasonality_heatmap": {
                 "label": "季节性热力图",
+                "help": "看月度销量季节性与年度内波动强弱。",
                 "render": lambda: render_chart_seasonality_heatmap(
                     filtered_df,
                     time_axis,
@@ -2431,6 +2460,7 @@ def render_advanced_charts(
             },
             "price_migration": {
                 "label": "价格带迁移图",
+                "help": "看不同年份在各价格带的销量迁移与峰值变化。",
                 "render": lambda: render_chart_price_migration(
                     filtered_df,
                     columns,
@@ -2440,6 +2470,7 @@ def render_advanced_charts(
             },
             "length_price_map": {
                 "label": "尺寸—价格地图",
+                "help": "看车型尺寸与价格定位关系，识别潜在越级价值点。",
                 "render": lambda: render_chart_length_vs_price_map(
                     filtered_df,
                     columns,
@@ -2449,6 +2480,7 @@ def render_advanced_charts(
             },
             "price_per_meter_sales": {
                 "label": "单位尺寸价格 vs 销量",
+                "help": "看单位车长价格密度与销量表现的关系。",
                 "render": lambda: render_chart_price_per_meter_vs_sales(
                     filtered_df,
                     columns,
@@ -2458,6 +2490,7 @@ def render_advanced_charts(
             },
             "powertrain_price_mix": {
                 "label": "动力结构 vs 价格",
+                "help": "看不同价格带的动力类型结构占比。",
                 "render": lambda: render_chart_powertrain_vs_price(
                     filtered_df,
                     columns,
@@ -2467,6 +2500,7 @@ def render_advanced_charts(
             },
             "sales_price_scatter": {
                 "label": "销量—价格散点",
+                "help": "看车型价格与销量分布，比较细分市场份额。",
                 "render": lambda: render_chart_sales_vs_price_scatter(
                     filtered_df,
                     columns,
@@ -2476,6 +2510,7 @@ def render_advanced_charts(
             },
             "segment_share_length": {
                 "label": "尺寸段份额",
+                "help": "看不同车长分段下的细分市场份额结构。",
                 "render": lambda: render_chart_segment_share_by_length(
                     filtered_df,
                     columns,
@@ -2485,6 +2520,7 @@ def render_advanced_charts(
             },
             "estimated_tco_msrp": {
                 "label": "估算TCO vs MSRP",
+                "help": "在可调参数下看估算TCO与MSRP的相对关系。",
                 "render": lambda: render_chart_estimated_tco_vs_msrp(
                     filtered_df,
                     columns,
@@ -2504,13 +2540,31 @@ def render_advanced_charts(
         ):
             st.session_state[group_state_key] = group_options[0]
 
-        selected_group = st.radio(
-            "业务组",
-            options=group_options,
-            format_func=lambda key: str(chart_groups[key]["label"]),
-            horizontal=True,
-            key=group_state_key,
-        )
+        st.caption("悬停业务组按钮可查看该组子图清单")
+        group_cols = st.columns(len(group_options))
+        for idx, group_key in enumerate(group_options):
+            group_label = str(chart_groups[group_key]["label"])
+            group_chart_labels = [
+                str(chart_registry[chart_id]["label"])
+                for chart_id in chart_groups[group_key]["charts"]
+                if chart_id in chart_registry
+            ]
+            group_tooltip = "子图：\n- " + "\n- ".join(group_chart_labels)
+            with group_cols[idx]:
+                if st.button(
+                    group_label,
+                    key=f"{group_state_key}_btn_{group_key}",
+                    help=group_tooltip,
+                    type=(
+                        "primary"
+                        if st.session_state[group_state_key] == group_key
+                        else "secondary"
+                    ),
+                    width="stretch",
+                ):
+                    st.session_state[group_state_key] = group_key
+
+        selected_group = str(st.session_state[group_state_key])
 
         chart_options = [
             chart_id
@@ -2527,13 +2581,26 @@ def render_advanced_charts(
         ):
             st.session_state[chart_state_key] = chart_options[0]
 
-        selected_chart = st.radio(
-            "分析图",
-            options=chart_options,
-            format_func=lambda key: str(chart_registry[key]["label"]),
-            horizontal=True,
-            key=chart_state_key,
-        )
+        st.caption("悬停分析图按钮可查看图表用途")
+        chart_cols = st.columns(len(chart_options))
+        for idx, chart_id in enumerate(chart_options):
+            chart_label = str(chart_registry[chart_id]["label"])
+            chart_help = str(chart_registry[chart_id].get("help", ""))
+            with chart_cols[idx]:
+                if st.button(
+                    chart_label,
+                    key=f"{chart_state_key}_btn_{chart_id}",
+                    help=chart_help,
+                    type=(
+                        "primary"
+                        if st.session_state[chart_state_key] == chart_id
+                        else "secondary"
+                    ),
+                    width="stretch",
+                ):
+                    st.session_state[chart_state_key] = chart_id
+
+        selected_chart = str(st.session_state[chart_state_key])
 
         st.caption(
             (
@@ -2556,7 +2623,7 @@ def render_detail_preview(
             preview_rows = st.slider(
                 "预览行数",
                 min_value=100,
-                max_value=5000,
+                max_value=20000,
                 value=1000,
                 step=100,
             )
