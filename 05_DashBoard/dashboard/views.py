@@ -2534,11 +2534,78 @@ def render_advanced_charts(
         group_state_key = "advanced_charts_group"
         chart_state_key = "advanced_charts_chart"
 
+        default_group = "market_structure"
+        if default_group not in chart_groups:
+            default_group = group_options[0]
+
+        default_chart = "powertrain_bubble"
+        group_chart_memory_key = "advanced_charts_group_chart_memory"
+
+        if (
+            group_chart_memory_key not in st.session_state
+            or not isinstance(st.session_state[group_chart_memory_key], dict)
+        ):
+            st.session_state[group_chart_memory_key] = {}
+
         if (
             group_state_key not in st.session_state
             or st.session_state[group_state_key] not in group_options
         ):
-            st.session_state[group_state_key] = group_options[0]
+            st.session_state[group_state_key] = default_group
+
+        current_group = str(st.session_state[group_state_key])
+        current_chart_options = [
+            chart_id
+            for chart_id in chart_groups[current_group]["charts"]
+            if chart_id in chart_registry
+        ]
+        remembered_for_group = st.session_state[group_chart_memory_key].get(
+            current_group
+        )
+        if (
+            chart_state_key not in st.session_state
+            or st.session_state[chart_state_key] not in current_chart_options
+        ):
+            if remembered_for_group in current_chart_options:
+                st.session_state[chart_state_key] = remembered_for_group
+            elif (
+                current_group == default_group
+                and default_chart in current_chart_options
+            ):
+                st.session_state[chart_state_key] = default_chart
+            elif current_chart_options:
+                st.session_state[chart_state_key] = current_chart_options[0]
+
+        def select_group(target_group: str) -> None:
+            st.session_state[group_state_key] = target_group
+            target_chart_options = [
+                chart_id
+                for chart_id in chart_groups[target_group]["charts"]
+                if chart_id in chart_registry
+            ]
+            remembered = st.session_state[group_chart_memory_key].get(
+                target_group
+            )
+            if remembered in target_chart_options:
+                st.session_state[chart_state_key] = remembered
+            elif (
+                target_group == default_group
+                and default_chart in target_chart_options
+            ):
+                st.session_state[chart_state_key] = default_chart
+            elif target_chart_options:
+                st.session_state[chart_state_key] = target_chart_options[0]
+
+        def select_chart(target_chart: str) -> None:
+            st.session_state[chart_state_key] = target_chart
+            active_group = str(
+                st.session_state.get(group_state_key, default_group)
+            )
+            memory = st.session_state.get(group_chart_memory_key, {})
+            if not isinstance(memory, dict):
+                memory = {}
+            memory[active_group] = target_chart
+            st.session_state[group_chart_memory_key] = memory
 
         st.caption("悬停业务组按钮可查看该组子图清单")
         group_cols = st.columns(len(group_options))
@@ -2551,7 +2618,7 @@ def render_advanced_charts(
             ]
             group_tooltip = "子图：\n- " + "\n- ".join(group_chart_labels)
             with group_cols[idx]:
-                if st.button(
+                st.button(
                     group_label,
                     key=f"{group_state_key}_btn_{group_key}",
                     help=group_tooltip,
@@ -2560,9 +2627,10 @@ def render_advanced_charts(
                         if st.session_state[group_state_key] == group_key
                         else "secondary"
                     ),
+                    on_click=select_group,
+                    args=(group_key,),
                     width="stretch",
-                ):
-                    st.session_state[group_state_key] = group_key
+                )
 
         selected_group = str(st.session_state[group_state_key])
 
@@ -2587,7 +2655,7 @@ def render_advanced_charts(
             chart_label = str(chart_registry[chart_id]["label"])
             chart_help = str(chart_registry[chart_id].get("help", ""))
             with chart_cols[idx]:
-                if st.button(
+                st.button(
                     chart_label,
                     key=f"{chart_state_key}_btn_{chart_id}",
                     help=chart_help,
@@ -2596,11 +2664,17 @@ def render_advanced_charts(
                         if st.session_state[chart_state_key] == chart_id
                         else "secondary"
                     ),
+                    on_click=select_chart,
+                    args=(chart_id,),
                     width="stretch",
-                ):
-                    st.session_state[chart_state_key] = chart_id
+                )
 
         selected_chart = str(st.session_state[chart_state_key])
+
+        memory = st.session_state.get(group_chart_memory_key, {})
+        if isinstance(memory, dict):
+            memory[selected_group] = selected_chart
+            st.session_state[group_chart_memory_key] = memory
 
         st.caption(
             (
