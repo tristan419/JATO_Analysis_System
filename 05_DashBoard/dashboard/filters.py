@@ -53,7 +53,7 @@ def render_search_select_filter(
         if action_col_1.button(
             "全选搜索结果",
             key=f"{key_prefix}_select_all",
-            use_container_width=True,
+            width="stretch",
         ):
             order = {
                 value: idx
@@ -70,7 +70,7 @@ def render_search_select_filter(
         if action_col_2.button(
             "清空",
             key=f"{key_prefix}_clear",
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state[select_key] = []
 
