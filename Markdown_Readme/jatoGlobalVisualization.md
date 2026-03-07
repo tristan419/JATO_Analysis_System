@@ -1,6 +1,9 @@
 
 # JATO Global Visualization（全球可视化）实施总方案
 
+> 文档定位：全球可视化项目的总控方案与 Phase 执行基线。
+> 返回总览：[ROADMAP（总览导航）](./ROADMAP.md)
+
 - 文档状态：`Active`
 - 当前版本：`v1.0`
 - 最后更新：`2026-03-08`
@@ -139,7 +142,7 @@ Phase 0 方案确认
 
 ## 5.4 工程资源（目录建议）
 
-- `Markdown_Readme/jatoGlobalVersiualization.md`（本文件）
+- `Markdown_Readme/jatoGlobalVisualization.md`（本文件）
 - `04_Processed_data/reference/country_alias_map.csv`
 - `04_Processed_data/reference/country_iso_continent_map.csv`
 - `04_Processed_data/geo/world_countries_low.geojson`

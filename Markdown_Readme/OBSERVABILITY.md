@@ -1,5 +1,8 @@
 # 日志采集接入预留（v1）
 
+> 文档定位：日志接入规范、字段约定与可观测演进方向。
+> 返回总览：[ROADMAP（总览导航）](./ROADMAP.md)
+
 ## 当前能力
 
 - 已新增 `dashboard/logging_utils.py`

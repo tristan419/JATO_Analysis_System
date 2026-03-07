@@ -1,5 +1,8 @@
 # 运营模板（回归 / 验收 / 发布 / 监控）
 
+> 文档定位：运营与发布过程中的标准模板与执行清单。
+> 返回总览：[ROADMAP（总览导航）](./ROADMAP.md)
+
 ## A. 回归测试清单模板
 
 ### 数据层
@@ -120,3 +123,55 @@ python 03_Scripts/cleanup_history_archive.py \
 - 清理前先备份文件列表（文件名、大小、mtime）到运维记录。
 - 若误删，优先从对象存储/离线备份恢复。
 - 每次执行后记录输出摘要：总文件、保留数、删除数。
+
+---
+
+## F. 补档数据合并运行模板（15+5 国家场景）
+
+### 适用场景
+
+- 主包：`JATO-2026.1.xlsx`（例如 15 国）
+- 补档：`JATO-2026.1 (1).xlsx`（例如新增 5 国）
+
+### 执行前检查
+
+- [ ] 两个文件 sheet 名一致（默认 `Data Export`）
+- [ ] 文件已放入 `01_RAW_DATA/`
+- [ ] 去重策略已确认（是否需要 `--dedupe-keys`）
+
+### 推荐执行命令
+
+自动合并 raw 全部 xlsx：
+
+```bash
+python 03_Scripts/run_data_refresh_job.py \
+  --merge-all-xlsx \
+  --incremental \
+  --skip-unchanged \
+  --skip-benchmark
+```
+
+存在重复记录时：
+
+```bash
+python 03_Scripts/run_data_refresh_job.py \
+  --merge-all-xlsx \
+  --dedupe-keys "国家,make,model,version name" \
+  --incremental \
+  --skip-unchanged \
+  --skip-benchmark
+```
+
+### 执行后验证
+
+- [ ] 检查 `04_Processed_data/refresh_job_report.json` 中 `jobStatus=success`
+- [ ] 检查 `incremental.fingerprintMatched=false`（有新增补档时应触发刷新）
+- [ ] 检查 `04_Processed_data/manifest.json` 的 `mergeSummary.sourceFileCount`
+- [ ] Dashboard 侧边栏确认新增国家可见
+
+### 冲突与回滚验收（建议）
+
+- [ ] 先执行一次 `--conflict-policy fail`，确认冲突可被阻断并输出冲突报告
+- [ ] 再执行一次 `--conflict-policy last_wins`，确认产物可落盘并可追溯
+- [ ] 若任务失败，确认日志出现“已自动回滚”提示
+- [ ] 检查回滚后全量/分区产物可正常读取（无半成品目录）

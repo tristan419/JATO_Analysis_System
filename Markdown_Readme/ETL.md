@@ -1,5 +1,8 @@
 # JATO 数据处理 Pipeline（四件套落地版）
 
+> 文档定位：数据处理 Pipeline 的标准执行手册（Raw -> ETL -> 分区 -> 刷新）。
+> 返回总览：[ROADMAP（总览导航）](./ROADMAP.md)
+
 ## 目录分层约定
 
 - 原始数据目录：`01_RAW_DATA/`
@@ -155,6 +158,84 @@ python 03_Scripts/run_data_refresh_job.py \
 
 说明：当输入有变化且启用 `--incremental` 时，
 分区构建阶段将执行“按分区增量重写”，不会全量重建全部分区目录。
+
+
+### Step 8: 扩展数据补档（多 Excel 合并）
+
+场景示例：
+
+- `JATO-2026.1.xlsx` 含 15 个国家
+- `JATO-2026.1 (1).xlsx` 补充另外 5 个国家
+
+推荐做法：将两份文件放入 `01_RAW_DATA/`，启用多文件合并。
+
+1) 自动合并 raw 目录下全部 xlsx：
+
+```bash
+python 03_Scripts/run_data_refresh_job.py \
+  --merge-all-xlsx \
+  --incremental \
+  --skip-unchanged \
+  --skip-benchmark
+```
+
+2) 若存在跨文件重复记录，增加去重键（后出现记录优先）：
+
+```bash
+python 03_Scripts/run_data_refresh_job.py \
+  --merge-all-xlsx \
+  --dedupe-keys "国家,make,model,version name" \
+  --incremental \
+  --skip-unchanged \
+  --skip-benchmark
+```
+
+3) 仅合并指定文件（避免误读 raw 目录全部文件）：
+
+```bash
+python 03_Scripts/run_data_refresh_job.py \
+  --input-files "01_RAW_DATA/JATO-2026.1.xlsx,01_RAW_DATA/JATO-2026.1 (1).xlsx" \
+  --dedupe-keys "国家,make,model,version name" \
+  --incremental \
+  --skip-unchanged \
+  --skip-benchmark
+```
+
+说明：
+
+- 去重键大小写不敏感，脚本会自动匹配实际列名。
+- 处理结果会写入 manifest 的 `mergeSummary`，包含 sourceFileCount 与 droppedDuplicateRows。
+- 建议命名补档文件为 `JATO-2026.1-P1.xlsx` / `JATO-2026.1-P2.xlsx`，避免长期使用 `(1)` 命名。
+
+4) 先做冲突拦截（发现冲突即失败，不落盘）：
+
+```bash
+python 03_Scripts/run_data_refresh_job.py \
+  --merge-all-xlsx \
+  --conflict-keys "国家,make,model,version name" \
+  --conflict-policy fail \
+  --incremental \
+  --skip-unchanged \
+  --skip-benchmark
+```
+
+5) 冲突按“后文件覆盖前文件”自动处理（last_wins）：
+
+```bash
+python 03_Scripts/run_data_refresh_job.py \
+  --merge-all-xlsx \
+  --conflict-keys "国家,make,model,version name" \
+  --conflict-policy last_wins \
+  --incremental \
+  --skip-unchanged \
+  --skip-benchmark
+```
+
+6) 回滚行为说明：
+
+- 默认开启“失败自动回滚”（全量 parquet、manifest、分区目录）。
+- 如需关闭，追加 `--no-rollback`。
+- 如需保留备份目录用于审计，追加 `--keep-backup`。
 
 
 ## 当前状态（截至本次更新）

@@ -1,5 +1,8 @@
 # Dashboard 部署模板（v1）
 
+> 文档定位：Dashboard 部署方式、容量建议与上线前检查。
+> 返回总览：[ROADMAP（总览导航）](./ROADMAP.md)
+
 ## 1) 标准启动模板
 
 项目启动入口：`05_DashBoard/app.py`
