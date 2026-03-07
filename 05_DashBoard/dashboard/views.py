@@ -1,10 +1,26 @@
 from dataclasses import dataclass
+from datetime import datetime
+from importlib.util import find_spec
+import sys
+import time
+from typing import Any, Callable
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
-from .config import APP_TITLE, COLOR_SEQ, PLOT_CONFIG
+from .config import (
+    APP_TITLE,
+    BATTERY_CAPACITY_CANDIDATES,
+    BATTERY_RANGE_CANDIDATES,
+    COLOR_SEQ,
+    CSV_DOWNLOAD_MAX_BYTES,
+    CSV_DOWNLOAD_MAX_ROWS,
+    LENGTH_CANDIDATES,
+    MSRP_CANDIDATES,
+    PLOT_CONFIG,
+)
 from .data import dedupe_preserve_order, get_month_columns, get_year_columns
 from .models import ColumnRegistry, FilterSelections
 from .styles import style_figure
@@ -13,11 +29,78 @@ from .styles import style_figure
 POWERTRAIN_DISPLAY_ORDER = ["BEV", "MHEV", "PHEV", "ICE", "HEV"]
 POWERTRAIN_COLOR_MAP = {
     "BEV": "#22C55E",
-    "MHEV": "#F59E0B",
+    "MHEV": "#F5550B",
     "PHEV": "#3B82F6",
     "ICE": "#9CA3AF",
     "HEV": "#EAB308",
 }
+
+EXPORT_LEGEND_POSITIONS = {
+    "右侧（默认）": {
+        "x": 1.02,
+        "y": 1.0,
+        "xanchor": "left",
+        "yanchor": "top",
+        "orientation": "v",
+    },
+    "顶部": {
+        "x": 0.0,
+        "y": 1.12,
+        "xanchor": "left",
+        "yanchor": "bottom",
+        "orientation": "h",
+    },
+    "底部": {
+        "x": 0.0,
+        "y": -0.18,
+        "xanchor": "left",
+        "yanchor": "top",
+        "orientation": "h",
+    },
+    "左侧": {
+        "x": -0.02,
+        "y": 1.0,
+        "xanchor": "right",
+        "yanchor": "top",
+        "orientation": "v",
+    },
+}
+
+EXPORT_COLOR_SCHEMES: dict[str, list[str] | None] = {
+    "保留原图配色": None,
+    "Plotly": px.colors.qualitative.Plotly,
+    "Safe": px.colors.qualitative.Safe,
+    "Set2": px.colors.qualitative.Set2,
+    "Pastel": px.colors.qualitative.Pastel,
+    "Dark24": px.colors.qualitative.Dark24,
+}
+
+EXPORT_AXIS_TICK_STYLE_OPTIONS = [
+    "保留原始",
+    "整数（千分位）",
+    "千分位小数",
+    "百分比（0-1）",
+    "百分比（原值+%）",
+    "科学计数法",
+]
+
+EXPORT_DATA_LABEL_MODE_OPTIONS = [
+    "关闭",
+    "仅数值",
+    "仅系列名",
+    "仅Model",
+    "系列名+数值",
+]
+
+EXPORT_DATA_LABEL_POSITION_OPTIONS = [
+    "自动",
+    "内侧",
+    "外侧",
+    "顶部",
+    "中间",
+]
+
+MAX_MANUAL_SERIES_COLOR_CONTROLS = 30
 
 
 @dataclass(frozen=True)
@@ -60,17 +143,6 @@ def build_time_axis(filtered_df: pd.DataFrame) -> TimeAxis | None:
         if pd.notna(date_value):
             month_entries.append((date_value, str(column)))
 
-    if month_entries:
-        month_entries.sort(key=lambda item: item[0])
-        dates = tuple(item[0] for item in month_entries)
-        labels = tuple(item[1] for item in month_entries)
-        return TimeAxis(
-            columns=labels,
-            labels=labels,
-            dates=dates,
-            grain="month",
-        )
-
     year_columns = get_year_columns(filtered_df)
     year_entries: list[tuple[pd.Timestamp, str]] = []
     for column in year_columns:
@@ -82,22 +154,90 @@ def build_time_axis(filtered_df: pd.DataFrame) -> TimeAxis | None:
         if pd.notna(date_value):
             year_entries.append((date_value, str(column)))
 
-    if not year_entries:
-        return None
+    if len(month_entries) >= 2:
+        month_entries.sort(key=lambda item: item[0])
+        dates = tuple(item[0] for item in month_entries)
+        labels = tuple(item[1] for item in month_entries)
+        return TimeAxis(
+            columns=labels,
+            labels=labels,
+            dates=dates,
+            grain="month",
+        )
 
-    year_entries.sort(key=lambda item: item[0])
-    dates = tuple(item[0] for item in year_entries)
-    labels = tuple(item[1] for item in year_entries)
-    return TimeAxis(
-        columns=labels,
-        labels=labels,
-        dates=dates,
-        grain="year",
-    )
+    if year_entries:
+        year_entries.sort(key=lambda item: item[0])
+        dates = tuple(item[0] for item in year_entries)
+        labels = tuple(item[1] for item in year_entries)
+        return TimeAxis(
+            columns=labels,
+            labels=labels,
+            dates=dates,
+            grain="year",
+        )
+
+    if month_entries:
+        month_entries.sort(key=lambda item: item[0])
+        dates = tuple(item[0] for item in month_entries)
+        labels = tuple(item[1] for item in month_entries)
+        return TimeAxis(
+            columns=labels,
+            labels=labels,
+            dates=dates,
+            grain="month",
+        )
+
+    return None
 
 
 def format_time_selection(selection: TimeSelection) -> str:
     return f"{selection.start_label} ~ {selection.end_label}"
+
+
+def show_no_data(scope: str) -> None:
+    st.info(f"当前筛选与时间范围下无可展示数据（{scope}）。")
+
+
+def show_time_axis_unavailable(scope: str) -> None:
+    st.warning(f"未识别可用时间轴，无法绘制{scope}。")
+
+
+def format_euro_value(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"€{float(value):,.0f}"
+
+
+def summarize_msrp_quality(msrp_values: pd.Series) -> dict[str, float | int]:
+    numeric = pd.to_numeric(msrp_values, errors="coerce")
+    positive = numeric[numeric > 0]
+
+    if positive.empty:
+        return {
+            "total_count": int(len(numeric)),
+            "non_null_count": int(numeric.notna().sum()),
+            "non_positive_count": int((numeric <= 0).sum()),
+            "positive_count": 0,
+            "p50": float("nan"),
+            "p95": float("nan"),
+            "high_outlier_count": 0,
+        }
+
+    q1 = float(positive.quantile(0.25))
+    q3 = float(positive.quantile(0.75))
+    iqr = q3 - q1
+    high_outlier_threshold = q3 + 1.5 * iqr
+    high_outlier_count = int((positive > high_outlier_threshold).sum())
+
+    return {
+        "total_count": int(len(numeric)),
+        "non_null_count": int(numeric.notna().sum()),
+        "non_positive_count": int((numeric <= 0).sum()),
+        "positive_count": int(len(positive)),
+        "p50": float(positive.quantile(0.50)),
+        "p95": float(positive.quantile(0.95)),
+        "high_outlier_count": high_outlier_count,
+    }
 
 
 def render_time_selector(
@@ -289,7 +429,7 @@ def sum_sales_for_columns(
     return numeric_df.fillna(0.0).sum(axis=1)
 
 
-def get_sort_items_callable():
+def get_sort_items_callable() -> Callable[..., list[str]] | None:
     try:
         from streamlit_sortables import sort_items as sortable
 
@@ -316,6 +456,21 @@ def get_group_dimensions(columns: ColumnRegistry) -> dict[str, str]:
 def normalize_series(series: pd.Series) -> pd.Series:
     normalized = series.astype("string").fillna("未标注")
     normalized = normalized.str.strip().replace("", "未标注")
+    return normalized.astype(str)
+
+
+def normalize_powertrain_for_nev(series: pd.Series) -> pd.Series:
+    normalized = normalize_series(series).str.upper().str.strip()
+    compact = normalized.str.replace(r"[\s_\-/]+", "", regex=True)
+
+    normalized = normalized.where(
+        ~compact.str.contains("PHEV", na=False),
+        "PHEV",
+    )
+    normalized = normalized.where(
+        ~compact.str.contains("BEV", na=False),
+        "BEV",
+    )
     return normalized.astype(str)
 
 
@@ -351,7 +506,7 @@ def shorten_label(value: str, max_len: int = 14) -> str:
     return text[: max_len - 1] + "…"
 
 
-def add_line_end_labels(fig):
+def add_line_end_labels(fig: Any) -> Any:
     for trace in fig.data:
         x_values = getattr(trace, "x", None)
         if x_values is None:
@@ -378,6 +533,847 @@ def add_line_end_labels(fig):
     return fig
 
 
+def export_figure_png(fig: Any) -> bytes:
+    return fig.to_image(format="png", scale=2)
+
+
+def is_kaleido_available() -> bool:
+    return find_spec("kaleido") is not None
+
+
+def get_kaleido_install_command() -> str:
+    return f"{sys.executable} -m pip install -r requirements.txt"
+
+
+def normalize_color_for_picker(
+    color: Any,
+    fallback: str,
+) -> str:
+    if isinstance(color, str):
+        value = color.strip()
+        if value.startswith("#"):
+            if len(value) == 4:
+                expanded = "#" + "".join(ch * 2 for ch in value[1:])
+                try:
+                    int(expanded[1:], 16)
+                    return expanded.upper()
+                except ValueError:
+                    pass
+            if len(value) == 7:
+                try:
+                    int(value[1:], 16)
+                    return value.upper()
+                except ValueError:
+                    pass
+
+        lower_value = value.lower()
+        if lower_value.startswith("rgb") and "(" in value and ")" in value:
+            raw = value[value.find("(") + 1 : value.rfind(")")]
+            parts = [part.strip() for part in raw.split(",")]
+            if len(parts) >= 3:
+                try:
+                    red = max(0, min(255, int(float(parts[0]))))
+                    green = max(0, min(255, int(float(parts[1]))))
+                    blue = max(0, min(255, int(float(parts[2]))))
+                    return f"#{red:02X}{green:02X}{blue:02X}"
+                except ValueError:
+                    pass
+
+    return fallback
+
+
+def get_trace_base_color(trace: Any) -> Any:
+    marker = getattr(trace, "marker", None)
+    line = getattr(trace, "line", None)
+
+    if marker is not None:
+        marker_color = getattr(marker, "color", None)
+        if isinstance(marker_color, str):
+            return marker_color
+
+    if line is not None:
+        line_color = getattr(line, "color", None)
+        if isinstance(line_color, str):
+            return line_color
+
+    return None
+
+
+def collect_export_series_color_defaults(fig: Any) -> dict[str, str]:
+    series_colors: dict[str, str] = {}
+
+    for index, trace in enumerate(getattr(fig, "data", [])):
+        series_name = str(getattr(trace, "name", "")).strip()
+        if not series_name or series_name in series_colors:
+            continue
+
+        fallback = str(COLOR_SEQ[index % len(COLOR_SEQ)])
+        base_color = get_trace_base_color(trace)
+        series_colors[series_name] = normalize_color_for_picker(
+            base_color,
+            normalize_color_for_picker(fallback, "#1F77B4"),
+        )
+
+    return series_colors
+
+
+def build_axis_tick_kwargs(
+    style_name: str,
+    decimal_places: int,
+) -> dict[str, Any]:
+    decimals = int(max(0, min(4, decimal_places)))
+
+    if style_name == "整数（千分位）":
+        return {"tickformat": ",.0f", "ticksuffix": ""}
+    if style_name == "千分位小数":
+        return {"tickformat": f",.{decimals}f", "ticksuffix": ""}
+    if style_name == "百分比（0-1）":
+        return {"tickformat": f".{decimals}%", "ticksuffix": ""}
+    if style_name == "百分比（原值+%）":
+        return {"tickformat": f",.{decimals}f", "ticksuffix": "%"}
+    if style_name == "科学计数法":
+        scientific_decimals = max(1, decimals)
+        return {"tickformat": f".{scientific_decimals}e", "ticksuffix": ""}
+
+    return {}
+
+
+def render_global_synced_checkbox(
+    label: str,
+    global_key: str,
+    widget_key: str,
+    default: bool = False,
+    help_text: str | None = None,
+    disabled: bool = False,
+) -> bool:
+    global_revision_key = f"{global_key}_revision"
+    widget_revision_key = f"{widget_key}_revision"
+
+    if global_key not in st.session_state:
+        st.session_state[global_key] = bool(default)
+    if global_revision_key not in st.session_state:
+        st.session_state[global_revision_key] = 0
+
+    global_value = bool(st.session_state[global_key])
+    global_revision = int(st.session_state[global_revision_key])
+
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = global_value
+        st.session_state[widget_revision_key] = global_revision
+    elif int(st.session_state.get(widget_revision_key, -1)) != global_revision:
+        st.session_state[widget_key] = global_value
+        st.session_state[widget_revision_key] = global_revision
+
+    widget_value = st.checkbox(
+        label,
+        key=widget_key,
+        help=help_text,
+        disabled=disabled,
+    )
+
+    if bool(widget_value) != global_value:
+        st.session_state[global_key] = bool(widget_value)
+        st.session_state[global_revision_key] = global_revision + 1
+        st.session_state[widget_revision_key] = int(
+            st.session_state[global_revision_key]
+        )
+
+    return bool(st.session_state[global_key])
+
+
+def render_global_synced_selectbox(
+    label: str,
+    options: list[str],
+    global_key: str,
+    widget_key: str,
+    default_option: str,
+    help_text: str | None = None,
+    disabled: bool = False,
+) -> str:
+    if not options:
+        return ""
+
+    global_revision_key = f"{global_key}_revision"
+    widget_revision_key = f"{widget_key}_revision"
+
+    if default_option not in options:
+        default_option = options[0]
+
+    if global_key not in st.session_state:
+        st.session_state[global_key] = default_option
+    if st.session_state[global_key] not in options:
+        st.session_state[global_key] = default_option
+    if global_revision_key not in st.session_state:
+        st.session_state[global_revision_key] = 0
+
+    global_value = str(st.session_state[global_key])
+    global_revision = int(st.session_state[global_revision_key])
+
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = global_value
+        st.session_state[widget_revision_key] = global_revision
+    elif int(st.session_state.get(widget_revision_key, -1)) != global_revision:
+        st.session_state[widget_key] = global_value
+        st.session_state[widget_revision_key] = global_revision
+
+    selected_value = st.selectbox(
+        label,
+        options=options,
+        key=widget_key,
+        help=help_text,
+        disabled=disabled,
+    )
+
+    if str(selected_value) != global_value:
+        st.session_state[global_key] = str(selected_value)
+        st.session_state[global_revision_key] = global_revision + 1
+        st.session_state[widget_revision_key] = int(
+            st.session_state[global_revision_key]
+        )
+
+    return str(st.session_state[global_key])
+
+
+def apply_export_palette(fig: go.Figure, palette: list[str]) -> None:
+    if not palette:
+        return
+
+    skipped_types = {
+        "heatmap",
+        "contour",
+        "histogram2d",
+        "surface",
+        "mesh3d",
+        "choropleth",
+    }
+    pie_like_types = {"pie", "sunburst", "treemap", "funnelarea"}
+
+    for index, trace in enumerate(fig.data):
+        trace_type = str(getattr(trace, "type", "")).lower()
+        if trace_type in skipped_types:
+            continue
+
+        if trace_type in pie_like_types:
+            if getattr(trace, "marker", None) is None:
+                continue
+            labels = getattr(trace, "labels", None)
+            values = getattr(trace, "values", None)
+            segment_count = 0
+            if labels is not None:
+                segment_count = max(segment_count, len(labels))
+            if values is not None:
+                segment_count = max(segment_count, len(values))
+            if segment_count > 0:
+                trace.marker.colors = [
+                    palette[i % len(palette)]
+                    for i in range(segment_count)
+                ]
+            continue
+
+        color = palette[index % len(palette)]
+        if getattr(trace, "marker", None) is not None:
+            trace.marker.color = color
+        if getattr(trace, "line", None) is not None:
+            trace.line.color = color
+
+
+def apply_manual_series_colors(
+    fig: go.Figure,
+    overrides: dict[str, str],
+) -> None:
+    if not overrides:
+        return
+
+    skipped_types = {
+        "heatmap",
+        "contour",
+        "histogram2d",
+        "surface",
+        "mesh3d",
+        "choropleth",
+    }
+
+    for trace in fig.data:
+        trace_type = str(getattr(trace, "type", "")).lower()
+        if trace_type in skipped_types:
+            continue
+
+        series_name = str(getattr(trace, "name", "")).strip()
+        if not series_name or series_name not in overrides:
+            continue
+
+        color = overrides[series_name]
+        if getattr(trace, "marker", None) is not None:
+            trace.marker.color = color
+        if getattr(trace, "line", None) is not None:
+            trace.line.color = color
+
+
+def map_bar_label_position(position_name: str) -> str:
+    if position_name == "内侧":
+        return "inside"
+    if position_name in {"外侧", "顶部"}:
+        return "outside"
+    if position_name == "中间":
+        return "inside"
+    return "auto"
+
+
+def map_scatter_label_position(position_name: str) -> str:
+    if position_name == "内侧":
+        return "middle center"
+    if position_name == "外侧":
+        return "top center"
+    if position_name == "顶部":
+        return "top center"
+    if position_name == "中间":
+        return "middle center"
+    return "top center"
+
+
+def map_pie_label_position(position_name: str) -> str:
+    if position_name == "内侧":
+        return "inside"
+    if position_name in {"外侧", "顶部"}:
+        return "outside"
+    if position_name == "中间":
+        return "inside"
+    return "auto"
+
+
+def apply_export_data_labels(
+    fig: go.Figure,
+    mode_name: str,
+    position_name: str,
+) -> None:
+    for trace in fig.data:
+        trace_type = str(getattr(trace, "type", "")).lower()
+
+        if trace_type == "bar":
+            if mode_name == "关闭":
+                trace.text = None
+                trace.texttemplate = None
+                trace.textposition = "none"
+                continue
+
+            orientation = str(getattr(trace, "orientation", "v")).lower()
+            value_field = "x" if orientation == "h" else "y"
+            series_name = str(getattr(trace, "name", "")).strip()
+
+            if mode_name in {"仅系列名", "仅Model"}:
+                trace.texttemplate = series_name or "%{label}"
+            elif mode_name == "系列名+数值":
+                prefix = f"{series_name}: " if series_name else ""
+                trace.texttemplate = f"{prefix}%{{{value_field}}}"
+            else:
+                trace.texttemplate = f"%{{{value_field}}}"
+
+            trace.textposition = map_bar_label_position(position_name)
+            trace.cliponaxis = False
+            continue
+
+        if trace_type == "scatter":
+            mode_text = str(getattr(trace, "mode", "markers"))
+            mode_parts = [part for part in mode_text.split("+") if part]
+
+            if mode_name == "关闭":
+                mode_parts = [part for part in mode_parts if part != "text"]
+                if not mode_parts:
+                    mode_parts = ["markers"]
+                trace.mode = "+".join(dict.fromkeys(mode_parts))
+                trace.text = None
+                trace.texttemplate = None
+                continue
+
+            if "text" not in mode_parts:
+                mode_parts.append("text")
+            if "markers" not in mode_parts and "lines" not in mode_parts:
+                mode_parts.insert(0, "markers")
+            trace.mode = "+".join(dict.fromkeys(mode_parts))
+
+            series_name = str(getattr(trace, "name", "")).strip()
+            value_field = "y" if getattr(trace, "y", None) is not None else "x"
+            hover_text = getattr(trace, "hovertext", None)
+
+            model_text: list[str] | None = None
+            if hover_text is not None:
+                try:
+                    hover_items = list(hover_text)
+                except TypeError:
+                    hover_items = [hover_text]
+                normalized_hover_items = [
+                    "" if item is None else str(item)
+                    for item in hover_items
+                ]
+                if any(item.strip() for item in normalized_hover_items):
+                    model_text = normalized_hover_items
+
+            if mode_name == "仅系列名":
+                trace.texttemplate = series_name or "%{text}"
+            elif mode_name == "仅Model":
+                if model_text:
+                    trace.text = model_text
+                    trace.texttemplate = "%{text}"
+                else:
+                    trace.texttemplate = series_name or "%{text}"
+            elif mode_name == "系列名+数值":
+                prefix = f"{series_name}: " if series_name else ""
+                trace.texttemplate = f"{prefix}%{{{value_field}}}"
+            else:
+                trace.texttemplate = f"%{{{value_field}}}"
+
+            trace.textposition = map_scatter_label_position(position_name)
+            continue
+
+        if trace_type in {"heatmap", "contour"}:
+            if mode_name == "关闭":
+                trace.texttemplate = None
+                trace.text = None
+                continue
+
+            series_name = str(getattr(trace, "name", "")).strip()
+            if mode_name in {"仅系列名", "仅Model"}:
+                trace.texttemplate = series_name or "Heatmap"
+            elif mode_name == "系列名+数值":
+                prefix = f"{series_name}: " if series_name else ""
+                trace.texttemplate = f"{prefix}%{{z}}"
+            else:
+                trace.texttemplate = "%{z}"
+            continue
+
+        if trace_type in {"pie", "sunburst", "treemap", "funnelarea"}:
+            if mode_name == "关闭":
+                trace.textinfo = "none"
+                continue
+
+            if mode_name == "仅系列名":
+                trace.textinfo = "label"
+            elif mode_name == "仅Model":
+                trace.textinfo = "label"
+            elif mode_name == "系列名+数值":
+                trace.textinfo = "label+value"
+            else:
+                trace.textinfo = "value"
+
+            trace.textposition = map_pie_label_position(position_name)
+
+
+def apply_export_figure_style(
+    fig: Any,
+    settings: dict[str, Any],
+) -> go.Figure:
+    styled_fig = go.Figure(fig)
+
+    show_x_grid = bool(settings["show_x_grid"])
+    show_y_grid = bool(settings["show_y_grid"])
+    show_axis_line = bool(settings["show_axis_line"])
+    show_legend = bool(settings["show_legend"])
+
+    styled_fig.update_layout(
+        width=int(settings["width"]),
+        height=int(settings["height"]),
+        showlegend=show_legend,
+        font={"size": int(settings["font_size"])},
+        paper_bgcolor=str(settings["paper_bgcolor"]),
+        plot_bgcolor=str(settings["plot_bgcolor"]),
+    )
+
+    if show_legend:
+        legend_position = EXPORT_LEGEND_POSITIONS.get(
+            str(settings["legend_position"]),
+            EXPORT_LEGEND_POSITIONS["右侧（默认）"],
+        )
+        styled_fig.update_layout(legend=legend_position)
+
+    title_text = str(settings["title_text"]).strip()
+    if title_text:
+        styled_fig.update_layout(title={"text": title_text})
+
+    x_title = str(settings["x_title"]).strip()
+    if x_title:
+        styled_fig.update_xaxes(title_text=x_title)
+
+    y_title = str(settings["y_title"]).strip()
+    if y_title:
+        styled_fig.update_yaxes(title_text=y_title)
+
+    styled_fig.update_xaxes(
+        showgrid=show_x_grid,
+        gridcolor=str(settings["grid_color"]),
+        showline=show_axis_line,
+        linecolor=str(settings["axis_line_color"]),
+        mirror=show_axis_line,
+    )
+    styled_fig.update_yaxes(
+        showgrid=show_y_grid,
+        gridcolor=str(settings["grid_color"]),
+        showline=show_axis_line,
+        linecolor=str(settings["axis_line_color"]),
+        mirror=show_axis_line,
+    )
+
+    x_tick_kwargs = build_axis_tick_kwargs(
+        str(settings["x_tick_style"]),
+        int(settings["tick_decimal_places"]),
+    )
+    if x_tick_kwargs:
+        styled_fig.update_xaxes(**x_tick_kwargs)
+
+    y_tick_kwargs = build_axis_tick_kwargs(
+        str(settings["y_tick_style"]),
+        int(settings["tick_decimal_places"]),
+    )
+    if y_tick_kwargs:
+        styled_fig.update_yaxes(**y_tick_kwargs)
+
+    apply_export_data_labels(
+        styled_fig,
+        mode_name=str(settings["data_label_mode"]),
+        position_name=str(settings["data_label_position"]),
+    )
+
+    palette_name = str(settings["palette_name"])
+    palette = EXPORT_COLOR_SCHEMES.get(palette_name)
+    if palette:
+        apply_export_palette(styled_fig, palette)
+
+    if bool(settings["manual_series_color_enabled"]):
+        apply_manual_series_colors(
+            styled_fig,
+            dict(settings["series_color_overrides"]),
+        )
+
+    return styled_fig
+
+
+def render_export_style_controls(
+    fig: Any,
+    chart_key: str,
+    kaleido_available: bool,
+) -> tuple[dict[str, Any], bool, Any, Any]:
+    layout_width = getattr(getattr(fig, "layout", None), "width", None)
+    layout_height = getattr(getattr(fig, "layout", None), "height", None)
+    default_width = int(layout_width) if layout_width else 1400
+    default_height = int(layout_height) if layout_height else 800
+    default_width = max(800, min(2400, default_width))
+    default_height = max(500, min(1800, default_height))
+    series_color_defaults = collect_export_series_color_defaults(fig)
+
+    with st.expander("导出图设置", expanded=False):
+        st.caption(
+            "支持按导出场景微调图样式（网格线、图例、配色、背景、尺寸等）。"
+        )
+
+        grid_col_1, grid_col_2, grid_col_3 = st.columns([1, 1, 1])
+        with grid_col_1:
+            show_x_grid = st.checkbox(
+                "显示X网格线",
+                value=True,
+                key=f"export_x_grid_{chart_key}",
+            )
+        with grid_col_2:
+            show_y_grid = st.checkbox(
+                "显示Y网格线",
+                value=True,
+                key=f"export_y_grid_{chart_key}",
+            )
+        with grid_col_3:
+            show_axis_line = st.checkbox(
+                "显示坐标轴线",
+                value=False,
+                key=f"export_axis_line_{chart_key}",
+            )
+
+        style_col_1, style_col_2, style_col_3 = st.columns([1, 1, 1])
+        with style_col_1:
+            show_legend = st.checkbox(
+                "显示图例",
+                value=True,
+                key=f"export_show_legend_{chart_key}",
+            )
+            legend_position = st.selectbox(
+                "图例位置",
+                options=list(EXPORT_LEGEND_POSITIONS.keys()),
+                index=0,
+                key=f"export_legend_pos_{chart_key}",
+                disabled=not show_legend,
+            )
+        with style_col_2:
+            palette_name = st.selectbox(
+                "系列配色",
+                options=list(EXPORT_COLOR_SCHEMES.keys()),
+                index=0,
+                key=f"export_palette_{chart_key}",
+            )
+            font_size = int(
+                st.slider(
+                    "字体大小",
+                    min_value=8,
+                    max_value=24,
+                    value=12,
+                    step=1,
+                    key=f"export_font_size_{chart_key}",
+                )
+            )
+        with style_col_3:
+            grid_color = st.color_picker(
+                "网格线颜色",
+                value="#E5E7EB",
+                key=f"export_grid_color_{chart_key}",
+            )
+            axis_line_color = st.color_picker(
+                "坐标轴线颜色",
+                value="#6B7280",
+                key=f"export_axis_color_{chart_key}",
+            )
+
+        axis_col_1, axis_col_2, axis_col_3 = st.columns([1, 1, 1])
+        with axis_col_1:
+            x_tick_style = st.selectbox(
+                "X轴刻度格式",
+                options=EXPORT_AXIS_TICK_STYLE_OPTIONS,
+                index=0,
+                key=f"export_x_tick_style_{chart_key}",
+            )
+        with axis_col_2:
+            y_tick_style = st.selectbox(
+                "Y轴刻度格式",
+                options=EXPORT_AXIS_TICK_STYLE_OPTIONS,
+                index=0,
+                key=f"export_y_tick_style_{chart_key}",
+            )
+        with axis_col_3:
+            tick_decimal_places = int(
+                st.slider(
+                    "小数位",
+                    min_value=0,
+                    max_value=4,
+                    value=1,
+                    step=1,
+                    key=f"export_tick_decimal_{chart_key}",
+                    help="用于小数/百分比/科学计数法。",
+                )
+            )
+
+        bg_col_1, bg_col_2 = st.columns([1, 1])
+        with bg_col_1:
+            paper_bgcolor = st.color_picker(
+                "整体背景色",
+                value="#FFFFFF",
+                key=f"export_paper_bg_{chart_key}",
+            )
+        with bg_col_2:
+            plot_bgcolor = st.color_picker(
+                "绘图区背景色",
+                value="#FFFFFF",
+                key=f"export_plot_bg_{chart_key}",
+            )
+
+        title_col_1, title_col_2, title_col_3 = st.columns([1, 1, 1])
+        with title_col_1:
+            title_text = st.text_input(
+                "导出标题（可选）",
+                value="",
+                key=f"export_title_{chart_key}",
+                placeholder="留空则沿用图表标题",
+            )
+        with title_col_2:
+            x_title = st.text_input(
+                "X轴标题（可选）",
+                value="",
+                key=f"export_x_title_{chart_key}",
+                placeholder="留空则沿用原始标题",
+            )
+        with title_col_3:
+            y_title = st.text_input(
+                "Y轴标题（可选）",
+                value="",
+                key=f"export_y_title_{chart_key}",
+                placeholder="留空则沿用原始标题",
+            )
+
+        size_col_1, size_col_2 = st.columns([1, 1])
+        with size_col_1:
+            width = int(
+                st.slider(
+                    "导出宽度(px)",
+                    min_value=800,
+                    max_value=2400,
+                    value=default_width,
+                    step=50,
+                    key=f"export_width_{chart_key}",
+                )
+            )
+        with size_col_2:
+            height = int(
+                st.slider(
+                    "导出高度(px)",
+                    min_value=500,
+                    max_value=1800,
+                    value=default_height,
+                    step=50,
+                    key=f"export_height_{chart_key}",
+                )
+            )
+
+        label_col_1, label_col_2 = st.columns([1, 1])
+        with label_col_1:
+            data_label_mode = render_global_synced_selectbox(
+                label="数据标签（全局）",
+                options=EXPORT_DATA_LABEL_MODE_OPTIONS,
+                global_key="export_data_label_mode_global",
+                widget_key=f"export_data_label_mode_{chart_key}",
+                default_option="关闭",
+                help_text="Excel风格：全局联动标签显示模式，影响条形/散点/气泡/热力图/饼图。",
+            )
+        with label_col_2:
+            data_label_position = render_global_synced_selectbox(
+                label="标签位置（全局）",
+                options=EXPORT_DATA_LABEL_POSITION_OPTIONS,
+                global_key="export_data_label_position_global",
+                widget_key=f"export_data_label_position_{chart_key}",
+                default_option="自动",
+                disabled=data_label_mode == "关闭",
+                help_text="全局联动标签位置。",
+            )
+
+        manual_series_color_enabled = st.checkbox(
+            "单系列手工改色",
+            value=False,
+            key=f"export_manual_series_color_enabled_{chart_key}",
+            disabled=not bool(series_color_defaults),
+            help="开启后可逐个图例系列指定颜色（导出专用）。",
+        )
+
+        series_color_overrides: dict[str, str] = {}
+        if manual_series_color_enabled and series_color_defaults:
+            series_items = list(series_color_defaults.items())
+            if len(series_items) > MAX_MANUAL_SERIES_COLOR_CONTROLS:
+                st.caption(
+                    "系列过多，仅显示前 "
+                    f"{MAX_MANUAL_SERIES_COLOR_CONTROLS} 个进行手工配色。"
+                )
+                series_items = series_items[:MAX_MANUAL_SERIES_COLOR_CONTROLS]
+
+            st.caption("逐系列颜色设置")
+            for index, (series_name, default_color) in enumerate(series_items):
+                series_color = st.color_picker(
+                    f"{series_name}",
+                    value=default_color,
+                    key=f"export_series_color_{chart_key}_{index}",
+                )
+                series_color_overrides[series_name] = series_color
+
+        generate_png = st.button(
+            "生成PNG",
+            key=f"png_generate_{chart_key}",
+            width="content",
+            disabled=not kaleido_available,
+        )
+        export_feedback_slot = st.container()
+        export_download_slot = st.container()
+        if not kaleido_available:
+            install_command = get_kaleido_install_command()
+            st.info(
+                "PNG 导出依赖 kaleido，当前环境未安装。"
+                f"请执行：{install_command}"
+            )
+
+    return {
+        "show_x_grid": show_x_grid,
+        "show_y_grid": show_y_grid,
+        "show_axis_line": show_axis_line,
+        "show_legend": show_legend,
+        "legend_position": legend_position,
+        "palette_name": palette_name,
+        "font_size": font_size,
+        "x_tick_style": x_tick_style,
+        "y_tick_style": y_tick_style,
+        "tick_decimal_places": tick_decimal_places,
+        "grid_color": grid_color,
+        "axis_line_color": axis_line_color,
+        "paper_bgcolor": paper_bgcolor,
+        "plot_bgcolor": plot_bgcolor,
+        "title_text": title_text,
+        "x_title": x_title,
+        "y_title": y_title,
+        "width": width,
+        "height": height,
+        "data_label_mode": data_label_mode,
+        "data_label_position": data_label_position,
+        "manual_series_color_enabled": manual_series_color_enabled,
+        "series_color_overrides": series_color_overrides,
+    }, generate_png, export_feedback_slot, export_download_slot
+
+
+def render_plotly_chart_with_png_export(
+    fig: Any,
+    chart_key: str,
+    filename_prefix: str,
+) -> None:
+    kaleido_available = is_kaleido_available()
+    (
+        export_settings,
+        generate_png,
+        export_feedback_slot,
+        export_download_slot,
+    ) = render_export_style_controls(
+        fig=fig,
+        chart_key=chart_key,
+        kaleido_available=kaleido_available,
+    )
+    export_fig = apply_export_figure_style(fig, export_settings)
+
+    st.plotly_chart(export_fig, width="stretch", config=PLOT_CONFIG)
+
+    bytes_key = f"png_bytes_{chart_key}"
+    file_key = f"png_file_{chart_key}"
+    export_error_message: str | None = None
+
+    if generate_png:
+        try:
+            png_bytes = export_figure_png(export_fig)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            st.session_state[bytes_key] = png_bytes
+            st.session_state[file_key] = (
+                f"{filename_prefix}_{timestamp}.png"
+            )
+        except Exception as error:
+            st.session_state.pop(bytes_key, None)
+            st.session_state.pop(file_key, None)
+            error_text = f"{type(error).__name__} {error}"
+            if "kaleido" in str(error).lower():
+                install_command = get_kaleido_install_command()
+                export_error_message = (
+                    "PNG 导出失败：当前环境缺少 kaleido。"
+                    f"请执行：{install_command}"
+                )
+            else:
+                export_error_message = f"PNG 导出失败：{error_text}"
+
+    with export_feedback_slot:
+        if export_error_message:
+            st.warning(export_error_message)
+
+    png_bytes = st.session_state.get(bytes_key)
+    png_name = st.session_state.get(file_key)
+    if isinstance(png_bytes, (bytes, bytearray)) and isinstance(
+        png_name,
+        str,
+    ):
+        with export_feedback_slot:
+            st.success("PNG 已生成，可下载。")
+        with export_download_slot:
+            st.download_button(
+                "下载当前图 PNG",
+                data=bytes(png_bytes),
+                file_name=png_name,
+                mime="image/png",
+                key=f"png_download_{chart_key}",
+                width="content",
+            )
+
+
 def find_existing_column(
     df: pd.DataFrame,
     candidates: list[str],
@@ -392,7 +1388,7 @@ def find_existing_column(
 
 def to_numeric_flexible(series: pd.Series) -> pd.Series:
     numeric = pd.to_numeric(series, errors="coerce")
-    if numeric.notna().sum() > 0:
+    if numeric.notna().all():
         return numeric
 
     extracted = (
@@ -400,7 +1396,8 @@ def to_numeric_flexible(series: pd.Series) -> pd.Series:
         .str.replace(",", "", regex=False)
         .str.extract(r"(-?\d+\.?\d*)")[0]
     )
-    return pd.to_numeric(extracted, errors="coerce")
+    extracted_numeric = pd.to_numeric(extracted, errors="coerce")
+    return numeric.where(numeric.notna(), extracted_numeric)
 
 
 def prepare_numeric_axis(
@@ -665,9 +1662,28 @@ def render_header_card(filtered_df: pd.DataFrame) -> None:
 def render_kpi_cards(
     filtered_df: pd.DataFrame,
     columns: ColumnRegistry,
+    time_axis: TimeAxis | None,
+    global_time_selection: TimeSelection | None,
 ) -> None:
     year_columns = get_year_columns(filtered_df)
-    total_sales = filtered_df[year_columns].sum().sum() if year_columns else 0
+    full_cycle_year_sales = (
+        filtered_df[year_columns].sum().sum() if year_columns else 0
+    )
+
+    selected_columns: list[str] = []
+    selection_scope = "全周期年度列"
+    if time_axis and global_time_selection and global_time_selection.columns:
+        selected_columns = list(global_time_selection.columns)
+        selection_scope = (
+            f"全局时间窗 {global_time_selection.start_label}"
+            f" ~ {global_time_selection.end_label}"
+        )
+    elif year_columns:
+        selected_columns = year_columns
+
+    scoped_sales = float(
+        sum_sales_for_columns(filtered_df, selected_columns).sum()
+    )
 
     brand_count = (
         filtered_df[columns.make].nunique(dropna=True) if columns.make else 0
@@ -683,13 +1699,18 @@ def render_kpi_cards(
 
     kpi_col_1, kpi_col_2, kpi_col_3, kpi_col_4 = st.columns(4)
     with kpi_col_1:
-        st.metric("累计销量（年度列合计）", f"{total_sales:,.0f}")
+        st.metric("累计销量（全局时间窗）", f"{scoped_sales:,.0f}")
     with kpi_col_2:
         st.metric("品牌数", f"{brand_count:,}")
     with kpi_col_3:
         st.metric("Model 数", f"{model_count:,}")
     with kpi_col_4:
         st.metric("Version 数", f"{version_count:,}")
+
+    st.caption(
+        f"KPI 口径：{selection_scope}｜"
+        f"全周期年度列合计：{full_cycle_year_sales:,.0f}"
+    )
 
 
 def render_year_tab(
@@ -703,7 +1724,7 @@ def render_year_tab(
         st.subheader("年度对比")
 
         if not time_axis or not global_time_selection:
-            st.warning("未识别可用时间轴，无法绘制年度趋势。")
+            show_time_axis_unavailable("年度趋势")
             return
 
         time_selection = resolve_chart_time_selection(
@@ -714,7 +1735,7 @@ def render_year_tab(
         )
         selected_columns = list(time_selection.columns)
         if not selected_columns:
-            st.info("当前时间选择范围内无可用列。")
+            show_no_data("年度趋势")
             return
 
         group_column = (
@@ -729,7 +1750,7 @@ def render_year_tab(
             group_column=group_column,
         )
         if yearly_long.empty:
-            st.info("当前时间范围下无可展示年度数据。")
+            show_no_data("年度趋势")
             return
 
         yearly_long["Year"] = yearly_long["Date"].dt.year.astype(str)
@@ -794,7 +1815,7 @@ def render_month_tab(
         st.subheader("月度细化（支持时间轴调整）")
 
         if not time_axis or not global_time_selection:
-            st.warning("未识别可用时间轴，无法绘制月度细化。")
+            show_time_axis_unavailable("月度细化")
             return
 
         time_selection = resolve_chart_time_selection(
@@ -805,7 +1826,7 @@ def render_month_tab(
         )
         selected_columns = list(time_selection.columns)
         if not selected_columns:
-            st.info("当前时间选择范围内无可用列。")
+            show_no_data("月度细化")
             return
 
         group_column = (
@@ -820,7 +1841,7 @@ def render_month_tab(
             group_column=group_column,
         )
         if period_df.empty:
-            st.info("当前时间范围下无可展示月度数据。")
+            show_no_data("月度细化")
             return
 
         period_df = apply_top_n_series(
@@ -828,7 +1849,7 @@ def render_month_tab(
             series_order=series_order,
             include_others=controls.include_others,
         )
-        st.metric("当前时间窗销量总和", f"{period_df['Sales'].sum():,.0f}")
+        st.metric("当前图表时间窗销量总和", f"{period_df['Sales'].sum():,.0f}")
 
         axis_options = ["月", "季度", "年"]
         if time_selection.grain != "month":
@@ -859,7 +1880,7 @@ def render_month_tab(
             as_index=False,
         )["Sales"].sum()
         if grouped.empty:
-            st.info("该时间范围内无数据。")
+            show_no_data(f"{axis_level}度趋势")
             return
 
         grouped = grouped.sort_values(["Period", "Series"])
@@ -901,7 +1922,7 @@ def get_time_selection_for_chart(
     global_time_selection: TimeSelection | None,
 ) -> tuple[TimeSelection | None, list[str]]:
     if not time_axis or not global_time_selection:
-        st.warning(f"未识别可用时间轴，无法绘制{chart_name}。")
+        show_time_axis_unavailable(chart_name)
         return None, []
 
     selection = resolve_chart_time_selection(
@@ -912,7 +1933,7 @@ def get_time_selection_for_chart(
     )
     selected_columns = list(selection.columns)
     if not selected_columns:
-        st.info("当前时间选择范围内无可用数据列。")
+        show_no_data(chart_name)
         return None, []
 
     return selection, selected_columns
@@ -1016,12 +2037,7 @@ def build_price_frame(
 ) -> tuple[pd.DataFrame, str | None]:
     msrp_col, msrp_values = prepare_numeric_axis(
         filtered_df,
-        [
-            "MSRP规整",
-            "MSRP including delivery charge",
-            "MSRP",
-            "MSRP区间",
-        ],
+        list(MSRP_CANDIDATES),
     )
     if not msrp_col:
         return pd.DataFrame(), None
@@ -1082,7 +2098,7 @@ def build_vehicle_frame(
 
     length_col, length_values = prepare_numeric_axis(
         filtered_df,
-        ["length (mm)", "车长(mm)", "车长", "length"],
+        list(LENGTH_CANDIDATES),
     )
     if not length_col:
         return pd.DataFrame(), None, msrp_col
@@ -1110,12 +2126,7 @@ def render_chart_price_migration(
 
     msrp_col, msrp_values = prepare_numeric_axis(
         filtered_df,
-        [
-            "MSRP规整",
-            "MSRP including delivery charge",
-            "MSRP",
-            "MSRP区间",
-        ],
+        list(MSRP_CANDIDATES),
     )
     if not msrp_col:
         st.warning("缺少 MSRP 数值列，无法绘制价格带迁移图。")
@@ -1170,12 +2181,8 @@ def render_chart_price_migration(
             filtered_df[columns.powertrain]
         )
 
-    invalid_msrp_count = int(
-        pd.to_numeric(work_df["MSRP"], errors="coerce")
-        .le(0)
-        .fillna(False)
-        .sum()
-    )
+    price_quality = summarize_msrp_quality(work_df["MSRP"])
+    invalid_msrp_count = int(price_quality["non_positive_count"])
 
     work_df["PriceBand"], band_order = make_price_bands(
         work_df["MSRP"],
@@ -1183,7 +2190,7 @@ def render_chart_price_migration(
     )
     work_df = work_df.dropna(subset=["PriceBand"])
     if work_df.empty:
-        st.info("当前筛选下无可用价格带数据。")
+        show_no_data("价格带迁移")
         return
 
     selected_powertrains: list[str] | None = None
@@ -1223,6 +2230,14 @@ def render_chart_price_migration(
     if invalid_msrp_count > 0:
         st.caption(
             f"已自动排除 MSRP≤0 的记录 {invalid_msrp_count:,} 条。"
+        )
+    if int(price_quality["positive_count"]) > 0:
+        st.caption(
+            "MSRP质量："
+            f"有效 {int(price_quality['positive_count']):,} 条｜"
+            f"P50={format_euro_value(float(price_quality['p50']))}｜"
+            f"P95={format_euro_value(float(price_quality['p95']))}｜"
+            f"IQR高价异常 {int(price_quality['high_outlier_count']):,} 条"
         )
 
     value_columns = [f"Sales_{year_key}" for year_key in year_map.keys()]
@@ -1315,10 +2330,11 @@ def render_chart_price_migration(
                 color_discrete_map=color_map,
             )
 
-    st.plotly_chart(
-        style_figure(fig),
-        width="stretch",
-        config=PLOT_CONFIG,
+    fig = style_figure(fig)
+    render_plotly_chart_with_png_export(
+        fig=fig,
+        chart_key="adv_price_migration",
+        filename_prefix="price_migration",
     )
 
     if split_by_powertrain and "Powertrain" in migration_plot.columns:
@@ -1386,7 +2402,7 @@ def render_chart_length_vs_price_map(
     )
     aggregate_df = aggregate_df.dropna(subset=["Length", "MSRP", "Sales"])
     if aggregate_df.empty:
-        st.info("当前筛选下无可展示尺寸—价格数据。")
+        show_no_data("尺寸—价格地图")
         return
 
     top_n = 180
@@ -1429,10 +2445,10 @@ def render_chart_length_vs_price_map(
     fig.add_vline(x=4550, line_dash="dash", line_color="#94A3B8")
     fig.add_vline(x=4700, line_dash="dash", line_color="#64748B")
 
-    st.plotly_chart(
-        fig,
-        width="stretch",
-        config=PLOT_CONFIG,
+    render_plotly_chart_with_png_export(
+        fig=fig,
+        chart_key="adv_length_price_map",
+        filename_prefix="length_price_map",
     )
 
     c_segment = aggregate_df[
@@ -1493,7 +2509,7 @@ def render_chart_price_per_meter_vs_sales(
     )
     model_df = model_df.sort_values("Sales", ascending=False)
     if model_df.empty:
-        st.info("当前筛选下无可展示数据。")
+        show_no_data("单位尺寸价格 vs 销量")
         return
 
     top_n = 50
@@ -1525,7 +2541,11 @@ def render_chart_price_per_meter_vs_sales(
     fig = style_figure(fig)
     fig.update_xaxes(title="单位尺寸价格（€/m）")
     fig.update_yaxes(title="销量")
-    st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
+    render_plotly_chart_with_png_export(
+        fig=fig,
+        chart_key="adv_price_per_meter_sales",
+        filename_prefix="price_per_meter_sales",
+    )
 
     st.caption(
         f"价格密度 = MSRP / 车长（米）；车长列：{length_col}，MSRP 列：{msrp_col}。"
@@ -1602,7 +2622,7 @@ def render_chart_powertrain_vs_price(
     )
     price_frame = price_frame.dropna(subset=["PriceBand"])
     if price_frame.empty:
-        st.info("当前筛选下无可用价格带数据。")
+        show_no_data("动力结构 vs 价格")
         return
 
     group_count = 6
@@ -1712,7 +2732,11 @@ def render_chart_powertrain_vs_price(
     fig = style_figure(fig)
     fig.update_xaxes(title="价格带")
     fig.update_yaxes(title="销量")
-    st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
+    render_plotly_chart_with_png_export(
+        fig=fig,
+        chart_key="adv_powertrain_price_mix",
+        filename_prefix="powertrain_price_mix",
+    )
     if split_enabled and split_label and selected_groups:
         st.caption(
             f"已按{split_label}分面，展示销量前 {len(selected_groups)} 个分组。"
@@ -1753,7 +2777,7 @@ def render_chart_sales_vs_price_scatter(
     )
     model_df = model_df.sort_values("Sales", ascending=False)
     if model_df.empty:
-        st.info("当前筛选下无可展示数据。")
+        show_no_data("销量—价格散点")
         return
 
     segment_total = model_df.groupby("Segment")["Sales"].transform("sum")
@@ -1794,7 +2818,11 @@ def render_chart_sales_vs_price_scatter(
     fig = style_figure(fig)
     fig.update_xaxes(title=f"MSRP（{msrp_col}）")
     fig.update_yaxes(title="销量")
-    st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
+    render_plotly_chart_with_png_export(
+        fig=fig,
+        chart_key="adv_sales_price_scatter",
+        filename_prefix="sales_price_scatter",
+    )
 
 
 def render_chart_segment_share_by_length(
@@ -1844,7 +2872,7 @@ def render_chart_segment_share_by_length(
     )
     vehicle_df = vehicle_df.dropna(subset=["LengthBand"])
     if vehicle_df.empty:
-        st.info("当前筛选下无可展示尺寸段数据。")
+        show_no_data("尺寸段份额")
         return
 
     share_df = vehicle_df.groupby(
@@ -1873,7 +2901,11 @@ def render_chart_segment_share_by_length(
     fig = style_figure(fig)
     fig.update_xaxes(title=f"车长分段（{length_col}）")
     fig.update_yaxes(title="销量")
-    st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
+    render_plotly_chart_with_png_export(
+        fig=fig,
+        chart_key="adv_segment_share_length",
+        filename_prefix="segment_share_length",
+    )
 
 
 def render_chart_estimated_tco_vs_msrp(
@@ -1967,7 +2999,7 @@ def render_chart_estimated_tco_vs_msrp(
     )
     model_df = model_df.sort_values("Sales", ascending=False)
     if model_df.empty:
-        st.info("当前筛选下无可展示数据。")
+        show_no_data("估算TCO vs MSRP")
         return
 
     top_n = int(
@@ -2035,7 +3067,11 @@ def render_chart_estimated_tco_vs_msrp(
     fig = style_figure(fig)
     fig.update_xaxes(title=f"MSRP（{msrp_col}）")
     fig.update_yaxes(title="Estimated TCO（€）")
-    st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
+    render_plotly_chart_with_png_export(
+        fig=fig,
+        chart_key="adv_estimated_tco_msrp",
+        filename_prefix="estimated_tco_msrp",
+    )
     st.caption(
         "说明：该图基于可调参数进行估算，非财务口径TCO；用于相对比较。"
     )
@@ -2068,16 +3104,11 @@ def render_chart_powertrain_bubble(
 
     length_col, length_values = prepare_numeric_axis(
         filtered_df,
-        ["length (mm)", "车长(mm)", "车长", "length"],
+        list(LENGTH_CANDIDATES),
     )
     msrp_col, msrp_values = prepare_numeric_axis(
         filtered_df,
-        [
-            "MSRP规整",
-            "MSRP including delivery charge",
-            "MSRP",
-            "MSRP区间",
-        ],
+        list(MSRP_CANDIDATES),
     )
 
     if not length_col or not msrp_col:
@@ -2266,7 +3297,7 @@ def render_chart_powertrain_bubble(
     size_max = max(8, min(size_max, 140))
 
     if bubble_df.empty:
-        st.info("当前筛选下无可展示气泡图数据。")
+        show_no_data("动总分布气泡图")
         return
 
     chart_title = "筛选后 Model 动总分布气泡图"
@@ -2333,7 +3364,578 @@ def render_chart_powertrain_bubble(
         st.caption(f"当前气泡放大倍数：{bubble_size_multiplier}x")
     else:
         st.caption("当前气泡放大倍数：1x")
-    st.plotly_chart(fig_bubble, width="stretch", config=PLOT_CONFIG)
+    render_plotly_chart_with_png_export(
+        fig=fig_bubble,
+        chart_key="adv_powertrain_bubble",
+        filename_prefix="powertrain_bubble",
+    )
+
+
+def resolve_year_column(
+    filtered_df: pd.DataFrame,
+    year_text: str,
+) -> str | None:
+    for column in get_year_columns(filtered_df):
+        if str(column).strip() == str(year_text).strip():
+            return str(column)
+    return None
+
+
+def build_nev_base_frame(
+    filtered_df: pd.DataFrame,
+    columns: ColumnRegistry,
+    selected_columns: list[str],
+) -> tuple[pd.DataFrame, str | None]:
+    if not columns.powertrain:
+        return pd.DataFrame(), None
+
+    range_col, range_values = prepare_numeric_axis(
+        filtered_df,
+        list(BATTERY_RANGE_CANDIDATES),
+    )
+    if not range_col:
+        return pd.DataFrame(), None
+
+    sales_window = sum_sales_for_columns(filtered_df, selected_columns)
+    model_series = (
+        normalize_series(filtered_df[columns.model])
+        if columns.model
+        else pd.Series("未标注", index=filtered_df.index)
+    )
+    brand_series = (
+        normalize_series(filtered_df[columns.make])
+        if columns.make
+        else pd.Series("全部品牌", index=filtered_df.index)
+    )
+
+    frame = pd.DataFrame(
+        {
+            "Model": model_series,
+            "Brand": brand_series,
+            "Powertrain": normalize_powertrain_for_nev(
+                filtered_df[columns.powertrain]
+            ),
+            "BatteryRange": range_values,
+            "SalesWindow": pd.to_numeric(
+                sales_window,
+                errors="coerce",
+            ).fillna(0.0),
+        }
+    )
+    frame = frame.dropna(subset=["BatteryRange"])
+    frame = frame[frame["BatteryRange"] >= 0]
+    return frame, range_col
+
+
+def render_chart_nev_range_distribution(
+    filtered_df: pd.DataFrame,
+    columns: ColumnRegistry,
+    time_axis: TimeAxis | None,
+    global_time_selection: TimeSelection | None,
+) -> None:
+    selection, selected_columns = get_time_selection_for_chart(
+        chart_name="NEV续航分布",
+        key_prefix="adv_nev_range",
+        time_axis=time_axis,
+        global_time_selection=global_time_selection,
+    )
+    if not selection:
+        return
+    if not columns.powertrain:
+        st.warning("缺少动总字段，无法绘制 NEV 续航分布。")
+        return
+
+    nev_pt_rows = int(
+        normalize_powertrain_for_nev(
+            filtered_df[columns.powertrain]
+        ).isin(["BEV", "PHEV"]).sum()
+    )
+
+    nev_df, range_col = build_nev_base_frame(
+        filtered_df,
+        columns,
+        selected_columns,
+    )
+    if not range_col:
+        st.warning(
+            "NEV 未匹配到电池续航字段，请确认表头为 Battery range。"
+        )
+        return
+    if nev_df.empty:
+        if nev_pt_rows > 0:
+            st.warning(
+                "已找到 BEV/PHEV 记录，但 Battery range 在当前筛选下均为空或非数值。"
+            )
+            return
+        show_no_data("NEV续航分布")
+        return
+
+    year_2023_col = resolve_year_column(filtered_df, "2023")
+    year_2025_col = resolve_year_column(filtered_df, "2025")
+    growth_ready = bool(year_2023_col and year_2025_col)
+
+    sales_2023 = (
+        sum_sales_for_columns(filtered_df, [year_2023_col])
+        if year_2023_col
+        else pd.Series(0.0, index=filtered_df.index)
+    )
+    sales_2025 = (
+        sum_sales_for_columns(filtered_df, [year_2025_col])
+        if year_2025_col
+        else pd.Series(0.0, index=filtered_df.index)
+    )
+    nev_df["Growth2325"] = pd.to_numeric(
+        sales_2025 - sales_2023,
+        errors="coerce",
+    ).fillna(0.0)
+
+    available_pt = set(nev_df["Powertrain"].astype(str))
+    nev_options = [
+        powertrain
+        for powertrain in ["PHEV", "BEV"]
+        if powertrain in available_pt
+    ]
+    if not nev_options:
+        st.info("当前筛选下无 BEV/PHEV 数据。")
+        return
+
+    reset_col_1, reset_col_2 = st.columns([1, 2])
+    with reset_col_1:
+        reset_controls = st.button(
+            "重置参数",
+            key="adv_nev_range_reset_controls",
+            width="stretch",
+        )
+    with reset_col_2:
+        st.caption("重置到默认：当前时间窗 + BEV/PHEV + TopN80。")
+
+    if reset_controls:
+        st.session_state["adv_nev_range_powertrain"] = list(nev_options)
+        st.session_state["adv_nev_range_metric_mode"] = "当前时间窗销量"
+        st.session_state["adv_nev_range_topn_enabled"] = True
+        st.session_state["adv_nev_range_topn"] = 80
+        st.session_state["adv_nev_range_axis_max"] = 1000
+        st.session_state["adv_nev_range_axis_step"] = 50
+        st.session_state["adv_nev_range_stack_by_model"] = False
+        st.session_state["adv_nev_range_facet_brand"] = False
+        st.session_state["adv_nev_range_max_brand"] = 4
+
+    control_col_1, control_col_2, control_col_3 = st.columns([1, 1, 1])
+    with control_col_1:
+        selected_powertrains = st.multiselect(
+            "动总类型",
+            options=nev_options,
+            default=nev_options,
+            key="adv_nev_range_powertrain",
+        )
+    with control_col_2:
+        top_n_enabled = st.checkbox(
+            "启用 TopN（按销量）",
+            value=True,
+            key="adv_nev_range_topn_enabled",
+        )
+    with control_col_3:
+        top_n = int(
+            st.slider(
+                "TopN",
+                min_value=10,
+                max_value=300,
+                value=80,
+                step=5,
+                key="adv_nev_range_topn",
+                disabled=not top_n_enabled,
+            )
+        )
+
+    adv_col_1, adv_col_2, adv_col_3 = st.columns([1, 1, 1])
+    with adv_col_1:
+        axis_max = int(
+            st.slider(
+                "续航轴上限",
+                min_value=200,
+                max_value=1500,
+                value=1000,
+                step=50,
+                key="adv_nev_range_axis_max",
+            )
+        )
+    with adv_col_2:
+        range_step = int(
+            st.slider(
+                "续航分箱步长",
+                min_value=10,
+                max_value=200,
+                value=50,
+                step=10,
+                key="adv_nev_range_axis_step",
+            )
+        )
+    with adv_col_3:
+        metric_mode = st.radio(
+            "分布口径",
+            ["当前时间窗销量", "23-25增长变化"],
+            horizontal=True,
+            key="adv_nev_range_metric_mode",
+        )
+
+    split_by_brand = False
+    stack_by_model = False
+    max_brand_facets = 4
+    with st.expander("高级设置", expanded=False):
+        stack_by_model = st.checkbox(
+            "按Model堆叠显示",
+            value=False,
+            key="adv_nev_range_stack_by_model",
+            disabled=not bool(columns.model),
+        )
+        split_by_brand = st.checkbox(
+            "按品牌分面",
+            value=False,
+            key="adv_nev_range_facet_brand",
+            disabled=not bool(columns.make),
+        )
+        if split_by_brand:
+            max_brand_facets = int(
+                st.slider(
+                    "最多展示品牌数",
+                    min_value=2,
+                    max_value=12,
+                    value=4,
+                    step=1,
+                    key="adv_nev_range_max_brand",
+                )
+            )
+
+    if not selected_powertrains:
+        st.info("请至少选择一个动总类型。")
+        return
+
+    if metric_mode == "23-25增长变化" and not growth_ready:
+        st.warning("缺少 2023 或 2025 年度列，已回退到当前时间窗销量。")
+        metric_mode = "当前时间窗销量"
+
+    nev_df = nev_df[nev_df["Powertrain"].isin(selected_powertrains)]
+    nev_df = nev_df[nev_df["BatteryRange"].between(0, axis_max)]
+    if nev_df.empty:
+        if nev_pt_rows > 0:
+            st.warning(
+                "当前筛选下 BEV/PHEV 的 Battery range 不在有效区间内，请放宽筛选或调整续航轴上限。"
+            )
+            return
+        show_no_data("NEV续航分布")
+        return
+
+    if top_n_enabled:
+        model_rank = (
+            nev_df.groupby("Model", as_index=False)["SalesWindow"]
+            .sum()
+            .sort_values("SalesWindow", ascending=False)
+        )
+        top_models = set(model_rank.head(top_n)["Model"])
+        nev_df = nev_df[nev_df["Model"].isin(top_models)]
+
+    if split_by_brand:
+        brand_rank = (
+            nev_df.groupby("Brand", as_index=False)["SalesWindow"]
+            .sum()
+            .sort_values("SalesWindow", ascending=False)
+        )
+        selected_brands = brand_rank.head(max_brand_facets)["Brand"].tolist()
+        nev_df = nev_df[nev_df["Brand"].isin(selected_brands)]
+    else:
+        selected_brands = []
+
+    if nev_df.empty:
+        show_no_data("NEV续航分布")
+        return
+
+    metric_column = "SalesWindow"
+    metric_title = "销量"
+    if metric_mode == "23-25增长变化":
+        metric_column = "Growth2325"
+        metric_title = "销量变化（2025-2023）"
+
+    nev_df["RangeBandStart"] = (
+        (pd.to_numeric(nev_df["BatteryRange"], errors="coerce") // range_step)
+        * range_step
+    )
+    nev_df["RangeBandStart"] = nev_df["RangeBandStart"].clip(
+        lower=0,
+        upper=max(0, axis_max - range_step),
+    )
+
+    color_dimension = "Model" if stack_by_model else "Powertrain"
+    group_fields = ["RangeBandStart", color_dimension]
+    if split_by_brand:
+        group_fields.insert(0, "Brand")
+
+    plot_df = nev_df.groupby(group_fields, as_index=False)[metric_column].sum()
+    plot_df = plot_df.sort_values(group_fields)
+    if plot_df.empty:
+        show_no_data("NEV续航分布")
+        return
+
+    plot_kwargs: dict[str, Any] = {"orientation": "h"}
+    if not stack_by_model:
+        plot_kwargs["color_discrete_map"] = {
+            key: value
+            for key, value in POWERTRAIN_COLOR_MAP.items()
+            if key in selected_powertrains
+        }
+    if split_by_brand:
+        plot_kwargs["facet_col"] = "Brand"
+        plot_kwargs["facet_col_wrap"] = 3
+        plot_kwargs["category_orders"] = {"Brand": selected_brands}
+
+    chart_title = "NEV 续航分布（Model堆叠）" if stack_by_model else "NEV 续航分布（BEV/PHEV）"
+
+    fig = px.bar(
+        plot_df,
+        x=metric_column,
+        y="RangeBandStart",
+        color=color_dimension,
+        title=chart_title,
+        **plot_kwargs,
+    )
+    fig.update_layout(barmode="stack")
+    if split_by_brand:
+        fig.for_each_annotation(
+            lambda annotation: annotation.update(
+                text=annotation.text.replace("Brand=", "")
+            )
+        )
+
+    fig = style_figure(fig)
+    fig.update_yaxes(
+        title=f"Battery range（{range_col}）",
+        range=[0, axis_max],
+        dtick=range_step,
+    )
+    fig.update_xaxes(title=metric_title)
+    render_plotly_chart_with_png_export(
+        fig=fig,
+        chart_key="adv_nev_range_distribution",
+        filename_prefix="nev_range_distribution",
+    )
+    if metric_mode == "23-25增长变化":
+        st.caption("当前口径：按 2025-2023 销量变化聚合分布。")
+    else:
+        st.caption(f"当前口径：{selection.start_label}~{selection.end_label} 销量。")
+    stack_caption = "Model" if stack_by_model else "Powertrain"
+    st.caption(f"当前堆叠维度：{stack_caption}")
+
+
+def render_chart_nev_capacity_vs_msrp(
+    filtered_df: pd.DataFrame,
+    columns: ColumnRegistry,
+    time_axis: TimeAxis | None,
+    global_time_selection: TimeSelection | None,
+) -> None:
+    selection, selected_columns = get_time_selection_for_chart(
+        chart_name="NEV电池容量与MSRP",
+        key_prefix="adv_nev_capacity_msrp",
+        time_axis=time_axis,
+        global_time_selection=global_time_selection,
+    )
+    if not selection:
+        return
+    if not columns.powertrain:
+        st.warning("缺少动总字段，无法绘制电池容量与 MSRP 关系图。")
+        return
+
+    capacity_col, capacity_values = prepare_numeric_axis(
+        filtered_df,
+        list(BATTERY_CAPACITY_CANDIDATES),
+    )
+    msrp_col, msrp_values = prepare_numeric_axis(
+        filtered_df,
+        list(MSRP_CANDIDATES),
+    )
+    if not capacity_col:
+        st.warning(
+            "NEV 未匹配到电池容量字段，请确认表头为 Battery kwh。"
+        )
+        return
+    if not msrp_col:
+        st.warning("NEV 未匹配到 MSRP 字段，无法绘制关系图。")
+        return
+
+    sales_ref = sum_sales_for_columns(filtered_df, selected_columns)
+    model_series = (
+        normalize_series(filtered_df[columns.model])
+        if columns.model
+        else pd.Series("未标注", index=filtered_df.index)
+    )
+    brand_series = (
+        normalize_series(filtered_df[columns.make])
+        if columns.make
+        else pd.Series("全部品牌", index=filtered_df.index)
+    )
+    nev_df = pd.DataFrame(
+        {
+            "Model": model_series,
+            "Brand": brand_series,
+            "Powertrain": normalize_powertrain_for_nev(
+                filtered_df[columns.powertrain]
+            ),
+            "BatteryCapacity": capacity_values,
+            "MSRP": msrp_values,
+            "Sales": pd.to_numeric(sales_ref, errors="coerce").fillna(0.0),
+        }
+    )
+
+    nev_pt_rows = int(
+        nev_df["Powertrain"].isin(["BEV", "PHEV"]).sum()
+    )
+
+    nev_df = nev_df.dropna(subset=["BatteryCapacity", "MSRP"])
+    nev_df = nev_df[
+        (nev_df["BatteryCapacity"] > 0)
+        & (nev_df["MSRP"] > 0)
+    ]
+    if nev_df.empty:
+        if nev_pt_rows > 0:
+            st.warning(
+                "已找到 BEV/PHEV 记录，但 Battery kwh 或 MSRP 在当前筛选下为空或非正值。"
+            )
+            return
+        show_no_data("NEV电池容量与MSRP")
+        return
+
+    available_pt = set(nev_df["Powertrain"].astype(str))
+    nev_options = [
+        powertrain
+        for powertrain in ["PHEV", "BEV"]
+        if powertrain in available_pt
+    ]
+    if not nev_options:
+        st.info("当前筛选下无 BEV/PHEV 数据。")
+        return
+
+    reset_col_1, reset_col_2 = st.columns([1, 2])
+    with reset_col_1:
+        reset_controls = st.button(
+            "重置参数",
+            key="adv_nev_capacity_reset_controls",
+            width="stretch",
+        )
+    with reset_col_2:
+        st.caption("重置到默认：BEV/PHEV + TopN120。")
+
+    if reset_controls:
+        st.session_state["adv_nev_capacity_powertrain"] = list(nev_options)
+        st.session_state["adv_nev_capacity_topn"] = 120
+        st.session_state["adv_nev_capacity_split_brand"] = False
+
+    top_col_1, top_col_2, top_col_3 = st.columns([1, 1, 1])
+    with top_col_1:
+        selected_powertrains = st.multiselect(
+            "动总类型",
+            options=nev_options,
+            default=nev_options,
+            key="adv_nev_capacity_powertrain",
+        )
+    with top_col_2:
+        top_n = int(
+            st.slider(
+                "TopN（按销量）",
+                min_value=20,
+                max_value=300,
+                value=120,
+                step=10,
+                key="adv_nev_capacity_topn",
+            )
+        )
+    with top_col_3:
+        split_by_brand = st.checkbox(
+            "按品牌分面",
+            value=False,
+            key="adv_nev_capacity_split_brand",
+            disabled=not bool(columns.make),
+        )
+
+    if not selected_powertrains:
+        st.info("请至少选择一个动总类型。")
+        return
+
+    nev_df = nev_df[nev_df["Powertrain"].isin(selected_powertrains)]
+    if nev_df.empty:
+        show_no_data("NEV电池容量与MSRP")
+        return
+
+    model_df = nev_df.groupby(
+        ["Model", "Brand", "Powertrain"],
+        as_index=False,
+    ).agg(
+        BatteryCapacity=("BatteryCapacity", "median"),
+        MSRP=("MSRP", "median"),
+        Sales=("Sales", "sum"),
+    )
+    model_df = model_df.sort_values("Sales", ascending=False).head(top_n)
+    if model_df.empty:
+        show_no_data("NEV电池容量与MSRP")
+        return
+
+    scatter_kwargs: dict[str, Any] = {
+        "size_max": 45,
+        "color_discrete_map": {
+            key: value
+            for key, value in POWERTRAIN_COLOR_MAP.items()
+            if key in selected_powertrains
+        },
+    }
+    if split_by_brand:
+        top_brands = (
+            model_df.groupby("Brand", as_index=False)["Sales"]
+            .sum()
+            .sort_values("Sales", ascending=False)
+            .head(6)["Brand"]
+            .tolist()
+        )
+        model_df = model_df[model_df["Brand"].isin(top_brands)]
+        scatter_kwargs["facet_col"] = "Brand"
+        scatter_kwargs["facet_col_wrap"] = 3
+        scatter_kwargs["category_orders"] = {"Brand": top_brands}
+
+    fig = px.scatter(
+        model_df,
+        x="BatteryCapacity",
+        y="MSRP",
+        size="Sales",
+        color="Powertrain",
+        hover_name="Model",
+        hover_data={
+            "Brand": True,
+            "BatteryCapacity": ":,.1f",
+            "MSRP": ":,.0f",
+            "Sales": ":,.0f",
+        },
+        title="NEV Battery Capacity vs MSRP",
+        **scatter_kwargs,
+    )
+    if split_by_brand:
+        fig.for_each_annotation(
+            lambda annotation: annotation.update(
+                text=annotation.text.replace("Brand=", "")
+            )
+        )
+    fig = style_figure(fig)
+    fig.update_xaxes(title=f"Battery kwh（{capacity_col}）")
+    fig.update_yaxes(title=f"MSRP（{msrp_col}）")
+    render_plotly_chart_with_png_export(
+        fig=fig,
+        chart_key="adv_nev_capacity_msrp",
+        filename_prefix="nev_capacity_msrp",
+    )
+
+    corr_value = model_df["BatteryCapacity"].corr(model_df["MSRP"])
+    if pd.notna(corr_value):
+        st.caption(
+            f"容量-价格相关系数（TopN）：{float(corr_value):.3f}"
+        )
+    st.caption(
+        f"当前口径：{selection.start_label}~{selection.end_label} 销量。"
+    )
 
 
 def render_chart_seasonality_heatmap(
@@ -2368,7 +3970,7 @@ def render_chart_seasonality_heatmap(
     month_total = month_total.dropna(subset=["Date"])
 
     if month_total.empty:
-        st.info("当前筛选下无可用于热力图的月度数据。")
+        show_no_data("季节性热力图")
         return
 
     month_total["Year"] = month_total["Date"].dt.year.astype(str)
@@ -2400,7 +4002,11 @@ def render_chart_seasonality_heatmap(
         color_continuous_scale="Blues",
     )
     fig_heatmap.update_layout(template="plotly_white")
-    st.plotly_chart(fig_heatmap, width="stretch", config=PLOT_CONFIG)
+    render_plotly_chart_with_png_export(
+        fig=fig_heatmap,
+        chart_key="adv_seasonality_heatmap",
+        filename_prefix="seasonality_heatmap",
+    )
 
 
 def render_advanced_charts(
@@ -2418,6 +4024,13 @@ def render_advanced_charts(
                     "powertrain_bubble",
                     "seasonality_heatmap",
                     "segment_share_length",
+                ],
+            },
+            "nev_analysis": {
+                "label": "NEV分析",
+                "charts": [
+                    "nev_range_distribution",
+                    "nev_capacity_msrp",
                 ],
             },
             "price_value": {
@@ -2454,6 +4067,26 @@ def render_advanced_charts(
                 "help": "看月度销量季节性与年度内波动强弱。",
                 "render": lambda: render_chart_seasonality_heatmap(
                     filtered_df,
+                    time_axis,
+                    global_time_selection,
+                ),
+            },
+            "nev_range_distribution": {
+                "label": "NEV续航分布",
+                "help": "BEV/PHEV 续航分布（支持TopN、23-25增长口径与品牌分面）。",
+                "render": lambda: render_chart_nev_range_distribution(
+                    filtered_df,
+                    columns,
+                    time_axis,
+                    global_time_selection,
+                ),
+            },
+            "nev_capacity_msrp": {
+                "label": "容量 vs MSRP",
+                "help": "查看 BEV/PHEV 电池容量与 MSRP 的关系。",
+                "render": lambda: render_chart_nev_capacity_vs_msrp(
+                    filtered_df,
+                    columns,
                     time_axis,
                     global_time_selection,
                 ),
@@ -2764,35 +4397,66 @@ def render_detail_preview(
                     f"仅显示前 {preview_rows:,} 行，完整结果共 {len(filtered_df):,} 行。"
                 )
 
-            st.download_button(
-                "下载当前预览 CSV",
-                data=preview_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name="jato_preview.csv",
-                mime="text/csv",
-                width="content",
-            )
+            download_df = preview_df.head(CSV_DOWNLOAD_MAX_ROWS)
+            csv_bytes = download_df.to_csv(index=False).encode("utf-8-sig")
+            csv_size_bytes = len(csv_bytes)
+
+            if len(preview_df) > CSV_DOWNLOAD_MAX_ROWS:
+                st.caption(
+                    f"下载将截断为前 {CSV_DOWNLOAD_MAX_ROWS:,} 行（安全阈值）。"
+                )
+
+            if csv_size_bytes > CSV_DOWNLOAD_MAX_BYTES:
+                st.warning(
+                    "CSV 文件超过安全阈值，已禁用下载；"
+                    "请缩小筛选范围、减少显示列或降低预览行数。"
+                )
+            else:
+                st.download_button(
+                    "下载当前预览 CSV",
+                    data=csv_bytes,
+                    file_name="jato_preview.csv",
+                    mime="text/csv",
+                    width="content",
+                )
 
 
 def render_dashboard(
     filtered_df: pd.DataFrame,
     columns: ColumnRegistry,
     selections: FilterSelections,
+    detail_df: pd.DataFrame | None = None,
 ) -> None:
+    render_timing: dict[str, float] = {}
+
+    stage_start = time.perf_counter()
     render_header_card(filtered_df)
+    render_timing["Header"] = time.perf_counter() - stage_start
+
+    stage_start = time.perf_counter()
     time_axis = build_time_axis(filtered_df)
     if time_axis:
         global_time_selection = render_global_time_controls(time_axis)
     else:
         global_time_selection = None
-        st.warning("未识别到时间列，图表时间轴功能不可用。")
+        show_time_axis_unavailable("时间轴功能")
+    render_timing["Time Controls"] = time.perf_counter() - stage_start
 
-    render_kpi_cards(filtered_df, columns)
+    stage_start = time.perf_counter()
+    render_kpi_cards(
+        filtered_df,
+        columns,
+        time_axis,
+        global_time_selection,
+    )
     controls = render_line_mode_controls(columns)
     series_order = get_series_order(filtered_df, controls)
     render_top_n_others_detail(filtered_df, controls, series_order)
+    render_timing["KPI & Controls"] = time.perf_counter() - stage_start
 
     year_tab, month_tab = st.tabs(["📅 年度趋势", "🌙 月度细化"])
     with year_tab:
+        stage_start = time.perf_counter()
         render_year_tab(
             filtered_df,
             controls,
@@ -2800,8 +4464,10 @@ def render_dashboard(
             time_axis,
             global_time_selection,
         )
+        render_timing["Year Tab"] = time.perf_counter() - stage_start
 
     with month_tab:
+        stage_start = time.perf_counter()
         render_month_tab(
             filtered_df,
             controls,
@@ -2809,12 +4475,27 @@ def render_dashboard(
             time_axis,
             global_time_selection,
         )
+        render_timing["Month Tab"] = time.perf_counter() - stage_start
 
+    stage_start = time.perf_counter()
     render_advanced_charts(
         filtered_df,
         columns,
         time_axis,
         global_time_selection,
     )
+    render_timing["Advanced Charts"] = time.perf_counter() - stage_start
 
-    render_detail_preview(filtered_df, columns)
+    preview_df = detail_df if detail_df is not None else filtered_df
+    stage_start = time.perf_counter()
+    render_detail_preview(preview_df, columns)
+    render_timing["Detail Preview"] = time.perf_counter() - stage_start
+
+    with st.expander("⏱️ 图表渲染耗时（本次）", expanded=False):
+        timing_df = pd.DataFrame(
+            {
+                "模块": list(render_timing.keys()),
+                "耗时(s)": [round(value, 3) for value in render_timing.values()],
+            }
+        ).sort_values("耗时(s)", ascending=False)
+        st.dataframe(timing_df, width="stretch", hide_index=True)

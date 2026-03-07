@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "1.0",
+  "sourceFile": "01_RAW_DATA/JATO-2026.1.xlsx",
+  "sourceFileBytes": 308685357,
+  "sourceFileMtimeNs": 1772731233180306823,
+  "sheetName": "Data Export",
+  "partitionCols": [
+    "国家"
+  ]
+}

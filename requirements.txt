@@ -1,5 +1,6 @@
 streamlit==1.54.0
 pandas==2.3.3
 plotly==6.5.2
+kaleido==1.1.0
 pyarrow==23.0.1
 streamlit-sortables==0.3.1

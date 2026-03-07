@@ -1,15 +1,59 @@
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Literal, Optional, Sequence
 
 import pandas as pd
+import pyarrow.dataset as ds
 import streamlit as st
 
-from .config import MONTH_COL_PATTERN, YEAR_COL_PATTERN
+from .config import (
+    CACHE_MAX_ENTRIES_ANALYSIS,
+    CACHE_MAX_ENTRIES_DETAIL,
+    CACHE_MAX_ENTRIES_SCHEMA,
+    CACHE_MAX_ENTRIES_SIDEBAR,
+    CACHE_TTL_ANALYSIS_SECONDS,
+    CACHE_TTL_DETAIL_SECONDS,
+    CACHE_TTL_SCHEMA_SECONDS,
+    CACHE_TTL_SIDEBAR_SECONDS,
+    MONTH_COL_PATTERN,
+    YEAR_COL_PATTERN,
+)
 from .models import ColumnRegistry
 
 
 def get_project_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def get_dataset_version_token(parquet_path: str) -> str:
+    path = Path(parquet_path)
+    if not path.exists():
+        raise FileNotFoundError(f"未找到数据文件: {path}")
+
+    if path.is_file():
+        stat = path.stat()
+        return f"file:{stat.st_mtime_ns}:{stat.st_size}"
+
+    manifest_path = path / "manifest.json"
+    if manifest_path.exists():
+        stat = manifest_path.stat()
+        return f"manifest:{stat.st_mtime_ns}:{stat.st_size}"
+
+    parquet_files = sorted(path.rglob("*.parquet"))
+    if not parquet_files:
+        stat = path.stat()
+        return f"dir:{stat.st_mtime_ns}"
+
+    latest_mtime_ns = 0
+    total_size = 0
+    for file_path in parquet_files:
+        stat = file_path.stat()
+        total_size += stat.st_size
+        latest_mtime_ns = max(latest_mtime_ns, stat.st_mtime_ns)
+
+    return (
+        f"dataset:{len(parquet_files)}:"
+        f"{latest_mtime_ns}:{total_size}"
+    )
 
 
 def get_year_columns(df: pd.DataFrame) -> list[str]:
@@ -21,12 +65,70 @@ def get_year_columns(df: pd.DataFrame) -> list[str]:
     return sorted(year_columns)
 
 
+def get_year_columns_from_names(column_names: Sequence[str]) -> list[str]:
+    year_columns = [
+        str(column).strip()
+        for column in column_names
+        if YEAR_COL_PATTERN.fullmatch(str(column).strip())
+    ]
+    return sorted(year_columns)
+
+
 def get_month_columns(df: pd.DataFrame) -> list[str]:
     return [
         column
         for column in df.columns
         if MONTH_COL_PATTERN.match(str(column).strip())
     ]
+
+
+def get_month_columns_from_names(column_names: Sequence[str]) -> list[str]:
+    month_columns = [
+        str(column).strip()
+        for column in column_names
+        if MONTH_COL_PATTERN.match(str(column).strip())
+    ]
+
+    def parse_month(name: str):
+        return pd.to_datetime(
+            str(name),
+            format="%Y %b",
+            errors="coerce",
+        )
+
+    return sorted(
+        month_columns,
+        key=lambda name: (
+            parse_month(name).toordinal()
+            if pd.notna(parse_month(name))
+            else float("inf"),
+            name,
+        ),
+    )
+
+
+def resolve_existing_columns(
+    column_names: Sequence[str],
+    candidates: Sequence[str],
+) -> list[str]:
+    available_map = {
+        str(column).strip().lower(): str(column).strip()
+        for column in column_names
+    }
+
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate).strip().lower()
+        if not key or key not in available_map:
+            continue
+        actual = available_map[key]
+        if actual in seen:
+            continue
+        resolved.append(actual)
+        seen.add(actual)
+
+    return resolved
 
 
 def optimize_dataframe_types(df: pd.DataFrame) -> pd.DataFrame:
@@ -68,14 +170,188 @@ def optimize_dataframe_types(df: pd.DataFrame) -> pd.DataFrame:
     return optimized
 
 
-@st.cache_data(show_spinner=False)
-def load_full_data(parquet_path: str) -> pd.DataFrame:
+@st.cache_data(
+    show_spinner=False,
+    ttl=CACHE_TTL_ANALYSIS_SECONDS,
+    max_entries=CACHE_MAX_ENTRIES_ANALYSIS,
+)
+def load_full_data(
+    parquet_path: str,
+    dataset_version: str | None = None,
+) -> pd.DataFrame:
     path = Path(parquet_path)
     if not path.exists():
         raise FileNotFoundError(f"未找到数据文件: {path}")
 
-    dataframe = pd.read_parquet(path)
+    if path.is_file():
+        dataframe = pd.read_parquet(path)
+    else:
+        dataset = open_parquet_dataset(path)
+        dataframe = dataset.to_table().to_pandas()
     return optimize_dataframe_types(dataframe)
+
+
+def open_parquet_dataset(path: Path) -> ds.Dataset:
+    if path.is_file():
+        return ds.dataset(path, format="parquet")
+
+    return ds.dataset(
+        path,
+        format="parquet",
+        partitioning="hive",
+        exclude_invalid_files=True,
+    )
+
+
+@st.cache_data(
+    show_spinner=False,
+    ttl=CACHE_TTL_SCHEMA_SECONDS,
+    max_entries=CACHE_MAX_ENTRIES_SCHEMA,
+)
+def load_column_names(
+    parquet_path: str,
+    dataset_version: str | None = None,
+) -> list[str]:
+    path = Path(parquet_path)
+    if not path.exists():
+        raise FileNotFoundError(f"未找到数据文件: {path}")
+
+    dataset = open_parquet_dataset(path)
+    return [str(name).strip() for name in dataset.schema.names]
+
+
+def resolve_columns_from_names(column_names: Sequence[str]) -> ColumnRegistry:
+    dataframe = pd.DataFrame(columns=list(column_names))
+    return resolve_columns(dataframe)
+
+
+def build_arrow_filter_expression(
+    filter_payload: Sequence[tuple[str, Sequence[str]]],
+) -> ds.Expression | None:
+    expression = None
+    for column, values in filter_payload:
+        normalized_column = str(column).strip()
+        normalized_values = [
+            str(value)
+            for value in values
+            if str(value).strip()
+        ]
+        if not normalized_column or not normalized_values:
+            continue
+
+        predicate = ds.field(normalized_column).isin(normalized_values)
+        if expression is None:
+            expression = predicate
+        else:
+            expression = expression & predicate
+
+    return expression
+
+
+def _load_dataset_slice_impl(
+    parquet_path: str,
+    columns: tuple[str, ...] | None = None,
+    filter_payload: tuple[tuple[str, tuple[str, ...]], ...] = (),
+) -> pd.DataFrame:
+    path = Path(parquet_path)
+    if not path.exists():
+        raise FileNotFoundError(f"未找到数据文件: {path}")
+
+    selected_columns = list(columns) if columns else None
+    dataset = open_parquet_dataset(path)
+    filter_expression = build_arrow_filter_expression(filter_payload)
+    table = dataset.to_table(
+        columns=selected_columns,
+        filter=filter_expression,
+    )
+    dataframe = table.to_pandas()
+
+    return optimize_dataframe_types(dataframe)
+
+
+@st.cache_data(
+    show_spinner=False,
+    ttl=CACHE_TTL_SIDEBAR_SECONDS,
+    max_entries=CACHE_MAX_ENTRIES_SIDEBAR,
+)
+def _load_dataset_slice_sidebar_cached(
+    parquet_path: str,
+    columns: tuple[str, ...] | None = None,
+    filter_payload: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    dataset_version: str | None = None,
+) -> pd.DataFrame:
+    return _load_dataset_slice_impl(
+        parquet_path=parquet_path,
+        columns=columns,
+        filter_payload=filter_payload,
+    )
+
+
+@st.cache_data(
+    show_spinner=False,
+    ttl=CACHE_TTL_ANALYSIS_SECONDS,
+    max_entries=CACHE_MAX_ENTRIES_ANALYSIS,
+)
+def _load_dataset_slice_analysis_cached(
+    parquet_path: str,
+    columns: tuple[str, ...] | None = None,
+    filter_payload: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    dataset_version: str | None = None,
+) -> pd.DataFrame:
+    return _load_dataset_slice_impl(
+        parquet_path=parquet_path,
+        columns=columns,
+        filter_payload=filter_payload,
+    )
+
+
+@st.cache_data(
+    show_spinner=False,
+    ttl=CACHE_TTL_DETAIL_SECONDS,
+    max_entries=CACHE_MAX_ENTRIES_DETAIL,
+)
+def _load_dataset_slice_detail_cached(
+    parquet_path: str,
+    columns: tuple[str, ...] | None = None,
+    filter_payload: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    dataset_version: str | None = None,
+) -> pd.DataFrame:
+    return _load_dataset_slice_impl(
+        parquet_path=parquet_path,
+        columns=columns,
+        filter_payload=filter_payload,
+    )
+
+
+def load_dataset_slice(
+    parquet_path: str,
+    columns: tuple[str, ...] | None = None,
+    filter_payload: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    dataset_version: str | None = None,
+    cache_scope: Literal["sidebar", "analysis", "detail"] = "analysis",
+) -> pd.DataFrame:
+    if cache_scope == "sidebar":
+        return _load_dataset_slice_sidebar_cached(
+            parquet_path=parquet_path,
+            columns=columns,
+            filter_payload=filter_payload,
+            dataset_version=dataset_version,
+        )
+
+    if cache_scope == "detail":
+        return _load_dataset_slice_detail_cached(
+            parquet_path=parquet_path,
+            columns=columns,
+            filter_payload=filter_payload,
+            dataset_version=dataset_version,
+        )
+
+    return _load_dataset_slice_analysis_cached(
+        parquet_path=parquet_path,
+        columns=columns,
+        filter_payload=filter_payload,
+        dataset_version=dataset_version,
+    )
 
 
 def find_column(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:

@@ -1,0 +1,53 @@
+{
+  "generatedAtUtc": "2026-03-07T19:04:00.124720+00:00",
+  "jobId": "refresh-3a6f5abe",
+  "jobStatus": "skipped_unchanged",
+  "input": {
+    "excelInput": null,
+    "resolvedExcelInput": "01_RAW_DATA/JATO-2026.1.xlsx",
+    "rawDir": "01_RAW_DATA",
+    "sheet": "Data Export",
+    "partitionCols": [
+      "国家"
+    ]
+  },
+  "outputs": {
+    "fullParquet": "04_Processed_data/jato_full_archive.parquet",
+    "fullManifest": "04_Processed_data/manifest.json",
+    "partitionDataset": "04_Processed_data/partitioned_dataset_v1",
+    "partitionManifest": "04_Processed_data/partitioned_dataset_v1/manifest.json"
+  },
+  "stepDurations": {},
+  "fullManifest": {
+    "rows": 724501,
+    "columns": 91,
+    "schemaVersion": "1.1"
+  },
+  "partitionManifest": {
+    "rows": 724501,
+    "columns": 91,
+    "schemaVersion": "1.1",
+    "parquetFileCount": 15
+  },
+  "benchmark": null,
+  "incremental": {
+    "enabled": true,
+    "skipUnchanged": true,
+    "fingerprintPath": "04_Processed_data/dataset_fingerprint.json",
+    "fingerprintMatched": true,
+    "fingerprintUpdated": false,
+    "regression": {
+      "previousRows": 724501,
+      "currentRows": 724501,
+      "rowDelta": 0,
+      "changedRows": 0,
+      "previousPartitionCount": 15,
+      "currentPartitionCount": 15,
+      "changedPartitionCount": 0,
+      "addedPartitionDirectories": [],
+      "updatedPartitionDirectories": [],
+      "removedPartitionDirectories": []
+    }
+  },
+  "jobElapsedSeconds": 0.001
+}

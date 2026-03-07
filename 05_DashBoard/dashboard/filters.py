@@ -5,6 +5,99 @@ from .data import apply_filter_rules, dedupe_preserve_order, unique_options
 from .models import ColumnRegistry, FilterSelections
 
 
+FILTER_KEY_PREFIXES = [
+    "country",
+    "segment",
+    "powertrain",
+    "make",
+    "model",
+    "version",
+]
+
+QUERY_PARAM_MAP = {
+    "country": "countries",
+    "segment": "segments",
+    "powertrain": "powertrains",
+    "make": "makes",
+    "model": "models",
+    "version": "versions",
+}
+
+
+def parse_query_param_values(raw_value) -> list[str]:
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, list):
+        text = ",".join(str(item) for item in raw_value)
+    else:
+        text = str(raw_value)
+    return [
+        item.strip()
+        for item in text.split(",")
+        if item.strip()
+    ]
+
+
+def hydrate_filter_states_from_query_params_once() -> None:
+    hydrated_key = "_filters_query_hydrated"
+    if st.session_state.get(hydrated_key):
+        return
+
+    for prefix, query_key in QUERY_PARAM_MAP.items():
+        values = parse_query_param_values(
+            st.query_params.get(query_key)
+        )
+        if values:
+            st.session_state[f"{prefix}_selected"] = values
+        if f"{prefix}_query" not in st.session_state:
+            st.session_state[f"{prefix}_query"] = ""
+
+    st.session_state[hydrated_key] = True
+
+
+def sync_query_params_from_selections(
+    selections: FilterSelections,
+) -> None:
+    target_map = {
+        "countries": ",".join(selections.countries),
+        "segments": ",".join(selections.segments),
+        "powertrains": ",".join(selections.powertrains),
+        "makes": ",".join(selections.makes),
+        "models": ",".join(selections.models),
+        "versions": ",".join(selections.versions),
+    }
+    target_map = {
+        key: value
+        for key, value in target_map.items()
+        if value
+    }
+
+    current_map = {
+        key: str(st.query_params.get(key))
+        for key in target_map.keys()
+    }
+
+    has_extra_keys = any(
+        key in st.query_params and key not in target_map
+        for key in QUERY_PARAM_MAP.values()
+    )
+
+    if (current_map == target_map) and not has_extra_keys:
+        return
+
+    st.query_params.clear()
+    for key, value in target_map.items():
+        st.query_params[key] = value
+
+
+def reset_all_filter_states() -> None:
+    for prefix in FILTER_KEY_PREFIXES:
+        st.session_state[f"{prefix}_selected"] = []
+        st.session_state[f"{prefix}_query"] = ""
+    st.query_params.clear()
+    st.session_state["_filters_query_hydrated"] = True
+
+
 def render_search_select_filter(
     label: str,
     options: list[str],
@@ -95,8 +188,19 @@ def render_sidebar_filters(
     df: pd.DataFrame,
     columns: ColumnRegistry,
 ) -> tuple[pd.DataFrame, FilterSelections]:
+    hydrate_filter_states_from_query_params_once()
+
     st.sidebar.header("🎛️ 全维度筛选")
     st.sidebar.caption("每个筛选器均支持：搜索 + 多选 + 全选搜索结果")
+    with st.sidebar.container(border=True):
+        reset_requested = st.button(
+            "重置全部筛选",
+            key="filters_reset_all",
+            width="stretch",
+        )
+    if reset_requested:
+        reset_all_filter_states()
+        st.rerun()
 
     if columns.country:
         countries = render_search_select_filter(
@@ -194,4 +298,22 @@ def render_sidebar_filters(
         models=models,
         versions=versions,
     )
+    sync_query_params_from_selections(selections)
+
+    with st.sidebar.container(border=True):
+        st.markdown("**📌 筛选摘要**")
+        st.caption(
+            "｜".join(
+                [
+                    f"国家 {len(countries):,}",
+                    f"细分 {len(segments):,}",
+                    f"动总 {len(powertrains):,}",
+                    f"品牌 {len(makes):,}",
+                    f"Model {len(models):,}",
+                    f"Version {len(versions):,}",
+                ]
+            )
+        )
+        st.caption(f"当前筛后行数：{len(filtered_df):,}")
+
     return filtered_df, selections
