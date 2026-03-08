@@ -1,7 +1,14 @@
-import pandas as pd
+from typing import Sequence
+
 import streamlit as st
 
-from .data import apply_filter_rules, dedupe_preserve_order, unique_options
+from .data import (
+    build_filter_signature,
+    dedupe_preserve_order,
+    load_distinct_options,
+    load_filtered_row_count,
+    normalize_filter_payload,
+)
 from .models import ColumnRegistry, FilterSelections
 
 
@@ -22,6 +29,11 @@ QUERY_PARAM_MAP = {
     "model": "models",
     "version": "versions",
 }
+
+FilterRule = tuple[str | None, Sequence[str]]
+ALLOW_GLOBAL_BRAND_HIERARCHY_KEY = (
+    "filters_allow_global_brand_hierarchy"
+)
 
 
 def parse_query_param_values(raw_value) -> list[str]:
@@ -184,10 +196,43 @@ def render_search_select_filter(
     return selected_values
 
 
+def build_filter_payload(
+    rules: Sequence[FilterRule],
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return normalize_filter_payload(
+        [
+            (column, values)
+            for column, values in rules
+            if column and values
+        ]
+    )
+
+
+def resolve_pushdown_options(
+    parquet_path: str,
+    dataset_version: str,
+    target_column: str | None,
+    rules: Sequence[FilterRule],
+) -> list[str]:
+    if not target_column:
+        return []
+
+    payload = build_filter_payload(rules)
+    signature = build_filter_signature(payload)
+    return load_distinct_options(
+        parquet_path=parquet_path,
+        column=target_column,
+        filter_payload=payload,
+        dataset_version=dataset_version,
+        filter_signature=signature,
+    )
+
+
 def render_sidebar_filters(
-    df: pd.DataFrame,
+    parquet_path: str,
+    dataset_version: str,
     columns: ColumnRegistry,
-) -> tuple[pd.DataFrame, FilterSelections]:
+) -> tuple[FilterSelections, int]:
     hydrate_filter_states_from_query_params_once()
 
     st.sidebar.header("🎛️ 全维度筛选")
@@ -203,9 +248,15 @@ def render_sidebar_filters(
         st.rerun()
 
     if columns.country:
+        country_options = resolve_pushdown_options(
+            parquet_path=parquet_path,
+            dataset_version=dataset_version,
+            target_column=columns.country,
+            rules=[],
+        )
         countries = render_search_select_filter(
             "国家",
-            unique_options(df, columns.country),
+            country_options,
             "country",
         )
     else:
@@ -213,9 +264,15 @@ def render_sidebar_filters(
         st.sidebar.warning("未找到 国家 字段")
 
     if columns.segment:
+        segment_options = resolve_pushdown_options(
+            parquet_path=parquet_path,
+            dataset_version=dataset_version,
+            target_column=columns.segment,
+            rules=[(columns.country, countries)],
+        )
         segments = render_search_select_filter(
             "细分市场",
-            unique_options(df, columns.segment),
+            segment_options,
             "segment",
         )
     else:
@@ -223,72 +280,112 @@ def render_sidebar_filters(
         st.sidebar.warning("未找到 细分市场 字段")
 
     if columns.powertrain:
+        powertrain_options = resolve_pushdown_options(
+            parquet_path=parquet_path,
+            dataset_version=dataset_version,
+            target_column=columns.powertrain,
+            rules=[
+                (columns.country, countries),
+                (columns.segment, segments),
+            ],
+        )
         powertrains = render_search_select_filter(
             "动总规整",
-            unique_options(df, columns.powertrain),
+            powertrain_options,
             "powertrain",
         )
     else:
         powertrains = []
         st.sidebar.warning("未找到 动总规整 字段")
 
-    base_df = apply_filter_rules(
-        df,
-        [
-            (columns.country, countries),
-            (columns.segment, segments),
-            (columns.powertrain, powertrains),
-        ],
-    )
+    allow_global_brand_hierarchy = bool(countries)
+    if not countries:
+        with st.sidebar.container(border=True):
+            st.caption(
+                "国家为空时默认跳过品牌/Model/Version候选加载，"
+                "以减少切换国家时的中间态等待。"
+            )
+            allow_global_brand_hierarchy = st.toggle(
+                "无国家时仍加载品牌/Model/Version（较慢）",
+                value=False,
+                key=ALLOW_GLOBAL_BRAND_HIERARCHY_KEY,
+                help=(
+                    "关闭可提升“先删后加国家”场景速度；"
+                    "开启可在无国家筛选时做全量品牌层级筛选。"
+                ),
+            )
 
-    if columns.make:
+    if columns.make and (countries or allow_global_brand_hierarchy):
+        make_options = resolve_pushdown_options(
+            parquet_path=parquet_path,
+            dataset_version=dataset_version,
+            target_column=columns.make,
+            rules=[
+                (columns.country, countries),
+                (columns.segment, segments),
+                (columns.powertrain, powertrains),
+            ],
+        )
         makes = render_search_select_filter(
             "品牌",
-            unique_options(base_df, columns.make),
+            make_options,
             "make",
         )
     else:
         makes = []
-        st.sidebar.warning("未找到 Make/品牌 字段，已跳过品牌筛选")
+        if columns.make:
+            st.session_state["make_selected"] = []
+            st.session_state["model_selected"] = []
+            st.session_state["version_selected"] = []
+        else:
+            st.sidebar.warning("未找到 Make/品牌 字段，已跳过品牌筛选")
 
-    model_source = apply_filter_rules(base_df, [(columns.make, makes)])
-    if columns.model:
+    if columns.model and (countries or allow_global_brand_hierarchy):
+        model_options = resolve_pushdown_options(
+            parquet_path=parquet_path,
+            dataset_version=dataset_version,
+            target_column=columns.model,
+            rules=[
+                (columns.country, countries),
+                (columns.segment, segments),
+                (columns.powertrain, powertrains),
+                (columns.make, makes),
+            ],
+        )
         models = render_search_select_filter(
             "Model",
-            unique_options(model_source, columns.model),
+            model_options,
             "model",
             max_options=800,
         )
     else:
         models = []
-        st.sidebar.warning("未找到 Model 字段，已跳过 Model 筛选")
+        if not columns.model:
+            st.sidebar.warning("未找到 Model 字段，已跳过 Model 筛选")
 
-    version_source = apply_filter_rules(
-        base_df,
-        [
-            (columns.make, makes),
-            (columns.model, models),
-        ],
-    )
-    if columns.version:
+    if columns.version and (countries or allow_global_brand_hierarchy):
+        version_options = resolve_pushdown_options(
+            parquet_path=parquet_path,
+            dataset_version=dataset_version,
+            target_column=columns.version,
+            rules=[
+                (columns.country, countries),
+                (columns.segment, segments),
+                (columns.powertrain, powertrains),
+                (columns.make, makes),
+                (columns.model, models),
+            ],
+        )
         versions = render_search_select_filter(
             "Version name",
-            unique_options(version_source, columns.version),
+            version_options,
             "version",
             max_options=500,
         )
     else:
         versions = []
-        st.sidebar.warning("未找到 Version name 字段，已跳过该筛选")
-
-    filtered_df = apply_filter_rules(
-        base_df,
-        [
-            (columns.make, makes),
-            (columns.model, models),
-            (columns.version, versions),
-        ],
-    )
+        if not columns.version:
+            st.sidebar.warning("未找到 Version name 字段，已跳过该筛选")
 
     selections = FilterSelections(
         countries=countries,
@@ -299,6 +396,24 @@ def render_sidebar_filters(
         versions=versions,
     )
     sync_query_params_from_selections(selections)
+
+    summary_payload = build_filter_payload(
+        [
+            (columns.country, countries),
+            (columns.segment, segments),
+            (columns.powertrain, powertrains),
+            (columns.make, makes),
+            (columns.model, models),
+            (columns.version, versions),
+        ]
+    )
+    summary_signature = build_filter_signature(summary_payload)
+    filtered_row_count = load_filtered_row_count(
+        parquet_path=parquet_path,
+        filter_payload=summary_payload,
+        dataset_version=dataset_version,
+        filter_signature=summary_signature,
+    )
 
     with st.sidebar.container(border=True):
         st.markdown("**📌 筛选摘要**")
@@ -314,6 +429,6 @@ def render_sidebar_filters(
                 ]
             )
         )
-        st.caption(f"当前筛后行数：{len(filtered_df):,}")
+        st.caption(f"当前筛后行数：{filtered_row_count:,}")
 
-    return filtered_df, selections
+    return selections, filtered_row_count

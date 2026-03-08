@@ -1,4 +1,4 @@
-# JATO 数据处理 Pipeline（四件套落地版）
+# JATO 数据处理 Pipeline（主链路 + 增量入库，合并版）
 
 > 文档定位：数据处理 Pipeline 的标准执行手册（Raw -> ETL -> 分区 -> 刷新）。
 > 返回总览：[ROADMAP（总览导航）](./ROADMAP.md)
@@ -169,7 +169,7 @@ python 03_Scripts/run_data_refresh_job.py \
 
 推荐做法：将两份文件放入 `01_RAW_DATA/`，启用多文件合并。
 
-1) 自动合并 raw 目录下全部 xlsx：
+1. 自动合并 raw 目录下全部 xlsx：
 
 ```bash
 python 03_Scripts/run_data_refresh_job.py \
@@ -179,7 +179,7 @@ python 03_Scripts/run_data_refresh_job.py \
   --skip-benchmark
 ```
 
-2) 若存在跨文件重复记录，增加去重键（后出现记录优先）：
+1. 若存在跨文件重复记录，增加去重键（后出现记录优先）：
 
 ```bash
 python 03_Scripts/run_data_refresh_job.py \
@@ -190,7 +190,7 @@ python 03_Scripts/run_data_refresh_job.py \
   --skip-benchmark
 ```
 
-3) 仅合并指定文件（避免误读 raw 目录全部文件）：
+1. 仅合并指定文件（避免误读 raw 目录全部文件）：
 
 ```bash
 python 03_Scripts/run_data_refresh_job.py \
@@ -207,7 +207,7 @@ python 03_Scripts/run_data_refresh_job.py \
 - 处理结果会写入 manifest 的 `mergeSummary`，包含 sourceFileCount 与 droppedDuplicateRows。
 - 建议命名补档文件为 `JATO-2026.1-P1.xlsx` / `JATO-2026.1-P2.xlsx`，避免长期使用 `(1)` 命名。
 
-4) 先做冲突拦截（发现冲突即失败，不落盘）：
+1. 先做冲突拦截（发现冲突即失败，不落盘）：
 
 ```bash
 python 03_Scripts/run_data_refresh_job.py \
@@ -219,7 +219,7 @@ python 03_Scripts/run_data_refresh_job.py \
   --skip-benchmark
 ```
 
-5) 冲突按“后文件覆盖前文件”自动处理（last_wins）：
+1. 冲突按“后文件覆盖前文件”自动处理（last_wins）：
 
 ```bash
 python 03_Scripts/run_data_refresh_job.py \
@@ -231,7 +231,7 @@ python 03_Scripts/run_data_refresh_job.py \
   --skip-benchmark
 ```
 
-6) 回滚行为说明：
+1. 回滚行为说明：
 
 - 默认开启“失败自动回滚”（全量 parquet、manifest、分区目录）。
 - 如需关闭，追加 `--no-rollback`。
@@ -327,3 +327,38 @@ python 03_Scripts/ci_smoke_check.py
   - 优先开启 `大数据模式（列裁剪 + 过滤下推）`
   - 明细预览不需要全字段时，关闭 `明细预览按需全列`
   - 缩小筛选范围（国家/细分/动总/品牌）后再看细粒度图表
+
+
+## 增量入库专题归档（合并自 `INCREMENTAL_INGESTION.md`）
+
+### 目标
+
+在不重跑全量 ETL 的前提下，仅处理新增/变更数据，缩短刷新时延并降低资源消耗。
+
+### 方案结论
+
+- 方案 A：基于快照对比（当前采用）
+  1. 输入快照生成指纹（文件哈希/大小/mtime 等）
+  2. 指纹未变时跳过 ETL 与分区重建
+  3. 变更时按业务键做增量对比，仅重写变更分区
+- 方案 B：事件日志（CDC 风格）
+  - 可做后续演进，当前未作为主路线
+
+### 里程碑状态
+
+- M1：输入快照指纹 + 变更检测跳过（已完成）
+- M2：按分区增量重写（已完成）
+- M3：冲突检测与回滚（v1 已落地）
+- P3：增量细粒度报告（v1 已落地）
+
+### 已落地能力摘要（2026-03-08）
+
+- `run_data_refresh_job.py` 支持：
+  - `--incremental`
+  - `--skip-unchanged`
+  - `--fingerprint`
+  - `--conflict-keys`
+  - `--conflict-policy`（`report_only` / `fail` / `last_wins`）
+  - `--no-rollback`、`--keep-backup`
+- `refresh_job_report.json` 已包含 `incremental` 与 `incremental.regression` 关键字段。
+- `build_partitioned_dataset.py --incremental` 已支持仅重写新增/变更分区，并清理已删除分区。

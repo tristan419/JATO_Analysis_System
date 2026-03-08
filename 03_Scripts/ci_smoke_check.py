@@ -4,6 +4,12 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYTHON_BIN = sys.executable
+PARTITIONED_DATASET_DIR = (
+    PROJECT_ROOT / "04_Processed_data/partitioned_dataset_v1"
+)
+FULL_PARQUET_FILE = (
+    PROJECT_ROOT / "04_Processed_data/jato_full_archive.parquet"
+)
 
 
 def run(command: list[str], cwd: Path | None = None) -> None:
@@ -35,6 +41,29 @@ def collect_python_files() -> list[str]:
     return sorted(set(files))
 
 
+def has_dashboard_dataset() -> bool:
+    has_partitioned = (
+        PARTITIONED_DATASET_DIR.exists()
+        and any(PARTITIONED_DATASET_DIR.rglob("*.parquet"))
+    )
+    has_full_parquet = FULL_PARQUET_FILE.exists()
+    return bool(has_partitioned or has_full_parquet)
+
+
+def run_regression_checks() -> None:
+    run([PYTHON_BIN, "03_Scripts/regression_csv_download_guardrails.py"])
+    run([PYTHON_BIN, "03_Scripts/regression_render_strategy_defaults.py"])
+    run([PYTHON_BIN, "03_Scripts/regression_time_selector_consistency.py"])
+
+    if has_dashboard_dataset():
+        run([PYTHON_BIN, "03_Scripts/regression_filter_option_pushdown.py"])
+    else:
+        print(
+            "⚠ 跳过 regression_filter_option_pushdown.py: "
+            "未发现 dashboard 数据集。"
+        )
+
+
 def main() -> None:
     files = collect_python_files()
     if not files:
@@ -46,6 +75,7 @@ def main() -> None:
     run([PYTHON_BIN, "03_Scripts/elt_worker.py", "--help"])
     run([PYTHON_BIN, "03_Scripts/build_partitioned_dataset.py", "--help"])
     run([PYTHON_BIN, "03_Scripts/run_data_refresh_job.py", "--help"])
+    run_regression_checks()
 
     print("✅ CI smoke checks passed")
 

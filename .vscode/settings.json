@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^/Users/litristan/Downloads/JATO_Analysis_System/\\.venv/bin/python 03_Scripts/benchmark_dashboard_load\\.py --repeats 2$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

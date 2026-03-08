@@ -1,135 +1,64 @@
-# JATO Analysis System Roadmap（总览与导航）
+# JATO Analysis System Roadmap（主索引）
 
-> 本文件是文档总入口：负责汇总阶段状态、执行优先级和跨文档导航。
-> 详细实现细节放在专题文档，本页仅保留摘要与跳转。
+> 本文件是 `Markdown_Readme/` 的唯一入口。
+> 目标：在保留历史改动与待办的前提下，保持文档架构精简、可维护、可追溯。
 
-## 1. 当前状态快照（2026-03-08）
+## 1. 维护原则
 
-- 项目阶段：`Phase 4（推进中）`
-- 已完成能力：
-	- 分区优先读取、过滤下推、列裁剪投影、版本令牌缓存失效
-	- URL 参数化筛选、慢图定位、空数据提示标准化、时间轴回退
-	- 数据刷新作业、历史归档清理、多用户缓存策略、CI smoke
-	- 多 Excel 合并输入（`--input-files` / `--merge-all-xlsx`）与可选去重（`--dedupe-keys`）
-	- 输入源集合指纹（补档新增/删除自动触发刷新）
-	- 导出能力评估（前置）已完成，导出图设置已落地
-	- PNG 导出全图接入、基础可观测日志接入
-- 推进中能力：
-	- 增量入库 `M3`（冲突检测与回滚已落地，P3 细粒度报告 v1 已落地）
-- 规划中能力：
-	- 对象存储直读与查询引擎接入
-	- 对象存储场景性能回归基线
+- `单索引`：仅保留一个总索引（本文件），不再拆分多级索引文档。
+- `保历史`：历史报告、评估记录、执行看板不删除。
+- `保待办`：所有待办统一保留在原看板文档中，不分散到新文件。
+- `低耦合`：专题文档只存专题信息，主索引只做导航与状态摘要。
 
-## 2. 文档架构（分层组织）
+## 2. 当前项目快照（2026-03-08）
 
-- `L0 总览层`：`ROADMAP.md`（状态看板 + 导航入口）
-- `L1 方案层`：数据、部署、可观测、增量、可视化专项方案
-- `L2 操作层`：操作模板、导出功能说明、评估记录
+- 阶段：`Phase 4`
+- 已完成：读取层优化、筛选下推、时间变换重构、PNG 导出与导出样式、基础可观测、CI smoke + nightly gate。
+- 进行中：增量入库后续能力与运维标准化。
+- 暂停：Round 3 剩余项按用户指令保留为待办，不继续实现。
 
-## 3. 系统与文档架构图
+## 3. 文档结构（精简版）
 
-```mermaid
-flowchart LR
-	A[Raw Excel 主包] --> B[03_Scripts / ETL]
-	A2[Raw Excel 补档包] --> B
-	B --> C[04_Processed_data / Full Parquet]
-	C --> D[Partitioned Dataset]
-	D --> E[05_DashBoard / Streamlit]
-	E --> F[导出图设置]
-	F --> G[PNG 导出]
+- `主索引`：`ROADMAP.md`
+- `专题文档`：按产品/实现/质量/运维直接分组，不再新增子索引文件。
 
-	K[Fingerprint: sourceFiles + mtime + size] -.变化检测.-> B
+## 4. Canonical 文档清单（全部 md）
 
-	H[OBSERVABILITY.md] -.日志与追踪规范.-> E
-	I[OPERATIONS_TEMPLATES.md] -.发布与回归模板.-> E
-	J[ROADMAP.md] -.总览与导航.-> H
-	J -.总览与导航.-> I
-```
+| 文档 | 领域 | 状态 | 说明 |
+| --- | --- | --- | --- |
+| `ROADMAP.md` | 总览 | Active | 唯一主索引 |
+| `JATO_GLOBAL_VISUALIZATION.md` | 产品/规划 | Active | 全球可视化总控方案 |
+| `DASHBOARD_PERFORMANCE_PREPLAN.md` | 产品/规划 | Active | 性能优化方案基线 |
+| `DASHBOARD_PERFORMANCE_TODOS_50.md` | 质量/执行 | Active | 性能与 Round 待办执行看板 |
+| `DASHBOARD_PERFORMANCE_PHASE_REPORT_20260308.md` | 质量/报告 | Active | 阶段报告与证据 |
+| `ETL.md` | 实现 | Active | 数据处理主链路与增量入库（合并版） |
+| `EXPORT_CHART_SETTINGS.md` | 实现 | Active | 图表导出设置与 PNG 选型（合并版） |
+| `DEPLOYMENT.md` | 运维/发布 | Active | 部署模板与容量建议 |
+| `OPERATIONS_TEMPLATES.md` | 运维/流程 | Active | 运维与发布模板（含日志与可观测，合并版） |
 
-## 4. 文档导航矩阵（点击跳转）
+## 5. 推荐阅读路径
 
-| 模块 | 内容摘要 | 文档 |
-|---|---|---|
-| 数据处理主链路 | Raw -> ETL -> 分区 -> 刷新作业全流程 | [ETL.md](./ETL.md) |
-| 增量入库 | M1/M2 已落地，M3 待推进 | [INCREMENTAL_INGESTION.md](./INCREMENTAL_INGESTION.md) |
-| 部署方案 | Streamlit Cloud / VM 部署与容量建议 | [DEPLOYMENT.md](./DEPLOYMENT.md) |
-| 可观测方案 | 日志字段、接入路径、脱敏与作业日志 | [OBSERVABILITY.md](./OBSERVABILITY.md) |
-| 运维模板 | 回归清单、发布模板、告警模板 | [OPERATIONS_TEMPLATES.md](./OPERATIONS_TEMPLATES.md) |
-| 导出设置说明 | 导出图设置（Excel 风格）能力清单 | [EXPORT_CHART_SETTINGS.md](./EXPORT_CHART_SETTINGS.md) |
-| 全球可视化总控 | 全球/大洲/国家可视化 Phase 方案 | [JATO_GLOBAL_VISUALIZATION.md](./JATO_GLOBAL_VISUALIZATION.md) |
+- 产品/业务：`JATO_GLOBAL_VISUALIZATION.md` -> `DASHBOARD_PERFORMANCE_PHASE_REPORT_20260308.md` -> `DASHBOARD_PERFORMANCE_TODOS_50.md`
+- 开发：`ETL.md` -> `DASHBOARD_PERFORMANCE_PREPLAN.md`
+- 测试/质量：`DASHBOARD_PERFORMANCE_TODOS_50.md` -> `DASHBOARD_PERFORMANCE_PHASE_REPORT_20260308.md` -> `OPERATIONS_TEMPLATES.md`
+- 运维/发布：`DEPLOYMENT.md` -> `OPERATIONS_TEMPLATES.md`
 
-## 5. 按角色阅读路径（快速入口）
+## 6. 变更流程（简化）
 
-- 产品/业务负责人（先看结果与节奏）
-	- 第一步：[ROADMAP.md](./ROADMAP.md)
-	- 第二步：[DEPLOYMENT.md](./DEPLOYMENT.md)
-	- 第三步：[OPERATIONS_TEMPLATES.md](./OPERATIONS_TEMPLATES.md)
-- 数据/后端开发（先看链路与增量）
-	- 第一步：[ETL.md](./ETL.md)
-	- 第二步：[INCREMENTAL_INGESTION.md](./INCREMENTAL_INGESTION.md)
-	- 第三步：[OBSERVABILITY.md](./OBSERVABILITY.md)
-- 前端/分析开发（先看图表与可视化）
-	- 第一步：[EXPORT_CHART_SETTINGS.md](./EXPORT_CHART_SETTINGS.md)
-	- 第二步：[JATO_GLOBAL_VISUALIZATION.md](./JATO_GLOBAL_VISUALIZATION.md)
+1. 修改专题文档。
+2. 回填 `ROADMAP.md` 状态与导航。
+3. 若有待办变化，仅更新对应看板（如 `DASHBOARD_PERFORMANCE_TODOS_50.md`）。
 
-## 6. 路线图摘要（Phase）
+## 7. 维护检查清单
 
-### Phase 1（已完成）
+- [ ] 历史报告与评估文档是否保留。
+- [ ] 待办是否仍集中在执行看板中。
+- [ ] 本索引是否覆盖全部 canonical 文档。
 
-- 分区优先读取
-- 过滤下推
-- 列裁剪投影
-- 版本令牌缓存失效
-- 读取耗时与行数可视化
-- 明细按需全列
+## 8. 快速使用（按场景）
 
-### Phase 2（已完成）
-
-- URL 参数化筛选（可分享视图）
-- 图表渲染耗时采样与慢图定位
-- 空数据提示标准化
-- 时间轴缺失回退策略增强
-
-### Phase 3（已完成）
-
-- 数据刷新作业脚本（`run_data_refresh_job.py`）
-- 历史归档清理脚本（`cleanup_history_archive.py`）
-- 多用户缓存策略（按 scope/version 分层）
-- CI smoke（本地 + GitHub Actions）
-
-### Phase 4（推进中）
-
-- 增量入库（M1/M2 已完成，M3 推进中）
-- M3-v1 已落地：冲突检测策略（report_only/fail/last_wins）
-- M3-v1 已落地：刷新失败自动回滚（可通过参数关闭）
-- P3-v1 已落地：changed partition keys / countries / affected rows 报告增强
-- 对象存储直读 + 查询引擎接入（规划）
-- 导出能力扩展（PNG + 导出图设置已落地）
-- 可观测接入（基础能力已落地，持续增强）
-
-## 7. 当前执行优先级
-
-1. 完成增量入库 `M3`：冲突检测与回滚机制
-2. 打通对象存储路径配置并完成一次端到端 smoke
-3. 建立对象存储场景性能基线（加载耗时、内存、慢图）
-4. 补充全球可视化 Phase 0/1 验证样例与回归点
-
-## 8. 文档维护规范
-
-- 本文档只放：状态摘要、优先级、导航入口。
-- 专题文档只放：实现细节、命令示例、验收标准。
-- Markdown 文档命名规范：新建文档优先 `UPPER_SNAKE_CASE.md`，存量文档按需渐进迁移。
-- 新增专题时，必须同时更新：
-	- `ROADMAP.md` 的“文档导航矩阵”
-	- 专题文档头部“返回 ROADMAP”链接
-- 更新节奏：每次 Phase 完成后，先更新专题，再回填 ROADMAP。
-
-## 9. 改进 Preplan（执行中）
-
-| Phase | 目标 | 进展 | 主要交付 |
-|---|---|---|---|
-| P1 输入批次治理 | 主包+补档可追溯 | 已完成 | 多文件输入、合并元数据、sourceExcels |
-| P2 冲突检测与回滚 | 跨文件冲突可控 + 失败可恢复 | 已完成（v1） | conflict policy + conflict report + refresh rollback |
-| P3 增量精细化 | 降低无效重算 | 已完成（v1） | changed keys / changed countries / affected rows 报告增强 |
-| P4 可观测增强 | 快速定位补档与冲突影响范围 | 规划中 | 冲突/去重/回滚指标日志化 |
-| P5 运维SOP固化 | 团队标准化执行 | 进行中 | 运行模板与验收清单统一 |
+1. 看项目全貌：先读 `ROADMAP.md`，再按“推荐阅读路径”进入对应专题。
+2. 做数据刷新：按 `ETL.md` 的“日常执行最短路径”运行 ETL/分区/刷新命令。
+3. 做发布与回归：按 `OPERATIONS_TEMPLATES.md` 执行回归清单、发布模板与监控阈值检查。
+4. 做图表导出：按 `EXPORT_CHART_SETTINGS.md` 调整导出样式并执行 PNG 导出。
+5. 查性能推进与待办：使用 `DASHBOARD_PERFORMANCE_TODOS_50.md` + `DASHBOARD_PERFORMANCE_PHASE_REPORT_20260308.md`。

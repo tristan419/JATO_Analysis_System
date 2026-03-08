@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from importlib.util import find_spec
 import sys
 import time
@@ -102,6 +102,13 @@ EXPORT_DATA_LABEL_POSITION_OPTIONS = [
 
 MAX_MANUAL_SERIES_COLOR_CONTROLS = 30
 
+_COMPUTE_CACHE: dict[tuple[object, ...], object] = {}
+_TIME_KEY_PARSE_CACHE: dict[tuple[str, str], pd.Timestamp] = {}
+
+
+def reset_compute_cache() -> None:
+    _COMPUTE_CACHE.clear()
+
 
 @dataclass(frozen=True)
 class ChartControls:
@@ -131,31 +138,54 @@ class TimeSelection:
     grain: str
 
 
-def build_time_axis(filtered_df: pd.DataFrame) -> TimeAxis | None:
-    month_columns = get_month_columns(filtered_df)
-    month_entries: list[tuple[pd.Timestamp, str]] = []
-    for column in month_columns:
-        date_value = pd.to_datetime(
-            str(column),
+def parse_time_key_cached(value: str, grain: str) -> pd.Timestamp:
+    normalized_value = str(value).strip()
+    cache_key = (grain, normalized_value)
+    if cache_key in _TIME_KEY_PARSE_CACHE:
+        return _TIME_KEY_PARSE_CACHE[cache_key]
+
+    if grain == "month":
+        parsed = pd.to_datetime(
+            normalized_value,
             format="%Y %b",
             errors="coerce",
         )
-        if pd.notna(date_value):
-            month_entries.append((date_value, str(column)))
-
-    year_columns = get_year_columns(filtered_df)
-    year_entries: list[tuple[pd.Timestamp, str]] = []
-    for column in year_columns:
-        date_value = pd.to_datetime(
-            str(column),
+    elif grain == "year":
+        parsed = pd.to_datetime(
+            normalized_value,
             format="%Y",
             errors="coerce",
         )
+    else:
+        parsed = pd.to_datetime(normalized_value, errors="coerce")
+
+    _TIME_KEY_PARSE_CACHE[cache_key] = parsed
+    return parsed
+
+
+def build_time_entries(
+    columns: list[str],
+    grain: str,
+) -> list[tuple[pd.Timestamp, str]]:
+    entries: list[tuple[pd.Timestamp, str]] = []
+    for column in columns:
+        label = str(column).strip()
+        date_value = parse_time_key_cached(label, grain)
         if pd.notna(date_value):
-            year_entries.append((date_value, str(column)))
+            entries.append((date_value, label))
+
+    entries.sort(key=lambda item: item[0])
+    return entries
+
+
+def build_time_axis(filtered_df: pd.DataFrame) -> TimeAxis | None:
+    month_columns = get_month_columns(filtered_df)
+    month_entries = build_time_entries(month_columns, grain="month")
+
+    year_columns = get_year_columns(filtered_df)
+    year_entries = build_time_entries(year_columns, grain="year")
 
     if len(month_entries) >= 2:
-        month_entries.sort(key=lambda item: item[0])
         dates = tuple(item[0] for item in month_entries)
         labels = tuple(item[1] for item in month_entries)
         return TimeAxis(
@@ -166,7 +196,6 @@ def build_time_axis(filtered_df: pd.DataFrame) -> TimeAxis | None:
         )
 
     if year_entries:
-        year_entries.sort(key=lambda item: item[0])
         dates = tuple(item[0] for item in year_entries)
         labels = tuple(item[1] for item in year_entries)
         return TimeAxis(
@@ -177,7 +206,6 @@ def build_time_axis(filtered_df: pd.DataFrame) -> TimeAxis | None:
         )
 
     if month_entries:
-        month_entries.sort(key=lambda item: item[0])
         dates = tuple(item[0] for item in month_entries)
         labels = tuple(item[1] for item in month_entries)
         return TimeAxis(
@@ -240,6 +268,52 @@ def summarize_msrp_quality(msrp_values: pd.Series) -> dict[str, float | int]:
     }
 
 
+def resolve_slider_indices(
+    labels: list[str],
+    start_label: str,
+    end_label: str,
+) -> list[int]:
+    if not labels:
+        return []
+
+    label_to_index = {
+        label: idx
+        for idx, label in enumerate(labels)
+    }
+    start_idx = label_to_index.get(start_label, 0)
+    end_idx = label_to_index.get(end_label, len(labels) - 1)
+    if start_idx > end_idx:
+        start_idx, end_idx = end_idx, start_idx
+
+    return list(range(start_idx, end_idx + 1))
+
+
+def resolve_calendar_indices(
+    date_values: list[date],
+    start_date: date,
+    end_date: date,
+) -> list[int]:
+    if not date_values:
+        return []
+
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    selected_indices = [
+        idx
+        for idx, value in enumerate(date_values)
+        if start_date <= value <= end_date
+    ]
+    if selected_indices:
+        return selected_indices
+
+    nearest_idx = min(
+        range(len(date_values)),
+        key=lambda idx: abs((date_values[idx] - start_date).days),
+    )
+    return [nearest_idx]
+
+
 def render_time_selector(
     time_axis: TimeAxis,
     key_prefix: str,
@@ -264,9 +338,11 @@ def render_time_selector(
             value=(labels[0], labels[-1]),
             key=f"{key_prefix}_slider",
         )
-        start_idx = labels.index(start_label)
-        end_idx = labels.index(end_label)
-        selected_indices = list(range(start_idx, end_idx + 1))
+        selected_indices = resolve_slider_indices(
+            labels,
+            start_label,
+            end_label,
+        )
     else:
         min_date = date_values[0]
         max_date = date_values[-1]
@@ -283,20 +359,11 @@ def render_time_selector(
         else:
             start_date = end_date = date_range
 
-        if start_date > end_date:
-            start_date, end_date = end_date, start_date
-
-        selected_indices = [
-            idx
-            for idx, value in enumerate(date_values)
-            if start_date <= value <= end_date
-        ]
-        if not selected_indices:
-            nearest_idx = min(
-                range(len(date_values)),
-                key=lambda idx: abs((date_values[idx] - start_date).days),
-            )
-            selected_indices = [nearest_idx]
+        selected_indices = resolve_calendar_indices(
+            date_values,
+            start_date,
+            end_date,
+        )
 
     selected_columns = tuple(columns[idx] for idx in selected_indices)
     start_label = labels[selected_indices[0]]
@@ -364,23 +431,50 @@ def resolve_chart_time_selection(
 
 
 def parse_time_keys(series: pd.Series, grain: str) -> pd.Series:
-    text_series = series.astype(str)
-    if grain == "month":
-        parsed = pd.to_datetime(
-            text_series,
-            format="%Y %b",
-            errors="coerce",
-        )
-    else:
-        parsed = pd.to_datetime(
-            text_series,
-            format="%Y",
-            errors="coerce",
-        )
+    text_series = series.astype(str).str.strip()
+    unique_values = pd.unique(text_series)
+    parsed_mapping = {
+        value: parse_time_key_cached(value, grain)
+        for value in unique_values
+    }
+    parsed = pd.to_datetime(
+        text_series.map(parsed_mapping),
+        errors="coerce",
+    )
 
     if parsed.isna().all():
-        parsed = pd.to_datetime(text_series, errors="coerce")
+        fallback_mapping = {
+            value: parse_time_key_cached(value, "auto")
+            for value in unique_values
+        }
+        parsed = pd.to_datetime(
+            text_series.map(fallback_mapping),
+            errors="coerce",
+        )
     return parsed
+
+
+def get_numeric_selected_frame(
+    filtered_df: pd.DataFrame,
+    selected_columns: list[str],
+) -> pd.DataFrame:
+    selected_df = filtered_df[selected_columns]
+    non_numeric_columns = [
+        column
+        for column in selected_columns
+        if not pd.api.types.is_numeric_dtype(selected_df[column])
+    ]
+
+    if not non_numeric_columns:
+        return selected_df
+
+    numeric_df = selected_df.copy()
+    for column in non_numeric_columns:
+        numeric_df[column] = pd.to_numeric(
+            numeric_df[column],
+            errors="coerce",
+        )
+    return numeric_df
 
 
 def build_time_long_dataframe(
@@ -392,19 +486,35 @@ def build_time_long_dataframe(
     if not selected_columns:
         return pd.DataFrame(columns=["Series", "Date", "Sales"])
 
-    if group_column:
-        time_df = filtered_df[[group_column] + selected_columns].copy()
-        time_df["Series"] = normalize_series(time_df[group_column])
-    else:
-        time_df = filtered_df[selected_columns].copy()
-        time_df["Series"] = "总和"
+    numeric_time_df = get_numeric_selected_frame(
+        filtered_df,
+        selected_columns,
+    ).fillna(0.0)
 
-    long_df = time_df.melt(
-        id_vars=["Series"],
-        value_vars=selected_columns,
-        var_name="TimeKey",
-        value_name="Sales",
-    )
+    if group_column:
+        series_values = normalize_series(filtered_df[group_column])
+        aggregated = numeric_time_df.groupby(
+            series_values,
+            observed=True,
+        ).sum()
+        aggregated.index.name = "Series"
+        long_df = (
+            aggregated.stack(future_stack=True)
+            .rename("Sales")
+            .reset_index()
+        )
+        long_df = long_df.rename(columns={"level_1": "TimeKey"})
+    else:
+        totals = numeric_time_df.sum(axis=0)
+        long_df = pd.DataFrame(
+            {
+                "Series": "总和",
+                "TimeKey": totals.index.astype(str),
+                "Sales": totals.values,
+            }
+        )
+
+    long_df["TimeKey"] = long_df["TimeKey"].astype(str)
     long_df["Sales"] = pd.to_numeric(
         long_df["Sales"],
         errors="coerce",
@@ -422,11 +532,22 @@ def sum_sales_for_columns(
     if not selected_columns:
         return pd.Series(0.0, index=filtered_df.index, dtype="float64")
 
-    numeric_df = filtered_df[selected_columns].apply(
-        pd.to_numeric,
-        errors="coerce",
+    cache_key = (
+        "sum_sales",
+        id(filtered_df),
+        tuple(selected_columns),
     )
-    return numeric_df.fillna(0.0).sum(axis=1)
+    cached = _COMPUTE_CACHE.get(cache_key)
+    if isinstance(cached, pd.Series):
+        return cached
+
+    numeric_df = get_numeric_selected_frame(
+        filtered_df,
+        selected_columns,
+    )
+    result = numeric_df.fillna(0.0).sum(axis=1)
+    _COMPUTE_CACHE[cache_key] = result
+    return result
 
 
 def get_sort_items_callable() -> Callable[..., list[str]] | None:
@@ -568,7 +689,7 @@ def normalize_color_for_picker(
 
         lower_value = value.lower()
         if lower_value.startswith("rgb") and "(" in value and ")" in value:
-            raw = value[value.find("(") + 1 : value.rfind(")")]
+            raw = value[value.find("(") + 1:value.rfind(")")]
             parts = [part.strip() for part in raw.split(",")]
             if len(parts) >= 3:
                 try:
@@ -1404,6 +1525,20 @@ def prepare_numeric_axis(
     df: pd.DataFrame,
     candidates: list[str],
 ) -> tuple[str | None, pd.Series]:
+    cache_key = (
+        "numeric_axis",
+        id(df),
+        tuple(str(candidate).strip().lower() for candidate in candidates),
+    )
+    cached = _COMPUTE_CACHE.get(cache_key)
+    if isinstance(cached, tuple) and len(cached) == 2:
+        cached_column, cached_series = cached
+        if (
+            (cached_column is None or isinstance(cached_column, str))
+            and isinstance(cached_series, pd.Series)
+        ):
+            return cached_column, cached_series
+
     for candidate in candidates:
         column = find_existing_column(df, [candidate])
         if not column:
@@ -1411,9 +1546,13 @@ def prepare_numeric_axis(
 
         numeric_series = to_numeric_flexible(df[column])
         if numeric_series.notna().sum() > 0:
-            return column, numeric_series
+            result = (column, numeric_series)
+            _COMPUTE_CACHE[cache_key] = result
+            return result
 
-    return None, pd.Series(index=df.index, dtype="float64")
+    empty_result = (None, pd.Series(index=df.index, dtype="float64"))
+    _COMPUTE_CACHE[cache_key] = empty_result
+    return empty_result
 
 
 def apply_top_n_series(
@@ -1476,6 +1615,16 @@ def get_series_contribution(
     if controls.chart_mode != "分组" or not controls.group_column:
         return pd.DataFrame(columns=["Series", "Sales", "SharePct"])
 
+    cache_key = (
+        "series_contribution",
+        id(filtered_df),
+        controls.group_column,
+        controls.chart_mode,
+    )
+    cached = _COMPUTE_CACHE.get(cache_key)
+    if isinstance(cached, pd.DataFrame):
+        return cached
+
     contribution_df = pd.DataFrame()
     contribution_df["Series"] = normalize_series(
         filtered_df[controls.group_column]
@@ -1502,6 +1651,7 @@ def get_series_contribution(
     else:
         grouped["SharePct"] = 0.0
 
+    _COMPUTE_CACHE[cache_key] = grouped
     return grouped
 
 
@@ -1719,13 +1869,18 @@ def render_year_tab(
     series_order: list[str],
     time_axis: TimeAxis | None,
     global_time_selection: TimeSelection | None,
-) -> None:
+) -> dict[str, float]:
+    stats = {
+        "Year Transform": 0.0,
+        "Year Plot": 0.0,
+    }
+
     with st.container(border=True):
         st.subheader("年度对比")
 
         if not time_axis or not global_time_selection:
             show_time_axis_unavailable("年度趋势")
-            return
+            return stats
 
         time_selection = resolve_chart_time_selection(
             chart_name="年度趋势",
@@ -1736,7 +1891,9 @@ def render_year_tab(
         selected_columns = list(time_selection.columns)
         if not selected_columns:
             show_no_data("年度趋势")
-            return
+            return stats
+
+        transform_start = time.perf_counter()
 
         group_column = (
             controls.group_column
@@ -1751,25 +1908,23 @@ def render_year_tab(
         )
         if yearly_long.empty:
             show_no_data("年度趋势")
-            return
+            return stats
 
-        yearly_long["Year"] = yearly_long["Date"].dt.year.astype(str)
+        yearly_long["YearNum"] = yearly_long["Date"].dt.year
         yearly_long = apply_top_n_series(
             yearly_long,
             series_order=series_order,
             include_others=controls.include_others,
         )
         year_plot = yearly_long.groupby(
-            ["Series", "Year"],
+            ["Series", "YearNum"],
             as_index=False,
         )["Sales"].sum()
-        year_plot["YearSort"] = pd.to_numeric(
-            year_plot["Year"],
-            errors="coerce",
-        )
-        year_plot = year_plot.sort_values(["YearSort", "Series"])
-        year_plot = year_plot.drop(columns=["YearSort"])
+        year_plot = year_plot.sort_values(["YearNum", "Series"])
+        year_plot["Year"] = year_plot["YearNum"].astype("Int64").astype(str)
+        stats["Year Transform"] = time.perf_counter() - transform_start
 
+        plot_start = time.perf_counter()
         color_map = build_color_map(
             year_plot["Series"],
             series_order=series_order,
@@ -1803,6 +1958,51 @@ def render_year_tab(
         else:
             st.caption("点位=该年销量。")
 
+        stats["Year Plot"] = time.perf_counter() - plot_start
+        return stats
+
+
+def convert_dates_to_period_start(
+    date_series: pd.Series,
+    axis_level: str,
+) -> pd.Series:
+    cache_key = (
+        "period_start",
+        id(date_series),
+        axis_level,
+    )
+    cached = _COMPUTE_CACHE.get(cache_key)
+    if isinstance(cached, pd.Series):
+        return cached
+
+    parsed_dates = pd.to_datetime(date_series, errors="coerce")
+    if axis_level == "月":
+        values = (
+            parsed_dates.to_numpy(dtype="datetime64[ns]")
+            .astype("datetime64[M]")
+            .astype("datetime64[ns]")
+        )
+        result = pd.Series(values, index=parsed_dates.index)
+    elif axis_level == "年":
+        values = (
+            parsed_dates.to_numpy(dtype="datetime64[ns]")
+            .astype("datetime64[Y]")
+            .astype("datetime64[ns]")
+        )
+        result = pd.Series(values, index=parsed_dates.index)
+    else:
+        result = pd.to_datetime(
+            {
+                "year": parsed_dates.dt.year,
+                "month": (parsed_dates.dt.quarter - 1) * 3 + 1,
+                "day": 1,
+            },
+            errors="coerce",
+        )
+
+    _COMPUTE_CACHE[cache_key] = result
+    return result
+
 
 def render_month_tab(
     filtered_df: pd.DataFrame,
@@ -1810,13 +2010,18 @@ def render_month_tab(
     series_order: list[str],
     time_axis: TimeAxis | None,
     global_time_selection: TimeSelection | None,
-) -> None:
+) -> dict[str, float]:
+    stats = {
+        "Month Transform": 0.0,
+        "Month Plot": 0.0,
+    }
+
     with st.container(border=True):
         st.subheader("月度细化（支持时间轴调整）")
 
         if not time_axis or not global_time_selection:
             show_time_axis_unavailable("月度细化")
-            return
+            return stats
 
         time_selection = resolve_chart_time_selection(
             chart_name="月度细化",
@@ -1827,7 +2032,9 @@ def render_month_tab(
         selected_columns = list(time_selection.columns)
         if not selected_columns:
             show_no_data("月度细化")
-            return
+            return stats
+
+        transform_start = time.perf_counter()
 
         group_column = (
             controls.group_column
@@ -1842,7 +2049,7 @@ def render_month_tab(
         )
         if period_df.empty:
             show_no_data("月度细化")
-            return
+            return stats
 
         period_df = apply_top_n_series(
             period_df,
@@ -1862,18 +2069,10 @@ def render_month_tab(
             key="month_axis_level",
         )
 
-        if axis_level == "月":
-            period_df["Period"] = period_df["Date"].dt.to_period(
-                "M"
-            ).dt.to_timestamp()
-        elif axis_level == "季度":
-            period_df["Period"] = period_df["Date"].dt.to_period(
-                "Q"
-            ).dt.to_timestamp()
-        else:
-            period_df["Period"] = period_df["Date"].dt.to_period(
-                "Y"
-            ).dt.to_timestamp()
+        period_df["Period"] = convert_dates_to_period_start(
+            period_df["Date"],
+            axis_level,
+        )
 
         grouped = period_df.groupby(
             ["Series", "Period"],
@@ -1881,9 +2080,12 @@ def render_month_tab(
         )["Sales"].sum()
         if grouped.empty:
             show_no_data(f"{axis_level}度趋势")
-            return
+            return stats
 
         grouped = grouped.sort_values(["Period", "Series"])
+        stats["Month Transform"] = time.perf_counter() - transform_start
+
+        plot_start = time.perf_counter()
         color_map = build_color_map(
             grouped["Series"],
             series_order=series_order,
@@ -1913,6 +2115,9 @@ def render_month_tab(
             st.caption("折线标签=分组名称；点位=该时间粒度销量。")
         else:
             st.caption("点位=该时间粒度销量。")
+
+        stats["Month Plot"] = time.perf_counter() - plot_start
+        return stats
 
 
 def get_time_selection_for_chart(
@@ -3470,24 +3675,58 @@ def render_chart_nev_range_distribution(
         show_no_data("NEV续航分布")
         return
 
-    year_2023_col = resolve_year_column(filtered_df, "2023")
-    year_2025_col = resolve_year_column(filtered_df, "2025")
-    growth_ready = bool(year_2023_col and year_2025_col)
+    growth_mode_label = "时间窗净变化（末年-首年）"
+    year_column_map = group_selected_columns_by_year(
+        selected_columns,
+        selection.grain,
+    )
+    year_labels = list(year_column_map.keys())
+    start_year_label = year_labels[0] if year_labels else None
+    end_year_label = year_labels[-1] if year_labels else None
 
-    sales_2023 = (
-        sum_sales_for_columns(filtered_df, [year_2023_col])
-        if year_2023_col
-        else pd.Series(0.0, index=filtered_df.index)
+    sales_year_columns: dict[str, str] = {}
+    for year_label, year_columns in year_column_map.items():
+        sales_series = sum_sales_for_columns(filtered_df, year_columns)
+        sales_col_name = f"SalesYear_{year_label}"
+        nev_df[sales_col_name] = pd.to_numeric(
+            sales_series,
+            errors="coerce",
+        ).fillna(0.0)
+        sales_year_columns[year_label] = sales_col_name
+
+    start_sales_col = (
+        sales_year_columns.get(start_year_label)
+        if start_year_label
+        else None
     )
-    sales_2025 = (
-        sum_sales_for_columns(filtered_df, [year_2025_col])
-        if year_2025_col
-        else pd.Series(0.0, index=filtered_df.index)
+    end_sales_col = (
+        sales_year_columns.get(end_year_label)
+        if end_year_label
+        else None
     )
-    nev_df["Growth2325"] = pd.to_numeric(
-        sales_2025 - sales_2023,
-        errors="coerce",
-    ).fillna(0.0)
+
+    if start_sales_col:
+        nev_df["SalesWindowStartYear"] = nev_df[start_sales_col]
+    else:
+        nev_df["SalesWindowStartYear"] = 0.0
+
+    if end_sales_col:
+        nev_df["SalesWindowEndYear"] = nev_df[end_sales_col]
+    else:
+        nev_df["SalesWindowEndYear"] = 0.0
+
+    nev_df["GrowthWindow"] = (
+        nev_df["SalesWindowEndYear"] - nev_df["SalesWindowStartYear"]
+    )
+    nev_df["GrowthAbsWindow"] = nev_df["GrowthWindow"].abs()
+
+    growth_ready = bool(
+        start_sales_col
+        and end_sales_col
+        and start_year_label
+        and end_year_label
+        and start_year_label != end_year_label
+    )
 
     available_pt = set(nev_df["Powertrain"].astype(str))
     nev_options = [
@@ -3520,6 +3759,13 @@ def render_chart_nev_range_distribution(
         st.session_state["adv_nev_range_facet_brand"] = False
         st.session_state["adv_nev_range_max_brand"] = 4
 
+    legacy_metric_mode = st.session_state.get("adv_nev_range_metric_mode")
+    if legacy_metric_mode in {
+        "23-25增长变化",
+        "23-25净变化（2025-2023）",
+    }:
+        st.session_state["adv_nev_range_metric_mode"] = growth_mode_label
+
     control_col_1, control_col_2, control_col_3 = st.columns([1, 1, 1])
     with control_col_1:
         selected_powertrains = st.multiselect(
@@ -3530,7 +3776,7 @@ def render_chart_nev_range_distribution(
         )
     with control_col_2:
         top_n_enabled = st.checkbox(
-            "启用 TopN（按销量）",
+            "启用 TopN（按当前口径）",
             value=True,
             key="adv_nev_range_topn_enabled",
         )
@@ -3573,7 +3819,7 @@ def render_chart_nev_range_distribution(
     with adv_col_3:
         metric_mode = st.radio(
             "分布口径",
-            ["当前时间窗销量", "23-25增长变化"],
+            ["当前时间窗销量", growth_mode_label],
             horizontal=True,
             key="adv_nev_range_metric_mode",
         )
@@ -3610,9 +3856,22 @@ def render_chart_nev_range_distribution(
         st.info("请至少选择一个动总类型。")
         return
 
-    if metric_mode == "23-25增长变化" and not growth_ready:
-        st.warning("缺少 2023 或 2025 年度列，已回退到当前时间窗销量。")
+    if metric_mode == growth_mode_label and not growth_ready:
+        st.warning(
+            "当前时间窗不足两个年份，已回退到当前时间窗销量。"
+        )
         metric_mode = "当前时间窗销量"
+
+    metric_column = "SalesWindow"
+    metric_title = "销量"
+    ranking_column = "SalesWindow"
+    if metric_mode == growth_mode_label:
+        metric_column = "GrowthWindow"
+        if growth_ready and start_year_label and end_year_label:
+            metric_title = f"销量净变化（{end_year_label}-{start_year_label}）"
+        else:
+            metric_title = "销量净变化（末年-首年）"
+        ranking_column = "GrowthAbsWindow"
 
     nev_df = nev_df[nev_df["Powertrain"].isin(selected_powertrains)]
     nev_df = nev_df[nev_df["BatteryRange"].between(0, axis_max)]
@@ -3626,19 +3885,23 @@ def render_chart_nev_range_distribution(
         return
 
     if top_n_enabled:
-        model_rank = (
-            nev_df.groupby("Model", as_index=False)["SalesWindow"]
-            .sum()
-            .sort_values("SalesWindow", ascending=False)
+        model_rank = nev_df.groupby("Model", as_index=False)[
+            ranking_column
+        ].sum()
+        model_rank = model_rank.sort_values(
+            ranking_column,
+            ascending=False,
         )
         top_models = set(model_rank.head(top_n)["Model"])
         nev_df = nev_df[nev_df["Model"].isin(top_models)]
 
     if split_by_brand:
-        brand_rank = (
-            nev_df.groupby("Brand", as_index=False)["SalesWindow"]
-            .sum()
-            .sort_values("SalesWindow", ascending=False)
+        brand_rank = nev_df.groupby("Brand", as_index=False)[
+            ranking_column
+        ].sum()
+        brand_rank = brand_rank.sort_values(
+            ranking_column,
+            ascending=False,
         )
         selected_brands = brand_rank.head(max_brand_facets)["Brand"].tolist()
         nev_df = nev_df[nev_df["Brand"].isin(selected_brands)]
@@ -3649,11 +3912,138 @@ def render_chart_nev_range_distribution(
         show_no_data("NEV续航分布")
         return
 
-    metric_column = "SalesWindow"
-    metric_title = "销量"
-    if metric_mode == "23-25增长变化":
-        metric_column = "Growth2325"
-        metric_title = "销量变化（2025-2023）"
+    net_change_total = 0.0
+    abs_change_total = 0.0
+    offset_ratio = 0.0
+    weighted_range_start: float | None = None
+    weighted_range_end: float | None = None
+    powertrain_tokens: list[str] = []
+    bucket_summary_df = pd.DataFrame()
+    bucket_positive_df = pd.DataFrame()
+    bucket_negative_df = pd.DataFrame()
+    model_mover_df = pd.DataFrame()
+    model_gain_df = pd.DataFrame()
+    model_decline_df = pd.DataFrame()
+    top_model_limit = 0
+    top_model_abs_share: float | None = None
+    topn_abs_share_alert_threshold = 0.70
+
+    if metric_mode == growth_mode_label:
+        net_change_total = float(nev_df["GrowthWindow"].sum())
+        abs_change_total = float(nev_df["GrowthAbsWindow"].sum())
+        if abs_change_total > 0:
+            offset_ratio = 1.0 - abs(net_change_total) / abs_change_total
+
+        def _weighted_avg_range(sales_col: str) -> float | None:
+            weight_sum = float(nev_df[sales_col].sum())
+            if weight_sum <= 0:
+                return None
+            weighted_sum = float(
+                (nev_df["BatteryRange"] * nev_df[sales_col]).sum()
+            )
+            return weighted_sum / weight_sum
+
+        weighted_range_start = _weighted_avg_range("SalesWindowStartYear")
+        weighted_range_end = _weighted_avg_range("SalesWindowEndYear")
+
+        powertrain_summary = (
+            nev_df.groupby("Powertrain", as_index=False)[
+                ["GrowthWindow", "GrowthAbsWindow"]
+            ]
+            .sum()
+            .sort_values("GrowthAbsWindow", ascending=False)
+        )
+        for _, row in powertrain_summary.iterrows():
+            share_text = (
+                f"{row['GrowthWindow'] / net_change_total:.1%}"
+                if net_change_total != 0
+                else "N/A"
+            )
+            powertrain_tokens.append(
+                f"{row['Powertrain']} {row['GrowthWindow']:,.0f} "
+                f"({share_text})"
+            )
+
+        bucket_labels = ["0-399", "400-499", "500-599", "600-1000"]
+        bucket_source = nev_df.copy()
+        bucket_source["RangeBucket"] = pd.cut(
+            bucket_source["BatteryRange"],
+            bins=[-1, 399, 499, 599, 1000],
+            labels=bucket_labels,
+        )
+        bucket_summary_df = (
+            bucket_source.groupby(
+                "RangeBucket",
+                as_index=False,
+                observed=False,
+            )[[
+                "SalesWindowStartYear",
+                "SalesWindowEndYear",
+                "GrowthWindow",
+            ]]
+            .sum()
+        )
+        if net_change_total != 0:
+            bucket_summary_df["NetShare"] = (
+                bucket_summary_df["GrowthWindow"] / net_change_total
+            )
+        else:
+            bucket_summary_df["NetShare"] = 0.0
+
+        if not bucket_summary_df.empty:
+            bucket_positive_df = (
+                bucket_summary_df.sort_values(
+                    "GrowthWindow",
+                    ascending=False,
+                )
+                .head(3)
+                .copy()
+            )
+            bucket_negative_df = (
+                bucket_summary_df.sort_values(
+                    "GrowthWindow",
+                    ascending=True,
+                )
+                .head(3)
+                .copy()
+            )
+
+        model_mover_df = (
+            nev_df.groupby("Model", as_index=False)[
+                [
+                    "GrowthWindow",
+                    "GrowthAbsWindow",
+                    "SalesWindowStartYear",
+                    "SalesWindowEndYear",
+                ]
+            ]
+            .sum()
+            .sort_values("GrowthAbsWindow", ascending=False)
+        )
+        top_model_limit = int(min(10, len(model_mover_df)))
+        if top_model_limit > 0 and abs_change_total > 0:
+            top_model_abs_share = float(
+                model_mover_df.head(top_model_limit)["GrowthAbsWindow"].sum()
+                / abs_change_total
+            )
+
+        if top_model_limit > 0:
+            model_gain_df = (
+                model_mover_df.sort_values(
+                    "GrowthWindow",
+                    ascending=False,
+                )
+                .head(top_model_limit)
+                .copy()
+            )
+            model_decline_df = (
+                model_mover_df.sort_values(
+                    "GrowthWindow",
+                    ascending=True,
+                )
+                .head(top_model_limit)
+                .copy()
+            )
 
     nev_df["RangeBandStart"] = (
         (pd.to_numeric(nev_df["BatteryRange"], errors="coerce") // range_step)
@@ -3687,7 +4077,19 @@ def render_chart_nev_range_distribution(
         plot_kwargs["facet_col_wrap"] = 3
         plot_kwargs["category_orders"] = {"Brand": selected_brands}
 
-    chart_title = "NEV 续航分布（Model堆叠）" if stack_by_model else "NEV 续航分布（BEV/PHEV）"
+    if metric_mode == growth_mode_label:
+        if growth_ready and start_year_label and end_year_label:
+            chart_title = (
+                f"NEV 续航分布变化（{end_year_label}-{start_year_label}）"
+            )
+        else:
+            chart_title = "NEV 续航分布变化（末年-首年）"
+    else:
+        chart_title = (
+            "NEV 续航分布（Model堆叠）"
+            if stack_by_model
+            else "NEV 续航分布（BEV/PHEV）"
+        )
 
     fig = px.bar(
         plot_df,
@@ -3717,8 +4119,244 @@ def render_chart_nev_range_distribution(
         chart_key="adv_nev_range_distribution",
         filename_prefix="nev_range_distribution",
     )
-    if metric_mode == "23-25增长变化":
-        st.caption("当前口径：按 2025-2023 销量变化聚合分布。")
+    if metric_mode == growth_mode_label:
+        if growth_ready and start_year_label and end_year_label:
+            growth_span_label = f"{end_year_label}-{start_year_label}"
+        else:
+            growth_span_label = "末年-首年"
+
+        annual_sales_tokens: list[str] = []
+        for year_label in year_labels:
+            sales_col_name = sales_year_columns.get(year_label)
+            if not sales_col_name:
+                continue
+            annual_sales_tokens.append(
+                f"{year_label} {float(nev_df[sales_col_name].sum()):,.0f}"
+            )
+        if annual_sales_tokens:
+            st.caption("NEV 年度销量：" + "｜".join(annual_sales_tokens))
+        (
+            insight_col_1,
+            insight_col_2,
+            insight_col_3,
+            insight_col_4,
+        ) = st.columns(4)
+        with insight_col_1:
+            st.metric("时间窗净变化", f"{net_change_total:,.0f}")
+        with insight_col_2:
+            st.metric("|净变化|总量", f"{abs_change_total:,.0f}")
+        with insight_col_3:
+            st.metric("结构对冲率", f"{offset_ratio:.1%}")
+        with insight_col_4:
+            weighted_end_text = (
+                f"{weighted_range_end:,.1f} km"
+                if weighted_range_end is not None
+                else "N/A"
+            )
+            weighted_delta_text: str | None = None
+            if (
+                weighted_range_start is not None
+                and weighted_range_end is not None
+            ):
+                if start_year_label:
+                    weighted_delta_text = (
+                        f"{weighted_range_end - weighted_range_start:+.1f} km "
+                        f"vs {start_year_label}"
+                    )
+                else:
+                    weighted_delta_text = (
+                        f"{weighted_range_end - weighted_range_start:+.1f} km"
+                    )
+            st.metric(
+                "销量加权平均续航(末年)",
+                weighted_end_text,
+                delta=weighted_delta_text,
+            )
+
+        if powertrain_tokens:
+            st.caption("净变化贡献：" + "｜".join(powertrain_tokens))
+        if top_model_abs_share is not None:
+            st.caption(
+                f"Top{top_model_limit} Model 贡献了 "
+                f"{top_model_abs_share:.1%} 的 |净变化|。"
+            )
+            if top_model_abs_share >= topn_abs_share_alert_threshold:
+                st.warning(
+                    f"Top{top_model_limit} |净变化|集中度 "
+                    f"{top_model_abs_share:.1%} >= "
+                    f"{topn_abs_share_alert_threshold:.0%}，"
+                    "结构风险较高，建议关注头部车型波动。"
+                )
+        if offset_ratio >= 0.85:
+            st.info(
+                "对冲率较高：净增背后存在较强的车型结构迁移，建议结合分桶与 Top 车型明细一起看。"
+            )
+
+        with st.expander("查看净变化结构拆解", expanded=False):
+            if not bucket_summary_df.empty:
+                bucket_display = bucket_summary_df.rename(
+                    columns={
+                        "RangeBucket": "续航分桶(km)",
+                        "SalesWindowStartYear": (
+                            f"{start_year_label or '首年'}销量"
+                        ),
+                        "SalesWindowEndYear": (
+                            f"{end_year_label or '末年'}销量"
+                        ),
+                        "GrowthWindow": f"净变化({growth_span_label})",
+                        "NetShare": "净变化贡献",
+                    }
+                ).copy()
+                bucket_display["净变化贡献"] = bucket_display["净变化贡献"].map(
+                    lambda value: f"{value:.1%}"
+                )
+                st.dataframe(
+                    bucket_display,
+                    width="stretch",
+                    hide_index=True,
+                )
+
+            if not bucket_positive_df.empty and not bucket_negative_df.empty:
+                bucket_pos_col, bucket_neg_col = st.columns(2)
+                with bucket_pos_col:
+                    st.caption("续航分桶净变化 Top 正向")
+                    bucket_pos_display = bucket_positive_df.rename(
+                        columns={
+                            "RangeBucket": "续航分桶(km)",
+                            "GrowthWindow": (
+                                f"净变化({growth_span_label})"
+                            ),
+                            "NetShare": "净变化贡献",
+                        }
+                    ).copy()
+                    bucket_pos_display["净变化贡献"] = (
+                        bucket_pos_display["净变化贡献"].map(
+                            lambda value: f"{value:.1%}"
+                        )
+                    )
+                    st.dataframe(
+                        bucket_pos_display[
+                            [
+                                "续航分桶(km)",
+                                f"净变化({growth_span_label})",
+                                "净变化贡献",
+                            ]
+                        ],
+                        width="stretch",
+                        hide_index=True,
+                    )
+                with bucket_neg_col:
+                    st.caption("续航分桶净变化 Top 负向")
+                    bucket_neg_display = bucket_negative_df.rename(
+                        columns={
+                            "RangeBucket": "续航分桶(km)",
+                            "GrowthWindow": (
+                                f"净变化({growth_span_label})"
+                            ),
+                            "NetShare": "净变化贡献",
+                        }
+                    ).copy()
+                    bucket_neg_display["净变化贡献"] = (
+                        bucket_neg_display["净变化贡献"].map(
+                            lambda value: f"{value:.1%}"
+                        )
+                    )
+                    st.dataframe(
+                        bucket_neg_display[
+                            [
+                                "续航分桶(km)",
+                                f"净变化({growth_span_label})",
+                                "净变化贡献",
+                            ]
+                        ],
+                        width="stretch",
+                        hide_index=True,
+                    )
+
+            if not model_mover_df.empty:
+                st.caption("Top 车型（按 |净变化| 排序）")
+                model_display = (
+                    model_mover_df.head(top_model_limit)
+                    .rename(
+                        columns={
+                            "Model": "Model",
+                            "GrowthWindow": f"净变化({growth_span_label})",
+                            "GrowthAbsWindow": "|净变化|",
+                            "SalesWindowStartYear": (
+                                f"{start_year_label or '首年'}销量"
+                            ),
+                            "SalesWindowEndYear": (
+                                f"{end_year_label or '末年'}销量"
+                            ),
+                        }
+                    )
+                    .copy()
+                )
+                st.dataframe(
+                    model_display,
+                    width="stretch",
+                    hide_index=True,
+                )
+
+            if not model_gain_df.empty and not model_decline_df.empty:
+                gain_col, decline_col = st.columns(2)
+                with gain_col:
+                    st.caption(f"Top{top_model_limit} 正向车型")
+                    gain_display = model_gain_df.rename(
+                        columns={
+                            "Model": "Model",
+                            "GrowthWindow": f"净变化({growth_span_label})",
+                            "SalesWindowStartYear": (
+                                f"{start_year_label or '首年'}销量"
+                            ),
+                            "SalesWindowEndYear": (
+                                f"{end_year_label or '末年'}销量"
+                            ),
+                        }
+                    ).copy()
+                    st.dataframe(
+                        gain_display[
+                            [
+                                "Model",
+                                f"净变化({growth_span_label})",
+                                f"{start_year_label or '首年'}销量",
+                                f"{end_year_label or '末年'}销量",
+                            ]
+                        ],
+                        width="stretch",
+                        hide_index=True,
+                    )
+                with decline_col:
+                    st.caption(f"Top{top_model_limit} 负向车型")
+                    decline_display = model_decline_df.rename(
+                        columns={
+                            "Model": "Model",
+                            "GrowthWindow": f"净变化({growth_span_label})",
+                            "SalesWindowStartYear": (
+                                f"{start_year_label or '首年'}销量"
+                            ),
+                            "SalesWindowEndYear": (
+                                f"{end_year_label or '末年'}销量"
+                            ),
+                        }
+                    ).copy()
+                    st.dataframe(
+                        decline_display[
+                            [
+                                "Model",
+                                f"净变化({growth_span_label})",
+                                f"{start_year_label or '首年'}销量",
+                                f"{end_year_label or '末年'}销量",
+                            ]
+                        ],
+                        width="stretch",
+                        hide_index=True,
+                    )
+
+        st.caption(
+            f"当前口径：图值={growth_span_label} 净变化；"
+            "TopN 按 |净变化| 排序。"
+        )
     else:
         st.caption(f"当前口径：{selection.start_label}~{selection.end_label} 销量。")
     stack_caption = "Model" if stack_by_model else "Powertrain"
@@ -4397,16 +5035,19 @@ def render_detail_preview(
                     f"仅显示前 {preview_rows:,} 行，完整结果共 {len(filtered_df):,} 行。"
                 )
 
-            download_df = preview_df.head(CSV_DOWNLOAD_MAX_ROWS)
-            csv_bytes = download_df.to_csv(index=False).encode("utf-8-sig")
-            csv_size_bytes = len(csv_bytes)
+            (
+                csv_bytes,
+                csv_size_bytes,
+                is_truncated,
+                exceeds_size_limit,
+            ) = build_preview_csv_payload(preview_df)
 
-            if len(preview_df) > CSV_DOWNLOAD_MAX_ROWS:
+            if is_truncated:
                 st.caption(
                     f"下载将截断为前 {CSV_DOWNLOAD_MAX_ROWS:,} 行（安全阈值）。"
                 )
 
-            if csv_size_bytes > CSV_DOWNLOAD_MAX_BYTES:
+            if exceeds_size_limit:
                 st.warning(
                     "CSV 文件超过安全阈值，已禁用下载；"
                     "请缩小筛选范围、减少显示列或降低预览行数。"
@@ -4421,12 +5062,37 @@ def render_detail_preview(
                 )
 
 
+def build_preview_csv_payload(
+    preview_df: pd.DataFrame,
+) -> tuple[bytes, int, bool, bool]:
+    download_df = preview_df.head(CSV_DOWNLOAD_MAX_ROWS)
+    csv_bytes = download_df.to_csv(index=False).encode("utf-8-sig")
+    csv_size_bytes = int(len(csv_bytes))
+    is_truncated = bool(len(preview_df) > CSV_DOWNLOAD_MAX_ROWS)
+    exceeds_size_limit = bool(csv_size_bytes > CSV_DOWNLOAD_MAX_BYTES)
+    return csv_bytes, csv_size_bytes, is_truncated, exceeds_size_limit
+
+
+def get_default_render_strategy(
+    large_data_mode: bool,
+    row_count: int,
+) -> tuple[bool, bool]:
+    lazy_overview_render = bool(large_data_mode and row_count >= 80_000)
+    lazy_advanced_render = bool(lazy_overview_render or row_count >= 200_000)
+    return lazy_overview_render, lazy_advanced_render
+
+
 def render_dashboard(
     filtered_df: pd.DataFrame,
     columns: ColumnRegistry,
     selections: FilterSelections,
     detail_df: pd.DataFrame | None = None,
+    large_data_mode: bool = False,
+    lazy_overview_render: bool | None = None,
+    primary_overview_chart: str | None = None,
+    lazy_advanced_render: bool | None = None,
 ) -> None:
+    reset_compute_cache()
     render_timing: dict[str, float] = {}
 
     stage_start = time.perf_counter()
@@ -4454,37 +5120,105 @@ def render_dashboard(
     render_top_n_others_detail(filtered_df, controls, series_order)
     render_timing["KPI & Controls"] = time.perf_counter() - stage_start
 
+    (
+        default_lazy_render,
+        default_lazy_advanced,
+    ) = get_default_render_strategy(
+        large_data_mode=large_data_mode,
+        row_count=len(filtered_df),
+    )
+    if lazy_overview_render is None:
+        lazy_overview_render = default_lazy_render
+    if lazy_advanced_render is None:
+        lazy_advanced_render = default_lazy_advanced
+    if primary_overview_chart not in {"年度趋势", "月度细化"}:
+        primary_overview_chart = "年度趋势"
+
     year_tab, month_tab = st.tabs(["📅 年度趋势", "🌙 月度细化"])
     with year_tab:
-        stage_start = time.perf_counter()
-        render_year_tab(
-            filtered_df,
-            controls,
-            series_order,
-            time_axis,
-            global_time_selection,
+        should_render_year = (
+            not lazy_overview_render
+            or primary_overview_chart == "年度趋势"
+            or st.session_state.get("force_render_year_tab", False)
         )
-        render_timing["Year Tab"] = time.perf_counter() - stage_start
+        if should_render_year:
+            stage_start = time.perf_counter()
+            year_stats = render_year_tab(
+                filtered_df,
+                controls,
+                series_order,
+                time_axis,
+                global_time_selection,
+            )
+            render_timing["Year Tab"] = time.perf_counter() - stage_start
+            render_timing.update(year_stats)
+        else:
+            st.info("已按渲染策略延迟年度趋势计算。")
+            if st.button(
+                "立即渲染年度趋势",
+                key="force_render_year_tab_btn",
+                width="content",
+            ):
+                st.session_state["force_render_year_tab"] = True
+                st.rerun()
+            render_timing["Year Tab"] = 0.0
+            render_timing["Year Deferred"] = 0.0
 
     with month_tab:
+        should_render_month = (
+            not lazy_overview_render
+            or primary_overview_chart == "月度细化"
+            or st.session_state.get("force_render_month_tab", False)
+        )
+        if should_render_month:
+            stage_start = time.perf_counter()
+            month_stats = render_month_tab(
+                filtered_df,
+                controls,
+                series_order,
+                time_axis,
+                global_time_selection,
+            )
+            render_timing["Month Tab"] = time.perf_counter() - stage_start
+            render_timing.update(month_stats)
+        else:
+            st.info("已按渲染策略延迟月度细化计算。")
+            if st.button(
+                "立即渲染月度细化",
+                key="force_render_month_tab_btn",
+                width="content",
+            ):
+                st.session_state["force_render_month_tab"] = True
+                st.rerun()
+            render_timing["Month Tab"] = 0.0
+            render_timing["Month Deferred"] = 0.0
+
+    should_render_advanced = (
+        not lazy_advanced_render
+        or st.session_state.get("force_render_advanced_charts", False)
+    )
+    if should_render_advanced:
         stage_start = time.perf_counter()
-        render_month_tab(
+        render_advanced_charts(
             filtered_df,
-            controls,
-            series_order,
+            columns,
             time_axis,
             global_time_selection,
         )
-        render_timing["Month Tab"] = time.perf_counter() - stage_start
-
-    stage_start = time.perf_counter()
-    render_advanced_charts(
-        filtered_df,
-        columns,
-        time_axis,
-        global_time_selection,
-    )
-    render_timing["Advanced Charts"] = time.perf_counter() - stage_start
+        render_timing["Advanced Charts"] = time.perf_counter() - stage_start
+    else:
+        with st.container(border=True):
+            st.subheader("增强分析图")
+            st.info("已按渲染策略延迟增强图计算。")
+            if st.button(
+                "加载增强分析图",
+                key="force_render_advanced_charts_btn",
+                width="content",
+            ):
+                st.session_state["force_render_advanced_charts"] = True
+                st.rerun()
+        render_timing["Advanced Charts"] = 0.0
+        render_timing["Advanced Deferred"] = 0.0
 
     preview_df = detail_df if detail_df is not None else filtered_df
     stage_start = time.perf_counter()

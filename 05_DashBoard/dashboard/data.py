@@ -1,7 +1,9 @@
 from pathlib import Path
+import hashlib
 from typing import Literal, Optional, Sequence
 
 import pandas as pd
+import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import streamlit as st
 
@@ -18,6 +20,9 @@ from .config import (
     YEAR_COL_PATTERN,
 )
 from .models import ColumnRegistry
+
+
+NormalizedFilterPayload = tuple[tuple[str, tuple[str, ...]], ...]
 
 
 def get_project_root() -> Path:
@@ -225,20 +230,55 @@ def resolve_columns_from_names(column_names: Sequence[str]) -> ColumnRegistry:
     return resolve_columns(dataframe)
 
 
+def normalize_filter_payload(
+    filter_payload: Sequence[tuple[str, Sequence[str]]],
+) -> NormalizedFilterPayload:
+    normalized_payload: list[tuple[str, tuple[str, ...]]] = []
+    for column, values in filter_payload:
+        normalized_column = str(column).strip()
+        if not normalized_column:
+            continue
+
+        normalized_values = sorted(
+            {
+                str(value).strip()
+                for value in values
+                if str(value).strip()
+            }
+        )
+        if not normalized_values:
+            continue
+
+        normalized_payload.append(
+            (normalized_column, tuple(normalized_values))
+        )
+
+    return tuple(normalized_payload)
+
+
+def build_filter_signature(
+    filter_payload: Sequence[tuple[str, Sequence[str]]],
+) -> str:
+    normalized_payload = normalize_filter_payload(filter_payload)
+    if not normalized_payload:
+        return "all"
+
+    signature_material = "&&".join(
+        f"{column}={'|'.join(values)}"
+        for column, values in normalized_payload
+    )
+    digest = hashlib.sha1(
+        signature_material.encode("utf-8")
+    ).hexdigest()
+    return f"sig-{digest[:16]}"
+
+
 def build_arrow_filter_expression(
     filter_payload: Sequence[tuple[str, Sequence[str]]],
 ) -> ds.Expression | None:
+    normalized_payload = normalize_filter_payload(filter_payload)
     expression = None
-    for column, values in filter_payload:
-        normalized_column = str(column).strip()
-        normalized_values = [
-            str(value)
-            for value in values
-            if str(value).strip()
-        ]
-        if not normalized_column or not normalized_values:
-            continue
-
+    for normalized_column, normalized_values in normalized_payload:
         predicate = ds.field(normalized_column).isin(normalized_values)
         if expression is None:
             expression = predicate
@@ -251,7 +291,7 @@ def build_arrow_filter_expression(
 def _load_dataset_slice_impl(
     parquet_path: str,
     columns: tuple[str, ...] | None = None,
-    filter_payload: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    filter_payload: NormalizedFilterPayload = (),
 ) -> pd.DataFrame:
     path = Path(parquet_path)
     if not path.exists():
@@ -277,8 +317,9 @@ def _load_dataset_slice_impl(
 def _load_dataset_slice_sidebar_cached(
     parquet_path: str,
     columns: tuple[str, ...] | None = None,
-    filter_payload: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    filter_payload: NormalizedFilterPayload = (),
     dataset_version: str | None = None,
+    filter_signature: str | None = None,
 ) -> pd.DataFrame:
     return _load_dataset_slice_impl(
         parquet_path=parquet_path,
@@ -295,8 +336,9 @@ def _load_dataset_slice_sidebar_cached(
 def _load_dataset_slice_analysis_cached(
     parquet_path: str,
     columns: tuple[str, ...] | None = None,
-    filter_payload: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    filter_payload: NormalizedFilterPayload = (),
     dataset_version: str | None = None,
+    filter_signature: str | None = None,
 ) -> pd.DataFrame:
     return _load_dataset_slice_impl(
         parquet_path=parquet_path,
@@ -313,8 +355,9 @@ def _load_dataset_slice_analysis_cached(
 def _load_dataset_slice_detail_cached(
     parquet_path: str,
     columns: tuple[str, ...] | None = None,
-    filter_payload: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    filter_payload: NormalizedFilterPayload = (),
     dataset_version: str | None = None,
+    filter_signature: str | None = None,
 ) -> pd.DataFrame:
     return _load_dataset_slice_impl(
         parquet_path=parquet_path,
@@ -326,31 +369,142 @@ def _load_dataset_slice_detail_cached(
 def load_dataset_slice(
     parquet_path: str,
     columns: tuple[str, ...] | None = None,
-    filter_payload: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    filter_payload: Sequence[tuple[str, Sequence[str]]] = (),
     dataset_version: str | None = None,
+    filter_signature: str | None = None,
     cache_scope: Literal["sidebar", "analysis", "detail"] = "analysis",
 ) -> pd.DataFrame:
+    normalized_filter_payload = normalize_filter_payload(filter_payload)
+
     if cache_scope == "sidebar":
         return _load_dataset_slice_sidebar_cached(
             parquet_path=parquet_path,
             columns=columns,
-            filter_payload=filter_payload,
+            filter_payload=normalized_filter_payload,
             dataset_version=dataset_version,
+            filter_signature=filter_signature,
         )
 
     if cache_scope == "detail":
         return _load_dataset_slice_detail_cached(
             parquet_path=parquet_path,
             columns=columns,
-            filter_payload=filter_payload,
+            filter_payload=normalized_filter_payload,
             dataset_version=dataset_version,
+            filter_signature=filter_signature,
         )
 
     return _load_dataset_slice_analysis_cached(
         parquet_path=parquet_path,
         columns=columns,
-        filter_payload=filter_payload,
+        filter_payload=normalized_filter_payload,
         dataset_version=dataset_version,
+        filter_signature=filter_signature,
+    )
+
+
+def _load_distinct_options_impl(
+    parquet_path: str,
+    column: str,
+    filter_payload: NormalizedFilterPayload = (),
+) -> list[str]:
+    normalized_column = str(column).strip()
+    if not normalized_column:
+        return []
+
+    path = Path(parquet_path)
+    if not path.exists():
+        raise FileNotFoundError(f"未找到数据文件: {path}")
+
+    dataset = open_parquet_dataset(path)
+    if normalized_column not in dataset.schema.names:
+        return []
+
+    filter_expression = build_arrow_filter_expression(filter_payload)
+    table = dataset.to_table(
+        columns=[normalized_column],
+        filter=filter_expression,
+    )
+
+    unique_values = pc.unique(table[normalized_column]).to_pylist()
+    normalized_options = sorted(
+        {
+            str(value).strip()
+            for value in unique_values
+            if value is not None and str(value).strip()
+        }
+    )
+    return normalized_options
+
+
+@st.cache_data(
+    show_spinner=False,
+    ttl=CACHE_TTL_SIDEBAR_SECONDS,
+    max_entries=CACHE_MAX_ENTRIES_SIDEBAR,
+)
+def _load_distinct_options_sidebar_cached(
+    parquet_path: str,
+    column: str,
+    filter_payload: NormalizedFilterPayload = (),
+    dataset_version: str | None = None,
+    filter_signature: str | None = None,
+) -> list[str]:
+    return _load_distinct_options_impl(
+        parquet_path=parquet_path,
+        column=column,
+        filter_payload=filter_payload,
+    )
+
+
+def load_distinct_options(
+    parquet_path: str,
+    column: str,
+    filter_payload: Sequence[tuple[str, Sequence[str]]] = (),
+    dataset_version: str | None = None,
+    filter_signature: str | None = None,
+) -> list[str]:
+    normalized_filter_payload = normalize_filter_payload(filter_payload)
+    return _load_distinct_options_sidebar_cached(
+        parquet_path=parquet_path,
+        column=column,
+        filter_payload=normalized_filter_payload,
+        dataset_version=dataset_version,
+        filter_signature=filter_signature,
+    )
+
+
+@st.cache_data(
+    show_spinner=False,
+    ttl=CACHE_TTL_SIDEBAR_SECONDS,
+    max_entries=CACHE_MAX_ENTRIES_SIDEBAR,
+)
+def _load_filtered_row_count_sidebar_cached(
+    parquet_path: str,
+    filter_payload: NormalizedFilterPayload = (),
+    dataset_version: str | None = None,
+    filter_signature: str | None = None,
+) -> int:
+    path = Path(parquet_path)
+    if not path.exists():
+        raise FileNotFoundError(f"未找到数据文件: {path}")
+
+    dataset = open_parquet_dataset(path)
+    filter_expression = build_arrow_filter_expression(filter_payload)
+    return int(dataset.count_rows(filter=filter_expression))
+
+
+def load_filtered_row_count(
+    parquet_path: str,
+    filter_payload: Sequence[tuple[str, Sequence[str]]] = (),
+    dataset_version: str | None = None,
+    filter_signature: str | None = None,
+) -> int:
+    normalized_filter_payload = normalize_filter_payload(filter_payload)
+    return _load_filtered_row_count_sidebar_cached(
+        parquet_path=parquet_path,
+        filter_payload=normalized_filter_payload,
+        dataset_version=dataset_version,
+        filter_signature=filter_signature,
     )
 
 

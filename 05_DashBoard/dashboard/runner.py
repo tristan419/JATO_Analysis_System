@@ -15,6 +15,7 @@ from .config import (
     PARTITIONED_DATASET_RELATIVE_PATH,
 )
 from .data import (
+    build_filter_signature,
     dedupe_preserve_order,
     get_dataset_version_token,
     get_project_root,
@@ -22,6 +23,7 @@ from .data import (
     get_year_columns_from_names,
     load_column_names,
     load_dataset_slice,
+    normalize_filter_payload,
     resolve_existing_columns,
     resolve_columns_from_names,
 )
@@ -29,7 +31,7 @@ from .filters import render_sidebar_filters
 from .logging_utils import get_logger
 from .models import ColumnRegistry, FilterSelections
 from .styles import apply_ui_style
-from .views import render_dashboard
+from .views import get_default_render_strategy, render_dashboard
 
 
 logger = get_logger("dashboard.runner")
@@ -73,19 +75,13 @@ def build_filter_rules(
 def build_filter_payload(
     filter_rules: list[FilterRule],
 ) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    payload: list[tuple[str, tuple[str, ...]]] = []
-    for column, values in filter_rules:
-        if not column or not values:
-            continue
-        normalized_values = tuple(
-            str(value)
-            for value in values
-            if str(value).strip()
-        )
-        if not normalized_values:
-            continue
-        payload.append((str(column), normalized_values))
-    return tuple(payload)
+    return normalize_filter_payload(
+        [
+            (column, values)
+            for column, values in filter_rules
+            if column and values
+        ]
+    )
 
 
 def build_analysis_projection(
@@ -188,12 +184,34 @@ def main() -> None:
             "可能影响分区筛选下推收益。"
         )
 
+    sidebar_load_start = time.perf_counter()
+    selections, filtered_row_count = render_sidebar_filters(
+        parquet_path=dataset_path,
+        dataset_version=dataset_version,
+        columns=columns,
+    )
+    sidebar_load_seconds = time.perf_counter() - sidebar_load_start
+
     default_large_data_mode = Path(dataset_path).is_dir()
+    current_mode_default = bool(
+        st.session_state.get(
+            "runner_large_data_mode",
+            default_large_data_mode,
+        )
+    )
+    (
+        default_lazy_overview,
+        default_lazy_advanced,
+    ) = get_default_render_strategy(
+        large_data_mode=current_mode_default,
+        row_count=filtered_row_count,
+    )
+
     with st.sidebar.container(border=True):
         st.markdown("**⚙️ 加载模式**")
         large_data_mode = st.toggle(
             "大数据模式（列裁剪 + 过滤下推）",
-            value=default_large_data_mode,
+            value=current_mode_default,
             key="runner_large_data_mode",
             help=(
                 "开启后仅加载图表所需核心列，适合大数据量；"
@@ -206,32 +224,32 @@ def main() -> None:
             key="runner_detail_full_columns",
             help="开启后会额外读取全列数据，仅用于明细预览。",
         )
-
-    filter_columns = tuple(
-        column
-        for column in [
-            columns.country,
-            columns.segment,
-            columns.powertrain,
-            columns.make,
-            columns.model,
-            columns.version,
-        ]
-        if column
-    )
-
-    sidebar_load_start = time.perf_counter()
-    sidebar_df = load_dataset_slice(
-        parquet_path=dataset_path,
-        columns=filter_columns or None,
-        dataset_version=dataset_version,
-        cache_scope="sidebar",
-    )
-    sidebar_load_seconds = time.perf_counter() - sidebar_load_start
-    _, selections = render_sidebar_filters(sidebar_df, columns)
+        st.markdown("**⚡ 概览渲染策略**")
+        lazy_overview_render = st.toggle(
+            "主图优先渲染（非活跃图按需）",
+            value=default_lazy_overview,
+            key="overview_lazy_render",
+            help=(
+                "开启后仅优先计算当前主图，"
+                "其他概览图可点击后再加载。"
+            ),
+        )
+        primary_overview_chart = st.radio(
+            "当前主图",
+            ["年度趋势", "月度细化"],
+            horizontal=True,
+            key="overview_primary_chart",
+        )
+        lazy_advanced_render = st.toggle(
+            "增强分析图按需加载",
+            value=default_lazy_advanced,
+            key="advanced_lazy_render",
+            help="开启后默认不计算增强图，点击按钮后再加载。",
+        )
 
     filter_rules = build_filter_rules(columns, selections)
     filter_payload = build_filter_payload(filter_rules)
+    filter_signature = build_filter_signature(filter_payload)
     active_filter_count = sum(1 for _, values in filter_rules if values)
     if large_data_mode:
         analysis_projection = build_analysis_projection(column_names, columns)
@@ -244,6 +262,7 @@ def main() -> None:
         columns=analysis_projection or None,
         filter_payload=filter_payload,
         dataset_version=dataset_version,
+        filter_signature=filter_signature,
         cache_scope="analysis",
     )
     analysis_load_seconds = time.perf_counter() - analysis_load_start
@@ -257,6 +276,7 @@ def main() -> None:
             columns=None,
             filter_payload=filter_payload,
             dataset_version=dataset_version,
+            filter_signature=filter_signature,
             cache_scope="detail",
         )
         detail_load_seconds = time.perf_counter() - detail_load_start
@@ -279,7 +299,7 @@ def main() -> None:
         f"侧边栏加载：{sidebar_load_seconds:.2f}s｜"
         f"分析加载：{analysis_load_seconds:.2f}s｜"
         f"明细加载：{detail_load_seconds:.2f}s｜"
-        f"侧边栏行数：{len(sidebar_df):,}｜"
+        f"激活筛选：{active_filter_count}｜"
         f"分析行数：{len(analysis_df):,}｜"
         f"明细行数：{len(detail_df):,}｜"
         f"分析内存估算：{analysis_memory_mb:.1f}MB"
@@ -303,4 +323,8 @@ def main() -> None:
         columns,
         selections,
         detail_df=filtered_detail_df,
+        large_data_mode=large_data_mode,
+        lazy_overview_render=lazy_overview_render,
+        primary_overview_chart=primary_overview_chart,
+        lazy_advanced_render=lazy_advanced_render,
     )
