@@ -1,0 +1,12 @@
+.git
+.github
+.venv
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+.ipynb_checkpoints/
+01_RAW_DATA/
+04_Processed_data/

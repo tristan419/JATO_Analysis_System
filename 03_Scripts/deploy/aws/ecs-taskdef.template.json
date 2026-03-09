@@ -1,0 +1,73 @@
+{
+  "family": "jato-dashboard-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "2048",
+  "memory": "4096",
+  "executionRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/<TASK_EXECUTION_ROLE_NAME>",
+  "taskRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/<TASK_ROLE_NAME>",
+  "containerDefinitions": [
+    {
+      "name": "jato-dashboard",
+      "image": "<IMAGE_URI>",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8501,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "JATO_PARTITIONED_PATH",
+          "value": "/data/04_Processed_data/partitioned_dataset_v1"
+        },
+        {
+          "name": "JATO_PARQUET_PATH",
+          "value": "/data/04_Processed_data/jato_full_archive.parquet"
+        },
+        {
+          "name": "JATO_LOG_LEVEL",
+          "value": "INFO"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "jato-data",
+          "containerPath": "/data",
+          "readOnly": true
+        }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3)\" || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 30
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/jato-dashboard",
+          "awslogs-region": "<AWS_REGION>",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "name": "jato-data",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "<EFS_FILE_SYSTEM_ID>",
+        "transitEncryption": "ENABLED",
+        "rootDirectory": "/"
+      }
+    }
+  ]
+}

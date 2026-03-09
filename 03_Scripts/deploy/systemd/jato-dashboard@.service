@@ -1,0 +1,27 @@
+[Unit]
+Description=JATO Dashboard Streamlit instance on port %i
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/JATO_Analysis_System
+
+# Recommended: run as a non-root user.
+# User=deploy
+# Group=deploy
+
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=05_DashBoard
+
+ExecStart=/opt/JATO_Analysis_System/.venv/bin/python -m streamlit run /opt/JATO_Analysis_System/05_DashBoard/app.py --server.address 127.0.0.1 --server.port %i --server.headless true --browser.gatherUsageStats false
+
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+KillMode=mixed
+
+# Raise file descriptors for concurrent sockets.
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
