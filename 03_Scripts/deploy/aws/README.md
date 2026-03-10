@@ -13,7 +13,7 @@ These templates support GitHub OIDC + ECR + ECS deployment.
 `bootstrap_ubuntu.sh` default behavior:
 
 - Starts only `jato-dashboard@8501` and disables `8502` by default.
-- On low-memory hosts (`< 8GB`) with no swap, auto-creates `4GB` swap.
+- On low-memory hosts (`< 8GB`) with no swap, auto-creates swap adaptively by free disk (prefers `4GB`, degrades to `3GB/2GB/1GB`); if disk is too tight, bootstrap continues with a warning instead of failing.
 - To enable dual-instance startup, set `JATO_ENABLE_SECONDARY_INSTANCE=true`.
 
 ## Replace Placeholders
