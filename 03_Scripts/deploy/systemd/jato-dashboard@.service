@@ -12,6 +12,9 @@ WorkingDirectory=/opt/JATO_Analysis_System
 
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=05_DashBoard
+Environment=MALLOC_ARENA_MAX=2
+Environment=JATO_DETAIL_FULL_COLUMNS_DEFAULT=false
+Environment=JATO_DETAIL_FULL_COLUMNS_MAX_ROWS=120000
 
 ExecStart=/opt/JATO_Analysis_System/.venv/bin/python -m streamlit run /opt/JATO_Analysis_System/05_DashBoard/app.py --server.address 127.0.0.1 --server.port %i --server.headless true --browser.gatherUsageStats false
 

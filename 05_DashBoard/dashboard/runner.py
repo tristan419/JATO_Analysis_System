@@ -9,6 +9,8 @@ from .config import (
     APP_TITLE,
     BATTERY_CAPACITY_CANDIDATES,
     BATTERY_RANGE_CANDIDATES,
+    DETAIL_FULL_COLUMNS_DEFAULT_ENABLED,
+    DETAIL_FULL_COLUMNS_MAX_ROWS,
     MSRP_CANDIDATES,
     LENGTH_CANDIDATES,
     PARQUET_RELATIVE_PATH,
@@ -218,11 +220,20 @@ def main() -> None:
                 "关闭后读取全部列，适合做全字段明细分析。"
             ),
         )
+
+        detail_default_value = (
+            large_data_mode
+            and DETAIL_FULL_COLUMNS_DEFAULT_ENABLED
+        )
         detail_on_demand_full_columns = st.toggle(
             "明细预览按需全列",
-            value=large_data_mode,
+            value=detail_default_value,
             key="runner_detail_full_columns",
             help="开启后会额外读取全列数据，仅用于明细预览。",
+        )
+        st.caption(
+            "全列明细保护阈值："
+            f"{DETAIL_FULL_COLUMNS_MAX_ROWS:,} 行"
         )
         st.markdown("**⚡ 概览渲染策略**")
         lazy_overview_render = st.toggle(
@@ -270,16 +281,30 @@ def main() -> None:
     detail_df = analysis_df
     detail_load_seconds = 0.0
     if detail_on_demand_full_columns and large_data_mode:
-        detail_load_start = time.perf_counter()
-        detail_df = load_dataset_slice(
-            parquet_path=dataset_path,
-            columns=None,
-            filter_payload=filter_payload,
-            dataset_version=dataset_version,
-            filter_signature=filter_signature,
-            cache_scope="detail",
-        )
-        detail_load_seconds = time.perf_counter() - detail_load_start
+        if filtered_row_count > DETAIL_FULL_COLUMNS_MAX_ROWS:
+            st.sidebar.warning(
+                "当前筛后行数过大，已自动跳过全列明细加载，"
+                "请继续收紧筛选后再开启。"
+            )
+            logger.warning(
+                "session=%s skip full detail load rows=%s threshold=%s",
+                session_id,
+                filtered_row_count,
+                DETAIL_FULL_COLUMNS_MAX_ROWS,
+            )
+        else:
+            detail_load_start = time.perf_counter()
+            detail_df = load_dataset_slice(
+                parquet_path=dataset_path,
+                columns=None,
+                filter_payload=filter_payload,
+                dataset_version=dataset_version,
+                filter_signature=filter_signature,
+                cache_scope="detail",
+            )
+            detail_load_seconds = (
+                time.perf_counter() - detail_load_start
+            )
 
     analysis_memory_mb = (
         float(analysis_df.memory_usage(deep=True).sum())

@@ -151,7 +151,7 @@ PYTHONPATH=05_DashBoard python 03_Scripts/benchmark_dashboard_load.py --repeats 
 - `03_Scripts/deploy/systemd/jato-dashboard@.service`
 - `03_Scripts/deploy/loadtest/k6_dashboard_50vus.js`
 
-### 6.1 systemd 双实例启动（8501/8502）
+### 6.1 systemd 启动策略（默认单实例，按需双实例）
 
 1. 修改 `03_Scripts/deploy/systemd/jato-dashboard@.service` 中的工作目录与 Python 路径：
 
@@ -166,7 +166,14 @@ sudo cp 03_Scripts/deploy/systemd/jato-dashboard@.service /etc/systemd/system/
 sudo systemctl daemon-reload
 ```
 
-1. 启动两个实例：
+1. 默认建议先启单实例（8501）：
+
+```bash
+sudo systemctl disable --now jato-dashboard@8502
+sudo systemctl enable --now jato-dashboard@8501
+```
+
+1. 机器内存足够时（建议 `>= 16GB`）再启双实例：
 
 ```bash
 sudo systemctl enable --now jato-dashboard@8501
@@ -196,6 +203,15 @@ sudo systemctl reload nginx
 curl -sS http://127.0.0.1/healthz
 ```
 
+若返回 `404 Not Found (nginx)`，通常是默认站点仍在生效，可执行：
+
+```bash
+sudo rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf
+sudo nginx -t
+sudo systemctl reload nginx
+curl -sS http://127.0.0.1/healthz
+```
+
 ### 6.3 50 并发压测（k6）
 
 1. 安装 k6（按目标系统官方方式安装）。
@@ -215,7 +231,8 @@ k6 run -e BASE_URL=http://127.0.0.1 03_Scripts/deploy/loadtest/k6_dashboard_50vu
 ### 6.4 发布当天建议执行顺序
 
 1. 先跑 `03_Scripts/ci_smoke_check.py`
-1. 再启动双实例 + nginx
+1. 先启动单实例 + nginx 验证稳定
+1. 再按资源情况切到双实例
 1. 执行 k6 压测并记录 P95/失败率
 1. 通过后再开放真实流量
 
@@ -259,11 +276,48 @@ cd /opt/JATO_Analysis_System
 sudo bash 03_Scripts/deploy/aws/bootstrap_ubuntu.sh /opt/JATO_Analysis_System
 ```
 
+说明：
+
+- 该脚本默认启动单实例（`8501`）并停用 `8502`。
+- 若检测到机器内存 `< 8GB` 且无 swap，会自动创建 `4GB swap` 以降低 OOM 风险。
+- 若你已是高内存机并要双实例，可在执行时显式开启：
+
+```bash
+cd /opt/JATO_Analysis_System
+sudo JATO_ENABLE_SECONDARY_INSTANCE=true \
+  bash 03_Scripts/deploy/aws/bootstrap_ubuntu.sh /opt/JATO_Analysis_System
+```
+
 1. 验证本机健康检查：
 
 ```bash
 curl -sS http://127.0.0.1/healthz
 ```
+
+### 7.3.1 出现 `502` / `connecting streamlit server` 的快速判定
+
+1. 若 `nginx access.log` 中出现 `/_stcore/stream 101` 但 `/_stcore/health` 间歇 `502`，优先怀疑应用进程被杀。
+1. 用以下命令确认是否 OOM：
+
+```bash
+sudo journalctl -u jato-dashboard@8501 -n 120 --no-pager
+```
+
+重点看是否出现：
+
+`Failed with result 'oom-kill'`
+
+`A process of this unit has been killed by the OOM killer`
+
+1. 立即止血：保持单实例、确认 `/healthz` 稳定 200：
+
+```bash
+sudo systemctl disable --now jato-dashboard@8502
+sudo systemctl restart jato-dashboard@8501
+curl -i http://127.0.0.1/healthz
+```
+
+1. 若是小规格机（如 `t3.medium`），建议升级到 `4 vCPU / 16GB` 或继续保持单实例并收紧筛选范围。
 
 ### 7.4 ALB 绑定与健康检查
 
@@ -481,3 +535,105 @@ bash 03_Scripts/deploy/aws/aws_cli_setup_ci_cd.sh
 1. [AWS Console] 观察 ECS Service 发布状态，确认新 Task 进入 healthy。
 1. [Local Terminal] 使用 ALB 地址执行 k6 压测：`k6 run -e BASE_URL=http://<ALB_DNS> 03_Scripts/deploy/loadtest/k6_dashboard_50vus.js`。
 1. [验收] 满足阈值后对外发布：`P95 <= 8s`、`http_req_failed < 1%`、实例内存长期 `< 80%`。
+
+### 8.10 新手版（从未用过 AWS）
+
+> 目标：先把服务成功上线，再逐步升级到 50 并发稳定架构。
+
+#### 第 1 阶段：先跑起来（最小可用）
+
+1. 注册并登录 AWS，选定一个固定 Region（例如 `ap-southeast-1`）。
+1. 在 Billing 中确认支付方式可用，并开启 MFA。
+1. 创建 1 台 EC2：
+
+`Ubuntu 22.04/24.04`
+
+`m6i.xlarge (4 vCPU / 16GB)`
+
+1. 配置安全组：
+
+`22` 端口仅允许你的公网 IP
+
+`80` 端口允许 `0.0.0.0/0`
+
+（`443` 可后续加域名时启用）
+
+1. 本地下载并保存 Key Pair（`.pem`）。
+1. 本地终端连接服务器：
+
+```bash
+chmod 400 <your-key>.pem
+ssh -i <your-key>.pem ubuntu@<EC2_PUBLIC_IP>
+```
+
+1. 在服务器安装 git：
+
+```bash
+sudo apt-get update -y
+sudo apt-get install -y git
+```
+
+1. 拉取项目代码到服务器：
+
+```bash
+sudo mkdir -p /opt
+cd /opt
+sudo git clone <your-repo-url> JATO_Analysis_System
+sudo chown -R ubuntu:ubuntu /opt/JATO_Analysis_System
+cd /opt/JATO_Analysis_System
+```
+
+1. 运行一键部署脚本（默认单实例 `8501`，会停用 `8502`）：
+
+```bash
+sudo bash 03_Scripts/deploy/aws/bootstrap_ubuntu.sh /opt/JATO_Analysis_System
+```
+
+1. 健康检查：
+
+```bash
+curl -sS http://127.0.0.1/healthz
+```
+
+1. 本地浏览器访问：`http://<EC2_PUBLIC_IP>`。
+
+到这一步，服务已经可访问。
+
+#### 第 2 阶段：升级到 50 并发稳定形态
+
+1. 再创建 1 台同规格 EC2，重复第 1 阶段部署。
+1. 创建 ALB + Target Group，健康检查路径使用 `/_stcore/health`。
+1. 将两台 EC2 挂到同一 Target Group。
+1. 对外入口切到 ALB DNS，不再直连单台 EC2。
+
+#### 第 3 阶段：接入自动部署（GitHub Actions -> AWS）
+
+1. 使用模板和脚本完成 OIDC/IAM/ECR/ECS 对接：
+
+`03_Scripts/deploy/aws/aws_cli_setup_ci_cd.sh`
+
+1. 在 GitHub 配置：
+
+Secret：`AWS_ROLE_TO_ASSUME`
+
+Variables：`AWS_REGION`、`ECR_REPOSITORY`、`ECS_CLUSTER`、`ECS_SERVICE`、`ECS_TASK_DEFINITION`、`ECS_CONTAINER_NAME`
+
+1. 推送 `main`，触发 `.github/workflows/deploy-aws-ecs.yml` 自动部署。
+
+#### 第 4 阶段：压测与发布
+
+1. 执行压测：
+
+```bash
+k6 run -e BASE_URL=http://<ALB_DNS> 03_Scripts/deploy/loadtest/k6_dashboard_50vus.js
+```
+
+1. 验收阈值：
+
+`P95 <= 8s`
+
+`http_req_failed < 1%`
+
+`实例内存长期 < 80%`
+
+1. 达标后正式对外发布。

@@ -10,6 +10,12 @@ These templates support GitHub OIDC + ECR + ECS deployment.
 - `bootstrap_ubuntu.sh`: EC2 bootstrap script.
 - `aws_cli_setup_ci_cd.sh`: AWS CLI script to setup IAM role/ECR/render taskdef.
 
+`bootstrap_ubuntu.sh` default behavior:
+
+- Starts only `jato-dashboard@8501` and disables `8502` by default.
+- On low-memory hosts (`< 8GB`) with no swap, auto-creates `4GB` swap.
+- To enable dual-instance startup, set `JATO_ENABLE_SECONDARY_INSTANCE=true`.
+
 ## Replace Placeholders
 
 Replace all placeholders before applying:

@@ -74,6 +74,45 @@ CACHE_MAX_ENTRIES_SIDEBAR = 192
 CACHE_MAX_ENTRIES_ANALYSIS = 256
 CACHE_MAX_ENTRIES_DETAIL = 96
 
+
+def _parse_bool_env(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    return raw_value.strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        return default
+
+    return parsed if parsed > 0 else default
+
+
+# Keep this disabled by default on low-memory hosts to avoid OOM loops.
+DETAIL_FULL_COLUMNS_DEFAULT_ENABLED = _parse_bool_env(
+    "JATO_DETAIL_FULL_COLUMNS_DEFAULT",
+    False,
+)
+
+# Guardrail: skip full-column detail load when filtered rows are too high.
+DETAIL_FULL_COLUMNS_MAX_ROWS = _parse_int_env(
+    "JATO_DETAIL_FULL_COLUMNS_MAX_ROWS",
+    120_000,
+)
+
 CSV_DOWNLOAD_MAX_ROWS = 10_000
 CSV_DOWNLOAD_MAX_BYTES = 12 * 1024 * 1024
 
