@@ -20,6 +20,44 @@ is_truthy() {
 }
 
 
+cleanup_stale_swapfile_if_needed() {
+  local swap_active
+  local swapfile_size_bytes
+  local swapfile_size_mb
+
+  if [[ ! -f /swapfile ]]; then
+    return
+  fi
+
+  swap_active="$(swapon --show=NAME --noheadings 2>/dev/null | awk '{print $1}' | grep -x '/swapfile' || true)"
+  if [[ -n "$swap_active" ]]; then
+    return
+  fi
+
+  swapfile_size_bytes="$(stat -c%s /swapfile 2>/dev/null || echo 0)"
+  swapfile_size_mb=$((swapfile_size_bytes / 1024 / 1024))
+
+  echo "[WARN] found inactive /swapfile (${swapfile_size_mb}MB); removing stale file before apt update"
+  sudo rm -f /swapfile || true
+  if grep -qE '^/swapfile\s' /etc/fstab; then
+    sudo sed -i.bak '/^\/swapfile[[:space:]]/d' /etc/fstab || true
+  fi
+}
+
+
+run_apt_update_with_retry() {
+  if sudo apt-get update -y; then
+    return
+  fi
+
+  echo "[WARN] apt update failed, cleaning apt cache and retrying once"
+  sudo apt-get clean || true
+  sudo rm -rf /var/lib/apt/lists/* || true
+  cleanup_stale_swapfile_if_needed
+  sudo apt-get update -y
+}
+
+
 ensure_swap_for_low_memory_host() {
   local mem_total_mb
   local swap_total_mb
@@ -163,8 +201,10 @@ fi
 
 cd "$APP_DIR"
 
+cleanup_stale_swapfile_if_needed
+
 echo "[INFO] apt update"
-sudo apt-get update -y
+run_apt_update_with_retry
 
 echo "[INFO] install runtime packages"
 sudo apt-get install -y python3 python3-venv nginx git

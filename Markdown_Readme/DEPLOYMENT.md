@@ -280,6 +280,7 @@ sudo bash 03_Scripts/deploy/aws/bootstrap_ubuntu.sh /opt/JATO_Analysis_System
 
 - 该脚本默认启动单实例（`8501`）并停用 `8502`。
 - 若检测到机器内存 `< 8GB` 且无 swap，会按磁盘可用空间自动创建 swap（优先 4GB，不足时降级为 3GB/2GB/1GB）；若磁盘空间仍不足会告警并继续部署，不会中断。
+- 若历史残留了未启用的 `/swapfile`（例如上次创建中断），脚本会在 `apt update` 前自动清理，避免 `No space left on device`。
 - 若你已是高内存机并要双实例，可在执行时显式开启：
 
 ```bash
