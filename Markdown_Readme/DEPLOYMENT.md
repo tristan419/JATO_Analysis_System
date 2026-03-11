@@ -42,6 +42,14 @@ pip install -r requirements.txt
 streamlit run 05_DashBoard/app.py --server.port 8501 --server.address 0.0.0.0
 ```
 
+### C. 当前默认路径（2026-03-11）
+
+- 当前项目默认采用 `EC2 + systemd + nginx + GitHub Actions SSH 自动更新`。
+- 自动更新工作流：`.github/workflows/deploy-ec2-auto-update.yml`。
+- 默认发布目标：`/opt/JATO_Analysis_System` 上的 `jato-dashboard@8501`。
+- `ECS` 保留为后续容器化升级路径，不再作为当前默认自动发布方案。
+- 若选择 EC2 路径，建议仅保留 EC2 工作流自动触发；ECS 工作流改为手动触发，避免一次 push 触发两套部署。
+
 ---
 
 ## 3) 并发容量估算（简版）
@@ -238,7 +246,7 @@ k6 run -e BASE_URL=http://127.0.0.1 03_Scripts/deploy/loadtest/k6_dashboard_50vu
 
 ---
 
-## 7) AWS 从 0 到上线（推荐路径）
+## 7) AWS EC2 从 0 到上线（当前推荐路径）
 
 ### 7.1 资源建议（目标 50 并发）
 
@@ -295,7 +303,53 @@ sudo JATO_ENABLE_SECONDARY_INSTANCE=true \
 curl -sS http://127.0.0.1/healthz
 ```
 
-### 7.3.1 出现 `502` / `connecting streamlit server` 的快速判定
+### 7.3.1 GitHub Actions 自动更新（push main 自动部署）
+
+当前仓库默认自动部署走 EC2，工作流文件：`.github/workflows/deploy-ec2-auto-update.yml`。
+
+工作流行为：
+
+1. 监听 `main` 分支 push。
+1. GitHub Actions 通过 SSH 登录 EC2。
+1. 在服务器执行：`git fetch`、`git reset --hard origin/main`、`pip install -r requirements.txt`。
+1. 通过 `systemd` 重启 `jato-dashboard@8501`。
+1. 访问 `/_stcore/health` 做健康检查。
+
+GitHub 仓库 `Secrets`（必填）：
+
+- `EC2_HOST`
+- `EC2_USER`
+- `EC2_SSH_KEY`
+
+GitHub 仓库 `Variables`（可选，未填写则走默认值）：
+
+- `EC2_REPO_DIR`，默认 `/opt/JATO_Analysis_System`
+- `SYSTEMD_SERVICE_NAME`，默认 `jato-dashboard@8501`
+- `DASHBOARD_PORT`，默认 `8501`
+
+服务器一次性准备：
+
+1. 确保 EC2 上项目目录固定为 `/opt/JATO_Analysis_System`（或与 `EC2_REPO_DIR` 保持一致）。
+1. 确保 `ubuntu` 用户可以 SSH 登录并具备仓库读权限。
+1. 建议服务以非 `root` 用户运行，避免端口占用、日志和 `__pycache__` 权限混乱。
+1. 给部署用户开放受限 sudo 权限，仅允许重启和查看 dashboard 服务：
+
+```bash
+sudo bash -c 'cat >/etc/sudoers.d/jato-dashboard-deploy <<EOF
+ubuntu ALL=(ALL) NOPASSWD:/bin/systemctl restart jato-dashboard@8501,/bin/systemctl status jato-dashboard@8501
+EOF'
+sudo chmod 440 /etc/sudoers.d/jato-dashboard-deploy
+sudo visudo -cf /etc/sudoers.d/jato-dashboard-deploy
+```
+
+建议验证：
+
+```bash
+sudo systemctl status jato-dashboard@8501 --no-pager
+curl -sS http://127.0.0.1:8501/_stcore/health
+```
+
+### 7.3.2 出现 `502` / `connecting streamlit server` 的快速判定
 
 1. 若 `nginx access.log` 中出现 `/_stcore/stream 101` 但 `/_stcore/health` 间歇 `502`，优先怀疑应用进程被杀。
 1. 用以下命令确认是否 OOM：
@@ -346,9 +400,9 @@ k6 run -e BASE_URL=http://<ALB_DNS> 03_Scripts/deploy/loadtest/k6_dashboard_50vu
 
 ---
 
-## 8) 本地 -> Docker -> GitHub Actions -> AWS（ECS）
+## 8) 本地 -> Docker -> GitHub Actions -> AWS（ECS，后续升级路径）
 
-本节给出容器化主路径，适合持续交付。
+本节给出容器化升级路径，适合后续需要更强发布标准化、滚动发布与多实例弹性时再启用。
 
 ### 8.1 本地（Local）
 
@@ -383,6 +437,8 @@ curl -sS http://127.0.0.1:8501/_stcore/health
 ### 8.2 GitHub Actions（CI/CD）
 
 已提供工作流：`.github/workflows/deploy-aws-ecs.yml`
+
+说明：当前默认自动发布走 EC2，因此该 ECS 工作流建议保留为 `workflow_dispatch` 手动触发，用于容器化演练、灰度验证或后续迁移。
 
 该工作流会执行：
 

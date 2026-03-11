@@ -3876,9 +3876,11 @@ def render_chart_rv_finance_dashboard(
             use_container_width=True,
         )
         if form_submitted:
-            st.session_state[rows_state_key] = pd.DataFrame(edited_rows_df).copy()
-            st.success("✓ 数据已保存", icon="✓")
-    
+            st.session_state[rows_state_key] = pd.DataFrame(
+                edited_rows_df
+            ).copy()
+            st.success("数据已保存", icon="✅")
+
     # Ensure rows_state_key is used for calculations
     if rows_state_key not in st.session_state:
         st.session_state[rows_state_key] = build_default_rv_vehicle_rows(
@@ -4207,7 +4209,7 @@ def render_chart_rv_finance_dashboard(
             st.session_state[scenario_table_key] = pd.DataFrame(
                 edited_scenario_df
             ).copy()
-            st.success("✓ 方案已保存", icon="✓")
+            st.success("方案已保存", icon="✅")
 
     scenario_param_df = pd.DataFrame(
         st.session_state[scenario_table_key]
