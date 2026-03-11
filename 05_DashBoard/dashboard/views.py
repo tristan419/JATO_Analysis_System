@@ -3872,7 +3872,7 @@ def render_chart_rv_finance_dashboard(
     )
     st.session_state[rows_state_key] = pd.DataFrame(edited_rows_df).copy()
 
-    working_rows = pd.DataFrame(edited_rows_df).copy()
+    working_rows = pd.DataFrame(st.session_state[rows_state_key]).copy()
     if working_rows.empty:
         st.warning("请至少输入 1 个车型后再进行 RV 计算。")
         return
@@ -4140,7 +4140,7 @@ def render_chart_rv_finance_dashboard(
         st.session_state[scenario_table_key] = default_scenarios
         st.session_state[scenario_table_base_key] = current_base_marker
 
-    scenario_param_df = st.data_editor(
+    edited_scenario_df = st.data_editor(
         pd.DataFrame(st.session_state[scenario_table_key]),
         key="adv_rv_scheme_param_editor",
         num_rows="dynamic",
@@ -4182,10 +4182,12 @@ def render_chart_rv_finance_dashboard(
         },
     )
     st.session_state[scenario_table_key] = pd.DataFrame(
-        scenario_param_df
+        edited_scenario_df
     ).copy()
 
-    scenario_param_df = pd.DataFrame(scenario_param_df).copy()
+    scenario_param_df = pd.DataFrame(
+        st.session_state[scenario_table_key]
+    ).copy()
     scenario_param_df["Scheme"] = (
         scenario_param_df["Scheme"].astype("string").fillna("").str.strip()
     )
