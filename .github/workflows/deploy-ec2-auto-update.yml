@@ -1,0 +1,75 @@
+name: deploy-ec2-auto-update
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-ec2-main
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Validate required GitHub secrets
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          missing=0
+          for key in EC2_HOST EC2_USER EC2_SSH_KEY; do
+            value="${!key}"
+            if [ -z "$value" ]; then
+              echo "::error::Missing required GitHub secret: $key"
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Deploy to EC2 over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+
+            REPO_DIR="${{ vars.EC2_REPO_DIR }}"
+            SERVICE_NAME="${{ vars.SYSTEMD_SERVICE_NAME }}"
+            APP_PORT="${{ vars.DASHBOARD_PORT }}"
+
+            if [ -z "$REPO_DIR" ]; then
+              REPO_DIR="/opt/JATO_Analysis_System"
+            fi
+            if [ -z "$SERVICE_NAME" ]; then
+              SERVICE_NAME="jato-dashboard@8501"
+            fi
+            if [ -z "$APP_PORT" ]; then
+              APP_PORT="8501"
+            fi
+
+            cd "$REPO_DIR"
+
+            git fetch origin main
+            git checkout main
+            git reset --hard origin/main
+
+            . .venv/bin/activate
+            pip install -r requirements.txt
+
+            sudo -n systemctl restart "$SERVICE_NAME"
+            sudo -n systemctl --no-pager status "$SERVICE_NAME" | head -n 30
+
+            curl -fsS "http://127.0.0.1:${APP_PORT}/_stcore/health"
+            git rev-parse --short HEAD
