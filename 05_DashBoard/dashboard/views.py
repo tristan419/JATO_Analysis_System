@@ -3817,8 +3817,11 @@ def render_chart_rv_finance_dashboard(
         if editor_state_key in st.session_state:
             del st.session_state[editor_state_key]
 
-    def on_vehicle_editor_change() -> None:
-        editor_value = st.session_state.get(editor_state_key)
+    def sync_editor_state_to_table(
+        editor_key: str,
+        table_key: str,
+    ) -> None:
+        editor_value = st.session_state.get(editor_key)
         if editor_value is None:
             return
 
@@ -3829,7 +3832,7 @@ def render_chart_rv_finance_dashboard(
             for key in ("edited_rows", "added_rows", "deleted_rows")
         ):
             working_df = pd.DataFrame(
-                st.session_state.get(rows_state_key, [])
+                st.session_state.get(table_key, [])
             ).copy()
 
             edited_rows = editor_value.get("edited_rows", {})
@@ -3895,10 +3898,16 @@ def render_chart_rv_finance_dashboard(
                         ignore_index=True,
                     )
 
-            st.session_state[rows_state_key] = working_df.copy()
+            st.session_state[table_key] = working_df.copy()
             return
 
-        st.session_state[rows_state_key] = pd.DataFrame(editor_value).copy()
+        st.session_state[table_key] = pd.DataFrame(editor_value).copy()
+
+    def on_vehicle_editor_change() -> None:
+        sync_editor_state_to_table(
+            editor_state_key,
+            rows_state_key,
+        )
 
     control_col_1, control_col_2, control_col_3 = st.columns([2, 1, 1])
     with control_col_1:
@@ -4138,6 +4147,7 @@ def render_chart_rv_finance_dashboard(
 
     scenario_table_key = "adv_rv_scheme_param_table"
     scenario_table_base_key = "adv_rv_scheme_param_table_base"
+    scenario_editor_state_key = "adv_rv_scheme_param_editor"
     current_base_marker = (
         f"{scenario_base_vehicle}:{scenario_base_msrp_eur:.2f}"
     )
@@ -4252,59 +4262,59 @@ def render_chart_rv_finance_dashboard(
         )
         st.session_state[scenario_table_key] = default_scenarios
         st.session_state[scenario_table_base_key] = current_base_marker
+        if scenario_editor_state_key in st.session_state:
+            del st.session_state[scenario_editor_state_key]
 
-    with st.form(key="rv_scenario_form", clear_on_submit=False):
-        st.caption("编辑方案参数（A/B/C对比）")
-        edited_scenario_df = st.data_editor(
-            pd.DataFrame(st.session_state[scenario_table_key]),
-            key="adv_rv_scheme_param_editor",
-            num_rows="dynamic",
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Scheme": st.column_config.TextColumn(
-                    "Scheme",
-                    required=True,
-                ),
-                "Down Payment (%)": st.column_config.NumberColumn(
-                    "Down Payment (%)",
-                    min_value=0.0,
-                    max_value=50.0,
-                    step=1.0,
-                    format="%.1f",
-                ),
-                "Residual Value (%)": st.column_config.NumberColumn(
-                    "Residual Value (%)",
-                    min_value=30.0,
-                    max_value=70.0,
-                    step=1.0,
-                    format="%.1f",
-                ),
-                "APR (%)": st.column_config.NumberColumn(
-                    "APR (%)",
-                    min_value=0.0,
-                    max_value=10.0,
-                    step=0.1,
-                    format="%.2f",
-                ),
-                "Term (Months)": st.column_config.NumberColumn(
-                    "Term (Months)",
-                    min_value=12,
-                    max_value=84,
-                    step=12,
-                    format="%d",
-                ),
-            },
+    def on_scenario_editor_change() -> None:
+        sync_editor_state_to_table(
+            scenario_editor_state_key,
+            scenario_table_key,
         )
-        scenario_form_submitted = st.form_submit_button(
-            "💾 保存方案参数",
-            use_container_width=True,
-        )
-        if scenario_form_submitted:
-            st.session_state[scenario_table_key] = pd.DataFrame(
-                edited_scenario_df
-            ).copy()
-            st.success("方案已保存", icon="✅")
+
+    st.caption("编辑方案参数（A/B/C对比）")
+    st.caption("修改后自动保存。")
+    st.data_editor(
+        pd.DataFrame(st.session_state[scenario_table_key]),
+        key=scenario_editor_state_key,
+        on_change=on_scenario_editor_change,
+        num_rows="dynamic",
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Scheme": st.column_config.TextColumn(
+                "Scheme",
+                required=True,
+            ),
+            "Down Payment (%)": st.column_config.NumberColumn(
+                "Down Payment (%)",
+                min_value=0.0,
+                max_value=50.0,
+                step=1.0,
+                format="%.1f",
+            ),
+            "Residual Value (%)": st.column_config.NumberColumn(
+                "Residual Value (%)",
+                min_value=30.0,
+                max_value=70.0,
+                step=1.0,
+                format="%.1f",
+            ),
+            "APR (%)": st.column_config.NumberColumn(
+                "APR (%)",
+                min_value=0.0,
+                max_value=10.0,
+                step=0.1,
+                format="%.2f",
+            ),
+            "Term (Months)": st.column_config.NumberColumn(
+                "Term (Months)",
+                min_value=12,
+                max_value=84,
+                step=12,
+                format="%d",
+            ),
+        },
+    )
 
     scenario_param_df = pd.DataFrame(
         st.session_state[scenario_table_key]
