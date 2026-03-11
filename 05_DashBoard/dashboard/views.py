@@ -3770,27 +3770,43 @@ def render_chart_rv_finance_dashboard(
         "MSRP 输入列固定为 EUR。"
     )
 
-    control_col_1, control_col_2, control_col_3 = st.columns([2, 1, 1])
-    with control_col_1:
-        selected_template_name = st.selectbox(
-            "参数模板",
-            options=list(preset_templates.keys()),
-            key=preset_state_key,
+    def apply_template_to_rows(template_name: str) -> None:
+        selected_preset = preset_templates[template_name]
+        rows_df = pd.DataFrame(
+            st.session_state.get(rows_state_key, [])
+        ).copy()
+        if rows_df.empty:
+            rows_df = build_default_rv_vehicle_rows(
+                price_frame=price_frame,
+                fallback_msrp=msrp_default,
+                preset=selected_preset,
+                row_count=3,
+            )
+        rows_df["Down Payment (%)"] = float(
+            selected_preset["down_percent"]
         )
-    with control_col_2:
-        apply_template_clicked = st.button(
-            "应用模板到全部车型",
-            key="adv_rv_apply_template",
-            width="stretch",
+        rows_df["Residual Value (%)"] = float(
+            selected_preset["rv_percent"]
         )
-    with control_col_3:
-        reset_clicked = st.button(
-            "重置参数",
-            key="adv_rv_reset",
-            width="stretch",
+        rows_df["APR (%)"] = float(selected_preset["apr"])
+        rows_df["Term (Months)"] = int(
+            round(selected_preset["term"])
         )
+        st.session_state[rows_state_key] = rows_df
+        if editor_state_key in st.session_state:
+            del st.session_state[editor_state_key]
 
-    if reset_clicked:
+    def on_apply_template_click() -> None:
+        template_name = st.session_state.get(
+            preset_state_key,
+            default_template_name,
+        )
+        if template_name not in preset_templates:
+            template_name = default_template_name
+            st.session_state[preset_state_key] = template_name
+        apply_template_to_rows(template_name)
+
+    def on_reset_click() -> None:
         st.session_state[preset_state_key] = default_template_name
         st.session_state[rows_state_key] = build_default_rv_vehicle_rows(
             price_frame=price_frame,
@@ -3801,85 +3817,164 @@ def render_chart_rv_finance_dashboard(
         if editor_state_key in st.session_state:
             del st.session_state[editor_state_key]
 
-    if apply_template_clicked:
-        selected_preset = preset_templates[selected_template_name]
-        rows_df = pd.DataFrame(st.session_state[rows_state_key]).copy()
-        if rows_df.empty:
-            rows_df = build_default_rv_vehicle_rows(
-                price_frame=price_frame,
-                fallback_msrp=msrp_default,
-                preset=selected_preset,
-                row_count=3,
-            )
-        rows_df["Down Payment (%)"] = float(selected_preset["down_percent"])
-        rows_df["Residual Value (%)"] = float(selected_preset["rv_percent"])
-        rows_df["APR (%)"] = float(selected_preset["apr"])
-        rows_df["Term (Months)"] = int(round(selected_preset["term"]))
-        st.session_state[rows_state_key] = rows_df
-        if editor_state_key in st.session_state:
-            del st.session_state[editor_state_key]
+    def on_vehicle_editor_change() -> None:
+        editor_value = st.session_state.get(editor_state_key)
+        if editor_value is None:
+            return
+
+        # Streamlit may expose data_editor widget state as patch-style dict:
+        # {"edited_rows": ..., "added_rows": ..., "deleted_rows": ...}
+        if isinstance(editor_value, dict) and any(
+            key in editor_value
+            for key in ("edited_rows", "added_rows", "deleted_rows")
+        ):
+            working_df = pd.DataFrame(
+                st.session_state.get(rows_state_key, [])
+            ).copy()
+
+            edited_rows = editor_value.get("edited_rows", {})
+            if isinstance(edited_rows, dict):
+                for raw_idx, updates in edited_rows.items():
+                    try:
+                        row_idx = int(raw_idx)
+                    except (TypeError, ValueError):
+                        continue
+                    if not isinstance(updates, dict):
+                        continue
+
+                    if row_idx not in working_df.index:
+                        missing_rows = row_idx - len(working_df) + 1
+                        if missing_rows > 0:
+                            filler = pd.DataFrame(
+                                [{} for _ in range(missing_rows)]
+                            )
+                            working_df = pd.concat(
+                                [working_df, filler],
+                                ignore_index=True,
+                            )
+
+                    for column_name, value in updates.items():
+                        working_df.at[row_idx, column_name] = value
+
+            deleted_rows = editor_value.get("deleted_rows", [])
+            if isinstance(deleted_rows, list) and deleted_rows:
+                normalized_delete_idx: list[int] = []
+                for raw_idx in deleted_rows:
+                    try:
+                        normalized_delete_idx.append(int(raw_idx))
+                    except (TypeError, ValueError):
+                        continue
+                if normalized_delete_idx:
+                    delete_idx = [
+                        idx
+                        for idx in sorted(set(normalized_delete_idx))
+                        if idx in working_df.index
+                    ]
+                    if delete_idx:
+                        working_df = working_df.drop(index=delete_idx)
+                        working_df = working_df.reset_index(drop=True)
+
+            added_rows = editor_value.get("added_rows", [])
+            if isinstance(added_rows, list) and added_rows:
+                valid_added_rows = [
+                    row for row in added_rows if isinstance(row, dict)
+                ]
+                if valid_added_rows:
+                    added_df = pd.DataFrame(valid_added_rows)
+                    for column_name in added_df.columns:
+                        if column_name not in working_df.columns:
+                            working_df[column_name] = pd.NA
+                    for column_name in working_df.columns:
+                        if column_name not in added_df.columns:
+                            added_df[column_name] = pd.NA
+                    added_df = added_df.reindex(
+                        columns=working_df.columns
+                    )
+                    working_df = pd.concat(
+                        [working_df, added_df],
+                        ignore_index=True,
+                    )
+
+            st.session_state[rows_state_key] = working_df.copy()
+            return
+
+        st.session_state[rows_state_key] = pd.DataFrame(editor_value).copy()
+
+    control_col_1, control_col_2, control_col_3 = st.columns([2, 1, 1])
+    with control_col_1:
+        st.selectbox(
+            "参数模板",
+            options=list(preset_templates.keys()),
+            key=preset_state_key,
+        )
+    with control_col_2:
+        st.button(
+            "应用模板到全部车型",
+            key="adv_rv_apply_template",
+            width="stretch",
+            on_click=on_apply_template_click,
+        )
+    with control_col_3:
+        st.button(
+            "重置参数",
+            key="adv_rv_reset",
+            width="stretch",
+            on_click=on_reset_click,
+        )
 
     st.caption(
         "可同时输入多车型参数。支持模板批量应用与重置。"
     )
-    with st.form(key="rv_vehicle_form", clear_on_submit=False):
-        edited_rows_df = st.data_editor(
-            pd.DataFrame(st.session_state[rows_state_key]),
-            key=editor_state_key,
-            num_rows="dynamic",
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Vehicle": st.column_config.TextColumn(
-                    "Vehicle",
-                    help="车型名称（可手填）",
-                    required=True,
-                ),
-                "MSRP (EUR)": st.column_config.NumberColumn(
-                    "MSRP (EUR)",
-                    min_value=0,
-                    step=1000,
-                    format="%d",
-                ),
-                "Down Payment (%)": st.column_config.NumberColumn(
-                    "Down Payment (%)",
-                    min_value=0,
-                    max_value=50,
-                    step=1,
-                    format="%.0f",
-                ),
-                "Residual Value (%)": st.column_config.NumberColumn(
-                    "Residual Value (%)",
-                    min_value=30,
-                    max_value=70,
-                    step=1,
-                    format="%.0f",
-                ),
-                "APR (%)": st.column_config.NumberColumn(
-                    "APR (%)",
-                    min_value=0.0,
-                    max_value=10.0,
-                    step=0.1,
-                    format="%.1f",
-                ),
-                "Term (Months)": st.column_config.NumberColumn(
-                    "Term (Months)",
-                    min_value=12,
-                    max_value=84,
-                    step=12,
-                    format="%d",
-                ),
-            },
-        )
-        form_submitted = st.form_submit_button(
-            "💾 保存数据",
-            use_container_width=True,
-        )
-        if form_submitted:
-            st.session_state[rows_state_key] = pd.DataFrame(
-                edited_rows_df
-            ).copy()
-            st.success("数据已保存", icon="✅")
+    st.caption("修改后自动保存。")
+    st.data_editor(
+        pd.DataFrame(st.session_state[rows_state_key]),
+        key=editor_state_key,
+        on_change=on_vehicle_editor_change,
+        num_rows="dynamic",
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Vehicle": st.column_config.TextColumn(
+                "Vehicle",
+                help="车型名称（可手填）",
+                required=True,
+            ),
+            "MSRP (EUR)": st.column_config.NumberColumn(
+                "MSRP (EUR)",
+                min_value=0,
+                step=1000,
+                format="%d",
+            ),
+            "Down Payment (%)": st.column_config.NumberColumn(
+                "Down Payment (%)",
+                min_value=0,
+                max_value=50,
+                step=1,
+                format="%.0f",
+            ),
+            "Residual Value (%)": st.column_config.NumberColumn(
+                "Residual Value (%)",
+                min_value=30,
+                max_value=70,
+                step=1,
+                format="%.0f",
+            ),
+            "APR (%)": st.column_config.NumberColumn(
+                "APR (%)",
+                min_value=0.0,
+                max_value=10.0,
+                step=0.1,
+                format="%.1f",
+            ),
+            "Term (Months)": st.column_config.NumberColumn(
+                "Term (Months)",
+                min_value=12,
+                max_value=84,
+                step=12,
+                format="%d",
+            ),
+        },
+    )
 
     # Ensure rows_state_key is used for calculations
     if rows_state_key not in st.session_state:
