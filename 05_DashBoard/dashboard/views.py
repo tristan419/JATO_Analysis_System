@@ -3822,55 +3822,71 @@ def render_chart_rv_finance_dashboard(
     st.caption(
         "可同时输入多车型参数。支持模板批量应用与重置。"
     )
-    edited_rows_df = st.data_editor(
-        pd.DataFrame(st.session_state[rows_state_key]),
-        key=editor_state_key,
-        num_rows="dynamic",
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "Vehicle": st.column_config.TextColumn(
-                "Vehicle",
-                help="车型名称（可手填）",
-                required=True,
-            ),
-            "MSRP (EUR)": st.column_config.NumberColumn(
-                "MSRP (EUR)",
-                min_value=0,
-                step=1000,
-                format="%d",
-            ),
-            "Down Payment (%)": st.column_config.NumberColumn(
-                "Down Payment (%)",
-                min_value=0,
-                max_value=50,
-                step=1,
-                format="%.0f",
-            ),
-            "Residual Value (%)": st.column_config.NumberColumn(
-                "Residual Value (%)",
-                min_value=30,
-                max_value=70,
-                step=1,
-                format="%.0f",
-            ),
-            "APR (%)": st.column_config.NumberColumn(
-                "APR (%)",
-                min_value=0.0,
-                max_value=10.0,
-                step=0.1,
-                format="%.1f",
-            ),
-            "Term (Months)": st.column_config.NumberColumn(
-                "Term (Months)",
-                min_value=12,
-                max_value=84,
-                step=12,
-                format="%d",
-            ),
-        },
-    )
-    st.session_state[rows_state_key] = pd.DataFrame(edited_rows_df).copy()
+    with st.form(key="rv_vehicle_form", clear_on_submit=False):
+        edited_rows_df = st.data_editor(
+            pd.DataFrame(st.session_state[rows_state_key]),
+            key=editor_state_key,
+            num_rows="dynamic",
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Vehicle": st.column_config.TextColumn(
+                    "Vehicle",
+                    help="车型名称（可手填）",
+                    required=True,
+                ),
+                "MSRP (EUR)": st.column_config.NumberColumn(
+                    "MSRP (EUR)",
+                    min_value=0,
+                    step=1000,
+                    format="%d",
+                ),
+                "Down Payment (%)": st.column_config.NumberColumn(
+                    "Down Payment (%)",
+                    min_value=0,
+                    max_value=50,
+                    step=1,
+                    format="%.0f",
+                ),
+                "Residual Value (%)": st.column_config.NumberColumn(
+                    "Residual Value (%)",
+                    min_value=30,
+                    max_value=70,
+                    step=1,
+                    format="%.0f",
+                ),
+                "APR (%)": st.column_config.NumberColumn(
+                    "APR (%)",
+                    min_value=0.0,
+                    max_value=10.0,
+                    step=0.1,
+                    format="%.1f",
+                ),
+                "Term (Months)": st.column_config.NumberColumn(
+                    "Term (Months)",
+                    min_value=12,
+                    max_value=84,
+                    step=12,
+                    format="%d",
+                ),
+            },
+        )
+        form_submitted = st.form_submit_button(
+            "💾 保存数据",
+            use_container_width=True,
+        )
+        if form_submitted:
+            st.session_state[rows_state_key] = pd.DataFrame(edited_rows_df).copy()
+            st.success("✓ 数据已保存", icon="✓")
+    
+    # Ensure rows_state_key is used for calculations
+    if rows_state_key not in st.session_state:
+        st.session_state[rows_state_key] = build_default_rv_vehicle_rows(
+            price_frame=price_frame,
+            fallback_msrp=msrp_default,
+            preset=preset_templates[default_template_name],
+            row_count=3,
+        )
 
     working_rows = pd.DataFrame(st.session_state[rows_state_key]).copy()
     if working_rows.empty:
