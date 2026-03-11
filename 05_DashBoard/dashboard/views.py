@@ -3282,6 +3282,1956 @@ def render_chart_estimated_tco_vs_msrp(
     )
 
 
+def calculate_finance(
+    msrp: float,
+    down_percent: float,
+    rv_percent: float,
+    apr: float,
+    term: int,
+) -> tuple[float, float, float, float, float]:
+    normalized_msrp = float(max(msrp, 0.0))
+    normalized_term = max(int(term), 1)
+    down_ratio = float(min(max(down_percent, 0.0), 100.0)) / 100.0
+    rv_ratio = float(min(max(rv_percent, 0.0), 100.0)) / 100.0
+
+    down_payment = normalized_msrp * down_ratio
+    principal = max(normalized_msrp - down_payment, 0.0)
+    rv = normalized_msrp * rv_ratio
+    monthly_rate = float(max(apr, 0.0)) / 100.0 / 12.0
+
+    if monthly_rate > 0:
+        pv_rv = rv / ((1.0 + monthly_rate) ** normalized_term)
+    else:
+        pv_rv = rv
+
+    # Clamp at zero to avoid negative payment scenarios in edge inputs.
+    net_financed = max(principal - pv_rv, 0.0)
+    if monthly_rate > 0:
+        denominator = 1.0 - (1.0 + monthly_rate) ** (-normalized_term)
+        pmt = net_financed * (monthly_rate / denominator)
+    else:
+        pmt = net_financed / normalized_term
+
+    return pmt, principal, pv_rv, net_financed, rv
+
+
+def resolve_country_finance_preset(
+    country_name: str | None,
+) -> dict[str, float]:
+    default_preset = {
+        "down_percent": 30.0,
+        "rv_percent": 55.0,
+        "apr": 5.0,
+        "term": 36.0,
+    }
+
+    if not country_name:
+        return default_preset
+
+    preset_map = {
+        "瑞典": {
+            "down_percent": 20.0,
+            "rv_percent": 56.0,
+            "apr": 6.5,
+            "term": 36.0,
+        },
+        "挪威": {
+            "down_percent": 28.0,
+            "rv_percent": 58.0,
+            "apr": 4.2,
+            "term": 36.0,
+        },
+        "德国": {
+            "down_percent": 32.0,
+            "rv_percent": 52.0,
+            "apr": 4.5,
+            "term": 36.0,
+        },
+        "荷兰": {
+            "down_percent": 30.0,
+            "rv_percent": 54.0,
+            "apr": 4.6,
+            "term": 36.0,
+        },
+        "英国": {
+            "down_percent": 25.0,
+            "rv_percent": 55.0,
+            "apr": 5.5,
+            "term": 48.0,
+        },
+        "法国": {
+            "down_percent": 28.0,
+            "rv_percent": 53.0,
+            "apr": 4.7,
+            "term": 36.0,
+        },
+    }
+
+    return preset_map.get(str(country_name).strip(), default_preset)
+
+
+def clamp_finance_preset(
+    preset: dict[str, float],
+) -> dict[str, float]:
+    term_candidates = [24.0, 36.0, 48.0, 60.0]
+    raw_term = float(preset.get("term", 36.0))
+    normalized_term = min(
+        term_candidates,
+        key=lambda value: abs(value - raw_term),
+    )
+    return {
+        "down_percent": float(
+            min(max(preset.get("down_percent", 30.0), 0.0), 50.0)
+        ),
+        "rv_percent": float(
+            min(max(preset.get("rv_percent", 55.0), 30.0), 70.0)
+        ),
+        "apr": float(
+            min(max(preset.get("apr", 5.0), 0.0), 10.0)
+        ),
+        "term": float(normalized_term),
+    }
+
+
+def detect_primary_brand_model(
+    price_frame: pd.DataFrame,
+) -> tuple[str | None, str | None]:
+    if price_frame.empty:
+        return None, None
+
+    invalid_tokens = {"", "nan", "未标注"}
+    work_df = price_frame.copy()
+    work_df["Brand"] = normalize_series(work_df["Brand"])
+    work_df["Model"] = normalize_series(work_df["Model"])
+
+    brand_rank = (
+        work_df.groupby("Brand", as_index=False)["Sales"]
+        .sum()
+        .sort_values("Sales", ascending=False)
+    )
+    model_rank = (
+        work_df.groupby("Model", as_index=False)["Sales"]
+        .sum()
+        .sort_values("Sales", ascending=False)
+    )
+
+    detected_brand = None
+    for brand_value in brand_rank["Brand"].tolist():
+        normalized = str(brand_value).strip()
+        if normalized.lower() in invalid_tokens:
+            continue
+        detected_brand = normalized
+        break
+
+    detected_model = None
+    for model_value in model_rank["Model"].tolist():
+        normalized = str(model_value).strip()
+        if normalized.lower() in invalid_tokens:
+            continue
+        detected_model = normalized
+        break
+
+    return detected_brand, detected_model
+
+
+def resolve_msrp_ratio(
+    price_frame: pd.DataFrame,
+    column: str,
+    target_value: str,
+) -> float:
+    if price_frame.empty:
+        return 1.0
+
+    target_series = normalize_series(price_frame[column])
+    target_mask = target_series == str(target_value).strip()
+    target_values = pd.to_numeric(
+        price_frame.loc[target_mask, "MSRP"],
+        errors="coerce",
+    ).dropna()
+    overall_values = pd.to_numeric(
+        price_frame["MSRP"],
+        errors="coerce",
+    ).dropna()
+
+    if target_values.empty or overall_values.empty:
+        return 1.0
+
+    overall_median = float(overall_values.median())
+    if overall_median <= 0:
+        return 1.0
+
+    return float(target_values.median()) / overall_median
+
+
+def resolve_brand_finance_preset(
+    brand_name: str | None,
+    country_preset: dict[str, float],
+    price_frame: pd.DataFrame,
+) -> dict[str, float]:
+    base_preset = clamp_finance_preset(dict(country_preset))
+    if not brand_name:
+        return base_preset
+
+    ratio = resolve_msrp_ratio(
+        price_frame=price_frame,
+        column="Brand",
+        target_value=brand_name,
+    )
+
+    candidate = dict(base_preset)
+    if ratio >= 1.20:
+        candidate["down_percent"] += 4.0
+        candidate["rv_percent"] += 3.0
+        candidate["apr"] -= 0.2
+    elif ratio <= 0.85:
+        candidate["down_percent"] -= 4.0
+        candidate["rv_percent"] -= 3.0
+        candidate["apr"] += 0.2
+        candidate["term"] = max(candidate["term"], 48.0)
+
+    return clamp_finance_preset(candidate)
+
+
+def resolve_model_finance_preset(
+    model_name: str | None,
+    brand_preset: dict[str, float],
+    price_frame: pd.DataFrame,
+) -> dict[str, float]:
+    base_preset = clamp_finance_preset(dict(brand_preset))
+    if not model_name:
+        return base_preset
+
+    ratio = resolve_msrp_ratio(
+        price_frame=price_frame,
+        column="Model",
+        target_value=model_name,
+    )
+
+    candidate = dict(base_preset)
+    if ratio >= 1.30:
+        candidate["down_percent"] += 3.0
+        candidate["rv_percent"] += 2.0
+        candidate["apr"] -= 0.1
+    elif ratio <= 0.80:
+        candidate["down_percent"] -= 3.0
+        candidate["rv_percent"] -= 2.0
+        candidate["apr"] += 0.1
+        candidate["term"] = max(candidate["term"], 48.0)
+
+    return clamp_finance_preset(candidate)
+
+
+def build_rv_preset_templates(
+    country_preset: dict[str, float],
+    brand_name: str | None = None,
+    brand_preset: dict[str, float] | None = None,
+    model_name: str | None = None,
+    model_preset: dict[str, float] | None = None,
+) -> dict[str, dict[str, float]]:
+    balanced = clamp_finance_preset(dict(country_preset))
+    conservative = {
+        "down_percent": min(balanced["down_percent"] + 10.0, 50.0),
+        "rv_percent": max(balanced["rv_percent"] - 6.0, 30.0),
+        "apr": max(balanced["apr"] - 0.2, 0.0),
+        "term": max(min(balanced["term"], 48.0), 24.0),
+    }
+    aggressive = {
+        "down_percent": max(balanced["down_percent"] - 12.0, 0.0),
+        "rv_percent": min(balanced["rv_percent"] + 6.0, 70.0),
+        "apr": min(balanced["apr"] + 0.5, 10.0),
+        "term": min(max(balanced["term"], 48.0), 60.0),
+    }
+
+    templates: dict[str, dict[str, float]] = {
+        "平衡（国家默认）": balanced,
+        "保守（高首付低残值）": clamp_finance_preset(conservative),
+        "进取（低首付高残值）": clamp_finance_preset(aggressive),
+    }
+
+    if brand_name and brand_preset:
+        templates[f"品牌默认（{brand_name}）"] = clamp_finance_preset(
+            dict(brand_preset)
+        )
+    if model_name and model_preset:
+        templates[f"车型默认（{model_name}）"] = clamp_finance_preset(
+            dict(model_preset)
+        )
+
+    return templates
+
+
+def build_default_rv_vehicle_rows(
+    price_frame: pd.DataFrame,
+    fallback_msrp: int,
+    preset: dict[str, float],
+    row_count: int = 3,
+) -> pd.DataFrame:
+    rows: list[dict[str, float | int | str]] = []
+
+    if not price_frame.empty:
+        candidates = (
+            price_frame.groupby(["Brand", "Model"], as_index=False)
+            .agg(
+                MSRP=("MSRP", "median"),
+                Sales=("Sales", "sum"),
+            )
+            .sort_values("Sales", ascending=False)
+            .head(row_count)
+        )
+        for _, row in candidates.iterrows():
+            brand = str(row["Brand"]).strip()
+            model = str(row["Model"]).strip()
+            vehicle_name = " ".join(
+                part for part in [brand, model] if part and part != "nan"
+            )
+            if not vehicle_name:
+                vehicle_name = f"车型{len(rows) + 1}"
+
+            rows.append(
+                {
+                    "Vehicle": vehicle_name,
+                    "MSRP (EUR)": int(max(float(row["MSRP"]), 0.0)),
+                    "Down Payment (%)": float(preset["down_percent"]),
+                    "Residual Value (%)": float(preset["rv_percent"]),
+                    "APR (%)": float(preset["apr"]),
+                    "Term (Months)": int(round(preset["term"])),
+                }
+            )
+
+    while len(rows) < row_count:
+        rows.append(
+            {
+                "Vehicle": f"车型{len(rows) + 1}",
+                "MSRP (EUR)": int(max(fallback_msrp, 0)),
+                "Down Payment (%)": float(preset["down_percent"]),
+                "Residual Value (%)": float(preset["rv_percent"]),
+                "APR (%)": float(preset["apr"]),
+                "Term (Months)": int(round(preset["term"])),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def render_chart_rv_finance_dashboard(
+    filtered_df: pd.DataFrame,
+    columns: ColumnRegistry,
+    time_axis: TimeAxis | None,
+    global_time_selection: TimeSelection | None,
+) -> None:
+    msrp_input_column = "MSRP (EUR)"
+    currency_rate_presets = {
+        "EUR": 1.0,
+        "SEK": 11.40,
+        "NOK": 11.60,
+        "DKK": 7.46,
+        "GBP": 0.86,
+        "USD": 1.09,
+    }
+    currency_state_key = "adv_rv_display_currency"
+    fx_mode_state_key = "adv_rv_fx_mode"
+    manual_rate_state_key = "adv_rv_manual_fx_rate"
+
+    selection, selected_columns = get_time_selection_for_chart(
+        chart_name="RV金融杠杆看板",
+        key_prefix="adv_rv_finance",
+        time_axis=time_axis,
+        global_time_selection=global_time_selection,
+    )
+    if not selection:
+        return
+
+    price_frame, msrp_col = build_price_frame(
+        filtered_df,
+        columns,
+        selected_columns,
+    )
+    msrp_default = 459_900
+    if not price_frame.empty:
+        median_msrp = pd.to_numeric(
+            price_frame["MSRP"],
+            errors="coerce",
+        ).median()
+        if pd.notna(median_msrp) and float(median_msrp) > 0:
+            msrp_default = int(float(median_msrp))
+
+    detected_country = None
+    if columns.country and columns.country in filtered_df.columns:
+        country_series = normalize_series(filtered_df[columns.country])
+        if not country_series.empty:
+            detected_country = str(country_series.mode(dropna=True).iloc[0])
+
+    country_preset = resolve_country_finance_preset(detected_country)
+    detected_brand, detected_model = detect_primary_brand_model(
+        price_frame
+    )
+    brand_preset = resolve_brand_finance_preset(
+        brand_name=detected_brand,
+        country_preset=country_preset,
+        price_frame=price_frame,
+    )
+    model_preset = resolve_model_finance_preset(
+        model_name=detected_model,
+        brand_preset=brand_preset,
+        price_frame=price_frame,
+    )
+    preset_templates = build_rv_preset_templates(
+        country_preset=country_preset,
+        brand_name=detected_brand,
+        brand_preset=brand_preset,
+        model_name=detected_model,
+        model_preset=model_preset,
+    )
+    default_template_name = "平衡（国家默认）"
+
+    preset_state_key = "adv_rv_template_name"
+    rows_state_key = "adv_rv_vehicle_rows"
+    editor_state_key = "adv_rv_vehicle_editor"
+
+    if preset_state_key not in st.session_state:
+        st.session_state[preset_state_key] = default_template_name
+    if st.session_state[preset_state_key] not in preset_templates:
+        st.session_state[preset_state_key] = default_template_name
+
+    if rows_state_key not in st.session_state:
+        st.session_state[rows_state_key] = build_default_rv_vehicle_rows(
+            price_frame=price_frame,
+            fallback_msrp=msrp_default,
+            preset=preset_templates[default_template_name],
+            row_count=3,
+        )
+
+    if currency_state_key not in st.session_state:
+        st.session_state[currency_state_key] = "EUR"
+    if st.session_state[currency_state_key] not in currency_rate_presets:
+        st.session_state[currency_state_key] = "EUR"
+    if fx_mode_state_key not in st.session_state:
+        st.session_state[fx_mode_state_key] = "预设汇率"
+
+    st.caption("🚗 OMODA/JAECOO 金融杠杆可视化（RV 折现模型）")
+    anchor_tokens = [f"国家={detected_country or '通用'}"]
+    if detected_brand:
+        anchor_tokens.append(f"品牌={detected_brand}")
+    if detected_model:
+        anchor_tokens.append(f"车型={detected_model}")
+    st.caption("预设锚点：" + "｜".join(anchor_tokens))
+
+    fx_col_1, fx_col_2, fx_col_3 = st.columns([1.4, 1.2, 1.4])
+    with fx_col_1:
+        display_currency = st.selectbox(
+            "展示币种",
+            options=list(currency_rate_presets.keys()),
+            key=currency_state_key,
+        )
+
+    preset_fx_rate = float(currency_rate_presets[display_currency])
+    with fx_col_2:
+        fx_mode = st.radio(
+            "汇率来源",
+            options=["预设汇率", "手动输入"],
+            horizontal=True,
+            key=fx_mode_state_key,
+        )
+
+    if fx_mode == "手动输入":
+        if manual_rate_state_key not in st.session_state:
+            st.session_state[manual_rate_state_key] = preset_fx_rate
+        with fx_col_3:
+            fx_rate = float(
+                st.number_input(
+                    f"手动汇率（1 EUR = ? {display_currency}）",
+                    min_value=0.0001,
+                    value=float(st.session_state[manual_rate_state_key]),
+                    step=0.0001,
+                    format="%.4f",
+                    key=manual_rate_state_key,
+                )
+            )
+    else:
+        fx_rate = preset_fx_rate
+        st.session_state[manual_rate_state_key] = preset_fx_rate
+        with fx_col_3:
+            st.metric(
+                "当前汇率",
+                f"1 EUR = {fx_rate:.4f} {display_currency}",
+            )
+
+    msrp_display_column = f"MSRP ({display_currency})"
+    monthly_payment_column = (
+        f"Monthly Payment ({display_currency}/月)"
+    )
+    total_monthly_payments_column = (
+        f"Total Monthly Payments ({display_currency})"
+    )
+    st.caption(
+        "汇率口径："
+        f"1 EUR = {fx_rate:.4f} {display_currency}"
+        f"（{'手动输入' if fx_mode == '手动输入' else '预设汇率'}）。"
+        "MSRP 输入列固定为 EUR。"
+    )
+
+    control_col_1, control_col_2, control_col_3 = st.columns([2, 1, 1])
+    with control_col_1:
+        selected_template_name = st.selectbox(
+            "参数模板",
+            options=list(preset_templates.keys()),
+            key=preset_state_key,
+        )
+    with control_col_2:
+        apply_template_clicked = st.button(
+            "应用模板到全部车型",
+            key="adv_rv_apply_template",
+            width="stretch",
+        )
+    with control_col_3:
+        reset_clicked = st.button(
+            "重置参数",
+            key="adv_rv_reset",
+            width="stretch",
+        )
+
+    if reset_clicked:
+        st.session_state[preset_state_key] = default_template_name
+        st.session_state[rows_state_key] = build_default_rv_vehicle_rows(
+            price_frame=price_frame,
+            fallback_msrp=msrp_default,
+            preset=preset_templates[default_template_name],
+            row_count=3,
+        )
+        if editor_state_key in st.session_state:
+            del st.session_state[editor_state_key]
+
+    if apply_template_clicked:
+        selected_preset = preset_templates[selected_template_name]
+        rows_df = pd.DataFrame(st.session_state[rows_state_key]).copy()
+        if rows_df.empty:
+            rows_df = build_default_rv_vehicle_rows(
+                price_frame=price_frame,
+                fallback_msrp=msrp_default,
+                preset=selected_preset,
+                row_count=3,
+            )
+        rows_df["Down Payment (%)"] = float(selected_preset["down_percent"])
+        rows_df["Residual Value (%)"] = float(selected_preset["rv_percent"])
+        rows_df["APR (%)"] = float(selected_preset["apr"])
+        rows_df["Term (Months)"] = int(round(selected_preset["term"]))
+        st.session_state[rows_state_key] = rows_df
+        if editor_state_key in st.session_state:
+            del st.session_state[editor_state_key]
+
+    st.caption(
+        "可同时输入多车型参数。支持模板批量应用与重置。"
+    )
+    edited_rows_df = st.data_editor(
+        pd.DataFrame(st.session_state[rows_state_key]),
+        key=editor_state_key,
+        num_rows="dynamic",
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Vehicle": st.column_config.TextColumn(
+                "Vehicle",
+                help="车型名称（可手填）",
+                required=True,
+            ),
+            "MSRP (EUR)": st.column_config.NumberColumn(
+                "MSRP (EUR)",
+                min_value=0,
+                step=1000,
+                format="%d",
+            ),
+            "Down Payment (%)": st.column_config.NumberColumn(
+                "Down Payment (%)",
+                min_value=0,
+                max_value=50,
+                step=1,
+                format="%.0f",
+            ),
+            "Residual Value (%)": st.column_config.NumberColumn(
+                "Residual Value (%)",
+                min_value=30,
+                max_value=70,
+                step=1,
+                format="%.0f",
+            ),
+            "APR (%)": st.column_config.NumberColumn(
+                "APR (%)",
+                min_value=0.0,
+                max_value=10.0,
+                step=0.1,
+                format="%.1f",
+            ),
+            "Term (Months)": st.column_config.NumberColumn(
+                "Term (Months)",
+                min_value=12,
+                max_value=84,
+                step=12,
+                format="%d",
+            ),
+        },
+    )
+    st.session_state[rows_state_key] = pd.DataFrame(edited_rows_df).copy()
+
+    working_rows = pd.DataFrame(edited_rows_df).copy()
+    if working_rows.empty:
+        st.warning("请至少输入 1 个车型后再进行 RV 计算。")
+        return
+
+    working_rows["Vehicle"] = (
+        working_rows["Vehicle"].astype("string").fillna("").str.strip()
+    )
+    working_rows = working_rows[working_rows["Vehicle"] != ""].copy()
+    if working_rows.empty:
+        st.warning("存在空车型名称，请补充后再计算。")
+        return
+
+    numeric_columns = [
+        msrp_input_column,
+        "Down Payment (%)",
+        "Residual Value (%)",
+        "APR (%)",
+        "Term (Months)",
+    ]
+    for column in numeric_columns:
+        working_rows[column] = pd.to_numeric(
+            working_rows[column],
+            errors="coerce",
+        )
+    working_rows = working_rows.dropna(subset=numeric_columns).copy()
+    if working_rows.empty:
+        st.warning("未识别到可计算的参数行，请检查数值输入。")
+        return
+
+    result_rows: list[dict[str, float | int | str]] = []
+    for _, row in working_rows.iterrows():
+        msrp_value = float(row[msrp_input_column])
+        term_months = int(row["Term (Months)"])
+        pmt, principal, pv_rv, net_financed, rv = calculate_finance(
+            msrp=msrp_value,
+            down_percent=float(row["Down Payment (%)"]),
+            rv_percent=float(row["Residual Value (%)"]),
+            apr=float(row["APR (%)"]),
+            term=term_months,
+        )
+        down_payment_amount_eur = max(msrp_value - principal, 0.0)
+        total_monthly_payment = float(pmt * term_months)
+
+        msrp_display_value = float(msrp_value * fx_rate)
+        down_payment_amount = float(down_payment_amount_eur * fx_rate)
+        principal_display = float(principal * fx_rate)
+        pv_rv_display = float(pv_rv * fx_rate)
+        net_financed_display = float(net_financed * fx_rate)
+        balloon_payment_display = float(rv * fx_rate)
+        monthly_payment_display = float(pmt * fx_rate)
+        total_monthly_payment_display = float(total_monthly_payment * fx_rate)
+
+        result_rows.append(
+            {
+                "Vehicle": str(row["Vehicle"]),
+                msrp_display_column: msrp_display_value,
+                "MSRP (EUR Base)": msrp_value,
+                "Down Payment (%)": float(row["Down Payment (%)"]),
+                "Residual Value (%)": float(row["Residual Value (%)"]),
+                "APR (%)": float(row["APR (%)"]),
+                "Term (Months)": term_months,
+                "Down Payment Amount": float(down_payment_amount),
+                "Principal": principal_display,
+                "PV(RV)": pv_rv_display,
+                "Net Financed": net_financed_display,
+                "Balloon Payment": balloon_payment_display,
+                monthly_payment_column: monthly_payment_display,
+                total_monthly_payments_column: total_monthly_payment_display,
+            }
+        )
+
+    result_df = pd.DataFrame(result_rows)
+    if result_df.empty:
+        st.warning("当前输入未产生有效结果。")
+        return
+
+    result_df = result_df.sort_values(
+        monthly_payment_column,
+        ascending=False,
+    )
+    summary_col_1, summary_col_2, summary_col_3 = st.columns(3)
+    with summary_col_1:
+        st.metric(
+            "车型数",
+            f"{len(result_df):,}",
+        )
+    with summary_col_2:
+        st.metric(
+            "月供均值",
+            f"{result_df[monthly_payment_column].mean():,.0f}"
+            f" {display_currency}/月",
+        )
+    with summary_col_3:
+        st.metric(
+            "月供最高",
+            f"{result_df[monthly_payment_column].max():,.0f}"
+            f" {display_currency}/月",
+        )
+
+    compare_fig = px.bar(
+        result_df,
+        x="Vehicle",
+        y=monthly_payment_column,
+        color="Term (Months)",
+        title="多车型月供对比",
+    )
+    compare_fig.update_traces(
+        texttemplate="%{y:,.0f}",
+        textposition="outside",
+    )
+    compare_fig = style_figure(compare_fig)
+    compare_fig.update_xaxes(title="车型")
+    compare_fig.update_yaxes(title=monthly_payment_column)
+    render_plotly_chart_with_png_export(
+        fig=compare_fig,
+        chart_key="adv_rv_finance_compare",
+        filename_prefix="rv_finance_compare",
+    )
+
+    st.dataframe(
+        result_df[
+            [
+                "Vehicle",
+                msrp_display_column,
+                "Down Payment (%)",
+                "Residual Value (%)",
+                "APR (%)",
+                "Term (Months)",
+                "Net Financed",
+                monthly_payment_column,
+                total_monthly_payments_column,
+                "Balloon Payment",
+            ]
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    st.markdown("**方案参数同屏对比（A/B/C）**")
+    vehicle_options = result_df["Vehicle"].astype(str).tolist()
+    scenario_base_vehicle = st.selectbox(
+        "基准车型（固定 MSRP）",
+        options=vehicle_options,
+        key="adv_rv_scheme_base_vehicle",
+    )
+    scenario_base_row = result_df[
+        result_df["Vehicle"] == scenario_base_vehicle
+    ].iloc[0]
+    scenario_base_msrp_eur = float(scenario_base_row["MSRP (EUR Base)"])
+
+    scenario_table_key = "adv_rv_scheme_param_table"
+    scenario_table_base_key = "adv_rv_scheme_param_table_base"
+    current_base_marker = (
+        f"{scenario_base_vehicle}:{scenario_base_msrp_eur:.2f}"
+    )
+
+    def clamp_term_value(term_value: float) -> int:
+        return int(min(max(round(term_value / 12) * 12, 12), 84))
+
+    if (
+        scenario_table_key not in st.session_state
+        or st.session_state.get(scenario_table_base_key) != current_base_marker
+    ):
+        default_scenarios = pd.DataFrame(
+            [
+                {
+                    "Scheme": "A",
+                    "Down Payment (%)": float(
+                        scenario_base_row["Down Payment (%)"]
+                    ),
+                    "Residual Value (%)": float(
+                        scenario_base_row["Residual Value (%)"]
+                    ),
+                    "APR (%)": float(scenario_base_row["APR (%)"]),
+                    "Term (Months)": int(scenario_base_row["Term (Months)"]),
+                },
+                {
+                    "Scheme": "B",
+                    "Down Payment (%)": float(
+                        min(
+                            max(
+                                float(
+                                    scenario_base_row[
+                                        "Down Payment (%)"
+                                    ]
+                                )
+                                + 5.0,
+                                0.0,
+                            ),
+                            50.0,
+                        )
+                    ),
+                    "Residual Value (%)": float(
+                        min(
+                            max(
+                                float(
+                                    scenario_base_row[
+                                        "Residual Value (%)"
+                                    ]
+                                )
+                                - 3.0,
+                                30.0,
+                            ),
+                            70.0,
+                        )
+                    ),
+                    "APR (%)": float(
+                        min(
+                            max(
+                                float(scenario_base_row["APR (%)"]) + 0.5,
+                                0.0,
+                            ),
+                            10.0,
+                        )
+                    ),
+                    "Term (Months)": int(
+                        scenario_base_row["Term (Months)"]
+                    ),
+                },
+                {
+                    "Scheme": "C",
+                    "Down Payment (%)": float(
+                        min(
+                            max(
+                                float(
+                                    scenario_base_row[
+                                        "Down Payment (%)"
+                                    ]
+                                )
+                                - 5.0,
+                                0.0,
+                            ),
+                            50.0,
+                        )
+                    ),
+                    "Residual Value (%)": float(
+                        min(
+                            max(
+                                float(
+                                    scenario_base_row[
+                                        "Residual Value (%)"
+                                    ]
+                                )
+                                + 3.0,
+                                30.0,
+                            ),
+                            70.0,
+                        )
+                    ),
+                    "APR (%)": float(
+                        min(
+                            max(
+                                float(scenario_base_row["APR (%)"]) - 0.5,
+                                0.0,
+                            ),
+                            10.0,
+                        )
+                    ),
+                    "Term (Months)": clamp_term_value(
+                        float(scenario_base_row["Term (Months)"]) + 12.0
+                    ),
+                },
+            ]
+        )
+        st.session_state[scenario_table_key] = default_scenarios
+        st.session_state[scenario_table_base_key] = current_base_marker
+
+    scenario_param_df = st.data_editor(
+        pd.DataFrame(st.session_state[scenario_table_key]),
+        key="adv_rv_scheme_param_editor",
+        num_rows="dynamic",
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Scheme": st.column_config.TextColumn(
+                "Scheme",
+                required=True,
+            ),
+            "Down Payment (%)": st.column_config.NumberColumn(
+                "Down Payment (%)",
+                min_value=0.0,
+                max_value=50.0,
+                step=1.0,
+                format="%.1f",
+            ),
+            "Residual Value (%)": st.column_config.NumberColumn(
+                "Residual Value (%)",
+                min_value=30.0,
+                max_value=70.0,
+                step=1.0,
+                format="%.1f",
+            ),
+            "APR (%)": st.column_config.NumberColumn(
+                "APR (%)",
+                min_value=0.0,
+                max_value=10.0,
+                step=0.1,
+                format="%.2f",
+            ),
+            "Term (Months)": st.column_config.NumberColumn(
+                "Term (Months)",
+                min_value=12,
+                max_value=84,
+                step=12,
+                format="%d",
+            ),
+        },
+    )
+    st.session_state[scenario_table_key] = pd.DataFrame(
+        scenario_param_df
+    ).copy()
+
+    scenario_param_df = pd.DataFrame(scenario_param_df).copy()
+    scenario_param_df["Scheme"] = (
+        scenario_param_df["Scheme"].astype("string").fillna("").str.strip()
+    )
+    scenario_param_df = scenario_param_df[
+        scenario_param_df["Scheme"] != ""
+    ].copy()
+
+    if scenario_param_df.empty:
+        st.info("请至少保留 2 个方案（A/B 或 A/B/C）。")
+    else:
+        for column_name in [
+            "Down Payment (%)",
+            "Residual Value (%)",
+            "APR (%)",
+            "Term (Months)",
+        ]:
+            scenario_param_df[column_name] = pd.to_numeric(
+                scenario_param_df[column_name],
+                errors="coerce",
+            )
+
+        scenario_param_df = scenario_param_df.dropna(
+            subset=[
+                "Down Payment (%)",
+                "Residual Value (%)",
+                "APR (%)",
+                "Term (Months)",
+            ]
+        ).copy()
+
+        if len(scenario_param_df) > 3:
+            st.warning("最多对比 3 个方案，系统将仅保留前 3 行。")
+            scenario_param_df = scenario_param_df.head(3).copy()
+
+        if len(scenario_param_df) < 2:
+            st.info("请至少输入 2 个有效方案参数。")
+        else:
+            scenario_rows: list[dict[str, float | int | str]] = []
+            for _, scenario_row in scenario_param_df.iterrows():
+                scenario_name = str(scenario_row["Scheme"])
+                scenario_down = float(
+                    min(max(scenario_row["Down Payment (%)"], 0.0), 50.0)
+                )
+                scenario_rv = float(
+                    min(max(scenario_row["Residual Value (%)"], 30.0), 70.0)
+                )
+                scenario_apr = float(
+                    min(max(scenario_row["APR (%)"], 0.0), 10.0)
+                )
+                scenario_term = clamp_term_value(
+                    float(scenario_row["Term (Months)"])
+                )
+
+                (
+                    scenario_pmt,
+                    scenario_principal,
+                    scenario_pv_rv,
+                    scenario_net,
+                    scenario_balloon,
+                ) = calculate_finance(
+                    msrp=scenario_base_msrp_eur,
+                    down_percent=scenario_down,
+                    rv_percent=scenario_rv,
+                    apr=scenario_apr,
+                    term=scenario_term,
+                )
+                scenario_down_payment = max(
+                    scenario_base_msrp_eur - scenario_principal,
+                    0.0,
+                )
+                scenario_rows.append(
+                    {
+                        "Scheme": scenario_name,
+                        "Down Payment (%)": scenario_down,
+                        "Residual Value (%)": scenario_rv,
+                        "APR (%)": scenario_apr,
+                        "Term (Months)": scenario_term,
+                        "Net Financed": float(scenario_net * fx_rate),
+                        monthly_payment_column: float(scenario_pmt * fx_rate),
+                        total_monthly_payments_column: float(
+                            scenario_pmt * scenario_term * fx_rate
+                        ),
+                        "Balloon Payment": float(
+                            scenario_balloon * fx_rate
+                        ),
+                        "Down Payment Amount": float(
+                            scenario_down_payment * fx_rate
+                        ),
+                        "PV(RV)": float(scenario_pv_rv * fx_rate),
+                    }
+                )
+
+            scenario_result_df = pd.DataFrame(scenario_rows)
+            scenario_result_df = scenario_result_df.drop_duplicates(
+                subset=["Scheme"],
+                keep="last",
+            )
+
+            st.caption(
+                f"基准车型：{scenario_base_vehicle}"
+                "｜固定 MSRP="
+                f"{scenario_base_msrp_eur * fx_rate:,.0f}"
+                f" {display_currency}"
+            )
+
+            scheme_cols = st.columns(len(scenario_result_df))
+            for scheme_col, (_, scheme_row) in zip(
+                scheme_cols,
+                scenario_result_df.iterrows(),
+            ):
+                scheme_name = str(scheme_row["Scheme"])
+                with scheme_col:
+                    st.markdown(f"**方案 {scheme_name}**")
+                    st.metric(
+                        f"月供 ({display_currency}/月)",
+                        f"{float(scheme_row[monthly_payment_column]):,.0f}",
+                    )
+                    st.metric(
+                        f"净融资额 ({display_currency})",
+                        f"{float(scheme_row['Net Financed']):,.0f}",
+                    )
+                    st.metric(
+                        f"Balloon ({display_currency})",
+                        f"{float(scheme_row['Balloon Payment']):,.0f}",
+                    )
+
+            scenario_bar_fig = px.bar(
+                scenario_result_df,
+                x="Scheme",
+                y=monthly_payment_column,
+                color="Scheme",
+                title="方案月供同屏对比",
+            )
+            scenario_bar_fig.update_traces(
+                texttemplate="%{y:,.0f}",
+                textposition="outside",
+            )
+            scenario_bar_fig = style_figure(scenario_bar_fig)
+            scenario_bar_fig.update_xaxes(title="方案")
+            scenario_bar_fig.update_yaxes(title=monthly_payment_column)
+            render_plotly_chart_with_png_export(
+                fig=scenario_bar_fig,
+                chart_key="adv_rv_scheme_compare",
+                filename_prefix="rv_scheme_compare",
+            )
+
+            baseline_row = scenario_result_df.iloc[0]
+            delta_rows: list[dict[str, str]] = []
+            for _, scheme_row in scenario_result_df.iloc[1:].iterrows():
+                baseline_monthly = float(baseline_row[monthly_payment_column])
+                current_monthly = float(scheme_row[monthly_payment_column])
+                baseline_net = float(baseline_row["Net Financed"])
+                current_net = float(scheme_row["Net Financed"])
+
+                monthly_delta = current_monthly - baseline_monthly
+                net_delta = current_net - baseline_net
+                monthly_ratio = (
+                    monthly_delta / baseline_monthly
+                    if baseline_monthly != 0
+                    else float("nan")
+                )
+                net_ratio = (
+                    net_delta / baseline_net
+                    if baseline_net != 0
+                    else float("nan")
+                )
+
+                delta_rows.append(
+                    {
+                        "Compare": f"{scheme_row['Scheme']}"
+                        f" vs {baseline_row['Scheme']}",
+                        "Monthly Delta": (
+                            f"{monthly_delta:+,.0f} {display_currency}/月"
+                        ),
+                        "Monthly Delta %": (
+                            f"{monthly_ratio:+.1%}"
+                            if pd.notna(monthly_ratio)
+                            else "N/A"
+                        ),
+                        "NetFin Delta": (
+                            f"{net_delta:+,.0f} {display_currency}"
+                        ),
+                        "NetFin Delta %": (
+                            f"{net_ratio:+.1%}"
+                            if pd.notna(net_ratio)
+                            else "N/A"
+                        ),
+                    }
+                )
+
+            if delta_rows:
+                st.markdown("**A/B/C 差异摘要卡（参数方案）**")
+                st.dataframe(
+                    pd.DataFrame(delta_rows),
+                    width="stretch",
+                    hide_index=True,
+                )
+                st.caption(
+                    f"基准方案：{baseline_row['Scheme']}"
+                    "（第一行）。建议优先比较月供与净融资额差异。"
+                )
+
+    focus_vehicle = st.selectbox(
+        "瀑布图展示车型",
+        options=result_df["Vehicle"].tolist(),
+        key="adv_rv_focus_vehicle",
+    )
+    focus_row = result_df[result_df["Vehicle"] == focus_vehicle].iloc[0]
+
+    focus_monthly_payment = int(
+        focus_row[monthly_payment_column]
+    )
+    st.subheader(
+        f"{focus_vehicle} 月供预测: {focus_monthly_payment:,}"
+        f" {display_currency} / 月"
+    )
+
+    waterfall_fig = go.Figure(
+        go.Waterfall(
+            name="Loan Logic",
+            orientation="v",
+            measure=[
+                "absolute",
+                "relative",
+                "total",
+                "relative",
+                "total",
+                "total",
+            ],
+            x=[
+                "Total MSRP",
+                "Down Payment",
+                "P (Loan Principal)",
+                "Minus PV(RV)",
+                "Net Financed",
+                "Monthly Payment",
+            ],
+            textposition="outside",
+            text=[
+                f"{int(focus_row[msrp_display_column]):,}",
+                f"-{int(focus_row['Down Payment Amount']):,}",
+                f"{int(focus_row['Principal']):,}",
+                f"-{int(focus_row['PV(RV)']):,}",
+                f"{int(focus_row['Net Financed']):,}",
+                f"PMT: {int(focus_row[monthly_payment_column]):,}",
+            ],
+            y=[
+                float(focus_row[msrp_display_column]),
+                -float(focus_row["Down Payment Amount"]),
+                float(focus_row["Principal"]),
+                -float(focus_row["PV(RV)"]),
+                float(focus_row["Net Financed"]),
+                float(focus_row[monthly_payment_column]),
+            ],
+            connector={"line": {"color": "rgb(63, 63, 63)"}},
+        )
+    )
+    waterfall_fig.update_layout(
+        title="从贷款总额到月供的折算过程",
+        showlegend=False,
+    )
+    render_plotly_chart_with_png_export(
+        fig=style_figure(waterfall_fig),
+        chart_key="adv_rv_finance_dashboard",
+        filename_prefix="rv_finance_dashboard",
+    )
+
+    focus_term_months = int(focus_row["Term (Months)"])
+    focus_apr_percent = float(focus_row["APR (%)"])
+    focus_monthly_rate = focus_apr_percent / 100.0 / 12.0
+    focus_msrp_amount = float(focus_row[msrp_display_column])
+    focus_rv_amount = float(focus_row["Balloon Payment"])
+    focus_pv_amount = float(focus_row["PV(RV)"])
+    focus_down_payment = float(focus_row["Down Payment Amount"])
+    focus_principal = float(focus_row["Principal"])
+    focus_net_financed = float(focus_row["Net Financed"])
+    focus_monthly_payment_amount = float(
+        focus_row[monthly_payment_column]
+    )
+
+    curve_month_points = sorted(
+        {
+            12,
+            24,
+            36,
+            48,
+            60,
+            max(focus_term_months, 1),
+        }
+    )
+    pv_curve_rows: list[dict[str, float | int | str]] = []
+    for month_value in curve_month_points:
+        if focus_monthly_rate > 0:
+            pv_value = focus_rv_amount / (
+                (1.0 + focus_monthly_rate) ** month_value
+            )
+        else:
+            pv_value = focus_rv_amount
+
+        pv_curve_rows.append(
+            {
+                "Term (Months)": int(month_value),
+                "Series": "Nominal RV",
+                "Amount": float(focus_rv_amount),
+            }
+        )
+        pv_curve_rows.append(
+            {
+                "Term (Months)": int(month_value),
+                "Series": "PV(RV)",
+                "Amount": float(pv_value),
+            }
+        )
+
+    pv_curve_df = pd.DataFrame(pv_curve_rows)
+
+    with st.expander("说明图：PV-RV关系与银行月供公式", expanded=False):
+        relation_tab, formula_tab, sensitivity_tab = st.tabs(
+            [
+                "PV-RV关系图",
+                "月供公式与步骤",
+                "APR敏感性分析",
+            ]
+        )
+
+        with relation_tab:
+            relation_fig = px.line(
+                pv_curve_df,
+                x="Term (Months)",
+                y="Amount",
+                color="Series",
+                markers=True,
+                title=f"{focus_vehicle}：RV 与 PV(RV) 随期限变化",
+            )
+            relation_fig = style_figure(relation_fig)
+            relation_fig.update_xaxes(title="Term (Months)")
+            relation_fig.update_yaxes(title=f"Amount ({display_currency})")
+            render_plotly_chart_with_png_export(
+                fig=relation_fig,
+                chart_key="adv_rv_pv_relation",
+                filename_prefix="rv_pv_relation",
+            )
+
+            pv_discount_gap = max(focus_rv_amount - focus_pv_amount, 0.0)
+            pv_ratio = (
+                focus_pv_amount / focus_rv_amount
+                if focus_rv_amount > 0
+                else float("nan")
+            )
+            if pd.notna(pv_ratio):
+                st.caption(
+                    f"当前期限 {focus_term_months} 月："
+                    f"PV(RV)={focus_pv_amount:,.0f} {display_currency}，"
+                    f"折现差额={pv_discount_gap:,.0f} {display_currency}，"
+                    f"PV/RV={pv_ratio:.1%}。"
+                )
+
+        with formula_tab:
+            st.markdown("**银行月供计算公式**")
+            st.latex(r"Down = MSRP \times down\%")
+            st.latex(r"P = MSRP - Down")
+            st.latex(r"PV(RV) = \frac{RV}{(1+r)^n}")
+            st.latex(r"NetFinanced = P - PV(RV)")
+            if focus_monthly_rate > 0:
+                st.latex(
+                    r"PMT = NetFinanced \times "
+                    r"\frac{r}{1-(1+r)^{-n}}"
+                )
+            else:
+                st.latex(r"PMT = \frac{NetFinanced}{n}")
+
+            monthly_rate_percent = focus_monthly_rate * 100.0
+            st.caption(
+                f"APR 年化={focus_apr_percent:.2f}%"
+                f" -> 月利率={monthly_rate_percent:.4f}%"
+            )
+
+            steps_df = pd.DataFrame(
+                [
+                    {
+                        "Step": "1. Total MSRP",
+                        "Formula": "输入",
+                        "Value": (
+                            f"{focus_msrp_amount:,.0f} {display_currency}"
+                        ),
+                    },
+                    {
+                        "Step": "2. Down Payment",
+                        "Formula": "MSRP * down%",
+                        "Value": (
+                            f"{focus_down_payment:,.0f} {display_currency}"
+                        ),
+                    },
+                    {
+                        "Step": "3. P (Loan Principal)",
+                        "Formula": "MSRP - Down",
+                        "Value": (
+                            f"{focus_principal:,.0f} {display_currency}"
+                        ),
+                    },
+                    {
+                        "Step": "4. PV(RV)",
+                        "Formula": "RV / (1+r)^n",
+                        "Value": (
+                            f"{focus_pv_amount:,.0f} {display_currency}"
+                        ),
+                    },
+                    {
+                        "Step": "5. Net Financed",
+                        "Formula": "P - PV(RV)",
+                        "Value": (
+                            f"{focus_net_financed:,.0f} {display_currency}"
+                        ),
+                    },
+                    {
+                        "Step": "6. Monthly Payment",
+                        "Formula": "PMT(NetFinanced, r, n)",
+                        "Value": (
+                            f"{focus_monthly_payment_amount:,.0f} "
+                            f"{display_currency}/月"
+                        ),
+                    },
+                ]
+            )
+            st.dataframe(steps_df, width="stretch", hide_index=True)
+
+            total_monthly_amount = (
+                focus_monthly_payment_amount * focus_term_months
+            )
+            monthly_payment_share = (
+                f"{focus_monthly_payment_amount / focus_msrp_amount:.1%}"
+                if focus_msrp_amount > 0
+                else "N/A"
+            )
+            total_monthly_share = (
+                f"{total_monthly_amount / focus_msrp_amount:.1%}"
+                if focus_msrp_amount > 0
+                else "N/A"
+            )
+
+            composition_df = pd.DataFrame(
+                [
+                    {
+                        "Component": "Total MSRP",
+                        "Amount": focus_msrp_amount,
+                        "Share of MSRP": (
+                            "100.0%"
+                            if focus_msrp_amount > 0
+                            else "N/A"
+                        ),
+                    },
+                    {
+                        "Component": "Down Payment (-)",
+                        "Amount": focus_down_payment,
+                        "Share of MSRP": (
+                            f"{focus_down_payment / focus_msrp_amount:.1%}"
+                            if focus_msrp_amount > 0
+                            else "N/A"
+                        ),
+                    },
+                    {
+                        "Component": "P (Loan Principal)",
+                        "Amount": focus_principal,
+                        "Share of MSRP": (
+                            f"{focus_principal / focus_msrp_amount:.1%}"
+                            if focus_msrp_amount > 0
+                            else "N/A"
+                        ),
+                    },
+                    {
+                        "Component": "PV(RV) (-)",
+                        "Amount": focus_pv_amount,
+                        "Share of MSRP": (
+                            f"{focus_pv_amount / focus_msrp_amount:.1%}"
+                            if focus_msrp_amount > 0
+                            else "N/A"
+                        ),
+                    },
+                    {
+                        "Component": "Net Financed",
+                        "Amount": focus_net_financed,
+                        "Share of MSRP": (
+                            f"{focus_net_financed / focus_msrp_amount:.1%}"
+                            if focus_msrp_amount > 0
+                            else "N/A"
+                        ),
+                    },
+                    {
+                        "Component": "Monthly Payment",
+                        "Amount": focus_monthly_payment_amount,
+                        "Share of MSRP": monthly_payment_share,
+                    },
+                    {
+                        "Component": "Total Monthly Payments",
+                        "Amount": total_monthly_amount,
+                        "Share of MSRP": total_monthly_share,
+                    },
+                ]
+            )
+            composition_df["Amount"] = composition_df["Amount"].map(
+                lambda value: f"{float(value):,.0f} {display_currency}"
+            )
+            st.markdown("**净融资额组成明细**")
+            st.dataframe(composition_df, width="stretch", hide_index=True)
+
+            balloon_ratio = (
+                focus_rv_amount / focus_msrp_amount
+                if focus_msrp_amount > 0
+                else 0.0
+            )
+            if balloon_ratio >= 0.55:
+                st.warning(
+                    f"Balloon Payment 占 MSRP 比例为 {balloon_ratio:.1%}，"
+                    "到期一次性支付压力较高，请评估再融资或置换策略。"
+                )
+            elif balloon_ratio >= 0.40:
+                st.info(
+                    f"Balloon Payment 占 MSRP 比例为 {balloon_ratio:.1%}，"
+                    "建议关注到期现金流安排。"
+                )
+
+        with sensitivity_tab:
+            st.markdown("**参数敏感性分析（其他参数固定）**")
+            base_msrp_eur = (
+                focus_msrp_amount / fx_rate if fx_rate > 0 else 0.0
+            )
+            base_down = float(focus_row["Down Payment (%)"])
+            base_rv = float(focus_row["Residual Value (%)"])
+            base_apr = float(focus_row["APR (%)"])
+            base_term = int(focus_row["Term (Months)"])
+            st.caption(
+                "基准参数："
+                f"首付 {base_down:.0f}%｜残值 {base_rv:.0f}%｜"
+                f"APR {base_apr:.2f}%｜期限 {base_term} 月"
+            )
+
+            apr_tab, rv_tab, down_tab, term_tab = st.tabs(
+                ["APR", "RV(残值率)", "首付", "期限"]
+            )
+
+            with apr_tab:
+                apr_col_1, apr_col_2 = st.columns(2)
+                with apr_col_1:
+                    apr_span = st.slider(
+                        "APR 扰动范围（±百分点）",
+                        min_value=0.5,
+                        max_value=4.0,
+                        value=2.0,
+                        step=0.1,
+                        key="adv_rv_apr_span",
+                    )
+                with apr_col_2:
+                    apr_points = st.slider(
+                        "采样点数",
+                        min_value=5,
+                        max_value=25,
+                        value=11,
+                        step=2,
+                        key="adv_rv_apr_points",
+                    )
+
+                min_apr = max(0.0, base_apr - apr_span)
+                max_apr = min(15.0, base_apr + apr_span)
+                if apr_points <= 1 or max_apr <= min_apr:
+                    apr_grid = [base_apr]
+                else:
+                    apr_step = (max_apr - min_apr) / (apr_points - 1)
+                    apr_grid = [
+                        min_apr + index * apr_step
+                        for index in range(apr_points)
+                    ]
+
+                apr_rows: list[dict[str, float]] = []
+                for apr_value in apr_grid:
+                    scenario_pmt, _, _, _, _ = calculate_finance(
+                        msrp=base_msrp_eur,
+                        down_percent=base_down,
+                        rv_percent=base_rv,
+                        apr=float(apr_value),
+                        term=base_term,
+                    )
+                    apr_rows.append(
+                        {
+                            "APR (%)": float(apr_value),
+                            monthly_payment_column: float(
+                                scenario_pmt * fx_rate
+                            ),
+                        }
+                    )
+
+                apr_df = pd.DataFrame(apr_rows)
+                apr_fig = px.line(
+                    apr_df,
+                    x="APR (%)",
+                    y=monthly_payment_column,
+                    markers=True,
+                    title=f"{focus_vehicle}：APR 对月供影响",
+                )
+                apr_fig = style_figure(apr_fig)
+                apr_fig.update_xaxes(title="APR (%)")
+                apr_fig.update_yaxes(title=monthly_payment_column)
+                apr_fig.add_vline(
+                    x=base_apr,
+                    line_dash="dash",
+                    line_color="#6B7280",
+                )
+                render_plotly_chart_with_png_export(
+                    fig=apr_fig,
+                    chart_key="adv_rv_apr_sensitivity",
+                    filename_prefix="rv_apr_sensitivity",
+                )
+
+            with rv_tab:
+                rv_col_1, rv_col_2 = st.columns(2)
+                with rv_col_1:
+                    rv_span = st.slider(
+                        "残值率扰动范围（±百分点）",
+                        min_value=2.0,
+                        max_value=20.0,
+                        value=8.0,
+                        step=1.0,
+                        key="adv_rv_pct_span",
+                    )
+                with rv_col_2:
+                    rv_points = st.slider(
+                        "采样点数",
+                        min_value=5,
+                        max_value=25,
+                        value=11,
+                        step=2,
+                        key="adv_rv_pct_points",
+                    )
+
+                min_rv = max(30.0, base_rv - rv_span)
+                max_rv = min(70.0, base_rv + rv_span)
+                if rv_points <= 1 or max_rv <= min_rv:
+                    rv_grid = [base_rv]
+                else:
+                    rv_step = (max_rv - min_rv) / (rv_points - 1)
+                    rv_grid = [
+                        min_rv + index * rv_step
+                        for index in range(rv_points)
+                    ]
+
+                rv_rows: list[dict[str, float]] = []
+                for rv_value in rv_grid:
+                    scenario_pmt, _, _, _, _ = calculate_finance(
+                        msrp=base_msrp_eur,
+                        down_percent=base_down,
+                        rv_percent=float(rv_value),
+                        apr=base_apr,
+                        term=base_term,
+                    )
+                    rv_rows.append(
+                        {
+                            "RV (%)": float(rv_value),
+                            monthly_payment_column: float(
+                                scenario_pmt * fx_rate
+                            ),
+                        }
+                    )
+
+                rv_df = pd.DataFrame(rv_rows)
+                rv_fig = px.line(
+                    rv_df,
+                    x="RV (%)",
+                    y=monthly_payment_column,
+                    markers=True,
+                    title=f"{focus_vehicle}：残值率 对月供影响",
+                )
+                rv_fig = style_figure(rv_fig)
+                rv_fig.update_xaxes(title="RV (%)")
+                rv_fig.update_yaxes(title=monthly_payment_column)
+                rv_fig.add_vline(
+                    x=base_rv,
+                    line_dash="dash",
+                    line_color="#6B7280",
+                )
+                render_plotly_chart_with_png_export(
+                    fig=rv_fig,
+                    chart_key="adv_rv_pct_sensitivity",
+                    filename_prefix="rv_pct_sensitivity",
+                )
+
+            with down_tab:
+                down_col_1, down_col_2 = st.columns(2)
+                with down_col_1:
+                    down_span = st.slider(
+                        "首付比例扰动范围（±百分点）",
+                        min_value=2.0,
+                        max_value=25.0,
+                        value=10.0,
+                        step=1.0,
+                        key="adv_rv_down_span",
+                    )
+                with down_col_2:
+                    down_points = st.slider(
+                        "采样点数",
+                        min_value=5,
+                        max_value=25,
+                        value=11,
+                        step=2,
+                        key="adv_rv_down_points",
+                    )
+
+                min_down = max(0.0, base_down - down_span)
+                max_down = min(50.0, base_down + down_span)
+                if down_points <= 1 or max_down <= min_down:
+                    down_grid = [base_down]
+                else:
+                    down_step = (max_down - min_down) / (down_points - 1)
+                    down_grid = [
+                        min_down + index * down_step
+                        for index in range(down_points)
+                    ]
+
+                down_rows: list[dict[str, float]] = []
+                for down_value in down_grid:
+                    scenario_pmt, _, _, _, _ = calculate_finance(
+                        msrp=base_msrp_eur,
+                        down_percent=float(down_value),
+                        rv_percent=base_rv,
+                        apr=base_apr,
+                        term=base_term,
+                    )
+                    down_rows.append(
+                        {
+                            "Down Payment (%)": float(down_value),
+                            monthly_payment_column: float(
+                                scenario_pmt * fx_rate
+                            ),
+                        }
+                    )
+
+                down_df = pd.DataFrame(down_rows)
+                down_fig = px.line(
+                    down_df,
+                    x="Down Payment (%)",
+                    y=monthly_payment_column,
+                    markers=True,
+                    title=f"{focus_vehicle}：首付比例 对月供影响",
+                )
+                down_fig = style_figure(down_fig)
+                down_fig.update_xaxes(title="Down Payment (%)")
+                down_fig.update_yaxes(title=monthly_payment_column)
+                down_fig.add_vline(
+                    x=base_down,
+                    line_dash="dash",
+                    line_color="#6B7280",
+                )
+                render_plotly_chart_with_png_export(
+                    fig=down_fig,
+                    chart_key="adv_rv_down_sensitivity",
+                    filename_prefix="rv_down_sensitivity",
+                )
+
+            with term_tab:
+                term_options = [24, 36, 48, 60, 72, 84]
+                default_terms = sorted(
+                    {
+                        24,
+                        36,
+                        48,
+                        60,
+                        int(base_term),
+                    }
+                )
+                selected_terms = st.multiselect(
+                    "期限采样（Months）",
+                    options=term_options,
+                    default=[
+                        term
+                        for term in default_terms
+                        if term in term_options
+                    ],
+                    key="adv_rv_term_sensitivity_terms",
+                )
+                if not selected_terms:
+                    st.info("请至少选择 1 个期限点。")
+                else:
+                    term_rows: list[dict[str, float | int]] = []
+                    for term_value in sorted(selected_terms):
+                        scenario_pmt, _, _, _, _ = calculate_finance(
+                            msrp=base_msrp_eur,
+                            down_percent=base_down,
+                            rv_percent=base_rv,
+                            apr=base_apr,
+                            term=int(term_value),
+                        )
+                        term_rows.append(
+                            {
+                                "Term (Months)": int(term_value),
+                                monthly_payment_column: float(
+                                    scenario_pmt * fx_rate
+                                ),
+                            }
+                        )
+
+                    term_df = pd.DataFrame(term_rows)
+                    term_fig = px.line(
+                        term_df,
+                        x="Term (Months)",
+                        y=monthly_payment_column,
+                        markers=True,
+                        title=f"{focus_vehicle}：期限 对月供影响",
+                    )
+                    term_fig = style_figure(term_fig)
+                    term_fig.update_xaxes(title="Term (Months)")
+                    term_fig.update_yaxes(title=monthly_payment_column)
+                    term_fig.add_vline(
+                        x=base_term,
+                        line_dash="dash",
+                        line_color="#6B7280",
+                    )
+                    render_plotly_chart_with_png_export(
+                        fig=term_fig,
+                        chart_key="adv_rv_term_sensitivity",
+                        filename_prefix="rv_term_sensitivity",
+                    )
+
+            st.markdown("**月供区间 Tornado 图**")
+            tornado_rows: list[dict[str, float | str]] = []
+
+            apr_low = max(0.0, base_apr - 2.0)
+            apr_high = min(15.0, base_apr + 2.0)
+            pmt_apr_low, _, _, _, _ = calculate_finance(
+                msrp=base_msrp_eur,
+                down_percent=base_down,
+                rv_percent=base_rv,
+                apr=apr_low,
+                term=base_term,
+            )
+            pmt_apr_high, _, _, _, _ = calculate_finance(
+                msrp=base_msrp_eur,
+                down_percent=base_down,
+                rv_percent=base_rv,
+                apr=apr_high,
+                term=base_term,
+            )
+            tornado_rows.append(
+                {
+                    "Parameter": "APR",
+                    "Low": float(pmt_apr_low * fx_rate),
+                    "High": float(pmt_apr_high * fx_rate),
+                }
+            )
+
+            rv_low = max(30.0, base_rv - 8.0)
+            rv_high = min(70.0, base_rv + 8.0)
+            pmt_rv_low, _, _, _, _ = calculate_finance(
+                msrp=base_msrp_eur,
+                down_percent=base_down,
+                rv_percent=rv_low,
+                apr=base_apr,
+                term=base_term,
+            )
+            pmt_rv_high, _, _, _, _ = calculate_finance(
+                msrp=base_msrp_eur,
+                down_percent=base_down,
+                rv_percent=rv_high,
+                apr=base_apr,
+                term=base_term,
+            )
+            tornado_rows.append(
+                {
+                    "Parameter": "RV",
+                    "Low": float(pmt_rv_low * fx_rate),
+                    "High": float(pmt_rv_high * fx_rate),
+                }
+            )
+
+            down_low = max(0.0, base_down - 10.0)
+            down_high = min(50.0, base_down + 10.0)
+            pmt_down_low, _, _, _, _ = calculate_finance(
+                msrp=base_msrp_eur,
+                down_percent=down_low,
+                rv_percent=base_rv,
+                apr=base_apr,
+                term=base_term,
+            )
+            pmt_down_high, _, _, _, _ = calculate_finance(
+                msrp=base_msrp_eur,
+                down_percent=down_high,
+                rv_percent=base_rv,
+                apr=base_apr,
+                term=base_term,
+            )
+            tornado_rows.append(
+                {
+                    "Parameter": "Down Payment",
+                    "Low": float(pmt_down_low * fx_rate),
+                    "High": float(pmt_down_high * fx_rate),
+                }
+            )
+
+            term_low = max(24, base_term - 12)
+            term_high = min(84, base_term + 12)
+            pmt_term_low, _, _, _, _ = calculate_finance(
+                msrp=base_msrp_eur,
+                down_percent=base_down,
+                rv_percent=base_rv,
+                apr=base_apr,
+                term=term_low,
+            )
+            pmt_term_high, _, _, _, _ = calculate_finance(
+                msrp=base_msrp_eur,
+                down_percent=base_down,
+                rv_percent=base_rv,
+                apr=base_apr,
+                term=term_high,
+            )
+            tornado_rows.append(
+                {
+                    "Parameter": "Term",
+                    "Low": float(pmt_term_low * fx_rate),
+                    "High": float(pmt_term_high * fx_rate),
+                }
+            )
+
+            tornado_df = pd.DataFrame(tornado_rows)
+            tornado_df["Range"] = (
+                tornado_df[["Low", "High"]].max(axis=1)
+                - tornado_df[["Low", "High"]].min(axis=1)
+            )
+            tornado_df = tornado_df.sort_values("Range", ascending=True)
+
+            tornado_fig = go.Figure()
+            tornado_fig.add_trace(
+                go.Bar(
+                    y=tornado_df["Parameter"],
+                    x=tornado_df["Low"],
+                    name="Low",
+                    orientation="h",
+                    marker_color="#93C5FD",
+                )
+            )
+            tornado_fig.add_trace(
+                go.Bar(
+                    y=tornado_df["Parameter"],
+                    x=tornado_df["High"],
+                    name="High",
+                    orientation="h",
+                    marker_color="#1D4ED8",
+                )
+            )
+            tornado_fig.update_layout(
+                title="月供区间 Tornado（参数扰动）",
+                barmode="overlay",
+                showlegend=True,
+            )
+            tornado_fig = style_figure(tornado_fig)
+            tornado_fig.update_xaxes(title=monthly_payment_column)
+            tornado_fig.update_yaxes(title="参数")
+            render_plotly_chart_with_png_export(
+                fig=tornado_fig,
+                chart_key="adv_rv_tornado",
+                filename_prefix="rv_tornado",
+            )
+
+            st.markdown("**PMT 等高线图（APR × RV）**")
+            contour_apr_grid = [
+                max(0.0, base_apr - 2.0) + index * 0.5
+                for index in range(9)
+            ]
+            contour_rv_grid = [
+                max(30.0, base_rv - 12.0) + index * 3.0
+                for index in range(9)
+            ]
+
+            z_values: list[list[float]] = []
+            for rv_value in contour_rv_grid:
+                row_values: list[float] = []
+                for apr_value in contour_apr_grid:
+                    pmt_value, _, _, _, _ = calculate_finance(
+                        msrp=base_msrp_eur,
+                        down_percent=base_down,
+                        rv_percent=min(max(rv_value, 30.0), 70.0),
+                        apr=apr_value,
+                        term=base_term,
+                    )
+                    row_values.append(float(pmt_value * fx_rate))
+                z_values.append(row_values)
+
+            contour_fig = go.Figure(
+                data=go.Contour(
+                    z=z_values,
+                    x=contour_apr_grid,
+                    y=contour_rv_grid,
+                    colorscale="Blues",
+                    contours=dict(showlabels=True),
+                    colorbar=dict(title=monthly_payment_column),
+                )
+            )
+            contour_fig.update_layout(
+                title=f"{focus_vehicle}：PMT 等高线（固定首付与期限）",
+            )
+            contour_fig = style_figure(contour_fig)
+            contour_fig.update_xaxes(title="APR (%)")
+            contour_fig.update_yaxes(title="RV (%)")
+            render_plotly_chart_with_png_export(
+                fig=contour_fig,
+                chart_key="adv_rv_pmt_contour",
+                filename_prefix="rv_pmt_contour",
+            )
+
+    st.caption(
+        f"口径说明：Monthly Payment 为“每月金额（{display_currency}/月）”，"
+        "在瀑布图中用独立 total 柱展示，不与 Net Financed 做同层累计。"
+    )
+    st.caption(
+        "关系说明：Monthly Payment = PMT(Net Financed, APR, Term)，"
+        "Total Monthly Payments = Monthly Payment * Term。"
+    )
+
+    if float(focus_row["Net Financed"]) <= 0:
+        st.warning(
+            "当前参数下净融资额为 0（或接近 0），请下调首付/残值比例后再观察月供变化。"
+        )
+
+    st.info(
+        "💡 洞察：银行实际上只要求你为 "
+        f"{int(focus_row['Net Financed']):,} {display_currency} 的差额支付 "
+        f"{int(focus_row['Term (Months)']):,} 个月月供，"
+        f"剩余的 {int(focus_row['Balloon Payment']):,} {display_currency} "
+        "将作为未来 Balloon Payment。"
+    )
+    active_template_name = str(
+        st.session_state.get(preset_state_key, default_template_name)
+    )
+    active_preset = preset_templates.get(
+        active_template_name,
+        clamp_finance_preset(country_preset),
+    )
+    st.caption(
+        f"当前模板：{active_template_name}"
+        f"｜首付 {active_preset['down_percent']:.0f}%"
+        f"｜残值 {active_preset['rv_percent']:.0f}%"
+        f"｜APR {active_preset['apr']:.1f}%"
+        f"｜期限 {int(active_preset['term'])} 月"
+    )
+    if msrp_col:
+        st.caption(
+            f"默认 MSRP 来自当前筛选时间窗的中位数（字段：{msrp_col}）。"
+        )
+
+
 def render_chart_powertrain_bubble(
     filtered_df: pd.DataFrame,
     columns: ColumnRegistry,
@@ -4683,8 +6633,9 @@ def render_advanced_charts(
             "powertrain_cost": {
                 "label": "动力成本",
                 "charts": [
-                    "powertrain_price_mix",
+                    "rv_finance_dashboard",
                     "estimated_tco_msrp",
+                    "powertrain_price_mix",
                 ],
             },
         }
@@ -4793,6 +6744,16 @@ def render_advanced_charts(
                 "label": "估算TCO vs MSRP",
                 "help": "在可调参数下看估算TCO与MSRP的相对关系。",
                 "render": lambda: render_chart_estimated_tco_vs_msrp(
+                    filtered_df,
+                    columns,
+                    time_axis,
+                    global_time_selection,
+                ),
+            },
+            "rv_finance_dashboard": {
+                "label": "RV金融杠杆",
+                "help": "输入首付、残值、APR 与期限，查看净融资额与月供推导。",
+                "render": lambda: render_chart_rv_finance_dashboard(
                     filtered_df,
                     columns,
                     time_axis,
