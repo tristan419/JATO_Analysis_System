@@ -4133,7 +4133,7 @@ def render_chart_rv_finance_dashboard(
         hide_index=True,
     )
 
-    st.markdown("**方案参数同屏对比（A/B/C）**")
+    st.markdown("**方案参数同屏对比（多方案）**")
     vehicle_options = result_df["Vehicle"].astype(str).tolist()
     scenario_base_vehicle = st.selectbox(
         "基准车型（固定 MSRP）",
@@ -4271,7 +4271,7 @@ def render_chart_rv_finance_dashboard(
             scenario_table_key,
         )
 
-    st.caption("编辑方案参数（A/B/C对比）")
+    st.caption("编辑方案参数（多方案对比）")
     st.caption("修改后自动保存。")
     st.data_editor(
         pd.DataFrame(st.session_state[scenario_table_key]),
@@ -4327,7 +4327,7 @@ def render_chart_rv_finance_dashboard(
     ].copy()
 
     if scenario_param_df.empty:
-        st.info("请至少保留 2 个方案（A/B 或 A/B/C）。")
+        st.info("请至少保留 2 个方案。")
     else:
         for column_name in [
             "Down Payment (%)",
@@ -4348,10 +4348,6 @@ def render_chart_rv_finance_dashboard(
                 "Term (Months)",
             ]
         ).copy()
-
-        if len(scenario_param_df) > 3:
-            st.warning("最多对比 3 个方案，系统将仅保留前 3 行。")
-            scenario_param_df = scenario_param_df.head(3).copy()
 
         if len(scenario_param_df) < 2:
             st.info("请至少输入 2 个有效方案参数。")
@@ -4510,7 +4506,7 @@ def render_chart_rv_finance_dashboard(
                 )
 
             if delta_rows:
-                st.markdown("**A/B/C 差异摘要卡（参数方案）**")
+                st.markdown("**多方案差异摘要卡（参数方案）**")
                 st.dataframe(
                     pd.DataFrame(delta_rows),
                     width="stretch",
