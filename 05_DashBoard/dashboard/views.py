@@ -4156,50 +4156,58 @@ def render_chart_rv_finance_dashboard(
         st.session_state[scenario_table_key] = default_scenarios
         st.session_state[scenario_table_base_key] = current_base_marker
 
-    edited_scenario_df = st.data_editor(
-        pd.DataFrame(st.session_state[scenario_table_key]),
-        key="adv_rv_scheme_param_editor",
-        num_rows="dynamic",
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "Scheme": st.column_config.TextColumn(
-                "Scheme",
-                required=True,
-            ),
-            "Down Payment (%)": st.column_config.NumberColumn(
-                "Down Payment (%)",
-                min_value=0.0,
-                max_value=50.0,
-                step=1.0,
-                format="%.1f",
-            ),
-            "Residual Value (%)": st.column_config.NumberColumn(
-                "Residual Value (%)",
-                min_value=30.0,
-                max_value=70.0,
-                step=1.0,
-                format="%.1f",
-            ),
-            "APR (%)": st.column_config.NumberColumn(
-                "APR (%)",
-                min_value=0.0,
-                max_value=10.0,
-                step=0.1,
-                format="%.2f",
-            ),
-            "Term (Months)": st.column_config.NumberColumn(
-                "Term (Months)",
-                min_value=12,
-                max_value=84,
-                step=12,
-                format="%d",
-            ),
-        },
-    )
-    st.session_state[scenario_table_key] = pd.DataFrame(
-        edited_scenario_df
-    ).copy()
+    with st.form(key="rv_scenario_form", clear_on_submit=False):
+        st.caption("编辑方案参数（A/B/C对比）")
+        edited_scenario_df = st.data_editor(
+            pd.DataFrame(st.session_state[scenario_table_key]),
+            key="adv_rv_scheme_param_editor",
+            num_rows="dynamic",
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Scheme": st.column_config.TextColumn(
+                    "Scheme",
+                    required=True,
+                ),
+                "Down Payment (%)": st.column_config.NumberColumn(
+                    "Down Payment (%)",
+                    min_value=0.0,
+                    max_value=50.0,
+                    step=1.0,
+                    format="%.1f",
+                ),
+                "Residual Value (%)": st.column_config.NumberColumn(
+                    "Residual Value (%)",
+                    min_value=30.0,
+                    max_value=70.0,
+                    step=1.0,
+                    format="%.1f",
+                ),
+                "APR (%)": st.column_config.NumberColumn(
+                    "APR (%)",
+                    min_value=0.0,
+                    max_value=10.0,
+                    step=0.1,
+                    format="%.2f",
+                ),
+                "Term (Months)": st.column_config.NumberColumn(
+                    "Term (Months)",
+                    min_value=12,
+                    max_value=84,
+                    step=12,
+                    format="%d",
+                ),
+            },
+        )
+        scenario_form_submitted = st.form_submit_button(
+            "💾 保存方案参数",
+            use_container_width=True,
+        )
+        if scenario_form_submitted:
+            st.session_state[scenario_table_key] = pd.DataFrame(
+                edited_scenario_df
+            ).copy()
+            st.success("✓ 方案已保存", icon="✓")
 
     scenario_param_df = pd.DataFrame(
         st.session_state[scenario_table_key]
