@@ -353,6 +353,16 @@ curl -sS http://127.0.0.1:8501/_stcore/health
 
 当你临时不走 GitHub Actions 自动发布，或需要手动热修时，可按以下步骤更新服务器。
 
+开发机发布最短流程（先 push，再去服务器拉取）：
+
+```bash
+cd /Users/litristan/Downloads/JATO_Analysis_System
+git restore 05_DashBoard/dashboard/__pycache__/views.cpython-311.pyc 05_DashBoard/dashboard/__pycache__/views.cpython-312.pyc
+git add 05_DashBoard/dashboard/views.py
+git commit -m "feat: update RV dashboard interactions"
+git push origin main
+```
+
 标准手动更新流程（推荐）：
 
 ```bash
@@ -364,11 +374,18 @@ git pull --rebase origin main
 source .venv/bin/activate
 pip install -r requirements.txt
 
+sudo systemctl daemon-reload
 sudo systemctl restart jato-dashboard@8501
 sudo systemctl --no-pager status jato-dashboard@8501
 
 curl -fsS http://127.0.0.1:8501/_stcore/health
 git rev-parse --short HEAD
+```
+
+服务器一键手动更新（可直接复制）：
+
+```bash
+cd /opt/JATO_Analysis_System && git fetch origin main && git reset --hard origin/main && source .venv/bin/activate && pip install -r requirements.txt && sudo systemctl daemon-reload && sudo systemctl restart jato-dashboard@8501 && curl -fsS http://127.0.0.1:8501/_stcore/health
 ```
 
 若出现 `cannot pull with rebase: You have unstaged changes`（常见于 `__pycache__`）：

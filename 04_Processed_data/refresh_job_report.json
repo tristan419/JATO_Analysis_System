@@ -1,53 +1,237 @@
 {
-  "generatedAtUtc": "2026-03-07T19:04:00.124720+00:00",
-  "jobId": "refresh-3a6f5abe",
-  "jobStatus": "skipped_unchanged",
+  "generatedAtUtc": "2026-03-12T05:35:24.070064+00:00",
+  "jobId": "refresh-1567dad6",
+  "jobStatus": "success",
   "input": {
-    "excelInput": null,
-    "resolvedExcelInput": "01_RAW_DATA/JATO-2026.1.xlsx",
+    "excelInput": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+    "excelInputs": null,
+    "mergeAllXlsx": false,
+    "resolvedExcelInput": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+    "resolvedExcelInputs": [
+      "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx"
+    ],
     "rawDir": "01_RAW_DATA",
     "sheet": "Data Export",
     "partitionCols": [
       "国家"
-    ]
+    ],
+    "partitionOverwrite": true,
+    "conflictKeys": null,
+    "conflictPolicy": "report_only"
   },
   "outputs": {
     "fullParquet": "04_Processed_data/jato_full_archive.parquet",
     "fullManifest": "04_Processed_data/manifest.json",
     "partitionDataset": "04_Processed_data/partitioned_dataset_v1",
-    "partitionManifest": "04_Processed_data/partitioned_dataset_v1/manifest.json"
+    "partitionManifest": "04_Processed_data/partitioned_dataset_v1/manifest.json",
+    "conflictReport": "04_Processed_data/conflict_report.json"
   },
-  "stepDurations": {},
+  "stepDurations": {
+    "etlSeconds": 92.221,
+    "partitionSeconds": 6.625,
+    "benchmarkSeconds": 13.679
+  },
   "fullManifest": {
-    "rows": 724501,
+    "rows": 901134,
     "columns": 91,
     "schemaVersion": "1.1"
   },
   "partitionManifest": {
-    "rows": 724501,
+    "rows": 901134,
     "columns": 91,
     "schemaVersion": "1.1",
-    "parquetFileCount": 15
+    "parquetFileCount": 21
   },
-  "benchmark": null,
+  "benchmark": {
+    "datasetPath": "/Users/litristan/Downloads/JATO_Analysis_System/04_Processed_data/partitioned_dataset_v1",
+    "datasetVersion": "manifest:1773293709901363515:4009",
+    "repeats": 2,
+    "filterColumnCount": 6,
+    "projectionColumnCount": 54,
+    "sidebarStats": {
+      "min": 0.649386958044488,
+      "avg": 0.6522183955239598,
+      "max": 0.6550498330034316
+    },
+    "projectedStats": {
+      "min": 1.0990420000161976,
+      "avg": 1.1002465205092449,
+      "max": 1.1014510410022922
+    },
+    "fullStats": {
+      "min": 5.045427250035573,
+      "avg": 5.079416104010306,
+      "max": 5.11340495798504
+    },
+    "projectionSpeedupVsFull": 4.6166163758094125
+  },
   "incremental": {
     "enabled": true,
-    "skipUnchanged": true,
+    "skipUnchanged": false,
     "fingerprintPath": "04_Processed_data/dataset_fingerprint.json",
-    "fingerprintMatched": true,
-    "fingerprintUpdated": false,
+    "fingerprintMatched": false,
+    "fingerprintUpdated": true,
     "regression": {
-      "previousRows": 724501,
-      "currentRows": 724501,
-      "rowDelta": 0,
-      "changedRows": 0,
+      "previousRows": 71599,
+      "currentRows": 71599,
+      "rowDelta": 176633,
+      "changedRows": 176633,
       "previousPartitionCount": 15,
-      "currentPartitionCount": 15,
-      "changedPartitionCount": 0,
-      "addedPartitionDirectories": [],
-      "updatedPartitionDirectories": [],
-      "removedPartitionDirectories": []
+      "currentPartitionCount": 21,
+      "changedPartitionCount": 21,
+      "affectedPartitionRowsEstimate": 901134,
+      "partitionKeyColumn": "国家",
+      "changedPartitionKeyCount": 21,
+      "addedPartitionKeys": [
+        "奥地利",
+        "斯洛伐克",
+        "斯洛文尼亚",
+        "波兰",
+        "芬兰",
+        "葡萄牙"
+      ],
+      "updatedPartitionKeys": [
+        "丹麦",
+        "克罗地亚",
+        "匈牙利",
+        "希腊",
+        "德国",
+        "意大利",
+        "挪威",
+        "捷克",
+        "比利时",
+        "法国",
+        "瑞典",
+        "瑞士",
+        "罗马尼亚",
+        "荷兰",
+        "西班牙"
+      ],
+      "removedPartitionKeys": [],
+      "changedPartitionKeys": [
+        "丹麦",
+        "克罗地亚",
+        "匈牙利",
+        "奥地利",
+        "希腊",
+        "德国",
+        "意大利",
+        "挪威",
+        "捷克",
+        "斯洛伐克",
+        "斯洛文尼亚",
+        "比利时",
+        "法国",
+        "波兰",
+        "瑞典",
+        "瑞士",
+        "罗马尼亚",
+        "芬兰",
+        "荷兰",
+        "葡萄牙",
+        "西班牙"
+      ],
+      "changedCountryCount": 21,
+      "addedCountries": [
+        "奥地利",
+        "斯洛伐克",
+        "斯洛文尼亚",
+        "波兰",
+        "芬兰",
+        "葡萄牙"
+      ],
+      "updatedCountries": [
+        "丹麦",
+        "克罗地亚",
+        "匈牙利",
+        "希腊",
+        "德国",
+        "意大利",
+        "挪威",
+        "捷克",
+        "比利时",
+        "法国",
+        "瑞典",
+        "瑞士",
+        "罗马尼亚",
+        "荷兰",
+        "西班牙"
+      ],
+      "removedCountries": [],
+      "changedCountries": [
+        "丹麦",
+        "克罗地亚",
+        "匈牙利",
+        "奥地利",
+        "希腊",
+        "德国",
+        "意大利",
+        "挪威",
+        "捷克",
+        "斯洛伐克",
+        "斯洛文尼亚",
+        "比利时",
+        "法国",
+        "波兰",
+        "瑞典",
+        "瑞士",
+        "罗马尼亚",
+        "芬兰",
+        "荷兰",
+        "葡萄牙",
+        "西班牙"
+      ],
+      "addedPartitionDirectories": [
+        "国家=%E5%A5%A5%E5%9C%B0%E5%88%A9",
+        "国家=%E6%96%AF%E6%B4%9B%E4%BC%90%E5%85%8B",
+        "国家=%E6%96%AF%E6%B4%9B%E6%96%87%E5%B0%BC%E4%BA%9A",
+        "国家=%E6%B3%A2%E5%85%B0",
+        "国家=%E8%8A%AC%E5%85%B0",
+        "国家=%E8%91%A1%E8%90%84%E7%89%99"
+      ],
+      "updatedPartitionDirectories": [
+        "国家=%E4%B8%B9%E9%BA%A6",
+        "国家=%E5%85%8B%E7%BD%97%E5%9C%B0%E4%BA%9A",
+        "国家=%E5%8C%88%E7%89%99%E5%88%A9",
+        "国家=%E5%B8%8C%E8%85%8A",
+        "国家=%E5%BE%B7%E5%9B%BD",
+        "国家=%E6%84%8F%E5%A4%A7%E5%88%A9",
+        "国家=%E6%8C%AA%E5%A8%81",
+        "国家=%E6%8D%B7%E5%85%8B",
+        "国家=%E6%AF%94%E5%88%A9%E6%97%B6",
+        "国家=%E6%B3%95%E5%9B%BD",
+        "国家=%E7%91%9E%E5%85%B8",
+        "国家=%E7%91%9E%E5%A3%AB",
+        "国家=%E7%BD%97%E9%A9%AC%E5%B0%BC%E4%BA%9A",
+        "国家=%E8%8D%B7%E5%85%B0",
+        "国家=%E8%A5%BF%E7%8F%AD%E7%89%99"
+      ],
+      "removedPartitionDirectories": [],
+      "mergeKeyRegression": {
+        "available": true,
+        "previousKeyColumns": [],
+        "currentKeyColumns": [],
+        "keyColumnsChanged": false,
+        "currentDedupeKeys": [],
+        "currentConflictKeys": [],
+        "conflictPolicy": "report_only",
+        "droppedDuplicateRows": 0,
+        "droppedDuplicateRowsDelta": 0,
+        "conflictGroupCount": 0,
+        "conflictGroupCountDelta": 0,
+        "conflictRowCount": 0,
+        "conflictRowCountDelta": 0
+      }
     }
   },
-  "jobElapsedSeconds": 0.001
+  "jobElapsedSeconds": 112.883,
+  "rollback": {
+    "enabled": true,
+    "triggered": false,
+    "restored": false,
+    "backupRoot": "04_Processed_data/.refresh_backups/refresh-1567dad6",
+    "restoredItems": [],
+    "removedNewItems": [],
+    "error": null
+  }
 }

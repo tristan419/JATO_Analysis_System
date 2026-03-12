@@ -1,11 +1,15 @@
 {
-  "generatedAtUtc": "2026-03-07T17:46:54.185867+00:00",
+  "generatedAtUtc": "2026-03-12T05:35:03.259338+00:00",
   "manifestSchemaVersion": "1.1",
   "pipelineVersion": "1.0",
-  "sourceExcel": "01_RAW_DATA/JATO-2026.1.xlsx",
+  "sourceExcel": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+  "sourceExcels": [
+    "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx"
+  ],
+  "inputMode": "single",
   "sheetName": "Data Export",
   "outputParquet": "04_Processed_data/jato_full_archive.parquet",
-  "rows": 724501,
+  "rows": 901134,
   "columns": 91,
   "columnNames": [
     "Vehicle/Volumes type",
@@ -100,12 +104,33 @@
     "2024",
     "2025"
   ],
-  "outputParquetBytes": 23934131,
-  "elapsedSeconds": 69.839,
+  "outputParquetBytes": 31382299,
+  "elapsedSeconds": 92.026,
   "validationSummary": {
     "yearColumnCount": 4,
     "monthColumnCount": 37,
     "hasTimeColumns": true,
     "missingRecommendedFields": {}
+  },
+  "mergeSummary": {
+    "sourceFileCount": 1,
+    "preMergeRows": 901134,
+    "mergedRows": 901134,
+    "finalRows": 901134,
+    "conflictSummary": {
+      "enabled": false,
+      "policy": "report_only",
+      "requestedConflictKeys": [],
+      "resolvedConflictKeys": [],
+      "hasConflicts": false,
+      "conflictGroupCount": 0,
+      "conflictRowCount": 0,
+      "sampleConflicts": [],
+      "sampleLimit": 20,
+      "droppedByConflictPolicy": 0
+    },
+    "dedupeApplied": false,
+    "dedupeKeys": [],
+    "droppedDuplicateRows": 0
   }
 }
