@@ -349,7 +349,52 @@ sudo systemctl status jato-dashboard@8501 --no-pager
 curl -sS http://127.0.0.1:8501/_stcore/health
 ```
 
-### 7.3.2 出现 `502` / `connecting streamlit server` 的快速判定
+### 7.3.2 手动更新（EC2，备用方案）
+
+当你临时不走 GitHub Actions 自动发布，或需要手动热修时，可按以下步骤更新服务器。
+
+标准手动更新流程（推荐）：
+
+```bash
+cd /opt/JATO_Analysis_System
+git fetch origin main
+git checkout main
+git pull --rebase origin main
+
+source .venv/bin/activate
+pip install -r requirements.txt
+
+sudo systemctl restart jato-dashboard@8501
+sudo systemctl --no-pager status jato-dashboard@8501
+
+curl -fsS http://127.0.0.1:8501/_stcore/health
+git rev-parse --short HEAD
+```
+
+若出现 `cannot pull with rebase: You have unstaged changes`（常见于 `__pycache__`）：
+
+```bash
+cd /opt/JATO_Analysis_System
+git stash push -m "server-temp-$(date +%F-%H%M%S)" -- 05_DashBoard/dashboard/__pycache__/
+git pull --rebase origin main
+```
+
+若重启时提示端口被占用（历史 root 进程）：
+
+```bash
+sudo lsof -nP -iTCP:8501 -sTCP:LISTEN
+sudo systemctl stop jato-dashboard@8501 || true
+sudo pkill -f "streamlit run .*05_DashBoard/app.py" || true
+sudo systemctl start jato-dashboard@8501
+```
+
+建议原则：
+
+1. 部署机尽量不做开发提交，仅用于拉取并运行。
+1. 服务统一通过 `systemd` 管理，避免与手工脚本混用造成权限冲突。
+1. 若长期手动更新频繁，建议回到 `7.3.1` 自动发布流程。
+
+### 7.3.3 出现 `502` / `connecting streamlit server` 的快速判定
 
 1. 若 `nginx access.log` 中出现 `/_stcore/stream 101` 但 `/_stcore/health` 间歇 `502`，优先怀疑应用进程被杀。
 1. 用以下命令确认是否 OOM：

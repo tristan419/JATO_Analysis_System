@@ -4636,7 +4636,7 @@ def render_chart_rv_finance_dashboard(
             [
                 "PV-RV关系图",
                 "月供公式与步骤",
-                "APR敏感性分析",
+                "综合敏感性分析",
             ]
         )
 
@@ -4851,295 +4851,249 @@ def render_chart_rv_finance_dashboard(
                 f"APR {base_apr:.2f}%｜期限 {base_term} 月"
             )
 
-            apr_tab, rv_tab, down_tab, term_tab = st.tabs(
-                ["APR", "RV(残值率)", "首付", "期限"]
+            def calc_monthly_display(
+                down_percent: float,
+                rv_percent: float,
+                apr_percent: float,
+                term_months: int,
+            ) -> float:
+                scenario_pmt, _, _, _, _ = calculate_finance(
+                    msrp=base_msrp_eur,
+                    down_percent=down_percent,
+                    rv_percent=rv_percent,
+                    apr=apr_percent,
+                    term=term_months,
+                )
+                return float(scenario_pmt * fx_rate)
+
+            st.markdown("**四参数综合敏感性（APR / RV / 首付 / 期限）**")
+
+            base_monthly = calc_monthly_display(
+                down_percent=base_down,
+                rv_percent=base_rv,
+                apr_percent=base_apr,
+                term_months=base_term,
             )
 
-            with apr_tab:
-                apr_col_1, apr_col_2 = st.columns(2)
-                with apr_col_1:
-                    apr_span = st.slider(
-                        "APR 扰动范围（±百分点）",
-                        min_value=0.5,
-                        max_value=4.0,
-                        value=2.0,
-                        step=0.1,
-                        key="adv_rv_apr_span",
-                    )
-                with apr_col_2:
-                    apr_points = st.slider(
-                        "采样点数",
-                        min_value=5,
-                        max_value=25,
-                        value=11,
-                        step=2,
-                        key="adv_rv_apr_points",
-                    )
+            apr_low = max(0.0, base_apr - 2.0)
+            apr_high = min(15.0, base_apr + 2.0)
+            rv_low = max(30.0, base_rv - 8.0)
+            rv_high = min(70.0, base_rv + 8.0)
+            down_low = max(0.0, base_down - 10.0)
+            down_high = min(50.0, base_down + 10.0)
+            term_low = max(24, base_term - 12)
+            term_high = min(84, base_term + 12)
 
-                min_apr = max(0.0, base_apr - apr_span)
-                max_apr = min(15.0, base_apr + apr_span)
-                if apr_points <= 1 or max_apr <= min_apr:
-                    apr_grid = [base_apr]
-                else:
-                    apr_step = (max_apr - min_apr) / (apr_points - 1)
-                    apr_grid = [
-                        min_apr + index * apr_step
-                        for index in range(apr_points)
-                    ]
+            apr_low_monthly = calc_monthly_display(
+                down_percent=base_down,
+                rv_percent=base_rv,
+                apr_percent=apr_low,
+                term_months=base_term,
+            )
+            apr_high_monthly = calc_monthly_display(
+                down_percent=base_down,
+                rv_percent=base_rv,
+                apr_percent=apr_high,
+                term_months=base_term,
+            )
 
-                apr_rows: list[dict[str, float]] = []
-                for apr_value in apr_grid:
-                    scenario_pmt, _, _, _, _ = calculate_finance(
-                        msrp=base_msrp_eur,
-                        down_percent=base_down,
-                        rv_percent=base_rv,
-                        apr=float(apr_value),
-                        term=base_term,
-                    )
-                    apr_rows.append(
-                        {
-                            "APR (%)": float(apr_value),
-                            monthly_payment_column: float(
-                                scenario_pmt * fx_rate
-                            ),
-                        }
-                    )
+            rv_low_monthly = calc_monthly_display(
+                down_percent=base_down,
+                rv_percent=rv_low,
+                apr_percent=base_apr,
+                term_months=base_term,
+            )
+            rv_high_monthly = calc_monthly_display(
+                down_percent=base_down,
+                rv_percent=rv_high,
+                apr_percent=base_apr,
+                term_months=base_term,
+            )
 
-                apr_df = pd.DataFrame(apr_rows)
-                apr_fig = px.line(
-                    apr_df,
-                    x="APR (%)",
-                    y=monthly_payment_column,
-                    markers=True,
-                    title=f"{focus_vehicle}：APR 对月供影响",
+            down_low_monthly = calc_monthly_display(
+                down_percent=down_low,
+                rv_percent=base_rv,
+                apr_percent=base_apr,
+                term_months=base_term,
+            )
+            down_high_monthly = calc_monthly_display(
+                down_percent=down_high,
+                rv_percent=base_rv,
+                apr_percent=base_apr,
+                term_months=base_term,
+            )
+
+            term_low_monthly = calc_monthly_display(
+                down_percent=base_down,
+                rv_percent=base_rv,
+                apr_percent=base_apr,
+                term_months=term_low,
+            )
+            term_high_monthly = calc_monthly_display(
+                down_percent=base_down,
+                rv_percent=base_rv,
+                apr_percent=base_apr,
+                term_months=term_high,
+            )
+
+            summary_rows = [
+                {
+                    "Parameter": "APR",
+                    "Low Setting": f"{apr_low:.2f}%",
+                    "Base Setting": f"{base_apr:.2f}%",
+                    "High Setting": f"{apr_high:.2f}%",
+                    "Low Monthly": apr_low_monthly,
+                    "Base Monthly": base_monthly,
+                    "High Monthly": apr_high_monthly,
+                },
+                {
+                    "Parameter": "RV",
+                    "Low Setting": f"{rv_low:.1f}%",
+                    "Base Setting": f"{base_rv:.1f}%",
+                    "High Setting": f"{rv_high:.1f}%",
+                    "Low Monthly": rv_low_monthly,
+                    "Base Monthly": base_monthly,
+                    "High Monthly": rv_high_monthly,
+                },
+                {
+                    "Parameter": "Down Payment",
+                    "Low Setting": f"{down_low:.1f}%",
+                    "Base Setting": f"{base_down:.1f}%",
+                    "High Setting": f"{down_high:.1f}%",
+                    "Low Monthly": down_low_monthly,
+                    "Base Monthly": base_monthly,
+                    "High Monthly": down_high_monthly,
+                },
+                {
+                    "Parameter": "Term",
+                    "Low Setting": f"{term_low} 月",
+                    "Base Setting": f"{base_term} 月",
+                    "High Setting": f"{term_high} 月",
+                    "Low Monthly": term_low_monthly,
+                    "Base Monthly": base_monthly,
+                    "High Monthly": term_high_monthly,
+                },
+            ]
+            summary_df = pd.DataFrame(summary_rows)
+            summary_df["Max Delta"] = summary_df.apply(
+                lambda row: max(
+                    abs(float(row["Low Monthly"]) - base_monthly),
+                    abs(float(row["High Monthly"]) - base_monthly),
+                ),
+                axis=1,
+            )
+
+            summary_display_df = summary_df.copy()
+            for column_name in [
+                "Low Monthly",
+                "Base Monthly",
+                "High Monthly",
+                "Max Delta",
+            ]:
+                summary_display_df[column_name] = summary_display_df[
+                    column_name
+                ].map(
+                    lambda value: (
+                        f"{float(value):,.0f} {display_currency}/月"
+                    )
                 )
-                apr_fig = style_figure(apr_fig)
-                apr_fig.update_xaxes(title="APR (%)")
-                apr_fig.update_yaxes(title=monthly_payment_column)
-                apr_fig.add_vline(
-                    x=base_apr,
-                    line_dash="dash",
-                    line_color="#6B7280",
-                )
-                render_plotly_chart_with_png_export(
-                    fig=apr_fig,
-                    chart_key="adv_rv_apr_sensitivity",
-                    filename_prefix="rv_apr_sensitivity",
-                )
+            st.dataframe(summary_display_df, width="stretch", hide_index=True)
 
-            with rv_tab:
-                rv_col_1, rv_col_2 = st.columns(2)
-                with rv_col_1:
-                    rv_span = st.slider(
-                        "残值率扰动范围（±百分点）",
-                        min_value=2.0,
-                        max_value=20.0,
-                        value=8.0,
-                        step=1.0,
-                        key="adv_rv_pct_span",
-                    )
-                with rv_col_2:
-                    rv_points = st.slider(
-                        "采样点数",
-                        min_value=5,
-                        max_value=25,
-                        value=11,
-                        step=2,
-                        key="adv_rv_pct_points",
-                    )
+            delta_rows: list[dict[str, float | str]] = []
+            trend_rows: list[dict[str, float | str]] = []
+            for _, row in summary_df.iterrows():
+                parameter_name = str(row["Parameter"])
+                low_monthly = float(row["Low Monthly"])
+                high_monthly = float(row["High Monthly"])
 
-                min_rv = max(30.0, base_rv - rv_span)
-                max_rv = min(70.0, base_rv + rv_span)
-                if rv_points <= 1 or max_rv <= min_rv:
-                    rv_grid = [base_rv]
-                else:
-                    rv_step = (max_rv - min_rv) / (rv_points - 1)
-                    rv_grid = [
-                        min_rv + index * rv_step
-                        for index in range(rv_points)
-                    ]
-
-                rv_rows: list[dict[str, float]] = []
-                for rv_value in rv_grid:
-                    scenario_pmt, _, _, _, _ = calculate_finance(
-                        msrp=base_msrp_eur,
-                        down_percent=base_down,
-                        rv_percent=float(rv_value),
-                        apr=base_apr,
-                        term=base_term,
-                    )
-                    rv_rows.append(
-                        {
-                            "RV (%)": float(rv_value),
-                            monthly_payment_column: float(
-                                scenario_pmt * fx_rate
-                            ),
-                        }
-                    )
-
-                rv_df = pd.DataFrame(rv_rows)
-                rv_fig = px.line(
-                    rv_df,
-                    x="RV (%)",
-                    y=monthly_payment_column,
-                    markers=True,
-                    title=f"{focus_vehicle}：残值率 对月供影响",
-                )
-                rv_fig = style_figure(rv_fig)
-                rv_fig.update_xaxes(title="RV (%)")
-                rv_fig.update_yaxes(title=monthly_payment_column)
-                rv_fig.add_vline(
-                    x=base_rv,
-                    line_dash="dash",
-                    line_color="#6B7280",
-                )
-                render_plotly_chart_with_png_export(
-                    fig=rv_fig,
-                    chart_key="adv_rv_pct_sensitivity",
-                    filename_prefix="rv_pct_sensitivity",
-                )
-
-            with down_tab:
-                down_col_1, down_col_2 = st.columns(2)
-                with down_col_1:
-                    down_span = st.slider(
-                        "首付比例扰动范围（±百分点）",
-                        min_value=2.0,
-                        max_value=25.0,
-                        value=10.0,
-                        step=1.0,
-                        key="adv_rv_down_span",
-                    )
-                with down_col_2:
-                    down_points = st.slider(
-                        "采样点数",
-                        min_value=5,
-                        max_value=25,
-                        value=11,
-                        step=2,
-                        key="adv_rv_down_points",
-                    )
-
-                min_down = max(0.0, base_down - down_span)
-                max_down = min(50.0, base_down + down_span)
-                if down_points <= 1 or max_down <= min_down:
-                    down_grid = [base_down]
-                else:
-                    down_step = (max_down - min_down) / (down_points - 1)
-                    down_grid = [
-                        min_down + index * down_step
-                        for index in range(down_points)
-                    ]
-
-                down_rows: list[dict[str, float]] = []
-                for down_value in down_grid:
-                    scenario_pmt, _, _, _, _ = calculate_finance(
-                        msrp=base_msrp_eur,
-                        down_percent=float(down_value),
-                        rv_percent=base_rv,
-                        apr=base_apr,
-                        term=base_term,
-                    )
-                    down_rows.append(
-                        {
-                            "Down Payment (%)": float(down_value),
-                            monthly_payment_column: float(
-                                scenario_pmt * fx_rate
-                            ),
-                        }
-                    )
-
-                down_df = pd.DataFrame(down_rows)
-                down_fig = px.line(
-                    down_df,
-                    x="Down Payment (%)",
-                    y=monthly_payment_column,
-                    markers=True,
-                    title=f"{focus_vehicle}：首付比例 对月供影响",
-                )
-                down_fig = style_figure(down_fig)
-                down_fig.update_xaxes(title="Down Payment (%)")
-                down_fig.update_yaxes(title=monthly_payment_column)
-                down_fig.add_vline(
-                    x=base_down,
-                    line_dash="dash",
-                    line_color="#6B7280",
-                )
-                render_plotly_chart_with_png_export(
-                    fig=down_fig,
-                    chart_key="adv_rv_down_sensitivity",
-                    filename_prefix="rv_down_sensitivity",
-                )
-
-            with term_tab:
-                term_options = [24, 36, 48, 60, 72, 84]
-                default_terms = sorted(
+                delta_rows.append(
                     {
-                        24,
-                        36,
-                        48,
-                        60,
-                        int(base_term),
+                        "Parameter": parameter_name,
+                        "Scenario": "低位",
+                        "Monthly Delta": low_monthly - base_monthly,
                     }
                 )
-                selected_terms = st.multiselect(
-                    "期限采样（Months）",
-                    options=term_options,
-                    default=[
-                        term
-                        for term in default_terms
-                        if term in term_options
-                    ],
-                    key="adv_rv_term_sensitivity_terms",
+                delta_rows.append(
+                    {
+                        "Parameter": parameter_name,
+                        "Scenario": "高位",
+                        "Monthly Delta": high_monthly - base_monthly,
+                    }
                 )
-                if not selected_terms:
-                    st.info("请至少选择 1 个期限点。")
-                else:
-                    term_rows: list[dict[str, float | int]] = []
-                    for term_value in sorted(selected_terms):
-                        scenario_pmt, _, _, _, _ = calculate_finance(
-                            msrp=base_msrp_eur,
-                            down_percent=base_down,
-                            rv_percent=base_rv,
-                            apr=base_apr,
-                            term=int(term_value),
-                        )
-                        term_rows.append(
-                            {
-                                "Term (Months)": int(term_value),
-                                monthly_payment_column: float(
-                                    scenario_pmt * fx_rate
-                                ),
-                            }
-                        )
 
-                    term_df = pd.DataFrame(term_rows)
-                    term_fig = px.line(
-                        term_df,
-                        x="Term (Months)",
-                        y=monthly_payment_column,
-                        markers=True,
-                        title=f"{focus_vehicle}：期限 对月供影响",
-                    )
-                    term_fig = style_figure(term_fig)
-                    term_fig.update_xaxes(title="Term (Months)")
-                    term_fig.update_yaxes(title=monthly_payment_column)
-                    term_fig.add_vline(
-                        x=base_term,
-                        line_dash="dash",
-                        line_color="#6B7280",
-                    )
-                    render_plotly_chart_with_png_export(
-                        fig=term_fig,
-                        chart_key="adv_rv_term_sensitivity",
-                        filename_prefix="rv_term_sensitivity",
-                    )
+                trend_rows.append(
+                    {
+                        "Parameter": parameter_name,
+                        "Level": "低位",
+                        monthly_payment_column: low_monthly,
+                    }
+                )
+                trend_rows.append(
+                    {
+                        "Parameter": parameter_name,
+                        "Level": "基准",
+                        monthly_payment_column: base_monthly,
+                    }
+                )
+                trend_rows.append(
+                    {
+                        "Parameter": parameter_name,
+                        "Level": "高位",
+                        monthly_payment_column: high_monthly,
+                    }
+                )
+
+            delta_df = pd.DataFrame(delta_rows)
+            delta_fig = px.bar(
+                delta_df,
+                x="Parameter",
+                y="Monthly Delta",
+                color="Scenario",
+                barmode="group",
+                title="四参数对月供影响（相对基准变化）",
+            )
+            delta_fig = style_figure(delta_fig)
+            delta_fig.update_xaxes(title="参数")
+            delta_fig.update_yaxes(
+                title=f"月供变化（{display_currency}/月）"
+            )
+            delta_fig.add_hline(
+                y=0.0,
+                line_dash="dash",
+                line_color="#6B7280",
+            )
+            render_plotly_chart_with_png_export(
+                fig=delta_fig,
+                chart_key="adv_rv_four_factor_delta",
+                filename_prefix="rv_four_factor_delta",
+            )
+
+            trend_df = pd.DataFrame(trend_rows)
+            trend_df["Level"] = pd.Categorical(
+                trend_df["Level"],
+                categories=["低位", "基准", "高位"],
+                ordered=True,
+            )
+            trend_fig = px.line(
+                trend_df,
+                x="Level",
+                y=monthly_payment_column,
+                color="Parameter",
+                markers=True,
+                title=f"{focus_vehicle}：四参数低/基准/高同屏对比",
+            )
+            trend_fig = style_figure(trend_fig)
+            trend_fig.update_xaxes(title="扰动水平")
+            trend_fig.update_yaxes(title=monthly_payment_column)
+            render_plotly_chart_with_png_export(
+                fig=trend_fig,
+                chart_key="adv_rv_four_factor_trend",
+                filename_prefix="rv_four_factor_trend",
+            )
 
             st.markdown("**月供区间 Tornado 图**")
             tornado_rows: list[dict[str, float | str]] = []
 
-            apr_low = max(0.0, base_apr - 2.0)
-            apr_high = min(15.0, base_apr + 2.0)
             pmt_apr_low, _, _, _, _ = calculate_finance(
                 msrp=base_msrp_eur,
                 down_percent=base_down,
@@ -5162,8 +5116,6 @@ def render_chart_rv_finance_dashboard(
                 }
             )
 
-            rv_low = max(30.0, base_rv - 8.0)
-            rv_high = min(70.0, base_rv + 8.0)
             pmt_rv_low, _, _, _, _ = calculate_finance(
                 msrp=base_msrp_eur,
                 down_percent=base_down,
@@ -5186,8 +5138,6 @@ def render_chart_rv_finance_dashboard(
                 }
             )
 
-            down_low = max(0.0, base_down - 10.0)
-            down_high = min(50.0, base_down + 10.0)
             pmt_down_low, _, _, _, _ = calculate_finance(
                 msrp=base_msrp_eur,
                 down_percent=down_low,
@@ -5210,8 +5160,6 @@ def render_chart_rv_finance_dashboard(
                 }
             )
 
-            term_low = max(24, base_term - 12)
-            term_high = min(84, base_term + 12)
             pmt_term_low, _, _, _, _ = calculate_finance(
                 msrp=base_msrp_eur,
                 down_percent=base_down,
