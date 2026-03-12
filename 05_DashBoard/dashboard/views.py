@@ -4841,14 +4841,16 @@ def render_chart_rv_finance_dashboard(
             base_msrp_eur = (
                 focus_msrp_amount / fx_rate if fx_rate > 0 else 0.0
             )
-            base_down = float(focus_row["Down Payment (%)"])
-            base_rv = float(focus_row["Residual Value (%)"])
-            base_apr = float(focus_row["APR (%)"])
-            base_term = int(focus_row["Term (Months)"])
+            base_down_default = float(focus_row["Down Payment (%)"])
+            base_rv_default = float(focus_row["Residual Value (%)"])
+            base_apr_default = float(focus_row["APR (%)"])
+            base_term_default = int(focus_row["Term (Months)"])
             st.caption(
-                "基准参数："
-                f"首付 {base_down:.0f}%｜残值 {base_rv:.0f}%｜"
-                f"APR {base_apr:.2f}%｜期限 {base_term} 月"
+                "默认基准参数："
+                f"首付 {base_down_default:.0f}%｜"
+                f"残值 {base_rv_default:.0f}%｜"
+                f"APR {base_apr_default:.2f}%｜"
+                f"期限 {base_term_default} 月"
             )
 
             def calc_monthly_display(
@@ -4867,6 +4869,58 @@ def render_chart_rv_finance_dashboard(
                 return float(scenario_pmt * fx_rate)
 
             st.markdown("**四参数综合敏感性（APR / RV / 首付 / 期限）**")
+
+            control_col_1, control_col_2, control_col_3, control_col_4 = (
+                st.columns(4)
+            )
+            with control_col_1:
+                base_apr = float(
+                    st.slider(
+                        "APR (%)",
+                        min_value=0.0,
+                        max_value=15.0,
+                        value=float(base_apr_default),
+                        step=0.1,
+                        key="adv_rv_live_apr",
+                    )
+                )
+            with control_col_2:
+                base_rv = float(
+                    st.slider(
+                        "RV (%)",
+                        min_value=30.0,
+                        max_value=70.0,
+                        value=float(base_rv_default),
+                        step=0.5,
+                        key="adv_rv_live_rv",
+                    )
+                )
+            with control_col_3:
+                base_down = float(
+                    st.slider(
+                        "首付 (%)",
+                        min_value=0.0,
+                        max_value=50.0,
+                        value=float(base_down_default),
+                        step=0.5,
+                        key="adv_rv_live_down",
+                    )
+                )
+            with control_col_4:
+                base_term = int(
+                    st.select_slider(
+                        "期限 (月)",
+                        options=[12, 24, 36, 48, 60, 72, 84],
+                        value=int(base_term_default),
+                        key="adv_rv_live_term",
+                    )
+                )
+
+            st.caption(
+                "当前实时参数："
+                f"APR {base_apr:.2f}%｜RV {base_rv:.1f}%｜"
+                f"首付 {base_down:.1f}%｜期限 {base_term} 月"
+            )
 
             base_monthly = calc_monthly_display(
                 down_percent=base_down,
@@ -5043,6 +5097,20 @@ def render_chart_rv_finance_dashboard(
                     }
                 )
 
+            (
+                sensitivity_tab_1,
+                sensitivity_tab_2,
+                sensitivity_tab_3,
+                sensitivity_tab_4,
+            ) = st.tabs(
+                [
+                    "参数变化柱状图",
+                    "低-基准-高趋势图",
+                    "Tornado 图",
+                    "APR×RV 等高线",
+                ]
+            )
+
             delta_df = pd.DataFrame(delta_rows)
             delta_fig = px.bar(
                 delta_df,
@@ -5062,11 +5130,12 @@ def render_chart_rv_finance_dashboard(
                 line_dash="dash",
                 line_color="#6B7280",
             )
-            render_plotly_chart_with_png_export(
-                fig=delta_fig,
-                chart_key="adv_rv_four_factor_delta",
-                filename_prefix="rv_four_factor_delta",
-            )
+            with sensitivity_tab_1:
+                render_plotly_chart_with_png_export(
+                    fig=delta_fig,
+                    chart_key="adv_rv_four_factor_delta",
+                    filename_prefix="rv_four_factor_delta",
+                )
 
             trend_df = pd.DataFrame(trend_rows)
             trend_df["Level"] = pd.Categorical(
@@ -5085,13 +5154,13 @@ def render_chart_rv_finance_dashboard(
             trend_fig = style_figure(trend_fig)
             trend_fig.update_xaxes(title="扰动水平")
             trend_fig.update_yaxes(title=monthly_payment_column)
-            render_plotly_chart_with_png_export(
-                fig=trend_fig,
-                chart_key="adv_rv_four_factor_trend",
-                filename_prefix="rv_four_factor_trend",
-            )
+            with sensitivity_tab_2:
+                render_plotly_chart_with_png_export(
+                    fig=trend_fig,
+                    chart_key="adv_rv_four_factor_trend",
+                    filename_prefix="rv_four_factor_trend",
+                )
 
-            st.markdown("**月供区间 Tornado 图**")
             tornado_rows: list[dict[str, float | str]] = []
 
             pmt_apr_low, _, _, _, _ = calculate_finance(
@@ -5216,13 +5285,13 @@ def render_chart_rv_finance_dashboard(
             tornado_fig = style_figure(tornado_fig)
             tornado_fig.update_xaxes(title=monthly_payment_column)
             tornado_fig.update_yaxes(title="参数")
-            render_plotly_chart_with_png_export(
-                fig=tornado_fig,
-                chart_key="adv_rv_tornado",
-                filename_prefix="rv_tornado",
-            )
+            with sensitivity_tab_3:
+                render_plotly_chart_with_png_export(
+                    fig=tornado_fig,
+                    chart_key="adv_rv_tornado",
+                    filename_prefix="rv_tornado",
+                )
 
-            st.markdown("**PMT 等高线图（APR × RV）**")
             contour_apr_grid = [
                 max(0.0, base_apr - 2.0) + index * 0.5
                 for index in range(9)
@@ -5262,11 +5331,12 @@ def render_chart_rv_finance_dashboard(
             contour_fig = style_figure(contour_fig)
             contour_fig.update_xaxes(title="APR (%)")
             contour_fig.update_yaxes(title="RV (%)")
-            render_plotly_chart_with_png_export(
-                fig=contour_fig,
-                chart_key="adv_rv_pmt_contour",
-                filename_prefix="rv_pmt_contour",
-            )
+            with sensitivity_tab_4:
+                render_plotly_chart_with_png_export(
+                    fig=contour_fig,
+                    chart_key="adv_rv_pmt_contour",
+                    filename_prefix="rv_pmt_contour",
+                )
 
     st.caption(
         f"口径说明：Monthly Payment 为“每月金额（{display_currency}/月）”，"
