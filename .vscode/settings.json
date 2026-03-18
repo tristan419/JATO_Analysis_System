@@ -4,5 +4,6 @@
             "approve": true,
             "matchCommandLine": true
         }
-    }
+    },
+    "chatgpt.openOnStartup": true
 }

@@ -34,6 +34,7 @@ if [[ -n "$REMAINING_PIDS" ]]; then
 fi
 
 echo "[INFO] 启动 Dashboard: http://127.0.0.1:${PORT}"
+cd "$ROOT_DIR"
 exec "$PYTHON_BIN" -m streamlit run "$APP_FILE" \
   --server.address 127.0.0.1 \
   --server.port "$PORT" \

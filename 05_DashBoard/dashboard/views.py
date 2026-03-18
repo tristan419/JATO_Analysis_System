@@ -90,6 +90,8 @@ EXPORT_DATA_LABEL_MODE_OPTIONS = [
     "仅系列名",
     "仅Model",
     "系列名+数值",
+    "Model+Sales",
+    "自定义字段",
 ]
 
 EXPORT_DATA_LABEL_POSITION_OPTIONS = [
@@ -118,7 +120,11 @@ class ChartControls:
     top_n_enabled: bool
     top_n: int
     include_others: bool
-    show_line_labels: bool
+    chart_type: str
+    data_label_mode: str
+    data_label_position: str
+    font_size: int
+    palette_name: str
 
 
 @dataclass(frozen=True)
@@ -136,6 +142,15 @@ class TimeSelection:
     end_label: str
     mode: str
     grain: str
+
+
+@dataclass(frozen=True)
+class TimeSeriesStyleSettings:
+    """时间序列导出样式设置"""
+    data_label_mode: str
+    data_label_position: str
+    font_size: int
+    palette_name: str
 
 
 def parse_time_key_cached(value: str, grain: str) -> pd.Timestamp:
@@ -944,7 +959,7 @@ def map_scatter_label_position(position_name: str) -> str:
     if position_name == "内侧":
         return "middle center"
     if position_name == "外侧":
-        return "top center"
+        return "middle right"
     if position_name == "顶部":
         return "top center"
     if position_name == "中间":
@@ -966,6 +981,9 @@ def apply_export_data_labels(
     fig: go.Figure,
     mode_name: str,
     position_name: str,
+    custom_label_template: str = "",
+    label_font_size: int | None = None,
+    force_bar_inside: bool = False,
 ) -> None:
     for trace in fig.data:
         trace_type = str(getattr(trace, "type", "")).lower()
@@ -979,18 +997,29 @@ def apply_export_data_labels(
 
             orientation = str(getattr(trace, "orientation", "v")).lower()
             value_field = "x" if orientation == "h" else "y"
+            value_template = f"%{{{value_field}:,.0f}}"
             series_name = str(getattr(trace, "name", "")).strip()
 
             if mode_name in {"仅系列名", "仅Model"}:
                 trace.texttemplate = series_name or "%{label}"
-            elif mode_name == "系列名+数值":
+            elif mode_name in {"系列名+数值", "Model+Sales"}:
                 prefix = f"{series_name}: " if series_name else ""
-                trace.texttemplate = f"{prefix}%{{{value_field}}}"
+                trace.texttemplate = f"{prefix}{value_template}"
+            elif mode_name == "自定义字段" and custom_label_template:
+                trace.texttemplate = custom_label_template
             else:
-                trace.texttemplate = f"%{{{value_field}}}"
+                trace.texttemplate = value_template
 
-            trace.textposition = map_bar_label_position(position_name)
+            trace.textposition = (
+                "inside"
+                if force_bar_inside
+                else map_bar_label_position(position_name)
+            )
+            if force_bar_inside:
+                trace.insidetextanchor = "middle"
             trace.cliponaxis = False
+            if label_font_size is not None:
+                trace.textfont = {"size": int(label_font_size)}
             continue
 
         if trace_type == "scatter":
@@ -1014,6 +1043,7 @@ def apply_export_data_labels(
 
             series_name = str(getattr(trace, "name", "")).strip()
             value_field = "y" if getattr(trace, "y", None) is not None else "x"
+            value_template = f"%{{{value_field}:,.0f}}"
             hover_text = getattr(trace, "hovertext", None)
 
             model_text: list[str] | None = None
@@ -1039,11 +1069,43 @@ def apply_export_data_labels(
                     trace.texttemplate = series_name or "%{text}"
             elif mode_name == "系列名+数值":
                 prefix = f"{series_name}: " if series_name else ""
-                trace.texttemplate = f"{prefix}%{{{value_field}}}"
+                trace.texttemplate = f"{prefix}{value_template}"
+            elif mode_name == "Model+Sales":
+                marker = getattr(trace, "marker", None)
+                size_data = (
+                    getattr(marker, "size", None) if marker else None
+                )
+                if model_text and size_data is not None:
+                    try:
+                        size_list = list(size_data)
+                        labels = [
+                            f"{m}\n{int(s):,}"
+                            for m, s in zip(model_text, size_list)
+                        ]
+                        trace.text = labels
+                        trace.texttemplate = "%{text}"
+                    except Exception:
+                        trace.text = model_text
+                        trace.texttemplate = "%{text}"
+                elif model_text:
+                    trace.text = model_text
+                    trace.texttemplate = "%{text}"
+                else:
+                    trace.texttemplate = value_template
+            elif mode_name == "自定义字段" and custom_label_template:
+                trace.texttemplate = custom_label_template
+            elif mode_name == "自定义字段":
+                if model_text:
+                    trace.text = model_text
+                    trace.texttemplate = "%{text}"
+                else:
+                    trace.texttemplate = value_template
             else:
-                trace.texttemplate = f"%{{{value_field}}}"
+                trace.texttemplate = value_template
 
             trace.textposition = map_scatter_label_position(position_name)
+            if label_font_size is not None:
+                trace.textfont = {"size": int(label_font_size)}
             continue
 
         if trace_type in {"heatmap", "contour"}:
@@ -1057,9 +1119,13 @@ def apply_export_data_labels(
                 trace.texttemplate = series_name or "Heatmap"
             elif mode_name == "系列名+数值":
                 prefix = f"{series_name}: " if series_name else ""
-                trace.texttemplate = f"{prefix}%{{z}}"
+                trace.texttemplate = f"{prefix}%{{z:,.0f}}"
+            elif mode_name == "自定义字段" and custom_label_template:
+                trace.texttemplate = custom_label_template
             else:
-                trace.texttemplate = "%{z}"
+                trace.texttemplate = "%{z:,.0f}"
+            if label_font_size is not None:
+                trace.textfont = {"size": int(label_font_size)}
             continue
 
         if trace_type in {"pie", "sunburst", "treemap", "funnelarea"}:
@@ -1071,12 +1137,16 @@ def apply_export_data_labels(
                 trace.textinfo = "label"
             elif mode_name == "仅Model":
                 trace.textinfo = "label"
-            elif mode_name == "系列名+数值":
+            elif mode_name in {"系列名+数值", "Model+Sales"}:
                 trace.textinfo = "label+value"
+            elif mode_name == "自定义字段" and custom_label_template:
+                trace.texttemplate = custom_label_template
             else:
                 trace.textinfo = "value"
 
             trace.textposition = map_pie_label_position(position_name)
+            if label_font_size is not None:
+                trace.textfont = {"size": int(label_font_size)}
 
 
 def apply_export_figure_style(
@@ -1151,6 +1221,9 @@ def apply_export_figure_style(
         styled_fig,
         mode_name=str(settings["data_label_mode"]),
         position_name=str(settings["data_label_position"]),
+        custom_label_template=str(
+            settings.get("custom_label_template", "")
+        ),
     )
 
     palette_name = str(settings["palette_name"])
@@ -1171,6 +1244,7 @@ def render_export_style_controls(
     fig: Any,
     chart_key: str,
     kaleido_available: bool,
+    show_png_controls: bool = True,
 ) -> tuple[dict[str, Any], bool, Any, Any]:
     layout_width = getattr(getattr(fig, "layout", None), "width", None)
     layout_height = getattr(getattr(fig, "layout", None), "height", None)
@@ -1358,6 +1432,36 @@ def render_export_style_controls(
                 help_text="全局联动标签位置。",
             )
 
+        custom_label_template = ""
+        if data_label_mode == "自定义字段":
+            _custom_presets: dict[str, str] = {
+                "Model（名称）": "%{hovertext}",
+                "MSRP（Y轴值）": "%{y:,.0f}",
+                "车长（X轴值）": "%{x:,.0f}",
+                "Model+MSRP": "%{hovertext}<br>MSRP: %{y:,.0f}",
+                "自由输入": "",
+            }
+            _preset_choice = st.selectbox(
+                "标签字段预设",
+                options=list(_custom_presets.keys()),
+                key=f"export_custom_label_preset_{chart_key}",
+                help=(
+                    "气泡/散点图：%{hovertext}=Model名，"
+                    "%{y}=Y轴值，%{x}=X轴值，"
+                    "%{marker.size}=气泡大小。"
+                    "选【自由输入】可手工填写 Plotly 模板。"
+                ),
+            )
+            if _preset_choice == "自由输入":
+                custom_label_template = st.text_input(
+                    "自定义标签模板",
+                    value="%{hovertext}",
+                    key=f"export_custom_label_input_{chart_key}",
+                    placeholder="例：%{hovertext}<br>%{y:,.0f}",
+                )
+            else:
+                custom_label_template = _custom_presets[_preset_choice]
+
         manual_series_color_enabled = st.checkbox(
             "单系列手工改色",
             value=False,
@@ -1385,20 +1489,24 @@ def render_export_style_controls(
                 )
                 series_color_overrides[series_name] = series_color
 
-        generate_png = st.button(
-            "生成PNG",
-            key=f"png_generate_{chart_key}",
-            width="content",
-            disabled=not kaleido_available,
-        )
-        export_feedback_slot = st.container()
-        export_download_slot = st.container()
-        if not kaleido_available:
-            install_command = get_kaleido_install_command()
-            st.info(
-                "PNG 导出依赖 kaleido，当前环境未安装。"
-                f"请执行：{install_command}"
+        generate_png = False
+        export_feedback_slot = st.empty()
+        export_download_slot = st.empty()
+        if show_png_controls:
+            generate_png = st.button(
+                "生成PNG",
+                key=f"png_generate_{chart_key}",
+                width="content",
+                disabled=not kaleido_available,
             )
+            export_feedback_slot = st.container()
+            export_download_slot = st.container()
+            if not kaleido_available:
+                install_command = get_kaleido_install_command()
+                st.info(
+                    "PNG 导出依赖 kaleido，当前环境未安装。"
+                    f"请执行：{install_command}"
+                )
 
     return {
         "show_x_grid": show_x_grid,
@@ -1422,9 +1530,52 @@ def render_export_style_controls(
         "height": height,
         "data_label_mode": data_label_mode,
         "data_label_position": data_label_position,
+        "custom_label_template": custom_label_template,
         "manual_series_color_enabled": manual_series_color_enabled,
         "series_color_overrides": series_color_overrides,
     }, generate_png, export_feedback_slot, export_download_slot
+
+
+def build_time_series_style_settings(
+    fig: Any,
+    chart_key: str,
+) -> TimeSeriesStyleSettings:
+    """复用导出设置控件，仅提取时间序列图所需样式字段。"""
+    (
+        export_settings,
+        _generate_png,
+        _export_feedback_slot,
+        _export_download_slot,
+    ) = render_export_style_controls(
+        fig=fig,
+        chart_key=chart_key,
+        kaleido_available=is_kaleido_available(),
+        show_png_controls=False,
+    )
+
+    # 规范化：时间序列仅支持这 4 个标签模式
+    allowed_label_modes = {"关闭", "仅数值", "仅系列名", "系列名+数值"}
+    data_label_mode = str(export_settings.get("data_label_mode", "仅数值"))
+    if data_label_mode not in allowed_label_modes:
+        data_label_mode = "仅数值"
+
+    data_label_position = str(export_settings.get("data_label_position", "顶部"))
+    if data_label_position not in EXPORT_DATA_LABEL_POSITION_OPTIONS:
+        data_label_position = "顶部"
+
+    font_size = int(export_settings.get("font_size", 12))
+    palette_name = str(
+        export_settings.get("palette_name", "保留原图配色")
+    )
+    if palette_name not in EXPORT_COLOR_SCHEMES:
+        palette_name = "保留原图配色"
+
+    return TimeSeriesStyleSettings(
+        data_label_mode=data_label_mode,
+        data_label_position=data_label_position,
+        font_size=font_size,
+        palette_name=palette_name,
+    )
 
 
 def render_plotly_chart_with_png_export(
@@ -1703,7 +1854,7 @@ def render_line_mode_controls(
     columns: ColumnRegistry,
 ) -> ChartControls:
     with st.container(border=True):
-        st.subheader("折线显示模式")
+        st.subheader("时间序列显示模式")
         mode_col_1, mode_col_2 = st.columns([2, 1])
 
         with mode_col_1:
@@ -1715,11 +1866,25 @@ def render_line_mode_controls(
             )
 
         with mode_col_2:
-            show_line_labels = st.checkbox(
-                "显示折线标签",
-                value=True,
-                key="line_show_labels",
+            chart_type = st.radio(
+                "图表类型",
+                ["折线", "累积条形"],
+                horizontal=True,
+                key="chart_type_switch",
             )
+
+        # 复用增强分析图中的导出设置模块（取时间序列需要的子集）
+        style_source_fig = st.session_state.get("time_series_style_source_fig")
+        if not isinstance(style_source_fig, go.Figure):
+            style_source_fig = go.Figure()
+        style_settings = build_time_series_style_settings(
+            fig=style_source_fig,
+            chart_key="time_series_shared",
+        )
+        data_label_mode = style_settings.data_label_mode
+        data_label_position = style_settings.data_label_position
+        font_size = style_settings.font_size
+        palette_name = style_settings.palette_name
 
         group_label: str | None = None
         group_column: str | None = None
@@ -1796,7 +1961,11 @@ def render_line_mode_controls(
         top_n_enabled=top_n_enabled,
         top_n=top_n,
         include_others=include_others,
-        show_line_labels=show_line_labels,
+        chart_type=chart_type,
+        data_label_mode=data_label_mode,
+        data_label_position=data_label_position,
+        font_size=font_size,
+        palette_name=palette_name,
     )
 
 
@@ -1935,28 +2104,71 @@ def render_year_tab(
             else "年度趋势（总和）"
         )
 
-        fig = px.line(
-            year_plot,
-            x="Year",
-            y="Sales",
-            color="Series",
-            markers=True,
-            title=title,
-            color_discrete_map=color_map,
+        if controls.chart_type == "折线":
+            fig = px.line(
+                year_plot,
+                x="Year",
+                y="Sales",
+                color="Series",
+                markers=True,
+                title=title,
+                color_discrete_map=color_map,
+            )
+        else:  # 累积条形
+            fig = px.bar(
+                year_plot,
+                x="Year",
+                y="Sales",
+                color="Series",
+                barmode="relative",
+                title=title,
+                color_discrete_map=color_map,
+            )
+
+        # 用真实图作为下一轮导出设置控件的上下文
+        st.session_state["time_series_style_source_fig"] = go.Figure(fig)
+
+        fig = style_figure(fig)
+        palette = EXPORT_COLOR_SCHEMES.get(controls.palette_name)
+        if palette:
+            apply_export_palette(fig, palette)
+
+        apply_export_data_labels(
+            fig,
+            mode_name=controls.data_label_mode,
+            position_name=controls.data_label_position,
+            label_font_size=controls.font_size,
+            force_bar_inside=(
+                controls.chart_type == "累积条形"
+                and controls.data_label_position == "自动"
+            ),
         )
 
-        if controls.show_line_labels:
-            fig = add_line_end_labels(fig)
+        fig.update_layout(
+            font={"size": int(controls.font_size)},
+            title_font={"size": int(controls.font_size)},
+            legend={"font": {"size": int(controls.font_size)}},
+        )
+        fig.update_xaxes(
+            tickfont={"size": int(controls.font_size)},
+            title_font={"size": int(controls.font_size)},
+        )
+        fig.update_yaxes(
+            tickfont={"size": int(controls.font_size)},
+            title_font={"size": int(controls.font_size)},
+        )
 
         st.plotly_chart(
-            style_figure(fig),
+            fig,
             width="stretch",
             config=PLOT_CONFIG,
         )
-        if controls.show_line_labels:
-            st.caption("折线标签=分组名称；点位=该年销量。")
+        if controls.data_label_mode == "关闭":
+            st.caption("当前已关闭数据标签。")
+        elif controls.chart_type == "累积条形":
+            st.caption("条形图数据标签显示销量（千分位），可在导出设置中调整位置。")
         else:
-            st.caption("点位=该年销量。")
+            st.caption("折线图已显示数据标签（不再使用 end labels）。")
 
         stats["Year Plot"] = time.perf_counter() - plot_start
         return stats
@@ -2095,26 +2307,71 @@ def render_month_tab(
             if controls.chart_mode == "分组" and controls.group_label
             else f"{axis_level}度销量趋势（总和）"
         )
-        fig = px.line(
-            grouped,
-            x="Period",
-            y="Sales",
-            color="Series",
-            markers=True,
-            title=title,
-            color_discrete_map=color_map,
+        if controls.chart_type == "折线":
+            fig = px.line(
+                grouped,
+                x="Period",
+                y="Sales",
+                color="Series",
+                markers=True,
+                title=title,
+                color_discrete_map=color_map,
+            )
+        else:  # 累积条形
+            fig = px.bar(
+                grouped,
+                x="Period",
+                y="Sales",
+                color="Series",
+                barmode="relative",
+                title=title,
+                color_discrete_map=color_map,
+            )
+
+        # 用真实图作为下一轮导出设置控件的上下文
+        st.session_state["time_series_style_source_fig"] = go.Figure(fig)
+
+        fig = style_figure(fig)
+        palette = EXPORT_COLOR_SCHEMES.get(controls.palette_name)
+        if palette:
+            apply_export_palette(fig, palette)
+
+        apply_export_data_labels(
+            fig,
+            mode_name=controls.data_label_mode,
+            position_name=controls.data_label_position,
+            label_font_size=controls.font_size,
+            force_bar_inside=(
+                controls.chart_type == "累积条形"
+                and controls.data_label_position == "自动"
+            ),
         )
-        if controls.show_line_labels:
-            fig = add_line_end_labels(fig)
+
+        fig.update_layout(
+            font={"size": int(controls.font_size)},
+            title_font={"size": int(controls.font_size)},
+            legend={"font": {"size": int(controls.font_size)}},
+        )
+        fig.update_xaxes(
+            tickfont={"size": int(controls.font_size)},
+            title_font={"size": int(controls.font_size)},
+        )
+        fig.update_yaxes(
+            tickfont={"size": int(controls.font_size)},
+            title_font={"size": int(controls.font_size)},
+        )
+
         st.plotly_chart(
-            style_figure(fig),
+            fig,
             width="stretch",
             config=PLOT_CONFIG,
         )
-        if controls.show_line_labels:
-            st.caption("折线标签=分组名称；点位=该时间粒度销量。")
+        if controls.data_label_mode == "关闭":
+            st.caption("当前已关闭数据标签。")
+        elif controls.chart_type == "累积条形":
+            st.caption("条形图数据标签显示销量（千分位），可在导出设置中调整位置。")
         else:
-            st.caption("点位=该时间粒度销量。")
+            st.caption("折线图已显示数据标签（不再使用 end labels）。")
 
         stats["Month Plot"] = time.perf_counter() - plot_start
         return stats
@@ -5422,10 +5679,17 @@ def render_chart_powertrain_bubble(
     else:
         brand_series = pd.Series("全部品牌", index=filtered_df.index)
 
+    if columns.segment:
+        segment_series = normalize_series(filtered_df[columns.segment])
+    else:
+        segment_series = pd.Series("未标注", index=filtered_df.index)
+
     bubble_raw = pd.DataFrame(
         {
+            "SourceIndex": filtered_df.index,
             "Model": normalize_series(filtered_df[columns.model]),
             "Brand": brand_series,
+            "Segment": segment_series,
             "Powertrain": normalize_series(filtered_df[columns.powertrain]),
             "Length": length_values,
             "MSRP": msrp_values,
@@ -5441,15 +5705,21 @@ def render_chart_powertrain_bubble(
         st.info("当前筛选下无 BEV/MHEV/PHEV/ICE/HEV 数据。")
         return
 
+    grouped_topn_enabled = False
+    grouped_topn_field = "Powertrain"
+    grouped_topn_label = "动总规整"
+    grouped_topn_groups: list[str] = []
+    grouped_topn_map: dict[str, int] = {}
+
     with st.container(border=True):
         st.caption("图表控制")
         core_col_1, core_col_2, core_col_3 = st.columns([1, 1, 1])
         with core_col_1:
             top_n_models = int(
                 st.number_input(
-                    "Top N Model（气泡图）",
+                    "默认 TopN（气泡图）",
                     min_value=5,
-                    max_value=80,
+                    max_value=200,
                     value=25,
                     step=1,
                     key="bubble_top_n_models",
@@ -5528,23 +5798,154 @@ def render_chart_powertrain_bubble(
                             f"YoY 基准：{yoy_base_year} → {yoy_compare_year}"
                         )
 
-    model_rank = (
-        bubble_raw.groupby("Model", as_index=False)["Sales"]
-        .sum()
-        .sort_values("Sales", ascending=False)
-    )
-    top_models = set(model_rank.head(top_n_models)["Model"])
-    bubble_raw = bubble_raw[bubble_raw["Model"].isin(top_models)]
+            st.divider()
+            st.caption("分组 TopN（同图叠加）")
+            grouped_topn_enabled = st.checkbox(
+                "启用分组 TopN",
+                value=False,
+                key="bubble_grouped_topn_enabled",
+                help=(
+                    "按细分市场或动总规整分别设置 TopN，"
+                    "结果合并到同一张气泡图。"
+                ),
+            )
+
+            if grouped_topn_enabled:
+                grouped_options: list[tuple[str, str]] = [
+                    ("动总规整", "Powertrain")
+                ]
+                if columns.segment:
+                    grouped_options.insert(0, ("细分市场", "Segment"))
+
+                grouped_topn_label = st.selectbox(
+                    "分组维度",
+                    [label for label, _ in grouped_options],
+                    index=0,
+                    key="bubble_grouped_topn_dimension",
+                )
+                grouped_option_map = {
+                    label: field for label, field in grouped_options
+                }
+                grouped_topn_field = grouped_option_map[grouped_topn_label]
+
+                grouped_rank = (
+                    bubble_raw.groupby(
+                        grouped_topn_field,
+                        as_index=False,
+                    )["Sales"]
+                    .sum()
+                    .sort_values("Sales", ascending=False)
+                )
+                grouped_candidates = (
+                    grouped_rank[grouped_topn_field].astype(str).tolist()
+                )
+                default_group_count = min(2, len(grouped_candidates))
+                default_groups = grouped_candidates[:default_group_count]
+                grouped_topn_groups = st.multiselect(
+                    f"选择{grouped_topn_label}",
+                    grouped_candidates,
+                    default=default_groups,
+                    key=(
+                        f"bubble_grouped_topn_selected_"
+                        f"{grouped_topn_field.lower()}"
+                    ),
+                    help="每个分组都可以设置独立 TopN。",
+                )
+
+                if grouped_topn_groups:
+                    topn_columns = st.columns(
+                        min(3, max(1, len(grouped_topn_groups)))
+                    )
+                    for idx, grouped_value in enumerate(grouped_topn_groups):
+                        with topn_columns[idx % len(topn_columns)]:
+                            grouped_topn_map[grouped_value] = int(
+                                st.number_input(
+                                    f"{grouped_value} TopN",
+                                    min_value=1,
+                                    max_value=300,
+                                    value=min(top_n_models, 300),
+                                    step=1,
+                                    key=(
+                                        "bubble_grouped_topn_value_"
+                                        f"{grouped_topn_field}_"
+                                        f"{grouped_value}"
+                                    ),
+                                )
+                            )
+                else:
+                    st.info("请至少选择一个分组后再应用分组 TopN。")
+
+    grouped_topn_applied = False
+    grouped_topn_summary = ""
+
+    if grouped_topn_enabled and grouped_topn_groups:
+        grouped_rank_df = (
+            bubble_raw.groupby([grouped_topn_field, "Model"], as_index=False)[
+                "Sales"
+            ]
+            .sum()
+            .sort_values("Sales", ascending=False)
+        )
+
+        keep_chunks: list[pd.DataFrame] = []
+        for grouped_value in grouped_topn_groups:
+            group_topn = int(grouped_topn_map.get(grouped_value, top_n_models))
+            group_rank = grouped_rank_df[
+                grouped_rank_df[grouped_topn_field] == grouped_value
+            ]
+            if group_rank.empty:
+                continue
+            keep_chunks.append(
+                group_rank.head(group_topn)[[grouped_topn_field, "Model"]]
+            )
+
+        if keep_chunks:
+            keep_pairs = pd.concat(
+                keep_chunks,
+                ignore_index=True,
+            ).drop_duplicates()
+            bubble_raw = bubble_raw.merge(
+                keep_pairs,
+                on=[grouped_topn_field, "Model"],
+                how="inner",
+            )
+            grouped_topn_applied = True
+            summary_items = [
+                (
+                    f"{grouped_value} Top"
+                    f"{grouped_topn_map.get(grouped_value, top_n_models)}"
+                )
+                for grouped_value in grouped_topn_groups[:4]
+            ]
+            if len(grouped_topn_groups) > 4:
+                summary_items.append(f"等{len(grouped_topn_groups)}组")
+            grouped_topn_summary = "；".join(summary_items)
+        else:
+            show_no_data("动总分布气泡图")
+            return
+    else:
+        model_rank = (
+            bubble_raw.groupby("Model", as_index=False)["Sales"]
+            .sum()
+            .sort_values("Sales", ascending=False)
+        )
+        top_models = set(model_rank.head(top_n_models)["Model"])
+        bubble_raw = bubble_raw[bubble_raw["Model"].isin(top_models)]
 
     if show_yoy_label and yoy_compare_year and yoy_base_year:
-        bubble_raw["SalesCurrent"] = pd.to_numeric(
-            filtered_df.loc[bubble_raw.index, yoy_compare_year],
+        source_index = bubble_raw["SourceIndex"]
+        current_values = pd.to_numeric(
+            filtered_df.reindex(source_index)[yoy_compare_year],
             errors="coerce",
         ).fillna(0.0)
-        bubble_raw["SalesBase"] = pd.to_numeric(
-            filtered_df.loc[bubble_raw.index, yoy_base_year],
+        base_values = pd.to_numeric(
+            filtered_df.reindex(source_index)[yoy_base_year],
             errors="coerce",
         ).fillna(0.0)
+        current_values.index = bubble_raw.index
+        base_values.index = bubble_raw.index
+        bubble_raw["SalesCurrent"] = current_values
+        bubble_raw["SalesBase"] = base_values
     else:
         bubble_raw["SalesCurrent"] = bubble_raw["Sales"]
         bubble_raw["SalesBase"] = bubble_raw["Sales"]
@@ -5567,6 +5968,8 @@ def render_chart_powertrain_bubble(
     group_columns = ["Model", "Powertrain"]
     if facet_col:
         group_columns.append("Brand")
+    if grouped_topn_applied and grouped_topn_field == "Segment":
+        group_columns.append("Segment")
 
     bubble_df = bubble_raw.groupby(group_columns, as_index=False).agg(
         Length=("Length", "median"),
@@ -5622,6 +6025,8 @@ def render_chart_powertrain_bubble(
         "SalesBase": False,
         "YoYPct": ":.1f" if show_yoy_label else False,
     }
+    if "Segment" in bubble_df.columns:
+        bubble_hover_data["Segment"] = True
 
     fig_bubble = px.scatter(
         bubble_df,
@@ -5647,6 +6052,10 @@ def render_chart_powertrain_bubble(
     fig_bubble.update_xaxes(title=f"车长（{length_col}）")
     fig_bubble.update_yaxes(title=f"MSRP（{msrp_col}）")
 
+    if grouped_topn_applied and grouped_topn_summary:
+        st.caption(
+            f"分组 TopN（{grouped_topn_label}）：{grouped_topn_summary}"
+        )
     if facet_col:
         st.caption(f"按品牌分面显示前 {max_brand_facets} 个品牌。")
     st.caption("仅显示 BEV/MHEV/PHEV/ICE/HEV；其余动总类型不显示。")
