@@ -5710,7 +5710,14 @@ def render_chart_powertrain_bubble(
     grouped_topn_label = "动总规整"
     grouped_topn_groups: list[str] = []
     grouped_topn_map: dict[str, int] = {}
+    bubble_timing: dict[str, float] = {
+        "控件构建": 0.0,
+        "数据变换": 0.0,
+        "绘图构建": 0.0,
+        "图表渲染": 0.0,
+    }
 
+    controls_start = time.perf_counter()
     with st.container(border=True):
         st.caption("图表控制")
         core_col_1, core_col_2, core_col_3 = st.columns([1, 1, 1])
@@ -5751,7 +5758,7 @@ def render_chart_powertrain_bubble(
                     )
                 )
         max_brand_facets = 4
-        show_yoy_label = True
+        show_yoy_label = False
         yoy_compare_year: str | None = None
         yoy_base_year: str | None = None
         year_options = [str(year) for year in year_columns]
@@ -5774,8 +5781,8 @@ def render_chart_powertrain_bubble(
             yoy_col_1, yoy_col_2 = st.columns([1, 2])
             with yoy_col_1:
                 show_yoy_label = st.checkbox(
-                    "hover显示YoY",
-                    value=True,
+                    "hover显示YoY（默认关闭，性能更优）",
+                    value=False,
                     key="bubble_show_yoy_label",
                 )
 
@@ -5874,6 +5881,10 @@ def render_chart_powertrain_bubble(
                             )
                 else:
                     st.info("请至少选择一个分组后再应用分组 TopN。")
+
+    bubble_timing["控件构建"] = time.perf_counter() - controls_start
+
+    transform_start = time.perf_counter()
 
     grouped_topn_applied = False
     grouped_topn_summary = ""
@@ -6001,9 +6012,13 @@ def render_chart_powertrain_bubble(
     size_max = int(24 * bubble_visual_scale)
     size_max = max(8, min(size_max, 140))
 
+    bubble_timing["数据变换"] = time.perf_counter() - transform_start
+
     if bubble_df.empty:
         show_no_data("动总分布气泡图")
         return
+
+    figure_build_start = time.perf_counter()
 
     chart_title = "筛选后 Model 动总分布气泡图"
     if facet_col:
@@ -6040,6 +6055,7 @@ def render_chart_powertrain_bubble(
         category_orders=category_orders,
         color_discrete_map=POWERTRAIN_COLOR_MAP,
         title=chart_title,
+        render_mode="webgl",
         **scatter_kwargs,
     )
     if facet_col:
@@ -6051,6 +6067,8 @@ def render_chart_powertrain_bubble(
     fig_bubble = style_figure(fig_bubble)
     fig_bubble.update_xaxes(title=f"车长（{length_col}）")
     fig_bubble.update_yaxes(title=f"MSRP（{msrp_col}）")
+
+    bubble_timing["绘图构建"] = time.perf_counter() - figure_build_start
 
     if grouped_topn_applied and grouped_topn_summary:
         st.caption(
@@ -6075,11 +6093,26 @@ def render_chart_powertrain_bubble(
         st.caption(f"当前气泡放大倍数：{bubble_size_multiplier}x")
     else:
         st.caption("当前气泡放大倍数：1x")
+
+    render_start = time.perf_counter()
     render_plotly_chart_with_png_export(
         fig=fig_bubble,
         chart_key="adv_powertrain_bubble",
         filename_prefix="powertrain_bubble",
     )
+    bubble_timing["图表渲染"] = time.perf_counter() - render_start
+
+    with st.expander("⏱️ 气泡图渲染拆分（本次）", expanded=False):
+        timing_df = pd.DataFrame(
+            {
+                "模块": list(bubble_timing.keys()),
+                "耗时(s)": [
+                    round(float(value), 3)
+                    for value in bubble_timing.values()
+                ],
+            }
+        ).sort_values("耗时(s)", ascending=False)
+        st.dataframe(timing_df, width="stretch", hide_index=True)
 
 
 def resolve_year_column(

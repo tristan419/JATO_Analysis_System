@@ -108,11 +108,11 @@ PYTHONPATH=05_DashBoard python 03_Scripts/benchmark_dashboard_load.py --repeats 
 
 ### 5.2 方案对比
 
-| 方案 | 架构 | 50 并发可行性 | 风险 |
-| --- | --- | --- | --- |
-| A | 单机 `2 vCPU / 8GB` | 不建议作为 50 并发目标 | 高峰时易触发内存与响应抖动 |
-| B | 单机 `4 vCPU / 16GB` | 可作为过渡方案（需强约束加载策略） | 无高可用，单点故障 |
-| C | 双实例 `2 x (4 vCPU / 16GB)` + 负载均衡 | 推荐 | 成本略增，但稳定性明显提升 |
+| 方案 | 架构                                      | 50 并发可行性                      | 风险                       |
+| ---- | ----------------------------------------- | ---------------------------------- | -------------------------- |
+| A    | 单机 `2 vCPU / 8GB`                     | 不建议作为 50 并发目标             | 高峰时易触发内存与响应抖动 |
+| B    | 单机 `4 vCPU / 16GB`                    | 可作为过渡方案（需强约束加载策略） | 无高可用，单点故障         |
+| C    | 双实例 `2 x (4 vCPU / 16GB)` + 负载均衡 | 推荐                               | 成本略增，但稳定性明显提升 |
 
 ### 5.3 推荐方案（目标：稳定 50 并发）
 
@@ -220,11 +220,59 @@ sudo systemctl reload nginx
 curl -sS http://127.0.0.1/healthz
 ```
 
+### 6.2.1 HTTPS + HTTP/2 最短路径（推荐）
+
+适用场景：当前采用 `EC2 + nginx + systemd` 路径，想从 `HTTP/1.1` 升级到 `HTTPS + HTTP/2`。
+
+关键结论：
+
+1. 浏览器侧的 `HTTP/2` 基本依赖 `TLS`（即 `HTTPS`）。
+2. 仅使用裸弹性 IP 时，通常无法通过 Let's Encrypt 获取公网可信证书。
+3. 生产建议：先绑定域名，再申请证书，再启用 `443`。
+
+执行步骤（最短路径）：
+
+1. 准备域名（例如 `dash.example.com`），A 记录指向当前弹性 IP。
+2. 安全组放通 `443`（保留 `80` 供证书验证与跳转）。
+3. 修改 nginx 配置中的 `server_name` 为你的域名（不要使用 `_`）。
+4. 安装 certbot：
+
+```bash
+sudo apt-get update -y
+sudo apt-get install -y certbot python3-certbot-nginx
+```
+
+1. 签发证书并自动配置 80->443 跳转：
+
+```bash
+sudo certbot --nginx -d dash.example.com --redirect -m you@example.com --agree-tos -n
+```
+
+1. 验证 nginx 与证书：
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+sudo certbot renew --dry-run
+```
+
+1. 协议检查（确认已不是 `http/1.1`）：
+
+```bash
+curl -s -o /dev/null -w "http_version=%{http_version}\n" https://dash.example.com/
+```
+
+1. 浏览器检查：DevTools -> Network -> Protocol 列应显示 `h2`。
+
+补充说明：
+
+1. 裸 IP 也可用自签证书临时启用 HTTPS，但浏览器会有安全警告，不建议对外用户使用。
+2. 若已切到 `ALB` 作为公网入口，建议把证书放在 `ALB(ACM)` 层终止 TLS，后端 nginx 维持内网 HTTP。
+
 ### 6.3 50 并发压测（k6）
 
 1. 安装 k6（按目标系统官方方式安装）。
-
-1. 执行压测（默认 2+3+5+2 分钟分阶段）：
+2. 执行压测（默认 2+3+5+2 分钟分阶段）：
 
 ```bash
 k6 run -e BASE_URL=http://127.0.0.1 03_Scripts/deploy/loadtest/k6_dashboard_50vus.js
@@ -239,10 +287,10 @@ k6 run -e BASE_URL=http://127.0.0.1 03_Scripts/deploy/loadtest/k6_dashboard_50vu
 ### 6.4 发布当天建议执行顺序
 
 1. 先跑 `03_Scripts/ci_smoke_check.py`
-1. 先启动单实例 + nginx 验证稳定
-1. 再按资源情况切到双实例
-1. 执行 k6 压测并记录 P95/失败率
-1. 通过后再开放真实流量
+2. 先启动单实例 + nginx 验证稳定
+3. 再按资源情况切到双实例
+4. 执行 k6 压测并记录 P95/失败率
+5. 通过后再开放真实流量
 
 ---
 
@@ -251,10 +299,10 @@ k6 run -e BASE_URL=http://127.0.0.1 03_Scripts/deploy/loadtest/k6_dashboard_50vu
 ### 7.1 资源建议（目标 50 并发）
 
 1. 区域：就近选择（示例 `ap-southeast-1` 或 `ap-northeast-1`）。
-1. 计算：2 台 EC2（每台 `4 vCPU / 16GB`，建议 `m6i.xlarge` 或同级）。
-1. 负载均衡：1 个 ALB（Application Load Balancer）。
-1. 存储：EBS `gp3`（建议 100GB 起步），后续可切 S3 承载数据。
-1. 监控：CloudWatch（CPU、内存、HTTP 错误率、响应时延）。
+2. 计算：2 台 EC2（每台 `4 vCPU / 16GB`，建议 `m6i.xlarge` 或同级）。
+3. 负载均衡：1 个 ALB（Application Load Balancer）。
+4. 存储：EBS `gp3`（建议 100GB 起步），后续可切 S3 承载数据。
+5. 监控：CloudWatch（CPU、内存、HTTP 错误率、响应时延）。
 
 ### 7.2 网络与安全组
 
@@ -277,7 +325,7 @@ k6 run -e BASE_URL=http://127.0.0.1 03_Scripts/deploy/loadtest/k6_dashboard_50vu
 ### 7.3 服务器初始化（Ubuntu）
 
 1. 上传项目到服务器（git clone 或 scp）。
-1. 执行一键初始化脚本：
+2. 执行一键初始化脚本：
 
 ```bash
 cd /opt/JATO_Analysis_System
@@ -310,10 +358,10 @@ curl -sS http://127.0.0.1/healthz
 工作流行为：
 
 1. 监听 `main` 分支 push。
-1. GitHub Actions 通过 SSH 登录 EC2。
-1. 在服务器执行：`git fetch`、`git reset --hard origin/main`、`pip install -r requirements.txt`。
-1. 通过 `systemd` 重启 `jato-dashboard@8501`。
-1. 访问 `/_stcore/health` 做健康检查。
+2. GitHub Actions 通过 SSH 登录 EC2。
+3. 在服务器执行：`git fetch`、`git reset --hard origin/main`、`pip install -r requirements.txt`。
+4. 通过 `systemd` 重启 `jato-dashboard@8501`。
+5. 访问 `/_stcore/health` 做健康检查。
 
 GitHub 仓库 `Secrets`（必填）：
 
@@ -330,9 +378,9 @@ GitHub 仓库 `Variables`（可选，未填写则走默认值）：
 服务器一次性准备：
 
 1. 确保 EC2 上项目目录固定为 `/opt/JATO_Analysis_System`（或与 `EC2_REPO_DIR` 保持一致）。
-1. 确保 `ubuntu` 用户可以 SSH 登录并具备仓库读权限。
-1. 建议服务以非 `root` 用户运行，避免端口占用、日志和 `__pycache__` 权限混乱。
-1. 给部署用户开放受限 sudo 权限，仅允许重启和查看 dashboard 服务：
+2. 确保 `ubuntu` 用户可以 SSH 登录并具备仓库读权限。
+3. 建议服务以非 `root` 用户运行，避免端口占用、日志和 `__pycache__` 权限混乱。
+4. 给部署用户开放受限 sudo 权限，仅允许重启和查看 dashboard 服务：
 
 ```bash
 sudo bash -c 'cat >/etc/sudoers.d/jato-dashboard-deploy <<EOF
@@ -408,13 +456,13 @@ sudo systemctl start jato-dashboard@8501
 建议原则：
 
 1. 部署机尽量不做开发提交，仅用于拉取并运行。
-1. 服务统一通过 `systemd` 管理，避免与手工脚本混用造成权限冲突。
-1. 若长期手动更新频繁，建议回到 `7.3.1` 自动发布流程。
+2. 服务统一通过 `systemd` 管理，避免与手工脚本混用造成权限冲突。
+3. 若长期手动更新频繁，建议回到 `7.3.1` 自动发布流程。
 
 ### 7.3.3 出现 `502` / `connecting streamlit server` 的快速判定
 
 1. 若 `nginx access.log` 中出现 `/_stcore/stream 101` 但 `/_stcore/health` 间歇 `502`，优先怀疑应用进程被杀。
-1. 用以下命令确认是否 OOM：
+2. 用以下命令确认是否 OOM：
 
 ```bash
 sudo journalctl -u jato-dashboard@8501 -n 120 --no-pager
@@ -439,14 +487,14 @@ curl -i http://127.0.0.1/healthz
 ### 7.4 ALB 绑定与健康检查
 
 1. 创建 Target Group（HTTP，端口 80，实例目标）。
-1. Health Check Path 配置为 `/healthz`。
-1. ALB Listener（80/443）转发到该 Target Group。
-1. 验证 ALB DNS 可访问首页和健康检查。
+2. Health Check Path 配置为 `/healthz`。
+3. ALB Listener（80/443）转发到该 Target Group。
+4. 验证 ALB DNS 可访问首页和健康检查。
 
 ### 7.5 上线前验收（必须）
 
 1. 应用侧：`03_Scripts/ci_smoke_check.py` 全通过。
-1. 压测侧：
+2. 压测侧：
 
 ```bash
 k6 run -e BASE_URL=http://<ALB_DNS> 03_Scripts/deploy/loadtest/k6_dashboard_50vus.js
@@ -457,8 +505,8 @@ k6 run -e BASE_URL=http://<ALB_DNS> 03_Scripts/deploy/loadtest/k6_dashboard_50vu
 ### 7.6 运维建议（首月）
 
 1. 每日巡检：实例状态、Target Group 健康数、错误率。
-1. 每周巡检：成本、日志量、慢请求分布。
-1. 每次数据刷新后：抽样执行 `ci_smoke_check.py` + 小规模 k6 回归。
+2. 每周巡检：成本、日志量、慢请求分布。
+3. 每次数据刷新后：抽样执行 `ci_smoke_check.py` + 小规模 k6 回归。
 
 ---
 
@@ -490,11 +538,66 @@ docker run --rm -p 8501:8501 \
   jato-dashboard:local
 ```
 
+1. 使用 docker compose（推荐长期使用）：
+
+```bash
+cp .env.docker.example .env
+docker compose up --build -d
+```
+
+1. 查看状态与日志：
+
+```bash
+docker compose ps
+docker compose logs -f --tail=100
+```
+
 1. 本地健康检查：
 
 ```bash
 curl -sS http://127.0.0.1:8501/_stcore/health
 ```
+
+1. 停止与清理：
+
+```bash
+docker compose down
+```
+
+1. 对外分发镜像时（给别人使用）仅需改 `.env` 中的 `JATO_IMAGE`，然后执行：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+#### 8.1.1 macOS 小白安装 Docker Desktop（一步一步）
+
+1. 在 Mac 顶部菜单点击“关于本机”，确认芯片是 `Apple` 还是 `Intel`。
+2. 打开 Docker Desktop 官网下载对应安装包：
+
+`https://www.docker.com/products/docker-desktop/`
+
+1. 双击 `.dmg`，把 Docker 拖到 `Applications`。
+2. 从 `Applications` 启动 Docker，按提示授权并等待右上角鲸鱼图标稳定。
+3. 终端验证安装：
+
+```bash
+docker --version
+docker compose version
+docker run hello-world
+```
+
+1. 若出现 `command not found`，先关闭并重开终端，再执行上面的验证命令。
+2. 在项目根目录一键启动：
+
+```bash
+cd /Users/litristan/Downloads/JATO_Analysis_System
+cp .env.docker.example .env
+docker compose up --build -d
+```
+
+1. 浏览器打开：`http://127.0.0.1:8501`。
 
 ### 8.2 GitHub Actions（CI/CD）
 
@@ -505,9 +608,9 @@ curl -sS http://127.0.0.1:8501/_stcore/health
 该工作流会执行：
 
 1. `ci_smoke_check.py`
-1. Docker build
-1. 推送到 ECR（镜像 tag 用 `commit SHA`）
-1. 更新 ECS task definition 并发布
+2. Docker build
+3. 推送到 ECR（镜像 tag 用 `commit SHA`）
+4. 更新 ECS task definition 并发布
 
 GitHub 仓库配置项（必须）：
 
@@ -532,10 +635,10 @@ GitHub 仓库配置项（必须）：
 ### 8.3 AWS（ECR + ECS + ALB）
 
 1. ECR：创建仓库（如 `jato-dashboard`）。
-1. ECS：创建 Cluster + Service（建议最少 2 个 Task 实例）。
-1. Task 定义中容器端口使用 `8501`。
-1. ALB Target Group 健康检查路径使用 `/_stcore/health`。
-1. Service 绑定 ALB，对外仅开放 `80/443`。
+2. ECS：创建 Cluster + Service（建议最少 2 个 Task 实例）。
+3. Task 定义中容器端口使用 `8501`。
+4. ALB Target Group 健康检查路径使用 `/_stcore/health`。
+5. Service 绑定 ALB，对外仅开放 `80/443`。
 
 ### 8.4 常见错误与纠正
 
@@ -569,9 +672,9 @@ GitHub 仓库配置项（必须）：
 执行顺序：
 
 1. 在 AWS 账户中创建 OIDC Provider：`token.actions.githubusercontent.com`。
-1. 创建 IAM Role，信任策略使用 `iam-github-oidc-trust-policy.json`。
-1. 给该 Role 绑定权限策略 `iam-github-ecs-deploy-policy.json`。
-1. 将 Role ARN 写入 GitHub Secret：`AWS_ROLE_TO_ASSUME`。
+2. 创建 IAM Role，信任策略使用 `iam-github-oidc-trust-policy.json`。
+3. 给该 Role 绑定权限策略 `iam-github-ecs-deploy-policy.json`。
+4. 将 Role ARN 写入 GitHub Secret：`AWS_ROLE_TO_ASSUME`。
 
 ### 8.6 ECS Task Definition 模板
 
@@ -582,8 +685,8 @@ GitHub 仓库配置项（必须）：
 关键点：
 
 1. 替换模板中的占位符（账号、区域、角色、EFS 等）。
-1. 容器健康检查与 ALB 保持一致：`/_stcore/health`。
-1. 环境变量使用：
+2. 容器健康检查与 ALB 保持一致：`/_stcore/health`。
+3. 环境变量使用：
 
 `JATO_PARTITIONED_PATH`
 
@@ -626,34 +729,34 @@ bash 03_Scripts/deploy/aws/aws_cli_setup_ci_cd.sh
 脚本会完成：
 
 1. 校验 GitHub OIDC Provider 是否存在
-1. 创建/更新 GitHub 部署 IAM Role（含信任策略）
-1. 注入 ECS/ECR 部署权限策略
-1. 确保 ECR 仓库存在
-1. 渲染 ECS task definition（可选：若镜像 tag 存在则自动注册）
-1. 输出应写入 GitHub 的 Secret/Variables
+2. 创建/更新 GitHub 部署 IAM Role（含信任策略）
+3. 注入 ECS/ECR 部署权限策略
+4. 确保 ECR 仓库存在
+5. 渲染 ECS task definition（可选：若镜像 tag 存在则自动注册）
+6. 输出应写入 GitHub 的 Secret/Variables
 
 ### 8.9 从 0 到上线 20 步清单
 
 1. [AWS Console] 选定目标 Region（与后续 CLI、GitHub Variables 保持一致）。
-1. [AWS Console] 确认账户已创建 GitHub OIDC Provider：`token.actions.githubusercontent.com`。
-1. [AWS Console] 创建或确认 ECR 仓库（例如 `jato-dashboard`）。
-1. [AWS Console] 创建或确认 ECS Cluster（例如 `jato-dashboard-cluster`）。
-1. [AWS Console] 创建或确认 ECS Service（例如 `jato-dashboard-service`）。
-1. [AWS Console] 创建或确认 ALB + Target Group，健康检查路径设为 `/_stcore/health`。
-1. [AWS Console] 确认 ALB 仅对公网开放 `80/443`，不要开放应用容器端口到公网。
-1. [AWS Console] 确认 Task Execution Role 与 Task Role 已存在。
-1. [AWS Console] 若使用 EFS 挂载数据，确认 EFS 文件系统与挂载目标可用。
-1. [Local Terminal] 在项目根目录执行一次本地 smoke：`python 03_Scripts/ci_smoke_check.py`。
-1. [Local Terminal] 准备并检查环境变量：`AWS_REGION`、`AWS_ACCOUNT_ID`、`GITHUB_ORG`、`GITHUB_REPO`、`ECR_REPOSITORY`、`GITHUB_DEPLOY_ROLE_NAME`、`TASK_EXECUTION_ROLE_NAME`、`TASK_ROLE_NAME`、`EFS_FILE_SYSTEM_ID`、`ECS_CLUSTER`、`ECS_SERVICE`、`ECS_CONTAINER_NAME`。
-1. [Local Terminal] 执行引导脚本：`bash 03_Scripts/deploy/aws/aws_cli_setup_ci_cd.sh`。
-1. [Local Terminal] 记录脚本输出的 Role ARN 与 GitHub 配置项。
-1. [GitHub Repo Settings] 填入 Secret：`AWS_ROLE_TO_ASSUME`。
-1. [GitHub Repo Settings] 填入 Variables：`AWS_REGION`、`ECR_REPOSITORY`、`ECS_CLUSTER`、`ECS_SERVICE`、`ECS_TASK_DEFINITION`、`ECS_CONTAINER_NAME`。
-1. [Local Terminal] 提交并推送当前代码到 `main`，触发 `deploy-aws-ecs.yml`。
-1. [GitHub Actions] 检查工作流执行顺序：smoke -> build image -> push ECR -> render taskdef -> deploy ECS。
-1. [AWS Console] 观察 ECS Service 发布状态，确认新 Task 进入 healthy。
-1. [Local Terminal] 使用 ALB 地址执行 k6 压测：`k6 run -e BASE_URL=http://<ALB_DNS> 03_Scripts/deploy/loadtest/k6_dashboard_50vus.js`。
-1. [验收] 满足阈值后对外发布：`P95 <= 8s`、`http_req_failed < 1%`、实例内存长期 `< 80%`。
+2. [AWS Console] 确认账户已创建 GitHub OIDC Provider：`token.actions.githubusercontent.com`。
+3. [AWS Console] 创建或确认 ECR 仓库（例如 `jato-dashboard`）。
+4. [AWS Console] 创建或确认 ECS Cluster（例如 `jato-dashboard-cluster`）。
+5. [AWS Console] 创建或确认 ECS Service（例如 `jato-dashboard-service`）。
+6. [AWS Console] 创建或确认 ALB + Target Group，健康检查路径设为 `/_stcore/health`。
+7. [AWS Console] 确认 ALB 仅对公网开放 `80/443`，不要开放应用容器端口到公网。
+8. [AWS Console] 确认 Task Execution Role 与 Task Role 已存在。
+9. [AWS Console] 若使用 EFS 挂载数据，确认 EFS 文件系统与挂载目标可用。
+10. [Local Terminal] 在项目根目录执行一次本地 smoke：`python 03_Scripts/ci_smoke_check.py`。
+11. [Local Terminal] 准备并检查环境变量：`AWS_REGION`、`AWS_ACCOUNT_ID`、`GITHUB_ORG`、`GITHUB_REPO`、`ECR_REPOSITORY`、`GITHUB_DEPLOY_ROLE_NAME`、`TASK_EXECUTION_ROLE_NAME`、`TASK_ROLE_NAME`、`EFS_FILE_SYSTEM_ID`、`ECS_CLUSTER`、`ECS_SERVICE`、`ECS_CONTAINER_NAME`。
+12. [Local Terminal] 执行引导脚本：`bash 03_Scripts/deploy/aws/aws_cli_setup_ci_cd.sh`。
+13. [Local Terminal] 记录脚本输出的 Role ARN 与 GitHub 配置项。
+14. [GitHub Repo Settings] 填入 Secret：`AWS_ROLE_TO_ASSUME`。
+15. [GitHub Repo Settings] 填入 Variables：`AWS_REGION`、`ECR_REPOSITORY`、`ECS_CLUSTER`、`ECS_SERVICE`、`ECS_TASK_DEFINITION`、`ECS_CONTAINER_NAME`。
+16. [Local Terminal] 提交并推送当前代码到 `main`，触发 `deploy-aws-ecs.yml`。
+17. [GitHub Actions] 检查工作流执行顺序：smoke -> build image -> push ECR -> render taskdef -> deploy ECS。
+18. [AWS Console] 观察 ECS Service 发布状态，确认新 Task 进入 healthy。
+19. [Local Terminal] 使用 ALB 地址执行 k6 压测：`k6 run -e BASE_URL=http://<ALB_DNS> 03_Scripts/deploy/loadtest/k6_dashboard_50vus.js`。
+20. [验收] 满足阈值后对外发布：`P95 <= 8s`、`http_req_failed < 1%`、实例内存长期 `< 80%`。
 
 ### 8.10 新手版（从未用过 AWS）
 
@@ -662,8 +765,8 @@ bash 03_Scripts/deploy/aws/aws_cli_setup_ci_cd.sh
 #### 第 1 阶段：先跑起来（最小可用）
 
 1. 注册并登录 AWS，选定一个固定 Region（例如 `ap-southeast-1`）。
-1. 在 Billing 中确认支付方式可用，并开启 MFA。
-1. 创建 1 台 EC2：
+2. 在 Billing 中确认支付方式可用，并开启 MFA。
+3. 创建 1 台 EC2：
 
 `Ubuntu 22.04/24.04`
 
@@ -678,7 +781,7 @@ bash 03_Scripts/deploy/aws/aws_cli_setup_ci_cd.sh
 （`443` 可后续加域名时启用）
 
 1. 本地下载并保存 Key Pair（`.pem`）。
-1. 本地终端连接服务器：
+2. 本地终端连接服务器：
 
 ```bash
 chmod 400 <your-key>.pem
@@ -697,7 +800,7 @@ sudo apt-get install -y git
 ```bash
 sudo mkdir -p /opt
 cd /opt
-sudo git clone <your-repo-url> JATO_Analysis_System
+sudo git clone https://github.com/tristan419/JATO_Analysis_System.git JATO_Analysis_System
 sudo chown -R ubuntu:ubuntu /opt/JATO_Analysis_System
 cd /opt/JATO_Analysis_System
 ```
@@ -714,16 +817,16 @@ sudo bash 03_Scripts/deploy/aws/bootstrap_ubuntu.sh /opt/JATO_Analysis_System
 curl -sS http://127.0.0.1/healthz
 ```
 
-1. 本地浏览器访问：`http://<EC2_PUBLIC_IP>`。
+1. 本地浏览器访问：`http://54.150.131.152`
 
 到这一步，服务已经可访问。
 
 #### 第 2 阶段：升级到 50 并发稳定形态
 
 1. 再创建 1 台同规格 EC2，重复第 1 阶段部署。
-1. 创建 ALB + Target Group，健康检查路径使用 `/_stcore/health`。
-1. 将两台 EC2 挂到同一 Target Group。
-1. 对外入口切到 ALB DNS，不再直连单台 EC2。
+2. 创建 ALB + Target Group，健康检查路径使用 `/_stcore/health`。
+3. 将两台 EC2 挂到同一 Target Group。
+4. 对外入口切到 ALB DNS，不再直连单台 EC2。
 
 #### 第 3 阶段：接入自动部署（GitHub Actions -> AWS）
 
@@ -756,3 +859,243 @@ k6 run -e BASE_URL=http://<ALB_DNS> 03_Scripts/deploy/loadtest/k6_dashboard_50vu
 `实例内存长期 < 80%`
 
 1. 达标后正式对外发布。
+
+---
+
+## 9) 打包成软件包分发的可行性论证
+
+### 9.1 结论（先给答案）
+
+1. 可行，但“直接打成单文件可执行程序”不是最优路径。
+2. 对外分发的最佳形态是：`Docker 镜像 + 配置模板 + 一键启动脚本`。
+3. 若目标用户无容器基础，再提供“EC2 一键初始化脚本”作为备选。
+
+### 9.2 可行路径对比
+
+| 方案                    | 可行性 | 适配度 | 主要问题                                      |
+| ----------------------- | ------ | ------ | --------------------------------------------- |
+| 源码 + requirements.txt | 高     | 中     | 环境差异大，复现成本高                        |
+| Python 包（wheel/pip）  | 中     | 低     | 适合库，不适合完整 nginx/systemd/服务编排交付 |
+| PyInstaller 单文件      | 中     | 低     | 体积大、跨平台兼容复杂、数据与系统依赖难管理  |
+| Docker 镜像（推荐）     | 高     | 高     | 需要用户具备 Docker 运行环境                  |
+| AMI（AWS 专用镜像）     | 中高   | 中     | 绑定云平台，跨平台迁移弱                      |
+
+### 9.3 为什么推荐 Docker 作为“软件包”
+
+1. 环境一致：Python/依赖版本固定，避免“我这能跑你那不行”。
+2. 交付清晰：一个镜像标签即可对应一个版本。
+3. 运维友好：便于升级、回滚、灰度与 CI/CD 对接。
+4. 与现有文档兼容：本项目已有 Dockerfile 与 ECS 路径，可直接复用。
+
+### 9.4 对外分发最小清单（建议）
+
+1. 镜像：`ghcr.io/<org>/jato-dashboard:<version>` 或 ECR 同步镜像。
+2. 运行模板：`docker run` 与 `docker compose` 两套示例。
+3. 仓库模板文件：`Dockerfile`、`docker-compose.yml`、`.env.docker.example`。
+4. 配置样例：`.env.example`、数据路径挂载说明、端口说明。
+5. 运维脚本：健康检查、日志采集、升级回滚脚本。
+6. 文档：5 分钟启动、常见错误、性能建议（启用 HTTPS + HTTP/2）。
+
+### 9.5 风险与约束
+
+1. 数据体积与数据更新策略需先定稿（本地挂载、对象存储或增量同步）。
+2. 若面向公网，必须补齐：域名、证书、访问控制与审计日志。
+3. 若面向多租户分发，需提前明确授权、计费与版本支持策略。
+
+### 9.6 落地建议（两阶段）
+
+1. 阶段 1：先做“内部可复用包”，输出 Docker 镜像 + compose 模板 + 运行说明。
+2. 阶段 2：再做“外部可交付包”，增加安装向导、License 校验、自动更新与问题诊断脚本。
+
+### 9.7 对外发送时该打包什么（你当前场景）
+
+1. 默认不建议把整个项目文件夹打包给对方再本地构建。
+2. 推荐做法：你在自己的环境构建并推送镜像，对方只需要安装 Docker 并运行镜像。
+3. 你需要发给对方的内容：`docker-compose.yml`、`.env.docker.example`、简短启动说明。
+4. 推荐发布命令（示例 GHCR）：
+
+```bash
+docker login ghcr.io
+docker build -t ghcr.io/<org>/jato-dashboard:v1.0.0 .
+docker push ghcr.io/<org>/jato-dashboard:v1.0.0
+```
+
+1. 一键发布脚本（推荐，少踩坑）：
+
+```bash
+# 第一次可先设置 Token（需要 package:write 权限）
+export GHCR_OWNER=<your-org-or-user>
+export GHCR_USER=<your-github-username>
+export GHCR_TOKEN=<your-ghcr-token>
+
+# 仅改版本号即可发布（自动打 v 前缀、推送 latest）
+bash 03_Scripts/deploy/docker/publish_ghcr.sh 1.0.0 jato-dashboard
+```
+
+脚本路径：`03_Scripts/deploy/docker/publish_ghcr.sh`
+
+1. 对方使用命令（只改镜像名）：
+
+```bash
+cp .env.docker.example .env
+# 编辑 .env，把 JATO_IMAGE 改成你发布的镜像标签
+docker compose pull
+docker compose up -d
+```
+
+1. 若对方无法访问镜像仓库，可离线发镜像包：
+
+```bash
+docker save ghcr.io/<org>/jato-dashboard:v1.0.0 | gzip > jato-dashboard_v1.0.0.tar.gz
+```
+
+对方导入：
+
+```bash
+gunzip -c jato-dashboard_v1.0.0.tar.gz | docker load
+```
+
+1. 数据目录建议独立分发并挂载，不建议把 `04_Processed_data` 打进镜像。
+
+---
+
+## 10) 分发给他人使用（快速指南）
+
+### 前置条件（他人需要的）
+
+他人需要在本地安装 **Docker Desktop**（或 Docker Engine）：
+
+- **macOS**：[Docker Desktop for Mac](https://www.docker.com/products/docker-desktop)
+- **Windows**：[Docker Desktop for Windows](https://www.docker.com/products/docker-desktop)
+- **Linux**：按发行版安装 Docker Engine（`apt-get install docker-ce` 或 `yum install docker-ce`）
+
+验证安装：
+
+```bash
+docker --version
+```
+
+### 你应该发给他人的文件
+
+创建一个分发包，包含：
+
+```
+jato-dashboard-distribution/
+├── docker-compose.yml          # 从你项目根目录复制
+├── .env.docker.example         # 从你项目根目录复制
+├── README.md                   # 快速启动说明（见下方模板）
+└── 04_Processed_data/          # （可选）如果他人没有数据，包含样本数据
+```
+
+**快速启动说明模板** (`README.md`)：
+
+```markdown
+# JATO 仪表板 - Docker 版快速启动
+
+## 前置条件
+
+1. 安装 Docker Desktop（macOS/Windows）或 Docker Engine（Linux）
+   - https://www.docker.com/products/docker-desktop
+
+2. 验证 Docker 安装
+   ```bash
+   docker --version
+```
+
+## 启动方法
+
+### 方式 1：使用官方镜像（推荐，无需构建）
+
+1. 复制 `.env.docker.example` 为 `.env`
+
+   ```bash
+   cp .env.docker.example .env
+   ```
+2. 编辑 `.env` 文件，修改镜像地址（如需要）
+
+   ```
+   JATO_IMAGE=ghcr.io/tristan419/jato-dashboard:v1.0.0
+   JATO_HOST_PORT=8501
+   JATO_DATA_ROOT=./04_Processed_data
+   ```
+3. 启动容器
+
+   ```bash
+   docker compose up -d
+   ```
+4. 打开浏览器访问
+
+   - http://localhost:8501
+
+### 方式 2：查看日志
+
+```bash
+docker compose logs -f
+```
+
+### 方式 3：停止容器
+
+```bash
+docker compose down
+```
+
+## 常见问题
+
+**Q: 容器启动失败？**
+
+- 检查日志：`docker compose logs`
+- 确保 port 8501 未被占用
+- 确保 `04_Processed_data` 目录存在
+
+**Q: 如何更换数据目录？**
+
+- 编辑 `.env` 中的 `JATO_DATA_ROOT` 指向你的数据目录
+
+**Q: 如何离线使用（无网络访问镜像仓库）？**
+
+- 镜像所有者可以提供 `.tar.gz` 包：
+  ```bash
+  gunzip -c jato-dashboard_v1.0.0.tar.gz | docker load
+  ```
+
+```
+
+### 你应该做的步骤（发布者视角）
+
+1. **验证镜像**（本地测试）
+   ```bash
+   docker compose --env-file .env.docker up -d
+   # 访问 http://localhost:8501 测试
+   docker compose down
+```
+
+2. **生成分发包**
+
+   ```bash
+   # 创建分发目录
+   mkdir -p jato-dashboard-distribution/04_Processed_data
+
+   # 复制文件
+   cp docker-compose.yml jato-dashboard-distribution/
+   cp .env.docker.example jato-dashboard-distribution/
+   cp README.md jato-dashboard-distribution/  # 用上方模板
+
+   # 复制样本数据（可选，如果数据量小）
+   cp -r 04_Processed_data/* jato-dashboard-distribution/04_Processed_data/
+
+   # 打包
+   tar -czf jato-dashboard-distribution.tar.gz jato-dashboard-distribution/
+   ```
+3. **分发给他人**
+
+   - Email / 文件共享平台发送 `jato-dashboard-distribution.tar.gz`
+   - 或提供镜像仓库地址（如 GHCR）
+
+### 镜像版本管理建议
+
+- 每次更新代码后重新发布镜像，增加 patch 版本
+  ```bash
+  bash 03_Scripts/deploy/docker/publish_ghcr.sh 1.0.1 jato-dashboard
+  ```
+- 在 `.env.docker.example` 中更新 `JATO_IMAGE` 的标签
+- 在 README.md 中记录更新说明
