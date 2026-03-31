@@ -2,15 +2,20 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
-APP_FILE="$ROOT_DIR/05_DashBoard/app.py"
-PORT="${1:-8501}"
 
-if [[ ! -x "$PYTHON_BIN" ]]; then
-  echo "[ERROR] 未找到 Python 虚拟环境: $PYTHON_BIN"
-  echo "请先在项目根目录创建 .venv 并安装依赖。"
+# 支持 venv 和 .venv 两种虚拟环境目录
+if [[ -x "$ROOT_DIR/venv/bin/python" ]]; then
+  PYTHON_BIN="$ROOT_DIR/venv/bin/python"
+elif [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
+  PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
+else
+  echo "[ERROR] 未找到 Python 虚拟环境"
+  echo "请确保存在 venv/ 或 .venv/ 目录"
   exit 1
 fi
+
+APP_FILE="$ROOT_DIR/05_DashBoard/app.py"
+PORT="${1:-8501}"
 
 if [[ ! -f "$APP_FILE" ]]; then
   echo "[ERROR] 未找到 Dashboard 入口文件: $APP_FILE"
