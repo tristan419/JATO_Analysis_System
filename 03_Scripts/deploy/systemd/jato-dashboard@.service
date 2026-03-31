@@ -15,6 +15,12 @@ Environment=PYTHONPATH=05_DashBoard
 Environment=MALLOC_ARENA_MAX=2
 Environment=JATO_DETAIL_FULL_COLUMNS_DEFAULT=false
 Environment=JATO_DETAIL_FULL_COLUMNS_MAX_ROWS=120000
+Environment="STREAMLIT_THEME_BASE=light"
+Environment="STREAMLIT_THEME_PRIMARY_COLOR=#2563EB"
+Environment="STREAMLIT_THEME_BACKGROUND_COLOR=#F8FAFC"
+Environment="STREAMLIT_THEME_SECONDARY_BACKGROUND_COLOR=#FFFFFF"
+Environment="STREAMLIT_THEME_TEXT_COLOR=#0F172A"
+Environment="STREAMLIT_THEME_FONT=sans serif"
 
 ExecStart=/opt/JATO_Analysis_System/.venv/bin/python -m streamlit run /opt/JATO_Analysis_System/05_DashBoard/app.py --server.address 127.0.0.1 --server.port %i --server.headless true --browser.gatherUsageStats false
 

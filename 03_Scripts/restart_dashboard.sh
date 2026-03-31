@@ -35,6 +35,12 @@ fi
 
 echo "[INFO] 启动 Dashboard: http://127.0.0.1:${PORT}"
 cd "$ROOT_DIR"
+export STREAMLIT_THEME_BASE="light"
+export STREAMLIT_THEME_PRIMARY_COLOR="#2563EB"
+export STREAMLIT_THEME_BACKGROUND_COLOR="#F8FAFC"
+export STREAMLIT_THEME_SECONDARY_BACKGROUND_COLOR="#FFFFFF"
+export STREAMLIT_THEME_TEXT_COLOR="#0F172A"
+export STREAMLIT_THEME_FONT="sans serif"
 exec "$PYTHON_BIN" -m streamlit run "$APP_FILE" \
   --server.address 127.0.0.1 \
   --server.port "$PORT" \
