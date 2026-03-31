@@ -1,4 +1,4 @@
-name: deploy-ec2-auto-update
+name: deploy-ssh-auto-update
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: deploy-ec2-main
+  group: deploy-ssh-main
   cancel-in-progress: true
 
 jobs:
@@ -17,12 +17,12 @@ jobs:
     steps:
       - name: Validate required GitHub secrets
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ secrets.EC2_USER }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           missing=0
-          for key in EC2_HOST EC2_USER EC2_SSH_KEY; do
+          for key in SSH_HOST SSH_USER SSH_PRIVATE_KEY; do
             value="${!key}"
             if [ -z "$value" ]; then
               echo "::error::Missing required GitHub secret: $key"
@@ -34,18 +34,18 @@ jobs:
             exit 1
           fi
 
-      - name: Deploy to EC2 over SSH
+      - name: Deploy to server over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           script_stop: true
           command_timeout: 20m
           script: |
             set -euo pipefail
 
-            REPO_DIR="${{ vars.EC2_REPO_DIR }}"
+            REPO_DIR="${{ vars.DEPLOY_REPO_DIR }}"
             SERVICE_NAME="${{ vars.SYSTEMD_SERVICE_NAME }}"
             APP_PORT="${{ vars.DASHBOARD_PORT }}"
 
@@ -63,7 +63,7 @@ jobs:
 
             git fetch origin main
             git checkout main
-            git reset --hard origin/main
+            git pull --ff-only origin main
 
             . .venv/bin/activate
             pip install -r requirements.txt
