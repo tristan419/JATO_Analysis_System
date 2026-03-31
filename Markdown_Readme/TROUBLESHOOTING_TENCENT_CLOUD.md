@@ -64,12 +64,12 @@ python 03_Scripts/diagnose_performance.py
 
 **方案A: 启用持久化缓存（推荐）**
 
-修改 `05_DashBoard/dashboard/data.py`，在所有 `@st.cache_data` 装饰器中添加 `persist="disk"`：
+详细步骤请参考：[性能优化：启用磁盘持久化缓存](./PERFORMANCE_OPTIMIZATION_CACHE.md)
+
+简要说明：修改 `05_DashBoard/dashboard/data.py`，在所有 `@st.cache_data` 装饰器中添加 `persist="disk"`：
 
 ```python
 @st.cache_data(ttl=3600, persist="disk")
-def load_sidebar_data():
-    ...
 ```
 
 **方案B: 预热缓存**
