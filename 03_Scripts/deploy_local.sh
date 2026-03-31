@@ -18,14 +18,8 @@ echo ""
 echo "待提交的更改:"
 git status -s
 
-# 询问提交信息
-echo ""
-read -p "请输入提交信息: " commit_msg
-
-if [[ -z "$commit_msg" ]]; then
-  echo "[ERROR] 提交信息不能为空"
-  exit 1
-fi
+# 自动生成提交信息（使用时间戳）
+commit_msg="自动部署 $(date '+%Y-%m-%d %H:%M:%S')"
 
 # 提交并推送
 echo ""
@@ -33,6 +27,7 @@ echo "[1/3] 添加所有更改..."
 git add -A
 
 echo "[2/3] 提交更改..."
+echo "提交信息: $commit_msg"
 git commit -m "$commit_msg"
 
 echo "[3/3] 推送到 GitHub..."
