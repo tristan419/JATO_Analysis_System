@@ -179,6 +179,7 @@ def optimize_dataframe_types(df: pd.DataFrame) -> pd.DataFrame:
     show_spinner=False,
     ttl=CACHE_TTL_ANALYSIS_SECONDS,
     max_entries=CACHE_MAX_ENTRIES_ANALYSIS,
+    persist="disk",
 )
 def load_full_data(
     parquet_path: str,
@@ -212,6 +213,7 @@ def open_parquet_dataset(path: Path) -> ds.Dataset:
     show_spinner=False,
     ttl=CACHE_TTL_SCHEMA_SECONDS,
     max_entries=CACHE_MAX_ENTRIES_SCHEMA,
+    persist="disk",
 )
 def load_column_names(
     parquet_path: str,
@@ -313,6 +315,7 @@ def _load_dataset_slice_impl(
     show_spinner=False,
     ttl=CACHE_TTL_SIDEBAR_SECONDS,
     max_entries=CACHE_MAX_ENTRIES_SIDEBAR,
+    persist="disk",
 )
 def _load_dataset_slice_sidebar_cached(
     parquet_path: str,
@@ -332,6 +335,7 @@ def _load_dataset_slice_sidebar_cached(
     show_spinner=False,
     ttl=CACHE_TTL_ANALYSIS_SECONDS,
     max_entries=CACHE_MAX_ENTRIES_ANALYSIS,
+    persist="disk",
 )
 def _load_dataset_slice_analysis_cached(
     parquet_path: str,
@@ -351,6 +355,7 @@ def _load_dataset_slice_analysis_cached(
     show_spinner=False,
     ttl=CACHE_TTL_DETAIL_SECONDS,
     max_entries=CACHE_MAX_ENTRIES_DETAIL,
+    persist="disk",
 )
 def _load_dataset_slice_detail_cached(
     parquet_path: str,
@@ -441,6 +446,7 @@ def _load_distinct_options_impl(
     show_spinner=False,
     ttl=CACHE_TTL_SIDEBAR_SECONDS,
     max_entries=CACHE_MAX_ENTRIES_SIDEBAR,
+    persist="disk",
 )
 def _load_distinct_options_sidebar_cached(
     parquet_path: str,
@@ -477,6 +483,7 @@ def load_distinct_options(
     show_spinner=False,
     ttl=CACHE_TTL_SIDEBAR_SECONDS,
     max_entries=CACHE_MAX_ENTRIES_SIDEBAR,
+    persist="disk",
 )
 def _load_filtered_row_count_sidebar_cached(
     parquet_path: str,
