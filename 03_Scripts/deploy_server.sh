@@ -33,17 +33,18 @@ sudo systemctl daemon-reload
 # 重启服务
 echo ""
 echo "[3/4] 重启 Dashboard 服务..."
-if systemctl is-active --quiet jato.service; then
-  sudo systemctl restart jato.service
+if systemctl list-unit-files | grep -q "jato.service"; then
   SERVICE_NAME="jato.service"
-elif systemctl is-active --quiet jato-dashboard@8501.service; then
-  sudo systemctl restart jato-dashboard@8501.service
+elif systemctl list-unit-files | grep -q "jato-dashboard@.service"; then
   SERVICE_NAME="jato-dashboard@8501.service"
 else
-  echo "[ERROR] 未找到运行中的服务"
-  echo "请手动启动: sudo systemctl start jato-dashboard@8501.service"
+  echo "[ERROR] 未找到 systemd 服务配置"
+  echo "请先安装服务: sudo cp 03_Scripts/deploy/systemd/jato-dashboard@.service /etc/systemd/system/"
   exit 1
 fi
+
+echo "重启服务: $SERVICE_NAME"
+sudo systemctl restart $SERVICE_NAME
 
 # 查看服务状态
 echo ""
