@@ -1,11 +1,18 @@
 #!/bin/bash
 # 服务器更新脚本 - 拉取最新代码并重启 Dashboard
+# 服务器路径: /var/www/JATO_Analysis_System
 
 set -e
 
 echo "=========================================="
 echo "服务器更新部署"
 echo "=========================================="
+
+# 确认在正确的目录
+if [[ "$PWD" != "/var/www/JATO_Analysis_System" ]]; then
+  echo "[WARNING] 当前目录: $PWD"
+  echo "[WARNING] 期望目录: /var/www/JATO_Analysis_System"
+fi
 
 # 拉取最新代码
 echo ""
