@@ -7,20 +7,9 @@ echo "=========================================="
 echo "服务器更新部署"
 echo "=========================================="
 
-# 检查是否在正确的目录
-if [[ ! -f "03_Scripts/restart_dashboard.sh" ]]; then
-  echo "[ERROR] 请在项目根目录运行此脚本"
-  exit 1
-fi
-
-# 停止当前运行的 Dashboard
-echo ""
-echo "[1/4] 停止当前 Dashboard..."
-pkill -f "streamlit run.*app.py" || echo "没有运行中的 Dashboard"
-
 # 拉取最新代码
 echo ""
-echo "[2/4] 拉取最新代码..."
+echo "[1/4] 拉取最新代码..."
 git fetch origin main
 git reset --hard origin/main
 
@@ -29,19 +18,34 @@ echo ""
 echo "最新提交:"
 git log --oneline -3
 
-# 重启 Dashboard
+# 重新加载 systemd 配置
 echo ""
-echo "[3/4] 重启 Dashboard..."
-bash 03_Scripts/restart_dashboard.sh
+echo "[2/4] 重新加载 systemd 配置..."
+sudo systemctl daemon-reload
 
-# 等待启动
+# 重启服务
 echo ""
-echo "[4/4] 等待 Dashboard 启动..."
-sleep 3
+echo "[3/4] 重启 Dashboard 服务..."
+if systemctl is-active --quiet jato.service; then
+  sudo systemctl restart jato.service
+  SERVICE_NAME="jato.service"
+elif systemctl is-active --quiet jato-dashboard@8501.service; then
+  sudo systemctl restart jato-dashboard@8501.service
+  SERVICE_NAME="jato-dashboard@8501.service"
+else
+  echo "[ERROR] 未找到运行中的服务"
+  echo "请手动启动: sudo systemctl start jato-dashboard@8501.service"
+  exit 1
+fi
+
+# 查看服务状态
+echo ""
+echo "[4/4] 服务状态:"
+sudo systemctl status $SERVICE_NAME --no-pager -l
 
 echo ""
 echo "=========================================="
 echo "✓ 更新部署成功！"
 echo "=========================================="
 echo ""
-echo "Dashboard 已启动，访问: http://服务器IP:8501"
+echo "查看日志: sudo journalctl -u $SERVICE_NAME -f"
