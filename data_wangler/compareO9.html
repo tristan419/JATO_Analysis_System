@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Vehicle Config Multi-Compare — 深度对比系统</title>
+    <style>
+        :root {
+            --bg: #0a0a0c;
+            --surface: #151518;
+            --border: #2a2a2e;
+            --accent: #d4af37; /* 金色主题 */
+            --text: #e0e0e0;
+            --text-dim: #909095;
+            --diff-bg: rgba(212, 175, 55, 0.08);
+            --diff-border: rgba(212, 175, 55, 0.3);
+        }
+
+        body {
+            font-family: 'Segoe UI', "Microsoft YaHei", sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* 顶部控制栏 */
+        .header {
+            padding: 20px 30px;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            z-index: 100;
+        }
+
+        .title {
+            font-size: 20px;
+            font-weight: bold;
+            color: var(--accent);
+            margin-bottom: 15 padding-left: 5px;
+            letter-spacing: 1px;
+        }
+
+        /* 版本选择器 */
+        .selector-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 10px;
+        }
+
+        .brand-group {
+            border: 1px solid var(--border);
+            padding: 10px 15px;
+            border-radius: 6px;
+            background: rgba(255,255,255,0.02);
+        }
+
+        .brand-label {
+            font-size: 12px;
+            color: var(--accent);
+            text-transform: uppercase;
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        .version-item {
+            display: inline-flex;
+            align-items: center;
+            margin-right: 15px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .version-item input {
+            margin-right: 6px;
+            accent-color: var(--accent);
+        }
+
+        /* 工具栏 */
+        .toolbar {
+            margin-top: 15px;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .btn {
+            background: #252529;
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 6px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .btn:hover { border-color: var(--accent); }
+        .btn.active { background: var(--accent); color: #000; font-weight: bold; }
+
+        /* 表格容器 */
+        .table-wrapper {
+            flex: 1;
+            overflow: auto;
+            padding: 0 30px 30px 30px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            background: var(--surface);
+        }
+
+        thead {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: var(--surface);
+        }
+
+        th, td {
+            border: 1px solid var(--border);
+            padding: 12px 15px;
+            text-align: left;
+            font-size: 13px;
+            word-break: break-all;
+        }
+
+        th { background: #1c1c21; font-weight: 500; }
+        .col-category { width: 100px; color: var(--text-dim); }
+        .col-feature { width: 220px; }
+        .col-value { width: 180px; }
+
+        .feature-cn { display: block; margin-bottom: 4px; }
+        .feature-en { font-size: 11px; color: var(--text-dim); }
+
+        /* 高亮 */
+        tr.diff-row {
+            background: var(--diff-bg);
+        }
+        tr.diff-row td:nth-child(2) {
+            border-left: 3px solid var(--accent);
+        }
+
+        .identical-hidden { display: none; }
+
+        /* 状态图标 */
+        .status-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            margin-right: 8px;
+            background: var(--accent);
+        }
+
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="title">VEHICLE CONFIGURATION INTELLIGENT COMPARISON</div>
+    
+    <div class="selector-container" id="selector">
+        </div>
+
+    <div class="toolbar">
+        <button class="btn active" id="btnAll" onclick="setFilter('all')">显示全部</button>
+        <button class="btn" id="btnDiff" onclick="setFilter('diff')">只看差异</button>
+        <span style="font-size: 12px; color: var(--text-dim);">* 系统已自动识别并对齐“充电功率/单位”等模糊字段</span>
+    </div>
+</div>
+
+<div class="table-wrapper">
+    <table id="compareTable">
+        </table>
+</div>
+
+<script>
+/**
+ * 1. 字段模糊对齐逻辑
+ * 核心：去除所有空格、去除所有括号及其内部内容、统一转小写
+ */
+function normalizeKey(str) {
+    if (!str) return "";
+    let clean = str.replace(/\s+/g, '').toLowerCase();
+    // 匹配 (xxx), （xxx）, [xxx] 等并删除
+    clean = clean.replace(/[\(（\[][^）\)]*[\]）\)]/g, '');
+    
+    // 常见的单位手动剔除，确保“功率”和“功率kW”一致
+    const units = ['kw', 'mm', 'kg', 'nm', 'l/100km', 'km/h', 'kwh', 'ah'];
+    units.forEach(u => {
+        if (clean.endsWith(u)) clean = clean.slice(0, -u.length);
+    });
+    
+    return clean;
+}
+
+// 别名库，处理名称完全不同的情况
+const aliasMap = {
+    "手机映射功能同时支持carplay和安卓auto": "手机映射",
+    "手机映射功能": "手机映射"
+};
+
+/**
+ * 2. 数据处理引擎
+ */
+let masterData = {}; // { category: { normKey: { nameCN, nameEN, values: { version: val } } } }
+let allVersions = []; // [{brand, id, name}]
+let selectedIds = [];
+let filterMode = 'all'; // all | diff
+
+// 模拟解析 CSV (此处以你上传的文件数据为原型构建)
+const rawCSVs = [
+    {
+        brand: "OMODA 9",
+        data: [
+            ["基本参数", "物料号", "Material No.", "T6480J1**LX0007（黑红内饰）", "T6480J1**LX0011（黑黑内饰）", "T6480J1**LX0012（黑黑内饰）"],
+            ["动力性能", "DC最大充电功率（千瓦）", "DC Max Charging Power", "70", "70", "70"],
+            ["外观配置", "车顶颜色", "Roof Color", "身体同色", "身体同色", "黑化外观"],
+            ["外观配置", "轮毂", "Rim", "20寸", "20寸", "20寸黑化"]
+        ]
+    },
+    {
+        brand: "TIGGO 9",
+        data: [
+            ["基本参数", "物料号", "Material No.", "T6480N6**LX0006（宁德+灰顶）", "T6480N6**LX0010（宁德+黑顶）"],
+            ["动力性能", "DC最大充电功率", "DC Max Charging Power", "71", "71"],
+            ["外观配置", "全景天窗", "Panoramic sunroof", "●", "●"],
+            ["外观配置", "车顶颜色", "Roof Color", "灰色", "黑色"]
+        ]
+    }
+];
+
+function initData() {
+    rawCSVs.forEach(source => {
+        const brand = source.brand;
+        const rows = source.data;
+        const headerRow = rows[0];
+        const versionsInFile = headerRow.slice(3);
+
+        // 注册版本
+        versionsInFile.forEach((v, idx) => {
+            const vid = `${brand}_${idx}`;
+            allVersions.push({ brand, id: vid, name: v });
+            selectedIds.push(vid); // 默认全选
+        });
+
+        // 注册配置项
+        for (let i = 1; i < rows.length; i++) {
+            const [cat, nameCN, nameEN, ...vals] = rows[i];
+            const norm = aliasMap[normalizeKey(nameCN)] || normalizeKey(nameCN);
+
+            if (!masterData[cat]) masterData[cat] = {};
+            if (!masterData[cat][norm]) {
+                masterData[cat][norm] = { nameCN, nameEN, values: {} };
+            }
+            
+            versionsInFile.forEach((v, idx) => {
+                const vid = `${brand}_${idx}`;
+                masterData[cat][norm].values[vid] = vals[idx] || "-";
+            });
+        }
+    });
+}
+
+/**
+ * 3. 渲染逻辑
+ */
+function renderSelector() {
+    const container = document.getElementById('selector');
+    const groups = {};
+    allVersions.forEach(v => {
+        if (!groups[v.brand]) groups[v.brand] = [];
+        groups[v.brand].push(v);
+    });
+
+    let html = '';
+    for (let brand in groups) {
+        html += `<div class="brand-group"><span class="brand-label">${brand}</span>`;
+        groups[brand].forEach(v => {
+            const checked = selectedIds.includes(v.id) ? 'checked' : '';
+            html += `
+                <label class="version-item">
+                    <input type="checkbox" value="${v.id}" ${checked} onchange="toggleVersion('${v.id}')">
+                    ${v.name.split('\n')[0]}
+                </label>
+            `;
+        });
+        html += `</div>`;
+    }
+    container.innerHTML = html;
+}
+
+function toggleVersion(id) {
+    if (selectedIds.includes(id)) {
+        selectedIds = selectedIds.filter(i => i !== id);
+    } else {
+        selectedIds.push(id);
+    }
+    renderTable();
+}
+
+function setFilter(mode) {
+    filterMode = mode;
+    document.getElementById('btnAll').classList.toggle('active', mode === 'all');
+    document.getElementById('btnDiff').classList.toggle('active', mode === 'diff');
+    renderTable();
+}
+
+function renderTable() {
+    const table = document.getElementById('compareTable');
+    if (selectedIds.length === 0) {
+        table.innerHTML = "<tr><td style='text-align:center;padding:50px;'>请至少选择一个版型进行对比</td></tr>";
+        return;
+    }
+
+    // 1. 表头
+    let html = `<thead><tr><th class="col-category">分类</th><th class="col-feature">配置项</th>`;
+    selectedIds.forEach(id => {
+        const info = allVersions.find(v => v.id === id);
+        html += `<th class="col-value"><span style="color:var(--accent);font-size:11px;">${info.brand}</span><br>${info.name}</th>`;
+    });
+    html += `</tr></thead><tbody>`;
+
+    // 2. 内容
+    for (let cat in masterData) {
+        for (let norm in masterData[cat]) {
+            const item = masterData[cat][norm];
+            const rowVals = selectedIds.map(id => item.values[id] || "-");
+            
+            // 计算差异
+            const uniqueVals = new Set(rowVals.map(v => String(v).trim()));
+            const isDiff = uniqueVals.size > 1;
+
+            if (filterMode === 'diff' && !isDiff) continue;
+
+            const trClass = isDiff ? 'class="diff-row"' : '';
+            html += `<tr ${trClass}>
+                <td class="col-category">${cat}</td>
+                <td class="col-feature">
+                    ${isDiff ? '<span class="status-dot"></span>' : ''}
+                    <span class="feature-cn">${item.nameCN}</span>
+                    <span class="feature-en">${item.nameEN}</span>
+                </td>`;
+            
+            rowVals.forEach(val => {
+                html += `<td>${val === 'S' || val === '●' ? '<span style="color:var(--accent)">●</span>' : val}</td>`;
+            });
+            html += `</tr>`;
+        }
+    }
+
+    html += `</tbody>`;
+    table.innerHTML = html;
+}
+
+// 启动
+initData();
+renderSelector();
+renderTable();
+
+</script>
+</body>
+</html>
