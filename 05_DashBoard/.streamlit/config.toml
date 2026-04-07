@@ -5,6 +5,15 @@ backgroundColor = "#ffffff"
 secondaryBackgroundColor = "#f0f2f6"
 textColor = "#262730"
 
+[theme.sidebar]
+primaryColor = "#1f77b4"
+backgroundColor = "#f0f2f6"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#262730"
+widgetBackgroundColor = "#ffffff"
+widgetBorderColor = "#dbe2ea"
+skeletonBackgroundColor = "#e9eef5"
+
 [server]
 maxUploadSize = 200
 enableCORS = false

@@ -29,6 +29,36 @@ def get_project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def try_load_precomputed_summary(
+    summary_name: str = "country",
+    prefer_csv: bool = False
+) -> Optional[pd.DataFrame]:
+    """
+    尝试加载预聚合的摘要表。
+    如果预聚合不存在或失败，返回 None。
+    """
+    try:
+        summaries_dir = (get_project_root()
+                         / "04_Processed_data"
+                         / "summaries")
+        if not summaries_dir.exists():
+            return None
+
+        ext = "csv" if prefer_csv else "parquet"
+        summary_path = (summaries_dir
+                        / f"{summary_name}_summary.{ext}")
+
+        if not summary_path.exists():
+            return None
+
+        if ext == "csv":
+            return pd.read_csv(summary_path)
+        else:
+            return pd.read_parquet(summary_path)
+    except Exception:
+        return None
+
+
 def get_dataset_version_token(parquet_path: str) -> str:
     path = Path(parquet_path)
     if not path.exists():

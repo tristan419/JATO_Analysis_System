@@ -46,6 +46,7 @@ export STREAMLIT_THEME_BACKGROUND_COLOR="#F8FAFC"
 export STREAMLIT_THEME_SECONDARY_BACKGROUND_COLOR="#FFFFFF"
 export STREAMLIT_THEME_TEXT_COLOR="#0F172A"
 export STREAMLIT_THEME_FONT="sans serif"
+export JATO_PERFORMANCE_FIRST_MODE="true"
 exec "$PYTHON_BIN" -m streamlit run "$APP_FILE" \
   --server.address 0.0.0.0 \
   --server.port "$PORT" \

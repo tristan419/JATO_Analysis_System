@@ -107,6 +107,14 @@ DETAIL_FULL_COLUMNS_DEFAULT_ENABLED = _parse_bool_env(
     False,
 )
 
+# Performance-first mode is intended for server deployments where the heavy
+# computations should happen upstream and the page should primarily render
+# precomputed results.
+PERFORMANCE_FIRST_MODE = _parse_bool_env(
+    "JATO_PERFORMANCE_FIRST_MODE",
+    False,
+)
+
 # Guardrail: skip full-column detail load when filtered rows are too high.
 DETAIL_FULL_COLUMNS_MAX_ROWS = _parse_int_env(
     "JATO_DETAIL_FULL_COLUMNS_MAX_ROWS",

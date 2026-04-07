@@ -20,6 +20,7 @@ from .config import (
     LENGTH_CANDIDATES,
     MSRP_CANDIDATES,
     PLOT_CONFIG,
+    PERFORMANCE_FIRST_MODE,
 )
 from .data import dedupe_preserve_order, get_month_columns, get_year_columns
 from .models import ColumnRegistry, FilterSelections
@@ -1254,6 +1255,35 @@ def render_export_style_controls(
     default_height = max(500, min(1800, default_height))
     series_color_defaults = collect_export_series_color_defaults(fig)
 
+    if PERFORMANCE_FIRST_MODE:
+        export_settings = {
+            "show_x_grid": True,
+            "show_y_grid": True,
+            "show_axis_line": False,
+            "show_legend": True,
+            "legend_position": "右侧（默认）",
+            "palette_name": "保留原图配色",
+            "font_size": 12,
+            "x_tick_style": "保留原始",
+            "y_tick_style": "保留原始",
+            "tick_decimal_places": 1,
+            "grid_color": "#E5E7EB",
+            "axis_line_color": "#6B7280",
+            "paper_bgcolor": "#FFFFFF",
+            "plot_bgcolor": "#FFFFFF",
+            "title_text": "",
+            "x_title": "",
+            "y_title": "",
+            "width": default_width,
+            "height": default_height,
+            "data_label_mode": "关闭",
+            "data_label_position": "自动",
+            "custom_label_template": "",
+            "manual_series_color_enabled": False,
+            "series_color_overrides": {},
+        }
+        return export_settings, False, st.empty(), st.empty()
+
     with st.expander("导出图设置", expanded=False):
         st.caption(
             "支持按导出场景微调图样式（网格线、图例、配色、背景、尺寸等）。"
@@ -1584,6 +1614,10 @@ def render_plotly_chart_with_png_export(
     filename_prefix: str,
 ) -> None:
     kaleido_available = is_kaleido_available()
+    if PERFORMANCE_FIRST_MODE:
+        st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
+        return
+
     (
         export_settings,
         generate_png,
@@ -6055,7 +6089,7 @@ def render_chart_powertrain_bubble(
         category_orders=category_orders,
         color_discrete_map=POWERTRAIN_COLOR_MAP,
         title=chart_title,
-        render_mode="webgl",
+        render_mode="svg",
         **scatter_kwargs,
     )
     if facet_col:
@@ -7627,7 +7661,7 @@ def get_default_render_strategy(
     large_data_mode: bool,
     row_count: int,
 ) -> tuple[bool, bool]:
-    lazy_overview_render = bool(large_data_mode and row_count >= 80_000)
+    lazy_overview_render = bool(row_count >= 80_000)
     lazy_advanced_render = bool(lazy_overview_render or row_count >= 200_000)
     return lazy_overview_render, lazy_advanced_render
 

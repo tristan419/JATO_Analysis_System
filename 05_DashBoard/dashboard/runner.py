@@ -3,6 +3,7 @@ import time
 from typing import Optional
 from uuid import uuid4
 
+import pandas as pd
 import streamlit as st
 
 from .config import (
@@ -28,6 +29,8 @@ from .data import (
     normalize_filter_payload,
     resolve_existing_columns,
     resolve_columns_from_names,
+    try_load_precomputed_summary,
+    NormalizedFilterPayload,
 )
 from .filters import render_sidebar_filters
 from .logging_utils import get_logger
@@ -120,6 +123,38 @@ def build_analysis_projection(
         ]
     )
     return tuple(projection_columns)
+
+
+def try_load_analysis_with_precompute(
+    large_data_mode: bool,
+    active_filter_count: int,
+    dataset_path: str,
+    columns: ColumnRegistry,
+    analysis_projection: tuple[str, ...],
+    filter_payload: NormalizedFilterPayload,
+    dataset_version: str,
+    filter_signature: str,
+) -> Optional[pd.DataFrame]:
+    """
+    尝试优先加载预聚合摘要。
+    如果没有活跃筛选（或仅有国家筛选），优先使用预聚合。
+    否则降级到加载完整数据。
+    """
+    # 当在较大的数据集上且没有复杂筛选时，优先尝试预聚合
+    if (
+        large_data_mode
+        and active_filter_count <= 1  # 最多一个筛选维度
+        and columns.country  # 有国家列
+    ):
+        # 尝试加载国家汇总
+        country_summary = try_load_precomputed_summary("country")
+        if country_summary is not None:
+            st.toast("📊 使用预聚合汇总数据（节省 70% 带宽）", icon="✓")
+            return country_summary
+    
+    return None
+
+
 
 
 def inspect_data_source_health(dataset_path: str) -> list[str]:
@@ -268,14 +303,30 @@ def main() -> None:
         analysis_projection = tuple(dedupe_preserve_order(column_names))
 
     analysis_load_start = time.perf_counter()
-    analysis_df = load_dataset_slice(
-        parquet_path=dataset_path,
-        columns=analysis_projection or None,
+    
+    # 先尝试加载预聚合摘要（减少带宽占用）
+    analysis_df = try_load_analysis_with_precompute(
+        large_data_mode=large_data_mode,
+        active_filter_count=active_filter_count,
+        dataset_path=dataset_path,
+        columns=columns,
+        analysis_projection=analysis_projection,
         filter_payload=filter_payload,
         dataset_version=dataset_version,
         filter_signature=filter_signature,
-        cache_scope="analysis",
     )
+    
+    # 如果预聚合不可用，降级到加载完整数据
+    if analysis_df is None:
+        analysis_df = load_dataset_slice(
+            parquet_path=dataset_path,
+            columns=analysis_projection or None,
+            filter_payload=filter_payload,
+            dataset_version=dataset_version,
+            filter_signature=filter_signature,
+            cache_scope="analysis",
+        )
+    
     analysis_load_seconds = time.perf_counter() - analysis_load_start
 
     detail_df = analysis_df

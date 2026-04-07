@@ -881,6 +881,28 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
         partition_manifest_payload = read_json(partition_manifest)
         validate_manifests(full_manifest_payload, partition_manifest_payload)
 
+        # 步骤：预聚合数据（降低前端带宽占用）
+        summaries_manifest = None
+        try:
+            from precompute_summaries import precompute_all_summaries
+            step_start = time.time()
+            summaries_output = resolve_path("04_Processed_data/summaries")
+            emit("📊 预聚合数据（减少前端传输）...")
+            summaries_manifest = precompute_all_summaries(
+                parquet_path=str(output_parquet),
+                output_dir=str(summaries_output),
+            )
+            step_durations["precomputeSeconds"] = round(
+                time.time() - step_start,
+                3,
+            )
+            total_rows = summaries_manifest['totalSummaryRows']
+            bw_red = summaries_manifest['bandwidthReduction']
+            emit(f"   ✓ 预聚合完成：{total_rows} 行（"f"带宽降低 {bw_red}）")
+        except Exception as precompute_error:
+            emit(f"⚠️  预聚合失败（非致命）: {precompute_error}")
+            logger.warning("预聚合失败，继续处理", exc_info=True)
+
         benchmark_summary = None
         if not args.skip_benchmark:
             from benchmark_dashboard_load import collect_benchmark
@@ -917,6 +939,9 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
                 "conflictReport": to_project_relative(
                     resolved_conflict_report_path
                 ),
+                "summariesDir": ("04_Processed_data/summaries"
+                             if summaries_manifest
+                             else None),
             },
             "stepDurations": step_durations,
             "fullManifest": {
@@ -940,6 +965,10 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
                 ),
             },
             "benchmark": benchmark_summary,
+            "precompute": summaries_manifest or {
+                "status": "skipped",
+                "reason": "预聚合模块不可用或执行失败"
+            },
             "incremental": {
                 "enabled": incremental_enabled,
                 "skipUnchanged": bool(args.skip_unchanged),

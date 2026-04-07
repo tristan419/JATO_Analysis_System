@@ -3,6 +3,8 @@
 > 文档定位：Dashboard 部署方式、容量建议与上线前检查。
 > 返回总览：[ROADMAP（总览导航）](./ROADMAP.md)
 
+> 当前约束：本项目的生产部署默认只走腾讯云 Ubuntu + systemd + nginx，不再使用 Docker 作为部署路径。
+
 ## 1) 标准启动模板
 
 项目启动入口：`05_DashBoard/app.py`
@@ -44,11 +46,12 @@ streamlit run 05_DashBoard/app.py --server.port 8501 --server.address 0.0.0.0
 
 ### C. 当前默认路径（2026-03-11）
 
-- 当前项目默认采用 `EC2 + systemd + nginx + GitHub Actions SSH 自动更新`。
+- 当前项目默认采用 `腾讯云 Ubuntu + systemd + nginx + GitHub Actions SSH 自动更新`。
 - 自动更新工作流：`.github/workflows/deploy-ec2-auto-update.yml`。
 - 默认发布目标：`/opt/JATO_Analysis_System` 上的 `jato-dashboard@8501`。
+- `Docker` 不再作为当前默认自动发布方案。
 - `ECS` 保留为后续容器化升级路径，不再作为当前默认自动发布方案。
-- 若选择 EC2 路径，建议仅保留 EC2 工作流自动触发；ECS 工作流改为手动触发，避免一次 push 触发两套部署。
+- 若保留其他云厂商或容器化工作流，建议改为手动触发，避免一次 push 触发多套部署。
 
 ---
 
