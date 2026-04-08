@@ -42,12 +42,15 @@ python3 --version
 
 ## 3. 首次拉取代码
 
+如果腾讯云上直接访问 GitHub 不稳定，先用镜像克隆：
+
 ```bash
 sudo mkdir -p /opt
 sudo chown "$USER":"$USER" /opt
 
 cd /opt
-git clone https://github.com/tristan419/JATO_Analysis_System.git
+REPO_REMOTE_URL="${REPO_REMOTE_URL:-https://gitclone.com/github.com/tristan419/JATO_Analysis_System.git}"
+git clone "$REPO_REMOTE_URL"
 cd /opt/JATO_Analysis_System
 
 python3 -m venv .venv
@@ -71,6 +74,7 @@ bash 03_Scripts/tencent_fullstack_bootstrap.sh
 
 ```bash
 cd /opt/JATO_Analysis_System
+REPO_REMOTE_URL=https://gitclone.com/github.com/tristan419/JATO_Analysis_System.git \
 SERVER_NAME=your.domain.com \
 BACKEND_PORT=8000 \
 APP_AUTH_TOKEN='你自己的token' \
@@ -88,6 +92,8 @@ bash 03_Scripts/tencent_fullstack_bootstrap.sh
 - 安装前端依赖并构建 `dist`
 - 安装 nginx 配置并重启服务
 - 做本地健康检查
+
+如果你已经有仓库副本，但 `origin` 还是指向 GitHub，把 `REPO_REMOTE_URL` 设成镜像地址后再跑一键脚本，脚本会把当前远端自动切到镜像。
 
 如果脚本失败，终端会自动打印一段以 `BEGIN JATO FULLSTACK DIAGNOSTICS` 开头的诊断块。你把整段复制给我就行。
 
@@ -231,6 +237,7 @@ bash 03_Scripts/print_fullstack_server_diagnostics.sh
 - Variables: `FULLSTACK_VITE_API_BASE`
 - Variables: `FULLSTACK_VITE_USER_ROLE`
 - Variables: `FULLSTACK_VITE_USER_NAME`
+- Environment / deploy script: `REPO_REMOTE_URL`
 
 推荐默认值：
 
@@ -238,6 +245,7 @@ bash 03_Scripts/print_fullstack_server_diagnostics.sh
 - `FULLSTACK_BACKEND_SERVICE_NAME=jato-fullstack-backend@8000`
 - `DEPLOY_BRANCH=main`
 - `FULLSTACK_VITE_API_BASE=/v1`
+- `REPO_REMOTE_URL=https://gitclone.com/github.com/tristan419/JATO_Analysis_System.git`
 
 ## 11. 回滚
 

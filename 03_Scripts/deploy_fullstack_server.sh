@@ -6,6 +6,7 @@ DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@8000}"
 BACKEND_PORT="${BACKEND_PORT:-}"
 REMOTE_NAME="${REMOTE_NAME:-}"
+REPO_REMOTE_URL="${REPO_REMOTE_URL:-https://gitclone.com/github.com/tristan419/JATO_Analysis_System.git}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIAGNOSTIC_SCRIPT="$SCRIPT_DIR/print_fullstack_server_diagnostics.sh"
 CURRENT_STEP="initialization"
@@ -89,6 +90,16 @@ fi
 if [[ -z "$REMOTE_NAME" ]]; then
   echo "[ERROR] No git remote found in $REPO_DIR"
   exit 1
+fi
+
+if [[ -n "$REPO_REMOTE_URL" ]]; then
+  CURRENT_REMOTE_URL="$(git -C "$REPO_DIR" remote get-url "$REMOTE_NAME" 2>/dev/null || true)"
+  if [[ -n "$CURRENT_REMOTE_URL" && "$CURRENT_REMOTE_URL" != "$REPO_REMOTE_URL" ]]; then
+    echo "[INFO] Pointing git remote '$REMOTE_NAME' to mirror URL"
+    echo "[INFO] old=$CURRENT_REMOTE_URL"
+    echo "[INFO] new=$REPO_REMOTE_URL"
+    git -C "$REPO_DIR" remote set-url "$REMOTE_NAME" "$REPO_REMOTE_URL"
+  fi
 fi
 
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
