@@ -1,8 +1,12 @@
 from pathlib import Path
 import json
+import functools
+import time
+import threading
 
 import pandas as pd
 import pyarrow.dataset as ds
+import pyarrow.compute as pc
 
 from app.core.config import (
     CRUD_DATA_PATH,
@@ -13,6 +17,10 @@ from app.core.config import (
     PRECOMPUTED_DIR,
 )
 
+# ── Dataset singleton (reuse across requests) ──
+_dataset_cache: ds.Dataset | None = None
+_dataset_lock = threading.Lock()
+
 
 def _resolve_dataset_path() -> Path:
     if PARTITIONED_PATH.exists() and any(PARTITIONED_PATH.rglob("*.parquet")):
@@ -21,15 +29,28 @@ def _resolve_dataset_path() -> Path:
 
 
 def _open_dataset() -> ds.Dataset:
-    path = _resolve_dataset_path()
-    if path.is_file():
-        return ds.dataset(path, format="parquet")
-    return ds.dataset(
-        path,
-        format="parquet",
-        partitioning="hive",
-        exclude_invalid_files=True,
-    )
+    global _dataset_cache
+    if _dataset_cache is not None:
+        return _dataset_cache
+    with _dataset_lock:
+        if _dataset_cache is not None:
+            return _dataset_cache
+        path = _resolve_dataset_path()
+        if path.is_file():
+            _dataset_cache = ds.dataset(path, format="parquet")
+        else:
+            _dataset_cache = ds.dataset(
+                path,
+                format="parquet",
+                partitioning="hive",
+                exclude_invalid_files=True,
+            )
+        return _dataset_cache
+
+
+# ── Lightweight TTL cache for immutable results ──
+_columns_cache: tuple[float, list[str]] | None = None
+_CACHE_TTL = 300  # 5 minutes
 
 
 def _build_filter_expression(
@@ -46,8 +67,14 @@ def _build_filter_expression(
 
 
 def list_columns() -> list[str]:
+    global _columns_cache
+    now = time.monotonic()
+    if _columns_cache is not None and (now - _columns_cache[0]) < _CACHE_TTL:
+        return _columns_cache[1]
     dataset = _open_dataset()
-    return [str(name).strip() for name in dataset.schema.names]
+    cols = [str(name).strip() for name in dataset.schema.names]
+    _columns_cache = (now, cols)
+    return cols
 
 
 def load_precomputed(summary_name: str) -> pd.DataFrame:
@@ -68,11 +95,11 @@ def load_distinct_options(
         columns=[column],
         filter=_build_filter_expression(filters),
     )
-    values = table[column].to_pylist()
+    unique_arr = pc.unique(table[column])
     return sorted(
         {
             str(v).strip()
-            for v in values
+            for v in unique_arr.to_pylist()
             if v is not None and str(v).strip()
         }
     )
@@ -91,10 +118,10 @@ def count_distinct(column: str, filters: dict[str, list[str]]) -> int:
         columns=[column],
         filter=_build_filter_expression(filters),
     )
-    values = table[column].to_pylist()
+    unique_arr = pc.unique(table[column])
     normalized = {
         str(v).strip()
-        for v in values
+        for v in unique_arr.to_pylist()
         if v is not None and str(v).strip()
     }
     return int(len(normalized))
@@ -107,14 +134,17 @@ def load_slice(
     offset: int = 0,
 ) -> pd.DataFrame:
     dataset = _open_dataset()
-    table = dataset.to_table(
+    scanner = dataset.scanner(
         columns=columns,
         filter=_build_filter_expression(filters),
     )
-    df = table.to_pandas()
     start = max(0, int(offset))
-    end = start + max(1, int(limit))
-    return df.iloc[start:end].reset_index(drop=True)
+    take_n = max(1, int(limit))
+    # Skip rows efficiently via head/take instead of loading all then slicing
+    table = scanner.head(start + take_n)
+    if start > 0:
+        table = table.slice(start)
+    return table.to_pandas().reset_index(drop=True)
 
 
 def aggregate(

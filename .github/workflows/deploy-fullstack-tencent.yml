@@ -87,24 +87,19 @@ jobs:
           command_timeout: 20m
           script: |
             REPO_DIR="/opt/JATO_Analysis_System-main"
-            LOGFILE="$REPO_DIR/06_AppPlatform/frontend/dist/_deploy.log"
+            LOGFILE="/tmp/_jato_deploy.log"
 
             {
               echo "=== Deploy started at $(date -u) ==="
-              echo "USER=$USER HOME=$HOME"
-              echo "--- Archive ---"
-              ls -lh /tmp/JATO_deploy.tar.gz 2>&1 || echo "ARCHIVE MISSING"
-              echo "--- Extract ---"
+              echo "USER=$USER"
+
+              echo "--- Extract archive ---"
               sudo mkdir -p "$REPO_DIR"
               sudo chown -R "$USER":"$USER" "$REPO_DIR"
               sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR" && echo "EXTRACT OK" || echo "EXTRACT FAILED $?"
               rm -f /tmp/JATO_deploy.tar.gz
-              echo "--- Env ---"
-              which node && node -v || echo "NODE MISSING"
-              which npm && npm -v || echo "NPM MISSING"
-              which python3 && python3 --version || echo "PYTHON3 MISSING"
-              ls -la "$REPO_DIR/.venv/bin/python" 2>&1 || echo "VENV MISSING"
-              echo "--- Deploy script ---"
+
+              echo "--- Run deploy script ---"
               cd "$REPO_DIR"
               export REPO_DIR SKIP_GIT_SYNC=true
               export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
@@ -115,7 +110,5 @@ jobs:
               echo "=== Deploy exit code: $? at $(date -u) ==="
             } > "$LOGFILE" 2>&1
 
-            # Show last 50 lines in Actions log too
-            tail -50 "$LOGFILE"
-            # Exit with real status
+            tail -80 "$LOGFILE"
             grep -q "Deployment finished successfully" "$LOGFILE"
