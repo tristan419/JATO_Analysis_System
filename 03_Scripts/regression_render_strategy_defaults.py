@@ -69,7 +69,7 @@ def main() -> None:
         name="huge-full-mode",
         large_data_mode=False,
         row_count=220_000,
-        expected_overview=False,
+        expected_overview=True,
         expected_advanced=True,
     )
 

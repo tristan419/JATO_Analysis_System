@@ -49,28 +49,9 @@ jobs:
 
       - name: Regression checks
         run: |
-          set +e
-          FAIL=0
-          for script in \
-            03_Scripts/regression_csv_download_guardrails.py \
-            03_Scripts/regression_render_strategy_defaults.py \
-            03_Scripts/regression_time_selector_consistency.py; do
-            echo "--- $script ---"
-            OUTPUT=$(python "$script" 2>&1)
-            RC=$?
-            echo "$OUTPUT"
-            if [ $RC -ne 0 ]; then
-              FAIL=1
-              echo "::error::$script exited with code $RC"
-              echo "### ❌ $script (exit $RC)" >> "$GITHUB_STEP_SUMMARY"
-              echo '```' >> "$GITHUB_STEP_SUMMARY"
-              echo "$OUTPUT" | tail -20 >> "$GITHUB_STEP_SUMMARY"
-              echo '```' >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "✅ $script"
-            fi
-          done
-          exit $FAIL
+          python 03_Scripts/regression_csv_download_guardrails.py
+          python 03_Scripts/regression_render_strategy_defaults.py
+          python 03_Scripts/regression_time_selector_consistency.py
 
   fullstack-backend:
     runs-on: ubuntu-latest
