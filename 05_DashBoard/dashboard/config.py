@@ -115,6 +115,12 @@ PERFORMANCE_FIRST_MODE = _parse_bool_env(
     False,
 )
 
+# Dynamic aggregation route (precompute -> dynamic aggregate -> raw slice).
+DYNAMIC_AGGREGATION_ENABLED = _parse_bool_env(
+    "JATO_DYNAMIC_AGGREGATION_ENABLED",
+    False,
+)
+
 # Guardrail: skip full-column detail load when filtered rows are too high.
 DETAIL_FULL_COLUMNS_MAX_ROWS = _parse_int_env(
     "JATO_DETAIL_FULL_COLUMNS_MAX_ROWS",

@@ -12,6 +12,7 @@ from .config import (
     BATTERY_RANGE_CANDIDATES,
     DETAIL_FULL_COLUMNS_DEFAULT_ENABLED,
     DETAIL_FULL_COLUMNS_MAX_ROWS,
+    DYNAMIC_AGGREGATION_ENABLED,
     MSRP_CANDIDATES,
     LENGTH_CANDIDATES,
     PARQUET_RELATIVE_PATH,
@@ -25,6 +26,7 @@ from .data import (
     get_month_columns_from_names,
     get_year_columns_from_names,
     load_column_names,
+    load_dynamic_group_aggregate,
     load_dataset_slice,
     normalize_filter_payload,
     resolve_existing_columns,
@@ -151,10 +153,43 @@ def try_load_analysis_with_precompute(
         if country_summary is not None:
             st.toast("📊 使用预聚合汇总数据（节省 70% 带宽）", icon="✓")
             return country_summary
-    
+
     return None
 
 
+def try_load_analysis_with_dynamic_aggregate(
+    enabled: bool,
+    large_data_mode: bool,
+    active_filter_count: int,
+    parquet_path: str,
+    groupby_column: str | None,
+    candidate_columns: tuple[str, ...],
+    filter_payload: NormalizedFilterPayload,
+    dataset_version: str,
+    filter_signature: str,
+) -> Optional[pd.DataFrame]:
+    """动态聚合兜底：复杂筛选时仅返回聚合结果。"""
+    if not enabled:
+        return None
+    if not large_data_mode:
+        return None
+    if active_filter_count < 2:
+        return None
+    if not groupby_column:
+        return None
+
+    grouped_df = load_dynamic_group_aggregate(
+        parquet_path=parquet_path,
+        groupby_column=groupby_column,
+        candidate_columns=candidate_columns,
+        filter_payload=filter_payload,
+        dataset_version=dataset_version,
+        filter_signature=filter_signature,
+    )
+    if grouped_df.empty:
+        return None
+    st.caption("已命中动态聚合路径：复杂筛选仅回传聚合结果。")
+    return grouped_df
 
 
 def inspect_data_source_health(dataset_path: str) -> list[str]:
@@ -303,7 +338,9 @@ def main() -> None:
         analysis_projection = tuple(dedupe_preserve_order(column_names))
 
     analysis_load_start = time.perf_counter()
-    
+
+    analysis_route = "raw"
+
     # 先尝试加载预聚合摘要（减少带宽占用）
     analysis_df = try_load_analysis_with_precompute(
         large_data_mode=large_data_mode,
@@ -315,8 +352,26 @@ def main() -> None:
         dataset_version=dataset_version,
         filter_signature=filter_signature,
     )
-    
-    # 如果预聚合不可用，降级到加载完整数据
+    if analysis_df is not None:
+        analysis_route = "precomputed"
+
+    # 预聚合未命中时，尝试动态聚合兜底（灰度开关控制）。
+    if analysis_df is None:
+        analysis_df = try_load_analysis_with_dynamic_aggregate(
+            enabled=DYNAMIC_AGGREGATION_ENABLED,
+            large_data_mode=large_data_mode,
+            active_filter_count=active_filter_count,
+            parquet_path=dataset_path,
+            groupby_column=columns.country,
+            candidate_columns=analysis_projection,
+            filter_payload=filter_payload,
+            dataset_version=dataset_version,
+            filter_signature=filter_signature,
+        )
+        if analysis_df is not None:
+            analysis_route = "dynamic-aggregate"
+
+    # 两条聚合路径都未命中，降级到原始数据切片。
     if analysis_df is None:
         analysis_df = load_dataset_slice(
             parquet_path=dataset_path,
@@ -326,7 +381,8 @@ def main() -> None:
             filter_signature=filter_signature,
             cache_scope="analysis",
         )
-    
+        analysis_route = "raw"
+
     analysis_load_seconds = time.perf_counter() - analysis_load_start
 
     detail_df = analysis_df
@@ -371,6 +427,7 @@ def main() -> None:
     st.caption(
         f"数据源：{source_type}｜版本：{version_display}｜"
         f"模式：{'大数据' if large_data_mode else '全列'}｜"
+        f"路径：{analysis_route}｜"
         f"读取列数：{len(analysis_projection):,}｜"
         f"侧边栏加载：{sidebar_load_seconds:.2f}s｜"
         f"分析加载：{analysis_load_seconds:.2f}s｜"

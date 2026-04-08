@@ -881,6 +881,18 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
         partition_manifest_payload = read_json(partition_manifest)
         validate_manifests(full_manifest_payload, partition_manifest_payload)
 
+        regression_summary = build_incremental_regression_summary(
+            previous_full_manifest=previous_full_manifest_payload,
+            previous_partition_manifest=(
+                previous_partition_manifest_payload
+            ),
+            current_full_manifest=full_manifest_payload,
+            current_partition_manifest=partition_manifest_payload,
+        )
+        changed_partition_keys = list(
+            regression_summary.get("changedPartitionKeys", [])
+        )
+
         # 步骤：预聚合数据（降低前端带宽占用）
         summaries_manifest = None
         try:
@@ -891,6 +903,8 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
             summaries_manifest = precompute_all_summaries(
                 parquet_path=str(output_parquet),
                 output_dir=str(summaries_output),
+                partitioned_dataset_path=str(partition_dir),
+                changed_partition_keys=changed_partition_keys,
             )
             step_durations["precomputeSeconds"] = round(
                 time.time() - step_start,
@@ -940,8 +954,8 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
                     resolved_conflict_report_path
                 ),
                 "summariesDir": ("04_Processed_data/summaries"
-                             if summaries_manifest
-                             else None),
+                                 if summaries_manifest
+                                 else None),
             },
             "stepDurations": step_durations,
             "fullManifest": {
@@ -975,14 +989,7 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
                 "fingerprintPath": to_project_relative(fingerprint_path),
                 "fingerprintMatched": False,
                 "fingerprintUpdated": incremental_enabled,
-                "regression": build_incremental_regression_summary(
-                    previous_full_manifest=previous_full_manifest_payload,
-                    previous_partition_manifest=(
-                        previous_partition_manifest_payload
-                    ),
-                    current_full_manifest=full_manifest_payload,
-                    current_partition_manifest=partition_manifest_payload,
-                ),
+                "regression": regression_summary,
             },
             "jobElapsedSeconds": round(time.time() - job_start, 3),
             "rollback": rollback_info,

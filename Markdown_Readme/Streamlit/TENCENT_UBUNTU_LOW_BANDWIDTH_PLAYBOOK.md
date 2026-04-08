@@ -116,3 +116,17 @@ curl -fsS http://127.0.0.1/healthz
 - 静态资源是否命中缓存（`cache-control`）
 - websocket `/_stcore/stream` 是否正常 101
 - 首屏后网络请求是否显著减少
+
+## 6) 动态聚合灰度（复杂筛选兜底）
+
+当前代码已支持三段路由：`预聚合 -> 动态聚合 -> 原始切片`。
+
+- 开关环境变量：`JATO_DYNAMIC_AGGREGATION_ENABLED=true`
+- `restart_dashboard.sh` 与 systemd 模板已默认开启该开关。
+
+验证方法：
+
+1. 打开 Dashboard，在顶部状态行观察 `路径` 字段。
+2. 无筛选或低复杂筛选时，应看到 `路径: precomputed`。
+3. 多维筛选（2 个及以上维度）时，应优先看到 `路径: dynamic-aggregate`。
+4. 若动态聚合不可用，自动回退 `路径: raw`，页面功能不受影响。

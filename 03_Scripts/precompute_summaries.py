@@ -1,11 +1,14 @@
-"""
-预聚合模块：在数据刷新时预先计算常见的分组汇总结果。
-目的：大幅减少前端传输数据量，从 70 万行降至几千行。
+"""预聚合模块。
+
+支持两种模式：
+1. 全量预聚合（冷启动或兜底）
+2. 增量预聚合（当前实现先覆盖国家汇总）
 """
 
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, unquote
 
 import pandas as pd
 import pyarrow.dataset as ds
@@ -22,6 +25,113 @@ def load_analysis_data(parquet_path: str) -> pd.DataFrame:
         return dataset.to_table().to_pandas()
     else:
         return pd.read_parquet(parquet_path)
+
+
+def load_existing_summary(
+    output_dir: str,
+    summary_name: str,
+) -> pd.DataFrame:
+    path = Path(output_dir) / f"{summary_name}_summary.parquet"
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_parquet(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def list_current_country_keys(partitioned_dataset_path: str) -> set[str]:
+    root = Path(partitioned_dataset_path)
+    if not root.exists():
+        return set()
+
+    keys: set[str] = set()
+    for path in root.rglob("国家=*"):
+        if not path.is_dir():
+            continue
+        suffix = path.name.split("=", 1)[-1]
+        key = unquote(suffix).strip()
+        if key:
+            keys.add(key)
+    return keys
+
+
+def build_country_partition_path(
+    partitioned_dataset_path: str,
+    country_key: str,
+) -> Path:
+    encoded = quote(str(country_key), safe="")
+    return Path(partitioned_dataset_path) / f"国家={encoded}"
+
+
+def compute_country_summary_incremental(
+    partitioned_dataset_path: str,
+    output_dir: str,
+    changed_country_keys: list[str],
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """按变化国家分区增量更新国家汇总。
+
+    当前实现只增量更新 country_summary，其他汇总保留现有或兜底全量重算。
+    """
+    existing = load_existing_summary(output_dir, "country")
+    current_keys = list_current_country_keys(partitioned_dataset_path)
+
+    normalized_changed = {
+        str(item).strip() for item in changed_country_keys if str(item).strip()
+    }
+    if not normalized_changed:
+        return existing, {
+            "mode": "full",
+            "reason": "no-changed-keys",
+            "changedCountryCount": 0,
+            "recomputedCountryCount": 0,
+            "removedCountryCount": 0,
+        }
+
+    keys_to_recompute = sorted(normalized_changed & current_keys)
+    removed_keys = sorted(normalized_changed - current_keys)
+
+    refreshed_rows: list[pd.DataFrame] = []
+    for country_key in keys_to_recompute:
+        partition_path = build_country_partition_path(
+            partitioned_dataset_path,
+            country_key,
+        )
+        if not partition_path.exists():
+            continue
+        try:
+            dataset = ds.dataset(str(partition_path), format="parquet")
+            partition_df = dataset.to_table().to_pandas()
+        except Exception:
+            continue
+        partition_summary = compute_country_summary(partition_df)
+        if not partition_summary.empty:
+            refreshed_rows.append(partition_summary)
+
+    refreshed_df = (
+        pd.concat(refreshed_rows, ignore_index=True)
+        if refreshed_rows
+        else pd.DataFrame(columns=existing.columns)
+    )
+
+    if not existing.empty and "国家" in existing.columns:
+        country_series = existing["国家"].astype(str)
+        existing = existing[~country_series.isin(normalized_changed)]
+
+    merged = pd.concat([existing, refreshed_df], ignore_index=True)
+    if "国家" in merged.columns:
+        merged = merged.sort_values("国家").reset_index(drop=True)
+
+    return merged, {
+        "mode": "incremental-country",
+        "reason": "changed-country-keys",
+        "changedCountryCount": len(normalized_changed),
+        "recomputedCountryCount": len(keys_to_recompute),
+        "removedCountryCount": len(removed_keys),
+        "changedCountryKeys": sorted(normalized_changed),
+        "recomputedCountryKeys": keys_to_recompute,
+        "removedCountryKeys": removed_keys,
+    }
 
 
 def compute_country_summary(df: pd.DataFrame) -> pd.DataFrame:
@@ -108,8 +218,10 @@ def compute_segment_summary(df: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
-def compute_top_makes_summary(df: pd.DataFrame,
-                               top_n: int = 20) -> pd.DataFrame:
+def compute_top_makes_summary(
+    df: pd.DataFrame,
+    top_n: int = 20,
+) -> pd.DataFrame:
     """计算最热门的 N 个品牌。"""
     if ("品牌" not in df.columns
             and "Make" not in df.columns):
@@ -142,47 +254,53 @@ def save_summary_tables(
     """保存预聚合表到 Parquet 和 CSV。"""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    
+
     saved_files = {}
     for name, df in summaries.items():
         if df.empty:
             continue
-        
+
         csv_path = output_path / f"{name}_summary.csv"
         parquet_path = output_path / f"{name}_summary.parquet"
-        
+
         df.to_csv(csv_path, index=False, encoding="utf-8-sig")
         df.to_parquet(parquet_path, index=False)
-        
+
         saved_files[name] = {
             "csv": str(csv_path),
             "parquet": str(parquet_path),
             "rows": len(df),
             "columns": len(df.columns),
         }
-    
+
     return saved_files
 
 
 def generate_summaries_manifest(
     saved_files: dict[str, dict],
     original_row_count: int,
+    precompute_mode: str = "full",
+    incremental_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """生成预聚合清单。"""
     total_summary_rows = sum(
         item.get("rows", 0)
         for item in saved_files.values()
     )
-    
+
     bandwidth_reduction = (1.0 -
                            (total_summary_rows /
                             max(original_row_count, 1)))
-    
+
     return {
         "generatedAt": pd.Timestamp.now().isoformat(),
         "originalRowCount": original_row_count,
         "totalSummaryRows": total_summary_rows,
         "bandwidthReduction": f"{bandwidth_reduction * 100:.1f}%",
+        "precomputeMode": precompute_mode,
+        "incremental": incremental_info or {
+            "mode": "full",
+        },
         "summaries": saved_files,
     }
 
@@ -190,36 +308,67 @@ def generate_summaries_manifest(
 def precompute_all_summaries(
     parquet_path: str,
     output_dir: str = "04_Processed_data/summaries",
+    partitioned_dataset_path: str | None = None,
+    changed_partition_keys: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     主入口：加载数据并预聚合所有统计汇总。
     返回清单信息。
     """
+    changed_keys = changed_partition_keys or []
+    incremental_country_enabled = bool(
+        partitioned_dataset_path and changed_keys
+    )
+
     print(f"📊 开始预聚合：读取 {parquet_path}...")
-    df = load_analysis_data(parquet_path)
-    original_rows = len(df)
-    print(f"   ✓ 加载成功，共 {original_rows} 行")
-    
-    print("📊 计算国家汇总...")
-    country_summary = compute_country_summary(df)
-    print(f"   ✓ {len(country_summary)} 个国家")
-    
-    print("📊 计算年月汇总...")
-    year_month_summary = compute_year_month_summary(df)
-    print(f"   ✓ {len(year_month_summary)} 个时间节点")
-    
-    print("📊 计算功率类型汇总...")
-    powertrain_summary = compute_powertrain_summary(df)
-    print(f"   ✓ {len(powertrain_summary)} 个功率类型")
-    
-    print("📊 计算车形分类汇总...")
-    segment_summary = compute_segment_summary(df)
-    print(f"   ✓ {len(segment_summary)} 个车形分类")
-    
-    print("📊 计算热门品牌（Top 20）...")
-    top_makes_summary = compute_top_makes_summary(df, top_n=20)
-    print(f"   ✓ {len(top_makes_summary)} 个品牌")
-    
+
+    # 先拿行数，供清单中的压缩比计算。
+    original_rows = len(load_analysis_data(parquet_path))
+
+    incremental_info: dict[str, Any] = {
+        "mode": "full",
+    }
+
+    if incremental_country_enabled:
+        print("📊 增量更新国家汇总（按变化分区键）...")
+        country_summary, incremental_info = (
+            compute_country_summary_incremental(
+                partitioned_dataset_path=partitioned_dataset_path,
+                output_dir=output_dir,
+                changed_country_keys=changed_keys,
+            )
+        )
+        print(f"   ✓ 国家汇总已更新，共 {len(country_summary)} 行")
+    else:
+        print("📊 计算国家汇总（全量）...")
+        df_for_country = load_analysis_data(parquet_path)
+        country_summary = compute_country_summary(df_for_country)
+        print(f"   ✓ {len(country_summary)} 个国家")
+
+    # 第一阶段优先减少刷新开销：非国家汇总优先复用已有结果。
+    year_month_summary = load_existing_summary(output_dir, "yearMonth")
+    powertrain_summary = load_existing_summary(output_dir, "powertrain")
+    segment_summary = load_existing_summary(output_dir, "segment")
+    top_makes_summary = load_existing_summary(output_dir, "topMakes")
+
+    missing_non_country = (
+        year_month_summary.empty
+        or powertrain_summary.empty
+        or segment_summary.empty
+        or top_makes_summary.empty
+    )
+    if missing_non_country:
+        print("📊 检测到非国家汇总缺失，执行一次全量兜底计算...")
+        df = load_analysis_data(parquet_path)
+        if year_month_summary.empty:
+            year_month_summary = compute_year_month_summary(df)
+        if powertrain_summary.empty:
+            powertrain_summary = compute_powertrain_summary(df)
+        if segment_summary.empty:
+            segment_summary = compute_segment_summary(df)
+        if top_makes_summary.empty:
+            top_makes_summary = compute_top_makes_summary(df, top_n=20)
+
     summaries = {
         "country": country_summary,
         "yearMonth": year_month_summary,
@@ -227,33 +376,43 @@ def precompute_all_summaries(
         "segment": segment_summary,
         "topMakes": top_makes_summary,
     }
-    
+
     print(f"\n💾 保存预聚合表到 {output_dir}...")
     saved_files = save_summary_tables(summaries, output_dir)
-    
+
+    precompute_mode = str(incremental_info.get("mode", "full"))
     manifest = generate_summaries_manifest(
         saved_files=saved_files,
         original_row_count=original_rows,
+        precompute_mode=precompute_mode,
+        incremental_info=incremental_info,
     )
-    
+
     manifest_path = Path(output_dir) / "summaries_manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
-    
+
     print(f"   ✓ 清单已保存: {manifest_path}")
-    print(f"\n📈 汇总：原始 {original_rows} 行 → 汇总 {manifest['totalSummaryRows']} 行")
+    print(
+        f"\n📈 汇总：原始 {original_rows} 行 -> "
+        f"汇总 {manifest['totalSummaryRows']} 行"
+    )
     print(f"📈 带宽降低：{manifest['bandwidthReduction']}")
-    
+
     return manifest
 
 
 if __name__ == "__main__":
     project_root = get_project_root()
-    parquet_path = str(project_root / "04_Processed_data" / "fullParquetV1.parquet")
+    parquet_path = str(
+        project_root / "04_Processed_data" / "fullParquetV1.parquet"
+    )
     output_dir = str(project_root / "04_Processed_data" / "summaries")
-    
+
     manifest = precompute_all_summaries(parquet_path, output_dir)
-    print(f"\n✅ 预聚合完成！清单中有 {len(manifest['summaries'])} 个汇总表")
+    print(
+        f"\n✅ 预聚合完成！清单中有 {len(manifest['summaries'])} 个汇总表"
+    )

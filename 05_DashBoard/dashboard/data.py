@@ -438,6 +438,89 @@ def load_dataset_slice(
     )
 
 
+def _dynamic_metric_candidates(columns: Sequence[str]) -> list[str]:
+    return [
+        col for col in columns
+        if col not in {"国家", "Country", "country"}
+    ]
+
+
+@st.cache_data(
+    show_spinner=False,
+    ttl=CACHE_TTL_ANALYSIS_SECONDS,
+    max_entries=CACHE_MAX_ENTRIES_ANALYSIS,
+    persist="disk",
+)
+def _load_dynamic_group_aggregate_cached(
+    parquet_path: str,
+    groupby_column: str,
+    metric_columns: tuple[str, ...],
+    filter_payload: NormalizedFilterPayload = (),
+    dataset_version: str | None = None,
+    filter_signature: str | None = None,
+) -> pd.DataFrame:
+    selected_columns = tuple(
+        dedupe_preserve_order([groupby_column, *metric_columns])
+    )
+    base_df = _load_dataset_slice_impl(
+        parquet_path=parquet_path,
+        columns=selected_columns,
+        filter_payload=filter_payload,
+    )
+    if base_df.empty or groupby_column not in base_df.columns:
+        return base_df
+
+    numeric_metrics = [
+        col for col in metric_columns
+        if (
+            col in base_df.columns
+            and pd.api.types.is_numeric_dtype(base_df[col])
+        )
+    ]
+    if not numeric_metrics:
+        # 没有可聚合指标时，退化为分组计数，避免全量明细回传。
+        return (
+            base_df.groupby(groupby_column, dropna=False)
+            .size()
+            .reset_index(name="count")
+        )
+
+    agg_spec = {col: "mean" for col in numeric_metrics[:6]}
+    grouped = (
+        base_df.groupby(groupby_column, dropna=False)
+        .agg(agg_spec)
+        .reset_index()
+    )
+    grouped["count"] = (
+        base_df.groupby(groupby_column, dropna=False)
+        .size()
+        .reindex(grouped[groupby_column])
+        .to_numpy()
+    )
+    grouped.columns = [str(col).strip() for col in grouped.columns]
+    return grouped
+
+
+def load_dynamic_group_aggregate(
+    parquet_path: str,
+    groupby_column: str,
+    candidate_columns: Sequence[str],
+    filter_payload: Sequence[tuple[str, Sequence[str]]] = (),
+    dataset_version: str | None = None,
+    filter_signature: str | None = None,
+) -> pd.DataFrame:
+    normalized_filter_payload = normalize_filter_payload(filter_payload)
+    metrics = tuple(_dynamic_metric_candidates(candidate_columns))
+    return _load_dynamic_group_aggregate_cached(
+        parquet_path=parquet_path,
+        groupby_column=groupby_column,
+        metric_columns=metrics,
+        filter_payload=normalized_filter_payload,
+        dataset_version=dataset_version,
+        filter_signature=filter_signature,
+    )
+
+
 def _load_distinct_options_impl(
     parquet_path: str,
     column: str,
