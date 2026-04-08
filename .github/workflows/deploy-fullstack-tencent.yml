@@ -75,7 +75,7 @@ jobs:
           password: ${{ secrets.SSH_PASSWORD }}
           source: /github/runner_temp/JATO_deploy.tar.gz
           target: /tmp/
-          strip_components: 0
+          strip_components: 2
 
       - name: Deploy on server via SSH
         uses: appleboy/ssh-action@v1.0.3
