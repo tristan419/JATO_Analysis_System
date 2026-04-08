@@ -1,0 +1,7 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+pydantic==2.11.7
+pandas==2.3.3
+pyarrow==23.0.1
+python-multipart==0.0.20
+scikit-learn>=1.5

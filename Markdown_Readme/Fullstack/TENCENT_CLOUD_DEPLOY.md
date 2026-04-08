@@ -1,0 +1,207 @@
+# JATO Fullstack 腾讯云 Ubuntu 部署手册
+
+本文对应当前 Fullstack 方案，不走 Docker。生产形态固定为：
+
+- React + Vite 前端先构建成静态文件
+- nginx 负责静态文件和反向代理
+- FastAPI 后端通过 systemd 常驻
+- 服务器更新通过 SSH 拉代码并执行发布脚本
+
+## 1. 目标目录与端口
+
+- 仓库目录：`/opt/JATO_Analysis_System`
+- 后端服务：`jato-fullstack-backend@8000`
+- 后端监听：`127.0.0.1:8000`
+- 前端静态目录：`/opt/JATO_Analysis_System/06_AppPlatform/frontend/dist`
+- 外部入口：nginx `80`
+
+## 2. 服务器前置依赖
+
+推荐以 Ubuntu 22.04 或 24.04 为基础镜像。
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git curl nginx python3 python3-venv python3-pip
+
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+node -v
+npm -v
+python3 --version
+```
+
+要求：
+
+- Node.js 不低于 20.19.0
+- Python 建议 3.10 及以上
+
+## 3. 首次拉取代码
+
+```bash
+sudo mkdir -p /opt
+sudo chown "$USER":"$USER" /opt
+
+cd /opt
+git clone https://github.com/tristan419/JATO_Analysis_System.git
+cd /opt/JATO_Analysis_System
+
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r 06_AppPlatform/backend/requirements.txt
+```
+
+如果服务器不是直接使用你的个人账号，先把仓库目录 owner 调整给实际部署用户。
+
+## 4. 配置后端环境变量
+
+复制模板并编辑：
+
+```bash
+sudo mkdir -p /etc/jato-fullstack
+sudo cp 03_Scripts/deploy/systemd/jato-fullstack-backend.env.example /etc/jato-fullstack/backend.env
+sudo nano /etc/jato-fullstack/backend.env
+```
+
+至少确认这些值：
+
+- `APP_AUTH_ENABLED=true`
+- `APP_AUTH_TOKEN=你自己的强口令`
+- `JATO_PARQUET_PATH=/opt/JATO_Analysis_System/04_Processed_data/jato_full_archive.parquet`
+- `JATO_PARTITIONED_PATH=/opt/JATO_Analysis_System/04_Processed_data/partitioned_dataset_v1`
+- `APP_CRUD_DATA_PATH=/opt/JATO_Analysis_System/04_Processed_data/app_entities.json`
+
+如果你暂时只允许内网访问，也可以把 `APP_AUTH_ENABLED=false`，但不建议长期这样跑公网。
+
+## 5. 安装 systemd 后端服务
+
+```bash
+sudo cp 03_Scripts/deploy/systemd/jato-fullstack-backend@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now jato-fullstack-backend@8000
+sudo systemctl status jato-fullstack-backend@8000 --no-pager
+```
+
+健康检查：
+
+```bash
+curl -fsS http://127.0.0.1:8000/healthz
+```
+
+## 6. 首次构建与发布前端
+
+仓库已经提供统一发布脚本：`03_Scripts/deploy_fullstack_server.sh`。
+
+首次执行前，确认：
+
+- `.venv` 已创建
+- `npm` 和 `node` 已可用
+- `jato-fullstack-backend@8000` 已存在
+
+执行：
+
+```bash
+cd /opt/JATO_Analysis_System
+VITE_API_BASE=/v1 \
+VITE_USER_ROLE=viewer \
+VITE_USER_NAME=anonymous \
+bash 03_Scripts/deploy_fullstack_server.sh
+```
+
+说明：
+
+- `VITE_API_BASE=/v1` 代表前端走同域 API，不把后端地址写死到构建产物里
+- `VITE_AUTH_TOKEN` 默认不建议写进前端构建产物，建议用户首次登录后在页面 Access Control 里填写 token
+
+## 7. 安装 nginx
+
+```bash
+cd /opt/JATO_Analysis_System
+sudo chmod +x 03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
+sudo SERVER_NAME=_ BACKEND_PORT=8000 FRONTEND_ROOT=/opt/JATO_Analysis_System/06_AppPlatform/frontend/dist \
+  bash 03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
+```
+
+如果你已经有域名，把 `SERVER_NAME=_` 换成真实域名，并在 DNS 中把 A 记录指向腾讯云服务器公网 IP。
+
+## 8. 防火墙与安全组
+
+腾讯云安全组至少放通：
+
+- `22/tcp` 用于 SSH
+- `80/tcp` 用于 nginx
+- 如果后续要加 HTTPS，再放通 `443/tcp`
+
+如果服务器本机启用了 UFW：
+
+```bash
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'
+sudo ufw enable
+sudo ufw status
+```
+
+## 9. 验证项
+
+```bash
+curl -fsS http://127.0.0.1:8000/healthz
+curl -I http://127.0.0.1/
+curl -I http://127.0.0.1/assets/
+```
+
+如果要验证带鉴权接口：
+
+```bash
+curl -fsS http://127.0.0.1/v1/metadata/columns \
+  -H 'X-Auth-Token: 你的token' \
+  -H 'X-User-Role: admin' \
+  -H 'X-User-Name: deploy-check'
+```
+
+浏览器检查：
+
+- 首页能正常打开
+- Dashboard `Load Overview` 成功
+- CRUD 页面能正常分页
+- Network 中 `/v1/...` 请求返回 200
+
+## 10. 后续自动部署
+
+仓库新增 workflow：`.github/workflows/deploy-fullstack-tencent.yml`。
+
+首次上线后，再配置这些 GitHub Secrets / Variables：
+
+- Secrets: `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`
+- Variables: `DEPLOY_REPO_DIR`
+- Variables: `FULLSTACK_BACKEND_SERVICE_NAME`
+- Variables: `DEPLOY_BRANCH`
+- Variables: `FULLSTACK_VITE_API_BASE`
+- Variables: `FULLSTACK_VITE_USER_ROLE`
+- Variables: `FULLSTACK_VITE_USER_NAME`
+
+推荐默认值：
+
+- `DEPLOY_REPO_DIR=/opt/JATO_Analysis_System`
+- `FULLSTACK_BACKEND_SERVICE_NAME=jato-fullstack-backend@8000`
+- `DEPLOY_BRANCH=main`
+- `FULLSTACK_VITE_API_BASE=/v1`
+
+## 11. 回滚
+
+查看最近提交：
+
+```bash
+cd /opt/JATO_Analysis_System
+git log --oneline -5
+```
+
+回滚到指定提交后重新发布：
+
+```bash
+cd /opt/JATO_Analysis_System
+git reset --hard <commit_sha>
+bash 03_Scripts/deploy_fullstack_server.sh
+```
+
+这是服务器侧回滚命令，只建议在明确知道目标提交的情况下执行。

@@ -1,2 +1,19 @@
 *.xlsx
 ~$*.xlsx
+
+# frontend artifacts
+**/node_modules/
+**/dist/
+06_AppPlatform/frontend/.env
+06_AppPlatform/.runtime/
+
+# python artifacts
+**/__pycache__/
+**/*.pyc
+
+# local environments
+.venv/
+venv/
+
+# macOS artifacts
+.DS_Store

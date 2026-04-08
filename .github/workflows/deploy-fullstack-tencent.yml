@@ -1,0 +1,83 @@
+name: deploy-fullstack-tencent
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "06_AppPlatform/**"
+      - "03_Scripts/deploy_fullstack_server.sh"
+      - "03_Scripts/deploy/nginx/jato_fullstack.conf.example"
+      - "03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh"
+      - "03_Scripts/deploy/systemd/jato-fullstack-backend@.service"
+      - "03_Scripts/deploy/systemd/jato-fullstack-backend.env.example"
+      - ".github/workflows/deploy-fullstack-tencent.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-fullstack-main
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Validate required GitHub secrets
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          missing=0
+          for key in SSH_HOST SSH_USER SSH_PRIVATE_KEY; do
+            value="${!key}"
+            if [ -z "$value" ]; then
+              echo "::error::Missing required GitHub secret: $key"
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Deploy fullstack app over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+
+            export REPO_DIR="${{ vars.DEPLOY_REPO_DIR }}"
+            export BACKEND_SERVICE_NAME="${{ vars.FULLSTACK_BACKEND_SERVICE_NAME }}"
+            export DEPLOY_BRANCH="${{ vars.DEPLOY_BRANCH }}"
+            export VITE_API_BASE="${{ vars.FULLSTACK_VITE_API_BASE }}"
+            export VITE_USER_ROLE="${{ vars.FULLSTACK_VITE_USER_ROLE }}"
+            export VITE_USER_NAME="${{ vars.FULLSTACK_VITE_USER_NAME }}"
+
+            if [ -z "$REPO_DIR" ]; then
+              export REPO_DIR="/opt/JATO_Analysis_System"
+            fi
+            if [ -z "$BACKEND_SERVICE_NAME" ]; then
+              export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
+            fi
+            if [ -z "$DEPLOY_BRANCH" ]; then
+              export DEPLOY_BRANCH="main"
+            fi
+            if [ -z "$VITE_API_BASE" ]; then
+              export VITE_API_BASE="/v1"
+            fi
+            if [ -z "$VITE_USER_ROLE" ]; then
+              export VITE_USER_ROLE="viewer"
+            fi
+            if [ -z "$VITE_USER_NAME" ]; then
+              export VITE_USER_NAME="github-actions"
+            fi
+
+            cd "$REPO_DIR"
+            bash 03_Scripts/deploy_fullstack_server.sh

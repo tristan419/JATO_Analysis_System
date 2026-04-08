@@ -1,0 +1,1990 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Data, Layout } from "plotly.js";
+
+import { api } from "../api/client";
+import type { DetailResponse, OverviewResponse, TimeSeriesPoint, GroupedTimeSeriesItem, ModelVersionItem, PositioningMapItem, OthersDetailItem } from "../types";
+import { PlotlyChart } from "../components/PlotlyChart";
+import { TimeAxis, type TimeRange } from "../components/TimeAxis";
+import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanel";
+import { RvFinanceDashboard } from "../components";
+
+/* ── constants ──────────────────────────────────────── */
+const COLORS = [
+  "#2563eb","#16a34a","#f59e0b","#ef4444","#8b5cf6","#ec4899",
+  "#14b8a6","#f97316","#6366f1","#0ea5e9","#84cc16","#e11d48",
+];
+
+/** 动力总成固定配色 — 全局所有图表统一使用 */
+const POWERTRAIN_COLORS: Record<string, string> = {
+  ICE:  "#6b7280",  // 灰色
+  MHEV: "#f97316",  // 橙色
+  HEV:  "#eab308",  // 黄色
+  PHEV: "#3b82f6",  // 蓝色
+  BEV:  "#22c55e",  // 绿色
+};
+const DEFAULT_POWERTRAINS = ["ICE", "HEV", "BEV", "MHEV", "PHEV"] as const;
+const MONTH_INDEX: Record<string, number> = {
+  Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6,
+  Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12,
+};
+function normalizePowertrainName(value: string): string {
+  return value.trim().toUpperCase();
+}
+function getDefaultPowertrainValues(options: string[]): string[] {
+  const optionMap = new Map(options.map(opt => [normalizePowertrainName(opt), opt]));
+  return DEFAULT_POWERTRAINS.map(name => optionMap.get(name)).filter((v): v is string => Boolean(v));
+}
+function parseMonthLabel(label: string): { year: number; month: number } | null {
+  const text = label.trim();
+  const monthNameMatch = text.match(/^(\d{4})\s+([A-Za-z]{3})$/);
+  if (monthNameMatch) {
+    return { year: Number(monthNameMatch[1]), month: MONTH_INDEX[monthNameMatch[2]] ?? 1 };
+  }
+  const shortYearMatch = text.match(/^(\d{2})[.\/-](\d{1,2})$/);
+  if (shortYearMatch) {
+    return { year: 2000 + Number(shortYearMatch[1]), month: Number(shortYearMatch[2]) };
+  }
+  const numericMatch = text.match(/^(\d{4})[-\/.](\d{1,2})$/);
+  if (numericMatch) {
+    return { year: Number(numericMatch[1]), month: Number(numericMatch[2]) };
+  }
+  return null;
+}
+function toTimeOrdinal(label: string): number | null {
+  const text = label.trim();
+  if (/^\d{4}$/.test(text)) return Number(text) * 100 + 12;
+  const month = parseMonthLabel(text);
+  if (month) return month.year * 100 + month.month;
+  const quarter = text.match(/^(\d{4})-Q([1-4])$/);
+  if (quarter) return Number(quarter[1]) * 100 + Number(quarter[2]) * 3;
+  return null;
+}
+function compareTimeLabels(a: string, b: string): number {
+  const ao = toTimeOrdinal(a);
+  const bo = toTimeOrdinal(b);
+  if (ao !== null && bo !== null && ao !== bo) return ao - bo;
+  return a.localeCompare(b);
+}
+
+function buildCategoryAxis(
+  labels: string[],
+  extra: Partial<Layout["xaxis"]> = {},
+): Partial<Layout["xaxis"]> {
+  const ordered = Array.from(new Set(labels));
+  return {
+    type: "category",
+    categoryorder: "array",
+    categoryarray: ordered,
+    ...extra,
+  };
+}
+/** 判断给定系列名/分组维度是否属于动力总成，返回固定色 */
+function ptColor(name: string, fallback: string): string {
+  return POWERTRAIN_COLORS[name] ?? POWERTRAIN_COLORS[name.toUpperCase()] ?? fallback;
+}
+/** 当分组维度是动力总成时为系列分配固定颜色，否则沿用 palette */
+function seriesColor(name: string, idx: number, palette: string[], isPowertrain: boolean): string {
+  if (isPowertrain) return ptColor(name, palette[idx % palette.length]);
+  return palette[idx % palette.length];
+}
+
+const DIM: Record<string, string[]> = {
+  country: ["\u56fd\u5bb6","Country","country"],
+  segment: ["\u7ec6\u5206\u5e02\u573a\uff08\u6309\u8f66\u957f\uff09","\u7ec6\u5206\u5e02\u573a","segment"],
+  powertrain: ["\u52a8\u603b\u89c4\u6574","powertrain","Powertrain"],
+  make: ["Make","\u54c1\u724c","make"],
+  model: ["Model","model"],
+  version: ["Version name","version name","Version Name"],
+};
+const FILTER_ORDER: { key: string; label: string }[] = [
+  { key: "country", label: "\u56fd\u5bb6" },
+  { key: "segment", label: "\u7ec6\u5206\u5e02\u573a" },
+  { key: "powertrain", label: "\u52a8\u603b\u89c4\u6574" },
+  { key: "make", label: "\u54c1\u724c" },
+  { key: "model", label: "Model" },
+  { key: "version", label: "Version name" },
+];
+
+const ADV_GROUPS: { v: string; l: string }[] = [
+  { v: "market_structure", l: "\u5e02\u573a\u7ed3\u6784" },
+  { v: "nev_analysis", l: "NEV\u5206\u6790" },
+  { v: "price_value", l: "\u4ef7\u683c\u4ef7\u503c" },
+  { v: "cost_analysis", l: "\u52a8\u529b\u6210\u672c" },
+];
+const ADV_CHARTS: Record<string, { v: string; l: string }[]> = {
+  market_structure: [
+    { v: "powertrain_bubble", l: "\u52a8\u529b\u6c14\u6ce1\u56fe" },
+    { v: "seasonality_heatmap", l: "\u5b63\u8282\u6027\u70ed\u529b\u56fe" },
+    { v: "segment_share_by_length", l: "\u8f66\u957f\u00d7\u7ec6\u5206\u5e02\u573a" },
+  ],
+  nev_analysis: [
+    { v: "nev_range_distribution", l: "\u7eed\u822a\u5206\u5e03" },
+    { v: "nev_capacity_vs_msrp", l: "\u7535\u6c60\u5bb9\u91cf vs MSRP" },
+  ],
+  price_value: [
+    { v: "price_migration", l: "\u4ef7\u683c\u8fc1\u79fb" },
+    { v: "length_vs_price", l: "\u8f66\u957f vs \u4ef7\u683c" },
+    { v: "price_per_meter", l: "\u6bcf\u7c73\u4ef7\u683c" },
+    { v: "sales_vs_price", l: "\u9500\u91cf vs \u4ef7\u683c" },
+  ],
+  cost_analysis: [
+    { v: "rv_finance_dashboard", l: "RV\u91d1\u878d\u6760\u6746\u770b\u677f" },
+    { v: "estimated_tco", l: "\u4f30\u7b97TCO vs MSRP" },
+    { v: "powertrain_vs_price", l: "\u52a8\u529b\u00d7\u4ef7\u683c\u5e26" },
+  ],
+};
+const GROUP_BY_OPTIONS = [
+  { v: "\u52a8\u603b\u89c4\u6574", l: "\u52a8\u529b\u603b\u6210" },
+  { v: "\u7ec6\u5206\u5e02\u573a\uff08\u6309\u8f66\u957f\uff09", l: "\u7ec6\u5206\u5e02\u573a" },
+  { v: "Make", l: "\u54c1\u724c" },
+  { v: "Model", l: "Model" },
+  { v: "Version name", l: "Version" },
+  { v: "\u56fd\u5bb6", l: "\u56fd\u5bb6" },
+];
+
+const SCATTER_CHARTS = new Set([
+  "powertrain_bubble","nev_capacity_vs_msrp",
+  "length_vs_price","price_per_meter","sales_vs_price","estimated_tco",
+]);
+const STACKED_CHARTS = new Set([
+  "segment_share_by_length","nev_range_distribution","powertrain_vs_price",
+]);
+
+/* ── helpers ────────────────────────────────────────── */
+function resolve(cols: string[], keys: string[]): string | null {
+  const map = new Map(cols.map((c) => [c.toLowerCase().trim(), c]));
+  for (const k of keys) { const hit = map.get(k.toLowerCase().trim()); if (hit) return hit; }
+  return null;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asMetaNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function asMetaText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function asMetaStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(item => String(item)).filter(Boolean) : [];
+}
+
+function asMetaRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isPlainRecord) : [];
+}
+
+/* ── filter component ──────────────────────────────── */
+function SearchSelectFilter({ label, options, selected, onChange, showSuvShortcut = false }: {
+  label: string; options: string[]; selected: string[]; onChange: (vals: string[]) => void; showSuvShortcut?: boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const lq = query.toLowerCase().trim();
+  const matched = lq ? options.filter((o) => o.toLowerCase().includes(lq)) : options;
+  const ss = new Set(selected);
+  return (
+    <div className="filter-card">
+      <div className="filter-card-title">{label}</div>
+      <input type="text" className="filter-search" placeholder={"\u641c\u7d22 "+label+"\u2026"} value={query} onChange={e=>setQuery(e.target.value)} />
+      <div className="filter-actions">
+        <button className="filter-action-btn" onClick={()=>{const m=new Set(selected);matched.forEach(x=>m.add(x));onChange(Array.from(m));}}>{"\u5168\u9009\u641c\u7d22\u7ed3\u679c"}</button>
+        {showSuvShortcut && options.some(opt=>opt.toLowerCase().includes("suv")) && (
+          <button className="filter-action-btn" onClick={()=>onChange(options.filter(opt=>opt.toLowerCase().includes("suv")))}>{"\u4e00\u952e\u7b5b\u9009 SUV"}</button>
+        )}
+        <button className="filter-action-btn" onClick={()=>onChange([])}>{"\u6e05\u7a7a"}</button>
+      </div>
+      <div className="filter-options-list">
+        {matched.slice(0,200).map(opt=>(
+          <label key={opt} className="filter-option">
+            <input type="checkbox" checked={ss.has(opt)} onChange={()=>onChange(ss.has(opt)?selected.filter(s=>s!==opt):[...selected,opt])} />
+            <span>{opt}</span>
+          </label>
+        ))}
+        {matched.length===0 && <div className="filter-empty">{"\u65e0\u5339\u914d\u9879"}</div>}
+      </div>
+      <div className="filter-summary">{"\u5339\u914d "+matched.length+" \u9879\uff5c\u5df2\u9009 "+selected.length+" \u9879"}</div>
+    </div>
+  );
+}
+
+/* ── Main Dashboard ────────────────────────────────── */
+export function DashboardPage() {
+  const [columns, setColumns] = useState<string[]>([]);
+  const [selections, setSelections] = useState<Record<string, string[]>>({
+    country:[], segment:[], powertrain:[], make:[], model:[], version:[],
+  });
+  const [optionsMap, setOptionsMap] = useState<Record<string, string[]>>({});
+  const [filteredRowCount, setFilteredRowCount] = useState<number|null>(null);
+  const [overview, setOverview] = useState<OverviewResponse|null>(null);
+  const [loading, setLoading] = useState(false);
+  const [yearSeries, setYearSeries] = useState<TimeSeriesPoint[]>([]);
+  const [monthSeries, setMonthSeries] = useState<TimeSeriesPoint[]>([]);
+
+  /* time-series controls */
+  const [activeTab, setActiveTab] = useState<"year"|"month">("year");
+  const [chartType, setChartType] = useState<"line"|"bar">("line");
+  const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">("\u603b\u548c");
+  const [tsGroupDim, setTsGroupDim] = useState("\u52a8\u603b\u89c4\u6574");
+  const [tsTopN, setTsTopN] = useState(10);
+  const [tsTopNEnabled, setTsTopNEnabled] = useState(true);
+  const [tsIncludeOthers, setTsIncludeOthers] = useState(false);
+  const [groupedItems, setGroupedItems] = useState<GroupedTimeSeriesItem[]>([]);
+  const [groupedLoading, setGroupedLoading] = useState(false);
+  const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
+  const [othersDetail, setOthersDetail] = useState<OthersDetailItem[]>([]);
+
+  /* detail table */
+  const [detail, setDetail] = useState<DetailResponse|null>(null);
+  const [detailPage, setDetailPage] = useState(1);
+  const [detailPageSize] = useState(200);
+  const [selectedCols, setSelectedCols] = useState<string[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [excludeZeroSales, setExcludeZeroSales] = useState(false);
+
+  /* advanced charts */
+  const [advGroup, setAdvGroup] = useState("market_structure");
+  const [advChart, setAdvChart] = useState("powertrain_bubble");
+  const [advItems, setAdvItems] = useState<Record<string, string|number>[]>([]);
+  const [advMeta, setAdvMeta] = useState<Record<string, unknown> | null>(null);
+  const [advLoading, setAdvLoading] = useState(false);
+  const [advBandSize, setAdvBandSize] = useState(1000);
+  const [advTopN, setAdvTopN] = useState(30);
+  const [advMigrationMode, setAdvMigrationMode] = useState<"area"|"line">("area");
+  const [advBubbleScale, setAdvBubbleScale] = useState(2);
+  const [advBubbleGrain, setAdvBubbleGrain] = useState<"model"|"version">("model");
+  /* 7a: brand faceting for powertrain_bubble */
+  const [advBubbleFacet, setAdvBubbleFacet] = useState(false);
+  const [advBubbleFacetMax, setAdvBubbleFacetMax] = useState(4);
+  /* NEV-specific controls */
+  const [advPowertrains, setAdvPowertrains] = useState<string[]>(["BEV","PHEV"]);
+  const [advNevTopNEnabled, setAdvNevTopNEnabled] = useState(true);
+  const [advNevAxisMax, setAdvNevAxisMax] = useState(1000);
+  const [advNevMetricMode, setAdvNevMetricMode] = useState<"window_sales"|"net_change">("window_sales");
+  const [advNevStackByModel, setAdvNevStackByModel] = useState(false);
+  const [advNevFacetBrand, setAdvNevFacetBrand] = useState(false);
+  const [advNevMaxBrandFacets, setAdvNevMaxBrandFacets] = useState(4);
+  const [advRangeStep, setAdvRangeStep] = useState(50);
+  const [advHeatmapScale, setAdvHeatmapScale] = useState("Blues");
+  /* TCO parameter sliders */
+  const [tcoYears, setTcoYears] = useState(5);
+  const [tcoAnnualKm, setTcoAnnualKm] = useState(15000);
+  const [tcoDepreciation, setTcoDepreciation] = useState(0.5);
+  const [tcoMaintenance, setTcoMaintenance] = useState(0.018);
+  const [tcoTaxInsurance, setTcoTaxInsurance] = useState(0.02);
+  const [tcoEnergyCost, setTcoEnergyCost] = useState(0.1);
+
+  /* model version bubble (Bug 2) */
+  const [mvModelName, setMvModelName] = useState("");
+  const [mvTopN, setMvTopN] = useState(50);
+  const [mvItems, setMvItems] = useState<ModelVersionItem[]>([]);
+  const [mvLoading, setMvLoading] = useState(false);
+  const [mvColorBy, setMvColorBy] = useState<"Powertrain"|"Trim">("Powertrain");
+
+  /* OJ positioning map (Bug 3) */
+  const [pmTargetLength, setPmTargetLength] = useState("");
+  const [pmTargetMsrp, setPmTargetMsrp] = useState("");
+  const [pmLengthRange, setPmLengthRange] = useState(600);
+  const [pmManualInput, setPmManualInput] = useState("");
+  const [pmManualCompetitors, setPmManualCompetitors] = useState<string[]>([]);
+  const [pmTopN, setPmTopN] = useState(80);
+  const [pmNClusters, setPmNClusters] = useState(4);
+  const [pmItems, setPmItems] = useState<PositioningMapItem[]>([]);
+  const [pmTarget, setPmTarget] = useState<{ Length: number; MSRP: number } | null>(null);
+  const [pmClusterTop3, setPmClusterTop3] = useState<string[]>([]);
+  const [pmLoading, setPmLoading] = useState(false);
+
+  /* global time axis */
+  const [timeRange, setTimeRange] = useState<TimeRange | null>(null);
+  const [monthGrain, setMonthGrain] = useState<"month"|"quarter"|"year">("month");
+
+  /* export settings (one per chart section) */
+  const [tsExport, setTsExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
+  const [advExport, setAdvExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
+  const [mvExport, setMvExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
+  const [pmExport, setPmExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
+  const tsChartRef = useRef<HTMLDivElement | null>(null);
+  const advChartRef = useRef<HTMLDivElement | null>(null);
+  const mvChartRef = useRef<HTMLDivElement | null>(null);
+  const pmChartRef = useRef<HTMLDivElement | null>(null);
+
+  const [error, setError] = useState("");
+  const bootDone = useRef(false);
+  const hydratedFromUrl = useRef(false);
+  const defaultsApplied = useRef(false);
+
+  /* column resolution */
+  const res = useMemo(() => {
+    const m: Record<string, string|null> = {};
+    for (const [k, candidates] of Object.entries(DIM)) m[k] = resolve(columns, candidates);
+    return m;
+  }, [columns]);
+
+  const buildFilterPayload = useCallback((): Record<string, string[]> => {
+    const p: Record<string, string[]> = {};
+    for (const { key } of FILTER_ORDER) { const col = res[key]; const vals = selections[key]; if (col && vals?.length) p[col] = vals; }
+    return p;
+  }, [res, selections]);
+
+  /* B13: hydrate filters from URL query params on boot */
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const initial: Record<string, string[]> = {};
+    for (const { key } of FILTER_ORDER) {
+      const val = params.get(key);
+      if (val) initial[key] = val.split(",").filter(Boolean);
+    }
+    hydratedFromUrl.current = Object.keys(initial).length > 0;
+    if (Object.keys(initial).length > 0) {
+      setSelections(prev => ({ ...prev, ...initial }));
+    }
+  }, []);
+
+  /* boot */
+  useEffect(() => {
+    if (bootDone.current) return;
+    bootDone.current = true;
+    (async () => {
+      setLoading(true); setError("");
+      try {
+        const { items } = await api.columns();
+        setColumns(items); setSelectedCols(items.slice(0,10));
+        for (const dk of ["country","segment","powertrain"] as const) {
+          const col = resolve(items, DIM[dk]);
+          if (col) { const opts = await api.filterOptions({ column: col, filters: {} }); setOptionsMap(p=>({...p,[dk]:opts.options})); }
+        }
+        const ov = await api.overview({ filters: {}, prefer_precomputed: true, top_n: 120 });
+        setOverview(ov); setYearSeries(ov.yearSeries??[]); setMonthSeries(ov.monthSeries??[]);
+        setFilteredRowCount(ov.kpis.totalRows);
+      } catch (e) { setError((e as Error).message); }
+      finally { setLoading(false); }
+    })();
+  }, []);
+
+  async function applySelections(next: Record<string, string[]>, dimKey: string) {
+    setSelections(next);
+    const idx = FILTER_ORDER.findIndex(f=>f.key===dimKey);
+    const pp: Record<string,string[]> = {};
+    for (let i = 0; i <= idx; i++) { const fk=FILTER_ORDER[i].key; const col=res[fk]; const vals=next[fk]; if(col&&vals?.length) pp[col]=vals; }
+    for (let i = idx+1; i < FILTER_ORDER.length; i++) {
+      const fk=FILTER_ORDER[i].key; const col=res[fk]; if(!col) continue;
+      try { const opts = await api.filterOptions({ column:col, filters:pp }); setOptionsMap(p=>({...p,[fk]:opts.options})); if(next[fk]?.length) pp[col]=next[fk]; } catch {}
+    }
+  }
+  async function onFilterChange(dimKey: string, newVals: string[]) {
+    const next = { ...selections, [dimKey]: newVals };
+    await applySelections(next, dimKey);
+  }
+  function resetFilters() {
+    const defaults = getDefaultPowertrainValues(optionsMap.powertrain ?? []);
+    const next = { country:[], segment:[], powertrain:defaults, make:[], model:[], version:[] };
+    void applySelections(next, "powertrain");
+  }
+
+  useEffect(() => {
+    if (defaultsApplied.current || hydratedFromUrl.current || columns.length === 0) return;
+    const powertrainOptions = optionsMap.powertrain ?? [];
+    if (powertrainOptions.length === 0) return;
+    defaultsApplied.current = true;
+    const defaults = getDefaultPowertrainValues(powertrainOptions);
+    if (defaults.length === 0) return;
+    const next = { country:[], segment:[], powertrain:defaults, make:[], model:[], version:[] };
+    void applySelections(next, "powertrain");
+  }, [columns.length, optionsMap.powertrain, res]);
+
+  /* B13: sync selections to URL */
+  useEffect(() => {
+    const params = new URLSearchParams();
+    for (const { key } of FILTER_ORDER) {
+      const vals = selections[key];
+      if (vals?.length) params.set(key, vals.join(","));
+    }
+    const qs = params.toString();
+    const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    window.history.replaceState(null, "", newUrl);
+  }, [selections]);
+
+  async function loadOverview() {
+    setLoading(true); setError("");
+    try {
+      const f = buildFilterPayload();
+      const ov = await api.overview({ filters:f, prefer_precomputed:true, top_n:120 });
+      setOverview(ov); setYearSeries(ov.yearSeries??[]); setMonthSeries(ov.monthSeries??[]);
+      setFilteredRowCount(ov.kpis.totalRows);
+    } catch (e) { setError((e as Error).message); }
+    finally { setLoading(false); }
+  }
+
+  const filterPayloadStr = useMemo(() => JSON.stringify(buildFilterPayload()), [buildFilterPayload]);
+  const prevPayloadRef = useRef(filterPayloadStr);
+  useEffect(() => {
+    if (prevPayloadRef.current !== filterPayloadStr && columns.length > 0) {
+      prevPayloadRef.current = filterPayloadStr;
+      loadOverview();
+    }
+  }, [filterPayloadStr, columns.length]);
+
+  /* B3: auto-reload advanced chart when filters change */
+  const prevAdvPayloadRef = useRef(filterPayloadStr);
+  useEffect(() => {
+    if (prevAdvPayloadRef.current !== filterPayloadStr && advItems.length > 0 && columns.length > 0) {
+      prevAdvPayloadRef.current = filterPayloadStr;
+      loadAdvChart();
+    }
+  }, [filterPayloadStr, advItems.length, columns.length]);
+
+  /* B12: lazy auto-load — when filteredRowCount < 200 000, auto-trigger first advanced chart */
+  const advAutoLoaded = useRef(false);
+  useEffect(() => {
+    if (advAutoLoaded.current) return;
+    if (filteredRowCount !== null && filteredRowCount < 200_000 && columns.length > 0 && advItems.length === 0 && advChart !== "rv_finance_dashboard") {
+      advAutoLoaded.current = true;
+      loadAdvChart();
+    }
+  }, [filteredRowCount, columns.length, advItems.length, advChart]);
+
+  /* B3: auto-reload detail table when filters change */
+  const prevDetailPayloadRef = useRef(filterPayloadStr);
+  useEffect(() => {
+    if (prevDetailPayloadRef.current !== filterPayloadStr && detail && columns.length > 0) {
+      prevDetailPayloadRef.current = filterPayloadStr;
+      loadDetail(1);
+    }
+  }, [filterPayloadStr, columns.length]);
+
+  /* auto-fetch grouped time series */
+  useEffect(() => {
+    if (tsMode !== "\u5206\u7ec4" || columns.length === 0) return;
+    const filters = JSON.parse(filterPayloadStr) as Record<string, string[]>;
+    setGroupedLoading(true);
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setError("");
+      try {
+        const r = await api.groupedTimeSeries({ filters, grain: activeTab, group_by: tsGroupDim, top_n: tsTopNEnabled ? tsTopN : 9999, include_others: tsIncludeOthers });
+        if (!cancelled) { setGroupedItems(r.items); setHiddenSeries(new Set()); setOthersDetail(r.others_detail ?? []); }
+      } catch (e) { if (!cancelled) setError((e as Error).message); }
+      finally { if (!cancelled) setGroupedLoading(false); }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); setGroupedLoading(false); };
+  }, [tsMode, tsGroupDim, activeTab, tsTopN, tsTopNEnabled, tsIncludeOthers, filterPayloadStr, columns.length]);
+
+  /* detail */
+  async function loadDetail(page: number) {
+    setDetailLoading(true); setError("");
+    try { const d = await api.detail({ filters:buildFilterPayload(), columns:selectedCols, page, page_size:detailPageSize, exclude_zero_sales:excludeZeroSales }); setDetail(d); setDetailPage(d.page); }
+    catch (e) { setError((e as Error).message); }
+    finally { setDetailLoading(false); }
+  }
+  async function exportCsv() {
+    try {
+      const b = await api.detailCsv({ filters:buildFilterPayload(), columns:selectedCols, max_rows:10000, exclude_zero_sales:excludeZeroSales });
+      const u=URL.createObjectURL(b); const a=document.createElement("a"); a.href=u; a.download="jato_export.csv";
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u);
+    } catch (e) { setError((e as Error).message); }
+  }
+
+  /* advanced chart */
+  async function loadAdvChart() {
+    setAdvLoading(true); setError("");
+    try {
+      const opts: Record<string, unknown> = { band_size: advBandSize };
+      if (advChart === "powertrain_bubble") opts.grain = advBubbleGrain;
+      if (advChart === "nev_range_distribution" || advChart === "nev_capacity_vs_msrp") {
+        opts.powertrains = advPowertrains;
+      }
+      if (advChart === "nev_range_distribution") {
+        opts.range_step = advRangeStep;
+        opts.top_n_enabled = advNevTopNEnabled;
+        opts.axis_max = advNevAxisMax;
+        opts.metric_mode = advNevMetricMode;
+        opts.stack_by_model = advNevStackByModel;
+        opts.facet_brand = advNevFacetBrand;
+        opts.max_brand_facets = advNevMaxBrandFacets;
+      }
+      if (advChart === "estimated_tco") {
+        opts.years = tcoYears; opts.annual_km = tcoAnnualKm;
+        opts.depreciation_rate = tcoDepreciation; opts.maintenance_rate = tcoMaintenance;
+        opts.tax_insurance_rate = tcoTaxInsurance; opts.energy_cost_base = tcoEnergyCost;
+      }
+      const r = await api.advancedChart({ group: advGroup, chart: advChart, filters: buildFilterPayload(), top_n: advTopN, options: opts });
+      setAdvItems(r.items);
+      setAdvMeta(r.meta ?? null);
+    } catch (e) { setError((e as Error).message); }
+    finally { setAdvLoading(false); }
+  }
+
+  /* model version bubble */
+  async function loadModelVersions() {
+    if (!mvModelName.trim()) return;
+    setMvLoading(true); setError("");
+    try {
+      const r = await api.modelVersions({ filters: buildFilterPayload(), model_name: mvModelName.trim(), top_n: mvTopN });
+      setMvItems(r.items);
+    } catch (e) { setError((e as Error).message); }
+    finally { setMvLoading(false); }
+  }
+
+  /* OJ positioning map */
+  function addCompetitor() {
+    const v = pmManualInput.trim();
+    if (v && !pmManualCompetitors.includes(v)) setPmManualCompetitors(p => [...p, v]);
+    setPmManualInput("");
+  }
+  async function loadPositioningMap() {
+    setPmLoading(true); setError("");
+    try {
+      const r = await api.positioningMap({
+        filters: buildFilterPayload(),
+        target_length: pmTargetLength ? Number(pmTargetLength) : null,
+        target_msrp: pmTargetMsrp ? Number(pmTargetMsrp) : null,
+        length_range: pmLengthRange,
+        manual_competitors: pmManualCompetitors,
+        top_n: pmTopN,
+        n_clusters: pmNClusters,
+      });
+      setPmItems(r.items); setPmTarget(r.target); setPmClusterTop3(r.cluster_top3);
+    } catch (e) { setError((e as Error).message); }
+    finally { setPmLoading(false); }
+  }
+
+  /* ── derived chart data ──────────────────────────── */
+  const kpis = overview?.kpis;
+  const isGrouped = tsMode === "\u5206\u7ec4";
+  const singleSeries = activeTab === "year" ? yearSeries : monthSeries;
+
+  /* all series names (stable order for consistent colours) */
+  const allSeriesNames = useMemo(() => {
+    if (!isGrouped || groupedItems.length === 0) return [] as string[];
+    const s = new Set<string>();
+    for (const item of groupedItems) s.add(item.series);
+    return Array.from(s);
+  }, [isGrouped, groupedItems]);
+
+  const visibleSeries = useMemo(() =>
+    allSeriesNames.filter(s => !hiddenSeries.has(s)),
+    [allSeriesNames, hiddenSeries],
+  );
+
+  /* stacked chart pivot */
+  const { stackData, stackKeys } = useMemo(() => {
+    if (!STACKED_CHARTS.has(advChart) || advItems.length === 0 || advChart === "nev_range_distribution")
+      return { stackData: [] as Record<string,unknown>[], stackKeys: [] as string[] };
+    let xKey = "PriceBand"; let stackKey = "Powertrain";
+    if (advChart === "segment_share_by_length") { xKey = "LengthBand"; stackKey = "Segment"; }
+    const xMap = new Map<number, Record<string,unknown>>();
+    const sSet = new Set<string>();
+    for (const item of advItems) {
+      const x = Number(item[xKey] ?? 0); const s = String(item[stackKey] ?? "");
+      sSet.add(s);
+      let row = xMap.get(x);
+      if (!row) { row = { [xKey]: x }; xMap.set(x, row); }
+      row[s] = (Number(row[s] ?? 0)) + Number(item.Sales ?? 0);
+    }
+    return { stackData: Array.from(xMap.values()).sort((a,b)=>Number(a[xKey])-Number(b[xKey])), stackKeys: Array.from(sSet) };
+  }, [advChart, advItems]);
+
+  /* price migration pivot */
+  const { migrationData, migrationYears } = useMemo(() => {
+    if (advChart !== "price_migration" || advItems.length === 0)
+      return { migrationData: [] as Record<string,unknown>[], migrationYears: [] as string[] };
+    const bandMap = new Map<number, Record<string,unknown>>();
+    const yearSet = new Set<string>();
+    for (const item of advItems) {
+      const band = Number(item.priceBand ?? 0); const yr = String(item.year ?? "");
+      yearSet.add(yr);
+      let row = bandMap.get(band); if (!row) { row = { priceBand: band }; bandMap.set(band, row); }
+      row[yr] = Number(item.sales ?? 0);
+    }
+    return { migrationData: Array.from(bandMap.values()).sort((a,b)=>Number(a.priceBand)-Number(b.priceBand)), migrationYears: Array.from(yearSet).sort() };
+  }, [advChart, advItems]);
+
+  /* heatmap */
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const hmYears = [...new Set(advItems.filter(()=>advChart==="seasonality_heatmap").map(r=>String(r.year??"")))].filter(Boolean).sort();
+  const hmMax = Math.max(1,...advItems.filter(()=>advChart==="seasonality_heatmap").map(r=>Number(r.value??0)));
+  function hmVal(y:string,m:string){return Number(advItems.find(r=>String(r.year)===y&&String(r.month)===m)?.value??0);}
+  function hmColor(v:number){return "rgba(7,89,133,"+(0.1+(v/hmMax)*0.8).toFixed(3)+")";}
+
+  /* time axis labels */
+  const timeLabels = useMemo(() => {
+    const src = activeTab === "year" ? yearSeries : monthSeries;
+    return src.map(s => s.time);
+  }, [activeTab, yearSeries, monthSeries]);
+
+  /* filter series by time range */
+  function filterByTimeRange<T extends { time: string }>(items: T[]): T[] {
+    if (!timeRange) return items;
+    const start = toTimeOrdinal(timeRange.start);
+    const end = toTimeOrdinal(timeRange.end);
+    return items.filter(it => {
+      const current = toTimeOrdinal(it.time);
+      if (start !== null && end !== null && current !== null) return current >= start && current <= end;
+      return compareTimeLabels(it.time, timeRange.start) >= 0 && compareTimeLabels(it.time, timeRange.end) <= 0;
+    });
+  }
+
+  const filteredSingle = useMemo(() => filterByTimeRange(singleSeries), [singleSeries, timeRange]);
+
+  /* B6: aggregate monthly data by quarter/year when monthGrain is set */
+  const aggregatedSingle = useMemo(() => {
+    if (activeTab !== "month" || monthGrain === "month") return filteredSingle;
+    const groups = new Map<string, number>();
+    for (const s of filteredSingle) {
+      const month = parseMonthLabel(s.time);
+      if (!month) continue;
+      let key: string;
+      if (monthGrain === "quarter") {
+        const q = Math.ceil(month.month / 3);
+        key = `${month.year}-Q${q}`;
+      } else {
+        key = String(month.year);
+      }
+      groups.set(key, (groups.get(key) ?? 0) + s.value);
+    }
+    return Array.from(groups.entries()).map(([time, value]) => ({ time, value })).sort((a, b) => compareTimeLabels(a.time, b.time));
+  }, [activeTab, monthGrain, filteredSingle]);
+  const singleTimeLabels = useMemo(
+    () => aggregatedSingle.map(point => point.time),
+    [aggregatedSingle],
+  );
+  const filteredGrouped = useMemo(() => filterByTimeRange(groupedItems), [groupedItems, timeRange]);
+  const groupedTimeLabels = useMemo(
+    () => Array.from(new Set(filteredGrouped.map(point => point.time))).sort(compareTimeLabels),
+    [filteredGrouped],
+  );
+
+  /* B7: time-window KPI — compute sales from filtered time series */
+  const timeWindowSales = useMemo(() => {
+    if (!timeRange) return kpis?.cumulativeSales;
+    return filteredSingle.reduce((sum, s) => sum + s.value, 0);
+  }, [timeRange, filteredSingle, kpis]);
+
+  /* palette helper */
+  const tsPalette = useMemo(() => getExportPalette(tsExport.colorScheme), [tsExport.colorScheme]);
+  const advPalette = useMemo(() => getExportPalette(advExport.colorScheme), [advExport.colorScheme]);
+  const mvPalette = useMemo(() => getExportPalette(mvExport.colorScheme), [mvExport.colorScheme]);
+  const pmPalette = useMemo(() => getExportPalette(pmExport.colorScheme), [pmExport.colorScheme]);
+  const tsLabelModeOptions = useMemo(
+    () => buildExportLabelModeOptions({ showValue: true, showSeries: isGrouped }),
+    [isGrouped],
+  );
+  const advLabelModeOptions = useMemo(() => {
+    if (advChart === "seasonality_heatmap") {
+      return buildExportLabelModeOptions({ showValue: false, showSeries: false });
+    }
+    if (SCATTER_CHARTS.has(advChart)) {
+      const hasModel = advItems.some(item => String(item.Model ?? "").trim());
+      const hasSales = advItems.some(item => item.Sales !== undefined);
+      return buildExportLabelModeOptions({ showValue: true, showSeries: true, showModel: hasModel, showSales: hasSales });
+    }
+    if (STACKED_CHARTS.has(advChart) || advChart === "price_migration") {
+      return buildExportLabelModeOptions({ showValue: true, showSeries: true });
+    }
+    return buildExportLabelModeOptions({ showValue: true, showSeries: false });
+  }, [advChart, advItems]);
+  const mvLabelModeOptions = useMemo(
+    () => buildExportLabelModeOptions({ showValue: true, showSeries: true, showSales: mvItems.length > 0 }),
+    [mvItems.length],
+  );
+  const pmLabelModeOptions = useMemo(
+    () => buildExportLabelModeOptions({ showValue: true, showSeries: true, showModel: pmItems.some(item => item.Model.trim()), showSales: pmItems.length > 0 }),
+    [pmItems],
+  );
+  /* simple bar */
+  const isSimpleBar = !SCATTER_CHARTS.has(advChart) && !STACKED_CHARTS.has(advChart) && advChart !== "price_migration" && advChart !== "seasonality_heatmap" && advChart !== "rv_finance_dashboard";
+  const maxBar = Math.max(1,...advItems.map(r=>Number(r.value??0)));
+  const nevMetaRecord = advChart === "nev_range_distribution" && advMeta ? advMeta : null;
+  const nevMetricMode = asMetaText(nevMetaRecord?.metricMode) || "window_sales";
+  const nevMetricTitle = asMetaText(nevMetaRecord?.metricTitle) || "销量";
+  const nevRangeColumn = asMetaText(nevMetaRecord?.rangeColumn) || "Battery range";
+  const nevStackKey = asMetaText(nevMetaRecord?.stackKey) || "Powertrain";
+  const nevSplitByBrand = Boolean(nevMetaRecord?.splitByBrand);
+  const nevBrands = asMetaStringArray(nevMetaRecord?.brands);
+  const nevWarnings = asMetaStringArray(nevMetaRecord?.warnings);
+  const nevRangeStep = asMetaNumber(nevMetaRecord?.rangeStep) ?? 50;
+  const nevAxisMaxMeta = asMetaNumber(nevMetaRecord?.axisMax) ?? advNevAxisMax;
+  const nevAnnualSales = asMetaRecordArray(nevMetaRecord?.annualSales);
+  const nevPowertrainSummary = asMetaRecordArray(nevMetaRecord?.powertrainSummary);
+  const nevBucketSummary = asMetaRecordArray(nevMetaRecord?.bucketSummary);
+  const nevBucketPositive = asMetaRecordArray(nevMetaRecord?.bucketPositive);
+  const nevBucketNegative = asMetaRecordArray(nevMetaRecord?.bucketNegative);
+  const nevModelMovers = asMetaRecordArray(nevMetaRecord?.modelMovers);
+  const nevModelGains = asMetaRecordArray(nevMetaRecord?.modelGains);
+  const nevModelDeclines = asMetaRecordArray(nevMetaRecord?.modelDeclines);
+  const nevGrowthSpanLabel = asMetaText(nevMetaRecord?.growthSpanLabel);
+  const nevKpis = isPlainRecord(nevMetaRecord?.kpis) ? nevMetaRecord.kpis : null;
+  const nevTopModelLimit = asMetaNumber(nevMetaRecord?.topModelLimit);
+  const nevTopModelAbsShare = asMetaNumber(nevMetaRecord?.topModelAbsShare);
+  const nevStackSeries = useMemo(() => {
+    if (advChart !== "nev_range_distribution") return [] as string[];
+    const series = new Set<string>();
+    for (const item of advItems) {
+      const name = String(item[nevStackKey] ?? "").trim();
+      if (name) series.add(name);
+    }
+    const values = Array.from(series);
+    if (nevStackKey === "Powertrain") {
+      return values.sort((a, b) => {
+        const ai = DEFAULT_POWERTRAINS.findIndex(name => name === normalizePowertrainName(a));
+        const bi = DEFAULT_POWERTRAINS.findIndex(name => name === normalizePowertrainName(b));
+        const av = ai === -1 ? Number.MAX_SAFE_INTEGER : ai;
+        const bv = bi === -1 ? Number.MAX_SAFE_INTEGER : bi;
+        return av - bv || a.localeCompare(b);
+      });
+    }
+    return values.sort((a, b) => a.localeCompare(b));
+  }, [advChart, advItems, nevStackKey]);
+  const nevPowertrainTokens = useMemo(() => {
+    if (advChart !== "nev_range_distribution" || nevMetricMode !== "net_change") {
+      return [] as string[];
+    }
+    const netChangeTotal = asMetaNumber(nevKpis?.netChangeTotal);
+    return nevPowertrainSummary.map((row) => {
+      const powertrain = String(row.Powertrain ?? "-");
+      const growth = asMetaNumber(row.GrowthWindow) ?? 0;
+      const shareText = netChangeTotal && netChangeTotal !== 0
+        ? `${((growth / netChangeTotal) * 100).toFixed(1)}%`
+        : "N/A";
+      return `${powertrain} ${growth.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${shareText})`;
+    });
+  }, [advChart, nevKpis, nevMetricMode, nevPowertrainSummary]);
+  const nevStartYearLabel = useMemo(() => {
+    if (!nevGrowthSpanLabel.includes("-")) return "首年";
+    const tokens = nevGrowthSpanLabel.split("-");
+    return tokens[tokens.length - 1] || "首年";
+  }, [nevGrowthSpanLabel]);
+  const nevChartTitle = useMemo(() => {
+    if (advChart !== "nev_range_distribution") return "";
+    if (nevMetricMode === "net_change") {
+      return nevGrowthSpanLabel
+        ? `NEV 续航分布变化（${nevGrowthSpanLabel}）`
+        : "NEV 续航分布变化（末年-首年）";
+    }
+    return nevStackKey === "Model"
+      ? "NEV 续航分布（Model堆叠）"
+      : "NEV 续航分布（BEV/PHEV）";
+  }, [advChart, nevGrowthSpanLabel, nevMetricMode, nevStackKey]);
+  const nevFacetPlot = useMemo(() => {
+    if (advChart !== "nev_range_distribution" || advItems.length === 0) {
+      return {
+        traces: [] as Data[],
+        layout: {} as Partial<Layout>,
+        height: 420,
+      };
+    }
+
+    const isPowertrainStack = nevStackKey === "Powertrain";
+    const rangeBands = Array.from(new Set(
+      advItems
+        .map(item => Number(item.RangeBand ?? 0))
+        .filter(value => Number.isFinite(value)),
+    )).sort((a, b) => a - b);
+    const selectedBrands = nevSplitByBrand && nevBrands.length > 0
+      ? nevBrands.filter(brand => advItems.some(item => String(item.Brand ?? "") === brand))
+      : [];
+    const facetBrands = selectedBrands.length > 0 ? selectedBrands : [null];
+    const gridColumns = facetBrands.length > 1 ? Math.min(3, facetBrands.length) : 1;
+    const gridRows = Math.max(1, Math.ceil(facetBrands.length / gridColumns));
+    const traces: Data[] = [];
+    const annotations: NonNullable<Layout["annotations"]> = [];
+
+    facetBrands.forEach((brand, facetIndex) => {
+      const axisIndex = facetIndex + 1;
+      const axisRef = axisIndex === 1 ? "" : String(axisIndex);
+      const xAxisName = axisRef ? `x${axisRef}` : undefined;
+      const yAxisName = axisRef ? `y${axisRef}` : undefined;
+      const facetRows = brand === null
+        ? advItems
+        : advItems.filter(item => String(item.Brand ?? "") === brand);
+      if (facetRows.length === 0) return;
+
+      nevStackSeries.forEach((series, seriesIndex) => {
+        const valueMap = new Map<number, number>();
+        for (const item of facetRows) {
+          const currentSeries = String(item[nevStackKey] ?? "").trim();
+          if (currentSeries !== series) continue;
+          const rangeBand = Number(item.RangeBand ?? 0);
+          const value = Number(item.Value ?? 0);
+          valueMap.set(rangeBand, (valueMap.get(rangeBand) ?? 0) + value);
+        }
+        if (valueMap.size === 0) return;
+
+        traces.push({
+          type: "bar",
+          orientation: "h",
+          name: series,
+          x: rangeBands.map(rangeBand => valueMap.get(rangeBand) ?? 0),
+          y: rangeBands,
+          marker: { color: seriesColor(series, seriesIndex, advPalette, isPowertrainStack) },
+          hovertemplate: `${brand ? `${brand}<br>` : ""}%{y:.0f} km<br>${series}: %{x:,.0f}<extra></extra>`,
+          showlegend: facetIndex === 0,
+          ...(xAxisName ? { xaxis: xAxisName } : {}),
+          ...(yAxisName ? { yaxis: yAxisName } : {}),
+        } as Data);
+      });
+
+      if (brand) {
+        const columnIndex = facetIndex % gridColumns;
+        const rowIndex = Math.floor(facetIndex / gridColumns);
+        annotations.push({
+          text: brand,
+          x: (columnIndex + 0.5) / gridColumns,
+          y: 1 - rowIndex / gridRows + 0.04,
+          xref: "paper",
+          yref: "paper",
+          showarrow: false,
+          font: { size: 12 },
+        });
+      }
+    });
+
+    const layout: Partial<Layout> = {
+      title: { text: nevChartTitle },
+      barmode: "stack",
+      showlegend: true,
+      margin: { t: facetBrands.length > 1 ? 76 : 48, b: 48, l: 78, r: 18 },
+    };
+    if (facetBrands.length > 1) {
+      layout.grid = {
+        rows: gridRows,
+        columns: gridColumns,
+        pattern: "independent",
+      };
+      layout.annotations = annotations;
+    }
+
+    facetBrands.forEach((_, facetIndex) => {
+      const axisIndex = facetIndex + 1;
+      const xaxisKey = axisIndex === 1 ? "xaxis" : `xaxis${axisIndex}`;
+      const yaxisKey = axisIndex === 1 ? "yaxis" : `yaxis${axisIndex}`;
+      const isLeftEdge = facetIndex % gridColumns === 0;
+      (layout as Record<string, unknown>)[xaxisKey] = {
+        title: { text: nevMetricTitle },
+        automargin: true,
+      };
+      (layout as Record<string, unknown>)[yaxisKey] = {
+        title: { text: isLeftEdge ? `Battery range（${nevRangeColumn}）` : "" },
+        range: [0, nevAxisMaxMeta],
+        dtick: nevRangeStep,
+        automargin: true,
+      };
+    });
+
+    return {
+      traces,
+      layout,
+      height: Math.max(420, gridRows * 300),
+    };
+  }, [
+    advChart,
+    advItems,
+    advPalette,
+    nevAxisMaxMeta,
+    nevBrands,
+    nevChartTitle,
+    nevMetricTitle,
+    nevRangeColumn,
+    nevRangeStep,
+    nevSplitByBrand,
+    nevStackKey,
+    nevStackSeries,
+  ]);
+
+  /* scatter axes config */
+  function scatterAxes() {
+    switch (advChart) {
+      case "powertrain_bubble": return { x:"Length", y:"MSRP", z:"Sales", color:"Powertrain", xLabel:"\u8f66\u957f(mm)", yLabel:"MSRP" };
+      case "nev_capacity_vs_msrp": return { x:"BatteryCapacity", y:"MSRP", z:"Sales", color:"Powertrain", xLabel:"\u7535\u6c60\u5bb9\u91cf(kWh)", yLabel:"MSRP" };
+      case "length_vs_price": return { x:"Length", y:"MSRP", z:"Sales", color:"Segment", xLabel:"\u8f66\u957f(mm)", yLabel:"MSRP" };
+      case "price_per_meter": return { x:"PricePerMeter", y:"Sales", z:"Sales", color:"Brand", xLabel:"\u6bcf\u7c73\u4ef7\u683c", yLabel:"\u9500\u91cf" };
+      case "sales_vs_price": return { x:"MSRP", y:"Sales", z:"SegmentSharePct", color:"Segment", xLabel:"MSRP", yLabel:"\u9500\u91cf" };
+      case "estimated_tco": return { x:"MSRP", y:"EstimatedTCO", z:"Sales", color:"Powertrain", xLabel:"MSRP", yLabel:"\u4f30\u7b97TCO" };
+      default: return { x:"x", y:"y", z:"z", color:"", xLabel:"X", yLabel:"Y" };
+    }
+  }
+
+  const chartOpts = ADV_CHARTS[advGroup] ?? [];
+
+  return (
+    <div className="dashboard-layout">
+      {/* ── Sidebar ──────────────────────────────────── */}
+      <aside className="filter-sidebar">
+        <div className="filter-sidebar-header">
+          <h3>{"\ud83c\udf9b\ufe0f \u5168\u7ef4\u5ea6\u7b5b\u9009"}</h3>
+          <span className="filter-sidebar-hint">{"\u6bcf\u4e2a\u7b5b\u9009\u5668\u652f\u6301\uff1a\u641c\u7d22 + \u591a\u9009 + \u5168\u9009"}</span>
+        </div>
+        <button className="btn btn-reset" onClick={resetFilters}>{"\u91cd\u7f6e\u5168\u90e8\u7b5b\u9009"}</button>
+        {FILTER_ORDER.map(({key,label})=>(
+          <SearchSelectFilter key={key} label={label} options={optionsMap[key]??[]} selected={selections[key]} onChange={(vals)=>onFilterChange(key,vals)} showSuvShortcut={key==="segment"} />
+        ))}
+        <div className="filter-card filter-summary-card">
+          <div className="filter-card-title">{"\ud83d\udccc \u7b5b\u9009\u6458\u8981"}</div>
+          <div className="filter-summary-text">
+            {FILTER_ORDER.map(({key,label})=><span key={key}>{label+" "+selections[key].length}</span>)}
+          </div>
+          {filteredRowCount!==null && <div className="filter-row-count">{"\u7b5b\u540e\u884c\u6570\uff1a"+filteredRowCount.toLocaleString()}</div>}
+        </div>
+      </aside>
+
+      {/* ── Main content ─────────────────────────────── */}
+      <section className="dashboard-main">
+        {error && <div className="alert alert-error">{error}</div>}
+        <div className="header-card">
+          <div className="header-card-left"><h1>{"\ud83d\ude97 JATO \u5168\u7403\u53ef\u89c6\u5316\u5206\u6790\u7cfb\u7edf"}</h1></div>
+          <div className="header-card-right">
+            <div className="header-metric-label">{"\u7b5b\u9009\u540e\u8bb0\u5f55\u6570"}</div>
+            <div className="header-metric-value">{(filteredRowCount??0).toLocaleString()}</div>
+          </div>
+        </div>
+
+        {/* KPI cards */}
+        <div className="kpi-grid">
+          <div className="kpi-card kpi-primary"><div className="kpi-label">{"\u7d2f\u8ba1\u9500\u91cf\uff08\u5168\u5c40\u65f6\u95f4\u7a97\uff09"}</div>
+            <div className="kpi-value">{timeWindowSales!=null?timeWindowSales.toLocaleString(undefined,{maximumFractionDigits:0}):"\u2013"}</div></div>
+          <div className="kpi-card"><div className="kpi-label">{"\u54c1\u724c\u6570"}</div><div className="kpi-value">{(kpis?.brandCount??0).toLocaleString()}</div></div>
+          <div className="kpi-card"><div className="kpi-label">{"Model \u6570"}</div><div className="kpi-value">{(kpis?.modelCount??0).toLocaleString()}</div></div>
+          <div className="kpi-card"><div className="kpi-label">{"Version \u6570"}</div><div className="kpi-value">{(kpis?.versionCount??0).toLocaleString()}</div></div>
+        </div>
+        <div className="kpi-caption" style={{fontSize:11,color:"var(--c-text-muted)",marginTop:-8,paddingLeft:4}}>
+          {"\u53e3\u5f84\uff1a"}{FILTER_ORDER.filter(f=>selections[f.key].length>0).map(f=>f.label+"="+selections[f.key].join("/")).join("\u3001") || "\u5168\u91cf"}
+          {timeRange ? ` \u00b7 \u65f6\u95f4\u7a97\u53e3 ${timeRange.start} ~ ${timeRange.end}` : ""}
+        </div>
+
+        {loading && <div className="loading-banner"><span className="spinner" />{" \u52a0\u8f7d\u4e2d\u2026"}</div>}
+
+        {/* ── Global Time Axis ────────────────────────── */}
+        <div className="card">
+          <TimeAxis
+            labels={timeLabels}
+            value={timeRange}
+            onChange={setTimeRange}
+            grain={activeTab}
+            onGrainChange={setActiveTab}
+            monthGrain={monthGrain}
+            onMonthGrainChange={setMonthGrain}
+          />
+        </div>
+
+        {/* ── Time series ─────────────────────────────── */}
+        <div className="card chart-section">
+          <div className="chart-header">
+            <div className="tab-bar">
+              <button className={"tab-btn"+(activeTab==="year"?" active":"")} onClick={()=>setActiveTab("year")}>{"\u5e74\u5ea6\u5bf9\u6bd4"}</button>
+              <button className={"tab-btn"+(activeTab==="month"?" active":"")} onClick={()=>setActiveTab("month")}>{"\u6708\u5ea6\u660e\u7ec6"}</button>
+            </div>
+            <div className="chart-controls">
+              <div className="tab-bar">
+                <button className={"tab-btn"+(tsMode==="\u603b\u548c"?" active":"")} onClick={()=>setTsMode("\u603b\u548c")}>{"\u603b\u548c"}</button>
+                <button className={"tab-btn"+(tsMode==="\u5206\u7ec4"?" active":"")} onClick={()=>setTsMode("\u5206\u7ec4")}>{"\u5206\u7ec4"}</button>
+              </div>
+              <span className="chart-controls-sep" />
+              <label className="chart-mode-label"><input type="radio" name="chartType" value="line" checked={chartType==="line"} onChange={()=>setChartType("line")} />{" \u6298\u7ebf"}</label>
+              <label className="chart-mode-label"><input type="radio" name="chartType" value="bar" checked={chartType==="bar"} onChange={()=>setChartType("bar")} />{" \u7d2f\u79ef\u6761\u5f62"}</label>
+            </div>
+          </div>
+
+          {/* grouped controls */}
+          {isGrouped && (
+            <div className="ts-group-bar">
+              <div className="filter-group"><label>{"\u5206\u7ec4\u7ef4\u5ea6"}</label>
+                <select value={tsGroupDim} onChange={e=>setTsGroupDim(e.target.value)}>
+                  {GROUP_BY_OPTIONS.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+                </select>
+              </div>
+              <label className="chart-mode-label" style={{gap:6}}>
+                <input type="checkbox" checked={tsTopNEnabled} onChange={e=>setTsTopNEnabled(e.target.checked)} />
+                {"\u542f\u7528 Top N"}
+              </label>
+              {tsTopNEnabled && <div className="filter-group"><label>Top N</label>
+                <input type="number" value={tsTopN} min={3} max={30} style={{width:56}} onChange={e=>setTsTopN(Math.max(3,Math.min(30,Number(e.target.value)||10)))} />
+              </div>}
+              <label className="chart-mode-label" style={{gap:6}}>
+                <input type="checkbox" checked={tsIncludeOthers} onChange={e=>setTsIncludeOthers(e.target.checked)} />
+                {"\u56fe\u4e2d\u663e\u793a\u201c\u5176\u4ed6\u201d"}
+              </label>
+              {groupedLoading && <span className="spinner" style={{marginLeft:8}} />}
+            </div>
+          )}
+          {!isGrouped && <div className="ts-mode-hint">{"\u5207\u6362\u5230\u201c\u5206\u7ec4\u201d\u540e\uff0c\u53ef\u6309\u52a8\u603b/\u7ec6\u5206/\u54c1\u724c/Model \u5206\u8272\u663e\u793a\u3002"}</div>}
+
+          {/* series pills (click to toggle visibility) */}
+          {isGrouped && allSeriesNames.length > 0 && (() => {
+            const isPt = tsGroupDim === "\u52a8\u603b\u89c4\u6574";
+            return (
+            <div className="ts-series-pills">
+              {allSeriesNames.map((name, i) => (
+                <button key={name} className={"ts-pill"+(hiddenSeries.has(name)?" ts-pill-hidden":"")}
+                  style={{"--pill-color": seriesColor(name, i, COLORS, isPt)} as React.CSSProperties}
+                  onClick={()=>setHiddenSeries(prev=>{const n=new Set(prev);n.has(name)?n.delete(name):n.add(name);return n;})}>
+                  <span className="ts-pill-dot" />{name}
+                </button>
+              ))}
+              <span className="ts-series-count">{visibleSeries.length+" / "+allSeriesNames.length+" \u7cfb\u5217"}</span>
+            </div>
+            );
+          })()}
+
+          {/* single-series */}
+          {!isGrouped && aggregatedSingle.length > 0 && (
+            <div ref={el => { tsChartRef.current = el; }}>
+              <PlotlyChart
+                data={applyDataLabelsToTraces([chartType === "line" ? {
+                  x: aggregatedSingle.map(s => s.time),
+                  y: aggregatedSingle.map(s => s.value),
+                  type: "scatter", mode: "lines+markers", name: "Sales",
+                  line: { color: tsPalette[0], width: 2 },
+                  marker: { size: 5 },
+                } as Data : {
+                  x: aggregatedSingle.map(s => s.time),
+                  y: aggregatedSingle.map(s => s.value),
+                  type: "bar", name: "Sales",
+                  marker: { color: tsPalette[0] },
+                } as Data], tsExport)}
+                layout={applyExportToLayout({
+                  xaxis: buildCategoryAxis(singleTimeLabels, { tickangle: -45 }),
+                  yaxis: { title: { text: "Sales" } },
+                }, tsExport)}
+                height={400}
+              />
+            </div>
+          )}
+
+          {/* multi-series grouped */}
+          {isGrouped && filteredGrouped.length > 0 && (() => {
+            const isPt = tsGroupDim === "\u52a8\u603b\u89c4\u6574";
+            let traces: Data[] = visibleSeries.map((name, i) => {
+              const seriesData = filteredGrouped.filter(g => g.series === name);
+              const c = seriesColor(name, i, tsPalette, isPt);
+              const base: Partial<Data> = {
+                x: seriesData.map(d => d.time),
+                y: seriesData.map(d => d.value),
+                name,
+              };
+              if (chartType === "line") {
+                return { ...base, type: "scatter", mode: "lines+markers", line: { color: c, width: 2 }, marker: { size: 4 } } as Data;
+              }
+              return { ...base, type: "bar", marker: { color: c } } as Data;
+            });
+            traces = applySeriesColors(applyDataLabelsToTraces(traces, tsExport), tsExport.seriesColors);
+            return (
+              <div ref={el => { tsChartRef.current = el; }}>
+                <PlotlyChart
+                  data={traces}
+                  layout={applyExportToLayout({
+                    barmode: chartType === "bar" ? "relative" : undefined,
+                    xaxis: buildCategoryAxis(groupedTimeLabels, { tickangle: -45 }),
+                    yaxis: { title: { text: "Sales" } },
+                  }, tsExport)}
+                  height={450}
+                />
+              </div>
+            );
+          })()}
+
+          {!isGrouped && aggregatedSingle.length===0 && !loading && <div className="chart-empty">{"\u6682\u65e0\u8d8b\u52bf\u6570\u636e"}</div>}
+          {isGrouped && filteredGrouped.length===0 && !groupedLoading && <div className="chart-empty">{"\u5207\u6362\u5206\u7ec4\u7ef4\u5ea6\u6216\u8c03\u6574\u7b5b\u9009\u6761\u4ef6"}</div>}
+
+          {/* B11: "其他"明细表 — 展示被合并进"其他"的各分组明细 */}
+          {isGrouped && tsIncludeOthers && othersDetail.length > 0 && (
+            <details style={{marginTop:8}}>
+              <summary style={{cursor:"pointer",fontSize:13,color:"var(--c-text-muted)"}}>
+                {"\ud83d\udce6"} {"\u201c\u5176\u4ed6\u201d\u5305\u542b "}{othersDetail.length}{" \u4e2a\u5206\u7ec4"}
+              </summary>
+              <div style={{fontSize:12,padding:"8px 0",maxHeight:260,overflowY:"auto"}}>
+                <table className="data-table">
+                  <thead><tr><th>{"\u540d\u79f0"}</th><th>{"\u9500\u91cf"}</th><th>{"\u5360\u6bd4"}</th></tr></thead>
+                  <tbody>{othersDetail.map(d=>(
+                    <tr key={d.name}>
+                      <td>{d.name}</td>
+                      <td>{d.sales.toLocaleString()}</td>
+                      <td>{(d.share*100).toFixed(1)}%</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            </details>
+          )}
+
+          <ExportPanel value={tsExport} onChange={setTsExport} graphDiv={tsChartRef.current} seriesNames={isGrouped ? visibleSeries : undefined} labelModeOptions={tsLabelModeOptions} />
+        </div>
+
+        {/* ── Advanced analysis ───────────────────────── */}
+        <div className="card">
+          <div className="card-title">{"\u9ad8\u7ea7\u5206\u6790"}</div>
+          {/* group button row */}
+          <div style={{display:"flex",gap:6,marginBottom:8}}>
+            {ADV_GROUPS.map(o=>(
+              <button key={o.v} className={"btn btn-sm "+(advGroup===o.v?"btn-primary":"btn-secondary")}
+                onClick={()=>{setAdvGroup(o.v); setAdvChart((ADV_CHARTS[o.v]??[])[0]?.v??""); setAdvItems([]); setAdvMeta(null);}}>{o.l}</button>
+            ))}
+          </div>
+          {/* chart button row */}
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+            {chartOpts.map(o=>(
+              <button key={o.v} className={"btn btn-sm "+(advChart===o.v?"btn-primary":"btn-secondary")}
+                onClick={()=>{setAdvChart(o.v); setAdvItems([]); setAdvMeta(null);}}>{o.l}</button>
+            ))}
+          </div>
+          {/* path display */}
+          <div style={{fontSize:12,color:"var(--c-text-muted)",marginBottom:8}}>
+            {ADV_GROUPS.find(g=>g.v===advGroup)?.l??""}
+            {" > "}
+            {chartOpts.find(c=>c.v===advChart)?.l??""}
+          </div>
+          <div className="adv-controls">
+            {advChart !== "rv_finance_dashboard" && (<>
+            {advChart !== "nev_range_distribution" && (
+              <div className="filter-group"><label>Top N</label>
+                <input type="number" value={advTopN} min={5} max={200} style={{width:60}} onChange={e=>setAdvTopN(Number(e.target.value)||30)} />
+              </div>
+            )}
+            {(STACKED_CHARTS.has(advChart) || advChart==="price_migration" || advChart==="powertrain_vs_price") && (
+              <div className="filter-group"><label>{"\u5e26\u5bbd"}</label>
+                <input type="number" value={advBandSize} min={50} max={50000} step={100} style={{width:80}} onChange={e=>setAdvBandSize(Number(e.target.value)||1000)} />
+              </div>
+            )}
+            {advChart==="price_migration" && (
+              <div className="filter-group"><label>{"\u7c7b\u578b"}</label>
+                <select value={advMigrationMode} onChange={e=>setAdvMigrationMode(e.target.value as "area"|"line")}>
+                  <option value="area">{"\u9762\u79ef\u56fe"}</option>
+                  <option value="line">{"\u6298\u7ebf\u56fe"}</option>
+                </select>
+              </div>
+            )}
+            {SCATTER_CHARTS.has(advChart) && (
+              <div className="filter-group"><label>{"\u6c14\u6ce1\u500d\u7387"}</label>
+                <select value={advBubbleScale} onChange={e=>setAdvBubbleScale(Number(e.target.value))}>
+                  <option value={1}>{"\u00d71"}</option>
+                  <option value={2}>{"\u00d72"}</option>
+                  <option value={3}>{"\u00d73"}</option>
+                  <option value={4}>{"\u00d74"}</option>
+                </select>
+              </div>
+            )}
+            {/* 7a: 品牌分面 */}
+            {advChart==="powertrain_bubble" && (
+              <div className="filter-group" style={{display:"flex",alignItems:"center",gap:8}}>
+                <label>{"粒度"}</label>
+                <select value={advBubbleGrain} onChange={e=>{setAdvBubbleGrain(e.target.value as "model"|"version"); setAdvItems([]); setAdvMeta(null);}}>
+                  <option value="model">Model</option>
+                  <option value="version">Version</option>
+                </select>
+                <label style={{display:"flex",alignItems:"center",gap:4}}>
+                  <input type="checkbox" checked={advBubbleFacet} onChange={e=>setAdvBubbleFacet(e.target.checked)} />
+                  {"\u6309\u54c1\u724c\u5206\u9762"}
+                </label>
+                {advBubbleFacet && (
+                  <input type="number" min={2} max={12} value={advBubbleFacetMax} style={{width:50}}
+                    onChange={e=>setAdvBubbleFacetMax(Number(e.target.value)||4)} title={"\u6700\u591a\u54c1\u724c\u6570"} />
+                )}
+              </div>
+            )}
+            {/* NEV动总筛选 */}
+            {(advChart==="nev_range_distribution"||advChart==="nev_capacity_vs_msrp") && (
+              <div className="filter-group"><label>{"\u52a8\u603b\u7c7b\u578b"}</label>
+                <div style={{display:"flex",gap:4}}>
+                  {["BEV","PHEV","HEV","MHEV","ICE"].map(pt=>(
+                    <label key={pt} style={{display:"flex",alignItems:"center",gap:2,fontSize:12}}>
+                      <input type="checkbox" checked={advPowertrains.includes(pt)}
+                        onChange={e=>{const next=e.target.checked?[...advPowertrains,pt]:advPowertrains.filter(x=>x!==pt);setAdvPowertrains(next);}} />
+                      <span style={{color:POWERTRAIN_COLORS[pt]}}>{pt}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+            {advChart==="nev_range_distribution" && (
+              <>
+                <label className="chart-mode-label" style={{gap:6}}>
+                  <input type="checkbox" checked={advNevTopNEnabled} onChange={e=>setAdvNevTopNEnabled(e.target.checked)} />
+                  {"\u542f\u7528 TopN"}
+                </label>
+                {advNevTopNEnabled && <div className="filter-group"><label>Top N</label>
+                  <input type="number" value={advTopN} min={10} max={300} step={5} style={{width:72}} onChange={e=>setAdvTopN(Number(e.target.value)||80)} />
+                </div>}
+                <div className="filter-group"><label>{"\u7eed\u822a\u8f74\u4e0a\u9650"}</label>
+                  <input type="number" value={advNevAxisMax} min={200} max={1500} step={50} style={{width:72}} onChange={e=>setAdvNevAxisMax(Number(e.target.value)||1000)} />
+                </div>
+                <div className="filter-group"><label>{"\u5206\u5e03\u53e3\u5f84"}</label>
+                  <select value={advNevMetricMode} onChange={e=>setAdvNevMetricMode(e.target.value as "window_sales"|"net_change")}>
+                    <option value="window_sales">{"\u5f53\u524d\u65f6\u95f4\u7a97\u9500\u91cf"}</option>
+                    <option value="net_change">{"\u51c0\u53d8\u5316\uff08\u672b\u5e74-\u9996\u5e74\uff09"}</option>
+                  </select>
+                </div>
+              </>
+            )}
+            {advChart==="nev_range_distribution" && (
+              <div className="filter-group"><label>{"\u7eed\u822a\u6b65\u957f(km)"}</label>
+                <input type="number" value={advRangeStep} min={10} max={200} step={10} style={{width:60}} onChange={e=>setAdvRangeStep(Number(e.target.value)||50)} />
+              </div>
+            )}
+            {/* NEV参数重置 */}
+            {(advChart==="nev_range_distribution"||advChart==="nev_capacity_vs_msrp") && (
+              <button className="btn btn-sm btn-secondary" onClick={()=>{setAdvPowertrains(["BEV","PHEV"]);setAdvTopN(advChart==="nev_range_distribution"?80:120);setAdvRangeStep(50);setAdvNevTopNEnabled(true);setAdvNevAxisMax(1000);setAdvNevMetricMode("window_sales");setAdvNevStackByModel(false);setAdvNevFacetBrand(false);setAdvNevMaxBrandFacets(4);}}>{"\u91cd\u7f6e\u53c2\u6570"}</button>
+            )}
+            {advChart==="nev_range_distribution" && (
+              <details style={{display:"flex",alignSelf:"stretch"}}>
+                <summary style={{cursor:"pointer",fontSize:12,color:"var(--c-text-muted)"}}>{"\u9ad8\u7ea7\u8bbe\u7f6e"}</summary>
+                <div style={{display:"flex",gap:12,flexWrap:"wrap",marginTop:8}}>
+                  <label className="chart-mode-label" style={{gap:6}}>
+                    <input type="checkbox" checked={advNevStackByModel} onChange={e=>setAdvNevStackByModel(e.target.checked)} />
+                    {"\u6309 Model \u5806\u53e0"}
+                  </label>
+                  <label className="chart-mode-label" style={{gap:6}}>
+                    <input type="checkbox" checked={advNevFacetBrand} onChange={e=>setAdvNevFacetBrand(e.target.checked)} />
+                    {"\u6309\u54c1\u724c\u5206\u9762"}
+                  </label>
+                  {advNevFacetBrand && <div className="filter-group"><label>{"\u6700\u591a\u54c1\u724c\u6570"}</label>
+                    <input type="number" value={advNevMaxBrandFacets} min={2} max={12} step={1} style={{width:60}} onChange={e=>setAdvNevMaxBrandFacets(Number(e.target.value)||4)} />
+                  </div>}
+                </div>
+              </details>
+            )}
+            {/* 热力图色阶 */}
+            {advChart==="seasonality_heatmap" && (
+              <div className="filter-group"><label>{"\u8272\u9636"}</label>
+                <select value={advHeatmapScale} onChange={e=>setAdvHeatmapScale(e.target.value)}>
+                  {["Blues","Viridis","YlOrRd","RdBu","Greens","Hot"].map(s=><option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            )}
+            <button className="btn btn-primary" disabled={!columns.length||advLoading} onClick={loadAdvChart}>{advLoading?"\u52a0\u8f7d\u4e2d\u2026":"\u52a0\u8f7d\u56fe\u8868"}</button>
+            </>)}
+          </div>
+
+          {/* TCO参数面板 */}
+          {advChart==="estimated_tco" && (
+            <div className="adv-controls" style={{flexWrap:"wrap",gap:8,marginTop:4}}>
+              <div className="filter-group"><label>{"\u4f7f\u7528\u5e74\u9650"}</label>
+                <input type="range" min={1} max={10} step={1} value={tcoYears} onChange={e=>setTcoYears(Number(e.target.value))} style={{width:80}} /><span style={{fontSize:12,marginLeft:4}}>{tcoYears}{"\u5e74"}</span>
+              </div>
+              <div className="filter-group"><label>{"\u5e74\u91cc\u7a0b(km)"}</label>
+                <input type="range" min={5000} max={50000} step={1000} value={tcoAnnualKm} onChange={e=>setTcoAnnualKm(Number(e.target.value))} style={{width:80}} /><span style={{fontSize:12,marginLeft:4}}>{tcoAnnualKm.toLocaleString()}</span>
+              </div>
+              <div className="filter-group"><label>{"\u6298\u65e7\u7387"}</label>
+                <input type="range" min={0.1} max={0.9} step={0.05} value={tcoDepreciation} onChange={e=>setTcoDepreciation(Number(e.target.value))} style={{width:80}} /><span style={{fontSize:12,marginLeft:4}}>{(tcoDepreciation*100).toFixed(0)}%</span>
+              </div>
+              <div className="filter-group"><label>{"\u7ef4\u4fdd\u7387"}</label>
+                <input type="range" min={0.005} max={0.05} step={0.002} value={tcoMaintenance} onChange={e=>setTcoMaintenance(Number(e.target.value))} style={{width:80}} /><span style={{fontSize:12,marginLeft:4}}>{(tcoMaintenance*100).toFixed(1)}%</span>
+              </div>
+              <div className="filter-group"><label>{"\u7a0e\u8d39\u4fdd\u9669"}</label>
+                <input type="range" min={0.005} max={0.06} step={0.005} value={tcoTaxInsurance} onChange={e=>setTcoTaxInsurance(Number(e.target.value))} style={{width:80}} /><span style={{fontSize:12,marginLeft:4}}>{(tcoTaxInsurance*100).toFixed(1)}%</span>
+              </div>
+              <div className="filter-group"><label>{"\u80fd\u6e90\u6210\u672c\u57fa\u7840(\u20ac/km)"}</label>
+                <input type="range" min={0.02} max={0.3} step={0.01} value={tcoEnergyCost} onChange={e=>setTcoEnergyCost(Number(e.target.value))} style={{width:80}} /><span style={{fontSize:12,marginLeft:4}}>{tcoEnergyCost.toFixed(2)}</span>
+              </div>
+            </div>
+          )}
+
+          {/* simple bar chart */}
+          {isSimpleBar && advItems.length > 0 && (
+            <div className="bar-chart">
+              {advItems.map(row=>{
+                const lb=String(row.label??"-"); const val=Number(row.value??0);
+                const pct=Math.max(1,Math.round((val/maxBar)*100));
+                return (<div className="bar-row" key={lb+"-"+val}>
+                  <span className="bar-label">{lb}</span>
+                  <div className="bar-track"><div className="bar-fill" style={{width:pct+"%"}} /></div>
+                  <span className="bar-value">{val.toLocaleString()}</span>
+                </div>);
+              })}
+            </div>
+          )}
+
+          {/* scatter / bubble */}
+          {SCATTER_CHARTS.has(advChart) && advItems.length > 0 && (() => {
+            const ax = scatterAxes();
+            const isPtScatter = ax.color === "Powertrain";
+            const cats = [...new Set(advItems.map(r=>String(r[ax.color]??"")))];
+            /* normalize bubble sizes — mimic px.scatter size_max behaviour */
+            const allZ = advItems.map(r => Math.max(1, Number(r[ax.z] ?? 1)));
+            const maxZ = Math.max(1, ...allZ);
+            const sizeMax = 24 * advBubbleScale; /* Streamlit default: 24 × multiplier */
+            const bubbleSizeRef = (2 * maxZ) / Math.max(1, sizeMax * sizeMax);
+
+            function buildTraces(items: Record<string, string|number>[]) {
+              const localCats = [...new Set(items.map(r=>String(r[ax.color]??"")))];
+              return localCats.map((cat, i) => {
+                const subset = items.filter(r=>String(r[ax.color]??"")=== cat);
+                const isBubbleMsrp = advChart === "powertrain_bubble";
+                return withExportLabels({
+                  x: subset.map(r => Number(r[ax.x] ?? 0)),
+                  y: subset.map(r => Number(r[ax.y] ?? 0)),
+                  text: subset.map(r => String(r.DisplayName ?? r.Version ?? r.Model ?? r.Brand ?? "")),
+                  customdata: subset.map(r => isBubbleMsrp
+                    ? [
+                        Number(r[ax.z] ?? 0),
+                        Number(r.MsrpMin ?? r[ax.y] ?? 0),
+                        Number(r.MsrpMax ?? r[ax.y] ?? 0),
+                        Number(r.VariantCount ?? 1),
+                      ]
+                    : [Number(r[ax.z] ?? 0)]),
+                  type: "scatter",
+                  mode: "markers",
+                  name: cat,
+                  marker: {
+                    color: seriesColor(cat, i, advPalette, isPtScatter),
+                    size: subset.map(r => Math.max(1, Number(r[ax.z] ?? 1))),
+                    sizemode: "area" as const,
+                    sizeref: bubbleSizeRef,
+                    sizemin: 4,
+                    opacity: 0.7,
+                  },
+                  hovertemplate: isBubbleMsrp
+                    ? advBubbleGrain === "version"
+                      ? "%{text}<br>" + ax.xLabel + ": %{x:,.0f}<br>MSRP（组内中位数）: %{y:,.0f}<br>MSRP范围: %{customdata[1]:,.0f} - %{customdata[2]:,.0f}<br>Sales: %{customdata[0]:,.0f}<extra>%{fullData.name}</extra>"
+                      : "%{text}<br>" + ax.xLabel + ": %{x:,.0f}<br>MSRP（组内中位数）: %{y:,.0f}<br>MSRP范围: %{customdata[1]:,.0f} - %{customdata[2]:,.0f}<br>聚合版型数: %{customdata[3]:,.0f}<br>Sales: %{customdata[0]:,.0f}<extra>%{fullData.name}</extra>"
+                    : "%{text}<br>" + ax.xLabel + ": %{x:,.0f}<br>" + ax.yLabel + ": %{y:,.0f}<br>Sales: %{customdata[0]:,.0f}<extra>%{fullData.name}</extra>",
+                } as Data, {
+                  ...(subset.some(r => String(r.Model ?? "").trim()) ? { model: subset.map(r => String(r.Model ?? "")) } : {}),
+                  ...(subset.some(r => r.Sales !== undefined) ? { sales: subset.map(r => Number(r.Sales ?? 0)) } : {}),
+                  value: subset.map(r => Number(r[ax.y] ?? 0)),
+                  series: subset.map(() => cat),
+                }) as Data;
+              });
+            }
+
+            /* 7a: brand faceting */
+            if (advChart === "powertrain_bubble" && advBubbleFacet) {
+              /* group by brand, take top N brands by total Sales */
+              const brandTotals = new Map<string, number>();
+              for (const r of advItems) {
+                const b = String(r.Brand ?? "");
+                brandTotals.set(b, (brandTotals.get(b) ?? 0) + Number(r.Sales ?? 0));
+              }
+              const topBrands = [...brandTotals.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, advBubbleFacetMax)
+                .map(e => e[0]);
+              return (
+                <div ref={el => { advChartRef.current = el; }}
+                  style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8}}>
+                  {topBrands.map(brand => {
+                    const subset = advItems.filter(r => String(r.Brand ?? "") === brand);
+                    const traces = buildTraces(subset);
+                    return (
+                      <div key={brand}>
+                        <PlotlyChart
+                          data={applySeriesColors(applyDataLabelsToTraces(traces, advExport), advExport.seriesColors)}
+                          layout={applyExportToLayout({
+                            title: { text: brand, font: { size: 13 } },
+                            xaxis: { title: { text: ax.xLabel } },
+                            yaxis: { title: { text: ax.yLabel } },
+                            showlegend: false,
+                            margin: { t: 30, b: 40, l: 50, r: 10 },
+                          }, advExport)}
+                          height={320}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            }
+
+            const traces = buildTraces(advItems);
+            return (
+              <div ref={el => { advChartRef.current = el; }}>
+                <PlotlyChart
+                  data={applySeriesColors(applyDataLabelsToTraces(traces, advExport), advExport.seriesColors)}
+                  layout={applyExportToLayout({
+                    xaxis: { title: { text: ax.xLabel } },
+                    yaxis: { title: { text: ax.yLabel } },
+                    ...(advChart === "length_vs_price" ? {
+                      shapes: [
+                        { type: "line", x0: 4550, x1: 4550, y0: 0, y1: 1, yref: "paper", line: { color: "#94a3b8", width: 1.5, dash: "dash" } },
+                        { type: "line", x0: 4700, x1: 4700, y0: 0, y1: 1, yref: "paper", line: { color: "#64748b", width: 1.5, dash: "dash" } },
+                      ],
+                      annotations: [
+                        { x: 4550, y: 1.02, yref: "paper", text: "C-SUV 4550mm", showarrow: false, font: { size: 10, color: "#94a3b8" } },
+                        { x: 4700, y: 1.02, yref: "paper", text: "D-SUV 4700mm", showarrow: false, font: { size: 10, color: "#64748b" } },
+                        /* §9b value detection: models ≥4700mm below median MSRP */
+                        ...(() => {
+                          const prices = advItems.map(r => Number(r.MSRP ?? 0)).filter(v => v > 0).sort((a, b) => a - b);
+                          const med = prices[Math.floor(prices.length / 2)] ?? 0;
+                          return advItems
+                            .filter(r => Number(r.Length ?? 0) >= 4700 && Number(r.MSRP ?? 0) > 0 && Number(r.MSRP ?? 0) < med)
+                            .slice(0, 5)
+                            .map(r => ({
+                              x: Number(r.Length), y: Number(r.MSRP),
+                              text: String(r.Model ?? ""), showarrow: true, arrowhead: 2, arrowcolor: "#ef4444",
+                              font: { size: 9, color: "#ef4444" }, ax: 30, ay: -20,
+                            }));
+                        })(),
+                      ],
+                    } : {}),
+                  }, advExport)}
+                  height={500}
+                />
+              </div>
+            );
+          })()}
+
+          {/* correlation coefficient for nev_capacity_vs_msrp */}
+          {advChart==="nev_capacity_vs_msrp" && advItems.length > 2 && (() => {
+            const xs = advItems.map(r=>Number(r.BatteryCapacity??0));
+            const ys = advItems.map(r=>Number(r.MSRP??0));
+            const n = xs.length;
+            const mx = xs.reduce((a,b)=>a+b,0)/n; const my = ys.reduce((a,b)=>a+b,0)/n;
+            let sxy=0,sxx=0,syy=0;
+            for(let i=0;i<n;i++){const dx=xs[i]-mx;const dy=ys[i]-my;sxy+=dx*dy;sxx+=dx*dx;syy+=dy*dy;}
+            const r = sxx>0&&syy>0 ? sxy/Math.sqrt(sxx*syy) : 0;
+            return <div style={{fontSize:12,color:"var(--c-text-muted)",padding:"4px 8px"}}>Pearson r = <strong>{r.toFixed(3)}</strong>{" (n="+n+")"}</div>;
+          })()}
+
+          {/* 8a: metadata-driven range distribution */}
+          {advChart==="nev_range_distribution" && advItems.length > 0 && (() => {
+            const weightedRangeEnd = asMetaNumber(nevKpis?.weightedRangeEnd);
+            const weightedRangeDelta = asMetaNumber(nevKpis?.weightedRangeDelta);
+            const offsetRatio = asMetaNumber(nevKpis?.offsetRatio) ?? 0;
+            return (
+              <>
+                {nevWarnings.map((warning, idx) => (
+                  <div key={warning+idx} className="alert alert-info">{warning}</div>
+                ))}
+
+                {nevFacetPlot.traces.length > 0 && (
+                  <div ref={el => { advChartRef.current = el; }} style={{marginBottom:12}}>
+                    <PlotlyChart
+                      data={applySeriesColors(
+                        applyDataLabelsToTraces(nevFacetPlot.traces, advExport),
+                        advExport.seriesColors,
+                      )}
+                      layout={applyExportToLayout(nevFacetPlot.layout, advExport)}
+                      height={nevFacetPlot.height}
+                    />
+                  </div>
+                )}
+
+                {nevMetricMode === "net_change" && nevAnnualSales.length > 0 && (
+                  <div className="kpi-caption" style={{fontSize:12,color:"var(--c-text-secondary)",marginBottom:8}}>
+                    {"NEV 年度销量：" + nevAnnualSales.map((row) => {
+                      const year = String(row.year ?? "-");
+                      const sales = (asMetaNumber(row.sales) ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
+                      return `${year} ${sales}`;
+                    }).join("｜")}
+                  </div>
+                )}
+
+                {nevMetricMode === "net_change" && nevKpis && (
+                  <div className="kpi-grid" style={{marginBottom:16}}>
+                    <div className="kpi-card kpi-primary">
+                      <div className="kpi-label">{"时间窗净变化"}</div>
+                      <div className="kpi-value">{(asMetaNumber(nevKpis.netChangeTotal) ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                      <div className="kpi-sub">{nevGrowthSpanLabel || "末年-首年"}</div>
+                    </div>
+                    <div className="kpi-card">
+                      <div className="kpi-label">{"|净变化|总量"}</div>
+                      <div className="kpi-value">{(asMetaNumber(nevKpis.absChangeTotal) ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                      <div className="kpi-sub">{"用于判断结构对冲强度"}</div>
+                    </div>
+                    <div className="kpi-card">
+                      <div className="kpi-label">{"结构对冲率"}</div>
+                      <div className="kpi-value">{((asMetaNumber(nevKpis.offsetRatio) ?? 0) * 100).toFixed(1)}%</div>
+                      <div className="kpi-sub">{"越高表示桶间此消彼长越明显"}</div>
+                    </div>
+                    <div className="kpi-card">
+                      <div className="kpi-label">{"销量加权平均续航(末年)"}</div>
+                      <div className="kpi-value">{weightedRangeEnd !== null ? `${weightedRangeEnd.toFixed(1)} km` : "N/A"}</div>
+                      <div className="kpi-sub">{weightedRangeDelta !== null ? `${weightedRangeDelta >= 0 ? "+" : ""}${weightedRangeDelta.toFixed(1)} km vs ${nevStartYearLabel}` : "N/A"}</div>
+                    </div>
+                  </div>
+                )}
+
+                {nevMetricMode === "net_change" && nevPowertrainTokens.length > 0 && (
+                  <div className="kpi-caption" style={{fontSize:12,color:"var(--c-text-secondary)",marginBottom:8}}>
+                    {"净变化贡献：" + nevPowertrainTokens.join("｜")}
+                  </div>
+                )}
+
+                {nevMetricMode === "net_change" && nevTopModelAbsShare !== null && nevTopModelLimit !== null && nevTopModelLimit > 0 && (
+                  <div className="kpi-caption" style={{fontSize:12,color:"var(--c-text-secondary)",marginBottom:8}}>
+                    {`Top${nevTopModelLimit} Model 贡献了 ${(nevTopModelAbsShare * 100).toFixed(1)}% 的 |净变化|。`}
+                  </div>
+                )}
+
+                {nevMetricMode === "net_change" && nevTopModelAbsShare !== null && nevTopModelLimit !== null && nevTopModelLimit > 0 && nevTopModelAbsShare >= 0.7 && (
+                  <div className="alert alert-warning">
+                    {`Top${nevTopModelLimit} |净变化|集中度 ${(nevTopModelAbsShare * 100).toFixed(1)}% >= 70%，结构风险较高，建议关注头部车型波动。`}
+                  </div>
+                )}
+
+                {nevMetricMode === "net_change" && offsetRatio >= 0.85 && (
+                  <div className="alert alert-info">{"对冲率较高：净增背后存在较强的车型结构迁移，建议结合分桶与 Top 车型明细一起看。"}</div>
+                )}
+
+                {nevMetricMode === "net_change" && (nevBucketSummary.length > 0 || nevModelMovers.length > 0) && (
+                  <details style={{marginBottom:4}}>
+                    <summary style={{cursor:"pointer",fontSize:13,color:"var(--c-text-secondary)"}}>{"查看净变化结构拆解"}</summary>
+
+                    {nevBucketSummary.length > 0 && (
+                      <div className="table-wrapper" style={{marginTop:8}}>
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>{"续航分桶(km)"}</th>
+                              <th>{`${nevStartYearLabel}销量`}</th>
+                              <th>{"末年销量"}</th>
+                              <th>{`净变化(${nevGrowthSpanLabel || "末年-首年"})`}</th>
+                              <th>{"净变化贡献"}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {nevBucketSummary.map((row, idx) => (
+                              <tr key={String(row.RangeBandLabel ?? idx)}>
+                                <td>{String(row.RangeBandLabel ?? "-")}</td>
+                                <td>{(asMetaNumber(row.SalesWindowStartYear) ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                <td>{(asMetaNumber(row.SalesWindowEndYear) ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                <td>{(asMetaNumber(row.GrowthWindow) ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                <td>{`${((asMetaNumber(row.NetShare) ?? 0) * 100).toFixed(1)}%`}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {(nevBucketPositive.length > 0 || nevBucketNegative.length > 0) && (
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))",gap:12,marginTop:8}}>
+                        {nevBucketPositive.length > 0 && (
+                          <div className="table-wrapper">
+                            <div style={{fontSize:12,color:"var(--c-text-secondary)",marginBottom:6}}>{"续航分桶净变化 Top 正向"}</div>
+                            <table className="data-table">
+                              <thead><tr><th>{"续航分桶(km)"}</th><th>{`净变化(${nevGrowthSpanLabel || "末年-首年"})`}</th><th>{"净变化贡献"}</th></tr></thead>
+                              <tbody>
+                                {nevBucketPositive.map((row, idx) => (
+                                  <tr key={`pos-${String(row.RangeBandLabel ?? idx)}`}>
+                                    <td>{String(row.RangeBandLabel ?? "-")}</td>
+                                    <td>{(asMetaNumber(row.GrowthWindow) ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                    <td>{`${((asMetaNumber(row.NetShare) ?? 0) * 100).toFixed(1)}%`}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        {nevBucketNegative.length > 0 && (
+                          <div className="table-wrapper">
+                            <div style={{fontSize:12,color:"var(--c-text-secondary)",marginBottom:6}}>{"续航分桶净变化 Top 负向"}</div>
+                            <table className="data-table">
+                              <thead><tr><th>{"续航分桶(km)"}</th><th>{`净变化(${nevGrowthSpanLabel || "末年-首年"})`}</th><th>{"净变化贡献"}</th></tr></thead>
+                              <tbody>
+                                {nevBucketNegative.map((row, idx) => (
+                                  <tr key={`neg-${String(row.RangeBandLabel ?? idx)}`}>
+                                    <td>{String(row.RangeBandLabel ?? "-")}</td>
+                                    <td>{(asMetaNumber(row.GrowthWindow) ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                    <td>{`${((asMetaNumber(row.NetShare) ?? 0) * 100).toFixed(1)}%`}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {nevModelMovers.length > 0 && (
+                      <div className="table-wrapper" style={{marginTop:8}}>
+                        <div style={{fontSize:12,color:"var(--c-text-secondary)",marginBottom:6}}>{"Top 车型（按 |净变化| 排序）"}</div>
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>{"Model"}</th>
+                              <th>{`${nevStartYearLabel}销量`}</th>
+                              <th>{"末年销量"}</th>
+                              <th>{`净变化(${nevGrowthSpanLabel || "末年-首年"})`}</th>
+                              <th>{"|净变化|"}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {nevModelMovers.map((row, idx) => (
+                              <tr key={String(row.Model ?? idx)}>
+                                <td>{String(row.Model ?? "-")}</td>
+                                <td>{(asMetaNumber(row.SalesWindowStartYear) ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                <td>{(asMetaNumber(row.SalesWindowEndYear) ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                <td>{(asMetaNumber(row.GrowthWindow) ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                <td>{(asMetaNumber(row.GrowthAbsWindow) ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {(nevModelGains.length > 0 || nevModelDeclines.length > 0) && (
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))",gap:12,marginTop:8}}>
+                        {nevModelGains.length > 0 && (
+                          <div className="table-wrapper">
+                            <div style={{fontSize:12,color:"var(--c-text-secondary)",marginBottom:6}}>{`Top${nevTopModelLimit ?? nevModelGains.length} 正向车型`}</div>
+                            <table className="data-table">
+                              <thead><tr><th>{"Model"}</th><th>{`净变化(${nevGrowthSpanLabel || "末年-首年"})`}</th></tr></thead>
+                              <tbody>
+                                {nevModelGains.map((row, idx) => (
+                                  <tr key={`gain-${String(row.Model ?? idx)}`}>
+                                    <td>{String(row.Model ?? "-")}</td>
+                                    <td>{(asMetaNumber(row.GrowthWindow) ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        {nevModelDeclines.length > 0 && (
+                          <div className="table-wrapper">
+                            <div style={{fontSize:12,color:"var(--c-text-secondary)",marginBottom:6}}>{`Top${nevTopModelLimit ?? nevModelDeclines.length} 负向车型`}</div>
+                            <table className="data-table">
+                              <thead><tr><th>{"Model"}</th><th>{`净变化(${nevGrowthSpanLabel || "末年-首年"})`}</th></tr></thead>
+                              <tbody>
+                                {nevModelDeclines.map((row, idx) => (
+                                  <tr key={`decline-${String(row.Model ?? idx)}`}>
+                                    <td>{String(row.Model ?? "-")}</td>
+                                    <td>{(asMetaNumber(row.GrowthWindow) ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </details>
+                )}
+              </>
+            );
+          })()}
+
+          {/* stacked bar */}
+          {STACKED_CHARTS.has(advChart) && advChart !== "nev_range_distribution" && stackData.length > 0 && (() => {
+            const xKey = advChart==="segment_share_by_length"?"LengthBand":"PriceBand";
+            const isPtStack = advChart === "powertrain_vs_price";
+            const isHorizontal = false;
+            /* compute per-xKey totals for percentage labels */
+            const xTotals = new Map<unknown, number>();
+            for (const r of stackData) {
+              const x = r[xKey];
+              let total = 0;
+              for (const k of stackKeys) total += Number(r[k] ?? 0);
+              xTotals.set(x, total);
+            }
+            const traces: Data[] = stackKeys.map((k, i) => ({
+              ...(isHorizontal
+                ? { y: stackData.map(r => r[xKey] as number), x: stackData.map(r => Number(r[k] ?? 0)), orientation: "h" as const }
+                : { x: stackData.map(r => r[xKey] as number), y: stackData.map(r => Number(r[k] ?? 0)) }),
+              type: "bar" as const,
+              name: k,
+              marker: { color: seriesColor(k, i, advPalette, isPtStack) },
+              ...(advChart === "segment_share_by_length" ? {
+                text: stackData.map(r => { const v = Number(r[k] ?? 0); const t = xTotals.get(r[xKey]) ?? 1; return t > 0 ? (v / t * 100).toFixed(0) + "%" : ""; }),
+                textposition: "inside" as const,
+                textfont: { size: 10, color: "#fff" },
+              } : {}),
+            }));
+            return (
+              <div ref={el => { advChartRef.current = el; }}>
+                <PlotlyChart
+                  data={applySeriesColors(applyDataLabelsToTraces(traces, advExport), advExport.seriesColors)}
+                  layout={applyExportToLayout({
+                    barmode: "stack",
+                    ...(isHorizontal
+                      ? { yaxis: { title: { text: xKey }, autorange: "reversed" as const }, xaxis: { title: { text: "Sales" } } }
+                      : { xaxis: { title: { text: xKey }, tickangle: -45 }, yaxis: { title: { text: "Sales" } } }),
+                  }, advExport)}
+                  height={450}
+                />
+              </div>
+            );
+          })()}
+
+          {/* price migration area/line */}
+          {advChart==="price_migration" && migrationData.length > 0 && (() => {
+            const isArea = advMigrationMode === "area";
+            const traces: Data[] = migrationYears.map((yr, i) => ({
+              x: migrationData.map(r => r.priceBand as number),
+              y: migrationData.map(r => Number(r[yr] ?? 0)),
+              type: "scatter" as const,
+              mode: "lines" as const,
+              ...(isArea ? { fill: "tozeroy" as const, fillcolor: advPalette[i % advPalette.length] + "26" } : {}),
+              name: yr,
+              line: { color: advPalette[i % advPalette.length], width: 2 },
+            }));
+            return (
+              <div ref={el => { advChartRef.current = el; }}>
+                <PlotlyChart
+                  data={applyDataLabelsToTraces(traces, advExport)}
+                  layout={applyExportToLayout({
+                    xaxis: { title: { text: "\u4ef7\u683c\u5e26" }, tickangle: -45 },
+                    yaxis: { title: { text: "Sales" } },
+                  }, advExport)}
+                  height={450}
+                />
+              </div>
+            );
+          })()}
+
+          {/* heatmap — B8: Plotly heatmap instead of HTML table */}
+          {advChart==="seasonality_heatmap" && hmYears.length > 0 && (() => {
+            const z = hmYears.map(y => months.map(m => hmVal(y, m)));
+            const heatTraces: Data[] = [{
+              z, x: months, y: hmYears,
+              type: "heatmap" as const,
+              colorscale: advHeatmapScale,
+              hoverongaps: false,
+              hovertemplate: "Year: %{y}<br>Month: %{x}<br>Sales: %{z:,.0f}<extra></extra>",
+            } as Data];
+            return (
+              <div ref={el => { advChartRef.current = el; }}>
+                <PlotlyChart
+                  data={applyDataLabelsToTraces(heatTraces, advExport)}
+                  layout={applyExportToLayout({
+                    xaxis: { title: { text: "Month" } },
+                    yaxis: { title: { text: "Year" }, autorange: "reversed" as const },
+                  }, advExport)}
+                  height={400}
+                />
+              </div>
+            );
+          })()}
+
+          {/* RV Finance Dashboard (inline within advanced analysis) */}
+          {advChart==="rv_finance_dashboard" && <RvFinanceDashboard />}
+
+          {advChart!=="rv_finance_dashboard" && advItems.length===0 && !advLoading && <div className="chart-empty">{"\u70b9\u51fb\u300c\u52a0\u8f7d\u56fe\u8868\u300d\u67e5\u770b\u5206\u6790\u7ed3\u679c"}</div>}
+          <ExportPanel value={advExport} onChange={setAdvExport} graphDiv={advChartRef.current} labelModeOptions={advLabelModeOptions} />
+        </div>
+
+        {/* ── Bug 2: Model Version Bubble ─────────────── */}
+        <div className="card">
+          <div className="card-title">{"\ud83d\udca0 \u7248\u578b\u6c14\u6ce1\u56fe\uff08\u5355 Model \u4e0d\u540c\u7248\u578b\uff09"}</div>
+          <div className="adv-controls">
+            <div className="filter-group"><label>Model</label>
+              <input type="text" placeholder="\u8f93\u5165 Model \u540d\u79f0" value={mvModelName}
+                onChange={e=>setMvModelName(e.target.value)}
+                style={{width:180}} />
+            </div>
+            <div className="filter-group"><label>Top N</label>
+              <input type="number" value={mvTopN} min={5} max={200} style={{width:60}}
+                onChange={e=>setMvTopN(Number(e.target.value)||50)} />
+            </div>
+            <div className="filter-group"><label>{"\u7740\u8272"}</label>
+              <select value={mvColorBy} onChange={e=>setMvColorBy(e.target.value as "Powertrain"|"Trim")}>
+                <option value="Powertrain">{"\u52a8\u529b\u603b\u6210"}</option>
+                <option value="Trim">Trim</option>
+              </select>
+            </div>
+            <button className="btn btn-primary" disabled={mvLoading||!mvModelName.trim()} onClick={loadModelVersions}>
+              {mvLoading?"\u52a0\u8f7d\u4e2d\u2026":"\u52a0\u8f7d\u7248\u578b"}
+            </button>
+          </div>
+          {/* Model filter quick pick */}
+          {selections.model.length > 0 && (
+            <div className="mv-quick-pick">
+              <span>{"\u5feb\u9009\uff1a"}</span>
+              {selections.model.map(m=>(
+                <button key={m} className={"btn btn-sm "+(mvModelName===m?"btn-primary":"btn-secondary")}
+                  onClick={()=>setMvModelName(m)}>{m}</button>
+              ))}
+            </div>
+          )}
+          {mvItems.length > 0 && (() => {
+            const isPtBubble = mvColorBy === "Powertrain";
+            const cats = [...new Set(mvItems.map(r=>r[mvColorBy]))];
+            const mvMaxSales = Math.max(1, ...mvItems.map(r => r.Sales));
+            const mvSizeMax = 30;
+            const traces: Data[] = cats.map((cat, i) => {
+              const subset = mvItems.filter(r=>r[mvColorBy]===cat);
+              return withExportLabels({
+                x: subset.map(r => r.Length),
+                y: subset.map(r => r.MSRP),
+                text: subset.map(r => r.Version),
+                customdata: subset.map(r => [r.Trim, r.Powertrain, Math.round(r.Sales)]),
+                type: "scatter",
+                mode: "markers",
+                name: cat,
+                marker: {
+                  color: seriesColor(cat, i, mvPalette, isPtBubble),
+                  size: subset.map(r => Math.max(5, Math.sqrt(Math.max(1, r.Sales) / mvMaxSales) * mvSizeMax)),
+                  sizemode: "area" as const,
+                  opacity: 0.7,
+                },
+                hovertemplate: "<b>%{text}</b><br>Trim: %{customdata[0]}<br>动力: %{customdata[1]}<br>车长: %{x} mm<br>MSRP: %{y:,.0f}<br>销量: %{customdata[2]}<extra>%{fullData.name}</extra>",
+              } as Data, {
+                sales: subset.map(r => Math.round(r.Sales)),
+                value: subset.map(r => r.MSRP),
+                series: subset.map(() => cat),
+              }) as Data;
+            });
+            return (
+              <div ref={el => { mvChartRef.current = el; }}>
+                <PlotlyChart
+                  data={traces}
+                  layout={applyExportToLayout({
+                    xaxis: { title: { text: "车长(mm)" } },
+                    yaxis: { title: { text: "MSRP" } },
+                  }, mvExport)}
+                  height={500}
+                />
+              </div>
+            );
+          })()}
+          {mvItems.length===0 && !mvLoading && <div className="chart-empty">{"\u8f93\u5165 Model \u540d\u79f0\u5e76\u70b9\u51fb\u300c\u52a0\u8f7d\u7248\u578b\u300d"}</div>}
+          <ExportPanel value={mvExport} onChange={setMvExport} graphDiv={mvChartRef.current} labelModeOptions={mvLabelModeOptions} />
+        </div>
+
+        {/* ── Bug 3: OJ Positioning Map ───────────────── */}
+        <div className="card">
+          <div className="card-title">{"\ud83d\udccd OJ \u5b9a\u4f4d\u5b9a\u4ef7\u56fe"}</div>
+          <div className="adv-controls" style={{flexWrap:"wrap"}}>
+            <div className="filter-group"><label>{"\u76ee\u6807\u8f66\u957f(mm)"}</label>
+              <input type="number" placeholder="4500" value={pmTargetLength}
+                onChange={e=>setPmTargetLength(e.target.value)} style={{width:100}} />
+            </div>
+            <div className="filter-group"><label>{"\u76ee\u6807 MSRP"}</label>
+              <input type="number" placeholder="30000" value={pmTargetMsrp}
+                onChange={e=>setPmTargetMsrp(e.target.value)} style={{width:100}} />
+            </div>
+            <div className="filter-group"><label>{"\u8f66\u957f\u7a97\u53e3(mm)"}</label>
+              <input type="number" value={pmLengthRange} min={100} max={2000} step={100} style={{width:80}}
+                onChange={e=>setPmLengthRange(Number(e.target.value)||600)} />
+            </div>
+            <div className="filter-group"><label>{"\u805a\u7c7b\u6570"}</label>
+              <input type="number" value={pmNClusters} min={2} max={10} style={{width:56}}
+                onChange={e=>setPmNClusters(Number(e.target.value)||4)} />
+            </div>
+            <div className="filter-group"><label>Top N</label>
+              <input type="number" value={pmTopN} min={10} max={300} style={{width:60}}
+                onChange={e=>setPmTopN(Number(e.target.value)||80)} />
+            </div>
+            <button className="btn btn-primary" disabled={pmLoading} onClick={loadPositioningMap}>
+              {pmLoading?"\u52a0\u8f7d\u4e2d\u2026":"\u52a0\u8f7d\u5b9a\u4f4d\u56fe"}
+            </button>
+          </div>
+          {/* manual competitor input */}
+          <div className="pm-competitor-bar">
+            <label>{"\u624b\u52a8\u6307\u5b9a\u7ade\u54c1\u54c1\u724c\uff1a"}</label>
+            <input type="text" placeholder="\u8f93\u5165\u54c1\u724c\u540d\u79f0\u2026" value={pmManualInput}
+              onChange={e=>setPmManualInput(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter") addCompetitor();}}
+              style={{width:150}} />
+            <button className="btn btn-sm btn-secondary" onClick={addCompetitor}>{"\u6dfb\u52a0"}</button>
+            {pmManualCompetitors.map(c=>(
+              <span key={c} className="pm-competitor-chip">
+                {c}
+                <button className="pm-chip-remove" onClick={()=>setPmManualCompetitors(p=>p.filter(x=>x!==c))}>{"\u00d7"}</button>
+              </span>
+            ))}
+          </div>
+          {/* cluster top 3 */}
+          {pmClusterTop3.length > 0 && (
+            <div className="pm-cluster-top3">
+              <span>{"\ud83c\udfc6 KMeans \u9500\u91cf Top3 \u805a\u7c7b\u4ee3\u8868\uff1a"}</span>
+              {pmClusterTop3.map(c=><span key={c} className="pm-top3-label">{c}</span>)}
+            </div>
+          )}
+          {pmItems.length > 0 && (() => {
+            const clusterIds = [...new Set(pmItems.map(r=>r.cluster))].sort((a,b)=>a-b);
+            const pmMax = Math.max(1, ...pmItems.map(p => p.Sales));
+            const traces: Data[] = clusterIds.map((cid, i) => {
+              const subset = pmItems.filter(r=>r.cluster===cid);
+              return withExportLabels({
+                x: subset.map(r => r.Length),
+                y: subset.map(r => r.MSRP),
+                text: subset.map(r => r.Brand + " " + r.Model),
+                customdata: subset.map(r => [r.Segment, Math.round(r.Sales), r.cluster]),
+                type: "scatter",
+                mode: "markers",
+                name: "Cluster " + cid,
+                marker: {
+                  color: pmPalette[i % pmPalette.length],
+                  size: subset.map(r => Math.max(5, Math.sqrt(Math.max(1, r.Sales) / pmMax) * 30)),
+                  sizemode: "area" as const,
+                },
+                hovertemplate: "<b>%{text}</b><br>\u7ec6\u5206: %{customdata[0]}<br>\u8f66\u957f: %{x} mm<br>MSRP: %{y:,.0f}<br>\u9500\u91cf: %{customdata[1]}<br>\u805a\u7c7b: %{customdata[2]}<extra>%{fullData.name}</extra>",
+              } as Data, {
+                model: subset.map(r => r.Model),
+                sales: subset.map(r => Math.round(r.Sales)),
+                value: subset.map(r => r.MSRP),
+                series: subset.map(() => `聚类 ${cid}`),
+              }) as Data;
+            });
+            if (pmTarget) {
+              traces.push(withExportLabels({
+                x: [pmTarget.Length],
+                y: [pmTarget.MSRP],
+                text: ["\u76ee\u6807\u8f66\u578b"],
+                type: "scatter",
+                mode: "markers",
+                name: "\u76ee\u6807\u8f66\u578b",
+                marker: { color: "#ef4444", size: 16, symbol: "diamond" },
+                hovertemplate: "<b>\u76ee\u6807\u8f66\u578b</b><br>\u8f66\u957f: %{x} mm<br>MSRP: %{y:,.0f}<extra>%{fullData.name}</extra>",
+              } as Data, {
+                model: ["\u76ee\u6807\u8f66\u578b"],
+                sales: [""],
+                value: [pmTarget.MSRP],
+                series: ["\u76ee\u6807\u8f66\u578b"],
+              }) as Data);
+            }
+            return (
+              <div ref={el => { pmChartRef.current = el; }}>
+                <PlotlyChart
+                  data={traces}
+                  layout={applyExportToLayout({
+                    xaxis: { title: { text: "\u8f66\u957f(mm)" } },
+                    yaxis: { title: { text: "MSRP" } },
+                  }, pmExport)}
+                  height={520}
+                />
+              </div>
+            );
+          })()}
+          {pmItems.length===0 && !pmLoading && <div className="chart-empty">{"\u8f93\u5165\u76ee\u6807\u8f66\u578b\u53c2\u6570\u6216\u76f4\u63a5\u70b9\u51fb\u300c\u52a0\u8f7d\u5b9a\u4f4d\u56fe\u300d\u67e5\u770b\u5f53\u524d\u7b5b\u9009\u8fb9\u754c\u5185\u5b9a\u4ef7"}</div>}
+          <ExportPanel value={pmExport} onChange={setPmExport} graphDiv={pmChartRef.current} labelModeOptions={pmLabelModeOptions} />
+        </div>
+
+        {/* ── Detail table ────────────────────────────── */}
+        <div className="card">
+          <div className="card-title">{"\u660e\u7ec6\u6570\u636e\u9884\u89c8"}</div>
+          <div className="detail-toolbar">
+            <button className="btn btn-primary" disabled={!columns.length||detailLoading} onClick={()=>loadDetail(1)}>{detailLoading?"\u52a0\u8f7d\u4e2d\u2026":"\u52a0\u8f7d\u660e\u7ec6"}</button>
+            <button className="btn btn-accent" disabled={!columns.length} onClick={exportCsv}>{"CSV \u4e0b\u8f7d"}</button>
+            <label className="chart-mode-label" style={{gap:6}}>
+              <input type="checkbox" checked={excludeZeroSales} onChange={e=>setExcludeZeroSales(e.target.checked)} />
+              {"\u4ec5\u663e\u793a\u6709\u9500\u91cf\u7248\u578b"}
+            </label>
+          </div>
+          <div className="col-picker">
+            {columns.map(c=>(<span key={c} className={"col-chip"+(selectedCols.includes(c)?" selected":"")}
+              onClick={()=>setSelectedCols(p=>p.includes(c)?p.filter(x=>x!==c):[...p,c])}>{c}</span>))}
+          </div>
+          {detailLoading && <div className="loading-banner"><span className="spinner" />{" \u52a0\u8f7d\u660e\u7ec6\u4e2d\u2026"}</div>}
+          <div className="table-wrapper">
+            <table className="data-table"><thead><tr>
+              {(selectedCols.length?selectedCols:columns.slice(0,8)).map(c=><th key={c}>{c}</th>)}
+            </tr></thead><tbody>
+              {(detail?.items??[]).map((row,i)=>(<tr key={i}>
+                {(selectedCols.length?selectedCols:columns.slice(0,8)).map(c=><td key={c}>{String((row as Record<string,unknown>)[c]??"")}</td>)}
+              </tr>))}
+              {!detail?.items?.length && !detailLoading && (
+                <tr><td colSpan={selectedCols.length||8} style={{textAlign:"center",color:"var(--c-text-muted)",padding:24}}>{"\u70b9\u51fb\u300c\u52a0\u8f7d\u660e\u7ec6\u300d\u67e5\u770b\u6570\u636e"}</td></tr>
+              )}
+            </tbody></table>
+          </div>
+          <div className="pagination">
+            <span>{"\u7b2c "+(detail?.page??detailPage)+" \u9875 \u00b7 \u5171 "+(detail?.total??0).toLocaleString()+" \u6761"}</span>
+            <div className="btn-group">
+              <button className="btn btn-sm btn-secondary" disabled={detailLoading||detailPage<=1} onClick={()=>loadDetail(detailPage-1)}>{"\u4e0a\u4e00\u9875"}</button>
+              <button className="btn btn-sm btn-secondary" disabled={detailLoading||!detail||detail.items.length<detailPageSize} onClick={()=>loadDetail(detailPage+1)}>{"\u4e0b\u4e00\u9875"}</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}

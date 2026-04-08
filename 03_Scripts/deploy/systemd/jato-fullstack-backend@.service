@@ -1,0 +1,27 @@
+[Unit]
+Description=JATO Fullstack FastAPI backend on port %i
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/JATO_Analysis_System/06_AppPlatform/backend
+
+# Recommended: run as a non-root user.
+# User=deploy
+# Group=deploy
+
+EnvironmentFile=-/etc/jato-fullstack/backend.env
+Environment=PYTHONUNBUFFERED=1
+Environment=APP_PROJECT_ROOT=/opt/JATO_Analysis_System
+Environment=PYTHONPATH=/opt/JATO_Analysis_System/06_AppPlatform/backend
+
+ExecStart=/opt/JATO_Analysis_System/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port %i
+
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+KillMode=mixed
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
