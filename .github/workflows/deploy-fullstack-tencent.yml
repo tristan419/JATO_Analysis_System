@@ -82,7 +82,7 @@ jobs:
             VITE_USER_ROLE="${{ vars.FULLSTACK_VITE_USER_ROLE }}"
             VITE_USER_NAME="${{ vars.FULLSTACK_VITE_USER_NAME }}"
 
-            export REPO_DIR="${REPO_DIR:-/opt/JATO_Analysis_System}"
+            export REPO_DIR="${REPO_DIR:-/opt/JATO_Analysis_System-main}"
             export BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@8000}"
             export VITE_API_BASE="${VITE_API_BASE:-/v1}"
             export VITE_USER_ROLE="${VITE_USER_ROLE:-viewer}"
