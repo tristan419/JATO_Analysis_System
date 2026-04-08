@@ -125,9 +125,9 @@ CURRENT_STEP="Validate Node.js version"
 log_section "$CURRENT_STEP"
 node - <<'EOF'
 const [major, minor, patch] = process.versions.node.split('.').map(Number);
-const ok = (major === 20 && (minor > 19 || (minor === 19 && patch >= 0))) || (major === 22 && minor >= 12) || major > 22;
+const ok = (major === 20 && minor >= 10) || (major === 22 && minor >= 0) || major > 22;
 if (!ok) {
-  console.error(`[ERROR] Node.js ${process.versions.node} detected. Need 20.19+ or 22.12+.`);
+  console.error(`[ERROR] Node.js ${process.versions.node} detected. Need 20.10+ or 22.x+.`);
   process.exit(1);
 }
 console.log(`[INFO] Node.js ${process.versions.node}`);

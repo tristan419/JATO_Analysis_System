@@ -106,8 +106,18 @@ jobs:
             echo "[INFO] Extracting deploy archive to $REPO_DIR …"
             sudo mkdir -p "$REPO_DIR"
             sudo chown -R "$USER":"$USER" "$REPO_DIR"
+
+            echo "[DEBUG] Checking archive at /tmp …"
+            ls -lh /tmp/JATO_deploy.tar.gz 2>&1 || { echo "[ERROR] Archive not found"; ls /tmp/ | grep -i jato || true; exit 1; }
+
             sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR"
             rm -f /tmp/JATO_deploy.tar.gz
+
+            echo "[DEBUG] Checking deploy artefacts …"
+            ls "$REPO_DIR/03_Scripts/deploy_fullstack_server.sh"
+            echo "[DEBUG] node=$(which node 2>&1 || echo MISSING) npm=$(which npm 2>&1 || echo MISSING)"
+            node -v 2>&1 || true
+            echo "[DEBUG] python venv=$REPO_DIR/.venv/bin/python exists=$(test -x $REPO_DIR/.venv/bin/python && echo yes || echo no)"
 
             cd "$REPO_DIR"
             bash 03_Scripts/deploy_fullstack_server.sh
