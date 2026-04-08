@@ -92,6 +92,7 @@ jobs:
             # Extract fresh code pushed by GitHub Actions (no server→GitHub needed)
             echo "[INFO] Extracting deploy archive to $REPO_DIR …"
             sudo mkdir -p "$REPO_DIR"
+            sudo chown -R "$USER":"$USER" "$REPO_DIR"
             sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR"
             rm -f /tmp/JATO_deploy.tar.gz
 
