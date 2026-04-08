@@ -86,29 +86,22 @@ jobs:
           password: ${{ secrets.SSH_PASSWORD }}
           command_timeout: 20m
           script: |
+            set -euo pipefail
             REPO_DIR="/opt/JATO_Analysis_System-main"
-            LOGFILE="/tmp/_jato_deploy.log"
 
-            {
-              echo "=== Deploy started at $(date -u) ==="
-              echo "USER=$USER"
+            echo "[INFO] Extracting deploy archive …"
+            sudo mkdir -p "$REPO_DIR"
+            sudo chown -R "$USER":"$USER" "$REPO_DIR"
+            sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR"
+            rm -f /tmp/JATO_deploy.tar.gz
 
-              echo "--- Extract archive ---"
-              sudo mkdir -p "$REPO_DIR"
-              sudo chown -R "$USER":"$USER" "$REPO_DIR"
-              sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR" && echo "EXTRACT OK" || echo "EXTRACT FAILED $?"
-              rm -f /tmp/JATO_deploy.tar.gz
+            cd "$REPO_DIR"
+            export REPO_DIR SKIP_GIT_SYNC=true
+            export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
+            export VITE_API_BASE="/v1"
+            export VITE_USER_ROLE="viewer"
+            export VITE_USER_NAME="github-actions"
+            bash 03_Scripts/deploy_fullstack_server.sh
 
-              echo "--- Run deploy script ---"
-              cd "$REPO_DIR"
-              export REPO_DIR SKIP_GIT_SYNC=true
-              export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
-              export VITE_API_BASE="/v1"
-              export VITE_USER_ROLE="viewer"
-              export VITE_USER_NAME="github-actions"
-              bash 03_Scripts/deploy_fullstack_server.sh 2>&1
-              echo "=== Deploy exit code: $? at $(date -u) ==="
-            } > "$LOGFILE" 2>&1
-
-            tail -80 "$LOGFILE"
-            grep -q "Deployment finished successfully" "$LOGFILE"
+            echo "[CI] Deploy completed, verifying health …"
+            curl -fsS http://127.0.0.1:8000/healthz

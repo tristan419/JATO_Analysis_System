@@ -186,6 +186,7 @@ if ! sudo -n systemctl cat "$BACKEND_SERVICE_NAME" >/dev/null 2>&1; then
   exit 1
 fi
 sudo -n systemctl restart "$BACKEND_SERVICE_NAME"
+sleep 2
 sudo -n systemctl --no-pager status "$BACKEND_SERVICE_NAME" | head -n 30
 
 if systemctl is-active --quiet nginx; then
@@ -198,7 +199,18 @@ fi
 echo "[INFO] Verify backend health"
 CURRENT_STEP="Verify backend health"
 log_section "$CURRENT_STEP"
-curl -fsS "http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null
+for i in 1 2 3 4 5; do
+  if curl -fsS "http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null 2>&1; then
+    echo "[INFO] Health check passed on attempt $i"
+    break
+  fi
+  if [[ "$i" -eq 5 ]]; then
+    echo "[ERROR] Health check failed after 5 attempts"
+    exit 1
+  fi
+  echo "[INFO] Health check attempt $i failed, retrying in 2s …"
+  sleep 2
+done
 
 echo "[INFO] Current revision"
 CURRENT_STEP="Print revision"
