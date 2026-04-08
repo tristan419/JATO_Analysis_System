@@ -23,7 +23,7 @@ VITE_USER_ROLE="${VITE_USER_ROLE:-viewer}"
 VITE_USER_NAME="${VITE_USER_NAME:-anonymous}"
 
 # ── China-friendly mirror defaults ──
-NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
+NPM_REGISTRY="${NPM_REGISTRY:-https://mirrors.cloud.tencent.com/npm/}"
 PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
 
