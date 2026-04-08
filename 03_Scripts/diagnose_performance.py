@@ -16,7 +16,7 @@ def measure_load_time():
     print("=" * 60)
     print("JATO Dashboard 性能诊断")
     print("=" * 60)
-    
+
     # 测试1: 导入模块时间
     print("\n[1/5] 测试模块导入时间...")
     start = time.time()
@@ -28,11 +28,11 @@ def measure_load_time():
     )
     import_time = time.time() - start
     print(f"✓ 模块导入耗时: {import_time:.3f}s")
-    
+
     # 获取数据路径
     data_path = str(get_project_root() / "04_Processed_data" / "partitioned_dataset_v1")
     dataset_version = get_dataset_version_token(data_path)
-    
+
     # 测试2: 加载列名（schema）
     print("\n[2/5] 测试加载列名...")
     start = time.time()
@@ -40,7 +40,7 @@ def measure_load_time():
     schema_time = time.time() - start
     print(f"✓ 列名加载耗时: {schema_time:.3f}s")
     print(f"  - 列数量: {len(columns)}")
-    
+
     # 测试3: 首次加载数据（sidebar范围）
     print("\n[3/5] 测试首次加载数据（sidebar范围）...")
     start = time.time()
@@ -53,7 +53,7 @@ def measure_load_time():
     sidebar_time = time.time() - start
     print(f"✓ Sidebar数据加载耗时: {sidebar_time:.3f}s")
     print(f"  - 数据行数: {len(df_sidebar)}")
-    
+
     # 测试4: 第二次加载（测试缓存）
     print("\n[4/5] 测试缓存命中...")
     start = time.time()
@@ -67,7 +67,7 @@ def measure_load_time():
     print(f"✓ 缓存命中耗时: {cache_time:.3f}s")
     if cache_time > 0:
         print(f"  - 加速比: {sidebar_time/cache_time:.1f}x")
-    
+
     # 测试5: 加载分析数据
     print("\n[5/5] 测试分析数据加载...")
     start = time.time()
@@ -79,7 +79,7 @@ def measure_load_time():
     analysis_time = time.time() - start
     print(f"✓ Analysis数据加载耗时: {analysis_time:.3f}s")
     print(f"  - 数据行数: {len(df_analysis)}")
-    
+
     # 总结
     print("\n" + "=" * 60)
     print("性能总结:")
