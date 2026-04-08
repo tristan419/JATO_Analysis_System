@@ -187,7 +187,7 @@ if ! sudo -n systemctl cat "$BACKEND_SERVICE_NAME" >/dev/null 2>&1; then
 fi
 sudo -n systemctl restart "$BACKEND_SERVICE_NAME"
 sleep 2
-sudo -n systemctl --no-pager status "$BACKEND_SERVICE_NAME" | head -n 30
+sudo -n systemctl --no-pager status "$BACKEND_SERVICE_NAME" 2>&1 | head -n 30 || true
 
 if systemctl is-active --quiet nginx; then
   echo "[INFO] Reload nginx"

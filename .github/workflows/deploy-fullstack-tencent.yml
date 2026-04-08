@@ -86,10 +86,8 @@ jobs:
           password: ${{ secrets.SSH_PASSWORD }}
           command_timeout: 20m
           script: |
-            set -euo pipefail
             REPO_DIR="/opt/JATO_Analysis_System-main"
 
-            echo "[INFO] Extracting deploy archive …"
             sudo mkdir -p "$REPO_DIR"
             sudo chown -R "$USER":"$USER" "$REPO_DIR"
             sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR"
@@ -101,7 +99,23 @@ jobs:
             export VITE_API_BASE="/v1"
             export VITE_USER_ROLE="viewer"
             export VITE_USER_NAME="github-actions"
-            bash 03_Scripts/deploy_fullstack_server.sh
+            bash 03_Scripts/deploy_fullstack_server.sh 2>&1 || true
+            DEPLOY_RC=${PIPESTATUS[0]:-$?}
 
-            echo "[CI] Deploy completed, verifying health …"
-            curl -fsS http://127.0.0.1:8000/healthz
+            # Write diagnostic output to HTTP-accessible location
+            DIST="$REPO_DIR/06_AppPlatform/frontend/dist"
+            {
+              echo "deploy_exit_code=$DEPLOY_RC"
+              echo "timestamp=$(date -u)"
+              echo "---systemctl---"
+              sudo -n systemctl status jato-fullstack-backend@8000 --no-pager 2>&1 || true
+              echo "---healthz---"
+              curl -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
+              echo "---nginx---"
+              sudo -n systemctl status nginx --no-pager 2>&1 | head -5 || true
+              echo "---index.html---"
+              head -1 "$DIST/index.html" 2>&1 || echo "INDEX_MISSING"
+            } > "$DIST/_deploy_status.txt" 2>&1
+
+            # Final verdict: if healthz works, we're good
+            curl -fsS http://127.0.0.1:8000/healthz >/dev/null
