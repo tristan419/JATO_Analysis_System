@@ -14,14 +14,20 @@ FULL_PARQUET_FILE = (
 
 def run(command: list[str], cwd: Path | None = None) -> None:
     joined = " ".join(command)
-    print(f"▶ {joined}")
+    print(f"▶ {joined}", flush=True)
     result = subprocess.run(
         command,
         cwd=str(cwd or PROJECT_ROOT),
         check=False,
         text=True,
+        capture_output=True,
     )
+    if result.stdout:
+        print(result.stdout, end="", flush=True)
     if result.returncode != 0:
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr, flush=True)
+        print(f"✗ exit code {result.returncode}", flush=True)
         raise SystemExit(result.returncode)
 
 
