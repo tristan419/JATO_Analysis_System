@@ -84,40 +84,30 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           password: ${{ secrets.SSH_PASSWORD }}
-          script_stop: true
           command_timeout: 20m
           script: |
-            set -euo pipefail
-
-            REPO_DIR="${{ vars.DEPLOY_REPO_DIR }}"
-            BACKEND_SERVICE_NAME="${{ vars.FULLSTACK_BACKEND_SERVICE_NAME }}"
-            VITE_API_BASE="${{ vars.FULLSTACK_VITE_API_BASE }}"
-            VITE_USER_ROLE="${{ vars.FULLSTACK_VITE_USER_ROLE }}"
-            VITE_USER_NAME="${{ vars.FULLSTACK_VITE_USER_NAME }}"
-
-            export REPO_DIR="${REPO_DIR:-/opt/JATO_Analysis_System-main}"
-            export BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@8000}"
-            export VITE_API_BASE="${VITE_API_BASE:-/v1}"
-            export VITE_USER_ROLE="${VITE_USER_ROLE:-viewer}"
-            export VITE_USER_NAME="${VITE_USER_NAME:-github-actions}"
-            export SKIP_GIT_SYNC=true
-
-            # Extract fresh code pushed by GitHub Actions (no server→GitHub needed)
-            echo "[INFO] Extracting deploy archive to $REPO_DIR …"
+            echo "=== SSH Connected ==="
+            echo "USER=$USER HOME=$HOME"
+            echo "--- Archive check ---"
+            ls -lh /tmp/JATO_deploy.tar.gz || echo "ARCHIVE MISSING"
+            echo "--- Node check ---"
+            which node || echo "node NOT FOUND"
+            node -v || echo "node -v FAILED"
+            which npm || echo "npm NOT FOUND"
+            echo "--- Python check ---"
+            REPO_DIR="/opt/JATO_Analysis_System-main"
+            ls "$REPO_DIR/.venv/bin/python" || echo "VENV MISSING"
+            echo "--- Extract archive ---"
             sudo mkdir -p "$REPO_DIR"
             sudo chown -R "$USER":"$USER" "$REPO_DIR"
-
-            echo "[DEBUG] Checking archive at /tmp …"
-            ls -lh /tmp/JATO_deploy.tar.gz 2>&1 || { echo "[ERROR] Archive not found"; ls /tmp/ | grep -i jato || true; exit 1; }
-
-            sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR"
+            sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR" && echo "EXTRACT OK" || echo "EXTRACT FAILED"
             rm -f /tmp/JATO_deploy.tar.gz
-
-            echo "[DEBUG] Checking deploy artefacts …"
-            ls "$REPO_DIR/03_Scripts/deploy_fullstack_server.sh"
-            echo "[DEBUG] node=$(which node 2>&1 || echo MISSING) npm=$(which npm 2>&1 || echo MISSING)"
-            node -v 2>&1 || true
-            echo "[DEBUG] python venv=$REPO_DIR/.venv/bin/python exists=$(test -x $REPO_DIR/.venv/bin/python && echo yes || echo no)"
-
+            echo "--- Run deploy ---"
             cd "$REPO_DIR"
-            bash 03_Scripts/deploy_fullstack_server.sh
+            export REPO_DIR SKIP_GIT_SYNC=true
+            export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
+            export VITE_API_BASE="/v1"
+            export VITE_USER_ROLE="viewer"
+            export VITE_USER_NAME="github-actions"
+            bash 03_Scripts/deploy_fullstack_server.sh 2>&1 || echo "DEPLOY SCRIPT EXIT CODE: $?"
+            echo "=== Done ==="
