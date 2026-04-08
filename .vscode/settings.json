@@ -5,5 +5,10 @@
             "matchCommandLine": true
         }
     },
-    "chatgpt.openOnStartup": true
+    "chatgpt.openOnStartup": true,
+    "git.env": {
+        "GIT_CURL_VERBOSE": "0"
+    },
+    "git.fetchOnPull": true,
+    "http.proxySupport": "off"
 }
