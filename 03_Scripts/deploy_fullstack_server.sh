@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 REPO_DIR="${REPO_DIR:-/opt/JATO_Analysis_System}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@8000}"
 BACKEND_PORT="${BACKEND_PORT:-}"
 REMOTE_NAME="${REMOTE_NAME:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIAGNOSTIC_SCRIPT="$SCRIPT_DIR/print_fullstack_server_diagnostics.sh"
+CURRENT_STEP="initialization"
 
 BACKEND_DIR="$REPO_DIR/06_AppPlatform/backend"
 FRONTEND_DIR="$REPO_DIR/06_AppPlatform/frontend"
@@ -16,6 +19,32 @@ VITE_API_BASE="${VITE_API_BASE:-/v1}"
 VITE_AUTH_TOKEN="${VITE_AUTH_TOKEN:-}"
 VITE_USER_ROLE="${VITE_USER_ROLE:-viewer}"
 VITE_USER_NAME="${VITE_USER_NAME:-anonymous}"
+
+log_section() {
+  printf '\n[STEP] %s\n' "$1"
+}
+
+run_diagnostics() {
+  if [[ -x "$DIAGNOSTIC_SCRIPT" ]]; then
+    REPO_DIR="$REPO_DIR" \
+    BACKEND_SERVICE_NAME="$BACKEND_SERVICE_NAME" \
+    BACKEND_PORT="$BACKEND_PORT" \
+    bash "$DIAGNOSTIC_SCRIPT" || true
+  fi
+}
+
+on_error() {
+  local line_no="$1"
+  local command="$2"
+  echo
+  echo "[ERROR] deploy_fullstack_server.sh failed"
+  echo "[ERROR] step=$CURRENT_STEP"
+  echo "[ERROR] line=$line_no"
+  echo "[ERROR] command=$command"
+  run_diagnostics
+}
+
+trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
 
 if [[ -z "$BACKEND_PORT" ]]; then
   if [[ "$BACKEND_SERVICE_NAME" =~ @([0-9]+)$ ]]; then
@@ -37,6 +66,12 @@ require_command git
 require_command curl
 require_command npm
 require_command node
+
+CURRENT_STEP="Validate sudo access"
+log_section "$CURRENT_STEP"
+if [[ "$(id -u)" -ne 0 ]]; then
+  sudo -v
+fi
 
 if [[ ! -d "$REPO_DIR/.git" ]]; then
   echo "[ERROR] Git repository not found at $REPO_DIR"
@@ -63,6 +98,8 @@ if [[ ! -x "$VENV_DIR/bin/python" ]]; then
 fi
 
 echo "[INFO] Validate Node.js version"
+CURRENT_STEP="Validate Node.js version"
+log_section "$CURRENT_STEP"
 node - <<'EOF'
 const [major, minor, patch] = process.versions.node.split('.').map(Number);
 const ok = (major === 20 && (minor > 19 || (minor === 19 && patch >= 0))) || (major === 22 && minor >= 12) || major > 22;
@@ -74,17 +111,23 @@ console.log(`[INFO] Node.js ${process.versions.node}`);
 EOF
 
 echo "[INFO] Update repository"
+CURRENT_STEP="Update repository"
+log_section "$CURRENT_STEP"
 cd "$REPO_DIR"
 git fetch "$REMOTE_NAME" "$DEPLOY_BRANCH"
 git checkout "$DEPLOY_BRANCH"
 git pull --ff-only "$REMOTE_NAME" "$DEPLOY_BRANCH"
 
 echo "[INFO] Install backend dependencies"
+CURRENT_STEP="Install backend dependencies"
+log_section "$CURRENT_STEP"
 . "$VENV_DIR/bin/activate"
 python -m pip install --upgrade pip
 pip install -r "$BACKEND_REQUIREMENTS"
 
 echo "[INFO] Build frontend"
+CURRENT_STEP="Build frontend"
+log_section "$CURRENT_STEP"
 cd "$FRONTEND_DIR"
 npm ci
 export VITE_API_BASE
@@ -99,16 +142,30 @@ if [[ ! -f "$FRONTEND_DIR/dist/index.html" ]]; then
 fi
 
 echo "[INFO] Restart backend service"
+CURRENT_STEP="Restart backend service"
+log_section "$CURRENT_STEP"
+if ! sudo -n systemctl cat "$BACKEND_SERVICE_NAME" >/dev/null 2>&1; then
+  echo "[ERROR] systemd service not found: $BACKEND_SERVICE_NAME"
+  echo "        Run bash 03_Scripts/tencent_fullstack_bootstrap.sh first."
+  exit 1
+fi
 sudo -n systemctl restart "$BACKEND_SERVICE_NAME"
 sudo -n systemctl --no-pager status "$BACKEND_SERVICE_NAME" | head -n 30
 
 if systemctl is-active --quiet nginx; then
   echo "[INFO] Reload nginx"
+  CURRENT_STEP="Reload nginx"
+  log_section "$CURRENT_STEP"
   sudo -n systemctl reload nginx
 fi
 
 echo "[INFO] Verify backend health"
+CURRENT_STEP="Verify backend health"
+log_section "$CURRENT_STEP"
 curl -fsS "http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null
 
 echo "[INFO] Current revision"
+CURRENT_STEP="Print revision"
+log_section "$CURRENT_STEP"
 git -C "$REPO_DIR" rev-parse --short HEAD
+echo "[INFO] Deployment finished successfully"

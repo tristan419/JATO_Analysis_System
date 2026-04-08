@@ -7,6 +7,8 @@
 - FastAPI 后端通过 systemd 常驻
 - 服务器更新通过 SSH 拉代码并执行发布脚本
 
+如果你想尽量少输命令，当前推荐直接使用：`bash 03_Scripts/tencent_fullstack_bootstrap.sh`。
+
 ## 1. 目标目录与端口
 
 - 仓库目录：`/opt/JATO_Analysis_System`
@@ -18,6 +20,8 @@
 ## 2. 服务器前置依赖
 
 推荐以 Ubuntu 22.04 或 24.04 为基础镜像。
+
+如果你直接使用一键脚本，这一节的安装动作会自动完成，可以跳到第 3 节。
 
 ```bash
 sudo apt-get update
@@ -54,7 +58,42 @@ pip install -r 06_AppPlatform/backend/requirements.txt
 
 如果服务器不是直接使用你的个人账号，先把仓库目录 owner 调整给实际部署用户。
 
+## 3.1 一键初始化、部署并启动
+
+完成仓库拉取后，直接执行：
+
+```bash
+cd /opt/JATO_Analysis_System
+bash 03_Scripts/tencent_fullstack_bootstrap.sh
+```
+
+常用覆盖参数：
+
+```bash
+cd /opt/JATO_Analysis_System
+SERVER_NAME=your.domain.com \
+BACKEND_PORT=8000 \
+APP_AUTH_TOKEN='你自己的token' \
+VITE_API_BASE=/v1 \
+bash 03_Scripts/tencent_fullstack_bootstrap.sh
+```
+
+这个脚本会自动做完：
+
+- 检查 sudo 权限
+- 安装 Python、Node.js、nginx 等基础依赖
+- 创建 `.venv`
+- 渲染 `/etc/jato-fullstack/backend.env`
+- 安装并启用 `jato-fullstack-backend@8000`
+- 安装前端依赖并构建 `dist`
+- 安装 nginx 配置并重启服务
+- 做本地健康检查
+
+如果脚本失败，终端会自动打印一段以 `BEGIN JATO FULLSTACK DIAGNOSTICS` 开头的诊断块。你把整段复制给我就行。
+
 ## 4. 配置后端环境变量
+
+如果你已经跑过一键脚本，这一节通常已经自动完成；只在你需要手动改 token 或数据路径时再编辑。
 
 复制模板并编辑：
 
@@ -114,6 +153,8 @@ bash 03_Scripts/deploy_fullstack_server.sh
 - `VITE_API_BASE=/v1` 代表前端走同域 API，不把后端地址写死到构建产物里
 - `VITE_AUTH_TOKEN` 默认不建议写进前端构建产物，建议用户首次登录后在页面 Access Control 里填写 token
 
+如果你只是想重新部署代码，不想重复初始化，直接运行这一节的 `03_Scripts/deploy_fullstack_server.sh` 即可。
+
 ## 7. 安装 nginx
 
 ```bash
@@ -165,6 +206,17 @@ curl -fsS http://127.0.0.1/v1/metadata/columns \
 - Dashboard `Load Overview` 成功
 - CRUD 页面能正常分页
 - Network 中 `/v1/...` 请求返回 200
+
+## 9.1 一键打印诊断信息
+
+任何时候只要你想把服务器当前状态贴给我，直接运行：
+
+```bash
+cd /opt/JATO_Analysis_System
+bash 03_Scripts/print_fullstack_server_diagnostics.sh
+```
+
+请从 `BEGIN JATO FULLSTACK DIAGNOSTICS` 到 `END JATO FULLSTACK DIAGNOSTICS` 整段复制。
 
 ## 10. 后续自动部署
 
