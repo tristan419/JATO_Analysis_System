@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import Plotly from "plotly.js-dist-min";
 import type { Data, Layout } from "plotly.js";
 
 export type ExportLabelMode =
@@ -242,7 +241,6 @@ function getSeriesDefaultColor(name: string, fallback: string): string {
   return FIXED_POWERTRAIN_COLORS[name.toUpperCase()] ?? fallback;
 }
 
-/* ── B9: apply data labels to trace-level properties ── */
 export function applyDataLabelsToTraces(traces: Data[], s: ExportSettings): Data[] {
   if (s.dataLabelMode === "off") return traces;
   const pos = s.dataLabelPosition === "auto" ? undefined : s.dataLabelPosition;
@@ -321,7 +319,6 @@ export function applyDataLabelsToTraces(traces: Data[], s: ExportSettings): Data
   });
 }
 
-/* ── B10: apply per-series manual colors ── */
 export function applySeriesColors(traces: Data[], colors: Record<string, string>): Data[] {
   if (!colors || Object.keys(colors).length === 0) return traces;
   return traces.map(tr => {
@@ -337,8 +334,9 @@ export function applySeriesColors(traces: Data[], colors: Record<string, string>
   });
 }
 
-export function downloadPng(graphDiv: HTMLElement | null, settings: ExportSettings) {
+export async function downloadPng(graphDiv: HTMLElement | null, settings: ExportSettings) {
   if (!graphDiv) return;
+  const { default: Plotly } = await import("plotly.js-dist-min");
   Plotly.downloadImage(graphDiv, {
     format: "png", width: settings.exportWidth, height: settings.exportHeight,
     filename: settings.chartTitle || "jato_export",
@@ -461,7 +459,6 @@ export function ExportPanel({ value: s, onChange, graphDiv, seriesNames, labelMo
                 onChange={e => set("decimalPlaces", Math.max(0, Math.min(4, Number(e.target.value) || 0)))} />
             </div>
           </div>
-          {/* B10: per-series color pickers */}
           {seriesNames && seriesNames.length > 0 && seriesNames.length <= 30 && (
             <div className="export-row" style={{flexWrap:"wrap",gap:4}}>
               <span style={{width:"100%",fontSize:12,color:"var(--c-text-muted)"}}>逐系列配色</span>
@@ -477,7 +474,7 @@ export function ExportPanel({ value: s, onChange, graphDiv, seriesNames, labelMo
             </div>
           )}
           <div className="export-row">
-            <button className="btn btn-primary" onClick={() => downloadPng(graphDiv ?? null, s)}
+            <button className="btn btn-primary" onClick={() => { void downloadPng(graphDiv ?? null, s); }}
               disabled={!graphDiv}>📷 导出 PNG</button>
           </div>
         </div>

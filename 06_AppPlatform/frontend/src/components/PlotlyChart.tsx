@@ -1,5 +1,8 @@
-import Plot from "react-plotly.js";
+import { Suspense, lazy } from "react";
+import type { CSSProperties } from "react";
 import type { Data, Layout, Config } from "plotly.js";
+
+const Plot = lazy(() => import("react-plotly.js"));
 
 const BASE_CONFIG: Partial<Config> = {
   displaylogo: false,
@@ -22,17 +25,31 @@ interface Props {
   layout?: Partial<Layout>;
   config?: Partial<Config>;
   height?: number;
-  style?: React.CSSProperties;
+  style?: CSSProperties;
 }
 
 export function PlotlyChart({ data, layout, config, height = 450, style }: Props) {
   return (
-    <Plot
-      data={data}
-      layout={{ ...BASE_LAYOUT, height, ...layout } as Layout}
-      config={{ ...BASE_CONFIG, ...config } as Config}
-      useResizeHandler
-      style={{ width: "100%", ...style }}
-    />
+    <Suspense
+      fallback={
+        <div
+          style={{
+            width: "100%",
+            height,
+            borderRadius: 12,
+            background: "#f8fafc",
+            border: "1px solid #e2e8f0",
+          }}
+        />
+      }
+    >
+      <Plot
+        data={data}
+        layout={{ ...BASE_LAYOUT, height, ...layout } as Layout}
+        config={{ ...BASE_CONFIG, ...config } as Config}
+        useResizeHandler
+        style={{ width: "100%", ...style }}
+      />
+    </Suspense>
   );
 }
