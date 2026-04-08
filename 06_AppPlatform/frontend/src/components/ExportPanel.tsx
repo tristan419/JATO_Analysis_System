@@ -338,7 +338,7 @@ export function applySeriesColors(traces: Data[], colors: Record<string, string>
 
 export async function downloadPng(graphDiv: HTMLElement | null, settings: ExportSettings) {
   if (!graphDiv) return;
-  const { default: Plotly } = await import("plotly.js-dist-min");
+  const { default: Plotly } = await import("plotly.js-cartesian-dist-min");
   Plotly.downloadImage(graphDiv, {
     format: "png", width: settings.exportWidth, height: settings.exportHeight,
     filename: settings.chartTitle || "jato_export",

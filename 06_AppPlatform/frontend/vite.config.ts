@@ -12,7 +12,7 @@ export default defineConfig({
           }
           if (
             id.includes("react-plotly.js")
-            || id.includes("plotly.js-dist-min")
+            || id.includes("plotly.js-cartesian-dist-min")
             || id.includes("plotly.js")
           ) {
             return "plotly-vendor";

@@ -1,6 +1,9 @@
 import type { CSSProperties } from "react";
 import type { Data, Layout, Config } from "plotly.js";
-import Plot from "react-plotly.js";
+import Plotly from "plotly.js-cartesian-dist-min";
+import createPlotlyComponent from "react-plotly.js/factory";
+
+const Plot = createPlotlyComponent(Plotly);
 
 const BASE_CONFIG: Partial<Config> = {
   displaylogo: false,
@@ -11,8 +14,8 @@ const BASE_CONFIG: Partial<Config> = {
 
 const BASE_LAYOUT: Partial<Layout> = {
   autosize: true,
-  margin: { l: 60, r: 30, t: 40, b: 60 },
-  font: { family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", size: 12 },
+  margin: { l: 52, r: 24, t: 28, b: 52 },
+  font: { family: '"Helvetica Neue", Helvetica, Arial, sans-serif', size: 11 },
   paper_bgcolor: "white",
   plot_bgcolor: "white",
   hovermode: "closest",

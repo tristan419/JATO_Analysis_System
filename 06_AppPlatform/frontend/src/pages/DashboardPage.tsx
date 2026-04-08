@@ -1,8 +1,17 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import type { Data, Layout } from "plotly.js";
 
 import { api } from "../api/client";
-import type { DetailResponse, OverviewResponse, TimeSeriesPoint, GroupedTimeSeriesItem, ModelVersionItem, PositioningMapItem, OthersDetailItem } from "../types";
+import { SearchSelectFilter } from "../components/SearchSelectFilter";
+import {
+  DIM,
+  FILTER_ORDER,
+  buildSearchFromSelections,
+  getDefaultPowertrainValues,
+  resolve,
+} from "../dashboardFilters";
+import type { OverviewResponse, TimeSeriesPoint, GroupedTimeSeriesItem, ModelVersionItem, PositioningMapItem, OthersDetailItem } from "../types";
 import { PlotlyChart } from "../components/PlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
 import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanel";
@@ -31,10 +40,6 @@ const MONTH_INDEX: Record<string, number> = {
 };
 function normalizePowertrainName(value: string): string {
   return value.trim().toUpperCase();
-}
-function getDefaultPowertrainValues(options: string[]): string[] {
-  const optionMap = new Map(options.map(opt => [normalizePowertrainName(opt), opt]));
-  return DEFAULT_POWERTRAINS.map(name => optionMap.get(name)).filter((v): v is string => Boolean(v));
 }
 function parseMonthLabel(label: string): { year: number; month: number } | null {
   const text = label.trim();
@@ -90,23 +95,6 @@ function seriesColor(name: string, idx: number, palette: string[], isPowertrain:
   return palette[idx % palette.length];
 }
 
-const DIM: Record<string, string[]> = {
-  country: ["\u56fd\u5bb6","Country","country"],
-  segment: ["\u7ec6\u5206\u5e02\u573a\uff08\u6309\u8f66\u957f\uff09","\u7ec6\u5206\u5e02\u573a","segment"],
-  powertrain: ["\u52a8\u603b\u89c4\u6574","powertrain","Powertrain"],
-  make: ["Make","\u54c1\u724c","make"],
-  model: ["Model","model"],
-  version: ["Version name","version name","Version Name"],
-};
-const FILTER_ORDER: { key: string; label: string }[] = [
-  { key: "country", label: "\u56fd\u5bb6" },
-  { key: "segment", label: "\u7ec6\u5206\u5e02\u573a" },
-  { key: "powertrain", label: "\u52a8\u603b\u89c4\u6574" },
-  { key: "make", label: "\u54c1\u724c" },
-  { key: "model", label: "Model" },
-  { key: "version", label: "Version name" },
-];
-
 const ADV_GROUPS: { v: string; l: string }[] = [
   { v: "market_structure", l: "\u5e02\u573a\u7ed3\u6784" },
   { v: "nev_analysis", l: "NEV\u5206\u6790" },
@@ -153,12 +141,6 @@ const STACKED_CHARTS = new Set([
 ]);
 
 /* ── helpers ────────────────────────────────────────── */
-function resolve(cols: string[], keys: string[]): string | null {
-  const map = new Map(cols.map((c) => [c.toLowerCase().trim(), c]));
-  for (const k of keys) { const hit = map.get(k.toLowerCase().trim()); if (hit) return hit; }
-  return null;
-}
-
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -185,38 +167,6 @@ function asMetaRecordArray(value: unknown): Record<string, unknown>[] {
 }
 
 /* ── filter component ──────────────────────────────── */
-function SearchSelectFilter({ label, options, selected, onChange, showSuvShortcut = false }: {
-  label: string; options: string[]; selected: string[]; onChange: (vals: string[]) => void; showSuvShortcut?: boolean;
-}) {
-  const [query, setQuery] = useState("");
-  const lq = query.toLowerCase().trim();
-  const matched = lq ? options.filter((o) => o.toLowerCase().includes(lq)) : options;
-  const ss = new Set(selected);
-  return (
-    <div className="filter-card">
-      <div className="filter-card-title">{label}</div>
-      <input type="text" className="filter-search" placeholder={"\u641c\u7d22 "+label+"\u2026"} value={query} onChange={e=>setQuery(e.target.value)} />
-      <div className="filter-actions">
-        <button className="filter-action-btn" onClick={()=>{const m=new Set(selected);matched.forEach(x=>m.add(x));onChange(Array.from(m));}}>{"\u5168\u9009\u641c\u7d22\u7ed3\u679c"}</button>
-        {showSuvShortcut && options.some(opt=>opt.toLowerCase().includes("suv")) && (
-          <button className="filter-action-btn" onClick={()=>onChange(options.filter(opt=>opt.toLowerCase().includes("suv")))}>{"\u4e00\u952e\u7b5b\u9009 SUV"}</button>
-        )}
-        <button className="filter-action-btn" onClick={()=>onChange([])}>{"\u6e05\u7a7a"}</button>
-      </div>
-      <div className="filter-options-list">
-        {matched.slice(0,200).map(opt=>(
-          <label key={opt} className="filter-option">
-            <input type="checkbox" checked={ss.has(opt)} onChange={()=>onChange(ss.has(opt)?selected.filter(s=>s!==opt):[...selected,opt])} />
-            <span>{opt}</span>
-          </label>
-        ))}
-        {matched.length===0 && <div className="filter-empty">{"\u65e0\u5339\u914d\u9879"}</div>}
-      </div>
-      <div className="filter-summary">{"\u5339\u914d "+matched.length+" \u9879\uff5c\u5df2\u9009 "+selected.length+" \u9879"}</div>
-    </div>
-  );
-}
-
 /* ── Main Dashboard ────────────────────────────────── */
 export function DashboardPage() {
   const [columns, setColumns] = useState<string[]>([]);
@@ -242,14 +192,6 @@ export function DashboardPage() {
   const [groupedLoading, setGroupedLoading] = useState(false);
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
   const [othersDetail, setOthersDetail] = useState<OthersDetailItem[]>([]);
-
-  /* detail table */
-  const [detail, setDetail] = useState<DetailResponse|null>(null);
-  const [detailPage, setDetailPage] = useState(1);
-  const [detailPageSize] = useState(200);
-  const [selectedCols, setSelectedCols] = useState<string[]>([]);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [excludeZeroSales, setExcludeZeroSales] = useState(false);
 
   /* advanced charts */
   const [advGroup, setAdvGroup] = useState("market_structure");
@@ -357,7 +299,7 @@ export function DashboardPage() {
       setLoading(true); setError("");
       try {
         const { items } = await api.columns();
-        setColumns(items); setSelectedCols(items.slice(0,10));
+        setColumns(items);
         for (const dk of ["country","segment","powertrain"] as const) {
           const col = resolve(items, DIM[dk]);
           if (col) { const opts = await api.filterOptions({ column: col, filters: {} }); setOptionsMap(p=>({...p,[dk]:opts.options})); }
@@ -425,6 +367,17 @@ export function DashboardPage() {
   }
 
   const filterPayloadStr = useMemo(() => JSON.stringify(buildFilterPayload()), [buildFilterPayload]);
+  const specificationHref = useMemo(() => {
+    const search = buildSearchFromSelections(selections as {
+      country: string[];
+      segment: string[];
+      powertrain: string[];
+      make: string[];
+      model: string[];
+      version: string[];
+    });
+    return `/specification${search}`;
+  }, [selections]);
   const prevPayloadRef = useRef(filterPayloadStr);
   useEffect(() => {
     if (prevPayloadRef.current !== filterPayloadStr && columns.length > 0) {
@@ -452,15 +405,6 @@ export function DashboardPage() {
     }
   }, [filteredRowCount, columns.length, advItems.length, advChart]);
 
-  /* B3: auto-reload detail table when filters change */
-  const prevDetailPayloadRef = useRef(filterPayloadStr);
-  useEffect(() => {
-    if (prevDetailPayloadRef.current !== filterPayloadStr && detail && columns.length > 0) {
-      prevDetailPayloadRef.current = filterPayloadStr;
-      loadDetail(1);
-    }
-  }, [filterPayloadStr, columns.length]);
-
   /* auto-fetch grouped time series */
   useEffect(() => {
     if (tsMode !== "\u5206\u7ec4" || columns.length === 0) return;
@@ -477,21 +421,6 @@ export function DashboardPage() {
     }, 300);
     return () => { cancelled = true; clearTimeout(timer); setGroupedLoading(false); };
   }, [tsMode, tsGroupDim, activeTab, tsTopN, tsTopNEnabled, tsIncludeOthers, filterPayloadStr, columns.length]);
-
-  /* detail */
-  async function loadDetail(page: number) {
-    setDetailLoading(true); setError("");
-    try { const d = await api.detail({ filters:buildFilterPayload(), columns:selectedCols, page, page_size:detailPageSize, exclude_zero_sales:excludeZeroSales }); setDetail(d); setDetailPage(d.page); }
-    catch (e) { setError((e as Error).message); }
-    finally { setDetailLoading(false); }
-  }
-  async function exportCsv() {
-    try {
-      const b = await api.detailCsv({ filters:buildFilterPayload(), columns:selectedCols, max_rows:10000, exclude_zero_sales:excludeZeroSales });
-      const u=URL.createObjectURL(b); const a=document.createElement("a"); a.href=u; a.download="jato_export.csv";
-      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u);
-    } catch (e) { setError((e as Error).message); }
-  }
 
   /* advanced chart */
   async function loadAdvChart() {
@@ -559,6 +488,16 @@ export function DashboardPage() {
 
   /* ── derived chart data ──────────────────────────── */
   const kpis = overview?.kpis;
+  const activeFilters = useMemo(
+    () => FILTER_ORDER.filter(({ key }) => (selections[key] ?? []).length > 0),
+    [selections],
+  );
+  const activeFilterSummary = useMemo(() => {
+    if (activeFilters.length === 0) return "默认动力总成视角，无额外维度约束";
+    return activeFilters
+      .map(({ key, label }) => `${label} ${selections[key].length}`)
+      .join(" / ");
+  }, [activeFilters, selections]);
   const isGrouped = tsMode === "\u5206\u7ec4";
   const singleSeries = activeTab === "year" ? yearSeries : monthSeries;
 
@@ -917,50 +856,73 @@ export function DashboardPage() {
 
   return (
     <div className="dashboard-layout">
-      {/* ── Sidebar ──────────────────────────────────── */}
       <aside className="filter-sidebar">
         <div className="filter-sidebar-header">
-          <h3>{"\ud83c\udf9b\ufe0f \u5168\u7ef4\u5ea6\u7b5b\u9009"}</h3>
-          <span className="filter-sidebar-hint">{"\u6bcf\u4e2a\u7b5b\u9009\u5668\u652f\u6301\uff1a\u641c\u7d22 + \u591a\u9009 + \u5168\u9009"}</span>
+          <div className="panel-kicker">01 / Filter Stack</div>
+          <h3>{"\u5168\u7ef4\u5ea6\u7b5b\u9009"}</h3>
+          <div className="filter-sidebar-hint">{"\u5f53\u524d\u7b5b\u9009\u4f1a\u540c\u6b65\u5230 URL\uff0c\u4e5f\u53ef\u76f4\u63a5\u5e26\u5230 Specification Page\u3002"}</div>
         </div>
-        <button className="btn btn-reset" onClick={resetFilters}>{"\u91cd\u7f6e\u5168\u90e8\u7b5b\u9009"}</button>
-        {FILTER_ORDER.map(({key,label})=>(
-          <SearchSelectFilter key={key} label={label} options={optionsMap[key]??[]} selected={selections[key]} onChange={(vals)=>onFilterChange(key,vals)} showSuvShortcut={key==="segment"} />
-        ))}
         <div className="filter-card filter-summary-card">
-          <div className="filter-card-title">{"\ud83d\udccc \u7b5b\u9009\u6458\u8981"}</div>
-          <div className="filter-summary-text">
-            {FILTER_ORDER.map(({key,label})=><span key={key}>{label+" "+selections[key].length}</span>)}
-          </div>
-          {filteredRowCount!==null && <div className="filter-row-count">{"\u7b5b\u540e\u884c\u6570\uff1a"+filteredRowCount.toLocaleString()}</div>}
-        </div>
-      </aside>
-
-      {/* ── Main content ─────────────────────────────── */}
-      <section className="dashboard-main">
-        {error && <div className="alert alert-error">{error}</div>}
-        <div className="header-card">
-          <div className="header-card-left"><h1>{"\ud83d\ude97 JATO \u5168\u7403\u53ef\u89c6\u5316\u5206\u6790\u7cfb\u7edf"}</h1></div>
-          <div className="header-card-right">
-            <div className="header-metric-label">{"\u7b5b\u9009\u540e\u8bb0\u5f55\u6570"}</div>
-            <div className="header-metric-value">{(filteredRowCount??0).toLocaleString()}</div>
-          </div>
-        </div>
-
-        {/* KPI cards */}
-        <div className="kpi-grid">
-          <div className="kpi-card kpi-primary"><div className="kpi-label">{"\u7d2f\u8ba1\u9500\u91cf\uff08\u5168\u5c40\u65f6\u95f4\u7a97\uff09"}</div>
-            <div className="kpi-value">{timeWindowSales!=null?timeWindowSales.toLocaleString(undefined,{maximumFractionDigits:0}):"\u2013"}</div></div>
+          <div className="kpi-card"><div className="kpi-label">{"\u7b5b\u9009\u540e\u8bb0\u5f55\u6570"}</div><div className="kpi-value">{(kpis?.totalRows??0).toLocaleString()}</div></div>
           <div className="kpi-card"><div className="kpi-label">{"\u54c1\u724c\u6570"}</div><div className="kpi-value">{(kpis?.brandCount??0).toLocaleString()}</div></div>
           <div className="kpi-card"><div className="kpi-label">{"Model \u6570"}</div><div className="kpi-value">{(kpis?.modelCount??0).toLocaleString()}</div></div>
           <div className="kpi-card"><div className="kpi-label">{"Version \u6570"}</div><div className="kpi-value">{(kpis?.versionCount??0).toLocaleString()}</div></div>
         </div>
-        <div className="kpi-caption" style={{fontSize:11,color:"var(--c-text-muted)",marginTop:-8,paddingLeft:4}}>
+        <div className="dashboard-sidebar-caption">
           {"\u53e3\u5f84\uff1a"}{FILTER_ORDER.filter(f=>selections[f.key].length>0).map(f=>f.label+"="+selections[f.key].join("/")).join("\u3001") || "\u5168\u91cf"}
           {timeRange ? ` \u00b7 \u65f6\u95f4\u7a97\u53e3 ${timeRange.start} ~ ${timeRange.end}` : ""}
         </div>
 
+        <div className="dashboard-sidebar-toolbar">
+          <button className="btn btn-sm btn-secondary" onClick={resetFilters}>{"\u91cd\u7f6e\u7b5b\u9009"}</button>
+          <Link className="btn btn-sm btn-primary" to={specificationHref}>{"\u89c4\u683c\u9875"}</Link>
+        </div>
+
+        {FILTER_ORDER.map(({ key, label }) => (
+          <SearchSelectFilter
+            key={key}
+            label={label}
+            options={optionsMap[key] ?? []}
+            selected={selections[key]}
+            onChange={(values) => void onFilterChange(key, values)}
+            showSuvShortcut={key === "segment"}
+          />
+        ))}
+      </aside>
+
+      <section className="dashboard-main">
         {loading && <div className="loading-banner"><span className="spinner" />{" \u52a0\u8f7d\u4e2d\u2026"}</div>}
+
+        <div className="header-card dashboard-hero">
+          <div className="dashboard-hero-copy">
+            <span className="page-kicker">01 / Market Overview</span>
+            <h1>Dashboard Control View</h1>
+            <p>
+              首屏保留 KPI、趋势和高级分析交互；规格明细、列选择、分页与 CSV 导出已下沉到独立的 Specification Page。
+            </p>
+            <div className="dashboard-hero-summary">
+              <span className="selection-ribbon-label">Current scope</span>
+              <span className="selection-ribbon-value">
+                {activeFilterSummary}
+                {timeRange ? ` · ${timeRange.start} ~ ${timeRange.end}` : " · Full timeline"}
+              </span>
+            </div>
+          </div>
+
+          <div className="dashboard-hero-actions">
+            <div className="hero-meta-block">
+              <span className="hero-meta-label">Rows in scope</span>
+              <strong className="hero-meta-value">{(filteredRowCount ?? kpis?.totalRows ?? 0).toLocaleString()}</strong>
+            </div>
+            <div className="hero-meta-block">
+              <span className="hero-meta-label">Window sales</span>
+              <strong className="hero-meta-value">{Number(timeWindowSales ?? 0).toLocaleString()}</strong>
+            </div>
+            <Link className="btn btn-primary dashboard-hero-link" to={specificationHref}>
+              Open Specification
+            </Link>
+          </div>
+        </div>
 
         {/* ── Global Time Axis ────────────────────────── */}
         <div className="card">
@@ -1954,40 +1916,22 @@ export function DashboardPage() {
           <ExportPanel value={pmExport} onChange={setPmExport} graphDiv={pmChartRef.current} labelModeOptions={pmLabelModeOptions} />
         </div>
 
-        {/* ── Detail table ────────────────────────────── */}
         <div className="card">
-          <div className="card-title">{"\u660e\u7ec6\u6570\u636e\u9884\u89c8"}</div>
-          <div className="detail-toolbar">
-            <button className="btn btn-primary" disabled={!columns.length||detailLoading} onClick={()=>loadDetail(1)}>{detailLoading?"\u52a0\u8f7d\u4e2d\u2026":"\u52a0\u8f7d\u660e\u7ec6"}</button>
-            <button className="btn btn-accent" disabled={!columns.length} onClick={exportCsv}>{"CSV \u4e0b\u8f7d"}</button>
-            <label className="chart-mode-label" style={{gap:6}}>
-              <input type="checkbox" checked={excludeZeroSales} onChange={e=>setExcludeZeroSales(e.target.checked)} />
-              {"\u4ec5\u663e\u793a\u6709\u9500\u91cf\u7248\u578b"}
-            </label>
-          </div>
-          <div className="col-picker">
-            {columns.map(c=>(<span key={c} className={"col-chip"+(selectedCols.includes(c)?" selected":"")}
-              onClick={()=>setSelectedCols(p=>p.includes(c)?p.filter(x=>x!==c):[...p,c])}>{c}</span>))}
-          </div>
-          {detailLoading && <div className="loading-banner"><span className="spinner" />{" \u52a0\u8f7d\u660e\u7ec6\u4e2d\u2026"}</div>}
-          <div className="table-wrapper">
-            <table className="data-table"><thead><tr>
-              {(selectedCols.length?selectedCols:columns.slice(0,8)).map(c=><th key={c}>{c}</th>)}
-            </tr></thead><tbody>
-              {(detail?.items??[]).map((row,i)=>(<tr key={i}>
-                {(selectedCols.length?selectedCols:columns.slice(0,8)).map(c=><td key={c}>{String((row as Record<string,unknown>)[c]??"")}</td>)}
-              </tr>))}
-              {!detail?.items?.length && !detailLoading && (
-                <tr><td colSpan={selectedCols.length||8} style={{textAlign:"center",color:"var(--c-text-muted)",padding:24}}>{"\u70b9\u51fb\u300c\u52a0\u8f7d\u660e\u7ec6\u300d\u67e5\u770b\u6570\u636e"}</td></tr>
-              )}
-            </tbody></table>
-          </div>
-          <div className="pagination">
-            <span>{"\u7b2c "+(detail?.page??detailPage)+" \u9875 \u00b7 \u5171 "+(detail?.total??0).toLocaleString()+" \u6761"}</span>
-            <div className="btn-group">
-              <button className="btn btn-sm btn-secondary" disabled={detailLoading||detailPage<=1} onClick={()=>loadDetail(detailPage-1)}>{"\u4e0a\u4e00\u9875"}</button>
-              <button className="btn btn-sm btn-secondary" disabled={detailLoading||!detail||detail.items.length<detailPageSize} onClick={()=>loadDetail(detailPage+1)}>{"\u4e0b\u4e00\u9875"}</button>
+          <div className="detail-section-head">
+            <div>
+              <div className="card-title">{"\u89c4\u683c\u660e\u7ec6\u72ec\u7acb\u9875"}</div>
+              <p className="section-note">
+                {"\u660e\u7ec6\u8868\u3001\u5217\u9009\u62e9\u3001\u5206\u9875\u548c CSV \u5bfc\u51fa\u5df2\u8fc1\u5230\u72ec\u7acb Specification Page\uff0c\u8fd9\u4e2a Dashboard \u53ea\u4fdd\u7559 KPI \u548c\u56fe\u8868\u4ea4\u4e92\uff0c\u51cf\u5c11\u9996\u5c4f\u8bf7\u6c42\u4e0e\u72b6\u6001\u8d1f\u62c5\u3002"}
+              </p>
             </div>
+            <div className="table-status-chip">
+              <span>Active filters</span>
+              <strong>{activeFilters.length}</strong>
+            </div>
+          </div>
+          <div className="dashboard-cta-row">
+            <Link className="btn btn-primary" to={specificationHref}>{"\u6253\u5f00 Specification Page"}</Link>
+            <Link className="btn btn-ghost" to={specificationHref}>{"\u5e26\u5f53\u524d\u7b5b\u9009\u8fdb\u5165"}</Link>
           </div>
         </div>
       </section>
