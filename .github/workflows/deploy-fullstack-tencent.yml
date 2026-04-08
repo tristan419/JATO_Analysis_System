@@ -86,28 +86,36 @@ jobs:
           password: ${{ secrets.SSH_PASSWORD }}
           command_timeout: 20m
           script: |
-            echo "=== SSH Connected ==="
-            echo "USER=$USER HOME=$HOME"
-            echo "--- Archive check ---"
-            ls -lh /tmp/JATO_deploy.tar.gz || echo "ARCHIVE MISSING"
-            echo "--- Node check ---"
-            which node || echo "node NOT FOUND"
-            node -v || echo "node -v FAILED"
-            which npm || echo "npm NOT FOUND"
-            echo "--- Python check ---"
             REPO_DIR="/opt/JATO_Analysis_System-main"
-            ls "$REPO_DIR/.venv/bin/python" || echo "VENV MISSING"
-            echo "--- Extract archive ---"
-            sudo mkdir -p "$REPO_DIR"
-            sudo chown -R "$USER":"$USER" "$REPO_DIR"
-            sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR" && echo "EXTRACT OK" || echo "EXTRACT FAILED"
-            rm -f /tmp/JATO_deploy.tar.gz
-            echo "--- Run deploy ---"
-            cd "$REPO_DIR"
-            export REPO_DIR SKIP_GIT_SYNC=true
-            export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
-            export VITE_API_BASE="/v1"
-            export VITE_USER_ROLE="viewer"
-            export VITE_USER_NAME="github-actions"
-            bash 03_Scripts/deploy_fullstack_server.sh 2>&1 || echo "DEPLOY SCRIPT EXIT CODE: $?"
-            echo "=== Done ==="
+            LOGFILE="$REPO_DIR/06_AppPlatform/frontend/dist/_deploy.log"
+
+            {
+              echo "=== Deploy started at $(date -u) ==="
+              echo "USER=$USER HOME=$HOME"
+              echo "--- Archive ---"
+              ls -lh /tmp/JATO_deploy.tar.gz 2>&1 || echo "ARCHIVE MISSING"
+              echo "--- Extract ---"
+              sudo mkdir -p "$REPO_DIR"
+              sudo chown -R "$USER":"$USER" "$REPO_DIR"
+              sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR" && echo "EXTRACT OK" || echo "EXTRACT FAILED $?"
+              rm -f /tmp/JATO_deploy.tar.gz
+              echo "--- Env ---"
+              which node && node -v || echo "NODE MISSING"
+              which npm && npm -v || echo "NPM MISSING"
+              which python3 && python3 --version || echo "PYTHON3 MISSING"
+              ls -la "$REPO_DIR/.venv/bin/python" 2>&1 || echo "VENV MISSING"
+              echo "--- Deploy script ---"
+              cd "$REPO_DIR"
+              export REPO_DIR SKIP_GIT_SYNC=true
+              export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
+              export VITE_API_BASE="/v1"
+              export VITE_USER_ROLE="viewer"
+              export VITE_USER_NAME="github-actions"
+              bash 03_Scripts/deploy_fullstack_server.sh 2>&1
+              echo "=== Deploy exit code: $? at $(date -u) ==="
+            } > "$LOGFILE" 2>&1
+
+            # Show last 50 lines in Actions log too
+            tail -50 "$LOGFILE"
+            # Exit with real status
+            grep -q "Deployment finished successfully" "$LOGFILE"
