@@ -22,6 +22,11 @@ VITE_AUTH_TOKEN="${VITE_AUTH_TOKEN:-}"
 VITE_USER_ROLE="${VITE_USER_ROLE:-viewer}"
 VITE_USER_NAME="${VITE_USER_NAME:-anonymous}"
 
+# ── China-friendly mirror defaults ──
+NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
+PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
+
 log_section() {
   printf '\n[STEP] %s\n' "$1"
 }
@@ -75,13 +80,16 @@ if [[ "$(id -u)" -ne 0 ]]; then
   sudo -v
 fi
 
-if [[ ! -d "$REPO_DIR" ]]; then
-  echo "[ERROR] Repository directory not found at $REPO_DIR"
-  echo "        Download the codeload archive or clone the mirror first."
-  exit 1
+if [[ ! -d "$REPO_DIR/.git" ]]; then
+  if [[ ! -d "$REPO_DIR" ]]; then
+    echo "[ERROR] Repository directory not found at $REPO_DIR"
+    echo "        Download the codeload archive or clone the mirror first."
+    exit 1
+  fi
+  echo "[INFO] No .git metadata found; continuing with local tree only"
 fi
 
-if [[ -d "$REPO_DIR/.git" ]]; then
+if [[ "$SKIP_GIT_SYNC" != "true" && -d "$REPO_DIR/.git" ]]; then
   if [[ -z "$REMOTE_NAME" ]]; then
     if git -C "$REPO_DIR" remote get-url origin >/dev/null 2>&1; then
       REMOTE_NAME="origin"
@@ -104,8 +112,6 @@ if [[ -d "$REPO_DIR/.git" ]]; then
       git -C "$REPO_DIR" remote set-url "$REMOTE_NAME" "$REPO_REMOTE_URL"
     fi
   fi
-else
-  echo "[INFO] No .git metadata found; continuing with local tree only"
 fi
 
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
@@ -145,13 +151,17 @@ echo "[INFO] Install backend dependencies"
 CURRENT_STEP="Install backend dependencies"
 log_section "$CURRENT_STEP"
 . "$VENV_DIR/bin/activate"
-python -m pip install --upgrade pip
-pip install -r "$BACKEND_REQUIREMENTS"
+python -m pip install --upgrade pip \
+  -i "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST"
+pip install -r "$BACKEND_REQUIREMENTS" \
+  -i "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST"
 
 echo "[INFO] Build frontend"
 CURRENT_STEP="Build frontend"
 log_section "$CURRENT_STEP"
 cd "$FRONTEND_DIR"
+npm config set registry "$NPM_REGISTRY"
+echo "[INFO] npm registry → $NPM_REGISTRY"
 npm ci
 export VITE_API_BASE
 export VITE_AUTH_TOKEN

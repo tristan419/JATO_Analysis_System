@@ -15,6 +15,12 @@ EMBED_FRONTEND_TOKEN="${EMBED_FRONTEND_TOKEN:-false}"
 VITE_API_BASE="${VITE_API_BASE:-/v1}"
 VITE_USER_ROLE="${VITE_USER_ROLE:-viewer}"
 VITE_USER_NAME="${VITE_USER_NAME:-anonymous}"
+
+# ── China-friendly mirror defaults (override with env vars if needed) ──
+NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
+PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
+NODESOURCE_MIRROR="${NODESOURCE_MIRROR:-https://deb.nodesource.com/setup_20.x}"
 BACKEND_ENV_FILE="${BACKEND_ENV_FILE:-/etc/jato-fullstack/backend.env}"
 DIAGNOSTIC_SCRIPT="$REPO_DIR/03_Scripts/print_fullstack_server_diagnostics.sh"
 SYSTEMD_TEMPLATE="$REPO_DIR/03_Scripts/deploy/systemd/jato-fullstack-backend@.service"
@@ -96,11 +102,20 @@ sudo apt-get install -y git curl ca-certificates gnupg nginx python3 python3-ven
 CURRENT_STEP="Install or validate Node.js"
 log_section "$CURRENT_STEP"
 if ! node_version_ok; then
-  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-  sudo apt-get install -y nodejs
+  echo "[INFO] Installing Node.js 20.x via NodeSource …"
+  curl -# -L --connect-timeout 15 --max-time 120 \
+    "$NODESOURCE_MIRROR" | sudo -E bash - || {
+    echo "[WARN] NodeSource script timed out; trying snap fallback …"
+    sudo snap install node --classic --channel=20 || true
+  }
+  sudo apt-get install -y nodejs || true
 fi
 node -v
 npm -v
+
+# ── Configure npm to use China mirror ──
+echo "[INFO] npm registry → $NPM_REGISTRY"
+npm config set registry "$NPM_REGISTRY"
 
 CURRENT_STEP="Create Python virtualenv"
 log_section "$CURRENT_STEP"
@@ -145,6 +160,9 @@ export SKIP_GIT_SYNC=true
 export VITE_API_BASE
 export VITE_USER_ROLE
 export VITE_USER_NAME
+export NPM_REGISTRY
+export PIP_INDEX_URL
+export PIP_TRUSTED_HOST
 if [[ "$EMBED_FRONTEND_TOKEN" == "true" ]]; then
   export VITE_AUTH_TOKEN="$APP_AUTH_TOKEN"
 else
