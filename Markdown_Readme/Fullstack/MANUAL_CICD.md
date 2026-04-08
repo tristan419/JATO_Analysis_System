@@ -178,3 +178,22 @@ curl -I http://127.0.0.1/
 4. `DashboardPage.tsx` 整个仪表板组件 lazy-load
 
 **效果**：首屏 gzip 压缩后约 118KB，最大单文件加载 115ms。Plotly 只在用户真正打开图表时才下载。
+
+### 7.6 CI smoke 回归测试断言不一致（2026-04-08）
+
+**现象**：ci workflow 的 smoke job 从 run #20 起连续 40+ 次失败，仅耗时 3 秒即退出。
+fullstack-backend 和 fullstack-frontend 一直正常。
+
+**根因**：`regression_render_strategy_defaults.py` 中的测试用例
+"huge-full-mode"（row_count=220,000, large_data_mode=False）期望
+`expected_overview=False`，但 `views.py` 中 `get_default_render_strategy()` 已改为
+仅基于 `row_count >= 80_000` 判断，不再参考 `large_data_mode`。220k 行必定 ≥ 80k，
+所以实际返回 `overview_lazy=True`，断言失败。
+
+**修复步骤**：
+1. 拆分 smoke step 为 Style check / Compile check / CLI help / Regression checks 四个独立步骤
+2. 对 Regression checks 加 `GITHUB_STEP_SUMMARY` 输出，定位到 `regression_render_strategy_defaults.py`
+3. 将 "huge-full-mode" 的 `expected_overview` 改为 `True`，与当前函数行为一致
+4. 恢复 regression step 为简洁的三行执行
+
+**验证**：ci #64 全部三个 job ✅ SUCCESS (smoke 33s, backend 35s, frontend 1m 19s)。
