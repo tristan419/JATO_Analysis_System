@@ -28,15 +28,21 @@ jobs:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         run: |
           missing=0
-          for key in SSH_HOST SSH_USER SSH_PRIVATE_KEY; do
+          for key in SSH_HOST SSH_USER; do
             value="${!key}"
             if [ -z "$value" ]; then
               echo "::error::Missing required GitHub secret: $key"
               missing=1
             fi
           done
+
+          if [ -z "$SSH_PRIVATE_KEY" ] && [ -z "$SSH_PASSWORD" ]; then
+            echo "::error::Provide either SSH_PRIVATE_KEY or SSH_PASSWORD"
+            missing=1
+          fi
 
           if [ "$missing" -ne 0 ]; then
             exit 1
@@ -61,6 +67,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          password: ${{ secrets.SSH_PASSWORD }}
           source: /tmp/JATO_deploy.tar.gz
           target: /tmp/
           strip_components: 0
@@ -71,6 +78,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          password: ${{ secrets.SSH_PASSWORD }}
           script_stop: true
           command_timeout: 20m
           script: |
