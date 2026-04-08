@@ -42,7 +42,30 @@ jobs:
             exit 1
           fi
 
-      - name: Deploy fullstack app over SSH
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Package deploy archive
+        run: |
+          tar czf /tmp/JATO_deploy.tar.gz \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='.venv' \
+            --exclude='__pycache__' \
+            -C "$GITHUB_WORKSPACE" .
+          ls -lh /tmp/JATO_deploy.tar.gz
+
+      - name: Upload archive to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: /tmp/JATO_deploy.tar.gz
+          target: /tmp/
+          strip_components: 0
+
+      - name: Deploy on server via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -53,31 +76,24 @@ jobs:
           script: |
             set -euo pipefail
 
-            export REPO_DIR="${{ vars.DEPLOY_REPO_DIR }}"
-            export BACKEND_SERVICE_NAME="${{ vars.FULLSTACK_BACKEND_SERVICE_NAME }}"
-            export DEPLOY_BRANCH="${{ vars.DEPLOY_BRANCH }}"
-            export VITE_API_BASE="${{ vars.FULLSTACK_VITE_API_BASE }}"
-            export VITE_USER_ROLE="${{ vars.FULLSTACK_VITE_USER_ROLE }}"
-            export VITE_USER_NAME="${{ vars.FULLSTACK_VITE_USER_NAME }}"
+            REPO_DIR="${{ vars.DEPLOY_REPO_DIR }}"
+            BACKEND_SERVICE_NAME="${{ vars.FULLSTACK_BACKEND_SERVICE_NAME }}"
+            VITE_API_BASE="${{ vars.FULLSTACK_VITE_API_BASE }}"
+            VITE_USER_ROLE="${{ vars.FULLSTACK_VITE_USER_ROLE }}"
+            VITE_USER_NAME="${{ vars.FULLSTACK_VITE_USER_NAME }}"
 
-            if [ -z "$REPO_DIR" ]; then
-              export REPO_DIR="/opt/JATO_Analysis_System"
-            fi
-            if [ -z "$BACKEND_SERVICE_NAME" ]; then
-              export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
-            fi
-            if [ -z "$DEPLOY_BRANCH" ]; then
-              export DEPLOY_BRANCH="main"
-            fi
-            if [ -z "$VITE_API_BASE" ]; then
-              export VITE_API_BASE="/v1"
-            fi
-            if [ -z "$VITE_USER_ROLE" ]; then
-              export VITE_USER_ROLE="viewer"
-            fi
-            if [ -z "$VITE_USER_NAME" ]; then
-              export VITE_USER_NAME="github-actions"
-            fi
+            export REPO_DIR="${REPO_DIR:-/opt/JATO_Analysis_System}"
+            export BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@8000}"
+            export VITE_API_BASE="${VITE_API_BASE:-/v1}"
+            export VITE_USER_ROLE="${VITE_USER_ROLE:-viewer}"
+            export VITE_USER_NAME="${VITE_USER_NAME:-github-actions}"
+            export SKIP_GIT_SYNC=true
+
+            # Extract fresh code pushed by GitHub Actions (no server→GitHub needed)
+            echo "[INFO] Extracting deploy archive to $REPO_DIR …"
+            sudo mkdir -p "$REPO_DIR"
+            sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR"
+            rm -f /tmp/JATO_deploy.tar.gz
 
             cd "$REPO_DIR"
             bash 03_Scripts/deploy_fullstack_server.sh
