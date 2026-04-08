@@ -8,6 +8,7 @@ BACKEND_PORT="${BACKEND_PORT:-8000}"
 BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@${BACKEND_PORT}}"
 SERVER_NAME="${SERVER_NAME:-_}"
 REPO_REMOTE_URL="${REPO_REMOTE_URL:-https://gitclone.com/github.com/tristan419/JATO_Analysis_System.git}"
+REPO_ARCHIVE_URL="${REPO_ARCHIVE_URL:-https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/refs/heads/main}"
 APP_AUTH_ENABLED="${APP_AUTH_ENABLED:-true}"
 APP_AUTH_TOKEN="${APP_AUTH_TOKEN:-}"
 EMBED_FRONTEND_TOKEN="${EMBED_FRONTEND_TOKEN:-false}"
@@ -69,10 +70,16 @@ EOF
 
 CURRENT_STEP="Validate repository"
 log_section "$CURRENT_STEP"
-if [[ ! -d "$REPO_DIR/.git" ]]; then
-  echo "[ERROR] Git repository not found at $REPO_DIR"
-  echo "        Run this script from the checked-out repository root or set REPO_DIR."
+if [[ ! -d "$REPO_DIR" ]]; then
+  echo "[ERROR] Repository directory not found at $REPO_DIR"
+  echo "        Download the codeload archive first or clone the mirror into this path."
   exit 1
+fi
+
+if [[ -d "$REPO_DIR/.git" ]]; then
+  echo "[INFO] Git repository metadata found"
+else
+  echo "[INFO] No .git metadata found; continuing with archive-based bootstrap"
 fi
 
 CURRENT_STEP="Validate sudo access"
@@ -134,6 +141,7 @@ export DEPLOY_BRANCH
 export BACKEND_PORT
 export BACKEND_SERVICE_NAME
 export REPO_REMOTE_URL
+export SKIP_GIT_SYNC=true
 export VITE_API_BASE
 export VITE_USER_ROLE
 export VITE_USER_NAME

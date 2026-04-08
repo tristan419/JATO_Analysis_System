@@ -42,16 +42,16 @@ python3 --version
 
 ## 3. 首次拉取代码
 
-如果腾讯云上直接访问 GitHub 不稳定，先用镜像克隆：
+如果腾讯云上直接访问 GitHub 不稳定，优先用 codeload 的 archive 下载。这个方式不依赖 git clone，通常比镜像更稳定：
 
 ```bash
 sudo mkdir -p /opt
 sudo chown "$USER":"$USER" /opt
 
 cd /opt
-REPO_REMOTE_URL="${REPO_REMOTE_URL:-https://gitclone.com/github.com/tristan419/JATO_Analysis_System.git}"
-git clone "$REPO_REMOTE_URL"
-cd /opt/JATO_Analysis_System
+curl -fsSL https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/refs/heads/main -o JATO_Analysis_System-main.tar.gz
+tar -xzf JATO_Analysis_System-main.tar.gz
+cd /opt/JATO_Analysis_System-main
 
 python3 -m venv .venv
 . .venv/bin/activate
@@ -59,22 +59,21 @@ python -m pip install --upgrade pip
 pip install -r 06_AppPlatform/backend/requirements.txt
 ```
 
-如果服务器不是直接使用你的个人账号，先把仓库目录 owner 调整给实际部署用户。
+如果你更想保留 git 历史，也可以先尝试镜像 clone；但当镜像不稳定时，codeload 这条路径更稳。当前脚本已经支持 archive-based bootstrap，所以下载后直接跑一键脚本即可。
 
 ## 3.1 一键初始化、部署并启动
 
 完成仓库拉取后，直接执行：
 
 ```bash
-cd /opt/JATO_Analysis_System
+cd /opt/JATO_Analysis_System-main
 bash 03_Scripts/tencent_fullstack_bootstrap.sh
 ```
 
 常用覆盖参数：
 
 ```bash
-cd /opt/JATO_Analysis_System
-REPO_REMOTE_URL=https://gitclone.com/github.com/tristan419/JATO_Analysis_System.git \
+cd /opt/JATO_Analysis_System-main
 SERVER_NAME=your.domain.com \
 BACKEND_PORT=8000 \
 APP_AUTH_TOKEN='你自己的token' \
@@ -92,8 +91,6 @@ bash 03_Scripts/tencent_fullstack_bootstrap.sh
 - 安装前端依赖并构建 `dist`
 - 安装 nginx 配置并重启服务
 - 做本地健康检查
-
-如果你已经有仓库副本，但 `origin` 还是指向 GitHub，把 `REPO_REMOTE_URL` 设成镜像地址后再跑一键脚本，脚本会把当前远端自动切到镜像。
 
 如果脚本失败，终端会自动打印一段以 `BEGIN JATO FULLSTACK DIAGNOSTICS` 开头的诊断块。你把整段复制给我就行。
 
@@ -147,7 +144,7 @@ curl -fsS http://127.0.0.1:8000/healthz
 执行：
 
 ```bash
-cd /opt/JATO_Analysis_System
+cd /opt/JATO_Analysis_System-main
 VITE_API_BASE=/v1 \
 VITE_USER_ROLE=viewer \
 VITE_USER_NAME=anonymous \
@@ -164,9 +161,9 @@ bash 03_Scripts/deploy_fullstack_server.sh
 ## 7. 安装 nginx
 
 ```bash
-cd /opt/JATO_Analysis_System
+cd /opt/JATO_Analysis_System-main
 sudo chmod +x 03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
-sudo SERVER_NAME=_ BACKEND_PORT=8000 FRONTEND_ROOT=/opt/JATO_Analysis_System/06_AppPlatform/frontend/dist \
+sudo SERVER_NAME=_ BACKEND_PORT=8000 FRONTEND_ROOT=/opt/JATO_Analysis_System-main/06_AppPlatform/frontend/dist \
   bash 03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
 ```
 
@@ -218,7 +215,7 @@ curl -fsS http://127.0.0.1/v1/metadata/columns \
 任何时候只要你想把服务器当前状态贴给我，直接运行：
 
 ```bash
-cd /opt/JATO_Analysis_System
+cd /opt/JATO_Analysis_System-main
 bash 03_Scripts/print_fullstack_server_diagnostics.sh
 ```
 
@@ -238,28 +235,30 @@ bash 03_Scripts/print_fullstack_server_diagnostics.sh
 - Variables: `FULLSTACK_VITE_USER_ROLE`
 - Variables: `FULLSTACK_VITE_USER_NAME`
 - Environment / deploy script: `REPO_REMOTE_URL`
+- Environment / deploy script: `REPO_ARCHIVE_URL`
 
 推荐默认值：
 
-- `DEPLOY_REPO_DIR=/opt/JATO_Analysis_System`
+- `DEPLOY_REPO_DIR=/opt/JATO_Analysis_System-main`
 - `FULLSTACK_BACKEND_SERVICE_NAME=jato-fullstack-backend@8000`
 - `DEPLOY_BRANCH=main`
 - `FULLSTACK_VITE_API_BASE=/v1`
 - `REPO_REMOTE_URL=https://gitclone.com/github.com/tristan419/JATO_Analysis_System.git`
+- `REPO_ARCHIVE_URL=https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/refs/heads/main`
 
 ## 11. 回滚
 
 查看最近提交：
 
 ```bash
-cd /opt/JATO_Analysis_System
+cd /opt/JATO_Analysis_System-main
 git log --oneline -5
 ```
 
 回滚到指定提交后重新发布：
 
 ```bash
-cd /opt/JATO_Analysis_System
+cd /opt/JATO_Analysis_System-main
 git reset --hard <commit_sha>
 bash 03_Scripts/deploy_fullstack_server.sh
 ```

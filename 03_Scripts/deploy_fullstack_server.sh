@@ -7,6 +7,7 @@ BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@8000}"
 BACKEND_PORT="${BACKEND_PORT:-}"
 REMOTE_NAME="${REMOTE_NAME:-}"
 REPO_REMOTE_URL="${REPO_REMOTE_URL:-https://gitclone.com/github.com/tristan419/JATO_Analysis_System.git}"
+SKIP_GIT_SYNC="${SKIP_GIT_SYNC:-false}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIAGNOSTIC_SCRIPT="$SCRIPT_DIR/print_fullstack_server_diagnostics.sh"
 CURRENT_STEP="initialization"
@@ -74,32 +75,37 @@ if [[ "$(id -u)" -ne 0 ]]; then
   sudo -v
 fi
 
-if [[ ! -d "$REPO_DIR/.git" ]]; then
-  echo "[ERROR] Git repository not found at $REPO_DIR"
+if [[ ! -d "$REPO_DIR" ]]; then
+  echo "[ERROR] Repository directory not found at $REPO_DIR"
+  echo "        Download the codeload archive or clone the mirror first."
   exit 1
 fi
 
-if [[ -z "$REMOTE_NAME" ]]; then
-  if git -C "$REPO_DIR" remote get-url origin >/dev/null 2>&1; then
-    REMOTE_NAME="origin"
-  else
-    REMOTE_NAME="$(git -C "$REPO_DIR" remote | head -n 1)"
+if [[ -d "$REPO_DIR/.git" ]]; then
+  if [[ -z "$REMOTE_NAME" ]]; then
+    if git -C "$REPO_DIR" remote get-url origin >/dev/null 2>&1; then
+      REMOTE_NAME="origin"
+    else
+      REMOTE_NAME="$(git -C "$REPO_DIR" remote | head -n 1)"
+    fi
   fi
-fi
 
-if [[ -z "$REMOTE_NAME" ]]; then
-  echo "[ERROR] No git remote found in $REPO_DIR"
-  exit 1
-fi
-
-if [[ -n "$REPO_REMOTE_URL" ]]; then
-  CURRENT_REMOTE_URL="$(git -C "$REPO_DIR" remote get-url "$REMOTE_NAME" 2>/dev/null || true)"
-  if [[ -n "$CURRENT_REMOTE_URL" && "$CURRENT_REMOTE_URL" != "$REPO_REMOTE_URL" ]]; then
-    echo "[INFO] Pointing git remote '$REMOTE_NAME' to mirror URL"
-    echo "[INFO] old=$CURRENT_REMOTE_URL"
-    echo "[INFO] new=$REPO_REMOTE_URL"
-    git -C "$REPO_DIR" remote set-url "$REMOTE_NAME" "$REPO_REMOTE_URL"
+  if [[ -z "$REMOTE_NAME" ]]; then
+    echo "[ERROR] No git remote found in $REPO_DIR"
+    exit 1
   fi
+
+  if [[ -n "$REPO_REMOTE_URL" ]]; then
+    CURRENT_REMOTE_URL="$(git -C "$REPO_DIR" remote get-url "$REMOTE_NAME" 2>/dev/null || true)"
+    if [[ -n "$CURRENT_REMOTE_URL" && "$CURRENT_REMOTE_URL" != "$REPO_REMOTE_URL" ]]; then
+      echo "[INFO] Pointing git remote '$REMOTE_NAME' to mirror URL"
+      echo "[INFO] old=$CURRENT_REMOTE_URL"
+      echo "[INFO] new=$REPO_REMOTE_URL"
+      git -C "$REPO_DIR" remote set-url "$REMOTE_NAME" "$REPO_REMOTE_URL"
+    fi
+  fi
+else
+  echo "[INFO] No .git metadata found; continuing with local tree only"
 fi
 
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
@@ -124,10 +130,16 @@ EOF
 echo "[INFO] Update repository"
 CURRENT_STEP="Update repository"
 log_section "$CURRENT_STEP"
-cd "$REPO_DIR"
-git fetch "$REMOTE_NAME" "$DEPLOY_BRANCH"
-git checkout "$DEPLOY_BRANCH"
-git pull --ff-only "$REMOTE_NAME" "$DEPLOY_BRANCH"
+if [[ "$SKIP_GIT_SYNC" == "true" ]]; then
+  echo "[INFO] SKIP_GIT_SYNC=true; using the local tree without git pull"
+elif [[ -d "$REPO_DIR/.git" ]]; then
+  cd "$REPO_DIR"
+  git fetch "$REMOTE_NAME" "$DEPLOY_BRANCH"
+  git checkout "$DEPLOY_BRANCH"
+  git pull --ff-only "$REMOTE_NAME" "$DEPLOY_BRANCH"
+else
+  echo "[INFO] No git repository metadata; skipping sync and using local tree"
+fi
 
 echo "[INFO] Install backend dependencies"
 CURRENT_STEP="Install backend dependencies"
@@ -178,5 +190,9 @@ curl -fsS "http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null
 echo "[INFO] Current revision"
 CURRENT_STEP="Print revision"
 log_section "$CURRENT_STEP"
-git -C "$REPO_DIR" rev-parse --short HEAD
+if [[ -d "$REPO_DIR/.git" ]]; then
+  git -C "$REPO_DIR" rev-parse --short HEAD
+else
+  echo "[INFO] No git revision available for archive-based bootstrap"
+fi
 echo "[INFO] Deployment finished successfully"
