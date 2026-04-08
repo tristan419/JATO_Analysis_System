@@ -24,16 +24,34 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run smoke checks
-        run: |
-          python 03_Scripts/ci_smoke_check.py 2>&1 | tee /tmp/smoke_output.txt
+      - name: Style check
+        run: python 03_Scripts/style_check.py
 
-      - name: Upload smoke output on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: smoke-output
-          path: /tmp/smoke_output.txt
+      - name: Compile check
+        run: |
+          python -c "
+          from pathlib import Path
+          files = []
+          for d in ['03_Scripts', '05_DashBoard']:
+              for f in Path(d).rglob('*.py'):
+                  if '.venv' not in f.parts and '__pycache__' not in f.parts:
+                      files.append(str(f))
+          print('\n'.join(sorted(set(files))))
+          " > /tmp/pyfiles.txt
+          cat /tmp/pyfiles.txt
+          xargs python -m py_compile < /tmp/pyfiles.txt
+
+      - name: CLI help checks
+        run: |
+          python 03_Scripts/elt_worker.py --help
+          python 03_Scripts/build_partitioned_dataset.py --help
+          python 03_Scripts/run_data_refresh_job.py --help
+
+      - name: Regression checks
+        run: |
+          python 03_Scripts/regression_csv_download_guardrails.py
+          python 03_Scripts/regression_render_strategy_defaults.py
+          python 03_Scripts/regression_time_selector_consistency.py
 
   fullstack-backend:
     runs-on: ubuntu-latest
