@@ -53,13 +53,13 @@ jobs:
 
       - name: Package deploy archive
         run: |
-          tar czf "$GITHUB_WORKSPACE/JATO_deploy.tar.gz" \
+          tar czf "$RUNNER_TEMP/JATO_deploy.tar.gz" \
             --exclude='.git' \
             --exclude='node_modules' \
             --exclude='.venv' \
             --exclude='__pycache__' \
             -C "$GITHUB_WORKSPACE" .
-          ls -lh "$GITHUB_WORKSPACE/JATO_deploy.tar.gz"
+          ls -lh "$RUNNER_TEMP/JATO_deploy.tar.gz"
 
       - name: Upload archive to server
         uses: appleboy/scp-action@v0.1.7
@@ -68,7 +68,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           password: ${{ secrets.SSH_PASSWORD }}
-          source: JATO_deploy.tar.gz
+          source: /github/runner_temp/JATO_deploy.tar.gz
           target: /tmp/
           strip_components: 0
 
