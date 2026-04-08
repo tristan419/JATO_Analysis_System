@@ -42,14 +42,14 @@ python3 --version
 
 ## 3. 首次拉取代码
 
-如果腾讯云上直接访问 GitHub 不稳定，优先用 codeload 的 archive 下载。这个方式不依赖 git clone，通常比镜像更稳定：
+如果腾讯云上直接访问 GitHub 不稳定，优先用 codeload 的 archive 下载。这个方式不依赖 git clone，通常比镜像更稳定。下载命令带进度条和超时，这样不会看起来像“卡死”：
 
 ```bash
 sudo mkdir -p /opt
 sudo chown "$USER":"$USER" /opt
 
 cd /opt
-curl -fsSL https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/refs/heads/main -o JATO_Analysis_System-main.tar.gz
+curl -# -L --connect-timeout 15 --max-time 600 https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/refs/heads/main -o JATO_Analysis_System-main.tar.gz
 tar -xzf JATO_Analysis_System-main.tar.gz
 cd /opt/JATO_Analysis_System-main
 
@@ -60,6 +60,19 @@ pip install -r 06_AppPlatform/backend/requirements.txt
 ```
 
 如果你更想保留 git 历史，也可以先尝试镜像 clone；但当镜像不稳定时，codeload 这条路径更稳。当前脚本已经支持 archive-based bootstrap，所以下载后直接跑一键脚本即可。
+
+如果腾讯云机器下载 archive 也很慢或经常中断，直接改成“本地下载后上传到服务器”：
+
+```bash
+# 在你自己的电脑上执行
+curl -# -L --connect-timeout 15 --max-time 600 https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/refs/heads/main -o JATO_Analysis_System-main.tar.gz
+scp JATO_Analysis_System-main.tar.gz root@<你的腾讯云IP>:/opt/
+
+# 在腾讯云服务器上执行
+cd /opt
+tar -xzf JATO_Analysis_System-main.tar.gz
+cd /opt/JATO_Analysis_System-main
+```
 
 ## 3.1 一键初始化、部署并启动
 
