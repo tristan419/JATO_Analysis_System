@@ -241,6 +241,7 @@ function getSeriesDefaultColor(name: string, fallback: string): string {
   return FIXED_POWERTRAIN_COLORS[name.toUpperCase()] ?? fallback;
 }
 
+/* ── B9: apply data labels to trace-level properties ── */
 export function applyDataLabelsToTraces(traces: Data[], s: ExportSettings): Data[] {
   if (s.dataLabelMode === "off") return traces;
   const pos = s.dataLabelPosition === "auto" ? undefined : s.dataLabelPosition;
@@ -319,6 +320,7 @@ export function applyDataLabelsToTraces(traces: Data[], s: ExportSettings): Data
   });
 }
 
+/* ── B10: apply per-series manual colors ── */
 export function applySeriesColors(traces: Data[], colors: Record<string, string>): Data[] {
   if (!colors || Object.keys(colors).length === 0) return traces;
   return traces.map(tr => {

@@ -12,7 +12,7 @@ import type {
   RvFinanceVehicle,
 } from "../types";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000/v1";
+const API_BASE = import.meta.env.VITE_API_BASE ?? "/v1";
 
 function getAuthHeaders(): Record<string, string> {
   const token = (
