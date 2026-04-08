@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Data, Layout } from "plotly.js";
 
 import { api } from "../api/client";
@@ -6,7 +6,9 @@ import type { DetailResponse, OverviewResponse, TimeSeriesPoint, GroupedTimeSeri
 import { PlotlyChart } from "../components/PlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
 import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanel";
-import { RvFinanceDashboard } from "../components";
+const RvFinanceDashboard = lazy(() =>
+  import("../components/RvFinanceDashboard").then((module) => ({ default: module.RvFinanceDashboard }))
+);
 
 /* ── constants ──────────────────────────────────────── */
 const COLORS = [
@@ -1754,7 +1756,11 @@ export function DashboardPage() {
           })()}
 
           {/* RV Finance Dashboard (inline within advanced analysis) */}
-          {advChart==="rv_finance_dashboard" && <RvFinanceDashboard />}
+          {advChart==="rv_finance_dashboard" && (
+            <Suspense fallback={<div className="card" style={{ padding: 24 }}>正在加载 RV Finance 仪表盘...</div>}>
+              <RvFinanceDashboard />
+            </Suspense>
+          )}
 
           {advChart!=="rv_finance_dashboard" && advItems.length===0 && !advLoading && <div className="chart-empty">{"\u70b9\u51fb\u300c\u52a0\u8f7d\u56fe\u8868\u300d\u67e5\u770b\u5206\u6790\u7ed3\u679c"}</div>}
           <ExportPanel value={advExport} onChange={setAdvExport} graphDiv={advChartRef.current} labelModeOptions={advLabelModeOptions} />

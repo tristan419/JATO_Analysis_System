@@ -58,6 +58,11 @@ jobs:
             --exclude='node_modules' \
             --exclude='.venv' \
             --exclude='__pycache__' \
+            --exclude='01_RAW_DATA' \
+            --exclude='04_Processed_data' \
+            --exclude='*.ipynb' \
+            --exclude='data_wangler' \
+            --exclude='Markdown_Readme' \
             -C "$GITHUB_WORKSPACE" .
           ls -lh "$RUNNER_TEMP/JATO_deploy.tar.gz"
 
