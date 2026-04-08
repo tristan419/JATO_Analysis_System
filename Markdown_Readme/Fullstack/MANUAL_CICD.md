@@ -124,3 +124,57 @@ curl -I http://127.0.0.1/
 - 你确认前端构建应该统一使用 `VITE_API_BASE=/v1`
 
 自动化 workflow 文件：`.github/workflows/deploy-fullstack-tencent.yml`
+
+## 7. 自动化 CI/CD 已知问题与修复记录
+
+### 7.1 scp-action 归档路径问题（2026-04-08）
+
+**现象**：Step 7（Upload archive to server）成功，但 Step 8（Deploy on server via SSH）tar 解包失败，提示找不到 `/tmp/JATO_deploy.tar.gz`。
+
+**原因**：`appleboy/scp-action@v0.1.7` 内部把源文件用 tar 打包后传到远端再解包。在 Actions 容器中，`RUNNER_TEMP` 被挂载在 `/github/runner_temp/`。source 设为 `/github/runner_temp/JATO_deploy.tar.gz` 时，tar 内部存储路径为 `github/runner_temp/JATO_deploy.tar.gz`（2 层目录前缀）。
+
+- `strip_components: 0` → 文件落在 `/tmp/github/runner_temp/JATO_deploy.tar.gz`（**错误路径**）
+- `strip_components: 2` → 文件落在 `/tmp/JATO_deploy.tar.gz`（**正确路径**）
+
+**修复**：将 workflow 中 `strip_components` 从 0 改为 2。
+
+### 7.2 Node.js 版本检查过于严格（2026-04-08）
+
+**现象**：deploy_fullstack_server.sh 的 Node.js 版本检查要求 20.19+，但服务器安装的可能是 20.15 或 20.17 等更早版本，导致部署脚本在版本校验处直接 exit 1。
+
+**修复**：放宽检查条件，只要求 Node.js 20.10+ 或 22.x+。
+
+### 7.3 deploy archive slim 化（2026-04-08）
+
+**现象**：deploy 归档过大（>700MB），导致上传耗时超过 10 分钟，CI/CD 经常因数据传输超时失败。
+
+**原因**：归档中包含了 `01_RAW_DATA`（~700MB 原始 Excel）、`04_Processed_data`（~61MB parquet）等只需要在服务器本地存在的数据文件。
+
+**修复**：tar 打包时添加如下 `--exclude`：
+```
+01_RAW_DATA, 04_Processed_data, *.ipynb, data_wangler, Markdown_Readme, .git, node_modules, .venv, __pycache__
+```
+归档从 700MB+ 缩减到约 50MB。服务器上已有的数据目录不受影响。
+
+### 7.4 前端构建产物白屏或加载失败
+
+**现象**：浏览器打开页面白屏，控制台报 `ERR_CONNECTION_REFUSED` 请求 `http://127.0.0.1:8000/v1`。
+
+**原因**：`06_AppPlatform/frontend/src/api/client.ts` 中 API_BASE 被硬编码为 `http://127.0.0.1:8000/v1`，打包进了前端产物。用户浏览器无法连接服务器本地回环地址。
+
+**修复**：
+1. `client.ts` 改为 `const API_BASE = import.meta.env.VITE_API_BASE ?? "/v1";`
+2. `.env.production` 设 `VITE_API_BASE=/v1`（走 nginx 同域代理）
+3. 构建时通过环境变量注入，不在代码中写死地址
+
+### 7.5 Plotly 导致首屏卡死
+
+**现象**：dashbaord 首屏加载 >3MB 的 Plotly 库，在弱网/低端机上白屏甚至超时。
+
+**修复**：
+1. `vite.config.ts` 中通过 `manualChunks` 把 plotly 分到独立 chunk `plotly-vendor`
+2. `PlotlyChart.tsx` 改为 `React.lazy(() => import("react-plotly.js"))` 按需加载
+3. `ExportPanel.tsx` 中 PNG 导出改为动态 `import("plotly.js-dist-min")`
+4. `DashboardPage.tsx` 整个仪表板组件 lazy-load
+
+**效果**：首屏 gzip 压缩后约 118KB，最大单文件加载 115ms。Plotly 只在用户真正打开图表时才下载。

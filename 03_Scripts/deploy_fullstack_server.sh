@@ -77,7 +77,10 @@ require_command node
 CURRENT_STEP="Validate sudo access"
 log_section "$CURRENT_STEP"
 if [[ "$(id -u)" -ne 0 ]]; then
-  sudo -v
+  if ! sudo -n true 2>/dev/null; then
+    echo "[WARN] sudo requires a password; skipping sudo -v (CI mode)"
+    echo "[WARN] Later sudo -n calls may fail if NOPASSWD is not configured"
+  fi
 fi
 
 if [[ ! -d "$REPO_DIR/.git" ]]; then

@@ -277,3 +277,90 @@ bash 03_Scripts/deploy_fullstack_server.sh
 ```
 
 这是服务器侧回滚命令，只建议在明确知道目标提交的情况下执行。
+
+## 12. 前端性能优化（防止数据大导致网页卡死）
+
+### 12.1 核心问题
+
+JATO 数据集包含 20+ 国家、多年历史数据，Parquet 文件超过 60MB。如果一次性把所有数据推给浏览器，会导致：
+- 网络传输超时（特别是弱网）
+- 浏览器内存溢出
+- Plotly 图表渲染卡死
+
+### 12.2 已实施的前端优化
+
+| 优化项 | 做法 | 效果 |
+|--------|------|------|
+| 代码分割 | `vite.config.ts` 中 `manualChunks` 把 plotly、recharts、react、router 拆分 | 首屏只下载 ~118KB (gzip) |
+| Plotly 懒加载 | `React.lazy` + `Suspense` 按需加载 plotly-vendor chunk | 首屏不下载 Plotly (~1.5MB) |
+| Dashboard 懒加载 | `DashboardPage.tsx` 中 `lazy(() => import(...))` | 未访问 Dashboard 不加载图表组件 |
+| PNG 导出动态导入 | `ExportPanel.tsx` 中 `import("plotly.js-dist-min")` | 只在用户点导出时才下载 |
+| gzip 压缩 | nginx 层启用 `gzip on` | 资源传输体积减少 50-80% |
+
+### 12.3 后端 API 防卡死建议
+
+目前后端直接从 Parquet/分区数据集读取数据。面对大数据量需要：
+
+**已实施**：
+- Parquet 分区按「国家」存储（`partitioned_dataset_v1/国家=XXX/`），查询时只扫描需要的分区
+- FastAPI 流式响应，后端只返回筛选后的数据
+
+**推荐进一步优化**：
+
+1. **后端分页**：API 对大型查询结果分页返回（每页 500-2000 行），前端按需加载
+   ```python
+   @app.get("/v1/data")
+   async def get_data(page: int = 1, page_size: int = 1000, ...):
+       df = load_partition(...)
+       return df.iloc[(page-1)*page_size : page*page_size]
+   ```
+
+2. **预聚合摘要**：Dashboard 概览不需要逐行数据，只需聚合结果
+   ```python
+   # 03_Scripts/precompute_summaries.py 已提供此能力
+   # 生成按国家×年月的聚合 Parquet，后端读聚合表而非明细表
+   ```
+
+3. **响应缓存**：对不经常变动的查询结果设 HTTP 缓存头
+   ```nginx
+   location /v1/ {
+       proxy_cache_valid 200 10m;   # 聚合接口缓存 10 分钟
+   }
+   ```
+
+4. **前端虚拟滚动**：表格行数超过 500 时使用 `react-window` 虚拟滚动，只渲染可视区域
+
+5. **图表数据采样**：数据点超过 5000 时前端自动采样到 2000 点，避免 Plotly 渲染卡顿
+
+### 12.4 nginx 静态资源长缓存
+
+```nginx
+# 已在 jato_fullstack.conf 中配置
+location /assets/ {
+    root /opt/JATO_Analysis_System-main/06_AppPlatform/frontend/dist;
+    expires 365d;
+    add_header Cache-Control "public, immutable";
+}
+```
+
+Vite 构建产物文件名自带 hash（如 `index-C0WnnW3p.js`），代码变更后文件名自动变化，所以可以安全设置长缓存。
+
+### 12.5 腾讯云服务器内存不足时的应急方案
+
+如果服务器只有 2-4GB 内存：
+
+```bash
+# 查看当前内存使用
+free -h
+
+# 如果 npm ci 或 vite build 被 OOMKill：
+# 方案 1：增加 swap
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# 方案 2：限制 Node.js 内存
+NODE_OPTIONS="--max-old-space-size=1024" npm run build
+```
