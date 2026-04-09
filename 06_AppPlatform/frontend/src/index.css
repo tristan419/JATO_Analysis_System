@@ -423,10 +423,10 @@ button, input, select, textarea {
   align-items: flex-end;
   justify-content: space-between;
   gap: 18px;
-  background: linear-gradient(90deg, var(--c-bg-deep) 0%, var(--c-bg-deep) 28px, var(--c-surface) 28px, var(--c-surface) 100%);
+  background: linear-gradient(90deg, var(--c-bg-deep) 0%, var(--c-bg-deep) 14px, var(--c-surface) 14px, var(--c-surface) 100%);
   color: var(--c-text);
   border: 1px solid var(--c-border);
-  padding: 18px 22px;
+  padding: 18px 24px;
   margin-bottom: 18px;
 }
 .header-card h1 { font-size: 32px; font-weight: 300; letter-spacing: -0.02em; }
@@ -434,10 +434,30 @@ button, input, select, textarea {
 .header-metric-value { font-size: 36px; font-weight: 700; }
 
 .dashboard-hero {
-  gap: 24px;
+  position: relative;
+  align-items: stretch;
+  gap: 28px;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 120% 200% at 80% 50%, rgba(28, 105, 212, 0.08) 0%, transparent 60%),
+    linear-gradient(90deg, var(--c-bg-deep) 0%, var(--c-bg-deep) 14px, var(--c-surface) 14px, var(--c-surface) 100%);
+}
+
+.dashboard-hero::after {
+  content: "";
+  position: absolute;
+  right: -80px;
+  top: -60px;
+  width: 340px;
+  height: 340px;
+  background: radial-gradient(circle, rgba(28, 105, 212, 0.07) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
 }
 
 .dashboard-hero-copy {
+  position: relative;
+  z-index: 1;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -461,15 +481,19 @@ button, input, select, textarea {
 }
 
 .dashboard-hero-actions {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   align-content: start;
-  min-width: min(100%, 340px);
+  min-width: min(100%, 380px);
 }
 
 .dashboard-hero .hero-meta-block {
-  min-height: 112px;
+  min-height: 132px;
+  background: linear-gradient(135deg, #ffffff 0%, #f0f5ff 100%);
+  border-color: #d5dde7;
 }
 
 .dashboard-hero-link {
@@ -579,7 +603,7 @@ button, input, select, textarea {
   gap: 16px;
   padding: 22px;
   border: 1px solid var(--c-border);
-  background: linear-gradient(90deg, var(--c-bg-deep) 0%, var(--c-bg-deep) 24px, var(--c-surface) 24px, var(--c-surface) 100%);
+  background: linear-gradient(90deg, var(--c-bg-deep) 0%, var(--c-bg-deep) 14px, var(--c-surface) 14px, var(--c-surface) 100%);
 }
 
 .specification-header-copy {
@@ -620,6 +644,8 @@ button, input, select, textarea {
 }
 
 .hero-meta-label {
+  position: relative;
+  z-index: 1;
   color: var(--c-text-muted);
   font-size: 10px;
   font-weight: 700;
@@ -628,9 +654,81 @@ button, input, select, textarea {
 }
 
 .hero-meta-value {
+  position: relative;
+  z-index: 1;
   font-size: clamp(24px, 2.8vw, 38px);
   font-weight: 700;
   line-height: 0.95;
+}
+
+.hero-meta-subvalue {
+  position: relative;
+  z-index: 1;
+  font-size: 11px;
+  color: var(--c-text-secondary);
+  margin-top: 4px;
+}
+
+.hero-meta-loader {
+  position: relative;
+  z-index: 1;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--c-primary);
+  opacity: 0.7;
+  margin-top: 6px;
+}
+
+.hero-meta-loader::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--c-primary);
+  border-top-color: transparent;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+  animation: spin 0.8s linear infinite;
+}
+
+.hero-meta-animated-value {
+  display: inline-block;
+  transition: none;
+}
+
+.hero-meta-block-immersive {
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-meta-block-immersive::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 0%;
+  background: linear-gradient(to top, rgba(28, 105, 212, 0.12) 0%, transparent 100%);
+  pointer-events: none;
+  transition: height 0.4s ease;
+}
+
+.hero-meta-block-immersive.is-loading::after {
+  animation: hero-liquid-fill 1.8s ease-in-out infinite;
+}
+
+@keyframes hero-liquid-fill {
+  0%   { height: 0%; opacity: 0.6; }
+  50%  { height: 60%; opacity: 1; }
+  100% { height: 0%; opacity: 0.6; }
+}
+
+@keyframes hero-loader-blink {
+  0%, 100% { opacity: 0.4; }
+  50%       { opacity: 1; }
 }
 
 .selection-ribbon {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
@@ -17,6 +17,24 @@ import {
   type FilterSelections,
 } from "../dashboardFilters";
 import type { DetailResponse, OverviewResponse } from "../types";
+import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
+
+const SPECIFICATION_CACHE_KEY = "specification-page";
+const PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
+
+interface SpecificationPageCache {
+  search: string;
+  columns: string[];
+  selections: FilterSelections;
+  optionsMap: Partial<Record<FilterKey, string[]>>;
+  overview: OverviewResponse | null;
+  detail: DetailResponse | null;
+  detailPage: number;
+  detailPageSize: number;
+  selectedCols: string[];
+  excludeZeroSales: boolean;
+  filtersReady: boolean;
+}
 
 function pickDefaultDetailColumns(columns: string[]): string[] {
   const years = columns.filter((column) => /^\d{4}$/.test(column)).sort().reverse().slice(0, 2);
@@ -37,20 +55,34 @@ function pickDefaultDetailColumns(columns: string[]): string[] {
 }
 
 export function SpecificationPage() {
-  const [columns, setColumns] = useState<string[]>([]);
-  const [selections, setSelections] = useState<FilterSelections>(createEmptySelections);
-  const [optionsMap, setOptionsMap] = useState<Partial<Record<FilterKey, string[]>>>({});
-  const [overview, setOverview] = useState<OverviewResponse | null>(null);
-  const [detail, setDetail] = useState<DetailResponse | null>(null);
-  const [detailPage, setDetailPage] = useState(1);
-  const [detailPageSize, setDetailPageSize] = useState(100);
-  const [selectedCols, setSelectedCols] = useState<string[]>([]);
-  const [excludeZeroSales, setExcludeZeroSales] = useState(false);
+  /* ── cache hydration (read once before any useState) ── */
+  const initRef = useRef<SpecificationPageCache | null | undefined>(undefined);
+  if (initRef.current === undefined) {
+    const currentSearch = window.location.search;
+    const cached = getCachedPageValue<SpecificationPageCache>(SPECIFICATION_CACHE_KEY);
+    initRef.current = cached?.search === currentSearch ? cached : null;
+  }
+  const cachedPage = initRef.current;
+
+  const [columns, setColumns] = useState<string[]>(cachedPage?.columns ?? []);
+  const [selections, setSelections] = useState<FilterSelections>(cachedPage?.selections ?? createEmptySelections());
+  const [optionsMap, setOptionsMap] = useState<Partial<Record<FilterKey, string[]>>>(cachedPage?.optionsMap ?? {});
+  const [overview, setOverview] = useState<OverviewResponse | null>(cachedPage?.overview ?? null);
+  const [detail, setDetail] = useState<DetailResponse | null>(cachedPage?.detail ?? null);
+  const [detailPage, setDetailPage] = useState(cachedPage?.detailPage ?? 1);
+  const [detailPageSize, setDetailPageSize] = useState(cachedPage?.detailPageSize ?? 100);
+  const [selectedCols, setSelectedCols] = useState<string[]>(cachedPage?.selectedCols ?? []);
+  const [excludeZeroSales, setExcludeZeroSales] = useState(cachedPage?.excludeZeroSales ?? false);
   const [bootLoading, setBootLoading] = useState(false);
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [filtersReady, setFiltersReady] = useState(false);
+  const [filtersReady, setFiltersReady] = useState(cachedPage?.filtersReady ?? false);
   const [error, setError] = useState("");
+
+  /* skip-refs for cache hydration — skip initial effect runs when hydrating */
+  const skipInitialOverviewRef = useRef(Boolean(cachedPage));
+  const skipInitialDetailResetRef = useRef(Boolean(cachedPage));
+  const skipInitialDetailFetchRef = useRef(Boolean(cachedPage));
 
   const res = useMemo(() => {
     const mapped = {} as Record<FilterKey, string | null>;
@@ -110,6 +142,7 @@ export function SpecificationPage() {
   );
 
   useEffect(() => {
+    if (cachedPage) return; // skip boot fetch when hydrating from cache
     let cancelled = false;
 
     (async () => {
@@ -159,6 +192,7 @@ export function SpecificationPage() {
 
   useEffect(() => {
     if (!filtersReady || columns.length === 0) return;
+    if (skipInitialOverviewRef.current) { skipInitialOverviewRef.current = false; return; }
     let cancelled = false;
 
     const timer = setTimeout(async () => {
@@ -185,11 +219,13 @@ export function SpecificationPage() {
   }, [columns.length, filterPayloadStr, filtersReady]);
 
   useEffect(() => {
+    if (skipInitialDetailResetRef.current) { skipInitialDetailResetRef.current = false; return; }
     setDetailPage(1);
   }, [filterPayloadStr, selectedColsStr, detailPageSize, excludeZeroSales]);
 
   useEffect(() => {
     if (!filtersReady || columns.length === 0 || selectedCols.length === 0) return;
+    if (skipInitialDetailFetchRef.current) { skipInitialDetailFetchRef.current = false; return; }
     let cancelled = false;
 
     const timer = setTimeout(async () => {
@@ -219,6 +255,17 @@ export function SpecificationPage() {
       clearTimeout(timer);
     };
   }, [columns.length, detailPage, detailPageSize, excludeZeroSales, filterPayloadStr, filtersReady, selectedCols, selectedColsStr]);
+
+  /* persist cache snapshot once filters are ready and columns are loaded */
+  useEffect(() => {
+    if (!filtersReady || columns.length === 0) return;
+    const snapshot: SpecificationPageCache = {
+      search: filterSearch,
+      columns, selections, optionsMap, overview, detail,
+      detailPage, detailPageSize, selectedCols, excludeZeroSales, filtersReady,
+    };
+    setCachedPageValue(SPECIFICATION_CACHE_KEY, snapshot, PAGE_CACHE_TTL_MS);
+  }, [filtersReady, columns, filterSearch, selections, optionsMap, overview, detail, detailPage, detailPageSize, selectedCols, excludeZeroSales]);
 
   async function onFilterChange(dimKey: FilterKey, newVals: string[]) {
     const nextSelections: FilterSelections = {

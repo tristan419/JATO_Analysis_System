@@ -12,6 +12,8 @@ import {
   resolve,
 } from "../dashboardFilters";
 import type { OverviewResponse, TimeSeriesPoint, GroupedTimeSeriesItem, ModelVersionItem, PositioningMapItem, OthersDetailItem } from "../types";
+import { buildBubbleSizing } from "../utils/bubbleSizing";
+import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 import { PlotlyChart } from "../components/PlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
 import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanel";
@@ -167,87 +169,185 @@ function asMetaRecordArray(value: unknown): Record<string, unknown>[] {
 }
 
 /* ── filter component ──────────────────────────────── */
+/* ── Cache constants & interface ──────────────────── */
+const DASHBOARD_CACHE_KEY = "dashboard-page";
+const PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
+
+interface DashboardPageCache {
+  search: string;
+  columns: string[];
+  selections: Record<string, string[]>;
+  optionsMap: Record<string, string[]>;
+  filteredRowCount: number | null;
+  overview: OverviewResponse | null;
+  yearSeries: TimeSeriesPoint[];
+  monthSeries: TimeSeriesPoint[];
+  activeTab: "year" | "month";
+  chartType: "line" | "bar";
+  tsMode: string;
+  tsGroupDim: string;
+  tsTopN: number;
+  tsTopNEnabled: boolean;
+  tsIncludeOthers: boolean;
+  groupedItems: GroupedTimeSeriesItem[];
+  hiddenSeries: string[];
+  othersDetail: OthersDetailItem[];
+  advGroup: string;
+  advChart: string;
+  advItems: Record<string, string | number>[];
+  advMeta: Record<string, unknown> | null;
+  advBandSize: number;
+  advTopN: number;
+  advMigrationMode: "area" | "line";
+  advBubbleScale: number;
+  advBubbleGrain: "model" | "version";
+  advBubbleFacet: boolean;
+  advBubbleFacetMax: number;
+  advPowertrains: string[];
+  advNevTopNEnabled: boolean;
+  advNevAxisMax: number;
+  advNevMetricMode: "window_sales" | "net_change";
+  advNevStackByModel: boolean;
+  advNevFacetBrand: boolean;
+  advNevMaxBrandFacets: number;
+  advRangeStep: number;
+  advHeatmapScale: string;
+  tcoYears: number;
+  tcoAnnualKm: number;
+  tcoDepreciation: number;
+  tcoMaintenance: number;
+  tcoTaxInsurance: number;
+  tcoEnergyCost: number;
+  mvModelName: string;
+  mvTopN: number;
+  mvItems: ModelVersionItem[];
+  mvColorBy: "Powertrain" | "Trim";
+  pmTargetLength: string;
+  pmTargetMsrp: string;
+  pmLengthRange: number;
+  pmManualCompetitors: string[];
+  pmTopN: number;
+  pmNClusters: number;
+  pmItems: PositioningMapItem[];
+  pmTarget: { Length: number; MSRP: number } | null;
+  pmClusterTop3: string[];
+  timeRange: { start: string; end: string } | null;
+  monthGrain: "month" | "quarter" | "year";
+}
+
+function createDashboardSelections(source?: Partial<Record<string, string[]>>): Record<string, string[]> {
+  return {
+    country: source?.country ?? [],
+    segment: source?.segment ?? [],
+    powertrain: source?.powertrain ?? [],
+    make: source?.make ?? [],
+    model: source?.model ?? [],
+    version: source?.version ?? [],
+  };
+}
+
+function getLoadingMetricValue(target: number | null | undefined, tick: number, fallback: number): number {
+  if (target != null) return target;
+  return fallback + (tick % 8) * Math.floor(Math.max(1, fallback * 0.07));
+}
+
+function formatMetricValue(value: number): string {
+  return value.toLocaleString();
+}
+
 /* ── Main Dashboard ────────────────────────────────── */
 export function DashboardPage() {
-  const [columns, setColumns] = useState<string[]>([]);
-  const [selections, setSelections] = useState<Record<string, string[]>>({
-    country:[], segment:[], powertrain:[], make:[], model:[], version:[],
-  });
-  const [optionsMap, setOptionsMap] = useState<Record<string, string[]>>({});
-  const [filteredRowCount, setFilteredRowCount] = useState<number|null>(null);
-  const [overview, setOverview] = useState<OverviewResponse|null>(null);
-  const [loading, setLoading] = useState(false);
-  const [yearSeries, setYearSeries] = useState<TimeSeriesPoint[]>([]);
-  const [monthSeries, setMonthSeries] = useState<TimeSeriesPoint[]>([]);
+  /* ── cache hydration (read once before any useState) ── */
+  const initRef = useRef<DashboardPageCache | null | undefined>(undefined);
+  if (initRef.current === undefined) {
+    const currentSearch = window.location.search;
+    const cached = getCachedPageValue<DashboardPageCache>(DASHBOARD_CACHE_KEY);
+    initRef.current = cached?.search === currentSearch ? cached : null;
+  }
+  const cachedPage = initRef.current;
+
+  const [columns, setColumns] = useState<string[]>(cachedPage?.columns ?? []);
+  const [selections, setSelections] = useState<Record<string, string[]>>(
+    cachedPage?.selections ?? createDashboardSelections(),
+  );
+  const [optionsMap, setOptionsMap] = useState<Record<string, string[]>>(cachedPage?.optionsMap ?? {});
+  const [filteredRowCount, setFilteredRowCount] = useState<number|null>(cachedPage?.filteredRowCount ?? null);
+  const [overview, setOverview] = useState<OverviewResponse|null>(cachedPage?.overview ?? null);
+  const [loading, setLoading] = useState(!cachedPage);
+  const [yearSeries, setYearSeries] = useState<TimeSeriesPoint[]>(cachedPage?.yearSeries ?? []);
+  const [monthSeries, setMonthSeries] = useState<TimeSeriesPoint[]>(cachedPage?.monthSeries ?? []);
 
   /* time-series controls */
-  const [activeTab, setActiveTab] = useState<"year"|"month">("year");
-  const [chartType, setChartType] = useState<"line"|"bar">("line");
-  const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">("\u603b\u548c");
-  const [tsGroupDim, setTsGroupDim] = useState("\u52a8\u603b\u89c4\u6574");
-  const [tsTopN, setTsTopN] = useState(10);
-  const [tsTopNEnabled, setTsTopNEnabled] = useState(true);
-  const [tsIncludeOthers, setTsIncludeOthers] = useState(false);
-  const [groupedItems, setGroupedItems] = useState<GroupedTimeSeriesItem[]>([]);
+  const [activeTab, setActiveTab] = useState<"year"|"month">(cachedPage?.activeTab ?? "year");
+  const [chartType, setChartType] = useState<"line"|"bar">(cachedPage?.chartType ?? "line");
+  const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">(cachedPage?.tsMode as "\u603b\u548c"|"\u5206\u7ec4" ?? "\u603b\u548c");
+  const [tsGroupDim, setTsGroupDim] = useState(cachedPage?.tsGroupDim ?? "\u52a8\u603b\u89c4\u6574");
+  const [tsTopN, setTsTopN] = useState(cachedPage?.tsTopN ?? 10);
+  const [tsTopNEnabled, setTsTopNEnabled] = useState(cachedPage?.tsTopNEnabled ?? true);
+  const [tsIncludeOthers, setTsIncludeOthers] = useState(cachedPage?.tsIncludeOthers ?? false);
+  const [groupedItems, setGroupedItems] = useState<GroupedTimeSeriesItem[]>(cachedPage?.groupedItems ?? []);
   const [groupedLoading, setGroupedLoading] = useState(false);
-  const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
-  const [othersDetail, setOthersDetail] = useState<OthersDetailItem[]>([]);
+  const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set(cachedPage?.hiddenSeries ?? []));
+  const [othersDetail, setOthersDetail] = useState<OthersDetailItem[]>(cachedPage?.othersDetail ?? []);
 
   /* advanced charts */
-  const [advGroup, setAdvGroup] = useState("market_structure");
-  const [advChart, setAdvChart] = useState("powertrain_bubble");
-  const [advItems, setAdvItems] = useState<Record<string, string|number>[]>([]);
-  const [advMeta, setAdvMeta] = useState<Record<string, unknown> | null>(null);
+  const [advGroup, setAdvGroup] = useState(cachedPage?.advGroup ?? "market_structure");
+  const [advChart, setAdvChart] = useState(cachedPage?.advChart ?? "powertrain_bubble");
+  const [advItems, setAdvItems] = useState<Record<string, string|number>[]>(cachedPage?.advItems ?? []);
+  const [advMeta, setAdvMeta] = useState<Record<string, unknown> | null>(cachedPage?.advMeta ?? null);
   const [advLoading, setAdvLoading] = useState(false);
-  const [advBandSize, setAdvBandSize] = useState(1000);
-  const [advTopN, setAdvTopN] = useState(30);
-  const [advMigrationMode, setAdvMigrationMode] = useState<"area"|"line">("area");
-  const [advBubbleScale, setAdvBubbleScale] = useState(2);
-  const [advBubbleGrain, setAdvBubbleGrain] = useState<"model"|"version">("model");
+  const [advBandSize, setAdvBandSize] = useState(cachedPage?.advBandSize ?? 1000);
+  const [advTopN, setAdvTopN] = useState(cachedPage?.advTopN ?? 30);
+  const [advMigrationMode, setAdvMigrationMode] = useState<"area"|"line">(cachedPage?.advMigrationMode ?? "area");
+  const [advBubbleScale, setAdvBubbleScale] = useState(cachedPage?.advBubbleScale ?? 2);
+  const [advBubbleGrain, setAdvBubbleGrain] = useState<"model"|"version">(cachedPage?.advBubbleGrain ?? "model");
   /* 7a: brand faceting for powertrain_bubble */
-  const [advBubbleFacet, setAdvBubbleFacet] = useState(false);
-  const [advBubbleFacetMax, setAdvBubbleFacetMax] = useState(4);
+  const [advBubbleFacet, setAdvBubbleFacet] = useState(cachedPage?.advBubbleFacet ?? false);
+  const [advBubbleFacetMax, setAdvBubbleFacetMax] = useState(cachedPage?.advBubbleFacetMax ?? 4);
   /* NEV-specific controls */
-  const [advPowertrains, setAdvPowertrains] = useState<string[]>(["BEV","PHEV"]);
-  const [advNevTopNEnabled, setAdvNevTopNEnabled] = useState(true);
-  const [advNevAxisMax, setAdvNevAxisMax] = useState(1000);
-  const [advNevMetricMode, setAdvNevMetricMode] = useState<"window_sales"|"net_change">("window_sales");
-  const [advNevStackByModel, setAdvNevStackByModel] = useState(false);
-  const [advNevFacetBrand, setAdvNevFacetBrand] = useState(false);
-  const [advNevMaxBrandFacets, setAdvNevMaxBrandFacets] = useState(4);
-  const [advRangeStep, setAdvRangeStep] = useState(50);
-  const [advHeatmapScale, setAdvHeatmapScale] = useState("Blues");
+  const [advPowertrains, setAdvPowertrains] = useState<string[]>(cachedPage?.advPowertrains ?? ["BEV","PHEV"]);
+  const [advNevTopNEnabled, setAdvNevTopNEnabled] = useState(cachedPage?.advNevTopNEnabled ?? true);
+  const [advNevAxisMax, setAdvNevAxisMax] = useState(cachedPage?.advNevAxisMax ?? 1000);
+  const [advNevMetricMode, setAdvNevMetricMode] = useState<"window_sales"|"net_change">(cachedPage?.advNevMetricMode ?? "window_sales");
+  const [advNevStackByModel, setAdvNevStackByModel] = useState(cachedPage?.advNevStackByModel ?? false);
+  const [advNevFacetBrand, setAdvNevFacetBrand] = useState(cachedPage?.advNevFacetBrand ?? false);
+  const [advNevMaxBrandFacets, setAdvNevMaxBrandFacets] = useState(cachedPage?.advNevMaxBrandFacets ?? 4);
+  const [advRangeStep, setAdvRangeStep] = useState(cachedPage?.advRangeStep ?? 50);
+  const [advHeatmapScale, setAdvHeatmapScale] = useState(cachedPage?.advHeatmapScale ?? "Blues");
   /* TCO parameter sliders */
-  const [tcoYears, setTcoYears] = useState(5);
-  const [tcoAnnualKm, setTcoAnnualKm] = useState(15000);
-  const [tcoDepreciation, setTcoDepreciation] = useState(0.5);
-  const [tcoMaintenance, setTcoMaintenance] = useState(0.018);
-  const [tcoTaxInsurance, setTcoTaxInsurance] = useState(0.02);
-  const [tcoEnergyCost, setTcoEnergyCost] = useState(0.1);
+  const [tcoYears, setTcoYears] = useState(cachedPage?.tcoYears ?? 5);
+  const [tcoAnnualKm, setTcoAnnualKm] = useState(cachedPage?.tcoAnnualKm ?? 15000);
+  const [tcoDepreciation, setTcoDepreciation] = useState(cachedPage?.tcoDepreciation ?? 0.5);
+  const [tcoMaintenance, setTcoMaintenance] = useState(cachedPage?.tcoMaintenance ?? 0.018);
+  const [tcoTaxInsurance, setTcoTaxInsurance] = useState(cachedPage?.tcoTaxInsurance ?? 0.02);
+  const [tcoEnergyCost, setTcoEnergyCost] = useState(cachedPage?.tcoEnergyCost ?? 0.1);
 
   /* model version bubble (Bug 2) */
-  const [mvModelName, setMvModelName] = useState("");
-  const [mvTopN, setMvTopN] = useState(50);
-  const [mvItems, setMvItems] = useState<ModelVersionItem[]>([]);
+  const [mvModelName, setMvModelName] = useState(cachedPage?.mvModelName ?? "");
+  const [mvTopN, setMvTopN] = useState(cachedPage?.mvTopN ?? 50);
+  const [mvItems, setMvItems] = useState<ModelVersionItem[]>(cachedPage?.mvItems ?? []);
   const [mvLoading, setMvLoading] = useState(false);
-  const [mvColorBy, setMvColorBy] = useState<"Powertrain"|"Trim">("Powertrain");
+  const [mvColorBy, setMvColorBy] = useState<"Powertrain"|"Trim">(cachedPage?.mvColorBy ?? "Powertrain");
 
   /* OJ positioning map (Bug 3) */
-  const [pmTargetLength, setPmTargetLength] = useState("");
-  const [pmTargetMsrp, setPmTargetMsrp] = useState("");
-  const [pmLengthRange, setPmLengthRange] = useState(600);
+  const [pmTargetLength, setPmTargetLength] = useState(cachedPage?.pmTargetLength ?? "");
+  const [pmTargetMsrp, setPmTargetMsrp] = useState(cachedPage?.pmTargetMsrp ?? "");
+  const [pmLengthRange, setPmLengthRange] = useState(cachedPage?.pmLengthRange ?? 600);
   const [pmManualInput, setPmManualInput] = useState("");
-  const [pmManualCompetitors, setPmManualCompetitors] = useState<string[]>([]);
-  const [pmTopN, setPmTopN] = useState(80);
-  const [pmNClusters, setPmNClusters] = useState(4);
-  const [pmItems, setPmItems] = useState<PositioningMapItem[]>([]);
-  const [pmTarget, setPmTarget] = useState<{ Length: number; MSRP: number } | null>(null);
-  const [pmClusterTop3, setPmClusterTop3] = useState<string[]>([]);
+  const [pmManualCompetitors, setPmManualCompetitors] = useState<string[]>(cachedPage?.pmManualCompetitors ?? []);
+  const [pmTopN, setPmTopN] = useState(cachedPage?.pmTopN ?? 80);
+  const [pmNClusters, setPmNClusters] = useState(cachedPage?.pmNClusters ?? 4);
+  const [pmItems, setPmItems] = useState<PositioningMapItem[]>(cachedPage?.pmItems ?? []);
+  const [pmTarget, setPmTarget] = useState<{ Length: number; MSRP: number } | null>(cachedPage?.pmTarget ?? null);
+  const [pmClusterTop3, setPmClusterTop3] = useState<string[]>(cachedPage?.pmClusterTop3 ?? []);
   const [pmLoading, setPmLoading] = useState(false);
 
   /* global time axis */
-  const [timeRange, setTimeRange] = useState<TimeRange | null>(null);
-  const [monthGrain, setMonthGrain] = useState<"month"|"quarter"|"year">("month");
+  const [timeRange, setTimeRange] = useState<TimeRange | null>(cachedPage?.timeRange ?? null);
+  const [monthGrain, setMonthGrain] = useState<"month"|"quarter"|"year">(cachedPage?.monthGrain ?? "month");
+
+  /* hero loading tick */
+  const [heroLoadingTick, setHeroLoadingTick] = useState(0);
 
   /* export settings (one per chart section) */
   const [tsExport, setTsExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
@@ -260,9 +360,9 @@ export function DashboardPage() {
   const pmChartRef = useRef<HTMLDivElement | null>(null);
 
   const [error, setError] = useState("");
-  const bootDone = useRef(false);
+  const bootDone = useRef(Boolean(cachedPage));
   const hydratedFromUrl = useRef(false);
-  const defaultsApplied = useRef(false);
+  const defaultsApplied = useRef(Boolean(cachedPage));
 
   /* column resolution */
   const res = useMemo(() => {
@@ -279,6 +379,7 @@ export function DashboardPage() {
 
   /* B13: hydrate filters from URL query params on boot */
   useEffect(() => {
+    if (cachedPage) return; // already hydrated from cache
     const params = new URLSearchParams(window.location.search);
     const initial: Record<string, string[]> = {};
     for (const { key } of FILTER_ORDER) {
@@ -343,17 +444,23 @@ export function DashboardPage() {
     void applySelections(next, "powertrain");
   }, [columns.length, optionsMap.powertrain, res]);
 
-  /* B13: sync selections to URL */
+  /* B13: sync selections to URL via memoized dashboardSearch */
+  const dashboardSearch = useMemo(() =>
+    buildSearchFromSelections(selections as {
+      country: string[];
+      segment: string[];
+      powertrain: string[];
+      make: string[];
+      model: string[];
+      version: string[];
+    }),
+    [selections],
+  );
+
   useEffect(() => {
-    const params = new URLSearchParams();
-    for (const { key } of FILTER_ORDER) {
-      const vals = selections[key];
-      if (vals?.length) params.set(key, vals.join(","));
-    }
-    const qs = params.toString();
-    const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    const newUrl = `${window.location.pathname}${dashboardSearch}`;
     window.history.replaceState(null, "", newUrl);
-  }, [selections]);
+  }, [dashboardSearch]);
 
   async function loadOverview() {
     setLoading(true); setError("");
@@ -367,17 +474,7 @@ export function DashboardPage() {
   }
 
   const filterPayloadStr = useMemo(() => JSON.stringify(buildFilterPayload()), [buildFilterPayload]);
-  const specificationHref = useMemo(() => {
-    const search = buildSearchFromSelections(selections as {
-      country: string[];
-      segment: string[];
-      powertrain: string[];
-      make: string[];
-      model: string[];
-      version: string[];
-    });
-    return `/specification${search}`;
-  }, [selections]);
+  const specificationHref = `/specification${dashboardSearch}`;
   const prevPayloadRef = useRef(filterPayloadStr);
   useEffect(() => {
     if (prevPayloadRef.current !== filterPayloadStr && columns.length > 0) {
@@ -394,6 +491,49 @@ export function DashboardPage() {
       loadAdvChart();
     }
   }, [filterPayloadStr, advItems.length, columns.length]);
+
+  /* hero loading tick — increment while loading, reset when done */
+  useEffect(() => {
+    if (!loading) { setHeroLoadingTick(0); return; }
+    const id = setInterval(() => setHeroLoadingTick(t => t + 1), 350);
+    return () => clearInterval(id);
+  }, [loading]);
+
+  /* persist cache snapshot once columns are loaded */
+  useEffect(() => {
+    if (columns.length === 0) return;
+    const snapshot: DashboardPageCache = {
+      search: dashboardSearch,
+      columns, selections, optionsMap, filteredRowCount, overview, yearSeries, monthSeries,
+      activeTab, chartType, tsMode, tsGroupDim, tsTopN, tsTopNEnabled, tsIncludeOthers,
+      groupedItems, hiddenSeries: Array.from(hiddenSeries), othersDetail,
+      advGroup, advChart, advItems, advMeta,
+      advBandSize, advTopN, advMigrationMode, advBubbleScale, advBubbleGrain,
+      advBubbleFacet, advBubbleFacetMax, advPowertrains,
+      advNevTopNEnabled, advNevAxisMax, advNevMetricMode, advNevStackByModel, advNevFacetBrand, advNevMaxBrandFacets,
+      advRangeStep, advHeatmapScale,
+      tcoYears, tcoAnnualKm, tcoDepreciation, tcoMaintenance, tcoTaxInsurance, tcoEnergyCost,
+      mvModelName, mvTopN, mvItems, mvColorBy,
+      pmTargetLength, pmTargetMsrp, pmLengthRange, pmManualCompetitors, pmTopN, pmNClusters,
+      pmItems, pmTarget, pmClusterTop3,
+      timeRange, monthGrain,
+    };
+    setCachedPageValue(DASHBOARD_CACHE_KEY, snapshot, PAGE_CACHE_TTL_MS);
+  }, [
+    columns, dashboardSearch, selections, optionsMap, filteredRowCount, overview, yearSeries, monthSeries,
+    activeTab, chartType, tsMode, tsGroupDim, tsTopN, tsTopNEnabled, tsIncludeOthers,
+    groupedItems, hiddenSeries, othersDetail,
+    advGroup, advChart, advItems, advMeta,
+    advBandSize, advTopN, advMigrationMode, advBubbleScale, advBubbleGrain,
+    advBubbleFacet, advBubbleFacetMax, advPowertrains,
+    advNevTopNEnabled, advNevAxisMax, advNevMetricMode, advNevStackByModel, advNevFacetBrand, advNevMaxBrandFacets,
+    advRangeStep, advHeatmapScale,
+    tcoYears, tcoAnnualKm, tcoDepreciation, tcoMaintenance, tcoTaxInsurance, tcoEnergyCost,
+    mvModelName, mvTopN, mvItems, mvColorBy,
+    pmTargetLength, pmTargetMsrp, pmLengthRange, pmManualCompetitors, pmTopN, pmNClusters,
+    pmItems, pmTarget, pmClusterTop3,
+    timeRange, monthGrain,
+  ]);
 
   /* B12: lazy auto-load — when filteredRowCount < 200 000, auto-trigger first advanced chart */
   const advAutoLoaded = useRef(false);
@@ -607,6 +747,18 @@ export function DashboardPage() {
     if (!timeRange) return kpis?.cumulativeSales;
     return filteredSingle.reduce((sum, s) => sum + s.value, 0);
   }, [timeRange, filteredSingle, kpis]);
+
+  /* hero animated metric values */
+  const heroTotalSales = getLoadingMetricValue(
+    loading ? null : (filteredRowCount ?? kpis?.totalRows),
+    heroLoadingTick,
+    800000,
+  );
+  const heroVersionCount = getLoadingMetricValue(
+    loading ? null : kpis?.versionCount,
+    heroLoadingTick,
+    12000,
+  );
 
   /* palette helper */
   const tsPalette = useMemo(() => getExportPalette(tsExport.colorScheme), [tsExport.colorScheme]);
@@ -910,13 +1062,15 @@ export function DashboardPage() {
           </div>
 
           <div className="dashboard-hero-actions">
-            <div className="hero-meta-block">
-              <span className="hero-meta-label">Rows in scope</span>
-              <strong className="hero-meta-value">{(filteredRowCount ?? kpis?.totalRows ?? 0).toLocaleString()}</strong>
+            <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
+              <span className="hero-meta-label">{loading ? "LOADING LIVE SCOPE" : "Total Sales"}</span>
+              <strong className="hero-meta-animated-value hero-meta-value">{formatMetricValue(heroTotalSales)}</strong>
+              {loading && <span className="hero-meta-loader">LOADING LIVE SCOPE</span>}
             </div>
-            <div className="hero-meta-block">
-              <span className="hero-meta-label">Window sales</span>
-              <strong className="hero-meta-value">{Number(timeWindowSales ?? 0).toLocaleString()}</strong>
+            <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
+              <span className="hero-meta-label">{loading ? "SYNCING FILTER STATE" : "Versions"}</span>
+              <strong className="hero-meta-animated-value hero-meta-value">{formatMetricValue(heroVersionCount)}</strong>
+              {loading && <span className="hero-meta-loader">SYNCING FILTER STATE</span>}
             </div>
             <Link className="btn btn-primary dashboard-hero-link" to={specificationHref}>
               Open Specification
@@ -1268,11 +1422,9 @@ export function DashboardPage() {
             const ax = scatterAxes();
             const isPtScatter = ax.color === "Powertrain";
             const cats = [...new Set(advItems.map(r=>String(r[ax.color]??"")))];
-            /* normalize bubble sizes — mimic px.scatter size_max behaviour */
+            /* normalize bubble sizes using shared buildBubbleSizing utility */
             const allZ = advItems.map(r => Math.max(1, Number(r[ax.z] ?? 1)));
-            const maxZ = Math.max(1, ...allZ);
-            const sizeMax = 24 * advBubbleScale; /* Streamlit default: 24 × multiplier */
-            const bubbleSizeRef = (2 * maxZ) / Math.max(1, sizeMax * sizeMax);
+            const { sizeref: bubbleSizeRef, sizemin: bubbleSizeMin } = buildBubbleSizing(allZ, { maxDiameter: 24 * advBubbleScale });
 
             function buildTraces(items: Record<string, string|number>[]) {
               const localCats = [...new Set(items.map(r=>String(r[ax.color]??"")))];
@@ -1299,7 +1451,7 @@ export function DashboardPage() {
                     size: subset.map(r => Math.max(1, Number(r[ax.z] ?? 1))),
                     sizemode: "area" as const,
                     sizeref: bubbleSizeRef,
-                    sizemin: 4,
+                    sizemin: bubbleSizeMin,
                     opacity: 0.7,
                   },
                   hovertemplate: isBubbleMsrp
@@ -1764,8 +1916,8 @@ export function DashboardPage() {
           {mvItems.length > 0 && (() => {
             const isPtBubble = mvColorBy === "Powertrain";
             const cats = [...new Set(mvItems.map(r=>r[mvColorBy]))];
-            const mvMaxSales = Math.max(1, ...mvItems.map(r => r.Sales));
-            const mvSizeMax = 30;
+            const allMvSales = mvItems.map(r => Math.max(1, r.Sales));
+            const mvSizing = buildBubbleSizing(allMvSales, { maxDiameter: 30, minDiameter: 5 });
             const traces: Data[] = cats.map((cat, i) => {
               const subset = mvItems.filter(r=>r[mvColorBy]===cat);
               return withExportLabels({
@@ -1778,8 +1930,10 @@ export function DashboardPage() {
                 name: cat,
                 marker: {
                   color: seriesColor(cat, i, mvPalette, isPtBubble),
-                  size: subset.map(r => Math.max(5, Math.sqrt(Math.max(1, r.Sales) / mvMaxSales) * mvSizeMax)),
-                  sizemode: "area" as const,
+                  size: subset.map(r => Math.max(1, r.Sales)),
+                  sizemode: mvSizing.sizemode,
+                  sizeref: mvSizing.sizeref,
+                  sizemin: mvSizing.sizemin,
                   opacity: 0.7,
                 },
                 hovertemplate: "<b>%{text}</b><br>Trim: %{customdata[0]}<br>动力: %{customdata[1]}<br>车长: %{x} mm<br>MSRP: %{y:,.0f}<br>销量: %{customdata[2]}<extra>%{fullData.name}</extra>",
@@ -1858,7 +2012,8 @@ export function DashboardPage() {
           )}
           {pmItems.length > 0 && (() => {
             const clusterIds = [...new Set(pmItems.map(r=>r.cluster))].sort((a,b)=>a-b);
-            const pmMax = Math.max(1, ...pmItems.map(p => p.Sales));
+            const allPmSales = pmItems.map(p => Math.max(1, p.Sales));
+            const pmSizing = buildBubbleSizing(allPmSales, { maxDiameter: 30, minDiameter: 5 });
             const traces: Data[] = clusterIds.map((cid, i) => {
               const subset = pmItems.filter(r=>r.cluster===cid);
               return withExportLabels({
@@ -1871,8 +2026,10 @@ export function DashboardPage() {
                 name: "Cluster " + cid,
                 marker: {
                   color: pmPalette[i % pmPalette.length],
-                  size: subset.map(r => Math.max(5, Math.sqrt(Math.max(1, r.Sales) / pmMax) * 30)),
-                  sizemode: "area" as const,
+                  size: subset.map(r => Math.max(1, r.Sales)),
+                  sizemode: pmSizing.sizemode,
+                  sizeref: pmSizing.sizeref,
+                  sizemin: pmSizing.sizemin,
                 },
                 hovertemplate: "<b>%{text}</b><br>\u7ec6\u5206: %{customdata[0]}<br>\u8f66\u957f: %{x} mm<br>MSRP: %{y:,.0f}<br>\u9500\u91cf: %{customdata[1]}<br>\u805a\u7c7b: %{customdata[2]}<extra>%{fullData.name}</extra>",
               } as Data, {
