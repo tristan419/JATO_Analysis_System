@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import type { Data, Layout } from "plotly.js";
 
 import { api } from "../api/client";
+import { LoadingActionButton } from "../components/LoadingActionButton";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
 import {
   DIM,
@@ -252,6 +253,12 @@ function getLoadingMetricValue(target: number, tick: number, fallback: number): 
 
 function formatMetricValue(value: number): string {
   return Math.max(0, Math.round(value)).toLocaleString();
+}
+
+function summarizeScopeValues(values: string[]): string {
+  if (values.length === 0) return "-";
+  if (values.length <= 2) return values.join(" · ");
+  return `${values.slice(0, 2).join(" · ")} +${values.length - 2}`;
 }
 
 /* ── filter component ──────────────────────────────── */
@@ -598,6 +605,16 @@ export function DashboardPage() {
       .map(({ key, label }) => `${label} ${selections[key].length}`)
       .join(" / ");
   }, [activeFilters, selections]);
+  const scopeFilters = useMemo(
+    () => activeFilters.map(({ key, label }) => ({
+      key,
+      label,
+      count: selections[key].length,
+      preview: summarizeScopeValues(selections[key]),
+    })),
+    [activeFilters, selections],
+  );
+  const scopeButtonCount = scopeFilters.length + (timeRange ? 1 : 0);
   const isGrouped = tsMode === "\u5206\u7ec4";
   const singleSeries = activeTab === "year" ? yearSeries : monthSeries;
 
@@ -1124,21 +1141,69 @@ export function DashboardPage() {
       </aside>
 
       <section className="dashboard-main">
-        {loading && <div className="loading-banner"><span className="spinner" />{" \u52a0\u8f7d\u4e2d\u2026"}</div>}
-
         <div className="header-card dashboard-hero">
           <div className="dashboard-hero-copy">
             <span className="page-kicker">01 / Market Overview</span>
             <h1>Dashboard Control View</h1>
-            <p>
-              首屏保留 KPI、趋势和高级分析交互；规格明细、列选择、分页与 CSV 导出已下沉到独立的 Specification Page。
-            </p>
-            <div className="dashboard-hero-summary">
-              <span className="selection-ribbon-label">Current scope</span>
-              <span className="selection-ribbon-value">
-                {activeFilterSummary}
-                {timeRange ? ` · ${timeRange.start} ~ ${timeRange.end}` : " · Full timeline"}
-              </span>
+            <div className="dashboard-hero-scope-board">
+              <div className="scope-board-head">
+                <span className="selection-ribbon-label">Current scope</span>
+                <div className="scope-board-actions">
+                  <button type="button" className="btn btn-sm btn-secondary" onClick={resetFilters}>
+                    Reset filters
+                  </button>
+                  <Link className="btn btn-sm btn-primary" to={specificationHref}>
+                    Open Specification
+                  </Link>
+                </div>
+              </div>
+
+              <div className="scope-chip-list">
+                {scopeFilters.length > 0 ? scopeFilters.map((scopeFilter) => (
+                  <button
+                    key={scopeFilter.key}
+                    type="button"
+                    className="scope-chip"
+                    title={`点击清空 ${scopeFilter.label} 筛选`}
+                    onClick={() => void onFilterChange(scopeFilter.key, [])}
+                  >
+                    <span className="scope-chip-label">{scopeFilter.label}</span>
+                    <strong className="scope-chip-value">{scopeFilter.preview}</strong>
+                    <span className="scope-chip-count">{scopeFilter.count}</span>
+                  </button>
+                )) : (
+                  <div className="scope-chip scope-chip-static">
+                    <span className="scope-chip-label">Default scope</span>
+                    <strong className="scope-chip-value">{activeFilterSummary}</strong>
+                    <span className="scope-chip-count">Base</span>
+                  </div>
+                )}
+
+                {timeRange ? (
+                  <button
+                    type="button"
+                    className="scope-chip scope-chip-time"
+                    title="点击清空时间窗口"
+                    onClick={() => setTimeRange(null)}
+                  >
+                    <span className="scope-chip-label">Time window</span>
+                    <strong className="scope-chip-value">{`${timeRange.start} ~ ${timeRange.end}`}</strong>
+                    <span className="scope-chip-count">Time</span>
+                  </button>
+                ) : (
+                  <div className="scope-chip scope-chip-static scope-chip-time">
+                    <span className="scope-chip-label">Time window</span>
+                    <strong className="scope-chip-value">Full timeline</strong>
+                    <span className="scope-chip-count">Full</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="scope-board-caption">
+                {scopeButtonCount
+                  ? "Click any scope button to clear that lens and widen the market view."
+                  : "Use the left filter stack to narrow the market lens, then jump into Specification for row-level detail."}
+              </div>
             </div>
           </div>
 
@@ -1146,18 +1211,15 @@ export function DashboardPage() {
             <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
               <span className="hero-meta-label">Total sales</span>
               <strong className="hero-meta-value hero-meta-animated-value">{formatMetricValue(heroTotalSales)}</strong>
-              <span className="hero-meta-subvalue">{loading ? "Loading live scope" : timeRange ? `${timeRange.start} ~ ${timeRange.end}` : "Full timeline"}</span>
+              <span className="hero-meta-subvalue">{timeRange ? `${timeRange.start} ~ ${timeRange.end}` : "Full timeline"}</span>
               {loading && <span className="hero-meta-loader">LOADING LIVE SCOPE</span>}
             </div>
             <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
               <span className="hero-meta-label">Version count</span>
               <strong className="hero-meta-value hero-meta-animated-value">{formatMetricValue(heroVersionCount)}</strong>
-              <span className="hero-meta-subvalue">{loading ? "Refreshing version coverage" : activeFilters.length ? `${activeFilters.length} active filters` : "Default powertrain lens"}</span>
+              <span className="hero-meta-subvalue">{scopeButtonCount ? `${scopeButtonCount} active scope buttons` : "Default powertrain lens"}</span>
               {loading && <span className="hero-meta-loader">SYNCING FILTER STATE</span>}
             </div>
-            <Link className="btn btn-primary dashboard-hero-link" to={specificationHref}>
-              Open Specification
-            </Link>
           </div>
         </div>
 
@@ -1457,7 +1519,7 @@ export function DashboardPage() {
                 </select>
               </div>
             )}
-            <button className="btn btn-primary" disabled={!columns.length||advLoading} onClick={loadAdvChart}>{advLoading?"\u52a0\u8f7d\u4e2d\u2026":"\u52a0\u8f7d\u56fe\u8868"}</button>
+            <LoadingActionButton loading={advLoading} loadingLabel="加载中…" disabled={!columns.length} onClick={loadAdvChart}>加载图表</LoadingActionButton>
             </>)}
           </div>
 
@@ -1983,9 +2045,9 @@ export function DashboardPage() {
                 <option value="Trim">Trim</option>
               </select>
             </div>
-            <button className="btn btn-primary" disabled={mvLoading||!mvModelName.trim()} onClick={loadModelVersions}>
-              {mvLoading?"\u52a0\u8f7d\u4e2d\u2026":"\u52a0\u8f7d\u7248\u578b"}
-            </button>
+            <LoadingActionButton loading={mvLoading} loadingLabel="加载中…" disabled={!mvModelName.trim()} onClick={loadModelVersions}>
+              加载版型
+            </LoadingActionButton>
           </div>
           {/* Model filter quick pick */}
           {selections.model.length > 0 && (
@@ -2070,9 +2132,9 @@ export function DashboardPage() {
               <input type="number" value={pmTopN} min={10} max={300} style={{width:60}}
                 onChange={e=>setPmTopN(Number(e.target.value)||80)} />
             </div>
-            <button className="btn btn-primary" disabled={pmLoading} onClick={loadPositioningMap}>
-              {pmLoading?"\u52a0\u8f7d\u4e2d\u2026":"\u52a0\u8f7d\u5b9a\u4f4d\u56fe"}
-            </button>
+            <LoadingActionButton loading={pmLoading} loadingLabel="加载中…" onClick={loadPositioningMap}>
+              加载定位图
+            </LoadingActionButton>
           </div>
           {/* manual competitor input */}
           <div className="pm-competitor-bar">

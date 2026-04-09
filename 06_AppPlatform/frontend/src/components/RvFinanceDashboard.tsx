@@ -11,6 +11,7 @@ import type {
   RvWaterfallStep,
 } from "../types";
 import { PlotlyChart } from "./PlotlyChart";
+import { LoadingActionButton } from "./LoadingActionButton";
 import {
   ExportPanel,
   DEFAULT_EXPORT,
@@ -344,9 +345,9 @@ export function RvFinanceDashboard() {
           </select>
         </div>
         <button className="btn btn-sm btn-secondary" onClick={addVehicle}>{"+ 添加方案"}</button>
-        <button className="btn btn-primary" disabled={loading || vehicles.length === 0} onClick={calculate}>
-          {loading ? "计算中…" : "计算"}
-        </button>
+        <LoadingActionButton loading={loading} loadingLabel="计算中…" disabled={vehicles.length === 0} onClick={calculate}>
+          计算
+        </LoadingActionButton>
       </div>
 
       <div className="rv-finance-table-wrap">
