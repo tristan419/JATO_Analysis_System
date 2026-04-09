@@ -1,4 +1,4 @@
-const CACHE_PREFIX = "jato:page-cache:v1:";
+const CACHE_PREFIX = "jato:page-cache:v2:";
 
 interface CacheEnvelope<T> {
   savedAt: number;
