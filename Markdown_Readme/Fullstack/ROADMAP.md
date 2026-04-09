@@ -27,6 +27,12 @@
 | 文档 | 领域 | 状态 | 说明 |
 | --- | --- | --- | --- |
 | `ROADMAP.md` | 总览 | Active | 唯一主索引 |
+| `STREAMLIT_VS_REACT_COMPARISON.md` | Fullstack/对齐 | Active | React 与 Streamlit 的当前事实对比、已修复项与剩余差距 |
+| `REACT_STREAMLIT_GAP_ANALYSIS.md` | Fullstack/历史 | History | 历史差距快照，不再作为当前事实来源 |
+| `FULLSTACK_LOCAL_DEBUG.md` | 运维/调试 | Active | Fullstack 本地联调、服务诊断与问题排查 |
+| `MANUAL_CICD.md` | 运维/发布 | Active | Fullstack 手动 CI/CD 与线上问题修复记录 |
+| `TENCENT_CLOUD_DEPLOY.md` | 运维/部署 | Active | 腾讯云 Ubuntu fullstack 部署、带宽与并发建议 |
+| `../UI/BMW.md` | UI/设计 | Active | 当前 Dashboard / Specification 的 BMW 风格设计约束与落地规则 |
 | `JATO_GLOBAL_VISUALIZATION.md` | 产品/规划 | Active | 全球可视化总控方案 |
 | `DASHBOARD_PERFORMANCE_PREPLAN.md` | 产品/规划 | Active | 性能优化方案基线 |
 | `DASHBOARD_PERFORMANCE_TODOS_50.md` | 质量/执行 | Active | 性能与 Round 待办执行看板 |
@@ -42,6 +48,14 @@
 - 开发：`ETL.md` -> `DASHBOARD_PERFORMANCE_PREPLAN.md`
 - 测试/质量：`DASHBOARD_PERFORMANCE_TODOS_50.md` -> `DASHBOARD_PERFORMANCE_PHASE_REPORT_20260308.md` -> `OPERATIONS_TEMPLATES.md`
 - 运维/发布：`DEPLOYMENT.md` -> `OPERATIONS_TEMPLATES.md`
+- Fullstack / 腾讯云：`TENCENT_CLOUD_DEPLOY.md` -> `MANUAL_CICD.md` -> `FULLSTACK_LOCAL_DEBUG.md`
+
+## 5.1 Fullstack 文档落点
+
+- 功能对齐、已修复行为、剩余差距：`STREAMLIT_VS_REACT_COMPARISON.md`
+- Bug 根因、首屏性能排查、回归记录：`FULLSTACK_LOCAL_DEBUG.md`
+- UI 设计原则、交互布局调整、折叠 rail 规范：`../UI/BMW.md`
+- 历史背景与旧差距快照：`REACT_STREAMLIT_GAP_ANALYSIS.md`
 
 ## 6. 变更流程（简化）
 

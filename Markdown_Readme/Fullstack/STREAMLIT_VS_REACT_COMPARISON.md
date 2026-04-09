@@ -52,6 +52,23 @@
 | Dashboard / Specification 页面缓存 | ✅ 已实现 | 两页切换时恢复筛选、概览、明细、图表与分页状态，使用内存 + sessionStorage TTL 缓存，避免重复首帧取数 |
 | Hero 指标重构 | ✅ 已实现 | Dashboard 首屏指标改为 Total sales + Version count，并为 loading 态增加数字冲高 + 液位填充视觉反馈 |
 | 气泡尺寸统一 | ✅ 已实现 | 动力气泡图、版型气泡图、OJ 定位图统一使用 Plotly sizeref/sizemode=area，同一套尺寸算法 |
+| Dashboard 首屏启动链路优化 | ✅ 已实现 | 首屏直接使用 URL / 默认筛选请求 overview，顶层 filter options 改为并发，移除空筛选 overview 的重复聚合 |
+| 全维度筛选 / Market Overview rail 折叠 | ✅ 已实现 | 移除 Current scope 大面板，左侧筛选与 Hero 均支持 rail 化折叠，统一使用 28px 微按钮控制 |
+| Full timeline 筛选可见性修复 | ✅ 已实现 | 首屏 bootstrap 会补齐 make / model / version 级联 options，Hero rail 直接展示 active lens token，不再依赖拖动时间轴才看清当前筛选 |
+
+## 0.2 2026-04-09 修复说明与后续待办
+
+### 已修复
+
+- 首次进入 `/?powertrain=ICE,HEV,BEV,MHEV,PHEV` 时，不再先打一轮空筛选 `overview`，首屏聚合直接按当前筛选执行。
+- `make / model / version` 在 full timeline 初始态也会正常出现在筛选链和 Hero summary 中，不再出现“拖一下时间轴才显示”的错觉。
+- `Current scope` 卡片已下线，Dashboard 改为更轻的 rail 交互，折叠态在桌面和移动端都保持单行/单轨语义。
+
+### 待办
+
+- `plotly-vendor` 仍然是首屏最大静态资源，后续继续做 chunk 拆分与压缩验证。
+- `groupedTimeSeries`、高级分析等次级请求仍未做 abort / request dedupe，快速切换筛选时还有继续优化空间。
+- 月度分组模式的 `monthGrain` 仍未完全对齐 Streamlit，这是剩余的主要行为差距之一。
 
 ---
 

@@ -10,9 +10,12 @@ import {
   DIM,
   FILTER_ORDER,
   buildSearchFromSelections,
+  createEmptySelections,
   getDefaultPowertrainValues,
+  readSelectionsFromSearch,
   resolve,
 } from "../dashboardFilters";
+import type { FilterKey, FilterSelections } from "../dashboardFilters";
 import type { OverviewResponse, TimeSeriesPoint, GroupedTimeSeriesItem, ModelVersionItem, PositioningMapItem, OthersDetailItem } from "../types";
 import { PlotlyChart } from "../components/PlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
@@ -179,6 +182,7 @@ interface DashboardPageCache {
   selections: Record<string, string[]>;
   optionsMap: Record<string, string[]>;
   heroCollapsed: boolean;
+  sidebarCollapsed: boolean;
   filteredRowCount: number | null;
   overview: OverviewResponse | null;
   yearSeries: TimeSeriesPoint[];
@@ -236,15 +240,72 @@ interface DashboardPageCache {
   monthGrain: "month" | "quarter" | "year";
 }
 
-function createDashboardSelections(source?: Record<string, string[]>): Record<string, string[]> {
+type ResolvedFilterColumns = Record<FilterKey, string | null>;
+
+function createDashboardSelections(source?: Record<string, string[]>): FilterSelections {
+  const base = createEmptySelections();
   return {
-    country: [...(source?.country ?? [])],
-    segment: [...(source?.segment ?? [])],
-    powertrain: [...(source?.powertrain ?? [])],
-    make: [...(source?.make ?? [])],
-    model: [...(source?.model ?? [])],
-    version: [...(source?.version ?? [])],
+    country: [...(source?.country ?? base.country)],
+    segment: [...(source?.segment ?? base.segment)],
+    powertrain: [...(source?.powertrain ?? base.powertrain)],
+    make: [...(source?.make ?? base.make)],
+    model: [...(source?.model ?? base.model)],
+    version: [...(source?.version ?? base.version)],
   };
+}
+
+function resolveFilterColumns(columns: string[]): ResolvedFilterColumns {
+  return FILTER_ORDER.reduce<ResolvedFilterColumns>((resolved, { key }) => {
+    resolved[key] = resolve(columns, DIM[key]);
+    return resolved;
+  }, {
+    country: null,
+    segment: null,
+    powertrain: null,
+    make: null,
+    model: null,
+    version: null,
+  });
+}
+
+function buildFilterPayloadFromResolved(
+  resolved: ResolvedFilterColumns,
+  selections: FilterSelections,
+): Record<string, string[]> {
+  const payload: Record<string, string[]> = {};
+  for (const { key } of FILTER_ORDER) {
+    const column = resolved[key];
+    const values = selections[key];
+    if (column && values.length > 0) payload[column] = values;
+  }
+  return payload;
+}
+
+async function fetchCascadedOptions(
+  resolved: ResolvedFilterColumns,
+  next: FilterSelections,
+  startIndex: number,
+): Promise<Partial<Record<FilterKey, string[]>>> {
+  if (startIndex >= FILTER_ORDER.length) return {};
+
+  const payload: Record<string, string[]> = {};
+  for (let index = 0; index < startIndex; index += 1) {
+    const key = FILTER_ORDER[index].key;
+    const column = resolved[key];
+    if (column && next[key].length > 0) payload[column] = next[key];
+  }
+
+  const updates: Partial<Record<FilterKey, string[]>> = {};
+  for (let index = startIndex; index < FILTER_ORDER.length; index += 1) {
+    const key = FILTER_ORDER[index].key;
+    const column = resolved[key];
+    if (!column) continue;
+    const options = await api.filterOptions({ column, filters: payload });
+    updates[key] = options.options;
+    if (next[key].length > 0) payload[column] = next[key];
+  }
+
+  return updates;
 }
 
 function getLoadingMetricValue(target: number, tick: number, fallback: number): number {
@@ -275,7 +336,7 @@ export function DashboardPage() {
   const cachedPage = cachedPageRef.current;
 
   const [columns, setColumns] = useState<string[]>(() => cachedPage?.columns ?? []);
-  const [selections, setSelections] = useState<Record<string, string[]>>(() => createDashboardSelections(cachedPage?.selections));
+  const [selections, setSelections] = useState<FilterSelections>(() => createDashboardSelections(cachedPage?.selections));
   const [optionsMap, setOptionsMap] = useState<Record<string, string[]>>(() => cachedPage?.optionsMap ?? {});
   const [filteredRowCount, setFilteredRowCount] = useState<number|null>(() => cachedPage?.filteredRowCount ?? null);
   const [overview, setOverview] = useState<OverviewResponse|null>(() => cachedPage?.overview ?? null);
@@ -365,36 +426,13 @@ export function DashboardPage() {
   const [error, setError] = useState("");
   const [heroLoadingTick, setHeroLoadingTick] = useState(0);
   const [heroCollapsed, setHeroCollapsed] = useState(() => cachedPage?.heroCollapsed ?? false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => cachedPage?.sidebarCollapsed ?? false);
   const bootDone = useRef(false);
-  const hydratedFromUrl = useRef(false);
-  const defaultsApplied = useRef(Boolean(cachedPage));
 
   /* column resolution */
-  const res = useMemo(() => {
-    const m: Record<string, string|null> = {};
-    for (const [k, candidates] of Object.entries(DIM)) m[k] = resolve(columns, candidates);
-    return m;
-  }, [columns]);
+  const res = useMemo<ResolvedFilterColumns>(() => resolveFilterColumns(columns), [columns]);
 
-  const buildFilterPayload = useCallback((): Record<string, string[]> => {
-    const p: Record<string, string[]> = {};
-    for (const { key } of FILTER_ORDER) { const col = res[key]; const vals = selections[key]; if (col && vals?.length) p[col] = vals; }
-    return p;
-  }, [res, selections]);
-
-  /* B13: hydrate filters from URL query params on boot */
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const initial: Record<string, string[]> = {};
-    for (const { key } of FILTER_ORDER) {
-      const val = params.get(key);
-      if (val) initial[key] = val.split(",").filter(Boolean);
-    }
-    hydratedFromUrl.current = Object.keys(initial).length > 0;
-    if (Object.keys(initial).length > 0) {
-      setSelections(prev => ({ ...prev, ...initial }));
-    }
-  }, []);
+  const buildFilterPayload = useCallback(() => buildFilterPayloadFromResolved(res, selections), [res, selections]);
 
   /* boot */
   useEffect(() => {
@@ -405,59 +443,71 @@ export function DashboardPage() {
       setLoading(true); setError("");
       try {
         const { items } = await api.columns();
+        const resolvedColumns = resolveFilterColumns(items);
+        const topLevelOptions = (await Promise.all(
+          (["country", "segment", "powertrain"] as const).map(async (key) => {
+            const column = resolvedColumns[key];
+            if (!column) return [key, [] as string[]] as const;
+            const options = await api.filterOptions({ column, filters: {} });
+            return [key, options.options] as const;
+          }),
+        )).reduce<Partial<Record<FilterKey, string[]>>>((accumulator, [key, options]) => {
+          accumulator[key] = options;
+          return accumulator;
+        }, {});
+
+        const initialFromSearch = readSelectionsFromSearch(currentSearch);
+        const hasSearchSelections = FILTER_ORDER.some(({ key }) => initialFromSearch[key].length > 0);
+        const initialSelections = hasSearchSelections
+          ? initialFromSearch
+          : createDashboardSelections({
+              powertrain: getDefaultPowertrainValues(topLevelOptions.powertrain ?? []),
+            });
+        const initialFilters = buildFilterPayloadFromResolved(resolvedColumns, initialSelections);
+        const [cascadedOptions, ov] = await Promise.all([
+          fetchCascadedOptions(resolvedColumns, initialSelections, 3),
+          api.overview({ filters: initialFilters, prefer_precomputed: true, top_n: 120 }),
+        ]);
+
+        prevPayloadRef.current = JSON.stringify(initialFilters);
+        prevAdvPayloadRef.current = JSON.stringify(initialFilters);
+
         setColumns(items);
-        for (const dk of ["country","segment","powertrain"] as const) {
-          const col = resolve(items, DIM[dk]);
-          if (col) { const opts = await api.filterOptions({ column: col, filters: {} }); setOptionsMap(p=>({...p,[dk]:opts.options})); }
+        setSelections(initialSelections);
+        setOptionsMap({ ...topLevelOptions, ...cascadedOptions });
+        if (initialSelections.model.length === 1) {
+          setMvModelName((current) => current || initialSelections.model[0]);
         }
-        const ov = await api.overview({ filters: {}, prefer_precomputed: true, top_n: 120 });
-        setOverview(ov); setYearSeries(ov.yearSeries??[]); setMonthSeries(ov.monthSeries??[]);
+        setOverview(ov); setYearSeries(ov.yearSeries ?? []); setMonthSeries(ov.monthSeries ?? []);
         setFilteredRowCount(ov.kpis.totalRows);
       } catch (e) { setError((e as Error).message); }
       finally { setLoading(false); }
     })();
   }, []);
 
-  async function applySelections(next: Record<string, string[]>, dimKey: string) {
+  async function applySelections(next: FilterSelections, dimKey: FilterKey) {
     setSelections(next);
-    const idx = FILTER_ORDER.findIndex(f=>f.key===dimKey);
-    const pp: Record<string,string[]> = {};
-    for (let i = 0; i <= idx; i++) { const fk=FILTER_ORDER[i].key; const col=res[fk]; const vals=next[fk]; if(col&&vals?.length) pp[col]=vals; }
-    for (let i = idx+1; i < FILTER_ORDER.length; i++) {
-      const fk=FILTER_ORDER[i].key; const col=res[fk]; if(!col) continue;
-      try { const opts = await api.filterOptions({ column:col, filters:pp }); setOptionsMap(p=>({...p,[fk]:opts.options})); if(next[fk]?.length) pp[col]=next[fk]; } catch {}
-    }
+    const idx = FILTER_ORDER.findIndex((filter) => filter.key === dimKey);
+    if (idx === -1) return;
+    try {
+      const updates = await fetchCascadedOptions(res, next, idx + 1);
+      if (Object.keys(updates).length > 0) {
+        setOptionsMap((previous) => ({ ...previous, ...updates }));
+      }
+    } catch {}
   }
-  async function onFilterChange(dimKey: string, newVals: string[]) {
+  async function onFilterChange(dimKey: FilterKey, newVals: string[]) {
     const next = { ...selections, [dimKey]: newVals };
     await applySelections(next, dimKey);
   }
   function resetFilters() {
     const defaults = getDefaultPowertrainValues(optionsMap.powertrain ?? []);
-    const next = { country:[], segment:[], powertrain:defaults, make:[], model:[], version:[] };
+    const next = createDashboardSelections({ powertrain: defaults });
     void applySelections(next, "powertrain");
   }
 
-  useEffect(() => {
-    if (defaultsApplied.current || hydratedFromUrl.current || columns.length === 0) return;
-    const powertrainOptions = optionsMap.powertrain ?? [];
-    if (powertrainOptions.length === 0) return;
-    defaultsApplied.current = true;
-    const defaults = getDefaultPowertrainValues(powertrainOptions);
-    if (defaults.length === 0) return;
-    const next = { country:[], segment:[], powertrain:defaults, make:[], model:[], version:[] };
-    void applySelections(next, "powertrain");
-  }, [columns.length, optionsMap.powertrain, res]);
-
   /* B13: sync selections to URL */
-  const dashboardSearch = useMemo(() => buildSearchFromSelections(selections as {
-    country: string[];
-    segment: string[];
-    powertrain: string[];
-    make: string[];
-    model: string[];
-    version: string[];
-  }), [selections]);
+  const dashboardSearch = useMemo(() => buildSearchFromSelections(selections), [selections]);
 
   useEffect(() => {
     const newUrl = `${window.location.pathname}${dashboardSearch}`;
@@ -599,25 +649,20 @@ export function DashboardPage() {
   /* ── derived chart data ──────────────────────────── */
   const kpis = overview?.kpis;
   const activeFilters = useMemo(
-    () => FILTER_ORDER.filter(({ key }) => (selections[key] ?? []).length > 0),
+    () => FILTER_ORDER.filter(({ key }) => selections[key].length > 0),
     [selections],
   );
+  const timeWindowLabel = timeRange ? `${timeRange.start} ~ ${timeRange.end}` : "Full timeline";
+  const activeLensTokens = useMemo(() => {
+    const filterTokens = activeFilters.length === 0
+      ? ["Default powertrain lens"]
+      : activeFilters.map(({ key, label }) => `${label}: ${summarizeScopeValues(selections[key])}`);
+    return [...filterTokens, `Time window: ${timeWindowLabel}`];
+  }, [activeFilters, selections, timeWindowLabel]);
   const activeFilterSummary = useMemo(() => {
-    if (activeFilters.length === 0) return "默认动力总成视角，无额外维度约束";
-    return activeFilters
-      .map(({ key, label }) => `${label} ${selections[key].length}`)
-      .join(" / ");
-  }, [activeFilters, selections]);
-  const scopeFilters = useMemo(
-    () => activeFilters.map(({ key, label }) => ({
-      key,
-      label,
-      count: selections[key].length,
-      preview: summarizeScopeValues(selections[key]),
-    })),
-    [activeFilters, selections],
-  );
-  const scopeButtonCount = scopeFilters.length + (timeRange ? 1 : 0);
+    return activeLensTokens.join(" · ");
+  }, [activeLensTokens]);
+  const activeFilterCount = activeFilters.length;
   const isGrouped = tsMode === "\u5206\u7ec4";
   const singleSeries = activeTab === "year" ? yearSeries : monthSeries;
 
@@ -741,6 +786,7 @@ export function DashboardPage() {
     selections,
     optionsMap,
     heroCollapsed,
+    sidebarCollapsed,
     filteredRowCount,
     overview,
     yearSeries,
@@ -823,6 +869,7 @@ export function DashboardPage() {
     dashboardSearch,
     filteredRowCount,
     heroCollapsed,
+    sidebarCollapsed,
     groupedItems,
     hiddenSeries,
     monthGrain,
@@ -1111,38 +1158,53 @@ export function DashboardPage() {
 
   return (
     <div className="dashboard-layout">
-      <aside className="filter-sidebar">
-        <div className="filter-sidebar-header">
-          <div className="panel-kicker">01 / Filter Stack</div>
-          <h3>{"\u5168\u7ef4\u5ea6\u7b5b\u9009"}</h3>
-          <div className="filter-sidebar-hint">{"\u5f53\u524d\u7b5b\u9009\u4f1a\u540c\u6b65\u5230 URL\uff0c\u4e5f\u53ef\u76f4\u63a5\u5e26\u5230 Specification Page\u3002"}</div>
-        </div>
-        <div className="filter-card filter-summary-card">
-          <div className="kpi-card"><div className="kpi-label">{"\u7b5b\u9009\u540e\u8bb0\u5f55\u6570"}</div><div className="kpi-value">{(kpis?.totalRows??0).toLocaleString()}</div></div>
-          <div className="kpi-card"><div className="kpi-label">{"\u54c1\u724c\u6570"}</div><div className="kpi-value">{(kpis?.brandCount??0).toLocaleString()}</div></div>
-          <div className="kpi-card"><div className="kpi-label">{"Model \u6570"}</div><div className="kpi-value">{(kpis?.modelCount??0).toLocaleString()}</div></div>
-          <div className="kpi-card"><div className="kpi-label">{"Version \u6570"}</div><div className="kpi-value">{(kpis?.versionCount??0).toLocaleString()}</div></div>
-        </div>
-        <div className="dashboard-sidebar-caption">
-          {"\u53e3\u5f84\uff1a"}{FILTER_ORDER.filter(f=>selections[f.key].length>0).map(f=>f.label+"="+selections[f.key].join("/")).join("\u3001") || "\u5168\u91cf"}
-          {timeRange ? ` \u00b7 \u65f6\u95f4\u7a97\u53e3 ${timeRange.start} ~ ${timeRange.end}` : ""}
-        </div>
-
-        <div className="dashboard-sidebar-toolbar">
-          <button className="btn btn-sm btn-secondary" onClick={resetFilters}>{"\u91cd\u7f6e\u7b5b\u9009"}</button>
-          <Link className="btn btn-sm btn-primary" to={specificationHref}>{"\u89c4\u683c\u9875"}</Link>
+      <aside className={`filter-sidebar${sidebarCollapsed ? " is-collapsed" : ""}`}>
+        <div className="filter-sidebar-rail">
+          <div className="filter-sidebar-rail-copy">
+            <span className="panel-kicker">01 / Filter Stack</span>
+            <strong className="filter-sidebar-rail-title">全维度筛选</strong>
+            <span className="filter-sidebar-rail-summary">{activeFilterSummary}</span>
+          </div>
+          <button
+            type="button"
+            className="dashboard-rail-toggle filter-sidebar-toggle"
+            aria-expanded={!sidebarCollapsed}
+            aria-label={sidebarCollapsed ? "展开筛选面板" : "收起筛选面板"}
+            title={sidebarCollapsed ? "Expand filters" : "Collapse filters"}
+            onClick={() => setSidebarCollapsed((current) => !current)}
+          >
+            <span aria-hidden="true">{sidebarCollapsed ? "+" : "-"}</span>
+          </button>
         </div>
 
-        {FILTER_ORDER.map(({ key, label }) => (
-          <SearchSelectFilter
-            key={key}
-            label={label}
-            options={optionsMap[key] ?? []}
-            selected={selections[key]}
-            onChange={(values) => void onFilterChange(key, values)}
-            showSuvShortcut={key === "segment"}
-          />
-        ))}
+        <div className="filter-sidebar-body">
+          <div className="filter-sidebar-header">
+            <div className="filter-sidebar-hint">当前筛选会同步到 URL，也可直接带到 Specification Page。</div>
+          </div>
+          <div className="filter-card filter-summary-card">
+            <div className="kpi-card"><div className="kpi-label">{"\u7b5b\u9009\u540e\u8bb0\u5f55\u6570"}</div><div className="kpi-value">{(kpis?.totalRows??0).toLocaleString()}</div></div>
+            <div className="kpi-card"><div className="kpi-label">{"\u54c1\u724c\u6570"}</div><div className="kpi-value">{(kpis?.brandCount??0).toLocaleString()}</div></div>
+            <div className="kpi-card"><div className="kpi-label">{"Model \u6570"}</div><div className="kpi-value">{(kpis?.modelCount??0).toLocaleString()}</div></div>
+            <div className="kpi-card"><div className="kpi-label">{"Version \u6570"}</div><div className="kpi-value">{(kpis?.versionCount??0).toLocaleString()}</div></div>
+          </div>
+          <div className="dashboard-sidebar-caption">{activeFilterSummary}</div>
+
+          <div className="dashboard-sidebar-toolbar">
+            <button className="btn btn-sm btn-secondary" onClick={resetFilters}>{"\u91cd\u7f6e\u7b5b\u9009"}</button>
+            <Link className="btn btn-sm btn-primary" to={specificationHref}>{"\u89c4\u683c\u9875"}</Link>
+          </div>
+
+          {FILTER_ORDER.map(({ key, label }) => (
+            <SearchSelectFilter
+              key={key}
+              label={label}
+              options={optionsMap[key] ?? []}
+              selected={selections[key]}
+              onChange={(values) => void onFilterChange(key, values)}
+              showSuvShortcut={key === "segment"}
+            />
+          ))}
+        </div>
       </aside>
 
       <section className="dashboard-main">
@@ -1154,9 +1216,7 @@ export function DashboardPage() {
                 <h1>Dashboard Control View</h1>
                 <div className="dashboard-hero-inline-summary">
                   <span className="selection-ribbon-label">Active lens</span>
-                  <span className="selection-ribbon-value">
-                    {timeRange ? `${activeFilterSummary} · ${timeRange.start} ~ ${timeRange.end}` : activeFilterSummary}
-                  </span>
+                  <span className="selection-ribbon-value">{activeFilterSummary}</span>
                 </div>
               </div>
 
@@ -1164,13 +1224,13 @@ export function DashboardPage() {
                 <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
                   <span className="hero-meta-label">Total sales</span>
                   <strong className="hero-meta-value hero-meta-animated-value">{formatMetricValue(heroTotalSales)}</strong>
-                  <span className="hero-meta-subvalue">{timeRange ? `${timeRange.start} ~ ${timeRange.end}` : "Full timeline"}</span>
+                  <span className="hero-meta-subvalue">{timeWindowLabel}</span>
                   {loading && <span className="hero-meta-loader">LOADING LIVE SCOPE</span>}
                 </div>
                 <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
                   <span className="hero-meta-label">Version count</span>
                   <strong className="hero-meta-value hero-meta-animated-value">{formatMetricValue(heroVersionCount)}</strong>
-                  <span className="hero-meta-subvalue">{scopeButtonCount ? `${scopeButtonCount} active scope buttons` : "Default powertrain lens"}</span>
+                  <span className="hero-meta-subvalue">{activeFilterCount ? `${activeFilterCount} filter dimensions active` : "Default powertrain lens"}</span>
                   {loading && <span className="hero-meta-loader">SYNCING FILTER STATE</span>}
                 </div>
               </div>
@@ -1178,64 +1238,19 @@ export function DashboardPage() {
 
             <div className="dashboard-hero-body">
               <div className="dashboard-hero-body-inner">
-                <div className="dashboard-hero-scope-board">
-                  <div className="scope-board-head">
-                    <span className="selection-ribbon-label">Current scope</span>
-                    <div className="scope-board-actions">
-                      <button type="button" className="btn btn-sm btn-secondary" onClick={resetFilters}>
-                        Reset filters
-                      </button>
-                      <Link className="btn btn-sm btn-primary" to={specificationHref}>
-                        Open Specification
-                      </Link>
-                    </div>
+                <div className="dashboard-hero-rail">
+                  <div className="dashboard-hero-chip-row">
+                    {activeLensTokens.map((token, index) => (
+                      <span key={`${index}-${token}`} className="dashboard-hero-chip">{token}</span>
+                    ))}
                   </div>
-
-                  <div className="scope-chip-list">
-                    {scopeFilters.length > 0 ? scopeFilters.map((scopeFilter) => (
-                      <button
-                        key={scopeFilter.key}
-                        type="button"
-                        className="scope-chip"
-                        title={`点击清空 ${scopeFilter.label} 筛选`}
-                        onClick={() => void onFilterChange(scopeFilter.key, [])}
-                      >
-                        <span className="scope-chip-label">{scopeFilter.label}</span>
-                        <strong className="scope-chip-value">{scopeFilter.preview}</strong>
-                        <span className="scope-chip-count">{scopeFilter.count}</span>
-                      </button>
-                    )) : (
-                      <div className="scope-chip scope-chip-static">
-                        <span className="scope-chip-label">Default scope</span>
-                        <strong className="scope-chip-value">{activeFilterSummary}</strong>
-                        <span className="scope-chip-count">Base</span>
-                      </div>
-                    )}
-
-                    {timeRange ? (
-                      <button
-                        type="button"
-                        className="scope-chip scope-chip-time"
-                        title="点击清空时间窗口"
-                        onClick={() => setTimeRange(null)}
-                      >
-                        <span className="scope-chip-label">Time window</span>
-                        <strong className="scope-chip-value">{`${timeRange.start} ~ ${timeRange.end}`}</strong>
-                        <span className="scope-chip-count">Time</span>
-                      </button>
-                    ) : (
-                      <div className="scope-chip scope-chip-static scope-chip-time">
-                        <span className="scope-chip-label">Time window</span>
-                        <strong className="scope-chip-value">Full timeline</strong>
-                        <span className="scope-chip-count">Full</span>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="scope-board-caption">
-                    {scopeButtonCount
-                      ? "Tap a scope chip to clear one lens and broaden the market view."
-                      : "Use the left filter stack to define a tighter market lens, then dive into Specification for row-level detail."}
+                  <div className="dashboard-hero-rail-actions">
+                    <button type="button" className="btn btn-sm btn-secondary" onClick={resetFilters}>
+                      Reset filters
+                    </button>
+                    <Link className="btn btn-sm btn-primary" to={specificationHref}>
+                      Open Specification
+                    </Link>
                   </div>
                 </div>
               </div>
@@ -1243,12 +1258,13 @@ export function DashboardPage() {
 
             <button
               type="button"
-              className="dashboard-hero-toggle"
+              className="dashboard-rail-toggle dashboard-hero-toggle"
               aria-expanded={!heroCollapsed}
+              aria-label={heroCollapsed ? "展开概览面板" : "收起概览面板"}
+              title={heroCollapsed ? "Expand overview" : "Collapse overview"}
               onClick={() => setHeroCollapsed((current) => !current)}
             >
-              <span className="dashboard-hero-toggle-kicker">{heroCollapsed ? "Expand" : "Roll up"}</span>
-              <strong className="dashboard-hero-toggle-label">{heroCollapsed ? "Open scope board" : "Collapse scope board"}</strong>
+              <span aria-hidden="true">{heroCollapsed ? "+" : "-"}</span>
             </button>
           </div>
         </div>
