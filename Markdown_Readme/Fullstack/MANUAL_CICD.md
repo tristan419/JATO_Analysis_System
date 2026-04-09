@@ -1,199 +1,238 @@
-# JATO Fullstack 手动 CI/CD 手册
+# JATO Fullstack CI/CD 手册（最终版）
 
-这份文档对应自动化还未完全接管之前的发布流程。目标是把前后端都纳入同一套人工检查和人工发布步骤，避免只更新前端或只更新后端。
+> 更新时间：2026-04-09
+>
+> 本文档是推送与部署的**唯一参考**。服务器初始化和环境搭建请看 `TENCENT_CLOUD_DEPLOY.md`。
 
-## 1. 手动 CI：本地或开发机先过关
+---
 
-发布前至少执行下面三组检查。
+## 0. 推送方式速查
 
-### 1.1 Python 烟测
+| 方式 | 命令 | 何时选用 |
+|------|------|----------|
+| **HTTPS（推荐）** | `git push JATO_Analysis_System main` | 默认方式，依赖 macOS 钥匙串中的凭据 |
+| SSH 标准端口 | `git push` (remote = `git@github.com:...`) | 网络允许 22 端口出站时 |
+| SSH 443 端口 | `git push` (remote = `git@github-443:...`) | 22 被封但 443 SSH 握手正常时 |
+
+**当前状态（2026-04-09）**：本机 remote `JATO_Analysis_System` 已切为 HTTPS，推送正常。
+如果将来需要切回 SSH，执行：
+
+```bash
+git remote set-url JATO_Analysis_System git@github.com:tristan419/JATO_Analysis_System.git
+```
+
+---
+
+## 1. 本地推送完整流程
+
+### 1.1 发布前检查（三选二即可，前端构建必须过）
 
 ```bash
 cd /path/to/JATO_Analysis_System
+
+# Python 烟测
 python 03_Scripts/ci_smoke_check.py
-```
 
-### 1.2 Fullstack 后端检查
-
-```bash
-cd /path/to/JATO_Analysis_System
+# 后端编译检查
 . .venv/bin/activate
-pip install -r 06_AppPlatform/backend/requirements.txt
 python -m compileall 06_AppPlatform/backend/app
-```
 
-### 1.3 Fullstack 前端检查
-
-```bash
-cd /path/to/JATO_Analysis_System/06_AppPlatform/frontend
+# 前端构建（必须）
+cd 06_AppPlatform/frontend
 npm ci
 npx tsc --noEmit
-VITE_API_BASE=/v1 VITE_AUTH_TOKEN=ci-token VITE_USER_ROLE=admin VITE_USER_NAME=manual-ci npm run build
+npm run build
 ```
 
-## 2. 手动 Push 到 GitHub
+### 1.2 选择性提交
 
-只把你确认过的文件加入提交，不要把本地日志、缓存、临时环境一起推上去。
+不要盲目 `git add .`，只提交本次改动相关的文件：
 
 ```bash
 cd /path/to/JATO_Analysis_System
-REMOTE_NAME="$(git remote | head -n 1)"
-git status --short
-git add .
-git commit -m "publish fullstack app and Tencent deploy assets"
-git push "$REMOTE_NAME" main
+git status --short          # 确认改动范围
+git add 06_AppPlatform/...  # 只加入目标文件
+git commit -m "描述本次改动"
 ```
 
-如果当前工作区还有不准备上库的内容，不要直接 `git add .`，而是改成按路径选择性 `git add`。
+### 1.3 推送
 
-## 3. 手动 CD：腾讯云服务器更新
+```bash
+git push JATO_Analysis_System main
+```
 
-登录服务器：
+推送成功后，如果 `06_AppPlatform/**` 路径有变更，GitHub Actions 会自动触发腾讯云部署。
+
+---
+
+## 2. 推送失败排查
+
+### 2.1 快速诊断
+
+```bash
+# 1) 确认 remote 地址
+git remote -v
+
+# 2) 测试 HTTPS 连通性
+curl -sI --connect-timeout 5 https://github.com | head -1
+
+# 3) 测试 SSH 连通性（如果 remote 是 SSH）
+ssh -T -o ConnectTimeout=5 git@github.com 2>&1
+ssh -T -o ConnectTimeout=5 git@github-443 2>&1
+
+# 4) 检查 SSH agent 身份
+ssh-add -l
+
+# 5) 检查 macOS 钥匙串中的 HTTPS 凭据
+git credential-osxkeychain get <<EOF
+protocol=https
+host=github.com
+EOF
+```
+
+### 2.2 常见问题与修复
+
+| 现象 | 根因 | 修复 |
+|------|------|------|
+| `Connection reset by peer` (443) | 当前网络封禁了 SSH 协议（即使走 443 端口） | 切 HTTPS：`git remote set-url JATO_Analysis_System https://github.com/tristan419/JATO_Analysis_System.git` |
+| `Operation timed out` (22) | 网络封禁 22 端口出站 | 同上，或切 443 SSH |
+| `Permission denied (publickey)` | SSH key 未加载或不匹配 | `ssh-add ~/.ssh/id_rsa` |
+| `The agent has no identities` | ssh-agent 空的 | `ssh-add ~/.ssh/id_rsa` |
+| HTTPS 推送 `403` | 钥匙串中 token 过期 | 在钥匙串中更新 github.com 的凭据，或用 `gh auth login` |
+| HTTPS 连接也超时 | 整体外网不通 | 检查代理 / VPN 设置 |
+
+### 2.3 SSH config 参考
+
+当前 `~/.ssh/config` 中的 `github-443` 条目：
+
+```
+Host github-443
+    HostName ssh.github.com
+    User git
+    Port 443
+    IdentityFile ~/.ssh/id_rsa
+    IdentitiesOnly yes
+```
+
+当 SSH 完全不通时，**不需要改这个文件**，只需把 git remote 切到 HTTPS 即可。
+
+---
+
+## 3. 自动部署（GitHub Actions → 腾讯云）
+
+Workflow 文件：`.github/workflows/deploy-fullstack-tencent.yml`
+
+### 3.1 触发条件
+
+- push 到 `main` 且修改了 `06_AppPlatform/**` 或部署相关脚本/配置
+- 或手动 `workflow_dispatch`
+
+### 3.2 必需的 GitHub Secrets
+
+| Secret | 说明 |
+|--------|------|
+| `SSH_HOST` | 腾讯云服务器公网 IP |
+| `SSH_USER` | SSH 登录用户名 |
+| `SSH_PRIVATE_KEY` | 私钥内容（和 `SSH_PASSWORD` 二选一） |
+| `SSH_PASSWORD` | 密码（和 `SSH_PRIVATE_KEY` 二选一） |
+
+### 3.3 自动部署流程
+
+1. checkout 代码
+2. 打包 deploy 归档（排除 `01_RAW_DATA`, `04_Processed_data`, `node_modules`, `.venv`, `.git`, `Markdown_Readme`, `*.ipynb`, `data_wangler`, `__pycache__`）
+3. `scp` 上传归档到服务器 `/tmp/JATO_deploy.tar.gz`（`strip_components: 2`）
+4. SSH 登录服务器，解压到 `/opt/JATO_Analysis_System-main`
+5. 执行 `03_Scripts/deploy_fullstack_server.sh`（`SKIP_GIT_SYNC=true`）
+6. 健康检查 `curl http://127.0.0.1:8000/healthz`
+
+---
+
+## 4. 手动服务端部署
+
+当自动部署不可用时，直接 SSH 到服务器操作。
 
 ```bash
 ssh <user>@<tencent-cloud-ip>
-```
+cd /opt/JATO_Analysis_System-main
 
-执行发布脚本：
-
-```bash
-cd /opt/JATO_Analysis_System
 VITE_API_BASE=/v1 \
 VITE_USER_ROLE=viewer \
 VITE_USER_NAME=manual-deploy \
 bash 03_Scripts/deploy_fullstack_server.sh
 ```
 
-这个脚本会自动做这些事：
+脚本自动完成：拉取最新 main → 安装后端依赖 → npm ci + 构建前端 → 重启 `jato-fullstack-backend@8000` → reload nginx。
 
-- 拉取最新 main
-- 安装后端依赖
-- `npm ci` 并重新构建前端
-- 重启 `jato-fullstack-backend@8000`
-- 如果 nginx 已在运行，则自动 reload nginx
+---
 
-## 4. 手动验收
-
-发布后至少检查：
+## 5. 发布验收
 
 ```bash
+# 服务端快速检查
 curl -fsS http://127.0.0.1:8000/healthz
 curl -I http://127.0.0.1/
+
+# 完整诊断
+bash 03_Scripts/print_fullstack_server_diagnostics.sh
 ```
 
-再从浏览器手工验证：
+浏览器检查：
+- Dashboard 首页 overview 加载
+- 时间序列图表正常
+- 高级分析页面出图
+- Specification / CRUD 页面可打开
 
-- Dashboard 可以加载 overview
-- 年度与月度图表正常
-- 高级分析页面能出图
-- CRUD 页面列表可以打开
+---
 
-## 5. 失败回退
-
-### 5.1 先看日志
-
-```bash
-sudo journalctl -u jato-fullstack-backend@8000 -n 100 --no-pager
-sudo nginx -t
-```
-
-### 5.2 回退代码并重新发布
+## 6. 回退
 
 ```bash
-cd /opt/JATO_Analysis_System
-git log --oneline -5
+cd /opt/JATO_Analysis_System-main
+git log --oneline -5             # 找到目标提交
 git reset --hard <commit_sha>
 bash 03_Scripts/deploy_fullstack_server.sh
-```
-
-### 5.3 快速确认回退成功
-
-```bash
 curl -fsS http://127.0.0.1:8000/healthz
-curl -I http://127.0.0.1/
 ```
 
-## 6. 何时切到自动化
+---
 
-满足下面条件后，就可以把这套人工流程切到 GitHub Actions：
+## 7. 已知问题与修复记录
 
-- 服务器首发已经成功
-- `/opt/JATO_Analysis_System` 路径固定
-- `jato-fullstack-backend@8000` 服务名固定
-- GitHub Secrets 已经配置好 SSH 连接信息
-- 你确认前端构建应该统一使用 `VITE_API_BASE=/v1`
+### 7.1 scp-action 归档路径（2026-04-08）
 
-自动化 workflow 文件：`.github/workflows/deploy-fullstack-tencent.yml`
+`appleboy/scp-action@v0.1.7` 需要 `strip_components: 2`（不是 0），否则文件落在 `/tmp/github/runner_temp/` 而非 `/tmp/`。
 
-## 7. 自动化 CI/CD 已知问题与修复记录
+### 7.2 Node.js 版本检查（2026-04-08）
 
-### 7.1 scp-action 归档路径问题（2026-04-08）
+`deploy_fullstack_server.sh` 版本校验已放宽为 Node.js 20.10+ 或 22.x+。
 
-**现象**：Step 7（Upload archive to server）成功，但 Step 8（Deploy on server via SSH）tar 解包失败，提示找不到 `/tmp/JATO_deploy.tar.gz`。
+### 7.3 deploy 归档体积（2026-04-08）
 
-**原因**：`appleboy/scp-action@v0.1.7` 内部把源文件用 tar 打包后传到远端再解包。在 Actions 容器中，`RUNNER_TEMP` 被挂载在 `/github/runner_temp/`。source 设为 `/github/runner_temp/JATO_deploy.tar.gz` 时，tar 内部存储路径为 `github/runner_temp/JATO_deploy.tar.gz`（2 层目录前缀）。
+tar 排除 `01_RAW_DATA` / `04_Processed_data` 等后，归档从 700MB+ 降到约 50MB。
 
-- `strip_components: 0` → 文件落在 `/tmp/github/runner_temp/JATO_deploy.tar.gz`（**错误路径**）
-- `strip_components: 2` → 文件落在 `/tmp/JATO_deploy.tar.gz`（**正确路径**）
+### 7.4 前端白屏（2026-04-08）
 
-**修复**：将 workflow 中 `strip_components` 从 0 改为 2。
+`client.ts` 中 `API_BASE` 不能写死 `http://127.0.0.1:8000/v1`。改为 `import.meta.env.VITE_API_BASE ?? "/v1"`，生产走 nginx 同域代理。
 
-### 7.2 Node.js 版本检查过于严格（2026-04-08）
+### 7.5 Plotly 懒加载致图表空白（2026-04-08）
 
-**现象**：deploy_fullstack_server.sh 的 Node.js 版本检查要求 20.19+，但服务器安装的可能是 20.15 或 20.17 等更早版本，导致部署脚本在版本校验处直接 exit 1。
+不用 `React.lazy` 加载 Plotly 组件，改为同步 import `plotly.js-cartesian-dist-min`（约 475KB gzip）。路由级 lazy 拆分 Specification / CRUD。
 
-**修复**：放宽检查条件，只要求 Node.js 20.10+ 或 22.x+。
+### 7.6 CI smoke 回归断言（2026-04-08）
 
-### 7.3 deploy archive slim 化（2026-04-08）
+`regression_render_strategy_defaults.py` 中 "huge-full-mode" 的 `expected_overview` 修正为 `True`。ci #64 全通过。
 
-**现象**：deploy 归档过大（>700MB），导致上传耗时超过 10 分钟，CI/CD 经常因数据传输超时失败。
+### 7.7 本地 git push 失败（2026-04-09）
 
-**原因**：归档中包含了 `01_RAW_DATA`（~700MB 原始 Excel）、`04_Processed_data`（~61MB parquet）等只需要在服务器本地存在的数据文件。
+**现象**：`kex_exchange_identification: read: Connection reset by peer`（443）和 `Operation timed out`（22），本地 git push 完全不通。
 
-**修复**：tar 打包时添加如下 `--exclude`：
-```
-01_RAW_DATA, 04_Processed_data, *.ipynb, data_wangler, Markdown_Readme, .git, node_modules, .venv, __pycache__
-```
-归档从 700MB+ 缩减到约 50MB。服务器上已有的数据目录不受影响。
-
-### 7.4 前端构建产物白屏或加载失败
-
-**现象**：浏览器打开页面白屏，控制台报 `ERR_CONNECTION_REFUSED` 请求 `http://127.0.0.1:8000/v1`。
-
-**原因**：`06_AppPlatform/frontend/src/api/client.ts` 中 API_BASE 被硬编码为 `http://127.0.0.1:8000/v1`，打包进了前端产物。用户浏览器无法连接服务器本地回环地址。
+**根因**：当前网络环境屏蔽了 SSH 协议出站。端口 22 超时、端口 443 TCP 建连后 SSH 握手被远端重置。而 `curl https://github.com` 正常返回 200，说明 HTTPS 完全可达。git remote 原来配的是 `git@github-443:...`（SSH），所以全部失败。
 
 **修复**：
-1. `client.ts` 改为 `const API_BASE = import.meta.env.VITE_API_BASE ?? "/v1";`
-2. `.env.production` 设 `VITE_API_BASE=/v1`（走 nginx 同域代理）
-3. 构建时通过环境变量注入，不在代码中写死地址
+```bash
+git remote set-url JATO_Analysis_System https://github.com/tristan419/JATO_Analysis_System.git
+git push JATO_Analysis_System main
+```
+macOS 钥匙串已有 GitHub HTTPS 凭据，切换后立即推送成功。
 
-### 7.5 Plotly 导致首屏卡死
-
-**现象**：dashbaord 首屏加载 >3MB 的 Plotly 库，在弱网/低端机上白屏甚至超时。
-
-**修复**：
-1. `vite.config.ts` 中通过 `manualChunks` 把 plotly 分到独立 chunk `plotly-vendor`
-2. `PlotlyChart.tsx` 改为 `React.lazy(() => import("react-plotly.js"))` 按需加载
-3. `ExportPanel.tsx` 中 PNG 导出改为动态 `import("plotly.js-dist-min")`
-4. `DashboardPage.tsx` 整个仪表板组件 lazy-load
-
-**效果**：首屏 gzip 压缩后约 118KB，最大单文件加载 115ms。Plotly 只在用户真正打开图表时才下载。
-
-### 7.6 CI smoke 回归测试断言不一致（2026-04-08）
-
-**现象**：ci workflow 的 smoke job 从 run #20 起连续 40+ 次失败，仅耗时 3 秒即退出。
-fullstack-backend 和 fullstack-frontend 一直正常。
-
-**根因**：`regression_render_strategy_defaults.py` 中的测试用例
-"huge-full-mode"（row_count=220,000, large_data_mode=False）期望
-`expected_overview=False`，但 `views.py` 中 `get_default_render_strategy()` 已改为
-仅基于 `row_count >= 80_000` 判断，不再参考 `large_data_mode`。220k 行必定 ≥ 80k，
-所以实际返回 `overview_lazy=True`，断言失败。
-
-**修复步骤**：
-1. 拆分 smoke step 为 Style check / Compile check / CLI help / Regression checks 四个独立步骤
-2. 对 Regression checks 加 `GITHUB_STEP_SUMMARY` 输出，定位到 `regression_render_strategy_defaults.py`
-3. 将 "huge-full-mode" 的 `expected_overview` 改为 `True`，与当前函数行为一致
-4. 恢复 regression step 为简洁的三行执行
-
-**验证**：ci #64 全部三个 job ✅ SUCCESS (smoke 33s, backend 35s, frontend 1m 19s)。
+**建议**：将 HTTPS 作为默认推送方式。只有明确知道 SSH 可达时才切回 SSH。
