@@ -29,6 +29,8 @@ interface Props {
   style?: CSSProperties;
 }
 
+export type PlotlyChartProps = Props;
+
 export function PlotlyChart({ data, layout, config, height = 450, style }: Props) {
   return (
     <Plot

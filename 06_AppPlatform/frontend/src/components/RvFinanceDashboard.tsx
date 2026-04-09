@@ -10,7 +10,7 @@ import type {
   RvSensitivitySummaryRow,
   RvWaterfallStep,
 } from "../types";
-import { PlotlyChart } from "./PlotlyChart";
+import { LazyPlotlyChart as PlotlyChart } from "./LazyPlotlyChart";
 import { LoadingActionButton } from "./LoadingActionButton";
 import {
   ExportPanel,

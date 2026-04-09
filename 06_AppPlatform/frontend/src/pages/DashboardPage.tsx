@@ -17,7 +17,7 @@ import {
 } from "../dashboardFilters";
 import type { FilterKey, FilterSelections } from "../dashboardFilters";
 import type { OverviewResponse, TimeSeriesPoint, GroupedTimeSeriesItem, ModelVersionItem, PositioningMapItem, OthersDetailItem } from "../types";
-import { PlotlyChart } from "../components/PlotlyChart";
+import { LazyPlotlyChart as PlotlyChart } from "../components/LazyPlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
 import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanel";
 import { buildBubbleSizing } from "../utils/bubbleSizing";
