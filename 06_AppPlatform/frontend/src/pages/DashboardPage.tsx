@@ -4,6 +4,7 @@ import type { Data, Layout } from "plotly.js";
 
 import { api } from "../api/client";
 import { LoadingActionButton } from "../components/LoadingActionButton";
+import { LoadingSurface } from "../components/LoadingSurface";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
 import {
   DIM,
@@ -177,6 +178,7 @@ interface DashboardPageCache {
   columns: string[];
   selections: Record<string, string[]>;
   optionsMap: Record<string, string[]>;
+  heroCollapsed: boolean;
   filteredRowCount: number | null;
   overview: OverviewResponse | null;
   yearSeries: TimeSeriesPoint[];
@@ -362,6 +364,7 @@ export function DashboardPage() {
 
   const [error, setError] = useState("");
   const [heroLoadingTick, setHeroLoadingTick] = useState(0);
+  const [heroCollapsed, setHeroCollapsed] = useState(() => cachedPage?.heroCollapsed ?? false);
   const bootDone = useRef(false);
   const hydratedFromUrl = useRef(false);
   const defaultsApplied = useRef(Boolean(cachedPage));
@@ -737,6 +740,7 @@ export function DashboardPage() {
     columns,
     selections,
     optionsMap,
+    heroCollapsed,
     filteredRowCount,
     overview,
     yearSeries,
@@ -818,6 +822,7 @@ export function DashboardPage() {
     columns,
     dashboardSearch,
     filteredRowCount,
+    heroCollapsed,
     groupedItems,
     hiddenSeries,
     monthGrain,
@@ -1141,85 +1146,110 @@ export function DashboardPage() {
       </aside>
 
       <section className="dashboard-main">
-        <div className="header-card dashboard-hero">
-          <div className="dashboard-hero-copy">
-            <span className="page-kicker">01 / Market Overview</span>
-            <h1>Dashboard Control View</h1>
-            <div className="dashboard-hero-scope-board">
-              <div className="scope-board-head">
-                <span className="selection-ribbon-label">Current scope</span>
-                <div className="scope-board-actions">
-                  <button type="button" className="btn btn-sm btn-secondary" onClick={resetFilters}>
-                    Reset filters
-                  </button>
-                  <Link className="btn btn-sm btn-primary" to={specificationHref}>
-                    Open Specification
-                  </Link>
+        <div className={`dashboard-hero-shell${heroCollapsed ? " is-collapsed" : ""}`}>
+          <div className="header-card dashboard-hero">
+            <div className="dashboard-hero-head">
+              <div className="dashboard-hero-copy">
+                <span className="page-kicker">01 / Market Overview</span>
+                <h1>Dashboard Control View</h1>
+                <div className="dashboard-hero-inline-summary">
+                  <span className="selection-ribbon-label">Active lens</span>
+                  <span className="selection-ribbon-value">
+                    {timeRange ? `${activeFilterSummary} · ${timeRange.start} ~ ${timeRange.end}` : activeFilterSummary}
+                  </span>
                 </div>
               </div>
 
-              <div className="scope-chip-list">
-                {scopeFilters.length > 0 ? scopeFilters.map((scopeFilter) => (
-                  <button
-                    key={scopeFilter.key}
-                    type="button"
-                    className="scope-chip"
-                    title={`点击清空 ${scopeFilter.label} 筛选`}
-                    onClick={() => void onFilterChange(scopeFilter.key, [])}
-                  >
-                    <span className="scope-chip-label">{scopeFilter.label}</span>
-                    <strong className="scope-chip-value">{scopeFilter.preview}</strong>
-                    <span className="scope-chip-count">{scopeFilter.count}</span>
-                  </button>
-                )) : (
-                  <div className="scope-chip scope-chip-static">
-                    <span className="scope-chip-label">Default scope</span>
-                    <strong className="scope-chip-value">{activeFilterSummary}</strong>
-                    <span className="scope-chip-count">Base</span>
-                  </div>
-                )}
-
-                {timeRange ? (
-                  <button
-                    type="button"
-                    className="scope-chip scope-chip-time"
-                    title="点击清空时间窗口"
-                    onClick={() => setTimeRange(null)}
-                  >
-                    <span className="scope-chip-label">Time window</span>
-                    <strong className="scope-chip-value">{`${timeRange.start} ~ ${timeRange.end}`}</strong>
-                    <span className="scope-chip-count">Time</span>
-                  </button>
-                ) : (
-                  <div className="scope-chip scope-chip-static scope-chip-time">
-                    <span className="scope-chip-label">Time window</span>
-                    <strong className="scope-chip-value">Full timeline</strong>
-                    <span className="scope-chip-count">Full</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="scope-board-caption">
-                {scopeButtonCount
-                  ? "Click any scope button to clear that lens and widen the market view."
-                  : "Use the left filter stack to narrow the market lens, then jump into Specification for row-level detail."}
+              <div className="dashboard-hero-actions">
+                <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
+                  <span className="hero-meta-label">Total sales</span>
+                  <strong className="hero-meta-value hero-meta-animated-value">{formatMetricValue(heroTotalSales)}</strong>
+                  <span className="hero-meta-subvalue">{timeRange ? `${timeRange.start} ~ ${timeRange.end}` : "Full timeline"}</span>
+                  {loading && <span className="hero-meta-loader">LOADING LIVE SCOPE</span>}
+                </div>
+                <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
+                  <span className="hero-meta-label">Version count</span>
+                  <strong className="hero-meta-value hero-meta-animated-value">{formatMetricValue(heroVersionCount)}</strong>
+                  <span className="hero-meta-subvalue">{scopeButtonCount ? `${scopeButtonCount} active scope buttons` : "Default powertrain lens"}</span>
+                  {loading && <span className="hero-meta-loader">SYNCING FILTER STATE</span>}
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="dashboard-hero-actions">
-            <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
-              <span className="hero-meta-label">Total sales</span>
-              <strong className="hero-meta-value hero-meta-animated-value">{formatMetricValue(heroTotalSales)}</strong>
-              <span className="hero-meta-subvalue">{timeRange ? `${timeRange.start} ~ ${timeRange.end}` : "Full timeline"}</span>
-              {loading && <span className="hero-meta-loader">LOADING LIVE SCOPE</span>}
+            <div className="dashboard-hero-body">
+              <div className="dashboard-hero-body-inner">
+                <div className="dashboard-hero-scope-board">
+                  <div className="scope-board-head">
+                    <span className="selection-ribbon-label">Current scope</span>
+                    <div className="scope-board-actions">
+                      <button type="button" className="btn btn-sm btn-secondary" onClick={resetFilters}>
+                        Reset filters
+                      </button>
+                      <Link className="btn btn-sm btn-primary" to={specificationHref}>
+                        Open Specification
+                      </Link>
+                    </div>
+                  </div>
+
+                  <div className="scope-chip-list">
+                    {scopeFilters.length > 0 ? scopeFilters.map((scopeFilter) => (
+                      <button
+                        key={scopeFilter.key}
+                        type="button"
+                        className="scope-chip"
+                        title={`点击清空 ${scopeFilter.label} 筛选`}
+                        onClick={() => void onFilterChange(scopeFilter.key, [])}
+                      >
+                        <span className="scope-chip-label">{scopeFilter.label}</span>
+                        <strong className="scope-chip-value">{scopeFilter.preview}</strong>
+                        <span className="scope-chip-count">{scopeFilter.count}</span>
+                      </button>
+                    )) : (
+                      <div className="scope-chip scope-chip-static">
+                        <span className="scope-chip-label">Default scope</span>
+                        <strong className="scope-chip-value">{activeFilterSummary}</strong>
+                        <span className="scope-chip-count">Base</span>
+                      </div>
+                    )}
+
+                    {timeRange ? (
+                      <button
+                        type="button"
+                        className="scope-chip scope-chip-time"
+                        title="点击清空时间窗口"
+                        onClick={() => setTimeRange(null)}
+                      >
+                        <span className="scope-chip-label">Time window</span>
+                        <strong className="scope-chip-value">{`${timeRange.start} ~ ${timeRange.end}`}</strong>
+                        <span className="scope-chip-count">Time</span>
+                      </button>
+                    ) : (
+                      <div className="scope-chip scope-chip-static scope-chip-time">
+                        <span className="scope-chip-label">Time window</span>
+                        <strong className="scope-chip-value">Full timeline</strong>
+                        <span className="scope-chip-count">Full</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="scope-board-caption">
+                    {scopeButtonCount
+                      ? "Tap a scope chip to clear one lens and broaden the market view."
+                      : "Use the left filter stack to define a tighter market lens, then dive into Specification for row-level detail."}
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
-              <span className="hero-meta-label">Version count</span>
-              <strong className="hero-meta-value hero-meta-animated-value">{formatMetricValue(heroVersionCount)}</strong>
-              <span className="hero-meta-subvalue">{scopeButtonCount ? `${scopeButtonCount} active scope buttons` : "Default powertrain lens"}</span>
-              {loading && <span className="hero-meta-loader">SYNCING FILTER STATE</span>}
-            </div>
+
+            <button
+              type="button"
+              className="dashboard-hero-toggle"
+              aria-expanded={!heroCollapsed}
+              onClick={() => setHeroCollapsed((current) => !current)}
+            >
+              <span className="dashboard-hero-toggle-kicker">{heroCollapsed ? "Expand" : "Roll up"}</span>
+              <strong className="dashboard-hero-toggle-label">{heroCollapsed ? "Open scope board" : "Collapse scope board"}</strong>
+            </button>
           </div>
         </div>
 
@@ -1273,7 +1303,13 @@ export function DashboardPage() {
                 <input type="checkbox" checked={tsIncludeOthers} onChange={e=>setTsIncludeOthers(e.target.checked)} />
                 {"\u56fe\u4e2d\u663e\u793a\u201c\u5176\u4ed6\u201d"}
               </label>
-              {groupedLoading && <span className="spinner" style={{marginLeft:8}} />}
+              {groupedLoading && (
+                <LoadingSurface
+                  mode="inline"
+                  label="正在刷新分组序列"
+                  detail={tsTopNEnabled ? `${tsGroupDim} · Top ${tsTopN}` : tsGroupDim}
+                />
+              )}
             </div>
           )}
           {!isGrouped && <div className="ts-mode-hint">{"\u5207\u6362\u5230\u201c\u5206\u7ec4\u201d\u540e\uff0c\u53ef\u6309\u52a8\u603b/\u7ec6\u5206/\u54c1\u724c/Model \u5206\u8272\u663e\u793a\u3002"}</div>}

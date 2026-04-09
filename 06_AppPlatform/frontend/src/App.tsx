@@ -2,6 +2,7 @@ import { Suspense, lazy, type ReactNode } from "react";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 
 import { Layout } from "./components/Layout";
+import { LoadingSurface } from "./components/LoadingSurface";
 import { DashboardPage } from "./pages/DashboardPage";
 
 const CrudPage = lazy(() => import("./pages/CrudPage").then((module) => ({ default: module.CrudPage })));
@@ -12,7 +13,16 @@ const SpecificationPage = lazy(() =>
 
 function withPageLoader(node: ReactNode) {
   return (
-    <Suspense fallback={<div className="loading-overlay"><span className="spinner" /> 正在加载页面…</div>}>
+    <Suspense fallback={
+      <div className="app-loading-shell">
+        <LoadingSurface
+          mode="overlay"
+          label="正在加载页面"
+          detail="准备下一个工作视图与路由资源"
+          kicker="Route"
+        />
+      </div>
+    }>
       {node}
     </Suspense>
   );

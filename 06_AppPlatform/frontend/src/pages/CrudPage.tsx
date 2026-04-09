@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api/client";
+import { LoadingSurface } from "../components/LoadingSurface";
 import type { CrudItem } from "../types";
 
 export function CrudPage() {
@@ -209,7 +210,14 @@ export function CrudPage() {
           </div>
         </div>
 
-        {loading && <div className="loading-overlay"><span className="spinner" /> 加载中…</div>}
+        {loading && (
+          <LoadingSurface
+            mode="overlay"
+            label="正在加载实体列表"
+            detail="同步当前页、排序条件和检索窗口"
+            kicker="CRUD"
+          />
+        )}
 
         <div className="table-wrapper">
           <table className="data-table">

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
+import { LoadingSurface } from "../components/LoadingSurface";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
 import {
   DIM,
@@ -435,9 +436,12 @@ export function SpecificationPage() {
         </div>
 
         {(bootLoading || overviewLoading) && !overview && (
-          <div className="loading-banner">
-            <span className="spinner" /> 正在初始化规格页…
-          </div>
+          <LoadingSurface
+            mode="overlay"
+            label="正在初始化规格页"
+            detail="同步筛选口径、概览指标和首屏字段配置"
+            kicker="Spec"
+          />
         )}
 
         <div className="card">
@@ -502,9 +506,11 @@ export function SpecificationPage() {
           </div>
 
           {detailLoading && (
-            <div className="loading-banner">
-              <span className="spinner" /> 正在刷新明细…
-            </div>
+            <LoadingSurface
+              label="正在刷新明细"
+              detail="按当前列选择、分页和销量过滤条件更新结果"
+              kicker="Detail"
+            />
           )}
 
           <div className="table-wrapper">
