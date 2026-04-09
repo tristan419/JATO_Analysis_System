@@ -1,6 +1,7 @@
 # Streamlit vs React App — 功能逐项对比 + 原子级行为差异
 
-> 更新时间：2026-04-08
+> 更新时间：2026-04-09
+> 本文档是当前 Fullstack 对比的主文档。若与 `REACT_STREAMLIT_GAP_ANALYSIS.md` 有出入，以本文为准。
 > 左列 = Streamlit 现有功能 (05_DashBoard/dashboard/views.py, 7819行)
 > 右列 = React App 现有实现 (06_AppPlatform/frontend，以 DashboardPage.tsx + ExportPanel.tsx + RvFinanceDashboard.tsx 为主)
 > 📁 文件夹已拆分：Streamlit相关文档 → `Markdown_Readme/Streamlit/`，Fullstack相关文档 → `Markdown_Readme/Fullstack/`
@@ -48,6 +49,9 @@
 | RV 金融仪表板 | ✅ 已实现 | 支持可编辑车辆表、模板应用/重置、预设/手动汇率、月供对比、瀑布图、敏感性分析、等高线 |
 | 默认筛选预设 | ✅ 已实现 | 动总规整默认 ICE/HEV/BEV/MHEV/PHEV，细分市场支持一键筛选 SUV |
 | 月度/年度时间过滤修复 | ✅ 已实现 | 前端按真实时间顺序过滤，不再因字符串比较导致 2025.1-2025.12 明细消失 |
+| Dashboard / Specification 页面缓存 | ✅ 已实现 | 两页切换时恢复筛选、概览、明细、图表与分页状态，使用内存 + sessionStorage TTL 缓存，避免重复首帧取数 |
+| Hero 指标重构 | ✅ 已实现 | Dashboard 首屏指标改为 Total sales + Version count，并为 loading 态增加数字冲高 + 液位填充视觉反馈 |
+| 气泡尺寸统一 | ✅ 已实现 | 动力气泡图、版型气泡图、OJ 定位图统一使用 Plotly sizeref/sizemode=area，同一套尺寸算法 |
 
 ---
 

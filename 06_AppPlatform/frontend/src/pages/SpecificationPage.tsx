@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
@@ -17,6 +17,7 @@ import {
   type FilterSelections,
 } from "../dashboardFilters";
 import type { DetailResponse, OverviewResponse } from "../types";
+import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 
 function pickDefaultDetailColumns(columns: string[]): string[] {
   const years = columns.filter((column) => /^\d{4}$/.test(column)).sort().reverse().slice(0, 2);
@@ -36,21 +37,49 @@ function pickDefaultDetailColumns(columns: string[]): string[] {
   return Array.from(new Set([...preferred, ...columns])).slice(0, 10);
 }
 
+const SPECIFICATION_CACHE_KEY = "specification-page";
+const PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
+
+interface SpecificationPageCache {
+  search: string;
+  columns: string[];
+  selections: FilterSelections;
+  optionsMap: Partial<Record<FilterKey, string[]>>;
+  overview: OverviewResponse | null;
+  detail: DetailResponse | null;
+  detailPage: number;
+  detailPageSize: number;
+  selectedCols: string[];
+  excludeZeroSales: boolean;
+  filtersReady: boolean;
+}
+
 export function SpecificationPage() {
-  const [columns, setColumns] = useState<string[]>([]);
-  const [selections, setSelections] = useState<FilterSelections>(createEmptySelections);
-  const [optionsMap, setOptionsMap] = useState<Partial<Record<FilterKey, string[]>>>({});
-  const [overview, setOverview] = useState<OverviewResponse | null>(null);
-  const [detail, setDetail] = useState<DetailResponse | null>(null);
-  const [detailPage, setDetailPage] = useState(1);
-  const [detailPageSize, setDetailPageSize] = useState(100);
-  const [selectedCols, setSelectedCols] = useState<string[]>([]);
-  const [excludeZeroSales, setExcludeZeroSales] = useState(false);
+  const currentSearch = typeof window !== "undefined" ? window.location.search : "";
+  const cachedPageRef = useRef<SpecificationPageCache | null>(null);
+  if (cachedPageRef.current === null) {
+    const cached = getCachedPageValue<SpecificationPageCache>(SPECIFICATION_CACHE_KEY);
+    cachedPageRef.current = cached && cached.search === currentSearch ? cached : null;
+  }
+  const cachedPage = cachedPageRef.current;
+
+  const [columns, setColumns] = useState<string[]>(() => cachedPage?.columns ?? []);
+  const [selections, setSelections] = useState<FilterSelections>(() => cachedPage?.selections ?? createEmptySelections());
+  const [optionsMap, setOptionsMap] = useState<Partial<Record<FilterKey, string[]>>>(() => cachedPage?.optionsMap ?? {});
+  const [overview, setOverview] = useState<OverviewResponse | null>(() => cachedPage?.overview ?? null);
+  const [detail, setDetail] = useState<DetailResponse | null>(() => cachedPage?.detail ?? null);
+  const [detailPage, setDetailPage] = useState(() => cachedPage?.detailPage ?? 1);
+  const [detailPageSize, setDetailPageSize] = useState(() => cachedPage?.detailPageSize ?? 100);
+  const [selectedCols, setSelectedCols] = useState<string[]>(() => cachedPage?.selectedCols ?? []);
+  const [excludeZeroSales, setExcludeZeroSales] = useState(() => cachedPage?.excludeZeroSales ?? false);
   const [bootLoading, setBootLoading] = useState(false);
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [filtersReady, setFiltersReady] = useState(false);
+  const [filtersReady, setFiltersReady] = useState(() => cachedPage?.filtersReady ?? false);
   const [error, setError] = useState("");
+  const skipInitialOverviewRef = useRef(Boolean(cachedPage));
+  const skipInitialDetailResetRef = useRef(Boolean(cachedPage));
+  const skipInitialDetailFetchRef = useRef(Boolean(cachedPage));
 
   const res = useMemo(() => {
     const mapped = {} as Record<FilterKey, string | null>;
@@ -112,6 +141,10 @@ export function SpecificationPage() {
   useEffect(() => {
     let cancelled = false;
 
+    if (cachedPage) return () => {
+      cancelled = true;
+    };
+
     (async () => {
       setBootLoading(true);
       setError("");
@@ -159,6 +192,10 @@ export function SpecificationPage() {
 
   useEffect(() => {
     if (!filtersReady || columns.length === 0) return;
+    if (skipInitialOverviewRef.current) {
+      skipInitialOverviewRef.current = false;
+      return;
+    }
     let cancelled = false;
 
     const timer = setTimeout(async () => {
@@ -185,11 +222,19 @@ export function SpecificationPage() {
   }, [columns.length, filterPayloadStr, filtersReady]);
 
   useEffect(() => {
+    if (skipInitialDetailResetRef.current) {
+      skipInitialDetailResetRef.current = false;
+      return;
+    }
     setDetailPage(1);
   }, [filterPayloadStr, selectedColsStr, detailPageSize, excludeZeroSales]);
 
   useEffect(() => {
     if (!filtersReady || columns.length === 0 || selectedCols.length === 0) return;
+    if (skipInitialDetailFetchRef.current) {
+      skipInitialDetailFetchRef.current = false;
+      return;
+    }
     let cancelled = false;
 
     const timer = setTimeout(async () => {
@@ -219,6 +264,37 @@ export function SpecificationPage() {
       clearTimeout(timer);
     };
   }, [columns.length, detailPage, detailPageSize, excludeZeroSales, filterPayloadStr, filtersReady, selectedCols, selectedColsStr]);
+
+  const specificationCacheSnapshot = useMemo<SpecificationPageCache>(() => ({
+    search: filterSearch,
+    columns,
+    selections,
+    optionsMap,
+    overview,
+    detail,
+    detailPage,
+    detailPageSize,
+    selectedCols,
+    excludeZeroSales,
+    filtersReady,
+  }), [
+    columns,
+    detail,
+    detailPage,
+    detailPageSize,
+    excludeZeroSales,
+    filterSearch,
+    filtersReady,
+    optionsMap,
+    overview,
+    selectedCols,
+    selections,
+  ]);
+
+  useEffect(() => {
+    if (!filtersReady || columns.length === 0) return;
+    setCachedPageValue(SPECIFICATION_CACHE_KEY, specificationCacheSnapshot, PAGE_CACHE_TTL_MS);
+  }, [columns.length, filtersReady, specificationCacheSnapshot]);
 
   async function onFilterChange(dimKey: FilterKey, newVals: string[]) {
     const nextSelections: FilterSelections = {
