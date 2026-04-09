@@ -324,6 +324,13 @@ function summarizeScopeValues(values: string[]): string {
   return `${values.slice(0, 2).join(" · ")} +${values.length - 2}`;
 }
 
+function getMetricDensityClass(valueText: string): string {
+  const digits = valueText.replace(/\D/g, "").length;
+  if (digits >= 7) return " metric-value--ultra";
+  if (digits >= 6) return " metric-value--compact";
+  return "";
+}
+
 /* ── filter component ──────────────────────────────── */
 /* ── Main Dashboard ────────────────────────────────── */
 export function DashboardPage() {
@@ -780,6 +787,17 @@ export function DashboardPage() {
     const target = Number(kpis?.versionCount ?? 0);
     return loading ? getLoadingMetricValue(target, heroLoadingTick + 5, 240) : target;
   }, [heroLoadingTick, kpis, loading]);
+  const heroTotalSalesText = useMemo(() => formatMetricValue(heroTotalSales), [heroTotalSales]);
+  const heroVersionCountText = useMemo(() => formatMetricValue(heroVersionCount), [heroVersionCount]);
+  const sidebarSummaryItems = useMemo(
+    () => [
+      { key: "rows", label: "筛选后记录数", value: (kpis?.totalRows ?? 0).toLocaleString() },
+      { key: "brands", label: "品牌数", value: (kpis?.brandCount ?? 0).toLocaleString() },
+      { key: "models", label: "Model 数", value: (kpis?.modelCount ?? 0).toLocaleString() },
+      { key: "versions", label: "Version 数", value: (kpis?.versionCount ?? 0).toLocaleString() },
+    ],
+    [kpis],
+  );
   const dashboardCacheSnapshot = useMemo<DashboardPageCache>(() => ({
     search: dashboardSearch,
     columns,
@@ -1182,10 +1200,12 @@ export function DashboardPage() {
             <div className="filter-sidebar-hint">当前筛选会同步到 URL，也可直接带到 Specification Page。</div>
           </div>
           <div className="filter-card filter-summary-card">
-            <div className="kpi-card"><div className="kpi-label">{"\u7b5b\u9009\u540e\u8bb0\u5f55\u6570"}</div><div className="kpi-value">{(kpis?.totalRows??0).toLocaleString()}</div></div>
-            <div className="kpi-card"><div className="kpi-label">{"\u54c1\u724c\u6570"}</div><div className="kpi-value">{(kpis?.brandCount??0).toLocaleString()}</div></div>
-            <div className="kpi-card"><div className="kpi-label">{"Model \u6570"}</div><div className="kpi-value">{(kpis?.modelCount??0).toLocaleString()}</div></div>
-            <div className="kpi-card"><div className="kpi-label">{"Version \u6570"}</div><div className="kpi-value">{(kpis?.versionCount??0).toLocaleString()}</div></div>
+            {sidebarSummaryItems.map((item) => (
+              <div key={item.key} className="kpi-card">
+                <div className="kpi-label">{item.label}</div>
+                <div className={`kpi-value${getMetricDensityClass(item.value)}`} title={item.value}>{item.value}</div>
+              </div>
+            ))}
           </div>
           <div className="dashboard-sidebar-caption">{activeFilterSummary}</div>
 
@@ -1223,13 +1243,13 @@ export function DashboardPage() {
               <div className="dashboard-hero-actions">
                 <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
                   <span className="hero-meta-label">Total sales</span>
-                  <strong className="hero-meta-value hero-meta-animated-value">{formatMetricValue(heroTotalSales)}</strong>
+                  <strong className={`hero-meta-value hero-meta-animated-value${getMetricDensityClass(heroTotalSalesText)}`} title={heroTotalSalesText}>{heroTotalSalesText}</strong>
                   <span className="hero-meta-subvalue">{timeWindowLabel}</span>
                   {loading && <span className="hero-meta-loader">LOADING LIVE SCOPE</span>}
                 </div>
                 <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
                   <span className="hero-meta-label">Version count</span>
-                  <strong className="hero-meta-value hero-meta-animated-value">{formatMetricValue(heroVersionCount)}</strong>
+                  <strong className={`hero-meta-value hero-meta-animated-value${getMetricDensityClass(heroVersionCountText)}`} title={heroVersionCountText}>{heroVersionCountText}</strong>
                   <span className="hero-meta-subvalue">{activeFilterCount ? `${activeFilterCount} filter dimensions active` : "Default powertrain lens"}</span>
                   {loading && <span className="hero-meta-loader">SYNCING FILTER STATE</span>}
                 </div>

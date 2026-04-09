@@ -55,6 +55,7 @@
 | Dashboard 首屏启动链路优化 | ✅ 已实现 | 首屏直接使用 URL / 默认筛选请求 overview，顶层 filter options 改为并发，移除空筛选 overview 的重复聚合 |
 | 全维度筛选 / Market Overview rail 折叠 | ✅ 已实现 | 移除 Current scope 大面板，左侧筛选与 Hero 均支持 rail 化折叠，统一使用 28px 微按钮控制 |
 | Full timeline 筛选可见性修复 | ✅ 已实现 | 首屏 bootstrap 会补齐 make / model / version 级联 options，Hero rail 直接展示 active lens token，不再依赖拖动时间轴才看清当前筛选 |
+| Dashboard 响应式密度修正 | ✅ 已实现 | 左侧 KPI 数字改成长度感知字号，Hero 展开态缩小到更紧凑比例，收纳态进一步压缩并统一断点行为 |
 
 ## 0.2 2026-04-09 修复说明与后续待办
 
@@ -63,6 +64,7 @@
 - 首次进入 `/?powertrain=ICE,HEV,BEV,MHEV,PHEV` 时，不再先打一轮空筛选 `overview`，首屏聚合直接按当前筛选执行。
 - `make / model / version` 在 full timeline 初始态也会正常出现在筛选链和 Hero summary 中，不再出现“拖一下时间轴才显示”的错觉。
 - `Current scope` 卡片已下线，Dashboard 改为更轻的 rail 交互，折叠态在桌面和移动端都保持单行/单轨语义。
+- `全维度筛选` 摘要卡与 `01 / Market Overview` Hero 已统一响应式密度规则，长数字不再冲出卡片边界，展开态和收纳态高度进一步压缩。
 
 ### 待办
 

@@ -117,3 +117,30 @@ APP_AUTH_TOKEN=my-token APP_USER_ROLE=viewer bash 03_Scripts/fullstack_dev.sh st
 - 继续拆分 Plotly 相关 chunk，只让 Dashboard 首屏加载必要模块。
 - 给 `overview`、`groupedTimeSeries` 等请求加 abort / dedupe，避免快速切换筛选时排队。
 - 如果后续确认聚合仍偏慢，再评估后端预聚合或 analytics engine，而不是先引入通用 OLTP 数据库。
+
+## 8. Dashboard 响应式密度修正（2026-04-09）
+
+### 8.1 现象
+
+- 左侧 `全维度筛选` 摘要卡在部分浏览器和缩放比例下会出现 KPI 数字溢出，例如 `136,928` 被卡片边界截断。
+- `01 / Market Overview` Hero 面板虽然已有折叠态，但展开态仍然偏高，内部 KPI、chip 和按钮密度过大，收纳后也还不够紧。
+
+### 8.2 根因
+
+- rail、sidebar、Hero 的外层断点是响应式的，但内部关键尺寸仍有一批固定值：`kpi-value`、`hero-meta-value`、`hero-meta-block`、按钮高度、padding、gap。
+- 左侧摘要卡虽然是 grid，但内容字号没有跟随位数和断点缩放，导致 6 位以上数字在窄列里挤出边界。
+- Hero 的折叠逻辑主要隐藏了 body，没有同步压缩标题、内边距、toggle 位置和内部控件的视觉占用。
+
+### 8.3 可行性判断
+
+- 这是纯前端布局密度问题，改动集中在 `DashboardPage.tsx` 和 `index.css`，不涉及 API、缓存模型或筛选状态机，因此风险可控。
+- “展开态减半、折叠态减到四分之一” 可以按视觉占用实现，但不能把所有控件机械除以 2，因为 click target 仍需保留基本可用面积。
+- 最稳妥的实现方式是：长度感知字号 + clamp 响应式尺寸 + 折叠态专用密度规则，而不是依赖某一个浏览器的字宽表现。
+
+### 8.4 本轮修复
+
+- 左侧 KPI 摘要卡改为长度感知字号：数字位数越长，字号自动降档，避免跨浏览器截断。
+- `全维度筛选` 的 rail 标题、提示、摘要、按钮和 KPI 卡片高度统一缩小，并继续跟随断点收缩。
+- `01 / Market Overview` Hero 的展开态整体压缩：标题、KPI 卡、chip rail、按钮、padding 和 gap 全部下调到更紧的比例。
+- Hero 折叠态进一步压缩：隐藏 kicker、缩小标题、上移 toggle、减少内边距，使收纳态接近原视觉占用的四分之一。
+- 保留 `24px` 左右的 toggle 点击区，兼顾密度和可操作性。

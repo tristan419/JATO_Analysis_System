@@ -186,3 +186,5 @@ What makes BMW distinctive is its CSS variable-driven theming system. Context-aw
 - `全维度筛选` 折叠态采用 slim rail：桌面宽度约 `74px`，移动端改成整行 rail，避免不同浏览器下出现窄卡片挤压。
 - 筛选上下文以 token 方式展示，优先显示真实筛选值与 `Full timeline`，不再只显示计数。
 - 交互原则保持不变：蓝色只用于 action / focus，背景和结构依然以黑白灰为主，避免把 rail 做成装饰组件。
+- 数值型 KPI 采用长度感知字号和 clamp 规则，6 位以上数字自动降档，避免不同浏览器字宽导致的溢出。
+- `01 / Market Overview` 展开态继续压缩到更接近原高度的 1/2，折叠态压缩到约 1/4，但 toggle 保留约 `24px` 可点击面积，不牺牲可用性。
