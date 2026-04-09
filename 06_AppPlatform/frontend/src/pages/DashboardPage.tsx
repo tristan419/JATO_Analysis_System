@@ -280,7 +280,9 @@ export function DashboardPage() {
   /* time-series controls */
   const [activeTab, setActiveTab] = useState<"year"|"month">(cachedPage?.activeTab ?? "year");
   const [chartType, setChartType] = useState<"line"|"bar">(cachedPage?.chartType ?? "line");
-  const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">(cachedPage?.tsMode as "\u603b\u548c"|"\u5206\u7ec4" ?? "\u603b\u548c");
+  const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">(
+    (cachedPage?.tsMode === "\u5206\u7ec4" ? "\u5206\u7ec4" : "\u603b\u548c"),
+  );
   const [tsGroupDim, setTsGroupDim] = useState(cachedPage?.tsGroupDim ?? "\u52a8\u603b\u89c4\u6574");
   const [tsTopN, setTsTopN] = useState(cachedPage?.tsTopN ?? 10);
   const [tsTopNEnabled, setTsTopNEnabled] = useState(cachedPage?.tsTopNEnabled ?? true);
@@ -474,7 +476,7 @@ export function DashboardPage() {
   }
 
   const filterPayloadStr = useMemo(() => JSON.stringify(buildFilterPayload()), [buildFilterPayload]);
-  const specificationHref = `/specification${dashboardSearch}`;
+  const specificationHref = useMemo(() => `/specification${dashboardSearch}`, [dashboardSearch]);
   const prevPayloadRef = useRef(filterPayloadStr);
   useEffect(() => {
     if (prevPayloadRef.current !== filterPayloadStr && columns.length > 0) {
