@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 
 const NAV_ITEMS = [
@@ -8,18 +9,37 @@ const NAV_ITEMS = [
 
 export function Layout() {
   const location = useLocation();
+  const [navOpen, setNavOpen] = useState(false);
 
   const isActive = (path: string) =>
     path === "/" ? location.pathname === "/" : location.pathname.startsWith(path);
 
+  useEffect(() => {
+    setNavOpen(false);
+  }, [location.pathname]);
+
   return (
     <div className="app-root">
-      <header className="top-bar">
-        <div className="top-bar-brand">
-          <span className="top-bar-brand-eyebrow">JATO Analysis System</span>
-          <span className="top-bar-brand-title">Market Intelligence Control Deck</span>
+      <header className={`top-bar${navOpen ? " is-nav-open" : ""}`}>
+        <div className="top-bar-main">
+          <div className="top-bar-brand">
+            <span className="top-bar-brand-eyebrow">JATO Analysis System</span>
+            <span className="top-bar-brand-title">Market Intelligence Control Deck</span>
+          </div>
+          <button
+            type="button"
+            className={`top-bar-menu-toggle${navOpen ? " is-open" : ""}`}
+            aria-expanded={navOpen}
+            aria-controls="primary-navigation"
+            aria-label={navOpen ? "收起主导航" : "展开主导航"}
+            onClick={() => setNavOpen((current) => !current)}
+          >
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+          </button>
         </div>
-        <nav className="top-bar-nav" aria-label="Primary">
+        <nav id="primary-navigation" className={`top-bar-nav${navOpen ? " is-open" : ""}`} aria-label="Primary">
           {NAV_ITEMS.map((item) => (
             <Link
               key={item.to}

@@ -72,6 +72,13 @@
 - `groupedTimeSeries`、高级分析等次级请求仍未做 abort / request dedupe，快速切换筛选时还有继续优化空间。
 - 月度分组模式的 `monthGrain` 仍未完全对齐 Streamlit，这是剩余的主要行为差距之一。
 
+## 0.3 2026-04-09 第一阶段已落地
+
+- 顶部 `Overview / Specification / Control` 在窄屏下已切到 hamburger + drawer，不再继续依赖固定卡片换行。
+- `全维度筛选` 的桌面折叠态已改成 toggle-only rail，竖排/倒置文本已移除。
+- `/v1/filters/options` 已去掉无收益的 `rowCount` 双扫描负担，Dashboard 与 Specification 均已切到顶层 eager + 下游按需加载。
+- 前端已为 options 请求补上 TTL cache 与 abort；PostgreSQL 仍不作为本轮首选方案。
+
 ---
 
 ## 1. 全局时间轴

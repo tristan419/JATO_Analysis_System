@@ -189,7 +189,6 @@ def filters_options(column: str, filters: dict[str, list[str]]) -> dict:
     return {
         "column": column,
         "options": repo.load_distinct_options(column, filters),
-        "rowCount": repo.count_rows(filters),
     }
 
 

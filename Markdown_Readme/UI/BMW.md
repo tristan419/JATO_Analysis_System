@@ -188,3 +188,17 @@ What makes BMW distinctive is its CSS variable-driven theming system. Context-aw
 - 交互原则保持不变：蓝色只用于 action / focus，背景和结构依然以黑白灰为主，避免把 rail 做成装饰组件。
 - 数值型 KPI 采用长度感知字号和 clamp 规则，6 位以上数字自动降档，避免不同浏览器字宽导致的溢出。
 - `01 / Market Overview` 展开态继续压缩到更接近原高度的 1/2，折叠态压缩到约 1/4，但 toggle 保留约 `24px` 可点击面积，不牺牲可用性。
+
+## 11. 移动端导航与 rail 语义补充（2026-04-09）
+
+- 顶部主导航在桌面端继续保持 card nav，但在 `<=768px` 必须切换为 hamburger 入口 + 纵向 drawer，不能只靠卡片换行充当移动端适配。
+- drawer 内的导航项应改为整行列表项，左侧保留 `01/02/03` 序号，右侧展示 label/sublabel，触控区域覆盖整行。
+- `全维度筛选` 的桌面折叠态只保留 toggle，不再保留竖排标题、摘要或任何旋转文案；折叠后的 rail 语义是“收纳开关”，不是“极窄信息卡”。
+- 移动端如果保留筛选 rail，应采用单行摘要或纯按钮语义，禁止出现 `writing-mode` 形成的竖排阅读路径。
+- hamburger、sidebar toggle 这类微控件可以保持 BMW 风格的锐利矩形和低饱和配色，但命中区域不能低于约 `32px`。
+
+### 11.1 当前落地状态
+
+- 规范已在当前 React shell 落地：窄屏顶部导航使用 hamburger + drawer，桌面端继续保留 card nav。
+- `全维度筛选` 收纳态已隐藏 rail copy，仅保留 toggle；视觉和语义都不再把收纳 rail 当作信息承载区。
+- 后续若继续优化，仅允许在命中面积、动画节奏和 drawer 层级上微调，不回退到竖排文字或被动换行方案。

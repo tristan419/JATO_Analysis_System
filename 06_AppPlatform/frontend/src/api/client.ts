@@ -11,6 +11,7 @@ import type {
   RvFinanceResponse,
   RvFinanceVehicle,
 } from "../types";
+import type { FilterOptionsPayload } from "../utils/filterOptions";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/v1";
 
@@ -71,10 +72,10 @@ async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
 
 export const api = {
   columns: () => request<{ items: string[] }>("/metadata/columns"),
-  filterOptions: (payload: { column: string; filters: Record<string, string[]> }) =>
-    request<{ column: string; options: string[]; rowCount: number }>(
+  filterOptions: (payload: FilterOptionsPayload, init?: RequestInit) =>
+    request<{ column: string; options: string[] }>(
       "/filters/options",
-      { method: "POST", body: JSON.stringify(payload) }
+      { method: "POST", body: JSON.stringify(payload), ...init }
     ),
   analysis: (payload: AnalysisQuery) =>
     request<{ route: string; rows: number; items: Record<string, unknown>[] }>(

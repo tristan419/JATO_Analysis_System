@@ -19,6 +19,13 @@ import {
 } from "../dashboardFilters";
 import type { DetailResponse, OverviewResponse } from "../types";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
+import {
+  FILTER_OPTIONS_CACHE_TTL_MS,
+  buildFilterOptionsCacheKey,
+  fetchOnDemandCascadedOptions,
+  isAbortError,
+  type FilterOptionsPayload,
+} from "../utils/filterOptions";
 
 function pickDefaultDetailColumns(columns: string[]): string[] {
   const years = columns.filter((column) => /^\d{4}$/.test(column)).sort().reverse().slice(0, 2);
@@ -55,6 +62,39 @@ interface SpecificationPageCache {
   filtersReady: boolean;
 }
 
+type ResolvedFilterColumns = Record<FilterKey, string | null>;
+
+const TOP_LEVEL_FILTER_KEYS = ["country", "segment", "powertrain"] as const satisfies readonly FilterKey[];
+
+function resolveFilterColumns(columns: string[]): ResolvedFilterColumns {
+  return FILTER_KEYS.reduce<ResolvedFilterColumns>((resolved, key) => {
+    resolved[key] = resolve(columns, DIM[key]);
+    return resolved;
+  }, {
+    country: null,
+    segment: null,
+    powertrain: null,
+    make: null,
+    model: null,
+    version: null,
+  });
+}
+
+function sanitizeTopLevelSelections(
+  selections: FilterSelections,
+  topLevelOptions: Partial<Record<FilterKey, string[]>>,
+): FilterSelections {
+  const next = createEmptySelections();
+  for (const { key } of FILTER_ORDER) {
+    next[key] = [...selections[key]];
+  }
+  for (const key of TOP_LEVEL_FILTER_KEYS) {
+    const available = topLevelOptions[key] ?? [];
+    next[key] = next[key].filter((value) => available.includes(value));
+  }
+  return next;
+}
+
 export function SpecificationPage() {
   const currentSearch = typeof window !== "undefined" ? window.location.search : "";
   const cachedPageRef = useRef<SpecificationPageCache | null>(null);
@@ -77,16 +117,16 @@ export function SpecificationPage() {
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [filtersReady, setFiltersReady] = useState(() => cachedPage?.filtersReady ?? false);
+  const [optionsSyncPending, setOptionsSyncPending] = useState(false);
   const [error, setError] = useState("");
   const skipInitialOverviewRef = useRef(Boolean(cachedPage));
   const skipInitialDetailResetRef = useRef(Boolean(cachedPage));
   const skipInitialDetailFetchRef = useRef(Boolean(cachedPage));
+  const optionsCacheRef = useRef(new Map<string, { expiresAt: number; options: string[] }>());
+  const bootOptionsAbortRef = useRef<AbortController | null>(null);
+  const syncOptionsAbortRef = useRef<AbortController | null>(null);
 
-  const res = useMemo(() => {
-    const mapped = {} as Record<FilterKey, string | null>;
-    for (const key of FILTER_KEYS) mapped[key] = resolve(columns, DIM[key]);
-    return mapped;
-  }, [columns]);
+  const res = useMemo<ResolvedFilterColumns>(() => resolveFilterColumns(columns), [columns]);
 
   const buildFilterPayload = useCallback((): Record<string, string[]> => {
     const payload: Record<string, string[]> = {};
@@ -114,77 +154,94 @@ export function SpecificationPage() {
       .join(" / ");
   }, [activeFilters, selections]);
 
-  const syncOptionsForColumns = useCallback(
-    async (sourceColumns: string[], nextSelections: FilterSelections) => {
-      const nextOptions: Partial<Record<FilterKey, string[]>> = {};
-      const sanitized = createEmptySelections();
-      const prefixFilters: Record<string, string[]> = {};
-
-      for (const { key } of FILTER_ORDER) {
-        const column = resolve(sourceColumns, DIM[key]);
-        if (!column) continue;
-
-        const response = await api.filterOptions({ column, filters: prefixFilters });
-        nextOptions[key] = response.options;
-
-        const validSelections = nextSelections[key].filter((value) => response.options.includes(value));
-        sanitized[key] = validSelections;
-
-        if (validSelections.length) prefixFilters[column] = validSelections;
+  const loadFilterOptions = useCallback(
+    async (payload: FilterOptionsPayload, signal?: AbortSignal): Promise<string[]> => {
+      const cacheKey = buildFilterOptionsCacheKey(payload);
+      const now = Date.now();
+      const cached = optionsCacheRef.current.get(cacheKey);
+      if (cached && cached.expiresAt > now) {
+        return cached.options;
       }
 
-      setOptionsMap(nextOptions);
-      return { selections: sanitized, options: nextOptions };
+      const response = await api.filterOptions(payload, { signal });
+      optionsCacheRef.current.set(cacheKey, {
+        expiresAt: now + FILTER_OPTIONS_CACHE_TTL_MS,
+        options: response.options,
+      });
+      return response.options;
     },
-    []
+    [],
   );
 
   useEffect(() => {
-    let cancelled = false;
+    if (cachedPage) return;
 
-    if (cachedPage) return () => {
-      cancelled = true;
-    };
+    const controller = new AbortController();
+    bootOptionsAbortRef.current = controller;
 
     (async () => {
       setBootLoading(true);
       setError("");
       try {
         const { items } = await api.columns();
-        if (cancelled) return;
+        const resolvedColumns = resolveFilterColumns(items);
+        const topLevelOptions = (await Promise.all(
+          TOP_LEVEL_FILTER_KEYS.map(async (key) => {
+            const column = resolvedColumns[key];
+            if (!column) return [key, [] as string[]] as const;
+            const options = await loadFilterOptions({ column, filters: {} }, controller.signal);
+            return [key, options] as const;
+          }),
+        )).reduce<Partial<Record<FilterKey, string[]>>>((accumulator, [key, options]) => {
+          accumulator[key] = options;
+          return accumulator;
+        }, {});
+
+        const initialFromSearch = sanitizeTopLevelSelections(readSelectionsFromSearch(currentSearch), topLevelOptions);
+        const initialSelections = hasSelections(initialFromSearch)
+          ? initialFromSearch
+          : {
+              ...initialFromSearch,
+              powertrain: getDefaultPowertrainValues(topLevelOptions.powertrain ?? []),
+            };
+
+        const { optionsMap: cascadedOptions, selections: syncedSelections } = await fetchOnDemandCascadedOptions(
+          resolvedColumns,
+          initialSelections,
+          3,
+          loadFilterOptions,
+          controller.signal,
+        );
 
         setColumns(items);
         setSelectedCols(pickDefaultDetailColumns(items));
-
-        let initialSelections = readSelectionsFromSearch(window.location.search);
-        let syncResult = await syncOptionsForColumns(items, initialSelections);
-        if (cancelled) return;
-
-        if (!hasSelections(syncResult.selections)) {
-          const defaults = getDefaultPowertrainValues(syncResult.options.powertrain ?? []);
-          if (defaults.length) {
-            initialSelections = {
-              ...syncResult.selections,
-              powertrain: defaults,
-            };
-            syncResult = await syncOptionsForColumns(items, initialSelections);
-            if (cancelled) return;
-          }
-        }
-
-        setSelections(syncResult.selections);
+        setSelections(syncedSelections);
+        setOptionsMap({ ...topLevelOptions, ...cascadedOptions });
         setFiltersReady(true);
       } catch (err) {
-        if (!cancelled) setError((err as Error).message);
+        if (!isAbortError(err)) setError((err as Error).message);
       } finally {
-        if (!cancelled) setBootLoading(false);
+        if (bootOptionsAbortRef.current === controller) {
+          bootOptionsAbortRef.current = null;
+        }
+        setBootLoading(false);
       }
     })();
 
     return () => {
-      cancelled = true;
+      controller.abort();
+      if (bootOptionsAbortRef.current === controller) {
+        bootOptionsAbortRef.current = null;
+      }
     };
-  }, [syncOptionsForColumns]);
+  }, [cachedPage, currentSearch, loadFilterOptions]);
+
+  useEffect(() => {
+    return () => {
+      bootOptionsAbortRef.current?.abort();
+      syncOptionsAbortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     const newUrl = `${window.location.pathname}${filterSearch}`;
@@ -192,7 +249,7 @@ export function SpecificationPage() {
   }, [filterSearch]);
 
   useEffect(() => {
-    if (!filtersReady || columns.length === 0) return;
+    if (!filtersReady || columns.length === 0 || optionsSyncPending) return;
     if (skipInitialOverviewRef.current) {
       skipInitialOverviewRef.current = false;
       return;
@@ -220,7 +277,7 @@ export function SpecificationPage() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [columns.length, filterPayloadStr, filtersReady]);
+  }, [columns.length, filterPayloadStr, filtersReady, optionsSyncPending]);
 
   useEffect(() => {
     if (skipInitialDetailResetRef.current) {
@@ -231,7 +288,7 @@ export function SpecificationPage() {
   }, [filterPayloadStr, selectedColsStr, detailPageSize, excludeZeroSales]);
 
   useEffect(() => {
-    if (!filtersReady || columns.length === 0 || selectedCols.length === 0) return;
+    if (!filtersReady || columns.length === 0 || selectedCols.length === 0 || optionsSyncPending) return;
     if (skipInitialDetailFetchRef.current) {
       skipInitialDetailFetchRef.current = false;
       return;
@@ -264,7 +321,7 @@ export function SpecificationPage() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [columns.length, detailPage, detailPageSize, excludeZeroSales, filterPayloadStr, filtersReady, selectedCols, selectedColsStr]);
+  }, [columns.length, detailPage, detailPageSize, excludeZeroSales, filterPayloadStr, filtersReady, optionsSyncPending, selectedCols, selectedColsStr]);
 
   const specificationCacheSnapshot = useMemo<SpecificationPageCache>(() => ({
     search: filterSearch,
@@ -297,34 +354,56 @@ export function SpecificationPage() {
     setCachedPageValue(SPECIFICATION_CACHE_KEY, specificationCacheSnapshot, PAGE_CACHE_TTL_MS);
   }, [columns.length, filtersReady, specificationCacheSnapshot]);
 
+  const applySelections = useCallback(async (nextSelections: FilterSelections, dimKey: FilterKey) => {
+    const index = FILTER_ORDER.findIndex((filter) => filter.key === dimKey);
+    if (index === -1) return;
+
+    const cascadeStartIndex = index < 3 ? 3 : index;
+    syncOptionsAbortRef.current?.abort();
+    const controller = new AbortController();
+    syncOptionsAbortRef.current = controller;
+
+    setOptionsSyncPending(true);
+    setSelections(nextSelections);
+    setError("");
+    try {
+      const { optionsMap: cascadedOptions, selections: syncedSelections } = await fetchOnDemandCascadedOptions(
+        res,
+        nextSelections,
+        cascadeStartIndex,
+        loadFilterOptions,
+        controller.signal,
+      );
+      if (syncOptionsAbortRef.current !== controller) return;
+
+      setSelections(syncedSelections);
+      setOptionsMap((previous) => ({ ...previous, ...cascadedOptions }));
+    } catch (err) {
+      if (!isAbortError(err)) setError((err as Error).message);
+    } finally {
+      if (syncOptionsAbortRef.current === controller) {
+        syncOptionsAbortRef.current = null;
+        setOptionsSyncPending(false);
+      }
+    }
+  }, [loadFilterOptions, res]);
+
   async function onFilterChange(dimKey: FilterKey, newVals: string[]) {
     const nextSelections: FilterSelections = {
       ...selections,
       [dimKey]: newVals,
     };
-    setError("");
-    try {
-      const { selections: syncedSelections } = await syncOptionsForColumns(columns, nextSelections);
-      setSelections(syncedSelections);
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await applySelections(nextSelections, dimKey);
   }
 
   function resetFilters() {
     void (async () => {
-      setError("");
-      try {
-        const defaults = getDefaultPowertrainValues(optionsMap.powertrain ?? []);
-        const nextSelections: FilterSelections = {
-          ...createEmptySelections(),
-          powertrain: defaults,
-        };
-        const { selections: syncedSelections } = await syncOptionsForColumns(columns, nextSelections);
-        setSelections(syncedSelections);
-      } catch (err) {
-        setError((err as Error).message);
-      }
+      const defaults = getDefaultPowertrainValues(optionsMap.powertrain ?? []);
+      const nextSelections: FilterSelections = {
+        ...createEmptySelections(),
+        powertrain: defaults,
+      };
+      await applySelections(nextSelections, "powertrain");
     })();
   }
 

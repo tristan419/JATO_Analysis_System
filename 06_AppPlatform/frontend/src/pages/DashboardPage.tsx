@@ -21,6 +21,13 @@ import { PlotlyChart } from "../components/PlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
 import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanel";
 import { buildBubbleSizing } from "../utils/bubbleSizing";
+import {
+  FILTER_OPTIONS_CACHE_TTL_MS,
+  buildFilterOptionsCacheKey,
+  fetchOnDemandCascadedOptions,
+  isAbortError,
+  type FilterOptionsPayload,
+} from "../utils/filterOptions";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 const RvFinanceDashboard = lazy(() =>
   import("../components/RvFinanceDashboard").then((module) => ({ default: module.RvFinanceDashboard }))
@@ -242,6 +249,8 @@ interface DashboardPageCache {
 
 type ResolvedFilterColumns = Record<FilterKey, string | null>;
 
+const TOP_LEVEL_FILTER_KEYS = ["country", "segment", "powertrain"] as const satisfies readonly FilterKey[];
+
 function createDashboardSelections(source?: Record<string, string[]>): FilterSelections {
   const base = createEmptySelections();
   return {
@@ -281,31 +290,16 @@ function buildFilterPayloadFromResolved(
   return payload;
 }
 
-async function fetchCascadedOptions(
-  resolved: ResolvedFilterColumns,
-  next: FilterSelections,
-  startIndex: number,
-): Promise<Partial<Record<FilterKey, string[]>>> {
-  if (startIndex >= FILTER_ORDER.length) return {};
-
-  const payload: Record<string, string[]> = {};
-  for (let index = 0; index < startIndex; index += 1) {
-    const key = FILTER_ORDER[index].key;
-    const column = resolved[key];
-    if (column && next[key].length > 0) payload[column] = next[key];
+function sanitizeTopLevelSelections(
+  selections: FilterSelections,
+  topLevelOptions: Partial<Record<FilterKey, string[]>>,
+): FilterSelections {
+  const next = createDashboardSelections(selections);
+  for (const key of TOP_LEVEL_FILTER_KEYS) {
+    const available = topLevelOptions[key] ?? [];
+    next[key] = next[key].filter((value) => available.includes(value));
   }
-
-  const updates: Partial<Record<FilterKey, string[]>> = {};
-  for (let index = startIndex; index < FILTER_ORDER.length; index += 1) {
-    const key = FILTER_ORDER[index].key;
-    const column = resolved[key];
-    if (!column) continue;
-    const options = await api.filterOptions({ column, filters: payload });
-    updates[key] = options.options;
-    if (next[key].length > 0) payload[column] = next[key];
-  }
-
-  return updates;
+  return next;
 }
 
 function getLoadingMetricValue(target: number, tick: number, fallback: number): number {
@@ -434,74 +428,138 @@ export function DashboardPage() {
   const [heroLoadingTick, setHeroLoadingTick] = useState(0);
   const [heroCollapsed, setHeroCollapsed] = useState(() => cachedPage?.heroCollapsed ?? false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => cachedPage?.sidebarCollapsed ?? false);
+  const [optionsSyncPending, setOptionsSyncPending] = useState(false);
   const bootDone = useRef(false);
+  const optionsCacheRef = useRef(new Map<string, { expiresAt: number; options: string[] }>());
+  const bootOptionsAbortRef = useRef<AbortController | null>(null);
+  const syncOptionsAbortRef = useRef<AbortController | null>(null);
 
   /* column resolution */
   const res = useMemo<ResolvedFilterColumns>(() => resolveFilterColumns(columns), [columns]);
 
   const buildFilterPayload = useCallback(() => buildFilterPayloadFromResolved(res, selections), [res, selections]);
 
+  const loadFilterOptions = useCallback(async (payload: FilterOptionsPayload, signal?: AbortSignal): Promise<string[]> => {
+    const key = buildFilterOptionsCacheKey(payload);
+    const now = Date.now();
+    const cached = optionsCacheRef.current.get(key);
+    if (cached && cached.expiresAt > now) {
+      return cached.options;
+    }
+
+    const response = await api.filterOptions(payload, { signal });
+    optionsCacheRef.current.set(key, {
+      expiresAt: now + FILTER_OPTIONS_CACHE_TTL_MS,
+      options: response.options,
+    });
+    return response.options;
+  }, []);
+
   /* boot */
   useEffect(() => {
     if (bootDone.current) return;
     bootDone.current = true;
     if (cachedPage) return;
+    const controller = new AbortController();
+    bootOptionsAbortRef.current = controller;
     (async () => {
       setLoading(true); setError("");
       try {
         const { items } = await api.columns();
         const resolvedColumns = resolveFilterColumns(items);
         const topLevelOptions = (await Promise.all(
-          (["country", "segment", "powertrain"] as const).map(async (key) => {
+          TOP_LEVEL_FILTER_KEYS.map(async (key) => {
             const column = resolvedColumns[key];
             if (!column) return [key, [] as string[]] as const;
-            const options = await api.filterOptions({ column, filters: {} });
-            return [key, options.options] as const;
+            const options = await loadFilterOptions({ column, filters: {} }, controller.signal);
+            return [key, options] as const;
           }),
         )).reduce<Partial<Record<FilterKey, string[]>>>((accumulator, [key, options]) => {
           accumulator[key] = options;
           return accumulator;
         }, {});
 
-        const initialFromSearch = readSelectionsFromSearch(currentSearch);
+        const initialFromSearch = sanitizeTopLevelSelections(readSelectionsFromSearch(currentSearch), topLevelOptions);
         const hasSearchSelections = FILTER_ORDER.some(({ key }) => initialFromSearch[key].length > 0);
         const initialSelections = hasSearchSelections
           ? initialFromSearch
           : createDashboardSelections({
               powertrain: getDefaultPowertrainValues(topLevelOptions.powertrain ?? []),
             });
-        const initialFilters = buildFilterPayloadFromResolved(resolvedColumns, initialSelections);
-        const [cascadedOptions, ov] = await Promise.all([
-          fetchCascadedOptions(resolvedColumns, initialSelections, 3),
-          api.overview({ filters: initialFilters, prefer_precomputed: true, top_n: 120 }),
-        ]);
+        const { optionsMap: cascadedOptions, selections: syncedSelections } = await fetchOnDemandCascadedOptions(
+          resolvedColumns,
+          initialSelections,
+          3,
+          loadFilterOptions,
+          controller.signal,
+        );
+        const initialFilters = buildFilterPayloadFromResolved(resolvedColumns, syncedSelections);
+        const ov = await api.overview({ filters: initialFilters, prefer_precomputed: true, top_n: 120 });
 
         prevPayloadRef.current = JSON.stringify(initialFilters);
         prevAdvPayloadRef.current = JSON.stringify(initialFilters);
 
         setColumns(items);
-        setSelections(initialSelections);
+        setSelections(syncedSelections);
         setOptionsMap({ ...topLevelOptions, ...cascadedOptions });
-        if (initialSelections.model.length === 1) {
-          setMvModelName((current) => current || initialSelections.model[0]);
+        if (syncedSelections.model.length === 1) {
+          setMvModelName((current) => current || syncedSelections.model[0]);
         }
         setOverview(ov); setYearSeries(ov.yearSeries ?? []); setMonthSeries(ov.monthSeries ?? []);
         setFilteredRowCount(ov.kpis.totalRows);
-      } catch (e) { setError((e as Error).message); }
-      finally { setLoading(false); }
+      } catch (e) {
+        if (!isAbortError(e)) setError((e as Error).message);
+      }
+      finally {
+        if (bootOptionsAbortRef.current === controller) {
+          bootOptionsAbortRef.current = null;
+        }
+        setLoading(false);
+      }
     })();
+    return () => {
+      controller.abort();
+    };
+  }, [cachedPage, currentSearch, loadFilterOptions]);
+
+  useEffect(() => {
+    return () => {
+      bootOptionsAbortRef.current?.abort();
+      syncOptionsAbortRef.current?.abort();
+    };
   }, []);
 
   async function applySelections(next: FilterSelections, dimKey: FilterKey) {
-    setSelections(next);
     const idx = FILTER_ORDER.findIndex((filter) => filter.key === dimKey);
     if (idx === -1) return;
+
+    const cascadeStartIndex = idx < 3 ? 3 : idx;
+    syncOptionsAbortRef.current?.abort();
+    const controller = new AbortController();
+    syncOptionsAbortRef.current = controller;
+
+    setOptionsSyncPending(true);
+    setSelections(next);
+    setError("");
     try {
-      const updates = await fetchCascadedOptions(res, next, idx + 1);
-      if (Object.keys(updates).length > 0) {
-        setOptionsMap((previous) => ({ ...previous, ...updates }));
+      const { optionsMap: updates, selections: syncedSelections } = await fetchOnDemandCascadedOptions(
+        res,
+        next,
+        cascadeStartIndex,
+        loadFilterOptions,
+        controller.signal,
+      );
+      if (syncOptionsAbortRef.current !== controller) return;
+      setSelections(syncedSelections);
+      setOptionsMap((previous) => ({ ...previous, ...updates }));
+    } catch (error) {
+      if (!isAbortError(error)) setError((error as Error).message);
+    } finally {
+      if (syncOptionsAbortRef.current === controller) {
+        syncOptionsAbortRef.current = null;
+        setOptionsSyncPending(false);
       }
-    } catch {}
+    }
   }
   async function onFilterChange(dimKey: FilterKey, newVals: string[]) {
     const next = { ...selections, [dimKey]: newVals };
@@ -547,20 +605,18 @@ export function DashboardPage() {
 
   const prevPayloadRef = useRef(filterPayloadStr);
   useEffect(() => {
-    if (prevPayloadRef.current !== filterPayloadStr && columns.length > 0) {
-      prevPayloadRef.current = filterPayloadStr;
-      loadOverview();
-    }
-  }, [filterPayloadStr, columns.length]);
+    if (optionsSyncPending || prevPayloadRef.current === filterPayloadStr || columns.length === 0) return;
+    prevPayloadRef.current = filterPayloadStr;
+    loadOverview();
+  }, [columns.length, filterPayloadStr, loadOverview, optionsSyncPending]);
 
   /* B3: auto-reload advanced chart when filters change */
   const prevAdvPayloadRef = useRef(filterPayloadStr);
   useEffect(() => {
-    if (prevAdvPayloadRef.current !== filterPayloadStr && advItems.length > 0 && columns.length > 0) {
-      prevAdvPayloadRef.current = filterPayloadStr;
-      loadAdvChart();
-    }
-  }, [filterPayloadStr, advItems.length, columns.length]);
+    if (optionsSyncPending || prevAdvPayloadRef.current === filterPayloadStr || advItems.length === 0 || columns.length === 0) return;
+    prevAdvPayloadRef.current = filterPayloadStr;
+    loadAdvChart();
+  }, [advItems.length, columns.length, filterPayloadStr, loadAdvChart, optionsSyncPending]);
 
   /* B12: lazy auto-load — when filteredRowCount < 200 000, auto-trigger first advanced chart */
   const advAutoLoaded = useRef(false);
