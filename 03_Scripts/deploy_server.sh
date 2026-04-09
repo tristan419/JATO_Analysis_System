@@ -4,6 +4,14 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FULLSTACK_DEPLOY_SCRIPT="$SCRIPT_DIR/deploy_fullstack_server.sh"
+
+if [[ -f "$FULLSTACK_DEPLOY_SCRIPT" ]] && systemctl list-unit-files 2>/dev/null | grep -q "jato-fullstack-backend@"; then
+  echo "[INFO] 检测到 Fullstack 服务，切换到 deploy_fullstack_server.sh"
+  exec bash "$FULLSTACK_DEPLOY_SCRIPT"
+fi
+
 echo "=========================================="
 echo "服务器更新部署"
 echo "=========================================="
@@ -14,11 +22,22 @@ if [[ "$PWD" != "/var/www/JATO_Analysis_System" ]]; then
   echo "[WARNING] 期望目录: /var/www/JATO_Analysis_System"
 fi
 
+if git remote get-url origin >/dev/null 2>&1; then
+  REMOTE_NAME="origin"
+else
+  REMOTE_NAME="$(git remote | head -n 1)"
+fi
+
+if [[ -z "$REMOTE_NAME" ]]; then
+  echo "[ERROR] 未找到 git remote，无法拉取最新代码"
+  exit 1
+fi
+
 # 拉取最新代码
 echo ""
 echo "[1/4] 拉取最新代码..."
-git fetch origin main
-git reset --hard origin/main
+git fetch "$REMOTE_NAME" main
+git reset --hard "$REMOTE_NAME/main"
 
 # 显示最新提交
 echo ""
