@@ -1236,26 +1236,22 @@ export function DashboardPage() {
 
         {/* ── Global Time Axis ────────────────────────── */}
         <div className="card analysis-deck-card dashboard-time-axis-card dashboard-deck-card--compact-hero">
-          <div className="analysis-deck-head dashboard-deck-hero-head">
-            <div className="analysis-deck-copy dashboard-deck-hero-copy">
+          <div className="dashboard-hero-head dashboard-deck-hero-head">
+            <div className="dashboard-hero-copy dashboard-deck-hero-copy">
               <span className="panel-kicker">02 / Global Time Axis</span>
               <h3>Global Time Axis</h3>
               <p>统一年度与月度时间窗，控制趋势对比与后续高级分析的观察区间。</p>
-              <div className="analysis-chip-row analysis-chip-row--compact">
-                <span className="analysis-chip">{activeFilterSummary}</span>
-                <span className="analysis-chip">{timeWindowLabel}</span>
-              </div>
             </div>
-            <div className="analysis-deck-meta dashboard-deck-hero-meta">
-              <div className="analysis-deck-stat">
-                <span className="analysis-deck-stat-label">Axis Mode</span>
-                <strong className="analysis-deck-stat-value">{timeAxisModeValue}</strong>
-                <span className="analysis-deck-stat-subvalue">{timeAxisModeDetail}</span>
+            <div className="dashboard-hero-actions dashboard-deck-hero-actions dashboard-deck-hero-actions--pair">
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Axis Mode</span>
+                <strong className="hero-meta-value">{timeAxisModeValue}</strong>
+                <span className="hero-meta-subvalue">{timeAxisModeDetail}</span>
               </div>
-              <div className="analysis-deck-stat">
-                <span className="analysis-deck-stat-label">Window State</span>
-                <strong className="analysis-deck-stat-value">{timeWindowStateValue}</strong>
-                <span className="analysis-deck-stat-subvalue">{timeWindowLabel}</span>
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Window State</span>
+                <strong className="hero-meta-value">{timeWindowStateValue}</strong>
+                <span className="hero-meta-subvalue">{timeWindowLabel}</span>
               </div>
             </div>
           </div>
@@ -1275,36 +1271,32 @@ export function DashboardPage() {
 
         {/* ── Time series ─────────────────────────────── */}
         <div className="card analysis-deck-card chart-section dashboard-time-series-card dashboard-deck-card--compact-hero">
-          <div className="analysis-deck-head dashboard-deck-hero-head">
-            <div className="analysis-deck-copy dashboard-deck-hero-copy">
+          <div className="dashboard-hero-head dashboard-deck-hero-head">
+            <div className="dashboard-hero-copy dashboard-deck-hero-copy">
               <span className="panel-kicker">03 / Time-Series Lens</span>
               <h3>Sales Time Series</h3>
               <p>在同一筛选边界下切换年度、月度与分组序列，保持趋势分析和图例交互语义一致。</p>
-              <div className="analysis-chip-row analysis-chip-row--compact">
-                <span className="analysis-chip">{activeFilterSummary}</span>
-                <span className="analysis-chip">{timeWindowLabel}</span>
-              </div>
             </div>
-            <div className="analysis-deck-meta dashboard-deck-hero-meta">
-              <div className="analysis-deck-stat">
-                <span className="analysis-deck-stat-label">View Mode</span>
-                <strong className="analysis-deck-stat-value">{activeTab === "year" ? "YEAR" : "MONTH"}</strong>
-                <span className="analysis-deck-stat-subvalue">{activeTab === "month" ? `聚合：${monthGrain}` : "年度对比"}</span>
+            <div className="dashboard-hero-actions dashboard-deck-hero-actions dashboard-deck-hero-actions--quad">
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">View Mode</span>
+                <strong className="hero-meta-value">{activeTab === "year" ? "YEAR" : "MONTH"}</strong>
+                <span className="hero-meta-subvalue">{activeTab === "month" ? `聚合：${monthGrain}` : "年度对比"}</span>
               </div>
-              <div className="analysis-deck-stat">
-                <span className="analysis-deck-stat-label">Series Mode</span>
-                <strong className="analysis-deck-stat-value">{isGrouped ? "GROUPED" : "TOTAL"}</strong>
-                <span className="analysis-deck-stat-subvalue">{isGrouped ? tsGroupDim : "单序列汇总视图"}</span>
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Series Mode</span>
+                <strong className="hero-meta-value">{isGrouped ? "GROUPED" : "TOTAL"}</strong>
+                <span className="hero-meta-subvalue">{isGrouped ? tsGroupDim : "单序列汇总视图"}</span>
               </div>
-              <div className="analysis-deck-stat">
-                <span className="analysis-deck-stat-label">Data State</span>
-                <strong className="analysis-deck-stat-value">{timeSeriesDeckState}</strong>
-                <span className="analysis-deck-stat-subvalue">{isGrouped ? `${filteredGrouped.length} 个分组点` : `${aggregatedSingle.length} 个时间点`}</span>
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Data State</span>
+                <strong className="hero-meta-value">{timeSeriesDeckState}</strong>
+                <span className="hero-meta-subvalue">{isGrouped ? `${filteredGrouped.length} 个分组点` : `${aggregatedSingle.length} 个时间点`}</span>
               </div>
-              <div className="analysis-deck-stat">
-                <span className="analysis-deck-stat-label">Visible Series</span>
-                <strong className="analysis-deck-stat-value">{isGrouped ? timeSeriesDeckVolume : "1"}</strong>
-                <span className="analysis-deck-stat-subvalue">{isGrouped ? `可见 ${visibleSeries.length} / ${allSeriesNames.length}` : "单序列展示"}</span>
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Visible Series</span>
+                <strong className="hero-meta-value">{isGrouped ? timeSeriesDeckVolume : "1"}</strong>
+                <span className="hero-meta-subvalue">{isGrouped ? `可见 ${visibleSeries.length} / ${allSeriesNames.length}` : "单序列展示"}</span>
               </div>
             </div>
           </div>
@@ -1459,36 +1451,32 @@ export function DashboardPage() {
 
         {/* ── Advanced analysis ───────────────────────── */}
         <div className="card analysis-deck-card dashboard-advanced-card dashboard-deck-card--compact-hero">
-          <div className="analysis-deck-head dashboard-deck-hero-head">
-            <div className="analysis-deck-copy dashboard-deck-hero-copy">
+          <div className="dashboard-hero-head dashboard-deck-hero-head">
+            <div className="dashboard-hero-copy dashboard-deck-hero-copy">
               <span className="panel-kicker">04 / Advanced Analysis</span>
               <h3>Advanced Control Deck</h3>
               <p>在同一筛选与时间窗口下切换分析域、图层和参数，承接主看板的深度分析与嵌入式 RV Finance 视图。</p>
-              <div className="analysis-chip-row analysis-chip-row--compact">
-                <span className="analysis-chip">{activeFilterSummary}</span>
-                <span className="analysis-chip">{timeWindowLabel}</span>
-              </div>
             </div>
-            <div className="analysis-deck-meta dashboard-deck-hero-meta">
-              <div className="analysis-deck-stat">
-                <span className="analysis-deck-stat-label">Analysis Domain</span>
-                <strong className="analysis-deck-stat-value">{selectedAdvGroupLabel || "-"}</strong>
-                <span className="analysis-deck-stat-subvalue">当前分析域</span>
+            <div className="dashboard-hero-actions dashboard-deck-hero-actions dashboard-deck-hero-actions--quad">
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Analysis Domain</span>
+                <strong className="hero-meta-value">{selectedAdvGroupLabel || "-"}</strong>
+                <span className="hero-meta-subvalue">当前分析域</span>
               </div>
-              <div className="analysis-deck-stat">
-                <span className="analysis-deck-stat-label">Chart Layer</span>
-                <strong className="analysis-deck-stat-value">{selectedAdvChartLabel || "-"}</strong>
-                <span className="analysis-deck-stat-subvalue">当前图层</span>
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Chart Layer</span>
+                <strong className="hero-meta-value">{selectedAdvChartLabel || "-"}</strong>
+                <span className="hero-meta-subvalue">当前图层</span>
               </div>
-              <div className="analysis-deck-stat">
-                <span className="analysis-deck-stat-label">Data State</span>
-                <strong className="analysis-deck-stat-value">{advancedDeckState}</strong>
-                <span className="analysis-deck-stat-subvalue">{advancedDeckVolume}</span>
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Data State</span>
+                <strong className="hero-meta-value">{advancedDeckState}</strong>
+                <span className="hero-meta-subvalue">{advancedDeckVolume}</span>
               </div>
-              <div className="analysis-deck-stat">
-                <span className="analysis-deck-stat-label">Active Filters</span>
-                <strong className="analysis-deck-stat-value">{String(activeFilters.length)}</strong>
-                <span className="analysis-deck-stat-subvalue">{activeFilters.length ? activeFilterSummary : "Default powertrain lens"}</span>
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Active Filters</span>
+                <strong className="hero-meta-value">{String(activeFilters.length)}</strong>
+                <span className="hero-meta-subvalue">{activeFilters.length ? activeFilterSummary : "Default powertrain lens"}</span>
               </div>
             </div>
           </div>
@@ -2253,30 +2241,27 @@ export function DashboardPage() {
         </div>
 
         {/* ── Bug 2: Model Version Bubble ─────────────── */}
-        <div className="card analysis-deck-card">
-          <div className="analysis-deck-head">
-            <div className="analysis-deck-copy">
+        <div className="card analysis-deck-card dashboard-deck-card--compact-hero">
+          <div className="dashboard-hero-head dashboard-deck-hero-head">
+            <div className="dashboard-hero-copy dashboard-deck-hero-copy">
               <span className="panel-kicker">05 / Single Model Lens</span>
               <h3>Model Version Bubble</h3>
               <p>锁定单一 Model，查看版本在车长与 MSRP 平面上的分布，并沿用当前 Dashboard 的筛选范围。</p>
-              <div className="analysis-chip-row">
-                <span className="analysis-chip">{activeFilterSummary}</span>
-                <span className="analysis-chip">{mvColorBy === "Powertrain" ? "Color by powertrain" : "Color by trim"}</span>
-              </div>
             </div>
-            <div className="analysis-deck-meta">
-              <div className={`analysis-deck-stat${mvLoading ? " is-loading" : ""}`}>
-                <span className="analysis-deck-stat-label">Data state</span>
-                <strong className="analysis-deck-stat-value">{mvLoading ? "SYNC" : mvItems.length ? "READY" : "IDLE"}</strong>
-                <span className="analysis-deck-stat-subvalue">{mvItems.length ? `${mvItems.length} 个版本` : "等待加载版型"}</span>
+            <div className="dashboard-hero-actions dashboard-deck-hero-actions dashboard-deck-hero-actions--pair">
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Data state</span>
+                <strong className="hero-meta-value">{mvLoading ? "SYNC" : mvItems.length ? "READY" : "IDLE"}</strong>
+                <span className="hero-meta-subvalue">{mvItems.length ? `${mvItems.length} 个版本` : "等待加载版型"}</span>
               </div>
-              <div className="analysis-deck-stat">
-                <span className="analysis-deck-stat-label">Quick picks</span>
-                <strong className="analysis-deck-stat-value">{String(selections.model.length).padStart(2, "0")}</strong>
-                <span className="analysis-deck-stat-subvalue">来自共享筛选</span>
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Quick picks</span>
+                <strong className="hero-meta-value">{String(selections.model.length).padStart(2, "0")}</strong>
+                <span className="hero-meta-subvalue">来自共享筛选</span>
               </div>
             </div>
           </div>
+          <div className="analysis-chart-block analysis-chart-block--compact dashboard-deck-hero-surface">
           <div className="adv-controls adv-controls-panel">
             <div className="filter-group adv-control-unit adv-control-unit--wide"><label>Model</label>
               <input type="text" placeholder="\u8f93\u5165 Model \u540d\u79f0" value={mvModelName}
@@ -2360,33 +2345,31 @@ export function DashboardPage() {
           })()}
           {mvItems.length===0 && !mvLoading && <div className="chart-empty">{"\u8f93\u5165 Model \u540d\u79f0\u5e76\u70b9\u51fb\u300c\u52a0\u8f7d\u7248\u578b\u300d"}</div>}
           <ExportPanel value={mvExport} onChange={setMvExport} graphDiv={mvChartRef.current} labelModeOptions={mvLabelModeOptions} />
+          </div>
         </div>
 
         {/* ── Bug 3: OJ Positioning Map ───────────────── */}
-        <div className="card analysis-deck-card">
-          <div className="analysis-deck-head">
-            <div className="analysis-deck-copy">
+        <div className="card analysis-deck-card dashboard-deck-card--compact-hero">
+          <div className="dashboard-hero-head dashboard-deck-hero-head">
+            <div className="dashboard-hero-copy dashboard-deck-hero-copy">
               <span className="panel-kicker">06 / Competitive Positioning</span>
               <h3>OJ Positioning Map</h3>
               <p>基于当前筛选边界生成竞品聚类，并支持叠加手动竞品与目标车型坐标，保持与主分析区一致的控件语言。</p>
-              <div className="analysis-chip-row">
-                <span className="analysis-chip">{activeFilterSummary}</span>
-                <span className="analysis-chip">Target ready {pmTarget ? "YES" : "NO"}</span>
-              </div>
             </div>
-            <div className="analysis-deck-meta">
-              <div className={`analysis-deck-stat${pmLoading ? " is-loading" : ""}`}>
-                <span className="analysis-deck-stat-label">Map state</span>
-                <strong className="analysis-deck-stat-value">{pmLoading ? "SYNC" : pmItems.length ? "READY" : "IDLE"}</strong>
-                <span className="analysis-deck-stat-subvalue">{pmItems.length ? `${pmItems.length} 个候选点` : "等待加载定位图"}</span>
+            <div className="dashboard-hero-actions dashboard-deck-hero-actions dashboard-deck-hero-actions--pair">
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Map state</span>
+                <strong className="hero-meta-value">{pmLoading ? "SYNC" : pmItems.length ? "READY" : "IDLE"}</strong>
+                <span className="hero-meta-subvalue">{pmItems.length ? `${pmItems.length} 个候选点` : "等待加载定位图"}</span>
               </div>
-              <div className="analysis-deck-stat">
-                <span className="analysis-deck-stat-label">Manual rivals</span>
-                <strong className="analysis-deck-stat-value">{String(pmManualCompetitors.length).padStart(2, "0")}</strong>
-                <span className="analysis-deck-stat-subvalue">{pmClusterTop3.length ? `${pmClusterTop3.length} 个Top3标签` : "尚未生成聚类代表"}</span>
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Manual rivals</span>
+                <strong className="hero-meta-value">{String(pmManualCompetitors.length).padStart(2, "0")}</strong>
+                <span className="hero-meta-subvalue">{pmClusterTop3.length ? `${pmClusterTop3.length} 个Top3标签` : "尚未生成聚类代表"}</span>
               </div>
             </div>
           </div>
+          <div className="analysis-chart-block analysis-chart-block--compact dashboard-deck-hero-surface">
           <div className="adv-controls adv-controls-panel">
             <div className="filter-group adv-control-unit"><label>{"\u76ee\u6807\u8f66\u957f(mm)"}</label>
               <input type="number" placeholder="4500" value={pmTargetLength}
@@ -2497,33 +2480,30 @@ export function DashboardPage() {
           })()}
           {pmItems.length===0 && !pmLoading && <div className="chart-empty">{"\u8f93\u5165\u76ee\u6807\u8f66\u578b\u53c2\u6570\u6216\u76f4\u63a5\u70b9\u51fb\u300c\u52a0\u8f7d\u5b9a\u4f4d\u56fe\u300d\u67e5\u770b\u5f53\u524d\u7b5b\u9009\u8fb9\u754c\u5185\u5b9a\u4ef7"}</div>}
           <ExportPanel value={pmExport} onChange={setPmExport} graphDiv={pmChartRef.current} labelModeOptions={pmLabelModeOptions} />
+          </div>
         </div>
 
-        <div className="card analysis-deck-card analysis-route-card">
-          <div className="analysis-deck-head">
-            <div className="analysis-deck-copy">
+        <div className="card analysis-deck-card analysis-route-card dashboard-deck-card--compact-hero">
+          <div className="dashboard-hero-head dashboard-deck-hero-head">
+            <div className="dashboard-hero-copy dashboard-deck-hero-copy">
               <span className="panel-kicker">07 / Specification Route</span>
               <h3>Specification Entry</h3>
               <p>明细表、列选择、分页和 CSV 导出已经迁到独立 Specification Page，Dashboard 只保留 KPI 与图表交互。</p>
-              <div className="analysis-chip-row">
-                <span className="analysis-chip">{activeFilterSummary}</span>
-                <span className="analysis-chip">React Router /specification</span>
-              </div>
             </div>
-            <div className="analysis-deck-meta">
-              <div className="analysis-deck-stat">
-                <span className="analysis-deck-stat-label">Route State</span>
-                <strong className="analysis-deck-stat-value">READY</strong>
-                <span className="analysis-deck-stat-subvalue">与 Dashboard 共享筛选 query</span>
+            <div className="dashboard-hero-actions dashboard-deck-hero-actions dashboard-deck-hero-actions--pair">
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Route State</span>
+                <strong className="hero-meta-value">READY</strong>
+                <span className="hero-meta-subvalue">与 Dashboard 共享筛选 query</span>
               </div>
-              <div className="analysis-deck-stat">
-                <span className="analysis-deck-stat-label">Active Filters</span>
-                <strong className="analysis-deck-stat-value">{String(activeFilters.length)}</strong>
-                <span className="analysis-deck-stat-subvalue">{activeFilters.length ? "带当前筛选进入" : "使用默认筛选进入"}</span>
+              <div className="hero-meta-block dashboard-deck-hero-stat">
+                <span className="hero-meta-label">Active Filters</span>
+                <strong className="hero-meta-value">{String(activeFilters.length)}</strong>
+                <span className="hero-meta-subvalue">{activeFilters.length ? "带当前筛选进入" : "使用默认筛选进入"}</span>
               </div>
             </div>
           </div>
-          <div className="analysis-chart-block analysis-chart-block--compact">
+          <div className="analysis-chart-block analysis-chart-block--compact dashboard-deck-hero-surface">
             <div className="dashboard-cta-row">
               <Link className="btn btn-primary" to={specificationHref}>{"\u6253\u5f00 Specification Page"}</Link>
               <Link className="btn btn-ghost" to={specificationHref}>{"\u5e26\u5f53\u524d\u7b5b\u9009\u8fdb\u5165"}</Link>

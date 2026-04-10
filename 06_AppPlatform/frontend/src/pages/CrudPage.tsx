@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api/client";
+import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { LoadingSurface } from "../components/LoadingSurface";
 import type { CrudItem } from "../types";
 
@@ -16,6 +17,7 @@ export function CrudPage() {
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [heroCollapsed, setHeroCollapsed] = useState(false);
 
   async function refresh() {
     setLoading(true);
@@ -56,6 +58,8 @@ export function CrudPage() {
   const visibleEnd = Math.min(page * pageSize, total);
   const querySummary = query.trim() ? `搜索 ${query.trim()}` : "当前未设置搜索过滤";
   const windowSummary = total === 0 ? "当前无可见记录" : `当前显示 ${visibleStart}-${visibleEnd} / ${total}`;
+  const sortSummary = `${sortBy.toUpperCase()} / ${sortOrder.toUpperCase()}`;
+  const pageSizeSummary = `${pageSize} rows per page`;
 
   function resetView() {
     setQuery("");
@@ -72,38 +76,66 @@ export function CrudPage() {
 
   return (
     <section className="crud-shell">
-      <div className="header-card crud-hero">
-        <div className="crud-hero-copy">
-          <span className="page-kicker">03 / Data Control</span>
-          <h1>CRUD Control Deck</h1>
-          <p>在同一套 BMW 语言下管理基础实体、分页结果与搜索条件，保持控制台语义和操作密度一致。</p>
-          <div className="dashboard-hero-summary">
-            <span className="selection-ribbon-label">Current scope</span>
-            <span className="selection-ribbon-value">
-              {querySummary} · 排序 {sortBy} / {sortOrder} · 每页 {pageSize}
-            </span>
-          </div>
-        </div>
+      <CollapsibleDeckHero
+        collapsed={heroCollapsed}
+        onToggle={() => setHeroCollapsed((current) => !current)}
+        expandedLabel="展开数据管理概览"
+        collapsedLabel="收起数据管理概览"
+        expandedTitle="Expand data control overview"
+        collapsedTitle="Collapse data control overview"
+        className="header-card dashboard-hero crud-hero"
+        head={(
+          <>
+            <div className="dashboard-hero-copy crud-hero-copy">
+              <span className="page-kicker">03 / Data Control</span>
+              <h1>CRUD Control Deck</h1>
+              <p>把基础实体管理、搜索、分页和列表操作统一进 Dashboard 的 hero 节奏里，避免这个工作视图继续保留旧壳层语言。</p>
+              <div className="dashboard-hero-inline-summary">
+                <span className="selection-ribbon-label">Current scope</span>
+                <span className="selection-ribbon-value">{querySummary}</span>
+              </div>
+            </div>
 
-        <div className="crud-hero-actions">
-          <div className="hero-meta-block">
-            <span className="hero-meta-label">Total records</span>
-            <strong className="hero-meta-value">{total.toLocaleString()}</strong>
+            <div className="dashboard-hero-actions crud-hero-actions">
+              <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
+                <span className="hero-meta-label">Total records</span>
+                <strong className="hero-meta-value">{total.toLocaleString()}</strong>
+                <span className="hero-meta-subvalue">{pageSizeSummary}</span>
+              </div>
+              <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
+                <span className="hero-meta-label">Active on page</span>
+                <strong className="hero-meta-value">{activeCount.toLocaleString()}</strong>
+                <span className="hero-meta-subvalue">当前页激活状态记录</span>
+              </div>
+              <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
+                <span className="hero-meta-label">Window</span>
+                <strong className="hero-meta-value">{total === 0 ? "0" : `${visibleStart}-${visibleEnd}`}</strong>
+                <span className="hero-meta-subvalue">{windowSummary}</span>
+              </div>
+              <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
+                <span className="hero-meta-label">Data state</span>
+                <strong className="hero-meta-value">{loading ? "SYNC" : "READY"}</strong>
+                <span className="hero-meta-subvalue">排序、分页和查询已联动</span>
+                {loading && <span className="hero-meta-loader">SYNCING CRUD VIEW</span>}
+              </div>
+            </div>
+          </>
+        )}
+        body={(
+          <div className="dashboard-hero-rail">
+            <div className="dashboard-hero-chip-row">
+              <span className="dashboard-hero-chip">{querySummary}</span>
+              <span className="dashboard-hero-chip">Sort {sortSummary}</span>
+              <span className="dashboard-hero-chip">{pageSizeSummary}</span>
+              <span className="dashboard-hero-chip">{windowSummary}</span>
+            </div>
+            <div className="dashboard-hero-rail-actions">
+              <button type="button" className="btn btn-sm btn-ghost" onClick={resetView}>重置视图</button>
+              <button type="button" className="btn btn-sm btn-secondary" onClick={() => void refresh()}>刷新列表</button>
+            </div>
           </div>
-          <div className="hero-meta-block">
-            <span className="hero-meta-label">Active on page</span>
-            <strong className="hero-meta-value">{activeCount.toLocaleString()}</strong>
-          </div>
-          <div className="hero-meta-block">
-            <span className="hero-meta-label">Window</span>
-            <strong className="hero-meta-value">{total === 0 ? "0" : `${visibleStart}-${visibleEnd}`}</strong>
-          </div>
-          <div className="hero-meta-block">
-            <span className="hero-meta-label">Data state</span>
-            <strong className="hero-meta-value">{loading ? "SYNC" : "READY"}</strong>
-          </div>
-        </div>
-      </div>
+        )}
+      />
 
       {error && <div className="alert alert-error">{error}</div>}
 
@@ -162,10 +194,6 @@ export function CrudPage() {
             <div className="crud-inline-status">
               <span className="selection-ribbon-label">Window</span>
               <span className="selection-ribbon-value">{windowSummary}</span>
-            </div>
-            <div className="crud-toolbar-actions">
-              <button type="button" className="btn btn-ghost" onClick={resetView}>重置视图</button>
-              <button type="button" className="btn btn-secondary" onClick={() => void refresh()}>刷新列表</button>
             </div>
           </div>
         </div>
