@@ -1,10 +1,15 @@
 from uuid import uuid4
 import io
+import threading
+import time
 
 import numpy as np
 import pandas as pd
 
-from app.core.config import DEFAULT_GROUP_BY
+from app.core.config import (
+    DEFAULT_GROUP_BY,
+    FILTER_OPTIONS_SNAPSHOT_TTL_SECONDS,
+)
 from app.infra import parquet_repository as repo
 
 
@@ -48,6 +53,16 @@ POWERTRAIN_DISPLAY_ORDER = ["BEV", "PHEV", "MHEV", "HEV", "ICE"]
 POWERTRAIN_ENERGY_FACTOR = {
     "BEV": 0.55, "PHEV": 0.85, "HEV": 0.90, "MHEV": 1.00, "ICE": 1.10,
 }
+TOP_LEVEL_FILTER_CANDIDATE_SETS = [
+    COUNTRY_CANDIDATES,
+    SEGMENT_CANDIDATES,
+    POWERTRAIN_CANDIDATES,
+]
+
+_top_level_filter_options_cache: (
+    tuple[float, str, dict[str, list[str]]] | None
+) = None
+_top_level_filter_options_lock = threading.Lock()
 
 
 # ── Helper: resolve column name ────────────────────────────────
@@ -64,6 +79,68 @@ def _resolve_existing_column(
         if hit:
             return hit
     return None
+
+
+def _has_active_filters(filters: dict[str, list[str]]) -> bool:
+    for values in filters.values():
+        for value in values or []:
+            if str(value).strip():
+                return True
+    return False
+
+
+def _resolve_option_columns(
+    candidate_sets: list[list[str]],
+    columns: list[str],
+) -> list[str]:
+    resolved_columns: list[str] = []
+    for candidates in candidate_sets:
+        hit = _resolve_existing_column(candidates, columns)
+        if hit and hit not in resolved_columns:
+            resolved_columns.append(hit)
+    return resolved_columns
+
+
+def _load_top_level_filter_options_snapshot() -> dict[str, list[str]]:
+    global _top_level_filter_options_cache
+
+    now = time.monotonic()
+    dataset_token = repo.current_dataset_token()
+    if _top_level_filter_options_cache is not None:
+        (
+            cached_at,
+            cached_token,
+            cached_snapshot,
+        ) = _top_level_filter_options_cache
+        if (
+            cached_token == dataset_token
+            and (now - cached_at) < FILTER_OPTIONS_SNAPSHOT_TTL_SECONDS
+        ):
+            return cached_snapshot
+
+    with _top_level_filter_options_lock:
+        now = time.monotonic()
+        dataset_token = repo.current_dataset_token()
+        if _top_level_filter_options_cache is not None:
+            (
+                cached_at,
+                cached_token,
+                cached_snapshot,
+            ) = _top_level_filter_options_cache
+            if (
+                cached_token == dataset_token
+                and (now - cached_at) < FILTER_OPTIONS_SNAPSHOT_TTL_SECONDS
+            ):
+                return cached_snapshot
+
+        columns = repo.list_columns()
+        top_level_columns = _resolve_option_columns(
+            TOP_LEVEL_FILTER_CANDIDATE_SETS,
+            columns,
+        )
+        snapshot = repo.load_distinct_options_batch(top_level_columns, {})
+        _top_level_filter_options_cache = (now, dataset_token, snapshot)
+        return snapshot
 
 
 def _year_columns(columns: list[str]) -> list[str]:
@@ -186,6 +263,13 @@ def metadata_columns() -> list[str]:
 
 
 def filters_options(column: str, filters: dict[str, list[str]]) -> dict:
+    if not _has_active_filters(filters):
+        snapshot = _load_top_level_filter_options_snapshot()
+        if column in snapshot:
+            return {
+                "column": column,
+                "options": snapshot[column],
+            }
     return {
         "column": column,
         "options": repo.load_distinct_options(column, filters),

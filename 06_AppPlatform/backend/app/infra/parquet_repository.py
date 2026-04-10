@@ -1,6 +1,6 @@
+from collections import OrderedDict
 from pathlib import Path
 import json
-import functools
 import time
 import threading
 
@@ -10,6 +10,8 @@ import pyarrow.compute as pc
 
 from app.core.config import (
     CRUD_DATA_PATH,
+    FILTER_OPTIONS_CACHE_MAX_ENTRIES,
+    FILTER_OPTIONS_CACHE_TTL_SECONDS,
     MAX_GROUP_METRICS,
     MAX_RAW_ROWS,
     PARTITIONED_PATH,
@@ -19,21 +21,70 @@ from app.core.config import (
 
 # ── Dataset singleton (reuse across requests) ──
 _dataset_cache: ds.Dataset | None = None
+_dataset_cache_token: str | None = None
 _dataset_lock = threading.Lock()
 
 
 def _resolve_dataset_path() -> Path:
-    if PARTITIONED_PATH.exists() and any(PARTITIONED_PATH.rglob("*.parquet")):
+    if (
+        PARTITIONED_PATH.is_dir()
+        and (PARTITIONED_PATH / "manifest.json").exists()
+    ):
+        return PARTITIONED_PATH
+    if (
+        PARTITIONED_PATH.is_dir()
+        and next(PARTITIONED_PATH.rglob("*.parquet"), None)
+    ):
         return PARTITIONED_PATH
     return PARQUET_PATH
 
 
+def _dataset_version_sources(path: Path) -> list[Path]:
+    candidates = [path]
+    if path.is_dir():
+        candidates.extend([
+            path / "manifest.json",
+            path.parent / "manifest.json",
+        ])
+    else:
+        candidates.append(path.parent / "manifest.json")
+
+    sources: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate.exists():
+            key = str(candidate.resolve())
+        else:
+            key = str(candidate)
+        if key in seen or not candidate.exists():
+            continue
+        seen.add(key)
+        sources.append(candidate)
+    return sources or [path]
+
+
+def current_dataset_token() -> str:
+    path = _resolve_dataset_path()
+    token_parts: list[str] = []
+    for source in _dataset_version_sources(path):
+        try:
+            stat = source.stat()
+        except OSError:
+            continue
+        token_parts.append(
+            f"{source.resolve()}:{stat.st_mtime_ns}:{stat.st_size}"
+        )
+    return "|".join(token_parts) or str(path.resolve())
+
+
 def _open_dataset() -> ds.Dataset:
-    global _dataset_cache
-    if _dataset_cache is not None:
+    global _dataset_cache, _dataset_cache_token
+    token = current_dataset_token()
+    if _dataset_cache is not None and _dataset_cache_token == token:
         return _dataset_cache
     with _dataset_lock:
-        if _dataset_cache is not None:
+        token = current_dataset_token()
+        if _dataset_cache is not None and _dataset_cache_token == token:
             return _dataset_cache
         path = _resolve_dataset_path()
         if path.is_file():
@@ -45,12 +96,76 @@ def _open_dataset() -> ds.Dataset:
                 partitioning="hive",
                 exclude_invalid_files=True,
             )
+        _dataset_cache_token = token
         return _dataset_cache
 
 
 # ── Lightweight TTL cache for immutable results ──
-_columns_cache: tuple[float, list[str]] | None = None
-_CACHE_TTL = 300  # 5 minutes
+_columns_cache: tuple[str, float, list[str]] | None = None
+_options_cache: OrderedDict[
+    tuple[str, str, tuple[tuple[str, tuple[str, ...]], ...]],
+    tuple[float, list[str]],
+] = OrderedDict()
+_options_cache_lock = threading.Lock()
+_METADATA_CACHE_TTL = 300  # 5 minutes
+
+
+def _normalize_option_values(values: list[object]) -> list[str]:
+    return sorted(
+        {
+            str(value).strip()
+            for value in values
+            if value is not None and str(value).strip()
+        }
+    )
+
+
+def _normalize_filter_cache_key(
+    filters: dict[str, list[str]],
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    normalized_filters: list[tuple[str, tuple[str, ...]]] = []
+    for column, values in filters.items():
+        normalized_column = str(column).strip()
+        normalized_values = tuple(
+            sorted(
+                {
+                    str(value).strip()
+                    for value in (values or [])
+                    if value is not None and str(value).strip()
+                }
+            )
+        )
+        if not normalized_column or not normalized_values:
+            continue
+        normalized_filters.append((normalized_column, normalized_values))
+    return tuple(sorted(normalized_filters))
+
+
+def _get_cached_options(
+    key: tuple[str, str, tuple[tuple[str, tuple[str, ...]], ...]],
+) -> list[str] | None:
+    with _options_cache_lock:
+        cached = _options_cache.get(key)
+        if cached is None:
+            return None
+        cached_at, options = cached
+        if (time.monotonic() - cached_at) >= FILTER_OPTIONS_CACHE_TTL_SECONDS:
+            _options_cache.pop(key, None)
+            return None
+        _options_cache.move_to_end(key)
+        return list(options)
+
+
+def _set_cached_options(
+    key: tuple[str, str, tuple[tuple[str, tuple[str, ...]], ...]],
+    options: list[str],
+) -> None:
+    max_entries = max(1, int(FILTER_OPTIONS_CACHE_MAX_ENTRIES))
+    with _options_cache_lock:
+        _options_cache[key] = (time.monotonic(), list(options))
+        _options_cache.move_to_end(key)
+        while len(_options_cache) > max_entries:
+            _options_cache.popitem(last=False)
 
 
 def _build_filter_expression(
@@ -69,11 +184,14 @@ def _build_filter_expression(
 def list_columns() -> list[str]:
     global _columns_cache
     now = time.monotonic()
-    if _columns_cache is not None and (now - _columns_cache[0]) < _CACHE_TTL:
-        return _columns_cache[1]
+    token = current_dataset_token()
+    if _columns_cache is not None:
+        cached_token, cached_at, cached_columns = _columns_cache
+        if cached_token == token and (now - cached_at) < _METADATA_CACHE_TTL:
+            return cached_columns
     dataset = _open_dataset()
     cols = [str(name).strip() for name in dataset.schema.names]
-    _columns_cache = (now, cols)
+    _columns_cache = (token, now, cols)
     return cols
 
 
@@ -91,18 +209,42 @@ def load_distinct_options(
     dataset = _open_dataset()
     if column not in dataset.schema.names:
         return []
+    cache_key = (
+        current_dataset_token(),
+        str(column).strip(),
+        _normalize_filter_cache_key(filters),
+    )
+    cached_options = _get_cached_options(cache_key)
+    if cached_options is not None:
+        return cached_options
+
+    options_map = load_distinct_options_batch([column], filters)
+    options = options_map.get(column, [])
+    _set_cached_options(cache_key, options)
+    return options
+
+
+def load_distinct_options_batch(
+    columns: list[str],
+    filters: dict[str, list[str]],
+) -> dict[str, list[str]]:
+    dataset = _open_dataset()
+    selected_columns = [
+        str(column).strip()
+        for column in dict.fromkeys(columns)
+        if str(column).strip() in dataset.schema.names
+    ]
+    if not selected_columns:
+        return {}
+
     table = dataset.to_table(
-        columns=[column],
+        columns=selected_columns,
         filter=_build_filter_expression(filters),
     )
-    unique_arr = pc.unique(table[column])
-    return sorted(
-        {
-            str(v).strip()
-            for v in unique_arr.to_pylist()
-            if v is not None and str(v).strip()
-        }
-    )
+    return {
+        column: _normalize_option_values(pc.unique(table[column]).to_pylist())
+        for column in selected_columns
+    }
 
 
 def count_rows(filters: dict[str, list[str]]) -> int:
@@ -111,20 +253,9 @@ def count_rows(filters: dict[str, list[str]]) -> int:
 
 
 def count_distinct(column: str, filters: dict[str, list[str]]) -> int:
-    dataset = _open_dataset()
-    if column not in dataset.schema.names:
+    if not column:
         return 0
-    table = dataset.to_table(
-        columns=[column],
-        filter=_build_filter_expression(filters),
-    )
-    unique_arr = pc.unique(table[column])
-    normalized = {
-        str(v).strip()
-        for v in unique_arr.to_pylist()
-        if v is not None and str(v).strip()
-    }
-    return int(len(normalized))
+    return int(len(load_distinct_options(column, filters)))
 
 
 def load_slice(
