@@ -9,7 +9,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:types": "tsc --noEmit",
+    "check:router-regression": "node scripts/run_dashboard_spec_regression.cjs",
+    "check:frontend": "npm run check:types && npm run build && npm run check:router-regression"
   },
   "dependencies": {
     "buffer": "^6.0.3",
@@ -26,6 +29,7 @@
     "@types/react-dom": "^19.1.7",
     "@types/react-plotly.js": "^2.6.4",
     "@vitejs/plugin-react": "^5.0.0",
+    "playwright": "^1.59.1",
     "typescript": "^5.9.2",
     "vite": "^7.1.2"
   }

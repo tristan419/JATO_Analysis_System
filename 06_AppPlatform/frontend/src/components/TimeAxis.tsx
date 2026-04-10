@@ -13,6 +13,7 @@ interface Props {
   onChange: (range: TimeRange | null) => void;
   grain: "year" | "month";
   onGrainChange: (g: "year" | "month") => void;
+  showTitle?: boolean;
   /** Month-tab sub-grain: month/quarter/year */
   monthGrain?: "month" | "quarter" | "year";
   onMonthGrainChange?: (g: "month" | "quarter" | "year") => void;
@@ -38,7 +39,7 @@ function toTimeOrdinal(label: string): number | null {
 }
 
 export function TimeAxis({
-  labels, value, onChange, grain, onGrainChange, monthGrain, onMonthGrainChange,
+  labels, value, onChange, grain, onGrainChange, showTitle = true, monthGrain, onMonthGrainChange,
 }: Props) {
   const [mode, setMode] = useState<"slider" | "calendar">("slider");
 
@@ -101,7 +102,7 @@ export function TimeAxis({
   return (
     <div className="time-axis">
       <div className="time-axis-header">
-        <span className="time-axis-title">🕐 全局时间轴</span>
+        {showTitle && <span className="time-axis-title">🕐 全局时间轴</span>}
         <div className="tab-bar">
           <button className={"tab-btn" + (grain === "year" ? " active" : "")} onClick={() => onGrainChange("year")}>年度</button>
           <button className={"tab-btn" + (grain === "month" ? " active" : "")} onClick={() => onGrainChange("month")}>月度</button>

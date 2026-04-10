@@ -1,33 +1,23 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Data, Layout } from "plotly.js";
 
 import { api } from "../api/client";
+import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
+import { CollapsibleFilterSidebar } from "../components/CollapsibleFilterSidebar";
 import { LoadingActionButton } from "../components/LoadingActionButton";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
+import { useSharedFilterScope } from "../contexts/SharedFilterScopeContext";
 import {
-  DIM,
   FILTER_ORDER,
-  buildSearchFromSelections,
-  createEmptySelections,
-  getDefaultPowertrainValues,
-  readSelectionsFromSearch,
-  resolve,
 } from "../dashboardFilters";
-import type { FilterKey, FilterSelections } from "../dashboardFilters";
+import type { FilterKey } from "../dashboardFilters";
 import type { OverviewResponse, TimeSeriesPoint, GroupedTimeSeriesItem, ModelVersionItem, PositioningMapItem, OthersDetailItem } from "../types";
 import { LazyPlotlyChart as PlotlyChart } from "../components/LazyPlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
 import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanel";
 import { buildBubbleSizing } from "../utils/bubbleSizing";
-import {
-  FILTER_OPTIONS_CACHE_TTL_MS,
-  buildFilterOptionsCacheKey,
-  fetchOnDemandCascadedOptions,
-  isAbortError,
-  type FilterOptionsPayload,
-} from "../utils/filterOptions";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 const RvFinanceDashboard = lazy(() =>
   import("../components/RvFinanceDashboard").then((module) => ({ default: module.RvFinanceDashboard }))
@@ -87,6 +77,10 @@ function compareTimeLabels(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
+function ensureArray<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 function buildCategoryAxis(
   labels: string[],
   extra: Partial<Layout["xaxis"]> = {},
@@ -144,6 +138,13 @@ const GROUP_BY_OPTIONS = [
   { v: "Model", l: "Model" },
   { v: "Version name", l: "Version" },
   { v: "\u56fd\u5bb6", l: "\u56fd\u5bb6" },
+];
+
+type BubbleGroupDimension = "segment" | "powertrain";
+
+const BUBBLE_GROUP_DIMENSIONS: { v: BubbleGroupDimension; l: string; dataKey: "Segment" | "Powertrain" }[] = [
+  { v: "segment", l: "\u7ec6\u5206\u5e02\u573a", dataKey: "Segment" },
+  { v: "powertrain", l: "\u52a8\u603b\u89c4\u6574", dataKey: "Powertrain" },
 ];
 
 const SCATTER_CHARTS = new Set([
@@ -215,6 +216,12 @@ interface DashboardPageCache {
   advBubbleGrain: "model" | "version";
   advBubbleFacet: boolean;
   advBubbleFacetMax: number;
+  advBubbleShowYoy: boolean;
+  advBubbleYoyYear: string;
+  advBubbleGroupTopN: boolean;
+  advBubbleGroupDimension: BubbleGroupDimension;
+  advBubbleGroupValues: string[];
+  advBubbleGroupTopNMap: Record<string, number>;
   advPowertrains: string[];
   advNevTopNEnabled: boolean;
   advNevAxisMax: number;
@@ -247,61 +254,6 @@ interface DashboardPageCache {
   monthGrain: "month" | "quarter" | "year";
 }
 
-type ResolvedFilterColumns = Record<FilterKey, string | null>;
-
-const TOP_LEVEL_FILTER_KEYS = ["country", "segment", "powertrain"] as const satisfies readonly FilterKey[];
-
-function createDashboardSelections(source?: Record<string, string[]>): FilterSelections {
-  const base = createEmptySelections();
-  return {
-    country: [...(source?.country ?? base.country)],
-    segment: [...(source?.segment ?? base.segment)],
-    powertrain: [...(source?.powertrain ?? base.powertrain)],
-    make: [...(source?.make ?? base.make)],
-    model: [...(source?.model ?? base.model)],
-    version: [...(source?.version ?? base.version)],
-  };
-}
-
-function resolveFilterColumns(columns: string[]): ResolvedFilterColumns {
-  return FILTER_ORDER.reduce<ResolvedFilterColumns>((resolved, { key }) => {
-    resolved[key] = resolve(columns, DIM[key]);
-    return resolved;
-  }, {
-    country: null,
-    segment: null,
-    powertrain: null,
-    make: null,
-    model: null,
-    version: null,
-  });
-}
-
-function buildFilterPayloadFromResolved(
-  resolved: ResolvedFilterColumns,
-  selections: FilterSelections,
-): Record<string, string[]> {
-  const payload: Record<string, string[]> = {};
-  for (const { key } of FILTER_ORDER) {
-    const column = resolved[key];
-    const values = selections[key];
-    if (column && values.length > 0) payload[column] = values;
-  }
-  return payload;
-}
-
-function sanitizeTopLevelSelections(
-  selections: FilterSelections,
-  topLevelOptions: Partial<Record<FilterKey, string[]>>,
-): FilterSelections {
-  const next = createDashboardSelections(selections);
-  for (const key of TOP_LEVEL_FILTER_KEYS) {
-    const available = topLevelOptions[key] ?? [];
-    next[key] = next[key].filter((value) => available.includes(value));
-  }
-  return next;
-}
-
 function getLoadingMetricValue(target: number, tick: number, fallback: number): number {
   const base = target > 0 ? target : fallback;
   const phase = (tick % 18) / 18;
@@ -325,6 +277,13 @@ function getMetricDensityClass(valueText: string): string {
   return "";
 }
 
+function getUnifiedMetricDensityClass(values: string[]): string {
+  const maxDigits = Math.max(0, ...values.map((value) => value.replace(/\D/g, "").length));
+  if (maxDigits >= 7) return " metric-value--ultra";
+  if (maxDigits >= 6) return " metric-value--compact";
+  return "";
+}
+
 /* ── filter component ──────────────────────────────── */
 /* ── Main Dashboard ────────────────────────────────── */
 export function DashboardPage() {
@@ -335,15 +294,30 @@ export function DashboardPage() {
     cachedPageRef.current = cached && cached.search === currentSearch ? cached : null;
   }
   const cachedPage = cachedPageRef.current;
-
-  const [columns, setColumns] = useState<string[]>(() => cachedPage?.columns ?? []);
-  const [selections, setSelections] = useState<FilterSelections>(() => createDashboardSelections(cachedPage?.selections));
-  const [optionsMap, setOptionsMap] = useState<Record<string, string[]>>(() => cachedPage?.optionsMap ?? {});
-  const [filteredRowCount, setFilteredRowCount] = useState<number|null>(() => cachedPage?.filteredRowCount ?? null);
-  const [overview, setOverview] = useState<OverviewResponse|null>(() => cachedPage?.overview ?? null);
-  const [loading, setLoading] = useState(() => !cachedPage);
-  const [yearSeries, setYearSeries] = useState<TimeSeriesPoint[]>(() => cachedPage?.yearSeries ?? []);
-  const [monthSeries, setMonthSeries] = useState<TimeSeriesPoint[]>(() => cachedPage?.monthSeries ?? []);
+  const {
+    columns,
+    selections,
+    optionsMap,
+    filteredRowCount,
+    overview,
+    yearSeries,
+    monthSeries,
+    loading,
+    optionsSyncPending,
+    error: sharedError,
+    activeFilters,
+    activeFilterSummary,
+    specificationHref,
+    dashboardSearch,
+    heroCollapsed,
+    sidebarCollapsed,
+    setHeroCollapsed,
+    setSidebarCollapsed,
+    buildFilterPayload,
+    filterPayloadStr,
+    onFilterChange,
+    resetFilters,
+  } = useSharedFilterScope();
 
   /* time-series controls */
   const [activeTab, setActiveTab] = useState<"year"|"month">(() => cachedPage?.activeTab ?? "year");
@@ -372,6 +346,12 @@ export function DashboardPage() {
   /* 7a: brand faceting for powertrain_bubble */
   const [advBubbleFacet, setAdvBubbleFacet] = useState(() => cachedPage?.advBubbleFacet ?? false);
   const [advBubbleFacetMax, setAdvBubbleFacetMax] = useState(() => cachedPage?.advBubbleFacetMax ?? 4);
+  const [advBubbleShowYoy, setAdvBubbleShowYoy] = useState(() => cachedPage?.advBubbleShowYoy ?? false);
+  const [advBubbleYoyYear, setAdvBubbleYoyYear] = useState(() => cachedPage?.advBubbleYoyYear ?? "");
+  const [advBubbleGroupTopN, setAdvBubbleGroupTopN] = useState(() => cachedPage?.advBubbleGroupTopN ?? false);
+  const [advBubbleGroupDimension, setAdvBubbleGroupDimension] = useState<BubbleGroupDimension>(() => cachedPage?.advBubbleGroupDimension ?? "segment");
+  const [advBubbleGroupValues, setAdvBubbleGroupValues] = useState<string[]>(() => cachedPage?.advBubbleGroupValues ?? []);
+  const [advBubbleGroupTopNMap, setAdvBubbleGroupTopNMap] = useState<Record<string, number>>(() => cachedPage?.advBubbleGroupTopNMap ?? {});
   /* NEV-specific controls */
   const [advPowertrains, setAdvPowertrains] = useState<string[]>(() => cachedPage?.advPowertrains ?? ["BEV","PHEV"]);
   const [advNevTopNEnabled, setAdvNevTopNEnabled] = useState(() => cachedPage?.advNevTopNEnabled ?? true);
@@ -425,173 +405,8 @@ export function DashboardPage() {
   const pmChartRef = useRef<HTMLDivElement | null>(null);
 
   const [error, setError] = useState("");
+  const combinedError = sharedError || error;
   const [heroLoadingTick, setHeroLoadingTick] = useState(0);
-  const [heroCollapsed, setHeroCollapsed] = useState(() => cachedPage?.heroCollapsed ?? false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => cachedPage?.sidebarCollapsed ?? false);
-  const [optionsSyncPending, setOptionsSyncPending] = useState(false);
-  const bootDone = useRef(false);
-  const optionsCacheRef = useRef(new Map<string, { expiresAt: number; options: string[] }>());
-  const bootOptionsAbortRef = useRef<AbortController | null>(null);
-  const syncOptionsAbortRef = useRef<AbortController | null>(null);
-
-  /* column resolution */
-  const res = useMemo<ResolvedFilterColumns>(() => resolveFilterColumns(columns), [columns]);
-
-  const buildFilterPayload = useCallback(() => buildFilterPayloadFromResolved(res, selections), [res, selections]);
-
-  const loadFilterOptions = useCallback(async (payload: FilterOptionsPayload, signal?: AbortSignal): Promise<string[]> => {
-    const key = buildFilterOptionsCacheKey(payload);
-    const now = Date.now();
-    const cached = optionsCacheRef.current.get(key);
-    if (cached && cached.expiresAt > now) {
-      return cached.options;
-    }
-
-    const response = await api.filterOptions(payload, { signal });
-    optionsCacheRef.current.set(key, {
-      expiresAt: now + FILTER_OPTIONS_CACHE_TTL_MS,
-      options: response.options,
-    });
-    return response.options;
-  }, []);
-
-  /* boot */
-  useEffect(() => {
-    if (bootDone.current) return;
-    bootDone.current = true;
-    if (cachedPage) return;
-    const controller = new AbortController();
-    bootOptionsAbortRef.current = controller;
-    (async () => {
-      setLoading(true); setError("");
-      try {
-        const { items } = await api.columns();
-        const resolvedColumns = resolveFilterColumns(items);
-        const topLevelOptions = (await Promise.all(
-          TOP_LEVEL_FILTER_KEYS.map(async (key) => {
-            const column = resolvedColumns[key];
-            if (!column) return [key, [] as string[]] as const;
-            const options = await loadFilterOptions({ column, filters: {} }, controller.signal);
-            return [key, options] as const;
-          }),
-        )).reduce<Partial<Record<FilterKey, string[]>>>((accumulator, [key, options]) => {
-          accumulator[key] = options;
-          return accumulator;
-        }, {});
-
-        const initialFromSearch = sanitizeTopLevelSelections(readSelectionsFromSearch(currentSearch), topLevelOptions);
-        const hasSearchSelections = FILTER_ORDER.some(({ key }) => initialFromSearch[key].length > 0);
-        const initialSelections = hasSearchSelections
-          ? initialFromSearch
-          : createDashboardSelections({
-              powertrain: getDefaultPowertrainValues(topLevelOptions.powertrain ?? []),
-            });
-        const { optionsMap: cascadedOptions, selections: syncedSelections } = await fetchOnDemandCascadedOptions(
-          resolvedColumns,
-          initialSelections,
-          3,
-          loadFilterOptions,
-          controller.signal,
-        );
-        const initialFilters = buildFilterPayloadFromResolved(resolvedColumns, syncedSelections);
-        const ov = await api.overview({ filters: initialFilters, prefer_precomputed: true, top_n: 120 });
-
-        prevPayloadRef.current = JSON.stringify(initialFilters);
-        prevAdvPayloadRef.current = JSON.stringify(initialFilters);
-
-        setColumns(items);
-        setSelections(syncedSelections);
-        setOptionsMap({ ...topLevelOptions, ...cascadedOptions });
-        if (syncedSelections.model.length === 1) {
-          setMvModelName((current) => current || syncedSelections.model[0]);
-        }
-        setOverview(ov); setYearSeries(ov.yearSeries ?? []); setMonthSeries(ov.monthSeries ?? []);
-        setFilteredRowCount(ov.kpis.totalRows);
-      } catch (e) {
-        if (!isAbortError(e)) setError((e as Error).message);
-      }
-      finally {
-        if (bootOptionsAbortRef.current === controller) {
-          bootOptionsAbortRef.current = null;
-        }
-        setLoading(false);
-      }
-    })();
-    return () => {
-      controller.abort();
-    };
-  }, [cachedPage, currentSearch, loadFilterOptions]);
-
-  useEffect(() => {
-    return () => {
-      bootOptionsAbortRef.current?.abort();
-      syncOptionsAbortRef.current?.abort();
-    };
-  }, []);
-
-  async function applySelections(next: FilterSelections, dimKey: FilterKey) {
-    const idx = FILTER_ORDER.findIndex((filter) => filter.key === dimKey);
-    if (idx === -1) return;
-
-    const cascadeStartIndex = idx < 3 ? 3 : idx;
-    syncOptionsAbortRef.current?.abort();
-    const controller = new AbortController();
-    syncOptionsAbortRef.current = controller;
-
-    setOptionsSyncPending(true);
-    setSelections(next);
-    setError("");
-    try {
-      const { optionsMap: updates, selections: syncedSelections } = await fetchOnDemandCascadedOptions(
-        res,
-        next,
-        cascadeStartIndex,
-        loadFilterOptions,
-        controller.signal,
-      );
-      if (syncOptionsAbortRef.current !== controller) return;
-      setSelections(syncedSelections);
-      setOptionsMap((previous) => ({ ...previous, ...updates }));
-    } catch (error) {
-      if (!isAbortError(error)) setError((error as Error).message);
-    } finally {
-      if (syncOptionsAbortRef.current === controller) {
-        syncOptionsAbortRef.current = null;
-        setOptionsSyncPending(false);
-      }
-    }
-  }
-  async function onFilterChange(dimKey: FilterKey, newVals: string[]) {
-    const next = { ...selections, [dimKey]: newVals };
-    await applySelections(next, dimKey);
-  }
-  function resetFilters() {
-    const defaults = getDefaultPowertrainValues(optionsMap.powertrain ?? []);
-    const next = createDashboardSelections({ powertrain: defaults });
-    void applySelections(next, "powertrain");
-  }
-
-  /* B13: sync selections to URL */
-  const dashboardSearch = useMemo(() => buildSearchFromSelections(selections), [selections]);
-
-  useEffect(() => {
-    const newUrl = `${window.location.pathname}${dashboardSearch}`;
-    window.history.replaceState(null, "", newUrl);
-  }, [dashboardSearch]);
-
-  async function loadOverview() {
-    setLoading(true); setError("");
-    try {
-      const f = buildFilterPayload();
-      const ov = await api.overview({ filters:f, prefer_precomputed:true, top_n:120 });
-      setOverview(ov); setYearSeries(ov.yearSeries??[]); setMonthSeries(ov.monthSeries??[]);
-      setFilteredRowCount(ov.kpis.totalRows);
-    } catch (e) { setError((e as Error).message); }
-    finally { setLoading(false); }
-  }
-
-  const filterPayloadStr = useMemo(() => JSON.stringify(buildFilterPayload()), [buildFilterPayload]);
-  const specificationHref = useMemo(() => `/specification${dashboardSearch}`, [dashboardSearch]);
   useEffect(() => {
     if (!loading) {
       setHeroLoadingTick(0);
@@ -603,12 +418,10 @@ export function DashboardPage() {
     return () => window.clearInterval(timer);
   }, [loading]);
 
-  const prevPayloadRef = useRef(filterPayloadStr);
   useEffect(() => {
-    if (optionsSyncPending || prevPayloadRef.current === filterPayloadStr || columns.length === 0) return;
-    prevPayloadRef.current = filterPayloadStr;
-    loadOverview();
-  }, [columns.length, filterPayloadStr, loadOverview, optionsSyncPending]);
+    if (selections.model.length !== 1) return;
+    setMvModelName((current) => current || selections.model[0]);
+  }, [selections.model]);
 
   /* B3: auto-reload advanced chart when filters change */
   const prevAdvPayloadRef = useRef(filterPayloadStr);
@@ -650,7 +463,15 @@ export function DashboardPage() {
     setAdvLoading(true); setError("");
     try {
       const opts: Record<string, unknown> = { band_size: advBandSize };
-      if (advChart === "powertrain_bubble") opts.grain = advBubbleGrain;
+      if (advChart === "powertrain_bubble") {
+        opts.grain = advBubbleGrain;
+        opts.show_yoy = advBubbleShowYoy;
+        if (advBubbleShowYoy && advBubbleYoyYear) opts.yoy_compare_year = advBubbleYoyYear;
+        opts.group_top_n = advBubbleGroupTopN;
+        opts.group_dimension = advBubbleGroupDimension;
+        opts.group_values = advBubbleGroupValues;
+        opts.group_top_n_map = advBubbleGroupTopNMap;
+      }
       if (advChart === "nev_range_distribution" || advChart === "nev_capacity_vs_msrp") {
         opts.powertrains = advPowertrains;
       }
@@ -669,7 +490,7 @@ export function DashboardPage() {
         opts.tax_insurance_rate = tcoTaxInsurance; opts.energy_cost_base = tcoEnergyCost;
       }
       const r = await api.advancedChart({ group: advGroup, chart: advChart, filters: buildFilterPayload(), top_n: advTopN, options: opts });
-      setAdvItems(r.items);
+      setAdvItems(ensureArray(r.items));
       setAdvMeta(r.meta ?? null);
     } catch (e) { setError((e as Error).message); }
     finally { setAdvLoading(false); }
@@ -681,7 +502,7 @@ export function DashboardPage() {
     setMvLoading(true); setError("");
     try {
       const r = await api.modelVersions({ filters: buildFilterPayload(), model_name: mvModelName.trim(), top_n: mvTopN });
-      setMvItems(r.items);
+      setMvItems(ensureArray(r.items));
     } catch (e) { setError((e as Error).message); }
     finally { setMvLoading(false); }
   }
@@ -691,6 +512,13 @@ export function DashboardPage() {
     const v = pmManualInput.trim();
     if (v && !pmManualCompetitors.includes(v)) setPmManualCompetitors(p => [...p, v]);
     setPmManualInput("");
+  }
+  function toggleAdvBubbleGroupValue(value: string) {
+    setAdvBubbleGroupValues((current) => (
+      current.includes(value)
+        ? current.filter((item) => item !== value)
+        : [...current, value]
+    ));
   }
   async function loadPositioningMap() {
     setPmLoading(true); setError("");
@@ -704,17 +532,13 @@ export function DashboardPage() {
         top_n: pmTopN,
         n_clusters: pmNClusters,
       });
-      setPmItems(r.items); setPmTarget(r.target); setPmClusterTop3(r.cluster_top3);
+      setPmItems(ensureArray(r.items)); setPmTarget(r.target ?? null); setPmClusterTop3(ensureArray(r.cluster_top3));
     } catch (e) { setError((e as Error).message); }
     finally { setPmLoading(false); }
   }
 
   /* ── derived chart data ──────────────────────────── */
   const kpis = overview?.kpis;
-  const activeFilters = useMemo(
-    () => FILTER_ORDER.filter(({ key }) => selections[key].length > 0),
-    [selections],
-  );
   const timeWindowLabel = timeRange ? `${timeRange.start} ~ ${timeRange.end}` : "Full timeline";
   const activeLensTokens = useMemo(() => {
     const filterTokens = activeFilters.length === 0
@@ -722,9 +546,6 @@ export function DashboardPage() {
       : activeFilters.map(({ key, label }) => `${label}: ${summarizeScopeValues(selections[key])}`);
     return [...filterTokens, `Time window: ${timeWindowLabel}`];
   }, [activeFilters, selections, timeWindowLabel]);
-  const activeFilterSummary = useMemo(() => {
-    return activeLensTokens.join(" · ");
-  }, [activeLensTokens]);
   const activeFilterCount = activeFilters.length;
   const isGrouped = tsMode === "\u5206\u7ec4";
   const singleSeries = activeTab === "year" ? yearSeries : monthSeries;
@@ -781,6 +602,47 @@ export function DashboardPage() {
   const hmMax = Math.max(1,...advItems.filter(()=>advChart==="seasonality_heatmap").map(r=>Number(r.value??0)));
   function hmVal(y:string,m:string){return Number(advItems.find(r=>String(r.year)===y&&String(r.month)===m)?.value??0);}
   function hmColor(v:number){return "rgba(7,89,133,"+(0.1+(v/hmMax)*0.8).toFixed(3)+")";}
+  const advBubbleYearOptions = useMemo(() => {
+    const years = Array.from(new Set(
+      yearSeries
+        .map((point) => String(point.time ?? "").trim())
+        .filter((value) => /^\d{4}$/.test(value)),
+    ));
+    return years.sort(compareTimeLabels);
+  }, [yearSeries]);
+  const advBubbleGroupFilterKey: FilterKey = advBubbleGroupDimension === "segment" ? "segment" : "powertrain";
+  const advBubbleGroupOptions = useMemo(() => {
+    const source = selections[advBubbleGroupFilterKey].length > 0
+      ? selections[advBubbleGroupFilterKey]
+      : optionsMap[advBubbleGroupFilterKey] ?? [];
+    const values = Array.from(new Set(source.map((value) => value.trim()).filter(Boolean)));
+    if (advBubbleGroupDimension === "powertrain") {
+      return values.sort((a, b) => {
+        const ai = DEFAULT_POWERTRAINS.findIndex((name) => name === normalizePowertrainName(a));
+        const bi = DEFAULT_POWERTRAINS.findIndex((name) => name === normalizePowertrainName(b));
+        if (ai !== -1 || bi !== -1) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+        return a.localeCompare(b);
+      });
+    }
+    return values.sort((a, b) => a.localeCompare(b, "zh-Hans"));
+  }, [advBubbleGroupDimension, advBubbleGroupFilterKey, optionsMap, selections]);
+  useEffect(() => {
+    if (!advBubbleShowYoy) return;
+    if (advBubbleYearOptions.length < 2) {
+      if (advBubbleYoyYear) setAdvBubbleYoyYear("");
+      return;
+    }
+    if (advBubbleYoyYear && advBubbleYearOptions.includes(advBubbleYoyYear)) return;
+    setAdvBubbleYoyYear(advBubbleYearOptions[advBubbleYearOptions.length - 1] ?? "");
+  }, [advBubbleShowYoy, advBubbleYoyYear, advBubbleYearOptions]);
+  useEffect(() => {
+    setAdvBubbleGroupValues((current) => {
+      const next = current.filter((value) => advBubbleGroupOptions.includes(value));
+      if (!advBubbleGroupTopN) return next;
+      if (next.length > 0) return next;
+      return advBubbleGroupOptions.slice(0, Math.min(2, advBubbleGroupOptions.length));
+    });
+  }, [advBubbleGroupDimension, advBubbleGroupOptions, advBubbleGroupTopN]);
 
   /* time axis labels */
   const timeLabels = useMemo(() => {
@@ -854,6 +716,10 @@ export function DashboardPage() {
     ],
     [kpis],
   );
+  const sidebarSummaryDensityClass = useMemo(
+    () => getUnifiedMetricDensityClass(sidebarSummaryItems.map((item) => item.value)),
+    [sidebarSummaryItems],
+  );
   const dashboardCacheSnapshot = useMemo<DashboardPageCache>(() => ({
     search: dashboardSearch,
     columns,
@@ -886,6 +752,12 @@ export function DashboardPage() {
     advBubbleGrain,
     advBubbleFacet,
     advBubbleFacetMax,
+    advBubbleShowYoy,
+    advBubbleYoyYear,
+    advBubbleGroupTopN,
+    advBubbleGroupDimension,
+    advBubbleGroupValues,
+    advBubbleGroupTopNMap,
     advPowertrains,
     advNevTopNEnabled,
     advNevAxisMax,
@@ -921,8 +793,14 @@ export function DashboardPage() {
     advBandSize,
     advBubbleFacet,
     advBubbleFacetMax,
+    advBubbleGroupDimension,
+    advBubbleGroupTopN,
+    advBubbleGroupTopNMap,
+    advBubbleGroupValues,
     advBubbleGrain,
     advBubbleScale,
+    advBubbleShowYoy,
+    advBubbleYoyYear,
     advChart,
     advGroup,
     advHeatmapScale,
@@ -1018,6 +896,14 @@ export function DashboardPage() {
   /* simple bar */
   const isSimpleBar = !SCATTER_CHARTS.has(advChart) && !STACKED_CHARTS.has(advChart) && advChart !== "price_migration" && advChart !== "seasonality_heatmap" && advChart !== "rv_finance_dashboard";
   const maxBar = Math.max(1,...advItems.map(r=>Number(r.value??0)));
+  const bubbleMetaRecord = advChart === "powertrain_bubble" && advMeta ? advMeta : null;
+  const bubbleYoyEnabled = Boolean(bubbleMetaRecord?.yoyEnabled);
+  const bubbleYoyCompareYear = asMetaText(bubbleMetaRecord?.yoyCompareYear);
+  const bubbleYoyBaseYear = asMetaText(bubbleMetaRecord?.yoyBaseYear);
+  const bubbleGroupTopNApplied = Boolean(bubbleMetaRecord?.groupTopNApplied);
+  const bubbleGroupDimensionLabel = asMetaText(bubbleMetaRecord?.groupDimensionLabel);
+  const bubbleSelectedGroups = asMetaStringArray(bubbleMetaRecord?.groupValues);
+  const bubbleWarnings = asMetaStringArray(bubbleMetaRecord?.warnings);
   const nevMetaRecord = advChart === "nev_range_distribution" && advMeta ? advMeta : null;
   const nevMetricMode = asMetaText(nevMetaRecord?.metricMode) || "window_sales";
   const nevMetricTitle = asMetaText(nevMetaRecord?.metricTitle) || "销量";
@@ -1229,29 +1115,39 @@ export function DashboardPage() {
   }
 
   const chartOpts = ADV_CHARTS[advGroup] ?? [];
+  const selectedAdvGroupLabel = ADV_GROUPS.find((group) => group.v === advGroup)?.l ?? "";
+  const selectedAdvChartLabel = chartOpts.find((chart) => chart.v === advChart)?.l ?? "";
+  const timeAxisModeValue = activeTab === "year" ? "YEAR" : "MONTH";
+  const timeAxisModeDetail = activeTab === "month"
+    ? `聚合口径：${monthGrain === "month" ? "月" : monthGrain === "quarter" ? "季" : "年"}`
+    : "聚焦年度对比区间";
+  const timeWindowStateValue = timeRange ? "CUSTOM" : "FULL";
+  const timeSeriesDeckState = isGrouped
+    ? (groupedLoading ? "SYNCING" : filteredGrouped.length > 0 ? "READY" : "IDLE")
+    : (loading ? "SYNCING" : aggregatedSingle.length > 0 ? "READY" : "IDLE");
+  const timeSeriesDeckVolume = isGrouped
+    ? `${visibleSeries.length} / ${allSeriesNames.length || 0}`
+    : String(aggregatedSingle.length);
+  const advancedDeckState = advChart === "rv_finance_dashboard"
+    ? "EMBEDDED"
+    : advLoading ? "LOADING" : advItems.length > 0 ? "READY" : "IDLE";
+  const advancedDeckVolume = advChart === "rv_finance_dashboard"
+    ? "Inline dashboard"
+    : `${advItems.length} rows`;
 
   return (
     <div className="dashboard-layout">
-      <aside className={`filter-sidebar${sidebarCollapsed ? " is-collapsed" : ""}`}>
-        <div className="filter-sidebar-rail">
-          <div className="filter-sidebar-rail-copy">
-            <span className="panel-kicker">01 / Filter Stack</span>
-            <strong className="filter-sidebar-rail-title">全维度筛选</strong>
-            <span className="filter-sidebar-rail-summary">{activeFilterSummary}</span>
-          </div>
-          <button
-            type="button"
-            className="dashboard-rail-toggle filter-sidebar-toggle"
-            aria-expanded={!sidebarCollapsed}
-            aria-label={sidebarCollapsed ? "展开筛选面板" : "收起筛选面板"}
-            title={sidebarCollapsed ? "Expand filters" : "Collapse filters"}
-            onClick={() => setSidebarCollapsed((current) => !current)}
-          >
-            <span aria-hidden="true">{sidebarCollapsed ? "+" : "-"}</span>
-          </button>
-        </div>
-
-        <div className="filter-sidebar-body">
+      <CollapsibleFilterSidebar
+        collapsed={sidebarCollapsed}
+        onToggle={() => setSidebarCollapsed((current) => !current)}
+        kicker="01 / Filter Stack"
+        title="全维度筛选"
+        summary={activeFilterSummary}
+        expandedLabel="展开筛选面板"
+        collapsedLabel="收起筛选面板"
+        expandedTitle="Expand filters"
+        collapsedTitle="Collapse filters"
+      >
           <div className="filter-sidebar-header">
             <div className="filter-sidebar-hint">当前筛选会同步到 URL，也可直接带到 Specification Page。</div>
           </div>
@@ -1259,7 +1155,7 @@ export function DashboardPage() {
             {sidebarSummaryItems.map((item) => (
               <div key={item.key} className="kpi-card">
                 <div className="kpi-label">{item.label}</div>
-                <div className={`kpi-value${getMetricDensityClass(item.value)}`} title={item.value}>{item.value}</div>
+                <div className={`kpi-value${sidebarSummaryDensityClass}`} title={item.value}>{item.value}</div>
               </div>
             ))}
           </div>
@@ -1280,13 +1176,20 @@ export function DashboardPage() {
               showSuvShortcut={key === "segment"}
             />
           ))}
-        </div>
-      </aside>
+      </CollapsibleFilterSidebar>
 
       <section className="dashboard-main">
-        <div className={`dashboard-hero-shell${heroCollapsed ? " is-collapsed" : ""}`}>
-          <div className="header-card dashboard-hero">
-            <div className="dashboard-hero-head">
+        {combinedError && <div className="alert alert-error">{combinedError}</div>}
+
+        <CollapsibleDeckHero
+          collapsed={heroCollapsed}
+          onToggle={() => setHeroCollapsed((current) => !current)}
+          expandedLabel="展开概览面板"
+          collapsedLabel="收起概览面板"
+          expandedTitle="Expand overview"
+          collapsedTitle="Collapse overview"
+          head={(
+            <>
               <div className="dashboard-hero-copy">
                 <span className="page-kicker">01 / Market Overview</span>
                 <h1>Dashboard Control View</h1>
@@ -1310,56 +1213,102 @@ export function DashboardPage() {
                   {loading && <span className="hero-meta-loader">SYNCING FILTER STATE</span>}
                 </div>
               </div>
-            </div>
-
-            <div className="dashboard-hero-body">
-              <div className="dashboard-hero-body-inner">
-                <div className="dashboard-hero-rail">
-                  <div className="dashboard-hero-chip-row">
-                    {activeLensTokens.map((token, index) => (
-                      <span key={`${index}-${token}`} className="dashboard-hero-chip">{token}</span>
-                    ))}
-                  </div>
-                  <div className="dashboard-hero-rail-actions">
-                    <button type="button" className="btn btn-sm btn-secondary" onClick={resetFilters}>
-                      Reset filters
-                    </button>
-                    <Link className="btn btn-sm btn-primary" to={specificationHref}>
-                      Open Specification
-                    </Link>
-                  </div>
-                </div>
+            </>
+          )}
+          body={(
+            <div className="dashboard-hero-rail">
+              <div className="dashboard-hero-chip-row">
+                {activeLensTokens.map((token, index) => (
+                  <span key={`${index}-${token}`} className="dashboard-hero-chip">{token}</span>
+                ))}
+              </div>
+              <div className="dashboard-hero-rail-actions">
+                <button type="button" className="btn btn-sm btn-secondary" onClick={resetFilters}>
+                  Reset filters
+                </button>
+                <Link className="btn btn-sm btn-primary" to={specificationHref}>
+                  Open Specification
+                </Link>
               </div>
             </div>
+          )}
+        />
 
-            <button
-              type="button"
-              className="dashboard-rail-toggle dashboard-hero-toggle"
-              aria-expanded={!heroCollapsed}
-              aria-label={heroCollapsed ? "展开概览面板" : "收起概览面板"}
-              title={heroCollapsed ? "Expand overview" : "Collapse overview"}
-              onClick={() => setHeroCollapsed((current) => !current)}
-            >
-              <span aria-hidden="true">{heroCollapsed ? "+" : "-"}</span>
-            </button>
+        {/* ── Global Time Axis ────────────────────────── */}
+        <div className="card analysis-deck-card dashboard-time-axis-card">
+          <div className="analysis-deck-head">
+            <div className="analysis-deck-copy">
+              <span className="panel-kicker">02 / Global Time Axis</span>
+              <h3>Global Time Axis</h3>
+              <p>统一年度与月度时间窗，控制趋势对比与后续高级分析的观察区间。</p>
+              <div className="analysis-chip-row">
+                <span className="analysis-chip">{activeFilterSummary}</span>
+                <span className="analysis-chip">{timeWindowLabel}</span>
+              </div>
+            </div>
+            <div className="analysis-deck-meta">
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Axis Mode</span>
+                <strong className="analysis-deck-stat-value">{timeAxisModeValue}</strong>
+                <span className="analysis-deck-stat-subvalue">{timeAxisModeDetail}</span>
+              </div>
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Window State</span>
+                <strong className="analysis-deck-stat-value">{timeWindowStateValue}</strong>
+                <span className="analysis-deck-stat-subvalue">{timeWindowLabel}</span>
+              </div>
+            </div>
+          </div>
+          <div className="analysis-chart-block">
+            <TimeAxis
+              labels={timeLabels}
+              value={timeRange}
+              onChange={setTimeRange}
+              grain={activeTab}
+              onGrainChange={setActiveTab}
+              showTitle={false}
+              monthGrain={monthGrain}
+              onMonthGrainChange={setMonthGrain}
+            />
           </div>
         </div>
 
-        {/* ── Global Time Axis ────────────────────────── */}
-        <div className="card">
-          <TimeAxis
-            labels={timeLabels}
-            value={timeRange}
-            onChange={setTimeRange}
-            grain={activeTab}
-            onGrainChange={setActiveTab}
-            monthGrain={monthGrain}
-            onMonthGrainChange={setMonthGrain}
-          />
-        </div>
-
         {/* ── Time series ─────────────────────────────── */}
-        <div className="card chart-section">
+        <div className="card analysis-deck-card chart-section dashboard-time-series-card">
+          <div className="analysis-deck-head">
+            <div className="analysis-deck-copy">
+              <span className="panel-kicker">03 / Time-Series Lens</span>
+              <h3>Sales Time Series</h3>
+              <p>在同一筛选边界下切换年度、月度与分组序列，保持趋势分析和图例交互语义一致。</p>
+              <div className="analysis-chip-row">
+                <span className="analysis-chip">{activeFilterSummary}</span>
+                <span className="analysis-chip">{timeWindowLabel}</span>
+              </div>
+            </div>
+            <div className="analysis-deck-meta">
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">View Mode</span>
+                <strong className="analysis-deck-stat-value">{activeTab === "year" ? "YEAR" : "MONTH"}</strong>
+                <span className="analysis-deck-stat-subvalue">{activeTab === "month" ? `聚合：${monthGrain}` : "年度对比"}</span>
+              </div>
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Series Mode</span>
+                <strong className="analysis-deck-stat-value">{isGrouped ? "GROUPED" : "TOTAL"}</strong>
+                <span className="analysis-deck-stat-subvalue">{isGrouped ? tsGroupDim : "单序列汇总视图"}</span>
+              </div>
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Data State</span>
+                <strong className="analysis-deck-stat-value">{timeSeriesDeckState}</strong>
+                <span className="analysis-deck-stat-subvalue">{isGrouped ? `${filteredGrouped.length} 个分组点` : `${aggregatedSingle.length} 个时间点`}</span>
+              </div>
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Visible Series</span>
+                <strong className="analysis-deck-stat-value">{isGrouped ? timeSeriesDeckVolume : "1"}</strong>
+                <span className="analysis-deck-stat-subvalue">{isGrouped ? `可见 ${visibleSeries.length} / ${allSeriesNames.length}` : "单序列展示"}</span>
+              </div>
+            </div>
+          </div>
+          <div className="analysis-chart-block">
           <div className="chart-header">
             <div className="tab-bar">
               <button className={"tab-btn"+(activeTab==="year"?" active":"")} onClick={()=>setActiveTab("year")}>{"\u5e74\u5ea6\u5bf9\u6bd4"}</button>
@@ -1485,11 +1434,11 @@ export function DashboardPage() {
 
           {/* B11: "其他"明细表 — 展示被合并进"其他"的各分组明细 */}
           {isGrouped && tsIncludeOthers && othersDetail.length > 0 && (
-            <details style={{marginTop:8}}>
-              <summary style={{cursor:"pointer",fontSize:13,color:"var(--c-text-muted)"}}>
-                {"\ud83d\udce6"} {"\u201c\u5176\u4ed6\u201d\u5305\u542b "}{othersDetail.length}{" \u4e2a\u5206\u7ec4"}
+            <details className="analysis-disclosure">
+              <summary>
+                {`“其他”包含 ${othersDetail.length} 个分组`}
               </summary>
-              <div style={{fontSize:12,padding:"8px 0",maxHeight:260,overflowY:"auto"}}>
+              <div className="analysis-table-wrap">
                 <table className="data-table">
                   <thead><tr><th>{"\u540d\u79f0"}</th><th>{"\u9500\u91cf"}</th><th>{"\u5360\u6bd4"}</th></tr></thead>
                   <tbody>{othersDetail.map(d=>(
@@ -1505,32 +1454,73 @@ export function DashboardPage() {
           )}
 
           <ExportPanel value={tsExport} onChange={setTsExport} graphDiv={tsChartRef.current} seriesNames={isGrouped ? visibleSeries : undefined} labelModeOptions={tsLabelModeOptions} />
+          </div>
         </div>
 
         {/* ── Advanced analysis ───────────────────────── */}
-        <div className="card">
-          <div className="card-title">{"\u9ad8\u7ea7\u5206\u6790"}</div>
+        <div className="card analysis-deck-card dashboard-advanced-card">
+          <div className="analysis-deck-head">
+            <div className="analysis-deck-copy">
+              <span className="panel-kicker">04 / Advanced Analysis</span>
+              <h3>Advanced Control Deck</h3>
+              <p>在同一筛选与时间窗口下切换分析域、图层和参数，承接主看板的深度分析与嵌入式 RV Finance 视图。</p>
+              <div className="analysis-chip-row">
+                <span className="analysis-chip">{activeFilterSummary}</span>
+                <span className="analysis-chip">{timeWindowLabel}</span>
+              </div>
+            </div>
+            <div className="analysis-deck-meta">
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Analysis Domain</span>
+                <strong className="analysis-deck-stat-value">{selectedAdvGroupLabel || "-"}</strong>
+                <span className="analysis-deck-stat-subvalue">当前分析域</span>
+              </div>
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Chart Layer</span>
+                <strong className="analysis-deck-stat-value">{selectedAdvChartLabel || "-"}</strong>
+                <span className="analysis-deck-stat-subvalue">当前图层</span>
+              </div>
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Data State</span>
+                <strong className="analysis-deck-stat-value">{advancedDeckState}</strong>
+                <span className="analysis-deck-stat-subvalue">{advancedDeckVolume}</span>
+              </div>
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Active Filters</span>
+                <strong className="analysis-deck-stat-value">{String(activeFilters.length)}</strong>
+                <span className="analysis-deck-stat-subvalue">{activeFilters.length ? activeFilterSummary : "Default powertrain lens"}</span>
+              </div>
+            </div>
+          </div>
+          <div className="analysis-chart-block">
           {/* group button row */}
-          <div style={{display:"flex",gap:6,marginBottom:8}}>
-            {ADV_GROUPS.map(o=>(
-              <button key={o.v} className={"btn btn-sm "+(advGroup===o.v?"btn-primary":"btn-secondary")}
-                onClick={()=>{setAdvGroup(o.v); setAdvChart((ADV_CHARTS[o.v]??[])[0]?.v??""); setAdvItems([]); setAdvMeta(null);}}>{o.l}</button>
-            ))}
+          <div className="adv-console">
+            <div className="adv-console-row">
+              <div className="adv-console-kicker">分析域</div>
+              <div className="adv-console-buttons">
+                {ADV_GROUPS.map(o=>(
+                  <button key={o.v} type="button" className={"adv-console-btn"+(advGroup===o.v?" is-active":"")}
+                    onClick={()=>{setAdvGroup(o.v); setAdvChart((ADV_CHARTS[o.v]??[])[0]?.v??""); setAdvItems([]); setAdvMeta(null);}}>{o.l}</button>
+                ))}
+              </div>
+            </div>
+            <div className="adv-console-row">
+              <div className="adv-console-kicker">分析图层</div>
+              <div className="adv-console-buttons adv-console-buttons--wrap">
+                {chartOpts.map(o=>(
+                  <button key={o.v} type="button" className={"adv-console-btn"+(advChart===o.v?" is-active":"")}
+                    onClick={()=>{setAdvChart(o.v); setAdvItems([]); setAdvMeta(null);}}>{o.l}</button>
+                ))}
+              </div>
+            </div>
+            <div className="adv-console-path">
+              <span>BMW Control Deck</span>
+              <strong>{ADV_GROUPS.find(g=>g.v===advGroup)?.l??""}</strong>
+              <span>/</span>
+              <strong>{chartOpts.find(c=>c.v===advChart)?.l??""}</strong>
+            </div>
           </div>
-          {/* chart button row */}
-          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
-            {chartOpts.map(o=>(
-              <button key={o.v} className={"btn btn-sm "+(advChart===o.v?"btn-primary":"btn-secondary")}
-                onClick={()=>{setAdvChart(o.v); setAdvItems([]); setAdvMeta(null);}}>{o.l}</button>
-            ))}
-          </div>
-          {/* path display */}
-          <div style={{fontSize:12,color:"var(--c-text-muted)",marginBottom:8}}>
-            {ADV_GROUPS.find(g=>g.v===advGroup)?.l??""}
-            {" > "}
-            {chartOpts.find(c=>c.v===advChart)?.l??""}
-          </div>
-          <div className="adv-controls">
+          <div className="adv-controls adv-controls-panel">
             {advChart !== "rv_finance_dashboard" && (<>
             {advChart !== "nev_range_distribution" && (
               <div className="filter-group"><label>Top N</label>
@@ -1560,33 +1550,115 @@ export function DashboardPage() {
                 </select>
               </div>
             )}
-            {/* 7a: 品牌分面 */}
             {advChart==="powertrain_bubble" && (
-              <div className="filter-group" style={{display:"flex",alignItems:"center",gap:8}}>
-                <label>{"粒度"}</label>
-                <select value={advBubbleGrain} onChange={e=>{setAdvBubbleGrain(e.target.value as "model"|"version"); setAdvItems([]); setAdvMeta(null);}}>
-                  <option value="model">Model</option>
-                  <option value="version">Version</option>
-                </select>
-                <label style={{display:"flex",alignItems:"center",gap:4}}>
-                  <input type="checkbox" checked={advBubbleFacet} onChange={e=>setAdvBubbleFacet(e.target.checked)} />
-                  {"\u6309\u54c1\u724c\u5206\u9762"}
-                </label>
-                {advBubbleFacet && (
-                  <input type="number" min={2} max={12} value={advBubbleFacetMax} style={{width:50}}
-                    onChange={e=>setAdvBubbleFacetMax(Number(e.target.value)||4)} title={"\u6700\u591a\u54c1\u724c\u6570"} />
-                )}
+              <div className="adv-bubble-deck">
+                <div className="adv-bubble-main">
+                  <div className="filter-group adv-control-unit"><label>粒度</label>
+                    <select value={advBubbleGrain} onChange={e=>{setAdvBubbleGrain(e.target.value as "model"|"version"); setAdvItems([]); setAdvMeta(null);}}>
+                      <option value="model">Model</option>
+                      <option value="version">Version</option>
+                    </select>
+                  </div>
+                  <label className="adv-toggle-chip">
+                    <input type="checkbox" checked={advBubbleFacet} onChange={e=>setAdvBubbleFacet(e.target.checked)} />
+                    <span>按品牌分面</span>
+                  </label>
+                  {advBubbleFacet && (
+                    <div className="filter-group adv-control-unit"><label>最多品牌数</label>
+                      <input type="number" min={2} max={12} value={advBubbleFacetMax}
+                        onChange={e=>setAdvBubbleFacetMax(Number(e.target.value)||4)} />
+                    </div>
+                  )}
+                </div>
+                <details className="adv-disclosure">
+                  <summary>7a 高级设置</summary>
+                  <div className="adv-bubble-advanced">
+                    <div className="adv-inline-strip">
+                      <label className="adv-toggle-chip">
+                        <input type="checkbox" checked={advBubbleShowYoy}
+                          onChange={e=>setAdvBubbleShowYoy(e.target.checked)} />
+                        <span>hover 显示 YoY</span>
+                      </label>
+                      {advBubbleShowYoy && advBubbleYearOptions.length >= 2 && (
+                        <div className="filter-group adv-control-unit"><label>YoY 年份</label>
+                          <select value={advBubbleYoyYear} onChange={e=>setAdvBubbleYoyYear(e.target.value)}>
+                            {advBubbleYearOptions.slice(1).map((year) => <option key={year} value={year}>{year}</option>)}
+                          </select>
+                        </div>
+                      )}
+                      {advBubbleShowYoy && advBubbleYearOptions.length < 2 && (
+                        <div className="adv-state-note">当前年度列不足两年，无法显示 YoY。</div>
+                      )}
+                    </div>
+
+                    <div className="adv-inline-strip">
+                      <label className="adv-toggle-chip">
+                        <input type="checkbox" checked={advBubbleGroupTopN}
+                          onChange={e=>setAdvBubbleGroupTopN(e.target.checked)} />
+                        <span>启用分组 TopN</span>
+                      </label>
+                      {advBubbleGroupTopN && (
+                        <div className="filter-group adv-control-unit"><label>分组维度</label>
+                          <select value={advBubbleGroupDimension} onChange={e=>setAdvBubbleGroupDimension(e.target.value as BubbleGroupDimension)}>
+                            {BUBBLE_GROUP_DIMENSIONS.map((option) => <option key={option.v} value={option.v}>{option.l}</option>)}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+
+                    {advBubbleGroupTopN && advBubbleGroupOptions.length > 0 && (
+                      <>
+                        <div className="adv-chip-grid">
+                          {advBubbleGroupOptions.map((value) => {
+                            const active = advBubbleGroupValues.includes(value);
+                            return (
+                              <button
+                                key={value}
+                                type="button"
+                                className={"adv-chip"+(active?" is-active":"")}
+                                onClick={() => toggleAdvBubbleGroupValue(value)}
+                              >
+                                {value}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {advBubbleGroupValues.length > 0 ? (
+                          <div className="adv-topn-grid">
+                            {advBubbleGroupValues.map((value) => (
+                              <div key={value} className="filter-group adv-control-unit"><label>{`${value} TopN`}</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={300}
+                                  value={advBubbleGroupTopNMap[value] ?? advTopN}
+                                  onChange={e=>setAdvBubbleGroupTopNMap((current) => ({
+                                    ...current,
+                                    [value]: Math.max(1, Math.min(300, Number(e.target.value) || advTopN)),
+                                  }))}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="adv-state-note">至少选择一个分组后，才能为每组设置独立 TopN。</div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </details>
               </div>
             )}
             {/* NEV动总筛选 */}
             {(advChart==="nev_range_distribution"||advChart==="nev_capacity_vs_msrp") && (
-              <div className="filter-group"><label>{"\u52a8\u603b\u7c7b\u578b"}</label>
-                <div style={{display:"flex",gap:4}}>
+              <div className="filter-group adv-control-unit adv-control-unit--wide"><label>{"\u52a8\u603b\u7c7b\u578b"}</label>
+                <div className="adv-powertrain-strip">
                   {["BEV","PHEV","HEV","MHEV","ICE"].map(pt=>(
-                    <label key={pt} style={{display:"flex",alignItems:"center",gap:2,fontSize:12}}>
+                    <label key={pt} className={"adv-powertrain-chip"+(advPowertrains.includes(pt)?" is-active":"")}>
                       <input type="checkbox" checked={advPowertrains.includes(pt)}
                         onChange={e=>{const next=e.target.checked?[...advPowertrains,pt]:advPowertrains.filter(x=>x!==pt);setAdvPowertrains(next);}} />
-                      <span style={{color:POWERTRAIN_COLORS[pt]}}>{pt}</span>
+                      <span className="adv-powertrain-chip-swatch" style={{"--pt-color": POWERTRAIN_COLORS[pt]} as React.CSSProperties} />
+                      <span>{pt}</span>
                     </label>
                   ))}
                 </div>
@@ -1622,9 +1694,10 @@ export function DashboardPage() {
               <button className="btn btn-sm btn-secondary" onClick={()=>{setAdvPowertrains(["BEV","PHEV"]);setAdvTopN(advChart==="nev_range_distribution"?80:120);setAdvRangeStep(50);setAdvNevTopNEnabled(true);setAdvNevAxisMax(1000);setAdvNevMetricMode("window_sales");setAdvNevStackByModel(false);setAdvNevFacetBrand(false);setAdvNevMaxBrandFacets(4);}}>{"\u91cd\u7f6e\u53c2\u6570"}</button>
             )}
             {advChart==="nev_range_distribution" && (
-              <details style={{display:"flex",alignSelf:"stretch"}}>
-                <summary style={{cursor:"pointer",fontSize:12,color:"var(--c-text-muted)"}}>{"\u9ad8\u7ea7\u8bbe\u7f6e"}</summary>
-                <div style={{display:"flex",gap:12,flexWrap:"wrap",marginTop:8}}>
+              <details className="adv-disclosure adv-disclosure--panel">
+                <summary>NEV 高级设置</summary>
+                <div className="adv-bubble-advanced">
+                  <div className="adv-inline-strip">
                   <label className="chart-mode-label" style={{gap:6}}>
                     <input type="checkbox" checked={advNevStackByModel} onChange={e=>setAdvNevStackByModel(e.target.checked)} />
                     {"\u6309 Model \u5806\u53e0"}
@@ -1633,9 +1706,10 @@ export function DashboardPage() {
                     <input type="checkbox" checked={advNevFacetBrand} onChange={e=>setAdvNevFacetBrand(e.target.checked)} />
                     {"\u6309\u54c1\u724c\u5206\u9762"}
                   </label>
-                  {advNevFacetBrand && <div className="filter-group"><label>{"\u6700\u591a\u54c1\u724c\u6570"}</label>
+                  {advNevFacetBrand && <div className="filter-group adv-control-unit"><label>{"\u6700\u591a\u54c1\u724c\u6570"}</label>
                     <input type="number" value={advNevMaxBrandFacets} min={2} max={12} step={1} style={{width:60}} onChange={e=>setAdvNevMaxBrandFacets(Number(e.target.value)||4)} />
                   </div>}
+                  </div>
                 </div>
               </details>
             )}
@@ -1653,25 +1727,43 @@ export function DashboardPage() {
 
           {/* TCO参数面板 */}
           {advChart==="estimated_tco" && (
-            <div className="adv-controls" style={{flexWrap:"wrap",gap:8,marginTop:4}}>
-              <div className="filter-group"><label>{"\u4f7f\u7528\u5e74\u9650"}</label>
-                <input type="range" min={1} max={10} step={1} value={tcoYears} onChange={e=>setTcoYears(Number(e.target.value))} style={{width:80}} /><span style={{fontSize:12,marginLeft:4}}>{tcoYears}{"\u5e74"}</span>
+            <div className="adv-controls adv-controls-panel adv-controls-panel-secondary">
+              <div className="filter-group adv-control-unit adv-slider-unit"><label>{"\u4f7f\u7528\u5e74\u9650"}</label>
+                <input type="range" min={1} max={10} step={1} value={tcoYears} onChange={e=>setTcoYears(Number(e.target.value))} />
+                <span className="adv-slider-readout">{tcoYears}{"\u5e74"}</span>
               </div>
-              <div className="filter-group"><label>{"\u5e74\u91cc\u7a0b(km)"}</label>
-                <input type="range" min={5000} max={50000} step={1000} value={tcoAnnualKm} onChange={e=>setTcoAnnualKm(Number(e.target.value))} style={{width:80}} /><span style={{fontSize:12,marginLeft:4}}>{tcoAnnualKm.toLocaleString()}</span>
+              <div className="filter-group adv-control-unit adv-slider-unit"><label>{"\u5e74\u91cc\u7a0b(km)"}</label>
+                <input type="range" min={5000} max={50000} step={1000} value={tcoAnnualKm} onChange={e=>setTcoAnnualKm(Number(e.target.value))} />
+                <span className="adv-slider-readout">{tcoAnnualKm.toLocaleString()}</span>
               </div>
-              <div className="filter-group"><label>{"\u6298\u65e7\u7387"}</label>
-                <input type="range" min={0.1} max={0.9} step={0.05} value={tcoDepreciation} onChange={e=>setTcoDepreciation(Number(e.target.value))} style={{width:80}} /><span style={{fontSize:12,marginLeft:4}}>{(tcoDepreciation*100).toFixed(0)}%</span>
+              <div className="filter-group adv-control-unit adv-slider-unit"><label>{"\u6298\u65e7\u7387"}</label>
+                <input type="range" min={0.1} max={0.9} step={0.05} value={tcoDepreciation} onChange={e=>setTcoDepreciation(Number(e.target.value))} />
+                <span className="adv-slider-readout">{(tcoDepreciation*100).toFixed(0)}%</span>
               </div>
-              <div className="filter-group"><label>{"\u7ef4\u4fdd\u7387"}</label>
-                <input type="range" min={0.005} max={0.05} step={0.002} value={tcoMaintenance} onChange={e=>setTcoMaintenance(Number(e.target.value))} style={{width:80}} /><span style={{fontSize:12,marginLeft:4}}>{(tcoMaintenance*100).toFixed(1)}%</span>
+              <div className="filter-group adv-control-unit adv-slider-unit"><label>{"\u7ef4\u4fdd\u7387"}</label>
+                <input type="range" min={0.005} max={0.05} step={0.002} value={tcoMaintenance} onChange={e=>setTcoMaintenance(Number(e.target.value))} />
+                <span className="adv-slider-readout">{(tcoMaintenance*100).toFixed(1)}%</span>
               </div>
-              <div className="filter-group"><label>{"\u7a0e\u8d39\u4fdd\u9669"}</label>
-                <input type="range" min={0.005} max={0.06} step={0.005} value={tcoTaxInsurance} onChange={e=>setTcoTaxInsurance(Number(e.target.value))} style={{width:80}} /><span style={{fontSize:12,marginLeft:4}}>{(tcoTaxInsurance*100).toFixed(1)}%</span>
+              <div className="filter-group adv-control-unit adv-slider-unit"><label>{"\u7a0e\u8d39\u4fdd\u9669"}</label>
+                <input type="range" min={0.005} max={0.06} step={0.005} value={tcoTaxInsurance} onChange={e=>setTcoTaxInsurance(Number(e.target.value))} />
+                <span className="adv-slider-readout">{(tcoTaxInsurance*100).toFixed(1)}%</span>
               </div>
-              <div className="filter-group"><label>{"\u80fd\u6e90\u6210\u672c\u57fa\u7840(\u20ac/km)"}</label>
-                <input type="range" min={0.02} max={0.3} step={0.01} value={tcoEnergyCost} onChange={e=>setTcoEnergyCost(Number(e.target.value))} style={{width:80}} /><span style={{fontSize:12,marginLeft:4}}>{tcoEnergyCost.toFixed(2)}</span>
+              <div className="filter-group adv-control-unit adv-slider-unit"><label>{"\u80fd\u6e90\u6210\u672c\u57fa\u7840(\u20ac/km)"}</label>
+                <input type="range" min={0.02} max={0.3} step={0.01} value={tcoEnergyCost} onChange={e=>setTcoEnergyCost(Number(e.target.value))} />
+                <span className="adv-slider-readout">{tcoEnergyCost.toFixed(2)}</span>
               </div>
+            </div>
+          )}
+
+          {advChart === "powertrain_bubble" && (bubbleWarnings.length > 0 || bubbleYoyEnabled || bubbleGroupTopNApplied) && (
+            <div className="adv-bubble-status">
+              {bubbleYoyEnabled && bubbleYoyBaseYear && bubbleYoyCompareYear && (
+                <span>{`YoY ${bubbleYoyBaseYear} -> ${bubbleYoyCompareYear}`}</span>
+              )}
+              {bubbleGroupTopNApplied && bubbleGroupDimensionLabel && bubbleSelectedGroups.length > 0 && (
+                <span>{`${bubbleGroupDimensionLabel} TopN: ${bubbleSelectedGroups.join(" / ")}`}</span>
+              )}
+              {bubbleWarnings.map((warning) => <span key={warning}>{warning}</span>)}
             </div>
           )}
 
@@ -1705,6 +1797,9 @@ export function DashboardPage() {
               return localCats.map((cat, i) => {
                 const subset = items.filter(r=>String(r[ax.color]??"")=== cat);
                 const isBubbleMsrp = advChart === "powertrain_bubble";
+                const bubbleYoyTemplate = isBubbleMsrp && bubbleYoyEnabled && bubbleYoyCompareYear && bubbleYoyBaseYear
+                  ? `<br>${bubbleYoyBaseYear} Sales: %{customdata[4]:,.0f}<br>${bubbleYoyCompareYear} Sales: %{customdata[5]:,.0f}<br>YoY: %{customdata[6]:+.1f}%`
+                  : "";
                 return withExportLabels({
                   x: subset.map(r => Number(r[ax.x] ?? 0)),
                   y: subset.map(r => Number(r[ax.y] ?? 0)),
@@ -1715,6 +1810,9 @@ export function DashboardPage() {
                         Number(r.MsrpMin ?? r[ax.y] ?? 0),
                         Number(r.MsrpMax ?? r[ax.y] ?? 0),
                         Number(r.VariantCount ?? 1),
+                        Number(r.SalesBase ?? r[ax.z] ?? 0),
+                        Number(r.SalesCurrent ?? r[ax.z] ?? 0),
+                        Number(r.YoYPct ?? 0),
                       ]
                     : [Number(r[ax.z] ?? 0)]),
                   type: "scatter",
@@ -1730,8 +1828,8 @@ export function DashboardPage() {
                   },
                   hovertemplate: isBubbleMsrp
                     ? advBubbleGrain === "version"
-                      ? "%{text}<br>" + ax.xLabel + ": %{x:,.0f}<br>MSRP（组内中位数）: %{y:,.0f}<br>MSRP范围: %{customdata[1]:,.0f} - %{customdata[2]:,.0f}<br>Sales: %{customdata[0]:,.0f}<extra>%{fullData.name}</extra>"
-                      : "%{text}<br>" + ax.xLabel + ": %{x:,.0f}<br>MSRP（组内中位数）: %{y:,.0f}<br>MSRP范围: %{customdata[1]:,.0f} - %{customdata[2]:,.0f}<br>聚合版型数: %{customdata[3]:,.0f}<br>Sales: %{customdata[0]:,.0f}<extra>%{fullData.name}</extra>"
+                      ? "%{text}<br>" + ax.xLabel + ": %{x:,.0f}<br>MSRP（组内中位数）: %{y:,.0f}<br>MSRP范围: %{customdata[1]:,.0f} - %{customdata[2]:,.0f}<br>Sales: %{customdata[0]:,.0f}" + bubbleYoyTemplate + "<extra>%{fullData.name}</extra>"
+                      : "%{text}<br>" + ax.xLabel + ": %{x:,.0f}<br>MSRP（组内中位数）: %{y:,.0f}<br>MSRP范围: %{customdata[1]:,.0f} - %{customdata[2]:,.0f}<br>聚合版型数: %{customdata[3]:,.0f}<br>Sales: %{customdata[0]:,.0f}" + bubbleYoyTemplate + "<extra>%{fullData.name}</extra>"
                     : "%{text}<br>" + ax.xLabel + ": %{x:,.0f}<br>" + ax.yLabel + ": %{y:,.0f}<br>Sales: %{customdata[0]:,.0f}<extra>%{fullData.name}</extra>",
                 } as Data, {
                   ...(subset.some(r => String(r.Model ?? "").trim()) ? { model: subset.map(r => String(r.Model ?? "")) } : {}),
@@ -1755,21 +1853,20 @@ export function DashboardPage() {
                 .slice(0, advBubbleFacetMax)
                 .map(e => e[0]);
               return (
-                <div ref={el => { advChartRef.current = el; }}
-                  style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8}}>
+                <div ref={el => { advChartRef.current = el; }} className="facet-plot-grid">
                   {topBrands.map(brand => {
                     const subset = advItems.filter(r => String(r.Brand ?? "") === brand);
                     const traces = buildTraces(subset);
                     return (
-                      <div key={brand}>
+                      <div key={brand} className="facet-plot-card">
+                        <div className="facet-plot-title">{brand}</div>
                         <PlotlyChart
                           data={applySeriesColors(applyDataLabelsToTraces(traces, advExport), advExport.seriesColors)}
                           layout={applyExportToLayout({
-                            title: { text: brand, font: { size: 13 } },
                             xaxis: { title: { text: ax.xLabel } },
                             yaxis: { title: { text: ax.yLabel } },
                             showlegend: false,
-                            margin: { t: 30, b: 40, l: 50, r: 10 },
+                            margin: { t: 18, b: 40, l: 50, r: 10 },
                           }, advExport)}
                           height={320}
                         />
@@ -2145,29 +2242,52 @@ export function DashboardPage() {
 
           {/* RV Finance Dashboard (inline within advanced analysis) */}
           {advChart==="rv_finance_dashboard" && (
-            <Suspense fallback={<div className="card" style={{ padding: 24 }}>正在加载 RV Finance 仪表盘...</div>}>
+            <Suspense fallback={<div className="analysis-inline-note">正在加载 RV Finance 仪表盘...</div>}>
               <RvFinanceDashboard />
             </Suspense>
           )}
 
           {advChart!=="rv_finance_dashboard" && advItems.length===0 && !advLoading && <div className="chart-empty">{"\u70b9\u51fb\u300c\u52a0\u8f7d\u56fe\u8868\u300d\u67e5\u770b\u5206\u6790\u7ed3\u679c"}</div>}
           <ExportPanel value={advExport} onChange={setAdvExport} graphDiv={advChartRef.current} labelModeOptions={advLabelModeOptions} />
+          </div>
         </div>
 
         {/* ── Bug 2: Model Version Bubble ─────────────── */}
-        <div className="card">
-          <div className="card-title">{"\ud83d\udca0 \u7248\u578b\u6c14\u6ce1\u56fe\uff08\u5355 Model \u4e0d\u540c\u7248\u578b\uff09"}</div>
-          <div className="adv-controls">
-            <div className="filter-group"><label>Model</label>
+        <div className="card analysis-deck-card">
+          <div className="analysis-deck-head">
+            <div className="analysis-deck-copy">
+              <span className="panel-kicker">05 / Single Model Lens</span>
+              <h3>Model Version Bubble</h3>
+              <p>锁定单一 Model，查看版本在车长与 MSRP 平面上的分布，并沿用当前 Dashboard 的筛选范围。</p>
+              <div className="analysis-chip-row">
+                <span className="analysis-chip">{activeFilterSummary}</span>
+                <span className="analysis-chip">{mvColorBy === "Powertrain" ? "Color by powertrain" : "Color by trim"}</span>
+              </div>
+            </div>
+            <div className="analysis-deck-meta">
+              <div className={`analysis-deck-stat${mvLoading ? " is-loading" : ""}`}>
+                <span className="analysis-deck-stat-label">Data state</span>
+                <strong className="analysis-deck-stat-value">{mvLoading ? "SYNC" : mvItems.length ? "READY" : "IDLE"}</strong>
+                <span className="analysis-deck-stat-subvalue">{mvItems.length ? `${mvItems.length} 个版本` : "等待加载版型"}</span>
+              </div>
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Quick picks</span>
+                <strong className="analysis-deck-stat-value">{String(selections.model.length).padStart(2, "0")}</strong>
+                <span className="analysis-deck-stat-subvalue">来自共享筛选</span>
+              </div>
+            </div>
+          </div>
+          <div className="adv-controls adv-controls-panel">
+            <div className="filter-group adv-control-unit adv-control-unit--wide"><label>Model</label>
               <input type="text" placeholder="\u8f93\u5165 Model \u540d\u79f0" value={mvModelName}
                 onChange={e=>setMvModelName(e.target.value)}
                 style={{width:180}} />
             </div>
-            <div className="filter-group"><label>Top N</label>
+            <div className="filter-group adv-control-unit"><label>Top N</label>
               <input type="number" value={mvTopN} min={5} max={200} style={{width:60}}
                 onChange={e=>setMvTopN(Number(e.target.value)||50)} />
             </div>
-            <div className="filter-group"><label>{"\u7740\u8272"}</label>
+            <div className="filter-group adv-control-unit"><label>{"\u7740\u8272"}</label>
               <select value={mvColorBy} onChange={e=>setMvColorBy(e.target.value as "Powertrain"|"Trim")}>
                 <option value="Powertrain">{"\u52a8\u529b\u603b\u6210"}</option>
                 <option value="Trim">Trim</option>
@@ -2179,12 +2299,18 @@ export function DashboardPage() {
           </div>
           {/* Model filter quick pick */}
           {selections.model.length > 0 && (
-            <div className="mv-quick-pick">
-              <span>{"\u5feb\u9009\uff1a"}</span>
+            <div className="mv-quick-pick analysis-chip-row">
+              <span className="analysis-chip-label">{"\u5feb\u9009"}</span>
               {selections.model.map(m=>(
-                <button key={m} className={"btn btn-sm "+(mvModelName===m?"btn-primary":"btn-secondary")}
+                <button key={m} type="button" className={"analysis-chip-button"+(mvModelName===m?" is-active":"")}
                   onClick={()=>setMvModelName(m)}>{m}</button>
               ))}
+            </div>
+          )}
+          {mvItems.length > 0 && (
+            <div className="analysis-chip-row analysis-chip-row--compact">
+              <span className="analysis-chip">Visible versions {mvItems.length}</span>
+              <span className="analysis-chip">Shared filter scope active</span>
             </div>
           )}
           {mvItems.length > 0 && (() => {
@@ -2237,26 +2363,48 @@ export function DashboardPage() {
         </div>
 
         {/* ── Bug 3: OJ Positioning Map ───────────────── */}
-        <div className="card">
-          <div className="card-title">{"\ud83d\udccd OJ \u5b9a\u4f4d\u5b9a\u4ef7\u56fe"}</div>
-          <div className="adv-controls" style={{flexWrap:"wrap"}}>
-            <div className="filter-group"><label>{"\u76ee\u6807\u8f66\u957f(mm)"}</label>
+        <div className="card analysis-deck-card">
+          <div className="analysis-deck-head">
+            <div className="analysis-deck-copy">
+              <span className="panel-kicker">06 / Competitive Positioning</span>
+              <h3>OJ Positioning Map</h3>
+              <p>基于当前筛选边界生成竞品聚类，并支持叠加手动竞品与目标车型坐标，保持与主分析区一致的控件语言。</p>
+              <div className="analysis-chip-row">
+                <span className="analysis-chip">{activeFilterSummary}</span>
+                <span className="analysis-chip">Target ready {pmTarget ? "YES" : "NO"}</span>
+              </div>
+            </div>
+            <div className="analysis-deck-meta">
+              <div className={`analysis-deck-stat${pmLoading ? " is-loading" : ""}`}>
+                <span className="analysis-deck-stat-label">Map state</span>
+                <strong className="analysis-deck-stat-value">{pmLoading ? "SYNC" : pmItems.length ? "READY" : "IDLE"}</strong>
+                <span className="analysis-deck-stat-subvalue">{pmItems.length ? `${pmItems.length} 个候选点` : "等待加载定位图"}</span>
+              </div>
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Manual rivals</span>
+                <strong className="analysis-deck-stat-value">{String(pmManualCompetitors.length).padStart(2, "0")}</strong>
+                <span className="analysis-deck-stat-subvalue">{pmClusterTop3.length ? `${pmClusterTop3.length} 个Top3标签` : "尚未生成聚类代表"}</span>
+              </div>
+            </div>
+          </div>
+          <div className="adv-controls adv-controls-panel">
+            <div className="filter-group adv-control-unit"><label>{"\u76ee\u6807\u8f66\u957f(mm)"}</label>
               <input type="number" placeholder="4500" value={pmTargetLength}
                 onChange={e=>setPmTargetLength(e.target.value)} style={{width:100}} />
             </div>
-            <div className="filter-group"><label>{"\u76ee\u6807 MSRP"}</label>
+            <div className="filter-group adv-control-unit"><label>{"\u76ee\u6807 MSRP"}</label>
               <input type="number" placeholder="30000" value={pmTargetMsrp}
                 onChange={e=>setPmTargetMsrp(e.target.value)} style={{width:100}} />
             </div>
-            <div className="filter-group"><label>{"\u8f66\u957f\u7a97\u53e3(mm)"}</label>
+            <div className="filter-group adv-control-unit"><label>{"\u8f66\u957f\u7a97\u53e3(mm)"}</label>
               <input type="number" value={pmLengthRange} min={100} max={2000} step={100} style={{width:80}}
                 onChange={e=>setPmLengthRange(Number(e.target.value)||600)} />
             </div>
-            <div className="filter-group"><label>{"\u805a\u7c7b\u6570"}</label>
+            <div className="filter-group adv-control-unit"><label>{"\u805a\u7c7b\u6570"}</label>
               <input type="number" value={pmNClusters} min={2} max={10} style={{width:56}}
                 onChange={e=>setPmNClusters(Number(e.target.value)||4)} />
             </div>
-            <div className="filter-group"><label>Top N</label>
+            <div className="filter-group adv-control-unit"><label>Top N</label>
               <input type="number" value={pmTopN} min={10} max={300} style={{width:60}}
                 onChange={e=>setPmTopN(Number(e.target.value)||80)} />
             </div>
@@ -2266,7 +2414,7 @@ export function DashboardPage() {
           </div>
           {/* manual competitor input */}
           <div className="pm-competitor-bar">
-            <label>{"\u624b\u52a8\u6307\u5b9a\u7ade\u54c1\u54c1\u724c\uff1a"}</label>
+            <span className="analysis-chip-label">{"\u624b\u52a8\u7ade\u54c1"}</span>
             <input type="text" placeholder="\u8f93\u5165\u54c1\u724c\u540d\u79f0\u2026" value={pmManualInput}
               onChange={e=>setPmManualInput(e.target.value)}
               onKeyDown={e=>{if(e.key==="Enter") addCompetitor();}}
@@ -2282,7 +2430,7 @@ export function DashboardPage() {
           {/* cluster top 3 */}
           {pmClusterTop3.length > 0 && (
             <div className="pm-cluster-top3">
-              <span>{"\ud83c\udfc6 KMeans \u9500\u91cf Top3 \u805a\u7c7b\u4ee3\u8868\uff1a"}</span>
+              <span className="analysis-chip-label">{"KMeans Top3"}</span>
               {pmClusterTop3.map(c=><span key={c} className="pm-top3-label">{c}</span>)}
             </div>
           )}
@@ -2351,22 +2499,35 @@ export function DashboardPage() {
           <ExportPanel value={pmExport} onChange={setPmExport} graphDiv={pmChartRef.current} labelModeOptions={pmLabelModeOptions} />
         </div>
 
-        <div className="card">
-          <div className="detail-section-head">
-            <div>
-              <div className="card-title">{"\u89c4\u683c\u660e\u7ec6\u72ec\u7acb\u9875"}</div>
-              <p className="section-note">
-                {"\u660e\u7ec6\u8868\u3001\u5217\u9009\u62e9\u3001\u5206\u9875\u548c CSV \u5bfc\u51fa\u5df2\u8fc1\u5230\u72ec\u7acb Specification Page\uff0c\u8fd9\u4e2a Dashboard \u53ea\u4fdd\u7559 KPI \u548c\u56fe\u8868\u4ea4\u4e92\uff0c\u51cf\u5c11\u9996\u5c4f\u8bf7\u6c42\u4e0e\u72b6\u6001\u8d1f\u62c5\u3002"}
-              </p>
+        <div className="card analysis-deck-card analysis-route-card">
+          <div className="analysis-deck-head">
+            <div className="analysis-deck-copy">
+              <span className="panel-kicker">07 / Specification Route</span>
+              <h3>Specification Entry</h3>
+              <p>明细表、列选择、分页和 CSV 导出已经迁到独立 Specification Page，Dashboard 只保留 KPI 与图表交互。</p>
+              <div className="analysis-chip-row">
+                <span className="analysis-chip">{activeFilterSummary}</span>
+                <span className="analysis-chip">React Router /specification</span>
+              </div>
             </div>
-            <div className="table-status-chip">
-              <span>Active filters</span>
-              <strong>{activeFilters.length}</strong>
+            <div className="analysis-deck-meta">
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Route State</span>
+                <strong className="analysis-deck-stat-value">READY</strong>
+                <span className="analysis-deck-stat-subvalue">与 Dashboard 共享筛选 query</span>
+              </div>
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Active Filters</span>
+                <strong className="analysis-deck-stat-value">{String(activeFilters.length)}</strong>
+                <span className="analysis-deck-stat-subvalue">{activeFilters.length ? "带当前筛选进入" : "使用默认筛选进入"}</span>
+              </div>
             </div>
           </div>
-          <div className="dashboard-cta-row">
-            <Link className="btn btn-primary" to={specificationHref}>{"\u6253\u5f00 Specification Page"}</Link>
-            <Link className="btn btn-ghost" to={specificationHref}>{"\u5e26\u5f53\u524d\u7b5b\u9009\u8fdb\u5165"}</Link>
+          <div className="analysis-chart-block analysis-chart-block--compact">
+            <div className="dashboard-cta-row">
+              <Link className="btn btn-primary" to={specificationHref}>{"\u6253\u5f00 Specification Page"}</Link>
+              <Link className="btn btn-ghost" to={specificationHref}>{"\u5e26\u5f53\u524d\u7b5b\u9009\u8fdb\u5165"}</Link>
+            </div>
           </div>
         </div>
       </section>

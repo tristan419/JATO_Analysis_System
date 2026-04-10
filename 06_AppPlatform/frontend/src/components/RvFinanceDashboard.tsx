@@ -278,16 +278,40 @@ export function RvFinanceDashboard() {
   }, [exportSettings]);
 
   return (
-    <div className="card rv-finance">
-      <div className="card-title">{"RV 金融杠杆看板"}</div>
+    <div className="rv-finance analysis-deck-card">
+      <div className="analysis-deck-head rv-finance-head">
+        <div className="analysis-deck-copy">
+          <span className="panel-kicker">04 / Powertrain Cost</span>
+          <h3>RV Finance Leverage Deck</h3>
+          <p>用统一的 control deck 组织模板、汇率、方案矩阵、敏感性和等高线，让金融测算区也保持与主分析一致的操作节奏。</p>
+          <div className="analysis-chip-row">
+            <span className="analysis-chip">{`1 EUR = ${effectiveRate.toFixed(4)} ${currency}`}</span>
+            <span className="analysis-chip">{fxMode === "manual" ? "Manual FX" : "Preset FX"}</span>
+            <span className="analysis-chip">MSRP in EUR</span>
+          </div>
+        </div>
+        <div className="analysis-deck-meta">
+          <div className={`analysis-deck-stat${loading ? " is-loading" : ""}`}>
+            <span className="analysis-deck-stat-label">Calc state</span>
+            <strong className="analysis-deck-stat-value">{loading ? "SYNC" : results.length ? "READY" : "IDLE"}</strong>
+            <span className="analysis-deck-stat-subvalue">{results.length ? `${results.length} 个方案已计算` : "等待执行计算"}</span>
+          </div>
+          <div className="analysis-deck-stat">
+            <span className="analysis-deck-stat-label">Vehicles</span>
+            <strong className="analysis-deck-stat-value">{String(vehicles.length).padStart(2, "0")}</strong>
+            <span className="analysis-deck-stat-subvalue">{`Sensitivity #${safeSensitivityIdx + 1}`}</span>
+          </div>
+        </div>
+      </div>
+
       {error && <div className="alert alert-error">{error}</div>}
 
-      <div className="alert alert-info">
+      <div className="analysis-inline-note">
         {`汇率口径：1 EUR = ${effectiveRate.toFixed(4)} ${currency} · ${fxMode === "manual" ? "手动输入" : "预设汇率"} · MSRP 输入始终按 EUR`}
       </div>
 
-      <div className="rv-finance-actions" style={{marginBottom:12}}>
-        <div className="filter-group">
+      <div className="adv-controls adv-controls-panel rv-finance-actions">
+        <div className="filter-group adv-control-unit">
           <label>{"参数模板"}</label>
           <select value={selectedPreset} onChange={(e) => setSelectedPreset(e.target.value)}>
             {Object.keys(presetOptions).map((name) => (
@@ -299,8 +323,8 @@ export function RvFinanceDashboard() {
         <button className="btn btn-sm btn-secondary" onClick={resetVehicles}>{"重置参数"}</button>
       </div>
 
-      <div className="rv-finance-actions">
-        <div className="filter-group">
+      <div className="adv-controls adv-controls-panel adv-controls-panel-secondary rv-finance-actions">
+        <div className="filter-group adv-control-unit">
           <label>{"展示币种"}</label>
           <select
             value={currency}
@@ -316,7 +340,7 @@ export function RvFinanceDashboard() {
             ))}
           </select>
         </div>
-        <div className="filter-group">
+        <div className="filter-group adv-control-unit">
           <label>{"汇率来源"}</label>
           <select value={fxMode} onChange={(e) => setFxMode(e.target.value as "preset" | "manual") }>
             <option value="preset">{"预设汇率"}</option>
@@ -324,7 +348,7 @@ export function RvFinanceDashboard() {
           </select>
         </div>
         {fxMode === "manual" && (
-          <div className="filter-group">
+          <div className="filter-group adv-control-unit">
             <label>{`手动汇率（1 EUR = ? ${currency}）`}</label>
             <input
               type="number"
@@ -336,7 +360,7 @@ export function RvFinanceDashboard() {
             />
           </div>
         )}
-        <div className="filter-group">
+        <div className="filter-group adv-control-unit">
           <label>{"敏感性分析对象"}</label>
           <select value={safeSensitivityIdx} onChange={(e) => setSensitivityIdx(Number(e.target.value))}>
             {vehicles.map((vehicle, idx) => (
@@ -350,7 +374,7 @@ export function RvFinanceDashboard() {
         </LoadingActionButton>
       </div>
 
-      <div className="rv-finance-table-wrap">
+      <div className="rv-finance-table-wrap analysis-table-wrap">
         <table className="data-table rv-finance-table">
           <thead>
             <tr>
@@ -396,7 +420,7 @@ export function RvFinanceDashboard() {
       </div>
 
       {summaryKpis && (
-        <div className="kpi-grid" style={{marginBottom:16}}>
+        <div className="kpi-grid rv-finance-kpi-grid">
           <div className="kpi-card kpi-primary">
             <div className="kpi-label">{"方案数"}</div>
             <div className="kpi-value">{summaryKpis.count}</div>
@@ -421,9 +445,18 @@ export function RvFinanceDashboard() {
       )}
 
       {results.length > 0 && (
-        <div className="rv-finance-results">
-          <h4>{"计算结果"}</h4>
-          <div className="table-wrapper">
+        <div className="rv-finance-results analysis-subsection">
+          <div className="analysis-subsection-head">
+            <div>
+              <div className="analysis-subsection-title">计算结果</div>
+              <p className="section-note">以当前汇率与模板设定输出 Down、Balloon、净贷款和月供对比。</p>
+            </div>
+            <div className="analysis-chip-row analysis-chip-row--compact">
+              <span className="analysis-chip">{`Baseline ${results[safeSensitivityIdx]?.vehicle ?? "-"}`}</span>
+              <span className="analysis-chip">{`${currency} settled`}</span>
+            </div>
+          </div>
+          <div className="table-wrapper analysis-table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
@@ -458,8 +491,8 @@ export function RvFinanceDashboard() {
 
       <div ref={(el) => { chartRef.current = el; }}>
         {comparisonTraces.length > 0 && (
-          <div className="rv-finance-chart">
-            <h4>{"多方案月供对比"}</h4>
+          <div className="rv-finance-chart analysis-chart-block">
+            <div className="analysis-subsection-title">多方案月供对比</div>
             <PlotlyChart
               data={applyRvExport(comparisonTraces)}
               layout={applyExportToLayout({
@@ -474,8 +507,8 @@ export function RvFinanceDashboard() {
         )}
 
         {waterfallTrace.length > 0 && (
-          <div className="rv-finance-chart">
-            <h4>{"资金流瀑布图"}</h4>
+          <div className="rv-finance-chart analysis-chart-block">
+            <div className="analysis-subsection-title">资金流瀑布图</div>
             <PlotlyChart
               data={applyRvExport(waterfallTrace)}
               layout={applyExportToLayout({ yaxis: { title: { text: currency } } }, exportSettings)}
@@ -485,8 +518,8 @@ export function RvFinanceDashboard() {
         )}
 
         {tornadoTraces.length > 0 && (
-          <div className="rv-finance-chart">
-            <h4>{"敏感性分析（龙卷风图）"}</h4>
+          <div className="rv-finance-chart analysis-chart-block">
+            <div className="analysis-subsection-title">敏感性分析（龙卷风图）</div>
             <PlotlyChart
               data={applyRvExport(tornadoTraces)}
               layout={applyExportToLayout({
@@ -499,8 +532,8 @@ export function RvFinanceDashboard() {
         )}
 
         {contourTrace.length > 0 && (
-          <div className="rv-finance-chart">
-            <h4>{"APR × RV 月供等高线"}</h4>
+          <div className="rv-finance-chart analysis-chart-block">
+            <div className="analysis-subsection-title">APR × RV 月供等高线</div>
             <PlotlyChart
               data={applyRvExport(contourTrace)}
               layout={applyExportToLayout({
@@ -514,9 +547,9 @@ export function RvFinanceDashboard() {
       </div>
 
       {sensitivitySummary.length > 0 && (
-        <details style={{marginBottom:12}} open>
-          <summary style={{cursor:"pointer",fontSize:13,color:"var(--c-text-secondary)"}}>{"敏感性汇总"}</summary>
-          <div className="table-wrapper" style={{marginTop:8}}>
+        <details className="adv-disclosure analysis-disclosure" open>
+          <summary>{"敏感性汇总"}</summary>
+          <div className="table-wrapper analysis-table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
@@ -544,9 +577,9 @@ export function RvFinanceDashboard() {
       )}
 
       {sensitivity.length > 0 && (
-        <details style={{marginBottom:12}}>
-          <summary style={{cursor:"pointer",fontSize:13,color:"var(--c-text-secondary)"}}>{"敏感性场景明细"}</summary>
-          <div className="table-wrapper" style={{marginTop:8}}>
+        <details className="adv-disclosure analysis-disclosure">
+          <summary>{"敏感性场景明细"}</summary>
+          <div className="table-wrapper analysis-table-wrap">
             <table className="data-table">
               <thead>
                 <tr>

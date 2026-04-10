@@ -1,6 +1,7 @@
 import { Suspense, lazy, type ReactNode } from "react";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 
+import { SharedFilterScopeProvider } from "./contexts/SharedFilterScopeContext";
 import { Layout } from "./components/Layout";
 import { LoadingSurface } from "./components/LoadingSurface";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -31,7 +32,11 @@ function withPageLoader(node: ReactNode) {
 const router = createBrowserRouter([
   {
     path: "/",
-    element: <Layout />,
+    element: (
+      <SharedFilterScopeProvider>
+        <Layout />
+      </SharedFilterScopeProvider>
+    ),
     children: [
       { index: true, element: <DashboardPage /> },
       { path: "specification", element: withPageLoader(<SpecificationPage />) },

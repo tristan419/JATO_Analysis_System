@@ -77,7 +77,7 @@ jobs:
 
   fullstack-frontend:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -94,15 +94,15 @@ jobs:
         working-directory: 06_AppPlatform/frontend
         run: npm ci
 
-      - name: Type check frontend
+      - name: Install Playwright browser
         working-directory: 06_AppPlatform/frontend
-        run: npx tsc --noEmit
+        run: npx playwright install --with-deps chromium
 
-      - name: Build frontend
+      - name: Fixed frontend checks
         working-directory: 06_AppPlatform/frontend
         env:
           VITE_API_BASE: /v1
           VITE_AUTH_TOKEN: ci-token
           VITE_USER_ROLE: admin
           VITE_USER_NAME: github-actions
-        run: npm run build
+        run: npm run check:frontend

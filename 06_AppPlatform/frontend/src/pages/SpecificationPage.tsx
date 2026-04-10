@@ -1,34 +1,22 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
+import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
+import { CollapsibleFilterSidebar } from "../components/CollapsibleFilterSidebar";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
-import {
-  DIM,
-  FILTER_KEYS,
-  FILTER_ORDER,
-  buildSearchFromSelections,
-  createEmptySelections,
-  getDefaultPowertrainValues,
-  hasSelections,
-  readSelectionsFromSearch,
-  resolve,
-  type FilterKey,
-  type FilterSelections,
-} from "../dashboardFilters";
-import type { DetailResponse, OverviewResponse } from "../types";
+import { useSharedFilterScope } from "../contexts/SharedFilterScopeContext";
+import { FILTER_ORDER } from "../dashboardFilters";
+import type { DetailResponse } from "../types";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
-import {
-  FILTER_OPTIONS_CACHE_TTL_MS,
-  buildFilterOptionsCacheKey,
-  fetchOnDemandCascadedOptions,
-  isAbortError,
-  type FilterOptionsPayload,
-} from "../utils/filterOptions";
 
 function pickDefaultDetailColumns(columns: string[]): string[] {
-  const years = columns.filter((column) => /^\d{4}$/.test(column)).sort().reverse().slice(0, 2);
+  const years = columns
+    .filter((column) => /^\d{4}$/.test(column))
+    .sort()
+    .reverse()
+    .slice(0, 2);
   const preferred = [
     "国家",
     "Country",
@@ -50,234 +38,85 @@ const PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
 
 interface SpecificationPageCache {
   search: string;
-  columns: string[];
-  selections: FilterSelections;
-  optionsMap: Partial<Record<FilterKey, string[]>>;
-  overview: OverviewResponse | null;
   detail: DetailResponse | null;
   detailPage: number;
   detailPageSize: number;
   selectedCols: string[];
   excludeZeroSales: boolean;
-  filtersReady: boolean;
-}
-
-type ResolvedFilterColumns = Record<FilterKey, string | null>;
-
-const TOP_LEVEL_FILTER_KEYS = ["country", "segment", "powertrain"] as const satisfies readonly FilterKey[];
-
-function resolveFilterColumns(columns: string[]): ResolvedFilterColumns {
-  return FILTER_KEYS.reduce<ResolvedFilterColumns>((resolved, key) => {
-    resolved[key] = resolve(columns, DIM[key]);
-    return resolved;
-  }, {
-    country: null,
-    segment: null,
-    powertrain: null,
-    make: null,
-    model: null,
-    version: null,
-  });
-}
-
-function sanitizeTopLevelSelections(
-  selections: FilterSelections,
-  topLevelOptions: Partial<Record<FilterKey, string[]>>,
-): FilterSelections {
-  const next = createEmptySelections();
-  for (const { key } of FILTER_ORDER) {
-    next[key] = [...selections[key]];
-  }
-  for (const key of TOP_LEVEL_FILTER_KEYS) {
-    const available = topLevelOptions[key] ?? [];
-    next[key] = next[key].filter((value) => available.includes(value));
-  }
-  return next;
 }
 
 export function SpecificationPage() {
   const currentSearch = typeof window !== "undefined" ? window.location.search : "";
   const cachedPageRef = useRef<SpecificationPageCache | null>(null);
   if (cachedPageRef.current === null) {
-    const cached = getCachedPageValue<SpecificationPageCache>(SPECIFICATION_CACHE_KEY);
+    const cached = getCachedPageValue<SpecificationPageCache>(
+      SPECIFICATION_CACHE_KEY,
+    );
     cachedPageRef.current = cached && cached.search === currentSearch ? cached : null;
   }
   const cachedPage = cachedPageRef.current;
 
-  const [columns, setColumns] = useState<string[]>(() => cachedPage?.columns ?? []);
-  const [selections, setSelections] = useState<FilterSelections>(() => cachedPage?.selections ?? createEmptySelections());
-  const [optionsMap, setOptionsMap] = useState<Partial<Record<FilterKey, string[]>>>(() => cachedPage?.optionsMap ?? {});
-  const [overview, setOverview] = useState<OverviewResponse | null>(() => cachedPage?.overview ?? null);
-  const [detail, setDetail] = useState<DetailResponse | null>(() => cachedPage?.detail ?? null);
-  const [detailPage, setDetailPage] = useState(() => cachedPage?.detailPage ?? 1);
-  const [detailPageSize, setDetailPageSize] = useState(() => cachedPage?.detailPageSize ?? 100);
-  const [selectedCols, setSelectedCols] = useState<string[]>(() => cachedPage?.selectedCols ?? []);
-  const [excludeZeroSales, setExcludeZeroSales] = useState(() => cachedPage?.excludeZeroSales ?? false);
-  const [bootLoading, setBootLoading] = useState(false);
-  const [overviewLoading, setOverviewLoading] = useState(false);
+  const {
+    columns,
+    selections,
+    optionsMap,
+    overview,
+    filtersReady,
+    loading: sharedLoading,
+    optionsSyncPending,
+    error: sharedError,
+    activeFilters,
+    activeFilterSummary,
+    dashboardHref,
+    dashboardSearch,
+    heroCollapsed,
+    sidebarCollapsed,
+    setHeroCollapsed,
+    setSidebarCollapsed,
+    buildFilterPayload,
+    filterPayloadStr,
+    onFilterChange,
+    resetFilters,
+  } = useSharedFilterScope();
+
+  const [detail, setDetail] = useState<DetailResponse | null>(
+    () => cachedPage?.detail ?? null,
+  );
+  const [detailPage, setDetailPage] = useState(
+    () => cachedPage?.detailPage ?? 1,
+  );
+  const [detailPageSize, setDetailPageSize] = useState(
+    () => cachedPage?.detailPageSize ?? 100,
+  );
+  const [selectedCols, setSelectedCols] = useState<string[]>(
+    () => cachedPage?.selectedCols ?? [],
+  );
+  const [excludeZeroSales, setExcludeZeroSales] = useState(
+    () => cachedPage?.excludeZeroSales ?? false,
+  );
   const [detailLoading, setDetailLoading] = useState(false);
-  const [filtersReady, setFiltersReady] = useState(() => cachedPage?.filtersReady ?? false);
-  const [optionsSyncPending, setOptionsSyncPending] = useState(false);
   const [error, setError] = useState("");
-  const skipInitialOverviewRef = useRef(Boolean(cachedPage));
   const skipInitialDetailResetRef = useRef(Boolean(cachedPage));
   const skipInitialDetailFetchRef = useRef(Boolean(cachedPage));
-  const optionsCacheRef = useRef(new Map<string, { expiresAt: number; options: string[] }>());
-  const bootOptionsAbortRef = useRef<AbortController | null>(null);
-  const syncOptionsAbortRef = useRef<AbortController | null>(null);
 
-  const res = useMemo<ResolvedFilterColumns>(() => resolveFilterColumns(columns), [columns]);
+  useEffect(() => {
+    if (columns.length === 0) return;
+    setSelectedCols((current) => {
+      const sanitized = current.filter((column) => columns.includes(column));
+      if (sanitized.length > 0) return sanitized;
+      return pickDefaultDetailColumns(columns);
+    });
+  }, [columns]);
 
-  const buildFilterPayload = useCallback((): Record<string, string[]> => {
-    const payload: Record<string, string[]> = {};
-    for (const { key } of FILTER_ORDER) {
-      const column = res[key];
-      const values = selections[key];
-      if (column && values.length) payload[column] = values;
-    }
-    return payload;
-  }, [res, selections]);
-
-  const filterPayloadStr = useMemo(() => JSON.stringify(buildFilterPayload()), [buildFilterPayload]);
-  const selectedColsStr = useMemo(() => JSON.stringify(selectedCols), [selectedCols]);
-  const filterSearch = useMemo(() => buildSearchFromSelections(selections), [selections]);
-  const dashboardHref = filterSearch ? `/${filterSearch}` : "/";
+  const selectedColsStr = useMemo(
+    () => JSON.stringify(selectedCols),
+    [selectedCols],
+  );
   const visibleCols = selectedCols.length ? selectedCols : columns.slice(0, 8);
-  const activeFilters = useMemo(
-    () => FILTER_ORDER.filter(({ key }) => selections[key].length > 0),
-    [selections]
-  );
-  const activeFilterSummary = useMemo(() => {
-    if (!activeFilters.length) return "默认动力总成视角，无额外维度约束";
-    return activeFilters
-      .map(({ key, label }) => `${label} ${selections[key].length}`)
-      .join(" / ");
-  }, [activeFilters, selections]);
-
-  const loadFilterOptions = useCallback(
-    async (payload: FilterOptionsPayload, signal?: AbortSignal): Promise<string[]> => {
-      const cacheKey = buildFilterOptionsCacheKey(payload);
-      const now = Date.now();
-      const cached = optionsCacheRef.current.get(cacheKey);
-      if (cached && cached.expiresAt > now) {
-        return cached.options;
-      }
-
-      const response = await api.filterOptions(payload, { signal });
-      optionsCacheRef.current.set(cacheKey, {
-        expiresAt: now + FILTER_OPTIONS_CACHE_TTL_MS,
-        options: response.options,
-      });
-      return response.options;
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (cachedPage) return;
-
-    const controller = new AbortController();
-    bootOptionsAbortRef.current = controller;
-
-    (async () => {
-      setBootLoading(true);
-      setError("");
-      try {
-        const { items } = await api.columns();
-        const resolvedColumns = resolveFilterColumns(items);
-        const topLevelOptions = (await Promise.all(
-          TOP_LEVEL_FILTER_KEYS.map(async (key) => {
-            const column = resolvedColumns[key];
-            if (!column) return [key, [] as string[]] as const;
-            const options = await loadFilterOptions({ column, filters: {} }, controller.signal);
-            return [key, options] as const;
-          }),
-        )).reduce<Partial<Record<FilterKey, string[]>>>((accumulator, [key, options]) => {
-          accumulator[key] = options;
-          return accumulator;
-        }, {});
-
-        const initialFromSearch = sanitizeTopLevelSelections(readSelectionsFromSearch(currentSearch), topLevelOptions);
-        const initialSelections = hasSelections(initialFromSearch)
-          ? initialFromSearch
-          : {
-              ...initialFromSearch,
-              powertrain: getDefaultPowertrainValues(topLevelOptions.powertrain ?? []),
-            };
-
-        const { optionsMap: cascadedOptions, selections: syncedSelections } = await fetchOnDemandCascadedOptions(
-          resolvedColumns,
-          initialSelections,
-          3,
-          loadFilterOptions,
-          controller.signal,
-        );
-
-        setColumns(items);
-        setSelectedCols(pickDefaultDetailColumns(items));
-        setSelections(syncedSelections);
-        setOptionsMap({ ...topLevelOptions, ...cascadedOptions });
-        setFiltersReady(true);
-      } catch (err) {
-        if (!isAbortError(err)) setError((err as Error).message);
-      } finally {
-        if (bootOptionsAbortRef.current === controller) {
-          bootOptionsAbortRef.current = null;
-        }
-        setBootLoading(false);
-      }
-    })();
-
-    return () => {
-      controller.abort();
-      if (bootOptionsAbortRef.current === controller) {
-        bootOptionsAbortRef.current = null;
-      }
-    };
-  }, [cachedPage, currentSearch, loadFilterOptions]);
-
-  useEffect(() => {
-    return () => {
-      bootOptionsAbortRef.current?.abort();
-      syncOptionsAbortRef.current?.abort();
-    };
-  }, []);
-
-  useEffect(() => {
-    const newUrl = `${window.location.pathname}${filterSearch}`;
-    window.history.replaceState(null, "", newUrl);
-  }, [filterSearch]);
-
-  useEffect(() => {
-    if (!filtersReady || columns.length === 0 || optionsSyncPending) return;
-    if (skipInitialOverviewRef.current) {
-      skipInitialOverviewRef.current = false;
-      return;
-    }
-    let cancelled = false;
-
-    const timer = setTimeout(async () => {
-      setOverviewLoading(true);
-      setError("");
-      try {
-        const overviewResponse = await api.overview({
-          filters: JSON.parse(filterPayloadStr) as Record<string, string[]>,
-          prefer_precomputed: true,
-          top_n: 120,
-        });
-        if (!cancelled) setOverview(overviewResponse);
-      } catch (err) {
-        if (!cancelled) setError((err as Error).message);
-      } finally {
-        if (!cancelled) setOverviewLoading(false);
-      }
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [columns.length, filterPayloadStr, filtersReady, optionsSyncPending]);
+  const combinedError = sharedError || error;
+  const detailDeckState = detailLoading || sharedLoading ? "SYNC" : "READY";
+  const detailDeckRows = detail?.total ?? 0;
+  const detailDeckPageLabel = `${detail?.page ?? detailPage} / ${Math.max(1, Math.ceil(detailDeckRows / detailPageSize))}`;
 
   useEffect(() => {
     if (skipInitialDetailResetRef.current) {
@@ -288,13 +127,20 @@ export function SpecificationPage() {
   }, [filterPayloadStr, selectedColsStr, detailPageSize, excludeZeroSales]);
 
   useEffect(() => {
-    if (!filtersReady || columns.length === 0 || selectedCols.length === 0 || optionsSyncPending) return;
+    if (
+      !filtersReady ||
+      columns.length === 0 ||
+      selectedCols.length === 0 ||
+      optionsSyncPending
+    ) {
+      return;
+    }
     if (skipInitialDetailFetchRef.current) {
       skipInitialDetailFetchRef.current = false;
       return;
     }
-    let cancelled = false;
 
+    let cancelled = false;
     const timer = setTimeout(async () => {
       setDetailLoading(true);
       setError("");
@@ -321,91 +167,45 @@ export function SpecificationPage() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [columns.length, detailPage, detailPageSize, excludeZeroSales, filterPayloadStr, filtersReady, optionsSyncPending, selectedCols, selectedColsStr]);
-
-  const specificationCacheSnapshot = useMemo<SpecificationPageCache>(() => ({
-    search: filterSearch,
-    columns,
-    selections,
-    optionsMap,
-    overview,
-    detail,
-    detailPage,
-    detailPageSize,
-    selectedCols,
-    excludeZeroSales,
-    filtersReady,
-  }), [
-    columns,
-    detail,
+  }, [
+    columns.length,
     detailPage,
     detailPageSize,
     excludeZeroSales,
-    filterSearch,
+    filterPayloadStr,
     filtersReady,
-    optionsMap,
-    overview,
+    optionsSyncPending,
     selectedCols,
-    selections,
+    selectedColsStr,
   ]);
+
+  const specificationCacheSnapshot = useMemo<SpecificationPageCache>(
+    () => ({
+      search: dashboardSearch,
+      detail,
+      detailPage,
+      detailPageSize,
+      selectedCols,
+      excludeZeroSales,
+    }),
+    [
+      dashboardSearch,
+      detail,
+      detailPage,
+      detailPageSize,
+      excludeZeroSales,
+      selectedCols,
+    ],
+  );
 
   useEffect(() => {
     if (!filtersReady || columns.length === 0) return;
-    setCachedPageValue(SPECIFICATION_CACHE_KEY, specificationCacheSnapshot, PAGE_CACHE_TTL_MS);
+    setCachedPageValue(
+      SPECIFICATION_CACHE_KEY,
+      specificationCacheSnapshot,
+      PAGE_CACHE_TTL_MS,
+    );
   }, [columns.length, filtersReady, specificationCacheSnapshot]);
-
-  const applySelections = useCallback(async (nextSelections: FilterSelections, dimKey: FilterKey) => {
-    const index = FILTER_ORDER.findIndex((filter) => filter.key === dimKey);
-    if (index === -1) return;
-
-    const cascadeStartIndex = index < 3 ? 3 : index;
-    syncOptionsAbortRef.current?.abort();
-    const controller = new AbortController();
-    syncOptionsAbortRef.current = controller;
-
-    setOptionsSyncPending(true);
-    setSelections(nextSelections);
-    setError("");
-    try {
-      const { optionsMap: cascadedOptions, selections: syncedSelections } = await fetchOnDemandCascadedOptions(
-        res,
-        nextSelections,
-        cascadeStartIndex,
-        loadFilterOptions,
-        controller.signal,
-      );
-      if (syncOptionsAbortRef.current !== controller) return;
-
-      setSelections(syncedSelections);
-      setOptionsMap((previous) => ({ ...previous, ...cascadedOptions }));
-    } catch (err) {
-      if (!isAbortError(err)) setError((err as Error).message);
-    } finally {
-      if (syncOptionsAbortRef.current === controller) {
-        syncOptionsAbortRef.current = null;
-        setOptionsSyncPending(false);
-      }
-    }
-  }, [loadFilterOptions, res]);
-
-  async function onFilterChange(dimKey: FilterKey, newVals: string[]) {
-    const nextSelections: FilterSelections = {
-      ...selections,
-      [dimKey]: newVals,
-    };
-    await applySelections(nextSelections, dimKey);
-  }
-
-  function resetFilters() {
-    void (async () => {
-      const defaults = getDefaultPowertrainValues(optionsMap.powertrain ?? []);
-      const nextSelections: FilterSelections = {
-        ...createEmptySelections(),
-        powertrain: defaults,
-      };
-      await applySelections(nextSelections, "powertrain");
-    })();
-  }
 
   async function exportCsv() {
     try {
@@ -430,21 +230,36 @@ export function SpecificationPage() {
 
   return (
     <div className="dashboard-shell specification-shell">
-      <aside className="sidebar sidebar-panel">
+      <CollapsibleFilterSidebar
+        collapsed={sidebarCollapsed}
+        onToggle={() => setSidebarCollapsed((current) => !current)}
+        kicker="02 / Filter Stack"
+        title="规格明细"
+        summary={activeFilterSummary}
+        expandedLabel="展开规格筛选面板"
+        collapsedLabel="收起规格筛选面板"
+        expandedTitle="Expand specification filters"
+        collapsedTitle="Collapse specification filters"
+        className="sidebar sidebar-panel"
+      >
         <div className="sidebar-header">
           <span className="panel-kicker">02 / Filter Stack</span>
           <h2>规格明细</h2>
-          <p>独立承载明细表、列选择和 CSV 导出，避免 Dashboard 首页额外挂载大表状态。</p>
+          <p>共享 Dashboard 的筛选口径，只在这里承载明细表、列选择和 CSV 导出。</p>
         </div>
 
         <div className="sidebar-meta">
           <div className="sidebar-stat">
             <span className="sidebar-stat-label">Active filters</span>
-            <strong className="sidebar-stat-value">{String(activeFilters.length).padStart(2, "0")}</strong>
+            <strong className="sidebar-stat-value">
+              {String(activeFilters.length).padStart(2, "0")}
+            </strong>
           </div>
           <div className="sidebar-stat">
             <span className="sidebar-stat-label">Visible columns</span>
-            <strong className="sidebar-stat-value">{String(visibleCols.length).padStart(2, "0")}</strong>
+            <strong className="sidebar-stat-value">
+              {String(visibleCols.length).padStart(2, "0")}
+            </strong>
           </div>
         </div>
 
@@ -467,178 +282,274 @@ export function SpecificationPage() {
             showSuvShortcut={key === "segment"}
           />
         ))}
-      </aside>
+      </CollapsibleFilterSidebar>
 
       <section className="content specification-content">
-        <div className="page-header specification-header">
-          <div className="specification-header-copy">
-            <span className="page-kicker">02 / Specification Intelligence</span>
-            <h1>Specification / Detail Explorer</h1>
-            <p>当前页自动跟随筛选刷新，专注车型规格、行级数据和导出，不再占用主看板首屏预算。</p>
-          </div>
-          <div className="hero-meta specification-hero-meta">
-            <div className="hero-meta-block">
-              <span className="hero-meta-label">Filter scope</span>
-              <strong className="hero-meta-value">{activeFilters.length ? String(activeFilters.length).padStart(2, "0") : "FULL"}</strong>
-            </div>
-            <div className="hero-meta-block">
-              <span className="hero-meta-label">Data state</span>
-              <strong className="hero-meta-value">{detailLoading || overviewLoading ? "SYNC" : "READY"}</strong>
-            </div>
-          </div>
-        </div>
+        {combinedError && <div className="alert alert-error">{combinedError}</div>}
 
-        {error && <div className="alert alert-error">{error}</div>}
+        <CollapsibleDeckHero
+          collapsed={heroCollapsed}
+          onToggle={() => setHeroCollapsed((current) => !current)}
+          expandedLabel="展开规格概览面板"
+          collapsedLabel="收起规格概览面板"
+          expandedTitle="Expand specification overview"
+          collapsedTitle="Collapse specification overview"
+          className="header-card dashboard-hero specification-deck-hero"
+          head={(
+            <>
+              <div className="dashboard-hero-copy specification-header-copy">
+                <span className="page-kicker">02 / Specification Intelligence</span>
+                <h1>Specification / Detail Explorer</h1>
+                <p>筛选口径与首页完全同步，跳页时不再重新初始化筛选链路。</p>
+                <div className="dashboard-hero-inline-summary">
+                  <span className="selection-ribbon-label">Current scope</span>
+                  <span className="selection-ribbon-value">{activeFilterSummary}</span>
+                </div>
+              </div>
 
-        <div className="selection-ribbon">
-          <span className="selection-ribbon-label">Current scope</span>
-          <span className="selection-ribbon-value">{activeFilterSummary}</span>
-        </div>
+              <div className="dashboard-hero-actions specification-hero-meta">
+                <div className="hero-meta-block hero-meta-block-immersive">
+                  <span className="hero-meta-label">Filter scope</span>
+                  <strong className="hero-meta-value">
+                    {activeFilters.length
+                      ? String(activeFilters.length).padStart(2, "0")
+                      : "FULL"}
+                  </strong>
+                  <span className="hero-meta-subvalue">Shared with dashboard</span>
+                </div>
+                <div className={`hero-meta-block hero-meta-block-immersive${detailLoading || sharedLoading ? " is-loading" : ""}`}>
+                  <span className="hero-meta-label">Data state</span>
+                  <strong className="hero-meta-value">
+                    {detailLoading || sharedLoading ? "SYNC" : "READY"}
+                  </strong>
+                  <span className="hero-meta-subvalue">Detail + overview linked</span>
+                  {(detailLoading || sharedLoading) && (
+                    <span className="hero-meta-loader">SYNCING SPEC GRID</span>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+          body={(
+            <div className="dashboard-hero-rail">
+              <div className="dashboard-hero-chip-row">
+                <span className="dashboard-hero-chip">Shared filter state</span>
+                <span className="dashboard-hero-chip">{activeFilterSummary}</span>
+                <span className="dashboard-hero-chip">Visible columns {visibleCols.length}</span>
+              </div>
+              <div className="dashboard-hero-rail-actions">
+                <Link className="btn btn-sm btn-secondary" to={dashboardHref}>
+                  Return dashboard
+                </Link>
+                <button type="button" className="btn btn-sm btn-primary" onClick={resetFilters}>
+                  Reset filters
+                </button>
+              </div>
+            </div>
+          )}
+        />
 
         <div className="metrics-grid">
           <div className="kpi-card">
             <span className="kpi-label">筛选后记录数</span>
-            <strong className="kpi-value">{overview?.kpis.totalRows?.toLocaleString() ?? "-"}</strong>
+            <strong className="kpi-value">
+              {overview?.kpis.totalRows?.toLocaleString() ?? "-"}
+            </strong>
           </div>
           <div className="kpi-card">
             <span className="kpi-label">品牌数</span>
-            <strong className="kpi-value">{overview?.kpis.brandCount?.toLocaleString() ?? "-"}</strong>
+            <strong className="kpi-value">
+              {overview?.kpis.brandCount?.toLocaleString() ?? "-"}
+            </strong>
           </div>
           <div className="kpi-card">
             <span className="kpi-label">Model 数</span>
-            <strong className="kpi-value">{overview?.kpis.modelCount?.toLocaleString() ?? "-"}</strong>
+            <strong className="kpi-value">
+              {overview?.kpis.modelCount?.toLocaleString() ?? "-"}
+            </strong>
           </div>
           <div className="kpi-card">
             <span className="kpi-label">Version 数</span>
-            <strong className="kpi-value">{overview?.kpis.versionCount?.toLocaleString() ?? "-"}</strong>
+            <strong className="kpi-value">
+              {overview?.kpis.versionCount?.toLocaleString() ?? "-"}
+            </strong>
           </div>
         </div>
 
-        {(bootLoading || overviewLoading) && !overview && (
+        {sharedLoading && !overview && (
           <LoadingSurface
             mode="overlay"
             label="正在初始化规格页"
-            detail="同步筛选口径、概览指标和首屏字段配置"
+            detail="复用共享筛选作用域，并同步概览指标与首屏字段配置"
             kicker="Spec"
           />
         )}
 
-        <div className="card">
-          <div className="detail-section-head">
-            <div>
-              <div className="card-title">规格与明细预览</div>
-              <p className="section-note">列选择、分页和 CSV 导出在本页集中处理，适合带宽受限场景下做按需查询。</p>
+        <div className="card analysis-deck-card specification-detail-card">
+          <div className="analysis-deck-head">
+            <div className="analysis-deck-copy">
+              <span className="panel-kicker">03 / Detail Grid</span>
+              <h3>Specification Detail Preview</h3>
+              <p>列选择、分页和 CSV 导出在本页集中处理，适合在共享筛选口径下做按需明细查询和字段投影。</p>
+              <div className="analysis-chip-row">
+                <span className="analysis-chip">{activeFilterSummary}</span>
+                <span className="analysis-chip">Visible columns {visibleCols.length}</span>
+                <span className="analysis-chip">Page size {detailPageSize}</span>
+                {excludeZeroSales && <span className="analysis-chip">Only non-zero sales</span>}
+              </div>
             </div>
-            <div className="table-status-chip">
-              <span>已选列</span>
-              <strong>{selectedCols.length}</strong>
-            </div>
-          </div>
-          <div className="detail-toolbar specification-toolbar">
-            <div className="detail-toolbar-cluster">
-              <button className="btn btn-accent" disabled={!selectedCols.length || detailLoading} onClick={exportCsv}>
-                CSV 下载
-              </button>
-              <label className="toolbar-checkbox">
-                <input
-                  type="checkbox"
-                  checked={excludeZeroSales}
-                  onChange={(event) => setExcludeZeroSales(event.target.checked)}
-                />
-                仅显示有销量版型
-              </label>
-            </div>
-            <div className="detail-toolbar-cluster detail-toolbar-cluster--push">
-              <div className="filter-group">
-                <label>每页</label>
-                <select
-                  value={detailPageSize}
-                  onChange={(event) => setDetailPageSize(Number(event.target.value))}
-                >
-                  <option value={50}>50</option>
-                  <option value={100}>100</option>
-                  <option value={200}>200</option>
-                </select>
+            <div className="analysis-deck-meta">
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Data State</span>
+                <strong className="analysis-deck-stat-value">{detailDeckState}</strong>
+                <span className="analysis-deck-stat-subvalue">Detail rows + overview linked</span>
+              </div>
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Selected Columns</span>
+                <strong className="analysis-deck-stat-value">{String(selectedCols.length).padStart(2, "0")}</strong>
+                <span className="analysis-deck-stat-subvalue">自动补齐默认关键列</span>
+              </div>
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Row Volume</span>
+                <strong className="analysis-deck-stat-value">{detailDeckRows.toLocaleString()}</strong>
+                <span className="analysis-deck-stat-subvalue">当前筛选下总记录数</span>
+              </div>
+              <div className="analysis-deck-stat">
+                <span className="analysis-deck-stat-label">Page Window</span>
+                <strong className="analysis-deck-stat-value">{detailDeckPageLabel}</strong>
+                <span className="analysis-deck-stat-subvalue">分页状态与导出共用同一列配置</span>
               </div>
             </div>
           </div>
 
-          <div className="col-picker-header">
-            <span className="section-note">点击列名切换可见字段。当前未选择时，会自动显示默认关键列。</span>
-          </div>
-          <div className="col-picker">
-            {columns.map((column) => (
-              <span
-                key={column}
-                className={`col-chip${selectedCols.includes(column) ? " selected" : ""}`}
-                onClick={() =>
-                  setSelectedCols((current) =>
-                    current.includes(column)
-                      ? current.filter((item) => item !== column)
-                      : [...current, column]
-                  )
-                }
-              >
-                {column}
-              </span>
-            ))}
+          <div className="analysis-chart-block analysis-chart-block--compact">
+            <div className="detail-toolbar specification-toolbar">
+              <div className="detail-toolbar-cluster">
+                <button className="btn btn-accent" disabled={!selectedCols.length || detailLoading} onClick={exportCsv}>
+                  CSV 下载
+                </button>
+                <label className="toolbar-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={excludeZeroSales}
+                    onChange={(event) => setExcludeZeroSales(event.target.checked)}
+                  />
+                  仅显示有销量版型
+                </label>
+              </div>
+              <div className="detail-toolbar-cluster detail-toolbar-cluster--push">
+                <div className="filter-group">
+                  <label>每页</label>
+                  <select
+                    value={detailPageSize}
+                    onChange={(event) => setDetailPageSize(Number(event.target.value))}
+                  >
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                    <option value={200}>200</option>
+                  </select>
+                </div>
+              </div>
+            </div>
           </div>
 
-          {detailLoading && (
-            <LoadingSurface
-              label="正在刷新明细"
-              detail="按当前列选择、分页和销量过滤条件更新结果"
-              kicker="Detail"
-            />
-          )}
+          <div className="analysis-subsection specification-subsection">
+            <div className="analysis-subsection-head">
+              <div>
+                <div className="analysis-subsection-title">Column Projection</div>
+                <p className="analysis-inline-note">点击列名切换可见字段。当前未选择时，会自动显示默认关键列。</p>
+              </div>
+            </div>
+            <div className="col-picker">
+              {columns.map((column) => (
+                <span
+                  key={column}
+                  className={`col-chip${selectedCols.includes(column) ? " selected" : ""}`}
+                  onClick={() =>
+                    setSelectedCols((current) =>
+                      current.includes(column)
+                        ? current.filter((item) => item !== column)
+                        : [...current, column],
+                    )
+                  }
+                >
+                  {column}
+                </span>
+              ))}
+            </div>
+          </div>
 
-          <div className="table-wrapper">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  {visibleCols.map((column) => (
-                    <th key={column}>{column}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {(detail?.items ?? []).map((row, index) => (
-                  <tr key={index}>
-                    {visibleCols.map((column) => (
-                      <td key={column}>{String((row as Record<string, unknown>)[column] ?? "")}</td>
+          <div className="analysis-subsection specification-subsection">
+            <div className="analysis-subsection-head">
+              <div>
+                <div className="analysis-subsection-title">Detail Table</div>
+                <p className="analysis-inline-note">当前显示第 {detail?.page ?? detailPage} 页，按共享筛选结果回填明细与导出范围。</p>
+              </div>
+            </div>
+
+            {detailLoading && (
+              <LoadingSurface
+                label="正在刷新明细"
+                detail="按当前列选择、分页和销量过滤条件更新结果"
+                kicker="Detail"
+              />
+            )}
+
+            <div className="analysis-table-wrap">
+              <div className="table-wrapper">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      {visibleCols.map((column) => (
+                        <th key={column}>{column}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(detail?.items ?? []).map((row, index) => (
+                      <tr key={index}>
+                        {visibleCols.map((column) => (
+                          <td key={column}>
+                            {String((row as Record<string, unknown>)[column] ?? "")}
+                          </td>
+                        ))}
+                      </tr>
                     ))}
-                  </tr>
-                ))}
-                {!detail?.items?.length && !detailLoading && (
-                  <tr>
-                    <td colSpan={Math.max(visibleCols.length, 1)} className="table-empty-cell">
-                      当前筛选下暂无明细数据
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                    {!detail?.items?.length && !detailLoading && (
+                      <tr>
+                        <td
+                          colSpan={Math.max(visibleCols.length, 1)}
+                          className="table-empty-cell"
+                        >
+                          当前筛选下暂无明细数据
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
 
-          <div className="pagination">
-            <span className="pagination-status">
-              第 {detail?.page ?? detailPage} 页 · 共 {(detail?.total ?? 0).toLocaleString()} 条
-            </span>
-            <div className="btn-group">
-              <button
-                className="btn btn-sm btn-secondary"
-                disabled={detailLoading || detailPage <= 1}
-                onClick={() => setDetailPage((current) => Math.max(1, current - 1))}
-              >
-                上一页
-              </button>
-              <button
-                className="btn btn-sm btn-secondary"
-                disabled={detailLoading || !detail || detail.items.length < detailPageSize}
-                onClick={() => setDetailPage((current) => current + 1)}
-              >
-                下一页
-              </button>
+            <div className="pagination">
+              <span className="pagination-status">
+                第 {detail?.page ?? detailPage} 页 · 共 {(detail?.total ?? 0).toLocaleString()} 条
+              </span>
+              <div className="btn-group">
+                <button
+                  className="btn btn-sm btn-secondary"
+                  disabled={detailLoading || detailPage <= 1}
+                  onClick={() => setDetailPage((current) => Math.max(1, current - 1))}
+                >
+                  上一页
+                </button>
+                <button
+                  className="btn btn-sm btn-secondary"
+                  disabled={detailLoading || !detail || detail.items.length < detailPageSize}
+                  onClick={() => setDetailPage((current) => current + 1)}
+                >
+                  下一页
+                </button>
+              </div>
             </div>
           </div>
         </div>

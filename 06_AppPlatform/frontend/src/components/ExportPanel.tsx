@@ -204,11 +204,18 @@ export function applyExportToLayout(
   s: ExportSettings,
 ): Partial<Layout> {
   const leg = LEGEND_MAP[s.legendPosition] ?? LEGEND_MAP.right;
+  const existingTitle = layout.title;
   return {
     ...layout,
     showlegend: s.showLegend,
     legend: s.showLegend ? leg as Layout["legend"] : undefined,
-    title: s.chartTitle ? { text: s.chartTitle, font: { size: s.fontSize + 2 } } : undefined,
+    title: s.chartTitle
+      ? {
+          ...(typeof existingTitle === "object" && existingTitle !== null ? existingTitle as object : {}),
+          text: s.chartTitle,
+          font: { size: s.fontSize + 2 },
+        }
+      : existingTitle,
     font: { size: s.fontSize },
     paper_bgcolor: s.paperBg,
     plot_bgcolor: s.plotBg,
