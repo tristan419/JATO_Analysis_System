@@ -2864,6 +2864,28 @@ table.data-table tr:last-child td { border-bottom: none; }
   padding: 0;
 }
 
+.dashboard-main > .analysis-deck-card > .analysis-deck-head {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 272px);
+  gap: 14px;
+}
+
+.dashboard-main > .analysis-deck-card > .analysis-deck-head .analysis-deck-meta {
+  width: 100%;
+}
+
+.dashboard-main > .analysis-deck-card > .analysis-deck-head .analysis-deck-stat {
+  min-height: 68px;
+  padding: 10px 12px;
+}
+
+.dashboard-main > .analysis-deck-card > .analysis-deck-head .analysis-deck-stat-value {
+  font-size: 20px;
+}
+
+.dashboard-main > .analysis-deck-card > .analysis-deck-head .analysis-deck-stat-subvalue {
+  font-size: 11px;
+}
+
 .dashboard-time-series-card .analysis-chart-block,
 .dashboard-advanced-card .analysis-chart-block {
   gap: 14px;
