@@ -1235,18 +1235,18 @@ export function DashboardPage() {
         />
 
         {/* ── Global Time Axis ────────────────────────── */}
-        <div className="card analysis-deck-card dashboard-time-axis-card">
-          <div className="analysis-deck-head">
-            <div className="analysis-deck-copy">
+        <div className="card analysis-deck-card dashboard-time-axis-card dashboard-deck-card--compact-hero">
+          <div className="analysis-deck-head dashboard-deck-hero-head">
+            <div className="analysis-deck-copy dashboard-deck-hero-copy">
               <span className="panel-kicker">02 / Global Time Axis</span>
               <h3>Global Time Axis</h3>
               <p>统一年度与月度时间窗，控制趋势对比与后续高级分析的观察区间。</p>
-              <div className="analysis-chip-row">
+              <div className="analysis-chip-row analysis-chip-row--compact">
                 <span className="analysis-chip">{activeFilterSummary}</span>
                 <span className="analysis-chip">{timeWindowLabel}</span>
               </div>
             </div>
-            <div className="analysis-deck-meta">
+            <div className="analysis-deck-meta dashboard-deck-hero-meta">
               <div className="analysis-deck-stat">
                 <span className="analysis-deck-stat-label">Axis Mode</span>
                 <strong className="analysis-deck-stat-value">{timeAxisModeValue}</strong>
@@ -1259,7 +1259,7 @@ export function DashboardPage() {
               </div>
             </div>
           </div>
-          <div className="analysis-chart-block">
+          <div className="analysis-chart-block analysis-chart-block--compact dashboard-deck-hero-surface">
             <TimeAxis
               labels={timeLabels}
               value={timeRange}
@@ -1274,18 +1274,18 @@ export function DashboardPage() {
         </div>
 
         {/* ── Time series ─────────────────────────────── */}
-        <div className="card analysis-deck-card chart-section dashboard-time-series-card">
-          <div className="analysis-deck-head">
-            <div className="analysis-deck-copy">
+        <div className="card analysis-deck-card chart-section dashboard-time-series-card dashboard-deck-card--compact-hero">
+          <div className="analysis-deck-head dashboard-deck-hero-head">
+            <div className="analysis-deck-copy dashboard-deck-hero-copy">
               <span className="panel-kicker">03 / Time-Series Lens</span>
               <h3>Sales Time Series</h3>
               <p>在同一筛选边界下切换年度、月度与分组序列，保持趋势分析和图例交互语义一致。</p>
-              <div className="analysis-chip-row">
+              <div className="analysis-chip-row analysis-chip-row--compact">
                 <span className="analysis-chip">{activeFilterSummary}</span>
                 <span className="analysis-chip">{timeWindowLabel}</span>
               </div>
             </div>
-            <div className="analysis-deck-meta">
+            <div className="analysis-deck-meta dashboard-deck-hero-meta">
               <div className="analysis-deck-stat">
                 <span className="analysis-deck-stat-label">View Mode</span>
                 <strong className="analysis-deck-stat-value">{activeTab === "year" ? "YEAR" : "MONTH"}</strong>
@@ -1308,7 +1308,7 @@ export function DashboardPage() {
               </div>
             </div>
           </div>
-          <div className="analysis-chart-block">
+          <div className="analysis-chart-block analysis-chart-block--compact dashboard-deck-hero-surface">
           <div className="chart-header">
             <div className="tab-bar">
               <button className={"tab-btn"+(activeTab==="year"?" active":"")} onClick={()=>setActiveTab("year")}>{"\u5e74\u5ea6\u5bf9\u6bd4"}</button>
@@ -1458,18 +1458,18 @@ export function DashboardPage() {
         </div>
 
         {/* ── Advanced analysis ───────────────────────── */}
-        <div className="card analysis-deck-card dashboard-advanced-card">
-          <div className="analysis-deck-head">
-            <div className="analysis-deck-copy">
+        <div className="card analysis-deck-card dashboard-advanced-card dashboard-deck-card--compact-hero">
+          <div className="analysis-deck-head dashboard-deck-hero-head">
+            <div className="analysis-deck-copy dashboard-deck-hero-copy">
               <span className="panel-kicker">04 / Advanced Analysis</span>
               <h3>Advanced Control Deck</h3>
               <p>在同一筛选与时间窗口下切换分析域、图层和参数，承接主看板的深度分析与嵌入式 RV Finance 视图。</p>
-              <div className="analysis-chip-row">
+              <div className="analysis-chip-row analysis-chip-row--compact">
                 <span className="analysis-chip">{activeFilterSummary}</span>
                 <span className="analysis-chip">{timeWindowLabel}</span>
               </div>
             </div>
-            <div className="analysis-deck-meta">
+            <div className="analysis-deck-meta dashboard-deck-hero-meta">
               <div className="analysis-deck-stat">
                 <span className="analysis-deck-stat-label">Analysis Domain</span>
                 <strong className="analysis-deck-stat-value">{selectedAdvGroupLabel || "-"}</strong>
@@ -1492,7 +1492,7 @@ export function DashboardPage() {
               </div>
             </div>
           </div>
-          <div className="analysis-chart-block">
+          <div className="analysis-chart-block analysis-chart-block--compact dashboard-deck-hero-surface">
           {/* group button row */}
           <div className="adv-console">
             <div className="adv-console-row">
