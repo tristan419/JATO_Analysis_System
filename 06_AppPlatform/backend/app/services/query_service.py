@@ -624,7 +624,11 @@ def _aggregate_count(
 
 
 # ── Vehicle frame builder ──────────────────────────────────────
-def _build_vehicle_frame(filters: dict[str, list[str]]) -> pd.DataFrame:
+def _build_vehicle_frame(
+    filters: dict[str, list[str]],
+    *,
+    include_year_columns: bool = False,
+) -> pd.DataFrame:
     """Load a vehicle-level frame with Make, Model, Segment, Powertrain, Length, MSRP, Sales."""
     columns = repo.list_columns()
     make_col = _resolve_existing_column(MAKE_CANDIDATES, columns)
@@ -635,14 +639,33 @@ def _build_vehicle_frame(filters: dict[str, list[str]]) -> pd.DataFrame:
     length_col = _resolve_existing_column(LENGTH_CANDIDATES, columns)
     msrp_col = _resolve_existing_column(MSRP_CANDIDATES, columns)
     year_cols = _year_columns(columns)
+    supplemental_year_groups: dict[str, list[str]] = {}
+    year_load_columns = [*year_cols]
+    if include_year_columns:
+        supplemental_year_groups = _supplemental_month_year_groups(columns)
+        for month_columns in supplemental_year_groups.values():
+            year_load_columns.extend(month_columns)
 
-    needed = [c for c in [make_col, model_col, version_col, segment_col, powertrain_col, length_col, msrp_col] if c] + year_cols
+    needed = [c for c in [make_col, model_col, version_col, segment_col, powertrain_col, length_col, msrp_col] if c] + year_load_columns
     if not needed:
         return pd.DataFrame()
 
     df = repo.load_slice(columns=needed, filters=filters, limit=200_000, offset=0)
     if df.empty:
         return df
+
+    effective_year_columns: dict[str, str] = {}
+    if include_year_columns and year_load_columns:
+        df, effective_year_columns = _prepare_effective_year_value_columns(
+            df,
+            supplemental_year_groups,
+        )
+    elif year_cols:
+        effective_year_columns = {
+            year_label: year_label
+            for year_label in year_cols
+            if year_label in df.columns
+        }
 
     out = pd.DataFrame()
     if make_col and make_col in df.columns:
@@ -659,7 +682,12 @@ def _build_vehicle_frame(filters: dict[str, list[str]]) -> pd.DataFrame:
         out["Length"] = pd.to_numeric(df[length_col], errors="coerce")
     if msrp_col and msrp_col in df.columns:
         out["MSRP"] = pd.to_numeric(df[msrp_col], errors="coerce")
-    out["Sales"] = _sum_sales_columns(df, year_cols)
+    if include_year_columns:
+        for year_label, source_column in effective_year_columns.items():
+            if source_column in df.columns:
+                out[year_label] = pd.to_numeric(df[source_column], errors="coerce").fillna(0.0)
+    sales_columns = list(effective_year_columns.values()) if include_year_columns else year_cols
+    out["Sales"] = _sum_sales_columns(df, sales_columns)
     return out
 
 
@@ -756,7 +784,9 @@ def query_advanced_chart(
 def _chart_powertrain_bubble(
     filters: dict[str, list[str]], top_n: int, opts: dict,
 ) -> dict:
-    vf = _build_vehicle_frame(filters)
+    max_top_n = max(1, int(top_n))
+    show_yoy = bool(opts.get("show_yoy"))
+    vf = _build_vehicle_frame(filters, include_year_columns=show_yoy)
     if vf.empty or "Powertrain" not in vf.columns:
         return {"group": "market_structure", "chart": "powertrain_bubble", "rows": 0, "items": []}
 
@@ -768,41 +798,162 @@ def _chart_powertrain_bubble(
     grain = str(opts.get("grain", "model")).strip().lower()
     use_version_grain = grain == "version" and "Version" in vf.columns
 
+    warnings: list[str] = []
+    year_options = sorted(
+        [column for column in vf.columns if len(column) == 4 and column.isdigit()],
+        key=int,
+    )
+    yoy_compare_year = str(opts.get("yoy_compare_year", "")).strip()
+    yoy_base_year = ""
+    if show_yoy:
+        if len(year_options) < 2:
+            show_yoy = False
+            warnings.append("年度列不足两年，已自动关闭 YoY。")
+        else:
+            if yoy_compare_year not in year_options:
+                yoy_compare_year = year_options[-1]
+            compare_index = year_options.index(yoy_compare_year)
+            if compare_index == 0:
+                show_yoy = False
+                warnings.append("所选 YoY 年份缺少上一年基准，已自动关闭 YoY。")
+            else:
+                yoy_base_year = year_options[compare_index - 1]
+
+    group_top_n = bool(opts.get("group_top_n"))
+    group_dimension = str(opts.get("group_dimension", "segment")).strip().lower()
+    group_field = "Segment" if group_dimension == "segment" else "Powertrain"
+    group_dimension_label = "细分市场" if group_field == "Segment" else "动总规整"
+    raw_group_values = opts.get("group_values", [])
+    requested_group_values = [
+        str(value).strip()
+        for value in raw_group_values
+        if str(value).strip()
+    ] if isinstance(raw_group_values, list) else []
+    raw_group_top_n_map = opts.get("group_top_n_map", {})
+    group_top_n_map: dict[str, int] = {}
+    if isinstance(raw_group_top_n_map, dict):
+        for key, value in raw_group_top_n_map.items():
+            try:
+                group_top_n_map[str(key).strip()] = max(1, min(300, int(value)))
+            except (TypeError, ValueError):
+                continue
+
+    available_group_values: list[str] = []
+    selected_group_values: list[str] = []
+    grouped_top_n_applied = False
+    if group_top_n:
+        if group_field not in vf.columns:
+            warnings.append(f"当前数据不包含{group_dimension_label}字段，已跳过分组 TopN。")
+        else:
+            grouped_rank_df = (
+                vf.groupby([group_field, "Model"], as_index=False)["Sales"]
+                .sum()
+                .sort_values("Sales", ascending=False)
+            )
+            available_group_values = grouped_rank_df[group_field].astype(str).drop_duplicates().tolist()
+            available_group_set = set(available_group_values)
+            selected_group_values = [
+                value for value in requested_group_values
+                if value in available_group_set
+            ]
+            if selected_group_values:
+                keep_chunks: list[pd.DataFrame] = []
+                for grouped_value in selected_group_values:
+                    group_topn = int(group_top_n_map.get(grouped_value, max_top_n))
+                    group_rank = grouped_rank_df[grouped_rank_df[group_field] == grouped_value]
+                    if group_rank.empty:
+                        continue
+                    keep_chunks.append(
+                        group_rank.head(group_topn)[[group_field, "Model"]]
+                    )
+                if keep_chunks:
+                    keep_pairs = pd.concat(keep_chunks, ignore_index=True).drop_duplicates()
+                    vf = vf.merge(keep_pairs, on=[group_field, "Model"], how="inner")
+                    grouped_top_n_applied = True
+            else:
+                warnings.append("已启用分组 TopN，但未选中有效分组。")
+
+    if show_yoy and yoy_compare_year and yoy_base_year:
+        vf["SalesCurrent"] = pd.to_numeric(vf[yoy_compare_year], errors="coerce").fillna(0.0)
+        vf["SalesBase"] = pd.to_numeric(vf[yoy_base_year], errors="coerce").fillna(0.0)
+    else:
+        vf["SalesCurrent"] = vf["Sales"]
+        vf["SalesBase"] = vf["Sales"]
+
     group_cols = ["Model", "Powertrain"]
     if use_version_grain:
         group_cols.insert(1, "Version")
     if "Brand" in vf.columns:
         group_cols.append("Brand")
-    if "Segment" in vf.columns:
-        segment_map = vf.groupby(group_cols, dropna=False)["Segment"].agg(lambda s: s.mode().iat[0] if not s.mode().empty else s.iloc[0])
-    else:
-        segment_map = None
+    if grouped_top_n_applied and group_field == "Segment" and "Segment" in vf.columns:
+        group_cols.append("Segment")
 
-    records = []
-    for keys, g in vf.groupby(group_cols, dropna=False):
-        sales = g["Sales"].fillna(0)
-        row = dict(zip(group_cols, keys if isinstance(keys, tuple) else (keys,)))
-        if use_version_grain:
-            model_name = str(row.get("Model", "")).strip()
-            version_name = str(row.get("Version", "")).strip()
-            row["DisplayName"] = f"{model_name} / {version_name}".strip(" /")
+    grouped = vf.groupby(group_cols, dropna=False)
+    agg = grouped.agg(
+        Length=("Length", "median"),
+        MSRP=("MSRP", "median"),
+        MsrpMin=("MSRP", "min"),
+        MsrpMax=("MSRP", "max"),
+        Sales=("Sales", "sum"),
+        SalesCurrent=("SalesCurrent", "sum"),
+        SalesBase=("SalesBase", "sum"),
+    ).reset_index()
+
+    if use_version_grain:
+        agg["DisplayName"] = (
+            agg["Model"].astype(str).str.strip()
+            + " / "
+            + agg["Version"].astype(str).str.strip()
+        ).str.strip(" /")
+        agg["VariantCount"] = 1
+    else:
+        agg["DisplayName"] = agg["Model"].astype(str).str.strip()
+        if "Version" in vf.columns:
+            variant_counts = grouped["Version"].nunique().reset_index(name="VariantCount")
         else:
-            row["DisplayName"] = str(row.get("Model", "")).strip()
-        row["Length"] = float(pd.to_numeric(g["Length"], errors="coerce").median())
-        row["MSRP"] = float(pd.to_numeric(g["MSRP"], errors="coerce").median())
-        row["MsrpMin"] = float(pd.to_numeric(g["MSRP"], errors="coerce").min())
-        row["MsrpMax"] = float(pd.to_numeric(g["MSRP"], errors="coerce").max())
-        row["VariantCount"] = 1 if use_version_grain else (int(g["Version"].nunique()) if "Version" in g.columns else int(len(g)))
-        row["BubbleGrain"] = "version" if use_version_grain else "model"
-        if segment_map is not None:
-            row["Segment"] = str(segment_map.loc[keys])
-        row["Sales"] = float(sales.sum())
-        records.append(row)
-    agg = pd.DataFrame(records)
-    agg = agg.sort_values("Sales", ascending=False).head(max(1, int(top_n)))
+            variant_counts = grouped.size().reset_index(name="VariantCount")
+        agg = agg.merge(variant_counts, on=group_cols, how="left")
+
+    agg["BubbleGrain"] = "version" if use_version_grain else "model"
+
+    if "Segment" in vf.columns and "Segment" not in group_cols:
+        segment_map = grouped["Segment"].agg(
+            lambda series: str(series.mode().iat[0]) if not series.mode().empty else str(series.iloc[0])
+        ).reset_index(name="Segment")
+        agg = agg.merge(segment_map, on=group_cols, how="left")
+
+    if show_yoy and yoy_compare_year and yoy_base_year:
+        base_sales = pd.to_numeric(agg["SalesBase"], errors="coerce")
+        current_sales = pd.to_numeric(agg["SalesCurrent"], errors="coerce")
+        yoy_ratio = (current_sales - base_sales).div(base_sales.where(base_sales != 0))
+        yoy_ratio = pd.to_numeric(yoy_ratio, errors="coerce").replace([np.inf, -np.inf], np.nan)
+        agg["YoYPct"] = (yoy_ratio.fillna(0.0).clip(-0.8, 3.0) * 100).round(2)
+    else:
+        agg["YoYPct"] = 0.0
+
+    agg = agg.sort_values("Sales", ascending=False)
+    if not grouped_top_n_applied:
+        agg = agg.head(max_top_n)
 
     items = agg.to_dict(orient="records")
-    return {"group": "market_structure", "chart": "powertrain_bubble", "rows": len(items), "items": items}
+    return {
+        "group": "market_structure",
+        "chart": "powertrain_bubble",
+        "rows": len(items),
+        "items": items,
+        "meta": {
+            "yoyEnabled": bool(show_yoy and yoy_compare_year and yoy_base_year),
+            "yoyCompareYear": yoy_compare_year,
+            "yoyBaseYear": yoy_base_year,
+            "availableYears": year_options,
+            "groupTopNApplied": grouped_top_n_applied,
+            "groupDimension": group_dimension,
+            "groupDimensionLabel": group_dimension_label,
+            "groupValues": selected_group_values,
+            "availableGroupValues": available_group_values,
+            "warnings": warnings,
+        },
+    }
 
 
 # ── Chart: Segment Share by Length ─────────────────────────────

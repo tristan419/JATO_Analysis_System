@@ -278,74 +278,134 @@ bash 03_Scripts/deploy_fullstack_server.sh
 
 这是服务器侧回滚命令，只建议在明确知道目标提交的情况下执行。
 
-## 12. 前端性能优化（防止数据大导致网页卡死）
+## 12. 带宽、并发与页面拆分建议（12Mbps / 4C16G 场景）
 
-### 12.1 核心问题
+### 12.1 核心判断
 
-JATO 数据集包含 20+ 国家、多年历史数据，Parquet 文件超过 60MB。如果一次性把所有数据推给浏览器，会导致：
-- 网络传输超时（特别是弱网）
-- 浏览器内存溢出
-- Plotly 图表渲染卡死
+当前 Fullstack 架构已经基本是“前后端只传数据”的模式：
 
-### 12.2 已实施的前端优化
+- 浏览器通过 `/v1/...` API 请求聚合结果、分页明细和图表数据
+- 后端在服务器本地读取分区 Parquet，并按筛选条件过滤、聚合、分页后返回 JSON
+- 浏览器负责收到数据后画图，而不是直接下载原始 Parquet / Excel
 
-| 优化项 | 做法 | 效果 |
-|--------|------|------|
-| 代码分割 | `vite.config.ts` 中 `manualChunks` 把 plotly、recharts、react、router 拆分 | 首屏只下载 ~118KB (gzip) |
-| Plotly 懒加载 | `React.lazy` + `Suspense` 按需加载 plotly-vendor chunk | 首屏不下载 Plotly (~1.5MB) |
-| Dashboard 懒加载 | `DashboardPage.tsx` 中 `lazy(() => import(...))` | 未访问 Dashboard 不加载图表组件 |
-| PNG 导出动态导入 | `ExportPanel.tsx` 中 `import("plotly.js-dist-min")` | 只在用户点导出时才下载 |
-| gzip 压缩 | nginx 层启用 `gzip on` | 资源传输体积减少 50-80% |
+因此，12Mbps 带宽场景下的首要瓶颈不是 API 数据体积，而是前端静态资源，尤其是 Plotly 相关 JS 包。
 
-### 12.3 后端 API 防卡死建议
+### 12.2 已验证的线上传输规模（2026-04-08）
 
-目前后端直接从 Parquet/分区数据集读取数据。面对大数据量需要：
+以下数据来自已部署的腾讯云实例，对浏览器实际压缩传输体积做的抽样测量：
 
-**已实施**：
-- Parquet 分区按「国家」存储（`partitioned_dataset_v1/国家=XXX/`），查询时只扫描需要的分区
-- FastAPI 流式响应，后端只返回筛选后的数据
+| 项目 | 压缩后体积 | 说明 |
+| --- | --- | --- |
+| `/v1/analysis/overview` | 约 522B | 首屏 KPI + 年/月概览 |
+| `/v1/analysis/time-series-grouped` | 约 3.2KB | 一个典型分组图请求 |
+| `/v1/analysis/detail`（100 行、5 列） | 约 10.5KB | 一页明细数据 |
+| `/assets/react-vendor-*.js` | 约 59KB gzip | React 基础运行时 |
+| `/assets/router-vendor-*.js` | 约 29KB gzip | 路由代码 |
+| `/assets/plotly-vendor-*.js` | 约 475KB gzip | 已切到 cartesian Plotly bundle，仍是 Dashboard 首屏最大 chunk，但已明显收敛 |
 
-**推荐进一步优化**：
+结论：
 
-1. **后端分页**：API 对大型查询结果分页返回（每页 500-2000 行），前端按需加载
-   ```python
-   @app.get("/v1/data")
-   async def get_data(page: int = 1, page_size: int = 1000, ...):
-       df = load_partition(...)
-       return df.iloc[(page-1)*page_size : page*page_size]
-   ```
+- API 返回体积已经很小，没必要为了“省公网带宽”把原始数据直接推给前端
+- 如果要优先优化体验，应先处理静态资源体积和缓存命中率，而不是先引入数据库
 
-2. **预聚合摘要**：Dashboard 概览不需要逐行数据，只需聚合结果
-   ```python
-   # 03_Scripts/precompute_summaries.py 已提供此能力
-   # 生成按国家×年月的聚合 Parquet，后端读聚合表而非明细表
-   ```
+### 12.3 当前推荐架构
 
-3. **响应缓存**：对不经常变动的查询结果设 HTTP 缓存头
-   ```nginx
-   location /v1/ {
-       proxy_cache_valid 200 10m;   # 聚合接口缓存 10 分钟
-   }
-   ```
+针对腾讯云 12Mbps 带宽，推荐继续保持以下原则：
 
-4. **前端虚拟滚动**：表格行数超过 500 时使用 `react-window` 虚拟滚动，只渲染可视区域
+1. 前端只请求聚合 JSON、分页明细和导出文件，不下发原始大表
+2. 后端继续负责本地筛选、聚合和分页，数据源仍以分区 Parquet 为主
+3. Overview、时间序列、分组图等接口优先返回聚合结果，不暴露明细级大结果集
+4. 明细查询和 CSV 导出保持按页或按按钮触发，避免用户一进首页就拉大数据块
+5. `/assets/` 继续使用 hash 文件名 + immutable 长缓存；如果未来有更多首次访问用户，再优先接 CDN
 
-5. **图表数据采样**：数据点超过 5000 时前端自动采样到 2000 点，避免 Plotly 渲染卡顿
+只有当查询延迟、并发压力、物化聚合需求明显提升时，才考虑引入中间层分析引擎。
 
-### 12.4 nginx 静态资源长缓存
+### 12.4 4C16G / 180GB / 12Mbps 下 20 人同时使用的判断
 
-```nginx
-# 已在 jato_fullstack.conf 中配置
-location /assets/ {
-    root /opt/JATO_Analysis_System-main/06_AppPlatform/frontend/dist;
-    expires 365d;
-    add_header Cache-Control "public, immutable";
-}
-```
+这台机器的瓶颈顺序通常是：
 
-Vite 构建产物文件名自带 hash（如 `index-C0WnnW3p.js`），代码变更后文件名自动变化，所以可以安全设置长缓存。
+1. 公网带宽
+2. 单实例 Python 查询吞吐
+3. 前端大体积图表库首次下载
 
-### 12.5 腾讯云服务器内存不足时的应急方案
+轻量并发压测结果（从外网发起，包含公网链路抖动与当前单实例部署影响）：
+
+| 接口 | 并发数 | 结果 |
+| --- | --- | --- |
+| `overview` | 5 | 全部成功，平均约 2.93s |
+| `overview` | 10 | 9 成功 1 超时，平均约 3.43s |
+| `overview` | 20 | 18 成功 2 超时，平均约 6.67s，最长约 17.65s |
+| `time-series-grouped` | 5 | 4 成功 1 超时，平均约 2.09s |
+| `time-series-grouped` | 10 | 8 成功 2 超时，平均约 4.03s |
+| `time-series-grouped` | 20 | 19 成功 1 超时，平均约 7.94s，最长约 17.97s |
+| `detail`（100 行 5 列） | 10 | 全部成功，平均约 3.61s，最长约 9.99s |
+
+如何解读：
+
+- 如果是 20 个人“错峰查看、偶尔切筛选”，这台 4C16G 机器可以先跑
+- 如果是 20 个人“同时高频切筛选、切图、导出、看明细”，当前单实例会开始出现超时和明显排队
+- 如果 20 个人几乎同时第一次打开页面，当前 `plotly-vendor` 约 475KB gzip，20 人约 9.5MB 出口流量；12Mbps 理论吞吐约 1.5MB/s，依然会排队，但已经比早期 2.9MB bundle 明显改善
+
+所以，对这台机器的现实判断是：
+
+- 适合 `20 人以内的轻中度看板浏览`
+- 不适合 `20 人同时重度交互 + 首次冷启动访问`
+
+如果你希望 20 个分析用户稳定同时在线，优先顺序建议是：
+
+1. 让静态资源走 CDN 或更强缓存命中
+2. 把明细表和导出从 Dashboard 主页面拆出去
+3. 控制明细页默认页大小与导出上限
+4. 再考虑增加后端 worker 或第二个实例
+
+### 12.5 是否应该把明细放到独立页面
+
+建议：**是，值得拆。**
+
+原因不是“明细接口体积太大”，而是它会拉高主页面的状态复杂度和交互耦合度：
+
+- Dashboard 首页的首要目标是尽快出 KPI 和图表
+- 明细表、列选择、分页、CSV 导出属于另一类使用路径
+- 把明细留在同一页，会让 Dashboard 挂上更多本不属于首屏的状态、按钮和副作用
+- 后续如果要给明细单独做权限、缓存、虚拟滚动或更严格限流，独立页面更好做
+
+当前路由只有 Dashboard 和 CRUD 两页，结构很简单，所以拆页成本不高。推荐做法：
+
+1. 在 `src/pages/` 新增一个专门页面
+2. 从 Dashboard 中迁出明细表、列选择、分页、CSV 导出相关状态和请求
+3. Dashboard 只保留 overview、grouped time series、advanced chart 等看板能力
+4. 通过 URL query 共享筛选条件，这样 Dashboard 和明细页可以互相跳转并保留同一套 filters
+
+命名上，如果该页主要展示车型规格和行级数据，可以用：
+
+- `DetailPage.tsx`
+- `SpecificationPage.tsx`
+- `DatasetExplorerPage.tsx`
+
+其中：
+
+- 如果你想强调“规格查看”，`SpecificationPage.tsx` 可以
+- 如果你想强调“行级明细浏览”，`DetailPage.tsx` 会更直接
+
+### 12.6 什么时候才需要中间层数据库
+
+仅仅因为带宽只有 12Mbps，**不需要**现在就上中间层数据库。
+
+更合适的触发条件是：
+
+- 多个高频筛选组合需要重复秒级响应
+- 单实例 Parquet + PyArrow 在 10 到 20 个活跃分析用户下已经明显排队
+- 需要更强的物化聚合、SQL 分析或跨时间窗口缓存
+- 你准备把这个系统从“内部看板”升级为“多人持续在线的数据产品”
+
+如果后续真要上中间层，优先考虑分析型方案：
+
+- 单机优先：DuckDB
+- 多用户和更高并发：ClickHouse
+
+不建议为了这个场景先上通用 OLTP 数据库，只会增加迁移和维护成本，收益不对等。
+
+### 12.7 腾讯云服务器内存不足时的应急方案
 
 如果服务器只有 2-4GB 内存：
 

@@ -210,11 +210,11 @@
 | Top N 控制 | ✅ st.number_input | ✅ advTopN |
 | 品牌分面 (facet_col="Brand") | ✅ st.checkbox | ✅ 客户端品牌分面 |
 | 气泡倍率放大 | ✅ st.select_slider [2,3,4] | ✅ advBubbleScale ×2/×3/×4 |
-| YoY hover叠加 | ✅ st.checkbox + selectbox | ❌ |
-| 分组TopN (per-group N) | ✅ 高级设置expander | ❌ |
-| 分组维度 (动总/细分) | ✅ st.selectbox | ❌ |
+| YoY hover叠加 | ✅ st.checkbox + selectbox | ✅ hover + compare year |
+| 分组TopN (per-group N) | ✅ 高级设置expander | ✅ per-group TopN |
+| 分组维度 (动总/细分) | ✅ st.selectbox | ✅ select |
 
-**React覆盖率：5/8 = 62.5%**
+**React覆盖率：8/8 = 100%**
 
 ### 7b. 季节性热力图 (seasonality_heatmap)
 
@@ -486,7 +486,7 @@
 | KPI卡片 | 6 | 6 | **100%** | ↑ 口径说明 |
 | 年度时序 | 11 | 9 | **82%** | ↑ 数据标签+配色 |
 | 月度时序 | 5 | 4 | **80%** | ↑ 总和模式已接入粒度切换 |
-| 动力气泡图 | 8 | 4 | **50%** | ↑ 气泡倍率 |
+| 动力气泡图 | 8 | 8 | **100%** | ↑ YoY + 分组TopN + 分面标题 |
 | 季节性热力图 | 4 | 3 | **75%** | ↑ 改为 Plotly heatmap |
 | 尺寸段份额 | 3 | 3 | **100%** | ↑ 百分比标签 |
 | NEV续航分布 | 12 | 12 | **100%** | ↑ 轴上限/口径/分面/KPI/结构表 |
@@ -668,7 +668,7 @@
 
 | 图表 | Streamlit独有控件 | React缺失 |
 |------|-------------------|-----------|
-| 动力气泡图 | 品牌分面 facet_col、~~气泡倍率×2/3/4~~、YoY叠加hover、分组维度选择 | 品牌分面、YoY叠加、分组维度 |
+| 动力气泡图 | ~~品牌分面 facet_col~~、~~气泡倍率×2/3/4~~、~~YoY叠加hover~~、~~分组TopN (per-group N)~~、~~分组维度选择~~ | 无 |
 | NEV续航分布 | ~~BEV/PHEV筛选~~、~~续航轴上限~~、~~步长~~、~~分布口径~~、~~按Model堆叠~~、~~按品牌分面~~、~~参数重置~~、~~增长KPI(4指标)~~、~~结构分解表~~、~~集中度告警~~ | 无 |
 | 电池容量vsMSRP | ~~动总筛选~~、品牌分面、~~相关系数显示~~ | 品牌分面 |
 | 价格迁移 | ~~折线/面积切换~~、分动总查看、动总筛选、MSRP质量摘要、峰值价格带表 | 分动总查看、动总筛选、摘要/表 |

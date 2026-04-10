@@ -1,6 +1,7 @@
 # React App vs Streamlit 功能差距分析
 
 > 生成时间：2025-07
+> 说明：本文档保留为历史差距快照；当前 Fullstack 对比与现状判断请优先参考 `STREAMLIT_VS_REACT_COMPARISON.md`。
 > 对比对象：`06_AppPlatform/frontend` (React+recharts) vs `05_DashBoard/dashboard/views.py` (Streamlit+Plotly)
 
 ---
