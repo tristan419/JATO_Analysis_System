@@ -1,0 +1,44 @@
+{
+  "generatedAtUtc": "2026-04-13T05:36:14.645916+00:00",
+  "rows": 944362,
+  "columns": 96,
+  "schemaVersion": "1.1",
+  "manifestSchemaVersion": "1.1",
+  "sourceFiles": [
+    "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+    "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx (仅缺失3国)"
+  ],
+  "sheetName": "Data Export",
+  "outputFile": "jato_full_archive.parquet",
+  "outputBytes": 37474492,
+  "countries": [
+    "丹麦",
+    "克罗地亚",
+    "匈牙利",
+    "奥地利",
+    "希腊",
+    "德国",
+    "意大利",
+    "挪威",
+    "捷克",
+    "斯洛伐克",
+    "斯洛文尼亚",
+    "比利时",
+    "法国",
+    "波兰",
+    "瑞典",
+    "瑞士",
+    "罗马尼亚",
+    "芬兰",
+    "荷兰",
+    "葡萄牙",
+    "西班牙"
+  ],
+  "countryCount": 21,
+  "timeRange": {
+    "start": "2023 Jan",
+    "end": "2026 Feb",
+    "note": "18国覆盖至2026 Feb；斯洛伐克/斯洛文尼亚/芬兰仅至2026 Jan"
+  },
+  "mergeNote": "由21国baseline(Jan2026)与18国patch(Feb2026)合并生成，3个缺失国家(斯洛伐克、斯洛文尼亚、芬兰)保留baseline数据"
+}

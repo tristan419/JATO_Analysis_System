@@ -1,0 +1,111 @@
+# ─────────────────────────────────────────────────────────────
+# Source definition template
+# Copy this file, rename to <brand>_<country>.yaml,
+# fill in the values, and the toolkit will auto-register it.
+#
+# No Python code changes needed!
+# ─────────────────────────────────────────────────────────────
+
+# ── Identity ─────────────────────────────────────────────────
+source_code: brand_XX_type        # unique key, e.g. "audi_de_scrapling"
+country: 德国                      # Chinese country name (must match COUNTRY_CURRENCY)
+brand: Brand                      # brand display name
+source_url: https://example.com   # base URL of the data source
+source_type: manufacturer_official  # or "third_party"
+price_semantics: base_msrp         # or "as_configured", "on_the_road"
+
+# ── Extractor type ───────────────────────────────────────────
+# Choose one:  "scrapling" (web page), "http_json" (REST API),
+# or "playwright" (dynamic trim -> powertrain card flow)
+extractor_type: scrapling
+
+# Optional: merge a shared profile preset before applying local overrides.
+# Useful for brand families like Volkswagen where many draft sources share
+# the same extractor skeleton.
+# profile_preset: ../source_drafts/suv_only_country_model_top30/_shared/presets/volkswagen_model_page_scrapling.yaml
+
+# ── Profile (depends on extractor_type) ──────────────────────
+profile:
+  url: https://example.com/models
+
+  # --- scrapling only ---
+  tier: http                      # http | stealth | dynamic
+  headless: true
+  network_idle: true
+  impersonate: chrome
+  solve_cloudflare: false
+
+  # JSON-LD strategy (preferred)
+  json_script_selector: "script[type='application/ld+json']"
+  json_vehicles_path: offers
+
+  # CSS fallback strategy
+  css:
+    vehicle_container: ".model-card"
+    model: ".model-name::text"
+    trim: ".model-variant::text"
+    price: ".price-value::text"
+    # currency: null              # optional CSS selector
+    # availability: null          # optional CSS selector
+
+  # --- http_json only ---
+  # method: GET
+  # headers:
+  #   Accept-Language: de-DE
+  # params: {}
+  # body: null                    # for POST
+  # field_mapping:
+  #   model: modelName
+  #   trim: trimName
+  #   price: basePrice
+  #   currency: currency
+  #   tax_included: taxIncluded
+  #   price_label: priceLabel
+  #   availability: availability
+  #   vehicles_path: data.models
+
+  # --- playwright only ---
+  # browser: chromium
+  # wait_until: domcontentloaded
+  # page_timeout_ms: 120000
+  # viewport_width: 1440
+  # viewport_height: 1200
+  # initial_ready_selector: '[data-testid="trimcard"]'
+  # initial_ready_timeout_ms: 60000
+  # cookie_banner_selector: '#ensNotifyBanner'
+  # cookie_reject_text: Enbart nödvändiga
+  # trim_card_selector: '[data-testid="trimcard"]'
+  # trim_name_selector: h3
+  # next_step_selector: '[data-testid="smart-offer-trim-next-step-cta"]'
+  # detail_ready_selector: '[data-testid="engine-card"]'
+  # detail_card_selector: '[data-testid="engine-card"]'
+  # detail_price_selector: '[data-testid="price-container"]'
+  # powertrain_line_count: 2
+  # combine_trim_and_powertrain: true
+  # combined_trim_separator: ' | '
+
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: "Manufacturer's Recommended Retail Price"
+
+  # Brand-family pages: keep fixed_model / fixed_jato_model empty and
+  # map official site labels onto JATO models with model_rules.
+  # model_rules:
+  #   - key: model_clio
+  #     jato_model: Clio
+  #     official_model: Clio
+  #     keywords: ["clio"]
+  # skip_if_model_unmapped: true
+
+  # Engine-level sources that emit multiple powertrains for one trim should
+  # generally combine trim + powertrain into the trim key until current_prices
+  # includes jato_powertrain in its business key.
+
+# ── Schedule ─────────────────────────────────────────────────
+# When to run automated scrapes. The runner will only execute
+# this source during the specified window.
+schedule:
+  frequency: weekly                # weekly | daily | manual_only
+  run_window_start: "00:00"        # earliest local time (server TZ)
+  run_window_end: "05:00"          # latest local time (server TZ)
+  preferred_weekday: monday        # mon-sun, for weekly frequency

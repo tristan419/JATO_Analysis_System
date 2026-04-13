@@ -1,0 +1,28 @@
+# Shared Volkswagen configurator defaults for pages that render engine cards
+# immediately without a trim-card stage.
+browser: chromium
+headless: true
+wait_until: domcontentloaded
+page_timeout_ms: 120000
+viewport_width: 1440
+viewport_height: 1200
+initial_ready_selector: '[data-testid="engine-card"]'
+initial_ready_timeout_ms: 60000
+detail_ready_selector: '[data-testid="engine-card"]'
+detail_card_selector: '[data-testid="engine-card"]'
+detail_price_selector: '[data-testid="price-container"]'
+trim_card_selector: ''
+next_step_selector: ''
+detail_card_wait_ms: 1500
+powertrain_line_count: 2
+combine_trim_and_powertrain: true
+combined_trim_separator: ' | '
+default_tax_included: true
+match_confidence: 0.84
+match_status: review_required
+structured_fields:
+  edition_rules:
+    - key: edition_special
+      label: Special Edition
+      keyword: special edition
+      special: true

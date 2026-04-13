@@ -245,12 +245,10 @@ status_service() {
 run_smoke_tests() {
   local read_headers=(
     -H "X-Auth-Token: $AUTH_TOKEN"
-    -H "X-User-Role: $USER_ROLE"
     -H "X-User-Name: $USER_NAME"
   )
   local json_headers=(
     -H "X-Auth-Token: $AUTH_TOKEN"
-    -H "X-User-Role: $USER_ROLE"
     -H "X-User-Name: $USER_NAME"
     -H "Content-Type: application/json"
   )

@@ -1,7 +1,7 @@
 # Dashboard 部署模板（v1）
 
 > 文档定位：Dashboard 部署方式、容量建议与上线前检查。
-> 返回总览：[ROADMAP（总览导航）](./ROADMAP.md)
+> 返回总览：[ROADMAP（总览导航）](../Fullstack/ROADMAP.md)
 
 > 当前约束：本项目的生产部署默认只走腾讯云 Ubuntu + systemd + nginx，不再使用 Docker 作为部署路径。
 

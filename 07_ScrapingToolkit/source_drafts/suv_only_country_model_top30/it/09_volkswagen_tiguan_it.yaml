@@ -1,0 +1,60 @@
+# Draft MSRP source scaffold generated from candidate scope report.
+# Country: 意大利 (it)
+# Country model rank: 9
+# Brand: VOLKSWAGEN
+# Model: TIGUAN
+# Suggested scope kind: single_model
+# Sales 12M: 24,172
+# Draft path: it/09_volkswagen_tiguan_it.yaml
+# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
+# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
+# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+source_code: volkswagen_tiguan_it_draft_scrapling
+country: 意大利
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.it/it/configuratore.html/__app/nuova-tiguan.app
+source_type: manufacturer_official
+price_semantics: base_msrp
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_playwright.yaml
+profile:
+  url: https://www.volkswagen.it/it/configuratore.html/__app/nuova-tiguan.app
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: Prezzo incl. IVA
+  fixed_model: TIGUAN
+  fixed_jato_model: TIGUAN
+  structured_fields:
+    powertrain_rules:
+    - key: powertrain_phev
+      powertrain: PHEV
+      keywords:
+      - ehybrid
+      - plug-in hybrid
+    - key: powertrain_mhev
+      powertrain: MHEV
+      keywords:
+      - etsi
+      - mild-hybrid
+    - key: powertrain_ice
+      powertrain: ICE
+      keywords:
+      - tdi
+      - tsi
+      - benzina
+      - diesel
+schedule:
+  frequency: manual_only
+  run_window_start: 00:00
+  run_window_end: 05:00
+  preferred_weekday: monday
+notes: Official Volkswagen model-page URL and local list-price wording were
+  superseded on 2026-04-13 by direct browser probing of the Italy
+  configurator at nuova-tiguan.app. The flow is stable trim -> MOTORI with
+  engine-card MSRP labeled "Prezzo incl. IVA", so this draft now uses the
+  shared Playwright configurator preset instead of showroom CSS selectors.
+bootstrap_meta:
+  country_model_rank: 9
+  suggested_scope_kind: single_model
+  sales_12m: 24172.0
+  model: TIGUAN

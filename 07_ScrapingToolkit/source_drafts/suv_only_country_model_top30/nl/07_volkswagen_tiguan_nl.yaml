@@ -1,0 +1,59 @@
+# Draft MSRP source scaffold generated from candidate scope report.
+# Country: 荷兰 (nl)
+# Country model rank: 7
+# Brand: VOLKSWAGEN
+# Model: TIGUAN
+# Suggested scope kind: single_model
+# Sales 12M: 5,212
+# Draft path: nl/07_volkswagen_tiguan_nl.yaml
+# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
+# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
+# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+source_code: volkswagen_tiguan_nl_draft_scrapling
+country: 荷兰
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.nl/nl/configurator.html/__app/tiguan.app
+source_type: manufacturer_official
+price_semantics: base_msrp
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_playwright.yaml
+profile:
+  url: https://www.volkswagen.nl/nl/configurator.html/__app/tiguan.app
+  cookie_reject_selector: null
+  cookie_reject_text: Weigeren
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: Consumentenadviesprijs incl. btw en bpm
+  fixed_model: TIGUAN
+  fixed_jato_model: TIGUAN
+  structured_fields:
+    powertrain_rules:
+      - key: powertrain_phev
+        powertrain: PHEV
+        keywords:
+          - ehybrid
+      - key: powertrain_mhev
+        powertrain: MHEV
+        keywords:
+          - etsi
+      - key: powertrain_ice
+        powertrain: ICE
+        keywords:
+          - tsi
+          - tdi
+          - benzine
+schedule:
+  frequency: manual_only
+  run_window_start: 00:00
+  run_window_end: 05:00
+  preferred_weekday: monday
+notes: Browser probing on 2026-04-13 confirmed the Dutch configurator entry at
+  tiguan.app and a stable trim -> Motoren flow with engine-card pricing labeled
+  "Consumentenadviesprijs incl. btw en bpm". The shared Playwright preset now
+  dismisses the Volkswagen overlay stack up front, so this draft no longer
+  depends on showroom CSS selectors.
+bootstrap_meta:
+  country_model_rank: 7
+  suggested_scope_kind: single_model
+  sales_12m: 5212.0
+  model: TIGUAN

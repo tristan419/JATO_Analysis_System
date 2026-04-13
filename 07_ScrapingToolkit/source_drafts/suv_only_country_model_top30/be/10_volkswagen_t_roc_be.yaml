@@ -1,0 +1,58 @@
+# Draft MSRP source scaffold generated from candidate scope report.
+# Country: 比利时 (be)
+# Country model rank: 10
+# Brand: VOLKSWAGEN
+# Model: T-ROC
+# Suggested scope kind: single_model
+# Sales 12M: 4,979
+# Draft path: be/10_volkswagen_t_roc_be.yaml
+# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
+# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
+# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
+# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+source_code: volkswagen_t_roc_be_draft_scrapling
+country: 比利时
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.be/nl/configurator.html/__app/de-nieuwe-t-roc.app
+source_type: manufacturer_official
+price_semantics: base_msrp
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_playwright.yaml
+profile:
+  url: https://www.volkswagen.be/nl/configurator.html/__app/de-nieuwe-t-roc.app
+  cookie_reject_selector: null
+  cookie_reject_text: Weigeren
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: Prijs incl. BTW
+  fixed_model: T-ROC
+  fixed_jato_model: T-ROC
+  structured_fields:
+    powertrain_rules:
+    - key: powertrain_mhev
+      powertrain: MHEV
+      keywords:
+      - mild-hybrid
+      - etsi
+    - key: powertrain_ice
+      powertrain: ICE
+      keywords:
+      - tsi
+      - tdi
+      - benzine
+      - diesel
+schedule:
+  frequency: manual_only
+  run_window_start: 00:00
+  run_window_end: 05:00
+  preferred_weekday: monday
+notes: Browser probing on 2026-04-13 confirmed the Belgium configurator entry at
+  de-nieuwe-t-roc.app and a stable trim -> MOTOREN flow with engine-card pricing
+  labeled "Prijs incl. BTW". The shared Playwright preset now dismisses the
+  Volkswagen overlay stack up front, so this draft no longer depends on showroom
+  CSS selectors.
+bootstrap_meta:
+  country_model_rank: 10
+  suggested_scope_kind: single_model
+  sales_12m: 4979.0
+  model: T-ROC

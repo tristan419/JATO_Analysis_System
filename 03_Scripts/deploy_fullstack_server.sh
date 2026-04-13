@@ -5,6 +5,8 @@ REPO_DIR="${REPO_DIR:-/opt/JATO_Analysis_System}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@8000}"
 BACKEND_PORT="${BACKEND_PORT:-}"
+BACKEND_ENV_FILE="${BACKEND_ENV_FILE:-/etc/jato-fullstack/backend.env}"
+RUN_DATABASE_MIGRATIONS="${RUN_DATABASE_MIGRATIONS:-auto}"
 REMOTE_NAME="${REMOTE_NAME:-}"
 REPO_REMOTE_URL="${REPO_REMOTE_URL:-git@github.com:tristan419/JATO_Analysis_System.git}"
 SKIP_GIT_SYNC="${SKIP_GIT_SYNC:-false}"
@@ -29,6 +31,24 @@ PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
 
 log_section() {
   printf '\n[STEP] %s\n' "$1"
+}
+
+is_truthy() {
+  case "${1,,}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+run_privileged_bash() {
+  local script="$1"
+  shift
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    bash -lc "$script" _ "$@"
+  else
+    sudo -n bash -lc "$script" _ "$@"
+  fi
 }
 
 run_diagnostics() {
@@ -158,6 +178,28 @@ python -m pip install --upgrade pip \
   -i "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST"
 pip install -r "$BACKEND_REQUIREMENTS" \
   -i "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST"
+
+echo "[INFO] Run database migrations when configured"
+CURRENT_STEP="Run database migrations"
+log_section "$CURRENT_STEP"
+if [[ "$RUN_DATABASE_MIGRATIONS" == "auto" ]]; then
+  if [[ -f "$BACKEND_ENV_FILE" ]]; then
+    if db_state="$(run_privileged_bash 'set -a; . "$1"; set +a; if [[ -n "${APP_DATABASE_URL:-}" ]] && [[ "${APP_DATABASE_ENABLED:-false}" =~ ^(1|true|yes|on)$ ]]; then echo run; else echo skip; fi' "$BACKEND_ENV_FILE" 2>/dev/null)"; then
+      RUN_DATABASE_MIGRATIONS="$db_state"
+    else
+      RUN_DATABASE_MIGRATIONS="skip"
+    fi
+  else
+    RUN_DATABASE_MIGRATIONS="skip"
+  fi
+fi
+
+if [[ "$RUN_DATABASE_MIGRATIONS" == "true" || "$RUN_DATABASE_MIGRATIONS" == "run" ]]; then
+  run_privileged_bash 'set -Eeuo pipefail; set -a; . "$1"; set +a; export PYTHONPATH="$2"; . "$3/bin/activate"; cd "$2"; python -m alembic upgrade head' \
+    "$BACKEND_ENV_FILE" "$BACKEND_DIR" "$VENV_DIR"
+else
+  echo "[INFO] Database migrations skipped (database not configured)"
+fi
 
 echo "[INFO] Build frontend"
 CURRENT_STEP="Build frontend"

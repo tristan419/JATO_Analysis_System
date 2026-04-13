@@ -7,6 +7,9 @@ import { LoadingSurface } from "./components/LoadingSurface";
 import { DashboardPage } from "./pages/DashboardPage";
 
 const CrudPage = lazy(() => import("./pages/CrudPage").then((module) => ({ default: module.CrudPage })));
+const EngineeringPage = lazy(() => import("./pages/EngineeringPage").then((module) => ({ default: module.EngineeringPage })));
+const ReviewCasesPage = lazy(() => import("./pages/ReviewCasesPage").then((module) => ({ default: module.ReviewCasesPage })));
+const MsrpPage = lazy(() => import("./pages/MsrpPage").then((module) => ({ default: module.MsrpPage })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((module) => ({ default: module.NotFoundPage })));
 const SpecificationPage = lazy(() =>
   import("./pages/SpecificationPage").then((module) => ({ default: module.SpecificationPage }))
@@ -41,6 +44,9 @@ const router = createBrowserRouter([
       { index: true, element: <DashboardPage /> },
       { path: "specification", element: withPageLoader(<SpecificationPage />) },
       { path: "crud", element: withPageLoader(<CrudPage />) },
+      { path: "engineering", element: withPageLoader(<EngineeringPage />) },
+      { path: "review", element: withPageLoader(<ReviewCasesPage />) },
+      { path: "msrp", element: withPageLoader(<MsrpPage />) },
       { path: "*", element: withPageLoader(<NotFoundPage />) }
     ]
   }

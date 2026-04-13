@@ -1,0 +1,140 @@
+# Draft MSRP source scaffold generated from candidate scope report.
+# Country: 克罗地亚 (hr)
+# Country model rank: 4
+# Brand: RENAULT
+# Model: CAPTUR
+# Suggested scope kind: single_model
+# Sales 12M: 1,884
+# Draft path: hr/04_renault_captur_hr.yaml
+# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
+# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
+# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
+# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+source_code: renault_captur_hr_draft_scrapling
+country: 克罗地亚
+brand: RENAULT
+source_url: https://www.renault.hr/vozila/captur.html
+source_type: manufacturer_official
+price_semantics: base_msrp
+extractor_type: scrapling
+profile:
+  url: https://www.renault.hr/vozila/captur.html
+  tier: stealth
+  headless: true
+  network_idle: true
+  impersonate: chrome
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: Preporučena maloprodajna cijena s PDV-om
+  fixed_model: CAPTUR
+  fixed_jato_model: CAPTUR
+  fixed_jato_powertrain: null
+  model_rules: []
+  skip_if_model_unmapped: false
+  copy_trim_to_jato_trim: true
+  confidence_rules:
+    base: 0.2
+    fixed_model_bonus: 0.18
+    fixed_jato_model_bonus: 0.12
+    model_rule_bonus: 0.12
+    trim_present_bonus: 0.1
+    copy_trim_to_jato_trim_bonus: 0.09
+    parsed_price_text_bonus: 0.03
+    currency_bonus: 0.01
+    price_label_bonus: 0.02
+    trim_keyword_bonuses: []
+    price_band_bonuses:
+    - key: price_band_entry
+      label: Entry price band matched
+      max: 0
+      delta: 0.0
+    - key: price_band_mid
+      label: Mid price band matched
+      min: 0
+      max: 0
+      delta: 0.01
+    - key: price_band_high
+      label: High price band matched
+      min: 0
+      delta: 0.03
+    powertrain_keyword_bonuses: []
+    powertrain_bonuses:
+    - key: powertrain_phev
+      label: 'Powertrain matched: PHEV'
+      powertrain: PHEV
+      delta: 0.03
+    - key: powertrain_hev
+      label: 'Powertrain matched: HEV'
+      powertrain: HEV
+      delta: 0.03
+    - key: powertrain_mhev
+      label: 'Powertrain matched: MHEV'
+      powertrain: MHEV
+      delta: 0.03
+    - key: powertrain_ice
+      label: 'Powertrain matched: ICE'
+      powertrain: ICE
+      delta: 0.03
+    - key: powertrain_lpg
+      label: 'Powertrain matched: LPG'
+      powertrain: LPG
+      delta: 0.03
+    clamp_min: 0.0
+    clamp_max: 1.0
+  structured_fields:
+    edition_rules:
+    - key: edition_special
+      label: Special Edition
+      keyword: special edition
+      special: true
+    powertrain_rules:
+    - key: powertrain_phev
+      powertrain: PHEV
+      keywords:
+      - plug-in hibrid
+      - plug-in hybrid
+      - E-TECH Plug-in
+      - PHEV
+    - key: powertrain_hev
+      powertrain: HEV
+      keywords:
+      - hibrid
+      - hybrid
+      - E-TECH Hybrid
+      - E-TECH
+    - key: powertrain_mhev
+      powertrain: MHEV
+      keywords:
+      - mild hybrid
+      - blagi hibrid
+    - key: powertrain_ice
+      powertrain: ICE
+      keywords:
+      - benzin
+      - TCe
+    - key: powertrain_lpg
+      powertrain: LPG
+      keywords:
+      - LPG
+      - autoplin
+      - plin
+  auto_accept_gates:
+    review_threshold: 0.95
+    semi_auto_threshold: 0.98
+    require_powertrain_match: true
+    force_review_if_powertrain_missing: true
+    force_review_if_powertrain_ambiguous: true
+    force_review_for_special_edition: true
+  json_script_selector: script[type='application/ld+json']
+schedule:
+  frequency: manual_only
+  run_window_start: 00:00
+  run_window_end: 05:00
+  preferred_weekday: monday
+notes: Keywords filled from official manufacturer website research (HR market). CSS selectors still require browser-based
+  inspection before promotion.
+bootstrap_meta:
+  country_model_rank: 4
+  suggested_scope_kind: single_model
+  sales_12m: 1884.0
+  model: CAPTUR

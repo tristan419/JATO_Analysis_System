@@ -42,6 +42,18 @@ CRUD_DATA_PATH = Path(
         str(PROJECT_ROOT / "04_Processed_data" / "app_entities.json"),
     )
 )
+ENGINEERING_IMPORT_ROOT = Path(
+    os.getenv(
+        "APP_ENGINEERING_IMPORT_ROOT",
+        str(PROJECT_ROOT / "01_RAW_DATA"),
+    )
+).resolve()
+DATABASE_URL = os.getenv("APP_DATABASE_URL", "").strip()
+DATABASE_ENABLED = _parse_bool_env(
+    "APP_DATABASE_ENABLED",
+    bool(DATABASE_URL),
+)
+DATABASE_ECHO = _parse_bool_env("APP_DATABASE_ECHO", False)
 
 API_PREFIX = "/v1"
 APP_NAME = "JATO Fullstack API"
@@ -65,3 +77,25 @@ FILTER_OPTIONS_SNAPSHOT_TTL_SECONDS = int(
 
 AUTH_ENABLED = _parse_bool_env("APP_AUTH_ENABLED", True)
 AUTH_TOKEN = os.getenv("APP_AUTH_TOKEN", "change-me")
+
+# Token → role mapping: "token1:admin,token2:editor,token3:viewer"
+# Falls back to AUTH_TOKEN with editor role when not set.
+_raw_token_role_map = os.getenv("APP_TOKEN_ROLE_MAP", "").strip()
+TOKEN_ROLE_MAP: dict[str, str] = {}
+if _raw_token_role_map:
+    for pair in _raw_token_role_map.split(","):
+        pair = pair.strip()
+        if ":" in pair:
+            tok, role = pair.rsplit(":", 1)
+            TOKEN_ROLE_MAP[tok.strip()] = role.strip().lower()
+if not TOKEN_ROLE_MAP and AUTH_TOKEN:
+    TOKEN_ROLE_MAP[AUTH_TOKEN] = "editor"
+
+CORS_ORIGINS: list[str] = [
+    origin.strip()
+    for origin in os.getenv(
+        "APP_CORS_ORIGINS",
+        "http://localhost:5173,http://localhost:3000",
+    ).split(",")
+    if origin.strip()
+]

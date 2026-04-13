@@ -1,0 +1,49 @@
+# Draft MSRP source scaffold generated from candidate scope report.
+# Country: 德国 (de)
+# Country model rank: 3
+# Brand: VOLKSWAGEN
+# Model: T-CROSS
+# Suggested scope kind: single_model
+# Sales 12M: 30,942
+# Draft path: de/03_volkswagen_t_cross_de.yaml
+# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
+# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
+# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+source_code: volkswagen_t_cross_de_draft_scrapling
+country: 德国
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.de/de/konfigurator.html/__app/t-cross-2024/energy-sondermodelle/energy.app
+source_type: manufacturer_official
+price_semantics: base_msrp
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_engine_card_playwright.yaml
+profile:
+  url: https://www.volkswagen.de/de/konfigurator.html/__app/t-cross-2024/energy-sondermodelle/energy.app
+  fixed_trim: ENERGY
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: Preis inkl. MwSt.
+  fixed_model: T-CROSS
+  fixed_jato_model: T-CROSS
+  structured_fields:
+    powertrain_rules:
+    - key: powertrain_ice
+      powertrain: ICE
+      keywords:
+      - benzin
+      - tsi
+schedule:
+  frequency: manual_only
+  run_window_start: 00:00
+  run_window_end: 05:00
+  preferred_weekday: monday
+notes: Browser-probed Volkswagen Germany configurator page renders engine-card
+  entries directly at load under the ENERGY special-edition path. Shared selector
+  set [data-testid="engine-card"] and [data-testid="price-container"] was
+  verified on 2026-04-13, with local price wording "Preis inkl. MwSt." visible
+  on the live page.
+bootstrap_meta:
+  country_model_rank: 3
+  suggested_scope_kind: single_model
+  sales_12m: 30942.0
+  model: T-CROSS

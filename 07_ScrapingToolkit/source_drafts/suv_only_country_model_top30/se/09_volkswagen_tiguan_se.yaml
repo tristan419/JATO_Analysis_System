@@ -1,0 +1,62 @@
+# Draft MSRP source scaffold generated from candidate scope report.
+# Country: 瑞典 (se)
+# Country model rank: 9
+# Brand: VOLKSWAGEN
+# Model: TIGUAN
+# Suggested scope kind: single_model
+# Sales 12M: 4,603
+# Draft path: se/09_volkswagen_tiguan_se.yaml
+# This draft now uses the generic Playwright trim-card -> engine-card flow.
+# It emits one observation per trim + powertrain so current_prices does not
+# collapse multiple powertrains onto the same trim key.
+source_code: volkswagen_tiguan_se_draft_scrapling
+country: 瑞典
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.se/sv/bygg-din-bil.html/__app/31106.app
+source_type: manufacturer_official
+price_semantics: base_msrp
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_playwright.yaml
+profile:
+  url: https://www.volkswagen.se/sv/bygg-din-bil.html/__app/31106.app
+  cookie_reject_text: Enbart nödvändiga
+  default_currency: SEK
+  default_price_label: Rekommenderat cirkapris inkl. moms
+  fixed_model: TIGUAN
+  fixed_jato_model: TIGUAN
+  structured_fields:
+    powertrain_rules:
+      - key: powertrain_phev
+        powertrain: PHEV
+        keywords:
+          - eHybrid
+          - laddhybrid
+          - Tiguan eHybrid
+          - laddbar
+      - key: powertrain_mhev
+        powertrain: MHEV
+        keywords:
+          - mild hybrid
+          - eTSI
+      - key: powertrain_ice
+        powertrain: ICE
+        keywords:
+          - bensin
+          - diesel
+          - TSI
+          - TDI
+          - bensinare
+schedule:
+  frequency: manual_only
+  run_window_start: 00:00
+  run_window_end: 05:00
+  preferred_weekday: monday
+notes: Volkswagen SE Tiguan now uses a Playwright-driven configurator flow. The extractor clicks each trim card, advances
+  into Drivlina, and emits one observation per trim+powertrain pair so current-price materialization will not collapse
+  multiple engines onto the same trim key.
+bootstrap_meta:
+  country_model_rank: 9
+  suggested_scope_kind: single_model
+  sales_12m: 4603.0
+  model: TIGUAN
+  require_powertrain_match: true

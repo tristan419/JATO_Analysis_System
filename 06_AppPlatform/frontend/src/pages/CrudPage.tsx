@@ -89,7 +89,7 @@ export function CrudPage() {
             <div className="dashboard-hero-copy crud-hero-copy">
               <span className="page-kicker">03 / Data Control</span>
               <h1>CRUD Control Deck</h1>
-              <p>把基础实体管理、搜索、分页和列表操作统一进 Dashboard 的 hero 节奏里，避免这个工作视图继续保留旧壳层语言。</p>
+              
               <div className="dashboard-hero-inline-summary">
                 <span className="selection-ribbon-label">Current scope</span>
                 <span className="selection-ribbon-value">{querySummary}</span>
@@ -143,7 +143,7 @@ export function CrudPage() {
         <div className="card crud-card">
           <div className="detail-section-head">
             <div>
-              <div className="card-title">检索与排序</div>
+              <div className="card-title">Filter</div>
               <p className="section-note">保留简单 CRUD 逻辑，但把筛选和排序入口做成更接近控制台的信息面板。</p>
             </div>
             <div className="table-status-chip">

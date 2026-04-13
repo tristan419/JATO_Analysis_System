@@ -15,6 +15,7 @@ from build_partitioned_dataset import (
 from elt_worker import (
     SUPPORTED_CONFLICT_POLICIES,
     convert_jato_to_parquet,
+    parse_csv_list,
     resolve_input_files,
 )
 from logging_utils import build_job_id, get_logger
@@ -84,6 +85,67 @@ def resolve_conflict_report_path(
     if conflict_report_text:
         return resolve_path(conflict_report_text)
     return resolve_path(output_path_text).parent / "conflict_report.json"
+
+
+def resolve_refresh_inputs(args: argparse.Namespace) -> dict[str, Any]:
+    patch_input_items = parse_csv_list(args.patch_input_files)
+    explicit_mode_enabled = bool(args.baseline_input or patch_input_items)
+
+    if explicit_mode_enabled:
+        if args.input or args.input_files or args.merge_all_xlsx:
+            raise ValueError(
+                "--baseline-input / --patch-input-files 不能与 "
+                "--input / --input-files / --merge-all-xlsx 混用。"
+            )
+        if not args.baseline_input:
+            raise ValueError(
+                "使用 --patch-input-files 时必须同时提供 --baseline-input。"
+            )
+
+        requested_inputs = [args.baseline_input, *patch_input_items]
+        explicit_input_files = ",".join(requested_inputs)
+        source_files = resolve_input_files(
+            input_path=None,
+            input_files=explicit_input_files,
+            raw_dir=args.raw_dir,
+            merge_all_xlsx=False,
+        )
+        return {
+            "mode": (
+                "explicit_baseline_patch"
+                if patch_input_items
+                else "explicit_baseline_only"
+            ),
+            "requestedBaselineInput": args.baseline_input,
+            "requestedPatchInputs": patch_input_items,
+            "resolvedBaselineInput": to_project_relative(source_files[0]),
+            "resolvedPatchInputs": [
+                to_project_relative(path)
+                for path in source_files[1:]
+            ],
+            "sourceFiles": source_files,
+            "etlInputPath": None,
+            "etlInputFiles": ",".join(str(path) for path in source_files),
+            "etlMergeAllXlsx": False,
+        }
+
+    source_files = resolve_input_files(
+        input_path=args.input,
+        input_files=args.input_files,
+        raw_dir=args.raw_dir,
+        merge_all_xlsx=bool(args.merge_all_xlsx),
+    )
+    return {
+        "mode": "legacy_selector",
+        "requestedBaselineInput": None,
+        "requestedPatchInputs": [],
+        "resolvedBaselineInput": None,
+        "resolvedPatchInputs": [],
+        "sourceFiles": source_files,
+        "etlInputPath": args.input,
+        "etlInputFiles": args.input_files,
+        "etlMergeAllXlsx": bool(args.merge_all_xlsx),
+    }
 
 
 def create_refresh_backup(
@@ -675,12 +737,8 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
 
     incremental_enabled = bool(args.incremental or args.skip_unchanged)
     rollback_enabled = not bool(args.no_rollback)
-    source_input_files = resolve_input_files(
-        input_path=args.input,
-        input_files=args.input_files,
-        raw_dir=args.raw_dir,
-        merge_all_xlsx=bool(args.merge_all_xlsx),
-    )
+    refresh_inputs = resolve_refresh_inputs(args)
+    source_input_files = list(refresh_inputs["sourceFiles"])
     fingerprint_path = resolve_path(args.fingerprint)
     current_fingerprint = build_refresh_fingerprint(
         source_files=source_input_files,
@@ -765,8 +823,15 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
                 "excelInput": args.input,
                 "excelInputs": args.input_files,
                 "mergeAllXlsx": bool(args.merge_all_xlsx),
+                "refreshInputMode": refresh_inputs["mode"],
+                "baselineInput": refresh_inputs["requestedBaselineInput"],
+                "patchInputFiles": refresh_inputs["requestedPatchInputs"],
                 "resolvedExcelInput": resolved_excel_inputs[0],
                 "resolvedExcelInputs": resolved_excel_inputs,
+                "resolvedBaselineInput": refresh_inputs[
+                    "resolvedBaselineInput"
+                ],
+                "resolvedPatchInputs": refresh_inputs["resolvedPatchInputs"],
                 "rawDir": args.raw_dir,
                 "sheet": args.sheet,
                 "partitionCols": partition_cols,
@@ -845,10 +910,10 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
     try:
         step_start = time.time()
         output_parquet, output_manifest = convert_jato_to_parquet(
-            input_path=args.input,
-            input_files=args.input_files,
+            input_path=refresh_inputs["etlInputPath"],
+            input_files=refresh_inputs["etlInputFiles"],
             raw_dir=args.raw_dir,
-            merge_all_xlsx=bool(args.merge_all_xlsx),
+            merge_all_xlsx=bool(refresh_inputs["etlMergeAllXlsx"]),
             output_path=args.output,
             manifest_path=args.manifest,
             sheet_name=args.sheet,
@@ -936,8 +1001,15 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
                 "excelInput": args.input,
                 "excelInputs": args.input_files,
                 "mergeAllXlsx": bool(args.merge_all_xlsx),
+                "refreshInputMode": refresh_inputs["mode"],
+                "baselineInput": refresh_inputs["requestedBaselineInput"],
+                "patchInputFiles": refresh_inputs["requestedPatchInputs"],
                 "resolvedExcelInput": resolved_excel_inputs[0],
                 "resolvedExcelInputs": resolved_excel_inputs,
+                "resolvedBaselineInput": refresh_inputs[
+                    "resolvedBaselineInput"
+                ],
+                "resolvedPatchInputs": refresh_inputs["resolvedPatchInputs"],
                 "rawDir": args.raw_dir,
                 "sheet": args.sheet,
                 "partitionCols": partition_cols,
@@ -1045,6 +1117,21 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="多个 Excel 输入路径（逗号分隔）。",
+    )
+    parser.add_argument(
+        "--baseline-input",
+        type=str,
+        default=None,
+        help=(
+            "baseline Excel 路径；"
+            "与 --patch-input-files 组合，显式构造 baseline + patch 输入。"
+        ),
+    )
+    parser.add_argument(
+        "--patch-input-files",
+        type=str,
+        default=None,
+        help="patch Excel 路径（逗号分隔）；需与 --baseline-input 搭配使用。",
     )
     parser.add_argument(
         "--raw-dir",

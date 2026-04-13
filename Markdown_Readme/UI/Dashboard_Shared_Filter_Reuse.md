@@ -258,6 +258,71 @@ SpecificationPage 应该只负责：
 
 - 启动本地 preview 服务。
 - 跑 Dashboard / Specification 的 mock 浏览器回归。
+
+## 10. 后续新增的可复用后台组件
+
+最近这轮管理台改造，又新增了两类可以继续复用的前端原语，不应该再回到“每个页面自己写一份搜索框/状态小窗格”的方式。
+
+对应文件：
+
+- 06_AppPlatform/frontend/src/components/TextSearchFilters.tsx
+- 06_AppPlatform/frontend/src/components/RollingTickerCard.tsx
+
+### TextSearchFilters
+
+这一层解决的是 Review、MSRP、后续 CRUD / Engineering 这类后台页里最常见的三个文本筛选：country、brand、model。
+
+它已经内置两部分语义：
+
+1. 三联文本搜索字段的统一布局。
+2. `useTextSearchFilters` 里 320ms 自动去抖应用。
+
+为什么这层要抽出来：
+
+1. 后台页普遍不想加“搜索”按钮，但又不希望每打一字就重刷表格。
+2. 如果每个页面自己写一版 debounce，很快会出现延迟不一致、按钮行为不一致、重置不一致。
+3. 文本筛选不是 Dashboard 那种复杂多选，它适合走一套更轻的共享控件。
+
+现在推荐的接法是：
+
+1. 页面持有 `draft` 和 `applied` 两层值。
+2. 输入时只改 `draft`。
+3. 停止输入约 0.3 秒后自动把 `draft` 提交到 `applied`，再触发表格刷新。
+4. 显式点击“刷新”时，如果仍有 pending draft，优先提交 draft，而不是发旧请求。
+
+### RollingTickerCard
+
+这一层解决的是“后台状态区除了数字 KPI，还需要一个轻量、连续、可扫一眼的活动名单窗格”。
+
+当前第一处落地是 Review Cases 页面的国家轮播窗格：
+
+1. 输入是当前 review queue 里存在的国家英文名。
+2. 视觉上采用近似 slot machine / casino reel 的纵向滚动。
+3. 动画不是定速，而是每次随机 idle + 随机 transition duration，避免像机械秒表。
+4. 在密度更高的 toolbar 场景，可用 `reel-only` 变体只保留滚轮本体，把数字摘要交给旁边的独立 KPI 条带。
+
+为什么值得抽象成组件：
+
+1. 后面可以直接复用到品牌轮播、模型轮播、活跃项目轮播。
+2. 它本质上是一个通用“滚动名单 KPI 卡片”，不是 Review 专属逻辑。
+3. 这类信息如果塞进普通 badge，会太静态；如果塞进大图表，又太重。
+
+当前推荐组合：
+
+1. 左侧放一个窄 KPI strip，表达 `Alive / All`、`JATO 21` 这类静态数字。
+2. 右侧放 `RollingTickerCard` 的 `reel-only` 变体，只负责动态滚动当前名单。
+3. 两者都控制成低高度 dashboard band，而不是高卡片。
+
+### 一个容易再次犯错的点：JATO 21 不等于 alias 表长度
+
+Review 页的 Countries KPI 里，`JATO 21` 表示的是基线数据口径里的 21 国，而不是 alias / 扩展市场配置项的条目数。
+
+因此这里要明确区分两件事：
+
+1. `JATO_BASELINE_COUNTRY_COUNT`：用于产品 KPI、基线覆盖口径展示，当前是 21。
+2. `COUNTRY_ALIAS_GROUPS`：用于搜索别名和扩展市场映射，允许比 21 更大，例如后续试探 UK / Ireland 时仍可保留别名配置。
+
+不要再直接拿 alias 表长度去显示“JATO 国家数”，否则很容易把扩展市场误显示成产品基线范围。
 - 回归结束后自动关闭 preview。
 
 `npm run check:frontend`

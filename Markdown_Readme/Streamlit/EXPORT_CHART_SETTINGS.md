@@ -1,7 +1,7 @@
 # 图表导出设置与 PNG 选型（合并版）
 
 > 文档定位：导出图设置能力说明与导出样式规范。
-> 返回总览：[ROADMAP（总览导航）](./ROADMAP.md)
+> 返回总览：[ROADMAP（总览导航）](../Fullstack/ROADMAP.md)
 
 ## 目标
 

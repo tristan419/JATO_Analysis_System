@@ -1,0 +1,32 @@
+# Shared Volkswagen configurator defaults for pages where trim cards already
+# expose the MSRP entry price and powertrain summary.
+browser: chromium
+headless: true
+wait_until: domcontentloaded
+page_timeout_ms: 120000
+viewport_width: 1440
+viewport_height: 1200
+initial_ready_selector: '[data-testid="trimcard"]'
+initial_ready_timeout_ms: 60000
+startup_dismiss_selectors:
+  - '#vwaUBNCloseButton'
+  - '#ensRejectAll'
+  - '#tcf2__ensCancel'
+  - '#onetrust-reject-all-handler'
+cookie_banner_selector: '#ensNotifyBanner'
+cookie_reject_selector: '#ensRejectAll'
+trim_card_selector: '[data-testid="trimcard"]'
+trim_name_selector: h3
+detail_price_selector: '[data-testid="prices"]'
+trim_card_wait_ms: 1200
+extract_from_trim_cards: true
+combine_trim_and_powertrain: false
+default_tax_included: true
+match_confidence: 0.82
+match_status: review_required
+structured_fields:
+  edition_rules:
+    - key: edition_special
+      label: Special Edition
+      keyword: special edition
+      special: true

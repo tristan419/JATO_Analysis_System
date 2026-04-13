@@ -11,6 +11,12 @@ REPO_REMOTE_URL="${REPO_REMOTE_URL:-git@github.com:tristan419/JATO_Analysis_Syst
 REPO_ARCHIVE_URL="${REPO_ARCHIVE_URL:-https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/refs/heads/main}"
 APP_AUTH_ENABLED="${APP_AUTH_ENABLED:-false}"
 APP_AUTH_TOKEN="${APP_AUTH_TOKEN:-}"
+APP_BACKEND_WORKERS="${APP_BACKEND_WORKERS:-2}"
+APP_ENGINEERING_IMPORT_ROOT="${APP_ENGINEERING_IMPORT_ROOT:-$REPO_DIR/01_RAW_DATA}"
+APP_DATABASE_ENABLED="${APP_DATABASE_ENABLED:-false}"
+APP_DATABASE_URL="${APP_DATABASE_URL:-}"
+APP_DATABASE_ECHO="${APP_DATABASE_ECHO:-false}"
+RUN_DATABASE_MIGRATIONS="${RUN_DATABASE_MIGRATIONS:-auto}"
 EMBED_FRONTEND_TOKEN="${EMBED_FRONTEND_TOKEN:-false}"
 VITE_API_BASE="${VITE_API_BASE:-/v1}"
 VITE_USER_ROLE="${VITE_USER_ROLE:-viewer}"
@@ -31,6 +37,13 @@ CURRENT_STEP="initialization"
 
 log_section() {
   printf '\n[STEP] %s\n' "$1"
+}
+
+is_truthy() {
+  case "${1,,}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 generate_token() {
@@ -134,10 +147,15 @@ trap 'rm -f "$TMP_ENV_FILE"' EXIT
 cat >"$TMP_ENV_FILE" <<EOF
 APP_AUTH_ENABLED=$APP_AUTH_ENABLED
 APP_AUTH_TOKEN=$APP_AUTH_TOKEN
+APP_BACKEND_WORKERS=$APP_BACKEND_WORKERS
 APP_PROJECT_ROOT=$REPO_DIR
 JATO_PARQUET_PATH=${JATO_PARQUET_PATH:-$REPO_DIR/04_Processed_data/jato_full_archive.parquet}
 JATO_PARTITIONED_PATH=${JATO_PARTITIONED_PATH:-$REPO_DIR/04_Processed_data/partitioned_dataset_v1}
 APP_CRUD_DATA_PATH=${APP_CRUD_DATA_PATH:-$REPO_DIR/04_Processed_data/app_entities.json}
+APP_ENGINEERING_IMPORT_ROOT=$APP_ENGINEERING_IMPORT_ROOT
+APP_DATABASE_ENABLED=$APP_DATABASE_ENABLED
+APP_DATABASE_URL=$APP_DATABASE_URL
+APP_DATABASE_ECHO=$APP_DATABASE_ECHO
 EOF
 
 sudo install -d -m 755 /etc/jato-fullstack
@@ -155,7 +173,9 @@ export REPO_DIR
 export DEPLOY_BRANCH
 export BACKEND_PORT
 export BACKEND_SERVICE_NAME
+export BACKEND_ENV_FILE
 export REPO_REMOTE_URL
+export RUN_DATABASE_MIGRATIONS
 export SKIP_GIT_SYNC=true
 export VITE_API_BASE
 export VITE_USER_ROLE
@@ -168,6 +188,15 @@ if [[ "$EMBED_FRONTEND_TOKEN" == "true" ]]; then
 else
   unset VITE_AUTH_TOKEN || true
 fi
+
+if [[ "$RUN_DATABASE_MIGRATIONS" == "auto" ]]; then
+  if is_truthy "$APP_DATABASE_ENABLED" && [[ -n "$APP_DATABASE_URL" ]]; then
+    export RUN_DATABASE_MIGRATIONS=true
+  else
+    export RUN_DATABASE_MIGRATIONS=false
+  fi
+fi
+
 bash "$REPO_DIR/03_Scripts/deploy_fullstack_server.sh"
 
 CURRENT_STEP="Install nginx configuration"

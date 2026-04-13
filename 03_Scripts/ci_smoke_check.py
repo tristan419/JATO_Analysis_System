@@ -79,6 +79,7 @@ def main() -> None:
     run([PYTHON_BIN, "-m", "py_compile", *files])
 
     run([PYTHON_BIN, "03_Scripts/elt_worker.py", "--help"])
+    run([PYTHON_BIN, "03_Scripts/raw_compare_review.py", "--help"])
     run([PYTHON_BIN, "03_Scripts/build_partitioned_dataset.py", "--help"])
     run([PYTHON_BIN, "03_Scripts/run_data_refresh_job.py", "--help"])
     run_regression_checks()

@@ -1,0 +1,52 @@
+# Draft MSRP source scaffold generated from candidate scope report.
+# Country: 西班牙 (es)
+# Country model rank: 18
+# Brand: VOLKSWAGEN
+# Model: T-CROSS
+# Suggested scope kind: single_model
+# Sales 12M: 11,645
+# Draft path: es/18_volkswagen_t_cross_es.yaml
+# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
+# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
+# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+source_code: volkswagen_t_cross_es_draft_scrapling
+country: 西班牙
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.es/es/configurador.html/__app/t-cross.app
+source_type: manufacturer_official
+price_semantics: as_configured
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_playwright.yaml
+profile:
+  url: https://www.volkswagen.es/es/configurador.html/__app/t-cross.app
+  cookie_reject_selector: null
+  cookie_reject_text: Rechazar
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: PVP Recomendado (con campañas)
+  fixed_model: T-CROSS
+  fixed_jato_model: T-CROSS
+  structured_fields:
+    powertrain_rules:
+    - key: powertrain_ice
+      powertrain: ICE
+      keywords:
+      - gasolina
+      - tsi
+schedule:
+  frequency: manual_only
+  run_window_start: 00:00
+  run_window_end: 05:00
+  preferred_weekday: monday
+notes: Browser probing on 2026-04-13 confirmed that the Spain configurator entry
+  at t-cross.app is stable once the global Volkswagen overlay stack is dismissed
+  up front. The earlier selector blocker was not dealer/runtime state but the
+  unsupported-browser and cookie/TCF overlay stack. Current engine-card pricing
+  is labeled "PVP Recomendado (con campañas)", so this draft is intentionally
+  marked as_configured and should not be promoted as base MSRP without a
+  non-campaign price path.
+bootstrap_meta:
+  country_model_rank: 18
+  suggested_scope_kind: single_model
+  sales_12m: 11645.0
+  model: T-CROSS

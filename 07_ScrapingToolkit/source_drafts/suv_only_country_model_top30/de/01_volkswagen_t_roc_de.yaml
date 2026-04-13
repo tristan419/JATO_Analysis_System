@@ -1,0 +1,56 @@
+# Draft MSRP source scaffold generated from candidate scope report.
+# Country: 德国 (de)
+# Country model rank: 1
+# Brand: VOLKSWAGEN
+# Model: T-ROC
+# Suggested scope kind: single_model
+# Sales 12M: 75,681
+# Draft path: de/01_volkswagen_t_roc_de.yaml
+# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
+# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
+# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+source_code: volkswagen_t_roc_de_draft_scrapling
+country: 德国
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.de/de/konfigurator.html/__app/der-neue-t-roc.app?---=%7B%22configuration-step-navigation-service%22%3A%22%2F%3FconfigStep%3D%257B%2522context%2522%253A%252230702-36525-Life%2522%252C%2522selectedStep%2522%253A%2522trim%2522%257D%22%7D
+source_type: manufacturer_official
+price_semantics: base_msrp
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+profile:
+  url: https://www.volkswagen.de/de/konfigurator.html/__app/der-neue-t-roc.app?---=%7B%22configuration-step-navigation-service%22%3A%22%2F%3FconfigStep%3D%257B%2522context%2522%253A%252230702-36525-Life%2522%252C%2522selectedStep%2522%253A%2522trim%2522%257D%22%7D
+  cookie_reject_text: Nur technisch notwendige Cookies
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: Preis inkl. MwSt. ab
+  fixed_model: T-ROC
+  fixed_jato_model: T-ROC
+  structured_fields:
+    powertrain_rules:
+    - key: powertrain_mhev
+      powertrain: MHEV
+      keywords:
+      - mild-hybrid
+      - etsi
+      - benzin, mild-hybrid
+    - key: powertrain_ice
+      powertrain: ICE
+      keywords:
+      - tsi opf
+      - tsi
+      - benzin
+schedule:
+  frequency: manual_only
+  run_window_start: 00:00
+  run_window_end: 05:00
+  preferred_weekday: monday
+notes: Browser-probed Volkswagen Germany configurator trim overview now serves
+  as the extraction surface. Each trim card exposes an MSRP entry label
+  "Preis inkl. MwSt. ab" plus a powertrain summary; the extractor reads trim-card
+  prices directly instead of relying on the showroom page or a downstream engine
+  step.
+bootstrap_meta:
+  country_model_rank: 1
+  suggested_scope_kind: single_model
+  sales_12m: 75681.0
+  model: T-ROC

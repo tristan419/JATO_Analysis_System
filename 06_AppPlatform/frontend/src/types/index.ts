@@ -110,6 +110,195 @@ export interface PositioningMapResponse {
   cluster_top3: string[];
 }
 
+/* ---- Engineering Config ---- */
+export interface ConfigProject {
+  id: string;
+  projectCode: string;
+  brand: string;
+  model: string;
+  marketCountry: string;
+  displayName: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConfigImportBatch {
+  id: string;
+  projectId: string;
+  importStatus: string;
+  sourceFilePath: string;
+  sheetName: string;
+  sourceSchemaVersion: string | null;
+  replaceMode: string;
+  totalRows: number;
+  importedRows: number;
+  skippedRows: number;
+  errorCount: number;
+  notes: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
+export interface ConfigVariant {
+  id: string;
+  projectId: string;
+  configImportBatchId: string;
+  model: string;
+  trim: string;
+  marketCountry: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  metaJson: Record<string, unknown> | null;
+}
+
+/* ---- Review Cases ---- */
+export interface ReviewCase {
+  id: string;
+  observationId: string;
+  reviewStatus: string;
+  country: string;
+  brand: string;
+  sourceCode?: string;
+  sourceRegistryUrl?: string;
+  sourceType?: string;
+  extractorName?: string;
+  extractorVersion?: string;
+  jatoModel: string;
+  jatoTrim: string;
+  jatoPowertrain: string | null;
+  officialModel: string;
+  officialTrim: string;
+  officialEdition: string | null;
+  officialPowertrain: string | null;
+  msrpValue?: number;
+  currency?: string;
+  sourceMsrpValue?: number;
+  sourceCurrency?: string;
+  fxRateToEur?: number;
+  fxRateAsOfDate?: string;
+  fxSource?: string;
+  priceLabel?: string;
+  observedAtUtc?: string;
+  sourceUrl?: string;
+  sourceSnapshotPath?: string | null;
+  matchConfidence: number;
+  matchReason?: Record<string, unknown> | null;
+  currentAssignee: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReviewDecision {
+  id: string;
+  reviewCaseId: string;
+  decision: string;
+  decidedOfficialModel: string | null;
+  decidedOfficialTrim: string | null;
+  note: string | null;
+  decidedBy: string;
+  decidedAt: string;
+}
+
+export interface ReviewScopeCountrySummary {
+  country: string;
+  latestMonth: string;
+  windowStartMonth: string;
+  windowEndMonth: string;
+  candidateCount: number;
+  missingCount: number;
+  topMissingBrands: string[];
+  topMissingModels: string[];
+}
+
+export interface ReviewBacklogOpportunity {
+  priorityRank: number;
+  country: string;
+  countryCode: string;
+  brand: string;
+  brandSlug: string;
+  candidateModelCount: number;
+  sales12mSum: number;
+  topModels: string[];
+  sourceCode: string;
+  fileName: string;
+  relativePath: string;
+}
+
+export interface ReviewWorkbench {
+  candidateScopeAvailable: boolean;
+  backlogAvailable: boolean;
+  generatedAtUtc: string | null;
+  reportTopN: number;
+  countryCount: number;
+  candidateCount: number;
+  coverageSummary: {
+    modelSource: number;
+    brandSource: number;
+    missingSource: number;
+  };
+  countryScope: ReviewScopeCountrySummary[];
+  backlog: ReviewBacklogOpportunity[];
+}
+
+export interface ReviewCaseDetail extends ReviewCase {
+  decisions: ReviewDecision[];
+  observation: Record<string, unknown> | null;
+  currentPrice: CurrentPrice | null;
+}
+
+/* ---- MSRP Current Prices ---- */
+export interface CurrentPrice {
+  id: string;
+  country: string;
+  brand: string;
+  jatoModel: string;
+  jatoTrim: string;
+  jatoPowertrain: string | null;
+  officialModel: string;
+  officialTrim: string;
+  officialEdition: string | null;
+  officialPowertrain: string | null;
+  effectiveObservationId: string;
+  currentMsrpValue: number;
+  currency: string;
+  sourceMsrpValue?: number;
+  sourceCurrency?: string;
+  fxRateToEur?: number;
+  fxRateAsOfDate?: string;
+  fxSource?: string;
+  taxIncluded: boolean;
+  matchConfidence: number;
+  matchStatus: string;
+  sourceUrl: string;
+  sourceSnapshotPath: string | null;
+  lastPriceChangeAtUtc: string | null;
+  updatedAtUtc: string;
+  msrpValue?: number;
+  observedAtUtc?: string;
+  materializedAt?: string;
+}
+
+export interface PriceHistoryEntry {
+  id: string;
+  country: string;
+  brand: string;
+  jatoModel: string;
+  jatoTrim: string;
+  msrpValue: number;
+  currency: string;
+  sourceMsrpValue: number;
+  sourceCurrency: string;
+  validFromUtc: string;
+  validToUtc: string | null;
+  lastConfirmedAtUtc: string;
+  startedByObservationId: string;
+  endedByObservationId: string | null;
+  lastConfirmedByObservationId: string;
+  createdAtUtc: string;
+}
+
 /* ---- RV Finance Dashboard ---- */
 export interface RvFinanceVehicle {
   vehicle: string;

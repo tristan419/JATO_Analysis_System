@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jato-scraping-toolkit"
+version = "0.1.0"
+description = "Standalone MSRP scraping toolkit for JATO Analysis System"
+requires-python = ">=3.11"
+dependencies = [
+  "pandas>=2.3",
+  "pyarrow>=23.0.0",
+  "pyyaml>=6.0",
+  "playwright>=1.54",
+  "requests>=2.32",
+  "scrapling[fetchers]>=0.4",
+]
+
+[project.scripts]
+jato-scrape = "jato_scraper.runner:main"
+jato-msrp-page-analyze = "jato_scraper.llm.msrp_page_analyzer:main"
+
+[tool.setuptools]
+packages = ["jato_scraper", "jato_scraper.extractors", "jato_scraper.llm"]

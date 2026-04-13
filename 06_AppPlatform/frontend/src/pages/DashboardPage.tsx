@@ -7,6 +7,7 @@ import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { CollapsibleFilterSidebar } from "../components/CollapsibleFilterSidebar";
 import { LoadingActionButton } from "../components/LoadingActionButton";
 import { LoadingSurface } from "../components/LoadingSurface";
+import { preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
 import { useSharedFilterScope } from "../contexts/SharedFilterScopeContext";
 import {
@@ -407,6 +408,14 @@ export function DashboardPage() {
   const [error, setError] = useState("");
   const combinedError = sharedError || error;
   const [heroLoadingTick, setHeroLoadingTick] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void preloadPlotlyChartRuntime();
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   useEffect(() => {
     if (!loading) {
       setHeroLoadingTick(0);
@@ -1500,12 +1509,6 @@ export function DashboardPage() {
                     onClick={()=>{setAdvChart(o.v); setAdvItems([]); setAdvMeta(null);}}>{o.l}</button>
                 ))}
               </div>
-            </div>
-            <div className="adv-console-path">
-              <span>BMW Control Deck</span>
-              <strong>{ADV_GROUPS.find(g=>g.v===advGroup)?.l??""}</strong>
-              <span>/</span>
-              <strong>{chartOpts.find(c=>c.v===advChart)?.l??""}</strong>
             </div>
           </div>
           <div className="adv-controls adv-controls-panel">

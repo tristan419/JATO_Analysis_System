@@ -1,0 +1,6 @@
+requests>=2.32
+scrapling[fetchers]>=0.4
+playwright>=1.54
+pandas>=2.3
+pyarrow>=23.0.0
+pyyaml>=6.0

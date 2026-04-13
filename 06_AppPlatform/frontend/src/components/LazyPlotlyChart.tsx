@@ -4,7 +4,25 @@ import type { CSSProperties } from "react";
 import { LoadingSurface } from "./LoadingSurface";
 import type { PlotlyChartProps } from "./PlotlyChart";
 
-const PlotlyChart = lazy(() => import("./PlotlyChart").then((module) => ({ default: module.PlotlyChart })));
+let plotlyChartModulePromise: Promise<typeof import("./PlotlyChart")> | null = null;
+
+function loadPlotlyChartModule() {
+  if (!plotlyChartModulePromise) {
+    plotlyChartModulePromise = import("./PlotlyChart").catch((error) => {
+      plotlyChartModulePromise = null;
+      throw error;
+    });
+  }
+  return plotlyChartModulePromise;
+}
+
+const PlotlyChart = lazy(() =>
+  loadPlotlyChartModule().then((module) => ({ default: module.PlotlyChart }))
+);
+
+export function preloadPlotlyChartRuntime() {
+  return loadPlotlyChartModule().then(() => undefined);
+}
 
 const FALLBACK_SHELL_STYLE: CSSProperties = {
   width: "100%",

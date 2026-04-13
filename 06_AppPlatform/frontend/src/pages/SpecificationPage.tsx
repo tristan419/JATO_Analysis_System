@@ -300,7 +300,7 @@ export function SpecificationPage() {
               <div className="dashboard-hero-copy specification-header-copy">
                 <span className="page-kicker">02 / Specification Intelligence</span>
                 <h1>Specification / Detail Explorer</h1>
-                <p>筛选口径与首页完全同步，跳页时不再重新初始化筛选链路。</p>
+                
                 <div className="dashboard-hero-inline-summary">
                   <span className="selection-ribbon-label">Current scope</span>
                   <span className="selection-ribbon-value">{activeFilterSummary}</span>

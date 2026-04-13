@@ -1,0 +1,119 @@
+# Draft MSRP source scaffold generated from candidate scope report.
+# Country: 瑞典 (se)
+# Country model rank: 20
+# Brand: CUPRA
+# Model: TERRAMAR
+# Suggested scope kind: single_model
+# Sales 12M: 2,266
+# Draft path: se/20_cupra_terramar_se.yaml
+# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
+# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
+# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
+# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+source_code: cupra_terramar_se_draft_scrapling
+country: 瑞典
+brand: CUPRA
+source_url: https://www.cupraofficial.se/modeller/terramar
+source_type: manufacturer_official
+price_semantics: base_msrp
+extractor_type: scrapling
+profile:
+  url: https://www.cupraofficial.se/modeller/terramar
+  tier: stealth
+  headless: true
+  network_idle: true
+  impersonate: chrome
+  default_currency: SEK
+  default_tax_included: true
+  default_price_label: Rekommenderat cirkapris inkl. moms
+  fixed_model: TERRAMAR
+  fixed_jato_model: TERRAMAR
+  fixed_jato_powertrain: null
+  model_rules: []
+  skip_if_model_unmapped: false
+  copy_trim_to_jato_trim: true
+  confidence_rules:
+    base: 0.2
+    fixed_model_bonus: 0.18
+    fixed_jato_model_bonus: 0.12
+    model_rule_bonus: 0.12
+    trim_present_bonus: 0.1
+    copy_trim_to_jato_trim_bonus: 0.09
+    parsed_price_text_bonus: 0.03
+    currency_bonus: 0.01
+    price_label_bonus: 0.02
+    trim_keyword_bonuses: []
+    price_band_bonuses:
+    - key: price_band_entry
+      label: Entry price band matched
+      max: 0
+      delta: 0.0
+    - key: price_band_mid
+      label: Mid price band matched
+      min: 0
+      max: 0
+      delta: 0.01
+    - key: price_band_high
+      label: High price band matched
+      min: 0
+      delta: 0.03
+    powertrain_keyword_bonuses: []
+    powertrain_bonuses:
+    - key: powertrain_phev
+      label: 'Powertrain matched: PHEV'
+      powertrain: PHEV
+      delta: 0.03
+    - key: powertrain_mhev
+      label: 'Powertrain matched: MHEV'
+      powertrain: MHEV
+      delta: 0.03
+    - key: powertrain_ice
+      label: 'Powertrain matched: ICE'
+      powertrain: ICE
+      delta: 0.03
+    clamp_min: 0.0
+    clamp_max: 1.0
+  structured_fields:
+    edition_rules:
+    - key: edition_special
+      label: Special Edition
+      keyword: special edition
+      special: true
+    powertrain_rules:
+    - key: powertrain_phev
+      powertrain: PHEV
+      keywords:
+      - eHybrid
+      - laddhybrid
+      - plug-in hybrid
+      - VZ e-HYBRID
+    - key: powertrain_mhev
+      powertrain: MHEV
+      keywords:
+      - mild hybrid
+      - eTSI
+    - key: powertrain_ice
+      powertrain: ICE
+      keywords:
+      - bensin
+      - TSI
+  auto_accept_gates:
+    review_threshold: 0.95
+    semi_auto_threshold: 0.98
+    require_powertrain_match: true
+    force_review_if_powertrain_missing: true
+    force_review_if_powertrain_ambiguous: true
+    force_review_for_special_edition: true
+  json_script_selector: script[type='application/ld+json']
+schedule:
+  frequency: manual_only
+  run_window_start: 00:00
+  run_window_end: 05:00
+  preferred_weekday: monday
+notes: Keywords filled from official manufacturer website research (SE market). CSS selectors still require browser-based
+  inspection before promotion.
+bootstrap_meta:
+  country_model_rank: 20
+  suggested_scope_kind: single_model
+  sales_12m: 2266.0
+  model: TERRAMAR

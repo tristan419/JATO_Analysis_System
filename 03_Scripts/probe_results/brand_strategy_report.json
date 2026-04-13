@@ -1,0 +1,120 @@
+[
+  {
+    "brand": "BYD",
+    "url": "https://www.byd.com/no/car/seal-ion-7",
+    "http_status": 404,
+    "strategies": [],
+    "ld_json_has_price": false,
+    "ld_json_price": null,
+    "ld_json_currency": null,
+    "ld_json_model": null,
+    "data_attr_price_found": false,
+    "visible_price_found": false,
+    "price_in_raw_html": false,
+    "raw_price_values": [],
+    "error": "HTTP 404",
+    "elapsed_s": 8.1
+  },
+  {
+    "brand": "GEELY",
+    "url": "https://www.geely-auto.hr/coolray",
+    "http_status": null,
+    "strategies": [],
+    "ld_json_has_price": false,
+    "ld_json_price": null,
+    "ld_json_currency": null,
+    "ld_json_model": null,
+    "data_attr_price_found": false,
+    "visible_price_found": false,
+    "price_in_raw_html": false,
+    "raw_price_values": [],
+    "error": "Page.goto: net::ERR_CONNECTION_CLOSED at https://www.geely-auto.hr/coolray\nCall log:\n  - navigating to \"https://www.geely-auto.hr/coolray\", waiting until \"load\"\n",
+    "elapsed_s": 5.5
+  },
+  {
+    "brand": "JAECOO",
+    "url": "https://www.jaecoo.com/hu/models/j7",
+    "http_status": 200,
+    "strategies": [
+      "unknown"
+    ],
+    "ld_json_has_price": false,
+    "ld_json_price": null,
+    "ld_json_currency": null,
+    "ld_json_model": null,
+    "data_attr_price_found": false,
+    "visible_price_found": false,
+    "price_in_raw_html": false,
+    "raw_price_values": [],
+    "error": null,
+    "elapsed_s": 19.4
+  },
+  {
+    "brand": "KGM",
+    "url": "https://www.kgmmotors.hu/korando",
+    "http_status": null,
+    "strategies": [],
+    "ld_json_has_price": false,
+    "ld_json_price": null,
+    "ld_json_currency": null,
+    "ld_json_model": null,
+    "data_attr_price_found": false,
+    "visible_price_found": false,
+    "price_in_raw_html": false,
+    "raw_price_values": [],
+    "error": "Page.goto: net::ERR_CONNECTION_CLOSED at https://www.kgmmotors.hu/korando\nCall log:\n  - navigating to \"https://www.kgmmotors.hu/korando\", waiting until \"load\"\n",
+    "elapsed_s": 5.9
+  },
+  {
+    "brand": "OMODA",
+    "url": "https://www.omoda.com/hu/models/omoda-5",
+    "http_status": null,
+    "strategies": [],
+    "ld_json_has_price": false,
+    "ld_json_price": null,
+    "ld_json_currency": null,
+    "ld_json_model": null,
+    "data_attr_price_found": false,
+    "visible_price_found": false,
+    "price_in_raw_html": false,
+    "raw_price_values": [],
+    "error": "Page.goto: net::ERR_CONNECTION_CLOSED at https://www.omoda.com/hu/models/omoda-5\nCall log:\n  - navigating to \"https://www.omoda.com/hu/models/omoda-5\", waiting until \"load\"\n",
+    "elapsed_s": 6.9
+  },
+  {
+    "brand": "PORSCHE",
+    "url": "https://www.porsche.com/norway/models/macan/",
+    "http_status": 200,
+    "strategies": [
+      "unknown"
+    ],
+    "ld_json_has_price": false,
+    "ld_json_price": null,
+    "ld_json_currency": null,
+    "ld_json_model": null,
+    "data_attr_price_found": false,
+    "visible_price_found": false,
+    "price_in_raw_html": false,
+    "raw_price_values": [],
+    "error": null,
+    "elapsed_s": 23.6
+  },
+  {
+    "brand": "XPENG",
+    "url": "https://www.xpeng.com/no/g6",
+    "http_status": 200,
+    "strategies": [
+      "unknown"
+    ],
+    "ld_json_has_price": false,
+    "ld_json_price": null,
+    "ld_json_currency": null,
+    "ld_json_model": null,
+    "data_attr_price_found": false,
+    "visible_price_found": false,
+    "price_in_raw_html": false,
+    "raw_price_values": [],
+    "error": null,
+    "elapsed_s": 49.1
+  }
+]

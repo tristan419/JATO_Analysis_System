@@ -1,0 +1,48 @@
+# Draft MSRP source scaffold generated from candidate scope report.
+# Country: 意大利 (it)
+# Country model rank: 11
+# Brand: VOLKSWAGEN
+# Model: T-CROSS
+# Suggested scope kind: single_model
+# Sales 12M: 21,177
+# Draft path: it/11_volkswagen_t_cross_it.yaml
+# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
+# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
+# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+source_code: volkswagen_t_cross_it_draft_scrapling
+country: 意大利
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.it/it/configuratore.html/__app/nuova-t-cross.app
+source_type: manufacturer_official
+price_semantics: base_msrp
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_playwright.yaml
+profile:
+  url: https://www.volkswagen.it/it/configuratore.html/__app/nuova-t-cross.app
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: Prezzo incl. IVA
+  fixed_model: T-CROSS
+  fixed_jato_model: T-CROSS
+  structured_fields:
+    powertrain_rules:
+    - key: powertrain_ice
+      powertrain: ICE
+      keywords:
+      - tsi
+      - benzina
+schedule:
+  frequency: manual_only
+  run_window_start: 00:00
+  run_window_end: 05:00
+  preferred_weekday: monday
+notes: Official Volkswagen model-page URL and local list-price wording were
+  superseded on 2026-04-13 by direct browser probing of the Italy
+  configurator at nuova-t-cross.app. The flow is stable trim -> MOTORI with
+  engine-card MSRP labeled "Prezzo incl. IVA", so this draft now uses the
+  shared Playwright configurator preset instead of showroom CSS selectors.
+bootstrap_meta:
+  country_model_rank: 11
+  suggested_scope_kind: single_model
+  sales_12m: 21177.0
+  model: T-CROSS

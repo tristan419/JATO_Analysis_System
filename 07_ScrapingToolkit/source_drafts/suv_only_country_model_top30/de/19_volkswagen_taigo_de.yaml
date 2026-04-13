@@ -1,0 +1,47 @@
+# Draft MSRP source scaffold generated from candidate scope report.
+# Country: 德国 (de)
+# Country model rank: 19
+# Brand: VOLKSWAGEN
+# Model: TAIGO
+# Suggested scope kind: single_model
+# Sales 12M: 19,712
+# Draft path: de/19_volkswagen_taigo_de.yaml
+# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
+# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
+# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+source_code: volkswagen_taigo_de_draft_scrapling
+country: 德国
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.de/de/konfigurator.html/__app/taigo.app
+source_type: manufacturer_official
+price_semantics: base_msrp
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+profile:
+  url: https://www.volkswagen.de/de/konfigurator.html/__app/taigo.app
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: Preis inkl. MwSt. ab
+  fixed_model: TAIGO
+  fixed_jato_model: TAIGO
+  structured_fields:
+    powertrain_rules:
+    - key: powertrain_ice
+      powertrain: ICE
+      keywords:
+      - benzin
+      - tsi
+schedule:
+  frequency: manual_only
+  run_window_start: 00:00
+  run_window_end: 05:00
+  preferred_weekday: monday
+notes: Browser-probed Volkswagen Germany configurator trim overview now serves
+  as the extraction surface. Trim cards expose the MSRP entry label "Preis inkl.
+  MwSt. ab" and powertrain summary directly, so selector TODOs are cleared without
+  relying on a downstream engine step.
+bootstrap_meta:
+  country_model_rank: 19
+  suggested_scope_kind: single_model
+  sales_12m: 19712.0
+  model: TAIGO

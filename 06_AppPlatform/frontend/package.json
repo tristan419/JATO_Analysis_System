@@ -11,8 +11,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "check:types": "tsc --noEmit",
+    "test:unit": "vitest run src/tests/unit",
     "check:router-regression": "node scripts/run_dashboard_spec_regression.cjs",
-    "check:frontend": "npm run check:types && npm run build && npm run check:router-regression"
+    "check:frontend": "npm run check:types && npm run test:unit && npm run build && npm run check:router-regression"
   },
   "dependencies": {
     "buffer": "^6.0.3",
@@ -31,6 +32,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "playwright": "^1.59.1",
     "typescript": "^5.9.2",
-    "vite": "^7.1.2"
+    "vite": "^7.1.2",
+    "vitest": "^3.2.4"
   }
 }

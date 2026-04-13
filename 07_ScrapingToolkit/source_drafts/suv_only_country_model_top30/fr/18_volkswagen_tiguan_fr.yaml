@@ -1,0 +1,57 @@
+# Draft MSRP source scaffold generated from candidate scope report.
+# Country: 法国 (fr)
+# Country model rank: 18
+# Brand: VOLKSWAGEN
+# Model: TIGUAN
+# Suggested scope kind: single_model
+# Sales 12M: 14,806
+# Draft path: fr/18_volkswagen_tiguan_fr.yaml
+# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
+# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
+# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+source_code: volkswagen_tiguan_fr_draft_scrapling
+country: 法国
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.fr/fr/configurateur.html/__app/tiguan.app
+source_type: manufacturer_official
+price_semantics: base_msrp
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+profile:
+  url: https://www.volkswagen.fr/fr/configurateur.html/__app/tiguan.app
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: Le prix inclut la TVA
+  fixed_model: TIGUAN
+  fixed_jato_model: TIGUAN
+  structured_fields:
+    powertrain_rules:
+    - key: powertrain_phev
+      powertrain: PHEV
+      keywords:
+      - hybride rechargeable
+    - key: powertrain_mhev
+      powertrain: MHEV
+      keywords:
+      - hybride non rechargeable
+    - key: powertrain_ice
+      powertrain: ICE
+      keywords:
+      - diesel
+      - essence
+schedule:
+  frequency: manual_only
+  run_window_start: 00:00
+  run_window_end: 05:00
+  preferred_weekday: monday
+notes: Official Volkswagen model-page URL and local list-price wording were
+  superseded on 2026-04-13 by direct browser probing of the France
+  configurator at tiguan.app. The trim overview already exposes MSRP entries
+  labeled "Le prix inclut la TVA" together with hybrid/diesel summaries, so
+  this draft now uses the shared trim-overview Playwright preset instead of
+  showroom CSS selectors.
+bootstrap_meta:
+  country_model_rank: 18
+  suggested_scope_kind: single_model
+  sales_12m: 14806.0
+  model: TIGUAN

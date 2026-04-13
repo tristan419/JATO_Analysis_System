@@ -1,0 +1,55 @@
+# ─────────────────────────────────────────────────────────────
+# BMW Germany — scrape the official models overview page
+# URL:  https://www.bmw.de/de/neufahrzeuge.html
+#
+# Strategy 1 (preferred — attr_json):
+#   Each model card is a <div class="cmp-allmodelscard"> with JSON
+#   embedded in data-card-filter-info (price, fuel, category, series)
+#   and data-tracking-attributes (model name, range code).
+#
+# Strategy 2 (fallback):  CSS selectors for series label.
+#
+# The page is React-rendered; the "stealth" tier gives us the
+# fully-hydrated DOM via Patchright / Chromium.
+# ─────────────────────────────────────────────────────────────
+
+source_code: bmw_de_scrapling
+country: 德国
+brand: BMW
+source_url: https://www.bmw.de/de/neufahrzeuge.html
+source_type: manufacturer_official
+price_semantics: base_msrp
+
+extractor_type: scrapling
+
+profile:
+  url: https://www.bmw.de/de/neufahrzeuge.html
+
+  # Use stealth tier — BMW.de is React SPA, needs JS rendering
+  tier: stealth
+  headless: true
+  network_idle: true
+  impersonate: chrome
+
+  # ── Attribute-JSON strategy (primary) ──────────────────────
+  attr_json:
+    vehicle_container: ".cmp-allmodelscard"
+    filter_attr: "data-card-filter-info"
+    tracking_attr: "data-tracking-attributes"
+    price_key: "price"
+    fuel_key: "fuelType"
+    category_key: "category"
+    series_key: "series"
+    name_key: "name"
+    range_key: "range"
+
+  # ── CSS fallback (series label inside cards) ───────────────
+  css:
+    vehicle_container: ".cmp-allmodelscard"
+    model: ".cmp-allmodelscarddetail__series::text"
+    trim: ""
+    price: ""
+
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: "UVP inkl. MwSt."

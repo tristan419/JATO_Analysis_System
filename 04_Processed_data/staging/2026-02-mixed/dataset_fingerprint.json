@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0",
+  "sourceFileCount": 2,
+  "sourceFiles": [
+    {
+      "path": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+      "bytes": 429042121,
+      "mtimeNs": 1773293009768549955
+    },
+    {
+      "path": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+      "bytes": 452151147,
+      "mtimeNs": 1776042229828896945
+    }
+  ],
+  "sheetName": "Data Export",
+  "partitionCols": [
+    "国家"
+  ]
+}

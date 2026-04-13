@@ -1,0 +1,12 @@
+{
+  "batch": "--help",
+  "countries": [
+    "--help"
+  ],
+  "total": 0,
+  "pass": 0,
+  "empty": 0,
+  "fail": 0,
+  "errors": 0,
+  "results": []
+}

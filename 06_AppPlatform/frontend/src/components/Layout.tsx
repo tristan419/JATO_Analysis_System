@@ -5,6 +5,9 @@ const NAV_ITEMS = [
   { to: "/", code: "01", label: "Overview", sublabel: "Dashboard" },
   { to: "/specification", code: "02", label: "Specification", sublabel: "规格明细" },
   { to: "/crud", code: "03", label: "Control", sublabel: "数据管理" },
+  { to: "/engineering", code: "04", label: "Engineering", sublabel: "配置导入" },
+  { to: "/review", code: "05", label: "Review", sublabel: "匹配审核" },
+  { to: "/msrp", code: "06", label: "MSRP", sublabel: "当前价格" },
 ];
 
 export function Layout() {

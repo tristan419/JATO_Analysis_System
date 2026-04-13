@@ -1,0 +1,59 @@
+# Draft MSRP source scaffold generated from candidate scope report.
+# Country: 波兰 (pl)
+# Country model rank: 12
+# Brand: VOLKSWAGEN
+# Model: TOUAREG
+# Suggested scope kind: single_model
+# Sales 12M: 5,637
+# Draft path: pl/12_volkswagen_touareg_pl.yaml
+# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
+# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
+# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+source_code: volkswagen_touareg_pl_draft_scrapling
+country: 波兰
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.pl/pl/modele/touareg.html
+source_type: manufacturer_official
+price_semantics: base_msrp
+extractor_type: scrapling
+profile_preset: ../_shared/presets/volkswagen_model_page_scrapling.yaml
+profile:
+  url: https://www.volkswagen.pl/pl/modele/touareg.html
+  css:
+    vehicle_container: TODO_SELECTOR
+    model: TODO_SELECTOR
+    trim: TODO_SELECTOR
+    price: TODO_SELECTOR
+  default_currency: PLN
+  default_tax_included: true
+  default_price_label: Cena katalogowa brutto
+  fixed_model: TOUAREG
+  fixed_jato_model: TOUAREG
+  structured_fields:
+    powertrain_rules:
+    - key: powertrain_phev
+      powertrain: PHEV
+      keywords:
+      - TODO_PHEV_KEYWORD
+    - key: powertrain_mhev
+      powertrain: MHEV
+      keywords:
+      - TODO_MHEV_KEYWORD
+    - key: powertrain_ice
+      powertrain: ICE
+      keywords:
+      - TODO_ICE_KEYWORD
+schedule:
+  frequency: manual_only
+  run_window_start: 00:00
+  run_window_end: 05:00
+  preferred_weekday: monday
+notes: Official Volkswagen model-page URL and local list-price wording were
+  verified on 2026-04-13. CSS selectors remain TODO because live probe did not
+  surface stable visible MSRP elements, so browser-based inspection is still
+  required before promotion.
+bootstrap_meta:
+  country_model_rank: 12
+  suggested_scope_kind: single_model
+  sales_12m: 5637.0
+  model: TOUAREG

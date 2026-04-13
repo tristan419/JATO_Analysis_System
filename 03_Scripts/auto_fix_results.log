@@ -1,0 +1,17 @@
+  ✗ NO FIX    volvo_ex40_se_draft_scrapling [403]
+  ✗ NO FIX    tesla_model_y_se_draft_scrapling [403]
+  ✗ NO FIX    volvo_ex30_se_draft_scrapling [403]
+  ✓ PATTERN FIX peugeot_3008_se_draft_scrapling: https://www.peugeot.se/modeller/suv-3008.html → https://www.peugeot.se/modeller/3008.html
+  ✓ PATTERN FIX peugeot_2008_se_draft_scrapling: https://www.peugeot.se/modeller/suv-2008.html → https://www.peugeot.se/modeller/2008.html
+  ✗ NO FIX    volvo_ec40_se_draft_scrapling [403]
+  ✗ NO FIX    cupra_terramar_se_draft_scrapling [404]
+  ✓ PATTERN FIX peugeot_5008_se_draft_scrapling: https://www.peugeot.se/modeller/suv-5008.html → https://www.peugeot.se/modeller/5008.html
+  ✗ NO FIX    volvo_xc40_se_draft_scrapling [403]
+  ✗ NO FIX    volvo_xc90_se_draft_scrapling [403]
+  ✗ NO FIX    bmw_ix1_se_draft_scrapling [-1]
+  ✗ NO FIX    mercedes_eqa_se_draft_scrapling [-1]
+  ✗ NO FIX    volvo_ex90_se_draft_scrapling [403]
+  ✗ NO FIX    volkswagen_t_cross_hr_draft_scrapling [404]
+  ✗ NO FIX    opel_mokka_hr_draft_scrapling [404]
+  ✗ NO FIX    renault_captur_hr_draft_scrapling [404]
+  ✗ NO FIX    dacia_duster_hr_draft_scrapling [404]

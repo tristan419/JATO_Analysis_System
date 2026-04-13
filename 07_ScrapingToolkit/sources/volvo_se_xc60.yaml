@@ -1,0 +1,128 @@
+# Volvo Sweden XC60 plug-in hybrid build page
+#
+# We intentionally keep only the trim / equipment-level cards and exclude:
+# - family cards whose price starts with "Från"
+# - powertrain cards that expose prism:valueDescription
+
+source_code: volvo_se_xc60_build_scrapling
+country: 瑞典
+brand: Volvo
+source_url: https://www.volvocars.com/se/build/xc60-hybrid/
+source_type: manufacturer_official
+price_semantics: base_msrp
+
+extractor_type: scrapling
+
+profile:
+  url: https://www.volvocars.com/se/build/xc60-hybrid/
+  tier: stealth
+  headless: true
+  network_idle: true
+  impersonate: chrome
+
+  css:
+    vehicle_container: '[data-testid="selection-card"]'
+    model: ''
+    trim: '[data-testid="title"]::text'
+    price: '[data-testid="price"]::text'
+    exclude_if_selector: 'small[data-sources*="valueDescription"]'
+
+  default_currency: SEK
+
+  exclude_price_prefixes:
+    - 'Från'
+
+  fixed_model: XC60
+  fixed_jato_model: XC60
+  fixed_jato_powertrain: PHEV
+  copy_trim_to_jato_trim: true
+  confidence_rules:
+    base: 0.19
+    fixed_model_bonus: 0.18
+    fixed_jato_model_bonus: 0.12
+    trim_present_bonus: 0.10
+    copy_trim_to_jato_trim_bonus: 0.09
+    exclude_price_prefixes_bonus: 0.04
+    exclude_if_selector_bonus: 0.04
+    parsed_price_text_bonus: 0.03
+    currency_bonus: 0.01
+    price_label_bonus: 0.02
+    trim_keyword_bonuses:
+      - key: trim_keyword_core
+        label: 'Trim keyword matched: core'
+        keyword: core
+        delta: 0.01
+      - key: trim_keyword_plus
+        label: 'Trim keyword matched: plus'
+        keyword: plus
+        delta: 0.02
+      - key: trim_keyword_ultra
+        label: 'Trim keyword matched: ultra'
+        keyword: ultra
+        delta: 0.03
+    price_band_bonuses:
+      - key: price_band_entry
+        label: Entry price band matched
+        max: 579999
+        delta: 0.00
+      - key: price_band_mid
+        label: Mid price band matched
+        min: 580000
+        max: 699999
+        delta: 0.01
+      - key: price_band_high
+        label: High price band matched
+        min: 700000
+        delta: 0.03
+    powertrain_bonuses:
+      - key: powertrain_phev
+        label: 'Powertrain matched: PHEV'
+        powertrain: PHEV
+        delta: 0.03
+      - key: powertrain_mhev
+        label: 'Powertrain matched: MHEV'
+        powertrain: MHEV
+        delta: 0.03
+    clamp_min: 0.0
+    clamp_max: 1.0
+  structured_fields:
+    edition_rules:
+      - key: edition_black
+        label: Black Edition
+        keyword: black edition
+        special: true
+      - key: edition_nordic
+        label: Nordic Edition
+        keyword: nordic edition
+    powertrain_rules:
+      - key: powertrain_xc60_phev
+        powertrain: PHEV
+        keywords:
+          - xc60-hybrid
+          - plug-in hybrid
+          - plugin hybrid
+          - plug in hybrid
+          - laddhybrid
+          - recharge
+          - t6
+          - t8
+      - key: powertrain_xc60_mhev
+        powertrain: MHEV
+        keywords:
+          - mild hybrid
+          - mhev
+          - b5
+          - b6
+  auto_accept_gates:
+    review_threshold: 0.95
+    semi_auto_threshold: 0.98
+    require_powertrain_match: true
+    force_review_if_powertrain_missing: true
+    force_review_if_powertrain_ambiguous: true
+    force_review_for_special_edition: true
+
+schedule:
+  frequency: weekly
+  run_window_start: "00:00"
+  run_window_end: "05:00"
+  preferred_weekday: monday

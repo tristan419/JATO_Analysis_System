@@ -1,0 +1,51 @@
+# Draft MSRP source scaffold generated from candidate scope report.
+# Country: 瑞士 (ch)
+# Country model rank: 21
+# Brand: VOLKSWAGEN
+# Model: T-ROC
+# Suggested scope kind: single_model
+# Sales 12M: 1,771
+# Draft path: ch/21_volkswagen_t_roc_ch.yaml
+# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
+# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
+# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
+# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+source_code: volkswagen_t_roc_ch_draft_scrapling
+country: 瑞士
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.ch/de/modelle/t-roc.html
+source_type: manufacturer_official
+price_semantics: base_msrp
+extractor_type: scrapling
+profile_preset: ../_shared/presets/volkswagen_model_page_scrapling.yaml
+profile:
+  url: https://www.volkswagen.ch/de/modelle/t-roc.html
+  default_currency: CHF
+  default_tax_included: true
+  default_price_label: Unverbindliche Preisempfehlung inkl. MwSt
+  fixed_model: T-ROC
+  fixed_jato_model: T-ROC
+  structured_fields:
+    powertrain_rules:
+    - key: powertrain_mhev
+      powertrain: MHEV
+      keywords:
+      - Mild-Hybrid
+      - eTSI
+    - key: powertrain_ice
+      powertrain: ICE
+      keywords:
+      - Benzin
+      - TSI
+schedule:
+  frequency: manual_only
+  run_window_start: 00:00
+  run_window_end: 05:00
+  preferred_weekday: monday
+notes: Keywords filled from official manufacturer website research (CH market). CSS selectors still require browser-based
+  inspection before promotion.
+bootstrap_meta:
+  country_model_rank: 21
+  suggested_scope_kind: single_model
+  sales_12m: 1771.0
+  model: T-ROC

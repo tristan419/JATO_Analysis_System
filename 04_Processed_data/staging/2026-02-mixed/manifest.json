@@ -1,0 +1,578 @@
+{
+  "generatedAtUtc": "2026-04-13T05:30:41.810339+00:00",
+  "manifestSchemaVersion": "1.1",
+  "pipelineVersion": "1.0",
+  "sourceExcel": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+  "sourceExcels": [
+    "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+    "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx"
+  ],
+  "inputMode": "multi",
+  "sheetName": "Data Export",
+  "outputParquet": "04_Processed_data/staging/2026-02-mixed/jato_full_archive.parquet",
+  "rows": 374294,
+  "columns": 96,
+  "columnNames": [
+    "Vehicle/Volumes type",
+    "Countries",
+    "国家",
+    "区域划分",
+    "Registration type",
+    "JATO global segment",
+    "Make group",
+    "Make",
+    "Model group",
+    "Model",
+    "MakeModel",
+    "MakeModel%Body type%JATO global segment",
+    "车型规整",
+    "品牌 (英)",
+    "品牌 (中)",
+    "车型类别",
+    "细分市场-欧",
+    "车系",
+    "细分市场（按车长）",
+    "Version name",
+    "Powertrain type",
+    "动总规整",
+    "Trim level",
+    "Body type",
+    "Fuel type",
+    "燃料规整",
+    "Transmission type",
+    "Driven wheels",
+    "CO2 level - (g/km) combined",
+    "WLTP Emission combined",
+    "Maximum power kW",
+    "Battery type",
+    "Battery kwh",
+    "电量区间",
+    "Useable battery kilowatt hour (kWh)",
+    "Battery range",
+    "Seating capacity",
+    "cargo volume (l)",
+    "length (mm)",
+    "width (mm)",
+    "height (mm)",
+    "wheelbase (mm)",
+    "curb weight (kg)",
+    "MSRP including delivery charge",
+    "Base price",
+    "Retail price",
+    "MSRP规整",
+    "MSRP区间",
+    "Currency",
+    "币种换算",
+    "2023 Jan",
+    "2023 Feb",
+    "2023 Mar",
+    "2023 Apr",
+    "2023 May",
+    "2023 Jun",
+    "2023 Jul",
+    "2023 Aug",
+    "2023 Sep",
+    "2023 Oct",
+    "2023 Nov",
+    "2023 Dec",
+    "2024 Jan",
+    "2024 Feb",
+    "2024 Mar",
+    "2024 Apr",
+    "2024 May",
+    "2024 Jun",
+    "2024 Jul",
+    "2024 Aug",
+    "2024 Sep",
+    "2024 Oct",
+    "2024 Nov",
+    "2024 Dec",
+    "2025 Jan",
+    "2025 Feb",
+    "2025 Mar",
+    "2025 Apr",
+    "2025 May",
+    "2025 Jun",
+    "2025 Jul",
+    "2025 Aug",
+    "2025 Sep",
+    "2025 Oct",
+    "2025 Nov",
+    "2025 Dec",
+    "2026 Jan",
+    "2022",
+    "2023",
+    "2024",
+    "2025",
+    "23,1-2",
+    "24,1-2",
+    "25,1-2",
+    "2026 Feb",
+    "26,1-2"
+  ],
+  "outputParquetBytes": 16705161,
+  "elapsedSeconds": 228.199,
+  "validationSummary": {
+    "yearColumnCount": 4,
+    "monthColumnCount": 38,
+    "hasTimeColumns": true,
+    "missingRecommendedFields": {}
+  },
+  "mergeSummary": {
+    "sourceFileCount": 2,
+    "preMergeRows": 1784612,
+    "mergedRows": 1784612,
+    "finalRows": 374294,
+    "conflictSummary": {
+      "enabled": true,
+      "policy": "last_wins",
+      "requestedConflictKeys": [
+        "国家",
+        "Registration type",
+        "MakeModel",
+        "Version name"
+      ],
+      "resolvedConflictKeys": [
+        "国家",
+        "Registration type",
+        "MakeModel",
+        "Version name"
+      ],
+      "hasConflicts": true,
+      "conflictGroupCount": 330465,
+      "conflictRowCount": 1708266,
+      "sampleConflicts": [
+        {
+          "key": {
+            "国家": "荷兰",
+            "Registration type": "Business",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "2.0 120DA MHEV M SPORT DESIGN EDITION"
+          },
+          "rowCount": 2,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 2,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 1
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 1
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "克罗地亚",
+            "Registration type": "Business",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "2.0 120D DCT"
+          },
+          "rowCount": 6,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 6,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 3
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 3
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "希腊",
+            "Registration type": "Business",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "2.0 120D MHEV AUTO"
+          },
+          "rowCount": 4,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 4,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 2
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 2
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "希腊",
+            "Registration type": "Private",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "2.0 120D MHEV AUTO"
+          },
+          "rowCount": 4,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 4,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 2
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 2
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "捷克",
+            "Registration type": "Business",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "2.0 120D MHEV AUTO"
+          },
+          "rowCount": 6,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 6,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 3
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 3
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "西班牙",
+            "Registration type": "Business",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "(O)2.0 120D MHEV"
+          },
+          "rowCount": 10,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 10,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 5
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 5
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "西班牙",
+            "Registration type": "Business",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "2.0 120D MHEV"
+          },
+          "rowCount": 16,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 16,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 9
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 7
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "西班牙",
+            "Registration type": "Private",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "(O)2.0 120D MHEV"
+          },
+          "rowCount": 10,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 10,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 5
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 5
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "西班牙",
+            "Registration type": "Private",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "2.0 120D MHEV"
+          },
+          "rowCount": 16,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 16,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 9
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 7
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "法国",
+            "Registration type": "Business",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "2.0 120D DCT"
+          },
+          "rowCount": 11,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 11,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 6
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 5
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "法国",
+            "Registration type": "Private",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "2.0 120D DCT"
+          },
+          "rowCount": 9,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 9,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 5
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 4
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "法国",
+            "Registration type": "Business",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "2.0 120D DCT M SPORT DESIGN"
+          },
+          "rowCount": 12,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 12,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 6
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 6
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "法国",
+            "Registration type": "Private",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "2.0 120D DCT M SPORT DESIGN"
+          },
+          "rowCount": 11,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 11,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 6
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 5
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "法国",
+            "Registration type": "Business",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "2.0 120D DCT M SPORT"
+          },
+          "rowCount": 12,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 12,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 6
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 6
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "法国",
+            "Registration type": "Private",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "2.0 120D DCT M SPORT"
+          },
+          "rowCount": 11,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 11,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 6
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 5
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "捷克",
+            "Registration type": "Private",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "120D"
+          },
+          "rowCount": 2,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 2,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 1
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 1
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "希腊",
+            "Registration type": "Business",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "1.5 116D"
+          },
+          "rowCount": 8,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 8,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 4
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 4
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "希腊",
+            "Registration type": "Business",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "2.0 120D"
+          },
+          "rowCount": 2,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 2,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 1
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 1
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "希腊",
+            "Registration type": "Private",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "1.5 116D"
+          },
+          "rowCount": 6,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 6,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 3
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 3
+            }
+          ]
+        },
+        {
+          "key": {
+            "国家": "希腊",
+            "Registration type": "Private",
+            "MakeModel": "BMWSERIES 1",
+            "Version name": "1.6 116D"
+          },
+          "rowCount": 2,
+          "sourceFileCount": 2,
+          "payloadSignatureCount": 2,
+          "sourceRows": [
+            {
+              "sourceFile": "01_RAW_DATA/整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+              "rows": 1
+            },
+            {
+              "sourceFile": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
+              "rows": 1
+            }
+          ]
+        }
+      ],
+      "sampleLimit": 20,
+      "droppedByConflictPolicy": 1410318
+    },
+    "dedupeApplied": true,
+    "dedupeKeys": [
+      "国家",
+      "Registration type",
+      "MakeModel",
+      "Version name"
+    ],
+    "droppedDuplicateRows": 0
+  }
+}
