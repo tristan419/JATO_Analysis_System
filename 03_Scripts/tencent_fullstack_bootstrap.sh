@@ -9,6 +9,8 @@ BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@${BACKEND_P
 SERVER_NAME="${SERVER_NAME:-_}"
 REPO_REMOTE_URL="${REPO_REMOTE_URL:-git@github.com:tristan419/JATO_Analysis_System.git}"
 REPO_ARCHIVE_URL="${REPO_ARCHIVE_URL:-https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/refs/heads/main}"
+ENABLE_HTTPS="${ENABLE_HTTPS:-false}"
+CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 APP_AUTH_ENABLED="${APP_AUTH_ENABLED:-false}"
 APP_AUTH_TOKEN="${APP_AUTH_TOKEN:-}"
 APP_BACKEND_WORKERS="${APP_BACKEND_WORKERS:-2}"
@@ -32,6 +34,7 @@ DIAGNOSTIC_SCRIPT="$REPO_DIR/03_Scripts/print_fullstack_server_diagnostics.sh"
 SYSTEMD_TEMPLATE="$REPO_DIR/03_Scripts/deploy/systemd/jato-fullstack-backend@.service"
 SYSTEMD_TARGET="/etc/systemd/system/jato-fullstack-backend@.service"
 NGINX_INSTALL_SCRIPT="$REPO_DIR/03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh"
+HTTPS_INSTALL_SCRIPT="$REPO_DIR/03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh"
 FRONTEND_ROOT="$REPO_DIR/06_AppPlatform/frontend/dist"
 CURRENT_STEP="initialization"
 
@@ -203,6 +206,20 @@ CURRENT_STEP="Install nginx configuration"
 log_section "$CURRENT_STEP"
 sudo SERVER_NAME="$SERVER_NAME" BACKEND_PORT="$BACKEND_PORT" FRONTEND_ROOT="$FRONTEND_ROOT" \
   bash "$NGINX_INSTALL_SCRIPT"
+
+CURRENT_STEP="Enable HTTPS"
+log_section "$CURRENT_STEP"
+if is_truthy "$ENABLE_HTTPS"; then
+  if [[ "$SERVER_NAME" == "_" ]]; then
+    echo "[ERROR] ENABLE_HTTPS=true requires SERVER_NAME to be set to a real domain"
+    exit 1
+  fi
+
+  sudo SERVER_NAME="$SERVER_NAME" BACKEND_PORT="$BACKEND_PORT" FRONTEND_ROOT="$FRONTEND_ROOT" \
+    CERTBOT_EMAIL="$CERTBOT_EMAIL" bash "$HTTPS_INSTALL_SCRIPT"
+else
+  echo "[INFO] HTTPS bootstrap skipped (ENABLE_HTTPS=$ENABLE_HTTPS)"
+fi
 
 CURRENT_STEP="Allow firewall rules if ufw is active"
 log_section "$CURRENT_STEP"

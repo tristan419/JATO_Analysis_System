@@ -135,6 +135,7 @@ Workflow 文件：`.github/workflows/deploy-fullstack-tencent.yml`
 | `SSH_USER` | SSH 登录用户名 |
 | `SSH_PRIVATE_KEY` | 私钥内容（和 `SSH_PASSWORD` 二选一） |
 | `SSH_PASSWORD` | 密码（和 `SSH_PRIVATE_KEY` 二选一） |
+| `DEPLOY_CERTBOT_EMAIL` | 可选，但推荐；Let's Encrypt 联系邮箱 |
 
 ### 3.3 自动部署流程
 
@@ -144,7 +145,16 @@ Workflow 文件：`.github/workflows/deploy-fullstack-tencent.yml`
 4. SSH 登录服务器，解压到 `/opt/JATO_Analysis_System-main`
 5. 执行 `03_Scripts/deploy_fullstack_server.sh`（`SKIP_GIT_SYNC=true`）
 6. 发布脚本会先清掉已知白名单内的 untracked 残留：`04_Processed_data/.refresh_backups/pre-sync-*`、`Markdown_Readme/Fullstack/*.md`、`Markdown_Readme/Streamlit/*.md`
-7. 健康检查 `curl http://127.0.0.1:8000/healthz`
+7. workflow 会再补一遍公网入口：默认按 `ojeur.cloud www.ojeur.cloud` 处理；如果仓库 Variable `DEPLOY_SERVER_NAME` 存在，则以它为准
+8. 如果 `DEPLOY_ENABLE_HTTPS` 不是 `false`，workflow 会调用 `enable_jato_fullstack_https.sh` 做幂等证书检查；已是 Certbot 管理的 nginx 配置不会被 HTTP 模板覆盖
+9. 健康检查 `curl http://127.0.0.1:8000/healthz`
+
+### 3.4 域名 / HTTPS 约定
+
+- 当前生产默认域名：`ojeur.cloud www.ojeur.cloud`
+- 可选 Variables：`DEPLOY_SERVER_NAME`、`DEPLOY_ENABLE_HTTPS`
+- `DEPLOY_ENABLE_HTTPS=false` 时，只维护 HTTP ingress，不碰证书
+- `install_jato_fullstack_nginx.sh` 检测到 `managed by Certbot` 后会跳过覆盖，避免把已签发证书的 nginx 配置冲掉
 
 ---
 

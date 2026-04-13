@@ -244,13 +244,33 @@ sudo SERVER_NAME=_ BACKEND_PORT=8000 FRONTEND_ROOT=/opt/JATO_Analysis_System-mai
 
 如果你已经有域名，把 `SERVER_NAME=_` 换成真实域名，并在 DNS 中把 A 记录指向腾讯云服务器公网 IP。
 
+## 7.1 启用 HTTPS（Let's Encrypt）
+
+域名已经指向腾讯云公网 IP 后，可以直接执行：
+
+```bash
+cd /opt/JATO_Analysis_System-main
+sudo SERVER_NAME="ojeur.cloud www.ojeur.cloud" \
+  CERTBOT_EMAIL='you@example.com' \
+  bash 03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh
+```
+
+如果你暂时不想给 Let's Encrypt 留联系邮箱，也可以不传 `CERTBOT_EMAIL`；脚本会退回 `--register-unsafely-without-email`。
+
+说明：
+
+- 脚本会先确保 80 端口 nginx 配置存在，再安装 `certbot` 和 `python3-certbot-nginx`
+- 证书签发成功后会自动把 `80 -> 443` 跳转配好
+- 以后再次执行是幂等的：证书未到期时不会重复签发
+- `install_jato_fullstack_nginx.sh` 现在会检测 `managed by Certbot` 标记，默认不覆盖证书版 nginx 配置，避免后续发布把 HTTPS 冲掉
+
 ## 8. 防火墙与安全组
 
 腾讯云安全组至少放通：
 
 - `22/tcp` 用于 SSH
 - `80/tcp` 用于 nginx
-- 如果后续要加 HTTPS，再放通 `443/tcp`
+- `443/tcp` 用于 HTTPS
 
 如果服务器本机启用了 UFW：
 
@@ -303,9 +323,12 @@ bash 03_Scripts/print_fullstack_server_diagnostics.sh
 首次上线后，再配置这些 GitHub Secrets / Variables：
 
 - Secrets: `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`
+- Secrets: `DEPLOY_CERTBOT_EMAIL`（推荐，Let's Encrypt 联系邮箱）
 - Variables: `DEPLOY_REPO_DIR`
 - Variables: `FULLSTACK_BACKEND_SERVICE_NAME`
 - Variables: `DEPLOY_BRANCH`
+- Variables: `DEPLOY_SERVER_NAME`（可选，未设置时当前 workflow 默认回落到 `ojeur.cloud www.ojeur.cloud`）
+- Variables: `DEPLOY_ENABLE_HTTPS`（可选，默认 `true`）
 - Variables: `FULLSTACK_VITE_API_BASE`
 - Variables: `FULLSTACK_VITE_USER_ROLE`
 - Variables: `FULLSTACK_VITE_USER_NAME`
@@ -317,9 +340,17 @@ bash 03_Scripts/print_fullstack_server_diagnostics.sh
 - `DEPLOY_REPO_DIR=/opt/JATO_Analysis_System-main`
 - `FULLSTACK_BACKEND_SERVICE_NAME=jato-fullstack-backend@8000`
 - `DEPLOY_BRANCH=main`
+- `DEPLOY_SERVER_NAME=ojeur.cloud www.ojeur.cloud`
+- `DEPLOY_ENABLE_HTTPS=true`
 - `FULLSTACK_VITE_API_BASE=/v1`
 - `REPO_REMOTE_URL=https://gitclone.com/github.com/tristan419/JATO_Analysis_System.git`
 - `REPO_ARCHIVE_URL=https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/refs/heads/main`
+
+GitHub Actions 自动部署现在会在代码发布后补一遍 ingress：
+
+- 如果 nginx 还是纯 HTTP，会按 `DEPLOY_SERVER_NAME` 补齐站点配置
+- 如果已经是 Certbot 管理的 HTTPS，会保留现有证书配置并做幂等校验
+- 因此后续 `push main` 不需要再手动处理域名绑定或因为 nginx 重装把 HTTPS 冲掉
 
 ## 11. 回滚
 

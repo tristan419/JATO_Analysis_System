@@ -13,6 +13,12 @@ ENABLED_CONF="/etc/nginx/sites-enabled/jato_fullstack.conf"
 SERVER_NAME="${SERVER_NAME:-_}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_ROOT="${FRONTEND_ROOT:-/opt/JATO_Analysis_System/06_AppPlatform/frontend/dist}"
+ALLOW_CERTBOT_OVERWRITE="${ALLOW_CERTBOT_OVERWRITE:-false}"
+
+allow_certbot_overwrite=false
+case "${ALLOW_CERTBOT_OVERWRITE,,}" in
+  1|true|yes|on) allow_certbot_overwrite=true ;;
+esac
 
 if [[ ! -f "$NGINX_TEMPLATE" ]]; then
   echo "[ERROR] Nginx template not found: $NGINX_TEMPLATE"
@@ -22,6 +28,16 @@ fi
 echo "[INFO] Install nginx"
 apt-get update -y
 apt-get install -y nginx
+
+if [[ -f "$TARGET_CONF" ]] && grep -qi 'managed by Certbot' "$TARGET_CONF" && [[ "$allow_certbot_overwrite" != "true" ]]; then
+  echo "[WARN] Existing nginx config is managed by Certbot; skipping overwrite to preserve HTTPS."
+  echo "[INFO] Set ALLOW_CERTBOT_OVERWRITE=true only if you intentionally want to replace the cert-managed config."
+  nginx -t
+  systemctl enable nginx
+  systemctl restart nginx
+  curl -fsS http://127.0.0.1/healthz && echo
+  exit 0
+fi
 
 echo "[INFO] Render nginx config"
 sed \
