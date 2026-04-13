@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "buffer": "^6.0.3",
+    "html-to-image": "^1.11.13",
     "plotly.js": "^3.5.0",
     "plotly.js-cartesian-dist-min": "^3.5.0",
     "react": "^19.1.0",

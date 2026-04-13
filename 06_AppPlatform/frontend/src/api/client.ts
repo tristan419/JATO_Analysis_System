@@ -10,6 +10,8 @@ import type {
   PriceHistoryEntry,
   DetailResponse,
   GroupedTimeSeriesResponse,
+  MarketScanDeckRequest,
+  MarketScanDeckResponse,
   ModelVersionsResponse,
   OverviewResponse,
   PositioningMapResponse,
@@ -395,6 +397,11 @@ export const api = {
     sensitivity_vehicle_idx?: number;
   }) =>
     request<RvFinanceResponse>("/analysis/rv-finance", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  marketScanDeck: (payload: MarketScanDeckRequest = {}) =>
+    request<MarketScanDeckResponse>("/market-scan/deck", {
       method: "POST",
       body: JSON.stringify(payload)
     }),

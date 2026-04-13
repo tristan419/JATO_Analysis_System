@@ -1,0 +1,43 @@
+# Volkswagen Denmark T-Roc configurator
+# Validated via live dry-run on 2026-04-13: 4 extracted / 4 valid.
+
+source_code: volkswagen_t_roc_dk_scrapling
+country: 丹麦
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.dk/da/byg-din-bil.html/__app/30380.app
+source_type: manufacturer_official
+price_semantics: base_msrp
+
+extractor_type: playwright
+profile_preset: ../source_drafts/suv_only_country_model_top30/_shared/presets/volkswagen_configurator_playwright.yaml
+profile:
+  url: https://www.volkswagen.dk/da/byg-din-bil.html/__app/30380.app
+  cookie_reject_selector: null
+  cookie_reject_text: Kun nødvendige
+  default_currency: DKK
+  default_tax_included: true
+  default_price_label: Pris inkl. moms.
+  fixed_model: T-ROC
+  fixed_jato_model: T-ROC
+  structured_fields:
+    powertrain_rules:
+      - key: powertrain_mhev
+        powertrain: MHEV
+        keywords:
+          - etsi
+      - key: powertrain_ice
+        powertrain: ICE
+        keywords:
+          - tsi
+          - tdi
+          - benzin
+          - diesel
+
+schedule:
+  frequency: manual_only
+  run_window_start: "00:00"
+  run_window_end: "05:00"
+  preferred_weekday: monday
+
+notes: Public Denmark Volkswagen configurator. Stable trim -> MOTORER flow with
+  engine-card pricing labeled "Pris inkl. moms.".

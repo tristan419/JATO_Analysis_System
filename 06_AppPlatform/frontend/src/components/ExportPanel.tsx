@@ -358,9 +358,17 @@ interface Props {
   graphDiv?: HTMLElement | null;
   seriesNames?: string[];
   labelModeOptions?: ExportLabelMode[];
+  showExportButton?: boolean;
 }
 
-export function ExportPanel({ value: s, onChange, graphDiv, seriesNames, labelModeOptions }: Props) {
+export function ExportPanel({
+  value: s,
+  onChange,
+  graphDiv,
+  seriesNames,
+  labelModeOptions,
+  showExportButton = true,
+}: Props) {
   const [open, setOpen] = useState(false);
   const set = <K extends keyof ExportSettings>(k: K, v: ExportSettings[K]) => onChange({ ...s, [k]: v });
   const resolvedLabelModes = labelModeOptions && labelModeOptions.length > 0 ? labelModeOptions : DEFAULT_LABEL_MODES;
@@ -482,10 +490,12 @@ export function ExportPanel({ value: s, onChange, graphDiv, seriesNames, labelMo
               ))}
             </div>
           )}
-          <div className="export-row">
-            <button className="btn btn-primary" onClick={() => { void downloadPng(graphDiv ?? null, s); }}
-              disabled={!graphDiv}>📷 导出 PNG</button>
-          </div>
+          {showExportButton ? (
+            <div className="export-row">
+              <button className="btn btn-primary" onClick={() => { void downloadPng(graphDiv ?? null, s); }}
+                disabled={!graphDiv}>📷 导出 PNG</button>
+            </div>
+          ) : null}
         </div>
       )}
     </div>

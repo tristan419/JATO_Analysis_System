@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import os
+from pathlib import Path
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -15,7 +16,7 @@ import requests
 
 from jato_scraper import registry
 from jato_scraper.base import BaseExtractor, RawObservation
-from jato_scraper.config_loader import load_all_sources
+from jato_scraper.config_loader import load_all_sources, load_source_file
 from jato_scraper.currency_converter import enrich_observations_with_eur
 from jato_scraper.validation import (
     BatchValidationReport,
@@ -24,6 +25,51 @@ from jato_scraper.validation import (
 
 log = logging.getLogger(__name__)
 DEFAULT_API_BASE = "http://localhost:8000/v1"
+SOURCE_FILE_SUFFIXES = frozenset({".yaml", ".yml"})
+
+
+def _dedupe_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _expand_source_ref(source_ref: str) -> list[str]:
+    candidate = Path(source_ref).expanduser()
+    is_path_like = (
+        candidate.suffix.lower() in SOURCE_FILE_SUFFIXES
+        or candidate.exists()
+    )
+    if not is_path_like:
+        return [source_ref]
+
+    resolved = candidate.resolve()
+    if not resolved.exists():
+        raise FileNotFoundError(f"Source path does not exist: {source_ref}")
+
+    if resolved.is_dir():
+        return load_all_sources(sources_dir=resolved)
+
+    if resolved.suffix.lower() not in SOURCE_FILE_SUFFIXES:
+        raise ValueError(f"Unsupported source file type: {source_ref}")
+
+    source_code = load_source_file(resolved)
+    if not source_code:
+        raise ValueError(f"Failed to load source file: {source_ref}")
+    return [source_code]
+
+
+def _resolve_source_codes(source_refs: list[str]) -> list[str]:
+    load_all_sources()
+    resolved_codes: list[str] = []
+    for source_ref in source_refs:
+        resolved_codes.extend(_expand_source_ref(source_ref))
+    return _dedupe_preserve_order(resolved_codes)
 
 
 def _auth_headers(
@@ -221,10 +267,9 @@ def run_scrape(
     auth_token: str | None = None,
     user_name: str | None = None,
 ) -> dict[str, Any]:
-    # Auto-load YAML source configs before running
-    load_all_sources()
+    resolved_codes = _resolve_source_codes(source_codes)
     summary: dict[str, Any] = {"sources": {}, "ok": True}
-    for code in source_codes:
+    for code in resolved_codes:
         log.info("── Scraping %s ──", code)
         source_result: dict[str, Any] = {"status": "error"}
         try:
@@ -320,7 +365,7 @@ def run_scrape(
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="JATO MSRP scraping toolkit")
-    parser.add_argument("--sources", nargs="+", metavar="CODE")
+    parser.add_argument("--sources", nargs="+", metavar="REF")
     parser.add_argument("--all", action="store_true", dest="scrape_all")
     parser.add_argument("--api-base", default=DEFAULT_API_BASE)
     parser.add_argument(
@@ -339,23 +384,29 @@ def main(argv: list[str] | None = None) -> None:
     )
     if args.scrape_all:
         load_all_sources()
-        codes = registry.list_registered()
+        source_refs = registry.list_registered()
     elif args.sources:
-        codes = args.sources
+        source_refs = args.sources
     else:
-        parser.error("Specify --sources CODE [CODE ...] or --all")
+        parser.error(
+            "Specify --sources REF [REF ...] or --all"
+        )
         return
-    if not codes:
+    if not source_refs:
         log.warning("No extractors registered — nothing to scrape.")
         sys.exit(0)
-    summary = run_scrape(
-        source_codes=codes,
-        api_base=args.api_base,
-        trigger_type=args.trigger,
-        dry_run=args.dry_run,
-        auth_token=args.auth_token,
-        user_name=args.user_name,
-    )
+    try:
+        summary = run_scrape(
+            source_codes=source_refs,
+            api_base=args.api_base,
+            trigger_type=args.trigger,
+            dry_run=args.dry_run,
+            auth_token=args.auth_token,
+            user_name=args.user_name,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        parser.error(str(exc))
+        return
     print(json.dumps(summary, indent=2, ensure_ascii=False, default=str))
     sys.exit(0 if summary["ok"] else 1)
 

@@ -17,3 +17,7 @@ venv/
 
 # macOS artifacts
 .DS_Store
+
+# local script logs
+03_Scripts/logs/
+

@@ -57,8 +57,10 @@ source 03_Scripts/load_nvidia_api_key.sh
 ### 单个 source dry-run
 
 ```bash
-# 方式 1：CLI
+# 方式 1：CLI，--sources 同时支持 source_code、单个 YAML 文件路径、或目录路径
 python run.py --sources source_drafts/suv_only_country_model_top30/se/01_kia_sportage_se.yaml --dry-run -v
+python run.py --sources kia_sportage_se_draft_scrapling --dry-run -v
+python run.py --sources source_drafts/suv_only_country_model_top30/be --dry-run -v
 
 # 方式 2：Python API
 from jato_scraper.runner import run_scrape

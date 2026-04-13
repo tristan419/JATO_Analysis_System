@@ -6,6 +6,7 @@ from app.api.routes.crud import router as crud_router
 from app.api.routes.engineering import router as engineering_router
 from app.api.routes.filters import router as filters_router
 from app.api.routes.health import router as health_router
+from app.api.routes.market_scan import router as market_scan_router
 from app.api.routes.metadata import router as metadata_router
 from app.api.routes.msrp import router as msrp_router
 from app.api.routes.msrp_workflow import router as msrp_workflow_router
@@ -28,6 +29,7 @@ app.include_router(health_router)
 app.include_router(metadata_router, prefix=API_PREFIX)
 app.include_router(filters_router, prefix=API_PREFIX)
 app.include_router(analysis_router, prefix=API_PREFIX)
+app.include_router(market_scan_router, prefix=API_PREFIX)
 app.include_router(crud_router, prefix=API_PREFIX)
 app.include_router(platform_db_router, prefix=API_PREFIX)
 app.include_router(engineering_router, prefix=API_PREFIX)

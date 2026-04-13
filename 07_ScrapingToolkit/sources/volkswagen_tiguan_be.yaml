@@ -1,0 +1,49 @@
+# Volkswagen Belgium Tiguan configurator
+# Validated via live dry-run on 2026-04-13: 21 extracted / 21 valid.
+
+source_code: volkswagen_tiguan_be_scrapling
+country: 比利时
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.be/nl/configurator.html/__app/tiguan.app
+source_type: manufacturer_official
+price_semantics: base_msrp
+
+extractor_type: playwright
+profile_preset: ../source_drafts/suv_only_country_model_top30/_shared/presets/volkswagen_configurator_playwright.yaml
+profile:
+  url: https://www.volkswagen.be/nl/configurator.html/__app/tiguan.app
+  cookie_reject_selector: null
+  cookie_reject_text: Weigeren
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: Prijs incl. BTW
+  fixed_model: TIGUAN
+  fixed_jato_model: TIGUAN
+  structured_fields:
+    powertrain_rules:
+      - key: powertrain_phev
+        powertrain: PHEV
+        keywords:
+          - ehybrid
+          - plug-in hybride
+      - key: powertrain_mhev
+        powertrain: MHEV
+        keywords:
+          - mild-hybrid
+          - etsi
+      - key: powertrain_ice
+        powertrain: ICE
+        keywords:
+          - tsi
+          - tdi
+          - benzine
+          - diesel
+
+schedule:
+  frequency: manual_only
+  run_window_start: "00:00"
+  run_window_end: "05:00"
+  preferred_weekday: monday
+
+notes: Public Belgium Volkswagen configurator. Stable trim -> MOTOREN flow with
+  engine-card pricing labeled "Prijs incl. BTW".

@@ -43,6 +43,207 @@ export interface OverviewResponse {
   yearSeries: TimeSeriesPoint[];
 }
 
+export interface MarketScanDelta {
+  value: number | null;
+  display: string;
+  tone: string;
+}
+
+export interface MarketScanCountryOption {
+  value: string;
+  label: string;
+}
+
+export interface MarketScanMetadataLabels {
+  pageTitle: string;
+  currentMonthShort: string;
+  previousMonthShort: string;
+  sameMonthLastYearShort: string;
+  currentYtd: string;
+  priorYtd: string;
+  ytdWindow: string;
+}
+
+export interface MarketScanMetadata {
+  protocolVersion: string;
+  requestedPeriod: string | null;
+  resolvedPeriod: string;
+  latestPeriod: string;
+  priorPeriod: string | null;
+  sameMonthLastYearPeriod: string | null;
+  selectedCountry: string;
+  selectedCountryLabel: string;
+  selectedFuelTypes: string[];
+  selectedDrilldownSegment: string;
+  availableCountries: MarketScanCountryOption[];
+  availablePeriods: MarketScanCountryOption[];
+  availableFuelTypes: string[];
+  availableSegments: MarketScanCountryOption[];
+  labels: MarketScanMetadataLabels;
+}
+
+export interface MarketScanMetricCell {
+  key: string;
+  value: number | null;
+  display: string;
+  tone: string;
+}
+
+export interface MarketScanMatrixRow {
+  metricKey: string;
+  label: string;
+  cells: MarketScanMetricCell[];
+}
+
+export interface MarketScanMatrix {
+  columns: string[];
+  rows: MarketScanMatrixRow[];
+}
+
+export interface MarketScanOverviewSummary {
+  headline: string;
+  subheadline: string;
+  currentMonthVolume: number;
+  currentMonthYoY: MarketScanDelta;
+  ytdVolume: number;
+  ytdYoY: MarketScanDelta;
+}
+
+export interface MarketScanOverviewTrendItem {
+  period: string;
+  label: string;
+  totalVolume: number;
+  fuelMix: Record<string, number>;
+  mom: MarketScanDelta;
+  yoy: MarketScanDelta;
+}
+
+export interface MarketScanRankingItem {
+  rank: number;
+  brand?: string;
+  model?: string;
+  volume: number;
+  sharePct: number;
+  shareDisplay?: string;
+  priorVolume?: number;
+  priorMonthVolume?: number;
+  yoy: MarketScanDelta;
+  mom?: MarketScanDelta;
+  barPct: number;
+  fuelMix?: Record<string, number>;
+  driveMix?: Record<string, number>;
+}
+
+export interface MarketScanRankingGroup {
+  title: string;
+  currentLabel?: string;
+  priorLabel?: string;
+  previousMonthLabel?: string;
+  items: MarketScanRankingItem[];
+}
+
+export interface MarketScanOverviewPage {
+  summary: MarketScanOverviewSummary;
+  trend: {
+    periods: string[];
+    items: MarketScanOverviewTrendItem[];
+  };
+  ytdBrandRanking: MarketScanRankingGroup;
+  monthlyBrandRanking: MarketScanRankingGroup;
+}
+
+export interface MarketScanOriginTrendPoint {
+  period: string;
+  label: string;
+  volume: number;
+  sharePct: number;
+}
+
+export interface MarketScanOriginSeries {
+  origin: string;
+  points: MarketScanOriginTrendPoint[];
+}
+
+export interface MarketScanOriginPage {
+  summaryText: string;
+  trend: {
+    series: MarketScanOriginSeries[];
+  };
+  matrix: MarketScanMatrix;
+}
+
+export interface MarketScanBodyShareTrendItem {
+  period: string;
+  label: string;
+  totalVolume: number;
+  suvSharePct: number;
+  sedanSharePct: number;
+}
+
+export interface MarketScanSegmentPage {
+  summaryText: string;
+  matrix: MarketScanMatrix;
+  bodyShareTrend: {
+    items: MarketScanBodyShareTrendItem[];
+  };
+}
+
+export interface MarketScanFuelTrendItem {
+  label: string;
+  totalVolume: number;
+  fuelMix: Record<string, number>;
+}
+
+export interface MarketScanFuelPanel {
+  fuelType: string;
+  monthTitle: string;
+  ytdTitle: string;
+  monthRanking: MarketScanRankingItem[];
+  ytdRanking: MarketScanRankingItem[];
+}
+
+export interface MarketScanDrilldownPage {
+  segment: string;
+  segmentLabel: string;
+  title: string;
+  summaryText: string;
+  totalRanking: {
+    title: string;
+    items: MarketScanRankingItem[];
+  };
+  ytdFuelTrend: {
+    items: MarketScanFuelTrendItem[];
+  };
+  fuelPanels: MarketScanFuelPanel[];
+}
+
+export interface MarketScanDeckResults {
+  overview: MarketScanOverviewPage;
+  origin: MarketScanOriginPage;
+  segment: MarketScanSegmentPage;
+  drilldown: MarketScanDrilldownPage;
+  suvA: MarketScanDrilldownPage;
+  suvB: MarketScanDrilldownPage;
+}
+
+export type MarketScanPageKey = keyof MarketScanDeckResults;
+
+export interface MarketScanDeckResponse {
+  metadata: MarketScanMetadata;
+  results: MarketScanDeckResults;
+}
+
+export interface MarketScanDeckRequest {
+  country?: string | null;
+  target_period?: string | null;
+  fuel_types?: string[];
+  trend_window_months?: number;
+  origin_window_months?: number;
+  body_window_months?: number;
+  ranking_limit?: number;
+  drilldown_segment?: string | null;
+}
+
 export interface DetailResponse {
   page: number;
   pageSize: number;

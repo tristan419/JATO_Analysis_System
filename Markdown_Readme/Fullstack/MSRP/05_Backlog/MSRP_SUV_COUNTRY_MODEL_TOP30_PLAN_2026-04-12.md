@@ -4,7 +4,7 @@ Date: 2026-04-12
 
 Status: 执行中 — Batch 1+2 keyword filling 完成 (206/629)，dry-run 通过 97/212 (45.8%)
 
-Update: 2026-04-13 Volkswagen configurator 专项补充已记录，FR/IT/FI 子集完成，SI/SK 与 PL 进入定向挂起。
+Update: 2026-04-13 Volkswagen configurator 专项补充已记录；BE/DK/FR 子集已 promotion 到 sources，IT/FI 子集验证完成，SI/SK 与 PL 进入定向挂起。
 
 ---
 
@@ -12,7 +12,10 @@ Update: 2026-04-13 Volkswagen configurator 专项补充已记录，FR/IT/FI 子�
 
 ### 已完成
 
+- BE: Volkswagen ID.4 / T-Roc / Tiguan 已完成 production promotion to `07_ScrapingToolkit/sources/`，对应 draft 不再作为 batch_dryrun 待跑项。
+- DK: Volkswagen ID.4 / T-Roc 已完成 production promotion to `07_ScrapingToolkit/sources/`，定向 dry-run 结果为 7/7、4/4。
 - FR: Volkswagen T-Roc / Tiguan / T-Cross 已切到 trim-overview Playwright preset，定向 dry-run 结果为 4/4、7/7、6/6。
+- FR: Volkswagen T-Roc / Tiguan / T-Cross 已完成 production promotion to `07_ScrapingToolkit/sources/`。
 - IT: Volkswagen T-Roc / Tiguan / T-Cross 已切到 trim -> engine Playwright preset，定向 dry-run 结果为 5/5、24/24、12/12。
 - FI: Volkswagen ID.4 / Tiguan / T-Cross / Taigo 已切到 numeric __app Playwright preset，并补上 OneTrust dismiss 支持，定向 dry-run 结果为 9/9、9/9、7/7、7/7。
 
@@ -90,13 +93,13 @@ scaffold 生成 → keyword filling → CSS selector 填充 → dry-run 测试 �
 | ISO | 国家   | 文件数 | 货币 | Keyword | CSS Selector | Dry-run |
 | --- | ------ | -----: | ---- | ------- | ------------ | ------- |
 | DE  | 德国   |     30 | EUR  | ⬜      | ⬜           | ⬜      |
-| FR  | 法国   |     30 | EUR  | ⬜      | ⬜           | ⬜      |
+| FR  | 法国   |     30 | EUR  | ⬜      | △ VW 子集已完成 | △ VW 子集已 promotion |
 | IT  | 意大利 |     30 | EUR  | ⬜      | ⬜           | ⬜      |
 | ES  | 西班牙 |     30 | EUR  | ⬜      | ⬜           | ⬜      |
 | NL  | 荷兰   |     30 | EUR  | ⬜      | ⬜           | ⬜      |
-| BE  | 比利时 |     30 | EUR  | ⬜      | ⬜           | ⬜      |
+| BE  | 比利时 |     30 | EUR  | ⬜      | △ VW 子集已完成 | △ VW 子集已 promotion |
 | PL  | 波兰   |     30 | PLN  | ⬜      | ⬜           | ⬜      |
-| DK  | 丹麦   |     30 | DKK  | ⬜      | ⬜           | ⬜      |
+| DK  | 丹麦   |     30 | DKK  | ⬜      | △ VW 子集已完成 | △ VW 子集已 promotion |
 | FI  | 芬兰   |     30 | EUR  | ⬜      | ⬜           | ⬜      |
 | PT  | 葡萄牙 |     30 | EUR  | ⬜      | ⬜           | ⬜      |
 | IE  | 爱尔兰 |     30 | EUR  | ⬜      | ⬜           | ⬜      |

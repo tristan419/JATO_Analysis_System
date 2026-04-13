@@ -8,6 +8,8 @@ Selection unit: country×model candidates from the report.
 
 ## Dry-run 进度（2026-04-12）
 
+> 2026-04-13 补记：Belgium / Denmark / France 已完成的 Volkswagen production promotions 仍保留 draft YAML 作为研究记录，但 `03_Scripts/batch_dryrun.py` 现在会自动跳过所有已存在 matching production source 的 draft，不再把它们当成待跑 backlog。
+
 | 市场 | Keyword | Dry-run | 通过率 |
 |------|---------|---------|-------|
 | SE 瑞典 | ✅ | ✅ 21/29 | 72.4% |

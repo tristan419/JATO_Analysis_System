@@ -173,7 +173,10 @@ extract() → validate_observations() → enrich_observations_with_eur() → run
 
 ### 5.2 已完成转换与验证
 
+- BE: `be/07_volkswagen_id_4_be.yaml`、`be/10_volkswagen_t_roc_be.yaml`、`be/25_volkswagen_tiguan_be.yaml` 已切到 Playwright configurator flow，dry-run 结果分别为 8/8、10/10、21/21；production sources 已落到 `07_ScrapingToolkit/sources/`。
+- DK: `dk/02_volkswagen_id_4_dk.yaml`、`dk/06_volkswagen_t_roc_dk.yaml` 已切到 numeric __app Playwright flow，dry-run 结果分别为 7/7、4/4；production sources 已落到 `07_ScrapingToolkit/sources/`。
 - FR: `fr/15_volkswagen_t_roc_fr.yaml`、`fr/18_volkswagen_tiguan_fr.yaml`、`fr/20_volkswagen_t_cross_fr.yaml` 已切到 Playwright trim-overview flow，dry-run 结果分别为 4/4、7/7、6/6。
+- FR production promotion 已完成：`07_ScrapingToolkit/sources/volkswagen_t_roc_fr.yaml`、`07_ScrapingToolkit/sources/volkswagen_tiguan_fr.yaml`、`07_ScrapingToolkit/sources/volkswagen_t_cross_fr.yaml`。
 - IT: `it/05_volkswagen_t_roc_it.yaml`、`it/09_volkswagen_tiguan_it.yaml`、`it/11_volkswagen_t_cross_it.yaml` 已切到 Playwright trim -> engine flow，dry-run 结果分别为 5/5、24/24、12/12。
 - FI: `fi/03_volkswagen_id_4_fi.yaml`、`fi/12_volkswagen_tiguan_fi.yaml`、`fi/15_volkswagen_t_cross_fi.yaml`、`fi/16_volkswagen_taigo_fi.yaml` 已切到 numeric __app Playwright flow，dry-run 结果分别为 9/9、9/9、7/7、7/7。
 

@@ -1,11 +1,33 @@
 #!/usr/bin/env bash
 set -u
 
-REPO_DIR="${REPO_DIR:-/opt/JATO_Analysis_System}"
 BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@8000}"
 BACKEND_PORT="${BACKEND_PORT:-}"
 BACKEND_ENV_FILE="${BACKEND_ENV_FILE:-/etc/jato-fullstack/backend.env}"
 NGINX_ERROR_LOG="${NGINX_ERROR_LOG:-/var/log/nginx/error.log}"
+
+resolve_repo_dir() {
+  if [[ -n "${REPO_DIR:-}" ]]; then
+    printf '%s\n' "$REPO_DIR"
+    return
+  fi
+
+  local candidate=""
+  for candidate in \
+    /opt/JATO_Analysis_System-main \
+    /opt/JATO_Analysis_System \
+    /var/www/JATO_Analysis_System
+  do
+    if [[ -d "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+
+  printf '%s\n' /opt/JATO_Analysis_System-main
+}
+
+REPO_DIR="$(resolve_repo_dir)"
 FRONTEND_DIST_DIR="${FRONTEND_DIST_DIR:-$REPO_DIR/06_AppPlatform/frontend/dist}"
 
 if [[ -z "$BACKEND_PORT" ]]; then
@@ -38,6 +60,7 @@ date '+%Y-%m-%d %H:%M:%S %Z'
 
 section "host"
 run_shell "hostname && whoami && pwd"
+run_shell "printf 'REPO_DIR=%s\nFRONTEND_DIST_DIR=%s\n' '$REPO_DIR' '$FRONTEND_DIST_DIR'"
 
 section "versions"
 run_shell "bash --version | head -n 1"

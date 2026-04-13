@@ -98,6 +98,17 @@ class RvFinanceRequest(BaseModel):
     sensitivity_vehicle_idx: int = 0
 
 
+class MarketScanDeckRequest(BaseModel):
+    country: str | None = None
+    target_period: str | None = None
+    fuel_types: list[str] = Field(default_factory=list)
+    trend_window_months: int = 24
+    origin_window_months: int = 30
+    body_window_months: int = 30
+    ranking_limit: int = 12
+    drilldown_segment: str | None = None
+
+
 class CrudItem(BaseModel):
     id: str
     code: str

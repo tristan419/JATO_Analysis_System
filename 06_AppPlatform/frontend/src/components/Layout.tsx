@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { to: "/engineering", code: "04", label: "Engineering", sublabel: "配置导入" },
   { to: "/review", code: "05", label: "Review", sublabel: "匹配审核" },
   { to: "/msrp", code: "06", label: "MSRP", sublabel: "当前价格" },
+  { to: "/market-scan", code: "07", label: "Scan", sublabel: "市场扫描" },
 ];
 
 export function Layout() {

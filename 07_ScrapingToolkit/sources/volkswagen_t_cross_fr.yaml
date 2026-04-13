@@ -1,0 +1,34 @@
+# Volkswagen France T-Cross configurator
+# Validated via live dry-run on 2026-04-13: 6 extracted / 6 valid.
+
+source_code: volkswagen_t_cross_fr_scrapling
+country: 法国
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.fr/fr/configurateur.html/__app/t-cross.app
+source_type: manufacturer_official
+price_semantics: base_msrp
+
+extractor_type: playwright
+profile_preset: ../source_drafts/suv_only_country_model_top30/_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+profile:
+  url: https://www.volkswagen.fr/fr/configurateur.html/__app/t-cross.app
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: Le prix inclut la TVA
+  fixed_model: T-CROSS
+  fixed_jato_model: T-CROSS
+  structured_fields:
+    powertrain_rules:
+      - key: powertrain_ice
+        powertrain: ICE
+        keywords:
+          - essence
+
+schedule:
+  frequency: manual_only
+  run_window_start: "00:00"
+  run_window_end: "05:00"
+  preferred_weekday: monday
+
+notes: Public France Volkswagen configurator. Stable trim-overview MSRP entries
+  labeled "Le prix inclut la TVA".

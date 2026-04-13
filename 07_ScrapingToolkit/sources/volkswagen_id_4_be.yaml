@@ -1,0 +1,37 @@
+# Volkswagen Belgium ID.4 configurator
+# Validated via live dry-run on 2026-04-13: 8 extracted / 8 valid.
+
+source_code: volkswagen_id_4_be_scrapling
+country: 比利时
+brand: VOLKSWAGEN
+source_url: https://www.volkswagen.be/nl/configurator.html/__app/id-4.app
+source_type: manufacturer_official
+price_semantics: base_msrp
+
+extractor_type: playwright
+profile_preset: ../source_drafts/suv_only_country_model_top30/_shared/presets/volkswagen_configurator_playwright.yaml
+profile:
+  url: https://www.volkswagen.be/nl/configurator.html/__app/id-4.app
+  cookie_reject_selector: null
+  cookie_reject_text: Weigeren
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: Prijs incl. BTW
+  fixed_model: ID.4
+  fixed_jato_model: ID.4
+  structured_fields:
+    powertrain_rules:
+      - key: powertrain_bev
+        powertrain: BEV
+        keywords:
+          - elektrisch
+          - batterij
+
+schedule:
+  frequency: manual_only
+  run_window_start: "00:00"
+  run_window_end: "05:00"
+  preferred_weekday: monday
+
+notes: Public Belgium Volkswagen configurator. Stable trim -> BATTERIJEN flow with
+  engine-card pricing labeled "Prijs incl. BTW".

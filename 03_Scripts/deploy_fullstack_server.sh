@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO_DIR="${REPO_DIR:-/opt/JATO_Analysis_System}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@8000}"
 BACKEND_PORT="${BACKEND_PORT:-}"
@@ -14,11 +13,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIAGNOSTIC_SCRIPT="$SCRIPT_DIR/print_fullstack_server_diagnostics.sh"
 CURRENT_STEP="initialization"
 
-BACKEND_DIR="$REPO_DIR/06_AppPlatform/backend"
-FRONTEND_DIR="$REPO_DIR/06_AppPlatform/frontend"
-BACKEND_REQUIREMENTS="$BACKEND_DIR/requirements.txt"
-VENV_DIR="$REPO_DIR/.venv"
-
 VITE_API_BASE="${VITE_API_BASE:-/v1}"
 VITE_AUTH_TOKEN="${VITE_AUTH_TOKEN:-}"
 VITE_USER_ROLE="${VITE_USER_ROLE:-viewer}"
@@ -28,6 +22,34 @@ VITE_USER_NAME="${VITE_USER_NAME:-anonymous}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://mirrors.cloud.tencent.com/npm/}"
 PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
+
+resolve_repo_dir() {
+  if [[ -n "${REPO_DIR:-}" ]]; then
+    printf '%s\n' "$REPO_DIR"
+    return
+  fi
+
+  local candidate=""
+  for candidate in \
+    /opt/JATO_Analysis_System-main \
+    /opt/JATO_Analysis_System \
+    /var/www/JATO_Analysis_System
+  do
+    if [[ -d "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+
+  printf '%s\n' /opt/JATO_Analysis_System-main
+}
+
+REPO_DIR="$(resolve_repo_dir)"
+
+BACKEND_DIR="$REPO_DIR/06_AppPlatform/backend"
+FRONTEND_DIR="$REPO_DIR/06_AppPlatform/frontend"
+BACKEND_REQUIREMENTS="$BACKEND_DIR/requirements.txt"
+VENV_DIR="$REPO_DIR/.venv"
 
 log_section() {
   printf '\n[STEP] %s\n' "$1"
@@ -93,6 +115,8 @@ require_command git
 require_command curl
 require_command npm
 require_command node
+
+echo "[INFO] Repository directory: $REPO_DIR"
 
 CURRENT_STEP="Validate sudo access"
 log_section "$CURRENT_STEP"
@@ -164,8 +188,13 @@ if [[ "$SKIP_GIT_SYNC" == "true" ]]; then
 elif [[ -d "$REPO_DIR/.git" ]]; then
   cd "$REPO_DIR"
   git fetch "$REMOTE_NAME" "$DEPLOY_BRANCH"
-  git checkout "$DEPLOY_BRANCH"
-  git pull --ff-only "$REMOTE_NAME" "$DEPLOY_BRANCH"
+  if git rev-parse --verify HEAD >/dev/null 2>&1; then
+    git checkout "$DEPLOY_BRANCH"
+    git pull --ff-only "$REMOTE_NAME" "$DEPLOY_BRANCH"
+  else
+    echo "[INFO] Repository has no local commits yet; bootstrapping $DEPLOY_BRANCH from $REMOTE_NAME/$DEPLOY_BRANCH"
+    git checkout -f -B "$DEPLOY_BRANCH" "$REMOTE_NAME/$DEPLOY_BRANCH"
+  fi
 else
   echo "[INFO] No git repository metadata; skipping sync and using local tree"
 fi
