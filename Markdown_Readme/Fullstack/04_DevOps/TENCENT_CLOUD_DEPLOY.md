@@ -32,11 +32,34 @@
 
 ## 1. 目标目录与端口
 
-- 仓库目录：`/opt/JATO_Analysis_System`
+- 仓库目录：`/opt/JATO_Analysis_System-main`
 - 后端服务：`jato-fullstack-backend@8000`
 - 后端监听：`127.0.0.1:8000`
-- 前端静态目录：`/opt/JATO_Analysis_System/06_AppPlatform/frontend/dist`
+- 前端静态目录：`/opt/JATO_Analysis_System-main/06_AppPlatform/frontend/dist`
 - 外部入口：nginx `80`
+
+### 1.1 发布前自动清理规则
+
+`03_Scripts/deploy_fullstack_server.sh` 现在会在构建前自动清理一批“已知安全”的 untracked 残留，避免腾讯云仓库因为历史备份目录或临时文档变脏：
+
+- `04_Processed_data/.refresh_backups/pre-sync-*`
+- `Markdown_Readme/Fullstack/*.md`
+- `Markdown_Readme/Streamlit/*.md`
+
+这里不是全量 `git clean -fdx`，而是只清这些明确白名单路径下的 untracked 项；已跟踪文件不会被删，`04_Processed_data` 主数据目录也不会被碰。
+
+如果某次你明确不想执行这一步，可以临时关闭：
+
+```bash
+DEPLOY_PRUNE_UNTRACKED=false bash 03_Scripts/deploy_fullstack_server.sh
+```
+
+如果后续还有新的服务器侧临时垃圾路径需要纳入，可以覆盖：
+
+```bash
+DEPLOY_UNTRACKED_CLEAN_PATTERNS='04_Processed_data/.refresh_backups/pre-sync-* tmp/deploy-* Markdown_Readme/Fullstack/*.md Markdown_Readme/Streamlit/*.md' \
+bash 03_Scripts/deploy_fullstack_server.sh
+```
 
 ## 2. 服务器前置依赖
 
@@ -206,6 +229,7 @@ bash 03_Scripts/deploy_fullstack_server.sh
 
 - `VITE_API_BASE=/v1` 代表前端走同域 API，不把后端地址写死到构建产物里
 - `VITE_AUTH_TOKEN` 默认不建议写进前端构建产物，建议用户首次登录后在页面 Access Control 里填写 token
+- 脚本会先清掉已知白名单内的 untracked 脏树，再继续 git / build / restart；这样不会再因为 refresh backup 或临时 Markdown 残留把远端工作树弄脏
 
 如果你只是想重新部署代码，不想重复初始化，直接运行这一节的 `03_Scripts/deploy_fullstack_server.sh` 即可。
 

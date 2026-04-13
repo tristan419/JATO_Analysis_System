@@ -143,7 +143,8 @@ Workflow 文件：`.github/workflows/deploy-fullstack-tencent.yml`
 3. `scp` 上传归档到服务器 `/tmp/JATO_deploy.tar.gz`（`strip_components: 2`）
 4. SSH 登录服务器，解压到 `/opt/JATO_Analysis_System-main`
 5. 执行 `03_Scripts/deploy_fullstack_server.sh`（`SKIP_GIT_SYNC=true`）
-6. 健康检查 `curl http://127.0.0.1:8000/healthz`
+6. 发布脚本会先清掉已知白名单内的 untracked 残留：`04_Processed_data/.refresh_backups/pre-sync-*`、`Markdown_Readme/Fullstack/*.md`、`Markdown_Readme/Streamlit/*.md`
+7. 健康检查 `curl http://127.0.0.1:8000/healthz`
 
 ---
 
@@ -162,6 +163,12 @@ bash 03_Scripts/deploy_fullstack_server.sh
 ```
 
 脚本自动完成：拉取最新 main → 安装后端依赖 → npm ci + 构建前端 → 重启 `jato-fullstack-backend@8000` → reload nginx。
+
+如果某次你想保留远端 untracked 调试痕迹，可以显式关闭自动清理：
+
+```bash
+DEPLOY_PRUNE_UNTRACKED=false bash 03_Scripts/deploy_fullstack_server.sh
+```
 
 ---
 
@@ -236,3 +243,15 @@ git push JATO_Analysis_System main
 macOS 钥匙串已有 GitHub HTTPS 凭据，切换后立即推送成功。
 
 **建议**：将 HTTPS 作为默认推送方式。只有明确知道 SSH 可达时才切回 SSH。
+
+### 7.8 腾讯云远端 untracked 脏树（2026-04-13）
+
+**现象**：腾讯云活跃仓库里残留了未跟踪的 refresh backup 目录和临时 Markdown 文档，后续 Git checkout / 部署容易因为工作树脏而变得不可预测。
+
+**修复**：`deploy_fullstack_server.sh` 已新增“已知白名单 untracked 清理”步骤，在构建前自动 prune：
+
+- `04_Processed_data/.refresh_backups/pre-sync-*`
+- `Markdown_Readme/Fullstack/*.md`
+- `Markdown_Readme/Streamlit/*.md`
+
+**原则**：不做全仓库 `git clean -fdx`，只清明确白名单里的 untracked 临时内容，避免误删数据目录或配置文件。

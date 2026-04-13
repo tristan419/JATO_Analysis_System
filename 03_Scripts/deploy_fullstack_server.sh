@@ -9,6 +9,8 @@ RUN_DATABASE_MIGRATIONS="${RUN_DATABASE_MIGRATIONS:-auto}"
 REMOTE_NAME="${REMOTE_NAME:-}"
 REPO_REMOTE_URL="${REPO_REMOTE_URL:-git@github.com:tristan419/JATO_Analysis_System.git}"
 SKIP_GIT_SYNC="${SKIP_GIT_SYNC:-false}"
+DEPLOY_PRUNE_UNTRACKED="${DEPLOY_PRUNE_UNTRACKED:-true}"
+DEPLOY_UNTRACKED_CLEAN_PATTERNS="${DEPLOY_UNTRACKED_CLEAN_PATTERNS:-04_Processed_data/.refresh_backups/pre-sync-* Markdown_Readme/Fullstack/*.md Markdown_Readme/Streamlit/*.md}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIAGNOSTIC_SCRIPT="$SCRIPT_DIR/print_fullstack_server_diagnostics.sh"
 CURRENT_STEP="initialization"
@@ -118,6 +120,50 @@ require_command node
 
 echo "[INFO] Repository directory: $REPO_DIR"
 
+cleanup_known_untracked_paths() {
+  local raw_pattern=""
+  local candidate=""
+  local status_output=""
+  local removed_count=0
+
+  if ! is_truthy "$DEPLOY_PRUNE_UNTRACKED"; then
+    echo "[INFO] Skipping untracked cleanup because DEPLOY_PRUNE_UNTRACKED=$DEPLOY_PRUNE_UNTRACKED"
+    return
+  fi
+
+  if [[ ! -d "$REPO_DIR/.git" ]]; then
+    echo "[INFO] Skipping untracked cleanup because git metadata is unavailable"
+    return
+  fi
+
+  cd "$REPO_DIR"
+  shopt -s nullglob dotglob
+  for raw_pattern in $DEPLOY_UNTRACKED_CLEAN_PATTERNS; do
+    for candidate in $raw_pattern; do
+      [[ -e "$candidate" ]] || continue
+      if git ls-files --error-unmatch -- "$candidate" >/dev/null 2>&1; then
+        continue
+      fi
+
+      status_output="$(git status --short --untracked-files=all -- "$candidate" || true)"
+      if [[ -z "$status_output" ]] || ! grep -q '^?? ' <<< "$status_output"; then
+        continue
+      fi
+
+      echo "[INFO] Pruning known untracked path: $candidate"
+      git clean -fd -- "$candidate"
+      removed_count=$((removed_count + 1))
+    done
+  done
+  shopt -u nullglob dotglob
+
+  if [[ "$removed_count" -eq 0 ]]; then
+    echo "[INFO] No matching known untracked paths found"
+  else
+    echo "[INFO] Pruned $removed_count known untracked path(s)"
+  fi
+}
+
 CURRENT_STEP="Validate sudo access"
 log_section "$CURRENT_STEP"
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -135,6 +181,10 @@ if [[ ! -d "$REPO_DIR/.git" ]]; then
   fi
   echo "[INFO] No .git metadata found; continuing with local tree only"
 fi
+
+CURRENT_STEP="Prune known untracked paths"
+log_section "$CURRENT_STEP"
+cleanup_known_untracked_paths
 
 if [[ "$SKIP_GIT_SYNC" != "true" && -d "$REPO_DIR/.git" ]]; then
   if [[ -z "$REMOTE_NAME" ]]; then
