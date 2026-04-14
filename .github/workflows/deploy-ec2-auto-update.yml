@@ -16,13 +16,16 @@ jobs:
 
     steps:
       - name: Validate required GitHub secrets
+        id: auth
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         run: |
           missing=0
-          for key in SSH_HOST SSH_USER SSH_PRIVATE_KEY; do
+          auth_mode=""
+          for key in SSH_HOST SSH_USER; do
             value="${!key}"
             if [ -z "$value" ]; then
               echo "::error::Missing required GitHub secret: $key"
@@ -30,16 +33,69 @@ jobs:
             fi
           done
 
+          if [ -n "$SSH_PRIVATE_KEY" ]; then
+            auth_mode="key"
+          elif [ -n "$SSH_PASSWORD" ]; then
+            auth_mode="password"
+          else
+            echo "::error::Provide either SSH_PRIVATE_KEY or SSH_PASSWORD"
+            missing=1
+          fi
+
           if [ "$missing" -ne 0 ]; then
             exit 1
           fi
 
+          echo "mode=$auth_mode" >> "$GITHUB_OUTPUT"
+
       - name: Deploy to server over SSH
+        if: ${{ steps.auth.outputs.mode == 'key' }}
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+
+            REPO_DIR="${{ vars.DEPLOY_REPO_DIR }}"
+            SERVICE_NAME="${{ vars.SYSTEMD_SERVICE_NAME }}"
+            APP_PORT="${{ vars.DASHBOARD_PORT }}"
+
+            if [ -z "$REPO_DIR" ]; then
+              REPO_DIR="/opt/JATO_Analysis_System"
+            fi
+            if [ -z "$SERVICE_NAME" ]; then
+              SERVICE_NAME="jato-dashboard@8501"
+            fi
+            if [ -z "$APP_PORT" ]; then
+              APP_PORT="8501"
+            fi
+
+            cd "$REPO_DIR"
+
+            git fetch origin main
+            git checkout main
+            git pull --ff-only origin main
+
+            . .venv/bin/activate
+            pip install -r requirements.txt
+
+            sudo -n systemctl restart "$SERVICE_NAME"
+            sudo -n systemctl --no-pager status "$SERVICE_NAME" | head -n 30
+
+            curl -fsS "http://127.0.0.1:${APP_PORT}/_stcore/health"
+            git rev-parse --short HEAD
+
+      - name: Deploy to server over SSH
+        if: ${{ steps.auth.outputs.mode == 'password' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
           script_stop: true
           command_timeout: 20m
           script: |
