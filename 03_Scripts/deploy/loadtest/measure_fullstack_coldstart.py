@@ -6,23 +6,42 @@ import json
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
 
 def build_headers(
-    auth_token: str,
-    user_role: str,
-    user_name: str,
+    auth_token: str | None,
+    user_role: str | None,
+    user_name: str | None,
     *,
     json_body: bool = False,
+    host_header: str | None = None,
 ) -> dict[str, str]:
-    headers = {
-        "X-Auth-Token": auth_token,
-        "X-User-Role": user_role,
-        "X-User-Name": user_name,
-    }
+    headers: dict[str, str] = {}
+    if auth_token:
+        headers["X-Auth-Token"] = auth_token
+    if user_role:
+        headers["X-User-Role"] = user_role
+    if user_name:
+        headers["X-User-Name"] = user_name
     if json_body:
         headers["Content-Type"] = "application/json"
+    if host_header:
+        headers["Host"] = host_header
     return headers
+
+
+def resolve_api_base_url(
+    app_base_url: str,
+    api_base_url: str | None,
+) -> str:
+    if api_base_url:
+        return api_base_url.rstrip("/")
+
+    parsed = urlparse(app_base_url)
+    if parsed.hostname in {"127.0.0.1", "localhost"} and parsed.port is None:
+        return f"{parsed.scheme}://{parsed.hostname}:8000"
+    return app_base_url.rstrip("/")
 
 
 def timed_request(
@@ -104,7 +123,7 @@ def main() -> int:
     parser.add_argument(
         "--api-base-url",
         default=None,
-        help="API base URL, defaults to app-base-url",
+        help="API base URL, defaults to app-base-url or localhost:8000",
     )
     parser.add_argument(
         "--auth-token",
@@ -136,10 +155,20 @@ def main() -> int:
         default="SUV A0",
         help="Market-scan drilldown segment",
     )
+    parser.add_argument(
+        "--page-host-header",
+        default=None,
+        help="Optional Host header for page requests via local nginx",
+    )
+    parser.add_argument(
+        "--api-host-header",
+        default=None,
+        help="Optional Host header for API requests via local nginx",
+    )
     args = parser.parse_args()
 
     app_base_url = args.app_base_url.rstrip("/")
-    api_base_url = (args.api_base_url or args.app_base_url).rstrip("/")
+    api_base_url = resolve_api_base_url(app_base_url, args.api_base_url)
 
     deck_payload = {
         "country": args.country,
@@ -157,22 +186,52 @@ def main() -> int:
         args.user_role,
         args.user_name,
         json_body=True,
+        host_header=args.api_host_header,
+    )
+    page_headers = build_headers(
+        None,
+        None,
+        None,
+        host_header=args.page_host_header,
     )
 
     print("== Page cold-start ==")
-    print_result("root-first", timed_request(f"{app_base_url}/"))
-    print_result("root-second", timed_request(f"{app_base_url}/"))
+    print_result(
+        "root-first",
+        timed_request(f"{app_base_url}/", headers=page_headers),
+    )
+    print_result(
+        "root-second",
+        timed_request(f"{app_base_url}/", headers=page_headers),
+    )
     print_result(
         "specification-first",
-        timed_request(f"{app_base_url}/specification"),
+        timed_request(
+            f"{app_base_url}/specification",
+            headers=page_headers,
+        ),
     )
     print_result(
         "market-scan-first",
-        timed_request(f"{app_base_url}/market-scan"),
+        timed_request(
+            f"{app_base_url}/market-scan",
+            headers=page_headers,
+        ),
     )
 
     print("\n== API cold-start ==")
-    print_result("healthz", timed_request(f"{api_base_url}/healthz"))
+    print_result(
+        "healthz",
+        timed_request(
+            f"{api_base_url}/healthz",
+            headers=build_headers(
+                args.auth_token,
+                args.user_role,
+                args.user_name,
+                host_header=args.api_host_header,
+            ),
+        ),
+    )
     print_result(
         "market-scan-deck-first",
         timed_request(

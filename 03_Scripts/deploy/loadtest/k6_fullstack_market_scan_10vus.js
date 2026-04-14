@@ -6,14 +6,19 @@ const API_BASE_URL = (__ENV.API_BASE_URL || APP_BASE_URL).replace(/\/$/, '');
 const AUTH_TOKEN = __ENV.AUTH_TOKEN || 'change-me';
 const USER_ROLE = __ENV.USER_ROLE || 'viewer';
 const USER_NAME = __ENV.USER_NAME || 'k6-market-scan';
+const APP_HOST_HEADER = __ENV.APP_HOST_HEADER || '';
+const API_HOST_HEADER = __ENV.API_HOST_HEADER || '';
 const TARGET_PERIOD = __ENV.TARGET_PERIOD || undefined;
 const COUNTRY = __ENV.COUNTRY || undefined;
 const DRILLDOWN_SEGMENT = __ENV.DRILLDOWN_SEGMENT || 'SUV A0';
+
+const PAGE_HEADERS = APP_HOST_HEADER ? { Host: APP_HOST_HEADER } : {};
 
 const READ_HEADERS = {
   'X-Auth-Token': AUTH_TOKEN,
   'X-User-Role': USER_ROLE,
   'X-User-Name': USER_NAME,
+  ...(API_HOST_HEADER ? { Host: API_HOST_HEADER } : {}),
 };
 
 const JSON_HEADERS = {
@@ -63,9 +68,9 @@ export function setup() {
 
 export default function (data) {
   const pageResponses = http.batch([
-    ['GET', `${APP_BASE_URL}/`, null, { tags: { endpoint: 'root-page' } }],
-    ['GET', `${APP_BASE_URL}/specification`, null, { tags: { endpoint: 'specification-page' } }],
-    ['GET', `${APP_BASE_URL}/market-scan`, null, { tags: { endpoint: 'market-scan-page' } }],
+    ['GET', `${APP_BASE_URL}/`, null, { headers: PAGE_HEADERS, tags: { endpoint: 'root-page' } }],
+    ['GET', `${APP_BASE_URL}/specification`, null, { headers: PAGE_HEADERS, tags: { endpoint: 'specification-page' } }],
+    ['GET', `${APP_BASE_URL}/market-scan`, null, { headers: PAGE_HEADERS, tags: { endpoint: 'market-scan-page' } }],
     ['GET', `${API_BASE_URL}/healthz`, null, { tags: { endpoint: 'healthz' } }],
   ]);
 
