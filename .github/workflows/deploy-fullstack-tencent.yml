@@ -50,7 +50,7 @@ jobs:
           fi
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Package deploy archive
         run: |
@@ -68,7 +68,7 @@ jobs:
           ls -lh "$RUNNER_TEMP/JATO_deploy.tar.gz"
 
       - name: Upload archive to server
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -79,20 +79,28 @@ jobs:
           strip_components: 2
 
       - name: Deploy on server via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        env:
-          DEPLOY_SERVER_NAME: ${{ vars.DEPLOY_SERVER_NAME }}
-          DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
-          DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           password: ${{ secrets.SSH_PASSWORD }}
           command_timeout: 30m
-          envs: DEPLOY_SERVER_NAME,DEPLOY_ENABLE_HTTPS,DEPLOY_CERTBOT_EMAIL
           script: |
+            set -euo pipefail
+
             REPO_DIR="/opt/JATO_Analysis_System-main"
+            DEPLOY_SERVER_NAME="${{ vars.DEPLOY_SERVER_NAME }}"
+            DEPLOY_ENABLE_HTTPS="${{ vars.DEPLOY_ENABLE_HTTPS }}"
+            DEPLOY_CERTBOT_EMAIL="${{ secrets.DEPLOY_CERTBOT_EMAIL }}"
+
+            if [ -z "$DEPLOY_SERVER_NAME" ]; then
+              DEPLOY_SERVER_NAME="ojeur.cloud www.ojeur.cloud"
+            fi
+
+            if [ -z "$DEPLOY_ENABLE_HTTPS" ]; then
+              DEPLOY_ENABLE_HTTPS="true"
+            fi
 
             sudo mkdir -p "$REPO_DIR"
             sudo chown -R "$USER":"$USER" "$REPO_DIR"
@@ -109,8 +117,6 @@ jobs:
             DEPLOY_RC=${PIPESTATUS[0]:-$?}
 
             FRONTEND_ROOT="$REPO_DIR/06_AppPlatform/frontend/dist"
-            DEPLOY_SERVER_NAME="${DEPLOY_SERVER_NAME:-ojeur.cloud www.ojeur.cloud}"
-            DEPLOY_ENABLE_HTTPS="${DEPLOY_ENABLE_HTTPS:-true}"
 
             # Keep ingress idempotent without overwriting Certbot-managed nginx blocks.
             if [ -n "$DEPLOY_SERVER_NAME" ] && [ "$DEPLOY_SERVER_NAME" != "_" ]; then
