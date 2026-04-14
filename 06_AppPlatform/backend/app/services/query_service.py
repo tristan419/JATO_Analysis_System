@@ -63,6 +63,16 @@ _top_level_filter_options_cache: (
     tuple[float, str, dict[str, list[str]]] | None
 ) = None
 _top_level_filter_options_lock = threading.Lock()
+_OVERVIEW_CACHE_TTL_SECONDS = 300
+_overview_cache: dict[
+    tuple[
+        tuple[tuple[str, tuple[str, ...]], ...],
+        bool,
+        int,
+    ],
+    tuple[float, str, dict],
+] = {}
+_overview_cache_lock = threading.Lock()
 
 
 # ── Helper: resolve column name ────────────────────────────────
@@ -87,6 +97,27 @@ def _has_active_filters(filters: dict[str, list[str]]) -> bool:
             if str(value).strip():
                 return True
     return False
+
+
+def _normalize_query_cache_filters(
+    filters: dict[str, list[str]],
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    normalized_filters: list[tuple[str, tuple[str, ...]]] = []
+    for column, values in filters.items():
+        normalized_column = str(column).strip()
+        normalized_values = tuple(
+            sorted(
+                {
+                    str(value).strip()
+                    for value in (values or [])
+                    if value is not None and str(value).strip()
+                }
+            )
+        )
+        if not normalized_column or not normalized_values:
+            continue
+        normalized_filters.append((normalized_column, normalized_values))
+    return tuple(sorted(normalized_filters))
 
 
 def _resolve_option_columns(
@@ -498,6 +529,54 @@ def query_grouped_time_series(
 
 # ── Overview ────────────────────────────────────────────────────
 def query_overview(
+    filters: dict[str, list[str]],
+    prefer_precomputed: bool,
+    top_n: int,
+) -> dict:
+    cache_key = (
+        _normalize_query_cache_filters(filters),
+        bool(prefer_precomputed),
+        max(1, int(top_n)),
+    )
+    dataset_token = repo.current_dataset_token()
+    now = time.monotonic()
+    cached = _overview_cache.get(cache_key)
+    if cached is not None:
+        cached_at, cached_token, cached_result = cached
+        if (
+            cached_token == dataset_token
+            and (now - cached_at) < _OVERVIEW_CACHE_TTL_SECONDS
+        ):
+            return cached_result
+
+    with _overview_cache_lock:
+        now = time.monotonic()
+        dataset_token = repo.current_dataset_token()
+        cached = _overview_cache.get(cache_key)
+        if cached is not None:
+            cached_at, cached_token, cached_result = cached
+            if (
+                cached_token == dataset_token
+                and (now - cached_at) < _OVERVIEW_CACHE_TTL_SECONDS
+            ):
+                return cached_result
+
+        result = _query_overview_impl(
+            filters=filters,
+            prefer_precomputed=prefer_precomputed,
+            top_n=top_n,
+        )
+        _overview_cache[cache_key] = (now, dataset_token, result)
+        if len(_overview_cache) > 32:
+            oldest_key = min(
+                _overview_cache,
+                key=lambda key: _overview_cache[key][0],
+            )
+            _overview_cache.pop(oldest_key, None)
+        return result
+
+
+def _query_overview_impl(
     filters: dict[str, list[str]],
     prefer_precomputed: bool,
     top_n: int,
