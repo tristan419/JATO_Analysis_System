@@ -77,162 +77,228 @@ jobs:
 
       - name: Upload archive to server
         if: ${{ steps.auth.outputs.mode == 'key' }}
-        uses: appleboy/scp-action@v1.0.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: /github/runner_temp/JATO_deploy.tar.gz
-          target: /tmp/
-          strip_components: 2
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?Missing SSH_HOST}"
+          : "${SSH_USER:?Missing SSH_USER}"
+          : "${SSH_PRIVATE_KEY:?Missing SSH_PRIVATE_KEY}"
+          if [ -z "${SSH_PORT:-}" ]; then
+            SSH_PORT=22
+          fi
+
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/github_actions_tencent_key
+          chmod 600 ~/.ssh/github_actions_tencent_key
+
+          scp -v -P "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=20 \
+            -i ~/.ssh/github_actions_tencent_key \
+            "$RUNNER_TEMP/JATO_deploy.tar.gz" \
+            "$SSH_USER@$SSH_HOST:/tmp/JATO_deploy.tar.gz"
 
       - name: Upload archive to server
         if: ${{ steps.auth.outputs.mode == 'password' }}
-        uses: appleboy/scp-action@v1.0.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          source: /github/runner_temp/JATO_deploy.tar.gz
-          target: /tmp/
-          strip_components: 2
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?Missing SSH_HOST}"
+          : "${SSH_USER:?Missing SSH_USER}"
+          : "${SSH_PASSWORD:?Missing SSH_PASSWORD}"
+          if [ -z "${SSH_PORT:-}" ]; then
+            SSH_PORT=22
+          fi
+
+          sudo apt-get update -y
+          sudo apt-get install -y sshpass
+
+          sshpass -p "$SSH_PASSWORD" \
+            scp -v -P "$SSH_PORT" \
+            -o PreferredAuthentications=password \
+            -o PubkeyAuthentication=no \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=20 \
+            "$RUNNER_TEMP/JATO_deploy.tar.gz" \
+            "$SSH_USER@$SSH_HOST:/tmp/JATO_deploy.tar.gz"
 
       - name: Deploy on server via SSH
         if: ${{ steps.auth.outputs.mode == 'key' }}
-        uses: appleboy/ssh-action@v1.2.5
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          command_timeout: 30m
-          script: |
-            set -euo pipefail
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SERVER_NAME: ${{ vars.DEPLOY_SERVER_NAME }}
+          DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
+          DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SSH_PORT:-}" ]; then
+            SSH_PORT=22
+          fi
+          if [ -z "${DEPLOY_SERVER_NAME:-}" ]; then
+            DEPLOY_SERVER_NAME="ojeur.cloud www.ojeur.cloud"
+          fi
+          if [ -z "${DEPLOY_ENABLE_HTTPS:-}" ]; then
+            DEPLOY_ENABLE_HTTPS="true"
+          fi
 
-            REPO_DIR="/opt/JATO_Analysis_System-main"
-            DEPLOY_SERVER_NAME="${{ vars.DEPLOY_SERVER_NAME }}"
-            DEPLOY_ENABLE_HTTPS="${{ vars.DEPLOY_ENABLE_HTTPS }}"
-            DEPLOY_CERTBOT_EMAIL="${{ secrets.DEPLOY_CERTBOT_EMAIL }}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/github_actions_tencent_key
+          chmod 600 ~/.ssh/github_actions_tencent_key
 
-            if [ -z "$DEPLOY_SERVER_NAME" ]; then
-              DEPLOY_SERVER_NAME="ojeur.cloud www.ojeur.cloud"
+          REMOTE_EXPORTS="export DEPLOY_SERVER_NAME=$(printf '%q' "$DEPLOY_SERVER_NAME"); "
+          REMOTE_EXPORTS+="export DEPLOY_ENABLE_HTTPS=$(printf '%q' "$DEPLOY_ENABLE_HTTPS"); "
+          REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
+
+          ssh -v -p "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=20 \
+            -i ~/.ssh/github_actions_tencent_key \
+            "$SSH_USER@$SSH_HOST" "${REMOTE_EXPORTS}bash -s" <<'EOF'
+          set -euo pipefail
+
+          REPO_DIR="/opt/JATO_Analysis_System-main"
+
+          sudo mkdir -p "$REPO_DIR"
+          sudo chown -R "$USER":"$USER" "$REPO_DIR"
+          sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR"
+          rm -f /tmp/JATO_deploy.tar.gz
+
+          cd "$REPO_DIR"
+          export REPO_DIR SKIP_GIT_SYNC=true
+          export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
+          export VITE_API_BASE="/v1"
+          export VITE_USER_ROLE="viewer"
+          export VITE_USER_NAME="github-actions"
+          bash 03_Scripts/deploy_fullstack_server.sh 2>&1 || true
+          DEPLOY_RC=${PIPESTATUS[0]:-$?}
+
+          FRONTEND_ROOT="$REPO_DIR/06_AppPlatform/frontend/dist"
+
+          if [ -n "$DEPLOY_SERVER_NAME" ] && [ "$DEPLOY_SERVER_NAME" != "_" ]; then
+            if [ "${DEPLOY_ENABLE_HTTPS,,}" = "true" ]; then
+              sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
+                CERTBOT_EMAIL="$DEPLOY_CERTBOT_EMAIL" CERTBOT_RENEW_DRY_RUN=false \
+                bash 03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh
+            else
+              sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
+                bash 03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
             fi
+          fi
 
-            if [ -z "$DEPLOY_ENABLE_HTTPS" ]; then
-              DEPLOY_ENABLE_HTTPS="true"
-            fi
+          DIST="$REPO_DIR/06_AppPlatform/frontend/dist"
+          {
+            echo "deploy_exit_code=$DEPLOY_RC"
+            echo "timestamp=$(date -u)"
+            echo "---systemctl---"
+            sudo -n systemctl status jato-fullstack-backend@8000 --no-pager 2>&1 || true
+            echo "---healthz---"
+            curl -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
+            echo "---nginx---"
+            sudo -n systemctl status nginx --no-pager 2>&1 | head -5 || true
+            echo "---index.html---"
+            head -1 "$DIST/index.html" 2>&1 || echo "INDEX_MISSING"
+          } > "$DIST/_deploy_status.txt" 2>&1
 
-            sudo mkdir -p "$REPO_DIR"
-            sudo chown -R "$USER":"$USER" "$REPO_DIR"
-            sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR"
-            rm -f /tmp/JATO_deploy.tar.gz
-
-            cd "$REPO_DIR"
-            export REPO_DIR SKIP_GIT_SYNC=true
-            export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
-            export VITE_API_BASE="/v1"
-            export VITE_USER_ROLE="viewer"
-            export VITE_USER_NAME="github-actions"
-            bash 03_Scripts/deploy_fullstack_server.sh 2>&1 || true
-            DEPLOY_RC=${PIPESTATUS[0]:-$?}
-
-            FRONTEND_ROOT="$REPO_DIR/06_AppPlatform/frontend/dist"
-
-            # Keep ingress idempotent without overwriting Certbot-managed nginx blocks.
-            if [ -n "$DEPLOY_SERVER_NAME" ] && [ "$DEPLOY_SERVER_NAME" != "_" ]; then
-              if [ "${DEPLOY_ENABLE_HTTPS,,}" = "true" ]; then
-                sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
-                  CERTBOT_EMAIL="$DEPLOY_CERTBOT_EMAIL" CERTBOT_RENEW_DRY_RUN=false \
-                  bash 03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh
-              else
-                sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
-                  bash 03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
-              fi
-            fi
-
-            # Write diagnostic output to HTTP-accessible location
-            DIST="$REPO_DIR/06_AppPlatform/frontend/dist"
-            {
-              echo "deploy_exit_code=$DEPLOY_RC"
-              echo "timestamp=$(date -u)"
-              echo "---systemctl---"
-              sudo -n systemctl status jato-fullstack-backend@8000 --no-pager 2>&1 || true
-              echo "---healthz---"
-              curl -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
-              echo "---nginx---"
-              sudo -n systemctl status nginx --no-pager 2>&1 | head -5 || true
-              echo "---index.html---"
-              head -1 "$DIST/index.html" 2>&1 || echo "INDEX_MISSING"
-            } > "$DIST/_deploy_status.txt" 2>&1
-
-            # Final verdict: if healthz works, we're good
-            curl -fsS http://127.0.0.1:8000/healthz >/dev/null
+          curl -fsS http://127.0.0.1:8000/healthz >/dev/null
+          EOF
 
       - name: Deploy on server via SSH
         if: ${{ steps.auth.outputs.mode == 'password' }}
-        uses: appleboy/ssh-action@v1.2.5
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          command_timeout: 30m
-          script: |
-            set -euo pipefail
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          DEPLOY_SERVER_NAME: ${{ vars.DEPLOY_SERVER_NAME }}
+          DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
+          DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SSH_PORT:-}" ]; then
+            SSH_PORT=22
+          fi
+          if [ -z "${DEPLOY_SERVER_NAME:-}" ]; then
+            DEPLOY_SERVER_NAME="ojeur.cloud www.ojeur.cloud"
+          fi
+          if [ -z "${DEPLOY_ENABLE_HTTPS:-}" ]; then
+            DEPLOY_ENABLE_HTTPS="true"
+          fi
 
-            REPO_DIR="/opt/JATO_Analysis_System-main"
-            DEPLOY_SERVER_NAME="${{ vars.DEPLOY_SERVER_NAME }}"
-            DEPLOY_ENABLE_HTTPS="${{ vars.DEPLOY_ENABLE_HTTPS }}"
-            DEPLOY_CERTBOT_EMAIL="${{ secrets.DEPLOY_CERTBOT_EMAIL }}"
+          sudo apt-get update -y
+          sudo apt-get install -y sshpass
 
-            if [ -z "$DEPLOY_SERVER_NAME" ]; then
-              DEPLOY_SERVER_NAME="ojeur.cloud www.ojeur.cloud"
+          REMOTE_EXPORTS="export DEPLOY_SERVER_NAME=$(printf '%q' "$DEPLOY_SERVER_NAME"); "
+          REMOTE_EXPORTS+="export DEPLOY_ENABLE_HTTPS=$(printf '%q' "$DEPLOY_ENABLE_HTTPS"); "
+          REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
+
+          sshpass -p "$SSH_PASSWORD" \
+            ssh -v -p "$SSH_PORT" \
+            -o PreferredAuthentications=password \
+            -o PubkeyAuthentication=no \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=20 \
+            "$SSH_USER@$SSH_HOST" "${REMOTE_EXPORTS}bash -s" <<'EOF'
+          set -euo pipefail
+
+          REPO_DIR="/opt/JATO_Analysis_System-main"
+
+          sudo mkdir -p "$REPO_DIR"
+          sudo chown -R "$USER":"$USER" "$REPO_DIR"
+          sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR"
+          rm -f /tmp/JATO_deploy.tar.gz
+
+          cd "$REPO_DIR"
+          export REPO_DIR SKIP_GIT_SYNC=true
+          export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
+          export VITE_API_BASE="/v1"
+          export VITE_USER_ROLE="viewer"
+          export VITE_USER_NAME="github-actions"
+          bash 03_Scripts/deploy_fullstack_server.sh 2>&1 || true
+          DEPLOY_RC=${PIPESTATUS[0]:-$?}
+
+          FRONTEND_ROOT="$REPO_DIR/06_AppPlatform/frontend/dist"
+
+          if [ -n "$DEPLOY_SERVER_NAME" ] && [ "$DEPLOY_SERVER_NAME" != "_" ]; then
+            if [ "${DEPLOY_ENABLE_HTTPS,,}" = "true" ]; then
+              sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
+                CERTBOT_EMAIL="$DEPLOY_CERTBOT_EMAIL" CERTBOT_RENEW_DRY_RUN=false \
+                bash 03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh
+            else
+              sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
+                bash 03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
             fi
+          fi
 
-            if [ -z "$DEPLOY_ENABLE_HTTPS" ]; then
-              DEPLOY_ENABLE_HTTPS="true"
-            fi
+          DIST="$REPO_DIR/06_AppPlatform/frontend/dist"
+          {
+            echo "deploy_exit_code=$DEPLOY_RC"
+            echo "timestamp=$(date -u)"
+            echo "---systemctl---"
+            sudo -n systemctl status jato-fullstack-backend@8000 --no-pager 2>&1 || true
+            echo "---healthz---"
+            curl -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
+            echo "---nginx---"
+            sudo -n systemctl status nginx --no-pager 2>&1 | head -5 || true
+            echo "---index.html---"
+            head -1 "$DIST/index.html" 2>&1 || echo "INDEX_MISSING"
+          } > "$DIST/_deploy_status.txt" 2>&1
 
-            sudo mkdir -p "$REPO_DIR"
-            sudo chown -R "$USER":"$USER" "$REPO_DIR"
-            sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR"
-            rm -f /tmp/JATO_deploy.tar.gz
-
-            cd "$REPO_DIR"
-            export REPO_DIR SKIP_GIT_SYNC=true
-            export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
-            export VITE_API_BASE="/v1"
-            export VITE_USER_ROLE="viewer"
-            export VITE_USER_NAME="github-actions"
-            bash 03_Scripts/deploy_fullstack_server.sh 2>&1 || true
-            DEPLOY_RC=${PIPESTATUS[0]:-$?}
-
-            FRONTEND_ROOT="$REPO_DIR/06_AppPlatform/frontend/dist"
-
-            # Keep ingress idempotent without overwriting Certbot-managed nginx blocks.
-            if [ -n "$DEPLOY_SERVER_NAME" ] && [ "$DEPLOY_SERVER_NAME" != "_" ]; then
-              if [ "${DEPLOY_ENABLE_HTTPS,,}" = "true" ]; then
-                sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
-                  CERTBOT_EMAIL="$DEPLOY_CERTBOT_EMAIL" CERTBOT_RENEW_DRY_RUN=false \
-                  bash 03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh
-              else
-                sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
-                  bash 03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
-              fi
-            fi
-
-            # Write diagnostic output to HTTP-accessible location
-            DIST="$REPO_DIR/06_AppPlatform/frontend/dist"
-            {
-              echo "deploy_exit_code=$DEPLOY_RC"
-              echo "timestamp=$(date -u)"
-              echo "---systemctl---"
-              sudo -n systemctl status jato-fullstack-backend@8000 --no-pager 2>&1 || true
-              echo "---healthz---"
-              curl -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
-              echo "---nginx---"
-              sudo -n systemctl status nginx --no-pager 2>&1 | head -5 || true
-              echo "---index.html---"
-              head -1 "$DIST/index.html" 2>&1 || echo "INDEX_MISSING"
-            } > "$DIST/_deploy_status.txt" 2>&1
-
-            # Final verdict: if healthz works, we're good
-            curl -fsS http://127.0.0.1:8000/healthz >/dev/null
+          curl -fsS http://127.0.0.1:8000/healthz >/dev/null
+          EOF
