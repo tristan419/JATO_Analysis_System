@@ -109,6 +109,17 @@ class MarketScanDeckRequest(BaseModel):
     drilldown_segment: str | None = None
 
 
+class CountryChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class CountryChatRequest(BaseModel):
+    country: str
+    question: str
+    history: list[CountryChatTurn] = Field(default_factory=list)
+
+
 class CrudItem(BaseModel):
     id: str
     code: str

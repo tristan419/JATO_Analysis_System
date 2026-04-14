@@ -43,6 +43,53 @@ export interface OverviewResponse {
   yearSeries: TimeSeriesPoint[];
 }
 
+export interface CountryChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface CountryChatOption {
+  value: string;
+  label: string;
+}
+
+export interface CountryChatRankItem {
+  label: string;
+  value: number;
+}
+
+export interface CountryChatSnapshot {
+  country: string;
+  route: string;
+  kpis: OverviewResponse["kpis"];
+  yearSeries: TimeSeriesPoint[];
+  monthSeries: TimeSeriesPoint[];
+  topBrands: CountryChatRankItem[];
+  topModels: CountryChatRankItem[];
+  powertrainMix: CountryChatRankItem[];
+}
+
+export interface CountryChatMetadataResponse {
+  availableCountries: CountryChatOption[];
+  provider: string;
+  providerAvailable: boolean;
+  providerReason?: string | null;
+  defaultModel?: string | null;
+  suggestedPrompts: string[];
+}
+
+export interface CountryChatResponse {
+  country: string;
+  question: string;
+  answer: string;
+  intent: string;
+  provider: string;
+  providerAvailable: boolean;
+  providerReason?: string | null;
+  contextSnapshot: CountryChatSnapshot;
+  suggestedPrompts: string[];
+}
+
 export interface MarketScanDelta {
   value: number | null;
   display: string;

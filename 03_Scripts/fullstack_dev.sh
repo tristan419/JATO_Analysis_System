@@ -19,8 +19,14 @@ BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
 FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 
+APP_DATABASE_ENABLED="${APP_DATABASE_ENABLED:-true}"
+APP_DATABASE_URL="${APP_DATABASE_URL:-postgresql+psycopg://postgres:postgres@127.0.0.1:5432/jato_app}"
+APP_DATABASE_AUTO_MIGRATE="${APP_DATABASE_AUTO_MIGRATE:-true}"
+APP_ENGINEERING_IMPORT_ROOT="${APP_ENGINEERING_IMPORT_ROOT:-$ROOT_DIR/01_RAW_DATA}"
 AUTH_ENABLED="${APP_AUTH_ENABLED:-true}"
 AUTH_TOKEN="${APP_AUTH_TOKEN:-change-me}"
+APP_TOKEN_ROLE_MAP="${APP_TOKEN_ROLE_MAP:-$AUTH_TOKEN:admin}"
+APP_CORS_ORIGINS="${APP_CORS_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173}"
 USER_ROLE="${APP_USER_ROLE:-admin}"
 USER_NAME="${APP_USER_NAME:-local-dev}"
 
@@ -32,6 +38,7 @@ else
 fi
 
 NPM_BIN="${NPM_BIN:-npm}"
+NVIDIA_KEY_LOADER="$ROOT_DIR/03_Scripts/load_nvidia_api_key.sh"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR"
 
@@ -110,6 +117,58 @@ wait_for_http() {
   return 1
 }
 
+is_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+run_backend_migrations() {
+  if ! is_truthy "$APP_DATABASE_ENABLED"; then
+    return 0
+  fi
+
+  if ! is_truthy "$APP_DATABASE_AUTO_MIGRATE"; then
+    return 0
+  fi
+
+  echo "[backend] running alembic upgrade head"
+  (
+    cd "$BACKEND_DIR"
+    export APP_DATABASE_ENABLED
+    export APP_DATABASE_URL
+    export APP_ENGINEERING_IMPORT_ROOT
+    export APP_AUTH_ENABLED="$AUTH_ENABLED"
+    export APP_AUTH_TOKEN="$AUTH_TOKEN"
+    export APP_TOKEN_ROLE_MAP
+    export APP_CORS_ORIGINS
+    export PYTHONPATH="$BACKEND_DIR"
+    "$PYTHON_BIN" -m alembic upgrade head
+  )
+}
+
+maybe_load_nvidia_key() {
+  if [[ -n "${NVIDIA_API_KEY:-}" || -n "${NVAPI_KEY:-}" ]]; then
+    export NVAPI_KEY="${NVAPI_KEY:-${NVIDIA_API_KEY:-}}"
+    return 0
+  fi
+
+  if [[ ! -f "$NVIDIA_KEY_LOADER" ]]; then
+    return 0
+  fi
+
+  if source "$NVIDIA_KEY_LOADER" >/dev/null 2>&1; then
+    echo "[backend] NVIDIA key loaded from macOS Keychain"
+  else
+    echo "[backend] NVIDIA key not found in environment or Keychain; continuing in fallback mode"
+  fi
+}
+
 start_backend() {
   local force_restart="${1:-false}"
 
@@ -137,11 +196,18 @@ start_backend() {
     return 0
   fi
 
+  run_backend_migrations
+  maybe_load_nvidia_key
   echo "[backend] starting..."
   (
     cd "$BACKEND_DIR"
+    export APP_DATABASE_ENABLED
+    export APP_DATABASE_URL
+    export APP_ENGINEERING_IMPORT_ROOT
     export APP_AUTH_ENABLED="$AUTH_ENABLED"
     export APP_AUTH_TOKEN="$AUTH_TOKEN"
+    export APP_TOKEN_ROLE_MAP
+    export APP_CORS_ORIGINS
     export PYTHONPATH="$BACKEND_DIR"
     nohup "$PYTHON_BIN" -m uvicorn app.main:app \
       --host "$BACKEND_HOST" \
@@ -288,6 +354,7 @@ Usage:
 
 Optional env overrides:
   BACKEND_HOST BACKEND_PORT FRONTEND_HOST FRONTEND_PORT
+  APP_DATABASE_ENABLED APP_DATABASE_URL APP_DATABASE_AUTO_MIGRATE
   APP_AUTH_ENABLED APP_AUTH_TOKEN APP_USER_ROLE APP_USER_NAME
 EOF
 }

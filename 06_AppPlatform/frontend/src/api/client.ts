@@ -4,6 +4,9 @@ import type {
   ConfigImportBatch,
   ConfigProject,
   ConfigVariant,
+  CountryChatMetadataResponse,
+  CountryChatResponse,
+  CountryChatTurn,
   CrudListResponse,
   CrudItem,
   CurrentPrice,
@@ -338,6 +341,17 @@ export const api = {
     top_n: number;
   }) =>
     request<OverviewResponse>("/analysis/overview", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  countryChatMetadata: () =>
+    request<CountryChatMetadataResponse>("/assistant/country/metadata"),
+  countryChat: (payload: {
+    country: string;
+    question: string;
+    history: CountryChatTurn[];
+  }) =>
+    request<CountryChatResponse>("/assistant/country/chat", {
       method: "POST",
       body: JSON.stringify(payload)
     }),

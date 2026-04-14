@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes.assistant import router as assistant_router
 from app.api.routes.analysis import router as analysis_router
 from app.api.routes.crud import router as crud_router
 from app.api.routes.engineering import router as engineering_router
@@ -29,6 +30,7 @@ app.include_router(health_router)
 app.include_router(metadata_router, prefix=API_PREFIX)
 app.include_router(filters_router, prefix=API_PREFIX)
 app.include_router(analysis_router, prefix=API_PREFIX)
+app.include_router(assistant_router, prefix=API_PREFIX)
 app.include_router(market_scan_router, prefix=API_PREFIX)
 app.include_router(crud_router, prefix=API_PREFIX)
 app.include_router(platform_db_router, prefix=API_PREFIX)
