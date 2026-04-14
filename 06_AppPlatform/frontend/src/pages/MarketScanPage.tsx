@@ -6,6 +6,8 @@ import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { DEFAULT_EXPORT, ExportPanel, buildExportLabelModeOptions, type ExportSettings } from "../components/ExportPanel";
 import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { LoadingSurface } from "../components/LoadingSurface";
+import { fuelColor, originColor } from "../utils/colors";
+import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
 import type {
   MarketScanBodyShareTrendItem,
   MarketScanDeckResponse,
@@ -23,22 +25,6 @@ import type {
 } from "../types";
 
 const DEFAULT_FUEL_TYPES = ["ICE", "MHEV", "HEV", "PHEV", "BEV", "LPG"];
-const FUEL_COLORS: Record<string, string> = {
-  ICE: "#6b7280",
-  MHEV: "#b45309",
-  HEV: "#ca8a04",
-  PHEV: "#1d4ed8",
-  BEV: "#0f9d58",
-  LPG: "#b91c1c",
-};
-const ORIGIN_COLORS: Record<string, string> = {
-  欧系: "#0f766e",
-  日系: "#d97706",
-  韩系: "#ef4444",
-  美系: "#2563eb",
-  中系: "#16a34a",
-  其他: "#6b7280",
-};
 const TAB_ITEMS: Array<{
   key: MarketScanPageKey;
   code: string;
@@ -77,20 +63,63 @@ interface PanelProps {
   actions?: ReactNode;
 }
 
-const CHART_LAYOUT: Partial<PlotlyLayout> = {
-  paper_bgcolor: "rgba(0, 0, 0, 0)",
-  plot_bgcolor: "rgba(0, 0, 0, 0)",
-  margin: { l: 52, r: 24, t: 20, b: 48 },
-  legend: {
-    orientation: "h",
-    yanchor: "bottom",
-    y: 1.02,
-    xanchor: "left",
-    x: 0,
-  },
-  font: { family: '"Helvetica Neue", Helvetica, Arial, sans-serif', size: 11 },
-  hoverlabel: { bgcolor: "#0f172a", font: { color: "#f8fafc" } },
-};
+function MarketScanDeckSkeleton() {
+  return (
+    <section className="market-scan-state-card market-scan-state-card--skeleton" aria-hidden="true">
+      <LoadingSurface
+        mode="inline"
+        kicker="Deck"
+        label="正在生成市场扫描页面"
+        detail="后端会按国家、月份和燃料组合动态聚合 Parquet 数据。"
+      />
+      <div className="market-scan-skeleton-hero">
+        <div className="market-scan-skeleton-copy">
+          <span className="market-scan-skeleton-block market-scan-skeleton-block--eyebrow" />
+          <span className="market-scan-skeleton-block market-scan-skeleton-block--title" />
+          <span className="market-scan-skeleton-block market-scan-skeleton-block--body" />
+        </div>
+        <div className="market-scan-skeleton-chip-row">
+          {Array.from({ length: 4 }, (_, index) => (
+            <span
+              key={`skeleton-chip-${index}`}
+              className="market-scan-skeleton-block market-scan-skeleton-block--chip"
+            />
+          ))}
+        </div>
+      </div>
+      <div className="market-scan-skeleton-tabs">
+        {Array.from({ length: 6 }, (_, index) => (
+          <span
+            key={`skeleton-tab-${index}`}
+            className="market-scan-skeleton-block market-scan-skeleton-block--tab"
+          />
+        ))}
+      </div>
+      <div className="market-scan-skeleton-grid market-scan-skeleton-grid--metrics">
+        {Array.from({ length: 4 }, (_, index) => (
+          <div key={`skeleton-metric-${index}`} className="market-scan-skeleton-panel">
+            <span className="market-scan-skeleton-block market-scan-skeleton-block--metric-label" />
+            <span className="market-scan-skeleton-block market-scan-skeleton-block--metric-value" />
+            <span className="market-scan-skeleton-block market-scan-skeleton-block--metric-detail" />
+          </div>
+        ))}
+      </div>
+      <div className="market-scan-skeleton-grid market-scan-skeleton-grid--content">
+        <div className="market-scan-skeleton-panel market-scan-skeleton-panel--wide">
+          <span className="market-scan-skeleton-block market-scan-skeleton-block--panel-title" />
+          <span className="market-scan-skeleton-block market-scan-skeleton-block--chart" />
+        </div>
+        <div className="market-scan-skeleton-panel market-scan-skeleton-panel--stack">
+          <span className="market-scan-skeleton-block market-scan-skeleton-block--panel-title" />
+          <span className="market-scan-skeleton-block market-scan-skeleton-block--list-row" />
+          <span className="market-scan-skeleton-block market-scan-skeleton-block--list-row" />
+          <span className="market-scan-skeleton-block market-scan-skeleton-block--list-row" />
+          <span className="market-scan-skeleton-block market-scan-skeleton-block--list-row" />
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function formatVolume(value: number | null | undefined): string {
   return Number(value ?? 0).toLocaleString("en-US");
@@ -137,14 +166,6 @@ function topCell(row?: MarketScanMatrixRow): { key: string; value: number | null
 
 function matrixRow(matrix: MarketScanMatrix, metricKey: string): MarketScanMatrixRow | undefined {
   return matrix.rows.find((row) => row.metricKey === metricKey);
-}
-
-function fuelColor(fuel: string): string {
-  return FUEL_COLORS[fuel] ?? "#94a3b8";
-}
-
-function originColor(origin: string): string {
-  return ORIGIN_COLORS[origin] ?? "#64748b";
 }
 
 function buildHeroMetrics(deck: MarketScanDeckResponse, pageKey: MarketScanPageKey): HeroMetric[] {
@@ -1285,16 +1306,7 @@ export function MarketScanPage() {
           </section>
         ) : null}
 
-        {loading && !deck ? (
-          <section className="market-scan-state-card">
-            <LoadingSurface
-              mode="inline"
-              kicker="Deck"
-              label="正在生成市场扫描页面"
-              detail="后端会按国家、月份和燃料组合动态聚合 Parquet 数据。"
-            />
-          </section>
-        ) : null}
+        {loading && !deck ? <MarketScanDeckSkeleton /> : null}
 
         {exportError ? (
           <section className="market-scan-state-card market-scan-state-card--error">
@@ -1304,7 +1316,17 @@ export function MarketScanPage() {
         ) : null}
 
         {deck ? (
-          <div className="market-scan-content">
+          <div className="market-scan-content" aria-busy={loading}>
+            {loading ? (
+              <div className="market-scan-refresh-layer">
+                <LoadingSurface
+                  mode="overlay"
+                  kicker="Refreshing"
+                  label="正在刷新当前 Market Scan 结果"
+                  detail="已命中相同条件时会优先走后端缓存。"
+                />
+              </div>
+            ) : null}
             <div className="market-scan-slide-shell">
               <div
                 ref={slideRef}

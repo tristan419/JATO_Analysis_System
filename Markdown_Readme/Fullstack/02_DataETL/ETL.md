@@ -33,14 +33,26 @@
 - `03_Scripts/cleanup_history_archive.py`
   - 历史归档清理（支持 dry-run / apply）
 
+### 月更推荐入口
+
+每月收到新 xlsx 后：
+
+```bash
+python 03_Scripts/prepare_monthly_raw_update.py \
+  --month 2026-03 \
+  --patch 01_RAW_DATA/新收到的文件.xlsx
+```
+
+baseline 自动找 `01_RAW_DATA/baseline/` 下最新的。脚本会打印后续 raw compare 和 refresh 命令，直接复制执行即可。详见 `01_RAW_DATA/README.md`。
+
 
 ## Pipeline 步骤总览（从原始到可部署）
 
 ### Step 1: 原始数据入仓（Raw）
 
-将文件放入：`01_RAW_DATA/`
+月更时用 `prepare_monthly_raw_update.py` 自动整理到 `baseline/` 和 `patches/<month>/`。
 
-推荐命名：`JATO-2026.1.xlsx`
+旧流程兼容：仍可把文件直接放入 `01_RAW_DATA/`，推荐命名 `JATO-2026.1.xlsx`
 
 
 ### Step 1.5: Raw Compare / Review（新批次先比对）
@@ -50,7 +62,7 @@
 ```bash
 python 03_Scripts/raw_compare_review.py \
   --old 01_RAW_DATA/baseline/JATO-2026.1-full-21countries-baseline.xlsx \
-  --new 01_RAW_DATA/patch_batches/2026-02/JATO-2026.2-partial-17countries.xlsx \
+  --new 01_RAW_DATA/patches/2026-02/JATO-2026.2-partial-18countries.xlsx \
   --output-dir 04_Processed_data/reviews/raw_compare/2026-01_vs_2026-02
 ```
 
@@ -272,7 +284,7 @@ python 03_Scripts/run_data_refresh_job.py \
 ```bash
 python 03_Scripts/run_data_refresh_job.py \
   --baseline-input 01_RAW_DATA/baseline/JATO-2026.1-full-21countries-baseline.xlsx \
-  --patch-input-files 01_RAW_DATA/patch_batches/2026-02/JATO-2026.2-partial-17countries.xlsx \
+  --patch-input-files 01_RAW_DATA/patches/2026-02/JATO-2026.2-partial-18countries.xlsx \
   --output 04_Processed_data/staging/2026-02-mixed/jato_full_archive.parquet \
   --manifest 04_Processed_data/staging/2026-02-mixed/manifest.json \
   --partition-output 04_Processed_data/staging/2026-02-mixed/partitioned_dataset_v1 \

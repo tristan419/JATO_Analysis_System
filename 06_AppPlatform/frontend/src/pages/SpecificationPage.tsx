@@ -92,7 +92,7 @@ export function SpecificationPage() {
     () => cachedPage?.selectedCols ?? [],
   );
   const [excludeZeroSales, setExcludeZeroSales] = useState(
-    () => cachedPage?.excludeZeroSales ?? false,
+    () => cachedPage?.excludeZeroSales ?? true,
   );
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");

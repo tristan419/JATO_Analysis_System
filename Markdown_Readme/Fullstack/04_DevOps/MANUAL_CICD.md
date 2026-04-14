@@ -132,10 +132,20 @@ Workflow 文件：`.github/workflows/deploy-fullstack-tencent.yml`
 | Secret | 说明 |
 |--------|------|
 | `SSH_HOST` | 腾讯云服务器公网 IP |
+| `SSH_PORT` | SSH 端口，当前生产固定为 `22` |
 | `SSH_USER` | SSH 登录用户名 |
 | `SSH_PRIVATE_KEY` | 私钥内容（和 `SSH_PASSWORD` 二选一） |
 | `SSH_PASSWORD` | 密码（和 `SSH_PRIVATE_KEY` 二选一） |
 | `DEPLOY_CERTBOT_EMAIL` | 可选，但推荐；Let's Encrypt 联系邮箱 |
+
+当前生产基线（2026-04-14 已验证通过）：
+
+- `SSH_HOST=150.158.141.14`
+- `SSH_PORT=22`
+- `SSH_USER=ubuntu`
+- `SSH_PRIVATE_KEY` 必须填写本地可直接免密登录腾讯云的完整私钥内容，当前对应 `~/.ssh/tencent_lh.pem`
+
+说明：`SSH_PRIVATE_KEY` 必须是完整原文粘贴，包含 `-----BEGIN RSA PRIVATE KEY-----` 和 `-----END RSA PRIVATE KEY-----`。少一行、少一个换行、粘错另一把 key，都会让 GitHub Actions 在上传归档或 SSH 执行阶段失败。
 
 ### 3.3 自动部署流程
 
@@ -155,6 +165,22 @@ Workflow 文件：`.github/workflows/deploy-fullstack-tencent.yml`
 - 可选 Variables：`DEPLOY_SERVER_NAME`、`DEPLOY_ENABLE_HTTPS`
 - `DEPLOY_ENABLE_HTTPS=false` 时，只维护 HTTP ingress，不碰证书
 - `install_jato_fullstack_nginx.sh` 检测到 `managed by Certbot` 后会跳过覆盖，避免把已签发证书的 nginx 配置冲掉
+
+### 3.5 以后默认怎么发版
+
+日常发布以后默认只走这一条：
+
+1. 本地提交代码后执行 `git push JATO_Analysis_System main`
+2. 等 GitHub Actions 自动触发 `deploy-fullstack-tencent`
+3. 如果只是想重跑同一版，在 GitHub 网页手动点一次 `workflow_dispatch`
+
+只要 GitHub Secrets 继续保持上面的正确值，后续不需要再手工 SSH 上腾讯云补域名、补 HTTPS 或手动上传归档。
+
+只有下面几类情况才需要跳出这条默认流程：
+
+1. 首次初始化一台新服务器
+2. 更换域名或首次接入 HTTPS
+3. 线上紧急回滚或做系统级排障
 
 ---
 
@@ -265,3 +291,29 @@ macOS 钥匙串已有 GitHub HTTPS 凭据，切换后立即推送成功。
 - `Markdown_Readme/Streamlit/*.md`
 
 **原则**：不做全仓库 `git clean -fdx`，只清明确白名单里的 untracked 临时内容，避免误删数据目录或配置文件。
+
+### 7.9 GitHub Actions SSH 上传失败（2026-04-14）
+
+**现象**：`deploy-fullstack-tencent` 连续多次失败或卡在 `Upload archive to server`，表面上看像 GitHub Actions 自身问题，早期日志里还夹杂 Node.js 20 deprecation warning，容易误判。
+
+**排查结论**：Node.js warning 不是根因。腾讯云服务器上的 `sshd`、22 端口监听和安全组都正常，服务器日志已经明确出现过 GitHub Actions runner 的 `Accepted publickey for ubuntu ...`。真正根因是 GitHub Secrets 里的 SSH 参数曾经配置不正确。
+
+**已验证可用的正确值**：
+
+- `SSH_HOST=150.158.141.14`
+- `SSH_PORT=22`
+- `SSH_USER=ubuntu`
+- `SSH_PRIVATE_KEY=<~/.ssh/tencent_lh.pem 的完整内容>`
+
+**验证结果**：
+
+- `deploy-fullstack-tencent #51`：push 触发，成功
+- `deploy-fullstack-tencent #52`：手动 `workflow_dispatch`，成功
+
+**以后如果再遇到同类问题，先按这个顺序查**：
+
+1. 先看 GitHub Secrets 里的 `SSH_HOST`、`SSH_PORT`、`SSH_USER` 是否仍是上面的值
+2. 再看 `SSH_PRIVATE_KEY` 是否被粘贴坏了，尤其是头尾行和换行
+3. 再去服务器看 `sudo systemctl status ssh`、`sudo ss -ltnp | grep :22` 和 `/var/log/auth.log` 或 `journalctl -u ssh`
+
+**结论**：这条 CI/CD 链路现在已经打通。后续常规发布默认只走 `git push JATO_Analysis_System main` 或手动 `workflow_dispatch` 即可。

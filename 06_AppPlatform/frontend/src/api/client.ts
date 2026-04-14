@@ -67,26 +67,45 @@ async function readErrorMessage(response: Response): Promise<string> {
   return text;
 }
 
+/* ── in-flight request deduplication ────────────────── */
+const inflightRequests = new Map<string, Promise<unknown>>();
+
+function dedupeKey(path: string, init?: RequestInit): string {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const body = init?.body ? String(init.body) : "";
+  return `${method}:${path}:${body}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE}${path}`, {
-      headers: {
-        "Content-Type": "application/json",
-        ...getAuthHeaders(),
-        ...(init?.headers ?? {})
-      },
-      ...init
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`网络请求失败：${path} (${message})`);
-  }
-  if (!response.ok) {
-    const message = await readErrorMessage(response);
-    throw new Error(`${response.status} ${message}`);
-  }
-  return (await response.json()) as T;
+  const key = dedupeKey(path, init);
+  const inflight = inflightRequests.get(key) as Promise<T> | undefined;
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}${path}`, {
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(),
+          ...(init?.headers ?? {})
+        },
+        ...init
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`网络请求失败：${path} (${message})`);
+    }
+    if (!response.ok) {
+      const message = await readErrorMessage(response);
+      throw new Error(`${response.status} ${message}`);
+    }
+    return (await response.json()) as T;
+  })();
+
+  inflightRequests.set(key, promise);
+  promise.finally(() => inflightRequests.delete(key));
+  return promise;
 }
 
 async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {

@@ -10,8 +10,8 @@ WorkingDirectory=/opt/JATO_Analysis_System/06_AppPlatform/backend
 # User=deploy
 # Group=deploy
 
-# Conservative default for a 4 vCPU shared box; override in backend.env if needed.
-Environment=APP_BACKEND_WORKERS=2
+# Balanced default for a 4 vCPU shared box; override in backend.env if needed.
+Environment=APP_BACKEND_WORKERS=3
 EnvironmentFile=-/etc/jato-fullstack/backend.env
 Environment=PYTHONUNBUFFERED=1
 Environment=APP_PROJECT_ROOT=/opt/JATO_Analysis_System

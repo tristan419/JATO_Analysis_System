@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -7,6 +9,10 @@ from typing import Any
 import pandas as pd
 
 from app.infra import parquet_repository as repo
+
+_DECK_CACHE_TTL_SECONDS = 300
+_deck_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
+_deck_cache_lock = threading.Lock()
 
 MONTH_NAME_TO_NUMBER = {
     "Jan": 1,
@@ -967,6 +973,40 @@ def _build_drilldown_payload(
 
 
 def query_market_scan_deck(
+    country: str | None,
+    target_period: str | None,
+    fuel_types: list[str],
+    trend_window_months: int,
+    origin_window_months: int,
+    body_window_months: int,
+    ranking_limit: int,
+    drilldown_segment: str | None,
+) -> dict[str, Any]:
+    cache_key = f"{country}|{target_period}|{','.join(sorted(fuel_types))}|{trend_window_months}|{origin_window_months}|{body_window_months}|{ranking_limit}|{drilldown_segment}"
+    now = time.monotonic()
+    dataset_token = repo.current_dataset_token()
+    cached = _deck_cache.get(cache_key)
+    if cached is not None:
+        cached_at, cached_token, cached_result = cached
+        if cached_token == dataset_token and (now - cached_at) < _DECK_CACHE_TTL_SECONDS:
+            return cached_result
+
+    result = _query_market_scan_deck_impl(
+        country, target_period, fuel_types,
+        trend_window_months, origin_window_months, body_window_months,
+        ranking_limit, drilldown_segment,
+    )
+
+    with _deck_cache_lock:
+        _deck_cache[cache_key] = (now, dataset_token, result)
+        if len(_deck_cache) > 32:
+            oldest_key = min(_deck_cache, key=lambda k: _deck_cache[k][0])
+            _deck_cache.pop(oldest_key, None)
+
+    return result
+
+
+def _query_market_scan_deck_impl(
     country: str | None,
     target_period: str | None,
     fuel_types: list[str],

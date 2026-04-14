@@ -1,5 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 
+import { toTimeOrdinal } from "../utils/timeFormatting";
+
 export interface TimeRange {
   start: string;
   end: string;
@@ -17,25 +19,6 @@ interface Props {
   /** Month-tab sub-grain: month/quarter/year */
   monthGrain?: "month" | "quarter" | "year";
   onMonthGrainChange?: (g: "month" | "quarter" | "year") => void;
-}
-
-const MONTH_INDEX: Record<string, number> = {
-  Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6,
-  Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12,
-};
-
-function toTimeOrdinal(label: string): number | null {
-  const text = label.trim();
-  if (/^\d{4}$/.test(text)) return Number(text) * 100 + 12;
-  const shortYearMatch = text.match(/^(\d{2})[.\/-](\d{1,2})$/);
-  if (shortYearMatch) return (2000 + Number(shortYearMatch[1])) * 100 + Number(shortYearMatch[2]);
-  const monthNameMatch = text.match(/^(\d{4})\s+([A-Za-z]{3})$/);
-  if (monthNameMatch) return Number(monthNameMatch[1]) * 100 + (MONTH_INDEX[monthNameMatch[2]] ?? 1);
-  const numericMatch = text.match(/^(\d{4})[-\/.](\d{1,2})$/);
-  if (numericMatch) return Number(numericMatch[1]) * 100 + Number(numericMatch[2]);
-  const quarterMatch = text.match(/^(\d{4})-Q([1-4])$/);
-  if (quarterMatch) return Number(quarterMatch[1]) * 100 + Number(quarterMatch[2]) * 3;
-  return null;
 }
 
 export function TimeAxis({

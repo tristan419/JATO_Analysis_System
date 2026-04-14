@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import type { Data, Layout } from "plotly.js";
 
+import { POWERTRAIN_COLORS as FIXED_POWERTRAIN_COLORS } from "../utils/colors";
+
 export type ExportLabelMode =
   | "off"
   | "value"
@@ -78,13 +80,6 @@ const PALETTES: Record<string, string[]> = {
   set2: ["#66C2A5","#FC8D62","#8DA0CB","#E78AC3","#A6D854","#FFD92F","#E5C494","#B3B3B3"],
   pastel: ["#FBB4AE","#B3CDE3","#CCEBC5","#DECBE4","#FED9A6","#FFFFCC","#E5D8BD","#FDDAEC"],
   dark24: ["#2E91E5","#E15F99","#1CA71C","#FB0D0D","#DA16FF","#222A2A","#B68100","#750D86","#EB663B","#511CFB"],
-};
-const FIXED_POWERTRAIN_COLORS: Record<string, string> = {
-  ICE: "#6b7280",
-  HEV: "#eab308",
-  BEV: "#22c55e",
-  MHEV: "#f97316",
-  PHEV: "#3b82f6",
 };
 
 const TICK_FORMATS: { v: string; l: string }[] = [

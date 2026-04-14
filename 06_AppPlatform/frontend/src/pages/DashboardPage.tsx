@@ -19,271 +19,36 @@ import { LazyPlotlyChart as PlotlyChart } from "../components/LazyPlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
 import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanel";
 import { buildBubbleSizing } from "../utils/bubbleSizing";
+import { SERIES_COLORS as COLORS, POWERTRAIN_COLORS, DEFAULT_POWERTRAINS, normalizePowertrainName, ptColor, seriesColor } from "../utils/colors";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
+import { buildCategoryAxis } from "../utils/plotlyDefaults";
+import { parseMonthLabel, toTimeOrdinal, compareTimeLabels } from "../utils/timeFormatting";
+import {
+  type BubbleGroupDimension,
+  type DashboardPageCache,
+  DASHBOARD_CACHE_KEY,
+  PAGE_CACHE_TTL_MS,
+  ADV_GROUPS,
+  ADV_CHARTS,
+  GROUP_BY_OPTIONS,
+  BUBBLE_GROUP_DIMENSIONS,
+  SCATTER_CHARTS,
+  STACKED_CHARTS,
+  ensureArray,
+  isPlainRecord,
+  asMetaNumber,
+  asMetaText,
+  asMetaStringArray,
+  asMetaRecordArray,
+  getLoadingMetricValue,
+  formatMetricValue,
+  summarizeScopeValues,
+  getMetricDensityClass,
+  getUnifiedMetricDensityClass,
+} from "./dashboardHelpers";
 const RvFinanceDashboard = lazy(() =>
   import("../components/RvFinanceDashboard").then((module) => ({ default: module.RvFinanceDashboard }))
 );
-
-/* ── constants ──────────────────────────────────────── */
-const COLORS = [
-  "#2563eb","#16a34a","#f59e0b","#ef4444","#8b5cf6","#ec4899",
-  "#14b8a6","#f97316","#6366f1","#0ea5e9","#84cc16","#e11d48",
-];
-
-/** 动力总成固定配色 — 全局所有图表统一使用 */
-const POWERTRAIN_COLORS: Record<string, string> = {
-  ICE:  "#6b7280",  // 灰色
-  MHEV: "#f97316",  // 橙色
-  HEV:  "#eab308",  // 黄色
-  PHEV: "#3b82f6",  // 蓝色
-  BEV:  "#22c55e",  // 绿色
-};
-const DEFAULT_POWERTRAINS = ["ICE", "HEV", "BEV", "MHEV", "PHEV"] as const;
-const MONTH_INDEX: Record<string, number> = {
-  Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6,
-  Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12,
-};
-function normalizePowertrainName(value: string): string {
-  return value.trim().toUpperCase();
-}
-function parseMonthLabel(label: string): { year: number; month: number } | null {
-  const text = label.trim();
-  const monthNameMatch = text.match(/^(\d{4})\s+([A-Za-z]{3})$/);
-  if (monthNameMatch) {
-    return { year: Number(monthNameMatch[1]), month: MONTH_INDEX[monthNameMatch[2]] ?? 1 };
-  }
-  const shortYearMatch = text.match(/^(\d{2})[.\/-](\d{1,2})$/);
-  if (shortYearMatch) {
-    return { year: 2000 + Number(shortYearMatch[1]), month: Number(shortYearMatch[2]) };
-  }
-  const numericMatch = text.match(/^(\d{4})[-\/.](\d{1,2})$/);
-  if (numericMatch) {
-    return { year: Number(numericMatch[1]), month: Number(numericMatch[2]) };
-  }
-  return null;
-}
-function toTimeOrdinal(label: string): number | null {
-  const text = label.trim();
-  if (/^\d{4}$/.test(text)) return Number(text) * 100 + 12;
-  const month = parseMonthLabel(text);
-  if (month) return month.year * 100 + month.month;
-  const quarter = text.match(/^(\d{4})-Q([1-4])$/);
-  if (quarter) return Number(quarter[1]) * 100 + Number(quarter[2]) * 3;
-  return null;
-}
-function compareTimeLabels(a: string, b: string): number {
-  const ao = toTimeOrdinal(a);
-  const bo = toTimeOrdinal(b);
-  if (ao !== null && bo !== null && ao !== bo) return ao - bo;
-  return a.localeCompare(b);
-}
-
-function ensureArray<T>(value: T[] | null | undefined): T[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function buildCategoryAxis(
-  labels: string[],
-  extra: Partial<Layout["xaxis"]> = {},
-): Partial<Layout["xaxis"]> {
-  const ordered = Array.from(new Set(labels));
-  return {
-    type: "category",
-    categoryorder: "array",
-    categoryarray: ordered,
-    ...extra,
-  };
-}
-/** 判断给定系列名/分组维度是否属于动力总成，返回固定色 */
-function ptColor(name: string, fallback: string): string {
-  return POWERTRAIN_COLORS[name] ?? POWERTRAIN_COLORS[name.toUpperCase()] ?? fallback;
-}
-/** 当分组维度是动力总成时为系列分配固定颜色，否则沿用 palette */
-function seriesColor(name: string, idx: number, palette: string[], isPowertrain: boolean): string {
-  if (isPowertrain) return ptColor(name, palette[idx % palette.length]);
-  return palette[idx % palette.length];
-}
-
-const ADV_GROUPS: { v: string; l: string }[] = [
-  { v: "market_structure", l: "\u5e02\u573a\u7ed3\u6784" },
-  { v: "nev_analysis", l: "NEV\u5206\u6790" },
-  { v: "price_value", l: "\u4ef7\u683c\u4ef7\u503c" },
-  { v: "cost_analysis", l: "\u52a8\u529b\u6210\u672c" },
-];
-const ADV_CHARTS: Record<string, { v: string; l: string }[]> = {
-  market_structure: [
-    { v: "powertrain_bubble", l: "\u52a8\u529b\u6c14\u6ce1\u56fe" },
-    { v: "seasonality_heatmap", l: "\u5b63\u8282\u6027\u70ed\u529b\u56fe" },
-    { v: "segment_share_by_length", l: "\u8f66\u957f\u00d7\u7ec6\u5206\u5e02\u573a" },
-  ],
-  nev_analysis: [
-    { v: "nev_range_distribution", l: "\u7eed\u822a\u5206\u5e03" },
-    { v: "nev_capacity_vs_msrp", l: "\u7535\u6c60\u5bb9\u91cf vs MSRP" },
-  ],
-  price_value: [
-    { v: "price_migration", l: "\u4ef7\u683c\u8fc1\u79fb" },
-    { v: "length_vs_price", l: "\u8f66\u957f vs \u4ef7\u683c" },
-    { v: "price_per_meter", l: "\u6bcf\u7c73\u4ef7\u683c" },
-    { v: "sales_vs_price", l: "\u9500\u91cf vs \u4ef7\u683c" },
-  ],
-  cost_analysis: [
-    { v: "rv_finance_dashboard", l: "RV\u91d1\u878d\u6760\u6746\u770b\u677f" },
-    { v: "estimated_tco", l: "\u4f30\u7b97TCO vs MSRP" },
-    { v: "powertrain_vs_price", l: "\u52a8\u529b\u00d7\u4ef7\u683c\u5e26" },
-  ],
-};
-const GROUP_BY_OPTIONS = [
-  { v: "\u52a8\u603b\u89c4\u6574", l: "\u52a8\u529b\u603b\u6210" },
-  { v: "\u7ec6\u5206\u5e02\u573a\uff08\u6309\u8f66\u957f\uff09", l: "\u7ec6\u5206\u5e02\u573a" },
-  { v: "Make", l: "\u54c1\u724c" },
-  { v: "Model", l: "Model" },
-  { v: "Version name", l: "Version" },
-  { v: "\u56fd\u5bb6", l: "\u56fd\u5bb6" },
-];
-
-type BubbleGroupDimension = "segment" | "powertrain";
-
-const BUBBLE_GROUP_DIMENSIONS: { v: BubbleGroupDimension; l: string; dataKey: "Segment" | "Powertrain" }[] = [
-  { v: "segment", l: "\u7ec6\u5206\u5e02\u573a", dataKey: "Segment" },
-  { v: "powertrain", l: "\u52a8\u603b\u89c4\u6574", dataKey: "Powertrain" },
-];
-
-const SCATTER_CHARTS = new Set([
-  "powertrain_bubble","nev_capacity_vs_msrp",
-  "length_vs_price","price_per_meter","sales_vs_price","estimated_tco",
-]);
-const STACKED_CHARTS = new Set([
-  "segment_share_by_length","nev_range_distribution","powertrain_vs_price",
-]);
-
-/* ── helpers ────────────────────────────────────────── */
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asMetaNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-}
-
-function asMetaText(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function asMetaStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.map(item => String(item)).filter(Boolean) : [];
-}
-
-function asMetaRecordArray(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value) ? value.filter(isPlainRecord) : [];
-}
-
-const DASHBOARD_CACHE_KEY = "dashboard-page";
-const PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
-
-interface DashboardPageCache {
-  search: string;
-  columns: string[];
-  selections: Record<string, string[]>;
-  optionsMap: Record<string, string[]>;
-  heroCollapsed: boolean;
-  sidebarCollapsed: boolean;
-  filteredRowCount: number | null;
-  overview: OverviewResponse | null;
-  yearSeries: TimeSeriesPoint[];
-  monthSeries: TimeSeriesPoint[];
-  activeTab: "year" | "month";
-  chartType: "line" | "bar";
-  tsMode: "总和" | "分组";
-  tsGroupDim: string;
-  tsTopN: number;
-  tsTopNEnabled: boolean;
-  tsIncludeOthers: boolean;
-  groupedItems: GroupedTimeSeriesItem[];
-  hiddenSeries: string[];
-  othersDetail: OthersDetailItem[];
-  advGroup: string;
-  advChart: string;
-  advItems: Record<string, string | number>[];
-  advMeta: Record<string, unknown> | null;
-  advBandSize: number;
-  advTopN: number;
-  advMigrationMode: "area" | "line";
-  advBubbleScale: number;
-  advBubbleGrain: "model" | "version";
-  advBubbleFacet: boolean;
-  advBubbleFacetMax: number;
-  advBubbleShowYoy: boolean;
-  advBubbleYoyYear: string;
-  advBubbleGroupTopN: boolean;
-  advBubbleGroupDimension: BubbleGroupDimension;
-  advBubbleGroupValues: string[];
-  advBubbleGroupTopNMap: Record<string, number>;
-  advPowertrains: string[];
-  advNevTopNEnabled: boolean;
-  advNevAxisMax: number;
-  advNevMetricMode: "window_sales" | "net_change";
-  advNevStackByModel: boolean;
-  advNevFacetBrand: boolean;
-  advNevMaxBrandFacets: number;
-  advRangeStep: number;
-  advHeatmapScale: string;
-  tcoYears: number;
-  tcoAnnualKm: number;
-  tcoDepreciation: number;
-  tcoMaintenance: number;
-  tcoTaxInsurance: number;
-  tcoEnergyCost: number;
-  mvModelName: string;
-  mvTopN: number;
-  mvItems: ModelVersionItem[];
-  mvColorBy: "Powertrain" | "Trim";
-  pmTargetLength: string;
-  pmTargetMsrp: string;
-  pmLengthRange: number;
-  pmManualCompetitors: string[];
-  pmTopN: number;
-  pmNClusters: number;
-  pmItems: PositioningMapItem[];
-  pmTarget: { Length: number; MSRP: number } | null;
-  pmClusterTop3: string[];
-  timeRange: TimeRange | null;
-  monthGrain: "month" | "quarter" | "year";
-}
-
-function getLoadingMetricValue(target: number, tick: number, fallback: number): number {
-  const base = target > 0 ? target : fallback;
-  const phase = (tick % 18) / 18;
-  return Math.round(base * (0.3 + phase * 0.95));
-}
-
-function formatMetricValue(value: number): string {
-  return Math.max(0, Math.round(value)).toLocaleString();
-}
-
-function summarizeScopeValues(values: string[]): string {
-  if (values.length === 0) return "-";
-  if (values.length <= 2) return values.join(" · ");
-  return `${values.slice(0, 2).join(" · ")} +${values.length - 2}`;
-}
-
-function getMetricDensityClass(valueText: string): string {
-  const digits = valueText.replace(/\D/g, "").length;
-  if (digits >= 7) return " metric-value--ultra";
-  if (digits >= 6) return " metric-value--compact";
-  return "";
-}
-
-function getUnifiedMetricDensityClass(values: string[]): string {
-  const maxDigits = Math.max(0, ...values.map((value) => value.replace(/\D/g, "").length));
-  if (maxDigits >= 7) return " metric-value--ultra";
-  if (maxDigits >= 6) return " metric-value--compact";
-  return "";
-}
 
 /* ── filter component ──────────────────────────────── */
 /* ── Main Dashboard ────────────────────────────────── */
