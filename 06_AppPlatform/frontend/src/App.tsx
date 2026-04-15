@@ -2,6 +2,7 @@ import { Suspense, lazy, type ReactNode } from "react";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 
 import { SharedFilterScopeProvider } from "./contexts/SharedFilterScopeContext";
+import { CountryChatProvider } from "./contexts/CountryChatContext";
 import { Layout } from "./components/Layout";
 import { LoadingSurface } from "./components/LoadingSurface";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -39,7 +40,9 @@ const router = createBrowserRouter([
     path: "/",
     element: (
       <SharedFilterScopeProvider>
-        <Layout />
+        <CountryChatProvider>
+          <Layout />
+        </CountryChatProvider>
       </SharedFilterScopeProvider>
     ),
     children: [

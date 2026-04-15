@@ -14,7 +14,7 @@ import {
   FILTER_ORDER,
 } from "../dashboardFilters";
 import type { FilterKey } from "../dashboardFilters";
-import type { OverviewResponse, TimeSeriesPoint, GroupedTimeSeriesItem, ModelVersionItem, PositioningMapItem, OthersDetailItem } from "../types";
+import type { OverviewResponse, TimeSeriesPoint, GroupedTimeSeriesItem, ModelVersionItem, PositioningMapItem, OthersDetailItem, DataFreshnessItem } from "../types";
 import { LazyPlotlyChart as PlotlyChart } from "../components/LazyPlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
 import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanel";
@@ -98,9 +98,10 @@ export function DashboardPage() {
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(() => new Set(cachedPage?.hiddenSeries ?? []));
   const [othersDetail, setOthersDetail] = useState<OthersDetailItem[]>(() => cachedPage?.othersDetail ?? []);
 
-  /* advanced charts */
-  const [advGroup, setAdvGroup] = useState(() => cachedPage?.advGroup ?? "market_structure");
-  const [advChart, setAdvChart] = useState(() => cachedPage?.advChart ?? "powertrain_bubble");
+  /* advanced charts — honor URL params for deep-links from Copilot */
+  const urlParams = useMemo(() => new URLSearchParams(currentSearch), [currentSearch]);
+  const [advGroup, setAdvGroup] = useState(() => urlParams.get("advGroup") ?? cachedPage?.advGroup ?? "market_structure");
+  const [advChart, setAdvChart] = useState(() => urlParams.get("advChart") ?? cachedPage?.advChart ?? "powertrain_bubble");
   const [advItems, setAdvItems] = useState<Record<string, string|number>[]>(() => cachedPage?.advItems ?? []);
   const [advMeta, setAdvMeta] = useState<Record<string, unknown> | null>(() => cachedPage?.advMeta ?? null);
   const [advLoading, setAdvLoading] = useState(false);
@@ -173,6 +174,16 @@ export function DashboardPage() {
   const [error, setError] = useState("");
   const combinedError = sharedError || error;
   const [heroLoadingTick, setHeroLoadingTick] = useState(0);
+
+  /* data freshness per country */
+  const [freshnessItems, setFreshnessItems] = useState<DataFreshnessItem[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    api.dataFreshness().then((res) => {
+      if (!cancelled) setFreshnessItems(res.items ?? []);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -996,14 +1007,38 @@ export function DashboardPage() {
                   <span key={`${index}-${token}`} className="dashboard-hero-chip">{token}</span>
                 ))}
               </div>
-              <div className="dashboard-hero-rail-actions">
-                <button type="button" className="btn btn-sm btn-secondary" onClick={resetFilters}>
-                  Reset filters
-                </button>
-                <Link className="btn btn-sm btn-primary" to={specificationHref}>
-                  Open Specification
-                </Link>
-              </div>
+              {freshnessItems.length > 0 && (() => {
+                /* group countries by latestMonth, sort months chronologically descending */
+                const byMonth = new Map<string, string[]>();
+                for (const item of freshnessItems) {
+                  const list = byMonth.get(item.latestMonth) ?? [];
+                  list.push(item.country);
+                  byMonth.set(item.latestMonth, list);
+                }
+                const sortedMonths = [...byMonth.keys()].sort((a, b) => {
+                  const oa = toTimeOrdinal(a);
+                  const ob = toTimeOrdinal(b);
+                  if (oa != null && ob != null) return ob - oa;
+                  return a < b ? 1 : -1;
+                });
+                return (
+                  <div className="dashboard-hero-freshness-table">
+                    <span className="dashboard-hero-freshness-label">数据覆盖</span>
+                    <div className="freshness-month-groups">
+                      {sortedMonths.map((month) => (
+                        <div key={month} className="freshness-month-col">
+                          <div className="freshness-month-header">{month}</div>
+                          <div className="freshness-country-list">
+                            {(byMonth.get(month) ?? []).map((c) => (
+                              <span key={c} className="freshness-country-tag">{c}</span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         />

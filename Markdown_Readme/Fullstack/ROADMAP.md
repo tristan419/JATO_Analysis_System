@@ -57,6 +57,7 @@ Markdown_Readme/
 | `01_DevWorkflow/SOFTWARE_DEV_WORKFLOW.md` | 开发规范 | Active | 从需求到上线的完整软件开发流程 |
 | `01_DevWorkflow/FULLSTACK_DEVELOPMENT_SPEC_2026-04-11.md` | 开发规范 | Active | 跨前后端 contract、测试补齐与验收流程规范 |
 | `01_DevWorkflow/PR_CHECKLIST.md` | 开发规范 | Active | 每次功能变更必须逐项勾选的 PR 清单 |
+| `01_DevWorkflow/COUNTRY_COPILOT_INTELLIGENCE_IMPLEMENTATION_2026-04-15.md` | 开发规范 | Active | Country Copilot 智能增强实施计划与执行记录 |
 | **02_DataETL/** | | | |
 | `02_DataETL/ETL.md` | 实现 | Active | 数据处理主链路（Raw → ETL → 分区 → 刷新） |
 | `02_DataETL/ETL_Baseline_Patch_Migration_Checklist_2026-04-10.md` | 实现 | Active | Baseline / Patch 迁移执行清单 |
@@ -143,6 +144,7 @@ Markdown_Readme/
 - Fullstack 迁移已完成，Streamlit 文档全部归档至 `Streamlit/`。
 - 全球可视化（地球项目）已搜置，`JATO_GLOBAL_VISUALIZATION.md` 保留但不再推进。
 - **MSRP 官方价格补全系统**：Batch 1+2（7 国）dry-run 已完成，92/209 通过 (44.0%)。下一步是将通过的 source promote 到 `sources/` 目录。
+- Country Copilot 智能增强已启动第一轮实施：先修月度趋势时间范围、动力总成固定配色，并补齐芬兰市场知识。
 - MSRP 官方价格文档已收拢到 `Fullstack/MSRP/`，旧 `country×brand` 计划已归档，由 SUV Top30 计划替代。
 - 数据库边界设计（PostgreSQL）和 Alembic 迁移方案已起草，迁移已执行到 0006（price_history）。
 - 跨层 contract 测试覆盖 MSRP、Review Cases、Engineering 三大页面（15 前端 + 10 后端测试）。

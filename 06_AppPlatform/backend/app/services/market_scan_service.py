@@ -90,7 +90,7 @@ def _resolve_columns(dataset_token: str) -> ColumnMap:
     columns = repo.list_columns()
     country_value = _resolve_existing_column(["国家", "Country", "country"], columns)
     make = _resolve_existing_column(["Make", "品牌 (英)", "品牌", "make"], columns)
-    model = _resolve_existing_column(["Model", "车型规整", "model"], columns)
+    model = _resolve_existing_column(["车型规整", "Model", "model"], columns)
     segment = _resolve_existing_column(["细分市场（按车长）", "JATO global segment", "细分市场"], columns)
     powertrain = _resolve_existing_column(["动总规整", "Powertrain type", "Fuel type", "powertrain"], columns)
     if country_value is None or make is None or model is None or segment is None or powertrain is None:
@@ -806,8 +806,9 @@ def _build_total_ranking_items(
         }
         drive_mix = {
             drive_type: float(_series_sum(group[group["__drive_type"] == drive_type], current_columns).sum())
-            for drive_type in ("2WD", "4WD")
+            for drive_type in ("2WD", "4WD", "OTHER")
         }
+        drive_share_pct = _safe_share(drive_mix["4WD"], current_volume)
         items.append(
             {
                 "model": str(model),
@@ -817,19 +818,23 @@ def _build_total_ranking_items(
                 "yoy": _delta_payload(current_volume, prior_volume),
                 "fuelMix": fuel_mix,
                 "driveMix": drive_mix,
+                "driveSharePct": drive_share_pct,
+                "driveShareDisplay": f"{drive_share_pct * 100:.1f}%",
             }
         )
-    items.sort(key=lambda item: item["volume"], reverse=True)
+    items.sort(
+        key=lambda item: (-item["sharePct"], -item["volume"], item["model"]),
+    )
     if not items:
         return []
-    max_volume = items[0]["volume"] or 1.0
+    max_share = items[0]["sharePct"] or 1.0
     for rank, item in enumerate(items[: max(1, int(ranking_limit))], start=1):
         item["rank"] = rank
-        item["barPct"] = _safe_share(item["volume"], max_volume)
+        item["barPct"] = _safe_share(item["sharePct"], max_share)
     return items[: max(1, int(ranking_limit))]
 
 
-def _build_single_fuel_ranking_items(
+def _build_single_fuel_ranking_items(  # noqa: keep volume-based sort
     frame: pd.DataFrame,
     fuel_type: str,
     current_columns: list[str],

@@ -75,6 +75,113 @@ class ImportBatch(Base):
     )
 
 
+class CountryNewsDigest(TimestampMixin, Base):
+    __tablename__ = "country_news_digests"
+    __table_args__ = (
+        UniqueConstraint(
+            "country_code",
+            name="uq_country_news_digests_country_code",
+        ),
+        Index(
+            "ix_ops_country_news_digests_synced",
+            "synced_at_utc",
+        ),
+        Index(
+            "ix_ops_country_news_digests_published",
+            "published_at_utc",
+        ),
+        {"schema": "ops"},
+    )
+
+    country_news_digest_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    country_label: Mapped[str] = mapped_column(Text, nullable=False)
+    article_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    published_at_utc: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    synced_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    headline: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    highlights_json: Mapped[list[str] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+    summary_provider: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    summary_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class CountryNewsArticle(TimestampMixin, Base):
+    __tablename__ = "country_news_articles"
+    __table_args__ = (
+        UniqueConstraint(
+            "country_code",
+            "source_url",
+            name="uq_country_news_articles_country_url",
+        ),
+        Index(
+            "ix_ops_country_news_articles_country_published",
+            "country_code",
+            "published_at_utc",
+        ),
+        Index(
+            "ix_ops_country_news_articles_country_synced",
+            "country_code",
+            "synced_at_utc",
+        ),
+        Index(
+            "ix_ops_country_news_articles_source_code",
+            "source_code",
+        ),
+        {"schema": "ops"},
+    )
+
+    country_news_article_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    country_label: Mapped[str] = mapped_column(Text, nullable=False)
+    source_code: Mapped[str] = mapped_column(Text, nullable=False)
+    publisher: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at_utc: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    tags_json: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    raw_payload_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    intelligence_provider: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    intelligence_model: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    synced_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 class ConfigProject(TimestampMixin, Base):
     __tablename__ = "config_projects"
     __table_args__ = (

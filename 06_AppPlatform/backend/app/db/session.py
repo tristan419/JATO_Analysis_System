@@ -13,8 +13,15 @@ from app.core.config import DATABASE_ECHO, DATABASE_ENABLED, DATABASE_URL
 def get_engine() -> Engine:
     if not DATABASE_ENABLED or not DATABASE_URL:
         raise RuntimeError("Database is not configured")
+    # Swap async-only drivers for sync equivalents so that
+    # create_engine (synchronous) works correctly.
+    sync_url = (
+        DATABASE_URL
+        .replace("+asyncpg", "+psycopg2")
+        .replace("+aiopg", "+psycopg2")
+    )
     return create_engine(
-        DATABASE_URL,
+        sync_url,
         echo=DATABASE_ECHO,
         future=True,
         pool_pre_ping=True,

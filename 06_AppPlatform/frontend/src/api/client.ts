@@ -4,12 +4,16 @@ import type {
   ConfigImportBatch,
   ConfigProject,
   ConfigVariant,
+  CountryChatDeckResponse,
   CountryChatMetadataResponse,
+  CountryChatNewsOpsStatus,
+  CountryChatNewsRefreshResponse,
   CountryChatResponse,
   CountryChatTurn,
   CrudListResponse,
   CrudItem,
   CurrentPrice,
+  DataFreshnessItem,
   PriceHistoryEntry,
   DetailResponse,
   GroupedTimeSeriesResponse,
@@ -344,14 +348,44 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  dataFreshness: () =>
+    request<{ items: DataFreshnessItem[] }>("/analysis/data-freshness"),
   countryChatMetadata: () =>
     request<CountryChatMetadataResponse>("/assistant/country/metadata"),
   countryChat: (payload: {
     country: string;
     question: string;
     history: CountryChatTurn[];
+    refresh_news?: boolean;
   }) =>
     request<CountryChatResponse>("/assistant/country/chat", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  countryChatNewsStatus: (country: string) =>
+    request<CountryChatNewsOpsStatus>(
+      `/assistant/country/news/status?country=${encodeURIComponent(country)}`
+    ),
+  countryChatNewsRefresh: (payload: {
+    country: string;
+    limit?: number;
+    persist?: boolean;
+    enrich_with_gemini?: boolean | null;
+  }) =>
+    request<CountryChatNewsRefreshResponse>("/assistant/country/news/refresh", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  countryChatDeck: (payload: {
+    country: string;
+    question?: string;
+    intents?: string[];
+    extracted_params?: Record<string, unknown>;
+    selected_year?: number;
+    selected_model?: string;
+    model_top_n?: number;
+  }) =>
+    request<CountryChatDeckResponse>("/assistant/country/chart-deck", {
       method: "POST",
       body: JSON.stringify(payload)
     }),

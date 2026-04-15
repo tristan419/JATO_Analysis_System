@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
@@ -775,6 +776,16 @@ export function MsrpPage() {
           )}
         </div>
       )}
+
+      <details className="msrp-admin-links">
+        <summary>管理工具</summary>
+        <nav>
+          <Link to="/specification">02 规格明细</Link>
+          <Link to="/crud">03 数据管理</Link>
+          <Link to="/engineering">04 配置导入</Link>
+          <Link to="/review">05 匹配审核</Link>
+        </nav>
+      </details>
     </section>
   );
 }

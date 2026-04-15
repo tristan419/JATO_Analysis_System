@@ -43,6 +43,12 @@ export interface OverviewResponse {
   yearSeries: TimeSeriesPoint[];
 }
 
+export interface DataFreshnessItem {
+  country: string;
+  latestMonth: string;
+  monthsInWindow: number;
+}
+
 export interface CountryChatTurn {
   role: "user" | "assistant";
   content: string;
@@ -58,6 +64,99 @@ export interface CountryChatRankItem {
   value: number;
 }
 
+export interface CountryChatInsightCard {
+  title: string;
+  conclusion: string;
+  tone: string;
+  relatedChartLink: string;
+}
+
+export interface CountryChatMarketEvent {
+  sourceCode?: string;
+  countryCode?: string | null;
+  countryLabel?: string;
+  publisher?: string;
+  title: string;
+  summary?: string | null;
+  url: string;
+  publishedAt?: string | null;
+  tags?: string[];
+}
+
+export interface CountryChatNewsDigest {
+  countryCode?: string | null;
+  countryLabel?: string;
+  articleCount: number;
+  updatedAt?: string | null;
+  headline?: string;
+  summary?: string;
+  highlights?: string[];
+  stale?: boolean;
+  summaryProvider?: string | null;
+  summaryModel?: string | null;
+  syncTimestamp?: string | null;
+}
+
+export interface CountryChatChartLink {
+  label: string;
+  href: string;
+}
+
+export interface CountryChatProviderRole {
+  capability: string;
+  provider: string;
+  model?: string | null;
+  mode?: string | null;
+}
+
+export interface CountryChatNewsOpsStatus {
+  country: string;
+  countryCode?: string | null;
+  countryLabel?: string;
+  configured: boolean;
+  feedCount: number;
+  databaseEnabled: boolean;
+  hasSnapshot: boolean;
+  articleCount: number;
+  syncTimestamp?: string | null;
+  updatedAt?: string | null;
+  summaryProvider?: string | null;
+  summaryModel?: string | null;
+  stale?: boolean | null;
+  liveFetchDefaultEnabled: boolean;
+  onlineRefreshSupported: boolean;
+  geminiConfigured: boolean;
+  geminiModel?: string | null;
+  chatProvider?: {
+    provider?: string | null;
+    available?: boolean;
+    reason?: string | null;
+    model?: string | null;
+  };
+  providerRoles?: CountryChatProviderRole[];
+}
+
+export interface CountryChatNewsRefreshResponse {
+  payload: {
+    countryCode?: string | null;
+    countryLabel?: string;
+    marketEvents: CountryChatMarketEvent[];
+    newsDigest: CountryChatNewsDigest | null;
+  };
+  status: CountryChatNewsOpsStatus;
+}
+
+export interface CountryChatAnalysisMeta {
+  availableYears?: Array<number | string>;
+  selectedYear?: number | null;
+  selectedMonth?: number | null;
+  yearLockedByQuestion?: boolean;
+  defaultLatestYearApplied?: boolean;
+  availableModels?: string[];
+  selectedModel?: string | null;
+  modelTopN?: number;
+}
+
 export interface CountryChatSnapshot {
   country: string;
   route: string;
@@ -67,6 +166,39 @@ export interface CountryChatSnapshot {
   topBrands: CountryChatRankItem[];
   topModels: CountryChatRankItem[];
   powertrainMix: CountryChatRankItem[];
+  marketEvents?: CountryChatMarketEvent[];
+  newsDigest?: CountryChatNewsDigest | null;
+  insightCards?: CountryChatInsightCard[];
+  periodLabel?: string;
+  resolvedPeriod?: string;
+  overviewSummary?: Record<string, unknown>;
+  ytdBrandRanking?: MarketScanRankingGroup | Record<string, unknown>[];
+  monthlyBrandRanking?: MarketScanRankingGroup | Record<string, unknown>[];
+  originAnalysis?: {
+    summaryText?: string;
+    matrix?: MarketScanMatrix;
+    [key: string]: unknown;
+  };
+  segmentMatrix?: MarketScanMatrix;
+  suvSedanTrend?: { items?: MarketScanBodyShareTrendItem[] } | Record<string, unknown>[];
+  drilldown?: Record<string, unknown>;
+  suvA?: Record<string, unknown>;
+  positioningMap?: PositioningMapResponse;
+  priceDistribution?: Record<string, unknown>[];
+  nevRangeDistribution?: Record<string, unknown>[];
+  bevShareBySegment?: Record<string, unknown>[];
+  powertrainVsPrice?: Record<string, unknown>[];
+  segmentShareByLength?: Record<string, unknown>[];
+  powertrainBubble?: Record<string, unknown>[];
+  modelVersionBubble?: ModelVersionItem[];
+  priceMigration?: Record<string, unknown>[];
+  pricePerMeter?: Record<string, unknown>[];
+  salesVsPrice?: Record<string, unknown>[];
+  nevCapacityVsMsrp?: Record<string, unknown>[];
+  seasonalityHeatmap?: Record<string, unknown>[];
+  estimatedTco?: Record<string, unknown>[];
+  analysisMeta?: CountryChatAnalysisMeta;
+  [key: string]: unknown;
 }
 
 export interface CountryChatMetadataResponse {
@@ -83,11 +215,26 @@ export interface CountryChatResponse {
   question: string;
   answer: string;
   intent: string;
+  primaryIntent?: string;
+  intents?: string[];
   provider: string;
   providerAvailable: boolean;
   providerReason?: string | null;
   contextSnapshot: CountryChatSnapshot;
   suggestedPrompts: string[];
+  chartLinks?: CountryChatChartLink[];
+  extractedParams?: Record<string, unknown> | null;
+}
+
+export interface CountryChatDeckResponse {
+  country: string;
+  question: string;
+  primaryIntent?: string;
+  intents?: string[];
+  deckIntents?: string[];
+  contextSnapshot: CountryChatSnapshot;
+  controls?: CountryChatAnalysisMeta;
+  extractedParams?: Record<string, unknown> | null;
 }
 
 export interface MarketScanDelta {
@@ -172,6 +319,8 @@ export interface MarketScanRankingItem {
   volume: number;
   sharePct: number;
   shareDisplay?: string;
+  driveSharePct?: number;
+  driveShareDisplay?: string;
   priorVolume?: number;
   priorMonthVolume?: number;
   yoy: MarketScanDelta;

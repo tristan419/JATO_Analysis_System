@@ -1,0 +1,67 @@
+batch_code: country_news_batch_b
+description: Remaining current JATO data countries for automotive market news ingestion.
+countries:
+  - country_code: DE
+    country_label: Germany / 德国
+    feeds:
+      - source_code: de_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Germany+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: FR
+    country_label: France / 法国
+    feeds:
+      - source_code: fr_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=France+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: IT
+    country_label: Italy / 意大利
+    feeds:
+      - source_code: it_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Italy+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: ES
+    country_label: Spain / 西班牙
+    feeds:
+      - source_code: es_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Spain+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: BE
+    country_label: Belgium / 比利时
+    feeds:
+      - source_code: be_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Belgium+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: NL
+    country_label: Netherlands / 荷兰
+    feeds:
+      - source_code: nl_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Netherlands+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: PL
+    country_label: Poland / 波兰
+    feeds:
+      - source_code: pl_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Poland+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: PT
+    country_label: Portugal / 葡萄牙
+    feeds:
+      - source_code: pt_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Portugal+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]

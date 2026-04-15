@@ -1,0 +1,27 @@
+[Unit]
+Description=JATO Country News Sync (one-shot prefetch to PostgreSQL)
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/JATO_Analysis_System
+
+# Recommended: run as a non-root user.
+# User=deploy
+# Group=deploy
+
+EnvironmentFile=-/etc/jato-fullstack/backend.env
+EnvironmentFile=-/etc/jato-fullstack/country-news.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/JATO_Analysis_System/06_AppPlatform/backend
+Environment=REPO_DIR=/opt/JATO_Analysis_System
+
+ExecStart=/opt/JATO_Analysis_System/03_Scripts/run_country_news_sync.sh
+
+# Allow up to 30 minutes for all countries.
+TimeoutStartSec=1800
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -19,13 +19,13 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option(
-    "sqlalchemy.url",
-    (
-        DATABASE_URL
-        or "postgresql+psycopg://postgres:postgres@localhost:5432/jato_app"
-    ),
+_raw_url = (
+    DATABASE_URL
+    or "postgresql+psycopg://postgres:postgres@localhost:5432/jato_app"
 )
+# Alembic runs synchronously – swap async drivers for sync equivalents.
+_sync_url = _raw_url.replace("+asyncpg", "+psycopg2").replace("+aiopg", "+psycopg2")
+config.set_main_option("sqlalchemy.url", _sync_url)
 
 target_metadata = Base.metadata
 

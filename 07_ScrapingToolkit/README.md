@@ -12,6 +12,9 @@
 │   │   └── http_json.py          # HTTP JSON API 提取器（备用）
 │   │   └── playwright_card_flow.py # 动态卡片流提取器（VW configurator 等）
 │   ├── base.py                   # 基础类型定义（RawObservation 等）
+│   ├── news_base.py              # 新闻批次和文章结构定义
+│   ├── news_config_loader.py     # 新闻批次 YAML 加载器
+│   ├── news_runner.py            # RSS/Atom 新闻抓取入口
 │   ├── config_loader.py          # YAML source 配置加载器
 │   ├── currency_converter.py     # 汇率自动转换（open.er-api.com → EUR）
 │   ├── llm/                      # LLM provider clients + page analyzer
@@ -32,7 +35,9 @@
 │   ├── volvo_se_xc60.yaml        # 已上线 source
 │   ├── bmw_de.yaml               # 样例 source
 │   └── _template.yaml            # YAML 模板
+├── news_sources/                 # 国家新闻批次配置（Batch A / Batch B）
 ├── run.py                        # CLI 入口
+├── run_news.py                   # 新闻 CLI 入口
 ├── pyproject.toml                # 包定义
 └── requirements.txt
 ```
@@ -76,6 +81,14 @@ cd 03_Scripts
 python batch_dryrun.py se    # 瑞典全部 29 个 source
 python batch_dryrun.py cz    # 捷克全部 30 个 source
 python batch_dryrun.py all   # 所有已填充 keyword 的国家
+```
+
+### 新闻批次抓取
+
+```bash
+cd 07_ScrapingToolkit
+python run_news.py --batch-files news_sources/batch_a.yaml --limit-per-feed 5
+python run_news.py --batch-files news_sources/batch_a.yaml news_sources/batch_b.yaml --output tmp/news_batch.json
 ```
 
 ## 提取策略
@@ -215,6 +228,27 @@ profile:
 - `default_currency`
 - `cookie_reject_text`
 - `structured_fields.powertrain_rules` 里的本地语言关键词
+
+## 新闻抓取基础设施（Phase 3 foundation）
+
+当前新增的是与 MSRP 抓取解耦的轻量新闻入口，先把国家新闻流按批次标准化输出：
+
+- `news_sources/batch_a.yaml`：第一批国家
+- `news_sources/batch_b.yaml`：剩余当前 JATO 数据国家
+- `jato_scraper/news_runner.py`：按批次抓取并输出标准 JSON
+
+输出字段包括：
+
+- `country_code`
+- `country_label`
+- `publisher`
+- `title`
+- `url`
+- `summary`
+- `published_at`
+- `tags`
+
+这一步先解决“国家新闻能批量抓到并标准化输出”，后续再决定是写入 PostgreSQL、回灌到 country chat snapshot，还是做成独立事件表。
 
 ## LLM 辅助分析
 

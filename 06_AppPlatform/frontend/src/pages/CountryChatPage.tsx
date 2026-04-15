@@ -1,25 +1,12 @@
 import {
   useEffect,
-  useMemo,
   useRef,
-  useState,
-  startTransition,
 } from "react";
+import { Link } from "react-router-dom";
 
-import { api } from "../api/client";
+import { CountryChatAnalysisDeck } from "../components/CountryChatAnalysisDeck";
 import { LoadingSurface } from "../components/LoadingSurface";
-import { useSharedFilterScope } from "../contexts/SharedFilterScopeContext";
-import type {
-  CountryChatMetadataResponse,
-  CountryChatResponse,
-  CountryChatTurn,
-} from "../types";
-
-interface TranscriptMessage extends CountryChatTurn {
-  id: string;
-  provider?: string;
-  providerReason?: string | null;
-}
+import { useCountryChat } from "../contexts/CountryChatContext";
 
 function formatNumber(value: number | undefined): string {
   if (value === undefined || Number.isNaN(value)) {
@@ -28,144 +15,51 @@ function formatNumber(value: number | undefined): string {
   return value.toLocaleString("en-US");
 }
 
+function formatDateTime(value: string | null | undefined): string {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return "-";
+  }
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) {
+    return text;
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
 export function CountryChatPage() {
-  const { selections } = useSharedFilterScope();
-  const preferredCountry = selections.country[0] ?? "";
-  const [metadata, setMetadata] =
-    useState<CountryChatMetadataResponse | null>(null);
-  const [selectedCountry, setSelectedCountry] = useState("");
-  const [draft, setDraft] = useState("");
-  const [messages, setMessages] = useState<TranscriptMessage[]>([]);
-  const [latestResponse, setLatestResponse] =
-    useState<CountryChatResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState("");
+  const {
+    draft,
+    error,
+    latestResponse,
+    loadingMetadata,
+    loadingNewsStatus,
+    messages,
+    metadata,
+    newsStatus,
+    promptSuggestions,
+    providerSummary,
+    refreshingNews,
+    refreshCountryNews,
+    retryLatestQuestionWithFreshNews,
+    selectedCountry,
+    sending,
+    setDraft,
+    setSelectedCountry,
+    sendQuestion,
+  } = useCountryChat();
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
-  const previousCountryRef = useRef("");
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    api.countryChatMetadata()
-      .then((response) => {
-        if (cancelled) {
-          return;
-        }
-        setMetadata(response);
-      })
-      .catch((reason: unknown) => {
-        if (cancelled) {
-          return;
-        }
-        setError(
-          reason instanceof Error
-            ? reason.message
-            : String(reason),
-        );
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!metadata || selectedCountry) {
-      return;
-    }
-    const matchedCountry = metadata.availableCountries.find(
-      (item) => item.value === preferredCountry,
-    );
-    setSelectedCountry(
-      matchedCountry?.value
-        ?? metadata.availableCountries[0]?.value
-        ?? "",
-    );
-  }, [metadata, preferredCountry, selectedCountry]);
-
-  useEffect(() => {
-    if (!selectedCountry) {
-      return;
-    }
-    if (!previousCountryRef.current) {
-      previousCountryRef.current = selectedCountry;
-      return;
-    }
-    if (previousCountryRef.current === selectedCountry) {
-      return;
-    }
-    previousCountryRef.current = selectedCountry;
-    setMessages([]);
-    setLatestResponse(null);
-    setError("");
-  }, [selectedCountry]);
 
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, sending]);
 
-  const promptSuggestions = useMemo(
-    () => latestResponse?.suggestedPrompts ?? metadata?.suggestedPrompts ?? [],
-    [latestResponse, metadata],
-  );
-
-  async function handleSend() {
-    const question = draft.trim();
-    if (!question || !selectedCountry || sending) {
-      return;
-    }
-
-    const userMessage: TranscriptMessage = {
-      id: `user-${Date.now()}`,
-      role: "user",
-      content: question,
-    };
-    const history = messages.map<CountryChatTurn>((message) => ({
-      role: message.role,
-      content: message.content,
-    }));
-
-    setDraft("");
-    setError("");
-    setSending(true);
-    setMessages((current) => [...current, userMessage]);
-
-    try {
-      const response = await api.countryChat({
-        country: selectedCountry,
-        question,
-        history,
-      });
-      startTransition(() => {
-        setLatestResponse(response);
-        setMessages((current) => [
-          ...current,
-          {
-            id: `assistant-${Date.now()}`,
-            role: "assistant",
-            content: response.answer,
-            provider: response.provider,
-            providerReason: response.providerReason,
-          },
-        ]);
-      });
-    } catch (reason: unknown) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : String(reason),
-      );
-    } finally {
-      setSending(false);
-    }
-  }
-
-  if (loading && !metadata) {
+  if (loadingMetadata && !metadata) {
     return (
       <div className="dashboard-shell copilot-shell">
         <LoadingSurface
@@ -179,9 +73,12 @@ export function CountryChatPage() {
   }
 
   const snapshot = latestResponse?.contextSnapshot ?? null;
-  const providerSummary = metadata?.providerAvailable
-    ? `NVIDIA · ${metadata.defaultModel ?? "default model"}`
-    : (metadata?.providerReason ?? "当前使用本地降级回答");
+  const countryOptions = Array.isArray(metadata?.availableCountries)
+    ? metadata.availableCountries
+    : [];
+  const latestAssistantMessageId = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant")?.id;
 
   return (
     <div className="dashboard-shell copilot-shell">
@@ -221,7 +118,7 @@ export function CountryChatPage() {
                   onChange={(event) => setSelectedCountry(event.target.value)}
                   disabled={sending}
                 >
-                  {metadata?.availableCountries.map((item) => (
+                  {countryOptions.map((item) => (
                     <option key={item.value} value={item.value}>
                       {item.label}
                     </option>
@@ -229,7 +126,7 @@ export function CountryChatPage() {
                 </select>
               </label>
               <div className="copilot-toolbar-note">
-                优先读取当前国家的 overview、品牌、车型和动力结构摘要，榜单按累计销量排序。
+                当前页面与右下角悬浮助手共享同一套会话，切换页面后会按国家恢复历史记录。
               </div>
             </div>
 
@@ -269,6 +166,12 @@ export function CountryChatPage() {
                     <div className="copilot-message-body">
                       {message.content}
                     </div>
+                    {message.contextSnapshot ? (
+                      <CountryChatAnalysisDeck
+                        message={message}
+                        defaultExpanded={message.id === latestAssistantMessageId}
+                      />
+                    ) : null}
                     {message.providerReason ? (
                       <div className="copilot-message-note">{message.providerReason}</div>
                     ) : null}
@@ -303,7 +206,9 @@ export function CountryChatPage() {
                 <button
                   type="button"
                   className="btn btn-primary"
-                  onClick={handleSend}
+                  onClick={() => {
+                    void sendQuestion();
+                  }}
                   disabled={sending || !selectedCountry || !draft.trim()}
                 >
                   {sending ? "发送中…" : "发送问题"}
@@ -343,28 +248,109 @@ export function CountryChatPage() {
             </div>
 
             <div className="card copilot-side-card">
-              <h3>头部品牌（销量）</h3>
-              <ul className="copilot-rank-list">
-                {(snapshot?.topBrands ?? []).map((item) => (
-                  <li key={`brand-${item.label}`}>
-                    <span>{item.label}</span>
-                    <strong>{formatNumber(item.value)}</strong>
-                  </li>
-                ))}
-              </ul>
+              <h3>新闻运维状态</h3>
+              {loadingNewsStatus ? (
+                <p>正在读取当前国家的新闻同步状态…</p>
+              ) : newsStatus ? (
+                <>
+                  <div className="copilot-kpi-grid copilot-ops-grid">
+                    <div>
+                      <span>快照状态</span>
+                      <strong>{newsStatus.hasSnapshot ? "已就绪" : "尚无快照"}</strong>
+                    </div>
+                    <div>
+                      <span>同步时间</span>
+                      <strong>{formatDateTime(newsStatus.syncTimestamp)}</strong>
+                    </div>
+                    <div>
+                      <span>摘要 Provider</span>
+                      <strong>{newsStatus.summaryProvider ?? "rss-fallback"}</strong>
+                    </div>
+                    <div>
+                      <span>Stale</span>
+                      <strong>{newsStatus.stale ? "是" : "否"}</strong>
+                    </div>
+                    <div>
+                      <span>文章数</span>
+                      <strong>{formatNumber(newsStatus.articleCount)}</strong>
+                    </div>
+                    <div>
+                      <span>Source feeds</span>
+                      <strong>{formatNumber(newsStatus.feedCount)}</strong>
+                    </div>
+                  </div>
+
+                  <div className="copilot-ops-actions">
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => {
+                        void refreshCountryNews();
+                      }}
+                      disabled={refreshingNews || !selectedCountry}
+                    >
+                      {refreshingNews ? "在线刷新中…" : "在线刷新新闻快照"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      onClick={() => {
+                        void retryLatestQuestionWithFreshNews();
+                      }}
+                      disabled={refreshingNews || sending || !latestResponse}
+                    >
+                      不满意时刷新后重答
+                    </button>
+                  </div>
+
+                  <p className="copilot-toolbar-note">
+                    默认问答优先读数据库快照；如果结果不满意，可以临时在线抓取最新新闻，
+                    再由 NVIDIA 基于更新后的上下文重答。Gemini 只做新闻摘要和标签增强，
+                    不替代 RSS/Atom 抓取层。
+                  </p>
+
+                  {newsStatus.providerRoles &&
+                  newsStatus.providerRoles.length > 0 ? (
+                    <ul className="copilot-ops-list">
+                      {newsStatus.providerRoles.map((role) => (
+                        <li key={`${role.capability}-${role.provider}`}>
+                          <strong>{role.capability}</strong>
+                          <span>
+                            {role.provider}
+                            {role.model ? ` · ${role.model}` : ""}
+                            {role.mode ? ` · ${role.mode}` : ""}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </>
+              ) : (
+                <p>当前国家还没有新闻同步信息。</p>
+              )}
             </div>
 
-            <div className="card copilot-side-card">
-              <h3>动力结构（销量）</h3>
-              <ul className="copilot-rank-list">
-                {(snapshot?.powertrainMix ?? []).map((item) => (
-                  <li key={`pt-${item.label}`}>
-                    <span>{item.label}</span>
-                    <strong>{formatNumber(item.value)}</strong>
-                  </li>
-                ))}
-              </ul>
-            </div>
+            {snapshot?.insightCards && snapshot.insightCards.length > 0 ? (
+              <div className="card copilot-side-card">
+                <h3>分析洞察</h3>
+                <ul className="copilot-insight-list">
+                  {snapshot.insightCards.map((card) => (
+                    <li key={card.title} className="copilot-insight-item">
+                      <span className={`copilot-insight-tone copilot-insight-tone--${card.tone}`} />
+                      <div className="copilot-insight-body">
+                        <strong>{card.title}</strong>
+                        <p>{card.conclusion}</p>
+                        {card.relatedChartLink ? (
+                          <Link to={card.relatedChartLink} className="copilot-insight-link">
+                            查看图表 →
+                          </Link>
+                        ) : null}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </aside>
         </div>
       </section>

@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 jato-scrape = "jato_scraper.runner:main"
+jato-news-fetch = "jato_scraper.news_runner:main"
 jato-msrp-page-analyze = "jato_scraper.llm.msrp_page_analyzer:main"
 
 [tool.setuptools]

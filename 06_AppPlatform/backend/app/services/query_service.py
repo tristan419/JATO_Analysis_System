@@ -183,6 +183,10 @@ _MONTH_ORDER = {
     "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
 }
 
+_MONTH_LABEL_BY_NUMBER = {
+    value: key for key, value in _MONTH_ORDER.items()
+}
+
 
 def _sort_month_cols_chrono(cols: list[str]) -> list[str]:
     def _key(col: str) -> tuple[int, int]:
@@ -244,6 +248,88 @@ def _sum_sales_columns(df: pd.DataFrame, year_cols: list[str]) -> pd.Series:
         if yc in df.columns:
             total += pd.to_numeric(df[yc], errors="coerce").fillna(0)
     return total
+
+
+def _sales_columns_for_scope(
+    columns: list[str],
+    *,
+    year: int | None = None,
+    month: int | None = None,
+    default_latest_year: bool = False,
+) -> tuple[list[str], list[str], str | None]:
+    explicit_years = _year_columns(columns)
+    supplemental_year_groups = _supplemental_month_year_groups(columns)
+    month_columns = _month_columns(columns)
+    available_years = sorted(
+        {str(item) for item in explicit_years}
+        | set(supplemental_year_groups.keys()),
+        key=int,
+    )
+
+    resolved_year: str | None = None
+    if year is not None:
+        resolved_year = str(int(year))
+    elif default_latest_year and available_years:
+        resolved_year = available_years[-1]
+
+    if resolved_year:
+        if month is not None:
+            month_label = _MONTH_LABEL_BY_NUMBER.get(int(month))
+            target_column = (
+                f"{resolved_year} {month_label}" if month_label else ""
+            )
+            if target_column in month_columns:
+                return [target_column], available_years, resolved_year
+            return [], available_years, resolved_year
+
+        if resolved_year in explicit_years:
+            return [resolved_year], available_years, resolved_year
+        if resolved_year in supplemental_year_groups:
+            return (
+                supplemental_year_groups[resolved_year],
+                available_years,
+                resolved_year,
+            )
+        return [], available_years, resolved_year
+
+    return explicit_years, available_years, None
+
+
+def _aggregate_sales(
+    filters: dict[str, list[str]],
+    target_column: str,
+    top_n: int,
+    sales_columns: list[str],
+) -> list[dict]:
+    if not sales_columns:
+        return []
+    frame = repo.load_slice(
+        columns=[target_column, *sales_columns],
+        filters=filters,
+        limit=200_000,
+        offset=0,
+    )
+    if frame.empty or target_column not in frame.columns:
+        return []
+
+    ranking = pd.DataFrame()
+    ranking["label"] = frame[target_column].astype(str).str.strip()
+    ranking.loc[ranking["label"] == "", "label"] = pd.NA
+    ranking["value"] = _sum_sales_columns(frame, sales_columns)
+    ranking = ranking.dropna(subset=["label"])
+    if ranking.empty:
+        return []
+
+    grouped = (
+        ranking.groupby("label", as_index=False)["value"]
+        .sum()
+        .sort_values(["value", "label"], ascending=[False, True])
+        .head(max(1, int(top_n)))
+    )
+    return [
+        {"label": str(row["label"]), "value": float(row["value"])}
+        for _, row in grouped.iterrows()
+    ]
 
 
 def _make_price_bands(series: pd.Series, band_size: int) -> pd.Series:
@@ -527,6 +613,11 @@ def query_grouped_time_series(
     return result
 
 
+# ── Data freshness ──────────────────────────────────────────────
+def get_data_freshness() -> list[dict[str, object]]:
+    return repo.country_data_freshness()
+
+
 # ── Overview ────────────────────────────────────────────────────
 def query_overview(
     filters: dict[str, list[str]],
@@ -707,6 +798,7 @@ def _build_vehicle_frame(
     filters: dict[str, list[str]],
     *,
     include_year_columns: bool = False,
+    sales_columns: list[str] | None = None,
 ) -> pd.DataFrame:
     """Load a vehicle-level frame with Make, Model, Segment, Powertrain, Length, MSRP, Sales."""
     columns = repo.list_columns()
@@ -725,7 +817,27 @@ def _build_vehicle_frame(
         for month_columns in supplemental_year_groups.values():
             year_load_columns.extend(month_columns)
 
-    needed = [c for c in [make_col, model_col, version_col, segment_col, powertrain_col, length_col, msrp_col] if c] + year_load_columns
+    requested_sales_columns = [
+        column for column in (sales_columns or []) if column
+    ]
+    needed = (
+        [
+            c
+            for c in [
+                make_col,
+                model_col,
+                version_col,
+                segment_col,
+                powertrain_col,
+                length_col,
+                msrp_col,
+            ]
+            if c
+        ]
+        + year_load_columns
+        + requested_sales_columns
+    )
+    needed = list(dict.fromkeys(needed))
     if not needed:
         return pd.DataFrame()
 
@@ -765,8 +877,11 @@ def _build_vehicle_frame(
         for year_label, source_column in effective_year_columns.items():
             if source_column in df.columns:
                 out[year_label] = pd.to_numeric(df[source_column], errors="coerce").fillna(0.0)
-    sales_columns = list(effective_year_columns.values()) if include_year_columns else year_cols
-    out["Sales"] = _sum_sales_columns(df, sales_columns)
+    sales_source_columns = (
+        requested_sales_columns
+        or (list(effective_year_columns.values()) if include_year_columns else year_cols)
+    )
+    out["Sales"] = _sum_sales_columns(df, sales_source_columns)
     return out
 
 
@@ -790,14 +905,32 @@ def query_advanced_chart(
             col = _resolve_existing_column(POWERTRAIN_CANDIDATES, columns)
             if not col:
                 return empty
-            items = _aggregate_count(filters, col, top_n)
+            sales_columns, _, _ = _sales_columns_for_scope(
+                columns,
+                year=opts.get("sales_year"),
+                month=opts.get("sales_month"),
+                default_latest_year=bool(opts.get("default_latest_year")),
+            )
+            items = (
+                _aggregate_sales(filters, col, top_n, sales_columns)
+                if sales_columns else _aggregate_count(filters, col, top_n)
+            )
             return {"group": group, "chart": chart, "rows": len(items), "items": items}
 
         if nc == "segment_share":
             col = _resolve_existing_column(SEGMENT_CANDIDATES, columns)
             if not col:
                 return empty
-            items = _aggregate_count(filters, col, top_n)
+            sales_columns, _, _ = _sales_columns_for_scope(
+                columns,
+                year=opts.get("sales_year"),
+                month=opts.get("sales_month"),
+                default_latest_year=bool(opts.get("default_latest_year")),
+            )
+            items = (
+                _aggregate_sales(filters, col, top_n, sales_columns)
+                if sales_columns else _aggregate_count(filters, col, top_n)
+            )
             return {"group": group, "chart": chart, "rows": len(items), "items": items}
 
         if nc == "powertrain_bubble":
@@ -827,13 +960,13 @@ def query_advanced_chart(
             return _chart_price_migration(filters, opts)
 
         if nc == "length_vs_price":
-            return _chart_length_vs_price(filters, top_n)
+            return _chart_length_vs_price(filters, top_n, opts)
 
         if nc == "price_per_meter":
-            return _chart_price_per_meter(filters, top_n)
+            return _chart_price_per_meter(filters, top_n, opts)
 
         if nc == "sales_vs_price":
-            return _chart_sales_vs_price(filters, top_n)
+            return _chart_sales_vs_price(filters, top_n, opts)
 
         if nc == "powertrain_vs_price":
             return _chart_powertrain_vs_price(filters, opts)
@@ -865,7 +998,17 @@ def _chart_powertrain_bubble(
 ) -> dict:
     max_top_n = max(1, int(top_n))
     show_yoy = bool(opts.get("show_yoy"))
-    vf = _build_vehicle_frame(filters, include_year_columns=show_yoy)
+    sales_columns, _, _ = _sales_columns_for_scope(
+        repo.list_columns(),
+        year=opts.get("sales_year"),
+        month=opts.get("sales_month"),
+        default_latest_year=bool(opts.get("default_latest_year")),
+    )
+    vf = _build_vehicle_frame(
+        filters,
+        include_year_columns=show_yoy,
+        sales_columns=sales_columns or None,
+    )
     if vf.empty or "Powertrain" not in vf.columns:
         return {"group": "market_structure", "chart": "powertrain_bubble", "rows": 0, "items": []}
 
@@ -1039,7 +1182,13 @@ def _chart_powertrain_bubble(
 def _chart_segment_share_by_length(
     filters: dict[str, list[str]], opts: dict,
 ) -> dict:
-    vf = _build_vehicle_frame(filters)
+    sales_columns, _, _ = _sales_columns_for_scope(
+        repo.list_columns(),
+        year=opts.get("sales_year"),
+        month=opts.get("sales_month"),
+        default_latest_year=bool(opts.get("default_latest_year")),
+    )
+    vf = _build_vehicle_frame(filters, sales_columns=sales_columns or None)
     if vf.empty or "Length" not in vf.columns or "Segment" not in vf.columns:
         return {"group": "market_structure", "chart": "segment_share_by_length", "rows": 0, "items": []}
 
@@ -1082,7 +1231,16 @@ def _chart_nev_range_distribution(
     for yc in year_cols:
         if yc in df.columns:
             df[yc] = pd.to_numeric(df[yc], errors="coerce").fillna(0.0)
-    df["SalesWindow"] = _sum_sales_columns(df, year_cols)
+    sales_scope_columns, _, _ = _sales_columns_for_scope(
+        columns,
+        year=opts.get("sales_year"),
+        month=opts.get("sales_month"),
+        default_latest_year=bool(opts.get("default_latest_year")),
+    )
+    df["SalesWindow"] = _sum_sales_columns(
+        df,
+        sales_scope_columns or year_cols,
+    )
 
     # Filter to NEV powertrains
     selected_pt = opts.get("powertrains", ["BEV", "PHEV"])
@@ -1297,7 +1455,13 @@ def _chart_nev_capacity_vs_msrp(
     df["BatteryCapacity"] = pd.to_numeric(df[cap_col], errors="coerce")
     df["MSRP"] = pd.to_numeric(df[msrp_col], errors="coerce")
     df["Powertrain"] = df[powertrain_col].astype(str).str.strip()
-    df["Sales"] = _sum_sales_columns(df, year_cols)
+    sales_scope_columns, _, _ = _sales_columns_for_scope(
+        columns,
+        year=opts.get("sales_year"),
+        month=opts.get("sales_month"),
+        default_latest_year=bool(opts.get("default_latest_year")),
+    )
+    df["Sales"] = _sum_sales_columns(df, sales_scope_columns or year_cols)
     if model_col and model_col in df.columns:
         df["Model"] = df[model_col].astype(str).str.strip()
     if make_col and make_col in df.columns:
@@ -1346,8 +1510,15 @@ def _chart_price_migration(
     df["PriceBand"] = _make_price_bands(df["MSRP"], band_size)
 
     # For each year column, aggregate sales by price band
+    scoped_year_cols, _, _ = _sales_columns_for_scope(
+        columns,
+        year=opts.get("sales_year"),
+        month=None,
+        default_latest_year=False,
+    )
+
     items = []
-    for yc in year_cols:
+    for yc in (scoped_year_cols or year_cols):
         if yc not in df.columns:
             continue
         df[yc] = pd.to_numeric(df[yc], errors="coerce").fillna(0)
@@ -1366,9 +1537,16 @@ def _chart_price_migration(
 
 # ── Chart: Length vs Price Map ─────────────────────────────────
 def _chart_length_vs_price(
-    filters: dict[str, list[str]], top_n: int,
+    filters: dict[str, list[str]], top_n: int, opts: dict | None = None,
 ) -> dict:
-    vf = _build_vehicle_frame(filters)
+    scope_opts = opts or {}
+    sales_columns, _, _ = _sales_columns_for_scope(
+        repo.list_columns(),
+        year=scope_opts.get("sales_year"),
+        month=scope_opts.get("sales_month"),
+        default_latest_year=bool(scope_opts.get("default_latest_year")),
+    )
+    vf = _build_vehicle_frame(filters, sales_columns=sales_columns or None)
     if vf.empty or "Length" not in vf.columns or "MSRP" not in vf.columns:
         return {"group": "price_value", "chart": "length_vs_price", "rows": 0, "items": []}
 
@@ -1391,9 +1569,16 @@ def _chart_length_vs_price(
 
 # ── Chart: Price Per Meter vs Sales ────────────────────────────
 def _chart_price_per_meter(
-    filters: dict[str, list[str]], top_n: int,
+    filters: dict[str, list[str]], top_n: int, opts: dict | None = None,
 ) -> dict:
-    vf = _build_vehicle_frame(filters)
+    scope_opts = opts or {}
+    sales_columns, _, _ = _sales_columns_for_scope(
+        repo.list_columns(),
+        year=scope_opts.get("sales_year"),
+        month=scope_opts.get("sales_month"),
+        default_latest_year=bool(scope_opts.get("default_latest_year")),
+    )
+    vf = _build_vehicle_frame(filters, sales_columns=sales_columns or None)
     if vf.empty or "Length" not in vf.columns or "MSRP" not in vf.columns:
         return {"group": "price_value", "chart": "price_per_meter", "rows": 0, "items": []}
 
@@ -1417,9 +1602,16 @@ def _chart_price_per_meter(
 
 # ── Chart: Sales vs Price Scatter ──────────────────────────────
 def _chart_sales_vs_price(
-    filters: dict[str, list[str]], top_n: int,
+    filters: dict[str, list[str]], top_n: int, opts: dict | None = None,
 ) -> dict:
-    vf = _build_vehicle_frame(filters)
+    scope_opts = opts or {}
+    sales_columns, _, _ = _sales_columns_for_scope(
+        repo.list_columns(),
+        year=scope_opts.get("sales_year"),
+        month=scope_opts.get("sales_month"),
+        default_latest_year=bool(scope_opts.get("default_latest_year")),
+    )
+    vf = _build_vehicle_frame(filters, sales_columns=sales_columns or None)
     if vf.empty or "MSRP" not in vf.columns:
         return {"group": "price_value", "chart": "sales_vs_price", "rows": 0, "items": []}
 
@@ -1465,7 +1657,13 @@ def _chart_powertrain_vs_price(
     band_size = int(opts.get("band_size", 1000))
     df["MSRP"] = pd.to_numeric(df[msrp_col], errors="coerce")
     df["Powertrain"] = df[powertrain_col].astype(str).str.strip()
-    df["Sales"] = _sum_sales_columns(df, year_cols)
+    sales_scope_columns, _, _ = _sales_columns_for_scope(
+        columns,
+        year=opts.get("sales_year"),
+        month=opts.get("sales_month"),
+        default_latest_year=bool(opts.get("default_latest_year")),
+    )
+    df["Sales"] = _sum_sales_columns(df, sales_scope_columns or year_cols)
     df = df.dropna(subset=["MSRP"])
     df = df[df["MSRP"] > 0]
     df["PriceBand"] = _make_price_bands(df["MSRP"], band_size)
@@ -1480,7 +1678,13 @@ def _chart_powertrain_vs_price(
 def _chart_estimated_tco(
     filters: dict[str, list[str]], top_n: int, opts: dict,
 ) -> dict:
-    vf = _build_vehicle_frame(filters)
+    sales_columns, _, _ = _sales_columns_for_scope(
+        repo.list_columns(),
+        year=opts.get("sales_year"),
+        month=opts.get("sales_month"),
+        default_latest_year=bool(opts.get("default_latest_year")),
+    )
+    vf = _build_vehicle_frame(filters, sales_columns=sales_columns or None)
     if vf.empty or "MSRP" not in vf.columns or "Powertrain" not in vf.columns:
         return {"group": "cost_analysis", "chart": "estimated_tco", "rows": 0, "items": []}
 
@@ -1525,7 +1729,10 @@ def _chart_estimated_tco(
 TRIM_CANDIDATES = ["Trim level", "Trim Level", "trim level"]
 
 
-def _build_version_frame(filters: dict[str, list[str]]) -> pd.DataFrame:
+def _build_version_frame(
+    filters: dict[str, list[str]],
+    sales_columns: list[str] | None = None,
+) -> pd.DataFrame:
     """Load version-level frame: Version, Trim, Powertrain, Length, MSRP, Sales."""
     columns = repo.list_columns()
     model_col = _resolve_existing_column(MODEL_CANDIDATES, columns)
@@ -1537,7 +1744,27 @@ def _build_version_frame(filters: dict[str, list[str]]) -> pd.DataFrame:
     trim_col = _resolve_existing_column(TRIM_CANDIDATES, columns)
     year_cols = _year_columns(columns)
 
-    needed = [c for c in [model_col, version_col, make_col, powertrain_col, length_col, msrp_col, trim_col] if c] + year_cols
+    requested_sales_columns = [
+        column for column in (sales_columns or []) if column
+    ]
+    needed = (
+        [
+            c
+            for c in [
+                model_col,
+                version_col,
+                make_col,
+                powertrain_col,
+                length_col,
+                msrp_col,
+                trim_col,
+            ]
+            if c
+        ]
+        + year_cols
+        + requested_sales_columns
+    )
+    needed = list(dict.fromkeys(needed))
     if not needed:
         return pd.DataFrame()
 
@@ -1560,7 +1787,7 @@ def _build_version_frame(filters: dict[str, list[str]]) -> pd.DataFrame:
         out["Length"] = pd.to_numeric(df[length_col], errors="coerce")
     if msrp_col and msrp_col in df.columns:
         out["MSRP"] = pd.to_numeric(df[msrp_col], errors="coerce")
-    out["Sales"] = _sum_sales_columns(df, year_cols)
+    out["Sales"] = _sum_sales_columns(df, requested_sales_columns or year_cols)
     return out
 
 
@@ -1568,9 +1795,10 @@ def query_model_versions(
     filters: dict[str, list[str]],
     model_name: str,
     top_n: int,
+    sales_columns: list[str] | None = None,
 ) -> dict:
     """Return version-level scatter for a given Model."""
-    vf = _build_version_frame(filters)
+    vf = _build_version_frame(filters, sales_columns=sales_columns)
     if vf.empty or "Model" not in vf.columns or "Version" not in vf.columns:
         return {"rows": 0, "items": []}
 
@@ -1614,6 +1842,7 @@ def query_positioning_map(
     manual_competitors: list[str] | None,
     top_n: int,
     n_clusters: int,
+    sales_columns: list[str] | None = None,
 ) -> dict:
     """
     Return positioning scatter with optional KMeans clustering.
@@ -1621,7 +1850,7 @@ def query_positioning_map(
     - manual_competitors: Brand names to force-include.
     - Returns items with cluster_id, and a target_point if target given.
     """
-    vf = _build_vehicle_frame(filters)
+    vf = _build_vehicle_frame(filters, sales_columns=sales_columns)
     if vf.empty or "Length" not in vf.columns or "MSRP" not in vf.columns:
         return {"rows": 0, "items": [], "target": None, "cluster_top3": []}
 

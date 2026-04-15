@@ -118,6 +118,24 @@ class CountryChatRequest(BaseModel):
     country: str
     question: str
     history: list[CountryChatTurn] = Field(default_factory=list)
+    refresh_news: bool = False
+
+
+class CountryChatDeckRequest(BaseModel):
+    country: str
+    question: str = ""
+    intents: list[str] = Field(default_factory=list)
+    extracted_params: dict[str, object] = Field(default_factory=dict)
+    selected_year: int | None = None
+    selected_model: str | None = None
+    model_top_n: int | None = None
+
+
+class CountryNewsRefreshRequest(BaseModel):
+    country: str
+    limit: int | None = None
+    persist: bool = True
+    enrich_with_gemini: bool | None = None
 
 
 class CrudItem(BaseModel):

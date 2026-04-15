@@ -1,15 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 
+import { CountryChatWidget } from "./CountryChatWidget";
+
 const NAV_ITEMS = [
   { to: "/", code: "01", label: "Overview", sublabel: "Dashboard" },
-  { to: "/specification", code: "02", label: "Specification", sublabel: "规格明细" },
-  { to: "/crud", code: "03", label: "Control", sublabel: "数据管理" },
-  { to: "/engineering", code: "04", label: "Engineering", sublabel: "配置导入" },
-  { to: "/review", code: "05", label: "Review", sublabel: "匹配审核" },
   { to: "/msrp", code: "06", label: "MSRP", sublabel: "当前价格" },
   { to: "/market-scan", code: "07", label: "Scan", sublabel: "市场扫描" },
-  { to: "/copilot", code: "08", label: "Copilot", sublabel: "国家助手" },
 ];
 
 export function Layout() {
@@ -63,6 +60,7 @@ export function Layout() {
       <main className="main-area">
         <Outlet />
       </main>
+      <CountryChatWidget />
     </div>
   );
 }

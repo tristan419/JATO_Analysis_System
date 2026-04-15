@@ -16,6 +16,7 @@ from app.core.config import MAX_DETAIL_PAGE_SIZE, MAX_EXPORT_ROWS
 from app.core.security import require_min_role
 from app.services.query_service import (
     export_detail_csv,
+    get_data_freshness,
     query_analysis,
     query_advanced_chart,
     query_detail,
@@ -66,6 +67,13 @@ def overview(
         prefer_precomputed=payload.prefer_precomputed,
         top_n=payload.top_n,
     )
+
+
+@router.get("/data-freshness")
+def data_freshness(
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    return {"items": get_data_freshness()}
 
 
 @router.post("/detail")

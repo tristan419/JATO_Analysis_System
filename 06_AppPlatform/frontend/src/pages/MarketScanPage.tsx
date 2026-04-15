@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
@@ -504,9 +505,11 @@ function dominantFuelForRanking(item: MarketScanRankingItem): string {
 }
 
 function driveShareText(item: MarketScanRankingItem): string {
-  const total = item.volume || 0;
-  const fourWheelShare = total > 0 ? Number(item.driveMix?.["4WD"] ?? 0) / total : 0;
-  return `4WD ${formatPercent(fourWheelShare)}`;
+  const pct =
+    typeof item.driveSharePct === "number"
+      ? item.driveSharePct
+      : Number(item.driveMix?.["4WD"] ?? 0) / Math.max(item.volume || 1, 1);
+  return `4WD ${formatPercent(pct)}`;
 }
 
 function buildTotalRankingChartData(items: MarketScanRankingItem[]): Data[] {
@@ -515,16 +518,19 @@ function buildTotalRankingChartData(items: MarketScanRankingItem[]): Data[] {
     {
       type: "bar",
       orientation: "h",
-      x: ordered.map((item) => item.volume),
+      x: ordered.map((item) => item.sharePct),
       y: ordered.map((item) => rankingItemLabel(item)),
       marker: {
         color: ordered.map((item) => fuelColor(dominantFuelForRanking(item))),
       },
-      text: ordered.map((item) => `${formatVolume(item.volume)} 台<br>${driveShareText(item)}`),
+      text: ordered.map(
+        (item) => `${item.shareDisplay ?? formatPercent(item.sharePct)}<br>${formatVolume(item.volume)} 台<br>${driveShareText(item)}`,
+      ),
       textposition: "outside",
       textfont: { size: 10 },
       cliponaxis: false,
-      hovertemplate: "%{y}<br>%{x:,.0f} 台<extra></extra>",
+      customdata: ordered.map((item) => item.volume),
+      hovertemplate: "%{y}<br>累计份额 %{x:.1%}<br>累计销量 %{customdata:,.0f} 台<extra></extra>",
     },
   ];
 }
@@ -851,7 +857,7 @@ function DrilldownSection({
         <Panel
           eyebrow="Ranking"
           title={page.totalRanking.title}
-          subtitle="按当前国家与细分市场 2026 累计份额排序，并显示 4WD 占比。"
+          subtitle="按当前国家与细分市场 2026 累计份额排序，4WD 占比按已识别驱动覆盖计算。"
         >
           {page.totalRanking.items.length > 0 ? (
             <div className="market-scan-ranking-chart-shell">
@@ -860,7 +866,7 @@ function DrilldownSection({
                 layout={{
                   ...CHART_LAYOUT,
                   margin: { l: 110, r: 32, t: 12, b: 28 },
-                  xaxis: { title: { text: "销量" } },
+                  xaxis: { title: { text: "累计份额" }, tickformat: ".0%" },
                   yaxis: { automargin: true },
                   showlegend: false,
                 }}
@@ -898,6 +904,7 @@ function DrilldownSection({
 }
 
 export function MarketScanPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const marketScanLabelModeOptions = useMemo(
     () => buildExportLabelModeOptions({ showValue: true, showSeries: false }),
     [],
@@ -910,14 +917,44 @@ export function MarketScanPage() {
   const [exportSettings, setExportSettings] = useState<ExportSettings>({ ...DEFAULT_MARKET_SCAN_EXPORT });
   const [exportToolsOpen, setExportToolsOpen] = useState(false);
   const [heroCollapsed, setHeroCollapsed] = useState(false);
-  const [activePage, setActivePage] = useState<MarketScanPageKey>("overview");
-  const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
-  const [selectedPeriod, setSelectedPeriod] = useState<string | null>(null);
-  const [selectedFuelTypes, setSelectedFuelTypes] = useState<string[]>(DEFAULT_FUEL_TYPES);
-  const [selectedDrilldownSegment, setSelectedDrilldownSegment] = useState("SUV A0");
+  const [activePage, setActivePage] = useState<MarketScanPageKey>(
+    () => (searchParams.get("activePage") as MarketScanPageKey) || "overview",
+  );
+  const [selectedCountry, setSelectedCountry] = useState<string | null>(
+    () => searchParams.get("country"),
+  );
+  const [selectedPeriod, setSelectedPeriod] = useState<string | null>(
+    () => searchParams.get("period"),
+  );
+  const [selectedFuelTypes, setSelectedFuelTypes] = useState<string[]>(
+    () => {
+      const ft = searchParams.get("fuelTypes");
+      return ft ? ft.split(",") : DEFAULT_FUEL_TYPES;
+    },
+  );
+  const [selectedDrilldownSegment, setSelectedDrilldownSegment] = useState(
+    () => searchParams.get("drilldownSegment") || "SUV A0",
+  );
   const [reloadToken, setReloadToken] = useState(0);
   const requestRef = useRef(0);
   const slideRef = useRef<HTMLDivElement | null>(null);
+
+  // Sync filter state back to URL search params
+  const syncUrlParams = useCallback(() => {
+    const params = new URLSearchParams();
+    if (selectedCountry) params.set("country", selectedCountry);
+    if (selectedPeriod) params.set("period", selectedPeriod);
+    if (activePage !== "overview") params.set("activePage", activePage);
+    if (selectedDrilldownSegment !== "SUV A0") params.set("drilldownSegment", selectedDrilldownSegment);
+    const ft = selectedFuelTypes.slice().sort().join(",");
+    const defaultFt = DEFAULT_FUEL_TYPES.slice().sort().join(",");
+    if (ft !== defaultFt) params.set("fuelTypes", selectedFuelTypes.join(","));
+    setSearchParams(params, { replace: true });
+  }, [activePage, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, setSearchParams]);
+
+  useEffect(() => {
+    syncUrlParams();
+  }, [syncUrlParams]);
 
   useEffect(() => {
     preloadPlotlyChartRuntime().catch(() => undefined);

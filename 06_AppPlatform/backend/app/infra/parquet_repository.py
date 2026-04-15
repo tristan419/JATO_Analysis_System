@@ -340,8 +340,16 @@ def _sort_month_columns_chrono(cols: list[str]) -> list[str]:
     """Sort month columns like '2023 Jan' in chronological order."""
     def _key(col: str) -> tuple[int, int]:
         parts = col.split(" ", 1)
-        return (int(parts[0]), _MONTH_ORDER.get(parts[1], 0)) if len(parts) == 2 else (0, 0)
+        if len(parts) == 2:
+            return int(parts[0]), _MONTH_ORDER.get(parts[1], 0)
+        return 0, 0
     return sorted(cols, key=_key)
+
+
+def _select_latest_time_rows(frame: pd.DataFrame, limit: int) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    return frame.tail(max(1, int(limit))).reset_index(drop=True)
 
 
 def _year_columns(columns: list[str]) -> list[str]:
@@ -359,7 +367,7 @@ def time_series(
     precomputed = load_precomputed("yearMonth")
     if grain == "month" and not filters and not precomputed.empty:
         limit = max(1, int(top_n))
-        return precomputed.head(limit)
+        return _select_latest_time_rows(precomputed, limit)
 
     dataset = _open_dataset()
     all_cols = [str(name).strip() for name in dataset.schema.names]
@@ -388,7 +396,75 @@ def time_series(
         })
 
     result = pd.DataFrame(payload)
-    return result.head(max(1, int(top_n)))
+    return _select_latest_time_rows(result, top_n)
+
+
+# ── Country data freshness ──────────────────────────────────────
+_COUNTRY_CANDIDATES = ["国家", "Country", "country"]
+
+_freshness_cache: tuple[str, float, list[dict[str, object]]] | None = None
+_freshness_lock = threading.Lock()
+
+
+def country_data_freshness() -> list[dict[str, object]]:
+    global _freshness_cache
+    now = time.monotonic()
+    token = current_dataset_token()
+    with _freshness_lock:
+        if _freshness_cache is not None:
+            cached_token, cached_at, cached_items = _freshness_cache
+            if cached_token == token and (now - cached_at) < FILTER_OPTIONS_CACHE_TTL_SECONDS:
+                return cached_items
+
+    dataset = _open_dataset()
+    all_cols = [str(name).strip() for name in dataset.schema.names]
+
+    country_col: str | None = None
+    for candidate in _COUNTRY_CANDIDATES:
+        norm = {c.strip().lower(): c.strip() for c in all_cols}
+        hit = norm.get(candidate.strip().lower())
+        if hit:
+            country_col = hit
+            break
+
+    month_cols = _sort_month_columns_chrono(_month_columns(all_cols))
+    if not country_col or not month_cols:
+        return []
+
+    table = dataset.to_table(columns=[country_col, *month_cols])
+    df = table.to_pandas()
+    if df.empty:
+        return []
+
+    for col in month_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+    country_totals = df.groupby(country_col, dropna=False)[month_cols].sum()
+
+    items: list[dict[str, object]] = []
+    reversed_months = list(reversed(month_cols))
+    for country_val, row in country_totals.iterrows():
+        latest_month: str | None = None
+        for month_col in reversed_months:
+            if float(row.get(month_col, 0.0) or 0.0) > 0:
+                latest_month = month_col
+                break
+        if latest_month is None:
+            continue
+        latest_idx = month_cols.index(latest_month)
+        start_idx = max(0, latest_idx - 11)
+        items.append({
+            "country": str(country_val).strip(),
+            "latestMonth": latest_month,
+            "monthsInWindow": latest_idx - start_idx + 1,
+        })
+
+    items.sort(key=lambda x: str(x.get("country", "")))
+
+    with _freshness_lock:
+        _freshness_cache = (token, time.monotonic(), items)
+
+    return items
 
 
 def _read_crud_items() -> list[dict]:

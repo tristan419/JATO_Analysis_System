@@ -1,0 +1,107 @@
+batch_code: country_news_batch_a
+description: First batch country automotive news feeds for Nordics and CEE markets.
+countries:
+  - country_code: SE
+    country_label: Sweden / 瑞典
+    feeds:
+      - source_code: se_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Sweden+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: FI
+    country_label: Finland / 芬兰
+    feeds:
+      - source_code: fi_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Finland+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: HU
+    country_label: Hungary / 匈牙利
+    feeds:
+      - source_code: hu_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Hungary+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: CZ
+    country_label: Czech Republic / 捷克
+    feeds:
+      - source_code: cz_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Czech+Republic+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: SK
+    country_label: Slovakia / 斯洛伐克
+    feeds:
+      - source_code: sk_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Slovakia+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: HR
+    country_label: Croatia / 克罗地亚
+    feeds:
+      - source_code: hr_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Croatia+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: SI
+    country_label: Slovenia / 斯洛文尼亚
+    feeds:
+      - source_code: si_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Slovenia+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: AT
+    country_label: Austria / 奥地利
+    feeds:
+      - source_code: at_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Austria+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: CH
+    country_label: Switzerland / 瑞士
+    feeds:
+      - source_code: ch_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Switzerland+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: RO
+    country_label: Romania / 罗马尼亚
+    feeds:
+      - source_code: ro_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Romania+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: GR
+    country_label: Greece / 希腊
+    feeds:
+      - source_code: gr_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Greece+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: NO
+    country_label: Norway / 挪威
+    feeds:
+      - source_code: no_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Norway+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+  - country_code: DK
+    country_label: Denmark / 丹麦
+    feeds:
+      - source_code: dk_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Denmark+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
