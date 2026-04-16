@@ -20,6 +20,7 @@ import type {
   CountryChatTurn,
 } from "../types";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
+import { isKnownCountryValue, resolveCountrySelection } from "./countryChatHelpers";
 import { useSharedFilterScope } from "./SharedFilterScopeContext";
 
 const CHAT_SESSIONS_CACHE_KEY = "country-chat-sessions";
@@ -150,19 +151,6 @@ function mergeNewsPayloadIntoSessions(
   };
 }
 
-function isKnownCountry(
-  metadata: CountryChatMetadataResponse | null,
-  country: string,
-): boolean {
-  const countries = Array.isArray(metadata?.availableCountries)
-    ? metadata.availableCountries
-    : [];
-  if (countries.length === 0 || !country) {
-    return false;
-  }
-  return countries.some((item) => item.value === country);
-}
-
 export function CountryChatProvider({ children }: { children: ReactNode }) {
   const { selections } = useSharedFilterScope();
   const preferredCountry = Array.isArray(selections.country)
@@ -242,19 +230,12 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     if (!metadata) {
       return;
     }
-    const availableCountries = Array.isArray(metadata.availableCountries)
-      ? metadata.availableCountries
-      : [];
-
-    const fallbackCountry =
-      (preferredCountry && isKnownCountry(metadata, preferredCountry)
-        ? preferredCountry
-        : "")
-      || (selectedCountry && isKnownCountry(metadata, selectedCountry)
-        ? selectedCountry
-        : "")
-      || availableCountries[0]?.value
-      || "";
+    const fallbackCountry = resolveCountrySelection({
+      metadata,
+      preferredCountry,
+      selectedCountry,
+      userPicked: userPickedRef.current,
+    });
 
     if (fallbackCountry && fallbackCountry !== selectedCountry) {
       setSelectedCountryState(fallbackCountry);
@@ -268,7 +249,7 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     if (!metadata || !preferredCountry || sending) {
       return;
     }
-    if (!isKnownCountry(metadata, preferredCountry)) {
+    if (!isKnownCountryValue(metadata, preferredCountry)) {
       return;
     }
     if (preferredCountry !== selectedCountry) {

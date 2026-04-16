@@ -89,6 +89,10 @@ export interface SharedFilterScopeValue {
 
 const SharedFilterScopeContext = createContext<SharedFilterScopeValue | null>(null);
 
+export function shouldSyncDashboardSearchToLocation(pathname: string): boolean {
+  return pathname === "/" || pathname === "/specification";
+}
+
 export function createSharedSelections(
   source?: Record<string, string[]>,
 ): FilterSelections {
@@ -391,6 +395,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
 
   useEffect(() => {
     if (!filtersReady || columns.length === 0) return;
+    if (!shouldSyncDashboardSearchToLocation(location.pathname)) return;
     const nextSearch = dashboardSearch;
     if (nextSearch === location.search) return;
     navigate(`${location.pathname}${nextSearch}`, { replace: true });
