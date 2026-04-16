@@ -52,8 +52,8 @@ bash 03_Scripts/local_dev/start_fullstack_local.sh stop
 
 脚本默认环境变量：
 
-- `APP_AUTH_ENABLED=true`
-- `APP_AUTH_TOKEN=change-me`
+- `APP_AUTH_ENABLED=false`
+- `APP_AUTH_TOKEN=change-me`（保留兼容；默认关闭认证时不会生效）
 - `APP_USER_ROLE=admin`
 - `APP_USER_NAME=local-dev`
 

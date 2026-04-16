@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import { useCountryChat } from "../contexts/CountryChatContext";
 import { CatMascot } from "./CatMascot";
 import { CountryChatAnalysisDeck } from "./CountryChatAnalysisDeck";
+import { CountryChatModelSelect } from "./CountryChatModelSelect";
 import { ChatInlineCharts } from "./ChatInlineCharts";
 
 /* ------------------------------------------------------------------ */
@@ -24,11 +25,6 @@ const LOADING_PHRASES = [
 /* ------------------------------------------------------------------ */
 /*  Drag helpers                                                      */
 /* ------------------------------------------------------------------ */
-
-interface DragOffset {
-  x: number;
-  y: number;
-}
 
 interface ResizeState {
   startX: number;
@@ -79,8 +75,13 @@ function clampWidgetSize(width: number, height: number): { width: number; height
 const FAB_SIZE = 72;
 const INITIAL_RIGHT = 20;
 const INITIAL_BOTTOM = 24;
-const RESIZE_WIDTH_STEP = 48;
-const RESIZE_HEIGHT_STEP = 64;
+const WIDGET_SIZE_PRESETS = [
+  { id: "compact", label: "紧凑", width: 360, height: 500 },
+  { id: "default", label: "标准", width: 420, height: 620 },
+  { id: "expanded", label: "展开", width: 520, height: 760 },
+] as const;
+
+type WidgetSizePresetId = typeof WIDGET_SIZE_PRESETS[number]["id"];
 
 function formatOpsTime(value: string | null | undefined): string {
   const text = String(value ?? "").trim();
@@ -97,6 +98,22 @@ function formatOpsTime(value: string | null | undefined): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(parsed);
+}
+
+function nearestWidgetPresetId(
+  width: number,
+  height: number,
+): WidgetSizePresetId {
+  return WIDGET_SIZE_PRESETS.reduce(
+    (best, preset) => {
+      const distance = Math.abs(preset.width - width) + Math.abs(preset.height - height);
+      if (distance < best.distance) {
+        return { id: preset.id, distance };
+      }
+      return best;
+    },
+    { id: "default" as WidgetSizePresetId, distance: Number.POSITIVE_INFINITY },
+  ).id;
 }
 
 export function CountryChatWidget() {
@@ -128,6 +145,10 @@ export function CountryChatWidget() {
   const location = useLocation();
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const resizeRef = useRef<ResizeState | null>(null);
+  const activeWidgetPreset = useMemo(
+    () => nearestWidgetPresetId(widgetWidth, widgetHeight),
+    [widgetHeight, widgetWidth],
+  );
 
   /* --- Random loading phrase --- */
   const loadingPhrase = useMemo(
@@ -150,15 +171,6 @@ export function CountryChatWidget() {
     originY: number;
     moved: boolean;
   } | null>(null);
-
-  /* Recalculate fab position on window resize */
-  useEffect(() => {
-    function handleResize() {
-      setFabPos((p) => clampPosition(p.x, p.y, FAB_SIZE));
-    }
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -241,8 +253,8 @@ export function CountryChatWidget() {
       const dx = event.clientX - resizeRef.current.startX;
       const dy = event.clientY - resizeRef.current.startY;
       applyWidgetSize(
-        resizeRef.current.originWidth + dx,
-        resizeRef.current.originHeight + dy,
+        resizeRef.current.originWidth - dx,
+        resizeRef.current.originHeight - dy,
       );
     },
     [applyWidgetSize],
@@ -257,14 +269,15 @@ export function CountryChatWidget() {
     [],
   );
 
-  const nudgeWidgetSize = useCallback(
-    (direction: -1 | 1) => {
-      applyWidgetSize(
-        widgetWidth + direction * RESIZE_WIDTH_STEP,
-        widgetHeight + direction * RESIZE_HEIGHT_STEP,
-      );
+  const applyWidgetPreset = useCallback(
+    (presetId: WidgetSizePresetId) => {
+      const preset = WIDGET_SIZE_PRESETS.find((item) => item.id === presetId);
+      if (!preset) {
+        return;
+      }
+      applyWidgetSize(preset.width, preset.height);
     },
-    [applyWidgetSize, widgetHeight, widgetWidth],
+    [applyWidgetSize],
   );
 
   useEffect(() => {
@@ -330,16 +343,41 @@ export function CountryChatWidget() {
     >
       {/* header */}
       <header className="ccw-popup-header">
-        <div className="ccw-popup-header-info">
-          <strong>国家助手</strong>
-          <span className="ccw-popup-provider">{providerSummary}</span>
+        <div className="ccw-popup-header-main">
+          <button
+            type="button"
+            className="ccw-resize-handle"
+            aria-label="从左上角细调助手窗口"
+            title="从左上角细调窗口"
+            onPointerDown={onResizePointerDown}
+            onPointerMove={onResizePointerMove}
+            onPointerUp={onResizePointerUp}
+          />
+          <div className="ccw-popup-header-info">
+            <strong>国家助手</strong>
+            <span className="ccw-popup-provider">{providerSummary}</span>
+          </div>
+          <div className="ccw-popup-header-actions">
+            <Link to="/copilot" className="btn btn-sm btn-secondary" title="全屏工作台">
+              ⛶
+            </Link>
+            <button
+              type="button"
+              className="ccw-close-btn"
+              onClick={() => setWidgetExpanded(false)}
+              aria-label="关闭助手"
+            >
+              ✕
+            </button>
+          </div>
         </div>
-        <div className="ccw-popup-header-actions">
+        <div className="ccw-popup-toolbar">
           <select
             className="ccw-country-select"
             value={selectedCountry}
             onChange={(e) => setSelectedCountry(e.target.value)}
             disabled={sending}
+            aria-label="选择国家"
           >
             {countryOptions.map((item) => (
               <option key={item.value} value={item.value}>
@@ -347,35 +385,22 @@ export function CountryChatWidget() {
               </option>
             ))}
           </select>
-            <button
-              type="button"
-              className="ccw-resize-btn"
-              onClick={() => nudgeWidgetSize(-1)}
-              aria-label="缩小助手窗口"
-              title="缩小"
-            >
-              −
-            </button>
-            <button
-              type="button"
-              className="ccw-resize-btn"
-              onClick={() => nudgeWidgetSize(1)}
-              aria-label="放大助手窗口"
-              title="放大"
-            >
-              +
-            </button>
-          <Link to="/copilot" className="btn btn-sm btn-secondary" title="全屏工作台">
-            ⛶
-          </Link>
-          <button
-            type="button"
-            className="ccw-close-btn"
-            onClick={() => setWidgetExpanded(false)}
-            aria-label="关闭助手"
-          >
-            ✕
-          </button>
+          <CountryChatModelSelect compact />
+          <div className="ccw-size-control" aria-label="窗口大小">
+            {WIDGET_SIZE_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className={`ccw-size-btn${activeWidgetPreset === preset.id ? " is-active" : ""}`}
+                onClick={() => applyWidgetPreset(preset.id)}
+                disabled={sending}
+                aria-label={`切换到${preset.label}窗口`}
+                title={preset.label}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -501,16 +526,6 @@ export function CountryChatWidget() {
           </button>
         </div>
       </div>
-
-      <button
-        type="button"
-        className="ccw-resize-handle"
-        aria-label="拖拽缩放助手窗口"
-        title="拖拽缩放"
-        onPointerDown={onResizePointerDown}
-        onPointerMove={onResizePointerMove}
-        onPointerUp={onResizePointerUp}
-      />
     </aside>
   );
 }

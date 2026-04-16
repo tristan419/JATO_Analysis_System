@@ -133,7 +133,8 @@ bash 03_Scripts/tencent_fullstack_bootstrap.sh
 cd /opt/JATO_Analysis_System-main
 SERVER_NAME=your.domain.com \
 BACKEND_PORT=8000 \
-APP_AUTH_TOKEN='你自己的token' \
+APP_BACKEND_WORKERS=2 \
+APP_AUTH_ENABLED=false \
 VITE_API_BASE=/v1 \
 bash 03_Scripts/tencent_fullstack_bootstrap.sh
 ```
@@ -165,13 +166,13 @@ sudo nano /etc/jato-fullstack/backend.env
 
 至少确认这些值：
 
-- `APP_AUTH_ENABLED=true`
-- `APP_AUTH_TOKEN=你自己的强口令`
+- `APP_PROJECT_ROOT=/opt/JATO_Analysis_System-main`
+- `APP_BACKEND_WORKERS=2`
+- `APP_AUTH_ENABLED=false`
+- `APP_AUTH_TOKEN=仅在服务器本地填写；不要提交进仓库`
 - `JATO_PARQUET_PATH=/opt/JATO_Analysis_System-main/04_Processed_data/jato_full_archive.parquet`
 - `JATO_PARTITIONED_PATH=/opt/JATO_Analysis_System-main/04_Processed_data/partitioned_dataset_v1`
 - `APP_CRUD_DATA_PATH=/opt/JATO_Analysis_System-main/04_Processed_data/app_entities.json`
-
-如果你暂时只允许内网访问，也可以把 `APP_AUTH_ENABLED=false`，但不建议长期这样跑公网。
 
 ## 4.1 MSRP 任务环境变量
 

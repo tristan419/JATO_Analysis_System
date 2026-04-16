@@ -4,9 +4,24 @@ import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
-import { DEFAULT_EXPORT, ExportPanel, buildExportLabelModeOptions, type ExportSettings } from "../components/ExportPanel";
+import {
+  DEFAULT_EXPORT,
+  ExportPanel,
+  applyExportToLayout,
+  applySeriesColors,
+  buildExportLabelModeOptions,
+  getExportPalette,
+  type ExportSettings,
+} from "../components/ExportPanel";
 import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { LoadingSurface } from "../components/LoadingSurface";
+import {
+  buildDrilldownInsight,
+  buildOriginInsight,
+  buildOverviewInsight,
+  buildSegmentInsight,
+  type MarketInsightSnapshot,
+} from "../utils/marketScanInsights";
 import { SERIES_COLORS, fuelColor, originColor } from "../utils/colors";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
 import type {
@@ -45,11 +60,15 @@ const TAB_ITEMS: Array<{
 
 const DEFAULT_MARKET_SCAN_EXPORT: ExportSettings = {
   ...DEFAULT_EXPORT,
+  showXGrid: false,
+  showYGrid: false,
+  showAxisLine: false,
   exportWidth: 1920,
   exportHeight: 1080,
   dataLabelMode: "value",
-  dataLabelPosition: "top",
+  dataLabelPosition: "auto",
   decimalPlaces: 1,
+  fontSize: 11,
 };
 const MIN_MARKET_SCAN_RANKING_LIMIT = 10;
 const MARKET_SCAN_RANKING_LIMIT_OPTIONS = [10, 15, 20, 30] as const;
@@ -69,6 +88,153 @@ function normalizeMarketScanRankingLimit(value: number | string | null | undefin
   return Math.max(MIN_MARKET_SCAN_RANKING_LIMIT, Math.round(numericValue));
 }
 
+function resolveMarketScanTextPosition(
+  trace: Partial<Data>,
+  requestedPosition: string,
+  fallback: unknown,
+): unknown {
+  const traceRecord = trace as Record<string, unknown>;
+  if (!requestedPosition || requestedPosition === "auto") {
+    return fallback;
+  }
+  if (requestedPosition === "top") {
+    return "top center";
+  }
+  if (requestedPosition === "middle") {
+    return "middle center";
+  }
+  if (requestedPosition === "inside") {
+    return trace.type === "bar" ? "inside" : "middle center";
+  }
+  if (requestedPosition === "outside") {
+    if (trace.type === "bar") {
+      return "outside";
+    }
+    return traceRecord.orientation === "h" ? "middle right" : "top center";
+  }
+  return fallback;
+}
+
+function marketScanSeriesKey(trace: Partial<Data>): string | null {
+  const traceRecord = trace as Record<string, unknown>;
+  if (typeof traceRecord.legendgroup === "string" && traceRecord.legendgroup.trim()) {
+    return traceRecord.legendgroup;
+  }
+  if (typeof trace.name === "string" && trace.name.trim()) {
+    return trace.name;
+  }
+  return null;
+}
+
+function buildMarketScanSeriesColors(traces: Data[], exportSettings: ExportSettings): Record<string, string> {
+  const manualColors = exportSettings.seriesColors ?? {};
+  const usePalette = exportSettings.colorScheme !== DEFAULT_MARKET_SCAN_EXPORT.colorScheme;
+  if (!usePalette && Object.keys(manualColors).length === 0) {
+    return manualColors;
+  }
+
+  const palette = getExportPalette(exportSettings.colorScheme);
+  const resolved: Record<string, string> = { ...manualColors };
+  const assigned = new Set(Object.keys(manualColors));
+  let paletteIndex = 0;
+
+  traces.forEach((trace) => {
+    const key = marketScanSeriesKey(trace);
+    if (!key || assigned.has(key) || key === "Labels" || key === "Total Labels") {
+      return;
+    }
+    resolved[key] = palette[paletteIndex % palette.length];
+    assigned.add(key);
+    paletteIndex += 1;
+  });
+
+  return resolved;
+}
+
+function applyMarketScanExportToTraces(traces: Data[], exportSettings: ExportSettings): Data[] {
+  const colorOverrides = buildMarketScanSeriesColors(traces, exportSettings);
+  const positioned = traces.map((trace) => {
+    const next = { ...trace } as Record<string, unknown> & Data & {
+      textposition?: unknown;
+      textfont?: { size?: number; color?: string };
+    };
+    const hasText =
+      typeof next.text === "string"
+      || (Array.isArray(next.text) && next.text.length > 0)
+      || (typeof next.mode === "string" && next.mode.includes("text"));
+
+    if (hasText) {
+      next.textposition = resolveMarketScanTextPosition(
+        next,
+        exportSettings.dataLabelPosition,
+        next.textposition,
+      );
+      if (next.textfont && typeof next.textfont === "object") {
+        next.textfont = {
+          ...next.textfont,
+          size: Math.max(8, exportSettings.fontSize - 2),
+        };
+      }
+    }
+
+    return next as Data;
+  });
+
+  return applySeriesColors(positioned, colorOverrides);
+}
+
+function applyMarketScanExportToLayout(
+  layout: Partial<PlotlyLayout>,
+  exportSettings: ExportSettings,
+): Partial<PlotlyLayout> {
+  const baseLayout: Partial<PlotlyLayout> = {
+    ...layout,
+    xaxis: layout.xaxis && typeof layout.xaxis === "object"
+      ? { ...(layout.xaxis as object) } as PlotlyLayout["xaxis"]
+      : layout.xaxis,
+    yaxis: layout.yaxis && typeof layout.yaxis === "object"
+      ? { ...(layout.yaxis as object) } as PlotlyLayout["yaxis"]
+      : layout.yaxis,
+    legend: layout.legend && typeof layout.legend === "object"
+      ? { ...(layout.legend as object) } as PlotlyLayout["legend"]
+      : layout.legend,
+    font: layout.font && typeof layout.font === "object"
+      ? { ...(layout.font as object) } as PlotlyLayout["font"]
+      : layout.font,
+  };
+
+  const exported = applyExportToLayout(baseLayout, { ...exportSettings, chartTitle: "" });
+  const next: Partial<PlotlyLayout> = { ...exported };
+  const baseXaxis = baseLayout.xaxis as PlotlyLayout["xaxis"] | undefined;
+  const baseYaxis = baseLayout.yaxis as PlotlyLayout["yaxis"] | undefined;
+
+  if (exportSettings.legendPosition === DEFAULT_MARKET_SCAN_EXPORT.legendPosition && baseLayout.legend) {
+    next.legend = baseLayout.legend;
+  }
+  if (exportSettings.fontSize === DEFAULT_MARKET_SCAN_EXPORT.fontSize && baseLayout.font) {
+    next.font = baseLayout.font;
+  }
+  if (exportSettings.paperBg === DEFAULT_MARKET_SCAN_EXPORT.paperBg && baseLayout.paper_bgcolor !== undefined) {
+    next.paper_bgcolor = baseLayout.paper_bgcolor;
+  }
+  if (exportSettings.plotBg === DEFAULT_MARKET_SCAN_EXPORT.plotBg && baseLayout.plot_bgcolor !== undefined) {
+    next.plot_bgcolor = baseLayout.plot_bgcolor;
+  }
+
+  next.xaxis = {
+    ...(exported.xaxis as object ?? {}),
+    ...(!exportSettings.xTickFormat && baseXaxis && "tickformat" in baseXaxis ? { tickformat: baseXaxis.tickformat } : {}),
+    ...(!exportSettings.xTitle && baseXaxis && "title" in baseXaxis ? { title: baseXaxis.title } : {}),
+  } as PlotlyLayout["xaxis"];
+  next.yaxis = {
+    ...(exported.yaxis as object ?? {}),
+    ...(!exportSettings.yTickFormat && baseYaxis && "tickformat" in baseYaxis ? { tickformat: baseYaxis.tickformat } : {}),
+    ...(!exportSettings.yTitle && baseYaxis && "title" in baseYaxis ? { title: baseYaxis.title } : {}),
+  } as PlotlyLayout["yaxis"];
+
+  return next;
+}
+
 interface HeroMetric {
   label: string;
   value: string;
@@ -82,6 +248,7 @@ interface PanelProps {
   subtitle?: string;
   children: ReactNode;
   actions?: ReactNode;
+  className?: string;
 }
 
 function MarketScanDeckSkeleton() {
@@ -360,16 +527,6 @@ function buildOverviewTrendData(
   fuelOrder.forEach((fuel) => {
     traces.push({
       type: "bar",
-      name: `${currentYear} ${fuel}`,
-      legendgroup: fuel,
-      offsetgroup: currentYear,
-      x: labels,
-      y: trailingItems.map((item) => item.fuelMix[fuel] ?? 0),
-      marker: { color: fuelColor(fuel) },
-      hovertemplate: `%{x}<br>${currentYear} ${fuel}: %{y:,.0f} 台<extra></extra>`,
-    } as Data);
-    traces.push({
-      type: "bar",
       name: `${priorYear} ${fuel}`,
       legendgroup: fuel,
       offsetgroup: priorYear,
@@ -379,6 +536,16 @@ function buildOverviewTrendData(
       y: priorItems.map((item) => item?.fuelMix[fuel] ?? 0),
       marker: { color: fuelColor(fuel) },
       hovertemplate: `%{x}<br>${priorYear} ${fuel}: %{y:,.0f} 台<extra></extra>`,
+    } as Data);
+    traces.push({
+      type: "bar",
+      name: `${currentYear} ${fuel}`,
+      legendgroup: fuel,
+      offsetgroup: currentYear,
+      x: labels,
+      y: trailingItems.map((item) => item.fuelMix[fuel] ?? 0),
+      marker: { color: fuelColor(fuel) },
+      hovertemplate: `%{x}<br>${currentYear} ${fuel}: %{y:,.0f} 台<extra></extra>`,
     } as Data);
   });
 
@@ -560,11 +727,20 @@ function buildFuelTrendData(
       text: items.map((item) => formatVolume(item.totalVolume)),
       textposition: "top center",
       textfont: { size: 10, color: "#0f172a" },
+      cliponaxis: false,
       hoverinfo: "skip",
       showlegend: false,
     });
   }
   return traces;
+}
+
+function fuelTrendYAxisMax(items: MarketScanFuelTrendItem[], showDataLabels: boolean): number {
+  const maxTotal = items.reduce((max, item) => Math.max(max, item.totalVolume || 0), 0);
+  if (maxTotal <= 0) {
+    return 1;
+  }
+  return maxTotal * (showDataLabels ? 1.16 : 1.04);
 }
 
 function dominantFuelForRanking(item: MarketScanRankingItem): string {
@@ -596,17 +772,99 @@ function marketShareLabel(item: MarketScanRankingItem): string {
   return `MS ${item.shareDisplay ?? formatPercent(item.sharePct)}`;
 }
 
+function monthlyBrandBreakdown(item: MarketScanRankingItem) {
+  if (Array.isArray(item.modelBreakdown) && item.modelBreakdown.length > 0) {
+    return item.modelBreakdown;
+  }
+  return [{ model: rankingItemLabel(item), volume: item.volume, sharePct: 1, powertrain: "OTHER" }];
+}
+
+function normalizeBreakdownPowertrain(powertrain?: string): string {
+  const normalized = String(powertrain ?? "").trim().toUpperCase();
+  return normalized || "OTHER";
+}
+
+function hexToRgb(hex: string): [number, number, number] | null {
+  const normalized = hex.replace("#", "").trim();
+  const expanded = normalized.length === 3
+    ? normalized.split("").map((chunk) => `${chunk}${chunk}`).join("")
+    : normalized;
+  if (!/^[\da-fA-F]{6}$/.test(expanded)) {
+    return null;
+  }
+  return [
+    Number.parseInt(expanded.slice(0, 2), 16),
+    Number.parseInt(expanded.slice(2, 4), 16),
+    Number.parseInt(expanded.slice(4, 6), 16),
+  ];
+}
+
+function mixHexColor(color: string, ratio: number, target: number): string {
+  const rgb = hexToRgb(color);
+  if (!rgb) {
+    return color;
+  }
+  const mixed = rgb.map((channel) => Math.round(channel + (target - channel) * ratio));
+  return `#${mixed.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function shadeHexColor(color: string, amount: number): string {
+  if (amount === 0) {
+    return color;
+  }
+  return amount > 0
+    ? mixHexColor(color, Math.min(amount, 0.55), 255)
+    : mixHexColor(color, Math.min(Math.abs(amount), 0.45), 0);
+}
+
+function breakdownColor(entry: { powertrain?: string }, index: number, total: number): string {
+  const powertrain = normalizeBreakdownPowertrain(entry.powertrain);
+  const baseColor = powertrain === "OTHER" ? "#94a3b8" : fuelColor(powertrain);
+  if (total <= 1) {
+    return baseColor;
+  }
+
+  const shadeOffsets = [0.24, 0.12, 0, -0.1, -0.2, -0.28, -0.34, -0.4, -0.46, -0.52];
+  const shadeAmount = shadeOffsets[Math.min(index, shadeOffsets.length - 1)];
+  return shadeHexColor(baseColor, shadeAmount);
+}
+
+function buildBreakdownColorMap(
+  breakdown: Array<{ model: string; volume: number; sharePct: number; powertrain?: string }>,
+): Record<string, string> {
+  const powertrainBuckets = new Map<string, Array<{ key: string; entry: (typeof breakdown)[number] }>>();
+
+  breakdown.forEach((entry) => {
+    const powertrain = normalizeBreakdownPowertrain(entry.powertrain);
+    const bucket = powertrainBuckets.get(powertrain) ?? [];
+    bucket.push({ key: `${entry.model}::${entry.volume}`, entry });
+    powertrainBuckets.set(powertrain, bucket);
+  });
+
+  const colorMap: Record<string, string> = {};
+  powertrainBuckets.forEach((bucket) => {
+    bucket.forEach(({ key, entry }, index) => {
+      colorMap[key] = breakdownColor(entry, index, bucket.length);
+    });
+  });
+  return colorMap;
+}
+
 const STACKED_FUEL_ORDER = ["ICE", "MHEV", "HEV", "PHEV", "BEV", "LPG"];
 
 function buildTotalRankingChartData(items: MarketScanRankingItem[]): Data[] {
   const ordered = [...items].reverse();
   const labels = ordered.map((item) => rankingItemLabel(item));
   const totalVolumeInSegment = items.reduce((sum, item) => sum + (item.volume || 0), 0) || 1;
+  const itemShares = ordered.map((item) => (
+    typeof item.sharePct === "number" && Number.isFinite(item.sharePct)
+      ? Math.max(item.sharePct, 0)
+      : (item.volume || 0) / totalVolumeInSegment
+  ));
 
-  const traces: Data[] = STACKED_FUEL_ORDER.map((fuel, fuelIdx) => {
+  const traces: Data[] = STACKED_FUEL_ORDER.map((fuel) => {
     const volumes = ordered.map((item) => (item.fuelMix?.[fuel] ?? 0));
     const sharePcts = volumes.map((vol) => vol / totalVolumeInSegment);
-    const isLastFuel = fuelIdx === STACKED_FUEL_ORDER.length - 1;
     return {
       type: "bar" as const,
       orientation: "h" as const,
@@ -614,26 +872,51 @@ function buildTotalRankingChartData(items: MarketScanRankingItem[]): Data[] {
       x: sharePcts,
       y: labels,
       marker: { color: fuelColor(fuel) },
-      text: isLastFuel
-        ? ordered.map(
-            (item) =>
-              `${marketShareLabel(item)} · ${formatVolume(item.volume)} · ${driveShareText(item)}`,
-          )
-        : ordered.map(() => ""),
-      textposition: "outside" as const,
-      textfont: { size: 10 },
-      cliponaxis: false,
       customdata: volumes.map((vol, i) => [vol, ordered[i]?.volume ?? 0]),
       hovertemplate: `%{y}<br>${fuel}: %{customdata[0]:,.0f} 台<br>总销量 %{customdata[1]:,.0f} 台<extra></extra>`,
     };
   });
 
+  traces.push({
+    type: "scatter",
+    mode: "text",
+    name: "Labels",
+    x: itemShares,
+    y: labels,
+    text: ordered.map(
+      (item) => `${marketShareLabel(item)} · ${formatVolume(item.volume)} · ${driveShareText(item)}`,
+    ),
+    textposition: "middle right",
+    textfont: { size: 10, color: "#0f172a" },
+    cliponaxis: false,
+    hoverinfo: "skip",
+    showlegend: false,
+  });
+
   return traces;
 }
 
-function Panel({ eyebrow, title, subtitle, children, actions }: PanelProps) {
+function totalRankingXAxisMax(items: MarketScanRankingItem[]): number {
+  if (items.length === 0) {
+    return 1;
+  }
+  const totalVolumeInSegment = items.reduce((sum, item) => sum + (item.volume || 0), 0) || 1;
+  const maxShare = items.reduce((max, item) => {
+    const share =
+      typeof item.sharePct === "number" && Number.isFinite(item.sharePct)
+        ? Math.max(item.sharePct, 0)
+        : (item.volume || 0) / totalVolumeInSegment;
+    return Math.max(max, share);
+  }, 0);
+  if (maxShare <= 0) {
+    return 1;
+  }
+  return Math.min(1, maxShare + Math.max(0.12, maxShare * 0.65));
+}
+
+function Panel({ eyebrow, title, subtitle, children, actions, className }: PanelProps) {
   return (
-    <section className="market-scan-panel">
+    <section className={`market-scan-panel${className ? ` ${className}` : ""}`}>
       <header className="market-scan-panel-head">
         <div>
           {eyebrow ? <span className="market-scan-panel-eyebrow">{eyebrow}</span> : null}
@@ -644,6 +927,43 @@ function Panel({ eyebrow, title, subtitle, children, actions }: PanelProps) {
       </header>
       <div className="market-scan-panel-body">{children}</div>
     </section>
+  );
+}
+
+function InsightContent({
+  insight,
+  inline = false,
+  dense = false,
+  stacked = false,
+}: {
+  insight: MarketInsightSnapshot;
+  inline?: boolean;
+  dense?: boolean;
+  stacked?: boolean;
+}) {
+  return (
+    <div
+      className={`market-scan-insight${inline ? " market-scan-insight--inline" : ""}${dense ? " market-scan-insight--dense" : ""}${stacked ? " market-scan-insight--stacked" : ""}`}
+    >
+      <div className="market-scan-insight-hero">
+        {inline ? <span className="market-scan-panel-eyebrow">Insight</span> : null}
+        <h3 className={`market-scan-insight-headline is-${insight.tone}`}>{insight.headline}</h3>
+        <p className="market-scan-insight-summary">{insight.summary}</p>
+      </div>
+      <div className="market-scan-insight-grid">
+        {insight.cards.map((card) => (
+          <article
+            key={card.label}
+            className={`market-scan-insight-card is-${card.tone}`}
+            title={`${card.label} · ${card.value} · ${card.detail}`}
+          >
+            <span className="market-scan-insight-card-label">{card.label}</span>
+            <strong className="market-scan-insight-card-value">{card.value}</strong>
+            <p className="market-scan-insight-card-detail">{card.detail}</p>
+          </article>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -784,6 +1104,99 @@ function RankingGroup({
   );
 }
 
+function BrandModelRankingGroup({
+  group,
+  compact = false,
+}: {
+  group: MarketScanRankingGroup;
+  compact?: boolean;
+}) {
+  if (group.items.length === 0) {
+    return <div className="market-scan-empty">暂无排行数据。</div>;
+  }
+
+  return (
+    <div
+      className={`market-scan-ranking-list market-scan-ranking-scrollable market-scan-ranking-list--monthly${
+        compact ? " market-scan-ranking-list--monthly-compact" : ""
+      }`}
+    >
+      {group.items.map((item) => {
+        const breakdown = monthlyBrandBreakdown(item);
+        const breakdownColorMap = buildBreakdownColorMap(breakdown);
+        const breakdownTitle = breakdown
+          .map((entry) => {
+            const powertrain = normalizeBreakdownPowertrain(entry.powertrain);
+            return `${entry.model} · ${powertrain}: ${formatVolume(entry.volume)} 台 (${formatPercent(entry.sharePct)})`;
+          })
+          .join(" | ");
+
+        return (
+          <article
+            key={`${rankingItemLabel(item)}-${item.rank}`}
+            className="market-scan-ranking-row market-scan-ranking-row--monthly"
+          >
+            <div className="market-scan-ranking-row-rank">{String(item.rank).padStart(2, "0")}</div>
+            <div className="market-scan-ranking-row-info">
+              <div className="market-scan-ranking-row-head">
+                <span className="market-scan-ranking-row-name">{rankingItemLabel(item)}</span>
+                <div className="market-scan-ranking-row-nums">
+                  <span>{formatVolume(item.volume)}</span>
+                  <span className="market-scan-tag">{marketShareLabel(item)}</span>
+                </div>
+              </div>
+              <div className="market-scan-ranking-row-bar market-scan-ranking-row-bar--monthly" title={breakdownTitle}>
+                <span
+                  className="market-scan-ranking-row-bar-fill market-scan-ranking-row-bar-fill--monthly"
+                  style={{ width: `${Math.max(1, item.barPct * 100)}%` }}
+                >
+                  {breakdown.map((entry) => (
+                    <span
+                      key={`${item.rank}-${entry.model}`}
+                      className="market-scan-model-segment"
+                      style={{
+                        width: `${Math.max(entry.sharePct * 100, 0)}%`,
+                        background: breakdownColorMap[`${entry.model}::${entry.volume}`],
+                      }}
+                    />
+                  ))}
+                </span>
+              </div>
+              <div className="market-scan-model-breakdown">
+                {breakdown.map((entry) => (
+                  <span
+                    key={`${item.rank}-chip-${entry.model}`}
+                    className="market-scan-model-breakdown-chip"
+                    title={`${entry.model} · ${normalizeBreakdownPowertrain(entry.powertrain)} · ${formatVolume(entry.volume)} 台 · ${formatPercent(entry.sharePct)}`}
+                  >
+                    <span
+                      className="market-scan-model-breakdown-swatch"
+                      style={{ background: breakdownColorMap[`${entry.model}::${entry.volume}`] }}
+                    />
+                    <span className="market-scan-model-breakdown-label">{entry.model}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="market-scan-ranking-row-side">
+              <span className={`market-scan-tone-text ${toneClassName(item.yoy.tone)}`}>
+                YoY {item.yoy.tone === "positive" ? "▲ " : item.yoy.tone === "negative" ? "▼ " : ""}
+                {item.yoy.display}
+              </span>
+              {item.mom ? (
+                <span className={`market-scan-tone-text ${toneClassName(item.mom.tone)}`}>
+                  MoM {item.mom.tone === "positive" ? "▲ " : item.mom.tone === "negative" ? "▼ " : ""}
+                  {item.mom.display}
+                </span>
+              ) : null}
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
 function MatrixTable({ matrix }: { matrix: MarketScanMatrix }) {
   if (matrix.rows.length === 0) {
     return <div className="market-scan-empty">暂无矩阵数据。</div>;
@@ -822,47 +1235,57 @@ function OverviewSection({
   page,
   fuelOrder,
   showDataLabels,
+  exportSettings,
   compact = false,
 }: {
   labels: MarketScanDeckResponse["metadata"]["labels"];
   page: MarketScanOverviewPage;
   fuelOrder: string[];
   showDataLabels: boolean;
+  exportSettings: ExportSettings;
   compact?: boolean;
 }) {
+  const insight = buildOverviewInsight(page);
+
   return (
     <div className="market-scan-grid market-scan-grid--three">
       <Panel
         eyebrow="Trend"
         title="Rolling 12M Volume / Powertrain"
-        subtitle="当前月往前 12 个月，对照去年同期双柱，并保留动总堆叠与总量折线。"
+        subtitle="上方保留 Rolling 12M 双柱趋势；下方直接汇总结论、结构驱动与下月观察点。"
       >
-        <PlotlyChart
-          data={buildOverviewTrendData(page.trend.items, fuelOrder, showDataLabels)}
-          layout={{
-            ...CHART_LAYOUT,
-            barmode: "stack",
-            xaxis: { type: "category" },
-            yaxis: { title: { text: "销量" } },
-          }}
-          height={compact ? 292 : 430}
-        />
+        <div className="market-scan-overview-trend-stack">
+          <div className="market-scan-overview-trend-chart">
+            <PlotlyChart
+              data={applyMarketScanExportToTraces(
+                buildOverviewTrendData(page.trend.items, fuelOrder, showDataLabels),
+                exportSettings,
+              )}
+              layout={applyMarketScanExportToLayout({
+                ...CHART_LAYOUT,
+                barmode: "stack",
+                xaxis: { type: "category" },
+                yaxis: { title: { text: "销量" } },
+              }, exportSettings)}
+              height={compact ? 238 : 318}
+            />
+          </div>
+          <InsightContent insight={insight} inline />
+        </div>
       </Panel>
 
       <Panel
         eyebrow="Ranking"
         title={page.monthlyBrandRanking.title}
-        subtitle={`${page.monthlyBrandRanking.currentLabel ?? "当月"} vs ${page.monthlyBrandRanking.priorLabel ?? "去年同期"}`}
       >
-        <RankingGroup group={page.monthlyBrandRanking} compact={compact} />
+        <BrandModelRankingGroup group={page.monthlyBrandRanking} compact={compact} />
       </Panel>
 
       <Panel
         eyebrow="Ranking"
         title={page.ytdBrandRanking.title}
-        subtitle={`${page.ytdBrandRanking.currentLabel ?? "累计"} vs ${page.ytdBrandRanking.priorLabel ?? "去年累计"}`}
       >
-        <RankingGroup group={page.ytdBrandRanking} compact={compact} />
+        <BrandModelRankingGroup group={page.ytdBrandRanking} compact={compact} />
       </Panel>
     </div>
   );
@@ -871,12 +1294,15 @@ function OverviewSection({
 function OriginSection({
   page,
   showDataLabels,
+  exportSettings,
   compact = false,
 }: {
   page: MarketScanDeckResponse["results"]["origin"];
   showDataLabels: boolean;
+  exportSettings: ExportSettings;
   compact?: boolean;
 }) {
+  const insight = buildOriginInsight(page);
   const trendPanel = (
     <Panel
       eyebrow="Trend"
@@ -884,12 +1310,12 @@ function OriginSection({
       subtitle="欧系、日系、韩系、美系、中系与其他车系的月度走势。"
     >
       <PlotlyChart
-        data={buildOriginTrendData(page.trend.series, showDataLabels)}
-        layout={{
+        data={applyMarketScanExportToTraces(buildOriginTrendData(page.trend.series, showDataLabels), exportSettings)}
+        layout={applyMarketScanExportToLayout({
           ...CHART_LAYOUT,
           xaxis: { type: "category" },
           yaxis: { title: { text: "销量" } },
-        }}
+        }, exportSettings)}
         height={compact ? 282 : 420}
       />
       </Panel>
@@ -922,8 +1348,8 @@ function OriginSection({
             <div key={group.origin} className="market-scan-subpanel">
               <h3>{group.origin}</h3>
               <PlotlyChart
-                data={buildOriginBrandTrendData(group, showDataLabels)}
-                layout={{
+                data={applyMarketScanExportToTraces(buildOriginBrandTrendData(group, showDataLabels), exportSettings)}
+                layout={applyMarketScanExportToLayout({
                   ...CHART_LAYOUT,
                   xaxis: { type: "category" },
                   yaxis: { title: { text: "销量" } },
@@ -934,7 +1360,7 @@ function OriginSection({
                     xanchor: "center",
                     font: { size: 10 },
                   },
-                }}
+                }, exportSettings)}
                 height={compact ? 220 : 260}
               />
             </div>
@@ -950,7 +1376,13 @@ function OriginSection({
 
   return (
     <>
-      <section className="market-scan-callout">{page.summaryText}</section>
+      <Panel
+        eyebrow="Conclusion"
+        title="Origin Insight"
+        className="market-scan-panel--insight-compact market-scan-panel--insight-slim"
+      >
+        <InsightContent insight={insight} dense />
+      </Panel>
       {compact ? (
         <>
           <div className="market-scan-grid market-scan-grid--two-wide">
@@ -974,16 +1406,25 @@ function SegmentSection({
   page,
   showDataLabels,
   labelDigits = 1,
+  exportSettings,
   compact = false,
 }: {
   page: MarketScanSegmentPage;
   showDataLabels: boolean;
   labelDigits?: number;
+  exportSettings: ExportSettings;
   compact?: boolean;
 }) {
+  const insight = buildSegmentInsight(page);
   return (
     <>
-      <section className="market-scan-callout">{page.summaryText}</section>
+      <Panel
+        eyebrow="Conclusion"
+        title="Segment Insight"
+        className="market-scan-panel--insight-compact market-scan-panel--insight-slim"
+      >
+        <InsightContent insight={insight} dense />
+      </Panel>
       <div className="market-scan-grid market-scan-grid--two">
         <Panel
           eyebrow="Trend"
@@ -991,12 +1432,15 @@ function SegmentSection({
           subtitle="观察车身结构的月度切换。"
         >
           <PlotlyChart
-            data={buildBodyShareData(page.bodyShareTrend.items, showDataLabels, labelDigits)}
-            layout={{
+            data={applyMarketScanExportToTraces(
+              buildBodyShareData(page.bodyShareTrend.items, showDataLabels, labelDigits),
+              exportSettings,
+            )}
+            layout={applyMarketScanExportToLayout({
               ...CHART_LAYOUT,
               xaxis: { type: "category" },
               yaxis: { title: { text: "占比" }, tickformat: ".0%", range: [0, 1] },
-            }}
+            }, exportSettings)}
             height={compact ? 268 : 400}
           />
         </Panel>
@@ -1006,12 +1450,15 @@ function SegmentSection({
           subtitle="把 SUV 市占拆成 SUV-A00 / SUV-A0 / SUV-A / ≥SUV-B。"
         >
           <PlotlyChart
-            data={buildSuvSegmentShareData(page.suvSegmentShareTrend.items, showDataLabels, labelDigits)}
-            layout={{
+            data={applyMarketScanExportToTraces(
+              buildSuvSegmentShareData(page.suvSegmentShareTrend.items, showDataLabels, labelDigits),
+              exportSettings,
+            )}
+            layout={applyMarketScanExportToLayout({
               ...CHART_LAYOUT,
               xaxis: { type: "category" },
               yaxis: { title: { text: "占比" }, tickformat: ".0%", range: [0, 1] },
-            }}
+            }, exportSettings)}
             height={compact ? 268 : 400}
           />
         </Panel>
@@ -1045,6 +1492,7 @@ function DrilldownSection({
   page,
   fuelOrder,
   showDataLabels,
+  exportSettings,
   compact = false,
   rankingLimit = 10,
   onRankingLimitChange,
@@ -1052,49 +1500,54 @@ function DrilldownSection({
   page: MarketScanDrilldownPage;
   fuelOrder: string[];
   showDataLabels: boolean;
+  exportSettings: ExportSettings;
   compact?: boolean;
   rankingLimit?: number;
   onRankingLimitChange?: (limit: number) => void;
 }) {
   const normalizedRankingLimit = normalizeMarketScanRankingLimit(rankingLimit);
+  const insight = buildDrilldownInsight(page);
 
   return (
     <>
-      <section className="market-scan-callout">
-        <span>{page.summaryText}</span>
-        {onRankingLimitChange ? (
-          <label className="market-scan-ranking-limit-control">
-            Top
-            <select
-              value={normalizedRankingLimit}
-              onChange={(e) => onRankingLimitChange(normalizeMarketScanRankingLimit(e.target.value))}
-            >
-              {MARKET_SCAN_RANKING_LIMIT_OPTIONS.map((n) => (
-                <option key={n} value={n}>{n}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-      </section>
-      <div className="market-scan-grid market-scan-grid--two-wide">
+      <div className="market-scan-grid market-scan-grid--drilldown-top">
         <Panel
           eyebrow="Ranking"
           title={page.totalRanking.title}
           subtitle="按当前国家与细分市场 2026 累计份额排序"
+          actions={onRankingLimitChange ? (
+            <label className="market-scan-ranking-limit-control">
+              Top
+              <select
+                value={normalizedRankingLimit}
+                onChange={(e) => onRankingLimitChange(normalizeMarketScanRankingLimit(e.target.value))}
+              >
+                {MARKET_SCAN_RANKING_LIMIT_OPTIONS.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
         >
           {page.totalRanking.items.length > 0 ? (
             <div className="market-scan-ranking-chart-shell">
               <PlotlyChart
-                data={buildTotalRankingChartData(page.totalRanking.items)}
-                layout={{
+                data={applyMarketScanExportToTraces(buildTotalRankingChartData(page.totalRanking.items), exportSettings)}
+                layout={applyMarketScanExportToLayout({
                   ...CHART_LAYOUT,
                   barmode: "stack",
-                  margin: { l: 110, r: 120, t: 12, b: 28 },
-                  xaxis: { title: { text: "" }, tickformat: ".0%" },
-                  yaxis: { automargin: true },
-                  legend: { orientation: "h", y: -0.12, x: 0.5, xanchor: "center", font: { size: 10 } },
-                }}
-                height={compact ? 252 : Math.max(280, page.totalRanking.items.length * 36 + 80)}
+                  margin: { l: 88, r: 96, t: 12, b: 26 },
+                  xaxis: {
+                    title: { text: "" },
+                    tickformat: ".0%",
+                    range: [0, totalRankingXAxisMax(page.totalRanking.items)],
+                    automargin: true,
+                    fixedrange: true,
+                  },
+                  yaxis: { automargin: true, fixedrange: true },
+                  legend: { orientation: "h", y: -0.1, x: 0.5, xanchor: "center", font: { size: 9 } },
+                }, exportSettings)}
+                height={compact ? 236 : 332}
               />
             </div>
           ) : (
@@ -1107,15 +1560,32 @@ function DrilldownSection({
           subtitle="观察同一累计窗口下各燃料路线的堆叠变化。"
         >
           <PlotlyChart
-            data={buildFuelTrendData(page.ytdFuelTrend.items, fuelOrder, showDataLabels)}
-            layout={{
+            data={applyMarketScanExportToTraces(
+              buildFuelTrendData(page.ytdFuelTrend.items, fuelOrder, showDataLabels),
+              exportSettings,
+            )}
+            layout={applyMarketScanExportToLayout({
               ...CHART_LAYOUT,
               barmode: "stack",
-              xaxis: { type: "category" },
-              yaxis: { title: { text: "累计销量" } },
-            }}
-            height={compact ? 252 : 400}
+              margin: { l: 54, r: 16, t: 22, b: 36 },
+              xaxis: { type: "category", automargin: true, fixedrange: true },
+              yaxis: {
+                title: { text: "累计销量" },
+                range: [0, fuelTrendYAxisMax(page.ytdFuelTrend.items, showDataLabels)],
+                automargin: true,
+                fixedrange: true,
+              },
+            }, exportSettings)}
+            height={compact ? 236 : 332}
           />
+        </Panel>
+
+        <Panel
+          eyebrow="Conclusion"
+          title={`${page.segmentLabel} Insight`}
+          className="market-scan-panel--insight-compact market-scan-panel--insight-fill"
+        >
+          <InsightContent insight={insight} dense stacked />
         </Panel>
       </div>
       <div className="market-scan-grid market-scan-grid--five market-scan-fuel-panel-row">
@@ -1267,10 +1737,13 @@ export function MarketScanPage() {
     ? selectedFuelTypes
     : (deck?.metadata.selectedFuelTypes ?? DEFAULT_FUEL_TYPES);
   const showDataLabels = exportSettings.dataLabelMode !== "off";
-  const labelDigits = Math.max(0, Math.min(2, exportSettings.decimalPlaces || 1));
+  const labelDigits = Math.max(0, Math.min(4, exportSettings.decimalPlaces || 1));
   const heroMetrics = deck ? buildHeroMetrics(deck, activePage) : [];
   const narrative = deck ? pageNarrative(deck, activePage) : "按国家、月份与动力组合切换市场扫描页。";
   const activeTab = TAB_ITEMS.find((item) => item.key === activePage) ?? TAB_ITEMS[0];
+  const previewWidth = Math.max(960, exportSettings.exportWidth || 1920);
+  const previewHeight = Math.max(540, exportSettings.exportHeight || 1080);
+  const slideTitle = exportSettings.chartTitle.trim() || deck?.metadata.labels.pageTitle || "Market Scan Deck";
 
   function toggleFuel(fuel: string) {
     setSelectedFuelTypes((current) => {
@@ -1292,6 +1765,7 @@ export function MarketScanPage() {
           page={deck.results.overview}
           fuelOrder={deck.metadata.selectedFuelTypes}
           showDataLabels={showDataLabels}
+          exportSettings={exportSettings}
           compact={compact}
         />
       );
@@ -1301,6 +1775,7 @@ export function MarketScanPage() {
         <OriginSection
           page={deck.results.origin}
           showDataLabels={showDataLabels}
+          exportSettings={exportSettings}
           compact={compact}
         />
       );
@@ -1311,6 +1786,7 @@ export function MarketScanPage() {
           page={deck.results.segment}
           showDataLabels={showDataLabels}
           labelDigits={labelDigits}
+          exportSettings={exportSettings}
           compact={compact}
         />
       );
@@ -1321,6 +1797,7 @@ export function MarketScanPage() {
           page={deck.results.drilldown}
           fuelOrder={deck.metadata.selectedFuelTypes}
           showDataLabels={showDataLabels}
+          exportSettings={exportSettings}
           compact={compact}
           rankingLimit={rankingLimit}
           onRankingLimitChange={setRankingLimit}
@@ -1333,6 +1810,7 @@ export function MarketScanPage() {
           page={deck.results.suvA}
           fuelOrder={deck.metadata.selectedFuelTypes}
           showDataLabels={showDataLabels}
+          exportSettings={exportSettings}
           compact={compact}
           rankingLimit={rankingLimit}
           onRankingLimitChange={setRankingLimit}
@@ -1344,6 +1822,7 @@ export function MarketScanPage() {
         page={deck.results.suvB}
         fuelOrder={deck.metadata.selectedFuelTypes}
         showDataLabels={showDataLabels}
+        exportSettings={exportSettings}
         compact={compact}
         rankingLimit={rankingLimit}
         onRankingLimitChange={setRankingLimit}
@@ -1605,11 +2084,18 @@ export function MarketScanPage() {
               <div
                 ref={slideRef}
                 className={`market-scan-slide-frame market-scan-slide-frame--${activePage}${exportingSlide ? " is-exporting" : ""}`}
+                style={{
+                  width: exportingSlide ? `${previewWidth}px` : `min(100%, ${previewWidth}px)`,
+                  height: exportingSlide ? `${previewHeight}px` : undefined,
+                  aspectRatio: exportingSlide ? "auto" : `${previewWidth} / ${previewHeight}`,
+                  minHeight: `${Math.min(previewHeight, 820)}px`,
+                  background: exportSettings.paperBg,
+                }}
               >
                 <header className="market-scan-slide-head">
                   <div className="market-scan-slide-copy">
                     <span className="market-scan-slide-kicker">{activeTab.code} {activeTab.label}</span>
-                    <h2>{deck.metadata.labels.pageTitle}</h2>
+                    <h2>{slideTitle}</h2>
                     <p>{narrative}</p>
                   </div>
                   <div className="market-scan-slide-meta">

@@ -2,8 +2,8 @@
 Description=JATO Country News Sync daily timer
 
 [Timer]
-# Run at 06:15 local time every day (same as macOS launchd schedule).
-OnCalendar=*-*-* 06:15:00
+# Run shortly after midnight local time every day.
+OnCalendar=*-*-* 00:15:00
 Persistent=true
 RandomizedDelaySec=120
 

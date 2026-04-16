@@ -4,7 +4,10 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import pandas as pd
 
@@ -14,6 +17,7 @@ from app.services import query_service
 from app.services import market_scan_service
 from app.services import insight_card_service
 from app.services import country_profiles
+from app.services import country_chat_models
 from app.services import local_wiki_service
 from app.services import news_digest_service
 from app.services import news_wiki_service
@@ -26,10 +30,6 @@ from jato_scraper.llm.providers import NvidiaChatClient  # noqa: E402
 
 log = logging.getLogger(__name__)
 
-DEFAULT_NVIDIA_CHAT_MODEL = os.getenv(
-    "APP_NVIDIA_CHAT_MODEL",
-    "meta/llama-3.3-70b-instruct",
-).strip()
 MAX_HISTORY_TURNS = 6
 TOP_BRAND_LIMIT = 15
 TOP_MODEL_LIMIT = 10
@@ -37,6 +37,34 @@ TOP_POWERTRAIN_LIMIT = 6
 CONTEXT_CHAR_BUDGET = 24_000
 MAX_DECK_BASE_INTENTS = 3
 MAX_DECK_INTENTS = 5
+GEMINI_SEARCH_INTENTS = {"market-context"}
+GEMINI_SEARCH_KEYWORDS = (
+    "最新",
+    "最近",
+    "今天",
+    "本周",
+    "本月",
+    "新闻",
+    "政策",
+    "补贴",
+    "关税",
+    "监管",
+    "法规",
+    "热点",
+    "舆情",
+    "联网",
+    "搜索",
+    "查一下",
+    "搜一下",
+    "latest",
+    "recent",
+    "news",
+    "policy",
+    "tariff",
+    "subsid",
+    "search",
+    "web",
+)
 
 INTENT_PRIORITY = [
     "positioning-analysis",
@@ -250,26 +278,14 @@ def get_country_chat_metadata() -> dict[str, Any]:
     countries = []
     if country_col:
         countries = repo.load_distinct_options(country_col, {})
-
-    provider_available = _nvidia_provider_available()
-    provider_reason = None
-    if not provider_available:
-        provider_reason = (
-            "当前环境未配置 NVIDIA_API_KEY / NVAPI_KEY，"
-            "页面会退回本地摘要回答。"
-        )
+    model_meta = country_chat_models.get_country_chat_model_metadata()
 
     return {
         "availableCountries": [
             {"value": country, "label": country}
             for country in countries
         ],
-        "provider": "nvidia" if provider_available else "fallback",
-        "providerAvailable": provider_available,
-        "providerReason": provider_reason,
-        "defaultModel": (
-            DEFAULT_NVIDIA_CHAT_MODEL if provider_available else None
-        ),
+        **model_meta,
         "suggestedPrompts": COUNTRY_PROMPT_SUGGESTIONS,
     }
 
@@ -279,6 +295,7 @@ def answer_country_question(
     question: str,
     history: list[dict[str, str]] | None = None,
     news_payload_override: dict[str, Any] | None = None,
+    chat_model: str | None = None,
 ) -> dict[str, Any]:
     normalized_country = str(country).strip()
     normalized_question = str(question).strip()
@@ -299,9 +316,13 @@ def answer_country_question(
     # Lazy-load Dashboard analysis data based on intent + extracted params
     _enrich_snapshot_for_intents(snapshot, intents, user_params)
 
+    selected_chat_model, execution_chain = (
+        country_chat_models.build_country_chat_execution_chain(chat_model)
+    )
     provider = "fallback"
-    provider_available = _nvidia_provider_available()
+    provider_available = bool(execution_chain)
     provider_reason = None
+    resolved_model = None
     answer = _build_fallback_answer_for_intents(
         country=normalized_country,
         question=normalized_question,
@@ -311,18 +332,42 @@ def answer_country_question(
     )
 
     if provider_available:
-        try:
-            answer = _answer_with_nvidia(
-                country=normalized_country,
-                question=normalized_question,
-                intents=intents,
-                user_params=user_params,
-                snapshot=snapshot,
-                history=history or [],
-            )
-            provider = "nvidia"
-        except Exception as exc:  # noqa: BLE001
-            provider_reason = str(exc)
+        provider_errors: list[tuple[country_chat_models.CountryChatModelOption, str]] = []
+        for model_option in execution_chain:
+            try:
+                if model_option.provider == "gemini":
+                    answer = _answer_with_gemini(
+                        country=normalized_country,
+                        question=normalized_question,
+                        intents=intents,
+                        user_params=user_params,
+                        snapshot=snapshot,
+                        history=history or [],
+                        chat_model=model_option.model,
+                    )
+                else:
+                    answer = _answer_with_nvidia(
+                        country=normalized_country,
+                        question=normalized_question,
+                        intents=intents,
+                        user_params=user_params,
+                        snapshot=snapshot,
+                        history=history or [],
+                        chat_model=model_option.model,
+                    )
+                provider = model_option.provider
+                resolved_model = model_option.model
+                provider_reason = _build_chat_model_switch_reason(
+                    selected_chat_model=selected_chat_model,
+                    resolved_option=model_option,
+                    provider_errors=provider_errors,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001
+                provider_errors.append((model_option, str(exc)))
+
+        if provider == "fallback":
+            provider_reason = _format_provider_errors(provider_errors)
             answer = _build_fallback_answer_for_intents(
                 country=normalized_country,
                 question=normalized_question,
@@ -332,7 +377,7 @@ def answer_country_question(
             )
     else:
         provider_reason = (
-            "当前环境没有 NVIDIA_API_KEY / NVAPI_KEY，已使用本地摘要降级回答。"
+            "当前环境没有可用聊天模型，已使用本地摘要降级回答。"
         )
 
     suggestions = _suggestions_for_intents(intents, snapshot)
@@ -352,6 +397,8 @@ def answer_country_question(
         "primaryIntent": intent,
         "intents": intents,
         "provider": provider,
+        "model": resolved_model,
+        "chatModelId": selected_chat_model,
         "providerAvailable": provider_available,
         "providerReason": provider_reason,
         "contextSnapshot": snapshot,
@@ -1242,10 +1289,11 @@ def _resolve_country_column() -> str | None:
 
 
 def _nvidia_provider_available() -> bool:
-    return bool(
-        os.getenv("NVIDIA_API_KEY", "").strip()
-        or os.getenv("NVAPI_KEY", "").strip()
-    )
+    return country_chat_models.nvidia_provider_available()
+
+
+def _gemini_provider_available() -> bool:
+    return country_chat_models.gemini_provider_available()
 
 
 def _build_sales_rankings(
@@ -1346,8 +1394,11 @@ def _answer_with_nvidia(
     user_params: dict[str, Any],
     snapshot: dict[str, Any],
     history: list[dict[str, str]],
+    chat_model: str | None = None,
 ) -> str:
-    client = NvidiaChatClient(default_model=DEFAULT_NVIDIA_CHAT_MODEL)
+    client = NvidiaChatClient(
+        default_model=country_chat_models.get_default_nvidia_chat_model()
+    )
     primary_intent = intents[0] if intents else "general-summary"
     messages: list[Any] = [
         ChatMessage(role="system", content=_SYSTEM_PROMPT),
@@ -1473,6 +1524,7 @@ def _answer_with_nvidia(
     while turn_count < max_tool_turns:
         response = client.chat(
             messages,
+            model=chat_model,
             max_tokens=1024,
             temperature=0.2,
             timeout=60,
@@ -1563,6 +1615,169 @@ def _answer_with_nvidia(
         turn_count += 1
         
     return "分析中断：模型执行函数调用层级过深，未能生成最终解答。"
+
+
+def _answer_with_gemini(
+    *,
+    country: str,
+    question: str,
+    intents: list[str],
+    user_params: dict[str, Any],
+    snapshot: dict[str, Any],
+    history: list[dict[str, str]],
+    chat_model: str | None = None,
+) -> str:
+    api_key = news_digest_service._gemini_api_key()  # noqa: SLF001
+    if not api_key:
+        raise RuntimeError("Gemini API key 未配置")
+
+    model = (
+        str(chat_model or "").strip()
+        or country_chat_models.get_default_gemini_chat_model()
+    )
+    context = _select_context_for_intents(snapshot, intents)
+    history_lines = []
+    for turn in history[-MAX_HISTORY_TURNS:]:
+        role = str(turn.get("role", "")).strip().lower()
+        content = str(turn.get("content", "")).strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        history_lines.append(f"{role}: {content[:800]}")
+
+    search_enabled = _should_enable_gemini_google_search(
+        question=question,
+        intents=intents,
+        snapshot=snapshot,
+        model=model,
+    )
+    request_body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": (
+                            f"{_SYSTEM_PROMPT}\n\n"
+                            "请基于给定国家快照直接输出最终中文分析回答，不要暴露推理过程。"
+                            "不要输出链接、URL、markdown 图片或文件路径。\n\n"
+                            "如果问题明显涉及最新新闻、政策、补贴、关税、法规或市场热点，"
+                            "且系统已启用 Google Search 工具，你可以先联网补充最新事实，"
+                            "再结合国家快照给出结论；不要直接贴链接。\n\n"
+                            f"国家: {country}\n"
+                            f"问题: {question}\n"
+                            f"意图: {json.dumps(intents, ensure_ascii=False)}\n"
+                            f"已解析参数: {json.dumps(user_params, ensure_ascii=False)}\n"
+                            f"历史对话:\n{chr(10).join(history_lines) if history_lines else '无'}\n\n"
+                            f"上下文(JSON):\n{json.dumps(context, ensure_ascii=False)}"
+                        ),
+                    }
+                ],
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+        },
+    }
+    if search_enabled:
+        request_body["tools"] = [{"google_search": {}}]
+    request = Request(
+        (
+            "https://generativelanguage.googleapis.com/v1beta/"
+            f"models/{model}:generateContent?key={api_key}"
+        ),
+        data=json.dumps(request_body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    payload: dict[str, Any] | None = None
+    for attempt in range(news_digest_service.DEFAULT_GEMINI_MAX_RETRIES + 1):
+        try:
+            with urlopen(
+                request,
+                timeout=news_digest_service.DEFAULT_GEMINI_TIMEOUT_SECONDS,
+            ) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            break
+        except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+            if attempt >= news_digest_service.DEFAULT_GEMINI_MAX_RETRIES:
+                raise RuntimeError(f"Gemini 请求失败: {exc}") from exc
+            if not news_digest_service._is_retryable_gemini_error(exc):  # noqa: SLF001
+                raise RuntimeError(f"Gemini 请求失败: {exc}") from exc
+            time.sleep(
+                news_digest_service._gemini_retry_delay_seconds(  # noqa: SLF001
+                    exc,
+                    attempt,
+                )
+            )
+
+    if payload is None:
+        raise RuntimeError("Gemini 返回了空响应")
+
+    text = news_digest_service._extract_gemini_response_text(payload)  # noqa: SLF001
+    if not text:
+        raise RuntimeError("Gemini 返回了空文本内容")
+    return text.strip()
+
+
+def _should_enable_gemini_google_search(
+    *,
+    question: str,
+    intents: list[str],
+    snapshot: dict[str, Any],
+    model: str | None,
+) -> bool:
+    if not country_chat_models.gemini_model_supports_google_search(model):
+        return False
+
+    if any(intent in GEMINI_SEARCH_INTENTS for intent in intents):
+        return True
+
+    normalized_question = str(question or "").strip().lower()
+    if any(keyword in normalized_question for keyword in GEMINI_SEARCH_KEYWORDS):
+        return True
+
+    news_digest = snapshot.get("newsDigest")
+    market_events = snapshot.get("marketEvents")
+    asks_for_fresh_context = any(
+        keyword in normalized_question
+        for keyword in ("最新", "最近", "today", "latest", "recent")
+    )
+    lacks_local_news = not news_digest and not market_events
+    return asks_for_fresh_context and lacks_local_news
+
+
+def _format_provider_errors(
+    provider_errors: list[tuple[country_chat_models.CountryChatModelOption, str]],
+) -> str | None:
+    if not provider_errors:
+        return None
+    return "；".join(
+        f"{country_chat_models.describe_model_option(option)} 失败：{error}"
+        for option, error in provider_errors
+    )
+
+
+def _build_chat_model_switch_reason(
+    *,
+    selected_chat_model: str,
+    resolved_option: country_chat_models.CountryChatModelOption,
+    provider_errors: list[tuple[country_chat_models.CountryChatModelOption, str]],
+) -> str | None:
+    if not provider_errors:
+        return None
+
+    fallback_reason = _format_provider_errors(provider_errors)
+    if selected_chat_model == country_chat_models.AUTO_CHAT_MODEL_ID:
+        return (
+            f"自动模型已切换到 "
+            f"{country_chat_models.describe_model_option(resolved_option)}；"
+            f"{fallback_reason}"
+        )
+    return (
+        f"已切换到 {country_chat_models.describe_model_option(resolved_option)}；"
+        f"{fallback_reason}"
+    )
 
 
 def _select_context_for_intent(

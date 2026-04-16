@@ -46,6 +46,7 @@ def chat(
             question=payload.question,
             history=[turn.model_dump() for turn in payload.history],
             news_payload_override=news_payload_override,
+            chat_model=payload.model,
         )
         if refresh_note:
             provider_reason = str(response.get("providerReason") or "").strip()

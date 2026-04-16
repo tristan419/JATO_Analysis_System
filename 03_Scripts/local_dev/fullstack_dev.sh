@@ -24,10 +24,13 @@ DEFAULT_APP_DATABASE_URL="postgresql+psycopg://postgres:postgres@127.0.0.1:5432/
 APP_DATABASE_URL="${APP_DATABASE_URL:-}"
 APP_DATABASE_AUTO_MIGRATE="${APP_DATABASE_AUTO_MIGRATE:-true}"
 APP_ENGINEERING_IMPORT_ROOT="${APP_ENGINEERING_IMPORT_ROOT:-$REPO_DIR/01_RAW_DATA}"
-AUTH_ENABLED="${APP_AUTH_ENABLED:-true}"
+AUTH_ENABLED="${APP_AUTH_ENABLED:-false}"
 AUTH_TOKEN="${APP_AUTH_TOKEN:-change-me}"
 APP_TOKEN_ROLE_MAP="${APP_TOKEN_ROLE_MAP:-$AUTH_TOKEN:admin}"
 APP_CORS_ORIGINS="${APP_CORS_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173}"
+APP_COUNTRY_CHAT_MODEL_OPTIONS="${APP_COUNTRY_CHAT_MODEL_OPTIONS:-nvidia:*,gemini:*}"
+APP_NVIDIA_CHAT_MODEL="${APP_NVIDIA_CHAT_MODEL:-meta/llama-3.3-70b-instruct}"
+APP_GEMINI_CHAT_MODEL="${APP_GEMINI_CHAT_MODEL:-gemini-2.5-flash}"
 USER_ROLE="${APP_USER_ROLE:-admin}"
 USER_NAME="${APP_USER_NAME:-local-dev}"
 
@@ -155,6 +158,9 @@ run_backend_migrations() {
     export APP_AUTH_TOKEN="$AUTH_TOKEN"
     export APP_TOKEN_ROLE_MAP
     export APP_CORS_ORIGINS
+    export APP_COUNTRY_CHAT_MODEL_OPTIONS
+    export APP_NVIDIA_CHAT_MODEL
+    export APP_GEMINI_CHAT_MODEL
     export PYTHONPATH="$BACKEND_DIR"
     "$PYTHON_BIN" -m alembic upgrade head
   )
@@ -216,6 +222,9 @@ start_backend() {
     export APP_AUTH_TOKEN="$AUTH_TOKEN"
     export APP_TOKEN_ROLE_MAP
     export APP_CORS_ORIGINS
+    export APP_COUNTRY_CHAT_MODEL_OPTIONS
+    export APP_NVIDIA_CHAT_MODEL
+    export APP_GEMINI_CHAT_MODEL
     export PYTHONPATH="$BACKEND_DIR"
     nohup "$PYTHON_BIN" -m uvicorn app.main:app \
       --host "$BACKEND_HOST" \
@@ -264,7 +273,8 @@ start_frontend() {
   echo "[frontend] starting..."
   (
     cd "$FRONTEND_DIR"
-    export VITE_API_BASE="http://$BACKEND_HOST:$BACKEND_PORT/v1"
+    export VITE_API_BASE="/v1"
+    export VITE_DEV_PROXY_TARGET="http://$BACKEND_HOST:$BACKEND_PORT"
     export VITE_AUTH_TOKEN="$AUTH_TOKEN"
     export VITE_USER_ROLE="$USER_ROLE"
     export VITE_USER_NAME="$USER_NAME"

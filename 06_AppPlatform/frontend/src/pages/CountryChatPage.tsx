@@ -5,6 +5,7 @@ import {
 import { Link } from "react-router-dom";
 
 import { CountryChatAnalysisDeck } from "../components/CountryChatAnalysisDeck";
+import { CountryChatModelSelect } from "../components/CountryChatModelSelect";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { useCountryChat } from "../contexts/CountryChatContext";
 
@@ -80,10 +81,10 @@ export function CountryChatPage() {
     <div className="dashboard-shell copilot-shell">
       <section className="content copilot-content">
         <div className="header-card dashboard-hero copilot-hero">
-          <div className="dashboard-hero-head">
-            <div className="dashboard-hero-copy">
-              <span className="page-kicker">08 / Country Copilot</span>
-              <h1>国家数据聊天助手</h1>
+            <div className="dashboard-hero-head">
+              <div className="dashboard-hero-copy">
+                <span className="page-kicker">08 / Country Copilot</span>
+                <h1>国家数据聊天助手</h1>
               <div className="dashboard-hero-inline-summary">
                 <span className="selection-ribbon-label">Current mode</span>
                 <span className="selection-ribbon-value">按国家读取快照，理解用户问题并回答</span>
@@ -95,34 +96,43 @@ export function CountryChatPage() {
               </span>
             </div>
           </div>
-          <div className="dashboard-hero-rail">
-            <div className="dashboard-hero-chip-row">
-              <span className="dashboard-hero-chip">国家维度回答</span>
-              <span className="dashboard-hero-chip">复用 overview 聚合数据</span>
-              <span className="dashboard-hero-chip">缺 key 自动降级</span>
+            <div className="dashboard-hero-rail">
+              <div className="dashboard-hero-chip-row">
+                <span className="dashboard-hero-chip">国家维度回答</span>
+                <span className="dashboard-hero-chip">复用 overview 聚合数据</span>
+                <span className="dashboard-hero-chip">自动轮换聊天模型</span>
+              </div>
             </div>
           </div>
-        </div>
 
         <div className="copilot-grid">
           <div className="card copilot-chat-card">
             <div className="copilot-toolbar">
-              <label className="copilot-field">
-                <span>国家</span>
-                <select
-                  value={selectedCountry}
-                  onChange={(event) => setSelectedCountry(event.target.value)}
-                  disabled={sending}
-                >
-                  {countryOptions.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="copilot-toolbar-note">
-                当前页面与右下角悬浮助手共享同一套会话，切换页面后会按国家恢复历史记录。
+              <div className="copilot-toolbar-controls">
+                <label className="copilot-field">
+                  <span>国家</span>
+                  <select
+                    value={selectedCountry}
+                    onChange={(event) => setSelectedCountry(event.target.value)}
+                    disabled={sending}
+                  >
+                    {countryOptions.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <CountryChatModelSelect />
+              </div>
+              <div className="copilot-toolbar-session">
+                <div className="copilot-toolbar-note">
+                  当前页面与右下角悬浮助手共享同一套会话，切换页面后会按国家和聊天模型恢复历史记录。
+                </div>
+                <div className="copilot-toolbar-meta">
+                  <span className="copilot-ops-pill">Page + Widget Shared</span>
+                  <span className="copilot-ops-pill">{providerSummary}</span>
+                </div>
               </div>
             </div>
 
@@ -156,7 +166,9 @@ export function CountryChatPage() {
                     <div className="copilot-message-meta">
                       <span>{message.role === "user" ? "你" : "助手"}</span>
                       {message.provider ? (
-                        <span>{message.provider}</span>
+                        <span>
+                          {[message.provider, message.model].filter(Boolean).join(" · ")}
+                        </span>
                       ) : null}
                     </div>
                     <div className="copilot-message-body">
@@ -301,8 +313,8 @@ export function CountryChatPage() {
 
                   <p className="copilot-toolbar-note">
                     默认问答优先读数据库快照；如果结果不满意，可以临时在线抓取最新新闻，
-                    再由 NVIDIA 基于更新后的上下文重答。Gemini 只做新闻摘要和标签增强，
-                    不替代 RSS/Atom 抓取层。
+                    再由当前选中的聊天模型基于更新后的上下文重答。新闻层仍然保持
+                    RSS/Atom 抓取，Gemini 可用于新闻摘要增强。
                   </p>
 
                   {newsStatus.providerRoles &&

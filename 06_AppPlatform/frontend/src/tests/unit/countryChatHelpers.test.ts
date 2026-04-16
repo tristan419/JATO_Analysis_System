@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveCountrySelection } from "../../contexts/countryChatHelpers";
+import {
+  buildCountryChatSessionKey,
+  resolveChatModelSelection,
+  resolveCountrySelection,
+} from "../../contexts/countryChatHelpers";
 import type { CountryChatMetadataResponse } from "../../types";
 
 const metadata: CountryChatMetadataResponse = {
@@ -11,6 +15,22 @@ const metadata: CountryChatMetadataResponse = {
   ],
   provider: "test",
   providerAvailable: true,
+  defaultChatModel: "auto",
+  availableChatModels: [
+    {
+      id: "auto",
+      provider: "auto",
+      label: "Auto (Recommended)",
+      available: true,
+    },
+    {
+      id: "nvidia:meta/llama-3.3-70b-instruct",
+      provider: "nvidia",
+      model: "meta/llama-3.3-70b-instruct",
+      label: "NVIDIA · meta/llama-3.3-70b-instruct",
+      available: true,
+    },
+  ],
   suggestedPrompts: [],
 };
 
@@ -46,5 +66,29 @@ describe("resolveCountrySelection", () => {
         userPicked: true,
       }),
     ).toBe("德国");
+  });
+
+  it("uses the metadata default chat model when the cached one is invalid", () => {
+    expect(
+      resolveChatModelSelection({
+        metadata,
+        selectedChatModel: "gemini:gemini-2.5-flash",
+      }),
+    ).toBe("auto");
+  });
+
+  it("keeps a valid selected chat model", () => {
+    expect(
+      resolveChatModelSelection({
+        metadata,
+        selectedChatModel: "nvidia:meta/llama-3.3-70b-instruct",
+      }),
+    ).toBe("nvidia:meta/llama-3.3-70b-instruct");
+  });
+
+  it("builds session keys with country and chat model", () => {
+    expect(
+      buildCountryChatSessionKey("瑞典", "nvidia:meta/llama-3.3-70b-instruct"),
+    ).toBe("瑞典::nvidia:meta/llama-3.3-70b-instruct");
   });
 });

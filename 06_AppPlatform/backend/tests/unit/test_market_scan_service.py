@@ -121,6 +121,64 @@ def test_origin_payload_includes_brand_level_trend_groups() -> None:
     assert [series["brand"] for series in japan["series"]] == ["TOYOTA", "NISSAN"]
 
 
+def test_monthly_brand_ranking_includes_model_breakdown() -> None:
+    frame = pd.DataFrame(
+        {
+            "__brand": ["VOLVO", "VOLVO", "VOLVO", "BMW", "BMW"],
+            "__model": ["XC60", "EX30", "XC40", "X3", "iX1"],
+            "__powertrain": ["PHEV", "BEV", "BEV", "ICE", "BEV"],
+            "m1": [60.0, 30.0, 10.0, 70.0, 20.0],
+            "m0": [55.0, 25.0, 5.0, 65.0, 15.0],
+            "m_12": [50.0, 20.0, 8.0, 60.0, 10.0],
+        }
+    )
+
+    items = market_scan_service._build_brand_ranking_items(
+        frame,
+        current_columns=["m1"],
+        prior_columns=["m_12"],
+        prior_month_columns=["m0"],
+        ranking_limit=5,
+        include_model_breakdown=True,
+    )
+
+    volvo = next(item for item in items if item["brand"] == "VOLVO")
+    bmw = next(item for item in items if item["brand"] == "BMW")
+
+    assert [entry["model"] for entry in volvo["modelBreakdown"]] == ["XC60", "EX30", "XC40"]
+    assert [entry["powertrain"] for entry in volvo["modelBreakdown"]] == ["PHEV", "BEV", "BEV"]
+    assert volvo["modelBreakdown"][0]["volume"] == pytest.approx(60.0)
+    assert volvo["modelBreakdown"][0]["sharePct"] == pytest.approx(0.6)
+    assert [entry["model"] for entry in bmw["modelBreakdown"]] == ["X3", "iX1"]
+
+
+def test_overview_payload_includes_ytd_and_monthly_model_breakdown() -> None:
+    frame = pd.DataFrame(
+        {
+            "__brand": ["VOLVO", "VOLVO", "BMW", "BMW"],
+            "__model": ["XC60", "EX30", "X3", "iX1"],
+            "__powertrain": ["BEV", "BEV", "BEV", "BEV"],
+            "2025 Jan": [100.0, 80.0, 70.0, 60.0],
+            "2025 Feb": [110.0, 90.0, 75.0, 65.0],
+            "2026 Jan": [120.0, 100.0, 85.0, 70.0],
+            "2026 Feb": [130.0, 95.0, 90.0, 75.0],
+        }
+    )
+
+    payload = market_scan_service._build_overview_payload(
+        frame=frame,
+        selected_fuels=["ICE", "MHEV", "HEV", "PHEV", "BEV", "LPG"],
+        available_periods=["2025-01", "2025-02", "2026-01", "2026-02"],
+        resolved_period="2026-02",
+        prior_period="2026-01",
+        same_month_last_year_period="2025-02",
+        ranking_limit=10,
+    )
+
+    assert payload["monthlyBrandRanking"]["items"][0]["modelBreakdown"]
+    assert payload["ytdBrandRanking"]["items"][0]["modelBreakdown"]
+
+
 def test_market_scan_deck_request_defaults_to_top10() -> None:
     payload = MarketScanDeckRequest()
     assert payload.ranking_limit == 10

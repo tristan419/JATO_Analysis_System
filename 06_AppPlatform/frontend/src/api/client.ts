@@ -384,6 +384,7 @@ export const api = {
     question: string;
     history: CountryChatTurn[];
     refresh_news?: boolean;
+    model?: string;
   }) =>
     request<CountryChatResponse>("/assistant/country/chat", {
       method: "POST",

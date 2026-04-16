@@ -14,17 +14,25 @@ import { api } from "../api/client";
 import type {
   CountryChatChartLink,
   CountryChatMetadataResponse,
+  CountryChatModelOption,
   CountryChatNewsOpsStatus,
   CountryChatResponse,
   CountryChatSnapshot,
   CountryChatTurn,
 } from "../types";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
-import { isKnownCountryValue, resolveCountrySelection } from "./countryChatHelpers";
+import {
+  availableChatModels,
+  buildCountryChatSessionKey,
+  getChatModelLabel,
+  isKnownCountryValue,
+  resolveChatModelSelection,
+  resolveCountrySelection,
+} from "./countryChatHelpers";
 import { useSharedFilterScope } from "./SharedFilterScopeContext";
 
-const CHAT_SESSIONS_CACHE_KEY = "country-chat-sessions";
-const CHAT_UI_CACHE_KEY = "country-chat-ui";
+const CHAT_SESSIONS_CACHE_KEY = "country-chat-sessions-v2";
+const CHAT_UI_CACHE_KEY = "country-chat-ui-v2";
 const CHAT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 
 export interface CountryChatTranscriptMessage extends CountryChatTurn {
@@ -32,6 +40,7 @@ export interface CountryChatTranscriptMessage extends CountryChatTurn {
   country?: string;
   question?: string;
   provider?: string;
+  model?: string | null;
   providerReason?: string | null;
   chartLinks?: CountryChatChartLink[];
   contextSnapshot?: CountryChatSnapshot;
@@ -49,6 +58,7 @@ type CountryChatSessions = Record<string, CountryChatSession>;
 interface CountryChatUiCache {
   drafts: Record<string, string>;
   selectedCountry: string;
+  selectedChatModel: string;
   widgetExpanded: boolean;
   widgetWidth?: number;
   widgetHeight?: number;
@@ -68,9 +78,12 @@ interface CountryChatContextValue {
   refreshingNews: boolean;
   refreshCountryNews: () => Promise<void>;
   retryLatestQuestionWithFreshNews: () => Promise<void>;
+  availableChatModels: CountryChatModelOption[];
   selectedCountry: string;
+  selectedChatModel: string;
   sending: boolean;
   setDraft: (value: string) => void;
+  setSelectedChatModel: (value: string) => void;
   setSelectedCountry: (country: string) => void;
   setWidgetExpanded: (next: boolean | ((current: boolean) => boolean)) => void;
   sendQuestion: (
@@ -115,40 +128,43 @@ function mergeNewsPayloadIntoSessions(
     newsDigest?: CountryChatSnapshot["newsDigest"];
   },
 ): CountryChatSessions {
-  const session = sessions[country];
-  if (!session) {
-    return sessions;
-  }
-  const latestResponse = session.latestResponse
-    ? {
-        ...session.latestResponse,
-        contextSnapshot: injectNewsPayloadIntoSnapshot(
-          session.latestResponse.contextSnapshot,
-          payload,
-        ) as CountryChatSnapshot,
-      }
-    : null;
-  const messages = [...session.messages];
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index]?.role !== "assistant") {
+  const nextSessions: CountryChatSessions = { ...sessions };
+  const sessionPrefix = `${country}::`;
+
+  for (const [sessionKey, session] of Object.entries(sessions)) {
+    if (!sessionKey.startsWith(sessionPrefix)) {
       continue;
     }
-    messages[index] = {
-      ...messages[index],
-      contextSnapshot: injectNewsPayloadIntoSnapshot(
-        messages[index].contextSnapshot,
-        payload,
-      ),
-    };
-    break;
-  }
-  return {
-    ...sessions,
-    [country]: {
+    const latestResponse = session.latestResponse
+      ? {
+          ...session.latestResponse,
+          contextSnapshot: injectNewsPayloadIntoSnapshot(
+            session.latestResponse.contextSnapshot,
+            payload,
+          ) as CountryChatSnapshot,
+        }
+      : null;
+    const messages = [...session.messages];
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]?.role !== "assistant") {
+        continue;
+      }
+      messages[index] = {
+        ...messages[index],
+        contextSnapshot: injectNewsPayloadIntoSnapshot(
+          messages[index].contextSnapshot,
+          payload,
+        ),
+      };
+      break;
+    }
+    nextSessions[sessionKey] = {
       latestResponse,
       messages,
-    },
-  };
+    };
+  }
+
+  return nextSessions;
 }
 
 export function CountryChatProvider({ children }: { children: ReactNode }) {
@@ -176,6 +192,9 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     useState<CountryChatNewsOpsStatus | null>(null);
   const [selectedCountry, setSelectedCountryState] = useState(
     () => cachedUi?.selectedCountry ?? "",
+  );
+  const [selectedChatModel, setSelectedChatModelState] = useState(
+    () => cachedUi?.selectedChatModel ?? "",
   );
   const [widgetExpanded, setWidgetExpanded] = useState(
     () => cachedUi?.widgetExpanded ?? false,
@@ -243,6 +262,19 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
   }, [metadata, preferredCountry, selectedCountry]);
 
   useEffect(() => {
+    if (!metadata) {
+      return;
+    }
+    const resolvedChatModel = resolveChatModelSelection({
+      metadata,
+      selectedChatModel,
+    });
+    if (resolvedChatModel && resolvedChatModel !== selectedChatModel) {
+      setSelectedChatModelState(resolvedChatModel);
+    }
+  }, [metadata, selectedChatModel]);
+
+  useEffect(() => {
     if (userPickedRef.current) {
       return;
     }
@@ -264,33 +296,59 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setCachedPageValue(
       CHAT_UI_CACHE_KEY,
-      {
-        drafts,
-        selectedCountry,
-        widgetExpanded,
-        widgetWidth,
-        widgetHeight,
-      },
-      CHAT_CACHE_TTL_MS,
-    );
-  }, [drafts, selectedCountry, widgetExpanded, widgetWidth, widgetHeight]);
+        {
+          drafts,
+          selectedCountry,
+          selectedChatModel,
+          widgetExpanded,
+          widgetWidth,
+          widgetHeight,
+        },
+        CHAT_CACHE_TTL_MS,
+      );
+  }, [
+    drafts,
+    selectedCountry,
+    selectedChatModel,
+    widgetExpanded,
+    widgetWidth,
+    widgetHeight,
+  ]);
 
-  const activeSession = useMemo(
-    () => (selectedCountry ? sessions[selectedCountry] ?? EMPTY_SESSION : EMPTY_SESSION),
-    [selectedCountry, sessions],
+  const activeSessionKey = useMemo(
+    () => buildCountryChatSessionKey(selectedCountry, selectedChatModel),
+    [selectedCountry, selectedChatModel],
   );
-  const draft = selectedCountry ? drafts[selectedCountry] ?? "" : "";
+  const activeSession = useMemo(
+    () => (selectedCountry ? sessions[activeSessionKey] ?? EMPTY_SESSION : EMPTY_SESSION),
+    [activeSessionKey, selectedCountry, sessions],
+  );
+  const draft = selectedCountry ? drafts[activeSessionKey] ?? "" : "";
+  const chatModelOptions = useMemo(
+    () => availableChatModels(metadata),
+    [metadata],
+  );
   const promptSuggestions = useMemo(
     () => activeSession.latestResponse?.suggestedPrompts ?? metadata?.suggestedPrompts ?? [],
     [activeSession.latestResponse, metadata],
   );
-  const providerSummary = metadata?.providerAvailable
-    ? `NVIDIA · ${metadata.defaultModel ?? "default model"}`
-    : (metadata?.providerReason ?? "当前使用本地降级回答");
+  const providerSummary = activeSession.latestResponse?.provider
+    ? [
+        activeSession.latestResponse.provider.toUpperCase(),
+        activeSession.latestResponse.model,
+      ].filter(Boolean).join(" · ")
+    : (metadata?.providerAvailable
+      ? getChatModelLabel(metadata, selectedChatModel)
+      : (metadata?.providerReason ?? "当前使用本地降级回答"));
 
   const setSelectedCountry = useCallback((country: string) => {
     userPickedRef.current = true;
     setSelectedCountryState(country);
+    setError("");
+  }, []);
+
+  const setSelectedChatModel = useCallback((value: string) => {
+    setSelectedChatModelState(value);
     setError("");
   }, []);
 
@@ -300,9 +358,9 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     }
     setDrafts((current) => ({
       ...current,
-      [selectedCountry]: value,
+      [activeSessionKey]: value,
     }));
-  }, [selectedCountry]);
+  }, [activeSessionKey, selectedCountry]);
 
   const loadNewsStatus = useCallback(
     async (country: string, mode: "initial" | "silent" = "initial") => {
@@ -346,12 +404,13 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     options?: { refreshNews?: boolean },
   ) => {
     const country = selectedCountry;
-    const question = String(questionOverride ?? drafts[country] ?? "").trim();
+    const sessionKey = buildCountryChatSessionKey(country, selectedChatModel);
+    const question = String(questionOverride ?? drafts[sessionKey] ?? "").trim();
     if (!country || !question || sending) {
       return;
     }
 
-    const currentSession = sessions[country] ?? EMPTY_SESSION;
+    const currentSession = sessions[sessionKey] ?? EMPTY_SESSION;
     const userMessage: CountryChatTranscriptMessage = {
       id: `user-${Date.now()}`,
       role: "user",
@@ -366,13 +425,13 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     setError("");
     setDrafts((current) => ({
       ...current,
-      [country]: "",
+      [sessionKey]: "",
     }));
     setSessions((current) => {
-      const previous = current[country] ?? EMPTY_SESSION;
+      const previous = current[sessionKey] ?? EMPTY_SESSION;
       return {
         ...current,
-        [country]: {
+        [sessionKey]: {
           ...previous,
           messages: [...previous.messages, userMessage],
         },
@@ -385,13 +444,14 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
         question,
         history,
         refresh_news: Boolean(options?.refreshNews),
+        model: selectedChatModel,
       });
       startTransition(() => {
         setSessions((current) => {
-          const previous = current[country] ?? EMPTY_SESSION;
+          const previous = current[sessionKey] ?? EMPTY_SESSION;
           return {
             ...current,
-            [country]: {
+            [sessionKey]: {
               latestResponse: response,
               messages: [
                 ...previous.messages,
@@ -402,6 +462,7 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
                   question: response.question,
                   content: response.answer,
                   provider: response.provider,
+                  model: response.model,
                   providerReason: response.providerReason,
                   chartLinks: response.chartLinks,
                   contextSnapshot: response.contextSnapshot,
@@ -423,7 +484,7 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     } finally {
       setSending(false);
     }
-  }, [drafts, loadNewsStatus, selectedCountry, sending, sessions]);
+  }, [drafts, loadNewsStatus, selectedChatModel, selectedCountry, sending, sessions]);
 
   const refreshCountryNews = useCallback(async () => {
     const country = selectedCountry;
@@ -470,6 +531,7 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
   }, [activeSession.latestResponse, activeSession.messages, sendQuestion]);
 
   const value = useMemo<CountryChatContextValue>(() => ({
+    availableChatModels: chatModelOptions,
     draft,
     error,
     latestResponse: activeSession.latestResponse,
@@ -484,8 +546,10 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     refreshCountryNews,
     retryLatestQuestionWithFreshNews,
     selectedCountry,
+    selectedChatModel,
     sending,
     setDraft,
+    setSelectedChatModel,
     setSelectedCountry,
     setWidgetExpanded,
     sendQuestion,
@@ -496,6 +560,7 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
   }), [
     activeSession.latestResponse,
     activeSession.messages,
+    chatModelOptions,
     draft,
     error,
     loadingMetadata,
@@ -508,8 +573,10 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     refreshCountryNews,
     retryLatestQuestionWithFreshNews,
     selectedCountry,
+    selectedChatModel,
     sending,
     setDraft,
+    setSelectedChatModel,
     setSelectedCountry,
     sendQuestion,
     widgetExpanded,

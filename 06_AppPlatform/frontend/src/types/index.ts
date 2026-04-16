@@ -109,6 +109,15 @@ export interface CountryChatProviderRole {
   mode?: string | null;
 }
 
+export interface CountryChatModelOption {
+  id: string;
+  provider: string;
+  model?: string | null;
+  label: string;
+  description?: string | null;
+  available: boolean;
+}
+
 export interface CountryChatNewsOpsStatus {
   country: string;
   countryCode?: string | null;
@@ -207,6 +216,8 @@ export interface CountryChatMetadataResponse {
   providerAvailable: boolean;
   providerReason?: string | null;
   defaultModel?: string | null;
+  defaultChatModel?: string | null;
+  availableChatModels: CountryChatModelOption[];
   suggestedPrompts: string[];
 }
 
@@ -218,6 +229,8 @@ export interface CountryChatResponse {
   primaryIntent?: string;
   intents?: string[];
   provider: string;
+  model?: string | null;
+  chatModelId?: string | null;
   providerAvailable: boolean;
   providerReason?: string | null;
   contextSnapshot: CountryChatSnapshot;
@@ -328,6 +341,12 @@ export interface MarketScanRankingItem {
   barPct: number;
   fuelMix?: Record<string, number>;
   driveMix?: Record<string, number>;
+  modelBreakdown?: Array<{
+    model: string;
+    volume: number;
+    sharePct: number;
+    powertrain?: string;
+  }>;
 }
 
 export interface MarketScanRankingGroup {

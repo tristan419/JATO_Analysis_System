@@ -119,6 +119,7 @@ class CountryChatRequest(BaseModel):
     question: str
     history: list[CountryChatTurn] = Field(default_factory=list)
     refresh_news: bool = False
+    model: str | None = None
 
 
 class CountryChatDeckRequest(BaseModel):

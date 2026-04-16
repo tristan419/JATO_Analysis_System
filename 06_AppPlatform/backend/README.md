@@ -30,7 +30,7 @@ export APP_COUNTRY_NEWS_LIVE_FETCH=false
 /bin/bash ../../03_Scripts/install_local_country_news_sync_launchd.sh 6 15
 
 # Auth (enabled by default)
-export APP_AUTH_ENABLED=true
+export APP_AUTH_ENABLED=false
 export APP_AUTH_TOKEN=change-me
 
 # Example request header
@@ -98,8 +98,8 @@ python -m pytest tests/unit
 ## Country News Ops
 
 - 默认问答路径只读数据库快照，不实时抓外网。
-- 当用户对结果不满意时，前端会调用 `/v1/assistant/country/chat` 并带上 `refresh_news=true`，先在线抓新闻，再让 NVIDIA 基于新上下文重答。
-- 模型分工：`RSS/Atom` 负责抓取，`Gemini` 负责新闻摘要/归因/标签，`NVIDIA` 负责最终国家市场分析回答。
+- 当用户对结果不满意时，前端会调用 `/v1/assistant/country/chat` 并带上 `refresh_news=true`，先在线抓新闻，再让当前选中的聊天模型基于新上下文重答。
+- 模型分工：`RSS/Atom` 负责抓取，`Gemini` 负责新闻摘要/归因/标签，国家聊天模型可按 `APP_COUNTRY_CHAT_MODEL_OPTIONS` 在前端切换；支持 `provider:*` 自动展开 provider 可用模型，`auto` 仅在各 provider 默认模型之间轮换。
 
 ### Scheduling
 

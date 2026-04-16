@@ -33,6 +33,7 @@ DEFAULT_FUEL_TYPES = ("ICE", "MHEV", "HEV", "PHEV", "BEV", "LPG")
 DRILLDOWN_PANEL_FUELS = ("BEV", "PHEV", "HEV", "MHEV", "ICE")
 PRIMARY_ORIGINS = ("欧系", "日系", "韩系", "美系", "中系")
 ORIGIN_BRAND_TREND_LIMIT = 4
+MONTHLY_BRAND_MODEL_STACK_LIMIT = 10
 SEGMENT_MATRIX_ORDER = (
     "SUV-A00",
     "SUV-A0",
@@ -432,39 +433,118 @@ def _build_brand_ranking_items(
     prior_columns: list[str],
     prior_month_columns: list[str],
     ranking_limit: int,
+    *,
+    include_model_breakdown: bool = False,
 ) -> list[dict[str, Any]]:
     current_series = _series_sum(frame, current_columns)
     prior_series = _series_sum(frame, prior_columns)
     prior_month_series = _series_sum(frame, prior_month_columns)
-    summary = pd.DataFrame(
-        {
-            "brand": frame["__brand"],
-            "current": current_series,
-            "prior": prior_series,
-            "prior_month": prior_month_series,
-        }
-    )
+    summary_data: dict[str, Any] = {
+        "brand": frame["__brand"],
+        "current": current_series,
+        "prior": prior_series,
+        "prior_month": prior_month_series,
+    }
+    if include_model_breakdown and "__model" in frame.columns:
+        summary_data["model"] = frame["__model"]
+    if include_model_breakdown and "__powertrain" in frame.columns:
+        summary_data["powertrain"] = frame["__powertrain"]
+    summary = pd.DataFrame(summary_data)
     grouped = summary.groupby("brand", dropna=False)[["current", "prior", "prior_month"]].sum(numeric_only=True)
     grouped = grouped[grouped["current"] > 0].sort_values("current", ascending=False)
     total_current = float(grouped["current"].sum()) or 0.0
     grouped = grouped.head(max(1, int(ranking_limit)))
+    model_grouped = (
+        summary.groupby(["brand", "model", "powertrain"], dropna=False)[["current"]].sum(numeric_only=True)
+        if include_model_breakdown and "model" in summary.columns and "powertrain" in summary.columns else
+        None
+    )
     items: list[dict[str, Any]] = []
     for rank, (brand, row) in enumerate(grouped.iterrows(), start=1):
         current_value = float(row["current"])
         prior_value = float(row["prior"])
         prior_month_value = float(row["prior_month"])
+        item = {
+            "rank": rank,
+            "brand": str(brand),
+            "volume": current_value,
+            "sharePct": _safe_share(current_value, total_current),
+            "shareDisplay": f"{_safe_share(current_value, total_current) * 100:.1f}%",
+            "priorVolume": prior_value,
+            "priorMonthVolume": prior_month_value,
+            "mom": _delta_payload(current_value, prior_month_value),
+            "yoy": _delta_payload(current_value, prior_value),
+            "barPct": _safe_share(current_value, float(grouped["current"].max()) or 1.0),
+        }
+        if include_model_breakdown and model_grouped is not None:
+            item["modelBreakdown"] = _build_brand_model_breakdown(
+                model_grouped,
+                brand=str(brand),
+                brand_total=current_value,
+                limit=MONTHLY_BRAND_MODEL_STACK_LIMIT,
+            )
+        items.append(item)
+    return items
+
+
+def _build_brand_model_breakdown(
+    model_grouped: pd.DataFrame,
+    *,
+    brand: str,
+    brand_total: float,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if brand_total <= 0 or model_grouped.empty:
+        return []
+
+    try:
+        brand_rows = model_grouped.xs(brand, level="brand")
+    except KeyError:
+        return []
+
+    if "current" not in brand_rows:
+        return []
+
+    model_series = brand_rows.groupby(level="model")["current"].sum()
+    ranked_models = _ranked_index(model_series)
+    if not ranked_models:
+        return []
+
+    items: list[dict[str, Any]] = []
+    remaining_volume = 0.0
+    for index, (model_name, volume) in enumerate(ranked_models):
+        if index >= limit:
+            remaining_volume += float(volume)
+            continue
+        normalized_model = str(model_name).strip() or "Unknown"
+        current_value = float(volume)
+        model_rows = brand_rows.xs(model_name, level="model")
+        if isinstance(model_rows, pd.Series):
+            powertrain_series = model_rows
+        else:
+            powertrain_series = model_rows["current"]
+        ranked_powertrains = _ranked_index(powertrain_series)
+        dominant_powertrain = (
+            str(ranked_powertrains[0][0]).strip().upper()
+            if ranked_powertrains else
+            "OTHER"
+        )
         items.append(
             {
-                "rank": rank,
-                "brand": str(brand),
+                "model": normalized_model,
                 "volume": current_value,
-                "sharePct": _safe_share(current_value, total_current),
-                "shareDisplay": f"{_safe_share(current_value, total_current) * 100:.1f}%",
-                "priorVolume": prior_value,
-                "priorMonthVolume": prior_month_value,
-                "mom": _delta_payload(current_value, prior_month_value),
-                "yoy": _delta_payload(current_value, prior_value),
-                "barPct": _safe_share(current_value, float(grouped["current"].max()) or 1.0),
+                "sharePct": _safe_share(current_value, brand_total),
+                "powertrain": dominant_powertrain,
+            }
+        )
+
+    if remaining_volume > 0:
+        items.append(
+            {
+                "model": "Other",
+                "volume": remaining_volume,
+                "sharePct": _safe_share(remaining_volume, brand_total),
+                "powertrain": "OTHER",
             }
         )
     return items
@@ -594,6 +674,7 @@ def _build_overview_payload(
                 prior_columns=prior_ytd_columns,
                 prior_month_columns=same_month_columns,
                 ranking_limit=ranking_limit,
+                include_model_breakdown=True,
             ),
         },
         "monthlyBrandRanking": {
@@ -607,6 +688,7 @@ def _build_overview_payload(
                 prior_columns=same_month_columns,
                 prior_month_columns=prior_period_columns,
                 ranking_limit=ranking_limit,
+                include_model_breakdown=True,
             ),
         },
     }
