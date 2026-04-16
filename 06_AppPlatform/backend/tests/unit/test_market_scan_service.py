@@ -62,6 +62,65 @@ def test_single_fuel_ranking_sorted_by_volume() -> None:
     assert items[1]["barPct"] == pytest.approx(200 / 300)
 
 
+def test_segment_payload_includes_suv_segment_share_breakdown() -> None:
+    frame = pd.DataFrame(
+        {
+            "__segment_raw": ["SUV A00", "SUV A0", "SUV A", "SUV B", "Car A"],
+            "2026 Jan": [10.0, 20.0, 30.0, 40.0, 100.0],
+            "2026 Feb": [15.0, 25.0, 35.0, 45.0, 80.0],
+        },
+    )
+
+    payload = market_scan_service._build_segment_payload(
+        frame=frame,
+        available_periods=["2026-01", "2026-02"],
+        resolved_period="2026-02",
+        prior_period="2026-01",
+        same_month_last_year_period=None,
+        body_window_months=2,
+    )
+
+    items = payload["suvSegmentShareTrend"]["items"]
+    assert len(items) == 2
+    latest = items[-1]
+    latest_body_share = payload["bodyShareTrend"]["items"][-1]
+    assert latest["label"] == "26.02"
+    assert latest["segmentSharePct"]["SUV-A00"] == pytest.approx(15 / 200)
+    assert latest["segmentSharePct"]["SUV-A0"] == pytest.approx(25 / 200)
+    assert latest["segmentSharePct"]["SUV-A"] == pytest.approx(35 / 200)
+    assert latest["segmentSharePct"]["≥SUV-B"] == pytest.approx(45 / 200)
+    assert sum(latest["segmentSharePct"].values()) == pytest.approx(latest_body_share["suvSharePct"])
+
+
+def test_origin_payload_includes_brand_level_trend_groups() -> None:
+    frame = pd.DataFrame(
+        {
+            "__origin": ["欧系", "欧系", "欧系", "欧系", "欧系", "日系", "日系"],
+            "__brand": ["VOLVO", "BMW", "VW", "AUDI", "SKODA", "TOYOTA", "NISSAN"],
+            "2026 Jan": [50.0, 40.0, 30.0, 20.0, 10.0, 60.0, 30.0],
+            "2026 Feb": [55.0, 45.0, 35.0, 25.0, 5.0, 70.0, 20.0],
+        },
+    )
+
+    payload = market_scan_service._build_origin_payload(
+        frame=frame,
+        available_periods=["2026-01", "2026-02"],
+        resolved_period="2026-02",
+        prior_period="2026-01",
+        same_month_last_year_period=None,
+        origin_window_months=2,
+    )
+
+    groups = payload["brandTrend"]["groups"]
+    europe = next(group for group in groups if group["origin"] == "欧系")
+    japan = next(group for group in groups if group["origin"] == "日系")
+
+    assert [series["brand"] for series in europe["series"]] == ["VOLVO", "BMW", "VW", "AUDI"]
+    assert europe["series"][0]["points"][-1]["volume"] == pytest.approx(55.0)
+    assert europe["series"][0]["points"][-1]["label"] == "26.02"
+    assert [series["brand"] for series in japan["series"]] == ["TOYOTA", "NISSAN"]
+
+
 def test_market_scan_deck_request_defaults_to_top10() -> None:
     payload = MarketScanDeckRequest()
     assert payload.ranking_limit == 10

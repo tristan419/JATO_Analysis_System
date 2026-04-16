@@ -360,10 +360,23 @@ export interface MarketScanOriginSeries {
   points: MarketScanOriginTrendPoint[];
 }
 
+export interface MarketScanOriginBrandSeries {
+  brand: string;
+  points: MarketScanOriginTrendPoint[];
+}
+
+export interface MarketScanOriginBrandGroup {
+  origin: string;
+  series: MarketScanOriginBrandSeries[];
+}
+
 export interface MarketScanOriginPage {
   summaryText: string;
   trend: {
     series: MarketScanOriginSeries[];
+  };
+  brandTrend: {
+    groups: MarketScanOriginBrandGroup[];
   };
   matrix: MarketScanMatrix;
 }
@@ -376,11 +389,21 @@ export interface MarketScanBodyShareTrendItem {
   sedanSharePct: number;
 }
 
+export interface MarketScanSuvSegmentShareTrendItem {
+  period: string;
+  label: string;
+  totalVolume: number;
+  segmentSharePct: Record<string, number>;
+}
+
 export interface MarketScanSegmentPage {
   summaryText: string;
   matrix: MarketScanMatrix;
   bodyShareTrend: {
     items: MarketScanBodyShareTrendItem[];
+  };
+  suvSegmentShareTrend: {
+    items: MarketScanSuvSegmentShareTrendItem[];
   };
 }
 

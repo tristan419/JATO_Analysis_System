@@ -7,7 +7,7 @@ import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { DEFAULT_EXPORT, ExportPanel, buildExportLabelModeOptions, type ExportSettings } from "../components/ExportPanel";
 import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { LoadingSurface } from "../components/LoadingSurface";
-import { fuelColor, originColor } from "../utils/colors";
+import { SERIES_COLORS, fuelColor, originColor } from "../utils/colors";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
 import type {
   MarketScanBodyShareTrendItem,
@@ -15,6 +15,7 @@ import type {
   MarketScanDrilldownPage,
   MarketScanFuelPanel,
   MarketScanFuelTrendItem,
+  MarketScanOriginBrandGroup,
   MarketScanMatrix,
   MarketScanMatrixRow,
   MarketScanOverviewPage,
@@ -23,6 +24,7 @@ import type {
   MarketScanRankingGroup,
   MarketScanRankingItem,
   MarketScanSegmentPage,
+  MarketScanSuvSegmentShareTrendItem,
 } from "../types";
 
 const DEFAULT_FUEL_TYPES = ["ICE", "MHEV", "HEV", "PHEV", "BEV", "LPG"];
@@ -51,6 +53,13 @@ const DEFAULT_MARKET_SCAN_EXPORT: ExportSettings = {
 };
 const MIN_MARKET_SCAN_RANKING_LIMIT = 10;
 const MARKET_SCAN_RANKING_LIMIT_OPTIONS = [10, 15, 20, 30] as const;
+const SUV_SEGMENT_SHARE_ORDER = ["SUV-A00", "SUV-A0", "SUV-A", "≥SUV-B"] as const;
+const SUV_SEGMENT_SHARE_META: Record<(typeof SUV_SEGMENT_SHARE_ORDER)[number], { label: string; color: string }> = {
+  "SUV-A00": { label: "SUV-A00", color: "#0f766e" },
+  "SUV-A0": { label: "SUV-A0", color: "#14b8a6" },
+  "SUV-A": { label: "SUV-A", color: "#84cc16" },
+  "≥SUV-B": { label: "≥SUV-B", color: "#f59e0b" },
+};
 
 function normalizeMarketScanRankingLimit(value: number | string | null | undefined): number {
   const numericValue = typeof value === "number" ? value : Number(value);
@@ -431,6 +440,30 @@ function buildOriginTrendData(
   }));
 }
 
+function buildOriginBrandTrendData(
+  group: MarketScanOriginBrandGroup,
+  showDataLabels: boolean,
+): Data[] {
+  return group.series.map((entry, index) => ({
+    type: "scatter",
+    mode: showDataLabels ? "text+lines+markers" : "lines+markers",
+    name: entry.brand,
+    x: entry.points.map((point) => point.label),
+    y: entry.points.map((point) => point.volume),
+    line: { color: SERIES_COLORS[index % SERIES_COLORS.length], width: 2.2 },
+    marker: { color: SERIES_COLORS[index % SERIES_COLORS.length], size: 4 },
+    text: showDataLabels
+      ? buildLastPointText(
+          entry.points.length,
+          (pointIndex) => `${entry.brand} ${formatVolume(entry.points[pointIndex]?.volume ?? 0)}`,
+        )
+      : undefined,
+    textposition: "middle right",
+    textfont: { size: 9 },
+    hovertemplate: `%{x}<br>${group.origin} · ${entry.brand}: %{y:,.0f} 台<extra></extra>`,
+  }));
+}
+
 function buildBodyShareData(
   items: MarketScanBodyShareTrendItem[],
   showDataLabels: boolean,
@@ -473,6 +506,34 @@ function buildBodyShareData(
       hovertemplate: "%{x}<br>Sedan: %{y:.1%}<extra></extra>",
     },
   ];
+}
+
+function buildSuvSegmentShareData(
+  items: MarketScanSuvSegmentShareTrendItem[],
+  showDataLabels: boolean,
+  labelDigits = 1,
+): Data[] {
+  const labels = items.map((item) => item.label);
+  return SUV_SEGMENT_SHARE_ORDER.map((segment) => ({
+    type: "scatter",
+    mode: showDataLabels ? "text+lines+markers" : "lines",
+    stackgroup: "suv-segment-share",
+    fill: "tonexty",
+    name: SUV_SEGMENT_SHARE_META[segment].label,
+    x: labels,
+    y: items.map((item) => item.segmentSharePct[segment] ?? 0),
+    line: { color: SUV_SEGMENT_SHARE_META[segment].color, width: 2.2 },
+    marker: { color: SUV_SEGMENT_SHARE_META[segment].color, size: 4 },
+    text: showDataLabels
+      ? buildLastPointText(
+          items.length,
+          (index) => formatPercent(items[index]?.segmentSharePct[segment] ?? 0, labelDigits),
+        )
+      : undefined,
+    textposition: "middle right",
+    textfont: { size: 9 },
+    hovertemplate: `%{x}<br>${SUV_SEGMENT_SHARE_META[segment].label}: %{y:.1%}<extra></extra>`,
+  }));
 }
 
 function buildFuelTrendData(
@@ -831,8 +892,56 @@ function OriginSection({
         }}
         height={compact ? 282 : 420}
       />
-    </Panel>
+      </Panel>
   );
+  const selectedBrandTrendGroups = (() => {
+    const rankedOrigins = [...page.trend.series]
+      .map((entry) => ({
+        origin: entry.origin,
+        latestVolume: entry.points[entry.points.length - 1]?.volume ?? 0,
+      }))
+      .sort((left, right) => right.latestVolume - left.latestVolume);
+    const topOrigin = rankedOrigins[0]?.origin ?? null;
+    const preferredOrigins = [topOrigin, "中系"].filter(
+      (origin, index, items): origin is string => Boolean(origin) && items.indexOf(origin) === index,
+    );
+    const selected = preferredOrigins
+      .map((origin) => page.brandTrend.groups.find((group) => group.origin === origin))
+      .filter((group): group is NonNullable<typeof group> => Boolean(group));
+    return selected.length > 0 ? selected : page.brandTrend.groups.slice(0, 2);
+  })();
+  const brandTrendPanel =
+    selectedBrandTrendGroups.length > 0 ? (
+      <Panel
+        eyebrow="Trend"
+        title="Origin Brand Trend"
+        subtitle="默认展示当前第一名车系与中系品牌走势，各自保留最新月销量 Top 4 品牌。"
+      >
+        <div className="market-scan-grid market-scan-grid--two">
+          {selectedBrandTrendGroups.map((group) => (
+            <div key={group.origin} className="market-scan-subpanel">
+              <h3>{group.origin}</h3>
+              <PlotlyChart
+                data={buildOriginBrandTrendData(group, showDataLabels)}
+                layout={{
+                  ...CHART_LAYOUT,
+                  xaxis: { type: "category" },
+                  yaxis: { title: { text: "销量" } },
+                  legend: {
+                    orientation: "h",
+                    y: -0.22,
+                    x: 0.5,
+                    xanchor: "center",
+                    font: { size: 10 },
+                  },
+                }}
+                height={compact ? 220 : 260}
+              />
+            </div>
+          ))}
+        </div>
+      </Panel>
+    ) : null;
   const matrixPanel = (
     <Panel eyebrow="Matrix" title="Origin Scorecard" subtitle="当月、同比、累计、累计同比矩阵。">
       <MatrixTable matrix={page.matrix} />
@@ -843,13 +952,17 @@ function OriginSection({
     <>
       <section className="market-scan-callout">{page.summaryText}</section>
       {compact ? (
-        <div className="market-scan-grid market-scan-grid--two-wide">
-          {trendPanel}
-          {matrixPanel}
-        </div>
+        <>
+          <div className="market-scan-grid market-scan-grid--two-wide">
+            {trendPanel}
+            {matrixPanel}
+          </div>
+          {brandTrendPanel}
+        </>
       ) : (
         <>
           {trendPanel}
+          {brandTrendPanel}
           {matrixPanel}
         </>
       )}
@@ -871,7 +984,7 @@ function SegmentSection({
   return (
     <>
       <section className="market-scan-callout">{page.summaryText}</section>
-      <div className="market-scan-grid market-scan-grid--two-wide">
+      <div className="market-scan-grid market-scan-grid--two">
         <Panel
           eyebrow="Trend"
           title="SUV vs Sedan Share"
@@ -887,10 +1000,25 @@ function SegmentSection({
             height={compact ? 268 : 400}
           />
         </Panel>
-        <Panel eyebrow="Matrix" title="Segment Matrix" subtitle="不同长度级别的当月与累计表现。">
-          <MatrixTable matrix={page.matrix} />
+        <Panel
+          eyebrow="Trend"
+          title="SUV Segment Share"
+          subtitle="把 SUV 市占拆成 SUV-A00 / SUV-A0 / SUV-A / ≥SUV-B。"
+        >
+          <PlotlyChart
+            data={buildSuvSegmentShareData(page.suvSegmentShareTrend.items, showDataLabels, labelDigits)}
+            layout={{
+              ...CHART_LAYOUT,
+              xaxis: { type: "category" },
+              yaxis: { title: { text: "占比" }, tickformat: ".0%", range: [0, 1] },
+            }}
+            height={compact ? 268 : 400}
+          />
         </Panel>
       </div>
+      <Panel eyebrow="Matrix" title="Segment Matrix" subtitle="不同长度级别的当月与累计表现。">
+        <MatrixTable matrix={page.matrix} />
+      </Panel>
     </>
   );
 }

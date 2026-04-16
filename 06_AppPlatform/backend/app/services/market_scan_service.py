@@ -32,11 +32,25 @@ NUMBER_TO_MONTH_NAME = {value: key for key, value in MONTH_NAME_TO_NUMBER.items(
 DEFAULT_FUEL_TYPES = ("ICE", "MHEV", "HEV", "PHEV", "BEV", "LPG")
 DRILLDOWN_PANEL_FUELS = ("BEV", "PHEV", "HEV", "MHEV", "ICE")
 PRIMARY_ORIGINS = ("欧系", "日系", "韩系", "美系", "中系")
+ORIGIN_BRAND_TREND_LIMIT = 4
 SEGMENT_MATRIX_ORDER = (
     "SUV-A00",
     "SUV-A0",
     "SUV-A",
     "≥SUV-B",
+    "SD-A00",
+    "SD-A0",
+    "SD-A",
+    "SD-B",
+    "SD-C",
+)
+SUV_SEGMENT_SHARE_ORDER = (
+    "SUV-A00",
+    "SUV-A0",
+    "SUV-A",
+    "≥SUV-B",
+)
+SEDAN_SEGMENT_SHARE_ORDER = (
     "SD-A00",
     "SD-A0",
     "SD-A",
@@ -639,6 +653,34 @@ def _build_origin_payload(
     prior_total = float(grouped[prior_column].sum()) if prior_column and prior_column in grouped.columns else 0.0
     same_month_total = float(grouped[same_month_column].sum()) if same_month_column and same_month_column in grouped.columns else 0.0
 
+    brand_trend_groups: list[dict[str, Any]] = []
+    for origin in ordered_origins:
+        origin_frame = frame[frame["__origin"] == origin].copy()
+        brand_grouped = _volume_by_group(origin_frame, "__brand", trend_columns)
+        if brand_grouped.empty:
+            continue
+        ranked_brands = _ranked_index(brand_grouped[current_column]) if current_column in brand_grouped.columns else []
+        selected_brands = [brand for brand, _ in ranked_brands[:ORIGIN_BRAND_TREND_LIMIT]]
+        if not selected_brands:
+            continue
+        brand_series: list[dict[str, Any]] = []
+        for brand in selected_brands:
+            points: list[dict[str, Any]] = []
+            for period in trend_periods:
+                column = _period_to_month_column(period)
+                month_total = float(brand_grouped[column].sum()) if column in brand_grouped.columns else 0.0
+                brand_value = float(brand_grouped.at[brand, column]) if brand in brand_grouped.index and column in brand_grouped.columns else 0.0
+                points.append(
+                    {
+                        "period": period,
+                        "label": _short_period_label(period),
+                        "volume": brand_value,
+                        "sharePct": _safe_share(brand_value, month_total),
+                    }
+                )
+            brand_series.append({"brand": brand, "points": points})
+        brand_trend_groups.append({"origin": origin, "series": brand_series})
+
     summary_frame = pd.DataFrame(index=ordered_origins)
     summary_frame["current"] = grouped[current_column] if current_column in grouped.columns else 0.0
     summary_frame["prior"] = grouped[prior_column] if prior_column and prior_column in grouped.columns else 0.0
@@ -684,6 +726,7 @@ def _build_origin_payload(
     return {
         "summaryText": summary_text,
         "trend": {"series": series},
+        "brandTrend": {"groups": brand_trend_groups},
         "matrix": {"columns": ordered_origins, "rows": matrix_rows},
     }
 
@@ -704,6 +747,7 @@ def _build_segment_payload(
             "summaryText": "当前筛选下没有可用的细分市场数据。",
             "matrix": {"columns": list(SEGMENT_MATRIX_ORDER), "rows": []},
             "bodyShareTrend": {"items": []},
+            "suvSegmentShareTrend": {"items": []},
         }
 
     current_column = _period_to_month_column(resolved_period)
@@ -748,10 +792,19 @@ def _build_segment_payload(
 
     trend_periods = _window_periods(available_periods, resolved_period, body_window_months)
     trend_items = []
+    suv_segment_trend_items = []
     for period in trend_periods:
         column = _period_to_month_column(period)
-        suv_volume = float(working.loc[working["__segment_bucket"].str.startswith("SUV"), column].sum()) if column in working.columns else 0.0
-        sedan_volume = float(working.loc[working["__segment_bucket"].str.startswith("SD"), column].sum()) if column in working.columns else 0.0
+        suv_volume = (
+            float(working.loc[working["__segment_bucket"].isin(SUV_SEGMENT_SHARE_ORDER), column].sum())
+            if column in working.columns
+            else 0.0
+        )
+        sedan_volume = (
+            float(working.loc[working["__segment_bucket"].isin(SEDAN_SEGMENT_SHARE_ORDER), column].sum())
+            if column in working.columns
+            else 0.0
+        )
         total_volume = float(working[column].sum()) if column in working.columns else 0.0
         trend_items.append(
             {
@@ -760,6 +813,20 @@ def _build_segment_payload(
                 "suvSharePct": _safe_share(suv_volume, total_volume),
                 "sedanSharePct": _safe_share(sedan_volume, total_volume),
                 "totalVolume": total_volume,
+            }
+        )
+        suv_segment_trend_items.append(
+            {
+                "period": period,
+                "label": _short_period_label(period),
+                "totalVolume": total_volume,
+                "segmentSharePct": {
+                    bucket: _safe_share(
+                        float(working.loc[working["__segment_bucket"] == bucket, column].sum()) if column in working.columns else 0.0,
+                        total_volume,
+                    )
+                    for bucket in SUV_SEGMENT_SHARE_ORDER
+                },
             }
         )
 
@@ -783,6 +850,7 @@ def _build_segment_payload(
         "summaryText": f"{leading_body}市占率达 {leading_share * 100:.1f}% ，市场容量 {latest['totalVolume']:,.0f} 台，{fastest_segment} 同比 {fastest_delta['display']}。",
         "matrix": {"columns": list(SEGMENT_MATRIX_ORDER), "rows": matrix_rows},
         "bodyShareTrend": {"items": trend_items},
+        "suvSegmentShareTrend": {"items": suv_segment_trend_items},
     }
 
 
