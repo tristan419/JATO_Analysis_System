@@ -189,6 +189,33 @@ export function formatMetricValue(value: number): string {
   return Math.max(0, Math.round(value)).toLocaleString();
 }
 
+export function isDashboardBootstrapping(
+  filtersReady: boolean,
+  loading: boolean,
+  overview: OverviewResponse | null,
+): boolean {
+  return !filtersReady && loading && overview === null;
+}
+
+export function formatDashboardSummaryMetric(
+  value: number | null | undefined,
+  bootstrapping: boolean,
+): string {
+  if (bootstrapping) return "...";
+  return Math.max(0, Math.round(Number(value ?? 0))).toLocaleString();
+}
+
+export function getDashboardLensSummary(
+  activeFilterSummary: string,
+  activeFilterCount: number,
+  bootstrapping: boolean,
+): string {
+  if (bootstrapping && activeFilterCount === 0) {
+    return "Loading default powertrain lens...";
+  }
+  return activeFilterSummary;
+}
+
 export function summarizeScopeValues(values: string[]): string {
   if (values.length === 0) return "-";
   if (values.length <= 2) return values.join(" · ");

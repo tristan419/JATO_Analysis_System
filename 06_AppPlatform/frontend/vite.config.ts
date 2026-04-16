@@ -23,7 +23,11 @@ export default defineConfig({
           if (id.includes("react-router")) {
             return "router-vendor";
           }
-          if (id.includes("react-dom") || id.includes("/react/")) {
+          if (
+            id.includes("scheduler")
+            || id.includes("react-dom")
+            || id.includes("/react/")
+          ) {
             return "react-vendor";
           }
           return "vendor";

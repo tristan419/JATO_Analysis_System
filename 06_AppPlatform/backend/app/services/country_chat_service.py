@@ -14,7 +14,9 @@ from app.services import query_service
 from app.services import market_scan_service
 from app.services import insight_card_service
 from app.services import country_profiles
+from app.services import local_wiki_service
 from app.services import news_digest_service
+from app.services import news_wiki_service
 
 
 enable_external_scraper_package()
@@ -33,6 +35,8 @@ TOP_BRAND_LIMIT = 15
 TOP_MODEL_LIMIT = 10
 TOP_POWERTRAIN_LIMIT = 6
 CONTEXT_CHAR_BUDGET = 24_000
+MAX_DECK_BASE_INTENTS = 3
+MAX_DECK_INTENTS = 5
 
 INTENT_PRIORITY = [
     "positioning-analysis",
@@ -106,7 +110,8 @@ _SYSTEM_PROMPT = (
     "8. 竞品狙击：提到具体车型/品牌/尺寸时，利用定位地图(positioningMap)进行降维打击式分析。\n"
     "9. BEV 战局：剖析 bevShareBySegment，指出新能源突破口。\n"
     "10. 价格带切割：结合 priceDistribution 定位溢价/折价空间，给出定价策略建议。\n"
-    "11. 国家热点嗅觉：当 countryProfile 可用时，结合当地政策/补贴/关税热点来解读数据变化。"
+    "11. 结构化排版（极其重要）：任何时候提及【竞品对比】、【具体版型差异】、【尺寸价格对比】时，**必须且只能以 Markdown 表格** 的形式进行严谨排版。不要使用冗长的自然段落罗列。\n"
+    "12. 国家热点嗅觉：当 countryProfile 可用时，结合当地政策/补贴/关税热点来解读数据变化。"
     "例如'BEV份额大幅下降' → 关联'补贴终止'。当 newsDigest 或 marketEvents 可用时，"
     "优先把最新新闻与数据变化串起来解释。融入分析，不要机械列举。\n\n"
     "数据字段说明：\n"
@@ -383,13 +388,14 @@ def build_country_chart_deck(
         merged_params["model"] = str(selected_model).strip()
     if model_top_n is not None:
         merged_params["model_top_n"] = int(model_top_n)
-    base_intents = _normalize_intents(
+    inferred_intents = _normalize_intents(
         intents
         or (
             infer_country_chat_intents(normalized_question)
             if normalized_question else ["general-summary"]
         ),
     )
+    base_intents = _limit_intents_for_deck(inferred_intents)
     deck_intents = _chart_deck_intents(base_intents)
 
     snapshot = build_country_snapshot(
@@ -1280,6 +1286,58 @@ def _build_sales_rankings(
     ]
 
 
+def _query_local_wiki(
+    query: str,
+    country: str,
+    brand: str = "",
+    model: str = "",
+) -> list[str]:
+    """Retrieve fine-grained vehicle specifications from local wiki."""
+    results = local_wiki_service.query_local_wiki_documents(
+        query,
+        country=country,
+        brand=brand,
+        model=model,
+        limit=5,
+    )
+    if results:
+        return results
+    return [
+        "Local vehicle_wiki is unavailable or returned no matching facts."
+    ]
+
+
+def _query_news_wiki(
+    query: str,
+    snapshot: dict[str, Any],
+) -> list[dict[str, Any]]:
+    news_digest = snapshot.get("newsDigest")
+    market_events = snapshot.get("marketEvents")
+    if not news_digest and not market_events:
+        country = str(snapshot.get("country") or "").strip()
+        if country:
+            try:
+                refreshed = news_digest_service.refresh_country_news(
+                    country,
+                    persist=False,
+                    enrich_with_gemini=None,
+                )
+                news_digest = refreshed.get("newsDigest")
+                market_events = refreshed.get("marketEvents")
+                snapshot["newsDigest"] = news_digest
+                snapshot["marketEvents"] = market_events or []
+            except Exception as exc:  # noqa: BLE001
+                log.warning("On-demand news refresh failed: %s", exc)
+
+    results = news_wiki_service.query_news_wiki(
+        query,
+        news_digest=news_digest,
+        market_events=market_events,
+        limit=4,
+    )
+    return results
+
+
 def _answer_with_nvidia(
     *,
     country: str,
@@ -1289,10 +1347,9 @@ def _answer_with_nvidia(
     snapshot: dict[str, Any],
     history: list[dict[str, str]],
 ) -> str:
-    context = _select_context_for_intents(snapshot, intents)
     client = NvidiaChatClient(default_model=DEFAULT_NVIDIA_CHAT_MODEL)
     primary_intent = intents[0] if intents else "general-summary"
-    messages = [
+    messages: list[Any] = [
         ChatMessage(role="system", content=_SYSTEM_PROMPT),
     ]
     for turn in history[-MAX_HISTORY_TURNS:]:
@@ -1300,32 +1357,212 @@ def _answer_with_nvidia(
         content = str(turn.get("content", "")).strip()
         if role not in {"user", "assistant"} or not content:
             continue
-        messages.append(ChatMessage(role=role, content=content[:2000]))
+        messages.append({"role": role, "content": content[:2000]})
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "query_market_kpis",
+                "description": "获取当前国家市场总体概况（品牌数量、车型数量、总销量、同比等宏观情况）。",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "query_top_brands",
+                "description": "获取当前国家市场销量排名前列的汽车品牌列表及其市场份额数据。",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "query_powertrain_mix",
+                "description": "获取该国市场的动力类型分布（如 BEV, PHEV, HEV 的销量、份额排名），用于计算新能源渗透率。",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "query_positioning_map",
+                "description": "获取各类竞品的售价(MSRP)和车长(mm)定位矩阵（非常适合竞品分析、售价战分析）。",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "query_segment_metrics",
+                "description": "获取轿车(Sedan)和SUV各级别(Segment)趋势、以及各类车型的销售矩阵。",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "query_news_and_events",
+                "description": "获取该国的汽车市场本地政策、法规关税、近期新闻事件及宏观投资摘要。",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "query_news_wiki",
+                "description": "检索新闻事实层，返回和当前问题最相关的政策、补贴、关税、竞争事件或 Gemini 新闻摘要片段。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "例如 '德国公司车税收支持对 BEV 有什么影响'。"
+                        }
+                    },
+                    "required": ["query"]
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "query_local_wiki",
+                "description": "检索本地 RAG 知识库，获取特定车辆的精确尺寸（长度/轴距）和MSRP建议零售价数据。当用户询问某款车型的长宽高或售价时调用此工具。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "具体的查询句子，例如 'Volkswagen XC60 的尺寸和售价'。"
+                        },
+                        "brand": {
+                            "type": "string",
+                            "description": "汽车品牌名称（可选），如果已知则填入以缩小搜索范围。"
+                        },
+                        "model": {
+                            "type": "string",
+                            "description": "车型系列名称（可选），如果已知则填入以缩小搜索范围。"
+                        }
+                    },
+                    "required": ["query"]
+                },
+            },
+        },
+    ]
 
     messages.append(
-        ChatMessage(
-            role="user",
-            content=(
+        {
+            "role": "user",
+            "content": (
                 f"国家: {country}\n"
-                f"推断主意图: {primary_intent}\n"
-                f"相关意图: {', '.join(intents)}\n"
                 f"用户问题: {question}\n"
-                f"解析参数: {json.dumps(user_params, ensure_ascii=False)}\n"
-                "国家数据快照(JSON):\n"
-                f"{json.dumps(context, ensure_ascii=False)}"
+                f"已解析参数: {json.dumps(user_params, ensure_ascii=False)}\n\n"
+                "请先调用一个或多个工具，根据回答需要的材料查询实时数据。"
+                "涉及车型尺寸/价格时优先用 query_local_wiki；"
+                "涉及新闻、政策、补贴、关税、竞争事件时优先用 query_news_wiki。"
+                "拿到 tool 的返回值后综合思考，再用表格输出竞品分析。"
             ),
+        }
+    )
+
+    max_tool_turns = 3
+    turn_count = 0
+
+    while turn_count < max_tool_turns:
+        response = client.chat(
+            messages,
+            max_tokens=1024,
+            temperature=0.2,
+            timeout=60,
+            tools=tools,
         )
-    )
-    response = client.chat(
-        messages,
-        max_tokens=1024,
-        temperature=0.2,
-        timeout=60,
-    )
-    text = (response.text or "").strip()
-    if not text:
-        raise RuntimeError("NVIDIA 返回了空响应")
-    return text
+        
+        first_msg = response.first_message
+        if not first_msg:
+            raise RuntimeError("NVIDIA 返回了空响应")
+
+        tool_calls = first_msg.get("tool_calls")
+        if not tool_calls:
+            text = (response.text or "").strip()
+            if not text:
+                raise RuntimeError("NVIDIA 返回了空文本内容")
+            return text
+
+        # 记录模型调用的请求
+        messages.append(first_msg)
+
+        # 逐个执行对应的方法并返回结果
+        for tc in tool_calls:
+            tc_id = tc.get("id")
+            func = tc.get("function", {})
+            fn_name = func.get("name")
+
+            tool_result_obj: Any = {}
+            if fn_name == "query_market_kpis":
+                tool_result_obj = snapshot.get("kpis", {})
+            elif fn_name == "query_top_brands":
+                tool_result_obj = snapshot.get("ytdBrandRanking", snapshot.get("topBrands", []))
+            elif fn_name == "query_powertrain_mix":
+                tool_result_obj = snapshot.get("powertrainMix", [])
+            elif fn_name == "query_positioning_map":
+                tool_result_obj = snapshot.get("positioningMap", {})
+            elif fn_name == "query_segment_metrics":
+                tool_result_obj = {
+                    "matrix": snapshot.get("segmentMatrix", {}),
+                    "suvSedanTrend": snapshot.get("suvSedanTrend", []),
+                }
+            elif fn_name == "query_news_and_events":
+                tool_result_obj = {
+                    "profile": snapshot.get("countryProfile", country_profiles.get_compact_profile(country)),
+                    "events": _compact_market_events_for_context(snapshot.get("marketEvents", []), limit=3) if snapshot.get("marketEvents") else [],
+                    "digest": snapshot.get("newsDigest", {}),
+                }
+            elif fn_name == "query_news_wiki":
+                try:
+                    args = json.loads(
+                        tc.get("function", {}).get("arguments", "{}")
+                    )
+                    q_text = args.get("query", question)
+                    news_hits = _query_news_wiki(q_text, snapshot)
+                    tool_result_obj = {"news_facts": news_hits}
+                except Exception as e:
+                    tool_result_obj = {
+                        "error": f"Failed to query news wiki: {e}"
+                    }
+            elif fn_name == "query_local_wiki":
+                # Assuming func['arguments'] comes as a JSON string from LLM in NVIDIA NIM
+                try:
+                    args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                    q_brand = args.get("brand") or user_params.get("brand", "")
+                    q_model = args.get("model") or user_params.get("model", "")
+                    q_text = args.get("query", question)
+                    wiki_results = _query_local_wiki(
+                        query=q_text, 
+                        country=country, 
+                        brand=q_brand, 
+                        model=q_model
+                    )
+                    tool_result_obj = {"wiki_facts": wiki_results}
+                except Exception as e:
+                    tool_result_obj = {"error": f"Failed to parse or query RAG: {e}"}
+            else:
+                tool_result_obj = {"error": f"Unknown tool {fn_name}"}
+
+            # 序列化为 JSON 字符串交还给 LLM
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "name": fn_name,
+                    "content": json.dumps(tool_result_obj, ensure_ascii=False)[:3000],  # 截断以避免单次Token超出限制
+                }
+            )
+
+        turn_count += 1
+        
+    return "分析中断：模型执行函数调用层级过深，未能生成最终解答。"
 
 
 def _select_context_for_intent(
@@ -1631,7 +1868,7 @@ def _build_fallback_answer(
         if ytd_brands:
             top3 = "、".join(
                 f"{b.get('brand', '?')}({b.get('volume', 0):,}辆, "
-                f"份额{b.get('share', 0):.1f}%)"
+                f"MS{b.get('share', 0):.1f}%)"
                 for b in ytd_brands[:3]
             )
             return (
@@ -1900,8 +2137,48 @@ def _normalize_intents(intents: list[str]) -> list[str]:
     return ordered or ["general-summary"]
 
 
+def _limit_intents_for_deck(intents: list[str]) -> list[str]:
+    ordered = _normalize_intents(intents)
+    return ordered[:MAX_DECK_BASE_INTENTS] if ordered else ["general-summary"]
+
+
+_DECK_INTENT_EXPANSIONS: dict[str, list[str]] = {
+    "positioning-analysis": ["competitive", "pricing-summary"],
+    "competitive": ["positioning-analysis", "brand-ranking"],
+    "segment-analysis": ["trend-summary", "nev-analysis"],
+    "origin-analysis": ["competitive", "trend-summary"],
+    "market-context": ["trend-summary", "brand-ranking"],
+    "nev-analysis": ["powertrain-mix", "segment-analysis"],
+    "pricing-summary": ["positioning-analysis", "competitive"],
+    "brand-ranking": ["trend-summary", "powertrain-mix"],
+    "powertrain-mix": ["nev-analysis", "pricing-summary"],
+    "trend-summary": ["brand-ranking", "segment-analysis"],
+    "general-summary": ["brand-ranking", "segment-analysis", "trend-summary"],
+}
+
+
 def _chart_deck_intents(intents: list[str]) -> list[str]:
-    return _normalize_intents([*intents, *INTENT_PRIORITY])
+    base = _limit_intents_for_deck(intents)
+    candidates = list(base)
+    for intent in base:
+        candidates.extend(_DECK_INTENT_EXPANSIONS.get(intent, []))
+
+    ordered = _normalize_intents(candidates)
+    if len(ordered) <= MAX_DECK_INTENTS:
+        return ordered
+
+    selected: list[str] = []
+    for intent in ordered:
+        if intent in base and intent not in selected:
+            selected.append(intent)
+
+    for intent in ordered:
+        if intent in selected:
+            continue
+        selected.append(intent)
+        if len(selected) >= MAX_DECK_INTENTS:
+            break
+    return selected
 
 
 def _strip_fallback_intro(text: str) -> str:

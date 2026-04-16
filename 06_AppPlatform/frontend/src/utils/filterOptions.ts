@@ -20,7 +20,25 @@ export function buildFilterOptionsCacheKey(payload: FilterOptionsPayload): strin
 }
 
 export function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
+  if (error instanceof DOMException) {
+    return error.name === "AbortError";
+  }
+
+  if (error instanceof Error) {
+    return error.name === "AbortError" || /\babort(?:ed)?\b/i.test(error.message);
+  }
+
+  if (typeof error === "object" && error !== null) {
+    const name = "name" in error ? String(error.name ?? "") : "";
+    const message = "message" in error ? String(error.message ?? "") : "";
+    return name === "AbortError" || /\babort(?:ed)?\b/i.test(message);
+  }
+
+  if (typeof error === "string") {
+    return /\babort(?:ed)?\b/i.test(error);
+  }
+
+  return false;
 }
 
 export function cloneFilterSelections(source: FilterSelections): FilterSelections {

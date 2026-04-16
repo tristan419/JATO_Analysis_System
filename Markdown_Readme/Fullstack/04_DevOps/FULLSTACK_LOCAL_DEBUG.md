@@ -5,32 +5,41 @@
 在项目根目录执行：
 
 ```bash
-bash 03_Scripts/fullstack_dev.sh start
+bash 03_Scripts/local_dev/start_fullstack_local.sh start
 ```
 
 脚本会自动：
 
 1. 先停止已存在的 FastAPI 后端和 Vite 前端
-2. 再重新启动 FastAPI 后端和 Vite 前端
-3. 自动探测端口冲突并切换空闲端口
-4. 输出运行地址与日志路径
+2. 启动并校验本地 PostgreSQL；如果 `5432` 被别的实例占用，会自动改用空闲端口启动自己的容器
+3. 再重新启动 FastAPI 后端和 Vite 前端
+4. 自动探测前后端端口冲突并切换空闲端口
+5. 输出运行地址与日志路径
+
+如果你偏好双击启动，在 macOS 里也可以直接运行：
+
+```bash
+open 03_Scripts/DoubleClick/start_local_fullstack.command
+```
 
 如果你只是想查看状态或只做烟测，可以继续使用 `status` / `test` / `stop` / `restart`。
+
+PostgreSQL 的实际连接信息会写到 `06_AppPlatform/.runtime/postgres.env`，双击脚本也会把最终使用的端口打印出来。
 
 ## 2. 常用命令
 
 ```bash
 # 查看状态
-bash 03_Scripts/fullstack_dev.sh status
+bash 03_Scripts/local_dev/start_fullstack_local.sh status
 
 # 联调烟测
-bash 03_Scripts/fullstack_dev.sh test
+bash 03_Scripts/local_dev/start_fullstack_local.sh test
 
 # 重启
-bash 03_Scripts/fullstack_dev.sh restart
+bash 03_Scripts/local_dev/fullstack_dev.sh restart
 
 # 停止
-bash 03_Scripts/fullstack_dev.sh stop
+bash 03_Scripts/local_dev/start_fullstack_local.sh stop
 ```
 
 ## 3. 权限相关（已启用）
@@ -51,7 +60,7 @@ bash 03_Scripts/fullstack_dev.sh stop
 可按需覆盖：
 
 ```bash
-APP_AUTH_TOKEN=my-token APP_USER_ROLE=viewer bash 03_Scripts/fullstack_dev.sh start
+APP_AUTH_TOKEN=my-token APP_USER_ROLE=viewer bash 03_Scripts/local_dev/start_fullstack_local.sh start
 ```
 
 ## 4. 联调检查清单

@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from threading import BoundedSemaphore
 from typing import Any, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -67,9 +69,46 @@ DEFAULT_GEMINI_TIMEOUT_SECONDS = max(
         ).strip()
     ),
 )
+DEFAULT_GEMINI_MAX_RETRIES = max(
+    0,
+    int(
+        (
+            os.getenv(
+                "APP_COUNTRY_NEWS_GEMINI_MAX_RETRIES",
+                "3",
+            )
+            or "3"
+        ).strip()
+    ),
+)
+DEFAULT_GEMINI_RETRY_BACKOFF_SECONDS = max(
+    0.25,
+    float(
+        (
+            os.getenv(
+                "APP_COUNTRY_NEWS_GEMINI_RETRY_BACKOFF_SECONDS",
+                "1.5",
+            )
+            or "1.5"
+        ).strip()
+    ),
+)
+DEFAULT_GEMINI_MAX_CONCURRENCY = max(
+    1,
+    int(
+        (
+            os.getenv(
+                "APP_COUNTRY_NEWS_GEMINI_MAX_CONCURRENCY",
+                "1",
+            )
+            or "1"
+        ).strip()
+    ),
+)
 
 _COUNTRY_CONFIGS: dict[str, CountryNewsConfig] | None = None
 _COUNTRY_ALIASES: dict[str, str] | None = None
+_GEMINI_CONCURRENCY_GUARD = BoundedSemaphore(DEFAULT_GEMINI_MAX_CONCURRENCY)
 
 
 def _normalize_alias(value: str) -> str:
@@ -896,18 +935,39 @@ def _generate_gemini_news_digest(
         method="POST",
     )
 
-    try:
-        with urlopen(
-            request,
-            timeout=DEFAULT_GEMINI_TIMEOUT_SECONDS,
-        ) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
-        log.warning(
-            "Gemini news digest failed for %s: %s",
-            country_config.country_code,
-            exc,
-        )
+    payload: dict[str, Any] | None = None
+    with _GEMINI_CONCURRENCY_GUARD:
+        for attempt in range(DEFAULT_GEMINI_MAX_RETRIES + 1):
+            try:
+                with urlopen(
+                    request,
+                    timeout=DEFAULT_GEMINI_TIMEOUT_SECONDS,
+                ) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                break
+            except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+                if attempt >= DEFAULT_GEMINI_MAX_RETRIES or not _is_retryable_gemini_error(
+                    exc
+                ):
+                    log.warning(
+                        "Gemini news digest failed for %s: %s",
+                        country_config.country_code,
+                        exc,
+                    )
+                    return None
+
+                backoff_seconds = _gemini_retry_delay_seconds(exc, attempt)
+                log.info(
+                    "Gemini news digest retry %s/%s for %s after %.2fs: %s",
+                    attempt + 1,
+                    DEFAULT_GEMINI_MAX_RETRIES,
+                    country_config.country_code,
+                    backoff_seconds,
+                    exc,
+                )
+                time.sleep(backoff_seconds)
+
+    if payload is None:
         return None
 
     text = _extract_gemini_response_text(payload)
@@ -931,6 +991,36 @@ def _generate_gemini_news_digest(
         "highlights": _normalize_highlights(parsed.get("highlights")),
         "events": _normalize_event_overrides(parsed.get("events")),
     }
+
+
+def _is_retryable_gemini_error(exc: Exception) -> bool:
+    if isinstance(exc, HTTPError):
+        return exc.code == 429 or 500 <= exc.code < 600
+    if isinstance(exc, (URLError, TimeoutError)):
+        return True
+    return False
+
+
+def _gemini_retry_delay_seconds(exc: Exception, attempt: int) -> float:
+    if isinstance(exc, HTTPError):
+        retry_after = exc.headers.get("Retry-After") if exc.headers else None
+        parsed_retry_after = _parse_retry_after_seconds(retry_after)
+        if parsed_retry_after is not None:
+            return max(
+                parsed_retry_after,
+                DEFAULT_GEMINI_RETRY_BACKOFF_SECONDS,
+            )
+    return DEFAULT_GEMINI_RETRY_BACKOFF_SECONDS * (2**attempt)
+
+
+def _parse_retry_after_seconds(value: str | None) -> float | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return None
 
 
 def _build_gemini_prompt(

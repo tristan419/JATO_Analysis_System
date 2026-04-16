@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/JATO_Analysis_System
+WorkingDirectory=/opt/JATO_Analysis_System-main
 
 # Recommended: run as a non-root user.
 # User=deploy
@@ -24,7 +24,7 @@ Environment="STREAMLIT_THEME_FONT=sans serif"
 Environment="JATO_PERFORMANCE_FIRST_MODE=true"
 Environment="JATO_DYNAMIC_AGGREGATION_ENABLED=true"
 
-ExecStart=/opt/JATO_Analysis_System/.venv/bin/python -m streamlit run /opt/JATO_Analysis_System/05_DashBoard/app.py --server.address 0.0.0.0 --server.port %i --server.headless true --browser.gatherUsageStats false
+ExecStart=/opt/JATO_Analysis_System-main/.venv/bin/python -m streamlit run /opt/JATO_Analysis_System-main/05_DashBoard/app.py --server.address 0.0.0.0 --server.port %i --server.headless true --browser.gatherUsageStats false
 
 Restart=always
 RestartSec=3

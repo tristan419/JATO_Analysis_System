@@ -40,7 +40,10 @@ import {
   asMetaText,
   asMetaStringArray,
   asMetaRecordArray,
+  formatDashboardSummaryMetric,
   getLoadingMetricValue,
+  getDashboardLensSummary,
+  isDashboardBootstrapping,
   formatMetricValue,
   summarizeScopeValues,
   getMetricDensityClass,
@@ -68,6 +71,7 @@ export function DashboardPage() {
     overview,
     yearSeries,
     monthSeries,
+    filtersReady,
     loading,
     optionsSyncPending,
     error: sharedError,
@@ -324,13 +328,23 @@ export function DashboardPage() {
 
   /* ── derived chart data ──────────────────────────── */
   const kpis = overview?.kpis;
+  const dashboardBootstrapping = useMemo(
+    () => isDashboardBootstrapping(filtersReady, loading, overview),
+    [filtersReady, loading, overview],
+  );
   const timeWindowLabel = timeRange ? `${timeRange.start} ~ ${timeRange.end}` : "Full timeline";
+  const activeFilterSummaryText = useMemo(
+    () => getDashboardLensSummary(activeFilterSummary, activeFilters.length, dashboardBootstrapping),
+    [activeFilterSummary, activeFilters.length, dashboardBootstrapping],
+  );
   const activeLensTokens = useMemo(() => {
-    const filterTokens = activeFilters.length === 0
+    const filterTokens = dashboardBootstrapping
+      ? [activeFilterSummaryText]
+      : activeFilters.length === 0
       ? ["Default powertrain lens"]
       : activeFilters.map(({ key, label }) => `${label}: ${summarizeScopeValues(selections[key])}`);
     return [...filterTokens, `Time window: ${timeWindowLabel}`];
-  }, [activeFilters, selections, timeWindowLabel]);
+  }, [activeFilterSummaryText, activeFilters, dashboardBootstrapping, selections, timeWindowLabel]);
   const activeFilterCount = activeFilters.length;
   const isGrouped = tsMode === "\u5206\u7ec4";
   const singleSeries = activeTab === "year" ? yearSeries : monthSeries;
@@ -494,12 +508,12 @@ export function DashboardPage() {
   const heroVersionCountText = useMemo(() => formatMetricValue(heroVersionCount), [heroVersionCount]);
   const sidebarSummaryItems = useMemo(
     () => [
-      { key: "rows", label: "筛选后记录数", value: (kpis?.totalRows ?? 0).toLocaleString() },
-      { key: "brands", label: "品牌数", value: (kpis?.brandCount ?? 0).toLocaleString() },
-      { key: "models", label: "Model 数", value: (kpis?.modelCount ?? 0).toLocaleString() },
-      { key: "versions", label: "Version 数", value: (kpis?.versionCount ?? 0).toLocaleString() },
+      { key: "rows", label: "筛选后记录数", value: formatDashboardSummaryMetric(kpis?.totalRows, dashboardBootstrapping) },
+      { key: "brands", label: "品牌数", value: formatDashboardSummaryMetric(kpis?.brandCount, dashboardBootstrapping) },
+      { key: "models", label: "Model 数", value: formatDashboardSummaryMetric(kpis?.modelCount, dashboardBootstrapping) },
+      { key: "versions", label: "Version 数", value: formatDashboardSummaryMetric(kpis?.versionCount, dashboardBootstrapping) },
     ],
-    [kpis],
+    [dashboardBootstrapping, kpis],
   );
   const sidebarSummaryDensityClass = useMemo(
     () => getUnifiedMetricDensityClass(sidebarSummaryItems.map((item) => item.value)),
@@ -927,7 +941,7 @@ export function DashboardPage() {
         onToggle={() => setSidebarCollapsed((current) => !current)}
         kicker="01 / Filter Stack"
         title="全维度筛选"
-        summary={activeFilterSummary}
+        summary={activeFilterSummaryText}
         expandedLabel="展开筛选面板"
         collapsedLabel="收起筛选面板"
         expandedTitle="Expand filters"
@@ -944,7 +958,7 @@ export function DashboardPage() {
               </div>
             ))}
           </div>
-          <div className="dashboard-sidebar-caption">{activeFilterSummary}</div>
+          <div className="dashboard-sidebar-caption">{activeFilterSummaryText}</div>
 
           <div className="dashboard-sidebar-toolbar">
             <button className="btn btn-sm btn-secondary" onClick={resetFilters}>{"\u91cd\u7f6e\u7b5b\u9009"}</button>
@@ -980,7 +994,7 @@ export function DashboardPage() {
                 <h1>Dashboard Control View</h1>
                 <div className="dashboard-hero-inline-summary">
                   <span className="selection-ribbon-label">Active lens</span>
-                  <span className="selection-ribbon-value">{activeFilterSummary}</span>
+                  <span className="selection-ribbon-value">{activeFilterSummaryText}</span>
                 </div>
               </div>
 
@@ -994,7 +1008,13 @@ export function DashboardPage() {
                 <div className={`hero-meta-block hero-meta-block-immersive${loading ? " is-loading" : ""}`}>
                   <span className="hero-meta-label">Version count</span>
                   <strong className={`hero-meta-value hero-meta-animated-value${getMetricDensityClass(heroVersionCountText)}`} title={heroVersionCountText}>{heroVersionCountText}</strong>
-                  <span className="hero-meta-subvalue">{activeFilterCount ? `${activeFilterCount} filter dimensions active` : "Default powertrain lens"}</span>
+                  <span className="hero-meta-subvalue">
+                    {dashboardBootstrapping
+                      ? "Bootstrapping default lens"
+                      : activeFilterCount
+                      ? `${activeFilterCount} filter dimensions active`
+                      : "Default powertrain lens"}
+                  </span>
                   {loading && <span className="hero-meta-loader">SYNCING FILTER STATE</span>}
                 </div>
               </div>
@@ -1285,7 +1305,13 @@ export function DashboardPage() {
               <div className="hero-meta-block dashboard-deck-hero-stat">
                 <span className="hero-meta-label">Active Filters</span>
                 <strong className="hero-meta-value">{String(activeFilters.length)}</strong>
-                <span className="hero-meta-subvalue">{activeFilters.length ? activeFilterSummary : "Default powertrain lens"}</span>
+                <span className="hero-meta-subvalue">
+                  {dashboardBootstrapping
+                    ? "Bootstrapping default lens"
+                    : activeFilters.length
+                    ? activeFilterSummaryText
+                    : "Default powertrain lens"}
+                </span>
               </div>
             </div>
           </div>

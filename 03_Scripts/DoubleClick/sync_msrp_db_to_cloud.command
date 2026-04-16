@@ -3,7 +3,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-RUNNER_SCRIPT="$REPO_DIR/03_Scripts/schedule_msrp_sync_to_cloud.sh"
+RUNNER_SCRIPT="$REPO_DIR/03_Scripts/ops/schedule_msrp_sync_to_cloud.sh"
 
 export PATH="/opt/homebrew/opt/postgresql@16/bin:/opt/homebrew/opt/libpq/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 

@@ -1,26 +1,32 @@
 {
-  "generatedAtUtc": "2026-04-13T05:36:14.691622+00:00",
-  "jobId": "promote-2026-02-corrected",
+  "generatedAtUtc": "2026-04-15T18:21:19.851303+00:00",
+  "jobId": "promote-2026-03-partial12",
   "jobStatus": "success",
-  "strategy": "non_overlapping_merge",
-  "description": "18国新数据(含Feb2026) + 3国baseline(仅至Jan2026)无重叠合并",
+  "strategy": "partial_country_replacement",
+  "description": "12国三月新数据(含Mar2026) + 9国沿用当前正式数据",
   "input": {
-    "primarySource": "整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
-    "supplementSource": "整合版【已规整】JATO数据-【202301-202601】21国-baseline parquet",
+    "primarySource": "已规整-汇总-JATO数据-意 挪 罗尼 瑞士、西 荷 瑞典 克罗、法 希 捷 葡-【202301-202603】.xlsx",
+    "supplementSource": "04_Processed_data/.refresh_backups/promote-2026-03-partial12/jato_full_archive.parquet",
     "supplementCountries": [
+      "丹麦",
+      "匈牙利",
+      "奥地利",
+      "德国",
       "斯洛伐克",
       "斯洛文尼亚",
+      "比利时",
+      "波兰",
       "芬兰"
     ]
   },
   "output": {
-    "rows": 944362,
+    "rows": 950999,
     "columns": 96,
     "countries": 21,
     "parquetFile": "jato_full_archive.parquet",
     "partitionDir": "partitioned_dataset_v1"
   },
   "backup": {
-    "path": "04_Processed_data/.refresh_backups/promote-2026-02-corrected"
+    "path": "04_Processed_data/.refresh_backups/promote-2026-03-partial12"
   }
 }

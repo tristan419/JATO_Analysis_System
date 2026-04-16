@@ -1,0 +1,95 @@
+{
+  "generatedAtUtc": "2026-04-15T18:19:10.706243+00:00",
+  "manifestSchemaVersion": "1.1",
+  "pipelineVersion": "1.0",
+  "sourceParquet": "04_Processed_data/staging/2026-03-partial12/jato_full_archive.parquet",
+  "sourceManifestSchemaVersion": "1.1",
+  "outputDatasetDir": "04_Processed_data/staging/2026-03-partial12/partitioned_dataset_v1",
+  "partitionColumns": [
+    "国家"
+  ],
+  "rows": 536122,
+  "columns": 96,
+  "parquetFileCount": 12,
+  "partitionDirectoryCount": 12,
+  "partitionDirectories": [
+    "国家=%E5%85%8B%E7%BD%97%E5%9C%B0%E4%BA%9A",
+    "国家=%E5%B8%8C%E8%85%8A",
+    "国家=%E6%84%8F%E5%A4%A7%E5%88%A9",
+    "国家=%E6%8C%AA%E5%A8%81",
+    "国家=%E6%8D%B7%E5%85%8B",
+    "国家=%E6%B3%95%E5%9B%BD",
+    "国家=%E7%91%9E%E5%85%B8",
+    "国家=%E7%91%9E%E5%A3%AB",
+    "国家=%E7%BD%97%E9%A9%AC%E5%B0%BC%E4%BA%9A",
+    "国家=%E8%8D%B7%E5%85%B0",
+    "国家=%E8%91%A1%E8%90%84%E7%89%99",
+    "国家=%E8%A5%BF%E7%8F%AD%E7%89%99"
+  ],
+  "partitionStats": {
+    "国家=%E8%A5%BF%E7%8F%AD%E7%89%99": {
+      "rows": 74921,
+      "signature": "16112117681307944954"
+    },
+    "国家=%E8%8D%B7%E5%85%B0": {
+      "rows": 46478,
+      "signature": "16581868427593030820"
+    },
+    "国家=%E5%85%8B%E7%BD%97%E5%9C%B0%E4%BA%9A": {
+      "rows": 24929,
+      "signature": "11240056533167680424"
+    },
+    "国家=%E5%B8%8C%E8%85%8A": {
+      "rows": 17954,
+      "signature": "15059540006880884600"
+    },
+    "国家=%E7%BD%97%E9%A9%AC%E5%B0%BC%E4%BA%9A": {
+      "rows": 30930,
+      "signature": "16414292622649708209"
+    },
+    "国家=%E6%8D%B7%E5%85%8B": {
+      "rows": 41296,
+      "signature": "474376825256645346"
+    },
+    "国家=%E6%84%8F%E5%A4%A7%E5%88%A9": {
+      "rows": 100302,
+      "signature": "16626462821161941879"
+    },
+    "国家=%E6%B3%95%E5%9B%BD": {
+      "rows": 68067,
+      "signature": "12910804497497615795"
+    },
+    "国家=%E8%91%A1%E8%90%84%E7%89%99": {
+      "rows": 29299,
+      "signature": "15287179676010532938"
+    },
+    "国家=%E7%91%9E%E5%A3%AB": {
+      "rows": 54023,
+      "signature": "7610196550937322936"
+    },
+    "国家=%E7%91%9E%E5%85%B8": {
+      "rows": 33327,
+      "signature": "7496608313633693265"
+    },
+    "国家=%E6%8C%AA%E5%A8%81": {
+      "rows": 14596,
+      "signature": "15453446954439512965"
+    }
+  },
+  "parquetTotalBytes": 24879217,
+  "elapsedSeconds": 2.866,
+  "validationSummary": {
+    "inputRows": 536122,
+    "inputColumns": 96,
+    "partitionCardinality": {
+      "国家": 12
+    }
+  },
+  "partitionUpdateSummary": {
+    "mode": "full_rebuild",
+    "addedPartitions": 12,
+    "updatedPartitions": 0,
+    "removedPartitions": 0,
+    "rewrittenPartitions": 12
+  }
+}

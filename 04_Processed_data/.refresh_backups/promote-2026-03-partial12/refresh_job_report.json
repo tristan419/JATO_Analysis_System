@@ -1,0 +1,26 @@
+{
+  "generatedAtUtc": "2026-04-13T05:36:14.691622+00:00",
+  "jobId": "promote-2026-02-corrected",
+  "jobStatus": "success",
+  "strategy": "non_overlapping_merge",
+  "description": "18国新数据(含Feb2026) + 3国baseline(仅至Jan2026)无重叠合并",
+  "input": {
+    "primarySource": "整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+    "supplementSource": "整合版【已规整】JATO数据-【202301-202601】21国-baseline parquet",
+    "supplementCountries": [
+      "斯洛伐克",
+      "斯洛文尼亚",
+      "芬兰"
+    ]
+  },
+  "output": {
+    "rows": 944362,
+    "columns": 96,
+    "countries": 21,
+    "parquetFile": "jato_full_archive.parquet",
+    "partitionDir": "partitioned_dataset_v1"
+  },
+  "backup": {
+    "path": "04_Processed_data/.refresh_backups/promote-2026-02-corrected"
+  }
+}

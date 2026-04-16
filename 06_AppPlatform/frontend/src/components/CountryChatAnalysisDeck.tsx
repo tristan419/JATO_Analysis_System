@@ -4,24 +4,7 @@ import {
   useState,
   type ReactElement,
 } from "react";
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Scatter,
-  ScatterChart,
-  Tooltip,
-  XAxis,
-  YAxis,
-  ZAxis,
-} from "recharts";
+import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
 import type { CountryChatTranscriptMessage } from "../contexts/CountryChatContext";
@@ -34,6 +17,14 @@ import type {
   TimeSeriesPoint,
 } from "../types";
 import { ptColor } from "../utils/colors";
+import {
+  buildCategoryAxis,
+  TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT,
+} from "../utils/plotlyDefaults";
+import {
+  LazyPlotlyChart as PlotlyChart,
+  preloadPlotlyChartRuntime,
+} from "./LazyPlotlyChart";
 import { LoadingSurface } from "./LoadingSurface";
 
 const PALETTE = [
@@ -62,17 +53,6 @@ const MONTH_ORDER: Record<string, number> = {
   Oct: 10,
   Nov: 11,
   Dec: 12,
-};
-
-const tooltipStyle = {
-  contentStyle: {
-    fontSize: 11,
-    borderRadius: 8,
-    background: "rgba(255,255,255,0.96)",
-    border: "1px solid rgba(148, 163, 184, 0.35)",
-    boxShadow: "0 10px 24px rgba(15, 23, 42, 0.12)",
-  },
-  labelStyle: { fontSize: 11, fontWeight: 600 },
 };
 
 interface RankDatum {
@@ -473,6 +453,57 @@ function titleCaseLabel(value: string): string {
   return value.replace(/([a-z])([A-Z])/g, "$1 $2");
 }
 
+function buildDeckLayout(
+  overrides: Partial<PlotlyLayout> = {},
+): Partial<PlotlyLayout> {
+  return {
+    ...CHART_LAYOUT,
+    ...overrides,
+    margin: {
+      l: 56,
+      r: 22,
+      t: 24,
+      b: 52,
+      ...(CHART_LAYOUT.margin ?? {}),
+      ...(overrides.margin ?? {}),
+    },
+    legend: {
+      ...(CHART_LAYOUT.legend ?? {}),
+      orientation: "h",
+      yanchor: "bottom",
+      y: 1.02,
+      xanchor: "left",
+      x: 0,
+      ...(overrides.legend ?? {}),
+    },
+    hoverlabel: {
+      bgcolor: "#0f172a",
+      font: { color: "#f8fafc" },
+      ...(CHART_LAYOUT.hoverlabel ?? {}),
+      ...(overrides.hoverlabel ?? {}),
+    },
+  };
+}
+
+function buildBubbleSizes(
+  points: ScatterPoint[],
+  compact: boolean,
+): number[] {
+  const values = points.map((point) => Math.max(point.z, 1));
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  if (!Number.isFinite(max) || !Number.isFinite(min)) {
+    return points.map(() => (compact ? 14 : 18));
+  }
+  return values.map((value) => {
+    if (max === min) {
+      return compact ? 14 : 18;
+    }
+    const ratio = (value - min) / (max - min);
+    return (compact ? 12 : 14) + ratio * (compact ? 16 : 22);
+  });
+}
+
 function SectionCard({
   title,
   subtitle,
@@ -512,26 +543,36 @@ function RankBarCard({
   if (top.length === 0) {
     return null;
   }
+  const rows = [...top].reverse();
+  const trace: Data = {
+    type: "bar",
+    orientation: "h",
+    x: rows.map((item) => item.value),
+    y: rows.map((item) => item.label),
+    marker: {
+      color: rows.map((item, index) => (
+        usePowertrainColors
+          ? ptColor(item.label, PALETTE[index % PALETTE.length])
+          : PALETTE[index % PALETTE.length]
+      )),
+    },
+    text: rows.map((item) => item.value.toLocaleString()),
+    textposition: "outside",
+    cliponaxis: false,
+    hovertemplate: "%{y}<br>销量 %{x:,}<extra></extra>",
+  };
   return (
     <SectionCard title={title} subtitle={`${top.length} 条排序视图`}>
-      <ResponsiveContainer width="100%" height={Math.max(220, top.length * 28)}>
-        <BarChart data={top} layout="vertical" margin={{ top: 4, right: 16, bottom: 4, left: 8 }}>
-          <CartesianGrid strokeDasharray="3 3" opacity={0.16} />
-          <XAxis type="number" tick={{ fontSize: 11 }} />
-          <YAxis type="category" dataKey="label" width={88} tick={{ fontSize: 11 }} />
-          <Tooltip {...tooltipStyle} formatter={(value) => [Number(value).toLocaleString(), "销量"]} />
-          <Bar dataKey="value" radius={[0, 6, 6, 0]}>
-            {top.map((item, index) => (
-              <Cell
-                key={`${item.label}-${index}`}
-                fill={usePowertrainColors
-                  ? ptColor(item.label, PALETTE[index % PALETTE.length])
-                  : PALETTE[index % PALETTE.length]}
-              />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
+      <PlotlyChart
+        data={[trace]}
+        layout={buildDeckLayout({
+          margin: { l: 108, r: 28, t: 18, b: 24 },
+          showlegend: false,
+          xaxis: { title: { text: "销量" }, zeroline: false },
+          yaxis: { automargin: true, type: "category" },
+        })}
+        height={Math.max(220, top.length * 32)}
+      />
     </SectionCard>
   );
 }
@@ -548,17 +589,26 @@ function TrendCard({
   if (data.length < 2) {
     return null;
   }
+  const trace: Data = {
+    type: "scatter",
+    mode: "lines+markers",
+    x: data.map((item) => item.time),
+    y: data.map((item) => item.value),
+    line: { color: "#2563eb", width: 2.5 },
+    marker: { color: "#2563eb", size: 6 },
+    hovertemplate: "%{x}<br>销量 %{y:,}<extra></extra>",
+  };
   return (
     <SectionCard title={title} subtitle={`${data.length} 个时间点`}>
-      <ResponsiveContainer width="100%" height={compact ? 220 : 260}>
-        <LineChart data={data} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" opacity={0.16} />
-          <XAxis dataKey="time" tick={{ fontSize: 11 }} />
-          <YAxis tick={{ fontSize: 11 }} width={54} />
-          <Tooltip {...tooltipStyle} formatter={(value) => [Number(value).toLocaleString(), "销量"]} />
-          <Line type="monotone" dataKey="value" stroke="#2563eb" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
-        </LineChart>
-      </ResponsiveContainer>
+      <PlotlyChart
+        data={[trace]}
+        layout={buildDeckLayout({
+          xaxis: buildCategoryAxis(data.map((item) => item.time)),
+          yaxis: { title: { text: "销量" } },
+          showlegend: false,
+        })}
+        height={compact ? 220 : 260}
+      />
     </SectionCard>
   );
 }
@@ -567,19 +617,40 @@ function ShareTrendCard({ data, compact }: { data: ShareTrendDatum[]; compact: b
   if (data.length < 2) {
     return null;
   }
+  const traces: Data[] = [
+    {
+      type: "scatter",
+      mode: "lines",
+      name: "SUV",
+      x: data.map((item) => item.label),
+      y: data.map((item) => item.suv),
+      stackgroup: "share",
+      line: { color: "#2563eb", width: 2.2 },
+      fillcolor: "rgba(37, 99, 235, 0.34)",
+      hovertemplate: "%{x}<br>SUV %{y:.1f}%<extra></extra>",
+    },
+    {
+      type: "scatter",
+      mode: "lines",
+      name: "Sedan",
+      x: data.map((item) => item.label),
+      y: data.map((item) => item.sedan),
+      stackgroup: "share",
+      line: { color: "#f97316", width: 2.2 },
+      fillcolor: "rgba(249, 115, 22, 0.26)",
+      hovertemplate: "%{x}<br>Sedan %{y:.1f}%<extra></extra>",
+    },
+  ];
   return (
     <SectionCard title="SUV / Sedan 结构趋势" subtitle="市场结构份额对比">
-      <ResponsiveContainer width="100%" height={compact ? 220 : 260}>
-        <AreaChart data={data} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" opacity={0.16} />
-          <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-          <YAxis tick={{ fontSize: 11 }} unit="%" width={48} />
-          <Tooltip {...tooltipStyle} formatter={(value) => [`${Number(value).toFixed(1)}%`, "份额"]} />
-          <Legend />
-          <Area type="monotone" dataKey="suv" stackId="share" stroke="#2563eb" fill="rgba(37, 99, 235, 0.35)" name="SUV" />
-          <Area type="monotone" dataKey="sedan" stackId="share" stroke="#f97316" fill="rgba(249, 115, 22, 0.25)" name="Sedan" />
-        </AreaChart>
-      </ResponsiveContainer>
+      <PlotlyChart
+        data={traces}
+        layout={buildDeckLayout({
+          xaxis: buildCategoryAxis(data.map((item) => item.label)),
+          yaxis: { title: { text: "MS" }, ticksuffix: "%" },
+        })}
+        height={compact ? 220 : 260}
+      />
     </SectionCard>
   );
 }
@@ -603,49 +674,64 @@ function ScatterCard({
     return null;
   }
   const grouped = Array.from(new Set(points.map((point) => point.group)));
+  const sizes = buildBubbleSizes(points, compact);
+  const sizedPoints = points.map((point, index) => ({
+    ...point,
+    markerSize: sizes[index],
+  }));
+  const traces: Data[] = grouped.map((group, index) => {
+    const groupPoints = sizedPoints.filter((point) => point.group === group);
+    return {
+      type: "scatter",
+      mode: "markers",
+      name: group,
+      x: groupPoints.map((point) => point.x),
+      y: groupPoints.map((point) => point.y),
+      text: groupPoints.map((point) => point.label),
+      customdata: groupPoints.map((point) => point.z),
+      marker: {
+        color: PALETTE[index % PALETTE.length],
+        size: groupPoints.map((point) => point.markerSize),
+        opacity: 0.78,
+        line: { width: 1, color: "rgba(15, 23, 42, 0.18)" },
+      },
+      hovertemplate:
+        "%{text}<br>"
+        + xLabel + ": %{x:,}<br>"
+        + yLabel + ": %{y:,}<br>"
+        + "销量 %{customdata:,}<extra></extra>",
+    };
+  });
+  if (target) {
+    traces.push({
+      type: "scatter",
+      mode: "markers",
+      name: "Target",
+      x: [target.x],
+      y: [target.y],
+      text: [target.label],
+      marker: {
+        color: "#dc2626",
+        size: compact ? 16 : 20,
+        symbol: "diamond-open",
+        line: { width: 2, color: "#dc2626" },
+      },
+      hovertemplate:
+        "%{text}<br>"
+        + xLabel + ": %{x:,}<br>"
+        + yLabel + ": %{y:,}<extra></extra>",
+    });
+  }
   return (
     <SectionCard title={title} subtitle={`${points.length} 个点位`} fullWidth>
-      <ResponsiveContainer width="100%" height={compact ? 260 : 320}>
-        <ScatterChart margin={{ top: 8, right: 20, bottom: 12, left: 4 }}>
-          <CartesianGrid strokeDasharray="3 3" opacity={0.18} />
-          <XAxis type="number" dataKey="x" name={xLabel} tick={{ fontSize: 11 }} />
-          <YAxis type="number" dataKey="y" name={yLabel} tick={{ fontSize: 11 }} width={68} />
-          <ZAxis type="number" dataKey="z" range={compact ? [44, 280] : [44, 440]} />
-          <Tooltip
-            {...tooltipStyle}
-            cursor={{ strokeDasharray: "3 3" }}
-            formatter={(value, _name, payload) => {
-              if (payload?.dataKey === "z") {
-                return [Number(value).toLocaleString(), "销量"];
-              }
-              return [Number(value).toLocaleString(), payload?.dataKey === "x" ? xLabel : yLabel];
-            }}
-            labelFormatter={(_, payload) => {
-              const datum = Array.isArray(payload) && payload[0]?.payload && isRecord(payload[0].payload)
-                ? payload[0].payload
-                : null;
-              return datum ? toText(datum.label) : "";
-            }}
-          />
-          <Legend />
-          {grouped.map((group, index) => (
-            <Scatter
-              key={group}
-              name={group}
-              data={points.filter((point) => point.group === group)}
-              fill={PALETTE[index % PALETTE.length]}
-            />
-          ))}
-          {target ? (
-            <Scatter
-              name="Target"
-              data={[target]}
-              fill="#dc2626"
-              line={{ stroke: "#dc2626", strokeDasharray: "4 3" }}
-            />
-          ) : null}
-        </ScatterChart>
-      </ResponsiveContainer>
+      <PlotlyChart
+        data={traces}
+        layout={buildDeckLayout({
+          xaxis: { title: { text: xLabel }, zeroline: false },
+          yaxis: { title: { text: yLabel }, zeroline: false },
+        })}
+        height={compact ? 260 : 320}
+      />
     </SectionCard>
   );
 }
@@ -659,45 +745,58 @@ function StackedBarCard({
   dataset: StackedDataset;
   compact: boolean;
 }) {
+  const traces: Data[] = dataset.series.map((series, index) => ({
+    type: "bar",
+    name: series,
+    x: dataset.rows.map((row) => String(row[dataset.xKey] ?? "")),
+    y: dataset.rows.map((row) => Number(row[series] ?? 0)),
+    marker: {
+      color: ptColor(series, PALETTE[index % PALETTE.length]),
+    },
+    hovertemplate: "%{x}<br>" + series + " %{y:,}<extra></extra>",
+  }));
   return (
     <SectionCard title={title} subtitle={`${dataset.series.length} 个堆叠序列`} fullWidth>
-      <ResponsiveContainer width="100%" height={compact ? 260 : 320}>
-        <BarChart data={dataset.rows} margin={{ top: 8, right: 16, bottom: 28, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" opacity={0.16} />
-          <XAxis dataKey={dataset.xKey} tick={{ fontSize: 11 }} angle={-30} textAnchor="end" height={52} />
-          <YAxis tick={{ fontSize: 11 }} width={58} />
-          <Tooltip {...tooltipStyle} formatter={(value) => [Number(value).toLocaleString(), "销量"]} />
-          <Legend />
-          {dataset.series.map((series, index) => (
-            <Bar
-              key={series}
-              dataKey={series}
-              stackId="stack"
-              fill={ptColor(series, PALETTE[index % PALETTE.length])}
-              radius={index === dataset.series.length - 1 ? [4, 4, 0, 0] : 0}
-            />
-          ))}
-        </BarChart>
-      </ResponsiveContainer>
+      <PlotlyChart
+        data={traces}
+        layout={buildDeckLayout({
+          barmode: "stack",
+          xaxis: buildCategoryAxis(
+            dataset.rows.map((row) => String(row[dataset.xKey] ?? "")),
+            { tickangle: -30 },
+          ),
+          yaxis: { title: { text: "销量" } },
+        })}
+        height={compact ? 260 : 320}
+      />
     </SectionCard>
   );
 }
 
 function MigrationCard({ dataset, compact }: { dataset: MigrationDataset; compact: boolean }) {
+  const traces: Data[] = dataset.years.map((year, index) => ({
+    type: "scatter",
+    mode: "lines+markers",
+    name: year,
+    x: dataset.rows.map((row) => String(row.priceBand ?? "")),
+    y: dataset.rows.map((row) => Number(row[year] ?? 0)),
+    line: { color: PALETTE[index % PALETTE.length], width: 2.3 },
+    marker: { size: 6 },
+    hovertemplate: "%{x}<br>" + year + " %{y:,}<extra></extra>",
+  }));
   return (
     <SectionCard title="价格带迁移" subtitle={`${dataset.years.length} 个年度序列`} fullWidth>
-      <ResponsiveContainer width="100%" height={compact ? 250 : 310}>
-        <LineChart data={dataset.rows} margin={{ top: 8, right: 16, bottom: 28, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" opacity={0.16} />
-          <XAxis dataKey="priceBand" tick={{ fontSize: 11 }} angle={-30} textAnchor="end" height={52} />
-          <YAxis tick={{ fontSize: 11 }} width={58} />
-          <Tooltip {...tooltipStyle} formatter={(value) => [Number(value).toLocaleString(), "销量"]} />
-          <Legend />
-          {dataset.years.map((year, index) => (
-            <Line key={year} type="monotone" dataKey={year} stroke={PALETTE[index % PALETTE.length]} strokeWidth={2.3} dot={false} />
-          ))}
-        </LineChart>
-      </ResponsiveContainer>
+      <PlotlyChart
+        data={traces}
+        layout={buildDeckLayout({
+          xaxis: buildCategoryAxis(
+            dataset.rows.map((row) => String(row.priceBand ?? "")),
+            { tickangle: -30 },
+          ),
+          yaxis: { title: { text: "销量" } },
+        })}
+        height={compact ? 250 : 310}
+      />
     </SectionCard>
   );
 }
@@ -732,37 +831,31 @@ function MatrixCard({ title, matrix }: { title: string; matrix: MatrixDatum }) {
 }
 
 function HeatmapCard({ dataset }: { dataset: HeatmapDataset }) {
+  const zValues = dataset.rows.map((row) => (
+    dataset.columns.map((column) => dataset.values.get(`${row}::${column}`) ?? 0)
+  ));
+  const trace: Data = {
+    type: "heatmap",
+    x: dataset.columns,
+    y: dataset.rows,
+    z: zValues,
+    colorscale: [
+      [0, "rgba(226, 232, 240, 0.16)"],
+      [1, "rgba(37, 99, 235, 0.92)"],
+    ],
+    hovertemplate: "%{y} / %{x}<br>销量 %{z:,}<extra></extra>",
+    colorbar: { title: { text: "销量" } },
+  };
   return (
     <SectionCard title="季节性热力图" subtitle={`${dataset.rows.length} × ${dataset.columns.length} 网格`} fullWidth>
-      <div className="copilot-analysis-heatmap-shell">
-        <div className="copilot-analysis-heatmap-header">
-          <span />
-          {dataset.columns.map((column) => (
-            <strong key={column}>{column}</strong>
-          ))}
-        </div>
-        <div className="copilot-analysis-heatmap-body">
-          {dataset.rows.map((row) => (
-            <div key={row} className="copilot-analysis-heatmap-row">
-              <strong>{row}</strong>
-              {dataset.columns.map((column) => {
-                const value = dataset.values.get(`${row}::${column}`) ?? 0;
-                const opacity = dataset.max > 0 ? 0.12 + value / dataset.max * 0.88 : 0.12;
-                return (
-                  <span
-                    key={`${row}-${column}`}
-                    className="copilot-analysis-heatmap-cell"
-                    style={{ background: `rgba(37, 99, 235, ${opacity.toFixed(3)})` }}
-                    title={`${row} / ${column}: ${value.toLocaleString()}`}
-                  >
-                    {value > 0 ? value.toLocaleString() : "-"}
-                  </span>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      </div>
+      <PlotlyChart
+        data={[trace]}
+        layout={buildDeckLayout({
+          xaxis: buildCategoryAxis(dataset.columns),
+          yaxis: { autorange: "reversed" },
+        })}
+        height={320}
+      />
     </SectionCard>
   );
 }
@@ -779,6 +872,11 @@ function NewsDigestCard({ digest }: { digest: CountryChatNewsDigest }) {
           <span className="copilot-analysis-news-badge">
             {newsProviderLabel(digest.summaryProvider)}
           </span>
+          {digest.summaryModel ? (
+            <span className="copilot-analysis-news-badge is-muted">
+              {digest.summaryModel}
+            </span>
+          ) : null}
           {digest.updatedAt ? (
             <span className="copilot-analysis-news-badge is-muted">
               更新时间 {formatDateLabel(digest.updatedAt)}
@@ -1030,6 +1128,12 @@ export function CountryChatAnalysisDeck({
   });
   const [selectedModel, setSelectedModel] = useState(() => toText(initialMeta.selectedModel));
   const [modelTopN, setModelTopN] = useState(() => clampModelTopN(toNumber(initialMeta.modelTopN)));
+
+  useEffect(() => {
+    if (expanded) {
+      preloadPlotlyChartRuntime().catch(() => undefined);
+    }
+  }, [expanded]);
 
   useEffect(() => {
     setExpanded(defaultExpanded);

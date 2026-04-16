@@ -76,10 +76,6 @@ export function CountryChatPage() {
   const countryOptions = Array.isArray(metadata?.availableCountries)
     ? metadata.availableCountries
     : [];
-  const latestAssistantMessageId = [...messages]
-    .reverse()
-    .find((message) => message.role === "assistant")?.id;
-
   return (
     <div className="dashboard-shell copilot-shell">
       <section className="content copilot-content">
@@ -169,7 +165,7 @@ export function CountryChatPage() {
                     {message.contextSnapshot ? (
                       <CountryChatAnalysisDeck
                         message={message}
-                        defaultExpanded={message.id === latestAssistantMessageId}
+                        defaultExpanded={false}
                       />
                     ) : null}
                     {message.providerReason ? (

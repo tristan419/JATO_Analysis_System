@@ -1,0 +1,344 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
+BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@8000}"
+BACKEND_PORT="${BACKEND_PORT:-}"
+BACKEND_ENV_FILE="${BACKEND_ENV_FILE:-/etc/jato-fullstack/backend.env}"
+RUN_DATABASE_MIGRATIONS="${RUN_DATABASE_MIGRATIONS:-auto}"
+REMOTE_NAME="${REMOTE_NAME:-}"
+REPO_REMOTE_URL="${REPO_REMOTE_URL:-git@github.com:tristan419/JATO_Analysis_System.git}"
+SKIP_GIT_SYNC="${SKIP_GIT_SYNC:-false}"
+DEPLOY_PRUNE_UNTRACKED="${DEPLOY_PRUNE_UNTRACKED:-true}"
+DEPLOY_UNTRACKED_CLEAN_PATTERNS="${DEPLOY_UNTRACKED_CLEAN_PATTERNS:-04_Processed_data/.refresh_backups/pre-sync-* Markdown_Readme/Fullstack/*.md Markdown_Readme/Streamlit/*.md}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIAGNOSTIC_SCRIPT="$SCRIPT_DIR/print_fullstack_server_diagnostics.sh"
+CURRENT_STEP="initialization"
+
+VITE_API_BASE="${VITE_API_BASE:-/v1}"
+VITE_AUTH_TOKEN="${VITE_AUTH_TOKEN:-}"
+VITE_USER_ROLE="${VITE_USER_ROLE:-viewer}"
+VITE_USER_NAME="${VITE_USER_NAME:-anonymous}"
+
+# ── China-friendly mirror defaults ──
+NPM_REGISTRY="${NPM_REGISTRY:-https://mirrors.cloud.tencent.com/npm/}"
+PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
+
+resolve_repo_dir() {
+  if [[ -n "${REPO_DIR:-}" ]]; then
+    printf '%s\n' "$REPO_DIR"
+    return
+  fi
+
+  local candidate=""
+  for candidate in \
+    /opt/JATO_Analysis_System-main \
+    /opt/JATO_Analysis_System \
+    /var/www/JATO_Analysis_System
+  do
+    if [[ -d "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+
+  printf '%s\n' /opt/JATO_Analysis_System-main
+}
+
+REPO_DIR="$(resolve_repo_dir)"
+
+BACKEND_DIR="$REPO_DIR/06_AppPlatform/backend"
+FRONTEND_DIR="$REPO_DIR/06_AppPlatform/frontend"
+BACKEND_REQUIREMENTS="$BACKEND_DIR/requirements.txt"
+VENV_DIR="$REPO_DIR/.venv"
+
+log_section() {
+  printf '\n[STEP] %s\n' "$1"
+}
+
+is_truthy() {
+  case "${1,,}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+run_privileged_bash() {
+  local script="$1"
+  shift
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    bash -lc "$script" _ "$@"
+  else
+    sudo -n bash -lc "$script" _ "$@"
+  fi
+}
+
+run_diagnostics() {
+  if [[ -x "$DIAGNOSTIC_SCRIPT" ]]; then
+    REPO_DIR="$REPO_DIR" \
+    BACKEND_SERVICE_NAME="$BACKEND_SERVICE_NAME" \
+    BACKEND_PORT="$BACKEND_PORT" \
+    bash "$DIAGNOSTIC_SCRIPT" || true
+  fi
+}
+
+on_error() {
+  local line_no="$1"
+  local command="$2"
+  echo
+  echo "[ERROR] deploy_fullstack_server.sh failed"
+  echo "[ERROR] step=$CURRENT_STEP"
+  echo "[ERROR] line=$line_no"
+  echo "[ERROR] command=$command"
+  run_diagnostics
+}
+
+trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
+
+if [[ -z "$BACKEND_PORT" ]]; then
+  if [[ "$BACKEND_SERVICE_NAME" =~ @([0-9]+)$ ]]; then
+    BACKEND_PORT="${BASH_REMATCH[1]}"
+  else
+    BACKEND_PORT="8000"
+  fi
+fi
+
+require_command() {
+  local name="$1"
+  if ! command -v "$name" >/dev/null 2>&1; then
+    echo "[ERROR] Missing required command: $name"
+    exit 1
+  fi
+}
+
+require_command git
+require_command curl
+require_command npm
+require_command node
+
+echo "[INFO] Repository directory: $REPO_DIR"
+
+cleanup_known_untracked_paths() {
+  local raw_pattern=""
+  local candidate=""
+  local status_output=""
+  local removed_count=0
+
+  if ! is_truthy "$DEPLOY_PRUNE_UNTRACKED"; then
+    echo "[INFO] Skipping untracked cleanup because DEPLOY_PRUNE_UNTRACKED=$DEPLOY_PRUNE_UNTRACKED"
+    return
+  fi
+
+  if [[ ! -d "$REPO_DIR/.git" ]]; then
+    echo "[INFO] Skipping untracked cleanup because git metadata is unavailable"
+    return
+  fi
+
+  cd "$REPO_DIR"
+  shopt -s nullglob dotglob
+  for raw_pattern in $DEPLOY_UNTRACKED_CLEAN_PATTERNS; do
+    for candidate in $raw_pattern; do
+      [[ -e "$candidate" ]] || continue
+      if git ls-files --error-unmatch -- "$candidate" >/dev/null 2>&1; then
+        continue
+      fi
+
+      status_output="$(git status --short --untracked-files=all -- "$candidate" || true)"
+      if [[ -z "$status_output" ]] || ! grep -q '^?? ' <<< "$status_output"; then
+        continue
+      fi
+
+      echo "[INFO] Pruning known untracked path: $candidate"
+      git clean -fd -- "$candidate"
+      removed_count=$((removed_count + 1))
+    done
+  done
+  shopt -u nullglob dotglob
+
+  if [[ "$removed_count" -eq 0 ]]; then
+    echo "[INFO] No matching known untracked paths found"
+  else
+    echo "[INFO] Pruned $removed_count known untracked path(s)"
+  fi
+}
+
+CURRENT_STEP="Validate sudo access"
+log_section "$CURRENT_STEP"
+if [[ "$(id -u)" -ne 0 ]]; then
+  if ! sudo -n true 2>/dev/null; then
+    echo "[WARN] sudo requires a password; skipping sudo -v (CI mode)"
+    echo "[WARN] Later sudo -n calls may fail if NOPASSWD is not configured"
+  fi
+fi
+
+if [[ ! -d "$REPO_DIR/.git" ]]; then
+  if [[ ! -d "$REPO_DIR" ]]; then
+    echo "[ERROR] Repository directory not found at $REPO_DIR"
+    echo "        Download the codeload archive or clone the mirror first."
+    exit 1
+  fi
+  echo "[INFO] No .git metadata found; continuing with local tree only"
+fi
+
+CURRENT_STEP="Prune known untracked paths"
+log_section "$CURRENT_STEP"
+cleanup_known_untracked_paths
+
+if [[ "$SKIP_GIT_SYNC" != "true" && -d "$REPO_DIR/.git" ]]; then
+  if [[ -z "$REMOTE_NAME" ]]; then
+    if git -C "$REPO_DIR" remote get-url origin >/dev/null 2>&1; then
+      REMOTE_NAME="origin"
+    else
+      REMOTE_NAME="$(git -C "$REPO_DIR" remote | head -n 1)"
+    fi
+  fi
+
+  if [[ -z "$REMOTE_NAME" ]]; then
+    echo "[ERROR] No git remote found in $REPO_DIR"
+    exit 1
+  fi
+
+  if [[ -n "$REPO_REMOTE_URL" ]]; then
+    CURRENT_REMOTE_URL="$(git -C "$REPO_DIR" remote get-url "$REMOTE_NAME" 2>/dev/null || true)"
+    if [[ -n "$CURRENT_REMOTE_URL" && "$CURRENT_REMOTE_URL" != "$REPO_REMOTE_URL" ]]; then
+      echo "[INFO] Pointing git remote '$REMOTE_NAME' to mirror URL"
+      echo "[INFO] old=$CURRENT_REMOTE_URL"
+      echo "[INFO] new=$REPO_REMOTE_URL"
+      git -C "$REPO_DIR" remote set-url "$REMOTE_NAME" "$REPO_REMOTE_URL"
+    fi
+  fi
+fi
+
+if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+  echo "[ERROR] Python virtualenv not found: $VENV_DIR"
+  echo "        Create it first with: python3 -m venv $VENV_DIR"
+  exit 1
+fi
+
+echo "[INFO] Validate Node.js version"
+CURRENT_STEP="Validate Node.js version"
+log_section "$CURRENT_STEP"
+node - <<'EOF'
+const [major, minor, patch] = process.versions.node.split('.').map(Number);
+const ok = (major === 20 && minor >= 10) || (major === 22 && minor >= 0) || major > 22;
+if (!ok) {
+  console.error(`[ERROR] Node.js ${process.versions.node} detected. Need 20.10+ or 22.x+.`);
+  process.exit(1);
+}
+console.log(`[INFO] Node.js ${process.versions.node}`);
+EOF
+
+echo "[INFO] Update repository"
+CURRENT_STEP="Update repository"
+log_section "$CURRENT_STEP"
+if [[ "$SKIP_GIT_SYNC" == "true" ]]; then
+  echo "[INFO] SKIP_GIT_SYNC=true; using the local tree without git pull"
+elif [[ -d "$REPO_DIR/.git" ]]; then
+  cd "$REPO_DIR"
+  git fetch "$REMOTE_NAME" "$DEPLOY_BRANCH"
+  if git rev-parse --verify HEAD >/dev/null 2>&1; then
+    git checkout "$DEPLOY_BRANCH"
+    git pull --ff-only "$REMOTE_NAME" "$DEPLOY_BRANCH"
+  else
+    echo "[INFO] Repository has no local commits yet; bootstrapping $DEPLOY_BRANCH from $REMOTE_NAME/$DEPLOY_BRANCH"
+    git checkout -f -B "$DEPLOY_BRANCH" "$REMOTE_NAME/$DEPLOY_BRANCH"
+  fi
+else
+  echo "[INFO] No git repository metadata; skipping sync and using local tree"
+fi
+
+echo "[INFO] Install backend dependencies"
+CURRENT_STEP="Install backend dependencies"
+log_section "$CURRENT_STEP"
+. "$VENV_DIR/bin/activate"
+python -m pip install --upgrade pip \
+  -i "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST"
+pip install -r "$BACKEND_REQUIREMENTS" \
+  -i "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST"
+
+echo "[INFO] Run database migrations when configured"
+CURRENT_STEP="Run database migrations"
+log_section "$CURRENT_STEP"
+if [[ "$RUN_DATABASE_MIGRATIONS" == "auto" ]]; then
+  if [[ -f "$BACKEND_ENV_FILE" ]]; then
+    if db_state="$(run_privileged_bash 'set -a; . "$1"; set +a; if [[ -n "${APP_DATABASE_URL:-}" ]] && [[ "${APP_DATABASE_ENABLED:-false}" =~ ^(1|true|yes|on)$ ]]; then echo run; else echo skip; fi' "$BACKEND_ENV_FILE" 2>/dev/null)"; then
+      RUN_DATABASE_MIGRATIONS="$db_state"
+    else
+      RUN_DATABASE_MIGRATIONS="skip"
+    fi
+  else
+    RUN_DATABASE_MIGRATIONS="skip"
+  fi
+fi
+
+if [[ "$RUN_DATABASE_MIGRATIONS" == "true" || "$RUN_DATABASE_MIGRATIONS" == "run" ]]; then
+  run_privileged_bash 'set -Eeuo pipefail; set -a; . "$1"; set +a; export PYTHONPATH="$2"; . "$3/bin/activate"; cd "$2"; python -m alembic upgrade head' \
+    "$BACKEND_ENV_FILE" "$BACKEND_DIR" "$VENV_DIR"
+else
+  echo "[INFO] Database migrations skipped (database not configured)"
+fi
+
+echo "[INFO] Build frontend"
+CURRENT_STEP="Build frontend"
+log_section "$CURRENT_STEP"
+cd "$FRONTEND_DIR"
+npm config set registry "$NPM_REGISTRY"
+echo "[INFO] npm registry → $NPM_REGISTRY"
+npm ci
+export VITE_API_BASE
+export VITE_AUTH_TOKEN
+export VITE_USER_ROLE
+export VITE_USER_NAME
+npm run build
+
+if [[ ! -f "$FRONTEND_DIR/dist/index.html" ]]; then
+  echo "[ERROR] Frontend build did not produce dist/index.html"
+  exit 1
+fi
+
+echo "[INFO] Restart backend service"
+CURRENT_STEP="Restart backend service"
+log_section "$CURRENT_STEP"
+if ! sudo -n systemctl cat "$BACKEND_SERVICE_NAME" >/dev/null 2>&1; then
+  echo "[ERROR] systemd service not found: $BACKEND_SERVICE_NAME"
+  echo "        Run bash 03_Scripts/tencent_fullstack_bootstrap.sh first."
+  exit 1
+fi
+sudo -n systemctl restart "$BACKEND_SERVICE_NAME"
+sleep 2
+sudo -n systemctl --no-pager status "$BACKEND_SERVICE_NAME" 2>&1 | head -n 30 || true
+
+if systemctl is-active --quiet nginx; then
+  echo "[INFO] Reload nginx"
+  CURRENT_STEP="Reload nginx"
+  log_section "$CURRENT_STEP"
+  sudo -n systemctl reload nginx
+fi
+
+echo "[INFO] Verify backend health"
+CURRENT_STEP="Verify backend health"
+log_section "$CURRENT_STEP"
+for i in 1 2 3 4 5; do
+  if curl -fsS "http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null 2>&1; then
+    echo "[INFO] Health check passed on attempt $i"
+    break
+  fi
+  if [[ "$i" -eq 5 ]]; then
+    echo "[ERROR] Health check failed after 5 attempts"
+    exit 1
+  fi
+  echo "[INFO] Health check attempt $i failed, retrying in 2s …"
+  sleep 2
+done
+
+echo "[INFO] Current revision"
+CURRENT_STEP="Print revision"
+log_section "$CURRENT_STEP"
+if [[ -d "$REPO_DIR/.git" ]]; then
+  git -C "$REPO_DIR" rev-parse --short HEAD
+else
+  echo "[INFO] No git revision available for archive-based bootstrap"
+fi
+echo "[INFO] Deployment finished successfully"

@@ -167,9 +167,9 @@ sudo nano /etc/jato-fullstack/backend.env
 
 - `APP_AUTH_ENABLED=true`
 - `APP_AUTH_TOKEN=你自己的强口令`
-- `JATO_PARQUET_PATH=/opt/JATO_Analysis_System/04_Processed_data/jato_full_archive.parquet`
-- `JATO_PARTITIONED_PATH=/opt/JATO_Analysis_System/04_Processed_data/partitioned_dataset_v1`
-- `APP_CRUD_DATA_PATH=/opt/JATO_Analysis_System/04_Processed_data/app_entities.json`
+- `JATO_PARQUET_PATH=/opt/JATO_Analysis_System-main/04_Processed_data/jato_full_archive.parquet`
+- `JATO_PARTITIONED_PATH=/opt/JATO_Analysis_System-main/04_Processed_data/partitioned_dataset_v1`
+- `APP_CRUD_DATA_PATH=/opt/JATO_Analysis_System-main/04_Processed_data/app_entities.json`
 
 如果你暂时只允许内网访问，也可以把 `APP_AUTH_ENABLED=false`，但不建议长期这样跑公网。
 

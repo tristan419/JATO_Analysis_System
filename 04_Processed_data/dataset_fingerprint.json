@@ -1,15 +1,32 @@
 {
   "schemaVersion": "1.0",
-  "sourceFileCount": 1,
+  "sourceFileCount": 2,
   "sourceFiles": [
     {
-      "path": "01_RAW_DATA/整合版【已规整】JATO数据-【202301-202601】21国（含奥、芬、斯洛文尼亚、斯洛伐克）-20250126-fina.xlsx",
-      "bytes": 429042121,
-      "mtimeNs": 1773293009768549955
+      "path": "01_RAW_DATA/已规整-汇总-JATO数据-意 挪 罗尼 瑞士、西 荷 瑞典 克罗、法 希 捷 葡-【202301-202603】.xlsx",
+      "bytes": 260566477,
+      "mtimeNs": 1776231223041463924
+    },
+    {
+      "path": "04_Processed_data/.refresh_backups/promote-2026-03-partial12/jato_full_archive.parquet",
+      "bytes": 37474492,
+      "mtimeNs": 1776061899103417220
     }
   ],
   "sheetName": "Data Export",
   "partitionCols": [
     "国家"
+  ],
+  "strategy": "partial_country_replacement",
+  "supplementCountries": [
+    "丹麦",
+    "匈牙利",
+    "奥地利",
+    "德国",
+    "斯洛伐克",
+    "斯洛文尼亚",
+    "比利时",
+    "波兰",
+    "芬兰"
   ]
 }

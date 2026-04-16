@@ -4,7 +4,7 @@ After=network.target postgresql.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/JATO_Analysis_System
+WorkingDirectory=/opt/JATO_Analysis_System-main
 
 # Recommended: run as a non-root user.
 # User=deploy
@@ -13,10 +13,10 @@ WorkingDirectory=/opt/JATO_Analysis_System
 EnvironmentFile=-/etc/jato-fullstack/backend.env
 EnvironmentFile=-/etc/jato-fullstack/country-news.env
 Environment=PYTHONUNBUFFERED=1
-Environment=PYTHONPATH=/opt/JATO_Analysis_System/06_AppPlatform/backend
-Environment=REPO_DIR=/opt/JATO_Analysis_System
+Environment=PYTHONPATH=/opt/JATO_Analysis_System-main/06_AppPlatform/backend
+Environment=REPO_DIR=/opt/JATO_Analysis_System-main
 
-ExecStart=/opt/JATO_Analysis_System/03_Scripts/run_country_news_sync.sh
+ExecStart=/opt/JATO_Analysis_System-main/03_Scripts/run_country_news_sync.sh
 
 # Allow up to 30 minutes for all countries.
 TimeoutStartSec=1800

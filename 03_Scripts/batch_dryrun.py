@@ -179,7 +179,8 @@ def main():
         print(f"{cc:8s} {c['pass']:6d} {c['empty']:6d} {c['fail']:6d} {t:6d}")
 
     # Save report
-    report_path = Path(__file__).parent / "dryrun_report.json"
+    report_path = Path(__file__).parent / "diagnostics" / "artifacts" / "dryrun_report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     with open(report_path, "w") as f:
         json.dump({
             "batch": batch,

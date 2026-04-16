@@ -26,6 +26,7 @@ import type {
 } from "../types";
 
 const DEFAULT_FUEL_TYPES = ["ICE", "MHEV", "HEV", "PHEV", "BEV", "LPG"];
+const DEFAULT_MARKET_SCAN_COUNTRY = "瑞典";
 const TAB_ITEMS: Array<{
   key: MarketScanPageKey;
   code: string;
@@ -48,6 +49,16 @@ const DEFAULT_MARKET_SCAN_EXPORT: ExportSettings = {
   dataLabelPosition: "top",
   decimalPlaces: 1,
 };
+const MIN_MARKET_SCAN_RANKING_LIMIT = 10;
+const MARKET_SCAN_RANKING_LIMIT_OPTIONS = [10, 15, 20, 30] as const;
+
+function normalizeMarketScanRankingLimit(value: number | string | null | undefined): number {
+  const numericValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return MIN_MARKET_SCAN_RANKING_LIMIT;
+  }
+  return Math.max(MIN_MARKET_SCAN_RANKING_LIMIT, Math.round(numericValue));
+}
 
 interface HeroMetric {
   label: string;
@@ -505,34 +516,58 @@ function dominantFuelForRanking(item: MarketScanRankingItem): string {
 }
 
 function driveShareText(item: MarketScanRankingItem): string {
+  return `4WD ${driveShareDisplay(item)}`;
+}
+
+function driveSharePct(item: MarketScanRankingItem): number {
   const pct =
     typeof item.driveSharePct === "number"
       ? item.driveSharePct
       : Number(item.driveMix?.["4WD"] ?? 0) / Math.max(item.volume || 1, 1);
-  return `4WD ${formatPercent(pct)}`;
+  return Number.isFinite(pct) ? Math.max(0, pct) : 0;
 }
+
+function driveShareDisplay(item: MarketScanRankingItem): string {
+  return item.driveShareDisplay ?? formatPercent(driveSharePct(item));
+}
+
+function marketShareLabel(item: MarketScanRankingItem): string {
+  return `MS ${item.shareDisplay ?? formatPercent(item.sharePct)}`;
+}
+
+const STACKED_FUEL_ORDER = ["ICE", "MHEV", "HEV", "PHEV", "BEV", "LPG"];
 
 function buildTotalRankingChartData(items: MarketScanRankingItem[]): Data[] {
   const ordered = [...items].reverse();
-  return [
-    {
-      type: "bar",
-      orientation: "h",
-      x: ordered.map((item) => item.sharePct),
-      y: ordered.map((item) => rankingItemLabel(item)),
-      marker: {
-        color: ordered.map((item) => fuelColor(dominantFuelForRanking(item))),
-      },
-      text: ordered.map(
-        (item) => `${item.shareDisplay ?? formatPercent(item.sharePct)}<br>${formatVolume(item.volume)} 台<br>${driveShareText(item)}`,
-      ),
-      textposition: "outside",
+  const labels = ordered.map((item) => rankingItemLabel(item));
+  const totalVolumeInSegment = items.reduce((sum, item) => sum + (item.volume || 0), 0) || 1;
+
+  const traces: Data[] = STACKED_FUEL_ORDER.map((fuel, fuelIdx) => {
+    const volumes = ordered.map((item) => (item.fuelMix?.[fuel] ?? 0));
+    const sharePcts = volumes.map((vol) => vol / totalVolumeInSegment);
+    const isLastFuel = fuelIdx === STACKED_FUEL_ORDER.length - 1;
+    return {
+      type: "bar" as const,
+      orientation: "h" as const,
+      name: fuel,
+      x: sharePcts,
+      y: labels,
+      marker: { color: fuelColor(fuel) },
+      text: isLastFuel
+        ? ordered.map(
+            (item) =>
+              `${marketShareLabel(item)} · ${formatVolume(item.volume)} · ${driveShareText(item)}`,
+          )
+        : ordered.map(() => ""),
+      textposition: "outside" as const,
       textfont: { size: 10 },
       cliponaxis: false,
-      customdata: ordered.map((item) => item.volume),
-      hovertemplate: "%{y}<br>累计份额 %{x:.1%}<br>累计销量 %{customdata:,.0f} 台<extra></extra>",
-    },
-  ];
+      customdata: volumes.map((vol, i) => [vol, ordered[i]?.volume ?? 0]),
+      hovertemplate: `%{y}<br>${fuel}: %{customdata[0]:,.0f} 台<br>总销量 %{customdata[1]:,.0f} 台<extra></extra>`,
+    };
+  });
+
+  return traces;
 }
 
 function Panel({ eyebrow, title, subtitle, children, actions }: PanelProps) {
@@ -574,47 +609,88 @@ function MetricCard({
 function RankingGroup({
   group,
   compact = false,
+  fuelType,
 }: {
   group: MarketScanRankingGroup;
   compact?: boolean;
+  fuelType?: string;
 }) {
   if (group.items.length === 0) {
     return <div className="market-scan-empty">暂无排行数据。</div>;
   }
 
+  const barColor = fuelType ? fuelColor(fuelType) : "#0f766e";
+  const isFuelRanking = Boolean(fuelType);
+
   if (compact) {
     return (
-      <div className="market-scan-ranking-list">
-        {group.items.map((item) => (
-          <article key={`${rankingItemLabel(item)}-${item.rank}`} className="market-scan-ranking-row">
-            <div className="market-scan-ranking-row-main">
+      <div
+        className={`market-scan-ranking-list market-scan-ranking-scrollable${isFuelRanking ? " market-scan-ranking-list--fuel" : ""}`}
+      >
+        {group.items.map((item) => {
+          const currentDriveSharePct = driveSharePct(item);
+          const hasDriveShare = typeof item.driveSharePct === "number" || item.driveMix?.["4WD"] !== undefined;
+          const driveShareLabel = driveShareDisplay(item);
+          const shareLabel = marketShareLabel(item);
+
+          return (
+            <article
+              key={`${rankingItemLabel(item)}-${item.rank}`}
+              className={`market-scan-ranking-row${isFuelRanking ? " market-scan-ranking-row--fuel" : ""}`}
+            >
               <div className="market-scan-ranking-row-rank">{String(item.rank).padStart(2, "0")}</div>
-              <div className="market-scan-ranking-row-copy">
-                <strong>{rankingItemLabel(item)}</strong>
-                <span>
-                  {formatVolume(item.volume)} 台
-                  {item.shareDisplay ? ` · ${item.shareDisplay}` : ""}
-                </span>
+              <div className="market-scan-ranking-row-info">
+                <div className="market-scan-ranking-row-head">
+                  <span className="market-scan-ranking-row-name">{rankingItemLabel(item)}</span>
+                  <div className="market-scan-ranking-row-nums">
+                    <span>{formatVolume(item.volume)}</span>
+                    <span className="market-scan-tag">{shareLabel}</span>
+                  </div>
+                </div>
+                <div
+                  className="market-scan-ranking-row-bar"
+                  title={hasDriveShare ? `${shareLabel} · 4WD ${driveShareLabel}` : shareLabel}
+                >
+                  <span
+                    className="market-scan-ranking-row-bar-fill"
+                    style={{ width: `${Math.max(1, item.barPct * 100)}%`, background: barColor }}
+                  >
+                    {hasDriveShare ? (
+                      <span
+                        className="market-scan-4wd-fill"
+                        style={{ width: `${currentDriveSharePct * 100}%` }}
+                      />
+                    ) : null}
+                  </span>
+                </div>
               </div>
-            </div>
-            <div className="market-scan-ranking-row-side">
-              <span className={`market-scan-tone-pill ${toneClassName(item.yoy.tone)}`}>
-                YoY {item.yoy.display}
-              </span>
-              {item.mom ? (
-                <span className={`market-scan-tone-pill ${toneClassName(item.mom.tone)}`}>
-                  MoM {item.mom.display}
+              <div className="market-scan-ranking-row-side">
+                <span className={`market-scan-tone-text ${toneClassName(item.yoy.tone)}`}>
+                  YoY {item.yoy.tone === "positive" ? "▲ " : item.yoy.tone === "negative" ? "▼ " : ""}
+                  {item.yoy.display}
                 </span>
-              ) : null}
-            </div>
-          </article>
-        ))}
+                {item.mom ? (
+                  <span className={`market-scan-tone-text ${toneClassName(item.mom.tone)}`}>
+                    MoM {item.mom.tone === "positive" ? "▲ " : item.mom.tone === "negative" ? "▼ " : ""}
+                    {item.mom.display}
+                  </span>
+                ) : null}
+                {hasDriveShare ? (
+                  <span className="market-scan-ranking-row-drive-chip">
+                    <span className="market-scan-ranking-row-drive-chip-label">4WD</span>
+                    <strong className="market-scan-ranking-row-drive-chip-value">{driveShareLabel}</strong>
+                  </span>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
       </div>
     );
   }
 
   return (
-    <div className="market-scan-ranking-stack">
+    <div className="market-scan-ranking-stack market-scan-ranking-scrollable">
       {group.items.map((item) => (
         <article key={`${rankingItemLabel(item)}-${item.rank}`} className="market-scan-ranking-card">
           <div className="market-scan-ranking-main">
@@ -639,7 +715,7 @@ function RankingGroup({
             ) : null}
           </div>
           <div className="market-scan-ranking-bar">
-            <span style={{ width: `${Math.max(5, item.barPct * 100)}%` }} />
+            <span style={{ width: `${Math.max(5, item.barPct * 100)}%`, background: barColor }} />
           </div>
         </article>
       ))}
@@ -826,15 +902,13 @@ function FuelPanel({ panel, compact = false }: { panel: MarketScanFuelPanel; com
     <Panel
       eyebrow={panel.fuelType}
       title={`${panel.fuelType} Share Ranking`}
-      subtitle="按当前国家与细分市场 2026 累计份额排序。"
+      subtitle={panel.ytdTitle}
     >
-      <div className="market-scan-subpanel">
-        <h3>{panel.ytdTitle}</h3>
-        <RankingGroup
-          group={{ title: panel.ytdTitle, currentLabel: panel.ytdTitle, items: panel.ytdRanking }}
-          compact={dense || compact}
-        />
-      </div>
+      <RankingGroup
+        group={{ title: panel.ytdTitle, currentLabel: panel.ytdTitle, items: panel.ytdRanking }}
+        compact={dense || compact}
+        fuelType={panel.fuelType}
+      />
     </Panel>
   );
 }
@@ -844,20 +918,41 @@ function DrilldownSection({
   fuelOrder,
   showDataLabels,
   compact = false,
+  rankingLimit = 10,
+  onRankingLimitChange,
 }: {
   page: MarketScanDrilldownPage;
   fuelOrder: string[];
   showDataLabels: boolean;
   compact?: boolean;
+  rankingLimit?: number;
+  onRankingLimitChange?: (limit: number) => void;
 }) {
+  const normalizedRankingLimit = normalizeMarketScanRankingLimit(rankingLimit);
+
   return (
     <>
-      <section className="market-scan-callout">{page.summaryText}</section>
+      <section className="market-scan-callout">
+        <span>{page.summaryText}</span>
+        {onRankingLimitChange ? (
+          <label className="market-scan-ranking-limit-control">
+            Top
+            <select
+              value={normalizedRankingLimit}
+              onChange={(e) => onRankingLimitChange(normalizeMarketScanRankingLimit(e.target.value))}
+            >
+              {MARKET_SCAN_RANKING_LIMIT_OPTIONS.map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+      </section>
       <div className="market-scan-grid market-scan-grid--two-wide">
         <Panel
           eyebrow="Ranking"
           title={page.totalRanking.title}
-          subtitle="按当前国家与细分市场 2026 累计份额排序，4WD 占比按已识别驱动覆盖计算。"
+          subtitle="按当前国家与细分市场 2026 累计份额排序"
         >
           {page.totalRanking.items.length > 0 ? (
             <div className="market-scan-ranking-chart-shell">
@@ -865,10 +960,11 @@ function DrilldownSection({
                 data={buildTotalRankingChartData(page.totalRanking.items)}
                 layout={{
                   ...CHART_LAYOUT,
-                  margin: { l: 110, r: 32, t: 12, b: 28 },
-                  xaxis: { title: { text: "累计份额" }, tickformat: ".0%" },
+                  barmode: "stack",
+                  margin: { l: 110, r: 120, t: 12, b: 28 },
+                  xaxis: { title: { text: "" }, tickformat: ".0%" },
                   yaxis: { automargin: true },
-                  showlegend: false,
+                  legend: { orientation: "h", y: -0.12, x: 0.5, xanchor: "center", font: { size: 10 } },
                 }}
                 height={compact ? 252 : Math.max(280, page.totalRanking.items.length * 36 + 80)}
               />
@@ -921,7 +1017,7 @@ export function MarketScanPage() {
     () => (searchParams.get("activePage") as MarketScanPageKey) || "overview",
   );
   const [selectedCountry, setSelectedCountry] = useState<string | null>(
-    () => searchParams.get("country"),
+    () => searchParams.get("country") || DEFAULT_MARKET_SCAN_COUNTRY,
   );
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(
     () => searchParams.get("period"),
@@ -935,6 +1031,12 @@ export function MarketScanPage() {
   const [selectedDrilldownSegment, setSelectedDrilldownSegment] = useState(
     () => searchParams.get("drilldownSegment") || "SUV A0",
   );
+  const [rankingLimit, setRankingLimit] = useState(
+    () => {
+      const rl = searchParams.get("rankingLimit");
+      return normalizeMarketScanRankingLimit(rl);
+    },
+  );
   const [reloadToken, setReloadToken] = useState(0);
   const requestRef = useRef(0);
   const slideRef = useRef<HTMLDivElement | null>(null);
@@ -946,11 +1048,12 @@ export function MarketScanPage() {
     if (selectedPeriod) params.set("period", selectedPeriod);
     if (activePage !== "overview") params.set("activePage", activePage);
     if (selectedDrilldownSegment !== "SUV A0") params.set("drilldownSegment", selectedDrilldownSegment);
+    if (rankingLimit !== MIN_MARKET_SCAN_RANKING_LIMIT) params.set("rankingLimit", String(rankingLimit));
     const ft = selectedFuelTypes.slice().sort().join(",");
     const defaultFt = DEFAULT_FUEL_TYPES.slice().sort().join(",");
     if (ft !== defaultFt) params.set("fuelTypes", selectedFuelTypes.join(","));
     setSearchParams(params, { replace: true });
-  }, [activePage, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, setSearchParams]);
+  }, [activePage, rankingLimit, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, setSearchParams]);
 
   useEffect(() => {
     syncUrlParams();
@@ -972,7 +1075,7 @@ export function MarketScanPage() {
       trend_window_months: 24,
       origin_window_months: 24,
       body_window_months: 24,
-      ranking_limit: 6,
+      ranking_limit: normalizeMarketScanRankingLimit(rankingLimit),
       drilldown_segment: selectedDrilldownSegment || undefined,
     })
       .then((response) => {
@@ -992,7 +1095,7 @@ export function MarketScanPage() {
           setLoading(false);
         }
       });
-  }, [reloadToken, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod]);
+  }, [rankingLimit, reloadToken, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod]);
 
   useEffect(() => {
     if (!deck) {
@@ -1091,6 +1194,8 @@ export function MarketScanPage() {
           fuelOrder={deck.metadata.selectedFuelTypes}
           showDataLabels={showDataLabels}
           compact={compact}
+          rankingLimit={rankingLimit}
+          onRankingLimitChange={setRankingLimit}
         />
       );
     }
@@ -1101,6 +1206,8 @@ export function MarketScanPage() {
           fuelOrder={deck.metadata.selectedFuelTypes}
           showDataLabels={showDataLabels}
           compact={compact}
+          rankingLimit={rankingLimit}
+          onRankingLimitChange={setRankingLimit}
         />
       );
     }
@@ -1110,6 +1217,8 @@ export function MarketScanPage() {
         fuelOrder={deck.metadata.selectedFuelTypes}
         showDataLabels={showDataLabels}
         compact={compact}
+        rankingLimit={rankingLimit}
+        onRankingLimitChange={setRankingLimit}
       />
     );
   }
@@ -1178,7 +1287,7 @@ export function MarketScanPage() {
               <p>{narrative}</p>
               <div className="market-scan-hero-ribbon">
                 <span className="market-scan-hero-chip">
-                  国家 {deck?.metadata.selectedCountryLabel ?? "Hungary"}
+                  国家 {deck?.metadata.selectedCountryLabel ?? "Sweden"}
                 </span>
                 <span className="market-scan-hero-chip">
                   月份 {deck?.metadata.labels.currentMonthShort ?? "Latest"}

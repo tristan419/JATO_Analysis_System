@@ -83,6 +83,27 @@ function dedupeKey(path: string, init?: RequestInit): string {
   return `${method}:${path}:${body}`;
 }
 
+function isAbortLikeError(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    return error.name === "AbortError";
+  }
+
+  if (error instanceof Error) {
+    if (error.name === "AbortError") {
+      return true;
+    }
+    return /\babort(?:ed)?\b/i.test(error.message);
+  }
+
+  if (typeof error === "object" && error !== null) {
+    const name = "name" in error ? String(error.name ?? "") : "";
+    const message = "message" in error ? String(error.message ?? "") : "";
+    return name === "AbortError" || /\babort(?:ed)?\b/i.test(message);
+  }
+
+  return false;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const key = dedupeKey(path, init);
   const inflight = inflightRequests.get(key) as Promise<T> | undefined;
@@ -100,6 +121,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         ...init
       });
     } catch (error) {
+      if (isAbortLikeError(error)) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`网络请求失败：${path} (${message})`);
     }
@@ -126,6 +150,9 @@ async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
       ...init
     });
   } catch (error) {
+    if (isAbortLikeError(error)) {
+      throw error;
+    }
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`网络请求失败：${path} (${message})`);
   }

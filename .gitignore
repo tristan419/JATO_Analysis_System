@@ -21,3 +21,5 @@ venv/
 # local script logs
 03_Scripts/logs/
 
+# local vector DB artifacts
+04_Processed_data/chroma_db/

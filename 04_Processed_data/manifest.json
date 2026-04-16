@@ -1,13 +1,17 @@
 {
-  "generatedAtUtc": "2026-04-13T06:31:39.105253+00:00",
-  "rows": 944362,
+  "generatedAtUtc": "2026-04-15T18:21:19.851303+00:00",
+  "rows": 950999,
   "columns": 96,
   "schemaVersion": "1.1",
   "manifestSchemaVersion": "1.1",
-  "sourceFile": "整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+  "sourceFile": "已规整-汇总-JATO数据-意 挪 罗尼 瑞士、西 荷 瑞典 克罗、法 希 捷 葡-【202301-202603】.xlsx",
+  "sourceFiles": [
+    "01_RAW_DATA/已规整-汇总-JATO数据-意 挪 罗尼 瑞士、西 荷 瑞典 克罗、法 希 捷 葡-【202301-202603】.xlsx",
+    "04_Processed_data/.refresh_backups/promote-2026-03-partial12/jato_full_archive.parquet"
+  ],
   "sheetName": "Data Export",
   "outputFile": "jato_full_archive.parquet",
-  "outputBytes": 37474492,
+  "outputBytes": 36688786,
   "countries": [
     "丹麦",
     "克罗地亚",
@@ -33,9 +37,21 @@
   ],
   "countryCount": 21,
   "supplementedCountries": [
+    "丹麦",
+    "匈牙利",
+    "奥地利",
+    "德国",
     "斯洛伐克",
     "斯洛文尼亚",
+    "比利时",
+    "波兰",
     "芬兰"
   ],
-  "mergeNote": "18国新数据 + 3国补充数据"
+  "mergeNote": "12国三月新数据 + 9国沿用当前正式数据",
+  "addedColumnsFromMarchPatch": [
+    "2026 Mar",
+    "YTD 2024 (Mar)",
+    "YTD 2025 (Mar)",
+    "YTD 2026 (Mar)"
+  ]
 }

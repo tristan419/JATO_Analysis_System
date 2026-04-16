@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Usage:
-#   sudo SERVER_NAME=example.com BACKEND_PORT=8000 FRONTEND_ROOT=/opt/JATO_Analysis_System/06_AppPlatform/frontend/dist \
+#   sudo SERVER_NAME=example.com BACKEND_PORT=8000 FRONTEND_ROOT=/opt/JATO_Analysis_System-main/06_AppPlatform/frontend/dist \
 #     bash 03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -12,8 +12,29 @@ ENABLED_CONF="/etc/nginx/sites-enabled/jato_fullstack.conf"
 
 SERVER_NAME="${SERVER_NAME:-_}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
-FRONTEND_ROOT="${FRONTEND_ROOT:-/opt/JATO_Analysis_System/06_AppPlatform/frontend/dist}"
 ALLOW_CERTBOT_OVERWRITE="${ALLOW_CERTBOT_OVERWRITE:-false}"
+
+resolve_frontend_root() {
+  if [[ -n "${FRONTEND_ROOT:-}" ]]; then
+    printf '%s\n' "$FRONTEND_ROOT"
+    return 0
+  fi
+
+  local candidate=""
+  for candidate in \
+    /opt/JATO_Analysis_System-main/06_AppPlatform/frontend/dist \
+    /opt/JATO_Analysis_System/06_AppPlatform/frontend/dist
+  do
+    if [[ -d "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  printf '%s\n' /opt/JATO_Analysis_System-main/06_AppPlatform/frontend/dist
+}
+
+FRONTEND_ROOT="$(resolve_frontend_root)"
 
 allow_certbot_overwrite=false
 case "${ALLOW_CERTBOT_OVERWRITE,,}" in

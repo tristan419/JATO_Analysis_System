@@ -45,6 +45,7 @@ SEGMENT_MATRIX_ORDER = (
 )
 DEFAULT_DRILLDOWN_SEGMENT = "SUV A0"
 FALLBACK_DRILLDOWN_FUELS = ("BEV", "PHEV")
+MIN_MARKET_SCAN_RANKING_LIMIT = 10
 
 
 @dataclass(frozen=True)
@@ -148,9 +149,9 @@ def _normalize_drive_type(value: object) -> str:
     text = str(value or "").strip().lower()
     if not text:
         return "OTHER"
-    if any(token in text for token in ("awd", "4wd", "4x4", "all wheel", "four wheel", "quattro", "4-matic", "4matic", "xdrive")):
+    if any(token in text for token in ("awd", "4wd", "4x4", "all wheel", "four wheel", "quattro", "4-matic", "4matic", "xdrive", "all", "four")):
         return "4WD"
-    if any(token in text for token in ("fwd", "rwd", "2wd", "front wheel", "rear wheel", "two wheel", "sdrive")):
+    if any(token in text for token in ("fwd", "rwd", "2wd", "front wheel", "rear wheel", "two wheel", "sdrive", "front", "rear")):
         return "2WD"
     return "OTHER"
 
@@ -852,6 +853,13 @@ def _build_single_fuel_ranking_items(  # noqa: keep volume-based sort
         if current_volume <= 0:
             continue
         prior_volume = float(_series_sum(group, prior_columns).sum())
+        
+        current_4wd_volume = float(_series_sum(group[group["__drive_type"] == "4WD"], current_columns).sum())
+        current_2wd_volume = float(_series_sum(group[group["__drive_type"] == "2WD"], current_columns).sum())
+        current_other_volume = float(_series_sum(group[group["__drive_type"] == "OTHER"], current_columns).sum())
+        
+        drive_share_pct = float(current_4wd_volume / current_volume) if current_volume > 0 else 0.0
+        
         items.append(
             {
                 "model": str(model),
@@ -859,6 +867,12 @@ def _build_single_fuel_ranking_items(  # noqa: keep volume-based sort
                 "sharePct": _safe_share(current_volume, segment_total),
                 "shareDisplay": f"{_safe_share(current_volume, segment_total) * 100:.1f}%",
                 "yoy": _delta_payload(current_volume, prior_volume),
+                "driveSharePct": drive_share_pct,
+                "driveMix": {
+                    "4WD": current_4wd_volume,
+                    "2WD": current_2wd_volume,
+                    "OTHER": current_other_volume,
+                }
             }
         )
     items.sort(key=lambda item: item["volume"], reverse=True)
@@ -987,6 +1001,7 @@ def query_market_scan_deck(
     ranking_limit: int,
     drilldown_segment: str | None,
 ) -> dict[str, Any]:
+    ranking_limit = max(MIN_MARKET_SCAN_RANKING_LIMIT, int(ranking_limit))
     cache_key = f"{country}|{target_period}|{','.join(sorted(fuel_types))}|{trend_window_months}|{origin_window_months}|{body_window_months}|{ranking_limit}|{drilldown_segment}"
     now = time.monotonic()
     dataset_token = repo.current_dataset_token()

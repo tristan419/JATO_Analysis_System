@@ -6,10 +6,31 @@ NGINX_INSTALL_SCRIPT="$ROOT_DIR/03_Scripts/deploy/nginx/install_jato_fullstack_n
 
 SERVER_NAME="${SERVER_NAME:-}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
-FRONTEND_ROOT="${FRONTEND_ROOT:-/opt/JATO_Analysis_System/06_AppPlatform/frontend/dist}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 CERTBOT_STAGING="${CERTBOT_STAGING:-false}"
 CERTBOT_RENEW_DRY_RUN="${CERTBOT_RENEW_DRY_RUN:-false}"
+
+resolve_frontend_root() {
+  if [[ -n "${FRONTEND_ROOT:-}" ]]; then
+    printf '%s\n' "$FRONTEND_ROOT"
+    return 0
+  fi
+
+  local candidate=""
+  for candidate in \
+    /opt/JATO_Analysis_System-main/06_AppPlatform/frontend/dist \
+    /opt/JATO_Analysis_System/06_AppPlatform/frontend/dist
+  do
+    if [[ -d "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  printf '%s\n' /opt/JATO_Analysis_System-main/06_AppPlatform/frontend/dist
+}
+
+FRONTEND_ROOT="$(resolve_frontend_root)"
 
 is_truthy() {
   case "${1,,}" in

@@ -1,4 +1,5 @@
 import copy
+import json
 
 import pandas as pd
 import pytest
@@ -6,6 +7,7 @@ import pytest
 from app.services import country_chat_service
 from app.services import country_profiles
 from app.services import insight_card_service
+from app.services import local_wiki_service
 
 
 # --------------- helpers ---------------
@@ -330,6 +332,107 @@ def test_nvidia_provider_unavailable_without_keys(monkeypatch) -> None:
     assert country_chat_service._nvidia_provider_available() is False
 
 
+def test_query_local_wiki_returns_xc60_price_and_dimensions(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db_dir = tmp_path / "chroma_db"
+    monkeypatch.setenv("APP_LOCAL_WIKI_DB_PATH", str(db_dir))
+    monkeypatch.setenv("APP_LOCAL_WIKI_COLLECTION", "vehicle_wiki")
+    local_wiki_service.clear_local_wiki_caches()
+
+    frame = pd.DataFrame(
+        [
+            {
+                "Countries": "Germany",
+                "Make": "VOLVO",
+                "Model": "XC60",
+                "Trim level": "Ultra",
+                "Powertrain type": "PHEV",
+                "Version name": "XC60 Ultra T8",
+                "Currency": "EUR",
+                "MSRP including delivery charge": 52000,
+                "Base price": 50000,
+                "Retail price": 51850,
+                "length (mm)": 4708,
+                "width (mm)": 1902,
+                "height (mm)": 1653,
+                "wheelbase (mm)": 2865,
+                "Body type": "SUV",
+                "Fuel type": "PHEV",
+                "Transmission type": "AUTO",
+                "Driven wheels": "AWD",
+                "Battery range": 81,
+                "Seating capacity": 5,
+                "cargo volume (l)": 468,
+            },
+            {
+                "Countries": "Germany",
+                "Make": "MERCEDES",
+                "Model": "GLC",
+                "Trim level": "Base",
+                "Powertrain type": "ICE",
+                "Version name": "GLC 300",
+                "Currency": "EUR",
+                "MSRP including delivery charge": 61000,
+                "Base price": 59000,
+                "Retail price": 60500,
+                "length (mm)": 4716,
+                "width (mm)": 1890,
+                "height (mm)": 1640,
+                "wheelbase (mm)": 2888,
+                "Body type": "SUV",
+                "Fuel type": "ICE",
+                "Transmission type": "AUTO",
+                "Driven wheels": "RWD",
+                "Battery range": 0,
+                "Seating capacity": 5,
+                "cargo volume (l)": 620,
+            },
+        ]
+    )
+
+    manifest = local_wiki_service.build_vehicle_wiki_from_dataframe(
+        frame,
+        source_path=tmp_path / "stub.parquet",
+    )
+
+    docs = country_chat_service._query_local_wiki(
+        "VOLVO XC60 的价格和尺寸",
+        "Germany",
+        "VOLVO",
+        "XC60",
+    )
+
+    assert manifest["collectionName"] == "vehicle_wiki"
+    assert manifest["documentCount"] == 2
+    manifest_path = local_wiki_service.get_local_wiki_manifest_path()
+    assert manifest_path.exists()
+    stored_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert stored_manifest["documentCount"] == 2
+    assert docs
+    assert "XC60" in docs[0]
+    assert "4708" in docs[0]
+    assert "52000" in docs[0]
+
+    local_wiki_service.clear_local_wiki_caches()
+
+
+@pytest.mark.usefixtures("_patch_base")
+def test_query_news_wiki_returns_policy_and_competition_hits() -> None:
+    snapshot = country_chat_service.build_country_snapshot("Germany")
+
+    hits = country_chat_service._query_news_wiki(
+        "德国 company-car tax support 和中国品牌定价压力",
+        snapshot,
+    )
+
+    assert hits
+    titles = " ".join(str(item.get("title", "")) for item in hits)
+    assert "tax support" in titles or "pricing pressure" in titles
+    assert any(item.get("kind") in {"digest", "event"} for item in hits)
+
+
 # --------------- intent classification ---------------
 
 @pytest.mark.parametrize(
@@ -631,7 +734,7 @@ def test_answer_returns_multi_intent_fields(monkeypatch) -> None:
 
 
 @pytest.mark.usefixtures("_patch_base", "_patch_dashboard")
-def test_build_country_chart_deck_returns_full_snapshot() -> None:
+def test_build_country_chart_deck_returns_targeted_snapshot() -> None:
     result = country_chat_service.build_country_chart_deck(
         "瑞典",
         question="中系SUV定价35000，续航和竞品表现怎么样？",
@@ -642,18 +745,35 @@ def test_build_country_chart_deck_returns_full_snapshot() -> None:
     assert result["country"] == "瑞典"
     assert result["primaryIntent"] == "positioning-analysis"
     assert "positioning-analysis" in result["deckIntents"]
-    assert "trend-summary" in result["deckIntents"]
+    assert len(result["intents"]) <= country_chat_service.MAX_DECK_BASE_INTENTS
+    assert len(result["deckIntents"]) <= country_chat_service.MAX_DECK_INTENTS
     assert "positioningMap" in snapshot
     assert "nevRangeDistribution" in snapshot
     assert "segmentShareByLength" in snapshot
-    assert "priceMigration" in snapshot
     assert "modelVersionBubble" in snapshot
     assert "pricePerMeter" in snapshot
     assert "salesVsPrice" in snapshot
     assert "nevCapacityVsMsrp" in snapshot
+    assert "priceMigration" not in snapshot
     assert snapshot["marketEvents"]
     assert snapshot["newsDigest"] is not None
     assert result["controls"]["selectedModel"]
+
+
+def test_chart_deck_intents_are_capped_and_keep_primary_first() -> None:
+    deck_intents = country_chat_service._chart_deck_intents(
+        [
+            "positioning-analysis",
+            "competitive",
+            "segment-analysis",
+            "origin-analysis",
+            "nev-analysis",
+        ],
+    )
+
+    assert len(deck_intents) <= country_chat_service.MAX_DECK_INTENTS
+    assert deck_intents[0] == "positioning-analysis"
+    assert "competitive" in deck_intents
 
 
 @pytest.mark.usefixtures("_patch_base", "_patch_dashboard")

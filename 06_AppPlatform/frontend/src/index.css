@@ -6572,21 +6572,59 @@ table.data-table tr.data-table-group-row.contains-selection td {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.market-scan-fuel-panel-row {
+  gap: 8px;
+}
+
 .market-scan-fuel-panel-row .market-scan-panel {
   min-width: 0;
+  gap: 6px;
+  padding: 10px 10px 8px;
+}
+
+.market-scan-fuel-panel-row .market-scan-panel-head {
+  gap: 8px;
 }
 
 .market-scan-fuel-panel-row .market-scan-panel-head h2 {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .market-scan-fuel-panel-row .market-scan-panel-head p {
-  font-size: 11px;
-  line-height: 1.35;
+  margin-top: 1px;
+  font-size: 9px;
+  line-height: 1.15;
 }
 
-.market-scan-fuel-panel-row .market-scan-subpanel h3 {
-  font-size: 10px;
+.market-scan-fuel-panel-row .market-scan-ranking-list {
+  gap: 3px;
+}
+
+.market-scan-fuel-panel-row .market-scan-ranking-row {
+  padding: 2px 0 4px;
+  gap: 2px 6px;
+}
+
+.market-scan-fuel-panel-row .market-scan-ranking-row-info {
+  gap: 2px;
+}
+
+.market-scan-fuel-panel-row .market-scan-ranking-row-head {
+  gap: 4px 6px;
+}
+
+.market-scan-fuel-panel-row .market-scan-ranking-row-nums,
+.market-scan-fuel-panel-row .market-scan-tone-text {
+  font-size: 9px;
+}
+
+.market-scan-fuel-panel-row .market-scan-ranking-row-drive-chip {
+  min-height: 14px;
+  padding: 0 4px;
+}
+
+.market-scan-fuel-panel-row .market-scan-ranking-row-drive-chip-value {
+  font-size: 9px;
 }
 
 .market-scan-panel {
@@ -6656,64 +6694,147 @@ table.data-table tr.data-table-group-row.contains-selection td {
   gap: 6px;
 }
 
-.market-scan-ranking-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-  padding: 8px 10px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background: rgba(255, 255, 255, 0.8);
-}
-
-.market-scan-ranking-row-main {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.market-scan-ranking-row-rank {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border: 1px solid rgba(15, 23, 42, 0.1);
-  background: linear-gradient(180deg, rgba(15, 118, 110, 0.12) 0%, rgba(15, 118, 110, 0.02) 100%);
-  color: #0f172a;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-}
-
-.market-scan-ranking-row-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
+.market-scan-ranking-list--fuel {
   gap: 2px;
 }
 
-.market-scan-ranking-row-copy strong {
+.market-scan-ranking-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 6px 8px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 250, 252, 0.88) 100%);
+}
+
+.market-scan-ranking-row--fuel {
+  padding: 1px 0 3px;
+  gap: 2px 5px;
+  border: 0;
+  background: transparent;
+}
+
+.market-scan-ranking-row--fuel + .market-scan-ranking-row--fuel {
+  border-top: 1px solid rgba(15, 23, 42, 0.06);
+  padding-top: 3px;
+}
+
+.market-scan-ranking-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.market-scan-ranking-row--fuel .market-scan-ranking-row-head {
+  align-items: baseline;
+  gap: 4px 6px;
+}
+
+.market-scan-ranking-row-rank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 2px;
+  background: rgba(15, 23, 42, 0.04);
+  color: #475569;
+  font-size: 9px;
+  font-weight: 700;
+  grid-row: 1 / span 2;
+}
+
+.market-scan-ranking-row--fuel .market-scan-ranking-row-rank {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.05);
+  font-size: 8px;
+}
+
+.market-scan-ranking-row-info {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  min-width: 0;
+}
+
+.market-scan-ranking-row--fuel .market-scan-ranking-row-info {
+  gap: 2px;
+}
+
+.market-scan-ranking-row-name {
   color: #0f172a;
-  font-size: 12px;
-  line-height: 1.15;
+  font-size: 11px;
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.market-scan-ranking-row-copy span {
-  color: #64748b;
+.market-scan-ranking-row--fuel .market-scan-ranking-row-name {
   font-size: 10px;
-  line-height: 1.2;
+  line-height: 1.05;
+}
+
+.market-scan-ranking-row-nums {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  color: #64748b;
+  font-size: 9px;
+  line-height: 1.15;
+}
+
+.market-scan-ranking-row--fuel .market-scan-ranking-row-nums {
+  gap: 3px;
+  font-size: 8px;
+  line-height: 1.1;
 }
 
 .market-scan-ranking-row-side {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 3px;
+  flex-shrink: 0;
   flex-wrap: wrap;
-  gap: 4px;
+  align-self: start;
 }
+
+.market-scan-ranking-row--fuel .market-scan-ranking-row-side {
+  gap: 3px;
+  align-self: center;
+}
+
+.market-scan-tone-text {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 0 5px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(248, 250, 252, 0.92);
+  font-size: 9px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.market-scan-ranking-row--fuel .market-scan-tone-text {
+  min-height: 12px;
+  padding: 0 3px;
+  font-size: 8px;
+  line-height: 1;
+}
+
+.market-scan-tone-text.is-positive { color: #0f9d58; }
+.market-scan-tone-text.is-negative { color: #b91c1c; }
+.market-scan-tone-text.is-new { color: #1d4ed8; }
 
 .market-scan-ranking-card {
   display: flex;
@@ -6809,6 +6930,104 @@ table.data-table tr.data-table-group-row.contains-selection td {
   background: linear-gradient(90deg, #0f766e 0%, #14b8a6 100%);
 }
 
+/* --- Ranking row inline bar (compact fuel panels) --- */
+.market-scan-ranking-row-bar {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.market-scan-ranking-row--fuel .market-scan-ranking-row-bar {
+  height: 3px;
+}
+
+.market-scan-ranking-row-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  overflow: hidden;
+}
+
+.market-scan-ranking-row-drive-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 16px;
+  padding: 0 5px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.04);
+  white-space: nowrap;
+}
+
+.market-scan-ranking-row--fuel .market-scan-ranking-row-drive-chip {
+  gap: 3px;
+  min-height: 12px;
+  padding: 0 3px;
+}
+
+.market-scan-ranking-row-drive-chip-label {
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.market-scan-ranking-row--fuel .market-scan-ranking-row-drive-chip-label {
+  font-size: 8px;
+  letter-spacing: 0.05em;
+}
+
+.market-scan-ranking-row-drive-chip-value {
+  color: #0f172a;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.market-scan-ranking-row--fuel .market-scan-ranking-row-drive-chip-value {
+  font-size: 8px;
+}
+
+/* --- Scrollable ranking containers --- */
+.market-scan-ranking-scrollable {
+  /* removed nested scroll to prevent double scrollbar confusion */
+}
+
+/* --- Ranking limit control in callout --- */
+.market-scan-callout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.market-scan-ranking-limit-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.market-scan-ranking-limit-control select {
+  padding: 2px 6px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  border-radius: 4px;
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .market-scan-table-wrap {
   overflow-x: auto;
 }
@@ -6900,30 +7119,89 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 .market-scan-slide-frame .market-scan-ranking-list {
-  gap: 4px;
-}
-
-.market-scan-slide-frame .market-scan-ranking-row {
-  padding: 6px 7px;
   gap: 6px;
 }
 
+.market-scan-slide-frame .market-scan-ranking-list--fuel {
+  gap: 2px;
+}
+
+.market-scan-slide-frame .market-scan-ranking-row {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  padding: 6px 8px;
+  gap: 5px 8px;
+}
+
+.market-scan-slide-frame .market-scan-ranking-row--fuel {
+  grid-template-columns: 15px minmax(0, 1fr) auto;
+  padding: 1px 0 3px;
+  gap: 2px 4px;
+}
+
 .market-scan-slide-frame .market-scan-ranking-row-rank {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
+  font-size: 7px;
+}
+
+.market-scan-slide-frame .market-scan-ranking-row--fuel .market-scan-ranking-row-rank {
+  width: 13px;
+  height: 13px;
+  font-size: 6px;
+}
+
+.market-scan-slide-frame .market-scan-ranking-row-name {
+  font-size: 9px;
+}
+
+.market-scan-slide-frame .market-scan-ranking-row--fuel .market-scan-ranking-row-name {
   font-size: 8px;
 }
 
-.market-scan-slide-frame .market-scan-ranking-row-copy strong {
-  font-size: 10px;
+.market-scan-slide-frame .market-scan-ranking-row-nums,
+.market-scan-slide-frame .market-scan-tone-text,
+.market-scan-slide-frame .market-scan-tag {
+  font-size: 8px;
 }
 
-.market-scan-slide-frame .market-scan-ranking-row-copy span {
-  font-size: 9px;
+.market-scan-slide-frame .market-scan-ranking-row--fuel .market-scan-ranking-row-nums,
+.market-scan-slide-frame .market-scan-ranking-row--fuel .market-scan-tone-text,
+.market-scan-slide-frame .market-scan-ranking-row--fuel .market-scan-ranking-row-drive-chip-label,
+.market-scan-slide-frame .market-scan-ranking-row--fuel .market-scan-ranking-row-drive-chip-value,
+.market-scan-slide-frame .market-scan-ranking-row--fuel .market-scan-tag {
+  font-size: 7px;
+}
+
+.market-scan-slide-frame .market-scan-ranking-row-bar {
+  height: 6px;
+}
+
+.market-scan-slide-frame .market-scan-ranking-row--fuel .market-scan-ranking-row-bar {
+  height: 3px;
 }
 
 .market-scan-slide-frame .market-scan-ranking-row-side {
   gap: 3px;
+}
+
+.market-scan-slide-frame .market-scan-ranking-row-drive-chip-label {
+  font-size: 8px;
+}
+
+.market-scan-slide-frame .market-scan-ranking-row-drive-chip,
+.market-scan-slide-frame .market-scan-tone-text {
+  min-height: 14px;
+  padding: 0 4px;
+}
+
+.market-scan-slide-frame .market-scan-ranking-row--fuel .market-scan-ranking-row-drive-chip,
+.market-scan-slide-frame .market-scan-ranking-row--fuel .market-scan-tone-text {
+  min-height: 10px;
+  padding: 0 2px;
+}
+
+.market-scan-slide-frame .market-scan-ranking-row-drive-chip-value {
+  font-size: 8px;
 }
 
 .market-scan-slide-frame .market-scan-ranking-card {
@@ -7065,6 +7343,22 @@ table.data-table tr.data-table-group-row.contains-selection td {
     gap: 6px;
   }
 
+  .market-scan-ranking-row {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+
+  .market-scan-ranking-row-name {
+    white-space: normal;
+  }
+
+  .market-scan-ranking-row-side {
+    grid-column: 2;
+    width: 100%;
+    align-items: center;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
   .market-scan-hero-chip,
   .market-scan-fuel-chip,
   .market-scan-tone-pill,
@@ -7107,16 +7401,29 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 .market-scan-slide-frame .market-scan-fuel-panel-row .market-scan-panel {
-  padding: 10px;
+  padding: 8px 8px 6px;
+  gap: 5px;
 }
 
 .market-scan-slide-frame .market-scan-fuel-panel-row .market-scan-panel-head h2 {
-  font-size: 12px;
+  font-size: 11px;
 }
 
-.market-scan-slide-frame .market-scan-fuel-panel-row .market-scan-panel-head p,
-.market-scan-slide-frame .market-scan-fuel-panel-row .market-scan-subpanel h3 {
-  font-size: 9px;
+.market-scan-slide-frame .market-scan-fuel-panel-row .market-scan-panel-head p {
+  font-size: 8px;
+}
+
+.market-scan-slide-frame .market-scan-fuel-panel-row .market-scan-ranking-list {
+  gap: 2px;
+}
+
+.market-scan-slide-frame .market-scan-fuel-panel-row .market-scan-ranking-row {
+  padding: 1px 0 3px;
+  gap: 2px 4px;
+}
+
+.market-scan-slide-frame .market-scan-fuel-panel-row .market-scan-ranking-row-info {
+  gap: 2px;
 }
 
 /* ── MSRP admin links ── */
@@ -7145,4 +7452,38 @@ table.data-table tr.data-table-group-row.contains-selection td {
 .msrp-admin-links nav a:hover {
   color: var(--c-accent, #1d4ed8);
   text-decoration: underline;
+}
+
+/* 4WD Animation CSS */
+.market-scan-4wd-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: block;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.22),
+    rgba(255, 255, 255, 0.22) 6px,
+    rgba(255, 255, 255, 0.48) 6px,
+    rgba(255, 255, 255, 0.48) 12px
+  );
+  animation: ms-bg-pan 1.2s linear infinite;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+@keyframes ms-bg-pan {
+  from { background-position: 0 0; }
+  to { background-position: 17px 0; }
+}
+
+.market-scan-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.04);
+  color: var(--c-text-secondary, #64748b);
+  font-size: inherit;
+  line-height: 1;
+  font-weight: 600;
 }

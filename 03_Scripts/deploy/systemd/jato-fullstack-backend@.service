@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/JATO_Analysis_System/06_AppPlatform/backend
+WorkingDirectory=/opt/JATO_Analysis_System-main/06_AppPlatform/backend
 
 # Recommended: run as a non-root user.
 # User=deploy
@@ -14,10 +14,10 @@ WorkingDirectory=/opt/JATO_Analysis_System/06_AppPlatform/backend
 Environment=APP_BACKEND_WORKERS=3
 EnvironmentFile=-/etc/jato-fullstack/backend.env
 Environment=PYTHONUNBUFFERED=1
-Environment=APP_PROJECT_ROOT=/opt/JATO_Analysis_System
-Environment=PYTHONPATH=/opt/JATO_Analysis_System/06_AppPlatform/backend
+Environment=APP_PROJECT_ROOT=/opt/JATO_Analysis_System-main
+Environment=PYTHONPATH=/opt/JATO_Analysis_System-main/06_AppPlatform/backend
 
-ExecStart=/opt/JATO_Analysis_System/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port %i --workers ${APP_BACKEND_WORKERS}
+ExecStart=/opt/JATO_Analysis_System-main/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port %i --workers ${APP_BACKEND_WORKERS}
 
 Restart=always
 RestartSec=3

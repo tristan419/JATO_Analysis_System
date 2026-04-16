@@ -231,8 +231,8 @@ sudo cp 03_Scripts/deploy/systemd/jato-dashboard@.service /etc/systemd/system/
 sudo systemctl daemon-reload
 
 # Replace default path in unit file if APP_DIR is custom.
-if [[ "$APP_DIR" != "/opt/JATO_Analysis_System" ]]; then
-  sudo sed -i "s#/opt/JATO_Analysis_System#$APP_DIR#g" /etc/systemd/system/jato-dashboard@.service
+if [[ "$APP_DIR" != "/opt/JATO_Analysis_System-main" ]]; then
+  sudo sed -i "s#/opt/JATO_Analysis_System-main#$APP_DIR#g" /etc/systemd/system/jato-dashboard@.service
   sudo systemctl daemon-reload
 fi
 

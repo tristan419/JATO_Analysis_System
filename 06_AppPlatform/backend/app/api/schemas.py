@@ -105,7 +105,7 @@ class MarketScanDeckRequest(BaseModel):
     trend_window_months: int = 24
     origin_window_months: int = 30
     body_window_months: int = 30
-    ranking_limit: int = 12
+    ranking_limit: int = Field(default=10, ge=10)
     drilldown_segment: str | None = None
 
 

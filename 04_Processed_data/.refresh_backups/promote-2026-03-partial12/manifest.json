@@ -1,0 +1,41 @@
+{
+  "generatedAtUtc": "2026-04-13T06:31:39.105253+00:00",
+  "rows": 944362,
+  "columns": 96,
+  "schemaVersion": "1.1",
+  "manifestSchemaVersion": "1.1",
+  "sourceFile": "整合版-【已规整】JATO数据-17+1国-【202301-202602】.xlsx",
+  "sheetName": "Data Export",
+  "outputFile": "jato_full_archive.parquet",
+  "outputBytes": 37474492,
+  "countries": [
+    "丹麦",
+    "克罗地亚",
+    "匈牙利",
+    "奥地利",
+    "希腊",
+    "德国",
+    "意大利",
+    "挪威",
+    "捷克",
+    "斯洛伐克",
+    "斯洛文尼亚",
+    "比利时",
+    "法国",
+    "波兰",
+    "瑞典",
+    "瑞士",
+    "罗马尼亚",
+    "芬兰",
+    "荷兰",
+    "葡萄牙",
+    "西班牙"
+  ],
+  "countryCount": 21,
+  "supplementedCountries": [
+    "斯洛伐克",
+    "斯洛文尼亚",
+    "芬兰"
+  ],
+  "mergeNote": "18国新数据 + 3国补充数据"
+}
