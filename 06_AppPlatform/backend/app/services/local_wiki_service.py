@@ -10,8 +10,15 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-import chromadb
 import pandas as pd
+
+try:
+    import chromadb
+except ModuleNotFoundError as exc:
+    chromadb = None
+    _CHROMADB_IMPORT_ERROR = exc
+else:
+    _CHROMADB_IMPORT_ERROR = None
 
 log = logging.getLogger(__name__)
 
@@ -84,8 +91,16 @@ def clear_local_wiki_caches() -> None:
     _get_collection.cache_clear()
 
 
+def _require_chromadb() -> None:
+    if chromadb is None:
+        raise RuntimeError(
+            "chromadb is not installed; local wiki features are unavailable"
+        ) from _CHROMADB_IMPORT_ERROR
+
+
 @lru_cache(maxsize=8)
 def _get_client(db_dir: str) -> chromadb.PersistentClient:
+    _require_chromadb()
     return chromadb.PersistentClient(path=db_dir)
 
 
