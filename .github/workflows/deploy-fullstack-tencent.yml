@@ -5,6 +5,7 @@ on:
     branches: ["main"]
     paths:
       - "06_AppPlatform/**"
+      - "01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
       - "03_Scripts/deploy_fullstack_server.sh"
       - "03_Scripts/deploy/nginx/jato_fullstack.conf.example"
       - "03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh"
