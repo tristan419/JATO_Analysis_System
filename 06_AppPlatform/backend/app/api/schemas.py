@@ -109,6 +109,29 @@ class MarketScanDeckRequest(BaseModel):
     drilldown_segment: str | None = None
 
 
+class PositioningPricingDeckRequest(BaseModel):
+    country: str | None = None
+    target_period: str | None = None
+    fuel_types: list[str] = Field(default_factory=list)
+    sales_mode: Literal["month", "rolling12"] = "month"
+    top_n: int = Field(default=50, ge=1, le=200)
+    msrp_min: float | None = Field(default=None, ge=0)
+    msrp_max: float | None = Field(default=None, ge=0)
+    price_band_size: int | None = Field(default=None, ge=500, le=200000)
+
+
+class VersionComparisonDeckRequest(BaseModel):
+    country: str | None = None
+    target_period: str | None = None
+    fuel_types: list[str] = Field(default_factory=list)
+    sales_mode: Literal["month", "rolling12"] = "month"
+    segment: str | None = None
+    models: list[str] = Field(default_factory=list)
+    msrp_min: float | None = Field(default=None, ge=0)
+    msrp_max: float | None = Field(default=None, ge=0)
+    price_band_size: int | None = Field(default=None, ge=500, le=200000)
+
+
 class CountryChatTurn(BaseModel):
     role: Literal["user", "assistant"]
     content: str
@@ -247,6 +270,45 @@ class MsrpObservationIngest(BaseModel):
         "rejected",
     ]
     match_reason_json: dict[str, object] | None = None
+    source_context_json: dict[str, object] | None = None
+    candidate_matches_json: list[dict[str, object]] | None = None
+
+
+class MsrpObservationCreate(MsrpObservationIngest):
+    pass
+
+
+class MsrpObservationPatch(BaseModel):
+    source_id: str | None = None
+    country: str | None = None
+    brand: str | None = None
+    jato_model: str | None = None
+    jato_trim: str | None = None
+    jato_powertrain: str | None = None
+    official_model: str | None = None
+    official_trim: str | None = None
+    official_edition: str | None = None
+    official_powertrain: str | None = None
+    msrp_value: float | None = None
+    currency: str | None = None
+    tax_included: bool | None = None
+    price_label: str | None = None
+    availability_text: str | None = None
+    observed_at_utc: datetime | None = None
+    source_url: str | None = None
+    source_snapshot_path: str | None = None
+    source_payload_hash: str | None = None
+    extraction_version: str | None = None
+    match_confidence: float | None = None
+    match_status: Literal[
+        "auto_accepted",
+        "review_required",
+        "human_approved",
+        "rejected",
+        "override_applied",
+    ] | None = None
+    match_reason_json: dict[str, object] | None = None
+    source_context_json: dict[str, object] | None = None
     candidate_matches_json: list[dict[str, object]] | None = None
 
 
@@ -290,6 +352,7 @@ class MatchOverrideCreate(BaseModel):
     brand: str
     jato_model: str
     jato_trim: str
+    jato_powertrain: str | None = None
     official_model: str
     official_trim: str
     valid_from_date: date
@@ -301,6 +364,7 @@ class MatchOverrideCreate(BaseModel):
 class MatchOverridePatch(BaseModel):
     official_model: str | None = None
     official_trim: str | None = None
+    jato_powertrain: str | None = None
     valid_from_date: date | None = None
     valid_to_date: date | None = None
     override_reason: str | None = None

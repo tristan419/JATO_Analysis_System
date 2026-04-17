@@ -14,18 +14,18 @@ export function NotFoundPage() {
               <span className="selection-ribbon-value">404 handled inside app shell</span>
             </div>
           </div>
-          <div className="dashboard-hero-actions">
-            <div className="hero-meta-block hero-meta-block-immersive">
-              <span className="hero-meta-label">Route state</span>
-              <strong className="hero-meta-value">404</strong>
-              <span className="hero-meta-subvalue">无匹配工作视图</span>
+            <div className="dashboard-hero-actions">
+              <div className="hero-meta-block hero-meta-block-immersive">
+                <span className="hero-meta-label">Route state</span>
+                <strong className="hero-meta-value">404</strong>
+                <span className="hero-meta-subvalue">无匹配工作视图</span>
+              </div>
+              <div className="hero-meta-block hero-meta-block-immersive">
+                <span className="hero-meta-label">Available views</span>
+                <strong className="hero-meta-value">ADMIN</strong>
+                <span className="hero-meta-subvalue">Dashboard / Specification / Data Management</span>
+              </div>
             </div>
-            <div className="hero-meta-block hero-meta-block-immersive">
-              <span className="hero-meta-label">Available views</span>
-              <strong className="hero-meta-value">03</strong>
-              <span className="hero-meta-subvalue">Dashboard / Specification / CRUD</span>
-            </div>
-          </div>
         </div>
 
         <div className="dashboard-hero-body">
@@ -39,7 +39,7 @@ export function NotFoundPage() {
               <div className="dashboard-hero-rail-actions">
                 <Link className="btn btn-sm btn-primary" to="/">返回 Dashboard</Link>
                 <Link className="btn btn-sm btn-secondary" to="/specification">打开 Specification</Link>
-                <Link className="btn btn-sm btn-ghost" to="/crud">打开 CRUD</Link>
+                <Link className="btn btn-sm btn-ghost" to="/data-management">打开数据总览</Link>
               </div>
             </div>
           </div>

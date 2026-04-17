@@ -1,8 +1,12 @@
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import MatchOverride, ReviewCase, ReviewDecision
 from app.services.country_service import country_filter_aliases
+
+
+def _normalize_powertrain(value: str | None) -> str:
+    return str(value or "").strip()
 
 
 def list_match_overrides(
@@ -51,6 +55,7 @@ def find_applicable_override(
     brand: str,
     jato_model: str,
     jato_trim: str,
+    jato_powertrain: str | None,
     observation_date: object,
 ) -> MatchOverride | None:
     """Find the most recent active override for a business key + date.
@@ -58,22 +63,33 @@ def find_applicable_override(
     Used during batch ingest to auto-apply previously-approved mappings
     so that repeated observations skip manual review.
     """
-    stmt: Select[tuple[MatchOverride]] = (
-        select(MatchOverride)
-        .where(
-            MatchOverride.country == country,
-            MatchOverride.brand == brand,
-            MatchOverride.jato_model == jato_model,
-            MatchOverride.jato_trim == jato_trim,
-            MatchOverride.valid_from_date <= observation_date,
-            or_(
-                MatchOverride.valid_to_date.is_(None),
-                MatchOverride.valid_to_date >= observation_date,
-            ),
-        )
-        .order_by(MatchOverride.valid_from_date.desc())
-        .limit(1)
+    normalized_powertrain = _normalize_powertrain(jato_powertrain)
+    stmt: Select[tuple[MatchOverride]] = select(MatchOverride).where(
+        MatchOverride.country == country,
+        MatchOverride.brand == brand,
+        MatchOverride.jato_model == jato_model,
+        MatchOverride.jato_trim == jato_trim,
+        MatchOverride.valid_from_date <= observation_date,
+        or_(
+            MatchOverride.valid_to_date.is_(None),
+            MatchOverride.valid_to_date >= observation_date,
+        ),
     )
+    if normalized_powertrain:
+        stmt = stmt.where(
+            MatchOverride.jato_powertrain.in_([normalized_powertrain, ""])
+        ).order_by(
+            case(
+                (MatchOverride.jato_powertrain == normalized_powertrain, 0),
+                else_=1,
+            ),
+            MatchOverride.valid_from_date.desc(),
+        )
+    else:
+        stmt = stmt.where(MatchOverride.jato_powertrain == "").order_by(
+            MatchOverride.valid_from_date.desc()
+        )
+    stmt = stmt.limit(1)
     return session.execute(stmt).scalar_one_or_none()
 
 
@@ -83,23 +99,35 @@ def list_active_match_overrides_by_key(
     brand: str,
     jato_model: str,
     jato_trim: str,
+    jato_powertrain: str | None,
     as_of_date: object,
 ) -> list[MatchOverride]:
-    stmt: Select[tuple[MatchOverride]] = (
-        select(MatchOverride)
-        .where(
-            MatchOverride.country == country,
-            MatchOverride.brand == brand,
-            MatchOverride.jato_model == jato_model,
-            MatchOverride.jato_trim == jato_trim,
-            MatchOverride.valid_from_date <= as_of_date,
-            or_(
-                MatchOverride.valid_to_date.is_(None),
-                MatchOverride.valid_to_date >= as_of_date,
-            ),
-        )
-        .order_by(MatchOverride.valid_from_date.desc())
+    normalized_powertrain = _normalize_powertrain(jato_powertrain)
+    stmt: Select[tuple[MatchOverride]] = select(MatchOverride).where(
+        MatchOverride.country == country,
+        MatchOverride.brand == brand,
+        MatchOverride.jato_model == jato_model,
+        MatchOverride.jato_trim == jato_trim,
+        MatchOverride.valid_from_date <= as_of_date,
+        or_(
+            MatchOverride.valid_to_date.is_(None),
+            MatchOverride.valid_to_date >= as_of_date,
+        ),
     )
+    if normalized_powertrain:
+        stmt = stmt.where(
+            MatchOverride.jato_powertrain.in_([normalized_powertrain, ""])
+        ).order_by(
+            case(
+                (MatchOverride.jato_powertrain == normalized_powertrain, 0),
+                else_=1,
+            ),
+            MatchOverride.valid_from_date.desc(),
+        )
+    else:
+        stmt = stmt.where(MatchOverride.jato_powertrain == "").order_by(
+            MatchOverride.valid_from_date.desc()
+        )
     return session.execute(stmt).scalars().all()
 
 

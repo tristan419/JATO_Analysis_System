@@ -53,16 +53,20 @@ Markdown_Readme/
 | 文档 | 领域 | 状态 | 说明 |
 | --- | --- | --- | --- |
 | `ROADMAP.md` | 总览 | Active | 唯一主索引 |
+| `ARCHITECTURE_REVIEW_2026-04-17.md` | 架构评审 | Draft | 跨域架构评审与 P0/P1/P2 改动建议（Streamlit 搁置后的新阶段） |
+| `PRODUCT_DEEPDIVE_2026-04-17.md` | 产品/架构 | Draft | 六问答卷：跨源 join / MSRP 抓取+配置差异 / Copilot 精准化 / 多源对账 / 统一抓取 |
 | **01_DevWorkflow/** | | | |
 | `01_DevWorkflow/SOFTWARE_DEV_WORKFLOW.md` | 开发规范 | Active | 从需求到上线的完整软件开发流程 |
 | `01_DevWorkflow/FULLSTACK_DEVELOPMENT_SPEC_2026-04-11.md` | 开发规范 | Active | 跨前后端 contract、测试补齐与验收流程规范 |
 | `01_DevWorkflow/PR_CHECKLIST.md` | 开发规范 | Active | 每次功能变更必须逐项勾选的 PR 清单 |
 | `01_DevWorkflow/COUNTRY_COPILOT_INTELLIGENCE_IMPLEMENTATION_2026-04-15.md` | 开发规范 | Active | Country Copilot 智能增强实施计划与执行记录 |
+| `01_DevWorkflow/COUNTRY_COPILOT_INTENT_AND_HYBRID_RETRIEVAL_2026-04-17.md` | 开发规范/AI | Draft | Copilot Intent Router + Tiered Retrieval（本地 × 联网）设计 |
 | **02_DataETL/** | | | |
 | `02_DataETL/ETL.md` | 实现 | Active | 数据处理主链路（Raw → ETL → 分区 → 刷新） |
 | `02_DataETL/ETL_Baseline_Patch_Migration_Checklist_2026-04-10.md` | 实现 | Active | Baseline / Patch 迁移执行清单 |
 | `02_DataETL/ETL_Raw_Compare_Review_Spec_2026-04-10.md` | 实现 | Active | Raw 对 Raw 比对 / Review 规格 |
 | `02_DataETL/PRECOMPUTE_STRATEGY.md` | 实现 | Active | 后端预聚合 + 前端轻加载方案 |
+| `02_DataETL/UNIFIED_SCRAPING_PIPELINE_2026-04-17.md` | 架构/抓取 | Draft | 统一抓取流水线（Scrapling + Playwright + Firecrawl + Crawlee 三层抽象） |
 | **MSRP** | | | |
 | `MSRP/README.md` | 功能/MSRP | Active | MSRP 文档总索引与阅读顺序 |
 | `MSRP/01_Requirements/MSRP_Official_Price_Enrichment_PRD_2026-04-10.md` | 产品/MSRP | Draft | MSRP 官方价格补全 PRD |
@@ -72,6 +76,7 @@ Markdown_Readme/
 | `MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md` | 实现/MSRP | Active | Override 回流与价格时间序列 |
 | `MSRP/03_Implementation/MSRP_BRAND_FAMILY_MODEL_RULES_2026-04-11.md` | 实现/MSRP | Active | 多车型映射规则 (model_rules) |
 | `MSRP/03_Implementation/CSS_SELECTOR_TOOLCHAIN_2026-04-11.md` | 实现/MSRP | Active | CSS Selector 填充工具链 |
+| `MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md` | 实现/MSRP | Draft | Version/Feature Matrix + 多源 Reconciliation（Q2+Q5 合写） |
 | `MSRP/05_Backlog/MSRP_SUV_COUNTRY_MODEL_TOP30_PLAN_2026-04-12.md` | Backlog/MSRP | Active | **当前执行计划（主入口）** |
 | `MSRP/04_Execution/MSRP_KEYWORD_FILLING_AND_POC_RESULTS_2026-04-12.md` | 执行/MSRP | Active | Keyword 填充记录 + POC 结果 |
 | `MSRP/04_Execution/MSRP_XC60_EXECUTION_RESULT_2026-04-11.md` | 验证/MSRP | Active | XC60 执行结果 |
@@ -83,6 +88,7 @@ Markdown_Readme/
 | `03_Database/POSTGRESQL_CORE_SCHEMA_2026-04-10.md` | 架构 | Draft | PostgreSQL 核心表结构设计 |
 | `03_Database/ALEMBIC_MIGRATION_PLAN_2026-04-10.md` | 架构 | Draft | Alembic 数据库迁移方案 |
 | `03_Database/BACKEND_POSTGRES_LOCAL_DEV_2026-04-10.md` | 运维/调试 | Draft | 后端 PostgreSQL 本地开发环境搭建 |
+| `03_Database/CROSS_SOURCE_JOIN_DESIGN_2026-04-17.md` | 架构 | Draft | JATO Parquet × PostgreSQL MSRP 跨源 join（DuckDB federated + positioning matrix） |
 | **04_DevOps/** | | | |
 | `04_DevOps/TENCENT_CLOUD_DEPLOY.md` | 运维/部署 | Active | 腾讯云 Ubuntu Fullstack 部署 |
 | `04_DevOps/MANUAL_CICD.md` | 运维/发布 | Active | Fullstack 手动 CI/CD 与线上修复 |
@@ -150,6 +156,18 @@ Markdown_Readme/
 - 跨层 contract 测试覆盖 MSRP、Review Cases、Engineering 三大页面（15 前端 + 10 后端测试）。
 - ETL baseline / patch / staging / release 工作流规格已定义。
 - Scraping Toolkit 文档已添加 README，详见 `07_ScrapingToolkit/README.md`。
+
+## 5.2 2026-04-17 新增规划（六问答卷）
+
+基于用户 2026-04-17 提出的六个核心难点，新增以下 5 份 Draft 专题文档：
+
+- [`PRODUCT_DEEPDIVE_2026-04-17.md`](./PRODUCT_DEEPDIVE_2026-04-17.md) — 主答卷（六问概览 + 动作清单）
+- [`03_Database/CROSS_SOURCE_JOIN_DESIGN_2026-04-17.md`](./03_Database/CROSS_SOURCE_JOIN_DESIGN_2026-04-17.md) — Q1 跨源 join
+- [`MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md`](./MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md) — Q2+Q5 配置差异 + 多源对账
+- [`01_DevWorkflow/COUNTRY_COPILOT_INTENT_AND_HYBRID_RETRIEVAL_2026-04-17.md`](./01_DevWorkflow/COUNTRY_COPILOT_INTENT_AND_HYBRID_RETRIEVAL_2026-04-17.md) — Q3+Q4 Copilot 精准化与本地 × 联网
+- [`02_DataETL/UNIFIED_SCRAPING_PIPELINE_2026-04-17.md`](./02_DataETL/UNIFIED_SCRAPING_PIPELINE_2026-04-17.md) — Q6 统一抓取流水线
+
+同时把根目录 `Markdown_Readme/country_assistant_upgrade_plan.md` 标记为 History（被 Copilot 新文档 supersede），但暂不移动文件（等下一轮归档批次一起处理）。
 
 ## 6. 变更流程（简化）
 

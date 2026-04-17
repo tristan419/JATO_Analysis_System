@@ -91,6 +91,45 @@ python run_news.py --batch-files news_sources/batch_a.yaml --limit-per-feed 5
 python run_news.py --batch-files news_sources/batch_a.yaml news_sources/batch_b.yaml --output tmp/news_batch.json
 ```
 
+### EVKX BEV 参数 + MSRP 抓取
+
+```bash
+cd 07_ScrapingToolkit
+python run_evkx.py --pricing-country UnitedStates --limit 20
+python run_evkx.py --pricing-country Germany --page-size 100
+```
+
+默认会输出到：
+
+```text
+04_Processed_data/msrp_candidate_scope/evkx/evkx_bev_<pricing_country>_<availability>.json
+```
+
+输出包含：
+
+- EVKX 搜索接口返回的 BEV 列表与起售价
+- 每辆车详情页里的多市场 pricing 列表
+- `/specifications/` 页里的分 section 规格表
+
+### EVKX JSON 导入 MSRP review
+
+抓完 EVKX JSON 后，可以直接走现有 MSRP review batch ingest：
+
+```bash
+python 03_Scripts/import_evkx_catalog.py \
+  04_Processed_data/msrp_candidate_scope/evkx/evkx_bev_unitedstates_current.json
+
+python 03_Scripts/import_evkx_catalog.py \
+  04_Processed_data/msrp_candidate_scope/evkx/evkx_bev_unitedstates_current.json \
+  --dry-run
+```
+
+当前导入策略：
+
+- 默认写入 `review_required`，不直接 auto-accept
+- 会为每条 EVKX 记录保存 `selectedMarketPrice`、`specHighlights`、完整 `specifications`
+- 会基于同国家 current prices 生成一组 `candidateMatches` 供 ReviewCasesPage 展示
+
 ## 提取策略
 
 `scrapling_web.py` 按优先级依次尝试三种提取方式：

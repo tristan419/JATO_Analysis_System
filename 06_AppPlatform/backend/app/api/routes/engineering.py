@@ -11,6 +11,7 @@ from app.api.schemas import (
 from app.core.security import require_min_role
 from app.db.session import get_db_session
 from app.services.engineering_service import (
+    archive_config_project,
     create_config_project,
     get_config_import_batch_detail,
     get_config_import_batch_page_data,
@@ -145,6 +146,18 @@ def patch_project(
         project_id,
         payload.model_dump(),
     )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"item": row}
+
+
+@router.delete("/{project_id}")
+def delete_project(
+    project_id: str,
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    row = archive_config_project(session, project_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return {"item": row}

@@ -912,6 +912,7 @@ def test_build_country_chart_deck_respects_selected_year_and_model_controls(monk
 def test_insight_card_positioning_link_template() -> None:
     assert "positioning" in insight_card_service._CHART_LINK_TEMPLATES
     assert "positioning-analysis" in insight_card_service.INTENT_TO_CATEGORIES
+    assert insight_card_service._CHART_LINK_TEMPLATES["positioning"] == "/positioning-pricing?country={country}&activePage=overview"
 
 
 # --------------- improved intent recognition ---------------

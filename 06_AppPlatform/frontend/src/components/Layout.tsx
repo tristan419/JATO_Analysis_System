@@ -7,6 +7,9 @@ const NAV_ITEMS = [
   { to: "/", code: "01", label: "Overview", sublabel: "Dashboard" },
   { to: "/msrp", code: "06", label: "MSRP", sublabel: "当前价格" },
   { to: "/market-scan", code: "07", label: "Scan", sublabel: "市场扫描" },
+  { to: "/positioning-pricing", code: "08", label: "Pricing", sublabel: "定位定价" },
+  { to: "/version-comparison", code: "09", label: "Compare", sublabel: "版型对比" },
+  { to: "/customer-insights", code: "10", label: "Customer", sublabel: "看客户" },
 ];
 
 export function Layout() {

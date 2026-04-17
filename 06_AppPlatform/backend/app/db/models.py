@@ -257,6 +257,7 @@ class MatchOverride(TimestampMixin, Base):
             "brand",
             "jato_model",
             "jato_trim",
+            "jato_powertrain",
             "official_model",
             "official_trim",
             "valid_from_date",
@@ -267,6 +268,7 @@ class MatchOverride(TimestampMixin, Base):
             "country",
             "brand",
             "jato_model",
+            "jato_powertrain",
         ),
         {"schema": "review"},
     )
@@ -280,6 +282,11 @@ class MatchOverride(TimestampMixin, Base):
     brand: Mapped[str] = mapped_column(Text, nullable=False)
     jato_model: Mapped[str] = mapped_column(Text, nullable=False)
     jato_trim: Mapped[str] = mapped_column(Text, nullable=False)
+    jato_powertrain: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="",
+    )
     official_model: Mapped[str] = mapped_column(Text, nullable=False)
     official_trim: Mapped[str] = mapped_column(Text, nullable=False)
     valid_from_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -541,6 +548,10 @@ class MsrpObservation(TimestampMixin, Base):
         JSONB,
         nullable=True,
     )
+    source_context_json: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
 
 
 class CurrentPrice(Base):
@@ -551,6 +562,7 @@ class CurrentPrice(Base):
             "brand",
             "jato_model",
             "jato_trim",
+            "jato_powertrain",
             name="uq_current_prices_business_key",
         ),
         Index("ix_msrp_current_prices_country_brand", "country", "brand"),
@@ -567,7 +579,11 @@ class CurrentPrice(Base):
     brand: Mapped[str] = mapped_column(Text, nullable=False)
     jato_model: Mapped[str] = mapped_column(Text, nullable=False)
     jato_trim: Mapped[str] = mapped_column(Text, nullable=False)
-    jato_powertrain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    jato_powertrain: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="",
+    )
     official_model: Mapped[str] = mapped_column(Text, nullable=False)
     official_trim: Mapped[str] = mapped_column(Text, nullable=False)
     official_edition: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -636,6 +652,7 @@ class PriceHistory(Base):
             "brand",
             "jato_model",
             "jato_trim",
+            "jato_powertrain",
         ),
         Index(
             "ix_msrp_price_history_open_period",
@@ -643,6 +660,7 @@ class PriceHistory(Base):
             "brand",
             "jato_model",
             "jato_trim",
+            "jato_powertrain",
             "valid_to_utc",
         ),
         {"schema": "msrp"},
@@ -657,6 +675,11 @@ class PriceHistory(Base):
     brand: Mapped[str] = mapped_column(Text, nullable=False)
     jato_model: Mapped[str] = mapped_column(Text, nullable=False)
     jato_trim: Mapped[str] = mapped_column(Text, nullable=False)
+    jato_powertrain: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="",
+    )
     msrp_value: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(Text, nullable=False)
     source_msrp_value: Mapped[float] = mapped_column(

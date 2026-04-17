@@ -1,0 +1,122 @@
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+
+from app.core.security import UserContext, require_min_role
+from app.services.jato_monthly_update_service import (
+    complete_jato_monthly_update_upload,
+    create_jato_monthly_update_job,
+    create_jato_monthly_update_job_from_upload,
+    get_jato_monthly_update_upload,
+    get_jato_monthly_update_job,
+    initiate_jato_monthly_update_upload,
+    list_jato_monthly_update_jobs,
+    run_jato_monthly_update_cleanup,
+    upload_jato_monthly_update_chunk,
+)
+
+router = APIRouter(prefix="/msrp", tags=["msrp"])
+
+
+@router.post("/monthly-update-jobs")
+def post_monthly_update_job(
+    month: str = Form(...),
+    file: UploadFile = File(...),
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": create_jato_monthly_update_job(
+            month=month,
+            file=file,
+            triggered_by=user.name,
+        )
+    }
+
+
+@router.post("/monthly-update-jobs/from-upload")
+def post_monthly_update_job_from_upload(
+    payload: dict[str, object],
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": create_jato_monthly_update_job_from_upload(
+            month=str(payload.get("month", "")),
+            upload_id=str(payload.get("uploadId", "")),
+            triggered_by=user.name,
+        )
+    }
+
+
+@router.get("/monthly-update-jobs")
+def get_monthly_update_jobs(
+    limit: int = Query(default=20, ge=1, le=50),
+    _user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return list_jato_monthly_update_jobs(limit=limit)
+
+
+@router.get("/monthly-update-jobs/{job_id}")
+def get_monthly_update_job(
+    job_id: str,
+    _user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {"item": get_jato_monthly_update_job(job_id)}
+
+
+@router.post("/monthly-update-uploads/initiate")
+def post_monthly_update_upload_session(
+    payload: dict[str, object],
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": initiate_jato_monthly_update_upload(
+            filename=str(payload.get("filename", "")),
+            size_bytes=payload.get("sizeBytes"),
+            resume_key=(
+                str(payload.get("resumeKey", "")).strip()
+                if payload.get("resumeKey") is not None
+                else None
+            ),
+            triggered_by=user.name,
+        )
+    }
+
+
+@router.get("/monthly-update-uploads/{upload_id}")
+def get_monthly_update_upload_session(
+    upload_id: str,
+    _user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {"item": get_jato_monthly_update_upload(upload_id)}
+
+
+@router.put("/monthly-update-uploads/{upload_id}/parts/{part_number}")
+async def put_monthly_update_upload_chunk(
+    upload_id: str,
+    part_number: int,
+    request: Request,
+    _user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": upload_jato_monthly_update_chunk(
+            upload_id=upload_id,
+            part_number=part_number,
+            content=await request.body(),
+            chunk_sha256=request.headers.get("X-Chunk-SHA256", ""),
+        )
+    }
+
+
+@router.post("/monthly-update-uploads/{upload_id}/complete")
+def post_monthly_update_upload_complete(
+    upload_id: str,
+    _user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {"item": complete_jato_monthly_update_upload(upload_id=upload_id)}
+
+
+@router.post("/monthly-update-maintenance/cleanup")
+def post_monthly_update_cleanup(
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": run_jato_monthly_update_cleanup(triggered_by=user.name)
+    }

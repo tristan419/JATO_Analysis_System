@@ -624,6 +624,21 @@ def update_config_project(
     return _project_payload(project)
 
 
+def archive_config_project(
+    session: Session,
+    project_id: str,
+) -> dict[str, object] | None:
+    project = repo.get_project(session, UUID(project_id))
+    if project is None:
+        return None
+    project.status = "archived"
+    project.updated_at_utc = datetime.now(timezone.utc)
+    repo.deactivate_project_variants(session, project.project_id)
+    _commit_or_conflict(session, "Project code already exists")
+    session.refresh(project)
+    return _project_payload(project)
+
+
 def list_config_import_batches(
     session: Session,
     project_id: UUID | None,

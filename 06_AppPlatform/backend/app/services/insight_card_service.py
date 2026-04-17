@@ -43,7 +43,7 @@ _CHART_LINK_TEMPLATES: dict[str, str] = {
     "drilldown": "/market-scan?country={country}&activePage=drilldown",
     "suv_a": "/market-scan?country={country}&activePage=suvA",
     "suv_b": "/market-scan?country={country}&activePage=suvB",
-    "positioning": "/?advGroup=market_structure&advChart=powertrain_bubble&country={country}",
+    "positioning": "/positioning-pricing?country={country}&activePage=overview",
     "price_value": "/?advGroup=price_value&advChart=length_vs_price&country={country}",
     "nev_range": "/?advGroup=nev_analysis&advChart=nev_range_distribution&country={country}",
     "segment_structure": "/?advGroup=market_structure&advChart=segment_share_by_length&country={country}",

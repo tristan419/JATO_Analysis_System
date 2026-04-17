@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, Fragment, useEffect, useRef, useState } from "react";
 
 import { api } from "../api/client";
+import { AdminToolsNav } from "../components/AdminToolsNav";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { LoopingCountStrip } from "../components/LoopingCountStrip";
@@ -10,7 +11,7 @@ import {
   TextSearchFilters,
   useTextSearchFilters,
 } from "../components/TextSearchFilters";
-import type { ReviewCase, ReviewCaseDetail } from "../types";
+import type { ReviewCandidateMatch, ReviewCase, ReviewCaseDetail } from "../types";
 import {
   formatReviewTrimSummary,
   summarizeReviewTrimCollection,
@@ -175,6 +176,41 @@ function formatEvidenceValue(value: unknown) {
     return JSON.stringify(value);
   }
   return String(value);
+}
+
+const EVKX_SPEC_LABELS: Record<string, string> = {
+  bodyType: "Body Type",
+  modelYear: "Model Year",
+  peakPower: "Peak Power",
+  torque: "Torque",
+  topSpeed: "Top Speed",
+  batteryNet: "Battery Net",
+  batteryGross: "Battery Gross",
+  maxDcCharging: "Max DC Charging",
+  range: "Range",
+  consumption: "Consumption",
+  trunkCapacity: "Trunk Capacity",
+  trailerWeight: "Trailer Weight",
+  chargeport: "Chargeport",
+};
+
+function formatEvkxFieldLabel(key: string) {
+  return EVKX_SPEC_LABELS[key]
+    ?? key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/_/g, " ");
+}
+
+function getEvkxSourceContext(
+  reviewCase: ReviewCaseDetail | null,
+) {
+  const context = asRecord(reviewCase?.observation?.sourceContext ?? null);
+  if (!context) {
+    return null;
+  }
+  return String(context.source ?? "").toUpperCase() === "EVKX" ? context : null;
+}
+
+function formatCandidateScore(match: ReviewCandidateMatch) {
+  return `${(match.score * 100).toFixed(1)}%`;
 }
 
 function getReviewCaseMatchReason(reviewCase: ReviewCase | ReviewCaseDetail): MatchReasonPayload | null {
@@ -516,6 +552,14 @@ export function ReviewCasesPage() {
   const detailMatchReason = detail ? getReviewCaseMatchReason(detail) : null;
   const detailConfidenceRule = getConfidenceRuleSummary(detailMatchReason);
   const detailEvidence = getMatchEvidenceEntries(detailMatchReason);
+  const detailEvkxContext = getEvkxSourceContext(detail);
+  const detailEvkxMarketPrice = asRecord(detailEvkxContext ? detailEvkxContext.selectedMarketPrice : null);
+  const detailEvkxSpecHighlights = asRecord(detailEvkxContext ? detailEvkxContext.specHighlights : null);
+  const detailEvkxSpecEntries = detailEvkxSpecHighlights
+    ? Object.entries(detailEvkxSpecHighlights)
+      .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    : [];
+  const detailCandidateMatches = detail?.candidateMatches ?? [];
   const currentPrice = detail?.currentPrice ?? null;
   const statusFilterLabel = statusFilter
     ? getReviewStatusLabel(statusFilter)
@@ -1037,6 +1081,110 @@ export function ReviewCasesPage() {
                 )}
               </div>
 
+              <div className="review-current-price-panel">
+                <div className="detail-section-head review-inline-section-head">
+                  <div>
+                    <div className="card-title">Candidate Matches</div>
+                    <p className="section-note">导入侧给出的候选映射会在这里展开，方便人工快速判断是否要 remap。</p>
+                  </div>
+                </div>
+                {detailCandidateMatches.length > 0 ? (
+                  <div className="admin-match-component-list">
+                    {detailCandidateMatches.map((candidate, index) => (
+                      <div key={`${candidate.currentPriceId || candidate.jatoModel}-${candidate.jatoTrim}-${index}`} className="admin-match-component is-applied">
+                        <div className="admin-match-component-head">
+                          <span className="admin-match-component-label">
+                            {candidate.officialModel || candidate.jatoModel} / {candidate.officialTrim || candidate.jatoTrim}
+                          </span>
+                          <span className="admin-match-component-delta">{formatCandidateScore(candidate)}</span>
+                        </div>
+                        <div className="admin-match-component-evidence">
+                          {[
+                            candidate.jatoTrim || null,
+                            candidate.jatoPowertrain || candidate.officialPowertrain || null,
+                            candidate.currentMsrpValue !== undefined
+                              ? formatMsrp(candidate.currentMsrpValue, candidate.currency || detail.currency || "EUR")
+                              : null,
+                          ].filter(Boolean).join(" / ")}
+                        </div>
+                        {candidate.reason && (
+                          <div className="admin-match-component-evidence">
+                            {Object.entries(candidate.reason)
+                              .map(([key, value]) => `${formatEvkxFieldLabel(key)}: ${formatEvidenceValue(value)}`)
+                              .join(" · ")}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="section-note">当前没有可展示的候选映射；这通常说明该市场还没有同国别 current price 基线。</p>
+                )}
+              </div>
+
+              {detailEvkxContext && (
+                <div className="review-current-price-panel">
+                  <div className="detail-section-head review-inline-section-head">
+                    <div>
+                      <div className="card-title">EVKX Variant / Spec Diff</div>
+                      <p className="section-note">这里集中展示 EVKX 变体身份、目标市场价格和关键规格，辅助 reviewer 判断这个 variant 应该映射到哪条 JATO 车型。</p>
+                    </div>
+                    {Boolean(detailEvkxContext.infoUrl) && (
+                      <a href={String(detailEvkxContext.infoUrl)} target="_blank" rel="noreferrer" className="review-table-link">
+                        {formatSourceLink(String(detailEvkxContext.infoUrl))}
+                      </a>
+                    )}
+                  </div>
+                  <div className="admin-detail-grid">
+                    <div className="admin-detail-item">
+                      <span className="admin-detail-label">EVKX Variant</span>
+                      <span className="admin-detail-value">{String(detailEvkxContext.vehicleName ?? "-")}</span>
+                    </div>
+                    <div className="admin-detail-item">
+                      <span className="admin-detail-label">EV ID</span>
+                      <span className="admin-detail-value">{String(detailEvkxContext.evId ?? "-")}</span>
+                    </div>
+                    <div className="admin-detail-item">
+                      <span className="admin-detail-label">Target Market</span>
+                      <span className="admin-detail-value">{String(detailEvkxContext.targetCountry ?? detail.country)}</span>
+                    </div>
+                    <div className="admin-detail-item">
+                      <span className="admin-detail-label">Selected Market Price</span>
+                      <span className="admin-detail-value">
+                        {detailEvkxMarketPrice
+                          ? formatMsrp(
+                            asNumber(detailEvkxMarketPrice.amount) ?? undefined,
+                            String(detailEvkxMarketPrice.currency ?? detail.sourceCurrency ?? ""),
+                          )
+                          : "-"}
+                      </span>
+                    </div>
+                    <div className="admin-detail-item">
+                      <span className="admin-detail-label">Mapped Target</span>
+                      <span className="admin-detail-value">
+                        {detail.officialModel} / {formatReviewTrimSummary(detail, Number.POSITIVE_INFINITY)}
+                      </span>
+                    </div>
+                    <div className="admin-detail-item">
+                      <span className="admin-detail-label">Mapped Powertrain</span>
+                      <span className="admin-detail-value">{detail.officialPowertrain || detail.jatoPowertrain || "-"}</span>
+                    </div>
+                  </div>
+                  {detailEvkxSpecEntries.length > 0 ? (
+                    <div className="admin-match-evidence-list" style={{ marginTop: 12 }}>
+                      {detailEvkxSpecEntries.map(([key, value]) => (
+                        <div key={key} className="admin-match-evidence-pill">
+                          <span className="admin-match-evidence-key">{formatEvkxFieldLabel(key)}</span>
+                          <span className="admin-match-evidence-value">{formatEvidenceValue(value)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="section-note">当前 EVKX 记录没有提取到可对比的关键规格。</p>
+                  )}
+                </div>
+              )}
+
               <div className="admin-match-reason">
                 <h3 className="admin-subsection-title">Match Reason</h3>
                 {!detailMatchReason ? (
@@ -1158,6 +1306,7 @@ export function ReviewCasesPage() {
           )}
         </div>
       )}
+      <AdminToolsNav />
     </section>
   );
 }

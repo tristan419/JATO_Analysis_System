@@ -31,6 +31,8 @@ MONTH_NAME_TO_NUMBER = {
 NUMBER_TO_MONTH_NAME = {value: key for key, value in MONTH_NAME_TO_NUMBER.items()}
 DEFAULT_FUEL_TYPES = ("ICE", "MHEV", "HEV", "PHEV", "BEV", "LPG")
 DRILLDOWN_PANEL_FUELS = ("BEV", "PHEV", "HEV", "MHEV", "ICE")
+POSITIONING_FUEL_ORDER = ("BEV", "HEV", "PHEV", "MHEV", "ICE")
+VERSION_COMPARISON_MODEL_LIMIT = 10
 PRIMARY_ORIGINS = ("欧系", "日系", "韩系", "美系", "中系")
 ORIGIN_BRAND_TREND_LIMIT = 4
 MONTHLY_BRAND_MODEL_STACK_LIMIT = 10
@@ -61,6 +63,36 @@ SEDAN_SEGMENT_SHARE_ORDER = (
 DEFAULT_DRILLDOWN_SEGMENT = "SUV A0"
 FALLBACK_DRILLDOWN_FUELS = ("BEV", "PHEV")
 MIN_MARKET_SCAN_RANKING_LIMIT = 10
+POSITIONING_BUBBLE_LIMIT = 60
+POSITIONING_SALES_MODES = ("month", "rolling12")
+MSRP_CANDIDATES = (
+    "MSRP规整",
+    "MSRP including delivery charge",
+    "MSRP",
+    "MSRP区间",
+)
+LENGTH_CANDIDATES = (
+    "length (mm)",
+    "车长(mm)",
+    "车长",
+    "length",
+)
+VERSION_CANDIDATES = (
+    "Version name",
+    "version name",
+    "Version Name",
+    "Version",
+    "版本",
+    "版型",
+)
+TRIM_CANDIDATES = (
+    "Trim level",
+    "Trim Level",
+    "trim level",
+    "Trim",
+    "trim",
+    "配置",
+)
 
 
 @dataclass(frozen=True)
@@ -69,10 +101,15 @@ class ColumnMap:
     country_label: str | None
     make: str
     model: str
+    version: str | None
+    trim: str | None
+    length: str | None
+    msrp: str | None
     origin: str | None
     segment: str
     powertrain: str
     drive_type: str | None
+    registration_type: str | None
     month_columns: tuple[str, ...]
 
 
@@ -123,10 +160,15 @@ def _resolve_columns(dataset_token: str) -> ColumnMap:
         country_label=_resolve_existing_column(["Countries", "Country"], columns),
         make=make,
         model=model,
+        version=_resolve_existing_column(list(VERSION_CANDIDATES), columns),
+        trim=_resolve_existing_column(list(TRIM_CANDIDATES), columns),
+        length=_resolve_existing_column(list(LENGTH_CANDIDATES), columns),
+        msrp=_resolve_existing_column(list(MSRP_CANDIDATES), columns),
         origin=_resolve_existing_column(["车系", "Origin", "Series"], columns),
         segment=segment,
         powertrain=powertrain,
         drive_type=_resolve_existing_column(["Driven wheels", "Drive type", "Drive", "驱动形式"], columns),
+        registration_type=_resolve_existing_column(["Registration type", "Registration Type", "registration type"], columns),
         month_columns=tuple(_list_month_columns(columns)),
     )
 
@@ -169,6 +211,26 @@ def _normalize_drive_type(value: object) -> str:
     if any(token in text for token in ("fwd", "rwd", "2wd", "front wheel", "rear wheel", "two wheel", "sdrive", "front", "rear")):
         return "2WD"
     return "OTHER"
+
+
+def _normalize_registration_type(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if not text or text in {"?", "unknown", "n/a", "na"}:
+        return "Other"
+    if any(token in text for token in ("business", "fleet", "company", "corporate", "lease", "leasing", "rental")):
+        return "Business"
+    if any(token in text for token in ("private", "retail", "personal", "consumer")):
+        return "Private"
+    return "Other"
+
+
+def _registration_mix_payload(group: pd.DataFrame, current_columns: list[str]) -> dict[str, float]:
+    if "__registration_type" not in group.columns:
+        return {"Business": 0.0, "Private": 0.0, "Other": 0.0}
+    return {
+        registration_type: float(_series_sum(group[group["__registration_type"] == registration_type], current_columns).sum())
+        for registration_type in ("Business", "Private", "Other")
+    }
 
 
 def _resolve_period(requested_period: str | None, available_periods: list[str]) -> str:
@@ -399,6 +461,23 @@ def _ytd_periods(available_periods: list[str], target_period: str) -> list[str]:
     ]
 
 
+def _normalize_positioning_sales_mode(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in POSITIONING_SALES_MODES else "month"
+
+
+def _resolve_positioning_sales_window(
+    available_periods: list[str],
+    resolved_period: str,
+    sales_mode: str,
+) -> tuple[list[str], str, str]:
+    normalized_mode = _normalize_positioning_sales_mode(sales_mode)
+    if normalized_mode == "rolling12":
+        periods = _window_periods(available_periods, resolved_period, 12)
+        return periods, "近12个月", "Rolling 12M Sales"
+    return [resolved_period], "当月", "Current Month Sales"
+
+
 def _series_sum(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
     present_columns = [column for column in columns if column in frame.columns]
     if not present_columns:
@@ -593,6 +672,455 @@ def _normalize_selected_fuels(requested_fuels: list[str], available_fuels: list[
             return selected
     fallback = [fuel for fuel in DEFAULT_FUEL_TYPES if fuel in available_fuels]
     return fallback or available_fuels[:]
+
+
+def _resolve_positioning_price_band_size(series: pd.Series) -> int:
+    cleaned = pd.to_numeric(series, errors="coerce").dropna()
+    cleaned = cleaned[cleaned > 0]
+    if cleaned.empty:
+        return 5000
+    span = float(cleaned.max() - cleaned.min())
+    if span <= 25_000:
+        return 2_500
+    if span <= 60_000:
+        return 5_000
+    if span <= 120_000:
+        return 10_000
+    if span <= 250_000:
+        return 20_000
+    if span <= 600_000:
+        return 50_000
+    return 100_000
+
+
+def _format_price_band_label(start: float, end: float) -> str:
+    return f"{start:,.0f}-{end:,.0f}"
+
+
+def _resolve_positioning_price_window(
+    series: pd.Series,
+    *,
+    requested_min: float | None,
+    requested_max: float | None,
+    band_size: int,
+) -> tuple[float, float]:
+    cleaned = pd.to_numeric(series, errors="coerce").dropna()
+    cleaned = cleaned[cleaned > 0]
+    if cleaned.empty:
+        fallback_min = float(requested_min or 0.0)
+        fallback_max = float(requested_max or fallback_min + band_size)
+        return fallback_min, max(fallback_min + band_size, fallback_max)
+
+    auto_min = float(cleaned.min())
+    auto_max = float(cleaned.max())
+    resolved_min = float(requested_min) if requested_min is not None else float(band_size * int(auto_min // band_size))
+    resolved_max = float(requested_max) if requested_max is not None else float(band_size * int(auto_max // band_size) + band_size)
+    if resolved_max <= resolved_min:
+        resolved_max = resolved_min + band_size
+    return resolved_min, resolved_max
+
+
+def _positioning_page_rows(
+    frame: pd.DataFrame,
+    page_key: str,
+) -> pd.DataFrame:
+    if page_key == "overview":
+        return frame.copy()
+    if page_key == "suvA0":
+        return frame[frame["__segment_raw"] == "SUV A0"].copy()
+    if page_key == "suvA":
+        return frame[frame["__segment_raw"] == "SUV A"].copy()
+    return frame[
+        frame["__segment_raw"].str.startswith(("SUV B", "SUV C", "SUV D"), na=False)
+    ].copy()
+
+
+def _resolve_version_comparison_segment(
+    frame: pd.DataFrame,
+    requested_segment: str | None,
+    *,
+    sales_column: str,
+) -> tuple[str, list[dict[str, str]]]:
+    if frame.empty or sales_column not in frame.columns:
+        return "", []
+    grouped = (
+        frame.groupby("__segment_raw", dropna=False)[sales_column]
+        .sum()
+        .sort_values(ascending=False)
+    )
+    options = [
+        {"value": str(segment), "label": str(segment)}
+        for segment in grouped.index
+        if str(segment).strip()
+    ]
+    if not options:
+        return "", []
+    available = {option["value"] for option in options}
+    if requested_segment and requested_segment in available:
+        return requested_segment, options
+    preferred = next((option["value"] for option in options if option["value"] == "SUV B"), None)
+    return preferred or options[0]["value"], options
+
+
+def _resolve_version_comparison_models(
+    frame: pd.DataFrame,
+    requested_models: list[str],
+    *,
+    sales_column: str,
+) -> tuple[list[str], list[dict[str, str]]]:
+    if frame.empty or sales_column not in frame.columns:
+        return [], []
+    grouped = (
+        frame.groupby("__model", dropna=False)[sales_column]
+        .sum()
+        .sort_values(ascending=False)
+    )
+    options = [
+        {"value": str(model), "label": str(model)}
+        for model in grouped.index
+        if str(model).strip()
+    ]
+    if not options:
+        return [], []
+    available = {option["value"] for option in options}
+    selected: list[str] = []
+    seen: set[str] = set()
+    for model in requested_models:
+        normalized = str(model).strip()
+        if not normalized or normalized not in available or normalized in seen:
+            continue
+        selected.append(normalized)
+        seen.add(normalized)
+        if len(selected) >= VERSION_COMPARISON_MODEL_LIMIT:
+            break
+    if selected:
+        return selected, options
+    return [option["value"] for option in options[:3]], options
+
+
+def _build_version_comparison_bubble_items(
+    frame: pd.DataFrame,
+    *,
+    sales_column: str,
+    msrp_min: float | None = None,
+    msrp_max: float | None = None,
+) -> list[dict[str, Any]]:
+    if frame.empty or sales_column not in frame.columns:
+        return []
+    working = frame.copy()
+    working["__sales"] = pd.to_numeric(working[sales_column], errors="coerce").fillna(0.0)
+    working = working[working["__sales"] > 0]
+    if working.empty:
+        return []
+    grouped = working.groupby(
+        ["__model", "__version", "__trim", "__powertrain"],
+        dropna=False,
+    )
+    aggregated = grouped.agg(
+        Length=("__length", "median"),
+        MSRP=("__msrp", "median"),
+        MsrpMin=("__msrp", "min"),
+        MsrpMax=("__msrp", "max"),
+        Sales=("__sales", "sum"),
+        VariantCount=("__version", "size"),
+    ).reset_index()
+    aggregated = aggregated[
+        (aggregated["Length"] > 0)
+        & (aggregated["MSRP"] > 0)
+        & (aggregated["Sales"] > 0)
+    ].copy()
+    if aggregated.empty:
+        return []
+    if msrp_min is not None:
+        aggregated = aggregated[aggregated["MSRP"] >= float(msrp_min)]
+    if msrp_max is not None:
+        aggregated = aggregated[aggregated["MSRP"] <= float(msrp_max)]
+    if aggregated.empty:
+        return []
+    aggregated = aggregated.sort_values(["Sales", "MSRP"], ascending=[False, True])
+    return [
+        {
+            "model": str(row["__model"]),
+            "version": str(row["__version"]),
+            "trim": str(row["__trim"]),
+            "powertrain": str(row["__powertrain"]),
+            "length": float(row["Length"]),
+            "msrp": float(row["MSRP"]),
+            "msrpMin": float(row["MsrpMin"]),
+            "msrpMax": float(row["MsrpMax"]),
+            "sales": float(row["Sales"]),
+            "variantCount": int(row["VariantCount"]),
+        }
+        for _, row in aggregated.iterrows()
+    ]
+
+
+def _build_version_comparison_page_payload(
+    frame: pd.DataFrame,
+    *,
+    title: str,
+    subtitle: str,
+    sales_column: str,
+    sales_metric_label: str,
+    sales_metric_detail: str,
+    selected_fuels: list[str],
+    msrp_min: float | None,
+    msrp_max: float | None,
+    price_band_size: int | None,
+) -> dict[str, Any]:
+    price_bands = _build_positioning_price_bands(
+        frame,
+        sales_column=sales_column,
+        selected_fuels=selected_fuels,
+        msrp_min=msrp_min,
+        msrp_max=msrp_max,
+        band_size=price_band_size,
+    )
+    range_min = price_bands["range"]["min"]
+    range_max = price_bands["range"]["max"]
+    range_frame = frame[
+        (frame["__msrp"] >= range_min)
+        & (frame["__msrp"] <= range_max)
+    ].copy()
+    bubble_items = _build_version_comparison_bubble_items(
+        range_frame,
+        sales_column=sales_column,
+        msrp_min=range_min,
+        msrp_max=range_max,
+    )
+    total_sales = float(pd.to_numeric(range_frame[sales_column], errors="coerce").fillna(0.0).sum()) if sales_column in range_frame.columns else 0.0
+    model_count = int(range_frame["__model"].nunique()) if "__model" in range_frame.columns else 0
+    version_count = len(bubble_items)
+    lead_version = bubble_items[0]["version"] if bubble_items else "-"
+    return {
+        "title": title,
+        "subtitle": subtitle,
+        "summaryText": (
+            f"{subtitle} 当前共 {total_sales:,.0f} 台，覆盖 {model_count} 个 Model / {version_count} 个版型。"
+        ) if total_sales > 0 else f"{subtitle} 当前筛选下暂无可用数据。",
+        "metrics": [
+            {"label": sales_metric_label, "value": total_sales, "detail": sales_metric_detail},
+            {"label": "Compared Models", "value": model_count, "detail": "当前对比 Model 数"},
+            {"label": "Visible Versions", "value": version_count, "detail": "右侧版型气泡数"},
+            {"label": "Lead Version", "value": lead_version, "detail": "销量最高版型"},
+        ],
+        "priceBands": price_bands,
+        "bubbleChart": {
+            "items": bubble_items,
+        },
+    }
+
+
+def _build_positioning_price_bands(
+    frame: pd.DataFrame,
+    *,
+    sales_column: str,
+    selected_fuels: list[str],
+    msrp_min: float | None = None,
+    msrp_max: float | None = None,
+    band_size: int | None = None,
+) -> dict[str, Any]:
+    if frame.empty or sales_column not in frame.columns:
+        return {"bandSize": int(band_size or 5000), "range": {"min": float(msrp_min or 0.0), "max": float(msrp_max or 0.0)}, "items": []}
+
+    working = frame.copy()
+    working["__sales"] = pd.to_numeric(working[sales_column], errors="coerce").fillna(0.0)
+    working = working[working["__sales"] > 0]
+    if working.empty:
+        resolved_band_size = int(band_size or 5000)
+        resolved_min, resolved_max = _resolve_positioning_price_window(
+            frame["__msrp"],
+            requested_min=msrp_min,
+            requested_max=msrp_max,
+            band_size=resolved_band_size,
+        )
+        return {"bandSize": resolved_band_size, "range": {"min": resolved_min, "max": resolved_max}, "items": []}
+
+    resolved_band_size = int(band_size or _resolve_positioning_price_band_size(working["__msrp"]))
+    resolved_min, resolved_max = _resolve_positioning_price_window(
+        working["__msrp"],
+        requested_min=msrp_min,
+        requested_max=msrp_max,
+        band_size=resolved_band_size,
+    )
+    working = working[
+        (working["__msrp"] >= resolved_min)
+        & (working["__msrp"] <= resolved_max)
+    ].copy()
+    if working.empty:
+        return {"bandSize": resolved_band_size, "range": {"min": resolved_min, "max": resolved_max}, "items": []}
+
+    working["__band_index"] = ((working["__msrp"] - resolved_min) // resolved_band_size).astype(int)
+    working["__band_start"] = resolved_min + working["__band_index"] * resolved_band_size
+
+    grouped = (
+        working.groupby(["__band_start", "__powertrain"], dropna=False)["__sales"]
+        .sum()
+        .reset_index()
+    )
+    band_starts: list[float] = []
+    cursor = resolved_min
+    while cursor < resolved_max:
+        band_starts.append(float(cursor))
+        cursor += resolved_band_size
+    if not band_starts:
+        band_starts = [resolved_min]
+    items: list[dict[str, Any]] = []
+    for band_start in band_starts:
+        bucket = grouped[grouped["__band_start"] == band_start]
+        fuel_mix = {
+            fuel: float(
+                bucket.loc[bucket["__powertrain"] == fuel, "__sales"].sum()
+            )
+            for fuel in selected_fuels
+        }
+        total_sales = float(sum(fuel_mix.values()))
+        band_end = min(float(band_start + resolved_band_size), resolved_max)
+        items.append(
+            {
+                "bandStart": float(band_start),
+                "bandEnd": band_end,
+                "label": _format_price_band_label(band_start, band_end),
+                "bandMid": float((band_start + band_end) / 2),
+                "bandWidth": float(max(band_end - band_start, resolved_band_size)),
+                "sales": total_sales,
+                "fuelMix": fuel_mix,
+            }
+        )
+    return {"bandSize": resolved_band_size, "range": {"min": resolved_min, "max": resolved_max}, "items": items}
+
+
+def _build_positioning_bubble_items(
+    frame: pd.DataFrame,
+    *,
+    sales_column: str,
+    bubble_limit: int = POSITIONING_BUBBLE_LIMIT,
+    msrp_min: float | None = None,
+    msrp_max: float | None = None,
+) -> list[dict[str, Any]]:
+    if frame.empty or sales_column not in frame.columns:
+        return []
+
+    working = frame.copy()
+    working["__sales"] = pd.to_numeric(working[sales_column], errors="coerce").fillna(0.0)
+    working = working[working["__sales"] > 0]
+    if working.empty:
+        return []
+
+    grouped = working.groupby(
+        ["__brand", "__model", "__powertrain", "__segment_raw"],
+        dropna=False,
+    )
+    aggregated = grouped.agg(
+        Length=("__length", "median"),
+        MSRP=("__msrp", "median"),
+        MsrpMin=("__msrp", "min"),
+        MsrpMax=("__msrp", "max"),
+        Sales=("__sales", "sum"),
+        VariantCount=("__model", "size"),
+    ).reset_index()
+    aggregated = aggregated[
+        (aggregated["Length"] > 0)
+        & (aggregated["MsrpMin"] > 0)
+        & (aggregated["Sales"] > 0)
+    ].copy()
+    if aggregated.empty:
+        return []
+    if msrp_min is not None:
+        aggregated = aggregated[aggregated["MsrpMin"] >= float(msrp_min)]
+    if msrp_max is not None:
+        aggregated = aggregated[aggregated["MsrpMin"] <= float(msrp_max)]
+    if aggregated.empty:
+        return []
+    aggregated = aggregated.sort_values(["Sales", "MsrpMin"], ascending=[False, True]).head(max(1, int(bubble_limit)))
+    return [
+        {
+            "brand": str(row["__brand"]),
+            "model": str(row["__model"]),
+            "powertrain": str(row["__powertrain"]),
+            "segment": str(row["__segment_raw"]),
+            "length": float(row["Length"]),
+            "msrp": float(row["MSRP"]),
+            "msrpMin": float(row["MsrpMin"]),
+            "msrpMax": float(row["MsrpMax"]),
+            "sales": float(row["Sales"]),
+            "variantCount": int(row["VariantCount"]),
+        }
+        for _, row in aggregated.iterrows()
+    ]
+
+
+def _build_positioning_page_payload(
+    frame: pd.DataFrame,
+    *,
+    page_key: str,
+    title: str,
+    subtitle: str,
+    sales_column: str,
+    sales_metric_label: str,
+    sales_metric_detail: str,
+    selected_fuels: list[str],
+    top_n: int,
+    msrp_min: float | None,
+    msrp_max: float | None,
+    price_band_size: int | None,
+) -> dict[str, Any]:
+    page_frame = _positioning_page_rows(frame, page_key)
+    price_bands = _build_positioning_price_bands(
+        page_frame,
+        sales_column=sales_column,
+        selected_fuels=selected_fuels,
+        msrp_min=msrp_min,
+        msrp_max=msrp_max,
+        band_size=price_band_size,
+    )
+    range_min = price_bands["range"]["min"]
+    range_max = price_bands["range"]["max"]
+    range_frame = page_frame[
+        (page_frame["__msrp"] >= range_min)
+        & (page_frame["__msrp"] <= range_max)
+    ].copy()
+    bubble_items = _build_positioning_bubble_items(
+        range_frame,
+        sales_column=sales_column,
+        bubble_limit=top_n,
+        msrp_min=range_min,
+        msrp_max=range_max,
+    )
+    total_sales = float(pd.to_numeric(range_frame[sales_column], errors="coerce").fillna(0.0).sum()) if sales_column in range_frame.columns else 0.0
+    model_count = int(range_frame["__model"].nunique()) if "__model" in range_frame.columns else 0
+    min_msrp = float(range_frame["__msrp"].min()) if not range_frame.empty else range_min
+    max_msrp = float(range_frame["__msrp"].max()) if not range_frame.empty else range_max
+    top_fuel = "-"
+    if not range_frame.empty:
+        fuel_totals = (
+            range_frame.groupby("__powertrain", dropna=False)[sales_column]
+            .sum()
+            .sort_values(ascending=False)
+        )
+        if not fuel_totals.empty:
+            top_fuel = str(fuel_totals.index[0])
+    lead_model = bubble_items[0]["model"] if bubble_items else "-"
+    return {
+        "key": page_key,
+        "title": title,
+        "subtitle": subtitle,
+        "summaryText": (
+            f"{subtitle} 当前共 {total_sales:,.0f} 台，主导动力 {top_fuel}，"
+            f"最低 MSRP 覆盖 {min_msrp:,.0f}-{max_msrp:,.0f}。"
+        ) if total_sales > 0 else f"{subtitle} 当前筛选下暂无可用数据。",
+        "metrics": [
+            {"label": sales_metric_label, "value": total_sales, "detail": sales_metric_detail},
+            {"label": "Tracked Models", "value": model_count, "detail": "纳入定位车型数"},
+            {"label": "Lowest MSRP", "value": min_msrp, "detail": "当前页最低价格"},
+            {"label": "Lead Model", "value": lead_model, "detail": "销量最高气泡"},
+        ],
+        "priceBands": price_bands,
+        "bubbleChart": {
+            "items": bubble_items,
+            "bubbleLimit": int(top_n),
+        },
+    }
 
 
 def _build_overview_payload(
@@ -959,6 +1487,7 @@ def _build_total_ranking_items(
             drive_type: float(_series_sum(group[group["__drive_type"] == drive_type], current_columns).sum())
             for drive_type in ("2WD", "4WD", "OTHER")
         }
+        registration_mix = _registration_mix_payload(group, current_columns)
         drive_share_pct = _safe_share(drive_mix["4WD"], current_volume)
         items.append(
             {
@@ -969,6 +1498,7 @@ def _build_total_ranking_items(
                 "yoy": _delta_payload(current_volume, prior_volume),
                 "fuelMix": fuel_mix,
                 "driveMix": drive_mix,
+                "registrationMix": registration_mix,
                 "driveSharePct": drive_share_pct,
                 "driveShareDisplay": f"{drive_share_pct * 100:.1f}%",
             }
@@ -1007,6 +1537,7 @@ def _build_single_fuel_ranking_items(  # noqa: keep volume-based sort
         current_4wd_volume = float(_series_sum(group[group["__drive_type"] == "4WD"], current_columns).sum())
         current_2wd_volume = float(_series_sum(group[group["__drive_type"] == "2WD"], current_columns).sum())
         current_other_volume = float(_series_sum(group[group["__drive_type"] == "OTHER"], current_columns).sum())
+        registration_mix = _registration_mix_payload(group, current_columns)
         
         drive_share_pct = float(current_4wd_volume / current_volume) if current_volume > 0 else 0.0
         
@@ -1022,7 +1553,8 @@ def _build_single_fuel_ranking_items(  # noqa: keep volume-based sort
                     "4WD": current_4wd_volume,
                     "2WD": current_2wd_volume,
                     "OTHER": current_other_volume,
-                }
+                },
+                "registrationMix": registration_mix,
             }
         )
     items.sort(key=lambda item: item["volume"], reverse=True)
@@ -1176,6 +1708,365 @@ def query_market_scan_deck(
     return result
 
 
+def query_positioning_pricing_deck(
+    *,
+    country: str | None,
+    target_period: str | None,
+    fuel_types: list[str],
+    sales_mode: str,
+    top_n: int,
+    msrp_min: float | None,
+    msrp_max: float | None,
+    price_band_size: int | None,
+) -> dict[str, Any]:
+    return _query_positioning_pricing_deck_impl(
+        country=country,
+        target_period=target_period,
+        fuel_types=fuel_types,
+        sales_mode=sales_mode,
+        top_n=top_n,
+        msrp_min=msrp_min,
+        msrp_max=msrp_max,
+        price_band_size=price_band_size,
+    )
+
+
+def _query_positioning_pricing_deck_impl(
+    *,
+    country: str | None,
+    target_period: str | None,
+    fuel_types: list[str],
+    sales_mode: str,
+    top_n: int,
+    msrp_min: float | None,
+    msrp_max: float | None,
+    price_band_size: int | None,
+) -> dict[str, Any]:
+    columns = _get_columns()
+    if not columns.length or not columns.msrp:
+        raise RuntimeError("Positioning pricing columns are incomplete")
+
+    available_periods = _available_periods(columns)
+    resolved_period = _resolve_period(target_period, available_periods)
+    selected_sales_mode = _normalize_positioning_sales_mode(sales_mode)
+    sales_periods, sales_mode_label, sales_metric_label = _resolve_positioning_sales_window(
+        available_periods,
+        resolved_period,
+        selected_sales_mode,
+    )
+    sales_columns = [_period_to_month_column(period) for period in sales_periods]
+    sales_column = "__positioning_sales"
+
+    country_options = _country_options(repo.current_dataset_token())
+    selected_country = _normalize_country_lookup(country, country_options)
+
+    selected_columns = [
+        columns.country_value,
+        columns.make,
+        columns.model,
+        columns.segment,
+        columns.powertrain,
+        columns.length,
+        columns.msrp,
+        *sales_columns,
+    ]
+    if columns.country_label and columns.country_label not in selected_columns:
+        selected_columns.append(columns.country_label)
+
+    dataset = repo._open_dataset()
+    filter_expression = repo._build_filter_expression({columns.country_value: [selected_country["value"]]})
+    table = dataset.to_table(columns=selected_columns, filter=filter_expression)
+    frame = table.to_pandas()
+    frame = _ensure_numeric_columns(frame, [*sales_columns, columns.length, columns.msrp])
+    frame["__brand"] = frame[columns.make].astype(str).str.strip()
+    frame["__model"] = frame[columns.model].astype(str).str.strip()
+    frame["__segment_raw"] = frame[columns.segment].astype(str).str.strip()
+    frame["__powertrain"] = frame[columns.powertrain].map(_normalize_powertrain)
+    frame["__length"] = pd.to_numeric(frame[columns.length], errors="coerce").fillna(0.0)
+    frame["__msrp"] = pd.to_numeric(frame[columns.msrp], errors="coerce").fillna(0.0)
+    frame[sales_column] = _series_sum(frame, sales_columns)
+    frame = frame[
+        (frame["__brand"] != "")
+        & (frame["__model"] != "")
+        & (frame["__segment_raw"] != "")
+        & (frame["__powertrain"] != "OTHER")
+        & (frame["__length"] > 0)
+        & (frame["__msrp"] > 0)
+    ].copy()
+
+    available_fuels = [
+        fuel for fuel in POSITIONING_FUEL_ORDER
+        if fuel in _available_fuel_types(frame)
+    ]
+    selected_fuels = _normalize_selected_fuels(fuel_types, available_fuels)
+    selected_fuels = [fuel for fuel in POSITIONING_FUEL_ORDER if fuel in selected_fuels]
+    filtered_frame = frame[frame["__powertrain"].isin(selected_fuels)].copy()
+
+    year_text, month_text = resolved_period.split("-", 1)
+    month_number = int(month_text)
+    if selected_sales_mode == "rolling12":
+        page_title = f"{selected_country['label']} 截至{int(year_text)}年{month_number}月近12个月定位定价"
+        sales_metric_detail = "近12个月销量"
+    else:
+        page_title = f"{selected_country['label']} {int(year_text)}年{month_number}月定位定价"
+        sales_metric_detail = "当月销量"
+    metadata = {
+        "protocolVersion": "positioning-pricing/v1",
+        "requestedPeriod": target_period,
+        "resolvedPeriod": resolved_period,
+        "latestPeriod": available_periods[-1],
+        "selectedCountry": selected_country["value"],
+        "selectedCountryLabel": selected_country["label"],
+        "selectedFuelTypes": selected_fuels,
+        "selectedSalesMode": selected_sales_mode,
+        "selectedTopN": int(top_n),
+        "availableSalesModes": [
+            {"value": "month", "label": "当月"},
+            {"value": "rolling12", "label": "近12个月"},
+        ],
+        "availableCountries": country_options,
+        "availablePeriods": [{"value": period, "label": _short_period_label(period)} for period in available_periods],
+        "availableFuelTypes": available_fuels,
+        "labels": {
+            "pageTitle": page_title,
+            "currentMonthShort": _short_period_label(resolved_period),
+            "salesModeLabel": sales_mode_label,
+        },
+    }
+
+    return {
+        "metadata": metadata,
+        "pages": {
+            "overview": _build_positioning_page_payload(
+                filtered_frame,
+                page_key="overview",
+                title="市场总览",
+                subtitle="全市场价格带与动力定位",
+                sales_column=sales_column,
+                sales_metric_label=sales_metric_label,
+                sales_metric_detail=sales_metric_detail,
+                selected_fuels=selected_fuels,
+                top_n=top_n,
+                msrp_min=msrp_min,
+                msrp_max=msrp_max,
+                price_band_size=price_band_size,
+            ),
+            "suvA0": _build_positioning_page_payload(
+                filtered_frame,
+                page_key="suvA0",
+                title="SUV-A0",
+                subtitle="SUV A0 价格带与动力定位",
+                sales_column=sales_column,
+                sales_metric_label=sales_metric_label,
+                sales_metric_detail=sales_metric_detail,
+                selected_fuels=selected_fuels,
+                top_n=top_n,
+                msrp_min=msrp_min,
+                msrp_max=msrp_max,
+                price_band_size=price_band_size,
+            ),
+            "suvA": _build_positioning_page_payload(
+                filtered_frame,
+                page_key="suvA",
+                title="SUV-A",
+                subtitle="SUV A 价格带与动力定位",
+                sales_column=sales_column,
+                sales_metric_label=sales_metric_label,
+                sales_metric_detail=sales_metric_detail,
+                selected_fuels=selected_fuels,
+                top_n=top_n,
+                msrp_min=msrp_min,
+                msrp_max=msrp_max,
+                price_band_size=price_band_size,
+            ),
+            "suvBPlus": _build_positioning_page_payload(
+                filtered_frame,
+                page_key="suvBPlus",
+                title="SUV-B+",
+                subtitle="SUV B+ 价格带与动力定位",
+                sales_column=sales_column,
+                sales_metric_label=sales_metric_label,
+                sales_metric_detail=sales_metric_detail,
+                selected_fuels=selected_fuels,
+                top_n=top_n,
+                msrp_min=msrp_min,
+                msrp_max=msrp_max,
+                price_band_size=price_band_size,
+            ),
+        },
+    }
+
+
+def query_version_comparison_deck(
+    *,
+    country: str | None,
+    target_period: str | None,
+    fuel_types: list[str],
+    sales_mode: str,
+    segment: str | None,
+    models: list[str],
+    msrp_min: float | None,
+    msrp_max: float | None,
+    price_band_size: int | None,
+) -> dict[str, Any]:
+    return _query_version_comparison_deck_impl(
+        country=country,
+        target_period=target_period,
+        fuel_types=fuel_types,
+        sales_mode=sales_mode,
+        segment=segment,
+        models=models,
+        msrp_min=msrp_min,
+        msrp_max=msrp_max,
+        price_band_size=price_band_size,
+    )
+
+
+def _query_version_comparison_deck_impl(
+    *,
+    country: str | None,
+    target_period: str | None,
+    fuel_types: list[str],
+    sales_mode: str,
+    segment: str | None,
+    models: list[str],
+    msrp_min: float | None,
+    msrp_max: float | None,
+    price_band_size: int | None,
+) -> dict[str, Any]:
+    columns = _get_columns()
+    if not columns.length or not columns.msrp or not columns.version:
+        raise RuntimeError("Version comparison columns are incomplete")
+
+    available_periods = _available_periods(columns)
+    resolved_period = _resolve_period(target_period, available_periods)
+    selected_sales_mode = _normalize_positioning_sales_mode(sales_mode)
+    sales_periods, sales_mode_label, sales_metric_label = _resolve_positioning_sales_window(
+        available_periods,
+        resolved_period,
+        selected_sales_mode,
+    )
+    sales_columns = [_period_to_month_column(period) for period in sales_periods]
+    sales_column = "__comparison_sales"
+
+    country_options = _country_options(repo.current_dataset_token())
+    selected_country = _normalize_country_lookup(country, country_options)
+
+    selected_columns = [
+        columns.country_value,
+        columns.make,
+        columns.model,
+        columns.version,
+        columns.segment,
+        columns.powertrain,
+        columns.length,
+        columns.msrp,
+        *sales_columns,
+    ]
+    if columns.trim and columns.trim not in selected_columns:
+        selected_columns.append(columns.trim)
+    if columns.country_label and columns.country_label not in selected_columns:
+        selected_columns.append(columns.country_label)
+    selected_columns = list(dict.fromkeys(selected_columns))
+
+    dataset = repo._open_dataset()
+    filter_expression = repo._build_filter_expression({columns.country_value: [selected_country["value"]]})
+    table = dataset.to_table(columns=selected_columns, filter=filter_expression)
+    frame = table.to_pandas()
+    numeric_columns = [*sales_columns, columns.length, columns.msrp]
+    frame = _ensure_numeric_columns(frame, numeric_columns)
+    frame["__brand"] = frame[columns.make].astype(str).str.strip()
+    frame["__model"] = frame[columns.model].astype(str).str.strip()
+    frame["__version"] = frame[columns.version].astype(str).str.strip()
+    frame["__trim"] = frame[columns.trim].astype(str).str.strip() if columns.trim and columns.trim in frame.columns else frame["__version"]
+    frame["__segment_raw"] = frame[columns.segment].astype(str).str.strip()
+    frame["__powertrain"] = frame[columns.powertrain].map(_normalize_powertrain)
+    frame["__length"] = pd.to_numeric(frame[columns.length], errors="coerce").fillna(0.0)
+    frame["__msrp"] = pd.to_numeric(frame[columns.msrp], errors="coerce").fillna(0.0)
+    frame[sales_column] = _series_sum(frame, sales_columns)
+    frame = frame[
+        (frame["__brand"] != "")
+        & (frame["__model"] != "")
+        & (frame["__version"] != "")
+        & (frame["__segment_raw"] != "")
+        & (frame["__powertrain"] != "OTHER")
+        & (frame["__length"] > 0)
+        & (frame["__msrp"] > 0)
+        & (frame[sales_column] > 0)
+    ].copy()
+
+    available_fuels = [
+        fuel for fuel in POSITIONING_FUEL_ORDER
+        if fuel in _available_fuel_types(frame)
+    ]
+    selected_fuels = _normalize_selected_fuels(fuel_types, available_fuels)
+    selected_fuels = [fuel for fuel in POSITIONING_FUEL_ORDER if fuel in selected_fuels]
+    fuel_frame = frame[frame["__powertrain"].isin(selected_fuels)].copy()
+
+    selected_segment, available_segments = _resolve_version_comparison_segment(
+        fuel_frame,
+        segment,
+        sales_column=sales_column,
+    )
+    segment_frame = fuel_frame[fuel_frame["__segment_raw"] == selected_segment].copy() if selected_segment else fuel_frame.iloc[0:0].copy()
+    selected_models, available_models = _resolve_version_comparison_models(
+        segment_frame,
+        models,
+        sales_column=sales_column,
+    )
+    comparison_frame = segment_frame[segment_frame["__model"].isin(selected_models)].copy() if selected_models else segment_frame.iloc[0:0].copy()
+
+    year_text, month_text = resolved_period.split("-", 1)
+    month_number = int(month_text)
+    if selected_sales_mode == "rolling12":
+        page_title = f"{selected_country['label']} {selected_segment or 'Segment'} 截至{int(year_text)}年{month_number}月近12个月版型对比"
+        sales_metric_detail = "近12个月销量"
+    else:
+        page_title = f"{selected_country['label']} {selected_segment or 'Segment'} {int(year_text)}年{month_number}月版型对比"
+        sales_metric_detail = "当月销量"
+
+    return {
+        "metadata": {
+            "protocolVersion": "version-comparison/v1",
+            "requestedPeriod": target_period,
+            "resolvedPeriod": resolved_period,
+            "latestPeriod": available_periods[-1],
+            "selectedCountry": selected_country["value"],
+            "selectedCountryLabel": selected_country["label"],
+            "selectedFuelTypes": selected_fuels,
+            "selectedSalesMode": selected_sales_mode,
+            "selectedSegment": selected_segment,
+            "selectedModels": selected_models,
+            "availableSalesModes": [
+                {"value": "month", "label": "当月"},
+                {"value": "rolling12", "label": "近12个月"},
+            ],
+            "availableCountries": country_options,
+            "availablePeriods": [{"value": period, "label": _short_period_label(period)} for period in available_periods],
+            "availableFuelTypes": available_fuels,
+            "availableSegments": available_segments,
+            "availableModels": available_models,
+            "labels": {
+                "pageTitle": page_title,
+                "currentMonthShort": _short_period_label(resolved_period),
+                "salesModeLabel": sales_mode_label,
+            },
+        },
+        "page": _build_version_comparison_page_payload(
+            comparison_frame,
+            title=selected_segment or "版型对比",
+            subtitle="Model 版型对比与价格带",
+            sales_column=sales_column,
+            sales_metric_label=sales_metric_label,
+            sales_metric_detail=sales_metric_detail,
+            selected_fuels=selected_fuels,
+            msrp_min=msrp_min,
+            msrp_max=msrp_max,
+            price_band_size=price_band_size,
+        ),
+    }
+
+
 def _query_market_scan_deck_impl(
     country: str | None,
     target_period: str | None,
@@ -1213,6 +2104,8 @@ def _query_market_scan_deck_impl(
         selected_columns.append(columns.origin)
     if columns.drive_type and columns.drive_type not in selected_columns:
         selected_columns.append(columns.drive_type)
+    if columns.registration_type and columns.registration_type not in selected_columns:
+        selected_columns.append(columns.registration_type)
 
     dataset = repo._open_dataset()
     filter_expression = repo._build_filter_expression({columns.country_value: [selected_country["value"]]})
@@ -1225,6 +2118,11 @@ def _query_market_scan_deck_impl(
     frame["__powertrain"] = frame[columns.powertrain].map(_normalize_powertrain)
     frame["__origin"] = frame[columns.origin].map(_normalize_origin) if columns.origin and columns.origin in frame.columns else "其他"
     frame["__drive_type"] = frame[columns.drive_type].map(_normalize_drive_type) if columns.drive_type and columns.drive_type in frame.columns else "OTHER"
+    frame["__registration_type"] = (
+        frame[columns.registration_type].map(_normalize_registration_type)
+        if columns.registration_type and columns.registration_type in frame.columns else
+        "Other"
+    )
 
     available_fuels = _available_fuel_types(frame)
     selected_fuels = _normalize_selected_fuels(fuel_types, available_fuels)

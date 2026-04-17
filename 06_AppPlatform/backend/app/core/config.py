@@ -48,6 +48,16 @@ ENGINEERING_IMPORT_ROOT = Path(
         str(PROJECT_ROOT / "01_RAW_DATA"),
     )
 ).resolve()
+JATO_MONTHLY_UPDATE_JOB_ROOT = Path(
+    os.getenv(
+        "APP_JATO_MONTHLY_UPDATE_JOB_ROOT",
+        str(PROJECT_ROOT / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"),
+    )
+).resolve()
+JATO_MONTHLY_UPDATE_UPLOAD_CHUNK_SIZE_BYTES = max(
+    int(os.getenv("APP_JATO_MONTHLY_UPDATE_UPLOAD_CHUNK_SIZE_BYTES", str(8 * 1024 * 1024))),
+    1024 * 1024,
+)
 DATABASE_URL = os.getenv("APP_DATABASE_URL", "").strip()
 DATABASE_ENABLED = _parse_bool_env(
     "APP_DATABASE_ENABLED",

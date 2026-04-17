@@ -50,8 +50,12 @@ COUNTRY_ALIAS_GROUPS: dict[str, set[str]] = {
     "Slovakia": {"slovakia", "sk", "斯洛伐克"},
     "Slovenia": {"slovenia", "si", "斯洛文尼亚"},
     "Croatia": {"croatia", "hr", "克罗地亚"},
+    "United States": {"united states", "unitedstates", "usa", "us", "美国"},
     "United Kingdom": {"united kingdom", "uk", "gb", "英国"},
     "Ireland": {"ireland", "ie", "爱尔兰"},
+    "Canada": {"canada", "ca", "加拿大"},
+    "Australia": {"australia", "au", "澳大利亚"},
+    "China": {"china", "cn", "中国"},
 }
 
 

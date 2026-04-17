@@ -1,6 +1,7 @@
 import { ChangeEvent, useEffect, useState } from "react";
 
 import { api } from "../api/client";
+import { AdminToolsNav } from "../components/AdminToolsNav";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { LoadingSurface } from "../components/LoadingSurface";
 import type { ConfigImportBatch, ConfigVariant } from "../types";
@@ -342,6 +343,7 @@ export function EngineeringPage() {
           )}
         </div>
       )}
+      <AdminToolsNav />
     </section>
   );
 }

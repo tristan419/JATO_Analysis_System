@@ -756,6 +756,43 @@ function driveShareText(item: MarketScanRankingItem): string {
   return `4WD ${driveShareDisplay(item)}`;
 }
 
+function channelMixText(item: MarketScanRankingItem): string {
+  const total = Math.max(item.volume || 0, 0);
+  const registrationMix = item.registrationMix ?? {};
+  if (total <= 0 || Object.keys(registrationMix).length === 0) {
+    return "渠道占比 暂无";
+  }
+  const order = ["Business", "Private", "Other"];
+  const labels: Record<string, string> = {
+    Business: "Business",
+    Private: "Private",
+    Other: "Other",
+  };
+  const parts = order
+    .map((key) => {
+      const volume = Number(registrationMix[key] ?? 0);
+      if (!Number.isFinite(volume) || volume <= 0) {
+        return null;
+      }
+      return `${labels[key]} ${formatPercent(volume / total)}`;
+    })
+    .filter((value): value is string => Boolean(value));
+  return parts.length > 0 ? `渠道占比 ${parts.join(" · ")}` : "渠道占比 暂无";
+}
+
+function businessSharePct(item: MarketScanRankingItem): number {
+  const total = Math.max(item.volume || 0, 0);
+  const businessVolume = Number(item.registrationMix?.Business ?? 0);
+  if (total <= 0 || !Number.isFinite(businessVolume) || businessVolume <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, businessVolume / total));
+}
+
+function businessShareDisplay(item: MarketScanRankingItem): string {
+  return formatPercent(businessSharePct(item));
+}
+
 function driveSharePct(item: MarketScanRankingItem): number {
   const pct =
     typeof item.driveSharePct === "number"
@@ -872,8 +909,8 @@ function buildTotalRankingChartData(items: MarketScanRankingItem[]): Data[] {
       x: sharePcts,
       y: labels,
       marker: { color: fuelColor(fuel) },
-      customdata: volumes.map((vol, i) => [vol, ordered[i]?.volume ?? 0]),
-      hovertemplate: `%{y}<br>${fuel}: %{customdata[0]:,.0f} 台<br>总销量 %{customdata[1]:,.0f} 台<extra></extra>`,
+      customdata: volumes.map((vol, i) => [vol, ordered[i]?.volume ?? 0, channelMixText(ordered[i])]),
+      hovertemplate: `%{y}<br>${fuel}: %{customdata[0]:,.0f} 台<br>总销量 %{customdata[1]:,.0f} 台<br>%{customdata[2]}<extra></extra>`,
     };
   });
 
@@ -1010,9 +1047,18 @@ function RankingGroup({
       >
         {group.items.map((item) => {
           const currentDriveSharePct = driveSharePct(item);
+          const currentBusinessSharePct = businessSharePct(item);
           const hasDriveShare = typeof item.driveSharePct === "number" || item.driveMix?.["4WD"] !== undefined;
           const driveShareLabel = driveShareDisplay(item);
           const shareLabel = marketShareLabel(item);
+          const hoverTitle = [
+            shareLabel,
+            hasDriveShare ? `4WD ${driveShareLabel}` : null,
+            `Business ${businessShareDisplay(item)}`,
+            channelMixText(item),
+          ]
+            .filter((value): value is string => Boolean(value))
+            .join(" · ");
 
           return (
             <article
@@ -1030,7 +1076,7 @@ function RankingGroup({
                 </div>
                 <div
                   className="market-scan-ranking-row-bar"
-                  title={hasDriveShare ? `${shareLabel} · 4WD ${driveShareLabel}` : shareLabel}
+                  title={hoverTitle}
                 >
                   <span
                     className="market-scan-ranking-row-bar-fill"
@@ -1042,6 +1088,11 @@ function RankingGroup({
                         style={{ width: `${currentDriveSharePct * 100}%` }}
                       />
                     ) : null}
+                    <span
+                      className="market-scan-business-marker"
+                      style={{ left: `${Math.max(0, Math.min(100, currentBusinessSharePct * 100))}%` }}
+                      title={`Business ${businessShareDisplay(item)}`}
+                    />
                   </span>
                 </div>
               </div>

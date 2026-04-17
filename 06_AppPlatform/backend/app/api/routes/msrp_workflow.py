@@ -87,10 +87,17 @@ def get_price_history(
     brand: str | None = Query(default=None),
     jato_model: str | None = Query(default=None),
     jato_trim: str | None = Query(default=None),
+    jato_powertrain: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     session: Session = Depends(get_db_session),
     _=Depends(require_min_role("viewer")),
 ) -> dict[str, object]:
     return list_price_history(
-        session, country, brand, jato_model, jato_trim, limit
+        session,
+        country,
+        brand,
+        jato_model,
+        jato_trim,
+        jato_powertrain,
+        limit,
     )

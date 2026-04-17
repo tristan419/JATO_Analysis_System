@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
+import { AdminToolsNav } from "../components/AdminToolsNav";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { CollapsibleFilterSidebar } from "../components/CollapsibleFilterSidebar";
 import { LoadingSurface } from "../components/LoadingSurface";
@@ -553,6 +554,7 @@ export function SpecificationPage() {
             </div>
           </div>
         </div>
+        <AdminToolsNav />
       </section>
     </div>
   );
