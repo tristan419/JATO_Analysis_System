@@ -91,6 +91,22 @@ python run_news.py --batch-files news_sources/batch_a.yaml --limit-per-feed 5
 python run_news.py --batch-files news_sources/batch_a.yaml news_sources/batch_b.yaml --output tmp/news_batch.json
 ```
 
+### 国家化 VOC batch 规划
+
+```bash
+cd 07_ScrapingToolkit
+jato-voc-plan --batch-files voc_sources/batch_a.yaml
+jato-voc-plan --batch-files voc_sources/batch_a.yaml --countries SE FI NO DK
+```
+
+当前这批 `voc_sources/` 先是**country-pack scaffold**，重点是把 VOC 按现有 news 一样组织成：
+
+- batch
+- countries
+- sources
+
+也就是说，先固化国家级 source registry、语言和 taxonomy 的承载方式；后续再逐国把占位 source 替换成已验证的本地公开讨论源。
+
 ### EVKX BEV 参数 + MSRP 抓取
 
 ```bash

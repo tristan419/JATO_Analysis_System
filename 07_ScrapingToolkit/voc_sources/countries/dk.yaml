@@ -1,0 +1,15 @@
+country_code: DK
+country_label: Denmark / 丹麦
+languages: [da, en]
+taxonomy_profile: nordic_core
+sources:
+  - source_code: dk_voc_public_seed
+    site_name: Denmark public VOC seed
+    site_url: https://example.com/voc/dk/public-seed
+    site_type: forum_seed
+    extractor: scrapling
+    language: da
+    tags: [voc, seed, public]
+    public_access: true
+    compliance_notes: Replace scaffold seed with verified public Danish discussion sources before live crawling.
+    notes: Country-pack placeholder aligned to the news batch structure.

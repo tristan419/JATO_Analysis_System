@@ -1,0 +1,15 @@
+country_code: HR
+country_label: Croatia / 克罗地亚
+languages: [hr, en]
+taxonomy_profile: cee_core
+sources:
+  - source_code: hr_voc_public_seed
+    site_name: Croatia public VOC seed
+    site_url: https://example.com/voc/hr/public-seed
+    site_type: forum_seed
+    extractor: scrapling
+    language: hr
+    tags: [voc, seed, public]
+    public_access: true
+    compliance_notes: Replace scaffold seed with verified public Croatian discussion sources before live crawling.
+    notes: Country-pack placeholder aligned to the news batch structure.

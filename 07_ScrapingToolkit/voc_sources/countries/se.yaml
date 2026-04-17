@@ -1,0 +1,15 @@
+country_code: SE
+country_label: Sweden / 瑞典
+languages: [sv, en]
+taxonomy_profile: nordic_core
+sources:
+  - source_code: se_voc_public_seed
+    site_name: Sweden public VOC seed
+    site_url: https://example.com/voc/se/public-seed
+    site_type: forum_seed
+    extractor: scrapling
+    language: sv
+    tags: [voc, seed, public]
+    public_access: true
+    compliance_notes: Replace scaffold seed with verified public Swedish discussion sources before live crawling.
+    notes: Country-pack placeholder aligned to the news batch structure.

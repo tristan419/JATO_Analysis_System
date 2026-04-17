@@ -1,0 +1,11 @@
+batch_code: country_voc_batch_a
+description: Country-aware VOC scaffold aligned with the existing news batch model.
+countries:
+  - country_file: countries/se.yaml
+  - country_file: countries/fi.yaml
+  - country_file: countries/no.yaml
+  - country_file: countries/dk.yaml
+  - country_file: countries/hu.yaml
+  - country_file: countries/hr.yaml
+  - country_file: countries/at.yaml
+  - country_file: countries/cz.yaml

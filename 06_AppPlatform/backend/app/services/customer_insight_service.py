@@ -125,7 +125,30 @@ def _load_voc_cache_key(path: Path) -> tuple[str, int, int]:
 
 @lru_cache(maxsize=1)
 def _load_voc_frame_cached(path_str: str, _mtime_ns: int, _size: int) -> pd.DataFrame:
-    return pd.read_excel(path_str, sheet_name="VOC Data").fillna("")
+    return _read_excel_with_fallback(path_str, sheet_name="VOC Data").fillna("")
+
+
+def _read_excel_with_fallback(
+    source_file: str | Path,
+    *,
+    sheet_name: str,
+) -> pd.DataFrame:
+    try:
+        return pd.read_excel(
+            source_file,
+            sheet_name=sheet_name,
+            engine="calamine",
+        )
+    except Exception:
+        try:
+            return pd.read_excel(
+                source_file,
+                sheet_name=sheet_name,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "读取 Nordic VOC Excel 失败：calamine 与默认引擎均不可用。"
+            ) from exc
 
 
 def _load_voc_frame() -> pd.DataFrame:

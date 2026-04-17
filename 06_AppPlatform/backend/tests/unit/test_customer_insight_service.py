@@ -3,6 +3,33 @@ import pandas as pd
 from app.services import customer_insight_service
 
 
+def test_read_excel_with_fallback_prefers_calamine_then_default(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_read_excel(source_file: object, *, sheet_name: str, engine: str | None = None) -> pd.DataFrame:
+        calls.append({
+            "source_file": source_file,
+            "sheet_name": sheet_name,
+            "engine": engine,
+        })
+        if engine == "calamine":
+            raise ImportError("calamine unavailable")
+        return pd.DataFrame({"A": [1]})
+
+    monkeypatch.setattr(customer_insight_service.pd, "read_excel", fake_read_excel)
+
+    frame = customer_insight_service._read_excel_with_fallback(
+        "dummy.xlsx",
+        sheet_name="VOC Data",
+    )
+
+    assert list(frame.columns) == ["A"]
+    assert calls == [
+        {"source_file": "dummy.xlsx", "sheet_name": "VOC Data", "engine": "calamine"},
+        {"source_file": "dummy.xlsx", "sheet_name": "VOC Data", "engine": None},
+    ]
+
+
 def test_estimate_weekly_commute_bucket_prefers_explicit_daily_distance() -> None:
     row = pd.Series(
         {
