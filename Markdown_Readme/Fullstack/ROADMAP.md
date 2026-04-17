@@ -67,6 +67,7 @@ Markdown_Readme/
 | `02_DataETL/ETL_Raw_Compare_Review_Spec_2026-04-10.md` | 实现 | Active | Raw 对 Raw 比对 / Review 规格 |
 | `02_DataETL/PRECOMPUTE_STRATEGY.md` | 实现 | Active | 后端预聚合 + 前端轻加载方案 |
 | `02_DataETL/UNIFIED_SCRAPING_PIPELINE_2026-04-17.md` | 架构/抓取 | Draft | 统一抓取流水线（Scrapling + Playwright + Firecrawl + Crawlee 三层抽象） |
+| `02_DataETL/VOC_FORUM_SCRAPING_FEASIBILITY_2026-04-17.md` | 架构/抓取 | Draft | 北欧汽车论坛 VOC 抓取可行性、边界与落地路径 |
 | **MSRP** | | | |
 | `MSRP/README.md` | 功能/MSRP | Active | MSRP 文档总索引与阅读顺序 |
 | `MSRP/01_Requirements/MSRP_Official_Price_Enrichment_PRD_2026-04-10.md` | 产品/MSRP | Draft | MSRP 官方价格补全 PRD |

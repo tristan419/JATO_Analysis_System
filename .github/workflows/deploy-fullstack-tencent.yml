@@ -62,7 +62,13 @@ jobs:
 
       - name: Package deploy archive
         run: |
-          tar czf "$RUNNER_TEMP/JATO_deploy.tar.gz" \
+          REQUIRED_WORKBOOK="01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
+          if [ ! -f "$GITHUB_WORKSPACE/$REQUIRED_WORKBOOK" ]; then
+            echo "::error::Missing required workbook: $REQUIRED_WORKBOOK"
+            exit 1
+          fi
+
+          tar cf "$RUNNER_TEMP/JATO_deploy.tar" \
             --exclude='.git' \
             --exclude='node_modules' \
             --exclude='.venv' \
@@ -73,7 +79,12 @@ jobs:
             --exclude='data_wangler' \
             --exclude='Markdown_Readme' \
             -C "$GITHUB_WORKSPACE" .
+          tar rf "$RUNNER_TEMP/JATO_deploy.tar" \
+            -C "$GITHUB_WORKSPACE" \
+            "$REQUIRED_WORKBOOK"
+          gzip -f "$RUNNER_TEMP/JATO_deploy.tar"
           ls -lh "$RUNNER_TEMP/JATO_deploy.tar.gz"
+          tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$REQUIRED_WORKBOOK"
 
       - name: Upload archive to server
         if: ${{ steps.auth.outputs.mode == 'key' }}
