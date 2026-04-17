@@ -1,5 +1,6 @@
 *.xlsx
 ~$*.xlsx
+!01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx
 
 # frontend artifacts
 **/node_modules/
