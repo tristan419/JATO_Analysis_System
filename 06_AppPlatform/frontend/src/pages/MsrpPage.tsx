@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
+import { AdminToolsNav } from "../components/AdminToolsNav";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { PriceHistoryTimeline } from "../components/PriceHistoryTimeline";
@@ -114,6 +114,34 @@ function formatPriceHistoryWindow(entry: PriceHistoryEntry) {
       ? `当前（最近确认 ${formatCurrentPriceDate(entry.lastConfirmedAtUtc)}）`
       : "当前";
   return `${start} → ${end}`;
+}
+
+function getCurrentPriceSourceTypeLabel(price: CurrentPrice) {
+  switch ((price.sourceType || "").trim().toLowerCase()) {
+    case "manufacturer_official":
+    case "official_configurator":
+      return "官网";
+    case "reference_catalog":
+      return "第三方";
+    default:
+      return price.sourceType || "未知来源";
+  }
+}
+
+function getCurrentPriceSourceBadgeClass(price: CurrentPrice) {
+  switch ((price.sourceType || "").trim().toLowerCase()) {
+    case "manufacturer_official":
+    case "official_configurator":
+      return "badge-active";
+    case "reference_catalog":
+      return "badge-warning";
+    default:
+      return "badge-inactive";
+  }
+}
+
+function formatCurrentPriceSourceMeta(price: CurrentPrice) {
+  return price.sourceCode || price.extractorName || "—";
 }
 
 export function MsrpPage() {
@@ -277,6 +305,7 @@ export function MsrpPage() {
           brand: currentPrice.brand,
           jato_model: currentPrice.jatoModel,
           jato_trim: currentPrice.jatoTrim,
+          jato_powertrain: currentPrice.jatoPowertrain || undefined,
           limit: 50,
         });
         if (!cancelled) {
@@ -299,7 +328,7 @@ export function MsrpPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedPrice?.country, selectedPrice?.brand, selectedPrice?.jatoModel, selectedPrice?.jatoTrim]);
+  }, [selectedPrice?.country, selectedPrice?.brand, selectedPrice?.jatoModel, selectedPrice?.jatoTrim, selectedPrice?.jatoPowertrain]);
 
   /* ── derived ────────────────────────────────────── */
   const uniqueCountries = new Set(prices.map((p) => p.country)).size;
@@ -574,6 +603,10 @@ export function MsrpPage() {
                             </span>
                           </td>
                           <td className="review-table-meta-cell">
+                            <span className={`badge ${getCurrentPriceSourceBadgeClass(p)}`}>
+                              {getCurrentPriceSourceTypeLabel(p)}
+                            </span>
+                            <strong>{formatCurrentPriceSourceMeta(p)}</strong>
                             {p.sourceUrl ? (
                               <a href={p.sourceUrl} target="_blank" rel="noreferrer" className="review-table-link">
                                 {formatSourceLink(p.sourceUrl)}
@@ -708,6 +741,16 @@ export function MsrpPage() {
               </span>
             </div>
             <div className="admin-detail-item">
+              <span className="admin-detail-label">Source Type</span>
+              <span className={`badge ${getCurrentPriceSourceBadgeClass(selectedPrice)}`}>
+                {getCurrentPriceSourceTypeLabel(selectedPrice)}
+              </span>
+            </div>
+            <div className="admin-detail-item">
+              <span className="admin-detail-label">Source Code</span>
+              <span className="admin-detail-value">{formatCurrentPriceSourceMeta(selectedPrice)}</span>
+            </div>
+            <div className="admin-detail-item">
               <span className="admin-detail-label">Source URL</span>
               <span className="admin-detail-value">
                 {selectedPrice.sourceUrl ? <a href={selectedPrice.sourceUrl} target="_blank" rel="noreferrer">打开来源</a> : "—"}
@@ -777,15 +820,7 @@ export function MsrpPage() {
         </div>
       )}
 
-      <details className="msrp-admin-links">
-        <summary>管理工具</summary>
-        <nav>
-          <Link to="/specification">02 规格明细</Link>
-          <Link to="/crud">03 数据管理</Link>
-          <Link to="/engineering">04 配置导入</Link>
-          <Link to="/review">05 匹配审核</Link>
-        </nav>
-      </details>
+      <AdminToolsNav />
     </section>
   );
 }

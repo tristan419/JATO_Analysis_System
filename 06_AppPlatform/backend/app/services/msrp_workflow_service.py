@@ -38,6 +38,10 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _business_powertrain(value: str | None) -> str:
+    return str(value or "").strip()
+
+
 def _commit_or_conflict(session: Session, detail: str) -> None:
     try:
         session.commit()
@@ -61,6 +65,7 @@ def materialize_current_price_from_observation(
         observation.brand,
         observation.jato_model,
         observation.jato_trim,
+        observation.jato_powertrain,
     )
     last_price_change_at_utc = observation.observed_at_utc
     price_changed = False
@@ -79,7 +84,9 @@ def materialize_current_price_from_observation(
         current_price.official_trim = observation.official_trim
         current_price.official_edition = observation.official_edition
         current_price.official_powertrain = observation.official_powertrain
-        current_price.jato_powertrain = observation.jato_powertrain
+        current_price.jato_powertrain = _business_powertrain(
+            observation.jato_powertrain
+        )
         current_price.effective_observation_id = observation.observation_id
         current_price.current_msrp_value = observation.msrp_value
         current_price.currency = observation.currency
@@ -102,7 +109,9 @@ def materialize_current_price_from_observation(
             brand=observation.brand,
             jato_model=observation.jato_model,
             jato_trim=observation.jato_trim,
-            jato_powertrain=observation.jato_powertrain,
+            jato_powertrain=_business_powertrain(
+                observation.jato_powertrain
+            ),
             official_model=observation.official_model,
             official_trim=observation.official_trim,
             official_edition=observation.official_edition,
@@ -134,6 +143,7 @@ def materialize_current_price_from_observation(
             observation.brand,
             observation.jato_model,
             observation.jato_trim,
+            observation.jato_powertrain,
         )
         if price_changed or open_period is None:
             _record_price_period(session, observation, open_period=open_period)
@@ -161,6 +171,7 @@ def _record_price_period(
             observation.brand,
             observation.jato_model,
             observation.jato_trim,
+            observation.jato_powertrain,
         )
     if open_period is not None:
         open_period.valid_to_utc = observation.observed_at_utc
@@ -171,6 +182,7 @@ def _record_price_period(
         brand=observation.brand,
         jato_model=observation.jato_model,
         jato_trim=observation.jato_trim,
+        jato_powertrain=_business_powertrain(observation.jato_powertrain),
         msrp_value=observation.msrp_value,
         currency=observation.currency,
         source_msrp_value=observation.source_msrp_value,
@@ -376,6 +388,7 @@ def create_scrape_batch_ingest(
                 item.get("match_status") or "review_required"
             ).strip(),
             match_reason_json=item.get("match_reason_json"),
+            source_context_json=item.get("source_context_json"),
         )
         observations.append(observation)
 
@@ -397,6 +410,7 @@ def create_scrape_batch_ingest(
                 observation.brand,
                 observation.jato_model,
                 observation.jato_trim,
+                observation.jato_powertrain,
                 observation.observed_at_utc.date()
                 if hasattr(observation.observed_at_utc, "date")
                 else observation.observed_at_utc,
@@ -497,13 +511,35 @@ def list_current_prices(
         brand,
         jato_model,
     )
+    observations = msrp_repo.list_observations_by_ids(
+        session,
+        [item.effective_observation_id for item in items],
+    )
+    observation_by_id = {
+        item.observation_id: item for item in observations
+    }
+    sources = msrp_repo.list_sources_by_ids(
+        session,
+        [item.source_id for item in observations],
+    )
+    source_by_id = {item.source_id: item for item in sources}
     return {
         "rows": len(items),
         "total": total,
         "limit": limit,
         "offset": offset,
         "priceAlertCount": price_alert_count,
-        "items": [current_price_payload(item) for item in items],
+        "items": [
+            current_price_payload(
+                item,
+                source_by_id.get(
+                    observation_by_id[item.effective_observation_id].source_id
+                )
+                if item.effective_observation_id in observation_by_id
+                else None,
+            )
+            for item in items
+        ],
     }
 
 
@@ -519,6 +555,7 @@ def _retire_active_overrides(
         observation.brand,
         observation.jato_model,
         observation.jato_trim,
+        observation.jato_powertrain,
         as_of_date,
     )
     if not active_overrides:
@@ -612,6 +649,7 @@ def remap_current_price(
             current_price.brand,
             current_price.jato_model,
             current_price.jato_trim,
+            current_price.jato_powertrain,
         )
         if open_period is not None:
             open_period.valid_to_utc = now
@@ -658,6 +696,7 @@ def list_price_history(
     brand: str | None,
     jato_model: str | None,
     jato_trim: str | None,
+    jato_powertrain: str | None,
     limit: int,
 ) -> dict[str, object]:
     if not msrp_repo.has_price_history_table(session):
@@ -673,6 +712,7 @@ def list_price_history(
         brand,
         jato_model,
         jato_trim,
+        jato_powertrain,
         limit,
     )
     return {
@@ -696,7 +736,7 @@ def materialize_current_prices(
         limit,
     )
     touched: list[CurrentPrice] = []
-    seen_keys: set[tuple[str, str, str, str]] = set()
+    seen_keys: set[tuple[str, str, str, str, str]] = set()
     price_history_enabled = msrp_repo.has_price_history_table(session)
     for observation in observations:
         business_key = (
@@ -704,6 +744,7 @@ def materialize_current_prices(
             observation.brand,
             observation.jato_model,
             observation.jato_trim,
+            _business_powertrain(observation.jato_powertrain),
         )
         if business_key in seen_keys:
             continue

@@ -4,25 +4,43 @@ import type {
   ConfigImportBatch,
   ConfigProject,
   ConfigVariant,
+  CustomerInsightDeckResponse,
   CountryChatDeckResponse,
   CountryChatMetadataResponse,
   CountryChatNewsOpsStatus,
   CountryChatNewsRefreshResponse,
   CountryChatResponse,
   CountryChatTurn,
+  DataManagementOverviewResponse,
   CrudListResponse,
   CrudItem,
   CurrentPrice,
   DataFreshnessItem,
+  MatchOverride,
+  MsrpObservationRecord,
+  MsrpSource,
   PriceHistoryEntry,
   DetailResponse,
   GroupedTimeSeriesResponse,
+  JatoMonthlyUpdateCleanupResult,
+  JatoMonthlyUpdateArtifacts,
+  JatoMonthlyUpdateJob,
+  JatoMonthlyUpdatePlan,
+  JatoMonthlyUpdateRawCompareSummary,
+  JatoMonthlyUpdateRefreshSummary,
+  JatoMonthlyUpdateSummaries,
+  JatoMonthlyUpdateUploadProgress,
+  JatoMonthlyUpdateUploadSession,
+  JatoMonthlyUpdateUpload,
   MarketScanDeckRequest,
   MarketScanDeckResponse,
   ModelVersionsResponse,
   OverviewResponse,
+  PositioningPricingDeckRequest,
+  PositioningPricingDeckResponse,
   PositioningMapResponse,
   ReviewCase,
+  ReviewCandidateMatch,
   ReviewCaseDetail,
   ReviewBacklogOpportunity,
   ReviewDecision,
@@ -30,10 +48,19 @@ import type {
   ReviewWorkbench,
   RvFinanceResponse,
   RvFinanceVehicle,
+  VersionComparisonDeckRequest,
+  VersionComparisonDeckResponse,
 } from "../types";
 import type { FilterOptionsPayload } from "../utils/filterOptions";
+import {
+  buildMonthlyUpdateUploadResumeKey,
+  getMonthlyUpdateRetryDelayMs,
+} from "../utils/jatoMonthlyUpdate";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/v1";
+const MONTHLY_UPDATE_RESUME_PROBE_BYTES = 1024 * 1024;
+const MONTHLY_UPDATE_UPLOAD_SESSION_STORAGE_PREFIX = "jato_monthly_update_upload_session:";
+const MONTHLY_UPDATE_UPLOAD_MAX_ATTEMPTS = 4;
 
 function getAuthHeaders(): Record<string, string> {
   const token = (
@@ -51,6 +78,25 @@ function getAuthHeaders(): Record<string, string> {
     ...(token ? { "X-Auth-Token": token } : {}),
     "X-User-Name": user || "anonymous"
   };
+}
+
+function buildHeaders(
+  init?: RequestInit,
+  options?: { includeJsonContentType?: boolean }
+): Headers {
+  const headers = new Headers(init?.headers);
+  const authHeaders = getAuthHeaders();
+  Object.entries(authHeaders).forEach(([key, value]) => {
+    headers.set(key, value);
+  });
+  if (
+    options?.includeJsonContentType
+    && !(init?.body instanceof FormData)
+    && !headers.has("Content-Type")
+  ) {
+    headers.set("Content-Type", "application/json");
+  }
+  return headers;
 }
 
 async function readErrorMessage(response: Response): Promise<string> {
@@ -105,19 +151,18 @@ function isAbortLikeError(error: unknown): boolean {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const key = dedupeKey(path, init);
-  const inflight = inflightRequests.get(key) as Promise<T> | undefined;
+  const shouldDedupe = !(init?.body instanceof FormData);
+  const key = shouldDedupe ? dedupeKey(path, init) : null;
+  const inflight = key
+    ? inflightRequests.get(key) as Promise<T> | undefined
+    : undefined;
   if (inflight) return inflight;
 
   const promise = (async () => {
     let response: Response;
     try {
       response = await fetch(`${API_BASE}${path}`, {
-        headers: {
-          "Content-Type": "application/json",
-          ...getAuthHeaders(),
-          ...(init?.headers ?? {})
-        },
+        headers: buildHeaders(init, { includeJsonContentType: true }),
         ...init
       });
     } catch (error) {
@@ -134,8 +179,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return (await response.json()) as T;
   })();
 
-  inflightRequests.set(key, promise);
-  promise.finally(() => inflightRequests.delete(key));
+  if (key) {
+    inflightRequests.set(key, promise);
+    promise.finally(() => inflightRequests.delete(key));
+  }
   return promise;
 }
 
@@ -143,10 +190,7 @@ async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
-      headers: {
-        ...getAuthHeaders(),
-        ...(init?.headers ?? {})
-      },
+      headers: buildHeaders(init),
       ...init
     });
   } catch (error) {
@@ -161,6 +205,53 @@ async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
     throw new Error(`${response.status} ${message}`);
   }
   return response.blob();
+}
+
+function toHex(buffer: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buffer))
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function sha256ForBlob(blob: Blob): Promise<string> {
+  if (!globalThis.crypto?.subtle) {
+    throw new Error("当前浏览器环境不支持 SHA-256 校验，请使用 HTTPS 或 localhost 访问。");
+  }
+  const buffer = await blob.arrayBuffer();
+  return toHex(await crypto.subtle.digest("SHA-256", buffer));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function getMonthlyUpdateUploadSessionStorageKey(resumeKey: string): string {
+  return `${MONTHLY_UPDATE_UPLOAD_SESSION_STORAGE_PREFIX}${resumeKey}`;
+}
+
+function readStoredMonthlyUpdateUploadId(resumeKey: string): string | null {
+  try {
+    const value = localStorage.getItem(getMonthlyUpdateUploadSessionStorageKey(resumeKey));
+    return value && value.trim() ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredMonthlyUpdateUploadId(resumeKey: string, uploadId: string): void {
+  try {
+    localStorage.setItem(getMonthlyUpdateUploadSessionStorageKey(resumeKey), uploadId);
+  } catch {
+    // Ignore storage quota / privacy mode failures; upload can still proceed without resume persistence.
+  }
+}
+
+function clearStoredMonthlyUpdateUploadId(resumeKey: string): void {
+  try {
+    localStorage.removeItem(getMonthlyUpdateUploadSessionStorageKey(resumeKey));
+  } catch {
+    // Ignore storage failures when clearing local resume state.
+  }
 }
 
 function mapReviewCase(raw: Record<string, unknown>): ReviewCase {
@@ -197,9 +288,75 @@ function mapReviewCase(raw: Record<string, unknown>): ReviewCase {
     matchReason: raw.matchReason === undefined || raw.matchReason === null
       ? null
       : (raw.matchReason as Record<string, unknown>),
+    candidateMatches: Array.isArray(raw.candidateMatches)
+      ? raw.candidateMatches.map((item) => mapReviewCandidateMatch(item as Record<string, unknown>))
+      : null,
     currentAssignee: raw.currentAssignee === undefined || raw.currentAssignee === null ? null : String(raw.currentAssignee),
     createdAt: String(raw.createdAtUtc ?? raw.createdAt ?? ""),
     updatedAt: String(raw.updatedAtUtc ?? raw.updatedAt ?? ""),
+  };
+}
+
+function mapReviewCandidateMatch(raw: Record<string, unknown>): ReviewCandidateMatch {
+  return {
+    currentPriceId: raw.currentPriceId === undefined || raw.currentPriceId === null ? undefined : String(raw.currentPriceId),
+    jatoModel: String(raw.jatoModel ?? ""),
+    jatoTrim: String(raw.jatoTrim ?? ""),
+    jatoPowertrain: raw.jatoPowertrain === undefined || raw.jatoPowertrain === null || String(raw.jatoPowertrain).trim() === ""
+      ? null
+      : String(raw.jatoPowertrain),
+    officialModel: String(raw.officialModel ?? ""),
+    officialTrim: String(raw.officialTrim ?? ""),
+    officialEdition: raw.officialEdition === undefined || raw.officialEdition === null ? null : String(raw.officialEdition),
+    officialPowertrain: raw.officialPowertrain === undefined || raw.officialPowertrain === null ? null : String(raw.officialPowertrain),
+    currentMsrpValue: raw.currentMsrpValue === undefined ? undefined : Number(raw.currentMsrpValue),
+    currency: raw.currency === undefined ? undefined : String(raw.currency),
+    score: Number(raw.score ?? 0),
+    reason: raw.reason === undefined || raw.reason === null ? null : (raw.reason as Record<string, unknown>),
+  };
+}
+
+function mapMsrpObservation(raw: Record<string, unknown>): MsrpObservationRecord {
+  return {
+    observationId: String(raw.observationId ?? ""),
+    scrapeBatchId: String(raw.scrapeBatchId ?? ""),
+    sourceId: String(raw.sourceId ?? ""),
+    sourceCode: raw.sourceCode === undefined ? undefined : String(raw.sourceCode),
+    sourceType: raw.sourceType === undefined ? undefined : String(raw.sourceType),
+    extractorName: raw.extractorName === undefined ? undefined : String(raw.extractorName),
+    extractorVersion: raw.extractorVersion === undefined ? undefined : String(raw.extractorVersion),
+    country: String(raw.country ?? ""),
+    brand: String(raw.brand ?? ""),
+    jatoModel: String(raw.jatoModel ?? ""),
+    jatoTrim: String(raw.jatoTrim ?? ""),
+    jatoPowertrain: raw.jatoPowertrain === undefined || raw.jatoPowertrain === null || String(raw.jatoPowertrain).trim() === ""
+      ? null
+      : String(raw.jatoPowertrain),
+    officialModel: String(raw.officialModel ?? ""),
+    officialTrim: String(raw.officialTrim ?? ""),
+    officialEdition: raw.officialEdition === undefined || raw.officialEdition === null ? null : String(raw.officialEdition),
+    officialPowertrain: raw.officialPowertrain === undefined || raw.officialPowertrain === null ? null : String(raw.officialPowertrain),
+    msrpValue: Number(raw.msrpValue ?? 0),
+    currency: String(raw.currency ?? ""),
+    sourceMsrpValue: Number(raw.sourceMsrpValue ?? 0),
+    sourceCurrency: String(raw.sourceCurrency ?? ""),
+    fxRateToEur: Number(raw.fxRateToEur ?? 0),
+    fxRateAsOfDate: String(raw.fxRateAsOfDate ?? ""),
+    fxSource: String(raw.fxSource ?? ""),
+    taxIncluded: Boolean(raw.taxIncluded),
+    priceLabel: String(raw.priceLabel ?? ""),
+    availabilityText: raw.availabilityText === undefined || raw.availabilityText === null ? null : String(raw.availabilityText),
+    observedAtUtc: String(raw.observedAtUtc ?? ""),
+    sourceUrl: String(raw.sourceUrl ?? ""),
+    sourceSnapshotPath: raw.sourceSnapshotPath === undefined ? null : (raw.sourceSnapshotPath as string | null),
+    sourcePayloadHash: raw.sourcePayloadHash === undefined || raw.sourcePayloadHash === null ? null : String(raw.sourcePayloadHash),
+    extractionVersion: String(raw.extractionVersion ?? ""),
+    matchConfidence: Number(raw.matchConfidence ?? 0),
+    matchStatus: String(raw.matchStatus ?? ""),
+    matchReason: raw.matchReason === undefined || raw.matchReason === null ? null : (raw.matchReason as Record<string, unknown>),
+    sourceContext: raw.sourceContext === undefined || raw.sourceContext === null ? null : (raw.sourceContext as Record<string, unknown>),
+    createdAtUtc: String(raw.createdAtUtc ?? ""),
+    updatedAtUtc: String(raw.updatedAtUtc ?? ""),
   };
 }
 
@@ -220,7 +377,9 @@ function mapReviewCaseDetail(raw: Record<string, unknown>): ReviewCaseDetail {
   const reviewCaseRaw = (raw.reviewCase as Record<string, unknown> | undefined) ?? raw;
   return {
     ...mapReviewCase(reviewCaseRaw),
-    observation: (raw.observation as Record<string, unknown> | null | undefined) ?? null,
+    observation: raw.observation && typeof raw.observation === "object"
+      ? mapMsrpObservation(raw.observation as Record<string, unknown>)
+      : null,
     decisions: Array.isArray(raw.decisions)
       ? raw.decisions.map((item) => mapReviewDecision(item as Record<string, unknown>))
       : [],
@@ -235,6 +394,10 @@ function mapCurrentPrice(raw: Record<string, unknown>): CurrentPrice {
     id: String(raw.currentPriceId ?? raw.id ?? ""),
     country: String(raw.country ?? ""),
     brand: String(raw.brand ?? ""),
+    sourceCode: raw.sourceCode === undefined ? undefined : String(raw.sourceCode),
+    sourceType: raw.sourceType === undefined ? undefined : String(raw.sourceType),
+    extractorName: raw.extractorName === undefined ? undefined : String(raw.extractorName),
+    extractorVersion: raw.extractorVersion === undefined ? undefined : String(raw.extractorVersion),
     jatoModel: String(raw.jatoModel ?? ""),
     jatoTrim: String(raw.jatoTrim ?? ""),
     jatoPowertrain: raw.jatoPowertrain === undefined || raw.jatoPowertrain === null ? null : String(raw.jatoPowertrain),
@@ -267,6 +430,9 @@ function mapPriceHistory(raw: Record<string, unknown>): PriceHistoryEntry {
     brand: String(raw.brand ?? ""),
     jatoModel: String(raw.jatoModel ?? ""),
     jatoTrim: String(raw.jatoTrim ?? ""),
+    jatoPowertrain: raw.jatoPowertrain === undefined || raw.jatoPowertrain === null || String(raw.jatoPowertrain).trim() === ""
+      ? null
+      : String(raw.jatoPowertrain),
     msrpValue: Number(raw.msrpValue ?? 0),
     currency: String(raw.currency ?? ""),
     sourceMsrpValue: Number(raw.sourceMsrpValue ?? 0),
@@ -283,6 +449,332 @@ function mapPriceHistory(raw: Record<string, unknown>): PriceHistoryEntry {
     lastConfirmedByObservationId: String(raw.lastConfirmedByObservationId ?? raw.startedByObservationId ?? ""),
     createdAtUtc: String(raw.createdAtUtc ?? ""),
   };
+}
+
+function mapConfigProject(raw: Record<string, unknown>): ConfigProject {
+  return {
+    id: String(raw.projectId ?? raw.id ?? ""),
+    projectCode: String(raw.projectCode ?? ""),
+    brand: String(raw.brand ?? ""),
+    model: String(raw.model ?? ""),
+    marketCountry: String(raw.marketCountry ?? ""),
+    displayName: String(raw.displayName ?? ""),
+    status: String(raw.status ?? ""),
+    createdAt: String(raw.createdAtUtc ?? raw.createdAt ?? ""),
+    updatedAt: String(raw.updatedAtUtc ?? raw.updatedAt ?? ""),
+  };
+}
+
+function mapMsrpSource(raw: Record<string, unknown>): MsrpSource {
+  return {
+    id: String(raw.sourceId ?? raw.id ?? ""),
+    sourceCode: String(raw.sourceCode ?? ""),
+    country: String(raw.country ?? ""),
+    brand: String(raw.brand ?? ""),
+    sourceUrl: String(raw.sourceUrl ?? ""),
+    sourceType: String(raw.sourceType ?? ""),
+    extractorName: String(raw.extractorName ?? ""),
+    extractorVersion: String(raw.extractorVersion ?? ""),
+    priceSemantics: String(raw.priceSemantics ?? ""),
+    requiresLocation: Boolean(raw.requiresLocation),
+    enabled: Boolean(raw.enabled),
+    notes: raw.notes === undefined || raw.notes === null ? null : String(raw.notes),
+    createdAt: String(raw.createdAtUtc ?? raw.createdAt ?? ""),
+    updatedAt: String(raw.updatedAtUtc ?? raw.updatedAt ?? ""),
+  };
+}
+
+function mapMatchOverride(raw: Record<string, unknown>): MatchOverride {
+  return {
+    id: String(raw.overrideId ?? raw.id ?? ""),
+    country: String(raw.country ?? ""),
+    brand: String(raw.brand ?? ""),
+    jatoModel: String(raw.jatoModel ?? ""),
+    jatoTrim: String(raw.jatoTrim ?? ""),
+    jatoPowertrain: raw.jatoPowertrain === undefined || raw.jatoPowertrain === null || String(raw.jatoPowertrain).trim() === ""
+      ? null
+      : String(raw.jatoPowertrain),
+    officialModel: String(raw.officialModel ?? ""),
+    officialTrim: String(raw.officialTrim ?? ""),
+    validFromDate: String(raw.validFromDate ?? ""),
+    validToDate: raw.validToDate === undefined || raw.validToDate === null ? null : String(raw.validToDate),
+    overrideReason: String(raw.overrideReason ?? ""),
+    createdBy: String(raw.createdBy ?? ""),
+    createdAt: String(raw.createdAtUtc ?? raw.createdAt ?? ""),
+    updatedAt: String(raw.updatedAtUtc ?? raw.updatedAt ?? ""),
+  };
+}
+
+function mapJatoMonthlyUpdateRawCompareSummary(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateRawCompareSummary {
+  return {
+    compareId: String(raw.compareId ?? ""),
+    decisionSuggestion: String(raw.decisionSuggestion ?? ""),
+    compareKeyMode: String(raw.compareKeyMode ?? ""),
+    compareKeyColumns: Array.isArray(raw.compareKeyColumns)
+      ? raw.compareKeyColumns.map((item) => String(item))
+      : [],
+    blockerCount: Number(raw.blockerCount ?? 0),
+    reviewCount: Number(raw.reviewCount ?? 0),
+    infoCount: Number(raw.infoCount ?? 0),
+    advancedCountryCount: Number(raw.advancedCountryCount ?? 0),
+    regressedCountryCount: Number(raw.regressedCountryCount ?? 0),
+    newCountryCount: Number(raw.newCountryCount ?? 0),
+    missingCountryCount: Number(raw.missingCountryCount ?? 0),
+    addedCountryCount: Number(raw.addedCountryCount ?? 0),
+    removedCountryCount: Number(raw.removedCountryCount ?? 0)
+  };
+}
+
+function mapJatoMonthlyUpdateRefreshSummary(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateRefreshSummary {
+  return {
+    jobStatus: String(raw.jobStatus ?? ""),
+    jobElapsedSeconds: Number(raw.jobElapsedSeconds ?? 0),
+    rowCount: Number(raw.rowCount ?? 0),
+    columnCount: Number(raw.columnCount ?? 0),
+    partitionCount: Number(raw.partitionCount ?? 0),
+    changedRows: Number(raw.changedRows ?? 0),
+    changedCountryCount: Number(raw.changedCountryCount ?? 0),
+    fingerprintMatched: Boolean(raw.fingerprintMatched),
+    fingerprintUpdated: Boolean(raw.fingerprintUpdated),
+    conflictGroupCount: Number(raw.conflictGroupCount ?? 0),
+    conflictRowCount: Number(raw.conflictRowCount ?? 0)
+  };
+}
+
+function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdateJob {
+  const uploadRaw = raw.upload && typeof raw.upload === "object"
+    ? raw.upload as Record<string, unknown>
+    : null;
+  const planRaw = raw.plan && typeof raw.plan === "object"
+    ? raw.plan as Record<string, unknown>
+    : null;
+  const artifactsRaw = raw.artifacts && typeof raw.artifacts === "object"
+    ? raw.artifacts as Record<string, unknown>
+    : null;
+  const summariesRaw = raw.summaries && typeof raw.summaries === "object"
+    ? raw.summaries as Record<string, unknown>
+    : null;
+
+  const upload: JatoMonthlyUpdateUpload | null = uploadRaw ? {
+    originalFilename: String(uploadRaw.originalFilename ?? ""),
+    storedPath: uploadRaw.storedPath === undefined || uploadRaw.storedPath === null
+      ? null
+      : String(uploadRaw.storedPath),
+    sizeBytes: uploadRaw.sizeBytes === undefined ? undefined : Number(uploadRaw.sizeBytes),
+    sha256: uploadRaw.sha256 === undefined || uploadRaw.sha256 === null
+      ? null
+      : String(uploadRaw.sha256),
+  } : null;
+
+  const plan: JatoMonthlyUpdatePlan | null = planRaw ? {
+    path: planRaw.path === undefined || planRaw.path === null ? null : String(planRaw.path),
+    compareId: planRaw.compareId === undefined || planRaw.compareId === null ? null : String(planRaw.compareId),
+    compareCommand: planRaw.compareCommand === undefined || planRaw.compareCommand === null
+      ? null
+      : String(planRaw.compareCommand),
+    refreshCommand: planRaw.refreshCommand === undefined || planRaw.refreshCommand === null
+      ? null
+      : String(planRaw.refreshCommand)
+  } : null;
+
+  const artifacts: JatoMonthlyUpdateArtifacts | null = artifactsRaw ? {
+    jobDir: artifactsRaw.jobDir === undefined || artifactsRaw.jobDir === null ? null : String(artifactsRaw.jobDir),
+    logPath: artifactsRaw.logPath === undefined || artifactsRaw.logPath === null ? null : String(artifactsRaw.logPath),
+    baselinePath: artifactsRaw.baselinePath === undefined || artifactsRaw.baselinePath === null ? null : String(artifactsRaw.baselinePath),
+    stagedPatchPath: artifactsRaw.stagedPatchPath === undefined || artifactsRaw.stagedPatchPath === null ? null : String(artifactsRaw.stagedPatchPath),
+    planPath: artifactsRaw.planPath === undefined || artifactsRaw.planPath === null ? null : String(artifactsRaw.planPath),
+    reviewDir: artifactsRaw.reviewDir === undefined || artifactsRaw.reviewDir === null ? null : String(artifactsRaw.reviewDir),
+    rawCompareReportPath: artifactsRaw.rawCompareReportPath === undefined || artifactsRaw.rawCompareReportPath === null
+      ? null
+      : String(artifactsRaw.rawCompareReportPath),
+    stagingOutputPath: artifactsRaw.stagingOutputPath === undefined || artifactsRaw.stagingOutputPath === null
+      ? null
+      : String(artifactsRaw.stagingOutputPath),
+    manifestPath: artifactsRaw.manifestPath === undefined || artifactsRaw.manifestPath === null
+      ? null
+      : String(artifactsRaw.manifestPath),
+    partitionOutputPath: artifactsRaw.partitionOutputPath === undefined || artifactsRaw.partitionOutputPath === null
+      ? null
+      : String(artifactsRaw.partitionOutputPath),
+    refreshReportPath: artifactsRaw.refreshReportPath === undefined || artifactsRaw.refreshReportPath === null
+      ? null
+      : String(artifactsRaw.refreshReportPath),
+    fingerprintPath: artifactsRaw.fingerprintPath === undefined || artifactsRaw.fingerprintPath === null
+      ? null
+      : String(artifactsRaw.fingerprintPath)
+  } : null;
+
+  const summaries: JatoMonthlyUpdateSummaries | null = summariesRaw ? {
+    rawCompare: summariesRaw.rawCompare && typeof summariesRaw.rawCompare === "object"
+      ? mapJatoMonthlyUpdateRawCompareSummary(summariesRaw.rawCompare as Record<string, unknown>)
+      : undefined,
+    refresh: summariesRaw.refresh && typeof summariesRaw.refresh === "object"
+      ? mapJatoMonthlyUpdateRefreshSummary(summariesRaw.refresh as Record<string, unknown>)
+      : undefined
+  } : null;
+
+  return {
+    jobId: String(raw.jobId ?? ""),
+    month: String(raw.month ?? ""),
+    status: String(raw.status ?? ""),
+    phase: String(raw.phase ?? ""),
+    triggeredBy: String(raw.triggeredBy ?? ""),
+    createdAt: String(raw.createdAt ?? ""),
+    updatedAt: String(raw.updatedAt ?? ""),
+    startedAt: raw.startedAt === undefined || raw.startedAt === null ? null : String(raw.startedAt),
+    finishedAt: raw.finishedAt === undefined || raw.finishedAt === null ? null : String(raw.finishedAt),
+    error: raw.error === undefined || raw.error === null ? null : String(raw.error),
+    upload,
+    plan,
+    artifacts,
+    summaries,
+    logPath: raw.logPath === undefined || raw.logPath === null ? null : String(raw.logPath),
+    logTail: raw.logTail === undefined || raw.logTail === null ? null : String(raw.logTail)
+  };
+}
+
+function mapJatoMonthlyUpdateCleanupResult(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateCleanupResult {
+  return {
+    cleanedAt: String(raw.cleanedAt ?? ""),
+    triggeredBy: String(raw.triggeredBy ?? ""),
+    activeBaselinePath:
+      raw.activeBaselinePath === undefined || raw.activeBaselinePath === null
+        ? null
+        : String(raw.activeBaselinePath),
+    activePatchMonth:
+      raw.activePatchMonth === undefined || raw.activePatchMonth === null
+        ? null
+        : String(raw.activePatchMonth),
+    archivedBaselineCount: Number(raw.archivedBaselineCount ?? 0),
+    archivedBaselines: Array.isArray(raw.archivedBaselines)
+      ? raw.archivedBaselines.map((item) => String(item))
+      : [],
+    archivedPatchDirCount: Number(raw.archivedPatchDirCount ?? 0),
+    archivedPatchDirs: Array.isArray(raw.archivedPatchDirs)
+      ? raw.archivedPatchDirs.map((item) => String(item))
+      : [],
+    removedJobUploadDirCount: Number(raw.removedJobUploadDirCount ?? 0),
+    removedJobUploadDirs: Array.isArray(raw.removedJobUploadDirs)
+      ? raw.removedJobUploadDirs.map((item) => String(item))
+      : [],
+  };
+}
+
+function mapJatoMonthlyUpdateUploadSession(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateUploadSession {
+  return {
+    uploadId: String(raw.uploadId ?? ""),
+    filename: String(raw.filename ?? ""),
+    sizeBytes: Number(raw.sizeBytes ?? 0),
+    chunkSize: Number(raw.chunkSize ?? 0),
+    totalChunks: Number(raw.totalChunks ?? 0),
+    receivedChunkCount: Number(raw.receivedChunkCount ?? 0),
+    receivedChunks: Array.isArray(raw.receivedChunks)
+      ? raw.receivedChunks.map((item) => Number(item))
+      : [],
+    uploadedBytes: Number(raw.uploadedBytes ?? 0),
+    status: String(raw.status ?? ""),
+    createdAt:
+      raw.createdAt === undefined || raw.createdAt === null
+        ? null
+        : String(raw.createdAt),
+    updatedAt:
+      raw.updatedAt === undefined || raw.updatedAt === null
+        ? null
+        : String(raw.updatedAt),
+    completedAt:
+      raw.completedAt === undefined || raw.completedAt === null
+        ? null
+        : String(raw.completedAt),
+    assembledPath:
+      raw.assembledPath === undefined || raw.assembledPath === null
+        ? null
+        : String(raw.assembledPath),
+    resumeKey:
+      raw.resumeKey === undefined || raw.resumeKey === null
+        ? null
+        : String(raw.resumeKey),
+    fileSha256:
+      raw.fileSha256 === undefined || raw.fileSha256 === null
+        ? null
+        : String(raw.fileSha256),
+    triggeredBy:
+      raw.triggeredBy === undefined || raw.triggeredBy === null
+        ? null
+        : String(raw.triggeredBy),
+  };
+}
+
+async function requestJatoMonthlyUpdateUploadChunk(
+  uploadId: string,
+  partNumber: number,
+  chunk: Blob,
+  chunkSha256: string
+): Promise<JatoMonthlyUpdateUploadSession> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/msrp/monthly-update-uploads/${uploadId}/parts/${partNumber}`, {
+      method: "PUT",
+      headers: new Headers({
+        ...getAuthHeaders(),
+        "Content-Type": "application/octet-stream",
+        "X-Chunk-SHA256": chunkSha256
+      }),
+      body: chunk
+    });
+  } catch (error) {
+    if (isAbortLikeError(error)) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `网络请求失败：/msrp/monthly-update-uploads/${uploadId}/parts/${partNumber} (${message})`
+    );
+  }
+  if (!response.ok) {
+    const message = await readErrorMessage(response);
+    throw new Error(`${response.status} ${message}`);
+  }
+  const payload = await response.json() as { item: Record<string, unknown> };
+  return mapJatoMonthlyUpdateUploadSession(payload.item);
+}
+
+async function getJatoMonthlyUpdateUploadSession(
+  uploadId: string
+): Promise<JatoMonthlyUpdateUploadSession> {
+  return request<{ item: Record<string, unknown> }>(
+    `/msrp/monthly-update-uploads/${uploadId}`
+  ).then((res) => mapJatoMonthlyUpdateUploadSession(res.item));
+}
+
+async function initiateJatoMonthlyUpdateUploadSession(
+  file: File,
+  resumeKey: string
+): Promise<JatoMonthlyUpdateUploadSession> {
+  return request<{ item: Record<string, unknown> }>("/msrp/monthly-update-uploads/initiate", {
+    method: "POST",
+    body: JSON.stringify({
+      filename: file.name,
+      sizeBytes: file.size,
+      resumeKey,
+    })
+  }).then((res) => mapJatoMonthlyUpdateUploadSession(res.item));
+}
+
+async function completeJatoMonthlyUpdateUploadSession(
+  uploadId: string
+): Promise<JatoMonthlyUpdateUploadSession> {
+  return request<{ item: Record<string, unknown> }>(
+    `/msrp/monthly-update-uploads/${uploadId}/complete`,
+    { method: "POST" }
+  ).then((res) => mapJatoMonthlyUpdateUploadSession(res.item));
 }
 
 function mapReviewScopeCountrySummary(raw: Record<string, unknown>): ReviewScopeCountrySummary {
@@ -500,6 +992,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  positioningPricingDeck: (payload: PositioningPricingDeckRequest = {}) =>
+    request<PositioningPricingDeckResponse>("/market-scan/positioning-pricing-deck", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  versionComparisonDeck: (payload: VersionComparisonDeckRequest = {}) =>
+    request<VersionComparisonDeckResponse>("/market-scan/version-comparison-deck", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  nordicCustomerDeck: () =>
+    request<CustomerInsightDeckResponse>("/market-scan/nordic-customer-deck"),
   listItems: (params?: {
     page?: number;
     page_size?: number;
@@ -521,6 +1025,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  getDataManagementOverview: () =>
+    request<{ item: DataManagementOverviewResponse }>("/data-management/overview")
+      .then((response) => response.item),
   patchItem: (id: string, payload: Partial<Omit<CrudItem, "id">>) =>
     request<{ item: CrudItem }>(`/crud/items/${id}`, {
       method: "PATCH",
@@ -542,10 +1049,39 @@ export const api = {
     if (params?.market_country) sp.set("market_country", params.market_country);
     if (params?.limit) sp.set("limit", String(params.limit));
     const q = sp.toString();
-    return request<{ items: ConfigProject[] }>(
+    return request<{ items: Record<string, unknown>[] }>(
       `/engineering/projects${q ? `?${q}` : ""}`
-    );
+    ).then((res) => ({
+      items: res.items.map((item) => mapConfigProject(item))
+    }));
   },
+  createProject: (payload: {
+    project_code: string;
+    brand: string;
+    model: string;
+    market_country: string;
+    display_name: string;
+    status?: string;
+  }) =>
+    request<{ item: Record<string, unknown> }>("/engineering/projects", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }).then((res) => ({ item: mapConfigProject(res.item) })),
+  patchProject: (projectId: string, payload: {
+    brand?: string;
+    model?: string;
+    market_country?: string;
+    display_name?: string;
+    status?: string;
+  }) =>
+    request<{ item: Record<string, unknown> }>(`/engineering/projects/${projectId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }).then((res) => ({ item: mapConfigProject(res.item) })),
+  deleteProject: (projectId: string) =>
+    request<{ item: Record<string, unknown> }>(`/engineering/projects/${projectId}`, {
+      method: "DELETE"
+    }).then((res) => ({ item: mapConfigProject(res.item) })),
   listImportBatches: (params?: {
     project_id?: string;
     import_status?: string;
@@ -586,6 +1122,58 @@ export const api = {
   },
 
   /* ── Review Cases ──────────────────────────────── */
+  listMatchOverrides: (params?: {
+    country?: string;
+    brand?: string;
+    jato_model?: string;
+    limit?: number;
+  }) => {
+    const sp = new URLSearchParams();
+    if (params?.country) sp.set("country", params.country);
+    if (params?.brand) sp.set("brand", params.brand);
+    if (params?.jato_model) sp.set("jato_model", params.jato_model);
+    if (params?.limit) sp.set("limit", String(params.limit));
+    const q = sp.toString();
+    return request<{ items: Record<string, unknown>[] }>(
+      `/review/overrides${q ? `?${q}` : ""}`
+    ).then((res) => ({
+      items: res.items.map((item) => mapMatchOverride(item))
+    }));
+  },
+  createMatchOverride: (payload: {
+    country: string;
+    brand: string;
+    jato_model: string;
+    jato_trim: string;
+    jato_powertrain?: string | null;
+    official_model: string;
+    official_trim: string;
+    valid_from_date: string;
+    valid_to_date?: string | null;
+    override_reason: string;
+    created_by: string;
+  }) =>
+    request<{ item: Record<string, unknown> }>("/review/overrides", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }).then((res) => ({ item: mapMatchOverride(res.item) })),
+  patchMatchOverride: (overrideId: string, payload: {
+    official_model?: string;
+    official_trim?: string;
+    jato_powertrain?: string | null;
+    valid_from_date?: string;
+    valid_to_date?: string | null;
+    override_reason?: string;
+    created_by?: string;
+  }) =>
+    request<{ item: Record<string, unknown> }>(`/review/overrides/${overrideId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }).then((res) => ({ item: mapMatchOverride(res.item) })),
+  deleteMatchOverride: (overrideId: string) =>
+    request<{ item: Record<string, unknown> }>(`/review/overrides/${overrideId}`, {
+      method: "DELETE"
+    }).then((res) => ({ item: mapMatchOverride(res.item) })),
   listReviewCases: (params?: {
     review_status?: string;
     country?: string;
@@ -655,6 +1243,157 @@ export const api = {
     }),
 
   /* ── MSRP Current Prices ───────────────────────── */
+  listMsrpSources: (params?: {
+    source_code?: string;
+    country?: string;
+    brand?: string;
+    source_type?: string;
+    enabled?: boolean;
+    limit?: number;
+  }) => {
+    const sp = new URLSearchParams();
+    if (params?.source_code) sp.set("source_code", params.source_code);
+    if (params?.country) sp.set("country", params.country);
+    if (params?.brand) sp.set("brand", params.brand);
+    if (params?.source_type) sp.set("source_type", params.source_type);
+    if (params?.enabled !== undefined) sp.set("enabled", String(params.enabled));
+    if (params?.limit) sp.set("limit", String(params.limit));
+    const q = sp.toString();
+    return request<{ items: Record<string, unknown>[] }>(
+      `/msrp/sources${q ? `?${q}` : ""}`
+    ).then((res) => ({
+      items: res.items.map((item) => mapMsrpSource(item))
+    }));
+  },
+  createMsrpSource: (payload: {
+    source_code: string;
+    country: string;
+    brand: string;
+    source_url: string;
+    source_type: string;
+    extractor_name: string;
+    extractor_version: string;
+    price_semantics: string;
+    requires_location?: boolean;
+    enabled?: boolean;
+    notes?: string | null;
+  }) =>
+    request<{ item: Record<string, unknown> }>("/msrp/sources", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }).then((res) => ({ item: mapMsrpSource(res.item) })),
+  patchMsrpSource: (sourceId: string, payload: {
+    country?: string;
+    brand?: string;
+    source_url?: string;
+    source_type?: string;
+    extractor_name?: string;
+    extractor_version?: string;
+    price_semantics?: string;
+    requires_location?: boolean;
+    enabled?: boolean;
+    notes?: string | null;
+  }) =>
+    request<{ item: Record<string, unknown> }>(`/msrp/sources/${sourceId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }).then((res) => ({ item: mapMsrpSource(res.item) })),
+  deleteMsrpSource: (sourceId: string) =>
+    request<{ item: Record<string, unknown> }>(`/msrp/sources/${sourceId}`, {
+      method: "DELETE"
+    }).then((res) => ({ item: mapMsrpSource(res.item) })),
+  listMsrpObservations: (params?: {
+    scrape_batch_id?: string;
+    country?: string;
+    brand?: string;
+    jato_model?: string;
+    match_status?: string;
+    source_code?: string;
+    source_type?: string;
+    limit?: number;
+  }) => {
+    const sp = new URLSearchParams();
+    if (params?.scrape_batch_id) sp.set("scrape_batch_id", params.scrape_batch_id);
+    if (params?.country) sp.set("country", params.country);
+    if (params?.brand) sp.set("brand", params.brand);
+    if (params?.jato_model) sp.set("jato_model", params.jato_model);
+    if (params?.match_status) sp.set("match_status", params.match_status);
+    if (params?.source_code) sp.set("source_code", params.source_code);
+    if (params?.source_type) sp.set("source_type", params.source_type);
+    if (params?.limit) sp.set("limit", String(params.limit));
+    const q = sp.toString();
+    return request<{ items: Record<string, unknown>[] }>(
+      `/msrp/sources/observations${q ? `?${q}` : ""}`
+    ).then((res) => ({
+      items: res.items.map((item) => mapMsrpObservation(item))
+    }));
+  },
+  createMsrpObservation: (payload: {
+    source_id: string;
+    country: string;
+    brand: string;
+    jato_model: string;
+    jato_trim: string;
+    jato_powertrain?: string | null;
+    official_model: string;
+    official_trim: string;
+    official_edition?: string | null;
+    official_powertrain?: string | null;
+    msrp_value: number;
+    currency: string;
+    tax_included: boolean;
+    price_label: string;
+    availability_text?: string | null;
+    observed_at_utc: string;
+    source_url: string;
+    source_snapshot_path?: string | null;
+    source_payload_hash?: string | null;
+    extraction_version: string;
+    match_confidence: number;
+    match_status: "auto_accepted" | "review_required" | "human_approved" | "rejected";
+    match_reason_json?: Record<string, unknown> | null;
+    source_context_json?: Record<string, unknown> | null;
+    candidate_matches_json?: Record<string, unknown>[] | null;
+  }) =>
+    request<{ item: Record<string, unknown> }>("/msrp/sources/observations", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }).then((res) => ({ item: mapMsrpObservation(res.item) })),
+  patchMsrpObservation: (observationId: string, payload: {
+    source_id?: string;
+    country?: string;
+    brand?: string;
+    jato_model?: string;
+    jato_trim?: string;
+    jato_powertrain?: string | null;
+    official_model?: string;
+    official_trim?: string;
+    official_edition?: string | null;
+    official_powertrain?: string | null;
+    msrp_value?: number;
+    currency?: string;
+    tax_included?: boolean;
+    price_label?: string;
+    availability_text?: string | null;
+    observed_at_utc?: string;
+    source_url?: string;
+    source_snapshot_path?: string | null;
+    source_payload_hash?: string | null;
+    extraction_version?: string;
+    match_confidence?: number;
+    match_status?: "auto_accepted" | "review_required" | "human_approved" | "rejected" | "override_applied";
+    match_reason_json?: Record<string, unknown> | null;
+    source_context_json?: Record<string, unknown> | null;
+    candidate_matches_json?: Record<string, unknown>[] | null;
+  }) =>
+    request<{ item: Record<string, unknown> }>(`/msrp/sources/observations/${observationId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }).then((res) => ({ item: mapMsrpObservation(res.item) })),
+  deleteMsrpObservation: (observationId: string) =>
+    request<{ item: Record<string, unknown> }>(`/msrp/sources/observations/${observationId}`, {
+      method: "DELETE"
+    }).then((res) => ({ item: mapMsrpObservation(res.item) })),
   listCurrentPrices: (params?: {
     country?: string;
     brand?: string;
@@ -692,6 +1431,7 @@ export const api = {
     brand?: string;
     jato_model?: string;
     jato_trim?: string;
+    jato_powertrain?: string;
     limit?: number;
   }) => {
     const sp = new URLSearchParams();
@@ -699,6 +1439,7 @@ export const api = {
     if (params?.brand) sp.set("brand", params.brand);
     if (params?.jato_model) sp.set("jato_model", params.jato_model);
     if (params?.jato_trim) sp.set("jato_trim", params.jato_trim);
+    if (params?.jato_powertrain) sp.set("jato_powertrain", params.jato_powertrain);
     if (params?.limit) sp.set("limit", String(params.limit));
     const q = sp.toString();
     return request<{ items: Record<string, unknown>[] }>(
@@ -725,4 +1466,171 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  createJatoMonthlyUpdateJob: async (
+    month: string,
+    file: File,
+    onProgress?: (progress: JatoMonthlyUpdateUploadProgress) => void
+  ) => {
+    const probeSha256 = await sha256ForBlob(
+      file.slice(0, Math.min(file.size, MONTHLY_UPDATE_RESUME_PROBE_BYTES))
+    );
+    const resumeKey = buildMonthlyUpdateUploadResumeKey({
+      filename: file.name,
+      sizeBytes: file.size,
+      lastModified: file.lastModified,
+      probeSha256,
+    });
+    onProgress?.({
+      stage: "initiating",
+      uploadedBytes: 0,
+      totalBytes: file.size,
+      uploadedChunks: 0,
+      totalChunks: 0,
+      chunkSize: 0,
+      detail: "准备上传会话与续传信息",
+    });
+
+    let session: JatoMonthlyUpdateUploadSession | null = null;
+    const storedUploadId = readStoredMonthlyUpdateUploadId(resumeKey);
+    if (storedUploadId) {
+      try {
+        session = await getJatoMonthlyUpdateUploadSession(storedUploadId);
+      } catch {
+        clearStoredMonthlyUpdateUploadId(resumeKey);
+      }
+    }
+
+    if (!session) {
+      session = await initiateJatoMonthlyUpdateUploadSession(file, resumeKey);
+    }
+    writeStoredMonthlyUpdateUploadId(resumeKey, session.uploadId);
+
+    onProgress?.({
+      stage: session.receivedChunkCount > 0 ? "resuming" : "uploading",
+      uploadedBytes: session.uploadedBytes,
+      totalBytes: file.size,
+      uploadedChunks: session.receivedChunkCount,
+      totalChunks: session.totalChunks,
+      chunkSize: session.chunkSize,
+      detail: session.receivedChunkCount > 0
+        ? `已恢复 ${session.receivedChunkCount}/${session.totalChunks} 个分片`
+        : "开始分片上传",
+    });
+
+    const receivedChunks = new Set(session.receivedChunks);
+    for (let chunkIndex = 0; chunkIndex < session.totalChunks; chunkIndex += 1) {
+      const partNumber = chunkIndex + 1;
+      if (receivedChunks.has(partNumber)) {
+        continue;
+      }
+      const start = chunkIndex * session.chunkSize;
+      const end = Math.min(file.size, start + session.chunkSize);
+      const chunk = file.slice(start, end);
+      const chunkSha256 = await sha256ForBlob(chunk);
+      let uploaded = false;
+      for (let attempt = 1; attempt <= MONTHLY_UPDATE_UPLOAD_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          session = await requestJatoMonthlyUpdateUploadChunk(
+            session.uploadId,
+            partNumber,
+            chunk,
+            chunkSha256
+          );
+          uploaded = true;
+          break;
+        } catch (error) {
+          if (attempt >= MONTHLY_UPDATE_UPLOAD_MAX_ATTEMPTS) {
+            throw error;
+          }
+          onProgress?.({
+            stage: "retrying",
+            uploadedBytes: session.uploadedBytes,
+            totalBytes: file.size,
+            uploadedChunks: session.receivedChunkCount,
+            totalChunks: session.totalChunks,
+            chunkSize: session.chunkSize,
+            detail: `分片 ${partNumber}/${session.totalChunks} 上传失败，正在第 ${attempt + 1} 次重试`,
+          });
+          await sleep(getMonthlyUpdateRetryDelayMs(attempt));
+        }
+      }
+      if (!uploaded) {
+        throw new Error(`分片 ${partNumber} 上传失败。`);
+      }
+      onProgress?.({
+        stage: "uploading",
+        uploadedBytes: session.uploadedBytes,
+        totalBytes: file.size,
+        uploadedChunks: session.receivedChunkCount,
+        totalChunks: session.totalChunks,
+        chunkSize: session.chunkSize,
+        detail: `分片 ${partNumber}/${session.totalChunks} 已完成`,
+      });
+    }
+
+    if (session.status !== "completed") {
+      onProgress?.({
+        stage: "assembling",
+        uploadedBytes: file.size,
+        totalBytes: file.size,
+        uploadedChunks: session.totalChunks,
+        totalChunks: session.totalChunks,
+        chunkSize: session.chunkSize,
+        detail: "服务端正在校验分片并组装整文件",
+      });
+      session = await completeJatoMonthlyUpdateUploadSession(session.uploadId);
+    }
+
+    onProgress?.({
+      stage: "creating_job",
+      uploadedBytes: file.size,
+      totalBytes: file.size,
+      uploadedChunks: session.totalChunks,
+      totalChunks: session.totalChunks,
+      chunkSize: session.chunkSize,
+      detail: session.fileSha256
+        ? `文件 SHA-256 ${session.fileSha256.slice(0, 12)}...`
+        : "准备创建月更任务",
+    });
+
+    const item = await request<{ item: Record<string, unknown> }>("/msrp/monthly-update-jobs/from-upload", {
+      method: "POST",
+      body: JSON.stringify({
+        month,
+        uploadId: session.uploadId
+      })
+    }).then((res) => mapJatoMonthlyUpdateJob(res.item));
+    clearStoredMonthlyUpdateUploadId(resumeKey);
+
+    onProgress?.({
+      stage: "queued",
+      uploadedBytes: file.size,
+      totalBytes: file.size,
+      uploadedChunks: session.totalChunks,
+      totalChunks: session.totalChunks,
+      chunkSize: session.chunkSize,
+      detail: item.upload?.sha256
+        ? `已入队，文件指纹 ${item.upload.sha256.slice(0, 12)}...`
+        : "已入队，后台开始执行脚本",
+    });
+
+    return { item };
+  },
+  listJatoMonthlyUpdateJobs: (limit = 20) =>
+    request<{ rows: number; items: Record<string, unknown>[] }>(
+      `/msrp/monthly-update-jobs?limit=${limit}`
+    ).then((res) => ({
+      rows: Number(res.rows ?? res.items.length),
+      items: res.items.map((item) => mapJatoMonthlyUpdateJob(item))
+    })),
+  getJatoMonthlyUpdateJob: (jobId: string) =>
+    request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}`).then((res) => ({
+      item: mapJatoMonthlyUpdateJob(res.item)
+    })),
+  runJatoMonthlyUpdateCleanup: () =>
+    request<{ item: Record<string, unknown> }>("/msrp/monthly-update-maintenance/cleanup", {
+      method: "POST",
+    }).then((res) => ({
+      item: mapJatoMonthlyUpdateCleanupResult(res.item)
+    }))
 };

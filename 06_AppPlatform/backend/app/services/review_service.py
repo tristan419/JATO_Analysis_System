@@ -53,7 +53,11 @@ def list_match_overrides(
 
 
 def create_match_override(session: Session, data: dict) -> dict[str, object]:
-    override = MatchOverride(**data)
+    payload = dict(data)
+    payload["jato_powertrain"] = str(
+        payload.get("jato_powertrain") or ""
+    ).strip()
+    override = MatchOverride(**payload)
     repo.add_match_override(session, override)
     _commit_or_conflict(session, "Override already exists")
     session.refresh(override)
@@ -70,11 +74,26 @@ def update_match_override(
         return None
     for key, value in data.items():
         if value is not None:
+            if key == "jato_powertrain":
+                value = str(value).strip()
             setattr(override, key, value)
     override.updated_at_utc = datetime.now(timezone.utc)
     _commit_or_conflict(session, "Override already exists")
     session.refresh(override)
     return override_payload(override)
+
+
+def delete_match_override(
+    session: Session,
+    override_id: str,
+) -> dict[str, object] | None:
+    override = repo.get_match_override(session, UUID(override_id))
+    if override is None:
+        return None
+    payload = override_payload(override)
+    repo.delete_match_override(session, override)
+    session.commit()
+    return payload
 
 
 def list_review_cases(
@@ -168,6 +187,20 @@ def get_review_case_detail(
         review_case.brand,
         review_case.jato_model,
         review_case.jato_trim,
+        review_case.jato_powertrain,
+    )
+    current_price_observation = (
+        msrp_repository.get_observation(
+            session,
+            current_price.effective_observation_id,
+        )
+        if current_price is not None
+        else None
+    )
+    current_price_source = (
+        msrp_repository.get_source(session, current_price_observation.source_id)
+        if current_price_observation is not None
+        else None
     )
     return {
         "reviewCase": review_case_payload(review_case, observation, source),
@@ -178,7 +211,7 @@ def get_review_case_detail(
         ),
         "decisions": [review_decision_payload(item) for item in decisions],
         "currentPrice": (
-            current_price_payload(current_price)
+            current_price_payload(current_price, current_price_source)
             if current_price is not None
             else None
         ),
@@ -295,6 +328,7 @@ def create_review_decision(
             brand=observation.brand,
             jato_model=observation.jato_model,
             jato_trim=observation.jato_trim,
+            jato_powertrain=str(observation.jato_powertrain or "").strip(),
             official_model=observation.official_model,
             official_trim=observation.official_trim,
             valid_from_date=(
@@ -323,13 +357,18 @@ def create_review_decision(
         session.refresh(override)
 
     source = msrp_repository.get_source(session, observation.source_id)
+    current_price_source = (
+        msrp_repository.get_source(session, observation.source_id)
+        if current_price is not None
+        else None
+    )
 
     return {
         "reviewCase": review_case_payload(review_case, observation, source),
         "decision": review_decision_payload(review_decision),
         "observation": observation_payload(observation),
         "currentPrice": (
-            current_price_payload(current_price)
+            current_price_payload(current_price, current_price_source)
             if current_price is not None
             else None
         ),

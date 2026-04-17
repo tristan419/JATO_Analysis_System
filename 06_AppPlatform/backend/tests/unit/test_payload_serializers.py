@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from app.db.models import CurrentPrice, MsrpObservation, PriceHistory
+from app.db.models import CurrentPrice, MsrpObservation, MsrpSource, PriceHistory
 from app.services.payload_serializers import (
     current_price_payload,
     observation_payload,
@@ -58,6 +58,61 @@ def test_current_price_payload_uses_current_price_contract() -> None:
     assert "materializedAt" not in payload
 
 
+def test_current_price_payload_can_include_source_metadata() -> None:
+    now = datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc)
+    current_price = CurrentPrice(
+        current_price_id=uuid4(),
+        country="美国",
+        brand="Tesla",
+        jato_model="MODEL Y",
+        jato_trim="Long Range",
+        jato_powertrain="BEV",
+        official_model="Model Y",
+        official_trim="Long Range",
+        official_edition=None,
+        official_powertrain="BEV AWD",
+        effective_observation_id=uuid4(),
+        current_msrp_value=Decimal("46779.82"),
+        currency="EUR",
+        source_msrp_value=Decimal("50990.00"),
+        source_currency="USD",
+        fx_rate_to_eur=Decimal("0.91743119"),
+        fx_rate_as_of_date=date(2026, 4, 17),
+        fx_source="static-fallback",
+        tax_included=False,
+        match_confidence=Decimal("0.8800"),
+        match_status="human_approved",
+        source_url="https://evkx.net/vehicle/tesla/model-y",
+        source_snapshot_path=None,
+        last_price_change_at_utc=now,
+        updated_at_utc=now,
+    )
+    source = MsrpSource(
+        source_id=uuid4(),
+        source_code="evkx_us_catalog",
+        country="美国",
+        brand="Tesla",
+        source_url="https://evkx.net/evsearch",
+        source_type="reference_catalog",
+        extractor_name="evkx_catalog",
+        extractor_version="v1",
+        price_semantics="base_msrp",
+        requires_location=False,
+        enabled=True,
+        notes=None,
+        created_at_utc=now,
+        updated_at_utc=now,
+    )
+
+    payload = current_price_payload(current_price, source)
+
+    assert payload["country"] == "United States"
+    assert payload["sourceCode"] == "evkx_us_catalog"
+    assert payload["sourceType"] == "reference_catalog"
+    assert payload["extractorName"] == "evkx_catalog"
+    assert payload["extractorVersion"] == "v1"
+
+
 def test_observation_payload_keeps_observation_contract() -> None:
     observed_at = datetime(2026, 4, 10, 8, 0, tzinfo=timezone.utc)
     updated_at = datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc)
@@ -93,6 +148,7 @@ def test_observation_payload_keeps_observation_contract() -> None:
         match_confidence=Decimal("0.9600"),
         match_status="matched",
         match_reason_json={"source": "unit-test"},
+        source_context_json={"source": "EVKX", "evId": "07828991"},
         created_at_utc=observed_at,
         updated_at_utc=updated_at,
     )
@@ -108,6 +164,7 @@ def test_observation_payload_keeps_observation_contract() -> None:
     assert payload["officialPowertrain"] == "PHEV"
     assert payload["observedAtUtc"] == observed_at.isoformat()
     assert payload["updatedAtUtc"] == updated_at.isoformat()
+    assert payload["sourceContext"] == {"source": "EVKX", "evId": "07828991"}
     assert "currentMsrpValue" not in payload
     assert "lastPriceChangeAtUtc" not in payload
 
@@ -121,6 +178,7 @@ def test_price_history_payload_exposes_last_confirmation_fields() -> None:
         brand="Volvo",
         jato_model="XC60",
         jato_trim="Ultra",
+        jato_powertrain="PHEV",
         msrp_value=Decimal("529900.00"),
         currency="EUR",
         source_msrp_value=Decimal("569900.00"),
@@ -137,6 +195,7 @@ def test_price_history_payload_exposes_last_confirmation_fields() -> None:
     payload = price_history_payload(price_history)
 
     assert payload["country"] == "Sweden"
+    assert payload["jatoPowertrain"] == "PHEV"
     assert payload["lastConfirmedAtUtc"] == confirmed_at.isoformat()
     assert payload["lastConfirmedByObservationId"] == str(
         price_history.last_confirmed_by_observation_id
@@ -330,6 +389,7 @@ def test_override_payload_contract() -> None:
         brand="BMW",
         jato_model="X5",
         jato_trim="xDrive40i",
+        jato_powertrain="PHEV",
         official_model="X5",
         official_trim="xDrive40i",
         valid_from_date=date(2026, 1, 1),
@@ -345,6 +405,7 @@ def test_override_payload_contract() -> None:
     assert payload["country"] == "Germany"
     assert payload["brand"] == "BMW"
     assert payload["jatoModel"] == "X5"
+    assert payload["jatoPowertrain"] == "PHEV"
     assert payload["officialModel"] == "X5"
     assert payload["validFromDate"] == "2026-01-01"
     assert payload["validToDate"] is None

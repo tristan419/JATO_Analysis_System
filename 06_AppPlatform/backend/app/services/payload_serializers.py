@@ -16,6 +16,11 @@ from app.db.models import (
 from app.services.country_service import to_display_country
 
 
+def _optional_text(value: object | None) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
 def scrape_batch_payload(
     batch: ScrapeBatch,
 ) -> dict[str, object]:
@@ -46,8 +51,9 @@ def scrape_batch_payload(
 
 def observation_payload(
     obs: MsrpObservation,
+    source: MsrpSource | None = None,
 ) -> dict[str, object]:
-    return {
+    payload = {
         "observationId": str(obs.observation_id),
         "scrapeBatchId": str(obs.scrape_batch_id),
         "sourceId": str(obs.source_id),
@@ -55,7 +61,7 @@ def observation_payload(
         "brand": obs.brand,
         "jatoModel": obs.jato_model,
         "jatoTrim": obs.jato_trim,
-        "jatoPowertrain": obs.jato_powertrain,
+        "jatoPowertrain": _optional_text(obs.jato_powertrain),
         "officialModel": obs.official_model,
         "officialTrim": obs.official_trim,
         "officialEdition": obs.official_edition,
@@ -78,21 +84,33 @@ def observation_payload(
         "matchConfidence": float(obs.match_confidence),
         "matchStatus": obs.match_status,
         "matchReason": obs.match_reason_json,
+        "sourceContext": obs.source_context_json,
         "createdAtUtc": obs.created_at_utc.isoformat(),
         "updatedAtUtc": obs.updated_at_utc.isoformat(),
     }
+    if source is not None:
+        payload.update(
+            {
+                "sourceCode": source.source_code,
+                "sourceType": source.source_type,
+                "extractorName": source.extractor_name,
+                "extractorVersion": source.extractor_version,
+            }
+        )
+    return payload
 
 
 def current_price_payload(
     cp: CurrentPrice,
+    source: MsrpSource | None = None,
 ) -> dict[str, object]:
-    return {
+    payload = {
         "currentPriceId": str(cp.current_price_id),
         "country": to_display_country(cp.country),
         "brand": cp.brand,
         "jatoModel": cp.jato_model,
         "jatoTrim": cp.jato_trim,
-        "jatoPowertrain": cp.jato_powertrain,
+        "jatoPowertrain": _optional_text(cp.jato_powertrain),
         "officialModel": cp.official_model,
         "officialTrim": cp.official_trim,
         "officialEdition": cp.official_edition,
@@ -119,6 +137,16 @@ def current_price_payload(
         ),
         "updatedAtUtc": cp.updated_at_utc.isoformat(),
     }
+    if source is not None:
+        payload.update(
+            {
+                "sourceCode": source.source_code,
+                "sourceType": source.source_type,
+                "extractorName": source.extractor_name,
+                "extractorVersion": source.extractor_version,
+            }
+        )
+    return payload
 
 
 def review_case_payload(
@@ -133,7 +161,7 @@ def review_case_payload(
         "brand": rc.brand,
         "jatoModel": rc.jato_model,
         "jatoTrim": rc.jato_trim,
-        "jatoPowertrain": rc.jato_powertrain,
+        "jatoPowertrain": _optional_text(rc.jato_powertrain),
         "officialModel": rc.official_model,
         "officialTrim": rc.official_trim,
         "officialEdition": rc.official_edition,
@@ -221,6 +249,7 @@ def override_payload(
         "brand": o.brand,
         "jatoModel": o.jato_model,
         "jatoTrim": o.jato_trim,
+        "jatoPowertrain": _optional_text(o.jato_powertrain),
         "officialModel": o.official_model,
         "officialTrim": o.official_trim,
         "validFromDate": o.valid_from_date.isoformat(),
@@ -245,6 +274,7 @@ def price_history_payload(
         "brand": ph.brand,
         "jatoModel": ph.jato_model,
         "jatoTrim": ph.jato_trim,
+        "jatoPowertrain": _optional_text(ph.jato_powertrain),
         "msrpValue": float(ph.msrp_value),
         "currency": ph.currency,
         "sourceMsrpValue": float(ph.source_msrp_value),

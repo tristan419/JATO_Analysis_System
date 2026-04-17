@@ -341,6 +341,7 @@ export interface MarketScanRankingItem {
   barPct: number;
   fuelMix?: Record<string, number>;
   driveMix?: Record<string, number>;
+  registrationMix?: Record<string, number>;
   modelBreakdown?: Array<{
     model: string;
     volume: number;
@@ -482,6 +483,241 @@ export interface MarketScanDeckRequest {
   drilldown_segment?: string | null;
 }
 
+export interface PositioningPricingMetric {
+  label: string;
+  value: number | string;
+  detail: string;
+}
+
+export interface PositioningPricingPriceBandItem {
+  bandStart: number;
+  bandEnd: number;
+  bandMid: number;
+  bandWidth: number;
+  label: string;
+  sales: number;
+  fuelMix: Record<string, number>;
+}
+
+export interface PositioningPricingBubbleItem {
+  brand: string;
+  model: string;
+  powertrain: string;
+  segment: string;
+  length: number;
+  msrp: number;
+  msrpMin: number;
+  msrpMax: number;
+  sales: number;
+  variantCount: number;
+}
+
+export interface PositioningPricingPage {
+  key: PositioningPricingPageKey;
+  title: string;
+  subtitle: string;
+  summaryText: string;
+  metrics: PositioningPricingMetric[];
+  priceBands: {
+    bandSize: number;
+    range: {
+      min: number;
+      max: number;
+    };
+    items: PositioningPricingPriceBandItem[];
+  };
+  bubbleChart: {
+    items: PositioningPricingBubbleItem[];
+    bubbleLimit: number;
+  };
+}
+
+export interface PositioningPricingMetadata {
+  protocolVersion: string;
+  requestedPeriod: string | null;
+  resolvedPeriod: string;
+  latestPeriod: string;
+  selectedCountry: string;
+  selectedCountryLabel: string;
+  selectedFuelTypes: string[];
+  selectedSalesMode: PositioningPricingSalesMode;
+  selectedTopN: number;
+  availableSalesModes: MarketScanCountryOption[];
+  availableCountries: MarketScanCountryOption[];
+  availablePeriods: MarketScanCountryOption[];
+  availableFuelTypes: string[];
+  labels: {
+    pageTitle: string;
+    currentMonthShort: string;
+    salesModeLabel: string;
+  };
+}
+
+export interface PositioningPricingDeckResponse {
+  metadata: PositioningPricingMetadata;
+  pages: Record<PositioningPricingPageKey, PositioningPricingPage>;
+}
+
+export interface PositioningPricingDeckRequest {
+  country?: string | null;
+  target_period?: string | null;
+  fuel_types?: string[];
+  sales_mode?: PositioningPricingSalesMode;
+  top_n?: number;
+  msrp_min?: number | null;
+  msrp_max?: number | null;
+  price_band_size?: number | null;
+}
+
+export type PositioningPricingSalesMode = "month" | "rolling12";
+export type PositioningPricingPageKey = "overview" | "suvA0" | "suvA" | "suvBPlus";
+
+export interface VersionComparisonBubbleItem {
+  model: string;
+  version: string;
+  trim: string;
+  powertrain: string;
+  length: number;
+  msrp: number;
+  msrpMin: number;
+  msrpMax: number;
+  sales: number;
+  variantCount: number;
+}
+
+export interface VersionComparisonPage {
+  title: string;
+  subtitle: string;
+  summaryText: string;
+  metrics: PositioningPricingMetric[];
+  priceBands: {
+    bandSize: number;
+    range: {
+      min: number;
+      max: number;
+    };
+    items: PositioningPricingPriceBandItem[];
+  };
+  bubbleChart: {
+    items: VersionComparisonBubbleItem[];
+  };
+}
+
+export interface VersionComparisonMetadata {
+  protocolVersion: string;
+  requestedPeriod: string | null;
+  resolvedPeriod: string;
+  latestPeriod: string;
+  selectedCountry: string;
+  selectedCountryLabel: string;
+  selectedFuelTypes: string[];
+  selectedSalesMode: PositioningPricingSalesMode;
+  selectedSegment: string;
+  selectedModels: string[];
+  availableSalesModes: MarketScanCountryOption[];
+  availableCountries: MarketScanCountryOption[];
+  availablePeriods: MarketScanCountryOption[];
+  availableFuelTypes: string[];
+  availableSegments: MarketScanCountryOption[];
+  availableModels: MarketScanCountryOption[];
+  labels: {
+    pageTitle: string;
+    currentMonthShort: string;
+    salesModeLabel: string;
+  };
+}
+
+export interface VersionComparisonDeckResponse {
+  metadata: VersionComparisonMetadata;
+  page: VersionComparisonPage;
+}
+
+export interface VersionComparisonDeckRequest {
+  country?: string | null;
+  target_period?: string | null;
+  fuel_types?: string[];
+  sales_mode?: PositioningPricingSalesMode;
+  segment?: string | null;
+  models?: string[];
+  msrp_min?: number | null;
+  msrp_max?: number | null;
+  price_band_size?: number | null;
+}
+
+export interface CustomerInsightShareItem {
+  label: string;
+  rawLabel: string;
+  value: number;
+  sharePct: number;
+}
+
+export interface CustomerInsightPersonaFact {
+  label: string;
+  value: string;
+}
+
+export interface CustomerInsightPersona {
+  title: string;
+  summary: string;
+  facts: CustomerInsightPersonaFact[];
+  notes: string[];
+}
+
+export interface CustomerInsightConclusionCard {
+  label: string;
+  headline: string;
+  detail: string;
+}
+
+export interface CustomerInsightPage {
+  title: string;
+  subtitle: string;
+  summaryText: string;
+  methodologyNote: string;
+  conclusionCards: CustomerInsightConclusionCard[];
+  metrics: PositioningPricingMetric[];
+  profile: {
+    sampleSources: CustomerInsightShareItem[];
+    attentionChannels: CustomerInsightShareItem[];
+    gender: CustomerInsightShareItem[];
+    age: CustomerInsightShareItem[];
+    household: CustomerInsightShareItem[];
+    weeklyCommute: CustomerInsightShareItem[];
+  };
+  occupation: {
+    items: CustomerInsightShareItem[];
+  };
+  lifestyle: {
+    items: CustomerInsightShareItem[];
+  };
+  powertrain: {
+    items: CustomerInsightShareItem[];
+  };
+  philosophy: {
+    items: CustomerInsightShareItem[];
+  };
+  purchaseUses: {
+    items: CustomerInsightShareItem[];
+  };
+  decisionFactors: {
+    items: CustomerInsightShareItem[];
+  };
+  persona: CustomerInsightPersona;
+}
+
+export interface CustomerInsightMetadata {
+  protocolVersion: string;
+  datasetLabel: string;
+  sourceFile: string;
+  respondentCount: number;
+  updatedAt: number;
+}
+
+export interface CustomerInsightDeckResponse {
+  metadata: CustomerInsightMetadata;
+  page: CustomerInsightPage;
+}
+
 export interface DetailResponse {
   page: number;
   pageSize: number;
@@ -592,6 +828,95 @@ export interface ConfigVariant {
   metaJson: Record<string, unknown> | null;
 }
 
+export interface MsrpSource {
+  id: string;
+  sourceCode: string;
+  country: string;
+  brand: string;
+  sourceUrl: string;
+  sourceType: string;
+  extractorName: string;
+  extractorVersion: string;
+  priceSemantics: string;
+  requiresLocation: boolean;
+  enabled: boolean;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MatchOverride {
+  id: string;
+  country: string;
+  brand: string;
+  jatoModel: string;
+  jatoTrim: string;
+  jatoPowertrain: string | null;
+  officialModel: string;
+  officialTrim: string;
+  validFromDate: string;
+  validToDate: string | null;
+  overrideReason: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReviewCandidateMatch {
+  currentPriceId?: string;
+  jatoModel: string;
+  jatoTrim: string;
+  jatoPowertrain: string | null;
+  officialModel: string;
+  officialTrim: string;
+  officialEdition: string | null;
+  officialPowertrain: string | null;
+  currentMsrpValue?: number;
+  currency?: string;
+  score: number;
+  reason?: Record<string, unknown> | null;
+}
+
+export interface MsrpObservationRecord {
+  observationId: string;
+  scrapeBatchId: string;
+  sourceId: string;
+  sourceCode?: string;
+  sourceType?: string;
+  extractorName?: string;
+  extractorVersion?: string;
+  country: string;
+  brand: string;
+  jatoModel: string;
+  jatoTrim: string;
+  jatoPowertrain: string | null;
+  officialModel: string;
+  officialTrim: string;
+  officialEdition: string | null;
+  officialPowertrain: string | null;
+  msrpValue: number;
+  currency: string;
+  sourceMsrpValue: number;
+  sourceCurrency: string;
+  fxRateToEur: number;
+  fxRateAsOfDate: string;
+  fxSource: string;
+  taxIncluded: boolean;
+  priceLabel: string;
+  availabilityText: string | null;
+  observedAtUtc: string;
+  sourceUrl: string;
+  sourceSnapshotPath: string | null;
+  sourcePayloadHash: string | null;
+  extractionVersion: string;
+  matchConfidence: number;
+  matchStatus: string;
+  matchReason: Record<string, unknown> | null;
+  sourceContext: Record<string, unknown> | null;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+}
+
 /* ---- Review Cases ---- */
 export interface ReviewCase {
   id: string;
@@ -624,6 +949,7 @@ export interface ReviewCase {
   sourceSnapshotPath?: string | null;
   matchConfidence: number;
   matchReason?: Record<string, unknown> | null;
+  candidateMatches: ReviewCandidateMatch[] | null;
   currentAssignee: string | null;
   createdAt: string;
   updatedAt: string;
@@ -683,7 +1009,7 @@ export interface ReviewWorkbench {
 
 export interface ReviewCaseDetail extends ReviewCase {
   decisions: ReviewDecision[];
-  observation: Record<string, unknown> | null;
+  observation: MsrpObservationRecord | null;
   currentPrice: CurrentPrice | null;
 }
 
@@ -692,6 +1018,10 @@ export interface CurrentPrice {
   id: string;
   country: string;
   brand: string;
+  sourceCode?: string;
+  sourceType?: string;
+  extractorName?: string;
+  extractorVersion?: string;
   jatoModel: string;
   jatoTrim: string;
   jatoPowertrain: string | null;
@@ -725,6 +1055,7 @@ export interface PriceHistoryEntry {
   brand: string;
   jatoModel: string;
   jatoTrim: string;
+  jatoPowertrain: string | null;
   msrpValue: number;
   currency: string;
   sourceMsrpValue: number;
@@ -736,6 +1067,213 @@ export interface PriceHistoryEntry {
   endedByObservationId: string | null;
   lastConfirmedByObservationId: string;
   createdAtUtc: string;
+}
+
+export interface JatoMonthlyUpdateUpload {
+  originalFilename: string;
+  storedPath?: string | null;
+  sizeBytes?: number;
+  sha256?: string | null;
+}
+
+export interface JatoMonthlyUpdatePlan {
+  path?: string | null;
+  compareId?: string | null;
+  compareCommand?: string | null;
+  refreshCommand?: string | null;
+}
+
+export interface JatoMonthlyUpdateArtifacts {
+  jobDir?: string | null;
+  logPath?: string | null;
+  baselinePath?: string | null;
+  stagedPatchPath?: string | null;
+  planPath?: string | null;
+  reviewDir?: string | null;
+  rawCompareReportPath?: string | null;
+  stagingOutputPath?: string | null;
+  manifestPath?: string | null;
+  partitionOutputPath?: string | null;
+  refreshReportPath?: string | null;
+  fingerprintPath?: string | null;
+}
+
+export interface JatoMonthlyUpdateRawCompareSummary {
+  compareId: string;
+  decisionSuggestion: string;
+  compareKeyMode: string;
+  compareKeyColumns: string[];
+  blockerCount: number;
+  reviewCount: number;
+  infoCount: number;
+  advancedCountryCount: number;
+  regressedCountryCount: number;
+  newCountryCount: number;
+  missingCountryCount: number;
+  addedCountryCount: number;
+  removedCountryCount: number;
+}
+
+export interface JatoMonthlyUpdateRefreshSummary {
+  jobStatus: string;
+  jobElapsedSeconds: number;
+  rowCount: number;
+  columnCount: number;
+  partitionCount: number;
+  changedRows: number;
+  changedCountryCount: number;
+  fingerprintMatched: boolean;
+  fingerprintUpdated: boolean;
+  conflictGroupCount: number;
+  conflictRowCount: number;
+}
+
+export interface JatoMonthlyUpdateSummaries {
+  rawCompare?: JatoMonthlyUpdateRawCompareSummary;
+  refresh?: JatoMonthlyUpdateRefreshSummary;
+}
+
+export interface JatoMonthlyUpdateJob {
+  jobId: string;
+  month: string;
+  status: string;
+  phase: string;
+  triggeredBy: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  upload: JatoMonthlyUpdateUpload | null;
+  plan: JatoMonthlyUpdatePlan | null;
+  artifacts: JatoMonthlyUpdateArtifacts | null;
+  summaries: JatoMonthlyUpdateSummaries | null;
+  logPath?: string | null;
+  logTail?: string | null;
+}
+
+export interface JatoMonthlyUpdateCleanupResult {
+  cleanedAt: string;
+  triggeredBy: string;
+  activeBaselinePath: string | null;
+  activePatchMonth: string | null;
+  archivedBaselineCount: number;
+  archivedBaselines: string[];
+  archivedPatchDirCount: number;
+  archivedPatchDirs: string[];
+  removedJobUploadDirCount: number;
+  removedJobUploadDirs: string[];
+}
+
+export interface JatoMonthlyUpdateUploadSession {
+  uploadId: string;
+  filename: string;
+  sizeBytes: number;
+  chunkSize: number;
+  totalChunks: number;
+  receivedChunkCount: number;
+  receivedChunks: number[];
+  uploadedBytes: number;
+  status: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  completedAt: string | null;
+  assembledPath: string | null;
+  resumeKey: string | null;
+  fileSha256: string | null;
+  triggeredBy: string | null;
+}
+
+export interface JatoMonthlyUpdateUploadProgress {
+  stage: "initiating" | "resuming" | "uploading" | "retrying" | "assembling" | "creating_job" | "queued";
+  uploadedBytes: number;
+  totalBytes: number;
+  uploadedChunks: number;
+  totalChunks: number;
+  chunkSize: number;
+  detail?: string | null;
+}
+
+export interface DataManagementDatabaseStatus {
+  enabled: boolean;
+  connected: boolean;
+  detail?: string | null;
+}
+
+export interface DataManagementMetric {
+  label: string;
+  value: string | number;
+  tone?: string;
+}
+
+export interface DataManagementRecentItem {
+  label: string;
+  value: string | number;
+  updatedAt?: string | null;
+}
+
+export interface DataManagementDomain {
+  key: string;
+  label: string;
+  status: string;
+  storage: string;
+  updatedAt?: string | null;
+  summary: string;
+  metrics: DataManagementMetric[];
+  recentItems: DataManagementRecentItem[];
+}
+
+export interface DataManagementFileItem {
+  key: string;
+  label: string;
+  kind: string;
+  path: string;
+  exists: boolean;
+  isDir: boolean;
+  sizeBytes?: number | null;
+  fileCount?: number | null;
+  updatedAt?: string | null;
+}
+
+export interface DataManagementTableItem {
+  key: string;
+  label: string;
+  domain: string;
+  schema: string;
+  table: string;
+  rowCount: number;
+  lastEventAt?: string | null;
+  status: string;
+}
+
+export interface DataManagementActivityDay {
+  date: string;
+  count: number;
+  level: number;
+}
+
+export interface DataManagementActivitySourceCount {
+  label: string;
+  count: number;
+}
+
+export interface DataManagementActivity {
+  days: DataManagementActivityDay[];
+  maxCount: number;
+  totalCount: number;
+  rangeStart: string;
+  rangeEnd: string;
+  sourceCounts: DataManagementActivitySourceCount[];
+  databaseConnected: boolean;
+}
+
+export interface DataManagementOverviewResponse {
+  generatedAt: string;
+  database: DataManagementDatabaseStatus;
+  domains: DataManagementDomain[];
+  fileInventory: DataManagementFileItem[];
+  databaseTables: DataManagementTableItem[];
+  activity: DataManagementActivity;
 }
 
 /* ---- RV Finance Dashboard ---- */

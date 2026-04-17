@@ -101,6 +101,7 @@ def test_list_price_history_returns_empty_when_table_is_missing(
         "Volvo",
         "XC60",
         "Ultra",
+        "PHEV",
         10,
     )
 
@@ -129,6 +130,29 @@ def test_list_current_prices_returns_window_metadata_and_alert_count(
     )
     monkeypatch.setattr(
         msrp_workflow_service.msrp_repo,
+        "list_observations_by_ids",
+        lambda *args, **kwargs: [
+            SimpleNamespace(
+                observation_id=current_price.effective_observation_id,
+                source_id=observation.source_id,
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "list_sources_by_ids",
+        lambda *args, **kwargs: [
+            SimpleNamespace(
+                source_id=observation.source_id,
+                source_code="evkx_us_catalog",
+                source_type="reference_catalog",
+                extractor_name="evkx_catalog",
+                extractor_version="v1",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
         "count_current_price_alerts",
         lambda *args, **kwargs: 17,
     )
@@ -149,6 +173,8 @@ def test_list_current_prices_returns_window_metadata_and_alert_count(
     assert payload["priceAlertCount"] == 17
     assert len(payload["items"]) == 1
     assert payload["items"][0]["country"] == "Sweden"
+    assert payload["items"][0]["sourceCode"] == "evkx_us_catalog"
+    assert payload["items"][0]["sourceType"] == "reference_catalog"
 
 
 def test_materialize_current_price_backfills_open_period_when_history_is_empty(
