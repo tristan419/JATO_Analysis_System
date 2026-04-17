@@ -6,31 +6,24 @@
 # Suggested scope kind: single_model
 # Sales 12M: 30,379
 # Draft path: de/04_skoda_kodiaq_de.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
 # TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
 # TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: skoda_kodiaq_de_draft_scrapling
 country: 德国
 brand: SKODA
-source_url: https://todo.invalid/de/skoda/kodiaq
+source_url: https://www.skoda-auto.de/modelle/kodiaq/kodiaq
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/de/skoda/kodiaq
+  url: https://www.skoda-auto.de/modelle/kodiaq/kodiaq
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
-  css:
-    vehicle_container: TODO_SELECTOR
-    model: TODO_SELECTOR
-    trim: TODO_SELECTOR
-    price: TODO_SELECTOR
-  default_currency: TODO
+  default_currency: EUR
   default_tax_included: true
-  default_price_label: TODO verify local MSRP label
+  default_price_label: Unverbindliche Preisempfehlung inkl. MwSt.
   fixed_model: KODIAQ
   fixed_jato_model: KODIAQ
   fixed_jato_powertrain: null
@@ -92,19 +85,22 @@ profile:
     - key: powertrain_phev
       powertrain: PHEV
       keywords:
-      - TODO_PHEV_KEYWORD
+      - plug-in-hybrid
+      - plugin-hybrid
+      - phev
     - key: powertrain_mhev
       powertrain: MHEV
       keywords:
-      - TODO_MHEV_KEYWORD
+      - mild-hybrid
+      - mhev
+      - etsi
     - key: powertrain_ice
       powertrain: ICE
       keywords:
-      - TODO_ICE_KEYWORD
-    - key: powertrain_lpg
-      powertrain: LPG
-      keywords:
-      - TODO_LPG_KEYWORD
+      - benzin
+      - diesel
+      - tsi
+      - tdi
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -112,14 +108,17 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
+  json_script_selector: script[type='application/ld+json']
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources.
+notes: Germany Kodiaq now points at the live skoda-auto.de model page and uses
+  the same single-model JSON-first extraction style as the Sweden Kodiaq draft.
+  The page currently exposes an entry MSRP card, so this source is suitable for
+  second-batch explicit-link seeding but still needs deeper trim-level follow-up
+  before promotion into the main sources directory.
 bootstrap_meta:
   country_model_rank: 4
   suggested_scope_kind: single_model

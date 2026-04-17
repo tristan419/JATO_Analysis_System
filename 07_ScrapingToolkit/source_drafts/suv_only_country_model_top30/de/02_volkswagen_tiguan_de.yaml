@@ -35,6 +35,7 @@ profile:
       - key: powertrain_mhev
         powertrain: MHEV
         keywords:
+          - etsi
           - mild-hybrid
           - mild hybrid
       - key: powertrain_ice

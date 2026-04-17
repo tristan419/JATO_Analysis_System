@@ -6,20 +6,21 @@
 # Suggested scope kind: single_model
 # Sales 12M: 3,651
 # Draft path: se/12_volkswagen_t_roc_se.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+# Sweden T-Roc now uses the same Volkswagen configurator flow as Sweden Tiguan.
+# It emits one observation per trim + powertrain so current_prices can distinguish
+# Life / R-Line MHEV rows cleanly.
 source_code: volkswagen_t_roc_se_draft_scrapling
 country: 瑞典
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.se/sv/modeller/t-roc.html
+source_url: https://www.volkswagen.se/sv/bygg-din-bil.html/__app/30702.app
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
-profile_preset: ../_shared/presets/volkswagen_model_page_scrapling.yaml
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_playwright.yaml
 profile:
-  url: https://www.volkswagen.se/sv/modeller/t-roc.html
+  url: https://www.volkswagen.se/sv/bygg-din-bil.html/__app/30702.app
+  cookie_reject_selector: '#ensNotifyBanner button:nth-of-type(2)'
+  cookie_reject_text: Enbart nödvändiga
   default_currency: SEK
   default_tax_included: true
   default_price_label: Rekommenderat cirkapris inkl. moms
@@ -30,24 +31,29 @@ profile:
       - key: powertrain_mhev
         powertrain: MHEV
         keywords:
-          - hybrid
-          - hybridsuven
           - eTSI
           - mild hybrid
+          - 1.5 eTSI
       - key: powertrain_ice
         powertrain: ICE
         keywords:
           - bensin
           - TSI
+          - TDI
+          - diesel
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (SE market). CSS selectors still require browser-based
-  inspection before promotion.
+notes: Browser probing on 2026-04-17 confirmed the Sweden configurator entry at
+  30702.app and a stable trim -> Drivlina flow with two current trim cards
+  (Life / R-Line). The shared Playwright preset dismisses the consent banner,
+  advances into engine cards, and emits trim+powertrain observations so MHEV
+  MSRP rows can be seeded without collapsing onto a trim-only key.
 bootstrap_meta:
   country_model_rank: 12
   suggested_scope_kind: single_model
   sales_12m: 3651.0
   model: T-ROC
+  require_powertrain_match: true

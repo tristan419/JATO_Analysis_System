@@ -19,6 +19,7 @@ extractor_type: playwright
 profile_preset: ../_shared/presets/volkswagen_configurator_playwright.yaml
 profile:
   url: https://www.volkswagen.se/sv/bygg-din-bil.html/__app/31106.app
+  cookie_reject_selector: '#ensNotifyBanner button:nth-of-type(2)'
   cookie_reject_text: Enbart nödvändiga
   default_currency: SEK
   default_price_label: Rekommenderat cirkapris inkl. moms
