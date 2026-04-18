@@ -6,42 +6,42 @@
 # Suggested scope kind: single_model
 # Sales 12M: 4,546
 # Draft path: se/10_volkswagen_id_4_se.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
 # TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
 # TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
 # TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: volkswagen_id_4_se_draft_scrapling
 country: 瑞典
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.se/sv/modeller/id4.html
+source_url: https://www.volkswagen.se/sv/bygg-din-bil.html/__app/30280.app
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
-profile_preset: ../_shared/presets/volkswagen_model_page_scrapling.yaml
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
 profile:
-  url: https://www.volkswagen.se/sv/modeller/id4.html
+  url: https://www.volkswagen.se/sv/bygg-din-bil.html/__app/30280.app
   default_currency: SEK
   default_tax_included: true
-  default_price_label: Rekommenderat cirkapris inkl. moms
+  default_price_label: Pris inkl. moms
   fixed_model: ID.4
   fixed_jato_model: ID.4
   structured_fields:
     powertrain_rules:
-      - key: powertrain_bev
-        powertrain: BEV
-        keywords:
-          - id.4
-          - id4
-          - electric
-          - elbil
-          - helelektrisk
+    - key: powertrain_bev
+      powertrain: BEV
+      keywords:
+      - el
+      - elbil
+      - batteristorlekar
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (SE market). CSS selectors still require browser-based
-  inspection before promotion.
+notes: Browser probing on 2026-04-18 confirmed the Sweden ID.4 configurator entry
+  at 30280.app and a stable trim-overview flow where trim cards expose the MSRP
+  entry label "Pris inkl. moms" directly. The shared Volkswagen trim-overview
+  Playwright preset now extracts Sweden ID.4 pricing without relying on showroom
+  CSS selectors.
 bootstrap_meta:
   country_model_rank: 10
   suggested_scope_kind: single_model

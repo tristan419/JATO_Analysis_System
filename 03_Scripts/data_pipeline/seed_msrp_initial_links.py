@@ -6,14 +6,16 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
+import logging
 from pathlib import Path
 import sys
+import time
 from typing import Any
 from urllib.parse import urljoin
 from uuid import uuid4
 
 import requests
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -40,6 +42,10 @@ from jato_scraper.validation import validate_observations  # noqa: E402
 EVKX_SEARCH_API_URL = "https://evkx.net/api/evs/search"
 EVKX_BASE_URL = "https://evkx.net/"
 SEED_LABEL = "w2-initial-links-2026-04-17"
+SOURCE_FILE_EXTRACT_MAX_ATTEMPTS = 3
+SOURCE_FILE_EXTRACT_RETRY_DELAY_SECONDS = 2.0
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -74,6 +80,70 @@ class SourceFileSeed:
     brand: str
     tier: int
     notes: str
+
+
+def _link_seed_business_key_from_values(
+    *,
+    country: str,
+    brand: str,
+    jato_model: str,
+    jato_trim: str,
+    jato_powertrain: str,
+    official_model: str,
+    official_trim: str,
+    official_edition: str,
+    official_powertrain: str,
+) -> tuple[str, ...]:
+    return (
+        str(country or "").strip(),
+        str(brand or "").strip(),
+        str(jato_model or "").strip(),
+        str(jato_trim or "").strip(),
+        str(jato_powertrain or "").strip(),
+        str(official_model or "").strip(),
+        str(official_trim or "").strip(),
+        str(official_edition or "").strip(),
+        str(official_powertrain or "").strip(),
+    )
+
+
+def _link_seed_business_key(item: LinkSeed) -> tuple[str, ...]:
+    return _link_seed_business_key_from_values(
+        country=item.country,
+        brand=item.brand,
+        jato_model=item.jato_model,
+        jato_trim=item.jato_trim,
+        jato_powertrain=item.jato_powertrain,
+        official_model=item.official_model,
+        official_trim=item.official_trim,
+        official_edition=item.official_edition,
+        official_powertrain=item.official_powertrain,
+    )
+
+
+def _existing_link_row_business_key(row: Any) -> tuple[str, ...]:
+    return _link_seed_business_key_from_values(
+        country=row.country,
+        brand=row.brand,
+        jato_model=row.jato_model,
+        jato_trim=row.jato_trim,
+        jato_powertrain=row.jato_powertrain,
+        official_model=row.official_model,
+        official_trim=row.official_trim,
+        official_edition=row.official_edition,
+        official_powertrain=row.official_powertrain,
+    )
+
+
+def _find_stale_link_seed_ids(
+    rows: list[Any],
+    desired_keys: set[tuple[str, ...]],
+) -> list[Any]:
+    stale_ids: list[Any] = []
+    for row in rows:
+        if _existing_link_row_business_key(row) not in desired_keys:
+            stale_ids.append(row.link_id)
+    return stale_ids
 
 
 SWEDEN = "Sweden"
@@ -155,11 +225,25 @@ OFFICIAL_SOURCE_FILE_SEEDS: tuple[SourceFileSeed, ...] = (
         "Sweden Tiguan official configurator draft for second-batch links",
     ),
     source_file_seed(
+        f"{SUV_DRAFT_ROOT}/se/10_volkswagen_id_4_se.yaml",
+        SWEDEN,
+        "VOLKSWAGEN",
+        1,
+        "Sweden ID.4 official configurator draft for next-batch links",
+    ),
+    source_file_seed(
         f"{SUV_DRAFT_ROOT}/se/12_volkswagen_t_roc_se.yaml",
         SWEDEN,
         "VOLKSWAGEN",
         1,
         "Sweden T-Roc official configurator draft for third-batch links",
+    ),
+    source_file_seed(
+        f"{SUV_DRAFT_ROOT}/se/23_volkswagen_tayron_se.yaml",
+        SWEDEN,
+        "VOLKSWAGEN",
+        1,
+        "Sweden Tayron official configurator draft for next-batch links",
     ),
     source_file_seed(
         f"{SUV_DRAFT_ROOT}/se/06_skoda_kodiaq_se.yaml",
@@ -594,11 +678,89 @@ LINK_SEEDS: tuple[LinkSeed, ...] = (
         "PRO EDITION",
         "BEV",
         "ID.4",
-        "Pro",
+        "Pro Edition",
         "",
         "BEV",
-        93,
-        "Sweden native ID.4 Pro",
+        97,
+        "Sweden native ID.4 Pro Edition",
+    ),
+    link_seed(
+        SWEDEN,
+        "VOLKSWAGEN",
+        "ID.4",
+        "PRO EDITION 4MOTION",
+        "BEV",
+        "ID.4",
+        "Pro 4MOTION Edition",
+        "",
+        "BEV",
+        97,
+        "Sweden native ID.4 Pro 4MOTION Edition",
+    ),
+    link_seed(
+        SWEDEN,
+        "VOLKSWAGEN",
+        "ID.4",
+        "GTX 4MOTION EDITION",
+        "BEV",
+        "ID.4",
+        "GTX 4MOTION Edition",
+        "",
+        "BEV",
+        97,
+        "Sweden native ID.4 GTX 4MOTION Edition",
+    ),
+    link_seed(
+        SWEDEN,
+        "VOLKSWAGEN",
+        "ID.4",
+        "PRO 4MOTION STYLE EDITION",
+        "BEV",
+        "ID.4",
+        "Pro 4MOTION Style Edition",
+        "",
+        "BEV",
+        96,
+        "Sweden native ID.4 Pro 4MOTION Style Edition",
+    ),
+    link_seed(
+        SWEDEN,
+        "VOLKSWAGEN",
+        "ID.4",
+        "PRO STYLE EDITION",
+        "BEV",
+        "ID.4",
+        "Pro Style Edition",
+        "",
+        "BEV",
+        96,
+        "Sweden native ID.4 Pro Style Edition",
+    ),
+    link_seed(
+        SWEDEN,
+        "VOLKSWAGEN",
+        "ID.4",
+        "LIFE PRO",
+        "BEV",
+        "ID.4",
+        "Pro Life",
+        "",
+        "BEV",
+        95,
+        "Collapse Sweden Life Pro to native Pro Life",
+    ),
+    link_seed(
+        SWEDEN,
+        "VOLKSWAGEN",
+        "ID.4",
+        "LIFE PRO 4MOTION",
+        "BEV",
+        "ID.4",
+        "Pro 4MOTION Life",
+        "",
+        "BEV",
+        95,
+        "Collapse Sweden Life Pro 4MOTION to native Pro 4MOTION Life",
     ),
     link_seed(
         SWEDEN,
@@ -1225,6 +1387,97 @@ LINK_SEEDS: tuple[LinkSeed, ...] = (
         "Sweden T-Roc R-Line MHEV to official configurator row",
     ),
     link_seed(
+        SWEDEN,
+        "VOLKSWAGEN",
+        "Tayron",
+        "LIFE EDITION",
+        "MHEV",
+        "TAYRON",
+        "Life Edition",
+        "",
+        "MHEV",
+        95,
+        "Sweden Tayron Life Edition MHEV to official configurator row",
+    ),
+    link_seed(
+        SWEDEN,
+        "VOLKSWAGEN",
+        "Tayron",
+        "LIFE EDITION",
+        "ICE",
+        "TAYRON",
+        "Life Edition",
+        "",
+        "ICE",
+        94,
+        "Sweden Tayron Life Edition ICE to official configurator row",
+    ),
+    link_seed(
+        SWEDEN,
+        "VOLKSWAGEN",
+        "Tayron",
+        "LIFE EDITION",
+        "PHEV",
+        "TAYRON",
+        "Life Edition",
+        "",
+        "PHEV",
+        95,
+        "Sweden Tayron Life Edition PHEV to official configurator row",
+    ),
+    link_seed(
+        SWEDEN,
+        "VOLKSWAGEN",
+        "Tayron",
+        "STYLE",
+        "ICE",
+        "TAYRON",
+        "Style",
+        "",
+        "ICE",
+        95,
+        "Sweden Tayron Style ICE to official configurator row",
+    ),
+    link_seed(
+        SWEDEN,
+        "VOLKSWAGEN",
+        "Tayron",
+        "STYLE",
+        "PHEV",
+        "TAYRON",
+        "Style",
+        "",
+        "PHEV",
+        92,
+        "Sweden Tayron Style PHEV to official configurator row",
+    ),
+    link_seed(
+        SWEDEN,
+        "VOLKSWAGEN",
+        "Tayron",
+        "R-LINE EDITION",
+        "ICE",
+        "TAYRON",
+        "R-Line Edition",
+        "",
+        "ICE",
+        95,
+        "Sweden Tayron R-Line Edition ICE to official configurator row",
+    ),
+    link_seed(
+        SWEDEN,
+        "VOLKSWAGEN",
+        "Tayron",
+        "R-LINE EDITION",
+        "PHEV",
+        "TAYRON",
+        "R-Line Edition",
+        "",
+        "PHEV",
+        95,
+        "Sweden Tayron R-Line Edition PHEV to official configurator row",
+    ),
+    link_seed(
         GERMANY,
         "VOLKSWAGEN",
         "T-Roc",
@@ -1646,12 +1899,40 @@ def build_source_file_observations(
         price_semantics=extractor.config.price_semantics,
         notes=source_seed.notes,
     )
-    observations = extractor.extract()
-    report = validate_observations(
-        observations,
-        country=extractor.config.country,
-    )
-    if not report.valid:
+    last_error: Exception | None = None
+    report = None
+    for attempt in range(1, SOURCE_FILE_EXTRACT_MAX_ATTEMPTS + 1):
+        extractor = registry.get(source_code)
+        try:
+            observations = extractor.extract()
+            report = validate_observations(
+                observations,
+                country=extractor.config.country,
+            )
+            if not report.valid:
+                raise ValueError(
+                    f"No valid observations for {source_seed.relative_path}"
+                )
+            break
+        except Exception as exc:
+            last_error = exc
+            if attempt >= SOURCE_FILE_EXTRACT_MAX_ATTEMPTS:
+                raise
+            log.warning(
+                (
+                    "Retrying source extract for %s after "
+                    "attempt %s/%s failed: %s"
+                ),
+                source_seed.relative_path,
+                attempt,
+                SOURCE_FILE_EXTRACT_MAX_ATTEMPTS,
+                exc,
+            )
+            time.sleep(SOURCE_FILE_EXTRACT_RETRY_DELAY_SECONDS)
+
+    if report is None or not report.valid:
+        if last_error is not None:
+            raise last_error
         raise ValueError(
             f"No valid observations for {source_seed.relative_path}"
         )
@@ -1756,6 +2037,36 @@ def upsert_link_seeds(session: Any) -> int:
             },
         )
     )
+    desired_keys = {_link_seed_business_key(item) for item in LINK_SEEDS}
+    existing_seed_rows = list(
+        session.execute(
+            select(
+                JatoMsrpLink.link_id,
+                JatoMsrpLink.country,
+                JatoMsrpLink.brand,
+                JatoMsrpLink.jato_model,
+                JatoMsrpLink.jato_trim,
+                JatoMsrpLink.jato_powertrain,
+                JatoMsrpLink.official_model,
+                JatoMsrpLink.official_trim,
+                JatoMsrpLink.official_edition,
+                JatoMsrpLink.official_powertrain,
+            ).where(
+                JatoMsrpLink.link_source == SEED_LABEL,
+                JatoMsrpLink.is_active.is_(True),
+            )
+        )
+    )
+    stale_ids = _find_stale_link_seed_ids(existing_seed_rows, desired_keys)
+    if stale_ids:
+        session.execute(
+            update(JatoMsrpLink)
+            .where(JatoMsrpLink.link_id.in_(stale_ids))
+            .values(
+                is_active=False,
+                updated_at_utc=func.now(),
+            )
+        )
     session.commit()
     return len(values)
 

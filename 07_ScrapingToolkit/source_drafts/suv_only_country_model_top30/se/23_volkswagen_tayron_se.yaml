@@ -6,20 +6,21 @@
 # Suggested scope kind: single_model
 # Sales 12M: 2,071
 # Draft path: se/23_volkswagen_tayron_se.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+# Sweden Tayron now uses the Volkswagen configurator entry instead of the
+# showroom model page. This enables trim + powertrain observations rather than
+# the previous zero-observation scrapling fallback.
 source_code: volkswagen_tayron_se_draft_scrapling
 country: 瑞典
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.se/sv/modeller/tayron.html
+source_url: https://www.volkswagen.se/sv/bygg-din-bil.html/__app/31150.app
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
-profile_preset: ../_shared/presets/volkswagen_model_page_scrapling.yaml
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_playwright.yaml
 profile:
-  url: https://www.volkswagen.se/sv/modeller/tayron.html
+  url: https://www.volkswagen.se/sv/bygg-din-bil.html/__app/31150.app
+  cookie_reject_selector: '#ensNotifyBanner button:nth-of-type(2)'
+  cookie_reject_text: Enbart nödvändiga
   default_currency: SEK
   default_tax_included: true
   default_price_label: Rekommenderat cirkapris inkl. moms
@@ -39,6 +40,7 @@ profile:
         keywords:
           - mild hybrid
           - eTSI
+          - 1.5 eTSI
       - key: powertrain_ice
         powertrain: ICE
         keywords:
@@ -46,15 +48,20 @@ profile:
           - TSI
           - diesel
           - TDI
+          - 2.0 TSI
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (SE market). CSS selectors still require browser-based
-  inspection before promotion.
+notes: Browser probing on 2026-04-18 confirmed the Sweden configurator entry at
+  31150.app and a stable trim-card overview with multiple current trims plus a
+  Drivlina step. The shared Playwright preset dismisses the consent banner,
+  advances into engine cards, and emits trim+powertrain observations so Tayron
+  rows no longer depend on showroom CSS selectors.
 bootstrap_meta:
   country_model_rank: 23
   suggested_scope_kind: single_model
   sales_12m: 2071.0
   model: TAYRON
+  require_powertrain_match: true
