@@ -13,9 +13,11 @@ import {
 import { api } from "../api/client";
 import type {
   CountryChatChartLink,
+  CountryChatGrounding,
   CountryChatMetadataResponse,
   CountryChatModelOption,
   CountryChatNewsOpsStatus,
+  CountryChatRenderHint,
   CountryChatResponse,
   CountryChatSnapshot,
   CountryChatTurn,
@@ -42,9 +44,14 @@ export interface CountryChatTranscriptMessage extends CountryChatTurn {
   provider?: string;
   model?: string | null;
   providerReason?: string | null;
+  answerMode?: string | null;
+  grounding?: CountryChatGrounding | null;
   chartLinks?: CountryChatChartLink[];
   contextSnapshot?: CountryChatSnapshot;
   intents?: string[];
+  focusedIntents?: string[];
+  intentRoute?: string;
+  renderHints?: CountryChatRenderHint[];
   extractedParams?: Record<string, unknown> | null;
 }
 
@@ -419,6 +426,8 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     const history = currentSession.messages.map<CountryChatTurn>((message) => ({
       role: message.role,
       content: message.content,
+      extracted_params: message.extractedParams ?? undefined,
+      intent_route: message.intentRoute ?? undefined,
     }));
 
     setSending(true);
@@ -464,9 +473,14 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
                   provider: response.provider,
                   model: response.model,
                   providerReason: response.providerReason,
+                  answerMode: response.answerMode,
+                  grounding: response.grounding,
                   chartLinks: response.chartLinks,
                   contextSnapshot: response.contextSnapshot,
                   intents: response.intents,
+                  focusedIntents: response.focusedIntents,
+                  intentRoute: response.intentRoute,
+                  renderHints: response.renderHints,
                   extractedParams: response.extractedParams,
                 },
               ],
@@ -592,8 +606,12 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
   );
 }
 
+export function useCountryChatOptional() {
+  return useContext(CountryChatContext);
+}
+
 export function useCountryChat() {
-  const context = useContext(CountryChatContext);
+  const context = useCountryChatOptional();
   if (!context) {
     throw new Error("useCountryChat must be used within CountryChatProvider");
   }

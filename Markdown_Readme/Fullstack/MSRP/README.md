@@ -17,7 +17,7 @@
 ## 当前进度快照
 
 | 市场 | 通过 | 总数 | 通过率 |
-|------|-----:|-----:|-------:|
+| ------ | -----: | -----: | -------: |
 | SE | 20 | 29 | 69.0% |
 | CZ | 19 | 30 | 63.3% |
 | HU | 15 | 30 | 50.0% |
@@ -38,13 +38,28 @@
 4. `03_Implementation/MSRP_PIPELINE_TECHNICAL_FLOW_2026-04-11.md` — 端到端技术流（核心）
 5. `03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md` — Override 与价格时间序列
 6. `03_Implementation/MSRP_BRAND_FAMILY_MODEL_RULES_2026-04-11.md` — 多车型映射规则
-7. `03_Implementation/CSS_SELECTOR_TOOLCHAIN_2026-04-11.md` — CSS Selector 填充工具链
-8. `05_Backlog/MSRP_SUV_COUNTRY_MODEL_TOP30_PLAN_2026-04-12.md` — **当前执行计划（主入口）**
-9. `04_Execution/MSRP_KEYWORD_FILLING_AND_POC_RESULTS_2026-04-12.md` — Keyword 填充记录
-10. `04_Execution/MSRP_XC60_EXECUTION_RESULT_2026-04-11.md` — XC60 pilot 结果
-11. `04_Execution/MSRP_XC60_SCRAPE_PREVIEW_2026-04-11.md` — XC60 预览评估（已执行）
-12. `04_Execution/MSRP_BATCH1_SOURCE_RESEARCH_2026-04-11.md` — Batch-1 品牌调研
-13. ~~`05_Backlog/MSRP_COUNTRY_BRAND_SOURCE_PRIORITY_PLAN_2026-04-11.md`~~ — 已归档，被 #8 替代
+7. `03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md` — **多 version / 多动总 / 配置 diff / 多源对账（当前架构主入口）**
+8. `../03_Database/CROSS_SOURCE_JOIN_DESIGN_2026-04-17.md` — JATO sales × MSRP 的跨源 join 设计
+9. `03_Implementation/CSS_SELECTOR_TOOLCHAIN_2026-04-11.md` — CSS Selector 填充工具链
+10. `05_Backlog/MSRP_SUV_COUNTRY_MODEL_TOP30_PLAN_2026-04-12.md` — 批量执行入口
+11. `04_Execution/MSRP_KEYWORD_FILLING_AND_POC_RESULTS_2026-04-12.md` — Keyword 填充记录
+12. `04_Execution/MSRP_SWEDEN_VOLKSWAGEN_BATCH_RESULT_2026-04-18.md` — Sweden Volkswagen ID.4 + Tayron rollout 收口结果
+13. `04_Execution/MSRP_XC60_EXECUTION_RESULT_2026-04-11.md` — XC60 pilot 结果
+14. `04_Execution/MSRP_XC60_SCRAPE_PREVIEW_2026-04-11.md` — XC60 预览评估（已执行）
+15. `04_Execution/MSRP_BATCH1_SOURCE_RESEARCH_2026-04-11.md` — Batch-1 品牌调研
+16. ~~`05_Backlog/MSRP_COUNTRY_BRAND_SOURCE_PRIORITY_PLAN_2026-04-11.md`~~ — 已归档，被 #10 替代
+
+## 当前推荐入口（2026-04-18）
+
+如果你当前关注的是：
+
+| 主题 | 优先看 |
+| --- | --- |
+| MSRP 抓取通过率、人审优化 | `03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md` |
+| JATO 销量 × MSRP 定位定价联表 | `../03_Database/CROSS_SOURCE_JOIN_DESIGN_2026-04-17.md` |
+| 多 version / 多动总 / 配置差异 | `03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md` § 3 |
+| 批量 source 执行现状 | `05_Backlog/MSRP_SUV_COUNTRY_MODEL_TOP30_PLAN_2026-04-12.md` |
+| 抓取平台扩展到 news/policy/spec | `../02_DataETL/UNIFIED_SCRAPING_PIPELINE_2026-04-17.md` |
 
 ## 当前开发入口
 
@@ -66,6 +81,11 @@
 8. 历史 `top20_batch1`、split brand backlog 草稿、旧 `all_market` country×brand 优先级排名均已废弃；后续只保留 `suv_only_country_model_top30` 目录。
 
 ## 变更日志
+
+### 2026-04-18
+
+1. **Sweden Volkswagen configurator batch 收口完成**：ID.4 与 Tayron 已完成 apply、DB 核验、Pricing/MSRP 前端核验，并补 execution 记录到 `04_Execution/MSRP_SWEDEN_VOLKSWAGEN_BATCH_RESULT_2026-04-18.md`。
+2. **Sweden Volkswagen top30 覆盖闭环**：`suv_only_country_model_top30/se/` 下的 Volkswagen 四个候选（Tiguan / ID.4 / T-Roc / Tayron）当前都已进入 configurator-capable draft 范围。
 
 ### 2026-04-12（第二次更新）
 

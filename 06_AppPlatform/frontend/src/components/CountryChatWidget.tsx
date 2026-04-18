@@ -1,26 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
-import { useCountryChat } from "../contexts/CountryChatContext";
+import { useCountryChatOptional } from "../contexts/CountryChatContext";
 import { CatMascot } from "./CatMascot";
 import { CountryChatAnalysisDeck } from "./CountryChatAnalysisDeck";
+import { CountryChatGroundedAnswer } from "./CountryChatGroundedAnswer";
+import { CountryChatPendingMessage } from "./CountryChatPendingMessage";
 import { CountryChatModelSelect } from "./CountryChatModelSelect";
 import { ChatInlineCharts } from "./ChatInlineCharts";
-
-/* ------------------------------------------------------------------ */
-/*  Loading phrases                                                   */
-/* ------------------------------------------------------------------ */
-
-const LOADING_PHRASES = [
-  "正在分析…",
-  "翻找数据中…",
-  "捣鼓中…",
-  "提取核心结论…",
-  "正在挖掘…",
-  "数据搬运中…",
-  "深度剖析中…",
-  "拼接洞察中…",
-];
 
 /* ------------------------------------------------------------------ */
 /*  Drag helpers                                                      */
@@ -117,6 +104,14 @@ function nearestWidgetPresetId(
 }
 
 export function CountryChatWidget() {
+  const countryChat = useCountryChatOptional();
+  const location = useLocation();
+
+  // Keep the shell stable during hot reloads or transient boot states.
+  if (!countryChat) {
+    return null;
+  }
+
   const {
     draft,
     error,
@@ -140,22 +135,21 @@ export function CountryChatWidget() {
     widgetWidth,
     widgetHeight,
     setWidgetSize,
-  } = useCountryChat();
+  } = countryChat;
 
-  const location = useLocation();
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const resizeRef = useRef<ResizeState | null>(null);
   const activeWidgetPreset = useMemo(
     () => nearestWidgetPresetId(widgetWidth, widgetHeight),
     [widgetHeight, widgetWidth],
   );
-
-  /* --- Random loading phrase --- */
-  const loadingPhrase = useMemo(
-    () => LOADING_PHRASES[Math.floor(Math.random() * LOADING_PHRASES.length)],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sending],
-  );
+  const pendingQuestion = sending
+    ? [...messages]
+      .reverse()
+      .find((message) => message.role === "user")
+      ?.content
+      ?? draft
+    : "";
 
   /* --- Drag state --- */
   const [fabPos, setFabPos] = useState<{ x: number; y: number }>(() => ({
@@ -436,12 +430,15 @@ export function CountryChatWidget() {
               key={message.id}
               className={`ccw-msg ccw-msg--${message.role}`}
             >
-              <div className="ccw-msg-body">{message.content}</div>
+              <div className="ccw-msg-body">
+                <CountryChatGroundedAnswer message={message} compact />
+              </div>
               {message.contextSnapshot ? (
                 <>
                   <ChatInlineCharts
                     snapshot={message.contextSnapshot}
-                    intents={message.intents}
+                    intents={message.focusedIntents ?? message.intents}
+                    renderHints={message.renderHints}
                   />
                   <CountryChatAnalysisDeck message={message} compact />
                 </>
@@ -451,7 +448,7 @@ export function CountryChatWidget() {
         )}
         {sending ? (
           <article className="ccw-msg ccw-msg--assistant ccw-msg--pending">
-            <div className="ccw-msg-body">{loadingPhrase}</div>
+            <CountryChatPendingMessage question={pendingQuestion} compact />
           </article>
         ) : null}
         <div ref={transcriptEndRef} />
