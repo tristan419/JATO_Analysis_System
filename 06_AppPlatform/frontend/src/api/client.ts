@@ -11,6 +11,8 @@ import type {
   CountryChatNewsRefreshResponse,
   CountryChatResponse,
   CountryChatTurn,
+  DataManagementAirflowActionResponse,
+  DataManagementAirflowStatus,
   DataManagementOverviewResponse,
   CrudListResponse,
   CrudItem,
@@ -181,7 +183,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (key) {
     inflightRequests.set(key, promise);
-    promise.finally(() => inflightRequests.delete(key));
+    promise.then(
+      () => {
+        inflightRequests.delete(key);
+      },
+      () => {
+        inflightRequests.delete(key);
+      },
+    );
   }
   return promise;
 }
@@ -473,6 +482,7 @@ function mapMsrpSource(raw: Record<string, unknown>): MsrpSource {
     brand: String(raw.brand ?? ""),
     sourceUrl: String(raw.sourceUrl ?? ""),
     sourceType: String(raw.sourceType ?? ""),
+    tier: Number(raw.tier ?? 3),
     extractorName: String(raw.extractorName ?? ""),
     extractorVersion: String(raw.extractorVersion ?? ""),
     priceSemantics: String(raw.priceSemantics ?? ""),
@@ -1028,6 +1038,17 @@ export const api = {
   getDataManagementOverview: () =>
     request<{ item: DataManagementOverviewResponse }>("/data-management/overview")
       .then((response) => response.item),
+  getAirflowStatus: () =>
+    request<{ item: DataManagementAirflowStatus }>("/data-management/airflow/status")
+      .then((response) => response.item),
+  startAirflow: () =>
+    request<{ item: DataManagementAirflowActionResponse }>("/data-management/airflow/start", {
+      method: "POST"
+    }).then((response) => response.item),
+  stopAirflow: () =>
+    request<{ item: DataManagementAirflowActionResponse }>("/data-management/airflow/stop", {
+      method: "POST"
+    }).then((response) => response.item),
   patchItem: (id: string, payload: Partial<Omit<CrudItem, "id">>) =>
     request<{ item: CrudItem }>(`/crud/items/${id}`, {
       method: "PATCH",
@@ -1271,6 +1292,7 @@ export const api = {
     brand: string;
     source_url: string;
     source_type: string;
+    tier?: number;
     extractor_name: string;
     extractor_version: string;
     price_semantics: string;
@@ -1287,6 +1309,7 @@ export const api = {
     brand?: string;
     source_url?: string;
     source_type?: string;
+    tier?: number;
     extractor_name?: string;
     extractor_version?: string;
     price_semantics?: string;

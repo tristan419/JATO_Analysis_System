@@ -148,9 +148,15 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
 
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const resizeRef = useRef<ResizeState | null>(null);
-  const activeWidgetPreset = useMemo(
-    () => nearestWidgetPresetId(widgetWidth, widgetHeight),
+  const clampedWidgetSize = useMemo(
+    () => clampWidgetSize(widgetWidth, widgetHeight),
     [widgetHeight, widgetWidth],
+  );
+  const renderedWidgetWidth = clampedWidgetSize.width;
+  const renderedWidgetHeight = clampedWidgetSize.height;
+  const activeWidgetPreset = useMemo(
+    () => nearestWidgetPresetId(renderedWidgetWidth, renderedWidgetHeight),
+    [renderedWidgetHeight, renderedWidgetWidth],
   );
   const pendingQuestion = sending
     ? [...messages]
@@ -186,7 +192,7 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
         moved: false,
       };
       setDragging(true);
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      e.currentTarget.setPointerCapture(e.pointerId);
     },
     [fabPos, widgetExpanded],
   );
@@ -217,7 +223,7 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
       setFabPos(finalPos);
       dragRef.current = null;
       setDragging(false);
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      e.currentTarget.releasePointerCapture(e.pointerId);
       if (!wasDrag) {
         setWidgetExpanded(true);
       }
@@ -284,21 +290,39 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
   );
 
   useEffect(() => {
+    if (
+      renderedWidgetWidth !== widgetWidth
+      || renderedWidgetHeight !== widgetHeight
+    ) {
+      setWidgetSize(renderedWidgetWidth, renderedWidgetHeight);
+    }
+  }, [
+    renderedWidgetHeight,
+    renderedWidgetWidth,
+    setWidgetSize,
+    widgetHeight,
+    widgetWidth,
+  ]);
+
+  useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, sending, widgetExpanded]);
 
   useEffect(() => {
     function handleViewportResize() {
       setFabPos((current) => clampPosition(current.x, current.y, FAB_SIZE));
-      const next = clampWidgetSize(widgetWidth, widgetHeight);
-      if (next.width !== widgetWidth || next.height !== widgetHeight) {
+      const next = clampWidgetSize(renderedWidgetWidth, renderedWidgetHeight);
+      if (
+        next.width !== renderedWidgetWidth
+        || next.height !== renderedWidgetHeight
+      ) {
         setWidgetSize(next.width, next.height);
       }
     }
 
     window.addEventListener("resize", handleViewportResize);
     return () => window.removeEventListener("resize", handleViewportResize);
-  }, [setWidgetSize, widgetHeight, widgetWidth]);
+  }, [renderedWidgetHeight, renderedWidgetWidth, setWidgetSize]);
 
   /* Hide on /copilot full-page */
   if (location.pathname === "/copilot") {
@@ -338,10 +362,13 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
     <aside
       className={`ccw-popup${resizing ? " is-resizing" : ""}`}
       style={{
-        right: Math.min(popupRight, window.innerWidth - (widgetWidth + 40)),
+        right: Math.min(
+          popupRight,
+          Math.max(16, window.innerWidth - (renderedWidgetWidth + 40)),
+        ),
         bottom: popupBottom,
-        width: widgetWidth,
-        height: widgetHeight,
+        width: renderedWidgetWidth,
+        height: renderedWidgetHeight,
       }}
     >
       {/* header */}
