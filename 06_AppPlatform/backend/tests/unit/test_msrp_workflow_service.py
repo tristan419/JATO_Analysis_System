@@ -3,6 +3,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
+from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
+
 from app.db.models import CurrentPrice, MsrpObservation
 from app.services import msrp_workflow_service
 
@@ -252,6 +255,47 @@ def test_refreshes_open_period_when_price_is_unchanged(
         open_period.last_confirmed_by_observation_id
         == observation.observation_id
     )
+
+
+def test_commit_or_conflict_flushes_when_commit_is_disabled() -> None:
+    calls: list[str] = []
+    session = SimpleNamespace(
+        commit=lambda: calls.append("commit"),
+        flush=lambda: calls.append("flush"),
+        rollback=lambda: calls.append("rollback"),
+    )
+
+    msrp_workflow_service._commit_or_conflict(
+        session,
+        "detail",
+        commit=False,
+    )
+
+    assert calls == ["flush"]
+
+
+def test_commit_or_conflict_rolls_back_integrity_errors() -> None:
+    calls: list[str] = []
+
+    def _raise_integrity_error():
+        calls.append("commit")
+        raise IntegrityError("stmt", "params", Exception("boom"))
+
+    session = SimpleNamespace(
+        commit=_raise_integrity_error,
+        flush=lambda: calls.append("flush"),
+        rollback=lambda: calls.append("rollback"),
+    )
+
+    try:
+        msrp_workflow_service._commit_or_conflict(session, "detail")
+    except HTTPException as exc:
+        assert exc.status_code == 409
+        assert exc.detail == "detail"
+    else:
+        raise AssertionError("Expected HTTPException")
+
+    assert calls == ["commit", "rollback"]
 
 
 def test_remap_current_price_reopens_review_and_removes_current_price(

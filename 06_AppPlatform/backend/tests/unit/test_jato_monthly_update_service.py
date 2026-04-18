@@ -516,3 +516,72 @@ def test_chunked_upload_session_can_be_completed_and_queued(
     stored_path = job_root / job["jobId"] / "uploads" / "patch.xlsx"
     assert stored_path.read_bytes() == b"abcdefghij"
     assert not (job_root / "_upload_sessions" / upload_id).exists()
+
+
+def test_create_job_from_upload_restores_assembled_file_when_queue_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    job_root = tmp_path / "jobs"
+    monkeypatch.setattr(
+        jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root
+    )
+    monkeypatch.setattr(jato_monthly_update_service, "UPLOAD_CHUNK_SIZE_BYTES", 4)
+
+    initiated = jato_monthly_update_service.initiate_jato_monthly_update_upload(
+        filename="patch.xlsx",
+        size_bytes=10,
+        resume_key="resume-key-fail",
+        triggered_by="tester",
+    )
+    upload_id = initiated["uploadId"]
+    jato_monthly_update_service.upload_jato_monthly_update_chunk(
+        upload_id=upload_id,
+        part_number=1,
+        content=b"abcd",
+        chunk_sha256=hashlib.sha256(b"abcd").hexdigest(),
+    )
+    jato_monthly_update_service.upload_jato_monthly_update_chunk(
+        upload_id=upload_id,
+        part_number=2,
+        content=b"efgh",
+        chunk_sha256=hashlib.sha256(b"efgh").hexdigest(),
+    )
+    jato_monthly_update_service.upload_jato_monthly_update_chunk(
+        upload_id=upload_id,
+        part_number=3,
+        content=b"ij",
+        chunk_sha256=hashlib.sha256(b"ij").hexdigest(),
+    )
+    assembled = jato_monthly_update_service.complete_jato_monthly_update_upload(
+        upload_id=upload_id
+    )
+    assembled_path = jato_monthly_update_service._upload_session_assembled_path(
+        upload_id,
+        "patch.xlsx",
+    )
+
+    def _raise_queue_failure(**kwargs):
+        raise RuntimeError("queue failed")
+
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_queue_monthly_update_job_from_stored_upload",
+        _raise_queue_failure,
+    )
+
+    try:
+        jato_monthly_update_service.create_jato_monthly_update_job_from_upload(
+            month="2026-03",
+            upload_id=upload_id,
+            triggered_by="tester",
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "queue failed"
+    else:
+        raise AssertionError("Expected queue failure")
+
+    assert assembled_path.exists()
+    assert assembled_path.read_bytes() == b"abcdefghij"
+    assert not any(path.name.startswith("jato-update-") for path in job_root.iterdir() if path.is_dir())
+    upload_state = jato_monthly_update_service.get_jato_monthly_update_upload(upload_id)
+    assert upload_state["status"] == "completed"

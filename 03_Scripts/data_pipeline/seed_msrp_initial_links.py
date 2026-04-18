@@ -2018,7 +2018,11 @@ def build_country_seed_payloads(
     }
 
 
-def upsert_link_seeds(session: Any) -> int:
+def upsert_link_seeds(
+    session: Any,
+    *,
+    commit: bool = True,
+) -> int:
     created_at = datetime.now(timezone.utc)
     values = [
         build_link_seed_row(item, created_at=created_at)
@@ -2067,13 +2071,18 @@ def upsert_link_seeds(session: Any) -> int:
                 updated_at_utc=func.now(),
             )
         )
-    session.commit()
+    if commit:
+        session.commit()
+    else:
+        session.flush()
     return len(values)
 
 
 def ingest_country_payloads(
     session: Any,
     payloads: dict[str, list[dict[str, Any]]],
+    *,
+    commit: bool = True,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for country, observations in payloads.items():
@@ -2104,10 +2113,32 @@ def ingest_country_payloads(
                 "country": country,
                 "brands": scope_brands,
                 "observationCount": len(observations),
-                "result": create_scrape_batch_ingest(session, batch),
+                "result": create_scrape_batch_ingest(
+                    session,
+                    batch,
+                    commit=commit,
+                ),
             }
         )
     return results
+
+
+def apply_seed_payloads_atomic(
+    session: Any,
+    payloads: dict[str, list[dict[str, Any]]],
+) -> tuple[list[dict[str, Any]], int]:
+    try:
+        ingest_results = ingest_country_payloads(
+            session,
+            payloads,
+            commit=False,
+        )
+        link_count = upsert_link_seeds(session, commit=False)
+        session.commit()
+        return ingest_results, link_count
+    except Exception:
+        session.rollback()
+        raise
 
 
 def print_plan(payloads: dict[str, list[dict[str, Any]]]) -> None:
@@ -2151,8 +2182,10 @@ def main() -> int:
             print_plan(payloads)
             session.rollback()
             return 0
-        ingest_results = ingest_country_payloads(session, payloads)
-        link_count = upsert_link_seeds(session)
+        ingest_results, link_count = apply_seed_payloads_atomic(
+            session,
+            payloads,
+        )
         print({
             "seed": SEED_LABEL,
             "countryResults": [

@@ -42,9 +42,17 @@ def _business_powertrain(value: str | None) -> str:
     return str(value or "").strip()
 
 
-def _commit_or_conflict(session: Session, detail: str) -> None:
+def _commit_or_conflict(
+    session: Session,
+    detail: str,
+    *,
+    commit: bool = True,
+) -> None:
     try:
-        session.commit()
+        if commit:
+            session.commit()
+        else:
+            session.flush()
     except IntegrityError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=detail) from exc
@@ -255,6 +263,8 @@ def _ensure_review_case(
 def create_scrape_batch_ingest(
     session: Session,
     data: dict[str, object],
+    *,
+    commit: bool = True,
 ) -> dict[str, object]:
     observations_payload = list(data.get("observations") or [])
     failed_count = max(0, int(data.get("failed_count") or 0))
@@ -468,7 +478,11 @@ def create_scrape_batch_ingest(
         batch.status = "completed"
     batch.finished_at_utc = batch.finished_at_utc or _utc_now()
 
-    _commit_or_conflict(session, "Scrape batch code already exists")
+    _commit_or_conflict(
+        session,
+        "Scrape batch ingest hit a conflict",
+        commit=commit,
+    )
     session.refresh(batch)
     return {
         "scrapeBatch": scrape_batch_payload(batch),

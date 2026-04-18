@@ -391,3 +391,80 @@ def test_build_link_seed_row_uses_seed_label_and_timestamp() -> None:
     assert row["updated_at_utc"] == created_at
     assert row["is_active"] is True
     assert row["official_trim"] == "Kodiaq"
+
+
+def test_apply_seed_payloads_atomic_commits_once_after_all_writes(
+) -> None:
+    calls: list[tuple[str, object]] = []
+    session = SimpleNamespace(
+        commit=lambda: calls.append(("commit", None)),
+        rollback=lambda: calls.append(("rollback", None)),
+    )
+
+    def _ingest_country_payloads(*args, **kwargs):
+        calls.append(("ingest", kwargs.get("commit")))
+        return [{"country": seed_module.SWEDEN}]
+
+    def _upsert_link_seeds(*args, **kwargs):
+        calls.append(("links", kwargs.get("commit")))
+        return 42
+
+    original_ingest = seed_module.ingest_country_payloads
+    original_upsert = seed_module.upsert_link_seeds
+    seed_module.ingest_country_payloads = _ingest_country_payloads
+    seed_module.upsert_link_seeds = _upsert_link_seeds
+    try:
+        result = seed_module.apply_seed_payloads_atomic(
+            session,
+            {seed_module.SWEDEN: [{"brand": "VOLKSWAGEN"}]},
+        )
+    finally:
+        seed_module.ingest_country_payloads = original_ingest
+        seed_module.upsert_link_seeds = original_upsert
+
+    assert result == ([{"country": seed_module.SWEDEN}], 42)
+    assert calls == [
+        ("ingest", False),
+        ("links", False),
+        ("commit", None),
+    ]
+
+
+def test_apply_seed_payloads_atomic_rolls_back_on_failure() -> None:
+    calls: list[tuple[str, object]] = []
+    session = SimpleNamespace(
+        commit=lambda: calls.append(("commit", None)),
+        rollback=lambda: calls.append(("rollback", None)),
+    )
+
+    def _ingest_country_payloads(*args, **kwargs):
+        calls.append(("ingest", kwargs.get("commit")))
+        return [{"country": seed_module.SWEDEN}]
+
+    def _upsert_link_seeds(*args, **kwargs):
+        calls.append(("links", kwargs.get("commit")))
+        raise RuntimeError("link failure")
+
+    original_ingest = seed_module.ingest_country_payloads
+    original_upsert = seed_module.upsert_link_seeds
+    seed_module.ingest_country_payloads = _ingest_country_payloads
+    seed_module.upsert_link_seeds = _upsert_link_seeds
+    try:
+        try:
+            seed_module.apply_seed_payloads_atomic(
+                session,
+                {seed_module.SWEDEN: [{"brand": "VOLKSWAGEN"}]},
+            )
+        except RuntimeError as exc:
+            assert str(exc) == "link failure"
+        else:
+            raise AssertionError("Expected RuntimeError")
+    finally:
+        seed_module.ingest_country_payloads = original_ingest
+        seed_module.upsert_link_seeds = original_upsert
+
+    assert calls == [
+        ("ingest", False),
+        ("links", False),
+        ("rollback", None),
+    ]

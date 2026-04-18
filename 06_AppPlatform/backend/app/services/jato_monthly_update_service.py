@@ -1025,14 +1025,22 @@ def create_jato_monthly_update_job_from_upload(
     uploads_dir.mkdir(parents=True, exist_ok=True)
     stored_upload_path = uploads_dir / filename
     shutil.move(str(assembled_path), str(stored_upload_path))
-    result = _queue_monthly_update_job_from_stored_upload(
-        job_id=job_id,
-        month=normalized_month,
-        triggered_by=triggered_by,
-        upload_filename=filename,
-        stored_upload_path=stored_upload_path,
-        file_sha256=file_sha256,
-    )
+    try:
+        result = _queue_monthly_update_job_from_stored_upload(
+            job_id=job_id,
+            month=normalized_month,
+            triggered_by=triggered_by,
+            upload_filename=filename,
+            stored_upload_path=stored_upload_path,
+            file_sha256=file_sha256,
+        )
+    except Exception:
+        upload_session_dir = _upload_session_dir(upload_id)
+        upload_session_dir.mkdir(parents=True, exist_ok=True)
+        if stored_upload_path.exists() and not assembled_path.exists():
+            shutil.move(str(stored_upload_path), str(assembled_path))
+        shutil.rmtree(_job_dir(job_id), ignore_errors=True)
+        raise
     shutil.rmtree(_upload_session_dir(upload_id), ignore_errors=True)
     return result
 
