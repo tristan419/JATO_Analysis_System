@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
-import { useCountryChatOptional } from "../contexts/CountryChatContext";
+import { useCountryChat, useCountryChatOptional } from "../contexts/CountryChatContext";
 import { CatMascot } from "./CatMascot";
+
+type CountryChatContextValue = ReturnType<typeof useCountryChat>;
 import { CountryChatAnalysisDeck } from "./CountryChatAnalysisDeck";
 import { CountryChatGroundedAnswer } from "./CountryChatGroundedAnswer";
 import { CountryChatPendingMessage } from "./CountryChatPendingMessage";
@@ -105,12 +107,19 @@ function nearestWidgetPresetId(
 
 export function CountryChatWidget() {
   const countryChat = useCountryChatOptional();
-  const location = useLocation();
 
   // Keep the shell stable during hot reloads or transient boot states.
+  // We must guard BEFORE the inner component's hooks run, otherwise React
+  // would see a changing hook count if the provider mounts/unmounts.
   if (!countryChat) {
     return null;
   }
+
+  return <CountryChatWidgetInner countryChat={countryChat} />;
+}
+
+function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatContextValue }) {
+  const location = useLocation();
 
   const {
     draft,
