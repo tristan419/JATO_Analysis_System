@@ -16,8 +16,6 @@
     "check:frontend": "npm run check:types && npm run test:unit && npm run build && npm run check:router-regression"
   },
   "dependencies": {
-    "@splinetool/react-spline": "^4.1.0",
-    "@splinetool/runtime": "^1.12.81",
     "buffer": "^6.0.3",
     "html-to-image": "^1.11.13",
     "plotly.js": "^3.5.0",
