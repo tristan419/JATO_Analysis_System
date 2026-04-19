@@ -25,24 +25,87 @@ const optionUniverse = {
   'Version name': ['iX1 xDrive30', 'X3 xDrive20', 'Q4 45 e-tron'],
 };
 
-const counters = { columns: 0, options: 0, overview: 0, detail: 0, crudList: 0 };
+const counters = { columns: 0, options: 0, overview: 0, detail: 0, crudList: 0, dataOverview: 0 };
 
 let crudItems = [
   {
-    id: 'crud-1',
-    code: 'BMW-001',
-    name: 'BMW iX1',
-    status: 'active',
+    id: 'src-1',
+    sourceId: 'src-1',
+    sourceCode: 'DE-BMW-OFFICIAL',
+    country: 'Germany',
+    brand: 'BMW',
+    sourceUrl: 'https://www.bmw.de/configure',
+    sourceType: 'official_configurator',
+    tier: 1,
+    extractorName: 'bmw_de_extractor',
+    extractorVersion: 'v2',
+    priceSemantics: 'msrp_incl_vat',
+    requiresLocation: false,
+    enabled: true,
     notes: 'Regression seed row',
+    createdAtUtc: '2026-04-17T08:00:00Z',
+    updatedAtUtc: '2026-04-17T08:00:00Z',
   },
   {
-    id: 'crud-2',
-    code: 'AUDI-001',
-    name: 'Audi Q4',
-    status: 'inactive',
+    id: 'src-2',
+    sourceId: 'src-2',
+    sourceCode: 'DE-AUDI-MEDIA',
+    country: 'Germany',
+    brand: 'Audi',
+    sourceUrl: 'https://example.com/audi-q4',
+    sourceType: 'automotive_media',
+    tier: 4,
+    extractorName: 'manual',
+    extractorVersion: 'v1',
+    priceSemantics: 'retail_price',
+    requiresLocation: false,
+    enabled: false,
     notes: 'Secondary mock row',
+    createdAtUtc: '2026-04-16T08:00:00Z',
+    updatedAtUtc: '2026-04-16T08:00:00Z',
   },
 ];
+
+function buildDataManagementOverview() {
+  return {
+    item: {
+      generatedAt: '2026-04-17T08:00:00Z',
+      database: {
+        enabled: true,
+        connected: true,
+        detail: 'ok',
+      },
+      domains: [
+        {
+          key: 'msrp',
+          label: 'MSRP',
+          status: 'ready',
+          storage: 'postgres',
+          updatedAt: '2026-04-17T08:00:00Z',
+          summary: 'Regression mock for data-management entry.',
+          metrics: [
+            { label: 'Sources', value: 2 },
+            { label: 'Current Prices', value: 12 },
+          ],
+          recentItems: [
+            { label: 'DE-BMW-OFFICIAL', value: 'updated', updatedAt: '2026-04-17T08:00:00Z' },
+          ],
+        },
+      ],
+      fileInventory: [],
+      databaseTables: [],
+      activity: {
+        days: [],
+        maxCount: 0,
+        totalCount: 0,
+        rangeStart: '2026-04-01',
+        rangeEnd: '2026-04-17',
+        sourceCounts: [],
+        databaseConnected: true,
+      },
+    },
+  };
+}
 
 function optionsFor(column, filters = {}) {
   if (column === 'Make') {
@@ -192,13 +255,24 @@ async function main() {
   const page = await browser.newPage();
 
   page.on('console', (message) => {
+    const text = message.text();
+    if (/spline|prod\.spline\.design|deserialize|KDA\.load|Failed to fetch|Failed to load resource|ERR_FAILED/i.test(text)) {
+      return;
+    }
     if (message.type() === 'error' || message.type() === 'warning') {
-      console.error(`BROWSER_${message.type().toUpperCase()}: ${message.text()}`);
+      console.error(`BROWSER_${message.type().toUpperCase()}: ${text}`);
     }
   });
 
   page.on('pageerror', (error) => {
+    if (/spline|prod\.spline\.design|deserialize|KDA\.load|Failed to fetch|Failed to load resource|ERR_FAILED/i.test(error.stack || error.message || '')) {
+      return;
+    }
     console.error(`PAGEERROR: ${error.stack || error.message}`);
+  });
+
+  await page.route('**/prod.spline.design/**', async (route) => {
+    await route.abort();
   });
 
   if (process.env.JATO_REGRESSION_DEBUG === '1') {
@@ -300,6 +374,16 @@ async function main() {
       return json(route, buildCrudListResponse(url));
     }
 
+    if (path.endsWith('/data-management/overview') && request.method() === 'GET') {
+      counters.dataOverview += 1;
+      return json(route, buildDataManagementOverview());
+    }
+
+    if (path.endsWith('/msrp/sources') && request.method() === 'GET') {
+      counters.crudList += 1;
+      return json(route, { items: crudItems });
+    }
+
     if (path.endsWith('/crud/items') && request.method() === 'POST') {
       const payload = request.postDataJSON() || {};
       const item = {
@@ -373,14 +457,19 @@ async function main() {
     assertSharedBootStable(afterSpecificationRefresh, afterBack, 'Specification refresh -> browser back');
 
     const beforeCrud = snapshot();
-    await page.getByRole('link', { name: /Control/ }).click();
-    await page.waitForURL((url) => url.pathname === '/crud');
-    await page.getByRole('heading', { name: 'CRUD Control Deck' }).waitFor();
-    await page.locator('table.data-table tbody').filter({ hasText: 'BMW-001' }).waitFor();
+    await page.evaluate(() => {
+      window.history.pushState({}, '', '/crud');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await page.waitForURL((url) => url.pathname === '/data-management');
+    await page.getByRole('heading', { name: '数据总览' }).waitFor();
+    await page.getByRole('button', { name: 'MSRP Sources' }).waitFor();
+    await page.locator('table.crud-table tbody').filter({ hasText: 'DE-BMW-OFFICIAL' }).waitFor();
 
     const afterCrud = snapshot();
-    assertSharedBootStable(beforeCrud, afterCrud, 'Dashboard -> CRUD');
-    assert.ok(afterCrud.crudList >= beforeCrud.crudList + 1, 'CRUD entry should request CRUD items');
+    assertSharedBootStable(beforeCrud, afterCrud, 'Dashboard -> Data Management redirect');
+    assert.ok(afterCrud.dataOverview >= beforeCrud.dataOverview + 1, 'Data management route should request overview');
+    assert.ok(afterCrud.crudList >= beforeCrud.crudList + 1, 'Data management route should request MSRP sources');
 
     await page.goto(`${baseUrl}/specification?powertrain=BEV&make=BMW&model=iX1`, { waitUntil: 'networkidle' });
     await page.getByRole('heading', { name: 'Specification / Detail Explorer' }).waitFor();
@@ -411,7 +500,7 @@ async function main() {
         'dashboard_to_spec_query_preserved',
         'specification_refresh_hydrates_query',
         'browser_back_query_preserved',
-        'crud_route_entry_loads',
+        'crud_redirect_to_data_management',
         'spec_share_link_back_query_preserved',
         'shared_filter_boot_not_repeated_on_route_switch',
         'not_found_route_renders_shell',

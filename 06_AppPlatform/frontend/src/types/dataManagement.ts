@@ -1,0 +1,163 @@
+export interface ConfigProject {
+  id: string;
+  projectCode: string;
+  brand: string;
+  model: string;
+  marketCountry: string;
+  displayName: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MsrpSource {
+  id: string;
+  sourceCode: string;
+  country: string;
+  brand: string;
+  sourceUrl: string;
+  sourceType: string;
+  tier: number;
+  extractorName: string;
+  extractorVersion: string;
+  priceSemantics: string;
+  requiresLocation: boolean;
+  enabled: boolean;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MatchOverride {
+  id: string;
+  country: string;
+  brand: string;
+  jatoModel: string;
+  jatoTrim: string;
+  jatoPowertrain: string | null;
+  officialModel: string;
+  officialTrim: string;
+  validFromDate: string;
+  validToDate: string | null;
+  overrideReason: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DataManagementDatabaseStatus {
+  enabled: boolean;
+  connected: boolean;
+  detail?: string | null;
+}
+
+export interface DataManagementMetric {
+  label: string;
+  value: string | number;
+  tone?: string;
+}
+
+export interface DataManagementRecentItem {
+  label: string;
+  value: string | number;
+  updatedAt?: string | null;
+}
+
+export interface DataManagementDomain {
+  key: string;
+  label: string;
+  status: string;
+  storage: string;
+  updatedAt?: string | null;
+  summary: string;
+  metrics: DataManagementMetric[];
+  recentItems: DataManagementRecentItem[];
+}
+
+export interface DataManagementFileItem {
+  key: string;
+  label: string;
+  kind: string;
+  path: string;
+  exists: boolean;
+  isDir: boolean;
+  sizeBytes?: number | null;
+  fileCount?: number | null;
+  updatedAt?: string | null;
+}
+
+export interface DataManagementTableItem {
+  key: string;
+  label: string;
+  domain: string;
+  schema: string;
+  table: string;
+  rowCount: number;
+  lastEventAt?: string | null;
+  status: string;
+}
+
+export interface DataManagementActivityDay {
+  date: string;
+  count: number;
+  level: number;
+}
+
+export interface DataManagementActivitySourceCount {
+  label: string;
+  count: number;
+}
+
+export interface DataManagementActivity {
+  days: DataManagementActivityDay[];
+  maxCount: number;
+  totalCount: number;
+  rangeStart: string;
+  rangeEnd: string;
+  sourceCounts: DataManagementActivitySourceCount[];
+  databaseConnected: boolean;
+}
+
+export interface DataManagementAirflowService {
+  service: string;
+  state: string;
+  status: string;
+  health?: string | null;
+  containerName?: string | null;
+  publishedPorts: string[];
+}
+
+export interface DataManagementAirflowActions {
+  canStart: boolean;
+  canStop: boolean;
+  canOpenUi: boolean;
+}
+
+export interface DataManagementAirflowStatus {
+  available: boolean;
+  mode: string;
+  detail: string;
+  uiUrl: string;
+  running: boolean;
+  runningServices: number;
+  totalServices: number;
+  updatedAt: string;
+  services: DataManagementAirflowService[];
+  actions: DataManagementAirflowActions;
+}
+
+export interface DataManagementAirflowActionResponse {
+  action: string;
+  detail: string;
+  status: DataManagementAirflowStatus;
+}
+
+export interface DataManagementOverviewResponse {
+  generatedAt: string;
+  database: DataManagementDatabaseStatus;
+  domains: DataManagementDomain[];
+  airflow: DataManagementAirflowStatus;
+  fileInventory: DataManagementFileItem[];
+  databaseTables: DataManagementTableItem[];
+  activity: DataManagementActivity;
+}

@@ -5,12 +5,13 @@ import { api } from "../api/client";
 import { AdminToolsNav } from "../components/AdminToolsNav";
 import { LoadingSurface } from "../components/LoadingSurface";
 import type {
-  ConfigProject,
+  DataManagementAirflowStatus,
   DataManagementDomain,
   DataManagementOverviewResponse,
+  ConfigProject,
   MatchOverride,
   MsrpSource,
-} from "../types";
+} from "../types/dataManagement";
 import {
   buildActivityHeatmapColumns,
   formatDataManagementBytes,
@@ -45,6 +46,7 @@ interface SourceFormState {
   brand: string;
   sourceUrl: string;
   sourceType: string;
+  tier: number;
   extractorName: string;
   extractorVersion: string;
   priceSemantics: string;
@@ -114,6 +116,7 @@ function defaultSourceForm(): SourceFormState {
     brand: "",
     sourceUrl: "",
     sourceType: "official_site",
+    tier: 1,
     extractorName: "manual",
     extractorVersion: "v1",
     priceSemantics: "msrp",
@@ -182,6 +185,9 @@ export function DataManagementPage() {
   const [crudLoading, setCrudLoading] = useState(false);
   const [crudError, setCrudError] = useState("");
   const [crudNotice, setCrudNotice] = useState("");
+  const [airflowBusyAction, setAirflowBusyAction] = useState<"start" | "stop" | null>(null);
+  const [airflowError, setAirflowError] = useState("");
+  const [airflowNotice, setAirflowNotice] = useState("");
 
   const [sourceFilters, setSourceFilters] = useState<SourceFilters>(defaultSourceFilters);
   const [projectFilters, setProjectFilters] = useState<ProjectFilters>(defaultProjectFilters);
@@ -269,6 +275,8 @@ export function DataManagementPage() {
     [overview]
   );
 
+  const airflowStatus: DataManagementAirflowStatus | null = overview?.airflow ?? null;
+
   function startEditSource(item: MsrpSource) {
     setEditingSourceId(item.id);
     setSourceForm({
@@ -277,6 +285,7 @@ export function DataManagementPage() {
       brand: item.brand,
       sourceUrl: item.sourceUrl,
       sourceType: item.sourceType,
+      tier: item.tier,
       extractorName: item.extractorName,
       extractorVersion: item.extractorVersion,
       priceSemantics: item.priceSemantics,
@@ -341,6 +350,7 @@ export function DataManagementPage() {
           brand: sourceForm.brand,
           source_url: sourceForm.sourceUrl,
           source_type: sourceForm.sourceType,
+          tier: sourceForm.tier,
           extractor_name: sourceForm.extractorName,
           extractor_version: sourceForm.extractorVersion,
           price_semantics: sourceForm.priceSemantics,
@@ -356,6 +366,7 @@ export function DataManagementPage() {
           brand: sourceForm.brand,
           source_url: sourceForm.sourceUrl,
           source_type: sourceForm.sourceType,
+          tier: sourceForm.tier,
           extractor_name: sourceForm.extractorName,
           extractor_version: sourceForm.extractorVersion,
           price_semantics: sourceForm.priceSemantics,
@@ -518,6 +529,27 @@ export function DataManagementPage() {
     }
   }
 
+  async function handleAirflowAction(action: "start" | "stop") {
+    setAirflowBusyAction(action);
+    setAirflowError("");
+    setAirflowNotice("");
+    try {
+      const result = action === "start"
+        ? await api.startAirflow()
+        : await api.stopAirflow();
+      setAirflowNotice(result.detail);
+      await loadOverview({ silent: true });
+    } catch (err) {
+      setAirflowError((err as Error).message);
+    } finally {
+      setAirflowBusyAction(null);
+    }
+  }
+
+  function handleOpenAirflowUi(status: DataManagementAirflowStatus) {
+    window.open(status.uiUrl, "_blank", "noopener,noreferrer");
+  }
+
   return (
     <section className="crud-shell data-management-shell">
       <header className="header-card dashboard-hero crud-hero">
@@ -638,6 +670,47 @@ export function DataManagementPage() {
                   <time>{formatDataManagementTimestamp(domain.updatedAt)}</time>
                   <span>{domain.storage}</span>
                 </div>
+                {domain.key === "airflow" && airflowStatus ? (
+                  <div className="data-management-airflow-panel">
+                    <p className="data-management-airflow-detail">
+                      {airflowStatus.detail}
+                    </p>
+                    <div className="data-management-airflow-meta">
+                      <span>Mode: {airflowStatus.mode}</span>
+                      <span>
+                        Web UI: {airflowStatus.actions.canOpenUi ? airflowStatus.uiUrl : "未运行"}
+                      </span>
+                    </div>
+                    {airflowError ? <div className="alert alert-error">{airflowError}</div> : null}
+                    {airflowNotice ? <div className="alert alert-success">{airflowNotice}</div> : null}
+                    <div className="data-management-inline-actions">
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        onClick={() => void handleAirflowAction("start")}
+                        disabled={!airflowStatus.actions.canStart || airflowBusyAction !== null}
+                      >
+                        {airflowBusyAction === "start" ? "启动中…" : "启动 Airflow"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => void handleAirflowAction("stop")}
+                        disabled={!airflowStatus.actions.canStop || airflowBusyAction !== null}
+                      >
+                        {airflowBusyAction === "stop" ? "暂停中…" : "暂停 Airflow"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => handleOpenAirflowUi(airflowStatus)}
+                        disabled={!airflowStatus.actions.canOpenUi || airflowBusyAction !== null}
+                      >
+                        打开 Airflow UI
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
                 {renderDomainRecentItems(domain)}
               </article>
             ))}
@@ -725,6 +798,7 @@ export function DataManagementPage() {
                       <div className="filter-group"><label>Brand</label><input value={sourceForm.brand} onChange={(event) => setSourceForm((prev) => ({ ...prev, brand: event.target.value }))} required /></div>
                       <div className="filter-group"><label>Source URL</label><input value={sourceForm.sourceUrl} onChange={(event) => setSourceForm((prev) => ({ ...prev, sourceUrl: event.target.value }))} required /></div>
                       <div className="filter-group"><label>Source Type</label><input value={sourceForm.sourceType} onChange={(event) => setSourceForm((prev) => ({ ...prev, sourceType: event.target.value }))} required /></div>
+                      <div className="filter-group"><label>Tier</label><select value={sourceForm.tier} onChange={(event) => setSourceForm((prev) => ({ ...prev, tier: Number(event.target.value) || 3 }))}><option value={1}>1 · Official</option><option value={2}>2 · Reference / Dealer</option><option value={3}>3 · Curated</option><option value={4}>4 · Third-party</option><option value={5}>5 · Experimental</option></select></div>
                       <div className="filter-group"><label>Extractor</label><input value={sourceForm.extractorName} onChange={(event) => setSourceForm((prev) => ({ ...prev, extractorName: event.target.value }))} required /></div>
                       <div className="filter-group"><label>Extractor Version</label><input value={sourceForm.extractorVersion} onChange={(event) => setSourceForm((prev) => ({ ...prev, extractorVersion: event.target.value }))} required /></div>
                       <div className="filter-group"><label>Price Semantics</label><input value={sourceForm.priceSemantics} onChange={(event) => setSourceForm((prev) => ({ ...prev, priceSemantics: event.target.value }))} required /></div>
@@ -744,6 +818,7 @@ export function DataManagementPage() {
                         <tr>
                           <th>Code</th>
                           <th>Country / Brand</th>
+                          <th>Tier / Extractor</th>
                           <th>Extractor</th>
                           <th>Status</th>
                           <th>Updated</th>
@@ -755,7 +830,8 @@ export function DataManagementPage() {
                           <tr key={item.id}>
                             <td><strong>{item.sourceCode}</strong><div className="data-management-table-subtle">{item.sourceType}</div></td>
                             <td>{item.country}<div className="data-management-table-subtle">{item.brand}</div></td>
-                            <td>{item.extractorName}<div className="data-management-table-subtle">{item.extractorVersion}</div></td>
+                            <td><strong>T{item.tier}</strong><div className="data-management-table-subtle">{item.extractorName}</div></td>
+                            <td>{item.extractorVersion}<div className="data-management-table-subtle">{item.priceSemantics}</div></td>
                             <td><span className={`badge ${getDataManagementStatusBadgeClass(item.enabled ? "ready" : "inactive")}`}>{item.enabled ? "enabled" : "disabled"}</span></td>
                             <td>{formatDataManagementTimestamp(item.updatedAt)}</td>
                             <td>
