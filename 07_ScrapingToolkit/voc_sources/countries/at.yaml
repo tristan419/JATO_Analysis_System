@@ -3,13 +3,33 @@ country_label: Austria / 奥地利
 languages: [de, en]
 taxonomy_profile: dach_core
 sources:
-  - source_code: at_voc_public_seed
-    site_name: Austria public VOC seed
-    site_url: https://example.com/voc/at/public-seed
-    site_type: forum_seed
+  - source_code: at_automotive_comments
+    site_name: Automotive.at
+    site_url: https://www.automotive.at/
+    site_type: industry_media
     extractor: scrapling
     language: de
-    tags: [voc, seed, public]
+    tags: [voc, public, industry, media, automotive]
     public_access: true
-    compliance_notes: Replace scaffold seed with verified public Austrian discussion sources before live crawling.
-    notes: Country-pack placeholder aligned to the news batch structure.
+    compliance_notes: Focus on public editorial pages and visible reader interaction only.
+    notes: Adds Austrian dealer/aftersales and industry-facing customer-experience signals.
+  - source_code: at_motor_comments
+    site_name: Motor
+    site_url: https://www.motor.at/
+    site_type: media_comments
+    extractor: scrapling
+    language: de
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Collect only from public article and review pages with visible reader feedback.
+    notes: Good for mainstream Austrian reaction to ownership costs, launches, and reliability.
+  - source_code: at_autotouring_consumer
+    site_name: Autotouring
+    site_url: https://www.oeamtc.at/autotouring/
+    site_type: consumer_media
+    extractor: scrapling
+    language: de
+    tags: [voc, public, consumer, media, automotive]
+    public_access: true
+    compliance_notes: Restrict crawl to public consumer editorial pages; do not target any member-only services.
+    notes: Useful for complaints, servicing, safety, and ownership-experience themes.

@@ -10,6 +10,10 @@ from typing import Any
 
 from jato_scraper.voc_base import VocBatchConfig
 from jato_scraper.voc_config_loader import load_voc_batch_config
+from jato_scraper.voc_taxonomy import get_source_collection_strategy
+from jato_scraper.voc_taxonomy import get_voc_taxonomy_profile
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _normalize_country_filter(values: list[str] | None) -> set[str] | None:
@@ -19,12 +23,19 @@ def _normalize_country_filter(values: list[str] | None) -> set[str] | None:
     return normalized or None
 
 
+def _resolve_output_root(output_root: str | Path) -> Path:
+    candidate = Path(output_root).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    return REPO_ROOT / candidate
+
+
 def build_voc_collection_plan(
     batch: VocBatchConfig,
     country_filter: set[str] | None = None,
     output_root: str | Path = "04_Processed_data/voc",
 ) -> dict[str, Any]:
-    root = Path(output_root)
+    root = _resolve_output_root(output_root)
     countries_payload: list[dict[str, Any]] = []
     source_count = 0
 
@@ -32,16 +43,26 @@ def build_voc_collection_plan(
         if country_filter and country.country_code.upper() not in country_filter:
             continue
         country_root = root / country.country_code.lower()
+        taxonomy = get_voc_taxonomy_profile(country.taxonomy_profile)
         payload = {
             "country_code": country.country_code,
             "country_label": country.country_label,
             "languages": list(country.languages),
             "taxonomy_profile": country.taxonomy_profile,
+            "taxonomy": taxonomy,
             "source_count": len(country.sources),
             "raw_output_path": str(country_root / "raw"),
             "enriched_output_path": str(country_root / "enriched"),
             "deck_output_path": str(country_root / "deck" / "customer_insight_deck.json"),
-            "sources": [asdict(source) for source in country.sources],
+            "sources": [
+                {
+                    **asdict(source),
+                    "collection_strategy": get_source_collection_strategy(
+                        source.site_type,
+                    ),
+                }
+                for source in country.sources
+            ],
         }
         source_count += len(country.sources)
         countries_payload.append(payload)

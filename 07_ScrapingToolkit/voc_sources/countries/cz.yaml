@@ -3,13 +3,33 @@ country_label: Czech Republic / 捷克
 languages: [cs, en]
 taxonomy_profile: cee_core
 sources:
-  - source_code: cz_voc_public_seed
-    site_name: Czechia public VOC seed
-    site_url: https://example.com/voc/cz/public-seed
-    site_type: forum_seed
+  - source_code: cz_fdrive_community
+    site_name: fDrive.cz
+    site_url: https://fdrive.cz/
+    site_type: ev_community
     extractor: scrapling
     language: cs
-    tags: [voc, seed, public]
+    tags: [voc, public, ev, community, owner]
     public_access: true
-    compliance_notes: Replace scaffold seed with verified public Czech discussion sources before live crawling.
-    notes: Country-pack placeholder aligned to the news batch structure.
+    compliance_notes: Collect from public EV discussion and article pages only; avoid any user-private areas.
+    notes: Strong source for EV usability, charging, and model-comparison feedback.
+  - source_code: cz_autorevue_comments
+    site_name: AutoRevue.cz
+    site_url: https://www.autorevue.cz/
+    site_type: media_comments
+    extractor: scrapling
+    language: cs
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Focus on public review and article pages with visible reader reaction.
+    notes: Adds mainstream Czech buyer and owner sentiment around launches and reliability.
+  - source_code: cz_garaz_comments
+    site_name: Garáž.cz
+    site_url: https://www.garaz.cz/
+    site_type: media_comments
+    extractor: scrapling
+    language: cs
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Restrict crawling to public editorial and article discussion surfaces only.
+    notes: Useful for local reaction to pricing, ownership, and product quality.

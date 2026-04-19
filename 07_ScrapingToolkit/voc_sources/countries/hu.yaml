@@ -3,13 +3,33 @@ country_label: Hungary / 匈牙利
 languages: [hu, en]
 taxonomy_profile: cee_core
 sources:
-  - source_code: hu_voc_public_seed
-    site_name: Hungary public VOC seed
-    site_url: https://example.com/voc/hu/public-seed
-    site_type: forum_seed
+  - source_code: hu_villanyautosok_community
+    site_name: Villanyautosok
+    site_url: https://villanyautosok.hu/
+    site_type: ev_community
     extractor: scrapling
     language: hu
-    tags: [voc, seed, public]
+    tags: [voc, public, ev, community, owner]
     public_access: true
-    compliance_notes: Replace scaffold seed with verified public Hungarian discussion sources before live crawling.
-    notes: Country-pack placeholder aligned to the news batch structure.
+    compliance_notes: Collect only from public EV articles and discussions; avoid any restricted community areas.
+    notes: Best early source for EV charging, battery, and ownership-experience signals.
+  - source_code: hu_totalcar_comments
+    site_name: Totalcar
+    site_url: https://totalcar.hu/
+    site_type: media_comments
+    extractor: scrapling
+    language: hu
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Focus on public comment-enabled articles and owner-reaction pages.
+    notes: Adds broad-market owner sentiment on launches, reliability, and pricing.
+  - source_code: hu_autonavigator_comments
+    site_name: AutoNavigator
+    site_url: https://www.autonavigator.hu/
+    site_type: media_comments
+    extractor: scrapling
+    language: hu
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Restrict extraction to public article or review pages with visible reader feedback.
+    notes: Useful for cost, service, and product-quality oriented VOC snippets.

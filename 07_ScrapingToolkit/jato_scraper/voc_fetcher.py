@@ -1,0 +1,542 @@
+"""Lightweight public VOC raw collector."""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import asdict
+from datetime import UTC, datetime
+from html.parser import HTMLParser
+import json
+from pathlib import Path
+import re
+from typing import Any
+from urllib.parse import urljoin, urlparse
+
+import requests
+
+from jato_scraper.voc_base import VocBatchConfig
+from jato_scraper.voc_base import VocSourceConfig
+from jato_scraper.voc_config_loader import load_voc_batch_config
+from jato_scraper.voc_taxonomy import get_source_collection_strategy
+from jato_scraper.voc_taxonomy import get_voc_taxonomy_profile
+
+try:
+    from lxml import html as lxml_html
+except ModuleNotFoundError:  # pragma: no cover - stdlib fallback stays exercised
+    lxml_html = None
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_WHITESPACE_RE = re.compile(r"\s+")
+_NEGATIVE_LINK_HINTS = (
+    "login",
+    "signin",
+    "signup",
+    "register",
+    "privacy",
+    "cookie",
+    "kontakt",
+    "contact",
+    "feed",
+    "rss",
+    "tag/",
+    "category/",
+    "#comment",
+    "/user/",
+    "/konto",
+)
+_POSITIVE_HINTS_BY_SITE_TYPE = {
+    "forum": ("thread", "topic", "forum", "discussion", "showtopic", "viewtopic"),
+    "ev_community": ("thread", "topic", "forum", "discussion", "charging", "battery", "ev", "electric"),
+    "media_comments": ("article", "news", "review", "test", "drive", "launch", "story", "bil", "auto"),
+    "consumer_media": ("article", "news", "test", "consumer", "guide", "advice", "problem", "issue"),
+    "industry_media": ("article", "news", "dealer", "service", "market", "industry"),
+}
+_TEXT_TARGET_XPATH = (
+    "//article//*[self::h1 or self::h2 or self::h3 or self::p or self::li or self::blockquote]/text()"
+    " | //main//*[self::h1 or self::h2 or self::h3 or self::p or self::li or self::blockquote]/text()"
+    " | //body//*[self::h1 or self::h2 or self::h3 or self::p or self::li or self::blockquote]/text()"
+)
+
+
+def _normalize_space(value: Any) -> str:
+    return _WHITESPACE_RE.sub(" ", str(value or "")).strip()
+
+
+def _normalize_country_filter(values: list[str] | None) -> set[str] | None:
+    if not values:
+        return None
+    normalized = {value.strip().upper() for value in values if value.strip()}
+    return normalized or None
+
+
+def _resolve_repo_path(path: str | Path) -> Path:
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    return REPO_ROOT / candidate
+
+
+def _normalize_host(value: str) -> str:
+    return str(value or "").strip().lower().removeprefix("www.")
+
+
+def _same_site(base_url: str, candidate_url: str) -> bool:
+    base_host = _normalize_host(urlparse(base_url).netloc)
+    candidate_host = _normalize_host(urlparse(candidate_url).netloc)
+    if not base_host or not candidate_host:
+        return False
+    return (
+        candidate_host == base_host
+        or candidate_host.endswith(f".{base_host}")
+        or base_host.endswith(f".{candidate_host}")
+    )
+
+
+class _FallbackPageParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.links: list[dict[str, str]] = []
+        self._current_link: dict[str, str] | None = None
+        self._in_title = False
+        self.title_parts: list[str] = []
+        self.text_parts: list[str] = []
+        self.meta: dict[str, str] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_map = {key.lower(): (value or "") for key, value in attrs}
+        tag_name = tag.lower()
+        if tag_name == "a":
+            href = attrs_map.get("href", "").strip()
+            self._current_link = {"href": href, "text": ""}
+        elif tag_name == "title":
+            self._in_title = True
+        elif tag_name == "meta":
+            name = attrs_map.get("name", "").strip().lower()
+            prop = attrs_map.get("property", "").strip().lower()
+            content = attrs_map.get("content", "").strip()
+            if content:
+                if name:
+                    self.meta[name] = content
+                if prop:
+                    self.meta[prop] = content
+
+    def handle_endtag(self, tag: str) -> None:
+        tag_name = tag.lower()
+        if tag_name == "a" and self._current_link is not None:
+            href = self._current_link.get("href", "").strip()
+            if href:
+                self.links.append(
+                    {
+                        "href": href,
+                        "text": _normalize_space(self._current_link.get("text", "")),
+                    }
+                )
+            self._current_link = None
+        elif tag_name == "title":
+            self._in_title = False
+
+    def handle_data(self, data: str) -> None:
+        normalized = _normalize_space(data)
+        if not normalized:
+            return
+        if self._in_title:
+            self.title_parts.append(normalized)
+        if self._current_link is not None:
+            current = self._current_link.get("text", "")
+            self._current_link["text"] = f"{current} {normalized}".strip()
+        self.text_parts.append(normalized)
+
+
+def _extract_page_fields(page_url: str, html_text: str) -> dict[str, Any]:
+    if lxml_html is not None:
+        tree = lxml_html.fromstring(html_text)
+        title = _normalize_space(
+            tree.xpath("string(//meta[@property='og:title']/@content)")
+            or tree.xpath("string(//title)")
+            or tree.xpath("string(//h1[1])")
+        )
+        published_at = _normalize_space(
+            tree.xpath("string(//meta[@property='article:published_time']/@content)")
+            or tree.xpath("string(//meta[@name='article:published_time']/@content)")
+            or tree.xpath("string(//time[1]/@datetime)")
+        )
+        summary = _normalize_space(
+            tree.xpath("string(//meta[@name='description']/@content)")
+            or tree.xpath("string(//meta[@property='og:description']/@content)")
+        )
+        text_nodes = [
+            _normalize_space(node)
+            for node in tree.xpath(_TEXT_TARGET_XPATH)
+            if _normalize_space(node)
+        ]
+        text = _normalize_space(" ".join(text_nodes))
+        links = []
+        for element in tree.xpath("//a[@href]"):
+            href = _normalize_space(element.attrib.get("href"))
+            if not href:
+                continue
+            links.append(
+                {
+                    "href": href,
+                    "text": _normalize_space(" ".join(element.itertext())),
+                }
+            )
+        return {
+            "url": page_url,
+            "title": title,
+            "publishedAt": published_at or None,
+            "summary": summary or None,
+            "text": text,
+            "links": links,
+        }
+
+    parser = _FallbackPageParser()
+    parser.feed(html_text)
+    return {
+        "url": page_url,
+        "title": _normalize_space(" ".join(parser.title_parts)),
+        "publishedAt": (
+            parser.meta.get("article:published_time")
+            or parser.meta.get("published_time")
+            or None
+        ),
+        "summary": (
+            parser.meta.get("description")
+            or parser.meta.get("og:description")
+            or None
+        ),
+        "text": _normalize_space(" ".join(parser.text_parts)),
+        "links": parser.links,
+    }
+
+
+def _score_candidate_link(
+    *,
+    source: VocSourceConfig,
+    url: str,
+    link_text: str,
+) -> float:
+    normalized_url = url.casefold()
+    normalized_text = link_text.casefold()
+    haystack = f"{normalized_url} {normalized_text}".strip()
+    if not haystack:
+        return -1.0
+    if any(hint in normalized_url for hint in _NEGATIVE_LINK_HINTS):
+        return -1.0
+
+    score = 0.0
+    site_type_hints = _POSITIVE_HINTS_BY_SITE_TYPE.get(
+        source.site_type,
+        _POSITIVE_HINTS_BY_SITE_TYPE["forum"],
+    )
+    if any(hint in haystack for hint in site_type_hints):
+        score += 2.0
+    if re.search(r"/20\d{2}/|-\d{4,}", normalized_url):
+        score += 1.0
+    if len(normalized_text) >= 24:
+        score += 0.5
+    if source.site_type in {"forum", "ev_community"} and "forum" in normalized_url:
+        score += 0.75
+    if source.site_type in {"media_comments", "consumer_media", "industry_media"} and any(
+        hint in normalized_url for hint in ("news", "article", "test", "review", "story")
+    ):
+        score += 0.75
+    return score
+
+
+def _select_candidate_links(
+    *,
+    source: VocSourceConfig,
+    landing_page: dict[str, Any],
+    max_links: int,
+) -> list[dict[str, str]]:
+    candidates: list[tuple[float, str, str]] = []
+    seen: set[str] = set()
+    for link in landing_page.get("links") or []:
+        href = _normalize_space(link.get("href"))
+        if not href:
+            continue
+        absolute = urljoin(source.site_url, href)
+        if not absolute.startswith(("http://", "https://")):
+            continue
+        if not _same_site(source.site_url, absolute):
+            continue
+        normalized_absolute = absolute.rstrip("/")
+        if normalized_absolute in seen:
+            continue
+        seen.add(normalized_absolute)
+        score = _score_candidate_link(
+            source=source,
+            url=absolute,
+            link_text=_normalize_space(link.get("text")),
+        )
+        if score <= 0:
+            continue
+        candidates.append((score, normalized_absolute, _normalize_space(link.get("text"))))
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [
+        {"url": url, "linkText": link_text}
+        for _, url, link_text in candidates[: max(1, int(max_links))]
+    ]
+
+
+def _http_headers() -> dict[str, str]:
+    return {
+        "User-Agent": (
+            "Mozilla/5.0 (compatible; JATOAnalysisSystem/1.0; "
+            "+https://github.com/tristan419/JATO_Analysis_System)"
+        )
+    }
+
+
+def fetch_public_page(url: str, timeout_seconds: int = 20) -> dict[str, Any]:
+    response = requests.get(
+        url,
+        timeout=timeout_seconds,
+        allow_redirects=True,
+        headers=_http_headers(),
+    )
+    response.raise_for_status()
+    html_text = response.text
+    page = _extract_page_fields(str(response.url), html_text)
+    page["statusCode"] = response.status_code
+    return page
+
+
+def collect_source_documents(
+    source: VocSourceConfig,
+    *,
+    taxonomy_profile: str,
+    max_links: int = 5,
+    timeout_seconds: int = 20,
+) -> dict[str, Any]:
+    collected_at = datetime.now(UTC).isoformat()
+    strategy = get_source_collection_strategy(source.site_type)
+    taxonomy = get_voc_taxonomy_profile(taxonomy_profile)
+    try:
+        landing_page = fetch_public_page(source.site_url, timeout_seconds=timeout_seconds)
+    except requests.RequestException as exc:
+        return {
+            "source": asdict(source),
+            "taxonomyProfile": taxonomy_profile,
+            "taxonomy": taxonomy,
+            "collectionStrategy": strategy,
+            "collectedAt": collected_at,
+            "landingPage": {
+                "url": source.site_url,
+                "title": None,
+                "publishedAt": None,
+                "summary": None,
+                "candidateCount": 0,
+            },
+            "documentCount": 0,
+            "documents": [],
+            "errors": [{"url": source.site_url, "error": str(exc)}],
+        }
+    candidates = _select_candidate_links(
+        source=source,
+        landing_page=landing_page,
+        max_links=max_links,
+    )
+    documents: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+
+    for candidate in candidates:
+        target_url = str(candidate["url"]).strip()
+        try:
+            page = fetch_public_page(target_url, timeout_seconds=timeout_seconds)
+        except requests.RequestException as exc:
+            errors.append({"url": target_url, "error": str(exc)})
+            continue
+        raw_text = _normalize_space(page.get("text"))
+        if not raw_text:
+            continue
+        documents.append(
+            {
+                "sourceCode": source.source_code,
+                "countryCode": source.country_code,
+                "countryLabel": source.country_label,
+                "siteName": source.site_name,
+                "siteType": source.site_type,
+                "language": source.language,
+                "url": page.get("url"),
+                "title": page.get("title"),
+                "pageKind": strategy["primaryUnit"],
+                "linkText": candidate.get("linkText"),
+                "publishedAt": page.get("publishedAt"),
+                "summary": page.get("summary"),
+                "rawText": raw_text,
+                "excerpt": raw_text[:400],
+                "collectedAt": collected_at,
+            }
+        )
+
+    if not documents:
+        landing_text = _normalize_space(landing_page.get("text"))
+        if landing_text:
+            documents.append(
+                {
+                    "sourceCode": source.source_code,
+                    "countryCode": source.country_code,
+                    "countryLabel": source.country_label,
+                    "siteName": source.site_name,
+                    "siteType": source.site_type,
+                    "language": source.language,
+                    "url": landing_page.get("url"),
+                    "title": landing_page.get("title"),
+                    "pageKind": "landing_page",
+                    "linkText": None,
+                    "publishedAt": landing_page.get("publishedAt"),
+                    "summary": landing_page.get("summary"),
+                    "rawText": landing_text,
+                    "excerpt": landing_text[:400],
+                    "collectedAt": collected_at,
+                }
+            )
+
+    return {
+        "source": asdict(source),
+        "taxonomyProfile": taxonomy_profile,
+        "taxonomy": taxonomy,
+        "collectionStrategy": strategy,
+        "collectedAt": collected_at,
+        "landingPage": {
+            "url": landing_page.get("url"),
+            "title": landing_page.get("title"),
+            "publishedAt": landing_page.get("publishedAt"),
+            "summary": landing_page.get("summary"),
+            "candidateCount": len(candidates),
+        },
+        "documentCount": len(documents),
+        "documents": documents,
+        "errors": errors,
+    }
+
+
+def build_voc_raw_collection(
+    batch: VocBatchConfig,
+    *,
+    country_filter: set[str] | None = None,
+    output_root: str | Path = "04_Processed_data/voc",
+    max_links_per_source: int = 5,
+    timeout_seconds: int = 20,
+) -> dict[str, Any]:
+    root = _resolve_repo_path(output_root)
+    countries_payload: list[dict[str, Any]] = []
+    source_count = 0
+    document_count = 0
+
+    for country in batch.countries:
+        if country_filter and country.country_code.upper() not in country_filter:
+            continue
+        raw_root = root / country.country_code.lower() / "raw"
+        raw_root.mkdir(parents=True, exist_ok=True)
+        source_payloads: list[dict[str, Any]] = []
+        for source in country.sources:
+            collected = collect_source_documents(
+                source,
+                taxonomy_profile=country.taxonomy_profile,
+                max_links=max_links_per_source,
+                timeout_seconds=timeout_seconds,
+            )
+            output_path = raw_root / f"{source.source_code}.json"
+            output_path.write_text(
+                json.dumps(collected, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            source_payloads.append(
+                {
+                    "source_code": source.source_code,
+                    "site_name": source.site_name,
+                    "site_type": source.site_type,
+                    "document_count": collected["documentCount"],
+                    "error_count": len(collected["errors"]),
+                    "output_path": str(output_path),
+                }
+            )
+            source_count += 1
+            document_count += int(collected["documentCount"])
+        countries_payload.append(
+            {
+                "country_code": country.country_code,
+                "country_label": country.country_label,
+                "taxonomy_profile": country.taxonomy_profile,
+                "source_count": len(country.sources),
+                "document_count": sum(
+                    int(item["document_count"]) for item in source_payloads
+                ),
+                "sources": source_payloads,
+            }
+        )
+
+    return {
+        "batch_code": batch.batch_code,
+        "description": batch.description,
+        "country_count": len(countries_payload),
+        "source_count": source_count,
+        "document_count": document_count,
+        "countries": countries_payload,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Collect lightweight public VOC raw documents from configured sources.",
+    )
+    parser.add_argument(
+        "--batch-files",
+        nargs="+",
+        required=True,
+        help="Batch YAML files under voc_sources/ or absolute paths.",
+    )
+    parser.add_argument(
+        "--countries",
+        nargs="*",
+        help="Optional list of country codes to keep.",
+    )
+    parser.add_argument(
+        "--output-root",
+        default="04_Processed_data/voc",
+        help="Root path for country raw output.",
+    )
+    parser.add_argument(
+        "--max-links-per-source",
+        type=int,
+        default=5,
+        help="Maximum number of article or thread links to fetch per source.",
+    )
+    parser.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=20,
+        help="HTTP timeout per page request.",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        help="Optional summary JSON output path.",
+    )
+    args = parser.parse_args(argv)
+
+    payload = [
+        build_voc_raw_collection(
+            load_voc_batch_config(batch_file),
+            country_filter=_normalize_country_filter(args.countries),
+            output_root=args.output_root,
+            max_links_per_source=max(1, args.max_links_per_source),
+            timeout_seconds=max(5, args.timeout_seconds),
+        )
+        for batch_file in args.batch_files
+    ]
+    rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+    if args.output:
+        output_path = _resolve_repo_path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(rendered, encoding="utf-8")
+    else:
+        print(rendered)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

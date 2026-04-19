@@ -3,13 +3,33 @@ country_label: Sweden / 瑞典
 languages: [sv, en]
 taxonomy_profile: nordic_core
 sources:
-  - source_code: se_voc_public_seed
-    site_name: Sweden public VOC seed
-    site_url: https://example.com/voc/se/public-seed
-    site_type: forum_seed
+  - source_code: se_teslaclubsweden_forum
+    site_name: Tesla Club Sweden Forum
+    site_url: https://teslaclubsweden.se/forum/
+    site_type: ev_community
     extractor: scrapling
     language: sv
-    tags: [voc, seed, public]
+    tags: [voc, public, forum, ev, owner]
     public_access: true
-    compliance_notes: Replace scaffold seed with verified public Swedish discussion sources before live crawling.
-    notes: Country-pack placeholder aligned to the news batch structure.
+    compliance_notes: Crawl only public threads and respect robots, rate limits, and forum pagination boundaries.
+    notes: Prioritize owner pain points on charging, software, winter range, and delivery experience.
+  - source_code: se_garaget_forum
+    site_name: Garaget Forum
+    site_url: https://www.garaget.org/forum/
+    site_type: forum
+    extractor: scrapling
+    language: sv
+    tags: [voc, public, forum, owner, automotive]
+    public_access: true
+    compliance_notes: Keep collection on publicly visible discussion pages only; skip profiles and private groups.
+    notes: Useful for reliability, maintenance, and modification-related owner feedback.
+  - source_code: se_carup_comments
+    site_name: Carup
+    site_url: https://carup.se/
+    site_type: media_comments
+    extractor: scrapling
+    language: sv
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Focus on article pages with public comment sections and avoid non-comment index pages when crawling.
+    notes: Good for mainstream market reaction to pricing, launches, and policy changes.

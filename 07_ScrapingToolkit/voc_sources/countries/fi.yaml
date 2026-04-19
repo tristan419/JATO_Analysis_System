@@ -3,13 +3,33 @@ country_label: Finland / 芬兰
 languages: [fi, sv, en]
 taxonomy_profile: nordic_core
 sources:
-  - source_code: fi_voc_public_seed
-    site_name: Finland public VOC seed
-    site_url: https://example.com/voc/fi/public-seed
-    site_type: forum_seed
+  - source_code: fi_sahkoautot_community
+    site_name: Sahkoautot
+    site_url: https://sahkoautot.fi/
+    site_type: ev_community
     extractor: scrapling
     language: fi
-    tags: [voc, seed, public]
+    tags: [voc, public, ev, community, owner]
     public_access: true
-    compliance_notes: Replace scaffold seed with verified public Finnish discussion sources before live crawling.
-    notes: Country-pack placeholder aligned to the news batch structure.
+    compliance_notes: Limit collection to public EV discussions and avoid any member-only or account-gated areas.
+    notes: Prioritize charging, winter usability, and total-cost-of-ownership discussions.
+  - source_code: fi_moottori_comments
+    site_name: Moottori
+    site_url: https://moottori.fi/
+    site_type: media_comments
+    extractor: scrapling
+    language: fi
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Focus on article pages with visible user comments or reader reaction sections only.
+    notes: Useful for mainstream owner perception of launches, tests, and aftersales reputation.
+  - source_code: fi_tuulilasi_comments
+    site_name: Tuulilasi
+    site_url: https://www.apu.fi/lehdet/tuulilasi
+    site_type: media_comments
+    extractor: scrapling
+    language: fi
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Restrict crawl targets to public article and comment pages; skip paywalled or login-gated areas.
+    notes: Adds owner-facing reactions from a mainstream Finnish car media brand.

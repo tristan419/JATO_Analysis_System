@@ -3,13 +3,33 @@ country_label: Croatia / 克罗地亚
 languages: [hr, en]
 taxonomy_profile: cee_core
 sources:
-  - source_code: hr_voc_public_seed
-    site_name: Croatia public VOC seed
-    site_url: https://example.com/voc/hr/public-seed
-    site_type: forum_seed
+  - source_code: hr_autonet_forum
+    site_name: Autonet BUG
+    site_url: https://autonet.bug.hr/
+    site_type: forum
     extractor: scrapling
     language: hr
-    tags: [voc, seed, public]
+    tags: [voc, public, forum, owner, automotive]
     public_access: true
-    compliance_notes: Replace scaffold seed with verified public Croatian discussion sources before live crawling.
-    notes: Country-pack placeholder aligned to the news batch structure.
+    compliance_notes: Limit collection to public thread pages and skip profiles or any account-only areas.
+    notes: Good base for owner-reported problems, maintenance questions, and buying advice.
+  - source_code: hr_revijahak_comments
+    site_name: Revija HAK
+    site_url: https://revijahak.hr/
+    site_type: media_comments
+    extractor: scrapling
+    language: hr
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Focus on public article pages with visible discussion or consumer reaction.
+    notes: Adds mainstream Croatian owner and buyer reactions to tests and policy news.
+  - source_code: hr_autoportal_comments
+    site_name: Autoportal
+    site_url: https://autoportal.hr/
+    site_type: media_comments
+    extractor: scrapling
+    language: hr
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Restrict crawling to public editorial and review pages only.
+    notes: Useful for additional local market reaction and product-quality sentiment.

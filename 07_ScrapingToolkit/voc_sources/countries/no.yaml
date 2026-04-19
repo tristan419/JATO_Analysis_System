@@ -3,13 +3,33 @@ country_label: Norway / 挪威
 languages: ["no", en]
 taxonomy_profile: nordic_core
 sources:
-  - source_code: no_voc_public_seed
-    site_name: Norway public VOC seed
-    site_url: https://example.com/voc/no/public-seed
-    site_type: forum_seed
+  - source_code: no_elbilforum_community
+    site_name: Elbilforum
+    site_url: https://elbilforum.no/
+    site_type: ev_community
     extractor: scrapling
-    language: no
-    tags: [voc, seed, public]
+    language: "no"
+    tags: [voc, public, forum, ev, owner]
     public_access: true
-    compliance_notes: Replace scaffold seed with verified public Norwegian discussion sources before live crawling.
-    notes: Country-pack placeholder aligned to the news batch structure.
+    compliance_notes: Crawl public discussion threads only and avoid member-only content or profile pages.
+    notes: High-value source for EV ownership pain points, charging, software issues, and winter usage.
+  - source_code: no_bil24_comments
+    site_name: Bil24
+    site_url: https://bil24.no/
+    site_type: media_comments
+    extractor: scrapling
+    language: "no"
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Prefer public article pages with visible reader comments or reaction blocks.
+    notes: Good for market-facing reaction to new models, pricing, and ownership stories.
+  - source_code: no_motor_comments
+    site_name: Motor
+    site_url: https://www.motor.no/
+    site_type: consumer_media
+    extractor: scrapling
+    language: "no"
+    tags: [voc, public, consumer, media, automotive]
+    public_access: true
+    compliance_notes: Keep collection on public editorial and consumer-facing pages; do not target any account-only sections.
+    notes: Useful for owner complaints, consumer tests, and aftersales/service topics.
