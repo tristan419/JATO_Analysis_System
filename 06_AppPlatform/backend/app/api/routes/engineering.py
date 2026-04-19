@@ -10,6 +10,12 @@ from app.api.schemas import (
 )
 from app.core.security import require_min_role
 from app.db.session import get_db_session
+from app.services.engineering_normalization_service import (
+    list_config_base_variants,
+    list_config_market_feature_overrides,
+    list_config_market_variants,
+    normalize_config_project,
+)
 from app.services.engineering_service import (
     archive_config_project,
     create_config_project,
@@ -75,6 +81,57 @@ def get_config_variants(
     )
 
 
+@router.get("/base-variants")
+def get_config_base_variants(
+    project_id: UUID = Query(),
+    model: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("viewer")),
+) -> dict[str, object]:
+    return list_config_base_variants(session, project_id, model, limit)
+
+
+@router.get("/market-variants")
+def get_config_market_variants(
+    project_id: UUID = Query(),
+    base_variant_id: UUID | None = Query(default=None),
+    market_country: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("viewer")),
+) -> dict[str, object]:
+    return list_config_market_variants(
+        session,
+        project_id,
+        base_variant_id,
+        market_country,
+        limit,
+    )
+
+
+@router.get("/feature-overrides")
+def get_config_feature_overrides(
+    project_id: UUID = Query(),
+    base_variant_id: UUID | None = Query(default=None),
+    market_variant_id: UUID | None = Query(default=None),
+    market_country: str | None = Query(default=None),
+    feature_code: str | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=2000),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("viewer")),
+) -> dict[str, object]:
+    return list_config_market_feature_overrides(
+        session,
+        project_id,
+        base_variant_id,
+        market_variant_id,
+        market_country,
+        feature_code,
+        limit,
+    )
+
+
 @router.get("/imports/{config_import_batch_id}")
 def get_config_import_detail(
     config_import_batch_id: str,
@@ -132,6 +189,15 @@ def post_config_import(
             payload.model_dump(),
         )
     }
+
+
+@router.post("/{project_id}/normalize")
+def post_config_normalization(
+    project_id: str,
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {"item": normalize_config_project(session, project_id)}
 
 
 @router.patch("/{project_id}")

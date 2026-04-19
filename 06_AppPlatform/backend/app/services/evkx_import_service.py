@@ -485,6 +485,7 @@ def _ensure_source(
             f"&availabilityFilter=current&pricingCountry={quote_plus(pricing_country)}"
         ),
         source_type=EVKX_SOURCE_TYPE,
+        tier=2,
         extractor_name="evkx_catalog",
         extractor_version=EVKX_EXTRACTOR_VERSION,
         price_semantics=EVKX_PRICE_SEMANTICS,

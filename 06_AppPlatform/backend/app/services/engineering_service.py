@@ -18,6 +18,9 @@ from app.db.models import (
     ImportBatch,
 )
 from app.infra import engineering_repository as repo
+from app.services.engineering_normalization_service import (
+    rebuild_project_normalized_config,
+)
 
 
 DEFAULT_ENGINEERING_SHEET = "Data Export"
@@ -457,6 +460,7 @@ def _build_import_summary(
     deactivated_rows: int,
     column_mapping: dict[str, str],
     warnings: list[str],
+    normalization_summary: dict[str, object] | None = None,
     failure_detail: str | None = None,
 ) -> dict[str, object]:
     return {
@@ -472,6 +476,7 @@ def _build_import_summary(
         "warningCount": len(warnings),
         "warnings": warnings[:20],
         "columnMapping": column_mapping,
+        "normalization": normalization_summary,
         "failureDetail": failure_detail,
     }
 
@@ -843,6 +848,7 @@ def _persist_failed_config_import(
             deactivated_rows=0,
             column_mapping=column_mapping,
             warnings=warnings,
+            normalization_summary=None,
             failure_detail=failure_detail,
         )
     )
@@ -874,6 +880,7 @@ def run_config_import(
     deactivated_rows = 0
     warnings: list[str] = []
     column_mapping: dict[str, str] = {}
+    normalization_summary: dict[str, object] | None = None
 
     import_batch = ImportBatch(
         domain="engineering",
@@ -950,6 +957,10 @@ def run_config_import(
 
         repo.add_variants(session, variants)
         inserted_rows = len(variants)
+        normalization_summary = rebuild_project_normalized_config(
+            session,
+            project,
+        )
 
         import_batch.import_status = "success"
         import_batch.row_count = inserted_rows
@@ -970,6 +981,7 @@ def run_config_import(
                 deactivated_rows=deactivated_rows,
                 column_mapping=column_mapping,
                 warnings=warnings,
+                normalization_summary=normalization_summary,
             )
         )
 
@@ -1069,4 +1081,5 @@ def run_config_import(
         "deactivatedRows": deactivated_rows,
         "columnMapping": column_mapping,
         "warnings": warnings[:20],
+        "normalization": normalization_summary,
     }
