@@ -52,6 +52,33 @@ def _clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", without_tags).strip()
 
 
+def _article_matches_feed(
+    *,
+    feed: NewsFeedConfig,
+    title: str,
+    summary: str,
+    url: str,
+) -> bool:
+    searchable = " ".join(
+        part.strip()
+        for part in (title, summary, url)
+        if part and part.strip()
+    ).casefold()
+    if not searchable:
+        return False
+    if feed.include_keywords and not any(
+        keyword.casefold() in searchable
+        for keyword in feed.include_keywords
+    ):
+        return False
+    if feed.exclude_keywords and any(
+        keyword.casefold() in searchable
+        for keyword in feed.exclude_keywords
+    ):
+        return False
+    return True
+
+
 def _normalize_published_at(value: str) -> str | None:
     raw = value.strip()
     if not raw:
@@ -73,7 +100,7 @@ def parse_feed_xml(
     feed: NewsFeedConfig,
     limit_per_feed: int = 5,
 ) -> list[NewsArticle]:
-    root = ET.fromstring(xml_text)
+    root = ET.fromstring(xml_text.lstrip())
     tag = _tag_name(root.tag)
     items: list[ET.Element]
     if tag == "rss":
@@ -99,6 +126,13 @@ def parse_feed_xml(
                 ("description", "summary", "content", "content:encoded"),
             )
         )
+        if not _article_matches_feed(
+            feed=feed,
+            title=title,
+            summary=summary,
+            url=url,
+        ):
+            continue
         published_at = _normalize_published_at(
             _first_child_text(
                 item,

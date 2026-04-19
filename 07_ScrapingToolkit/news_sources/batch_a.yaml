@@ -1,5 +1,5 @@
 batch_code: country_news_batch_a
-description: First batch country automotive news feeds for Nordics and CEE markets.
+description: First batch country automotive news feeds for Nordics and CEE markets with keyword-filtered multi-source inputs.
 countries:
   - country_code: SE
     country_label: Sweden / 瑞典
@@ -9,6 +9,23 @@ countries:
         feed_url: https://news.google.com/rss/search?q=Sweden+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
         language: en
         tags: [market, policy, automotive]
+      - source_code: se_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Sweden, Swedish]
+      - source_code: se_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Sweden, Swedish]
+      - source_code: se_carup_auto_market
+        publisher: Carup
+        feed_url: https://carup.se/feed/
+        language: sv
+        tags: [market, automotive, local]
   - country_code: FI
     country_label: Finland / 芬兰
     feeds:
@@ -17,6 +34,23 @@ countries:
         feed_url: https://news.google.com/rss/search?q=Finland+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
         language: en
         tags: [market, policy, automotive]
+      - source_code: fi_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Finland, Finnish]
+      - source_code: fi_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Finland, Finnish]
+      - source_code: fi_moottori_auto_market
+        publisher: Moottori
+        feed_url: https://moottori.fi/feed/
+        language: fi
+        tags: [market, automotive, local]
   - country_code: HU
     country_label: Hungary / 匈牙利
     feeds:
@@ -25,6 +59,23 @@ countries:
         feed_url: https://news.google.com/rss/search?q=Hungary+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
         language: en
         tags: [market, policy, automotive]
+      - source_code: hu_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Hungary, Hungarian]
+      - source_code: hu_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Hungary, Hungarian]
+      - source_code: hu_villanyautosok_ev_market
+        publisher: Villanyautosok
+        feed_url: https://villanyautosok.hu/feed/
+        language: hu
+        tags: [market, ev, local]
   - country_code: CZ
     country_label: Czech Republic / 捷克
     feeds:
@@ -33,6 +84,23 @@ countries:
         feed_url: https://news.google.com/rss/search?q=Czech+Republic+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
         language: en
         tags: [market, policy, automotive]
+      - source_code: cz_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Czech Republic, Czechia, Czech]
+      - source_code: cz_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Czech Republic, Czechia, Czech]
+      - source_code: cz_autorevue_auto_market
+        publisher: AutoRevue.cz
+        feed_url: https://www.autorevue.cz/rss
+        language: cs
+        tags: [market, automotive, local]
   - country_code: SK
     country_label: Slovakia / 斯洛伐克
     feeds:
@@ -41,6 +109,23 @@ countries:
         feed_url: https://news.google.com/rss/search?q=Slovakia+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
         language: en
         tags: [market, policy, automotive]
+      - source_code: sk_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Slovakia, Slovak]
+      - source_code: sk_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Slovakia, Slovak]
+      - source_code: sk_autozurnal_auto_market
+        publisher: Autozurnal
+        feed_url: https://www.autozurnal.com/feed/
+        language: sk
+        tags: [market, automotive, local]
   - country_code: HR
     country_label: Croatia / 克罗地亚
     feeds:
@@ -49,6 +134,23 @@ countries:
         feed_url: https://news.google.com/rss/search?q=Croatia+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
         language: en
         tags: [market, policy, automotive]
+      - source_code: hr_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Croatia, Croatian]
+      - source_code: hr_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Croatia, Croatian]
+      - source_code: hr_revijahak_auto_market
+        publisher: Revija HAK
+        feed_url: https://revijahak.hr/feed/
+        language: hr
+        tags: [market, automotive, local]
   - country_code: SI
     country_label: Slovenia / 斯洛文尼亚
     feeds:
@@ -57,6 +159,23 @@ countries:
         feed_url: https://news.google.com/rss/search?q=Slovenia+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
         language: en
         tags: [market, policy, automotive]
+      - source_code: si_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Slovenia, Slovenian]
+      - source_code: si_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Slovenia, Slovenian]
+      - source_code: si_avto_magazin_auto_market
+        publisher: Avto Magazin
+        feed_url: https://avto-magazin.metropolitan.si/feeds/latest/
+        language: sl
+        tags: [market, automotive, local]
   - country_code: AT
     country_label: Austria / 奥地利
     feeds:
@@ -65,6 +184,23 @@ countries:
         feed_url: https://news.google.com/rss/search?q=Austria+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
         language: en
         tags: [market, policy, automotive]
+      - source_code: at_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Austria, Austrian]
+      - source_code: at_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Austria, Austrian]
+      - source_code: at_automotive_industry_news
+        publisher: Automotive.at
+        feed_url: https://www.automotive.at/feed/
+        language: de
+        tags: [industry, automotive, local]
   - country_code: CH
     country_label: Switzerland / 瑞士
     feeds:
@@ -73,6 +209,23 @@ countries:
         feed_url: https://news.google.com/rss/search?q=Switzerland+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
         language: en
         tags: [market, policy, automotive]
+      - source_code: ch_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Switzerland, Swiss]
+      - source_code: ch_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Switzerland, Swiss]
+      - source_code: ch_auto_swiss_policy
+        publisher: auto.swiss
+        feed_url: https://www.auto.swiss/feed/
+        language: de
+        tags: [association, policy, automotive, local]
   - country_code: RO
     country_label: Romania / 罗马尼亚
     feeds:
@@ -81,6 +234,23 @@ countries:
         feed_url: https://news.google.com/rss/search?q=Romania+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
         language: en
         tags: [market, policy, automotive]
+      - source_code: ro_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Romania, Romanian]
+      - source_code: ro_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Romania, Romanian]
+      - source_code: ro_automarket_auto_market
+        publisher: Automarket
+        feed_url: http://www.automarket.ro/rss/
+        language: ro
+        tags: [market, automotive, local]
   - country_code: GR
     country_label: Greece / 希腊
     feeds:
@@ -89,7 +259,24 @@ countries:
         feed_url: https://news.google.com/rss/search?q=Greece+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
         language: en
         tags: [market, policy, automotive]
-  - country_code: NO
+      - source_code: gr_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Greece, Greek]
+      - source_code: gr_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Greece, Greek]
+      - source_code: gr_newsauto_auto_market
+        publisher: NewsAuto
+        feed_url: https://www.newsauto.gr/feed/
+        language: el
+        tags: [market, automotive, local]
+  - country_code: "NO"
     country_label: Norway / 挪威
     feeds:
       - source_code: no_google_auto_market
@@ -97,6 +284,23 @@ countries:
         feed_url: https://news.google.com/rss/search?q=Norway+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
         language: en
         tags: [market, policy, automotive]
+      - source_code: no_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Norway, Norwegian]
+      - source_code: no_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Norway, Norwegian]
+      - source_code: no_elbil_ev_market
+        publisher: Elbil
+        feed_url: https://elbil.no/feed/
+        language: nb
+        tags: [market, ev, local]
   - country_code: DK
     country_label: Denmark / 丹麦
     feeds:
@@ -105,3 +309,20 @@ countries:
         feed_url: https://news.google.com/rss/search?q=Denmark+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
         language: en
         tags: [market, policy, automotive]
+      - source_code: dk_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Denmark, Danish]
+      - source_code: dk_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Denmark, Danish]
+      - source_code: dk_boosted_auto_market
+        publisher: Boosted
+        feed_url: https://www.boosted.dk/feed/
+        language: da
+        tags: [market, automotive, local]

@@ -15,6 +15,8 @@ class NewsFeedConfig:
     feed_url: str
     language: str = "en"
     tags: tuple[str, ...] = ()
+    include_keywords: tuple[str, ...] = ()
+    exclude_keywords: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
