@@ -195,12 +195,54 @@ export interface CountryChatEvidenceTable {
   rows: string[][];
 }
 
+export interface CountryChatSourceCoverage {
+  requiredReady: number;
+  requiredTotal: number;
+  prefetchedCount: number;
+}
+
+export interface CountryChatTrustAssessment {
+  confidence: string;
+  evidenceSufficiency: string;
+  evidenceScore: number;
+  routeRationale: string;
+  missingFacts: string[];
+  sourceCoverage?: CountryChatSourceCoverage;
+}
+
+export interface CountryChatExecutionPlanSource {
+  key: string;
+  label?: string;
+  required?: boolean;
+  status?: string;
+  reason?: string;
+  toolName?: string;
+  query?: Record<string, unknown>;
+}
+
+export interface CountryChatExecutionPlanTool {
+  name: string;
+  arguments?: Record<string, unknown>;
+}
+
+export interface CountryChatExecutionPlan {
+  route?: string;
+  country?: string;
+  answerStrategy?: string;
+  orchestrationMode?: string;
+  sourcePlan?: CountryChatExecutionPlanSource[];
+  allowedToolNames?: string[];
+  prefetchedToolNames?: string[];
+  prefetchTools?: CountryChatExecutionPlanTool[];
+}
+
 export interface CountryChatGrounding {
   strategyLabel: string;
   summary: string;
   layers: CountryChatGroundingLayer[];
   keyFindings: string[];
   evidenceTables: CountryChatEvidenceTable[];
+  trust?: CountryChatTrustAssessment;
 }
 
 export interface CountryChatSnapshot {
@@ -280,6 +322,7 @@ export interface CountryChatResponse {
   chartLinks?: CountryChatChartLink[];
   renderHints?: CountryChatRenderHint[];
   extractedParams?: Record<string, unknown> | null;
+  executionPlan?: CountryChatExecutionPlan | null;
 }
 
 export interface CountryChatDeckResponse {

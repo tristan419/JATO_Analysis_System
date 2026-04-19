@@ -15,6 +15,7 @@ import { api } from "../api/client";
 import type {
   CountryChatChartLink,
   CountryChatGrounding,
+  CountryChatExecutionPlan,
   CountryChatMetadataResponse,
   CountryChatModelOption,
   CountryChatNewsOpsStatus,
@@ -57,6 +58,7 @@ export interface CountryChatTranscriptMessage extends CountryChatTurn {
   intentRoute?: string;
   renderHints?: CountryChatRenderHint[];
   extractedParams?: Record<string, unknown> | null;
+  executionPlan?: CountryChatExecutionPlan | null;
 }
 
 interface CountryChatSession {
@@ -553,6 +555,7 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
                   intentRoute: response.intentRoute,
                   renderHints: response.renderHints,
                   extractedParams: response.extractedParams,
+                  executionPlan: response.executionPlan,
                 },
               ],
             },

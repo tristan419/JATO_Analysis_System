@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { to: "/positioning-pricing", code: "08", label: "Pricing", sublabel: "定位定价" },
   { to: "/version-comparison", code: "09", label: "Compare", sublabel: "版型对比" },
   { to: "/customer-insights", code: "10", label: "Customer", sublabel: "看客户" },
+  { to: "/copilot", code: "11", label: "Copilot", sublabel: "国家助手" },
 ];
 
 export function Layout() {

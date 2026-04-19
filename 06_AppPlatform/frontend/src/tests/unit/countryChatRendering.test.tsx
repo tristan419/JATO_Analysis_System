@@ -54,6 +54,48 @@ function buildAssistantMessage(): CountryChatTranscriptMessage {
           rows: [["B"]],
         },
       ],
+      trust: {
+        confidence: "high",
+        evidenceSufficiency: "strong",
+        evidenceScore: 92,
+        routeRationale: "当前价格类精确查询必须命中 DB price state，不能只靠模型概述。",
+        missingFacts: [],
+        sourceCoverage: {
+          requiredReady: 3,
+          requiredTotal: 3,
+          prefetchedCount: 1,
+        },
+      },
+    },
+    executionPlan: {
+      orchestrationMode: "prefetch-first",
+      answerStrategy: "snapshot-first",
+      prefetchedToolNames: ["query_local_wiki"],
+      allowedToolNames: ["query_local_wiki", "query_news_wiki"],
+      sourcePlan: [
+        {
+          key: "snapshot-core",
+          label: "Country snapshot",
+          required: true,
+          status: "ready",
+          reason: "先锁国家、周期、基础销量结构。",
+        },
+        {
+          key: "db-price-state",
+          label: "DB current price state",
+          required: true,
+          status: "ready",
+          reason: "当前价格类精确查询必须命中 DB price state。",
+        },
+        {
+          key: "vehicle-wiki",
+          label: "Vehicle wiki facts",
+          required: false,
+          status: "prefetched",
+          toolName: "query_local_wiki",
+          reason: "点名车型的精确查询优先预取本地 wiki。",
+        },
+      ],
     },
   };
 }
@@ -68,6 +110,11 @@ describe("CountryChatGroundedAnswer", () => {
     expect(markup).toContain("直接回答");
     expect(markup).toContain("关键结论");
     expect(markup).toContain("思考链");
+    expect(markup).toContain("可信度");
+    expect(markup).toContain("执行计划");
+    expect(markup).toContain("高可信");
+    expect(markup).toContain("证据充分");
+    expect(markup).toContain("已预取 query_local_wiki");
     expect(markup).toContain("数据依据");
     expect(markup).toContain("数据来源层");
     expect(markup).toContain("瑞典");

@@ -34,6 +34,47 @@ function answerModeLabel(value: string | null | undefined): string {
   }
 }
 
+function confidenceLabel(value: string | null | undefined): string {
+  switch (value) {
+    case "high":
+      return "高可信";
+    case "medium":
+      return "中可信";
+    case "low":
+      return "低可信";
+    default:
+      return "可信度";
+  }
+}
+
+function sufficiencyLabel(value: string | null | undefined): string {
+  switch (value) {
+    case "strong":
+      return "证据充分";
+    case "partial":
+      return "证据部分充分";
+    case "thin":
+      return "证据偏薄";
+    default:
+      return "证据状态";
+  }
+}
+
+function sourceStatusLabel(value: string | null | undefined): string {
+  switch (value) {
+    case "ready":
+      return "已就绪";
+    case "prefetched":
+      return "已预取";
+    case "prefetch":
+      return "待预取";
+    case "planned":
+      return "待补充";
+    default:
+      return String(value ?? "").trim() || "未知";
+  }
+}
+
 export function CountryChatGroundedAnswer({
   message,
   compact = false,
@@ -63,6 +104,13 @@ export function CountryChatGroundedAnswer({
   });
   const keyFindings = grounding?.keyFindings ?? [];
   const layers = grounding?.layers ?? [];
+  const trust = grounding?.trust;
+  const executionPlan = message.executionPlan;
+  const executionSources = compact
+    ? executionPlan?.sourcePlan?.slice(0, 4) ?? []
+    : executionPlan?.sourcePlan ?? [];
+  const prefetchedToolNames = executionPlan?.prefetchedToolNames ?? [];
+  const allowedToolNames = executionPlan?.allowedToolNames ?? [];
   const showAnswerPath = isAssistant && (
     answerPath.focusTags.length > 0
     || answerPath.steps.length > 0
@@ -141,6 +189,102 @@ export function CountryChatGroundedAnswer({
               <li key={step}>{step}</li>
             ))}
           </ol>
+        </div>
+      ) : null}
+
+      {trust ? (
+        <div className="copilot-answer-section">
+          <div className="copilot-answer-section-head">
+            <strong>可信度</strong>
+            <span className="copilot-answer-section-kicker">Trust layer</span>
+          </div>
+          <div className="copilot-answer-path-head">
+            <span className="copilot-answer-path-pill">
+              {confidenceLabel(trust.confidence)}
+            </span>
+            <span className="copilot-answer-path-pill is-muted">
+              {sufficiencyLabel(trust.evidenceSufficiency)}
+            </span>
+            <span className="copilot-answer-path-pill is-soft">
+              证据分 {trust.evidenceScore}
+            </span>
+          </div>
+          {trust.sourceCoverage ? (
+            <div className="copilot-answer-note">
+              必需来源命中 {trust.sourceCoverage.requiredReady}/{trust.sourceCoverage.requiredTotal}
+              ，预取 {trust.sourceCoverage.prefetchedCount} 个来源。
+            </div>
+          ) : null}
+          {trust.routeRationale ? (
+            <p className="copilot-answer-note">{trust.routeRationale}</p>
+          ) : null}
+          {trust.missingFacts.length > 0 ? (
+            <ul className="copilot-trust-missing-list">
+              {trust.missingFacts.slice(0, compact ? 2 : 3).map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+
+      {executionSources.length > 0 ? (
+        <div className="copilot-answer-section">
+          <div className="copilot-answer-section-head">
+            <strong>执行计划</strong>
+            <span className="copilot-answer-section-kicker">Planner</span>
+          </div>
+          <div className="copilot-answer-path-head">
+            {executionPlan?.orchestrationMode ? (
+              <span className="copilot-answer-path-pill">
+                {executionPlan.orchestrationMode}
+              </span>
+            ) : null}
+            {executionPlan?.answerStrategy ? (
+              <span className="copilot-answer-path-pill is-muted">
+                {executionPlan.answerStrategy}
+              </span>
+            ) : null}
+            {prefetchedToolNames.length > 0 ? (
+              <span className="copilot-answer-path-pill is-soft">
+                已预取 {prefetchedToolNames.join(" / ")}
+              </span>
+            ) : null}
+          </div>
+          <div className="copilot-plan-grid">
+            {executionSources.map((source) => (
+              <div
+                key={`${source.key}-${source.status}-${source.label ?? ""}`}
+                className="copilot-plan-card"
+              >
+                <div className="copilot-plan-card-head">
+                  <strong>{source.label ?? source.key}</strong>
+                  <span className={`copilot-plan-status is-${source.status ?? "unknown"}`}>
+                    {sourceStatusLabel(source.status)}
+                  </span>
+                </div>
+                <div className="copilot-plan-card-meta">
+                  {source.required ? "必需来源" : "补充来源"}
+                  {source.toolName ? ` · ${source.toolName}` : ""}
+                </div>
+                {source.reason ? (
+                  <div className="copilot-plan-card-body">{source.reason}</div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+          {allowedToolNames.length > 0 ? (
+            <div className="copilot-answer-focus">
+              <span className="copilot-answer-focus-label">允许工具</span>
+              <div className="copilot-answer-focus-tags">
+                {allowedToolNames.map((toolName) => (
+                  <span key={toolName} className="copilot-answer-focus-tag">
+                    {toolName}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
