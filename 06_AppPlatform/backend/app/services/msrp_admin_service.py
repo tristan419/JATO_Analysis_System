@@ -25,7 +25,9 @@ from app.services.msrp_workflow_service import (
     create_scrape_batch_ingest,
     materialize_current_price_from_observation,
 )
+from app.services.msrp_link_service import upsert_jato_msrp_link
 from app.services.payload_serializers import (
+    jato_msrp_link_payload,
     observation_payload,
     scrape_batch_payload,
     source_payload,
@@ -65,6 +67,7 @@ def list_msrp_sources(
 
 
 def create_msrp_source(session: Session, data: dict) -> dict[str, object]:
+    data.setdefault("tier", 3)
     source = MsrpSource(**data)
     repo.add_source(session, source)
     _commit_or_conflict(session, "Source code already exists")
@@ -101,6 +104,106 @@ def deactivate_msrp_source(
     _commit_or_conflict(session, "Source code already exists")
     session.refresh(source)
     return source_payload(source)
+
+
+def list_jato_msrp_links(
+    session: Session,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    official_model: str | None,
+    is_active: bool | None,
+    limit: int,
+) -> dict[str, object]:
+    items = repo.list_jato_msrp_links(
+        session,
+        country,
+        brand,
+        jato_model,
+        official_model,
+        is_active,
+        limit,
+    )
+    return {
+        "rows": len(items),
+        "items": [jato_msrp_link_payload(item) for item in items],
+    }
+
+
+def create_jato_msrp_link(
+    session: Session,
+    data: dict[str, object],
+) -> dict[str, object]:
+    link = upsert_jato_msrp_link(
+        session,
+        country=_require_text(data.get("country"), "country"),
+        brand=_require_text(data.get("brand"), "brand"),
+        jato_model=_require_text(data.get("jato_model"), "jato_model"),
+        jato_trim=_require_text(data.get("jato_trim"), "jato_trim"),
+        jato_powertrain=_optional_text(data.get("jato_powertrain")),
+        official_model=_require_text(
+            data.get("official_model"),
+            "official_model",
+        ),
+        official_trim=_require_text(
+            data.get("official_trim"),
+            "official_trim",
+        ),
+        official_edition=_optional_text(data.get("official_edition")),
+        official_powertrain=_optional_text(data.get("official_powertrain")),
+        confidence=int(data.get("confidence") or 80),
+        link_source=_require_text(data.get("link_source"), "link_source"),
+        notes=_optional_text(data.get("notes")),
+    )
+    link.is_active = bool(data.get("is_active", True))
+    _commit_or_conflict(session, "Link already exists")
+    session.refresh(link)
+    return jato_msrp_link_payload(link)
+
+
+def update_jato_msrp_link(
+    session: Session,
+    link_id: str,
+    data: dict[str, object],
+) -> dict[str, object] | None:
+    link = repo.get_jato_msrp_link(session, UUID(link_id))
+    if link is None:
+        return None
+    for key, value in data.items():
+        if value is not None:
+            setattr(link, key, value)
+    link.updated_at_utc = datetime.now(timezone.utc)
+    if link.is_active:
+        sibling_links = repo.list_jato_msrp_links_for_key(
+            session,
+            link.country,
+            link.brand,
+            link.jato_model,
+            link.jato_trim,
+            link.jato_powertrain,
+            is_active=None,
+        )
+        for sibling in sibling_links:
+            if sibling.link_id != link.link_id:
+                sibling.is_active = False
+                sibling.updated_at_utc = link.updated_at_utc
+    _commit_or_conflict(session, "Link update conflicted with existing data")
+    session.refresh(link)
+    return jato_msrp_link_payload(link)
+
+
+def deactivate_jato_msrp_link(
+    session: Session,
+    link_id: str,
+) -> dict[str, object] | None:
+    link = repo.get_jato_msrp_link(session, UUID(link_id))
+    if link is None:
+        return None
+    link.is_active = False
+    link.updated_at_utc = datetime.now(timezone.utc)
+    _commit_or_conflict(session, "Link update conflicted with existing data")
+    session.refresh(link)
+    return jato_msrp_link_payload(link)
 
 
 def list_scrape_batches(
@@ -155,7 +258,10 @@ def list_observations(
 def _require_text(value: object | None, field_name: str) -> str:
     text = str(value or "").strip()
     if not text:
-        raise HTTPException(status_code=400, detail=f"{field_name} is required")
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} is required",
+        )
     return text
 
 
@@ -179,7 +285,10 @@ def _normalize_observation_mutation(
 
     observed_at_utc = data.get("observed_at_utc")
     if not isinstance(observed_at_utc, datetime):
-        raise HTTPException(status_code=400, detail="observed_at_utc is required")
+        raise HTTPException(
+            status_code=400,
+            detail="observed_at_utc is required",
+        )
 
     source_price = float(data["msrp_value"])
     source_currency = _require_text(data.get("currency"), "currency").upper()
@@ -227,7 +336,10 @@ def _normalize_observation_mutation(
             data.get("extraction_version"), "extraction_version"
         ),
         "match_confidence": float(data.get("match_confidence") or 0.0),
-        "match_status": _require_text(data.get("match_status"), "match_status"),
+        "match_status": _require_text(
+            data.get("match_status"),
+            "match_status",
+        ),
         "match_reason_json": data.get("match_reason_json"),
         "source_context_json": data.get("source_context_json"),
         "candidate_matches_json": data.get("candidate_matches_json"),

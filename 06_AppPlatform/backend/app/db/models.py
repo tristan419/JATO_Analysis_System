@@ -8,6 +8,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Integer,
     Index,
     Numeric,
     Text,
@@ -219,6 +220,7 @@ class MsrpSource(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("source_code", name="uq_sources_source_code"),
         Index("ix_msrp_sources_country_brand", "country", "brand"),
+        Index("ix_msrp_sources_tier", "tier"),
         Index("ix_msrp_sources_enabled", "enabled"),
         {"schema": "msrp"},
     )
@@ -233,6 +235,7 @@ class MsrpSource(TimestampMixin, Base):
     brand: Mapped[str] = mapped_column(Text, nullable=False)
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     source_type: Mapped[str] = mapped_column(Text, nullable=False)
+    tier: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     extractor_name: Mapped[str] = mapped_column(Text, nullable=False)
     extractor_version: Mapped[str] = mapped_column(Text, nullable=False)
     price_semantics: Mapped[str] = mapped_column(Text, nullable=False)
@@ -242,6 +245,83 @@ class MsrpSource(TimestampMixin, Base):
         default=False,
     )
     enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class JatoMsrpLink(TimestampMixin, Base):
+    __tablename__ = "jato_msrp_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "country",
+            "brand",
+            "jato_model",
+            "jato_trim",
+            "jato_powertrain",
+            "official_model",
+            "official_trim",
+            "official_edition",
+            "official_powertrain",
+            name="uq_jato_msrp_links_business_key",
+        ),
+        Index(
+            "ix_msrp_jato_msrp_links_jato_key",
+            "country",
+            "brand",
+            "jato_model",
+            "jato_powertrain",
+        ),
+        Index(
+            "ix_msrp_jato_msrp_links_official_key",
+            "country",
+            "brand",
+            "official_model",
+            "official_powertrain",
+        ),
+        Index("ix_msrp_jato_msrp_links_active", "is_active"),
+        {"schema": "msrp"},
+    )
+
+    link_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    country: Mapped[str] = mapped_column(Text, nullable=False)
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    jato_model: Mapped[str] = mapped_column(Text, nullable=False)
+    jato_trim: Mapped[str] = mapped_column(Text, nullable=False)
+    jato_powertrain: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="",
+    )
+    official_model: Mapped[str] = mapped_column(Text, nullable=False)
+    official_trim: Mapped[str] = mapped_column(Text, nullable=False)
+    official_edition: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="",
+    )
+    official_powertrain: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="",
+    )
+    confidence: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=80,
+    )
+    link_source: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="manual",
+    )
+    is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=True,

@@ -5,6 +5,7 @@ layer.  Import these helpers instead of redefining them per service.
 """
 from app.db.models import (
     CurrentPrice,
+    JatoMsrpLink,
     MatchOverride,
     MsrpObservation,
     MsrpSource,
@@ -229,6 +230,7 @@ def source_payload(
         "brand": source.brand,
         "sourceUrl": source.source_url,
         "sourceType": source.source_type,
+        "tier": int(source.tier if source.tier is not None else 3),
         "extractorName": source.extractor_name,
         "extractorVersion": source.extractor_version,
         "priceSemantics": source.price_semantics,
@@ -237,6 +239,29 @@ def source_payload(
         "notes": source.notes,
         "createdAtUtc": source.created_at_utc.isoformat(),
         "updatedAtUtc": source.updated_at_utc.isoformat(),
+    }
+
+
+def jato_msrp_link_payload(
+    link: JatoMsrpLink,
+) -> dict[str, object]:
+    return {
+        "linkId": str(link.link_id),
+        "country": to_display_country(link.country),
+        "brand": link.brand,
+        "jatoModel": link.jato_model,
+        "jatoTrim": link.jato_trim,
+        "jatoPowertrain": _optional_text(link.jato_powertrain),
+        "officialModel": link.official_model,
+        "officialTrim": link.official_trim,
+        "officialEdition": _optional_text(link.official_edition),
+        "officialPowertrain": _optional_text(link.official_powertrain),
+        "confidence": int(link.confidence),
+        "linkSource": link.link_source,
+        "isActive": bool(link.is_active),
+        "notes": link.notes,
+        "createdAtUtc": link.created_at_utc.isoformat(),
+        "updatedAtUtc": link.updated_at_utc.isoformat(),
     }
 
 

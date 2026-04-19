@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.api.routes import engineering, msrp, review
+from app.api.routes import engineering, msrp, msrp_links, review
 from app.db.session import get_db_session
 from app.main import app
 
@@ -67,5 +67,25 @@ def test_delete_match_override_route_returns_deleted_item(monkeypatch) -> None:
         response = client.delete("/v1/review/overrides/override-1", headers=_headers())
         assert response.status_code == 200
         assert response.json()["item"]["overrideId"] == "override-1"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_delete_jato_msrp_link_route_returns_deactivated_item(monkeypatch) -> None:
+    monkeypatch.setattr(
+        msrp_links,
+        "deactivate_jato_msrp_link",
+        lambda session, link_id: {
+            "linkId": link_id,
+            "isActive": False,
+        },
+    )
+    app.dependency_overrides[get_db_session] = lambda: None
+    try:
+        client = TestClient(app)
+        response = client.delete("/v1/msrp/links/link-1", headers=_headers())
+        assert response.status_code == 200
+        assert response.json()["item"]["linkId"] == "link-1"
+        assert response.json()["item"]["isActive"] is False
     finally:
         app.dependency_overrides.clear()

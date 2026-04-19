@@ -11,6 +11,7 @@ from app.api.routes.market_scan import router as market_scan_router
 from app.api.routes.metadata import router as metadata_router
 from app.api.routes.msrp_monthly_update import router as msrp_monthly_update_router
 from app.api.routes.msrp import router as msrp_router
+from app.api.routes.msrp_links import router as msrp_links_router
 from app.api.routes.msrp_workflow import router as msrp_workflow_router
 from app.api.routes.platform_db import router as platform_db_router
 from app.api.routes.review import router as review_router
@@ -37,6 +38,7 @@ app.include_router(data_management_router, prefix=API_PREFIX)
 app.include_router(platform_db_router, prefix=API_PREFIX)
 app.include_router(engineering_router, prefix=API_PREFIX)
 app.include_router(msrp_router, prefix=API_PREFIX)
+app.include_router(msrp_links_router, prefix=API_PREFIX)
 app.include_router(msrp_workflow_router, prefix=API_PREFIX)
 app.include_router(msrp_monthly_update_router, prefix=API_PREFIX)
 app.include_router(review_router, prefix=API_PREFIX)

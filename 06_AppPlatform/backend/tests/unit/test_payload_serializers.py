@@ -369,11 +369,55 @@ def test_source_payload_contract() -> None:
     assert payload["country"] == "Germany"
     assert payload["brand"] == "BMW"
     assert payload["sourceType"] == "official_configurator"
+    assert payload["tier"] == 3
     assert payload["extractorName"] == "bmw_de_extractor"
     assert payload["extractorVersion"] == "v2"
     assert payload["priceSemantics"] == "msrp_incl_vat"
     assert payload["requiresLocation"] is False
     assert payload["enabled"] is True
+    assert payload["createdAtUtc"] == now.isoformat()
+    assert payload["updatedAtUtc"] == now.isoformat()
+
+
+def test_jato_msrp_link_payload_contract() -> None:
+    from app.db.models import JatoMsrpLink
+    from app.services.payload_serializers import jato_msrp_link_payload
+
+    now = datetime(2026, 4, 12, 10, 0, tzinfo=timezone.utc)
+    link = JatoMsrpLink(
+        link_id=uuid4(),
+        country="德国",
+        brand="BMW",
+        jato_model="X5",
+        jato_trim="xDrive40i",
+        jato_powertrain="PHEV",
+        official_model="X5",
+        official_trim="xDrive40i M Sport",
+        official_edition="Launch Edition",
+        official_powertrain="Plug-in Hybrid",
+        confidence=96,
+        link_source="review_decision",
+        is_active=True,
+        notes="Naming mismatch approved by reviewer.",
+        created_at_utc=now,
+        updated_at_utc=now,
+    )
+    payload = jato_msrp_link_payload(link)
+
+    assert "linkId" in payload
+    assert payload["country"] == "Germany"
+    assert payload["brand"] == "BMW"
+    assert payload["jatoModel"] == "X5"
+    assert payload["jatoTrim"] == "xDrive40i"
+    assert payload["jatoPowertrain"] == "PHEV"
+    assert payload["officialModel"] == "X5"
+    assert payload["officialTrim"] == "xDrive40i M Sport"
+    assert payload["officialEdition"] == "Launch Edition"
+    assert payload["officialPowertrain"] == "Plug-in Hybrid"
+    assert payload["confidence"] == 96
+    assert payload["linkSource"] == "review_decision"
+    assert payload["isActive"] is True
+    assert payload["notes"] == "Naming mismatch approved by reviewer."
     assert payload["createdAtUtc"] == now.isoformat()
     assert payload["updatedAtUtc"] == now.isoformat()
 

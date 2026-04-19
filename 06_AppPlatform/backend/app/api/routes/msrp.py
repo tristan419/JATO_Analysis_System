@@ -3,11 +3,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.api.msrp_schemas import (
+    MsrpSourceCreate,
+    MsrpSourcePatch,
+)
 from app.api.schemas import (
     MsrpObservationCreate,
     MsrpObservationPatch,
-    MsrpSourceCreate,
-    MsrpSourcePatch,
 )
 from app.core.security import require_min_role
 from app.db.session import get_db_session

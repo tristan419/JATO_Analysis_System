@@ -1,6 +1,7 @@
 from sqlalchemy import (
     Select,
     and_,
+    case,
     distinct,
     func,
     inspect,
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import (
     CurrentPrice,
+    JatoMsrpLink,
     MsrpObservation,
     MsrpSource,
     PriceHistory,
@@ -47,6 +49,7 @@ def list_sources(
     if enabled is not None:
         stmt = stmt.where(MsrpSource.enabled == enabled)
     stmt = stmt.order_by(
+        MsrpSource.tier.asc(),
         MsrpSource.updated_at_utc.desc(),
         MsrpSource.source_code.asc(),
     ).limit(max(1, min(int(limit), 200)))
@@ -82,6 +85,117 @@ def list_sources_by_ids(
 def add_source(session: Session, source: MsrpSource) -> MsrpSource:
     session.add(source)
     return source
+
+
+def list_jato_msrp_links(
+    session: Session,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    official_model: str | None,
+    is_active: bool | None,
+    limit: int,
+) -> list[JatoMsrpLink]:
+    stmt: Select[tuple[JatoMsrpLink]] = select(JatoMsrpLink)
+    if country:
+        stmt = stmt.where(
+            func.lower(JatoMsrpLink.country).in_(country_filter_aliases(country))
+        )
+    if brand:
+        stmt = stmt.where(func.lower(JatoMsrpLink.brand).contains(brand.strip().lower()))
+    if jato_model:
+        stmt = stmt.where(
+            func.lower(JatoMsrpLink.jato_model).contains(jato_model.strip().lower())
+        )
+    if official_model:
+        stmt = stmt.where(
+            func.lower(JatoMsrpLink.official_model).contains(
+                official_model.strip().lower()
+            )
+        )
+    if is_active is not None:
+        stmt = stmt.where(JatoMsrpLink.is_active == is_active)
+    stmt = stmt.order_by(
+        JatoMsrpLink.is_active.desc(),
+        JatoMsrpLink.confidence.desc(),
+        JatoMsrpLink.updated_at_utc.desc(),
+    ).limit(max(1, min(int(limit), 500)))
+    return session.execute(stmt).scalars().all()
+
+
+def get_jato_msrp_link(
+    session: Session,
+    link_id: object,
+) -> JatoMsrpLink | None:
+    return session.get(JatoMsrpLink, link_id)
+
+
+def add_jato_msrp_link(
+    session: Session,
+    link: JatoMsrpLink,
+) -> JatoMsrpLink:
+    session.add(link)
+    return link
+
+
+def list_jato_msrp_links_for_key(
+    session: Session,
+    country: str,
+    brand: str,
+    jato_model: str,
+    jato_trim: str,
+    jato_powertrain: str | None,
+    *,
+    is_active: bool | None = None,
+) -> list[JatoMsrpLink]:
+    normalized_powertrain = _normalize_powertrain(jato_powertrain)
+    stmt: Select[tuple[JatoMsrpLink]] = select(JatoMsrpLink).where(
+        JatoMsrpLink.country == country,
+        JatoMsrpLink.brand == brand,
+        JatoMsrpLink.jato_model == jato_model,
+        JatoMsrpLink.jato_trim == jato_trim,
+    )
+    if normalized_powertrain:
+        stmt = stmt.where(
+            JatoMsrpLink.jato_powertrain.in_([normalized_powertrain, ""])
+        ).order_by(
+            case(
+                (JatoMsrpLink.jato_powertrain == normalized_powertrain, 0),
+                else_=1,
+            ),
+            JatoMsrpLink.is_active.desc(),
+            JatoMsrpLink.confidence.desc(),
+            JatoMsrpLink.updated_at_utc.desc(),
+        )
+    else:
+        stmt = stmt.where(JatoMsrpLink.jato_powertrain == "").order_by(
+            JatoMsrpLink.is_active.desc(),
+            JatoMsrpLink.confidence.desc(),
+            JatoMsrpLink.updated_at_utc.desc(),
+        )
+    if is_active is not None:
+        stmt = stmt.where(JatoMsrpLink.is_active == is_active)
+    return session.execute(stmt).scalars().all()
+
+
+def find_active_jato_msrp_link(
+    session: Session,
+    country: str,
+    brand: str,
+    jato_model: str,
+    jato_trim: str,
+    jato_powertrain: str | None,
+) -> JatoMsrpLink | None:
+    links = list_jato_msrp_links_for_key(
+        session,
+        country,
+        brand,
+        jato_model,
+        jato_trim,
+        jato_powertrain,
+        is_active=True,
+    )
+    return links[0] if links else None
 
 
 def get_scrape_batch(
