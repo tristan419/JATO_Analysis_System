@@ -1395,18 +1395,54 @@ class ScraplingExtractor(BaseExtractor):
         payload: Any,
         path: str,
     ) -> Any | None:
-        current = payload
-        for key in path.split("."):
+        parts = path.split(".")
+
+        def _walk(current: Any, index: int) -> Any | None:
+            if index >= len(parts):
+                return current
+            key = parts[index]
             if isinstance(current, dict):
-                current = current.get(key)
-            elif isinstance(current, list) and key.isdigit():
-                index = int(key)
-                if index >= len(current):
-                    return None
-                current = current[index]
-            else:
+                if key in current:
+                    next_value = current.get(key)
+                    if isinstance(next_value, list):
+                        inherited_fields = {
+                            fallback_key: current.get(fallback_key)
+                            for fallback_key in self._JSON_FALLBACK_KEYS
+                            if current.get(fallback_key) not in (None, "", [], {})
+                        }
+                        if inherited_fields:
+                            next_value = [
+                                (
+                                    {**inherited_fields, **item}
+                                    if isinstance(item, dict)
+                                    else item
+                                )
+                                for item in next_value
+                            ]
+                    return _walk(next_value, index + 1)
+                graph = current.get("@graph")
+                if isinstance(graph, list):
+                    return _walk(graph, index)
                 return None
-        return current
+            if isinstance(current, list):
+                if key.isdigit():
+                    resolved_index = int(key)
+                    if resolved_index >= len(current):
+                        return None
+                    return _walk(current[resolved_index], index + 1)
+                collected: list[Any] = []
+                for item in current:
+                    resolved = _walk(item, index)
+                    if resolved is None:
+                        continue
+                    if isinstance(resolved, list):
+                        collected.extend(resolved)
+                    else:
+                        collected.append(resolved)
+                return collected or None
+            return None
+
+        return _walk(payload, 0)
 
     def _json_type_set(self, payload: dict[str, Any]) -> set[str]:
         json_type = payload.get("@type", "")
@@ -1495,7 +1531,7 @@ class ScraplingExtractor(BaseExtractor):
                     self._collect_json_vehicle_candidates(
                         offer,
                         inherited=parent_fields,
-                        allow_untyped=allow_untyped,
+                        allow_untyped=(allow_untyped or typed_vehicle),
                     )
                 )
 

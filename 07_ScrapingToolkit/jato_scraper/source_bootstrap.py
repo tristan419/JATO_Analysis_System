@@ -56,12 +56,15 @@ COUNTRY_CODE_MAP = {
 class DraftOpportunity:
     country: str
     country_code: str
+    country_priority_rank: int
     country_model_rank: int
     brand: str
     brand_slug: str
     model: str
     model_slug: str
     sales_12m: float
+    candidate_model_count: int
+    top_models: tuple[str, ...]
     source_code: str
     file_name: str
     relative_path: str
@@ -182,6 +185,18 @@ def _sort_powertrains(values: set[str]) -> tuple[str, ...]:
     return tuple(sorted(values, key=lambda item: (order.get(item, 99), item)))
 
 
+def _unique_preserve_order(values: list[str]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        token = str(value).strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        ordered.append(token)
+    return tuple(ordered)
+
+
 def load_jato_powertrain_lookup(
     report: dict[str, Any],
 ) -> dict[tuple[str, str, str], tuple[str, ...]]:
@@ -280,7 +295,14 @@ def _build_model_rule_scaffold(
     opportunity: DraftOpportunity,
     max_rules: int = 5,
 ) -> list[dict[str, Any]]:
-    return []
+    return [
+        {
+            "key": f"model_{_slugify_token(model)}",
+            "keyword": model,
+            "jato_model": model,
+        }
+        for model in opportunity.top_models[: max(1, max_rules)]
+    ]
 
 
 def load_candidate_scope_report(
@@ -308,11 +330,16 @@ def rank_source_draft_opportunities(
 ) -> list[DraftOpportunity]:
     del rollout_batch_size
 
-    ranked_rows: list[dict[str, Any]] = []
-    for country_summary in report.get("country_summaries", []):
+    grouped_rows: dict[tuple[str, str], dict[str, Any]] = {}
+    country_order: dict[str, int] = {}
+    for country_index, country_summary in enumerate(
+        report.get("country_summaries", []),
+        start=1,
+    ):
         country = str(country_summary.get("country") or "").strip()
         if not country:
             continue
+        country_order.setdefault(country, country_index)
         country_code = COUNTRY_CODE_MAP.get(country)
         if not country_code:
             raise KeyError(f"Missing country code mapping for {country!r}")
@@ -325,67 +352,101 @@ def rank_source_draft_opportunities(
             if not brand or not model:
                 continue
             sales_12m = float(candidate.get("sales_12m") or 0.0)
-            ranked_rows.append(
+            row = grouped_rows.setdefault(
+                (country, brand),
                 {
                     "country": country,
                     "country_code": country_code,
-                    "country_model_rank": int(candidate.get("rank") or 0),
+                    "country_order": country_order[country],
+                    "country_model_rank": (
+                        int(candidate.get("rank") or 0) or 9999
+                    ),
                     "brand": brand,
                     "brand_slug": _slugify_brand(brand),
+                    "models": [],
+                    "sales_12m": 0.0,
+                },
+            )
+            row["country_model_rank"] = min(
+                int(row["country_model_rank"]),
+                int(candidate.get("rank") or 0) or 9999,
+            )
+            row["sales_12m"] = float(row["sales_12m"]) + sales_12m
+            row["models"].append(
+                {
                     "model": model,
                     "model_slug": _slugify_token(model),
                     "sales_12m": sales_12m,
+                    "rank": int(candidate.get("rank") or 0) or 9999,
                 }
             )
 
+    ranked_rows = list(grouped_rows.values())
     ranked_rows.sort(
         key=lambda row: (
-            row["country"],
+            row["country_order"],
             row["country_model_rank"],
             row["brand"],
-            row["model"],
         )
     )
 
-    if batch_size > 0:
-        ranked_rows = ranked_rows[:batch_size]
-
+    country_rank_counters: dict[str, int] = {}
     opportunities: list[DraftOpportunity] = []
     for row in ranked_rows:
+        country_rank_counters[row["country"]] = (
+            country_rank_counters.get(row["country"], 0) + 1
+        )
+        models = sorted(
+            row["models"],
+            key=lambda item: (
+                int(item["rank"]),
+                -float(item["sales_12m"]),
+                str(item["model"]),
+            ),
+        )
+        top_models = _unique_preserve_order(
+            [str(item["model"]) for item in models]
+        )
+        representative_model = top_models[0] if top_models else "MODEL"
+        model_slug = _slugify_token(representative_model)
         country_code = row["country_code"]
-        lookup_key = (
-            _normalize_lookup_value(row["country"]),
-            _normalize_lookup_value(row["brand"]),
-            _normalize_lookup_value(row["model"]),
-        )
-        jato_powertrains = tuple(
-            (jato_powertrains_by_key or {}).get(lookup_key, ())
-        )
+        powertrain_values: set[str] = set()
+        for model in top_models:
+            lookup_key = (
+                _normalize_lookup_value(row["country"]),
+                _normalize_lookup_value(row["brand"]),
+                _normalize_lookup_value(model),
+            )
+            powertrain_values.update(
+                (jato_powertrains_by_key or {}).get(lookup_key, ())
+            )
         file_name = (
-            f"{row['country_model_rank']:02d}_{row['brand_slug']}_"
-            f"{row['model_slug']}_"
-            f"{country_code}.yaml"
+            f"{country_rank_counters[row['country']]:02d}_"
+            f"{row['brand_slug']}_{country_code}.yaml"
         )
-        source_code = (
-            f"{row['brand_slug']}_{row['model_slug']}_"
-            f"{country_code}_draft_scrapling"
-        )
+        source_code = f"{row['brand_slug']}_{country_code}_draft_scrapling"
         opportunities.append(
             DraftOpportunity(
                 country=row["country"],
                 country_code=country_code,
+                country_priority_rank=country_rank_counters[row["country"]],
                 country_model_rank=row["country_model_rank"],
                 brand=row["brand"],
                 brand_slug=row["brand_slug"],
-                model=row["model"],
-                model_slug=row["model_slug"],
+                model=representative_model,
+                model_slug=model_slug,
                 sales_12m=row["sales_12m"],
+                candidate_model_count=len(top_models),
+                top_models=top_models,
                 source_code=source_code,
                 file_name=file_name,
                 relative_path=str(Path(row["country_code"]) / file_name),
-                jato_powertrains=jato_powertrains,
+                jato_powertrains=_sort_powertrains(powertrain_values),
             )
         )
+
+    if batch_size > 0:
+        opportunities = opportunities[:batch_size]
 
     return opportunities
 
@@ -394,7 +455,7 @@ def render_source_yaml_draft(opportunity: DraftOpportunity) -> str:
     placeholder_url = (
         "https://todo.invalid/"
         f"{opportunity.country_code}/{opportunity.brand_slug}/"
-        f"{opportunity.model_slug}"
+        f"{opportunity.brand_slug}"
     )
     model_rules = _build_model_rule_scaffold(opportunity)
     powertrain_rules = _build_powertrain_rule_scaffold(opportunity)
@@ -422,8 +483,8 @@ def render_source_yaml_draft(opportunity: DraftOpportunity) -> str:
             "default_currency": "TODO",
             "default_tax_included": True,
             "default_price_label": "TODO verify local MSRP label",
-            "fixed_model": opportunity.model,
-            "fixed_jato_model": opportunity.model,
+            "fixed_model": None,
+            "fixed_jato_model": None,
             "fixed_jato_powertrain": None,
             "model_rules": model_rules,
             "skip_if_model_unmapped": False,
@@ -492,36 +553,42 @@ def render_source_yaml_draft(opportunity: DraftOpportunity) -> str:
             "preferred_weekday": "monday",
         },
         "notes": (
-            "Draft scaffold generated from country×model top30 backlog. "
+            "Draft scaffold generated from country×brand top30 backlog. "
             "Replace source_url, profile.url, selectors, currency, "
-            "price label, and the single-model placeholders before "
+            "price label, and the brand-cluster placeholders before "
             "promoting to "
             "07_ScrapingToolkit/sources."
         ),
         "bootstrap_meta": {
+            "country_priority_rank": opportunity.country_priority_rank,
             "country_model_rank": opportunity.country_model_rank,
-            "suggested_scope_kind": "single_model",
+            "suggested_scope_kind": "brand_cluster",
+            "candidate_model_count": opportunity.candidate_model_count,
             "sales_12m": round(opportunity.sales_12m, 2),
-            "model": opportunity.model,
+            "top_models": list(opportunity.top_models),
         },
     }
     header_lines = [
         "# Draft MSRP source scaffold generated from candidate scope report.",
         f"# Country: {opportunity.country} ({opportunity.country_code})",
+        f"# Country queue rank: {opportunity.country_priority_rank}",
         f"# Country model rank: {opportunity.country_model_rank}",
         f"# Brand: {opportunity.brand}",
-        f"# Model: {opportunity.model}",
-        "# Suggested scope kind: single_model",
+        (
+            "# Candidate models: "
+            f"{', '.join(opportunity.top_models) or opportunity.model}"
+        ),
+        "# Suggested scope kind: brand_cluster",
         f"# Sales 12M: {opportunity.sales_12m:,.0f}",
         f"# Draft path: {opportunity.relative_path}",
         (
             "# TODO: Replace source_url/profile.url with the official "
-            "single-model MSRP or configurator page."
+            "brand landing page, model hub, or configurator entry page."
         ),
         (
-            "# TODO: Keep fixed_model/fixed_jato_model aligned with the exact "
-            "JATO model and only set fixed_jato_powertrain when the page is "
-            "powertrain-specific; otherwise rely on "
+            "# TODO: Prefer model_rules over fixed_model/fixed_jato_model for "
+            "brand-cluster drafts, and only set fixed_jato_powertrain when "
+            "the page is powertrain-specific; otherwise rely on "
             "structured_fields.powertrain_rules."
         ),
         (
@@ -565,7 +632,7 @@ def render_draft_batch_markdown(
             else "Report vehicle category: ALL"
         ),
         f"Draft count: {len(opportunities)}",
-        "Selection unit: country×model candidates from the report.",
+        "Selection unit: country×brand backlog groups from the report.",
         "",
     ]
 
@@ -612,9 +679,10 @@ def render_draft_batch_markdown(
             "top_n candidate ranking from the report."
         ),
         (
-            "- Every draft is emitted as single_model scope with fixed_model, "
-            "fixed_jato_model, fixed_jato_powertrain placeholders, JATO "
-            "powertrain rules, edition rules, and price_band_bonuses."
+            "- Every draft is emitted as brand_cluster scope with "
+            "model_rules, "
+            "optional fixed_jato_powertrain placeholders, JATO powertrain "
+            "rules, edition rules, and price_band_bonuses."
         ),
         (
             "- The current production candidate coverage report remains "
