@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
@@ -15,6 +15,7 @@ import {
 } from "../components/ExportPanel";
 import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { LoadingSurface } from "../components/LoadingSurface";
+import { SlideLayoutEditor } from "../components/SlideLayoutEditor";
 import {
   buildDrilldownInsight,
   buildOriginInsight,
@@ -23,7 +24,22 @@ import {
   type MarketInsightSnapshot,
 } from "../utils/marketScanInsights";
 import { SERIES_COLORS, fuelColor, originColor } from "../utils/colors";
+import {
+  DEFAULT_SLIDE_LAYOUT,
+  readStoredSlideLayouts,
+  writeStoredSlideLayouts,
+  type SlideLayoutSettings,
+} from "../utils/slideLayout";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
+import { SlideFitSummary } from "../components/SlideFitSummary";
+import {
+  buildDefaultMarketScanSlideLayouts,
+  buildMarketScanSlideFitAssessment,
+  resetMarketScanActiveSlideLayout,
+  toggleMarketScanFuelSelection,
+  toggleMarketScanSlideEditModeState,
+  updateMarketScanActiveSlideLayout,
+} from "../utils/marketScanPageState";
 import type {
   MarketScanBodyShareTrendItem,
   MarketScanDeckResponse,
@@ -79,6 +95,11 @@ const SUV_SEGMENT_SHARE_META: Record<(typeof SUV_SEGMENT_SHARE_ORDER)[number], {
   "SUV-A": { label: "SUV-A", color: "#84cc16" },
   "≥SUV-B": { label: "≥SUV-B", color: "#f59e0b" },
 };
+const MARKET_SCAN_SLIDE_LAYOUT_STORAGE_KEY = "market-scan";
+
+function isMarketScanPageKey(value: string | null): value is MarketScanPageKey {
+  return value !== null && TAB_ITEMS.some((item) => item.key === value);
+}
 
 function normalizeMarketScanRankingLimit(value: number | string | null | undefined): number {
   const numericValue = typeof value === "number" ? value : Number(value);
@@ -889,7 +910,10 @@ function buildBreakdownColorMap(
 
 const STACKED_FUEL_ORDER = ["ICE", "MHEV", "HEV", "PHEV", "BEV", "LPG"];
 
-function buildTotalRankingChartData(items: MarketScanRankingItem[]): Data[] {
+function buildTotalRankingChartData(
+  items: MarketScanRankingItem[],
+  showDataLabels = true,
+): Data[] {
   const ordered = [...items].reverse();
   const labels = ordered.map((item) => rankingItemLabel(item));
   const totalVolumeInSegment = items.reduce((sum, item) => sum + (item.volume || 0), 0) || 1;
@@ -914,23 +938,36 @@ function buildTotalRankingChartData(items: MarketScanRankingItem[]): Data[] {
     };
   });
 
-  traces.push({
-    type: "scatter",
-    mode: "text",
-    name: "Labels",
-    x: itemShares,
-    y: labels,
-    text: ordered.map(
-      (item) => `${marketShareLabel(item)} · ${formatVolume(item.volume)} · ${driveShareText(item)}`,
-    ),
-    textposition: "middle right",
-    textfont: { size: 10, color: "#0f172a" },
-    cliponaxis: false,
-    hoverinfo: "skip",
-    showlegend: false,
-  });
+  if (showDataLabels) {
+    traces.push({
+      type: "scatter",
+      mode: "text",
+      name: "Labels",
+      x: itemShares,
+      y: labels,
+      text: ordered.map(
+        (item) => `${marketShareLabel(item)} · ${formatVolume(item.volume)} · ${driveShareText(item)}`,
+      ),
+      textposition: "middle right",
+      textfont: { size: 10, color: "#0f172a" },
+      cliponaxis: false,
+      hoverinfo: "skip",
+      showlegend: false,
+    });
+  }
 
   return traces;
+}
+
+function normalizeMarketScanExportDimension(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(min, Math.round(value));
 }
 
 function totalRankingXAxisMax(items: MarketScanRankingItem[]): number {
@@ -1583,7 +1620,10 @@ function DrilldownSection({
           {page.totalRanking.items.length > 0 ? (
             <div className="market-scan-ranking-chart-shell">
               <PlotlyChart
-                data={applyMarketScanExportToTraces(buildTotalRankingChartData(page.totalRanking.items), exportSettings)}
+                data={applyMarketScanExportToTraces(
+                  buildTotalRankingChartData(page.totalRanking.items, showDataLabels),
+                  exportSettings,
+                )}
                 layout={applyMarketScanExportToLayout({
                   ...CHART_LAYOUT,
                   barmode: "stack",
@@ -1661,9 +1701,19 @@ export function MarketScanPage() {
   const [exportingSlide, setExportingSlide] = useState(false);
   const [exportSettings, setExportSettings] = useState<ExportSettings>({ ...DEFAULT_MARKET_SCAN_EXPORT });
   const [exportToolsOpen, setExportToolsOpen] = useState(false);
+  const [slideEditMode, setSlideEditMode] = useState(false);
+  const [slideLayouts, setSlideLayouts] = useState<Record<MarketScanPageKey, SlideLayoutSettings>>(
+    () => readStoredSlideLayouts(
+      MARKET_SCAN_SLIDE_LAYOUT_STORAGE_KEY,
+      buildDefaultMarketScanSlideLayouts(),
+    ),
+  );
   const [heroCollapsed, setHeroCollapsed] = useState(false);
   const [activePage, setActivePage] = useState<MarketScanPageKey>(
-    () => (searchParams.get("activePage") as MarketScanPageKey) || "overview",
+    () => {
+      const requestedPage = searchParams.get("activePage");
+      return isMarketScanPageKey(requestedPage) ? requestedPage : "overview";
+    },
   );
   const [selectedCountry, setSelectedCountry] = useState<string | null>(
     () => searchParams.get("country") || DEFAULT_MARKET_SCAN_COUNTRY,
@@ -1711,6 +1761,10 @@ export function MarketScanPage() {
   useEffect(() => {
     preloadPlotlyChartRuntime().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    writeStoredSlideLayouts(MARKET_SCAN_SLIDE_LAYOUT_STORAGE_KEY, slideLayouts);
+  }, [slideLayouts]);
 
   useEffect(() => {
     const requestId = ++requestRef.current;
@@ -1788,21 +1842,64 @@ export function MarketScanPage() {
     ? selectedFuelTypes
     : (deck?.metadata.selectedFuelTypes ?? DEFAULT_FUEL_TYPES);
   const showDataLabels = exportSettings.dataLabelMode !== "off";
-  const labelDigits = Math.max(0, Math.min(4, exportSettings.decimalPlaces || 1));
+  const labelDigits = Math.max(0, Math.min(4, exportSettings.decimalPlaces ?? 1));
   const heroMetrics = deck ? buildHeroMetrics(deck, activePage) : [];
   const narrative = deck ? pageNarrative(deck, activePage) : "按国家、月份与动力组合切换市场扫描页。";
   const activeTab = TAB_ITEMS.find((item) => item.key === activePage) ?? TAB_ITEMS[0];
-  const previewWidth = Math.max(960, exportSettings.exportWidth || 1920);
-  const previewHeight = Math.max(540, exportSettings.exportHeight || 1080);
+  const previewWidth = normalizeMarketScanExportDimension(exportSettings.exportWidth, 1920, 400);
+  const previewHeight = normalizeMarketScanExportDimension(exportSettings.exportHeight, 1080, 300);
   const slideTitle = exportSettings.chartTitle.trim() || deck?.metadata.labels.pageTitle || "Market Scan Deck";
+  const activeSlideLayout = slideLayouts[activePage] ?? DEFAULT_SLIDE_LAYOUT;
+  const slideFitAssessment = useMemo(
+    () => (deck
+      ? buildMarketScanSlideFitAssessment({
+          deck,
+          activePage,
+          heroMetricCount: heroMetrics.length,
+          narrative,
+          exportWidth: previewWidth,
+          exportHeight: previewHeight,
+        })
+      : null),
+    [activePage, deck, heroMetrics.length, narrative, previewHeight, previewWidth],
+  );
+  const slideFrameStyle: CSSProperties = {
+    width: exportingSlide ? `${previewWidth}px` : `min(100%, ${previewWidth}px)`,
+    height: exportingSlide ? `${previewHeight}px` : undefined,
+    aspectRatio: exportingSlide ? "auto" : `${previewWidth} / ${previewHeight}`,
+    minHeight: `${Math.min(previewHeight, 820)}px`,
+    background: exportSettings.paperBg,
+    "--market-scan-slide-pad-x": `${activeSlideLayout.paddingX}px`,
+    "--market-scan-slide-pad-y": `${activeSlideLayout.paddingY}px`,
+    "--market-scan-slide-frame-gap": `${activeSlideLayout.frameGap}px`,
+    "--market-scan-slide-head-gap": `${activeSlideLayout.headGap}px`,
+    "--market-scan-slide-body-gap": `${activeSlideLayout.bodyGap}px`,
+    "--market-scan-slide-content-gap": `${activeSlideLayout.contentGap}px`,
+  } as CSSProperties;
+
+  function handleToggleSlideEditMode() {
+    const next = toggleMarketScanSlideEditModeState({
+      slideEditMode,
+      exportToolsOpen,
+    });
+    setSlideEditMode(next.slideEditMode);
+    setExportToolsOpen(next.exportToolsOpen);
+  }
+
+  function handleSlideLayoutChange(patch: Partial<SlideLayoutSettings>) {
+    setSlideLayouts((current) =>
+      updateMarketScanActiveSlideLayout(current, activePage, patch),
+    );
+  }
+
+  function handleSlideLayoutReset() {
+    setSlideLayouts((current) =>
+      resetMarketScanActiveSlideLayout(current, activePage),
+    );
+  }
 
   function toggleFuel(fuel: string) {
-    setSelectedFuelTypes((current) => {
-      if (current.includes(fuel)) {
-        return current.length > 1 ? current.filter((item) => item !== fuel) : current;
-      }
-      return [...current, fuel];
-    });
+    setSelectedFuelTypes((current) => toggleMarketScanFuelSelection(current, fuel));
   }
 
   function renderActivePageContent(compact = false) {
@@ -1851,7 +1948,7 @@ export function MarketScanPage() {
           exportSettings={exportSettings}
           compact={compact}
           rankingLimit={rankingLimit}
-          onRankingLimitChange={setRankingLimit}
+          onRankingLimitChange={compact ? undefined : setRankingLimit}
         />
       );
     }
@@ -1864,7 +1961,7 @@ export function MarketScanPage() {
           exportSettings={exportSettings}
           compact={compact}
           rankingLimit={rankingLimit}
-          onRankingLimitChange={setRankingLimit}
+          onRankingLimitChange={compact ? undefined : setRankingLimit}
         />
       );
     }
@@ -1876,7 +1973,7 @@ export function MarketScanPage() {
         exportSettings={exportSettings}
         compact={compact}
         rankingLimit={rankingLimit}
-        onRankingLimitChange={setRankingLimit}
+        onRankingLimitChange={compact ? undefined : setRankingLimit}
       />
     );
   }
@@ -1888,8 +1985,8 @@ export function MarketScanPage() {
     try {
       setExportError("");
       setExportingSlide(true);
-      const exportWidth = Math.max(960, exportSettings.exportWidth || 1920);
-      const exportHeight = Math.max(540, exportSettings.exportHeight || 1080);
+      const exportWidth = normalizeMarketScanExportDimension(exportSettings.exportWidth, 1920, 400);
+      const exportHeight = normalizeMarketScanExportDimension(exportSettings.exportHeight, 1080, 300);
       if ("fonts" in document) {
         await document.fonts.ready;
       }
@@ -2131,17 +2228,30 @@ export function MarketScanPage() {
                 />
               </div>
             ) : null}
+            <div className="market-scan-slide-shell-actions">
+              <div className="market-scan-slide-shell-meta">
+                <span className={`market-scan-toolbar-chip slide-edit-shell-chip${slideEditMode ? " is-active" : ""}`}>
+                  {slideEditMode ? "Edit Mode" : "Preview"}
+                </span>
+                <span className="market-scan-slide-shell-note">
+                  {slideEditMode
+                    ? "正在调整固定画布版式参数。"
+                    : "默认只做预览，需要时再进入一键 edit。"}
+                </span>
+              </div>
+              <button
+                type="button"
+                className={`btn btn-sm ${slideEditMode ? "btn-secondary" : "btn-primary"}`}
+                onClick={handleToggleSlideEditMode}
+              >
+                {slideEditMode ? "返回 Preview" : "一键 Edit"}
+              </button>
+            </div>
             <div className="market-scan-slide-shell">
               <div
                 ref={slideRef}
-                className={`market-scan-slide-frame market-scan-slide-frame--${activePage}${exportingSlide ? " is-exporting" : ""}`}
-                style={{
-                  width: exportingSlide ? `${previewWidth}px` : `min(100%, ${previewWidth}px)`,
-                  height: exportingSlide ? `${previewHeight}px` : undefined,
-                  aspectRatio: exportingSlide ? "auto" : `${previewWidth} / ${previewHeight}`,
-                  minHeight: `${Math.min(previewHeight, 820)}px`,
-                  background: exportSettings.paperBg,
-                }}
+                className={`market-scan-slide-frame market-scan-slide-frame--${activePage}${exportingSlide ? " is-exporting" : ""}${slideEditMode && !exportingSlide ? " is-editing" : ""}`}
+                style={slideFrameStyle}
               >
                 <header className="market-scan-slide-head">
                   <div className="market-scan-slide-copy">
@@ -2189,14 +2299,31 @@ export function MarketScanPage() {
               {exportToolsOpen ? (
                 <div className="market-scan-toolbar market-scan-toolbar--bottom">
                   <div className="market-scan-toolbar-group market-scan-toolbar-group--settings">
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
-                      onClick={() => { void handleExportSlide(); }}
-                      disabled={exportingSlide}
-                    >
-                      {exportingSlide ? "正在导出 PNG..." : "导出当前页 PNG"}
-                    </button>
+                    <div className="market-scan-toolbar-actions">
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => { void handleExportSlide(); }}
+                        disabled={exportingSlide}
+                      >
+                        {exportingSlide ? "正在导出 PNG..." : "导出当前页 PNG"}
+                      </button>
+                      <button
+                        type="button"
+                        className={`btn btn-sm ${slideEditMode ? "btn-secondary" : "btn-ghost"}`}
+                        onClick={handleToggleSlideEditMode}
+                      >
+                        {slideEditMode ? "退出 Edit" : "一键 Edit"}
+                      </button>
+                    </div>
+                    {slideEditMode ? (
+                      <SlideLayoutEditor
+                        value={activeSlideLayout}
+                        onChange={handleSlideLayoutChange}
+                        onReset={handleSlideLayoutReset}
+                      />
+                    ) : null}
+                    {slideFitAssessment ? <SlideFitSummary assessment={slideFitAssessment} /> : null}
                     <ExportPanel
                       value={exportSettings}
                       onChange={setExportSettings}
@@ -2209,6 +2336,15 @@ export function MarketScanPage() {
                     <span className="market-scan-toolbar-chip">{exportSettings.exportWidth} x {exportSettings.exportHeight}</span>
                     <span className="market-scan-toolbar-chip">标签 {showDataLabels ? "On" : "Off"}</span>
                     <span className="market-scan-toolbar-chip">{activeTab.label}</span>
+                    {slideFitAssessment ? (
+                      <span className={`market-scan-toolbar-chip slide-fit-chip slide-fit-chip--${slideFitAssessment.status}`}>
+                        {slideFitAssessment.status === "safe"
+                          ? "Fit Safe"
+                          : slideFitAssessment.status === "compress"
+                            ? "Need Trim"
+                            : `Split ${slideFitAssessment.splitSlides}`}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
               ) : null}
