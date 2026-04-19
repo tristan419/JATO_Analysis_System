@@ -21,6 +21,7 @@ import {
 } from "../utils/dataManagement";
 
 type CrudEntityTab = "msrp-sources" | "engineering-projects" | "review-overrides";
+const DEFAULT_RECENT_ITEMS_VISIBLE = 6;
 
 interface SourceFilters {
   country: string;
@@ -156,13 +157,21 @@ function formatMetricValue(value: string | number): string {
   return typeof value === "number" ? value.toLocaleString() : value;
 }
 
-function renderDomainRecentItems(domain: DataManagementDomain) {
+function renderDomainRecentItems(
+  domain: DataManagementDomain,
+  expanded: boolean,
+  onToggle: (domainKey: string) => void,
+) {
   if (domain.recentItems.length === 0) {
     return <div className="crud-empty-state">暂无近期记录</div>;
   }
+  const visibleItems = expanded
+    ? domain.recentItems
+    : domain.recentItems.slice(0, DEFAULT_RECENT_ITEMS_VISIBLE);
+  const hiddenCount = Math.max(0, domain.recentItems.length - visibleItems.length);
   return (
     <div className="data-management-recent-list">
-      {domain.recentItems.map((item, index) => (
+      {visibleItems.map((item, index) => (
         <article key={`${domain.key}-${index}`} className="data-management-recent-item">
           <div>
             <strong>{item.label}</strong>
@@ -171,6 +180,15 @@ function renderDomainRecentItems(domain: DataManagementDomain) {
           <time>{formatDataManagementTimestamp(item.updatedAt)}</time>
         </article>
       ))}
+      {domain.recentItems.length > DEFAULT_RECENT_ITEMS_VISIBLE ? (
+        <button
+          type="button"
+          className="btn btn-sm btn-secondary"
+          onClick={() => onToggle(domain.key)}
+        >
+          {expanded ? "收起明细" : `查看全部 ${domain.recentItems.length} 项${hiddenCount > 0 ? `（还有 ${hiddenCount} 项）` : ""}`}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -180,6 +198,7 @@ export function DataManagementPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [expandedDomains, setExpandedDomains] = useState<Record<string, boolean>>({});
 
   const [crudTab, setCrudTab] = useState<CrudEntityTab>("msrp-sources");
   const [crudLoading, setCrudLoading] = useState(false);
@@ -188,6 +207,9 @@ export function DataManagementPage() {
   const [airflowBusyAction, setAirflowBusyAction] = useState<"start" | "stop" | null>(null);
   const [airflowError, setAirflowError] = useState("");
   const [airflowNotice, setAirflowNotice] = useState("");
+  const [vocSyncBusy, setVocSyncBusy] = useState(false);
+  const [vocSyncError, setVocSyncError] = useState("");
+  const [vocSyncNotice, setVocSyncNotice] = useState("");
 
   const [sourceFilters, setSourceFilters] = useState<SourceFilters>(defaultSourceFilters);
   const [projectFilters, setProjectFilters] = useState<ProjectFilters>(defaultProjectFilters);
@@ -220,6 +242,13 @@ export function DataManagementPage() {
       setLoading(false);
       setRefreshing(false);
     }
+  }
+
+  function toggleDomainRecentItems(domainKey: string) {
+    setExpandedDomains((current) => ({
+      ...current,
+      [domainKey]: !current[domainKey],
+    }));
   }
 
   async function loadCrudData(tab: CrudEntityTab = crudTab) {
@@ -550,6 +579,23 @@ export function DataManagementPage() {
     window.open(status.uiUrl, "_blank", "noopener,noreferrer");
   }
 
+  async function handleVocSync() {
+    setVocSyncBusy(true);
+    setVocSyncError("");
+    setVocSyncNotice("");
+    try {
+      const result = await api.syncVocRawToStore();
+      setVocSyncNotice(
+        `已同步 ${result.countryCount} 个国家 / ${result.sourceRunCount} 个 source runs / ${result.documentCount} 篇文档到 PostgreSQL。`,
+      );
+      await loadOverview({ silent: true });
+    } catch (err) {
+      setVocSyncError((err as Error).message);
+    } finally {
+      setVocSyncBusy(false);
+    }
+  }
+
   return (
     <section className="crud-shell data-management-shell">
       <header className="header-card dashboard-hero crud-hero">
@@ -711,7 +757,31 @@ export function DataManagementPage() {
                     </div>
                   </div>
                 ) : null}
-                {renderDomainRecentItems(domain)}
+                {domain.key === "voc" ? (
+                  <div className="data-management-airflow-panel">
+                    <p className="data-management-airflow-detail">
+                      将 `04_Processed_data/voc/**/raw/*.json` 同步到 PostgreSQL staging，
+                      供后续统计、过滤与 Assistant 消费。
+                    </p>
+                    {vocSyncError ? <div className="alert alert-error">{vocSyncError}</div> : null}
+                    {vocSyncNotice ? <div className="alert alert-success">{vocSyncNotice}</div> : null}
+                    <div className="data-management-inline-actions">
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        onClick={() => void handleVocSync()}
+                        disabled={!overview.database.connected || vocSyncBusy}
+                      >
+                        {vocSyncBusy ? "同步中…" : "同步 VOC 到 PostgreSQL"}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                {renderDomainRecentItems(
+                  domain,
+                  Boolean(expandedDomains[domain.key]),
+                  toggleDomainRecentItems,
+                )}
               </article>
             ))}
           </div>

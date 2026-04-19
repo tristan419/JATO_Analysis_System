@@ -152,6 +152,14 @@ export interface DataManagementAirflowActionResponse {
   status: DataManagementAirflowStatus;
 }
 
+export interface DataManagementVocSyncResponse {
+  root: string;
+  countryCount: number;
+  sourceRunCount: number;
+  documentCount: number;
+  errorCount: number;
+}
+
 export interface DataManagementOverviewResponse {
   generatedAt: string;
   database: DataManagementDatabaseStatus;

@@ -46,6 +46,7 @@ import type {
   DataManagementAirflowActionResponse,
   DataManagementAirflowStatus,
   DataManagementOverviewResponse,
+  DataManagementVocSyncResponse,
   MatchOverride,
   MsrpSource,
 } from "../types/dataManagement";
@@ -1051,6 +1052,10 @@ export const api = {
     }).then((response) => response.item),
   stopAirflow: () =>
     request<{ item: DataManagementAirflowActionResponse }>("/data-management/airflow/stop", {
+      method: "POST"
+    }).then((response) => response.item),
+  syncVocRawToStore: () =>
+    request<{ item: DataManagementVocSyncResponse }>("/data-management/voc/sync", {
       method: "POST"
     }).then((response) => response.item),
   patchItem: (id: string, payload: Partial<Omit<CrudItem, "id">>) =>

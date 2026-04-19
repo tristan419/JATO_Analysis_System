@@ -71,6 +71,32 @@ describe("data management api", () => {
     });
   });
 
+  it("returns voc sync payloads on success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            item: {
+              root: "04_Processed_data/voc",
+              countryCount: 8,
+              sourceRunCount: 24,
+              documentCount: 46,
+              errorCount: 1,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(api.syncVocRawToStore()).resolves.toMatchObject({
+      countryCount: 8,
+      sourceRunCount: 24,
+      documentCount: 46,
+    });
+  });
+
   it("preserves conflict detail for airflow stop errors", async () => {
     vi.stubGlobal(
       "fetch",
