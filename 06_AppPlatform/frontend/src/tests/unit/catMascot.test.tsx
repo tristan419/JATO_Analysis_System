@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { CatMascot, resolveCatMascotMode } from "../../components/CatMascot";
+import { AssistantMark } from "../../components/AssistantMark";
 
 describe("resolveCatMascotMode", () => {
   it("uses curious mode when the chat drawer is open", () => {
@@ -14,10 +15,20 @@ describe("resolveCatMascotMode", () => {
 });
 
 describe("CatMascot", () => {
-  it("renders the local SVG mascot without depending on Spline markup", () => {
+  it("renders the legacy local SVG mascot without depending on Spline markup", () => {
     const markup = renderToStaticMarkup(<CatMascot chatOpen size={64} />);
 
     expect(markup).toContain("cat-mascot--curious");
+    expect(markup).toContain("<svg");
+    expect(markup).not.toContain("spline");
+  });
+});
+
+describe("AssistantMark", () => {
+  it("renders the local SVG business mark without depending on Spline markup", () => {
+    const markup = renderToStaticMarkup(<AssistantMark active size={64} />);
+
+    expect(markup).toContain("assistant-mark is-active");
     expect(markup).toContain("<svg");
     expect(markup).not.toContain("spline");
   });

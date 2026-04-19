@@ -9,6 +9,7 @@ import {
   startTransition,
   type ReactNode,
 } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { api } from "../api/client";
 import type {
@@ -21,13 +22,16 @@ import type {
   CountryChatResponse,
   CountryChatSnapshot,
   CountryChatTurn,
-} from "../types";
+} from "../types/countryChat";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 import {
   availableChatModels,
+  getCountryChatHandoffSearch,
+  isKnownChatModelValue,
   buildCountryChatSessionKey,
   getChatModelLabel,
   isKnownCountryValue,
+  parseCountryChatHandoffSearch,
   resolveChatModelSelection,
   resolveCountrySelection,
 } from "./countryChatHelpers";
@@ -175,6 +179,8 @@ function mergeNewsPayloadIntoSessions(
 }
 
 export function CountryChatProvider({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const { selections } = useSharedFilterScope();
   const preferredCountry = Array.isArray(selections.country)
     ? selections.country[0] ?? ""
@@ -217,6 +223,7 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     setWidgetHeight(h);
   }, []);
   const userPickedRef = useRef(false);
+  const consumedHandoffSearchRef = useRef("");
   const [drafts, setDrafts] = useState<Record<string, string>>(
     () => cachedUi?.drafts ?? {},
   );
@@ -295,6 +302,70 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
       setSelectedCountryState(preferredCountry);
     }
   }, [metadata, preferredCountry, selectedCountry, sending]);
+
+  useEffect(() => {
+    const activeHandoffSearch = getCountryChatHandoffSearch(
+      location.pathname,
+      location.search,
+    );
+    if (!activeHandoffSearch) {
+      consumedHandoffSearchRef.current = "";
+      return;
+    }
+    if (!metadata) {
+      return;
+    }
+    if (consumedHandoffSearchRef.current === activeHandoffSearch) {
+      return;
+    }
+
+    const handoff = parseCountryChatHandoffSearch(activeHandoffSearch);
+    if (!handoff.country && !handoff.chatModel && !handoff.question) {
+      return;
+    }
+
+    consumedHandoffSearchRef.current = activeHandoffSearch;
+
+    const nextCountry = handoff.country && isKnownCountryValue(metadata, handoff.country)
+      ? handoff.country
+      : (selectedCountry || resolveCountrySelection({
+        metadata,
+        preferredCountry,
+        selectedCountry,
+        userPicked: userPickedRef.current,
+      }));
+    const nextChatModel = handoff.chatModel && isKnownChatModelValue(metadata, handoff.chatModel)
+      ? handoff.chatModel
+      : resolveChatModelSelection({
+        metadata,
+        selectedChatModel,
+      });
+
+    if (nextCountry && nextCountry !== selectedCountry) {
+      userPickedRef.current = true;
+      setSelectedCountryState(nextCountry);
+    }
+    if (nextChatModel && nextChatModel !== selectedChatModel) {
+      setSelectedChatModelState(nextChatModel);
+    }
+    if (handoff.question && nextCountry) {
+      const handoffSessionKey = buildCountryChatSessionKey(nextCountry, nextChatModel);
+      setDrafts((current) => ({
+        ...current,
+        [handoffSessionKey]: handoff.question,
+      }));
+    }
+    setError("");
+    void navigate({ pathname: location.pathname }, { replace: true });
+  }, [
+    location.pathname,
+    location.search,
+    metadata,
+    navigate,
+    preferredCountry,
+    selectedChatModel,
+    selectedCountry,
+  ]);
 
   useEffect(() => {
     setCachedPageValue(CHAT_SESSIONS_CACHE_KEY, sessions, CHAT_CACHE_TTL_MS);

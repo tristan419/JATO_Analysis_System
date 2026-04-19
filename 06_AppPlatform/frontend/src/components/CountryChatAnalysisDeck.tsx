@@ -7,15 +7,21 @@ import {
 import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
+import {
+  resolveCountryChatDeckScope,
+  type CountryChatDeckLens,
+} from "../contexts/countryChatHelpers";
 import type { CountryChatTranscriptMessage } from "../contexts/CountryChatContext";
+import type {
+  TimeSeriesPoint,
+} from "../types";
 import type {
   CountryChatAnalysisMeta,
   CountryChatDeckResponse,
   CountryChatMarketEvent,
   CountryChatNewsDigest,
   CountryChatSnapshot,
-  TimeSeriesPoint,
-} from "../types";
+} from "../types/countryChat";
 import { ptColor } from "../utils/colors";
 import {
   buildCategoryAxis,
@@ -985,10 +991,8 @@ function buildPositioningTarget(snapshot: CountryChatSnapshot): ScatterPoint | n
   };
 }
 
-type DeckLens = "all" | "workbench" | "market" | "trend" | "intelligence";
-
 interface DeckSectionDefinition {
-  id: DeckLens;
+  id: Exclude<CountryChatDeckLens, "all">;
   title: string;
   subtitle: string;
   cards: ReactElement[];
@@ -1033,6 +1037,7 @@ function countAvailableViews(snapshot: CountryChatSnapshot | null): number {
     labelKeys: ["Version", "Trim"],
     groupKeys: ["Powertrain", "Trim"],
   }).length > 0 ? 1 : 0;
+  count += rankItemsFromUnknown(snapshot.marketScanScope?.modelPerformance?.versionDistribution).length > 0 ? 1 : 0;
   count += stackedDatasetFromUnknown(snapshot.powertrainVsPrice, ["PriceBand"], ["Powertrain"]) ? 1 : 0;
   count += stackedDatasetFromUnknown(snapshot.segmentShareByLength, ["LengthBand"], ["Segment"]) ? 1 : 0;
   count += migrationDatasetFromUnknown(snapshot.priceMigration) ? 1 : 0;
@@ -1121,7 +1126,11 @@ export function CountryChatAnalysisDeck({
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [deck, setDeck] = useState<CountryChatDeckResponse | null>(null);
-  const [activeLens, setActiveLens] = useState<DeckLens>("all");
+  const deckScope = useMemo(
+    () => resolveCountryChatDeckScope(deck?.intentRoute ?? message.intentRoute),
+    [deck?.intentRoute, message.intentRoute],
+  );
+  const [activeLens, setActiveLens] = useState<CountryChatDeckLens>(deckScope.defaultLens);
   const [selectedYear, setSelectedYear] = useState<number | undefined>(() => {
     const value = toNumber(initialMeta.selectedYear);
     return value ?? undefined;
@@ -1139,11 +1148,12 @@ export function CountryChatAnalysisDeck({
     setExpanded(defaultExpanded);
     setDeck(null);
     setLoadError("");
-    setActiveLens("all");
+    setActiveLens(deckScope.defaultLens);
     setSelectedYear(toNumber(initialMeta.selectedYear) ?? undefined);
     setSelectedModel(toText(initialMeta.selectedModel));
     setModelTopN(clampModelTopN(toNumber(initialMeta.modelTopN)));
   }, [
+    deckScope.defaultLens,
     defaultExpanded,
     initialMeta.modelTopN,
     initialMeta.selectedModel,
@@ -1161,7 +1171,7 @@ export function CountryChatAnalysisDeck({
     api.countryChatDeck({
       country,
       question: message.question,
-      intents: message.intents,
+      intents: message.focusedIntents ?? message.intents,
       extracted_params: message.extractedParams ?? undefined,
       ...(selectedYear ? { selected_year: selectedYear } : {}),
       ...(selectedModel.trim() ? { selected_model: selectedModel.trim() } : {}),
@@ -1203,6 +1213,7 @@ export function CountryChatAnalysisDeck({
     country,
     expanded,
     message.extractedParams,
+    message.focusedIntents,
     message.intents,
     message.question,
     modelTopN,
@@ -1273,6 +1284,10 @@ export function CountryChatAnalysisDeck({
       labelKeys: ["Version", "Trim"],
       groupKeys: ["Powertrain", "Trim"],
     });
+    const scopedVersionMix = rankItemsFromUnknown(
+      snapshot.marketScanScope?.modelPerformance?.versionDistribution,
+    );
+    const scopedVersionAxis = toText(snapshot.marketScanScope?.modelPerformance?.versionAxis) || "version";
     const bubbleScatter = buildScatterDataset(snapshot.powertrainBubble, {
       xKeys: ["Length"],
       yKeys: ["MSRP"],
@@ -1308,6 +1323,9 @@ export function CountryChatAnalysisDeck({
     }
     if (modelVersionBubble.length === 0) {
       workbenchMissing.push("版本气泡");
+    }
+    if (snapshot.marketScanScope?.focusModel && scopedVersionMix.length === 0) {
+      workbenchMissing.push("Scoped 版本 / trim 分布");
     }
     if (priceScatter.length === 0) {
       workbenchMissing.push("价格 / 尺寸分布");
@@ -1397,6 +1415,16 @@ export function CountryChatAnalysisDeck({
           compact={compact}
           xLabel="Length"
           yLabel="MSRP"
+        />,
+      );
+    }
+    if (scopedVersionMix.length > 0) {
+      workbenchCards.push(
+        <RankBarCard
+          key="scoped-version-mix"
+          title={scopeModel ? `${scopeModel} ${scopedVersionAxis === "trim" ? "Trim" : "Version"} 分布` : "Scoped Version / Trim 分布"}
+          data={scopedVersionMix}
+          compact={compact}
         />,
       );
     }
@@ -1568,12 +1596,23 @@ export function CountryChatAnalysisDeck({
     ];
   }, [compact, deckMarketEvents, deckNewsDigest, scopeModel, snapshot]);
 
+  const scopedSections = useMemo(
+    () => sections.filter((section) => deckScope.visibleLenses.includes(section.id as CountryChatDeckLens)),
+    [deckScope.visibleLenses, sections],
+  );
+  const scopedViewCount = useMemo(
+    () => scopedSections.reduce((sum, section) => sum + section.cards.length, 0),
+    [scopedSections],
+  );
   const visibleSections = useMemo(() => {
-    if (activeLens === "all") {
-      return sections;
+    if (activeLens === "all" && deckScope.visibleLenses.includes("all")) {
+      return scopedSections;
     }
-    return sections.filter((section) => section.id === activeLens);
-  }, [activeLens, sections]);
+    const fallbackLens = deckScope.visibleLenses.includes(activeLens)
+      ? activeLens
+      : deckScope.defaultLens;
+    return scopedSections.filter((section) => section.id === fallbackLens);
+  }, [activeLens, deckScope.defaultLens, deckScope.visibleLenses, scopedSections]);
 
   if (!snapshot) {
     return null;
@@ -1586,7 +1625,7 @@ export function CountryChatAnalysisDeck({
         className={`copilot-analysis-toggle${expanded ? " is-open" : ""}`}
         onClick={() => setExpanded((current) => !current)}
       >
-        <span>{expanded ? "收起完整分析" : `展开完整分析 · ${Math.max(availableViews, 1)} 图`}</span>
+        <span>{expanded ? "收起完整分析" : `展开完整分析 · ${Math.max(scopedViewCount || availableViews, 1)} 图`}</span>
         <strong>{expanded ? "−" : "+"}</strong>
       </button>
       {expanded ? (
@@ -1686,12 +1725,12 @@ export function CountryChatAnalysisDeck({
                   { id: "market", label: "市场结构" },
                   { id: "intelligence", label: "市场情报" },
                   { id: "trend", label: "趋势监控" },
-                ].map((item) => (
+                ].filter((item) => deckScope.visibleLenses.includes(item.id as CountryChatDeckLens)).map((item) => (
                   <button
                     key={item.id}
                     type="button"
                     className={`copilot-analysis-lens${activeLens === item.id ? " is-active" : ""}`}
-                    onClick={() => setActiveLens(item.id as DeckLens)}
+                    onClick={() => setActiveLens(item.id as CountryChatDeckLens)}
                   >
                     {item.label}
                   </button>

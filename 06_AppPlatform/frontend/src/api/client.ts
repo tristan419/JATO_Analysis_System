@@ -5,12 +5,6 @@ import type {
   ConfigProject,
   ConfigVariant,
   CustomerInsightDeckResponse,
-  CountryChatDeckResponse,
-  CountryChatMetadataResponse,
-  CountryChatNewsOpsStatus,
-  CountryChatNewsRefreshResponse,
-  CountryChatResponse,
-  CountryChatTurn,
   DataManagementAirflowActionResponse,
   DataManagementAirflowStatus,
   DataManagementOverviewResponse,
@@ -53,6 +47,14 @@ import type {
   VersionComparisonDeckRequest,
   VersionComparisonDeckResponse,
 } from "../types";
+import type {
+  CountryChatDeckResponse,
+  CountryChatMetadataResponse,
+  CountryChatNewsOpsStatus,
+  CountryChatNewsRefreshResponse,
+  CountryChatResponse,
+  CountryChatTurn,
+} from "../types/countryChat";
 import type { FilterOptionsPayload } from "../utils/filterOptions";
 import {
   buildMonthlyUpdateUploadResumeKey,

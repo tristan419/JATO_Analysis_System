@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import { useCountryChat, useCountryChatOptional } from "../contexts/CountryChatContext";
-import { CatMascot } from "./CatMascot";
+import { isCountryChatMobileAccess } from "../contexts/countryChatHelpers";
+import { AssistantMark } from "./AssistantMark";
 
 type CountryChatContextValue = ReturnType<typeof useCountryChat>;
 import { CountryChatAnalysisDeck } from "./CountryChatAnalysisDeck";
@@ -329,6 +330,10 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
     return null;
   }
 
+  if (isCountryChatMobileAccess(window.innerWidth, window.matchMedia("(pointer: coarse)").matches, 768)) {
+    return null;
+  }
+
   const countryOptions = Array.isArray(metadata?.availableCountries)
     ? metadata.availableCountries
     : [];
@@ -346,7 +351,7 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
         onPointerUp={onPointerUp}
         aria-label="打开国家助手"
       >
-        <CatMascot chatOpen={false} size={FAB_SIZE - 8} />
+        <AssistantMark active={false} size={FAB_SIZE - 8} />
         {unreadCount > 0 ? (
           <span className="ccw-fab-badge">{unreadCount > 99 ? "99+" : unreadCount}</span>
         ) : null}
