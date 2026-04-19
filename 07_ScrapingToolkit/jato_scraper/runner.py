@@ -18,6 +18,7 @@ from jato_scraper import registry
 from jato_scraper.base import BaseExtractor, RawObservation
 from jato_scraper.config_loader import load_all_sources, load_source_file
 from jato_scraper.currency_converter import enrich_observations_with_eur
+from jato_scraper.msrp_batch_config import resolve_msrp_batch_source_refs
 from jato_scraper.validation import (
     BatchValidationReport,
     validate_observations,
@@ -37,6 +38,13 @@ def _dedupe_preserve_order(values: list[str]) -> list[str]:
         seen.add(value)
         ordered.append(value)
     return ordered
+
+
+def _normalize_country_filter(values: list[str] | None) -> set[str] | None:
+    if not values:
+        return None
+    normalized = {value.strip().upper() for value in values if value.strip()}
+    return normalized or None
 
 
 def _expand_source_ref(source_ref: str) -> list[str]:
@@ -366,6 +374,13 @@ def run_scrape(
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="JATO MSRP scraping toolkit")
     parser.add_argument("--sources", nargs="+", metavar="REF")
+    parser.add_argument("--batch-files", nargs="+", metavar="BATCH")
+    parser.add_argument(
+        "--countries",
+        nargs="*",
+        metavar="CC",
+        help="Optional country codes to keep when using --batch-files.",
+    )
     parser.add_argument("--all", action="store_true", dest="scrape_all")
     parser.add_argument("--api-base", default=DEFAULT_API_BASE)
     parser.add_argument(
@@ -382,15 +397,31 @@ def main(argv: list[str] | None = None) -> None:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
     )
+    selected_mode_count = sum(
+        bool(value)
+        for value in (args.scrape_all, args.sources, args.batch_files)
+    )
+    if selected_mode_count != 1:
+        parser.error(
+            "Specify exactly one of --sources REF [REF ...], "
+            "--batch-files BATCH [BATCH ...], or --all",
+        )
+        return
+    if args.countries and not args.batch_files:
+        parser.error("--countries requires --batch-files")
+        return
     if args.scrape_all:
         load_all_sources()
         source_refs = registry.list_registered()
+    elif args.batch_files:
+        source_refs = resolve_msrp_batch_source_refs(
+            args.batch_files,
+            country_filter=_normalize_country_filter(args.countries),
+        )
     elif args.sources:
         source_refs = args.sources
     else:
-        parser.error(
-            "Specify --sources REF [REF ...] or --all"
-        )
+        parser.error("Specify --sources REF [REF ...], --batch-files, or --all")
         return
     if not source_refs:
         log.warning("No extractors registered — nothing to scrape.")

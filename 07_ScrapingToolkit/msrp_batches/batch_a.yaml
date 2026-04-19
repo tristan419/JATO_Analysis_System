@@ -1,0 +1,37 @@
+batch_code: country_msrp_batch_a
+description: >
+  First MSRP country batch aligned with the existing country news/VOC batch_a
+  pack. Each country points at the current SUV top30 draft country directory.
+countries:
+  - country_code: SE
+    country_label: Sweden / 瑞典
+    source_path: ../source_drafts/suv_only_country_model_top30/se
+    notes: 29 source drafts in the current country pack.
+  - country_code: FI
+    country_label: Finland / 芬兰
+    source_path: ../source_drafts/suv_only_country_model_top30/fi
+    notes: 30 source drafts in the current country pack.
+  - country_code: "NO"
+    country_label: Norway / 挪威
+    source_path: ../source_drafts/suv_only_country_model_top30/no
+    notes: 30 source drafts in the current country pack.
+  - country_code: DK
+    country_label: Denmark / 丹麦
+    source_path: ../source_drafts/suv_only_country_model_top30/dk
+    notes: 30 source drafts in the current country pack.
+  - country_code: HU
+    country_label: Hungary / 匈牙利
+    source_path: ../source_drafts/suv_only_country_model_top30/hu
+    notes: 31 source drafts in the current country pack.
+  - country_code: HR
+    country_label: Croatia / 克罗地亚
+    source_path: ../source_drafts/suv_only_country_model_top30/hr
+    notes: 30 source drafts in the current country pack.
+  - country_code: AT
+    country_label: Austria / 奥地利
+    source_path: ../source_drafts/suv_only_country_model_top30/at
+    notes: 31 source drafts in the current country pack.
+  - country_code: CZ
+    country_label: Czech Republic / 捷克
+    source_path: ../source_drafts/suv_only_country_model_top30/cz
+    notes: 30 source drafts in the current country pack.

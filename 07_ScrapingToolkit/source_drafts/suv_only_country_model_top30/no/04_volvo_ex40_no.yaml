@@ -28,7 +28,7 @@ profile:
     model: ''
     trim: '[data-testid="title"]'
     price: '[data-testid="price"]'
-    exclude_if_selector: '[data-testid="selection-card-unavailable"]'
+    exclude_if_selector: '[data-testid="selection-card-unavailable"], [data-testid="price"][data-sources*="priceBreakdown.standard"], [data-testid="price"][data-sources*="relative"]'
   default_currency: NOK
   default_tax_included: true
   default_price_label: Veiledende pris

@@ -13,18 +13,20 @@
 source_code: volkswagen_id_4_no_draft_scrapling
 country: 挪威
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.no/no/modeller/id4.html
+source_url: https://www.volkswagen.no/no/bygg-din-volkswagen.html/__app/id4.app
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
-profile_preset: ../_shared/presets/volkswagen_model_page_scrapling.yaml
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
 profile:
-  url: https://www.volkswagen.no/no/modeller/id4.html
+  url: https://www.volkswagen.no/no/bygg-din-volkswagen.html/__app/id4.app
   default_currency: NOK
   default_tax_included: true
   default_price_label: Veiledende pris inkl. mva
   fixed_model: ID.4
   fixed_jato_model: ID.4
+  cookie_reject_selector: '#onlyNecessary'
+  cookie_reject_text: Kun nødvendige
   structured_fields:
     powertrain_rules:
     - key: powertrain_bev
@@ -40,8 +42,9 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (NO market). CSS selectors still require browser-based
-  inspection before promotion.
+notes: Volkswagen Norway ID.4 now points at the public configurator entry discovered
+  from the official Norway sitemap. The shared Playwright configurator preset is used
+  instead of the stale model overview page that returned 404 during batch dry-run.
 bootstrap_meta:
   country_model_rank: 2
   suggested_scope_kind: single_model
