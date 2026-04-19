@@ -159,66 +159,31 @@ def build_backlog_items(
         if _matches_country_filter(opportunity.country, country_filter)
         and _matches_brand_filter(opportunity.brand, brand_filter)
     ]
-
-    grouped: dict[tuple[str, str], dict[str, Any]] = {}
-    for opportunity in filtered:
-        group_key = (opportunity.country, opportunity.brand)
-        current = grouped.get(group_key)
-        if current is None:
-            current = {
-                "country": opportunity.country,
-                "countryCode": opportunity.country_code,
-                "brand": opportunity.brand,
-                "brandSlug": opportunity.brand_slug,
-                "countryModelRank": opportunity.country_model_rank,
-                "candidateModelCount": 0,
-                "sales12mSum": 0.0,
-                "topModels": [],
-            }
-            grouped[group_key] = current
-
-        current["countryModelRank"] = min(
-            int(current["countryModelRank"]),
-            int(opportunity.country_model_rank),
-        )
-        current["candidateModelCount"] = (
-            int(current["candidateModelCount"]) + 1
-        )
-        current["sales12mSum"] = (
-            float(current["sales12mSum"]) + float(opportunity.sales_12m)
-        )
-        if opportunity.model not in current["topModels"]:
-            current["topModels"].append(opportunity.model)
-
-    ranked_groups = sorted(
-        grouped.values(),
+    ranked = sorted(
+        filtered,
         key=lambda item: (
-            int(item["countryModelRank"]),
-            str(item["country"]),
-            str(item["brand"]),
+            int(item.country_model_rank),
+            str(item.country),
+            str(item.brand),
         ),
     )
 
-    items = []
-    for index, item in enumerate(ranked_groups, start=1):
-        brand_slug = str(item["brandSlug"])
-        country_code = str(item["countryCode"])
-        file_name = f"{index:02d}_{brand_slug}_{country_code}.yaml"
-        items.append(
-            {
-                "priorityRank": index,
-                "country": to_display_country(str(item["country"])),
-                "countryCode": country_code,
-                "brand": str(item["brand"]),
-                "brandSlug": brand_slug,
-                "candidateModelCount": int(item["candidateModelCount"]),
-                "sales12mSum": float(item["sales12mSum"]),
-                "topModels": list(item["topModels"]),
-                "sourceCode": f"{brand_slug}_{country_code}_draft_scrapling",
-                "fileName": file_name,
-                "relativePath": f"{country_code}/{file_name}",
-            }
-        )
+    items = [
+        {
+            "priorityRank": index,
+            "country": to_display_country(str(opportunity.country)),
+            "countryCode": opportunity.country_code,
+            "brand": opportunity.brand,
+            "brandSlug": opportunity.brand_slug,
+            "candidateModelCount": int(opportunity.candidate_model_count),
+            "sales12mSum": float(opportunity.sales_12m),
+            "topModels": list(opportunity.top_models),
+            "sourceCode": opportunity.source_code,
+            "fileName": opportunity.file_name,
+            "relativePath": opportunity.relative_path,
+        }
+        for index, opportunity in enumerate(ranked, start=1)
+    ]
     return _apply_limit(items, limit)
 
 
