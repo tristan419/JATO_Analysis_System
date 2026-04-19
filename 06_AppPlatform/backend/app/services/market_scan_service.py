@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -8,6 +9,12 @@ from typing import Any
 
 import pandas as pd
 
+try:
+    import duckdb
+except ImportError:  # pragma: no cover - optional runtime dependency
+    duckdb = None
+
+from app.db.session import get_engine
 from app.infra import parquet_repository as repo
 
 _DECK_CACHE_TTL_SECONDS = 300
@@ -93,6 +100,7 @@ TRIM_CANDIDATES = (
     "trim",
     "配置",
 )
+OVERLAY_KEY_PATTERN = re.compile(r"[^0-9a-z\u4e00-\u9fff]+", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -284,6 +292,691 @@ def _coerce_text(value: object) -> str:
     if value is None or pd.isna(value):
         return ""
     return str(value).strip()
+
+
+def _normalize_overlay_key(value: object) -> str:
+    text = _coerce_text(value).lower()
+    if not text:
+        return ""
+    return OVERLAY_KEY_PATTERN.sub("", text)
+
+
+def _country_overlay_candidates(selected_country: dict[str, str]) -> list[str]:
+    raw_candidates = [selected_country.get("value"), selected_country.get("label")]
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for raw_value in raw_candidates:
+        text = _coerce_text(raw_value)
+        if not text:
+            continue
+        parts = [text]
+        if "/" in text:
+            parts.extend(part.strip() for part in text.split("/") if part.strip())
+        for part in parts:
+            normalized = part.lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            candidates.append(part)
+    return candidates
+
+
+def _sql_quote_literal(value: str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _sql_quote_literal_list(values: list[str]) -> str:
+    return ", ".join(
+        _sql_quote_literal(value)
+        for value in values
+        if _coerce_text(value)
+    )
+
+
+def _normalize_duckdb_postgres_url(raw_url: str) -> str:
+    return (
+        str(raw_url)
+        .replace("postgresql+psycopg2://", "postgresql://")
+        .replace("postgresql+psycopg://", "postgresql://")
+        .replace("postgresql+asyncpg://", "postgresql://")
+        .replace("postgresql+aiopg://", "postgresql://")
+    )
+
+
+def _load_duckdb_postgres_extension(connection: Any) -> None:
+    attempts = (
+        ("LOAD postgres",),
+        ("LOAD postgres_scanner",),
+        ("INSTALL postgres", "LOAD postgres"),
+        ("INSTALL postgres_scanner", "LOAD postgres_scanner"),
+    )
+    last_error: Exception | None = None
+    for statements in attempts:
+        try:
+            for statement in statements:
+                connection.execute(statement)
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+    raise RuntimeError("DuckDB postgres extension is unavailable") from last_error
+
+
+def _build_positioning_current_price_candidates(price_frame: pd.DataFrame) -> pd.DataFrame:
+    if price_frame.empty:
+        return pd.DataFrame(
+            columns=[
+                "brand_norm",
+                "model_norm",
+                "trim_norm",
+                "powertrain_norm",
+                "current_msrp_value",
+                "currency",
+                "source_url",
+                "match_confidence",
+                "updated_at_utc",
+                "source_tier",
+                "source_code",
+                "source_type",
+                "match_variant",
+            ]
+        )
+
+    candidate_rows: list[dict[str, Any]] = []
+    for row in price_frame.to_dict("records"):
+        brand_norm = _normalize_overlay_key(row.get("brand"))
+        if not brand_norm:
+            continue
+        official_trim_parts = [
+            _coerce_text(row.get("official_trim")),
+            _coerce_text(row.get("official_edition")),
+        ]
+        official_trim = " ".join(part for part in official_trim_parts if part).strip()
+        for model_field, trim_field, powertrain_field, match_variant in (
+            ("jato_model", "jato_trim", "jato_powertrain", "jato"),
+            ("official_model", "__official_trim", "official_powertrain", "official"),
+        ):
+            normalized_trim_source = official_trim if trim_field == "__official_trim" else row.get(trim_field)
+            model_norm = _normalize_overlay_key(row.get(model_field))
+            if not model_norm:
+                continue
+            normalized_powertrain = _normalize_powertrain(row.get(powertrain_field))
+            candidate_rows.append(
+                {
+                    "brand_norm": brand_norm,
+                    "model_norm": model_norm,
+                    "trim_norm": _normalize_overlay_key(normalized_trim_source),
+                    "powertrain_norm": ""
+                    if normalized_powertrain == "OTHER"
+                    else _normalize_overlay_key(normalized_powertrain),
+                    "current_msrp_value": row.get("current_msrp_value"),
+                    "currency": _coerce_text(row.get("currency")),
+                    "source_url": _coerce_text(row.get("source_url")),
+                    "match_confidence": row.get("match_confidence"),
+                    "updated_at_utc": row.get("updated_at_utc"),
+                    "source_tier": row.get("source_tier"),
+                    "source_code": _coerce_text(row.get("source_code")),
+                    "source_type": _coerce_text(row.get("source_type")),
+                    "match_variant": match_variant,
+                }
+            )
+
+    if not candidate_rows:
+        return pd.DataFrame(
+            columns=[
+                "brand_norm",
+                "model_norm",
+                "trim_norm",
+                "powertrain_norm",
+                "current_msrp_value",
+                "currency",
+                "source_url",
+                "match_confidence",
+                "updated_at_utc",
+                "source_tier",
+                "source_code",
+                "source_type",
+                "match_variant",
+            ]
+        )
+
+    candidates = pd.DataFrame(candidate_rows)
+    candidates["current_msrp_value"] = pd.to_numeric(
+        candidates["current_msrp_value"],
+        errors="coerce",
+    ).fillna(0.0)
+    candidates["match_confidence"] = pd.to_numeric(
+        candidates["match_confidence"],
+        errors="coerce",
+    ).fillna(0.0)
+    candidates["updated_at_utc"] = pd.to_datetime(
+        candidates["updated_at_utc"],
+        errors="coerce",
+    )
+    candidates["source_tier"] = pd.to_numeric(
+        candidates["source_tier"],
+        errors="coerce",
+    ).fillna(3).astype(int)
+    candidates = candidates[candidates["current_msrp_value"] > 0].copy()
+    if candidates.empty:
+        return candidates
+    return candidates.drop_duplicates(
+        subset=[
+            "brand_norm",
+            "model_norm",
+            "trim_norm",
+            "powertrain_norm",
+            "current_msrp_value",
+            "source_url",
+            "source_code",
+            "match_variant",
+        ]
+    ).reset_index(drop=True)
+
+
+def _build_positioning_jato_link_candidates(link_frame: pd.DataFrame) -> pd.DataFrame:
+    if link_frame.empty:
+        return pd.DataFrame(
+            columns=[
+                "brand_norm",
+                "jato_model_norm",
+                "jato_trim_norm",
+                "jato_powertrain_norm",
+                "official_model_norm",
+                "official_trim_norm",
+                "official_powertrain_norm",
+                "confidence",
+                "link_source",
+            ]
+        )
+
+    rows: list[dict[str, Any]] = []
+    for row in link_frame.to_dict("records"):
+        brand_norm = _normalize_overlay_key(row.get("brand"))
+        jato_model_norm = _normalize_overlay_key(row.get("jato_model"))
+        official_model_norm = _normalize_overlay_key(row.get("official_model"))
+        if not brand_norm or not jato_model_norm or not official_model_norm:
+            continue
+        official_trim_parts = [
+            _coerce_text(row.get("official_trim")),
+            _coerce_text(row.get("official_edition")),
+        ]
+        jato_powertrain = _normalize_powertrain(row.get("jato_powertrain"))
+        official_powertrain = _normalize_powertrain(row.get("official_powertrain"))
+        rows.append(
+            {
+                "brand_norm": brand_norm,
+                "jato_model_norm": jato_model_norm,
+                "jato_trim_norm": _normalize_overlay_key(row.get("jato_trim")),
+                "jato_powertrain_norm": ""
+                if jato_powertrain == "OTHER"
+                else _normalize_overlay_key(jato_powertrain),
+                "official_model_norm": official_model_norm,
+                "official_trim_norm": _normalize_overlay_key(
+                    " ".join(part for part in official_trim_parts if part)
+                ),
+                "official_powertrain_norm": ""
+                if official_powertrain == "OTHER"
+                else _normalize_overlay_key(official_powertrain),
+                "confidence": row.get("confidence"),
+                "link_source": _coerce_text(row.get("link_source")),
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "brand_norm",
+                "jato_model_norm",
+                "jato_trim_norm",
+                "jato_powertrain_norm",
+                "official_model_norm",
+                "official_trim_norm",
+                "official_powertrain_norm",
+                "confidence",
+                "link_source",
+            ]
+        )
+
+    candidates = pd.DataFrame(rows)
+    candidates["confidence"] = pd.to_numeric(
+        candidates["confidence"],
+        errors="coerce",
+    ).fillna(0.0)
+    return candidates.drop_duplicates().reset_index(drop=True)
+
+
+def _load_positioning_overlay_candidates(
+    selected_country: dict[str, str],
+    frame: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    country_candidates = _country_overlay_candidates(selected_country)
+    if not country_candidates:
+        return pd.DataFrame(), pd.DataFrame(), {
+            "mode": "parquet-only",
+            "reason": "country-unresolved",
+        }
+
+    if duckdb is None:
+        return pd.DataFrame(), pd.DataFrame(), {
+            "mode": "parquet-only",
+            "reason": "duckdb-unavailable",
+        }
+
+    try:
+        engine = get_engine()
+    except Exception as exc:  # noqa: BLE001
+        return pd.DataFrame(), pd.DataFrame(), {
+            "mode": "parquet-only",
+            "reason": f"database-unavailable: {exc}",
+        }
+
+    brand_candidates = sorted(
+        {
+            _coerce_text(value)
+            for value in frame.get("__brand", pd.Series(dtype=str)).tolist()
+            if _coerce_text(value)
+        }
+    )
+    country_filter_sql = _sql_quote_literal_list(
+        [candidate.lower() for candidate in country_candidates]
+    )
+    brand_filter_sql = ""
+    if brand_candidates:
+        brand_filter_sql = (
+            f"AND cp.brand IN ({_sql_quote_literal_list(brand_candidates)})"
+        )
+
+    connection = None
+    try:
+        connection = duckdb.connect(database=":memory:")
+        _load_duckdb_postgres_extension(connection)
+        postgres_url = _normalize_duckdb_postgres_url(
+            engine.url.render_as_string(hide_password=False)
+        )
+        connection.execute(
+            f"ATTACH {_sql_quote_literal(postgres_url)} AS msrp_pg (TYPE POSTGRES, READ_ONLY)"
+        )
+        current_price_frame = connection.execute(
+            f"""
+            SELECT
+                cp.country AS country,
+                cp.brand AS brand,
+                cp.jato_model AS jato_model,
+                cp.jato_trim AS jato_trim,
+                cp.jato_powertrain AS jato_powertrain,
+                cp.official_model AS official_model,
+                cp.official_trim AS official_trim,
+                COALESCE(cp.official_edition, '') AS official_edition,
+                COALESCE(cp.official_powertrain, '') AS official_powertrain,
+                cp.current_msrp_value AS current_msrp_value,
+                cp.currency AS currency,
+                cp.match_confidence AS match_confidence,
+                cp.source_url AS source_url,
+                cp.updated_at_utc AS updated_at_utc,
+                COALESCE(src.tier, 3) AS source_tier,
+                COALESCE(src.source_code, '') AS source_code,
+                COALESCE(src.source_type, '') AS source_type
+            FROM msrp_pg.msrp.current_prices cp
+            LEFT JOIN msrp_pg.msrp.observations obs
+              ON obs.observation_id = cp.effective_observation_id
+            LEFT JOIN msrp_pg.msrp.sources src
+              ON src.source_id = obs.source_id
+            WHERE lower(cp.country) IN ({country_filter_sql})
+              {brand_filter_sql}
+            """
+        ).fetchdf()
+    except Exception as exc:  # noqa: BLE001
+        return pd.DataFrame(), pd.DataFrame(), {
+            "mode": "parquet-only",
+            "reason": f"duckdb-postgres-attach-failed: {exc}",
+        }
+
+    link_query_reason = None
+    try:
+        link_frame = connection.execute(
+            f"""
+            SELECT
+                country,
+                brand,
+                jato_model,
+                jato_trim,
+                jato_powertrain,
+                official_model,
+                official_trim,
+                official_edition,
+                official_powertrain,
+                confidence,
+                link_source
+            FROM msrp_pg.msrp.jato_msrp_links
+            WHERE is_active = true
+              AND lower(country) IN ({country_filter_sql})
+              {brand_filter_sql.replace('cp.brand', 'brand')}
+            """
+        ).fetchdf()
+    except Exception as exc:  # noqa: BLE001
+        link_frame = pd.DataFrame()
+        link_query_reason = f"link-query-failed: {exc}"
+    finally:
+        if connection is not None:
+            connection.close()
+
+    candidates = _build_positioning_current_price_candidates(current_price_frame)
+    link_candidates = _build_positioning_jato_link_candidates(link_frame)
+    meta = {
+        "mode": "duckdb-postgres-attach",
+        "candidateRows": int(len(candidates)),
+        "linkCandidateRows": int(len(link_candidates)),
+        "countryCandidates": country_candidates,
+        "brandCandidates": brand_candidates,
+    }
+    if link_query_reason:
+        meta["linkReason"] = link_query_reason
+    if candidates.empty:
+        meta["reason"] = "no-current-prices"
+        return pd.DataFrame(), link_candidates, meta
+    return candidates, link_candidates, meta
+
+
+def _apply_positioning_current_price_overlay(
+    frame: pd.DataFrame,
+    current_price_candidates: pd.DataFrame,
+    jato_link_candidates: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    if frame.empty:
+        return frame, {"mode": "parquet-only", "reason": "no-positioning-rows"}
+    if current_price_candidates.empty:
+        return frame, {"mode": "parquet-only", "reason": "no-current-price-candidates"}
+    if duckdb is None:
+        return frame, {"mode": "parquet-only", "reason": "duckdb-unavailable"}
+
+    working = frame.copy()
+    working["__row_id"] = range(len(working))
+    if "__trim" in working.columns:
+        working["__trim"] = working["__trim"].fillna("").astype(str).str.strip()
+    else:
+        working["__trim"] = ""
+    working["__brand_norm"] = working["__brand"].map(_normalize_overlay_key)
+    working["__model_norm"] = working["__model"].map(_normalize_overlay_key)
+    working["__trim_norm"] = working["__trim"].map(_normalize_overlay_key)
+    working["__powertrain_norm"] = working["__powertrain"].map(_normalize_overlay_key)
+    link_candidates = (
+        jato_link_candidates.copy()
+        if jato_link_candidates is not None
+        else pd.DataFrame(
+            columns=[
+                "brand_norm",
+                "jato_model_norm",
+                "jato_trim_norm",
+                "jato_powertrain_norm",
+                "official_model_norm",
+                "official_trim_norm",
+                "official_powertrain_norm",
+                "confidence",
+                "link_source",
+            ]
+        )
+    )
+
+    connection = None
+    try:
+        connection = duckdb.connect(database=":memory:")
+        connection.register("parquet_rows", working)
+        connection.register("current_price_rows", current_price_candidates)
+        connection.register("link_rows", link_candidates)
+        overlay = connection.execute(
+            """
+            WITH link_matched AS (
+                SELECT
+                    parquet_rows.__row_id AS row_id,
+                    current_price_rows.current_msrp_value,
+                    current_price_rows.currency,
+                    current_price_rows.source_url,
+                    current_price_rows.match_confidence,
+                    current_price_rows.updated_at_utc,
+                    current_price_rows.match_variant,
+                    current_price_rows.source_tier,
+                    current_price_rows.source_code,
+                    current_price_rows.source_type,
+                    COALESCE(link_rows.confidence, 0) AS link_confidence,
+                    COALESCE(link_rows.link_source, '') AS link_source,
+                    'link' AS overlay_strategy,
+                    CASE
+                        WHEN parquet_rows.__trim_norm <> ''
+                             AND current_price_rows.trim_norm <> ''
+                             AND parquet_rows.__trim_norm = current_price_rows.trim_norm
+                            THEN 0
+                        WHEN parquet_rows.__trim_norm <> ''
+                             AND current_price_rows.trim_norm <> ''
+                             AND (
+                                strpos(parquet_rows.__trim_norm, current_price_rows.trim_norm) > 0
+                                OR strpos(current_price_rows.trim_norm, parquet_rows.__trim_norm) > 0
+                             )
+                            THEN 1
+                        WHEN parquet_rows.__trim_norm = '' OR current_price_rows.trim_norm = ''
+                            THEN 2
+                        ELSE 3
+                    END AS trim_rank,
+                    CASE
+                        WHEN parquet_rows.__powertrain_norm <> ''
+                             AND parquet_rows.__powertrain_norm = current_price_rows.powertrain_norm
+                            THEN 0
+                        WHEN parquet_rows.__powertrain_norm = '' OR current_price_rows.powertrain_norm = ''
+                            THEN 1
+                        ELSE 2
+                    END AS powertrain_rank,
+                    0 AS match_variant_rank
+                FROM parquet_rows
+                JOIN link_rows
+                  ON parquet_rows.__brand_norm = link_rows.brand_norm
+                 AND parquet_rows.__model_norm = link_rows.jato_model_norm
+                 AND (
+                    parquet_rows.__powertrain_norm = ''
+                    OR link_rows.jato_powertrain_norm = ''
+                    OR parquet_rows.__powertrain_norm = link_rows.jato_powertrain_norm
+                 )
+                 AND (
+                    parquet_rows.__trim_norm = ''
+                    OR link_rows.jato_trim_norm = ''
+                    OR parquet_rows.__trim_norm = link_rows.jato_trim_norm
+                    OR strpos(parquet_rows.__trim_norm, link_rows.jato_trim_norm) > 0
+                    OR strpos(link_rows.jato_trim_norm, parquet_rows.__trim_norm) > 0
+                 )
+                JOIN current_price_rows
+                  ON current_price_rows.match_variant = 'official'
+                 AND parquet_rows.__brand_norm = current_price_rows.brand_norm
+                 AND current_price_rows.model_norm = link_rows.official_model_norm
+                 AND (
+                    link_rows.official_powertrain_norm = ''
+                    OR current_price_rows.powertrain_norm = ''
+                    OR link_rows.official_powertrain_norm = current_price_rows.powertrain_norm
+                 )
+                 AND (
+                    link_rows.official_trim_norm = ''
+                    OR current_price_rows.trim_norm = ''
+                    OR link_rows.official_trim_norm = current_price_rows.trim_norm
+                    OR strpos(link_rows.official_trim_norm, current_price_rows.trim_norm) > 0
+                    OR strpos(current_price_rows.trim_norm, link_rows.official_trim_norm) > 0
+                 )
+            ),
+            direct_matched AS (
+                SELECT
+                    parquet_rows.__row_id AS row_id,
+                    current_price_rows.current_msrp_value,
+                    current_price_rows.currency,
+                    current_price_rows.source_url,
+                    current_price_rows.match_confidence,
+                    current_price_rows.updated_at_utc,
+                    current_price_rows.match_variant,
+                    current_price_rows.source_tier,
+                    current_price_rows.source_code,
+                    current_price_rows.source_type,
+                    0.0 AS link_confidence,
+                    '' AS link_source,
+                    'direct' AS overlay_strategy,
+                    CASE
+                        WHEN parquet_rows.__trim_norm <> ''
+                             AND current_price_rows.trim_norm <> ''
+                             AND parquet_rows.__trim_norm = current_price_rows.trim_norm
+                            THEN 0
+                        WHEN parquet_rows.__trim_norm <> ''
+                             AND current_price_rows.trim_norm <> ''
+                             AND (
+                                strpos(parquet_rows.__trim_norm, current_price_rows.trim_norm) > 0
+                                OR strpos(current_price_rows.trim_norm, parquet_rows.__trim_norm) > 0
+                             )
+                            THEN 1
+                        WHEN parquet_rows.__trim_norm = '' OR current_price_rows.trim_norm = ''
+                            THEN 2
+                        ELSE 3
+                    END AS trim_rank,
+                    CASE
+                        WHEN parquet_rows.__powertrain_norm <> ''
+                             AND parquet_rows.__powertrain_norm = current_price_rows.powertrain_norm
+                            THEN 0
+                        WHEN parquet_rows.__powertrain_norm = '' OR current_price_rows.powertrain_norm = ''
+                            THEN 1
+                        ELSE 2
+                    END AS powertrain_rank,
+                    CASE
+                        WHEN current_price_rows.match_variant = 'jato' THEN 0
+                        ELSE 1
+                    END AS match_variant_rank
+                FROM parquet_rows
+                JOIN current_price_rows
+                  ON parquet_rows.__brand_norm = current_price_rows.brand_norm
+                 AND parquet_rows.__model_norm = current_price_rows.model_norm
+                 AND (
+                    parquet_rows.__powertrain_norm = ''
+                    OR current_price_rows.powertrain_norm = ''
+                    OR parquet_rows.__powertrain_norm = current_price_rows.powertrain_norm
+                 )
+                 AND (
+                    parquet_rows.__trim_norm = ''
+                    OR current_price_rows.trim_norm = ''
+                    OR parquet_rows.__trim_norm = current_price_rows.trim_norm
+                    OR strpos(parquet_rows.__trim_norm, current_price_rows.trim_norm) > 0
+                    OR strpos(current_price_rows.trim_norm, parquet_rows.__trim_norm) > 0
+                 )
+            ),
+            matched AS (
+                SELECT * FROM link_matched
+                UNION ALL
+                SELECT * FROM direct_matched
+            ),
+            ranked AS (
+                SELECT
+                    *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY row_id
+                        ORDER BY
+                            CASE overlay_strategy
+                                WHEN 'link' THEN 0
+                                ELSE 1
+                            END,
+                            trim_rank,
+                            powertrain_rank,
+                            match_variant_rank,
+                            COALESCE(source_tier, 3) ASC,
+                            COALESCE(link_confidence, 0) DESC,
+                            COALESCE(match_confidence, 0) DESC,
+                            updated_at_utc DESC,
+                            current_msrp_value DESC
+                    ) AS match_rank
+                FROM matched
+            )
+            SELECT
+                row_id,
+                current_msrp_value,
+                currency,
+                source_url,
+                match_confidence,
+                updated_at_utc,
+                match_variant
+                ,source_tier,
+                source_code,
+                source_type,
+                link_confidence,
+                link_source,
+                overlay_strategy
+            FROM ranked
+            WHERE match_rank = 1
+            """
+        ).fetchdf()
+    except Exception as exc:  # noqa: BLE001
+        return frame, {"mode": "parquet-only", "reason": f"duckdb-overlay-failed: {exc}"}
+    finally:
+        if connection is not None:
+            connection.close()
+
+    if overlay.empty:
+        return frame, {"mode": "parquet-only", "reason": "no-overlay-matches"}
+
+    merged = working.merge(
+        overlay,
+        how="left",
+        left_on="__row_id",
+        right_on="row_id",
+    )
+    merged["__msrp_parquet"] = merged["__msrp"]
+    overlay_mask = pd.to_numeric(
+        merged["current_msrp_value"],
+        errors="coerce",
+    ).fillna(0.0) > 0
+    merged.loc[overlay_mask, "__msrp"] = pd.to_numeric(
+        merged.loc[overlay_mask, "current_msrp_value"],
+        errors="coerce",
+    ).fillna(0.0)
+    merged["__msrp_source"] = "parquet"
+    merged.loc[overlay_mask, "__msrp_source"] = "current_prices"
+    merged["__msrp_source_url"] = merged["source_url"].fillna("")
+    merged["__msrp_match_variant"] = merged["match_variant"].fillna("")
+    merged["__msrp_overlay_strategy"] = merged["overlay_strategy"].fillna("")
+    merged["__msrp_match_confidence"] = pd.to_numeric(
+        merged["match_confidence"],
+        errors="coerce",
+    ).fillna(0.0)
+    merged["__msrp_source_tier"] = pd.to_numeric(
+        merged["source_tier"],
+        errors="coerce",
+    ).fillna(0).astype(int)
+    merged["__msrp_source_code"] = merged["source_code"].fillna("")
+    merged["__msrp_source_type"] = merged["source_type"].fillna("")
+    merged["__msrp_link_confidence"] = pd.to_numeric(
+        merged["link_confidence"],
+        errors="coerce",
+    ).fillna(0.0)
+    merged["__msrp_link_source"] = merged["link_source"].fillna("")
+    merged = merged.drop(
+        columns=[
+            "row_id",
+            "current_msrp_value",
+            "currency",
+            "source_url",
+            "match_confidence",
+            "updated_at_utc",
+            "match_variant",
+            "source_tier",
+            "source_code",
+            "source_type",
+            "link_confidence",
+            "link_source",
+            "overlay_strategy",
+        ],
+        errors="ignore",
+    )
+    link_matches = 0
+    direct_matches = 0
+    if not overlay.empty and "overlay_strategy" in overlay.columns:
+        strategies = overlay["overlay_strategy"].fillna("")
+        link_matches = int((strategies == "link").sum())
+        direct_matches = int((strategies == "direct").sum())
+    return merged, {
+        "mode": "duckdb-overlay",
+        "matchedRows": int(overlay_mask.sum()),
+        "matchedModels": int(merged.loc[overlay_mask, "__model"].nunique()),
+        "linkMatches": link_matches,
+        "directMatches": direct_matches,
+    }
 
 
 def _normalize_powertrain(value: object) -> str:
@@ -1770,6 +2463,8 @@ def _query_positioning_pricing_deck_impl(
         columns.msrp,
         *sales_columns,
     ]
+    if columns.trim and columns.trim not in selected_columns:
+        selected_columns.append(columns.trim)
     if columns.country_label and columns.country_label not in selected_columns:
         selected_columns.append(columns.country_label)
 
@@ -1782,6 +2477,11 @@ def _query_positioning_pricing_deck_impl(
     frame["__model"] = frame[columns.model].astype(str).str.strip()
     frame["__segment_raw"] = frame[columns.segment].astype(str).str.strip()
     frame["__powertrain"] = frame[columns.powertrain].map(_normalize_powertrain)
+    frame["__trim"] = (
+        frame[columns.trim].astype(str).str.strip()
+        if columns.trim and columns.trim in frame.columns
+        else ""
+    )
     frame["__length"] = pd.to_numeric(frame[columns.length], errors="coerce").fillna(0.0)
     frame["__msrp"] = pd.to_numeric(frame[columns.msrp], errors="coerce").fillna(0.0)
     frame[sales_column] = _series_sum(frame, sales_columns)
@@ -1793,6 +2493,21 @@ def _query_positioning_pricing_deck_impl(
         & (frame["__length"] > 0)
         & (frame["__msrp"] > 0)
     ].copy()
+
+    current_price_candidates, jato_link_candidates, price_overlay_meta = _load_positioning_overlay_candidates(
+        selected_country,
+        frame,
+    )
+    frame, overlay_result_meta = _apply_positioning_current_price_overlay(
+        frame,
+        current_price_candidates,
+        jato_link_candidates,
+    )
+    price_overlay_meta = {
+        "sourceMode": price_overlay_meta.get("mode"),
+        **price_overlay_meta,
+        **overlay_result_meta,
+    }
 
     available_fuels = [
         fuel for fuel in POSITIONING_FUEL_ORDER
@@ -1827,6 +2542,7 @@ def _query_positioning_pricing_deck_impl(
         "availableCountries": country_options,
         "availablePeriods": [{"value": period, "label": _short_period_label(period)} for period in available_periods],
         "availableFuelTypes": available_fuels,
+        "priceOverlay": price_overlay_meta,
         "labels": {
             "pageTitle": page_title,
             "currentMonthShort": _short_period_label(resolved_period),

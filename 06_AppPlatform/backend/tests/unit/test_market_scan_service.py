@@ -419,6 +419,202 @@ def test_build_positioning_bubble_items_respects_range_and_top_n() -> None:
     assert [item["model"] for item in items] == ["Two", "Three"]
 
 
+def test_build_positioning_current_price_candidates_keeps_jato_and_official_keys() -> None:
+    price_frame = pd.DataFrame(
+        {
+            "brand": ["VOLVO"],
+            "jato_model": ["XC60"],
+            "jato_trim": ["Ultra AWD"],
+            "jato_powertrain": ["PHEV"],
+            "official_model": ["XC60 Recharge"],
+            "official_trim": ["Ultra"],
+            "official_edition": ["AWD"],
+            "official_powertrain": ["PHEV"],
+            "current_msrp_value": [52000.0],
+            "currency": ["EUR"],
+            "source_url": ["https://example.com/xc60"],
+            "match_confidence": [0.93],
+            "updated_at_utc": ["2026-04-17T00:00:00+00:00"],
+        }
+    )
+
+    candidates = market_scan_service._build_positioning_current_price_candidates(
+        price_frame,
+    )
+
+    assert set(candidates["match_variant"].tolist()) == {"jato", "official"}
+    assert set(candidates["model_norm"].tolist()) == {"xc60", "xc60recharge"}
+    assert "ultraawd" in set(candidates["trim_norm"].tolist())
+
+
+def test_build_positioning_jato_link_candidates_keeps_jato_and_official_keys() -> None:
+    link_frame = pd.DataFrame(
+        {
+            "country": ["Germany"],
+            "brand": ["VOLVO"],
+            "jato_model": ["XC60"],
+            "jato_trim": ["Plus AWD"],
+            "jato_powertrain": ["PHEV"],
+            "official_model": ["XC60 Recharge"],
+            "official_trim": ["Plus"],
+            "official_edition": ["AWD"],
+            "official_powertrain": ["PHEV"],
+            "confidence": [95],
+            "link_source": ["manual"],
+        }
+    )
+
+    candidates = market_scan_service._build_positioning_jato_link_candidates(
+        link_frame,
+    )
+
+    row = candidates.iloc[0]
+    assert row["brand_norm"] == "volvo"
+    assert row["jato_model_norm"] == "xc60"
+    assert row["jato_trim_norm"] == "plusawd"
+    assert row["official_model_norm"] == "xc60recharge"
+    assert row["official_trim_norm"] == "plusawd"
+    assert row["official_powertrain_norm"] == "phev"
+
+
+def test_apply_positioning_current_price_overlay_prefers_trim_match() -> None:
+    if market_scan_service.duckdb is None:
+        pytest.skip("duckdb not installed")
+
+    frame = pd.DataFrame(
+        {
+            "__brand": ["VOLVO", "VOLVO"],
+            "__model": ["XC60", "XC60"],
+            "__trim": ["Ultra AWD", "Core"],
+            "__powertrain": ["PHEV", "PHEV"],
+            "__segment_raw": ["SUV C", "SUV C"],
+            "__length": [4708.0, 4708.0],
+            "__msrp": [50000.0, 47000.0],
+            "2026 Apr": [120.0, 90.0],
+        }
+    )
+    price_frame = pd.DataFrame(
+        {
+            "brand": ["VOLVO", "VOLVO"],
+            "jato_model": ["XC60", "XC60"],
+            "jato_trim": ["Ultra AWD", ""],
+            "jato_powertrain": ["PHEV", "PHEV"],
+            "official_model": ["XC60", "XC60"],
+            "official_trim": ["Ultra", ""],
+            "official_edition": ["AWD", ""],
+            "official_powertrain": ["PHEV", "PHEV"],
+            "current_msrp_value": [52000.0, 48000.0],
+            "currency": ["EUR", "EUR"],
+            "source_url": ["https://example.com/xc60-ultra", "https://example.com/xc60"],
+            "match_confidence": [0.95, 0.7],
+            "source_tier": [1, 3],
+            "source_code": ["de_volvo_official", "de_volvo_catalog"],
+            "source_type": ["official_site", "reference_catalog"],
+            "updated_at_utc": [
+                "2026-04-17T00:00:00+00:00",
+                "2026-04-16T00:00:00+00:00",
+            ],
+        }
+    )
+
+    candidates = market_scan_service._build_positioning_current_price_candidates(
+        price_frame,
+    )
+    overlayed, meta = market_scan_service._apply_positioning_current_price_overlay(
+        frame,
+        candidates,
+    )
+
+    ultra = overlayed.loc[overlayed["__trim"] == "Ultra AWD"].iloc[0]
+    core = overlayed.loc[overlayed["__trim"] == "Core"].iloc[0]
+
+    assert meta["mode"] == "duckdb-overlay"
+    assert meta["matchedRows"] == 2
+    assert meta["directMatches"] == 2
+    assert ultra["__msrp"] == pytest.approx(52000.0)
+    assert ultra["__msrp_source"] == "current_prices"
+    assert ultra["__msrp_source_tier"] == 1
+    assert core["__msrp"] == pytest.approx(48000.0)
+    assert core["__msrp_source"] == "current_prices"
+
+
+def test_apply_positioning_current_price_overlay_prefers_explicit_link() -> None:
+    if market_scan_service.duckdb is None:
+        pytest.skip("duckdb not installed")
+
+    frame = pd.DataFrame(
+        {
+            "__brand": ["VOLVO"],
+            "__model": ["XC60"],
+            "__trim": ["Plus AWD"],
+            "__powertrain": ["PHEV"],
+            "__segment_raw": ["SUV C"],
+            "__length": [4708.0],
+            "__msrp": [50000.0],
+            "2026 Apr": [120.0],
+        }
+    )
+    price_frame = pd.DataFrame(
+        {
+            "brand": ["VOLVO", "VOLVO"],
+            "jato_model": ["XC60", "XC60"],
+            "jato_trim": ["", "Plus AWD"],
+            "jato_powertrain": ["PHEV", "PHEV"],
+            "official_model": ["XC60 Recharge", "XC60"],
+            "official_trim": ["Plus", "Core"],
+            "official_edition": ["AWD", ""],
+            "official_powertrain": ["PHEV", "PHEV"],
+            "current_msrp_value": [51000.0, 52000.0],
+            "currency": ["EUR", "EUR"],
+            "source_url": ["https://example.com/xc60-plus", "https://example.com/xc60-core"],
+            "match_confidence": [0.88, 0.92],
+            "source_tier": [1, 4],
+            "source_code": ["de_volvo_official", "de_volvo_media"],
+            "source_type": ["official_site", "automotive_media"],
+            "updated_at_utc": [
+                "2026-04-17T00:00:00+00:00",
+                "2026-04-16T00:00:00+00:00",
+            ],
+        }
+    )
+    link_frame = pd.DataFrame(
+        {
+            "country": ["Germany"],
+            "brand": ["VOLVO"],
+            "jato_model": ["XC60"],
+            "jato_trim": ["Plus AWD"],
+            "jato_powertrain": ["PHEV"],
+            "official_model": ["XC60 Recharge"],
+            "official_trim": ["Plus"],
+            "official_edition": ["AWD"],
+            "official_powertrain": ["PHEV"],
+            "confidence": [95],
+            "link_source": ["manual"],
+        }
+    )
+
+    current_price_candidates = market_scan_service._build_positioning_current_price_candidates(
+        price_frame,
+    )
+    link_candidates = market_scan_service._build_positioning_jato_link_candidates(
+        link_frame,
+    )
+    overlayed, meta = market_scan_service._apply_positioning_current_price_overlay(
+        frame,
+        current_price_candidates,
+        link_candidates,
+    )
+
+    row = overlayed.iloc[0]
+    assert row["__msrp"] == pytest.approx(51000.0)
+    assert row["__msrp_overlay_strategy"] == "link"
+    assert row["__msrp_source_tier"] == 1
+    assert row["__msrp_source_code"] == "de_volvo_official"
+    assert row["__msrp_link_source"] == "manual"
+    assert meta["linkMatches"] == 1
+    assert meta["directMatches"] == 0
+
+
 def test_build_version_comparison_bubble_items_groups_model_versions() -> None:
     frame = pd.DataFrame(
         {

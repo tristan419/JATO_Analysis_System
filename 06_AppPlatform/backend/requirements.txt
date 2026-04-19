@@ -6,6 +6,7 @@ pyarrow==23.0.1
 pyyaml>=6.0
 python-multipart==0.0.20
 scikit-learn>=1.5
+duckdb==1.4.1
 SQLAlchemy==2.0.43
 alembic==1.16.5
 psycopg[binary]==3.2.9

@@ -353,6 +353,200 @@ def _weighted_median(values: pd.Series, weights: pd.Series) -> float:
     return float(tmp.loc[(tmp["w"].cumsum() >= cutoff).idxmax(), "v"])
 
 
+def _weighted_quantile(values: pd.Series, weights: pd.Series, quantile: float) -> float:
+    """Value at cumulative-weight = *quantile*, weighted by *weights*."""
+    quantile = min(max(float(quantile), 0.0), 1.0)
+    tmp = pd.DataFrame({"v": values, "w": weights}).dropna()
+    tmp = tmp[tmp["w"] > 0]
+    if tmp.empty:
+        if len(values) == 0:
+            return 0.0
+        return float(values.quantile(quantile))
+    tmp = tmp.sort_values("v")
+    cutoff = tmp["w"].sum() * quantile
+    if cutoff <= 0:
+        return float(tmp.iloc[0]["v"])
+    return float(tmp.loc[(tmp["w"].cumsum() >= cutoff).idxmax(), "v"])
+
+
+def _build_peer_corridor(
+    agg: pd.DataFrame,
+    *,
+    target_length: float | None,
+    target_msrp: float | None,
+) -> dict | None:
+    if agg.empty or "Length" not in agg.columns or "MSRP" not in agg.columns:
+        return None
+
+    peer = agg.dropna(subset=["Length", "MSRP"]).copy()
+    peer = peer[(peer["Length"] > 0) & (peer["MSRP"] > 0)]
+    if peer.empty:
+        return None
+
+    weights = pd.to_numeric(peer.get("Sales"), errors="coerce").fillna(0).clip(lower=0)
+    weights = weights.where(weights > 0, 1.0)
+    peer["PricePerMeter"] = peer["MSRP"] / (peer["Length"] / 1000.0)
+
+    msrp_p25 = _weighted_quantile(peer["MSRP"], weights, 0.25)
+    msrp_median = _weighted_quantile(peer["MSRP"], weights, 0.50)
+    msrp_p75 = _weighted_quantile(peer["MSRP"], weights, 0.75)
+    ppm_median = _weighted_quantile(peer["PricePerMeter"], weights, 0.50)
+
+    target_price_per_meter = None
+    target_residual = None
+    target_residual_pct = None
+    target_ppm_residual_pct = None
+    position_label = "unknown"
+    stance_code = "unscored"
+    stance_label = "待判断"
+    stance_detail = "当前没有足够目标定价来判断 price stance。"
+    if target_msrp is not None and target_msrp > 0:
+        target_residual = float(target_msrp) - msrp_median
+        if msrp_median > 0:
+            target_residual_pct = target_residual / msrp_median * 100.0
+        if target_length is not None and target_length > 0:
+            target_price_per_meter = float(target_msrp) / (float(target_length) / 1000.0)
+            if ppm_median > 0:
+                target_ppm_residual_pct = (
+                    (target_price_per_meter - ppm_median) / ppm_median * 100.0
+                )
+        if target_msrp < msrp_p25:
+            position_label = "below-peer-range"
+        elif target_msrp > msrp_p75:
+            position_label = "above-peer-range"
+        else:
+            position_label = "within-peer-range"
+
+        gap_pct = float(target_residual_pct or 0.0)
+        if gap_pct <= -12 or (position_label == "below-peer-range" and gap_pct <= -6):
+            stance_code = "aggressive-share-take"
+            stance_label = "进攻切入价"
+            stance_detail = "明显低于 peer 中位数，更偏 volume / share take。"
+        elif gap_pct <= -4:
+            stance_code = "competitive-entry"
+            stance_label = "偏进攻主流价"
+            stance_detail = "略低于 peer 中位数，属于更积极的切入位。"
+        elif gap_pct < 8 and position_label == "within-peer-range":
+            stance_code = "market-aligned"
+            stance_label = "主流防守价"
+            stance_detail = "落在 peer corridor 中段，更像市场主流防守位。"
+        elif gap_pct < 15:
+            stance_code = "upper-band-stretch"
+            stance_label = "偏高试探价"
+            stance_detail = "已靠近或略高于 corridor 上沿，需要更强产品力支撑。"
+        else:
+            stance_code = "premium-stretch"
+            stance_label = "高溢价试探价"
+            stance_detail = "明显高于 peer corridor，属于 premium stretch。"
+
+    return {
+        "peerCount": int(len(peer)),
+        "salesTotal": float(weights.sum()),
+        "lengthMin": int(round(float(peer["Length"].min()))),
+        "lengthMax": int(round(float(peer["Length"].max()))),
+        "msrpP25": float(msrp_p25),
+        "msrpMedian": float(msrp_median),
+        "msrpP75": float(msrp_p75),
+        "pricePerMeterMedian": float(ppm_median),
+        "targetLength": float(target_length) if target_length is not None else None,
+        "targetMsrp": float(target_msrp) if target_msrp is not None else None,
+        "targetPricePerMeter": float(target_price_per_meter) if target_price_per_meter is not None else None,
+        "targetResidual": float(target_residual) if target_residual is not None else None,
+        "targetResidualPct": float(target_residual_pct) if target_residual_pct is not None else None,
+        "targetPricePerMeterResidualPct": (
+            float(target_ppm_residual_pct) if target_ppm_residual_pct is not None else None
+        ),
+        "positionLabel": position_label,
+        "stanceCode": stance_code,
+        "stanceLabel": stance_label,
+        "stanceDetail": stance_detail,
+        "salesWeighted": True,
+    }
+
+
+def _weighted_quantile(values: pd.Series, weights: pd.Series, quantile: float) -> float:
+    """Value at cumulative-weight = *quantile*, weighted by *weights*."""
+    quantile = min(max(float(quantile), 0.0), 1.0)
+    tmp = pd.DataFrame({"v": values, "w": weights}).dropna()
+    tmp = tmp[tmp["w"] > 0]
+    if tmp.empty:
+        if len(values) == 0:
+            return 0.0
+        return float(values.quantile(quantile))
+    tmp = tmp.sort_values("v")
+    cutoff = tmp["w"].sum() * quantile
+    if cutoff <= 0:
+        return float(tmp.iloc[0]["v"])
+    return float(tmp.loc[(tmp["w"].cumsum() >= cutoff).idxmax(), "v"])
+
+
+def _build_peer_corridor(
+    agg: pd.DataFrame,
+    *,
+    target_length: float | None,
+    target_msrp: float | None,
+) -> dict | None:
+    if agg.empty or "Length" not in agg.columns or "MSRP" not in agg.columns:
+        return None
+
+    peer = agg.dropna(subset=["Length", "MSRP"]).copy()
+    peer = peer[(peer["Length"] > 0) & (peer["MSRP"] > 0)]
+    if peer.empty:
+        return None
+
+    weights = pd.to_numeric(peer.get("Sales"), errors="coerce").fillna(0).clip(lower=0)
+    weights = weights.where(weights > 0, 1.0)
+    peer["PricePerMeter"] = peer["MSRP"] / (peer["Length"] / 1000.0)
+
+    msrp_p25 = _weighted_quantile(peer["MSRP"], weights, 0.25)
+    msrp_median = _weighted_quantile(peer["MSRP"], weights, 0.50)
+    msrp_p75 = _weighted_quantile(peer["MSRP"], weights, 0.75)
+    ppm_median = _weighted_quantile(peer["PricePerMeter"], weights, 0.50)
+
+    target_price_per_meter = None
+    target_residual = None
+    target_residual_pct = None
+    target_ppm_residual_pct = None
+    position_label = "unknown"
+    if target_msrp is not None and target_msrp > 0:
+        target_residual = float(target_msrp) - msrp_median
+        if msrp_median > 0:
+            target_residual_pct = target_residual / msrp_median * 100.0
+        if target_length is not None and target_length > 0:
+            target_price_per_meter = float(target_msrp) / (float(target_length) / 1000.0)
+            if ppm_median > 0:
+                target_ppm_residual_pct = (
+                    (target_price_per_meter - ppm_median) / ppm_median * 100.0
+                )
+        if target_msrp < msrp_p25:
+            position_label = "below-peer-range"
+        elif target_msrp > msrp_p75:
+            position_label = "above-peer-range"
+        else:
+            position_label = "within-peer-range"
+
+    return {
+        "peerCount": int(len(peer)),
+        "salesTotal": float(weights.sum()),
+        "lengthMin": int(round(float(peer["Length"].min()))),
+        "lengthMax": int(round(float(peer["Length"].max()))),
+        "msrpP25": float(msrp_p25),
+        "msrpMedian": float(msrp_median),
+        "msrpP75": float(msrp_p75),
+        "pricePerMeterMedian": float(ppm_median),
+        "targetLength": float(target_length) if target_length is not None else None,
+        "targetMsrp": float(target_msrp) if target_msrp is not None else None,
+        "targetPricePerMeter": float(target_price_per_meter) if target_price_per_meter is not None else None,
+        "targetResidual": float(target_residual) if target_residual is not None else None,
+        "targetResidualPct": float(target_residual_pct) if target_residual_pct is not None else None,
+        "targetPricePerMeterResidualPct": (
+            float(target_ppm_residual_pct) if target_ppm_residual_pct is not None else None
+        ),
+        "positionLabel": position_label,
+        "salesWeighted": True,
+    }
+
+
 def _load_excluding_zero_sales(
     filters: dict[str, list[str]],
     selected_columns: list[str] | None,
@@ -1852,14 +2046,14 @@ def query_positioning_map(
     """
     vf = _build_vehicle_frame(filters, sales_columns=sales_columns)
     if vf.empty or "Length" not in vf.columns or "MSRP" not in vf.columns:
-        return {"rows": 0, "items": [], "target": None, "cluster_top3": []}
+        return {"rows": 0, "items": [], "target": None, "cluster_top3": [], "peerCorridor": None}
 
     vf = vf.dropna(subset=["Length", "MSRP"])
     vf = vf[(vf["Length"] > 0) & (vf["MSRP"] > 0)]
 
     group_cols = [c for c in ["Brand", "Model", "Segment", "Powertrain"] if c in vf.columns]
     if not group_cols:
-        return {"rows": 0, "items": [], "target": None, "cluster_top3": []}
+        return {"rows": 0, "items": [], "target": None, "cluster_top3": [], "peerCorridor": None}
 
     records: list[dict] = []
     for keys, g in vf.groupby(group_cols, dropna=False):
@@ -1889,6 +2083,12 @@ def query_positioning_map(
             agg = agg.head(max(1, int(top_n)))
     else:
         agg = agg.head(max(1, int(top_n)))
+
+    peer_corridor = _build_peer_corridor(
+        agg,
+        target_length=target_length,
+        target_msrp=target_msrp,
+    )
 
     # KMeans clustering
     cluster_top3: list[str] = []
@@ -1926,6 +2126,7 @@ def query_positioning_map(
         "items": items,
         "target": target_point,
         "cluster_top3": cluster_top3,
+        "peerCorridor": peer_corridor,
     }
 
 
