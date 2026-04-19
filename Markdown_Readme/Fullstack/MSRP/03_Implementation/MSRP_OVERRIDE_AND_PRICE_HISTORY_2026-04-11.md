@@ -2,7 +2,7 @@
 
 Date: 2026-04-11
 
-Status: Implemented (migration 0006)
+Status: Active（price history 已实现；2026-04-18 补齐 link/override lifecycle）
 
 关联文档：
 - Pipeline 全流程: [MSRP_PIPELINE_TECHNICAL_FLOW_2026-04-11.md](./MSRP_PIPELINE_TECHNICAL_FLOW_2026-04-11.md)
@@ -10,11 +10,27 @@ Status: Implemented (migration 0006)
 
 ---
 
+## 0. 2026-04-18 更新说明
+
+这份文档最初记录的是“override auto-apply + price history”设计与实现。到 2026-04-18，实际代码已经继续往前走了一步：
+
+1. **`MatchOverride` 不再是唯一映射层**：现在还有长期稳定映射对象 `JatoMsrpLink`。
+2. **ingest / materialize 已共用 canonical mapping resolver**：优先级固定为 `valid MatchOverride > active JatoMsrpLink > raw observation`。
+3. **review approve/remap 会 upsert active link**：人工确认不再只写 dated override；`persist_override=true` 时才额外写 `MatchOverride`。
+4. **mismatch reason 已统一分类**：`naming_mismatch / timing_mismatch / market_mismatch / granularity_mismatch` 会写入 `match_reason_json.mappingResolver`。
+5. **新增 `/v1/msrp/links` CRUD API**：后续 workbench UI 不必再把所有 link 管理都塞进 override 列表。
+
+因此，下面原始章节里凡是把 override 描述成“唯一映射手段”的地方，都应理解为**早期阶段背景**；当前主流程已经升级为 `link + override + price history` 三层并行。
+
+---
+
 ## 1. 问题陈述
 
-### 1.1 Override 能存不能用
+### 1.1 早期痛点：Override 能存但还没真正进入主链路
 
-当前 `review.match_overrides` 表在人工 approve/remap 时可以存入（`review_service.py:264-289`，`persist_override=True`），但后续 scraper 抓取同一个 trim 时，系统**不会**读取已有 override 自动应用。结果是：同一个 trim 每次抓取都重新进入 `review_required` 队列，人工重复批准。
+最初的问题是：`review.match_overrides` 在人工 approve/remap 时可以存入，但后续 scraper 抓取同一个 trim 时不会自动复用，导致重复进入 `review_required` 队列、人工重复批准。
+
+> 现状：这个问题已经解决，而且进一步升级成了 **`MatchOverride + JatoMsrpLink` 共用 resolver** 的主链路。
 
 ### 1.2 价格时间序列丢失
 
@@ -26,7 +42,7 @@ Status: Implemented (migration 0006)
 
 ## 2. 设计决策
 
-### 2.1 Override Lookup Key: (country, brand, jato_model, jato_trim)
+### 2.1 Override / Link Lookup Key: (country, brand, jato_model, jato_trim[, jato_powertrain])
 
 关键观察：人工 review 只修改 `official_model` / `official_trim`，**不修改** `jato_model` / `jato_trim`。而 `jato_model` 来自 YAML 配置的 `fixed_jato_model`，`jato_trim` 来自 `copy_trim_to_jato_trim`（= 网页上的 official_trim）。这两个字段在同一个 scraper 的重复执行中是稳定的。
 
@@ -44,7 +60,7 @@ Status: Implemented (migration 0006)
 
 在 `ELIGIBLE_CURRENT_PRICE_STATUSES` 中新增 `"override_applied"`，使得 override 命中的 observation 跳过 ReviewCase 创建，直接进入 `materialize_current_price_from_observation()`。
 
-### 2.3 Override 时效性
+### 2.3 Override 时效性（当前仍有效）
 
 `MatchOverride` 已有 `valid_from_date` / `valid_to_date` 字段。Lookup 自动过滤：
 
@@ -120,15 +136,17 @@ ORDER BY valid_from_utc DESC;
 | `msrp_repository.py` | `add_price_history()` | 写入新区间 |
 | `msrp_repository.py` | `list_price_history()` | 按条件查询区间 |
 
-### 3.4 Service 变更 (`msrp_workflow_service.py`)
+### 3.4 Service 变更 (`msrp_workflow_service.py` + `msrp_mapping_service.py`)
 
 | 位置 | 变更 | 说明 |
 |:---|:---|:---|
 | `ELIGIBLE_CURRENT_PRICE_STATUSES` | 新增 `"override_applied"` | override 命中的 observation 可 materialize |
-| `create_scrape_batch_ingest()` | ingest 循环中注入 override lookup | review_required → 先查 override → 命中则 auto-apply |
+| `msrp_mapping_service.py` | 新增 canonical mapping resolver | resolver 顺序：`valid override > active link > raw observation` |
+| `create_scrape_batch_ingest()` | ingest 循环中统一走 resolver | review_required → 先查 override/link → 命中则 auto-apply / materialize |
 | `materialize_current_price_from_observation()` | 价格变动时调用 `_record_price_period()` | 记录压缩时间序列 |
 | 新增 `_record_price_period()` | 关闭旧区间 + 开放新区间 | 内部 helper |
 | 新增 `list_price_history()` | service layer 查询 | 调用 repo + payload 序列化 |
+| `review_service.create_review_decision()` | approve/remap 时 upsert active `JatoMsrpLink` | 人工确认会被后续 observation 继承 |
 
 ### 3.5 API 变更 (`msrp_workflow.py`)
 
@@ -159,9 +177,9 @@ Jul:      scraper 抓到 source_msrp = 549,900 SEK (降价)
             [Jul → NULL, 549900 SEK] (open)
 ```
 
-关键：**Override 管 naming/mapping（谁对应谁），Price history 管价格（什么时候是多少钱）。两者独立运作。**
+关键：**Link / Override 管 naming/mapping（谁对应谁），Price history 管价格（什么时候是多少钱）。三者独立运作。**
 
-Override 有 `valid_to_date`：当品牌换代/停产时设置截止日期，系统自动回退到 manual review。
+Override 有 `valid_to_date`：当品牌换代/停产时设置截止日期，系统自动回退到 active link 或 manual review。
 
 ---
 

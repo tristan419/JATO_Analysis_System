@@ -1,12 +1,29 @@
 # MSRP：Version / Feature Matrix + 多源对账（2026-04-17）
 
-状态：Draft（合并 Q2 抓取优化 + 配置差异 + Q5 多源 reconciliation，同一张 PG schema）
+状态：Active（当前实现 + 后续 reconcile 设计并存）
 
 关联：
 - [PRODUCT_DEEPDIVE_2026-04-17.md](../../PRODUCT_DEEPDIVE_2026-04-17.md) § Q2 + Q5
 - [MSRP_PIPELINE_TECHNICAL_FLOW_2026-04-11.md](./MSRP_PIPELINE_TECHNICAL_FLOW_2026-04-11.md)
 - [MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md](./MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md)
 - [CROSS_SOURCE_JOIN_DESIGN_2026-04-17.md](../../03_Database/CROSS_SOURCE_JOIN_DESIGN_2026-04-17.md)
+
+---
+
+## 0. 2026-04-18 实现快照
+
+这份文档要分成两层看：
+
+1. **已经落地的部分**
+   - `CurrentPrice` 直查 MSRP
+   - `engineering_variant_diff_service.py` 基于 engineering normalized variants 输出 `variantDiff`
+   - `JatoMsrpLink + MatchOverride` 生命周期、canonical mapping resolver、`/v1/msrp/links` API
+2. **仍在规划中的部分**
+   - `msrp_trim_price` / `trim_feature_catalog` 这类更通用的 trim-grain published schema
+   - multi-source reconcile job
+   - 更完整的 trim matrix / feature dictionary UI
+
+所以，本文 §2.6 代表**当前已经生效的 mapping/lifecycle**，§3~§6 更多是“下一层 published trim schema”设计，而不是说 repo 现在还没有任何 version diff 能力。
 
 ---
 
@@ -62,9 +79,31 @@ BMW / Mercedes / Volvo 会定期发 PDF price list。新增 `extractors/pdf_tabl
 - `camelot` 抽表格（lattice 模式）。
 - 输出 DataFrame → 走 `RawObservation` 常规 pipeline。
 
-## 3. 配置差异 PG 设计（Q2 后半）
+### 2.5 把人工审核压缩成"例外流"
 
-### 3.1 表结构（Alembic 0008）
+MSRP 难的不是"能不能抓到一条价格"，而是**官网、第三方、配置页、PDF、经销商页的组合太碎**。因此审核不能按"每页都人工过"设计，而要按"只有例外才进人"设计：
+
+1. **official-first**：官网 / 官方 PDF / 官方 dealer 页面优先建 source family，第三方只做补缺与交叉校验。
+2. **page-family 复用**：同品牌同站点优先抽 shared preset / shared extractor，不再按国家复制 20 份逻辑。
+3. **只审核变化**：同一 source 二次抓取时，只把 `trim 新增 / trim 下线 / 价格变动超阈值 / 配置 diff` 推给 reviewer。
+4. **低置信才升 Firecrawl 或 OpenCLI**：贵且不稳定的手段只兜底，不当主链路。
+5. **人工审核要有"一次审核，后续继承"**：review decision 应回流到 `model_rules` / `trim_alias` / `source override`，避免重复劳动。
+
+### 2.6 已落地：link / review lifecycle（2026-04-18）
+
+这一条现在已经从原则变成 backend 主流程：
+
+1. **`JatoMsrpLink` 是长期映射对象**：review approve / remap 会 upsert active link，并保留 `confidence`、`link_source`、`is_active`、`notes`。
+2. **`MatchOverride` 是时态例外对象**：只有带 `valid_from / valid_to` 的覆盖才进 override，不再把所有人工确认都塞成 override。
+3. **ingest 与 materialize 共用同一个 resolver**：`create_scrape_batch_ingest()` 和 `materialize_current_price_from_observation()` 现在都会先走 canonical mapping resolver，再决定 `CurrentPrice` 用哪个 official key。
+4. **resolver 优先级固定**：`MatchOverride(valid)` > `JatoMsrpLink(active)` > observation 原始 official 字段。
+5. **mismatch reason 统一口径**：当前统一写成 `naming_mismatch / timing_mismatch / market_mismatch / granularity_mismatch`，落到 `match_reason_json.mappingResolver`，后续 reconcile / diff answer / UI 不再各写各的临时字符串。
+
+这一步的直接价值是：后面接官网、第三方、历史现售版本时，不必再靠 ad hoc trim rename 去硬配 JATO version。
+
+## 3. 配置差异 PG 设计（Q2 后半，下一层 trim-grain schema）
+
+### 3.1 表结构（目标态，不等于当前 repo 已有表）
 
 ```sql
 -- trim 级已有，扩字段
@@ -146,6 +185,23 @@ FULL OUTER JOIN trim_feature_catalog b
 2. **官网配置页** schema.org `Vehicle.vehicleConfiguration`：Scrapling 扩 rule。
 3. **汽车媒体试驾报告**：Firecrawl `extract` 作为补全（标 `source_tier=3`）。
 
+### 3.4 关键建模原则：Observation ≠ Published Price
+
+后续数据库扩展时，强烈建议始终分开这两层：
+
+1. **Observation layer**：保留每一个来源、每一次抓取到的原始价格 / 配置记录（官网、dealer、第三方、PDF）。
+2. **Published layer**：只发布一个当前主值到 `msrp_trim_price.is_primary=true`，并把 `reconciled_from` 指回 observation 集合。
+
+这样才能同时满足：
+
+- 回答时能说清楚"当前采用的是哪条官方价 / 它和第三方差多少"
+- review 时能追溯冲突来源
+- 将来价格历史、配置 diff、版本上下线都能复盘
+
+> Repo 现状：`06_AppPlatform/backend/app/db/models.py` 已经有 `MsrpObservation`、`CurrentPrice`、`PriceHistory`，所以这里更像是在它们之上补 canonical trim / feature matrix，而不是从零重建 MSRP 表。
+
+补充：截至 2026-04-18，repo 里也已经把 `JatoMsrpLink + MatchOverride` 接进 observation/current-price lifecycle，所以后面的 trim matrix / feature diff / reconcile 可以直接复用这层 canonical mapping。
+
 ## 4. 多源 Reconciliation（Q5）
 
 ### 4.1 Source Tier 定义（建表时 seed）
@@ -196,10 +252,28 @@ reconcile_prices(country, trim_id, price_period):
 - 差异 > 3% 时 red badge "Conflict pending review"。
 - 当前价旁小标 `reconciled · 3 sources` 可点击查看。
 
+### 4.4 是否保留多个数据源
+
+**结论：保留，而且必须保留。**
+
+不能只保留一个最终价，因为后面会碰到这些真实场景：
+
+- 官网与 dealer 同步慢，价格相差 1–2 周
+- 官网列的是 base MSRP，第三方列的是带 package 的 on-the-road 价
+- 同一 trim 名称下，不同国家实际配置不同
+
+推荐规则：
+
+1. **所有 observation 都入库**，包括官方和第三方。
+2. **只有 tier 1/2/3 进入 reconciliation**，tier 4/5 主要做 research / conflict clue。
+3. **最终回答默认展示 primary 值 + source summary**，用户展开时再看全部来源。
+4. **冲突不自动抹平**；超过阈值时进入 review，而不是静默覆盖。
+
 ## 5. 回流到 review workbench
 - Review 队列新增 tab "Tier Conflict"（delta_pct > 3% 的案例）。
 - Review decision 写回 `reconciliation_log.reviewer_choice` + `source_tier_override`。
 - 高频冲突品牌自动生成 override 规则，回归到 source YAML 里固化。
+- 新增 `JatoMsrpLink` CRUD API（`GET/POST/PATCH/DELETE /v1/msrp/links`），给后续 workbench UI 一个正式的 link 管理面，而不是继续把 link 逻辑塞进 override 列表。
 
 ## 6. 迁移步骤
 
@@ -224,3 +298,11 @@ reconcile_prices(country, trim_id, price_period):
 - **trim_slug 归一化**：同一款 RAV4 Active Plus 在不同国家官网命名不同（"Active Plus" vs "Active Business Plus"）——需要 `trim_alias` 辅助表映射。
 - **feature_key 命名**：必须团队维护一份术语表，避免 `heads_up_display` / `hud` / `head_up_display` 三个 key 并存。初期由 reviewer 在 UI 选择已存在的 key，禁止自由输入。
 - **package 价格**：同一个 package 在不同 trim 上可能 include 或 extra-cost，需要 `trim_feature_catalog.package_name` + `option_price` 一起记录，不能只记"属于哪个 package"。
+
+## 9. 对当前产品决策的落地结论（2026-04-18）
+
+1. **JATO 销量作为销量真值**：继续保留在 Parquet / matrix 侧，不迁走。
+2. **审核后的 MSRP 作为价格真值**：放在 PG published layer，由 reconciliation 产出。
+3. **版本 / 动总 / 配置差异必须 trim-grain 落库**：不要试图把这些都塞回 model-level 宽表。
+4. **定位定价页读 materialized positioning matrix**：不要让前端或问答链路每次临时做多源 merge。
+5. **MSRP 抓取的主战场不是"更强模型"，而是 shared extractor、multi-source observation、review 回流和 page-family 复用。**

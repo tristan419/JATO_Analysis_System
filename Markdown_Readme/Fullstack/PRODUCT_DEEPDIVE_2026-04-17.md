@@ -1,9 +1,25 @@
 # JATO 平台：六问答卷（2026-04-17）
 
-状态：Draft（主答卷，供讨论与落地）
+状态：Active（主答卷；含 2026-04-18 已实现增量）
 关联：[ROADMAP.md](./ROADMAP.md) · [ARCHITECTURE_REVIEW_2026-04-17.md](./ARCHITECTURE_REVIEW_2026-04-17.md)
 
 > 定位：这是针对你 2026-04-17 提出的六个核心难点的系统性答卷。每一问给出"结论 + 架构方案 + 动作清单 + 对应专题文档链接"。细节全部落到专题 md，本文只做总览与导航。
+
+---
+
+## 0. 2026-04-18 实现增量
+
+这份“六问答卷”起草时，大部分内容还停留在设计层。到 2026-04-18，代码侧已经先落下了几块关键地基：
+
+| 主题 | 已落地 | 仍待继续 |
+|---|---|---|
+| **Q1 跨源 join** | `market_scan_service.py` 已使用 DuckDB + Postgres attach，并消费 `JatoMsrpLink` 作为 overlay candidate 之一 | 离线 `positioning_matrix.parquet` 主路径仍待补齐 |
+| **Q2 version / feature diff** | 国家助手已能通过 `engineering_variant_diff_service.py` 直接回答 trim/version/config 差异 | 更稳定的 powertrain / entry-vs-top / cross-country diff 还未扩完 |
+| **Q3 + Q4 Copilot 精准化** | `positioning-focus`、`segment-fuel-focus`、`precise-lookup`、`answerMode + grounding`、CurrentPrice 直查、related-news evidence 已进入主流程 | 通用 tool registry、Live writeback、稳定 news/policy sink 仍未闭环 |
+| **Q5 多源对账** | `JatoMsrpLink + MatchOverride` 生命周期已接进 ingest / materialize / review decision，resolver 顺序固定为 override > link > raw observation | 真正的 multi-source reconcile layer 还未接 |
+| **Q6 统一抓取平台** | toolkit 里已有 MSRP、RSS/Atom news foundation，本地 `/data-management` 页也已有 local-only Airflow 控制 | 通用 `ScrapeJob` 抽象、policy/incentive/spec sink 仍以规划为主 |
+
+因此，后面各问要按“**已实现地基 + 未完成上层**”来理解，而不是把它们全部视为纯未来方案。
 
 ---
 
@@ -93,6 +109,8 @@ trim_feature_diff_view    (materialized view：两两 trim 差集)
 ### 根因
 当前 `country_chat_service` 是"**先取所有数据，再让 LLM 收口**"——意图识别→加载 country snapshot + local wiki + 销量榜 + MSRP + news 全部塞进 prompt。这不是 Function Calling，是"context 倾倒"。LLM 再聪明也只能照着倾倒物编故事。
 
+> 2026-04-18 补充：这条主问题已经开始被修正。当前代码已经先落地了 **rule-based direct routes + structured grounding**，即 `positioning-focus` / `segment-fuel-focus` / `precise-lookup` 先直接组装答案，再把 evidence tables / related news / chart links 放进 `grounding`，而不是继续默认全量 deck 倾倒。
+
 ### 目标架构：真·Function Calling + 分层检索
 
 **分层 1：意图分类（router，便宜快）**
@@ -143,7 +161,7 @@ LLM 回复不再是 markdown+已渲染的所有卡片。后端返回：
 [`01_DevWorkflow/COUNTRY_COPILOT_INTENT_AND_HYBRID_RETRIEVAL_2026-04-17.md`](./01_DevWorkflow/COUNTRY_COPILOT_INTENT_AND_HYBRID_RETRIEVAL_2026-04-17.md)
 
 ### News 时效性（2025 年底 vs 2026-04 最新）
-根因有二：(1) `news_runner` 的产物还没落库（`COUNTRY_COPILOT_INTELLIGENCE_IMPLEMENTATION_2026-04-15.md` Phase 3 Step 3.3 未完成）；(2) 没有 "fresh_web_lookup" 兜底。解决路径在上面的 T1 回填 + T2 兜底，加一个 systemd timer 每 6 小时跑 `news_runner`。
+根因现在已经从“完全没落库”收缩为两点：(1) backend 已有 country news cache / digest，但还没有把 toolkit 侧 news / policy freshness 做成稳定的 PG + vector 闭环；(2) 仍没有正式的 `fresh_web_lookup` 兜底。解决路径是：保留当前 digest/cache，继续补 T1 回填与 T2 兜底，而不是回到无状态 RSS 读取。
 
 ---
 

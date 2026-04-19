@@ -2,12 +2,24 @@
 
 Date: 2026-04-11
 
-Status: Implemented & Tested (79 backend + 16 frontend tests passing)
+Status: Active（主链路已实现；2026-04-18 补齐 canonical mapping resolver 与 link lifecycle）
 
 关联文档：
 - PRD: [MSRP_Official_Price_Enrichment_PRD_2026-04-10.md](../01_Requirements/MSRP_Official_Price_Enrichment_PRD_2026-04-10.md)
 - 技术设计: [MSRP_Official_Price_Enrichment_Technical_Design_2026-04-10.md](../02_Research_Design/MSRP_Official_Price_Enrichment_Technical_Design_2026-04-10.md)
 - XC60 执行记录: [MSRP_XC60_EXECUTION_RESULT_2026-04-11.md](../04_Execution/MSRP_XC60_EXECUTION_RESULT_2026-04-11.md)
+
+---
+
+## 0. 2026-04-18 更新说明
+
+本文件的主体流程图仍然描述 MSRP pipeline 的主干，但 current code 已经把“review override auto-apply”进一步升级成：
+
+1. **canonical mapping resolver**：`valid MatchOverride > active JatoMsrpLink > raw observation`
+2. **review approve/remap 会 upsert active link**
+3. **新增 `/v1/msrp/links` CRUD API**
+
+因此，下面 ingest flow 里凡是只写“先查 override”的地方，都应读成“先走 resolver，再决定是否 materialize / review”。
 
 ---
 
@@ -148,18 +160,17 @@ Status: Implemented & Tested (79 backend + 16 frontend tests passing)
 │  1. Create ScrapeBatch record                                    │
 │  2. For each observation:                                        │
 │     a. Create MsrpObservation in msrp.observations               │
-│     b. If match_status = "auto_accepted":                        │
+│     b. If match_status 可直接发布:                               │
+│        → apply_canonical_mapping()                               │
 │        → materialize_current_price_from_observation()            │
 │     c. If match_status = "review_required":                      │
-│        → ★ Override Feedback Lookup (2026-04-11 新增)            │
-│          查询 review.match_overrides:                            │
-│          WHERE (country, brand, jato_model, jato_trim)           │
-│          AND valid_from ≤ observation_date                       │
-│          AND (valid_to IS NULL OR valid_to ≥ observation_date)   │
-│          → 匹配到 → 应用 override 的 official_model/trim        │
-│              设 match_status = "override_applied"                │
-│              → materialize_current_price_from_observation()      │
-│          → 未匹配 → _ensure_review_case()                       │
+│        → ★ Canonical Mapping Resolver (2026-04-18 更新)          │
+│          顺序：valid MatchOverride                               │
+│              > active JatoMsrpLink                               │
+│              > raw observation official fields                   │
+│          → 命中 override → "override_applied"                    │
+│          → 命中 link     → "auto_accepted"                       │
+│          → 都没命中      → _ensure_review_case()                │
 │  3. Commit transaction                                           │
 │                                                                  │
 │  ★ Price History Recording (2026-04-11 新增)                     │
@@ -176,7 +187,8 @@ Status: Implemented & Tested (79 backend + 16 frontend tests passing)
 │  Unique key:         │ │  Human review queue     │
 │  (country, brand,    │ │  - open / approved /    │
 │   jato_model,        │ │    rejected /           │
-│   jato_trim)         │ │    closed_superseded    │
+│   jato_trim,         │ │    closed_superseded    │
+│   jato_powertrain)   │ │                         │
 │                      │ │                         │
 │  价格变动检测:        │ │  一键 approve → 触发    │
 │  比较 source_msrp    │ │  materialize            │

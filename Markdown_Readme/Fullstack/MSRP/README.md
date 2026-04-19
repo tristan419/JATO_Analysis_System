@@ -1,6 +1,6 @@
 # MSRP 文档索引
 
-日期：2026-04-12
+日期：2026-04-18
 
 这个目录把 Fullstack 下所有 MSRP 功能开发文档按功能阶段归档，避免再散落在根目录。
 
@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 需求 | `01_Requirements/` | 产品目标、范围、验收口径 |
 | 预研 / 设计 | `02_Research_Design/` | 技术路径、实现设计、路线选择 |
-| 实现 | `03_Implementation/` | 已落地的 pipeline、currency converter、review loop、price history |
+| 实现 | `03_Implementation/` | 已落地的 pipeline、currency converter、review loop、price history、link/override lifecycle |
 | 执行验证 | `04_Execution/` | 真实站点抓取 POC 测试、keyword filling 批次记录 |
 | Backlog | `05_Backlog/` | SUV country model top30 批次计划与后续开发入口 |
 
@@ -58,6 +58,7 @@
 | MSRP 抓取通过率、人审优化 | `03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md` |
 | JATO 销量 × MSRP 定位定价联表 | `../03_Database/CROSS_SOURCE_JOIN_DESIGN_2026-04-17.md` |
 | 多 version / 多动总 / 配置差异 | `03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md` § 3 |
+| JATO trim ↔ official trim 生命周期 | `03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md` + `../03_Database/CROSS_SOURCE_JOIN_DESIGN_2026-04-17.md` |
 | 批量 source 执行现状 | `05_Backlog/MSRP_SUV_COUNTRY_MODEL_TOP30_PLAN_2026-04-12.md` |
 | 抓取平台扩展到 news/policy/spec | `../02_DataETL/UNIFIED_SCRAPING_PIPELINE_2026-04-17.md` |
 
@@ -75,10 +76,11 @@
 2. **按国家批次推进 keyword filling**：每批国家的 draft YAML 按标准化流程填充本地化关键词（动力总成、版本、价格带），填完后零 `TODO_KEYWORD` 残留才算可进入 CSS selector 填充阶段。
 3. **pipeline 内自动汇率转换**：scraping toolkit 的 `currency_converter.py` 在 extract → validate 之后自动调用免费汇率 API (`open.er-api.com`) 将本地货币转 EUR，写入 `msrp_value_eur` / `fx_rate_to_eur`，无需手工换算。
 4. brand-family 级 source 优先，规则化配置 `model_rules`、`fixed_model`、`fixed_jato_model`、`fixed_jato_powertrain`、`copy_trim_to_jato_trim`、`edition_rules`、`powertrain_rules`、`price_band_bonuses`。
-5. review override 已回流到 future matching；重复 case 优先靠规则与 override 消灭，而不是先引入 LLM。
-6. price history 负责价格区间时间线，override 负责 trim 命名映射，两者分离。
-7. 生产 source 只接收真实 MSRP / 官方购车价页面；月供 / leasing offer 页面只能作为 research 线索，不能直接接入 MSRP pipeline。
-8. 历史 `top20_batch1`、split brand backlog 草稿、旧 `all_market` country×brand 优先级排名均已废弃；后续只保留 `suv_only_country_model_top30` 目录。
+5. review 不再只写 dated override：approve/remap 现在会沉淀 active `JatoMsrpLink`，`persist_override=true` 时再额外写 `MatchOverride`。
+6. canonical mapping resolver 已进入 ingest / materialize 主链路，顺序固定为 `valid MatchOverride > active JatoMsrpLink > raw observation`。
+7. price history 负责价格区间时间线；link/override 负责 trim / official key 映射；mismatch taxonomy 统一为 `naming / timing / market / granularity`。
+8. 生产 source 只接收真实 MSRP / 官方购车价页面；月供 / leasing offer 页面只能作为 research 线索，不能直接接入 MSRP pipeline。
+9. 历史 `top20_batch1`、split brand backlog 草稿、旧 `all_market` country×brand 优先级排名均已废弃；后续只保留 `suv_only_country_model_top30` 目录。
 
 ## 变更日志
 
@@ -86,6 +88,7 @@
 
 1. **Sweden Volkswagen configurator batch 收口完成**：ID.4 与 Tayron 已完成 apply、DB 核验、Pricing/MSRP 前端核验，并补 execution 记录到 `04_Execution/MSRP_SWEDEN_VOLKSWAGEN_BATCH_RESULT_2026-04-18.md`。
 2. **Sweden Volkswagen top30 覆盖闭环**：`suv_only_country_model_top30/se/` 下的 Volkswagen 四个候选（Tiguan / ID.4 / T-Roc / Tayron）当前都已进入 configurator-capable draft 范围。
+3. **`JatoMsrpLink + MatchOverride` 生命周期接入主流程**：review approve/remap 现在会 upsert active link；ingest 与 current-price materialize 共用 canonical mapping resolver；新增 `/v1/msrp/links` CRUD API。
 
 ### 2026-04-12（第二次更新）
 

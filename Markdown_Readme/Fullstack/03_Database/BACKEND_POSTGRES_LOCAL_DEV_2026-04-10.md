@@ -1,8 +1,8 @@
 # Backend PostgreSQL Local Dev
 
-Status: Draft
+Status: Active
 
-Date: 2026-04-10
+Date: 2026-04-18
 
 ## 1. Goal
 
@@ -75,11 +75,14 @@ From `06_AppPlatform/backend`:
 alembic upgrade head
 ```
 
-Current revisions:
+Current revisions now extend through:
 
 1. `20260410_0001`: foundation schemas and first business tables
 2. `20260410_0002`: engineering import core and MSRP observation core
 3. `20260411_0003`: current prices and review loop tables
+4. `20260411_0004` ~ `20260412_0007`: FX normalization, structured variant fields, override feedback, price history refinements
+5. `20260415_0008`: country news cache
+6. `20260417_0009` ~ `20260417_0011`: EVKX variant business key, MSRP source tier + JATO links, engineering market overrides
 
 ## 7. Start Backend
 
@@ -106,7 +109,9 @@ Use it to verify:
 GET /v1/engineering/projects
 POST /v1/engineering/projects
 POST /v1/engineering/projects/{project_id}/imports
+POST /v1/engineering/projects/{project_id}/normalize
 PATCH /v1/engineering/projects/{project_id}
+DELETE /v1/engineering/projects/{project_id}
 ```
 
 Use it to manage the project container for engineering config imports.
@@ -122,6 +127,9 @@ GET /v1/engineering/projects/imports
 GET /v1/engineering/projects/imports/{config_import_batch_id}
 GET /v1/engineering/projects/imports/{config_import_batch_id}/page-data
 GET /v1/engineering/projects/variants
+GET /v1/engineering/projects/base-variants
+GET /v1/engineering/projects/market-variants
+GET /v1/engineering/projects/feature-overrides
 ```
 
 Use it to inspect imported engineering batches, persisted failure details, and materialized variant rows.
@@ -130,12 +138,29 @@ Use it to inspect imported engineering batches, persisted failure details, and m
 
 `GET /v1/engineering/projects/imports/{config_import_batch_id}/page-data` reshapes the same batch into a frontend-friendly admin page payload with header metadata, summary cards, warning panel, mapping rows, full summary, and sample variants.
 
-### 8.4 MSRP Sources, Batches, and Observations
+`POST /v1/engineering/projects/{project_id}/normalize` runs the engineering normalization pipeline and returns both the import summary and a `normalization` summary payload for the resulting base variants / market variants / feature overrides.
+
+### 8.4 Data Management and Local Airflow Controls
+
+```text
+GET /v1/data-management/overview
+GET /v1/data-management/airflow/status
+POST /v1/data-management/airflow/start
+POST /v1/data-management/airflow/stop
+```
+
+Use it to inspect local data pipelines and, when Docker Compose is available, control the **local-only Airflow** helper stack from the app. This is a local orchestration aid, not a required production dependency.
+
+### 8.5 MSRP Sources, Batches, Observations, and Links
 
 ```text
 POST /v1/msrp/batches
 GET /v1/msrp/current-prices
 POST /v1/msrp/current-prices/materialize
+GET /v1/msrp/links
+POST /v1/msrp/links
+PATCH /v1/msrp/links/{link_id}
+DELETE /v1/msrp/links/{link_id}
 GET /v1/msrp/sources
 POST /v1/msrp/sources
 PATCH /v1/msrp/sources/{source_id}
@@ -143,23 +168,24 @@ GET /v1/msrp/sources/batches
 GET /v1/msrp/sources/observations
 ```
 
-Use it to inspect source registration, ingest scrape batches, materialize current official prices, and inspect structured observation records.
+Use it to inspect source registration, ingest scrape batches, materialize current official prices, manage `JatoMsrpLink`, and inspect structured observation records.
 
-`POST /v1/msrp/batches` is the first write entry for scraper output. It creates a scrape batch, writes observations, opens review cases for `review_required`, and materializes `msrp.current_prices` for `auto_accepted` or `human_approved` observations.
+`POST /v1/msrp/batches` is the first write entry for scraper output. It creates a scrape batch, writes observations, opens review cases for unresolved `review_required`, and materializes `msrp.current_prices` after the canonical mapping resolver runs (`valid MatchOverride > active JatoMsrpLink > raw observation`).
 
 `POST /v1/msrp/current-prices/materialize` rebuilds current prices from eligible observations when you need a controlled backfill or recompute.
 
-### 8.5 Review Overrides
+### 8.6 Review Overrides
 
 ```text
 GET /v1/review/overrides
 POST /v1/review/overrides
 PATCH /v1/review/overrides/{override_id}
+DELETE /v1/review/overrides/{override_id}
 ```
 
 Use it to inspect and maintain manual match overrides.
 
-### 8.6 Review Cases and Decisions
+### 8.7 Review Cases and Decisions
 
 ```text
 GET /v1/review/cases
@@ -169,7 +195,7 @@ POST /v1/review/cases/{review_case_id}/decisions
 
 Use it to inspect review-required MSRP matches, view case detail plus decision history, and close the loop with approve/reject/remap actions.
 
-Approve or remap decisions update the observation, mark the case approved, materialize `msrp.current_prices`, and can optionally persist a `review.match_overrides` rule.
+Approve or remap decisions update the observation, mark the case approved, materialize `msrp.current_prices`, upsert an active `JatoMsrpLink`, and can optionally persist a dated `review.match_overrides` rule.
 
 ## 9. What This Skeleton Covers
 
@@ -185,8 +211,10 @@ The current backend skeleton now covers:
 8. Current official price materialization
 9. Review case and review decision loop
 10. Review override management
-11. Read-only engineering import and variant queries
-12. Read-only MSRP batch and observation queries
+11. JATO-to-official link management
+12. Data management overview + local Airflow helper controls
+13. Read-only engineering import and variant queries
+14. Read-only MSRP batch and observation queries
 
 ## 10. What Still Comes Next
 

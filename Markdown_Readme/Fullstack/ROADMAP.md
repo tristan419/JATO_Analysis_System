@@ -10,12 +10,12 @@
 - `保待办`：所有待办统一保留在原看板文档中，不分散到新文件。
 - `低耦合`：专题文档只存专题信息，主索引只做导航与状态摘要。
 
-## 2. 当前项目快照（2026-04-12）
+## 2. 当前项目快照（2026-04-18）
 
 - 阶段：`Phase 4 — Fullstack 主线`
 - 架构：FastAPI + React + TypeScript（Streamlit 看板功能已全部迁移完成）
-- 已完成：Fullstack 迁移、读取层优化、筛选下推、时间变换重构、跨层 contract 测试（15 前端 + 10 后端）、CI smoke + nightly gate。
-- 进行中：**MSRP 官方价格补全系统** — Batch 1+2（7 国 209 个 source）dry-run 通过 92/209 (44.0%)；数据库边界设计（PostgreSQL）；ETL baseline/patch 迁移。
+- 已完成：Fullstack 迁移、读取层优化、筛选下推、时间变换重构、跨层 contract 测试、Country Copilot grounded answer/direct-answer 主链路、CurrentPrice 直查 MSRP、engineering variant diff、`JatoMsrpLink + MatchOverride` 生命周期闭环、`/copilot` mobile-web 初版（chat-first / answer-first / desktop handoff）。
+- 进行中：**MSRP 官方价格补全系统** — Batch 1+2（7 国 209 个 source）dry-run 通过 92/209 (44.0%)；版本 reconcile 层；sales truth 接入 diff answer；review/workbench mismatch UI。
 - 搁置：全球可视化（地球项目）不再继续；Round 3 剩余项保留为待办，不继续实现。
 
 ## 3. 文档结构
@@ -53,20 +53,20 @@ Markdown_Readme/
 | 文档 | 领域 | 状态 | 说明 |
 | --- | --- | --- | --- |
 | `ROADMAP.md` | 总览 | Active | 唯一主索引 |
-| `ARCHITECTURE_REVIEW_2026-04-17.md` | 架构评审 | Draft | 跨域架构评审与 P0/P1/P2 改动建议（Streamlit 搁置后的新阶段） |
-| `PRODUCT_DEEPDIVE_2026-04-17.md` | 产品/架构 | Draft | 六问答卷：跨源 join / MSRP 抓取+配置差异 / Copilot 精准化 / 多源对账 / 统一抓取 |
+| `ARCHITECTURE_REVIEW_2026-04-17.md` | 架构评审 | Active | 跨域架构评审与 P0/P1/P2 改动建议（含后续实现增量说明） |
+| `PRODUCT_DEEPDIVE_2026-04-17.md` | 产品/架构 | Active | 六问答卷：跨源 join / MSRP 抓取+配置差异 / Copilot 精准化 / 多源对账 / 统一抓取 |
 | **01_DevWorkflow/** | | | |
 | `01_DevWorkflow/SOFTWARE_DEV_WORKFLOW.md` | 开发规范 | Active | 从需求到上线的完整软件开发流程 |
 | `01_DevWorkflow/FULLSTACK_DEVELOPMENT_SPEC_2026-04-11.md` | 开发规范 | Active | 跨前后端 contract、测试补齐与验收流程规范 |
 | `01_DevWorkflow/PR_CHECKLIST.md` | 开发规范 | Active | 每次功能变更必须逐项勾选的 PR 清单 |
-| `01_DevWorkflow/COUNTRY_COPILOT_INTELLIGENCE_IMPLEMENTATION_2026-04-15.md` | 开发规范 | Active | Country Copilot 智能增强实施计划与执行记录 |
-| `01_DevWorkflow/COUNTRY_COPILOT_INTENT_AND_HYBRID_RETRIEVAL_2026-04-17.md` | 开发规范/AI | Draft | Copilot Intent Router + Tiered Retrieval（本地 × 联网）设计 |
+| `01_DevWorkflow/COUNTRY_COPILOT_INTELLIGENCE_IMPLEMENTATION_2026-04-15.md` | 开发规范 | Active | Country Copilot 智能增强实施计划、已实现 tranche 与剩余缺口 |
+| `01_DevWorkflow/COUNTRY_COPILOT_INTENT_AND_HYBRID_RETRIEVAL_2026-04-17.md` | 开发规范/AI | Active | Copilot Snapshot / Dynamic / Live 架构、grounded answer 与 direct-answer 路由 |
 | **02_DataETL/** | | | |
 | `02_DataETL/ETL.md` | 实现 | Active | 数据处理主链路（Raw → ETL → 分区 → 刷新） |
 | `02_DataETL/ETL_Baseline_Patch_Migration_Checklist_2026-04-10.md` | 实现 | Active | Baseline / Patch 迁移执行清单 |
 | `02_DataETL/ETL_Raw_Compare_Review_Spec_2026-04-10.md` | 实现 | Active | Raw 对 Raw 比对 / Review 规格 |
 | `02_DataETL/PRECOMPUTE_STRATEGY.md` | 实现 | Active | 后端预聚合 + 前端轻加载方案 |
-| `02_DataETL/UNIFIED_SCRAPING_PIPELINE_2026-04-17.md` | 架构/抓取 | Draft | 统一抓取流水线（Scrapling + Playwright + Firecrawl + Crawlee 三层抽象） |
+| `02_DataETL/UNIFIED_SCRAPING_PIPELINE_2026-04-17.md` | 架构/抓取 | Active | 统一抓取流水线（当前实现 + 后续扩展位） |
 | `02_DataETL/VOC_FORUM_SCRAPING_FEASIBILITY_2026-04-17.md` | 架构/抓取 | Draft | 北欧汽车论坛 VOC 抓取可行性、边界与落地路径 |
 | **MSRP** | | | |
 | `MSRP/README.md` | 功能/MSRP | Active | MSRP 文档总索引与阅读顺序 |
@@ -77,7 +77,7 @@ Markdown_Readme/
 | `MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md` | 实现/MSRP | Active | Override 回流与价格时间序列 |
 | `MSRP/03_Implementation/MSRP_BRAND_FAMILY_MODEL_RULES_2026-04-11.md` | 实现/MSRP | Active | 多车型映射规则 (model_rules) |
 | `MSRP/03_Implementation/CSS_SELECTOR_TOOLCHAIN_2026-04-11.md` | 实现/MSRP | Active | CSS Selector 填充工具链 |
-| `MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md` | 实现/MSRP | Draft | Version/Feature Matrix + 多源 Reconciliation（Q2+Q5 合写） |
+| `MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md` | 实现/MSRP | Active | Version/Feature Matrix + 多源 Reconciliation（含 link/review lifecycle 现状） |
 | `MSRP/05_Backlog/MSRP_SUV_COUNTRY_MODEL_TOP30_PLAN_2026-04-12.md` | Backlog/MSRP | Active | **当前执行计划（主入口）** |
 | `MSRP/04_Execution/MSRP_KEYWORD_FILLING_AND_POC_RESULTS_2026-04-12.md` | 执行/MSRP | Active | Keyword 填充记录 + POC 结果 |
 | `MSRP/04_Execution/MSRP_XC60_EXECUTION_RESULT_2026-04-11.md` | 验证/MSRP | Active | XC60 执行结果 |
@@ -85,11 +85,11 @@ Markdown_Readme/
 | `MSRP/04_Execution/MSRP_BATCH1_SOURCE_RESEARCH_2026-04-11.md` | 验证/MSRP | Active | Batch-1 品牌调研结果 |
 | `MSRP/05_Backlog/MSRP_COUNTRY_BRAND_SOURCE_PRIORITY_PLAN_2026-04-11.md` | Backlog/MSRP | **Archived** | 旧 country×brand 计划（已被 SUV Top30 替代） |
 | **03_Database/** | | | |
-| `03_Database/PLATFORM_STACK_AND_DATABASE_BOUNDARY_2026-04-10.md` | 架构 | Draft | 平台技术栈与数据库边界设计 |
-| `03_Database/POSTGRESQL_CORE_SCHEMA_2026-04-10.md` | 架构 | Draft | PostgreSQL 核心表结构设计 |
-| `03_Database/ALEMBIC_MIGRATION_PLAN_2026-04-10.md` | 架构 | Draft | Alembic 数据库迁移方案 |
-| `03_Database/BACKEND_POSTGRES_LOCAL_DEV_2026-04-10.md` | 运维/调试 | Draft | 后端 PostgreSQL 本地开发环境搭建 |
-| `03_Database/CROSS_SOURCE_JOIN_DESIGN_2026-04-17.md` | 架构 | Draft | JATO Parquet × PostgreSQL MSRP 跨源 join（DuckDB federated + positioning matrix） |
+| `03_Database/PLATFORM_STACK_AND_DATABASE_BOUNDARY_2026-04-10.md` | 架构 | Active | 平台技术栈与数据库边界设计 |
+| `03_Database/POSTGRESQL_CORE_SCHEMA_2026-04-10.md` | 架构 | Active | PostgreSQL 核心表结构设计 |
+| `03_Database/ALEMBIC_MIGRATION_PLAN_2026-04-10.md` | 架构 | Active | Alembic 数据库迁移方案 |
+| `03_Database/BACKEND_POSTGRES_LOCAL_DEV_2026-04-10.md` | 运维/调试 | Active | 后端 PostgreSQL 本地开发环境搭建 |
+| `03_Database/CROSS_SOURCE_JOIN_DESIGN_2026-04-17.md` | 架构 | Active | JATO Parquet × PostgreSQL MSRP 跨源 join（含当前 link/override contract） |
 | **04_DevOps/** | | | |
 | `04_DevOps/TENCENT_CLOUD_DEPLOY.md` | 运维/部署 | Active | 腾讯云 Ubuntu Fullstack 部署 |
 | `04_DevOps/MANUAL_CICD.md` | 运维/发布 | Active | Fullstack 手动 CI/CD 与线上修复 |
@@ -146,17 +146,19 @@ Markdown_Readme/
 ### 迁移历史（仅追溯）
 `_archived/STREAMLIT_TO_FULLSTACK_MIGRATION.md` → `_archived/STREAMLIT_VS_REACT_COMPARISON.md` → `_archived/REACT_STREAMLIT_GAP_ANALYSIS.md` → [`../Streamlit/README.md`](../Streamlit/README.md)
 
-## 5.1 当前关注点（2026-04-12）
+## 5.1 当前关注点（2026-04-18）
 
 - Fullstack 迁移已完成，Streamlit 文档全部归档至 `Streamlit/`。
-- 全球可视化（地球项目）已搜置，`JATO_GLOBAL_VISUALIZATION.md` 保留但不再推进。
+- 全球可视化（地球项目）已搁置，`JATO_GLOBAL_VISUALIZATION.md` 保留但不再推进。
 - **MSRP 官方价格补全系统**：Batch 1+2（7 国）dry-run 已完成，92/209 通过 (44.0%)。下一步是将通过的 source promote 到 `sources/` 目录。
-- Country Copilot 智能增强已启动第一轮实施：先修月度趋势时间范围、动力总成固定配色，并补齐芬兰市场知识。
-- MSRP 官方价格文档已收拢到 `Fullstack/MSRP/`，旧 `country×brand` 计划已归档，由 SUV Top30 计划替代。
-- 数据库边界设计（PostgreSQL）和 Alembic 迁移方案已起草，迁移已执行到 0006（price_history）。
+- Country Copilot 已从“只给大盘”升级到 **grounded answer + direct answer**：窄问题优先走 `positioning-focus` / `segment-fuel-focus` / `precise-lookup`，并返回 `answerMode + grounding`。
+- `/copilot` 现已作为 **mobile-web 一等入口**：主导航加入 Copilot，手机端默认隐藏悬浮 widget，页面本体改用 compact grounded answer / compact deck、折叠式 context/news/insight 面板与桌面接力深链接；后续又继续把手机首屏压缩到更偏 chat-first 的 reveal order（短 header、空状态才显示 prompts、更紧凑的 pending / inline charts），同时保持桌面端不受影响；最新又补了一层 **visible answer path**，把 route / focus / truth layers / output mode 组织成用户可读的回答路径，并把每次回答统一成“直接回答 → 关键结论 → 思考链 → 证据/来源层”的固定结构；同时把 NVIDIA tool-depth overflow 收敛成正常 fallback，并把 tool-first 执行改成 **单轮取证 + 强制最终答复**，不再把内部中断字符串直接展示给用户。
+- MSRP 官方价格文档已收拢到 `Fullstack/MSRP/`，旧 `country×brand` 计划已归档，由 SUV Top30 计划替代；`JatoMsrpLink + MatchOverride` 生命周期与 `/v1/msrp/links` API 已接入主流程。
+- 数据库边界设计（PostgreSQL）和 Alembic 迁移方案已起草并被实现引用；当前运行时已包含 `CurrentPrice`、`PriceHistory`、engineering normalized variants、`JatoMsrpLink`、`MatchOverride` 等核心表。
 - 跨层 contract 测试覆盖 MSRP、Review Cases、Engineering 三大页面（15 前端 + 10 后端测试）。
 - ETL baseline / patch / staging / release 工作流规格已定义。
 - Scraping Toolkit 文档已添加 README，详见 `07_ScrapingToolkit/README.md`。
+- `/data-management` 页面已提供 **local-only Airflow start/stop/open-UI controls**，仅作为本地 orchestration 辅助层，不改变核心抓取 / 刷新主链路。
 
 ## 5.2 2026-04-17 新增规划（六问答卷）
 
@@ -175,6 +177,13 @@ Markdown_Readme/
 1. 修改专题文档。
 2. 回填 `ROADMAP.md` 状态与导航。
 3. 若涉及新文档，必须加入 §4 清单。
+
+### 6.1 文档状态定义
+
+- `Draft`：主要是方案草稿，尚未被当前代码或运行流程真正采用。
+- `Active`：已被现有代码、API、运行流程或团队协作直接引用；允许同时包含“已实现 + 下一步”。
+- `History`：被新的 Active 文档取代，但保留原始决策或阶段记录供追溯。
+- `Archived` / `Shelved`：明确不继续推进，只保留历史材料。
 
 ## 7. 维护检查清单
 

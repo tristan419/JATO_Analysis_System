@@ -1,6 +1,6 @@
 # 统一抓取流水线（Unified Scraping Pipeline）2026-04-17
 
-状态：Draft（Q6：MSRP + news + policy + incentive + spec 统一抓取平台）
+状态：Active（当前实现 + 后续扩展位并存）
 
 关联：
 - [PRODUCT_DEEPDIVE_2026-04-17.md](../PRODUCT_DEEPDIVE_2026-04-17.md) § Q6
@@ -9,6 +9,59 @@
 - [COUNTRY_COPILOT_INTENT_AND_HYBRID_RETRIEVAL_2026-04-17.md](../01_DevWorkflow/COUNTRY_COPILOT_INTENT_AND_HYBRID_RETRIEVAL_2026-04-17.md)
 
 ---
+
+## 0. 2026-04-18 实现快照
+
+当前 repo 已经有的部分：
+
+- MSRP 抓取主链路（Scrapling / Playwright / httpx / JSON / currency converter）
+- news RSS/Atom foundation（`07_ScrapingToolkit/news_sources/*.yaml` + `news_runner`）
+- 本地 `/data-management` 页面上的 **Airflow start / stop / open-UI controls**，用于单机环境下的可视化 orchestration 辅助
+
+当前**还没统一抽象好**的部分：
+
+- 通用 `ScrapeJob` / `scrape_job_queue`
+- policy / incentive / spec 的稳定 sink
+- Firecrawl / Crawlee 的正式接入
+
+因此本文要读成：**前半是当前能力边界，后半是统一平台的目标形态**。
+
+## 0.1 无人工 review 的自动质检策略
+
+对 `news` / `VOC` 不走人工逐条 review，而是走 **auto review + confidence gate**：
+
+1. **Deterministic checks**
+   - URL / host 合法性
+   - 标题 / 摘要 / 正文长度阈值
+   - 发布时间有效性 / 新鲜度
+   - 页面类型是否符合 source 预期（thread / article / landing fallback）
+   - country/source metadata 是否完整
+
+2. **Source tier**
+   - `official`
+   - `association`
+   - `trusted_media`
+   - `local_media`
+   - `aggregator`
+
+3. **Cross-source / cross-document consistency**
+   - `news`：同一 country refresh 内，跨 publisher 的标题/摘要 token overlap 作为 corroboration 信号
+   - `VOC`：按文档质量和 source-level document coverage 做 publish-ready 统计，不因单个 source error 拖垮整批
+
+4. **Evidence-grounded output**
+   - 每个 observation / document 都带 `autoReview`
+   - 至少包含：`score`、`publishTier`、`publishDecision`、`signals`、`warnings`
+
+5. **Publish tiers**
+   - `high` → `auto_publish`
+   - `medium` → `candidate_publish`
+   - `low` → `holdout` / `hold_raw`
+
+原则不是“让 LLM 单点审批”，而是：
+
+> **规则校验 + source tier + corroboration + confidence gate**
+
+这样 `assistant` / `deck` / `digest` 默认只消费通过自动闸门的数据，raw layer 则保留全量证据，便于后续回放和调试。
 
 ## 1. 目标
 
@@ -21,7 +74,7 @@
 
 同时不打破现有架构的边界约束：
 - 仍然定位为**离线制品生产者**（见 ARCHITECTURE_REVIEW P1-1）。
-- 单机运行，不引入 Redis / Celery / Airflow / K8s。
+- 默认仍可单机直接运行；**Airflow 只作为可选的本地 orchestration / 可视化层**，不改变核心抓取代码结构，也不是线上请求依赖。
 - FastAPI 进程不 import toolkit 的 fetcher / extractor 运行时模块。
 
 ## 2. 工具分工
@@ -228,7 +281,9 @@ CREATE TABLE incentive_program (
 );
 ```
 
-## 5. 调度（systemd timer，不升级到 Airflow）
+## 5. 调度（默认 systemd timer；Airflow 仅本地可选）
+
+默认调度主链路仍以 systemd timer 为准；Airflow 目前只作为 **local-only orchestration / 可视化控制层** 出现在 `/data-management`，不替代核心抓取代码与发布流程。
 
 在 `04_DevOps/SINGLE_NODE_SCHEDULING_2026-04-17.md`（待建，ARCHITECTURE_REVIEW P0-5）里统一排布：
 
@@ -258,6 +313,7 @@ CREATE TABLE incentive_program (
 │   │   ├── playwright_fetcher.py
 │   │   ├── firecrawl_fetcher.py
 │   │   └── crawlee_fetcher.py
+
 │   ├── extractors/
 │   │   ├── css_rules.py        # Scrapling 封装
 │   │   ├── schema_org.py       # 已有
@@ -350,3 +406,73 @@ python 07_ScrapingToolkit/run.py scrape --kind policy --country SE --topics malu
 - 对长尾 / 无规律站点，Firecrawl 的 `extract` API 能用 LLM 按 JSON schema 输出，省掉 CSS 调试工时。
 - 月度成本估算：`low_confidence_rate × monthly_job_count × $0.003`。当前 44% 通过率 → 约 $0.5–1/月（完全可接受）。
 - 可自托管（firecrawl-self-host），如未来隐私要求升级再切换。
+
+## 14. 2026-04-18 补充：Scrapling + OpenCLI + Firecrawl 的协同策略
+
+为了把 MSRP、news、finance、碳税法规这些抓取都收进同一套平台，推荐把抓取器能力再分一层：
+
+| 能力 | 优先级 | 适用场景 | 产物 |
+|---|---|---|---|
+| **Scrapling / httpx** | 默认 | 结构稳定的官网、RSS、JSON API、schema.org 页面 | 低成本 canonical observation |
+| **Playwright / OpenCLI** | 次级 | 需要点击流程、cookie、配置器、登录态、人机交互录制的站点 | 可复用交互脚本 + page snapshot |
+| **Firecrawl** | 兜底 | PDF、深层目录、长尾媒体、规则性很差的政策/新闻页 | 结构化 JSON / markdown 抽取 |
+
+这里的 **OpenCLI** 更适合被定位成"交互编排层"：当站点必须点开 trim、切换 engine、展开 finance 条款时，用 OpenCLI/浏览器脚本把动作固化成 step sequence；真正的结构化抽取仍回到 extractor schema，而不是把 CLI 输出直接当最终数据。
+
+> 注意：**OpenCLI 目前还不在 repo 内**。这里记录的是推荐扩展位；当前已存在的是 Scrapling、Playwright、httpx/JSON、news runner，以及文档里规划中的 Firecrawl/Crawlee。
+
+## 15. 推荐的六阶段总流程
+
+```text
+Source discovery
+  -> Probe & classify
+  -> Fetch
+  -> Extract
+  -> Normalize & reconcile
+  -> Publish & sync
+```
+
+### 15.1 Source discovery
+- MSRP：brand family source、dealer page、官方 PDF
+- News：RSS / 媒体站 / 行业协会
+- Policy / finance / tax：政府公报、税务局、交通部、EU 法规页面
+
+### 15.2 Probe & classify
+- 先判断站点属于 `static_html` / `dynamic_flow` / `pdf_table` / `long_tail_unstructured`
+- 产出推荐 fetcher：Scrapling、OpenCLI/Playwright、Firecrawl、Crawlee
+
+### 15.3 Fetch
+- 原始 HTML / PDF / JSON 一律先落硬盘缓存：`04_Processed_data/raw_documents/{kind}/{country}/{date}/...`
+- 每次抓取都保留 `final_url / fetched_at / http_status / content_hash`
+
+### 15.4 Extract
+- MSRP / spec / policy / news 各自有独立 schema
+- LLM 只负责把"难抽的网页"转成 schema，不负责最终 truth 决策
+
+### 15.5 Normalize & reconcile
+- 货币、日期、生效期、country code、brand/model/trim alias 统一在这里收口
+- MSRP 进入 `observation -> reconciliation -> published price`
+- policy/news 进入 `observation -> dedup/topic tagging -> country digest`
+
+### 15.6 Publish & sync
+- PG：transactional truth（observation、published、review、run log）
+- Parquet：分析宽表 / 预聚合产物
+- Vector store：给 Country Copilot 做 local retrieval
+- Chart deck snapshots：给前端/国家助手做 deterministic answer context
+
+## 16. 为什么现在 news 只能抓到旧时间
+
+当前痛点本质上不是"源不够多"，而是**抓到的内容还没有稳定 sink 成国家助手可检索的本地 truth**。要让 2026-04 的新闻和法规真的能回答出来，至少要补齐：
+
+1. `news_article` / `policy_snippet` 落 PG，并带 `published_at` / `fetched_at`
+2. 定时增量同步到 vector store
+3. 国家助手只在问到 freshness / policy / latest 时再触发 live fetch
+4. live fetch 结果必须回写，不然下一轮还会继续"只知道旧快照"
+
+## 17. 面向国家助手的落地要求
+
+抓取平台的产物最终不是为了"抓到页面"，而是为了让 Country Copilot 能精准回答。因此要求：
+
+1. **每种抓取都必须能落到可查询实体**：model、trim、feature、policy topic、news topic。
+2. **每条记录都要有 source tier 和 freshness**：否则回答无法解释"为什么信这个价格/这条法规"。
+3. **图表和回答共用同一套 sink**：不要出现聊天回答来自 live 页面、图表来自旧 snapshot 的口径撕裂。

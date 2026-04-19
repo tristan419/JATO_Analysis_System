@@ -1,6 +1,6 @@
 # JATO Fullstack 架构评审与改动建议（2026-04-17）
 
-状态：Draft（供讨论 / 逐项落地）
+状态：Active（供讨论 / 逐项落地；含后续实现修正）
 作者：Copilot（基于现有 `Markdown_Readme/` 全量阅读）
 关联入口：[ROADMAP.md](./ROADMAP.md)
 
@@ -66,7 +66,7 @@
 **风险**：MSRP 批量 dry-run 的 headless browser + FastAPI + PG + nginx + Parquet 读写会抢内存，曾经的 12 Mbps 带宽瓶颈问题（`fullstack-bandwidth-bottleneck-2026-04-08`）会以 CPU/IO 形态重现。
 
 **建议**：
-- 把 refresh job、MSRP 抓取、news 抓取统一纳入一个**单机调度清单**（仍然是 systemd timer，不要上 Airflow）。
+- 把 refresh job、MSRP 抓取、news 抓取统一纳入一个**单机调度清单**。当前代码已经允许在 `/data-management` 上做 **local-only Airflow start / stop / open UI**，但它应继续只充当本地 orchestration / 可视化辅助层，而不是线上依赖。
 - 在 `04_DevOps/` 下补一份 `SINGLE_NODE_SCHEDULING_2026-04-17.md`（1 页），明确 3 件事：各任务时间窗、最大并发、允许抢占顺序。
 - FastAPI 通过 `st_atime` / manifest mtime 惰性 reload 分区数据，不要与 refresh job 强耦合。
 
@@ -139,7 +139,7 @@
 
 ## 5. 我不建议做的事
 
-1. **不建议**现阶段引入 Redis / Celery / Airflow / K8s。现有 systemd timer + 单机节奏足够支撑年底的 MSRP Batch 3+4 扩张，引入任何一个都会让运维复杂度翻倍而收益很薄。
+1. **不建议**现阶段把 Redis / Celery / K8s 做成主调度依赖。Airflow 目前可以保留为**本地辅助控制层**，但不应取代 systemd timer 作为核心运行方式。
 2. **不建议**把 JATO 主事实数据搬进 PostgreSQL。`PLATFORM_STACK_AND_DATABASE_BOUNDARY` 的结论现在看仍然正确，Parquet 读多写少 + 预聚合是性价比最高的路径。
 3. **不建议**恢复全球可视化。地球项目与当前业务优先级正交，重启代价至少 2 个月，应继续维持 Archived。
 4. **不建议**在 Copilot 里做数据写入工具（任何 mutating tool）。Copilot 只读，所有写回路仍走现有 review / override 入口。

@@ -22,33 +22,124 @@ JATO sales 在 Parquet（分区 + 预聚合），MSRP 在 PostgreSQL（事务 + 
 2. **Offline materialized**（新）：夜间 refresh job 追加一步，产出 `04_Processed_data/positioning/positioning_matrix.parquet`，前端 dashboard 直接读，零 join。
 3. **Streaming fallback**：Online federated 不可用时，service 层手写"先查 PG → 按 key list 过滤 parquet"，保证可用但不做主路径。
 
-## 3. 关键表：`jato_msrp_link`（PG）
+### 2.1 对当前疑问的直接回答
 
-把 JATO 的 dimensional key 与 MSRP 的 trim 建立**多对多显式映射**，这是跨源 join 的唯一契约。
+用户现在的核心担忧是：**sales 总来源于 JATO、MSRP 总来源于库以后，是不是就不能再用 Parquet？**
+
+答案是：**还能用，而且应该继续用；只是 Parquet 不再承担"主键契约"。**
+
+- **Parquet 负责 analytics facts**：销量、segment share、历史趋势、预聚合矩阵。
+- **PostgreSQL 负责 canonical entities**：trim、price history、source review、override、link contract。
+- **Join contract 不能靠裸 `model` 字符串**：必须显式落在 `jato_msrp_link` 这类桥接表，并保留 `country + brand + normalized model + powertrain + year` 粒度。
+
+### 2.2 推荐的 grain 切分
+
+要把"一款车多个 version / 多个动总 / 多个 trim"讲清楚，至少要分三层 grain：
+
+1. **JATO model grain**：`country_code + jato_brand + jato_model + jato_powertrain + model_year`
+2. **sellable trim grain**：`trim_id`（本地可售版型，带本币 MSRP、配置、source history）
+3. **positioning matrix grain**：`country_code + jato_model grain + trim_id`
+
+这样处理以后：
+
+- JATO sales 仍然可以在 Parquet 里按 model grain 高效扫描。
+- trim / feature / source 冲突继续留在 PG 做事务与审核。
+- dashboard / 国家助手主查询可以优先读 materialized `positioning_matrix.parquet`，而不是每次在线拼接大量明细。
+
+### 2.3 Repo 现状与下一步
+
+这不是一张白纸：
+
+- `06_AppPlatform/backend/app/services/market_scan_service.py` 已经在用 **DuckDB + Postgres attach** 做 overlay。
+- `06_AppPlatform/backend/app/db/models.py` 已经有 `JatoMsrpLink`、`MatchOverride`、`MsrpObservation`、`CurrentPrice`、`PriceHistory`。
+
+因此当前最合理的推进方式不是重写一套，而是：
+
+1. 保留现有 `CurrentPrice` 作为 published/current projection。
+2. 把 `JatoMsrpLink` 作为正式 lifecycle object 使用：active 状态、confidence、link source、notes 都进入主流程；`MatchOverride` 只负责带生效期的例外。
+3. 让 positioning / 国家助手优先消费 materialized matrix 或 compositions，而不是前端临时 join。
+
+## 3. 当前 join contract：`jato_msrp_link` + `match_override`（2026-04-18）
+
+现在 backend 里已经落地的桥接契约不是“直接把 JATO rename 成 official”，而是保留两边原始 key，再通过两层 resolver 串起来：
+
+1. **`JatoMsrpLink`**：稳定映射层，表示“这个 JATO key 通常对应哪个 official key”。
+2. **`MatchOverride`**：带 `valid_from / valid_to` 的时态例外层，表示“在这个时间窗口里，link 结果要被临时覆盖”。
+
+这两层共同决定 `MsrpObservation -> CurrentPrice` 的 canonical official key；销量 truth 仍挂 JATO，价格 / 配置 truth 仍挂 official / engineering key。
 
 ```sql
 CREATE TABLE jato_msrp_link (
-    link_id             BIGSERIAL PRIMARY KEY,
-    country_code        VARCHAR(4)  NOT NULL,       -- 'SE'
-    jato_brand          VARCHAR(64) NOT NULL,       -- JATO '品牌'
-    jato_model          VARCHAR(128) NOT NULL,      -- JATO 'Model'
-    jato_powertrain     VARCHAR(32),                -- 'HEV'|'PHEV'|'BEV'|'MHEV'|'ICE'
-    jato_model_year     SMALLINT,                   -- 2026, 可空
-    msrp_trim_id        BIGINT NOT NULL REFERENCES msrp_trim(trim_id),
-    confidence          SMALLINT NOT NULL DEFAULT 80,   -- 0-100
-    source              VARCHAR(32) NOT NULL,       -- 'model_rules' | 'override' | 'manual'
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (country_code, jato_brand, jato_model, jato_powertrain, jato_model_year, msrp_trim_id)
+    link_id              UUID PRIMARY KEY,
+    country              VARCHAR(64) NOT NULL,
+    brand                VARCHAR(64) NOT NULL,
+    jato_model           VARCHAR(255) NOT NULL,
+    jato_trim            VARCHAR(255) NOT NULL,
+    jato_powertrain      VARCHAR(64) NOT NULL DEFAULT '',
+    official_model       VARCHAR(255) NOT NULL,
+    official_trim        VARCHAR(255) NOT NULL,
+    official_edition     VARCHAR(255),
+    official_powertrain  VARCHAR(64),
+    confidence           SMALLINT NOT NULL DEFAULT 80,
+    link_source          VARCHAR(64) NOT NULL DEFAULT 'manual',
+    is_active            BOOLEAN NOT NULL DEFAULT TRUE,
+    notes                TEXT,
+    created_at_utc       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at_utc       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX ix_link_jato_key ON jato_msrp_link (country_code, jato_brand, jato_model, jato_powertrain);
-CREATE INDEX ix_link_trim ON jato_msrp_link (msrp_trim_id);
+CREATE TABLE match_override (
+    override_id          UUID PRIMARY KEY,
+    country              VARCHAR(64) NOT NULL,
+    brand                VARCHAR(64) NOT NULL,
+    jato_model           VARCHAR(255) NOT NULL,
+    jato_trim            VARCHAR(255) NOT NULL,
+    jato_powertrain      VARCHAR(64) NOT NULL DEFAULT '',
+    official_model       VARCHAR(255) NOT NULL,
+    official_trim        VARCHAR(255) NOT NULL,
+    valid_from_date      DATE NOT NULL,
+    valid_to_date        DATE,
+    override_reason      TEXT NOT NULL,
+    created_by           VARCHAR(128) NOT NULL,
+    created_at_utc       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at_utc       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 ```
 
-来源优先级：
-1. 从 MSRP source YAML 的 `model_rules` / `fixed_jato_model` / `fixed_jato_powertrain` 自动派生（ETL 时 upsert）。
-2. review workbench 里 reviewer 手动 override（source='override'）。
-3. 人工补录（source='manual'）。
+### 3.1 Resolver 优先级
+
+同一个 observation 进入 ingest / materialize 时，按下面顺序解析 canonical mapping：
+
+1. **有效期内的 `MatchOverride`**
+2. **active 的 `JatoMsrpLink`**
+3. **observation 自带的 official 字段**
+
+这样做的原因：
+
+- `JatoMsrpLink` 负责长期稳定映射，避免同一 JATO trim 每次都重复 review。
+- `MatchOverride` 负责时间窗例外，避免把短期命名调整或过渡版本写死成永久 link。
+- observation 原字段仍保留，resolver 只是决定 published/current projection 用哪个 official key。
+
+### 3.2 Review 写回规则
+
+review decision 在 2026-04-18 这一批开始不再只写 `MatchOverride`：
+
+1. **approve / remap**：会 upsert 一个 active `JatoMsrpLink`，并把同一 JATO key 下冲突的旧 active link 退役。
+2. **persist_override=true**：另外再写一条 `MatchOverride`，只覆盖指定生效期。
+3. **ingest / current price materialize**：统一走同一个 canonical mapping resolver，不再一边只看 override、一边直接信 observation 字段。
+
+这意味着“一次人工确认，后续 observation 继承”终于真正进入主链路，而不是停留在孤立 review 记录。
+
+### 3.3 mismatch taxonomy
+
+当前 resolver 和 review decision 统一使用四类 mismatch reason：
+
+1. `naming_mismatch`：同一个 official target，主要差在命名或 trim label。
+2. `timing_mismatch`：只在某个时间窗内需要临时覆盖，优先落 `MatchOverride`。
+3. `market_mismatch`：JATO key 与 official market key 实际不在同一个市场表达。
+4. `granularity_mismatch`：一侧比另一侧更粗或更细，例如 edition / powertrain 颗粒度不一致。
+
+这些分类会进入 observation 的 `match_reason_json.mappingResolver`，供后续 reconcile、assistant answer 和 workbench UI 共用。
 
 ## 4. 在线 federated 查询方案（DuckDB）
 
