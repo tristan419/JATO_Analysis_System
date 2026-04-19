@@ -1,3 +1,30 @@
+x-airflow-common: &airflow-common
+  build:
+    context: ./airflow
+    dockerfile: Dockerfile
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    JATO_REPO_ROOT: /opt/jato
+    APP_PROJECT_ROOT: /opt/jato
+    PYTHONPATH: /opt/jato/07_ScrapingToolkit
+    JATO_API_BASE: ${JATO_API_BASE:-http://host.docker.internal:8000/v1}
+    JATO_API_TOKEN: ${JATO_API_TOKEN:-change-me}
+  user: "${AIRFLOW_UID:-50000}:0"
+  volumes:
+    - ./:/opt/jato
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  profiles:
+    - airflow
+
 services:
   jato-dashboard:
     image: ${JATO_IMAGE:-jato-dashboard:local}
@@ -21,3 +48,65 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+  airflow-postgres:
+    image: postgres:16-alpine
+    container_name: jato-airflow-postgres
+    profiles:
+      - airflow
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./airflow/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: jato-airflow-init
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: /bin/bash
+    command:
+      - -lc
+      - >
+        airflow db migrate &&
+        airflow users list | grep -q "${AIRFLOW_ADMIN_USERNAME:-admin}" ||
+        airflow users create
+        --role Admin
+        --username "${AIRFLOW_ADMIN_USERNAME:-admin}"
+        --password "${AIRFLOW_ADMIN_PASSWORD:-admin}"
+        --firstname JATO
+        --lastname Admin
+        --email "${AIRFLOW_ADMIN_EMAIL:-admin@example.com}"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: jato-airflow-webserver
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    command: webserver
+    restart: unless-stopped
+    ports:
+      - "${AIRFLOW_HOST_PORT:-8080}:8080"
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: jato-airflow-scheduler
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    command: scheduler
+    restart: unless-stopped
