@@ -52,6 +52,8 @@ export interface DataFreshnessItem {
 export interface CountryChatTurn {
   role: "user" | "assistant";
   content: string;
+  extracted_params?: Record<string, unknown>;
+  intent_route?: string;
 }
 
 export interface CountryChatOption {
@@ -166,6 +168,123 @@ export interface CountryChatAnalysisMeta {
   modelTopN?: number;
 }
 
+export interface CountryChatRenderHint {
+  kind: string;
+  title: string;
+  intent?: string;
+}
+
+export interface CountryChatMarketScanScope {
+  pageKey: "drilldown" | "suvA" | "suvB" | string;
+  resolvedSegment?: string | null;
+  resolvedSegmentLabel?: string | null;
+  summaryText?: string;
+  totalRanking: MarketScanRankingItem[];
+  focusModel?: string | null;
+  focusModelRank?: number | null;
+  focusModelItem?: MarketScanRankingItem | null;
+  resolvedPeriod?: string | null;
+  selectedFuelTypes?: string[];
+  modelPerformance?: CountryChatModelPerformanceFocus | null;
+}
+
+export interface CountryChatShareMixItem {
+  label: string;
+  value: number;
+  sharePct: number;
+}
+
+export interface CountryChatMarketSignal {
+  title: string;
+  summary?: string | null;
+  publisher?: string | null;
+  publishedAt?: string | null;
+  reason?: string | null;
+}
+
+export interface CountryChatModelPerformanceFocus {
+  model: string;
+  rank?: number | null;
+  volume?: number | null;
+  shareDisplay?: string | null;
+  yoyDisplay?: string | null;
+  leaderModel?: string | null;
+  leaderShareDisplay?: string | null;
+  leaderVolumeGap?: number | null;
+  channelMix?: CountryChatShareMixItem[];
+  driveMix?: CountryChatShareMixItem[];
+  awdSharePct?: number | null;
+  awdShareDisplay?: string | null;
+  bodyStyleDistribution?: CountryChatShareMixItem[];
+  versionAxis?: "trim" | "version" | string;
+  versionDistribution?: CountryChatShareMixItem[];
+  bodyStyleNote?: string | null;
+  newsSignals?: CountryChatMarketSignal[];
+}
+
+export interface CountryChatGroundingLayer {
+  kind: string;
+  label: string;
+  detail: string;
+  freshness?: string | null;
+}
+
+export interface CountryChatEvidenceTable {
+  title: string;
+  columns: string[];
+  rows: string[][];
+}
+
+export interface CountryChatSourceCoverage {
+  requiredReady: number;
+  requiredTotal: number;
+  prefetchedCount: number;
+}
+
+export interface CountryChatTrustAssessment {
+  confidence: string;
+  evidenceSufficiency: string;
+  evidenceScore: number;
+  routeRationale: string;
+  missingFacts: string[];
+  sourceCoverage?: CountryChatSourceCoverage;
+}
+
+export interface CountryChatExecutionPlanSource {
+  key: string;
+  label?: string;
+  required?: boolean;
+  status?: string;
+  reason?: string;
+  toolName?: string;
+  query?: Record<string, unknown>;
+}
+
+export interface CountryChatExecutionPlanTool {
+  name: string;
+  arguments?: Record<string, unknown>;
+}
+
+export interface CountryChatExecutionPlan {
+  route?: string;
+  country?: string;
+  answerStrategy?: string;
+  orchestrationMode?: string;
+  sourcePlan?: CountryChatExecutionPlanSource[];
+  allowedToolNames?: string[];
+  prefetchedToolNames?: string[];
+  prefetchTools?: CountryChatExecutionPlanTool[];
+}
+
+export interface CountryChatGrounding {
+  strategyLabel: string;
+  summary: string;
+  layers: CountryChatGroundingLayer[];
+  keyFindings: string[];
+  evidenceTables: CountryChatEvidenceTable[];
+  trust?: CountryChatTrustAssessment;
+}
+
 export interface CountryChatSnapshot {
   country: string;
   route: string;
@@ -192,6 +311,7 @@ export interface CountryChatSnapshot {
   suvSedanTrend?: { items?: MarketScanBodyShareTrendItem[] } | Record<string, unknown>[];
   drilldown?: Record<string, unknown>;
   suvA?: Record<string, unknown>;
+  marketScanScope?: CountryChatMarketScanScope;
   positioningMap?: PositioningMapResponse;
   priceDistribution?: Record<string, unknown>[];
   nevRangeDistribution?: Record<string, unknown>[];
@@ -228,15 +348,21 @@ export interface CountryChatResponse {
   intent: string;
   primaryIntent?: string;
   intents?: string[];
+  focusedIntents?: string[];
+  intentRoute?: string;
   provider: string;
   model?: string | null;
   chatModelId?: string | null;
   providerAvailable: boolean;
   providerReason?: string | null;
+  answerMode?: string | null;
+  grounding?: CountryChatGrounding | null;
   contextSnapshot: CountryChatSnapshot;
   suggestedPrompts: string[];
   chartLinks?: CountryChatChartLink[];
+  renderHints?: CountryChatRenderHint[];
   extractedParams?: Record<string, unknown> | null;
+  executionPlan?: CountryChatExecutionPlan | null;
 }
 
 export interface CountryChatDeckResponse {
@@ -245,6 +371,7 @@ export interface CountryChatDeckResponse {
   primaryIntent?: string;
   intents?: string[];
   deckIntents?: string[];
+  intentRoute?: string;
   contextSnapshot: CountryChatSnapshot;
   controls?: CountryChatAnalysisMeta;
   extractedParams?: Record<string, unknown> | null;
@@ -778,11 +905,34 @@ export interface PositioningMapItem {
   cluster: number;
 }
 
+export interface PositioningPeerCorridor {
+  peerCount: number;
+  salesTotal: number;
+  lengthMin: number;
+  lengthMax: number;
+  msrpP25: number;
+  msrpMedian: number;
+  msrpP75: number;
+  pricePerMeterMedian?: number | null;
+  targetLength?: number | null;
+  targetMsrp?: number | null;
+  targetPricePerMeter?: number | null;
+  targetResidual?: number | null;
+  targetResidualPct?: number | null;
+  targetPricePerMeterResidualPct?: number | null;
+  positionLabel?: string | null;
+  stanceCode?: string | null;
+  stanceLabel?: string | null;
+  stanceDetail?: string | null;
+  salesWeighted?: boolean;
+}
+
 export interface PositioningMapResponse {
   rows: number;
   items: PositioningMapItem[];
   target: { Length: number; MSRP: number } | null;
   cluster_top3: string[];
+  peerCorridor?: PositioningPeerCorridor | null;
 }
 
 /* ---- Engineering Config ---- */
@@ -835,6 +985,7 @@ export interface MsrpSource {
   brand: string;
   sourceUrl: string;
   sourceType: string;
+  tier: number;
   extractorName: string;
   extractorVersion: string;
   priceSemantics: string;
@@ -1267,10 +1418,53 @@ export interface DataManagementActivity {
   databaseConnected: boolean;
 }
 
+export interface DataManagementAirflowService {
+  service: string;
+  state: string;
+  status: string;
+  health?: string | null;
+  containerName?: string | null;
+  publishedPorts: string[];
+}
+
+export interface DataManagementAirflowActions {
+  canStart: boolean;
+  canStop: boolean;
+  canOpenUi: boolean;
+}
+
+export interface DataManagementAirflowStatus {
+  available: boolean;
+  mode: string;
+  detail: string;
+  uiUrl: string;
+  running: boolean;
+  runningServices: number;
+  totalServices: number;
+  updatedAt: string;
+  services: DataManagementAirflowService[];
+  actions: DataManagementAirflowActions;
+}
+
+export interface DataManagementAirflowActionResponse {
+  action: string;
+  detail: string;
+  status: DataManagementAirflowStatus;
+}
+
+export interface DataManagementVocSyncResponse {
+  root: string;
+  countryCount: number;
+  sourceRunCount: number;
+  documentCount: number;
+  errorCount: number;
+}
+
 export interface DataManagementOverviewResponse {
   generatedAt: string;
   database: DataManagementDatabaseStatus;
   domains: DataManagementDomain[];
+  airflow: DataManagementAirflowStatus;
   fileInventory: DataManagementFileItem[];
   databaseTables: DataManagementTableItem[];
   activity: DataManagementActivity;
