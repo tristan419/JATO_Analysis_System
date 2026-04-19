@@ -122,6 +122,9 @@ class CountryNewsDigest(TimestampMixin, Base):
         nullable=True,
     )
     summary_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auto_review_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    publish_tier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    publish_decision: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class CountryNewsArticle(TimestampMixin, Base):
@@ -176,11 +179,121 @@ class CountryNewsArticle(TimestampMixin, Base):
         Text,
         nullable=True,
     )
+    auto_review_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    publish_tier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    publish_decision: Mapped[str | None] = mapped_column(Text, nullable=True)
     synced_at_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
     )
+
+
+class VocSourceRun(TimestampMixin, Base):
+    __tablename__ = "voc_source_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_code",
+            "collected_at_utc",
+            name="uq_voc_source_runs_source_collected",
+        ),
+        Index(
+            "ix_ops_voc_source_runs_country_collected",
+            "country_code",
+            "collected_at_utc",
+        ),
+        Index(
+            "ix_ops_voc_source_runs_publish_tier",
+            "publish_tier",
+        ),
+        {"schema": "ops"},
+    )
+
+    voc_source_run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    country_label: Mapped[str] = mapped_column(Text, nullable=False)
+    source_code: Mapped[str] = mapped_column(Text, nullable=False)
+    site_name: Mapped[str] = mapped_column(Text, nullable=False)
+    site_type: Mapped[str] = mapped_column(Text, nullable=False)
+    language: Mapped[str | None] = mapped_column(Text, nullable=True)
+    taxonomy_profile: Mapped[str | None] = mapped_column(Text, nullable=True)
+    collected_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    source_file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_meta_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    landing_page_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    collection_strategy_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    taxonomy_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    auto_review_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    publish_tier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    publish_decision: Mapped[str | None] = mapped_column(Text, nullable=True)
+    candidate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    document_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    publish_ready_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    errors_json: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
+
+
+class VocRawDocument(TimestampMixin, Base):
+    __tablename__ = "voc_raw_documents"
+    __table_args__ = (
+        UniqueConstraint(
+            "voc_source_run_id",
+            "source_url",
+            name="uq_voc_raw_documents_run_url",
+        ),
+        Index(
+            "ix_ops_voc_raw_documents_country_collected",
+            "country_code",
+            "collected_at_utc",
+        ),
+        Index(
+            "ix_ops_voc_raw_documents_publish_tier",
+            "publish_tier",
+        ),
+        {"schema": "ops"},
+    )
+
+    voc_raw_document_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    voc_source_run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("ops.voc_source_runs.voc_source_run_id"),
+        nullable=False,
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    country_label: Mapped[str] = mapped_column(Text, nullable=False)
+    source_code: Mapped[str] = mapped_column(Text, nullable=False)
+    site_name: Mapped[str] = mapped_column(Text, nullable=False)
+    site_type: Mapped[str] = mapped_column(Text, nullable=False)
+    language: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    link_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at_utc: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    collected_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    auto_review_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    publish_tier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    publish_decision: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ConfigProject(TimestampMixin, Base):
@@ -494,6 +607,168 @@ class ConfigVariant(TimestampMixin, Base):
     row_hash: Mapped[str] = mapped_column(Text, nullable=False)
     attributes_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     source_file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ConfigBaseVariant(TimestampMixin, Base):
+    __tablename__ = "base_variants"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "business_key",
+            name="uq_config_base_variants_project_key",
+        ),
+        Index(
+            "ix_engineering_base_variants_project_model",
+            "project_id",
+            "model",
+        ),
+        Index(
+            "ix_engineering_base_variants_brand_model",
+            "brand",
+            "model",
+        ),
+        {"schema": "engineering"},
+    )
+
+    base_variant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("engineering.config_projects.project_id"),
+        nullable=False,
+    )
+    business_key: Mapped[str] = mapped_column(Text, nullable=False)
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    trim_name: Mapped[str] = mapped_column(Text, nullable=False)
+    version_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    powertrain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    base_features_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    base_feature_labels_json: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+    source_variant_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+    market_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+
+
+class ConfigMarketVariant(TimestampMixin, Base):
+    __tablename__ = "market_variants"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_variant_id",
+            name="uq_config_market_variants_source_variant",
+        ),
+        Index(
+            "ix_engineering_market_variants_project_country",
+            "project_id",
+            "market_country",
+        ),
+        Index(
+            "ix_engineering_market_variants_base_country",
+            "base_variant_id",
+            "market_country",
+        ),
+        {"schema": "engineering"},
+    )
+
+    market_variant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("engineering.config_projects.project_id"),
+        nullable=False,
+    )
+    base_variant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("engineering.base_variants.base_variant_id"),
+        nullable=False,
+    )
+    source_variant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("engineering.config_variants.variant_id"),
+        nullable=False,
+    )
+    external_row_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    market_country: Mapped[str] = mapped_column(Text, nullable=False)
+    target_msrp: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    source_file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    override_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+
+
+class ConfigMarketFeatureOverride(TimestampMixin, Base):
+    __tablename__ = "market_feature_overrides"
+    __table_args__ = (
+        UniqueConstraint(
+            "market_variant_id",
+            "feature_code",
+            name="uq_config_market_feature_overrides_market_feature",
+        ),
+        Index(
+            "ix_engineering_market_feature_overrides_project_feature",
+            "project_id",
+            "feature_code",
+        ),
+        Index(
+            "ix_engineering_market_feature_overrides_market",
+            "market_variant_id",
+        ),
+        {"schema": "engineering"},
+    )
+
+    feature_override_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("engineering.config_projects.project_id"),
+        nullable=False,
+    )
+    market_variant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("engineering.market_variants.market_variant_id"),
+        nullable=False,
+    )
+    source_variant_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("engineering.config_variants.variant_id"),
+        nullable=True,
+    )
+    feature_code: Mapped[str] = mapped_column(Text, nullable=False)
+    feature_label: Mapped[str] = mapped_column(Text, nullable=False)
+    value_type: Mapped[str] = mapped_column(Text, nullable=False)
+    bool_value: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    number_value: Mapped[float | None] = mapped_column(
+        Numeric(14, 4),
+        nullable=True,
+    )
+    text_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    json_value: Mapped[dict | list | None] = mapped_column(JSONB, nullable=True)
+    availability: Mapped[str | None] = mapped_column(Text, nullable=True)
+    package_code: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ScrapeBatch(Base):

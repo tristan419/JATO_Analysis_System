@@ -135,6 +135,8 @@ class VersionComparisonDeckRequest(BaseModel):
 class CountryChatTurn(BaseModel):
     role: Literal["user", "assistant"]
     content: str
+    extracted_params: dict[str, object] = Field(default_factory=dict)
+    intent_route: str | None = None
 
 
 class CountryChatRequest(BaseModel):
@@ -220,6 +222,7 @@ class MsrpSourceCreate(BaseModel):
     brand: str
     source_url: str
     source_type: str
+    tier: int = Field(default=3, ge=1, le=5)
     extractor_name: str
     extractor_version: str
     price_semantics: str
@@ -233,6 +236,7 @@ class MsrpSourcePatch(BaseModel):
     brand: str | None = None
     source_url: str | None = None
     source_type: str | None = None
+    tier: int | None = Field(default=None, ge=1, le=5)
     extractor_name: str | None = None
     extractor_version: str | None = None
     price_semantics: str | None = None
@@ -345,6 +349,15 @@ class ReviewDecisionCreate(BaseModel):
     persist_override: bool = False
     override_reason: str | None = None
     valid_from_date: date | None = None
+    link_confidence: int = Field(default=100, ge=0, le=100)
+    link_source: str | None = None
+    link_notes: str | None = None
+    mismatch_reason_category: Literal[
+        "naming_mismatch",
+        "timing_mismatch",
+        "market_mismatch",
+        "granularity_mismatch",
+    ] | None = None
 
 
 class MatchOverrideCreate(BaseModel):
@@ -369,3 +382,30 @@ class MatchOverridePatch(BaseModel):
     valid_to_date: date | None = None
     override_reason: str | None = None
     created_by: str | None = None
+
+
+class JatoMsrpLinkCreate(BaseModel):
+    country: str
+    brand: str
+    jato_model: str
+    jato_trim: str
+    jato_powertrain: str | None = None
+    official_model: str
+    official_trim: str
+    official_edition: str | None = None
+    official_powertrain: str | None = None
+    confidence: int = Field(default=80, ge=0, le=100)
+    link_source: str
+    is_active: bool = True
+    notes: str | None = None
+
+
+class JatoMsrpLinkPatch(BaseModel):
+    official_model: str | None = None
+    official_trim: str | None = None
+    official_edition: str | None = None
+    official_powertrain: str | None = None
+    confidence: int | None = Field(default=None, ge=0, le=100)
+    link_source: str | None = None
+    is_active: bool | None = None
+    notes: str | None = None
