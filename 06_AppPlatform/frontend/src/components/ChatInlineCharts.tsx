@@ -194,12 +194,25 @@ function MiniPositioningCard({ snapshot, title }: { snapshot: CountryChatSnapsho
   if (!positioningMap) return null;
   const target = positioningMap.target ?? undefined;
   const nearby = Array.isArray(positioningMap.items) ? positioningMap.items.slice(0, 3) : [];
+  const peerCorridor = positioningMap.peerCorridor ?? null;
   const lines: string[] = [];
   if (target) {
     const length = Number(target.Length ?? 0);
     const msrp = Number(target.MSRP ?? 0);
     if (length > 0 || msrp > 0) {
       lines.push(`目标 ${length > 0 ? `${Math.round(length)}mm` : "-"} / ${msrp > 0 ? msrp.toLocaleString("en-US") : "-"}`);
+    }
+  }
+  if (peerCorridor) {
+    const p25 = Number(peerCorridor.msrpP25 ?? 0);
+    const median = Number(peerCorridor.msrpMedian ?? 0);
+    const p75 = Number(peerCorridor.msrpP75 ?? 0);
+    const stanceLabel = String(peerCorridor.stanceLabel ?? "").trim();
+    if (stanceLabel) {
+      lines.push(`姿态 ${stanceLabel}`);
+    }
+    if (p25 > 0 || p75 > 0) {
+      lines.push(`Peer ${p25 > 0 ? p25.toLocaleString("en-US") : "-"} - ${p75 > 0 ? p75.toLocaleString("en-US") : "-"} · 中位 ${median > 0 ? median.toLocaleString("en-US") : "-"}`);
     }
   }
   nearby.forEach((item) => {

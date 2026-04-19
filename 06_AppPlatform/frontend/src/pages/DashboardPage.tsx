@@ -14,7 +14,7 @@ import {
   FILTER_ORDER,
 } from "../dashboardFilters";
 import type { FilterKey } from "../dashboardFilters";
-import type { OverviewResponse, TimeSeriesPoint, GroupedTimeSeriesItem, ModelVersionItem, PositioningMapItem, OthersDetailItem, DataFreshnessItem } from "../types";
+import type { OverviewResponse, TimeSeriesPoint, GroupedTimeSeriesItem, ModelVersionItem, PositioningMapItem, PositioningPeerCorridor, OthersDetailItem, DataFreshnessItem } from "../types";
 import { LazyPlotlyChart as PlotlyChart } from "../components/LazyPlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
 import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanel";
@@ -159,6 +159,7 @@ export function DashboardPage() {
   const [pmItems, setPmItems] = useState<PositioningMapItem[]>(() => cachedPage?.pmItems ?? []);
   const [pmTarget, setPmTarget] = useState<{ Length: number; MSRP: number } | null>(() => cachedPage?.pmTarget ?? null);
   const [pmClusterTop3, setPmClusterTop3] = useState<string[]>(() => cachedPage?.pmClusterTop3 ?? []);
+  const [pmPeerCorridor, setPmPeerCorridor] = useState<PositioningPeerCorridor | null>(() => cachedPage?.pmPeerCorridor ?? null);
   const [pmLoading, setPmLoading] = useState(false);
 
   /* global time axis */
@@ -321,7 +322,7 @@ export function DashboardPage() {
         top_n: pmTopN,
         n_clusters: pmNClusters,
       });
-      setPmItems(ensureArray(r.items)); setPmTarget(r.target ?? null); setPmClusterTop3(ensureArray(r.cluster_top3));
+      setPmItems(ensureArray(r.items)); setPmTarget(r.target ?? null); setPmClusterTop3(ensureArray(r.cluster_top3)); setPmPeerCorridor(r.peerCorridor ?? null);
     } catch (e) { setError((e as Error).message); }
     finally { setPmLoading(false); }
   }
@@ -585,6 +586,7 @@ export function DashboardPage() {
     pmItems,
     pmTarget,
     pmClusterTop3,
+    pmPeerCorridor,
     timeRange,
     monthGrain,
   }), [
@@ -637,6 +639,7 @@ export function DashboardPage() {
     pmLengthRange,
     pmManualCompetitors,
     pmNClusters,
+    pmPeerCorridor,
     pmTarget,
     pmTargetLength,
     pmTargetMsrp,
@@ -2194,7 +2197,7 @@ export function DashboardPage() {
               <div className="hero-meta-block dashboard-deck-hero-stat">
                 <span className="hero-meta-label">Manual rivals</span>
                 <strong className="hero-meta-value">{String(pmManualCompetitors.length).padStart(2, "0")}</strong>
-                <span className="hero-meta-subvalue">{pmClusterTop3.length ? `${pmClusterTop3.length} 个Top3标签` : "尚未生成聚类代表"}</span>
+                <span className="hero-meta-subvalue">{pmPeerCorridor ? `${pmPeerCorridor.peerCount} 个 peer` : pmClusterTop3.length ? `${pmClusterTop3.length} 个Top3标签` : "尚未生成聚类代表"}</span>
               </div>
             </div>
           </div>
@@ -2244,6 +2247,22 @@ export function DashboardPage() {
             <div className="pm-cluster-top3">
               <span className="analysis-chip-label">{"KMeans Top3"}</span>
               {pmClusterTop3.map(c=><span key={c} className="pm-top3-label">{c}</span>)}
+            </div>
+          )}
+          {pmPeerCorridor && (
+            <div className="pm-cluster-top3">
+              <span className="analysis-chip-label">Peer corridor</span>
+              {pmPeerCorridor.stanceLabel ? (
+                <span className="pm-top3-label">{pmPeerCorridor.stanceLabel}</span>
+              ) : null}
+              <span className="pm-top3-label">{`${Math.round(pmPeerCorridor.msrpP25).toLocaleString("en-US")} - ${Math.round(pmPeerCorridor.msrpP75).toLocaleString("en-US")}`}</span>
+              <span className="pm-top3-label">{`Median ${Math.round(pmPeerCorridor.msrpMedian).toLocaleString("en-US")}`}</span>
+              <span className="pm-top3-label">{`${Math.round(pmPeerCorridor.lengthMin).toLocaleString("en-US")} - ${Math.round(pmPeerCorridor.lengthMax).toLocaleString("en-US")} mm`}</span>
+              {typeof pmPeerCorridor.targetMsrp === "number" ? (
+                <span className="pm-top3-label">
+                  {`Target ${Math.round(pmPeerCorridor.targetMsrp).toLocaleString("en-US")} / ${typeof pmPeerCorridor.targetResidualPct === "number" ? `${pmPeerCorridor.targetResidualPct > 0 ? "+" : ""}${pmPeerCorridor.targetResidualPct.toFixed(1)}%` : "-"}`}
+                </span>
+              ) : null}
             </div>
           )}
           {pmItems.length > 0 && (() => {

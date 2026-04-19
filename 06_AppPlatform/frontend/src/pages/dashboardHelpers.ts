@@ -13,6 +13,7 @@ import type {
   GroupedTimeSeriesItem,
   ModelVersionItem,
   PositioningMapItem,
+  PositioningPeerCorridor,
   OthersDetailItem,
 } from "../types";
 
@@ -86,6 +87,7 @@ export interface DashboardPageCache {
   pmItems: PositioningMapItem[];
   pmTarget: { Length: number; MSRP: number } | null;
   pmClusterTop3: string[];
+  pmPeerCorridor: PositioningPeerCorridor | null;
   timeRange: TimeRange | null;
   monthGrain: "month" | "quarter" | "year";
 }

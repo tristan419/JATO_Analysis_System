@@ -96,6 +96,24 @@ interface ScatterPoint {
   group: string;
 }
 
+interface PositioningPeerCorridorSummary {
+  peerCount: number;
+  lengthMin: number;
+  lengthMax: number;
+  msrpP25: number;
+  msrpMedian: number;
+  msrpP75: number;
+  targetMsrp: number | null;
+  targetResidual: number | null;
+  targetResidualPct: number | null;
+  pricePerMeterMedian: number | null;
+  targetPricePerMeter: number | null;
+  targetPricePerMeterResidualPct: number | null;
+  positionLabel: string;
+  stanceLabel: string;
+  stanceDetail: string;
+}
+
 interface HeatmapDataset {
   rows: string[];
   columns: string[];
@@ -156,6 +174,22 @@ function formatPercent(value: number | null): string {
   }
   const scaled = Math.abs(value) <= 1 ? value * 100 : value;
   return `${scaled.toFixed(1)}%`;
+}
+
+function formatSignedMetric(value: number | null): string {
+  if (value === null) {
+    return "-";
+  }
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${formatMetric(value)}`;
+}
+
+function formatSignedPercent(value: number | null): string {
+  if (value === null) {
+    return "-";
+  }
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${formatPercent(value)}`;
 }
 
 function formatDateLabel(value: string | null | undefined): string {
@@ -455,8 +489,60 @@ function buildScatterDataset(
     .filter((item): item is ScatterPoint => item !== null);
 }
 
+function peerCorridorFromUnknown(source: unknown): PositioningPeerCorridorSummary | null {
+  if (!isRecord(source)) {
+    return null;
+  }
+  const peerCount = toNumber(source.peerCount);
+  const lengthMin = toNumber(source.lengthMin);
+  const lengthMax = toNumber(source.lengthMax);
+  const msrpP25 = toNumber(source.msrpP25);
+  const msrpMedian = toNumber(source.msrpMedian);
+  const msrpP75 = toNumber(source.msrpP75);
+  if (
+    peerCount === null
+    || lengthMin === null
+    || lengthMax === null
+    || msrpP25 === null
+    || msrpMedian === null
+    || msrpP75 === null
+  ) {
+    return null;
+  }
+  return {
+    peerCount,
+    lengthMin,
+    lengthMax,
+    msrpP25,
+    msrpMedian,
+    msrpP75,
+    targetMsrp: toNumber(source.targetMsrp),
+    targetResidual: toNumber(source.targetResidual),
+    targetResidualPct: toNumber(source.targetResidualPct),
+    pricePerMeterMedian: toNumber(source.pricePerMeterMedian),
+    targetPricePerMeter: toNumber(source.targetPricePerMeter),
+    targetPricePerMeterResidualPct: toNumber(source.targetPricePerMeterResidualPct),
+    positionLabel: toText(source.positionLabel) || "unknown",
+    stanceLabel: toText(source.stanceLabel),
+    stanceDetail: toText(source.stanceDetail),
+  };
+}
+
 function titleCaseLabel(value: string): string {
   return value.replace(/([a-z])([A-Z])/g, "$1 $2");
+}
+
+function translatePeerPosition(value: string): string {
+  switch (value) {
+    case "below-peer-range":
+      return "低于 peer corridor";
+    case "above-peer-range":
+      return "高于 peer corridor";
+    case "within-peer-range":
+      return "位于 peer corridor 内";
+    default:
+      return "peer corridor 待定";
+  }
 }
 
 function buildDeckLayout(
@@ -531,6 +617,32 @@ function SectionCard({
       </div>
       {children}
     </section>
+  );
+}
+
+function InsightListCard({
+  title,
+  subtitle,
+  items,
+}: {
+  title: string;
+  subtitle: string;
+  items: Array<{ label: string; value: string }>;
+}) {
+  if (items.length === 0) {
+    return null;
+  }
+  return (
+    <SectionCard title={title} subtitle={subtitle}>
+      <div className="copilot-analysis-insight-list">
+        {items.map((item) => (
+          <div key={`${title}-${item.label}`} className="copilot-analysis-insight-item">
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+          </div>
+        ))}
+      </div>
+    </SectionCard>
   );
 }
 
@@ -1269,6 +1381,7 @@ export function CountryChatAnalysisDeck({
       labelKeys: ["Model", "Brand"],
       groupKeys: ["cluster", "Segment", "Brand"],
     });
+    const positioningPeerCorridor = peerCorridorFromUnknown(snapshot.positioningMap?.peerCorridor);
     const positioningTarget = buildPositioningTarget(snapshot);
     const priceScatter = buildScatterDataset(snapshot.priceDistribution, {
       xKeys: ["Length", "BatteryCapacity", "PricePerMeter"],
@@ -1320,6 +1433,9 @@ export function CountryChatAnalysisDeck({
 
     if (positioningPoints.length === 0) {
       workbenchMissing.push("竞品定位图");
+    }
+    if (!positioningPeerCorridor) {
+      workbenchMissing.push("Peer 价格走廊");
     }
     if (modelVersionBubble.length === 0) {
       workbenchMissing.push("版本气泡");
@@ -1403,6 +1519,60 @@ export function CountryChatAnalysisDeck({
           xLabel="Length"
           yLabel="MSRP"
           target={positioningTarget}
+        />,
+      );
+    }
+    if (positioningPeerCorridor) {
+      const corridorItems = [
+        {
+          label: "价格姿态",
+          value: positioningPeerCorridor.stanceLabel || translatePeerPosition(positioningPeerCorridor.positionLabel),
+        },
+        {
+          label: "Peer corridor",
+          value: `${formatMetric(positioningPeerCorridor.msrpP25)} - ${formatMetric(positioningPeerCorridor.msrpP75)}`,
+        },
+        {
+          label: "Peer 中位数",
+          value: formatMetric(positioningPeerCorridor.msrpMedian),
+        },
+        {
+          label: "长度窗口",
+          value: `${formatMetric(positioningPeerCorridor.lengthMin)} - ${formatMetric(positioningPeerCorridor.lengthMax)} mm`,
+        },
+      ];
+      if (positioningPeerCorridor.targetMsrp !== null) {
+        corridorItems.push(
+          {
+            label: "目标 MSRP",
+            value: formatMetric(positioningPeerCorridor.targetMsrp),
+          },
+          {
+            label: "Residual",
+            value: `${formatSignedMetric(positioningPeerCorridor.targetResidual)} / ${formatSignedPercent(positioningPeerCorridor.targetResidualPct)}`,
+          },
+          {
+            label: "位置判断",
+            value: translatePeerPosition(positioningPeerCorridor.positionLabel),
+          },
+        );
+      }
+      if (positioningPeerCorridor.targetPricePerMeterResidualPct !== null) {
+        corridorItems.push({
+          label: "每米价格 residual",
+          value: formatSignedPercent(positioningPeerCorridor.targetPricePerMeterResidualPct),
+        });
+      }
+      workbenchCards.push(
+        <InsightListCard
+          key="positioning-peer-corridor"
+          title="Peer 价格走廊 / residual"
+          subtitle={
+            positioningPeerCorridor.stanceDetail
+              ? `${formatMetric(positioningPeerCorridor.peerCount)} 个 peer · ${positioningPeerCorridor.stanceDetail}`
+              : `${formatMetric(positioningPeerCorridor.peerCount)} 个 peer`
+          }
+          items={corridorItems}
         />,
       );
     }
