@@ -66,14 +66,21 @@ python -m pytest tests/unit
 - GET /v1/engineering/projects
 - POST /v1/engineering/projects
 - POST /v1/engineering/projects/{project_id}/imports
+- POST /v1/engineering/projects/{project_id}/normalize
 - PATCH /v1/engineering/projects/{project_id}
 - GET /v1/engineering/projects/imports
 - GET /v1/engineering/projects/imports/{config_import_batch_id}
 - GET /v1/engineering/projects/imports/{config_import_batch_id}/page-data
 - GET /v1/engineering/projects/variants
+- GET /v1/engineering/projects/base-variants
+- GET /v1/engineering/projects/market-variants
+- GET /v1/engineering/projects/feature-overrides
 - POST /v1/msrp/batches
 - GET /v1/msrp/current-prices
 - POST /v1/msrp/current-prices/materialize
+- GET /v1/msrp/links
+- POST /v1/msrp/links
+- PATCH /v1/msrp/links/{link_id}
 - GET /v1/msrp/sources
 - POST /v1/msrp/sources
 - PATCH /v1/msrp/sources/{source_id}
@@ -87,6 +94,11 @@ python -m pytest tests/unit
 - POST /v1/review/overrides
 - PATCH /v1/review/overrides/{override_id}
 
+MSRP mapping lifecycle:
+- `JatoMsrpLink` = stable active mapping from JATO key to official key
+- `MatchOverride` = dated exception that overrides link results within `valid_from_date` / `valid_to_date`
+- review approve/remap now writes an active link; `persist_override=true` additionally writes a dated override
+
 ## Production
 
 - Tencent Cloud Ubuntu deployment: `Markdown_Readme/Fullstack/TENCENT_CLOUD_DEPLOY.md`
@@ -94,6 +106,13 @@ python -m pytest tests/unit
 - PostgreSQL local dev: `Markdown_Readme/Fullstack/BACKEND_POSTGRES_LOCAL_DEV_2026-04-10.md`
 - systemd template: `03_Scripts/deploy/systemd/jato-fullstack-backend@.service`
 - nginx template: `03_Scripts/deploy/nginx/jato_fullstack.conf.example`
+
+## Architecture docs
+
+- Country Copilot routing + local/live retrieval: `Markdown_Readme/Fullstack/01_DevWorkflow/COUNTRY_COPILOT_INTENT_AND_HYBRID_RETRIEVAL_2026-04-17.md`
+- JATO sales × MSRP join boundary: `Markdown_Readme/Fullstack/03_Database/CROSS_SOURCE_JOIN_DESIGN_2026-04-17.md`
+- MSRP version matrix + multi-source reconciliation: `Markdown_Readme/Fullstack/MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md`
+- Unified scraping pipeline: `Markdown_Readme/Fullstack/02_DataETL/UNIFIED_SCRAPING_PIPELINE_2026-04-17.md`
 
 ## Country News Ops
 
@@ -106,6 +125,31 @@ python -m pytest tests/unit
 - 本地 macOS：`03_Scripts/install_local_country_news_sync_launchd.sh`
 - 本地 runner：`03_Scripts/run_country_news_sync.sh`
 - GitHub Actions：`.github/workflows/country-news-sync.yml`
+- Airflow 适合管理**定时抓取 / 重试 / 依赖串联 / 补跑(backfill)** 这类批处理流程；用户点击后要立刻刷新的在线请求，仍建议保留在应用侧直接触发。
+
+### Airflow UI (local)
+
+```bash
+docker compose --profile airflow up airflow-init
+docker compose --profile airflow up -d airflow-webserver airflow-scheduler airflow-postgres
+
+# Open http://localhost:8080
+# username: admin
+# password: admin
+```
+
+本地打开 `/data-management` 时，如果宿主机存在 Docker Compose，页面里的 **Local Airflow** 卡片也会提供一键**启动 / 暂停 / 打开 UI**；腾讯云这类无 Docker 环境会自动显示为不可用。
+
+默认会挂出这些 DAG：
+- `jato_country_news_sync`
+- `jato_msrp_low_concurrency`
+- `jato_scraping_toolkit_manual`
+
+手动触发时可在 Airflow UI 的 **Trigger DAG w/ config** 里传 JSON，例如：
+
+```json
+{"countries":"se,no","pause_seconds":10}
+```
 
 ### Cron Example
 

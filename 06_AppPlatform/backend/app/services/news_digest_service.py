@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections import Counter
 import json
 import logging
 import os
+import re
 import time
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -10,6 +12,7 @@ from email.utils import parsedate_to_datetime
 from threading import BoundedSemaphore
 from typing import Any, Iterator
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from sqlalchemy import select
@@ -109,10 +112,283 @@ DEFAULT_GEMINI_MAX_CONCURRENCY = max(
 _COUNTRY_CONFIGS: dict[str, CountryNewsConfig] | None = None
 _COUNTRY_ALIASES: dict[str, str] | None = None
 _GEMINI_CONCURRENCY_GUARD = BoundedSemaphore(DEFAULT_GEMINI_MAX_CONCURRENCY)
+_NEWS_REVIEW_TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
+_NEWS_REVIEW_STOPWORDS = {
+    "about",
+    "after",
+    "amid",
+    "auto",
+    "automotive",
+    "cars",
+    "from",
+    "into",
+    "news",
+    "says",
+    "that",
+    "their",
+    "them",
+    "they",
+    "this",
+    "with",
+}
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+_OFFICIAL_PUBLISHER_HINTS = (
+    "government",
+    "ministry",
+    "department",
+    "transport ministry",
+    "european commission",
+    "parliament",
+    "official",
+)
+_ASSOCIATION_PUBLISHER_HINTS = (
+    "acea",
+    "transport & environment",
+    "transport and environment",
+    "association",
+    "federation",
+)
+_TRUSTED_MEDIA_HINTS = (
+    "reuters",
+    "bloomberg",
+    "financial times",
+    "automotive news",
+)
+_AGGREGATOR_PUBLISHER_HINTS = ("google news",)
 
 
 def _normalize_alias(value: str) -> str:
     return str(value or "").strip().lower()
+
+
+def _news_review_tokens(*parts: Any) -> set[str]:
+    tokens: set[str] = set()
+    for part in parts:
+        for token in _NEWS_REVIEW_TOKEN_RE.findall(str(part or "").casefold()):
+            if token in _NEWS_REVIEW_STOPWORDS:
+                continue
+            tokens.add(token)
+    return tokens
+
+
+def _classify_news_source_tier(
+    *,
+    publisher: str,
+    source_code: str,
+    tags: list[str],
+) -> str:
+    searchable = " ".join(
+        item.strip().casefold()
+        for item in (
+            publisher,
+            source_code,
+            " ".join(tags),
+        )
+        if item and str(item).strip()
+    )
+    if any(hint in searchable for hint in _AGGREGATOR_PUBLISHER_HINTS):
+        return "aggregator"
+    if any(hint in searchable for hint in _OFFICIAL_PUBLISHER_HINTS):
+        return "official"
+    if any(hint in searchable for hint in _ASSOCIATION_PUBLISHER_HINTS):
+        return "association"
+    if any(hint in searchable for hint in _TRUSTED_MEDIA_HINTS):
+        return "trusted_media"
+    if "local" in {tag.casefold() for tag in tags}:
+        return "local_media"
+    return "standard_media"
+
+
+def _build_news_corroboration_map(
+    article_rows: list[dict[str, Any]],
+) -> dict[str, int]:
+    token_sets = [
+        _news_review_tokens(
+            row.get("title"),
+            row.get("summary"),
+            row.get("rawSummary"),
+        )
+        for row in article_rows
+    ]
+    corroboration: dict[str, int] = {}
+    for index, row in enumerate(article_rows):
+        url = str(row.get("url") or "").strip()
+        if not url:
+            continue
+        publishers: set[str] = set()
+        base_tokens = token_sets[index]
+        if len(base_tokens) < 3:
+            corroboration[url] = 0
+            continue
+        for compare_index, compare_row in enumerate(article_rows):
+            if compare_index == index:
+                continue
+            if str(compare_row.get("publisher") or "").strip().casefold() == str(
+                row.get("publisher") or "",
+            ).strip().casefold():
+                continue
+            overlap = base_tokens & token_sets[compare_index]
+            if len(overlap) < 3:
+                continue
+            overlap_ratio = len(overlap) / max(
+                1,
+                min(len(base_tokens), len(token_sets[compare_index])),
+            )
+            if overlap_ratio >= 0.45:
+                publishers.add(str(compare_row.get("publisher") or "").strip())
+        corroboration[url] = len(publishers)
+    return corroboration
+
+
+def _score_news_article_row(
+    row: dict[str, Any],
+    *,
+    corroborated_publishers: int,
+) -> dict[str, Any]:
+    title = str(row.get("title") or "").strip()
+    summary = str(row.get("summary") or row.get("rawSummary") or "").strip()
+    url = str(row.get("url") or "").strip()
+    tags = [str(tag).strip() for tag in row.get("tags") or [] if str(tag).strip()]
+    source_tier = _classify_news_source_tier(
+        publisher=str(row.get("publisher") or ""),
+        source_code=str(row.get("sourceCode") or ""),
+        tags=tags,
+    )
+    score = 0
+    signals: list[str] = []
+    warnings: list[str] = []
+
+    if urlparse(url).netloc:
+        score += 1
+        signals.append("url-host-present")
+    else:
+        warnings.append("missing-url-host")
+
+    if len(title) >= 28:
+        score += 1
+        signals.append("title-length-ok")
+    else:
+        warnings.append("short-title")
+
+    if len(summary) >= 120:
+        score += 2
+        signals.append("summary-rich")
+    elif len(summary) >= 60:
+        score += 1
+        signals.append("summary-present")
+    else:
+        warnings.append("thin-summary")
+
+    published_at_utc = row.get("publishedAtUtc")
+    if isinstance(published_at_utc, datetime):
+        age_days = max(
+            0,
+            int((_utc_now() - published_at_utc).total_seconds() // 86400),
+        )
+        if age_days <= 14:
+            score += 2
+            signals.append("fresh-14d")
+        elif age_days <= 45:
+            score += 1
+            signals.append("fresh-45d")
+        else:
+            warnings.append("stale-source")
+    else:
+        warnings.append("missing-published-at")
+
+    if source_tier in {"official", "association"}:
+        score += 2
+        signals.append(f"source-tier:{source_tier}")
+    elif source_tier in {"trusted_media", "local_media"}:
+        score += 1
+        signals.append(f"source-tier:{source_tier}")
+    elif source_tier == "aggregator":
+        warnings.append("aggregator-source")
+
+    if corroborated_publishers >= 1:
+        score += 2
+        signals.append(f"corroborated:{corroborated_publishers}")
+
+    if tags:
+        score += 1
+        signals.append("tagged")
+
+    if score >= 7:
+        publish_tier = "high"
+        publish_decision = "auto_publish"
+    elif score >= 4:
+        publish_tier = "medium"
+        publish_decision = "candidate_publish"
+    else:
+        publish_tier = "low"
+        publish_decision = "holdout"
+
+    return {
+        "version": "news-auto-review-v1",
+        "score": score,
+        "maxScore": 11,
+        "publishTier": publish_tier,
+        "publishDecision": publish_decision,
+        "sourceTier": source_tier,
+        "corroboratedPublishers": corroborated_publishers,
+        "signals": signals,
+        "warnings": warnings,
+    }
+
+
+def _apply_news_auto_review(
+    article_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    reviewed_rows: list[dict[str, Any]] = []
+    corroboration = _build_news_corroboration_map(article_rows)
+    for row in article_rows:
+        cloned_row = dict(row)
+        raw_payload = row.get("rawPayload")
+        raw_payload_dict = dict(raw_payload) if isinstance(raw_payload, dict) else {}
+        review = raw_payload_dict.get("autoReview")
+        if not isinstance(review, dict):
+            review = row.get("autoReview")
+        if not isinstance(review, dict):
+            review = _score_news_article_row(
+                row,
+                corroborated_publishers=corroboration.get(
+                    str(row.get("url") or "").strip(),
+                    0,
+                ),
+            )
+        raw_payload_dict["autoReview"] = review
+        cloned_row["rawPayload"] = raw_payload_dict
+        cloned_row["autoReview"] = review
+        reviewed_rows.append(cloned_row)
+    return reviewed_rows
+
+
+def _summarize_news_auto_review(
+    article_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    tier_counter = Counter(
+        str((row.get("autoReview") or {}).get("publishTier") or "unknown")
+        for row in article_rows
+    )
+    accepted = sum(
+        1
+        for row in article_rows
+        if str((row.get("autoReview") or {}).get("publishDecision") or "") != "holdout"
+    )
+    return {
+        "version": "news-auto-review-v1",
+        "reviewedCount": len(article_rows),
+        "publishedCount": accepted,
+        "heldOutCount": max(0, len(article_rows) - accepted),
+        "tierCounts": {
+            "high": int(tier_counter.get("high", 0)),
+            "medium": int(tier_counter.get("medium", 0)),
+            "low": int(tier_counter.get("low", 0)),
+        },
+    }
 
 
 def _ensure_country_indexes(
@@ -236,6 +512,7 @@ def get_country_news_payload(
         articles=articles,
         enrichment=None,
     )
+    article_rows = _apply_news_auto_review(article_rows)
     return _build_public_payload(
         country_code=country_code,
         country_label=country_config.country_label,
@@ -298,6 +575,7 @@ def refresh_country_news(
         articles=articles,
         enrichment=enrichment,
     )
+    article_rows = _apply_news_auto_review(article_rows)
     synced_at = datetime.now(UTC)
     digest_override = _normalize_digest_override(enrichment)
     payload = _build_public_payload(
@@ -494,6 +772,20 @@ def _upsert_country_news_payload(
     synced_at: datetime,
 ) -> None:
     news_digest = payload.get("newsDigest") or {}
+    review_summary = payload.get("reviewSummary") or {}
+    reviewed_article_rows = _apply_news_auto_review(article_rows)
+    digest_publish_tier = None
+    if int(review_summary.get("tierCounts", {}).get("high") or 0) > 0:
+        digest_publish_tier = "high"
+    elif int(review_summary.get("tierCounts", {}).get("medium") or 0) > 0:
+        digest_publish_tier = "medium"
+    elif int(review_summary.get("reviewedCount") or 0) > 0:
+        digest_publish_tier = "low"
+    digest_publish_decision = None
+    if int(review_summary.get("publishedCount") or 0) > 0:
+        digest_publish_decision = "auto_publish"
+    elif int(review_summary.get("reviewedCount") or 0) > 0:
+        digest_publish_decision = "holdout"
     digest_insert = insert(CountryNewsDigest).values(
         country_news_digest_id=_new_uuid_string(),
         country_code=payload.get("countryCode"),
@@ -508,6 +800,9 @@ def _upsert_country_news_payload(
         highlights_json=_json_safe(news_digest.get("highlights") or []),
         summary_provider=news_digest.get("summaryProvider"),
         summary_model=news_digest.get("summaryModel"),
+        auto_review_json=_json_safe(review_summary),
+        publish_tier=digest_publish_tier,
+        publish_decision=digest_publish_decision,
     )
     session.execute(
         digest_insert.on_conflict_do_update(
@@ -522,12 +817,19 @@ def _upsert_country_news_payload(
                 "highlights_json": digest_insert.excluded.highlights_json,
                 "summary_provider": digest_insert.excluded.summary_provider,
                 "summary_model": digest_insert.excluded.summary_model,
+                "auto_review_json": digest_insert.excluded.auto_review_json,
+                "publish_tier": digest_insert.excluded.publish_tier,
+                "publish_decision": digest_insert.excluded.publish_decision,
                 "updated_at_utc": synced_at,
             },
         )
     )
 
-    for article in article_rows:
+    for article in reviewed_article_rows:
+        article_review = article.get("autoReview") or {}
+        raw_payload = article.get("rawPayload")
+        raw_payload_dict = dict(raw_payload) if isinstance(raw_payload, dict) else {}
+        raw_payload_dict["autoReview"] = article_review
         article_insert = insert(CountryNewsArticle).values(
             country_news_article_id=_new_uuid_string(),
             country_code=article.get("countryCode"),
@@ -540,9 +842,12 @@ def _upsert_country_news_payload(
             summary=article.get("summary"),
             published_at_utc=article.get("publishedAtUtc"),
             tags_json=_json_safe(article.get("tags") or []),
-            raw_payload_json=_json_safe(article.get("rawPayload") or {}),
+            raw_payload_json=_json_safe(raw_payload_dict),
             intelligence_provider=article.get("summaryProvider"),
             intelligence_model=article.get("summaryModel"),
+            auto_review_json=_json_safe(article_review),
+            publish_tier=article_review.get("publishTier"),
+            publish_decision=article_review.get("publishDecision"),
             synced_at_utc=synced_at,
         )
         session.execute(
@@ -568,6 +873,9 @@ def _upsert_country_news_payload(
                     "intelligence_model": (
                         article_insert.excluded.intelligence_model
                     ),
+                    "auto_review_json": article_insert.excluded.auto_review_json,
+                    "publish_tier": article_insert.excluded.publish_tier,
+                    "publish_decision": article_insert.excluded.publish_decision,
                     "synced_at_utc": article_insert.excluded.synced_at_utc,
                     "updated_at_utc": synced_at,
                 },
@@ -653,16 +961,23 @@ def _build_public_payload(
     summary_provider: str,
     summary_model: str | None,
 ) -> dict[str, Any]:
+    reviewed_rows = _apply_news_auto_review(article_rows)
+    published_rows = [
+        row
+        for row in reviewed_rows
+        if str((row.get("autoReview") or {}).get("publishDecision") or "") != "holdout"
+    ]
+    review_summary = _summarize_news_auto_review(reviewed_rows)
     public_events = [
         _public_market_event(row)
-        for row in article_rows[:limit]
+        for row in published_rows[:limit]
     ]
     news_digest = _build_news_digest(
         country_code=country_code,
         country_label=country_label,
         market_events=public_events,
         stale=stale,
-        digest_override=digest_override,
+        digest_override=digest_override if public_events else None,
         synced_at=synced_at,
         summary_provider=summary_provider,
         summary_model=summary_model,
@@ -672,6 +987,7 @@ def _build_public_payload(
         "countryLabel": country_label,
         "marketEvents": public_events,
         "newsDigest": news_digest,
+        "reviewSummary": review_summary,
     }
 
 
@@ -686,6 +1002,7 @@ def _public_market_event(article_row: dict[str, Any]) -> dict[str, Any]:
         "url": article_row.get("url"),
         "publishedAt": article_row.get("publishedAt"),
         "tags": list(article_row.get("tags") or []),
+        "autoReview": article_row.get("autoReview"),
     }
 
 
@@ -791,6 +1108,8 @@ def _digest_override_from_model(
 
 
 def _article_row_from_model(article: CountryNewsArticle) -> dict[str, Any]:
+    raw_payload = article.raw_payload_json or {}
+    auto_review = article.auto_review_json or raw_payload.get("autoReview")
     return {
         "sourceCode": article.source_code,
         "countryCode": article.country_code,
@@ -803,9 +1122,10 @@ def _article_row_from_model(article: CountryNewsArticle) -> dict[str, Any]:
         "publishedAt": _datetime_to_iso(article.published_at_utc),
         "publishedAtUtc": article.published_at_utc,
         "tags": _normalize_tag_list(article.tags_json),
-        "rawPayload": article.raw_payload_json or {},
+        "rawPayload": raw_payload,
         "summaryProvider": article.intelligence_provider,
         "summaryModel": article.intelligence_model,
+        "autoReview": auto_review,
     }
 
 
@@ -829,6 +1149,13 @@ def _empty_news_payload(
         "countryLabel": country_label,
         "marketEvents": [],
         "newsDigest": None,
+        "reviewSummary": {
+            "version": "news-auto-review-v1",
+            "reviewedCount": 0,
+            "publishedCount": 0,
+            "heldOutCount": 0,
+            "tierCounts": {"high": 0, "medium": 0, "low": 0},
+        },
     }
 
 

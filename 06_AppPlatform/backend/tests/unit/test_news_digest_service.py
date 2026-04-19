@@ -165,6 +165,64 @@ def test_refresh_country_news_uses_gemini_only_for_prefetched_digest(
     assert payload["newsDigest"]["headline"] == "德国车队税收激励进入调整窗口"
     assert payload["marketEvents"][0]["summary"] == "车队税收激励或收紧"
     assert payload["marketEvents"][0]["tags"] == ["policy", "fleet"]
+    assert payload["marketEvents"][0]["autoReview"]["publishDecision"] in {
+        "auto_publish",
+        "candidate_publish",
+    }
+    assert payload["reviewSummary"]["reviewedCount"] == 1
+
+
+def test_refresh_country_news_holds_out_low_confidence_aggregator_items(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        news_digest_service,
+        "resolve_country_news_code",
+        lambda country: "DE",
+    )
+    monkeypatch.setattr(
+        news_digest_service,
+        "_ensure_country_indexes",
+        lambda: ({"DE": _GERMANY_CONFIG}, {}),
+    )
+    monkeypatch.setattr(
+        news_digest_service,
+        "_gemini_enrichment_enabled",
+        lambda explicit: False,
+    )
+    monkeypatch.setattr(
+        news_digest_service,
+        "_database_available",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        news_digest_service,
+        "_fetch_country_articles",
+        lambda *args, **kwargs: [
+            NewsArticle(
+                source_code="de_google_news",
+                country_code="DE",
+                country_label="Germany / 德国",
+                publisher="Google News",
+                title="Brief EV note",
+                summary="Short update.",
+                url="https://news.google.com/articles/demo",
+                published_at="2026-01-01T08:00:00+00:00",
+                tags=(),
+            )
+        ],
+    )
+
+    payload = news_digest_service.refresh_country_news(
+        "Germany",
+        persist=False,
+        enrich_with_gemini=False,
+    )
+
+    assert payload["marketEvents"] == []
+    assert payload["newsDigest"] is None
+    assert payload["reviewSummary"]["heldOutCount"] == 1
+    assert payload["reviewSummary"]["tierCounts"]["low"] == 1
 
 
 def test_refresh_country_news_marks_stored_snapshot_stale_when_fetch_fails(
