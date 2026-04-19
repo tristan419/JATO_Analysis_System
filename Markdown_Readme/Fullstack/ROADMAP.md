@@ -146,12 +146,14 @@ Markdown_Readme/
 ### 迁移历史（仅追溯）
 `_archived/STREAMLIT_TO_FULLSTACK_MIGRATION.md` → `_archived/STREAMLIT_VS_REACT_COMPARISON.md` → `_archived/REACT_STREAMLIT_GAP_ANALYSIS.md` → [`../Streamlit/README.md`](../Streamlit/README.md)
 
-## 5.1 当前关注点（2026-04-18）
+## 5.1 当前关注点（2026-04-19）
 
 - Fullstack 迁移已完成，Streamlit 文档全部归档至 `Streamlit/`。
 - 全球可视化（地球项目）已搁置，`JATO_GLOBAL_VISUALIZATION.md` 保留但不再推进。
 - **MSRP 官方价格补全系统**：Batch 1+2（7 国）dry-run 已完成，92/209 通过 (44.0%)。下一步是将通过的 source promote 到 `sources/` 目录。
 - Country Copilot 已从“只给大盘”升级到 **grounded answer + direct answer**：窄问题优先走 `positioning-focus` / `segment-fuel-focus` / `precise-lookup`，并返回 `answerMode + grounding`。
+- `positioningMap` 已补第一层 **peer corridor / residual**：不仅给 Length × MSRP × Sales 散点，还统一返回 sales-weighted peer P25 / median / P75、target residual 与 `below / within / above corridor` 判断，供 Dashboard 与 Country Copilot 共用。
+- `peerCorridor` 已继续补成 **price stance / verdict**：在 corridor 之上再给 `进攻切入价 / 主流防守价 / 市场对齐价 / 上沿试探价 / 高溢价试探价` 这类确定性结论，并把 stance label/detail 同步给 Copilot 回答、grounding、inline chart、analysis deck 与 Dashboard hero chips。
 - `/copilot` 现已作为 **mobile-web 一等入口**：主导航加入 Copilot，手机端默认隐藏悬浮 widget，页面本体改用 compact grounded answer / compact deck、折叠式 context/news/insight 面板与桌面接力深链接；后续又继续把手机首屏压缩到更偏 chat-first 的 reveal order（短 header、空状态才显示 prompts、更紧凑的 pending / inline charts），同时保持桌面端不受影响；最新又补了一层 **visible answer path**，把 route / focus / truth layers / output mode 组织成用户可读的回答路径，并把每次回答统一成“直接回答 → 关键结论 → 思考链 → 证据/来源层”的固定结构；同时把 NVIDIA tool-depth overflow 收敛成正常 fallback，并把 tool-first 执行改成 **单轮取证 + 强制最终答复**，不再把内部中断字符串直接展示给用户。
 - MSRP 官方价格文档已收拢到 `Fullstack/MSRP/`，旧 `country×brand` 计划已归档，由 SUV Top30 计划替代；`JatoMsrpLink + MatchOverride` 生命周期与 `/v1/msrp/links` API 已接入主流程。
 - 数据库边界设计（PostgreSQL）和 Alembic 迁移方案已起草并被实现引用；当前运行时已包含 `CurrentPrice`、`PriceHistory`、engineering normalized variants、`JatoMsrpLink`、`MatchOverride` 等核心表。
