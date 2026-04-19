@@ -16,6 +16,11 @@ from app.db.models import (
 from app.infra import msrp_repository as msrp_repo
 from app.infra import review_repository as review_repo
 from app.services.fx_service import convert_amount_to_eur
+from app.services.msrp_mapping_service import (
+    RESOLVER_KIND_LINK,
+    RESOLVER_KIND_OVERRIDE,
+    apply_canonical_mapping,
+)
 from app.services.payload_serializers import (
     current_price_payload,
     observation_payload,
@@ -64,6 +69,7 @@ def materialize_current_price_from_observation(
     *,
     price_history_enabled: bool | None = None,
 ) -> CurrentPrice | None:
+    apply_canonical_mapping(session, observation)
     if observation.match_status not in ELIGIBLE_CURRENT_PRICE_STATUSES:
         return None
 
@@ -408,44 +414,19 @@ def create_scrape_batch_ingest(
     success_count = 0
     review_required_count = 0
     override_applied_count = 0
+    link_applied_count = 0
     for observation, payload in zip(
         observations,
         observations_payload,
         strict=False,
     ):
         if observation.match_status == REVIEW_REQUIRED_STATUS:
-            override = review_repo.find_applicable_override(
-                session,
-                observation.country,
-                observation.brand,
-                observation.jato_model,
-                observation.jato_trim,
-                observation.jato_powertrain,
-                observation.observed_at_utc.date()
-                if hasattr(observation.observed_at_utc, "date")
-                else observation.observed_at_utc,
-            )
-            if override is not None:
-                observation.official_model = override.official_model
-                observation.official_trim = override.official_trim
-                observation.match_status = "override_applied"
-                existing_reason = observation.match_reason_json or {}
-                if not isinstance(existing_reason, dict):
-                    existing_reason = {"previous": existing_reason}
-                existing_reason["overrideApplied"] = {
-                    "overrideId": str(override.override_id),
-                    "overrideReason": override.override_reason,
-                    "appliedOfficialModel": override.official_model,
-                    "appliedOfficialTrim": override.official_trim,
-                    "validFrom": override.valid_from_date.isoformat(),
-                    "validTo": (
-                        override.valid_to_date.isoformat()
-                        if override.valid_to_date
-                        else None
-                    ),
-                }
-                observation.match_reason_json = existing_reason
-                override_applied_count += 1
+            resolution = apply_canonical_mapping(session, observation)
+            if observation.match_status in ELIGIBLE_CURRENT_PRICE_STATUSES:
+                if resolution["resolverKind"] == RESOLVER_KIND_OVERRIDE:
+                    override_applied_count += 1
+                elif resolution["resolverKind"] == RESOLVER_KIND_LINK:
+                    link_applied_count += 1
                 # Fall through to current price materialization below
             else:
                 review_case = _ensure_review_case(
@@ -489,6 +470,7 @@ def create_scrape_batch_ingest(
         "observationRows": len(observations),
         "reviewCasesCreated": len(review_cases),
         "overrideAppliedCount": override_applied_count,
+        "linkAppliedCount": link_applied_count,
         "currentPricesTouched": len(current_prices),
         "sampleObservations": [
             observation_payload(item) for item in observations[:10]

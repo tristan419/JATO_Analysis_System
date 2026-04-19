@@ -12,11 +12,17 @@ from app.db.models import (
 )
 from app.infra import msrp_repository
 from app.infra import review_repository as repo
+from app.services.msrp_mapping_service import (
+    HUMAN_REVIEW_LINK_SOURCE,
+    classify_mismatch_category,
+)
+from app.services.msrp_link_service import upsert_jato_msrp_link
 from app.services.msrp_workflow_service import (
     materialize_current_price_from_observation,
 )
 from app.services.payload_serializers import (
     current_price_payload,
+    jato_msrp_link_payload,
     observation_payload,
     override_payload,
     review_case_payload,
@@ -198,7 +204,10 @@ def get_review_case_detail(
         else None
     )
     current_price_source = (
-        msrp_repository.get_source(session, current_price_observation.source_id)
+        msrp_repository.get_source(
+            session,
+            current_price_observation.source_id,
+        )
         if current_price_observation is not None
         else None
     )
@@ -256,7 +265,13 @@ def create_review_decision(
 
     current_price: CurrentPrice | None = None
     override: MatchOverride | None = None
+    link = None
+    mismatch_category: str | None = None
     if decision_name in {"approve", "remap"}:
+        previous_official_model = observation.official_model
+        previous_official_trim = observation.official_trim
+        previous_official_edition = observation.official_edition
+        previous_official_powertrain = observation.official_powertrain
         observation.official_model = (
             str(decided_official_model).strip()
             if decided_official_model
@@ -274,6 +289,50 @@ def create_review_decision(
         review_case.official_edition = observation.official_edition
         review_case.official_powertrain = observation.official_powertrain
         review_case.jato_powertrain = observation.jato_powertrain
+        mismatch_category = (
+            str(data.get("mismatch_reason_category") or "").strip()
+            or classify_mismatch_category(
+                raw_official_model=previous_official_model,
+                raw_official_trim=previous_official_trim,
+                raw_official_edition=previous_official_edition,
+                raw_official_powertrain=previous_official_powertrain,
+                resolved_official_model=observation.official_model,
+                resolved_official_trim=observation.official_trim,
+                resolved_official_edition=observation.official_edition,
+                resolved_official_powertrain=observation.official_powertrain,
+                resolver_kind="review_decision",
+            )
+        )
+        link_notes = (
+            str(data.get("link_notes") or "").strip()
+            or str(data.get("note") or "").strip()
+            or None
+        )
+        link = upsert_jato_msrp_link(
+            session,
+            country=observation.country,
+            brand=observation.brand,
+            jato_model=observation.jato_model,
+            jato_trim=observation.jato_trim,
+            jato_powertrain=observation.jato_powertrain,
+            official_model=observation.official_model,
+            official_trim=observation.official_trim,
+            official_edition=observation.official_edition,
+            official_powertrain=observation.official_powertrain,
+            confidence=int(data.get("link_confidence") or 100),
+            link_source=str(
+                data.get("link_source") or HUMAN_REVIEW_LINK_SOURCE
+            ).strip(),
+            notes=(
+                f"[{mismatch_category}] {link_notes}"
+                if mismatch_category and link_notes
+                else (
+                    f"[{mismatch_category}]"
+                    if mismatch_category
+                    else link_notes
+                )
+            ),
+        )
         current_price = materialize_current_price_from_observation(
             session,
             observation,
@@ -296,6 +355,10 @@ def create_review_decision(
     existing_reason["reviewDecision"] = decision_name
     existing_reason["reviewNote"] = data.get("note")
     existing_reason["decidedBy"] = decided_by
+    if link is not None:
+        existing_reason["linkId"] = str(link.link_id)
+        if mismatch_category:
+            existing_reason["mismatchCategory"] = mismatch_category
     observation.match_reason_json = existing_reason
 
     review_decision = ReviewDecision(
@@ -355,6 +418,8 @@ def create_review_decision(
         session.refresh(current_price)
     if override is not None:
         session.refresh(override)
+    if link is not None:
+        session.refresh(link)
 
     source = msrp_repository.get_source(session, observation.source_id)
     current_price_source = (
@@ -374,5 +439,8 @@ def create_review_decision(
         ),
         "override": (
             override_payload(override) if override is not None else None
+        ),
+        "link": (
+            jato_msrp_link_payload(link) if link is not None else None
         ),
     }

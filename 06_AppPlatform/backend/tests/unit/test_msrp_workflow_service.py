@@ -188,6 +188,11 @@ def test_materialize_current_price_backfills_open_period_when_history_is_empty(
     recorded: list[object] = []
 
     monkeypatch.setattr(
+        msrp_workflow_service,
+        "apply_canonical_mapping",
+        lambda *args, **kwargs: {"resolverKind": "observation_payload"},
+    )
+    monkeypatch.setattr(
         msrp_workflow_service.msrp_repo,
         "get_current_price_by_key",
         lambda *args, **kwargs: current_price,
@@ -215,6 +220,41 @@ def test_materialize_current_price_backfills_open_period_when_history_is_empty(
     assert recorded == [observation.observation_id]
 
 
+def test_materialize_current_price_applies_canonical_mapping_before_update(
+    monkeypatch,
+) -> None:
+    observation = _make_observation()
+    current_price = _make_current_price(observation)
+
+    def _apply_mapping(_session, incoming_observation):
+        incoming_observation.official_model = "XC60"
+        incoming_observation.official_trim = "Ultra Dark"
+        incoming_observation.match_status = "override_applied"
+        return {"resolverKind": "match_override"}
+
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "apply_canonical_mapping",
+        _apply_mapping,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "get_current_price_by_key",
+        lambda *args, **kwargs: current_price,
+    )
+
+    result = msrp_workflow_service.materialize_current_price_from_observation(
+        None,
+        observation,
+        price_history_enabled=False,
+    )
+
+    assert result is current_price
+    assert current_price.official_model == "XC60"
+    assert current_price.official_trim == "Ultra Dark"
+    assert current_price.match_status == "override_applied"
+
+
 def test_refreshes_open_period_when_price_is_unchanged(
     monkeypatch,
 ) -> None:
@@ -226,6 +266,11 @@ def test_refreshes_open_period_when_price_is_unchanged(
     )
     recorded: list[object] = []
 
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "apply_canonical_mapping",
+        lambda *args, **kwargs: {"resolverKind": "observation_payload"},
+    )
     monkeypatch.setattr(
         msrp_workflow_service.msrp_repo,
         "get_current_price_by_key",

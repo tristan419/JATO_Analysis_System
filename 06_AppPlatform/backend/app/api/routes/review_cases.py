@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.schemas import ReviewDecisionCreate
+from app.api.review_schemas import ReviewDecisionCreate
 from app.core.security import require_min_role
 from app.db.session import get_db_session
 from app.services.review_service import (
