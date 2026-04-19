@@ -2,6 +2,7 @@ from pathlib import Path
 
 from jato_scraper.news_config_loader import load_news_batch_config
 from jato_scraper.news_runner import parse_feed_xml
+from jato_scraper.news_runner import write_news_batch_output
 
 
 _RSS_SAMPLE = """
@@ -151,4 +152,22 @@ def test_batch_a_countries_use_multi_source_feeds() -> None:
             }
             for publisher in publishers
         )
-    assert "NO" in countries
+        assert "NO" in countries
+
+
+def test_write_news_batch_output_writes_timestamped_file(tmp_path: Path) -> None:
+    payload = [
+        {
+            "batch_code": "demo_batch",
+            "country_count": 2,
+            "article_count": 5,
+            "countries": [],
+            "errors": [],
+        }
+    ]
+
+    output_path = write_news_batch_output(payload, output_root=tmp_path)
+
+    assert output_path.parent == tmp_path
+    assert output_path.exists()
+    assert "news_batch_" in output_path.name

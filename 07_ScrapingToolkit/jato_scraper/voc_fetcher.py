@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import asdict
 from datetime import UTC, datetime
 from html.parser import HTMLParser
@@ -90,6 +91,138 @@ def _same_site(base_url: str, candidate_url: str) -> bool:
         or candidate_host.endswith(f".{base_host}")
         or base_host.endswith(f".{candidate_host}")
     )
+
+
+def _score_voc_document(
+    *,
+    source: VocSourceConfig,
+    document: dict[str, Any],
+) -> dict[str, Any]:
+    title = _normalize_space(document.get("title"))
+    summary = _normalize_space(document.get("summary"))
+    raw_text = _normalize_space(document.get("rawText"))
+    page_kind = _normalize_space(document.get("pageKind"))
+    score = 0
+    signals: list[str] = []
+    warnings: list[str] = []
+
+    if urlparse(str(document.get("url") or "")).netloc:
+        score += 1
+        signals.append("url-host-present")
+    else:
+        warnings.append("missing-url-host")
+
+    if len(title) >= 20:
+        score += 1
+        signals.append("title-length-ok")
+    else:
+        warnings.append("short-title")
+
+    if len(raw_text) >= 800:
+        score += 2
+        signals.append("rich-body")
+    elif len(raw_text) >= 250:
+        score += 1
+        signals.append("body-present")
+    else:
+        warnings.append("thin-body")
+
+    if summary:
+        score += 1
+        signals.append("summary-present")
+    else:
+        warnings.append("missing-summary")
+
+    if document.get("publishedAt"):
+        score += 1
+        signals.append("published-at-present")
+    else:
+        warnings.append("missing-published-at")
+
+    if page_kind and page_kind != "landing_page":
+        score += 1
+        signals.append(f"page-kind:{page_kind}")
+    else:
+        warnings.append("landing-page-fallback")
+
+    if source.site_type in {"ev_community", "forum"} and page_kind in {
+        "discussion_thread",
+        "thread",
+    }:
+        score += 1
+        signals.append("discussion-unit-match")
+    elif source.site_type in {"media_comments", "consumer_media", "industry_media"} and page_kind in {
+        "article_comment_page",
+        "consumer_editorial_page",
+        "industry_article_page",
+    }:
+        score += 1
+        signals.append("editorial-unit-match")
+
+    if score >= 6:
+        publish_tier = "high"
+        publish_decision = "auto_publish"
+    elif score >= 4:
+        publish_tier = "medium"
+        publish_decision = "candidate_publish"
+    else:
+        publish_tier = "low"
+        publish_decision = "hold_raw"
+
+    return {
+        "version": "voc-auto-review-v1",
+        "score": score,
+        "maxScore": 8,
+        "publishTier": publish_tier,
+        "publishDecision": publish_decision,
+        "signals": signals,
+        "warnings": warnings,
+    }
+
+
+def _summarize_voc_auto_review(
+    *,
+    documents: list[dict[str, Any]],
+    errors: list[dict[str, str]],
+    candidate_count: int,
+) -> dict[str, Any]:
+    counter = Counter(
+        str((document.get("autoReview") or {}).get("publishTier") or "unknown")
+        for document in documents
+    )
+    publish_ready = sum(
+        1
+        for document in documents
+        if str((document.get("autoReview") or {}).get("publishDecision") or "")
+        != "hold_raw"
+    )
+    if int(counter.get("high", 0)) > 0:
+        publish_tier = "high"
+        publish_decision = "auto_publish"
+    elif int(counter.get("medium", 0)) > 0 and publish_ready > 0:
+        publish_tier = "medium"
+        publish_decision = "candidate_publish"
+    elif documents:
+        publish_tier = "low"
+        publish_decision = "hold_raw"
+    else:
+        publish_tier = None
+        publish_decision = None
+    return {
+        "version": "voc-auto-review-v1",
+        "candidateCount": candidate_count,
+        "reviewedCount": len(documents),
+        "publishReadyCount": publish_ready,
+        "heldRawCount": max(0, len(documents) - publish_ready),
+        "errorCount": len(errors),
+        "publishTier": publish_tier,
+        "publishDecision": publish_decision,
+        "tierCounts": {
+            "high": int(counter.get("high", 0)),
+            "medium": int(counter.get("medium", 0)),
+            "low": int(counter.get("low", 0)),
+        },
+    }
 
 
 class _FallbackPageParser(HTMLParser):
@@ -316,12 +449,18 @@ def collect_source_documents(
     try:
         landing_page = fetch_public_page(source.site_url, timeout_seconds=timeout_seconds)
     except requests.RequestException as exc:
+        errors = [{"url": source.site_url, "error": str(exc)}]
         return {
             "source": asdict(source),
             "taxonomyProfile": taxonomy_profile,
             "taxonomy": taxonomy,
             "collectionStrategy": strategy,
             "collectedAt": collected_at,
+            "autoReview": _summarize_voc_auto_review(
+                documents=[],
+                errors=errors,
+                candidate_count=0,
+            ),
             "landingPage": {
                 "url": source.site_url,
                 "title": None,
@@ -331,7 +470,7 @@ def collect_source_documents(
             },
             "documentCount": 0,
             "documents": [],
-            "errors": [{"url": source.site_url, "error": str(exc)}],
+            "errors": errors,
         }
     candidates = _select_candidate_links(
         source=source,
@@ -394,12 +533,28 @@ def collect_source_documents(
                 }
             )
 
+    reviewed_documents = []
+    for document in documents:
+        reviewed_document = dict(document)
+        reviewed_document["autoReview"] = _score_voc_document(
+            source=source,
+            document=reviewed_document,
+        )
+        reviewed_documents.append(reviewed_document)
+
+    auto_review = _summarize_voc_auto_review(
+        documents=reviewed_documents,
+        errors=errors,
+        candidate_count=len(candidates),
+    )
+
     return {
         "source": asdict(source),
         "taxonomyProfile": taxonomy_profile,
         "taxonomy": taxonomy,
         "collectionStrategy": strategy,
         "collectedAt": collected_at,
+        "autoReview": auto_review,
         "landingPage": {
             "url": landing_page.get("url"),
             "title": landing_page.get("title"),
@@ -407,8 +562,8 @@ def collect_source_documents(
             "summary": landing_page.get("summary"),
             "candidateCount": len(candidates),
         },
-        "documentCount": len(documents),
-        "documents": documents,
+        "documentCount": len(reviewed_documents),
+        "documents": reviewed_documents,
         "errors": errors,
     }
 
@@ -450,6 +605,9 @@ def build_voc_raw_collection(
                     "site_name": source.site_name,
                     "site_type": source.site_type,
                     "document_count": collected["documentCount"],
+                    "publish_ready_count": int(
+                        ((collected.get("autoReview") or {}).get("publishReadyCount") or 0),
+                    ),
                     "error_count": len(collected["errors"]),
                     "output_path": str(output_path),
                 }

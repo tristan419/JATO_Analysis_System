@@ -1,6 +1,12 @@
 # JATO Scraping Toolkit
 
-独立的 MSRP 官方价格抓取工具包，从各国汽车品牌官网提取结构化价格数据。
+独立的抓取工具包，当前主战场仍是 MSRP 官方价格抓取，同时逐步扩展到 news / policy / incentive / spec 等结构化采集。
+
+## 相关设计文档
+
+- `../Markdown_Readme/Fullstack/02_DataETL/UNIFIED_SCRAPING_PIPELINE_2026-04-17.md` — 统一抓取平台蓝图
+- `../Markdown_Readme/Fullstack/MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md` — MSRP 多源对账与 feature diff
+- `../Markdown_Readme/Fullstack/03_Database/CROSS_SOURCE_JOIN_DESIGN_2026-04-17.md` — JATO sales × MSRP 联表方案
 
 ## 目录结构
 
@@ -31,11 +37,12 @@
 │   └── _archived/                      # 旧口径存档
 │       ├── country_brand_priority_top30/   # 旧口径（已归档）
 │       └── all_market_country_model_top30/ # 全市场口径（备用参考）
+├── msrp_batches/                 # MSRP 国家批次入口（如 batch_a）
 ├── sources/                      # 生产 source YAML
 │   ├── volvo_se_xc60.yaml        # 已上线 source
 │   ├── bmw_de.yaml               # 样例 source
 │   └── _template.yaml            # YAML 模板
-├── news_sources/                 # 国家新闻批次配置（Batch A / Batch B）
+├── news_sources/                 # 国家新闻批次配置（Batch A / Batch B，Batch A 已接入多源试点）
 ├── run.py                        # CLI 入口
 ├── run_news.py                   # 新闻 CLI 入口
 ├── pyproject.toml                # 包定义
@@ -83,6 +90,17 @@ python batch_dryrun.py cz    # 捷克全部 30 个 source
 python batch_dryrun.py all   # 所有已填充 keyword 的国家
 ```
 
+### MSRP 批次执行（Batch A）
+
+```bash
+cd 07_ScrapingToolkit
+python run.py --batch-files msrp_batches/batch_a.yaml --countries SE FI --dry-run -v
+python run.py --batch-files msrp_batches/batch_a.yaml --dry-run -v
+```
+
+当前 `msrp_batches/batch_a.yaml` 先对齐第一批 8 个国家（SE / FI / NO / DK / HU / HR / AT / CZ），
+每个国家映射到现有的 `source_drafts/suv_only_country_model_top30/<country>/` country pack。
+
 ### 新闻批次抓取
 
 ```bash
@@ -90,6 +108,29 @@ cd 07_ScrapingToolkit
 python run_news.py --batch-files news_sources/batch_a.yaml --limit-per-feed 5
 python run_news.py --batch-files news_sources/batch_a.yaml news_sources/batch_b.yaml --output tmp/news_batch.json
 ```
+
+> 当前 `run_news.py` 更接近 feed-level ingest；如果要支撑国家助手的"最新政策 / 最新碳税 / 最新市场新闻"问答，还需要把结果稳定 sink 到 PG + vector store，再由 Copilot 只在 freshness query 时按需调用。
+
+当前 news runner 也会默认额外保留一份 raw batch artifact 到仓库根目录：
+
+```text
+04_Processed_data/news/raw/news_batch_<timestamp>.json
+```
+
+如果显式传了 `--output`，则写到指定文件；不传时仍会把 JSON 打到终端，但同时落一份默认 artifact，方便后续在数据总览页统计最近抓取批次、文章量和错误数。
+
+当前 `news` 还开始附带第一版 **auto review / publish gate** 思路，目标不是人工 review，而是自动质量闸门：
+
+- 先做 deterministic checks：URL、标题长度、摘要长度、发布时间、标签存在性
+- 再做 source tier 识别：aggregator / local_media / trusted_media / association / official
+- 再做 batch 内 corroboration：不同 publisher 标题/摘要高度重合时加分
+- 最终产出 `autoReview`：
+  - `score`
+  - `publishTier`（high / medium / low）
+  - `publishDecision`（auto_publish / candidate_publish / holdout）
+  - `signals` / `warnings`
+
+当前 public payload 默认只把 `publishDecision != holdout` 的事件放进 `marketEvents`，也就是先做自动闸门，再给国家助手和 digest 层消费。
 
 ### 国家化 VOC batch 规划
 
@@ -99,13 +140,59 @@ jato-voc-plan --batch-files voc_sources/batch_a.yaml
 jato-voc-plan --batch-files voc_sources/batch_a.yaml --countries SE FI NO DK
 ```
 
-当前这批 `voc_sources/` 先是**country-pack scaffold**，重点是把 VOC 按现有 news 一样组织成：
+当前这批 `voc_sources/` 已经开始从 scaffold 进入第一波真实公开源，先按现有 news 一样组织成：
 
 - batch
 - countries
 - sources
 
-也就是说，先固化国家级 source registry、语言和 taxonomy 的承载方式；后续再逐国把占位 source 替换成已验证的本地公开讨论源。
+当前 `batch_a.yaml` 先落地 8 个国家（SE / FI / NO / DK / HU / HR / AT / CZ），每国 3 个公开源，组合是：
+
+- 公开论坛 / 车主社区
+- 本地汽车媒体评论页
+- EV 社区或消费者媒体
+
+也就是说，先固化国家级 source registry、语言和 taxonomy 的承载方式，并把第一波真实公开源写进 country-pack；后续再继续扩到更多国家与更细的评论页 / 车型论坛。
+
+当前 `jato_scraper.voc_runner` 输出的 collection plan 也会一并带上：
+
+- `taxonomy`：每个 `taxonomy_profile` 对应的 sentiment labels、ownership stages、pain points、focus themes、extraction fields
+- `collection_strategy`：每个 source 的 primary unit、content targets、extraction targets
+
+这样后续做 crawler、清洗、翻译、deck 抽取时，可以统一围绕同一套 VOC schema 推进，而不是每个国家各做各的字段。
+
+### VOC raw 抓取（第一版）
+
+```bash
+cd 07_ScrapingToolkit
+jato-voc-fetch --batch-files voc_sources/batch_a.yaml --countries SE NO --max-links-per-source 4
+jato-voc-fetch --batch-files voc_sources/batch_a.yaml --output tmp/voc_raw_summary.json
+```
+
+当前 `jato_scraper.voc_fetcher` 是一个轻量 public-page collector，职责是：
+
+- 先抓每个 source 的公开入口页
+- 按 `site_type`（forum / ev_community / media_comments ...）挑选同站 article / thread 候选链接
+- 再抓这些公开页面正文，统一写入 `04_Processed_data/voc/<country>/raw/<source_code>.json`
+
+第一版输出以 raw layer 为主，默认带：
+
+- source 元数据
+- taxonomy / collection strategy
+- landing page 摘要
+- 文档级 `url` / `title` / `publishedAt` / `rawText` / `excerpt`
+- 抓取错误列表（单个 source 失败不会拖垮整批）
+
+当前 `VOC raw` 也开始附带第一版 **auto review**：
+
+- 文档级 `autoReview`：按正文长度、标题质量、发布时间、page kind、source/site_type 匹配度给分
+- source 级 `autoReview` 汇总：`candidateCount` / `reviewedCount` / `publishReadyCount` / `heldRawCount` / `tierCounts`
+- 输出层级：
+  - `high` → `auto_publish`
+  - `medium` → `candidate_publish`
+  - `low` → `hold_raw`
+
+这一步先解决“有标准化 raw capture 可落盘”的问题；更细的 thread pagination、comment DOM 解析、作者字段、翻译和 sentiment enrichment，下一层再继续补。
 
 ### EVKX BEV 参数 + MSRP 抓取
 
@@ -291,6 +378,13 @@ profile:
 - `news_sources/batch_a.yaml`：第一批国家
 - `news_sources/batch_b.yaml`：剩余当前 JATO 数据国家
 - `jato_scraper/news_runner.py`：按批次抓取并输出标准 JSON
+
+当前推荐的新闻职责拆分是：
+
+- Feed 层负责召回：保留 `Google News RSS`，同时补充本地媒体 / 行业协会 / OEM newsroom 等 RSS
+- Digest 层负责理解：Gemini 只做摘要、标签、排序、事件提炼，不替代检索
+
+当前 `batch_a.yaml` 已经升级到四层组合：国家定向 `Google News RSS` + `ACEA` + `Transport & Environment` + 每国一条本地汽车 / 行业 RSS。其中 `ACEA` 与 `Transport & Environment` 继续通过 `include_keywords` 按国家名过滤，本地 RSS 则负责补足更高密度的市场新闻。
 
 输出字段包括：
 

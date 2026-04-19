@@ -20,6 +20,8 @@ from jato_scraper.news_base import NewsArticle, NewsBatchConfig, NewsFeedConfig
 from jato_scraper.news_config_loader import load_news_batch_config
 
 log = logging.getLogger(__name__)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_NEWS_OUTPUT_ROOT = REPO_ROOT / "04_Processed_data" / "news" / "raw"
 
 
 def _tag_name(tag: str) -> str:
@@ -174,6 +176,32 @@ def fetch_feed_articles(
     )
 
 
+def _resolve_repo_path(path: str | Path) -> Path:
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    return REPO_ROOT / candidate
+
+
+def write_news_batch_output(
+    payload: list[dict[str, Any]],
+    *,
+    output_path: str | Path | None = None,
+    output_root: str | Path = DEFAULT_NEWS_OUTPUT_ROOT,
+) -> Path:
+    if output_path is None:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        destination = _resolve_repo_path(output_root) / f"news_batch_{timestamp}.json"
+    else:
+        destination = _resolve_repo_path(output_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return destination
+
+
 def run_news_batch(
     batch: NewsBatchConfig,
     limit_per_feed: int = 5,
@@ -262,6 +290,11 @@ def main(argv: list[str] | None = None) -> int:
         type=str,
         help="Optional JSON output path.",
     )
+    parser.add_argument(
+        "--output-root",
+        default=str(DEFAULT_NEWS_OUTPUT_ROOT.relative_to(REPO_ROOT)),
+        help="Default output root for auto-saved batch JSON files.",
+    )
     args = parser.parse_args(argv)
 
     payload = [
@@ -272,13 +305,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         for batch_file in args.batch_files
     ]
+    write_news_batch_output(
+        payload,
+        output_path=args.output,
+        output_root=args.output_root,
+    )
 
     rendered = json.dumps(payload, ensure_ascii=False, indent=2)
-    if args.output:
-        output_path = Path(args.output).expanduser().resolve()
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(rendered, encoding="utf-8")
-    else:
+    if not args.output:
         print(rendered)
     return 0
 

@@ -68,6 +68,9 @@ def test_collect_source_documents_fetches_ranked_same_site_pages(monkeypatch) ->
         "https://example.com/forum/topic-winter-range-2025",
     }
     assert all(document["pageKind"] == "discussion_thread" for document in payload["documents"])
+    assert all(document["autoReview"]["publishDecision"] == "auto_publish" for document in payload["documents"])
+    assert payload["autoReview"]["reviewedCount"] == 2
+    assert payload["autoReview"]["publishReadyCount"] == 2
     assert payload["errors"] == []
 
 
@@ -125,3 +128,8 @@ def test_build_voc_raw_collection_writes_source_payloads(tmp_path: Path, monkeyp
     assert saved["documentCount"] == 1
     assert saved["documents"][0]["pageKind"] == "landing_page"
     assert saved["documents"][0]["siteType"] == "media_comments"
+    assert saved["documents"][0]["autoReview"]["publishDecision"] in {
+        "candidate_publish",
+        "hold_raw",
+    }
+    assert saved["autoReview"]["reviewedCount"] == 1
