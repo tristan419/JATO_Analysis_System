@@ -4,6 +4,7 @@ import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
+import { DeckSubpageNav } from "../components/DeckSubpageNav";
 import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { LoadingSurface } from "../components/LoadingSurface";
 import type {
@@ -12,15 +13,18 @@ import type {
   PositioningPricingMetric,
   PositioningPricingPage,
   PositioningPricingPageKey,
+  PositioningPricingPriceOverlay,
   PositioningPricingSalesMode,
 } from "../types";
 import { buildBubbleSizing } from "../utils/bubbleSizing";
 import { fuelColor } from "../utils/colors";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
+import { useArrowCountryNavigation } from "../utils/useArrowCountryNavigation";
 
 const DEFAULT_FUEL_TYPES = ["BEV", "HEV", "PHEV", "MHEV", "ICE"];
 const DEFAULT_COUNTRY = "瑞典";
 const DEFAULT_SALES_MODE: PositioningPricingSalesMode = "month";
+const DEFAULT_PRICE_BAND_SIZE = 1000;
 const DEFAULT_TOP_N = 50;
 const TOP_N_OPTIONS = [30, 50, 100] as const;
 const EXPORT_PRESETS = [
@@ -32,6 +36,16 @@ const SALES_MODE_OPTIONS: Array<{ value: PositioningPricingSalesMode; label: str
   { value: "month", label: "当月" },
   { value: "rolling12", label: "近12个月" },
 ];
+const PRICE_OVERLAY_REASON_LABELS: Record<string, string> = {
+  "country-unresolved": "国家字段未解析",
+  "duckdb-unavailable": "DuckDB 不可用",
+  "database-unavailable": "应用数据库不可用",
+  "duckdb-postgres-attach-failed": "DuckDB 无法挂载 PostgreSQL",
+  "no-current-prices": "PG current_prices 暂无候选",
+  "no-current-price-candidates": "当前页没有可覆盖的 current price 候选",
+  "no-overlay-matches": "当前页未命中 reviewed price",
+  "duckdb-overlay-failed": "DuckDB overlay 执行失败",
+};
 const TAB_ITEMS: Array<{
   key: PositioningPricingPageKey;
   code: string;
@@ -71,6 +85,59 @@ function sanitizeFileNameSegment(value: string): string {
 function bubbleTextPosition(index: number): string {
   const positions = ["top center", "middle right", "bottom center", "middle left"] as const;
   return positions[index % positions.length];
+}
+
+type PositioningPricingTruthLayer = {
+  chipLabel: string;
+  title: string;
+  detail: string;
+};
+
+function formatPositioningPriceOverlayReason(reason?: string | null): string | null {
+  const value = String(reason ?? "").trim();
+  if (!value) {
+    return null;
+  }
+  const [prefix, ...rest] = value.split(":");
+  const label = PRICE_OVERLAY_REASON_LABELS[prefix.trim()] ?? prefix.trim();
+  const suffix = rest.join(":").trim();
+  return suffix ? `${label}（${suffix}）` : label;
+}
+
+function buildPositioningTruthLayer(overlay?: PositioningPricingPriceOverlay | null): PositioningPricingTruthLayer | null {
+  if (!overlay) {
+    return null;
+  }
+  const sourceMode = String(overlay.mode ?? overlay.sourceMode ?? "").trim();
+  const matchedRows = overlay.matchedRows ?? 0;
+  const matchedModels = overlay.matchedModels ?? 0;
+  const linkMatches = overlay.linkMatches ?? 0;
+  const directMatches = overlay.directMatches ?? 0;
+  const candidateRows = overlay.candidateRows ?? 0;
+  const linkCandidateRows = overlay.linkCandidateRows ?? 0;
+  const reason = formatPositioningPriceOverlayReason(overlay.reason);
+
+  if (sourceMode === "duckdb-overlay" && matchedRows > 0) {
+    return {
+      chipLabel: "Reviewed MSRP overlay 已命中",
+      title: "价格真值层",
+      detail: `当前页已命中 reviewed PG current price，覆盖 ${matchedRows.toLocaleString("en-US")} 行 / ${matchedModels.toLocaleString("en-US")} 个车型；link 命中 ${linkMatches.toLocaleString("en-US")} 行，direct 命中 ${directMatches.toLocaleString("en-US")} 行。`,
+    };
+  }
+
+  if (sourceMode === "duckdb-postgres-attach") {
+    return {
+      chipLabel: "Reviewed MSRP overlay 部分命中",
+      title: "价格真值层",
+      detail: `已连接 PG reviewed price layer，但当前页并非全部命中；current price 候选 ${candidateRows.toLocaleString("en-US")} 行，link 候选 ${linkCandidateRows.toLocaleString("en-US")} 行。${reason ? `原因：${reason}。` : "未命中的车型仍会回落到 parquet MSRP。"}`,
+    };
+  }
+
+  return {
+    chipLabel: "Parquet MSRP fallback",
+    title: "价格真值层",
+    detail: `当前页未命中 reviewed PG current price，仍使用 parquet MSRP。${reason ? `原因：${reason}。` : ""}`,
+  };
 }
 
 function Panel({
@@ -246,6 +313,9 @@ export function PositioningPricingPage() {
     const raw = Number(searchParams.get("topN") || DEFAULT_TOP_N);
     return TOP_N_OPTIONS.includes(raw as typeof TOP_N_OPTIONS[number]) ? raw : DEFAULT_TOP_N;
   });
+  const [priceControlsTouched, setPriceControlsTouched] = useState<boolean>(
+    () => searchParams.has("msrpMin") || searchParams.has("msrpMax") || searchParams.has("priceBandSize"),
+  );
   const [msrpMin, setMsrpMin] = useState<number | null>(() => {
     const raw = searchParams.get("msrpMin");
     return raw ? Number(raw) : null;
@@ -256,8 +326,9 @@ export function PositioningPricingPage() {
   });
   const [priceBandSize, setPriceBandSize] = useState<number | null>(() => {
     const raw = searchParams.get("priceBandSize");
-    return raw ? Number(raw) : null;
+    return raw ? Number(raw) : DEFAULT_PRICE_BAND_SIZE;
   });
+  const countryOptions = deck?.metadata.availableCountries ?? [];
 
   const syncUrlParams = useCallback(() => {
     const params = new URLSearchParams();
@@ -284,6 +355,12 @@ export function PositioningPricingPage() {
   useEffect(() => {
     preloadPlotlyChartRuntime().catch(() => undefined);
   }, []);
+
+  useArrowCountryNavigation({
+    options: countryOptions,
+    activeValue: selectedCountry || DEFAULT_COUNTRY,
+    onSelect: (value) => setSelectedCountry(value || null),
+  });
 
   useEffect(() => {
     setLoading(true);
@@ -339,6 +416,20 @@ export function PositioningPricingPage() {
     ? selectedFuelTypes
     : (deck?.metadata.selectedFuelTypes ?? DEFAULT_FUEL_TYPES);
   const page = deck?.pages[activePage];
+  useEffect(() => {
+    if (!page || priceControlsTouched) {
+      return;
+    }
+    if (msrpMin !== page.priceBands.range.min) {
+      setMsrpMin(page.priceBands.range.min);
+    }
+    if (msrpMax !== page.priceBands.range.max) {
+      setMsrpMax(page.priceBands.range.max);
+    }
+    if (priceBandSize !== DEFAULT_PRICE_BAND_SIZE) {
+      setPriceBandSize(DEFAULT_PRICE_BAND_SIZE);
+    }
+  }, [msrpMax, msrpMin, page, priceBandSize, priceControlsTouched]);
   const activeTab = TAB_ITEMS.find((item) => item.key === activePage) ?? TAB_ITEMS[0];
   const exportPreset = EXPORT_PRESETS.find((item) => item.key === exportPresetKey) ?? EXPORT_PRESETS[1];
   const barTraces = useMemo(
@@ -348,6 +439,10 @@ export function PositioningPricingPage() {
   const bubbleTraces = useMemo(
     () => (page ? buildBubbleTraces(page.bubbleChart.items, activeFuelTypes) : []),
     [activeFuelTypes, page],
+  );
+  const priceTruthLayer = useMemo(
+    () => buildPositioningTruthLayer(deck?.metadata.priceOverlay),
+    [deck],
   );
 
   function toggleFuel(fuel: string) {
@@ -426,6 +521,7 @@ export function PositioningPricingPage() {
                 <span className="market-scan-hero-chip">页面 {activeTab.label}</span>
                 <span className="market-scan-hero-chip">口径 {deck?.metadata.labels.salesModeLabel ?? SALES_MODE_OPTIONS.find((item) => item.value === salesMode)?.label ?? "当月"}</span>
                 <span className="market-scan-hero-chip">Top {topN}</span>
+                {priceTruthLayer ? <span className="market-scan-hero-chip">{priceTruthLayer.chipLabel}</span> : null}
                 <span className="market-scan-hero-chip">
                   MSRP {formatMetricValue(page?.priceBands.range.min ?? msrpMin ?? 0)}-{formatMetricValue(page?.priceBands.range.max ?? msrpMax ?? 0)}
                 </span>
@@ -497,7 +593,10 @@ export function PositioningPricingPage() {
                     step={1000}
                     value={msrpMin ?? ""}
                     placeholder={String(page?.priceBands.range.min ?? "")}
-                    onChange={(event) => setMsrpMin(event.target.value ? Number(event.target.value) : null)}
+                    onChange={(event) => {
+                      setPriceControlsTouched(true);
+                      setMsrpMin(event.target.value ? Number(event.target.value) : null);
+                    }}
                   />
                 </label>
                 <label className="market-scan-field">
@@ -508,7 +607,10 @@ export function PositioningPricingPage() {
                     step={1000}
                     value={msrpMax ?? ""}
                     placeholder={String(page?.priceBands.range.max ?? "")}
-                    onChange={(event) => setMsrpMax(event.target.value ? Number(event.target.value) : null)}
+                    onChange={(event) => {
+                      setPriceControlsTouched(true);
+                      setMsrpMax(event.target.value ? Number(event.target.value) : null);
+                    }}
                   />
                 </label>
                 <label className="market-scan-field">
@@ -519,7 +621,10 @@ export function PositioningPricingPage() {
                     step={500}
                     value={priceBandSize ?? ""}
                     placeholder={String(page?.priceBands.bandSize ?? "")}
-                    onChange={(event) => setPriceBandSize(event.target.value ? Number(event.target.value) : null)}
+                    onChange={(event) => {
+                      setPriceControlsTouched(true);
+                      setPriceBandSize(event.target.value ? Number(event.target.value) : null);
+                    }}
                   />
                 </label>
                 <div className="market-scan-field market-scan-field-actions">
@@ -549,9 +654,10 @@ export function PositioningPricingPage() {
                         setSalesMode(DEFAULT_SALES_MODE);
                         setSelectedFuelTypes(DEFAULT_FUEL_TYPES);
                         setTopN(DEFAULT_TOP_N);
+                        setPriceControlsTouched(false);
                         setMsrpMin(null);
                         setMsrpMax(null);
-                        setPriceBandSize(null);
+                        setPriceBandSize(DEFAULT_PRICE_BAND_SIZE);
                         setActivePage("overview");
                       }}
                     >
@@ -591,22 +697,13 @@ export function PositioningPricingPage() {
           )}
         />
 
-        <nav className="positioning-pricing-tab-strip" aria-label="Positioning Pricing Pages">
-          {TAB_ITEMS.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={`market-scan-tab${activePage === item.key ? " is-active" : ""}`}
-              onClick={() => setActivePage(item.key)}
-            >
-              <span className="market-scan-tab-code">{item.code}</span>
-              <span className="market-scan-tab-copy">
-                <strong>{item.label}</strong>
-                <span>{item.sublabel}</span>
-              </span>
-            </button>
-          ))}
-        </nav>
+        <DeckSubpageNav
+          items={TAB_ITEMS}
+          activeKey={activePage}
+          onSelect={setActivePage}
+          ariaLabel="Positioning Pricing Pages"
+          tabsClassName="positioning-pricing-tab-strip"
+        />
 
         {error ? (
           <section className="market-scan-state-card market-scan-state-card--error">
@@ -686,6 +783,12 @@ export function PositioningPricingPage() {
                     <div className="market-scan-callout positioning-pricing-summary">
                       {page.subtitle}：左侧按 MSRP 区间看销量堆叠，右侧按最低 MSRP 看动力气泡定位。
                     </div>
+                    {priceTruthLayer ? (
+                      <div className="market-scan-callout positioning-pricing-summary">
+                        <strong>{priceTruthLayer.title}：</strong>
+                        {priceTruthLayer.detail}
+                      </div>
+                    ) : null}
 
                     <div className="market-scan-grid market-scan-grid--two-wide positioning-pricing-grid">
                       <Panel

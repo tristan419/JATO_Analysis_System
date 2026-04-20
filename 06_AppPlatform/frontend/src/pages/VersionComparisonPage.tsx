@@ -16,10 +16,12 @@ import type {
 import { buildBubbleSizing } from "../utils/bubbleSizing";
 import { fuelColor } from "../utils/colors";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
+import { useArrowCountryNavigation } from "../utils/useArrowCountryNavigation";
 
 const DEFAULT_FUEL_TYPES = ["BEV", "HEV", "PHEV", "MHEV", "ICE"];
 const DEFAULT_COUNTRY = "瑞典";
 const DEFAULT_SALES_MODE: PositioningPricingSalesMode = "month";
+const DEFAULT_PRICE_BAND_SIZE = 1000;
 const DEFAULT_EXPORT_PRESET = "fhd";
 const MAX_SELECTED_MODELS = 10;
 const SALES_MODE_OPTIONS: Array<{ value: PositioningPricingSalesMode; label: string }> = [
@@ -276,6 +278,9 @@ export function VersionComparisonPage() {
     return raw ? raw.split(",") : DEFAULT_FUEL_TYPES;
   });
   const [modelToAdd, setModelToAdd] = useState("");
+  const [priceControlsTouched, setPriceControlsTouched] = useState<boolean>(
+    () => searchParams.has("msrpMin") || searchParams.has("msrpMax") || searchParams.has("priceBandSize"),
+  );
   const [msrpMin, setMsrpMin] = useState<number | null>(() => {
     const raw = searchParams.get("msrpMin");
     return raw ? Number(raw) : null;
@@ -286,8 +291,9 @@ export function VersionComparisonPage() {
   });
   const [priceBandSize, setPriceBandSize] = useState<number | null>(() => {
     const raw = searchParams.get("priceBandSize");
-    return raw ? Number(raw) : null;
+    return raw ? Number(raw) : DEFAULT_PRICE_BAND_SIZE;
   });
+  const countryOptions = deck?.metadata.availableCountries ?? [];
 
   const syncUrlParams = useCallback(() => {
     const params = new URLSearchParams();
@@ -312,6 +318,12 @@ export function VersionComparisonPage() {
   useEffect(() => {
     preloadPlotlyChartRuntime().catch(() => undefined);
   }, []);
+
+  useArrowCountryNavigation({
+    options: countryOptions,
+    activeValue: selectedCountry || DEFAULT_COUNTRY,
+    onSelect: (value) => setSelectedCountry(value || null),
+  });
 
   useEffect(() => {
     const requestId = ++requestRef.current;
@@ -385,6 +397,20 @@ export function VersionComparisonPage() {
     : (deck?.metadata.selectedModels ?? []);
   const maxModelsReached = activeModels.length >= MAX_SELECTED_MODELS;
   const page = deck?.page;
+  useEffect(() => {
+    if (!page || priceControlsTouched) {
+      return;
+    }
+    if (msrpMin !== page.priceBands.range.min) {
+      setMsrpMin(page.priceBands.range.min);
+    }
+    if (msrpMax !== page.priceBands.range.max) {
+      setMsrpMax(page.priceBands.range.max);
+    }
+    if (priceBandSize !== DEFAULT_PRICE_BAND_SIZE) {
+      setPriceBandSize(DEFAULT_PRICE_BAND_SIZE);
+    }
+  }, [msrpMax, msrpMin, page, priceBandSize, priceControlsTouched]);
   const exportPreset = EXPORT_PRESETS.find((item) => item.key === exportPresetKey) ?? EXPORT_PRESETS[1];
   const unselectedModelOptions = (deck?.metadata.availableModels ?? []).filter((item) => !activeModels.includes(item.value));
 
@@ -598,7 +624,10 @@ export function VersionComparisonPage() {
                     step={500}
                     value={priceBandSize ?? ""}
                     placeholder={String(page?.priceBands.bandSize ?? "")}
-                    onChange={(event) => setPriceBandSize(event.target.value ? Number(event.target.value) : null)}
+                    onChange={(event) => {
+                      setPriceControlsTouched(true);
+                      setPriceBandSize(event.target.value ? Number(event.target.value) : null);
+                    }}
                   />
                 </label>
                 <label className="market-scan-field">
@@ -609,7 +638,10 @@ export function VersionComparisonPage() {
                     step={1000}
                     value={msrpMin ?? ""}
                     placeholder={String(page?.priceBands.range.min ?? "")}
-                    onChange={(event) => setMsrpMin(event.target.value ? Number(event.target.value) : null)}
+                    onChange={(event) => {
+                      setPriceControlsTouched(true);
+                      setMsrpMin(event.target.value ? Number(event.target.value) : null);
+                    }}
                   />
                 </label>
                 <label className="market-scan-field">
@@ -620,7 +652,10 @@ export function VersionComparisonPage() {
                     step={1000}
                     value={msrpMax ?? ""}
                     placeholder={String(page?.priceBands.range.max ?? "")}
-                    onChange={(event) => setMsrpMax(event.target.value ? Number(event.target.value) : null)}
+                    onChange={(event) => {
+                      setPriceControlsTouched(true);
+                      setMsrpMax(event.target.value ? Number(event.target.value) : null);
+                    }}
                   />
                 </label>
                 <div className="market-scan-field market-scan-field-actions">
@@ -659,9 +694,10 @@ export function VersionComparisonPage() {
                         setSelectedSegment(null);
                         setSelectedModels([]);
                         setSelectedFuelTypes(DEFAULT_FUEL_TYPES);
+                        setPriceControlsTouched(false);
                         setMsrpMin(null);
                         setMsrpMax(null);
-                        setPriceBandSize(null);
+                        setPriceBandSize(DEFAULT_PRICE_BAND_SIZE);
                       }}
                     >
                       Reset

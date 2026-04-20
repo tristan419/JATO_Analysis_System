@@ -338,6 +338,20 @@ describe("buildDrilldownInsight", () => {
       segmentLabel: "SUV-A0",
       title: "SUV-A0",
       summaryText: "EX30 目前领跑 SUV-A0，累计同比 +9.0%。",
+      monthTotalRanking: {
+        title: "Monthly Total Model Ranking",
+        items: [
+          {
+            rank: 1,
+            model: "EX30",
+            volume: 880,
+            sharePct: 0.2,
+            shareDisplay: "20.0%",
+            yoy: makeDelta(0.11),
+            barPct: 1,
+          },
+        ],
+      },
       totalRanking: {
         title: "YTD Total Model Ranking",
         items: [
@@ -370,6 +384,13 @@ describe("buildDrilldownInsight", () => {
             yoy: makeDelta(-0.01),
             barPct: 0.6,
           },
+        ],
+      },
+      monthFuelTrend: {
+        items: [
+          { label: "24.04", totalVolume: 2800, fuelMix: { ICE: 1100, PHEV: 600, BEV: 1100 } },
+          { label: "25.04", totalVolume: 3200, fuelMix: { ICE: 1050, PHEV: 650, BEV: 1500 } },
+          { label: "26.04", totalVolume: 3600, fuelMix: { ICE: 980, PHEV: 720, BEV: 1900 } },
         ],
       },
       ytdFuelTrend: {

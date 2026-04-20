@@ -13,6 +13,7 @@ import {
   getExportPalette,
   type ExportSettings,
 } from "../components/ExportPanel";
+import { DeckSubpageNav } from "../components/DeckSubpageNav";
 import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { SlideLayoutEditor } from "../components/SlideLayoutEditor";
@@ -31,6 +32,7 @@ import {
   type SlideLayoutSettings,
 } from "../utils/slideLayout";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
+import { useArrowCountryNavigation } from "../utils/useArrowCountryNavigation";
 import { SlideFitSummary } from "../components/SlideFitSummary";
 import {
   buildDefaultMarketScanSlideLayouts,
@@ -58,8 +60,15 @@ import type {
   MarketScanSuvSegmentShareTrendItem,
 } from "../types";
 
+type MarketScanSalesMode = "month" | "ytd";
+
 const DEFAULT_FUEL_TYPES = ["ICE", "MHEV", "HEV", "PHEV", "BEV", "LPG"];
 const DEFAULT_MARKET_SCAN_COUNTRY = "瑞典";
+const DEFAULT_MARKET_SCAN_SALES_MODE: MarketScanSalesMode = "month";
+const MARKET_SCAN_SALES_MODE_OPTIONS: Array<{ value: MarketScanSalesMode; label: string }> = [
+  { value: "month", label: "当月" },
+  { value: "ytd", label: "累计" },
+];
 const TAB_ITEMS: Array<{
   key: MarketScanPageKey;
   code: string;
@@ -99,6 +108,10 @@ const MARKET_SCAN_SLIDE_LAYOUT_STORAGE_KEY = "market-scan";
 
 function isMarketScanPageKey(value: string | null): value is MarketScanPageKey {
   return value !== null && TAB_ITEMS.some((item) => item.key === value);
+}
+
+function isMarketScanSalesMode(value: string | null): value is MarketScanSalesMode {
+  return value === "month" || value === "ytd";
 }
 
 function normalizeMarketScanRankingLimit(value: number | string | null | undefined): number {
@@ -377,45 +390,86 @@ function matrixRow(matrix: MarketScanMatrix, metricKey: string): MarketScanMatri
   return matrix.rows.find((row) => row.metricKey === metricKey);
 }
 
-function buildHeroMetrics(deck: MarketScanDeckResponse, pageKey: MarketScanPageKey): HeroMetric[] {
+function filterMatrixBySalesMode(matrix: MarketScanMatrix, salesMode: MarketScanSalesMode): MarketScanMatrix {
+  const visibleMetricKeys = salesMode === "month"
+    ? new Set(["current_volume", "mom", "yoy"])
+    : new Set(["ytd", "ytd_yoy"]);
+  return {
+    ...matrix,
+    rows: matrix.rows.filter((row) => visibleMetricKeys.has(row.metricKey)),
+  };
+}
+
+function buildHeroMetrics(
+  deck: MarketScanDeckResponse,
+  pageKey: MarketScanPageKey,
+  salesMode: MarketScanSalesMode,
+): HeroMetric[] {
   if (pageKey === "overview") {
     const { summary } = deck.results.overview;
-    return [
-      {
-        label: deck.metadata.labels.currentMonthShort,
-        value: formatVolume(summary.currentMonthVolume),
-        detail: "当月销量",
-      },
-      {
-        label: "YoY",
-        value: summary.currentMonthYoY.display,
-        detail: "当月同比",
-        tone: summary.currentMonthYoY.tone,
-      },
-      {
-        label: deck.metadata.labels.currentYtd,
-        value: formatVolume(summary.ytdVolume),
-        detail: `${deck.metadata.labels.ytdWindow} 累计`,
-      },
-      {
-        label: "YTD YoY",
-        value: summary.ytdYoY.display,
-        detail: "累计同比",
-        tone: summary.ytdYoY.tone,
-      },
-    ];
+    return salesMode === "month"
+      ? [
+          {
+            label: deck.metadata.labels.currentMonthShort,
+            value: formatVolume(summary.currentMonthVolume),
+            detail: "当月销量",
+          },
+          {
+            label: "YoY",
+            value: summary.currentMonthYoY.display,
+            detail: "当月同比",
+            tone: summary.currentMonthYoY.tone,
+          },
+          {
+            label: deck.metadata.labels.currentYtd,
+            value: formatVolume(summary.ytdVolume),
+            detail: `${deck.metadata.labels.ytdWindow} 累计`,
+          },
+          {
+            label: "YTD YoY",
+            value: summary.ytdYoY.display,
+            detail: "累计同比",
+            tone: summary.ytdYoY.tone,
+          },
+        ]
+      : [
+          {
+            label: deck.metadata.labels.currentYtd,
+            value: formatVolume(summary.ytdVolume),
+            detail: `${deck.metadata.labels.ytdWindow} 累计`,
+          },
+          {
+            label: "YTD YoY",
+            value: summary.ytdYoY.display,
+            detail: "累计同比",
+            tone: summary.ytdYoY.tone,
+          },
+          {
+            label: deck.metadata.labels.currentMonthShort,
+            value: formatVolume(summary.currentMonthVolume),
+            detail: "当月销量",
+          },
+          {
+            label: "YoY",
+            value: summary.currentMonthYoY.display,
+            detail: "当月同比",
+            tone: summary.currentMonthYoY.tone,
+          },
+        ];
   }
 
   if (pageKey === "origin") {
-    const currentRow = matrixRow(deck.results.origin.matrix, "current_volume");
+    const metricKey = salesMode === "month" ? "current_volume" : "ytd";
+    const currentRow = matrixRow(deck.results.origin.matrix, metricKey);
+    const deltaRow = matrixRow(deck.results.origin.matrix, salesMode === "month" ? "yoy" : "ytd_yoy");
     const leader = topCell(currentRow);
+    const total = currentRow?.cells.reduce((sum, cell) => sum + Number(cell.value ?? 0), 0) ?? 0;
+    const deltaLeader = topCell(deltaRow);
     return [
       {
-        label: deck.metadata.labels.currentMonthShort,
-        value: formatVolume(
-          currentRow?.cells.reduce((sum, cell) => sum + Number(cell.value ?? 0), 0) ?? 0,
-        ),
-        detail: "车系总量",
+        label: salesMode === "month" ? deck.metadata.labels.currentMonthShort : deck.metadata.labels.currentYtd,
+        value: formatVolume(total),
+        detail: salesMode === "month" ? "车系总量" : `${deck.metadata.labels.ytdWindow} 累计`,
       },
       {
         label: "Leading Origin",
@@ -423,15 +477,15 @@ function buildHeroMetrics(deck: MarketScanDeckResponse, pageKey: MarketScanPageK
         detail: leader ? `${formatVolume(leader.value)} 台` : "暂无数据",
       },
       {
-        label: "Tracked Series",
-        value: String(deck.results.origin.trend.series.length),
-        detail: "纳入走势的车系数量",
+        label: salesMode === "month" ? "YoY" : "YTD YoY",
+        value: deltaLeader?.key ?? "-",
+        detail: deltaLeader ? deltaRow?.cells.find((cell) => cell.key === deltaLeader.key)?.display ?? "-" : "暂无变化",
       },
     ];
   }
 
   if (pageKey === "segment") {
-    const currentRow = matrixRow(deck.results.segment.matrix, "current_volume");
+    const currentRow = matrixRow(deck.results.segment.matrix, salesMode === "month" ? "current_volume" : "ytd");
     const leader = topCell(currentRow);
     const lastPoint = deck.results.segment.bodyShareTrend.items[
       deck.results.segment.bodyShareTrend.items.length - 1
@@ -450,14 +504,18 @@ function buildHeroMetrics(deck: MarketScanDeckResponse, pageKey: MarketScanPageK
       {
         label: "Top Bucket",
         value: leader?.key ?? "-",
-        detail: leader ? `${formatVolume(leader.value)} 台` : "暂无数据",
+        detail: leader
+          ? `${formatVolume(leader.value)} ${salesMode === "month" ? "台" : `台（${deck.metadata.labels.ytdWindow}）`}`
+          : "暂无数据",
       },
     ];
   }
 
   const drilldown = deck.results[pageKey] as MarketScanDrilldownPage;
-  const leader = drilldown.totalRanking.items[0];
-  const lastYtd = drilldown.ytdFuelTrend.items[drilldown.ytdFuelTrend.items.length - 1];
+  const activeRanking = salesMode === "month" ? drilldown.monthTotalRanking : drilldown.totalRanking;
+  const activeFuelTrend = salesMode === "month" ? drilldown.monthFuelTrend : drilldown.ytdFuelTrend;
+  const leader = activeRanking.items[0];
+  const lastTrend = activeFuelTrend.items[activeFuelTrend.items.length - 1];
   return [
     {
       label: drilldown.segmentLabel,
@@ -470,9 +528,9 @@ function buildHeroMetrics(deck: MarketScanDeckResponse, pageKey: MarketScanPageK
       detail: "榜首份额",
     },
     {
-      label: "YTD Window",
-      value: lastYtd?.label ?? deck.metadata.labels.currentYtd,
-      detail: lastYtd ? `${formatVolume(lastYtd.totalVolume)} 台` : "暂无累计趋势",
+      label: salesMode === "month" ? "Month Window" : "YTD Window",
+      value: lastTrend?.label ?? (salesMode === "month" ? deck.metadata.labels.currentMonthShort : deck.metadata.labels.currentYtd),
+      detail: lastTrend ? `${formatVolume(lastTrend.totalVolume)} 台` : "暂无销量趋势",
     },
   ];
 }
@@ -1322,6 +1380,7 @@ function OverviewSection({
   labels: _labels,
   page,
   fuelOrder,
+  salesMode,
   showDataLabels,
   exportSettings,
   compact = false,
@@ -1329,11 +1388,15 @@ function OverviewSection({
   labels: MarketScanDeckResponse["metadata"]["labels"];
   page: MarketScanOverviewPage;
   fuelOrder: string[];
+  salesMode: MarketScanSalesMode;
   showDataLabels: boolean;
   exportSettings: ExportSettings;
   compact?: boolean;
 }) {
   const insight = buildOverviewInsight(page);
+  const rankingGroups = salesMode === "month"
+    ? [page.monthlyBrandRanking, page.ytdBrandRanking]
+    : [page.ytdBrandRanking, page.monthlyBrandRanking];
 
   return (
     <div className="market-scan-grid market-scan-grid--three">
@@ -1362,35 +1425,34 @@ function OverviewSection({
         </div>
       </Panel>
 
-      <Panel
-        eyebrow="Ranking"
-        title={page.monthlyBrandRanking.title}
-      >
-        <BrandModelRankingGroup group={page.monthlyBrandRanking} compact={compact} />
-      </Panel>
-
-      <Panel
-        eyebrow="Ranking"
-        title={page.ytdBrandRanking.title}
-      >
-        <BrandModelRankingGroup group={page.ytdBrandRanking} compact={compact} />
-      </Panel>
+      {rankingGroups.map((group, index) => (
+        <Panel
+          key={group.title}
+          eyebrow={index === 0 ? "Ranking · Active" : "Ranking · Alt"}
+          title={group.title}
+        >
+          <BrandModelRankingGroup group={group} compact={compact} />
+        </Panel>
+      ))}
     </div>
   );
 }
 
 function OriginSection({
   page,
+  salesMode,
   showDataLabels,
   exportSettings,
   compact = false,
 }: {
   page: MarketScanDeckResponse["results"]["origin"];
+  salesMode: MarketScanSalesMode;
   showDataLabels: boolean;
   exportSettings: ExportSettings;
   compact?: boolean;
 }) {
   const insight = buildOriginInsight(page);
+  const filteredMatrix = filterMatrixBySalesMode(page.matrix, salesMode);
   const trendPanel = (
     <Panel
       eyebrow="Trend"
@@ -1457,8 +1519,12 @@ function OriginSection({
       </Panel>
     ) : null;
   const matrixPanel = (
-    <Panel eyebrow="Matrix" title="Origin Scorecard" subtitle="当月、同比、累计、累计同比矩阵。">
-      <MatrixTable matrix={page.matrix} />
+    <Panel
+      eyebrow="Matrix"
+      title="Origin Scorecard"
+      subtitle={salesMode === "month" ? "当月、环比、同比矩阵。" : "累计、累计同比矩阵。"}
+    >
+      <MatrixTable matrix={filteredMatrix} />
     </Panel>
   );
 
@@ -1492,18 +1558,21 @@ function OriginSection({
 
 function SegmentSection({
   page,
+  salesMode,
   showDataLabels,
   labelDigits = 1,
   exportSettings,
   compact = false,
 }: {
   page: MarketScanSegmentPage;
+  salesMode: MarketScanSalesMode;
   showDataLabels: boolean;
   labelDigits?: number;
   exportSettings: ExportSettings;
   compact?: boolean;
 }) {
   const insight = buildSegmentInsight(page);
+  const filteredMatrix = filterMatrixBySalesMode(page.matrix, salesMode);
   return (
     <>
       <Panel
@@ -1551,24 +1620,38 @@ function SegmentSection({
           />
         </Panel>
       </div>
-      <Panel eyebrow="Matrix" title="Segment Matrix" subtitle="不同长度级别的当月与累计表现。">
-        <MatrixTable matrix={page.matrix} />
+      <Panel
+        eyebrow="Matrix"
+        title="Segment Matrix"
+        subtitle={salesMode === "month" ? "不同长度级别的当月、环比、同比表现。" : "不同长度级别的累计与累计同比表现。"}
+      >
+        <MatrixTable matrix={filteredMatrix} />
       </Panel>
     </>
   );
 }
 
-function FuelPanel({ panel, compact = false }: { panel: MarketScanFuelPanel; compact?: boolean }) {
+function FuelPanel({
+  panel,
+  salesMode,
+  compact = false,
+}: {
+  panel: MarketScanFuelPanel;
+  salesMode: MarketScanSalesMode;
+  compact?: boolean;
+}) {
   const dense = true;
+  const activeTitle = salesMode === "month" ? panel.monthTitle : panel.ytdTitle;
+  const activeRanking = salesMode === "month" ? panel.monthRanking : panel.ytdRanking;
 
   return (
     <Panel
       eyebrow={panel.fuelType}
       title={`${panel.fuelType} Share Ranking`}
-      subtitle={panel.ytdTitle}
+      subtitle={activeTitle}
     >
       <RankingGroup
-        group={{ title: panel.ytdTitle, currentLabel: panel.ytdTitle, items: panel.ytdRanking }}
+        group={{ title: activeTitle, currentLabel: activeTitle, items: activeRanking }}
         compact={dense || compact}
         fuelType={panel.fuelType}
       />
@@ -1579,6 +1662,7 @@ function FuelPanel({ panel, compact = false }: { panel: MarketScanFuelPanel; com
 function DrilldownSection({
   page,
   fuelOrder,
+  salesMode,
   showDataLabels,
   exportSettings,
   compact = false,
@@ -1587,6 +1671,7 @@ function DrilldownSection({
 }: {
   page: MarketScanDrilldownPage;
   fuelOrder: string[];
+  salesMode: MarketScanSalesMode;
   showDataLabels: boolean;
   exportSettings: ExportSettings;
   compact?: boolean;
@@ -1595,14 +1680,21 @@ function DrilldownSection({
 }) {
   const normalizedRankingLimit = normalizeMarketScanRankingLimit(rankingLimit);
   const insight = buildDrilldownInsight(page);
+  const activeTotalRanking = salesMode === "month" ? page.monthTotalRanking : page.totalRanking;
+  const activeFuelTrend = salesMode === "month" ? page.monthFuelTrend : page.ytdFuelTrend;
+  const activeFuelTrendTitle = salesMode === "month" ? "Monthly Fuel Trend" : "YTD Fuel Trend";
+  const activeFuelTrendSubtitle = salesMode === "month"
+    ? "观察同一月份跨年度的燃料路线结构。"
+    : "观察同一累计窗口下各燃料路线的堆叠变化。";
+  const activeFuelTrendYAxisTitle = salesMode === "month" ? "当月销量" : "累计销量";
 
   return (
     <>
       <div className="market-scan-grid market-scan-grid--drilldown-top">
         <Panel
           eyebrow="Ranking"
-          title={page.totalRanking.title}
-          subtitle="按当前国家与细分市场 2026 累计份额排序"
+          title={activeTotalRanking.title}
+          subtitle={salesMode === "month" ? "按当前国家与细分市场当月份额排序" : "按当前国家与细分市场累计份额排序"}
           actions={onRankingLimitChange ? (
             <label className="market-scan-ranking-limit-control">
               Top
@@ -1617,11 +1709,11 @@ function DrilldownSection({
             </label>
           ) : null}
         >
-          {page.totalRanking.items.length > 0 ? (
+          {activeTotalRanking.items.length > 0 ? (
             <div className="market-scan-ranking-chart-shell">
               <PlotlyChart
                 data={applyMarketScanExportToTraces(
-                  buildTotalRankingChartData(page.totalRanking.items, showDataLabels),
+                  buildTotalRankingChartData(activeTotalRanking.items, showDataLabels),
                   exportSettings,
                 )}
                 layout={applyMarketScanExportToLayout({
@@ -1631,7 +1723,7 @@ function DrilldownSection({
                   xaxis: {
                     title: { text: "" },
                     tickformat: ".0%",
-                    range: [0, totalRankingXAxisMax(page.totalRanking.items)],
+                    range: [0, totalRankingXAxisMax(activeTotalRanking.items)],
                     automargin: true,
                     fixedrange: true,
                   },
@@ -1647,25 +1739,25 @@ function DrilldownSection({
         </Panel>
         <Panel
           eyebrow="Trend"
-          title="YTD Fuel Trend"
-          subtitle="观察同一累计窗口下各燃料路线的堆叠变化。"
+          title={activeFuelTrendTitle}
+          subtitle={activeFuelTrendSubtitle}
         >
           <PlotlyChart
             data={applyMarketScanExportToTraces(
-              buildFuelTrendData(page.ytdFuelTrend.items, fuelOrder, showDataLabels),
+              buildFuelTrendData(activeFuelTrend.items, fuelOrder, showDataLabels),
               exportSettings,
             )}
             layout={applyMarketScanExportToLayout({
               ...CHART_LAYOUT,
               barmode: "stack",
-              margin: { l: 54, r: 16, t: 22, b: 36 },
-              xaxis: { type: "category", automargin: true, fixedrange: true },
-              yaxis: {
-                title: { text: "累计销量" },
-                range: [0, fuelTrendYAxisMax(page.ytdFuelTrend.items, showDataLabels)],
-                automargin: true,
-                fixedrange: true,
-              },
+                margin: { l: 54, r: 16, t: 22, b: 36 },
+                xaxis: { type: "category", automargin: true, fixedrange: true },
+                yaxis: {
+                  title: { text: activeFuelTrendYAxisTitle },
+                  range: [0, fuelTrendYAxisMax(activeFuelTrend.items, showDataLabels)],
+                  automargin: true,
+                  fixedrange: true,
+                },
             }, exportSettings)}
             height={compact ? 236 : 332}
           />
@@ -1681,7 +1773,12 @@ function DrilldownSection({
       </div>
       <div className="market-scan-grid market-scan-grid--five market-scan-fuel-panel-row">
         {page.fuelPanels.map((panel) => (
-          <FuelPanel key={`${page.segment}-${panel.fuelType}`} panel={panel} compact={compact} />
+          <FuelPanel
+            key={`${page.segment}-${panel.fuelType}`}
+            panel={panel}
+            salesMode={salesMode}
+            compact={compact}
+          />
         ))}
       </div>
     </>
@@ -1721,6 +1818,12 @@ export function MarketScanPage() {
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(
     () => searchParams.get("period"),
   );
+  const [salesMode, setSalesMode] = useState<MarketScanSalesMode>(
+    () => {
+      const requestedMode = searchParams.get("salesMode");
+      return isMarketScanSalesMode(requestedMode) ? requestedMode : DEFAULT_MARKET_SCAN_SALES_MODE;
+    },
+  );
   const [selectedFuelTypes, setSelectedFuelTypes] = useState<string[]>(
     () => {
       const ft = searchParams.get("fuelTypes");
@@ -1739,6 +1842,7 @@ export function MarketScanPage() {
   const [reloadToken, setReloadToken] = useState(0);
   const requestRef = useRef(0);
   const slideRef = useRef<HTMLDivElement | null>(null);
+  const countryOptions = deck?.metadata.availableCountries ?? [];
 
   // Sync filter state back to URL search params
   const syncUrlParams = useCallback(() => {
@@ -1746,13 +1850,14 @@ export function MarketScanPage() {
     if (selectedCountry) params.set("country", selectedCountry);
     if (selectedPeriod) params.set("period", selectedPeriod);
     if (activePage !== "overview") params.set("activePage", activePage);
+    if (salesMode !== DEFAULT_MARKET_SCAN_SALES_MODE) params.set("salesMode", salesMode);
     if (selectedDrilldownSegment !== "SUV A0") params.set("drilldownSegment", selectedDrilldownSegment);
     if (rankingLimit !== MIN_MARKET_SCAN_RANKING_LIMIT) params.set("rankingLimit", String(rankingLimit));
     const ft = selectedFuelTypes.slice().sort().join(",");
     const defaultFt = DEFAULT_FUEL_TYPES.slice().sort().join(",");
     if (ft !== defaultFt) params.set("fuelTypes", selectedFuelTypes.join(","));
     setSearchParams(params, { replace: true });
-  }, [activePage, rankingLimit, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, setSearchParams]);
+  }, [activePage, rankingLimit, salesMode, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, setSearchParams]);
 
   useEffect(() => {
     syncUrlParams();
@@ -1765,6 +1870,12 @@ export function MarketScanPage() {
   useEffect(() => {
     writeStoredSlideLayouts(MARKET_SCAN_SLIDE_LAYOUT_STORAGE_KEY, slideLayouts);
   }, [slideLayouts]);
+
+  useArrowCountryNavigation({
+    options: countryOptions,
+    activeValue: selectedCountry || DEFAULT_MARKET_SCAN_COUNTRY,
+    onSelect: (value) => setSelectedCountry(value || null),
+  });
 
   useEffect(() => {
     const requestId = ++requestRef.current;
@@ -1843,7 +1954,7 @@ export function MarketScanPage() {
     : (deck?.metadata.selectedFuelTypes ?? DEFAULT_FUEL_TYPES);
   const showDataLabels = exportSettings.dataLabelMode !== "off";
   const labelDigits = Math.max(0, Math.min(4, exportSettings.decimalPlaces ?? 1));
-  const heroMetrics = deck ? buildHeroMetrics(deck, activePage) : [];
+  const heroMetrics = deck ? buildHeroMetrics(deck, activePage, salesMode) : [];
   const narrative = deck ? pageNarrative(deck, activePage) : "按国家、月份与动力组合切换市场扫描页。";
   const activeTab = TAB_ITEMS.find((item) => item.key === activePage) ?? TAB_ITEMS[0];
   const previewWidth = normalizeMarketScanExportDimension(exportSettings.exportWidth, 1920, 400);
@@ -1912,6 +2023,7 @@ export function MarketScanPage() {
           labels={deck.metadata.labels}
           page={deck.results.overview}
           fuelOrder={deck.metadata.selectedFuelTypes}
+          salesMode={salesMode}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -1922,6 +2034,7 @@ export function MarketScanPage() {
       return (
         <OriginSection
           page={deck.results.origin}
+          salesMode={salesMode}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -1932,6 +2045,7 @@ export function MarketScanPage() {
       return (
         <SegmentSection
           page={deck.results.segment}
+          salesMode={salesMode}
           showDataLabels={showDataLabels}
           labelDigits={labelDigits}
           exportSettings={exportSettings}
@@ -1944,6 +2058,7 @@ export function MarketScanPage() {
         <DrilldownSection
           page={deck.results.drilldown}
           fuelOrder={deck.metadata.selectedFuelTypes}
+          salesMode={salesMode}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -1957,6 +2072,7 @@ export function MarketScanPage() {
         <DrilldownSection
           page={deck.results.suvA}
           fuelOrder={deck.metadata.selectedFuelTypes}
+          salesMode={salesMode}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -1969,6 +2085,7 @@ export function MarketScanPage() {
       <DrilldownSection
         page={deck.results.suvB}
         fuelOrder={deck.metadata.selectedFuelTypes}
+        salesMode={salesMode}
         showDataLabels={showDataLabels}
         exportSettings={exportSettings}
         compact={compact}
@@ -2048,6 +2165,9 @@ export function MarketScanPage() {
                   月份 {deck?.metadata.labels.currentMonthShort ?? "Latest"}
                 </span>
                 <span className="market-scan-hero-chip">
+                  口径 {MARKET_SCAN_SALES_MODE_OPTIONS.find((option) => option.value === salesMode)?.label ?? "当月"}
+                </span>
+                <span className="market-scan-hero-chip">
                   动力 {activeFuelTypes.join(" / ")}
                 </span>
                 <span className="market-scan-hero-chip">
@@ -2092,6 +2212,22 @@ export function MarketScanPage() {
                   </select>
                 </label>
 
+                <div className="market-scan-field">
+                  <span>销量口径</span>
+                  <div className="btn-group">
+                    {MARKET_SCAN_SALES_MODE_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`btn btn-sm ${salesMode === option.value ? "btn-primary" : "btn-ghost"}`}
+                        onClick={() => setSalesMode(option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <label className="market-scan-field">
                   <span>Drilldown</span>
                   <select
@@ -2123,8 +2259,11 @@ export function MarketScanPage() {
                       onClick={() => {
                         setSelectedCountry(null);
                         setSelectedPeriod(null);
+                        setSalesMode(DEFAULT_MARKET_SCAN_SALES_MODE);
                         setSelectedFuelTypes(DEFAULT_FUEL_TYPES);
                         setSelectedDrilldownSegment("SUV A0");
+                        setRankingLimit(MIN_MARKET_SCAN_RANKING_LIMIT);
+                        setActivePage("overview");
                       }}
                     >
                       Reset
@@ -2176,22 +2315,13 @@ export function MarketScanPage() {
           )}
         />
 
-        <nav className="market-scan-tab-strip" aria-label="Market Scan Pages">
-          {TAB_ITEMS.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={`market-scan-tab${activePage === item.key ? " is-active" : ""}`}
-              onClick={() => setActivePage(item.key)}
-            >
-              <span className="market-scan-tab-code">{item.code}</span>
-              <span className="market-scan-tab-copy">
-                <strong>{item.label}</strong>
-                <span>{item.sublabel}</span>
-              </span>
-            </button>
-          ))}
-        </nav>
+        <DeckSubpageNav
+          items={TAB_ITEMS}
+          activeKey={activePage}
+          onSelect={setActivePage}
+          ariaLabel="Market Scan Pages"
+          tabsClassName="market-scan-tab-strip"
+        />
 
         {error ? (
           <section className="market-scan-state-card market-scan-state-card--error">

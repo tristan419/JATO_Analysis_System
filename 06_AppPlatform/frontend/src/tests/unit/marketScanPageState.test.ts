@@ -202,11 +202,24 @@ function makeDrilldownPage({
     segmentLabel: "SUV-A0",
     title: "SUV-A0",
     summaryText: "drilldown summary",
+    monthTotalRanking: {
+      title: "Monthly Ranking",
+      items: Array.from({ length: rankingCount }, (_, index) =>
+        makeRankingItem(`MONTH-MODEL-${index + 1}`, 0.16 - index * 0.003, index + 1),
+      ),
+    },
     totalRanking: {
       title: "Ranking",
       items: Array.from({ length: rankingCount }, (_, index) =>
         makeRankingItem(`MODEL-${index + 1}`, 0.18 - index * 0.003, index + 1),
       ),
+    },
+    monthFuelTrend: {
+      items: Array.from({ length: trendCount }, (_, index) => ({
+        label: `25.${String(index + 1).padStart(2, "0")}`,
+        totalVolume: 2400 + index * 120,
+        fuelMix: { ICE: 1000, HEV: 700, BEV: 780 },
+      })),
     },
     ytdFuelTrend: {
       items: Array.from({ length: trendCount }, (_, index) => ({

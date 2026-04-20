@@ -2287,6 +2287,28 @@ def _build_ytd_fuel_trend(
     return {"items": items}
 
 
+def _build_month_fuel_trend(
+    frame: pd.DataFrame,
+    fuel_order: list[str],
+    resolved_period: str,
+    available_periods: list[str],
+) -> dict[str, Any]:
+    target = pd.Period(resolved_period, freq="M")
+    years = [target.year - 2, target.year - 1, target.year]
+    items = []
+    for year in years:
+        period = f"{year}-{target.month:02d}"
+        period_columns = [_period_to_month_column(period)] if period in available_periods else []
+        total = _total_volume(frame, period_columns)
+        label = f"{str(year)[2:4]}.{target.month:02d}"
+        fuel_mix = {
+            fuel: float(_total_volume(frame[frame["__powertrain"] == fuel], period_columns))
+            for fuel in fuel_order
+        }
+        items.append({"label": label, "totalVolume": total, "fuelMix": fuel_mix})
+    return {"items": items}
+
+
 def _build_drilldown_payload(
     frame: pd.DataFrame,
     available_periods: list[str],
@@ -2301,8 +2323,11 @@ def _build_drilldown_payload(
         return {
             "segment": segment_value,
             "segmentLabel": _segment_display_label(segment_value),
+            "title": f"{_segment_display_label(segment_value)} 车型",
             "summaryText": "当前筛选下没有该细分市场的可用数据。",
-            "totalRanking": {"items": []},
+            "monthTotalRanking": {"title": "Monthly Total Model Ranking", "items": []},
+            "totalRanking": {"title": "YTD Total Model Ranking", "items": []},
+            "monthFuelTrend": {"items": []},
             "ytdFuelTrend": {"items": []},
             "fuelPanels": [],
         }
@@ -2319,6 +2344,13 @@ def _build_drilldown_payload(
         segment_frame,
         current_columns=current_ytd_columns,
         prior_columns=prior_ytd_columns,
+        fuel_order=available_fuels,
+        ranking_limit=ranking_limit,
+    )
+    month_total_ranking = _build_total_ranking_items(
+        segment_frame,
+        current_columns=current_month_columns,
+        prior_columns=same_month_columns,
         fuel_order=available_fuels,
         ranking_limit=ranking_limit,
     )
@@ -2357,10 +2389,15 @@ def _build_drilldown_payload(
         "segmentLabel": _segment_display_label(segment_value),
         "title": f"{_segment_display_label(segment_value)} 车型 {year_text}年1-{month_number}月",
         "summaryText": f"{headline_model} 目前领跑 {_segment_display_label(segment_value)}，累计同比 {headline_yoy}。",
+        "monthTotalRanking": {
+            "title": "Monthly Total Model Ranking",
+            "items": month_total_ranking,
+        },
         "totalRanking": {
             "title": "YTD Total Model Ranking",
             "items": total_ranking,
         },
+        "monthFuelTrend": _build_month_fuel_trend(segment_frame, available_fuels, resolved_period, available_periods),
         "ytdFuelTrend": _build_ytd_fuel_trend(segment_frame, available_fuels, resolved_period, available_periods),
         "fuelPanels": fuel_panel_items,
     }

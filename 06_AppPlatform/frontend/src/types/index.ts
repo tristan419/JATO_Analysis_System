@@ -581,9 +581,16 @@ export interface MarketScanDrilldownPage {
   segmentLabel: string;
   title: string;
   summaryText: string;
+  monthTotalRanking: {
+    title: string;
+    items: MarketScanRankingItem[];
+  };
   totalRanking: {
     title: string;
     items: MarketScanRankingItem[];
+  };
+  monthFuelTrend: {
+    items: MarketScanFuelTrendItem[];
   };
   ytdFuelTrend: {
     items: MarketScanFuelTrendItem[];
