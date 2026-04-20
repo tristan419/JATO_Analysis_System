@@ -103,3 +103,54 @@ def test_build_key_digest_frame_preserves_group_digests_when_rows_reordered(
             "multiRow": False,
         },
     ]
+
+
+def test_allow_missing_countries_treats_absent_baseline_scope_as_unchanged(
+) -> None:
+    old_info = {
+        "德国": {"latestMonth": "2026 Jan", "rowCount": 10, "months": ["2026 Jan"]},
+        "瑞典": {"latestMonth": "2026 Jan", "rowCount": 12, "months": ["2026 Jan"]},
+    }
+    new_info = {
+        "德国": {
+            "latestMonth": "2026 Mar",
+            "rowCount": 15,
+            "months": ["2026 Jan", "2026 Feb", "2026 Mar"],
+        }
+    }
+
+    freshness = raw_compare_module.summarize_country_freshness(
+        old_info,
+        new_info,
+        allow_missing_countries=True,
+    )
+    coverage = raw_compare_module.summarize_country_coverage(
+        old_info,
+        new_info,
+        allow_missing_countries=True,
+    )
+    scope = raw_compare_module.build_country_scope_summary(
+        freshness,
+        coverage,
+        old_countries=["德国", "瑞典"],
+        new_countries=["德国"],
+        allow_missing_countries=True,
+    )
+
+    assert next(
+        entry for entry in freshness if entry["country"] == "瑞典"
+    ) == {
+        "country": "瑞典",
+        "oldLatestMonth": "2026 Jan",
+        "newLatestMonth": "2026 Jan",
+        "freshnessStatus": "unchanged_latest",
+        "freshnessDeltaMonths": 0,
+        "oldRowCount": 12,
+        "newRowCount": 12,
+        "rowDelta": 0,
+    }
+    assert next(
+        entry for entry in coverage if entry["country"] == "瑞典"
+    )["coverageStatus"] == "unchanged_coverage"
+    assert scope["removedCountries"] == []
+    assert scope["changedCountries"] == ["德国"]

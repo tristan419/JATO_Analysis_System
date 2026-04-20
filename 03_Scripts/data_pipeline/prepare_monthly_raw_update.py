@@ -176,6 +176,7 @@ def main() -> None:
         "python", "03_Scripts/raw_compare_review.py",
         "--old", _rel(bl_tgt),
         "--new", _rel(pa_tgt),
+        "--allow-missing-countries",
         "--output-dir", _rel(review_dir),
     ])
     refresh_cmd = shlex.join([

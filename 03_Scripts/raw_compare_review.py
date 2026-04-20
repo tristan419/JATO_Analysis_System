@@ -383,19 +383,27 @@ def build_time_axis_check(
 def summarize_country_freshness(
     old_info: dict[str, dict[str, Any]],
     new_info: dict[str, dict[str, Any]],
+    *,
+    allow_missing_countries: bool = False,
 ) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     all_countries = sorted(set(old_info) | set(new_info))
     for country in all_countries:
         old_payload = old_info.get(country, {})
         new_payload = new_info.get(country, {})
+        if allow_missing_countries and country in old_info and country not in new_info:
+            new_payload = old_payload
         old_latest = old_payload.get("latestMonth")
         new_latest = new_payload.get("latestMonth")
 
         if country not in old_info:
             status = "new_country"
         elif country not in new_info:
-            status = "missing_in_candidate"
+            status = (
+                "unchanged_latest"
+                if allow_missing_countries
+                else "missing_in_candidate"
+            )
         elif (
             old_latest
             and new_latest
@@ -431,12 +439,18 @@ def summarize_country_freshness(
 def summarize_country_coverage(
     old_info: dict[str, dict[str, Any]],
     new_info: dict[str, dict[str, Any]],
+    *,
+    allow_missing_countries: bool = False,
 ) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     all_countries = sorted(set(old_info) | set(new_info))
     for country in all_countries:
-        old_months = list(old_info.get(country, {}).get("months", []))
-        new_months = list(new_info.get(country, {}).get("months", []))
+        old_payload = old_info.get(country, {})
+        new_payload = new_info.get(country, {})
+        if allow_missing_countries and country in old_info and country not in new_info:
+            new_payload = old_payload
+        old_months = list(old_payload.get("months", []))
+        new_months = list(new_payload.get("months", []))
         added_months = sort_time_labels(
             list(set(new_months) - set(old_months))
         )
@@ -447,7 +461,13 @@ def summarize_country_coverage(
             list(set(old_months) & set(new_months))
         )
 
-        if country not in old_info or country not in new_info:
+        if (
+            country not in old_info
+            or (
+                country not in new_info
+                and not allow_missing_countries
+            )
+        ):
             status = "scope_changed"
         elif removed_months:
             status = "regressed_coverage"
@@ -759,6 +779,8 @@ def build_country_scope_summary(
     coverage_entries: list[dict[str, Any]],
     old_countries: list[str],
     new_countries: list[str],
+    *,
+    allow_missing_countries: bool = False,
 ) -> dict[str, Any]:
     coverage_by_country = {
         str(entry["country"]): str(entry["coverageStatus"])
@@ -778,12 +800,19 @@ def build_country_scope_summary(
     )
     old_set = set(old_countries)
     new_set = set(new_countries)
-    overlapping = sorted(old_set & new_set)
+    effective_new_set = old_set | new_set if allow_missing_countries else new_set
+    overlapping = sorted(old_set & effective_new_set)
     return {
         "oldCountries": old_countries,
-        "newCountries": new_countries,
+        "newCountries": (
+            sorted(effective_new_set)
+            if allow_missing_countries
+            else new_countries
+        ),
         "addedCountries": sorted(new_set - old_set),
-        "removedCountries": sorted(old_set - new_set),
+        "removedCountries": (
+            [] if allow_missing_countries else sorted(old_set - new_set)
+        ),
         "overlappingCountries": overlapping,
         "unchangedCountryCount": int(
             len(
@@ -1203,10 +1232,12 @@ def run_compare(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     freshness_entries = summarize_country_freshness(
         old_country_info,
         new_country_info,
+        allow_missing_countries=bool(args.allow_missing_countries),
     )
     coverage_entries = summarize_country_coverage(
         old_country_info,
         new_country_info,
+        allow_missing_countries=bool(args.allow_missing_countries),
     )
     emit(
         f"🔎 开始记录级重叠比对（{len(coverage_entries)} 个国家）"
@@ -1230,6 +1261,7 @@ def run_compare(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         coverage_entries=coverage_entries,
         old_countries=collect_country_set(old_df, old_country_col),
         new_countries=collect_country_set(new_df, new_country_col),
+        allow_missing_countries=bool(args.allow_missing_countries),
     )
     schema_check = build_schema_check(old_df, new_df, compare_plan)
     time_axis_check = build_time_axis_check(
@@ -1255,6 +1287,7 @@ def run_compare(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "candidateInput": new_summary,
         "compareKeyMode": compare_plan["compareKeyMode"],
         "compareKeyColumns": compare_plan["compareKeyColumns"],
+        "allowMissingCountries": bool(args.allow_missing_countries),
         "outputDir": to_project_relative(output_dir),
         "schemaCheck": schema_check,
         "timeAxisCheck": time_axis_check,
@@ -1390,6 +1423,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_SAMPLE_LIMIT,
         help="变更样本上限，默认 20。",
+    )
+    parser.add_argument(
+        "--allow-missing-countries",
+        action="store_true",
+        help="允许候选文件只覆盖部分国家；未出现的 baseline 国家按沿用 baseline 处理。",
     )
     parser.add_argument(
         "--strict",
