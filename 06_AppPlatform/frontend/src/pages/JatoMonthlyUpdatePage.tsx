@@ -11,6 +11,7 @@ import type {
   JatoMonthlyUpdateJob,
   JatoMonthlyUpdateMaintenanceStatus,
   JatoMonthlyUpdateReviewBundle,
+  JatoMonthlyUpdateStorageMetric,
   JatoMonthlyUpdateUploadProgress,
 } from "../types";
 import {
@@ -96,6 +97,14 @@ function formatSignedNumber(value: number): string {
   return "0";
 }
 
+function sumStorageMetricBytes(metrics: JatoMonthlyUpdateStorageMetric[]): number {
+  return metrics.reduce((total, metric) => total + metric.bytes, 0);
+}
+
+function formatCleanupTierLabel(tier: "safe" | "cautious"): string {
+  return tier === "cautious" ? "谨慎删" : "安全删";
+}
+
 export function JatoMonthlyUpdatePage() {
   const [jobs, setJobs] = useState<JatoMonthlyUpdateJob[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
@@ -117,6 +126,8 @@ export function JatoMonthlyUpdatePage() {
   const [notice, setNotice] = useState("");
   const [cleanupResult, setCleanupResult] =
     useState<JatoMonthlyUpdateCleanupResult | null>(null);
+  const [selectedCleanupTier, setSelectedCleanupTier] =
+    useState<"safe" | "cautious">("safe");
   const [maintenanceStatus, setMaintenanceStatus] =
     useState<JatoMonthlyUpdateMaintenanceStatus | null>(null);
   const [baselinePromotion, setBaselinePromotion] =
@@ -319,9 +330,10 @@ export function JatoMonthlyUpdatePage() {
       setError("存在运行中的月更任务，请等待完成后再执行一键清理。");
       return;
     }
-    const confirmed = window.confirm(
-      "将归档旧 baseline/patch，并删除所有已结束任务（success / failed）的临时上传副本。当前激活 baseline、最新 patch 批次以及报告文件会保留；清理后 failed 任务不能直接 retry，需要重新上传。继续吗？"
-    );
+    const confirmationMessage = selectedCleanupTier === "cautious"
+      ? "将执行“谨慎删”：除安全删外，还会删除 raw compare reviews、staging outputs、refresh backups 和 archived baselines/patches。会影响回看和 rollback，但不会删除当前 active baseline、当前 active dataset、当前 latest patch batch。继续吗？"
+      : "将执行“安全删”：归档旧 baseline/patch，删除 upload session cache，以及所有已结束任务（success / failed）的临时上传副本。当前激活 baseline、最新 patch 批次、staging、refresh backups 和报告文件会保留；清理后 failed 任务不能直接 retry，需要重新上传。继续吗？";
+    const confirmed = window.confirm(confirmationMessage);
     if (!confirmed) {
       return;
     }
@@ -329,10 +341,10 @@ export function JatoMonthlyUpdatePage() {
     setError("");
     setNotice("");
     try {
-      const response = await api.runJatoMonthlyUpdateCleanup();
+      const response = await api.runJatoMonthlyUpdateCleanup(selectedCleanupTier);
       setCleanupResult(response.item);
       setNotice(
-        `清理完成：归档 baseline ${response.item.archivedBaselineCount} 个，归档 patch 目录 ${response.item.archivedPatchDirCount} 个，清理上传副本 ${response.item.removedJobUploadDirCount} 个。`
+        `${formatCleanupTierLabel(response.item.cleanupTier)}完成：释放 ${formatMonthlyUpdateFileSize(response.item.freedBytes)}，归档 baseline ${response.item.archivedBaselineCount} 个，归档 patch 目录 ${response.item.archivedPatchDirCount} 个，清理 upload session ${response.item.removedUploadSessionDirCount} 个，清理上传副本 ${response.item.removedJobUploadDirCount} 个。`
       );
       await refreshJobs(selectedJobId ?? undefined, true);
       await refreshMaintenanceStatus(true);
@@ -511,6 +523,9 @@ export function JatoMonthlyUpdatePage() {
   const activeConflictSamples = activeReviewCountry
     ? (reviewBundle?.conflictSamples.filter((item) => item.country === activeReviewCountry) ?? [])
     : (reviewBundle?.conflictSamples ?? []);
+  const safeCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "safe") ?? [];
+  const cautiousCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "cautious") ?? [];
+  const protectedCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "protected") ?? [];
 
   return (
     <section className="crud-shell">
@@ -718,13 +733,24 @@ export function JatoMonthlyUpdatePage() {
             >
               {promotingBaseline ? "保存中..." : "保存当前 active 为 baseline"}
             </button>
+            <div className="filter-group" style={{ minWidth: 180 }}>
+              <label>一键清理级别</label>
+              <select
+                value={selectedCleanupTier}
+                onChange={(event) => setSelectedCleanupTier(event.target.value as "safe" | "cautious")}
+                disabled={cleanupRunning || hasActiveJob}
+              >
+                <option value="safe">安全删（推荐）</option>
+                <option value="cautious">谨慎删</option>
+              </select>
+            </div>
             <button
               type="button"
               className="btn btn-secondary"
               onClick={() => void handleCleanup()}
               disabled={cleanupRunning || hasActiveJob}
             >
-              {cleanupRunning ? "清理中..." : "一键清理"}
+              {cleanupRunning ? "清理中..." : `执行${formatCleanupTierLabel(selectedCleanupTier)}`}
             </button>
           </div>
         </div>
@@ -777,11 +803,16 @@ export function JatoMonthlyUpdatePage() {
               </span>
             </div>
             <div className="monthly-update-cleanup-summary">
+              <span>cleanup tier: {formatCleanupTierLabel(cleanupResult.cleanupTier)}</span>
+              <span>freed: {formatMonthlyUpdateFileSize(cleanupResult.freedBytes)}</span>
               <span>active baseline: {cleanupResult.activeBaselinePath ?? "-"}</span>
               <span>active patch batch: {cleanupResult.activePatchMonth ?? "-"}</span>
               <span>archived baselines: {formatMonthlyUpdateNumber(cleanupResult.archivedBaselineCount)}</span>
               <span>archived patch dirs: {formatMonthlyUpdateNumber(cleanupResult.archivedPatchDirCount)}</span>
+              <span>removed upload sessions: {formatMonthlyUpdateNumber(cleanupResult.removedUploadSessionDirCount)}</span>
               <span>removed upload dirs: {formatMonthlyUpdateNumber(cleanupResult.removedJobUploadDirCount)}</span>
+              <span>deleted staging dirs: {formatMonthlyUpdateNumber(cleanupResult.deletedStagingDirCount)}</span>
+              <span>deleted backup dirs: {formatMonthlyUpdateNumber(cleanupResult.deletedRefreshBackupDirCount)}</span>
             </div>
           </div>
         )}
@@ -800,24 +831,28 @@ export function JatoMonthlyUpdatePage() {
         )}
         <div className="monthly-update-cleanup-grid">
           <article className="monthly-update-cleanup-card">
-            <span>保留</span>
-            <strong>01_RAW_DATA/baseline/</strong>
-            <small>只留当前激活最新 baseline，供下一轮 compare 使用；如当前 active 已稳定，可一键固化成新 baseline。</small>
+            <span>安全删</span>
+            <strong>{formatMonthlyUpdateFileSize(sumStorageMetricBytes(safeCleanupMetrics))}</strong>
+            <small>
+              {safeCleanupMetrics.map((metric) => metric.label).join(" / ") || "upload session cache / job upload copies"}
+              。会归档旧 baseline / patch，并删除 upload session 与已结束任务上传副本。
+            </small>
           </article>
           <article className="monthly-update-cleanup-card">
-            <span>归档</span>
-            <strong>旧 baseline / 旧 patch</strong>
-            <small>保留追溯能力，但不要继续放在 active 目录影响自动识别；保存新 baseline 时旧 baseline 也会自动归档。</small>
+            <span>谨慎删</span>
+            <strong>{formatMonthlyUpdateFileSize(sumStorageMetricBytes(cautiousCleanupMetrics))}</strong>
+            <small>
+              {cautiousCleanupMetrics.map((metric) => metric.label).join(" / ") || "archived baselines / raw compare reviews / staging outputs / refresh backups"}
+              。可明显降盘，但会影响回看、重建和 rollback。
+            </small>
           </article>
           <article className="monthly-update-cleanup-card">
-            <span>可清理</span>
-            <strong>04_Processed_data/ops/jato_monthly_update_jobs/*/uploads/</strong>
-            <small>这是 job 级临时上传副本；success / failed 都可以删，原 patch 归档仍保留，但 failed 清理后需重新上传才能 retry。</small>
-          </article>
-          <article className="monthly-update-cleanup-card">
-            <span>建议保留</span>
-            <strong>raw compare / refresh reports</strong>
-            <small>用于回溯、审计、排错，不建议和临时上传副本一起清掉。</small>
+            <span>不要删</span>
+            <strong>{formatMonthlyUpdateFileSize(sumStorageMetricBytes(protectedCleanupMetrics))}</strong>
+            <small>
+              {protectedCleanupMetrics.map((metric) => metric.label).join(" / ") || "active baseline / patch batches / active dataset"}
+              。这部分是当前运行或重建所需核心数据，不进入一键删除。
+            </small>
           </article>
         </div>
       </div>

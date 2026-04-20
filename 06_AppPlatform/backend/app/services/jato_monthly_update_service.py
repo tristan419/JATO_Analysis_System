@@ -47,6 +47,10 @@ MONTH_COLUMN_PATTERN = re.compile(
 YEAR_COLUMN_PATTERN = re.compile(r"^\d{4}$")
 BATCH_ID_PATTERN = re.compile(r"^(20\d{2}-\d{2})-r(\d+)$")
 COUNTRY_COLUMN_CANDIDATES = ("国家", "country")
+SAFE_CLEANUP_TIER = "safe"
+CAUTIOUS_CLEANUP_TIER = "cautious"
+PROTECTED_CLEANUP_TIER = "protected"
+ALLOWED_CLEANUP_TIERS = {SAFE_CLEANUP_TIER, CAUTIOUS_CLEANUP_TIER}
 _WRITE_LOCK = threading.Lock()
 _RUNNING_THREADS: dict[str, threading.Thread] = {}
 
@@ -676,6 +680,14 @@ def _build_storage_metric(*, key: str, label: str, paths: list[Path]) -> dict[st
         for path in paths
         if path.exists()
     ]
+    cleanup_tier = {
+        "upload-session-cache": SAFE_CLEANUP_TIER,
+        "job-upload-copies": SAFE_CLEANUP_TIER,
+        "baseline-archive": CAUTIOUS_CLEANUP_TIER,
+        "review-reports": CAUTIOUS_CLEANUP_TIER,
+        "staging-outputs": CAUTIOUS_CLEANUP_TIER,
+        "refresh-backups": CAUTIOUS_CLEANUP_TIER,
+    }.get(key, PROTECTED_CLEANUP_TIER)
     return {
         "key": key,
         "label": label,
@@ -683,7 +695,41 @@ def _build_storage_metric(*, key: str, label: str, paths: list[Path]) -> dict[st
         "fileCount": file_count,
         "dirCount": dir_count,
         "paths": relative_paths,
+        "cleanupTier": cleanup_tier,
     }
+
+
+def _normalize_cleanup_tier(value: Any) -> str:
+    tier = str(value or SAFE_CLEANUP_TIER).strip().lower() or SAFE_CLEANUP_TIER
+    if tier not in ALLOWED_CLEANUP_TIERS:
+        supported = ", ".join(sorted(ALLOWED_CLEANUP_TIERS))
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的 cleanupTier: {tier}（支持: {supported}）。",
+        )
+    return tier
+
+
+def _remove_cleanup_paths(paths: list[Path]) -> tuple[list[str], int]:
+    removed_paths: list[str] = []
+    freed_bytes = 0
+    for path in paths:
+        if not path.exists():
+            continue
+        path_bytes, _, _ = _measure_path_usage(path)
+        freed_bytes += path_bytes
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        removed_paths.append(_relative_to_project(path) or str(path))
+    return removed_paths, freed_bytes
+
+
+def _child_cleanup_paths(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    return sorted(root.glob("*"))
 
 
 def _job_upload_dirs() -> list[Path]:
@@ -2213,7 +2259,8 @@ def promote_current_active_to_baseline(*, triggered_by: str) -> dict[str, Any]:
     }
 
 
-def run_jato_monthly_update_cleanup(*, triggered_by: str) -> dict[str, Any]:
+def run_jato_monthly_update_cleanup(*, triggered_by: str, cleanup_tier: str = SAFE_CLEANUP_TIER) -> dict[str, Any]:
+    normalized_cleanup_tier = _normalize_cleanup_tier(cleanup_tier)
     job_payloads = _list_job_state_payloads()
     running_jobs = [
         str(payload.get("jobId", ""))
@@ -2247,6 +2294,7 @@ def run_jato_monthly_update_cleanup(*, triggered_by: str) -> dict[str, Any]:
             archived_patch_dirs.append(_relative_to_project(target) or str(target))
 
     removed_job_upload_dirs: list[str] = []
+    removed_job_upload_bytes = 0
     for payload in job_payloads:
         if str(payload.get("status", "")) not in {"success", "failed"}:
             continue
@@ -2256,6 +2304,8 @@ def run_jato_monthly_update_cleanup(*, triggered_by: str) -> dict[str, Any]:
         upload_dir = _job_dir(job_id) / "uploads"
         if not upload_dir.exists():
             continue
+        path_bytes, _, _ = _measure_path_usage(upload_dir)
+        removed_job_upload_bytes += path_bytes
         shutil.rmtree(upload_dir)
         removed_job_upload_dirs.append(_relative_to_project(upload_dir) or str(upload_dir))
         upload_payload = payload.get("upload")
@@ -2263,16 +2313,71 @@ def run_jato_monthly_update_cleanup(*, triggered_by: str) -> dict[str, Any]:
             upload_payload["storedPath"] = None
         _persist_job_state(payload)
 
+    removed_upload_session_dirs, removed_upload_session_bytes = _remove_cleanup_paths(
+        _child_cleanup_paths(_upload_session_root())
+    )
+    deleted_review_dirs: list[str] = []
+    deleted_review_bytes = 0
+    deleted_staging_dirs: list[str] = []
+    deleted_staging_bytes = 0
+    deleted_refresh_backup_dirs: list[str] = []
+    deleted_refresh_backup_bytes = 0
+    deleted_archived_baselines: list[str] = []
+    deleted_archived_baseline_bytes = 0
+    deleted_archived_patch_dirs: list[str] = []
+    deleted_archived_patch_bytes = 0
+    if normalized_cleanup_tier == CAUTIOUS_CLEANUP_TIER:
+        processed_root = _processed_data_root()
+        active_paths = _active_data_paths()
+        deleted_review_dirs, deleted_review_bytes = _remove_cleanup_paths(
+            _child_cleanup_paths(processed_root / "reviews" / "raw_compare")
+        )
+        deleted_staging_dirs, deleted_staging_bytes = _remove_cleanup_paths(
+            _child_cleanup_paths(processed_root / "staging")
+        )
+        deleted_refresh_backup_dirs, deleted_refresh_backup_bytes = _remove_cleanup_paths(
+            _child_cleanup_paths(active_paths["backupRoot"])
+        )
+        deleted_archived_baselines, deleted_archived_baseline_bytes = _remove_cleanup_paths(
+            _list_supported_excel_files(HISTORY_ARCHIVE_ROOT / "baseline")
+        )
+        deleted_archived_patch_dirs, deleted_archived_patch_bytes = _remove_cleanup_paths(
+            [path for path in _child_cleanup_paths(HISTORY_ARCHIVE_ROOT / "patches") if path.is_dir()]
+        )
+
     cleaned_at = _utc_now().isoformat()
+    freed_bytes = (
+        removed_job_upload_bytes
+        + removed_upload_session_bytes
+        + deleted_review_bytes
+        + deleted_staging_bytes
+        + deleted_refresh_backup_bytes
+        + deleted_archived_baseline_bytes
+        + deleted_archived_patch_bytes
+    )
     return {
         "cleanedAt": cleaned_at,
         "triggeredBy": triggered_by.strip() or "anonymous",
+        "cleanupTier": normalized_cleanup_tier,
         "activeBaselinePath": _relative_to_project(latest_baseline),
         "activePatchMonth": latest_patch_dir.name if latest_patch_dir is not None else None,
+        "freedBytes": int(freed_bytes),
         "archivedBaselineCount": len(archived_baselines),
         "archivedBaselines": archived_baselines,
         "archivedPatchDirCount": len(archived_patch_dirs),
         "archivedPatchDirs": archived_patch_dirs,
+        "removedUploadSessionDirCount": len(removed_upload_session_dirs),
+        "removedUploadSessionDirs": removed_upload_session_dirs,
         "removedJobUploadDirCount": len(removed_job_upload_dirs),
         "removedJobUploadDirs": removed_job_upload_dirs,
+        "deletedReviewDirCount": len(deleted_review_dirs),
+        "deletedReviewDirs": deleted_review_dirs,
+        "deletedStagingDirCount": len(deleted_staging_dirs),
+        "deletedStagingDirs": deleted_staging_dirs,
+        "deletedRefreshBackupDirCount": len(deleted_refresh_backup_dirs),
+        "deletedRefreshBackupDirs": deleted_refresh_backup_dirs,
+        "deletedArchivedBaselineCount": len(deleted_archived_baselines),
+        "deletedArchivedBaselines": deleted_archived_baselines,
+        "deletedArchivedPatchDirCount": len(deleted_archived_patch_dirs),
+        "deletedArchivedPatchDirs": deleted_archived_patch_dirs,
     }

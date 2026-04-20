@@ -250,6 +250,12 @@ export interface CountryChatTrustAssessment {
   sourceCoverage?: CountryChatSourceCoverage;
 }
 
+export interface CountryChatGroundingAnswerPath {
+  routeTrigger?: string;
+  evidenceUsed?: string[];
+  steps: string[];
+}
+
 export interface CountryChatExecutionPlanSource {
   key: string;
   label?: string;
@@ -279,6 +285,8 @@ export interface CountryChatExecutionPlan {
 export interface CountryChatGrounding {
   strategyLabel: string;
   summary: string;
+  answerPath?: CountryChatGroundingAnswerPath;
+  reasoningNotes?: string[];
   layers: CountryChatGroundingLayer[];
   keyFindings: string[];
   evidenceTables: CountryChatEvidenceTable[];
@@ -817,10 +825,31 @@ export interface CustomerInsightEvidenceCard {
   url: string;
   siteName: string;
   siteType: string;
+  sourceCode?: string;
+  countryCode?: string;
+  countryLabel?: string;
+  language?: string;
+  publishedAt?: string | null;
+  collectedAt?: string | null;
   publishTier: string;
+  publishDecision?: string;
   sentiment: string;
+  qualityScore?: number;
+  observationCount?: number;
   signals: string[];
   evidenceSnippets: string[];
+  excerpt?: string;
+  contentPreview?: string;
+  contentTruncated?: boolean;
+  observations: CustomerInsightEvidenceObservation[];
+}
+
+export interface CustomerInsightEvidenceObservation {
+  signalKind: string;
+  label: string;
+  sentence: string;
+  matchedTokens: string[];
+  sentiment: string;
 }
 
 export interface CustomerInsightForumLiveSection {
@@ -1443,14 +1472,28 @@ export interface JatoMonthlyUpdateReviewBundle {
 export interface JatoMonthlyUpdateCleanupResult {
   cleanedAt: string;
   triggeredBy: string;
+  cleanupTier: "safe" | "cautious";
   activeBaselinePath: string | null;
   activePatchMonth: string | null;
+  freedBytes: number;
   archivedBaselineCount: number;
   archivedBaselines: string[];
   archivedPatchDirCount: number;
   archivedPatchDirs: string[];
+  removedUploadSessionDirCount: number;
+  removedUploadSessionDirs: string[];
   removedJobUploadDirCount: number;
   removedJobUploadDirs: string[];
+  deletedReviewDirCount: number;
+  deletedReviewDirs: string[];
+  deletedStagingDirCount: number;
+  deletedStagingDirs: string[];
+  deletedRefreshBackupDirCount: number;
+  deletedRefreshBackupDirs: string[];
+  deletedArchivedBaselineCount: number;
+  deletedArchivedBaselines: string[];
+  deletedArchivedPatchDirCount: number;
+  deletedArchivedPatchDirs: string[];
 }
 
 export interface JatoMonthlyUpdateStorageMetric {
@@ -1460,6 +1503,7 @@ export interface JatoMonthlyUpdateStorageMetric {
   fileCount: number;
   dirCount: number;
   paths: string[];
+  cleanupTier: "safe" | "cautious" | "protected";
 }
 
 export interface JatoMonthlyUpdateMaintenanceStatus {

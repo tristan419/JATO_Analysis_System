@@ -167,10 +167,14 @@ def post_monthly_update_upload_complete(
 
 @router.post("/monthly-update-maintenance/cleanup")
 def post_monthly_update_cleanup(
+    payload: dict[str, object] | None = None,
     user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
     return {
-        "item": run_jato_monthly_update_cleanup(triggered_by=user.name)
+        "item": run_jato_monthly_update_cleanup(
+            triggered_by=user.name,
+            cleanup_tier=str((payload or {}).get("cleanupTier", "safe")),
+        )
     }
 
 

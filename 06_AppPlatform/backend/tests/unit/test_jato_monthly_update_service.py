@@ -681,6 +681,8 @@ def test_run_cleanup_archives_old_raw_data_and_removes_job_upload_copies(
     )
 
     assert result["triggeredBy"] == "tester"
+    assert result["cleanupTier"] == "safe"
+    assert result["freedBytes"] > 0
     assert (
         result["activeBaselinePath"]
         == "01_RAW_DATA/baseline/JATO-2026.3-full-baseline.xlsx"
@@ -694,6 +696,8 @@ def test_run_cleanup_archives_old_raw_data_and_removes_job_upload_copies(
     assert result["archivedPatchDirs"] == [
         "01_RAW_DATA/historyDataArchive/patches/2026-02"
     ]
+    assert result["removedUploadSessionDirCount"] == 0
+    assert result["removedUploadSessionDirs"] == []
     assert result["removedJobUploadDirCount"] == 2
     assert sorted(result["removedJobUploadDirs"]) == sorted(
         [
@@ -701,6 +705,11 @@ def test_run_cleanup_archives_old_raw_data_and_removes_job_upload_copies(
             "04_Processed_data/ops/jato_monthly_update_jobs/job-failed/uploads",
         ]
     )
+    assert result["deletedReviewDirCount"] == 0
+    assert result["deletedStagingDirCount"] == 0
+    assert result["deletedRefreshBackupDirCount"] == 0
+    assert result["deletedArchivedBaselineCount"] == 0
+    assert result["deletedArchivedPatchDirCount"] == 0
     assert not old_baseline.exists()
     assert new_baseline.exists()
     assert not old_patch_dir.exists()
@@ -714,6 +723,73 @@ def test_run_cleanup_archives_old_raw_data_and_removes_job_upload_copies(
     assert payload["upload"]["storedPath"] is None
     failed_payload = jato_monthly_update_service._load_job_state("job-failed")
     assert failed_payload["upload"]["storedPath"] is None
+
+
+def test_cautious_cleanup_removes_regenerable_artifacts_and_archives(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    raw_root = project_root / "01_RAW_DATA"
+    baseline_root = raw_root / "baseline"
+    patch_root = raw_root / "patches"
+    history_root = raw_root / "historyDataArchive"
+    job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
+    processed_root = project_root / "04_Processed_data"
+
+    baseline_root.mkdir(parents=True, exist_ok=True)
+    patch_root.mkdir(parents=True, exist_ok=True)
+    (history_root / "baseline").mkdir(parents=True, exist_ok=True)
+    (history_root / "patches").mkdir(parents=True, exist_ok=True)
+
+    (baseline_root / "JATO-2026.3-full-baseline.xlsx").write_bytes(b"new")
+    (patch_root / "2026-03").mkdir()
+    ((patch_root / "2026-03") / "new.xlsx").write_bytes(b"new-patch")
+    (history_root / "baseline" / "old-archive.xlsx").write_bytes(b"archived-baseline")
+    (history_root / "patches" / "2026-01").mkdir()
+    ((history_root / "patches" / "2026-01") / "patch.xlsx").write_bytes(b"archived-patch")
+
+    review_dir = processed_root / "reviews" / "raw_compare" / "2026-01_vs_2026-03"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    (review_dir / "raw_compare_report.json").write_text("{}", encoding="utf-8")
+
+    staging_dir = processed_root / "staging" / "2026-03-r1-mixed"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    (staging_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+    backup_dir = processed_root / ".refresh_backups" / "manual-promote-1"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    (backup_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+    upload_session_dir = job_root / "_upload_sessions" / "session-1"
+    upload_session_dir.mkdir(parents=True, exist_ok=True)
+    (upload_session_dir / "upload_state.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "RAW_DATA_ROOT", raw_root)
+    monkeypatch.setattr(jato_monthly_update_service, "BASELINE_ROOT", baseline_root)
+    monkeypatch.setattr(jato_monthly_update_service, "PATCHES_ROOT", patch_root)
+    monkeypatch.setattr(jato_monthly_update_service, "HISTORY_ARCHIVE_ROOT", history_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+
+    result = jato_monthly_update_service.run_jato_monthly_update_cleanup(
+        triggered_by="tester",
+        cleanup_tier="cautious",
+    )
+
+    assert result["cleanupTier"] == "cautious"
+    assert result["removedUploadSessionDirCount"] == 1
+    assert result["deletedReviewDirCount"] == 1
+    assert result["deletedStagingDirCount"] == 1
+    assert result["deletedRefreshBackupDirCount"] == 1
+    assert result["deletedArchivedBaselineCount"] == 1
+    assert result["deletedArchivedPatchDirCount"] == 1
+    assert result["freedBytes"] > 0
+    assert not review_dir.exists()
+    assert not staging_dir.exists()
+    assert not backup_dir.exists()
+    assert not upload_session_dir.exists()
+    assert not (history_root / "baseline" / "old-archive.xlsx").exists()
+    assert not (history_root / "patches" / "2026-01").exists()
 
 
 def test_promote_current_active_to_baseline_exports_snapshot_and_archives_old(

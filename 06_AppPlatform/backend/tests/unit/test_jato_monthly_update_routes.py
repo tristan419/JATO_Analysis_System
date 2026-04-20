@@ -151,35 +151,54 @@ def test_monthly_update_cleanup_route_returns_summary(monkeypatch) -> None:
     monkeypatch.setattr(
         msrp_monthly_update,
         "run_jato_monthly_update_cleanup",
-        lambda *, triggered_by: {
+        lambda *, triggered_by, cleanup_tier: {
             "cleanedAt": "2026-04-16T00:00:00+00:00",
             "triggeredBy": triggered_by,
+            "cleanupTier": cleanup_tier,
             "activeBaselinePath": "01_RAW_DATA/baseline/JATO-2026.3-full-baseline.xlsx",
             "activePatchMonth": "2026-03",
+            "freedBytes": 12345,
             "archivedBaselineCount": 1,
             "archivedBaselines": [
                 "01_RAW_DATA/historyDataArchive/baseline/JATO-2026.2-full-baseline.xlsx"
             ],
             "archivedPatchDirCount": 1,
             "archivedPatchDirs": ["01_RAW_DATA/historyDataArchive/patches/2026-02"],
+            "removedUploadSessionDirCount": 1,
+            "removedUploadSessionDirs": [
+                "04_Processed_data/ops/jato_monthly_update_jobs/_upload_sessions/session-a"
+            ],
             "removedJobUploadDirCount": 2,
             "removedJobUploadDirs": [
                 "04_Processed_data/ops/jato_monthly_update_jobs/job-a/uploads",
                 "04_Processed_data/ops/jato_monthly_update_jobs/job-b/uploads",
             ],
+            "deletedReviewDirCount": 1,
+            "deletedReviewDirs": ["04_Processed_data/reviews/raw_compare/2026-01_vs_2026-03"],
+            "deletedStagingDirCount": 1,
+            "deletedStagingDirs": ["04_Processed_data/staging/2026-03-r1-mixed"],
+            "deletedRefreshBackupDirCount": 1,
+            "deletedRefreshBackupDirs": ["04_Processed_data/.refresh_backups/manual-promote-1"],
+            "deletedArchivedBaselineCount": 1,
+            "deletedArchivedBaselines": ["01_RAW_DATA/historyDataArchive/baseline/old.xlsx"],
+            "deletedArchivedPatchDirCount": 1,
+            "deletedArchivedPatchDirs": ["01_RAW_DATA/historyDataArchive/patches/2026-01"],
         },
     )
 
     client = TestClient(app)
     response = client.post(
         "/v1/msrp/monthly-update-maintenance/cleanup",
+        json={"cleanupTier": "cautious"},
         headers=_headers(),
     )
 
     assert response.status_code == 200
     payload = response.json()["item"]
     assert payload["triggeredBy"] == "tester"
+    assert payload["cleanupTier"] == "cautious"
     assert payload["archivedBaselineCount"] == 1
+    assert payload["removedUploadSessionDirCount"] == 1
     assert payload["removedJobUploadDirCount"] == 2
 
 

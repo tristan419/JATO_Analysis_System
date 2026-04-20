@@ -846,6 +846,7 @@ function mapJatoMonthlyUpdateCleanupResult(
   return {
     cleanedAt: String(raw.cleanedAt ?? ""),
     triggeredBy: String(raw.triggeredBy ?? ""),
+    cleanupTier: String(raw.cleanupTier ?? "safe") as "safe" | "cautious",
     activeBaselinePath:
       raw.activeBaselinePath === undefined || raw.activeBaselinePath === null
         ? null
@@ -854,6 +855,7 @@ function mapJatoMonthlyUpdateCleanupResult(
       raw.activePatchMonth === undefined || raw.activePatchMonth === null
         ? null
         : String(raw.activePatchMonth),
+    freedBytes: Number(raw.freedBytes ?? 0),
     archivedBaselineCount: Number(raw.archivedBaselineCount ?? 0),
     archivedBaselines: Array.isArray(raw.archivedBaselines)
       ? raw.archivedBaselines.map((item) => String(item))
@@ -862,9 +864,33 @@ function mapJatoMonthlyUpdateCleanupResult(
     archivedPatchDirs: Array.isArray(raw.archivedPatchDirs)
       ? raw.archivedPatchDirs.map((item) => String(item))
       : [],
+    removedUploadSessionDirCount: Number(raw.removedUploadSessionDirCount ?? 0),
+    removedUploadSessionDirs: Array.isArray(raw.removedUploadSessionDirs)
+      ? raw.removedUploadSessionDirs.map((item) => String(item))
+      : [],
     removedJobUploadDirCount: Number(raw.removedJobUploadDirCount ?? 0),
     removedJobUploadDirs: Array.isArray(raw.removedJobUploadDirs)
       ? raw.removedJobUploadDirs.map((item) => String(item))
+      : [],
+    deletedReviewDirCount: Number(raw.deletedReviewDirCount ?? 0),
+    deletedReviewDirs: Array.isArray(raw.deletedReviewDirs)
+      ? raw.deletedReviewDirs.map((item) => String(item))
+      : [],
+    deletedStagingDirCount: Number(raw.deletedStagingDirCount ?? 0),
+    deletedStagingDirs: Array.isArray(raw.deletedStagingDirs)
+      ? raw.deletedStagingDirs.map((item) => String(item))
+      : [],
+    deletedRefreshBackupDirCount: Number(raw.deletedRefreshBackupDirCount ?? 0),
+    deletedRefreshBackupDirs: Array.isArray(raw.deletedRefreshBackupDirs)
+      ? raw.deletedRefreshBackupDirs.map((item) => String(item))
+      : [],
+    deletedArchivedBaselineCount: Number(raw.deletedArchivedBaselineCount ?? 0),
+    deletedArchivedBaselines: Array.isArray(raw.deletedArchivedBaselines)
+      ? raw.deletedArchivedBaselines.map((item) => String(item))
+      : [],
+    deletedArchivedPatchDirCount: Number(raw.deletedArchivedPatchDirCount ?? 0),
+    deletedArchivedPatchDirs: Array.isArray(raw.deletedArchivedPatchDirs)
+      ? raw.deletedArchivedPatchDirs.map((item) => String(item))
       : [],
   };
 }
@@ -881,6 +907,7 @@ function mapJatoMonthlyUpdateStorageMetric(
     paths: Array.isArray(raw.paths)
       ? raw.paths.map((item) => String(item))
       : [],
+    cleanupTier: String(raw.cleanupTier ?? "protected") as "safe" | "cautious" | "protected",
   };
 }
 
@@ -1966,9 +1993,10 @@ export const api = {
     }).then((res) => ({
       item: mapJatoMonthlyUpdateBaselinePromotionResult(res.item)
     })),
-  runJatoMonthlyUpdateCleanup: () =>
+  runJatoMonthlyUpdateCleanup: (cleanupTier: "safe" | "cautious") =>
     request<{ item: Record<string, unknown> }>("/msrp/monthly-update-maintenance/cleanup", {
       method: "POST",
+      body: JSON.stringify({ cleanupTier }),
     }).then((res) => ({
       item: mapJatoMonthlyUpdateCleanupResult(res.item)
     }))
