@@ -165,6 +165,10 @@ export function DashboardPage() {
   /* global time axis */
   const [timeRange, setTimeRange] = useState<TimeRange | null>(() => cachedPage?.timeRange ?? null);
   const [monthGrain, setMonthGrain] = useState<"month"|"quarter"|"year">(() => cachedPage?.monthGrain ?? "month");
+  const timeRangePayload = useMemo(
+    () => (timeRange ? { start: timeRange.start, end: timeRange.end } : undefined),
+    [timeRange],
+  );
 
   /* export settings (one per chart section) */
   const [tsExport, setTsExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
@@ -179,6 +183,10 @@ export function DashboardPage() {
   const [error, setError] = useState("");
   const combinedError = sharedError || error;
   const [heroLoadingTick, setHeroLoadingTick] = useState(0);
+  const filterTimeScopeKey = useMemo(
+    () => `${filterPayloadStr}::${activeTab}::${timeRange?.start ?? ""}::${timeRange?.end ?? ""}`,
+    [activeTab, filterPayloadStr, timeRange],
+  );
 
   /* data freshness per country */
   const [freshnessItems, setFreshnessItems] = useState<DataFreshnessItem[]>([]);
@@ -214,12 +222,26 @@ export function DashboardPage() {
   }, [selections.model]);
 
   /* B3: auto-reload advanced chart when filters change */
-  const prevAdvPayloadRef = useRef(filterPayloadStr);
+  const prevAdvPayloadRef = useRef(filterTimeScopeKey);
+  const prevMvScopeRef = useRef(filterTimeScopeKey);
+  const prevPmScopeRef = useRef(filterTimeScopeKey);
   useEffect(() => {
-    if (optionsSyncPending || prevAdvPayloadRef.current === filterPayloadStr || advItems.length === 0 || columns.length === 0) return;
-    prevAdvPayloadRef.current = filterPayloadStr;
+    if (optionsSyncPending || prevAdvPayloadRef.current === filterTimeScopeKey || advItems.length === 0 || columns.length === 0) return;
+    prevAdvPayloadRef.current = filterTimeScopeKey;
     loadAdvChart();
-  }, [advItems.length, columns.length, filterPayloadStr, loadAdvChart, optionsSyncPending]);
+  }, [advItems.length, columns.length, filterTimeScopeKey, loadAdvChart, optionsSyncPending]);
+
+  useEffect(() => {
+    if (optionsSyncPending || prevMvScopeRef.current === filterTimeScopeKey || mvItems.length === 0 || !mvModelName.trim()) return;
+    prevMvScopeRef.current = filterTimeScopeKey;
+    loadModelVersions();
+  }, [filterTimeScopeKey, loadModelVersions, mvItems.length, mvModelName, optionsSyncPending]);
+
+  useEffect(() => {
+    if (optionsSyncPending || prevPmScopeRef.current === filterTimeScopeKey || pmItems.length === 0) return;
+    prevPmScopeRef.current = filterTimeScopeKey;
+    loadPositioningMap();
+  }, [filterTimeScopeKey, loadPositioningMap, optionsSyncPending, pmItems.length]);
 
   /* B12: lazy auto-load — when filteredRowCount < 200 000, auto-trigger first advanced chart */
   const advAutoLoaded = useRef(false);
@@ -237,22 +259,31 @@ export function DashboardPage() {
     const filters = JSON.parse(filterPayloadStr) as Record<string, string[]>;
     setGroupedLoading(true);
     let cancelled = false;
-    const timer = setTimeout(async () => {
-      setError("");
-      try {
-        const r = await api.groupedTimeSeries({ filters, grain: activeTab, group_by: tsGroupDim, top_n: tsTopNEnabled ? tsTopN : 9999, include_others: tsIncludeOthers });
-        if (!cancelled) { setGroupedItems(r.items); setHiddenSeries(new Set()); setOthersDetail(r.others_detail ?? []); }
-      } catch (e) { if (!cancelled) setError((e as Error).message); }
-      finally { if (!cancelled) setGroupedLoading(false); }
-    }, 300);
-    return () => { cancelled = true; clearTimeout(timer); setGroupedLoading(false); };
-  }, [tsMode, tsGroupDim, activeTab, tsTopN, tsTopNEnabled, tsIncludeOthers, filterPayloadStr, columns.length]);
+      const timer = setTimeout(async () => {
+        setError("");
+        try {
+          const r = await api.groupedTimeSeries({
+            filters,
+            grain: activeTab,
+            group_by: tsGroupDim,
+            top_n: tsTopNEnabled ? tsTopN : 9999,
+            include_others: tsIncludeOthers,
+            time_range: timeRangePayload,
+          });
+          if (!cancelled) { setGroupedItems(r.items); setHiddenSeries(new Set()); setOthersDetail(r.others_detail ?? []); }
+        } catch (e) { if (!cancelled) setError((e as Error).message); }
+        finally { if (!cancelled) setGroupedLoading(false); }
+      }, 300);
+      return () => { cancelled = true; clearTimeout(timer); setGroupedLoading(false); };
+  }, [tsMode, tsGroupDim, activeTab, tsTopN, tsTopNEnabled, tsIncludeOthers, filterPayloadStr, columns.length, timeRangePayload]);
 
   /* advanced chart */
   async function loadAdvChart() {
+    prevAdvPayloadRef.current = filterTimeScopeKey;
     setAdvLoading(true); setError("");
     try {
       const opts: Record<string, unknown> = { band_size: advBandSize };
+      if (timeRangePayload) opts.time_range = timeRangePayload;
       if (advChart === "powertrain_bubble") {
         opts.grain = advBubbleGrain;
         opts.show_yoy = advBubbleShowYoy;
@@ -279,7 +310,14 @@ export function DashboardPage() {
         opts.depreciation_rate = tcoDepreciation; opts.maintenance_rate = tcoMaintenance;
         opts.tax_insurance_rate = tcoTaxInsurance; opts.energy_cost_base = tcoEnergyCost;
       }
-      const r = await api.advancedChart({ group: advGroup, chart: advChart, filters: buildFilterPayload(), top_n: advTopN, options: opts });
+      const r = await api.advancedChart({
+        group: advGroup,
+        chart: advChart,
+        filters: buildFilterPayload(),
+        top_n: advTopN,
+        options: opts,
+        time_range: timeRangePayload,
+      });
       setAdvItems(ensureArray(r.items));
       setAdvMeta(r.meta ?? null);
     } catch (e) { setError((e as Error).message); }
@@ -289,9 +327,15 @@ export function DashboardPage() {
   /* model version bubble */
   async function loadModelVersions() {
     if (!mvModelName.trim()) return;
+    prevMvScopeRef.current = filterTimeScopeKey;
     setMvLoading(true); setError("");
     try {
-      const r = await api.modelVersions({ filters: buildFilterPayload(), model_name: mvModelName.trim(), top_n: mvTopN });
+      const r = await api.modelVersions({
+        filters: buildFilterPayload(),
+        model_name: mvModelName.trim(),
+        top_n: mvTopN,
+        time_range: timeRangePayload,
+      });
       setMvItems(ensureArray(r.items));
     } catch (e) { setError((e as Error).message); }
     finally { setMvLoading(false); }
@@ -311,6 +355,7 @@ export function DashboardPage() {
     ));
   }
   async function loadPositioningMap() {
+    prevPmScopeRef.current = filterTimeScopeKey;
     setPmLoading(true); setError("");
     try {
       const r = await api.positioningMap({
@@ -321,6 +366,7 @@ export function DashboardPage() {
         manual_competitors: pmManualCompetitors,
         top_n: pmTopN,
         n_clusters: pmNClusters,
+        time_range: timeRangePayload,
       });
       setPmItems(ensureArray(r.items)); setPmTarget(r.target ?? null); setPmClusterTop3(ensureArray(r.cluster_top3)); setPmPeerCorridor(r.peerCorridor ?? null);
     } catch (e) { setError((e as Error).message); }

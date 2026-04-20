@@ -125,6 +125,9 @@ def time_series_grouped(
         group_by=payload.group_by,
         top_n=payload.top_n,
         include_others=payload.include_others,
+        time_range=(
+            payload.time_range.model_dump() if payload.time_range is not None else None
+        ),
     )
 
 
@@ -139,6 +142,9 @@ def advanced_chart(
         filters=payload.filters,
         top_n=payload.top_n,
         options=payload.options,
+        time_range=(
+            payload.time_range.model_dump() if payload.time_range is not None else None
+        ),
     )
 
 
@@ -151,6 +157,9 @@ def model_versions(
         filters=payload.filters,
         model_name=payload.model_name,
         top_n=payload.top_n,
+        time_range=(
+            payload.time_range.model_dump() if payload.time_range is not None else None
+        ),
     )
 
 
@@ -167,6 +176,9 @@ def positioning_map(
         manual_competitors=payload.manual_competitors,
         top_n=payload.top_n,
         n_clusters=payload.n_clusters,
+        time_range=(
+            payload.time_range.model_dump() if payload.time_range is not None else None
+        ),
     )
 
 

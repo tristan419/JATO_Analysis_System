@@ -1,7 +1,9 @@
 from uuid import uuid4
 import io
+import re
 import threading
 import time
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -295,6 +297,181 @@ def _sales_columns_for_scope(
     return explicit_years, available_years, None
 
 
+def _parse_time_label(
+    label: object,
+) -> tuple[Literal["year", "month", "quarter"], int, int | None] | None:
+    text = str(label).strip()
+    if not text:
+        return None
+    if re.fullmatch(r"\d{4}", text):
+        return ("year", int(text), None)
+
+    month_name_match = re.fullmatch(r"(\d{4})\s+([A-Za-z]{3})", text)
+    if month_name_match:
+        month = _MONTH_ORDER.get(month_name_match.group(2).title())
+        if month is None:
+            return None
+        return ("month", int(month_name_match.group(1)), month)
+
+    short_year_match = re.fullmatch(r"(\d{2})[./-](\d{1,2})", text)
+    if short_year_match:
+        return (
+            "month",
+            2000 + int(short_year_match.group(1)),
+            int(short_year_match.group(2)),
+        )
+
+    numeric_match = re.fullmatch(r"(\d{4})[./-](\d{1,2})", text)
+    if numeric_match:
+        return (
+            "month",
+            int(numeric_match.group(1)),
+            int(numeric_match.group(2)),
+        )
+
+    quarter_match = re.fullmatch(r"(\d{4})-Q([1-4])", text)
+    if quarter_match:
+        return (
+            "quarter",
+            int(quarter_match.group(1)),
+            int(quarter_match.group(2)),
+        )
+    return None
+
+
+def _time_label_ordinal(label: object) -> int | None:
+    parsed = _parse_time_label(label)
+    if parsed is None:
+        return None
+    kind, year, unit = parsed
+    if kind == "year":
+        return year * 100 + 12
+    if kind == "quarter":
+        return year * 100 + int(unit or 0) * 3
+    return year * 100 + int(unit or 0)
+
+
+def _extract_time_range(
+    time_range: object,
+) -> tuple[str, str] | None:
+    if not isinstance(time_range, dict):
+        return None
+    start_text = str(time_range.get("start", "")).strip()
+    end_text = str(time_range.get("end", "")).strip()
+    if not start_text or not end_text:
+        return None
+    start_ord = _time_label_ordinal(start_text)
+    end_ord = _time_label_ordinal(end_text)
+    if start_ord is None or end_ord is None:
+        return None
+    if start_ord <= end_ord:
+        return start_text, end_text
+    return end_text, start_text
+
+
+def _sales_columns_for_time_label(columns: list[str], label: str) -> list[str]:
+    parsed = _parse_time_label(label)
+    if parsed is None:
+        return []
+    kind, year, unit = parsed
+    if kind == "year":
+        cols, _, _ = _sales_columns_for_scope(columns, year=year)
+        return cols
+    if kind == "quarter":
+        start_month = (int(unit or 1) - 1) * 3 + 1
+        end_month = start_month + 2
+        selected: list[str] = []
+        for month in range(start_month, end_month + 1):
+            cols, _, _ = _sales_columns_for_scope(columns, year=year, month=month)
+            selected.extend(cols)
+        return list(dict.fromkeys(selected))
+    cols, _, _ = _sales_columns_for_scope(columns, year=year, month=int(unit or 1))
+    return cols
+
+
+def _sales_columns_for_time_range(
+    columns: list[str],
+    start_label: str,
+    end_label: str,
+) -> list[str]:
+    normalized_range = _extract_time_range({"start": start_label, "end": end_label})
+    if normalized_range is None:
+        return []
+    normalized_start, normalized_end = normalized_range
+    start_parsed = _parse_time_label(normalized_start)
+    end_parsed = _parse_time_label(normalized_end)
+    if start_parsed is None or end_parsed is None:
+        return []
+
+    if start_parsed[0] == "year" and end_parsed[0] == "year":
+        selected: list[str] = []
+        explicit_years = set(_year_columns(columns))
+        supplemental_year_groups = _supplemental_month_year_groups(columns)
+        for year in range(start_parsed[1], end_parsed[1] + 1):
+            year_label = str(year)
+            if year_label in explicit_years:
+                selected.append(year_label)
+            elif year_label in supplemental_year_groups:
+                selected.extend(supplemental_year_groups[year_label])
+        return list(dict.fromkeys(selected))
+
+    start_ord = _time_label_ordinal(normalized_start)
+    end_ord = _time_label_ordinal(normalized_end)
+    if start_ord is None or end_ord is None:
+        return []
+    return [
+        column
+        for column in _month_columns(columns)
+        if (column_ord := _time_label_ordinal(column)) is not None
+        and start_ord <= column_ord <= end_ord
+    ]
+
+
+def _filter_time_labels(
+    labels: list[str],
+    time_range: dict[str, str] | None,
+) -> list[str]:
+    normalized_range = _extract_time_range(time_range)
+    if normalized_range is None:
+        return labels
+    start_ord = _time_label_ordinal(normalized_range[0])
+    end_ord = _time_label_ordinal(normalized_range[1])
+    if start_ord is None or end_ord is None:
+        return labels
+    return [
+        label
+        for label in labels
+        if (label_ord := _time_label_ordinal(label)) is not None
+        and start_ord <= label_ord <= end_ord
+    ]
+
+
+def _resolve_sales_columns_from_options(
+    columns: list[str],
+    opts: dict | None,
+) -> list[str]:
+    scope_opts = opts or {}
+    normalized_range = _extract_time_range(scope_opts.get("time_range"))
+    if normalized_range is not None:
+        return _sales_columns_for_time_range(
+            columns,
+            normalized_range[0],
+            normalized_range[1],
+        )
+    sales_columns, _, _ = _sales_columns_for_scope(
+        columns,
+        year=scope_opts.get("sales_year"),
+        month=scope_opts.get("sales_month"),
+        default_latest_year=bool(scope_opts.get("default_latest_year")),
+    )
+    return sales_columns
+
+
+def _has_explicit_time_range(opts: dict | None) -> bool:
+    scope_opts = opts or {}
+    return _extract_time_range(scope_opts.get("time_range")) is not None
+
+
 def _aggregate_sales(
     filters: dict[str, list[str]],
     target_column: str,
@@ -464,89 +641,6 @@ def _build_peer_corridor(
     }
 
 
-def _weighted_quantile(values: pd.Series, weights: pd.Series, quantile: float) -> float:
-    """Value at cumulative-weight = *quantile*, weighted by *weights*."""
-    quantile = min(max(float(quantile), 0.0), 1.0)
-    tmp = pd.DataFrame({"v": values, "w": weights}).dropna()
-    tmp = tmp[tmp["w"] > 0]
-    if tmp.empty:
-        if len(values) == 0:
-            return 0.0
-        return float(values.quantile(quantile))
-    tmp = tmp.sort_values("v")
-    cutoff = tmp["w"].sum() * quantile
-    if cutoff <= 0:
-        return float(tmp.iloc[0]["v"])
-    return float(tmp.loc[(tmp["w"].cumsum() >= cutoff).idxmax(), "v"])
-
-
-def _build_peer_corridor(
-    agg: pd.DataFrame,
-    *,
-    target_length: float | None,
-    target_msrp: float | None,
-) -> dict | None:
-    if agg.empty or "Length" not in agg.columns or "MSRP" not in agg.columns:
-        return None
-
-    peer = agg.dropna(subset=["Length", "MSRP"]).copy()
-    peer = peer[(peer["Length"] > 0) & (peer["MSRP"] > 0)]
-    if peer.empty:
-        return None
-
-    weights = pd.to_numeric(peer.get("Sales"), errors="coerce").fillna(0).clip(lower=0)
-    weights = weights.where(weights > 0, 1.0)
-    peer["PricePerMeter"] = peer["MSRP"] / (peer["Length"] / 1000.0)
-
-    msrp_p25 = _weighted_quantile(peer["MSRP"], weights, 0.25)
-    msrp_median = _weighted_quantile(peer["MSRP"], weights, 0.50)
-    msrp_p75 = _weighted_quantile(peer["MSRP"], weights, 0.75)
-    ppm_median = _weighted_quantile(peer["PricePerMeter"], weights, 0.50)
-
-    target_price_per_meter = None
-    target_residual = None
-    target_residual_pct = None
-    target_ppm_residual_pct = None
-    position_label = "unknown"
-    if target_msrp is not None and target_msrp > 0:
-        target_residual = float(target_msrp) - msrp_median
-        if msrp_median > 0:
-            target_residual_pct = target_residual / msrp_median * 100.0
-        if target_length is not None and target_length > 0:
-            target_price_per_meter = float(target_msrp) / (float(target_length) / 1000.0)
-            if ppm_median > 0:
-                target_ppm_residual_pct = (
-                    (target_price_per_meter - ppm_median) / ppm_median * 100.0
-                )
-        if target_msrp < msrp_p25:
-            position_label = "below-peer-range"
-        elif target_msrp > msrp_p75:
-            position_label = "above-peer-range"
-        else:
-            position_label = "within-peer-range"
-
-    return {
-        "peerCount": int(len(peer)),
-        "salesTotal": float(weights.sum()),
-        "lengthMin": int(round(float(peer["Length"].min()))),
-        "lengthMax": int(round(float(peer["Length"].max()))),
-        "msrpP25": float(msrp_p25),
-        "msrpMedian": float(msrp_median),
-        "msrpP75": float(msrp_p75),
-        "pricePerMeterMedian": float(ppm_median),
-        "targetLength": float(target_length) if target_length is not None else None,
-        "targetMsrp": float(target_msrp) if target_msrp is not None else None,
-        "targetPricePerMeter": float(target_price_per_meter) if target_price_per_meter is not None else None,
-        "targetResidual": float(target_residual) if target_residual is not None else None,
-        "targetResidualPct": float(target_residual_pct) if target_residual_pct is not None else None,
-        "targetPricePerMeterResidualPct": (
-            float(target_ppm_residual_pct) if target_ppm_residual_pct is not None else None
-        ),
-        "positionLabel": position_label,
-        "salesWeighted": True,
-    }
-
-
 def _load_excluding_zero_sales(
     filters: dict[str, list[str]],
     selected_columns: list[str] | None,
@@ -702,11 +796,22 @@ def query_grouped_time_series(
     group_by: str | None,
     top_n: int,
     include_others: bool,
+    time_range: dict[str, str] | None = None,
 ) -> dict:
     if not group_by:
         ts = query_time_series(filters, grain, 120)
-        items = [{"time": r["time"], "value": r["value"], "series": "总和"}
-                 for r in ts["items"]]
+        items = [
+            {"time": r["time"], "value": r["value"], "series": "总和"}
+            for r in ts["items"]
+        ]
+        allowed_labels = set(
+            _filter_time_labels(
+                [str(item["time"]) for item in items],
+                time_range,
+            )
+        )
+        if time_range is not None:
+            items = [item for item in items if str(item["time"]) in allowed_labels]
         return {"grain": grain, "rows": len(items), "items": items}
 
     columns_all = repo.list_columns()
@@ -750,6 +855,18 @@ def query_grouped_time_series(
         time_labels = time_cols
         value_columns = time_cols
 
+    if not value_columns:
+        return {"grain": normalized_grain, "rows": 0, "items": []}
+
+    time_labels = _filter_time_labels(time_labels, time_range)
+    if normalized_grain == "year":
+        value_columns = [
+            effective_year_columns[label]
+            for label in time_labels
+            if label in effective_year_columns
+        ]
+    else:
+        value_columns = [label for label in time_labels if label in df.columns]
     if not value_columns:
         return {"grain": normalized_grain, "rows": 0, "items": []}
 
@@ -1011,9 +1128,10 @@ def _build_vehicle_frame(
         for month_columns in supplemental_year_groups.values():
             year_load_columns.extend(month_columns)
 
-    requested_sales_columns = [
-        column for column in (sales_columns or []) if column
-    ]
+    explicit_sales_scope = sales_columns is not None
+    requested_sales_columns = [column for column in (sales_columns or []) if column]
+    if explicit_sales_scope and not requested_sales_columns:
+        return pd.DataFrame()
     needed = (
         [
             c
@@ -1086,11 +1204,14 @@ def query_advanced_chart(
     filters: dict[str, list[str]],
     top_n: int,
     options: dict | None = None,
+    time_range: dict[str, str] | None = None,
 ) -> dict:
     columns = repo.list_columns()
     ng = str(group).strip().lower()
     nc = str(chart).strip().lower()
-    opts = options or {}
+    opts = dict(options or {})
+    if time_range is not None:
+        opts["time_range"] = time_range
     empty = {"group": group, "chart": chart, "rows": 0, "items": []}
 
     # ── Market structure ────────────────────────────────────────
@@ -1099,12 +1220,9 @@ def query_advanced_chart(
             col = _resolve_existing_column(POWERTRAIN_CANDIDATES, columns)
             if not col:
                 return empty
-            sales_columns, _, _ = _sales_columns_for_scope(
-                columns,
-                year=opts.get("sales_year"),
-                month=opts.get("sales_month"),
-                default_latest_year=bool(opts.get("default_latest_year")),
-            )
+            sales_columns = _resolve_sales_columns_from_options(columns, opts)
+            if _has_explicit_time_range(opts) and not sales_columns:
+                return {"group": group, "chart": chart, "rows": 0, "items": []}
             items = (
                 _aggregate_sales(filters, col, top_n, sales_columns)
                 if sales_columns else _aggregate_count(filters, col, top_n)
@@ -1115,12 +1233,9 @@ def query_advanced_chart(
             col = _resolve_existing_column(SEGMENT_CANDIDATES, columns)
             if not col:
                 return empty
-            sales_columns, _, _ = _sales_columns_for_scope(
-                columns,
-                year=opts.get("sales_year"),
-                month=opts.get("sales_month"),
-                default_latest_year=bool(opts.get("default_latest_year")),
-            )
+            sales_columns = _resolve_sales_columns_from_options(columns, opts)
+            if _has_explicit_time_range(opts) and not sales_columns:
+                return {"group": group, "chart": chart, "rows": 0, "items": []}
             items = (
                 _aggregate_sales(filters, col, top_n, sales_columns)
                 if sales_columns else _aggregate_count(filters, col, top_n)
@@ -1174,9 +1289,18 @@ def query_advanced_chart(
     if ng == "time_insight":
         if nc == "seasonality_heatmap":
             monthly = query_time_series(filters=filters, grain="month", top_n=120)["items"]
+            normalized_time_range = _extract_time_range(opts.get("time_range"))
+            allowed_labels = set(
+                _filter_time_labels(
+                    [str(row.get("time", "")).strip() for row in monthly],
+                    opts.get("time_range"),
+                )
+            )
             matrix: list[dict] = []
             for row in monthly:
                 time_key = str(row.get("time", "")).strip()
+                if normalized_time_range is not None and time_key not in allowed_labels:
+                    continue
                 if len(time_key) < 8 or " " not in time_key:
                     continue
                 year, month = time_key.split(" ", 1)
@@ -1192,16 +1316,11 @@ def _chart_powertrain_bubble(
 ) -> dict:
     max_top_n = max(1, int(top_n))
     show_yoy = bool(opts.get("show_yoy"))
-    sales_columns, _, _ = _sales_columns_for_scope(
-        repo.list_columns(),
-        year=opts.get("sales_year"),
-        month=opts.get("sales_month"),
-        default_latest_year=bool(opts.get("default_latest_year")),
-    )
+    sales_columns = _resolve_sales_columns_from_options(repo.list_columns(), opts)
     vf = _build_vehicle_frame(
         filters,
         include_year_columns=show_yoy,
-        sales_columns=sales_columns or None,
+        sales_columns=sales_columns,
     )
     if vf.empty or "Powertrain" not in vf.columns:
         return {"group": "market_structure", "chart": "powertrain_bubble", "rows": 0, "items": []}
@@ -1376,13 +1495,8 @@ def _chart_powertrain_bubble(
 def _chart_segment_share_by_length(
     filters: dict[str, list[str]], opts: dict,
 ) -> dict:
-    sales_columns, _, _ = _sales_columns_for_scope(
-        repo.list_columns(),
-        year=opts.get("sales_year"),
-        month=opts.get("sales_month"),
-        default_latest_year=bool(opts.get("default_latest_year")),
-    )
-    vf = _build_vehicle_frame(filters, sales_columns=sales_columns or None)
+    sales_columns = _resolve_sales_columns_from_options(repo.list_columns(), opts)
+    vf = _build_vehicle_frame(filters, sales_columns=sales_columns)
     if vf.empty or "Length" not in vf.columns or "Segment" not in vf.columns:
         return {"group": "market_structure", "chart": "segment_share_by_length", "rows": 0, "items": []}
 
@@ -1410,7 +1524,29 @@ def _chart_nev_range_distribution(
         return {"group": "nev_analysis", "chart": "nev_range_distribution", "rows": 0, "items": []}
 
     year_cols = _year_columns(columns)
-    load_cols = [c for c in [powertrain_col, range_col, model_col, make_col] if c] + year_cols
+    normalized_time_range = _extract_time_range(opts.get("time_range"))
+    sales_scope_columns = _resolve_sales_columns_from_options(columns, opts)
+    if normalized_time_range is not None and not sales_scope_columns:
+        return {"group": "nev_analysis", "chart": "nev_range_distribution", "rows": 0, "items": []}
+    boundary_start_columns = (
+        _sales_columns_for_time_label(columns, normalized_time_range[0])
+        if normalized_time_range is not None
+        else []
+    )
+    boundary_end_columns = (
+        _sales_columns_for_time_label(columns, normalized_time_range[1])
+        if normalized_time_range is not None
+        else []
+    )
+    load_cols = list(
+        dict.fromkeys(
+            [c for c in [powertrain_col, range_col, model_col, make_col] if c]
+            + year_cols
+            + sales_scope_columns
+            + boundary_start_columns
+            + boundary_end_columns
+        )
+    )
     df = repo.load_slice(columns=load_cols, filters=filters, limit=200_000, offset=0)
     if df.empty:
         return {"group": "nev_analysis", "chart": "nev_range_distribution", "rows": 0, "items": []}
@@ -1425,12 +1561,6 @@ def _chart_nev_range_distribution(
     for yc in year_cols:
         if yc in df.columns:
             df[yc] = pd.to_numeric(df[yc], errors="coerce").fillna(0.0)
-    sales_scope_columns, _, _ = _sales_columns_for_scope(
-        columns,
-        year=opts.get("sales_year"),
-        month=opts.get("sales_month"),
-        default_latest_year=bool(opts.get("default_latest_year")),
-    )
     df["SalesWindow"] = _sum_sales_columns(
         df,
         sales_scope_columns or year_cols,
@@ -1455,12 +1585,23 @@ def _chart_nev_range_distribution(
     max_brand_facets = int(opts.get("max_brand_facets", 4))
     warnings: list[str] = []
 
-    start_year_label = year_cols[0] if year_cols else None
-    end_year_label = year_cols[-1] if year_cols else None
-    growth_ready = len(year_cols) >= 2 and start_year_label is not None and end_year_label is not None and start_year_label != end_year_label
+    start_year_label = normalized_time_range[0] if normalized_time_range is not None else (year_cols[0] if year_cols else None)
+    end_year_label = normalized_time_range[1] if normalized_time_range is not None else (year_cols[-1] if year_cols else None)
+    start_growth_columns = boundary_start_columns
+    end_growth_columns = boundary_end_columns
+    if normalized_time_range is None:
+        start_growth_columns = [start_year_label] if start_year_label in df.columns else []
+        end_growth_columns = [end_year_label] if end_year_label in df.columns else []
+    growth_ready = (
+        start_year_label is not None
+        and end_year_label is not None
+        and start_year_label != end_year_label
+        and len(start_growth_columns) > 0
+        and len(end_growth_columns) > 0
+    )
     if growth_ready:
-        df["SalesWindowStartYear"] = df[start_year_label]
-        df["SalesWindowEndYear"] = df[end_year_label]
+        df["SalesWindowStartYear"] = _sum_sales_columns(df, start_growth_columns)
+        df["SalesWindowEndYear"] = _sum_sales_columns(df, end_growth_columns)
         df["GrowthWindow"] = df["SalesWindowEndYear"] - df["SalesWindowStartYear"]
         df["GrowthAbsWindow"] = df["GrowthWindow"].abs()
     else:
@@ -1641,7 +1782,16 @@ def _chart_nev_capacity_vs_msrp(
         return {"group": "nev_analysis", "chart": "nev_capacity_vs_msrp", "rows": 0, "items": []}
 
     year_cols = _year_columns(columns)
-    load_cols = [c for c in [cap_col, msrp_col, powertrain_col, model_col, make_col] if c] + year_cols
+    sales_scope_columns = _resolve_sales_columns_from_options(columns, opts)
+    if _has_explicit_time_range(opts) and not sales_scope_columns:
+        return {"group": "nev_analysis", "chart": "nev_capacity_vs_msrp", "rows": 0, "items": []}
+    load_cols = list(
+        dict.fromkeys(
+            [c for c in [cap_col, msrp_col, powertrain_col, model_col, make_col] if c]
+            + year_cols
+            + sales_scope_columns
+        )
+    )
     df = repo.load_slice(columns=load_cols, filters=filters, limit=200_000, offset=0)
     if df.empty:
         return {"group": "nev_analysis", "chart": "nev_capacity_vs_msrp", "rows": 0, "items": []}
@@ -1649,12 +1799,6 @@ def _chart_nev_capacity_vs_msrp(
     df["BatteryCapacity"] = pd.to_numeric(df[cap_col], errors="coerce")
     df["MSRP"] = pd.to_numeric(df[msrp_col], errors="coerce")
     df["Powertrain"] = df[powertrain_col].astype(str).str.strip()
-    sales_scope_columns, _, _ = _sales_columns_for_scope(
-        columns,
-        year=opts.get("sales_year"),
-        month=opts.get("sales_month"),
-        default_latest_year=bool(opts.get("default_latest_year")),
-    )
     df["Sales"] = _sum_sales_columns(df, sales_scope_columns or year_cols)
     if model_col and model_col in df.columns:
         df["Model"] = df[model_col].astype(str).str.strip()
@@ -1689,10 +1833,13 @@ def _chart_price_migration(
         return {"group": "price_value", "chart": "price_migration", "rows": 0, "items": []}
 
     year_cols = _year_columns(columns)
-    if not year_cols:
+    sales_scope_columns = _resolve_sales_columns_from_options(columns, opts)
+    if _has_explicit_time_range(opts) and not sales_scope_columns:
+        return {"group": "price_value", "chart": "price_migration", "rows": 0, "items": []}
+    if not year_cols and not sales_scope_columns:
         return {"group": "price_value", "chart": "price_migration", "rows": 0, "items": []}
 
-    load_cols = [msrp_col] + year_cols
+    load_cols = list(dict.fromkeys([msrp_col] + year_cols + sales_scope_columns))
     df = repo.load_slice(columns=load_cols, filters=filters, limit=200_000, offset=0)
     if df.empty:
         return {"group": "price_value", "chart": "price_migration", "rows": 0, "items": []}
@@ -1704,15 +1851,8 @@ def _chart_price_migration(
     df["PriceBand"] = _make_price_bands(df["MSRP"], band_size)
 
     # For each year column, aggregate sales by price band
-    scoped_year_cols, _, _ = _sales_columns_for_scope(
-        columns,
-        year=opts.get("sales_year"),
-        month=None,
-        default_latest_year=False,
-    )
-
     items = []
-    for yc in (scoped_year_cols or year_cols):
+    for yc in (sales_scope_columns or year_cols):
         if yc not in df.columns:
             continue
         df[yc] = pd.to_numeric(df[yc], errors="coerce").fillna(0)
@@ -1734,13 +1874,8 @@ def _chart_length_vs_price(
     filters: dict[str, list[str]], top_n: int, opts: dict | None = None,
 ) -> dict:
     scope_opts = opts or {}
-    sales_columns, _, _ = _sales_columns_for_scope(
-        repo.list_columns(),
-        year=scope_opts.get("sales_year"),
-        month=scope_opts.get("sales_month"),
-        default_latest_year=bool(scope_opts.get("default_latest_year")),
-    )
-    vf = _build_vehicle_frame(filters, sales_columns=sales_columns or None)
+    sales_columns = _resolve_sales_columns_from_options(repo.list_columns(), scope_opts)
+    vf = _build_vehicle_frame(filters, sales_columns=sales_columns)
     if vf.empty or "Length" not in vf.columns or "MSRP" not in vf.columns:
         return {"group": "price_value", "chart": "length_vs_price", "rows": 0, "items": []}
 
@@ -1766,13 +1901,8 @@ def _chart_price_per_meter(
     filters: dict[str, list[str]], top_n: int, opts: dict | None = None,
 ) -> dict:
     scope_opts = opts or {}
-    sales_columns, _, _ = _sales_columns_for_scope(
-        repo.list_columns(),
-        year=scope_opts.get("sales_year"),
-        month=scope_opts.get("sales_month"),
-        default_latest_year=bool(scope_opts.get("default_latest_year")),
-    )
-    vf = _build_vehicle_frame(filters, sales_columns=sales_columns or None)
+    sales_columns = _resolve_sales_columns_from_options(repo.list_columns(), scope_opts)
+    vf = _build_vehicle_frame(filters, sales_columns=sales_columns)
     if vf.empty or "Length" not in vf.columns or "MSRP" not in vf.columns:
         return {"group": "price_value", "chart": "price_per_meter", "rows": 0, "items": []}
 
@@ -1799,13 +1929,8 @@ def _chart_sales_vs_price(
     filters: dict[str, list[str]], top_n: int, opts: dict | None = None,
 ) -> dict:
     scope_opts = opts or {}
-    sales_columns, _, _ = _sales_columns_for_scope(
-        repo.list_columns(),
-        year=scope_opts.get("sales_year"),
-        month=scope_opts.get("sales_month"),
-        default_latest_year=bool(scope_opts.get("default_latest_year")),
-    )
-    vf = _build_vehicle_frame(filters, sales_columns=sales_columns or None)
+    sales_columns = _resolve_sales_columns_from_options(repo.list_columns(), scope_opts)
+    vf = _build_vehicle_frame(filters, sales_columns=sales_columns)
     if vf.empty or "MSRP" not in vf.columns:
         return {"group": "price_value", "chart": "sales_vs_price", "rows": 0, "items": []}
 
@@ -1843,7 +1968,12 @@ def _chart_powertrain_vs_price(
         return {"group": "price_value", "chart": "powertrain_vs_price", "rows": 0, "items": []}
 
     year_cols = _year_columns(columns)
-    load_cols = [msrp_col, powertrain_col] + year_cols
+    sales_scope_columns = _resolve_sales_columns_from_options(columns, opts)
+    if _has_explicit_time_range(opts) and not sales_scope_columns:
+        return {"group": "price_value", "chart": "powertrain_vs_price", "rows": 0, "items": []}
+    load_cols = list(
+        dict.fromkeys([msrp_col, powertrain_col] + year_cols + sales_scope_columns)
+    )
     df = repo.load_slice(columns=load_cols, filters=filters, limit=200_000, offset=0)
     if df.empty:
         return {"group": "price_value", "chart": "powertrain_vs_price", "rows": 0, "items": []}
@@ -1851,12 +1981,6 @@ def _chart_powertrain_vs_price(
     band_size = int(opts.get("band_size", 1000))
     df["MSRP"] = pd.to_numeric(df[msrp_col], errors="coerce")
     df["Powertrain"] = df[powertrain_col].astype(str).str.strip()
-    sales_scope_columns, _, _ = _sales_columns_for_scope(
-        columns,
-        year=opts.get("sales_year"),
-        month=opts.get("sales_month"),
-        default_latest_year=bool(opts.get("default_latest_year")),
-    )
     df["Sales"] = _sum_sales_columns(df, sales_scope_columns or year_cols)
     df = df.dropna(subset=["MSRP"])
     df = df[df["MSRP"] > 0]
@@ -1872,13 +1996,8 @@ def _chart_powertrain_vs_price(
 def _chart_estimated_tco(
     filters: dict[str, list[str]], top_n: int, opts: dict,
 ) -> dict:
-    sales_columns, _, _ = _sales_columns_for_scope(
-        repo.list_columns(),
-        year=opts.get("sales_year"),
-        month=opts.get("sales_month"),
-        default_latest_year=bool(opts.get("default_latest_year")),
-    )
-    vf = _build_vehicle_frame(filters, sales_columns=sales_columns or None)
+    sales_columns = _resolve_sales_columns_from_options(repo.list_columns(), opts)
+    vf = _build_vehicle_frame(filters, sales_columns=sales_columns)
     if vf.empty or "MSRP" not in vf.columns or "Powertrain" not in vf.columns:
         return {"group": "cost_analysis", "chart": "estimated_tco", "rows": 0, "items": []}
 
@@ -1938,9 +2057,10 @@ def _build_version_frame(
     trim_col = _resolve_existing_column(TRIM_CANDIDATES, columns)
     year_cols = _year_columns(columns)
 
-    requested_sales_columns = [
-        column for column in (sales_columns or []) if column
-    ]
+    explicit_sales_scope = sales_columns is not None
+    requested_sales_columns = [column for column in (sales_columns or []) if column]
+    if explicit_sales_scope and not requested_sales_columns:
+        return pd.DataFrame()
     needed = (
         [
             c
@@ -1990,9 +2110,18 @@ def query_model_versions(
     model_name: str,
     top_n: int,
     sales_columns: list[str] | None = None,
+    time_range: dict[str, str] | None = None,
 ) -> dict:
     """Return version-level scatter for a given Model."""
-    vf = _build_version_frame(filters, sales_columns=sales_columns)
+    resolved_sales_columns = sales_columns
+    normalized_time_range = _extract_time_range(time_range)
+    if resolved_sales_columns is None and normalized_time_range is not None:
+        resolved_sales_columns = _sales_columns_for_time_range(
+            repo.list_columns(),
+            normalized_time_range[0],
+            normalized_time_range[1],
+        )
+    vf = _build_version_frame(filters, sales_columns=resolved_sales_columns)
     if vf.empty or "Model" not in vf.columns or "Version" not in vf.columns:
         return {"rows": 0, "items": []}
 
@@ -2037,6 +2166,7 @@ def query_positioning_map(
     top_n: int,
     n_clusters: int,
     sales_columns: list[str] | None = None,
+    time_range: dict[str, str] | None = None,
 ) -> dict:
     """
     Return positioning scatter with optional KMeans clustering.
@@ -2044,7 +2174,15 @@ def query_positioning_map(
     - manual_competitors: Brand names to force-include.
     - Returns items with cluster_id, and a target_point if target given.
     """
-    vf = _build_vehicle_frame(filters, sales_columns=sales_columns)
+    resolved_sales_columns = sales_columns
+    normalized_time_range = _extract_time_range(time_range)
+    if resolved_sales_columns is None and normalized_time_range is not None:
+        resolved_sales_columns = _sales_columns_for_time_range(
+            repo.list_columns(),
+            normalized_time_range[0],
+            normalized_time_range[1],
+        )
+    vf = _build_vehicle_frame(filters, sales_columns=resolved_sales_columns)
     if vf.empty or "Length" not in vf.columns or "MSRP" not in vf.columns:
         return {"rows": 0, "items": [], "target": None, "cluster_top3": [], "peerCorridor": None}
 

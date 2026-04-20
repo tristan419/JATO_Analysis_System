@@ -1090,6 +1090,7 @@ export const api = {
     filters: Record<string, string[]>;
     top_n: number;
     options?: Record<string, unknown>;
+    time_range?: { start: string; end: string };
   }) =>
     request<AdvancedChartResponse>("/analysis/advanced-chart", {
       method: "POST",
@@ -1101,6 +1102,7 @@ export const api = {
     group_by: string | null;
     top_n: number;
     include_others: boolean;
+    time_range?: { start: string; end: string };
   }) =>
     request<GroupedTimeSeriesResponse>("/analysis/time-series-grouped", {
       method: "POST",
@@ -1110,6 +1112,7 @@ export const api = {
     filters: Record<string, string[]>;
     model_name: string;
     top_n?: number;
+    time_range?: { start: string; end: string };
   }) =>
     request<ModelVersionsResponse>("/analysis/model-versions", {
       method: "POST",
@@ -1123,6 +1126,7 @@ export const api = {
     manual_competitors?: string[];
     top_n?: number;
     n_clusters?: number;
+    time_range?: { start: string; end: string };
   }) =>
     request<PositioningMapResponse>("/analysis/positioning-map", {
       method: "POST",

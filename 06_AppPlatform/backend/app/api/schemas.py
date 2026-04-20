@@ -50,12 +50,18 @@ class DetailCsvRequest(BaseModel):
     exclude_zero_sales: bool = False
 
 
+class DashboardTimeRange(BaseModel):
+    start: str
+    end: str
+
+
 class AdvancedChartRequest(BaseModel):
     group: str
     chart: str
     filters: dict[str, list[str]] = Field(default_factory=dict)
     top_n: int = 20
     options: dict[str, object] = Field(default_factory=dict)
+    time_range: DashboardTimeRange | None = None
 
 
 class GroupedTimeSeriesRequest(BaseModel):
@@ -64,12 +70,14 @@ class GroupedTimeSeriesRequest(BaseModel):
     group_by: str | None = None
     top_n: int = 10
     include_others: bool = True
+    time_range: DashboardTimeRange | None = None
 
 
 class ModelVersionsRequest(BaseModel):
     filters: dict[str, list[str]] = Field(default_factory=dict)
     model_name: str
     top_n: int = 50
+    time_range: DashboardTimeRange | None = None
 
 
 class PositioningMapRequest(BaseModel):
@@ -80,6 +88,7 @@ class PositioningMapRequest(BaseModel):
     manual_competitors: list[str] = Field(default_factory=list)
     top_n: int = 80
     n_clusters: int = 4
+    time_range: DashboardTimeRange | None = None
 
 
 class RvFinanceVehicle(BaseModel):
