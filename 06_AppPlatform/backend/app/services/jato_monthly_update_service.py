@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import pandas as pd
 from fastapi import HTTPException, UploadFile
 
 from app.core.config import (
@@ -38,6 +39,12 @@ MONTH_PATTERN = re.compile(r"(20\d{2})[-./]?(0?[1-9]|1[0-2])")
 CODE_BLOCK_PATTERN = re.compile(r"```bash\s*(.*?)\s*```", re.DOTALL)
 ALLOWED_UPLOAD_EXTENSIONS = {".xlsx", ".xlsm", ".xls"}
 UPLOAD_CHUNK_SIZE_BYTES = JATO_MONTHLY_UPDATE_UPLOAD_CHUNK_SIZE_BYTES
+MONTH_COLUMN_PATTERN = re.compile(
+    r"^\d{4}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)$",
+    re.IGNORECASE,
+)
+YEAR_COLUMN_PATTERN = re.compile(r"^\d{4}$")
+COUNTRY_COLUMN_CANDIDATES = ("国家", "country")
 _WRITE_LOCK = threading.Lock()
 _RUNNING_THREADS: dict[str, threading.Thread] = {}
 
@@ -88,6 +95,113 @@ def _active_data_paths() -> dict[str, Path]:
         "refreshReport": processed_root / "refresh_job_report.json",
         "backupRoot": processed_root / ".refresh_backups",
     }
+
+
+def _time_sort_key(label: str) -> tuple[int, int, str]:
+    text = str(label).strip()
+    if MONTH_COLUMN_PATTERN.match(text):
+        parsed = datetime.strptime(text.title(), "%Y %b")
+        return (parsed.year, parsed.month, text)
+    if YEAR_COLUMN_PATTERN.fullmatch(text):
+        return (int(text), 0, text)
+    return (9999, 12, text)
+
+
+def _series_has_data(series: pd.Series) -> bool:
+    if series.empty:
+        return False
+    if (
+        pd.api.types.is_string_dtype(series.dtype)
+        or pd.api.types.is_object_dtype(series.dtype)
+    ):
+        normalized = series.astype("string").fillna("").str.strip()
+        return bool((normalized != "").any())
+    return bool(series.notna().any())
+
+
+def _find_country_column(columns: list[str]) -> str | None:
+    lookup = {str(column).strip().lower(): str(column) for column in columns}
+    for candidate in COUNTRY_COLUMN_CANDIDATES:
+        column = lookup.get(candidate.lower())
+        if column:
+            return column
+    return None
+
+
+def _detect_month_columns(columns: list[str]) -> list[str]:
+    return sorted(
+        [
+            str(column).strip()
+            for column in columns
+            if MONTH_COLUMN_PATTERN.match(str(column).strip())
+        ],
+        key=_time_sort_key,
+    )
+
+
+def _collect_dataset_country_latest_months(path: Path) -> dict[str, str | None]:
+    frame = pd.read_parquet(path)
+    frame.columns = [str(column).strip() for column in frame.columns]
+    country_col = _find_country_column(list(frame.columns))
+    if country_col is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"无法从 {path.name} 识别国家列，不能执行 publish 校验。",
+        )
+    month_columns = _detect_month_columns(list(frame.columns))
+    if not month_columns:
+        raise HTTPException(
+            status_code=409,
+            detail=f"无法从 {path.name} 识别月份列，不能执行 publish 校验。",
+        )
+
+    info: dict[str, str | None] = {}
+    grouped = frame.groupby(country_col, dropna=False, sort=False)
+    for raw_country, group_df in grouped:
+        country = str(raw_country).strip()
+        if not country:
+            continue
+        present_months = [
+            column
+            for column in month_columns
+            if column in group_df.columns and _series_has_data(group_df[column])
+        ]
+        info[country] = present_months[-1] if present_months else None
+    return info
+
+
+def _find_publish_country_regressions(
+    *,
+    active_parquet_path: Path,
+    candidate_parquet_path: Path,
+) -> list[dict[str, str | None]]:
+    active_latest = _collect_dataset_country_latest_months(active_parquet_path)
+    candidate_latest = _collect_dataset_country_latest_months(candidate_parquet_path)
+    regressions: list[dict[str, str | None]] = []
+    for country, active_month in active_latest.items():
+        candidate_month = candidate_latest.get(country)
+        if active_month and not candidate_month:
+            regressions.append(
+                {
+                    "country": country,
+                    "activeLatestMonth": active_month,
+                    "candidateLatestMonth": None,
+                }
+            )
+            continue
+        if (
+            active_month
+            and candidate_month
+            and _time_sort_key(candidate_month) < _time_sort_key(active_month)
+        ):
+            regressions.append(
+                {
+                    "country": country,
+                    "activeLatestMonth": active_month,
+                    "candidateLatestMonth": candidate_month,
+                }
+            )
+    return regressions
 
 
 def _upload_session_root() -> Path:
@@ -892,6 +1006,28 @@ def publish_jato_monthly_update_job(
         )
 
     active_paths = _active_data_paths()
+    if active_paths["parquet"].exists():
+        regressions = _find_publish_country_regressions(
+            active_parquet_path=active_paths["parquet"],
+            candidate_parquet_path=source_paths["parquet"],
+        )
+        if regressions:
+            rendered = ", ".join(
+                (
+                    f"{entry['country']} "
+                    f"({entry['activeLatestMonth']} -> {entry['candidateLatestMonth'] or '-'})"
+                )
+                for entry in regressions[:5]
+            )
+            extra = " 等" if len(regressions) > 5 else ""
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "publish 会让当前 active 数据回退，请先更换 baseline 或重建 candidate："
+                    f"{rendered}{extra}"
+                ),
+            )
+
     published_at = _utc_now()
     backup_dir = active_paths["backupRoot"] / (
         f"manual-promote-{job_id}-{published_at.strftime('%Y%m%d-%H%M%S')}"
@@ -935,6 +1071,84 @@ def publish_jato_monthly_update_job(
         _job_log_path(job_id),
         (
             f"[{published_at.isoformat()}] published candidate to active dataset by "
+            f"{triggered_by.strip() or 'anonymous'}"
+        ),
+    )
+    return _serialize_job_state(payload, include_log_tail=True)
+
+
+def rollback_jato_monthly_update_job(
+    *,
+    job_id: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    _require_no_running_monthly_update_jobs(excluding_job_id=job_id)
+    payload = _load_job_state(job_id)
+    publication = payload.get("publication")
+    if not isinstance(publication, dict) or not publication.get("publishedAt"):
+        raise HTTPException(status_code=409, detail="当前任务还没有 publish，不能回滚。")
+    if publication.get("rolledBackAt"):
+        raise HTTPException(status_code=409, detail="当前任务已经执行过回滚。")
+
+    active_paths = _active_data_paths()
+    backup_dir = _project_path(str(publication.get("backupDir") or "").strip())
+    if backup_dir is None or not backup_dir.exists():
+        raise HTTPException(status_code=409, detail="找不到 publish 备份目录，不能回滚。")
+
+    restore_sources = {
+        "parquet": backup_dir / active_paths["parquet"].name,
+        "manifest": backup_dir / active_paths["manifest"].name,
+        "partition": backup_dir / active_paths["partition"].name,
+        "fingerprint": backup_dir / active_paths["fingerprint"].name,
+        "refreshReport": backup_dir / active_paths["refreshReport"].name,
+    }
+    missing_sources = [
+        key
+        for key, path in restore_sources.items()
+        if not path.exists()
+    ]
+    if missing_sources:
+        raise HTTPException(
+            status_code=409,
+            detail=f"publish 备份不完整，缺少：{', '.join(missing_sources)}。",
+        )
+
+    rolled_back_at = _utc_now()
+    rollback_backup_dir = active_paths["backupRoot"] / (
+        f"restore-pre-{job_id}-{rolled_back_at.strftime('%Y%m%d-%H%M%S')}"
+    )
+    rollback_backup_dir.mkdir(parents=True, exist_ok=True)
+    if active_paths["parquet"].exists():
+        shutil.copy2(active_paths["parquet"], rollback_backup_dir / active_paths["parquet"].name)
+    if active_paths["manifest"].exists():
+        shutil.copy2(active_paths["manifest"], rollback_backup_dir / active_paths["manifest"].name)
+    if active_paths["fingerprint"].exists():
+        shutil.copy2(active_paths["fingerprint"], rollback_backup_dir / active_paths["fingerprint"].name)
+    if active_paths["refreshReport"].exists():
+        shutil.copy2(active_paths["refreshReport"], rollback_backup_dir / active_paths["refreshReport"].name)
+    if active_paths["partition"].exists():
+        shutil.copytree(
+            active_paths["partition"],
+            rollback_backup_dir / active_paths["partition"].name,
+        )
+
+    shutil.copy2(restore_sources["parquet"], active_paths["parquet"])
+    shutil.copy2(restore_sources["manifest"], active_paths["manifest"])
+    shutil.copy2(restore_sources["fingerprint"], active_paths["fingerprint"])
+    shutil.copy2(restore_sources["refreshReport"], active_paths["refreshReport"])
+    if active_paths["partition"].exists():
+        shutil.rmtree(active_paths["partition"])
+    shutil.copytree(restore_sources["partition"], active_paths["partition"])
+
+    publication["rolledBackAt"] = rolled_back_at.isoformat()
+    publication["rolledBackBy"] = triggered_by.strip() or "anonymous"
+    publication["rollbackBackupDir"] = _relative_to_project(rollback_backup_dir)
+    payload["publication"] = publication
+    _persist_job_state(payload)
+    _append_log(
+        _job_log_path(job_id),
+        (
+            f"[{rolled_back_at.isoformat()}] restored active dataset from publish backup by "
             f"{triggered_by.strip() or 'anonymous'}"
         ),
     )

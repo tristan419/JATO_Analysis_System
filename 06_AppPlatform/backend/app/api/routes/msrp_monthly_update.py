@@ -11,6 +11,7 @@ from app.services.jato_monthly_update_service import (
     initiate_jato_monthly_update_upload,
     list_jato_monthly_update_jobs,
     publish_jato_monthly_update_job,
+    rollback_jato_monthly_update_job,
     retry_failed_jato_monthly_update_job,
     run_jato_monthly_update_cleanup,
     upload_jato_monthly_update_chunk,
@@ -92,6 +93,19 @@ def post_publish_monthly_update_job(
 ) -> dict[str, object]:
     return {
         "item": publish_jato_monthly_update_job(
+            job_id=job_id,
+            triggered_by=user.name,
+        )
+    }
+
+
+@router.post("/monthly-update-jobs/{job_id}/rollback")
+def post_rollback_monthly_update_job(
+    job_id: str,
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": rollback_jato_monthly_update_job(
             job_id=job_id,
             triggered_by=user.name,
         )

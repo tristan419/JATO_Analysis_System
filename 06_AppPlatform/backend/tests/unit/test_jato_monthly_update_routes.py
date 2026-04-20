@@ -374,3 +374,33 @@ def test_publish_monthly_update_job_route_returns_published_job(monkeypatch) -> 
     payload = response.json()["item"]
     assert payload["jobId"] == "jato-update-1234abcd"
     assert payload["publication"]["publishedBy"] == "tester"
+
+
+def test_rollback_monthly_update_job_route_returns_rolled_back_job(monkeypatch) -> None:
+    monkeypatch.setattr(
+        msrp_monthly_update,
+        "rollback_jato_monthly_update_job",
+        lambda *, job_id, triggered_by: {
+            "jobId": job_id,
+            "status": "success",
+            "phase": "completed",
+            "publication": {
+                "publishedAt": "2026-04-20T16:00:00+00:00",
+                "publishedBy": "tester",
+                "backupDir": "04_Processed_data/.refresh_backups/manual-promote-test",
+                "rolledBackAt": "2026-04-20T16:10:00+00:00",
+                "rolledBackBy": triggered_by,
+            },
+        },
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/msrp/monthly-update-jobs/jato-update-1234abcd/rollback",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["item"]
+    assert payload["jobId"] == "jato-update-1234abcd"
+    assert payload["publication"]["rolledBackBy"] == "tester"
