@@ -166,6 +166,98 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def resolve_first_matching_column(
+    columns: list[str],
+    candidates: tuple[str, ...],
+) -> str | None:
+    column_map = {
+        str(column).strip().lower(): str(column)
+        for column in columns
+    }
+    for candidate in candidates:
+        target = column_map.get(candidate.strip().lower())
+        if target:
+            return target
+    return None
+
+
+def _collect_non_empty_string_values(series: pd.Series) -> set[str]:
+    values: set[str] = set()
+    for value in series.astype("string").tolist():
+        if value is pd.NA or pd.isna(value):
+            continue
+        text = str(value).strip()
+        if text and text != "<NA>":
+            values.add(text)
+    return values
+
+
+def supplement_missing_countries_from_parquet(
+    df: pd.DataFrame,
+    supplement_parquet_path: str | None,
+    *,
+    source_index: int,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    if not supplement_parquet_path:
+        return df, {
+            "enabled": False,
+            "supplementParquetPath": None,
+            "supplementedCountryCount": 0,
+            "supplementedCountries": [],
+            "supplementedRowCount": 0,
+        }
+
+    resolved_parquet_path = resolve_explicit_file(supplement_parquet_path)
+    country_column = resolve_first_matching_column(
+        columns=[str(column) for column in df.columns],
+        candidates=RECOMMENDED_DIMENSION_CANDIDATES["country"],
+    )
+    if not country_column:
+        raise ValueError("输入数据缺少国家列，无法从现有 parquet 补齐缺失国家。")
+
+    supplement_df = pd.read_parquet(resolved_parquet_path)
+    supplement_df = normalize_dataframe(supplement_df)
+    supplement_country_column = resolve_first_matching_column(
+        columns=[str(column) for column in supplement_df.columns],
+        candidates=RECOMMENDED_DIMENSION_CANDIDATES["country"],
+    )
+    if not supplement_country_column:
+        raise ValueError("补齐 parquet 缺少国家列，无法执行缺失国家补齐。")
+    if supplement_country_column != country_column:
+        supplement_df = supplement_df.rename(
+            columns={supplement_country_column: country_column}
+        )
+        supplement_country_column = country_column
+
+    current_countries = _collect_non_empty_string_values(df[country_column])
+    available_countries = _collect_non_empty_string_values(
+        supplement_df[supplement_country_column]
+    )
+    missing_countries = sorted(available_countries - current_countries)
+
+    summary = {
+        "enabled": True,
+        "supplementParquetPath": to_project_relative(resolved_parquet_path),
+        "supplementedCountryCount": int(len(missing_countries)),
+        "supplementedCountries": missing_countries,
+        "supplementedRowCount": 0,
+    }
+    if not missing_countries:
+        return df, summary
+
+    appended_df = supplement_df[
+        supplement_df[supplement_country_column].isin(missing_countries)
+    ].copy()
+    appended_df = add_source_tracking_columns(
+        appended_df,
+        source_file=resolved_parquet_path,
+        source_index=source_index,
+    )
+    merged_df = pd.concat([df, appended_df], ignore_index=True, sort=False)
+    summary["supplementedRowCount"] = int(len(appended_df))
+    return merged_df, summary
+
+
 def _to_key_dict(
     key_values: object,
     key_columns: list[str],
@@ -502,6 +594,7 @@ def convert_jato_to_parquet(
     conflict_keys: str | None,
     conflict_policy: str,
     conflict_report_path: str | None,
+    supplement_parquet_path: str | None = None,
     job_id: str | None = None,
 ) -> tuple[Path, Path]:
     logger = get_logger("jato.etl", job_id=job_id)
@@ -579,6 +672,30 @@ def convert_jato_to_parquet(
     emit("🧹 执行基础清洗与类型标准化...")
     df = normalize_dataframe(df)
 
+    supplement_summary = {
+        "enabled": False,
+        "supplementParquetPath": None,
+        "supplementedCountryCount": 0,
+        "supplementedCountries": [],
+        "supplementedRowCount": 0,
+    }
+    if supplement_parquet_path:
+        df, supplement_summary = supplement_missing_countries_from_parquet(
+            df,
+            supplement_parquet_path,
+            source_index=len(source_files) + 1,
+        )
+        if supplement_summary["supplementedCountryCount"] > 0:
+            emit(
+                "🧩 从现有 parquet 补齐缺失国家: countries=%s, rows=%s"
+                % (
+                    supplement_summary["supplementedCountryCount"],
+                    supplement_summary["supplementedRowCount"],
+                )
+            )
+        else:
+            emit("🧩 patch 已覆盖现有 parquet 的全部国家，无需补齐。")
+
     conflict_key_list = parse_csv_list(conflict_keys)
     conflict_summary = detect_cross_file_conflicts(
         df=df,
@@ -654,6 +771,7 @@ def convert_jato_to_parquet(
             "preMergeRows": int(pre_merge_rows),
             "mergedRows": int(merged_rows),
             "finalRows": int(len(df)),
+            "supplementSummary": supplement_summary,
             "conflictSummary": conflict_summary,
             **dedupe_result,
         },
@@ -736,6 +854,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="冲突报告输出路径（默认输出目录下 conflict_report.json）。",
     )
     parser.add_argument(
+        "--supplement-missing-countries-from-parquet",
+        type=str,
+        default=None,
+        help="用现有 parquet 补齐本次输入未覆盖的国家。",
+    )
+    parser.add_argument(
         "--job-id",
         type=str,
         default=None,
@@ -761,6 +885,9 @@ def main() -> None:
             conflict_keys=args.conflict_keys,
             conflict_policy=args.conflict_policy,
             conflict_report_path=args.conflict_report,
+            supplement_parquet_path=(
+                args.supplement_missing_countries_from_parquet
+            ),
             job_id=job_id,
         )
     except Exception as error:

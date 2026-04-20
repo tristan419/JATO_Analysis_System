@@ -248,6 +248,7 @@ def build_refresh_fingerprint(
     source_files: list[Path],
     sheet_name: str,
     partition_cols: list[str],
+    supplement_files: list[Path] | None = None,
 ) -> dict[str, Any]:
     if not source_files:
         raise ValueError("source_files 不能为空。")
@@ -263,10 +264,23 @@ def build_refresh_fingerprint(
             }
         )
 
+    supplement_payload = []
+    for supplement_file in supplement_files or []:
+        supplement_stat = supplement_file.stat()
+        supplement_payload.append(
+            {
+                "path": to_project_relative(supplement_file),
+                "bytes": int(supplement_stat.st_size),
+                "mtimeNs": int(supplement_stat.st_mtime_ns),
+            }
+        )
+
     return {
         "schemaVersion": FINGERPRINT_SCHEMA_VERSION,
         "sourceFileCount": int(len(source_payload)),
         "sourceFiles": source_payload,
+        "supplementFileCount": int(len(supplement_payload)),
+        "supplementFiles": supplement_payload,
         "sheetName": str(sheet_name),
         "partitionCols": list(partition_cols),
     }
@@ -743,11 +757,26 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
     rollback_enabled = not bool(args.no_rollback)
     refresh_inputs = resolve_refresh_inputs(args)
     source_input_files = list(refresh_inputs["sourceFiles"])
+    supplement_parquet_path = (
+        resolve_path(args.supplement_missing_countries_from_parquet)
+        if args.supplement_missing_countries_from_parquet
+        else None
+    )
+    if supplement_parquet_path is not None and not supplement_parquet_path.exists():
+        raise ValueError(
+            "补齐缺失国家的 parquet 不存在："
+            f"{to_project_relative(supplement_parquet_path)}"
+        )
     fingerprint_path = resolve_path(args.fingerprint)
     current_fingerprint = build_refresh_fingerprint(
         source_files=source_input_files,
         sheet_name=args.sheet,
         partition_cols=partition_cols,
+        supplement_files=(
+            [supplement_parquet_path]
+            if supplement_parquet_path is not None
+            else None
+        ),
     )
     resolved_excel_inputs = [
         to_project_relative(path)
@@ -836,6 +865,14 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
                     "resolvedBaselineInput"
                 ],
                 "resolvedPatchInputs": refresh_inputs["resolvedPatchInputs"],
+                "supplementMissingCountriesFromParquet": (
+                    args.supplement_missing_countries_from_parquet
+                ),
+                "resolvedSupplementMissingCountriesFromParquet": (
+                    to_project_relative(supplement_parquet_path)
+                    if supplement_parquet_path is not None
+                    else None
+                ),
                 "rawDir": args.raw_dir,
                 "sheet": args.sheet,
                 "partitionCols": partition_cols,
@@ -925,6 +962,11 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
             conflict_keys=args.conflict_keys,
             conflict_policy=args.conflict_policy,
             conflict_report_path=args.conflict_report,
+            supplement_parquet_path=(
+                str(supplement_parquet_path)
+                if supplement_parquet_path is not None
+                else None
+            ),
             job_id=job_id,
         )
         step_durations["etlSeconds"] = round(time.time() - step_start, 3)
@@ -1014,6 +1056,14 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
                     "resolvedBaselineInput"
                 ],
                 "resolvedPatchInputs": refresh_inputs["resolvedPatchInputs"],
+                "supplementMissingCountriesFromParquet": (
+                    args.supplement_missing_countries_from_parquet
+                ),
+                "resolvedSupplementMissingCountriesFromParquet": (
+                    to_project_relative(supplement_parquet_path)
+                    if supplement_parquet_path is not None
+                    else None
+                ),
                 "rawDir": args.raw_dir,
                 "sheet": args.sheet,
                 "partitionCols": partition_cols,
@@ -1222,6 +1272,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="冲突报告输出路径（默认输出目录下 conflict_report.json）。",
+    )
+    parser.add_argument(
+        "--supplement-missing-countries-from-parquet",
+        type=str,
+        default=None,
+        help="用现有 parquet 补齐本次输入未覆盖的国家。",
     )
     parser.add_argument(
         "--fingerprint",

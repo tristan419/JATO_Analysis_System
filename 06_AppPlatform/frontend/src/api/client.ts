@@ -625,6 +625,9 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
     logPath: artifactsRaw.logPath === undefined || artifactsRaw.logPath === null ? null : String(artifactsRaw.logPath),
     baselinePath: artifactsRaw.baselinePath === undefined || artifactsRaw.baselinePath === null ? null : String(artifactsRaw.baselinePath),
     stagedPatchPath: artifactsRaw.stagedPatchPath === undefined || artifactsRaw.stagedPatchPath === null ? null : String(artifactsRaw.stagedPatchPath),
+    supplementParquetPath: artifactsRaw.supplementParquetPath === undefined || artifactsRaw.supplementParquetPath === null
+      ? null
+      : String(artifactsRaw.supplementParquetPath),
     planPath: artifactsRaw.planPath === undefined || artifactsRaw.planPath === null ? null : String(artifactsRaw.planPath),
     reviewDir: artifactsRaw.reviewDir === undefined || artifactsRaw.reviewDir === null ? null : String(artifactsRaw.reviewDir),
     rawCompareReportPath: artifactsRaw.rawCompareReportPath === undefined || artifactsRaw.rawCompareReportPath === null

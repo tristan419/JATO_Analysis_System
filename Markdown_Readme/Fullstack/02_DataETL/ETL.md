@@ -43,7 +43,7 @@ python 03_Scripts/prepare_monthly_raw_update.py \
   --patch 01_RAW_DATA/新收到的文件.xlsx
 ```
 
-baseline 会优先找 `01_RAW_DATA/baseline/` 下最新的；如果 active baseline 暂时缺位，会回退到 `01_RAW_DATA/historyDataArchive/baseline/` 下最新的。脚本会打印后续 raw compare 和 refresh 命令，直接复制执行即可。详见 `01_RAW_DATA/README.md`。
+baseline 会优先找 `01_RAW_DATA/baseline/` 下最新的；如果 active baseline 暂时缺位，会回退到 `01_RAW_DATA/historyDataArchive/baseline/` 下最新的。脚本会打印后续 raw compare 和 refresh 命令，直接复制执行即可。若当前 active parquet 已存在，refresh 命令还会自动带上 `--supplement-missing-countries-from-parquet 04_Processed_data/jato_full_archive.parquet`，把 patch 未覆盖国家按 current active 补齐。详见 `01_RAW_DATA/README.md`。
 
 
 ## Pipeline 步骤总览（从原始到可部署）

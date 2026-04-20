@@ -597,6 +597,8 @@ def _parse_plan_markdown(plan_path: Path) -> dict[str, Any]:
             metadata["baselinePath"] = stripped.split(":", 1)[1].strip()
         elif stripped.startswith("- patch:"):
             metadata["patchPath"] = stripped.split(":", 1)[1].strip()
+        elif stripped.startswith("- supplement parquet:"):
+            metadata["supplementParquetPath"] = stripped.split(":", 1)[1].strip()
 
     compare_command = commands[0]
     refresh_command = commands[1]
@@ -614,6 +616,13 @@ def _parse_plan_markdown(plan_path: Path) -> dict[str, Any]:
         "compareId": metadata.get("compareId", ""),
         "baselinePath": metadata.get("baselinePath"),
         "patchPath": metadata.get("patchPath"),
+        "supplementParquetPath": (
+            metadata.get("supplementParquetPath")
+            or _extract_flag_value(
+                refresh_args,
+                "--supplement-missing-countries-from-parquet",
+            )
+        ),
         "compareCommand": compare_command,
         "refreshCommand": refresh_command,
         "reviewDir": review_dir,
@@ -626,6 +635,28 @@ def _parse_plan_markdown(plan_path: Path) -> dict[str, Any]:
         "refreshReportPath": refresh_report,
         "fingerprintPath": fingerprint_path,
     }
+
+
+def _inject_refresh_supplement_arg(
+    refresh_command: str,
+) -> tuple[str, str | None]:
+    active_parquet_path = _active_data_paths()["parquet"]
+    if not active_parquet_path.exists():
+        return refresh_command, None
+
+    refresh_args = shlex.split(refresh_command)
+    supplement_flag = "--supplement-missing-countries-from-parquet"
+    supplement_path = _relative_to_project(active_parquet_path) or str(
+        active_parquet_path
+    )
+    if supplement_flag in refresh_args:
+        return (
+            refresh_command,
+            _extract_flag_value(refresh_args, supplement_flag) or supplement_path,
+        )
+
+    refresh_args.extend([supplement_flag, supplement_path])
+    return shlex.join(refresh_args), supplement_path
 
 
 def _command_to_args(command: str) -> list[str]:
@@ -975,7 +1006,11 @@ def publish_jato_monthly_update_job(
         )
 
     publication = payload.get("publication")
-    if isinstance(publication, dict) and publication.get("publishedAt"):
+    if (
+        isinstance(publication, dict)
+        and publication.get("publishedAt")
+        and not publication.get("rolledBackAt")
+    ):
         raise HTTPException(status_code=409, detail="该月更任务已经 publish 过。")
 
     summaries = payload.get("summaries")
@@ -1510,6 +1545,12 @@ def _run_job(job_id: str) -> None:
             raise RuntimeError("prepare 完成后未生成 monthly_update_plan.md")
 
         parsed_plan = _parse_plan_markdown(plan_path)
+        refresh_command, supplement_parquet_path = _inject_refresh_supplement_arg(
+            str(parsed_plan["refreshCommand"])
+        )
+        parsed_plan["refreshCommand"] = refresh_command
+        if supplement_parquet_path:
+            parsed_plan["supplementParquetPath"] = supplement_parquet_path
         state["plan"] = {
             "path": _relative_to_project(plan_path),
             "compareId": parsed_plan.get("compareId"),
@@ -1524,6 +1565,7 @@ def _run_job(job_id: str) -> None:
                 "logPath": _relative_to_project(log_path),
                 "baselinePath": parsed_plan.get("baselinePath"),
                 "stagedPatchPath": parsed_plan.get("patchPath"),
+                "supplementParquetPath": parsed_plan.get("supplementParquetPath"),
                 "planPath": _relative_to_project(plan_path),
                 "reviewDir": parsed_plan.get("reviewDir"),
                 "rawCompareReportPath": parsed_plan.get("rawCompareReportPath"),

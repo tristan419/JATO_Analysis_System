@@ -127,6 +127,7 @@ export function buildMonthlyUpdateArtifactEntries(
   return [
     ["Baseline", job.artifacts.baselinePath],
     ["Staged patch", job.artifacts.stagedPatchPath],
+    ["Supplement parquet", job.artifacts.supplementParquetPath],
     ["Plan", job.artifacts.planPath ?? job.plan?.path],
     ["Review dir", job.artifacts.reviewDir],
     ["Raw compare report", job.artifacts.rawCompareReportPath],

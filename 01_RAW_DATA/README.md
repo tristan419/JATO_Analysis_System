@@ -26,6 +26,7 @@ baseline 不传则优先找 `baseline/` 下最新的一份；如果 active basel
 - 把 patch 复制到 `patches/<month>/` 并标准化命名
 - 打印后续两步要执行的命令
 - 在 `patches/<month>/monthly_update_plan.md` 留档
+- 如果当前 active parquet 已存在，则 refresh 命令会自动带上 `--supplement-missing-countries-from-parquet 04_Processed_data/jato_full_archive.parquet`，把 patch 未覆盖国家从 current active 补齐，避免 partial patch publish 时把旧国家回退
 
 ### 第 2 步 · Raw Compare
 
@@ -53,6 +54,7 @@ python 03_Scripts/raw_compare_review.py \
 python 03_Scripts/run_data_refresh_job.py \
   --baseline-input 01_RAW_DATA/baseline/JATO-2026.1-full-21countries-baseline.xlsx \
   --patch-input-files 01_RAW_DATA/patches/2026-02/JATO-2026.2-partial-18countries.xlsx \
+  --supplement-missing-countries-from-parquet 04_Processed_data/jato_full_archive.parquet \
   --output 04_Processed_data/staging/2026-02-mixed/jato_full_archive.parquet \
   --manifest 04_Processed_data/staging/2026-02-mixed/manifest.json \
   --partition-output 04_Processed_data/staging/2026-02-mixed/partitioned_dataset_v1 \

@@ -347,6 +347,139 @@ def test_run_job_marks_success_and_collects_summaries(
     )
 
 
+def test_run_job_injects_active_parquet_supplement_into_refresh(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root, baseline_path, _archive_path = _configure_raw_roots(
+        tmp_path,
+        monkeypatch,
+        active_baseline_name="JATO-2026.2-full-baseline.xlsx",
+    )
+    month = "2026-03"
+    compare_id = "2026-02_vs_2026-03"
+    processed_root = project_root / "04_Processed_data"
+    _write_dataset_parquet(
+        processed_root / "jato_full_archive.parquet",
+        [{"国家": "瑞典", "Model": "EX30", "2026 Jan": 10}],
+    )
+    job_root = processed_root / "ops" / "jato_monthly_update_jobs"
+    upload_path = job_root / "jato-update-merge" / "uploads" / "patch.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"fake-xlsx")
+
+    monkeypatch.setattr(
+        jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root
+    )
+    prepare_script = (
+        project_root
+        / "03_Scripts"
+        / "data_pipeline"
+        / "prepare_monthly_raw_update.py"
+    )
+    prepare_script.parent.mkdir(parents=True, exist_ok=True)
+    prepare_script.write_text("# fake", encoding="utf-8")
+    monkeypatch.setattr(
+        jato_monthly_update_service, "PREPARE_SCRIPT_PATH", prepare_script
+    )
+
+    state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id="jato-update-merge",
+        month=month,
+        triggered_by="tester",
+        upload_filename="patch.xlsx",
+        stored_upload_path=upload_path,
+        baseline_path=baseline_path,
+        baseline_source="active",
+    )
+    jato_monthly_update_service._persist_job_state(state)
+
+    def fake_run_logged_command(
+        *, label: str, args: list[str], log_path: Path
+    ) -> None:
+        jato_monthly_update_service._append_log(
+            log_path, f"{label}: {' '.join(args)}"
+        )
+        if label == "Prepare monthly update":
+            _write_plan(project_root, month, compare_id)
+        elif label == "Raw compare review":
+            report_path = (
+                project_root
+                / "04_Processed_data"
+                / "reviews"
+                / "raw_compare"
+                / compare_id
+                / "raw_compare_report.json"
+            )
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "compareId": compare_id,
+                        "decisionSuggestion": "manual_review_required",
+                        "compareKeyMode": "auto",
+                        "compareKeyColumns": ["国家", "MakeModel"],
+                        "reviewFindings": [],
+                        "countryFreshnessSummary": [],
+                        "countryScopeSummary": {
+                            "addedCountries": [],
+                            "removedCountries": [],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        elif label == "Candidate refresh":
+            assert "--supplement-missing-countries-from-parquet" in args
+            assert args[args.index("--supplement-missing-countries-from-parquet") + 1] == str(
+                processed_root / "jato_full_archive.parquet"
+            )
+            refresh_path = (
+                project_root
+                / "04_Processed_data"
+                / "staging"
+                / f"{month}-mixed"
+                / "refresh_job_report.json"
+            )
+            refresh_path.parent.mkdir(parents=True, exist_ok=True)
+            refresh_path.write_text(
+                json.dumps(
+                    {
+                        "jobStatus": "success",
+                        "jobElapsedSeconds": 10.2,
+                        "fullManifest": {"rows": 123, "columns": 96},
+                        "partitionManifest": {"parquetFileCount": 2},
+                        "incremental": {
+                            "fingerprintMatched": False,
+                            "fingerprintUpdated": True,
+                            "regression": {
+                                "changedRows": 12,
+                                "changedCountryCount": 1,
+                                "mergeKeyRegression": {
+                                    "conflictGroupCount": 0,
+                                    "conflictRowCount": 0,
+                                },
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_run_logged_command",
+        fake_run_logged_command,
+    )
+
+    jato_monthly_update_service._run_job("jato-update-merge")
+    payload = jato_monthly_update_service._load_job_state("jato-update-merge")
+
+    assert payload["artifacts"]["supplementParquetPath"] == (
+        "04_Processed_data/jato_full_archive.parquet"
+    )
+
+
 def test_run_job_marks_failed_when_stage_raises(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1048,3 +1181,78 @@ def test_rollback_monthly_update_job_restores_publish_backup(
     )
     restore_backup_dir = project_root / rolled_back["publication"]["rollbackBackupDir"]
     assert (restore_backup_dir / "jato_full_archive.parquet").read_text(encoding="utf-8") == "bad-parquet"
+
+
+def test_publish_monthly_update_job_allows_republish_after_rollback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    processed_root = project_root / "04_Processed_data"
+    job_root = processed_root / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+
+    active_partition = processed_root / "partitioned_dataset_v1"
+    active_partition.mkdir(parents=True, exist_ok=True)
+    _write_dataset_parquet(
+        processed_root / "jato_full_archive.parquet",
+        [{"国家": "瑞典", "Model": "EX30", "2026 Jan": 10}],
+    )
+    (processed_root / "manifest.json").write_text('{"version":"old"}', encoding="utf-8")
+    (processed_root / "dataset_fingerprint.json").write_text('{"hash":"old"}', encoding="utf-8")
+    (processed_root / "refresh_job_report.json").write_text('{"jobStatus":"old"}', encoding="utf-8")
+    (active_partition / "part-000.parquet").write_text("old-partition", encoding="utf-8")
+
+    staging_root = processed_root / "staging" / "2026-03-mixed"
+    staging_partition = staging_root / "partitioned_dataset_v1"
+    staging_partition.mkdir(parents=True, exist_ok=True)
+    _write_dataset_parquet(
+        staging_root / "jato_full_archive.parquet",
+        [{"国家": "瑞典", "Model": "EX30", "2026 Jan": 10, "2026 Mar": 12}],
+    )
+    (staging_root / "manifest.json").write_text('{"version":"new"}', encoding="utf-8")
+    (staging_root / "dataset_fingerprint.json").write_text('{"hash":"new"}', encoding="utf-8")
+    (staging_root / "refresh_job_report.json").write_text('{"jobStatus":"success"}', encoding="utf-8")
+    (staging_partition / "part-000.parquet").write_text("new-partition", encoding="utf-8")
+
+    job_id = "jato-update-republish"
+    upload_path = job_root / job_id / "uploads" / "patch.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"fake")
+    state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id=job_id,
+        month="2026-03",
+        triggered_by="tester",
+        upload_filename="patch.xlsx",
+        stored_upload_path=upload_path,
+    )
+    state["status"] = "success"
+    state["phase"] = "completed"
+    state["artifacts"] = {
+        "stagingOutputPath": "04_Processed_data/staging/2026-03-mixed/jato_full_archive.parquet",
+        "manifestPath": "04_Processed_data/staging/2026-03-mixed/manifest.json",
+        "partitionOutputPath": "04_Processed_data/staging/2026-03-mixed/partitioned_dataset_v1",
+        "fingerprintPath": "04_Processed_data/staging/2026-03-mixed/dataset_fingerprint.json",
+        "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
+    }
+    state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    state["publication"] = {
+        "publishedAt": "2026-04-20T12:02:33+00:00",
+        "publishedBy": "tester",
+        "backupDir": "04_Processed_data/.refresh_backups/manual-promote-jato-update-republish-20260420-120233",
+        "rolledBackAt": "2026-04-20T12:18:45+00:00",
+        "rolledBackBy": "tester",
+        "rollbackBackupDir": "04_Processed_data/.refresh_backups/restore-pre-jato-update-republish-20260420-121845",
+    }
+    jato_monthly_update_service._persist_job_state(state)
+
+    published = jato_monthly_update_service.publish_jato_monthly_update_job(
+        job_id=job_id,
+        triggered_by="publisher",
+    )
+
+    assert published["publication"]["publishedBy"] == "publisher"
+    assert published["publication"]["backupDir"].startswith(
+        "04_Processed_data/.refresh_backups/manual-promote-"
+    )
+    assert "rolledBackAt" not in published["publication"]

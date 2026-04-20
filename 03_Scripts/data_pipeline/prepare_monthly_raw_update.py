@@ -161,6 +161,7 @@ def main() -> None:
     compare_id = f"{bl_month}_vs_{month}"
     review_dir = PROC / "reviews" / "raw_compare" / compare_id
     staging_dir = PROC / "staging" / f"{month}-mixed"
+    active_parquet = PROC / "jato_full_archive.parquet"
 
     # ---- 建目录 ----
     for d in [bl_tgt.parent, pa_tgt.parent, review_dir, staging_dir]:
@@ -179,7 +180,7 @@ def main() -> None:
         "--allow-missing-countries",
         "--output-dir", _rel(review_dir),
     ])
-    refresh_cmd = shlex.join([
+    refresh_args = [
         "python", "03_Scripts/data_pipeline/run_data_refresh_job.py",
         "--baseline-input", _rel(bl_tgt),
         "--patch-input-files", _rel(pa_tgt),
@@ -189,14 +190,25 @@ def main() -> None:
         "--report", _rel(staging_dir / "refresh_job_report.json"),
         "--fingerprint", _rel(staging_dir / "dataset_fingerprint.json"),
         "--incremental", "--skip-benchmark",
-    ])
+    ]
+    supplement_line = ""
+    if active_parquet.exists():
+        refresh_args.extend(
+            [
+                "--supplement-missing-countries-from-parquet",
+                _rel(active_parquet),
+            ]
+        )
+        supplement_line = f"- supplement parquet: {_rel(active_parquet)}\n"
+    refresh_cmd = shlex.join(refresh_args)
 
     # ---- 写 plan.md ----
     plan_md = (
         f"# {month} 月度更新计划\n\n"
         f"- 对比: {compare_id}\n"
         f"- baseline: {_rel(bl_tgt)}\n"
-        f"- patch: {_rel(pa_tgt)}\n\n"
+        f"- patch: {_rel(pa_tgt)}\n"
+        f"{supplement_line}\n"
         f"## 步骤 1 · Raw Compare\n\n```bash\n{compare_cmd}\n```\n\n"
         f"## 步骤 2 · Candidate Refresh\n\n```bash\n{refresh_cmd}\n```\n\n"
         "## 步骤 3 · Promotion\n\n"

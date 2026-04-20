@@ -107,6 +107,7 @@
     python 03_Scripts/run_data_refresh_job.py \
       --baseline-input 01_RAW_DATA/baseline/JATO-2026.1-full-21countries-baseline.xlsx \
       --patch-input-files 01_RAW_DATA/patch_batches/2026-02/JATO-2026.2-partial-17countries.xlsx \
+      --supplement-missing-countries-from-parquet 04_Processed_data/jato_full_archive.parquet \
       --output 04_Processed_data/staging/2026-02-mixed/jato_full_archive.parquet \
       --manifest 04_Processed_data/staging/2026-02-mixed/manifest.json \
       --partition-output 04_Processed_data/staging/2026-02-mixed/partitioned_dataset_v1 \
@@ -114,6 +115,8 @@
       --fingerprint 04_Processed_data/staging/2026-02-mixed/dataset_fingerprint.json \
       --incremental \
       --skip-benchmark
+
+当 patch 只覆盖部分国家时，`--supplement-missing-countries-from-parquet` 会把 current active 中未出现在 patch 的国家整国补回 candidate，保证 promotion 的语义更接近“current active ∪ 本次 patch”，而不是“历史 baseline + 本次 patch”。
 
 ## 7. promotion 清单
 

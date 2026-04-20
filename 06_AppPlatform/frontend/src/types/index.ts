@@ -1276,6 +1276,7 @@ export interface JatoMonthlyUpdateArtifacts {
   logPath?: string | null;
   baselinePath?: string | null;
   stagedPatchPath?: string | null;
+  supplementParquetPath?: string | null;
   planPath?: string | null;
   reviewDir?: string | null;
   rawCompareReportPath?: string | null;
