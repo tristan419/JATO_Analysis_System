@@ -713,11 +713,10 @@ def summarize_overlap_changes(
             sample_limit
         ).to_dict("records")
 
-        changed_rows = merged.loc[changed_mask].head(
-            max(sample_limit - len(samples), 0)
-        )
+        country_samples: list[dict[str, Any]] = []
+        changed_rows = merged.loc[changed_mask].head(sample_limit)
         for _, changed_row in changed_rows.iterrows():
-            if len(samples) >= sample_limit:
+            if len(country_samples) >= sample_limit:
                 break
             business_key = {
                 group_id: normalize_scalar(changed_row[group_id])
@@ -741,7 +740,7 @@ def summarize_overlap_changes(
                     old_payload,
                     new_payload,
                 )
-            samples.append(
+            country_samples.append(
                 {
                     "country": country,
                     "businessKey": business_key,
@@ -754,6 +753,7 @@ def summarize_overlap_changes(
                     "changedFields": changed_fields,
                 }
             )
+        samples.extend(country_samples)
 
         summaries.append(
             {
@@ -1422,7 +1422,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--sample-limit",
         type=int,
         default=DEFAULT_SAMPLE_LIMIT,
-        help="变更样本上限，默认 20。",
+        help="每个国家保留的变更样本上限，默认 20。",
     )
     parser.add_argument(
         "--allow-missing-countries",

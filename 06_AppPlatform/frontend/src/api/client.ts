@@ -19,6 +19,7 @@ import type {
   JatoMonthlyUpdatePlan,
   JatoMonthlyUpdateConflictSample,
   JatoMonthlyUpdatePublication,
+  JatoMonthlyUpdateOverlapChangeSummary,
   JatoMonthlyUpdateRawCompareSummary,
   JatoMonthlyUpdateReviewBundle,
   JatoMonthlyUpdateReviewFinding,
@@ -712,6 +713,34 @@ function mapJatoMonthlyUpdateConflictSample(
   };
 }
 
+function mapJatoMonthlyUpdateOverlapChangeSummary(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateOverlapChangeSummary {
+  return {
+    country: String(raw.country ?? ""),
+    compareMonths: Array.isArray(raw.compareMonths)
+      ? raw.compareMonths.map((item) => String(item))
+      : [],
+    compareKeyColumns: Array.isArray(raw.compareKeyColumns)
+      ? raw.compareKeyColumns.map((item) => String(item))
+      : [],
+    addedRecordCount: Number(raw.addedRecordCount ?? 0),
+    removedRecordCount: Number(raw.removedRecordCount ?? 0),
+    changedRecordCount: Number(raw.changedRecordCount ?? 0),
+    unchangedRecordCount: Number(raw.unchangedRecordCount ?? 0),
+    changeRate: Number(raw.changeRate ?? 0),
+    sampleAddedKeys: Array.isArray(raw.sampleAddedKeys)
+      ? raw.sampleAddedKeys.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+      : [],
+    sampleRemovedKeys: Array.isArray(raw.sampleRemovedKeys)
+      ? raw.sampleRemovedKeys.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+      : [],
+    sampleChangedKeys: Array.isArray(raw.sampleChangedKeys)
+      ? raw.sampleChangedKeys.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+      : []
+  };
+}
+
 function mapJatoMonthlyUpdateReviewBundle(
   raw: Record<string, unknown>
 ): JatoMonthlyUpdateReviewBundle {
@@ -735,6 +764,9 @@ function mapJatoMonthlyUpdateReviewBundle(
     conflictSampleCount: Number(raw.conflictSampleCount ?? 0),
     conflictSamples: Array.isArray(raw.conflictSamples)
       ? raw.conflictSamples.map((item) => mapJatoMonthlyUpdateConflictSample(item as Record<string, unknown>))
+      : [],
+    overlapChangeSummary: Array.isArray(raw.overlapChangeSummary)
+      ? raw.overlapChangeSummary.map((item) => mapJatoMonthlyUpdateOverlapChangeSummary(item as Record<string, unknown>))
       : [],
     timeAxisCheck: raw.timeAxisCheck && typeof raw.timeAxisCheck === "object"
       ? raw.timeAxisCheck as Record<string, unknown>

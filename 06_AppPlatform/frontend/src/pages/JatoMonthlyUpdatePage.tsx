@@ -67,6 +67,21 @@ function formatDigestPreview(value: string | null | undefined): string {
   return value.length > 24 ? `${value.slice(0, 10)}...${value.slice(-8)}` : value;
 }
 
+function formatSampleKeyRecord(item: Record<string, unknown>): string {
+  const entries = Object.entries(item);
+  if (entries.length === 0) {
+    return "-";
+  }
+  return entries.map(([key, value]) => `${key}: ${formatReviewMetricValue(value)}`).join(" · ");
+}
+
+function formatSampleKeyRecords(items: Record<string, unknown>[]): string {
+  if (items.length === 0) {
+    return "-";
+  }
+  return items.map((item) => `- ${formatSampleKeyRecord(item)}`).join("\n");
+}
+
 export function JatoMonthlyUpdatePage() {
   const [jobs, setJobs] = useState<JatoMonthlyUpdateJob[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
@@ -79,6 +94,7 @@ export function JatoMonthlyUpdatePage() {
   const [publishingJobId, setPublishingJobId] = useState<string | null>(null);
   const [reviewLoadingJobId, setReviewLoadingJobId] = useState<string | null>(null);
   const [reviewBundle, setReviewBundle] = useState<JatoMonthlyUpdateReviewBundle | null>(null);
+  const [selectedReviewCountry, setSelectedReviewCountry] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -150,6 +166,7 @@ export function JatoMonthlyUpdatePage() {
   useEffect(() => {
     setReviewBundle(null);
     setReviewLoadingJobId(null);
+    setSelectedReviewCountry(null);
   }, [selectedJobId]);
 
   const hasActiveJob = shouldPollMonthlyUpdateJobs(jobs);
@@ -365,6 +382,25 @@ export function JatoMonthlyUpdatePage() {
     && selectedJob.phase === "completed"
   );
   const isSelectedJobPublished = Boolean(selectedJob?.publication?.publishedAt);
+  const availableReviewCountries = reviewBundle
+    ? Array.from(
+      new Set(
+        [
+          ...reviewBundle.overlapChangeSummary.map((item) => item.country),
+          ...reviewBundle.sampledCountries
+        ].filter((item) => Boolean(item))
+      )
+    )
+    : [];
+  const activeReviewCountry = availableReviewCountries.includes(selectedReviewCountry ?? "")
+    ? selectedReviewCountry
+    : (availableReviewCountries[0] ?? null);
+  const activeOverlapSummary = activeReviewCountry
+    ? reviewBundle?.overlapChangeSummary.find((item) => item.country === activeReviewCountry) ?? null
+    : null;
+  const activeConflictSamples = activeReviewCountry
+    ? (reviewBundle?.conflictSamples.filter((item) => item.country === activeReviewCountry) ?? [])
+    : (reviewBundle?.conflictSamples ?? []);
 
   return (
     <section className="crud-shell">
@@ -857,13 +893,56 @@ export function JatoMonthlyUpdatePage() {
                     <article className="monthly-update-summary-card">
                       <span>Conflict samples</span>
                       <strong>{formatMonthlyUpdateNumber(reviewBundle.conflictSampleCount)}</strong>
-                      <small>{reviewBundle.sampledCountries.join(", ") || "-"}</small>
+                      <small>{availableReviewCountries.join(", ") || "-"}</small>
                     </article>
                     <article className="monthly-update-summary-card">
                       <span>Refresh status</span>
                       <strong>{reviewBundle.refreshSummary?.jobStatus || refresh?.jobStatus || "-"}</strong>
                       <small>{formatMonthlyUpdateSeconds(reviewBundle.refreshSummary?.jobElapsedSeconds)}</small>
                     </article>
+                  </div>
+                  <div>
+                    {availableReviewCountries.length > 0 && (
+                      <div className="crud-toolbar-grid" style={{ marginBottom: 12 }}>
+                        <div className="filter-group">
+                          <label>Sample country</label>
+                          <select
+                            value={activeReviewCountry ?? ""}
+                            onChange={(event) => setSelectedReviewCountry(event.target.value)}
+                          >
+                            {availableReviewCountries.map((country) => (
+                              <option key={country} value={country}>
+                                {country}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
+                    {activeOverlapSummary && (
+                      <div className="monthly-update-summary-grid" style={{ marginBottom: 16 }}>
+                        <article className="monthly-update-summary-card">
+                          <span>Selected country</span>
+                          <strong>{activeOverlapSummary.country || "-"}</strong>
+                          <small>{activeOverlapSummary.compareMonths.join(", ") || "-"}</small>
+                        </article>
+                        <article className="monthly-update-summary-card">
+                          <span>Change rate</span>
+                          <strong>{activeOverlapSummary.changeRate.toFixed(2)}</strong>
+                          <small>{formatMonthlyUpdateNumber(activeOverlapSummary.changedRecordCount)} changed</small>
+                        </article>
+                        <article className="monthly-update-summary-card">
+                          <span>Added / Removed</span>
+                          <strong>{formatMonthlyUpdateNumber(activeOverlapSummary.addedRecordCount)}</strong>
+                          <small>removed {formatMonthlyUpdateNumber(activeOverlapSummary.removedRecordCount)}</small>
+                        </article>
+                        <article className="monthly-update-summary-card">
+                          <span>Unchanged</span>
+                          <strong>{formatMonthlyUpdateNumber(activeOverlapSummary.unchangedRecordCount)}</strong>
+                          <small>{activeOverlapSummary.compareKeyColumns.join(" / ") || "-"}</small>
+                        </article>
+                      </div>
+                    )}
                   </div>
                   <div>
                     <div className="card-title">Review Findings</div>
@@ -898,8 +977,10 @@ export function JatoMonthlyUpdatePage() {
                   </div>
                   <div>
                     <div className="card-title">Conflict Samples</div>
-                    {reviewBundle.conflictSamples.length === 0 ? (
-                      <div className="crud-empty-state">暂无可展示的冲突样本</div>
+                    {activeConflictSamples.length === 0 ? (
+                      <div className="crud-empty-state">
+                        当前国家暂无字段级样本；可先参考下方 sample key snapshots。后续新任务会按国家保留样本。
+                      </div>
                     ) : (
                       <div className="table-wrapper">
                         <table className="data-table">
@@ -913,7 +994,7 @@ export function JatoMonthlyUpdatePage() {
                             </tr>
                           </thead>
                           <tbody>
-                            {reviewBundle.conflictSamples.map((sample, index) => (
+                            {activeConflictSamples.map((sample, index) => (
                               <tr key={`${sample.country}-${index}`}>
                                 <td>{sample.country || "-"}</td>
                                 <td>{formatConflictSampleBusinessKey(sample.businessKey)}</td>
@@ -931,6 +1012,34 @@ export function JatoMonthlyUpdatePage() {
                       </div>
                     )}
                   </div>
+                  {activeOverlapSummary && (
+                    <div>
+                      <div className="card-title">Sample Key Snapshots</div>
+                      <div className="monthly-update-summary-grid">
+                        <article className="monthly-update-summary-card">
+                          <span>Added keys</span>
+                          <strong>{formatMonthlyUpdateNumber(activeOverlapSummary.sampleAddedKeys.length)}</strong>
+                          <pre className="monthly-update-pre">
+                            {formatSampleKeyRecords(activeOverlapSummary.sampleAddedKeys)}
+                          </pre>
+                        </article>
+                        <article className="monthly-update-summary-card">
+                          <span>Removed keys</span>
+                          <strong>{formatMonthlyUpdateNumber(activeOverlapSummary.sampleRemovedKeys.length)}</strong>
+                          <pre className="monthly-update-pre">
+                            {formatSampleKeyRecords(activeOverlapSummary.sampleRemovedKeys)}
+                          </pre>
+                        </article>
+                        <article className="monthly-update-summary-card">
+                          <span>Changed keys</span>
+                          <strong>{formatMonthlyUpdateNumber(activeOverlapSummary.sampleChangedKeys.length)}</strong>
+                          <pre className="monthly-update-pre">
+                            {formatSampleKeyRecords(activeOverlapSummary.sampleChangedKeys)}
+                          </pre>
+                        </article>
+                      </div>
+                    </div>
+                  )}
                   <div>
                     <div className="card-title">Review Checklist</div>
                     <pre className="monthly-update-pre">

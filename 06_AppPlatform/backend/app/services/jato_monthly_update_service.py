@@ -707,6 +707,44 @@ def _sanitize_conflict_sample(item: Any) -> dict[str, Any] | None:
     }
 
 
+def _sanitize_overlap_change_summary(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    return {
+        "country": str(item.get("country", "")),
+        "compareMonths": (
+            [str(month) for month in item.get("compareMonths", [])]
+            if isinstance(item.get("compareMonths"), list)
+            else []
+        ),
+        "compareKeyColumns": (
+            [str(column) for column in item.get("compareKeyColumns", [])]
+            if isinstance(item.get("compareKeyColumns"), list)
+            else []
+        ),
+        "addedRecordCount": int(item.get("addedRecordCount", 0) or 0),
+        "removedRecordCount": int(item.get("removedRecordCount", 0) or 0),
+        "changedRecordCount": int(item.get("changedRecordCount", 0) or 0),
+        "unchangedRecordCount": int(item.get("unchangedRecordCount", 0) or 0),
+        "changeRate": float(item.get("changeRate", 0) or 0),
+        "sampleAddedKeys": (
+            [entry for entry in item.get("sampleAddedKeys", []) if isinstance(entry, dict)]
+            if isinstance(item.get("sampleAddedKeys"), list)
+            else []
+        ),
+        "sampleRemovedKeys": (
+            [entry for entry in item.get("sampleRemovedKeys", []) if isinstance(entry, dict)]
+            if isinstance(item.get("sampleRemovedKeys"), list)
+            else []
+        ),
+        "sampleChangedKeys": (
+            [entry for entry in item.get("sampleChangedKeys", []) if isinstance(entry, dict)]
+            if isinstance(item.get("sampleChangedKeys"), list)
+            else []
+        ),
+    }
+
+
 def _require_no_running_monthly_update_jobs(*, excluding_job_id: str | None = None) -> None:
     running_jobs = [
         str(payload.get("jobId", ""))
@@ -752,6 +790,14 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
     sampled_countries: list[str] = []
     sample_count = 0
     conflict_samples: list[dict[str, Any]] = []
+    overlap_change_summary = [
+        sanitized
+        for sanitized in (
+            _sanitize_overlap_change_summary(item)
+            for item in raw_compare_report.get("overlapChangeSummary", [])
+        )
+        if sanitized is not None
+    ]
     if isinstance(conflict_payload, dict):
         sampled = conflict_payload.get("sampledCountries")
         samples = conflict_payload.get("samples")
@@ -782,6 +828,7 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
         "sampledCountries": sampled_countries,
         "conflictSampleCount": sample_count,
         "conflictSamples": conflict_samples,
+        "overlapChangeSummary": overlap_change_summary,
         "timeAxisCheck": (
             raw_compare_report.get("timeAxisCheck")
             if isinstance(raw_compare_report.get("timeAxisCheck"), dict)

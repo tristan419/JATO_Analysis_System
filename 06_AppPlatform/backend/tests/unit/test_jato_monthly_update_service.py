@@ -756,6 +756,21 @@ def test_get_review_bundle_reads_compare_outputs(tmp_path: Path, monkeypatch) ->
                         "suggestedAction": "inspect",
                     }
                 ],
+                "overlapChangeSummary": [
+                    {
+                        "country": "DE",
+                        "compareMonths": ["2026 Jan"],
+                        "compareKeyColumns": ["国家", "MakeModel"],
+                        "addedRecordCount": 1,
+                        "removedRecordCount": 0,
+                        "changedRecordCount": 12,
+                        "unchangedRecordCount": 88,
+                        "changeRate": 0.12,
+                        "sampleAddedKeys": [{"国家": "DE", "MakeModel": "VW ID.4"}],
+                        "sampleRemovedKeys": [],
+                        "sampleChangedKeys": [{"国家": "DE", "MakeModel": "VW ID.3"}],
+                    }
+                ],
                 "timeAxisCheck": {"hasOverlap": True},
                 "countryScopeSummary": {"addedCountries": ["DE"]},
             },
@@ -804,6 +819,8 @@ def test_get_review_bundle_reads_compare_outputs(tmp_path: Path, monkeypatch) ->
     assert review["conflictSamples"][0]["country"] == "DE"
     assert review["conflictSamples"][0]["businessKey"]["Model"] == "ID.4"
     assert review["conflictSamples"][0]["changedFields"] == ["2026 Jan", "2026 Feb"]
+    assert review["overlapChangeSummary"][0]["country"] == "DE"
+    assert review["overlapChangeSummary"][0]["sampleChangedKeys"][0]["MakeModel"] == "VW ID.3"
     assert review["reviewFindings"][0]["ruleId"] == "price-jump"
     assert review["refreshSummary"]["jobStatus"] == "success"
     assert review["refreshSummary"]["rowCount"] == 123

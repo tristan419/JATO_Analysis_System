@@ -1370,6 +1370,20 @@ export interface JatoMonthlyUpdateConflictSample {
   changedFields: string[];
 }
 
+export interface JatoMonthlyUpdateOverlapChangeSummary {
+  country: string;
+  compareMonths: string[];
+  compareKeyColumns: string[];
+  addedRecordCount: number;
+  removedRecordCount: number;
+  changedRecordCount: number;
+  unchangedRecordCount: number;
+  changeRate: number;
+  sampleAddedKeys: Record<string, unknown>[];
+  sampleRemovedKeys: Record<string, unknown>[];
+  sampleChangedKeys: Record<string, unknown>[];
+}
+
 export interface JatoMonthlyUpdateReviewBundle {
   jobId: string;
   reviewDir?: string | null;
@@ -1381,6 +1395,7 @@ export interface JatoMonthlyUpdateReviewBundle {
   sampledCountries: string[];
   conflictSampleCount: number;
   conflictSamples: JatoMonthlyUpdateConflictSample[];
+  overlapChangeSummary: JatoMonthlyUpdateOverlapChangeSummary[];
   timeAxisCheck: Record<string, unknown>;
   countryScopeSummary: Record<string, unknown>;
   refreshSummary?: JatoMonthlyUpdateRefreshSummary | null;

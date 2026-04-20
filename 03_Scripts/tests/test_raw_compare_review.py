@@ -154,3 +154,48 @@ def test_allow_missing_countries_treats_absent_baseline_scope_as_unchanged(
     )["coverageStatus"] == "unchanged_coverage"
     assert scope["removedCountries"] == []
     assert scope["changedCountries"] == ["德国"]
+
+
+def test_overlap_samples_are_collected_per_country() -> None:
+    compare_plan = {
+        "groups": [
+            {"id": "country", "oldColumn": "国家", "newColumn": "国家"},
+            {"id": "model", "oldColumn": "Model", "newColumn": "Model"},
+        ],
+        "compareKeyColumns": ["国家", "Model"],
+    }
+    old_df = pd.DataFrame(
+        {
+            "国家": ["A", "A", "B", "B"],
+            "Model": ["m1", "m2", "m1", "m2"],
+            "Trim": ["base", "plus", "base", "plus"],
+            "2026 Jan": [10, 20, 30, 40],
+        }
+    )
+    new_df = pd.DataFrame(
+        {
+            "国家": ["A", "A", "B", "B"],
+            "Model": ["m1", "m2", "m1", "m2"],
+            "Trim": ["base", "plus", "base", "plus"],
+            "2026 Jan": [11, 21, 31, 41],
+        }
+    )
+    coverage_entries = [
+        {"country": "A", "overlappingMonths": ["2026 Jan"]},
+        {"country": "B", "overlappingMonths": ["2026 Jan"]},
+    ]
+
+    _summaries, samples = raw_compare_module.summarize_overlap_changes(
+        old_df=old_df,
+        new_df=new_df,
+        compare_plan=compare_plan,
+        old_country_col="国家",
+        new_country_col="国家",
+        coverage_entries=coverage_entries,
+        old_time_columns=["2026 Jan"],
+        new_time_columns=["2026 Jan"],
+        sample_limit=1,
+    )
+
+    assert len(samples) == 2
+    assert [sample["country"] for sample in samples] == ["A", "B"]
