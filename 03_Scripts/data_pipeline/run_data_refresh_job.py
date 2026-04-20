@@ -757,6 +757,11 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
     rollback_enabled = not bool(args.no_rollback)
     refresh_inputs = resolve_refresh_inputs(args)
     source_input_files = list(refresh_inputs["sourceFiles"])
+    patch_source_indices: set[int] | None = None
+    if refresh_inputs["mode"] == "explicit_baseline_patch":
+        patch_source_indices = set(range(2, len(source_input_files) + 1))
+    elif source_input_files:
+        patch_source_indices = set(range(1, len(source_input_files) + 1))
     supplement_parquet_path = (
         resolve_path(args.supplement_missing_countries_from_parquet)
         if args.supplement_missing_countries_from_parquet
@@ -967,6 +972,7 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
                 if supplement_parquet_path is not None
                 else None
             ),
+            patch_source_indices=patch_source_indices,
             job_id=job_id,
         )
         step_durations["etlSeconds"] = round(time.time() - step_start, 3)

@@ -66,4 +66,66 @@ def test_supplement_missing_countries_from_parquet_adds_absent_country_rows(
     assert summary["supplementedCountryCount"] == 1
     assert summary["supplementedCountries"] == ["瑞典"]
     assert summary["supplementedRowCount"] == 1
+    assert summary["replacedCountryCount"] == 0
+    assert summary["replacedCountries"] == []
     assert sorted(merged_df["国家"].astype("string").tolist()) == ["德国", "瑞典"]
+
+
+def test_supplement_missing_countries_from_parquet_replaces_unuploaded_baseline_countries_with_active(
+    tmp_path: Path,
+) -> None:
+    baseline_path = tmp_path / "baseline.xlsx"
+    patch_path = tmp_path / "patch.xlsx"
+    baseline_path.write_bytes(b"baseline")
+    patch_path.write_bytes(b"patch")
+
+    baseline_df = elt_worker_module.add_source_tracking_columns(
+        pd.DataFrame(
+            [
+                {"国家": "德国", "Model": "ID.4", "2026 Jan": 11},
+                {"国家": "西班牙", "Model": "Born", "2026 Jan": 5},
+            ]
+        ),
+        source_file=baseline_path,
+        source_index=1,
+    )
+    patch_df = elt_worker_module.add_source_tracking_columns(
+        pd.DataFrame(
+            [
+                {"国家": "德国", "Model": "ID.4", "2026 Mar": 21},
+            ]
+        ),
+        source_file=patch_path,
+        source_index=2,
+    )
+    current_df = elt_worker_module.normalize_dataframe(
+        pd.concat([baseline_df, patch_df], ignore_index=True, sort=False)
+    )
+
+    supplement_path = tmp_path / "active.parquet"
+    pd.DataFrame(
+        [
+            {"国家": "德国", "Model": "ID.4", "2026 Mar": 21},
+            {"国家": "西班牙", "Model": "Born", "2026 Mar": 18},
+        ]
+    ).to_parquet(supplement_path, index=False)
+
+    merged_df, summary = elt_worker_module.supplement_missing_countries_from_parquet(
+        current_df,
+        str(supplement_path),
+        source_index=3,
+        patch_source_indices={2},
+    )
+
+    assert summary["supplementedCountryCount"] == 1
+    assert summary["supplementedCountries"] == ["西班牙"]
+    assert summary["replacedCountryCount"] == 1
+    assert summary["replacedCountries"] == ["西班牙"]
+    assert summary["supplementedRowCount"] == 1
+
+    germany_rows = merged_df[merged_df["国家"] == "德国"].copy()
+    spain_rows = merged_df[merged_df["国家"] == "西班牙"].copy()
+    assert len(germany_rows) == 2
+    assert len(spain_rows) == 1
+    assert spain_rows["2026 Mar"].iloc[0] == 18
+    assert pd.isna(spain_rows["2026 Jan"].iloc[0])

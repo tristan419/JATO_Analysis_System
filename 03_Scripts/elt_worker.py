@@ -197,6 +197,7 @@ def supplement_missing_countries_from_parquet(
     supplement_parquet_path: str | None,
     *,
     source_index: int,
+    patch_source_indices: set[int] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     if not supplement_parquet_path:
         return df, {
@@ -205,6 +206,8 @@ def supplement_missing_countries_from_parquet(
             "supplementedCountryCount": 0,
             "supplementedCountries": [],
             "supplementedRowCount": 0,
+            "replacedCountryCount": 0,
+            "replacedCountries": [],
         }
 
     resolved_parquet_path = resolve_explicit_file(supplement_parquet_path)
@@ -233,27 +236,39 @@ def supplement_missing_countries_from_parquet(
     available_countries = _collect_non_empty_string_values(
         supplement_df[supplement_country_column]
     )
-    missing_countries = sorted(available_countries - current_countries)
+    patch_countries: set[str] = set(current_countries)
+    if patch_source_indices and SOURCE_TRACK_COLUMNS[1] in df.columns:
+        patch_mask = df[SOURCE_TRACK_COLUMNS[1]].isin(list(patch_source_indices))
+        if patch_mask.any():
+            patch_countries = _collect_non_empty_string_values(
+                df.loc[patch_mask, country_column]
+            )
+
+    supplemented_countries = sorted(available_countries - patch_countries)
+    replaced_countries = sorted(current_countries & set(supplemented_countries))
 
     summary = {
         "enabled": True,
         "supplementParquetPath": to_project_relative(resolved_parquet_path),
-        "supplementedCountryCount": int(len(missing_countries)),
-        "supplementedCountries": missing_countries,
+        "supplementedCountryCount": int(len(supplemented_countries)),
+        "supplementedCountries": supplemented_countries,
         "supplementedRowCount": 0,
+        "replacedCountryCount": int(len(replaced_countries)),
+        "replacedCountries": replaced_countries,
     }
-    if not missing_countries:
+    if not supplemented_countries:
         return df, summary
 
+    preserved_df = df[~df[country_column].isin(supplemented_countries)].copy()
     appended_df = supplement_df[
-        supplement_df[supplement_country_column].isin(missing_countries)
+        supplement_df[supplement_country_column].isin(supplemented_countries)
     ].copy()
     appended_df = add_source_tracking_columns(
         appended_df,
         source_file=resolved_parquet_path,
         source_index=source_index,
     )
-    merged_df = pd.concat([df, appended_df], ignore_index=True, sort=False)
+    merged_df = pd.concat([preserved_df, appended_df], ignore_index=True, sort=False)
     summary["supplementedRowCount"] = int(len(appended_df))
     return merged_df, summary
 
@@ -595,6 +610,7 @@ def convert_jato_to_parquet(
     conflict_policy: str,
     conflict_report_path: str | None,
     supplement_parquet_path: str | None = None,
+    patch_source_indices: set[int] | None = None,
     job_id: str | None = None,
 ) -> tuple[Path, Path]:
     logger = get_logger("jato.etl", job_id=job_id)
@@ -678,23 +694,27 @@ def convert_jato_to_parquet(
         "supplementedCountryCount": 0,
         "supplementedCountries": [],
         "supplementedRowCount": 0,
+        "replacedCountryCount": 0,
+        "replacedCountries": [],
     }
     if supplement_parquet_path:
         df, supplement_summary = supplement_missing_countries_from_parquet(
             df,
             supplement_parquet_path,
             source_index=len(source_files) + 1,
+            patch_source_indices=patch_source_indices,
         )
         if supplement_summary["supplementedCountryCount"] > 0:
             emit(
-                "🧩 从现有 parquet 补齐缺失国家: countries=%s, rows=%s"
+                "🧩 从现有 parquet 沿用未上传国家: countries=%s, replaced=%s, rows=%s"
                 % (
                     supplement_summary["supplementedCountryCount"],
+                    supplement_summary["replacedCountryCount"],
                     supplement_summary["supplementedRowCount"],
                 )
             )
         else:
-            emit("🧩 patch 已覆盖现有 parquet 的全部国家，无需补齐。")
+            emit("🧩 patch 已覆盖现有 parquet 的全部国家，无需沿用 active 国家。")
 
     conflict_key_list = parse_csv_list(conflict_keys)
     conflict_summary = detect_cross_file_conflicts(
