@@ -266,3 +266,51 @@ def test_chunked_monthly_update_upload_routes_create_job(
     assert payload["upload"]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
     assert payload["artifacts"]["baselinePath"] == "01_RAW_DATA/historyDataArchive/baseline/JATO-2026.1-full-baseline.xlsx"
     assert payload["artifacts"]["baselineSource"] == "archive"
+
+
+def test_retry_failed_monthly_update_job_route_requeues_existing_upload(
+    tmp_path, monkeypatch
+) -> None:
+    _configure_baseline_dirs(
+        tmp_path,
+        monkeypatch,
+        active_baseline_name="JATO-2026.2-full-baseline.xlsx",
+    )
+    job_root = tmp_path / "jobs"
+    monkeypatch.setattr(
+        jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service, "_launch_job_thread", lambda job_id: None
+    )
+
+    source_job_id = "jato-update-failed"
+    source_upload = job_root / source_job_id / "uploads" / "patch.xlsx"
+    source_upload.parent.mkdir(parents=True, exist_ok=True)
+    source_upload.write_bytes(b"retry-me")
+    failed_state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id=source_job_id,
+        month="2026-03",
+        triggered_by="tester",
+        upload_filename="patch.xlsx",
+        stored_upload_path=source_upload,
+        file_sha256=hashlib.sha256(b"retry-me").hexdigest(),
+    )
+    failed_state["status"] = "failed"
+    failed_state["phase"] = "failed"
+    failed_state["error"] = "prepare exploded"
+    jato_monthly_update_service._persist_job_state(failed_state)
+
+    client = TestClient(app)
+    response = client.post(
+        f"/v1/msrp/monthly-update-jobs/{source_job_id}/retry",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["item"]
+    assert payload["jobId"] != source_job_id
+    assert payload["status"] == "queued"
+    assert payload["triggeredBy"] == "tester"
+    assert payload["upload"]["sha256"] == hashlib.sha256(b"retry-me").hexdigest()
+    assert payload["artifacts"]["retriedFromJobId"] == source_job_id

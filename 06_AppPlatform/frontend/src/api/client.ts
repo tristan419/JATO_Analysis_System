@@ -4,6 +4,7 @@ import type {
   ConfigImportBatch,
   ConfigVariant,
   CustomerInsightDeckResponse,
+  CustomerInsightMode,
   CrudListResponse,
   CrudItem,
   CurrentPrice,
@@ -1017,8 +1018,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  nordicCustomerDeck: () =>
-    request<CustomerInsightDeckResponse>("/market-scan/nordic-customer-deck"),
+  nordicCustomerDeck: (mode: CustomerInsightMode = "benchmark") =>
+    request<CustomerInsightDeckResponse>(`/market-scan/nordic-customer-deck?mode=${encodeURIComponent(mode)}`),
   listItems: (params?: {
     page?: number;
     page_size?: number;
@@ -1657,6 +1658,12 @@ export const api = {
     })),
   getJatoMonthlyUpdateJob: (jobId: string) =>
     request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}`).then((res) => ({
+      item: mapJatoMonthlyUpdateJob(res.item)
+    })),
+  retryFailedJatoMonthlyUpdateJob: (jobId: string) =>
+    request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/retry`, {
+      method: "POST"
+    }).then((res) => ({
       item: mapJatoMonthlyUpdateJob(res.item)
     })),
   runJatoMonthlyUpdateCleanup: () =>

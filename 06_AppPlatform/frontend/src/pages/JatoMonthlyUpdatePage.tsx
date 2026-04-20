@@ -31,6 +31,7 @@ export function JatoMonthlyUpdatePage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [cleanupRunning, setCleanupRunning] = useState(false);
+  const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -233,6 +234,24 @@ export function JatoMonthlyUpdatePage() {
       setError((err as Error).message);
     } finally {
       setCleanupRunning(false);
+    }
+  }
+
+  async function handleRetryFailedJob(job: JatoMonthlyUpdateJob) {
+    setRetryingJobId(job.jobId);
+    setError("");
+    setNotice("");
+    try {
+      const response = await api.retryFailedJatoMonthlyUpdateJob(job.jobId);
+      setNotice(`已基于失败任务 ${job.jobId} 重新创建任务 ${response.item.jobId}，直接复用原上传副本，无需重新上传。`);
+      setSelectedJob(response.item);
+      setSelectedJobId(response.item.jobId);
+      await refreshJobs(response.item.jobId, true);
+      await loadJobDetail(response.item.jobId, true);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRetryingJobId(null);
     }
   }
 
@@ -587,9 +606,21 @@ export function JatoMonthlyUpdatePage() {
               <p className="section-note">状态、摘要、路径和日志都集中在这里查看。</p>
             </div>
             {selectedJob && (
-              <div className="table-status-chip">
-                <span>Job</span>
-                <strong>{selectedJob.jobId}</strong>
+              <div className="crud-row-actions">
+                {selectedJob.status === "failed" && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => void handleRetryFailedJob(selectedJob)}
+                    disabled={retryingJobId === selectedJob.jobId || !selectedJob.upload?.storedPath}
+                  >
+                    {retryingJobId === selectedJob.jobId ? "重试中..." : "Retry Failed Job"}
+                  </button>
+                )}
+                <div className="table-status-chip">
+                  <span>Job</span>
+                  <strong>{selectedJob.jobId}</strong>
+                </div>
               </div>
             )}
           </div>

@@ -576,6 +576,62 @@ def test_chunked_upload_session_can_be_completed_and_queued(
     assert not (job_root / "_upload_sessions" / upload_id).exists()
 
 
+def test_retry_failed_job_reuses_stored_upload_copy(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root, baseline_path, _archive_path = _configure_raw_roots(
+        tmp_path,
+        monkeypatch,
+        active_baseline_name="JATO-2026.2-full-baseline.xlsx",
+    )
+    job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(
+        jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service, "_launch_job_thread", lambda job_id: None
+    )
+
+    source_upload = job_root / "jato-update-failed" / "uploads" / "patch.xlsx"
+    source_upload.parent.mkdir(parents=True, exist_ok=True)
+    source_upload.write_bytes(b"retry-me")
+    failed_state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id="jato-update-failed",
+        month="2026-03",
+        triggered_by="tester",
+        upload_filename="patch.xlsx",
+        stored_upload_path=source_upload,
+        file_sha256=hashlib.sha256(b"retry-me").hexdigest(),
+        baseline_path=baseline_path,
+        baseline_source="active",
+    )
+    failed_state["status"] = "failed"
+    failed_state["phase"] = "failed"
+    failed_state["error"] = "prepare exploded"
+    jato_monthly_update_service._persist_job_state(failed_state)
+
+    retried = jato_monthly_update_service.retry_failed_jato_monthly_update_job(
+        source_job_id="jato-update-failed",
+        triggered_by="retry-user",
+    )
+
+    assert retried["jobId"] != "jato-update-failed"
+    assert retried["status"] == "queued"
+    assert retried["month"] == "2026-03"
+    assert retried["triggeredBy"] == "retry-user"
+    assert retried["upload"]["originalFilename"] == "patch.xlsx"
+    assert retried["upload"]["sha256"] == hashlib.sha256(b"retry-me").hexdigest()
+    assert retried["artifacts"]["baselinePath"] == (
+        "01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx"
+    )
+    assert retried["artifacts"]["retriedFromJobId"] == "jato-update-failed"
+
+    retried_upload = job_root / retried["jobId"] / "uploads" / "patch.xlsx"
+    assert retried_upload.exists()
+    assert retried_upload.read_bytes() == b"retry-me"
+    assert source_upload.read_bytes() == b"retry-me"
+
+
 def test_create_job_from_upload_restores_assembled_file_when_queue_fails(
     tmp_path: Path, monkeypatch
 ) -> None:

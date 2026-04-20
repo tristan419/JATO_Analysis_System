@@ -1136,6 +1136,70 @@ def create_jato_monthly_update_job_from_upload(
     return result
 
 
+def retry_failed_jato_monthly_update_job(
+    *,
+    source_job_id: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    source_state = _load_job_state(source_job_id)
+    if str(source_state.get("status", "")) != "failed":
+        raise HTTPException(
+            status_code=409,
+            detail="只有 failed 的月更任务才能直接重试。",
+        )
+
+    source_upload = source_state.get("upload")
+    if not isinstance(source_upload, dict):
+        raise HTTPException(status_code=409, detail="原任务缺少 upload 信息，无法直接重试。")
+
+    stored_path_value = source_upload.get("storedPath")
+    if not stored_path_value:
+        raise HTTPException(
+            status_code=409,
+            detail="原任务的上传副本已不存在，请重新上传文件后再试。",
+        )
+
+    source_upload_path = _project_path(str(stored_path_value))
+    if source_upload_path is None or not source_upload_path.exists():
+        raise HTTPException(
+            status_code=409,
+            detail="原任务的上传副本已不存在，请重新上传文件后再试。",
+        )
+
+    month = _normalize_month(str(source_state.get("month", "")))
+    filename = _validate_upload_filename(
+        str(source_upload.get("originalFilename") or source_upload_path.name)
+    )
+    job_id = f"jato-update-{uuid4().hex[:8]}"
+    uploads_dir = _job_dir(job_id) / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    stored_upload_path = uploads_dir / filename
+    shutil.copy2(source_upload_path, stored_upload_path)
+    try:
+        result = _queue_monthly_update_job_from_stored_upload(
+            job_id=job_id,
+            month=month,
+            triggered_by=triggered_by,
+            upload_filename=filename,
+            stored_upload_path=stored_upload_path,
+            file_sha256=(
+                str(source_upload.get("sha256"))
+                if source_upload.get("sha256") is not None
+                else None
+            ),
+        )
+    except Exception:
+        shutil.rmtree(_job_dir(job_id), ignore_errors=True)
+        raise
+
+    payload = _load_job_state(job_id)
+    artifacts = payload.get("artifacts")
+    payload["artifacts"] = artifacts if isinstance(artifacts, dict) else {}
+    payload["artifacts"]["retriedFromJobId"] = source_job_id
+    _persist_job_state(payload)
+    return _serialize_job_state(payload, include_log_tail=True)
+
+
 def list_jato_monthly_update_jobs(*, limit: int = 20) -> dict[str, Any]:
     items = [
         _serialize_job_state(payload, include_log_tail=False)
