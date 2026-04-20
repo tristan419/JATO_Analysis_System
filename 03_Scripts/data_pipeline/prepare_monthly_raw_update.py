@@ -115,6 +115,11 @@ def main() -> None:
         description="每月 01_RAW_DATA 更新：整理文件 + 生成后续命令",
     )
     pa.add_argument("--month", required=True, help="目标月份 YYYY-MM")
+    pa.add_argument(
+        "--batch-id",
+        default=None,
+        help="批次标识（默认沿用 month；建议自动批次使用 YYYY-MM-rN）",
+    )
     pa.add_argument("--patch", required=True, help="新的 patch xlsx")
     pa.add_argument(
         "--baseline", default=None,
@@ -126,6 +131,7 @@ def main() -> None:
     args = pa.parse_args()
 
     month = _normalize_month(args.month)
+    batch_id = str(args.batch_id or month).strip() or month
     jm = _jato_month(month)
 
     # ---- patch ----
@@ -156,11 +162,11 @@ def main() -> None:
 
     # ---- 目标路径 ----
     bl_tgt = RAW / "baseline" / f"JATO-{bl_jm}-{bl_tag}-baseline.xlsx"
-    pa_tgt = RAW / "patches" / month / f"JATO-{jm}-{pa_tag}.xlsx"
+    pa_tgt = RAW / "patches" / batch_id / f"JATO-{jm}-{pa_tag}.xlsx"
 
-    compare_id = f"{bl_month}_vs_{month}"
+    compare_id = f"{bl_month}_vs_{batch_id}"
     review_dir = PROC / "reviews" / "raw_compare" / compare_id
-    staging_dir = PROC / "staging" / f"{month}-mixed"
+    staging_dir = PROC / "staging" / f"{batch_id}-mixed"
     active_parquet = PROC / "jato_full_archive.parquet"
 
     # ---- 建目录 ----
@@ -204,7 +210,9 @@ def main() -> None:
 
     # ---- 写 plan.md ----
     plan_md = (
-        f"# {month} 月度更新计划\n\n"
+        f"# {batch_id} 月度更新计划\n\n"
+        f"- 数据月: {month}\n"
+        f"- 批次: {batch_id}\n"
         f"- 对比: {compare_id}\n"
         f"- baseline: {_rel(bl_tgt)}\n"
         f"- patch: {_rel(pa_tgt)}\n"
@@ -216,13 +224,14 @@ def main() -> None:
         "2. 确认 staging 无异常后复制到 releases/ 和 canonical 根目录\n"
         "3. 归档到 historyDataArchive/\n"
     )
-    plan_path = RAW / "patches" / month / "monthly_update_plan.md"
+    plan_path = RAW / "patches" / batch_id / "monthly_update_plan.md"
     if not args.dry_run:
         plan_path.write_text(plan_md, encoding="utf-8")
 
     # ---- 输出 ----
     tag = "[dry-run] " if args.dry_run else ""
     print(f"{tag}月份: {month}")
+    print(f"{tag}批次: {batch_id}")
     print(f"{tag}baseline: {bl_action} → {_rel(bl_tgt)}")
     print(f"{tag}patch:    {pa_action} → {_rel(pa_tgt)}")
     print()

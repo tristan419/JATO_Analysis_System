@@ -24,6 +24,7 @@ def _configure_raw_roots(
     monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(jato_monthly_update_service, "RAW_DATA_ROOT", raw_root)
     monkeypatch.setattr(jato_monthly_update_service, "BASELINE_ROOT", baseline_root)
+    monkeypatch.setattr(jato_monthly_update_service, "PATCHES_ROOT", raw_root / "patches")
     monkeypatch.setattr(
         jato_monthly_update_service, "HISTORY_ARCHIVE_ROOT", history_root
     )
@@ -46,6 +47,51 @@ def _configure_raw_roots(
     return project_root, baseline_path, archive_path
 
 
+def test_detect_latest_month_from_upload_uses_last_non_empty_month(tmp_path: Path) -> None:
+    upload_path = tmp_path / "patch.xlsx"
+    pd.DataFrame(
+        {
+            "国家": ["德国", "波兰"],
+            "2026 Jan": [1, 2],
+            "2026 Feb": [0, None],
+            "2026 Mar": [None, 3],
+        }
+    ).to_excel(upload_path, index=False, sheet_name="Data Export")
+
+    detected = jato_monthly_update_service._detect_latest_month_from_upload(upload_path)
+
+    assert detected == "2026-03"
+
+
+def test_allocate_batch_id_increments_existing_revisions(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    patch_root = project_root / "01_RAW_DATA" / "patches"
+    job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "PATCHES_ROOT", patch_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+
+    (patch_root / "2026-03-r1").mkdir(parents=True, exist_ok=True)
+    stored_path = job_root / "jato-update-existing" / "uploads" / "patch.xlsx"
+    stored_path.parent.mkdir(parents=True, exist_ok=True)
+    stored_path.write_bytes(b"fake")
+    existing_state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id="jato-update-existing",
+        month="2026-03",
+        batch_id="2026-03-r2",
+        triggered_by="tester",
+        upload_filename="patch.xlsx",
+        stored_upload_path=stored_path,
+    )
+    jato_monthly_update_service._persist_job_state(existing_state)
+
+    allocated = jato_monthly_update_service._allocate_batch_id("2026-03")
+
+    assert allocated == "2026-03-r3"
+
+
 def test_parse_plan_markdown_extracts_commands_and_artifacts(tmp_path: Path) -> None:
     plan_path = tmp_path / "monthly_update_plan.md"
     plan_path.write_text(
@@ -53,20 +99,22 @@ def test_parse_plan_markdown_extracts_commands_and_artifacts(tmp_path: Path) -> 
             [
                 "# 2026-03 月度更新计划",
                 "",
-                "- 对比: 2026-02_vs_2026-03",
+                "- 数据月: 2026-03",
+                "- 批次: 2026-03-r1",
+                "- 对比: 2026-02_vs_2026-03-r1",
                 "- baseline: 01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx",
-                "- patch: 01_RAW_DATA/patches/2026-03/JATO-2026.3-partial.xlsx",
+                "- patch: 01_RAW_DATA/patches/2026-03-r1/JATO-2026.3-partial.xlsx",
                 "",
                 "## 步骤 1 · Raw Compare",
                 "",
                 "```bash",
-                "python 03_Scripts/raw_compare_review.py --old 01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx --new 01_RAW_DATA/patches/2026-03/JATO-2026.3-partial.xlsx --allow-missing-countries --output-dir 04_Processed_data/reviews/raw_compare/2026-02_vs_2026-03",
+                "python 03_Scripts/raw_compare_review.py --old 01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx --new 01_RAW_DATA/patches/2026-03-r1/JATO-2026.3-partial.xlsx --allow-missing-countries --output-dir 04_Processed_data/reviews/raw_compare/2026-02_vs_2026-03-r1",
                 "```",
                 "",
                 "## 步骤 2 · Candidate Refresh",
                 "",
                 "```bash",
-                "python 03_Scripts/data_pipeline/run_data_refresh_job.py --baseline-input 01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx --patch-input-files 01_RAW_DATA/patches/2026-03/JATO-2026.3-partial.xlsx --output 04_Processed_data/staging/2026-03-mixed/jato_full_archive.parquet --manifest 04_Processed_data/staging/2026-03-mixed/manifest.json --partition-output 04_Processed_data/staging/2026-03-mixed/partitioned_dataset_v1 --report 04_Processed_data/staging/2026-03-mixed/refresh_job_report.json --fingerprint 04_Processed_data/staging/2026-03-mixed/dataset_fingerprint.json --incremental --skip-benchmark",
+                "python 03_Scripts/data_pipeline/run_data_refresh_job.py --baseline-input 01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx --patch-input-files 01_RAW_DATA/patches/2026-03-r1/JATO-2026.3-partial.xlsx --output 04_Processed_data/staging/2026-03-r1-mixed/jato_full_archive.parquet --manifest 04_Processed_data/staging/2026-03-r1-mixed/manifest.json --partition-output 04_Processed_data/staging/2026-03-r1-mixed/partitioned_dataset_v1 --report 04_Processed_data/staging/2026-03-r1-mixed/refresh_job_report.json --fingerprint 04_Processed_data/staging/2026-03-r1-mixed/dataset_fingerprint.json --incremental --skip-benchmark",
                 "```",
             ]
         ),
@@ -75,14 +123,16 @@ def test_parse_plan_markdown_extracts_commands_and_artifacts(tmp_path: Path) -> 
 
     parsed = jato_monthly_update_service._parse_plan_markdown(plan_path)
 
-    assert parsed["compareId"] == "2026-02_vs_2026-03"
+    assert parsed["month"] == "2026-03"
+    assert parsed["batchId"] == "2026-03-r1"
+    assert parsed["compareId"] == "2026-02_vs_2026-03-r1"
     assert parsed["baselinePath"] == "01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx"
-    assert parsed["patchPath"] == "01_RAW_DATA/patches/2026-03/JATO-2026.3-partial.xlsx"
-    assert parsed["reviewDir"] == "04_Processed_data/reviews/raw_compare/2026-02_vs_2026-03"
-    assert parsed["rawCompareReportPath"] == "04_Processed_data/reviews/raw_compare/2026-02_vs_2026-03/raw_compare_report.json"
-    assert parsed["refreshReportPath"] == "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json"
-    assert parsed["manifestPath"] == "04_Processed_data/staging/2026-03-mixed/manifest.json"
-    assert parsed["fingerprintPath"] == "04_Processed_data/staging/2026-03-mixed/dataset_fingerprint.json"
+    assert parsed["patchPath"] == "01_RAW_DATA/patches/2026-03-r1/JATO-2026.3-partial.xlsx"
+    assert parsed["reviewDir"] == "04_Processed_data/reviews/raw_compare/2026-02_vs_2026-03-r1"
+    assert parsed["rawCompareReportPath"] == "04_Processed_data/reviews/raw_compare/2026-02_vs_2026-03-r1/raw_compare_report.json"
+    assert parsed["refreshReportPath"] == "04_Processed_data/staging/2026-03-r1-mixed/refresh_job_report.json"
+    assert parsed["manifestPath"] == "04_Processed_data/staging/2026-03-r1-mixed/manifest.json"
+    assert parsed["fingerprintPath"] == "04_Processed_data/staging/2026-03-r1-mixed/dataset_fingerprint.json"
 
 
 def test_summarize_raw_compare_report_counts_findings() -> None:
@@ -182,6 +232,8 @@ def _write_plan(project_root: Path, month: str, compare_id: str) -> None:
             [
                 f"# {month} 月度更新计划",
                 "",
+                f"- 数据月: {month}",
+                f"- 批次: {month}",
                 f"- 对比: {compare_id}",
                 "- baseline: 01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx",
                 f"- patch: 01_RAW_DATA/patches/{month}/JATO-2026.3-partial.xlsx",
@@ -256,6 +308,8 @@ def test_run_job_marks_success_and_collects_summaries(
             log_path, f"{label}: {' '.join(args)}"
         )
         if label == "Prepare monthly update":
+            assert "--batch-id" in args
+            assert args[args.index("--batch-id") + 1] == month
             assert "--baseline" in args
             assert args[args.index("--baseline") + 1] == str(baseline_path)
             _write_plan(project_root, month, compare_id)
@@ -400,6 +454,8 @@ def test_run_job_injects_active_parquet_supplement_into_refresh(
             log_path, f"{label}: {' '.join(args)}"
         )
         if label == "Prepare monthly update":
+            assert "--batch-id" in args
+            assert args[args.index("--batch-id") + 1] == month
             _write_plan(project_root, month, compare_id)
         elif label == "Raw compare review":
             report_path = (
@@ -528,6 +584,8 @@ def test_run_job_marks_failed_when_stage_raises(
             log_path, f"{label}: {' '.join(args)}"
         )
         if label == "Prepare monthly update":
+            assert "--batch-id" in args
+            assert args[args.index("--batch-id") + 1] == month
             assert "--baseline" in args
             assert args[args.index("--baseline") + 1] == str(baseline_path)
             _write_plan(project_root, month, compare_id)
@@ -653,6 +711,16 @@ def test_chunked_upload_session_can_be_completed_and_queued(
     monkeypatch.setattr(
         jato_monthly_update_service, "_launch_job_thread", lambda job_id: None
     )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_detect_latest_month_from_upload",
+        lambda _path: "2026-03",
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_allocate_batch_id",
+        lambda month: f"{month}-r1",
+    )
 
     initiated = jato_monthly_update_service.initiate_jato_monthly_update_upload(
         filename="patch.xlsx",
@@ -702,13 +770,13 @@ def test_chunked_upload_session_can_be_completed_and_queued(
     assert assembled["fileSha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
 
     job = jato_monthly_update_service.create_jato_monthly_update_job_from_upload(
-        month="2026-03",
         upload_id=upload_id,
         triggered_by="tester",
     )
 
     assert job["status"] == "queued"
     assert job["month"] == "2026-03"
+    assert job["batchId"] == "2026-03-r1"
     assert job["upload"]["sizeBytes"] == 10
     assert job["upload"]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
     assert job["artifacts"]["baselinePath"] == "01_RAW_DATA/historyDataArchive/baseline/JATO-2026.1-full-baseline.xlsx"
@@ -732,6 +800,16 @@ def test_retry_failed_job_reuses_stored_upload_copy(
     )
     monkeypatch.setattr(
         jato_monthly_update_service, "_launch_job_thread", lambda job_id: None
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_detect_latest_month_from_upload",
+        lambda _path: "2026-03",
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_allocate_batch_id",
+        lambda month: f"{month}-r2",
     )
 
     source_upload = job_root / "jato-update-failed" / "uploads" / "patch.xlsx"
@@ -760,6 +838,7 @@ def test_retry_failed_job_reuses_stored_upload_copy(
     assert retried["jobId"] != "jato-update-failed"
     assert retried["status"] == "queued"
     assert retried["month"] == "2026-03"
+    assert retried["batchId"] == "2026-03-r2"
     assert retried["triggeredBy"] == "retry-user"
     assert retried["upload"]["originalFilename"] == "patch.xlsx"
     assert retried["upload"]["sha256"] == hashlib.sha256(b"retry-me").hexdigest()
@@ -827,7 +906,6 @@ def test_create_job_from_upload_restores_assembled_file_when_queue_fails(
 
     try:
         jato_monthly_update_service.create_jato_monthly_update_job_from_upload(
-            month="2026-03",
             upload_id=upload_id,
             triggered_by="tester",
         )

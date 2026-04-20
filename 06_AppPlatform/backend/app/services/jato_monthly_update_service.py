@@ -39,11 +39,13 @@ MONTH_PATTERN = re.compile(r"(20\d{2})[-./]?(0?[1-9]|1[0-2])")
 CODE_BLOCK_PATTERN = re.compile(r"```bash\s*(.*?)\s*```", re.DOTALL)
 ALLOWED_UPLOAD_EXTENSIONS = {".xlsx", ".xlsm", ".xls"}
 UPLOAD_CHUNK_SIZE_BYTES = JATO_MONTHLY_UPDATE_UPLOAD_CHUNK_SIZE_BYTES
+DEFAULT_UPLOAD_SHEET_NAME = "Data Export"
 MONTH_COLUMN_PATTERN = re.compile(
     r"^\d{4}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)$",
     re.IGNORECASE,
 )
 YEAR_COLUMN_PATTERN = re.compile(r"^\d{4}$")
+BATCH_ID_PATTERN = re.compile(r"^(20\d{2}-\d{2})-r(\d+)$")
 COUNTRY_COLUMN_CANDIDATES = ("国家", "country")
 _WRITE_LOCK = threading.Lock()
 _RUNNING_THREADS: dict[str, threading.Thread] = {}
@@ -319,6 +321,14 @@ def _normalize_month(value: str) -> str:
     return f"{match.group(1)}-{int(match.group(2)):02d}"
 
 
+def _parse_batch_id(value: str | None) -> tuple[str, int] | None:
+    candidate = str(value or "").strip()
+    match = BATCH_ID_PATTERN.fullmatch(candidate)
+    if match is None:
+        return None
+    return match.group(1), int(match.group(2))
+
+
 def _infer_month_token(value: str) -> str | None:
     dotted_match = re.findall(
         r"(?<!\d)(20\d{2})[._-](0?[1-9]|1[0-2])(?!\d)", value
@@ -385,6 +395,82 @@ def _sha256_hex_for_path(path: Path) -> str:
                 break
             hasher.update(chunk)
     return hasher.hexdigest()
+
+
+def _read_excel_with_fallback(
+    input_file: Path,
+    *,
+    sheet_name: str,
+    nrows: int | None = None,
+    usecols: list[str] | None = None,
+) -> pd.DataFrame:
+    kwargs: dict[str, Any] = {"sheet_name": sheet_name}
+    if nrows is not None:
+        kwargs["nrows"] = nrows
+    if usecols is not None:
+        kwargs["usecols"] = usecols
+    try:
+        return pd.read_excel(input_file, engine="calamine", **kwargs)
+    except Exception:
+        try:
+            return pd.read_excel(input_file, **kwargs)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"读取上传 Excel 失败：{input_file.name}",
+            ) from exc
+
+
+def _detect_latest_month_from_upload(path: Path) -> str:
+    header = _read_excel_with_fallback(
+        path,
+        sheet_name=DEFAULT_UPLOAD_SHEET_NAME,
+        nrows=0,
+    )
+    header.columns = [str(column).strip() for column in header.columns]
+    month_columns = _detect_month_columns(list(header.columns))
+    if not month_columns:
+        raise HTTPException(
+            status_code=400,
+            detail="上传文件中未识别到可用月份列，无法自动生成批次。",
+        )
+    month_frame = _read_excel_with_fallback(
+        path,
+        sheet_name=DEFAULT_UPLOAD_SHEET_NAME,
+        usecols=month_columns,
+    )
+    month_frame.columns = [str(column).strip() for column in month_frame.columns]
+    for column in reversed(month_columns):
+        if column in month_frame.columns and _series_has_data(month_frame[column]):
+            parsed = datetime.strptime(column.title(), "%Y %b")
+            return f"{parsed.year}-{parsed.month:02d}"
+    raise HTTPException(
+        status_code=400,
+        detail="上传文件的月份列均为空，无法自动生成批次。",
+    )
+
+
+def _allocate_batch_id(month: str) -> str:
+    normalized_month = _normalize_month(month)
+    highest_revision = 0
+    for payload in _list_job_state_payloads():
+        parsed = _parse_batch_id(payload.get("batchId"))
+        if parsed is None:
+            continue
+        item_month, item_revision = parsed
+        if item_month == normalized_month:
+            highest_revision = max(highest_revision, item_revision)
+    if PATCHES_ROOT.exists():
+        for path in PATCHES_ROOT.glob("*"):
+            if not path.is_dir():
+                continue
+            parsed = _parse_batch_id(path.name)
+            if parsed is None:
+                continue
+            item_month, item_revision = parsed
+            if item_month == normalized_month:
+                highest_revision = max(highest_revision, item_revision)
+    return f"{normalized_month}-r{highest_revision + 1}"
 
 
 def _chunk_file_name(part_number: int) -> str:
@@ -591,7 +677,11 @@ def _parse_plan_markdown(plan_path: Path) -> dict[str, Any]:
     metadata: dict[str, str] = {}
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("- 对比:"):
+        if stripped.startswith("- 数据月:"):
+            metadata["month"] = stripped.split(":", 1)[1].strip()
+        elif stripped.startswith("- 批次:"):
+            metadata["batchId"] = stripped.split(":", 1)[1].strip()
+        elif stripped.startswith("- 对比:"):
             metadata["compareId"] = stripped.split(":", 1)[1].strip()
         elif stripped.startswith("- baseline:"):
             metadata["baselinePath"] = stripped.split(":", 1)[1].strip()
@@ -613,6 +703,8 @@ def _parse_plan_markdown(plan_path: Path) -> dict[str, Any]:
     fingerprint_path = _extract_flag_value(refresh_args, "--fingerprint")
 
     return {
+        "month": metadata.get("month"),
+        "batchId": metadata.get("batchId"),
         "compareId": metadata.get("compareId", ""),
         "baselinePath": metadata.get("baselinePath"),
         "patchPath": metadata.get("patchPath"),
@@ -778,6 +870,11 @@ def _serialize_job_state(
     item = {
         "jobId": str(payload.get("jobId", "")),
         "month": str(payload.get("month", "")),
+        "batchId": (
+            None
+            if payload.get("batchId") in {None, ""}
+            else str(payload.get("batchId"))
+        ),
         "status": str(payload.get("status", "")),
         "phase": str(payload.get("phase", "")),
         "triggeredBy": str(payload.get("triggeredBy", "")),
@@ -1225,6 +1322,7 @@ def _prepare_initial_job_state(
     *,
     job_id: str,
     month: str,
+    batch_id: str | None = None,
     triggered_by: str,
     upload_filename: str,
     stored_upload_path: Path,
@@ -1244,6 +1342,7 @@ def _prepare_initial_job_state(
     return {
         "jobId": job_id,
         "month": month,
+        "batchId": str(batch_id or month),
         "status": "queued",
         "phase": "queued",
         "triggeredBy": triggered_by,
@@ -1440,7 +1539,6 @@ def complete_jato_monthly_update_upload(*, upload_id: str) -> dict[str, Any]:
 def _queue_monthly_update_job_from_stored_upload(
     *,
     job_id: str,
-    month: str,
     triggered_by: str,
     upload_filename: str,
     stored_upload_path: Path,
@@ -1453,11 +1551,14 @@ def _queue_monthly_update_job_from_stored_upload(
         if file_sha256
         else _sha256_hex_for_path(stored_upload_path)
     )
+    detected_month = _detect_latest_month_from_upload(stored_upload_path)
+    batch_id = _allocate_batch_id(detected_month)
     baseline_path, baseline_source = _require_latest_baseline()
 
     state = _prepare_initial_job_state(
         job_id=job_id,
-        month=month,
+        month=detected_month,
+        batch_id=batch_id,
         triggered_by=triggered_by.strip() or "anonymous",
         upload_filename=upload_filename,
         stored_upload_path=stored_upload_path,
@@ -1468,7 +1569,10 @@ def _queue_monthly_update_job_from_stored_upload(
     _persist_job_state(state)
     _append_log(
         _job_log_path(job_id),
-        f"[{_utc_now().isoformat()}] queued monthly update for {month}",
+        (
+            f"[{_utc_now().isoformat()}] queued monthly update batch {batch_id} "
+            f"for detected latest month {detected_month}"
+        ),
     )
     _launch_job_thread(job_id)
     return _serialize_job_state(state, include_log_tail=True)
@@ -1477,6 +1581,9 @@ def _queue_monthly_update_job_from_stored_upload(
 def _run_job(job_id: str) -> None:
     state = _load_job_state(job_id)
     log_path = _job_log_path(job_id)
+    batch_id = str(state.get("batchId") or state.get("month") or "").strip()
+    if not batch_id:
+        raise RuntimeError("任务缺少批次标识")
     upload_payload = state.get("upload")
     if not isinstance(upload_payload, dict):
         raise RuntimeError("任务缺少 upload 信息")
@@ -1533,6 +1640,8 @@ def _run_job(job_id: str) -> None:
             str(PREPARE_SCRIPT_PATH),
             "--month",
             str(state["month"]),
+            "--batch-id",
+            batch_id,
             "--baseline",
             str(baseline_path),
             "--patch",
@@ -1540,7 +1649,7 @@ def _run_job(job_id: str) -> None:
         ]
         _run_logged_command(label="Prepare monthly update", args=prepare_args, log_path=log_path)
 
-        plan_path = PROJECT_ROOT / "01_RAW_DATA" / "patches" / str(state["month"]) / "monthly_update_plan.md"
+        plan_path = PROJECT_ROOT / "01_RAW_DATA" / "patches" / batch_id / "monthly_update_plan.md"
         if not plan_path.exists():
             raise RuntimeError("prepare 完成后未生成 monthly_update_plan.md")
 
@@ -1553,6 +1662,7 @@ def _run_job(job_id: str) -> None:
             parsed_plan["supplementParquetPath"] = supplement_parquet_path
         state["plan"] = {
             "path": _relative_to_project(plan_path),
+            "batchId": parsed_plan.get("batchId") or batch_id,
             "compareId": parsed_plan.get("compareId"),
             "compareCommand": parsed_plan.get("compareCommand"),
             "refreshCommand": parsed_plan.get("refreshCommand"),
@@ -1628,11 +1738,9 @@ def _launch_job_thread(job_id: str) -> None:
 
 def create_jato_monthly_update_job(
     *,
-    month: str,
     file: UploadFile,
     triggered_by: str,
 ) -> dict[str, Any]:
-    normalized_month = _normalize_month(month)
     filename = _validate_upload(file)
 
     job_id = f"jato-update-{uuid4().hex[:8]}"
@@ -1645,7 +1753,6 @@ def create_jato_monthly_update_job(
 
     return _queue_monthly_update_job_from_stored_upload(
         job_id=job_id,
-        month=normalized_month,
         triggered_by=triggered_by,
         upload_filename=filename,
         stored_upload_path=stored_upload_path,
@@ -1654,11 +1761,9 @@ def create_jato_monthly_update_job(
 
 def create_jato_monthly_update_job_from_upload(
     *,
-    month: str,
     upload_id: str,
     triggered_by: str,
 ) -> dict[str, Any]:
-    normalized_month = _normalize_month(month)
     state = _load_upload_session(upload_id)
     if str(state.get("status", "")) != "completed":
         raise HTTPException(status_code=409, detail="上传尚未完成组装，不能创建月更任务。")
@@ -1680,7 +1785,6 @@ def create_jato_monthly_update_job_from_upload(
     try:
         result = _queue_monthly_update_job_from_stored_upload(
             job_id=job_id,
-            month=normalized_month,
             triggered_by=triggered_by,
             upload_filename=filename,
             stored_upload_path=stored_upload_path,
@@ -1727,7 +1831,6 @@ def retry_failed_jato_monthly_update_job(
             detail="原任务的上传副本已不存在，请重新上传文件后再试。",
         )
 
-    month = _normalize_month(str(source_state.get("month", "")))
     filename = _validate_upload_filename(
         str(source_upload.get("originalFilename") or source_upload_path.name)
     )
@@ -1739,7 +1842,6 @@ def retry_failed_jato_monthly_update_job(
     try:
         result = _queue_monthly_update_job_from_stored_upload(
             job_id=job_id,
-            month=month,
             triggered_by=triggered_by,
             upload_filename=filename,
             stored_upload_path=stored_upload_path,

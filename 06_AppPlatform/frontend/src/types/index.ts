@@ -1266,6 +1266,7 @@ export interface JatoMonthlyUpdateUpload {
 
 export interface JatoMonthlyUpdatePlan {
   path?: string | null;
+  batchId?: string | null;
   compareId?: string | null;
   compareCommand?: string | null;
   refreshCommand?: string | null;
@@ -1339,6 +1340,7 @@ export interface JatoMonthlyUpdateSummaries {
 export interface JatoMonthlyUpdateJob {
   jobId: string;
   month: string;
+  batchId?: string | null;
   status: string;
   phase: string;
   triggeredBy: string;

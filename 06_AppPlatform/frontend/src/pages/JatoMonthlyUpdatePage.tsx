@@ -18,7 +18,6 @@ import {
   formatMonthlyUpdatePhase,
   formatMonthlyUpdateSeconds,
   formatMonthlyUpdateTimestamp,
-  getDefaultMonthlyUpdateMonth,
   getMonthlyUpdateStatusBadgeClass,
   getMonthlyUpdateUploadStageLabel,
   isMonthlyUpdateUploadFilenameAccepted,
@@ -103,7 +102,6 @@ export function JatoMonthlyUpdatePage() {
     useState<JatoMonthlyUpdateCleanupResult | null>(null);
   const [uploadProgress, setUploadProgress] =
     useState<JatoMonthlyUpdateUploadProgress | null>(null);
-  const [month, setMonth] = useState(getDefaultMonthlyUpdateMonth());
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [heroCollapsed, setHeroCollapsed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -196,12 +194,10 @@ export function JatoMonthlyUpdatePage() {
     setNotice("");
     setUploadProgress(null);
     try {
-      const response = await api.createJatoMonthlyUpdateJob(
-        month,
-        uploadFile,
-        setUploadProgress
+      const response = await api.createJatoMonthlyUpdateJob(uploadFile, setUploadProgress);
+      setNotice(
+        `已创建任务 ${response.item.jobId}，自动识别最新数据月 ${response.item.month || "-"}，批次 ${response.item.batchId || "-"}，后台开始串行执行 prepare / compare / refresh。`
       );
-      setNotice(`已创建任务 ${response.item.jobId}，后台开始串行执行 prepare / compare / refresh。`);
       setSelectedJob(response.item);
       setSelectedJobId(response.item.jobId);
       setUploadFile(null);
@@ -486,21 +482,20 @@ export function JatoMonthlyUpdatePage() {
         body={(
           <div className="dashboard-hero-rail">
             <div className="dashboard-hero-chip-row">
-              <span className="dashboard-hero-chip">{month}</span>
+              <span className="dashboard-hero-chip">Auto batch</span>
               <span className="dashboard-hero-chip">{uploadFile?.name ?? "No file selected"}</span>
             </div>
             <div className="dashboard-hero-rail-actions">
               <button
                 type="button"
                 className="btn btn-sm btn-ghost"
-                  onClick={() => {
-                    setMonth(getDefaultMonthlyUpdateMonth());
-                    setUploadFile(null);
-                    setUploadProgress(null);
-                    setDragActive(false);
-                    setNotice("");
-                    setError("");
-                    if (fileInputRef.current) {
+                onClick={() => {
+                  setUploadFile(null);
+                  setUploadProgress(null);
+                  setDragActive(false);
+                  setNotice("");
+                  setError("");
+                  if (fileInputRef.current) {
                     fileInputRef.current.value = "";
                   }
                 }}
@@ -533,7 +528,7 @@ export function JatoMonthlyUpdatePage() {
             <div className="card-title">Create Monthly Update Job</div>
             <p className="section-note">
               第一期仅执行 candidate 流程并回传日志 / 关键产物；正式 release promote 仍然保留人工确认步骤。
-              这里的月份表示本次 patch 的归档批次，不要求所有国家都推进到该月。
+              上传后会自动识别文件里的最新有效月份，并自动生成批次号；仍允许 mixed freshness，只要没有国家回退。
             </p>
           </div>
           <div className="table-status-chip">
@@ -544,16 +539,6 @@ export function JatoMonthlyUpdatePage() {
 
         <form className="monthly-update-upload-form" onSubmit={handleSubmit}>
           <div className="monthly-update-field-grid">
-            <label className="monthly-update-field">
-              <span>Patch batch month</span>
-              <input
-                type="month"
-                value={month}
-                onChange={(event) => setMonth(event.target.value)}
-                required
-              />
-              <small>用于 patch 归档目录、compare id 和 staging 命名；允许混杂月份，只要没有国家回退。</small>
-            </label>
             <label className="monthly-update-field">
               <span>JATO patch xlsx</span>
               <input
@@ -588,6 +573,7 @@ export function JatoMonthlyUpdatePage() {
 
           <div className="monthly-update-form-actions">
             <p className="monthly-update-note">
+              系统会先扫描上传文件，自动识别最新有效月份，并生成唯一批次号（如 `2026-03-r1`）。
               上传后会先把文件落到受控目录，再复用现有 `prepare_monthly_raw_update.py`、
               `raw_compare_review.py`、`run_data_refresh_job.py`。大文件会先分片上传、自动重试，再在服务端做分片校验和整文件
               SHA-256 指纹后入队；刷新页面后重新选择同一文件，也会从已完成分片继续。
@@ -595,7 +581,7 @@ export function JatoMonthlyUpdatePage() {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={submitting || !month || uploadFile === null}
+              disabled={submitting || uploadFile === null}
             >
               {submitting ? "上传并启动中..." : "启动月更任务"}
             </button>
@@ -666,7 +652,7 @@ export function JatoMonthlyUpdatePage() {
             </div>
             <div className="monthly-update-cleanup-summary">
               <span>active baseline: {cleanupResult.activeBaselinePath ?? "-"}</span>
-              <span>active patch month: {cleanupResult.activePatchMonth ?? "-"}</span>
+              <span>active patch batch: {cleanupResult.activePatchMonth ?? "-"}</span>
               <span>archived baselines: {formatMonthlyUpdateNumber(cleanupResult.archivedBaselineCount)}</span>
               <span>archived patch dirs: {formatMonthlyUpdateNumber(cleanupResult.archivedPatchDirCount)}</span>
               <span>removed upload dirs: {formatMonthlyUpdateNumber(cleanupResult.removedJobUploadDirCount)}</span>
@@ -718,7 +704,7 @@ export function JatoMonthlyUpdatePage() {
                 <thead>
                   <tr>
                     <th>Status</th>
-                    <th>Month</th>
+                    <th>Data month</th>
                     <th>Patch file</th>
                     <th>Phase</th>
                     <th>Updated</th>
@@ -737,7 +723,12 @@ export function JatoMonthlyUpdatePage() {
                           {job.status}
                         </span>
                       </td>
-                      <td><strong>{job.month}</strong></td>
+                      <td>
+                        <strong>{job.month}</strong>
+                        {job.batchId && (
+                          <div className="section-note">{job.batchId}</div>
+                        )}
+                      </td>
                       <td title={job.upload?.originalFilename ?? "-"}>
                         {job.upload?.originalFilename ?? "-"}
                       </td>
@@ -861,8 +852,12 @@ export function JatoMonthlyUpdatePage() {
                   <strong>{formatMonthlyUpdatePhase(selectedJob.phase)}</strong>
                 </div>
                 <div className="admin-detail-item">
-                  <span>Month</span>
+                  <span>Detected latest month</span>
                   <strong>{selectedJob.month}</strong>
+                </div>
+                <div className="admin-detail-item">
+                  <span>Batch</span>
+                  <strong>{selectedJob.batchId || selectedJob.plan?.batchId || "-"}</strong>
                 </div>
                 <div className="admin-detail-item">
                   <span>Triggered by</span>

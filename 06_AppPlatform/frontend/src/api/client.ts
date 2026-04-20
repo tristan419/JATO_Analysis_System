@@ -611,6 +611,7 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
 
   const plan: JatoMonthlyUpdatePlan | null = planRaw ? {
     path: planRaw.path === undefined || planRaw.path === null ? null : String(planRaw.path),
+    batchId: planRaw.batchId === undefined || planRaw.batchId === null ? null : String(planRaw.batchId),
     compareId: planRaw.compareId === undefined || planRaw.compareId === null ? null : String(planRaw.compareId),
     compareCommand: planRaw.compareCommand === undefined || planRaw.compareCommand === null
       ? null
@@ -665,6 +666,7 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
   return {
     jobId: String(raw.jobId ?? ""),
     month: String(raw.month ?? ""),
+    batchId: raw.batchId === undefined || raw.batchId === null ? null : String(raw.batchId),
     status: String(raw.status ?? ""),
     phase: String(raw.phase ?? ""),
     triggeredBy: String(raw.triggeredBy ?? ""),
@@ -1633,7 +1635,6 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   createJatoMonthlyUpdateJob: async (
-    month: string,
     file: File,
     onProgress?: (progress: JatoMonthlyUpdateUploadProgress) => void
   ) => {
@@ -1762,7 +1763,6 @@ export const api = {
     const item = await request<{ item: Record<string, unknown> }>("/msrp/monthly-update-jobs/from-upload", {
       method: "POST",
       body: JSON.stringify({
-        month,
         uploadId: session.uploadId
       })
     }).then((res) => mapJatoMonthlyUpdateJob(res.item));

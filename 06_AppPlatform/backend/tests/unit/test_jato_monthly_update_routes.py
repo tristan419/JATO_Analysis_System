@@ -22,6 +22,7 @@ def _configure_baseline_dirs(
     monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(jato_monthly_update_service, "RAW_DATA_ROOT", raw_root)
     monkeypatch.setattr(jato_monthly_update_service, "BASELINE_ROOT", baseline_root)
+    monkeypatch.setattr(jato_monthly_update_service, "PATCHES_ROOT", raw_root / "patches")
     monkeypatch.setattr(
         jato_monthly_update_service, "HISTORY_ARCHIVE_ROOT", history_root
     )
@@ -59,12 +60,21 @@ def test_create_monthly_update_job_route_persists_job(
     monkeypatch.setattr(
         jato_monthly_update_service, "_launch_job_thread", lambda job_id: None
     )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_detect_latest_month_from_upload",
+        lambda _path: "2026-03",
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_allocate_batch_id",
+        lambda month: f"{month}-r1",
+    )
 
     client = TestClient(app)
     response = client.post(
         "/v1/msrp/monthly-update-jobs",
         headers=_headers(),
-        data={"month": "2026-03"},
         files={
             "file": (
                 "patch.xlsx",
@@ -77,6 +87,7 @@ def test_create_monthly_update_job_route_persists_job(
     assert response.status_code == 200
     payload = response.json()["item"]
     assert payload["month"] == "2026-03"
+    assert payload["batchId"] == "2026-03-r1"
     assert payload["status"] == "queued"
     assert payload["triggeredBy"] == "tester"
     assert payload["upload"]["originalFilename"] == "patch.xlsx"
@@ -188,6 +199,16 @@ def test_chunked_monthly_update_upload_routes_create_job(
     monkeypatch.setattr(
         jato_monthly_update_service, "_launch_job_thread", lambda job_id: None
     )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_detect_latest_month_from_upload",
+        lambda _path: "2026-03",
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_allocate_batch_id",
+        lambda month: f"{month}-r1",
+    )
 
     client = TestClient(app)
     initiate_response = client.post(
@@ -257,11 +278,12 @@ def test_chunked_monthly_update_upload_routes_create_job(
     create_response = client.post(
         "/v1/msrp/monthly-update-jobs/from-upload",
         headers=_headers(),
-        json={"month": "2026-03", "uploadId": upload_id},
+        json={"uploadId": upload_id},
     )
     assert create_response.status_code == 200
     payload = create_response.json()["item"]
     assert payload["status"] == "queued"
+    assert payload["batchId"] == "2026-03-r1"
     assert payload["upload"]["sizeBytes"] == 10
     assert payload["upload"]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
     assert payload["artifacts"]["baselinePath"] == "01_RAW_DATA/historyDataArchive/baseline/JATO-2026.1-full-baseline.xlsx"
@@ -282,6 +304,16 @@ def test_retry_failed_monthly_update_job_route_requeues_existing_upload(
     )
     monkeypatch.setattr(
         jato_monthly_update_service, "_launch_job_thread", lambda job_id: None
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_detect_latest_month_from_upload",
+        lambda _path: "2026-03",
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_allocate_batch_id",
+        lambda month: f"{month}-r2",
     )
 
     source_job_id = "jato-update-failed"
@@ -311,6 +343,7 @@ def test_retry_failed_monthly_update_job_route_requeues_existing_upload(
     payload = response.json()["item"]
     assert payload["jobId"] != source_job_id
     assert payload["status"] == "queued"
+    assert payload["batchId"] == "2026-03-r2"
     assert payload["triggeredBy"] == "tester"
     assert payload["upload"]["sha256"] == hashlib.sha256(b"retry-me").hexdigest()
     assert payload["artifacts"]["retriedFromJobId"] == source_job_id

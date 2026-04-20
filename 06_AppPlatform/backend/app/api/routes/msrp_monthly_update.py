@@ -22,13 +22,13 @@ router = APIRouter(prefix="/msrp", tags=["msrp"])
 
 @router.post("/monthly-update-jobs")
 def post_monthly_update_job(
-    month: str = Form(...),
+    month: str | None = Form(default=None),
     file: UploadFile = File(...),
     user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
+    _ = month
     return {
         "item": create_jato_monthly_update_job(
-            month=month,
             file=file,
             triggered_by=user.name,
         )
@@ -42,7 +42,6 @@ def post_monthly_update_job_from_upload(
 ) -> dict[str, object]:
     return {
         "item": create_jato_monthly_update_job_from_upload(
-            month=str(payload.get("month", "")),
             upload_id=str(payload.get("uploadId", "")),
             triggered_by=user.name,
         )
