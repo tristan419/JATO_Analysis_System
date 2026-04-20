@@ -5,7 +5,8 @@
         --month 2026-03 \\
         --patch 01_RAW_DATA/新文件.xlsx
 
-baseline 不传则自动找 01_RAW_DATA/baseline/ 下最新的一份。
+baseline 不传则优先找 01_RAW_DATA/baseline/ 下最新的一份；
+若 active baseline 暂缺，则回退到 01_RAW_DATA/historyDataArchive/baseline/ 下最新的一份。
 """
 import argparse
 import re
@@ -16,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 RAW = ROOT / "01_RAW_DATA"
 PROC = ROOT / "04_Processed_data"
+ARCHIVE = RAW / "historyDataArchive"
 
 
 # ── 工具函数 ─────────────────────────────────────────────
@@ -75,18 +77,23 @@ def _infer_countries(name: str) -> int | None:
 
 
 def _find_latest_baseline() -> Path | None:
-    bd = RAW / "baseline"
-    if not bd.exists():
-        return None
-    candidates = [
-        p for p in bd.glob("*.xlsx") if not p.name.startswith("~$")
-    ]
-    if not candidates:
-        return None
-    return max(
-        candidates,
-        key=lambda p: (_infer_month(p) or "0000-00", p.stat().st_mtime),
-    )
+    for directory in (RAW / "baseline", ARCHIVE / "baseline"):
+        if not directory.exists():
+            continue
+        candidates = [
+            p
+            for p in directory.glob("*")
+            if p.is_file()
+            and p.suffix.lower() in {".xlsx", ".xlsm", ".xls"}
+            and not p.name.startswith("~$")
+        ]
+        if not candidates:
+            continue
+        return max(
+            candidates,
+            key=lambda p: (_infer_month(p) or "0000-00", p.stat().st_mtime),
+        )
+    return None
 
 
 def _stage(src: Path, tgt: Path, dry: bool) -> str:
@@ -111,7 +118,7 @@ def main() -> None:
     pa.add_argument("--patch", required=True, help="新的 patch xlsx")
     pa.add_argument(
         "--baseline", default=None,
-        help="baseline xlsx（不传则用 baseline/ 下最新的）",
+        help="baseline xlsx（不传则优先用 baseline/，否则回退到 historyDataArchive/baseline/ 下最新的）",
     )
     pa.add_argument(
         "--dry-run", action="store_true", help="只看计划，不动文件",
@@ -134,7 +141,8 @@ def main() -> None:
     if baseline_src is None or not baseline_src.exists():
         raise SystemExit(
             "未找到 baseline。用 --baseline 指定，"
-            "或先把 baseline 放到 01_RAW_DATA/baseline/"
+            "或先把 baseline 放到 01_RAW_DATA/baseline/；"
+            "如果 active baseline 被清理了，也可先从 01_RAW_DATA/historyDataArchive/baseline/ 恢复。"
         )
 
     # ---- 推断月份 & 国家数 ----

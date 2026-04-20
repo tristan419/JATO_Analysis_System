@@ -22,7 +22,7 @@ python 03_Scripts/prepare_monthly_raw_update.py \
   --patch 01_RAW_DATA/新收到的文件.xlsx
 ```
 
-baseline 不传则自动找 `baseline/` 下最新的一份。脚本会：
+baseline 不传则优先找 `baseline/` 下最新的一份；如果 active baseline 暂时缺位，会回退到 `historyDataArchive/baseline/` 下最新的一份。脚本会：
 - 把 patch 复制到 `patches/<month>/` 并标准化命名
 - 打印后续两步要执行的命令
 - 在 `patches/<month>/monthly_update_plan.md` 留档

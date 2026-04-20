@@ -5,6 +5,43 @@ from pathlib import Path
 from app.services import jato_monthly_update_service
 
 
+def _configure_raw_roots(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    active_baseline_name: str | None = None,
+    archived_baseline_name: str | None = None,
+) -> tuple[Path, Path, Path]:
+    project_root = tmp_path / "project"
+    raw_root = project_root / "01_RAW_DATA"
+    baseline_root = raw_root / "baseline"
+    history_root = raw_root / "historyDataArchive"
+
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "RAW_DATA_ROOT", raw_root)
+    monkeypatch.setattr(jato_monthly_update_service, "BASELINE_ROOT", baseline_root)
+    monkeypatch.setattr(
+        jato_monthly_update_service, "HISTORY_ARCHIVE_ROOT", history_root
+    )
+
+    baseline_root.mkdir(parents=True, exist_ok=True)
+    (history_root / "baseline").mkdir(parents=True, exist_ok=True)
+
+    baseline_path = baseline_root / (
+        active_baseline_name or "JATO-2026.2-full-baseline.xlsx"
+    )
+    archive_path = (history_root / "baseline") / (
+        archived_baseline_name or "JATO-2026.1-full-baseline.xlsx"
+    )
+
+    if active_baseline_name is not None:
+        baseline_path.write_bytes(b"active-baseline")
+    if archived_baseline_name is not None:
+        archive_path.write_bytes(b"archived-baseline")
+
+    return project_root, baseline_path, archive_path
+
+
 def test_parse_plan_markdown_extracts_commands_and_artifacts(tmp_path: Path) -> None:
     plan_path = tmp_path / "monthly_update_plan.md"
     plan_path.write_text(
@@ -165,7 +202,11 @@ def _write_plan(project_root: Path, month: str, compare_id: str) -> None:
 def test_run_job_marks_success_and_collects_summaries(
     tmp_path: Path, monkeypatch
 ) -> None:
-    project_root = tmp_path / "project"
+    project_root, baseline_path, _archive_path = _configure_raw_roots(
+        tmp_path,
+        monkeypatch,
+        active_baseline_name="JATO-2026.2-full-baseline.xlsx",
+    )
     month = "2026-03"
     compare_id = "2026-02_vs_2026-03"
     job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
@@ -173,7 +214,6 @@ def test_run_job_marks_success_and_collects_summaries(
     upload_path.parent.mkdir(parents=True, exist_ok=True)
     upload_path.write_bytes(b"fake-xlsx")
 
-    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(
         jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root
     )
@@ -195,6 +235,8 @@ def test_run_job_marks_success_and_collects_summaries(
         triggered_by="tester",
         upload_filename="patch.xlsx",
         stored_upload_path=upload_path,
+        baseline_path=baseline_path,
+        baseline_source="active",
     )
     jato_monthly_update_service._persist_job_state(state)
 
@@ -205,6 +247,8 @@ def test_run_job_marks_success_and_collects_summaries(
             log_path, f"{label}: {' '.join(args)}"
         )
         if label == "Prepare monthly update":
+            assert "--baseline" in args
+            assert args[args.index("--baseline") + 1] == str(baseline_path)
             _write_plan(project_root, month, compare_id)
         elif label == "Raw compare review":
             report_path = (
@@ -297,7 +341,11 @@ def test_run_job_marks_success_and_collects_summaries(
 def test_run_job_marks_failed_when_stage_raises(
     tmp_path: Path, monkeypatch
 ) -> None:
-    project_root = tmp_path / "project"
+    project_root, baseline_path, _archive_path = _configure_raw_roots(
+        tmp_path,
+        monkeypatch,
+        active_baseline_name="JATO-2026.2-full-baseline.xlsx",
+    )
     month = "2026-03"
     compare_id = "2026-02_vs_2026-03"
     job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
@@ -305,7 +353,6 @@ def test_run_job_marks_failed_when_stage_raises(
     upload_path.parent.mkdir(parents=True, exist_ok=True)
     upload_path.write_bytes(b"fake-xlsx")
 
-    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(
         jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root
     )
@@ -327,6 +374,8 @@ def test_run_job_marks_failed_when_stage_raises(
         triggered_by="tester",
         upload_filename="patch.xlsx",
         stored_upload_path=upload_path,
+        baseline_path=baseline_path,
+        baseline_source="active",
     )
     jato_monthly_update_service._persist_job_state(state)
 
@@ -337,6 +386,8 @@ def test_run_job_marks_failed_when_stage_raises(
             log_path, f"{label}: {' '.join(args)}"
         )
         if label == "Prepare monthly update":
+            assert "--baseline" in args
+            assert args[args.index("--baseline") + 1] == str(baseline_path)
             _write_plan(project_root, month, compare_id)
             return
         if label == "Raw compare review":
@@ -447,6 +498,11 @@ def test_run_cleanup_archives_old_raw_data_and_removes_job_upload_copies(
 def test_chunked_upload_session_can_be_completed_and_queued(
     tmp_path: Path, monkeypatch
 ) -> None:
+    _project_root, _baseline_path, _archive_path = _configure_raw_roots(
+        tmp_path,
+        monkeypatch,
+        archived_baseline_name="JATO-2026.1-full-baseline.xlsx",
+    )
     job_root = tmp_path / "jobs"
     monkeypatch.setattr(
         jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root
@@ -513,6 +569,8 @@ def test_chunked_upload_session_can_be_completed_and_queued(
     assert job["month"] == "2026-03"
     assert job["upload"]["sizeBytes"] == 10
     assert job["upload"]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
+    assert job["artifacts"]["baselinePath"] == "01_RAW_DATA/historyDataArchive/baseline/JATO-2026.1-full-baseline.xlsx"
+    assert job["artifacts"]["baselineSource"] == "archive"
     stored_path = job_root / job["jobId"] / "uploads" / "patch.xlsx"
     assert stored_path.read_bytes() == b"abcdefghij"
     assert not (job_root / "_upload_sessions" / upload_id).exists()

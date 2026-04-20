@@ -43,7 +43,7 @@ python 03_Scripts/prepare_monthly_raw_update.py \
   --patch 01_RAW_DATA/新收到的文件.xlsx
 ```
 
-baseline 自动找 `01_RAW_DATA/baseline/` 下最新的。脚本会打印后续 raw compare 和 refresh 命令，直接复制执行即可。详见 `01_RAW_DATA/README.md`。
+baseline 会优先找 `01_RAW_DATA/baseline/` 下最新的；如果 active baseline 暂时缺位，会回退到 `01_RAW_DATA/historyDataArchive/baseline/` 下最新的。脚本会打印后续 raw compare 和 refresh 命令，直接复制执行即可。详见 `01_RAW_DATA/README.md`。
 
 
 ## Pipeline 步骤总览（从原始到可部署）

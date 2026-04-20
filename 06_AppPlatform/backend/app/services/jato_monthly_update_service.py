@@ -55,6 +55,13 @@ def _relative_to_project(path: Path | None) -> str | None:
         return str(path.resolve())
 
 
+def _project_path(value: str | Path | None) -> Path | None:
+    if value is None:
+        return None
+    candidate = Path(value)
+    return candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
+
+
 def _job_dir(job_id: str) -> Path:
     return MONTHLY_UPDATE_JOB_ROOT / job_id
 
@@ -352,6 +359,44 @@ def _latest_baseline_file(paths: list[Path]) -> Path | None:
     )
 
 
+def _list_supported_excel_files(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    return sorted(
+        path
+        for path in root.glob("*")
+        if path.is_file()
+        and path.suffix.lower() in ALLOWED_UPLOAD_EXTENSIONS
+        and not path.name.startswith("~$")
+    )
+
+
+def _resolve_latest_baseline() -> tuple[Path | None, str | None]:
+    active_baseline = _latest_baseline_file(_list_supported_excel_files(BASELINE_ROOT))
+    if active_baseline is not None:
+        return active_baseline, "active"
+
+    archived_root = HISTORY_ARCHIVE_ROOT / "baseline"
+    archived_baseline = _latest_baseline_file(_list_supported_excel_files(archived_root))
+    if archived_baseline is not None:
+        return archived_baseline, "archive"
+
+    return None, None
+
+
+def _require_latest_baseline() -> tuple[Path, str]:
+    baseline_path, baseline_source = _resolve_latest_baseline()
+    if baseline_path is None or baseline_source is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "未找到可用 baseline。请先在 01_RAW_DATA/baseline/ 放入当前激活 baseline；"
+                "如误清理，可从 01_RAW_DATA/historyDataArchive/baseline/ 恢复后重试。"
+            ),
+        )
+    return baseline_path, baseline_source
+
+
 def _latest_patch_dir(paths: list[Path]) -> Path | None:
     if not paths:
         return None
@@ -630,8 +675,18 @@ def _prepare_initial_job_state(
     upload_filename: str,
     stored_upload_path: Path,
     file_sha256: str | None = None,
+    baseline_path: Path | None = None,
+    baseline_source: str | None = None,
 ) -> dict[str, Any]:
     now = _utc_now().isoformat()
+    artifacts: dict[str, Any] = {
+        "jobDir": _relative_to_project(_job_dir(job_id)),
+        "logPath": _relative_to_project(_job_log_path(job_id)),
+    }
+    if baseline_path is not None:
+        artifacts["baselinePath"] = _relative_to_project(baseline_path)
+    if baseline_source:
+        artifacts["baselineSource"] = baseline_source
     return {
         "jobId": job_id,
         "month": month,
@@ -650,10 +705,7 @@ def _prepare_initial_job_state(
             "sha256": file_sha256,
         },
         "plan": None,
-        "artifacts": {
-            "jobDir": _relative_to_project(_job_dir(job_id)),
-            "logPath": _relative_to_project(_job_log_path(job_id)),
-        },
+        "artifacts": artifacts,
         "summaries": {},
         "logPath": _relative_to_project(_job_log_path(job_id)),
     }
@@ -847,6 +899,7 @@ def _queue_monthly_update_job_from_stored_upload(
         if file_sha256
         else _sha256_hex_for_path(stored_upload_path)
     )
+    baseline_path, baseline_source = _require_latest_baseline()
 
     state = _prepare_initial_job_state(
         job_id=job_id,
@@ -855,6 +908,8 @@ def _queue_monthly_update_job_from_stored_upload(
         upload_filename=upload_filename,
         stored_upload_path=stored_upload_path,
         file_sha256=normalized_file_sha256,
+        baseline_path=baseline_path,
+        baseline_source=baseline_source,
     )
     _persist_job_state(state)
     _append_log(
@@ -882,6 +937,40 @@ def _run_job(job_id: str) -> None:
     _persist_job_state(state)
 
     try:
+        artifacts = state.get("artifacts")
+        baseline_relative_path = (
+            artifacts.get("baselinePath")
+            if isinstance(artifacts, dict)
+            else None
+        )
+        baseline_source = (
+            str(artifacts.get("baselineSource"))
+            if isinstance(artifacts, dict) and artifacts.get("baselineSource")
+            else None
+        )
+        baseline_path = _project_path(str(baseline_relative_path)) if baseline_relative_path else None
+        if baseline_path is None:
+            baseline_path, baseline_source = _require_latest_baseline()
+            state["artifacts"] = artifacts if isinstance(artifacts, dict) else {}
+            state["artifacts"]["baselinePath"] = _relative_to_project(baseline_path)
+            state["artifacts"]["baselineSource"] = baseline_source
+            _persist_job_state(state)
+        elif not baseline_path.exists():
+            raise RuntimeError(
+                "任务绑定的 baseline 不存在："
+                f"{_relative_to_project(baseline_path) or str(baseline_path)}"
+            )
+
+        if baseline_source == "archive":
+            _append_log(
+                log_path,
+                (
+                    f"[{_utc_now().isoformat()}] active baseline 缺失，"
+                    "使用 archive baseline: "
+                    f"{_relative_to_project(baseline_path) or str(baseline_path)}"
+                ),
+            )
+
         if not PREPARE_SCRIPT_PATH.exists():
             raise RuntimeError(f"找不到脚本: {_relative_to_project(PREPARE_SCRIPT_PATH)}")
 
@@ -890,6 +979,8 @@ def _run_job(job_id: str) -> None:
             str(PREPARE_SCRIPT_PATH),
             "--month",
             str(state["month"]),
+            "--baseline",
+            str(baseline_path),
             "--patch",
             str(stored_upload_path),
         ]
@@ -1074,13 +1165,7 @@ def run_jato_monthly_update_cleanup(*, triggered_by: str) -> dict[str, Any]:
             detail="存在运行中的月更任务，暂时不能执行一键清理。",
         )
 
-    baseline_files = sorted(
-        [
-            path
-            for path in BASELINE_ROOT.glob("*")
-            if path.is_file() and path.suffix.lower() in ALLOWED_UPLOAD_EXTENSIONS
-        ]
-    )
+    baseline_files = _list_supported_excel_files(BASELINE_ROOT)
     latest_baseline = _latest_baseline_file(baseline_files)
     archived_baselines: list[str] = []
     if latest_baseline is not None:

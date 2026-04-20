@@ -7,6 +7,36 @@ from app.main import app
 from app.services import jato_monthly_update_service
 
 
+def _configure_baseline_dirs(
+    tmp_path,
+    monkeypatch,
+    *,
+    active_baseline_name: str | None = None,
+    archived_baseline_name: str | None = None,
+) -> None:
+    project_root = tmp_path / "project"
+    raw_root = project_root / "01_RAW_DATA"
+    baseline_root = raw_root / "baseline"
+    history_root = raw_root / "historyDataArchive"
+
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "RAW_DATA_ROOT", raw_root)
+    monkeypatch.setattr(jato_monthly_update_service, "BASELINE_ROOT", baseline_root)
+    monkeypatch.setattr(
+        jato_monthly_update_service, "HISTORY_ARCHIVE_ROOT", history_root
+    )
+
+    baseline_root.mkdir(parents=True, exist_ok=True)
+    (history_root / "baseline").mkdir(parents=True, exist_ok=True)
+
+    if active_baseline_name is not None:
+        (baseline_root / active_baseline_name).write_bytes(b"active-baseline")
+    if archived_baseline_name is not None:
+        ((history_root / "baseline") / archived_baseline_name).write_bytes(
+            b"archived-baseline"
+        )
+
+
 def _headers() -> dict[str, str]:
     return {
         "X-Auth-Token": "change-me",
@@ -17,6 +47,11 @@ def _headers() -> dict[str, str]:
 def test_create_monthly_update_job_route_persists_job(
     tmp_path, monkeypatch
 ) -> None:
+    _configure_baseline_dirs(
+        tmp_path,
+        monkeypatch,
+        active_baseline_name="JATO-2026.2-full-baseline.xlsx",
+    )
     job_root = tmp_path / "jobs"
     monkeypatch.setattr(
         jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root
@@ -45,6 +80,7 @@ def test_create_monthly_update_job_route_persists_job(
     assert payload["status"] == "queued"
     assert payload["triggeredBy"] == "tester"
     assert payload["upload"]["originalFilename"] == "patch.xlsx"
+    assert payload["artifacts"]["baselinePath"] == "01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx"
     assert len(list(job_root.glob("*/job_state.json"))) == 1
 
 
@@ -139,6 +175,11 @@ def test_monthly_update_cleanup_route_returns_summary(monkeypatch) -> None:
 def test_chunked_monthly_update_upload_routes_create_job(
     tmp_path, monkeypatch
 ) -> None:
+    _configure_baseline_dirs(
+        tmp_path,
+        monkeypatch,
+        archived_baseline_name="JATO-2026.1-full-baseline.xlsx",
+    )
     job_root = tmp_path / "jobs"
     monkeypatch.setattr(
         jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root
@@ -223,3 +264,5 @@ def test_chunked_monthly_update_upload_routes_create_job(
     assert payload["status"] == "queued"
     assert payload["upload"]["sizeBytes"] == 10
     assert payload["upload"]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
+    assert payload["artifacts"]["baselinePath"] == "01_RAW_DATA/historyDataArchive/baseline/JATO-2026.1-full-baseline.xlsx"
+    assert payload["artifacts"]["baselineSource"] == "archive"
