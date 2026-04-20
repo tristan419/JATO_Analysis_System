@@ -577,7 +577,10 @@ function mapJatoMonthlyUpdatePublication(
     activeManifestPath: raw.activeManifestPath === undefined || raw.activeManifestPath === null ? null : String(raw.activeManifestPath),
     activePartitionPath: raw.activePartitionPath === undefined || raw.activePartitionPath === null ? null : String(raw.activePartitionPath),
     activeFingerprintPath: raw.activeFingerprintPath === undefined || raw.activeFingerprintPath === null ? null : String(raw.activeFingerprintPath),
-    activeRefreshReportPath: raw.activeRefreshReportPath === undefined || raw.activeRefreshReportPath === null ? null : String(raw.activeRefreshReportPath)
+    activeRefreshReportPath: raw.activeRefreshReportPath === undefined || raw.activeRefreshReportPath === null ? null : String(raw.activeRefreshReportPath),
+    rolledBackAt: raw.rolledBackAt === undefined || raw.rolledBackAt === null ? null : String(raw.rolledBackAt),
+    rolledBackBy: raw.rolledBackBy === undefined || raw.rolledBackBy === null ? null : String(raw.rolledBackBy),
+    rollbackBackupDir: raw.rollbackBackupDir === undefined || raw.rollbackBackupDir === null ? null : String(raw.rollbackBackupDir)
   };
 }
 
@@ -1799,6 +1802,12 @@ export const api = {
     })),
   publishJatoMonthlyUpdateJob: (jobId: string) =>
     request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/publish`, {
+      method: "POST"
+    }).then((res) => ({
+      item: mapJatoMonthlyUpdateJob(res.item)
+    })),
+  rollbackJatoMonthlyUpdateJob: (jobId: string) =>
+    request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/rollback`, {
       method: "POST"
     }).then((res) => ({
       item: mapJatoMonthlyUpdateJob(res.item)

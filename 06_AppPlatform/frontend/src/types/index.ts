@@ -1295,6 +1295,9 @@ export interface JatoMonthlyUpdatePublication {
   activePartitionPath?: string | null;
   activeFingerprintPath?: string | null;
   activeRefreshReportPath?: string | null;
+  rolledBackAt?: string | null;
+  rolledBackBy?: string | null;
+  rollbackBackupDir?: string | null;
 }
 
 export interface JatoMonthlyUpdateRawCompareSummary {

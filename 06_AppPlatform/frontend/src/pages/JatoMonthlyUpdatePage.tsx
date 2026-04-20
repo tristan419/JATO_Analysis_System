@@ -92,6 +92,7 @@ export function JatoMonthlyUpdatePage() {
   const [cleanupRunning, setCleanupRunning] = useState(false);
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
   const [publishingJobId, setPublishingJobId] = useState<string | null>(null);
+  const [rollingBackJobId, setRollingBackJobId] = useState<string | null>(null);
   const [reviewLoadingJobId, setReviewLoadingJobId] = useState<string | null>(null);
   const [reviewBundle, setReviewBundle] = useState<JatoMonthlyUpdateReviewBundle | null>(null);
   const [selectedReviewCountry, setSelectedReviewCountry] = useState<string | null>(null);
@@ -367,6 +368,32 @@ export function JatoMonthlyUpdatePage() {
     }
   }
 
+  async function handleRollbackJob(job: JatoMonthlyUpdateJob) {
+    const confirmed = window.confirm(
+      "将把当前 active 数据集恢复到这次 publish 之前的备份，并额外保留一份回滚前快照。继续吗？"
+    );
+    if (!confirmed) {
+      return;
+    }
+    setRollingBackJobId(job.jobId);
+    setError("");
+    setNotice("");
+    try {
+      const response = await api.rollbackJatoMonthlyUpdateJob(job.jobId);
+      setSelectedJob(response.item);
+      setSelectedJobId(response.item.jobId);
+      setNotice(
+        `已回滚任务 ${job.jobId} 的 publish。恢复来源：${response.item.publication?.backupDir ?? "-"}；回滚前快照：${response.item.publication?.rollbackBackupDir ?? "-"}`
+      );
+      await refreshJobs(response.item.jobId, true);
+      await loadJobDetail(response.item.jobId, true);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRollingBackJobId(null);
+    }
+  }
+
   const successCount = jobs.filter((job) => job.status === "success").length;
   const failedCount = jobs.filter((job) => job.status === "failed").length;
   const runningCount = jobs.filter((job) => job.status === "running" || job.status === "queued").length;
@@ -381,7 +408,13 @@ export function JatoMonthlyUpdatePage() {
     && selectedJob.status === "success"
     && selectedJob.phase === "completed"
   );
-  const isSelectedJobPublished = Boolean(selectedJob?.publication?.publishedAt);
+  const hasSelectedJobBeenRolledBack = Boolean(selectedJob?.publication?.rolledBackAt);
+  const isSelectedJobPublished = Boolean(
+    selectedJob?.publication?.publishedAt && !selectedJob?.publication?.rolledBackAt
+  );
+  const canRollbackSelectedJob = Boolean(
+    selectedJob?.publication?.publishedAt && !selectedJob?.publication?.rolledBackAt
+  );
   const availableReviewCountries = reviewBundle
     ? Array.from(
       new Set(
@@ -766,7 +799,6 @@ export function JatoMonthlyUpdatePage() {
                       onClick={() => void handlePublishJob(selectedJob)}
                       disabled={
                         publishingJobId === selectedJob.jobId
-                        || isSelectedJobPublished
                         || hasActiveJob
                       }
                     >
@@ -774,7 +806,25 @@ export function JatoMonthlyUpdatePage() {
                         ? "Published"
                         : publishingJobId === selectedJob.jobId
                           ? "Publishing..."
-                          : "Publish Candidate"}
+                            : "Publish Candidate"}
+                    </button>
+                  )}
+                  {(canRollbackSelectedJob || hasSelectedJobBeenRolledBack) && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => void handleRollbackJob(selectedJob)}
+                      disabled={
+                        hasSelectedJobBeenRolledBack
+                        || rollingBackJobId === selectedJob.jobId
+                        || hasActiveJob
+                      }
+                    >
+                      {hasSelectedJobBeenRolledBack
+                        ? "Rolled Back"
+                        : rollingBackJobId === selectedJob.jobId
+                          ? "Rolling back..."
+                          : "Rollback Publish"}
                     </button>
                   )}
                   {selectedJob.status === "failed" && (
@@ -832,13 +882,23 @@ export function JatoMonthlyUpdatePage() {
                 <div className="alert alert-error">{selectedJob.error}</div>
               )}
 
-              {selectedJob.publication?.publishedAt && (
+              {isSelectedJobPublished && (
                 <div className="alert alert-success">
-                  已 publish 到 active：{formatMonthlyUpdateTimestamp(selectedJob.publication.publishedAt)}
+                  已 publish 到 active：{formatMonthlyUpdateTimestamp(selectedJob.publication?.publishedAt ?? null)}
                   {" · "}
-                  {selectedJob.publication.publishedBy || "-"}
+                  {selectedJob.publication?.publishedBy || "-"}
                   {" · backup "}
-                  {selectedJob.publication.backupDir || "-"}
+                  {selectedJob.publication?.backupDir || "-"}
+                </div>
+              )}
+
+              {hasSelectedJobBeenRolledBack && (
+                <div className="alert alert-warning">
+                  已从 active 回滚本次 publish：{formatMonthlyUpdateTimestamp(selectedJob.publication?.rolledBackAt ?? null)}
+                  {" · "}
+                  {selectedJob.publication?.rolledBackBy || "-"}
+                  {" · restore-pre backup "}
+                  {selectedJob.publication?.rollbackBackupDir || "-"}
                 </div>
               )}
 
