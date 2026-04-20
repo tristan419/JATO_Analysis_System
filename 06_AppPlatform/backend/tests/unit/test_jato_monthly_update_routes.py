@@ -314,3 +314,63 @@ def test_retry_failed_monthly_update_job_route_requeues_existing_upload(
     assert payload["triggeredBy"] == "tester"
     assert payload["upload"]["sha256"] == hashlib.sha256(b"retry-me").hexdigest()
     assert payload["artifacts"]["retriedFromJobId"] == source_job_id
+
+
+def test_get_monthly_update_review_route_returns_review_bundle(monkeypatch) -> None:
+    monkeypatch.setattr(
+        msrp_monthly_update,
+        "get_jato_monthly_update_review",
+        lambda job_id: {
+            "jobId": job_id,
+            "compareId": "2026-02_vs_2026-03",
+            "decisionSuggestion": "manual_review_required",
+            "compareKeyColumns": ["国家", "MakeModel"],
+            "checklistMarkdown": "## checklist",
+            "reviewFindings": [],
+            "sampledCountries": ["DE"],
+            "conflictSampleCount": 1,
+            "timeAxisCheck": {},
+            "countryScopeSummary": {},
+            "refreshSummary": {"jobStatus": "success"},
+        },
+    )
+
+    client = TestClient(app)
+    response = client.get(
+        "/v1/msrp/monthly-update-jobs/jato-update-1234abcd/review",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["item"]
+    assert payload["jobId"] == "jato-update-1234abcd"
+    assert payload["decisionSuggestion"] == "manual_review_required"
+
+
+def test_publish_monthly_update_job_route_returns_published_job(monkeypatch) -> None:
+    monkeypatch.setattr(
+        msrp_monthly_update,
+        "publish_jato_monthly_update_job",
+        lambda *, job_id, triggered_by: {
+            "jobId": job_id,
+            "status": "success",
+            "phase": "completed",
+            "triggeredBy": "builder",
+            "publication": {
+                "publishedAt": "2026-04-20T16:00:00+00:00",
+                "publishedBy": triggered_by,
+                "backupDir": "04_Processed_data/.refresh_backups/manual-promote-test",
+            },
+        },
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/msrp/monthly-update-jobs/jato-update-1234abcd/publish",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["item"]
+    assert payload["jobId"] == "jato-update-1234abcd"
+    assert payload["publication"]["publishedBy"] == "tester"

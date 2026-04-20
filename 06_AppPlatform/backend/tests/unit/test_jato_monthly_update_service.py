@@ -699,3 +699,163 @@ def test_create_job_from_upload_restores_assembled_file_when_queue_fails(
     assert not any(path.name.startswith("jato-update-") for path in job_root.iterdir() if path.is_dir())
     upload_state = jato_monthly_update_service.get_jato_monthly_update_upload(upload_id)
     assert upload_state["status"] == "completed"
+
+
+def test_get_review_bundle_reads_compare_outputs(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "project"
+    job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+
+    job_id = "jato-update-review"
+    upload_path = job_root / job_id / "uploads" / "patch.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"fake")
+
+    review_dir = project_root / "04_Processed_data" / "reviews" / "raw_compare" / "2026-02_vs_2026-03"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    (review_dir / "review_checklist.md").write_text("## checklist\n- check rows\n", encoding="utf-8")
+    (review_dir / "conflict_samples.json").write_text(
+        json.dumps(
+            {
+                "sampledCountries": ["DE", "PL"],
+                "samples": [{"id": 1}, {"id": 2}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (review_dir / "raw_compare_report.json").write_text(
+        json.dumps(
+            {
+                "compareId": "2026-02_vs_2026-03",
+                "decisionSuggestion": "manual_review_required",
+                "compareKeyColumns": ["国家", "MakeModel"],
+                "reviewFindings": [
+                    {
+                        "severity": "review",
+                        "scope": "country",
+                        "target": "DE",
+                        "ruleId": "price-jump",
+                        "message": "Unexpected jump",
+                        "metrics": {"delta": 15},
+                        "suggestedAction": "inspect",
+                    }
+                ],
+                "timeAxisCheck": {"hasOverlap": True},
+                "countryScopeSummary": {"addedCountries": ["DE"]},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    refresh_report = project_root / "04_Processed_data" / "staging" / "2026-03-mixed" / "refresh_job_report.json"
+    refresh_report.parent.mkdir(parents=True, exist_ok=True)
+    refresh_report.write_text(
+        json.dumps(
+            {
+                "jobStatus": "success",
+                "jobElapsedSeconds": 22.5,
+                "fullManifest": {"rows": 123, "columns": 96},
+                "partitionManifest": {"parquetFileCount": 21},
+                "incremental": {"fingerprintMatched": False, "fingerprintUpdated": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id=job_id,
+        month="2026-03",
+        triggered_by="tester",
+        upload_filename="patch.xlsx",
+        stored_upload_path=upload_path,
+    )
+    state["artifacts"] = {
+        "reviewDir": "04_Processed_data/reviews/raw_compare/2026-02_vs_2026-03",
+        "rawCompareReportPath": "04_Processed_data/reviews/raw_compare/2026-02_vs_2026-03/raw_compare_report.json",
+        "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
+    }
+    jato_monthly_update_service._persist_job_state(state)
+
+    review = jato_monthly_update_service.get_jato_monthly_update_review(job_id)
+
+    assert review["jobId"] == job_id
+    assert review["compareId"] == "2026-02_vs_2026-03"
+    assert review["decisionSuggestion"] == "manual_review_required"
+    assert review["compareKeyColumns"] == ["国家", "MakeModel"]
+    assert review["checklistMarkdown"] == "## checklist\n- check rows\n"
+    assert review["sampledCountries"] == ["DE", "PL"]
+    assert review["conflictSampleCount"] == 2
+    assert review["reviewFindings"][0]["ruleId"] == "price-jump"
+    assert review["refreshSummary"]["jobStatus"] == "success"
+    assert review["refreshSummary"]["rowCount"] == 123
+
+
+def test_publish_monthly_update_job_promotes_staging_outputs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    processed_root = project_root / "04_Processed_data"
+    job_root = processed_root / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+
+    active_partition = processed_root / "partitioned_dataset_v1"
+    active_partition.mkdir(parents=True, exist_ok=True)
+    (processed_root / "jato_full_archive.parquet").write_text("old-parquet", encoding="utf-8")
+    (processed_root / "manifest.json").write_text('{"version":"old"}', encoding="utf-8")
+    (processed_root / "dataset_fingerprint.json").write_text('{"hash":"old"}', encoding="utf-8")
+    (processed_root / "refresh_job_report.json").write_text('{"jobStatus":"old"}', encoding="utf-8")
+    (active_partition / "part-000.parquet").write_text("old-partition", encoding="utf-8")
+
+    staging_root = processed_root / "staging" / "2026-03-mixed"
+    staging_partition = staging_root / "partitioned_dataset_v1"
+    staging_partition.mkdir(parents=True, exist_ok=True)
+    (staging_root / "jato_full_archive.parquet").write_text("new-parquet", encoding="utf-8")
+    (staging_root / "manifest.json").write_text('{"version":"new"}', encoding="utf-8")
+    (staging_root / "dataset_fingerprint.json").write_text('{"hash":"new"}', encoding="utf-8")
+    (staging_root / "refresh_job_report.json").write_text('{"jobStatus":"success"}', encoding="utf-8")
+    (staging_partition / "part-000.parquet").write_text("new-partition", encoding="utf-8")
+
+    job_id = "jato-update-publish"
+    upload_path = job_root / job_id / "uploads" / "patch.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"fake")
+    state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id=job_id,
+        month="2026-03",
+        triggered_by="tester",
+        upload_filename="patch.xlsx",
+        stored_upload_path=upload_path,
+    )
+    state["status"] = "success"
+    state["phase"] = "completed"
+    state["artifacts"] = {
+        "stagingOutputPath": "04_Processed_data/staging/2026-03-mixed/jato_full_archive.parquet",
+        "manifestPath": "04_Processed_data/staging/2026-03-mixed/manifest.json",
+        "partitionOutputPath": "04_Processed_data/staging/2026-03-mixed/partitioned_dataset_v1",
+        "fingerprintPath": "04_Processed_data/staging/2026-03-mixed/dataset_fingerprint.json",
+        "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
+    }
+    state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    jato_monthly_update_service._persist_job_state(state)
+
+    published = jato_monthly_update_service.publish_jato_monthly_update_job(
+        job_id=job_id,
+        triggered_by="publisher",
+    )
+
+    assert published["publication"]["publishedBy"] == "publisher"
+    assert published["publication"]["backupDir"].startswith("04_Processed_data/.refresh_backups/manual-promote-")
+    assert (processed_root / "jato_full_archive.parquet").read_text(encoding="utf-8") == "new-parquet"
+    assert (processed_root / "manifest.json").read_text(encoding="utf-8") == '{"version":"new"}'
+    assert (processed_root / "dataset_fingerprint.json").read_text(encoding="utf-8") == '{"hash":"new"}'
+    assert (processed_root / "refresh_job_report.json").read_text(encoding="utf-8") == '{"jobStatus":"success"}'
+    assert (active_partition / "part-000.parquet").read_text(encoding="utf-8") == "new-partition"
+
+    backup_dir = project_root / published["publication"]["backupDir"]
+    assert (backup_dir / "jato_full_archive.parquet").read_text(encoding="utf-8") == "old-parquet"
+    assert (backup_dir / "manifest.json").read_text(encoding="utf-8") == '{"version":"old"}'
+    assert (backup_dir / "dataset_fingerprint.json").read_text(encoding="utf-8") == '{"hash":"old"}'
+    assert (backup_dir / "refresh_job_report.json").read_text(encoding="utf-8") == '{"jobStatus":"old"}'
+    assert (backup_dir / "partitioned_dataset_v1" / "part-000.parquet").read_text(encoding="utf-8") == "old-partition"

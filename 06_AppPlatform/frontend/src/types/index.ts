@@ -776,7 +776,10 @@ export interface CustomerInsightShareItem {
   rawLabel: string;
   value: number;
   sharePct: number;
+  mentionCount?: number;
 }
+
+export type CustomerInsightMode = "benchmark" | "forum_live";
 
 export interface CustomerInsightPersonaFact {
   label: string;
@@ -794,6 +797,33 @@ export interface CustomerInsightConclusionCard {
   label: string;
   headline: string;
   detail: string;
+}
+
+export interface CustomerInsightEvidenceCard {
+  title: string;
+  url: string;
+  siteName: string;
+  siteType: string;
+  publishTier: string;
+  sentiment: string;
+  signals: string[];
+  evidenceSnippets: string[];
+}
+
+export interface CustomerInsightForumLiveSection {
+  sourceMix: CustomerInsightShareItem[];
+  siteTypes: CustomerInsightShareItem[];
+  languages: CustomerInsightShareItem[];
+  publishTiers: CustomerInsightShareItem[];
+  sentiment: CustomerInsightShareItem[];
+  ownershipStages: CustomerInsightShareItem[];
+  painPoints: CustomerInsightShareItem[];
+  productSignals: CustomerInsightShareItem[];
+  powertrains: CustomerInsightShareItem[];
+  decisionFactors: CustomerInsightShareItem[];
+  evidenceCards: CustomerInsightEvidenceCard[];
+  observedSections: string[];
+  inferredSections: string[];
 }
 
 export interface CustomerInsightPage {
@@ -830,6 +860,7 @@ export interface CustomerInsightPage {
     items: CustomerInsightShareItem[];
   };
   persona: CustomerInsightPersona;
+  forumLive?: CustomerInsightForumLiveSection;
 }
 
 export interface CustomerInsightMetadata {
@@ -838,6 +869,12 @@ export interface CustomerInsightMetadata {
   sourceFile: string;
   respondentCount: number;
   updatedAt: number;
+  mode: CustomerInsightMode;
+  modeLabel: string;
+  sourceKind: string;
+  sampleUnitLabel: string;
+  coverageLabel: string;
+  countryCodes: string[];
 }
 
 export interface CustomerInsightDeckResponse {
@@ -1249,6 +1286,17 @@ export interface JatoMonthlyUpdateArtifacts {
   fingerprintPath?: string | null;
 }
 
+export interface JatoMonthlyUpdatePublication {
+  publishedAt?: string | null;
+  publishedBy?: string | null;
+  backupDir?: string | null;
+  activeParquetPath?: string | null;
+  activeManifestPath?: string | null;
+  activePartitionPath?: string | null;
+  activeFingerprintPath?: string | null;
+  activeRefreshReportPath?: string | null;
+}
+
 export interface JatoMonthlyUpdateRawCompareSummary {
   compareId: string;
   decisionSuggestion: string;
@@ -1299,8 +1347,34 @@ export interface JatoMonthlyUpdateJob {
   plan: JatoMonthlyUpdatePlan | null;
   artifacts: JatoMonthlyUpdateArtifacts | null;
   summaries: JatoMonthlyUpdateSummaries | null;
+  publication?: JatoMonthlyUpdatePublication | null;
   logPath?: string | null;
   logTail?: string | null;
+}
+
+export interface JatoMonthlyUpdateReviewFinding {
+  severity: string;
+  scope: string;
+  target: string;
+  ruleId: string;
+  message: string;
+  metrics: Record<string, unknown>;
+  suggestedAction: string;
+}
+
+export interface JatoMonthlyUpdateReviewBundle {
+  jobId: string;
+  reviewDir?: string | null;
+  compareId: string;
+  decisionSuggestion: string;
+  compareKeyColumns: string[];
+  checklistMarkdown?: string | null;
+  reviewFindings: JatoMonthlyUpdateReviewFinding[];
+  sampledCountries: string[];
+  conflictSampleCount: number;
+  timeAxisCheck: Record<string, unknown>;
+  countryScopeSummary: Record<string, unknown>;
+  refreshSummary?: JatoMonthlyUpdateRefreshSummary | null;
 }
 
 export interface JatoMonthlyUpdateCleanupResult {

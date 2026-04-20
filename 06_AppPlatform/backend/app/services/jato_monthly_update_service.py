@@ -74,6 +74,22 @@ def _job_log_path(job_id: str) -> Path:
     return _job_dir(job_id) / LOG_FILENAME
 
 
+def _processed_data_root() -> Path:
+    return PROJECT_ROOT / "04_Processed_data"
+
+
+def _active_data_paths() -> dict[str, Path]:
+    processed_root = _processed_data_root()
+    return {
+        "parquet": processed_root / "jato_full_archive.parquet",
+        "manifest": processed_root / "manifest.json",
+        "partition": processed_root / "partitioned_dataset_v1",
+        "fingerprint": processed_root / "dataset_fingerprint.json",
+        "refreshReport": processed_root / "refresh_job_report.json",
+        "backupRoot": processed_root / ".refresh_backups",
+    }
+
+
 def _upload_session_root() -> Path:
     return MONTHLY_UPDATE_JOB_ROOT / "_upload_sessions"
 
@@ -428,6 +444,15 @@ def _tail_text(path: Path, *, max_lines: int = 160, max_chars: int = 20000) -> s
     return tail
 
 
+def _read_text_if_exists(project_relative_path: str | None) -> str | None:
+    if not project_relative_path:
+        return None
+    path = PROJECT_ROOT / project_relative_path
+    if not path.exists():
+        return None
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
 def _extract_flag_value(command_args: list[str], flag: str) -> str | None:
     try:
         index = command_args.index(flag)
@@ -629,11 +654,209 @@ def _serialize_job_state(
             else None
         ),
         "logPath": payload.get("logPath"),
+        "publication": (
+            payload.get("publication")
+            if isinstance(payload.get("publication"), dict)
+            else None
+        ),
     }
     if include_log_tail:
         log_path = _job_log_path(item["jobId"])
         item["logTail"] = _tail_text(log_path)
     return item
+
+
+def _sanitize_review_finding(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    metrics = item.get("metrics")
+    return {
+        "severity": str(item.get("severity", "")),
+        "scope": str(item.get("scope", "")),
+        "target": str(item.get("target", "")),
+        "ruleId": str(item.get("ruleId", "")),
+        "message": str(item.get("message", "")),
+        "metrics": metrics if isinstance(metrics, dict) else {},
+        "suggestedAction": str(item.get("suggestedAction", "")),
+    }
+
+
+def _require_no_running_monthly_update_jobs(*, excluding_job_id: str | None = None) -> None:
+    running_jobs = [
+        str(payload.get("jobId", ""))
+        for payload in _list_job_state_payloads()
+        if str(payload.get("status", "")) in {"queued", "running"}
+        and str(payload.get("jobId", "")) != str(excluding_job_id or "")
+    ]
+    if running_jobs:
+        raise HTTPException(
+            status_code=409,
+            detail="存在运行中的月更任务，请等待完成后再执行 review / publish。",
+        )
+
+
+def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
+    payload = _load_job_state(job_id)
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise HTTPException(status_code=409, detail="当前任务暂无可 review 的 compare 产物。")
+
+    raw_compare_report_path = str(artifacts.get("rawCompareReportPath") or "").strip()
+    review_dir = str(artifacts.get("reviewDir") or "").strip()
+    raw_compare_report = _read_json_if_exists(raw_compare_report_path)
+    if raw_compare_report is None:
+        raise HTTPException(status_code=409, detail="当前任务暂无可 review 的 compare 报告。")
+
+    checklist_markdown = _read_text_if_exists(
+        f"{review_dir}/review_checklist.md" if review_dir else None
+    )
+    conflict_payload = _read_json_if_exists(
+        f"{review_dir}/conflict_samples.json" if review_dir else None
+    )
+    refresh_report = _read_json_if_exists(str(artifacts.get("refreshReportPath") or "").strip())
+
+    findings = [
+        sanitized
+        for sanitized in (
+            _sanitize_review_finding(item)
+            for item in raw_compare_report.get("reviewFindings", [])
+        )
+        if sanitized is not None
+    ]
+    sampled_countries: list[str] = []
+    sample_count = 0
+    if isinstance(conflict_payload, dict):
+        sampled = conflict_payload.get("sampledCountries")
+        samples = conflict_payload.get("samples")
+        if isinstance(sampled, list):
+            sampled_countries = [str(item) for item in sampled]
+        if isinstance(samples, list):
+            sample_count = len(samples)
+
+    return {
+        "jobId": job_id,
+        "reviewDir": review_dir or None,
+        "compareId": str(raw_compare_report.get("compareId", "")),
+        "decisionSuggestion": str(raw_compare_report.get("decisionSuggestion", "")),
+        "compareKeyColumns": (
+            [str(item) for item in raw_compare_report.get("compareKeyColumns", [])]
+            if isinstance(raw_compare_report.get("compareKeyColumns"), list)
+            else []
+        ),
+        "checklistMarkdown": checklist_markdown,
+        "reviewFindings": findings,
+        "sampledCountries": sampled_countries,
+        "conflictSampleCount": sample_count,
+        "timeAxisCheck": (
+            raw_compare_report.get("timeAxisCheck")
+            if isinstance(raw_compare_report.get("timeAxisCheck"), dict)
+            else {}
+        ),
+        "countryScopeSummary": (
+            raw_compare_report.get("countryScopeSummary")
+            if isinstance(raw_compare_report.get("countryScopeSummary"), dict)
+            else {}
+        ),
+        "refreshSummary": (
+            _summarize_refresh_report(refresh_report)
+            if isinstance(refresh_report, dict)
+            else None
+        ),
+    }
+
+
+def publish_jato_monthly_update_job(
+    *,
+    job_id: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    _require_no_running_monthly_update_jobs(excluding_job_id=job_id)
+    payload = _load_job_state(job_id)
+    if str(payload.get("status", "")) != "success" or str(payload.get("phase", "")) != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail="只有 success/completed 的月更任务才能执行 publish。",
+        )
+
+    publication = payload.get("publication")
+    if isinstance(publication, dict) and publication.get("publishedAt"):
+        raise HTTPException(status_code=409, detail="该月更任务已经 publish 过。")
+
+    summaries = payload.get("summaries")
+    refresh_summary = summaries.get("refresh") if isinstance(summaries, dict) else None
+    if not isinstance(refresh_summary, dict) or str(refresh_summary.get("jobStatus", "")) != "success":
+        raise HTTPException(status_code=409, detail="当前任务 refresh 尚未成功，不能 publish。")
+
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise HTTPException(status_code=409, detail="当前任务缺少 staging 产物信息，不能 publish。")
+
+    source_paths = {
+        "parquet": _project_path(str(artifacts.get("stagingOutputPath") or "").strip()),
+        "manifest": _project_path(str(artifacts.get("manifestPath") or "").strip()),
+        "partition": _project_path(str(artifacts.get("partitionOutputPath") or "").strip()),
+        "fingerprint": _project_path(str(artifacts.get("fingerprintPath") or "").strip()),
+        "refreshReport": _project_path(str(artifacts.get("refreshReportPath") or "").strip()),
+    }
+    missing_sources = [
+        key
+        for key, path in source_paths.items()
+        if path is None or not path.exists()
+    ]
+    if missing_sources:
+        raise HTTPException(
+            status_code=409,
+            detail=f"当前任务缺少 publish 所需产物：{', '.join(missing_sources)}。",
+        )
+
+    active_paths = _active_data_paths()
+    published_at = _utc_now()
+    backup_dir = active_paths["backupRoot"] / (
+        f"manual-promote-{job_id}-{published_at.strftime('%Y%m%d-%H%M%S')}"
+    )
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    if active_paths["parquet"].exists():
+        shutil.copy2(active_paths["parquet"], backup_dir / active_paths["parquet"].name)
+    if active_paths["manifest"].exists():
+        shutil.copy2(active_paths["manifest"], backup_dir / active_paths["manifest"].name)
+    if active_paths["fingerprint"].exists():
+        shutil.copy2(active_paths["fingerprint"], backup_dir / active_paths["fingerprint"].name)
+    if active_paths["refreshReport"].exists():
+        shutil.copy2(active_paths["refreshReport"], backup_dir / active_paths["refreshReport"].name)
+    if active_paths["partition"].exists():
+        shutil.copytree(
+            active_paths["partition"],
+            backup_dir / active_paths["partition"].name,
+        )
+
+    shutil.copy2(source_paths["parquet"], active_paths["parquet"])
+    shutil.copy2(source_paths["manifest"], active_paths["manifest"])
+    shutil.copy2(source_paths["fingerprint"], active_paths["fingerprint"])
+    shutil.copy2(source_paths["refreshReport"], active_paths["refreshReport"])
+    if active_paths["partition"].exists():
+        shutil.rmtree(active_paths["partition"])
+    shutil.copytree(source_paths["partition"], active_paths["partition"])
+
+    payload["publication"] = {
+        "publishedAt": published_at.isoformat(),
+        "publishedBy": triggered_by.strip() or "anonymous",
+        "backupDir": _relative_to_project(backup_dir),
+        "activeParquetPath": _relative_to_project(active_paths["parquet"]),
+        "activeManifestPath": _relative_to_project(active_paths["manifest"]),
+        "activePartitionPath": _relative_to_project(active_paths["partition"]),
+        "activeFingerprintPath": _relative_to_project(active_paths["fingerprint"]),
+        "activeRefreshReportPath": _relative_to_project(active_paths["refreshReport"]),
+    }
+    _persist_job_state(payload)
+    _append_log(
+        _job_log_path(job_id),
+        (
+            f"[{published_at.isoformat()}] published candidate to active dataset by "
+            f"{triggered_by.strip() or 'anonymous'}"
+        ),
+    )
+    return _serialize_job_state(payload, include_log_tail=True)
 
 
 def _run_logged_command(

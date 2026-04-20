@@ -17,7 +17,10 @@ import type {
   JatoMonthlyUpdateArtifacts,
   JatoMonthlyUpdateJob,
   JatoMonthlyUpdatePlan,
+  JatoMonthlyUpdatePublication,
   JatoMonthlyUpdateRawCompareSummary,
+  JatoMonthlyUpdateReviewBundle,
+  JatoMonthlyUpdateReviewFinding,
   JatoMonthlyUpdateRefreshSummary,
   JatoMonthlyUpdateSummaries,
   JatoMonthlyUpdateUploadProgress,
@@ -561,6 +564,21 @@ function mapJatoMonthlyUpdateRefreshSummary(
   };
 }
 
+function mapJatoMonthlyUpdatePublication(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdatePublication {
+  return {
+    publishedAt: raw.publishedAt === undefined || raw.publishedAt === null ? null : String(raw.publishedAt),
+    publishedBy: raw.publishedBy === undefined || raw.publishedBy === null ? null : String(raw.publishedBy),
+    backupDir: raw.backupDir === undefined || raw.backupDir === null ? null : String(raw.backupDir),
+    activeParquetPath: raw.activeParquetPath === undefined || raw.activeParquetPath === null ? null : String(raw.activeParquetPath),
+    activeManifestPath: raw.activeManifestPath === undefined || raw.activeManifestPath === null ? null : String(raw.activeManifestPath),
+    activePartitionPath: raw.activePartitionPath === undefined || raw.activePartitionPath === null ? null : String(raw.activePartitionPath),
+    activeFingerprintPath: raw.activeFingerprintPath === undefined || raw.activeFingerprintPath === null ? null : String(raw.activeFingerprintPath),
+    activeRefreshReportPath: raw.activeRefreshReportPath === undefined || raw.activeRefreshReportPath === null ? null : String(raw.activeRefreshReportPath)
+  };
+}
+
 function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdateJob {
   const uploadRaw = raw.upload && typeof raw.upload === "object"
     ? raw.upload as Record<string, unknown>
@@ -632,6 +650,9 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
       ? mapJatoMonthlyUpdateRefreshSummary(summariesRaw.refresh as Record<string, unknown>)
       : undefined
   } : null;
+  const publicationRaw = raw.publication && typeof raw.publication === "object"
+    ? raw.publication as Record<string, unknown>
+    : null;
 
   return {
     jobId: String(raw.jobId ?? ""),
@@ -648,8 +669,58 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
     plan,
     artifacts,
     summaries,
+    publication: publicationRaw ? mapJatoMonthlyUpdatePublication(publicationRaw) : null,
     logPath: raw.logPath === undefined || raw.logPath === null ? null : String(raw.logPath),
     logTail: raw.logTail === undefined || raw.logTail === null ? null : String(raw.logTail)
+  };
+}
+
+function mapJatoMonthlyUpdateReviewFinding(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateReviewFinding {
+  return {
+    severity: String(raw.severity ?? ""),
+    scope: String(raw.scope ?? ""),
+    target: String(raw.target ?? ""),
+    ruleId: String(raw.ruleId ?? ""),
+    message: String(raw.message ?? ""),
+    metrics: raw.metrics && typeof raw.metrics === "object"
+      ? raw.metrics as Record<string, unknown>
+      : {},
+    suggestedAction: String(raw.suggestedAction ?? "")
+  };
+}
+
+function mapJatoMonthlyUpdateReviewBundle(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateReviewBundle {
+  return {
+    jobId: String(raw.jobId ?? ""),
+    reviewDir: raw.reviewDir === undefined || raw.reviewDir === null ? null : String(raw.reviewDir),
+    compareId: String(raw.compareId ?? ""),
+    decisionSuggestion: String(raw.decisionSuggestion ?? ""),
+    compareKeyColumns: Array.isArray(raw.compareKeyColumns)
+      ? raw.compareKeyColumns.map((item) => String(item))
+      : [],
+    checklistMarkdown: raw.checklistMarkdown === undefined || raw.checklistMarkdown === null
+      ? null
+      : String(raw.checklistMarkdown),
+    reviewFindings: Array.isArray(raw.reviewFindings)
+      ? raw.reviewFindings.map((item) => mapJatoMonthlyUpdateReviewFinding(item as Record<string, unknown>))
+      : [],
+    sampledCountries: Array.isArray(raw.sampledCountries)
+      ? raw.sampledCountries.map((item) => String(item))
+      : [],
+    conflictSampleCount: Number(raw.conflictSampleCount ?? 0),
+    timeAxisCheck: raw.timeAxisCheck && typeof raw.timeAxisCheck === "object"
+      ? raw.timeAxisCheck as Record<string, unknown>
+      : {},
+    countryScopeSummary: raw.countryScopeSummary && typeof raw.countryScopeSummary === "object"
+      ? raw.countryScopeSummary as Record<string, unknown>
+      : {},
+    refreshSummary: raw.refreshSummary && typeof raw.refreshSummary === "object"
+      ? mapJatoMonthlyUpdateRefreshSummary(raw.refreshSummary as Record<string, unknown>)
+      : null
   };
 }
 
@@ -1660,8 +1731,18 @@ export const api = {
     request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}`).then((res) => ({
       item: mapJatoMonthlyUpdateJob(res.item)
     })),
+  getJatoMonthlyUpdateReview: (jobId: string) =>
+    request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/review`).then((res) => ({
+      item: mapJatoMonthlyUpdateReviewBundle(res.item)
+    })),
   retryFailedJatoMonthlyUpdateJob: (jobId: string) =>
     request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/retry`, {
+      method: "POST"
+    }).then((res) => ({
+      item: mapJatoMonthlyUpdateJob(res.item)
+    })),
+  publishJatoMonthlyUpdateJob: (jobId: string) =>
+    request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/publish`, {
       method: "POST"
     }).then((res) => ({
       item: mapJatoMonthlyUpdateJob(res.item)

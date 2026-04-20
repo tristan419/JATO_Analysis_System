@@ -7,8 +7,10 @@ from app.services.jato_monthly_update_service import (
     create_jato_monthly_update_job_from_upload,
     get_jato_monthly_update_upload,
     get_jato_monthly_update_job,
+    get_jato_monthly_update_review,
     initiate_jato_monthly_update_upload,
     list_jato_monthly_update_jobs,
+    publish_jato_monthly_update_job,
     retry_failed_jato_monthly_update_job,
     run_jato_monthly_update_cleanup,
     upload_jato_monthly_update_chunk,
@@ -70,6 +72,27 @@ def post_retry_monthly_update_job(
     return {
         "item": retry_failed_jato_monthly_update_job(
             source_job_id=job_id,
+            triggered_by=user.name,
+        )
+    }
+
+
+@router.get("/monthly-update-jobs/{job_id}/review")
+def get_monthly_update_review(
+    job_id: str,
+    _user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {"item": get_jato_monthly_update_review(job_id)}
+
+
+@router.post("/monthly-update-jobs/{job_id}/publish")
+def post_publish_monthly_update_job(
+    job_id: str,
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": publish_jato_monthly_update_job(
+            job_id=job_id,
             triggered_by=user.name,
         )
     }

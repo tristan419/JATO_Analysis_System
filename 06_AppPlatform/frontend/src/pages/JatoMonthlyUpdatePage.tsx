@@ -7,6 +7,7 @@ import { LoadingSurface } from "../components/LoadingSurface";
 import type {
   JatoMonthlyUpdateCleanupResult,
   JatoMonthlyUpdateJob,
+  JatoMonthlyUpdateReviewBundle,
   JatoMonthlyUpdateUploadProgress,
 } from "../types";
 import {
@@ -32,6 +33,9 @@ export function JatoMonthlyUpdatePage() {
   const [submitting, setSubmitting] = useState(false);
   const [cleanupRunning, setCleanupRunning] = useState(false);
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
+  const [publishingJobId, setPublishingJobId] = useState<string | null>(null);
+  const [reviewLoadingJobId, setReviewLoadingJobId] = useState<string | null>(null);
+  const [reviewBundle, setReviewBundle] = useState<JatoMonthlyUpdateReviewBundle | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -99,6 +103,11 @@ export function JatoMonthlyUpdatePage() {
     }
     void loadJobDetail(selectedJobId);
   }, [loadJobDetail, selectedJobId]);
+
+  useEffect(() => {
+    setReviewBundle(null);
+    setReviewLoadingJobId(null);
+  }, [selectedJobId]);
 
   const hasActiveJob = shouldPollMonthlyUpdateJobs(jobs);
 
@@ -255,6 +264,49 @@ export function JatoMonthlyUpdatePage() {
     }
   }
 
+  async function handleReviewJob(job: JatoMonthlyUpdateJob) {
+    if (reviewBundle?.jobId === job.jobId) {
+      setReviewBundle(null);
+      return;
+    }
+    setReviewLoadingJobId(job.jobId);
+    setError("");
+    try {
+      const response = await api.getJatoMonthlyUpdateReview(job.jobId);
+      setReviewBundle(response.item);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setReviewLoadingJobId(null);
+    }
+  }
+
+  async function handlePublishJob(job: JatoMonthlyUpdateJob) {
+    const confirmed = window.confirm(
+      "将把当前 staging candidate promote 为 active 数据集，并自动备份现有 active parquet / manifest / partitioned_dataset_v1 / fingerprint。继续吗？"
+    );
+    if (!confirmed) {
+      return;
+    }
+    setPublishingJobId(job.jobId);
+    setError("");
+    setNotice("");
+    try {
+      const response = await api.publishJatoMonthlyUpdateJob(job.jobId);
+      setSelectedJob(response.item);
+      setSelectedJobId(response.item.jobId);
+      setNotice(
+        `已将任务 ${job.jobId} 的 staging candidate promote 到 active 数据集。备份目录：${response.item.publication?.backupDir ?? "-"}`
+      );
+      await refreshJobs(response.item.jobId, true);
+      await loadJobDetail(response.item.jobId, true);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setPublishingJobId(null);
+    }
+  }
+
   const successCount = jobs.filter((job) => job.status === "success").length;
   const failedCount = jobs.filter((job) => job.status === "failed").length;
   const runningCount = jobs.filter((job) => job.status === "running" || job.status === "queued").length;
@@ -263,6 +315,13 @@ export function JatoMonthlyUpdatePage() {
 
   const rawCompare = selectedJob?.summaries?.rawCompare;
   const refresh = selectedJob?.summaries?.refresh;
+  const canReviewSelectedJob = Boolean(selectedJob?.artifacts?.rawCompareReportPath);
+  const canPublishSelectedJob = Boolean(
+    selectedJob
+    && selectedJob.status === "success"
+    && selectedJob.phase === "completed"
+  );
+  const isSelectedJobPublished = Boolean(selectedJob?.publication?.publishedAt);
 
   return (
     <section className="crud-shell">
@@ -285,7 +344,7 @@ export function JatoMonthlyUpdatePage() {
               </p>
               <div className="dashboard-hero-inline-summary">
                 <span className="selection-ribbon-label">Publish</span>
-                <span className="selection-ribbon-value">仍保持人工 promote / archive</span>
+                <span className="selection-ribbon-value">保留人工确认，现已支持网页 review / promote / cleanup</span>
               </div>
             </div>
             <div className="dashboard-hero-actions crud-hero-actions">
@@ -606,10 +665,42 @@ export function JatoMonthlyUpdatePage() {
               <p className="section-note">状态、摘要、路径和日志都集中在这里查看。</p>
             </div>
             {selectedJob && (
-              <div className="crud-row-actions">
-                {selectedJob.status === "failed" && (
-                  <button
-                    type="button"
+                <div className="crud-row-actions">
+                  {canReviewSelectedJob && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => void handleReviewJob(selectedJob)}
+                      disabled={reviewLoadingJobId === selectedJob.jobId}
+                    >
+                      {reviewLoadingJobId === selectedJob.jobId
+                        ? "加载 review..."
+                        : reviewBundle?.jobId === selectedJob.jobId
+                          ? "收起 Review"
+                          : "Review Candidate"}
+                    </button>
+                  )}
+                  {canPublishSelectedJob && (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => void handlePublishJob(selectedJob)}
+                      disabled={
+                        publishingJobId === selectedJob.jobId
+                        || isSelectedJobPublished
+                        || hasActiveJob
+                      }
+                    >
+                      {isSelectedJobPublished
+                        ? "Published"
+                        : publishingJobId === selectedJob.jobId
+                          ? "Publishing..."
+                          : "Publish Candidate"}
+                    </button>
+                  )}
+                  {selectedJob.status === "failed" && (
+                    <button
+                      type="button"
                     className="btn btn-secondary"
                     onClick={() => void handleRetryFailedJob(selectedJob)}
                     disabled={retryingJobId === selectedJob.jobId || !selectedJob.upload?.storedPath}
@@ -662,6 +753,16 @@ export function JatoMonthlyUpdatePage() {
                 <div className="alert alert-error">{selectedJob.error}</div>
               )}
 
+              {selectedJob.publication?.publishedAt && (
+                <div className="alert alert-success">
+                  已 publish 到 active：{formatMonthlyUpdateTimestamp(selectedJob.publication.publishedAt)}
+                  {" · "}
+                  {selectedJob.publication.publishedBy || "-"}
+                  {" · backup "}
+                  {selectedJob.publication.backupDir || "-"}
+                </div>
+              )}
+
               <div className="monthly-update-summary-grid">
                 <article className="monthly-update-summary-card">
                   <span>Raw compare blockers</span>
@@ -684,6 +785,80 @@ export function JatoMonthlyUpdatePage() {
                   <small>{formatMonthlyUpdateNumber(refresh?.changedCountryCount)} countries changed</small>
                 </article>
               </div>
+
+              {reviewBundle?.jobId === selectedJob.jobId && (
+                <div className="card crud-card">
+                  <div className="detail-section-head">
+                    <div>
+                      <div className="card-title">Review Candidate</div>
+                      <p className="section-note">
+                        这里集中展示 raw compare checklist 与人工 review 要点；确认后可直接点击 Publish Candidate。
+                      </p>
+                    </div>
+                    <div className="table-status-chip">
+                      <span>Decision</span>
+                      <strong>{reviewBundle.decisionSuggestion || "-"}</strong>
+                    </div>
+                  </div>
+                  <div className="monthly-update-summary-grid">
+                    <article className="monthly-update-summary-card">
+                      <span>Compare ID</span>
+                      <strong>{reviewBundle.compareId || "-"}</strong>
+                      <small>{reviewBundle.compareKeyColumns.join(" / ") || "-"}</small>
+                    </article>
+                    <article className="monthly-update-summary-card">
+                      <span>Review findings</span>
+                      <strong>{formatMonthlyUpdateNumber(reviewBundle.reviewFindings.length)}</strong>
+                      <small>{reviewBundle.reviewDir || "-"}</small>
+                    </article>
+                    <article className="monthly-update-summary-card">
+                      <span>Conflict samples</span>
+                      <strong>{formatMonthlyUpdateNumber(reviewBundle.conflictSampleCount)}</strong>
+                      <small>{reviewBundle.sampledCountries.join(", ") || "-"}</small>
+                    </article>
+                    <article className="monthly-update-summary-card">
+                      <span>Refresh status</span>
+                      <strong>{reviewBundle.refreshSummary?.jobStatus || refresh?.jobStatus || "-"}</strong>
+                      <small>{formatMonthlyUpdateSeconds(reviewBundle.refreshSummary?.jobElapsedSeconds)}</small>
+                    </article>
+                  </div>
+                  <div>
+                    <div className="card-title">Review Findings</div>
+                    {reviewBundle.reviewFindings.length === 0 ? (
+                      <div className="crud-empty-state">暂无需要人工确认的 findings</div>
+                    ) : (
+                      <div className="table-wrapper">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>Severity</th>
+                              <th>Target</th>
+                              <th>Rule</th>
+                              <th>Message</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reviewBundle.reviewFindings.map((finding, index) => (
+                              <tr key={`${finding.ruleId}-${finding.target}-${index}`}>
+                                <td>{finding.severity}</td>
+                                <td>{finding.target || "-"}</td>
+                                <td>{finding.ruleId || "-"}</td>
+                                <td>{finding.message || "-"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <div className="card-title">Review Checklist</div>
+                    <pre className="monthly-update-pre">
+                      {reviewBundle.checklistMarkdown || "暂无 checklist 输出"}
+                    </pre>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <div className="card-title">Artifacts</div>
