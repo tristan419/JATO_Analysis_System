@@ -661,6 +661,21 @@ def test_run_cleanup_archives_old_raw_data_and_removes_job_upload_copies(
     success_state["phase"] = "completed"
     jato_monthly_update_service._persist_job_state(success_state)
 
+    failed_upload = job_root / "job-failed" / "uploads" / "patch.xlsx"
+    failed_upload.parent.mkdir(parents=True, exist_ok=True)
+    failed_upload.write_bytes(b"failed-upload")
+    failed_state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id="job-failed",
+        month="2026-03",
+        triggered_by="tester",
+        upload_filename="patch.xlsx",
+        stored_upload_path=failed_upload,
+    )
+    failed_state["status"] = "failed"
+    failed_state["phase"] = "failed"
+    failed_state["error"] = "prepare exploded"
+    jato_monthly_update_service._persist_job_state(failed_state)
+
     result = jato_monthly_update_service.run_jato_monthly_update_cleanup(
         triggered_by="tester"
     )
@@ -679,10 +694,13 @@ def test_run_cleanup_archives_old_raw_data_and_removes_job_upload_copies(
     assert result["archivedPatchDirs"] == [
         "01_RAW_DATA/historyDataArchive/patches/2026-02"
     ]
-    assert result["removedJobUploadDirCount"] == 1
-    assert result["removedJobUploadDirs"] == [
-        "04_Processed_data/ops/jato_monthly_update_jobs/job-success/uploads"
-    ]
+    assert result["removedJobUploadDirCount"] == 2
+    assert sorted(result["removedJobUploadDirs"]) == sorted(
+        [
+            "04_Processed_data/ops/jato_monthly_update_jobs/job-success/uploads",
+            "04_Processed_data/ops/jato_monthly_update_jobs/job-failed/uploads",
+        ]
+    )
     assert not old_baseline.exists()
     assert new_baseline.exists()
     assert not old_patch_dir.exists()
@@ -690,9 +708,12 @@ def test_run_cleanup_archives_old_raw_data_and_removes_job_upload_copies(
     assert (history_root / "baseline" / old_baseline.name).exists()
     assert (history_root / "patches" / old_patch_dir.name).exists()
     assert not success_upload.parent.exists()
+    assert not failed_upload.parent.exists()
 
     payload = jato_monthly_update_service._load_job_state("job-success")
     assert payload["upload"]["storedPath"] is None
+    failed_payload = jato_monthly_update_service._load_job_state("job-failed")
+    assert failed_payload["upload"]["storedPath"] is None
 
 
 def test_chunked_upload_session_can_be_completed_and_queued(

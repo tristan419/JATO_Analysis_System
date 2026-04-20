@@ -1914,7 +1914,7 @@ def run_jato_monthly_update_cleanup(*, triggered_by: str) -> dict[str, Any]:
 
     removed_job_upload_dirs: list[str] = []
     for payload in job_payloads:
-        if str(payload.get("status", "")) != "success":
+        if str(payload.get("status", "")) not in {"success", "failed"}:
             continue
         job_id = str(payload.get("jobId", "")).strip()
         if not job_id:

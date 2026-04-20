@@ -278,7 +278,7 @@ export function JatoMonthlyUpdatePage() {
       return;
     }
     const confirmed = window.confirm(
-      "将归档旧 baseline/patch，并删除成功任务的临时上传副本。当前激活 baseline、最新 patch 月份以及报告文件会保留。继续吗？"
+      "将归档旧 baseline/patch，并删除所有已结束任务（success / failed）的临时上传副本。当前激活 baseline、最新 patch 批次以及报告文件会保留；清理后 failed 任务不能直接 retry，需要重新上传。继续吗？"
     );
     if (!confirmed) {
       return;
@@ -640,7 +640,7 @@ export function JatoMonthlyUpdatePage() {
         </div>
         <div className="alert alert-warning monthly-update-reminder">
           <strong>建议保留策略：</strong> baseline 目录只保留一个当前激活最新 baseline；旧 baseline 和旧 patch 做归档，
-          不要继续堆在 active 目录里；job 目录中的临时上传副本成功后可清理。
+          不要继续堆在 active 目录里；job 目录中的已结束任务临时上传副本可清理。
         </div>
         {cleanupResult && (
           <div className="monthly-update-cleanup-result">
@@ -673,7 +673,7 @@ export function JatoMonthlyUpdatePage() {
           <article className="monthly-update-cleanup-card">
             <span>可清理</span>
             <strong>04_Processed_data/ops/jato_monthly_update_jobs/*/uploads/</strong>
-            <small>这是 job 级临时上传副本；成功后可以删，原 patch 归档仍保留。</small>
+            <small>这是 job 级临时上传副本；success / failed 都可以删，原 patch 归档仍保留，但 failed 清理后需重新上传才能 retry。</small>
           </article>
           <article className="monthly-update-cleanup-card">
             <span>建议保留</span>
