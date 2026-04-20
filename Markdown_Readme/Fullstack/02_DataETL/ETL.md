@@ -45,6 +45,40 @@ python 03_Scripts/prepare_monthly_raw_update.py \
 
 baseline 会优先找 `01_RAW_DATA/baseline/` 下最新的；如果 active baseline 暂时缺位，会回退到 `01_RAW_DATA/historyDataArchive/baseline/` 下最新的。脚本会打印后续 raw compare 和 refresh 命令，直接复制执行即可。若当前 active parquet 已存在，refresh 命令还会自动带上 `--supplement-missing-countries-from-parquet 04_Processed_data/jato_full_archive.parquet`，把 patch 未覆盖国家按 current active 补齐。详见 `01_RAW_DATA/README.md`。
 
+### baseline 什么时候更新
+
+当前线上实现里，**baseline 不会在 upload / prepare / compare / refresh / review / publish 时自动前滚成新的 xlsx**。
+
+现状分两层：
+
+1. `publish` 只会把 staging 的 parquet / manifest / partition / fingerprint / refresh report 覆盖到当前 active canonical 数据集。
+2. 下一轮 `prepare` 仍然只会读取 `01_RAW_DATA/baseline/` 里当前保留的最新 baseline；如果这里缺文件，才会回退到 `01_RAW_DATA/historyDataArchive/baseline/`。
+
+所以现在的 baseline 更新时机是：**某次 candidate 人工 review + publish 确认无误后，再由人工把你认可的新全量 raw xlsx 放入 `01_RAW_DATA/baseline/`，作为下一轮 compare/refresh 的锚点。** 这一步目前不是网页自动完成，因为系统现在 publish 的是 processed 产物，不会反向生成新的 baseline xlsx。
+
+### 月更流程图（含 baseline 时机）
+
+```mermaid
+flowchart TD
+    A[上传 JATO xlsx] --> B[prepare 锁定本次 baseline]
+    B --> B1[优先读取 01_RAW_DATA/baseline 最新文件]
+    B --> B2[若 active baseline 缺失则回退 archive baseline]
+    B1 --> C[raw compare]
+    B2 --> C
+    C --> D[candidate refresh 到 staging]
+    D --> D1[patch 未覆盖国家从 current active parquet 补齐]
+    D1 --> E[人工 review]
+    E -->|不通过| F[保留 job / 日志 / 报告]
+    F --> F1[active 不变]
+    F --> F2[baseline 不变]
+    E -->|通过并 publish| G[staging 覆盖 active parquet / manifest / partition]
+    G --> H[active 数据已更新]
+    H --> I[baseline xlsx 仍不自动更新]
+    I --> J[运营确认需要换锚点时\n手动放入新的全量 baseline xlsx]
+    J --> K[下一轮 prepare 从这个 baseline 起步]
+    K --> L[一键清理只归档旧 baseline\n保留当前 active baseline]
+```
+
 
 ## Pipeline 步骤总览（从原始到可部署）
 

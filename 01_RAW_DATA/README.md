@@ -28,6 +28,26 @@ baseline 不传则优先找 `baseline/` 下最新的一份；如果 active basel
 - 在 `patches/<month>/monthly_update_plan.md` 留档
 - 如果当前 active parquet 已存在，则 refresh 命令会自动带上 `--supplement-missing-countries-from-parquet 04_Processed_data/jato_full_archive.parquet`，把 patch 未覆盖国家从 current active 补齐，避免 partial patch publish 时把旧国家回退
 
+### baseline 更新时机
+
+当前实现里，**baseline 不会随着 publish 自动改成新的 xlsx**。
+
+- upload / prepare / raw compare / candidate refresh / review：都只是生成候选结果，不会改 baseline。
+- publish：只会把 staging 里的 parquet / manifest / partition / refresh report 覆盖到 active 数据集，不会反向生成 baseline xlsx。
+- cleanup：只会归档旧 baseline，保留 `baseline/` 里当前最新的一份。
+
+所以真正的 baseline 换代，还是要在你确认某次 publish 结果可作为下一轮锚点之后，**手动把新的全量 raw xlsx 放进 `01_RAW_DATA/baseline/`**。
+
+```mermaid
+flowchart LR
+    A[prepare 读取 baseline] --> B[compare + refresh 生成 candidate]
+    B --> C[人工 review]
+    C -->|publish| D[更新 active processed 数据]
+    D --> E[baseline xlsx 不自动变化]
+    E --> F[人工放入新的全量 baseline xlsx]
+    F --> G[下一轮 prepare 使用新 baseline]
+```
+
 ### 第 2 步 · Raw Compare
 
 直接复制第 1 步输出的命令执行即可。

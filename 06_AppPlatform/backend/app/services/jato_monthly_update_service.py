@@ -587,6 +587,117 @@ def _list_supported_excel_files(root: Path) -> list[Path]:
     )
 
 
+def _load_dataset_frame(path: Path) -> pd.DataFrame:
+    frame = pd.read_parquet(path)
+    frame.columns = [str(column).strip() for column in frame.columns]
+    return frame
+
+
+def _detect_latest_month_from_dataset_frame(
+    frame: pd.DataFrame, *, path_label: str
+) -> str:
+    month_columns = _detect_month_columns(list(frame.columns))
+    if not month_columns:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{path_label} 缺少可识别的月份列，不能生成 baseline。",
+        )
+    for column in reversed(month_columns):
+        if column in frame.columns and _series_has_data(frame[column]):
+            parsed = datetime.strptime(column.title(), "%Y %b")
+            return f"{parsed.year}-{parsed.month:02d}"
+    raise HTTPException(
+        status_code=409,
+        detail=f"{path_label} 的月份列均为空，不能生成 baseline。",
+    )
+
+
+def _collect_dataset_country_count(frame: pd.DataFrame, *, path_label: str) -> int:
+    country_column = _find_country_column(list(frame.columns))
+    if country_column is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{path_label} 缺少国家列，不能生成 baseline。",
+        )
+    values = frame[country_column].astype("string").fillna("").str.strip()
+    count = int(values[values != ""].nunique())
+    if count <= 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{path_label} 不包含有效国家数据，不能生成 baseline。",
+        )
+    return count
+
+
+def _baseline_snapshot_filename(*, latest_month: str, country_count: int) -> str:
+    year, month = latest_month.split("-")
+    jato_month = f"{year}.{int(month)}"
+    country_tag = f"full-{country_count}countries" if country_count > 0 else "full"
+    return f"JATO-{jato_month}-{country_tag}-baseline.xlsx"
+
+
+def _measure_path_usage(path: Path) -> tuple[int, int, int]:
+    if not path.exists():
+        return (0, 0, 0)
+    if path.is_file():
+        return (int(path.stat().st_size), 1, 0)
+    total_bytes = 0
+    file_count = 0
+    dir_count = 0
+    for root, dirnames, filenames in os.walk(path):
+        dir_count += len(dirnames)
+        for filename in filenames:
+            candidate = Path(root) / filename
+            try:
+                stat = candidate.stat()
+            except FileNotFoundError:
+                continue
+            total_bytes += int(stat.st_size)
+            file_count += 1
+    return (total_bytes, file_count, dir_count)
+
+
+def _measure_combined_usage(paths: list[Path]) -> tuple[int, int, int]:
+    total_bytes = 0
+    file_count = 0
+    dir_count = 0
+    for path in paths:
+        item_bytes, item_files, item_dirs = _measure_path_usage(path)
+        total_bytes += item_bytes
+        file_count += item_files
+        dir_count += item_dirs
+    return (total_bytes, file_count, dir_count)
+
+
+def _build_storage_metric(*, key: str, label: str, paths: list[Path]) -> dict[str, Any]:
+    total_bytes, file_count, dir_count = _measure_combined_usage(paths)
+    relative_paths = [
+        _relative_to_project(path) or str(path)
+        for path in paths
+        if path.exists()
+    ]
+    return {
+        "key": key,
+        "label": label,
+        "bytes": total_bytes,
+        "fileCount": file_count,
+        "dirCount": dir_count,
+        "paths": relative_paths,
+    }
+
+
+def _job_upload_dirs() -> list[Path]:
+    if not MONTHLY_UPDATE_JOB_ROOT.exists():
+        return []
+    return sorted(
+        [
+            path
+            for path in MONTHLY_UPDATE_JOB_ROOT.glob("*/uploads")
+            if path.is_dir()
+        ]
+    )
+
+
 def _resolve_latest_baseline() -> tuple[Path | None, str | None]:
     active_baseline = _latest_baseline_file(_list_supported_excel_files(BASELINE_ROOT))
     if active_baseline is not None:
@@ -987,6 +1098,60 @@ def _sanitize_overlap_change_summary(item: Any) -> dict[str, Any] | None:
     }
 
 
+def _sanitize_country_freshness_summary(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    return {
+        "country": str(item.get("country", "")),
+        "oldLatestMonth": (
+            None
+            if item.get("oldLatestMonth") in {None, ""}
+            else str(item.get("oldLatestMonth"))
+        ),
+        "newLatestMonth": (
+            None
+            if item.get("newLatestMonth") in {None, ""}
+            else str(item.get("newLatestMonth"))
+        ),
+        "freshnessStatus": str(item.get("freshnessStatus", "")),
+        "rowDelta": int(item.get("rowDelta", 0) or 0),
+    }
+
+
+def _sanitize_country_coverage_summary(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    return {
+        "country": str(item.get("country", "")),
+        "oldMonths": (
+            [str(month) for month in item.get("oldMonths", [])]
+            if isinstance(item.get("oldMonths"), list)
+            else []
+        ),
+        "newMonths": (
+            [str(month) for month in item.get("newMonths", [])]
+            if isinstance(item.get("newMonths"), list)
+            else []
+        ),
+        "addedMonths": (
+            [str(month) for month in item.get("addedMonths", [])]
+            if isinstance(item.get("addedMonths"), list)
+            else []
+        ),
+        "removedMonths": (
+            [str(month) for month in item.get("removedMonths", [])]
+            if isinstance(item.get("removedMonths"), list)
+            else []
+        ),
+        "overlappingMonths": (
+            [str(month) for month in item.get("overlappingMonths", [])]
+            if isinstance(item.get("overlappingMonths"), list)
+            else []
+        ),
+        "coverageStatus": str(item.get("coverageStatus", "")),
+    }
+
+
 def _require_no_running_monthly_update_jobs(*, excluding_job_id: str | None = None) -> None:
     running_jobs = [
         str(payload.get("jobId", ""))
@@ -1040,6 +1205,22 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
         )
         if sanitized is not None
     ]
+    country_freshness_summary = [
+        sanitized
+        for sanitized in (
+            _sanitize_country_freshness_summary(item)
+            for item in raw_compare_report.get("countryFreshnessSummary", [])
+        )
+        if sanitized is not None
+    ]
+    country_coverage_summary = [
+        sanitized
+        for sanitized in (
+            _sanitize_country_coverage_summary(item)
+            for item in raw_compare_report.get("countryCoverageSummary", [])
+        )
+        if sanitized is not None
+    ]
     if isinstance(conflict_payload, dict):
         sampled = conflict_payload.get("sampledCountries")
         samples = conflict_payload.get("samples")
@@ -1071,6 +1252,8 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
         "conflictSampleCount": sample_count,
         "conflictSamples": conflict_samples,
         "overlapChangeSummary": overlap_change_summary,
+        "countryFreshnessSummary": country_freshness_summary,
+        "countryCoverageSummary": country_coverage_summary,
         "timeAxisCheck": (
             raw_compare_report.get("timeAxisCheck")
             if isinstance(raw_compare_report.get("timeAxisCheck"), dict)
@@ -1877,6 +2060,157 @@ def list_jato_monthly_update_jobs(*, limit: int = 20) -> dict[str, Any]:
 def get_jato_monthly_update_job(job_id: str) -> dict[str, Any]:
     payload = _load_job_state(job_id)
     return _serialize_job_state(payload, include_log_tail=True)
+
+
+def get_jato_monthly_update_maintenance_status() -> dict[str, Any]:
+    baseline_path, baseline_source = _resolve_latest_baseline()
+    patch_dirs = sorted([path for path in PATCHES_ROOT.glob("*") if path.is_dir()])
+    latest_patch_dir = _latest_patch_dir(patch_dirs)
+    processed_root = _processed_data_root()
+    active_paths = _active_data_paths()
+    metrics = [
+        _build_storage_metric(
+            key="active-baseline",
+            label="Active baseline",
+            paths=[BASELINE_ROOT],
+        ),
+        _build_storage_metric(
+            key="baseline-archive",
+            label="Archived baselines",
+            paths=[HISTORY_ARCHIVE_ROOT / "baseline"],
+        ),
+        _build_storage_metric(
+            key="patch-batches",
+            label="Patch batches",
+            paths=[PATCHES_ROOT],
+        ),
+        _build_storage_metric(
+            key="upload-session-cache",
+            label="Upload session cache",
+            paths=[_upload_session_root()],
+        ),
+        _build_storage_metric(
+            key="job-upload-copies",
+            label="Job upload copies",
+            paths=_job_upload_dirs(),
+        ),
+        _build_storage_metric(
+            key="review-reports",
+            label="Raw compare reviews",
+            paths=[processed_root / "reviews" / "raw_compare"],
+        ),
+        _build_storage_metric(
+            key="staging-outputs",
+            label="Staging outputs",
+            paths=[processed_root / "staging"],
+        ),
+        _build_storage_metric(
+            key="active-dataset",
+            label="Active dataset",
+            paths=[
+                active_paths["parquet"],
+                active_paths["manifest"],
+                active_paths["partition"],
+                active_paths["fingerprint"],
+                active_paths["refreshReport"],
+            ],
+        ),
+        _build_storage_metric(
+            key="refresh-backups",
+            label="Refresh backups",
+            paths=[active_paths["backupRoot"]],
+        ),
+    ]
+    return {
+        "checkedAt": _utc_now().isoformat(),
+        "activeBaselinePath": _relative_to_project(baseline_path),
+        "activeBaselineSource": baseline_source,
+        "latestPatchBatch": latest_patch_dir.name if latest_patch_dir is not None else None,
+        "jobCount": len(_list_job_state_payloads()),
+        "uploadSessionCount": len(_iter_upload_session_payloads()),
+        "trackedStorageBytes": sum(int(item["bytes"]) for item in metrics),
+        "storageMetrics": metrics,
+    }
+
+
+def promote_current_active_to_baseline(*, triggered_by: str) -> dict[str, Any]:
+    running_jobs = [
+        str(payload.get("jobId", ""))
+        for payload in _list_job_state_payloads()
+        if str(payload.get("status", "")) in {"queued", "running"}
+    ]
+    if running_jobs:
+        raise HTTPException(
+            status_code=409,
+            detail="存在运行中的月更任务，请等待完成后再保存新的 baseline。",
+        )
+
+    active_parquet_path = _active_data_paths()["parquet"]
+    if not active_parquet_path.exists():
+        raise HTTPException(
+            status_code=409,
+            detail="当前 active parquet 不存在，不能生成 baseline。",
+        )
+
+    try:
+        frame = _load_dataset_frame(active_parquet_path)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="读取当前 active parquet 失败，不能生成 baseline。",
+        ) from exc
+
+    latest_month = _detect_latest_month_from_dataset_frame(
+        frame,
+        path_label=active_parquet_path.name,
+    )
+    country_count = _collect_dataset_country_count(
+        frame,
+        path_label=active_parquet_path.name,
+    )
+    row_count = int(len(frame))
+
+    maintenance_dir = MONTHLY_UPDATE_JOB_ROOT / "_maintenance"
+    maintenance_dir.mkdir(parents=True, exist_ok=True)
+    temp_export_path = maintenance_dir / f"baseline-export-{uuid4().hex}.xlsx"
+    try:
+        frame.to_excel(
+            temp_export_path,
+            index=False,
+            sheet_name=DEFAULT_UPLOAD_SHEET_NAME,
+            engine="openpyxl",
+        )
+    except Exception as exc:
+        temp_export_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500,
+            detail="导出 baseline xlsx 失败，请确认后端具备 openpyxl 能力。",
+        ) from exc
+
+    BASELINE_ROOT.mkdir(parents=True, exist_ok=True)
+    archived_baselines: list[str] = []
+    for path in _list_supported_excel_files(BASELINE_ROOT):
+        target = _move_to_archive(path, HISTORY_ARCHIVE_ROOT / "baseline")
+        archived_baselines.append(_relative_to_project(target) or str(target))
+
+    baseline_path = BASELINE_ROOT / _baseline_snapshot_filename(
+        latest_month=latest_month,
+        country_count=country_count,
+    )
+    baseline_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(temp_export_path), str(baseline_path))
+
+    return {
+        "promotedAt": _utc_now().isoformat(),
+        "triggeredBy": triggered_by.strip() or "anonymous",
+        "sourceParquetPath": _relative_to_project(active_parquet_path),
+        "baselinePath": _relative_to_project(baseline_path),
+        "detectedLatestMonth": latest_month,
+        "countryCount": country_count,
+        "rowCount": row_count,
+        "archivedBaselineCount": len(archived_baselines),
+        "archivedBaselines": archived_baselines,
+    }
 
 
 def run_jato_monthly_update_cleanup(*, triggered_by: str) -> dict[str, Any]:

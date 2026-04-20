@@ -659,6 +659,18 @@ export interface PositioningPricingPage {
   };
 }
 
+export interface PositioningPricingPriceOverlay {
+  sourceMode?: string | null;
+  mode?: string | null;
+  candidateRows?: number;
+  linkCandidateRows?: number;
+  reason?: string | null;
+  matchedRows?: number;
+  matchedModels?: number;
+  linkMatches?: number;
+  directMatches?: number;
+}
+
 export interface PositioningPricingMetadata {
   protocolVersion: string;
   requestedPeriod: string | null;
@@ -678,6 +690,7 @@ export interface PositioningPricingMetadata {
     currentMonthShort: string;
     salesModeLabel: string;
   };
+  priceOverlay?: PositioningPricingPriceOverlay | null;
 }
 
 export interface PositioningPricingDeckResponse {
@@ -1390,6 +1403,24 @@ export interface JatoMonthlyUpdateOverlapChangeSummary {
   sampleChangedKeys: Record<string, unknown>[];
 }
 
+export interface JatoMonthlyUpdateCountryFreshnessSummary {
+  country: string;
+  oldLatestMonth?: string | null;
+  newLatestMonth?: string | null;
+  freshnessStatus: string;
+  rowDelta: number;
+}
+
+export interface JatoMonthlyUpdateCountryCoverageSummary {
+  country: string;
+  oldMonths: string[];
+  newMonths: string[];
+  addedMonths: string[];
+  removedMonths: string[];
+  overlappingMonths: string[];
+  coverageStatus: string;
+}
+
 export interface JatoMonthlyUpdateReviewBundle {
   jobId: string;
   reviewDir?: string | null;
@@ -1402,6 +1433,8 @@ export interface JatoMonthlyUpdateReviewBundle {
   conflictSampleCount: number;
   conflictSamples: JatoMonthlyUpdateConflictSample[];
   overlapChangeSummary: JatoMonthlyUpdateOverlapChangeSummary[];
+  countryFreshnessSummary: JatoMonthlyUpdateCountryFreshnessSummary[];
+  countryCoverageSummary: JatoMonthlyUpdateCountryCoverageSummary[];
   timeAxisCheck: Record<string, unknown>;
   countryScopeSummary: Record<string, unknown>;
   refreshSummary?: JatoMonthlyUpdateRefreshSummary | null;
@@ -1418,6 +1451,38 @@ export interface JatoMonthlyUpdateCleanupResult {
   archivedPatchDirs: string[];
   removedJobUploadDirCount: number;
   removedJobUploadDirs: string[];
+}
+
+export interface JatoMonthlyUpdateStorageMetric {
+  key: string;
+  label: string;
+  bytes: number;
+  fileCount: number;
+  dirCount: number;
+  paths: string[];
+}
+
+export interface JatoMonthlyUpdateMaintenanceStatus {
+  checkedAt: string;
+  activeBaselinePath: string | null;
+  activeBaselineSource: string | null;
+  latestPatchBatch: string | null;
+  jobCount: number;
+  uploadSessionCount: number;
+  trackedStorageBytes: number;
+  storageMetrics: JatoMonthlyUpdateStorageMetric[];
+}
+
+export interface JatoMonthlyUpdateBaselinePromotionResult {
+  promotedAt: string;
+  triggeredBy: string;
+  sourceParquetPath: string | null;
+  baselinePath: string | null;
+  detectedLatestMonth: string | null;
+  countryCount: number;
+  rowCount: number;
+  archivedBaselineCount: number;
+  archivedBaselines: string[];
 }
 
 export interface JatoMonthlyUpdateUploadSession {

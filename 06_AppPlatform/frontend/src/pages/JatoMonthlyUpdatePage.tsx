@@ -5,9 +5,11 @@ import { AdminToolsNav } from "../components/AdminToolsNav";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { LoadingSurface } from "../components/LoadingSurface";
 import type {
+  JatoMonthlyUpdateBaselinePromotionResult,
   JatoMonthlyUpdateConflictSample,
   JatoMonthlyUpdateCleanupResult,
   JatoMonthlyUpdateJob,
+  JatoMonthlyUpdateMaintenanceStatus,
   JatoMonthlyUpdateReviewBundle,
   JatoMonthlyUpdateUploadProgress,
 } from "../types";
@@ -81,6 +83,19 @@ function formatSampleKeyRecords(items: Record<string, unknown>[]): string {
   return items.map((item) => `- ${formatSampleKeyRecord(item)}`).join("\n");
 }
 
+function formatSignedNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "0";
+  }
+  if (value > 0) {
+    return `+${formatMonthlyUpdateNumber(value)}`;
+  }
+  if (value < 0) {
+    return `-${formatMonthlyUpdateNumber(Math.abs(value))}`;
+  }
+  return "0";
+}
+
 export function JatoMonthlyUpdatePage() {
   const [jobs, setJobs] = useState<JatoMonthlyUpdateJob[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
@@ -89,9 +104,11 @@ export function JatoMonthlyUpdatePage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [cleanupRunning, setCleanupRunning] = useState(false);
+  const [maintenanceLoading, setMaintenanceLoading] = useState(false);
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
   const [publishingJobId, setPublishingJobId] = useState<string | null>(null);
   const [rollingBackJobId, setRollingBackJobId] = useState<string | null>(null);
+  const [promotingBaseline, setPromotingBaseline] = useState(false);
   const [reviewLoadingJobId, setReviewLoadingJobId] = useState<string | null>(null);
   const [reviewBundle, setReviewBundle] = useState<JatoMonthlyUpdateReviewBundle | null>(null);
   const [selectedReviewCountry, setSelectedReviewCountry] = useState<string | null>(null);
@@ -100,6 +117,10 @@ export function JatoMonthlyUpdatePage() {
   const [notice, setNotice] = useState("");
   const [cleanupResult, setCleanupResult] =
     useState<JatoMonthlyUpdateCleanupResult | null>(null);
+  const [maintenanceStatus, setMaintenanceStatus] =
+    useState<JatoMonthlyUpdateMaintenanceStatus | null>(null);
+  const [baselinePromotion, setBaselinePromotion] =
+    useState<JatoMonthlyUpdateBaselinePromotionResult | null>(null);
   const [uploadProgress, setUploadProgress] =
     useState<JatoMonthlyUpdateUploadProgress | null>(null);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -150,9 +171,29 @@ export function JatoMonthlyUpdatePage() {
     }
   }, []);
 
+  const refreshMaintenanceStatus = useCallback(async (silent = false) => {
+    if (!silent) {
+      setMaintenanceLoading(true);
+    }
+    try {
+      const response = await api.getJatoMonthlyUpdateMaintenanceStatus();
+      setMaintenanceStatus(response.item);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      if (!silent) {
+        setMaintenanceLoading(false);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     void refreshJobs();
   }, [refreshJobs]);
+
+  useEffect(() => {
+    void refreshMaintenanceStatus();
+  }, [refreshMaintenanceStatus]);
 
   useEffect(() => {
     if (!selectedJobId) {
@@ -207,6 +248,7 @@ export function JatoMonthlyUpdatePage() {
         fileInputRef.current.value = "";
       }
       await refreshJobs(response.item.jobId, true);
+      await refreshMaintenanceStatus(true);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -293,6 +335,7 @@ export function JatoMonthlyUpdatePage() {
         `清理完成：归档 baseline ${response.item.archivedBaselineCount} 个，归档 patch 目录 ${response.item.archivedPatchDirCount} 个，清理上传副本 ${response.item.removedJobUploadDirCount} 个。`
       );
       await refreshJobs(selectedJobId ?? undefined, true);
+      await refreshMaintenanceStatus(true);
       if (selectedJobId) {
         await loadJobDetail(selectedJobId, true);
       }
@@ -300,6 +343,34 @@ export function JatoMonthlyUpdatePage() {
       setError((err as Error).message);
     } finally {
       setCleanupRunning(false);
+    }
+  }
+
+  async function handlePromoteBaseline() {
+    if (hasActiveJob) {
+      setError("存在运行中的月更任务，请等待完成后再保存新的 baseline。");
+      return;
+    }
+    const confirmed = window.confirm(
+      "将读取当前 active parquet，导出一份新的 baseline xlsx（Data Export sheet），并自动归档旧 active baseline。继续吗？"
+    );
+    if (!confirmed) {
+      return;
+    }
+    setPromotingBaseline(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await api.promoteCurrentActiveToJatoBaseline();
+      setBaselinePromotion(response.item);
+      setNotice(
+        `已保存新的 baseline：${response.item.baselinePath ?? "-"}；latest month ${response.item.detectedLatestMonth ?? "-"}；自动归档旧 baseline ${response.item.archivedBaselineCount} 个。`
+      );
+      await refreshMaintenanceStatus(true);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setPromotingBaseline(false);
     }
   }
 
@@ -356,6 +427,7 @@ export function JatoMonthlyUpdatePage() {
         `已将任务 ${job.jobId} 的 staging candidate promote 到 active 数据集。备份目录：${response.item.publication?.backupDir ?? "-"}`
       );
       await refreshJobs(response.item.jobId, true);
+      await refreshMaintenanceStatus(true);
       await loadJobDetail(response.item.jobId, true);
     } catch (err) {
       setError((err as Error).message);
@@ -382,6 +454,7 @@ export function JatoMonthlyUpdatePage() {
         `已回滚任务 ${job.jobId} 的 publish。恢复来源：${response.item.publication?.backupDir ?? "-"}；回滚前快照：${response.item.publication?.rollbackBackupDir ?? "-"}`
       );
       await refreshJobs(response.item.jobId, true);
+      await refreshMaintenanceStatus(true);
       await loadJobDetail(response.item.jobId, true);
     } catch (err) {
       setError((err as Error).message);
@@ -416,6 +489,8 @@ export function JatoMonthlyUpdatePage() {
       new Set(
         [
           ...reviewBundle.overlapChangeSummary.map((item) => item.country),
+          ...reviewBundle.countryFreshnessSummary.map((item) => item.country),
+          ...reviewBundle.countryCoverageSummary.map((item) => item.country),
           ...reviewBundle.sampledCountries
         ].filter((item) => Boolean(item))
       )
@@ -426,6 +501,12 @@ export function JatoMonthlyUpdatePage() {
     : (availableReviewCountries[0] ?? null);
   const activeOverlapSummary = activeReviewCountry
     ? reviewBundle?.overlapChangeSummary.find((item) => item.country === activeReviewCountry) ?? null
+    : null;
+  const activeFreshnessSummary = activeReviewCountry
+    ? reviewBundle?.countryFreshnessSummary.find((item) => item.country === activeReviewCountry) ?? null
+    : null;
+  const activeCoverageSummary = activeReviewCountry
+    ? reviewBundle?.countryCoverageSummary.find((item) => item.country === activeReviewCountry) ?? null
     : null;
   const activeConflictSamples = activeReviewCountry
     ? (reviewBundle?.conflictSamples.filter((item) => item.country === activeReviewCountry) ?? [])
@@ -507,6 +588,7 @@ export function JatoMonthlyUpdatePage() {
                 className="btn btn-sm btn-secondary"
                 onClick={() => {
                   void refreshJobs(selectedJobId ?? undefined);
+                  void refreshMaintenanceStatus(true);
                   if (selectedJobId) {
                     void loadJobDetail(selectedJobId, true);
                   }
@@ -624,10 +706,18 @@ export function JatoMonthlyUpdatePage() {
           <div>
             <div className="card-title">Cleanup Reminder</div>
             <p className="section-note">
-              这块会固定显示，作为你每次月更前后的清理提醒。
+              这块会固定显示，作为你每次月更前后的清理提醒、baseline 固化入口和磁盘占用概览。
             </p>
           </div>
           <div className="monthly-update-cleanup-actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void handlePromoteBaseline()}
+              disabled={promotingBaseline || hasActiveJob}
+            >
+              {promotingBaseline ? "保存中..." : "保存当前 active 为 baseline"}
+            </button>
             <button
               type="button"
               className="btn btn-secondary"
@@ -642,6 +732,42 @@ export function JatoMonthlyUpdatePage() {
           <strong>建议保留策略：</strong> baseline 目录只保留一个当前激活最新 baseline；旧 baseline 和旧 patch 做归档，
           不要继续堆在 active 目录里；job 目录中的已结束任务临时上传副本可清理。
         </div>
+        {maintenanceStatus && (
+          <div className="monthly-update-cleanup-result">
+            <div className="monthly-update-cleanup-result-head">
+              <span className="card-title">Runtime Snapshot</span>
+              <span className="section-note">
+                {formatMonthlyUpdateTimestamp(maintenanceStatus.checkedAt)}
+                {maintenanceLoading ? " · 刷新中" : ""}
+              </span>
+            </div>
+            <div className="monthly-update-cleanup-summary">
+              <span>active baseline: {maintenanceStatus.activeBaselinePath ?? "-"}</span>
+              <span>baseline source: {maintenanceStatus.activeBaselineSource ?? "-"}</span>
+              <span>latest patch batch: {maintenanceStatus.latestPatchBatch ?? "-"}</span>
+              <span>tracked disk: {formatMonthlyUpdateFileSize(maintenanceStatus.trackedStorageBytes)}</span>
+              <span>jobs: {formatMonthlyUpdateNumber(maintenanceStatus.jobCount)}</span>
+              <span>upload sessions: {formatMonthlyUpdateNumber(maintenanceStatus.uploadSessionCount)}</span>
+            </div>
+          </div>
+        )}
+        {baselinePromotion && (
+          <div className="monthly-update-cleanup-result">
+            <div className="monthly-update-cleanup-result-head">
+              <span className="card-title">Last Baseline Save</span>
+              <span className="section-note">
+                {formatMonthlyUpdateTimestamp(baselinePromotion.promotedAt)}
+              </span>
+            </div>
+            <div className="monthly-update-cleanup-summary">
+              <span>baseline: {baselinePromotion.baselinePath ?? "-"}</span>
+              <span>latest month: {baselinePromotion.detectedLatestMonth ?? "-"}</span>
+              <span>countries: {formatMonthlyUpdateNumber(baselinePromotion.countryCount)}</span>
+              <span>rows: {formatMonthlyUpdateNumber(baselinePromotion.rowCount)}</span>
+              <span>archived baselines: {formatMonthlyUpdateNumber(baselinePromotion.archivedBaselineCount)}</span>
+            </div>
+          </div>
+        )}
         {cleanupResult && (
           <div className="monthly-update-cleanup-result">
             <div className="monthly-update-cleanup-result-head">
@@ -659,16 +785,29 @@ export function JatoMonthlyUpdatePage() {
             </div>
           </div>
         )}
+        {maintenanceStatus && (
+          <div className="monthly-update-summary-grid" style={{ marginBottom: 16 }}>
+            {maintenanceStatus.storageMetrics.map((metric) => (
+              <article key={metric.key} className="monthly-update-summary-card">
+                <span>{metric.label}</span>
+                <strong>{formatMonthlyUpdateFileSize(metric.bytes)}</strong>
+                <small>
+                  {formatMonthlyUpdateNumber(metric.fileCount)} files · {metric.paths[0] ?? "-"}
+                </small>
+              </article>
+            ))}
+          </div>
+        )}
         <div className="monthly-update-cleanup-grid">
           <article className="monthly-update-cleanup-card">
             <span>保留</span>
             <strong>01_RAW_DATA/baseline/</strong>
-            <small>只留当前激活最新 baseline，供下一轮 compare 使用。</small>
+            <small>只留当前激活最新 baseline，供下一轮 compare 使用；如当前 active 已稳定，可一键固化成新 baseline。</small>
           </article>
           <article className="monthly-update-cleanup-card">
             <span>归档</span>
             <strong>旧 baseline / 旧 patch</strong>
-            <small>保留追溯能力，但不要继续放在 active 目录影响自动识别。</small>
+            <small>保留追溯能力，但不要继续放在 active 目录影响自动识别；保存新 baseline 时旧 baseline 也会自动归档。</small>
           </article>
           <article className="monthly-update-cleanup-card">
             <span>可清理</span>
@@ -974,27 +1113,52 @@ export function JatoMonthlyUpdatePage() {
                         </div>
                       </div>
                     )}
-                    {activeOverlapSummary && (
+                    {(activeReviewCountry && (activeOverlapSummary || activeFreshnessSummary || activeCoverageSummary)) && (
                       <div className="monthly-update-summary-grid" style={{ marginBottom: 16 }}>
                         <article className="monthly-update-summary-card">
                           <span>Selected country</span>
-                          <strong>{activeOverlapSummary.country || "-"}</strong>
-                          <small>{activeOverlapSummary.compareMonths.join(", ") || "-"}</small>
+                          <strong>{activeReviewCountry || "-"}</strong>
+                          <small>
+                            candidate {activeFreshnessSummary?.newLatestMonth || "-"}
+                            {" / "}
+                            baseline {activeFreshnessSummary?.oldLatestMonth || "-"}
+                          </small>
+                        </article>
+                        <article className="monthly-update-summary-card">
+                          <span>Freshness</span>
+                          <strong>{activeFreshnessSummary?.freshnessStatus || "-"}</strong>
+                          <small>
+                            row delta {formatSignedNumber(activeFreshnessSummary?.rowDelta ?? 0)}
+                          </small>
+                        </article>
+                        <article className="monthly-update-summary-card">
+                          <span>Added months</span>
+                          <strong>{formatMonthlyUpdateNumber(activeCoverageSummary?.addedMonths.length ?? 0)}</strong>
+                          <small>{activeCoverageSummary?.addedMonths.join(", ") || "无新增月份"}</small>
                         </article>
                         <article className="monthly-update-summary-card">
                           <span>Change rate</span>
-                          <strong>{activeOverlapSummary.changeRate.toFixed(2)}</strong>
-                          <small>{formatMonthlyUpdateNumber(activeOverlapSummary.changedRecordCount)} changed</small>
+                          <strong>{activeOverlapSummary ? activeOverlapSummary.changeRate.toFixed(2) : "-"}</strong>
+                          <small>
+                            {activeOverlapSummary
+                              ? `${formatMonthlyUpdateNumber(activeOverlapSummary.changedRecordCount)} changed`
+                              : "-"}
+                          </small>
                         </article>
                         <article className="monthly-update-summary-card">
                           <span>Added / Removed</span>
-                          <strong>{formatMonthlyUpdateNumber(activeOverlapSummary.addedRecordCount)}</strong>
-                          <small>removed {formatMonthlyUpdateNumber(activeOverlapSummary.removedRecordCount)}</small>
+                          <strong>{formatMonthlyUpdateNumber(activeOverlapSummary?.addedRecordCount ?? 0)}</strong>
+                          <small>removed {formatMonthlyUpdateNumber(activeOverlapSummary?.removedRecordCount ?? 0)}</small>
+                        </article>
+                        <article className="monthly-update-summary-card">
+                          <span>Overlap months</span>
+                          <strong>{formatMonthlyUpdateNumber(activeCoverageSummary?.overlappingMonths.length ?? 0)}</strong>
+                          <small>{activeCoverageSummary?.overlappingMonths.join(", ") || "-"}</small>
                         </article>
                         <article className="monthly-update-summary-card">
                           <span>Unchanged</span>
-                          <strong>{formatMonthlyUpdateNumber(activeOverlapSummary.unchangedRecordCount)}</strong>
-                          <small>{activeOverlapSummary.compareKeyColumns.join(" / ") || "-"}</small>
+                          <strong>{formatMonthlyUpdateNumber(activeOverlapSummary?.unchangedRecordCount ?? 0)}</strong>
+                          <small>{activeOverlapSummary?.compareKeyColumns.join(" / ") || "-"}</small>
                         </article>
                       </div>
                     )}

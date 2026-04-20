@@ -18,13 +18,18 @@ import type {
   JatoMonthlyUpdateJob,
   JatoMonthlyUpdatePlan,
   JatoMonthlyUpdateConflictSample,
+  JatoMonthlyUpdateCountryCoverageSummary,
+  JatoMonthlyUpdateCountryFreshnessSummary,
+  JatoMonthlyUpdateBaselinePromotionResult,
   JatoMonthlyUpdatePublication,
   JatoMonthlyUpdateOverlapChangeSummary,
+  JatoMonthlyUpdateMaintenanceStatus,
   JatoMonthlyUpdateRawCompareSummary,
   JatoMonthlyUpdateReviewBundle,
   JatoMonthlyUpdateReviewFinding,
   JatoMonthlyUpdateRefreshSummary,
   JatoMonthlyUpdateSummaries,
+  JatoMonthlyUpdateStorageMetric,
   JatoMonthlyUpdateUploadProgress,
   JatoMonthlyUpdateUploadSession,
   JatoMonthlyUpdateUpload,
@@ -52,6 +57,7 @@ import type {
   DataManagementAirflowActionResponse,
   DataManagementAirflowStatus,
   DataManagementOverviewResponse,
+  DataManagementVocOverviewResponse,
   DataManagementVocSyncResponse,
   MatchOverride,
   MsrpSource,
@@ -749,6 +755,46 @@ function mapJatoMonthlyUpdateOverlapChangeSummary(
   };
 }
 
+function mapJatoMonthlyUpdateCountryFreshnessSummary(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateCountryFreshnessSummary {
+  return {
+    country: String(raw.country ?? ""),
+    oldLatestMonth: raw.oldLatestMonth === undefined || raw.oldLatestMonth === null
+      ? null
+      : String(raw.oldLatestMonth),
+    newLatestMonth: raw.newLatestMonth === undefined || raw.newLatestMonth === null
+      ? null
+      : String(raw.newLatestMonth),
+    freshnessStatus: String(raw.freshnessStatus ?? ""),
+    rowDelta: Number(raw.rowDelta ?? 0)
+  };
+}
+
+function mapJatoMonthlyUpdateCountryCoverageSummary(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateCountryCoverageSummary {
+  return {
+    country: String(raw.country ?? ""),
+    oldMonths: Array.isArray(raw.oldMonths)
+      ? raw.oldMonths.map((item) => String(item))
+      : [],
+    newMonths: Array.isArray(raw.newMonths)
+      ? raw.newMonths.map((item) => String(item))
+      : [],
+    addedMonths: Array.isArray(raw.addedMonths)
+      ? raw.addedMonths.map((item) => String(item))
+      : [],
+    removedMonths: Array.isArray(raw.removedMonths)
+      ? raw.removedMonths.map((item) => String(item))
+      : [],
+    overlappingMonths: Array.isArray(raw.overlappingMonths)
+      ? raw.overlappingMonths.map((item) => String(item))
+      : [],
+    coverageStatus: String(raw.coverageStatus ?? "")
+  };
+}
+
 function mapJatoMonthlyUpdateReviewBundle(
   raw: Record<string, unknown>
 ): JatoMonthlyUpdateReviewBundle {
@@ -775,6 +821,12 @@ function mapJatoMonthlyUpdateReviewBundle(
       : [],
     overlapChangeSummary: Array.isArray(raw.overlapChangeSummary)
       ? raw.overlapChangeSummary.map((item) => mapJatoMonthlyUpdateOverlapChangeSummary(item as Record<string, unknown>))
+      : [],
+    countryFreshnessSummary: Array.isArray(raw.countryFreshnessSummary)
+      ? raw.countryFreshnessSummary.map((item) => mapJatoMonthlyUpdateCountryFreshnessSummary(item as Record<string, unknown>))
+      : [],
+    countryCoverageSummary: Array.isArray(raw.countryCoverageSummary)
+      ? raw.countryCoverageSummary.map((item) => mapJatoMonthlyUpdateCountryCoverageSummary(item as Record<string, unknown>))
       : [],
     timeAxisCheck: raw.timeAxisCheck && typeof raw.timeAxisCheck === "object"
       ? raw.timeAxisCheck as Record<string, unknown>
@@ -813,6 +865,74 @@ function mapJatoMonthlyUpdateCleanupResult(
     removedJobUploadDirCount: Number(raw.removedJobUploadDirCount ?? 0),
     removedJobUploadDirs: Array.isArray(raw.removedJobUploadDirs)
       ? raw.removedJobUploadDirs.map((item) => String(item))
+      : [],
+  };
+}
+
+function mapJatoMonthlyUpdateStorageMetric(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateStorageMetric {
+  return {
+    key: String(raw.key ?? ""),
+    label: String(raw.label ?? ""),
+    bytes: Number(raw.bytes ?? 0),
+    fileCount: Number(raw.fileCount ?? 0),
+    dirCount: Number(raw.dirCount ?? 0),
+    paths: Array.isArray(raw.paths)
+      ? raw.paths.map((item) => String(item))
+      : [],
+  };
+}
+
+function mapJatoMonthlyUpdateMaintenanceStatus(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateMaintenanceStatus {
+  return {
+    checkedAt: String(raw.checkedAt ?? ""),
+    activeBaselinePath:
+      raw.activeBaselinePath === undefined || raw.activeBaselinePath === null
+        ? null
+        : String(raw.activeBaselinePath),
+    activeBaselineSource:
+      raw.activeBaselineSource === undefined || raw.activeBaselineSource === null
+        ? null
+        : String(raw.activeBaselineSource),
+    latestPatchBatch:
+      raw.latestPatchBatch === undefined || raw.latestPatchBatch === null
+        ? null
+        : String(raw.latestPatchBatch),
+    jobCount: Number(raw.jobCount ?? 0),
+    uploadSessionCount: Number(raw.uploadSessionCount ?? 0),
+    trackedStorageBytes: Number(raw.trackedStorageBytes ?? 0),
+    storageMetrics: Array.isArray(raw.storageMetrics)
+      ? raw.storageMetrics.map((item) => mapJatoMonthlyUpdateStorageMetric(item as Record<string, unknown>))
+      : [],
+  };
+}
+
+function mapJatoMonthlyUpdateBaselinePromotionResult(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateBaselinePromotionResult {
+  return {
+    promotedAt: String(raw.promotedAt ?? ""),
+    triggeredBy: String(raw.triggeredBy ?? ""),
+    sourceParquetPath:
+      raw.sourceParquetPath === undefined || raw.sourceParquetPath === null
+        ? null
+        : String(raw.sourceParquetPath),
+    baselinePath:
+      raw.baselinePath === undefined || raw.baselinePath === null
+        ? null
+        : String(raw.baselinePath),
+    detectedLatestMonth:
+      raw.detectedLatestMonth === undefined || raw.detectedLatestMonth === null
+        ? null
+        : String(raw.detectedLatestMonth),
+    countryCount: Number(raw.countryCount ?? 0),
+    rowCount: Number(raw.rowCount ?? 0),
+    archivedBaselineCount: Number(raw.archivedBaselineCount ?? 0),
+    archivedBaselines: Array.isArray(raw.archivedBaselines)
+      ? raw.archivedBaselines.map((item) => String(item))
       : [],
   };
 }
@@ -1157,8 +1277,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  nordicCustomerDeck: (mode: CustomerInsightMode = "benchmark") =>
-    request<CustomerInsightDeckResponse>(`/market-scan/nordic-customer-deck?mode=${encodeURIComponent(mode)}`),
+  nordicCustomerDeck: (mode: CustomerInsightMode = "benchmark", countries?: string[]) => {
+    const search = new URLSearchParams();
+    search.set("mode", mode);
+    (countries ?? []).forEach((country) => {
+      if (country.trim()) {
+        search.append("countries", country.trim().toUpperCase());
+      }
+    });
+    return request<CustomerInsightDeckResponse>(`/market-scan/nordic-customer-deck?${search.toString()}`);
+  },
   listItems: (params?: {
     page?: number;
     page_size?: number;
@@ -1183,6 +1311,15 @@ export const api = {
   getDataManagementOverview: () =>
     request<{ item: DataManagementOverviewResponse }>("/data-management/overview")
       .then((response) => response.item),
+  getVocManagementOverview: (country?: string) => {
+    const search = new URLSearchParams();
+    if (country) {
+      search.set("country", country);
+    }
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    return request<{ item: DataManagementVocOverviewResponse }>(`/data-management/voc/overview${suffix}`)
+      .then((response) => response.item);
+  },
   getAirflowStatus: () =>
     request<{ item: DataManagementAirflowStatus }>("/data-management/airflow/status")
       .then((response) => response.item),
@@ -1818,6 +1955,16 @@ export const api = {
       method: "POST"
     }).then((res) => ({
       item: mapJatoMonthlyUpdateJob(res.item)
+    })),
+  getJatoMonthlyUpdateMaintenanceStatus: () =>
+    request<{ item: Record<string, unknown> }>("/msrp/monthly-update-maintenance/status").then((res) => ({
+      item: mapJatoMonthlyUpdateMaintenanceStatus(res.item)
+    })),
+  promoteCurrentActiveToJatoBaseline: () =>
+    request<{ item: Record<string, unknown> }>("/msrp/monthly-update-maintenance/promote-baseline", {
+      method: "POST",
+    }).then((res) => ({
+      item: mapJatoMonthlyUpdateBaselinePromotionResult(res.item)
     })),
   runJatoMonthlyUpdateCleanup: () =>
     request<{ item: Record<string, unknown> }>("/msrp/monthly-update-maintenance/cleanup", {

@@ -183,6 +183,76 @@ def test_monthly_update_cleanup_route_returns_summary(monkeypatch) -> None:
     assert payload["removedJobUploadDirCount"] == 2
 
 
+def test_monthly_update_maintenance_status_route_returns_storage_summary(monkeypatch) -> None:
+    monkeypatch.setattr(
+        msrp_monthly_update,
+        "get_jato_monthly_update_maintenance_status",
+        lambda: {
+            "checkedAt": "2026-04-20T12:00:00+00:00",
+            "activeBaselinePath": "01_RAW_DATA/baseline/JATO-2026.3-full-baseline.xlsx",
+            "activeBaselineSource": "active",
+            "latestPatchBatch": "2026-03-r1",
+            "jobCount": 5,
+            "uploadSessionCount": 2,
+            "trackedStorageBytes": 123456,
+            "storageMetrics": [
+                {
+                    "key": "job-upload-copies",
+                    "label": "Job upload copies",
+                    "bytes": 2048,
+                    "fileCount": 2,
+                    "dirCount": 1,
+                    "paths": ["04_Processed_data/ops/jato_monthly_update_jobs/job-a/uploads"],
+                }
+            ],
+        },
+    )
+
+    client = TestClient(app)
+    response = client.get(
+        "/v1/msrp/monthly-update-maintenance/status",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["item"]
+    assert payload["activeBaselineSource"] == "active"
+    assert payload["latestPatchBatch"] == "2026-03-r1"
+    assert payload["trackedStorageBytes"] == 123456
+
+
+def test_monthly_update_promote_baseline_route_returns_summary(monkeypatch) -> None:
+    monkeypatch.setattr(
+        msrp_monthly_update,
+        "promote_current_active_to_baseline",
+        lambda *, triggered_by: {
+            "promotedAt": "2026-04-20T12:30:00+00:00",
+            "triggeredBy": triggered_by,
+            "sourceParquetPath": "04_Processed_data/jato_full_archive.parquet",
+            "baselinePath": "01_RAW_DATA/baseline/JATO-2026.3-full-21countries-baseline.xlsx",
+            "detectedLatestMonth": "2026-03",
+            "countryCount": 21,
+            "rowCount": 1272500,
+            "archivedBaselineCount": 1,
+            "archivedBaselines": [
+                "01_RAW_DATA/historyDataArchive/baseline/JATO-2026.2-full-21countries-baseline.xlsx"
+            ],
+        },
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/msrp/monthly-update-maintenance/promote-baseline",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["item"]
+    assert payload["triggeredBy"] == "tester"
+    assert payload["detectedLatestMonth"] == "2026-03"
+    assert payload["archivedBaselineCount"] == 1
+
+
 def test_chunked_monthly_update_upload_routes_create_job(
     tmp_path, monkeypatch
 ) -> None:
@@ -362,6 +432,26 @@ def test_get_monthly_update_review_route_returns_review_bundle(monkeypatch) -> N
             "reviewFindings": [],
             "sampledCountries": ["DE"],
             "conflictSampleCount": 1,
+            "countryFreshnessSummary": [
+                {
+                    "country": "DE",
+                    "oldLatestMonth": "2026 Jan",
+                    "newLatestMonth": "2026 Mar",
+                    "freshnessStatus": "advanced",
+                    "rowDelta": 12,
+                }
+            ],
+            "countryCoverageSummary": [
+                {
+                    "country": "DE",
+                    "oldMonths": ["2026 Jan"],
+                    "newMonths": ["2026 Jan", "2026 Feb", "2026 Mar"],
+                    "addedMonths": ["2026 Feb", "2026 Mar"],
+                    "removedMonths": [],
+                    "overlappingMonths": ["2026 Jan"],
+                    "coverageStatus": "expanded",
+                }
+            ],
             "timeAxisCheck": {},
             "countryScopeSummary": {},
             "refreshSummary": {"jobStatus": "success"},
@@ -378,6 +468,8 @@ def test_get_monthly_update_review_route_returns_review_bundle(monkeypatch) -> N
     payload = response.json()["item"]
     assert payload["jobId"] == "jato-update-1234abcd"
     assert payload["decisionSuggestion"] == "manual_review_required"
+    assert payload["countryFreshnessSummary"][0]["newLatestMonth"] == "2026 Mar"
+    assert payload["countryCoverageSummary"][0]["addedMonths"] == ["2026 Feb", "2026 Mar"]
 
 
 def test_publish_monthly_update_job_route_returns_published_job(monkeypatch) -> None:

@@ -7,9 +7,11 @@ from app.services.jato_monthly_update_service import (
     create_jato_monthly_update_job_from_upload,
     get_jato_monthly_update_upload,
     get_jato_monthly_update_job,
+    get_jato_monthly_update_maintenance_status,
     get_jato_monthly_update_review,
     initiate_jato_monthly_update_upload,
     list_jato_monthly_update_jobs,
+    promote_current_active_to_baseline,
     publish_jato_monthly_update_job,
     rollback_jato_monthly_update_job,
     retry_failed_jato_monthly_update_job,
@@ -169,4 +171,20 @@ def post_monthly_update_cleanup(
 ) -> dict[str, object]:
     return {
         "item": run_jato_monthly_update_cleanup(triggered_by=user.name)
+    }
+
+
+@router.get("/monthly-update-maintenance/status")
+def get_monthly_update_maintenance_status(
+    _user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {"item": get_jato_monthly_update_maintenance_status()}
+
+
+@router.post("/monthly-update-maintenance/promote-baseline")
+def post_monthly_update_promote_baseline(
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": promote_current_active_to_baseline(triggered_by=user.name)
     }

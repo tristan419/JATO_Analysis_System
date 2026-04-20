@@ -716,6 +716,112 @@ def test_run_cleanup_archives_old_raw_data_and_removes_job_upload_copies(
     assert failed_payload["upload"]["storedPath"] is None
 
 
+def test_promote_current_active_to_baseline_exports_snapshot_and_archives_old(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root, _baseline_path, _archive_path = _configure_raw_roots(
+        tmp_path,
+        monkeypatch,
+        active_baseline_name="JATO-2026.2-full-21countries-baseline.xlsx",
+    )
+    processed_root = project_root / "04_Processed_data"
+    processed_root.mkdir(parents=True, exist_ok=True)
+    active_parquet = processed_root / "jato_full_archive.parquet"
+    pd.DataFrame(
+        {
+            "国家": ["德国", "波兰"],
+            "Make": ["BMW", "Tesla"],
+            "2026 Jan": [10, 12],
+            "2026 Feb": [11, None],
+            "2026 Mar": [None, 14],
+        }
+    ).to_parquet(active_parquet, index=False)
+
+    job_root = processed_root / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(
+        jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root
+    )
+
+    result = jato_monthly_update_service.promote_current_active_to_baseline(
+        triggered_by="tester"
+    )
+
+    assert result["triggeredBy"] == "tester"
+    assert result["detectedLatestMonth"] == "2026-03"
+    assert result["countryCount"] == 2
+    assert result["rowCount"] == 2
+    assert result["archivedBaselineCount"] == 1
+    assert result["archivedBaselines"] == [
+        "01_RAW_DATA/historyDataArchive/baseline/JATO-2026.2-full-21countries-baseline.xlsx"
+    ]
+
+    promoted_path = project_root / str(result["baselinePath"])
+    assert promoted_path.exists()
+    exported = pd.read_excel(promoted_path, sheet_name="Data Export")
+    assert exported.shape == (2, 5)
+    assert list(exported.columns) == ["国家", "Make", "2026 Jan", "2026 Feb", "2026 Mar"]
+    assert (
+        project_root
+        / "01_RAW_DATA"
+        / "historyDataArchive"
+        / "baseline"
+        / "JATO-2026.2-full-21countries-baseline.xlsx"
+    ).exists()
+
+
+def test_get_monthly_update_maintenance_status_summarizes_storage(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root, _baseline_path, _archive_path = _configure_raw_roots(
+        tmp_path,
+        monkeypatch,
+        active_baseline_name="JATO-2026.3-full-21countries-baseline.xlsx",
+        archived_baseline_name="JATO-2026.2-full-21countries-baseline.xlsx",
+    )
+    processed_root = project_root / "04_Processed_data"
+    patch_dir = project_root / "01_RAW_DATA" / "patches" / "2026-03-r1"
+    patch_dir.mkdir(parents=True, exist_ok=True)
+    (patch_dir / "patch.xlsx").write_bytes(b"patch")
+
+    active_parquet = processed_root / "jato_full_archive.parquet"
+    active_parquet.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"国家": ["德国"], "2026 Mar": [1]}).to_parquet(active_parquet, index=False)
+    (processed_root / "manifest.json").write_text("{}", encoding="utf-8")
+    (processed_root / "dataset_fingerprint.json").write_text("{}", encoding="utf-8")
+    (processed_root / "refresh_job_report.json").write_text("{}", encoding="utf-8")
+    (processed_root / "partitioned_dataset_v1" / "国家=德国").mkdir(parents=True, exist_ok=True)
+    ((processed_root / "partitioned_dataset_v1" / "国家=德国") / "part-0.parquet").write_bytes(b"x")
+    ((processed_root / "reviews" / "raw_compare" / "2026-03-r1") / "raw_compare_report.json").parent.mkdir(parents=True, exist_ok=True)
+    ((processed_root / "reviews" / "raw_compare" / "2026-03-r1") / "raw_compare_report.json").write_text("{}", encoding="utf-8")
+    ((processed_root / "staging" / "2026-03-r1-mixed") / "refresh_job_report.json").parent.mkdir(parents=True, exist_ok=True)
+    ((processed_root / "staging" / "2026-03-r1-mixed") / "refresh_job_report.json").write_text("{}", encoding="utf-8")
+    ((processed_root / ".refresh_backups" / "backup-a") / "manifest.json").parent.mkdir(parents=True, exist_ok=True)
+    ((processed_root / ".refresh_backups" / "backup-a") / "manifest.json").write_text("{}", encoding="utf-8")
+
+    job_root = processed_root / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(
+        jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root
+    )
+    upload_dir = job_root / "job-a" / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    (upload_dir / "patch.xlsx").write_bytes(b"upload")
+    upload_session_chunks = job_root / "_upload_sessions" / "upload-a" / "chunks"
+    upload_session_chunks.mkdir(parents=True, exist_ok=True)
+    (upload_session_chunks / "00001.part").write_bytes(b"chunk")
+
+    status = jato_monthly_update_service.get_jato_monthly_update_maintenance_status()
+
+    assert status["activeBaselinePath"] == "01_RAW_DATA/baseline/JATO-2026.3-full-21countries-baseline.xlsx"
+    assert status["activeBaselineSource"] == "active"
+    assert status["latestPatchBatch"] == "2026-03-r1"
+    assert status["trackedStorageBytes"] > 0
+    metrics = {item["key"]: item for item in status["storageMetrics"]}
+    assert metrics["upload-session-cache"]["bytes"] > 0
+    assert metrics["job-upload-copies"]["bytes"] > 0
+    assert metrics["active-dataset"]["bytes"] > 0
+    assert metrics["patch-batches"]["bytes"] > 0
+
+
 def test_chunked_upload_session_can_be_completed_and_queued(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1012,6 +1118,26 @@ def test_get_review_bundle_reads_compare_outputs(tmp_path: Path, monkeypatch) ->
                         "sampleChangedKeys": [{"国家": "DE", "MakeModel": "VW ID.3"}],
                     }
                 ],
+                "countryFreshnessSummary": [
+                    {
+                        "country": "DE",
+                        "oldLatestMonth": "2026 Jan",
+                        "newLatestMonth": "2026 Mar",
+                        "freshnessStatus": "advanced",
+                        "rowDelta": 12,
+                    }
+                ],
+                "countryCoverageSummary": [
+                    {
+                        "country": "DE",
+                        "oldMonths": ["2026 Jan"],
+                        "newMonths": ["2026 Jan", "2026 Feb", "2026 Mar"],
+                        "addedMonths": ["2026 Feb", "2026 Mar"],
+                        "removedMonths": [],
+                        "overlappingMonths": ["2026 Jan"],
+                        "coverageStatus": "expanded",
+                    }
+                ],
                 "timeAxisCheck": {"hasOverlap": True},
                 "countryScopeSummary": {"addedCountries": ["DE"]},
             },
@@ -1062,6 +1188,8 @@ def test_get_review_bundle_reads_compare_outputs(tmp_path: Path, monkeypatch) ->
     assert review["conflictSamples"][0]["changedFields"] == ["2026 Jan", "2026 Feb"]
     assert review["overlapChangeSummary"][0]["country"] == "DE"
     assert review["overlapChangeSummary"][0]["sampleChangedKeys"][0]["MakeModel"] == "VW ID.3"
+    assert review["countryFreshnessSummary"][0]["newLatestMonth"] == "2026 Mar"
+    assert review["countryCoverageSummary"][0]["addedMonths"] == ["2026 Feb", "2026 Mar"]
     assert review["reviewFindings"][0]["ruleId"] == "price-jump"
     assert review["refreshSummary"]["jobStatus"] == "success"
     assert review["refreshSummary"]["rowCount"] == 123
