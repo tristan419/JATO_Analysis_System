@@ -1362,6 +1362,14 @@ export interface JatoMonthlyUpdateReviewFinding {
   suggestedAction: string;
 }
 
+export interface JatoMonthlyUpdateConflictSample {
+  country: string;
+  businessKey: Record<string, unknown>;
+  oldValueDigest?: string | null;
+  newValueDigest?: string | null;
+  changedFields: string[];
+}
+
 export interface JatoMonthlyUpdateReviewBundle {
   jobId: string;
   reviewDir?: string | null;
@@ -1372,6 +1380,7 @@ export interface JatoMonthlyUpdateReviewBundle {
   reviewFindings: JatoMonthlyUpdateReviewFinding[];
   sampledCountries: string[];
   conflictSampleCount: number;
+  conflictSamples: JatoMonthlyUpdateConflictSample[];
   timeAxisCheck: Record<string, unknown>;
   countryScopeSummary: Record<string, unknown>;
   refreshSummary?: JatoMonthlyUpdateRefreshSummary | null;

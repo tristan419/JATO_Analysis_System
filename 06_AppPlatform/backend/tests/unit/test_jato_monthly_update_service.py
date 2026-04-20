@@ -719,7 +719,22 @@ def test_get_review_bundle_reads_compare_outputs(tmp_path: Path, monkeypatch) ->
         json.dumps(
             {
                 "sampledCountries": ["DE", "PL"],
-                "samples": [{"id": 1}, {"id": 2}],
+                "samples": [
+                    {
+                        "country": "DE",
+                        "businessKey": {"国家": "DE", "Make": "VW", "Model": "ID.4"},
+                        "oldValueDigest": "old-digest",
+                        "newValueDigest": "new-digest",
+                        "changedFields": ["2026 Jan", "2026 Feb"],
+                    },
+                    {
+                        "country": "PL",
+                        "businessKey": {"国家": "PL", "Make": "Skoda", "Model": "Enyaq"},
+                        "oldValueDigest": "old-digest-2",
+                        "newValueDigest": "new-digest-2",
+                        "changedFields": ["2026 Mar"],
+                    },
+                ],
             }
         ),
         encoding="utf-8",
@@ -786,6 +801,9 @@ def test_get_review_bundle_reads_compare_outputs(tmp_path: Path, monkeypatch) ->
     assert review["checklistMarkdown"] == "## checklist\n- check rows\n"
     assert review["sampledCountries"] == ["DE", "PL"]
     assert review["conflictSampleCount"] == 2
+    assert review["conflictSamples"][0]["country"] == "DE"
+    assert review["conflictSamples"][0]["businessKey"]["Model"] == "ID.4"
+    assert review["conflictSamples"][0]["changedFields"] == ["2026 Jan", "2026 Feb"]
     assert review["reviewFindings"][0]["ruleId"] == "price-jump"
     assert review["refreshSummary"]["jobStatus"] == "success"
     assert review["refreshSummary"]["rowCount"] == 123

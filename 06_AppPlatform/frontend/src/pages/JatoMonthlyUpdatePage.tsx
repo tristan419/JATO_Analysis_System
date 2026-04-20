@@ -5,6 +5,7 @@ import { AdminToolsNav } from "../components/AdminToolsNav";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { LoadingSurface } from "../components/LoadingSurface";
 import type {
+  JatoMonthlyUpdateConflictSample,
   JatoMonthlyUpdateCleanupResult,
   JatoMonthlyUpdateJob,
   JatoMonthlyUpdateReviewBundle,
@@ -23,6 +24,48 @@ import {
   isMonthlyUpdateUploadFilenameAccepted,
   shouldPollMonthlyUpdateJobs,
 } from "../utils/jatoMonthlyUpdate";
+
+function formatReviewMetricValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => formatReviewMetricValue(item)).join(", ");
+  }
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => `${key}: ${formatReviewMetricValue(item)}`)
+      .join(" · ");
+  }
+  return String(value);
+}
+
+function formatReviewMetrics(metrics: Record<string, unknown>): string {
+  const entries = Object.entries(metrics);
+  if (entries.length === 0) {
+    return "-";
+  }
+  return entries
+    .map(([key, value]) => `${key}: ${formatReviewMetricValue(value)}`)
+    .join(" · ");
+}
+
+function formatConflictSampleBusinessKey(
+  businessKey: JatoMonthlyUpdateConflictSample["businessKey"]
+): string {
+  const entries = Object.entries(businessKey);
+  if (entries.length === 0) {
+    return "-";
+  }
+  return entries.map(([key, value]) => `${key}: ${formatReviewMetricValue(value)}`).join(" · ");
+}
+
+function formatDigestPreview(value: string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+  return value.length > 24 ? `${value.slice(0, 10)}...${value.slice(-8)}` : value;
+}
 
 export function JatoMonthlyUpdatePage() {
   const [jobs, setJobs] = useState<JatoMonthlyUpdateJob[]>([]);
@@ -835,6 +878,7 @@ export function JatoMonthlyUpdatePage() {
                               <th>Target</th>
                               <th>Rule</th>
                               <th>Message</th>
+                              <th>Details</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -844,6 +888,42 @@ export function JatoMonthlyUpdatePage() {
                                 <td>{finding.target || "-"}</td>
                                 <td>{finding.ruleId || "-"}</td>
                                 <td>{finding.message || "-"}</td>
+                                <td>{formatReviewMetrics(finding.metrics)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <div className="card-title">Conflict Samples</div>
+                    {reviewBundle.conflictSamples.length === 0 ? (
+                      <div className="crud-empty-state">暂无可展示的冲突样本</div>
+                    ) : (
+                      <div className="table-wrapper">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>Country</th>
+                              <th>Business key</th>
+                              <th>Changed fields</th>
+                              <th>Old digest</th>
+                              <th>New digest</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reviewBundle.conflictSamples.map((sample, index) => (
+                              <tr key={`${sample.country}-${index}`}>
+                                <td>{sample.country || "-"}</td>
+                                <td>{formatConflictSampleBusinessKey(sample.businessKey)}</td>
+                                <td>{sample.changedFields.join(", ") || "-"}</td>
+                                <td title={sample.oldValueDigest || undefined}>
+                                  {formatDigestPreview(sample.oldValueDigest)}
+                                </td>
+                                <td title={sample.newValueDigest || undefined}>
+                                  {formatDigestPreview(sample.newValueDigest)}
+                                </td>
                               </tr>
                             ))}
                           </tbody>

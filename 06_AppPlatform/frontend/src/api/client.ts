@@ -17,6 +17,7 @@ import type {
   JatoMonthlyUpdateArtifacts,
   JatoMonthlyUpdateJob,
   JatoMonthlyUpdatePlan,
+  JatoMonthlyUpdateConflictSample,
   JatoMonthlyUpdatePublication,
   JatoMonthlyUpdateRawCompareSummary,
   JatoMonthlyUpdateReviewBundle,
@@ -691,6 +692,26 @@ function mapJatoMonthlyUpdateReviewFinding(
   };
 }
 
+function mapJatoMonthlyUpdateConflictSample(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateConflictSample {
+  return {
+    country: String(raw.country ?? ""),
+    businessKey: raw.businessKey && typeof raw.businessKey === "object"
+      ? raw.businessKey as Record<string, unknown>
+      : {},
+    oldValueDigest: raw.oldValueDigest === undefined || raw.oldValueDigest === null
+      ? null
+      : String(raw.oldValueDigest),
+    newValueDigest: raw.newValueDigest === undefined || raw.newValueDigest === null
+      ? null
+      : String(raw.newValueDigest),
+    changedFields: Array.isArray(raw.changedFields)
+      ? raw.changedFields.map((item) => String(item))
+      : []
+  };
+}
+
 function mapJatoMonthlyUpdateReviewBundle(
   raw: Record<string, unknown>
 ): JatoMonthlyUpdateReviewBundle {
@@ -712,6 +733,9 @@ function mapJatoMonthlyUpdateReviewBundle(
       ? raw.sampledCountries.map((item) => String(item))
       : [],
     conflictSampleCount: Number(raw.conflictSampleCount ?? 0),
+    conflictSamples: Array.isArray(raw.conflictSamples)
+      ? raw.conflictSamples.map((item) => mapJatoMonthlyUpdateConflictSample(item as Record<string, unknown>))
+      : [],
     timeAxisCheck: raw.timeAxisCheck && typeof raw.timeAxisCheck === "object"
       ? raw.timeAxisCheck as Record<string, unknown>
       : {},

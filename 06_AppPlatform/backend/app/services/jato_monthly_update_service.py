@@ -681,6 +681,32 @@ def _sanitize_review_finding(item: Any) -> dict[str, Any] | None:
     }
 
 
+def _sanitize_conflict_sample(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    business_key = item.get("businessKey")
+    changed_fields = item.get("changedFields")
+    return {
+        "country": str(item.get("country", "")),
+        "businessKey": business_key if isinstance(business_key, dict) else {},
+        "oldValueDigest": (
+            None
+            if item.get("oldValueDigest") in {None, ""}
+            else str(item.get("oldValueDigest"))
+        ),
+        "newValueDigest": (
+            None
+            if item.get("newValueDigest") in {None, ""}
+            else str(item.get("newValueDigest"))
+        ),
+        "changedFields": (
+            [str(field) for field in changed_fields]
+            if isinstance(changed_fields, list)
+            else []
+        ),
+    }
+
+
 def _require_no_running_monthly_update_jobs(*, excluding_job_id: str | None = None) -> None:
     running_jobs = [
         str(payload.get("jobId", ""))
@@ -725,6 +751,7 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
     ]
     sampled_countries: list[str] = []
     sample_count = 0
+    conflict_samples: list[dict[str, Any]] = []
     if isinstance(conflict_payload, dict):
         sampled = conflict_payload.get("sampledCountries")
         samples = conflict_payload.get("samples")
@@ -732,6 +759,13 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
             sampled_countries = [str(item) for item in sampled]
         if isinstance(samples, list):
             sample_count = len(samples)
+            conflict_samples = [
+                sanitized
+                for sanitized in (
+                    _sanitize_conflict_sample(item) for item in samples
+                )
+                if sanitized is not None
+            ]
 
     return {
         "jobId": job_id,
@@ -747,6 +781,7 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
         "reviewFindings": findings,
         "sampledCountries": sampled_countries,
         "conflictSampleCount": sample_count,
+        "conflictSamples": conflict_samples,
         "timeAxisCheck": (
             raw_compare_report.get("timeAxisCheck")
             if isinstance(raw_compare_report.get("timeAxisCheck"), dict)
