@@ -4,7 +4,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -52,6 +52,22 @@ def normalize_scalar(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     return str(value)
+
+
+def normalize_series_for_digest(series: pd.Series) -> pd.Series:
+    if (
+        pd.api.types.is_string_dtype(series.dtype)
+        or pd.api.types.is_object_dtype(series.dtype)
+    ):
+        return series.astype("string").fillna("<null>").str.strip()
+    return series.map(normalize_scalar).astype("string")
+
+
+def normalize_frame_for_digest(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = frame.copy()
+    for column in normalized.columns:
+        normalized[column] = normalize_series_for_digest(normalized[column])
+    return normalized
 
 
 def to_json_safe(value: Any) -> Any:
@@ -468,13 +484,7 @@ def summarize_country_coverage(
 def compute_payload_digest(payload_df: pd.DataFrame) -> str:
     if payload_df.empty or not list(payload_df.columns):
         return "0"
-    normalized = payload_df.copy()
-    for column in normalized.columns:
-        normalized[column] = normalized[column].map(normalize_scalar)
-    normalized = normalized.sort_values(
-        by=list(normalized.columns),
-        kind="stable",
-    ).reset_index(drop=True)
+    normalized = normalize_frame_for_digest(payload_df)
     hash_values = pd.util.hash_pandas_object(
         normalized,
         index=False,
@@ -495,41 +505,71 @@ def build_key_digest_frame(
         group[f"{source_name}Column"]: group["id"]
         for group in key_groups
     }
-    selected = df[key_columns + payload_columns].copy()
-    selected = selected.rename(columns=rename_map)
-    grouped = selected.groupby(
-        list(rename_map.values()),
+    key_ids = list(rename_map.values())
+    selected_keys = normalize_frame_for_digest(
+        df[key_columns].copy().rename(columns=rename_map)
+    )
+    grouped = selected_keys.groupby(
+        key_ids,
         dropna=False,
         sort=False,
     )
-    rows: list[dict[str, Any]] = []
-    for key_values, group_df in grouped:
-        if not isinstance(key_values, tuple):
-            key_values = (key_values,)
-        row: dict[str, Any] = {}
-        for group, key_value in zip(key_groups, key_values, strict=False):
-            row[group["id"]] = normalize_scalar(key_value)
-        if payload_columns:
-            payload_df = group_df[payload_columns].copy()
-        else:
-            payload_df = pd.DataFrame(index=group_df.index)
-        sample_payload = {}
-        if payload_columns and not group_df.empty:
-            first_row = group_df.iloc[0]
-            sample_payload = {
-                column: normalize_scalar(first_row[column])
-                for column in payload_columns
-            }
-        row.update(
-            {
-                "payloadDigest": compute_payload_digest(payload_df),
-                "recordCount": int(len(group_df)),
-                "multiRow": bool(len(group_df) > 1),
-                "samplePayload": sample_payload,
-            }
-        )
-        rows.append(row)
-    return pd.DataFrame(rows)
+    result = grouped.size().rename("recordCount").reset_index()
+    result["recordCount"] = result["recordCount"].astype(int)
+    result["multiRow"] = result["recordCount"] > 1
+
+    if not payload_columns:
+        result["payloadDigest"] = "0"
+        result["samplePayload"] = [{} for _ in range(len(result))]
+        return result[
+            [*key_ids, "payloadDigest", "recordCount", "multiRow", "samplePayload"]
+        ]
+
+    payload_df = normalize_frame_for_digest(df[payload_columns].copy())
+    payload_hashes = pd.util.hash_pandas_object(
+        payload_df,
+        index=False,
+        categorize=True,
+    ).astype("uint64")
+
+    digest_source = selected_keys.copy()
+    digest_source["__payload_hash"] = payload_hashes
+    payload_sums = digest_source.groupby(
+        key_ids,
+        dropna=False,
+        sort=False,
+    )["__payload_hash"].sum().reset_index(name="payloadHashSum")
+    payload_sums["payloadDigest"] = payload_sums["payloadHashSum"].map(
+        lambda value: str(int(value))
+    )
+
+    sample_source = selected_keys.copy()
+    for column in payload_columns:
+        sample_source[column] = payload_df[column]
+    sample_first = sample_source.groupby(
+        key_ids,
+        dropna=False,
+        sort=False,
+    ).first().reset_index()
+    sample_payloads = sample_first[payload_columns].to_dict("records")
+    sample_frame = sample_first[key_ids].copy()
+    sample_frame["samplePayload"] = sample_payloads
+
+    result = result.merge(
+        payload_sums[key_ids + ["payloadDigest"]],
+        on=key_ids,
+        how="left",
+        sort=False,
+    )
+    result = result.merge(
+        sample_frame,
+        on=key_ids,
+        how="left",
+        sort=False,
+    )
+    return result[
+        [*key_ids, "payloadDigest", "recordCount", "multiRow", "samplePayload"]
+    ]
 
 
 def compute_changed_fields(
@@ -561,6 +601,7 @@ def summarize_overlap_changes(
     old_time_columns: list[str],
     new_time_columns: list[str],
     sample_limit: int,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     summaries: list[dict[str, Any]] = []
     samples: list[dict[str, Any]] = []
@@ -577,12 +618,17 @@ def summarize_overlap_changes(
         - {group["newColumn"] for group in key_groups}
     )
 
-    for coverage_entry in coverage_entries:
+    total_countries = len(coverage_entries)
+    for country_index, coverage_entry in enumerate(coverage_entries, start=1):
         country = str(coverage_entry["country"])
         if country not in old_country_set:
             continue
         if country not in new_country_set:
             continue
+        if progress_callback:
+            progress_callback(
+                f"🔍 记录级比对 {country} ({country_index}/{total_countries})"
+            )
 
         compare_months = sort_time_labels(
             list(coverage_entry.get("overlappingMonths", []))
@@ -1162,6 +1208,9 @@ def run_compare(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         old_country_info,
         new_country_info,
     )
+    emit(
+        f"🔎 开始记录级重叠比对（{len(coverage_entries)} 个国家）"
+    )
     overlap_summaries, conflict_samples = summarize_overlap_changes(
         old_df=old_df,
         new_df=new_df,
@@ -1172,7 +1221,9 @@ def run_compare(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         old_time_columns=old_month_columns,
         new_time_columns=new_month_columns,
         sample_limit=max(int(args.sample_limit), 1),
+        progress_callback=emit,
     )
+    emit("✅ 完成记录级重叠比对")
 
     scope_summary = build_country_scope_summary(
         freshness_entries=freshness_entries,
