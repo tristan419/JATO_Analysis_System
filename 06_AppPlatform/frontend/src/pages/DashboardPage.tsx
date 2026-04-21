@@ -53,6 +53,28 @@ const RvFinanceDashboard = lazy(() =>
   import("../components/RvFinanceDashboard").then((module) => ({ default: module.RvFinanceDashboard }))
 );
 
+function applyTimeSeriesLineColors(traces: Data[], colors: Record<string, string>): Data[] {
+  if (!colors || Object.keys(colors).length === 0) return traces;
+  return traces.map((trace) => {
+    const name = String((trace as Partial<Data>).name ?? "").trim();
+    const resolvedColor = colors[name];
+    if (!name || !resolvedColor) return trace;
+    const next = { ...trace } as Data & {
+      line?: Record<string, unknown>;
+      marker?: Record<string, unknown>;
+    };
+    if (trace.type === "scatter" && next.line) {
+      next.line = { ...next.line, color: resolvedColor };
+      return next;
+    }
+    if (next.marker) {
+      next.marker = { ...next.marker, color: resolvedColor };
+      return next;
+    }
+    return next;
+  });
+}
+
 /* ── filter component ──────────────────────────────── */
 /* ── Main Dashboard ────────────────────────────────── */
 export function DashboardPage() {
@@ -1283,7 +1305,10 @@ export function DashboardPage() {
               }
               return { ...base, type: "bar", marker: { color: c } } as Data;
             });
-            traces = applySeriesColors(applyDataLabelsToTraces(traces, tsExport), tsExport.seriesColors);
+            traces = applyTimeSeriesLineColors(
+              applyDataLabelsToTraces(traces, tsExport),
+              tsExport.seriesColors,
+            );
             return (
               <div ref={el => { tsChartRef.current = el; }}>
                 <PlotlyChart
