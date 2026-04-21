@@ -784,6 +784,74 @@ def test_answer_passes_prefetched_execution_plan_to_model(monkeypatch) -> None:
     assert planner_context["evidencePacks"]["dashboard"]["periodLabel"] == "Sweden - Feb 2025"
     assert result["grounding"]["trust"]["confidence"] == "medium"
     assert result["grounding"]["trust"]["sourceCoverage"]["requiredReady"] == 3
+    assert any(
+        layer["label"] == "新闻快照已同步"
+        for layer in result["grounding"]["layers"]
+    )
+    assert any(
+        "最近同步时间" in finding
+        for finding in result["grounding"]["keyFindings"]
+    )
+    assert result["grounding"]["answerPath"]["steps"][0] == "先锁定政策 / 新闻 / 市场事件范围。"
+    assert "政策/新闻问题" in result["grounding"]["reasoningNotes"][0]
+
+
+@pytest.mark.usefixtures("_patch_base")
+def test_answer_market_context_marks_stale_news_snapshot(monkeypatch) -> None:
+    monkeypatch.setenv("NVIDIA_API_KEY", "secret")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv(
+        "APP_COUNTRY_CHAT_MODEL_OPTIONS",
+        "nvidia:meta/llama-3.3-70b-instruct",
+    )
+    monkeypatch.setattr(
+        country_chat_service,
+        "_answer_with_nvidia",
+        lambda **kwargs: "nvidia ok",
+    )
+    monkeypatch.setattr(
+        country_chat_service.news_wiki_service,
+        "query_news_wiki",
+        lambda *args, **kwargs: [
+            {
+                "title": "Stub news fact",
+                "publishedAt": "2026-03-01T00:00:00+00:00",
+                "reason": "policy",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        country_chat_service.news_digest_service,
+        "get_country_news_payload",
+        lambda country, **kwargs: {
+            **copy.deepcopy(_build_stub_news_payload(country)),
+            "newsDigest": {
+                **copy.deepcopy(_build_stub_news_payload(country))["newsDigest"],
+                "stale": True,
+            },
+        },
+    )
+
+    result = country_chat_service.answer_country_question(
+        "瑞典",
+        "瑞典最近的补贴政策是什么？",
+    )
+
+    assert result["intentRoute"] == "market-context"
+    assert result["provider"] == "nvidia"
+    assert any(
+        layer["label"] == "新闻快照偏旧"
+        for layer in result["grounding"]["layers"]
+    )
+    assert result["grounding"]["trust"]["confidence"] == "low"
+    assert any(
+        "新闻快照偏旧" in fact or "谨慎解释" in fact
+        for fact in result["grounding"]["trust"]["missingFacts"]
+    )
+    assert any(
+        "证据边界理解" in note
+        for note in result["grounding"]["reasoningNotes"]
+    )
 
 
 @pytest.mark.usefixtures("_patch_base")
@@ -1191,6 +1259,15 @@ _STUB_MODEL_VERSION_BUBBLE = {
 _STUB_POSITIONING_PRICING_DECK = {
     "metadata": {
         "resolvedPeriod": "2025-02",
+        "priceOverlay": {
+            "sourceMode": "duckdb-overlay",
+            "matchedRows": 8,
+            "matchedModels": 2,
+            "linkMatches": 6,
+            "directMatches": 2,
+            "candidateRows": 10,
+            "linkCandidateRows": 6,
+        },
         "labels": {
             "pageTitle": "Sweden 2025-02 positioning pricing",
             "currentMonthShort": "2025 Feb",
@@ -1326,12 +1403,66 @@ def test_answer_uses_snapshot_direct_for_positioning_page_scope(monkeypatch) -> 
     assert result["answerMode"] == "grounded-direct"
     assert result["extractedParams"]["positioningPage"] == "suvA"
     assert result["contextSnapshot"]["positioningPageScope"]["pageKey"] == "suvA"
+    assert result["contextSnapshot"]["positioningPageScope"]["priceOverlay"]["matchedRows"] == 8
     assert "35k-40k" in result["answer"]
     assert "头部竞品" in result["answer"]
+    assert "reviewed PG current price" in result["answer"]
     assert result["renderHints"][0]["kind"] == "positioning-summary"
+    assert "reviewed PG current price overlay" in str(result["providerReason"])
+    assert any(
+        layer["label"] == "Reviewed MSRP overlay 已命中"
+        for layer in result["grounding"]["layers"]
+    )
     assert any(
         table["title"] == "SUV-A 价格带排名"
         for table in result["grounding"]["evidenceTables"]
+    )
+    assert any(
+        layer["label"] == "参数线索推导"
+        for layer in result["grounding"]["layers"]
+    )
+    assert any(
+        "suvA page" in step
+        for step in result["grounding"]["answerPath"]["steps"]
+    )
+
+
+@pytest.mark.usefixtures("_patch_base", "_patch_dashboard")
+def test_answer_positioning_page_scope_marks_parquet_fallback(monkeypatch) -> None:
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    monkeypatch.delenv("NVAPI_KEY", raising=False)
+    fallback_deck = copy.deepcopy(_STUB_POSITIONING_PRICING_DECK)
+    fallback_deck["metadata"]["priceOverlay"] = {
+        "sourceMode": "parquet-only",
+        "candidateRows": 10,
+        "linkCandidateRows": 6,
+        "matchedRows": 0,
+        "matchedModels": 0,
+        "linkMatches": 0,
+        "directMatches": 0,
+        "reason": "no-overlay-matches",
+    }
+    monkeypatch.setattr(
+        country_chat_service.market_scan_service,
+        "query_positioning_pricing_deck",
+        lambda **kw: fallback_deck,
+    )
+
+    result = country_chat_service.answer_country_question(
+        "瑞典",
+        "看一下 /positioning-pricing?country=瑞典&activePage=suvA 里哪个价带最挤",
+    )
+
+    assert result["intentRoute"] == "positioning-focus"
+    assert "parquet MSRP fallback" in str(result["providerReason"])
+    assert any(
+        layer["label"] == "Parquet MSRP fallback"
+        for layer in result["grounding"]["layers"]
+    )
+    assert result["grounding"]["trust"]["confidence"] == "medium"
+    assert any(
+        "parquet MSRP fallback" in fact
+        for fact in result["grounding"]["trust"]["missingFacts"]
     )
 
 

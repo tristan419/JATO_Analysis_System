@@ -9,7 +9,7 @@ Status: Active
 - `/copilot` now acts as the **mobile-web primary entry**: the top nav exposes Copilot directly, the floating widget is hidden on phone-sized coarse-pointer access, and the full page reuses compact grounded-answer / compact deck rendering without changing the desktop page into mobile mode.
 - Mobile handoff is now explicit at the page layer through a **desktop continuation deep link** that carries country, chat model, and the latest question into `/copilot` on another device/browser session.
 - Phone view now further compresses the **pre-transcript stack**: mobile hero/header is shorter, prompts collapse to the empty state, quick actions focus on desktop handoff, pending/loading uses compact rendering, and inline charts are capped more aggressively on phone only.
-- Grounded answers now expose a **visible answer path** from existing metadata: route label, resolved focus tags, truth-layer read path, and output mode are rendered as a concise user-facing reasoning chain without exposing raw model chain-of-thought.
+- Grounded answers now expose a **backend-owned visible answer path**: route trigger, parameter-clue inference, truth-layer read path, and output mode are emitted by backend grounding first, so the UI no longer has to reconstruct the main reasoning chain from generic heuristics or paragraph splitting.
 - Assistant replies now share one **answer-first scaffold** across page + widget: lead answer first, then key findings, then a visible thinking chain, then explanation/evidence/data layers, so every turn feels structured instead of dumping one long body.
 - NVIDIA tool-first routes now **degrade cleanly** when function-calling does not converge in time: the backend raises into the normal provider fallback path, so users get a grounded local snapshot answer instead of seeing a raw “analysis interrupted / tool depth exceeded” message.
 - NVIDIA tool execution is now **two-stage instead of recursive**: the model gets one tool-planning pass to request all needed tools, backend executes them in parallel-like batch, then a second no-tool pass forces the model to synthesize the final answer from the gathered evidence.
@@ -17,6 +17,10 @@ Status: Active
 - `engineering_variant_diff_service.py` provides deterministic **trim/version diff** from engineering normalized variants (`ConfigBaseVariant` + `ConfigMarketFeatureOverride`).
 - Related news now acts as **question-scoped evidence** instead of always appearing as a standalone market snapshot block.
 - Backend already has a **country news cache / digest layer**, but toolkit-side news freshness, PG persistence, and vector sync are still not one fully closed pipeline.
+- App-facing news snapshot persistence is now explicitly **PostgreSQL-first**: `ops.country_news_articles` stores normalized article snapshots and `ops.country_news_digests` stores one current digest snapshot per country for Country Copilot / dashboard consumption; toolkit fetch, vector sync, and policy persistence remain separate follow-up layers.
+- MSRP provenance is only **partially visible**: `MsrpPage` 已能看 current price、price history、以及打回 review，但 effective observation / source-tier / match reason 还没有在同一个 detail drawer 里讲透。
+- News freshness is now **visible in the answer chain**: `/copilot` page、widget、analysis deck 继续显示 `syncTimestamp + stale`，同时 grounded answer / trust 也会明确说明新闻快照是 fresh、stale 还是时效未知。
+- Positioning / Pricing 与 Country Copilot 目前仍缺一层 **reviewed-price visibility**：backend 已经产生 `priceOverlay` metadata，但前端页和 grounding / trust 还没有稳定展示“这次到底用了 reviewed PG price 还是 parquet fallback”。
 
 ## Target State
 
@@ -24,6 +28,7 @@ Status: Active
 - CurrentPrice lookup, variant diff, policy/news evidence, and future sales-truth joins converge into a narrower canonical tool layer.
 - News / policy freshness closes the loop through persistent sinks and stable retrieval, not just toolkit-side collection.
 - Grounding becomes more explicit about source tier, observed time, and official vs third-party provenance.
+- Grounding also needs to become explicit about **reviewed-price usage state**：当答案来自 positioning-pricing scope 时，必须说明是 reviewed PG overlay、partial overlay，还是 parquet fallback。
 - Diff answers keep expanding from “A vs B trim” into powertrain, entry-vs-top, and cross-country comparisons.
 - Mobile handoff eventually becomes a **true cross-device session continuation**, not only a deep link that preloads country/model/question.
 
@@ -122,3 +127,6 @@ If something fails:
 - 2026-04-19: Reworked NVIDIA tool-first execution into a bounded two-pass flow (`tool request -> tool results -> forced final answer`), so precise-lookup / positioning routes still use the LLM for synthesis but no longer recurse through repeated tool-calling rounds.
 - 2026-04-19: Added a first `peerCorridor` layer on top of `positioningMap`: the backend now returns sales-weighted peer P25 / median / P75, residual vs peer median, and corridor position labels; `positioning-focus` answers, grounding tables, Chat inline cards, the analysis deck, and DashboardPage now surface the same corridor/residual summary instead of only showing raw scatter neighbors.
 - 2026-04-19: Expanded `peerCorridor` into a deterministic **price stance / verdict** layer: the backend now classifies the target into `进攻切入价 / 主流防守价 / 市场对齐价 / 上沿试探价 / 高溢价试探价`, attaches stance detail to the shared response contract, and lifts that verdict into direct answers, grounding key findings/evidence, inline positioning cards, the analysis deck, and DashboardPage chips.
+- 2026-04-20: 明确收敛当前 Copilot / Positioning 的下一优先级：先补齐 **MSRP provenance、news freshness、reviewed-price usage** 的可见性，再谈 unified scraping / VOC / 更大的平台扩展；其中 reviewed-price usage 以 positioning-pricing deck 的 `priceOverlay` metadata 为唯一状态源。
+- 2026-04-21: 把 **news freshness** 从 page/widget 状态区提升进 grounded answer 主链：Country Copilot 现在会在 grounding layers、key findings、trust missing facts 里明确说明新闻快照是已同步、偏旧还是时效未确认，并在 market-context / news evidence 场景下对信心做对应降级。
+- 2026-04-21: 把 **参数线索推导 / visible thinking chain** 收回 backend：`grounding.answerPath + grounding.reasoningNotes` 现在由 backend 基于 intent route、resolved params、page scope、news freshness 与已命中证据直接生成，frontend 只负责优先渲染这份 reasoning brief，旧的段落拆分逻辑退回 fallback。

@@ -1874,6 +1874,12 @@ def _resolve_positioning_page_scope_bundle(
         for item in list(page.get("metrics", []) or [])
         if isinstance(item, dict)
     ]
+    metadata = deck.get("metadata", {}) if isinstance(deck, dict) else {}
+    price_overlay = (
+        metadata.get("priceOverlay", {})
+        if isinstance(metadata, dict)
+        else {}
+    )
 
     bundle = {
         "pageKey": page_key,
@@ -1891,9 +1897,351 @@ def _resolve_positioning_page_scope_bundle(
             else snapshot.get("resolvedPeriod")
         ),
         "selectedFuelTypes": fuel_types,
+        "priceOverlay": price_overlay if isinstance(price_overlay, dict) else {},
     }
     snapshot["positioningPageScope"] = bundle
     return bundle
+
+
+_POSITIONING_PRICE_OVERLAY_REASON_LABELS = {
+    "country-unresolved": "国家字段未解析",
+    "duckdb-unavailable": "DuckDB 不可用",
+    "database-unavailable": "应用数据库不可用",
+    "duckdb-postgres-attach-failed": "DuckDB 无法挂载 PostgreSQL",
+    "no-current-prices": "PG current_prices 暂无候选",
+    "no-current-price-candidates": "当前页没有可覆盖的 current price 候选",
+    "no-overlay-matches": "当前页未命中 reviewed price",
+    "duckdb-overlay-failed": "DuckDB overlay 执行失败",
+}
+
+
+def _format_positioning_price_overlay_reason(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    prefix, _, suffix = text.partition(":")
+    label = _POSITIONING_PRICE_OVERLAY_REASON_LABELS.get(
+        prefix.strip(),
+        prefix.strip(),
+    )
+    if suffix.strip():
+        return f"{label}（{suffix.strip()}）"
+    return label or None
+
+
+def _summarize_positioning_price_overlay(value: Any) -> dict[str, str] | None:
+    if not isinstance(value, dict) or not value:
+        return None
+
+    source_mode = str(value.get("mode") or value.get("sourceMode") or "").strip()
+    matched_rows = int(value.get("matchedRows") or 0)
+    matched_models = int(value.get("matchedModels") or 0)
+    link_matches = int(value.get("linkMatches") or 0)
+    direct_matches = int(value.get("directMatches") or 0)
+    candidate_rows = int(value.get("candidateRows") or 0)
+    link_candidate_rows = int(value.get("linkCandidateRows") or 0)
+    reason_text = _format_positioning_price_overlay_reason(value.get("reason"))
+
+    if source_mode == "duckdb-overlay" and matched_rows > 0:
+        detail = (
+            "当前页已命中 reviewed PG current price，"
+            f"覆盖 {matched_rows:,} 行 / {matched_models:,} 个车型；"
+            f"link 命中 {link_matches:,} 行，direct 命中 {direct_matches:,} 行。"
+        )
+        return {
+            "status": "reviewed-overlay",
+            "label": "Reviewed MSRP overlay 已命中",
+            "detail": detail,
+            "providerNote": "本次定位定价已命中 reviewed PG current price overlay。",
+            "trustNote": "",
+        }
+
+    if source_mode == "duckdb-postgres-attach":
+        detail = (
+            "已连接 PG reviewed price layer，但当前页并非全部命中；"
+            f"current price 候选 {candidate_rows:,} 行，link 候选 {link_candidate_rows:,} 行。"
+        )
+        if reason_text:
+            detail += f"原因：{reason_text}。"
+        else:
+            detail += "未命中的车型仍会回落到 parquet MSRP。"
+        note = "当前页只部分命中 reviewed PG current price，未命中的车型仍使用 parquet MSRP。"
+        return {
+            "status": "partial-overlay",
+            "label": "Reviewed MSRP overlay 部分命中",
+            "detail": detail,
+            "providerNote": note,
+            "trustNote": note,
+        }
+
+    detail = "当前页未命中 reviewed PG current price，仍使用 parquet MSRP。"
+    if reason_text:
+        detail += f"原因：{reason_text}。"
+    note = "当前页仍使用 parquet MSRP fallback，reviewed PG current price 未命中。"
+    return {
+        "status": "parquet-fallback",
+        "label": "Parquet MSRP fallback",
+        "detail": detail,
+        "providerNote": note,
+        "trustNote": note,
+    }
+
+
+def _summarize_news_digest_freshness(value: Any) -> dict[str, str] | None:
+    if not isinstance(value, dict) or not value:
+        return None
+
+    timestamp = str(
+        value.get("syncTimestamp") or value.get("updatedAt") or ""
+    ).strip()
+    article_count = int(value.get("articleCount") or 0)
+
+    if bool(value.get("stale")):
+        detail = "当前回答引用了新闻快照，但这份快照已标记 stale。"
+        if timestamp:
+            detail += f"最近同步时间 {timestamp}。"
+        if article_count > 0:
+            detail += f"摘要覆盖 {article_count:,} 条新闻。"
+        return {
+            "status": "stale",
+            "label": "新闻快照偏旧",
+            "detail": detail,
+            "freshness": timestamp,
+            "trustNote": "当前新闻快照偏旧，涉及最新政策/新闻时需要谨慎解释。",
+        }
+
+    if timestamp:
+        detail = f"当前回答引用了新闻快照，最近同步时间 {timestamp}。"
+        if article_count > 0:
+            detail += f"摘要覆盖 {article_count:,} 条新闻。"
+        return {
+            "status": "fresh",
+            "label": "新闻快照已同步",
+            "detail": detail,
+            "freshness": timestamp,
+            "trustNote": "",
+        }
+
+    detail = "当前回答引用了新闻快照，但缺少稳定的同步时间，暂时无法确认其新鲜度。"
+    if article_count > 0:
+        detail += f"当前摘要覆盖 {article_count:,} 条新闻。"
+    return {
+        "status": "unknown",
+        "label": "新闻时效未确认",
+        "detail": detail,
+        "freshness": "",
+        "trustNote": "当前新闻快照缺少稳定的同步时间。",
+    }
+
+
+def _format_reasoning_value(value: Any, *, suffix: str = "") -> str:
+    if isinstance(value, str):
+        return value.strip()
+    number = _coerce_optional_float(value)
+    if number is None:
+        return ""
+    rounded = int(round(number))
+    if abs(number - rounded) < 1e-6:
+        return f"{rounded:,}{suffix}"
+    return f"{number:,.1f}{suffix}"
+
+
+def _build_country_chat_reasoning_clue(
+    *,
+    intent_route: str,
+    user_params: dict[str, Any],
+    snapshot: dict[str, Any],
+) -> str | None:
+    params = user_params if isinstance(user_params, dict) else {}
+
+    if intent_route == "precise-lookup":
+        compare_subjects = [
+            item
+            for item in list(params.get("compare_subjects") or [])
+            if isinstance(item, dict)
+        ]
+        if len(compare_subjects) >= 2:
+            labels = []
+            for item in compare_subjects[:2]:
+                label = " ".join(
+                    part
+                    for part in [
+                        str(item.get("model") or "").strip(),
+                        str(item.get("variantQuery") or "").strip(),
+                    ]
+                    if part
+                ).strip()
+                if label:
+                    labels.append(label)
+            if labels:
+                return "参数线索推导：已先按 " + " vs ".join(labels) + " 收窄到版本/配置对比。"
+
+        query_models = [
+            str(item).strip()
+            for item in list(params.get("models") or [])
+            if str(item).strip()
+        ]
+        model = str(params.get("model") or "").strip()
+        if model and model not in query_models:
+            query_models.insert(0, model)
+        powertrain = str(params.get("powertrain") or "").strip()
+        year = _format_reasoning_value(params.get("model_year") or params.get("year"))
+        clue_parts = []
+        if query_models:
+            clue_parts.append(" / ".join(query_models[:3]))
+        if powertrain:
+            clue_parts.append(powertrain)
+        if year:
+            clue_parts.append(f"{year} 款")
+        if clue_parts:
+            return "参数线索推导：已先按 " + " / ".join(clue_parts) + " 收窄到当前 MSRP / trim 命中。"
+        return None
+
+    if intent_route == "positioning-focus":
+        positioning_page = str(params.get("positioningPage") or "").strip()
+        if positioning_page:
+            return (
+                "参数线索推导：已先锁定 positioning-pricing 的 "
+                f"{positioning_page} page，再按价格带与竞品气泡判断结论。"
+            )
+        positioning_lookup = (
+            snapshot.get("positioningLookup", {})
+            if isinstance(snapshot.get("positioningLookup"), dict)
+            else {}
+        )
+        resolved_segment = str(
+            positioning_lookup.get("resolvedSegmentLabel")
+            or positioning_lookup.get("resolvedSegment")
+            or params.get("segment")
+            or ""
+        ).strip()
+        length_text = _format_reasoning_value(params.get("length"), suffix="mm")
+        msrp_text = _format_reasoning_value(params.get("msrp"))
+        peer_corridor = (
+            positioning_lookup.get("peerCorridor", {})
+            if isinstance(positioning_lookup.get("peerCorridor"), dict)
+            else {}
+        )
+        stance_label = str(peer_corridor.get("stanceLabel") or "").strip()
+        clue_parts = []
+        if length_text:
+            clue_parts.append(f"车长 {length_text}")
+        if msrp_text:
+            clue_parts.append(f"目标 MSRP {msrp_text}")
+        if resolved_segment:
+            clue_parts.append(f"落在 {resolved_segment}")
+        if stance_label:
+            clue_parts.append(f"price stance 为 {stance_label}")
+        if clue_parts:
+            return "参数线索推导：" + " -> ".join(clue_parts) + "。"
+        return None
+
+    if intent_route == "segment-fuel-focus":
+        resolved_segment = str(
+            params.get("segment")
+            or (
+                snapshot.get("segmentFuelLookup", {}).get("resolvedSegmentLabel")
+                if isinstance(snapshot.get("segmentFuelLookup"), dict)
+                else ""
+            )
+            or ""
+        ).strip()
+        fuel_type = str(
+            params.get("powertrain")
+            or (
+                snapshot.get("segmentFuelLookup", {}).get("fuelType")
+                if isinstance(snapshot.get("segmentFuelLookup"), dict)
+                else ""
+            )
+            or ""
+        ).strip()
+        ranking = str(params.get("ranking") or "").strip()
+        clue_parts = [part for part in [resolved_segment, fuel_type] if part]
+        if ranking == "top":
+            clue_parts.append("Top ranking")
+        if clue_parts:
+            return "参数线索推导：已先按 " + " / ".join(clue_parts) + " 收窄到细分动力榜单。"
+        return None
+
+    if intent_route == "market-scan-scope":
+        market_scan_scope = (
+            snapshot.get("marketScanScope", {})
+            if isinstance(snapshot.get("marketScanScope"), dict)
+            else {}
+        )
+        page_label = str(
+            market_scan_scope.get("pageLabel")
+            or params.get("marketScanPage")
+            or ""
+        ).strip()
+        focus_model = str(
+            market_scan_scope.get("focusModel")
+            or params.get("model")
+            or ""
+        ).strip()
+        clue_parts = []
+        if page_label:
+            clue_parts.append(f"{page_label} page")
+        if focus_model:
+            clue_parts.append(f"车型 {focus_model}")
+        if clue_parts:
+            return "参数线索推导：已先锁定 " + " / ".join(clue_parts) + "，再用榜单和结构数据解释结论。"
+        return None
+
+    if intent_route == "market-context":
+        freshness_summary = _summarize_news_digest_freshness(snapshot.get("newsDigest"))
+        if freshness_summary:
+            return (
+                "参数线索推导：已先按政策/新闻问题收窄到市场情报层，"
+                + freshness_summary["label"]
+                + "。"
+            )
+        return "参数线索推导：已先按政策/新闻问题收窄到市场情报层。"
+
+    return None
+
+
+def _build_country_chat_answer_path_payload(
+    *,
+    intent_route: str,
+    provider: str,
+    user_params: dict[str, Any],
+    snapshot: dict[str, Any],
+    layers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    route_step = {
+        "precise-lookup": "先锁定具体车型 / trim / 价格条件。",
+        "positioning-focus": "先锁定长度 / 价格 / positioning 范围。",
+        "segment-fuel-focus": "先锁定 segment × fuel 排名范围。",
+        "market-scan-scope": "先锁定具体 Market Scan page scope。",
+        "market-context": "先锁定政策 / 新闻 / 市场事件范围。",
+    }.get(intent_route, "先锁定问题范围与国家上下文。")
+    clue = _build_country_chat_reasoning_clue(
+        intent_route=intent_route,
+        user_params=user_params,
+        snapshot=snapshot,
+    )
+    evidence_used = [
+        str(layer.get("label") or "").strip()
+        for layer in layers
+        if str(layer.get("label") or "").strip()
+    ][:3]
+    steps = [route_step]
+    if clue:
+        steps.append(clue)
+    steps.append(
+        "读取 " + (" / ".join(evidence_used) if evidence_used else "国家快照与已命中证据") + "。"
+    )
+    steps.append(
+        "在已验证证据上直接组装结论。"
+        if provider in {"snapshot", "fallback"}
+        else "在已验证证据上做模型润色，但不改写事实边界。"
+    )
+    return {
+        "routeTrigger": clue or route_step,
+        "evidenceUsed": evidence_used,
+        "steps": steps[:4],
+    }
 
 
 def _aggregate_mix_share(
@@ -3773,6 +4121,9 @@ def _build_snapshot_first_answer(
             for item in list(positioning_page_scope.get("metrics") or [])
             if isinstance(item, dict)
         ]
+        overlay_summary = _summarize_positioning_price_overlay(
+            positioning_page_scope.get("priceOverlay")
+        )
         if not ranking:
             return None
 
@@ -3812,6 +4163,8 @@ def _build_snapshot_first_answer(
             opening,
             f"**{page_label} 价格带 Top 5**\n" + "\n".join(price_band_lines),
         ]
+        if overlay_summary:
+            sections.append(f"**价格真值层**：{overlay_summary['detail']}")
         if summary_text:
             sections.append(f"**Page 摘要**：{summary_text}")
         if metrics:
@@ -3854,6 +4207,11 @@ def _build_snapshot_first_answer(
             "providerReason": (
                 f"该问题已直接基于 positioning-pricing deck 的 {page_key} page scope 作答，"
                 f"未再进入 {model_text} 的多轮工具调用。"
+                + (
+                    overlay_summary.get("providerNote", "")
+                    if overlay_summary
+                    else ""
+                )
             ),
         }
 
@@ -4015,6 +4373,20 @@ def _build_country_chat_grounding(
                 "label": "Snapshot 市场底图",
                 "detail": f"{country} 的基础市场快照与聚合 scan。",
                 "freshness": period_label,
+            }
+        )
+    reasoning_clue = _build_country_chat_reasoning_clue(
+        intent_route=intent_route,
+        user_params=user_params,
+        snapshot=snapshot,
+    )
+    if reasoning_clue:
+        layers.append(
+            {
+                "kind": "dynamic",
+                "label": "参数线索推导",
+                "detail": reasoning_clue,
+                "freshness": snapshot.get("resolvedPeriod") or period_label or None,
             }
         )
 
@@ -4258,6 +4630,9 @@ def _build_country_chat_grounding(
             for item in list(positioning_page_scope.get("bubbleItems") or [])
             if isinstance(item, dict)
         ]
+        overlay_summary = _summarize_positioning_price_overlay(
+            positioning_page_scope.get("priceOverlay")
+        )
         layers.append(
             {
                 "kind": "dynamic",
@@ -4274,11 +4649,22 @@ def _build_country_chat_grounding(
                 "freshness": positioning_page_scope.get("resolvedPeriod") or snapshot.get("resolvedPeriod") or period_label or None,
             }
         )
+        if overlay_summary:
+            layers.append(
+                {
+                    "kind": "dynamic",
+                    "label": overlay_summary["label"],
+                    "detail": overlay_summary["detail"],
+                    "freshness": positioning_page_scope.get("resolvedPeriod") or snapshot.get("resolvedPeriod") or period_label or None,
+                }
+            )
         if ranking:
             leader = ranking[0]
             key_findings.append(
                 f"{page_label} 当前最拥挤的价格带是 {leader.get('label', '-')}。"
             )
+            if overlay_summary:
+                key_findings.append(overlay_summary["detail"])
             evidence_tables.append(
                 {
                     "title": f"{page_label} 价格带排名",
@@ -4708,6 +5094,7 @@ def _build_country_chat_grounding(
                 )
 
     news_digest = snapshot.get("newsDigest", {})
+    news_freshness_summary = _summarize_news_digest_freshness(news_digest)
     related_news_events = _select_related_market_events(
         question=question,
         intent_route=intent_route,
@@ -4768,6 +5155,17 @@ def _build_country_chat_grounding(
                     ),
                 }
             )
+            if news_freshness_summary:
+                layers.append(
+                    {
+                        "kind": "live",
+                        "label": news_freshness_summary["label"],
+                        "detail": news_freshness_summary["detail"],
+                        "freshness": news_freshness_summary["freshness"] or None,
+                    }
+                )
+                if intent_route == "market-context" or "market-context" in intents:
+                    key_findings.append(news_freshness_summary["detail"])
             if intent_route == "market-context" or "market-context" in intents:
                 highlights = news_digest.get("highlights", [])
                 if isinstance(highlights, list):
@@ -4881,10 +5279,24 @@ def _build_country_chat_grounding(
         evidence_tables=evidence_tables,
         snapshot=snapshot,
     )
+    answer_path = _build_country_chat_answer_path_payload(
+        intent_route=intent_route,
+        provider=provider,
+        user_params=user_params,
+        snapshot=snapshot,
+        layers=layers,
+    )
+    reasoning_notes = [reasoning_clue] if reasoning_clue else []
+    if trust.get("missingFacts"):
+        reasoning_notes.append(
+            f"当前仍缺少 {str(trust['missingFacts'][0])}，结论要按现有证据边界理解。"
+        )
     evidence_limit = 4 if intent_route == "market-scan-scope" else 3
     return {
         "strategyLabel": strategy_label,
         "summary": summary,
+        "answerPath": answer_path,
+        "reasoningNotes": reasoning_notes,
         "layers": layers,
         "keyFindings": key_findings,
         "evidenceTables": evidence_tables[:evidence_limit],
@@ -6382,6 +6794,7 @@ def _build_planner_evidence_pack(snapshot: dict[str, Any]) -> dict[str, Any]:
             "pageLabel": positioning_page_scope.get("pageLabel"),
             "ranking": list(positioning_page_scope.get("ranking") or [])[:5],
             "bubbleItems": list(positioning_page_scope.get("bubbleItems") or [])[:5],
+            "priceOverlay": positioning_page_scope.get("priceOverlay"),
         }
     segment_fuel_lookup = snapshot.get("segmentFuelLookup", {})
     if isinstance(segment_fuel_lookup, dict) and segment_fuel_lookup:
@@ -6486,6 +6899,37 @@ def _build_country_chat_trust_assessment(
         for item in required_sources
         if str(item.get("status") or "").strip() not in PLANNER_READY_STATUSES
     ]
+    positioning_page_scope = (
+        snapshot.get("positioningPageScope", {})
+        if isinstance(snapshot.get("positioningPageScope"), dict)
+        else {}
+    )
+    overlay_summary = _summarize_positioning_price_overlay(
+        positioning_page_scope.get("priceOverlay")
+        if isinstance(positioning_page_scope, dict)
+        else None
+    )
+    news_digest = (
+        snapshot.get("newsDigest", {})
+        if isinstance(snapshot.get("newsDigest"), dict)
+        else {}
+    )
+    news_freshness_summary = _summarize_news_digest_freshness(news_digest)
+    uses_news_evidence = (
+        any("新闻" in str(item.get("label") or "") for item in layers)
+        or any("新闻" in str(item.get("title") or "") for item in evidence_tables)
+        or intent_route == "market-context"
+    )
+    if overlay_summary and overlay_summary.get("trustNote"):
+        missing_facts.append(str(overlay_summary["trustNote"]))
+    if intent_route == "market-context" and not news_digest:
+        missing_facts.append("当前没有稳定的新闻快照。")
+    elif (
+        uses_news_evidence
+        and news_freshness_summary
+        and news_freshness_summary.get("trustNote")
+    ):
+        missing_facts.append(str(news_freshness_summary["trustNote"]))
     if not evidence_tables:
         missing_facts.append("当前没有稳定的证据表。")
     elif (
@@ -6524,6 +6968,23 @@ def _build_country_chat_trust_assessment(
         confidence = "high"
     elif evidence_sufficiency in {"strong", "partial"}:
         confidence = "medium"
+    if overlay_summary and overlay_summary.get("status") == "parquet-fallback":
+        confidence = "medium" if confidence == "high" else "low"
+    elif overlay_summary and overlay_summary.get("status") == "partial-overlay" and confidence == "high":
+        confidence = "medium"
+    if intent_route == "market-context" and not news_digest:
+        confidence = "medium" if confidence == "high" else "low"
+    elif uses_news_evidence and news_freshness_summary:
+        if news_freshness_summary.get("status") == "stale":
+            if intent_route == "market-context":
+                confidence = "medium" if confidence == "high" else "low"
+            elif confidence == "high":
+                confidence = "medium"
+        elif news_freshness_summary.get("status") == "unknown":
+            if intent_route == "market-context":
+                confidence = "medium" if confidence == "high" else "low"
+            elif confidence == "high":
+                confidence = "medium"
 
     route_rationale = ""
     primary_source = required_sources[0] if required_sources else (source_plan[0] if source_plan else {})

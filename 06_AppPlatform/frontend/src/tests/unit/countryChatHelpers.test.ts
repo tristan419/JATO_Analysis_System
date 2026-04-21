@@ -140,6 +140,7 @@ describe("resolveCountrySelection", () => {
       extractedParams: {
         model: "RAV4",
         powertrain: "HEV",
+        msrp: 450000,
       },
     })).toEqual({
       routeLabel: "精准查询",
@@ -147,6 +148,7 @@ describe("resolveCountrySelection", () => {
       focusTags: ["瑞典", "RAV4", "HEV"],
       steps: [
         "锁定具体车型 / trim / 价格条件",
+        "把 RAV4 与 450000 价格线索绑定到具体版型查询。",
         "读取 Snapshot / Dynamic",
         "按直接组装方式生成答案",
       ],
@@ -163,6 +165,23 @@ describe("resolveCountrySelection", () => {
       reasoningNotes: [
         "这次回答优先读取当前价格样本与国家快照。",
         "价格带主要落在 42-46 万 SEK。",
+      ],
+    });
+  });
+
+  it("prefers backend reasoning notes over detail paragraph splitting", () => {
+    expect(buildCountryChatAnswerSections({
+      content: "德国补贴政策仍在收紧。\n\n短期价格战会更看本地库存。",
+      summary: "这次回答先锁定政策与新闻范围。",
+      reasoningNotes: [
+        "参数线索推导：用户在问政策变化，所以优先读取 news digest 与 market events。",
+      ],
+    })).toEqual({
+      lead: "德国补贴政策仍在收紧。",
+      detailParagraphs: ["短期价格战会更看本地库存。"],
+      reasoningNotes: [
+        "参数线索推导：用户在问政策变化，所以优先读取 news digest 与 market events。",
+        "这次回答先锁定政策与新闻范围。",
       ],
     });
   });
@@ -184,7 +203,7 @@ describe("resolveCountrySelection", () => {
       extractedParams: {
         segment: "C-SUV",
       },
-    }).steps[1]).toBe("读取 国家快照与已命中证据");
+    }).steps).toContain("读取 国家快照与已命中证据");
   });
 
   it("treats phone-sized coarse-pointer access as mobile-only mode", () => {

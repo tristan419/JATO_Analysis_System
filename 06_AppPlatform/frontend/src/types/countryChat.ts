@@ -210,6 +210,12 @@ export interface CountryChatTrustAssessment {
   sourceCoverage?: CountryChatSourceCoverage;
 }
 
+export interface CountryChatGroundingAnswerPath {
+  routeTrigger?: string;
+  evidenceUsed?: string[];
+  steps: string[];
+}
+
 export interface CountryChatExecutionPlanSource {
   key: string;
   label?: string;
@@ -239,6 +245,8 @@ export interface CountryChatExecutionPlan {
 export interface CountryChatGrounding {
   strategyLabel: string;
   summary: string;
+  answerPath?: CountryChatGroundingAnswerPath;
+  reasoningNotes?: string[];
   layers: CountryChatGroundingLayer[];
   keyFindings: string[];
   evidenceTables: CountryChatEvidenceTable[];

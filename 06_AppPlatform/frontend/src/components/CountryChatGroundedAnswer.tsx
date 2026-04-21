@@ -91,16 +91,23 @@ export function CountryChatGroundedAnswer({
   const evidenceTables = compact
     ? grounding?.evidenceTables.slice(0, 2) ?? []
     : grounding?.evidenceTables ?? [];
-  const answerPath = buildCountryChatAnswerPath({
+  const fallbackAnswerPath = buildCountryChatAnswerPath({
     country: message.country ?? message.contextSnapshot?.country,
     intentRoute: message.intentRoute,
     answerMode: message.answerMode,
     layers: grounding?.layers,
     extractedParams: message.extractedParams,
   });
+  const answerPath = grounding?.answerPath?.steps?.length
+    ? {
+      ...fallbackAnswerPath,
+      steps: grounding.answerPath.steps,
+    }
+    : fallbackAnswerPath;
   const answerSections = buildCountryChatAnswerSections({
     content: message.content,
     summary: grounding?.summary,
+    reasoningNotes: grounding?.reasoningNotes,
   });
   const keyFindings = grounding?.keyFindings ?? [];
   const layers = grounding?.layers ?? [];
@@ -114,6 +121,7 @@ export function CountryChatGroundedAnswer({
   const showAnswerPath = isAssistant && (
     answerPath.focusTags.length > 0
     || answerPath.steps.length > 0
+    || Boolean(grounding?.answerPath?.routeTrigger)
     || Boolean(message.intentRoute)
     || Boolean(message.answerMode)
     || layers.length > 0
@@ -184,6 +192,9 @@ export function CountryChatGroundedAnswer({
               </span>
             ))}
           </div>
+          {grounding?.answerPath?.routeTrigger ? (
+            <p className="copilot-answer-note">{grounding.answerPath.routeTrigger}</p>
+          ) : null}
           <ol className="copilot-answer-path-steps">
             {answerPath.steps.map((step) => (
               <li key={step}>{step}</li>

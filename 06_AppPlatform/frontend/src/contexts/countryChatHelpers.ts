@@ -209,9 +209,11 @@ function splitCountryChatAnswerParagraphs(content: string): string[] {
 export function buildCountryChatAnswerSections({
   content,
   summary,
+  reasoningNotes,
 }: {
   content?: string | null;
   summary?: string | null;
+  reasoningNotes?: string[] | null;
 }): CountryChatAnswerSections {
   const normalizedContent = normalizeAnswerSectionText(content);
   const contentBlocks = normalizedContent
@@ -225,13 +227,19 @@ export function buildCountryChatAnswerSections({
     return {
       lead: normalizedSummary,
       detailParagraphs: [],
-      reasoningNotes: [],
+      reasoningNotes: (reasoningNotes ?? []).map(normalizeAnswerSectionText).filter(Boolean),
     };
   }
 
-  const reasoningNotes: string[] = [];
+  const answerReasoningNotes: string[] = [];
   const seen = new Set<string>(lead ? [normalizeAnswerSectionKey(lead)] : []);
-  for (const candidate of [normalizedSummary, ...detailParagraphs]) {
+  const explicitReasoningNotes = Array.isArray(reasoningNotes)
+    ? reasoningNotes.map(normalizeAnswerSectionText).filter(Boolean)
+    : [];
+  const reasoningCandidates = explicitReasoningNotes.length > 0
+    ? [...explicitReasoningNotes, normalizedSummary]
+    : [normalizedSummary, ...detailParagraphs];
+  for (const candidate of reasoningCandidates) {
     if (!candidate) {
       continue;
     }
@@ -240,13 +248,13 @@ export function buildCountryChatAnswerSections({
       continue;
     }
     seen.add(normalizedKey);
-    reasoningNotes.push(candidate);
+    answerReasoningNotes.push(candidate);
   }
 
   return {
     lead,
     detailParagraphs,
-    reasoningNotes,
+    reasoningNotes: answerReasoningNotes,
   };
 }
 
@@ -269,6 +277,57 @@ function normalizeAnswerPathTag(value: unknown): string {
         }
       }
     }
+  }
+  return "";
+}
+
+function countryChatReasoningClueStep(
+  intentRoute: string | null | undefined,
+  extractedParams: Record<string, unknown>,
+): string {
+  const msrp = normalizeAnswerPathTag(extractedParams.msrp);
+  const length = normalizeAnswerPathTag(extractedParams.length);
+  const model = normalizeAnswerPathTag(
+    extractedParams.subjectModel ?? extractedParams.targetModel ?? extractedParams.model,
+  );
+  const compareModel = normalizeAnswerPathTag(extractedParams.compareModel);
+  const segment = normalizeAnswerPathTag(extractedParams.segment);
+  const fuelType = normalizeAnswerPathTag(extractedParams.fuelType ?? extractedParams.fuel_type ?? extractedParams.powertrain);
+
+  switch ((intentRoute ?? "").trim()) {
+    case "precise-lookup":
+      if (model && msrp) {
+        return `把 ${model} 与 ${msrp} 价格线索绑定到具体版型查询。`;
+      }
+      if (model && compareModel) {
+        return `把 ${model} 与 ${compareModel} 绑定到同一对比问题。`;
+      }
+      break;
+    case "positioning-focus":
+      if (length && msrp) {
+        return `把 ${length} 车长与 ${msrp} 价格线索绑定到同尺寸竞品带。`;
+      }
+      if (length) {
+        return `把 ${length} 车长先映射到邻近 segment 与竞品带。`;
+      }
+      break;
+    case "segment-fuel-focus":
+      if (segment && fuelType) {
+        return `把 ${segment} 与 ${fuelType} 绑定到对应动力排名。`;
+      }
+      break;
+    case "market-scan-scope":
+      if (model) {
+        return `把 ${model} 绑定到对应榜单页与销量结构。`;
+      }
+      break;
+    case "market-context":
+      if (segment) {
+        return `把 ${segment} 相关政策 / 新闻线索绑定到当前市场背景。`;
+      }
+      break;
+    default:
+      break;
   }
   return "";
 }
@@ -325,16 +384,19 @@ export function buildCountryChatAnswerPath({
   const layerSummary = layerLabels.length > 0
     ? layerLabels.slice(0, 3).join(" / ")
     : "国家快照与已命中证据";
+  const reasoningClueStep = countryChatReasoningClueStep(intentRoute, params);
+  const steps = [
+    countryChatRouteStep(intentRoute),
+    reasoningClueStep,
+    `读取 ${layerSummary}`,
+    `按${outputLabel}方式生成答案`,
+  ].filter(Boolean);
 
   return {
     routeLabel,
     outputLabel,
     focusTags: focusTags.slice(0, 4),
-    steps: [
-      countryChatRouteStep(intentRoute),
-      `读取 ${layerSummary}`,
-      `按${outputLabel}方式生成答案`,
-    ],
+    steps,
   };
 }
 

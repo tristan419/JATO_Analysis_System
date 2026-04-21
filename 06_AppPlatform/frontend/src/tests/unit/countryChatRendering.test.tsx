@@ -20,6 +20,19 @@ function buildAssistantMessage(): CountryChatTranscriptMessage {
     grounding: {
       strategyLabel: "CurrentPrice 直查",
       summary: "这次回答优先读取当前价格样本与国家快照。",
+      answerPath: {
+        routeTrigger: "参数线索推导：RAV4 + HEV + 价格条件已经收敛到当前版型查询。",
+        evidenceUsed: ["Snapshot", "CurrentPrice"],
+        steps: [
+          "先锁定具体车型 / trim / 价格条件。",
+          "参数线索推导：RAV4 + HEV + 价格条件已经收敛到当前版型查询。",
+          "读取 Snapshot / CurrentPrice。",
+          "在已验证证据上直接组装结论。",
+        ],
+      },
+      reasoningNotes: [
+        "参数线索推导：RAV4 + HEV + 价格条件已经收敛到当前版型查询。",
+      ],
       layers: [
         {
           kind: "snapshot",
@@ -121,6 +134,8 @@ describe("CountryChatGroundedAnswer", () => {
     expect(markup).toContain("RAV4");
     expect(markup).toContain("HEV");
     expect(markup).toContain("CurrentPrice 直查");
+    expect(markup).toContain("参数线索推导：RAV4 + HEV + 价格条件已经收敛到当前版型查询。");
+    expect(markup).toContain("在已验证证据上直接组装结论。");
     expect(markup).toContain("Trim Price");
     expect(markup).toContain("Feature Diff");
     expect(markup).not.toContain("Should Be Hidden In Compact");
