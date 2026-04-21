@@ -237,6 +237,7 @@ def supplement_missing_countries_from_parquet(
         supplement_df[supplement_country_column]
     )
     patch_countries: set[str] = set(current_countries)
+    patch_mask = pd.Series(False, index=df.index)
     if patch_source_indices and SOURCE_TRACK_COLUMNS[1] in df.columns:
         patch_mask = df[SOURCE_TRACK_COLUMNS[1]].isin(list(patch_source_indices))
         if patch_mask.any():
@@ -257,9 +258,20 @@ def supplement_missing_countries_from_parquet(
         "replacedCountries": replaced_countries,
     }
     if not supplemented_countries:
+        if patch_mask.any() and patch_countries:
+            preserved_df = df[
+                (~df[country_column].isin(patch_countries)) | patch_mask
+            ].copy()
+            return preserved_df, summary
         return df, summary
 
-    preserved_df = df[~df[country_column].isin(supplemented_countries)].copy()
+    if patch_mask.any() and patch_countries:
+        preserved_df = df[
+            (~df[country_column].isin(supplemented_countries))
+            & ((~df[country_column].isin(patch_countries)) | patch_mask)
+        ].copy()
+    else:
+        preserved_df = df[~df[country_column].isin(supplemented_countries)].copy()
     appended_df = supplement_df[
         supplement_df[supplement_country_column].isin(supplemented_countries)
     ].copy()

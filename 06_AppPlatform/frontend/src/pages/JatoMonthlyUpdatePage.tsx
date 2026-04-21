@@ -626,6 +626,7 @@ export function JatoMonthlyUpdatePage() {
             <p className="section-note">
               第一期仅执行 candidate 流程并回传日志 / 关键产物；正式 release promote 仍然保留人工确认步骤。
               上传后会自动识别文件里的最新有效月份，并自动生成批次号；仍允许 mixed freshness，只要没有国家回退。
+              本次上传覆盖到的国家会直接替换网站当前该国家快照，不会把新旧月份累加到一起；未上传的国家继续沿用 current active。
             </p>
           </div>
           <div className="table-status-chip">
@@ -673,7 +674,8 @@ export function JatoMonthlyUpdatePage() {
               系统会先扫描上传文件，自动识别最新有效月份，并生成唯一批次号（如 `2026-03-r1`）。
               上传后会先把文件落到受控目录，再复用现有 `prepare_monthly_raw_update.py`、
               `raw_compare_review.py`、`run_data_refresh_job.py`。大文件会先分片上传、自动重试，再在服务端做分片校验和整文件
-              SHA-256 指纹后入队；刷新页面后重新选择同一文件，也会从已完成分片继续。
+              SHA-256 指纹后入队；刷新页面后重新选择同一文件，也会从已完成分片继续。候选数据的合成规则是：
+              已上传国家以 patch 为准直接替换，未上传国家沿用 current active。
             </p>
             <button
               type="submit"
