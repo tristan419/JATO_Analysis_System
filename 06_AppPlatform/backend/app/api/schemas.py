@@ -110,6 +110,7 @@ class RvFinanceRequest(BaseModel):
 class MarketScanDeckRequest(BaseModel):
     country: str | None = None
     target_period: str | None = None
+    time_range: dict[str, str] | None = None
     fuel_types: list[str] = Field(default_factory=list)
     trend_window_months: int = 24
     origin_window_months: int = 30
@@ -121,8 +122,9 @@ class MarketScanDeckRequest(BaseModel):
 class PositioningPricingDeckRequest(BaseModel):
     country: str | None = None
     target_period: str | None = None
+    time_range: dict[str, str] | None = None
     fuel_types: list[str] = Field(default_factory=list)
-    sales_mode: Literal["month", "rolling12"] = "month"
+    sales_mode: Literal["month", "ytd", "rolling12"] = "month"
     top_n: int = Field(default=50, ge=1, le=200)
     msrp_min: float | None = Field(default=None, ge=0)
     msrp_max: float | None = Field(default=None, ge=0)
@@ -132,8 +134,9 @@ class PositioningPricingDeckRequest(BaseModel):
 class VersionComparisonDeckRequest(BaseModel):
     country: str | None = None
     target_period: str | None = None
+    time_range: dict[str, str] | None = None
     fuel_types: list[str] = Field(default_factory=list)
-    sales_mode: Literal["month", "rolling12"] = "month"
+    sales_mode: Literal["month", "ytd", "rolling12"] = "month"
     segment: str | None = None
     models: list[str] = Field(default_factory=list)
     msrp_min: float | None = Field(default=None, ge=0)

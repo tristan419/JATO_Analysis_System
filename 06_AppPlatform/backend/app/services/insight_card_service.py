@@ -169,6 +169,7 @@ def _generate_cards(country: str) -> list[InsightCard]:
         deck = market_scan_service.query_market_scan_deck(
             country=country,
             target_period=None,
+            time_range=None,
             fuel_types=list(market_scan_service.DEFAULT_FUEL_TYPES),
             trend_window_months=24,
             origin_window_months=12,

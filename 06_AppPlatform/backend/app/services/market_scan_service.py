@@ -71,7 +71,7 @@ DEFAULT_DRILLDOWN_SEGMENT = "SUV A0"
 FALLBACK_DRILLDOWN_FUELS = ("BEV", "PHEV")
 MIN_MARKET_SCAN_RANKING_LIMIT = 10
 POSITIONING_BUBBLE_LIMIT = 60
-POSITIONING_SALES_MODES = ("month", "rolling12")
+POSITIONING_SALES_MODES = ("month", "ytd", "rolling12")
 MSRP_CANDIDATES = (
     "MSRP规整",
     "MSRP including delivery charge",
@@ -1166,6 +1166,43 @@ def _ytd_periods(available_periods: list[str], target_period: str) -> list[str]:
     ]
 
 
+def _normalize_period_range(
+    available_periods: list[str],
+    time_range: dict[str, str] | None,
+    resolved_period: str,
+) -> list[str] | None:
+    if not time_range:
+        return None
+    start = str(time_range.get("start") or "").strip()
+    end = str(time_range.get("end") or "").strip() or resolved_period
+    if not start and not end:
+        return None
+    start_period = start if start in available_periods else available_periods[0]
+    end_period = end if end in available_periods else resolved_period
+    start_index = available_periods.index(start_period)
+    end_index = available_periods.index(end_period)
+    if start_index > end_index:
+        start_index, end_index = end_index, start_index
+    periods = available_periods[start_index:end_index + 1]
+    latest_period = available_periods[-1]
+    if len(periods) == 1 and periods[0] == latest_period:
+        return None
+    return periods
+
+
+def _shifted_periods_if_present(
+    periods: list[str],
+    available_periods: list[str],
+    delta_months: int,
+) -> list[str]:
+    shifted: list[str] = []
+    for period in periods:
+        candidate = _shift_period(period, delta_months)
+        if candidate in available_periods:
+            shifted.append(candidate)
+    return shifted
+
+
 def _normalize_positioning_sales_mode(value: str | None) -> str:
     normalized = str(value or "").strip().lower()
     return normalized if normalized in POSITIONING_SALES_MODES else "month"
@@ -1175,8 +1212,14 @@ def _resolve_positioning_sales_window(
     available_periods: list[str],
     resolved_period: str,
     sales_mode: str,
+    custom_periods: list[str] | None = None,
 ) -> tuple[list[str], str, str]:
+    if custom_periods:
+        return custom_periods, "自定义区间", "Custom Range Sales"
     normalized_mode = _normalize_positioning_sales_mode(sales_mode)
+    if normalized_mode == "ytd":
+        periods = _ytd_periods(available_periods, resolved_period)
+        return periods, "YTD", "YTD Sales"
     if normalized_mode == "rolling12":
         periods = _window_periods(available_periods, resolved_period, 12)
         return periods, "近12个月", "Rolling 12M Sales"
@@ -1836,6 +1879,7 @@ def _build_overview_payload(
     prior_period: str | None,
     same_month_last_year_period: str | None,
     ranking_limit: int,
+    custom_range_periods: list[str] | None = None,
 ) -> dict[str, Any]:
     trend_periods = _window_periods(available_periods, resolved_period, 24)
     trend_columns = [_period_to_month_column(period) for period in trend_periods]
@@ -1879,6 +1923,13 @@ def _build_overview_payload(
     prior_rolling12_periods = _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
     current_rolling12_columns = [_period_to_month_column(period) for period in current_rolling12_periods]
     prior_rolling12_columns = [_period_to_month_column(period) for period in prior_rolling12_periods]
+    custom_range_columns = [_period_to_month_column(period) for period in (custom_range_periods or [])]
+    prior_custom_range_periods = (
+        _shifted_periods_if_present(custom_range_periods, available_periods, -12)
+        if custom_range_periods
+        else []
+    )
+    prior_custom_range_columns = [_period_to_month_column(period) for period in prior_custom_range_periods]
 
     current_month_total = _total_volume(frame, current_period_columns)
     same_month_total = _total_volume(frame, same_month_columns)
@@ -1886,11 +1937,13 @@ def _build_overview_payload(
     prior_ytd_total = _total_volume(frame, prior_ytd_columns)
     current_rolling12_total = _total_volume(frame, current_rolling12_columns)
     prior_rolling12_total = _total_volume(frame, prior_rolling12_columns)
+    custom_range_total = _total_volume(frame, custom_range_columns)
+    prior_custom_range_total = _total_volume(frame, prior_custom_range_columns)
 
     year_text, month_text = resolved_period.split("-", 1)
     month_number = int(month_text)
 
-    return {
+    payload = {
         "summary": {
             "headline": f"{_short_period_label(resolved_period)} 总销量 {current_month_total:,.0f} 台，YoY { _delta_payload(current_month_total, same_month_total)['display'] }",
             "subheadline": f"近12个月总销量 {current_rolling12_total:,.0f} 台，Rolling 12M YoY { _delta_payload(current_rolling12_total, prior_rolling12_total)['display'] }",
@@ -1946,6 +1999,38 @@ def _build_overview_payload(
             ),
         },
     }
+    if custom_range_periods:
+        range_start = custom_range_periods[0]
+        range_end = custom_range_periods[-1]
+        payload["summary"]["customRangeVolume"] = custom_range_total
+        payload["summary"]["customRangeYoY"] = _delta_payload(custom_range_total, prior_custom_range_total)
+        payload["summary"]["customRangeLabel"] = (
+            _short_period_label(range_start)
+            if range_start == range_end
+            else f"{_short_period_label(range_start)} - {_short_period_label(range_end)}"
+        )
+        payload["customRangeBrandRanking"] = {
+            "title": "Custom Range Brand Ranking",
+            "currentLabel": payload["summary"]["customRangeLabel"],
+            "priorLabel": (
+                _short_period_label(prior_custom_range_periods[0])
+                if len(prior_custom_range_periods) == 1
+                else (
+                    f"{_short_period_label(prior_custom_range_periods[0])} - {_short_period_label(prior_custom_range_periods[-1])}"
+                    if prior_custom_range_periods
+                    else "-"
+                )
+            ),
+            "items": _build_brand_ranking_items(
+                frame,
+                current_columns=custom_range_columns,
+                prior_columns=prior_custom_range_columns,
+                prior_month_columns=[],
+                ranking_limit=ranking_limit,
+                include_model_breakdown=True,
+            ),
+        }
+    return payload
 
 
 def _build_origin_payload(
@@ -1955,6 +2040,7 @@ def _build_origin_payload(
     prior_period: str | None,
     same_month_last_year_period: str | None,
     origin_window_months: int,
+    custom_range_periods: list[str] | None = None,
 ) -> dict[str, Any]:
     trend_periods = _window_periods(available_periods, resolved_period, origin_window_months)
     trend_columns = [_period_to_month_column(period) for period in trend_periods]
@@ -1992,6 +2078,13 @@ def _build_origin_payload(
         _period_to_month_column(period)
         for period in _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
     ]
+    custom_range_columns = [_period_to_month_column(period) for period in (custom_range_periods or [])]
+    prior_custom_range_periods = (
+        _shifted_periods_if_present(custom_range_periods, available_periods, -12)
+        if custom_range_periods
+        else []
+    )
+    prior_custom_range_columns = [_period_to_month_column(period) for period in prior_custom_range_periods]
 
     current_total = float(grouped[current_column].sum()) if current_column in grouped.columns else 0.0
     prior_total = float(grouped[prior_column].sum()) if prior_column and prior_column in grouped.columns else 0.0
@@ -2037,6 +2130,10 @@ def _build_origin_payload(
     summary_frame["prior_ytd"] = prior_ytd_grouped.sum(axis=1) if not prior_ytd_grouped.empty else 0.0
     summary_frame["rolling12"] = current_rolling12_grouped.sum(axis=1) if not current_rolling12_grouped.empty else 0.0
     summary_frame["prior_rolling12"] = prior_rolling12_grouped.sum(axis=1) if not prior_rolling12_grouped.empty else 0.0
+    current_custom_range_grouped = _volume_by_group(frame, "__origin", custom_range_columns)
+    prior_custom_range_grouped = _volume_by_group(frame, "__origin", prior_custom_range_columns)
+    summary_frame["custom_range"] = current_custom_range_grouped.sum(axis=1) if not current_custom_range_grouped.empty else 0.0
+    summary_frame["prior_custom_range"] = prior_custom_range_grouped.sum(axis=1) if not prior_custom_range_grouped.empty else 0.0
     summary_frame = summary_frame.fillna(0.0)
 
     matrix_rows = []
@@ -2082,6 +2179,22 @@ def _build_origin_payload(
         "trend": {"series": series},
         "brandTrend": {"groups": brand_trend_groups},
         "matrix": {"columns": ordered_origins, "rows": matrix_rows},
+        "customRangeMatrixRow": {
+            "metricKey": "custom_range",
+            "label": "自定义区间",
+            "cells": [
+                {"key": origin, **_metric_cell(float(summary_frame.loc[origin, "custom_range"]), "volume")}
+                for origin in ordered_origins
+            ],
+        } if custom_range_periods else None,
+        "customRangeYoYMatrixRow": {
+            "metricKey": "custom_range_yoy",
+            "label": "自定义区间 YoY",
+            "cells": [
+                {"key": origin, **_delta_payload(float(summary_frame.loc[origin, "custom_range"]), float(summary_frame.loc[origin, "prior_custom_range"]))}
+                for origin in ordered_origins
+            ],
+        } if custom_range_periods else None,
     }
 
 
@@ -2092,6 +2205,7 @@ def _build_segment_payload(
     prior_period: str | None,
     same_month_last_year_period: str | None,
     body_window_months: int,
+    custom_range_periods: list[str] | None = None,
 ) -> dict[str, Any]:
     working = frame.copy()
     working["__segment_bucket"] = working["__segment_raw"].map(_segment_matrix_bucket)
@@ -2117,6 +2231,13 @@ def _build_segment_payload(
         _period_to_month_column(period)
         for period in _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
     ]
+    custom_range_columns = [_period_to_month_column(period) for period in (custom_range_periods or [])]
+    prior_custom_range_periods = (
+        _shifted_periods_if_present(custom_range_periods, available_periods, -12)
+        if custom_range_periods
+        else []
+    )
+    prior_custom_range_columns = [_period_to_month_column(period) for period in prior_custom_range_periods]
 
     grouped_current = _volume_by_group(working, "__segment_bucket", [current_column])
     grouped_prior = _volume_by_group(working, "__segment_bucket", [prior_column] if prior_column else [])
@@ -2125,6 +2246,8 @@ def _build_segment_payload(
     grouped_prior_ytd = _volume_by_group(working, "__segment_bucket", prior_ytd_columns)
     grouped_rolling12 = _volume_by_group(working, "__segment_bucket", current_rolling12_columns)
     grouped_prior_rolling12 = _volume_by_group(working, "__segment_bucket", prior_rolling12_columns)
+    grouped_custom_range = _volume_by_group(working, "__segment_bucket", custom_range_columns)
+    grouped_prior_custom_range = _volume_by_group(working, "__segment_bucket", prior_custom_range_columns)
 
     matrix_rows = []
     for metric_key, label in [
@@ -2145,6 +2268,8 @@ def _build_segment_payload(
             prior_ytd_value = float(grouped_prior_ytd.loc[bucket].sum()) if bucket in grouped_prior_ytd.index else 0.0
             rolling12_value = float(grouped_rolling12.loc[bucket].sum()) if bucket in grouped_rolling12.index else 0.0
             prior_rolling12_value = float(grouped_prior_rolling12.loc[bucket].sum()) if bucket in grouped_prior_rolling12.index else 0.0
+            custom_range_value = float(grouped_custom_range.loc[bucket].sum()) if bucket in grouped_custom_range.index else 0.0
+            prior_custom_range_value = float(grouped_prior_custom_range.loc[bucket].sum()) if bucket in grouped_prior_custom_range.index else 0.0
             if metric_key == "current_volume":
                 payload = _metric_cell(current_value, "volume")
             elif metric_key == "mom":
@@ -2161,6 +2286,38 @@ def _build_segment_payload(
                 payload = _delta_payload(ytd_value, prior_ytd_value)
             cells.append({"key": bucket, **payload})
         matrix_rows.append({"metricKey": metric_key, "label": label, "cells": cells})
+
+    if custom_range_periods:
+        matrix_rows.extend([
+            {
+                "metricKey": "custom_range",
+                "label": "自定义区间",
+                "cells": [
+                    {
+                        "key": bucket,
+                        **_metric_cell(
+                            float(grouped_custom_range.loc[bucket].sum()) if bucket in grouped_custom_range.index else 0.0,
+                            "volume",
+                        ),
+                    }
+                    for bucket in SEGMENT_MATRIX_ORDER
+                ],
+            },
+            {
+                "metricKey": "custom_range_yoy",
+                "label": "自定义区间 YoY",
+                "cells": [
+                    {
+                        "key": bucket,
+                        **_delta_payload(
+                            float(grouped_custom_range.loc[bucket].sum()) if bucket in grouped_custom_range.index else 0.0,
+                            float(grouped_prior_custom_range.loc[bucket].sum()) if bucket in grouped_prior_custom_range.index else 0.0,
+                        ),
+                    }
+                    for bucket in SEGMENT_MATRIX_ORDER
+                ],
+            },
+        ])
 
     trend_periods = _window_periods(available_periods, resolved_period, body_window_months)
     trend_items = []
@@ -2409,6 +2566,7 @@ def _build_drilldown_payload(
     segment_value: str,
     fuel_panels: tuple[str, ...],
     ranking_limit: int,
+    custom_range_periods: list[str] | None = None,
 ) -> dict[str, Any]:
     segment_frame = frame[frame["__segment_raw"] == segment_value].copy()
     if segment_frame.empty:
@@ -2440,6 +2598,13 @@ def _build_drilldown_payload(
         _period_to_month_column(period)
         for period in _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
     ]
+    custom_range_columns = [_period_to_month_column(period) for period in (custom_range_periods or [])]
+    prior_custom_range_periods = (
+        _shifted_periods_if_present(custom_range_periods, available_periods, -12)
+        if custom_range_periods
+        else []
+    )
+    prior_custom_range_columns = [_period_to_month_column(period) for period in prior_custom_range_periods]
     available_fuels = _available_fuel_types(segment_frame)
 
     total_ranking = _build_total_ranking_items(
@@ -2463,9 +2628,17 @@ def _build_drilldown_payload(
         fuel_order=available_fuels,
         ranking_limit=ranking_limit,
     )
+    custom_range_total_ranking = _build_total_ranking_items(
+        segment_frame,
+        current_columns=custom_range_columns,
+        prior_columns=prior_custom_range_columns,
+        fuel_order=available_fuels,
+        ranking_limit=ranking_limit,
+    ) if custom_range_periods else []
     segment_total_ytd = _total_volume(segment_frame, current_ytd_columns)
     segment_total_month = _total_volume(segment_frame, current_month_columns)
     segment_total_rolling12 = _total_volume(segment_frame, current_rolling12_columns)
+    segment_total_custom_range = _total_volume(segment_frame, custom_range_columns)
     fuel_panel_items = []
     for fuel_type in fuel_panels:
         fuel_panel_items.append(
@@ -2498,6 +2671,23 @@ def _build_drilldown_payload(
                     segment_total=segment_total_month,
                     ranking_limit=ranking_limit,
                 ),
+                "customRangeTitle": (
+                    f"{fuel_type} {_short_period_label(custom_range_periods[0])}"
+                    if custom_range_periods and custom_range_periods[0] == custom_range_periods[-1]
+                    else (
+                        f"{fuel_type} {_short_period_label(custom_range_periods[0])} - {_short_period_label(custom_range_periods[-1])}"
+                        if custom_range_periods
+                        else None
+                    )
+                ),
+                "customRangeRanking": _build_single_fuel_ranking_items(
+                    segment_frame,
+                    fuel_type=fuel_type,
+                    current_columns=custom_range_columns,
+                    prior_columns=prior_custom_range_columns,
+                    segment_total=segment_total_custom_range,
+                    ranking_limit=ranking_limit,
+                ) if custom_range_periods else [],
             }
         )
 
@@ -2516,6 +2706,10 @@ def _build_drilldown_payload(
             "title": "Rolling 12M Total Model Ranking",
             "items": rolling12_total_ranking,
         },
+        "customRangeTotalRanking": {
+            "title": "Custom Range Total Model Ranking",
+            "items": custom_range_total_ranking,
+        } if custom_range_periods else None,
         "totalRanking": {
             "title": "YTD Total Model Ranking",
             "items": total_ranking,
@@ -2523,6 +2717,22 @@ def _build_drilldown_payload(
         "monthFuelTrend": _build_month_fuel_trend(segment_frame, available_fuels, resolved_period, available_periods),
         "rolling12FuelTrend": _build_rolling12_fuel_trend(segment_frame, available_fuels, resolved_period, available_periods),
         "ytdFuelTrend": _build_ytd_fuel_trend(segment_frame, available_fuels, resolved_period, available_periods),
+        "customRangeFuelTrend": {
+            "items": [
+                {
+                    "label": (
+                        _short_period_label(custom_range_periods[0])
+                        if custom_range_periods[0] == custom_range_periods[-1]
+                        else f"{_short_period_label(custom_range_periods[0])} - {_short_period_label(custom_range_periods[-1])}"
+                    ),
+                    "totalVolume": segment_total_custom_range,
+                    "fuelMix": {
+                        fuel: float(_total_volume(segment_frame[segment_frame["__powertrain"] == fuel], custom_range_columns))
+                        for fuel in available_fuels
+                    },
+                }
+            ],
+        } if custom_range_periods else None,
         "fuelPanels": fuel_panel_items,
     }
 
@@ -2530,6 +2740,7 @@ def _build_drilldown_payload(
 def query_market_scan_deck(
     country: str | None,
     target_period: str | None,
+    time_range: dict[str, str] | None,
     fuel_types: list[str],
     trend_window_months: int,
     origin_window_months: int,
@@ -2538,7 +2749,10 @@ def query_market_scan_deck(
     drilldown_segment: str | None,
 ) -> dict[str, Any]:
     ranking_limit = max(MIN_MARKET_SCAN_RANKING_LIMIT, int(ranking_limit))
-    cache_key = f"{country}|{target_period}|{','.join(sorted(fuel_types))}|{trend_window_months}|{origin_window_months}|{body_window_months}|{ranking_limit}|{drilldown_segment}"
+    time_range_key = ""
+    if time_range:
+        time_range_key = f"{time_range.get('start', '')}:{time_range.get('end', '')}"
+    cache_key = f"{country}|{target_period}|{time_range_key}|{','.join(sorted(fuel_types))}|{trend_window_months}|{origin_window_months}|{body_window_months}|{ranking_limit}|{drilldown_segment}"
     now = time.monotonic()
     dataset_token = repo.current_dataset_token()
     cached = _deck_cache.get(cache_key)
@@ -2548,7 +2762,7 @@ def query_market_scan_deck(
             return cached_result
 
     result = _query_market_scan_deck_impl(
-        country, target_period, fuel_types,
+        country, target_period, time_range, fuel_types,
         trend_window_months, origin_window_months, body_window_months,
         ranking_limit, drilldown_segment,
     )
@@ -2566,6 +2780,7 @@ def query_positioning_pricing_deck(
     *,
     country: str | None,
     target_period: str | None,
+    time_range: dict[str, str] | None,
     fuel_types: list[str],
     sales_mode: str,
     top_n: int,
@@ -2576,6 +2791,7 @@ def query_positioning_pricing_deck(
     return _query_positioning_pricing_deck_impl(
         country=country,
         target_period=target_period,
+        time_range=time_range,
         fuel_types=fuel_types,
         sales_mode=sales_mode,
         top_n=top_n,
@@ -2589,6 +2805,7 @@ def _query_positioning_pricing_deck_impl(
     *,
     country: str | None,
     target_period: str | None,
+    time_range: dict[str, str] | None,
     fuel_types: list[str],
     sales_mode: str,
     top_n: int,
@@ -2602,11 +2819,13 @@ def _query_positioning_pricing_deck_impl(
 
     available_periods = _available_periods(columns)
     resolved_period = _resolve_period(target_period, available_periods)
+    custom_periods = _normalize_period_range(available_periods, time_range, resolved_period)
     selected_sales_mode = _normalize_positioning_sales_mode(sales_mode)
     sales_periods, sales_mode_label, sales_metric_label = _resolve_positioning_sales_window(
         available_periods,
         resolved_period,
         selected_sales_mode,
+        custom_periods,
     )
     sales_columns = [_period_to_month_column(period) for period in sales_periods]
     sales_column = "__positioning_sales"
@@ -2683,9 +2902,15 @@ def _query_positioning_pricing_deck_impl(
     if selected_sales_mode == "rolling12":
         page_title = f"{selected_country['label']} 截至{int(year_text)}年{month_number}月近12个月定位定价"
         sales_metric_detail = "近12个月销量"
+    elif selected_sales_mode == "ytd":
+        page_title = f"{selected_country['label']} {int(year_text)}年1-{month_number}月YTD定位定价"
+        sales_metric_detail = "YTD销量"
     else:
         page_title = f"{selected_country['label']} {int(year_text)}年{month_number}月定位定价"
         sales_metric_detail = "当月销量"
+    if custom_periods:
+        page_title = f"{selected_country['label']} {custom_periods[0]} ~ {custom_periods[-1]} 自定义区间定位定价"
+        sales_metric_detail = "自定义区间累计销量"
     metadata = {
         "protocolVersion": "positioning-pricing/v1",
         "requestedPeriod": target_period,
@@ -2694,10 +2919,16 @@ def _query_positioning_pricing_deck_impl(
         "selectedCountry": selected_country["value"],
         "selectedCountryLabel": selected_country["label"],
         "selectedFuelTypes": selected_fuels,
-        "selectedSalesMode": selected_sales_mode,
-        "selectedTopN": int(top_n),
+            "selectedSalesMode": selected_sales_mode,
+            "selectedTimeRange": {
+                "start": custom_periods[0],
+                "end": custom_periods[-1],
+            } if custom_periods else None,
+            "customRangeActive": bool(custom_periods),
+            "selectedTopN": int(top_n),
         "availableSalesModes": [
             {"value": "month", "label": "当月"},
+            {"value": "ytd", "label": "YTD"},
             {"value": "rolling12", "label": "近12个月"},
         ],
         "availableCountries": country_options,
@@ -2778,6 +3009,7 @@ def query_version_comparison_deck(
     *,
     country: str | None,
     target_period: str | None,
+    time_range: dict[str, str] | None,
     fuel_types: list[str],
     sales_mode: str,
     segment: str | None,
@@ -2789,6 +3021,7 @@ def query_version_comparison_deck(
     return _query_version_comparison_deck_impl(
         country=country,
         target_period=target_period,
+        time_range=time_range,
         fuel_types=fuel_types,
         sales_mode=sales_mode,
         segment=segment,
@@ -2803,6 +3036,7 @@ def _query_version_comparison_deck_impl(
     *,
     country: str | None,
     target_period: str | None,
+    time_range: dict[str, str] | None,
     fuel_types: list[str],
     sales_mode: str,
     segment: str | None,
@@ -2817,11 +3051,13 @@ def _query_version_comparison_deck_impl(
 
     available_periods = _available_periods(columns)
     resolved_period = _resolve_period(target_period, available_periods)
+    custom_periods = _normalize_period_range(available_periods, time_range, resolved_period)
     selected_sales_mode = _normalize_positioning_sales_mode(sales_mode)
     sales_periods, sales_mode_label, sales_metric_label = _resolve_positioning_sales_window(
         available_periods,
         resolved_period,
         selected_sales_mode,
+        custom_periods,
     )
     sales_columns = [_period_to_month_column(period) for period in sales_periods]
     sales_column = "__comparison_sales"
@@ -2898,9 +3134,15 @@ def _query_version_comparison_deck_impl(
     if selected_sales_mode == "rolling12":
         page_title = f"{selected_country['label']} {selected_segment or 'Segment'} 截至{int(year_text)}年{month_number}月近12个月版型对比"
         sales_metric_detail = "近12个月销量"
+    elif selected_sales_mode == "ytd":
+        page_title = f"{selected_country['label']} {selected_segment or 'Segment'} {int(year_text)}年1-{month_number}月YTD版型对比"
+        sales_metric_detail = "YTD销量"
     else:
         page_title = f"{selected_country['label']} {selected_segment or 'Segment'} {int(year_text)}年{month_number}月版型对比"
         sales_metric_detail = "当月销量"
+    if custom_periods:
+        page_title = f"{selected_country['label']} {selected_segment or 'Segment'} {custom_periods[0]} ~ {custom_periods[-1]} 自定义区间版型对比"
+        sales_metric_detail = "自定义区间累计销量"
 
     return {
         "metadata": {
@@ -2912,10 +3154,16 @@ def _query_version_comparison_deck_impl(
             "selectedCountryLabel": selected_country["label"],
             "selectedFuelTypes": selected_fuels,
             "selectedSalesMode": selected_sales_mode,
+            "selectedTimeRange": {
+                "start": custom_periods[0],
+                "end": custom_periods[-1],
+            } if custom_periods else None,
+            "customRangeActive": bool(custom_periods),
             "selectedSegment": selected_segment,
             "selectedModels": selected_models,
             "availableSalesModes": [
                 {"value": "month", "label": "当月"},
+                {"value": "ytd", "label": "YTD"},
                 {"value": "rolling12", "label": "近12个月"},
             ],
             "availableCountries": country_options,
@@ -2947,6 +3195,7 @@ def _query_version_comparison_deck_impl(
 def _query_market_scan_deck_impl(
     country: str | None,
     target_period: str | None,
+    time_range: dict[str, str] | None,
     fuel_types: list[str],
     trend_window_months: int,
     origin_window_months: int,
@@ -2957,6 +3206,7 @@ def _query_market_scan_deck_impl(
     columns = _get_columns()
     available_periods = _available_periods(columns)
     resolved_period = _resolve_period(target_period, available_periods)
+    custom_periods = _normalize_period_range(available_periods, time_range, resolved_period)
     same_month_last_year_period = _shift_period(resolved_period, -12)
     if same_month_last_year_period not in available_periods:
         same_month_last_year_period = None
@@ -3024,6 +3274,11 @@ def _query_market_scan_deck_impl(
         "protocolVersion": "market-scan/v1",
         "requestedPeriod": target_period,
         "resolvedPeriod": resolved_period,
+        "selectedTimeRange": {
+            "start": custom_periods[0],
+            "end": custom_periods[-1],
+        } if custom_periods else None,
+        "customRangeActive": bool(custom_periods),
         "latestPeriod": available_periods[-1],
         "priorPeriod": prior_period,
         "sameMonthLastYearPeriod": same_month_last_year_period,
@@ -3057,6 +3312,7 @@ def _query_market_scan_deck_impl(
                 prior_period=prior_period,
                 same_month_last_year_period=same_month_last_year_period,
                 ranking_limit=ranking_limit,
+                custom_range_periods=custom_periods,
             ),
             "origin": _build_origin_payload(
                 filtered_frame,
@@ -3065,6 +3321,7 @@ def _query_market_scan_deck_impl(
                 prior_period=prior_period,
                 same_month_last_year_period=same_month_last_year_period,
                 origin_window_months=origin_window_months,
+                custom_range_periods=custom_periods,
             ),
             "segment": _build_segment_payload(
                 filtered_frame,
@@ -3073,6 +3330,7 @@ def _query_market_scan_deck_impl(
                 prior_period=prior_period,
                 same_month_last_year_period=same_month_last_year_period,
                 body_window_months=body_window_months,
+                custom_range_periods=custom_periods,
             ),
             "drilldown": _build_drilldown_payload(
                 filtered_frame,
@@ -3082,6 +3340,7 @@ def _query_market_scan_deck_impl(
                 segment_value=resolved_drilldown_segment,
                 fuel_panels=DRILLDOWN_PANEL_FUELS,
                 ranking_limit=ranking_limit,
+                custom_range_periods=custom_periods,
             ),
             "suvA": _build_drilldown_payload(
                 filtered_frame,
@@ -3091,6 +3350,7 @@ def _query_market_scan_deck_impl(
                 segment_value=suv_a_segment,
                 fuel_panels=DRILLDOWN_PANEL_FUELS,
                 ranking_limit=ranking_limit,
+                custom_range_periods=custom_periods,
             ),
             "suvB": _build_drilldown_payload(
                 filtered_frame,
@@ -3100,6 +3360,7 @@ def _query_market_scan_deck_impl(
                 segment_value=suv_b_segment,
                 fuel_panels=DRILLDOWN_PANEL_FUELS,
                 ranking_limit=ranking_limit,
+                custom_range_periods=custom_periods,
             ),
         },
     }

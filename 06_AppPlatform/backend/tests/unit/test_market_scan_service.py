@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 
 from app.services import market_scan_service
-from app.api.schemas import MarketScanDeckRequest
+from app.api.schemas import MarketScanDeckRequest, PositioningPricingDeckRequest, VersionComparisonDeckRequest
 from pydantic import ValidationError
 
 
@@ -259,6 +259,7 @@ def test_query_market_scan_deck_clamps_ranking_limit_to_top10(monkeypatch: pytes
     def _stub_query_market_scan_deck_impl(
         country: str | None,
         target_period: str | None,
+        time_range: dict[str, str] | None,
         fuel_types: list[str],
         trend_window_months: int,
         origin_window_months: int,
@@ -276,6 +277,7 @@ def test_query_market_scan_deck_clamps_ranking_limit_to_top10(monkeypatch: pytes
     result = market_scan_service.query_market_scan_deck(
         country="SE",
         target_period="2025-02",
+        time_range=None,
         fuel_types=["BEV"],
         trend_window_months=24,
         origin_window_months=24,
@@ -291,10 +293,11 @@ def test_query_market_scan_deck_clamps_ranking_limit_to_top10(monkeypatch: pytes
 def test_normalize_positioning_sales_mode_defaults_to_month() -> None:
     assert market_scan_service._normalize_positioning_sales_mode(None) == "month"
     assert market_scan_service._normalize_positioning_sales_mode("bad-mode") == "month"
+    assert market_scan_service._normalize_positioning_sales_mode("ytd") == "ytd"
     assert market_scan_service._normalize_positioning_sales_mode("rolling12") == "rolling12"
 
 
-def test_resolve_positioning_sales_window_supports_month_and_rolling12() -> None:
+def test_resolve_positioning_sales_window_supports_month_ytd_and_rolling12() -> None:
     available_periods = [
         "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09",
         "2025-10", "2025-11", "2025-12", "2026-01", "2026-02", "2026-03",
@@ -305,6 +308,11 @@ def test_resolve_positioning_sales_window_supports_month_and_rolling12() -> None
         "2026-03",
         "month",
     )
+    ytd_periods, ytd_label, ytd_metric = market_scan_service._resolve_positioning_sales_window(
+        available_periods,
+        "2026-03",
+        "ytd",
+    )
     rolling_periods, rolling_label, rolling_metric = market_scan_service._resolve_positioning_sales_window(
         available_periods,
         "2026-03",
@@ -314,9 +322,52 @@ def test_resolve_positioning_sales_window_supports_month_and_rolling12() -> None
     assert month_periods == ["2026-03"]
     assert month_label == "当月"
     assert month_metric == "Current Month Sales"
+    assert ytd_periods == ["2026-01", "2026-02", "2026-03"]
+    assert ytd_label == "YTD"
+    assert ytd_metric == "YTD Sales"
     assert rolling_periods == available_periods
     assert rolling_label == "近12个月"
     assert rolling_metric == "Rolling 12M Sales"
+
+
+def test_normalize_period_range_returns_custom_interval_and_skips_default_latest() -> None:
+    available_periods = ["2026-01", "2026-02", "2026-03", "2026-04"]
+
+    assert market_scan_service._normalize_period_range(
+        available_periods,
+        {"start": "2026-02", "end": "2026-04"},
+        "2026-04",
+    ) == ["2026-02", "2026-03", "2026-04"]
+    assert market_scan_service._normalize_period_range(
+        available_periods,
+        {"start": "2026-04", "end": "2026-04"},
+        "2026-04",
+    ) is None
+
+
+def test_resolve_positioning_sales_window_prefers_custom_range() -> None:
+    available_periods = ["2026-01", "2026-02", "2026-03", "2026-04"]
+
+    periods, label, metric = market_scan_service._resolve_positioning_sales_window(
+        available_periods,
+        "2026-04",
+        "month",
+        ["2026-02", "2026-03"],
+    )
+
+    assert periods == ["2026-02", "2026-03"]
+    assert label == "自定义区间"
+    assert metric == "Custom Range Sales"
+
+
+def test_positioning_pricing_deck_request_accepts_ytd_sales_mode() -> None:
+    payload = PositioningPricingDeckRequest(sales_mode="ytd")
+    assert payload.sales_mode == "ytd"
+
+
+def test_version_comparison_deck_request_accepts_ytd_sales_mode() -> None:
+    payload = VersionComparisonDeckRequest(sales_mode="ytd")
+    assert payload.sales_mode == "ytd"
 
 
 def test_resolve_version_comparison_models_defaults_to_top3() -> None:

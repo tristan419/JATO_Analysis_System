@@ -1233,6 +1233,7 @@ def build_country_snapshot(
         deck = market_scan_service.query_market_scan_deck(
             country=country,
             target_period=None,
+            time_range=None,
             fuel_types=list(market_scan_service.DEFAULT_FUEL_TYPES),
             trend_window_months=24,
             origin_window_months=12,
@@ -1669,6 +1670,7 @@ def _resolve_segment_drilldown(
         deck = market_scan_service.query_market_scan_deck(
             country=country,
             target_period=None,
+            time_range=None,
             fuel_types=list(market_scan_service.DEFAULT_FUEL_TYPES),
             trend_window_months=24,
             origin_window_months=12,
@@ -1820,6 +1822,7 @@ def _resolve_positioning_page_scope_bundle(
         deck = market_scan_service.query_positioning_pricing_deck(
             country=country,
             target_period=resolved_period,
+            time_range=None,
             fuel_types=fuel_types,
             sales_mode="month",
             top_n=50,

@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends
+from typing import Literal
+
+from fastapi import APIRouter, Depends, Query
 
 from app.api.schemas import (
     MarketScanDeckRequest,
@@ -24,6 +26,7 @@ def market_scan_deck(
     return query_market_scan_deck(
         country=payload.country,
         target_period=payload.target_period,
+        time_range=payload.time_range,
         fuel_types=payload.fuel_types,
         trend_window_months=payload.trend_window_months,
         origin_window_months=payload.origin_window_months,
@@ -41,6 +44,7 @@ def positioning_pricing_deck(
     return query_positioning_pricing_deck(
         country=payload.country,
         target_period=payload.target_period,
+        time_range=payload.time_range,
         fuel_types=payload.fuel_types,
         sales_mode=payload.sales_mode,
         top_n=payload.top_n,
@@ -58,6 +62,7 @@ def version_comparison_deck(
     return query_version_comparison_deck(
         country=payload.country,
         target_period=payload.target_period,
+        time_range=payload.time_range,
         fuel_types=payload.fuel_types,
         sales_mode=payload.sales_mode,
         segment=payload.segment,
@@ -70,6 +75,8 @@ def version_comparison_deck(
 
 @router.get("/nordic-customer-deck")
 def nordic_customer_deck(
+    mode: Literal["benchmark", "forum_live"] = "benchmark",
+    countries: list[str] | None = Query(default=None),
     _=Depends(require_min_role("viewer")),
 ) -> dict:
-    return query_nordic_customer_deck()
+    return query_nordic_customer_deck(mode=mode, country_codes=countries)

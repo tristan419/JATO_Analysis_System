@@ -4,9 +4,11 @@ import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
+import { DeckPeriodTimeline } from "../components/DeckPeriodTimeline";
 import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { LoadingSurface } from "../components/LoadingSurface";
 import type {
+  MarketScanPeriodRange,
   PositioningPricingMetric,
   PositioningPricingPriceBandItem,
   PositioningPricingSalesMode,
@@ -26,6 +28,7 @@ const DEFAULT_EXPORT_PRESET = "fhd";
 const MAX_SELECTED_MODELS = 10;
 const SALES_MODE_OPTIONS: Array<{ value: PositioningPricingSalesMode; label: string }> = [
   { value: "month", label: "当月" },
+  { value: "ytd", label: "YTD" },
   { value: "rolling12", label: "近12个月" },
 ];
 const EXPORT_PRESETS = [
@@ -52,6 +55,16 @@ function sanitizeFileNameSegment(value: string): string {
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+function readSearchTimeRange(searchParams: URLSearchParams): MarketScanPeriodRange | null {
+  const start = searchParams.get("timeStart");
+  const end = searchParams.get("timeEnd");
+  if (start && end) {
+    return { start, end };
+  }
+  const period = searchParams.get("period");
+  return period ? { start: period, end: period } : null;
 }
 
 function Panel({
@@ -264,6 +277,9 @@ export function VersionComparisonPage() {
 
   const [selectedCountry, setSelectedCountry] = useState<string | null>(() => searchParams.get("country") || DEFAULT_COUNTRY);
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(() => searchParams.get("period"));
+  const [selectedTimeRange, setSelectedTimeRange] = useState<MarketScanPeriodRange | null>(
+    () => readSearchTimeRange(searchParams),
+  );
   const [salesMode, setSalesMode] = useState<PositioningPricingSalesMode>(() => {
     const requested = searchParams.get("salesMode");
     return isSalesMode(requested) ? requested : DEFAULT_SALES_MODE;
@@ -299,6 +315,10 @@ export function VersionComparisonPage() {
     const params = new URLSearchParams();
     if (selectedCountry) params.set("country", selectedCountry);
     if (selectedPeriod) params.set("period", selectedPeriod);
+    if (selectedTimeRange) {
+      params.set("timeStart", selectedTimeRange.start);
+      params.set("timeEnd", selectedTimeRange.end);
+    }
     if (salesMode !== DEFAULT_SALES_MODE) params.set("salesMode", salesMode);
     if (selectedSegment) params.set("segment", selectedSegment);
     if (selectedModels.length > 0) params.set("models", selectedModels.join("||"));
@@ -309,7 +329,7 @@ export function VersionComparisonPage() {
     if (msrpMax !== null) params.set("msrpMax", String(msrpMax));
     if (priceBandSize !== null) params.set("priceBandSize", String(priceBandSize));
     setSearchParams(params, { replace: true });
-  }, [msrpMax, msrpMin, priceBandSize, salesMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, setSearchParams]);
+  }, [msrpMax, msrpMin, priceBandSize, salesMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, selectedTimeRange, setSearchParams]);
 
   useEffect(() => {
     syncUrlParams();
@@ -332,6 +352,7 @@ export function VersionComparisonPage() {
     api.versionComparisonDeck({
       country: selectedCountry || undefined,
       target_period: selectedPeriod || undefined,
+      time_range: selectedTimeRange || undefined,
       fuel_types: selectedFuelTypes,
       sales_mode: salesMode,
       segment: selectedSegment || undefined,
@@ -357,7 +378,7 @@ export function VersionComparisonPage() {
           setLoading(false);
         }
       });
-  }, [msrpMax, msrpMin, priceBandSize, reloadToken, salesMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment]);
+  }, [msrpMax, msrpMin, priceBandSize, reloadToken, salesMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, selectedTimeRange]);
 
   useEffect(() => {
     if (!deck) {
@@ -368,6 +389,14 @@ export function VersionComparisonPage() {
     }
     if (selectedPeriod && !deck.metadata.availablePeriods.some((item) => item.value === selectedPeriod)) {
       setSelectedPeriod(deck.metadata.resolvedPeriod);
+    }
+    if (selectedTimeRange) {
+      const availablePeriodSet = new Set(deck.metadata.availablePeriods.map((item) => item.value));
+      const nextRange = deck.metadata.selectedTimeRange ?? null;
+      const isCurrentRangeValid = availablePeriodSet.has(selectedTimeRange.start) && availablePeriodSet.has(selectedTimeRange.end);
+      if (!isCurrentRangeValid || nextRange?.start !== selectedTimeRange.start || nextRange?.end !== selectedTimeRange.end) {
+        setSelectedTimeRange(nextRange);
+      }
     }
     if (selectedSegment !== deck.metadata.selectedSegment) {
       setSelectedSegment(deck.metadata.selectedSegment);
@@ -383,10 +412,12 @@ export function VersionComparisonPage() {
     ) {
       setSelectedModels(deck.metadata.selectedModels);
     }
-  }, [deck]);
+  }, [deck, selectedTimeRange]);
 
   const currentCountry = selectedCountry ?? deck?.metadata.selectedCountry ?? DEFAULT_COUNTRY;
-  const currentPeriod = selectedPeriod ?? deck?.metadata.resolvedPeriod ?? "";
+  const resolvedTimeRange = selectedTimeRange ?? deck?.metadata.selectedTimeRange ?? null;
+  const customRangeActive = Boolean(resolvedTimeRange);
+  const currentPeriod = resolvedTimeRange?.end ?? selectedPeriod ?? deck?.metadata.resolvedPeriod ?? "";
   const currentSegment = selectedSegment ?? deck?.metadata.selectedSegment ?? "";
   const fuelOptions = deck?.metadata.availableFuelTypes ?? DEFAULT_FUEL_TYPES;
   const activeFuelTypes = selectedFuelTypes.length > 0
@@ -524,8 +555,8 @@ export function VersionComparisonPage() {
               <p>{page?.summaryText ?? "按 segment 和 model 组合，对比不同 version/trim 的定位分布。"}</p>
               <div className="market-scan-hero-ribbon">
                 <span className="market-scan-hero-chip">国家 {deck?.metadata.selectedCountryLabel ?? currentCountry}</span>
-                <span className="market-scan-hero-chip">月份 {deck?.metadata.labels.currentMonthShort ?? "Latest"}</span>
-                <span className="market-scan-hero-chip">口径 {deck?.metadata.labels.salesModeLabel ?? "当月"}</span>
+                <span className="market-scan-hero-chip">月份 {customRangeActive ? (resolvedTimeRange ? `${resolvedTimeRange.start}~${resolvedTimeRange.end}` : (deck?.metadata.labels.currentMonthShort ?? "Latest")) : (deck?.metadata.labels.currentMonthShort ?? "Latest")}</span>
+                <span className="market-scan-hero-chip">口径 {customRangeActive ? "自定义区间累计" : (deck?.metadata.labels.salesModeLabel ?? "当月")}</span>
                 <span className="market-scan-hero-chip">Segment {currentSegment || "-"}</span>
                 <span className="market-scan-hero-chip">Models {activeModels.length}/{MAX_SELECTED_MODELS}</span>
                 {loading && deck ? <span className="market-scan-hero-chip market-scan-hero-chip--live">Refreshing</span> : null}
@@ -549,20 +580,15 @@ export function VersionComparisonPage() {
                     ))}
                   </select>
                 </label>
-                <label className="market-scan-field">
-                  <span>Period</span>
-                  <select
-                    value={currentPeriod}
-                    onChange={(event) => setSelectedPeriod(event.target.value || null)}
-                    disabled={!deck}
-                  >
-                    {(deck?.metadata.availablePeriods ?? []).map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <DeckPeriodTimeline
+                  options={deck?.metadata.availablePeriods ?? []}
+                  value={resolvedTimeRange ?? (selectedPeriod ? { start: selectedPeriod, end: selectedPeriod } : null)}
+                  onChange={(value) => {
+                    setSelectedTimeRange(value);
+                    setSelectedPeriod(value?.end ?? null);
+                  }}
+                  disabled={!deck}
+                />
                 <label className="market-scan-field">
                   <span>Segment</span>
                   <select
@@ -615,6 +641,9 @@ export function VersionComparisonPage() {
                       </button>
                     ))}
                   </div>
+                  {customRangeActive ? (
+                    <small className="market-scan-field-hint">当前已按自定义区间累计重算。</small>
+                  ) : null}
                 </div>
                 <label className="market-scan-field">
                   <span>Step</span>

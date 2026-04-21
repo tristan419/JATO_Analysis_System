@@ -410,6 +410,8 @@ export interface MarketScanMetadata {
   protocolVersion: string;
   requestedPeriod: string | null;
   resolvedPeriod: string;
+  selectedTimeRange?: MarketScanPeriodRange | null;
+  customRangeActive?: boolean;
   latestPeriod: string;
   priorPeriod: string | null;
   sameMonthLastYearPeriod: string | null;
@@ -451,6 +453,9 @@ export interface MarketScanOverviewSummary {
   rolling12YoY: MarketScanDelta;
   ytdVolume: number;
   ytdYoY: MarketScanDelta;
+  customRangeVolume?: number;
+  customRangeYoY?: MarketScanDelta;
+  customRangeLabel?: string;
 }
 
 export interface MarketScanOverviewTrendItem {
@@ -504,6 +509,7 @@ export interface MarketScanOverviewPage {
   ytdBrandRanking: MarketScanRankingGroup;
   rolling12BrandRanking: MarketScanRankingGroup;
   monthlyBrandRanking: MarketScanRankingGroup;
+  customRangeBrandRanking?: MarketScanRankingGroup;
 }
 
 export interface MarketScanOriginTrendPoint {
@@ -537,6 +543,8 @@ export interface MarketScanOriginPage {
     groups: MarketScanOriginBrandGroup[];
   };
   matrix: MarketScanMatrix;
+  customRangeMatrixRow?: MarketScanMatrixRow | null;
+  customRangeYoYMatrixRow?: MarketScanMatrixRow | null;
 }
 
 export interface MarketScanBodyShareTrendItem {
@@ -576,9 +584,11 @@ export interface MarketScanFuelPanel {
   monthTitle: string;
   ytdTitle: string;
   rolling12Title: string;
+  customRangeTitle?: string | null;
   monthRanking: MarketScanRankingItem[];
   ytdRanking: MarketScanRankingItem[];
   rolling12Ranking: MarketScanRankingItem[];
+  customRangeRanking?: MarketScanRankingItem[];
 }
 
 export interface MarketScanDrilldownPage {
@@ -598,6 +608,10 @@ export interface MarketScanDrilldownPage {
     title: string;
     items: MarketScanRankingItem[];
   };
+  customRangeTotalRanking?: {
+    title: string;
+    items: MarketScanRankingItem[];
+  } | null;
   monthFuelTrend: {
     items: MarketScanFuelTrendItem[];
   };
@@ -607,6 +621,9 @@ export interface MarketScanDrilldownPage {
   rolling12FuelTrend: {
     items: MarketScanFuelTrendItem[];
   };
+  customRangeFuelTrend?: {
+    items: MarketScanFuelTrendItem[];
+  } | null;
   fuelPanels: MarketScanFuelPanel[];
 }
 
@@ -629,12 +646,18 @@ export interface MarketScanDeckResponse {
 export interface MarketScanDeckRequest {
   country?: string | null;
   target_period?: string | null;
+  time_range?: MarketScanPeriodRange | null;
   fuel_types?: string[];
   trend_window_months?: number;
   origin_window_months?: number;
   body_window_months?: number;
   ranking_limit?: number;
   drilldown_segment?: string | null;
+}
+
+export interface MarketScanPeriodRange {
+  start: string;
+  end: string;
 }
 
 export interface PositioningPricingMetric {
@@ -707,6 +730,8 @@ export interface PositioningPricingMetadata {
   selectedCountryLabel: string;
   selectedFuelTypes: string[];
   selectedSalesMode: PositioningPricingSalesMode;
+  selectedTimeRange?: MarketScanPeriodRange | null;
+  customRangeActive?: boolean;
   selectedTopN: number;
   availableSalesModes: MarketScanCountryOption[];
   availableCountries: MarketScanCountryOption[];
@@ -728,6 +753,7 @@ export interface PositioningPricingDeckResponse {
 export interface PositioningPricingDeckRequest {
   country?: string | null;
   target_period?: string | null;
+  time_range?: MarketScanPeriodRange | null;
   fuel_types?: string[];
   sales_mode?: PositioningPricingSalesMode;
   top_n?: number;
@@ -736,7 +762,7 @@ export interface PositioningPricingDeckRequest {
   price_band_size?: number | null;
 }
 
-export type PositioningPricingSalesMode = "month" | "rolling12";
+export type PositioningPricingSalesMode = "month" | "ytd" | "rolling12";
 export type PositioningPricingPageKey = "overview" | "suvA0" | "suvA" | "suvBPlus";
 
 export interface VersionComparisonBubbleItem {
@@ -779,6 +805,8 @@ export interface VersionComparisonMetadata {
   selectedCountryLabel: string;
   selectedFuelTypes: string[];
   selectedSalesMode: PositioningPricingSalesMode;
+  selectedTimeRange?: MarketScanPeriodRange | null;
+  customRangeActive?: boolean;
   selectedSegment: string;
   selectedModels: string[];
   availableSalesModes: MarketScanCountryOption[];
@@ -802,6 +830,7 @@ export interface VersionComparisonDeckResponse {
 export interface VersionComparisonDeckRequest {
   country?: string | null;
   target_period?: string | null;
+  time_range?: MarketScanPeriodRange | null;
   fuel_types?: string[];
   sales_mode?: PositioningPricingSalesMode;
   segment?: string | null;

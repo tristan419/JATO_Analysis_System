@@ -4,6 +4,7 @@ import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
+import { DeckPeriodTimeline } from "../components/DeckPeriodTimeline";
 import {
   DEFAULT_EXPORT,
   ExportPanel,
@@ -52,6 +53,7 @@ import type {
   MarketScanMatrix,
   MarketScanMatrixRow,
   MarketScanOverviewPage,
+  MarketScanPeriodRange,
   MarketScanOverviewTrendItem,
   MarketScanPageKey,
   MarketScanRankingGroup,
@@ -60,13 +62,14 @@ import type {
   MarketScanSuvSegmentShareTrendItem,
 } from "../types";
 
-type MarketScanSalesMode = "month" | "rolling12";
+type MarketScanSalesMode = "month" | "ytd" | "rolling12";
 
 const DEFAULT_FUEL_TYPES = ["ICE", "MHEV", "HEV", "PHEV", "BEV", "LPG"];
 const DEFAULT_MARKET_SCAN_COUNTRY = "瑞典";
 const DEFAULT_MARKET_SCAN_SALES_MODE: MarketScanSalesMode = "month";
 const MARKET_SCAN_SALES_MODE_OPTIONS: Array<{ value: MarketScanSalesMode; label: string }> = [
   { value: "month", label: "当月" },
+  { value: "ytd", label: "YTD" },
   { value: "rolling12", label: "近12个月" },
 ];
 const TAB_ITEMS: Array<{
@@ -111,7 +114,7 @@ function isMarketScanPageKey(value: string | null): value is MarketScanPageKey {
 }
 
 function isMarketScanSalesMode(value: string | null): value is MarketScanSalesMode {
-  return value === "month" || value === "rolling12";
+  return value === "month" || value === "ytd" || value === "rolling12";
 }
 
 function normalizeMarketScanRankingLimit(value: number | string | null | undefined): number {
@@ -390,10 +393,201 @@ function matrixRow(matrix: MarketScanMatrix, metricKey: string): MarketScanMatri
   return matrix.rows.find((row) => row.metricKey === metricKey);
 }
 
-function filterMatrixBySalesMode(matrix: MarketScanMatrix, salesMode: MarketScanSalesMode): MarketScanMatrix {
-  const visibleMetricKeys = salesMode === "month"
+function marketScanVolumeMetricKey(salesMode: MarketScanSalesMode, customRangeActive = false): string {
+  if (customRangeActive) {
+    return "custom_range";
+  }
+  if (salesMode === "ytd") {
+    return "ytd";
+  }
+  if (salesMode === "rolling12") {
+    return "rolling12";
+  }
+  return "current_volume";
+}
+
+function marketScanDeltaMetricKey(salesMode: MarketScanSalesMode, customRangeActive = false): string {
+  if (customRangeActive) {
+    return "custom_range_yoy";
+  }
+  if (salesMode === "ytd") {
+    return "ytd_yoy";
+  }
+  if (salesMode === "rolling12") {
+    return "rolling12_yoy";
+  }
+  return "yoy";
+}
+
+function marketScanWindowLabel(
+  salesMode: MarketScanSalesMode,
+  currentMonthShort: string,
+  customRangeLabel?: string,
+): string {
+  if (customRangeLabel) {
+    return customRangeLabel;
+  }
+  if (salesMode === "ytd") {
+    return "YTD";
+  }
+  if (salesMode === "rolling12") {
+    return "Rolling 12M";
+  }
+  return currentMonthShort;
+}
+
+function marketScanWindowDetail(
+  salesMode: MarketScanSalesMode,
+  currentMonthShort: string,
+  customRangeActive = false,
+): string {
+  if (customRangeActive) {
+    return "区间累计销量";
+  }
+  if (salesMode === "month") {
+    return "车系总量";
+  }
+  return `截至 ${currentMonthShort}`;
+}
+
+function marketScanDeltaLabel(salesMode: MarketScanSalesMode, customRangeActive = false): string {
+  if (customRangeActive) {
+    return "自定义区间 YoY";
+  }
+  if (salesMode === "ytd") {
+    return "YTD YoY";
+  }
+  if (salesMode === "rolling12") {
+    return "Rolling 12M YoY";
+  }
+  return "YoY";
+}
+
+function marketScanVolumeSuffix(salesMode: MarketScanSalesMode, customRangeActive = false): string {
+  if (customRangeActive) {
+    return "台（自定义区间）";
+  }
+  if (salesMode === "ytd") {
+    return "台（YTD）";
+  }
+  if (salesMode === "rolling12") {
+    return "台（近12个月）";
+  }
+  return "台";
+}
+
+function marketScanOverviewRankingGroups(
+  page: MarketScanOverviewPage,
+  salesMode: MarketScanSalesMode,
+  customRangeActive = false,
+): MarketScanRankingGroup[] {
+  if (customRangeActive && page.customRangeBrandRanking) {
+    return [page.customRangeBrandRanking, page.rolling12BrandRanking];
+  }
+  if (salesMode === "ytd") {
+    return [page.ytdBrandRanking, page.rolling12BrandRanking];
+  }
+  if (salesMode === "rolling12") {
+    return [page.rolling12BrandRanking, page.monthlyBrandRanking];
+  }
+  return [page.monthlyBrandRanking, page.ytdBrandRanking];
+}
+
+function marketScanActiveFuelPanelWindow(
+  panel: MarketScanFuelPanel,
+  salesMode: MarketScanSalesMode,
+  customRangeActive = false,
+): { title: string; ranking: MarketScanRankingItem[] } {
+  if (customRangeActive) {
+    return {
+      title: panel.customRangeTitle || panel.monthTitle,
+      ranking: panel.customRangeRanking || panel.monthRanking,
+    };
+  }
+  if (salesMode === "ytd") {
+    return { title: panel.ytdTitle, ranking: panel.ytdRanking };
+  }
+  if (salesMode === "rolling12") {
+    return { title: panel.rolling12Title, ranking: panel.rolling12Ranking };
+  }
+  return { title: panel.monthTitle, ranking: panel.monthRanking };
+}
+
+function marketScanActiveDrilldownWindow(
+  page: MarketScanDrilldownPage,
+  salesMode: MarketScanSalesMode,
+  customRangeActive = false,
+  customRangeLabel?: string,
+): {
+  ranking: MarketScanDrilldownPage["monthTotalRanking"];
+  fuelTrend: MarketScanDrilldownPage["monthFuelTrend"];
+  trendTitle: string;
+  trendSubtitle: string;
+  trendYAxisTitle: string;
+  rankingSubtitle: string;
+  heroWindowLabel: string;
+  heroWindowValue: string;
+} {
+  if (customRangeActive && page.customRangeTotalRanking && page.customRangeFuelTrend) {
+    return {
+      ranking: page.customRangeTotalRanking,
+      fuelTrend: page.customRangeFuelTrend,
+      trendTitle: "Custom Range Fuel Mix",
+      trendSubtitle: "观察自定义区间累计口径下各燃料路线的结构。",
+      trendYAxisTitle: "区间累计销量",
+      rankingSubtitle: "按当前国家与细分市场自定义区间份额排序",
+      heroWindowLabel: "Custom Range",
+      heroWindowValue: customRangeLabel || "自定义区间",
+    };
+  }
+  if (salesMode === "ytd") {
+    return {
+      ranking: page.totalRanking,
+      fuelTrend: page.ytdFuelTrend,
+      trendTitle: "YTD Fuel Trend",
+      trendSubtitle: "观察同一年内累计窗口下各燃料路线的堆叠变化。",
+      trendYAxisTitle: "YTD销量",
+      rankingSubtitle: "按当前国家与细分市场 YTD 份额排序",
+      heroWindowLabel: "YTD Window",
+      heroWindowValue: "YTD",
+    };
+  }
+  if (salesMode === "rolling12") {
+    return {
+      ranking: page.rolling12TotalRanking,
+      fuelTrend: page.rolling12FuelTrend,
+      trendTitle: "Rolling 12M Fuel Trend",
+      trendSubtitle: "观察同一近12个月窗口下各燃料路线的堆叠变化。",
+      trendYAxisTitle: "近12个月销量",
+      rankingSubtitle: "按当前国家与细分市场近12个月份额排序",
+      heroWindowLabel: "Rolling 12M Window",
+      heroWindowValue: "",
+    };
+  }
+  return {
+    ranking: page.monthTotalRanking,
+    fuelTrend: page.monthFuelTrend,
+    trendTitle: "Monthly Fuel Trend",
+    trendSubtitle: "观察同一月份跨年度的燃料路线结构。",
+    trendYAxisTitle: "当月销量",
+    rankingSubtitle: "按当前国家与细分市场当月份额排序",
+    heroWindowLabel: "Month Window",
+    heroWindowValue: "",
+  };
+}
+
+function filterMatrixBySalesMode(
+  matrix: MarketScanMatrix,
+  salesMode: MarketScanSalesMode,
+  customRangeActive = false,
+): MarketScanMatrix {
+  const visibleMetricKeys = customRangeActive
+    ? new Set(["custom_range", "custom_range_yoy"])
+    : salesMode === "month"
     ? new Set(["current_volume", "mom", "yoy"])
-    : new Set(["rolling12", "rolling12_yoy"]);
+    : salesMode === "ytd"
+      ? new Set(["ytd", "ytd_yoy"])
+      : new Set(["rolling12", "rolling12_yoy"]);
   return {
     ...matrix,
     rows: matrix.rows.filter((row) => visibleMetricKeys.has(row.metricKey)),
@@ -404,72 +598,130 @@ function buildHeroMetrics(
   deck: MarketScanDeckResponse,
   pageKey: MarketScanPageKey,
   salesMode: MarketScanSalesMode,
+  customRangeActive = false,
 ): HeroMetric[] {
   if (pageKey === "overview") {
     const { summary } = deck.results.overview;
-    return salesMode === "month"
-      ? [
-          {
-            label: deck.metadata.labels.currentMonthShort,
-            value: formatVolume(summary.currentMonthVolume),
-            detail: "当月销量",
-          },
-          {
-            label: "YoY",
-            value: summary.currentMonthYoY.display,
-            detail: "当月同比",
-            tone: summary.currentMonthYoY.tone,
-          },
-          {
-            label: "Rolling 12M",
-            value: formatVolume(summary.rolling12Volume),
-            detail: `截至 ${deck.metadata.labels.currentMonthShort}`,
-          },
-          {
-            label: "Rolling 12M YoY",
-            value: summary.rolling12YoY.display,
-            detail: "近12个月同比",
-            tone: summary.rolling12YoY.tone,
-          },
-        ]
-      : [
-          {
-            label: "Rolling 12M",
-            value: formatVolume(summary.rolling12Volume),
-            detail: `截至 ${deck.metadata.labels.currentMonthShort}`,
-          },
-          {
-            label: "Rolling 12M YoY",
-            value: summary.rolling12YoY.display,
-            detail: "近12个月同比",
-            tone: summary.rolling12YoY.tone,
-          },
-          {
-            label: deck.metadata.labels.currentMonthShort,
-            value: formatVolume(summary.currentMonthVolume),
-            detail: "当月销量",
-          },
-          {
-            label: "YoY",
-            value: summary.currentMonthYoY.display,
-            detail: "当月同比",
-            tone: summary.currentMonthYoY.tone,
-          },
-        ];
+    if (customRangeActive && summary.customRangeYoY) {
+      return [
+        {
+          label: summary.customRangeLabel || "自定义区间",
+          value: formatVolume(summary.customRangeVolume),
+          detail: "区间累计销量",
+        },
+        {
+          label: "自定义区间 YoY",
+          value: summary.customRangeYoY.display,
+          detail: "区间累计同比",
+          tone: summary.customRangeYoY.tone,
+        },
+        {
+          label: "Rolling 12M",
+          value: formatVolume(summary.rolling12Volume),
+          detail: `截至 ${deck.metadata.labels.currentMonthShort}`,
+        },
+        {
+          label: "Rolling 12M YoY",
+          value: summary.rolling12YoY.display,
+          detail: "近12个月同比",
+          tone: summary.rolling12YoY.tone,
+        },
+      ];
+    }
+    if (salesMode === "ytd") {
+      return [
+        {
+          label: "YTD",
+          value: formatVolume(summary.ytdVolume),
+          detail: `截至 ${deck.metadata.labels.currentMonthShort}`,
+        },
+        {
+          label: "YTD YoY",
+          value: summary.ytdYoY.display,
+          detail: "累计同比",
+          tone: summary.ytdYoY.tone,
+        },
+        {
+          label: "Rolling 12M",
+          value: formatVolume(summary.rolling12Volume),
+          detail: `截至 ${deck.metadata.labels.currentMonthShort}`,
+        },
+        {
+          label: "Rolling 12M YoY",
+          value: summary.rolling12YoY.display,
+          detail: "近12个月同比",
+          tone: summary.rolling12YoY.tone,
+        },
+      ];
+    }
+    if (salesMode === "rolling12") {
+      return [
+        {
+          label: "Rolling 12M",
+          value: formatVolume(summary.rolling12Volume),
+          detail: `截至 ${deck.metadata.labels.currentMonthShort}`,
+        },
+        {
+          label: "Rolling 12M YoY",
+          value: summary.rolling12YoY.display,
+          detail: "近12个月同比",
+          tone: summary.rolling12YoY.tone,
+        },
+        {
+          label: deck.metadata.labels.currentMonthShort,
+          value: formatVolume(summary.currentMonthVolume),
+          detail: "当月销量",
+        },
+        {
+          label: "YoY",
+          value: summary.currentMonthYoY.display,
+          detail: "当月同比",
+          tone: summary.currentMonthYoY.tone,
+        },
+      ];
+    }
+    return [
+      {
+        label: deck.metadata.labels.currentMonthShort,
+        value: formatVolume(summary.currentMonthVolume),
+        detail: "当月销量",
+      },
+      {
+        label: "YoY",
+        value: summary.currentMonthYoY.display,
+        detail: "当月同比",
+        tone: summary.currentMonthYoY.tone,
+      },
+      {
+        label: "YTD",
+        value: formatVolume(summary.ytdVolume),
+        detail: `截至 ${deck.metadata.labels.currentMonthShort}`,
+      },
+      {
+        label: "YTD YoY",
+        value: summary.ytdYoY.display,
+        detail: "累计同比",
+        tone: summary.ytdYoY.tone,
+      },
+    ];
   }
 
   if (pageKey === "origin") {
-    const metricKey = salesMode === "month" ? "current_volume" : "rolling12";
-    const currentRow = matrixRow(deck.results.origin.matrix, metricKey);
-    const deltaRow = matrixRow(deck.results.origin.matrix, salesMode === "month" ? "yoy" : "rolling12_yoy");
+    const currentRow = customRangeActive
+      ? (deck.results.origin.customRangeMatrixRow ?? undefined)
+      : matrixRow(deck.results.origin.matrix, marketScanVolumeMetricKey(salesMode, false));
+    const deltaRow = customRangeActive
+      ? (deck.results.origin.customRangeYoYMatrixRow ?? undefined)
+      : matrixRow(deck.results.origin.matrix, marketScanDeltaMetricKey(salesMode, false));
     const leader = topCell(currentRow);
     const total = currentRow?.cells.reduce((sum, cell) => sum + Number(cell.value ?? 0), 0) ?? 0;
     const deltaLeader = topCell(deltaRow);
+    const customRangeLabel = deck.results.overview.summary.customRangeLabel;
     return [
       {
-        label: salesMode === "month" ? deck.metadata.labels.currentMonthShort : "Rolling 12M",
+        label: marketScanWindowLabel(salesMode, deck.metadata.labels.currentMonthShort, customRangeActive ? customRangeLabel : undefined),
         value: formatVolume(total),
-        detail: salesMode === "month" ? "车系总量" : `截至 ${deck.metadata.labels.currentMonthShort}`,
+        detail: marketScanWindowDetail(salesMode, deck.metadata.labels.currentMonthShort, customRangeActive),
       },
       {
         label: "Leading Origin",
@@ -477,7 +729,7 @@ function buildHeroMetrics(
         detail: leader ? `${formatVolume(leader.value)} 台` : "暂无数据",
       },
       {
-        label: salesMode === "month" ? "YoY" : "Rolling 12M YoY",
+        label: marketScanDeltaLabel(salesMode, customRangeActive),
         value: deltaLeader?.key ?? "-",
         detail: deltaLeader ? deltaRow?.cells.find((cell) => cell.key === deltaLeader.key)?.display ?? "-" : "暂无变化",
       },
@@ -485,7 +737,7 @@ function buildHeroMetrics(
   }
 
   if (pageKey === "segment") {
-    const currentRow = matrixRow(deck.results.segment.matrix, salesMode === "month" ? "current_volume" : "rolling12");
+    const currentRow = matrixRow(deck.results.segment.matrix, marketScanVolumeMetricKey(salesMode, customRangeActive));
     const leader = topCell(currentRow);
     const lastPoint = deck.results.segment.bodyShareTrend.items[
       deck.results.segment.bodyShareTrend.items.length - 1
@@ -505,15 +757,21 @@ function buildHeroMetrics(
         label: "Top Bucket",
         value: leader?.key ?? "-",
         detail: leader
-          ? `${formatVolume(leader.value)} ${salesMode === "month" ? "台" : "台（近12个月）"}`
+          ? `${formatVolume(leader.value)} ${marketScanVolumeSuffix(salesMode, customRangeActive)}`
           : "暂无数据",
       },
     ];
   }
 
   const drilldown = deck.results[pageKey] as MarketScanDrilldownPage;
-  const activeRanking = salesMode === "month" ? drilldown.monthTotalRanking : drilldown.rolling12TotalRanking;
-  const activeFuelTrend = salesMode === "month" ? drilldown.monthFuelTrend : drilldown.rolling12FuelTrend;
+  const activeWindow = marketScanActiveDrilldownWindow(
+    drilldown,
+    salesMode,
+    customRangeActive,
+    deck.results.overview.summary.customRangeLabel,
+  );
+  const activeRanking = activeWindow.ranking;
+  const activeFuelTrend = activeWindow.fuelTrend;
   const leader = activeRanking.items[0];
   const lastTrend = activeFuelTrend.items[activeFuelTrend.items.length - 1];
   return [
@@ -528,14 +786,25 @@ function buildHeroMetrics(
       detail: "榜首份额",
     },
     {
-      label: salesMode === "month" ? "Month Window" : "Rolling 12M Window",
-      value: lastTrend?.label ?? (salesMode === "month" ? deck.metadata.labels.currentMonthShort : `L12M ${deck.metadata.labels.currentMonthShort}`),
+      label: activeWindow.heroWindowLabel,
+      value: lastTrend?.label
+        ?? (
+          activeWindow.heroWindowValue
+          || (salesMode === "month"
+            ? deck.metadata.labels.currentMonthShort
+            : salesMode === "ytd"
+              ? "YTD"
+              : `L12M ${deck.metadata.labels.currentMonthShort}`)
+        ),
       detail: lastTrend ? `${formatVolume(lastTrend.totalVolume)} 台` : "暂无销量趋势",
     },
   ];
 }
 
 function pageNarrative(deck: MarketScanDeckResponse, pageKey: MarketScanPageKey): string {
+  if (deck.metadata.customRangeActive) {
+    return `当前页面已切换为 ${deck.results.overview.summary.customRangeLabel || "自定义区间"} 累计口径。`;
+  }
   if (pageKey === "overview") {
     return deck.results.overview.summary.subheadline;
   }
@@ -583,6 +852,26 @@ function shiftMonthPeriod(period: string, deltaMonths: number): string {
   }
   const shifted = new Date(Date.UTC(year, month - 1 + deltaMonths, 1));
   return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function readSearchTimeRange(searchParams: URLSearchParams): MarketScanPeriodRange | null {
+  const start = searchParams.get("timeStart");
+  const end = searchParams.get("timeEnd");
+  if (start && end) {
+    return { start, end };
+  }
+  const period = searchParams.get("period");
+  if (period) {
+    return { start: period, end: period };
+  }
+  return null;
+}
+
+function periodWithinRange(period: string, range: MarketScanPeriodRange | null | undefined): boolean {
+  if (!range) {
+    return true;
+  }
+  return period >= range.start && period <= range.end;
 }
 
 function buildOverviewTrendData(
@@ -1381,6 +1670,8 @@ function OverviewSection({
   page,
   fuelOrder,
   salesMode,
+  customRangeActive = false,
+  timeRange = null,
   showDataLabels,
   exportSettings,
   compact = false,
@@ -1389,14 +1680,17 @@ function OverviewSection({
   page: MarketScanOverviewPage;
   fuelOrder: string[];
   salesMode: MarketScanSalesMode;
+  customRangeActive?: boolean;
+  timeRange?: MarketScanPeriodRange | null;
   showDataLabels: boolean;
   exportSettings: ExportSettings;
   compact?: boolean;
 }) {
   const insight = buildOverviewInsight(page);
-  const rankingGroups = salesMode === "month"
-    ? [page.monthlyBrandRanking, page.rolling12BrandRanking]
-    : [page.rolling12BrandRanking, page.monthlyBrandRanking];
+  const rankingGroups = marketScanOverviewRankingGroups(page, salesMode, customRangeActive);
+  const trendItems = customRangeActive
+    ? page.trend.items.filter((item) => periodWithinRange(item.period, timeRange))
+    : page.trend.items;
 
   return (
     <div className="market-scan-grid market-scan-grid--three">
@@ -1407,9 +1701,9 @@ function OverviewSection({
       >
         <div className="market-scan-overview-trend-stack">
           <div className="market-scan-overview-trend-chart">
-            <PlotlyChart
+              <PlotlyChart
               data={applyMarketScanExportToTraces(
-                buildOverviewTrendData(page.trend.items, fuelOrder, showDataLabels),
+                buildOverviewTrendData(trendItems, fuelOrder, showDataLabels),
                 exportSettings,
               )}
               layout={applyMarketScanExportToLayout({
@@ -1441,18 +1735,44 @@ function OverviewSection({
 function OriginSection({
   page,
   salesMode,
+  customRangeActive = false,
+  timeRange = null,
   showDataLabels,
   exportSettings,
   compact = false,
 }: {
   page: MarketScanDeckResponse["results"]["origin"];
   salesMode: MarketScanSalesMode;
+  customRangeActive?: boolean;
+  timeRange?: MarketScanPeriodRange | null;
   showDataLabels: boolean;
   exportSettings: ExportSettings;
   compact?: boolean;
 }) {
   const insight = buildOriginInsight(page);
-  const filteredMatrix = filterMatrixBySalesMode(page.matrix, salesMode);
+  const filteredMatrix = customRangeActive
+    ? {
+        ...page.matrix,
+        rows: [page.customRangeMatrixRow, page.customRangeYoYMatrixRow].filter(
+          (row): row is MarketScanMatrixRow => Boolean(row),
+        ),
+      }
+    : filterMatrixBySalesMode(page.matrix, salesMode);
+  const trendSeries = customRangeActive
+    ? page.trend.series.map((series) => ({
+        ...series,
+        points: series.points.filter((point) => periodWithinRange(point.period, timeRange)),
+      }))
+    : page.trend.series;
+  const brandTrendGroups = customRangeActive
+    ? page.brandTrend.groups.map((group) => ({
+        ...group,
+        series: group.series.map((series) => ({
+          ...series,
+          points: series.points.filter((point) => periodWithinRange(point.period, timeRange)),
+        })),
+      }))
+    : page.brandTrend.groups;
   const trendPanel = (
     <Panel
       eyebrow="Trend"
@@ -1460,7 +1780,7 @@ function OriginSection({
       subtitle="欧系、日系、韩系、美系、中系与其他车系的月度走势。"
     >
       <PlotlyChart
-        data={applyMarketScanExportToTraces(buildOriginTrendData(page.trend.series, showDataLabels), exportSettings)}
+        data={applyMarketScanExportToTraces(buildOriginTrendData(trendSeries, showDataLabels), exportSettings)}
         layout={applyMarketScanExportToLayout({
           ...CHART_LAYOUT,
           xaxis: { type: "category" },
@@ -1471,7 +1791,7 @@ function OriginSection({
       </Panel>
   );
   const selectedBrandTrendGroups = (() => {
-    const rankedOrigins = [...page.trend.series]
+    const rankedOrigins = [...trendSeries]
       .map((entry) => ({
         origin: entry.origin,
         latestVolume: entry.points[entry.points.length - 1]?.volume ?? 0,
@@ -1482,9 +1802,9 @@ function OriginSection({
       (origin, index, items): origin is string => Boolean(origin) && items.indexOf(origin) === index,
     );
     const selected = preferredOrigins
-      .map((origin) => page.brandTrend.groups.find((group) => group.origin === origin))
+      .map((origin) => brandTrendGroups.find((group) => group.origin === origin))
       .filter((group): group is NonNullable<typeof group> => Boolean(group));
-    return selected.length > 0 ? selected : page.brandTrend.groups.slice(0, 2);
+    return selected.length > 0 ? selected : brandTrendGroups.slice(0, 2);
   })();
   const brandTrendPanel =
     selectedBrandTrendGroups.length > 0 ? (
@@ -1522,7 +1842,15 @@ function OriginSection({
     <Panel
       eyebrow="Matrix"
       title="Origin Scorecard"
-      subtitle={salesMode === "month" ? "当月、环比、同比矩阵。" : "近12个月、近12个月同比矩阵。"}
+      subtitle={
+        customRangeActive
+          ? "自定义区间累计与同比矩阵。"
+          : salesMode === "month"
+          ? "当月、环比、同比矩阵。"
+          : salesMode === "ytd"
+            ? "YTD、YTD同比矩阵。"
+            : "近12个月、近12个月同比矩阵。"
+      }
     >
       <MatrixTable matrix={filteredMatrix} />
     </Panel>
@@ -1559,6 +1887,8 @@ function OriginSection({
 function SegmentSection({
   page,
   salesMode,
+  customRangeActive = false,
+  timeRange = null,
   showDataLabels,
   labelDigits = 1,
   exportSettings,
@@ -1566,13 +1896,21 @@ function SegmentSection({
 }: {
   page: MarketScanSegmentPage;
   salesMode: MarketScanSalesMode;
+  customRangeActive?: boolean;
+  timeRange?: MarketScanPeriodRange | null;
   showDataLabels: boolean;
   labelDigits?: number;
   exportSettings: ExportSettings;
   compact?: boolean;
 }) {
   const insight = buildSegmentInsight(page);
-  const filteredMatrix = filterMatrixBySalesMode(page.matrix, salesMode);
+  const filteredMatrix = filterMatrixBySalesMode(page.matrix, salesMode, customRangeActive);
+  const bodyShareItems = customRangeActive
+    ? page.bodyShareTrend.items.filter((item) => periodWithinRange(item.period, timeRange))
+    : page.bodyShareTrend.items;
+  const suvSegmentItems = customRangeActive
+    ? page.suvSegmentShareTrend.items.filter((item) => periodWithinRange(item.period, timeRange))
+    : page.suvSegmentShareTrend.items;
   return (
     <>
       <Panel
@@ -1590,7 +1928,7 @@ function SegmentSection({
         >
           <PlotlyChart
             data={applyMarketScanExportToTraces(
-              buildBodyShareData(page.bodyShareTrend.items, showDataLabels, labelDigits),
+              buildBodyShareData(bodyShareItems, showDataLabels, labelDigits),
               exportSettings,
             )}
             layout={applyMarketScanExportToLayout({
@@ -1608,7 +1946,7 @@ function SegmentSection({
         >
           <PlotlyChart
             data={applyMarketScanExportToTraces(
-              buildSuvSegmentShareData(page.suvSegmentShareTrend.items, showDataLabels, labelDigits),
+              buildSuvSegmentShareData(suvSegmentItems, showDataLabels, labelDigits),
               exportSettings,
             )}
             layout={applyMarketScanExportToLayout({
@@ -1623,7 +1961,15 @@ function SegmentSection({
       <Panel
         eyebrow="Matrix"
         title="Segment Matrix"
-        subtitle={salesMode === "month" ? "不同长度级别的当月、环比、同比表现。" : "不同长度级别的近12个月与近12个月同比表现。"}
+        subtitle={
+          customRangeActive
+            ? "不同长度级别的自定义区间累计与同比表现。"
+            : salesMode === "month"
+            ? "不同长度级别的当月、环比、同比表现。"
+            : salesMode === "ytd"
+              ? "不同长度级别的 YTD 与 YTD 同比表现。"
+              : "不同长度级别的近12个月与近12个月同比表现。"
+        }
       >
         <MatrixTable matrix={filteredMatrix} />
       </Panel>
@@ -1634,15 +1980,18 @@ function SegmentSection({
 function FuelPanel({
   panel,
   salesMode,
+  customRangeActive = false,
   compact = false,
 }: {
   panel: MarketScanFuelPanel;
   salesMode: MarketScanSalesMode;
+  customRangeActive?: boolean;
   compact?: boolean;
 }) {
   const dense = true;
-  const activeTitle = salesMode === "month" ? panel.monthTitle : panel.rolling12Title;
-  const activeRanking = salesMode === "month" ? panel.monthRanking : panel.rolling12Ranking;
+  const activeWindow = marketScanActiveFuelPanelWindow(panel, salesMode, customRangeActive);
+  const activeTitle = activeWindow.title;
+  const activeRanking = activeWindow.ranking;
 
   return (
     <Panel
@@ -1663,6 +2012,8 @@ function DrilldownSection({
   page,
   fuelOrder,
   salesMode,
+  customRangeActive = false,
+  customRangeLabel,
   showDataLabels,
   exportSettings,
   compact = false,
@@ -1672,6 +2023,8 @@ function DrilldownSection({
   page: MarketScanDrilldownPage;
   fuelOrder: string[];
   salesMode: MarketScanSalesMode;
+  customRangeActive?: boolean;
+  customRangeLabel?: string;
   showDataLabels: boolean;
   exportSettings: ExportSettings;
   compact?: boolean;
@@ -1680,13 +2033,12 @@ function DrilldownSection({
 }) {
   const normalizedRankingLimit = normalizeMarketScanRankingLimit(rankingLimit);
   const insight = buildDrilldownInsight(page);
-  const activeTotalRanking = salesMode === "month" ? page.monthTotalRanking : page.rolling12TotalRanking;
-  const activeFuelTrend = salesMode === "month" ? page.monthFuelTrend : page.rolling12FuelTrend;
-  const activeFuelTrendTitle = salesMode === "month" ? "Monthly Fuel Trend" : "Rolling 12M Fuel Trend";
-  const activeFuelTrendSubtitle = salesMode === "month"
-    ? "观察同一月份跨年度的燃料路线结构。"
-    : "观察同一近12个月窗口下各燃料路线的堆叠变化。";
-  const activeFuelTrendYAxisTitle = salesMode === "month" ? "当月销量" : "近12个月销量";
+  const activeWindow = marketScanActiveDrilldownWindow(page, salesMode, customRangeActive, customRangeLabel);
+  const activeTotalRanking = activeWindow.ranking;
+  const activeFuelTrend = activeWindow.fuelTrend;
+  const activeFuelTrendTitle = activeWindow.trendTitle;
+  const activeFuelTrendSubtitle = activeWindow.trendSubtitle;
+  const activeFuelTrendYAxisTitle = activeWindow.trendYAxisTitle;
 
   return (
     <>
@@ -1694,7 +2046,7 @@ function DrilldownSection({
         <Panel
           eyebrow="Ranking"
           title={activeTotalRanking.title}
-          subtitle={salesMode === "month" ? "按当前国家与细分市场当月份额排序" : "按当前国家与细分市场近12个月份额排序"}
+          subtitle={activeWindow.rankingSubtitle}
           actions={onRankingLimitChange ? (
             <label className="market-scan-ranking-limit-control">
               Top
@@ -1777,6 +2129,7 @@ function DrilldownSection({
             key={`${page.segment}-${panel.fuelType}`}
             panel={panel}
             salesMode={salesMode}
+            customRangeActive={customRangeActive}
             compact={compact}
           />
         ))}
@@ -1818,6 +2171,9 @@ export function MarketScanPage() {
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(
     () => searchParams.get("period"),
   );
+  const [selectedTimeRange, setSelectedTimeRange] = useState<MarketScanPeriodRange | null>(
+    () => readSearchTimeRange(searchParams),
+  );
   const [salesMode, setSalesMode] = useState<MarketScanSalesMode>(
     () => {
       const requestedMode = searchParams.get("salesMode");
@@ -1849,6 +2205,10 @@ export function MarketScanPage() {
     const params = new URLSearchParams();
     if (selectedCountry) params.set("country", selectedCountry);
     if (selectedPeriod) params.set("period", selectedPeriod);
+    if (selectedTimeRange) {
+      params.set("timeStart", selectedTimeRange.start);
+      params.set("timeEnd", selectedTimeRange.end);
+    }
     if (activePage !== "overview") params.set("activePage", activePage);
     if (salesMode !== DEFAULT_MARKET_SCAN_SALES_MODE) params.set("salesMode", salesMode);
     if (selectedDrilldownSegment !== "SUV A0") params.set("drilldownSegment", selectedDrilldownSegment);
@@ -1857,7 +2217,7 @@ export function MarketScanPage() {
     const defaultFt = DEFAULT_FUEL_TYPES.slice().sort().join(",");
     if (ft !== defaultFt) params.set("fuelTypes", selectedFuelTypes.join(","));
     setSearchParams(params, { replace: true });
-  }, [activePage, rankingLimit, salesMode, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, setSearchParams]);
+  }, [activePage, rankingLimit, salesMode, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, selectedTimeRange, setSearchParams]);
 
   useEffect(() => {
     syncUrlParams();
@@ -1885,6 +2245,7 @@ export function MarketScanPage() {
     api.marketScanDeck({
       country: selectedCountry || undefined,
       target_period: selectedPeriod || undefined,
+      time_range: selectedTimeRange || undefined,
       fuel_types: selectedFuelTypes,
       trend_window_months: 24,
       origin_window_months: 24,
@@ -1909,7 +2270,7 @@ export function MarketScanPage() {
           setLoading(false);
         }
       });
-  }, [rankingLimit, reloadToken, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod]);
+  }, [rankingLimit, reloadToken, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
 
   useEffect(() => {
     if (!deck) {
@@ -1929,6 +2290,14 @@ export function MarketScanPage() {
     ) {
       setSelectedPeriod(deck.metadata.resolvedPeriod);
     }
+    if (selectedTimeRange) {
+      const availablePeriodSet = new Set(deck.metadata.availablePeriods.map((option) => option.value));
+      const nextRange = deck.metadata.selectedTimeRange ?? null;
+      const isCurrentRangeValid = availablePeriodSet.has(selectedTimeRange.start) && availablePeriodSet.has(selectedTimeRange.end);
+      if (!isCurrentRangeValid || nextRange?.start !== selectedTimeRange.start || nextRange?.end !== selectedTimeRange.end) {
+        setSelectedTimeRange(nextRange);
+      }
+    }
 
     if (
       selectedDrilldownSegment
@@ -1944,17 +2313,19 @@ export function MarketScanPage() {
     if (normalizedFuelTypes.length !== selectedFuelTypes.length && deck.metadata.selectedFuelTypes.length > 0) {
       setSelectedFuelTypes(deck.metadata.selectedFuelTypes);
     }
-  }, [deck, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod]);
+  }, [deck, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
 
   const currentCountry = selectedCountry ?? deck?.metadata.selectedCountry ?? "";
-  const currentPeriod = selectedPeriod ?? deck?.metadata.resolvedPeriod ?? "";
+  const resolvedTimeRange = selectedTimeRange ?? deck?.metadata.selectedTimeRange ?? null;
+  const customRangeActive = Boolean(resolvedTimeRange);
+  const currentPeriod = resolvedTimeRange?.end ?? selectedPeriod ?? deck?.metadata.resolvedPeriod ?? "";
   const fuelOptions = deck?.metadata.availableFuelTypes ?? selectedFuelTypes;
   const activeFuelTypes = selectedFuelTypes.length > 0
     ? selectedFuelTypes
     : (deck?.metadata.selectedFuelTypes ?? DEFAULT_FUEL_TYPES);
   const showDataLabels = exportSettings.dataLabelMode !== "off";
   const labelDigits = Math.max(0, Math.min(4, exportSettings.decimalPlaces ?? 1));
-  const heroMetrics = deck ? buildHeroMetrics(deck, activePage, salesMode) : [];
+  const heroMetrics = deck ? buildHeroMetrics(deck, activePage, salesMode, customRangeActive) : [];
   const narrative = deck ? pageNarrative(deck, activePage) : "按国家、月份与动力组合切换市场扫描页。";
   const activeTab = TAB_ITEMS.find((item) => item.key === activePage) ?? TAB_ITEMS[0];
   const previewWidth = normalizeMarketScanExportDimension(exportSettings.exportWidth, 1920, 400);
@@ -2024,6 +2395,8 @@ export function MarketScanPage() {
           page={deck.results.overview}
           fuelOrder={deck.metadata.selectedFuelTypes}
           salesMode={salesMode}
+          customRangeActive={customRangeActive}
+          timeRange={resolvedTimeRange}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -2035,6 +2408,8 @@ export function MarketScanPage() {
         <OriginSection
           page={deck.results.origin}
           salesMode={salesMode}
+          customRangeActive={customRangeActive}
+          timeRange={resolvedTimeRange}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -2046,6 +2421,8 @@ export function MarketScanPage() {
         <SegmentSection
           page={deck.results.segment}
           salesMode={salesMode}
+          customRangeActive={customRangeActive}
+          timeRange={resolvedTimeRange}
           showDataLabels={showDataLabels}
           labelDigits={labelDigits}
           exportSettings={exportSettings}
@@ -2059,6 +2436,8 @@ export function MarketScanPage() {
           page={deck.results.drilldown}
           fuelOrder={deck.metadata.selectedFuelTypes}
           salesMode={salesMode}
+          customRangeActive={customRangeActive}
+          customRangeLabel={deck.results.overview.summary.customRangeLabel}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -2073,6 +2452,8 @@ export function MarketScanPage() {
           page={deck.results.suvA}
           fuelOrder={deck.metadata.selectedFuelTypes}
           salesMode={salesMode}
+          customRangeActive={customRangeActive}
+          customRangeLabel={deck.results.overview.summary.customRangeLabel}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -2082,12 +2463,14 @@ export function MarketScanPage() {
       );
     }
     return (
-      <DrilldownSection
-        page={deck.results.suvB}
-        fuelOrder={deck.metadata.selectedFuelTypes}
-        salesMode={salesMode}
-        showDataLabels={showDataLabels}
-        exportSettings={exportSettings}
+        <DrilldownSection
+          page={deck.results.suvB}
+          fuelOrder={deck.metadata.selectedFuelTypes}
+          salesMode={salesMode}
+          customRangeActive={customRangeActive}
+          customRangeLabel={deck.results.overview.summary.customRangeLabel}
+          showDataLabels={showDataLabels}
+          exportSettings={exportSettings}
         compact={compact}
         rankingLimit={rankingLimit}
         onRankingLimitChange={compact ? undefined : setRankingLimit}
@@ -2162,10 +2545,10 @@ export function MarketScanPage() {
                   国家 {deck?.metadata.selectedCountryLabel ?? "Sweden"}
                 </span>
                 <span className="market-scan-hero-chip">
-                  月份 {deck?.metadata.labels.currentMonthShort ?? "Latest"}
+                  月份 {customRangeActive ? (deck?.results.overview.summary.customRangeLabel ?? deck?.metadata.labels.currentMonthShort ?? "Latest") : (deck?.metadata.labels.currentMonthShort ?? "Latest")}
                 </span>
                 <span className="market-scan-hero-chip">
-                  口径 {MARKET_SCAN_SALES_MODE_OPTIONS.find((option) => option.value === salesMode)?.label ?? "当月"}
+                  口径 {customRangeActive ? "自定义区间累计" : (MARKET_SCAN_SALES_MODE_OPTIONS.find((option) => option.value === salesMode)?.label ?? "当月")}
                 </span>
                 <span className="market-scan-hero-chip">
                   动力 {activeFuelTypes.join(" / ")}
@@ -2197,20 +2580,15 @@ export function MarketScanPage() {
                   </select>
                 </label>
 
-                <label className="market-scan-field">
-                  <span>Period</span>
-                  <select
-                    value={currentPeriod}
-                    onChange={(event) => setSelectedPeriod(event.target.value || null)}
-                    disabled={!deck}
-                  >
-                    {(deck?.metadata.availablePeriods ?? []).map((period) => (
-                      <option key={period.value} value={period.value}>
-                        {period.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <DeckPeriodTimeline
+                  options={deck?.metadata.availablePeriods ?? []}
+                  value={resolvedTimeRange ?? (selectedPeriod ? { start: selectedPeriod, end: selectedPeriod } : null)}
+                  onChange={(value) => {
+                    setSelectedTimeRange(value);
+                    setSelectedPeriod(value?.end ?? null);
+                  }}
+                  disabled={!deck}
+                />
 
                 <div className="market-scan-field">
                   <span>销量口径</span>
@@ -2226,6 +2604,11 @@ export function MarketScanPage() {
                       </button>
                     ))}
                   </div>
+                  {customRangeActive ? (
+                    <small className="market-scan-field-hint">
+                      当前时间轴已切到自定义区间，按钮保留显示，但页面按区间累计重算。
+                    </small>
+                  ) : null}
                 </div>
 
                 <label className="market-scan-field">
