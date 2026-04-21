@@ -176,6 +176,161 @@ def _collect_dataset_country_latest_months(path: Path) -> dict[str, str | None]:
     return info
 
 
+def _ordered_distinct_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for raw_value in values:
+        value = str(raw_value).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _serialize_numeric_value(value: Any) -> int | float | None:
+    if value is None or pd.isna(value):
+        return None
+    number = float(value)
+    if number.is_integer():
+        return int(number)
+    return number
+
+
+def _load_monthly_sales_frame(path: Path, *, path_label: str) -> pd.DataFrame:
+    if not path.exists():
+        raise HTTPException(status_code=409, detail=f"{path_label} 不存在：{path}")
+    suffix = path.suffix.lower()
+    if suffix == ".parquet":
+        return _load_dataset_frame(path)
+    if suffix in ALLOWED_UPLOAD_EXTENSIONS:
+        frame = _read_excel_with_fallback(path, sheet_name=0)
+        frame.columns = [str(column).strip() for column in frame.columns]
+        return frame
+    raise HTTPException(
+        status_code=409,
+        detail=f"{path_label} 不是支持的 tabular 数据文件：{path.name}",
+    )
+
+
+def _collect_country_monthly_sales(
+    frame: pd.DataFrame,
+    *,
+    countries: list[str],
+    path_label: str,
+) -> dict[str, dict[str, int | float]]:
+    if frame.empty or not countries:
+        return {}
+    country_column = _find_country_column(list(frame.columns))
+    if country_column is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{path_label} 缺少国家列，无法生成逐月销量核对表。",
+        )
+    month_columns = _detect_month_columns(list(frame.columns))
+    if not month_columns:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{path_label} 缺少月份列，无法生成逐月销量核对表。",
+        )
+    normalized_countries = frame[country_column].astype("string").fillna("").str.strip()
+    working = frame.loc[
+        normalized_countries.isin(countries), [country_column, *month_columns]
+    ].copy()
+    if working.empty:
+        return {}
+    working[country_column] = normalized_countries.loc[working.index]
+    for column in month_columns:
+        working[column] = pd.to_numeric(working[column], errors="coerce")
+    grouped = working.groupby(country_column, dropna=False, sort=False)[
+        month_columns
+    ].sum(min_count=1)
+    result: dict[str, dict[str, int | float]] = {}
+    for country in countries:
+        if country not in grouped.index:
+            continue
+        values = grouped.loc[country]
+        result[country] = {
+            month: serialized
+            for month in month_columns
+            if (serialized := _serialize_numeric_value(values.get(month))) is not None
+        }
+    return result
+
+
+def _resolve_review_reference_dataset(
+    artifacts: dict[str, Any]
+) -> tuple[Path | None, str]:
+    active_parquet_path = _active_data_paths()["parquet"]
+    if active_parquet_path.exists():
+        return active_parquet_path, "网站当前 active"
+    baseline_path = _project_path(str(artifacts.get("baselinePath") or "").strip())
+    if baseline_path and baseline_path.exists():
+        return baseline_path, "baseline"
+    return None, "-"
+
+
+def _build_country_monthly_sales_summary(
+    *,
+    countries: list[str],
+    candidate_path: Path,
+    reference_path: Path | None,
+) -> list[dict[str, Any]]:
+    candidate_frame = _load_monthly_sales_frame(
+        candidate_path, path_label="candidate 数据集"
+    )
+    candidate_totals = _collect_country_monthly_sales(
+        candidate_frame,
+        countries=countries,
+        path_label="candidate 数据集",
+    )
+    reference_totals: dict[str, dict[str, int | float]] = {}
+    if reference_path is not None:
+        reference_frame = _load_monthly_sales_frame(
+            reference_path, path_label="参考数据集"
+        )
+        reference_totals = _collect_country_monthly_sales(
+            reference_frame,
+            countries=countries,
+            path_label="参考数据集",
+        )
+
+    summaries: list[dict[str, Any]] = []
+    for country in countries:
+        reference_months = reference_totals.get(country, {})
+        candidate_months = candidate_totals.get(country, {})
+        months = sorted(
+            set(reference_months.keys()) | set(candidate_months.keys()),
+            key=_time_sort_key,
+        )
+        if not months:
+            continue
+        rows: list[dict[str, Any]] = []
+        for month in months:
+            reference_sales = reference_months.get(month)
+            candidate_sales = candidate_months.get(month)
+            if reference_sales is not None and candidate_sales is not None:
+                delta_sales = _serialize_numeric_value(candidate_sales - reference_sales)
+                change_status = "unchanged" if delta_sales == 0 else "changed"
+            elif candidate_sales is not None:
+                delta_sales = None
+                change_status = "added"
+            else:
+                delta_sales = None
+                change_status = "removed"
+            rows.append(
+                {
+                    "month": month,
+                    "referenceSales": reference_sales,
+                    "candidateSales": candidate_sales,
+                    "deltaSales": delta_sales,
+                    "changeStatus": change_status,
+                }
+            )
+        summaries.append({"country": country, "rows": rows})
+    return summaries
+
+
 def _find_publish_country_regressions(
     *,
     active_parquet_path: Path,
@@ -404,7 +559,7 @@ def _sha256_hex_for_path(path: Path) -> str:
 def _read_excel_with_fallback(
     input_file: Path,
     *,
-    sheet_name: str,
+    sheet_name: str | int,
     nrows: int | None = None,
     usecols: list[str] | None = None,
 ) -> pd.DataFrame:
@@ -1282,6 +1437,36 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
                 if sanitized is not None
             ]
 
+    review_countries = _ordered_distinct_strings(
+        [
+            *(item.get("country", "") for item in overlap_change_summary),
+            *(item.get("country", "") for item in country_freshness_summary),
+            *(item.get("country", "") for item in country_coverage_summary),
+            *sampled_countries,
+        ]
+    )
+    country_monthly_sales_summary: list[dict[str, Any]] = []
+    country_sales_reference_label = "-"
+    country_monthly_sales_error: str | None = None
+    candidate_path = _project_path(str(artifacts.get("stagingOutputPath") or "").strip())
+    if review_countries:
+        if candidate_path is None:
+            country_monthly_sales_error = (
+                "缺少 candidate parquet 产物，无法生成逐月销量核对表。"
+            )
+        else:
+            reference_path, country_sales_reference_label = (
+                _resolve_review_reference_dataset(artifacts)
+            )
+            try:
+                country_monthly_sales_summary = _build_country_monthly_sales_summary(
+                    countries=review_countries,
+                    candidate_path=candidate_path,
+                    reference_path=reference_path,
+                )
+            except HTTPException as exc:
+                country_monthly_sales_error = str(exc.detail)
+
     return {
         "jobId": job_id,
         "reviewDir": review_dir or None,
@@ -1300,6 +1485,9 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
         "overlapChangeSummary": overlap_change_summary,
         "countryFreshnessSummary": country_freshness_summary,
         "countryCoverageSummary": country_coverage_summary,
+        "countrySalesReferenceLabel": country_sales_reference_label,
+        "countryMonthlySalesSummary": country_monthly_sales_summary,
+        "countryMonthlySalesError": country_monthly_sales_error,
         "timeAxisCheck": (
             raw_compare_report.get("timeAxisCheck")
             if isinstance(raw_compare_report.get("timeAxisCheck"), dict)

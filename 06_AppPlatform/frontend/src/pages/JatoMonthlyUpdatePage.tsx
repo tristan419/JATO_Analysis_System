@@ -97,6 +97,21 @@ function formatSignedNumber(value: number): string {
   return "0";
 }
 
+function formatMonthlySalesChangeStatus(value: string): string {
+  switch (value) {
+    case "unchanged":
+      return "持平";
+    case "changed":
+      return "变动";
+    case "added":
+      return "新增月份";
+    case "removed":
+      return "候选缺失";
+    default:
+      return value || "-";
+  }
+}
+
 function sumStorageMetricBytes(metrics: JatoMonthlyUpdateStorageMetric[]): number {
   return metrics.reduce((total, metric) => total + metric.bytes, 0);
 }
@@ -519,6 +534,9 @@ export function JatoMonthlyUpdatePage() {
     : null;
   const activeCoverageSummary = activeReviewCountry
     ? reviewBundle?.countryCoverageSummary.find((item) => item.country === activeReviewCountry) ?? null
+    : null;
+  const activeMonthlySalesSummary = activeReviewCountry
+    ? reviewBundle?.countryMonthlySalesSummary.find((item) => item.country === activeReviewCountry) ?? null
     : null;
   const activeConflictSamples = activeReviewCountry
     ? (reviewBundle?.conflictSamples.filter((item) => item.country === activeReviewCountry) ?? [])
@@ -1197,6 +1215,48 @@ export function JatoMonthlyUpdatePage() {
                           <strong>{formatMonthlyUpdateNumber(activeOverlapSummary?.unchangedRecordCount ?? 0)}</strong>
                           <small>{activeOverlapSummary?.compareKeyColumns.join(" / ") || "-"}</small>
                         </article>
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <div className="card-title">Country Monthly Sales Check</div>
+                    {reviewBundle.countryMonthlySalesError && (
+                      <div className="alert alert-warning" style={{ marginBottom: 12 }}>
+                        {reviewBundle.countryMonthlySalesError}
+                      </div>
+                    )}
+                    {!activeReviewCountry ? (
+                      <div className="crud-empty-state">先选择一个国家查看逐月销量</div>
+                    ) : !activeMonthlySalesSummary || activeMonthlySalesSummary.rows.length === 0 ? (
+                      <div className="crud-empty-state">当前国家暂无逐月销量汇总</div>
+                    ) : (
+                      <div className="table-wrapper">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>Month</th>
+                              <th>{reviewBundle.countrySalesReferenceLabel || "Reference"}</th>
+                              <th>Candidate</th>
+                              <th>Delta</th>
+                              <th>Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {activeMonthlySalesSummary.rows.map((row) => (
+                              <tr key={`${activeMonthlySalesSummary.country}-${row.month}`}>
+                                <td>{row.month}</td>
+                                <td>{formatMonthlyUpdateNumber(row.referenceSales)}</td>
+                                <td>{formatMonthlyUpdateNumber(row.candidateSales)}</td>
+                                <td>
+                                  {row.deltaSales === null || row.deltaSales === undefined
+                                    ? "-"
+                                    : formatSignedNumber(row.deltaSales)}
+                                </td>
+                                <td>{formatMonthlySalesChangeStatus(row.changeStatus)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </div>

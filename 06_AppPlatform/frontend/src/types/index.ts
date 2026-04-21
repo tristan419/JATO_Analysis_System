@@ -1457,6 +1457,19 @@ export interface JatoMonthlyUpdateCountryCoverageSummary {
   coverageStatus: string;
 }
 
+export interface JatoMonthlyUpdateCountryMonthlySalesRow {
+  month: string;
+  referenceSales?: number | null;
+  candidateSales?: number | null;
+  deltaSales?: number | null;
+  changeStatus: string;
+}
+
+export interface JatoMonthlyUpdateCountryMonthlySalesSummary {
+  country: string;
+  rows: JatoMonthlyUpdateCountryMonthlySalesRow[];
+}
+
 export interface JatoMonthlyUpdateReviewBundle {
   jobId: string;
   reviewDir?: string | null;
@@ -1471,6 +1484,9 @@ export interface JatoMonthlyUpdateReviewBundle {
   overlapChangeSummary: JatoMonthlyUpdateOverlapChangeSummary[];
   countryFreshnessSummary: JatoMonthlyUpdateCountryFreshnessSummary[];
   countryCoverageSummary: JatoMonthlyUpdateCountryCoverageSummary[];
+  countrySalesReferenceLabel: string;
+  countryMonthlySalesSummary: JatoMonthlyUpdateCountryMonthlySalesSummary[];
+  countryMonthlySalesError?: string | null;
   timeAxisCheck: Record<string, unknown>;
   countryScopeSummary: Record<string, unknown>;
   refreshSummary?: JatoMonthlyUpdateRefreshSummary | null;

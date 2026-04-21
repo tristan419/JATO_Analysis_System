@@ -471,6 +471,29 @@ def test_get_monthly_update_review_route_returns_review_bundle(monkeypatch) -> N
                     "coverageStatus": "expanded",
                 }
             ],
+            "countrySalesReferenceLabel": "网站当前 active",
+            "countryMonthlySalesSummary": [
+                {
+                    "country": "DE",
+                    "rows": [
+                        {
+                            "month": "2026 Jan",
+                            "referenceSales": 100,
+                            "candidateSales": 100,
+                            "deltaSales": 0,
+                            "changeStatus": "unchanged",
+                        },
+                        {
+                            "month": "2026 Feb",
+                            "referenceSales": None,
+                            "candidateSales": 120,
+                            "deltaSales": None,
+                            "changeStatus": "added",
+                        },
+                    ],
+                }
+            ],
+            "countryMonthlySalesError": None,
             "timeAxisCheck": {},
             "countryScopeSummary": {},
             "refreshSummary": {"jobStatus": "success"},
@@ -489,6 +512,7 @@ def test_get_monthly_update_review_route_returns_review_bundle(monkeypatch) -> N
     assert payload["decisionSuggestion"] == "manual_review_required"
     assert payload["countryFreshnessSummary"][0]["newLatestMonth"] == "2026 Mar"
     assert payload["countryCoverageSummary"][0]["addedMonths"] == ["2026 Feb", "2026 Mar"]
+    assert payload["countryMonthlySalesSummary"][0]["rows"][1]["candidateSales"] == 120
 
 
 def test_publish_monthly_update_job_route_returns_published_job(monkeypatch) -> None:

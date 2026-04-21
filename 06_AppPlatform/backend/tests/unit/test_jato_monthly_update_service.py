@@ -1235,6 +1235,28 @@ def test_get_review_bundle_reads_compare_outputs(tmp_path: Path, monkeypatch) ->
         ),
         encoding="utf-8",
     )
+    candidate_parquet = (
+        project_root
+        / "04_Processed_data"
+        / "staging"
+        / "2026-03-mixed"
+        / "jato_full_archive.parquet"
+    )
+    _write_dataset_parquet(
+        candidate_parquet,
+        [
+            {"国家": "DE", "2026 Jan": 182526, "2026 Feb": 195317, "2026 Mar": 275452},
+            {"国家": "PL", "2026 Jan": 12345},
+        ],
+    )
+    active_parquet = project_root / "04_Processed_data" / "jato_full_archive.parquet"
+    _write_dataset_parquet(
+        active_parquet,
+        [
+            {"国家": "DE", "2026 Jan": 182526, "2026 Feb": 190000, "2026 Mar": None},
+            {"国家": "PL", "2026 Jan": 12345},
+        ],
+    )
 
     state = jato_monthly_update_service._prepare_initial_job_state(
         job_id=job_id,
@@ -1247,6 +1269,7 @@ def test_get_review_bundle_reads_compare_outputs(tmp_path: Path, monkeypatch) ->
         "reviewDir": "04_Processed_data/reviews/raw_compare/2026-02_vs_2026-03",
         "rawCompareReportPath": "04_Processed_data/reviews/raw_compare/2026-02_vs_2026-03/raw_compare_report.json",
         "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
+        "stagingOutputPath": "04_Processed_data/staging/2026-03-mixed/jato_full_archive.parquet",
     }
     jato_monthly_update_service._persist_job_state(state)
 
@@ -1269,6 +1292,32 @@ def test_get_review_bundle_reads_compare_outputs(tmp_path: Path, monkeypatch) ->
     assert review["reviewFindings"][0]["ruleId"] == "price-jump"
     assert review["refreshSummary"]["jobStatus"] == "success"
     assert review["refreshSummary"]["rowCount"] == 123
+    assert review["countrySalesReferenceLabel"] == "网站当前 active"
+    assert review["countryMonthlySalesError"] is None
+    assert review["countryMonthlySalesSummary"][0]["country"] == "DE"
+    assert review["countryMonthlySalesSummary"][0]["rows"] == [
+        {
+            "month": "2026 Jan",
+            "referenceSales": 182526,
+            "candidateSales": 182526,
+            "deltaSales": 0,
+            "changeStatus": "unchanged",
+        },
+        {
+            "month": "2026 Feb",
+            "referenceSales": 190000,
+            "candidateSales": 195317,
+            "deltaSales": 5317,
+            "changeStatus": "changed",
+        },
+        {
+            "month": "2026 Mar",
+            "referenceSales": None,
+            "candidateSales": 275452,
+            "deltaSales": None,
+            "changeStatus": "added",
+        },
+    ]
 
 
 def test_publish_monthly_update_job_promotes_staging_outputs(

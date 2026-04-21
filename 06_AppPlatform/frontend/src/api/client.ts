@@ -20,6 +20,8 @@ import type {
   JatoMonthlyUpdateConflictSample,
   JatoMonthlyUpdateCountryCoverageSummary,
   JatoMonthlyUpdateCountryFreshnessSummary,
+  JatoMonthlyUpdateCountryMonthlySalesRow,
+  JatoMonthlyUpdateCountryMonthlySalesSummary,
   JatoMonthlyUpdateBaselinePromotionResult,
   JatoMonthlyUpdatePublication,
   JatoMonthlyUpdateOverlapChangeSummary,
@@ -795,6 +797,35 @@ function mapJatoMonthlyUpdateCountryCoverageSummary(
   };
 }
 
+function mapJatoMonthlyUpdateCountryMonthlySalesRow(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateCountryMonthlySalesRow {
+  return {
+    month: String(raw.month ?? ""),
+    referenceSales: raw.referenceSales === undefined || raw.referenceSales === null
+      ? null
+      : Number(raw.referenceSales),
+    candidateSales: raw.candidateSales === undefined || raw.candidateSales === null
+      ? null
+      : Number(raw.candidateSales),
+    deltaSales: raw.deltaSales === undefined || raw.deltaSales === null
+      ? null
+      : Number(raw.deltaSales),
+    changeStatus: String(raw.changeStatus ?? "")
+  };
+}
+
+function mapJatoMonthlyUpdateCountryMonthlySalesSummary(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateCountryMonthlySalesSummary {
+  return {
+    country: String(raw.country ?? ""),
+    rows: Array.isArray(raw.rows)
+      ? raw.rows.map((item) => mapJatoMonthlyUpdateCountryMonthlySalesRow(item as Record<string, unknown>))
+      : []
+  };
+}
+
 function mapJatoMonthlyUpdateReviewBundle(
   raw: Record<string, unknown>
 ): JatoMonthlyUpdateReviewBundle {
@@ -828,6 +859,13 @@ function mapJatoMonthlyUpdateReviewBundle(
     countryCoverageSummary: Array.isArray(raw.countryCoverageSummary)
       ? raw.countryCoverageSummary.map((item) => mapJatoMonthlyUpdateCountryCoverageSummary(item as Record<string, unknown>))
       : [],
+    countrySalesReferenceLabel: String(raw.countrySalesReferenceLabel ?? ""),
+    countryMonthlySalesSummary: Array.isArray(raw.countryMonthlySalesSummary)
+      ? raw.countryMonthlySalesSummary.map((item) => mapJatoMonthlyUpdateCountryMonthlySalesSummary(item as Record<string, unknown>))
+      : [],
+    countryMonthlySalesError: raw.countryMonthlySalesError === undefined || raw.countryMonthlySalesError === null
+      ? null
+      : String(raw.countryMonthlySalesError),
     timeAxisCheck: raw.timeAxisCheck && typeof raw.timeAxisCheck === "object"
       ? raw.timeAxisCheck as Record<string, unknown>
       : {},
