@@ -58,7 +58,7 @@ function makeRankingItem(brand: string, sharePct: number, rank: number): MarketS
 function makeOverviewPage(
   trendItems: MarketScanOverviewTrendItem[],
   monthlyRanking: MarketScanRankingItem[],
-  ytdRanking: MarketScanRankingItem[],
+  rolling12Ranking: MarketScanRankingItem[],
 ): MarketScanOverviewPage {
   return {
     summary: {
@@ -66,6 +66,8 @@ function makeOverviewPage(
       subheadline: "subheadline",
       currentMonthVolume: trendItems[trendItems.length - 1]?.totalVolume ?? 0,
       currentMonthYoY: makeDelta(0.08),
+      rolling12Volume: 118000,
+      rolling12YoY: makeDelta(0.07),
       ytdVolume: 100000,
       ytdYoY: makeDelta(0.05),
     },
@@ -79,7 +81,11 @@ function makeOverviewPage(
     },
     ytdBrandRanking: {
       title: "YTD Brand Ranking",
-      items: ytdRanking,
+      items: [],
+    },
+    rolling12BrandRanking: {
+      title: "Rolling 12M Brand Ranking",
+      items: rolling12Ranking,
     },
   };
 }
@@ -386,11 +392,34 @@ describe("buildDrilldownInsight", () => {
           },
         ],
       },
+      rolling12TotalRanking: {
+        title: "Rolling 12M Total Model Ranking",
+        items: [
+          {
+            rank: 1,
+            model: "EX30",
+            volume: 14800,
+            sharePct: 0.19,
+            shareDisplay: "19.0%",
+            yoy: makeDelta(0.1),
+            barPct: 1,
+            fuelMix: { BEV: 12800, PHEV: 2000, ICE: 0 },
+            driveMix: { "4WD": 5200, "2WD": 9600, OTHER: 0 },
+          },
+        ],
+      },
       monthFuelTrend: {
         items: [
           { label: "24.04", totalVolume: 2800, fuelMix: { ICE: 1100, PHEV: 600, BEV: 1100 } },
           { label: "25.04", totalVolume: 3200, fuelMix: { ICE: 1050, PHEV: 650, BEV: 1500 } },
           { label: "26.04", totalVolume: 3600, fuelMix: { ICE: 980, PHEV: 720, BEV: 1900 } },
+        ],
+      },
+      rolling12FuelTrend: {
+        items: [
+          { label: "L12M 24.04", totalVolume: 14200, fuelMix: { ICE: 5600, PHEV: 2900, BEV: 5700 } },
+          { label: "L12M 25.04", totalVolume: 15600, fuelMix: { ICE: 5200, PHEV: 3000, BEV: 7400 } },
+          { label: "L12M 26.04", totalVolume: 17800, fuelMix: { ICE: 5000, PHEV: 2800, BEV: 10000 } },
         ],
       },
       ytdFuelTrend: {
@@ -404,7 +433,11 @@ describe("buildDrilldownInsight", () => {
         {
           fuelType: "BEV",
           monthTitle: "BEV 26.04",
+          rolling12Title: "BEV 近12个月 · 截至 26.04",
           ytdTitle: "BEV YTD",
+          rolling12Ranking: [
+            { rank: 1, model: "EX30", volume: 12800, sharePct: 0.22, shareDisplay: "22.0%", yoy: makeDelta(0.11), barPct: 1 },
+          ],
           ytdRanking: [
             { rank: 1, model: "EX30", volume: 3200, sharePct: 0.18, shareDisplay: "18.0%", yoy: makeDelta(0.09), barPct: 1 },
           ],
@@ -415,7 +448,11 @@ describe("buildDrilldownInsight", () => {
         {
           fuelType: "PHEV",
           monthTitle: "PHEV 26.04",
+          rolling12Title: "PHEV 近12个月 · 截至 26.04",
           ytdTitle: "PHEV YTD",
+          rolling12Ranking: [
+            { rank: 1, model: "XC60", volume: 4200, sharePct: 0.08, shareDisplay: "8.0%", yoy: makeDelta(0.04), barPct: 1 },
+          ],
           ytdRanking: [
             { rank: 1, model: "XC60", volume: 1100, sharePct: 0.06, shareDisplay: "6.0%", yoy: makeDelta(0.03), barPct: 1 },
           ],

@@ -178,7 +178,7 @@ def test_monthly_brand_ranking_includes_model_breakdown() -> None:
     assert [entry["model"] for entry in bmw["modelBreakdown"]] == ["X3", "iX1"]
 
 
-def test_overview_payload_includes_ytd_and_monthly_model_breakdown() -> None:
+def test_overview_payload_includes_monthly_and_rolling12_model_breakdown() -> None:
     frame = pd.DataFrame(
         {
             "__brand": ["VOLVO", "VOLVO", "BMW", "BMW"],
@@ -202,10 +202,12 @@ def test_overview_payload_includes_ytd_and_monthly_model_breakdown() -> None:
     )
 
     assert payload["monthlyBrandRanking"]["items"][0]["modelBreakdown"]
+    assert payload["rolling12BrandRanking"]["items"][0]["modelBreakdown"]
     assert payload["ytdBrandRanking"]["items"][0]["modelBreakdown"]
+    assert payload["summary"]["rolling12Volume"] > 0
 
 
-def test_drilldown_payload_includes_month_and_ytd_variants() -> None:
+def test_drilldown_payload_includes_month_rolling12_and_ytd_variants() -> None:
     frame = pd.DataFrame(
         {
             "__segment_raw": ["SUV A0", "SUV A0", "SUV A0", "SUV A0"],
@@ -233,8 +235,11 @@ def test_drilldown_payload_includes_month_and_ytd_variants() -> None:
 
     assert payload["monthTotalRanking"]["title"] == "Monthly Total Model Ranking"
     assert payload["monthTotalRanking"]["items"][0]["model"] == "EX30"
+    assert payload["rolling12TotalRanking"]["title"] == "Rolling 12M Total Model Ranking"
+    assert payload["rolling12TotalRanking"]["items"][0]["model"] == "EX30"
     assert payload["totalRanking"]["title"] == "YTD Total Model Ranking"
     assert payload["monthFuelTrend"]["items"][-1]["label"] == "26.04"
+    assert payload["rolling12FuelTrend"]["items"][-1]["label"] == "L12M 26.04"
     assert payload["ytdFuelTrend"]["items"][-1]["label"] == "26,1-04"
 
 

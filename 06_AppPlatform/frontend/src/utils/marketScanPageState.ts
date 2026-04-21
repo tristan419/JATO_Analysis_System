@@ -81,14 +81,14 @@ export function buildMarketScanSlideFitAssessment({
     chartCount = 3;
     primaryItemCount = Math.max(
       page.monthlyBrandRanking.items.length,
-      page.ytdBrandRanking.items.length,
+      page.rolling12BrandRanking.items.length,
     );
     secondaryItemCount = page.trend.items.length;
     seriesCount = deck.metadata.selectedFuelTypes.length;
     labels = [
       ...page.trend.items.map((item) => item.label),
       ...rankingLabels(page.monthlyBrandRanking.items),
-      ...rankingLabels(page.ytdBrandRanking.items),
+      ...rankingLabels(page.rolling12BrandRanking.items),
     ];
   } else if (activePage === "origin") {
     const page = deck.results.origin;

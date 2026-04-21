@@ -76,6 +76,8 @@ function makeOverviewPage(): MarketScanOverviewPage {
       subheadline: "subheadline",
       currentMonthVolume: 8400,
       currentMonthYoY: makeDelta(0.04),
+      rolling12Volume: 104000,
+      rolling12YoY: makeDelta(0.06),
       ytdVolume: 24600,
       ytdYoY: makeDelta(0.05),
     },
@@ -97,6 +99,14 @@ function makeOverviewPage(): MarketScanOverviewPage {
         makeRankingItem("VOLVO", 0.21, 1),
         makeRankingItem("BMW", 0.17, 2),
         makeRankingItem("VW", 0.11, 3),
+      ],
+    },
+    rolling12BrandRanking: {
+      title: "Rolling 12M",
+      items: [
+        makeRankingItem("VOLVO", 0.22, 1),
+        makeRankingItem("BMW", 0.16, 2),
+        makeRankingItem("VW", 0.12, 3),
       ],
     },
   };
@@ -214,11 +224,24 @@ function makeDrilldownPage({
         makeRankingItem(`MODEL-${index + 1}`, 0.18 - index * 0.003, index + 1),
       ),
     },
+    rolling12TotalRanking: {
+      title: "Rolling 12M Ranking",
+      items: Array.from({ length: rankingCount }, (_, index) =>
+        makeRankingItem(`ROLLING-MODEL-${index + 1}`, 0.2 - index * 0.003, index + 1),
+      ),
+    },
     monthFuelTrend: {
       items: Array.from({ length: trendCount }, (_, index) => ({
         label: `25.${String(index + 1).padStart(2, "0")}`,
         totalVolume: 2400 + index * 120,
         fuelMix: { ICE: 1000, HEV: 700, BEV: 780 },
+      })),
+    },
+    rolling12FuelTrend: {
+      items: Array.from({ length: trendCount }, (_, index) => ({
+        label: `L12M 26.${String(index + 1).padStart(2, "0")}`,
+        totalVolume: 12000 + index * 220,
+        fuelMix: { ICE: 4200, HEV: 3200, BEV: 3800 },
       })),
     },
     ytdFuelTrend: {
@@ -231,8 +254,10 @@ function makeDrilldownPage({
     fuelPanels: Array.from({ length: fuelPanelCount }, (_, index) => ({
       fuelType: `Fuel-${index + 1}`,
       monthTitle: `Fuel-${index + 1} 26.04`,
+      rolling12Title: `Fuel-${index + 1} 近12个月 · 截至 26.04`,
       ytdTitle: `Fuel-${index + 1} YTD`,
       monthRanking: [makeRankingItem(`MONTH-${index + 1}`, 0.1, 1)],
+      rolling12Ranking: [makeRankingItem(`ROLLING-${index + 1}`, 0.13, 1)],
       ytdRanking: Array.from({ length: rankingCount }, (_, rankIndex) =>
         makeRankingItem(`FUEL-${index + 1}-${rankIndex + 1}`, 0.12, rankIndex + 1),
       ),

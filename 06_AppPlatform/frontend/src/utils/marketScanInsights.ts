@@ -160,7 +160,7 @@ function buildRollingTrendRead(items: MarketScanOverviewTrendItem[]): RollingTre
   if (recent.length < 4) {
     return {
       value: "趋势样本不足",
-      detail: "最近月份不足，先结合当月与累计同比判断方向。",
+      detail: "最近月份不足，先结合当月与近12个月同比判断方向。",
       tone: "neutral",
       changeRatio: null,
     };
@@ -278,37 +278,37 @@ function buildStructureRead(items: MarketScanOverviewTrendItem[]): StructureRead
 function buildOverviewSignalCard(page: MarketScanOverviewPage, latest?: MarketScanOverviewTrendItem): MarketInsightCard {
   const currentYoY = deltaValue(page.summary.currentMonthYoY);
   const latestMoM = deltaValue(latest?.mom);
-  const ytdYoY = deltaValue(page.summary.ytdYoY);
-  const positiveCount = [currentYoY, latestMoM, ytdYoY].filter((value) => (value ?? 0) > 0).length;
+  const rolling12YoY = deltaValue(page.summary.rolling12YoY);
+  const positiveCount = [currentYoY, latestMoM, rolling12YoY].filter((value) => (value ?? 0) > 0).length;
 
   if (positiveCount === 3) {
-    return {
-      label: "方向信号",
-      value: "单月 / 环比 / 累计三线共振",
-      detail: `当月 YoY ${page.summary.currentMonthYoY.display}、MoM ${latest?.mom.display ?? "-"}、累计 YoY ${page.summary.ytdYoY.display}。`,
-      tone: "positive",
-    };
+      return {
+        label: "方向信号",
+        value: "当月 / 环比 / 近12个月三线共振",
+        detail: `当月 YoY ${page.summary.currentMonthYoY.display}、MoM ${latest?.mom.display ?? "-"}、近12个月 YoY ${page.summary.rolling12YoY.display}。`,
+        tone: "positive",
+      };
   }
   if (positiveCount === 2) {
-    return {
-      label: "方向信号",
-      value: "修复仍在，但节奏不完全一致",
-      detail: `当月 YoY ${page.summary.currentMonthYoY.display}、MoM ${latest?.mom.display ?? "-"}、累计 YoY ${page.summary.ytdYoY.display}。`,
-      tone: "neutral",
-    };
+      return {
+        label: "方向信号",
+        value: "修复仍在，但节奏不完全一致",
+        detail: `当月 YoY ${page.summary.currentMonthYoY.display}、MoM ${latest?.mom.display ?? "-"}、近12个月 YoY ${page.summary.rolling12YoY.display}。`,
+        tone: "neutral",
+      };
   }
   return {
     label: "方向信号",
     value: "市场信号偏弱",
-    detail: `当月 YoY ${page.summary.currentMonthYoY.display}、MoM ${latest?.mom.display ?? "-"}、累计 YoY ${page.summary.ytdYoY.display}。`,
+    detail: `当月 YoY ${page.summary.currentMonthYoY.display}、MoM ${latest?.mom.display ?? "-"}、近12个月 YoY ${page.summary.rolling12YoY.display}。`,
     tone: "negative",
   };
 }
 
 function buildOverviewLeaderCard(page: MarketScanOverviewPage): MarketInsightCard {
   const monthlyLeader = page.monthlyBrandRanking.items[0];
-  const ytdLeader = page.ytdBrandRanking.items[0];
-  if (!monthlyLeader && !ytdLeader) {
+  const rolling12Leader = page.rolling12BrandRanking.items[0];
+  if (!monthlyLeader && !rolling12Leader) {
     return {
       label: "头部品牌",
       value: "暂无头部样本",
@@ -316,23 +316,23 @@ function buildOverviewLeaderCard(page: MarketScanOverviewPage): MarketInsightCar
       tone: "neutral",
     };
   }
-  if (monthlyLeader && ytdLeader && rankingItemLabel(monthlyLeader) === rankingItemLabel(ytdLeader)) {
+  if (monthlyLeader && rolling12Leader && rankingItemLabel(monthlyLeader) === rankingItemLabel(rolling12Leader)) {
     return {
       label: "头部品牌",
-      value: `${rankingItemLabel(monthlyLeader)} 月榜 / 累计双第一`,
-      detail: `当月份额 ${monthlyLeader.shareDisplay ?? formatPercent(monthlyLeader.sharePct)}，累计份额 ${ytdLeader.shareDisplay ?? formatPercent(ytdLeader.sharePct)}。`,
+      value: `${rankingItemLabel(monthlyLeader)} 月榜 / 近12个月双第一`,
+      detail: `当月份额 ${monthlyLeader.shareDisplay ?? formatPercent(monthlyLeader.sharePct)}，近12个月份额 ${rolling12Leader.shareDisplay ?? formatPercent(rolling12Leader.sharePct)}。`,
       tone: "positive",
     };
   }
-  if (monthlyLeader && ytdLeader) {
+  if (monthlyLeader && rolling12Leader) {
     return {
       label: "头部品牌",
-      value: `${rankingItemLabel(monthlyLeader)} 抢下月榜，${rankingItemLabel(ytdLeader)} 仍守住累计`,
-      detail: `短期冲量与全年格局并未完全重合，说明竞争仍在重排。`,
+      value: `${rankingItemLabel(monthlyLeader)} 抢下月榜，${rankingItemLabel(rolling12Leader)} 仍守住近12个月`,
+      detail: "短期冲量与近12个月格局并未完全重合，说明竞争仍在重排。",
       tone: "neutral",
     };
   }
-  const leader = monthlyLeader ?? ytdLeader;
+  const leader = monthlyLeader ?? rolling12Leader;
   return {
     label: "头部品牌",
     value: `${rankingItemLabel(leader!)} 领跑`,
@@ -343,8 +343,8 @@ function buildOverviewLeaderCard(page: MarketScanOverviewPage): MarketInsightCar
 
 function competitionCard(page: MarketScanOverviewPage): MarketInsightCard {
   const monthlyItems = page.monthlyBrandRanking.items;
-  const ytdItems = page.ytdBrandRanking.items;
-  if (monthlyItems.length === 0 || ytdItems.length === 0) {
+  const rolling12Items = page.rolling12BrandRanking.items;
+  if (monthlyItems.length === 0 || rolling12Items.length === 0) {
     return {
       label: "竞争格局",
       value: "暂无品牌榜数据",
@@ -354,22 +354,22 @@ function competitionCard(page: MarketScanOverviewPage): MarketInsightCard {
   }
 
   const monthlyLeader = rankingItemLabel(monthlyItems[0]);
-  const ytdLeader = rankingItemLabel(ytdItems[0]);
+  const rolling12Leader = rankingItemLabel(rolling12Items[0]);
   const monthlyTop3Share = monthlyItems.slice(0, 3).reduce((sum, item) => sum + (item.sharePct ?? 0), 0);
 
-  if (monthlyLeader === ytdLeader && monthlyTop3Share >= 0.5) {
+  if (monthlyLeader === rolling12Leader && monthlyTop3Share >= 0.5) {
     return {
       label: "竞争格局",
       value: "头部稳固且集中",
-      detail: `${monthlyLeader} 同时领跑月榜与 YTD，月榜 Top3 占 ${formatPercent(monthlyTop3Share)}。`,
+      detail: `${monthlyLeader} 同时领跑月榜与近12个月，月榜 Top3 占 ${formatPercent(monthlyTop3Share)}。`,
       tone: "positive",
     };
   }
-  if (monthlyLeader === ytdLeader) {
+  if (monthlyLeader === rolling12Leader) {
     return {
       label: "竞争格局",
       value: "头部稳定，竞争仍有空间",
-      detail: `${monthlyLeader} 同时领跑月榜与 YTD，但月榜 Top3 占比仅 ${formatPercent(monthlyTop3Share)}。`,
+      detail: `${monthlyLeader} 同时领跑月榜与近12个月，但月榜 Top3 占比仅 ${formatPercent(monthlyTop3Share)}。`,
       tone: "neutral",
     };
   }
@@ -377,14 +377,14 @@ function competitionCard(page: MarketScanOverviewPage): MarketInsightCard {
     return {
       label: "竞争格局",
       value: "月榜更分散，短期换位频繁",
-      detail: `${monthlyLeader} 拿下月榜，但 YTD 仍由 ${ytdLeader} 领跑；月榜 Top3 仅占 ${formatPercent(monthlyTop3Share)}。`,
+      detail: `${monthlyLeader} 拿下月榜，但近12个月仍由 ${rolling12Leader} 领跑；月榜 Top3 仅占 ${formatPercent(monthlyTop3Share)}。`,
       tone: "neutral",
     };
   }
   return {
     label: "竞争格局",
-    value: "月榜冲量与累计格局分化",
-    detail: `${monthlyLeader} 拿下月榜，但 YTD 仍由 ${ytdLeader} 领跑；短期冲量强于长期换挡。`,
+    value: "月榜冲量与近12个月格局分化",
+    detail: `${monthlyLeader} 拿下月榜，但近12个月仍由 ${rolling12Leader} 领跑；短期冲量强于长期换挡。`,
     tone: "neutral",
   };
 }
@@ -403,15 +403,15 @@ function watchoutCard(
   const currentYoY = deltaValue(page.summary.currentMonthYoY);
   const latest = orderedTrendItems(page.trend.items).slice(-1)[0];
   const latestMoM = deltaValue(latest?.mom);
-  const ytdYoY = deltaValue(page.summary.ytdYoY);
+  const rolling12YoY = deltaValue(page.summary.rolling12YoY);
   const conflictingSignals = (
     currentYoY !== null
     && latestMoM !== null
     && ((currentYoY > 0 && latestMoM < 0) || (currentYoY < 0 && latestMoM > 0))
   ) || (
     currentYoY !== null
-    && ytdYoY !== null
-    && ((currentYoY > 0 && ytdYoY < 0) || (currentYoY < 0 && ytdYoY > 0))
+    && rolling12YoY !== null
+    && ((currentYoY > 0 && rolling12YoY < 0) || (currentYoY < 0 && rolling12YoY > 0))
   );
 
   if (monthlyLeaderShare >= 0.18 || monthlyTop3Share >= 0.55) {
@@ -433,8 +433,8 @@ function watchoutCard(
   if (conflictingSignals) {
     return {
       label: "下月观察",
-      value: "观察单月与累计是否再分化",
-      detail: `当前 YoY ${page.summary.currentMonthYoY.display}、MoM ${latest?.mom.display ?? "-"}、累计 YoY ${page.summary.ytdYoY.display}，仍需下月验证。`,
+      value: "观察单月与近12个月是否再分化",
+      detail: `当前 YoY ${page.summary.currentMonthYoY.display}、MoM ${latest?.mom.display ?? "-"}、近12个月 YoY ${page.summary.rolling12YoY.display}，仍需下月验证。`,
       tone: "neutral",
     };
   }
@@ -459,7 +459,7 @@ export function buildOverviewInsight(page: MarketScanOverviewPage): MarketInsigh
   const latest = ordered[ordered.length - 1];
   const currentYoY = deltaValue(page.summary.currentMonthYoY);
   const latestMoM = deltaValue(latest?.mom);
-  const ytdYoY = deltaValue(page.summary.ytdYoY);
+  const rolling12YoY = deltaValue(page.summary.rolling12YoY);
   const rolling = buildRollingTrendRead(page.trend.items);
   const structure = buildStructureRead(page.trend.items);
   const competition = competitionCard(page);
@@ -467,19 +467,19 @@ export function buildOverviewInsight(page: MarketScanOverviewPage): MarketInsigh
 
   let headline = "市场仍在震荡";
   let tone: InsightTone = "neutral";
-  if ((currentYoY ?? 0) > 0 && (latestMoM ?? 0) > 0 && (ytdYoY ?? 0) > 0) {
+  if ((currentYoY ?? 0) > 0 && (latestMoM ?? 0) > 0 && (rolling12YoY ?? 0) > 0) {
     headline = "市场进入上行通道";
     tone = "positive";
-  } else if ((currentYoY ?? 0) > 0 && (ytdYoY ?? 0) > 0 && (latestMoM ?? 0) < 0) {
+  } else if ((currentYoY ?? 0) > 0 && (rolling12YoY ?? 0) > 0 && (latestMoM ?? 0) < 0) {
     headline = "市场延续修复，但短期回踩";
     tone = "neutral";
-  } else if ((currentYoY ?? 0) > 0 && (ytdYoY ?? 0) > 0) {
+  } else if ((currentYoY ?? 0) > 0 && (rolling12YoY ?? 0) > 0) {
     headline = "市场延续修复";
     tone = "positive";
-  } else if ((currentYoY ?? 0) < 0 && (ytdYoY ?? 0) > 0) {
-    headline = "累计改善仍在，但单月承压";
+  } else if ((currentYoY ?? 0) < 0 && (rolling12YoY ?? 0) > 0) {
+    headline = "近12个月改善仍在，但单月承压";
     tone = "neutral";
-  } else if ((currentYoY ?? 0) < 0 && (ytdYoY ?? 0) < 0) {
+  } else if ((currentYoY ?? 0) < 0 && (rolling12YoY ?? 0) < 0) {
     headline = "市场整体偏弱";
     tone = "negative";
   }
@@ -493,7 +493,7 @@ export function buildOverviewInsight(page: MarketScanOverviewPage): MarketInsigh
       {
         label: "规模趋势",
         value: rolling.tone === "positive" ? "修复斜率继续抬升" : rolling.tone === "negative" ? "总量斜率正在转弱" : "总量仍处平台区间",
-        detail: `当月 YoY ${page.summary.currentMonthYoY.display}，MoM ${latest?.mom.display ?? "-"}，累计 YoY ${page.summary.ytdYoY.display}；${rolling.detail}`,
+        detail: `当月 YoY ${page.summary.currentMonthYoY.display}，MoM ${latest?.mom.display ?? "-"}，近12个月 YoY ${page.summary.rolling12YoY.display}；${rolling.detail}`,
         tone: rolling.tone === "neutral" ? tone : rolling.tone,
       },
       {
@@ -548,12 +548,12 @@ function buildOriginBrandRead(group: MarketScanOriginBrandGroup | undefined): Ma
 export function buildOriginInsight(page: MarketScanOriginPage): MarketInsightSnapshot {
   const currentRow = matrixRow(page.matrix, "current_volume");
   const yoyRow = matrixRow(page.matrix, "yoy");
-  const ytdRow = matrixRow(page.matrix, "ytd");
-  const ytdYoYRow = matrixRow(page.matrix, "ytd_yoy");
+  const rolling12Row = matrixRow(page.matrix, "rolling12");
+  const rolling12YoYRow = matrixRow(page.matrix, "rolling12_yoy");
   const currentLeader = topMatrixCell(currentRow);
   const yoyLeader = topPositiveMatrixCell(yoyRow);
-  const ytdLeader = topMatrixCell(ytdRow);
-  const ytdYoYLeader = topPositiveMatrixCell(ytdYoYRow);
+  const rolling12Leader = topMatrixCell(rolling12Row);
+  const rolling12YoYLeader = topPositiveMatrixCell(rolling12YoYRow);
   const latestShares = page.trend.series
     .map((series) => ({ origin: series.origin, point: lastItem(series.points) }))
     .filter((entry): entry is { origin: string; point: NonNullable<typeof entry.point> } => Boolean(entry.point))
@@ -569,7 +569,7 @@ export function buildOriginInsight(page: MarketScanOriginPage): MarketInsightSna
 
   let headline = "车系格局保持轮动";
   let tone: InsightTone = "neutral";
-  if (currentLeader?.key && ytdLeader?.key && currentLeader.key === ytdLeader.key) {
+  if (currentLeader?.key && rolling12Leader?.key && currentLeader.key === rolling12Leader.key) {
     headline = `${currentLeader.key} 继续主导车系格局`;
     tone = "positive";
   } else if (currentLeader?.key) {
@@ -599,27 +599,27 @@ export function buildOriginInsight(page: MarketScanOriginPage): MarketInsightSna
         tone: (yoyLeader?.value ?? 0) > 0 ? "positive" : "neutral",
       },
       {
-        label: "累计格局",
-        value: ytdLeader?.key ? `${ytdLeader.key} 仍居 YTD 第一` : "暂无累计格局样本",
-        detail: ytdLeader?.key
-          ? `累计表现由 ${ytdLeader.key} 领跑${ytdYoYLeader?.key ? `，其中 ${ytdYoYLeader.key} 的累计弹性更突出。` : "。"}`
-          : "当前没有足够的累计车系数据。",
-        tone: currentLeader?.key && ytdLeader?.key && currentLeader.key === ytdLeader.key ? "positive" : "neutral",
+        label: "近12个月格局",
+        value: rolling12Leader?.key ? `${rolling12Leader.key} 仍居 Rolling 12M 第一` : "暂无近12个月格局样本",
+        detail: rolling12Leader?.key
+          ? `近12个月表现由 ${rolling12Leader.key} 领跑${rolling12YoYLeader?.key ? `，其中 ${rolling12YoYLeader.key} 的近12个月弹性更突出。` : "。"}`
+          : "当前没有足够的近12个月车系数据。",
+        tone: currentLeader?.key && rolling12Leader?.key && currentLeader.key === rolling12Leader.key ? "positive" : "neutral",
       },
       brandCard,
       {
         label: "下月观察",
-        value: currentLeader?.key && ytdLeader?.key && currentLeader.key !== ytdLeader.key
-          ? "关注月度抬头能否传导到累计"
+        value: currentLeader?.key && rolling12Leader?.key && currentLeader.key !== rolling12Leader.key
+          ? "关注月度抬头能否传导到近12个月"
           : yoyLeader?.key && yoyLeader.key !== currentLeader?.key
             ? `关注 ${yoyLeader.key} 份额扩张`
             : "关注头部车系份额是否继续集中",
-        detail: currentLeader?.key && ytdLeader?.key && currentLeader.key !== ytdLeader.key
-          ? `${currentLeader.key} 已领先当月，但全年仍由 ${ytdLeader.key} 把持，需要继续验证趋势强度。`
+        detail: currentLeader?.key && rolling12Leader?.key && currentLeader.key !== rolling12Leader.key
+          ? `${currentLeader.key} 已领先当月，但近12个月仍由 ${rolling12Leader.key} 把持，需要继续验证趋势强度。`
           : yoyLeader?.key && yoyLeader.key !== currentLeader?.key
             ? `${yoyLeader.key} 已表现出更高弹性，若连续扩张会改写现有车系排序。`
             : "若头部车系继续扩大份额，后续品牌趋势会进一步向少数车系集中。",
-        tone: currentLeader?.key && ytdLeader?.key && currentLeader.key !== ytdLeader.key ? "neutral" : "negative",
+        tone: currentLeader?.key && rolling12Leader?.key && currentLeader.key !== rolling12Leader.key ? "neutral" : "negative",
       },
     ],
   };
@@ -651,10 +651,10 @@ export function buildSegmentInsight(page: MarketScanSegmentPage): MarketInsightS
 
   const currentRow = matrixRow(page.matrix, "current_volume");
   const yoyRow = matrixRow(page.matrix, "yoy");
-  const ytdRow = matrixRow(page.matrix, "ytd");
+  const rolling12Row = matrixRow(page.matrix, "rolling12");
   const currentLeader = topMatrixCell(currentRow);
   const yoyLeader = topPositiveMatrixCell(yoyRow);
-  const ytdLeader = topMatrixCell(ytdRow);
+  const rolling12Leader = topMatrixCell(rolling12Row);
   const currentTotal = totalMatrixRow(currentRow);
   const currentLeaderShare = safeShare(Number(currentLeader?.value ?? 0), currentTotal);
 
@@ -705,13 +705,13 @@ export function buildSegmentInsight(page: MarketScanSegmentPage): MarketInsightS
       },
       {
         label: "下月观察",
-        value: currentLeader?.key && ytdLeader?.key && currentLeader.key !== ytdLeader.key
-          ? "关注当月与累计领先级别是否切换"
+        value: currentLeader?.key && rolling12Leader?.key && currentLeader.key !== rolling12Leader.key
+          ? "关注当月与近12个月领先级别是否切换"
           : topSuvBucket
             ? `关注 ${topSuvBucket[0]} 是否继续放大`
             : "关注结构切换是否延续",
-        detail: currentLeader?.key && ytdLeader?.key && currentLeader.key !== ytdLeader.key
-          ? `当月由 ${currentLeader.key} 领跑，但累计第一仍是 ${ytdLeader.key}，说明结构变化仍在过渡期。`
+        detail: currentLeader?.key && rolling12Leader?.key && currentLeader.key !== rolling12Leader.key
+          ? `当月由 ${currentLeader.key} 领跑，但近12个月第一仍是 ${rolling12Leader.key}，说明结构变化仍在过渡期。`
           : topSuvBucket
             ? `${topSuvBucket[0]} 已成为 SUV 份额核心层，若继续扩大将改变整体长度结构。`
             : "若 SUV / Sedan 份额继续偏移，后续长度级别矩阵会更快重排。",
@@ -740,26 +740,26 @@ function buildFuelDominanceRead(items: MarketScanFuelTrendItem[]) {
 }
 
 function buildFuelPanelLeaderRead(panel: MarketScanFuelPanel | undefined) {
-  const ytdLeader = panel?.ytdRanking[0];
+  const rolling12Leader = panel?.rolling12Ranking[0];
   const monthLeader = panel?.monthRanking[0];
-  if (!panel || !ytdLeader) {
+  if (!panel || !rolling12Leader) {
     return null;
   }
   return {
     fuelType: panel.fuelType,
-    ytdLeader,
+    rolling12Leader,
     monthLeader,
   };
 }
 
 export function buildDrilldownInsight(page: MarketScanDrilldownPage): MarketInsightSnapshot {
-  const totalLeader = page.totalRanking.items[0];
-  const totalTop3Share = page.totalRanking.items.slice(0, 3).reduce((sum, item) => sum + (item.sharePct ?? 0), 0);
-  const dominantFuel = buildFuelDominanceRead(page.ytdFuelTrend.items);
+  const totalLeader = page.rolling12TotalRanking.items[0];
+  const totalTop3Share = page.rolling12TotalRanking.items.slice(0, 3).reduce((sum, item) => sum + (item.sharePct ?? 0), 0);
+  const dominantFuel = buildFuelDominanceRead(page.rolling12FuelTrend.items);
   const strongestFuelPanel = [...page.fuelPanels]
     .map((panel) => buildFuelPanelLeaderRead(panel))
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-    .sort((left, right) => (right.ytdLeader.sharePct ?? 0) - (left.ytdLeader.sharePct ?? 0))[0];
+    .sort((left, right) => (right.rolling12Leader.sharePct ?? 0) - (left.rolling12Leader.sharePct ?? 0))[0];
 
   let headline = `${page.segmentLabel} 头部格局仍在重排`;
   let tone: InsightTone = "neutral";
@@ -770,12 +770,12 @@ export function buildDrilldownInsight(page: MarketScanDrilldownPage): MarketInsi
 
   return {
     headline,
-    summary: `${page.summaryText}${dominantFuel ? ` ${dominantFuel.fuel} 当前占累计结构 ${formatPercent(dominantFuel.share)}。` : ""}`,
+    summary: `${page.summaryText}${dominantFuel ? ` ${dominantFuel.fuel} 当前占近12个月结构 ${formatPercent(dominantFuel.share)}。` : ""}`,
     tone,
     cards: [
       {
         label: "榜首车型",
-        value: totalLeader?.model ? `${totalLeader.model} 位居 YTD 第一` : "暂无榜首车型",
+        value: totalLeader?.model ? `${totalLeader.model} 位居 Rolling 12M 第一` : "暂无榜首车型",
         detail: totalLeader?.model
           ? `当前份额 ${totalLeader.shareDisplay ?? formatPercent(totalLeader.sharePct)}，同比 ${totalLeader.yoy.display}。`
           : "当前筛选下没有足够的车型排行数据。",
@@ -783,10 +783,10 @@ export function buildDrilldownInsight(page: MarketScanDrilldownPage): MarketInsi
       },
       {
         label: "动力主线",
-        value: dominantFuel ? `${dominantFuel.fuel} 是当前累计主线` : "暂无动力主线样本",
+        value: dominantFuel ? `${dominantFuel.fuel} 是当前近12个月主线` : "暂无动力主线样本",
         detail: dominantFuel
-          ? `占累计结构 ${formatPercent(dominantFuel.share)}，较上一累计窗口 ${formatSignedPctPoints(dominantFuel.shareDelta)}。`
-          : "当前没有足够的累计动力结构数据。",
+          ? `占近12个月结构 ${formatPercent(dominantFuel.share)}，较上一近12个月窗口 ${formatSignedPctPoints(dominantFuel.shareDelta)}。`
+          : "当前没有足够的近12个月动力结构数据。",
         tone: dominantFuel && dominantFuel.shareDelta > 0 ? "positive" : "neutral",
       },
       {
@@ -801,23 +801,23 @@ export function buildDrilldownInsight(page: MarketScanDrilldownPage): MarketInsi
         label: "细分亮点",
         value: strongestFuelPanel ? `${strongestFuelPanel.fuelType} 头部车型最强` : "暂无燃料亮点样本",
         detail: strongestFuelPanel
-          ? `${rankingItemLabel(strongestFuelPanel.ytdLeader)} 是 ${strongestFuelPanel.fuelType} 当前累计第一${
-            strongestFuelPanel.monthLeader && rankingItemLabel(strongestFuelPanel.monthLeader) !== rankingItemLabel(strongestFuelPanel.ytdLeader)
+          ? `${rankingItemLabel(strongestFuelPanel.rolling12Leader)} 是 ${strongestFuelPanel.fuelType} 当前近12个月第一${
+            strongestFuelPanel.monthLeader && rankingItemLabel(strongestFuelPanel.monthLeader) !== rankingItemLabel(strongestFuelPanel.rolling12Leader)
               ? `，但月榜已被 ${rankingItemLabel(strongestFuelPanel.monthLeader)} 挑战`
               : ""
-          }。`
+            }。`
           : "当前没有足够的燃料面板排行数据。",
         tone: "neutral",
       },
       {
         label: "下月观察",
-        value: strongestFuelPanel?.monthLeader && rankingItemLabel(strongestFuelPanel.monthLeader) !== rankingItemLabel(strongestFuelPanel.ytdLeader)
-          ? `关注 ${strongestFuelPanel.fuelType} 月榜冲量能否传导到累计`
+        value: strongestFuelPanel?.monthLeader && rankingItemLabel(strongestFuelPanel.monthLeader) !== rankingItemLabel(strongestFuelPanel.rolling12Leader)
+          ? `关注 ${strongestFuelPanel.fuelType} 月榜冲量能否传导到近12个月`
           : dominantFuel && dominantFuel.share >= 0.5
             ? `关注 ${dominantFuel.fuel} 是否继续单线扩张`
             : "关注头部车型是否继续集中",
-        detail: strongestFuelPanel?.monthLeader && rankingItemLabel(strongestFuelPanel.monthLeader) !== rankingItemLabel(strongestFuelPanel.ytdLeader)
-          ? `${strongestFuelPanel.fuelType} 月榜已出现新领跑者，若连续两月延续，累计榜将更快改写。`
+        detail: strongestFuelPanel?.monthLeader && rankingItemLabel(strongestFuelPanel.monthLeader) !== rankingItemLabel(strongestFuelPanel.rolling12Leader)
+          ? `${strongestFuelPanel.fuelType} 月榜已出现新领跑者，若连续两月延续，近12个月榜将更快改写。`
           : dominantFuel && dominantFuel.share >= 0.5
             ? `${dominantFuel.fuel} 已占据较高结构权重，后续细分市场波动会更依赖该动力路线。`
             : "若 Top3 份额继续提升，细分市场会从多车型竞争转向少数车型主导。",

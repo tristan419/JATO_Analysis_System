@@ -1144,6 +1144,18 @@ def _window_periods(available_periods: list[str], resolved_period: str, size: in
     return available_periods[start_index:end_index]
 
 
+def _window_periods_if_present(
+    available_periods: list[str],
+    target_period: str | None,
+    size: int,
+) -> list[str]:
+    if not target_period or target_period not in available_periods:
+        return []
+    end_index = available_periods.index(target_period) + 1
+    start_index = max(0, end_index - max(1, int(size)))
+    return available_periods[start_index:end_index]
+
+
 def _ytd_periods(available_periods: list[str], target_period: str) -> list[str]:
     target = pd.Period(target_period, freq="M")
     return [
@@ -1863,11 +1875,17 @@ def _build_overview_payload(
     prior_ytd_periods = _ytd_periods(available_periods, _shift_period(resolved_period, -12)) if same_month_last_year_period else []
     current_ytd_columns = [_period_to_month_column(period) for period in current_ytd_periods]
     prior_ytd_columns = [_period_to_month_column(period) for period in prior_ytd_periods]
+    current_rolling12_periods = _window_periods_if_present(available_periods, resolved_period, 12)
+    prior_rolling12_periods = _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
+    current_rolling12_columns = [_period_to_month_column(period) for period in current_rolling12_periods]
+    prior_rolling12_columns = [_period_to_month_column(period) for period in prior_rolling12_periods]
 
     current_month_total = _total_volume(frame, current_period_columns)
     same_month_total = _total_volume(frame, same_month_columns)
     current_ytd_total = _total_volume(frame, current_ytd_columns)
     prior_ytd_total = _total_volume(frame, prior_ytd_columns)
+    current_rolling12_total = _total_volume(frame, current_rolling12_columns)
+    prior_rolling12_total = _total_volume(frame, prior_rolling12_columns)
 
     year_text, month_text = resolved_period.split("-", 1)
     month_number = int(month_text)
@@ -1875,9 +1893,11 @@ def _build_overview_payload(
     return {
         "summary": {
             "headline": f"{_short_period_label(resolved_period)} 总销量 {current_month_total:,.0f} 台，YoY { _delta_payload(current_month_total, same_month_total)['display'] }",
-            "subheadline": f"1-{month_number} 月累计 {current_ytd_total:,.0f} 台，累计 YoY { _delta_payload(current_ytd_total, prior_ytd_total)['display'] }",
+            "subheadline": f"近12个月总销量 {current_rolling12_total:,.0f} 台，Rolling 12M YoY { _delta_payload(current_rolling12_total, prior_rolling12_total)['display'] }",
             "currentMonthVolume": current_month_total,
             "currentMonthYoY": _delta_payload(current_month_total, same_month_total),
+            "rolling12Volume": current_rolling12_total,
+            "rolling12YoY": _delta_payload(current_rolling12_total, prior_rolling12_total),
             "ytdVolume": current_ytd_total,
             "ytdYoY": _delta_payload(current_ytd_total, prior_ytd_total),
         },
@@ -1894,6 +1914,19 @@ def _build_overview_payload(
                 current_columns=current_ytd_columns,
                 prior_columns=prior_ytd_columns,
                 prior_month_columns=same_month_columns,
+                ranking_limit=ranking_limit,
+                include_model_breakdown=True,
+            ),
+        },
+        "rolling12BrandRanking": {
+            "title": "Rolling 12M Brand Ranking",
+            "currentLabel": f"L12M {_short_period_label(resolved_period)}",
+            "priorLabel": f"L12M {_short_period_label(_shift_period(resolved_period, -12))}",
+            "items": _build_brand_ranking_items(
+                frame,
+                current_columns=current_rolling12_columns,
+                prior_columns=prior_rolling12_columns,
+                prior_month_columns=[],
                 ranking_limit=ranking_limit,
                 include_model_breakdown=True,
             ),
@@ -1951,6 +1984,14 @@ def _build_origin_payload(
     same_month_column = _period_to_month_column(same_month_last_year_period) if same_month_last_year_period else None
     current_ytd_columns = [_period_to_month_column(period) for period in _ytd_periods(available_periods, resolved_period)]
     prior_ytd_columns = [_period_to_month_column(period) for period in _ytd_periods(available_periods, _shift_period(resolved_period, -12))] if same_month_last_year_period else []
+    current_rolling12_columns = [
+        _period_to_month_column(period)
+        for period in _window_periods_if_present(available_periods, resolved_period, 12)
+    ]
+    prior_rolling12_columns = [
+        _period_to_month_column(period)
+        for period in _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
+    ]
 
     current_total = float(grouped[current_column].sum()) if current_column in grouped.columns else 0.0
     prior_total = float(grouped[prior_column].sum()) if prior_column and prior_column in grouped.columns else 0.0
@@ -1990,8 +2031,12 @@ def _build_origin_payload(
     summary_frame["same_month"] = grouped[same_month_column] if same_month_column and same_month_column in grouped.columns else 0.0
     current_ytd_grouped = _volume_by_group(frame, "__origin", current_ytd_columns)
     prior_ytd_grouped = _volume_by_group(frame, "__origin", prior_ytd_columns)
+    current_rolling12_grouped = _volume_by_group(frame, "__origin", current_rolling12_columns)
+    prior_rolling12_grouped = _volume_by_group(frame, "__origin", prior_rolling12_columns)
     summary_frame["ytd"] = current_ytd_grouped.sum(axis=1) if not current_ytd_grouped.empty else 0.0
     summary_frame["prior_ytd"] = prior_ytd_grouped.sum(axis=1) if not prior_ytd_grouped.empty else 0.0
+    summary_frame["rolling12"] = current_rolling12_grouped.sum(axis=1) if not current_rolling12_grouped.empty else 0.0
+    summary_frame["prior_rolling12"] = prior_rolling12_grouped.sum(axis=1) if not prior_rolling12_grouped.empty else 0.0
     summary_frame = summary_frame.fillna(0.0)
 
     matrix_rows = []
@@ -1999,6 +2044,8 @@ def _build_origin_payload(
         ("current_volume", "当月销量", "volume"),
         ("mom", "MoM", "delta"),
         ("yoy", "YoY", "delta"),
+        ("rolling12", "近12个月", "volume"),
+        ("rolling12_yoy", "Rolling 12M YoY", "delta"),
         ("ytd", "YTD", "volume"),
         ("ytd_yoy", "YTD YoY", "delta"),
     ]:
@@ -2011,6 +2058,10 @@ def _build_origin_payload(
                 payload = _delta_payload(float(row["current"]), float(row["prior"]))
             elif metric_key == "yoy":
                 payload = _delta_payload(float(row["current"]), float(row["same_month"]))
+            elif metric_key == "rolling12":
+                payload = _metric_cell(float(row["rolling12"]), kind)
+            elif metric_key == "rolling12_yoy":
+                payload = _delta_payload(float(row["rolling12"]), float(row["prior_rolling12"]))
             elif metric_key == "ytd":
                 payload = _metric_cell(float(row["ytd"]), kind)
             else:
@@ -2058,18 +2109,30 @@ def _build_segment_payload(
     same_month_column = _period_to_month_column(same_month_last_year_period) if same_month_last_year_period else None
     current_ytd_columns = [_period_to_month_column(period) for period in _ytd_periods(available_periods, resolved_period)]
     prior_ytd_columns = [_period_to_month_column(period) for period in _ytd_periods(available_periods, _shift_period(resolved_period, -12))] if same_month_last_year_period else []
+    current_rolling12_columns = [
+        _period_to_month_column(period)
+        for period in _window_periods_if_present(available_periods, resolved_period, 12)
+    ]
+    prior_rolling12_columns = [
+        _period_to_month_column(period)
+        for period in _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
+    ]
 
     grouped_current = _volume_by_group(working, "__segment_bucket", [current_column])
     grouped_prior = _volume_by_group(working, "__segment_bucket", [prior_column] if prior_column else [])
     grouped_same_month = _volume_by_group(working, "__segment_bucket", [same_month_column] if same_month_column else [])
     grouped_ytd = _volume_by_group(working, "__segment_bucket", current_ytd_columns)
     grouped_prior_ytd = _volume_by_group(working, "__segment_bucket", prior_ytd_columns)
+    grouped_rolling12 = _volume_by_group(working, "__segment_bucket", current_rolling12_columns)
+    grouped_prior_rolling12 = _volume_by_group(working, "__segment_bucket", prior_rolling12_columns)
 
     matrix_rows = []
     for metric_key, label in [
         ("current_volume", "当月销量"),
         ("mom", "MoM"),
         ("yoy", "YoY"),
+        ("rolling12", "近12个月"),
+        ("rolling12_yoy", "Rolling 12M YoY"),
         ("ytd", "YTD"),
         ("ytd_yoy", "YTD YoY"),
     ]:
@@ -2080,12 +2143,18 @@ def _build_segment_payload(
             same_month_value = float(grouped_same_month.at[bucket, same_month_column]) if same_month_column and bucket in grouped_same_month.index and same_month_column in grouped_same_month.columns else 0.0
             ytd_value = float(grouped_ytd.loc[bucket].sum()) if bucket in grouped_ytd.index else 0.0
             prior_ytd_value = float(grouped_prior_ytd.loc[bucket].sum()) if bucket in grouped_prior_ytd.index else 0.0
+            rolling12_value = float(grouped_rolling12.loc[bucket].sum()) if bucket in grouped_rolling12.index else 0.0
+            prior_rolling12_value = float(grouped_prior_rolling12.loc[bucket].sum()) if bucket in grouped_prior_rolling12.index else 0.0
             if metric_key == "current_volume":
                 payload = _metric_cell(current_value, "volume")
             elif metric_key == "mom":
                 payload = _delta_payload(current_value, prior_value)
             elif metric_key == "yoy":
                 payload = _delta_payload(current_value, same_month_value)
+            elif metric_key == "rolling12":
+                payload = _metric_cell(rolling12_value, "volume")
+            elif metric_key == "rolling12_yoy":
+                payload = _delta_payload(rolling12_value, prior_rolling12_value)
             elif metric_key == "ytd":
                 payload = _metric_cell(ytd_value, "volume")
             else:
@@ -2287,6 +2356,29 @@ def _build_ytd_fuel_trend(
     return {"items": items}
 
 
+def _build_rolling12_fuel_trend(
+    frame: pd.DataFrame,
+    fuel_order: list[str],
+    resolved_period: str,
+    available_periods: list[str],
+) -> dict[str, Any]:
+    target = pd.Period(resolved_period, freq="M")
+    years = [target.year - 2, target.year - 1, target.year]
+    items = []
+    for year in years:
+        end_period = f"{year}-{target.month:02d}"
+        rolling_periods = _window_periods_if_present(available_periods, end_period, 12)
+        period_columns = [_period_to_month_column(period) for period in rolling_periods]
+        total = _total_volume(frame, period_columns)
+        label = f"L12M {str(year)[2:4]}.{target.month:02d}"
+        fuel_mix = {
+            fuel: float(_total_volume(frame[frame["__powertrain"] == fuel], period_columns))
+            for fuel in fuel_order
+        }
+        items.append({"label": label, "totalVolume": total, "fuelMix": fuel_mix})
+    return {"items": items}
+
+
 def _build_month_fuel_trend(
     frame: pd.DataFrame,
     fuel_order: list[str],
@@ -2326,8 +2418,10 @@ def _build_drilldown_payload(
             "title": f"{_segment_display_label(segment_value)} 车型",
             "summaryText": "当前筛选下没有该细分市场的可用数据。",
             "monthTotalRanking": {"title": "Monthly Total Model Ranking", "items": []},
+            "rolling12TotalRanking": {"title": "Rolling 12M Total Model Ranking", "items": []},
             "totalRanking": {"title": "YTD Total Model Ranking", "items": []},
             "monthFuelTrend": {"items": []},
+            "rolling12FuelTrend": {"items": []},
             "ytdFuelTrend": {"items": []},
             "fuelPanels": [],
         }
@@ -2338,6 +2432,14 @@ def _build_drilldown_payload(
     same_month_columns = [_period_to_month_column(same_month_last_year_period)] if same_month_last_year_period else []
     current_ytd_columns = [_period_to_month_column(period) for period in _ytd_periods(available_periods, resolved_period)]
     prior_ytd_columns = [_period_to_month_column(period) for period in _ytd_periods(available_periods, _shift_period(resolved_period, -12))] if same_month_last_year_period else []
+    current_rolling12_columns = [
+        _period_to_month_column(period)
+        for period in _window_periods_if_present(available_periods, resolved_period, 12)
+    ]
+    prior_rolling12_columns = [
+        _period_to_month_column(period)
+        for period in _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
+    ]
     available_fuels = _available_fuel_types(segment_frame)
 
     total_ranking = _build_total_ranking_items(
@@ -2354,14 +2456,23 @@ def _build_drilldown_payload(
         fuel_order=available_fuels,
         ranking_limit=ranking_limit,
     )
+    rolling12_total_ranking = _build_total_ranking_items(
+        segment_frame,
+        current_columns=current_rolling12_columns,
+        prior_columns=prior_rolling12_columns,
+        fuel_order=available_fuels,
+        ranking_limit=ranking_limit,
+    )
     segment_total_ytd = _total_volume(segment_frame, current_ytd_columns)
     segment_total_month = _total_volume(segment_frame, current_month_columns)
+    segment_total_rolling12 = _total_volume(segment_frame, current_rolling12_columns)
     fuel_panel_items = []
     for fuel_type in fuel_panels:
         fuel_panel_items.append(
             {
                 "fuelType": fuel_type,
                 "ytdTitle": f"{fuel_type} 1-{month_number}月累计",
+                "rolling12Title": f"{fuel_type} 近12个月 · 截至 {_short_period_label(resolved_period)}",
                 "monthTitle": f"{fuel_type} { _short_period_label(resolved_period) }",
                 "ytdRanking": _build_single_fuel_ranking_items(
                     segment_frame,
@@ -2369,6 +2480,14 @@ def _build_drilldown_payload(
                     current_columns=current_ytd_columns,
                     prior_columns=prior_ytd_columns,
                     segment_total=segment_total_ytd,
+                    ranking_limit=ranking_limit,
+                ),
+                "rolling12Ranking": _build_single_fuel_ranking_items(
+                    segment_frame,
+                    fuel_type=fuel_type,
+                    current_columns=current_rolling12_columns,
+                    prior_columns=prior_rolling12_columns,
+                    segment_total=segment_total_rolling12,
                     ranking_limit=ranking_limit,
                 ),
                 "monthRanking": _build_single_fuel_ranking_items(
@@ -2382,22 +2501,27 @@ def _build_drilldown_payload(
             }
         )
 
-    headline_model = total_ranking[0]["model"] if total_ranking else "市场"
-    headline_yoy = total_ranking[0]["yoy"]["display"] if total_ranking else "-"
+    headline_model = rolling12_total_ranking[0]["model"] if rolling12_total_ranking else "市场"
+    headline_yoy = rolling12_total_ranking[0]["yoy"]["display"] if rolling12_total_ranking else "-"
     return {
         "segment": segment_value,
         "segmentLabel": _segment_display_label(segment_value),
         "title": f"{_segment_display_label(segment_value)} 车型 {year_text}年1-{month_number}月",
-        "summaryText": f"{headline_model} 目前领跑 {_segment_display_label(segment_value)}，累计同比 {headline_yoy}。",
+        "summaryText": f"{headline_model} 目前领跑 {_segment_display_label(segment_value)}，近12个月同比 {headline_yoy}。",
         "monthTotalRanking": {
             "title": "Monthly Total Model Ranking",
             "items": month_total_ranking,
+        },
+        "rolling12TotalRanking": {
+            "title": "Rolling 12M Total Model Ranking",
+            "items": rolling12_total_ranking,
         },
         "totalRanking": {
             "title": "YTD Total Model Ranking",
             "items": total_ranking,
         },
         "monthFuelTrend": _build_month_fuel_trend(segment_frame, available_fuels, resolved_period, available_periods),
+        "rolling12FuelTrend": _build_rolling12_fuel_trend(segment_frame, available_fuels, resolved_period, available_periods),
         "ytdFuelTrend": _build_ytd_fuel_trend(segment_frame, available_fuels, resolved_period, available_periods),
         "fuelPanels": fuel_panel_items,
     }

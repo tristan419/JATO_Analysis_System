@@ -447,6 +447,8 @@ export interface MarketScanOverviewSummary {
   subheadline: string;
   currentMonthVolume: number;
   currentMonthYoY: MarketScanDelta;
+  rolling12Volume: number;
+  rolling12YoY: MarketScanDelta;
   ytdVolume: number;
   ytdYoY: MarketScanDelta;
 }
@@ -500,6 +502,7 @@ export interface MarketScanOverviewPage {
     items: MarketScanOverviewTrendItem[];
   };
   ytdBrandRanking: MarketScanRankingGroup;
+  rolling12BrandRanking: MarketScanRankingGroup;
   monthlyBrandRanking: MarketScanRankingGroup;
 }
 
@@ -572,8 +575,10 @@ export interface MarketScanFuelPanel {
   fuelType: string;
   monthTitle: string;
   ytdTitle: string;
+  rolling12Title: string;
   monthRanking: MarketScanRankingItem[];
   ytdRanking: MarketScanRankingItem[];
+  rolling12Ranking: MarketScanRankingItem[];
 }
 
 export interface MarketScanDrilldownPage {
@@ -589,10 +594,17 @@ export interface MarketScanDrilldownPage {
     title: string;
     items: MarketScanRankingItem[];
   };
+  rolling12TotalRanking: {
+    title: string;
+    items: MarketScanRankingItem[];
+  };
   monthFuelTrend: {
     items: MarketScanFuelTrendItem[];
   };
   ytdFuelTrend: {
+    items: MarketScanFuelTrendItem[];
+  };
+  rolling12FuelTrend: {
     items: MarketScanFuelTrendItem[];
   };
   fuelPanels: MarketScanFuelPanel[];

@@ -60,14 +60,14 @@ import type {
   MarketScanSuvSegmentShareTrendItem,
 } from "../types";
 
-type MarketScanSalesMode = "month" | "ytd";
+type MarketScanSalesMode = "month" | "rolling12";
 
 const DEFAULT_FUEL_TYPES = ["ICE", "MHEV", "HEV", "PHEV", "BEV", "LPG"];
 const DEFAULT_MARKET_SCAN_COUNTRY = "瑞典";
 const DEFAULT_MARKET_SCAN_SALES_MODE: MarketScanSalesMode = "month";
 const MARKET_SCAN_SALES_MODE_OPTIONS: Array<{ value: MarketScanSalesMode; label: string }> = [
   { value: "month", label: "当月" },
-  { value: "ytd", label: "累计" },
+  { value: "rolling12", label: "近12个月" },
 ];
 const TAB_ITEMS: Array<{
   key: MarketScanPageKey;
@@ -111,7 +111,7 @@ function isMarketScanPageKey(value: string | null): value is MarketScanPageKey {
 }
 
 function isMarketScanSalesMode(value: string | null): value is MarketScanSalesMode {
-  return value === "month" || value === "ytd";
+  return value === "month" || value === "rolling12";
 }
 
 function normalizeMarketScanRankingLimit(value: number | string | null | undefined): number {
@@ -393,7 +393,7 @@ function matrixRow(matrix: MarketScanMatrix, metricKey: string): MarketScanMatri
 function filterMatrixBySalesMode(matrix: MarketScanMatrix, salesMode: MarketScanSalesMode): MarketScanMatrix {
   const visibleMetricKeys = salesMode === "month"
     ? new Set(["current_volume", "mom", "yoy"])
-    : new Set(["ytd", "ytd_yoy"]);
+    : new Set(["rolling12", "rolling12_yoy"]);
   return {
     ...matrix,
     rows: matrix.rows.filter((row) => visibleMetricKeys.has(row.metricKey)),
@@ -421,28 +421,28 @@ function buildHeroMetrics(
             tone: summary.currentMonthYoY.tone,
           },
           {
-            label: deck.metadata.labels.currentYtd,
-            value: formatVolume(summary.ytdVolume),
-            detail: `${deck.metadata.labels.ytdWindow} 累计`,
+            label: "Rolling 12M",
+            value: formatVolume(summary.rolling12Volume),
+            detail: `截至 ${deck.metadata.labels.currentMonthShort}`,
           },
           {
-            label: "YTD YoY",
-            value: summary.ytdYoY.display,
-            detail: "累计同比",
-            tone: summary.ytdYoY.tone,
+            label: "Rolling 12M YoY",
+            value: summary.rolling12YoY.display,
+            detail: "近12个月同比",
+            tone: summary.rolling12YoY.tone,
           },
         ]
       : [
           {
-            label: deck.metadata.labels.currentYtd,
-            value: formatVolume(summary.ytdVolume),
-            detail: `${deck.metadata.labels.ytdWindow} 累计`,
+            label: "Rolling 12M",
+            value: formatVolume(summary.rolling12Volume),
+            detail: `截至 ${deck.metadata.labels.currentMonthShort}`,
           },
           {
-            label: "YTD YoY",
-            value: summary.ytdYoY.display,
-            detail: "累计同比",
-            tone: summary.ytdYoY.tone,
+            label: "Rolling 12M YoY",
+            value: summary.rolling12YoY.display,
+            detail: "近12个月同比",
+            tone: summary.rolling12YoY.tone,
           },
           {
             label: deck.metadata.labels.currentMonthShort,
@@ -459,17 +459,17 @@ function buildHeroMetrics(
   }
 
   if (pageKey === "origin") {
-    const metricKey = salesMode === "month" ? "current_volume" : "ytd";
+    const metricKey = salesMode === "month" ? "current_volume" : "rolling12";
     const currentRow = matrixRow(deck.results.origin.matrix, metricKey);
-    const deltaRow = matrixRow(deck.results.origin.matrix, salesMode === "month" ? "yoy" : "ytd_yoy");
+    const deltaRow = matrixRow(deck.results.origin.matrix, salesMode === "month" ? "yoy" : "rolling12_yoy");
     const leader = topCell(currentRow);
     const total = currentRow?.cells.reduce((sum, cell) => sum + Number(cell.value ?? 0), 0) ?? 0;
     const deltaLeader = topCell(deltaRow);
     return [
       {
-        label: salesMode === "month" ? deck.metadata.labels.currentMonthShort : deck.metadata.labels.currentYtd,
+        label: salesMode === "month" ? deck.metadata.labels.currentMonthShort : "Rolling 12M",
         value: formatVolume(total),
-        detail: salesMode === "month" ? "车系总量" : `${deck.metadata.labels.ytdWindow} 累计`,
+        detail: salesMode === "month" ? "车系总量" : `截至 ${deck.metadata.labels.currentMonthShort}`,
       },
       {
         label: "Leading Origin",
@@ -477,7 +477,7 @@ function buildHeroMetrics(
         detail: leader ? `${formatVolume(leader.value)} 台` : "暂无数据",
       },
       {
-        label: salesMode === "month" ? "YoY" : "YTD YoY",
+        label: salesMode === "month" ? "YoY" : "Rolling 12M YoY",
         value: deltaLeader?.key ?? "-",
         detail: deltaLeader ? deltaRow?.cells.find((cell) => cell.key === deltaLeader.key)?.display ?? "-" : "暂无变化",
       },
@@ -485,7 +485,7 @@ function buildHeroMetrics(
   }
 
   if (pageKey === "segment") {
-    const currentRow = matrixRow(deck.results.segment.matrix, salesMode === "month" ? "current_volume" : "ytd");
+    const currentRow = matrixRow(deck.results.segment.matrix, salesMode === "month" ? "current_volume" : "rolling12");
     const leader = topCell(currentRow);
     const lastPoint = deck.results.segment.bodyShareTrend.items[
       deck.results.segment.bodyShareTrend.items.length - 1
@@ -505,15 +505,15 @@ function buildHeroMetrics(
         label: "Top Bucket",
         value: leader?.key ?? "-",
         detail: leader
-          ? `${formatVolume(leader.value)} ${salesMode === "month" ? "台" : `台（${deck.metadata.labels.ytdWindow}）`}`
+          ? `${formatVolume(leader.value)} ${salesMode === "month" ? "台" : "台（近12个月）"}`
           : "暂无数据",
       },
     ];
   }
 
   const drilldown = deck.results[pageKey] as MarketScanDrilldownPage;
-  const activeRanking = salesMode === "month" ? drilldown.monthTotalRanking : drilldown.totalRanking;
-  const activeFuelTrend = salesMode === "month" ? drilldown.monthFuelTrend : drilldown.ytdFuelTrend;
+  const activeRanking = salesMode === "month" ? drilldown.monthTotalRanking : drilldown.rolling12TotalRanking;
+  const activeFuelTrend = salesMode === "month" ? drilldown.monthFuelTrend : drilldown.rolling12FuelTrend;
   const leader = activeRanking.items[0];
   const lastTrend = activeFuelTrend.items[activeFuelTrend.items.length - 1];
   return [
@@ -528,8 +528,8 @@ function buildHeroMetrics(
       detail: "榜首份额",
     },
     {
-      label: salesMode === "month" ? "Month Window" : "YTD Window",
-      value: lastTrend?.label ?? (salesMode === "month" ? deck.metadata.labels.currentMonthShort : deck.metadata.labels.currentYtd),
+      label: salesMode === "month" ? "Month Window" : "Rolling 12M Window",
+      value: lastTrend?.label ?? (salesMode === "month" ? deck.metadata.labels.currentMonthShort : `L12M ${deck.metadata.labels.currentMonthShort}`),
       detail: lastTrend ? `${formatVolume(lastTrend.totalVolume)} 台` : "暂无销量趋势",
     },
   ];
@@ -1395,8 +1395,8 @@ function OverviewSection({
 }) {
   const insight = buildOverviewInsight(page);
   const rankingGroups = salesMode === "month"
-    ? [page.monthlyBrandRanking, page.ytdBrandRanking]
-    : [page.ytdBrandRanking, page.monthlyBrandRanking];
+    ? [page.monthlyBrandRanking, page.rolling12BrandRanking]
+    : [page.rolling12BrandRanking, page.monthlyBrandRanking];
 
   return (
     <div className="market-scan-grid market-scan-grid--three">
@@ -1522,7 +1522,7 @@ function OriginSection({
     <Panel
       eyebrow="Matrix"
       title="Origin Scorecard"
-      subtitle={salesMode === "month" ? "当月、环比、同比矩阵。" : "累计、累计同比矩阵。"}
+      subtitle={salesMode === "month" ? "当月、环比、同比矩阵。" : "近12个月、近12个月同比矩阵。"}
     >
       <MatrixTable matrix={filteredMatrix} />
     </Panel>
@@ -1623,7 +1623,7 @@ function SegmentSection({
       <Panel
         eyebrow="Matrix"
         title="Segment Matrix"
-        subtitle={salesMode === "month" ? "不同长度级别的当月、环比、同比表现。" : "不同长度级别的累计与累计同比表现。"}
+        subtitle={salesMode === "month" ? "不同长度级别的当月、环比、同比表现。" : "不同长度级别的近12个月与近12个月同比表现。"}
       >
         <MatrixTable matrix={filteredMatrix} />
       </Panel>
@@ -1641,8 +1641,8 @@ function FuelPanel({
   compact?: boolean;
 }) {
   const dense = true;
-  const activeTitle = salesMode === "month" ? panel.monthTitle : panel.ytdTitle;
-  const activeRanking = salesMode === "month" ? panel.monthRanking : panel.ytdRanking;
+  const activeTitle = salesMode === "month" ? panel.monthTitle : panel.rolling12Title;
+  const activeRanking = salesMode === "month" ? panel.monthRanking : panel.rolling12Ranking;
 
   return (
     <Panel
@@ -1680,13 +1680,13 @@ function DrilldownSection({
 }) {
   const normalizedRankingLimit = normalizeMarketScanRankingLimit(rankingLimit);
   const insight = buildDrilldownInsight(page);
-  const activeTotalRanking = salesMode === "month" ? page.monthTotalRanking : page.totalRanking;
-  const activeFuelTrend = salesMode === "month" ? page.monthFuelTrend : page.ytdFuelTrend;
-  const activeFuelTrendTitle = salesMode === "month" ? "Monthly Fuel Trend" : "YTD Fuel Trend";
+  const activeTotalRanking = salesMode === "month" ? page.monthTotalRanking : page.rolling12TotalRanking;
+  const activeFuelTrend = salesMode === "month" ? page.monthFuelTrend : page.rolling12FuelTrend;
+  const activeFuelTrendTitle = salesMode === "month" ? "Monthly Fuel Trend" : "Rolling 12M Fuel Trend";
   const activeFuelTrendSubtitle = salesMode === "month"
     ? "观察同一月份跨年度的燃料路线结构。"
-    : "观察同一累计窗口下各燃料路线的堆叠变化。";
-  const activeFuelTrendYAxisTitle = salesMode === "month" ? "当月销量" : "累计销量";
+    : "观察同一近12个月窗口下各燃料路线的堆叠变化。";
+  const activeFuelTrendYAxisTitle = salesMode === "month" ? "当月销量" : "近12个月销量";
 
   return (
     <>
@@ -1694,7 +1694,7 @@ function DrilldownSection({
         <Panel
           eyebrow="Ranking"
           title={activeTotalRanking.title}
-          subtitle={salesMode === "month" ? "按当前国家与细分市场当月份额排序" : "按当前国家与细分市场累计份额排序"}
+          subtitle={salesMode === "month" ? "按当前国家与细分市场当月份额排序" : "按当前国家与细分市场近12个月份额排序"}
           actions={onRankingLimitChange ? (
             <label className="market-scan-ranking-limit-control">
               Top
