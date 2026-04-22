@@ -123,6 +123,7 @@ def time_series_grouped(
         filters=payload.filters,
         grain=payload.grain,
         group_by=payload.group_by,
+        share_split_by=payload.share_split_by,
         top_n=payload.top_n,
         include_others=payload.include_others,
         time_range=(

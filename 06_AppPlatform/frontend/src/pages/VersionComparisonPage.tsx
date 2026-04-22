@@ -60,11 +60,11 @@ function sanitizeFileNameSegment(value: string): string {
 function readSearchTimeRange(searchParams: URLSearchParams): MarketScanPeriodRange | null {
   const start = searchParams.get("timeStart");
   const end = searchParams.get("timeEnd");
-  if (start && end) {
-    return { start, end };
-  }
-  const period = searchParams.get("period");
-  return period ? { start: period, end: period } : null;
+  return start && end ? { start, end } : null;
+}
+
+function isCustomTimeRange(range: MarketScanPeriodRange | null | undefined): boolean {
+  return Boolean(range && range.start !== range.end);
 }
 
 function Panel({
@@ -394,7 +394,12 @@ export function VersionComparisonPage() {
       const availablePeriodSet = new Set(deck.metadata.availablePeriods.map((item) => item.value));
       const nextRange = deck.metadata.selectedTimeRange ?? null;
       const isCurrentRangeValid = availablePeriodSet.has(selectedTimeRange.start) && availablePeriodSet.has(selectedTimeRange.end);
-      if (!isCurrentRangeValid || nextRange?.start !== selectedTimeRange.start || nextRange?.end !== selectedTimeRange.end) {
+      if (!isCurrentRangeValid) {
+        setSelectedTimeRange(nextRange);
+      } else if (
+        nextRange
+        && (nextRange.start !== selectedTimeRange.start || nextRange.end !== selectedTimeRange.end)
+      ) {
         setSelectedTimeRange(nextRange);
       }
     }
@@ -416,7 +421,7 @@ export function VersionComparisonPage() {
 
   const currentCountry = selectedCountry ?? deck?.metadata.selectedCountry ?? DEFAULT_COUNTRY;
   const resolvedTimeRange = selectedTimeRange ?? deck?.metadata.selectedTimeRange ?? null;
-  const customRangeActive = Boolean(resolvedTimeRange);
+  const customRangeActive = isCustomTimeRange(resolvedTimeRange);
   const currentPeriod = resolvedTimeRange?.end ?? selectedPeriod ?? deck?.metadata.resolvedPeriod ?? "";
   const currentSegment = selectedSegment ?? deck?.metadata.selectedSegment ?? "";
   const fuelOptions = deck?.metadata.availableFuelTypes ?? DEFAULT_FUEL_TYPES;
@@ -584,7 +589,7 @@ export function VersionComparisonPage() {
                   options={deck?.metadata.availablePeriods ?? []}
                   value={resolvedTimeRange ?? (selectedPeriod ? { start: selectedPeriod, end: selectedPeriod } : null)}
                   onChange={(value) => {
-                    setSelectedTimeRange(value);
+                    setSelectedTimeRange(isCustomTimeRange(value) ? value : null);
                     setSelectedPeriod(value?.end ?? null);
                   }}
                   disabled={!deck}
@@ -634,15 +639,23 @@ export function VersionComparisonPage() {
                       <button
                         key={option.value}
                         type="button"
-                        className={`btn btn-sm ${salesMode === option.value ? "btn-primary" : "btn-ghost"}`}
-                        onClick={() => setSalesMode(option.value)}
+                        className={`btn btn-sm ${!customRangeActive && salesMode === option.value ? "btn-primary" : "btn-ghost"}`}
+                        onClick={() => {
+                          setSelectedTimeRange(null);
+                          setSalesMode(option.value);
+                        }}
                       >
                         {option.label}
                       </button>
                     ))}
+                    {customRangeActive ? (
+                      <span className="btn btn-sm btn-primary">
+                        {resolvedTimeRange ? `${resolvedTimeRange.start} - ${resolvedTimeRange.end}` : "自定义区间"}
+                      </span>
+                    ) : null}
                   </div>
                   {customRangeActive ? (
-                    <small className="market-scan-field-hint">当前已按自定义区间累计重算。</small>
+                    <small className="market-scan-field-hint">当前时间轴就是激活中的销量口径；点击三档按钮会退出自定义区间。</small>
                   ) : null}
                 </div>
                 <label className="market-scan-field">

@@ -189,6 +189,40 @@ _MONTH_LABEL_BY_NUMBER = {
     value: key for key, value in _MONTH_ORDER.items()
 }
 
+_GROUPED_SHARE_MODE_SPECS = {
+    "四驱占比": {
+        "column_candidates": ["Driven wheels"],
+        "series": [
+            (
+                "4x4",
+                lambda values: values.astype(str).str.strip().str.lower().eq("4x4"),
+            ),
+        ],
+    },
+    "Business/Private 占比": {
+        "column_candidates": ["Registration type"],
+        "series": [
+            (
+                "Business",
+                lambda values: values.astype(str).str.strip().str.lower().eq("business"),
+            ),
+            (
+                "Private",
+                lambda values: values.astype(str).str.strip().str.lower().eq("private"),
+            ),
+        ],
+    },
+}
+
+_GROUPED_SHARE_SPLIT_SPECS = {
+    "segment": {
+        "column_candidates": ["细分市场（按车长）"],
+    },
+    "powertrain": {
+        "column_candidates": ["动总规整"],
+    },
+}
+
 
 def _sort_month_cols_chrono(cols: list[str]) -> list[str]:
     def _key(col: str) -> tuple[int, int]:
@@ -444,6 +478,127 @@ def _filter_time_labels(
         if (label_ord := _time_label_ordinal(label)) is not None
         and start_ord <= label_ord <= end_ord
     ]
+
+
+def _query_grouped_share_time_series(
+    filters: dict[str, list[str]],
+    grain: str,
+    group_by: str,
+    share_split_by: str | None = None,
+    time_range: dict[str, str] | None = None,
+) -> dict:
+    spec = _GROUPED_SHARE_MODE_SPECS.get(group_by)
+    if spec is None:
+        return {"grain": grain, "rows": 0, "items": []}
+
+    columns_all = repo.list_columns()
+    group_column = _resolve_existing_column(spec["column_candidates"], columns_all)
+    split_spec = _GROUPED_SHARE_SPLIT_SPECS.get(str(share_split_by or "").strip().lower())
+    split_column = (
+        _resolve_existing_column(split_spec["column_candidates"], columns_all)
+        if split_spec is not None
+        else None
+    )
+    normalized_grain = "year" if str(grain).lower() == "year" else "month"
+    if not group_column:
+        return {"grain": normalized_grain, "rows": 0, "items": []}
+
+    supplemental_year_groups: dict[str, list[str]] = {}
+    if normalized_grain == "year":
+        time_cols = _year_columns(columns_all)
+        supplemental_year_groups = _supplemental_month_year_groups(columns_all)
+        month_supplement_columns = [
+            column
+            for month_columns in supplemental_year_groups.values()
+            for column in month_columns
+        ]
+        load_cols = [group_column, *time_cols, *month_supplement_columns]
+    else:
+        time_cols = _month_columns(columns_all)
+        load_cols = [group_column, *time_cols]
+    if split_column and split_column not in load_cols:
+        load_cols = [split_column, *load_cols]
+
+    if len(load_cols) <= 1:
+        return {"grain": normalized_grain, "rows": 0, "items": []}
+
+    df = repo.load_slice(columns=load_cols, filters=filters, limit=500_000, offset=0)
+    if df.empty or group_column not in df.columns:
+        return {"grain": normalized_grain, "rows": 0, "items": []}
+
+    df[group_column] = df[group_column].astype(str).fillna("?").str.strip()
+    if split_column and split_column in df.columns:
+        df[split_column] = df[split_column].astype(str).fillna("未标注").str.strip()
+    numeric_columns = [
+        column
+        for column in load_cols
+        if column not in {group_column, split_column}
+    ]
+    for tc in numeric_columns:
+        if tc in df.columns:
+            df[tc] = pd.to_numeric(df[tc], errors="coerce").fillna(0)
+
+    if normalized_grain == "year":
+        df, effective_year_columns = _prepare_effective_year_value_columns(
+            df,
+            supplemental_year_groups,
+        )
+        time_labels = _filter_time_labels(list(effective_year_columns.keys()), time_range)
+        value_columns = [
+            effective_year_columns[label]
+            for label in time_labels
+            if label in effective_year_columns
+        ]
+    else:
+        time_labels = _filter_time_labels(time_cols, time_range)
+        value_columns = [label for label in time_labels if label in df.columns]
+
+    if not value_columns:
+        return {"grain": normalized_grain, "rows": 0, "items": []}
+
+    items: list[dict[str, object]] = []
+    series_count = len(spec["series"])
+    split_frames: list[tuple[str | None, pd.DataFrame]]
+    if split_column and split_column in df.columns:
+        split_totals = (
+            df.groupby(split_column)[value_columns]
+            .sum()
+            .sum(axis=1)
+            .sort_values(ascending=False)
+        )
+        split_frames = [
+            (str(split_value), df[df[split_column] == split_value].copy())
+            for split_value in split_totals.index
+        ]
+    else:
+        split_frames = [(None, df)]
+    for split_value, frame in split_frames:
+        totals = frame.loc[:, value_columns].sum()
+        for series_name, matcher in spec["series"]:
+            mask = matcher(frame[group_column])
+            numerator = (
+                frame.loc[mask, value_columns].sum()
+                if mask.any()
+                else pd.Series(0.0, index=value_columns)
+            )
+            resolved_series_name = (
+                series_name
+                if split_value is None
+                else split_value
+                if series_count == 1
+                else f"{split_value} · {series_name}"
+            )
+            for time_label, value_column in zip(time_labels, value_columns):
+                denominator = float(totals.get(value_column, 0.0))
+                share_value = float(numerator.get(value_column, 0.0))
+                items.append(
+                    {
+                        "time": time_label,
+                        "value": round((share_value / denominator * 100.0), 4) if denominator > 0 else 0.0,
+                        "series": resolved_series_name,
+                    }
+                )
+    return {"grain": normalized_grain, "rows": len(items), "items": items}
 
 
 def _resolve_sales_columns_from_options(
@@ -796,6 +951,7 @@ def query_grouped_time_series(
     group_by: str | None,
     top_n: int,
     include_others: bool,
+    share_split_by: str | None = None,
     time_range: dict[str, str] | None = None,
 ) -> dict:
     if not group_by:
@@ -813,6 +969,14 @@ def query_grouped_time_series(
         if time_range is not None:
             items = [item for item in items if str(item["time"]) in allowed_labels]
         return {"grain": grain, "rows": len(items), "items": items}
+    if group_by in _GROUPED_SHARE_MODE_SPECS:
+        return _query_grouped_share_time_series(
+            filters=filters,
+            grain=grain,
+            group_by=group_by,
+            share_split_by=share_split_by,
+            time_range=time_range,
+        )
 
     columns_all = repo.list_columns()
     normalized_grain = "year" if str(grain).lower() == "year" else "month"
@@ -904,7 +1068,10 @@ def query_grouped_time_series(
     items = []
     for series_name, row in grouped.iterrows():
         if normalized_grain == "year":
-            for time_label, source_column in effective_year_columns.items():
+            for time_label in time_labels:
+                source_column = effective_year_columns.get(time_label)
+                if source_column is None:
+                    continue
                 items.append({
                     "time": time_label,
                     "value": float(row.get(source_column, 0)),

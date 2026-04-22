@@ -20,6 +20,7 @@ import type {
 /* ── types ──────────────────────────────────────────── */
 
 export type BubbleGroupDimension = "segment" | "powertrain";
+export type TimeSeriesShareSplitDimension = "total" | "segment" | "powertrain";
 
 export interface DashboardPageCache {
   search: string;
@@ -36,6 +37,7 @@ export interface DashboardPageCache {
   chartType: "line" | "bar";
   tsMode: "总和" | "分组";
   tsGroupDim: string;
+  tsShareSplit: TimeSeriesShareSplitDimension;
   tsTopN: number;
   tsTopNEnabled: boolean;
   tsIncludeOthers: boolean;
@@ -134,6 +136,22 @@ export const GROUP_BY_OPTIONS = [
   { v: "Model", l: "Model" },
   { v: "Version name", l: "Version" },
   { v: "国家", l: "国家" },
+  { v: "四驱占比", l: "四驱占比" },
+  { v: "Business/Private 占比", l: "Business/Private 占比" },
+];
+
+export const TIME_SERIES_SHARE_GROUP_DIMENSIONS = new Set([
+  "四驱占比",
+  "Business/Private 占比",
+]);
+
+export const TIME_SERIES_SHARE_SPLIT_OPTIONS: Array<{
+  value: TimeSeriesShareSplitDimension;
+  label: string;
+}> = [
+  { value: "total", label: "整体" },
+  { value: "segment", label: "按细分市场" },
+  { value: "powertrain", label: "按动总规整" },
 ];
 
 export const BUBBLE_GROUP_DIMENSIONS: { v: BubbleGroupDimension; l: string; dataKey: "Segment" | "Powertrain" }[] = [
@@ -154,6 +172,10 @@ export const STACKED_CHARTS = new Set([
 
 export function ensureArray<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
+}
+
+export function isTimeSeriesShareGroupDimension(value: string): boolean {
+  return TIME_SERIES_SHARE_GROUP_DIMENSIONS.has(value);
 }
 
 export function isPlainRecord(value: unknown): value is Record<string, unknown> {

@@ -26,11 +26,13 @@ import { parseMonthLabel, toTimeOrdinal, compareTimeLabels } from "../utils/time
 import {
   type BubbleGroupDimension,
   type DashboardPageCache,
+  type TimeSeriesShareSplitDimension,
   DASHBOARD_CACHE_KEY,
   PAGE_CACHE_TTL_MS,
   ADV_GROUPS,
   ADV_CHARTS,
   GROUP_BY_OPTIONS,
+  TIME_SERIES_SHARE_SPLIT_OPTIONS,
   BUBBLE_GROUP_DIMENSIONS,
   SCATTER_CHARTS,
   STACKED_CHARTS,
@@ -43,6 +45,7 @@ import {
   formatDashboardSummaryMetric,
   getLoadingMetricValue,
   getDashboardLensSummary,
+  isTimeSeriesShareGroupDimension,
   isDashboardBootstrapping,
   formatMetricValue,
   summarizeScopeValues,
@@ -116,6 +119,9 @@ export function DashboardPage() {
   const [chartType, setChartType] = useState<"line"|"bar">(() => cachedPage?.chartType ?? "line");
   const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">(() => cachedPage?.tsMode ?? "\u603b\u548c");
   const [tsGroupDim, setTsGroupDim] = useState(() => cachedPage?.tsGroupDim ?? "\u52a8\u603b\u89c4\u6574");
+  const [tsShareSplit, setTsShareSplit] = useState<TimeSeriesShareSplitDimension>(
+    () => cachedPage?.tsShareSplit ?? "total",
+  );
   const [tsTopN, setTsTopN] = useState(() => cachedPage?.tsTopN ?? 10);
   const [tsTopNEnabled, setTsTopNEnabled] = useState(() => cachedPage?.tsTopNEnabled ?? true);
   const [tsIncludeOthers, setTsIncludeOthers] = useState(() => cachedPage?.tsIncludeOthers ?? false);
@@ -284,10 +290,14 @@ export function DashboardPage() {
       const timer = setTimeout(async () => {
         setError("");
         try {
+          const shareSplitBy = tsMode === "\u5206\u7ec4" && isTimeSeriesShareGroupDimension(tsGroupDim) && tsShareSplit !== "total"
+            ? tsShareSplit
+            : undefined;
           const r = await api.groupedTimeSeries({
             filters,
             grain: activeTab,
             group_by: tsGroupDim,
+            share_split_by: shareSplitBy,
             top_n: tsTopNEnabled ? tsTopN : 9999,
             include_others: tsIncludeOthers,
             time_range: timeRangePayload,
@@ -297,7 +307,7 @@ export function DashboardPage() {
         finally { if (!cancelled) setGroupedLoading(false); }
       }, 300);
       return () => { cancelled = true; clearTimeout(timer); setGroupedLoading(false); };
-  }, [tsMode, tsGroupDim, activeTab, tsTopN, tsTopNEnabled, tsIncludeOthers, filterPayloadStr, columns.length, timeRangePayload]);
+  }, [tsMode, tsGroupDim, tsShareSplit, activeTab, tsTopN, tsTopNEnabled, tsIncludeOthers, filterPayloadStr, columns.length, timeRangePayload]);
 
   /* advanced chart */
   async function loadAdvChart() {
@@ -416,6 +426,7 @@ export function DashboardPage() {
   }, [activeFilterSummaryText, activeFilters, dashboardBootstrapping, selections, timeWindowLabel]);
   const activeFilterCount = activeFilters.length;
   const isGrouped = tsMode === "\u5206\u7ec4";
+  const isShareGrouped = isGrouped && isTimeSeriesShareGroupDimension(tsGroupDim);
   const singleSeries = activeTab === "year" ? yearSeries : monthSeries;
 
   /* all series names (stable order for consistent colours) */
@@ -603,6 +614,7 @@ export function DashboardPage() {
     chartType,
     tsMode,
     tsGroupDim,
+    tsShareSplit,
     tsTopN,
     tsTopNEnabled,
     tsIncludeOthers,
@@ -723,6 +735,7 @@ export function DashboardPage() {
     tsGroupDim,
     tsIncludeOthers,
     tsMode,
+    tsShareSplit,
     tsTopN,
     tsTopNEnabled,
     yearSeries,
@@ -1186,7 +1199,7 @@ export function DashboardPage() {
               <div className="hero-meta-block dashboard-deck-hero-stat">
                 <span className="hero-meta-label">Series Mode</span>
                 <strong className="hero-meta-value">{isGrouped ? "GROUPED" : "TOTAL"}</strong>
-                <span className="hero-meta-subvalue">{isGrouped ? tsGroupDim : "单序列汇总视图"}</span>
+                <span className="hero-meta-subvalue">{isGrouped ? `${tsGroupDim}${isShareGrouped && tsShareSplit !== "total" ? ` · ${TIME_SERIES_SHARE_SPLIT_OPTIONS.find(option => option.value === tsShareSplit)?.label ?? tsShareSplit}` : ""}` : "单序列汇总视图"}</span>
               </div>
               <div className="hero-meta-block dashboard-deck-hero-stat">
                 <span className="hero-meta-label">Data State</span>
@@ -1225,22 +1238,35 @@ export function DashboardPage() {
                   {GROUP_BY_OPTIONS.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
                 </select>
               </div>
-              <label className="chart-mode-label" style={{gap:6}}>
-                <input type="checkbox" checked={tsTopNEnabled} onChange={e=>setTsTopNEnabled(e.target.checked)} />
-                {"\u542f\u7528 Top N"}
-              </label>
-              {tsTopNEnabled && <div className="filter-group"><label>Top N</label>
-                <input type="number" value={tsTopN} min={3} max={30} style={{width:56}} onChange={e=>setTsTopN(Math.max(3,Math.min(30,Number(e.target.value)||10)))} />
-              </div>}
-              <label className="chart-mode-label" style={{gap:6}}>
-                <input type="checkbox" checked={tsIncludeOthers} onChange={e=>setTsIncludeOthers(e.target.checked)} />
-                {"\u56fe\u4e2d\u663e\u793a\u201c\u5176\u4ed6\u201d"}
-              </label>
+              {!isShareGrouped ? (
+                <>
+                  <label className="chart-mode-label" style={{gap:6}}>
+                    <input type="checkbox" checked={tsTopNEnabled} onChange={e=>setTsTopNEnabled(e.target.checked)} />
+                    {"\u542f\u7528 Top N"}
+                  </label>
+                  {tsTopNEnabled && <div className="filter-group"><label>Top N</label>
+                    <input type="number" value={tsTopN} min={3} max={30} style={{width:56}} onChange={e=>setTsTopN(Math.max(3,Math.min(30,Number(e.target.value)||10)))} />
+                  </div>}
+                  <label className="chart-mode-label" style={{gap:6}}>
+                    <input type="checkbox" checked={tsIncludeOthers} onChange={e=>setTsIncludeOthers(e.target.checked)} />
+                    {"\u56fe\u4e2d\u663e\u793a\u201c\u5176\u4ed6\u201d"}
+                  </label>
+                </>
+              ) : (
+                <>
+                  <div className="filter-group"><label>拆分视角</label>
+                    <select value={tsShareSplit} onChange={e=>setTsShareSplit(e.target.value as TimeSeriesShareSplitDimension)}>
+                      {TIME_SERIES_SHARE_SPLIT_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  </div>
+                  <span className="ts-mode-hint">拆分后的每条线都按各自子组重算占比，不应用 Top N / 其他 合并。</span>
+                </>
+              )}
               {groupedLoading && (
                 <LoadingSurface
                   mode="inline"
                   label="正在刷新分组序列"
-                  detail={tsTopNEnabled ? `${tsGroupDim} · Top ${tsTopN}` : tsGroupDim}
+                  detail={!isShareGrouped && tsTopNEnabled ? `${tsGroupDim} · Top ${tsTopN}` : tsGroupDim}
                 />
               )}
             </div>
@@ -1314,9 +1340,11 @@ export function DashboardPage() {
                 <PlotlyChart
                   data={traces}
                   layout={applyExportToLayout({
-                    barmode: chartType === "bar" ? "relative" : undefined,
+                    barmode: chartType === "bar" ? (isShareGrouped ? "group" : "relative") : undefined,
                     xaxis: buildCategoryAxis(groupedTimeLabels, { tickangle: -45 }),
-                    yaxis: { title: { text: "Sales" } },
+                    yaxis: isShareGrouped
+                      ? { title: { text: "Share (%)" }, range: [0, 100], ticksuffix: "%" }
+                      : { title: { text: "Sales" } },
                   }, tsExport)}
                   height={450}
                 />

@@ -532,9 +532,9 @@ function marketScanActiveDrilldownWindow(
     return {
       ranking: page.customRangeTotalRanking,
       fuelTrend: page.customRangeFuelTrend,
-      trendTitle: "Custom Range Fuel Mix",
-      trendSubtitle: "观察自定义区间累计口径下各燃料路线的结构。",
-      trendYAxisTitle: "区间累计销量",
+      trendTitle: "Custom Range Monthly Fuel Trend",
+      trendSubtitle: "观察所选时间轴区间内逐月的燃料路线结构。",
+      trendYAxisTitle: "月度销量",
       rankingSubtitle: "按当前国家与细分市场自定义区间份额排序",
       heroWindowLabel: "Custom Range",
       heroWindowValue: customRangeLabel || "自定义区间",
@@ -860,11 +860,11 @@ function readSearchTimeRange(searchParams: URLSearchParams): MarketScanPeriodRan
   if (start && end) {
     return { start, end };
   }
-  const period = searchParams.get("period");
-  if (period) {
-    return { start: period, end: period };
-  }
   return null;
+}
+
+function isCustomTimeRange(range: MarketScanPeriodRange | null | undefined): boolean {
+  return Boolean(range && range.start !== range.end);
 }
 
 function periodWithinRange(period: string, range: MarketScanPeriodRange | null | undefined): boolean {
@@ -2294,7 +2294,12 @@ export function MarketScanPage() {
       const availablePeriodSet = new Set(deck.metadata.availablePeriods.map((option) => option.value));
       const nextRange = deck.metadata.selectedTimeRange ?? null;
       const isCurrentRangeValid = availablePeriodSet.has(selectedTimeRange.start) && availablePeriodSet.has(selectedTimeRange.end);
-      if (!isCurrentRangeValid || nextRange?.start !== selectedTimeRange.start || nextRange?.end !== selectedTimeRange.end) {
+      if (!isCurrentRangeValid) {
+        setSelectedTimeRange(nextRange);
+      } else if (
+        nextRange
+        && (nextRange.start !== selectedTimeRange.start || nextRange.end !== selectedTimeRange.end)
+      ) {
         setSelectedTimeRange(nextRange);
       }
     }
@@ -2317,7 +2322,7 @@ export function MarketScanPage() {
 
   const currentCountry = selectedCountry ?? deck?.metadata.selectedCountry ?? "";
   const resolvedTimeRange = selectedTimeRange ?? deck?.metadata.selectedTimeRange ?? null;
-  const customRangeActive = Boolean(resolvedTimeRange);
+  const customRangeActive = isCustomTimeRange(resolvedTimeRange);
   const currentPeriod = resolvedTimeRange?.end ?? selectedPeriod ?? deck?.metadata.resolvedPeriod ?? "";
   const fuelOptions = deck?.metadata.availableFuelTypes ?? selectedFuelTypes;
   const activeFuelTypes = selectedFuelTypes.length > 0
@@ -2584,7 +2589,7 @@ export function MarketScanPage() {
                   options={deck?.metadata.availablePeriods ?? []}
                   value={resolvedTimeRange ?? (selectedPeriod ? { start: selectedPeriod, end: selectedPeriod } : null)}
                   onChange={(value) => {
-                    setSelectedTimeRange(value);
+                    setSelectedTimeRange(isCustomTimeRange(value) ? value : null);
                     setSelectedPeriod(value?.end ?? null);
                   }}
                   disabled={!deck}
@@ -2597,16 +2602,24 @@ export function MarketScanPage() {
                       <button
                         key={option.value}
                         type="button"
-                        className={`btn btn-sm ${salesMode === option.value ? "btn-primary" : "btn-ghost"}`}
-                        onClick={() => setSalesMode(option.value)}
+                        className={`btn btn-sm ${!customRangeActive && salesMode === option.value ? "btn-primary" : "btn-ghost"}`}
+                        onClick={() => {
+                          setSelectedTimeRange(null);
+                          setSalesMode(option.value);
+                        }}
                       >
                         {option.label}
                       </button>
                     ))}
+                    {customRangeActive ? (
+                      <span className="btn btn-sm btn-primary">
+                        {deck?.results.overview.summary.customRangeLabel ?? "自定义区间"}
+                      </span>
+                    ) : null}
                   </div>
                   {customRangeActive ? (
                     <small className="market-scan-field-hint">
-                      当前时间轴已切到自定义区间，按钮保留显示，但页面按区间累计重算。
+                      当前时间轴就是激活中的销量口径；点击当月 / YTD / 近12个月会退出自定义区间。
                     </small>
                   ) : null}
                 </div>

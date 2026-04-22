@@ -41,6 +41,196 @@ def test_query_grouped_time_series_respects_time_range_for_topn(
     assert [item["value"] for item in result["items"]] == [40.0, 0.0]
 
 
+def test_query_grouped_time_series_respects_year_time_range(
+    monkeypatch,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Brand": ["Alpha", "Beta"],
+            "2023": [10.0, 5.0],
+            "2024": [20.0, 8.0],
+            "2025": [30.0, 9.0],
+        }
+    )
+
+    monkeypatch.setattr(
+        query_service.repo,
+        "list_columns",
+        lambda: ["Brand", "2023", "2024", "2025"],
+    )
+    monkeypatch.setattr(
+        query_service.repo,
+        "load_slice",
+        lambda columns, filters, limit, offset: frame.loc[:, columns].copy(),
+    )
+
+    result = query_service.query_grouped_time_series(
+        filters={},
+        grain="year",
+        group_by="Brand",
+        top_n=1,
+        include_others=False,
+        time_range={"start": "2024", "end": "2024"},
+    )
+
+    assert result["rows"] == 1
+    assert result["items"] == [
+        {"time": "2024", "value": 20.0, "series": "Alpha"},
+    ]
+
+
+def test_query_grouped_time_series_returns_awd_share_monthly(
+    monkeypatch,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Driven wheels": ["4x4", "front", "rear"],
+            "2024 Jan": [25.0, 75.0, 0.0],
+            "2024 Feb": [10.0, 0.0, 40.0],
+        }
+    )
+
+    monkeypatch.setattr(
+        query_service.repo,
+        "list_columns",
+        lambda: ["Driven wheels", "2024 Jan", "2024 Feb"],
+    )
+    monkeypatch.setattr(
+        query_service.repo,
+        "load_slice",
+        lambda columns, filters, limit, offset: frame.loc[:, columns].copy(),
+    )
+
+    result = query_service.query_grouped_time_series(
+        filters={},
+        grain="month",
+        group_by="四驱占比",
+        top_n=10,
+        include_others=False,
+        time_range={"start": "2024 Jan", "end": "2024 Feb"},
+    )
+
+    assert result["items"] == [
+        {"time": "2024 Jan", "value": 25.0, "series": "4x4"},
+        {"time": "2024 Feb", "value": 20.0, "series": "4x4"},
+    ]
+
+
+def test_query_grouped_time_series_returns_business_private_share_yearly(
+    monkeypatch,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Registration type": ["Business", "Private", "?"],
+            "2024": [60.0, 40.0, 0.0],
+            "2025": [50.0, 45.0, 5.0],
+        }
+    )
+
+    monkeypatch.setattr(
+        query_service.repo,
+        "list_columns",
+        lambda: ["Registration type", "2024", "2025"],
+    )
+    monkeypatch.setattr(
+        query_service.repo,
+        "load_slice",
+        lambda columns, filters, limit, offset: frame.loc[:, columns].copy(),
+    )
+
+    result = query_service.query_grouped_time_series(
+        filters={},
+        grain="year",
+        group_by="Business/Private 占比",
+        top_n=10,
+        include_others=False,
+        time_range={"start": "2025", "end": "2025"},
+    )
+
+    assert result["items"] == [
+        {"time": "2025", "value": 50.0, "series": "Business"},
+        {"time": "2025", "value": 45.0, "series": "Private"},
+    ]
+
+
+def test_query_grouped_time_series_returns_awd_share_split_by_segment(
+    monkeypatch,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Driven wheels": ["4x4", "front", "4x4", "front"],
+            "细分市场（按车长）": ["SUV A", "SUV A", "SUV A0", "SUV A0"],
+            "2024 Jan": [20.0, 80.0, 30.0, 30.0],
+        }
+    )
+
+    monkeypatch.setattr(
+        query_service.repo,
+        "list_columns",
+        lambda: ["Driven wheels", "细分市场（按车长）", "2024 Jan"],
+    )
+    monkeypatch.setattr(
+        query_service.repo,
+        "load_slice",
+        lambda columns, filters, limit, offset: frame.loc[:, columns].copy(),
+    )
+
+    result = query_service.query_grouped_time_series(
+        filters={},
+        grain="month",
+        group_by="四驱占比",
+        top_n=10,
+        include_others=False,
+        share_split_by="segment",
+        time_range={"start": "2024 Jan", "end": "2024 Jan"},
+    )
+
+    assert result["items"] == [
+        {"time": "2024 Jan", "value": 20.0, "series": "SUV A"},
+        {"time": "2024 Jan", "value": 50.0, "series": "SUV A0"},
+    ]
+
+
+def test_query_grouped_time_series_returns_business_private_share_split_by_powertrain(
+    monkeypatch,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Registration type": ["Business", "Private", "Business", "Private"],
+            "动总规整": ["BEV", "BEV", "PHEV", "PHEV"],
+            "2025": [30.0, 70.0, 80.0, 20.0],
+        }
+    )
+
+    monkeypatch.setattr(
+        query_service.repo,
+        "list_columns",
+        lambda: ["Registration type", "动总规整", "2025"],
+    )
+    monkeypatch.setattr(
+        query_service.repo,
+        "load_slice",
+        lambda columns, filters, limit, offset: frame.loc[:, columns].copy(),
+    )
+
+    result = query_service.query_grouped_time_series(
+        filters={},
+        grain="year",
+        group_by="Business/Private 占比",
+        top_n=10,
+        include_others=False,
+        share_split_by="powertrain",
+        time_range={"start": "2025", "end": "2025"},
+    )
+
+    assert result["items"] == [
+        {"time": "2025", "value": 30.0, "series": "BEV · Business"},
+        {"time": "2025", "value": 70.0, "series": "BEV · Private"},
+        {"time": "2025", "value": 80.0, "series": "PHEV · Business"},
+        {"time": "2025", "value": 20.0, "series": "PHEV · Private"},
+    ]
+
+
 def test_query_advanced_chart_respects_time_range_window(
     monkeypatch,
 ) -> None:

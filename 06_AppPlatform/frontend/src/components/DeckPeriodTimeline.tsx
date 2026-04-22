@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { MarketScanCountryOption, MarketScanPeriodRange } from "../types";
 
@@ -9,6 +9,8 @@ interface DeckPeriodTimelineProps {
   disabled?: boolean;
   label?: string;
 }
+
+const AUTO_COMMIT_DELAY_MS = 1000;
 
 function buildRangeState(
   options: MarketScanCountryOption[],
@@ -30,7 +32,8 @@ function buildRangeState(
     startOption,
     endOption,
     latestOption,
-    isCustom: !(startOption.value === latestOption.value && endOption.value === latestOption.value),
+    isDefaultLatest: startOption.value === latestOption.value && endOption.value === latestOption.value,
+    isCustomRange: startOption.value !== endOption.value,
   };
 }
 
@@ -62,16 +65,45 @@ export function DeckPeriodTimeline({
     return buildRangeState(options, startIndex, endIndex);
   }, [options, value]);
   const [draftRange, setDraftRange] = useState<{ startIndex: number; endIndex: number } | null>(null);
+  const draftRangeRef = useRef<{ startIndex: number; endIndex: number } | null>(null);
 
   useEffect(() => {
     if (expanded || !committedRangeState) {
       return;
     }
-    setDraftRange({
+    const nextDraftRange = {
       startIndex: committedRangeState.startIndex,
       endIndex: committedRangeState.endIndex,
-    });
+    };
+    draftRangeRef.current = nextDraftRange;
+    setDraftRange(nextDraftRange);
   }, [committedRangeState, expanded]);
+
+  useEffect(() => {
+    if (!expanded) {
+      return;
+    }
+    const latestDraftRange = draftRangeRef.current;
+    if (!latestDraftRange || !committedRangeState) {
+      return;
+    }
+    if (
+      latestDraftRange.startIndex === committedRangeState.startIndex
+      && latestDraftRange.endIndex === committedRangeState.endIndex
+    ) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      const draftToCommit = draftRangeRef.current;
+      if (!draftToCommit) {
+        return;
+      }
+      commitRange(draftToCommit.startIndex, draftToCommit.endIndex);
+    }, AUTO_COMMIT_DELAY_MS);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [committedRangeState, draftRange, expanded]);
 
   const rangeState = useMemo(() => {
     if (expanded && draftRange) {
@@ -99,17 +131,20 @@ export function DeckPeriodTimeline({
   };
 
   const updateDraftRange = (nextStartIndex: number, nextEndIndex: number) => {
-    setDraftRange({
+    const nextDraftRange = {
       startIndex: Math.min(nextStartIndex, nextEndIndex),
       endIndex: Math.max(nextStartIndex, nextEndIndex),
-    });
+    };
+    draftRangeRef.current = nextDraftRange;
+    setDraftRange(nextDraftRange);
   };
 
   const commitDraftRange = () => {
-    if (!draftRange) {
+    const latestDraftRange = draftRangeRef.current;
+    if (!latestDraftRange) {
       return;
     }
-    commitRange(draftRange.startIndex, draftRange.endIndex);
+    commitRange(latestDraftRange.startIndex, latestDraftRange.endIndex);
   };
 
   return (
@@ -127,10 +162,12 @@ export function DeckPeriodTimeline({
                 return;
               }
               if (committedRangeState) {
-                setDraftRange({
+                const nextDraftRange = {
                   startIndex: committedRangeState.startIndex,
                   endIndex: committedRangeState.endIndex,
-                });
+                };
+                draftRangeRef.current = nextDraftRange;
+                setDraftRange(nextDraftRange);
               }
               setExpanded(true);
             }}
@@ -149,9 +186,11 @@ export function DeckPeriodTimeline({
             </strong>
             <small>
               {rangeState
-                ? rangeState.isCustom
+                ? rangeState.isCustomRange
                   ? "已切换自定义区间累计"
-                  : "当前默认最新月当月"
+                  : rangeState.isDefaultLatest
+                    ? "当前默认最新月当月"
+                    : "已切换历史月份"
                 : "等待可选月份"}
             </small>
           </div>
@@ -181,7 +220,6 @@ export function DeckPeriodTimeline({
                 onChange={(event) => {
                   updateDraftRange(Number(event.target.value), rangeState.endIndex);
                 }}
-                onPointerUp={commitDraftRange}
                 onKeyUp={commitDraftRange}
                 onBlur={commitDraftRange}
                 disabled={disabled}
@@ -198,7 +236,6 @@ export function DeckPeriodTimeline({
                 onChange={(event) => {
                   updateDraftRange(rangeState.startIndex, Number(event.target.value));
                 }}
-                onPointerUp={commitDraftRange}
                 onKeyUp={commitDraftRange}
                 onBlur={commitDraftRange}
                 disabled={disabled}
@@ -224,11 +261,15 @@ export function DeckPeriodTimeline({
               {" · "}
               全范围 {firstOption.label} — {rangeState.latestOption.label}
             </div>
-            {rangeState.isCustom ? (
+            {!rangeState.isDefaultLatest ? (
               <button
                 type="button"
                 className="btn btn-sm btn-ghost deck-period-timeline-reset"
-                onClick={() => onChange(null)}
+                onClick={() => {
+                  draftRangeRef.current = null;
+                  setDraftRange(null);
+                  onChange(null);
+                }}
                 disabled={disabled}
               >
                 回到默认最新月

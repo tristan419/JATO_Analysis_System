@@ -68,6 +68,7 @@ class GroupedTimeSeriesRequest(BaseModel):
     filters: dict[str, list[str]] = Field(default_factory=dict)
     grain: str = "year"
     group_by: str | None = None
+    share_split_by: str | None = None
     top_n: int = 10
     include_others: bool = True
     time_range: DashboardTimeRange | None = None

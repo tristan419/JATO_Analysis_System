@@ -1184,8 +1184,7 @@ def _normalize_period_range(
     if start_index > end_index:
         start_index, end_index = end_index, start_index
     periods = available_periods[start_index:end_index + 1]
-    latest_period = available_periods[-1]
-    if len(periods) == 1 and periods[0] == latest_period:
+    if len(periods) <= 1:
         return None
     return periods
 
@@ -2558,6 +2557,29 @@ def _build_month_fuel_trend(
     return {"items": items}
 
 
+def _build_custom_range_fuel_trend(
+    frame: pd.DataFrame,
+    fuel_order: list[str],
+    custom_range_periods: list[str],
+) -> dict[str, Any]:
+    items = []
+    for period in custom_range_periods:
+        period_columns = [_period_to_month_column(period)]
+        total = _total_volume(frame, period_columns)
+        fuel_mix = {
+            fuel: float(_total_volume(frame[frame["__powertrain"] == fuel], period_columns))
+            for fuel in fuel_order
+        }
+        items.append(
+            {
+                "label": _short_period_label(period),
+                "totalVolume": total,
+                "fuelMix": fuel_mix,
+            }
+        )
+    return {"items": items}
+
+
 def _build_drilldown_payload(
     frame: pd.DataFrame,
     available_periods: list[str],
@@ -2718,20 +2740,11 @@ def _build_drilldown_payload(
         "rolling12FuelTrend": _build_rolling12_fuel_trend(segment_frame, available_fuels, resolved_period, available_periods),
         "ytdFuelTrend": _build_ytd_fuel_trend(segment_frame, available_fuels, resolved_period, available_periods),
         "customRangeFuelTrend": {
-            "items": [
-                {
-                    "label": (
-                        _short_period_label(custom_range_periods[0])
-                        if custom_range_periods[0] == custom_range_periods[-1]
-                        else f"{_short_period_label(custom_range_periods[0])} - {_short_period_label(custom_range_periods[-1])}"
-                    ),
-                    "totalVolume": segment_total_custom_range,
-                    "fuelMix": {
-                        fuel: float(_total_volume(segment_frame[segment_frame["__powertrain"] == fuel], custom_range_columns))
-                        for fuel in available_fuels
-                    },
-                }
-            ],
+            **_build_custom_range_fuel_trend(
+                segment_frame,
+                available_fuels,
+                custom_range_periods,
+            ),
         } if custom_range_periods else None,
         "fuelPanels": fuel_panel_items,
     }

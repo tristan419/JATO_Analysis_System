@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatDashboardSummaryMetric,
   getDashboardLensSummary,
+  isTimeSeriesShareGroupDimension,
   isDashboardBootstrapping,
 } from "../../pages/dashboardHelpers";
 import type { OverviewResponse } from "../../types";
@@ -42,5 +43,11 @@ describe("dashboardHelpers bootstrapping helpers", () => {
     expect(getDashboardLensSummary("Default powertrain lens", 0, false)).toBe(
       "Default powertrain lens",
     );
+  });
+
+  it("identifies grouped share-only dimensions", () => {
+    expect(isTimeSeriesShareGroupDimension("四驱占比")).toBe(true);
+    expect(isTimeSeriesShareGroupDimension("Business/Private 占比")).toBe(true);
+    expect(isTimeSeriesShareGroupDimension("Make")).toBe(false);
   });
 });

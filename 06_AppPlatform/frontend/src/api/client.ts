@@ -1285,6 +1285,7 @@ export const api = {
     filters: Record<string, string[]>;
     grain: "year" | "month";
     group_by: string | null;
+    share_split_by?: "segment" | "powertrain";
     top_n: number;
     include_others: boolean;
     time_range?: { start: string; end: string };

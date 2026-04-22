@@ -343,6 +343,11 @@ def test_normalize_period_range_returns_custom_interval_and_skips_default_latest
         {"start": "2026-04", "end": "2026-04"},
         "2026-04",
     ) is None
+    assert market_scan_service._normalize_period_range(
+        available_periods,
+        {"start": "2026-02", "end": "2026-02"},
+        "2026-02",
+    ) is None
 
 
 def test_resolve_positioning_sales_window_prefers_custom_range() -> None:

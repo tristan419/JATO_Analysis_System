@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { useState } from "react";
 
@@ -41,14 +41,15 @@ describe("DeckPeriodTimeline", () => {
     expect(screen.getByText("当前默认最新月当月")).toBeTruthy();
   });
 
-  it("lets users pick a custom range and collapse back to latest", () => {
+  it("lets users pick a custom range and collapse back to latest", async () => {
     render(<TestHarness />);
 
     fireEvent.click(screen.getByRole("button", { name: "展开时间轴" }));
     fireEvent.change(screen.getByRole("slider", { name: "开始月份" }), { target: { value: "0" } });
     expect(screen.getByText("Active period: latest")).toBeTruthy();
-    fireEvent.pointerUp(screen.getByRole("slider", { name: "开始月份" }));
-    expect(screen.getByText("Active period: 2026-02~2026-04")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("Active period: 2026-02~2026-04")).toBeTruthy();
+    }, { timeout: 1500 });
 
     fireEvent.click(screen.getByRole("button", { name: "回到默认最新月" }));
     expect(screen.getByText("Active period: latest")).toBeTruthy();
