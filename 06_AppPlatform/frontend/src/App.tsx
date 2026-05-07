@@ -26,6 +26,9 @@ const VersionComparisonPage = lazy(() =>
 const CustomerInsightsPage = lazy(() =>
   import("./pages/CustomerInsightsPage").then((module) => ({ default: module.CustomerInsightsPage }))
 );
+const NordicHevInsightsPage = lazy(() =>
+  import("./pages/NordicHevInsightsPage").then((module) => ({ default: module.NordicHevInsightsPage }))
+);
 const CountryChatPage = lazy(() => import("./pages/CountryChatPage").then((module) => ({ default: module.CountryChatPage })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((module) => ({ default: module.NotFoundPage })));
 const SpecificationPage = lazy(() =>
@@ -72,6 +75,7 @@ const router = createBrowserRouter([
       { path: "positioning-pricing", element: withPageLoader(<PositioningPricingPage />) },
       { path: "version-comparison", element: withPageLoader(<VersionComparisonPage />) },
       { path: "customer-insights", element: withPageLoader(<CustomerInsightsPage />) },
+      { path: "customer-hev", element: withPageLoader(<NordicHevInsightsPage />) },
       { path: "copilot", element: withPageLoader(<CountryChatPage />) },
       { path: "*", element: withPageLoader(<NotFoundPage />) }
     ]

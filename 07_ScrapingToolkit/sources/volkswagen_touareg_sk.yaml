@@ -1,0 +1,94 @@
+# Volkswagen Slovakia Touareg official stock price-list PDF
+# Validated via live dry-run on 2026-04-21: 11 extracted / 11 valid.
+
+source_code: volkswagen_touareg_sk_scrapling
+country: 斯洛伐克
+brand: VOLKSWAGEN
+source_url: https://www.vw.sk/touareg/touareg/cenniky-a-katalogy
+source_type: official_price_list
+price_semantics: base_msrp
+
+extractor_type: pdf_text
+
+profile:
+  url: https://www.vw.sk/dam/files/download/e990a0bc7556d1fe875757484bef278ef724375c/a7ba49dfd6e806a7ed5850886591ad90/47c5a55f-75d5-4deb-ba8f-d9d61fd22f3b/Touareg_sklad-1.4.2026
+  default_currency: EUR
+  default_tax_included: true
+  default_price_label: Cenníková cena s DPH
+  fixed_model: TOUAREG
+  fixed_jato_model: TOUAREG
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.84
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_stock_cennik
+    note: Base MSRP is reconstructed from the official promo line plus the same-row 8000 EUR stock bonus documented in the PDF.
+  entry_patterns:
+    - pattern: 'RC81\*\s+Limited\s+Bonus\s+Akciová\s+cena1\s+\*4JL1\s+-8\s+000\s+€\s+(?P<price>\d{1,3}(?:\s\d{3})+)\s+€'
+      official_trim: Limited
+      official_powertrain: 3.0 V6 TDI 8-st. automatická / 4x4 170 kW (231 k)
+      jato_powertrain: ICE
+      price_delta: 8000
+    - pattern: 'RC83\*\s+Elegance\s+Limited\s+Bonus\s+Akciová\s+cena1\s+\*4JL1\s+-8\s+000\s+€\s+(?P<price>\d{1,3}(?:\s\d{3})+)\s+€'
+      official_trim: Elegance Limited
+      official_powertrain: 3.0 V6 TDI 8-st. automatická / 4x4 170 kW (231 k)
+      jato_powertrain: ICE
+      price_delta: 8000
+    - pattern: 'RC83\*\s+Elegance\s+Limited\s+Bonus\s+Akciová\s+cena1\s+\*4JL1\s+-8\s+000\s+€\s+\d{1,3}(?:\s\d{3})+\s+€\s+\*7JL1\s+-8\s+000\s+€\s+(?P<price>\d{1,3}(?:\s\d{3})+)\s+€'
+      official_trim: Elegance Limited
+      official_powertrain: 3.0 V6 TDI 8-st. automatická / 4x4 210 kW (286 k)
+      jato_powertrain: ICE
+      price_delta: 8000
+    - pattern: 'RC83\*\s+Elegance\s+Limited\s+Bonus\s+Akciová\s+cena1\s+\*4JL1\s+-8\s+000\s+€\s+\d{1,3}(?:\s\d{3})+\s+€\s+\*7JL1\s+-8\s+000\s+€\s+\d{1,3}(?:\s\d{3})+\s+€\s+\*YJL1.*?-8\s+000\s+€\s+(?P<price>\d{1,3}(?:\s\d{3})+)\s+€'
+      official_trim: Elegance Limited
+      official_powertrain: 3.0 V6 TSI eHybrid 8-st. automatická / 4x4 280 kW (381 k)
+      jato_powertrain: PHEV
+      price_delta: 8000
+    - pattern: 'RC85\*\s+R-Line\s+Limited\s+Bonus\s+Akciová\s+cena1\s+\*4JL1\s+-8\s+000\s+€\s+(?P<price>\d{1,3}(?:\s\d{3})+)\s+€'
+      official_trim: R-Line Limited
+      official_powertrain: 3.0 V6 TDI 8-st. automatická / 4x4 170 kW (231 k)
+      jato_powertrain: ICE
+      price_delta: 8000
+    - pattern: 'RC85\*\s+R-Line\s+Limited\s+Bonus\s+Akciová\s+cena1\s+\*4JL1\s+-8\s+000\s+€\s+\d{1,3}(?:\s\d{3})+\s+€\s+\*7JL1\s+-8\s+000\s+€\s+(?P<price>\d{1,3}(?:\s\d{3})+)\s+€'
+      official_trim: R-Line Limited
+      official_powertrain: 3.0 V6 TDI 8-st. automatická / 4x4 210 kW (286 k)
+      jato_powertrain: ICE
+      price_delta: 8000
+    - pattern: 'RC83\*\s+Limited\s+Premium\s+Bonus\s+Akciová\s+cena1\s+\*4JLP\s+-8\s+000\s+€\s+(?P<price>\d{1,3}(?:\s\d{3})+)\s+€'
+      official_trim: Limited Premium
+      official_powertrain: 3.0 V6 TDI 8-st. automatická / 4x4 170 kW (231 k)
+      jato_powertrain: ICE
+      price_delta: 8000
+    - pattern: 'RC83\*\s+Limited\s+Premium\s+Bonus\s+Akciová\s+cena1\s+\*4JLP\s+-8\s+000\s+€\s+\d{1,3}(?:\s\d{3})+\s+€\s+\*7JLP\s+-8\s+000\s+€\s+(?P<price>\d{1,3}(?:\s\d{3})+)\s+€'
+      official_trim: Limited Premium
+      official_powertrain: 3.0 V6 TDI 8-st. automatická / 4x4 210 kW (286 k)
+      jato_powertrain: ICE
+      price_delta: 8000
+    - pattern: 'RC83\*\s+Limited\s+Premium\s+Bonus\s+Akciová\s+cena1\s+\*4JLP\s+-8\s+000\s+€\s+\d{1,3}(?:\s\d{3})+\s+€\s+\*7JLP\s+-8\s+000\s+€\s+\d{1,3}(?:\s\d{3})+\s+€\s+\*YJLP.*?-8\s+000\s+€\s+(?P<price>\d{1,3}(?:\s\d{3})+)\s+€'
+      official_trim: Limited Premium
+      official_powertrain: 3.0 V6 TSI eHybrid 8-st. automatická / 4x4 280 kW (381 k)
+      jato_powertrain: PHEV
+      price_delta: 8000
+    - pattern: 'RC85\*\s+R-Line\s+Final\s+Edition\s+Bonus\s+Akciová\s+cena1\s+\*4JF1\s+-8\s+000\s+€\s+(?P<price>\d{1,3}(?:\s\d{3})+)\s+€'
+      official_trim: R-Line Final Edition
+      official_powertrain: 3.0 V6 TDI 8-st. automatická / 4x4 170 kW (231 k)
+      jato_powertrain: ICE
+      price_delta: 8000
+    - pattern: 'RC85\*\s+R-Line\s+Final\s+Edition\s+Bonus\s+Akciová\s+cena1\s+\*4JF1\s+-8\s+000\s+€\s+\d{1,3}(?:\s\d{3})+\s+€\s+\*7JF1\s+-8\s+000\s+€\s+(?P<price>\d{1,3}(?:\s\d{3})+)\s+€'
+      official_trim: R-Line Final Edition
+      official_powertrain: 3.0 V6 TDI 8-st. automatická / 4x4 210 kW (286 k)
+      jato_powertrain: ICE
+      price_delta: 8000
+
+schedule:
+  frequency: manual_only
+  run_window_start: "00:00"
+  run_window_end: "05:00"
+  preferred_weekday: monday
+
+notes: Official Touareg Slovakia stock cennik PDF linked from the public
+  `cenniky-a-katalogy` page. The PDF exposes current promo prices plus a fixed
+  8000 EUR stock bonus; this source reconstructs the matching cennik/base price
+  for the listed stock configurations and keeps the public landing page as the
+  visible source URL.

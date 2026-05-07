@@ -24,6 +24,7 @@ class CssMapping:
     currency: str | None = None
     availability: str | None = None
     exclude_if_selector: str | None = None
+    include_if_text_contains: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1656,6 +1657,23 @@ class ScraplingExtractor(BaseExtractor):
             price_raw = el.css(css.price).get() if css.price else ""
             price_text = _HTML_TAG_RE.sub("", price_raw).strip() if price_raw else ""
             stripped_price_text = (price_text or "").strip()
+            if css.include_if_text_contains:
+                container_search_text = _normalize_space(
+                    " ".join(
+                        part
+                        for part in (
+                            model_text,
+                            trim_text,
+                            stripped_price_text,
+                        )
+                        if part
+                    )
+                ).lower()
+                if not any(
+                    keyword.lower() in container_search_text
+                    for keyword in css.include_if_text_contains
+                ):
+                    continue
             if any(
                 stripped_price_text.startswith(prefix)
                 for prefix in p.exclude_price_prefixes

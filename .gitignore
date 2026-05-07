@@ -15,14 +15,15 @@
 # local environments
 .venv/
 venv/
+.claude/
 
 # macOS artifacts
 .DS_Store
 
 # local script logs
 03_Scripts/logs/
+tmp/
 
 # local vector DB artifacts
 04_Processed_data/chroma_db/
 .gitnexus
-.claude/

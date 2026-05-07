@@ -26,8 +26,14 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - stdlib fallback stays exercised
     lxml_html = None
 
+try:
+    from trafilatura import extract as trafilatura_extract
+except ModuleNotFoundError:  # pragma: no cover - dependency remains optional at import time
+    trafilatura_extract = None
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _WHITESPACE_RE = re.compile(r"\s+")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\s*[;\n]+\s*")
 _NEGATIVE_LINK_HINTS = (
     "login",
     "signin",
@@ -57,10 +63,110 @@ _TEXT_TARGET_XPATH = (
     " | //main//*[self::h1 or self::h2 or self::h3 or self::p or self::li or self::blockquote]/text()"
     " | //body//*[self::h1 or self::h2 or self::h3 or self::p or self::li or self::blockquote]/text()"
 )
+_TEXT_UNIT_XPATH = (
+    "//article//*[self::p or self::li or self::blockquote]"
+    " | //main//*[self::p or self::li or self::blockquote]"
+    " | //body//*[self::p or self::li or self::blockquote]"
+)
+_COMMENT_UNIT_HINTS = ("comment", "reply", "post", "message", "forum", "discussion")
 
 
 def _normalize_space(value: Any) -> str:
     return _WHITESPACE_RE.sub(" ", str(value or "")).strip()
+
+
+def _text_sentences(text: str) -> list[str]:
+    return [segment.strip() for segment in _SENTENCE_SPLIT_RE.split(text) if segment.strip()]
+
+
+def _build_sentence_window_units(text: str) -> list[str]:
+    units: list[str] = []
+    current: list[str] = []
+    current_chars = 0
+    for sentence in _text_sentences(text):
+        normalized = _normalize_space(sentence)
+        if not normalized:
+            continue
+        current.append(normalized)
+        current_chars += len(normalized)
+        joined = " ".join(current)
+        if len(current) >= 2 or current_chars >= 260:
+            units.append(joined)
+            current = []
+            current_chars = 0
+    if current:
+        units.append(" ".join(current))
+    return units
+
+
+def _extract_content_units_from_tree(tree: Any, *, page_url: str) -> list[dict[str, Any]]:
+    units: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, element in enumerate(tree.xpath(_TEXT_UNIT_XPATH), start=1):
+        text = _normalize_space(" ".join(element.itertext()))
+        if not text:
+            continue
+        normalized_key = text.casefold()
+        if normalized_key in seen:
+            continue
+        seen.add(normalized_key)
+        container_tokens = " ".join(
+            str(value or "").strip().lower()
+            for value in element.xpath(
+                "ancestor-or-self::*[@class or @id]/@class | ancestor-or-self::*[@class or @id]/@id"
+            )
+            if str(value or "").strip()
+        )
+        if "reply" in container_tokens:
+            unit_type = "reply_post"
+        elif "comment" in container_tokens:
+            unit_type = "comment"
+        elif any(hint in container_tokens for hint in _COMMENT_UNIT_HINTS):
+            unit_type = "discussion_post"
+        elif getattr(element, "tag", "") == "blockquote":
+            unit_type = "quote_block"
+        elif getattr(element, "tag", "") == "li":
+            unit_type = "list_item"
+        else:
+            unit_type = "content_block"
+        author = _normalize_space(
+            element.xpath(
+                "string((ancestor-or-self::*[contains(@class,'comment') or contains(@class,'reply') or contains(@class,'post')][1]"
+                "//*[contains(@class,'author') or contains(@class,'user') or contains(@class,'name')][1])[1])"
+            )
+        )
+        published_at = _normalize_space(
+            element.xpath(
+                "string((ancestor-or-self::*[contains(@class,'comment') or contains(@class,'reply') or contains(@class,'post')][1]//time[1]/@datetime)[1])"
+            )
+        )
+        units.append(
+            {
+                "unitId": f"{page_url}#unit-{index}",
+                "unitType": unit_type,
+                "unitSource": "fetch_lxml_block",
+                "text": text,
+                "author": author or None,
+                "publishedAt": published_at or None,
+            }
+        )
+    return units
+
+
+def _derive_content_units_from_text(text: str, *, page_url: str) -> list[dict[str, Any]]:
+    units: list[dict[str, Any]] = []
+    for index, unit_text in enumerate(_build_sentence_window_units(text), start=1):
+        units.append(
+            {
+                "unitId": f"{page_url}#derived-{index}",
+                "unitType": "sentence_window",
+                "unitSource": "fetch_sentence_window",
+                "text": unit_text,
+                "author": None,
+                "publishedAt": None,
+            }
+        )
+    return units
 
 
 def _normalize_country_filter(values: list[str] | None) -> set[str] | None:
@@ -297,12 +403,45 @@ def _extract_page_fields(page_url: str, html_text: str) -> dict[str, Any]:
             tree.xpath("string(//meta[@name='description']/@content)")
             or tree.xpath("string(//meta[@property='og:description']/@content)")
         )
-        text_nodes = [
+        fallback_text_nodes = [
             _normalize_space(node)
             for node in tree.xpath(_TEXT_TARGET_XPATH)
             if _normalize_space(node)
         ]
-        text = _normalize_space(" ".join(text_nodes))
+        fallback_text = _normalize_space(" ".join(fallback_text_nodes))
+        trafilatura_text = None
+        if trafilatura_extract is not None:
+            trafilatura_text = _normalize_space(
+                trafilatura_extract(
+                    html_text,
+                    url=page_url,
+                    fast=True,
+                    favor_precision=True,
+                    include_comments=True,
+                    include_tables=False,
+                    deduplicate=True,
+                    output_format="txt",
+                ),
+            )
+        text = fallback_text
+        text_method = "lxml_xpath"
+        if trafilatura_text:
+            trafilatura_word_count = len(trafilatura_text.split())
+            minimum_viable_length = max(80, min(200, len(fallback_text) // 4))
+            if (
+                len(trafilatura_text) >= 120
+                or trafilatura_word_count >= 20
+                or (
+                    trafilatura_word_count >= 10
+                    and len(trafilatura_text) >= minimum_viable_length
+                )
+                or not fallback_text
+            ):
+                text = trafilatura_text
+                text_method = "trafilatura"
+        content_units = _extract_content_units_from_tree(tree, page_url=page_url)
+        if not content_units:
+            content_units = _derive_content_units_from_text(text, page_url=page_url)
         links = []
         for element in tree.xpath("//a[@href]"):
             href = _normalize_space(element.attrib.get("href"))
@@ -320,11 +459,16 @@ def _extract_page_fields(page_url: str, html_text: str) -> dict[str, Any]:
             "publishedAt": published_at or None,
             "summary": summary or None,
             "text": text,
+            "textExtraction": {
+                "method": text_method,
+            },
+            "contentUnits": content_units,
             "links": links,
         }
 
     parser = _FallbackPageParser()
     parser.feed(html_text)
+    parser_text = _normalize_space(" ".join(parser.text_parts))
     return {
         "url": page_url,
         "title": _normalize_space(" ".join(parser.title_parts)),
@@ -338,7 +482,11 @@ def _extract_page_fields(page_url: str, html_text: str) -> dict[str, Any]:
             or parser.meta.get("og:description")
             or None
         ),
-        "text": _normalize_space(" ".join(parser.text_parts)),
+        "text": parser_text,
+        "textExtraction": {
+            "method": "html_parser",
+        },
+        "contentUnits": _derive_content_units_from_text(parser_text, page_url=page_url),
         "links": parser.links,
     }
 
@@ -505,6 +653,8 @@ def collect_source_documents(
                 "publishedAt": page.get("publishedAt"),
                 "summary": page.get("summary"),
                 "rawText": raw_text,
+                "textExtraction": page.get("textExtraction"),
+                "contentUnits": list(page.get("contentUnits") or []),
                 "excerpt": raw_text[:400],
                 "collectedAt": collected_at,
             }
@@ -528,6 +678,8 @@ def collect_source_documents(
                     "publishedAt": landing_page.get("publishedAt"),
                     "summary": landing_page.get("summary"),
                     "rawText": landing_text,
+                    "textExtraction": landing_page.get("textExtraction"),
+                    "contentUnits": list(landing_page.get("contentUnits") or []),
                     "excerpt": landing_text[:400],
                     "collectedAt": collected_at,
                 }
@@ -560,6 +712,7 @@ def collect_source_documents(
             "title": landing_page.get("title"),
             "publishedAt": landing_page.get("publishedAt"),
             "summary": landing_page.get("summary"),
+            "textExtraction": landing_page.get("textExtraction"),
             "candidateCount": len(candidates),
         },
         "documentCount": len(reviewed_documents),

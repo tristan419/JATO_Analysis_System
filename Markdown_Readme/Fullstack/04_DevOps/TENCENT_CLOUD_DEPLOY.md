@@ -146,6 +146,8 @@ bash 03_Scripts/tencent_fullstack_bootstrap.sh
 - 创建 `.venv`
 - 渲染 `/etc/jato-fullstack/backend.env`
 - 安装并启用 `jato-fullstack-backend@8000`
+- 把 `07_ScrapingToolkit` 安装进服务器 `.venv`
+- 同步并启用抓取 timer：country news、VOC、MSRP
 - 安装前端依赖并构建 `dist`
 - 安装 nginx 配置并重启服务
 - 做本地健康检查
@@ -185,11 +187,38 @@ sudo nano /etc/jato-fullstack/msrp.env
 
 这个文件主要放三类变量：
 
-- 任务模式：`JATO_MSRP_MODE=dryrun` 或 `ingest`
+- 任务模式：手工运行时可用 `JATO_MSRP_MODE=dryrun` 或 `ingest`；线上 timer 会按实例名覆盖成 nightly dry-run / weekly ingest
 - 调度节流：`JATO_MSRP_COUNTRIES`、`JATO_MSRP_PAUSE_SECONDS`、`JATO_MSRP_STOP_ON_FAILURE`
 - 可选诊断密钥：`NVIDIA_API_KEY`、`NVAPI_KEY`、`HF_TOKEN`
 
 `03_Scripts/run_msrp_low_concurrency.sh` 会先读取 `/etc/jato-fullstack/backend.env`，再读取 `/etc/jato-fullstack/msrp.env`。这意味着常规 ingest 场景下可以直接复用后端的 `APP_AUTH_TOKEN`，不需要再复制一份。
+
+## 4.2 Country News 任务环境变量
+
+Country news 继续保持 **DB-first** 目标形态：线上定时任务写 PostgreSQL snapshot，不要求保留 `04_Processed_data/news` 原始目录。
+
+```bash
+sudo cp 03_Scripts/deploy/systemd/jato-country-news.env.example /etc/jato-fullstack/country-news.env
+sudo nano /etc/jato-fullstack/country-news.env
+```
+
+默认 nightly timer 会在 `23:15` 触发 `jato-country-news-sync.service`。
+
+## 4.3 VOC 任务环境变量
+
+VOC 按当前 VOC 文档执行，线上目标形态是：
+
+1. 保留 `04_Processed_data/voc/<country>/raw/*.json`
+2. 继续产出 `enriched/customer_insight_signals.json`
+3. 继续产出 `deck/customer_insight_deck.json`
+4. 同步 raw layer 到 PostgreSQL staging（`ops.voc_source_runs` / `ops.voc_raw_documents`）
+
+```bash
+sudo cp 03_Scripts/deploy/systemd/jato-voc.env.example /etc/jato-fullstack/voc.env
+sudo nano /etc/jato-fullstack/voc.env
+```
+
+默认 nightly timer 会在 `01:45` 触发 `jato-voc-forum-sync.service`。
 
 ## 5. 安装 systemd 后端服务
 
@@ -233,6 +262,19 @@ bash 03_Scripts/deploy_fullstack_server.sh
 - 脚本会先清掉已知白名单内的 untracked 脏树，再继续 git / build / restart；这样不会再因为 refresh backup 或临时 Markdown 残留把远端工作树弄脏
 
 如果你只是想重新部署代码，不想重复初始化，直接运行这一节的 `03_Scripts/deploy_fullstack_server.sh` 即可。
+
+## 6.1 默认 nightly 抓取窗口
+
+当前腾讯云默认把三条抓取都放进 `23:00-07:00` 窗口：
+
+| Timer | 默认时间 | 目标形态 |
+|------|------|------|
+| `jato-country-news-sync.timer` | 每日 `23:15` | DB-first country digest snapshot |
+| `jato-voc-forum-sync.timer` | 每日 `01:45` | raw + enriched + deck artifact，并同步 raw 到 PG staging |
+| `jato-msrp-dryrun.timer` | 每日 `03:30` | 低并发 nightly dry-run |
+| `jato-msrp-ingest.timer` | 每周六 `05:30` | 低并发正式 ingest |
+
+部署脚本每次都会把这些 unit / timer 同步到 `/etc/systemd/system`，并重启 timer 以应用新的时间表。
 
 ## 7. 安装 nginx
 

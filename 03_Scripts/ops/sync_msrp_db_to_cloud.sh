@@ -7,7 +7,8 @@ SSH_ALIAS="${SSH_ALIAS:-tencent-cloud}"
 REMOTE_BACKEND_ENV_FILE="${REMOTE_BACKEND_ENV_FILE:-/etc/jato-fullstack/backend.env}"
 REMOTE_BACKEND_SERVICE="${REMOTE_BACKEND_SERVICE:-jato-fullstack-backend@8000}"
 REMOTE_BACKEND_PORT="${REMOTE_BACKEND_PORT:-}"
-LOCAL_DATABASE_URL="${LOCAL_DATABASE_URL:-${APP_DATABASE_URL:-postgresql+psycopg://postgres:postgres@127.0.0.1:5432/jato_app}}"
+LOCAL_POSTGRES_RUNTIME_FILE="${LOCAL_POSTGRES_RUNTIME_FILE:-$REPO_DIR/06_AppPlatform/.runtime/postgres.env}"
+LOCAL_DATABASE_URL="${LOCAL_DATABASE_URL:-${APP_DATABASE_URL:-}}"
 PG_DUMP_BIN="${PG_DUMP_BIN:-pg_dump}"
 if [[ -z "${PSQL_BIN:-}" ]]; then
   if [[ "$PG_DUMP_BIN" == */pg_dump ]]; then
@@ -26,6 +27,32 @@ log_step() { printf "\n${CYAN}[STEP]${NC} %s\n" "$1"; }
 log_ok() { printf "${GREEN}  ✅ %s${NC}\n" "$1"; }
 log_fail() { printf "${RED}  ❌ %s${NC}\n" "$1"; }
 log_info() { printf '  %s\n' "$1"; }
+
+resolve_local_database_url() {
+  if [[ -n "$LOCAL_DATABASE_URL" ]]; then
+    log_info "本地数据库来源: 显式环境变量"
+    return 0
+  fi
+
+  if [[ -f "$LOCAL_POSTGRES_RUNTIME_FILE" ]]; then
+    local runtime_database_url=""
+    runtime_database_url="$(
+      (
+        # shellcheck disable=SC1090
+        source "$LOCAL_POSTGRES_RUNTIME_FILE"
+        printf '%s' "${APP_DATABASE_URL:-}"
+      )
+    )"
+    if [[ -n "$runtime_database_url" ]]; then
+      LOCAL_DATABASE_URL="$runtime_database_url"
+      log_info "本地数据库来源: $LOCAL_POSTGRES_RUNTIME_FILE"
+      return 0
+    fi
+  fi
+
+  LOCAL_DATABASE_URL="postgresql+psycopg://postgres:postgres@127.0.0.1:5432/jato_app"
+  log_info "本地数据库来源: fallback 5432 default"
+}
 
 normalize_pgtool_url() {
   local value="$1"
@@ -92,6 +119,7 @@ if [[ -z "$REMOTE_BACKEND_PORT" && "$REMOTE_BACKEND_SERVICE" =~ @([0-9]+)$ ]]; t
   REMOTE_BACKEND_PORT="${BASH_REMATCH[1]}"
 fi
 REMOTE_BACKEND_PORT="${REMOTE_BACKEND_PORT:-8000}"
+resolve_local_database_url
 LOCAL_PGTOOLS_URL="$(normalize_pgtool_url "$LOCAL_DATABASE_URL")"
 
 if ! command -v "$PG_DUMP_BIN" >/dev/null 2>&1; then

@@ -463,6 +463,8 @@ export interface MarketScanOverviewTrendItem {
   label: string;
   totalVolume: number;
   fuelMix: Record<string, number>;
+  suvTotalVolume?: number;
+  suvFuelMix?: Record<string, number>;
   mom: MarketScanDelta;
   yoy: MarketScanDelta;
 }
@@ -695,6 +697,10 @@ export interface PositioningPricingPage {
   subtitle: string;
   summaryText: string;
   metrics: PositioningPricingMetric[];
+  lengthRange: {
+    min: number;
+    max: number;
+  };
   priceBands: {
     bandSize: number;
     range: {
@@ -759,11 +765,13 @@ export interface PositioningPricingDeckRequest {
   top_n?: number;
   msrp_min?: number | null;
   msrp_max?: number | null;
+  length_min?: number | null;
+  length_max?: number | null;
   price_band_size?: number | null;
 }
 
 export type PositioningPricingSalesMode = "month" | "ytd" | "rolling12";
-export type PositioningPricingPageKey = "overview" | "suvA0" | "suvA" | "suvBPlus";
+export type PositioningPricingPageKey = "overview" | "suvAll" | "suvA0" | "suvA" | "suvBPlus";
 
 export interface VersionComparisonBubbleItem {
   model: string;

@@ -12,7 +12,8 @@ export const PAGE_NAV_ITEMS: PageNavigationItem[] = [
   { to: "/positioning-pricing", code: "08", label: "Pricing", sublabel: "定位定价" },
   { to: "/version-comparison", code: "09", label: "Compare", sublabel: "版型对比" },
   { to: "/customer-insights", code: "10", label: "Customer", sublabel: "看客户" },
-  { to: "/copilot", code: "11", label: "Copilot", sublabel: "国家助手" },
+  { to: "/customer-hev", code: "11", label: "Hybrid", sublabel: "看HEV" },
+  { to: "/copilot", code: "12", label: "Copilot", sublabel: "国家助手" },
 ];
 
 function matchesNavPath(pathname: string, path: string): boolean {

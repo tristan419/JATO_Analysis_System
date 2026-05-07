@@ -1,11 +1,11 @@
 [Unit]
-Description=JATO Country News Sync daily timer
+Description=JATO Country News Sync nightly timer
 
 [Timer]
-# Run shortly after midnight local time every day.
-OnCalendar=*-*-* 00:15:00
+# Keep all three production scraping jobs inside the 23:00-07:00 window.
+OnCalendar=*-*-* 23:15:00
 Persistent=true
-RandomizedDelaySec=120
+RandomizedDelaySec=180
 
 [Install]
 WantedBy=timers.target

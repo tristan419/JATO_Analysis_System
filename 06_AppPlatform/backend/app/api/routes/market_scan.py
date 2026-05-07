@@ -8,7 +8,10 @@ from app.api.schemas import (
     VersionComparisonDeckRequest,
 )
 from app.core.security import require_min_role
-from app.services.customer_insight_service import query_nordic_customer_deck
+from app.services.customer_insight_service import (
+    query_nordic_customer_deck,
+    query_nordic_hev_customer_deck,
+)
 from app.services.market_scan_service import (
     query_market_scan_deck,
     query_positioning_pricing_deck,
@@ -50,6 +53,8 @@ def positioning_pricing_deck(
         top_n=payload.top_n,
         msrp_min=payload.msrp_min,
         msrp_max=payload.msrp_max,
+        length_min=payload.length_min,
+        length_max=payload.length_max,
         price_band_size=payload.price_band_size,
     )
 
@@ -80,3 +85,12 @@ def nordic_customer_deck(
     _=Depends(require_min_role("viewer")),
 ) -> dict:
     return query_nordic_customer_deck(mode=mode, country_codes=countries)
+
+
+@router.get("/nordic-hev-customer-deck")
+def nordic_hev_customer_deck(
+    mode: Literal["benchmark", "forum_live"] = "benchmark",
+    countries: list[str] | None = Query(default=None),
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    return query_nordic_hev_customer_deck(mode=mode, country_codes=countries)

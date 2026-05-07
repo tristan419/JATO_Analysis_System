@@ -21,6 +21,18 @@ That boundary is intentional.
 2. Give engineering config, MSRP, and review flows transactional storage.
 3. Avoid forcing all analytical history into a relational database.
 
+## 2.1 Current app-facing PostgreSQL domains
+
+The current local PostgreSQL setup now carries these mutable business domains:
+
+1. `engineering.*`: project/import/variant normalization tables.
+2. `msrp.*`: source registration, scrape batches, observations, current prices, price history, active JATO links.
+3. `review.*`: review cases, review decisions, dated overrides.
+4. `ops.country_news_*`: app-facing country news article + digest snapshots.
+5. `ops.voc_*`: VOC raw source-run + raw-document staging.
+
+That means local PostgreSQL is now the app-facing operational store for MSRP / review / news / VOC, while Parquet remains the analytical store and file artifacts remain the large-object source of truth.
+
 ## 3. Backend Dependencies
 
 The backend now relies on:
@@ -83,6 +95,8 @@ Current revisions now extend through:
 4. `20260411_0004` ~ `20260412_0007`: FX normalization, structured variant fields, override feedback, price history refinements
 5. `20260415_0008`: country news cache
 6. `20260417_0009` ~ `20260417_0011`: EVKX variant business key, MSRP source tier + JATO links, engineering market overrides
+7. `20260419_0012`: news auto-review fields + VOC staging tables
+8. `20260421_0013`: database guardrails for temporal overlap, review-case consistency, polymorphic feature values, and missing FK indexes
 
 ## 7. Start Backend
 

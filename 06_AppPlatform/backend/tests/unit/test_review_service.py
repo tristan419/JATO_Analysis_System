@@ -257,3 +257,155 @@ def test_create_review_decision_persists_link_and_mismatch_category(
     assert captured["link_payload"]["confidence"] == 99
     assert observation.match_reason_json["mismatchCategory"] == "naming_mismatch"
     assert payload["link"]["officialTrim"] == "Ultra Dark"
+
+
+def test_auto_resolve_review_cases_approves_link_backed_open_cases(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 4, 21, 0, 30, tzinfo=timezone.utc)
+    review_case_id = uuid4()
+    observation_id = uuid4()
+    source_id = uuid4()
+    review_case = SimpleNamespace(
+        review_case_id=review_case_id,
+        observation_id=observation_id,
+        review_status="open",
+        current_assignee=None,
+        official_model="XC60",
+        official_trim="Ultra",
+        official_edition=None,
+        official_powertrain="PHEV",
+        jato_powertrain="PHEV",
+        updated_at_utc=now,
+    )
+    observation = SimpleNamespace(
+        observation_id=observation_id,
+        source_id=source_id,
+        country="瑞典",
+        brand="Volvo",
+        jato_model="XC60",
+        jato_trim="Ultra",
+        jato_powertrain="PHEV",
+        official_model="XC60",
+        official_trim="Ultra",
+        official_edition=None,
+        official_powertrain="PHEV",
+        match_status="review_required",
+        match_reason_json={},
+        updated_at_utc=now,
+    )
+    source = SimpleNamespace(
+        source_id=source_id,
+        source_code="volvo_xc60_se",
+        source_url="https://example.test/source-registry",
+        source_type="brand_site",
+        extractor_name="scrapling",
+        extractor_version="v1",
+    )
+    current_price = SimpleNamespace(
+        current_price_id=uuid4(),
+        effective_observation_id=observation_id,
+    )
+    added_decisions = []
+
+    def _apply_mapping(_session, incoming_observation):
+        incoming_observation.official_trim = "Ultra Dark"
+        incoming_observation.match_status = "auto_accepted"
+        return {
+            "resolverKind": "jato_link",
+            "linkId": "link-1",
+            "overrideId": None,
+        }
+
+    monkeypatch.setattr(
+        review_service.repo,
+        "list_review_cases",
+        lambda *args, **kwargs: [review_case],
+    )
+    monkeypatch.setattr(
+        review_service.msrp_repository,
+        "list_observations_by_ids",
+        lambda *args, **kwargs: [observation],
+    )
+    monkeypatch.setattr(
+        review_service.msrp_repository,
+        "list_sources_by_ids",
+        lambda *args, **kwargs: [source],
+    )
+    monkeypatch.setattr(
+        review_service,
+        "apply_canonical_mapping",
+        _apply_mapping,
+    )
+    monkeypatch.setattr(review_service, "_utc_now", lambda: now)
+    monkeypatch.setattr(
+        review_service,
+        "materialize_current_price_from_observation",
+        lambda *args, **kwargs: current_price,
+    )
+    monkeypatch.setattr(
+        review_service.repo,
+        "add_review_decision",
+        lambda _session, decision: added_decisions.append(decision),
+    )
+    monkeypatch.setattr(
+        review_service,
+        "_commit_or_conflict",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        review_service,
+        "review_case_payload",
+        lambda case, obs, src: {
+            "reviewCaseId": str(case.review_case_id),
+            "observationId": str(obs.observation_id),
+            "sourceId": str(src.source_id),
+        },
+    )
+    monkeypatch.setattr(
+        review_service,
+        "review_decision_payload",
+        lambda decision: {
+            "decision": decision.decision,
+            "note": decision.note,
+        },
+    )
+    monkeypatch.setattr(
+        review_service,
+        "current_price_payload",
+        lambda price, src: {
+            "currentPriceId": str(price.current_price_id),
+            "sourceId": str(src.source_id),
+        },
+    )
+
+    payload = review_service.auto_resolve_review_cases(
+        None,
+        {
+            "decided_by": "msrp-auto-review",
+            "country": "Sweden",
+            "brand": "Volvo",
+            "limit": 100,
+        },
+    )
+
+    assert review_case.review_status == "approved"
+    assert review_case.current_assignee == "msrp-auto-review"
+    assert observation.match_status == "auto_accepted"
+    assert observation.match_reason_json["autoReviewDecision"] == {
+        "decision": "approve",
+        "decidedBy": "msrp-auto-review",
+        "decidedAtUtc": now.isoformat(),
+        "resolverKind": "jato_link",
+        "linkId": "link-1",
+        "overrideId": None,
+        "note": "Auto-approved via active MSRP link",
+    }
+    assert len(added_decisions) == 1
+    assert added_decisions[0].decision == "approve"
+    assert payload["candidateCases"] == 1
+    assert payload["autoApprovedCount"] == 1
+    assert payload["linkAppliedCount"] == 1
+    assert payload["overrideAppliedCount"] == 0
+    assert payload["unresolvedCount"] == 0
+    assert payload["missingObservationCount"] == 0

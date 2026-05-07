@@ -175,12 +175,20 @@ jato-voc-fetch --batch-files voc_sources/batch_a.yaml --output tmp/voc_raw_summa
 - 按 `site_type`（forum / ev_community / media_comments ...）挑选同站 article / thread 候选链接
 - 再抓这些公开页面正文，统一写入 `04_Processed_data/voc/<country>/raw/<source_code>.json`
 
+正文抽取现在改成 **Trafilatura-first + safe fallback**：
+
+- 优先用 `trafilatura.extract(...)` 做 main-text / boilerplate removal
+- 如果抽出来的正文过薄，自动退回现有 `lxml` XPath 提取
+- raw artifact 会额外写 `textExtraction.method`，方便回看每篇文档用了哪条抽取路径
+
 第一版输出以 raw layer 为主，默认带：
 
 - source 元数据
 - taxonomy / collection strategy
 - landing page 摘要
 - 文档级 `url` / `title` / `publishedAt` / `rawText` / `excerpt`
+- 文档级 `textExtraction.method`
+- 文档级 `contentUnits`（`unitId` / `unitType` / `unitSource` / `text` / `author?` / `publishedAt?`）
 - 抓取错误列表（单个 source 失败不会拖垮整批）
 
 当前 `VOC raw` 也开始附带第一版 **auto review**：
@@ -192,7 +200,126 @@ jato-voc-fetch --batch-files voc_sources/batch_a.yaml --output tmp/voc_raw_summa
   - `medium` → `candidate_publish`
   - `low` → `hold_raw`
 
-这一步先解决“有标准化 raw capture 可落盘”的问题；更细的 thread pagination、comment DOM 解析、作者字段、翻译和 sentiment enrichment，下一层再继续补。
+fetch 层现在又继续往前补了一步：**把 fetch-time content units 直接落进 raw artifact**。
+
+- 优先从页面 DOM 里保留 `p / li / blockquote` 这类 block 作为 `contentUnits`
+- 对 comment / reply / post-like 容器会尽量保留 `comment` / `reply_post` / `discussion_post` 这类 unitType
+- 如果页面结构过薄，再退回 `fetch_sentence_window`
+
+这一步先解决“raw 层就开始保住 thread/comment block”，后续如果要继续做更稳的 comment DOM 解析、作者字段、翻译和 sentiment enrichment，就不必全靠 downstream 再从整页正文二次切句。
+
+### VOC enriched signals + country deck
+
+```bash
+cd 07_ScrapingToolkit
+jato-voc-enrich --countries SE NO
+jato-voc-enrich --output tmp/voc_enriched_summary.json
+jato-voc-enrich --countries SE FI NO DK HU HR AT CZ --output tmp/voc_batch_a_summary.json
+```
+
+当前 `jato_scraper.voc_enricher` 会把已有的 raw artifact 继续聚合成：
+
+- `04_Processed_data/voc/<country>/enriched/customer_insight_signals.json`
+- `04_Processed_data/voc/<country>/deck/customer_insight_deck.json`
+
+第一版 enrichment 先走 **heuristic signal extraction**，补出：
+
+- document-level sentiment / ownership stage
+- pain points（winter range / charging / software / service / price / delivery）
+- product signals（range / charging / software / reliability / service / family practicality）
+- powertrain mentions（BEV / PHEV / HEV / ICE）
+- evidence cards（标题 + URL + 命中信号 + excerpt）
+
+当前又往前补了一层 **boilerplate-aware cleaning + sentence-level observations**：
+
+- 先清掉论坛 chrome / navigation / repeated member meta 这类正文噪声
+- 再按 sentence 产出 observation 级 signal hits（signal kind / key / matched tokens / sentence / sentiment）
+- deck 层额外暴露 `Signal observations`，方便区分“有多少文档”与“有多少可回放证据命中”
+
+当前这条 enrichment 链又继续补成一层 **taxonomy-driven automatic analysis**，目标就是把 `voc_sources/` 从“只定义抓取入口”推进成“也定义自动分析维度”的入口：
+
+- **自动归类 / 多标签**：
+  - `themeTags`
+  - `personaCohorts`
+  - `painPoints`
+  - `productSignals`
+- **自动匹配**：
+  - `productMentions`
+  - `primaryProduct`
+  - `competitorMentions`
+  - 当前先按 taxonomy profile 里的 alias catalog 做 heuristic matching
+- **自动打分**：
+  - `relevanceScore`
+  - `personaScore`
+  - `matchConfidence`
+  - `overallScore`
+  - `scoreBand`
+- **cross analysis**：
+  - `productPainPoints`
+  - `personaDecisionFactors`
+  - `themeBySourceType`
+- **协同矩阵 / 推荐筛选**：
+  - `associationGraph`
+  - `associationRecommendations`
+  - `synergyMatrix`
+  - `filterSuggestions`
+  - 通过同一批 publish-ready VOC 文档里的标签共现，按 transaction 方式计算：
+    - `count`
+    - `supportPct`
+    - `confidenceForwardPct`
+    - `confidenceReversePct`
+    - `lift`
+    - `jaccard`
+    - `npmi`
+    - `phiCoefficient`
+    - `expectedCount`
+    - `fisherPValue`
+    - `fdrAdjustedPValue`
+  - 当前还会记录 replication 轴：
+    - `sourceCodes`
+    - `siteTypes`
+    - `monthBuckets`
+  - 显著性用 **one-tailed Fisher exact test**，多重比较校正用 **Benjamini-Hochberg FDR**
+  - transaction unit 现已优先使用显式 `contentUnits / comments / replyPosts / readerComments / publicComments`，没有结构化评论时退回 **derived sentence windows**
+  - deck / enrichment 现在会额外给出 `Analysis units`，用于判断当前 country VOC 的有效样本量是否足够支撑关联筛选
+  - 适合做“选了长续航的人，也常继续看性价比”这类 guided filter，不把它当作因果结论
+  - `synergyMatrix` / `filterSuggestions` 当前保留为兼容别名；更通用、更可复现实质上是 `associationGraph` / `associationRecommendations`
+- **产品 / 人群筛选基础层**：
+  - `matchedProducts`
+  - `personaSummaries`
+  - `scoreBands`
+
+这些新维度当前由 `taxonomy_profile` 驱动，所以只要 `voc_sources/countries/*.yaml` 继续引用 profile（如 `nordic_core` / `cee_core` / `dach_core`），后续加国家时就能直接继承同一套多标签、打分、匹配和 cross-analysis 逻辑。
+
+同时 deck artifact 会显式区分：
+
+- **observed from forum VOC**：source mix、site type、语言、情绪、ownership stage、pain points、product signals、decision factors、evidence cards
+- **not treated as sample facts**：年龄、家庭结构、通勤等 profile 字段
+
+这样 raw → enriched → deck 三层就先跑通了；后续如果要接翻译、LLM tagging 或前端消费，可以直接围绕这份 country deck 再接下一层。
+
+### Batch A 实跑快照（2026-04-21）
+
+用当前 repo 内已有 raw artifact 直接跑：
+
+```bash
+cd 07_ScrapingToolkit
+jato-voc-enrich --countries SE FI NO DK HU HR AT CZ --output tmp/voc_batch_a_summary.json
+```
+
+本地这轮 batch_a 结果是：
+
+- 8 个国家全部成功产出 enriched + deck artifact
+- 总计 **43 docs / 43 publish-ready docs / 68 analysis units / 24 configured sources**
+- 当前 `analysisUnitCount` 已明显高于 document 数，但 raw snapshot 里还几乎没有显式 `contentUnits/comments/replyPosts`，所以大部分 unit 仍来自 **derived sentence windows**
+- 这意味着 content-unit association graph 已经能跑，但下一阶段最有价值的提升仍然是：让 fetch/raw 层真正保留 comment/reply 结构，而不是主要依赖 sentence-window fallback
+
+在 fetcher 补完 `contentUnits` 之后，又做了一轮**隔离的 batch_a refetch smoke run**（每 source 抓 1 个链接，输出到独立目录，不覆盖主数据）：
+
+- SE / NO / HU / HR / AT / CZ 已开始出现 `fetch_lxml_block`
+- FI / DK 这轮 refetch 仍是 0 analysis units，说明当前抓到的页面虽然能落 raw，但还没有稳定产出可分析 block / signal
+
+这说明 fetch-time content-unit preservation 已经开始起作用，但“各国都稳定拿到 comment/reply-like unit”还没完成，后续仍要继续前推 source-specific comment DOM/分页策略。
 
 ### EVKX BEV 参数 + MSRP 抓取
 

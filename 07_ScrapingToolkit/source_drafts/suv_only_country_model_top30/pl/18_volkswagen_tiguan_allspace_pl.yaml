@@ -6,30 +6,23 @@
 # Suggested scope kind: single_model
 # Sales 12M: 4,769
 # Draft path: pl/18_volkswagen_tiguan_allspace_pl.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
 # TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
 # TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
 # TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
-source_code: volkswagen_tiguan_allspace_pl_draft_scrapling
+source_code: volkswagen_tiguan_allspace_pl_draft_http_json
 country: 波兰
 brand: VOLKSWAGEN
-source_url: https://todo.invalid/pl/volkswagen/tiguan_allspace
+source_url: https://cenniki.volkswagen.pl/Tiguan-Allspace.html
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
-profile_preset: ../_shared/presets/volkswagen_model_page_scrapling.yaml
+extractor_type: http_json
+profile_preset: ../_shared/presets/volkswagen_pl_pricelist_http_json.yaml
 profile:
-  url: https://todo.invalid/pl/volkswagen/tiguan_allspace
-  css:
-    vehicle_container: TODO_SELECTOR
-    model: TODO_SELECTOR
-    trim: TODO_SELECTOR
-    price: TODO_SELECTOR
-  default_currency: TODO
+  url: https://cenniki.volkswagen.pl/pricelists/1bbcd298-c6ac-432c-a76f-66cc27a0f3c6/pricelist.json
+  default_currency: PLN
   default_tax_included: true
-  default_price_label: TODO verify local MSRP label
+  default_price_label: Cena katalogowa brutto
   fixed_model: TIGUAN ALLSPACE
-  fixed_jato_model: TIGUAN ALLSPACE
   structured_fields:
     powertrain_rules:
     - key: powertrain_ice
@@ -41,9 +34,10 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources.
+notes: The main Volkswagen Poland site no longer exposes a dedicated Allspace model
+  page and current public URLs redirect back to Tiguan, but the official cenniki
+  index still publishes `Tiguan-Allspace.html` and a matching `pricelist.json`.
+  This draft now consumes that archived official price-list payload directly.
 bootstrap_meta:
   country_model_rank: 18
   suggested_scope_kind: single_model

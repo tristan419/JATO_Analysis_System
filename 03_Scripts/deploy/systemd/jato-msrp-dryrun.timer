@@ -1,0 +1,11 @@
+[Unit]
+Description=JATO MSRP nightly dry-run timer
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=jato-msrp-sync@dryrun.service
+
+[Install]
+WantedBy=timers.target

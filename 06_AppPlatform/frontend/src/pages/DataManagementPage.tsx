@@ -8,6 +8,7 @@ import type {
   DataManagementAirflowStatus,
   DataManagementDomain,
   DataManagementOverviewResponse,
+  DataManagementVocOverviewResponse,
   ConfigProject,
   MatchOverride,
   MsrpSource,
@@ -157,6 +158,10 @@ function formatMetricValue(value: string | number): string {
   return typeof value === "number" ? value.toLocaleString() : value;
 }
 
+function formatSharePct(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
+}
+
 function renderDomainRecentItems(
   domain: DataManagementDomain,
   expanded: boolean,
@@ -195,10 +200,14 @@ function renderDomainRecentItems(
 
 export function DataManagementPage() {
   const [overview, setOverview] = useState<DataManagementOverviewResponse | null>(null);
+  const [vocOverview, setVocOverview] = useState<DataManagementVocOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [vocOverviewLoading, setVocOverviewLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [vocOverviewError, setVocOverviewError] = useState("");
   const [expandedDomains, setExpandedDomains] = useState<Record<string, boolean>>({});
+  const [vocCountry, setVocCountry] = useState("");
 
   const [crudTab, setCrudTab] = useState<CrudEntityTab>("msrp-sources");
   const [crudLoading, setCrudLoading] = useState(false);
@@ -241,6 +250,24 @@ export function DataManagementPage() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  }
+
+  async function loadVocOverview(country?: string, options?: { silent?: boolean }) {
+    if (!options?.silent) {
+      setVocOverviewLoading(true);
+    }
+    setVocOverviewError("");
+    try {
+      const result = await api.getVocManagementOverview(country);
+      setVocOverview(result);
+      if (!country && result.selectedCountryCode) {
+        setVocCountry((current) => current || result.selectedCountryCode);
+      }
+    } catch (err) {
+      setVocOverviewError((err as Error).message);
+    } finally {
+      setVocOverviewLoading(false);
     }
   }
 
@@ -291,6 +318,7 @@ export function DataManagementPage() {
 
   useEffect(() => {
     void loadOverview();
+    void loadVocOverview();
   }, []);
 
   useEffect(() => {
@@ -305,6 +333,9 @@ export function DataManagementPage() {
   );
 
   const airflowStatus: DataManagementAirflowStatus | null = overview?.airflow ?? null;
+  const selectedVocCountryStatus = vocOverview?.availableCountries.find(
+    (item) => item.code === vocOverview.selectedCountryCode,
+  )?.status ?? "warning";
 
   function startEditSource(item: MsrpSource) {
     setEditingSourceId(item.id);
@@ -589,6 +620,7 @@ export function DataManagementPage() {
         `已同步 ${result.countryCount} 个国家 / ${result.sourceRunCount} 个 source runs / ${result.documentCount} 篇文档到 PostgreSQL。`,
       );
       await loadOverview({ silent: true });
+      await loadVocOverview(vocCountry || undefined, { silent: true });
     } catch (err) {
       setVocSyncError((err as Error).message);
     } finally {
@@ -784,6 +816,316 @@ export function DataManagementPage() {
                 )}
               </article>
             ))}
+          </div>
+
+          <div className="card crud-card">
+            <div className="admin-card-header">
+              <div>
+                <h2>VOC 观察台</h2>
+                <p>
+                  在数据管理页直接查看 VOC 抓取产物、国家切换、source runs、PostgreSQL staging 状态，以及对应设计文档路径。
+                </p>
+              </div>
+              <span className={`badge ${getDataManagementStatusBadgeClass(selectedVocCountryStatus)}`}>
+                {vocOverview?.selectedCountryCode || "VOC"}
+              </span>
+            </div>
+
+            {vocOverviewError ? <div className="alert alert-error">{vocOverviewError}</div> : null}
+            {vocSyncError ? <div className="alert alert-error">{vocSyncError}</div> : null}
+            {vocSyncNotice ? <div className="alert alert-success">{vocSyncNotice}</div> : null}
+
+            <div className="crud-toolbar-grid">
+              <div className="filter-group">
+                <label>Country</label>
+                <select
+                  value={vocCountry}
+                  onChange={(event) => {
+                    const nextCountry = event.target.value;
+                    setVocCountry(nextCountry);
+                    void loadVocOverview(nextCountry, { silent: true });
+                  }}
+                  disabled={vocOverviewLoading && !vocOverview}
+                >
+                  {vocOverview?.availableCountries.map((item) => (
+                    <option key={item.code} value={item.code}>
+                      {item.code} · {item.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="filter-group">
+                <label>Selected deck</label>
+                <input value={vocOverview?.selectedCountryLabel ?? "-"} disabled />
+              </div>
+              <div className="data-management-inline-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => void loadVocOverview(vocCountry || undefined, { silent: true })}
+                  disabled={vocOverviewLoading}
+                >
+                  {vocOverviewLoading ? "刷新中…" : "刷新 VOC"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  onClick={() => void handleVocSync()}
+                  disabled={!overview.database.connected || vocSyncBusy}
+                >
+                  {vocSyncBusy ? "同步中…" : "同步 VOC 到 PostgreSQL"}
+                </button>
+                <Link className="btn btn-sm btn-ghost" to="/customer-insights">
+                  打开 Customer Insights
+                </Link>
+                <Link className="btn btn-sm btn-ghost" to="/customer-hev">
+                  打开 Nordic HEV
+                </Link>
+              </div>
+            </div>
+
+            {vocOverviewLoading && !vocOverview ? (
+              <LoadingSurface
+                mode="inline"
+                label="正在读取 VOC 观察台"
+                detail="汇总 raw / enriched / deck / staging 状态"
+                kicker="VOC"
+              />
+            ) : null}
+
+            {vocOverview ? (
+              <>
+                <div className="data-management-card-header">
+                  <div>
+                    <strong>全局抓取概览</strong>
+                    <p>当前 VOC 目录下可见国家与已生成 deck 的整体覆盖。</p>
+                  </div>
+                  <time>{formatDataManagementTimestamp(vocOverview.generatedAt)}</time>
+                </div>
+                <div className="data-management-metric-grid">
+                  {vocOverview.overallMetrics.map((metric, index) => (
+                    <div key={`voc-overall-${index}`} className="data-management-metric">
+                      <span>{metric.label}</span>
+                      <strong>{formatMetricValue(metric.value)}</strong>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="data-management-card-header">
+                  <div>
+                    <strong>{vocOverview.selectedCountryCode} 国家明细</strong>
+                    <p>聚焦当前国家的 raw 抓取、enrichment、deck 和 staging 入库状态。</p>
+                  </div>
+                  <span>{vocOverview.selectedCountryLabel}</span>
+                </div>
+                <div className="data-management-metric-grid">
+                  {vocOverview.countryMetrics.map((metric, index) => (
+                    <div key={`voc-country-${index}`} className="data-management-metric">
+                      <span>{metric.label}</span>
+                      <strong>{formatMetricValue(metric.value)}</strong>
+                    </div>
+                  ))}
+                  <div className="data-management-metric">
+                    <span>PG source runs</span>
+                    <strong>{formatDataManagementNumber(vocOverview.staging.sourceRunCount)}</strong>
+                  </div>
+                  <div className="data-management-metric">
+                    <span>PG documents</span>
+                    <strong>{formatDataManagementNumber(vocOverview.staging.documentCount)}</strong>
+                  </div>
+                  <div className="data-management-metric">
+                    <span>PG publish-ready</span>
+                    <strong>{formatDataManagementNumber(vocOverview.staging.publishReadyCount)}</strong>
+                  </div>
+                  <div className="data-management-metric">
+                    <span>PG latest sync</span>
+                    <strong>{formatDataManagementTimestamp(vocOverview.staging.latestCollectedAt)}</strong>
+                  </div>
+                </div>
+
+                <div className="data-management-domain-grid">
+                  <article className="card crud-card data-management-domain-card">
+                    <div className="data-management-card-header">
+                      <div>
+                        <strong>Artifacts</strong>
+                        <p>当前国家对应的 raw 目录、enriched 输出和 deck 文件。</p>
+                      </div>
+                    </div>
+                    <div className="data-management-recent-list">
+                      {vocOverview.artifacts.map((item) => (
+                        <article key={item.key} className="data-management-recent-item">
+                          <div>
+                            <strong>{item.label}</strong>
+                            <span className="data-management-path-cell">{item.path}</span>
+                          </div>
+                          <div className="data-management-card-meta">
+                            <span>{item.exists ? (item.isDir ? `${formatDataManagementNumber(item.fileCount)} files` : formatDataManagementBytes(item.sizeBytes)) : "missing"}</span>
+                            <time>{formatDataManagementTimestamp(item.updatedAt)}</time>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </article>
+
+                  <article className="card crud-card data-management-domain-card">
+                    <div className="data-management-card-header">
+                      <div>
+                        <strong>Country switchboard</strong>
+                        <p>每个国家的 raw/doc/deck 就绪情况，帮助快速切换观察。</p>
+                      </div>
+                    </div>
+                    <div className="data-management-recent-list">
+                      {vocOverview.availableCountries.map((item) => (
+                        <article key={item.code} className="data-management-recent-item">
+                          <div>
+                            <strong>{item.code} · {item.label}</strong>
+                            <span>
+                              {formatDataManagementNumber(item.rawSourceCount)} sources · {formatDataManagementNumber(item.rawDocumentCount)} docs · {formatDataManagementNumber(item.signalObservationCount)} observations
+                            </span>
+                          </div>
+                          <div className="data-management-card-meta">
+                            <span className={`badge ${getDataManagementStatusBadgeClass(item.status)}`}>
+                              {item.deckReady ? "deck ready" : item.status}
+                            </span>
+                            <time>{formatDataManagementTimestamp(item.updatedAt)}</time>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </article>
+                </div>
+
+                <div className="data-management-domain-grid">
+                  <article className="card crud-card data-management-domain-card">
+                    <div className="data-management-card-header">
+                      <div>
+                        <strong>Source runs</strong>
+                        <p>当前国家 raw 采集批次与 text extraction 方法分布。</p>
+                      </div>
+                    </div>
+                    <div className="data-management-recent-list">
+                      {vocOverview.sourceRuns.length > 0 ? vocOverview.sourceRuns.map((item) => (
+                        <article key={`${item.sourceCode}-${item.path}`} className="data-management-recent-item">
+                          <div>
+                            <strong>{item.siteName}</strong>
+                            <span>
+                              {item.sourceCode} · {item.siteType}
+                              {item.language ? ` · ${item.language}` : ""}
+                              {item.publishTier ? ` · ${item.publishTier}` : ""}
+                            </span>
+                            <span className="data-management-path-cell">{item.path}</span>
+                          </div>
+                          <div className="data-management-card-meta">
+                            <span>
+                              {formatDataManagementNumber(item.documentCount)} docs / {formatDataManagementNumber(item.publishReadyCount)} ready / {formatDataManagementNumber(item.errorCount)} errors
+                            </span>
+                            <time>{formatDataManagementTimestamp(item.updatedAt)}</time>
+                          </div>
+                          {item.textExtractionMethods.length > 0 ? (
+                            <div className="data-management-source-chips">
+                              {item.textExtractionMethods.map((method) => (
+                                <span key={`${item.sourceCode}-${method}`} className="data-management-source-chip">
+                                  {method}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </article>
+                      )) : <div className="crud-empty-state">当前国家还没有 raw source run。</div>}
+                    </div>
+                  </article>
+
+                  <article className="card crud-card data-management-domain-card">
+                    <div className="data-management-card-header">
+                      <div>
+                        <strong>Deck signals</strong>
+                        <p>如果当前国家已经生成 deck，这里直接显示 observed / inferred 结构和高频信号。</p>
+                      </div>
+                    </div>
+                    <div className="data-management-activity-meta">
+                      <p>Observed sections</p>
+                      <div className="data-management-source-chips">
+                        {vocOverview.observedSections.length > 0 ? vocOverview.observedSections.map((item) => (
+                          <span key={item} className="data-management-source-chip">{item}</span>
+                        )) : <span className="data-management-source-chip">暂无</span>}
+                      </div>
+                      <p>Inferred sections</p>
+                      <div className="data-management-source-chips">
+                        {vocOverview.inferredSections.length > 0 ? vocOverview.inferredSections.map((item) => (
+                          <span key={item} className="data-management-source-chip">{item}</span>
+                        )) : <span className="data-management-source-chip">暂无</span>}
+                      </div>
+                      <p>Top pain points</p>
+                      <div className="data-management-source-chips">
+                        {vocOverview.topPainPoints.length > 0 ? vocOverview.topPainPoints.map((item) => (
+                          <span key={`pain-${item.label}`} className="data-management-source-chip">
+                            {item.label} · {formatSharePct(item.sharePct)}
+                          </span>
+                        )) : <span className="data-management-source-chip">暂无</span>}
+                      </div>
+                      <p>Top product signals</p>
+                      <div className="data-management-source-chips">
+                        {vocOverview.topProductSignals.length > 0 ? vocOverview.topProductSignals.map((item) => (
+                          <span key={`signal-${item.label}`} className="data-management-source-chip">
+                            {item.label} · {formatSharePct(item.sharePct)}
+                          </span>
+                        )) : <span className="data-management-source-chip">暂无</span>}
+                      </div>
+                    </div>
+                  </article>
+                </div>
+
+                <div className="data-management-domain-grid">
+                  <article className="card crud-card data-management-domain-card">
+                    <div className="data-management-card-header">
+                      <div>
+                        <strong>Evidence cards</strong>
+                        <p>从 country deck 中抽样展示当前国家的代表性证据卡片。</p>
+                      </div>
+                    </div>
+                    <div className="data-management-recent-list">
+                      {vocOverview.evidenceCards.length > 0 ? vocOverview.evidenceCards.map((item) => (
+                        <article key={`${item.url}-${item.title}`} className="data-management-recent-item">
+                          <div>
+                            <strong>{item.title || item.siteName}</strong>
+                            <span>{item.siteName}{item.publishTier ? ` · ${item.publishTier}` : ""}</span>
+                            {item.snippet ? <span>{item.snippet}</span> : null}
+                            <span className="data-management-path-cell">{item.url}</span>
+                          </div>
+                          <div className="data-management-source-chips">
+                            {item.signals.map((signal) => (
+                              <span key={`${item.url}-${signal}`} className="data-management-source-chip">
+                                {signal}
+                              </span>
+                            ))}
+                          </div>
+                        </article>
+                      )) : <div className="crud-empty-state">当前国家还没有可展示的 evidence cards。</div>}
+                    </div>
+                  </article>
+
+                  <article className="card crud-card data-management-domain-card">
+                    <div className="data-management-card-header">
+                      <div>
+                        <strong>VOC docs</strong>
+                        <p>本次 VOC 方案、实现状态与抓取设计文档都在这里留路径，方便继续追踪。</p>
+                      </div>
+                    </div>
+                    <div className="data-management-recent-list">
+                      {vocOverview.documentation.map((item) => (
+                        <article key={item.path} className="data-management-recent-item">
+                          <div>
+                            <strong>{item.label}</strong>
+                            <span className="data-management-path-cell">{item.path}</span>
+                          </div>
+                          <time>{formatDataManagementTimestamp(item.updatedAt)}</time>
+                        </article>
+                      ))}
+                    </div>
+                  </article>
+                </div>
+              </>
+            ) : null}
           </div>
 
           {overview.database.connected ? (

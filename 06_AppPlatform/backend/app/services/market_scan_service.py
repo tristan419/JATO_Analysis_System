@@ -1467,12 +1467,62 @@ def _resolve_positioning_price_window(
     return resolved_min, resolved_max
 
 
+def _resolve_positioning_length_window(
+    series: pd.Series,
+    *,
+    requested_min: float | None,
+    requested_max: float | None,
+) -> tuple[float, float]:
+    cleaned = pd.to_numeric(series, errors="coerce").dropna()
+    cleaned = cleaned[cleaned > 0]
+    fallback_min = float(requested_min or 0.0)
+    fallback_max = float(requested_max) if requested_max is not None else fallback_min + 1.0
+    if cleaned.empty:
+        return fallback_min, max(fallback_min + 1.0, fallback_max)
+
+    resolved_min = float(requested_min) if requested_min is not None else float(cleaned.min())
+    resolved_max = float(requested_max) if requested_max is not None else float(cleaned.max())
+    if resolved_max <= resolved_min:
+        resolved_max = resolved_min + 1.0
+    return resolved_min, resolved_max
+
+
+def _filter_positioning_length_window(
+    frame: pd.DataFrame,
+    *,
+    length_min: float | None,
+    length_max: float | None,
+) -> tuple[pd.DataFrame, dict[str, float]]:
+    if "__length" not in frame.columns:
+        resolved_min, resolved_max = _resolve_positioning_length_window(
+            pd.Series(dtype=float),
+            requested_min=length_min,
+            requested_max=length_max,
+        )
+        return frame.copy(), {"min": resolved_min, "max": resolved_max}
+
+    resolved_min, resolved_max = _resolve_positioning_length_window(
+        frame["__length"],
+        requested_min=length_min,
+        requested_max=length_max,
+    )
+    if frame.empty:
+        return frame.copy(), {"min": resolved_min, "max": resolved_max}
+    filtered = frame[
+        (frame["__length"] >= resolved_min)
+        & (frame["__length"] <= resolved_max)
+    ].copy()
+    return filtered, {"min": resolved_min, "max": resolved_max}
+
+
 def _positioning_page_rows(
     frame: pd.DataFrame,
     page_key: str,
 ) -> pd.DataFrame:
     if page_key == "overview":
         return frame.copy()
+    if page_key == "suvAll":
+        return frame[frame["__segment_raw"].str.startswith("SUV", na=False)].copy()
     if page_key == "suvA0":
         return frame[frame["__segment_raw"] == "SUV A0"].copy()
     if page_key == "suvA":
@@ -1744,6 +1794,8 @@ def _build_positioning_bubble_items(
     bubble_limit: int = POSITIONING_BUBBLE_LIMIT,
     msrp_min: float | None = None,
     msrp_max: float | None = None,
+    length_min: float | None = None,
+    length_max: float | None = None,
 ) -> list[dict[str, Any]]:
     if frame.empty or sales_column not in frame.columns:
         return []
@@ -1777,6 +1829,10 @@ def _build_positioning_bubble_items(
         aggregated = aggregated[aggregated["MsrpMin"] >= float(msrp_min)]
     if msrp_max is not None:
         aggregated = aggregated[aggregated["MsrpMin"] <= float(msrp_max)]
+    if length_min is not None:
+        aggregated = aggregated[aggregated["Length"] >= float(length_min)]
+    if length_max is not None:
+        aggregated = aggregated[aggregated["Length"] <= float(length_max)]
     if aggregated.empty:
         return []
     aggregated = aggregated.sort_values(["Sales", "MsrpMin"], ascending=[False, True]).head(max(1, int(bubble_limit)))
@@ -1811,8 +1867,14 @@ def _build_positioning_page_payload(
     msrp_min: float | None,
     msrp_max: float | None,
     price_band_size: int | None,
+    length_min: float | None = None,
+    length_max: float | None = None,
 ) -> dict[str, Any]:
-    page_frame = _positioning_page_rows(frame, page_key)
+    page_frame, length_range = _filter_positioning_length_window(
+        _positioning_page_rows(frame, page_key),
+        length_min=length_min,
+        length_max=length_max,
+    )
     price_bands = _build_positioning_price_bands(
         page_frame,
         sales_column=sales_column,
@@ -1833,11 +1895,15 @@ def _build_positioning_page_payload(
         bubble_limit=top_n,
         msrp_min=range_min,
         msrp_max=range_max,
+        length_min=length_range["min"],
+        length_max=length_range["max"],
     )
     total_sales = float(pd.to_numeric(range_frame[sales_column], errors="coerce").fillna(0.0).sum()) if sales_column in range_frame.columns else 0.0
     model_count = int(range_frame["__model"].nunique()) if "__model" in range_frame.columns else 0
     min_msrp = float(range_frame["__msrp"].min()) if not range_frame.empty else range_min
     max_msrp = float(range_frame["__msrp"].max()) if not range_frame.empty else range_max
+    min_length = float(range_frame["__length"].min()) if not range_frame.empty else length_range["min"]
+    max_length = float(range_frame["__length"].max()) if not range_frame.empty else length_range["max"]
     top_fuel = "-"
     if not range_frame.empty:
         fuel_totals = (
@@ -1854,6 +1920,7 @@ def _build_positioning_page_payload(
         "subtitle": subtitle,
         "summaryText": (
             f"{subtitle} 当前共 {total_sales:,.0f} 台，主导动力 {top_fuel}，"
+            f"车长覆盖 {min_length:,.0f}-{max_length:,.0f} mm，"
             f"最低 MSRP 覆盖 {min_msrp:,.0f}-{max_msrp:,.0f}。"
         ) if total_sales > 0 else f"{subtitle} 当前筛选下暂无可用数据。",
         "metrics": [
@@ -1862,6 +1929,7 @@ def _build_positioning_page_payload(
             {"label": "Lowest MSRP", "value": min_msrp, "detail": "当前页最低价格"},
             {"label": "Lead Model", "value": lead_model, "detail": "销量最高气泡"},
         ],
+        "lengthRange": length_range,
         "priceBands": price_bands,
         "bubbleChart": {
             "items": bubble_items,
@@ -1884,12 +1952,23 @@ def _build_overview_payload(
     trend_columns = [_period_to_month_column(period) for period in trend_periods]
     grouped = _volume_by_group(frame, "__powertrain", trend_columns)
     grouped = grouped.reindex(selected_fuels, fill_value=0.0)
+    suv_frame = (
+        frame[frame["__segment_raw"].str.startswith("SUV", na=False)].copy()
+        if "__segment_raw" in frame.columns
+        else frame.iloc[0:0].copy()
+    )
+    suv_grouped = _volume_by_group(suv_frame, "__powertrain", trend_columns)
+    suv_grouped = suv_grouped.reindex(selected_fuels, fill_value=0.0)
 
     total_by_column = {column: float(grouped[column].sum()) for column in trend_columns if column in grouped.columns}
+    suv_total_by_column = {
+        column: float(suv_grouped[column].sum()) for column in trend_columns if column in suv_grouped.columns
+    }
     trend_items: list[dict[str, Any]] = []
     for period in trend_periods:
         column = _period_to_month_column(period)
         current_total = total_by_column.get(column, 0.0)
+        suv_total = suv_total_by_column.get(column, 0.0)
         prior_total = total_by_column.get(_period_to_month_column(prior_period), 0.0) if prior_period else 0.0
         same_month_total = total_by_column.get(_period_to_month_column(same_month_last_year_period), 0.0) if same_month_last_year_period else 0.0
         if period != resolved_period:
@@ -1904,6 +1983,11 @@ def _build_overview_payload(
                 "totalVolume": current_total,
                 "fuelMix": {
                     fuel: float(grouped.at[fuel, column]) if fuel in grouped.index and column in grouped.columns else 0.0
+                    for fuel in selected_fuels
+                },
+                "suvTotalVolume": suv_total,
+                "suvFuelMix": {
+                    fuel: float(suv_grouped.at[fuel, column]) if fuel in suv_grouped.index and column in suv_grouped.columns else 0.0
                     for fuel in selected_fuels
                 },
                 "mom": _delta_payload(current_total, prior_total),
@@ -2799,6 +2883,8 @@ def query_positioning_pricing_deck(
     top_n: int,
     msrp_min: float | None,
     msrp_max: float | None,
+    length_min: float | None,
+    length_max: float | None,
     price_band_size: int | None,
 ) -> dict[str, Any]:
     return _query_positioning_pricing_deck_impl(
@@ -2810,6 +2896,8 @@ def query_positioning_pricing_deck(
         top_n=top_n,
         msrp_min=msrp_min,
         msrp_max=msrp_max,
+        length_min=length_min,
+        length_max=length_max,
         price_band_size=price_band_size,
     )
 
@@ -2824,6 +2912,8 @@ def _query_positioning_pricing_deck_impl(
     top_n: int,
     msrp_min: float | None,
     msrp_max: float | None,
+    length_min: float | None,
+    length_max: float | None,
     price_band_size: int | None,
 ) -> dict[str, Any]:
     columns = _get_columns()
@@ -2971,6 +3061,24 @@ def _query_positioning_pricing_deck_impl(
                 msrp_min=msrp_min,
                 msrp_max=msrp_max,
                 price_band_size=price_band_size,
+                length_min=length_min,
+                length_max=length_max,
+            ),
+            "suvAll": _build_positioning_page_payload(
+                filtered_frame,
+                page_key="suvAll",
+                title="全 SUV",
+                subtitle="全 SUV 价格带与动力定位",
+                sales_column=sales_column,
+                sales_metric_label=sales_metric_label,
+                sales_metric_detail=sales_metric_detail,
+                selected_fuels=selected_fuels,
+                top_n=top_n,
+                msrp_min=msrp_min,
+                msrp_max=msrp_max,
+                price_band_size=price_band_size,
+                length_min=length_min,
+                length_max=length_max,
             ),
             "suvA0": _build_positioning_page_payload(
                 filtered_frame,
@@ -2985,6 +3093,8 @@ def _query_positioning_pricing_deck_impl(
                 msrp_min=msrp_min,
                 msrp_max=msrp_max,
                 price_band_size=price_band_size,
+                length_min=length_min,
+                length_max=length_max,
             ),
             "suvA": _build_positioning_page_payload(
                 filtered_frame,
@@ -2999,6 +3109,8 @@ def _query_positioning_pricing_deck_impl(
                 msrp_min=msrp_min,
                 msrp_max=msrp_max,
                 price_band_size=price_band_size,
+                length_min=length_min,
+                length_max=length_max,
             ),
             "suvBPlus": _build_positioning_page_payload(
                 filtered_frame,
@@ -3013,6 +3125,8 @@ def _query_positioning_pricing_deck_impl(
                 msrp_min=msrp_min,
                 msrp_max=msrp_max,
                 price_band_size=price_band_size,
+                length_min=length_min,
+                length_max=length_max,
             ),
         },
     }

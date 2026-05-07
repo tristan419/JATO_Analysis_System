@@ -25,6 +25,7 @@ is_truthy() {
 
 resolve_countries() {
   case "$1" in
+    batch_a|a) printf '%s\n' se fi no dk hu hr at cz ;;
     1) printf '%s\n' se hr ;;
     2) printf '%s\n' hu no at cz ch ;;
     all) printf '%s\n' se hr hu no at cz ch ;;
@@ -36,7 +37,7 @@ load_env_file "$BACKEND_ENV_FILE"
 load_env_file "$MSRP_ENV_FILE"
 
 MODE="${JATO_MSRP_MODE:-dryrun}"
-COUNTRIES_RAW="${JATO_MSRP_COUNTRIES:-all}"
+COUNTRIES_RAW="${JATO_MSRP_COUNTRIES:-batch_a}"
 PAUSE_SECONDS="${JATO_MSRP_PAUSE_SECONDS:-20}"
 STOP_ON_FAILURE="${JATO_MSRP_STOP_ON_FAILURE:-true}"
 PYTHON_BIN="${JATO_MSRP_PYTHON:-$REPO_DIR/.venv/bin/python}"
@@ -46,6 +47,11 @@ BACKEND_PORT="${BACKEND_PORT:-8000}"
 export JATO_API_BASE="${JATO_API_BASE:-http://127.0.0.1:${BACKEND_PORT}/v1}"
 export JATO_STRICT_EXIT="${JATO_STRICT_EXIT:-true}"
 export APP_USER_NAME="${APP_USER_NAME:-msrp-cron}"
+AUTO_REVIEW="${JATO_MSRP_AUTO_REVIEW:-true}"
+AUTO_MATERIALIZE="${JATO_MSRP_AUTO_MATERIALIZE:-true}"
+AUTO_REVIEW_LIMIT="${JATO_MSRP_AUTO_REVIEW_LIMIT:-500}"
+MATERIALIZE_LIMIT="${JATO_MSRP_MATERIALIZE_LIMIT:-500}"
+AUTO_REVIEW_DECIDED_BY="${JATO_AUTO_REVIEW_DECIDED_BY:-${APP_USER_NAME:-msrp-cron}}"
 export NVAPI_KEY="${NVAPI_KEY:-${NVIDIA_API_KEY:-}}"
 
 case "$MODE" in
@@ -89,6 +95,8 @@ echo "[INFO] Backend env: $BACKEND_ENV_FILE"
 echo "[INFO] MSRP env: $MSRP_ENV_FILE"
 echo "[INFO] API base: $JATO_API_BASE"
 echo "[INFO] Log file: $LOG_FILE"
+echo "[INFO] Auto review: $AUTO_REVIEW"
+echo "[INFO] Auto materialize: $AUTO_MATERIALIZE"
 
 failures=0
 total="${#COUNTRIES[@]}"
@@ -96,7 +104,16 @@ for index in "${!COUNTRIES[@]}"; do
   country="${COUNTRIES[$index]}"
   echo
   echo "[RUN] $((index + 1))/$total country=$country mode=$MODE"
-  if "$PYTHON_BIN" "$TARGET_SCRIPT" "$country"; then
+  extra_args=()
+  if [[ "$MODE" == "ingest" ]]; then
+    if is_truthy "$AUTO_REVIEW"; then
+      extra_args+=(--auto-review --decided-by "$AUTO_REVIEW_DECIDED_BY" --auto-review-limit "$AUTO_REVIEW_LIMIT")
+    fi
+    if is_truthy "$AUTO_MATERIALIZE"; then
+      extra_args+=(--materialize --materialize-limit "$MATERIALIZE_LIMIT")
+    fi
+  fi
+  if "$PYTHON_BIN" "$TARGET_SCRIPT" "$country" "${extra_args[@]}"; then
     echo "[OK] country=$country"
   else
     failures=$((failures + 1))

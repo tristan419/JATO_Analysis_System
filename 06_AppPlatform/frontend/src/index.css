@@ -7195,7 +7195,7 @@ table.data-table tr.data-table-group-row.contains-selection td {
 
 .positioning-pricing-tab-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -7859,6 +7859,31 @@ table.data-table tr.data-table-group-row.contains-selection td {
   flex-direction: column;
 }
 
+.positioning-pricing-slide-frame .positioning-pricing-grid {
+  align-items: stretch;
+  padding-top: 6px;
+}
+
+.positioning-pricing-slide-frame .positioning-pricing-grid .market-scan-panel {
+  display: grid;
+  grid-template-rows: 82px 430px;
+  gap: 10px;
+}
+
+.positioning-pricing-slide-frame .positioning-pricing-grid .market-scan-panel-head {
+  min-height: 82px;
+}
+
+.positioning-pricing-slide-frame .positioning-pricing-grid .market-scan-panel-body {
+  height: 430px;
+  overflow: hidden;
+}
+
+.positioning-pricing-slide-frame .positioning-pricing-chart {
+  flex: none;
+  height: 430px;
+}
+
 .version-comparison-selection-bank {
   grid-column: 1 / -1;
   display: flex;
@@ -8492,6 +8517,46 @@ table.data-table tr.data-table-group-row.contains-selection td {
 
 .market-scan-overview-trend-chart {
   flex: 0 0 auto;
+}
+
+.market-scan-trend-share-table {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: -8px;
+  color: #334155;
+}
+
+.market-scan-trend-share-row {
+  display: grid;
+  grid-template-columns: var(--trend-left) repeat(var(--trend-column-count), minmax(0, 1fr)) var(--trend-right);
+  align-items: center;
+  min-height: 16px;
+}
+
+.market-scan-trend-share-label {
+  grid-column: 1;
+  min-width: 0;
+  padding-right: 8px;
+  overflow: hidden;
+  color: #64748b;
+  font-size: var(--trend-font-size);
+  font-weight: 700;
+  line-height: 1.1;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-scan-trend-share-cell {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--trend-font-size);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .market-scan-insight--inline {

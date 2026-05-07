@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 import { useSearchParams } from "react-router-dom";
 import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
@@ -98,6 +107,7 @@ const DEFAULT_MARKET_SCAN_EXPORT: ExportSettings = {
   decimalPlaces: 1,
   fontSize: 11,
 };
+const MARKET_SCAN_OVERVIEW_TREND_MARGIN = { l: 52, r: 24, t: 20, b: 48 } as const;
 const MIN_MARKET_SCAN_RANKING_LIMIT = 10;
 const MARKET_SCAN_RANKING_LIMIT_OPTIONS = [10, 15, 20, 30] as const;
 const SUV_SEGMENT_SHARE_ORDER = ["SUV-A00", "SUV-A0", "SUV-A", "≥SUV-B"] as const;
@@ -355,6 +365,13 @@ function formatPercent(value: number | null | undefined, digits = 1): string {
     return "-";
   }
   return `${(value * 100).toFixed(digits)}%`;
+}
+
+function safeShareValue(value: number, total: number): number | null {
+  if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) {
+    return null;
+  }
+  return value / total;
 }
 
 function toneClassName(tone?: string): string {
@@ -874,13 +891,34 @@ function periodWithinRange(period: string, range: MarketScanPeriodRange | null |
   return period >= range.start && period <= range.end;
 }
 
+function overviewTrendTrailingItems(items: MarketScanOverviewTrendItem[]): MarketScanOverviewTrendItem[] {
+  return [...items].sort((left, right) => left.period.localeCompare(right.period)).slice(-12);
+}
+
+function readMarketScanFuelFromLegendName(traceName: string, fuelOrder: string[]): string | null {
+  const normalizedName = traceName.trim();
+  if (!normalizedName) {
+    return null;
+  }
+  return fuelOrder.find((fuel) => normalizedName === fuel || normalizedName.endsWith(` ${fuel}`)) ?? null;
+}
+
+function readMarketScanLegendFuelFromTarget(target: EventTarget | null, fuelOrder: string[]): string | null {
+  if (!(target instanceof Element)) {
+    return null;
+  }
+  const legendTrace = target.closest("g.traces");
+  const legendText = legendTrace?.querySelector("text.legendtext")?.textContent ?? "";
+  return readMarketScanFuelFromLegendName(legendText, fuelOrder);
+}
+
 function buildOverviewTrendData(
   items: MarketScanOverviewTrendItem[],
   fuelOrder: string[],
   showDataLabels: boolean,
 ): Data[] {
   const ordered = [...items].sort((left, right) => left.period.localeCompare(right.period));
-  const trailingItems = ordered.slice(-12);
+  const trailingItems = overviewTrendTrailingItems(items);
   if (trailingItems.length === 0) {
     return [];
   }
@@ -1665,6 +1703,68 @@ function MatrixTable({ matrix }: { matrix: MarketScanMatrix }) {
   );
 }
 
+function OverviewTrendShareRows({
+  items,
+  fuel,
+  fontSize,
+}: {
+  items: MarketScanOverviewTrendItem[];
+  fuel: string | null;
+  fontSize: number;
+}) {
+  if (!fuel) {
+    return null;
+  }
+
+  const trailingItems = overviewTrendTrailingItems(items);
+  if (trailingItems.length === 0) {
+    return null;
+  }
+
+  const rows = [
+    {
+      key: "market",
+      label: "全市场",
+      values: trailingItems.map((item) => safeShareValue(item.fuelMix?.[fuel] ?? 0, item.totalVolume)),
+    },
+    {
+      key: "suv",
+      label: "SUV内",
+      values: trailingItems.map((item) => safeShareValue(item.suvFuelMix?.[fuel] ?? Number.NaN, item.suvTotalVolume ?? 0)),
+    },
+  ];
+  const style = {
+    "--trend-left": `${MARKET_SCAN_OVERVIEW_TREND_MARGIN.l}px`,
+    "--trend-right": `${MARKET_SCAN_OVERVIEW_TREND_MARGIN.r}px`,
+    "--trend-font-size": `${Math.max(9, fontSize)}px`,
+    "--trend-column-count": String(trailingItems.length),
+  } as CSSProperties;
+
+  return (
+    <div className="market-scan-trend-share-table" style={style} aria-label={`${fuel} 动力占比`}>
+      {rows.map((row) => (
+        <div key={row.key} className="market-scan-trend-share-row">
+          <span
+            className="market-scan-trend-share-label"
+            title={row.key === "market" ? `${fuel} 总市场占比` : `${fuel} SUV 内占比`}
+          >
+            {row.label}
+          </span>
+          {row.values.map((value, index) => (
+            <span
+              key={`${row.key}-${trailingItems[index].period}`}
+              className="market-scan-trend-share-cell"
+              style={{ gridColumn: index + 2 }}
+            >
+              {formatPercent(value)}
+            </span>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function OverviewSection({
   labels: _labels,
   page,
@@ -1691,6 +1791,18 @@ function OverviewSection({
   const trendItems = customRangeActive
     ? page.trend.items.filter((item) => periodWithinRange(item.period, timeRange))
     : page.trend.items;
+  const [focusedTrendFuel, setFocusedTrendFuel] = useState<string | null>(null);
+  const activeTrendShareFuel = focusedTrendFuel && fuelOrder.includes(focusedTrendFuel)
+    ? focusedTrendFuel
+    : fuelOrder.length === 1
+      ? fuelOrder[0]
+      : null;
+  const handleTrendLegendDoubleClick = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    const fuel = readMarketScanLegendFuelFromTarget(event.target, fuelOrder);
+    if (fuel) {
+      setFocusedTrendFuel(fuel);
+    }
+  };
 
   return (
     <div className="market-scan-grid market-scan-grid--three">
@@ -1700,14 +1812,15 @@ function OverviewSection({
         subtitle="上方保留 Rolling 12M 双柱趋势；下方直接汇总结论、结构驱动与下月观察点。"
       >
         <div className="market-scan-overview-trend-stack">
-          <div className="market-scan-overview-trend-chart">
-              <PlotlyChart
+          <div className="market-scan-overview-trend-chart" onDoubleClickCapture={handleTrendLegendDoubleClick}>
+            <PlotlyChart
               data={applyMarketScanExportToTraces(
                 buildOverviewTrendData(trendItems, fuelOrder, showDataLabels),
                 exportSettings,
               )}
               layout={applyMarketScanExportToLayout({
                 ...CHART_LAYOUT,
+                margin: MARKET_SCAN_OVERVIEW_TREND_MARGIN,
                 barmode: "stack",
                 xaxis: { type: "category" },
                 yaxis: { title: { text: "销量" } },
@@ -1715,6 +1828,11 @@ function OverviewSection({
               height={compact ? 238 : 318}
             />
           </div>
+          <OverviewTrendShareRows
+            items={trendItems}
+            fuel={activeTrendShareFuel}
+            fontSize={exportSettings.fontSize}
+          />
           <InsightContent insight={insight} inline />
         </div>
       </Panel>

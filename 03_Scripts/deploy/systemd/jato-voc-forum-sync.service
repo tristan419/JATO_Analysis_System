@@ -1,0 +1,27 @@
+[Unit]
+Description=JATO VOC forum sync (raw -> staging -> deck)
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/JATO_Analysis_System-main
+
+# Recommended: run as a non-root user.
+# User=deploy
+# Group=deploy
+
+EnvironmentFile=-/etc/jato-fullstack/backend.env
+EnvironmentFile=-/etc/jato-fullstack/voc.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/JATO_Analysis_System-main/06_AppPlatform/backend
+Environment=REPO_DIR=/opt/JATO_Analysis_System-main
+
+ExecStart=/opt/JATO_Analysis_System-main/03_Scripts/run_voc_forum_sync.sh
+
+# Allow enough time for fetch + staging sync + deck generation.
+TimeoutStartSec=5400
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

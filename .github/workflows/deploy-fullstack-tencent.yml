@@ -5,13 +5,9 @@ on:
     branches: ["main"]
     paths:
       - "06_AppPlatform/**"
+      - "07_ScrapingToolkit/**"
+      - "03_Scripts/**"
       - "01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
-      - "03_Scripts/deploy_fullstack_server.sh"
-      - "03_Scripts/deploy/nginx/jato_fullstack.conf.example"
-      - "03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh"
-      - "03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh"
-      - "03_Scripts/deploy/systemd/jato-fullstack-backend@.service"
-      - "03_Scripts/deploy/systemd/jato-fullstack-backend.env.example"
       - ".github/workflows/deploy-fullstack-tencent.yml"
   workflow_dispatch:
 
@@ -73,7 +69,10 @@ jobs:
             --exclude='.git' \
             --exclude='node_modules' \
             --exclude='.venv' \
+            --exclude='.claude' \
+            --exclude='tmp' \
             --exclude='__pycache__' \
+            --exclude='*.pyc' \
             --exclude='01_RAW_DATA' \
             --exclude='04_Processed_data' \
             --exclude='*.ipynb' \

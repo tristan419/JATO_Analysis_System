@@ -301,6 +301,11 @@ POSITIONING_PAGE_REGISTRY: dict[str, dict[str, Any]] = {
         "subjectLabel": "价格带",
         "aliases": ("overview", "overview页", "总览页", "全市场页"),
     },
+    "suvAll": {
+        "pageLabel": "全 SUV",
+        "subjectLabel": "价格带",
+        "aliases": ("suvall", "suv-all", "suv all", "全suv", "全suv页", "全 suv页"),
+    },
     "suvA0": {
         "pageLabel": "SUV-A0",
         "subjectLabel": "价格带",
@@ -505,7 +510,7 @@ def _extract_positioning_page_from_text(text: str) -> str:
     if direct:
         return direct
     explicit_token = re.search(
-        r"(?<![A-Za-z0-9])(overview|suv\s*[- ]?a0|suv\s*[- ]?a|suv\s*[- ]?b\+?)\s*(?:页|页面|tab|里|中)",
+        r"(?<![A-Za-z0-9])(overview|suv\s*[- ]?all|suv\s*[- ]?a0|suv\s*[- ]?a|suv\s*[- ]?b\+?)\s*(?:页|页面|tab|里|中)",
         raw,
         re.IGNORECASE,
     )
@@ -513,6 +518,8 @@ def _extract_positioning_page_from_text(text: str) -> str:
         return _normalize_positioning_page_key(explicit_token.group(1))
     if re.search(r"全市场\s*(?:页|页面|里|中)", raw):
         return "overview"
+    if re.search(r"全\s*suv\s*(?:页|页面|里|中)", raw, re.IGNORECASE):
+        return "suvAll"
     return ""
 
 
@@ -1828,6 +1835,8 @@ def _resolve_positioning_page_scope_bundle(
             top_n=50,
             msrp_min=None,
             msrp_max=None,
+            length_min=None,
+            length_max=None,
             price_band_size=None,
         )
     except Exception:  # noqa: BLE001

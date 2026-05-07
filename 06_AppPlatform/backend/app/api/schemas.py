@@ -129,6 +129,8 @@ class PositioningPricingDeckRequest(BaseModel):
     top_n: int = Field(default=50, ge=1, le=200)
     msrp_min: float | None = Field(default=None, ge=0)
     msrp_max: float | None = Field(default=None, ge=0)
+    length_min: float | None = Field(default=None, ge=0)
+    length_max: float | None = Field(default=None, ge=0)
     price_band_size: int | None = Field(default=None, ge=500, le=200000)
 
 

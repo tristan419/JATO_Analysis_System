@@ -16,7 +16,8 @@ price_semantics: base_msrp         # or "as_configured", "on_the_road"
 
 # ── Extractor type ───────────────────────────────────────────
 # Choose one:  "scrapling" (web page), "http_json" (REST API),
-# or "playwright" (dynamic trim -> powertrain card flow)
+# "playwright" (dynamic trim -> powertrain card flow),
+# or "pdf_text" (official PDF price lists parsed via regex)
 extractor_type: scrapling
 
 # Optional: merge a shared profile preset before applying local overrides.
@@ -63,6 +64,15 @@ profile:
   #   price_label: priceLabel
   #   availability: availability
   #   vehicles_path: data.models
+
+  # --- pdf_text only ---
+  # entry_patterns:
+  #   - pattern: 'Trim A.*?(?P<price>\d{1,3}(?:\s\d{3})+)\s+€'
+  #     official_trim: Trim A
+  #     official_powertrain: 2.0 TDI 110 kW
+  #     jato_powertrain: ICE
+  #     price_delta: 0
+  # copy_trim_to_jato_trim: true
 
   # --- playwright only ---
   # browser: chromium

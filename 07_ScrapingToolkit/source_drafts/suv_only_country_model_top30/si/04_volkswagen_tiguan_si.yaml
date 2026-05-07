@@ -6,52 +6,33 @@
 # Suggested scope kind: single_model
 # Sales 12M: 1,182
 # Draft path: si/04_volkswagen_tiguan_si.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
+# Porsche Holding Volkswagen family page exposes static model overview cards with
+# entry MSRP and a deep link into the configurator. This draft now filters the
+# shared overview page down to the Tiguan card.
 source_code: volkswagen_tiguan_si_draft_scrapling
 country: 斯洛文尼亚
 brand: VOLKSWAGEN
-source_url: https://todo.invalid/si/volkswagen/tiguan
+source_url: https://www.volkswagen.si/modeli-in-konfigurator/vsi-modeli
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
-profile_preset: ../_shared/presets/volkswagen_model_page_scrapling.yaml
+profile_preset: ../_shared/presets/porsche_holding_volkswagen_model_overview_scrapling.yaml
 profile:
-  url: https://todo.invalid/si/volkswagen/tiguan
+  url: https://www.volkswagen.si/modeli-in-konfigurator/vsi-modeli
   css:
-    vehicle_container: TODO_SELECTOR
-    model: TODO_SELECTOR
-    trim: TODO_SELECTOR
-    price: TODO_SELECTOR
-  default_currency: TODO
-  default_tax_included: true
-  default_price_label: TODO verify local MSRP label
+    include_if_text_contains:
+    - Tiguan
+  default_price_label: Od z DDV
   fixed_model: TIGUAN
   fixed_jato_model: TIGUAN
-  structured_fields:
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - TODO_PHEV_KEYWORD
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - TODO_MHEV_KEYWORD
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - TODO_ICE_KEYWORD
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources.
+notes: Uses the Porsche Holding all-model overview page and filters to the Tiguan
+  card by container text. This keeps the draft runnable without hard-coding an unstable
+  single-model configurator route.
 bootstrap_meta:
   country_model_rank: 4
   suggested_scope_kind: single_model

@@ -9,11 +9,13 @@ description = "Standalone MSRP scraping toolkit for JATO Analysis System"
 requires-python = ">=3.11"
 dependencies = [
   "pandas>=2.3",
+  "pypdf>=5.4",
   "pyarrow>=23.0.0",
   "pyyaml>=6.0",
   "playwright>=1.54",
   "requests>=2.32",
   "scrapling[fetchers]>=0.4",
+  "trafilatura>=1.12",
 ]
 
 [project.scripts]
@@ -21,6 +23,7 @@ jato-scrape = "jato_scraper.runner:main"
 jato-news-fetch = "jato_scraper.news_runner:main"
 jato-voc-plan = "jato_scraper.voc_runner:main"
 jato-voc-fetch = "jato_scraper.voc_fetcher:main"
+jato-voc-enrich = "jato_scraper.voc_enricher:main"
 jato-msrp-page-analyze = "jato_scraper.llm.msrp_page_analyzer:main"
 jato-evkx-fetch = "jato_scraper.evkx_catalog:main"
 

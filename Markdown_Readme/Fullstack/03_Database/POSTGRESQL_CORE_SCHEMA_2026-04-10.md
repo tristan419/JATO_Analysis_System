@@ -1,6 +1,6 @@
 # PostgreSQL Core Schema Design
 
-状态：Draft
+状态：Active
 
 日期：2026-04-10
 
@@ -98,6 +98,41 @@
 3. msrp：来源、抓取、价格结果、当前价格。
 4. review：人工复核与 override。
 5. alerting：价格波动预警和价格效果验证。
+
+### 3.1 当前已落地的 app-facing PostgreSQL 契约（2026-04-21）
+
+当前仓库里的 PostgreSQL 已经实际承载四类 app-facing 业务域：
+
+1. `engineering.*`
+	- `config_projects`
+	- `config_import_batches`
+	- `config_variants`
+	- `base_variants`
+	- `market_variants`
+	- `market_feature_overrides`
+2. `msrp.*`
+	- `sources`
+	- `scrape_batches`
+	- `observations`
+	- `current_prices`
+	- `price_history`
+	- `jato_msrp_links`
+3. `review.*`
+	- `review_cases`
+	- `review_decisions`
+	- `match_overrides`
+4. `ops.*` 中和 app-facing 内容直接相关的业务表
+	- `country_news_articles`
+	- `country_news_digests`
+	- `voc_source_runs`
+	- `voc_raw_documents`
+
+当前边界应固定为：
+
+1. PostgreSQL 负责业务真值、事务、一致性、可索引查询和审计链。
+2. Parquet 继续负责 JATO 主分析事实表与大规模分析查询。
+3. 文件系统 / artifact 层继续负责 VOC raw/enriched/deck、网页 snapshot 路径和其他大对象。
+4. News / VOC 在 PostgreSQL 里当前是 app-facing snapshot / staging，不是全文对象仓库。
 
 ## 4. 首批核心表总览
 
@@ -552,6 +587,23 @@
 9. msrp.observations -> alerting.price_alerts
 10. alerting.price_alerts -> alerting.price_sales_effectiveness
 
+### 18.1 2026-04-21 审计后新增的结构护栏
+
+基于本地 PostgreSQL 实例审计，当前实现需要把下面几条从“应用层约定”升级成“数据库级护栏”：
+
+1. `msrp.price_history` 必须禁止同一业务键出现重叠价格区间。
+2. `review.match_overrides` 必须禁止同一业务键出现重叠有效期。
+3. `review.review_decisions` 必须和 `review_cases` 里的 `review_case_id + observation_id` 成对一致，不能只靠两条独立外键。
+4. `engineering.market_feature_overrides` 的 `bool/number/text/json` 多态值列必须强制“恰好一列有值”。
+5. `current_prices / observations / price_history / engineering import` 等真实外键需要补齐索引。
+
+这些约束的目标不是追求“更严格的 schema 好看”，而是把现在已经由服务层隐式维护的事实收回到 PostgreSQL 自己保证：
+
+1. MSRP current truth 的时间线不重叠。
+2. dated override 不会产生双重生效窗口。
+3. review 审计链不会出现 case / observation 漂移。
+4. 多态 feature value 不会写出自相矛盾的数据。
+
 ## 19. 与 Parquet 的边界
 
 以下结论必须明确：
@@ -580,3 +632,12 @@
 4. 通知中心表。
 
 如果后续 review 用户数量增加，再补充这些通用平台表。
+
+## 22. 当前推荐的 domain 文档入口（2026-04-21）
+
+为了避免后续把 news / VOC / MSRP 的关系库入口写散，这里把当前推荐入口固定如下：
+
+1. MSRP 数据库架构入口：`Fullstack/MSRP/README.md` + 本文档。
+2. VOC 数据库边界入口：`Fullstack/02_DataETL/VOC_FORUM_IMPLEMENTATION_STATUS_2026-04-19.md` + 本文档。
+3. News 数据库边界入口：`Fullstack/01_DevWorkflow/COUNTRY_COPILOT_INTELLIGENCE_IMPLEMENTATION_2026-04-15.md` + 本文档。
+4. 迁移落地入口：`Fullstack/03_Database/ALEMBIC_MIGRATION_PLAN_2026-04-10.md` + `06_AppPlatform/backend/alembic/versions/`。

@@ -1,6 +1,6 @@
 # Alembic Migration Plan
 
-状态：Draft
+状态：Active
 
 日期：2026-04-10
 
@@ -101,6 +101,40 @@
 1. alerts 依赖 current prices 或 observations。
 2. effectiveness 又依赖 alerts 和后续 JATO 月度数据。
 
+### 3.6 0012 news auto review + VOC staging
+
+用途：把 app-facing news snapshot 和 VOC raw staging 正式接进 PostgreSQL。
+
+内容：
+
+1. 给 `ops.country_news_articles` / `ops.country_news_digests` 增加 auto-review 字段。
+2. 创建 `ops.voc_source_runs`。
+3. 创建 `ops.voc_raw_documents`。
+
+为什么这一步要进 PostgreSQL：
+
+1. news 需要 app-facing snapshot / digest store，而不是继续依赖 toolkit-only 文件。
+2. VOC 需要可筛选、可审计、可观察的 raw staging 层。
+3. 这两类表都属于业务操作型数据，不应该回落到 Parquet。
+
+### 3.7 0013 database guardrails
+
+用途：把本来只在服务层隐式成立的数据库规则收回到 PostgreSQL 自己保证。
+
+内容：
+
+1. 给 `msrp.price_history` 增加时间窗口合法性检查与业务键区间排斥约束。
+2. 给 `review.match_overrides` 增加有效期合法性检查与业务键区间排斥约束。
+3. 给 `review.review_decisions` 增加 `review_case_id + observation_id` 复合一致性约束。
+4. 给 `engineering.market_feature_overrides` 增加多态值列一致性 CHECK。
+5. 给 `engineering/msrp` 下真实外键补索引。
+
+为什么这一步必须补：
+
+1. 当前 live 数据虽然干净，但 schema 本身还没防住时态重叠和冗余漂移。
+2. 这些问题越到后期越难靠脚本补救。
+3. 现在数据量还小，补这类约束的成本最低。
+
 ## 4. Revision 命名建议
 
 建议统一格式：
@@ -110,6 +144,8 @@
 3. 20260410_0003_msrp_ingestion
 4. 20260410_0004_review_and_serving
 5. 20260410_0005_alerting
+6. 20260419_0012_news_auto_review_and_voc_staging
+7. 20260421_0013_database_guardrails
 
 ## 5. Alembic 操作约定
 

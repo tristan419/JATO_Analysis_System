@@ -160,6 +160,98 @@ export interface DataManagementVocSyncResponse {
   errorCount: number;
 }
 
+export interface DataManagementVocCountryOption {
+  code: string;
+  label: string;
+  status: string;
+  updatedAt?: string | null;
+  rawSourceCount: number;
+  rawDocumentCount: number;
+  publishReadyCount: number;
+  signalObservationCount: number;
+  deckReady: boolean;
+}
+
+export interface DataManagementVocArtifact {
+  key: string;
+  label: string;
+  kind: string;
+  path: string;
+  exists: boolean;
+  isDir: boolean;
+  sizeBytes?: number | null;
+  fileCount?: number | null;
+  updatedAt?: string | null;
+}
+
+export interface DataManagementVocSourceRun {
+  sourceCode: string;
+  siteName: string;
+  siteType: string;
+  language?: string | null;
+  publishTier?: string | null;
+  publishDecision?: string | null;
+  documentCount: number;
+  publishReadyCount: number;
+  errorCount: number;
+  updatedAt?: string | null;
+  path: string;
+  textExtractionMethods: string[];
+}
+
+export interface DataManagementVocShareItem {
+  label: string;
+  rawLabel?: string | null;
+  count: number;
+  sharePct: number;
+  mentionCount?: number | null;
+}
+
+export interface DataManagementVocEvidenceCard {
+  title: string;
+  url: string;
+  siteName: string;
+  publishTier: string;
+  signals: string[];
+  snippet: string;
+}
+
+export interface DataManagementVocDocumentationRef {
+  label: string;
+  path: string;
+  exists: boolean;
+  isDir: boolean;
+  sizeBytes?: number | null;
+  fileCount?: number | null;
+  updatedAt?: string | null;
+}
+
+export interface DataManagementVocStagingStatus {
+  databaseConnected: boolean;
+  sourceRunCount: number;
+  documentCount: number;
+  publishReadyCount: number;
+  latestCollectedAt?: string | null;
+}
+
+export interface DataManagementVocOverviewResponse {
+  generatedAt: string;
+  selectedCountryCode: string;
+  selectedCountryLabel: string;
+  availableCountries: DataManagementVocCountryOption[];
+  overallMetrics: DataManagementMetric[];
+  countryMetrics: DataManagementMetric[];
+  artifacts: DataManagementVocArtifact[];
+  sourceRuns: DataManagementVocSourceRun[];
+  observedSections: string[];
+  inferredSections: string[];
+  topPainPoints: DataManagementVocShareItem[];
+  topProductSignals: DataManagementVocShareItem[];
+  evidenceCards: DataManagementVocEvidenceCard[];
+  documentation: DataManagementVocDocumentationRef[];
+  staging: DataManagementVocStagingStatus;
+}
+
 export interface DataManagementOverviewResponse {
   generatedAt: string;
   database: DataManagementDatabaseStatus;

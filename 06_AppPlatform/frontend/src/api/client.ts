@@ -1353,6 +1353,16 @@ export const api = {
     });
     return request<CustomerInsightDeckResponse>(`/market-scan/nordic-customer-deck?${search.toString()}`);
   },
+  nordicHevCustomerDeck: (mode: CustomerInsightMode = "benchmark", countries?: string[]) => {
+    const search = new URLSearchParams();
+    search.set("mode", mode);
+    (countries ?? []).forEach((country) => {
+      if (country.trim()) {
+        search.append("countries", country.trim().toUpperCase());
+      }
+    });
+    return request<CustomerInsightDeckResponse>(`/market-scan/nordic-hev-customer-deck?${search.toString()}`);
+  },
   listItems: (params?: {
     page?: number;
     page_size?: number;

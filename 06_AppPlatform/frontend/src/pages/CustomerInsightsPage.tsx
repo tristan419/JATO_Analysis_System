@@ -6,6 +6,8 @@ import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../co
 import { LoadingSurface } from "../components/LoadingSurface";
 import type {
   CustomerInsightDeckResponse,
+  CustomerInsightEvidenceCard,
+  CustomerInsightMode,
   CustomerInsightShareItem,
   PositioningPricingMetric,
 } from "../types";
@@ -16,6 +18,46 @@ const EXPORT_PRESETS = [
   { key: "fhd", label: "1920 x 1080", width: 1920, height: 1080 },
   { key: "qhd", label: "2560 x 1440", width: 2560, height: 1440 },
 ] as const;
+const LIVE_COUNTRY_LABELS: Record<string, string> = {
+  SE: "SE / Sweden",
+  FI: "FI / Finland",
+  NO: "NO / Norway",
+  DK: "DK / Denmark",
+};
+const DEFAULT_MODE_OPTIONS: CustomerInsightMode[] = ["benchmark", "forum_live"];
+
+type BenchmarkSectionCopy = {
+  chipLabel: string;
+  loadingLabel: string;
+  loadingDetail: string;
+  occupationSubtitle: string;
+  powertrainSubtitle: string;
+  philosophySubtitle: string;
+  useCasesSubtitle: string;
+  decisionFactorsSubtitle: string;
+  personaSubtitle: string;
+};
+
+type CustomerInsightsPageProps = {
+  deckLoader?: (mode: CustomerInsightMode, countries?: string[]) => Promise<CustomerInsightDeckResponse>;
+  modeOptions?: CustomerInsightMode[];
+  slideCode?: string;
+  exportFilePrefix?: string;
+  errorTitle?: string;
+  benchmarkCopy?: Partial<BenchmarkSectionCopy>;
+};
+
+const DEFAULT_BENCHMARK_COPY: BenchmarkSectionCopy = {
+  chipLabel: "Curated benchmark sample",
+  loadingLabel: "正在整理北欧用户调研",
+  loadingDetail: "从 VOC Nordic 用户深访中聚合家庭画像、购车用途与典型 persona。",
+  occupationSubtitle: "职业主要集中在专业白领、教育、医疗与公共服务。",
+  powertrainSubtitle: "不是排斥转电，而是按冬季补能、家庭长途和 TCO 做现实权衡。",
+  philosophySubtitle: "用户在品牌、低碳、TCO 和科技体验之间做现实取舍。",
+  useCasesSubtitle: "家庭长途、滑雪、拖挂与通勤并存，强调全季节适应性。",
+  decisionFactorsSubtitle: "价格体系、补能便利、冬季能力和智能化都在前排。",
+  personaSubtitle: "把北欧家庭转电用户翻译成可直接用于产品和营销讨论的画像。",
+};
 
 function formatMetricValue(value: number | string): string {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -26,6 +68,17 @@ function formatMetricValue(value: number | string): string {
 
 function formatShare(sharePct: number): string {
   return `${Math.round(sharePct * 100)}%`;
+}
+
+function formatEvidenceTimestamp(value?: string | null): string {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
 }
 
 function takeTopItems(items: CustomerInsightShareItem[] | undefined, limit: number): CustomerInsightShareItem[] {
@@ -45,10 +98,19 @@ function buildSourceMetaLabel(items: CustomerInsightShareItem[] | undefined): st
   return items && items.length > 0 ? "来源 瑞典 / 北欧常看汽车论坛" : "来源 瑞典 / 北欧车主讨论网站";
 }
 
-function buildSourceDetail(
-  sampleSources: CustomerInsightShareItem[] | undefined,
-  attentionChannels: CustomerInsightShareItem[] | undefined,
-): string {
+function buildDeckSourceMetaLabel(deck: CustomerInsightDeckResponse | null): string {
+  if (deck?.metadata.mode === "forum_live") {
+    return "来源 北欧公开论坛 / 评论页";
+  }
+  return buildSourceMetaLabel(deck?.page.profile.sampleSources);
+}
+
+function buildDeckSourceDetail(deck: CustomerInsightDeckResponse | null): string {
+  if (deck?.metadata.mode === "forum_live") {
+    return `覆盖 ${deck.metadata.coverageLabel}；只展示 observed forum VOC sections。`;
+  }
+  const sampleSources = deck?.page.profile.sampleSources;
+  const attentionChannels = deck?.page.profile.attentionChannels;
   if ((sampleSources?.length ?? 0) === 0 && (attentionChannels?.length ?? 0) === 0) {
     return "样本来源与购车信息渠道拆分展示。";
   }
@@ -115,8 +177,139 @@ function ProfileBlock({ title, items, wide = false }: { title: string; items: Cu
       <header>
         <h3>{title}</h3>
       </header>
-      <ShareList items={items} variant="profile" />
+      {items.length > 0 ? (
+        <ShareList items={items} variant="profile" />
+      ) : (
+        <p className="version-comparison-empty">暂无可展示项</p>
+      )}
     </section>
+  );
+}
+
+function TagCloud({ items }: { items: string[] }) {
+  if (items.length === 0) {
+    return <p className="version-comparison-empty">暂无可展示项</p>;
+  }
+  return (
+    <div className="customer-insight-tag-cloud">
+      {items.map((item) => (
+        <span key={item} className="customer-insight-tag">{item}</span>
+      ))}
+    </div>
+  );
+}
+
+function EvidenceCardList({ cards }: { cards: CustomerInsightEvidenceCard[] }) {
+  const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setExpandedCards({});
+  }, [cards]);
+
+  if (cards.length === 0) {
+    return <p className="version-comparison-empty">暂无可回放的证据卡片</p>;
+  }
+  return (
+    <div className="customer-insight-evidence-grid">
+      {cards.map((card) => (
+        <article key={card.url} className="customer-insight-evidence-card">
+          <div className="customer-insight-evidence-meta">
+            <span>{card.siteName || "Source"}</span>
+            <span>{card.publishTier || "n/a"}</span>
+            <span>{card.sentiment || "neutral"}</span>
+            {card.countryCode ? <span>{card.countryCode}</span> : null}
+            {card.language ? <span>{card.language}</span> : null}
+          </div>
+          <a
+            className="customer-insight-evidence-title"
+            href={card.url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {card.title}
+          </a>
+          <div className="customer-insight-tag-cloud">
+            {card.signals.map((signal) => (
+              <span key={`${card.url}-${signal}`} className="customer-insight-tag">
+                {signal}
+              </span>
+            ))}
+          </div>
+          <div className="customer-insight-note-list">
+            {card.evidenceSnippets.slice(0, 2).map((snippet) => (
+              <p key={`${card.url}-${snippet}`} className="customer-insight-note">{snippet}</p>
+            ))}
+          </div>
+          {card.excerpt || card.contentPreview || card.observations.length > 0 ? (
+            <>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost customer-insight-evidence-toggle"
+                onClick={() => {
+                  setExpandedCards((current) => ({
+                    ...current,
+                    [card.url]: !current[card.url],
+                  }));
+                }}
+              >
+                {expandedCards[card.url] ? "收起抓取内容" : "查看抓取内容"}
+              </button>
+              {expandedCards[card.url] ? (
+                <div className="customer-insight-evidence-detail">
+                  <div className="customer-insight-evidence-detail-meta">
+                    <span>发布时间：{formatEvidenceTimestamp(card.publishedAt)}</span>
+                    <span>抓取时间：{formatEvidenceTimestamp(card.collectedAt)}</span>
+                    {card.qualityScore ? <span>质量分：{card.qualityScore}</span> : null}
+                    {card.observationCount ? <span>Observation：{card.observationCount}</span> : null}
+                  </div>
+                  {card.excerpt ? (
+                    <div className="customer-insight-evidence-copy">
+                      <strong>页面摘录</strong>
+                      <p>{card.excerpt}</p>
+                    </div>
+                  ) : null}
+                  {card.contentPreview ? (
+                    <div className="customer-insight-evidence-copy">
+                      <strong>抓取正文预览{card.contentTruncated ? "（已截断）" : ""}</strong>
+                      <p>{card.contentPreview}</p>
+                    </div>
+                  ) : null}
+                  {card.observations.length > 0 ? (
+                    <div className="customer-insight-evidence-copy">
+                      <strong>命中的观察句</strong>
+                      <div className="customer-insight-evidence-observations">
+                        {card.observations.map((observation, index) => (
+                          <article
+                            key={`${card.url}-${observation.label}-${index}`}
+                            className="customer-insight-evidence-observation"
+                          >
+                            <div className="customer-insight-evidence-meta">
+                              <span>{observation.label}</span>
+                              <span>{observation.signalKind || "signal"}</span>
+                              <span>{observation.sentiment || "neutral"}</span>
+                            </div>
+                            <p>{observation.sentence}</p>
+                            {observation.matchedTokens.length > 0 ? (
+                              <div className="customer-insight-tag-cloud">
+                                {observation.matchedTokens.map((token) => (
+                                  <span key={`${card.url}-${observation.label}-${token}`} className="customer-insight-tag">
+                                    {token}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          ) : null}
+        </article>
+      ))}
+    </div>
   );
 }
 
@@ -158,8 +351,21 @@ function horizontalBarLayout(maxValue: number): Partial<PlotlyLayout> {
   };
 }
 
-export function CustomerInsightsPage() {
+export function CustomerInsightsPage({
+  deckLoader = api.nordicCustomerDeck,
+  modeOptions = DEFAULT_MODE_OPTIONS,
+  slideCode = "10",
+  exportFilePrefix = "customer-insights",
+  errorTitle = "北欧用户调研加载失败",
+  benchmarkCopy: benchmarkCopyOverrides,
+}: CustomerInsightsPageProps = {}) {
+  const availableModes = modeOptions.length > 0 ? modeOptions : DEFAULT_MODE_OPTIONS;
+  const defaultMode = availableModes[0] ?? "benchmark";
+  const benchmarkCopy = { ...DEFAULT_BENCHMARK_COPY, ...benchmarkCopyOverrides };
   const [deck, setDeck] = useState<CustomerInsightDeckResponse | null>(null);
+  const [mode, setMode] = useState<CustomerInsightMode>(defaultMode);
+  const [forumCountryFilter, setForumCountryFilter] = useState("ALL");
+  const [forumCountryOptions, setForumCountryOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [exportError, setExportError] = useState("");
@@ -172,13 +378,31 @@ export function CustomerInsightsPage() {
   }, []);
 
   useEffect(() => {
+    if (availableModes.includes(mode)) {
+      return;
+    }
+    setMode(defaultMode);
+    setForumCountryFilter("ALL");
+  }, [availableModes, defaultMode, mode]);
+
+  useEffect(() => {
     let active = true;
+    setDeck(null);
     setLoading(true);
     setError("");
-    api.nordicCustomerDeck()
+    const requestedCountries = mode === "forum_live" && forumCountryFilter !== "ALL"
+      ? [forumCountryFilter]
+      : undefined;
+    deckLoader(mode, requestedCountries)
       .then((response) => {
         if (!active) {
           return;
+        }
+        if (response.metadata.mode === "forum_live") {
+          setForumCountryOptions((current) => {
+            const merged = new Set<string>([...current, ...response.metadata.countryCodes]);
+            return Array.from(merged);
+          });
         }
         setDeck(response);
       })
@@ -196,9 +420,10 @@ export function CustomerInsightsPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [deckLoader, mode, forumCountryFilter]);
 
   const page = deck?.page;
+  const isForumLive = deck?.metadata.mode === "forum_live";
   const compactProfile = useMemo(() => ({
     sampleSources: page?.profile.sampleSources ?? [],
     attentionChannels: page?.profile.attentionChannels ?? [],
@@ -225,11 +450,22 @@ export function CustomerInsightsPage() {
   const usageMax = Math.max(...compactPurchaseUses.map((item) => item.sharePct), 0);
   const factorMax = Math.max(...compactDecisionFactors.map((item) => item.sharePct), 0);
   const exportPreset = EXPORT_PRESETS.find((item) => item.key === exportPresetKey) ?? EXPORT_PRESETS[1];
-  const sourceMetaLabel = useMemo(() => buildSourceMetaLabel(page?.profile.sampleSources), [page]);
-  const sourceDetail = useMemo(
-    () => buildSourceDetail(page?.profile.sampleSources, page?.profile.attentionChannels),
-    [page],
-  );
+  const sourceMetaLabel = useMemo(() => buildDeckSourceMetaLabel(deck), [deck]);
+  const sourceDetail = useMemo(() => buildDeckSourceDetail(deck), [deck]);
+  const sampleUnitLabel = deck?.metadata.sampleUnitLabel === "docs" ? "文档" : "样本";
+  const forumLive = page?.forumLive;
+  const forumSourceMix = forumLive?.sourceMix ?? [];
+  const forumSiteTypes = forumLive?.siteTypes ?? [];
+  const forumLanguages = forumLive?.languages ?? [];
+  const forumPublishTiers = forumLive?.publishTiers ?? [];
+  const forumSentiment = forumLive?.sentiment ?? [];
+  const forumOwnershipStages = forumLive?.ownershipStages ?? [];
+  const forumPainPoints = forumLive?.painPoints ?? [];
+  const forumProductSignals = forumLive?.productSignals ?? [];
+  const forumDecisionFactors = forumLive?.decisionFactors ?? [];
+  const forumEvidenceCards = forumLive?.evidenceCards ?? [];
+  const forumObservedSections = forumLive?.observedSections ?? [];
+  const forumInferredSections = forumLive?.inferredSections ?? [];
 
   async function handleExportSlide() {
     if (!slideRef.current || !deck || !page) {
@@ -261,7 +497,7 @@ export function CustomerInsightsPage() {
       const link = document.createElement("a");
       link.href = dataUrl;
       link.download = [
-        "customer-insights",
+        exportFilePrefix,
         sanitizeFileNameSegment(page.subtitle),
         String(deck.metadata.respondentCount),
       ].join("-") + ".png";
@@ -276,9 +512,56 @@ export function CustomerInsightsPage() {
   return (
     <div className="positioning-pricing-shell customer-insight-shell">
       <div className="positioning-pricing-main customer-insight-main">
+        <section className="market-scan-toolbar customer-insight-mode-toolbar">
+          <div className="market-scan-toolbar-group market-scan-toolbar-group--settings">
+            {availableModes.length > 1 ? (
+              <label className="market-scan-field">
+                <span>数据模式</span>
+                <select
+                  value={mode}
+                  onChange={(event) => {
+                    const nextMode = event.target.value as CustomerInsightMode;
+                    setMode(nextMode);
+                    if (nextMode !== "forum_live") {
+                      setForumCountryFilter("ALL");
+                    }
+                  }}
+                >
+                  {availableModes.includes("benchmark") ? <option value="benchmark">Benchmark Excel</option> : null}
+                  {availableModes.includes("forum_live") ? <option value="forum_live">Forum VOC Live</option> : null}
+                </select>
+              </label>
+            ) : null}
+            {mode === "forum_live" ? (
+              <label className="market-scan-field">
+                <span>live 国家</span>
+                <select
+                  value={forumCountryFilter}
+                  onChange={(event) => setForumCountryFilter(event.target.value)}
+                >
+                  <option value="ALL">All live countries</option>
+                  {forumCountryOptions.map((countryCode) => (
+                    <option key={countryCode} value={countryCode}>
+                      {LIVE_COUNTRY_LABELS[countryCode] ?? countryCode}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
+          <div className="market-scan-toolbar-group">
+            <span className="market-scan-toolbar-chip">
+              {mode === "benchmark" ? benchmarkCopy.chipLabel : "Observed-only live forum deck"}
+            </span>
+            {mode === "forum_live" && deck?.metadata.coverageLabel ? (
+              <span className="market-scan-toolbar-chip">覆盖 {deck.metadata.coverageLabel}</span>
+            ) : null}
+          </div>
+        </section>
+
         {error ? (
           <section className="market-scan-state-card market-scan-state-card--error">
-            <strong>北欧用户调研加载失败</strong>
+            <strong>{errorTitle}</strong>
             <p>{error}</p>
           </section>
         ) : null}
@@ -288,8 +571,12 @@ export function CustomerInsightsPage() {
             <LoadingSurface
               mode="inline"
               kicker="VOC"
-              label="正在整理北欧用户调研"
-              detail="从 VOC Nordic 用户深访中聚合家庭画像、购车用途与典型 persona。"
+              label={mode === "benchmark" ? benchmarkCopy.loadingLabel : "正在整理 live forum VOC"}
+              detail={
+                mode === "benchmark"
+                  ? benchmarkCopy.loadingDetail
+                  : "从已生成的公开论坛 / 评论页 deck 中聚合 observed evidence、痛点与决策因素。"
+              }
             />
           </section>
         ) : null}
@@ -315,13 +602,14 @@ export function CustomerInsightsPage() {
               >
               <header className="market-scan-slide-head">
                 <div className="market-scan-slide-copy">
-                  <span className="market-scan-slide-kicker">10 {page.title}</span>
+                  <span className="market-scan-slide-kicker">{slideCode} {page.title}</span>
                   <h2>{page.subtitle}</h2>
                   <p>{page.summaryText}</p>
                 </div>
                 <div className="market-scan-slide-meta">
-                  <span className="market-scan-slide-tag">样本 {deck.metadata.respondentCount}</span>
+                  <span className="market-scan-slide-tag">{sampleUnitLabel} {deck.metadata.respondentCount}</span>
                   <span className="market-scan-slide-tag">数据源 {deck.metadata.datasetLabel}</span>
+                  <span className="market-scan-slide-tag">{deck.metadata.modeLabel}</span>
                   <span className="market-scan-slide-tag">{sourceMetaLabel}</span>
                 </div>
               </header>
@@ -335,8 +623,8 @@ export function CustomerInsightsPage() {
 
                 <section className="market-scan-callout customer-insight-callout">
                   <div className="customer-insight-callout-head">
-                    <span className="market-scan-panel-eyebrow">Core Target User</span>
-                    <strong>核心目标用户结论</strong>
+                    <span className="market-scan-panel-eyebrow">{isForumLive ? "Observed Forum VOC" : "Core Target User"}</span>
+                    <strong>{isForumLive ? "公开论坛 live VOC 结论" : "核心目标用户结论"}</strong>
                   </div>
                   <div className="customer-insight-conclusion-grid">
                     {page.conclusionCards.map((card) => (
@@ -350,99 +638,207 @@ export function CustomerInsightsPage() {
                   <p className="customer-insight-methodology-note">{page.methodologyNote}</p>
                 </section>
 
-                <div className="market-scan-grid customer-insight-grid customer-insight-grid--upper">
-                  <Panel
-                    eyebrow="Profile Mix"
-                    title="基础画像"
-                    subtitle={sourceDetail}
-                  >
-                    <div className="customer-insight-profile-grid">
-                      <ProfileBlock title="样本来源" items={compactProfile.sampleSources} wide />
-                      <ProfileBlock title="关注渠道" items={compactProfile.attentionChannels} wide />
-                      <ProfileBlock title="性别" items={compactProfile.gender} />
-                      <ProfileBlock title="年龄" items={compactProfile.age} />
-                      <ProfileBlock title="家庭" items={compactProfile.household} />
-                      <ProfileBlock title="周通勤" items={compactProfile.weeklyCommute} />
+                {isForumLive ? (
+                  <>
+                    <div className="market-scan-grid customer-insight-grid customer-insight-grid--upper">
+                      <Panel
+                        eyebrow="Coverage"
+                        title="来源与覆盖"
+                        subtitle={sourceDetail}
+                      >
+                        <div className="customer-insight-profile-grid">
+                          <ProfileBlock title="来源站点" items={forumSourceMix} wide />
+                          <ProfileBlock title="站点类型" items={forumSiteTypes} wide />
+                          <ProfileBlock title="语言" items={forumLanguages} />
+                          <ProfileBlock title="发布层级" items={forumPublishTiers} />
+                        </div>
+                      </Panel>
+
+                      <Panel
+                        eyebrow="Sentiment"
+                        title="情绪分布"
+                        subtitle="当前为 document-level 主情绪，只作为粗粒度背景层。"
+                      >
+                        {forumSentiment.length > 0 ? (
+                          <ShareList items={forumSentiment} />
+                        ) : (
+                          <p className="version-comparison-empty">暂无可展示项</p>
+                        )}
+                      </Panel>
+
+                      <Panel
+                        eyebrow="Ownership"
+                        title="使用阶段 / 关注位"
+                        subtitle="forum live 模式里保留 heuristic ownership / energy-stage hits。"
+                      >
+                        {forumOwnershipStages.length > 0 ? (
+                          <ShareList items={forumOwnershipStages} />
+                        ) : (
+                          <p className="version-comparison-empty">暂无可展示项</p>
+                        )}
+                      </Panel>
+
+                      <Panel
+                        eyebrow="Boundaries"
+                        title="Observed vs inferred"
+                        subtitle="live 模式只展示 public VOC 里可直接观测到的 section。"
+                      >
+                        <div className="customer-insight-forum-sections">
+                          <div>
+                            <h3>Observed</h3>
+                            <TagCloud items={forumObservedSections} />
+                          </div>
+                          <div>
+                            <h3>Excluded / inferred-only</h3>
+                            <TagCloud items={forumInferredSections} />
+                          </div>
+                        </div>
+                      </Panel>
                     </div>
-                  </Panel>
 
-                  <Panel
-                    eyebrow="Occupation"
-                    title="工作领域"
-                    subtitle="职业主要集中在专业白领、教育、医疗与公共服务。"
-                  >
-                    <ShareList items={compactOccupation} />
-                  </Panel>
+                    <div className="market-scan-grid customer-insight-grid customer-insight-grid--lower">
+                      <Panel
+                        eyebrow="Pain Points"
+                        title="高频痛点"
+                        subtitle="来自 publish-ready 文档的 observation / mention 聚合。"
+                      >
+                        {forumPainPoints.length > 0 ? (
+                          <ShareList items={forumPainPoints} />
+                        ) : (
+                          <p className="version-comparison-empty">暂无可展示项</p>
+                        )}
+                      </Panel>
 
-                  <Panel
-                    eyebrow="Powertrain"
-                    title="动力 / 转电取向"
-                    subtitle="不是排斥转电，而是按冬季补能、家庭长途和 TCO 做现实权衡。"
-                  >
-                    <ShareList items={compactPowertrain} />
-                  </Panel>
+                      <Panel
+                        eyebrow="Product Signals"
+                        title="产品信号"
+                        subtitle="当前 live 讨论里最稳定出现的产品维度。"
+                      >
+                        {forumProductSignals.length > 0 ? (
+                          <ShareList items={forumProductSignals} />
+                        ) : (
+                          <p className="version-comparison-empty">暂无可展示项</p>
+                        )}
+                      </Panel>
 
-                  <Panel
-                    eyebrow="Philosophy"
-                    title="购车判断逻辑"
-                    subtitle="用户在品牌、低碳、TCO 和科技体验之间做现实取舍。"
-                  >
-                    <ShareList items={compactPhilosophy} />
-                  </Panel>
-                </div>
-
-                <div className="market-scan-grid customer-insight-grid customer-insight-grid--lower">
-                  <Panel
-                    eyebrow="Use Cases"
-                    title="购车用途"
-                    subtitle="家庭长途、滑雪、拖挂与通勤并存，强调全季节适应性。"
-                  >
-                    <div className="customer-insight-chart">
-                      <PlotlyChart
-                        data={usageTraces}
-                        layout={horizontalBarLayout(usageMax)}
-                        height={188}
-                      />
+                      <Panel
+                        eyebrow="Decision Factors"
+                        title="决策因素"
+                        subtitle="从产品信号与痛点反推出的高层 reason cluster。"
+                      >
+                        {forumDecisionFactors.length > 0 ? (
+                          <ShareList items={forumDecisionFactors} />
+                        ) : (
+                          <p className="version-comparison-empty">暂无可展示项</p>
+                        )}
+                      </Panel>
                     </div>
-                  </Panel>
 
-                  <Panel
-                    eyebrow="Decision Factors"
-                    title="购车关注因素"
-                    subtitle="价格体系、补能便利、冬季能力和智能化都在前排。"
-                  >
-                    <div className="customer-insight-chart">
-                      <PlotlyChart
-                        data={factorTraces}
-                        layout={horizontalBarLayout(factorMax)}
-                        height={188}
-                      />
-                    </div>
-                  </Panel>
+                    <Panel
+                      eyebrow="Evidence Cards"
+                      title="可回放证据"
+                      subtitle="保留来源、信号、snippet，并可直接展开查看抓取到的正文预览与命中观察句。"
+                    >
+                      <EvidenceCardList cards={forumEvidenceCards} />
+                    </Panel>
+                  </>
+                ) : (
+                  <>
+                    <div className="market-scan-grid customer-insight-grid customer-insight-grid--upper">
+                      <Panel
+                        eyebrow="Profile Mix"
+                        title="基础画像"
+                        subtitle={sourceDetail}
+                      >
+                        <div className="customer-insight-profile-grid">
+                          <ProfileBlock title="样本来源" items={compactProfile.sampleSources} wide />
+                          <ProfileBlock title="关注渠道" items={compactProfile.attentionChannels} wide />
+                          <ProfileBlock title="性别" items={compactProfile.gender} />
+                          <ProfileBlock title="年龄" items={compactProfile.age} />
+                          <ProfileBlock title="家庭" items={compactProfile.household} />
+                          <ProfileBlock title="周通勤" items={compactProfile.weeklyCommute} />
+                        </div>
+                      </Panel>
 
-                  <Panel
-                    eyebrow="Persona"
-                    title={page.persona.title}
-                    subtitle="把北欧家庭转电用户翻译成可直接用于产品和营销讨论的画像。"
-                  >
-                    <div className="customer-insight-persona">
-                      <p className="customer-insight-persona-summary">{page.persona.summary}</p>
-                      <div className="customer-insight-persona-grid">
-                        {compactPersonaFacts.map((fact) => (
-                          <article key={fact.label} className="customer-insight-persona-fact">
-                            <span>{fact.label}</span>
-                            <strong>{fact.value}</strong>
-                          </article>
-                        ))}
-                      </div>
-                      <div className="customer-insight-note-list">
-                        {compactPersonaNotes.map((note) => (
-                          <p key={note} className="customer-insight-note">{note}</p>
-                        ))}
-                      </div>
+                      <Panel
+                        eyebrow="Occupation"
+                        title="工作领域"
+                        subtitle={benchmarkCopy.occupationSubtitle}
+                      >
+                        <ShareList items={compactOccupation} />
+                      </Panel>
+
+                      <Panel
+                        eyebrow="Powertrain"
+                        title="动力 / 转电取向"
+                        subtitle={benchmarkCopy.powertrainSubtitle}
+                      >
+                        <ShareList items={compactPowertrain} />
+                      </Panel>
+
+                      <Panel
+                        eyebrow="Philosophy"
+                        title="购车判断逻辑"
+                        subtitle={benchmarkCopy.philosophySubtitle}
+                      >
+                        <ShareList items={compactPhilosophy} />
+                      </Panel>
                     </div>
-                  </Panel>
-                </div>
+
+                    <div className="market-scan-grid customer-insight-grid customer-insight-grid--lower">
+                      <Panel
+                        eyebrow="Use Cases"
+                        title="购车用途"
+                        subtitle={benchmarkCopy.useCasesSubtitle}
+                      >
+                        <div className="customer-insight-chart">
+                          <PlotlyChart
+                            data={usageTraces}
+                            layout={horizontalBarLayout(usageMax)}
+                            height={188}
+                          />
+                        </div>
+                      </Panel>
+
+                      <Panel
+                        eyebrow="Decision Factors"
+                        title="购车关注因素"
+                        subtitle={benchmarkCopy.decisionFactorsSubtitle}
+                      >
+                        <div className="customer-insight-chart">
+                          <PlotlyChart
+                            data={factorTraces}
+                            layout={horizontalBarLayout(factorMax)}
+                            height={188}
+                          />
+                        </div>
+                      </Panel>
+
+                      <Panel
+                        eyebrow="Persona"
+                        title={page.persona.title}
+                        subtitle={benchmarkCopy.personaSubtitle}
+                      >
+                        <div className="customer-insight-persona">
+                          <p className="customer-insight-persona-summary">{page.persona.summary}</p>
+                          <div className="customer-insight-persona-grid">
+                            {compactPersonaFacts.map((fact) => (
+                              <article key={fact.label} className="customer-insight-persona-fact">
+                                <span>{fact.label}</span>
+                                <strong>{fact.value}</strong>
+                              </article>
+                            ))}
+                          </div>
+                          <div className="customer-insight-note-list">
+                            {compactPersonaNotes.map((note) => (
+                              <p key={note} className="customer-insight-note">{note}</p>
+                            ))}
+                          </div>
+                        </div>
+                      </Panel>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
             </div>
@@ -473,7 +869,7 @@ export function CustomerInsightsPage() {
                   {exportingSlide ? "正在导出 PNG..." : "导出当前页 PNG"}
                 </button>
                 <span className="market-scan-toolbar-chip">{exportPreset.width} x {exportPreset.height}</span>
-                <span className="market-scan-toolbar-chip">{deck.metadata.respondentCount} Samples</span>
+                <span className="market-scan-toolbar-chip">{deck.metadata.respondentCount} {deck.metadata.sampleUnitLabel}</span>
               </div>
             </section>
           </>

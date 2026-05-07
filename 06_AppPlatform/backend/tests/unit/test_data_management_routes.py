@@ -217,3 +217,39 @@ def test_sync_voc_raw_route_maps_runtime_error(monkeypatch) -> None:
 
     assert response.status_code == 500
     assert response.json()["detail"] == "sync failed"
+
+
+def test_get_voc_overview_route_returns_payload(monkeypatch) -> None:
+    def _fake_read(country: str | None = None):
+        assert country == "NO"
+        return {
+            "generatedAt": "2026-04-20T12:00:00+00:00",
+            "selectedCountryCode": "NO",
+            "selectedCountryLabel": "Norway / 挪威",
+            "availableCountries": [],
+            "overallMetrics": [],
+            "countryMetrics": [],
+            "artifacts": [],
+            "sourceRuns": [],
+            "observedSections": [],
+            "inferredSections": [],
+            "topPainPoints": [],
+            "topProductSignals": [],
+            "evidenceCards": [],
+            "documentation": [],
+            "staging": {
+                "databaseConnected": False,
+                "sourceRunCount": 0,
+                "documentCount": 0,
+                "publishReadyCount": 0,
+                "latestCollectedAt": None,
+            },
+        }
+
+    monkeypatch.setattr(data_management, "read_voc_management_overview", _fake_read)
+
+    client = TestClient(app)
+    response = client.get("/v1/data-management/voc/overview?country=NO", headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json()["item"]["selectedCountryCode"] == "NO"

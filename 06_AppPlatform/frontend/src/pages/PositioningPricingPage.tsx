@@ -6,6 +6,17 @@ import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { DeckPeriodTimeline } from "../components/DeckPeriodTimeline";
 import { DeckSubpageNav } from "../components/DeckSubpageNav";
+import {
+  DEFAULT_EXPORT,
+  ExportPanel,
+  applyDataLabelsToTraces,
+  applyExportToLayout,
+  applySeriesColors,
+  buildExportLabelModeOptions,
+  getExportPalette,
+  withExportLabels,
+  type ExportSettings,
+} from "../components/ExportPanel";
 import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { LoadingSurface } from "../components/LoadingSurface";
 import type {
@@ -26,9 +37,51 @@ import { useArrowCountryNavigation } from "../utils/useArrowCountryNavigation";
 const DEFAULT_FUEL_TYPES = ["BEV", "HEV", "PHEV", "MHEV", "ICE"];
 const DEFAULT_COUNTRY = "瑞典";
 const DEFAULT_SALES_MODE: PositioningPricingSalesMode = "month";
+const DEFAULT_MSRP_MIN = 20000;
+const DEFAULT_MSRP_MAX = 60000;
 const DEFAULT_PRICE_BAND_SIZE = 1000;
+const DEFAULT_LENGTH_MIN = 4000;
+const DEFAULT_LENGTH_MAX = 5000;
+const DEFAULT_LENGTH_STEP = 50;
 const DEFAULT_TOP_N = 50;
+const DEFAULT_BUBBLE_SCALE = 2;
 const TOP_N_OPTIONS = [30, 50, 100] as const;
+const BUBBLE_SCALE_OPTIONS = [1, 2, 3, 4] as const;
+const POSITIONING_CHART_MARGIN = { l: 84, r: 24, t: 16, b: 52 } as const;
+const DEFAULT_POSITIONING_EXPORT: ExportSettings = {
+  ...DEFAULT_EXPORT,
+  showXGrid: false,
+  showYGrid: false,
+  showAxisLine: false,
+  legendPosition: "right",
+  fontSize: 11,
+  xTickFormat: "d",
+  yTickFormat: "d",
+  exportWidth: 960,
+  exportHeight: 430,
+  decimalPlaces: 0,
+};
+const DEFAULT_PRICE_BAND_EXPORT: ExportSettings = {
+  ...DEFAULT_POSITIONING_EXPORT,
+  dataLabelMode: "off",
+  dataLabelPosition: "outside",
+};
+const DEFAULT_BUBBLE_EXPORT: ExportSettings = {
+  ...DEFAULT_POSITIONING_EXPORT,
+  dataLabelMode: "model",
+  dataLabelPosition: "top",
+};
+const PRICE_BAND_LABEL_MODE_OPTIONS = buildExportLabelModeOptions({
+  showValue: true,
+  showSeries: true,
+  showSales: true,
+});
+const BUBBLE_LABEL_MODE_OPTIONS = buildExportLabelModeOptions({
+  showValue: true,
+  showSeries: true,
+  showModel: true,
+  showSales: true,
+});
 const EXPORT_PRESETS = [
   { key: "hd+", label: "1600 x 900", width: 1600, height: 900 },
   { key: "fhd", label: "1920 x 1080", width: 1920, height: 1080 },
@@ -56,9 +109,10 @@ const TAB_ITEMS: Array<{
   sublabel: string;
 }> = [
   { key: "overview", code: "01", label: "Overview", sublabel: "全市场" },
-  { key: "suvA0", code: "02", label: "SUV-A0", sublabel: "入门 SUV" },
-  { key: "suvA", code: "03", label: "SUV-A", sublabel: "A级 SUV" },
-  { key: "suvBPlus", code: "04", label: "SUV-B+", sublabel: "B 级及以上 SUV" },
+  { key: "suvAll", code: "02", label: "SUV", sublabel: "全 SUV" },
+  { key: "suvA0", code: "03", label: "SUV-A0", sublabel: "入门 SUV" },
+  { key: "suvA", code: "04", label: "SUV-A", sublabel: "A级 SUV" },
+  { key: "suvBPlus", code: "05", label: "SUV-B+", sublabel: "B 级及以上 SUV" },
 ];
 
 function isPageKey(value: string | null): value is PositioningPricingPageKey {
@@ -188,38 +242,52 @@ function MetricCard({ metric }: { metric: PositioningPricingMetric }) {
   );
 }
 
-function buildPriceBandTraces(page: PositioningPricingPage, fuelOrder: string[]): Data[] {
-  return fuelOrder.map((fuel) => ({
-    type: "bar",
-    orientation: "h",
-    name: fuel,
-    y: page.priceBands.items.map((item) => item.bandMid),
-    x: page.priceBands.items.map((item) => item.fuelMix[fuel] ?? 0),
-    width: page.priceBands.items.map((item) => Math.max(item.bandWidth * 0.84, 500)),
-    customdata: page.priceBands.items.map((item) => [item.label]),
-    marker: { color: fuelColor(fuel) },
-    hovertemplate: `%{customdata[0]}<br>${fuel}: %{x:,.0f} 台<extra></extra>`,
-  }) as Data);
+function buildPriceBandTraces(
+  page: PositioningPricingPage,
+  fuelOrder: string[],
+): Data[] {
+  return fuelOrder.map((fuel) => {
+    const salesValues = page.priceBands.items.map((item) => item.fuelMix[fuel] ?? 0);
+    return withExportLabels({
+      type: "bar",
+      orientation: "h",
+      name: fuel,
+      y: page.priceBands.items.map((item) => item.bandMid),
+      x: salesValues,
+      width: page.priceBands.items.map((item) => Math.max(item.bandWidth * 0.84, 500)),
+      customdata: page.priceBands.items.map((item) => [item.label]),
+      marker: { color: fuelColor(fuel) },
+      hovertemplate: `%{customdata[0]}<br>${fuel}: %{x:,.0f} 台<extra></extra>`,
+    } as Data, {
+      model: page.priceBands.items.map((item) => item.label),
+      sales: salesValues,
+      value: salesValues,
+      series: page.priceBands.items.map(() => fuel),
+    });
+  });
 }
 
-function buildBubbleTraces(items: PositioningPricingBubbleItem[], fuelOrder: string[]): Data[] {
+function buildBubbleTraces(
+  items: PositioningPricingBubbleItem[],
+  fuelOrder: string[],
+  bubbleScale: number,
+): Data[] {
+  const sizing = buildBubbleSizing(items.map((item) => item.sales), {
+    maxDiameter: 28 * bubbleScale,
+    minDiameter: 4,
+  });
   return fuelOrder.flatMap((fuel) => {
     const fuelItems = items.filter((item) => item.powertrain === fuel);
     if (fuelItems.length === 0) {
       return [];
     }
     const labelPosition = bubbleTextPosition(fuelOrder.indexOf(fuel));
-    const sizing = buildBubbleSizing(fuelItems.map((item) => item.sales), {
-      maxDiameter: 58,
-      minDiameter: 10,
-    });
-    return [{
+    return [withExportLabels({
       type: "scatter",
-      mode: "text+markers",
+      mode: "markers",
       name: fuel,
       x: fuelItems.map((item) => item.length),
       y: fuelItems.map((item) => item.msrpMin),
-      text: fuelItems.map((item) => item.model.trim()),
       textposition: labelPosition,
       textfont: { size: 9, color: "#334155" },
       cliponaxis: false,
@@ -236,7 +304,7 @@ function buildBubbleTraces(items: PositioningPricingBubbleItem[], fuelOrder: str
         color: fuelColor(fuel),
         opacity: 0.82,
         line: { color: "rgba(15, 23, 42, 0.28)", width: 1 },
-        size: sizing.values,
+        size: fuelItems.map((item) => Math.max(0, item.sales)),
         sizemode: sizing.sizemode,
         sizeref: sizing.sizeref,
         sizemin: sizing.sizemin,
@@ -245,45 +313,109 @@ function buildBubbleTraces(items: PositioningPricingBubbleItem[], fuelOrder: str
         "Model: %{customdata[0]}<br>Brand: %{customdata[1]}<br>Segment: %{customdata[2]}<br>Length: %{x:,.0f} mm"
         + "<br>最低 MSRP: %{y:,.0f}<br>组内中位 MSRP: %{customdata[3]:,.0f}<br>最高 MSRP: %{customdata[4]:,.0f}"
         + "<br>Sales: %{customdata[5]:,.0f}<br>聚合版型数: %{customdata[6]:,.0f}<extra>%{fullData.name}</extra>",
-    } as Data];
+    } as Data, {
+      model: fuelItems.map((item) => item.model.trim()),
+      sales: fuelItems.map((item) => item.sales),
+      value: fuelItems.map((item) => item.msrpMin),
+      series: fuelItems.map(() => fuel),
+    })];
   });
 }
 
-function priceBandLayout(page: PositioningPricingPage): Partial<PlotlyLayout> {
-  const rangeMin = page.priceBands.range.min;
-  const rangeMax = page.priceBands.range.max;
-  const step = page.priceBands.bandSize;
+function priceBandLayout(
+  page: PositioningPricingPage,
+  exportSettings: ExportSettings,
+): Partial<PlotlyLayout> {
+  const showDataLabels = exportSettings.dataLabelMode !== "off";
+  const maxSales = Math.max(0, ...page.priceBands.items.map((item) => item.sales));
   return {
     ...CHART_LAYOUT,
     barmode: "stack",
-    margin: { l: 84, r: 20, t: 16, b: 48 },
-    xaxis: { title: { text: "Sales" }, zeroline: false },
-    yaxis: {
-      title: { text: "MSRP" },
-      range: [rangeMin, rangeMax],
-      tick0: rangeMin,
-      dtick: step,
-      tickformat: ",d",
-      automargin: true,
+    margin: { ...POSITIONING_CHART_MARGIN, r: showDataLabels ? 70 : POSITIONING_CHART_MARGIN.r },
+    xaxis: {
+      title: { text: "Sales" },
+      exponentformat: "none",
       zeroline: false,
+      ...(showDataLabels && maxSales > 0 ? { range: [0, maxSales * 1.18] } : {}),
     },
+    yaxis: msrpYAxisLayout(page),
   };
 }
 
 function bubbleLayout(page: PositioningPricingPage): Partial<PlotlyLayout> {
+  const lengthMin = page.lengthRange.min;
+  const lengthMax = page.lengthRange.max;
   return {
     ...CHART_LAYOUT,
-    margin: { l: 58, r: 24, t: 16, b: 52 },
-    xaxis: { title: { text: "Length (mm)" }, zeroline: false },
-    yaxis: {
-      title: { text: "最低 MSRP" },
-      range: [page.priceBands.range.min, page.priceBands.range.max],
-      tick0: page.priceBands.range.min,
-      dtick: page.priceBands.bandSize,
-      tickformat: ",d",
+    margin: POSITIONING_CHART_MARGIN,
+    xaxis: {
+      title: { text: "Length (mm)" },
+      range: [lengthMin, lengthMax],
+      tickformat: "d",
+      exponentformat: "none",
       zeroline: false,
     },
+    yaxis: msrpYAxisLayout(page),
   };
+}
+
+function msrpYAxisLayout(page: PositioningPricingPage): Partial<PlotlyLayout>["yaxis"] {
+  const rangeMin = page.priceBands.range.min;
+  return {
+    title: { text: "MSRP" },
+    range: [rangeMin, page.priceBands.range.max],
+    tick0: rangeMin,
+    dtick: page.priceBands.bandSize,
+    tickformat: "d",
+    exponentformat: "none",
+    zeroline: false,
+  };
+}
+
+function positioningSeriesKey(trace: Data): string | null {
+  const name = (trace as { name?: unknown }).name;
+  return typeof name === "string" && name.trim() ? name : null;
+}
+
+function buildPositioningSeriesColors(
+  traces: Data[],
+  exportSettings: ExportSettings,
+): Record<string, string> {
+  const manualColors = exportSettings.seriesColors ?? {};
+  if (exportSettings.colorScheme === DEFAULT_POSITIONING_EXPORT.colorScheme) {
+    return manualColors;
+  }
+  const palette = getExportPalette(exportSettings.colorScheme);
+  const resolved: Record<string, string> = { ...manualColors };
+  const assigned = new Set(Object.keys(manualColors));
+  let paletteIndex = 0;
+
+  traces.forEach((trace) => {
+    const key = positioningSeriesKey(trace);
+    if (!key || assigned.has(key)) {
+      return;
+    }
+    resolved[key] = palette[paletteIndex % palette.length];
+    assigned.add(key);
+    paletteIndex += 1;
+  });
+  return resolved;
+}
+
+function applyPositioningExportToTraces(
+  traces: Data[],
+  exportSettings: ExportSettings,
+): Data[] {
+  const labeled = applyDataLabelsToTraces(traces, exportSettings);
+  const colorOverrides = buildPositioningSeriesColors(traces, exportSettings);
+  return applySeriesColors(labeled, colorOverrides);
+}
+
+function applyPositioningExportToLayout(
+  layout: Partial<PlotlyLayout>,
+  exportSettings: ExportSettings,
+): Partial<PlotlyLayout> {
+  return applyExportToLayout(layout, { ...exportSettings, chartTitle: "" });
 }
 
 export function PositioningPricingPage() {
@@ -295,6 +427,9 @@ export function PositioningPricingPage() {
   const [exportingSlide, setExportingSlide] = useState(false);
   const [exportToolsOpen, setExportToolsOpen] = useState(false);
   const [exportPresetKey, setExportPresetKey] = useState<(typeof EXPORT_PRESETS)[number]["key"]>("fhd");
+  const [priceBandExport, setPriceBandExport] = useState<ExportSettings>(DEFAULT_PRICE_BAND_EXPORT);
+  const [bubbleExport, setBubbleExport] = useState<ExportSettings>(DEFAULT_BUBBLE_EXPORT);
+  const [bubbleScale, setBubbleScale] = useState<number>(DEFAULT_BUBBLE_SCALE);
   const [heroCollapsed, setHeroCollapsed] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const slideRef = useRef<HTMLDivElement | null>(null);
@@ -329,20 +464,25 @@ export function PositioningPricingPage() {
     const raw = Number(searchParams.get("topN") || DEFAULT_TOP_N);
     return TOP_N_OPTIONS.includes(raw as typeof TOP_N_OPTIONS[number]) ? raw : DEFAULT_TOP_N;
   });
-  const [priceControlsTouched, setPriceControlsTouched] = useState<boolean>(
-    () => searchParams.has("msrpMin") || searchParams.has("msrpMax") || searchParams.has("priceBandSize"),
-  );
   const [msrpMin, setMsrpMin] = useState<number | null>(() => {
     const raw = searchParams.get("msrpMin");
-    return raw ? Number(raw) : null;
+    return raw ? Number(raw) : DEFAULT_MSRP_MIN;
   });
   const [msrpMax, setMsrpMax] = useState<number | null>(() => {
     const raw = searchParams.get("msrpMax");
-    return raw ? Number(raw) : null;
+    return raw ? Number(raw) : DEFAULT_MSRP_MAX;
   });
   const [priceBandSize, setPriceBandSize] = useState<number | null>(() => {
     const raw = searchParams.get("priceBandSize");
     return raw ? Number(raw) : DEFAULT_PRICE_BAND_SIZE;
+  });
+  const [lengthMin, setLengthMin] = useState<number | null>(() => {
+    const raw = searchParams.get("lengthMin");
+    return raw ? Number(raw) : DEFAULT_LENGTH_MIN;
+  });
+  const [lengthMax, setLengthMax] = useState<number | null>(() => {
+    const raw = searchParams.get("lengthMax");
+    return raw ? Number(raw) : DEFAULT_LENGTH_MAX;
   });
   const countryOptions = deck?.metadata.availableCountries ?? [];
 
@@ -359,6 +499,8 @@ export function PositioningPricingPage() {
     if (topN !== DEFAULT_TOP_N) params.set("topN", String(topN));
     if (msrpMin !== null) params.set("msrpMin", String(msrpMin));
     if (msrpMax !== null) params.set("msrpMax", String(msrpMax));
+    if (lengthMin !== null) params.set("lengthMin", String(lengthMin));
+    if (lengthMax !== null) params.set("lengthMax", String(lengthMax));
     if (priceBandSize !== null) params.set("priceBandSize", String(priceBandSize));
     const fuels = selectedFuelTypes.slice().sort().join(",");
     const defaultFuels = DEFAULT_FUEL_TYPES.slice().sort().join(",");
@@ -366,7 +508,7 @@ export function PositioningPricingPage() {
       params.set("fuelTypes", selectedFuelTypes.join(","));
     }
     setSearchParams(params, { replace: true });
-  }, [activePage, msrpMax, msrpMin, priceBandSize, salesMode, selectedCountry, selectedFuelTypes, selectedPeriod, selectedTimeRange, setSearchParams, topN]);
+  }, [activePage, lengthMax, lengthMin, msrpMax, msrpMin, priceBandSize, salesMode, selectedCountry, selectedFuelTypes, selectedPeriod, selectedTimeRange, setSearchParams, topN]);
 
   useEffect(() => {
     syncUrlParams();
@@ -394,6 +536,8 @@ export function PositioningPricingPage() {
       top_n: topN,
       msrp_min: msrpMin,
       msrp_max: msrpMax,
+      length_min: lengthMin,
+      length_max: lengthMax,
       price_band_size: priceBandSize,
     })
       .then((response) => {
@@ -405,7 +549,7 @@ export function PositioningPricingPage() {
       .finally(() => {
         setLoading(false);
       });
-  }, [msrpMax, msrpMin, priceBandSize, reloadToken, salesMode, selectedCountry, selectedFuelTypes, selectedPeriod, selectedTimeRange, topN]);
+  }, [lengthMax, lengthMin, msrpMax, msrpMin, priceBandSize, reloadToken, salesMode, selectedCountry, selectedFuelTypes, selectedPeriod, selectedTimeRange, topN]);
 
   useEffect(() => {
     if (!deck) {
@@ -452,29 +596,22 @@ export function PositioningPricingPage() {
     ? selectedFuelTypes
     : (deck?.metadata.selectedFuelTypes ?? DEFAULT_FUEL_TYPES);
   const page = deck?.pages[activePage];
-  useEffect(() => {
-    if (!page || priceControlsTouched) {
-      return;
-    }
-    if (msrpMin !== page.priceBands.range.min) {
-      setMsrpMin(page.priceBands.range.min);
-    }
-    if (msrpMax !== page.priceBands.range.max) {
-      setMsrpMax(page.priceBands.range.max);
-    }
-    if (priceBandSize !== DEFAULT_PRICE_BAND_SIZE) {
-      setPriceBandSize(DEFAULT_PRICE_BAND_SIZE);
-    }
-  }, [msrpMax, msrpMin, page, priceBandSize, priceControlsTouched]);
   const activeTab = TAB_ITEMS.find((item) => item.key === activePage) ?? TAB_ITEMS[0];
   const exportPreset = EXPORT_PRESETS.find((item) => item.key === exportPresetKey) ?? EXPORT_PRESETS[1];
   const barTraces = useMemo(
-    () => (page ? buildPriceBandTraces(page, activeFuelTypes) : []),
-    [activeFuelTypes, page],
+    () => (page ? applyPositioningExportToTraces(buildPriceBandTraces(page, activeFuelTypes), priceBandExport) : []),
+    [activeFuelTypes, page, priceBandExport],
   );
   const bubbleTraces = useMemo(
-    () => (page ? buildBubbleTraces(page.bubbleChart.items, activeFuelTypes) : []),
-    [activeFuelTypes, page],
+    () => (
+      page
+        ? applyPositioningExportToTraces(
+            buildBubbleTraces(page.bubbleChart.items, activeFuelTypes, bubbleScale),
+            bubbleExport,
+          )
+        : []
+    ),
+    [activeFuelTypes, bubbleExport, bubbleScale, page],
   );
   const priceTruthLayer = useMemo(
     () => buildPositioningTruthLayer(deck?.metadata.priceOverlay),
@@ -561,6 +698,9 @@ export function PositioningPricingPage() {
                 <span className="market-scan-hero-chip">
                   MSRP {formatMetricValue(page?.priceBands.range.min ?? msrpMin ?? 0)}-{formatMetricValue(page?.priceBands.range.max ?? msrpMax ?? 0)}
                 </span>
+                <span className="market-scan-hero-chip">
+                  Length {formatMetricValue(page?.lengthRange.min ?? lengthMin ?? 0)}-{formatMetricValue(page?.lengthRange.max ?? lengthMax ?? 0)} mm
+                </span>
                 {loading && deck ? <span className="market-scan-hero-chip market-scan-hero-chip--live">Refreshing</span> : null}
               </div>
             </div>
@@ -636,7 +776,6 @@ export function PositioningPricingPage() {
                     value={msrpMin ?? ""}
                     placeholder={String(page?.priceBands.range.min ?? "")}
                     onChange={(event) => {
-                      setPriceControlsTouched(true);
                       setMsrpMin(event.target.value ? Number(event.target.value) : null);
                     }}
                   />
@@ -650,8 +789,33 @@ export function PositioningPricingPage() {
                     value={msrpMax ?? ""}
                     placeholder={String(page?.priceBands.range.max ?? "")}
                     onChange={(event) => {
-                      setPriceControlsTouched(true);
                       setMsrpMax(event.target.value ? Number(event.target.value) : null);
+                    }}
+                  />
+                </label>
+                <label className="market-scan-field">
+                  <span>Length Min</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={DEFAULT_LENGTH_STEP}
+                    value={lengthMin ?? ""}
+                    placeholder={String(page?.lengthRange.min ?? "")}
+                    onChange={(event) => {
+                      setLengthMin(event.target.value ? Number(event.target.value) : null);
+                    }}
+                  />
+                </label>
+                <label className="market-scan-field">
+                  <span>Length Max</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={DEFAULT_LENGTH_STEP}
+                    value={lengthMax ?? ""}
+                    placeholder={String(page?.lengthRange.max ?? "")}
+                    onChange={(event) => {
+                      setLengthMax(event.target.value ? Number(event.target.value) : null);
                     }}
                   />
                 </label>
@@ -664,7 +828,6 @@ export function PositioningPricingPage() {
                     value={priceBandSize ?? ""}
                     placeholder={String(page?.priceBands.bandSize ?? "")}
                     onChange={(event) => {
-                      setPriceControlsTouched(true);
                       setPriceBandSize(event.target.value ? Number(event.target.value) : null);
                     }}
                   />
@@ -696,10 +859,14 @@ export function PositioningPricingPage() {
                         setSalesMode(DEFAULT_SALES_MODE);
                         setSelectedFuelTypes(DEFAULT_FUEL_TYPES);
                         setTopN(DEFAULT_TOP_N);
-                        setPriceControlsTouched(false);
-                        setMsrpMin(null);
-                        setMsrpMax(null);
+                        setMsrpMin(DEFAULT_MSRP_MIN);
+                        setMsrpMax(DEFAULT_MSRP_MAX);
                         setPriceBandSize(DEFAULT_PRICE_BAND_SIZE);
+                        setLengthMin(DEFAULT_LENGTH_MIN);
+                        setLengthMax(DEFAULT_LENGTH_MAX);
+                        setPriceBandExport(DEFAULT_PRICE_BAND_EXPORT);
+                        setBubbleExport(DEFAULT_BUBBLE_EXPORT);
+                        setBubbleScale(DEFAULT_BUBBLE_SCALE);
                         setActivePage("overview");
                       }}
                     >
@@ -810,6 +977,9 @@ export function PositioningPricingPage() {
                     <span className="market-scan-slide-tag">
                       MSRP {page.priceBands.range.min.toLocaleString("en-US")}-{page.priceBands.range.max.toLocaleString("en-US")}
                     </span>
+                    <span className="market-scan-slide-tag">
+                      Length {page.lengthRange.min.toLocaleString("en-US")}-{page.lengthRange.max.toLocaleString("en-US")} mm
+                    </span>
                     <span className="market-scan-slide-tag">价格带步长 {page.priceBands.bandSize.toLocaleString("en-US")}</span>
                   </div>
                 </header>
@@ -823,7 +993,7 @@ export function PositioningPricingPage() {
 
                   <div className="market-scan-slide-content">
                     <div className="market-scan-callout positioning-pricing-summary">
-                      {page.subtitle}：左侧按 MSRP 区间看销量堆叠，右侧按最低 MSRP 看动力气泡定位。
+                      {page.subtitle}：左侧按 MSRP 区间看销量堆叠，右侧按车长区间过滤后用最低 MSRP 看动力气泡定位。
                     </div>
                     {priceTruthLayer ? (
                       <div className="market-scan-callout positioning-pricing-summary">
@@ -836,13 +1006,13 @@ export function PositioningPricingPage() {
                       <Panel
                         eyebrow="Price Bands"
                         title="累计价格带"
-                        subtitle="纵轴为 MSRP 区间，横轴为销量，按动力堆叠。"
+                        
                       >
                         <div className="positioning-pricing-chart">
                           {barTraces.length > 0 ? (
                             <PlotlyChart
                               data={barTraces}
-                              layout={priceBandLayout(page)}
+                              layout={applyPositioningExportToLayout(priceBandLayout(page, priceBandExport), priceBandExport)}
                               height={430}
                             />
                           ) : (
@@ -859,13 +1029,13 @@ export function PositioningPricingPage() {
                       <Panel
                         eyebrow="Powertrain Bubble"
                         title="动力气泡图"
-                        subtitle="与 Dashboard 不同，这里的 MSRP 使用组内最低值。"
+                        
                       >
                         <div className="positioning-pricing-chart">
                           {bubbleTraces.length > 0 ? (
                             <PlotlyChart
                               data={bubbleTraces}
-                              layout={bubbleLayout(page)}
+                              layout={applyPositioningExportToLayout(bubbleLayout(page), bubbleExport)}
                               height={430}
                             />
                           ) : (
@@ -910,6 +1080,41 @@ export function PositioningPricingPage() {
                         ))}
                       </select>
                     </label>
+                    <label className="market-scan-field">
+                      <span>气泡倍率</span>
+                      <select
+                        value={bubbleScale}
+                        onChange={(event) => setBubbleScale(Number(event.target.value))}
+                      >
+                        {BUBBLE_SCALE_OPTIONS.map((option) => (
+                          <option key={option} value={option}>
+                            ×{option}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="market-scan-field">
+                      <span>Price Bands</span>
+                      <ExportPanel
+                        value={priceBandExport}
+                        onChange={setPriceBandExport}
+                        seriesNames={activeFuelTypes}
+                        labelModeOptions={PRICE_BAND_LABEL_MODE_OPTIONS}
+                        showExportButton={false}
+                        showDimensionControls={false}
+                      />
+                    </div>
+                    <div className="market-scan-field">
+                      <span>Powertrain Bubble</span>
+                      <ExportPanel
+                        value={bubbleExport}
+                        onChange={setBubbleExport}
+                        seriesNames={activeFuelTypes}
+                        labelModeOptions={BUBBLE_LABEL_MODE_OPTIONS}
+                        showExportButton={false}
+                        showDimensionControls={false}
+                      />
+                    </div>
                     <button
                       type="button"
                       className="btn btn-primary btn-sm"
@@ -923,6 +1128,9 @@ export function PositioningPricingPage() {
                     <span className="market-scan-toolbar-chip">{exportPreset.width} x {exportPreset.height}</span>
                     <span className="market-scan-toolbar-chip">{deck.metadata.labels.salesModeLabel}</span>
                     <span className="market-scan-toolbar-chip">{activeTab.label}</span>
+                    <span className="market-scan-toolbar-chip">Bands 标签 {priceBandExport.dataLabelMode}</span>
+                    <span className="market-scan-toolbar-chip">Bubble 标签 {bubbleExport.dataLabelMode}</span>
+                    <span className="market-scan-toolbar-chip">气泡 ×{bubbleScale}</span>
                     <span className="market-scan-toolbar-chip">{deck.metadata.selectedCountryLabel}</span>
                     <span className="market-scan-toolbar-chip">{deck.metadata.resolvedPeriod}</span>
                   </div>

@@ -207,6 +207,35 @@ def test_overview_payload_includes_monthly_and_rolling12_model_breakdown() -> No
     assert payload["summary"]["rolling12Volume"] > 0
 
 
+def test_overview_payload_includes_suv_fuel_mix_for_trend() -> None:
+    frame = pd.DataFrame(
+        {
+            "__brand": ["TOYOTA", "KIA", "TOYOTA", "VOLVO"],
+            "__model": ["C-HR", "Niro", "Corolla", "XC40"],
+            "__powertrain": ["HEV", "HEV", "HEV", "BEV"],
+            "__segment_raw": ["SUV A", "SUV A0", "C", "SUV A"],
+            "2026 Jan": [100.0, 14.0, 280.0, 60.0],
+            "2026 Feb": [120.0, 18.0, 260.0, 80.0],
+        }
+    )
+
+    payload = market_scan_service._build_overview_payload(
+        frame=frame,
+        selected_fuels=["HEV", "BEV"],
+        available_periods=["2026-01", "2026-02"],
+        resolved_period="2026-02",
+        prior_period="2026-01",
+        same_month_last_year_period=None,
+        ranking_limit=10,
+    )
+
+    latest = payload["trend"]["items"][-1]
+    assert latest["fuelMix"]["HEV"] == pytest.approx(398.0)
+    assert latest["suvFuelMix"]["HEV"] == pytest.approx(138.0)
+    assert latest["suvFuelMix"]["BEV"] == pytest.approx(80.0)
+    assert latest["suvTotalVolume"] == pytest.approx(218.0)
+
+
 def test_drilldown_payload_includes_month_rolling12_and_ytd_variants() -> None:
     frame = pd.DataFrame(
         {
@@ -366,8 +395,10 @@ def test_resolve_positioning_sales_window_prefers_custom_range() -> None:
 
 
 def test_positioning_pricing_deck_request_accepts_ytd_sales_mode() -> None:
-    payload = PositioningPricingDeckRequest(sales_mode="ytd")
+    payload = PositioningPricingDeckRequest(sales_mode="ytd", length_min=4200, length_max=5000)
     assert payload.sales_mode == "ytd"
+    assert payload.length_min == pytest.approx(4200)
+    assert payload.length_max == pytest.approx(5000)
 
 
 def test_version_comparison_deck_request_accepts_ytd_sales_mode() -> None:
@@ -463,6 +494,19 @@ def test_build_positioning_price_bands_respects_custom_range_and_step() -> None:
     assert payload["items"][-1]["fuelMix"]["ICE"] == pytest.approx(80.0)
 
 
+def test_positioning_page_rows_supports_all_suv_scope() -> None:
+    frame = pd.DataFrame(
+        {
+            "__segment_raw": ["SUV A0", "SUV A", "SUV B", "SUV C", "Car A"],
+            "__model": ["A", "B", "C", "D", "E"],
+        }
+    )
+
+    rows = market_scan_service._positioning_page_rows(frame, "suvAll")
+
+    assert list(rows["__segment_raw"]) == ["SUV A0", "SUV A", "SUV B", "SUV C"]
+
+
 def test_build_positioning_bubble_items_uses_min_msrp_and_sales_sum() -> None:
     frame = pd.DataFrame(
         {
@@ -511,6 +555,65 @@ def test_build_positioning_bubble_items_respects_range_and_top_n() -> None:
     )
 
     assert [item["model"] for item in items] == ["Two", "Three"]
+
+
+def test_build_positioning_bubble_items_respects_length_range() -> None:
+    frame = pd.DataFrame(
+        {
+            "__brand": ["A", "B", "C", "D"],
+            "__model": ["One", "Two", "Three", "Four"],
+            "__powertrain": ["BEV", "PHEV", "HEV", "ICE"],
+            "__segment_raw": ["SUV A", "SUV A", "SUV A", "SUV A"],
+            "__length": [4500.0, 4650.0, 4700.0, 4850.0],
+            "__msrp": [43000.0, 50000.0, 56000.0, 62000.0],
+            "2026 Apr": [300.0, 250.0, 220.0, 200.0],
+        }
+    )
+
+    items = market_scan_service._build_positioning_bubble_items(
+        frame,
+        sales_column="2026 Apr",
+        bubble_limit=10,
+        length_min=4600.0,
+        length_max=4750.0,
+    )
+
+    assert [item["model"] for item in items] == ["Two", "Three"]
+
+
+def test_build_positioning_page_payload_applies_length_range_to_bands() -> None:
+    frame = pd.DataFrame(
+        {
+            "__brand": ["A", "B"],
+            "__model": ["Short", "Long"],
+            "__powertrain": ["BEV", "ICE"],
+            "__segment_raw": ["SUV A", "SUV B"],
+            "__length": [4300.0, 4800.0],
+            "__msrp": [22000.0, 32000.0],
+            "2026 Apr": [80.0, 120.0],
+        }
+    )
+
+    payload = market_scan_service._build_positioning_page_payload(
+        frame,
+        page_key="suvAll",
+        title="全 SUV",
+        subtitle="全 SUV 价格带与动力定位",
+        sales_column="2026 Apr",
+        sales_metric_label="Current Month Sales",
+        sales_metric_detail="当月销量",
+        selected_fuels=["BEV", "ICE"],
+        top_n=10,
+        msrp_min=None,
+        msrp_max=None,
+        price_band_size=10000,
+        length_min=4700.0,
+        length_max=4900.0,
+    )
+
+    assert payload["lengthRange"] == {"min": 4700.0, "max": 4900.0}
+    assert sum(item["sales"] for item in payload["priceBands"]["items"]) == pytest.approx(120.0)
+    assert [item["model"] for item in payload["bubbleChart"]["items"]] == ["Long"]
 
 
 def test_build_positioning_current_price_candidates_keeps_jato_and_official_keys() -> None:

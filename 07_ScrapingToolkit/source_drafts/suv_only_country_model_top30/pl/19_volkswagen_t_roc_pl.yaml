@@ -16,17 +16,11 @@ source_url: https://www.volkswagen.pl/pl/modele/t-roc.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
-profile_preset: ../_shared/presets/volkswagen_model_page_scrapling.yaml
+profile_preset: ../_shared/presets/volkswagen_pl_special_price_scrapling.yaml
 profile:
   url: https://www.volkswagen.pl/pl/modele/t-roc.html
-  css:
-    vehicle_container: TODO_SELECTOR
-    model: TODO_SELECTOR
-    trim: TODO_SELECTOR
-    price: TODO_SELECTOR
   default_currency: PLN
   default_tax_included: true
-  default_price_label: Cena katalogowa brutto
   fixed_model: T-ROC
   fixed_jato_model: T-ROC
   structured_fields:
@@ -44,10 +38,12 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Official Volkswagen model-page URL and local list-price wording were
-  verified on 2026-04-13. CSS selectors remain TODO because live probe did not
-  surface stable visible MSRP elements, so browser-based inspection is still
-  required before promotion.
+notes: The raw HTML exposes a stable `car-technical-data-section-v2` block where
+  the first list item is `Cena specjalna` and the finance metrics follow in a
+  separate technical-data list. This draft intentionally extracts the total
+  campaign price and excludes monthly-payment copy, but still needs a semantic
+  review before promotion because the page label is promotional rather than
+  explicit catalog MSRP.
 bootstrap_meta:
   country_model_rank: 19
   suggested_scope_kind: single_model

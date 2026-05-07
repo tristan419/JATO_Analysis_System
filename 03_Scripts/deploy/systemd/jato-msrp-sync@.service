@@ -1,0 +1,27 @@
+[Unit]
+Description=JATO MSRP %i sync (low concurrency)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/JATO_Analysis_System-main
+
+# Recommended: run as a non-root user.
+# User=deploy
+# Group=deploy
+
+EnvironmentFile=-/etc/jato-fullstack/backend.env
+EnvironmentFile=-/etc/jato-fullstack/msrp.env
+Environment=PYTHONUNBUFFERED=1
+Environment=REPO_DIR=/opt/JATO_Analysis_System-main
+Environment=JATO_MSRP_MODE=%i
+
+ExecStart=/opt/JATO_Analysis_System-main/03_Scripts/run_msrp_low_concurrency.sh
+
+# Allow enough time for sequential per-country dry-run / ingest work.
+TimeoutStartSec=14400
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

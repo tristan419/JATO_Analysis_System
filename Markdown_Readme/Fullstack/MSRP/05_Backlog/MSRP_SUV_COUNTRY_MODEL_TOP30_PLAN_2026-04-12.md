@@ -2,9 +2,9 @@
 
 Date: 2026-04-12
 
-Status: 执行中 — Batch 1+2 keyword filling 完成 (206/629)，dry-run 通过 97/212 (45.8%)
+Status: 执行中 — 执行口径已统一为 Batch A / Batch B，当前按 Batch A 优先推进。
 
-Update: 2026-04-13 Volkswagen configurator 专项补充已记录；BE/DK/FR 子集已 promotion 到 sources，IT/FI 子集验证完成，SI/SK 与 PL 进入定向挂起。
+Update: 2026-04-13 Volkswagen configurator 专项补充已记录；BE/DK/FR 子集已 promotion 到 sources，IT/FI 子集验证完成，SI/SK 与 PL 进入定向挂起。2026-04-21 补记：本页的批次口径已改为 Batch A / Batch B；其中 Batch A 与 `07_ScrapingToolkit/msrp_batches/batch_a.yaml` 对齐，CZ Skoda 5 个 source 已完成 production promotion；`03_Scripts/batch_ingest.py` 现已支持 `--auto-review --materialize` 串联自动链路；SK Touareg 已通过官方 `stock-cennik` PDF 收口并 promotion 到 production source；同日已完成 **CZ live ingest** 首轮实跑，review queue 已真实落地到本地 PostgreSQL。
 
 ---
 
@@ -18,13 +18,18 @@ Update: 2026-04-13 Volkswagen configurator 专项补充已记录；BE/DK/FR 子�
 - FR: Volkswagen T-Roc / Tiguan / T-Cross 已完成 production promotion to `07_ScrapingToolkit/sources/`。
 - IT: Volkswagen T-Roc / Tiguan / T-Cross 已切到 trim -> engine Playwright preset，定向 dry-run 结果为 5/5、24/24、12/12。
 - FI: Volkswagen ID.4 / Tiguan / T-Cross / Taigo 已切到 numeric __app Playwright preset，并补上 OneTrust dismiss 支持，定向 dry-run 结果为 9/9、9/9、7/7、7/7。
+- CZ: Skoda Kamiq / Karoq / Kodiaq / Elroq / Enyaq 的 draft 已在官方 `skoda-auto.cz/modely/*/*` 页面完成定向 dry-run，均为 **2/2 valid**，并已 promotion 到 `07_ScrapingToolkit/sources/`。
 
 ### 暂存 / 后续
 
-- SI / SK: Volkswagen 页面属于 Porsche configurator family，不再硬套当前 VW shared preset；后续单独抽一套 Porsche configurator shared preset 或 extractor。
-- PL: Volkswagen 页面在 total price 区域混入 finance 月供文案；后续先把总价 MSRP 与 finance 月供做干净分离，再执行 YAML 转换。
+- SI / SK: 已补 `porsche_holding_volkswagen_model_overview_scrapling` shared preset，并把 SI / SK Volkswagen drafts 从 `todo.invalid` 切到 Porsche Holding all-model overview 入口；SI 的 Tiguan / T-Roc / Tayron 已定向 dry-run 1/1。
+- SK: live validation 已定位到当前真实入口 `https://www.vw.sk/modely`，不是旧的 `volkswagen.sk/modely-a-konfigurator/vsetky-modely`。T-Cross / Tiguan / Taigo / T-Roc / Tayron 已切到新入口并定向 dry-run **1/1**。
+- SK: Touareg 已从 blocker 转为 production source：`/touareg/touareg/cenniky-a-katalogy` 公共页稳定暴露 `stock-cennik` / `katalog` / `technické údaje` 三个 PDF，其中 `stock-cennik` 已通过新 `pdf_text` extractor 接入 `07_ScrapingToolkit/sources/volkswagen_touareg_sk.yaml`，live dry-run 为 **11/11 valid**。
+- PL: Volkswagen Tiguan / T-Roc 已补 `volkswagen_pl_special_price_scrapling` shared preset，直接落在 `car-technical-data-section-v2` 的首条 `Cena specjalna`，避开后续 finance 月供与 leasing 百分比。
+- PL: Touareg 主站模型页不直接给 MSRP，但会跳到 `https://cenniki.volkswagen.pl/Touareg.html`；其前端实际再拉 `pricelists/<uuid>/pricelist.json`，其中 `sections.0.groups[*].items[*].price` 已给出正式价目。现已补 `volkswagen_pl_pricelist_http_json` shared preset，并定向 dry-run **7/7**。
+- PL: Tiguan Allspace 虽然主站独立车型页已失效/回跳 Tiguan，但 `cenniki.volkswagen.pl` 的官方价目索引仍保留 `Tiguan-Allspace.html` 与对应 `pricelist.json`。现已切到同一 JSON preset，并定向 dry-run **14/14**。
 
-> 这两项作为 handoff 保存在本计划中，后续恢复 Volkswagen backlog 时先按这里继续，不再重新判型。
+> 当前 Volkswagen handoff 中，SK Touareg 的单独 source 已经收口。PL 的 Tiguan / T-Roc finance 文案分离、Touareg / Tiguan Allspace 的 `pricelist.json` 接入，以及 SK 的 T-Cross / Tiguan / Taigo / T-Roc / Tayron live validation 现在都已有定向 dry-run 或 production source 落地；后续应回到 Batch A 优先推进。
 
 ---
 
@@ -64,62 +69,52 @@ scaffold 生成 → keyword filling → CSS selector 填充 → dry-run 测试 �
 
 ## 2. 国家批次划分
 
-### Batch 1 — dry-run 完成 ✅
+### Batch A — 当前优先波次
 
-| ISO | 国家     | 文件数 | 货币 | Keyword | CSS/URL 修复 | Dry-run                 |
-| --- | -------- | -----: | ---- | ------- | ------------ | ----------------------- |
-| SE  | 瑞典     |     29 | SEK  | ✅      | ✅ 多品牌    | **21/29** (72.4%) |
-| HR  | 克罗地亚 |     30 | EUR  | ✅      | 部分         | **5/30** (16.7%)  |
+> 与 `07_ScrapingToolkit/msrp_batches/batch_a.yaml` 对齐，后续 scraper 修复、promotion、ingest 都以这 8 国优先。
 
-### Batch 2 — dry-run 完成 ✅
+| ISO | 国家     | 文件数 | 货币 | 当前状态 |
+| --- | -------- | -----: | ---- | -------- |
+| SE  | 瑞典     |     29 | SEK  | ✅ Keyword / CSS / dry-run 已完成首轮，当前可继续做 promotion / ingest |
+| FI  | 芬兰     |     30 | EUR  | 进行中；VW 子集已验证，其余品牌继续补 URL / selector |
+| NO  | 挪威     |     30 | NOK  | ✅ Keyword / CSS / dry-run 已完成首轮 |
+| DK  | 丹麦     |     30 | DKK  | 进行中；VW 子集已 promotion，其余品牌继续补 URL / selector |
+| HU  | 匈牙利   |     31 | HUF  | ✅ Keyword / CSS / dry-run 已完成首轮 |
+| HR  | 克罗地亚 |     30 | EUR  | 进行中；Keyword 已完成，继续补稳定品牌 |
+| AT  | 奥地利   |     31 | EUR  | ✅ Keyword / CSS / dry-run 已完成首轮 |
+| CZ  | 捷克     |     30 | CZK  | ✅ Keyword / CSS / dry-run 已完成首轮；Skoda 5 个 source 已 promotion |
 
-| ISO | 国家   | 文件数 | 货币 | Keyword | CSS/URL 修复 | Dry-run                 |
-| --- | ------ | -----: | ---- | ------- | ------------ | ----------------------- |
-| HU  | 匈牙利 |     31 | HUF  | ✅      | ✅ 多品牌    | **16/31** (51.6%) |
-| NO  | 挪威   |     30 | NOK  | ✅      | ✅ 多品牌    | **13/30** (43.3%) |
-| AT  | 奥地利 |     31 | EUR  | ✅      | ✅ 多品牌    | **8/31** (25.8%)  |
-| CZ  | 捷克   |     30 | CZK  | ✅      | ✅ 多品牌    | **19/30** (63.3%) |
-| CH  | 瑞士   |     31 | CHF  | ✅      | ✅ 多品牌    | **15/31** (48.4%) |
+### Batch B — 后续波次
 
-### Batch 3 — 待执行
+> Batch B 作为后续波次排队，待 Batch A 的高确定性品牌、promotion、ingest 路径稳定后再整体推进。当前文档先按这组国家管理；如后续新增 `msrp_batches/batch_b.yaml`，应以此分组为准。
 
-| ISO | 国家       | 文件数 | 货币 | Keyword | CSS Selector | Dry-run |
-| --- | ---------- | -----: | ---- | ------- | ------------ | ------- |
-| SI  | 斯洛文尼亚 |     30 | EUR  | ⬜      | ⬜           | ⬜      |
-| RO  | 罗马尼亚   |     30 | RON  | ⬜      | ⬜           | ⬜      |
-
-### Batch 4 — 批量执行
-
-| ISO | 国家   | 文件数 | 货币 | Keyword | CSS Selector | Dry-run |
-| --- | ------ | -----: | ---- | ------- | ------------ | ------- |
-| DE  | 德国   |     30 | EUR  | ⬜      | ⬜           | ⬜      |
-| FR  | 法国   |     30 | EUR  | ⬜      | △ VW 子集已完成 | △ VW 子集已 promotion |
-| IT  | 意大利 |     30 | EUR  | ⬜      | ⬜           | ⬜      |
-| ES  | 西班牙 |     30 | EUR  | ⬜      | ⬜           | ⬜      |
-| NL  | 荷兰   |     30 | EUR  | ⬜      | ⬜           | ⬜      |
-| BE  | 比利时 |     30 | EUR  | ⬜      | △ VW 子集已完成 | △ VW 子集已 promotion |
-| PL  | 波兰   |     30 | PLN  | ⬜      | ⬜           | ⬜      |
-| DK  | 丹麦   |     30 | DKK  | ⬜      | △ VW 子集已完成 | △ VW 子集已 promotion |
-| FI  | 芬兰   |     30 | EUR  | ⬜      | ⬜           | ⬜      |
-| PT  | 葡萄牙 |     30 | EUR  | ⬜      | ⬜           | ⬜      |
-| IE  | 爱尔兰 |     30 | EUR  | ⬜      | ⬜           | ⬜      |
-| GB  | 英国   |     30 | GBP  | ⬜      | ⬜           | ⬜      |
+| ISO | 国家       | 文件数 | 货币 | 当前状态 |
+| --- | ---------- | -----: | ---- | -------- |
+| CH  | 瑞士       |     31 | CHF  | 已有首轮 keyword / dry-run 基线，归入 Batch B 统一排期 |
+| SI  | 斯洛文尼亚 |     30 | EUR  | 进行中；VW 子集已定向补充 |
+| RO  | 罗马尼亚   |     30 | RON  | 待启动 |
+| DE  | 德国       |     30 | EUR  | 待启动 |
+| FR  | 法国       |     30 | EUR  | 待启动；VW 子集已 promotion |
+| IT  | 意大利     |     30 | EUR  | 待启动；VW 子集已验证 |
+| ES  | 西班牙     |     30 | EUR  | 待启动 |
+| NL  | 荷兰       |     30 | EUR  | 待启动 |
+| BE  | 比利时     |     30 | EUR  | 待启动；VW 子集已 promotion |
+| PL  | 波兰       |     30 | PLN  | 进行中；VW 专项定向推进 |
+| PT  | 葡萄牙     |     30 | EUR  | 待启动 |
+| IE  | 爱尔兰     |     30 | EUR  | 待启动 |
+| GB  | 英国       |     30 | GBP  | 待启动 |
 
 ---
 
 ## 3. 进度汇总
 
-```
-                      Keyword Filling         CSS/URL 修复        Dry-run OK
-Batch 1 (2国/59文件)   ██████████ 100%        ████████░░  80%     ████░░░░░░  44% (26/59)
-Batch 2 (5国/153文件)  ██████████ 100%        ██████░░░░  60%     █████░░░░░  46% (71/153)
-Batch 3 (2国/60文件)   ░░░░░░░░░░   0%        ░░░░░░░░░░   0%     ░░░░░░░░░░   0%
-Batch 4 (12国/360文件) ░░░░░░░░░░   0%        ░░░░░░░░░░   0%     ░░░░░░░░░░   0%
-────────────────────────────────────────────────────────────────────────────
-总计 (21国/632文件)     ███░░░░░░░  33%        ██░░░░░░░░  ~15%    ██░░░░░░░░  15% (97/632)
-```
+| 波次 | 范围 | 当前目标 | 当前状态 |
+| ---- | ---- | -------- | -------- |
+| Batch A | SE / FI / NO / DK / HU / HR / AT / CZ（241 文件） | 继续补高确定性品牌，优先做 promotion / ingest / review 闭环 | **优先推进中** |
+| Batch B | CH / SI / RO / DE / FR / IT / ES / NL / BE / PL / PT / IE / GB（391 文件） | 维持排队，等待 Batch A 的模式复用与执行路径稳定 | **后续波次** |
+| 总计 | 21 国 / 632 文件 | 先拉起 Batch A 的系统可用覆盖，再扩 Batch B | 执行中 |
 
-> 注：Batch 1+2 的 212 个 source 中 97 个 dry-run 通过（45.8%），剩余 115 个多数为品牌官网不可用或无结构化价格数据。
+> 注：历史上已完成的首轮 keyword filling / dry-run 基线仍然有效，但本页后续执行、汇报、排期都统一使用 Batch A / Batch B 口径。
 
 ---
 
@@ -299,7 +294,7 @@ https://porschegpt-prod.etn.cz/at/brand/{BRAND_CODE}/pricelist/{FILENAME}.pdf
 | 维度       | 旧计划 (04-11)                 | 新计划 (04-12)                   |
 | ---------- | ------------------------------ | -------------------------------- |
 | 范围       | 国家 × 品牌系族               | SUV-only × country model top 30 |
-| 批次单位   | 10 个 brand-family source 每批 | 按国家分批                       |
+| 批次单位   | 10 个 brand-family source 每批 | 按 Batch A / Batch B 两波推进，波内按国家 pack 执行 |
 | draft 数量 | 估算 ~1000+                    | 实际 626                         |
 | 汇率       | Frankfurter API（未集成）      | open.er-api.com（已集成并验证）  |
 | 状态       | 已归档                         | 当前执行中                       |
@@ -397,19 +392,20 @@ VW 切换 dynamic 后，理论上可补回一部分此前失败的 YAML（重点
 
 **建议优先级**：PDF 解析 (P1) → DynamicFetcher VW 适配 (P1) → LLM HTML 提取 (P2) → CSS 自动建议 (P3)
 
-### 7.6 Batch 1+2 落地策略
+### 7.6 Batch A 优先落地策略
 
-Batch 1+2 不必等到 dry-run 全绿后再入系统。当前后端已经支持“先落 observation，再走 review”的链路，和 XC60 的处理思路一致。
+Batch A 不必等到 dry-run 全绿后再入系统。当前后端已经支持“先落 observation，再走 review”的链路，和 XC60 的处理思路一致。
 
 #### 路径 A：现有 valid observation 直接入库
 
 - 入口脚本：`03_Scripts/batch_ingest.py`
-- 行为：对指定国家重新执行非 dry-run 抓取
+- 行为：对指定国家重新执行非 dry-run 抓取；使用 `--auto-review --materialize` 时，会在 ingest 后继续触发 `POST /v1/review/cases/auto-resolve` 与 `POST /v1/msrp/current-prices/materialize`
 - 条件：只要某个 source 产出 `report.valid`，就会 `POST /v1/msrp/batches`
 - 结果：
     - `auto_accepted` 直接写入 `CurrentPrice`
     - `review_required` 自动创建 `ReviewCase`
     - `override_applied` 自动复用历史规则
+    - open `ReviewCase` 若后续已能命中 active link / override，可被 auto-resolve 自动 approve 并 materialize
 
 这条路适合已经能抽到价格、但匹配信心不足的样本。它们不需要继续卡在 scraper 侧，可以先进系统审核。
 
@@ -432,20 +428,30 @@ Batch 1+2 不必等到 dry-run 全绿后再入系统。当前后端已经支持�
 
 #### 路径 C：按品牌白名单推进国家落地
 
-Batch 1+2 建议不要按“国家全量是否完成”推进，而是按“品牌白名单”推进：
+Batch A 建议不要按“国家全量是否完成”推进，而是按“品牌白名单”推进：
 
 - 第一组：Toyota / Dacia / Skoda / Volvo / Ford
 - 第二组：Mercedes / Hyundai / KIA / Peugeot / Nissan / Opel
 - 第三组：VW dynamic 试点
 
-这样可以先把确定性高的 observation 批量导入，尽快让各国在系统里出现可审核数据，而不是被 Tesla、BMW、Audi 这类难点品牌拖住整国进度。
+这样可以先把确定性高的 observation 批量导入，尽快让 Batch A 各国在系统里出现可审核数据，而不是被 Tesla、BMW、Audi 这类难点品牌拖住整波进度。Batch B 保持排队，不与 Batch A 抢执行优先级。
 
 #### 推荐执行顺序
 
-1. 先用 `batch_ingest.py` 导入 Batch 1+2 已经有 valid observation 的国家和品牌
+1. 先用 `batch_ingest.py batch_a --auto-review --materialize` 导入 Batch A 已经有 valid observation 的国家和品牌
 2. 再把 VW dynamic 试点补进去，观察能否新增一批 review case
 3. 对 PDF 可得品牌，补一条“人工整理后入库”的旁路
 4. 在前端 review workbench 中集中做 remap / approve / reject
+
+#### 2026-04-21 CZ live ingest 实际结果
+
+- 已执行：`python 03_Scripts/batch_ingest.py cz --auto-review --materialize`
+- 首轮 country-pack 结果：**14/30 OK, 11 empty, 5 failed**
+- 空结果/失败主要来自旧 draft 的 404、连接关闭、或未配置 extractor 的站点；不是 batch 脚本本身中断
+- 首轮结束时：`auto-review approved=0`、`materialize candidates=0`
+- 随后已补跑 5 个 promoted `Skoda CZ` production sources，当前 `review/cases?country=CZ` 总量为 **146**
+- `current-prices?country=Czechia` 仍为 **0**，说明当前 observation 主要仍处于 `review_required` 队列，尚未通过 active link / override 自动出队，这与现有 resolver 设计一致
+- 这次实跑已经证明 **抓取 → ingest → review case 创建 → auto-review/materialize 调用** 链路在本地后端 + Docker DB 上可真实执行；下一步重点应转到 review workbench 的批量 approve/remap，而不是继续只做 dry-run
 
 ---
 
@@ -453,9 +459,9 @@ Batch 1+2 建议不要按“国家全量是否完成”推进，而是按“品�
 
 | 里程碑 | 目标                                      | 状态                       |
 | ------ | ----------------------------------------- | -------------------------- |
-| M1     | Batch 1+2 keyword filling (7 国 206 文件) | ✅ 已完成                  |
-| M2     | Batch 1+2 CSS/URL 修复 + dry-run          | ✅ 已完成 (97/212 = 45.8%) |
-| M3     | 通过 source promotion to `sources/`     | 待启动                     |
-| M4     | Batch 3 keyword filling (SI + RO)         | 待启动                     |
-| M5     | Batch 4 keyword filling (12 国)           | 待启动                     |
+| M1     | Batch A country pack 对齐（8 国）         | ✅ 已完成（与 `msrp_batches/batch_a.yaml` 对齐） |
+| M2     | Batch A 高确定性品牌 dry-run / promotion  | 进行中（DK VW、CZ Skoda 等子集已落地；Batch B 的 SK Touareg PDF blocker 已额外收口） |
+| M3     | Batch A valid observation ingest          | 进行中（CZ 已完成 live ingest 实跑；review queue 已落地，待批量审核/映射） |
+| M4     | Batch B 首轮 keyword / CSS / dry-run      | 待启动                     |
+| M5     | Batch B promotion / ingest                | 待启动                     |
 | M6     | 全部 626 个 draft YAML dry-run pass       | 长期目标                   |

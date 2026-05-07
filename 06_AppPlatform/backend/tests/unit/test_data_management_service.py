@@ -435,3 +435,141 @@ def test_stop_airflow_stack_raises_value_error_when_compose_unavailable(
         assert False, "expected ValueError"
     except ValueError as exc:
         assert str(exc) == "Docker Compose 不可用，当前环境无法执行本地 Airflow 控制命令。"
+
+
+def test_read_voc_management_overview_returns_country_snapshot(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / "project"
+    voc_root = project_root / "04_Processed_data" / "voc"
+    no_root = voc_root / "no"
+    raw_root = no_root / "raw"
+    enriched_path = no_root / "enriched" / "customer_insight_signals.json"
+    deck_path = no_root / "deck" / "customer_insight_deck.json"
+    docs_root = project_root / "Markdown_Readme" / "Fullstack" / "02_DataETL"
+    toolkit_readme = project_root / "07_ScrapingToolkit" / "README.md"
+
+    raw_root.mkdir(parents=True, exist_ok=True)
+    enriched_path.parent.mkdir(parents=True, exist_ok=True)
+    deck_path.parent.mkdir(parents=True, exist_ok=True)
+    docs_root.mkdir(parents=True, exist_ok=True)
+    toolkit_readme.parent.mkdir(parents=True, exist_ok=True)
+
+    (raw_root / "no_forum_source.json").write_text(
+        json.dumps(
+            {
+                "source": {
+                    "source_code": "no_forum_source",
+                    "country_code": "NO",
+                    "country_label": "Norway / 挪威",
+                    "site_name": "Elbilforum",
+                    "site_type": "forum",
+                    "language": "no",
+                },
+                "collectedAt": "2026-04-20T10:00:00+00:00",
+                "documentCount": 2,
+                "autoReview": {
+                    "publishTier": "review",
+                    "publishDecision": "publish_ready",
+                    "publishReadyCount": 1,
+                },
+                "documents": [
+                    {
+                        "url": "https://example.com/thread-1",
+                        "textExtraction": {"method": "trafilatura"},
+                    },
+                    {
+                        "url": "https://example.com/thread-2",
+                        "textExtraction": {"method": "lxml_xpath"},
+                    },
+                ],
+                "errors": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    enriched_path.write_text(
+        json.dumps(
+            {
+                "countryCode": "NO",
+                "countryLabel": "Norway / 挪威",
+                "generatedAt": "2026-04-20T11:00:00+00:00",
+                "signalObservationCount": 6,
+                "qualityScoreAvg": 0.82,
+            }
+        ),
+        encoding="utf-8",
+    )
+    deck_path.write_text(
+        json.dumps(
+            {
+                "countryCode": "NO",
+                "countryLabel": "Norway / 挪威",
+                "generatedAt": "2026-04-20T12:00:00+00:00",
+                "observedSections": ["Pain points", "Product signals"],
+                "inferredSections": ["Persona cues"],
+                "painPoints": [{"label": "Charging", "count": 3, "sharePct": 0.5}],
+                "productSignals": [{"label": "OTA", "count": 2, "sharePct": 0.33}],
+                "evidenceCards": [
+                    {
+                        "title": "Charging issues in winter",
+                        "url": "https://example.com/thread-1",
+                        "siteName": "Elbilforum",
+                        "publishTier": "review",
+                        "signals": ["Charging"],
+                        "evidenceSnippets": ["Cold-weather charging drop reported by owners."],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (docs_root / "VOC_FORUM_IMPLEMENTATION_STATUS_2026-04-19.md").write_text(
+        "# status\n",
+        encoding="utf-8",
+    )
+    (docs_root / "VOC_FORUM_SCRAPING_FEASIBILITY_2026-04-17.md").write_text(
+        "# feasibility\n",
+        encoding="utf-8",
+    )
+    toolkit_readme.write_text("# toolkit\n", encoding="utf-8")
+
+    monkeypatch.setattr(data_management_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(data_management_service, "VOC_RAW_ROOT", voc_root)
+    monkeypatch.setattr(
+        data_management_service,
+        "VOC_IMPLEMENTATION_STATUS_PATH",
+        docs_root / "VOC_FORUM_IMPLEMENTATION_STATUS_2026-04-19.md",
+    )
+    monkeypatch.setattr(
+        data_management_service,
+        "VOC_FEASIBILITY_PATH",
+        docs_root / "VOC_FORUM_SCRAPING_FEASIBILITY_2026-04-17.md",
+    )
+    monkeypatch.setattr(
+        data_management_service,
+        "VOC_TOOLKIT_README_PATH",
+        toolkit_readme,
+    )
+    monkeypatch.setattr(
+        data_management_service,
+        "get_database_health",
+        lambda: {"enabled": False, "connected": False, "detail": "disabled"},
+    )
+
+    payload = data_management_service.read_voc_management_overview("NO")
+
+    assert payload["selectedCountryCode"] == "NO"
+    assert payload["selectedCountryLabel"] == "Norway / 挪威"
+    assert payload["availableCountries"][0]["deckReady"] is True
+    assert payload["countryMetrics"][0]["value"] == 1
+    assert payload["artifacts"][0]["exists"] is True
+    assert payload["sourceRuns"][0]["textExtractionMethods"] == [
+        "lxml_xpath × 1",
+        "trafilatura × 1",
+    ]
+    assert payload["topPainPoints"][0]["label"] == "Charging"
+    assert payload["evidenceCards"][0]["siteName"] == "Elbilforum"
+    assert payload["staging"]["databaseConnected"] is False
+    assert payload["documentation"][0]["exists"] is True

@@ -51,6 +51,21 @@ PATCH_ROOT = RAW_DATA_ROOT / "patches"
 ARCHIVE_ROOT = RAW_DATA_ROOT / "historyDataArchive"
 NEWS_RAW_ROOT = PROCESSED_DATA_ROOT / "news" / "raw"
 VOC_RAW_ROOT = PROCESSED_DATA_ROOT / "voc"
+VOC_IMPLEMENTATION_STATUS_PATH = (
+    PROJECT_ROOT
+    / "Markdown_Readme"
+    / "Fullstack"
+    / "02_DataETL"
+    / "VOC_FORUM_IMPLEMENTATION_STATUS_2026-04-19.md"
+)
+VOC_FEASIBILITY_PATH = (
+    PROJECT_ROOT
+    / "Markdown_Readme"
+    / "Fullstack"
+    / "02_DataETL"
+    / "VOC_FORUM_SCRAPING_FEASIBILITY_2026-04-17.md"
+)
+VOC_TOOLKIT_README_PATH = PROJECT_ROOT / "07_ScrapingToolkit" / "README.md"
 WIKI_MANIFEST_PATH = get_local_wiki_manifest_path()
 WIKI_DB_ROOT = WIKI_MANIFEST_PATH.parent
 ACTIVITY_WINDOW_DAYS = 84
@@ -705,6 +720,365 @@ def _build_voc_raw_domain() -> dict[str, Any]:
             _metric("Errors", error_count),
         ],
         "recentItems": recent_items,
+    }
+
+
+def _artifact_item(key: str, label: str, path: Path, kind: str) -> dict[str, Any]:
+    return {
+        "key": key,
+        "label": label,
+        "kind": kind,
+        **_safe_stat(path),
+    }
+
+
+def _voc_text_extraction_methods(documents: list[dict[str, Any]]) -> list[str]:
+    counter: defaultdict[str, int] = defaultdict(int)
+    for document in documents:
+        if not isinstance(document, dict):
+            continue
+        extraction = document.get("textExtraction")
+        if not isinstance(extraction, dict):
+            continue
+        method = str(extraction.get("method") or "").strip()
+        if method:
+            counter[method] += 1
+    return [
+        f"{method} × {count}"
+        for method, count in sorted(counter.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def _build_voc_country_snapshot(country_root: Path) -> dict[str, Any] | None:
+    if not country_root.exists() or not country_root.is_dir():
+        return None
+
+    country_code = country_root.name.strip().upper()
+    raw_root = country_root / "raw"
+    enriched_path = country_root / "enriched" / "customer_insight_signals.json"
+    deck_path = country_root / "deck" / "customer_insight_deck.json"
+
+    raw_source_runs: list[dict[str, Any]] = []
+    raw_source_count = 0
+    raw_document_count = 0
+    raw_error_count = 0
+    publish_ready_count = 0
+    latest_updated_at: str | None = None
+    country_label = country_code
+
+    for path in _iter_json_files(raw_root, pattern="*.json"):
+        payload = _read_json_value(path)
+        if not isinstance(payload, dict):
+            continue
+        source = payload.get("source")
+        source_payload = source if isinstance(source, dict) else {}
+        country_label = (
+            str(source_payload.get("country_label") or country_label).strip()
+            or country_label
+        )
+        updated_at = _coerce_iso_timestamp(payload.get("collectedAt")) or _safe_stat(path).get(
+            "updatedAt",
+        )
+        latest_updated_at = _latest_timestamp(latest_updated_at, updated_at)
+        auto_review = payload.get("autoReview") if isinstance(payload.get("autoReview"), dict) else {}
+        documents = [
+            item
+            for item in payload.get("documents") or []
+            if isinstance(item, dict)
+        ]
+        raw_source_count += 1
+        raw_document_count += _coerce_int(payload.get("documentCount") or len(documents))
+        raw_error_count += len(payload.get("errors") or [])
+        publish_ready_count += _coerce_int(auto_review.get("publishReadyCount"))
+        raw_source_runs.append(
+            {
+                "sourceCode": str(source_payload.get("source_code") or path.stem),
+                "siteName": str(source_payload.get("site_name") or "").strip() or path.stem,
+                "siteType": str(source_payload.get("site_type") or "").strip() or "unknown",
+                "language": str(source_payload.get("language") or "").strip() or None,
+                "publishTier": str(auto_review.get("publishTier") or "").strip() or None,
+                "publishDecision": str(auto_review.get("publishDecision") or "").strip() or None,
+                "documentCount": _coerce_int(payload.get("documentCount") or len(documents)),
+                "publishReadyCount": _coerce_int(auto_review.get("publishReadyCount")),
+                "errorCount": len(payload.get("errors") or []),
+                "updatedAt": updated_at,
+                "path": _relative_to_project(path) or str(path),
+                "textExtractionMethods": _voc_text_extraction_methods(documents),
+            }
+        )
+
+    raw_source_runs.sort(
+        key=lambda item: (
+            str(item.get("updatedAt") or ""),
+            str(item.get("sourceCode") or ""),
+        ),
+        reverse=True,
+    )
+
+    enriched_payload = _read_json_if_exists(enriched_path)
+    deck_payload = _read_json_if_exists(deck_path)
+    if isinstance(enriched_payload, dict):
+        country_label = (
+            str(enriched_payload.get("countryLabel") or country_label).strip()
+            or country_label
+        )
+        latest_updated_at = _latest_timestamp(
+            latest_updated_at,
+            _coerce_iso_timestamp(enriched_payload.get("generatedAt")) or _safe_stat(enriched_path).get("updatedAt"),
+        )
+    if isinstance(deck_payload, dict):
+        country_label = (
+            str(deck_payload.get("countryLabel") or country_label).strip()
+            or country_label
+        )
+        latest_updated_at = _latest_timestamp(
+            latest_updated_at,
+            _coerce_iso_timestamp(deck_payload.get("generatedAt")) or _safe_stat(deck_path).get("updatedAt"),
+        )
+
+    status = "inactive"
+    if raw_source_count > 0:
+        status = "warning" if raw_error_count > 0 else "ready"
+    if raw_source_count <= 0 and (enriched_path.exists() or deck_path.exists()):
+        status = "warning"
+
+    return {
+        "code": country_code,
+        "label": country_label,
+        "status": status,
+        "updatedAt": latest_updated_at,
+        "rawSourceCount": raw_source_count,
+        "rawDocumentCount": raw_document_count,
+        "publishReadyCount": publish_ready_count,
+        "rawErrorCount": raw_error_count,
+        "signalObservationCount": _coerce_int(
+            enriched_payload.get("signalObservationCount") if isinstance(enriched_payload, dict) else 0
+        ),
+        "deckEvidenceCardCount": len(deck_payload.get("evidenceCards") or []) if isinstance(deck_payload, dict) else 0,
+        "qualityScoreAvg": (
+            float(enriched_payload.get("qualityScoreAvg") or 0)
+            if isinstance(enriched_payload, dict)
+            else 0.0
+        ),
+        "artifacts": {
+            "rawRoot": raw_root,
+            "enrichedPath": enriched_path,
+            "deckPath": deck_path,
+        },
+        "rawSourceRuns": raw_source_runs,
+        "enrichedPayload": enriched_payload or {},
+        "deckPayload": deck_payload or {},
+    }
+
+
+def _list_voc_country_snapshots() -> list[dict[str, Any]]:
+    if not VOC_RAW_ROOT.exists() or not VOC_RAW_ROOT.is_dir():
+        return []
+    snapshots: list[dict[str, Any]] = []
+    for path in sorted(VOC_RAW_ROOT.iterdir()):
+        if not path.is_dir():
+            continue
+        snapshot = _build_voc_country_snapshot(path)
+        if snapshot is not None:
+            snapshots.append(snapshot)
+    snapshots.sort(
+        key=lambda item: (
+            str(item.get("updatedAt") or ""),
+            str(item.get("code") or ""),
+        ),
+        reverse=True,
+    )
+    return snapshots
+
+
+def _build_voc_documentation_refs() -> list[dict[str, Any]]:
+    return [
+        {
+            "label": "VOC implementation status",
+            **_safe_stat(VOC_IMPLEMENTATION_STATUS_PATH),
+        },
+        {
+            "label": "VOC feasibility",
+            **_safe_stat(VOC_FEASIBILITY_PATH),
+        },
+        {
+            "label": "Scraping toolkit README",
+            **_safe_stat(VOC_TOOLKIT_README_PATH),
+        },
+    ]
+
+
+def _read_voc_staging_summary(country_code: str) -> dict[str, Any]:
+    health = get_database_health()
+    if not bool(health.get("enabled")) or not bool(health.get("connected")):
+        return {
+            "databaseConnected": False,
+            "sourceRunCount": 0,
+            "documentCount": 0,
+            "publishReadyCount": 0,
+            "latestCollectedAt": None,
+        }
+
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        source_run_count = session.execute(
+            select(func.count()).select_from(VocSourceRun).where(
+                VocSourceRun.country_code == country_code,
+            ),
+        ).scalar_one()
+        document_count = session.execute(
+            select(func.count()).select_from(VocRawDocument).where(
+                VocRawDocument.country_code == country_code,
+            ),
+        ).scalar_one()
+        publish_ready_count = session.execute(
+            select(func.coalesce(func.sum(VocSourceRun.publish_ready_count), 0)).where(
+                VocSourceRun.country_code == country_code,
+            ),
+        ).scalar_one()
+        latest_collected_at = session.execute(
+            select(func.max(VocSourceRun.collected_at_utc)).where(
+                VocSourceRun.country_code == country_code,
+            ),
+        ).scalar_one()
+
+    return {
+        "databaseConnected": True,
+        "sourceRunCount": _coerce_int(source_run_count),
+        "documentCount": _coerce_int(document_count),
+        "publishReadyCount": _coerce_int(publish_ready_count),
+        "latestCollectedAt": _iso_or_none(latest_collected_at),
+    }
+
+
+def read_voc_management_overview(country_code: str | None = None) -> dict[str, Any]:
+    country_snapshots = _list_voc_country_snapshots()
+    selected_snapshot = None
+    normalized_country = str(country_code or "").strip().upper()
+    if normalized_country:
+        selected_snapshot = next(
+            (item for item in country_snapshots if item["code"] == normalized_country),
+            None,
+        )
+    if selected_snapshot is None and country_snapshots:
+        selected_snapshot = country_snapshots[0]
+
+    if selected_snapshot is None:
+        selected_snapshot = {
+            "code": normalized_country or "",
+            "label": normalized_country or "VOC",
+            "status": "warning",
+            "updatedAt": None,
+            "rawSourceCount": 0,
+            "rawDocumentCount": 0,
+            "publishReadyCount": 0,
+            "rawErrorCount": 0,
+            "signalObservationCount": 0,
+            "deckEvidenceCardCount": 0,
+            "qualityScoreAvg": 0.0,
+            "artifacts": {
+                "rawRoot": VOC_RAW_ROOT / (normalized_country.lower() if normalized_country else "unknown") / "raw",
+                "enrichedPath": VOC_RAW_ROOT / (normalized_country.lower() if normalized_country else "unknown") / "enriched" / "customer_insight_signals.json",
+                "deckPath": VOC_RAW_ROOT / (normalized_country.lower() if normalized_country else "unknown") / "deck" / "customer_insight_deck.json",
+            },
+            "rawSourceRuns": [],
+            "enrichedPayload": {},
+            "deckPayload": {},
+        }
+
+    overall_metrics = [
+        _metric("Countries", len(country_snapshots)),
+        _metric("Sources", sum(item["rawSourceCount"] for item in country_snapshots)),
+        _metric("Documents", sum(item["rawDocumentCount"] for item in country_snapshots)),
+        _metric("Signal observations", sum(item["signalObservationCount"] for item in country_snapshots)),
+        _metric("Deck-ready countries", sum(1 for item in country_snapshots if Path(item["artifacts"]["deckPath"]).exists())),
+    ]
+    country_metrics = [
+        _metric("Sources", selected_snapshot["rawSourceCount"]),
+        _metric("Documents", selected_snapshot["rawDocumentCount"]),
+        _metric("Publish-ready", selected_snapshot["publishReadyCount"]),
+        _metric("Signal observations", selected_snapshot["signalObservationCount"]),
+        _metric("Evidence cards", selected_snapshot["deckEvidenceCardCount"]),
+        _metric("Raw errors", selected_snapshot["rawErrorCount"]),
+    ]
+    if selected_snapshot["qualityScoreAvg"] > 0:
+        country_metrics.append(_metric("Avg quality score", round(selected_snapshot["qualityScoreAvg"], 2)))
+
+    deck_payload = selected_snapshot.get("deckPayload") or {}
+    staging = _read_voc_staging_summary(selected_snapshot["code"]) if selected_snapshot["code"] else {
+        "databaseConnected": False,
+        "sourceRunCount": 0,
+        "documentCount": 0,
+        "publishReadyCount": 0,
+        "latestCollectedAt": None,
+    }
+
+    return {
+        "generatedAt": _utc_now().isoformat(),
+        "selectedCountryCode": selected_snapshot["code"],
+        "selectedCountryLabel": selected_snapshot["label"],
+        "availableCountries": [
+            {
+                "code": item["code"],
+                "label": item["label"],
+                "status": item["status"],
+                "updatedAt": item["updatedAt"],
+                "rawSourceCount": item["rawSourceCount"],
+                "rawDocumentCount": item["rawDocumentCount"],
+                "publishReadyCount": item["publishReadyCount"],
+                "signalObservationCount": item["signalObservationCount"],
+                "deckReady": Path(item["artifacts"]["deckPath"]).exists(),
+            }
+            for item in country_snapshots
+        ],
+        "overallMetrics": overall_metrics,
+        "countryMetrics": country_metrics,
+        "artifacts": [
+            _artifact_item("voc-country-raw", "VOC raw directory", selected_snapshot["artifacts"]["rawRoot"], "directory"),
+            _artifact_item("voc-country-enriched", "VOC enriched signals", selected_snapshot["artifacts"]["enrichedPath"], "file"),
+            _artifact_item("voc-country-deck", "VOC country deck", selected_snapshot["artifacts"]["deckPath"], "file"),
+        ],
+        "sourceRuns": selected_snapshot["rawSourceRuns"],
+        "observedSections": [
+            str(item).strip()
+            for item in deck_payload.get("observedSections") or []
+            if str(item).strip()
+        ],
+        "inferredSections": [
+            str(item).strip()
+            for item in deck_payload.get("inferredSections") or []
+            if str(item).strip()
+        ],
+        "topPainPoints": [
+            item
+            for item in deck_payload.get("painPoints") or []
+            if isinstance(item, dict)
+        ][:5],
+        "topProductSignals": [
+            item
+            for item in deck_payload.get("productSignals") or []
+            if isinstance(item, dict)
+        ][:5],
+        "evidenceCards": [
+            {
+                "title": str(item.get("title") or ""),
+                "url": str(item.get("url") or ""),
+                "siteName": str(item.get("siteName") or ""),
+                "publishTier": str(item.get("publishTier") or ""),
+                "signals": [
+                    str(signal).strip()
+                    for signal in item.get("signals") or []
+                    if str(signal).strip()
+                ],
+                "snippet": (
+                    str((item.get("evidenceSnippets") or [""])[0] or "").strip()
+                ),
+            }
+            for item in deck_payload.get("evidenceCards") or []
+            if isinstance(item, dict)
+        ][:5],
+        "documentation": _build_voc_documentation_refs(),
+        "staging": staging,
     }
 
 

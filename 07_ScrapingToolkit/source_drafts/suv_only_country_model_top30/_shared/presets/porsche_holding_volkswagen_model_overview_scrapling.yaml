@@ -1,0 +1,16 @@
+# Shared Porsche Holding Volkswagen model-overview defaults for SI/SK family
+# pages where the static model cards already expose the entry MSRP.
+tier: http
+headless: true
+network_idle: true
+impersonate: chrome
+css:
+  vehicle_container: 'article[aria-labelledby]'
+  model: 'h3::text'
+  trim: ''
+  price: 'h3 + div::text'
+default_currency: EUR
+default_tax_included: true
+copy_trim_to_jato_trim: true
+match_confidence: 0.78
+match_status: review_required

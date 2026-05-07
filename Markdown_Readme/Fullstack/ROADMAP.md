@@ -68,6 +68,7 @@ Markdown_Readme/
 | `02_DataETL/PRECOMPUTE_STRATEGY.md` | 实现 | Active | 后端预聚合 + 前端轻加载方案 |
 | `02_DataETL/UNIFIED_SCRAPING_PIPELINE_2026-04-17.md` | 架构/抓取 | Active | 统一抓取流水线（当前实现 + 后续扩展位） |
 | `02_DataETL/VOC_FORUM_SCRAPING_FEASIBILITY_2026-04-17.md` | 架构/抓取 | Draft | 北欧汽车论坛 VOC 抓取可行性、边界与落地路径 |
+| `02_DataETL/VOC_FORUM_IMPLEMENTATION_STATUS_2026-04-19.md` | 实现/抓取 | Active | VOC research 结论、当前实现状态、已完成项与下一步执行顺序 |
 | **MSRP** | | | |
 | `MSRP/README.md` | 功能/MSRP | Active | MSRP 文档总索引与阅读顺序 |
 | `MSRP/01_Requirements/MSRP_Official_Price_Enrichment_PRD_2026-04-10.md` | 产品/MSRP | Draft | MSRP 官方价格补全 PRD |
@@ -161,6 +162,8 @@ Markdown_Readme/
 - ETL baseline / patch / staging / release 工作流规格已定义。
 - Scraping Toolkit 文档已添加 README，详见 `07_ScrapingToolkit/README.md`。
 - `/data-management` 页面已提供 **local-only Airflow start/stop/open-UI controls**，仅作为本地 orchestration 辅助层，不改变核心抓取 / 刷新主链路。
+- VOC forum pipeline 已落地 **raw → heuristic enriched → country deck artifact**：`jato-voc-fetch` 现已升级到 **Trafilatura-first main-text extraction + lxml fallback**，并在 raw artifact 记录 `textExtraction.method`，同时开始保留 fetch-time `contentUnits`；`jato-voc-enrich` 继续产出 `enriched/customer_insight_signals.json` 与 `deck/customer_insight_deck.json`，且 enrichment 已补 **taxonomy-driven automatic analysis**（theme tags、persona cohorts、product/competitor matching、heuristic auto scores、cross analysis、content-unit transaction-based association graph with Fisher/FDR validation and replication axes）；当前 batch_a 八国本地实跑已可产出 43 docs / 68 analysis units，而隔离 refetch smoke run 已在 SE / NO / HU / HR / AT / CZ 看到 `fetch_lxml_block` units，但整体仍需继续前推 comment/reply structure preservation；`CustomerInsightsPage` 现已补 **Benchmark Excel / Forum VOC Live** 双模式，live 模式展示 observed-only forum deck，并支持按已生成 country deck 做 country-focus 查看，且 evidence card 可直接展开查看抓取正文预览与 observation 句子；`/data-management` 现已补 **VOC 观察台**，可按国家查看 raw / enriched / deck artifact、source runs、staging 同步与 VOC 文档路径；benchmark 继续承载样本画像。
+- VOC 已补一份正式状态文档 `02_DataETL/VOC_FORUM_IMPLEMENTATION_STATUS_2026-04-19.md`，用于汇总 research 结论、已做项与后续执行顺序。
 
 ## 5.2 2026-04-17 新增规划（六问答卷）
 

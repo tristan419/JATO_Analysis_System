@@ -1,0 +1,11 @@
+[Unit]
+Description=JATO MSRP weekly ingest timer
+
+[Timer]
+OnCalendar=Sat 05:30:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=jato-msrp-sync@ingest.service
+
+[Install]
+WantedBy=timers.target

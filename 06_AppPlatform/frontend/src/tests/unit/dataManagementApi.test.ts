@@ -97,6 +97,48 @@ describe("data management api", () => {
     });
   });
 
+  it("passes country filters to voc overview endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          item: {
+            generatedAt: "2026-04-20T12:00:00+00:00",
+            selectedCountryCode: "NO",
+            selectedCountryLabel: "Norway / 挪威",
+            availableCountries: [],
+            overallMetrics: [],
+            countryMetrics: [],
+            artifacts: [],
+            sourceRuns: [],
+            observedSections: [],
+            inferredSections: [],
+            topPainPoints: [],
+            topProductSignals: [],
+            evidenceCards: [],
+            documentation: [],
+            staging: {
+              databaseConnected: false,
+              sourceRunCount: 0,
+              documentCount: 0,
+              publishReadyCount: 0,
+              latestCollectedAt: null,
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.getVocManagementOverview("NO")).resolves.toMatchObject({
+      selectedCountryCode: "NO",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/data-management/voc/overview?country=NO"),
+      expect.any(Object),
+    );
+  });
+
   it("preserves conflict detail for airflow stop errors", async () => {
     vi.stubGlobal(
       "fetch",

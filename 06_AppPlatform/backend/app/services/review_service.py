@@ -14,6 +14,9 @@ from app.infra import msrp_repository
 from app.infra import review_repository as repo
 from app.services.msrp_mapping_service import (
     HUMAN_REVIEW_LINK_SOURCE,
+    RESOLVER_KIND_LINK,
+    RESOLVER_KIND_OVERRIDE,
+    apply_canonical_mapping,
     classify_mismatch_category,
 )
 from app.services.msrp_link_service import upsert_jato_msrp_link
@@ -28,6 +31,13 @@ from app.services.payload_serializers import (
     review_case_payload,
     review_decision_payload,
 )
+
+
+AUTO_REVIEW_ELIGIBLE_STATUSES = {"auto_accepted", "override_applied"}
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _commit_or_conflict(session: Session, detail: str) -> None:
@@ -227,6 +237,184 @@ def get_review_case_detail(
     }
 
 
+def auto_resolve_review_cases(
+    session: Session,
+    data: dict[str, object],
+) -> dict[str, object]:
+    decided_by = str(data.get("decided_by") or "").strip()
+    if not decided_by:
+        raise HTTPException(
+            status_code=400,
+            detail="decided_by is required",
+        )
+
+    country = str(data.get("country") or "").strip() or None
+    brand = str(data.get("brand") or "").strip() or None
+    model = str(data.get("model") or "").strip() or None
+    note = str(data.get("note") or "").strip() or None
+    limit = int(data.get("limit") or 500)
+
+    review_cases = repo.list_review_cases(
+        session,
+        "open",
+        country,
+        brand,
+        None,
+        limit,
+        0,
+        model,
+    )
+    if not review_cases:
+        return {
+            "candidateCases": 0,
+            "autoApprovedCount": 0,
+            "linkAppliedCount": 0,
+            "overrideAppliedCount": 0,
+            "unresolvedCount": 0,
+            "missingObservationCount": 0,
+            "sampleReviewCases": [],
+            "sampleDecisions": [],
+            "sampleCurrentPrices": [],
+        }
+
+    observations = msrp_repository.list_observations_by_ids(
+        session,
+        [item.observation_id for item in review_cases],
+    )
+    observation_by_id = {
+        observation.observation_id: observation for observation in observations
+    }
+    sources = msrp_repository.list_sources_by_ids(
+        session,
+        [item.source_id for item in observations],
+    )
+    source_by_id = {source.source_id: source for source in sources}
+
+    approved_cases = []
+    review_decisions = []
+    current_prices = []
+    unresolved_count = 0
+    missing_observation_count = 0
+    link_applied_count = 0
+    override_applied_count = 0
+    now = _utc_now()
+
+    for review_case in review_cases:
+        observation = observation_by_id.get(review_case.observation_id)
+        if observation is None:
+            missing_observation_count += 1
+            continue
+        if review_case.review_status != "open":
+            unresolved_count += 1
+            continue
+        if observation.match_status != "review_required":
+            unresolved_count += 1
+            continue
+
+        resolution = apply_canonical_mapping(session, observation)
+        if (
+            resolution["resolverKind"]
+            not in {RESOLVER_KIND_LINK, RESOLVER_KIND_OVERRIDE}
+            or observation.match_status
+            not in AUTO_REVIEW_ELIGIBLE_STATUSES
+        ):
+            unresolved_count += 1
+            continue
+
+        if resolution["resolverKind"] == RESOLVER_KIND_LINK:
+            link_applied_count += 1
+        elif resolution["resolverKind"] == RESOLVER_KIND_OVERRIDE:
+            override_applied_count += 1
+
+        review_case.review_status = "approved"
+        review_case.current_assignee = decided_by
+        review_case.updated_at_utc = now
+        review_case.official_model = observation.official_model
+        review_case.official_trim = observation.official_trim
+        review_case.official_edition = observation.official_edition
+        review_case.official_powertrain = observation.official_powertrain
+        review_case.jato_powertrain = observation.jato_powertrain
+
+        observation.updated_at_utc = now
+        match_reason = observation.match_reason_json or {}
+        if not isinstance(match_reason, dict):
+            match_reason = {"previous": match_reason}
+        decision_note = note or (
+            "Auto-approved via active MSRP link"
+            if resolution["resolverKind"] == RESOLVER_KIND_LINK
+            else "Auto-approved via applicable match override"
+        )
+        match_reason["autoReviewDecision"] = {
+            "decision": "approve",
+            "decidedBy": decided_by,
+            "decidedAtUtc": now.isoformat(),
+            "resolverKind": resolution["resolverKind"],
+            "linkId": resolution["linkId"],
+            "overrideId": resolution["overrideId"],
+            "note": decision_note,
+        }
+        observation.match_reason_json = match_reason
+
+        review_decision = ReviewDecision(
+            review_case_id=review_case.review_case_id,
+            observation_id=observation.observation_id,
+            decision="approve",
+            decided_official_model=observation.official_model,
+            decided_official_trim=observation.official_trim,
+            note=decision_note,
+            decided_by=decided_by,
+        )
+        repo.add_review_decision(session, review_decision)
+        current_price = materialize_current_price_from_observation(
+            session,
+            observation,
+        )
+        approved_cases.append(review_case)
+        review_decisions.append(review_decision)
+        if current_price is not None:
+            current_prices.append(current_price)
+
+    _commit_or_conflict(
+        session,
+        "Auto-resolving review cases conflicted with existing data",
+    )
+
+    return {
+        "candidateCases": len(review_cases),
+        "autoApprovedCount": len(approved_cases),
+        "linkAppliedCount": link_applied_count,
+        "overrideAppliedCount": override_applied_count,
+        "unresolvedCount": unresolved_count,
+        "missingObservationCount": missing_observation_count,
+        "sampleReviewCases": [
+            review_case_payload(
+                item,
+                observation_by_id.get(item.observation_id),
+                source_by_id.get(
+                    observation_by_id[item.observation_id].source_id
+                )
+                if item.observation_id in observation_by_id
+                else None,
+            )
+            for item in approved_cases[:10]
+        ],
+        "sampleDecisions": [
+            review_decision_payload(item) for item in review_decisions[:10]
+        ],
+        "sampleCurrentPrices": [
+            current_price_payload(
+                item,
+                source_by_id.get(
+                    observation_by_id[item.effective_observation_id].source_id
+                )
+                if item.effective_observation_id in observation_by_id
+                else None,
+            )
+            for item in current_prices[:10]
+        ],
+    }
+
+
 def create_review_decision(
     session: Session,
     review_case_id: str,
@@ -347,8 +535,8 @@ def create_review_decision(
         )
 
     review_case.current_assignee = decided_by
-    review_case.updated_at_utc = datetime.now(timezone.utc)
-    observation.updated_at_utc = datetime.now(timezone.utc)
+    review_case.updated_at_utc = _utc_now()
+    observation.updated_at_utc = _utc_now()
     existing_reason = observation.match_reason_json or {}
     if not isinstance(existing_reason, dict):
         existing_reason = {"previous": existing_reason}

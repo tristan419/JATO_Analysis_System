@@ -22,6 +22,10 @@
 - 把日志写到 `03_Scripts/logs/`
 - 调用 `03_Scripts/sync_msrp_db_to_cloud.sh`
 
+> 2026-04-21 补记：本地 MSRP 源库不要再假设是 `5432`。同步脚本现在会优先读取
+> `06_AppPlatform/.runtime/postgres.env` 里的 `APP_DATABASE_URL`，也就是本地
+> fullstack 当前实际在用的 PostgreSQL（例如 Docker `5433`），以避免把空库同步到腾讯云。
+
 ## 本机定时执行
 
 推荐本机用 macOS `launchd`，因为当前 MSRP 源库在本机 PostgreSQL；云端“主动拉取”本地库会涉及暴露数据库端口或反向隧道，稳定性和安全面都更差。

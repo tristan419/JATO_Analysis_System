@@ -1,5 +1,9 @@
 # 论坛 VOC 抓取可行性论证（北欧汽车用户声音）
 
+状态：Draft（方向已确认；当前 repo 已实现 raw collector + heuristic enriched/deck artifact；Customer Insights 与 Data Management 已补 VOC 入口）
+
+> 2026-04-20 实现增量：`CustomerInsightsPage` 已支持 `benchmark / forum_live` 双模式与 country-focus；`/data-management` 已新增 VOC 观察台，可按国家查看 raw / enriched / deck artifact、source runs、PostgreSQL staging 状态与 VOC 文档路径。
+
 ## 1. 结论
 
 **可以做，但要分清“原始论坛 VOC”与“结构化洞察 deck”是两层产物。**
@@ -307,6 +311,20 @@
 - 软件 / OTA / 车机
 - 品牌 / 售后 / 经销商体验
 
+> 2026-04-19 implementation increment  
+> `07_ScrapingToolkit` 已补 `jato-voc-enrich`，会把 `04_Processed_data/voc/<country>/raw/*.json`
+> 继续聚合成：
+> - `enriched/customer_insight_signals.json`
+> - `deck/customer_insight_deck.json`
+>
+> 当前这层先走 heuristic extraction，覆盖 sentiment、ownership stage、pain points、product signals、
+> powertrain mentions、decision factors 与 evidence cards；人口画像 / 家庭结构 / 通勤等字段仍不作为 sample facts 输出。
+>
+> 同期 raw layer 也已把 fetch-time 正文抽取升级为 **Trafilatura-first + lxml fallback**：
+> - 优先做 main-text / boilerplate removal，再落 rawText
+> - 当 Trafilatura 结果过薄时，自动退回轻量 XPath 抽取
+> - raw artifact 额外记录 `textExtraction.method`，方便后续 review / 对比抽取质量
+
 ### Phase 3：和现有 Excel / 研究样本做对照
 
 把论坛聚合结果与当前 `VOC_Nordic_SUV_Users_100.xlsx` 对比：
@@ -319,6 +337,20 @@
 
 - Excel 保留为 benchmark deck
 - Forum VOC 变成持续更新的数据源
+
+> 2026-04-20 implementation increment  
+> `06_AppPlatform` 已把这条边界真正接进产品层：
+> - backend `customer_insight_service` 新增 `forum_live` mode
+> - `CustomerInsightsPage` 新增 **Benchmark Excel / Forum VOC Live** 双模式
+> - live 模式继续补 country-focus filter，可按单一已生成 country deck 聚焦查看
+>
+> 当前 live 模式展示的是 observed-only forum deck：
+> - source mix / site type / language / publish tier
+> - sentiment / ownership-stage hits
+> - pain points / product signals / decision factors
+> - evidence cards
+>
+> 同时 benchmark mode 继续保留 Excel 的人口画像 / sample facts，不让 forum live 直接替换 benchmark 画像页。
 
 ---
 

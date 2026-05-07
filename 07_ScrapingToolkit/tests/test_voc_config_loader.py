@@ -38,6 +38,14 @@ def test_build_voc_collection_plan_filters_countries() -> None:
     assert len(payload["countries"][0]["sources"]) == 3
     assert payload["countries"][0]["taxonomy"]["profile"] == "nordic_core"
     assert "painPoints" in payload["countries"][0]["taxonomy"]
+    assert payload["countries"][0]["taxonomy"]["themeTags"]
+    assert payload["countries"][0]["taxonomy"]["personaCohorts"]
+    assert payload["countries"][0]["taxonomy"]["productCatalog"]
+    assert payload["countries"][0]["taxonomy"]["crossAnalysisAxes"][0]["key"] == "product_vs_pain_point"
+    assert any(
+        item["key"] == "attribute_affinity"
+        for item in payload["countries"][0]["taxonomy"]["crossAnalysisAxes"]
+    )
     assert (
         payload["countries"][0]["sources"][0]["collection_strategy"]["primaryUnit"]
         == "discussion_thread"

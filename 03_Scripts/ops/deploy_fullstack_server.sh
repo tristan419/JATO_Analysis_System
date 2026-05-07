@@ -52,6 +52,11 @@ BACKEND_DIR="$REPO_DIR/06_AppPlatform/backend"
 FRONTEND_DIR="$REPO_DIR/06_AppPlatform/frontend"
 BACKEND_REQUIREMENTS="$BACKEND_DIR/requirements.txt"
 VENV_DIR="$REPO_DIR/.venv"
+TOOLKIT_DIR="$REPO_DIR/07_ScrapingToolkit"
+SYSTEMD_SOURCE_DIR="$REPO_DIR/03_Scripts/deploy/systemd"
+SYSTEMD_TARGET_DIR="/etc/systemd/system"
+JATO_ETC_DIR="/etc/jato-fullstack"
+ENABLE_SCRAPER_SCHEDULERS="${ENABLE_SCRAPER_SCHEDULERS:-true}"
 
 log_section() {
   printf '\n[STEP] %s\n' "$1"
@@ -164,6 +169,85 @@ cleanup_known_untracked_paths() {
   fi
 }
 
+install_systemd_file() {
+  local source_path="$1"
+  local target_name="${2:-$(basename "$source_path")}"
+  local temp_file=""
+
+  if [[ ! -f "$source_path" ]]; then
+    echo "[ERROR] Missing systemd source file: $source_path"
+    exit 1
+  fi
+
+  temp_file="$(mktemp)"
+  sed "s|/opt/JATO_Analysis_System-main|$REPO_DIR|g" "$source_path" > "$temp_file"
+  sudo -n install -D -m 644 "$temp_file" "$SYSTEMD_TARGET_DIR/$target_name"
+  rm -f "$temp_file"
+}
+
+install_env_file_if_missing() {
+  local source_path="$1"
+  local target_path="$2"
+  local mode="${3:-600}"
+  local temp_file=""
+
+  if [[ ! -f "$source_path" ]]; then
+    echo "[ERROR] Missing env template: $source_path"
+    exit 1
+  fi
+
+  if sudo -n test -e "$target_path"; then
+    echo "[INFO] Existing env file preserved: $target_path"
+    return 0
+  fi
+
+  temp_file="$(mktemp)"
+  sed "s|/opt/JATO_Analysis_System-main|$REPO_DIR|g" "$source_path" > "$temp_file"
+  sudo -n install -D -m "$mode" "$temp_file" "$target_path"
+  rm -f "$temp_file"
+  echo "[INFO] Installed default env file: $target_path"
+}
+
+restart_timer_unit() {
+  local timer_name="$1"
+
+  sudo -n systemctl enable "$timer_name"
+  sudo -n systemctl restart "$timer_name"
+  sudo -n systemctl --no-pager status "$timer_name" 2>&1 | head -n 12 || true
+}
+
+reconcile_scraper_schedulers() {
+  if ! is_truthy "$ENABLE_SCRAPER_SCHEDULERS"; then
+    echo "[INFO] Skipping scraper scheduler reconciliation because ENABLE_SCRAPER_SCHEDULERS=$ENABLE_SCRAPER_SCHEDULERS"
+    return 0
+  fi
+
+  install_env_file_if_missing \
+    "$SYSTEMD_SOURCE_DIR/jato-country-news.env.example" \
+    "$JATO_ETC_DIR/country-news.env"
+  install_env_file_if_missing \
+    "$SYSTEMD_SOURCE_DIR/jato-msrp.env.example" \
+    "$JATO_ETC_DIR/msrp.env"
+  install_env_file_if_missing \
+    "$SYSTEMD_SOURCE_DIR/jato-voc.env.example" \
+    "$JATO_ETC_DIR/voc.env"
+
+  install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-country-news-sync.service"
+  install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-country-news-sync.timer"
+  install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-msrp-sync@.service"
+  install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-msrp-dryrun.timer"
+  install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-msrp-ingest.timer"
+  install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-voc-forum-sync.service"
+  install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-voc-forum-sync.timer"
+
+  sudo -n systemctl daemon-reload
+
+  restart_timer_unit jato-country-news-sync.timer
+  restart_timer_unit jato-msrp-dryrun.timer
+  restart_timer_unit jato-msrp-ingest.timer
+  restart_timer_unit jato-voc-forum-sync.timer
+}
+
 CURRENT_STEP="Validate sudo access"
 log_section "$CURRENT_STEP"
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -257,6 +341,21 @@ python -m pip install --upgrade pip \
   -i "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST"
 pip install -r "$BACKEND_REQUIREMENTS" \
   -i "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST"
+
+echo "[INFO] Install scraping toolkit"
+CURRENT_STEP="Install scraping toolkit"
+log_section "$CURRENT_STEP"
+if [[ ! -d "$TOOLKIT_DIR" ]]; then
+  echo "[ERROR] Scraping toolkit directory not found: $TOOLKIT_DIR"
+  exit 1
+fi
+python -m pip install -e "$TOOLKIT_DIR" \
+  -i "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST"
+
+echo "[INFO] Reconcile scraper schedulers"
+CURRENT_STEP="Reconcile scraper schedulers"
+log_section "$CURRENT_STEP"
+reconcile_scraper_schedulers
 
 echo "[INFO] Run database migrations when configured"
 CURRENT_STEP="Run database migrations"

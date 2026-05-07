@@ -354,6 +354,7 @@ interface Props {
   seriesNames?: string[];
   labelModeOptions?: ExportLabelMode[];
   showExportButton?: boolean;
+  showDimensionControls?: boolean;
 }
 
 export function ExportPanel({
@@ -363,6 +364,7 @@ export function ExportPanel({
   seriesNames,
   labelModeOptions,
   showExportButton = true,
+  showDimensionControls = true,
 }: Props) {
   const [open, setOpen] = useState(false);
   const set = <K extends keyof ExportSettings>(k: K, v: ExportSettings[K]) => onChange({ ...s, [k]: v });
@@ -445,16 +447,18 @@ export function ExportPanel({
                 onChange={e => set("yTitle", e.target.value)} />
             </div>
           </div>
-          <div className="export-row">
-            <div className="filter-group"><label>导出宽度</label>
-              <input type="number" value={s.exportWidth} min={400} max={2400} step={100} style={{ width: 70 }}
-                onChange={e => set("exportWidth", Number(e.target.value) || 1200)} />
+          {showDimensionControls ? (
+            <div className="export-row">
+              <div className="filter-group"><label>导出宽度</label>
+                <input type="number" value={s.exportWidth} min={400} max={2400} step={100} style={{ width: 70 }}
+                  onChange={e => set("exportWidth", Number(e.target.value) || 1200)} />
+              </div>
+              <div className="filter-group"><label>导出高度</label>
+                <input type="number" value={s.exportHeight} min={300} max={1800} step={100} style={{ width: 70 }}
+                  onChange={e => set("exportHeight", Number(e.target.value) || 800)} />
+              </div>
             </div>
-            <div className="filter-group"><label>导出高度</label>
-              <input type="number" value={s.exportHeight} min={300} max={1800} step={100} style={{ width: 70 }}
-                onChange={e => set("exportHeight", Number(e.target.value) || 800)} />
-            </div>
-          </div>
+          ) : null}
           <div className="export-row">
             <div className="filter-group"><label>数据标签</label>
               <select value={safeLabelMode} onChange={e => set("dataLabelMode", e.target.value as ExportLabelMode)}>

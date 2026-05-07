@@ -4,6 +4,7 @@ from app.core.security import UserContext, require_min_role
 from app.services.data_management_service import (
     read_airflow_ops_status,
     read_data_management_overview,
+    read_voc_management_overview,
     start_airflow_stack,
     stop_airflow_stack,
 )
@@ -58,3 +59,11 @@ def sync_voc_raw(
         return {"item": sync_voc_raw_to_store()}
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/voc/overview")
+def get_voc_overview(
+    country: str | None = None,
+    _user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {"item": read_voc_management_overview(country)}

@@ -1,11 +1,109 @@
 import json
 from pathlib import Path
 
+import jato_scraper.voc_fetcher as voc_fetcher
 from jato_scraper.voc_base import CountryVocConfig
 from jato_scraper.voc_base import VocBatchConfig
 from jato_scraper.voc_base import VocSourceConfig
+from jato_scraper.voc_fetcher import _extract_page_fields
 from jato_scraper.voc_fetcher import build_voc_raw_collection
 from jato_scraper.voc_fetcher import collect_source_documents
+
+
+def test_extract_page_fields_prefers_trafilatura_main_text(monkeypatch) -> None:
+    html_text = """
+    <html>
+      <head>
+        <title>Charging topic</title>
+        <meta name="description" content="Owners discuss charging issues." />
+      </head>
+      <body>
+        <nav>Login Register Cookie Settings</nav>
+        <main>
+          <article>
+            <h1>Charging topic</h1>
+            <p>Fallback page text with extra boilerplate and repeated navigation labels.</p>
+          </article>
+          <a href="/forum/thread-1">Thread link</a>
+        </main>
+      </body>
+    </html>
+    """
+
+    monkeypatch.setattr(
+        voc_fetcher,
+        "trafilatura_extract",
+        lambda *args, **kwargs: (
+            "Charging stopped after the latest software update. "
+            "Owners now need a dealer reset before AC charging works again."
+        ),
+    )
+
+    page = _extract_page_fields("https://example.com/forum/thread-1", html_text)
+
+    assert page["textExtraction"] == {"method": "trafilatura"}
+    assert page["text"].startswith("Charging stopped after the latest software update.")
+    assert page["summary"] == "Owners discuss charging issues."
+    assert page["contentUnits"]
+    assert page["contentUnits"][0]["unitSource"] == "fetch_lxml_block"
+    assert page["links"] == [{"href": "/forum/thread-1", "text": "Thread link"}]
+
+
+def test_extract_page_fields_falls_back_when_trafilatura_is_too_thin(monkeypatch) -> None:
+    html_text = """
+    <html>
+      <head><title>Winter range</title></head>
+      <body>
+        <main>
+          <article>
+            <h1>Winter range discussion</h1>
+            <p>Drivers compare cold-weather efficiency and cabin heating trade-offs on motorway trips.</p>
+            <p>Several owners also report slower DC charging speeds after arriving with a cold battery.</p>
+          </article>
+        </main>
+      </body>
+    </html>
+    """
+
+    monkeypatch.setattr(voc_fetcher, "trafilatura_extract", lambda *args, **kwargs: "Short teaser")
+
+    page = _extract_page_fields("https://example.com/forum/thread-2", html_text)
+
+    assert page["textExtraction"] == {"method": "lxml_xpath"}
+    assert "Drivers compare cold-weather efficiency" in page["text"]
+    assert "Short teaser" not in page["text"]
+    assert page["contentUnits"]
+
+
+def test_extract_page_fields_preserves_comment_like_units() -> None:
+    html_text = """
+    <html>
+      <body>
+        <main>
+          <article>
+            <p>Main post on charging reliability and dealer follow-up.</p>
+          </article>
+          <div class="comment">
+            <span class="author">Eva</span>
+            <time datetime="2026-04-21T08:00:00Z"></time>
+            <p>Public charging still fails after the update.</p>
+          </div>
+          <div class="reply post">
+            <span class="author">Lars</span>
+            <time datetime="2026-04-21T09:00:00Z"></time>
+            <p>Same here, range and lease value are now the deciding factors.</p>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+
+    page = _extract_page_fields("https://example.com/forum/thread-3", html_text)
+
+    assert len(page["contentUnits"]) >= 3
+    assert any(unit["unitType"] == "comment" for unit in page["contentUnits"])
+    assert any(unit["unitType"] == "reply_post" for unit in page["contentUnits"])
+    assert any(unit["author"] == "Eva" for unit in page["contentUnits"])
 
 
 def test_collect_source_documents_fetches_ranked_same_site_pages(monkeypatch) -> None:
@@ -69,6 +167,8 @@ def test_collect_source_documents_fetches_ranked_same_site_pages(monkeypatch) ->
     }
     assert all(document["pageKind"] == "discussion_thread" for document in payload["documents"])
     assert all(document["autoReview"]["publishDecision"] == "auto_publish" for document in payload["documents"])
+    assert all(document["textExtraction"] is None for document in payload["documents"])
+    assert all("contentUnits" in document for document in payload["documents"])
     assert payload["autoReview"]["reviewedCount"] == 2
     assert payload["autoReview"]["publishReadyCount"] == 2
     assert payload["errors"] == []
@@ -128,6 +228,8 @@ def test_build_voc_raw_collection_writes_source_payloads(tmp_path: Path, monkeyp
     assert saved["documentCount"] == 1
     assert saved["documents"][0]["pageKind"] == "landing_page"
     assert saved["documents"][0]["siteType"] == "media_comments"
+    assert saved["documents"][0]["textExtraction"] is None
+    assert "contentUnits" in saved["documents"][0]
     assert saved["documents"][0]["autoReview"]["publishDecision"] in {
         "candidate_publish",
         "hold_raw",

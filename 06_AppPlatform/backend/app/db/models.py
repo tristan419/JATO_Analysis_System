@@ -5,8 +5,10 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
+    ForeignKeyConstraint,
     ForeignKey,
     Integer,
     Index,
@@ -445,6 +447,10 @@ class JatoMsrpLink(TimestampMixin, Base):
 class MatchOverride(TimestampMixin, Base):
     __tablename__ = "match_overrides"
     __table_args__ = (
+        CheckConstraint(
+            "valid_to_date IS NULL OR valid_to_date >= valid_from_date",
+            name="ck_review_match_overrides_valid_window",
+        ),
         UniqueConstraint(
             "country",
             "brand",
@@ -462,6 +468,14 @@ class MatchOverride(TimestampMixin, Base):
             "brand",
             "jato_model",
             "jato_powertrain",
+        ),
+        Index(
+            "ix_review_match_overrides_lookup",
+            "country",
+            "brand",
+            "jato_model",
+            "jato_trim",
+            "valid_from_date",
         ),
         {"schema": "review"},
     )
@@ -491,6 +505,10 @@ class MatchOverride(TimestampMixin, Base):
 class ConfigImportBatch(Base):
     __tablename__ = "config_import_batches"
     __table_args__ = (
+        Index(
+            "ix_engineering_config_import_batches_import_batch",
+            "import_batch_id",
+        ),
         Index(
             "ix_engineering_config_import_batches_project_created",
             "project_id",
@@ -547,6 +565,10 @@ class ConfigVariant(TimestampMixin, Base):
             "ix_engineering_config_variants_project_active",
             "project_id",
             "is_active",
+        ),
+        Index(
+            "ix_engineering_config_variants_import_batch",
+            "config_import_batch_id",
         ),
         Index(
             "ix_engineering_config_variants_brand_model_country",
@@ -720,6 +742,10 @@ class ConfigMarketVariant(TimestampMixin, Base):
 class ConfigMarketFeatureOverride(TimestampMixin, Base):
     __tablename__ = "market_feature_overrides"
     __table_args__ = (
+        CheckConstraint(
+            "(CASE WHEN bool_value IS NOT NULL THEN 1 ELSE 0 END + CASE WHEN number_value IS NOT NULL THEN 1 ELSE 0 END + CASE WHEN text_value IS NOT NULL THEN 1 ELSE 0 END + CASE WHEN json_value IS NOT NULL THEN 1 ELSE 0 END) = 1",
+            name="ck_engineering_market_feature_overrides_single_value",
+        ),
         UniqueConstraint(
             "market_variant_id",
             "feature_code",
@@ -733,6 +759,10 @@ class ConfigMarketFeatureOverride(TimestampMixin, Base):
         Index(
             "ix_engineering_market_feature_overrides_market",
             "market_variant_id",
+        ),
+        Index(
+            "ix_engineering_market_feature_overrides_source_variant",
+            "source_variant_id",
         ),
         {"schema": "engineering"},
     )
@@ -818,6 +848,14 @@ class ScrapeBatch(Base):
 class MsrpObservation(TimestampMixin, Base):
     __tablename__ = "observations"
     __table_args__ = (
+        Index(
+            "ix_msrp_observations_scrape_batch",
+            "scrape_batch_id",
+        ),
+        Index(
+            "ix_msrp_observations_source",
+            "source_id",
+        ),
         Index(
             "ix_msrp_observations_country_brand_model_observed",
             "country",
@@ -922,6 +960,10 @@ class CurrentPrice(Base):
         ),
         Index("ix_msrp_current_prices_country_brand", "country", "brand"),
         Index("ix_msrp_current_prices_jato_model", "jato_model"),
+        Index(
+            "ix_msrp_current_prices_effective_observation",
+            "effective_observation_id",
+        ),
         {"schema": "msrp"},
     )
 
@@ -1001,6 +1043,10 @@ class PriceHistory(Base):
 
     __tablename__ = "price_history"
     __table_args__ = (
+        CheckConstraint(
+            "valid_to_utc IS NULL OR valid_to_utc > valid_from_utc",
+            name="ck_msrp_price_history_valid_window",
+        ),
         Index(
             "ix_msrp_price_history_business_key",
             "country",
@@ -1008,6 +1054,18 @@ class PriceHistory(Base):
             "jato_model",
             "jato_trim",
             "jato_powertrain",
+        ),
+        Index(
+            "ix_msrp_price_history_started_by_observation",
+            "started_by_observation_id",
+        ),
+        Index(
+            "ix_msrp_price_history_ended_by_observation",
+            "ended_by_observation_id",
+        ),
+        Index(
+            "ix_msrp_price_history_last_confirmed_observation",
+            "last_confirmed_by_observation_id",
         ),
         Index(
             "ix_msrp_price_history_open_period",
@@ -1080,6 +1138,11 @@ class ReviewCase(TimestampMixin, Base):
     __tablename__ = "review_cases"
     __table_args__ = (
         UniqueConstraint(
+            "review_case_id",
+            "observation_id",
+            name="uq_review_cases_case_observation_pair",
+        ),
+        UniqueConstraint(
             "observation_id",
             name="uq_review_cases_observation_id",
         ),
@@ -1135,6 +1198,19 @@ class ReviewCase(TimestampMixin, Base):
 class ReviewDecision(Base):
     __tablename__ = "review_decisions"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["review_case_id", "observation_id"],
+            [
+                "review.review_cases.review_case_id",
+                "review.review_cases.observation_id",
+            ],
+            name="fk_review_decisions_case_observation_pair",
+        ),
+        Index(
+            "ix_review_decisions_case_observation",
+            "review_case_id",
+            "observation_id",
+        ),
         Index(
             "ix_review_decisions_case_decided",
             "review_case_id",

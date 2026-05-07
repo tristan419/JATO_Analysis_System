@@ -59,6 +59,23 @@ JATO sales 在 Parquet（分区 + 预聚合），MSRP 在 PostgreSQL（事务 + 
 2. 把 `JatoMsrpLink` 作为正式 lifecycle object 使用：active 状态、confidence、link source、notes 都进入主流程；`MatchOverride` 只负责带生效期的例外。
 3. 让 positioning / 国家助手优先消费 materialized matrix 或 compositions，而不是前端临时 join。
 
+### 2.4 业务可见性要求（2026-04-20）
+
+截至当前实现，`market_scan_service.py` 在运行时已经会把 **PG reviewed price overlay 的元信息** 放进 deck metadata（`priceOverlay`），其中至少会区分：
+
+- 是否真正命中了 `current_prices`
+- 命中了多少 row / model
+- 是 `link` 还是 `direct` overlay
+- 还是已经退回 `parquet-only`
+
+因此接下来的优先级不应再只是“能不能 join”，而是要让业务面明确看到：
+
+1. **这次定位定价页到底有没有用到 reviewed PG MSRP**
+2. **如果没有，是部分未命中还是完全 parquet fallback**
+3. **Country Copilot 的定位/定价回答有没有使用这层 reviewed truth**
+
+换句话说，`priceOverlay` 不应只停留在 backend metadata；它应该被提升为 Positioning/Pricing 页和 Country Copilot grounding / trust 的**显式状态层**。否则系统虽然已经做了 cross-source join，业务侧仍然看不出“当前结论用了哪层价格真值”。
+
 ## 3. 当前 join contract：`jato_msrp_link` + `match_override`（2026-04-18）
 
 现在 backend 里已经落地的桥接契约不是“直接把 JATO rename 成 official”，而是保留两边原始 key，再通过两层 resolver 串起来：

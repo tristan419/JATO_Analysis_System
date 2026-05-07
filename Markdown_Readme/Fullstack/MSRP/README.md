@@ -27,7 +27,7 @@
 | HR | 5 | 30 | 16.7% |
 | **合计** | **92** | **209** | **44.0%** |
 
-> Batch 1+2（7 国）已完成 keyword filling + CSS/URL 修复 + dry-run 验证。
+> 主执行口径已切到 Batch A / Batch B；当前优先推进 Batch A（SE / FI / NO / DK / HU / HR / AT / CZ）。
 > 详见 `05_Backlog/MSRP_SUV_COUNTRY_MODEL_TOP30_PLAN_2026-04-12.md` § 7。
 
 ## 推荐阅读顺序
@@ -62,6 +62,29 @@
 | 批量 source 执行现状 | `05_Backlog/MSRP_SUV_COUNTRY_MODEL_TOP30_PLAN_2026-04-12.md` |
 | 抓取平台扩展到 news/policy/spec | `../02_DataETL/UNIFIED_SCRAPING_PIPELINE_2026-04-17.md` |
 
+## PostgreSQL 架构入口（2026-04-21）
+
+MSRP 当前已经明确采用 PostgreSQL 业务真值层，而不是“抓取产物 + 页面临时拼接”的形态。
+
+当前数据库边界应按两层理解：
+
+1. `msrp.*`：来源、抓取批次、observation、current price、price history、active JATO link。
+2. `review.*`：review case、decision 审计链、dated override。
+
+推荐按下面顺序阅读数据库架构：
+
+1. `../03_Database/POSTGRESQL_CORE_SCHEMA_2026-04-10.md` — PostgreSQL 当前已落地 schema 与 news/VOC/MSRP 边界。
+2. `03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md` — current price / override / price history 生命周期。
+3. `../03_Database/CROSS_SOURCE_JOIN_DESIGN_2026-04-17.md` — JATO sales × PostgreSQL MSRP bridge contract。
+4. `../03_Database/ALEMBIC_MIGRATION_PLAN_2026-04-10.md` — 迁移顺序与 2026-04-21 数据库护栏修复 revision。
+
+2026-04-21 之后，MSRP 数据库层新增的结构护栏重点是：
+
+1. `msrp.price_history` 禁止同一业务键出现重叠价格区间。
+2. `review.match_overrides` 禁止同一业务键出现重叠有效期。
+3. `review.review_decisions` 要和 `review_cases` 里的 `review_case_id + observation_id` 配对一致。
+4. `current_prices / observations / price_history` 等真实外键补齐索引。
+
 ## 当前开发入口
 
 - 文档入口：`05_Backlog/MSRP_SUV_COUNTRY_MODEL_TOP30_PLAN_2026-04-12.md`
@@ -78,11 +101,22 @@
 4. brand-family 级 source 优先，规则化配置 `model_rules`、`fixed_model`、`fixed_jato_model`、`fixed_jato_powertrain`、`copy_trim_to_jato_trim`、`edition_rules`、`powertrain_rules`、`price_band_bonuses`。
 5. review 不再只写 dated override：approve/remap 现在会沉淀 active `JatoMsrpLink`，`persist_override=true` 时再额外写 `MatchOverride`。
 6. canonical mapping resolver 已进入 ingest / materialize 主链路，顺序固定为 `valid MatchOverride > active JatoMsrpLink > raw observation`。
-7. price history 负责价格区间时间线；link/override 负责 trim / official key 映射；mismatch taxonomy 统一为 `naming / timing / market / granularity`。
-8. 生产 source 只接收真实 MSRP / 官方购车价页面；月供 / leasing offer 页面只能作为 research 线索，不能直接接入 MSRP pipeline。
-9. 历史 `top20_batch1`、split brand backlog 草稿、旧 `all_market` country×brand 优先级排名均已废弃；后续只保留 `suv_only_country_model_top30` 目录。
+7. open review case 现在可以通过 `POST /v1/review/cases/auto-resolve` 自动出队：当 observation 已能被 active `JatoMsrpLink` / `MatchOverride` 解析时，系统会自动 approve 并 materialize。
+8. `03_Scripts/batch_ingest.py` 现已支持 `batch_a --auto-review --materialize`，可把“抓取 → ingest → auto review → current-price materialize”串成单次执行。
+9. price history 负责价格区间时间线；link/override 负责 trim / official key 映射；mismatch taxonomy 统一为 `naming / timing / market / granularity`。
+10. 生产 source 只接收真实 MSRP / 官方购车价页面；官方 PDF 价目表现在也可以通过 `pdf_text` extractor 接入。月供 / leasing offer 页面只能作为 research 线索，不能直接接入 MSRP pipeline。
+11. 历史 `top20_batch1`、split brand backlog 草稿、旧 `all_market` country×brand 优先级排名均已废弃；后续只保留 `suv_only_country_model_top30` 目录。
 
 ## 变更日志
+
+### 2026-04-21
+
+1. **MSRP 自动链路补齐一段**：后端新增 `POST /v1/review/cases/auto-resolve`，可自动处理那些后来已被 active link/override 覆盖的 open review cases。
+2. **批量 ingest 脚本切到 Batch A 口径**：`03_Scripts/batch_ingest.py` 默认 target 改为 `batch_a`，并支持 `--auto-review --materialize` 一键串行。
+3. **低并发 runner 默认按 Batch A 优先**：`03_Scripts/run_msrp_low_concurrency.sh` 默认 `JATO_MSRP_COUNTRIES=batch_a`，ingest 模式默认开启 auto-review / materialize。
+4. **数据库架构入口补齐**：MSRP README 现在把 `msrp.* + review.*` 的 PostgreSQL 真值层、price history / override 时态护栏，以及对应 Alembic 修复 revision 统一收口到数据库文档入口。
+5. **SK Touareg blocker 收口**：scraping toolkit 新增 `pdf_text` extractor，已把 `vw.sk` 公共 `stock-cennik` PDF 接成 production source，并通过 live dry-run 产出 11 条 valid Touareg base-price observation。
+6. **Batch A / CZ live ingest 已实跑**：`python 03_Scripts/batch_ingest.py cz --auto-review --materialize` 已在本地后端+Docker DB 上真实执行；首轮结果为 `14/30 OK, 11 empty, 5 failed`，随后补跑 5 个 promoted Skoda CZ sources，当前 CZ review queue 为 **146**，`current_prices` 仍为 **0**，符合“先入 review、待 link/override 后再 materialize”的当前状态。
 
 ### 2026-04-18
 

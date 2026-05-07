@@ -1,0 +1,15 @@
+method: GET
+headers:
+  User-Agent: Mozilla/5.0
+field_mapping:
+  model: ""
+  trim:
+    - equipmentLine
+    - engineFullName
+  price: price
+  availability: name
+  vehicles_path: sections.0.groups
+  items_path: items
+default_currency: PLN
+default_tax_included: true
+default_price_label: Cena katalogowa brutto

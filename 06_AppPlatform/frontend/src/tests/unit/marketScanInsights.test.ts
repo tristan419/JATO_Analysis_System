@@ -37,6 +37,8 @@ function makeTrendItem(
     label: `${period.slice(2, 4)}.${monthText}`,
     totalVolume,
     fuelMix,
+    suvTotalVolume: totalVolume,
+    suvFuelMix: fuelMix,
     mom: makeDelta(mom),
     yoy: makeDelta(yoy),
   };

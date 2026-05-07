@@ -9,26 +9,20 @@
 # TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
 # TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
 # TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
-source_code: volkswagen_touareg_pl_draft_scrapling
+source_code: volkswagen_touareg_pl_draft_http_json
 country: 波兰
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.pl/pl/modele/touareg.html
+source_url: https://cenniki.volkswagen.pl/Touareg.html
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
-profile_preset: ../_shared/presets/volkswagen_model_page_scrapling.yaml
+extractor_type: http_json
+profile_preset: ../_shared/presets/volkswagen_pl_pricelist_http_json.yaml
 profile:
-  url: https://www.volkswagen.pl/pl/modele/touareg.html
-  css:
-    vehicle_container: TODO_SELECTOR
-    model: TODO_SELECTOR
-    trim: TODO_SELECTOR
-    price: TODO_SELECTOR
+  url: https://cenniki.volkswagen.pl/pricelists/91f8305c-3f97-4026-95c6-616140414648/pricelist.json
   default_currency: PLN
   default_tax_included: true
   default_price_label: Cena katalogowa brutto
   fixed_model: TOUAREG
-  fixed_jato_model: TOUAREG
   structured_fields:
     powertrain_rules:
     - key: powertrain_phev
@@ -48,10 +42,10 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Official Volkswagen model-page URL and local list-price wording were
-  verified on 2026-04-13. CSS selectors remain TODO because live probe did not
-  surface stable visible MSRP elements, so browser-based inspection is still
-  required before promotion.
+notes: The public Touareg model page links out to `https://cenniki.volkswagen.pl/Touareg.html`,
+  whose network payload resolves to `pricelist.json` with engine-grouped
+  `sections.0.groups[*].items[*].price` entries. This draft now reads that JSON
+  directly instead of the finance-heavy model page.
 bootstrap_meta:
   country_model_rank: 12
   suggested_scope_kind: single_model

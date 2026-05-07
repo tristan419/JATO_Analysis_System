@@ -6,7 +6,7 @@ requires creating a new YAML file — no Python code changes needed.
 
 Each YAML file describes **one source** and must contain:
     - source_code, country, brand, source_url   (identity)
-    - extractor_type: "http_json" | "scrapling" | "playwright"
+    - extractor_type: "http_json" | "scrapling" | "playwright" | "pdf_text"
     - profile: <dict>                            (extractor-specific config)
 
 Optional source fields:
@@ -38,6 +38,11 @@ from jato_scraper.extractors.scrapling_web import (
 from jato_scraper.extractors.playwright_card_flow import (
     PlaywrightCardFlowExtractor,
     PlaywrightCardFlowProfile,
+)
+from jato_scraper.extractors.pdf_text import (
+    PdfTextEntryPattern,
+    PdfTextExtractor,
+    PdfTextProfile,
 )
 
 log = logging.getLogger(__name__)
@@ -103,15 +108,48 @@ def _build_extractor_config(data: dict[str, Any]) -> ExtractorConfig:
 
 def _build_http_json_profile(profile: dict[str, Any]) -> HttpJsonProfile:
     fm_raw = profile.get("field_mapping", {})
+
+    def _path_field(
+        raw: Any,
+        default: str,
+        *,
+        allow_list: bool = False,
+    ) -> str | tuple[str, ...]:
+        if allow_list and isinstance(raw, list):
+            return tuple(
+                str(value).strip()
+                for value in raw
+                if str(value).strip()
+            )
+        if raw is None:
+            return default
+        text = str(raw).strip()
+        return text or default
+
     fm = FieldMapping(
-        model=fm_raw.get("model", "model"),
-        trim=fm_raw.get("trim", "trim"),
-        price=fm_raw.get("price", "price"),
-        currency=fm_raw.get("currency", "currency"),
-        tax_included=fm_raw.get("tax_included", "taxIncluded"),
-        price_label=fm_raw.get("price_label", "priceLabel"),
-        availability=fm_raw.get("availability"),
-        vehicles_path=fm_raw.get("vehicles_path", "models"),
+        model=_path_field(fm_raw.get("model"), "model", allow_list=True),
+        trim=_path_field(fm_raw.get("trim"), "trim", allow_list=True),
+        price=str(fm_raw.get("price", "price")).strip() or "price",
+        currency=str(fm_raw.get("currency", "currency")).strip() or "currency",
+        tax_included=(
+            str(fm_raw.get("tax_included", "taxIncluded")).strip()
+            or "taxIncluded"
+        ),
+        price_label=(
+            str(fm_raw.get("price_label", "priceLabel")).strip()
+            or "priceLabel"
+        ),
+        availability=(
+            str(fm_raw["availability"]).strip()
+            if fm_raw.get("availability") is not None
+            else None
+        ),
+        vehicles_path=str(fm_raw.get("vehicles_path", "models")).strip() or "models",
+        items_path=(
+            str(fm_raw["items_path"]).strip()
+            if fm_raw.get("items_path") is not None
+            else None
+        ),
     )
     return HttpJsonProfile(
         url=profile["url"],
@@ -126,6 +164,7 @@ def _build_http_json_profile(profile: dict[str, Any]) -> HttpJsonProfile:
             "default_price_label",
             "Manufacturer's Recommended Retail Price",
         ),
+        fixed_model=profile.get("fixed_model"),
     )
 
 
@@ -133,6 +172,22 @@ def _build_scrapling_profile(profile: dict[str, Any]) -> ScraplingProfile:
     css_raw = profile.get("css")
     css = None
     if css_raw:
+        include_if_text_contains_raw = css_raw.get(
+            "include_if_text_contains",
+            [],
+        )
+        if isinstance(include_if_text_contains_raw, str):
+            include_if_text_contains = (
+                include_if_text_contains_raw.strip(),
+            ) if include_if_text_contains_raw.strip() else ()
+        elif isinstance(include_if_text_contains_raw, list):
+            include_if_text_contains = tuple(
+                str(value).strip()
+                for value in include_if_text_contains_raw
+                if str(value).strip()
+            )
+        else:
+            include_if_text_contains = ()
         css = CssMapping(
             vehicle_container=css_raw["vehicle_container"],
             model=css_raw.get("model", ""),
@@ -141,6 +196,7 @@ def _build_scrapling_profile(profile: dict[str, Any]) -> ScraplingProfile:
             currency=css_raw.get("currency"),
             availability=css_raw.get("availability"),
             exclude_if_selector=css_raw.get("exclude_if_selector"),
+            include_if_text_contains=include_if_text_contains,
         )
 
     aj_raw = profile.get("attr_json")
@@ -283,9 +339,79 @@ def _build_playwright_profile(
     )
 
 
+def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
+    patterns_raw = profile.get("entry_patterns", [])
+    if not isinstance(patterns_raw, list):
+        raise ValueError("pdf_text entry_patterns must be a list")
+    entry_patterns = tuple(
+        PdfTextEntryPattern(
+            pattern=str(item["pattern"]).strip(),
+            official_trim=(
+                str(item["official_trim"]).strip()
+                if item.get("official_trim") is not None
+                else None
+            ),
+            official_powertrain=(
+                str(item["official_powertrain"]).strip()
+                if item.get("official_powertrain") is not None
+                else None
+            ),
+            official_edition=(
+                str(item["official_edition"]).strip()
+                if item.get("official_edition") is not None
+                else None
+            ),
+            availability_text=(
+                str(item["availability_text"]).strip()
+                if item.get("availability_text") is not None
+                else None
+            ),
+            jato_trim=(
+                str(item["jato_trim"]).strip()
+                if item.get("jato_trim") is not None
+                else None
+            ),
+            jato_powertrain=(
+                str(item["jato_powertrain"]).strip()
+                if item.get("jato_powertrain") is not None
+                else None
+            ),
+            price_delta=float(item.get("price_delta", 0.0) or 0.0),
+            price_label=(
+                str(item["price_label"]).strip()
+                if item.get("price_label") is not None
+                else None
+            ),
+        )
+        for item in patterns_raw
+        if isinstance(item, dict) and str(item.get("pattern", "")).strip()
+    )
+    return PdfTextProfile(
+        url=profile["url"],
+        entry_patterns=entry_patterns,
+        default_currency=profile.get("default_currency", "EUR"),
+        default_tax_included=bool(profile.get("default_tax_included", True)),
+        default_price_label=profile.get(
+            "default_price_label",
+            "Manufacturer's Recommended Retail Price",
+        ),
+        fixed_model=profile.get("fixed_model"),
+        fixed_jato_model=profile.get("fixed_jato_model"),
+        fixed_jato_powertrain=profile.get("fixed_jato_powertrain"),
+        copy_trim_to_jato_trim=bool(profile.get("copy_trim_to_jato_trim", False)),
+        match_confidence=(
+            float(profile["match_confidence"])
+            if profile.get("match_confidence") is not None
+            else None
+        ),
+        match_status=profile.get("match_status", "review_required"),
+        match_reason=profile.get("match_reason"),
+    )
+
+
 def _make_extractor_class(
     extractor_type: str,
-    profile: HttpJsonProfile | ScraplingProfile | PlaywrightCardFlowProfile,
+    profile: HttpJsonProfile | ScraplingProfile | PlaywrightCardFlowProfile | PdfTextProfile,
 ) -> type:
     """Create an extractor class that binds a fixed profile at init."""
     if extractor_type == "http_json":
@@ -311,6 +437,14 @@ def _make_extractor_class(
             def __init__(self, config: ExtractorConfig) -> None:
                 super().__init__(config, self._profile)
         return _ConfiguredPlaywright
+
+    if extractor_type == "pdf_text":
+        class _ConfiguredPdfText(PdfTextExtractor):
+            _profile = profile
+
+            def __init__(self, config: ExtractorConfig) -> None:
+                super().__init__(config, self._profile)
+        return _ConfiguredPdfText
 
     raise ValueError(f"Unknown extractor_type: {extractor_type!r}")
 
@@ -358,6 +492,8 @@ def load_source_file(path: Path) -> str | None:
             profile = _build_scrapling_profile(profile_raw)
         elif ext_type == "playwright":
             profile = _build_playwright_profile(profile_raw)
+        elif ext_type == "pdf_text":
+            profile = _build_pdf_text_profile(profile_raw)
         else:
             log.warning(
                 "Skipping %s — unknown extractor_type=%s",

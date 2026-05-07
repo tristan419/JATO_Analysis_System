@@ -81,6 +81,7 @@ export function buildMarketScanSlideFitAssessment({
     chartCount = 3;
     primaryItemCount = Math.max(
       page.monthlyBrandRanking.items.length,
+      page.ytdBrandRanking.items.length,
       page.rolling12BrandRanking.items.length,
     );
     secondaryItemCount = page.trend.items.length;
@@ -88,6 +89,7 @@ export function buildMarketScanSlideFitAssessment({
     labels = [
       ...page.trend.items.map((item) => item.label),
       ...rankingLabels(page.monthlyBrandRanking.items),
+      ...rankingLabels(page.ytdBrandRanking.items),
       ...rankingLabels(page.rolling12BrandRanking.items),
     ];
   } else if (activePage === "origin") {
@@ -129,20 +131,34 @@ export function buildMarketScanSlideFitAssessment({
     const page = deck.results[activePage] as MarketScanDrilldownPage;
     chartCount = 2 + page.fuelPanels.length;
     primaryItemCount = Math.max(
+      page.monthTotalRanking.items.length,
       page.totalRanking.items.length,
+      page.rolling12TotalRanking.items.length,
+      ...page.fuelPanels.map((panel) => panel.monthRanking.length),
       ...page.fuelPanels.map((panel) => panel.ytdRanking.length),
+      ...page.fuelPanels.map((panel) => panel.rolling12Ranking.length),
     );
-    secondaryItemCount = page.ytdFuelTrend.items.length;
+    secondaryItemCount = Math.max(
+      page.monthFuelTrend.items.length,
+      page.ytdFuelTrend.items.length,
+      page.rolling12FuelTrend.items.length,
+    );
     seriesCount = Math.max(
       deck.metadata.selectedFuelTypes.length,
       page.fuelPanels.length,
     );
     labels = [
+      ...rankingLabels(page.monthTotalRanking.items),
       ...rankingLabels(page.totalRanking.items),
+      ...rankingLabels(page.rolling12TotalRanking.items),
+      ...page.monthFuelTrend.items.map((item) => item.label),
       ...page.ytdFuelTrend.items.map((item) => item.label),
+      ...page.rolling12FuelTrend.items.map((item) => item.label),
       ...page.fuelPanels.flatMap((panel) => [
         panel.fuelType,
+        ...rankingLabels(panel.monthRanking),
         ...rankingLabels(panel.ytdRanking),
+        ...rankingLabels(panel.rolling12Ranking),
       ]),
     ];
   }

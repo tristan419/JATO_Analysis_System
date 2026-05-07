@@ -42,6 +42,8 @@ function makeOverviewTrendItem(
     label,
     totalVolume,
     fuelMix,
+    suvTotalVolume: totalVolume,
+    suvFuelMix: fuelMix,
     mom: makeDelta(0.02),
     yoy: makeDelta(0.04),
   };

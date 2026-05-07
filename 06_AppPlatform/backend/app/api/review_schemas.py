@@ -3,6 +3,15 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class ReviewAutoResolveRequest(BaseModel):
+    decided_by: str
+    country: str | None = None
+    brand: str | None = None
+    model: str | None = None
+    note: str | None = None
+    limit: int = Field(default=500, ge=1, le=1000)
+
+
 class ReviewDecisionCreate(BaseModel):
     decision: Literal["approve", "reject", "remap"]
     decided_official_model: str | None = None

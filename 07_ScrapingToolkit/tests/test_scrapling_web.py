@@ -1,5 +1,8 @@
+from unittest.mock import MagicMock, patch
+
 from jato_scraper.base import ExtractorConfig
 from jato_scraper.extractors.scrapling_web import (
+    CssMapping,
     ScraplingExtractor,
     ScraplingProfile,
 )
@@ -81,3 +84,66 @@ def test_resolve_json_path_inherits_parent_fields() -> None:
             "priceCurrency": "SEK",
         },
     ]
+
+
+def _mock_page_with_css(cards: list[dict[str, str | None]]) -> MagicMock:
+    page = MagicMock()
+    containers = []
+    for card in cards:
+        el = MagicMock()
+
+        def _css_side_effect(selector, _card=card):
+            mock_result = MagicMock()
+            if "model-name" in selector:
+                mock_result.get.return_value = _card.get("model")
+            elif "trim-name" in selector:
+                mock_result.get.return_value = _card.get("trim")
+            elif "price" in selector:
+                mock_result.get.return_value = _card.get("price")
+            else:
+                mock_result.get.return_value = None
+            return mock_result
+
+        el.css = _css_side_effect
+        containers.append(el)
+
+    page.css.return_value = containers
+    return page
+
+
+@patch.object(ScraplingExtractor, "_fetch")
+def test_css_extract_honors_include_if_text_contains(mock_fetch) -> None:
+    mock_fetch.return_value = _mock_page_with_css(
+        [
+            {"model": "Tiguan", "trim": "", "price": "Od 39.870,00 € z DDV"},
+            {"model": "Taigo", "trim": "", "price": "Od 23.132,00 € z DDV"},
+        ]
+    )
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="vw_si_tiguan",
+            country="SI",
+            brand="Volkswagen",
+            source_url="https://www.volkswagen.si/modeli-in-konfigurator/vsi-modeli",
+        ),
+        ScraplingProfile(
+            url="https://www.volkswagen.si/modeli-in-konfigurator/vsi-modeli",
+            css=CssMapping(
+                vehicle_container="article[aria-labelledby]",
+                model=".model-name::text",
+                trim=".trim-name::text",
+                price=".price::text",
+                include_if_text_contains=("tiguan",),
+            ),
+            default_currency="EUR",
+            fixed_model="TIGUAN",
+            fixed_jato_model="TIGUAN",
+            copy_trim_to_jato_trim=True,
+        ),
+    )
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].official_model == "TIGUAN"
+    assert results[0].msrp_value == 39_870.0

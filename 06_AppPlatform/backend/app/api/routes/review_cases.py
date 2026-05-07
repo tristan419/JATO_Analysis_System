@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.review_schemas import ReviewDecisionCreate
+from app.api.review_schemas import (
+    ReviewAutoResolveRequest,
+    ReviewDecisionCreate,
+)
 from app.core.security import require_min_role
 from app.db.session import get_db_session
 from app.services.review_service import (
+    auto_resolve_review_cases,
     create_review_decision,
     get_review_case_detail,
     list_review_cases,
@@ -85,4 +89,15 @@ def post_case_decision(
             review_case_id,
             payload.model_dump(),
         )
+    }
+
+
+@router.post("/auto-resolve")
+def post_auto_resolve_cases(
+    payload: ReviewAutoResolveRequest,
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": auto_resolve_review_cases(session, payload.model_dump())
     }

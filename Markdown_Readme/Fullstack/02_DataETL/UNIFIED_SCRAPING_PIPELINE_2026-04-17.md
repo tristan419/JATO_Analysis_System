@@ -285,16 +285,16 @@ CREATE TABLE incentive_program (
 
 默认调度主链路仍以 systemd timer 为准；Airflow 目前只作为 **local-only orchestration / 可视化控制层** 出现在 `/data-management`，不替代核心抓取代码与发布流程。
 
-在 `04_DevOps/SINGLE_NODE_SCHEDULING_2026-04-17.md`（待建，ARCHITECTURE_REVIEW P0-5）里统一排布：
+当前腾讯云单机调度默认统一排布如下：
 
-| Timer | Kind | 节奏 | 时间窗 | 并发 |
-|-------|------|------|--------|------|
-| `jato-msrp-sync` | msrp | 每日 | 01:00–03:00 | 2 |
-| `jato-news-sync` | news | 每 6 小时 | `0 */6 * * *` | 1 |
-| `jato-policy-sync` | policy | 每周一 | 04:00 | 1 |
-| `jato-incentive-sync` | incentive | 每周三 | 04:00 | 1 |
-| `jato-spec-sync` | spec | 触发式 | MSRP 发现新 trim 后入队 | 1 |
-| `jato-refresh-job` | ETL | 每月 | 指定日 05:00 | 1 |
+| Timer | Kind | 节奏 | 时间窗 | 线上目标形态 |
+|-------|------|------|--------|--------------|
+| `jato-country-news-sync.timer` | news | 每日 | 23:15 | **DB-first**：写 PostgreSQL snapshot，不要求保留 `04_Processed_data/news` |
+| `jato-voc-forum-sync.timer` | voc | 每日 | 01:45 | **artifact-first**：保留 `04_Processed_data/voc` raw / enriched / deck，并同步 raw 到 PG staging |
+| `jato-msrp-dryrun.timer` | msrp | 每日 | 03:30 | **backend/API-first**：低并发 dry-run |
+| `jato-msrp-ingest.timer` | msrp | 每周六 | 05:30 | **backend/API-first**：低并发 ingest |
+
+这组 timer 故意全部落在 `23:00-07:00` 窗口，避免和白天的 dashboard / copilot 交互流量争资源。
 
 **并发协调**：Fetcher 层共享一个 `concurrency_limiter`（以 domain 为 key），同一域名并发 ≤ 2，全局并发 ≤ 6。Playwright 浏览器池全局 ≤ 1 个（内存预算 ~2 GB）。
 

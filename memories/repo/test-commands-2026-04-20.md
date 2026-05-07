@@ -1,0 +1,2 @@
+- Backend targeted pytest: cd 06_AppPlatform/backend && PYTHONPATH=. ../../.venv/bin/python -m pytest tests/unit/<file> -q
+- Frontend unit tests: cd 06_AppPlatform/frontend && npm run test:unit -- <file-or-pattern>

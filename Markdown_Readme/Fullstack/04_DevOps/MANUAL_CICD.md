@@ -124,7 +124,7 @@ Workflow 文件：`.github/workflows/deploy-fullstack-tencent.yml`
 
 ### 3.1 触发条件
 
-- push 到 `main` 且修改了 `06_AppPlatform/**` 或部署相关脚本/配置
+- push 到 `main` 且修改了 `06_AppPlatform/**`、`03_Scripts/**`、`07_ScrapingToolkit/**` 或部署相关配置
 - 或手动 `workflow_dispatch`
 
 ### 3.2 必需的 GitHub Secrets
@@ -155,9 +155,10 @@ Workflow 文件：`.github/workflows/deploy-fullstack-tencent.yml`
 4. SSH 登录服务器，解压到 `/opt/JATO_Analysis_System-main`
 5. 执行 `03_Scripts/deploy_fullstack_server.sh`（`SKIP_GIT_SYNC=true`）
 6. 发布脚本会先清掉已知白名单内的 untracked 残留：`04_Processed_data/.refresh_backups/pre-sync-*`、`Markdown_Readme/Fullstack/*.md`、`Markdown_Readme/Streamlit/*.md`
-7. workflow 会再补一遍公网入口：默认按 `ojeur.cloud www.ojeur.cloud` 处理；如果仓库 Variable `DEPLOY_SERVER_NAME` 存在，则以它为准
-8. 如果 `DEPLOY_ENABLE_HTTPS` 不是 `false`，workflow 会调用 `enable_jato_fullstack_https.sh` 做幂等证书检查；已是 Certbot 管理的 nginx 配置不会被 HTTP 模板覆盖
-9. 健康检查 `curl http://127.0.0.1:8000/healthz`
+7. 发布脚本会把 `07_ScrapingToolkit` 安装进服务器 `.venv`，并同步 night window 内的抓取 timer：country news、VOC、MSRP dry-run / ingest
+8. workflow 会再补一遍公网入口：默认按 `ojeur.cloud www.ojeur.cloud` 处理；如果仓库 Variable `DEPLOY_SERVER_NAME` 存在，则以它为准
+9. 如果 `DEPLOY_ENABLE_HTTPS` 不是 `false`，workflow 会调用 `enable_jato_fullstack_https.sh` 做幂等证书检查；已是 Certbot 管理的 nginx 配置不会被 HTTP 模板覆盖
+10. 健康检查 `curl http://127.0.0.1:8000/healthz`
 
 ### 3.4 域名 / HTTPS 约定
 

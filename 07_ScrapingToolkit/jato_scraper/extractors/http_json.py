@@ -16,14 +16,15 @@ DEFAULT_TIMEOUT = 30
 
 @dataclass(frozen=True)
 class FieldMapping:
-    model: str = "model"
-    trim: str = "trim"
+    model: str | tuple[str, ...] = "model"
+    trim: str | tuple[str, ...] = "trim"
     price: str = "price"
     currency: str = "currency"
     tax_included: str = "taxIncluded"
     price_label: str = "priceLabel"
     availability: str | None = "availability"
     vehicles_path: str = "models"
+    items_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class HttpJsonProfile:
     default_currency: str = "EUR"
     default_tax_included: bool = True
     default_price_label: str = "Manufacturer's Recommended Retail Price"
+    fixed_model: str | None = None
 
 
 class HttpJsonExtractor(BaseExtractor):
@@ -63,6 +65,7 @@ class HttpJsonExtractor(BaseExtractor):
         vehicles = self._navigate(raw_json)
         if vehicles is None:
             return []
+        vehicles = self._expand_items(vehicles)
         return self._map(vehicles)
 
     def _fetch(self) -> dict | list | None:
@@ -82,27 +85,109 @@ class HttpJsonExtractor(BaseExtractor):
             log.error("HTTP request failed for %s: %s", self.config.source_code, exc)
             return None
 
-    def _navigate(self, data: Any) -> list[dict] | None:
-        path = self.profile.field_mapping.vehicles_path
+    def _resolve_path(
+        self,
+        data: Any,
+        path: str,
+        *,
+        log_errors: bool,
+    ) -> Any:
         node = data
         for key in path.split("."):
             if isinstance(node, dict):
                 node = node.get(key)
+            elif isinstance(node, list):
+                try:
+                    index = int(key)
+                except ValueError:
+                    if log_errors:
+                        log.error(
+                            "Cannot navigate path '%s' at key '%s' — list index required",
+                            path,
+                            key,
+                        )
+                    return None
+                if index < 0 or index >= len(node):
+                    if log_errors:
+                        log.error(
+                            "Path '%s' index '%s' out of range for list of size %s",
+                            path,
+                            key,
+                            len(node),
+                        )
+                    return None
+                node = node[index]
             else:
-                log.error(
-                    "Cannot navigate path '%s' at key '%s' — node is %s",
-                    path,
-                    key,
-                    type(node).__name__,
-                )
+                if log_errors:
+                    log.error(
+                        "Cannot navigate path '%s' at key '%s' — node is %s",
+                        path,
+                        key,
+                        type(node).__name__,
+                    )
                 return None
             if node is None:
-                log.error("Path '%s' not found at key '%s'", path, key)
+                if log_errors:
+                    log.error("Path '%s' not found at key '%s'", path, key)
                 return None
+        return node
+
+    def _navigate(self, data: Any) -> list[dict] | None:
+        path = self.profile.field_mapping.vehicles_path
+        node = self._resolve_path(data, path, log_errors=True)
+        if node is None:
+            return None
         if not isinstance(node, list):
             log.error("Expected list at path '%s', got %s", path, type(node).__name__)
             return None
         return node
+
+    def _expand_items(self, vehicles: list[dict]) -> list[dict]:
+        items_path = self.profile.field_mapping.items_path
+        if not items_path:
+            return vehicles
+        flattened: list[dict] = []
+        for vehicle in vehicles:
+            if not isinstance(vehicle, dict):
+                log.warning("Skipping non-dict vehicle container: %s", type(vehicle).__name__)
+                continue
+            items = self._resolve_path(vehicle, items_path, log_errors=False)
+            if items is None:
+                continue
+            if not isinstance(items, list):
+                log.warning(
+                    "Expected list at nested items path '%s', got %s",
+                    items_path,
+                    type(items).__name__,
+                )
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    log.warning("Skipping non-dict nested item: %s", type(item).__name__)
+                    continue
+                flattened.append({**vehicle, **item})
+        return flattened
+
+    def _resolve_field_value(
+        self,
+        vehicle: dict[str, Any],
+        mapping: str | tuple[str, ...] | None,
+    ) -> Any:
+        if mapping is None:
+            return None
+        if isinstance(mapping, tuple):
+            parts: list[str] = []
+            for path in mapping:
+                value = self._resolve_path(vehicle, path, log_errors=False)
+                if value is None:
+                    continue
+                text = str(value).strip()
+                if text:
+                    parts.append(text)
+            return " / ".join(parts)
+        if not mapping:
+            return None
+        return self._resolve_path(vehicle, mapping, log_errors=False)
 
     def _map(self, vehicles: list[dict]) -> list[RawObservation]:
         fm = self.profile.field_mapping
@@ -110,16 +195,35 @@ class HttpJsonExtractor(BaseExtractor):
         results: list[RawObservation] = []
         for v in vehicles:
             try:
+                official_model = str(
+                    p.fixed_model or self._resolve_field_value(v, fm.model) or ""
+                )
+                official_trim = str(self._resolve_field_value(v, fm.trim) or "")
+                msrp_value = float(self._resolve_field_value(v, fm.price) or 0)
+                currency = str(
+                    self._resolve_field_value(v, fm.currency) or p.default_currency
+                )
+                tax_included = self._resolve_field_value(v, fm.tax_included)
+                price_label = self._resolve_field_value(v, fm.price_label)
+                availability = (
+                    self._resolve_field_value(v, fm.availability)
+                    if fm.availability
+                    else None
+                )
                 obs = RawObservation(
-                    official_model=str(v.get(fm.model, "")),
-                    official_trim=str(v.get(fm.trim, "")),
-                    msrp_value=float(v.get(fm.price, 0)),
-                    currency=str(v.get(fm.currency, p.default_currency)),
-                    tax_included=bool(v.get(fm.tax_included, p.default_tax_included)),
-                    price_label=str(v.get(fm.price_label, p.default_price_label)),
-                    source_url=p.url,
+                    official_model=official_model,
+                    official_trim=official_trim,
+                    msrp_value=msrp_value,
+                    currency=currency,
+                    tax_included=(
+                        bool(tax_included)
+                        if tax_included is not None
+                        else p.default_tax_included
+                    ),
+                    price_label=str(price_label or p.default_price_label),
+                    source_url=self.config.source_url,
                     availability_text=(
-                        str(v[fm.availability]) if fm.availability and fm.availability in v else None
+                        str(availability).strip() if availability is not None else None
                     ),
                     raw_payload=v,
                 )
@@ -127,4 +231,3 @@ class HttpJsonExtractor(BaseExtractor):
             except (TypeError, ValueError) as exc:
                 log.warning("Skipping vehicle entry: %s — %s", v, exc)
         return results
-
