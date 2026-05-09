@@ -7,6 +7,7 @@ import html
 import json
 import os
 import re
+import time
 from typing import Any
 from urllib.error import HTTPError
 from urllib.error import URLError
@@ -18,8 +19,15 @@ import xml.etree.ElementTree as ET
 
 
 DEFAULT_SEARCH_TIMEOUT_SECONDS = max(
+    1,
+    min(3, int(os.getenv("APP_WEB_SEARCH_TIMEOUT_SECONDS", "3").strip() or "3")),
+)
+DEFAULT_SEARCH_TOTAL_TIMEOUT_SECONDS = max(
     3,
-    int(os.getenv("APP_WEB_SEARCH_TIMEOUT_SECONDS", "8").strip() or "8"),
+    min(
+        10,
+        int(os.getenv("APP_WEB_SEARCH_TOTAL_TIMEOUT_SECONDS", "6").strip() or "6"),
+    ),
 )
 
 _LATIN_TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9-]{1,}")
@@ -84,12 +92,15 @@ def search_market_news(
 ) -> list[dict[str, str]]:
     query = _build_market_news_query(country=country, question=question)
     providers = (
+        _search_google_news_rss,
         _search_tavily,
         _search_google_custom_search,
         _search_serpapi,
-        _search_google_news_rss,
     )
+    deadline = time.monotonic() + DEFAULT_SEARCH_TOTAL_TIMEOUT_SECONDS
     for provider in providers:
+        if time.monotonic() >= deadline:
+            break
         results = provider(query=query, limit=limit)
         if results:
             deduped = _dedupe_results(results)

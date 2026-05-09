@@ -786,6 +786,39 @@ def test_fresh_news_question_uses_external_search_fast_path(monkeypatch) -> None
 
 
 @pytest.mark.usefixtures("_patch_base")
+def test_fresh_news_question_stays_fast_when_search_has_no_results(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.setenv(
+        "APP_COUNTRY_CHAT_MODEL_OPTIONS",
+        "gemini:gemini-flash-latest",
+    )
+    monkeypatch.setattr(
+        country_chat_service,
+        "build_country_snapshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("should not build full snapshot")
+        ),
+    )
+    monkeypatch.setattr(
+        country_chat_service.web_search_service,
+        "search_market_news",
+        lambda **kwargs: [],
+    )
+
+    result = country_chat_service.answer_country_question(
+        "瑞典",
+        "瑞典最近有没有 Volvo 新闻？",
+        chat_model="auto",
+    )
+
+    assert result["provider"] == "external-search"
+    assert result["answerMode"] == "grounded-direct"
+    assert "暂时没有查到" in result["answer"]
+    assert result["grounding"]["trust"]["confidence"] == "low"
+    assert result["contextSnapshot"]["externalSearchResults"] == []
+
+
+@pytest.mark.usefixtures("_patch_base")
 def test_answer_passes_prefetched_execution_plan_to_model(monkeypatch) -> None:
     monkeypatch.setenv("NVIDIA_API_KEY", "secret")
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)

@@ -890,6 +890,9 @@ def answer_country_question(
         user_params=user_params,
         chat_model_id=selected_chat_model,
         provider_available=bool(execution_chain),
+        has_gemini_provider=any(
+            option.provider == "gemini" for option in execution_chain
+        ),
     )
     if fast_context_payload is not None:
         return fast_context_payload
@@ -1202,7 +1205,10 @@ def _build_fresh_context_fast_answer(
     user_params: dict[str, Any],
     chat_model_id: str,
     provider_available: bool,
+    has_gemini_provider: bool,
 ) -> dict[str, Any] | None:
+    if not has_gemini_provider:
+        return None
     normalized_intents = _normalize_intents(focused_intents)
     if (
         intent_route != "market-context"
@@ -1217,8 +1223,6 @@ def _build_fresh_context_fast_answer(
         question=question,
         limit=6,
     )
-    if not search_results:
-        return None
 
     execution_plan = {
         "route": intent_route,
@@ -1409,26 +1413,39 @@ def _build_external_search_grounding(
             {
                 "kind": "live",
                 "label": "External news search",
-                "detail": f"命中 {len(search_results)} 条公开检索结果。",
+                "detail": (
+                    f"命中 {len(search_results)} 条公开检索结果。"
+                    if search_results
+                    else "短时外部检索未命中可用公开结果。"
+                ),
                 "freshness": str(first.get("publishedAt") or "").strip() or None,
             }
         ],
-        "keyFindings": key_findings,
+        "keyFindings": key_findings
+        or ["短时外部检索暂未返回可核查结果。"],
         "evidenceTables": [
             {
                 "title": "外部新闻检索结果",
                 "columns": ["时间", "来源", "标题"],
-                "rows": rows,
+                "rows": rows or [["-", "-", "短时外部检索未命中可用公开结果"]],
             }
         ],
         "trust": {
-            "confidence": "medium",
-            "evidenceSufficiency": "partial",
-            "evidenceScore": min(95, 45 + len(search_results) * 8),
+            "confidence": "medium" if search_results else "low",
+            "evidenceSufficiency": "partial" if search_results else "thin",
+            "evidenceScore": (
+                min(95, 45 + len(search_results) * 8)
+                if search_results
+                else 25
+            ),
             "routeRationale": "用户询问最新新闻/市场动态，需要优先读取外部公开线索。",
-            "missingFacts": [],
+            "missingFacts": (
+                []
+                if search_results
+                else ["短时外部检索没有返回可用新闻结果。"]
+            ),
             "sourceCoverage": {
-                "requiredReady": 1,
+                "requiredReady": 1 if search_results else 0,
                 "requiredTotal": 1,
                 "prefetchedCount": 1,
             },
@@ -7955,6 +7972,12 @@ def _format_external_search_results(
     summary_timed_out: bool = True,
 ) -> str:
     del question
+    if not search_results:
+        return (
+            f"我在短时外部检索里暂时没有查到 {country} 相关的可用公开新闻结果。"
+            "这次已跳过完整国家快照构建，避免新闻问题继续超时；"
+            "建议稍后重试，或补充品牌、车型、英文关键词后再查。"
+        )
     status_text = (
         "当前模型总结超时，先返回检索摘要。"
         if summary_timed_out
