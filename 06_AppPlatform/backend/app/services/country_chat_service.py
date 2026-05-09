@@ -7566,13 +7566,7 @@ def _answer_with_gemini(
             "只有联网检索和本地快照都无结果，才说明未找到相关动态。"
         )
     search_brief = ""
-    if (
-        search_enabled
-        and (
-            intent_route == "market-context"
-            or "market-context" in _normalize_intents(intents)
-        )
-    ):
+    if search_enabled:
         search_results = web_search_service.search_market_news(
             country=country,
             question=question,
