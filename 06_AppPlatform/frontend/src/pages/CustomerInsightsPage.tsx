@@ -12,6 +12,7 @@ import type {
   PositioningPricingMetric,
 } from "../types";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
+import { useFixedCanvasPreview } from "../utils/useFixedCanvasPreview";
 
 const EXPORT_PRESETS = [
   { key: "hd+", label: "1600 x 900", width: 1600, height: 900 },
@@ -450,6 +451,11 @@ export function CustomerInsightsPage({
   const usageMax = Math.max(...compactPurchaseUses.map((item) => item.sharePct), 0);
   const factorMax = Math.max(...compactDecisionFactors.map((item) => item.sharePct), 0);
   const exportPreset = EXPORT_PRESETS.find((item) => item.key === exportPresetKey) ?? EXPORT_PRESETS[1];
+  const slidePreview = useFixedCanvasPreview({
+    width: exportPreset.width,
+    height: exportPreset.height,
+    exporting: exportingSlide,
+  });
   const sourceMetaLabel = useMemo(() => buildDeckSourceMetaLabel(deck), [deck]);
   const sourceDetail = useMemo(() => buildDeckSourceDetail(deck), [deck]);
   const sampleUnitLabel = deck?.metadata.sampleUnitLabel === "docs" ? "文档" : "样本";
@@ -590,16 +596,13 @@ export function CustomerInsightsPage({
 
         {deck && page ? (
           <>
-            <div className="market-scan-slide-shell">
-              <div
-                ref={slideRef}
-                className={`market-scan-slide-frame customer-insight-slide-frame${exportingSlide ? " is-exporting" : ""}`}
-                style={{
-                  width: exportingSlide ? `${exportPreset.width}px` : undefined,
-                  height: exportingSlide ? `${exportPreset.height}px` : undefined,
-                  aspectRatio: exportingSlide ? "auto" : undefined,
-                }}
-              >
+            <div ref={slidePreview.shellRef} className="market-scan-slide-shell">
+              <div className="market-scan-slide-scale-box" style={slidePreview.scaleBoxStyle}>
+                <div
+                  ref={slideRef}
+                  className={`market-scan-slide-frame customer-insight-slide-frame${exportingSlide ? " is-exporting" : ""}`}
+                  style={slidePreview.frameStyle}
+                >
               <header className="market-scan-slide-head">
                 <div className="market-scan-slide-copy">
                   <span className="market-scan-slide-kicker">{slideCode} {page.title}</span>
@@ -840,7 +843,8 @@ export function CustomerInsightsPage({
                   </>
                 )}
               </div>
-            </div>
+                </div>
+              </div>
             </div>
 
             <section className="market-scan-toolbar market-scan-toolbar--bottom customer-insight-export-toolbar">

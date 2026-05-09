@@ -2,6 +2,34 @@ from pathlib import Path
 import os
 
 
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, raw_value = stripped.split("=", 1)
+        env_key = key.strip()
+        if not env_key or env_key in os.environ:
+            continue
+        env_value = raw_value.strip().strip("'\"")
+        os.environ[env_key] = env_value
+
+
+def _load_local_env_files() -> None:
+    current_file = Path(__file__).resolve()
+    for env_path in (
+        current_file.parents[2] / ".env",
+        current_file.parents[3] / ".env",
+        current_file.parents[4] / ".env",
+    ):
+        _load_env_file(env_path)
+
+
+_load_local_env_files()
+
+
 def _parse_bool_env(name: str, default: bool) -> bool:
     raw_value = os.getenv(name)
     if raw_value is None:

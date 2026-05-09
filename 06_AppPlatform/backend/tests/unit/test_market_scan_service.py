@@ -118,6 +118,44 @@ def test_segment_payload_includes_suv_segment_share_breakdown() -> None:
     assert sum(latest["segmentSharePct"].values()) == pytest.approx(latest_body_share["suvSharePct"])
 
 
+def test_segment_payload_includes_overall_origin_channel_mix() -> None:
+    frame = pd.DataFrame(
+        {
+            "__segment_raw": ["SUV A0", "SUV A0", "Car A", "Car A"],
+            "__origin": ["欧系", "欧系", "日系", "日系"],
+            "__registration_type": ["Business", "Private", "Private", "Other"],
+            "2026 Jan": [40.0, 20.0, 35.0, 5.0],
+            "2026 Feb": [60.0, 40.0, 50.0, 10.0],
+        },
+    )
+
+    payload = market_scan_service._build_segment_payload(
+        frame=frame,
+        available_periods=["2026-01", "2026-02"],
+        resolved_period="2026-02",
+        prior_period="2026-01",
+        same_month_last_year_period=None,
+        body_window_months=2,
+    )
+
+    assert payload["channelMix"]["options"][0]["value"] == "overall"
+    assert payload["channelMix"]["month"]["defaultView"] == "origin"
+
+    month_items = payload["channelMix"]["month"]["items"]
+    overall = month_items[0]
+    origin_items = payload["channelMix"]["month"]["views"]["origin"]["items"]
+    europe = next(item for item in origin_items if item["label"] == "欧系")
+    japan = next(item for item in origin_items if item["label"] == "日系")
+
+    assert overall["label"] == "整体市场"
+    assert overall["channelSharePct"]["Business"] == pytest.approx(60 / 160)
+    assert europe["volume"] == pytest.approx(100.0)
+    assert europe["channelMix"]["Business"] == pytest.approx(60.0)
+    assert europe["channelSharePct"]["Business"] == pytest.approx(0.6)
+    assert japan["channelMix"]["Private"] == pytest.approx(50.0)
+    assert japan["channelSharePct"]["Other"] == pytest.approx(10 / 60)
+
+
 def test_origin_payload_includes_brand_level_trend_groups() -> None:
     frame = pd.DataFrame(
         {

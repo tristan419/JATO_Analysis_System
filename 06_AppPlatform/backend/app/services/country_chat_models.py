@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import itertools
 import json
 import logging
 import os
@@ -21,8 +20,10 @@ DEFAULT_NVIDIA_CHAT_MODEL = "meta/llama-3.3-70b-instruct"
 NVIDIA_MODELS_URL = "https://integrate.api.nvidia.com/v1/models"
 GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 DISCOVERY_ALL_MODELS = "*"
-_ROTATION_COUNTER = itertools.count()
-_ROTATION_LOCK = threading.Lock()
+PRIMARY_PROVIDER_ORDER = ("gemini", "nvidia")
+_PROVIDER_PRIORITY = {
+    provider: index for index, provider in enumerate(PRIMARY_PROVIDER_ORDER)
+}
 _DISCOVERY_CACHE_LOCK = threading.Lock()
 _DISCOVERY_CACHE: dict[str, tuple[float, tuple[str, ...]]] = {}
 
@@ -178,9 +179,9 @@ def list_country_chat_model_options() -> list[CountryChatModelOption]:
             id=AUTO_CHAT_MODEL_ID,
             provider="auto",
             model=None,
-            label="Auto (Recommended)",
+            label="Auto · Gemini first",
             description=(
-                "自动在各 provider 的默认模型之间轮换，并在失败时切换。"
+                "优先使用 Gemini，失败时自动切换到其他可用 provider。"
                 if provider_options else
                 "当前没有可用聊天模型，将退回本地摘要回答。"
             ),
@@ -191,7 +192,8 @@ def list_country_chat_model_options() -> list[CountryChatModelOption]:
 
 
 def default_country_chat_model_id() -> str:
-    return AUTO_CHAT_MODEL_ID
+    preferred_options = _preferred_provider_model_options()
+    return preferred_options[0].id if preferred_options else AUTO_CHAT_MODEL_ID
 
 
 def resolve_country_chat_model_id(requested_model: str | None) -> str:
@@ -200,12 +202,22 @@ def resolve_country_chat_model_id(requested_model: str | None) -> str:
         return default_country_chat_model_id()
 
     normalized = requested.lower()
-    for option in list_country_chat_model_options():
+    options = list_country_chat_model_options()
+    for option in options:
         if option.id.lower() == normalized:
             return option.id
 
+    provider_prefix = normalized.split(":", 1)[0] if ":" in normalized else ""
+    available_providers = {option.provider for option in options}
+    if provider_prefix in {"gemini", "nvidia"} and provider_prefix not in available_providers:
+        log.info(
+            "Requested country chat provider %s is unavailable; falling back to default",
+            provider_prefix,
+        )
+        return default_country_chat_model_id()
+
     allowed = ", ".join(
-        option.id for option in list_country_chat_model_options()
+        option.id for option in options
     )
     raise ValueError(f"不支持的聊天模型: {requested}（可选: {allowed}）")
 
@@ -219,10 +231,7 @@ def build_country_chat_execution_chain(
         return selected_id, []
 
     if selected_id == AUTO_CHAT_MODEL_ID:
-        with _ROTATION_LOCK:
-            offset = next(_ROTATION_COUNTER) % len(preferred_options)
-        ordered = preferred_options[offset:] + preferred_options[:offset]
-        return selected_id, ordered
+        return selected_id, preferred_options
 
     all_options = _provider_model_options()
     selected = next(
@@ -290,7 +299,7 @@ def _provider_model_options() -> list[CountryChatModelOption]:
                 ),
             )
         )
-    return options
+    return _sort_options_by_provider_priority(options)
 
 
 def _preferred_provider_model_options() -> list[CountryChatModelOption]:
@@ -299,7 +308,7 @@ def _preferred_provider_model_options() -> list[CountryChatModelOption]:
         return []
 
     preferred: list[CountryChatModelOption] = []
-    for provider in ("nvidia", "gemini"):
+    for provider in PRIMARY_PROVIDER_ORDER:
         candidates = [option for option in options if option.provider == provider]
         if not candidates:
             continue
@@ -350,15 +359,15 @@ def _expand_provider_model_specs(
 
 def _discover_default_provider_model_specs() -> list[tuple[str, str]]:
     specs: list[tuple[str, str]] = []
-    if nvidia_provider_available():
-        specs.extend(
-            ("nvidia", model)
-            for model in _discover_provider_model_names("nvidia")
-        )
     if gemini_provider_available():
         specs.extend(
             ("gemini", model)
             for model in _discover_provider_model_names("gemini")
+        )
+    if nvidia_provider_available():
+        specs.extend(
+            ("nvidia", model)
+            for model in _discover_provider_model_names("nvidia")
         )
     return specs
 
@@ -541,6 +550,21 @@ def _dedupe_options(
         seen.add(option.id)
         ordered.append(option)
     return ordered
+
+
+def _sort_options_by_provider_priority(
+    options: list[CountryChatModelOption],
+) -> list[CountryChatModelOption]:
+    return [
+        option
+        for _, option in sorted(
+            enumerate(options),
+            key=lambda indexed: (
+                _PROVIDER_PRIORITY.get(indexed[1].provider, len(_PROVIDER_PRIORITY)),
+                indexed[0],
+            ),
+        )
+    ]
 
 
 def _model_label(provider: str, model: str) -> str:

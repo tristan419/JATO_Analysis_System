@@ -21,14 +21,21 @@ const metadata: CountryChatMetadataResponse = {
     { value: "法国", label: "France" },
     { value: "中国", label: "China" },
   ],
-  provider: "test",
+  provider: "gemini",
   providerAvailable: true,
-  defaultChatModel: "auto",
+  defaultChatModel: "gemini:gemini-2.5-flash",
   availableChatModels: [
     {
       id: "auto",
       provider: "auto",
-      label: "Auto (Recommended)",
+      label: "Auto · Gemini first",
+      available: true,
+    },
+    {
+      id: "gemini:gemini-2.5-flash",
+      provider: "gemini",
+      model: "gemini-2.5-flash",
+      label: "Gemini · gemini-2.5-flash",
       available: true,
     },
     {
@@ -80,9 +87,9 @@ describe("resolveCountrySelection", () => {
     expect(
       resolveChatModelSelection({
         metadata,
-        selectedChatModel: "gemini:gemini-2.5-flash",
+        selectedChatModel: "gemini:missing",
       }),
-    ).toBe("auto");
+    ).toBe("gemini:gemini-2.5-flash");
   });
 
   it("keeps a valid selected chat model", () => {

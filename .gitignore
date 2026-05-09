@@ -6,6 +6,9 @@
 **/node_modules/
 **/dist/
 06_AppPlatform/frontend/.env
+06_AppPlatform/backend/.env
+06_AppPlatform/.env
+/.env
 06_AppPlatform/.runtime/
 
 # python artifacts
@@ -16,6 +19,7 @@
 .venv/
 venv/
 .claude/
+.playwright-mcp/
 
 # macOS artifacts
 .DS_Store

@@ -564,6 +564,28 @@ export interface MarketScanSuvSegmentShareTrendItem {
   segmentSharePct: Record<string, number>;
 }
 
+export interface MarketScanChannelMixItem {
+  label: string;
+  volume: number;
+  channelMix: Record<string, number>;
+  channelSharePct: Record<string, number>;
+}
+
+export interface MarketScanChannelMixWindow {
+  title: string;
+  items: MarketScanChannelMixItem[];
+  defaultView?: string;
+  views?: Record<string, {
+    title: string;
+    items: MarketScanChannelMixItem[];
+  }>;
+}
+
+export interface MarketScanChannelMixOption {
+  value: string;
+  label: string;
+}
+
 export interface MarketScanSegmentPage {
   summaryText: string;
   matrix: MarketScanMatrix;
@@ -572,6 +594,13 @@ export interface MarketScanSegmentPage {
   };
   suvSegmentShareTrend: {
     items: MarketScanSuvSegmentShareTrendItem[];
+  };
+  channelMix?: {
+    options?: MarketScanChannelMixOption[];
+    month: MarketScanChannelMixWindow;
+    ytd: MarketScanChannelMixWindow;
+    rolling12: MarketScanChannelMixWindow;
+    customRange?: MarketScanChannelMixWindow | null;
   };
 }
 

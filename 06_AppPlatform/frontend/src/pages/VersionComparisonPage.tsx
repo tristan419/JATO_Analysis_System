@@ -19,6 +19,7 @@ import { buildBubbleSizing } from "../utils/bubbleSizing";
 import { fuelColor } from "../utils/colors";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
 import { useArrowCountryNavigation } from "../utils/useArrowCountryNavigation";
+import { useFixedCanvasPreview } from "../utils/useFixedCanvasPreview";
 
 const DEFAULT_FUEL_TYPES = ["BEV", "HEV", "PHEV", "MHEV", "ICE"];
 const DEFAULT_COUNTRY = "瑞典";
@@ -448,6 +449,11 @@ export function VersionComparisonPage() {
     }
   }, [msrpMax, msrpMin, page, priceBandSize, priceControlsTouched]);
   const exportPreset = EXPORT_PRESETS.find((item) => item.key === exportPresetKey) ?? EXPORT_PRESETS[1];
+  const slidePreview = useFixedCanvasPreview({
+    width: exportPreset.width,
+    height: exportPreset.height,
+    exporting: exportingSlide,
+  });
   const unselectedModelOptions = (deck?.metadata.availableModels ?? []).filter((item) => !activeModels.includes(item.value));
 
   useEffect(() => {
@@ -839,16 +845,13 @@ export function VersionComparisonPage() {
               </div>
             ) : null}
 
-            <div className="market-scan-slide-shell">
-              <div
-                ref={slideRef}
-                className="market-scan-slide-frame positioning-pricing-slide-frame"
-                style={{
-                  width: exportingSlide ? `${exportPreset.width}px` : undefined,
-                  height: exportingSlide ? `${exportPreset.height}px` : undefined,
-                  aspectRatio: exportingSlide ? "auto" : undefined,
-                }}
-              >
+            <div ref={slidePreview.shellRef} className="market-scan-slide-shell">
+              <div className="market-scan-slide-scale-box" style={slidePreview.scaleBoxStyle}>
+                <div
+                  ref={slideRef}
+                  className="market-scan-slide-frame positioning-pricing-slide-frame"
+                  style={slidePreview.frameStyle}
+                >
                 <header className="market-scan-slide-head">
                   <div className="market-scan-slide-copy">
                     <span className="market-scan-slide-kicker">09 {page.title}</span>
@@ -929,6 +932,7 @@ export function VersionComparisonPage() {
                       </Panel>
                     </div>
                   </div>
+                </div>
                 </div>
               </div>
             </div>

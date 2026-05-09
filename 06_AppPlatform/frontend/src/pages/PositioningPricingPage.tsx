@@ -33,6 +33,7 @@ import { buildBubbleSizing } from "../utils/bubbleSizing";
 import { fuelColor } from "../utils/colors";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
 import { useArrowCountryNavigation } from "../utils/useArrowCountryNavigation";
+import { useFixedCanvasPreview } from "../utils/useFixedCanvasPreview";
 
 const DEFAULT_FUEL_TYPES = ["BEV", "HEV", "PHEV", "MHEV", "ICE"];
 const DEFAULT_COUNTRY = "瑞典";
@@ -47,7 +48,8 @@ const DEFAULT_TOP_N = 50;
 const DEFAULT_BUBBLE_SCALE = 2;
 const TOP_N_OPTIONS = [30, 50, 100] as const;
 const BUBBLE_SCALE_OPTIONS = [1, 2, 3, 4] as const;
-const POSITIONING_CHART_MARGIN = { l: 84, r: 24, t: 16, b: 52 } as const;
+const POSITIONING_CHART_MARGIN = { l: 96, r: 24, t: 16, b: 62 } as const;
+const POSITIONING_AXIS_TITLE_STANDOFF = 12;
 const DEFAULT_POSITIONING_EXPORT: ExportSettings = {
   ...DEFAULT_EXPORT,
   showXGrid: false,
@@ -333,7 +335,8 @@ function priceBandLayout(
     barmode: "stack",
     margin: { ...POSITIONING_CHART_MARGIN, r: showDataLabels ? 70 : POSITIONING_CHART_MARGIN.r },
     xaxis: {
-      title: { text: "Sales" },
+      title: { text: "Sales", standoff: POSITIONING_AXIS_TITLE_STANDOFF },
+      automargin: true,
       exponentformat: "none",
       zeroline: false,
       ...(showDataLabels && maxSales > 0 ? { range: [0, maxSales * 1.18] } : {}),
@@ -349,7 +352,8 @@ function bubbleLayout(page: PositioningPricingPage): Partial<PlotlyLayout> {
     ...CHART_LAYOUT,
     margin: POSITIONING_CHART_MARGIN,
     xaxis: {
-      title: { text: "Length (mm)" },
+      title: { text: "Length (mm)", standoff: POSITIONING_AXIS_TITLE_STANDOFF },
+      automargin: true,
       range: [lengthMin, lengthMax],
       tickformat: "d",
       exponentformat: "none",
@@ -361,9 +365,11 @@ function bubbleLayout(page: PositioningPricingPage): Partial<PlotlyLayout> {
 
 function msrpYAxisLayout(page: PositioningPricingPage): Partial<PlotlyLayout>["yaxis"] {
   const rangeMin = page.priceBands.range.min;
+  const lowerPadding = Math.max(page.priceBands.bandSize * 0.6, 400);
   return {
-    title: { text: "MSRP" },
-    range: [rangeMin, page.priceBands.range.max],
+    title: { text: "MSRP", standoff: POSITIONING_AXIS_TITLE_STANDOFF },
+    automargin: true,
+    range: [Math.max(0, rangeMin - lowerPadding), page.priceBands.range.max],
     tick0: rangeMin,
     dtick: page.priceBands.bandSize,
     tickformat: "d",
@@ -598,6 +604,11 @@ export function PositioningPricingPage() {
   const page = deck?.pages[activePage];
   const activeTab = TAB_ITEMS.find((item) => item.key === activePage) ?? TAB_ITEMS[0];
   const exportPreset = EXPORT_PRESETS.find((item) => item.key === exportPresetKey) ?? EXPORT_PRESETS[1];
+  const slidePreview = useFixedCanvasPreview({
+    width: exportPreset.width,
+    height: exportPreset.height,
+    exporting: exportingSlide,
+  });
   const barTraces = useMemo(
     () => (page ? applyPositioningExportToTraces(buildPriceBandTraces(page, activeFuelTypes), priceBandExport) : []),
     [activeFuelTypes, page, priceBandExport],
@@ -952,16 +963,13 @@ export function PositioningPricingPage() {
               </div>
             ) : null}
 
-            <div className="market-scan-slide-shell">
-              <div
-                ref={slideRef}
-                className="market-scan-slide-frame positioning-pricing-slide-frame"
-                style={{
-                  width: exportingSlide ? `${exportPreset.width}px` : undefined,
-                  height: exportingSlide ? `${exportPreset.height}px` : undefined,
-                  aspectRatio: exportingSlide ? "auto" : undefined,
-                }}
-              >
+            <div ref={slidePreview.shellRef} className="market-scan-slide-shell">
+              <div className="market-scan-slide-scale-box" style={slidePreview.scaleBoxStyle}>
+                <div
+                  ref={slideRef}
+                  className="market-scan-slide-frame positioning-pricing-slide-frame"
+                  style={slidePreview.frameStyle}
+                >
                 <header className="market-scan-slide-head">
                   <div className="market-scan-slide-copy">
                     <span className="market-scan-slide-kicker">{activeTab.code} {page.title}</span>
@@ -1050,6 +1058,7 @@ export function PositioningPricingPage() {
                       </Panel>
                     </div>
                   </div>
+                </div>
                 </div>
               </div>
             </div>

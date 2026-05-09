@@ -23,6 +23,13 @@ python ../../03_Scripts/run_country_news_sync.sh
 export GEMINI_API_KEY=your-key
 python ../../03_Scripts/sync_country_news_digest.py --workers 4
 
+# Optional country assistant live-search providers
+# Priority: Tavily -> Google Custom Search -> SerpAPI -> Google News RSS fallback.
+export TAVILY_API_KEY=your-tavily-key
+export GOOGLE_CUSTOM_SEARCH_API_KEY=your-google-cse-api-key
+export GOOGLE_CSE_ID=your-google-cse-id
+export SERPAPI_API_KEY=your-serpapi-key
+
 # Runtime requests read DB snapshots first; live external fetch is off by default
 export APP_COUNTRY_NEWS_LIVE_FETCH=false
 

@@ -225,6 +225,7 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     setWidgetHeight(h);
   }, []);
   const userPickedRef = useRef(false);
+  const chatModelPickedRef = useRef(false);
   const consumedHandoffSearchRef = useRef("");
   const [drafts, setDrafts] = useState<Record<string, string>>(
     () => cachedUi?.drafts ?? {},
@@ -281,9 +282,13 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     if (!metadata) {
       return;
     }
+    const selectedModelForResolution =
+      selectedChatModel === "auto" && !chatModelPickedRef.current
+        ? ""
+        : selectedChatModel;
     const resolvedChatModel = resolveChatModelSelection({
       metadata,
-      selectedChatModel,
+      selectedChatModel: selectedModelForResolution,
     });
     if (resolvedChatModel && resolvedChatModel !== selectedChatModel) {
       setSelectedChatModelState(resolvedChatModel);
@@ -348,6 +353,7 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
       setSelectedCountryState(nextCountry);
     }
     if (nextChatModel && nextChatModel !== selectedChatModel) {
+      chatModelPickedRef.current = true;
       setSelectedChatModelState(nextChatModel);
     }
     if (handoff.question && nextCountry) {
@@ -428,6 +434,7 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setSelectedChatModel = useCallback((value: string) => {
+    chatModelPickedRef.current = true;
     setSelectedChatModelState(value);
     setError("");
   }, []);

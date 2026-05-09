@@ -452,12 +452,13 @@ def test_metadata_exposes_available_chat_models(monkeypatch) -> None:
 
     metadata = country_chat_service.get_country_chat_metadata()
 
-    assert metadata["defaultChatModel"] == country_chat_models.AUTO_CHAT_MODEL_ID
+    assert metadata["provider"] == "gemini"
+    assert metadata["defaultChatModel"] == "gemini:gemini-2.5-flash"
     assert metadata["providerAvailable"] is True
     assert [item["id"] for item in metadata["availableChatModels"]] == [
         "auto",
-        "nvidia:meta/llama-3.3-70b-instruct",
         "gemini:gemini-2.5-flash",
+        "nvidia:meta/llama-3.3-70b-instruct",
     ]
 
 
@@ -693,7 +694,7 @@ def test_answer_uses_requested_nvidia_chat_model(monkeypatch) -> None:
 
 
 @pytest.mark.usefixtures("_patch_base")
-def test_answer_auto_falls_back_to_gemini(monkeypatch) -> None:
+def test_answer_auto_uses_gemini_first(monkeypatch) -> None:
     monkeypatch.setenv("NVIDIA_API_KEY", "secret")
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
     monkeypatch.setenv(
@@ -703,7 +704,7 @@ def test_answer_auto_falls_back_to_gemini(monkeypatch) -> None:
     monkeypatch.setattr(
         country_chat_service,
         "_answer_with_nvidia",
-        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("quota hit")),
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not call nvidia")),
     )
     monkeypatch.setattr(
         country_chat_service,
@@ -721,7 +722,7 @@ def test_answer_auto_falls_back_to_gemini(monkeypatch) -> None:
     assert result["answerMode"] == "grounded-model"
     assert result["model"] == "gemini-2.5-flash"
     assert result["chatModelId"] == "auto"
-    assert "quota hit" in str(result["providerReason"])
+    assert result["providerReason"] is None
     assert result["grounding"]["strategyLabel"].startswith("Snapshot")
     assert result["grounding"]["layers"][0]["kind"] == "snapshot"
     assert result["grounding"]["evidenceTables"]
@@ -1012,6 +1013,38 @@ def test_answer_with_nvidia_raises_when_final_pass_still_requests_tools(monkeypa
 
 
 @pytest.mark.usefixtures("_patch_base")
+def test_answer_with_nvidia_rejects_textual_tool_call(monkeypatch) -> None:
+    class _FakeResponse:
+        first_message = {
+            "role": "assistant",
+            "content": '{"name":"query_news_and_events","parameters":{"query":"Volvo EX60"}}',
+        }
+        text = '{"name":"query_news_and_events","parameters":{"query":"Volvo EX60"}}'
+
+    class _FakeNvidiaClient:
+        def __init__(self, default_model: str) -> None:
+            self.default_model = default_model
+
+        def chat(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return _FakeResponse()
+
+    monkeypatch.setattr(country_chat_service, "NvidiaChatClient", _FakeNvidiaClient)
+
+    with pytest.raises(RuntimeError, match="文本形式的工具调用"):
+        country_chat_service._answer_with_nvidia(
+            country="瑞典",
+            question="瑞典最近有没有 Volvo EX60 新闻？",
+            intents=["market-context"],
+            intent_route="market-context",
+            user_params={},
+            snapshot={"country": "瑞典"},
+            history=[],
+            chat_model="meta/llama-3.3-70b-instruct",
+            execution_plan={"orchestrationMode": "route-bounded"},
+        )
+
+
+@pytest.mark.usefixtures("_patch_base")
 def test_answer_falls_back_after_nvidia_tool_depth_limit(monkeypatch) -> None:
     monkeypatch.setenv("NVIDIA_API_KEY", "secret")
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -1050,15 +1083,39 @@ def test_answer_rejects_unknown_chat_model(monkeypatch) -> None:
     monkeypatch.setenv("NVIDIA_API_KEY", "secret")
     monkeypatch.setenv(
         "APP_COUNTRY_CHAT_MODEL_OPTIONS",
-        "nvidia:meta/llama-3.3-70b-instruct",
+        "gemini:gemini-2.5-flash",
     )
 
     with pytest.raises(ValueError, match="不支持的聊天模型"):
         country_chat_service.answer_country_question(
             "瑞典",
             "SUV 细分市场分析",
-            chat_model="gemini:gemini-2.5-pro",
+            chat_model="gemini:not-a-real-chat-model",
         )
+
+
+@pytest.mark.usefixtures("_patch_base")
+def test_answer_maps_unavailable_provider_chat_model_to_default(monkeypatch) -> None:
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.setenv(
+        "APP_COUNTRY_CHAT_MODEL_OPTIONS",
+        "gemini:gemini-2.5-flash",
+    )
+    monkeypatch.setattr(
+        country_chat_service,
+        "_answer_with_gemini",
+        lambda **kwargs: "gemini ok",
+    )
+
+    result = country_chat_service.answer_country_question(
+        "瑞典",
+        "SUV 细分市场分析",
+        chat_model="nvidia:meta/llama-3.3-70b-instruct",
+    )
+
+    assert result["provider"] == "gemini"
+    assert result["model"] == "gemini-2.5-flash"
 
 
 @pytest.mark.usefixtures("_patch_base")

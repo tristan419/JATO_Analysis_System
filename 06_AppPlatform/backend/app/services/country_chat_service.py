@@ -26,6 +26,7 @@ from app.services import local_wiki_service
 from app.services import msrp_lookup_service
 from app.services import news_digest_service
 from app.services import news_wiki_service
+from app.services import web_search_service
 
 
 enable_external_scraper_package()
@@ -43,6 +44,23 @@ CONTEXT_CHAR_BUDGET = 24_000
 MAX_DECK_BASE_INTENTS = 3
 MAX_DECK_INTENTS = 5
 GEMINI_SEARCH_INTENTS = {"market-context"}
+GEMINI_SEARCH_ROUTES = {"market-context"}
+GEMINI_CHAT_TIMEOUT_SECONDS = max(
+    5,
+    int(os.getenv("APP_COUNTRY_CHAT_GEMINI_TIMEOUT_SECONDS", "20").strip() or "20"),
+)
+GEMINI_CHAT_MAX_RETRIES = max(
+    0,
+    int(os.getenv("APP_COUNTRY_CHAT_GEMINI_MAX_RETRIES", "0").strip() or "0"),
+)
+GEMINI_SEARCH_TIMEOUT_SECONDS = max(
+    5,
+    int(os.getenv("APP_COUNTRY_CHAT_GEMINI_SEARCH_TIMEOUT_SECONDS", "15").strip() or "15"),
+)
+GEMINI_SEARCH_MAX_RETRIES = max(
+    0,
+    int(os.getenv("APP_COUNTRY_CHAT_GEMINI_SEARCH_MAX_RETRIES", "0").strip() or "0"),
+)
 PLANNER_NEWS_KEYWORDS = (
     "新闻",
     "政策",
@@ -7122,7 +7140,7 @@ def _query_news_wiki(
                 refreshed = news_digest_service.refresh_country_news(
                     country,
                     persist=False,
-                    enrich_with_gemini=None,
+                    enrich_with_gemini=False,
                 )
                 news_digest = refreshed.get("newsDigest")
                 market_events = refreshed.get("marketEvents")
@@ -7165,6 +7183,50 @@ def _extract_nvidia_response_text(response: Any) -> str:
                 parts.append(value)
         return "\n".join(parts).strip()
     return ""
+
+
+NVIDIA_TEXT_TOOL_CALL_NAMES = {
+    "query_market_kpis",
+    "query_top_brands",
+    "query_powertrain_mix",
+    "query_positioning_map",
+    "query_segment_metrics",
+    "query_news_and_events",
+    "query_news_wiki",
+    "query_local_wiki",
+}
+
+
+def _strip_json_code_fence(text: str) -> str:
+    value = text.strip()
+    if not value.startswith("```"):
+        return value
+    lines = value.splitlines()
+    if len(lines) >= 3 and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return value
+
+
+def _is_textual_nvidia_tool_call(text: str) -> bool:
+    value = _strip_json_code_fence(text)
+    if not (value.startswith("{") and value.endswith("}")):
+        return False
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    name = str(payload.get("name") or payload.get("tool") or payload.get("function_name") or "").strip()
+    function_payload = payload.get("function")
+    if not name and isinstance(function_payload, dict):
+        name = str(function_payload.get("name") or "").strip()
+    return name in NVIDIA_TEXT_TOOL_CALL_NAMES
+
+
+def _reject_textual_nvidia_tool_call(text: str) -> None:
+    if _is_textual_nvidia_tool_call(text):
+        raise RuntimeError("NVIDIA 返回了文本形式的工具调用，未生成最终回答")
 
 
 def _answer_with_nvidia(
@@ -7358,6 +7420,7 @@ def _answer_with_nvidia(
         text = _extract_nvidia_response_text(response)
         if not text:
             raise RuntimeError("NVIDIA 返回了空文本内容")
+        _reject_textual_nvidia_tool_call(text)
         return text
 
     messages.append(first_msg)
@@ -7450,6 +7513,7 @@ def _answer_with_nvidia(
     final_text = _extract_nvidia_response_text(final_response)
     if not final_text:
         raise RuntimeError("NVIDIA 未在工具结果后生成最终回答")
+    _reject_textual_nvidia_tool_call(final_text)
     return final_text
 
 
@@ -7486,9 +7550,53 @@ def _answer_with_gemini(
     search_enabled = _should_enable_gemini_google_search(
         question=question,
         intents=intents,
+        intent_route=intent_route,
         snapshot=snapshot,
         model=model,
     )
+    search_instruction = (
+        "独立搜索未启用；只能基于已给国家快照和预取证据回答。"
+    )
+    if search_enabled:
+        search_instruction = (
+            "独立搜索已启用；如果问题涉及最新、最近、新闻、政策、法规、"
+            "补贴、关税、品牌动态或具体车型动态，必须优先参考联网检索摘要。"
+            "如果用户点名品牌或车型，必须把这些词和国家一起作为检索重点；"
+            "不要只依赖本地 newsDigest 或 marketEvents。"
+            "只有联网检索和本地快照都无结果，才说明未找到相关动态。"
+        )
+    search_brief = ""
+    if (
+        search_enabled
+        and (
+            intent_route == "market-context"
+            or "market-context" in _normalize_intents(intents)
+        )
+    ):
+        search_results = web_search_service.search_market_news(
+            country=country,
+            question=question,
+            limit=6,
+        )
+        search_brief = _summarize_external_search_results_with_gemini(
+            api_key=api_key,
+            model=model,
+            country=country,
+            question=question,
+            search_results=search_results,
+        )
+        if search_brief:
+            return search_brief
+        if search_results:
+            return _format_external_search_results(
+                country=country,
+                question=question,
+                search_results=search_results,
+            )
+        search_instruction = (
+            "独立搜索短超时内未返回可用摘要；本次不再继续调用联网工具，"
+            "改为基于国家快照、预取证据和模型已有知识快速回答。"
+        )
     request_body = {
         "contents": [
             {
@@ -7500,8 +7608,7 @@ def _answer_with_gemini(
                             "请基于给定国家快照直接输出最终中文分析回答，不要暴露推理过程。"
                             "不要输出链接、URL、markdown 图片或文件路径。\n\n"
                             "如果问题明显涉及最新新闻、政策、补贴、关税、法规或市场热点，"
-                            "且系统已启用 Google Search 工具，你可以先联网补充最新事实，"
-                            "再结合国家快照给出结论；不要直接贴链接。\n\n"
+                            "按联网检索要求处理，再结合国家快照给出结论；不要直接贴链接。\n\n"
                             f"国家: {country}\n"
                             f"问题: {question}\n"
                             f"路由: {intent_route}\n"
@@ -7510,6 +7617,8 @@ def _answer_with_gemini(
                             f"执行计划: {json.dumps(_compact_execution_plan_for_prompt(execution_plan), ensure_ascii=False)}\n"
                             f"预取证据: {json.dumps(_compact_planner_context_for_prompt(planner_context), ensure_ascii=False)}\n"
                             f"回答约束: {_route_specific_answer_guidance(intent_route)}\n"
+                            f"联网检索要求: {search_instruction}\n"
+                            f"联网检索摘要: {search_brief if search_brief else '无'}\n"
                             f"历史对话:\n{chr(10).join(history_lines) if history_lines else '无'}\n\n"
                             f"上下文(JSON):\n{json.dumps(context, ensure_ascii=False)}"
                         ),
@@ -7521,8 +7630,105 @@ def _answer_with_gemini(
             "temperature": 0.2,
         },
     }
-    if search_enabled:
-        request_body["tools"] = [{"google_search": {}}]
+    payload = _post_gemini_generate_content(
+        api_key=api_key,
+        model=model,
+        request_body=request_body,
+        timeout_seconds=GEMINI_CHAT_TIMEOUT_SECONDS,
+        max_retries=GEMINI_CHAT_MAX_RETRIES,
+    )
+
+    text = news_digest_service._extract_gemini_response_text(payload)  # noqa: SLF001
+    if not text:
+        raise RuntimeError("Gemini 返回了空文本内容")
+    return text.strip()
+
+
+def _summarize_external_search_results_with_gemini(
+    *,
+    api_key: str,
+    model: str,
+    country: str,
+    question: str,
+    search_results: list[dict[str, str]],
+) -> str:
+    if not search_results:
+        return ""
+    request_body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": (
+                            "你是汽车市场新闻总结助手。请只基于下面的联网检索结果，"
+                            "输出可以直接给用户阅读的中文事实摘要。\n"
+                            f"今天日期: {time.strftime('%Y-%m-%d')}\n"
+                            f"国家: {country}\n"
+                            f"问题: {question}\n"
+                            "要求: 如果用户点名品牌或车型，必须重点回答这些词；"
+                            "先给结论，说明是否找到相关动态；"
+                            "再输出不超过 5 条事实，每条包含时间、事件和与该国家市场的关系；"
+                            "不要输出 URL；不要编造检索结果中没有的事实。\n"
+                            f"联网检索结果(JSON): {json.dumps(search_results, ensure_ascii=False)}"
+                        )
+                    }
+                ],
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.1,
+        },
+    }
+    try:
+        payload = _post_gemini_generate_content(
+            api_key=api_key,
+            model=model,
+            request_body=request_body,
+            timeout_seconds=GEMINI_SEARCH_TIMEOUT_SECONDS,
+            max_retries=GEMINI_SEARCH_MAX_RETRIES,
+        )
+    except RuntimeError as exc:
+        log.warning("Gemini Google Search brief failed: %s", exc)
+        return ""
+
+    text = news_digest_service._extract_gemini_response_text(payload)  # noqa: SLF001
+    return text.strip()[:3000] if text else ""
+
+
+def _format_external_search_results(
+    *,
+    country: str,
+    question: str,
+    search_results: list[dict[str, str]],
+) -> str:
+    del question
+    lines = [
+        f"我查到 {country} 相关的公开新闻线索；当前模型总结超时，先返回检索摘要。",
+        "",
+    ]
+    for item in search_results[:5]:
+        published_at = str(item.get("publishedAt") or "").strip()
+        source = str(item.get("source") or item.get("provider") or "").strip()
+        title = str(item.get("title") or "").strip()
+        snippet = str(item.get("snippet") or "").strip()
+        prefix_parts = [part for part in [published_at, source] if part]
+        prefix = f"{' · '.join(prefix_parts)}: " if prefix_parts else ""
+        line = f"- {prefix}{title}"
+        if snippet and snippet.casefold() != title.casefold():
+            line = f"{line}。{snippet[:220]}"
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _post_gemini_generate_content(
+    *,
+    api_key: str,
+    model: str,
+    request_body: dict[str, Any],
+    timeout_seconds: int,
+    max_retries: int,
+) -> dict[str, Any]:
     request = Request(
         (
             "https://generativelanguage.googleapis.com/v1beta/"
@@ -7533,17 +7739,15 @@ def _answer_with_gemini(
         method="POST",
     )
 
-    payload: dict[str, Any] | None = None
-    for attempt in range(news_digest_service.DEFAULT_GEMINI_MAX_RETRIES + 1):
+    for attempt in range(max_retries + 1):
         try:
             with urlopen(
                 request,
-                timeout=news_digest_service.DEFAULT_GEMINI_TIMEOUT_SECONDS,
+                timeout=timeout_seconds,
             ) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            break
+                return json.loads(response.read().decode("utf-8"))
         except (HTTPError, URLError, TimeoutError, ValueError) as exc:
-            if attempt >= news_digest_service.DEFAULT_GEMINI_MAX_RETRIES:
+            if attempt >= max_retries:
                 raise RuntimeError(f"Gemini 请求失败: {exc}") from exc
             if not news_digest_service._is_retryable_gemini_error(exc):  # noqa: SLF001
                 raise RuntimeError(f"Gemini 请求失败: {exc}") from exc
@@ -7554,24 +7758,21 @@ def _answer_with_gemini(
                 )
             )
 
-    if payload is None:
-        raise RuntimeError("Gemini 返回了空响应")
-
-    text = news_digest_service._extract_gemini_response_text(payload)  # noqa: SLF001
-    if not text:
-        raise RuntimeError("Gemini 返回了空文本内容")
-    return text.strip()
+    raise RuntimeError("Gemini 返回了空响应")
 
 
 def _should_enable_gemini_google_search(
     *,
     question: str,
     intents: list[str],
+    intent_route: str,
     snapshot: dict[str, Any],
     model: str | None,
 ) -> bool:
-    if not country_chat_models.gemini_model_supports_google_search(model):
-        return False
+    del model
+
+    if intent_route in GEMINI_SEARCH_ROUTES:
+        return True
 
     if any(intent in GEMINI_SEARCH_INTENTS for intent in intents):
         return True

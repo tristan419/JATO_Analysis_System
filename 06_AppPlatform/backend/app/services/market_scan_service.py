@@ -241,6 +241,87 @@ def _registration_mix_payload(group: pd.DataFrame, current_columns: list[str]) -
     }
 
 
+def _build_channel_mix_items(
+    frame: pd.DataFrame,
+    current_columns: list[str],
+    *,
+    group_column: str = "__origin",
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    if frame.empty or not current_columns or "__registration_type" not in frame.columns:
+        return []
+    working = frame.copy()
+    if group_column in working.columns:
+        working["__channel_mix_group"] = working[group_column].fillna("其他").astype(str)
+    else:
+        working["__channel_mix_group"] = "整体市场"
+    working["__channel_mix_volume"] = _series_sum(working, current_columns)
+    grouped_volume = (
+        working.groupby("__channel_mix_group", dropna=False)["__channel_mix_volume"]
+        .sum()
+        .sort_values(ascending=False)
+    )
+    grouped_volume = grouped_volume[grouped_volume > 0].head(max(1, int(limit)))
+
+    items: list[dict[str, Any]] = []
+    for label, volume in grouped_volume.items():
+        group = working[working["__channel_mix_group"] == label]
+        channel_mix = _registration_mix_payload(group, current_columns)
+        denominator = float(volume) if float(volume) > 0 else sum(channel_mix.values())
+        items.append(
+            {
+                "label": str(label),
+                "volume": float(volume),
+                "channelMix": channel_mix,
+                "channelSharePct": {
+                    channel: _safe_share(value, denominator)
+                    for channel, value in channel_mix.items()
+                },
+            }
+        )
+    return items
+
+
+CHANNEL_MIX_OPTIONS = [
+    {"value": "overall", "label": "整体市场"},
+    {"value": "origin", "label": "按车系"},
+]
+
+
+def _build_channel_mix_window(
+    frame: pd.DataFrame,
+    current_columns: list[str],
+    *,
+    title: str,
+) -> dict[str, Any]:
+    overall_items = _build_channel_mix_items(
+        frame,
+        current_columns,
+        group_column="__overall_market",
+        limit=1,
+    )
+    return {
+        "title": title,
+        "defaultView": "origin",
+        "items": overall_items,
+        "views": {
+            "overall": {
+                "title": f"{title} · Overall",
+                "items": overall_items,
+            },
+            "origin": {
+                "title": f"{title} · Origin",
+                "items": _build_channel_mix_items(
+                    frame,
+                    current_columns,
+                    group_column="__origin",
+                    limit=6,
+                ),
+            },
+        },
+    }
+
+
 def _resolve_period(requested_period: str | None, available_periods: list[str]) -> str:
     if not available_periods:
         raise RuntimeError("No month columns available for market scan")
@@ -2299,6 +2380,13 @@ def _build_segment_payload(
             "matrix": {"columns": list(SEGMENT_MATRIX_ORDER), "rows": []},
             "bodyShareTrend": {"items": []},
             "suvSegmentShareTrend": {"items": []},
+            "channelMix": {
+                "options": CHANNEL_MIX_OPTIONS,
+                "month": {"title": "Monthly Channel Mix", "items": []},
+                "ytd": {"title": "YTD Channel Mix", "items": []},
+                "rolling12": {"title": "Rolling 12M Channel Mix", "items": []},
+                "customRange": None,
+            },
         }
 
     current_column = _period_to_month_column(resolved_period)
@@ -2463,6 +2551,29 @@ def _build_segment_payload(
         "matrix": {"columns": list(SEGMENT_MATRIX_ORDER), "rows": matrix_rows},
         "bodyShareTrend": {"items": trend_items},
         "suvSegmentShareTrend": {"items": suv_segment_trend_items},
+        "channelMix": {
+            "options": CHANNEL_MIX_OPTIONS,
+            "month": _build_channel_mix_window(
+                working,
+                [current_column],
+                title=f"{_short_period_label(resolved_period)} Overall Channel Mix",
+            ),
+            "ytd": _build_channel_mix_window(
+                working,
+                current_ytd_columns,
+                title=f"YTD {_short_period_label(resolved_period)} Overall Channel Mix",
+            ),
+            "rolling12": _build_channel_mix_window(
+                working,
+                current_rolling12_columns,
+                title=f"L12M {_short_period_label(resolved_period)} Overall Channel Mix",
+            ),
+            "customRange": _build_channel_mix_window(
+                working,
+                custom_range_columns,
+                title="Custom Range Overall Channel Mix",
+            ) if custom_range_periods else None,
+        },
     }
 
 

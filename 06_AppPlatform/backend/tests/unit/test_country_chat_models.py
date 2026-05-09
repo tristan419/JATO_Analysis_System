@@ -1,4 +1,3 @@
-import itertools
 import json
 
 import pytest
@@ -41,10 +40,10 @@ def test_list_country_chat_model_options_expands_provider_wildcards(
 
     assert [item.id for item in options] == [
         "auto",
-        "nvidia:meta/llama-3.3-70b-instruct",
-        "nvidia:mistralai/mistral-large",
         "gemini:gemini-2.5-flash",
         "gemini:gemini-2.5-pro",
+        "nvidia:meta/llama-3.3-70b-instruct",
+        "nvidia:mistralai/mistral-large",
     ]
     gemini_option = next(item for item in options if item.provider == "gemini")
     assert "Google Search" in str(gemini_option.description)
@@ -69,16 +68,14 @@ def test_execution_chain_keeps_auto_on_provider_defaults(monkeypatch) -> None:
         "_fetch_gemini_model_names",
         lambda: ["gemini-2.5-flash", "gemini-2.5-pro"],
     )
-    monkeypatch.setattr(country_chat_models, "_ROTATION_COUNTER", itertools.count())
-
     selected_id, execution_chain = country_chat_models.build_country_chat_execution_chain(
         "auto"
     )
 
     assert selected_id == "auto"
     assert [item.id for item in execution_chain] == [
-        "nvidia:meta/llama-3.3-70b-instruct",
         "gemini:gemini-2.5-flash",
+        "nvidia:meta/llama-3.3-70b-instruct",
     ]
 
 
@@ -129,7 +126,7 @@ class _StubUrlopenResponse:
         return False
 
 
-def test_gemini_request_enables_google_search_for_market_context(
+def test_gemini_request_summarizes_external_search_for_market_context(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
@@ -141,6 +138,20 @@ def test_gemini_request_enables_google_search_for_market_context(
         country_chat_service,
         "_select_context_for_intents",
         lambda *_: {"overviewSummary": {"totalVolume": 1}},
+    )
+    monkeypatch.setattr(
+        country_chat_service.web_search_service,
+        "search_market_news",
+        lambda **_: [
+            {
+                "title": "Volvo EX60 production starts",
+                "source": "Reuters",
+                "publishedAt": "2026-04-22",
+                "snippet": "Demand for the new EX60 exceeds expectations.",
+                "url": "https://example.test/ex60",
+                "provider": "test",
+            }
+        ],
     )
     captured: dict[str, object] = {}
 
@@ -171,7 +182,56 @@ def test_gemini_request_enables_google_search_for_market_context(
     )
 
     assert result == "gemini ok"
-    assert captured["request_body"]["tools"] == [{"google_search": {}}]
+    assert "tools" not in captured["request_body"]
+    prompt = captured["request_body"]["contents"][0]["parts"][0]["text"]
+    assert "Volvo EX60 production starts" in prompt
+
+
+def test_gemini_market_context_returns_search_results_when_summary_times_out(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        country_chat_service.news_digest_service,
+        "_gemini_api_key",
+        lambda: "gemini-secret",
+    )
+    monkeypatch.setattr(
+        country_chat_service,
+        "_select_context_for_intents",
+        lambda *_: {"overviewSummary": {"totalVolume": 1}},
+    )
+    monkeypatch.setattr(
+        country_chat_service.web_search_service,
+        "search_market_news",
+        lambda **_: [
+            {
+                "title": "Volvo EX60 production starts",
+                "source": "Reuters",
+                "publishedAt": "2026-04-22",
+                "snippet": "Demand for the new EX60 exceeds expectations.",
+                "url": "https://example.test/ex60",
+                "provider": "test",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        country_chat_service,
+        "urlopen",
+        lambda *_, **__: (_ for _ in ()).throw(TimeoutError("timeout")),
+    )
+
+    result = country_chat_service._answer_with_gemini(
+        country="瑞典",
+        question="最近瑞典 Volvo EX60 有什么新闻？",
+        intents=["market-context"],
+        user_params={},
+        snapshot={},
+        history=[],
+        chat_model="gemini-flash-latest",
+    )
+
+    assert "Volvo EX60 production starts" in result
+    assert "模型总结超时" in result
 
 
 def test_gemini_request_skips_google_search_for_regular_snapshot_question(
@@ -209,6 +269,7 @@ def test_gemini_request_skips_google_search_for_regular_snapshot_question(
         country="瑞典",
         question="SUV 细分市场分析",
         intents=["segment-analysis"],
+        intent_route="market-scan-scope",
         user_params={},
         snapshot={"newsDigest": {"headline": "old"}, "marketEvents": []},
         history=[],

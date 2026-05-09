@@ -1176,7 +1176,7 @@ def _gemini_enrichment_enabled(explicit: bool | None) -> bool:
         return False
     if raw in {"1", "true", "yes", "on"}:
         return bool(_gemini_api_key())
-    return bool(_gemini_api_key())
+    return False
 
 
 def _gemini_api_key() -> str:

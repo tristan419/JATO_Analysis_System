@@ -166,6 +166,7 @@ _SWEDEN: dict[str, Any] = {
         "No congestion charge exemption for BEVs in Stockholm/Gothenburg",
     ],
     "hot_topics": [
+        "Volvo EX60 — revealed in Jan 2026 as Volvo's next Sweden-built electric SUV signal",
         "Volvo Cars EX30 — affordable Swedish-designed BEV, produced in China (tariff risk)",
         "Post-bonus-malus BEV sales dip as private buyers wait or switch to HEV",
         "Polestar struggling with profitability despite Swedish roots",
