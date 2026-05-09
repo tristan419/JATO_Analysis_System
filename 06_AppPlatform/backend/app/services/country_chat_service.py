@@ -1223,6 +1223,11 @@ def _build_fresh_context_fast_answer(
         question=question,
         limit=6,
     )
+    if not search_results:
+        search_results = _profile_hot_topic_search_results(
+            country=country,
+            question=question,
+        )
 
     execution_plan = {
         "route": intent_route,
@@ -1345,6 +1350,74 @@ def _external_search_results_to_market_events(
             }
         )
     return events
+
+
+def _profile_hot_topic_search_results(
+    *,
+    country: str,
+    question: str,
+) -> list[dict[str, str]]:
+    profile = country_profiles.get_compact_profile(country)
+    if not isinstance(profile, dict):
+        return []
+
+    query_tokens = {
+        token.casefold()
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9-]{1,}", question)
+        if len(token) >= 3
+    }
+    if not query_tokens:
+        return []
+
+    results: list[dict[str, str]] = []
+    for topic in list(profile.get("hot_topics") or []):
+        text = str(topic or "").strip()
+        if not text:
+            continue
+        folded = text.casefold()
+        if not any(token in folded for token in query_tokens):
+            continue
+        results.append(
+            {
+                "title": text,
+                "source": "Country profile",
+                "publishedAt": _extract_profile_topic_period(text),
+                "snippet": (
+                    "国家助手本地市场 profile 热点；用于外部新闻检索无结果时的兜底线索。"
+                ),
+                "url": "",
+                "provider": "country-profile",
+            }
+        )
+    return results[:3]
+
+
+def _extract_profile_topic_period(text: str) -> str:
+    year_match = re.search(r"\b(20\d{2})\b", text)
+    if not year_match:
+        return ""
+    month_match = re.search(
+        r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not month_match:
+        return year_match.group(1)
+    month = {
+        "jan": "01",
+        "feb": "02",
+        "mar": "03",
+        "apr": "04",
+        "may": "05",
+        "jun": "06",
+        "jul": "07",
+        "aug": "08",
+        "sep": "09",
+        "oct": "10",
+        "nov": "11",
+        "dec": "12",
+    }.get(month_match.group(1)[:3].casefold())
+    return f"{year_match.group(1)}-{month}" if month else year_match.group(1)
 
 
 def _build_external_search_digest(

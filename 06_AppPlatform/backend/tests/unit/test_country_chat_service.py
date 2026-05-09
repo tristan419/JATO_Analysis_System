@@ -807,7 +807,7 @@ def test_fresh_news_question_stays_fast_when_search_has_no_results(monkeypatch) 
 
     result = country_chat_service.answer_country_question(
         "瑞典",
-        "瑞典最近有没有 Volvo 新闻？",
+        "瑞典最近有没有 BMW 新闻？",
         chat_model="auto",
     )
 
@@ -816,6 +816,33 @@ def test_fresh_news_question_stays_fast_when_search_has_no_results(monkeypatch) 
     assert "暂时没有查到" in result["answer"]
     assert result["grounding"]["trust"]["confidence"] == "low"
     assert result["contextSnapshot"]["externalSearchResults"] == []
+
+
+@pytest.mark.usefixtures("_patch_base")
+def test_fresh_news_question_uses_profile_hot_topic_when_search_empty(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.setenv(
+        "APP_COUNTRY_CHAT_MODEL_OPTIONS",
+        "gemini:gemini-flash-latest",
+    )
+    monkeypatch.setattr(
+        country_chat_service.web_search_service,
+        "search_market_news",
+        lambda **kwargs: [],
+    )
+
+    result = country_chat_service.answer_country_question(
+        "瑞典",
+        "瑞典最近有没有 Volvo EX60 新闻？",
+        chat_model="auto",
+    )
+
+    assert result["provider"] == "external-search"
+    assert "Volvo EX60" in result["answer"]
+    assert result["contextSnapshot"]["externalSearchResults"][0][
+        "provider"
+    ] == "country-profile"
+    assert result["grounding"]["trust"]["confidence"] == "medium"
 
 
 @pytest.mark.usefixtures("_patch_base")
