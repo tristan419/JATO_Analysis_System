@@ -878,6 +878,22 @@ def answer_country_question(
         raw_intents,
     )
     focused_intents = route_plan["focusedIntents"]
+    selected_chat_model, execution_chain = (
+        country_chat_models.build_country_chat_execution_chain(chat_model)
+    )
+    fast_context_payload = _build_fresh_context_fast_answer(
+        country=normalized_country,
+        question=normalized_question,
+        intent_route=route_plan["intentRoute"],
+        raw_intents=raw_intents,
+        focused_intents=focused_intents,
+        user_params=user_params,
+        chat_model_id=selected_chat_model,
+        provider_available=bool(execution_chain),
+    )
+    if fast_context_payload is not None:
+        return fast_context_payload
+
     snapshot = build_country_snapshot(
         normalized_country,
         user_params=user_params,
@@ -913,9 +929,6 @@ def answer_country_question(
         snapshot,
         intent_route=route_plan["intentRoute"],
         focused_intents=focused_intents,
-    )
-    selected_chat_model, execution_chain = (
-        country_chat_models.build_country_chat_execution_chain(chat_model)
     )
     provider_available = bool(execution_chain)
     direct_answer_payload = _build_snapshot_first_answer(
@@ -1176,6 +1189,250 @@ def build_country_chart_deck(
         "contextSnapshot": snapshot,
         "controls": controls,
         "extractedParams": response_params,
+    }
+
+
+def _build_fresh_context_fast_answer(
+    *,
+    country: str,
+    question: str,
+    intent_route: str,
+    raw_intents: list[str],
+    focused_intents: list[str],
+    user_params: dict[str, Any],
+    chat_model_id: str,
+    provider_available: bool,
+) -> dict[str, Any] | None:
+    normalized_intents = _normalize_intents(focused_intents)
+    if (
+        intent_route != "market-context"
+        and "market-context" not in normalized_intents
+    ):
+        return None
+    if not _question_requests_news(question, normalized_intents):
+        return None
+
+    search_results = web_search_service.search_market_news(
+        country=country,
+        question=question,
+        limit=6,
+    )
+    if not search_results:
+        return None
+
+    execution_plan = {
+        "route": intent_route,
+        "country": country,
+        "answerStrategy": "fresh-context-search",
+        "orchestrationMode": "external-search-fast",
+        "sourcePlan": [
+            {
+                "key": "external-news-search",
+                "label": "External news search",
+                "required": True,
+                "status": "ready",
+                "reason": (
+                    "用户询问最新新闻/品牌车型动态时，先用外部检索锁定事实，"
+                    "避免先构建完整国家快照导致超时。"
+                ),
+                "toolName": "search_market_news",
+                "query": {"country": country, "question": question},
+            },
+        ],
+        "allowedToolNames": ["search_market_news"],
+        "prefetchedToolNames": ["search_market_news"],
+        "prefetchTools": [
+            {
+                "name": "search_market_news",
+                "arguments": {"country": country, "question": question},
+            },
+        ],
+    }
+    market_events = _external_search_results_to_market_events(
+        country=country,
+        search_results=search_results,
+    )
+    snapshot = {
+        "country": country,
+        "route": "external-search",
+        "kpis": {},
+        "yearSeries": [],
+        "monthSeries": [],
+        "topBrands": [],
+        "topModels": [],
+        "powertrainMix": [],
+        "analysisMeta": {
+            "fastContext": True,
+            "sourceProvider": "external-search",
+            "selectedChatModel": chat_model_id,
+        },
+        "marketEvents": market_events,
+        "newsDigest": _build_external_search_digest(
+            country=country,
+            search_results=search_results,
+        ),
+        "externalSearchResults": search_results,
+        "executionPlan": execution_plan,
+    }
+    intent = normalized_intents[0] if normalized_intents else "market-context"
+    grounding = _build_external_search_grounding(
+        country=country,
+        question=question,
+        search_results=search_results,
+    )
+
+    return {
+        "country": country,
+        "question": question,
+        "answer": _format_external_search_results(
+            country=country,
+            question=question,
+            search_results=search_results,
+            summary_timed_out=False,
+        ),
+        "intent": intent,
+        "primaryIntent": intent,
+        "intents": _normalize_intents(raw_intents),
+        "focusedIntents": normalized_intents,
+        "intentRoute": intent_route,
+        "provider": "external-search",
+        "model": None,
+        "chatModelId": chat_model_id,
+        "providerAvailable": provider_available,
+        "providerReason": (
+            "新闻/近期动态问题已先走外部检索快路径，"
+            "跳过完整国家快照和 Market Scan deck 构建。"
+        ),
+        "answerMode": "grounded-direct",
+        "grounding": grounding,
+        "contextSnapshot": snapshot,
+        "executionPlan": execution_plan,
+        "suggestedPrompts": _suggestions_for_intents(normalized_intents, snapshot),
+        "chartLinks": [],
+        "renderHints": [],
+        "extractedParams": user_params,
+    }
+
+
+def _external_search_results_to_market_events(
+    *,
+    country: str,
+    search_results: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for item in search_results[:6]:
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        publisher = str(
+            item.get("source") or item.get("provider") or ""
+        ).strip()
+        events.append(
+            {
+                "sourceCode": "external_search",
+                "countryCode": "",
+                "countryLabel": country,
+                "publisher": publisher,
+                "title": title,
+                "summary": str(item.get("snippet") or "").strip(),
+                "url": str(item.get("url") or "").strip(),
+                "publishedAt": str(item.get("publishedAt") or "").strip(),
+                "tags": ["external-search", "market-context"],
+            }
+        )
+    return events
+
+
+def _build_external_search_digest(
+    *,
+    country: str,
+    search_results: list[dict[str, str]],
+) -> dict[str, Any]:
+    highlights = [
+        str(item.get("title") or "").strip()
+        for item in search_results[:5]
+        if str(item.get("title") or "").strip()
+    ]
+    first = search_results[0] if search_results else {}
+    return {
+        "countryCode": "",
+        "countryLabel": country,
+        "articleCount": len(search_results),
+        "updatedAt": str(first.get("publishedAt") or "").strip(),
+        "headline": highlights[0] if highlights else "",
+        "summary": "；".join(highlights),
+        "highlights": highlights,
+        "stale": False,
+        "source": "external-search",
+    }
+
+
+def _build_external_search_grounding(
+    *,
+    country: str,
+    question: str,
+    search_results: list[dict[str, str]],
+) -> dict[str, Any]:
+    first = search_results[0] if search_results else {}
+    rows = [
+        [
+            str(item.get("publishedAt") or "-")[:10],
+            str(item.get("source") or item.get("provider") or "-"),
+            str(item.get("title") or "-"),
+        ]
+        for item in search_results[:6]
+    ]
+    key_findings = [
+        str(item.get("title") or "").strip()
+        for item in search_results[:3]
+        if str(item.get("title") or "").strip()
+    ]
+    return {
+        "strategyLabel": "Live Search",
+        "summary": (
+            "当前回答先用外部新闻检索锁定事实，"
+            "再把命中的公开线索整理成中文摘要。"
+        ),
+        "answerPath": {
+            "routeTrigger": f"{country} / {question}",
+            "evidenceUsed": ["external-news-search"],
+            "steps": [
+                "识别为新闻 / 最新动态问题。",
+                "用国家、品牌、车型关键词执行外部检索。",
+                "按发布时间、来源和标题整理可核查线索。",
+            ],
+        },
+        "reasoningNotes": [
+            "该路径不依赖完整国家快照，适合需要最新公开信息的问题。"
+        ],
+        "layers": [
+            {
+                "kind": "live",
+                "label": "External news search",
+                "detail": f"命中 {len(search_results)} 条公开检索结果。",
+                "freshness": str(first.get("publishedAt") or "").strip() or None,
+            }
+        ],
+        "keyFindings": key_findings,
+        "evidenceTables": [
+            {
+                "title": "外部新闻检索结果",
+                "columns": ["时间", "来源", "标题"],
+                "rows": rows,
+            }
+        ],
+        "trust": {
+            "confidence": "medium",
+            "evidenceSufficiency": "partial",
+            "evidenceScore": min(95, 45 + len(search_results) * 8),
+            "routeRationale": "用户询问最新新闻/市场动态，需要优先读取外部公开线索。",
+            "missingFacts": [],
+            "sourceCoverage": {
+                "requiredReady": 1,
+                "requiredTotal": 1,
+                "prefetchedCount": 1,
+            },
+        },
     }
 
 
@@ -7695,10 +7952,16 @@ def _format_external_search_results(
     country: str,
     question: str,
     search_results: list[dict[str, str]],
+    summary_timed_out: bool = True,
 ) -> str:
     del question
+    status_text = (
+        "当前模型总结超时，先返回检索摘要。"
+        if summary_timed_out
+        else "已优先返回检索摘要。"
+    )
     lines = [
-        f"我查到 {country} 相关的公开新闻线索；当前模型总结超时，先返回检索摘要。",
+        f"我查到 {country} 相关的公开新闻线索；{status_text}",
         "",
     ]
     for item in search_results[:5]:

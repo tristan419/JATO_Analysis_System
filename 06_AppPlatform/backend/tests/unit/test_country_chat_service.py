@@ -729,6 +729,63 @@ def test_answer_auto_uses_gemini_first(monkeypatch) -> None:
 
 
 @pytest.mark.usefixtures("_patch_base")
+def test_fresh_news_question_uses_external_search_fast_path(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.setenv(
+        "APP_COUNTRY_CHAT_MODEL_OPTIONS",
+        "gemini:gemini-flash-latest",
+    )
+    monkeypatch.setattr(
+        country_chat_service,
+        "build_country_snapshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("should not build full snapshot")
+        ),
+    )
+    monkeypatch.setattr(
+        country_chat_service,
+        "_answer_with_gemini",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("should not call gemini on fast path")
+        ),
+    )
+    monkeypatch.setattr(
+        country_chat_service.web_search_service,
+        "search_market_news",
+        lambda **kwargs: [
+            {
+                "title": "Volvo EX60 production starts in Sweden",
+                "source": "Reuters",
+                "publishedAt": "2026-04-22",
+                "snippet": "Volvo prepares EX60 output for the Swedish market.",
+                "url": "https://example.test/ex60",
+                "provider": "test",
+            }
+        ],
+    )
+
+    result = country_chat_service.answer_country_question(
+        "瑞典",
+        "瑞典这个国家最近有没有 Volvo 的动态？特别是 EX60，有没有相关新闻？",
+        chat_model="auto",
+    )
+
+    assert result["intentRoute"] == "market-context"
+    assert result["provider"] == "external-search"
+    assert result["answerMode"] == "grounded-direct"
+    assert result["chatModelId"] == "auto"
+    assert "Volvo EX60 production starts" in result["answer"]
+    assert "模型总结超时" not in result["answer"]
+    assert result["executionPlan"]["orchestrationMode"] == "external-search-fast"
+    assert result["contextSnapshot"]["route"] == "external-search"
+    assert result["contextSnapshot"]["externalSearchResults"][0][
+        "title"
+    ].startswith("Volvo EX60")
+    assert result["grounding"]["layers"][0]["kind"] == "live"
+    assert result["grounding"]["evidenceTables"][0]["title"] == "外部新闻检索结果"
+
+
+@pytest.mark.usefixtures("_patch_base")
 def test_answer_passes_prefetched_execution_plan_to_model(monkeypatch) -> None:
     monkeypatch.setenv("NVIDIA_API_KEY", "secret")
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)

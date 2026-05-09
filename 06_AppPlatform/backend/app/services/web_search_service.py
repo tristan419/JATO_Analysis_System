@@ -92,10 +92,15 @@ def search_market_news(
     for provider in providers:
         results = provider(query=query, limit=limit)
         if results:
-            return [
-                result.to_dict()
-                for result in _dedupe_results(results)[:limit]
-            ]
+            deduped = _dedupe_results(results)
+            ranked = sorted(
+                enumerate(deduped),
+                key=lambda item: (
+                    -_score_result_relevance(item[1], query),
+                    item[0],
+                ),
+            )
+            return [result.to_dict() for _, result in ranked[:limit]]
     return []
 
 
@@ -287,6 +292,26 @@ def _dedupe_results(results: list[WebSearchResult]) -> list[WebSearchResult]:
         seen.add(key)
         deduped.append(result)
     return deduped
+
+
+def _score_result_relevance(result: WebSearchResult, query: str) -> int:
+    query_tokens = [
+        token.casefold()
+        for token in _LATIN_TOKEN_PATTERN.findall(query)
+        if len(token) >= 3 and token.casefold() not in _QUESTION_NOISE_TOKENS
+    ]
+    if not query_tokens:
+        return 0
+
+    title = result.title.casefold()
+    body = f"{result.title} {result.snippet} {result.source}".casefold()
+    score = 0
+    for token in dict.fromkeys(query_tokens):
+        if token in title:
+            score += 20
+        elif token in body:
+            score += 8
+    return score
 
 
 def _clean_text(value: Any) -> str:
