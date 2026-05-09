@@ -79,6 +79,26 @@ def test_execution_chain_keeps_auto_on_provider_defaults(monkeypatch) -> None:
     ]
 
 
+def test_default_model_options_use_static_models_without_discovery(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.delenv("APP_COUNTRY_CHAT_MODEL_OPTIONS", raising=False)
+    monkeypatch.delenv("APP_COUNTRY_CHAT_MODEL_DISCOVER_ON_REQUEST", raising=False)
+    monkeypatch.setattr(
+        country_chat_models,
+        "_fetch_gemini_model_names",
+        lambda: (_ for _ in ()).throw(AssertionError("should not discover models")),
+    )
+
+    metadata = country_chat_models.get_country_chat_model_metadata()
+
+    assert metadata["defaultChatModel"] == "gemini:gemini-flash-latest"
+    assert "gemini:gemini-flash-latest" in [
+        item["id"] for item in metadata["availableChatModels"]
+    ]
+
+
 def test_selected_model_falls_back_to_provider_default_then_other_provider(
     monkeypatch,
 ) -> None:

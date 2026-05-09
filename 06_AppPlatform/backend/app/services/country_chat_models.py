@@ -17,6 +17,7 @@ from app.services import news_digest_service
 
 AUTO_CHAT_MODEL_ID = "auto"
 DEFAULT_NVIDIA_CHAT_MODEL = "meta/llama-3.3-70b-instruct"
+DEFAULT_GEMINI_CHAT_MODEL = "gemini-flash-latest"
 NVIDIA_MODELS_URL = "https://integrate.api.nvidia.com/v1/models"
 GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 DISCOVERY_ALL_MODELS = "*"
@@ -127,9 +128,9 @@ def get_default_gemini_chat_model() -> str:
     return (
         os.getenv(
             "APP_GEMINI_CHAT_MODEL",
-            news_digest_service.DEFAULT_GEMINI_MODEL,
+            DEFAULT_GEMINI_CHAT_MODEL,
         ).strip()
-        or news_digest_service.DEFAULT_GEMINI_MODEL
+        or DEFAULT_GEMINI_CHAT_MODEL
     )
 
 
@@ -362,14 +363,20 @@ def _discover_default_provider_model_specs() -> list[tuple[str, str]]:
     if gemini_provider_available():
         specs.extend(
             ("gemini", model)
-            for model in _discover_provider_model_names("gemini")
+            for model in _default_provider_model_names("gemini")
         )
     if nvidia_provider_available():
         specs.extend(
             ("nvidia", model)
-            for model in _discover_provider_model_names("nvidia")
+            for model in _default_provider_model_names("nvidia")
         )
     return specs
+
+
+def _default_provider_model_names(provider: str) -> list[str]:
+    if _discover_models_on_request():
+        return _discover_provider_model_names(provider)
+    return _static_provider_model_names(provider)
 
 
 def _discover_provider_model_names(provider: str) -> list[str]:
@@ -589,3 +596,8 @@ def _model_discovery_ttl_seconds() -> int:
 def _model_discovery_timeout_seconds() -> int:
     raw = os.getenv("APP_COUNTRY_CHAT_MODEL_DISCOVERY_TIMEOUT_SECONDS", "10")
     return max(3, int((raw or "10").strip()))
+
+
+def _discover_models_on_request() -> bool:
+    raw = os.getenv("APP_COUNTRY_CHAT_MODEL_DISCOVER_ON_REQUEST", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
