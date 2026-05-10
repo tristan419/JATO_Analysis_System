@@ -18,10 +18,11 @@ from app.services import news_digest_service
 AUTO_CHAT_MODEL_ID = "auto"
 DEFAULT_NVIDIA_CHAT_MODEL = "meta/llama-3.3-70b-instruct"
 DEFAULT_GEMINI_CHAT_MODEL = "gemini-flash-latest"
+DEFAULT_DEEPSEEK_CHAT_MODEL = "deepseek-chat"
 NVIDIA_MODELS_URL = "https://integrate.api.nvidia.com/v1/models"
 GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 DISCOVERY_ALL_MODELS = "*"
-PRIMARY_PROVIDER_ORDER = ("gemini", "nvidia")
+PRIMARY_PROVIDER_ORDER = ("deepseek", "gemini", "nvidia")
 _PROVIDER_PRIORITY = {
     provider: index for index, provider in enumerate(PRIMARY_PROVIDER_ORDER)
 }
@@ -46,6 +47,10 @@ _STATIC_GEMINI_CHAT_MODELS = (
     "gemini-2.5-pro",
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
+)
+_STATIC_DEEPSEEK_CHAT_MODELS = (
+    "deepseek-chat",
+    "deepseek-reasoner",
 )
 _NVIDIA_MODEL_SKIP_TOKENS = (
     "embed",
@@ -134,6 +139,16 @@ def get_default_gemini_chat_model() -> str:
     )
 
 
+def get_default_deepseek_chat_model() -> str:
+    return (
+        os.getenv(
+            "APP_DEEPSEEK_CHAT_MODEL",
+            DEFAULT_DEEPSEEK_CHAT_MODEL,
+        ).strip()
+        or DEFAULT_DEEPSEEK_CHAT_MODEL
+    )
+
+
 def nvidia_provider_available() -> bool:
     return bool(
         os.getenv("NVIDIA_API_KEY", "").strip()
@@ -143,6 +158,10 @@ def nvidia_provider_available() -> bool:
 
 def gemini_provider_available() -> bool:
     return bool(news_digest_service._gemini_api_key())  # noqa: SLF001
+
+
+def deepseek_provider_available() -> bool:
+    return bool(os.getenv("DEEPSEEK_API_KEY", "").strip())
 
 
 def gemini_model_supports_google_search(model: str | None) -> bool:
@@ -175,14 +194,16 @@ def get_country_chat_model_metadata() -> dict[str, Any]:
 
 def list_country_chat_model_options() -> list[CountryChatModelOption]:
     provider_options = _provider_model_options()
+    primary_provider = provider_options[0].provider if provider_options else ""
+    primary_label = _provider_display_label(primary_provider)
     return [
         CountryChatModelOption(
             id=AUTO_CHAT_MODEL_ID,
             provider="auto",
             model=None,
-            label="Auto · Gemini first",
+            label=f"Auto · {primary_label} first" if primary_label else "Auto",
             description=(
-                "优先使用 Gemini，失败时自动切换到其他可用 provider。"
+                f"优先使用 {primary_label}，失败时自动切换到其他可用 provider。"
                 if provider_options else
                 "当前没有可用聊天模型，将退回本地摘要回答。"
             ),
@@ -210,7 +231,10 @@ def resolve_country_chat_model_id(requested_model: str | None) -> str:
 
     provider_prefix = normalized.split(":", 1)[0] if ":" in normalized else ""
     available_providers = {option.provider for option in options}
-    if provider_prefix in {"gemini", "nvidia"} and provider_prefix not in available_providers:
+    if (
+        provider_prefix in {"deepseek", "gemini", "nvidia"}
+        and provider_prefix not in available_providers
+    ):
         log.info(
             "Requested country chat provider %s is unavailable; falling back to default",
             provider_prefix,
@@ -284,6 +308,8 @@ def _provider_model_options() -> list[CountryChatModelOption]:
             continue
         if normalized_provider == "gemini" and not gemini_provider_available():
             continue
+        if normalized_provider == "deepseek" and not deepseek_provider_available():
+            continue
         option_id = f"{normalized_provider}:{normalized_model}"
         if option_id in seen_ids:
             continue
@@ -323,6 +349,8 @@ def _preferred_provider_model_options() -> list[CountryChatModelOption]:
 
 
 def _preferred_model_name_for_provider(provider: str) -> str:
+    if provider == "deepseek":
+        return get_default_deepseek_chat_model()
     if provider == "gemini":
         return get_default_gemini_chat_model()
     return get_default_nvidia_chat_model()
@@ -360,6 +388,11 @@ def _expand_provider_model_specs(
 
 def _discover_default_provider_model_specs() -> list[tuple[str, str]]:
     specs: list[tuple[str, str]] = []
+    if deepseek_provider_available():
+        specs.extend(
+            ("deepseek", model)
+            for model in _default_provider_model_names("deepseek")
+        )
     if gemini_provider_available():
         specs.extend(
             ("gemini", model)
@@ -392,6 +425,8 @@ def _discover_provider_model_names(provider: str) -> list[str]:
     try:
         if normalized_provider == "gemini":
             models = _fetch_gemini_model_names()
+        elif normalized_provider == "deepseek":
+            models = _static_provider_model_names(normalized_provider)
         else:
             models = _fetch_nvidia_model_names()
     except (
@@ -498,6 +533,8 @@ def _normalize_provider_models(provider: str, models: list[str]) -> list[str]:
             continue
         if provider == "nvidia" and not _looks_like_nvidia_chat_model(normalized):
             continue
+        if provider == "deepseek" and not _looks_like_deepseek_chat_model(normalized):
+            continue
         seen.add(normalized)
         cleaned.append(normalized)
 
@@ -511,6 +548,8 @@ def _normalize_provider_models(provider: str, models: list[str]) -> list[str]:
 
 
 def _static_provider_model_names(provider: str) -> list[str]:
+    if provider == "deepseek":
+        return _normalize_provider_models(provider, list(_STATIC_DEEPSEEK_CHAT_MODELS))
     if provider == "gemini":
         return _normalize_provider_models(provider, list(_STATIC_GEMINI_CHAT_MODELS))
     return _normalize_provider_models(provider, list(_STATIC_NVIDIA_CHAT_MODELS))
@@ -530,18 +569,23 @@ def _looks_like_gemini_chat_model(model: str) -> bool:
     return normalized.startswith("gemini-")
 
 
+def _looks_like_deepseek_chat_model(model: str) -> bool:
+    normalized = str(model or "").strip().lower()
+    return normalized in {"deepseek-chat", "deepseek-reasoner"}
+
+
 def _parse_model_spec(spec: str) -> tuple[str, str]:
     normalized = spec.strip()
     lowered = normalized.lower()
     if ":" not in normalized:
-        if lowered in {"nvidia", "gemini"}:
+        if lowered in {"nvidia", "gemini", "deepseek"}:
             return lowered, DISCOVERY_ALL_MODELS
         return "nvidia", normalized
 
     provider, model = normalized.split(":", 1)
     normalized_provider = provider.strip().lower()
     normalized_model = model.strip() or DISCOVERY_ALL_MODELS
-    if normalized_provider not in {"nvidia", "gemini"}:
+    if normalized_provider not in {"nvidia", "gemini", "deepseek"}:
         return "nvidia", normalized
     return normalized_provider, normalized_model
 
@@ -575,12 +619,26 @@ def _sort_options_by_provider_priority(
 
 
 def _model_label(provider: str, model: str) -> str:
+    if provider == "deepseek":
+        return f"DeepSeek · {model}"
     if provider == "gemini":
         return f"Gemini · {model}"
     return f"NVIDIA · {model}"
 
 
+def _provider_display_label(provider: str) -> str:
+    if provider == "deepseek":
+        return "DeepSeek"
+    if provider == "gemini":
+        return "Gemini"
+    if provider == "nvidia":
+        return "NVIDIA"
+    return provider
+
+
 def _model_description(provider: str, model: str) -> str:
+    if provider == "deepseek":
+        return "DeepSeek 聊天模型，按证据包直接生成国家市场回答，并记录上下文缓存命中。"
     if provider == "gemini":
         if gemini_model_supports_google_search(model):
             return "Gemini 聊天模型，可按语义触发 Google Search 联网检索。"

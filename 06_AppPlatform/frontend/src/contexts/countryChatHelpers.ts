@@ -62,7 +62,7 @@ export function buildCountryChatLoadingPlan(question: string): CountryChatLoadin
   if (!normalized) {
     return {
       label: "正在准备回答",
-      steps: ["解析问题", "读取国家快照", "整理回答"],
+      steps: ["判断问题意图", "准备证据上下文", "调用模型生成回答", "必要时用证据兜底"],
     };
   }
 
@@ -97,10 +97,10 @@ export function buildCountryChatLoadingPlan(question: string): CountryChatLoadin
     return {
       label: "正在做市场情报分析",
       steps: [
-        "识别政策与新闻意图",
-        "读取国家快照",
-        "提取市场事件与新闻摘要",
-        "整理影响判断",
+        "提取国家 / 品牌 / 车型线索",
+        "检索新闻快照与本地 profile",
+        "调用模型生成针对性回答",
+        "模型超时时用证据摘要兜底",
       ],
     };
   }
@@ -110,20 +110,20 @@ export function buildCountryChatLoadingPlan(question: string): CountryChatLoadin
       label: "正在做动力结构分析",
       steps: [
         "识别动力类型条件",
-        "读取国家快照",
+        "准备国家快照上下文",
         "补齐燃料排名与结构数据",
-        "整理核心结论",
+        "调用模型生成回答",
       ],
     };
   }
 
   return {
-    label: "正在整理国家回答",
+    label: "正在组织国家回答",
     steps: [
-      "解析问题",
-      "读取国家快照",
-      "补齐结构与趋势图层",
-      "生成回答",
+      "判断问题意图",
+      "准备国家快照与图表证据",
+      "调用模型生成回答",
+      "模型超时时用证据摘要兜底",
     ],
   };
 }
@@ -169,7 +169,7 @@ function countryChatOutputLabel(answerMode: string | null | undefined): string {
     case "grounded-model":
       return "模型润色";
     case "grounded-fallback":
-      return "降级回答";
+      return "证据兜底";
     default:
       return "综合回答";
   }

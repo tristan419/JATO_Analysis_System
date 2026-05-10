@@ -83,6 +83,7 @@ def test_default_model_options_use_static_models_without_discovery(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("APP_COUNTRY_CHAT_MODEL_OPTIONS", raising=False)
     monkeypatch.delenv("APP_COUNTRY_CHAT_MODEL_DISCOVER_ON_REQUEST", raising=False)
     monkeypatch.setattr(
@@ -96,6 +97,32 @@ def test_default_model_options_use_static_models_without_discovery(
     assert metadata["defaultChatModel"] == "gemini:gemini-flash-latest"
     assert "gemini:gemini-flash-latest" in [
         item["id"] for item in metadata["availableChatModels"]
+    ]
+
+
+def test_deepseek_is_primary_provider_when_configured(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvidia-secret")
+    monkeypatch.setenv(
+        "APP_COUNTRY_CHAT_MODEL_OPTIONS",
+        "nvidia:meta/llama-3.3-70b-instruct,"
+        "gemini:gemini-2.5-flash,"
+        "deepseek:deepseek-chat",
+    )
+
+    metadata = country_chat_models.get_country_chat_model_metadata()
+    selected_id, execution_chain = (
+        country_chat_models.build_country_chat_execution_chain("auto")
+    )
+
+    assert selected_id == "auto"
+    assert metadata["provider"] == "deepseek"
+    assert metadata["defaultChatModel"] == "deepseek:deepseek-chat"
+    assert [item.id for item in execution_chain] == [
+        "deepseek:deepseek-chat",
+        "gemini:gemini-2.5-flash",
+        "nvidia:meta/llama-3.3-70b-instruct",
     ]
 
 

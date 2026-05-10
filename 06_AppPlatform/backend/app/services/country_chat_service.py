@@ -47,7 +47,7 @@ GEMINI_SEARCH_INTENTS = {"market-context"}
 GEMINI_SEARCH_ROUTES = {"market-context"}
 GEMINI_CHAT_TIMEOUT_SECONDS = max(
     5,
-    int(os.getenv("APP_COUNTRY_CHAT_GEMINI_TIMEOUT_SECONDS", "20").strip() or "20"),
+    int(os.getenv("APP_COUNTRY_CHAT_GEMINI_TIMEOUT_SECONDS", "10").strip() or "10"),
 )
 GEMINI_CHAT_MAX_RETRIES = max(
     0,
@@ -55,11 +55,31 @@ GEMINI_CHAT_MAX_RETRIES = max(
 )
 GEMINI_SEARCH_TIMEOUT_SECONDS = max(
     5,
-    int(os.getenv("APP_COUNTRY_CHAT_GEMINI_SEARCH_TIMEOUT_SECONDS", "15").strip() or "15"),
+    int(os.getenv("APP_COUNTRY_CHAT_GEMINI_SEARCH_TIMEOUT_SECONDS", "6").strip() or "6"),
 )
 GEMINI_SEARCH_MAX_RETRIES = max(
     0,
     int(os.getenv("APP_COUNTRY_CHAT_GEMINI_SEARCH_MAX_RETRIES", "0").strip() or "0"),
+)
+GEMINI_FAST_ANSWER_TIMEOUT_SECONDS = max(
+    4,
+    int(os.getenv("APP_COUNTRY_CHAT_GEMINI_FAST_TIMEOUT_SECONDS", "6").strip() or "6"),
+)
+DEEPSEEK_CHAT_COMPLETIONS_URL = os.getenv(
+    "DEEPSEEK_CHAT_COMPLETIONS_URL",
+    "https://api.deepseek.com/chat/completions",
+).strip() or "https://api.deepseek.com/chat/completions"
+DEEPSEEK_CHAT_TIMEOUT_SECONDS = max(
+    5,
+    int(os.getenv("APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS", "18").strip() or "18"),
+)
+DEEPSEEK_FAST_ANSWER_TIMEOUT_SECONDS = max(
+    4,
+    int(os.getenv("APP_COUNTRY_CHAT_DEEPSEEK_FAST_TIMEOUT_SECONDS", "15").strip() or "15"),
+)
+DEEPSEEK_CHAT_MAX_RETRIES = max(
+    0,
+    int(os.getenv("APP_COUNTRY_CHAT_DEEPSEEK_MAX_RETRIES", "0").strip() or "0"),
 )
 PLANNER_NEWS_KEYWORDS = (
     "新闻",
@@ -442,6 +462,15 @@ _SYSTEM_PROMPT = (
     "基于这些数据，用产品经理的自信语调强势输出你的专业判断。\n\n"
     "【严禁事项】绝对不要在回答中插入任何链接、URL、markdown图片语法(![]())、"
     "图表跳转地址或文件路径。系统会在你回答之后自动追加导航按钮，你只需要输出纯文字分析。\n"
+)
+
+_DEEPSEEK_STABLE_SYSTEM_PROMPT = (
+    "你是汽车国家市场分析助手。你必须直接回答用户问题，避免固定模板和空泛复述。\n"
+    "所有结论必须来自后续提供的 JATO 数据快照、dashboard 证据包、新闻/VOC 证据或用户历史上下文。"
+    "如果证据不足，要明确说明缺口，并给出已经命中的事实线索。\n"
+    "回答使用中文，结论先行；涉及具体数据时写出销量、份额、月份、车型、segment 或动力类型。"
+    "涉及新闻或热点时，只引用证据中存在的标题/来源/时间，不编造链接或事实。"
+    "不要暴露内部执行计划，不要输出思考链，不要输出 URL、markdown 链接、markdown 图片或文件路径。"
 )
 
 
@@ -881,6 +910,14 @@ def answer_country_question(
     selected_chat_model, execution_chain = (
         country_chat_models.build_country_chat_execution_chain(chat_model)
     )
+    fast_context_model = next(
+        (
+            option
+            for option in execution_chain
+            if option.provider in {"deepseek", "gemini"} and option.model
+        ),
+        None,
+    )
     fast_context_payload = _build_fresh_context_fast_answer(
         country=normalized_country,
         question=normalized_question,
@@ -890,9 +927,7 @@ def answer_country_question(
         user_params=user_params,
         chat_model_id=selected_chat_model,
         provider_available=bool(execution_chain),
-        has_gemini_provider=any(
-            option.provider == "gemini" for option in execution_chain
-        ),
+        model_option=fast_context_model,
     )
     if fast_context_payload is not None:
         return fast_context_payload
@@ -1012,7 +1047,20 @@ def answer_country_question(
         provider_errors: list[tuple[country_chat_models.CountryChatModelOption, str]] = []
         for model_option in execution_chain:
             try:
-                if model_option.provider == "gemini":
+                if model_option.provider == "deepseek":
+                    answer = _answer_with_deepseek(
+                        country=normalized_country,
+                        question=normalized_question,
+                        intents=focused_intents,
+                        intent_route=route_plan["intentRoute"],
+                        user_params=user_params,
+                        snapshot=snapshot,
+                        history=history or [],
+                        chat_model=model_option.model,
+                        execution_plan=execution_plan,
+                        planner_context=planner_context,
+                    )
+                elif model_option.provider == "gemini":
                     answer = _answer_with_gemini(
                         country=normalized_country,
                         question=normalized_question,
@@ -1098,7 +1146,7 @@ def answer_country_question(
         "providerReason": provider_reason,
         "answerMode": (
             "grounded-model"
-            if provider in {"nvidia", "gemini"}
+            if provider in {"deepseek", "nvidia", "gemini"}
             else "grounded-fallback"
         ),
         "grounding": grounding,
@@ -1205,10 +1253,12 @@ def _build_fresh_context_fast_answer(
     user_params: dict[str, Any],
     chat_model_id: str,
     provider_available: bool,
-    has_gemini_provider: bool,
+    model_option: country_chat_models.CountryChatModelOption | None,
 ) -> dict[str, Any] | None:
-    if not has_gemini_provider:
+    if not model_option or not model_option.model:
         return None
+    fast_provider = model_option.provider
+    fast_model = model_option.model
     normalized_intents = _normalize_intents(focused_intents)
     if (
         intent_route != "market-context"
@@ -1216,6 +1266,11 @@ def _build_fresh_context_fast_answer(
     ):
         return None
     if not _question_requests_news(question, normalized_intents):
+        return None
+    if not _fresh_context_question_has_specific_focus(
+        question=question,
+        user_params=user_params,
+    ):
         return None
 
     search_results = web_search_service.search_market_news(
@@ -1274,6 +1329,8 @@ def _build_fresh_context_fast_answer(
             "fastContext": True,
             "sourceProvider": "external-search",
             "selectedChatModel": chat_model_id,
+            "fastModelProvider": fast_provider,
+            "fastModel": fast_model,
         },
         "marketEvents": market_events,
         "newsDigest": _build_external_search_digest(
@@ -1289,30 +1346,45 @@ def _build_fresh_context_fast_answer(
         question=question,
         search_results=search_results,
     )
+    model_answer = _answer_fresh_context_with_model(
+        country=country,
+        question=question,
+        search_results=search_results,
+        provider=fast_provider,
+        chat_model=fast_model,
+    )
+    answer_text = model_answer or _format_external_search_results(
+        country=country,
+        question=question,
+        search_results=search_results,
+        summary_timed_out=False,
+    )
+    provider = fast_provider if model_answer else "external-search"
+    provider_label = country_chat_models.describe_model_option(model_option)
+    provider_reason = (
+        f"已调用 {provider_label} 直接基于检索证据回答。"
+        if model_answer
+        else (
+            f"{provider_label} 短时没有返回稳定结果；已基于检索证据快速回答，"
+            "没有退回完整国家快照链路。"
+        )
+    )
 
     return {
         "country": country,
         "question": question,
-        "answer": _format_external_search_results(
-            country=country,
-            question=question,
-            search_results=search_results,
-            summary_timed_out=False,
-        ),
+        "answer": answer_text,
         "intent": intent,
         "primaryIntent": intent,
         "intents": _normalize_intents(raw_intents),
         "focusedIntents": normalized_intents,
         "intentRoute": intent_route,
-        "provider": "external-search",
-        "model": None,
+        "provider": provider,
+        "model": fast_model if model_answer else None,
         "chatModelId": chat_model_id,
         "providerAvailable": provider_available,
-        "providerReason": (
-            "新闻/近期动态问题已先走外部检索快路径，"
-            "跳过完整国家快照和 Market Scan deck 构建。"
-        ),
-        "answerMode": "grounded-direct",
+        "providerReason": provider_reason,
+        "answerMode": "grounded-model" if model_answer else "grounded-direct",
         "grounding": grounding,
         "contextSnapshot": snapshot,
         "executionPlan": execution_plan,
@@ -1392,6 +1464,37 @@ def _profile_hot_topic_search_results(
     return results[:3]
 
 
+def _fresh_context_question_has_specific_focus(
+    *,
+    question: str,
+    user_params: dict[str, Any],
+) -> bool:
+    if any(
+        user_params.get(key)
+        for key in ("brand", "model", "subjectModel", "targetModel")
+    ):
+        return True
+    if list(user_params.get("models") or []):
+        return True
+    tokens = [
+        token.casefold()
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", question)
+    ]
+    noise = {
+        "news",
+        "recent",
+        "latest",
+        "market",
+        "policy",
+        "brand",
+        "model",
+        "country",
+        "sweden",
+        "sverige",
+    }
+    return any(token not in noise for token in tokens)
+
+
 def _extract_profile_topic_period(text: str) -> str:
     year_match = re.search(r"\b(20\d{2})\b", text)
     if not year_match:
@@ -1418,6 +1521,151 @@ def _extract_profile_topic_period(text: str) -> str:
         "dec": "12",
     }.get(month_match.group(1)[:3].casefold())
     return f"{year_match.group(1)}-{month}" if month else year_match.group(1)
+
+
+def _answer_fresh_context_with_model(
+    *,
+    country: str,
+    question: str,
+    search_results: list[dict[str, str]],
+    provider: str,
+    chat_model: str,
+) -> str:
+    if provider == "deepseek":
+        return _answer_fresh_context_with_deepseek(
+            country=country,
+            question=question,
+            search_results=search_results,
+            chat_model=chat_model,
+        )
+    if provider == "gemini":
+        return _answer_fresh_context_with_gemini(
+            country=country,
+            question=question,
+            search_results=search_results,
+            chat_model=chat_model,
+        )
+    return ""
+
+
+def _compact_search_results_for_model(
+    search_results: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    compact: list[dict[str, str]] = []
+    for item in search_results[:5]:
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        compact.append(
+            {
+                "title": title[:220],
+                "source": str(
+                    item.get("source") or item.get("provider") or ""
+                ).strip()[:80],
+                "publishedAt": str(item.get("publishedAt") or "").strip()[:32],
+                "snippet": str(item.get("snippet") or "").strip()[:220],
+            }
+        )
+    return compact
+
+
+def _answer_fresh_context_with_deepseek(
+    *,
+    country: str,
+    question: str,
+    search_results: list[dict[str, str]],
+    chat_model: str,
+) -> str:
+    if not search_results:
+        return ""
+    api_key = _deepseek_api_key()
+    if not api_key:
+        return ""
+    compact_results = _compact_search_results_for_model(search_results)
+    messages = [
+        {
+            "role": "system",
+            "content": _DEEPSEEK_STABLE_SYSTEM_PROMPT,
+        },
+        {
+            "role": "user",
+            "content": (
+                "任务: 基于外部新闻检索证据回答用户问题。\n"
+                "输出要求: 直接回答，不套固定模板；如果证据不足，明确说明不足；"
+                "回答末尾列出来源标题和来源名称，但不要输出 URL 或 markdown 链接；"
+                "前端证据表会负责展示可点击来源。不要编造证据中没有的新闻。\n"
+                f"国家: {country}\n"
+                f"用户问题: {question}\n"
+                f"证据(JSON): {json.dumps(compact_results, ensure_ascii=False)}"
+            ),
+        },
+    ]
+    try:
+        payload = _post_deepseek_chat_completion(
+            api_key=api_key,
+            model=chat_model,
+            messages=messages,
+            temperature=0.2,
+            timeout_seconds=DEEPSEEK_FAST_ANSWER_TIMEOUT_SECONDS,
+            max_retries=0,
+        )
+    except RuntimeError as exc:
+        log.info("Fresh context DeepSeek answer failed: %s", exc)
+        return ""
+    text = _extract_openai_chat_response_text(payload)
+    return text.strip()[:3000] if text else ""
+
+
+def _answer_fresh_context_with_gemini(
+    *,
+    country: str,
+    question: str,
+    search_results: list[dict[str, str]],
+    chat_model: str,
+) -> str:
+    if not search_results:
+        return ""
+    api_key = news_digest_service._gemini_api_key()  # noqa: SLF001
+    if not api_key:
+        return ""
+    compact_results = _compact_search_results_for_model(search_results)
+    request_body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": (
+                            "你是汽车国家市场助手。请把用户问题直接发散成自然中文回答，"
+                            "但只能基于给定证据，不要编造证据中没有的新闻。\n"
+                            "要求：先回答用户真正问的点；不要套固定模板；"
+                            "如果证据不足，明确说证据不足并给出已命中的线索；"
+                            "不要输出 URL。\n"
+                            f"国家: {country}\n"
+                            f"用户问题: {question}\n"
+                            f"证据(JSON): {json.dumps(compact_results, ensure_ascii=False)}"
+                        )
+                    }
+                ],
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.25,
+        },
+    }
+    try:
+        payload = _post_gemini_generate_content(
+            api_key=api_key,
+            model=chat_model,
+            request_body=request_body,
+            timeout_seconds=GEMINI_FAST_ANSWER_TIMEOUT_SECONDS,
+            max_retries=0,
+        )
+    except RuntimeError as exc:
+        log.info("Fresh context Gemini answer failed: %s", exc)
+        return ""
+    text = news_digest_service._extract_gemini_response_text(payload)  # noqa: SLF001
+    return text.strip()[:3000] if text else ""
 
 
 def _build_external_search_digest(
@@ -1456,6 +1704,7 @@ def _build_external_search_grounding(
             str(item.get("publishedAt") or "-")[:10],
             str(item.get("source") or item.get("provider") or "-"),
             str(item.get("title") or "-"),
+            str(item.get("url") or ""),
         ]
         for item in search_results[:6]
     ]
@@ -1499,8 +1748,8 @@ def _build_external_search_grounding(
         "evidenceTables": [
             {
                 "title": "外部新闻检索结果",
-                "columns": ["时间", "来源", "标题"],
-                "rows": rows or [["-", "-", "短时外部检索未命中可用公开结果"]],
+                "columns": ["时间", "来源", "标题", "链接"],
+                "rows": rows or [["-", "-", "短时外部检索未命中可用公开结果", ""]],
             }
         ],
         "trust": {
@@ -1727,6 +1976,7 @@ def _compact_market_events_for_context(
                 "publisher": event.get("publisher"),
                 "title": event.get("title"),
                 "summary": event.get("summary"),
+                "url": event.get("url"),
                 "publishedAt": event.get("publishedAt"),
                 "tags": event.get("tags", []),
             }
@@ -5554,12 +5804,13 @@ def _build_country_chat_grounding(
         evidence_tables.append(
             {
                 "title": "相关新闻 / 政策佐证",
-                "columns": ["时间", "事件", "关联点"],
+                "columns": ["时间", "事件", "关联点", "链接"],
                 "rows": [
                     [
                         str(item.get("publishedAt") or "-")[:10],
                         str(item.get("title") or "-"),
                         str(item.get("reason") or "市场新闻补充"),
+                        str(item.get("url") or ""),
                     ]
                     for item in related_news_events[:3]
                 ],
@@ -5833,6 +6084,7 @@ def _select_related_market_events(
                     "summary": summary,
                     "publishedAt": str(raw_event.get("publishedAt") or "").strip(),
                     "publisher": str(raw_event.get("publisher") or "").strip(),
+                    "url": str(raw_event.get("url") or "").strip(),
                     "reason": reason,
                 },
             )
@@ -7329,7 +7581,7 @@ def _build_country_chat_trust_assessment(
                 + min(len(evidence_tables), 4) * 10
                 + min(len(layers), 3) * 5
                 + min(prefetched_count, 3) * 5
-                + (10 if provider == "snapshot" else 5 if provider in {"nvidia", "gemini"} else 0),
+                + (10 if provider == "snapshot" else 5 if provider in {"deepseek", "nvidia", "gemini"} else 0),
             )
         )
     )
@@ -7413,6 +7665,10 @@ def _nvidia_provider_available() -> bool:
 
 def _gemini_provider_available() -> bool:
     return country_chat_models.gemini_provider_available()
+
+
+def _deepseek_provider_available() -> bool:
+    return country_chat_models.deepseek_provider_available()
 
 
 def _build_sales_rankings(
@@ -7864,6 +8120,86 @@ def _answer_with_nvidia(
     return final_text
 
 
+def _answer_with_deepseek(
+    *,
+    country: str,
+    question: str,
+    intents: list[str],
+    intent_route: str = "market-overview",
+    user_params: dict[str, Any],
+    snapshot: dict[str, Any],
+    history: list[dict[str, str]],
+    chat_model: str | None = None,
+    execution_plan: dict[str, Any] | None = None,
+    planner_context: dict[str, Any] | None = None,
+) -> str:
+    api_key = _deepseek_api_key()
+    if not api_key:
+        raise RuntimeError("DeepSeek API key 未配置")
+
+    model = (
+        str(chat_model or "").strip()
+        or country_chat_models.get_default_deepseek_chat_model()
+    )
+    context = _select_context_for_intents(snapshot, intents)
+    request_context = {
+        "country": country,
+        "question": question,
+        "route": intent_route,
+        "intents": intents,
+        "parsedParams": user_params,
+        "executionPlan": _compact_execution_plan_for_prompt(execution_plan),
+        "plannerEvidence": _compact_planner_context_for_prompt(planner_context),
+        "answerGuidance": _route_specific_answer_guidance(intent_route),
+        "dashboardContext": context,
+    }
+    history_messages = _build_deepseek_history_messages(history)
+    messages = [
+        {
+            "role": "system",
+            "content": _DEEPSEEK_STABLE_SYSTEM_PROMPT,
+        },
+        {
+            "role": "system",
+            "content": (
+                "稳定字段说明: dashboardContext 是已经按意图裁剪过的 JATO 看板证据；"
+                "plannerEvidence 是后端已预取的工具证据；executionPlan 只用于理解证据来源，"
+                "不要向用户复述。回答必须把当前问题作为主线，不要每次都输出相同市场概况。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "证据包(JSON，已裁剪):\n"
+                f"{_json_for_model_prompt(request_context, max_chars=CONTEXT_CHAR_BUDGET)}"
+            ),
+        },
+        *history_messages,
+        {
+            "role": "user",
+            "content": (
+                f"当前用户问题: {question}\n"
+                "请基于上面的证据包直接回答。需要时先解释数据变化，再结合新闻/VOC/政策证据给可能原因；"
+                "如果只是相关性线索，不要写成已证实因果。"
+            ),
+        },
+    ]
+
+    payload = _post_deepseek_chat_completion(
+        api_key=api_key,
+        model=model,
+        messages=messages,
+        temperature=0.25,
+        timeout_seconds=DEEPSEEK_CHAT_TIMEOUT_SECONDS,
+        max_retries=DEEPSEEK_CHAT_MAX_RETRIES,
+    )
+    _record_deepseek_usage(snapshot, payload)
+    text = _extract_openai_chat_response_text(payload)
+    if not text:
+        raise RuntimeError("DeepSeek 返回了空文本内容")
+    return text.strip()
+
+
 def _answer_with_gemini(
     *,
     country: str,
@@ -8114,6 +8450,159 @@ def _post_gemini_generate_content(
     raise RuntimeError("Gemini 返回了空响应")
 
 
+def _deepseek_api_key() -> str:
+    return os.getenv("DEEPSEEK_API_KEY", "").strip()
+
+
+def _build_deepseek_history_messages(
+    history: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    for turn in history[-MAX_HISTORY_TURNS:]:
+        role = str(turn.get("role", "")).strip().lower()
+        content = str(turn.get("content", "")).strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        messages.append({"role": role, "content": content[:1200]})
+    return messages
+
+
+def _json_for_model_prompt(value: Any, *, max_chars: int) -> str:
+    compact = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    if len(compact) <= max_chars:
+        return compact
+    shrunk = _shrink_prompt_value(value)
+    compact = json.dumps(
+        shrunk,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    if len(compact) <= max_chars:
+        return compact
+    return compact[:max_chars] + "...(truncated)"
+
+
+def _shrink_prompt_value(value: Any, *, depth: int = 0) -> Any:
+    if depth >= 4:
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)[:300]
+    if isinstance(value, list):
+        return [
+            _shrink_prompt_value(item, depth=depth + 1)
+            for item in value[:6]
+        ]
+    if isinstance(value, dict):
+        shrunk: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in {"raw", "html", "fullText"}:
+                continue
+            shrunk[str(key)] = _shrink_prompt_value(item, depth=depth + 1)
+        return shrunk
+    if isinstance(value, str):
+        return value[:1200]
+    return value
+
+
+def _post_deepseek_chat_completion(
+    *,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float,
+    timeout_seconds: int,
+    max_retries: int,
+) -> dict[str, Any]:
+    request_body = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": 1400,
+        "stream": False,
+    }
+    request = Request(
+        DEEPSEEK_CHAT_COMPLETIONS_URL,
+        data=json.dumps(request_body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    for attempt in range(max_retries + 1):
+        try:
+            with urlopen(request, timeout=timeout_seconds) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+            if attempt >= max_retries:
+                raise RuntimeError(f"DeepSeek 请求失败: {_http_error_summary(exc)}") from exc
+            time.sleep(min(2.0, 0.5 * (attempt + 1)))
+
+    raise RuntimeError("DeepSeek 返回了空响应")
+
+
+def _http_error_summary(exc: Exception) -> str:
+    if isinstance(exc, HTTPError):
+        try:
+            detail = exc.read().decode("utf-8")[:500]
+        except Exception:  # noqa: BLE001
+            detail = ""
+        return f"HTTP {exc.code} {detail}".strip()
+    return str(exc)
+
+
+def _extract_openai_chat_response_text(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0]
+    if not isinstance(first, dict):
+        return ""
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [
+            str(item.get("text") or item.get("content") or "").strip()
+            for item in content
+            if isinstance(item, dict)
+        ]
+        return "\n".join(part for part in parts if part).strip()
+    return ""
+
+
+def _record_deepseek_usage(snapshot: dict[str, Any], payload: dict[str, Any]) -> None:
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    if not isinstance(usage, dict):
+        return
+    analysis_meta = snapshot.setdefault("analysisMeta", {})
+    if not isinstance(analysis_meta, dict):
+        return
+    prompt_hit = int(_coerce_optional_float(usage.get("prompt_cache_hit_tokens")) or 0)
+    prompt_miss = int(_coerce_optional_float(usage.get("prompt_cache_miss_tokens")) or 0)
+    total_prompt = int(_coerce_optional_float(usage.get("prompt_tokens")) or 0)
+    analysis_meta["modelUsage"] = {
+        "provider": "deepseek",
+        "promptTokens": total_prompt,
+        "completionTokens": int(_coerce_optional_float(usage.get("completion_tokens")) or 0),
+        "totalTokens": int(_coerce_optional_float(usage.get("total_tokens")) or 0),
+        "promptCacheHitTokens": prompt_hit,
+        "promptCacheMissTokens": prompt_miss,
+        "promptCacheHitRatio": (
+            prompt_hit / (prompt_hit + prompt_miss)
+            if prompt_hit + prompt_miss > 0
+            else None
+        ),
+    }
+
+
 def _should_enable_gemini_google_search(
     *,
     question: str,
@@ -8159,6 +8648,12 @@ def _format_provider_errors(
             or "继续请求额外工具" in normalized
         ):
             return "工具调用轮次过多，已改用本地数据降级回答"
+        if (
+            "timed out" in normalized.lower()
+            or "timeout" in normalized.lower()
+            or "handshake operation timed out" in normalized.lower()
+        ):
+            return "模型接口短时超时，已改用已命中的证据回答"
         return normalized
 
     return "；".join(
@@ -8488,7 +8983,7 @@ def _build_fallback_answer(
     intro = (
         f"我先基于 {country} 的当前数据快照回答你。"
         if not provider_error
-        else f"当前聊天模型未返回稳定结果，我先基于 {country} 的当前数据快照回答你。"
+        else f"我先基于 {country} 已命中的 JATO 数据和新闻证据回答你。"
     )
     if period_label:
         intro += f"（数据截至 {period_label}）"

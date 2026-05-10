@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import type { CountryChatTranscriptMessage } from "../contexts/CountryChatContext";
 import {
   buildCountryChatAnswerPath,
@@ -28,7 +30,7 @@ function answerModeLabel(value: string | null | undefined): string {
     case "grounded-model":
       return "证据润色";
     case "grounded-fallback":
-      return "降级回答";
+      return "证据回答";
     default:
       return "综合回答";
   }
@@ -73,6 +75,30 @@ function sourceStatusLabel(value: string | null | undefined): string {
     default:
       return String(value ?? "").trim() || "未知";
   }
+}
+
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\/\S+$/i.test(value.trim());
+}
+
+function renderEvidenceCell(cell: string, column: string): ReactNode {
+  const text = String(cell ?? "").trim();
+  if (!text) {
+    return "-";
+  }
+  if (isHttpUrl(text)) {
+    return (
+      <a
+        className="copilot-evidence-link"
+        href={text}
+        target="_blank"
+        rel="noreferrer"
+      >
+        {column === "链接" ? "打开来源" : text}
+      </a>
+    );
+  }
+  return cell;
 }
 
 export function CountryChatGroundedAnswer({
@@ -127,6 +153,9 @@ export function CountryChatGroundedAnswer({
     || layers.length > 0
   );
   const strategyLabel = grounding?.strategyLabel ?? answerPath.routeLabel;
+  const visibleSteps = Array.from(
+    new Set(answerPath.steps.map((step) => step.trim()).filter(Boolean)),
+  );
 
   return (
     <div className={`copilot-grounded-answer${compact ? " is-compact" : ""}`}>
@@ -180,8 +209,8 @@ export function CountryChatGroundedAnswer({
       {showAnswerPath ? (
         <div className="copilot-answer-section">
           <div className="copilot-answer-section-head">
-            <strong>思考链</strong>
-            <span className="copilot-answer-section-kicker">Visible answer path</span>
+            <strong>回答路径</strong>
+            <span className="copilot-answer-section-kicker">Evidence path</span>
           </div>
           <div className="copilot-answer-path-head">
             <span className="copilot-answer-path-pill">{answerPath.routeLabel}</span>
@@ -196,7 +225,7 @@ export function CountryChatGroundedAnswer({
             <p className="copilot-answer-note">{grounding.answerPath.routeTrigger}</p>
           ) : null}
           <ol className="copilot-answer-path-steps">
-            {answerPath.steps.map((step) => (
+            {visibleSteps.map((step) => (
               <li key={step}>{step}</li>
             ))}
           </ol>
@@ -204,11 +233,11 @@ export function CountryChatGroundedAnswer({
       ) : null}
 
       {trust ? (
-        <div className="copilot-answer-section">
-          <div className="copilot-answer-section-head">
+        <details className="copilot-answer-section is-collapsible">
+          <summary className="copilot-answer-section-head">
             <strong>可信度</strong>
             <span className="copilot-answer-section-kicker">Trust layer</span>
-          </div>
+          </summary>
           <div className="copilot-answer-path-head">
             <span className="copilot-answer-path-pill">
               {confidenceLabel(trust.confidence)}
@@ -236,15 +265,15 @@ export function CountryChatGroundedAnswer({
               ))}
             </ul>
           ) : null}
-        </div>
+        </details>
       ) : null}
 
       {executionSources.length > 0 ? (
-        <div className="copilot-answer-section">
-          <div className="copilot-answer-section-head">
+        <details className="copilot-answer-section is-collapsible">
+          <summary className="copilot-answer-section-head">
             <strong>执行计划</strong>
             <span className="copilot-answer-section-kicker">Planner</span>
-          </div>
+          </summary>
           <div className="copilot-answer-path-head">
             {executionPlan?.orchestrationMode ? (
               <span className="copilot-answer-path-pill">
@@ -296,7 +325,7 @@ export function CountryChatGroundedAnswer({
               </div>
             </div>
           ) : null}
-        </div>
+        </details>
       ) : null}
 
       {answerSections.reasoningNotes.length > 0 ? (
@@ -336,7 +365,9 @@ export function CountryChatGroundedAnswer({
                       {table.rows.map((row, rowIndex) => (
                         <tr key={`${table.title}-${rowIndex}`}>
                           {row.map((cell, cellIndex) => (
-                            <td key={`${table.title}-${rowIndex}-${cellIndex}`}>{cell}</td>
+                            <td key={`${table.title}-${rowIndex}-${cellIndex}`}>
+                              {renderEvidenceCell(cell, table.columns[cellIndex] ?? "")}
+                            </td>
                           ))}
                         </tr>
                       ))}

@@ -68,7 +68,21 @@ _QUESTION_NOISE_TOKENS = {
     "where",
     "have",
     "with",
+    "automotive",
+    "segment",
+    "sales",
+    "volume",
+    "suv",
+    "hev",
+    "bev",
+    "phev",
+    "mhev",
+    "ice",
 }
+_MARKET_FILTER_TOKEN_PATTERN = re.compile(
+    r"^(suv|sd|bev|hev|phev|mhev|ice|reev)(?:[-_a-z0-9]+)?$",
+    flags=re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -90,7 +104,7 @@ def search_market_news(
     question: str,
     limit: int = 6,
 ) -> list[dict[str, str]]:
-    query = _build_market_news_query(country=country, question=question)
+    queries = _build_market_news_queries(country=country, question=question)
     providers = (
         _search_google_news_rss,
         _search_tavily,
@@ -98,30 +112,54 @@ def search_market_news(
         _search_serpapi,
     )
     deadline = time.monotonic() + DEFAULT_SEARCH_TOTAL_TIMEOUT_SECONDS
-    for provider in providers:
-        if time.monotonic() >= deadline:
-            break
-        results = provider(query=query, limit=limit)
-        if results:
-            deduped = _dedupe_results(results)
-            ranked = sorted(
-                enumerate(deduped),
-                key=lambda item: (
-                    -_score_result_relevance(item[1], query),
-                    item[0],
-                ),
-            )
-            return [result.to_dict() for _, result in ranked[:limit]]
-    return []
+    best_ranked: list[tuple[int, int, WebSearchResult]] = []
+    for query in queries:
+        for provider in providers:
+            if time.monotonic() >= deadline:
+                break
+            results = provider(query=query, limit=limit)
+            if results:
+                deduped = _dedupe_results(results)
+                ranked = sorted(
+                    enumerate(deduped),
+                    key=lambda item: (
+                        -_score_result_relevance(item[1], query),
+                        item[0],
+                    ),
+                )
+                scored_ranked = [
+                    (_score_result_relevance(result, query), index, result)
+                    for index, result in ranked
+                ]
+                if scored_ranked and (
+                    not best_ranked or scored_ranked[0][0] > best_ranked[0][0]
+                ):
+                    best_ranked = scored_ranked
+                if scored_ranked and scored_ranked[0][0] > 0:
+                    return [
+                        result.to_dict()
+                        for _, _, result in scored_ranked[:limit]
+                    ]
+    return [
+        result.to_dict()
+        for _, _, result in best_ranked[:limit]
+    ]
 
 
 def _build_market_news_query(*, country: str, question: str) -> str:
+    return _build_market_news_queries(country=country, question=question)[0]
+
+
+def _build_market_news_queries(*, country: str, question: str) -> list[str]:
     tokens: list[str] = []
     seen: set[str] = set()
     for token in _LATIN_TOKEN_PATTERN.findall(question):
         normalized = token.strip()
         lowered = normalized.lower()
-        if len(normalized) < 2 or lowered in _QUESTION_NOISE_TOKENS:
+        if (
+            len(normalized) < 2
+            or lowered in _QUESTION_NOISE_TOKENS
+        ):
             continue
         if lowered in seen:
             continue
@@ -129,9 +167,51 @@ def _build_market_news_query(*, country: str, question: str) -> str:
         seen.add(lowered)
 
     country_alias = _COUNTRY_ALIASES.get(str(country).strip(), str(country).strip())
+    queries: list[str] = []
     if tokens:
-        return " ".join([*tokens, country_alias, "2026"])
-    return " ".join(part for part in [question.strip(), country_alias, "automotive news"] if part)
+        queries.append(" ".join([*tokens, country_alias, "2026"]))
+    else:
+        queries.append(
+            " ".join(
+                part
+                for part in [question.strip(), country_alias, "automotive news"]
+                if part
+            )
+        )
+
+    focus_tokens = [
+        token
+        for token in tokens
+        if not _MARKET_FILTER_TOKEN_PATTERN.match(token)
+    ]
+    if focus_tokens:
+        queries.append(" ".join([*focus_tokens, country_alias, "automotive news"]))
+        queries.append(" ".join([*focus_tokens, "Europe", "2026", "news"]))
+
+    lowered_question = question.casefold()
+    asks_generation = any(
+        keyword in lowered_question
+        for keyword in ("换代", "第六代", "new generation", "sixth generation", "all-new")
+    )
+    if asks_generation and focus_tokens:
+        queries.extend(
+            [
+                " ".join([*focus_tokens, "new generation", "Europe", "2026"]),
+                " ".join([*focus_tokens, "sixth generation", "Europe", "2026"]),
+                " ".join([*focus_tokens, "all-new", "Europe", "2026"]),
+            ]
+        )
+
+    deduped: list[str] = []
+    seen_queries: set[str] = set()
+    for query in queries:
+        normalized = " ".join(query.split())
+        key = normalized.casefold()
+        if not normalized or key in seen_queries:
+            continue
+        seen_queries.add(key)
+        deduped.append(normalized)
+    return deduped
 
 
 def _search_tavily(*, query: str, limit: int) -> list[WebSearchResult]:
@@ -322,6 +402,17 @@ def _score_result_relevance(result: WebSearchResult, query: str) -> int:
             score += 20
         elif token in body:
             score += 8
+    year_match = re.search(r"\b(20\d{2})\b", result.publishedAt)
+    if year_match:
+        year = int(year_match.group(1))
+        if year >= 2026:
+            score += 30
+        elif year == 2025:
+            score += 18
+        elif year == 2024:
+            score += 8
+        else:
+            score -= 80
     return score
 
 

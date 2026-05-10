@@ -43,6 +43,19 @@ function formatDateTime(value: string | null | undefined): string {
   }).format(parsed);
 }
 
+function formatProviderMeta(provider: string | null | undefined, model: string | null | undefined): string {
+  const normalizedProvider = String(provider ?? "").trim();
+  const providerLabel = {
+    fallback: "证据兜底",
+    "external-search": "检索证据",
+    snapshot: "快照证据",
+    deepseek: "DeepSeek",
+    gemini: "Gemini",
+    nvidia: "NVIDIA",
+  }[normalizedProvider] ?? normalizedProvider;
+  return [providerLabel, model].filter(Boolean).join(" · ");
+}
+
 function useIsMobileAccess(maxWidth = 720) {
   const [isMobileAccess, setIsMobileAccess] = useState(
     () => isCountryChatMobileAccess(
@@ -515,9 +528,7 @@ export function CountryChatPage() {
                     <div className="copilot-message-meta">
                       <span>{message.role === "user" ? "你" : "助手"}</span>
                       {message.provider ? (
-                        <span>
-                          {[message.provider, message.model].filter(Boolean).join(" · ")}
-                        </span>
+                        <span>{formatProviderMeta(message.provider, message.model)}</span>
                       ) : null}
                     </div>
                     <CountryChatGroundedAnswer message={message} compact={isMobileAccess} />

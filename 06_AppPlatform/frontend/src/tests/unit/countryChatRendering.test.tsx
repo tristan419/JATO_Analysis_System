@@ -58,8 +58,8 @@ function buildAssistantMessage(): CountryChatTranscriptMessage {
         },
         {
           title: "Feature Diff",
-          columns: ["Feature", "Delta"],
-          rows: [["HUD", "Optional"]],
+          columns: ["Feature", "Delta", "链接"],
+          rows: [["HUD", "Optional", "https://example.test/rav4"]],
         },
         {
           title: "Should Be Hidden In Compact",
@@ -122,7 +122,7 @@ describe("CountryChatGroundedAnswer", () => {
     expect(markup).toContain("copilot-grounded-answer is-compact");
     expect(markup).toContain("直接回答");
     expect(markup).toContain("关键结论");
-    expect(markup).toContain("思考链");
+    expect(markup).toContain("回答路径");
     expect(markup).toContain("可信度");
     expect(markup).toContain("执行计划");
     expect(markup).toContain("高可信");
@@ -138,6 +138,8 @@ describe("CountryChatGroundedAnswer", () => {
     expect(markup).toContain("在已验证证据上直接组装结论。");
     expect(markup).toContain("Trim Price");
     expect(markup).toContain("Feature Diff");
+    expect(markup).toContain("href=\"https://example.test/rav4\"");
+    expect(markup).toContain("打开来源");
     expect(markup).not.toContain("Should Be Hidden In Compact");
   });
 

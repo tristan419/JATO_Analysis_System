@@ -246,6 +246,20 @@ _STUB_ADVANCED_CHARTS = {
 }
 
 
+class _StubUrlopenResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")
+
+    def __enter__(self) -> "_StubUrlopenResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
 def _build_stub_news_payload(country: str) -> dict[str, object]:
     normalized = str(country).strip().lower()
     if normalized in {"火星", "mars"}:
@@ -438,6 +452,12 @@ def test_gemini_provider_available_when_key_present(monkeypatch) -> None:
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
 
     assert country_chat_service._gemini_provider_available() is True
+
+
+def test_deepseek_provider_available_when_key_present(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+
+    assert country_chat_service._deepseek_provider_available() is True
 
 
 def test_metadata_exposes_available_chat_models(monkeypatch) -> None:
@@ -697,6 +717,7 @@ def test_answer_uses_requested_nvidia_chat_model(monkeypatch) -> None:
 def test_answer_auto_uses_gemini_first(monkeypatch) -> None:
     monkeypatch.setenv("NVIDIA_API_KEY", "secret")
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setenv(
         "APP_COUNTRY_CHAT_MODEL_OPTIONS",
         "nvidia:meta/llama-3.3-70b-instruct,gemini:gemini-2.5-flash",
@@ -729,8 +750,54 @@ def test_answer_auto_uses_gemini_first(monkeypatch) -> None:
 
 
 @pytest.mark.usefixtures("_patch_base")
+def test_answer_auto_uses_deepseek_first_when_available(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.setenv("NVIDIA_API_KEY", "secret")
+    monkeypatch.setenv(
+        "APP_COUNTRY_CHAT_MODEL_OPTIONS",
+        "deepseek:deepseek-chat,"
+        "gemini:gemini-2.5-flash,"
+        "nvidia:meta/llama-3.3-70b-instruct",
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_answer_with_deepseek(**kwargs):
+        captured["chat_model"] = kwargs.get("chat_model")
+        return "deepseek ok"
+
+    monkeypatch.setattr(
+        country_chat_service,
+        "_answer_with_deepseek",
+        _fake_answer_with_deepseek,
+    )
+    monkeypatch.setattr(
+        country_chat_service,
+        "_answer_with_gemini",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not call gemini")),
+    )
+    monkeypatch.setattr(
+        country_chat_service,
+        "_answer_with_nvidia",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not call nvidia")),
+    )
+
+    result = country_chat_service.answer_country_question(
+        "瑞典",
+        "瑞典市场整体怎么看？",
+        chat_model="auto",
+    )
+
+    assert captured["chat_model"] == "deepseek-chat"
+    assert result["provider"] == "deepseek"
+    assert result["answerMode"] == "grounded-model"
+    assert result["model"] == "deepseek-chat"
+
+
+@pytest.mark.usefixtures("_patch_base")
 def test_fresh_news_question_uses_external_search_fast_path(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setenv(
         "APP_COUNTRY_CHAT_MODEL_OPTIONS",
         "gemini:gemini-flash-latest",
@@ -763,6 +830,11 @@ def test_fresh_news_question_uses_external_search_fast_path(monkeypatch) -> None
             }
         ],
     )
+    monkeypatch.setattr(
+        country_chat_service,
+        "_answer_fresh_context_with_gemini",
+        lambda **kwargs: "Gemini 直接回答 Volvo EX60 news",
+    )
 
     result = country_chat_service.answer_country_question(
         "瑞典",
@@ -771,10 +843,10 @@ def test_fresh_news_question_uses_external_search_fast_path(monkeypatch) -> None
     )
 
     assert result["intentRoute"] == "market-context"
-    assert result["provider"] == "external-search"
-    assert result["answerMode"] == "grounded-direct"
+    assert result["provider"] == "gemini"
+    assert result["answerMode"] == "grounded-model"
     assert result["chatModelId"] == "auto"
-    assert "Volvo EX60 production starts" in result["answer"]
+    assert "Volvo EX60" in result["answer"]
     assert "模型总结超时" not in result["answer"]
     assert result["executionPlan"]["orchestrationMode"] == "external-search-fast"
     assert result["contextSnapshot"]["route"] == "external-search"
@@ -788,6 +860,7 @@ def test_fresh_news_question_uses_external_search_fast_path(monkeypatch) -> None
 @pytest.mark.usefixtures("_patch_base")
 def test_fresh_news_question_stays_fast_when_search_has_no_results(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setenv(
         "APP_COUNTRY_CHAT_MODEL_OPTIONS",
         "gemini:gemini-flash-latest",
@@ -803,6 +876,11 @@ def test_fresh_news_question_stays_fast_when_search_has_no_results(monkeypatch) 
         country_chat_service.web_search_service,
         "search_market_news",
         lambda **kwargs: [],
+    )
+    monkeypatch.setattr(
+        country_chat_service,
+        "_answer_fresh_context_with_gemini",
+        lambda **kwargs: "",
     )
 
     result = country_chat_service.answer_country_question(
@@ -821,6 +899,7 @@ def test_fresh_news_question_stays_fast_when_search_has_no_results(monkeypatch) 
 @pytest.mark.usefixtures("_patch_base")
 def test_fresh_news_question_uses_profile_hot_topic_when_search_empty(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setenv(
         "APP_COUNTRY_CHAT_MODEL_OPTIONS",
         "gemini:gemini-flash-latest",
@@ -830,6 +909,11 @@ def test_fresh_news_question_uses_profile_hot_topic_when_search_empty(monkeypatc
         "search_market_news",
         lambda **kwargs: [],
     )
+    monkeypatch.setattr(
+        country_chat_service,
+        "_answer_fresh_context_with_gemini",
+        lambda **kwargs: "Gemini 基于 profile 说明 Volvo EX60 是 2026 年瑞典制造电动 SUV 信号。",
+    )
 
     result = country_chat_service.answer_country_question(
         "瑞典",
@@ -837,7 +921,7 @@ def test_fresh_news_question_uses_profile_hot_topic_when_search_empty(monkeypatc
         chat_model="auto",
     )
 
-    assert result["provider"] == "external-search"
+    assert result["provider"] == "gemini"
     assert "Volvo EX60" in result["answer"]
     assert result["contextSnapshot"]["externalSearchResults"][0][
         "provider"
@@ -970,6 +1054,68 @@ def test_answer_market_context_marks_stale_news_snapshot(monkeypatch) -> None:
         "证据边界理解" in note
         for note in result["grounding"]["reasoningNotes"]
     )
+
+
+def test_answer_with_deepseek_records_cache_usage_and_uses_stable_prefix(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+    captured: dict[str, object] = {}
+
+    def _fake_urlopen(request, timeout):  # noqa: ANN001
+        captured["timeout"] = timeout
+        captured["request_body"] = json.loads(request.data.decode("utf-8"))
+        captured["auth_header"] = request.headers.get("Authorization")
+        return _StubUrlopenResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "DeepSeek 基于证据回答。",
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 120,
+                    "completion_tokens": 20,
+                    "total_tokens": 140,
+                    "prompt_cache_hit_tokens": 80,
+                    "prompt_cache_miss_tokens": 40,
+                },
+            }
+        )
+
+    monkeypatch.setattr(country_chat_service, "urlopen", _fake_urlopen)
+    snapshot: dict[str, object] = {
+        "country": "瑞典",
+        "periodLabel": "Sweden - Feb 2025",
+        "kpis": {"modelCount": 5},
+    }
+
+    answer = country_chat_service._answer_with_deepseek(
+        country="瑞典",
+        question="瑞典 SUV HEV 发生下跌可能是什么原因？",
+        intents=["segment-analysis", "market-context"],
+        intent_route="market-context",
+        user_params={"segment": "SUV-A", "powertrain": "HEV"},
+        snapshot=snapshot,
+        history=[{"role": "user", "content": "先看 SUV-A HEV"}],
+        chat_model="deepseek-chat",
+        execution_plan={"route": "market-context"},
+        planner_context={"prefetchedEvidence": []},
+    )
+
+    body = captured["request_body"]
+    messages = body["messages"]
+    assert answer == "DeepSeek 基于证据回答。"
+    assert captured["auth_header"] == "Bearer deepseek-secret"
+    assert body["model"] == "deepseek-chat"
+    assert messages[0]["role"] == "system"
+    assert "汽车国家市场分析助手" in messages[0]["content"]
+    assert "证据包(JSON" in messages[2]["content"]
+    assert "当前用户问题" in messages[-1]["content"]
+    assert snapshot["analysisMeta"]["modelUsage"]["promptCacheHitTokens"] == 80
+    assert snapshot["analysisMeta"]["modelUsage"]["promptCacheMissTokens"] == 40
 
 
 @pytest.mark.usefixtures("_patch_base")
@@ -1191,7 +1337,7 @@ def test_answer_falls_back_after_nvidia_tool_depth_limit(monkeypatch) -> None:
     assert result["provider"] == "fallback"
     assert result["answerMode"] == "grounded-fallback"
     assert "分析中断" not in str(result["answer"])
-    assert "当前聊天模型未返回稳定结果" in str(result["answer"])
+    assert "已命中的 JATO 数据和新闻证据" in str(result["answer"])
     assert "工具调用轮次过多" in str(result["providerReason"])
 
 
