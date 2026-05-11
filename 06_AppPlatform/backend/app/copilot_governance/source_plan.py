@@ -70,20 +70,63 @@ _SOURCE_RULES: list[tuple[list[str], str, str, str]] = [
 
 
 def plan_sources(intent: str, question: str = "") -> SourcePlan:
+    from app.copilot_governance.intent import LEGACY_TO_GOVERNED_INTENT
+
     lowered = (question or "").lower()
     items: list[SourcePlanItem] = []
     seen: set[str] = set()
 
+    governed_intent = LEGACY_TO_GOVERNED_INTENT.get(intent, intent)
+
+    # Intent-based rules — add sources based on governed intent
+    _INTENT_SOURCES: dict[str, list[tuple[str, str, str]]] = {
+        "metric_query": [("jato_sales_parquet", "structured_bi", "Structured data for metrics.")],
+        "distribution": [("jato_sales_parquet", "structured_bi", "Distribution analysis.")],
+        "trend": [("jato_sales_parquet", "structured_bi", "Trend analysis.")],
+        "comparison": [
+            ("jato_sales_parquet", "structured_bi", "Market comparison data."),
+            ("current_price_postgres", "canonical_entity", "Price comparison."),
+        ],
+        "pricing_strategy": [
+            ("jato_sales_parquet", "structured_bi", "Market structure context."),
+            ("current_price_postgres", "canonical_entity", "Current MSRP data."),
+        ],
+        "product_strategy": [
+            ("jato_sales_parquet", "structured_bi", "Market structure context."),
+            ("current_price_postgres", "canonical_entity", "Price corridor context."),
+            ("country_profiles", "policy_tax", "Policy context."),
+        ],
+        "policy_tax": [
+            ("country_profiles", "policy_tax", "Policy and tax rules."),
+        ],
+        "voc_insight": [
+            ("voc_forum_artifacts", "voc", "Customer feedback evidence."),
+        ],
+        "news_intelligence": [
+            ("news_digest", "news", "Recent news evidence."),
+        ],
+        "country_report": [
+            ("jato_sales_parquet", "structured_bi", "Full market data."),
+        ],
+    }
+
+    if governed_intent in _INTENT_SOURCES:
+        for source_id, lane, reason in _INTENT_SOURCES[governed_intent]:
+            if source_id not in seen:
+                seen.add(source_id)
+                items.append(SourcePlanItem(
+                    source_id=source_id, source_lane=lane,
+                    required=True, reason=reason,
+                ))
+
+    # Keyword-based rules — supplement with question-level keyword matching
     for keywords, source_id, lane, reason in _SOURCE_RULES:
         if any(kw in intent.lower() or kw in lowered for kw in keywords):
             if source_id not in seen:
                 seen.add(source_id)
                 items.append(SourcePlanItem(
-                    source_id=source_id,
-                    source_lane=lane,
-                    required=True,
-                    reason=reason,
-                    expected_output="",
+                    source_id=source_id, source_lane=lane,
+                    required=False, reason=f"Keyword match: {reason}",
                 ))
 
     if not items:
@@ -106,7 +149,7 @@ def plan_sources(intent: str, question: str = "") -> SourcePlan:
 
     return SourcePlan(
         question=question,
-        intent=intent,
+        intent=governed_intent,
         execution_mode=execution_mode,
         items=items,
         requires_sql_planner="structured_bi" in lanes,

@@ -1,0 +1,132 @@
+# Governed Copilot eval cases
+# Each case: id, question, country, expected_intent, expected_execution_mode,
+# expected_sources (must), optional_sources (may), expected_answer_mode
+
+cases:
+  - id: se_bev_share_bi
+    question: "瑞典 2025 年 BEV 占比是多少？"
+    country: "瑞典"
+    expected_intent: "nev-analysis"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+    expected_answer_mode: "quick_answer"
+
+  - id: se_brand_ranking
+    question: "瑞典销量最好的品牌有哪些？"
+    country: "瑞典"
+    expected_intent: "brand-ranking"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+
+  - id: no_trend
+    question: "挪威 BEV 趋势如何？"
+    country: "挪威"
+    expected_intent: "trend-summary"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+
+  - id: se_segment
+    question: "瑞典 SUV 和轿车哪个卖得更好？"
+    country: "瑞典"
+    expected_intent: "segment-analysis"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+
+  - id: se_msrp
+    question: "瑞典 XC60 多少钱？"
+    country: "瑞典"
+    expected_intent: "precise-lookup"
+    expected_execution_mode: "canonical_only"
+    expected_sources:
+      - current_price_postgres
+
+  - id: cz_voc
+    question: "捷克 Tucson HEV 用户抱怨什么？"
+    country: "捷克"
+    expected_intent: "voc_insight"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - voc_forum_artifacts
+
+  - id: se_policy
+    question: "瑞典 malus 碳税怎么算？"
+    country: "瑞典"
+    expected_intent: "policy_tax"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - country_profiles
+
+  - id: no_news
+    question: "挪威最近有什么汽车新闻？"
+    country: "挪威"
+    expected_intent: "market-context"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - news_digest
+
+  - id: se_strategy
+    question: "J7 SHS 在瑞典能不能卖？政策怎么样 用户反馈如何"
+    country: "瑞典"
+    expected_intent: "product_strategy"
+    expected_execution_mode: "hybrid"
+    expected_sources:
+      - jato_sales_parquet
+      - current_price_postgres
+    optional_sources:
+      - voc_forum_artifacts
+      - country_profiles
+
+  - id: se_pricing
+    question: "瑞典 SUV-B PHEV 价格带分布？"
+    country: "瑞典"
+    expected_intent: "pricing_strategy"
+    expected_execution_mode: "hybrid"
+    expected_sources:
+      - jato_sales_parquet
+      - current_price_postgres
+
+  - id: no_powertrain
+    question: "挪威动力结构是什么？"
+    country: "挪威"
+    expected_intent: "powertrain-mix"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+
+  - id: se_origin
+    question: "瑞典哪个车系阵营份额最大？"
+    country: "瑞典"
+    expected_intent: "origin-analysis"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+
+  - id: no_general
+    question: "挪威市场概况"
+    country: "挪威"
+    expected_intent: "general-summary"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+
+  - id: se_positioning
+    question: "XC60 在竞品中定位如何？"
+    country: "瑞典"
+    expected_intent: "positioning-analysis"
+    expected_execution_mode: "hybrid"
+    expected_sources:
+      - jato_sales_parquet
+      - current_price_postgres
+
+  - id: cz_news_policy
+    question: "捷克最近政策有什么变化？"
+    country: "捷克"
+    expected_intent: "market-context"
+    expected_execution_mode: "hybrid"
+    expected_sources:
+      - news_digest
+      - country_profiles
