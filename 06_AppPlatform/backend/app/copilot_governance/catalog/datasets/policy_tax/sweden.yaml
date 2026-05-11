@@ -1,0 +1,69 @@
+country: Sweden
+country_code: SE
+currency: SEK
+last_updated: "2026-01"
+source_authority: Transportstyrelsen / Skatteverket
+rules:
+  - id: se_malus_co2
+    name: Malus (CO₂-based vehicle tax)
+    type: co2_tax
+    effective_date: "2024-07-01"
+    jurisdiction: SE
+    description: >
+      Vehicles registered after 2024-07 pay increased malus for CO₂
+      emissions above 70 g/km during the first 3 years.
+    formula: "132 SEK × (CO₂_gkm - 70) per year for CO₂ > 70 g/km"
+    thresholds:
+      - co2_gkm: 70
+        rate_per_g_sek: 132
+        base_sek: 0
+    unit: SEK/year
+    applies_to: [ICE, PHEV, HEV, MHEV]
+    exempt: [BEV, FCEV]
+    duration_years: 3
+    source_url: https://transportstyrelsen.se/en/road/vehicles/vehicle-tax/
+    confidence: high
+    notes: >
+      Minimum malus is 360 SEK/year. CO₂ measured under WLTP.
+      For diesel vehicles, CO₂ value is multiplied by 2.37 before calculation.
+
+  - id: se_bonus_bev
+    name: BEV Climate Bonus
+    type: subsidy
+    effective_date: "2023-01-01"
+    jurisdiction: SE
+    description: >
+      Climate bonus (klimatbonus) for zero-emission vehicles ended
+      2022-11-08. No purchase subsidy for BEVs registered after that date.
+    status: expired
+    applies_to: [BEV]
+    source_url: https://transportstyrelsen.se/en/road/vehicles/
+    confidence: high
+
+  - id: se_bonus_low_co2
+    name: Low-CO₂ vehicle tax reduction
+    type: tax_reduction
+    effective_date: "2024-07-01"
+    jurisdiction: SE
+    description: >
+      Vehicles emitting ≤70 g/km CO₂ pay only the base tax of 360 SEK/year.
+    formula: "360 SEK/year (base) if CO₂ ≤ 70 g/km"
+    thresholds:
+      - co2_gkm: 70
+        tax_sek: 360
+    unit: SEK/year
+    applies_to: [PHEV, HEV, MHEV]
+    confidence: medium
+
+  - id: se_company_car_benefit
+    name: Company Car Benefit (Förmånsbil)
+    type: tax_benefit_in_kind
+    effective_date: "2024-01-01"
+    jurisdiction: SE
+    description: >
+      Company car benefit calculated based on vehicle MSRP + 9% of base amount.
+      BEVs get reduced benefit value (75% of equivalent ICE).
+    applies_to: [BEV, PHEV, ICE, HEV]
+    be_multiplier: 0.75
+    source_url: https://skatteverket.se
+    confidence: medium

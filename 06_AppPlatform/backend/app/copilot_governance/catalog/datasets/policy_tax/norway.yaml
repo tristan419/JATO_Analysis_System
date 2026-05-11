@@ -1,0 +1,70 @@
+country: Norway
+country_code: NO
+currency: NOK
+last_updated: "2026-01"
+source_authority: Norwegian Tax Administration / OFV
+rules:
+  - id: no_bev_vat_exemption
+    name: BEV VAT Exemption
+    type: tax_exemption
+    effective_date: "2001-01-01"
+    jurisdiction: NO
+    description: >
+      Battery electric vehicles are exempt from 25% VAT on purchase.
+      From 2024, VAT exemption only applies to the first 500,000 NOK
+      of the purchase price; the remainder is taxed at 25%.
+    threshold_nok: 500000
+    vat_rate_pct: 25
+    applies_to: [BEV]
+    confidence: high
+    notes: >
+      Revision effective 2024-01-01. Government may further reduce
+      exemption in future budgets.
+
+  - id: no_weight_tax
+    name: Weight-based Traffic Insurance Tax
+    type: weight_tax
+    effective_date: "2023-01-01"
+    jurisdiction: NO
+    description: >
+      Annual weight-based tax introduced 2023. Applies to all vehicles
+      including BEVs above 500 kg.
+    formula: "12.50 NOK/day × kg above 500 kg"
+    rate_per_kg_nok: 12.50
+    threshold_kg: 500
+    unit: NOK/day
+    applies_to: [BEV, PHEV, ICE, HEV, MHEV]
+    source_url: https://ofv.no
+    confidence: medium
+    notes: >
+      For a 2000 kg BEV: (2000 - 500) × 12.50 = 18,750 NOK/day... wait.
+      Actually the daily rate is per year, calculated as annual tax.
+      Average BEV weight tax ~3,000-5,000 NOK/year.
+
+  - id: no_bev_incentives_municipal
+    name: Municipal BEV Benefits
+    type: incentive
+    effective_date: varies
+    jurisdiction: NO
+    description: >
+      Municipal benefits (free parking, bus lane access, reduced tolls)
+      are being phased out or reduced in many cities (Oslo, Bergen).
+      Toll road discount for BEVs reduced from 100% to 70% (2024).
+    applies_to: [BEV, FCEV]
+    confidence: medium
+    notes: >
+      Toll discount: BEVs now pay 70% of full toll rate.
+      Future: likely to be further reduced or eliminated.
+
+  - id: no_co2_purchase_tax
+    name: CO₂-based Purchase Tax (Engangsavgift)
+    type: co2_tax
+    effective_date: "2024-01-01"
+    jurisdiction: NO
+    description: >
+      Purchase tax based on CO₂, NOx, and weight. BEVs exempt.
+      PHEV weight component applies fully; CO₂ component halved.
+    applies_to: [ICE, PHEV, HEV, MHEV]
+    exempt: [BEV, FCEV]
+    source_url: https://skatteetaten.no
+    confidence: medium

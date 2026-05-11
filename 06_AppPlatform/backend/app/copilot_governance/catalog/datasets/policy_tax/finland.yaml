@@ -1,0 +1,65 @@
+country: Finland
+country_code: FI
+currency: EUR
+last_updated: "2026-01"
+source_authority: Traficom / Finnish Tax Administration
+rules:
+  - id: fi_car_tax
+    name: Car Tax (Autovero)
+    type: purchase_tax
+    effective_date: "2024-01-01"
+    jurisdiction: FI
+    description: >
+      CO₂-based car tax applied at first registration. Rate ranges from
+      2.7% (0 g/km) to ~50% (≥360 g/km). BEVs pay minimum 2.7%.
+    formula: "tax_rate_pct based on CO₂ WLTP; minimum 2.7%"
+    thresholds:
+      - co2_gkm: 0
+        tax_rate_pct: 2.7
+      - co2_gkm: 100
+        tax_rate_pct: 15
+      - co2_gkm: 200
+        tax_rate_pct: 30
+      - co2_gkm: 360
+        tax_rate_pct: 50
+    applies_to: [BEV, PHEV, ICE, HEV, MHEV]
+    source_url: https://traficom.fi
+    confidence: high
+
+  - id: fi_vehicle_tax
+    name: Annual Vehicle Tax (Ajoneuvovero)
+    type: annual_tax
+    effective_date: "2024-01-01"
+    jurisdiction: FI
+    description: >
+      Annual tax based on CO₂ emissions (or weight for older vehicles).
+      BEVs pay reduced minimum rate.
+    applies_to: [BEV, PHEV, ICE, HEV, MHEV]
+    confidence: medium
+
+  - id: fi_bev_subsidy
+    name: BEV Purchase Subsidy
+    type: subsidy
+    effective_date: "2022-01-01"
+    jurisdiction: FI
+    description: >
+      Purchase subsidy for new BEVs up to 2,000 EUR. Price cap
+      50,000 EUR. Ended for private buyers 2023, still available
+      for some commercial/fleet purchases.
+    status: limited
+    subsidy_eur: 2000
+    max_vehicle_price_eur: 50000
+    applies_to: [BEV]
+    source_url: https://traficom.fi
+    confidence: high
+
+  - id: fi_company_car_benefit
+    name: Company Car CO₂-based Benefit
+    type: tax_benefit_in_kind
+    effective_date: "2024-01-01"
+    jurisdiction: FI
+    description: >
+      Monthly benefit value reduced for low-CO₂ vehicles.
+      BEV: benefit reduced by 200 EUR/month (temporary, expires 2025).
+    applies_to: [BEV, PHEV, ICE, HEV]
+    confidence: low

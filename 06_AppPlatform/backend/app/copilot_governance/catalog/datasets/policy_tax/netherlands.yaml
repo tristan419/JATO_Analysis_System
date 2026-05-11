@@ -1,0 +1,64 @@
+country: Netherlands
+country_code: NL
+currency: EUR
+last_updated: "2026-01"
+source_authority: RDW / Belastingdienst
+rules:
+  - id: nl_bpm_co2
+    name: BPM (CO₂-based Registration Tax)
+    type: purchase_tax
+    effective_date: "2024-01-01"
+    jurisdiction: NL
+    description: >
+      One-time registration tax (BPM) based on CO₂ emissions.
+      BEVs pay 0 EUR BPM. PHEVs pay CO₂-based rates.
+      ICE rates: ~2-500 EUR per g/km CO₂, graduated.
+    formula: "CO₂ rate × (CO₂_gkm - threshold) + base"
+    applies_to: [ICE, PHEV, HEV, MHEV]
+    exempt: [BEV, FCEV]
+    source_url: https://belastingdienst.nl
+    confidence: high
+
+  - id: nl_motor_vehicle_tax
+    name: Motor Vehicle Tax (MRB)
+    type: annual_tax
+    effective_date: "2024-01-01"
+    jurisdiction: NL
+    description: >
+      Quarterly/annual tax based on vehicle weight and fuel type.
+      BEVs fully exempt until 2025, then phased in at 25% rate.
+    applies_to: [BEV, PHEV, ICE, HEV, MHEV]
+    be_exempt_until: "2025-01-01"
+    be_rate_pct_after: 25
+    confidence: medium
+
+  - id: nl_bijtelling_bev
+    name: Company Car Benefit (Bijtelling) — BEV
+    type: tax_benefit_in_kind
+    effective_date: "2024-01-01"
+    jurisdiction: NL
+    description: >
+      BEV company car benefit: 16% of list price up to 30,000 EUR,
+      22% above. ICE/PHEV: 22% of full list price.
+    thresholds:
+      - list_price_eur: 30000
+        rate_pct: 16
+    applies_to: [BEV, FCEV]
+    ice_rate_pct: 22
+    source_url: https://belastingdienst.nl
+    confidence: high
+
+  - id: nl_bev_subsidy
+    name: BEV Private Purchase Subsidy (SEPP)
+    type: subsidy
+    effective_date: "2024-01-01"
+    jurisdiction: NL
+    description: >
+      New BEV subsidy: 2,950 EUR for private buyers.
+      Price cap 45,000 EUR. Used BEV: 2,000 EUR.
+      Budget-limited, may run out during year.
+    subsidy_eur: 2950
+    max_price_eur: 45000
+    applies_to: [BEV]
+    confidence: high
+    notes: Budget capped. Early-year applications recommended.

@@ -1,0 +1,69 @@
+country: Germany
+country_code: DE
+currency: EUR
+last_updated: "2026-01"
+source_authority: KBA / BAFA / BMF
+rules:
+  - id: de_co2_vehicle_tax
+    name: CO₂-based Annual Vehicle Tax
+    type: annual_tax
+    effective_date: "2021-01-01"
+    jurisdiction: DE
+    description: >
+      Annual vehicle tax has CO₂-progressive component:
+      2.00 EUR per g/km for CO₂ above 95 g/km, graduated scale.
+      BEVs exempt for 10 years from first registration.
+    formula: "base (engine size) + CO₂ surcharge (graduated)"
+    thresholds:
+      - co2_gkm: 95
+        rate_eur_per_g: 2.0
+      - co2_gkm: 115
+        rate_eur_per_g: 2.2
+      - co2_gkm: 135
+        rate_eur_per_g: 2.5
+    applies_to: [ICE, PHEV, HEV, MHEV]
+    exempt: [BEV]
+    be_exempt_years: 10
+    source_url: https://kba.de
+    confidence: high
+
+  - id: de_ev_subsidy_ended
+    name: EV Environmental Bonus (Umweltbonus)
+    type: subsidy
+    effective_date: "2023-12-17"
+    jurisdiction: DE
+    description: >
+      EV purchase subsidy (Umweltbonus) abruptly ended December 2023.
+      No federal purchase subsidy currently available.
+    status: expired
+    applies_to: [BEV, PHEV, FCEV]
+    source_url: https://bafa.de
+    confidence: high
+
+  - id: de_company_car_benefit
+    name: Company Car BEV Benefit (Dienstwagenbesteuerung)
+    type: tax_benefit_in_kind
+    effective_date: "2024-01-01"
+    jurisdiction: DE
+    description: >
+      BEV company cars taxed at 0.25% of gross list price/month
+      (vs 1% for ICE). Applies to BEVs with list price ≤70,000 EUR.
+      Above 70k EUR, 0.5% rate applies.
+    thresholds:
+      - list_price_eur: 70000
+        rate_pct_per_month: 0.25
+    applies_to: [BEV, FCEV]
+    confidence: high
+
+  - id: de_co2_fuel_tax
+    name: CO₂ Fuel Tax (nationaler Emissionshandel)
+    type: carbon_tax
+    effective_date: "2025-01-01"
+    jurisdiction: DE
+    description: >
+      National carbon price on heating and transport fuels.
+      55 EUR/t CO₂ in 2025, rising to 55-65 EUR/t by 2026.
+      ETS2 extends to transport from 2027.
+    rate_eur_per_tonne: 55
+    applies_to: [ICE, PHEV, HEV, MHEV]
+    confidence: high

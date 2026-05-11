@@ -1,0 +1,55 @@
+country: Denmark
+country_code: DK
+currency: DKK
+last_updated: "2026-01"
+source_authority: SKAT / Motorstyrelsen
+rules:
+  - id: dk_registration_tax
+    name: Registration Tax (Registreringsafgift)
+    type: purchase_tax
+    effective_date: "2024-01-01"
+    jurisdiction: DK
+    description: >
+      Progressive registration tax based on vehicle value:
+      25% up to ~73,000 DKK, 85% from ~73,000 to ~218,000 DKK,
+      150% above ~218,000 DKK. BEVs pay reduced rates phased in.
+    formula: "progressive bands on taxable value"
+    thresholds:
+      - value_dkk: 73000
+        rate_pct: 25
+      - value_dkk: 218000
+        rate_pct: 85
+      - value_dkk: 9999999
+        rate_pct: 150
+    applies_to: [ICE, PHEV, HEV, MHEV]
+    source_url: https://motorst.dk
+    confidence: high
+    notes: >
+      BEV registration tax: phased reduction, reaching ~60% of ICE
+      rates by 2025-2026. Full parity expected by 2030.
+
+  - id: dk_bev_deduction
+    name: BEV Registration Tax Deduction
+    type: tax_reduction
+    effective_date: "2024-01-01"
+    jurisdiction: DK
+    description: >
+      BEVs get a deduction from the taxable value before registration
+      tax calculation. Deduction was 175,000 DKK, phased down to
+      ~157,500 DKK in 2024.
+    deduction_dkk: 157500
+    applies_to: [BEV]
+    confidence: medium
+
+  - id: dk_green_ownership_tax
+    name: Green Ownership Tax (Grøn ejerafgift)
+    type: annual_tax
+    effective_date: "2024-01-01"
+    jurisdiction: DK
+    description: >
+      Semi-annual tax based on fuel efficiency (km/L). BEVs pay
+      minimum rate (780 DKK/half-year). ICE vehicles pay up to
+      11,700 DKK/half-year for lowest efficiency.
+    applies_to: [BEV, PHEV, ICE, HEV, MHEV]
+    unit: DKK/half-year
+    confidence: high
