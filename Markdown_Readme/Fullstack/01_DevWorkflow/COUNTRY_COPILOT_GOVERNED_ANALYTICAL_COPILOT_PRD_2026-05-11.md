@@ -1681,7 +1681,7 @@ python evals/governed_copilot/run_eval.py
 
 ## 19. Implementation Plan for Claude Code
 
-## 实施状态快照（2026-05-12）
+## 实施状态快照（2026-05-12，最终版）
 
 ### 已完成 ✅
 
@@ -1689,33 +1689,68 @@ python evals/governed_copilot/run_eval.py
 |-------|------|------|
 | Phase 1 | Governance schemas (intent, source_plan, query_plan, evidence_pack, result_verifier) | ✅ |
 | Phase 2 | Metadata Catalog: 5 dataset YAMLs + registry + 10-country policy tax YAMLs | ✅ |
-| Phase 3 | Rule-based Source Planner with Chinese/English keywords + intent mapping | ✅ |
-| Phase 4 | QueryPlan schema + SQL Validator (dataset whitelist, forbidden keywords, row limits) | ✅ |
-| Phase 5 | (skipped — MVP uses snapshot data, not live query engine) | — |
+| Phase 3 | Rule-based Source Planner with Chinese/English keywords + intent-based mapping (9 intents) | ✅ |
+| Phase 4 | QueryPlan schema + SQL Validator (13 rules: whitelist, forbidden keywords, row limits, SELECT *) | ✅ |
+| Phase 5 | Governed Query Engine adapter: 5 source types (jato_sales, msrp, voc, policy, news) | ✅ |
 | Phase 6 | Result Verifier: 5 checks (row count, freshness, share sum, source coverage, empty) | ✅ |
-| Phase 7 | Evidence Pack Builder from snapshot + source plan | ✅ |
-| Phase 8 | (next — Answer Composer Adapter) | ❌ |
-| Phase 9 | Wired sourcePlan, evidencePack, governanceTrace into CountryChatResponse | ✅ |
-| Phase 10 | Frontend CopilotGovernancePanel (collapsed by default) | ✅ |
-| Phase 11 | Eval Harness: 20 cases, CLI runner, 100% pass | ✅ |
-| Extra | 10-country tax calculators (SE/NO/FI/DK/DE/NL/HU/HR/AT/CZ) + policy_service | ✅ |
-| Extra | Streaming SSE endpoint, 6-section report prompt, cross-tab causal analysis | ✅ |
+| Phase 7 | Evidence Pack Builder from snapshot + source plan + tax estimate tables | ✅ |
+| Phase 8 | Answer Composer: StructuredAnswer with 7 block types, rule-driven | ✅ |
+| Phase 9 | Wired sourcePlan, evidencePack, governanceTrace, structuredAnswer, auditId into CountryChatResponse | ✅ |
+| Phase 10 | Frontend CopilotGovernancePanel (collapsed, shows intent/sources/blocks) + StructuredAnswerView | ✅ |
+| Phase 11 | Eval Harness: 39 cases, CLI runner, 100% pass | ✅ |
+| Extra | 10-country tax calculators (SE/NO/FI/DK/DE/NL/HU/HR/AT/CZ) with EUR unification | ✅ |
+| Extra | Semantic layer: entity resolution for powertrain, segment, metrics, business goals (中英文别名) | ✅ |
+| Extra | Audit logging: in-memory ring buffer (200 records), auditId in every response | ✅ |
+| Extra | User feedback: up/down/issue ratings contract | ✅ |
+| Extra | Price Alert service: EUR-unified, MSRP repository integration, monthly payment estimates | ✅ |
+| Extra | VOC data wiring: query_nordic_customer_deck(mode=forum_live) for qualitative evidence | ✅ |
+| Extra | SSE streaming progress events (loading → cross-tabs → planning → generating) | ✅ |
+| Extra | Token cost display (RMB, collapsed by default) | ✅ |
 
-### 当前测试
+### 最终统计
 
 | 指标 | 值 |
 |------|-----|
-| Unit tests | **514 passed** |
-| Eval cases | **20/20 (100%)** |
-| Governance files | **28** |
-| Supported countries (tax) | **10** |
+| Unit tests | **528 passed** |
+| Eval cases | **39/39 (100%)** |
+| Governance files | **37** |
+| Supported countries (tax) | **10** (Batch A full: SE/NO/FI/DK/HU/HR/AT/CZ + DE/NL) |
+| Source lanes wired | **5/6** (structured_bi, canonical_entity, voc, policy_tax, news; live_web reserved) |
+| PRD phases complete | **11/11** |
 
-### 待实施
+### 每个 Chat 响应包含的治理字段
 
-- **Phase 8**: Answer Composer Adapter — 把 EvidencePack 转成结构化答案
-- **Phase 5**: Governed Query Engine — 根据 SourcePlan 实际执行查询（当前从 snapshot 复用）
-- **semantic_layer.py / entity_resolution.py**: 语义层
-- **audit.py / feedback.py**: 审计和反馈
+```json
+{
+  "sourcePlan":        { "execution_mode": "hybrid", "items": [...] },
+  "evidencePack":      { "sources": [...], "limitations": [...] },
+  "governanceTrace":   { "intent": "...", "planGenerated": true },
+  "structuredAnswer":  { "summary": "...", "blocks": [...], "recommendations": [...] },
+  "auditId":           "a1b2c3d4"
+}
+```
+
+### 完整治理栈文件树
+
+```
+copilot_governance/
+  __init__.py
+  intent.py              ← 14 intents + legacy mapping
+  semantic_layer.py      ← entity resolution (中英文)
+  source_plan.py         ← rule + intent Source Planner (10 rules)
+  query_plan.py          ← QueryPlan schema
+  sql_validator.py       ← 13 safety rules
+  result_verifier.py     ← 5 quality checks
+  evidence_pack.py       ← EvidencePack builder
+  answer_composer.py     ← StructuredAnswer (7 block types)
+  policy_service.py      ← policy query + search
+  tax_calculator.py      ← 10-country CO2/weight/purchase tax
+  price_alert_service.py ← EUR price alerts + monthly payments
+  audit.py               ← audit logging (200 records)
+  feedback.py            ← user feedback contract
+  catalog/               ← 5 dataset YAMLs + 10 policy YAMLs
+  engines/               ← Governed Query Engine adapter
+```
 
 ---
 
