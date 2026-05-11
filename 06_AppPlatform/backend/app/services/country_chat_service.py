@@ -974,6 +974,11 @@ def answer_country_question_stream(
     focused_intents = route_plan["focusedIntents"]
     intent_route = route_plan["intentRoute"]
 
+    yield _sse_event("status", json.dumps({
+        "text": f"正在加载 {normalized_country} 市场数据，翻阅销量档案中...",
+        "step": "loading",
+    }, ensure_ascii=False))
+
     try:
         snapshot = build_country_snapshot(
             normalized_country,
@@ -982,10 +987,20 @@ def answer_country_question_stream(
     except Exception:
         snapshot = {"country": normalized_country, "crossTabs": {}}
 
+    yield _sse_event("status", json.dumps({
+        "text": f"正在构建 {normalized_country} 交叉分析维度，比对动力×驱动×渠道...",
+        "step": "cross_tabs",
+    }, ensure_ascii=False))
+
     try:
         snapshot = _enrich_snapshot_for_intents(snapshot, focused_intents)
     except Exception:
         pass
+
+    yield _sse_event("status", json.dumps({
+        "text": "正在匹配最优数据源，规划证据链...",
+        "step": "planning",
+    }, ensure_ascii=False))
 
     model = str(chat_model or "").strip() or country_chat_models.get_default_deepseek_chat_model()
     context = _select_context_for_intents(snapshot, focused_intents)
@@ -1049,6 +1064,10 @@ def answer_country_question_stream(
         "model": model,
     }
     yield _sse_event("meta", json.dumps(metadata, ensure_ascii=False))
+    yield _sse_event("status", json.dumps({
+        "text": f"DeepSeek 正在逐字生成 {normalized_country} 分析报告，稍等片刻...",
+        "step": "generating",
+    }, ensure_ascii=False))
 
     full_text = ""
     try:

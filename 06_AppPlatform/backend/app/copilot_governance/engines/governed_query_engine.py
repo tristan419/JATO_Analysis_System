@@ -76,17 +76,44 @@ def _execute_source_item(
         }
 
     if source_id == "voc_forum_artifacts":
-        return {
-            **base,
-            "status": "empty",
-            "rows": [],
-            "summary": {},
-            "confidence": "low",
-            "limitations": [
-                "VOC forum data is not wired into the Country Copilot snapshot.",
-                "VOC data exists in voc_staging_service and customer_insight_service but requires explicit query.",
-            ],
-        }
+        try:
+            from app.services.customer_insight_service import query_nordic_customer_deck
+            deck = query_nordic_customer_deck(mode="forum_live", country_codes=[country[:2].upper()] if country else None)
+            observations: list[dict[str, Any]] = []
+            page = deck.get("page", {})
+            if isinstance(page, dict):
+                for section_name, section_data in page.items():
+                    if isinstance(section_data, list):
+                        for item in section_data:
+                            if isinstance(item, dict) and item.get("observation"):
+                                observations.append({
+                                    "section": section_name,
+                                    "observation": item.get("observation", ""),
+                                    "theme": item.get("theme", ""),
+                                    "persona": item.get("persona", ""),
+                                })
+            return {
+                **base,
+                "status": "ok" if observations else "partial",
+                "rows": observations[:20] if observations else [],
+                "summary": {
+                    "observation_count": len(observations),
+                    "source": "VOC forum_live + benchmark deck",
+                },
+                "confidence": "low",
+                "limitations": [
+                    "VOC data is qualitative and cannot represent full market statistics.",
+                    "Forum data may have selection bias.",
+                ] if observations else ["No VOC data available for this country."],
+            }
+        except Exception as exc:
+            return {
+                **base,
+                "status": "empty",
+                "summary": {},
+                "confidence": "low",
+                "limitations": [f"VOC query failed: {exc}"],
+            }
 
     if source_id == "country_profiles":
         from app.copilot_governance.policy_service import load_policy_rules
