@@ -16,6 +16,7 @@ from app.db.session import get_session_factory
 from app.infra import msrp_repository
 from app.infra import parquet_repository as repo
 from app.copilot_governance.answer_composer import compose_answer
+from app.copilot_governance.audit import build_audit_record
 from app.copilot_governance.evidence_pack import build_evidence_pack_from_snapshot
 from app.copilot_governance.source_plan import plan_sources
 from app.scraper import enable_external_scraper_package
@@ -1249,6 +1250,13 @@ def answer_country_question(
             "evidencePack": evidence_pack.model_dump(),
             "governanceTrace": governance_trace,
             "structuredAnswer": structured_answer.model_dump(),
+            "auditId": build_audit_record(
+                country=normalized_country, question=normalized_question,
+                intent=intent, intent_route=route_plan["intentRoute"],
+                provider="snapshot", answer_mode="grounded-direct",
+                source_plan=source_plan.model_dump(),
+                evidence_pack_sources=[s.source_id for s in evidence_pack.sources],
+            ).audit_id,
         }
     execution_chain = _prioritize_execution_chain_for_route(
         execution_chain,
@@ -1390,6 +1398,18 @@ def answer_country_question(
         "sourcePlan": source_plan.model_dump(),
         "evidencePack": evidence_pack.model_dump(),
         "governanceTrace": governance_trace,
+        "structuredAnswer": structured_answer.model_dump(),
+        "auditId": build_audit_record(
+            country=normalized_country, question=normalized_question,
+            intent=intent, intent_route=route_plan["intentRoute"],
+            provider=provider, model=resolved_model,
+            answer_mode=(
+                "grounded-model" if provider in {"deepseek", "nvidia", "gemini"}
+                else "grounded-fallback"
+            ),
+            source_plan=source_plan.model_dump(),
+            evidence_pack_sources=[s.source_id for s in evidence_pack.sources],
+        ).audit_id,
     }
 
 

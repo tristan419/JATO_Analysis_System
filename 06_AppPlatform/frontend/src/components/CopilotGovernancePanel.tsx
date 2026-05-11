@@ -2,6 +2,7 @@ import type {
   CountryCopilotEvidencePack,
   CountryCopilotGovernanceTrace,
   CountryCopilotSourcePlan,
+  CountryCopilotStructuredAnswer,
 } from "../types/countryChat";
 
 function laneLabel(lane: string): string {
@@ -32,14 +33,18 @@ export function CopilotGovernancePanel({
   sourcePlan,
   evidencePack,
   governanceTrace,
+  structuredAnswer,
   compact = false,
 }: {
   sourcePlan?: CountryCopilotSourcePlan | null;
   evidencePack?: CountryCopilotEvidencePack | null;
   governanceTrace?: CountryCopilotGovernanceTrace | null;
+  structuredAnswer?: CountryCopilotStructuredAnswer | null;
   compact?: boolean;
 }) {
-  if (!sourcePlan && !evidencePack) return null;
+  if (!sourcePlan && !evidencePack && !structuredAnswer) return null;
+
+  const blocks = structuredAnswer?.blocks ?? [];
 
   return (
     <details className="copilot-answer-section is-collapsible">
@@ -48,8 +53,26 @@ export function CopilotGovernancePanel({
         <span className="copilot-answer-section-kicker">
           {sourcePlan?.execution_mode ?? "unknown"}
           {evidencePack ? ` · ${evidencePack.sources.length} sources` : ""}
+          {blocks.length > 0 ? ` · ${blocks.length} blocks` : ""}
         </span>
       </summary>
+
+      {blocks.length > 0 ? (
+        <div style={{ marginBottom: 12 }}>
+          {blocks.slice(0, compact ? 3 : 6).map((block, i) => (
+            <div key={i} style={{ fontSize: 12, color: "#475569", marginBottom: 6, padding: "4px 8px", background: "#f8fafc", borderRadius: 4 }}>
+              <strong>{block.block_type}: {block.title}</strong>
+              {block.content ? <div style={{ marginTop: 2 }}>{block.content}</div> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {structuredAnswer?.limitations?.length ? (
+        <div style={{ fontSize: 12, color: "#ef4444", marginBottom: 4 }}>
+          ⚠ {structuredAnswer.limitations.join(" · ")}
+        </div>
+      ) : null}
 
       {governanceTrace ? (
         <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>

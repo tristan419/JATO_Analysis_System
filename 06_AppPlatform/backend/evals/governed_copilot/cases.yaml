@@ -172,3 +172,159 @@ cases:
     expected_execution_mode: "evidence_only"
     expected_sources:
       - country_profiles
+
+  # ── Round 3: Extended eval cases ──
+  - id: dk_registration_tax
+    question: "丹麦登记税 BEV vs ICE 差多少？"
+    country: "丹麦"
+    expected_intent: "policy_tax"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - country_profiles
+
+  - id: de_company_car
+    question: "德国公司车 BEV 税务优惠有哪些？"
+    country: "德国"
+    expected_intent: "policy_tax"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - country_profiles
+
+  - id: fi_car_tax_rate
+    question: "芬兰 autovero 税率怎么算？"
+    country: "芬兰"
+    expected_intent: "policy_tax"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - country_profiles
+
+  - id: hr_bev_incentive
+    question: "克罗地亚 BEV 补贴还有吗？"
+    country: "克罗地亚"
+    expected_intent: "policy_tax"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - country_profiles
+
+  - id: cz_company_car_benefit
+    question: "捷克公司车福利税率 BEV 多少？"
+    country: "捷克"
+    expected_intent: "policy_tax"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - country_profiles
+
+  - id: at_sachbezug
+    question: "奥地利 Sachbezug BEV 豁免还在吗？"
+    country: "奥地利"
+    expected_intent: "policy_tax"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - country_profiles
+
+  - id: se_bev_trend
+    question: "瑞典 BEV 三年趋势如何？"
+    country: "瑞典"
+    expected_intent: "trend-summary"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+
+  - id: no_segment_powertrain
+    question: "挪威 SUV-B PHEV 市场占比？"
+    country: "挪威"
+    expected_intent: "segment-analysis"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+
+  - id: de_pricing_compare
+    question: "德国 ID.4 vs Model Y 定价对比"
+    country: "德国"
+    expected_intent: "product_strategy"
+    expected_execution_mode: "hybrid"
+    expected_sources:
+      - jato_sales_parquet
+      - current_price_postgres
+
+  - id: cz_segment_share
+    question: "捷克 SUV 各细分市场份额？"
+    country: "捷克"
+    expected_intent: "segment-analysis"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+
+  - id: hu_powertrain_mix
+    question: "匈牙利动力结构分布？"
+    country: "匈牙利"
+    expected_intent: "powertrain-mix"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+
+  - id: hr_origin_analysis
+    question: "克罗地亚哪个车系阵营最大？"
+    country: "克罗地亚"
+    expected_intent: "origin-analysis"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+
+  - id: at_nev_share
+    question: "奥地利新能源占比多少？"
+    country: "奥地利"
+    expected_intent: "nev-analysis"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+
+  - id: fi_positioning
+    question: "芬兰 XC60 在竞品中定位如何？"
+    country: "芬兰"
+    expected_intent: "positioning-analysis"
+    expected_execution_mode: "hybrid"
+    expected_sources:
+      - jato_sales_parquet
+      - current_price_postgres
+
+  - id: dk_news_policy
+    question: "丹麦最近有什么排放政策新闻？"
+    country: "丹麦"
+    expected_intent: "market-context"
+    expected_execution_mode: "hybrid"
+    expected_sources:
+      - news_digest
+      - country_profiles
+
+  - id: nl_general_report
+    question: "荷兰市场整体概况"
+    country: "荷兰"
+    expected_intent: "general-summary"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+
+  - id: cz_segment_vs_powertrain
+    question: "捷克 SUV-A BEV 占比趋势"
+    country: "捷克"
+    expected_intent: "distribution"
+    expected_execution_mode: "structured_only"
+    expected_sources:
+      - jato_sales_parquet
+
+  - id: no_tax_weight
+    question: "挪威重量税 2000kg BEV 要交多少？"
+    country: "挪威"
+    expected_intent: "policy_tax"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - country_profiles
+
+  - id: se_compare_policy
+    question: "瑞典和挪威 BEV 政策对比？"
+    country: "瑞典"
+    expected_intent: "policy_tax"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - country_profiles

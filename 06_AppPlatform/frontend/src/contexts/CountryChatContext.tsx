@@ -26,6 +26,7 @@ import type {
   CountryCopilotSourcePlan,
   CountryCopilotEvidencePack,
   CountryCopilotGovernanceTrace,
+  CountryCopilotStructuredAnswer,
 } from "../types/countryChat";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 import {
@@ -65,6 +66,8 @@ export interface CountryChatTranscriptMessage extends CountryChatTurn {
   sourcePlan?: CountryCopilotSourcePlan | null;
   evidencePack?: CountryCopilotEvidencePack | null;
   governanceTrace?: CountryCopilotGovernanceTrace | null;
+  structuredAnswer?: CountryCopilotStructuredAnswer | null;
+  auditId?: string | null;
 }
 
 interface CountryChatSession {
@@ -572,6 +575,8 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
                   sourcePlan: response.sourcePlan,
                   evidencePack: response.evidencePack,
                   governanceTrace: response.governanceTrace,
+                  structuredAnswer: response.structuredAnswer,
+                  auditId: response.auditId,
                 },
               ],
             },

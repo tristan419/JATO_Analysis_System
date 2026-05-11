@@ -397,6 +397,21 @@ export interface CountryCopilotGovernanceTrace {
   planGenerated: boolean;
 }
 
+export interface CountryCopilotAnswerBlock {
+  block_type: string;
+  title: string;
+  content: string;
+  data?: Record<string, unknown> | null;
+}
+
+export interface CountryCopilotStructuredAnswer {
+  summary: string;
+  blocks: CountryCopilotAnswerBlock[];
+  limitations: string[];
+  recommendations: string[];
+  answer_mode: string;
+}
+
 export interface CountryChatResponse {
   country: string;
   question: string;
@@ -422,6 +437,8 @@ export interface CountryChatResponse {
   sourcePlan?: CountryCopilotSourcePlan | null;
   evidencePack?: CountryCopilotEvidencePack | null;
   governanceTrace?: CountryCopilotGovernanceTrace | null;
+  structuredAnswer?: CountryCopilotStructuredAnswer | null;
+  auditId?: string | null;
 }
 
 export interface CountryChatDeckResponse {

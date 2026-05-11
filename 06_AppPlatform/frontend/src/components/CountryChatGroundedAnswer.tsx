@@ -451,6 +451,7 @@ export function CountryChatGroundedAnswer({
         sourcePlan={message.sourcePlan}
         evidencePack={message.evidencePack}
         governanceTrace={message.governanceTrace}
+        structuredAnswer={message.structuredAnswer}
         compact={compact}
       />
 
