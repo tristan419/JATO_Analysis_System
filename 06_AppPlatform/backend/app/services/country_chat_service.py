@@ -15,8 +15,9 @@ import pandas as pd
 from app.db.session import get_session_factory
 from app.infra import msrp_repository
 from app.infra import parquet_repository as repo
-from app.copilot_governance.source_plan import plan_sources
+from app.copilot_governance.answer_composer import compose_answer
 from app.copilot_governance.evidence_pack import build_evidence_pack_from_snapshot
+from app.copilot_governance.source_plan import plan_sources
 from app.scraper import enable_external_scraper_package
 from app.services import query_service
 from app.services import market_scan_service
@@ -1179,6 +1180,13 @@ def answer_country_question(
         intent=intent,
         country=normalized_country,
     )
+    structured_answer = compose_answer(
+        evidence_pack=evidence_pack,
+        source_plan=source_plan,
+        snapshot=snapshot,
+        country=normalized_country,
+        question=normalized_question,
+    )
     governance_trace = {
         "intent": intent,
         "focusedIntents": focused_intents,
@@ -1240,6 +1248,7 @@ def answer_country_question(
             "sourcePlan": source_plan.model_dump(),
             "evidencePack": evidence_pack.model_dump(),
             "governanceTrace": governance_trace,
+            "structuredAnswer": structured_answer.model_dump(),
         }
     execution_chain = _prioritize_execution_chain_for_route(
         execution_chain,
