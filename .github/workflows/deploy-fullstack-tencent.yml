@@ -194,20 +194,13 @@ jobs:
 
           if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
             echo "[INFO] Configuring DeepSeek in backend env..."
-            (sudo mkdir -p "$(dirname "$ENV_FILE")" 2>/dev/null || true)
-            if sudo test -f "$ENV_FILE" 2>/dev/null; then
-              (sudo sed -i '/^DEEPSEEK_API_KEY=/d' "$ENV_FILE" 2>/dev/null || true)
-              (echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
-              (sudo sed -i '/^APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true)
-              (echo "APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=8" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
-              if ! grep -q 'nvidia:meta/llama-3.3-70b-instruct' "$ENV_FILE" 2>/dev/null; then
-                (sudo sed -i 's/^APP_COUNTRY_CHAT_MODEL_OPTIONS=.*/APP_COUNTRY_CHAT_MODEL_OPTIONS=nvidia:meta\/llama-3.3-70b-instruct,deepseek:deepseek-chat,gemini:*/' "$ENV_FILE" 2>/dev/null || true)
-              fi
-              echo "[INFO] DeepSeek config updated in existing env file"
-            else
-              (echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee "$ENV_FILE" > /dev/null 2>&1 || true)
-              (echo "APP_COUNTRY_CHAT_MODEL_OPTIONS=nvidia:meta/llama-3.3-70b-instruct,deepseek:deepseek-chat,gemini:*" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
-              echo "[INFO] DeepSeek env file created"
+            sudo -n mkdir -p "$(dirname "$ENV_FILE")" 2>/dev/null || true
+            if sudo -n test -f "$ENV_FILE" 2>/dev/null; then
+              sudo -n sed -i '/^DEEPSEEK_API_KEY=/d' "$ENV_FILE" 2>/dev/null || true
+              echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
+              sudo -n sed -i '/^APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true
+              echo "APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=8" | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
+              echo "[INFO] DeepSeek config updated"
             fi
           fi
 
@@ -217,8 +210,8 @@ jobs:
           export VITE_API_BASE="/v1"
           export VITE_USER_ROLE="viewer"
           export VITE_USER_NAME="github-actions"
-          bash 03_Scripts/deploy_fullstack_server.sh 2>&1 || true
-          DEPLOY_RC=${PIPESTATUS[0]:-$?}
+          bash 03_Scripts/deploy_fullstack_server.sh 2>&1
+          DEPLOY_RC=$?
 
           FRONTEND_ROOT="$REPO_DIR/06_AppPlatform/frontend/dist"
 
@@ -230,6 +223,12 @@ jobs:
             else
               sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
                 bash 03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
+            fi
+            NGINX_CONF=$(sudo -n nginx -T 2>/dev/null | grep -l 'proxy_pass http://jato_fullstack_api' /etc/nginx/sites-enabled/* /etc/nginx/conf.d/* 2>/dev/null | head -1 || echo "")
+            if [ -n "$NGINX_CONF" ] && sudo -n test -f "$NGINX_CONF"; then
+              sudo -n sed -i 's/proxy_buffering on;/proxy_buffering off;/g' "$NGINX_CONF" 2>/dev/null || true
+              sudo -n nginx -t 2>/dev/null && sudo -n systemctl reload nginx 2>/dev/null || true
+              echo "[INFO] nginx proxy_buffering disabled for SSE streaming"
             fi
           fi
 
@@ -300,20 +299,13 @@ jobs:
 
           if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
             echo "[INFO] Configuring DeepSeek in backend env..."
-            (sudo mkdir -p "$(dirname "$ENV_FILE")" 2>/dev/null || true)
-            if sudo test -f "$ENV_FILE" 2>/dev/null; then
-              (sudo sed -i '/^DEEPSEEK_API_KEY=/d' "$ENV_FILE" 2>/dev/null || true)
-              (echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
-              (sudo sed -i '/^APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true)
-              (echo "APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=8" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
-              if ! grep -q 'nvidia:meta/llama-3.3-70b-instruct' "$ENV_FILE" 2>/dev/null; then
-                (sudo sed -i 's/^APP_COUNTRY_CHAT_MODEL_OPTIONS=.*/APP_COUNTRY_CHAT_MODEL_OPTIONS=nvidia:meta\/llama-3.3-70b-instruct,deepseek:deepseek-chat,gemini:*/' "$ENV_FILE" 2>/dev/null || true)
-              fi
-              echo "[INFO] DeepSeek config updated in existing env file"
-            else
-              (echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee "$ENV_FILE" > /dev/null 2>&1 || true)
-              (echo "APP_COUNTRY_CHAT_MODEL_OPTIONS=nvidia:meta/llama-3.3-70b-instruct,deepseek:deepseek-chat,gemini:*" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
-              echo "[INFO] DeepSeek env file created"
+            sudo -n mkdir -p "$(dirname "$ENV_FILE")" 2>/dev/null || true
+            if sudo -n test -f "$ENV_FILE" 2>/dev/null; then
+              sudo -n sed -i '/^DEEPSEEK_API_KEY=/d' "$ENV_FILE" 2>/dev/null || true
+              echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
+              sudo -n sed -i '/^APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true
+              echo "APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=8" | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
+              echo "[INFO] DeepSeek config updated"
             fi
           fi
 
@@ -323,8 +315,8 @@ jobs:
           export VITE_API_BASE="/v1"
           export VITE_USER_ROLE="viewer"
           export VITE_USER_NAME="github-actions"
-          bash 03_Scripts/deploy_fullstack_server.sh 2>&1 || true
-          DEPLOY_RC=${PIPESTATUS[0]:-$?}
+          bash 03_Scripts/deploy_fullstack_server.sh 2>&1
+          DEPLOY_RC=$?
 
           FRONTEND_ROOT="$REPO_DIR/06_AppPlatform/frontend/dist"
 
@@ -336,6 +328,12 @@ jobs:
             else
               sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
                 bash 03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
+            fi
+            NGINX_CONF=$(sudo -n nginx -T 2>/dev/null | grep -l 'proxy_pass http://jato_fullstack_api' /etc/nginx/sites-enabled/* /etc/nginx/conf.d/* 2>/dev/null | head -1 || echo "")
+            if [ -n "$NGINX_CONF" ] && sudo -n test -f "$NGINX_CONF"; then
+              sudo -n sed -i 's/proxy_buffering on;/proxy_buffering off;/g' "$NGINX_CONF" 2>/dev/null || true
+              sudo -n nginx -t 2>/dev/null && sudo -n systemctl reload nginx 2>/dev/null || true
+              echo "[INFO] nginx proxy_buffering disabled for SSE streaming"
             fi
           fi
 
