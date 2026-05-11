@@ -1,4 +1,4 @@
-name: deploy-fullstack-tencent  # auto-deploy DeepSeek + NVIDIA-first
+name: deploy-fullstack-tencent  # auto-deploy DeepSeek + Governed Copilot
 
 on:
   push:
