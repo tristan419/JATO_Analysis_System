@@ -69,6 +69,7 @@ Markdown_Readme/
 | `02_DataETL/UNIFIED_SCRAPING_PIPELINE_2026-04-17.md` | 架构/抓取 | Active | 统一抓取流水线（当前实现 + 后续扩展位） |
 | `02_DataETL/VOC_FORUM_SCRAPING_FEASIBILITY_2026-04-17.md` | 架构/抓取 | Draft | 北欧汽车论坛 VOC 抓取可行性、边界与落地路径 |
 | `02_DataETL/VOC_FORUM_IMPLEMENTATION_STATUS_2026-04-19.md` | 实现/抓取 | Active | VOC research 结论、当前实现状态、已完成项与下一步执行顺序 |
+| `02_DataETL/AI_NEWS_VOC_INTELLIGENCE_PIPELINE_2026-05-09.md` | 架构/抓取/AI | Draft | AI News & VOC 智能管线：crawler 主采集 + LLM 增强理解/结构化/翻译/摘要 |
 | **MSRP** | | | |
 | `MSRP/README.md` | 功能/MSRP | Active | MSRP 文档总索引与阅读顺序 |
 | `MSRP/01_Requirements/MSRP_Official_Price_Enrichment_PRD_2026-04-10.md` | 产品/MSRP | Draft | MSRP 官方价格补全 PRD |

@@ -1,0 +1,89 @@
+# CLAUDE.md
+
+## Must-read docs first
+
+Before editing code, read these first:
+
+1. `Markdown_Readme/Fullstack/ROADMAP.md`
+2. `Markdown_Readme/Fullstack/WORKFLOWS/README.md`
+
+Then read task-specific docs:
+
+- Data / ETL: `Markdown_Readme/Fullstack/02_DataETL/ETL.md`
+- MSRP: `Markdown_Readme/Fullstack/MSRP/README.md`
+- Backend: `06_AppPlatform/backend/README.md`
+- Scraping / VOC / news: `07_ScrapingToolkit/README.md`
+- UI / frontend: `Markdown_Readme/UI/UI_SPECIFICATION_V1.md`
+
+`Markdown_Readme/Streamlit/` is historical archive only. Do not treat Streamlit as the current mainline unless explicitly requested.
+
+## Current architecture
+
+This project is now a Fullstack JATO automotive analysis system.
+
+Mainline:
+
+- FastAPI backend
+- React + TypeScript + Vite frontend
+- PostgreSQL business truth layer
+- JATO Parquet / partitioned dataset layer
+- Scraping Toolkit for MSRP, news, VOC, policy, incentives, and specs
+- Airflow / Docker for local orchestration
+- Streamlit is legacy
+
+## Running services rule
+
+Frontend, backend, PostgreSQL, Docker services, Airflow, and local services may already be running in VS Code.
+
+Default rule:
+
+- Do not start, stop, restart, or recreate frontend, backend, PostgreSQL, Docker, Airflow, or Streamlit services unless explicitly asked.
+- Do not run `npm run dev`, `uvicorn`, `docker compose up`, `docker compose down`, `docker restart`, `streamlit run`, `alembic upgrade`, or `alembic downgrade` unless explicitly approved.
+- Prefer using the existing running services.
+- If validation needs a service, first check whether the existing port is alive.
+- If a service appears unavailable, report it first instead of restarting it.
+
+## Repository map
+
+- `01_RAW_DATA/`: raw JATO input data. Do not open unless explicitly needed.
+- `02_Config_MetaData/`: configuration, mappings, and business rules.
+- `03_Scripts/`: ETL, ingestion, sync, deployment, and utility scripts.
+- `04_Processed_data/`: processed Parquet, partitioned data, reports, news/VOC artifacts. Do not scan large files by default.
+- `05_DashBoard/`: legacy Streamlit dashboard.
+- `06_AppPlatform/backend/`: FastAPI backend.
+- `06_AppPlatform/frontend/`: React + TypeScript + Vite frontend.
+- `07_ScrapingToolkit/`: MSRP / news / VOC / policy / incentive / spec scraping toolkit.
+- `Markdown_Readme/Fullstack/`: active architecture and workflow docs.
+- `Markdown_Readme/UI/`: active UI docs.
+- `Markdown_Readme/Streamlit/`: historical archive only.
+- `airflow/`: local orchestration.
+
+## Coding rules
+
+- Read docs before code.
+- Make small, targeted changes.
+- Do not scan the whole repository unless necessary.
+- Do not open raw data or processed data unless needed.
+- Do not rename columns, API fields, business keys, or folders without checking downstream usage.
+- Do not expose API keys, `.env` values, raw data, local paths, or generated cache files.
+- Prefer existing project patterns over new dependencies.
+
+## Validation rules
+
+Use targeted validation only.
+
+Backend:
+
+```bash
+cd 06_AppPlatform/backend
+python -m pytest tests/unit -x -q
+python -m pytest tests/integration -x -q
+```
+
+Frontend:
+
+```bash
+cd 06_AppPlatform/frontend
+npx tsc --noEmit --pretty
+npx vitest run --reporter=verbose
+```

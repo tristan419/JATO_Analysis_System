@@ -41,6 +41,7 @@ TOP_BRAND_LIMIT = 15
 TOP_MODEL_LIMIT = 10
 TOP_POWERTRAIN_LIMIT = 6
 CONTEXT_CHAR_BUDGET = 24_000
+DEEPSEEK_CONTEXT_CHAR_BUDGET = 12_000
 MAX_DECK_BASE_INTENTS = 3
 MAX_DECK_INTENTS = 5
 GEMINI_SEARCH_INTENTS = {"market-context"}
@@ -193,6 +194,28 @@ ROUTE_MODEL_PERFORMANCE_KEYWORDS = (
     "why sells well",
     "why does",
 )
+ROUTE_CAUSAL_EXPLANATION_KEYWORDS = (
+    "为什么",
+    "为何",
+    "原因",
+    "怎么回事",
+    "发生了什么",
+    "下跌",
+    "下降",
+    "下滑",
+    "掉了",
+    "跌了",
+    "drop",
+    "decline",
+    "down",
+    "fall",
+    "fell",
+    "falling",
+    "decrease",
+    "decreased",
+    "reduced",
+    "shrink",
+)
 ROUTE_TRIM_SALES_KEYWORDS = (
     "卖得最好",
     "卖的最好",
@@ -210,12 +233,19 @@ FOLLOW_UP_CUE_KEYWORDS = (
     "里面",
     "这个",
     "这类",
+    "为什么",
+    "原因",
+    "下跌",
+    "下降",
     "呢",
     "它",
     "他们",
     "what about",
     "among them",
     "then",
+    "why",
+    "decline",
+    "drop",
 )
 MODEL_TOKEN_STOPWORDS = {
     "A",
@@ -779,8 +809,7 @@ def _looks_like_followup_question(question: str) -> bool:
     return bool(
         text
         and (
-            any(keyword in text for keyword in FOLLOW_UP_CUE_KEYWORDS[:9])
-            or any(keyword in lowered for keyword in FOLLOW_UP_CUE_KEYWORDS[9:])
+            any(str(keyword).lower() in lowered for keyword in FOLLOW_UP_CUE_KEYWORDS)
         )
     )
 
@@ -2945,6 +2974,52 @@ def _extract_fuel_panel(
     return {}
 
 
+def _coerce_delta_payload_value(value: Any) -> float | None:
+    if isinstance(value, dict):
+        numeric = _coerce_optional_float(value.get("value"))
+        if numeric is not None:
+            return numeric
+        value = value.get("display")
+    if isinstance(value, str):
+        text = value.strip().replace(",", "")
+        if not text or text in {"-", "New"}:
+            return None
+        percent_match = re.search(r"([+-]?\d+(?:\.\d+)?)\s*%", text)
+        if percent_match:
+            return float(percent_match.group(1)) / 100.0
+        return _coerce_optional_float(text)
+    return _coerce_optional_float(value)
+
+
+def _normalize_segment_fuel_ranking_items(
+    ranking: Any,
+) -> list[dict[str, Any]]:
+    normalized_ranking: list[dict[str, Any]] = []
+    if not isinstance(ranking, list):
+        return normalized_ranking
+    for item in ranking:
+        if not isinstance(item, dict):
+            continue
+        model = str(item.get("model") or "").strip()
+        if not model:
+            continue
+        yoy = item.get("yoy", {}) if isinstance(item.get("yoy"), dict) else {}
+        normalized_ranking.append(
+            {
+                "model": model,
+                "rank": item.get("rank"),
+                "volume": int(round(_coerce_optional_float(item.get("volume")) or 0.0)),
+                "shareDisplay": str(item.get("shareDisplay") or "").strip(),
+                "yoyDisplay": str(yoy.get("display") or "").strip(),
+                "yoyValue": _coerce_delta_payload_value(yoy),
+                "yoyTone": str(yoy.get("tone") or "").strip(),
+                "registrationMix": item.get("registrationMix", {}),
+                "driveMix": item.get("driveMix", {}),
+            }
+        )
+    return normalized_ranking
+
+
 def _aggregate_mix_share_from_ranking(
     ranking: list[dict[str, Any]],
     *,
@@ -3432,23 +3507,18 @@ def _resolve_segment_fuel_focus_bundle(
         return None
 
     fuel_panel = _extract_fuel_panel(drilldown, fuel_type)
-    ranking = fuel_panel.get("ytdRanking", []) if isinstance(fuel_panel, dict) else []
-    normalized_ranking: list[dict[str, Any]] = []
-    for item in ranking:
-        if not isinstance(item, dict):
-            continue
-        model = str(item.get("model") or "").strip()
-        if not model:
-            continue
-        normalized_ranking.append(
-            {
-                "model": model,
-                "volume": int(round(_coerce_optional_float(item.get("volume")) or 0.0)),
-                "shareDisplay": str(item.get("shareDisplay") or "").strip(),
-                "registrationMix": item.get("registrationMix", {}),
-                "driveMix": item.get("driveMix", {}),
-            }
-        )
+    normalized_ranking = _normalize_segment_fuel_ranking_items(
+        fuel_panel.get("ytdRanking", []) if isinstance(fuel_panel, dict) else []
+    )
+    monthly_ranking = _normalize_segment_fuel_ranking_items(
+        fuel_panel.get("monthRanking", []) if isinstance(fuel_panel, dict) else []
+    )
+    rolling12_ranking = _normalize_segment_fuel_ranking_items(
+        fuel_panel.get("rolling12Ranking", []) if isinstance(fuel_panel, dict) else []
+    )
+    custom_range_ranking = _normalize_segment_fuel_ranking_items(
+        fuel_panel.get("customRangeRanking", []) if isinstance(fuel_panel, dict) else []
+    )
 
     bundle = {
         "resolvedSegment": segment,
@@ -3462,6 +3532,9 @@ def _resolve_segment_fuel_focus_bundle(
         "segmentDrilldown": drilldown,
         "fuelPanel": fuel_panel,
         "fuelRanking": normalized_ranking,
+        "monthlyRanking": monthly_ranking,
+        "rolling12Ranking": rolling12_ranking,
+        "customRangeRanking": custom_range_ranking,
         "registrationMix": _aggregate_mix_share_from_ranking(
             normalized_ranking,
             mix_key="registrationMix",
@@ -6608,6 +6681,7 @@ def _build_country_chat_route(
         "market-context" in normalized_intents
         or any(keyword in lowered for keyword in ROUTE_MARKET_CONTEXT_KEYWORDS)
     )
+    asks_causal_explanation = _question_requests_causal_explanation(question)
     asks_ranking = (
         any(keyword in lowered for keyword in ROUTE_RANKING_KEYWORDS)
         or user_params.get("ranking") == "top"
@@ -6634,7 +6708,9 @@ def _build_country_chat_route(
             "focusedIntents": ["market-context"],
         }
 
-    if has_segment_focus and has_powertrain_focus and asks_ranking:
+    if has_segment_focus and has_powertrain_focus and (
+        asks_ranking or asks_causal_explanation
+    ):
         focused = ["segment-analysis", "powertrain-mix"]
         if asks_compare:
             focused.append("competitive")
@@ -6885,6 +6961,11 @@ def _question_requests_news(question: str, intents: list[str]) -> bool:
     return "market-context" in _normalize_intents(intents) or any(
         keyword in lowered for keyword in PLANNER_NEWS_KEYWORDS
     )
+
+
+def _question_requests_causal_explanation(question: str) -> bool:
+    lowered = str(question or "").strip().lower()
+    return any(keyword in lowered for keyword in ROUTE_CAUSAL_EXPLANATION_KEYWORDS)
 
 
 def _question_requests_trim_sales(question: str) -> bool:
