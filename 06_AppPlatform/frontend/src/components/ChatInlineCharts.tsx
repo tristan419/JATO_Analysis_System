@@ -330,6 +330,48 @@ function MiniModelVersionMixChart({ snapshot, title }: { snapshot: CountryChatSn
   return <MiniBrandBar data={distribution.slice(0, 4)} title={title} />;
 }
 
+function MiniCrossTabCard({
+  snapshot,
+  title,
+}: {
+  snapshot: CountryChatSnapshot;
+  title: string;
+}) {
+  const crossTabs = snapshot.crossTabs;
+  if (!crossTabs) return null;
+
+  const driveByFuel = crossTabs.driveByFuel;
+  if (!driveByFuel || driveByFuel.length === 0) return null;
+
+  const chartData = driveByFuel.slice(0, 5).map((row) => ({
+    name: row._index as string,
+    "4WD": (row["4WD_pct"] as number) || 0,
+    "2WD": (row["2WD_pct"] as number) || 0,
+  }));
+
+  if (chartData.length === 0) return null;
+
+  return (
+    <div style={{ marginTop: 8, padding: "6px 8px", borderRadius: 6, background: "#f8fafc" }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: "#334155", marginBottom: 4 }}>
+        {title}
+      </div>
+      <ResponsiveContainer width="100%" height={Math.max(60, chartData.length * 26)}>
+        <BarChart data={chartData} layout="vertical" margin={{ top: 0, right: 0, bottom: 0, left: 44 }}>
+          <XAxis type="number" tick={{ fontSize: 9 }} hide />
+          <YAxis type="category" dataKey="name" tick={{ fontSize: 10 }} width={44} />
+          <Tooltip
+            formatter={(val) => `${val}%`}
+            {...tooltipStyle}
+          />
+          <Bar dataKey="4WD" stackId="a" fill={PALETTE[0]} />
+          <Bar dataKey="2WD" stackId="a" fill={PALETTE[1]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Intent → chart selection                                          */
 /* ------------------------------------------------------------------ */
@@ -400,6 +442,11 @@ export function ChatInlineCharts({
           case "model-version-mix":
             hintedCharts.push(
               <MiniModelVersionMixChart key={hint.kind} snapshot={snapshot} title={hint.title} />,
+            );
+            break;
+          case "cross-tab":
+            hintedCharts.push(
+              <MiniCrossTabCard key={hint.kind} snapshot={snapshot} title={hint.title} />,
             );
             break;
           default:

@@ -2680,6 +2680,171 @@ def _build_single_fuel_ranking_items(  # noqa: keep volume-based sort
     return items[: max(1, int(ranking_limit))]
 
 
+def _build_cross_tab_pct(
+    frame: pd.DataFrame,
+    *,
+    index_col: str,
+    column_col: str,
+    index_values: list[str] | None = None,
+    column_values: list[str] | None = None,
+    top_n: int = 10,
+) -> list[dict[str, Any]]:
+    if frame.empty or index_col not in frame.columns or column_col not in frame.columns:
+        return []
+    if "__sales" not in frame.columns:
+        return []
+    working = frame[frame["__sales"] > 0].copy()
+    if working.empty:
+        return []
+    if index_values is None:
+        index_totals = working.groupby(index_col)["__sales"].sum().sort_values(ascending=False)
+        index_values = [str(v) for v in index_totals.head(top_n).index.tolist()]
+    if column_values is None:
+        col_totals = working.groupby(column_col)["__sales"].sum().sort_values(ascending=False)
+        column_values = [str(v) for v in col_totals.head(top_n).index.tolist()]
+    grouped = (
+        working.groupby([index_col, column_col], dropna=False)["__sales"]
+        .sum()
+        .reset_index()
+    )
+    result: list[dict[str, Any]] = []
+    for idx_val in index_values:
+        idx_group = grouped[grouped[index_col].astype(str).str.strip() == str(idx_val).strip()]
+        if idx_group.empty:
+            continue
+        total = float(idx_group["__sales"].sum())
+        if total <= 0:
+            continue
+        row: dict[str, Any] = {"_index": str(idx_val).strip(), "_total": int(round(total))}
+        for col_val in column_values:
+            col_label = str(col_val).strip()
+            col_sales = float(
+                idx_group[idx_group[column_col].astype(str).str.strip() == col_label][
+                    "__sales"
+                ].sum()
+            )
+            row[col_label + "_pct"] = round(col_sales / total * 100, 1)
+        result.append(row)
+    result.sort(key=lambda r: r["_total"], reverse=True)
+    return result[:top_n]
+
+
+def build_causal_cross_tabs(
+    country: str,
+    target_period: str | None = None,
+    fuel_types: list[str] | None = None,
+) -> dict[str, Any]:
+    columns = _get_columns()
+    available_periods = _available_periods(columns)
+    resolved_period = _resolve_period(target_period, available_periods)
+    if fuel_types is None:
+        fuel_types = list(DEFAULT_FUEL_TYPES)
+    sales_column = _period_to_month_column(resolved_period)
+    if sales_column not in columns.month_columns:
+        return {"availableDimensions": [], "_note": "Sales period unavailable"}
+    country_options = _country_options(repo.current_dataset_token())
+    selected_country = _normalize_country_lookup(country, country_options)
+    selected_columns = [
+        columns.country_value,
+        columns.segment,
+        columns.powertrain,
+    ]
+    for extra_col in (columns.drive_type, columns.registration_type, columns.origin):
+        if extra_col and extra_col not in selected_columns:
+            selected_columns.append(extra_col)
+    selected_columns.append(sales_column)
+    dataset = repo._open_dataset()
+    filter_expression = repo._build_filter_expression(
+        {columns.country_value: [selected_country["value"]]}
+    )
+    table = dataset.to_table(columns=selected_columns, filter=filter_expression)
+    frame = table.to_pandas()
+    frame["__powertrain"] = frame[columns.powertrain].map(_normalize_powertrain)
+    frame["__segment_raw"] = frame[columns.segment].astype(str).str.strip()
+    frame["__sales"] = pd.to_numeric(frame[sales_column], errors="coerce").fillna(0.0)
+    frame = frame[frame["__sales"] > 0]
+    frame = frame[frame["__powertrain"].isin(fuel_types)].copy()
+    available_dimensions: list[str] = []
+    result: dict[str, Any] = {"availableDimensions": available_dimensions}
+
+    has_drive = bool(columns.drive_type and columns.drive_type in frame.columns)
+    has_reg = bool(columns.registration_type and columns.registration_type in frame.columns)
+    has_origin = bool(columns.origin and columns.origin in frame.columns)
+
+    if has_drive:
+        frame["__drive_type"] = frame[columns.drive_type].map(_normalize_drive_type)
+        available_dimensions.append("drive_type")
+        result["driveByFuel"] = _build_cross_tab_pct(
+            frame,
+            index_col="__powertrain",
+            column_col="__drive_type",
+            column_values=["4WD", "2WD", "OTHER"],
+            top_n=8,
+        )
+        result["driveBySegment"] = _build_cross_tab_pct(
+            frame,
+            index_col="__segment_raw",
+            column_col="__drive_type",
+            column_values=["4WD", "2WD", "OTHER"],
+            top_n=10,
+        )
+
+    if has_reg:
+        frame["__registration_type"] = frame[columns.registration_type].map(
+            _normalize_registration_type
+        )
+        available_dimensions.append("registration_type")
+        result["registrationByFuel"] = _build_cross_tab_pct(
+            frame,
+            index_col="__powertrain",
+            column_col="__registration_type",
+            column_values=["Business", "Private", "Other"],
+            top_n=8,
+        )
+        result["registrationBySegment"] = _build_cross_tab_pct(
+            frame,
+            index_col="__segment_raw",
+            column_col="__registration_type",
+            column_values=["Business", "Private", "Other"],
+            top_n=10,
+        )
+
+    result["segmentByFuel"] = _build_cross_tab_pct(
+        frame,
+        index_col="__segment_raw",
+        column_col="__powertrain",
+        top_n=10,
+    )
+
+    result["fuelBySegment"] = _build_cross_tab_pct(
+        frame,
+        index_col="__powertrain",
+        column_col="__segment_raw",
+        top_n=8,
+    )
+
+    if has_origin and has_drive:
+        frame["__origin"] = frame[columns.origin].map(_normalize_origin)
+        result["driveByOrigin"] = _build_cross_tab_pct(
+            frame,
+            index_col="__origin",
+            column_col="__drive_type",
+            column_values=["4WD", "2WD", "OTHER"],
+            top_n=6,
+        )
+
+    if has_origin and has_reg:
+        result["registrationByOrigin"] = _build_cross_tab_pct(
+            frame,
+            index_col="__origin",
+            column_col="__registration_type",
+            column_values=["Business", "Private", "Other"],
+            top_n=6,
+        )
+
+    return result
+
+
 def _build_ytd_fuel_trend(
     frame: pd.DataFrame,
     fuel_order: list[str],

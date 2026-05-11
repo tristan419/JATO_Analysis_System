@@ -253,6 +253,24 @@ export interface CountryChatGrounding {
   trust?: CountryChatTrustAssessment;
 }
 
+export interface CountryChatCrossTabRow {
+  _index: string;
+  _total: number;
+  [key: string]: string | number;
+}
+
+export interface CountryChatCrossTabs {
+  driveByFuel?: CountryChatCrossTabRow[];
+  registrationByFuel?: CountryChatCrossTabRow[];
+  driveBySegment?: CountryChatCrossTabRow[];
+  segmentByFuel?: CountryChatCrossTabRow[];
+  fuelBySegment?: CountryChatCrossTabRow[];
+  driveByOrigin?: CountryChatCrossTabRow[];
+  registrationByOrigin?: CountryChatCrossTabRow[];
+  registrationBySegment?: CountryChatCrossTabRow[];
+  availableDimensions: string[];
+}
+
 export interface CountryChatSnapshot {
   country: string;
   route: string;
@@ -262,6 +280,7 @@ export interface CountryChatSnapshot {
   topBrands: CountryChatRankItem[];
   topModels: CountryChatRankItem[];
   powertrainMix: CountryChatRankItem[];
+  crossTabs?: CountryChatCrossTabs;
   marketEvents?: CountryChatMarketEvent[];
   newsDigest?: CountryChatNewsDigest | null;
   insightCards?: CountryChatInsightCard[];
