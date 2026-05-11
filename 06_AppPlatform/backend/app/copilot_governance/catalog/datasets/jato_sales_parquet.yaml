@@ -1,0 +1,59 @@
+dataset_id: jato_sales_parquet
+display_name: JATO Sales Parquet
+source_lane: structured_bi
+storage_type: parquet
+grain: country_month_model_version
+freshness_field: year_month
+allowed_intents:
+  - metric_query
+  - comparison
+  - trend
+  - distribution
+  - correlation
+  - pricing_strategy
+  - product_strategy
+  - country_report
+  - brand-ranking
+  - segment-analysis
+  - origin-analysis
+  - powertrain-mix
+  - nev-analysis
+  - general-summary
+  - trend-summary
+required_filters:
+  - country
+governance:
+  max_rows: 5000
+  allow_full_scan: false
+  readonly: true
+fields:
+  - name: Country
+    semantic_role: country
+    data_type: string
+    filterable: true
+    groupable: true
+  - name: Model
+    semantic_role: model
+    data_type: string
+    filterable: true
+    groupable: true
+  - name: Powertrain
+    semantic_role: powertrain
+    data_type: string
+    filterable: true
+    groupable: true
+  - name: Driven wheels
+    semantic_role: drive_type
+    data_type: string
+    filterable: true
+    groupable: true
+  - name: Registration type
+    semantic_role: registration_type
+    data_type: string
+    filterable: true
+    groupable: true
+  - name: Segment
+    semantic_role: segment
+    data_type: string
+    filterable: true
+    groupable: true

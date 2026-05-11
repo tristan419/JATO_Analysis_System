@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import type { CountryChatTranscriptMessage } from "../contexts/CountryChatContext";
 import type { CountryChatModelUsage } from "../types/countryChat";
+import { CopilotGovernancePanel } from "./CopilotGovernancePanel";
 import {
   buildCountryChatAnswerPath,
   buildCountryChatAnswerSections,
@@ -445,6 +446,13 @@ export function CountryChatGroundedAnswer({
           <TokenCostDetail usage={message.contextSnapshot.analysisMeta.modelUsage} />
         </details>
       ) : null}
+
+      <CopilotGovernancePanel
+        sourcePlan={message.sourcePlan}
+        evidencePack={message.evidencePack}
+        governanceTrace={message.governanceTrace}
+        compact={compact}
+      />
 
       {layers.length > 0 ? (
         <div className="copilot-answer-section">

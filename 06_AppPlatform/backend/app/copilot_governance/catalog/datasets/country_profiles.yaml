@@ -1,0 +1,22 @@
+dataset_id: country_profiles
+display_name: Country Profiles
+source_lane: policy_tax
+storage_type: python_dict
+grain: country
+allowed_intents:
+  - policy_tax
+  - country_report
+  - market-context
+governance:
+  readonly: true
+fields:
+  - name: country
+    semantic_role: country
+    data_type: string
+    filterable: true
+  - name: key_policies
+    semantic_role: content.policy
+    data_type: array
+  - name: hot_topics
+    semantic_role: content.topic
+    data_type: array

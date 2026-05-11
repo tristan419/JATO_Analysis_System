@@ -1,0 +1,27 @@
+dataset_id: voc_forum_artifacts
+display_name: VOC Forum Artifacts
+source_lane: voc
+storage_type: artifact_json
+grain: country_source_document_content_unit
+freshness_field: fetched_at
+allowed_intents:
+  - voc_insight
+  - product_strategy
+  - pricing_strategy
+  - country_report
+governance:
+  qualitative_only: true
+  cannot_claim_market_share: true
+  require_observation_sentence: true
+fields:
+  - name: country
+    semantic_role: country
+    data_type: string
+    filterable: true
+  - name: theme_tags
+    semantic_role: voc.theme
+    data_type: array
+    filterable: true
+  - name: observation_sentence
+    semantic_role: evidence.quote
+    data_type: string

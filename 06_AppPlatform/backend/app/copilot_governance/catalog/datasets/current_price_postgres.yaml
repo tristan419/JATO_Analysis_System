@@ -1,0 +1,31 @@
+dataset_id: current_price_postgres
+display_name: CurrentPrice (PostgreSQL)
+source_lane: canonical_entity
+storage_type: postgresql
+grain: country_model_trim_powertrain
+allowed_intents:
+  - pricing_strategy
+  - product_strategy
+  - comparison
+  - precise-lookup
+  - positioning-focus
+  - positioning-analysis
+governance:
+  readonly: true
+fields:
+  - name: country
+    semantic_role: country
+    data_type: string
+    filterable: true
+  - name: model
+    semantic_role: model
+    data_type: string
+    filterable: true
+  - name: msrp_value_eur
+    semantic_role: measure.msrp_eur
+    data_type: number
+    aggregatable: true
+  - name: msrp_value_local
+    semantic_role: measure.msrp_local
+    data_type: number
+    aggregatable: true

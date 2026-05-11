@@ -337,6 +337,66 @@ export interface CountryChatMetadataResponse {
   suggestedPrompts: string[];
 }
 
+export interface CountryCopilotSourcePlanItem {
+  source_id: string;
+  source_lane: string;
+  required: boolean;
+  reason: string;
+  expected_output: string;
+  fallback_source_id?: string | null;
+  freshness_required?: boolean;
+  confidence_weight?: number;
+}
+
+export interface CountryCopilotSourcePlan {
+  question: string;
+  intent: string;
+  execution_mode: string;
+  items: CountryCopilotSourcePlanItem[];
+  answer_mode: string;
+  requires_sql_planner: boolean;
+  requires_tool_planner: boolean;
+  requires_evidence_retrieval: boolean;
+}
+
+export interface CountryCopilotEvidenceSource {
+  source_id: string;
+  source_lane: string;
+  source_name: string;
+  freshness?: string | null;
+  confidence: "high" | "medium" | "low";
+  coverage: "strong" | "partial" | "thin" | "missing";
+  limitations?: string[];
+}
+
+export interface CountryCopilotEvidencePack {
+  evidence_pack_id: string;
+  question: string;
+  country?: string | null;
+  intent: string;
+  answer_mode: string;
+  sources: CountryCopilotEvidenceSource[];
+  claims?: CountryCopilotEvidenceClaim[];
+  limitations: string[];
+  next_data_needed: string[];
+}
+
+export interface CountryCopilotEvidenceClaim {
+  claim_id: string;
+  claim: string;
+  claim_type: string;
+  supporting_source_ids: string[];
+  confidence: "high" | "medium" | "low";
+  limitations?: string[];
+}
+
+export interface CountryCopilotGovernanceTrace {
+  intent: string;
+  focusedIntents?: string[];
+  intentRoute?: string;
+  planGenerated: boolean;
+}
+
 export interface CountryChatResponse {
   country: string;
   question: string;
@@ -359,6 +419,9 @@ export interface CountryChatResponse {
   renderHints?: CountryChatRenderHint[];
   extractedParams?: Record<string, unknown> | null;
   executionPlan?: CountryChatExecutionPlan | null;
+  sourcePlan?: CountryCopilotSourcePlan | null;
+  evidencePack?: CountryCopilotEvidencePack | null;
+  governanceTrace?: CountryCopilotGovernanceTrace | null;
 }
 
 export interface CountryChatDeckResponse {

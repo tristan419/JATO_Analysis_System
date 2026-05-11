@@ -23,6 +23,9 @@ import type {
   CountryChatResponse,
   CountryChatSnapshot,
   CountryChatTurn,
+  CountryCopilotSourcePlan,
+  CountryCopilotEvidencePack,
+  CountryCopilotGovernanceTrace,
 } from "../types/countryChat";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 import {
@@ -59,6 +62,9 @@ export interface CountryChatTranscriptMessage extends CountryChatTurn {
   renderHints?: CountryChatRenderHint[];
   extractedParams?: Record<string, unknown> | null;
   executionPlan?: CountryChatExecutionPlan | null;
+  sourcePlan?: CountryCopilotSourcePlan | null;
+  evidencePack?: CountryCopilotEvidencePack | null;
+  governanceTrace?: CountryCopilotGovernanceTrace | null;
 }
 
 interface CountryChatSession {
@@ -563,6 +569,9 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
                   renderHints: response.renderHints,
                   extractedParams: response.extractedParams,
                   executionPlan: response.executionPlan,
+                  sourcePlan: response.sourcePlan,
+                  evidencePack: response.evidencePack,
+                  governanceTrace: response.governanceTrace,
                 },
               ],
             },

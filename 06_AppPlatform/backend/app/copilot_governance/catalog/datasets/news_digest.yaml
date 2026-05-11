@@ -1,0 +1,25 @@
+dataset_id: news_digest
+display_name: News Digest
+source_lane: news
+storage_type: postgresql
+grain: country_article
+freshness_field: published_at
+allowed_intents:
+  - news_intelligence
+  - market-context
+  - country_report
+  - policy_tax
+governance:
+  readonly: true
+fields:
+  - name: country
+    semantic_role: country
+    data_type: string
+    filterable: true
+  - name: title
+    semantic_role: content.title
+    data_type: string
+  - name: published_at
+    semantic_role: time.published
+    data_type: datetime
+    filterable: true
