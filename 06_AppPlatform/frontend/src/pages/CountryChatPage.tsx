@@ -462,29 +462,6 @@ export function CountryChatPage() {
               )}
             </div>
 
-            {showPromptSuggestions ? (
-              <div className={`copilot-prompt-block${isMobileAccess ? " is-mobile" : ""}`}>
-                {isMobileAccess ? (
-                  <div className="copilot-prompt-block-head">
-                    <strong>试试这样问</strong>
-                    <span>高频手机入口</span>
-                  </div>
-                ) : null}
-                <div className="copilot-suggestion-row">
-                  {visiblePromptSuggestions.map((prompt) => (
-                    <button
-                      key={prompt}
-                      type="button"
-                      className="btn btn-sm btn-secondary"
-                      onClick={() => setDraft(prompt)}
-                    >
-                      {prompt}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
             {showMobileQuickActions ? (
               <div className="copilot-mobile-quick-actions">
                 <button
@@ -564,6 +541,21 @@ export function CountryChatPage() {
               ) : null}
               <div ref={transcriptEndRef} />
             </div>
+
+            {showPromptSuggestions ? (
+              <div className={`copilot-suggestion-bar${isMobileAccess ? " is-mobile" : ""}`}>
+                {visiblePromptSuggestions.map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => setDraft(prompt)}
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            ) : null}
 
             <div className="copilot-composer">
               <label className="copilot-field copilot-field--stacked">

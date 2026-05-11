@@ -386,6 +386,24 @@ button, input, select, textarea {
   gap: 10px;
 }
 
+.copilot-suggestion-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 0 14px;
+  margin: 0 12px;
+}
+
+.copilot-suggestion-bar .btn {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 16px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 320px;
+  overflow: hidden;
+}
+
 .copilot-mobile-quick-actions {
   display: flex;
   flex-wrap: wrap;
