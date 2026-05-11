@@ -9347,11 +9347,16 @@ def _build_fallback_answer(
 
     if intent == "brand-ranking":
         ytd_brands = snapshot.get("ytdBrandRanking", [])
+        if isinstance(ytd_brands, dict):
+            ytd_brands = list(ytd_brands.values()) if ytd_brands else []
+        if not isinstance(ytd_brands, list):
+            ytd_brands = []
         if ytd_brands:
             top3 = "、".join(
                 f"{b.get('brand', '?')}({b.get('volume', 0):,}辆, "
                 f"MS{b.get('share', 0):.1f}%)"
                 for b in ytd_brands[:3]
+                if isinstance(b, dict)
             )
             return (
                 f"{intro}\n\n"
