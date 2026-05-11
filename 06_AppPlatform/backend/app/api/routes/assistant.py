@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from app.api.schemas import (
     CountryChatDeckRequest,
@@ -10,6 +11,7 @@ from app.api.schemas import (
 from app.core.security import require_min_role
 from app.services.country_chat_service import (
     answer_country_question,
+    answer_country_question_stream,
     build_country_chart_deck,
     get_country_chat_metadata,
 )
@@ -24,6 +26,27 @@ def metadata(
     _=Depends(require_min_role("viewer")),
 ) -> dict:
     return get_country_chat_metadata()
+
+
+@router.post("/chat/stream")
+def chat_stream(
+    payload: CountryChatRequest,
+    _=Depends(require_min_role("viewer")),
+):
+    return StreamingResponse(
+        answer_country_question_stream(
+            country=payload.country,
+            question=payload.question,
+            history=[turn.model_dump() for turn in payload.history],
+            chat_model=payload.model,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/chat")

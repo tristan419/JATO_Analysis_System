@@ -10,11 +10,17 @@
 - `保待办`：所有待办统一保留在原看板文档中，不分散到新文件。
 - `低耦合`：专题文档只存专题信息，主索引只做导航与状态摘要。
 
-## 2. 当前项目快照（2026-04-18）
+## 2. 当前项目快照（2026-05-11）
 
 - 阶段：`Phase 4 — Fullstack 主线`
 - 架构：FastAPI + React + TypeScript（Streamlit 看板功能已全部迁移完成）
-- 已完成：Fullstack 迁移、读取层优化、筛选下推、时间变换重构、跨层 contract 测试、Country Copilot grounded answer/direct-answer 主链路、CurrentPrice 直查 MSRP、engineering variant diff、`JatoMsrpLink + MatchOverride` 生命周期闭环、`/copilot` mobile-web 初版（chat-first / answer-first / desktop handoff）。
+- 部署：https://www.ojeur.cloud (Tencent Cloud, nginx + systemd, GitHub Actions CI/CD)
+- LLM：DeepSeek V4-Flash (deepseek-chat) — 直连 API，流式 SSE，6-section 结构化报告
+- 已完成：
+  - Fullstack 迁移、读取层优化、筛选下推、时间变换重构、跨层 contract 测试
+  - Country Copilot: snapshot → report 重构，交叉维度因果分析（drive×fuel, registration×fuel, segment×fuel），6-section 报告提示（核心发现→数据证据→因果分析→市场背景→趋势展望→进一步建议），流式 SSE 响应，Token 花费展示（RMB）
+  - CurrentPrice 直查 MSRP、engineering variant diff、`JatoMsrpLink + MatchOverride` 生命周期闭环
+  - AI News & VOC 智能管线文档（crawler 采集 + LLM 增强）
 - 进行中：**MSRP 官方价格补全系统** — Batch 1+2（7 国 209 个 source）dry-run 通过 92/209 (44.0%)；版本 reconcile 层；sales truth 接入 diff answer；review/workbench mismatch UI。
 - 搁置：全球可视化（地球项目）不再继续；Round 3 剩余项保留为待办，不继续实现。
 

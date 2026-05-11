@@ -937,6 +937,150 @@ def get_country_chat_metadata() -> dict[str, Any]:
     }
 
 
+def answer_country_question_stream(
+    country: str,
+    question: str,
+    history: list[dict[str, Any]] | None = None,
+    news_payload_override: dict[str, Any] | None = None,
+    chat_model: str | None = None,
+):
+    """Stream a DeepSeek-powered country analysis as SSE events."""
+    api_key = _deepseek_api_key()
+    if not api_key:
+        yield _sse_event("error", json.dumps({"message": "DeepSeek API key 未配置"}, ensure_ascii=False))
+        return
+
+    normalized_country = str(country).strip()
+    normalized_question = str(question).strip()
+    if not normalized_country:
+        yield _sse_event("error", json.dumps({"message": "请指定国家"}, ensure_ascii=False))
+        return
+    if not normalized_question:
+        yield _sse_event("error", json.dumps({"message": "请输入问题"}, ensure_ascii=False))
+        return
+
+    user_params = extract_user_params(normalized_question)
+    user_params = _merge_followup_user_params(user_params, history or [])
+    raw_intents = infer_country_chat_intents(normalized_question)
+    route_plan = _build_country_chat_route(
+        question=normalized_question,
+        raw_intents=raw_intents,
+        user_params=user_params,
+    )
+    focused_intents = route_plan["focusedIntents"]
+    intent_route = route_plan["intentRoute"]
+
+    try:
+        snapshot = build_country_snapshot(
+            normalized_country,
+            news_payload_override=news_payload_override,
+        )
+    except Exception:
+        snapshot = {"country": normalized_country, "crossTabs": {}}
+
+    try:
+        snapshot = _enrich_snapshot_for_intents(snapshot, focused_intents)
+    except Exception:
+        pass
+
+    model = str(chat_model or "").strip() or country_chat_models.get_default_deepseek_chat_model()
+    context = _select_context_for_intents(snapshot, focused_intents)
+    cross_tabs = snapshot.get("crossTabs", {})
+    if not isinstance(cross_tabs, dict):
+        cross_tabs = {}
+
+    execution_plan = None
+    planner_context = None
+    try:
+        execution_plan = _build_country_chat_execution_plan(
+            snapshot=snapshot,
+            country=normalized_country,
+            intent_route=intent_route,
+            focused_intents=focused_intents,
+            user_params=user_params,
+            chat_model_id=model,
+        )
+        planner_context = _prefetch_country_chat_execution_plan(execution_plan)
+    except Exception:
+        pass
+
+    request_context = {
+        "country": normalized_country,
+        "question": normalized_question,
+        "route": intent_route,
+        "intents": focused_intents,
+        "parsedParams": user_params,
+        "dashboardContext": context,
+        "crossSectionData": {
+            "driveByFuel": cross_tabs.get("driveByFuel", []),
+            "registrationByFuel": cross_tabs.get("registrationByFuel", []),
+            "driveBySegment": cross_tabs.get("driveBySegment", []),
+            "segmentByFuel": cross_tabs.get("segmentByFuel", []),
+            "fuelBySegment": cross_tabs.get("fuelBySegment", []),
+            "availableDimensions": cross_tabs.get("availableDimensions", []),
+        },
+    }
+
+    messages = [
+        {"role": "system", "content": _DEEPSEEK_STABLE_SYSTEM_PROMPT},
+        {"role": "system", "content": (
+            "crossSectionData 是交叉维度数据(百分比)，dashboardContext 是单维度。优先用交叉数据做因果分析。"
+        )},
+        {"role": "user", "content": (
+            "证据包(JSON):\n"
+            f"{_json_for_model_prompt(request_context, max_chars=CONTEXT_CHAR_BUDGET)}"
+        )},
+        *(_build_deepseek_history_messages(history or [])),
+        {"role": "user", "content": (
+            f"当前用户问题: {normalized_question}\n"
+            "请按 #核心发现 #数据证据 #因果分析 #市场背景 #趋势展望 #进一步分析建议 的6节结构生成分析报告。"
+        )},
+    ]
+
+    metadata = {
+        "country": normalized_country,
+        "intentRoute": intent_route,
+        "focusedIntents": focused_intents,
+        "provider": "deepseek",
+        "model": model,
+    }
+    yield _sse_event("meta", json.dumps(metadata, ensure_ascii=False))
+
+    full_text = ""
+    try:
+        for token in _stream_deepseek_chat_completion(
+            api_key=api_key,
+            model=model,
+            messages=messages,
+            temperature=0.25,
+            timeout_seconds=DEEPSEEK_CHAT_TIMEOUT_SECONDS,
+        ):
+            full_text += token
+            yield _sse_event("token", json.dumps({"text": token}, ensure_ascii=False))
+    except Exception as exc:
+        log.warning("DeepSeek stream failed: %s", exc)
+        if not full_text:
+            fallback = _build_fallback_answer_for_intents(
+                country=normalized_country,
+                question=normalized_question,
+                intents=focused_intents,
+                user_params=user_params,
+                intent_route=intent_route,
+            )
+            full_text = fallback.get("answer", "")
+            for token in full_text:
+                yield _sse_event("token", json.dumps({"text": token}, ensure_ascii=False))
+
+    suggestions = _parse_report_suggestions(full_text)
+    yield _sse_event("done", json.dumps({
+        "suggestedPrompts": suggestions,
+    }, ensure_ascii=False))
+
+
+def _sse_event(event: str, data: str) -> str:
+    return f"event: {event}\ndata: {data}\n\n"
+
+
 def answer_country_question(
     country: str,
     question: str,
@@ -8675,6 +8819,53 @@ def _post_deepseek_chat_completion(
             time.sleep(min(2.0, 0.5 * (attempt + 1)))
 
     raise RuntimeError("DeepSeek 返回了空响应")
+
+
+def _stream_deepseek_chat_completion(
+    *,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float,
+    timeout_seconds: int,
+):
+    request_body = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": 1400,
+        "stream": True,
+    }
+    request = Request(
+        DEEPSEEK_CHAT_COMPLETIONS_URL,
+        data=json.dumps(request_body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            for line in response:
+                line = line.decode("utf-8").strip()
+                if not line or not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                    choices = chunk.get("choices")
+                    if isinstance(choices, list) and choices:
+                        delta = choices[0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            yield content
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    continue
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise RuntimeError(f"DeepSeek 流式请求失败: {_http_error_summary(exc)}") from exc
 
 
 def _http_error_summary(exc: Exception) -> str:
