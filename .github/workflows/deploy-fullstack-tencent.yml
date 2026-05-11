@@ -198,8 +198,8 @@ jobs:
             if sudo test -f "$ENV_FILE" 2>/dev/null; then
               (sudo sed -i '/^DEEPSEEK_API_KEY=/d' "$ENV_FILE" 2>/dev/null || true)
               (echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
-              (sudo sed -i '/^DEEPSEEK_CHAT_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true)
-              (echo "DEEPSEEK_CHAT_TIMEOUT_SECONDS=15" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
+              (sudo sed -i '/^APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true)
+              (echo "APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=8" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
               if ! grep -q 'nvidia:meta/llama-3.3-70b-instruct' "$ENV_FILE" 2>/dev/null; then
                 (sudo sed -i 's/^APP_COUNTRY_CHAT_MODEL_OPTIONS=.*/APP_COUNTRY_CHAT_MODEL_OPTIONS=nvidia:meta\/llama-3.3-70b-instruct,deepseek:deepseek-chat,gemini:*/' "$ENV_FILE" 2>/dev/null || true)
               fi
@@ -304,8 +304,8 @@ jobs:
             if sudo test -f "$ENV_FILE" 2>/dev/null; then
               (sudo sed -i '/^DEEPSEEK_API_KEY=/d' "$ENV_FILE" 2>/dev/null || true)
               (echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
-              (sudo sed -i '/^DEEPSEEK_CHAT_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true)
-              (echo "DEEPSEEK_CHAT_TIMEOUT_SECONDS=15" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
+              (sudo sed -i '/^APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true)
+              (echo "APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=8" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
               if ! grep -q 'nvidia:meta/llama-3.3-70b-instruct' "$ENV_FILE" 2>/dev/null; then
                 (sudo sed -i 's/^APP_COUNTRY_CHAT_MODEL_OPTIONS=.*/APP_COUNTRY_CHAT_MODEL_OPTIONS=nvidia:meta\/llama-3.3-70b-instruct,deepseek:deepseek-chat,gemini:*/' "$ENV_FILE" 2>/dev/null || true)
               fi
