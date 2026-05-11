@@ -1,4 +1,4 @@
-name: deploy-fullstack-tencent
+name: deploy-fullstack-tencent  # auto-deploy DeepSeek config
 
 on:
   push:
