@@ -2845,6 +2845,28 @@ def build_causal_cross_tabs(
     return result
 
 
+def _safe_build_cross_tabs(
+    frame: pd.DataFrame,
+    *,
+    columns: ColumnMap,
+    selected_fuels: list[str],
+    sales_column: str,
+) -> dict[str, Any]:
+    try:
+        return _build_cross_tabs_from_frame(
+            frame,
+            columns=columns,
+            selected_fuels=selected_fuels,
+            sales_column=sales_column,
+        )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Cross-tab builder failed, returning empty", exc_info=True,
+        )
+        return {"availableDimensions": []}
+
+
 def _build_cross_tabs_from_frame(
     frame: pd.DataFrame,
     *,
@@ -3825,7 +3847,7 @@ def _query_market_scan_deck_impl(
                 ranking_limit=ranking_limit,
                 custom_range_periods=custom_periods,
             ),
-            "crossTabs": _build_cross_tabs_from_frame(
+            "crossTabs": _safe_build_cross_tabs(
                 filtered_frame,
                 columns=columns,
                 selected_fuels=selected_fuels,
