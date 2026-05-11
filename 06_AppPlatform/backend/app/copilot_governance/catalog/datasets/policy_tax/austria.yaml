@@ -1,0 +1,76 @@
+country: Austria
+country_code: AT
+currency: EUR
+last_updated: "2026-01"
+source_authority: BMF / ÖAMTC
+rules:
+  - id: at_nova
+    name: NoVA (Normverbrauchsabgabe) — CO₂ Purchase Tax
+    type: purchase_tax
+    effective_date: "2025-01-01"
+    jurisdiction: AT
+    description: >
+      NoVA is a CO₂-based registration tax. Formula:
+      (CO₂_gkm - 115) × 72 EUR for CO₂ > 115 g/km.
+      Malus surcharge: +20% for CO₂ > 160, +50% for CO₂ > 200.
+      BEVs exempt. Deduction of 350 EUR for hybrid/alternative fuel.
+    formula: "max(0, (CO₂ - 115) × 72) × malus_factor"
+    thresholds:
+      - co2_gkm: 115
+        rate_eur_per_g: 72
+        malus_factor: 1.0
+      - co2_gkm: 160
+        malus_factor: 1.2
+      - co2_gkm: 200
+        malus_factor: 1.5
+    applies_to: [ICE, HEV, MHEV]
+    exempt: [BEV, FCEV]
+    hybrid_deduction_eur: 350
+    source_url: https://bmf.gv.at
+    confidence: high
+    notes: >
+      NoVA applies at first registration in Austria.
+      Deduction for PHEV/HEV: 350 EUR.
+
+  - id: at_annual_tax
+    name: Motorbezogene Versicherungssteuer (Insurance Tax)
+    type: annual_tax
+    effective_date: "2024-01-01"
+    jurisdiction: AT
+    description: >
+      Monthly insurance tax based on engine power (kW) for ICE,
+      and CO₂ for BEV. BEV rate: 0.014 EUR/kW/month.
+      ICE rate: (kW - 24) × 0.72/month.
+    applies_to: [BEV, PHEV, ICE, HEV, MHEV]
+    unit: EUR/month
+    confidence: high
+
+  - id: at_bev_incentive
+    name: BEV Purchase Subsidy (E-Mobilitätsbonus)
+    type: subsidy
+    effective_date: "2024-01-01"
+    jurisdiction: AT
+    description: >
+      Federal BEV purchase subsidy for private buyers:
+      up to 5,400 EUR. Price cap 60,000 EUR.
+      Additional manufacturer contribution required.
+    subsidy_eur: 5400
+    max_price_eur: 60000
+    applies_to: [BEV, FCEV]
+    status: active
+    source_url: https://umweltfoerderung.at
+    confidence: high
+
+  - id: at_sachbezug_bev
+    name: Company Car BEV Benefit (Sachbezug)
+    type: tax_benefit_in_kind
+    effective_date: "2024-01-01"
+    jurisdiction: AT
+    description: >
+      BEV company cars: no Sachbezug (benefit-in-kind tax).
+      ICE/PHEV: 1.5% of MSRP/month up to 720 EUR/month.
+    applies_to: [BEV, FCEV]
+    ice_rate_pct: 1.5
+    max_monthly_eur: 720
+    source_url: https://bmf.gv.at
+    confidence: high

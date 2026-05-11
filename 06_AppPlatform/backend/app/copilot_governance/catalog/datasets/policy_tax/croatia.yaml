@@ -1,0 +1,48 @@
+country: Croatia
+country_code: HR
+currency: EUR
+last_updated: "2026-01"
+source_authority: Croatian Tax Administration / CVH
+rules:
+  - id: hr_co2_tax
+    name: CO₂-based Registration Fee
+    type: purchase_tax
+    effective_date: "2024-01-01"
+    jurisdiction: HR
+    description: >
+      Registration fee (Posebni porez na motorna vozila) based on
+      CO₂ emissions and vehicle value. BEVs exempt.
+    applies_to: [ICE, PHEV, HEV, MHEV]
+    exempt: [BEV, FCEV]
+    source_url: https://carina.gov.hr
+    confidence: medium
+
+  - id: hr_annual_tax
+    name: Annual Road Tax
+    type: annual_tax
+    effective_date: "2024-01-01"
+    jurisdiction: HR
+    description: >
+      Annual road tax based on engine power (kW) and CO₂.
+      BEVs pay reduced rate.
+    applies_to: [BEV, PHEV, ICE, HEV, MHEV]
+    unit: EUR/year
+    source_url: https://cvh.hr
+    confidence: medium
+    notes: >
+      BEV annual tax typically 100-200 EUR.
+
+  - id: hr_bev_incentive
+    name: BEV Purchase Subsidy (FZOEU)
+    type: subsidy
+    effective_date: "2024-01-01"
+    jurisdiction: HR
+    description: >
+      Environmental Protection Fund (FZOEU) subsidy for BEV purchases.
+      Up to 9,000 EUR for private buyers, price cap 50,000 EUR.
+    subsidy_eur: 9000
+    max_price_eur: 50000
+    applies_to: [BEV]
+    status: active
+    source_url: https://fzoeu.hr
+    confidence: high

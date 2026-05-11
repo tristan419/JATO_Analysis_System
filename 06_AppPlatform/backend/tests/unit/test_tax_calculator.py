@@ -156,4 +156,55 @@ class TestUnifiedDispatcher:
         assert "SE" in codes_upper
         assert "NO" in codes_upper
         assert "DE" in codes_upper
-        assert len(codes) >= 6
+        assert len(codes) >= 10
+
+
+class TestHungary:
+    def test_bev_subsidy(self):
+        est = calculate_country_taxes("HU", powertrain="BEV", vehicle_price=10_000_000)
+        assert any("补贴" in s.label for s in est.subsidies)
+
+    def test_bev_exempt_registration(self):
+        est = calculate_country_taxes("HU", powertrain="BEV")
+        assert any("exempt" in e.lower() for e in est.exemptions)
+
+
+class TestCroatia:
+    def test_bev_subsidy(self):
+        est = calculate_country_taxes("HR", powertrain="BEV", vehicle_price=40_000)
+        assert any("FZOEU" in s.label for s in est.subsidies)
+
+    def test_bev_exempt(self):
+        est = calculate_country_taxes("HR", powertrain="BEV")
+        assert any("exempt" in e.lower() for e in est.exemptions)
+
+
+class TestAustria:
+    def test_nova_for_high_co2(self):
+        est = calculate_country_taxes("AT", co2_gkm=180, powertrain="ICE")
+        assert any("NoVA" in c.label for c in est.one_time_costs)
+
+    def test_bev_subsidy(self):
+        est = calculate_country_taxes("AT", powertrain="BEV", vehicle_price=50_000)
+        assert any("Mobilität" in s.label for s in est.subsidies)
+
+    def test_sachbezug_exempt_bev(self):
+        est = calculate_country_taxes("AT", powertrain="BEV", vehicle_price=50_000, is_company_car=True)
+        assert any("Sachbezug" in e for e in est.exemptions)
+
+
+class TestCzechRepublic:
+    def test_co2_fee_bands(self):
+        est_low = calculate_country_taxes("CZ", co2_gkm=80, powertrain="ICE")
+        est_high = calculate_country_taxes("CZ", co2_gkm=160, powertrain="ICE")
+        fee_low = next(c.amount for c in est_low.one_time_costs if "登记费" in c.label)
+        fee_high = next(c.amount for c in est_high.one_time_costs if "登记费" in c.label)
+        assert fee_low < fee_high
+
+    def test_bev_subsidy(self):
+        est = calculate_country_taxes("CZ", powertrain="BEV", vehicle_price=1_000_000)
+        assert any("补贴" in s.label for s in est.subsidies)
+
+    def test_bev_exempt_annual(self):
+        est = calculate_country_taxes("CZ", powertrain="BEV")
+        assert any("exempt" in e.lower() for e in est.exemptions)

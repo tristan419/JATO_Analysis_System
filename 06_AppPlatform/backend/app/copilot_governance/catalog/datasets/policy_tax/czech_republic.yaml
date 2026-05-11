@@ -1,0 +1,72 @@
+country: Czech Republic
+country_code: CZ
+currency: CZK
+last_updated: "2026-01"
+source_authority: Ministry of Finance / SDA
+rules:
+  - id: cz_registration_fee
+    name: Registration Fee
+    type: purchase_tax
+    effective_date: "2024-01-01"
+    jurisdiction: CZ
+    description: >
+      Registration fee based on CO₂ emissions:
+      0 g/km: 0 CZK (BEV), ≤100 g/km: 3,000 CZK,
+      100-150 g/km: 5,000 CZK, >150 g/km: 10,000 CZK.
+    thresholds:
+      - co2_gkm: 0
+        fee_czk: 0
+      - co2_gkm: 100
+        fee_czk: 3000
+      - co2_gkm: 150
+        fee_czk: 5000
+      - co2_gkm: 999
+        fee_czk: 10000
+    applies_to: [BEV, PHEV, ICE, HEV, MHEV]
+    unit: CZK (one-time)
+    source_url: https://mdcr.cz
+    confidence: high
+
+  - id: cz_annual_tax
+    name: Annual Road Tax (Silniční daň)
+    type: annual_tax
+    effective_date: "2024-01-01"
+    jurisdiction: CZ
+    description: >
+      Annual road tax for business-registered vehicles.
+      BEVs exempt. ICE based on engine capacity (ccm).
+    applies_to: [ICE, PHEV, HEV, MHEV]
+    exempt: [BEV, FCEV]
+    unit: CZK/year
+    source_url: https://mdcr.cz
+    confidence: medium
+
+  - id: cz_bev_incentive
+    name: BEV Purchase Subsidy
+    type: subsidy
+    effective_date: "2024-01-01"
+    jurisdiction: CZ
+    description: >
+      Government BEV subsidy program: up to 200,000 CZK for
+      private BEV purchases. Price cap 1.5M CZK.
+      Business buyers eligible for higher amounts.
+    subsidy_czk: 200000
+    max_price_czk: 1500000
+    applies_to: [BEV, FCEV]
+    status: active
+    source_url: https://mpo.cz
+    confidence: medium
+
+  - id: cz_company_car_tax
+    name: Company Car Benefit Tax
+    type: tax_benefit_in_kind
+    effective_date: "2024-01-01"
+    jurisdiction: CZ
+    description: >
+      1% of vehicle MSRP per month as benefit-in-kind for
+      private use of company car. BEV rate: 0.5%.
+    applies_to: [BEV, PHEV, ICE, HEV, MHEV]
+    ice_rate_pct: 1.0
+    be_rate_pct: 0.5
+    source_url: https://mdcr.cz
+    confidence: medium

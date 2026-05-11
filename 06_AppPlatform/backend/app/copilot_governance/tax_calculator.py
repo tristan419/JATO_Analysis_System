@@ -437,6 +437,278 @@ def calculate_netherlands_taxes(
 
 
 # ═══════════════════════════════════════════════════════════════
+# Hungary
+# ═══════════════════════════════════════════════════════════════
+
+def calculate_hungary_taxes(
+    co2_gkm: float = 0,
+    weight_kg: float = 0,
+    vehicle_price: float = 0,
+    powertrain: str = "ICE",
+    is_company_car: bool = False,
+) -> TaxEstimate:
+    est = TaxEstimate(
+        country="Hungary", country_code="HU", currency="HUF",
+        co2_gkm=co2_gkm, weight_kg=weight_kg, vehicle_price=vehicle_price,
+        powertrain=powertrain, is_company_car=is_company_car,
+    )
+    be_bev = powertrain.upper() == "BEV"
+    be_phev = powertrain.upper() == "PHEV"
+
+    # Registration tax
+    if not be_bev and not be_phev:
+        reg_tax = max(0, co2_gkm * 950)
+        est.one_time_costs.append(CostItem(
+            label="登记税 (Regisztrációs adó)", amount=round(reg_tax), currency="HUF",
+            period="one_time", category="purchase_tax",
+            note=f"CO₂-based: ~950 HUF/g/km",
+        ))
+    else:
+        est.exemptions.append(f"{powertrain}: exempt from registration tax")
+
+    # BEV subsidy
+    if be_bev and vehicle_price <= 15_000_000:
+        est.subsidies.append(CostItem(
+            label="BEV购置补贴", amount=2_500_000, currency="HUF",
+            period="one_time", category="subsidy",
+        ))
+        est.one_time_costs.append(CostItem(
+            label="BEV补贴", amount=-2_500_000, currency="HUF",
+            period="one_time", category="subsidy",
+        ))
+
+    # Annual vehicle tax — BEV exempt
+    if be_bev:
+        est.exemptions.append("BEV: exempt from annual vehicle tax")
+    else:
+        est.annual_costs.append(CostItem(
+            label="年度车辆税 (Gépjárműadó)", amount=15_000, currency="HUF",
+            period="annual", category="annual_tax",
+            note="Based on engine power; estimate for avg car",
+        ))
+
+    # Company car tax
+    if is_company_car and not be_bev:
+        est.annual_costs.append(CostItem(
+            label="公司车税 (Cégautóadó)", amount=7_000, currency="HUF",
+            period="monthly", category="benefit_in_kind",
+        ))
+
+    est.total_one_time = sum(c.amount for c in est.one_time_costs)
+    est.total_annual = sum(c.amount for c in est.annual_costs if c.period == "annual")
+    est.total_3year = est.total_one_time + est.total_annual * 3
+    return est
+
+
+# ═══════════════════════════════════════════════════════════════
+# Croatia
+# ═══════════════════════════════════════════════════════════════
+
+def calculate_croatia_taxes(
+    co2_gkm: float = 0,
+    weight_kg: float = 0,
+    vehicle_price: float = 0,
+    powertrain: str = "ICE",
+    is_company_car: bool = False,
+) -> TaxEstimate:
+    est = TaxEstimate(
+        country="Croatia", country_code="HR", currency="EUR",
+        co2_gkm=co2_gkm, weight_kg=weight_kg, vehicle_price=vehicle_price,
+        powertrain=powertrain, is_company_car=is_company_car,
+    )
+    be_bev = powertrain.upper() == "BEV"
+
+    # CO2 registration fee
+    if not be_bev and co2_gkm > 0:
+        fee = co2_gkm * 15
+        est.one_time_costs.append(CostItem(
+            label="CO₂登记费", amount=round(fee), currency="EUR",
+            period="one_time", category="purchase_tax",
+            note=f"~15 EUR/g CO₂",
+        ))
+    else:
+        est.exemptions.append("BEV: exempt from CO₂ registration fee")
+
+    # Annual road tax
+    if be_bev:
+        est.annual_costs.append(CostItem(
+            label="年度道路税 (BEV优惠)", amount=150, currency="EUR",
+            period="annual", category="annual_tax",
+        ))
+    else:
+        est.annual_costs.append(CostItem(
+            label="年度道路税", amount=300, currency="EUR",
+            period="annual", category="annual_tax",
+        ))
+
+    # BEV subsidy (FZOEU)
+    if be_bev and vehicle_price <= 50_000:
+        est.subsidies.append(CostItem(
+            label="FZOEU BEV补贴", amount=9_000, currency="EUR",
+            period="one_time", category="subsidy",
+        ))
+        est.one_time_costs.append(CostItem(
+            label="FZOEU补贴", amount=-9_000, currency="EUR",
+            period="one_time", category="subsidy",
+        ))
+
+    est.total_one_time = sum(c.amount for c in est.one_time_costs)
+    est.total_annual = sum(c.amount for c in est.annual_costs)
+    est.total_3year = est.total_one_time + est.total_annual * 3
+    return est
+
+
+# ═══════════════════════════════════════════════════════════════
+# Austria
+# ═══════════════════════════════════════════════════════════════
+
+def calculate_austria_taxes(
+    co2_gkm: float = 0,
+    weight_kg: float = 0,
+    vehicle_price: float = 0,
+    powertrain: str = "ICE",
+    is_company_car: bool = False,
+) -> TaxEstimate:
+    est = TaxEstimate(
+        country="Austria", country_code="AT", currency="EUR",
+        co2_gkm=co2_gkm, weight_kg=weight_kg, vehicle_price=vehicle_price,
+        powertrain=powertrain, is_company_car=is_company_car,
+    )
+    be_bev = powertrain.upper() == "BEV"
+    is_hybrid = powertrain.upper() in ("PHEV", "HEV", "MHEV")
+
+    # NoVA purchase tax
+    if not be_bev and co2_gkm > 115:
+        excess = co2_gkm - 115
+        nova = excess * 72
+        if co2_gkm > 200:
+            nova *= 1.5
+        elif co2_gkm > 160:
+            nova *= 1.2
+        if is_hybrid:
+            nova = max(0, nova - 350)
+        est.one_time_costs.append(CostItem(
+            label="NoVA CO₂购置税", amount=round(nova), currency="EUR",
+            period="one_time", category="purchase_tax",
+            note=f"(CO₂ {co2_gkm:.0f} - 115) × 72 EUR × malus",
+        ))
+    elif be_bev:
+        est.exemptions.append("BEV: exempt from NoVA")
+
+    # BEV subsidy
+    if be_bev and vehicle_price <= 60_000:
+        est.subsidies.append(CostItem(
+            label="E-Mobilitätsbonus BEV补贴", amount=5_400, currency="EUR",
+            period="one_time", category="subsidy",
+        ))
+        est.one_time_costs.append(CostItem(
+            label="BEV补贴", amount=-5_400, currency="EUR",
+            period="one_time", category="subsidy",
+        ))
+
+    # Insurance tax (monthly)
+    if be_bev:
+        monthly = weight_kg * 0.014
+        est.annual_costs.append(CostItem(
+            label="保险税 (motorbezogene)", amount=round(monthly * 12), currency="EUR",
+            period="annual", category="annual_tax",
+            note=f"BEV rate: 0.014 EUR/kg/month",
+        ))
+    else:
+        est.annual_costs.append(CostItem(
+            label="保险税 (motorbezogene, ICE)", amount=200, currency="EUR",
+            period="annual", category="annual_tax",
+            note="Based on kW; estimate",
+        ))
+
+    # Sachbezug (company car)
+    if is_company_car:
+        if be_bev:
+            est.exemptions.append("BEV: exempt from Sachbezug")
+        else:
+            monthly = min(vehicle_price * 0.015, 720)
+            est.annual_costs.append(CostItem(
+                label="Sachbezug公司车税", amount=round(monthly * 12), currency="EUR",
+                period="annual", category="benefit_in_kind",
+                note=f"1.5%/month of MSRP, max 720 EUR/month",
+            ))
+
+    est.total_one_time = sum(c.amount for c in est.one_time_costs)
+    est.total_annual = sum(c.amount for c in est.annual_costs)
+    est.total_3year = est.total_one_time + est.total_annual * 3
+    return est
+
+
+# ═══════════════════════════════════════════════════════════════
+# Czech Republic
+# ═══════════════════════════════════════════════════════════════
+
+def calculate_czech_republic_taxes(
+    co2_gkm: float = 0,
+    weight_kg: float = 0,
+    vehicle_price: float = 0,
+    powertrain: str = "ICE",
+    is_company_car: bool = False,
+) -> TaxEstimate:
+    est = TaxEstimate(
+        country="Czech Republic", country_code="CZ", currency="CZK",
+        co2_gkm=co2_gkm, weight_kg=weight_kg, vehicle_price=vehicle_price,
+        powertrain=powertrain, is_company_car=is_company_car,
+    )
+    be_bev = powertrain.upper() == "BEV"
+
+    # Registration fee (CO2 bands)
+    if co2_gkm <= 0:
+        fee = 0
+    elif co2_gkm <= 100:
+        fee = 3_000
+    elif co2_gkm <= 150:
+        fee = 5_000
+    else:
+        fee = 10_000
+    est.one_time_costs.append(CostItem(
+        label="登记费", amount=fee, currency="CZK",
+        period="one_time", category="purchase_tax",
+        note=f"CO₂ {co2_gkm:.0f} g/km band",
+    ))
+
+    # Annual road tax — BEV exempt
+    if be_bev:
+        est.exemptions.append("BEV: exempt from annual road tax")
+    else:
+        est.annual_costs.append(CostItem(
+            label="年度道路税 (Silniční daň)", amount=3_000, currency="CZK",
+            period="annual", category="annual_tax",
+        ))
+
+    # BEV subsidy
+    if be_bev and vehicle_price <= 1_500_000:
+        est.subsidies.append(CostItem(
+            label="BEV购置补贴", amount=200_000, currency="CZK",
+            period="one_time", category="subsidy",
+        ))
+        est.one_time_costs.append(CostItem(
+            label="BEV补贴", amount=-200_000, currency="CZK",
+            period="one_time", category="subsidy",
+        ))
+
+    # Company car benefit
+    if is_company_car and vehicle_price > 0:
+        rate = 0.005 if be_bev else 0.01
+        monthly = vehicle_price * rate
+        est.annual_costs.append(CostItem(
+            label="公司车福利税", amount=round(monthly * 12), currency="CZK",
+            period="annual", category="benefit_in_kind",
+            note=f"{rate*100:.1f}%/month of MSRP",
+        ))
+
+    est.total_one_time = sum(c.amount for c in est.one_time_costs)
+    est.total_annual = sum(c.amount for c in est.annual_costs)
+    est.total_3year = est.total_one_time + est.total_annual * 3
+    return est
+
+
+# ═══════════════════════════════════════════════════════════════
 # Unified dispatcher
 # ═══════════════════════════════════════════════════════════════
 
@@ -453,6 +725,15 @@ _CALCULATORS: dict[str, object] = {
     "de": calculate_germany_taxes,
     "netherlands": calculate_netherlands_taxes,
     "nl": calculate_netherlands_taxes,
+    "hungary": calculate_hungary_taxes,
+    "hu": calculate_hungary_taxes,
+    "croatia": calculate_croatia_taxes,
+    "hr": calculate_croatia_taxes,
+    "austria": calculate_austria_taxes,
+    "at": calculate_austria_taxes,
+    "czech republic": calculate_czech_republic_taxes,
+    "czechia": calculate_czech_republic_taxes,
+    "cz": calculate_czech_republic_taxes,
 }
 
 

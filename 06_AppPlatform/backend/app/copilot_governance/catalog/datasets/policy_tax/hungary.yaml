@@ -1,0 +1,60 @@
+country: Hungary
+country_code: HU
+currency: HUF
+last_updated: "2026-01"
+source_authority: NAV / NÉBIH
+rules:
+  - id: hu_registration_tax
+    name: Registration Tax (Regisztrációs adó)
+    type: purchase_tax
+    effective_date: "2024-01-01"
+    jurisdiction: HU
+    description: >
+      CO₂ and environmental class-based registration tax.
+      BEVs and PHEVs with ≤50 g/km exempt. ICE vehicles pay
+      based on CO₂ (HUF/unit) and environmental classification.
+    applies_to: [ICE, HEV, MHEV]
+    exempt: [BEV, PHEV]
+    source_url: https://nav.gov.hu
+    confidence: medium
+
+  - id: hu_annual_vehicle_tax
+    name: Annual Vehicle Tax (Gépjárműadó)
+    type: annual_tax
+    effective_date: "2024-01-01"
+    jurisdiction: HU
+    description: >
+      Annual tax based on vehicle age and engine power (kW).
+      BEVs exempt. Older vehicles pay reduced rates.
+    applies_to: [ICE, PHEV, HEV, MHEV]
+    exempt: [BEV, FCEV]
+    unit: HUF/year
+    source_url: https://nav.gov.hu
+    confidence: high
+
+  - id: hu_bev_incentive
+    name: BEV Purchase Subsidy
+    type: subsidy
+    effective_date: "2024-01-01"
+    jurisdiction: HU
+    description: >
+      Government BEV purchase subsidy program. Up to 2.5M HUF
+      for BEVs with price ≤15M HUF. Budget limited.
+    subsidy_huf: 2500000
+    max_price_huf: 15000000
+    applies_to: [BEV]
+    status: active
+    confidence: medium
+
+  - id: hu_company_car_tax
+    name: Company Car Tax (Cégautóadó)
+    type: tax_benefit_in_kind
+    effective_date: "2024-01-01"
+    jurisdiction: HU
+    description: >
+      Monthly company car tax based on vehicle value and
+      environmental class. BEVs exempt.
+    applies_to: [ICE, PHEV, HEV, MHEV]
+    exempt: [BEV]
+    source_url: https://nav.gov.hu
+    confidence: medium
