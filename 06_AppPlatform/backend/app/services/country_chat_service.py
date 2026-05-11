@@ -71,8 +71,8 @@ DEEPSEEK_CHAT_COMPLETIONS_URL = os.getenv(
     "https://api.deepseek.com/chat/completions",
 ).strip() or "https://api.deepseek.com/chat/completions"
 DEEPSEEK_CHAT_TIMEOUT_SECONDS = max(
-    3,
-    int(os.getenv("APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS", "8").strip() or "8"),
+    5,
+    int(os.getenv("APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS", "60").strip() or "60"),
 )
 DEEPSEEK_FAST_ANSWER_TIMEOUT_SECONDS = max(
     4,
