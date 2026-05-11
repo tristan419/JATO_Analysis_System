@@ -173,6 +173,7 @@ jobs:
           REMOTE_EXPORTS="export DEPLOY_SERVER_NAME=$(printf '%q' "$DEPLOY_SERVER_NAME"); "
           REMOTE_EXPORTS+="export DEPLOY_ENABLE_HTTPS=$(printf '%q' "$DEPLOY_ENABLE_HTTPS"); "
           REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
+          REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
 
           ssh -v -p "$SSH_PORT" \
             -o BatchMode=yes \
@@ -184,11 +185,27 @@ jobs:
           set -euo pipefail
 
           REPO_DIR="/opt/JATO_Analysis_System-main"
+          ENV_FILE="/etc/jato-fullstack/backend.env"
 
           sudo mkdir -p "$REPO_DIR"
           sudo chown -R "$USER":"$USER" "$REPO_DIR"
           sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR"
           rm -f /tmp/JATO_deploy.tar.gz
+
+          if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
+            sudo mkdir -p "$(dirname "$ENV_FILE")"
+            if sudo test -f "$ENV_FILE"; then
+              sudo sed -i '/^DEEPSEEK_API_KEY=/d' "$ENV_FILE"
+              echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee -a "$ENV_FILE" > /dev/null
+              if ! grep -q 'deepseek:deepseek-chat' "$ENV_FILE" 2>/dev/null; then
+                sudo sed -i 's/^APP_COUNTRY_CHAT_MODEL_OPTIONS=.*/APP_COUNTRY_CHAT_MODEL_OPTIONS=deepseek:deepseek-chat,nvidia:*,gemini:*/' "$ENV_FILE"
+              fi
+            else
+              echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee "$ENV_FILE" > /dev/null
+              echo "APP_COUNTRY_CHAT_MODEL_OPTIONS=deepseek:deepseek-chat,nvidia:*,gemini:*" | sudo tee -a "$ENV_FILE" > /dev/null
+            fi
+            echo "[INFO] DeepSeek API key configured"
+          fi
 
           cd "$REPO_DIR"
           export REPO_DIR SKIP_GIT_SYNC=true
@@ -257,6 +274,7 @@ jobs:
           REMOTE_EXPORTS="export DEPLOY_SERVER_NAME=$(printf '%q' "$DEPLOY_SERVER_NAME"); "
           REMOTE_EXPORTS+="export DEPLOY_ENABLE_HTTPS=$(printf '%q' "$DEPLOY_ENABLE_HTTPS"); "
           REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
+          REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
 
           sshpass -p "$SSH_PASSWORD" \
             ssh -v -p "$SSH_PORT" \
@@ -269,11 +287,27 @@ jobs:
           set -euo pipefail
 
           REPO_DIR="/opt/JATO_Analysis_System-main"
+          ENV_FILE="/etc/jato-fullstack/backend.env"
 
           sudo mkdir -p "$REPO_DIR"
           sudo chown -R "$USER":"$USER" "$REPO_DIR"
           sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR"
           rm -f /tmp/JATO_deploy.tar.gz
+
+          if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
+            sudo mkdir -p "$(dirname "$ENV_FILE")"
+            if sudo test -f "$ENV_FILE"; then
+              sudo sed -i '/^DEEPSEEK_API_KEY=/d' "$ENV_FILE"
+              echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee -a "$ENV_FILE" > /dev/null
+              if ! grep -q 'deepseek:deepseek-chat' "$ENV_FILE" 2>/dev/null; then
+                sudo sed -i 's/^APP_COUNTRY_CHAT_MODEL_OPTIONS=.*/APP_COUNTRY_CHAT_MODEL_OPTIONS=deepseek:deepseek-chat,nvidia:*,gemini:*/' "$ENV_FILE"
+              fi
+            else
+              echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee "$ENV_FILE" > /dev/null
+              echo "APP_COUNTRY_CHAT_MODEL_OPTIONS=deepseek:deepseek-chat,nvidia:*,gemini:*" | sudo tee -a "$ENV_FILE" > /dev/null
+            fi
+            echo "[INFO] DeepSeek API key configured"
+          fi
 
           cd "$REPO_DIR"
           export REPO_DIR SKIP_GIT_SYNC=true
