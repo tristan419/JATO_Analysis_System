@@ -1,4 +1,4 @@
-name: deploy-fullstack-tencent  # auto-deploy DeepSeek config
+name: deploy-fullstack-tencent  # auto-deploy DeepSeek + NVIDIA-first
 
 on:
   push:
@@ -193,20 +193,22 @@ jobs:
           rm -f /tmp/JATO_deploy.tar.gz
 
           if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
-            sudo mkdir -p "$(dirname "$ENV_FILE")"
-            if sudo test -f "$ENV_FILE"; then
-              sudo sed -i '/^DEEPSEEK_API_KEY=/d' "$ENV_FILE"
-              echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee -a "$ENV_FILE" > /dev/null
-              sudo sed -i '/^DEEPSEEK_CHAT_TIMEOUT_SECONDS=/d' "$ENV_FILE"
-              echo "DEEPSEEK_CHAT_TIMEOUT_SECONDS=90" | sudo tee -a "$ENV_FILE" > /dev/null
-              if ! grep -q 'deepseek:deepseek-chat' "$ENV_FILE" 2>/dev/null; then
-                sudo sed -i 's/^APP_COUNTRY_CHAT_MODEL_OPTIONS=.*/APP_COUNTRY_CHAT_MODEL_OPTIONS=deepseek:deepseek-chat,nvidia:*,gemini:*/' "$ENV_FILE"
+            echo "[INFO] Configuring DeepSeek in backend env..."
+            (sudo mkdir -p "$(dirname "$ENV_FILE")" 2>/dev/null || true)
+            if sudo test -f "$ENV_FILE" 2>/dev/null; then
+              (sudo sed -i '/^DEEPSEEK_API_KEY=/d' "$ENV_FILE" 2>/dev/null || true)
+              (echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
+              (sudo sed -i '/^DEEPSEEK_CHAT_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true)
+              (echo "DEEPSEEK_CHAT_TIMEOUT_SECONDS=15" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
+              if ! grep -q 'nvidia:meta/llama-3.3-70b-instruct' "$ENV_FILE" 2>/dev/null; then
+                (sudo sed -i 's/^APP_COUNTRY_CHAT_MODEL_OPTIONS=.*/APP_COUNTRY_CHAT_MODEL_OPTIONS=nvidia:meta\/llama-3.3-70b-instruct,deepseek:deepseek-chat,gemini:*/' "$ENV_FILE" 2>/dev/null || true)
               fi
+              echo "[INFO] DeepSeek config updated in existing env file"
             else
-              echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee "$ENV_FILE" > /dev/null
-              echo "APP_COUNTRY_CHAT_MODEL_OPTIONS=deepseek:deepseek-chat,nvidia:*,gemini:*" | sudo tee -a "$ENV_FILE" > /dev/null
+              (echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee "$ENV_FILE" > /dev/null 2>&1 || true)
+              (echo "APP_COUNTRY_CHAT_MODEL_OPTIONS=nvidia:meta/llama-3.3-70b-instruct,deepseek:deepseek-chat,gemini:*" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
+              echo "[INFO] DeepSeek env file created"
             fi
-            echo "[INFO] DeepSeek API key configured"
           fi
 
           cd "$REPO_DIR"
@@ -297,20 +299,22 @@ jobs:
           rm -f /tmp/JATO_deploy.tar.gz
 
           if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
-            sudo mkdir -p "$(dirname "$ENV_FILE")"
-            if sudo test -f "$ENV_FILE"; then
-              sudo sed -i '/^DEEPSEEK_API_KEY=/d' "$ENV_FILE"
-              echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee -a "$ENV_FILE" > /dev/null
-              sudo sed -i '/^DEEPSEEK_CHAT_TIMEOUT_SECONDS=/d' "$ENV_FILE"
-              echo "DEEPSEEK_CHAT_TIMEOUT_SECONDS=90" | sudo tee -a "$ENV_FILE" > /dev/null
-              if ! grep -q 'deepseek:deepseek-chat' "$ENV_FILE" 2>/dev/null; then
-                sudo sed -i 's/^APP_COUNTRY_CHAT_MODEL_OPTIONS=.*/APP_COUNTRY_CHAT_MODEL_OPTIONS=deepseek:deepseek-chat,nvidia:*,gemini:*/' "$ENV_FILE"
+            echo "[INFO] Configuring DeepSeek in backend env..."
+            (sudo mkdir -p "$(dirname "$ENV_FILE")" 2>/dev/null || true)
+            if sudo test -f "$ENV_FILE" 2>/dev/null; then
+              (sudo sed -i '/^DEEPSEEK_API_KEY=/d' "$ENV_FILE" 2>/dev/null || true)
+              (echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
+              (sudo sed -i '/^DEEPSEEK_CHAT_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true)
+              (echo "DEEPSEEK_CHAT_TIMEOUT_SECONDS=15" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
+              if ! grep -q 'nvidia:meta/llama-3.3-70b-instruct' "$ENV_FILE" 2>/dev/null; then
+                (sudo sed -i 's/^APP_COUNTRY_CHAT_MODEL_OPTIONS=.*/APP_COUNTRY_CHAT_MODEL_OPTIONS=nvidia:meta\/llama-3.3-70b-instruct,deepseek:deepseek-chat,gemini:*/' "$ENV_FILE" 2>/dev/null || true)
               fi
+              echo "[INFO] DeepSeek config updated in existing env file"
             else
-              echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee "$ENV_FILE" > /dev/null
-              echo "APP_COUNTRY_CHAT_MODEL_OPTIONS=deepseek:deepseek-chat,nvidia:*,gemini:*" | sudo tee -a "$ENV_FILE" > /dev/null
+              (echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" | sudo tee "$ENV_FILE" > /dev/null 2>&1 || true)
+              (echo "APP_COUNTRY_CHAT_MODEL_OPTIONS=nvidia:meta/llama-3.3-70b-instruct,deepseek:deepseek-chat,gemini:*" | sudo tee -a "$ENV_FILE" > /dev/null 2>&1 || true)
+              echo "[INFO] DeepSeek env file created"
             fi
-            echo "[INFO] DeepSeek API key configured"
           fi
 
           cd "$REPO_DIR"
