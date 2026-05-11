@@ -1,4 +1,8 @@
-"""Per-country tax calculators — CO2 tax, weight tax, purchase tax, subsidies."""
+"""Per-country tax calculators — CO2 tax, weight tax, purchase tax, subsidies.
+
+All monetary values are in local currency. The MSRP module handles EUR
+conversion via fx_rate_to_eur on CurrentPrice / PriceHistory.
+"""
 
 from __future__ import annotations
 
