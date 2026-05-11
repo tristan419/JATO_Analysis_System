@@ -1922,17 +1922,6 @@ def build_country_snapshot(
         _inject_deck_panels(snapshot, deck)
     except Exception:  # noqa: BLE001
         log.warning("Market Scan deck unavailable for %s, skipping", country)
-
-    # ---------- Enrich with causal cross-tabs ----------
-    try:
-        cross_tabs = market_scan_service.build_causal_cross_tabs(
-            country=country,
-            target_period=None,
-            fuel_types=list(market_scan_service.DEFAULT_FUEL_TYPES),
-        )
-        snapshot["crossTabs"] = cross_tabs
-    except Exception:  # noqa: BLE001
-        log.warning("Causal cross-tabs unavailable for %s, skipping", country)
         snapshot["crossTabs"] = {}
 
     return snapshot
@@ -2196,6 +2185,9 @@ def _inject_deck_panels(
         "ytdFuelTrend": suv_b.get("ytdFuelTrend", []),
         "fuelPanels": suv_b.get("fuelPanels", []),
     }
+
+    cross_tabs = results.get("crossTabs")
+    snapshot["crossTabs"] = cross_tabs if isinstance(cross_tabs, dict) else {}
 
 
 def _normalize_segment_token(value: Any) -> str:

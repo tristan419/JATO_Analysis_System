@@ -2845,6 +2845,66 @@ def build_causal_cross_tabs(
     return result
 
 
+def _build_cross_tabs_from_frame(
+    frame: pd.DataFrame,
+    *,
+    columns: ColumnMap,
+    selected_fuels: list[str],
+    sales_column: str,
+) -> dict[str, Any]:
+    working = frame.copy()
+    working["__sales"] = pd.to_numeric(working[sales_column], errors="coerce").fillna(0.0)
+    working = working[working["__sales"] > 0]
+    available_dimensions: list[str] = []
+    result: dict[str, Any] = {"availableDimensions": available_dimensions}
+
+    has_drive = bool(columns.drive_type and columns.drive_type in working.columns)
+    has_reg = bool(columns.registration_type and columns.registration_type in working.columns)
+    has_origin = bool(columns.origin and columns.origin in working.columns)
+
+    if has_drive:
+        available_dimensions.append("drive_type")
+        result["driveByFuel"] = _build_cross_tab_pct(
+            working, index_col="__powertrain", column_col="__drive_type",
+            column_values=["4WD", "2WD", "OTHER"], top_n=8,
+        )
+        result["driveBySegment"] = _build_cross_tab_pct(
+            working, index_col="__segment_raw", column_col="__drive_type",
+            column_values=["4WD", "2WD", "OTHER"], top_n=10,
+        )
+
+    if has_reg:
+        available_dimensions.append("registration_type")
+        result["registrationByFuel"] = _build_cross_tab_pct(
+            working, index_col="__powertrain", column_col="__registration_type",
+            column_values=["Business", "Private", "Other"], top_n=8,
+        )
+        result["registrationBySegment"] = _build_cross_tab_pct(
+            working, index_col="__segment_raw", column_col="__registration_type",
+            column_values=["Business", "Private", "Other"], top_n=10,
+        )
+
+    result["segmentByFuel"] = _build_cross_tab_pct(
+        working, index_col="__segment_raw", column_col="__powertrain", top_n=10,
+    )
+    result["fuelBySegment"] = _build_cross_tab_pct(
+        working, index_col="__powertrain", column_col="__segment_raw", top_n=8,
+    )
+
+    if has_origin and has_drive:
+        result["driveByOrigin"] = _build_cross_tab_pct(
+            working, index_col="__origin", column_col="__drive_type",
+            column_values=["4WD", "2WD", "OTHER"], top_n=6,
+        )
+    if has_origin and has_reg:
+        result["registrationByOrigin"] = _build_cross_tab_pct(
+            working, index_col="__origin", column_col="__registration_type",
+            column_values=["Business", "Private", "Other"], top_n=6,
+        )
+
+    return result
+
+
 def _build_ytd_fuel_trend(
     frame: pd.DataFrame,
     fuel_order: list[str],
@@ -3764,6 +3824,12 @@ def _query_market_scan_deck_impl(
                 fuel_panels=DRILLDOWN_PANEL_FUELS,
                 ranking_limit=ranking_limit,
                 custom_range_periods=custom_periods,
+            ),
+            "crossTabs": _build_cross_tabs_from_frame(
+                filtered_frame,
+                columns=columns,
+                selected_fuels=selected_fuels,
+                sales_column=_period_to_month_column(resolved_period),
             ),
         },
     }
