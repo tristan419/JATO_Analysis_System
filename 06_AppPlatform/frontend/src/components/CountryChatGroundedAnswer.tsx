@@ -1,10 +1,66 @@
 import type { ReactNode } from "react";
 
 import type { CountryChatTranscriptMessage } from "../contexts/CountryChatContext";
+import type { CountryChatModelUsage } from "../types/countryChat";
 import {
   buildCountryChatAnswerPath,
   buildCountryChatAnswerSections,
 } from "../contexts/countryChatHelpers";
+
+const DEEPSEEK_INPUT_PRICE_PER_1M = 1.0;
+const DEEPSEEK_CACHE_HIT_PRICE_PER_1M = 0.2;
+const DEEPSEEK_OUTPUT_PRICE_PER_1M = 2.0;
+
+function calcTokenCostRMB(usage: CountryChatModelUsage): {
+  inputCost: number;
+  cacheHitCost: number;
+  outputCost: number;
+  totalCost: number;
+} {
+  const cacheHit = usage.promptCacheHitTokens ?? 0;
+  const cacheMiss = (usage.promptTokens ?? 0) - cacheHit;
+  const inputCost = (cacheMiss / 1_000_000) * DEEPSEEK_INPUT_PRICE_PER_1M;
+  const cacheHitCost = (cacheHit / 1_000_000) * DEEPSEEK_CACHE_HIT_PRICE_PER_1M;
+  const outputCost = ((usage.completionTokens ?? 0) / 1_000_000) * DEEPSEEK_OUTPUT_PRICE_PER_1M;
+  return {
+    inputCost,
+    cacheHitCost,
+    outputCost,
+    totalCost: inputCost + cacheHitCost + outputCost,
+  };
+}
+
+function TokenCostSummary({ usage }: { usage: CountryChatModelUsage }) {
+  const cost = calcTokenCostRMB(usage);
+  return (
+    <span className="copilot-answer-section-kicker" style={{ marginLeft: 8 }}>
+      {usage.totalTokens?.toLocaleString()} tokens · ¥{cost.totalCost.toFixed(4)}
+    </span>
+  );
+}
+
+function TokenCostDetail({ usage }: { usage: CountryChatModelUsage }) {
+  const cost = calcTokenCostRMB(usage);
+  const cacheHit = usage.promptCacheHitTokens ?? 0;
+  const cacheMiss = (usage.promptTokens ?? 0) - cacheHit;
+  return (
+    <div style={{ padding: "6px 0", fontSize: 12, color: "#64748b", lineHeight: 1.8 }}>
+      <div>
+        Prompt: {usage.promptTokens?.toLocaleString() ?? 0} tokens
+        {cacheHit > 0 ? ` (cache hit ${cacheHit.toLocaleString()})` : ""}
+        <span style={{ marginLeft: 8 }}>¥{cost.inputCost.toFixed(4)}</span>
+        {cost.cacheHitCost > 0 ? <span style={{ marginLeft: 4 }}>+ cache ¥{cost.cacheHitCost.toFixed(4)}</span> : null}
+      </div>
+      <div>
+        Completion: {usage.completionTokens?.toLocaleString() ?? 0} tokens
+        <span style={{ marginLeft: 8 }}>¥{cost.outputCost.toFixed(4)}</span>
+      </div>
+      <div style={{ fontWeight: 600, color: "#334155", marginTop: 2 }}>
+        合计: {usage.totalTokens?.toLocaleString() ?? 0} tokens · ¥{cost.totalCost.toFixed(4)}
+      </div>
+    </div>
+  );
+}
 
 function formatFreshness(value: string | null | undefined): string {
   const text = String(value ?? "").trim();
@@ -378,6 +434,16 @@ export function CountryChatGroundedAnswer({
             ))}
           </div>
         </div>
+      ) : null}
+
+      {message.contextSnapshot?.analysisMeta?.modelUsage ? (
+        <details className="copilot-answer-section is-collapsible">
+          <summary className="copilot-answer-section-head">
+            <strong>Token 花费</strong>
+            <TokenCostSummary usage={message.contextSnapshot.analysisMeta.modelUsage} />
+          </summary>
+          <TokenCostDetail usage={message.contextSnapshot.analysisMeta.modelUsage} />
+        </details>
       ) : null}
 
       {layers.length > 0 ? (

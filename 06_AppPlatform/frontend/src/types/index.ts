@@ -157,6 +157,14 @@ export interface CountryChatNewsRefreshResponse {
   status: CountryChatNewsOpsStatus;
 }
 
+export interface CountryChatModelUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  promptCacheHitTokens?: number;
+  promptCacheMissTokens?: number;
+}
+
 export interface CountryChatAnalysisMeta {
   availableYears?: Array<number | string>;
   selectedYear?: number | null;
@@ -166,6 +174,7 @@ export interface CountryChatAnalysisMeta {
   availableModels?: string[];
   selectedModel?: string | null;
   modelTopN?: number;
+  modelUsage?: CountryChatModelUsage;
 }
 
 export interface CountryChatRenderHint {
