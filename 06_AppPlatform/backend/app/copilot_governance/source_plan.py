@@ -97,7 +97,7 @@ def plan_sources(intent: str, question: str = "") -> SourcePlan:
             ("country_profiles", "policy_tax", "Policy context."),
         ],
         "policy_tax": [
-            ("country_profiles", "policy_tax", "Policy and tax rules."),
+            ("country_profiles", "policy_tax", "Structured tax and subsidy rules."),
         ],
         "voc_insight": [
             ("voc_forum_artifacts", "voc", "Customer feedback evidence."),

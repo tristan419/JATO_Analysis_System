@@ -130,3 +130,45 @@ cases:
     expected_sources:
       - news_digest
       - country_profiles
+
+  - id: se_malus_tax
+    question: "瑞典 malus 碳税怎么算？120g CO2 要交多少？"
+    country: "瑞典"
+    expected_intent: "policy_tax"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - country_profiles
+
+  - id: at_nova_tax
+    question: "奥地利 NoVA 购置税 180g 要交多少？"
+    country: "奥地利"
+    expected_intent: "policy_tax"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - country_profiles
+
+  - id: no_vat_bev
+    question: "挪威 BEV 增值税豁免政策还有吗？"
+    country: "挪威"
+    expected_intent: "policy_tax"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - country_profiles
+
+  - id: hu_bev_subsidy
+    question: "匈牙利 BEV 补贴多少钱？"
+    country: "匈牙利"
+    expected_intent: "policy_tax"
+    expected_execution_mode: "hybrid"
+    expected_sources:
+      - country_profiles
+    optional_sources:
+      - current_price_postgres
+
+  - id: nl_bijtelling
+    question: "荷兰 bijtelling BEV 公司车税率多少？"
+    country: "荷兰"
+    expected_intent: "policy_tax"
+    expected_execution_mode: "evidence_only"
+    expected_sources:
+      - country_profiles

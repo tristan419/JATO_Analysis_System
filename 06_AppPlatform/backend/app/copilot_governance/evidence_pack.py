@@ -49,6 +49,7 @@ def build_evidence_pack_from_snapshot(
     question: str = "",
     intent: str = "",
     country: str | None = None,
+    extra: dict | None = None,
 ) -> EvidencePack:
     sources: list[EvidenceSource] = []
     cross_tabs = snapshot.get("crossTabs", {})
@@ -95,6 +96,10 @@ def build_evidence_pack_from_snapshot(
     if not snapshot.get("newsDigest"):
         limitations.append("当前无新闻证据。")
 
+    tax_estimate = None
+    if extra and extra.get("tax_estimate"):
+        tax_estimate = extra["tax_estimate"]
+
     return EvidencePack(
         evidence_pack_id="",
         question=question,
@@ -102,4 +107,8 @@ def build_evidence_pack_from_snapshot(
         intent=intent,
         sources=sources,
         limitations=limitations,
+        **({"tables": [{"title": "税负估算", "columns": ["项目", "金额", "周期"], "rows": [
+            [c.label, str(c.amount), c.period]
+            for c in (tax_estimate.one_time_costs + tax_estimate.annual_costs)
+        ]}]} if tax_estimate else {}),
     )
