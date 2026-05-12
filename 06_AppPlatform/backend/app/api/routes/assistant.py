@@ -36,6 +36,7 @@ async def chat_stream(
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
 
+    loop = asyncio.get_running_loop()
     queue: asyncio.Queue[str | None] = asyncio.Queue()
 
     def _run_blocking() -> None:
@@ -46,22 +47,21 @@ async def chat_stream(
                 history=[turn.model_dump() for turn in payload.history],
                 chat_model=payload.model,
             ):
-                queue.put_nowait(chunk)
+                loop.call_soon_threadsafe(queue.put_nowait, chunk)
         except Exception:
             pass
         finally:
-            queue.put_nowait(None)
+            loop.call_soon_threadsafe(queue.put_nowait, None)
 
     executor = ThreadPoolExecutor(max_workers=1)
     executor.submit(_run_blocking)
 
-    async def _drain() -> None:
+    async def _drain():
         while True:
             chunk = await queue.get()
             if chunk is None:
                 break
-            yield chunk
-            await asyncio.sleep(0)
+            yield chunk.encode("utf-8") if isinstance(chunk, str) else chunk
 
     return StreamingResponse(
         _drain(),
