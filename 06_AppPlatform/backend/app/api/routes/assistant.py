@@ -29,17 +29,41 @@ def metadata(
 
 
 @router.post("/chat/stream")
-def chat_stream(
+async def chat_stream(
     payload: CountryChatRequest,
     _=Depends(require_min_role("viewer")),
 ):
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    def _run_blocking() -> None:
+        try:
+            for chunk in answer_country_question_stream(
+                country=payload.country,
+                question=payload.question,
+                history=[turn.model_dump() for turn in payload.history],
+                chat_model=payload.model,
+            ):
+                loop.call_soon_threadsafe(lambda c=chunk: queue.put_nowait(c))
+        except Exception:
+            pass
+        finally:
+            loop.call_soon_threadsafe(lambda: queue.put_nowait(None))
+
+    ThreadPoolExecutor(max_workers=1).submit(_run_blocking)
+
+    async def _drain():
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
+            yield chunk
+
     return StreamingResponse(
-        answer_country_question_stream(
-            country=payload.country,
-            question=payload.question,
-            history=[turn.model_dump() for turn in payload.history],
-            chat_model=payload.model,
-        ),
+        _drain(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
