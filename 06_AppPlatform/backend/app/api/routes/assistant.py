@@ -33,19 +33,38 @@ async def chat_stream(
     payload: CountryChatRequest,
     _=Depends(require_min_role("viewer")),
 ):
-    async def event_generator():
-        import asyncio
-        for chunk in answer_country_question_stream(
-            country=payload.country,
-            question=payload.question,
-            history=[turn.model_dump() for turn in payload.history],
-            chat_model=payload.model,
-        ):
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    def _run_blocking() -> None:
+        try:
+            for chunk in answer_country_question_stream(
+                country=payload.country,
+                question=payload.question,
+                history=[turn.model_dump() for turn in payload.history],
+                chat_model=payload.model,
+            ):
+                queue.put_nowait(chunk)
+        except Exception:
+            pass
+        finally:
+            queue.put_nowait(None)
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    executor.submit(_run_blocking)
+
+    async def _drain() -> None:
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
             yield chunk
-            await asyncio.sleep(0)  # flush event loop
+            await asyncio.sleep(0)
 
     return StreamingResponse(
-        event_generator(),
+        _drain(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
