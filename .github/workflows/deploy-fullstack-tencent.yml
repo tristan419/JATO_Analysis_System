@@ -1,4 +1,4 @@
-name: deploy-fullstack-tencent  # auto-deploy DeepSeek + Governed Copilot
+name: deploy-fullstack-tencent  # auto-deploy DeepSeek + Governed Copilot v2
 
 on:
   push:
