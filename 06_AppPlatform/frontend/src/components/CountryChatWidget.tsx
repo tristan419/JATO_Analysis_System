@@ -159,6 +159,9 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
     () => nearestWidgetPresetId(renderedWidgetWidth, renderedWidgetHeight),
     [renderedWidgetHeight, renderedWidgetWidth],
   );
+  const streamingContent = sending
+    ? [...messages].reverse().find((m) => m.role === "assistant")?.content ?? ""
+    : "";
   const pendingQuestion = sending
     ? [...messages]
       .reverse()
@@ -489,7 +492,7 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
         )}
         {sending ? (
           <article className="ccw-msg ccw-msg--assistant ccw-msg--pending">
-            <CountryChatPendingMessage question={pendingQuestion} compact />
+            <CountryChatPendingMessage question={pendingQuestion} streamingContent={streamingContent} compact />
           </article>
         ) : null}
         <div ref={transcriptEndRef} />

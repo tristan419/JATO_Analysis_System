@@ -116,6 +116,7 @@ class ColumnMap:
     origin: str | None
     segment: str
     powertrain: str
+    body_type: str | None
     drive_type: str | None
     registration_type: str | None
     month_columns: tuple[str, ...]
@@ -176,6 +177,7 @@ def _resolve_columns(dataset_token: str) -> ColumnMap:
         segment=segment,
         powertrain=powertrain,
         drive_type=_resolve_existing_column(["Driven wheels", "Drive type", "Drive", "驱动形式"], columns),
+        body_type=_resolve_existing_column(["Body type", "Body Type", "body type", "车身形式"], columns),
         registration_type=_resolve_existing_column(["Registration type", "Registration Type", "registration type"], columns),
         month_columns=tuple(_list_month_columns(columns)),
     )
@@ -1502,6 +1504,45 @@ def _normalize_selected_fuels(requested_fuels: list[str], available_fuels: list[
     return fallback or available_fuels[:]
 
 
+def _available_body_types(frame: pd.DataFrame) -> list[str]:
+    if frame.empty or "__body_type" not in frame.columns:
+        return []
+    discovered = sorted({
+        str(v).strip() for v in frame["__body_type"].dropna().unique()
+        if str(v).strip()
+    })
+    return discovered
+
+
+def _available_drive_types(frame: pd.DataFrame) -> list[str]:
+    if frame.empty or "__drive_type" not in frame.columns:
+        return []
+    discovered = sorted({
+        str(v).strip() for v in frame["__drive_type"].dropna().unique()
+        if str(v).strip()
+    })
+    return discovered
+
+
+def _build_model_option_list(
+    frame: pd.DataFrame,
+    column: str,
+    sales_column: str,
+) -> list[dict[str, str]]:
+    if frame.empty or column not in frame.columns or sales_column not in frame.columns:
+        return []
+    grouped = (
+        frame.groupby(column, dropna=False)[sales_column]
+        .sum()
+        .sort_values(ascending=False)
+    )
+    return [
+        {"value": str(key), "label": str(key)}
+        for key in grouped.index
+        if str(key).strip()
+    ]
+
+
 def _resolve_positioning_price_band_size(series: pd.Series) -> int:
     cleaned = pd.to_numeric(series, errors="coerce").dropna()
     cleaned = cleaned[cleaned > 0]
@@ -1638,6 +1679,24 @@ def _resolve_version_comparison_segment(
         return requested_segment, options
     preferred = next((option["value"] for option in options if option["value"] == "SUV B"), None)
     return preferred or options[0]["value"], options
+
+
+def _build_all_model_options(
+    frame: pd.DataFrame,
+    sales_column: str,
+) -> list[dict[str, str]]:
+    if frame.empty or sales_column not in frame.columns:
+        return []
+    grouped = (
+        frame.groupby("__model", dropna=False)[sales_column]
+        .sum()
+        .sort_values(ascending=False)
+    )
+    return [
+        {"value": str(model), "label": str(model)}
+        for model in grouped.index
+        if str(model).strip()
+    ]
 
 
 def _resolve_version_comparison_models(
@@ -3497,11 +3556,17 @@ def query_version_comparison_deck(
     time_range: dict[str, str] | None,
     fuel_types: list[str],
     sales_mode: str,
+    comparison_mode: str = "same_segment",
     segment: str | None,
     models: list[str],
     msrp_min: float | None,
     msrp_max: float | None,
     price_band_size: int | None,
+    body_type: str | None = None,
+    drive_types: list[str] | None = None,
+    segments: list[str] | None = None,
+    length_min: float | None = None,
+    length_max: float | None = None,
 ) -> dict[str, Any]:
     return _query_version_comparison_deck_impl(
         country=country,
@@ -3509,11 +3574,17 @@ def query_version_comparison_deck(
         time_range=time_range,
         fuel_types=fuel_types,
         sales_mode=sales_mode,
+        comparison_mode=comparison_mode,
         segment=segment,
         models=models,
         msrp_min=msrp_min,
         msrp_max=msrp_max,
         price_band_size=price_band_size,
+        body_type=body_type,
+        drive_types=drive_types,
+        segments=segments,
+        length_min=length_min,
+        length_max=length_max,
     )
 
 
@@ -3524,11 +3595,17 @@ def _query_version_comparison_deck_impl(
     time_range: dict[str, str] | None,
     fuel_types: list[str],
     sales_mode: str,
+    comparison_mode: str = "same_segment",
     segment: str | None,
     models: list[str],
     msrp_min: float | None,
     msrp_max: float | None,
     price_band_size: int | None,
+    body_type: str | None = None,
+    drive_types: list[str] | None = None,
+    segments: list[str] | None = None,
+    length_min: float | None = None,
+    length_max: float | None = None,
 ) -> dict[str, Any]:
     columns = _get_columns()
     if not columns.length or not columns.msrp or not columns.version:
@@ -3565,6 +3642,10 @@ def _query_version_comparison_deck_impl(
         selected_columns.append(columns.trim)
     if columns.country_label and columns.country_label not in selected_columns:
         selected_columns.append(columns.country_label)
+    if columns.drive_type and columns.drive_type not in selected_columns:
+        selected_columns.append(columns.drive_type)
+    if columns.body_type and columns.body_type not in selected_columns:
+        selected_columns.append(columns.body_type)
     selected_columns = list(dict.fromkeys(selected_columns))
 
     dataset = repo._open_dataset()
@@ -3581,6 +3662,8 @@ def _query_version_comparison_deck_impl(
     frame["__powertrain"] = frame[columns.powertrain].map(_normalize_powertrain)
     frame["__length"] = pd.to_numeric(frame[columns.length], errors="coerce").fillna(0.0)
     frame["__msrp"] = pd.to_numeric(frame[columns.msrp], errors="coerce").fillna(0.0)
+    frame["__drive_type"] = frame[columns.drive_type].astype(str).str.strip() if columns.drive_type and columns.drive_type in frame.columns else ""
+    frame["__body_type"] = frame[columns.body_type].astype(str).str.strip() if columns.body_type and columns.body_type in frame.columns else ""
     frame[sales_column] = _series_sum(frame, sales_columns)
     frame = frame[
         (frame["__brand"] != "")
@@ -3601,22 +3684,108 @@ def _query_version_comparison_deck_impl(
     selected_fuels = [fuel for fuel in POSITIONING_FUEL_ORDER if fuel in selected_fuels]
     fuel_frame = frame[frame["__powertrain"].isin(selected_fuels)].copy()
 
-    selected_segment, available_segments = _resolve_version_comparison_segment(
-        fuel_frame,
-        segment,
-        sales_column=sales_column,
+    # --- Comparison mode logic ---
+    if comparison_mode == "same_segment":
+        # Segment = hard single filter
+        selected_segment, available_segments = _resolve_version_comparison_segment(
+            fuel_frame, segment, sales_column=sales_column,
+        )
+        segment_frame = fuel_frame[fuel_frame["__segment_raw"] == selected_segment].copy() if selected_segment else fuel_frame.iloc[0:0].copy()
+        selected_models, _ = _resolve_version_comparison_models(
+            segment_frame, models, sales_column=sales_column,
+        )
+        comparison_frame = segment_frame[segment_frame["__model"].isin(selected_models)].copy() if selected_models else segment_frame.iloc[0:0].copy()
+        candidate_model_options = _build_all_model_options(segment_frame, sales_column)
+    else:  # free_comparison
+        # Candidate pool: optional filters (body, length, msrp, drive, segments)
+        candidate_frame = fuel_frame.copy()
+        if body_type and body_type.strip():
+            candidate_frame = candidate_frame[candidate_frame["__body_type"] == body_type.strip()]
+        if length_min is not None:
+            candidate_frame = candidate_frame[candidate_frame["__length"] >= float(length_min)]
+        if length_max is not None:
+            candidate_frame = candidate_frame[candidate_frame["__length"] <= float(length_max)]
+        if msrp_min is not None:
+            candidate_frame = candidate_frame[candidate_frame["__msrp"] >= float(msrp_min)]
+        if msrp_max is not None:
+            candidate_frame = candidate_frame[candidate_frame["__msrp"] <= float(msrp_max)]
+        if drive_types:
+            candidate_frame = candidate_frame[candidate_frame["__drive_type"].isin(drive_types)]
+        if segments:
+            candidate_frame = candidate_frame[candidate_frame["__segment_raw"].isin(segments)]
+        available_segments = _build_model_option_list(fuel_frame, "__segment_raw", sales_column)
+        selected_segment = ""
+        # Selected basket from full country frame (not candidate pool)
+        selected_models, _ = _resolve_version_comparison_models(fuel_frame, models, sales_column=sales_column)
+        candidate_model_options = _build_all_model_options(candidate_frame, sales_column)
+        comparison_frame = fuel_frame[fuel_frame["__model"].isin(selected_models)].copy() if selected_models else fuel_frame.iloc[0:0].copy()
+
+    # Build enhanced model options with metadata
+    def _build_enhanced_model_options(model_list: list[str]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        model_agg: dict[str, dict[str, Any]] = {}
+        for model_name in model_list:
+            model_rows = fuel_frame[fuel_frame["__model"] == model_name]
+            if model_rows.empty:
+                continue
+            segments = model_rows["__segment_raw"].dropna().unique()
+            powertrains = model_rows["__powertrain"].dropna().unique()
+            body_types = model_rows["__body_type"].dropna().unique() if columns.body_type else []
+            drive_types_list = model_rows["__drive_type"].dropna().unique() if columns.drive_type else []
+            lengths = model_rows[model_rows["__length"] > 0]["__length"]
+            msrps = model_rows[model_rows["__msrp"] > 0]["__msrp"]
+            model_agg[model_name] = {
+                "value": model_name,
+                "label": model_name,
+                "segment": str(segments[0]) if len(segments) > 0 else "",
+                "powertrain": " / ".join(sorted(set(str(p) for p in powertrains))) if len(powertrains) > 0 else "",
+                "bodyType": str(body_types[0]) if len(body_types) > 0 else "",
+                "driveType": " / ".join(sorted(set(str(d) for d in drive_types_list))) if len(drive_types_list) > 0 else "",
+                "lengthMm": float(lengths.median()) if len(lengths) > 0 else 0,
+                "msrpMedian": float(msrps.median()) if len(msrps) > 0 else 0,
+            }
+        result = [model_agg[m] for m in model_list if m in model_agg]
+        return result
+
+    # Enhanced availableModels with metadata
+    enhanced_available_models = _build_enhanced_model_options(
+        [opt["value"] for opt in candidate_model_options]
     )
-    segment_frame = fuel_frame[fuel_frame["__segment_raw"] == selected_segment].copy() if selected_segment else fuel_frame.iloc[0:0].copy()
-    selected_models, available_models = _resolve_version_comparison_models(
-        segment_frame,
-        models,
-        sales_column=sales_column,
-    )
-    comparison_frame = segment_frame[segment_frame["__model"].isin(selected_models)].copy() if selected_models else segment_frame.iloc[0:0].copy()
+    # Detect mixed segment
+    selected_model_details = _build_enhanced_model_options(selected_models)
+    selected_segments_set = {m["segment"] for m in selected_model_details if m["segment"]}
+    is_mixed_segment = len(selected_segments_set) > 1
+
+    # Suggested length range: segment-based in same_segment, full range in free_comparison
+    if comparison_mode == "same_segment" and selected_segment:
+        seg_lengths = fuel_frame[fuel_frame["__segment_raw"] == selected_segment]["__length"]
+        seg_lengths = seg_lengths[(seg_lengths > 0) & (seg_lengths < 6000)]
+        if len(seg_lengths) > 0:
+            suggested_length_min = float(seg_lengths.quantile(0.05))
+            suggested_length_max = float(seg_lengths.quantile(0.95))
+        else:
+            suggested_length_min, suggested_length_max = None, None
+    else:
+        all_lengths = fuel_frame["__length"]
+        all_lengths = all_lengths[(all_lengths > 0) & (all_lengths < 6000)]
+        if len(all_lengths) > 0:
+            suggested_length_min = float(all_lengths.min())
+            suggested_length_max = float(all_lengths.max())
+        else:
+            suggested_length_min, suggested_length_max = None, None
+
+    # Round to nearest 50
+    if suggested_length_min is not None:
+        suggested_length_min = round(suggested_length_min / 50) * 50
+    if suggested_length_max is not None:
+        suggested_length_max = round(suggested_length_max / 50) * 50
 
     year_text, month_text = resolved_period.split("-", 1)
     month_number = int(month_text)
-    if selected_sales_mode == "rolling12":
+    if comparison_mode == "free_comparison":
+        page_title = f"{selected_country['label']} 自由对比 {int(year_text)}年{month_number}月版型对比"
+        sales_metric_detail = "当月销量"
+    elif selected_sales_mode == "rolling12":
         page_title = f"{selected_country['label']} {selected_segment or 'Segment'} 截至{int(year_text)}年{month_number}月近12个月版型对比"
         sales_metric_detail = "近12个月销量"
     elif selected_sales_mode == "ytd":
@@ -3626,12 +3795,13 @@ def _query_version_comparison_deck_impl(
         page_title = f"{selected_country['label']} {selected_segment or 'Segment'} {int(year_text)}年{month_number}月版型对比"
         sales_metric_detail = "当月销量"
     if custom_periods:
-        page_title = f"{selected_country['label']} {selected_segment or 'Segment'} {custom_periods[0]} ~ {custom_periods[-1]} 自定义区间版型对比"
+        segment_label = selected_segment or "多Segment"
+        page_title = f"{selected_country['label']} {segment_label} {custom_periods[0]} ~ {custom_periods[-1]} 自定义区间版型对比"
         sales_metric_detail = "自定义区间累计销量"
 
     return {
         "metadata": {
-            "protocolVersion": "version-comparison/v1",
+            "protocolVersion": "version-comparison/v2",
             "requestedPeriod": target_period,
             "resolvedPeriod": resolved_period,
             "latestPeriod": available_periods[-1],
@@ -3644,8 +3814,10 @@ def _query_version_comparison_deck_impl(
                 "end": custom_periods[-1],
             } if custom_periods else None,
             "customRangeActive": bool(custom_periods),
+            "comparisonMode": comparison_mode,
             "selectedSegment": selected_segment,
             "selectedModels": selected_models,
+            "isMixedSegment": is_mixed_segment,
             "availableSalesModes": [
                 {"value": "month", "label": "当月"},
                 {"value": "ytd", "label": "YTD"},
@@ -3655,7 +3827,11 @@ def _query_version_comparison_deck_impl(
             "availablePeriods": [{"value": period, "label": _short_period_label(period)} for period in available_periods],
             "availableFuelTypes": available_fuels,
             "availableSegments": available_segments,
-            "availableModels": available_models,
+            "availableModels": enhanced_available_models,
+            "availableBodyTypes": _available_body_types(fuel_frame) if columns.body_type else [],
+            "availableDriveTypes": _available_drive_types(fuel_frame) if columns.drive_type else [],
+            "suggestedLengthMin": suggested_length_min,
+            "suggestedLengthMax": suggested_length_max,
             "labels": {
                 "pageTitle": page_title,
                 "currentMonthShort": _short_period_label(resolved_period),

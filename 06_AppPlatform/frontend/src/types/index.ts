@@ -822,7 +822,23 @@ export interface VersionComparisonBubbleItem {
   msrpMax: number;
   sales: number;
   variantCount: number;
+  segment?: string;
+  bodyType?: string;
+  driveType?: string;
 }
+
+export interface VersionComparisonModelOption {
+  value: string;
+  label: string;
+  segment: string;
+  powertrain: string;
+  bodyType: string;
+  driveType: string;
+  lengthMm: number;
+  msrpMedian: number;
+}
+
+export type VersionComparisonMode = "same_segment" | "free_comparison";
 
 export interface VersionComparisonPage {
   title: string;
@@ -853,14 +869,20 @@ export interface VersionComparisonMetadata {
   selectedSalesMode: PositioningPricingSalesMode;
   selectedTimeRange?: MarketScanPeriodRange | null;
   customRangeActive?: boolean;
+  comparisonMode: VersionComparisonMode;
   selectedSegment: string;
   selectedModels: string[];
+  isMixedSegment: boolean;
   availableSalesModes: MarketScanCountryOption[];
   availableCountries: MarketScanCountryOption[];
   availablePeriods: MarketScanCountryOption[];
   availableFuelTypes: string[];
   availableSegments: MarketScanCountryOption[];
-  availableModels: MarketScanCountryOption[];
+  availableModels: VersionComparisonModelOption[];
+  availableBodyTypes: string[];
+  availableDriveTypes: string[];
+  suggestedLengthMin: number | null;
+  suggestedLengthMax: number | null;
   labels: {
     pageTitle: string;
     currentMonthShort: string;
@@ -879,11 +901,17 @@ export interface VersionComparisonDeckRequest {
   time_range?: MarketScanPeriodRange | null;
   fuel_types?: string[];
   sales_mode?: PositioningPricingSalesMode;
+  comparison_mode?: VersionComparisonMode;
   segment?: string | null;
   models?: string[];
   msrp_min?: number | null;
   msrp_max?: number | null;
   price_band_size?: number | null;
+  body_type?: string | null;
+  drive_types?: string[];
+  segments?: string[];
+  length_min?: number | null;
+  length_max?: number | null;
 }
 
 export interface CustomerInsightShareItem {

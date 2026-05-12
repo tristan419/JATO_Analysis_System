@@ -70,11 +70,17 @@ def version_comparison_deck(
         time_range=payload.time_range,
         fuel_types=payload.fuel_types,
         sales_mode=payload.sales_mode,
+        comparison_mode=payload.comparison_mode,
         segment=payload.segment,
         models=payload.models,
         msrp_min=payload.msrp_min,
         msrp_max=payload.msrp_max,
         price_band_size=payload.price_band_size,
+        body_type=payload.body_type,
+        drive_types=payload.drive_types,
+        segments=payload.segments,
+        length_min=payload.length_min,
+        length_max=payload.length_max,
     )
 
 

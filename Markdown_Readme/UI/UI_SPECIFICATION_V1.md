@@ -161,7 +161,70 @@
 
 ---
 
-## 8. 验证方式
+## 8. 可搜索下拉选择器 (Searchable Dropdown)
+
+> 首次落地：`VersionComparisonPage.tsx` — Country / Segment / Add Model 三个筛选器  
+> 复用范围：任何需要从长列表中单选或多选选项的筛选器
+
+### 8.1 结构
+
+```
+┌──────────────────────────────────────┐
+│  Label                    (已选 N)   │
+│  ┌──────────────────────────────────┐│
+│  │ 搜索品牌或车型名称...            ││
+│  └──────────────────────────────────┘│
+│  ┌──────────────────────────────────┐│
+│  │ [全选可见] [取消可见] [清空全部] ││  ← 批量操作行 (仅多选模式)
+│  │ 匹配 X 项 · 已选 Y/10           ││
+│  ├──────────────────────────────────┤│
+│  │ ☑ Brand Model                   ││  ← 选项行: checkbox + 名称
+│  │   Segment | Powertrain | Len mm  ││  ← 可选元数据行
+│  │ ☐ Brand Model                   ││
+│  │ ☐ Brand Model                   ││
+│  └──────────────────────────────────┘│
+│  仅显示当前 Segment 内车型           │  ← hint 文本
+└──────────────────────────────────────┘
+```
+
+### 8.2 CSS 类名约定
+
+| 类名 | 用途 |
+|------|------|
+| `version-comparison-model-picker-field` | 下拉容器 wrapper |
+| `version-comparison-model-picker` | `position: relative` 锚点 |
+| `version-comparison-model-search` | 搜索输入框 |
+| `version-comparison-model-dropdown` | 下拉面板 (`position: absolute`, `z-index: 50`) |
+| `version-comparison-model-dropdown-actions` | 批量操作行 (`position: sticky; top: 0`) |
+| `version-comparison-batch-btn` | 批量操作按钮 |
+| `version-comparison-model-option` | 选项行 |
+| `version-comparison-model-checkbox` | 复选框 (18×18px, BMW Blue 选中态) |
+| `version-comparison-model-option-name` | 选项主名称 |
+| `version-comparison-model-option-meta` | 选项元数据标签行 |
+| `version-comparison-model-empty` | 空结果提示 |
+| `version-comparison-dropdown-count` | 匹配/已选计数 |
+
+### 8.3 行为约定
+
+- **单选** (如 Country)：点击选项后关闭下拉框，checkbox 为 radio 风格
+- **多选** (如 Segment, Add Model)：点击选项切换选中状态，下拉框保持打开
+- **搜索**：客户端即时过滤，匹配 `label`、`value`、及元数据字段
+- **外部点击关闭**：`useEffect` + `mousedown` 事件监听
+- **键盘导航**：保留箭头键切换 + Enter 选择 (由 `useArrowCountryNavigation` 提供范式)
+
+### 8.4 数字范围行 (Range Row)
+
+用于将两个数字输入合并为一条视觉范围（如 Length Range）：
+
+```
+Length Range (mm):  [4300] — [5000]
+```
+
+CSS 类名：`version-comparison-range-row` / `version-comparison-range-input` / `version-comparison-range-sep`
+
+---
+
+## 9. 验证方式
 
 1. `npm run check:frontend` — 类型 + 测试 + 构建 + 路由回归
 2. 桌面端验证：sidebar 左侧固定、主内容右侧填充、collapse 后无异常空槽

@@ -140,11 +140,17 @@ class VersionComparisonDeckRequest(BaseModel):
     time_range: dict[str, str] | None = None
     fuel_types: list[str] = Field(default_factory=list)
     sales_mode: Literal["month", "ytd", "rolling12"] = "month"
+    comparison_mode: Literal["same_segment", "free_comparison"] = "same_segment"
     segment: str | None = None
     models: list[str] = Field(default_factory=list)
     msrp_min: float | None = Field(default=None, ge=0)
     msrp_max: float | None = Field(default=None, ge=0)
     price_band_size: int | None = Field(default=None, ge=500, le=200000)
+    body_type: str | None = None
+    drive_types: list[str] = Field(default_factory=list)
+    segments: list[str] = Field(default_factory=list)
+    length_min: float | None = Field(default=None, ge=0)
+    length_max: float | None = Field(default=None, ge=0)
 
 
 class CountryChatTurn(BaseModel):

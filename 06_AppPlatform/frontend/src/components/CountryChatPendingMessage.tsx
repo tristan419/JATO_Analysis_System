@@ -1,46 +1,65 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { buildCountryChatLoadingPlan } from "../contexts/countryChatHelpers";
+const FUN_WAITING_PHRASES = [
+  "翻阅销量档案中...",
+  "比对动力×驱动×渠道交叉数据...",
+  "匹配合适的分析模型...",
+  "检查各国政策与碳税规则...",
+  "DeepSeek 正在逐字生成报告...",
+  "马上就好，数据量有点大...",
+  "正在整理证据链...",
+  "核对 MSRP 价格数据中...",
+];
 
 export function CountryChatPendingMessage({
   question,
+  streamingContent = "",
   compact = false,
 }: {
   question: string;
+  streamingContent?: string;
   compact?: boolean;
 }) {
-  const plan = useMemo(
-    () => buildCountryChatLoadingPlan(question),
-    [question],
-  );
-  const [activeStep, setActiveStep] = useState(0);
+  const [phraseIndex, setPhraseIndex] = useState(0);
 
   useEffect(() => {
-    setActiveStep(0);
-    if (plan.steps.length < 2) {
-      return undefined;
-    }
-    const timerId = window.setInterval(() => {
-      setActiveStep((current) => Math.min(current + 1, plan.steps.length - 1));
-    }, compact ? 1200 : 1500);
-    return () => window.clearInterval(timerId);
-  }, [compact, plan.steps]);
+    if (streamingContent) return;
+    const timer = window.setInterval(() => {
+      setPhraseIndex((i) => (i + 1) % FUN_WAITING_PHRASES.length);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [streamingContent]);
 
+  // Show actual streaming content if available
+  if (streamingContent) {
+    const lines = streamingContent.split("\n").filter(Boolean);
+    const preview = lines.slice(-3).join("\n");
+    return (
+      <div className={`copilot-loading${compact ? " is-compact" : ""}`}>
+        <div className="copilot-loading-kicker">DeepSeek 正在生成</div>
+        <div className="copilot-loading-current" style={{ maxHeight: 120, overflow: "hidden", whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.5 }}>
+          {preview.length > 300 ? preview.slice(-300) : preview || "..."}
+        </div>
+      </div>
+    );
+  }
+
+  // Otherwise show waiting phrases (during snapshot building)
   return (
     <div className={`copilot-loading${compact ? " is-compact" : ""}`}>
-      <div className="copilot-loading-kicker">{plan.label}</div>
-      <div className="copilot-loading-current">{plan.steps[activeStep] ?? plan.label}</div>
+      <div className="copilot-loading-kicker">准备数据中</div>
+      <div className="copilot-loading-current">{FUN_WAITING_PHRASES[phraseIndex]}</div>
       <div className="copilot-loading-steps">
-        {plan.steps.map((step, index) => (
+        {FUN_WAITING_PHRASES.slice(0, compact ? 3 : 5).map((phrase, i) => (
           <span
-            key={step}
+            key={phrase}
             className={[
               "copilot-loading-step",
-              index < activeStep ? "is-done" : "",
-              index === activeStep ? "is-active" : "",
+              i < phraseIndex ? "is-done" : "",
+              i === phraseIndex ? "is-active" : "",
             ].filter(Boolean).join(" ")}
           >
-            {index + 1}. {step}
+            {phrase}
           </span>
         ))}
       </div>

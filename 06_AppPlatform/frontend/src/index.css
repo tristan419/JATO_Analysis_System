@@ -7055,12 +7055,13 @@ table.data-table tr.data-table-group-row.contains-selection td {
 .market-scan-fuel-chip {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  padding: 7px 10px;
+  gap: 5px;
+  min-height: 26px;
+  padding: 3px 8px;
   border: 1px solid rgba(15, 23, 42, 0.12);
   background: rgba(255, 255, 255, 0.78);
   color: #334155;
+  font-size: 11px;
   cursor: pointer;
   transition: border-color var(--transition), background var(--transition), transform var(--transition);
 }
@@ -7928,9 +7929,9 @@ table.data-table tr.data-table-group-row.contains-selection td {
 .version-comparison-chip {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 30px;
-  padding: 6px 10px;
+  gap: 5px;
+  min-height: 26px;
+  padding: 3px 8px;
   border: 1px solid rgba(37, 99, 235, 0.18);
   background: rgba(37, 99, 235, 0.08);
   color: #1e3a8a;
@@ -7941,6 +7942,676 @@ table.data-table tr.data-table-group-row.contains-selection td {
 .version-comparison-empty {
   color: #64748b;
   font-size: 12px;
+}
+
+/* --- Version Comparison: Model Picker --- */
+.version-comparison-model-picker-field {
+  grid-column: span 2;
+}
+
+.version-comparison-model-picker {
+  position: relative;
+}
+
+.version-comparison-model-picker-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.version-comparison-model-search {
+  width: 50%;
+  min-width: 180px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  background: #ffffff;
+  font-size: 11px;
+  font-family: inherit;
+  border-radius: 0;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.version-comparison-model-search:focus {
+  border-color: #1c69d4;
+}
+
+.version-comparison-model-search:disabled {
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+
+.version-comparison-model-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 50%;
+  min-width: 200px;
+  z-index: 50;
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: #ffffff;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.10);
+}
+
+.version-comparison-model-dropdown-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  background: #f8fafc;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.version-comparison-batch-btn {
+  padding: 2px 8px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: #ffffff;
+  font-size: 10px;
+  font-family: inherit;
+  font-weight: 500;
+  color: #334155;
+  cursor: pointer;
+  border-radius: 0;
+  transition: background 0.1s;
+}
+
+.version-comparison-batch-btn:hover {
+  background: #f1f5f9;
+}
+
+.version-comparison-batch-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.version-comparison-dropdown-count {
+  margin-left: auto;
+  font-size: 9px;
+  color: #94a3b8;
+}
+
+.version-comparison-model-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.04);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  transition: background 0.1s;
+}
+
+.version-comparison-model-checkbox {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  border: 1.5px solid rgba(15, 23, 42, 0.18);
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: #ffffff;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.version-comparison-model-checkbox.is-checked {
+  background: #1c69d4;
+  border-color: #1c69d4;
+}
+
+.version-comparison-model-option-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.version-comparison-model-option.is-active,
+.version-comparison-model-option:hover {
+  background: rgba(28, 105, 212, 0.06);
+}
+
+.version-comparison-model-option.is-selected {
+  background: rgba(28, 105, 212, 0.10);
+}
+
+.version-comparison-model-option-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.version-comparison-model-option-name {
+  font-weight: 600;
+  font-size: 11px;
+  color: #1e293b;
+}
+
+.version-comparison-model-option-added {
+  font-size: 9px;
+  color: #1c69d4;
+  font-weight: 600;
+}
+
+.version-comparison-model-option-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.version-comparison-model-option-meta span {
+  font-size: 9px;
+  color: #64748b;
+  padding: 1px 4px;
+  background: rgba(15, 23, 42, 0.04);
+}
+
+.version-comparison-model-empty {
+  padding: 16px 14px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+/* --- Version Comparison: Enhanced Chips --- */
+.version-comparison-chip--detailed {
+  flex-direction: row;
+  gap: 12px;
+  min-height: 40px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.version-comparison-chip-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.version-comparison-chip-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1e3a8a;
+}
+
+.version-comparison-chip-meta {
+  font-size: 10px;
+  color: #64748b;
+  font-weight: 400;
+}
+
+.version-comparison-chip-remove {
+  font-size: 16px;
+  line-height: 1;
+  color: #94a3b8;
+}
+
+/* --- Version Comparison: Mixed Segment Warning --- */
+.version-comparison-mixed-warning {
+  grid-column: 1 / -1;
+  padding: 10px 14px;
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  background: rgba(245, 158, 11, 0.08);
+  color: #92400e;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* --- Compact chips bar --- */
+.version-comparison-chips-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 0 0;
+}
+
+.version-comparison-chips-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.version-comparison-chips-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+  min-width: 44px;
+}
+
+.version-comparison-mixed-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  background: rgba(245, 158, 11, 0.08);
+  color: #92400e;
+  flex-shrink: 0;
+}
+
+/* --- Version Comparison: Selection Header & Clear --- */
+.version-comparison-selection-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.version-comparison-clear-btn {
+  padding: 2px 10px;
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  background: rgba(239, 68, 68, 0.06);
+  color: #dc2626;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 0;
+  transition: background 0.1s;
+}
+
+.version-comparison-clear-btn:hover {
+  background: rgba(239, 68, 68, 0.12);
+}
+
+/* --- Version Comparison: Mode Hint --- */
+.version-comparison-mode-hint {
+  padding: 10px 14px;
+  border: 1px solid rgba(28, 105, 212, 0.16);
+  background: rgba(28, 105, 212, 0.04);
+  color: #1e40af;
+  font-size: 12px;
+}
+
+/* --- Version Comparison: Segment Tags --- */
+.version-comparison-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: rgba(15, 23, 42, 0.04);
+  color: #475569;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+/* --- Version Comparison: Hero chip variants --- */
+.market-scan-hero-chip--warn {
+  border-color: rgba(245, 158, 11, 0.40);
+  background: rgba(245, 158, 11, 0.10);
+  color: #92400e;
+}
+
+/* ================================================================
+   Version Comparison — Control Panel
+   ================================================================ */
+
+
+/* --- Filter grid --- */
+.version-comparison-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(14, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.version-comparison-filter-grid .vc-col-2  { grid-column: span 2; }
+.version-comparison-filter-grid .vc-col-5  { grid-column: span 5; }
+.version-comparison-filter-grid .vc-col-8  { grid-column: span 8; }
+.version-comparison-filter-grid .vc-col-14 { grid-column: span 14; }
+
+@media (max-width: 1023px) {
+  .version-comparison-filter-grid {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+  .version-comparison-filter-grid .vc-col-2  { grid-column: span 4; }
+  .version-comparison-filter-grid .vc-col-5  { grid-column: span 8; }
+  .version-comparison-filter-grid .vc-col-8  { grid-column: span 8; }
+  .version-comparison-filter-grid .vc-col-14 { grid-column: span 8; }
+}
+
+@media (max-width: 767px) {
+  .version-comparison-filter-grid {
+    grid-template-columns: 1fr;
+  }
+  .version-comparison-filter-grid .vc-col-2,
+  .version-comparison-filter-grid .vc-col-5,
+  .version-comparison-filter-grid .vc-col-8,
+  .version-comparison-filter-grid .vc-col-14 { grid-column: span 1; }
+}
+
+/* --- Version Comparison specific inputs --- */
+.version-comparison-number-input,
+.version-comparison-model-search,
+.version-comparison-length-input {
+  height: 32px;
+  width: 100%;
+  border-radius: 0;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  background: #ffffff;
+  padding: 0 10px;
+  font-size: 12px;
+  font-family: inherit;
+  color: #262626;
+  outline: none;
+}
+
+.version-comparison-number-input:hover,
+.version-comparison-model-search:hover,
+.version-comparison-length-input:hover {
+  border-color: rgba(15, 23, 42, 0.24);
+}
+
+.version-comparison-number-input:focus,
+.version-comparison-model-search:focus,
+.version-comparison-length-input:focus {
+  border-color: #1c69d4;
+}
+
+.version-comparison-model-search { width: 50%; min-width: 180px; }
+.version-comparison-number-input,
+.version-comparison-length-input { text-align: left; }
+
+/* --- Period row --- */
+.version-comparison-period-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.version-comparison-period-row .market-scan-field--timeline {
+  flex: 1;
+  min-width: 0;
+}
+
+.version-comparison-sales-mode-group {
+  flex-shrink: 0;
+}
+
+/* --- Length slider row --- */
+.version-comparison-length-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.version-comparison-length-input {
+  width: 76px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.version-comparison-length-bar {
+  flex: 1;
+  height: 2px;
+  background: rgba(15, 23, 42, 0.10);
+  position: relative;
+  min-width: 32px;
+}
+
+.version-comparison-length-bar-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: #1c69d4;
+}
+
+.version-comparison-length-unit {
+  font-size: 16px;
+  font-weight: 400;
+  color: #757575;
+  flex-shrink: 0;
+}
+
+/* --- Clear button --- */
+.version-comparison-clear-btn {
+  padding: 2px 10px;
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  background: rgba(239, 68, 68, 0.06);
+  color: #dc2626;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 0;
+}
+
+.version-comparison-clear-btn:hover { background: rgba(239, 68, 68, 0.12); }
+
+/* --- Dropdown --- */
+.version-comparison-model-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 50%;
+  min-width: 200px;
+  z-index: 50;
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: #ffffff;
+}
+
+.version-comparison-model-dropdown-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+  background: #ffffff;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.version-comparison-batch-btn {
+  padding: 2px 8px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: #ffffff;
+  font-size: 10px;
+  font-family: inherit;
+  font-weight: 700;
+  color: #334155;
+  cursor: pointer;
+  border-radius: 0;
+}
+
+.version-comparison-batch-btn:hover { background: rgba(28, 105, 212, 0.04); }
+
+.version-comparison-dropdown-count {
+  margin-left: auto;
+  font-size: 9px;
+  color: #94a3b8;
+}
+
+.version-comparison-model-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.04);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.version-comparison-model-option.is-selected,
+.version-comparison-model-option:hover {
+  background: rgba(28, 105, 212, 0.04);
+}
+
+.version-comparison-model-checkbox {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid rgba(15, 23, 42, 0.16);
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: #ffffff;
+}
+
+.version-comparison-model-checkbox.is-checked {
+  background: #1c69d4;
+  border-color: #1c69d4;
+}
+
+.version-comparison-model-option-name {
+  font-weight: 600;
+  font-size: 11px;
+  color: #1e293b;
+}
+
+.version-comparison-model-option-added {
+  font-size: 9px;
+  color: #1c69d4;
+  font-weight: 600;
+}
+
+.version-comparison-model-option-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.version-comparison-model-option-meta span {
+  font-size: 9px;
+  color: #64748b;
+  padding: 1px 4px;
+}
+
+.version-comparison-model-empty {
+  padding: 12px 10px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.version-comparison-model-picker { position: relative; }
+
+.version-comparison-model-picker-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* Period + Sales mode inline row */
+.version-comparison-period-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.version-comparison-period-row .market-scan-field--timeline {
+  flex: 1;
+  min-width: 280px;
+}
+
+.version-comparison-sales-mode-group {
+  flex-shrink: 0;
+}
+
+/* Length Range visual row */
+.version-comparison-length-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.version-comparison-length-input {
+  width: 80px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  background: #ffffff;
+  font-size: 11px;
+  font-family: inherit;
+  text-align: center;
+  border-radius: 0;
+  outline: none;
+}
+
+.version-comparison-length-input:focus {
+  border-color: #1c69d4;
+}
+
+.version-comparison-length-bar {
+  flex: 1;
+  height: 4px;
+  background: rgba(15, 23, 42, 0.08);
+  position: relative;
+  min-width: 40px;
+}
+
+.version-comparison-length-bar-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: #1c69d4;
+  opacity: 0.55;
+}
+
+.version-comparison-length-unit {
+  font-size: 10px;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.version-comparison-number-input {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  background: #ffffff;
+  font-size: 12px;
+  font-family: inherit;
+  border-radius: 0;
+  outline: none;
+}
+
+.version-comparison-number-input:focus {
+  border-color: #1c69d4;
+}
+
+.version-comparison-range-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.version-comparison-range-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.version-comparison-range-sep {
+  color: #94a3b8;
+  font-size: 13px;
+  flex-shrink: 0;
 }
 
 .customer-insight-slide-frame {

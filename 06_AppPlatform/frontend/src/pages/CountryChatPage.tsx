@@ -151,6 +151,9 @@ export function CountryChatPage() {
   }, [messages, sending]);
 
   const snapshot = latestResponse?.contextSnapshot ?? null;
+  const streamingContent = sending
+    ? [...messages].reverse().find((m) => m.role === "assistant")?.content ?? ""
+    : "";
   const pendingQuestion = sending
     ? [...messages]
       .reverse()
@@ -536,7 +539,7 @@ export function CountryChatPage() {
                     <span>助手</span>
                     <span>working</span>
                   </div>
-                  <CountryChatPendingMessage question={pendingQuestion} compact={isMobileAccess} />
+                  <CountryChatPendingMessage question={pendingQuestion} streamingContent={streamingContent} compact={isMobileAccess} />
                 </article>
               ) : null}
               <div ref={transcriptEndRef} />
