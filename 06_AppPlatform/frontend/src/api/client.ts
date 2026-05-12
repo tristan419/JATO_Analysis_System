@@ -1207,6 +1207,61 @@ export const api = {
     request<{ items: DataFreshnessItem[] }>("/analysis/data-freshness"),
   countryChatMetadata: () =>
     request<CountryChatMetadataResponse>("/assistant/country/metadata"),
+  countryChatStream: async (
+    payload: {
+      country: string;
+      question: string;
+      history: CountryChatTurn[];
+      model?: string;
+    },
+    onStatus: (text: string) => void,
+    onToken: (token: string) => void,
+    onMeta: (meta: Record<string, unknown>) => void,
+    onDone: (suggestions: string[]) => void,
+    onError: (error: string) => void,
+  ): Promise<void> => {
+    const API_BASE = "/v1";
+    const response = await fetch(`${API_BASE}/assistant/country/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      onError(`Stream error: ${response.status}`);
+      return;
+    }
+    const reader = response.body?.getReader();
+    if (!reader) { onError("No stream reader"); return; }
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      let eventType = "";
+      for (const line of lines) {
+        if (line.startsWith("event: ")) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith("data: ")) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (eventType === "status") {
+              onStatus(data.text || "");
+            } else if (eventType === "token") {
+              onToken(data.text || "");
+            } else if (eventType === "meta") {
+              onMeta(data);
+            } else if (eventType === "done") {
+              onDone(data.suggestedPrompts || []);
+            }
+          } catch { /* skip malformed */ }
+          eventType = "";
+        }
+      }
+    }
+  },
   countryChat: (payload: {
     country: string;
     question: string;

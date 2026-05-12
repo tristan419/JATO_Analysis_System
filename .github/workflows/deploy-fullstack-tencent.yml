@@ -201,7 +201,7 @@ jobs:
               sudo -n sed -i '/^APP_COUNTRY_CHAT_MODEL_OPTIONS=/d' "$ENV_FILE" 2>/dev/null || true
               {
                 echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY"
-                echo "APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=8"
+                echo "APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=60"
                 echo "APP_COUNTRY_CHAT_MODEL_OPTIONS=deepseek:deepseek-chat"
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
               echo "[INFO] DeepSeek config updated"
@@ -310,7 +310,7 @@ jobs:
               sudo -n sed -i '/^APP_COUNTRY_CHAT_MODEL_OPTIONS=/d' "$ENV_FILE" 2>/dev/null || true
               {
                 echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY"
-                echo "APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=8"
+                echo "APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=60"
                 echo "APP_COUNTRY_CHAT_MODEL_OPTIONS=deepseek:deepseek-chat"
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
               echo "[INFO] DeepSeek config updated"

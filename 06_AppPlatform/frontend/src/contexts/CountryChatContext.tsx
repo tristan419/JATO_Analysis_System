@@ -68,6 +68,7 @@ export interface CountryChatTranscriptMessage extends CountryChatTurn {
   governanceTrace?: CountryCopilotGovernanceTrace | null;
   structuredAnswer?: CountryCopilotStructuredAnswer | null;
   auditId?: string | null;
+  suggestedPrompts?: string[];
 }
 
 interface CountryChatSession {
@@ -525,73 +526,107 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
       ...current,
       [sessionKey]: "",
     }));
+
+    const assistantId = `assistant-${Date.now()}`;
+    const placeholderMessage: CountryChatTranscriptMessage = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      country,
+      question,
+      provider: "deepseek",
+      model: null,
+      providerReason: null,
+      answerMode: null,
+      grounding: null,
+      chartLinks: [],
+      contextSnapshot: undefined,
+      intents: [],
+      focusedIntents: [],
+      intentRoute: undefined,
+      renderHints: [],
+      extractedParams: null,
+      executionPlan: null,
+      sourcePlan: null,
+      evidencePack: null,
+      governanceTrace: null,
+      structuredAnswer: null,
+      auditId: null,
+    };
+
     setSessions((current) => {
       const previous = current[sessionKey] ?? EMPTY_SESSION;
       return {
         ...current,
         [sessionKey]: {
           ...previous,
-          messages: [...previous.messages, userMessage],
+          messages: [...previous.messages, userMessage, placeholderMessage],
         },
       };
     });
 
+    let streamedContent = "";
+
+    const updateMessage = (updates: Partial<CountryChatTranscriptMessage>) => {
+      setSessions((current) => {
+        const previous = current[sessionKey] ?? EMPTY_SESSION;
+        return {
+          ...current,
+          [sessionKey]: {
+            ...previous,
+            messages: previous.messages.map((m) =>
+              m.id === assistantId ? { ...m, ...updates } : m,
+            ),
+          },
+        };
+      });
+    };
+
     try {
-      const response = await api.countryChat({
-        country,
-        question,
-        history,
-        refresh_news: Boolean(options?.refreshNews),
-        model: selectedChatModel,
-      });
-      startTransition(() => {
-        setSessions((current) => {
-          const previous = current[sessionKey] ?? EMPTY_SESSION;
-          return {
-            ...current,
-            [sessionKey]: {
-              latestResponse: response,
-              messages: [
-                ...previous.messages,
-                {
-                  id: `assistant-${Date.now()}`,
-                  role: "assistant",
-                  country: response.country,
-                  question: response.question,
-                  content: response.answer,
-                  provider: response.provider,
-                  model: response.model,
-                  providerReason: response.providerReason,
-                  answerMode: response.answerMode,
-                  grounding: response.grounding,
-                  chartLinks: response.chartLinks,
-                  contextSnapshot: response.contextSnapshot,
-                  intents: response.intents,
-                  focusedIntents: response.focusedIntents,
-                  intentRoute: response.intentRoute,
-                  renderHints: response.renderHints,
-                  extractedParams: response.extractedParams,
-                  executionPlan: response.executionPlan,
-                  sourcePlan: response.sourcePlan,
-                  evidencePack: response.evidencePack,
-                  governanceTrace: response.governanceTrace,
-                  structuredAnswer: response.structuredAnswer,
-                  auditId: response.auditId,
-                },
-              ],
-            },
-          };
-        });
-      });
-      void loadNewsStatus(country, "silent");
-    } catch (reason: unknown) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : String(reason),
+      await api.countryChatStream(
+        { country, question, history, model: selectedChatModel },
+        (statusText) => {
+          streamedContent = statusText;
+          updateMessage({ content: streamedContent, answerMode: "thinking" });
+        },
+        (token) => {
+          streamedContent += token;
+          updateMessage({ content: streamedContent });
+        },
+        (meta) => {
+          updateMessage({
+            provider: (meta.provider as string) || "deepseek",
+            model: (meta.model as string) || null,
+            intentRoute: (meta.intentRoute as string) || undefined,
+            focusedIntents: (meta.focusedIntents as string[]) || [],
+          });
+        },
+        (suggestions) => {
+          updateMessage({
+            answerMode: "grounded-model",
+            suggestedPrompts: suggestions,
+          });
+        },
+        (error) => {
+          setError(error);
+          updateMessage({
+            content: streamedContent || `回答失败：${error}`,
+            answerMode: "error",
+            provider: "fallback",
+          });
+        },
       );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      updateMessage({
+        content: streamedContent || `网络错误: ${msg}`,
+        answerMode: "error",
+        provider: "fallback",
+      });
     } finally {
       setSending(false);
+      void loadNewsStatus(country, "silent");
     }
   }, [drafts, loadNewsStatus, selectedChatModel, selectedCountry, sending, sessions]);
 
