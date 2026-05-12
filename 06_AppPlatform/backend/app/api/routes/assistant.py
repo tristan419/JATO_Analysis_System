@@ -29,17 +29,23 @@ def metadata(
 
 
 @router.post("/chat/stream")
-def chat_stream(
+async def chat_stream(
     payload: CountryChatRequest,
     _=Depends(require_min_role("viewer")),
 ):
-    return StreamingResponse(
-        answer_country_question_stream(
+    async def event_generator():
+        import asyncio
+        for chunk in answer_country_question_stream(
             country=payload.country,
             question=payload.question,
             history=[turn.model_dump() for turn in payload.history],
             chat_model=payload.model,
-        ),
+        ):
+            yield chunk
+            await asyncio.sleep(0)  # flush event loop
+
+    return StreamingResponse(
+        event_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

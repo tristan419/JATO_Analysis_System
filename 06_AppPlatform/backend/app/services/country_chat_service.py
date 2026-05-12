@@ -949,6 +949,8 @@ def answer_country_question_stream(
     chat_model: str | None = None,
 ):
     """Stream a DeepSeek-powered country analysis as SSE events."""
+    yield _sse_event("status", json.dumps({"text": "正在启动分析引擎...", "step": "start"}, ensure_ascii=False))
+
     api_key = _deepseek_api_key()
     if not api_key:
         yield _sse_event("error", json.dumps({"message": "DeepSeek API key 未配置"}, ensure_ascii=False))
