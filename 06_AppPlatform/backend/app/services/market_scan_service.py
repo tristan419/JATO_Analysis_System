@@ -3715,8 +3715,12 @@ def _query_version_comparison_deck_impl(
             candidate_frame = candidate_frame[candidate_frame["__segment_raw"].isin(segments)]
         available_segments = _build_model_option_list(fuel_frame, "__segment_raw", sales_column)
         selected_segment = ""
-        # Selected basket from full country frame (not candidate pool)
-        selected_models, _ = _resolve_version_comparison_models(fuel_frame, models, sales_column=sales_column)
+        # Selected basket: explicit models from full frame, default top 3 from candidate pool
+        if models:
+            selected_models, _ = _resolve_version_comparison_models(fuel_frame, models, sales_column=sales_column)
+        else:
+            selected_models, _ = _resolve_version_comparison_models(candidate_frame, [], sales_column=sales_column)
+        # Candidate pool = models within the filtered candidate frame
         candidate_model_options = _build_all_model_options(candidate_frame, sales_column)
         comparison_frame = fuel_frame[fuel_frame["__model"].isin(selected_models)].copy() if selected_models else fuel_frame.iloc[0:0].copy()
 

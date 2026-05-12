@@ -501,6 +501,13 @@ export function VersionComparisonPage() {
     }
   }, [deck, selectedTimeRange]);
 
+  // In free_comparison, clear selected models when segments change so backend
+  // re-resolves the top 3 from the new segment selection
+  useEffect(() => {
+    if (comparisonMode !== "free_comparison") return;
+    setSelectedModels([]);
+  }, [selectedSegments, comparisonMode]);
+
   // Auto-detect free_comparison mode when models span multiple segments
   useEffect(() => {
     if (!deck || comparisonMode !== "same_segment") return;
@@ -563,17 +570,6 @@ export function VersionComparisonPage() {
       setPriceBandSize(DEFAULT_PRICE_BAND_SIZE);
     }
   }, [msrpMax, msrpMin, page, priceBandSize, priceControlsTouched]);
-
-  // Auto-populate length range from segment suggestion (same_segment) or full range (free_comparison)
-  const [lengthTouched, setLengthTouched] = useState(false);
-  useEffect(() => {
-    if (!deck?.metadata.suggestedLengthMin && !deck?.metadata.suggestedLengthMax) return;
-    if (lengthTouched) return;
-    const slm = deck.metadata.suggestedLengthMin;
-    const slx = deck.metadata.suggestedLengthMax;
-    if (slm != null && lengthMin !== slm) setLengthMin(slm);
-    if (slx != null && lengthMax !== slx) setLengthMax(slx);
-  }, [deck?.metadata.suggestedLengthMin, deck?.metadata.suggestedLengthMax]);
 
   const exportPreset = EXPORT_PRESETS.find((item) => item.key === exportPresetKey) ?? EXPORT_PRESETS[1];
   const slidePreview = useFixedCanvasPreview({
@@ -779,7 +775,6 @@ export function VersionComparisonPage() {
                       setSelectedFuelTypes(DEFAULT_FUEL_TYPES); setPriceControlsTouched(false);
                       setMsrpMin(null); setMsrpMax(null); setPriceBandSize(DEFAULT_PRICE_BAND_SIZE);
                       setBodyType(null); setDriveTypes([]); setSelectedSegments([]);
-                      setLengthMin(null); setLengthMax(null); setLengthTouched(false);
                       setModelSearchQuery(""); setSegmentSearchQuery("");
                     }}>Reset</button>
                 </div>
@@ -1048,81 +1043,25 @@ export function VersionComparisonPage() {
                   </div>
                 </div>
 
-                {/* Filter Row 2: MSRP Min(2) + MSRP Max(2) + Step(2) + Length Range(8) */}
-                <label className="vc-col-2 market-scan-field">
+                {/* Filter Row 2: MSRP Min(3) + MSRP Max(3) + Step(3) */}
+                <label className="vc-col-4 market-scan-field">
                   <span>MSRP Min</span>
                   <input type="text" inputMode="numeric" className="version-comparison-number-input"
                     value={msrpMin ?? ""} placeholder={String(page?.priceBands.range.min ?? "")}
                     onChange={(event) => { setPriceControlsTouched(true); const raw = event.target.value.replace(/[^0-9]/g, ""); setMsrpMin(raw ? Number(raw) : null); }} />
                 </label>
-                <label className="vc-col-2 market-scan-field">
+                <label className="vc-col-5 market-scan-field">
                   <span>MSRP Max</span>
                   <input type="text" inputMode="numeric" className="version-comparison-number-input"
                     value={msrpMax ?? ""} placeholder={String(page?.priceBands.range.max ?? "")}
                     onChange={(event) => { setPriceControlsTouched(true); const raw = event.target.value.replace(/[^0-9]/g, ""); setMsrpMax(raw ? Number(raw) : null); }} />
                 </label>
-                <label className="vc-col-2 market-scan-field">
+                <label className="vc-col-5 market-scan-field">
                   <span>Step</span>
                   <input type="text" inputMode="numeric" className="version-comparison-number-input"
                     value={priceBandSize ?? ""} placeholder={String(page?.priceBands.bandSize ?? "")}
                     onChange={(event) => { setPriceControlsTouched(true); const raw = event.target.value.replace(/[^0-9]/g, ""); setPriceBandSize(raw ? Number(raw) : null); }} />
                 </label>
-                <div className="vc-col-8 market-scan-field">
-                  <span>Length Range (mm)</span>
-                  <div className="version-comparison-length-slider-row">
-                    <input type="text" inputMode="numeric"
-                      className="version-comparison-length-input"
-                      value={lengthMin ?? ""} placeholder={String(deck?.metadata.suggestedLengthMin ?? "3500")}
-                      onChange={(event) => { setLengthTouched(true); const raw = event.target.value.replace(/[^0-9]/g, ""); setLengthMin(raw ? Number(raw) : null); }} />
-                    <div className="version-comparison-length-bar">
-                      {lengthMin && lengthMax ? (
-                        <div className="version-comparison-length-bar-fill"
-                          style={{
-                            left: `${Math.max(0, ((lengthMin - 3500) / (5500 - 3500)) * 100)}%`,
-                            right: `${Math.max(0, ((5500 - lengthMax) / (5500 - 3500)) * 100)}%`,
-                          }} />
-                      ) : null}
-                    </div>
-                    <input type="text" inputMode="numeric"
-                      className="version-comparison-length-input"
-                      value={lengthMax ?? ""} placeholder={String(deck?.metadata.suggestedLengthMax ?? "5000")}
-                      onChange={(event) => { setLengthTouched(true); const raw = event.target.value.replace(/[^0-9]/g, ""); setLengthMax(raw ? Number(raw) : null); }} />
-                    <span className="version-comparison-length-unit">mm</span>
-                  </div>
-                </div>
-
-                {/* Corridor extra filters: Body Type + Drive Type */}
-                {comparisonMode !== "same_segment" ? (
-                  <>
-                    {bodyTypeOptions.length > 0 ? (
-                      <label className="vc-col-2 market-scan-field">
-                        <span>Body Type</span>
-                        <select value={bodyType ?? ""}
-                          onChange={(event) => setBodyType(event.target.value || null)} disabled={!deck}>
-                          <option value="">全部</option>
-                          {bodyTypeOptions.map((option) => (<option key={option} value={option}>{option}</option>))}
-                        </select>
-                      </label>
-                    ) : null}
-                    {driveTypeOptions.length > 0 ? (
-                      <div className="vc-col-5 market-scan-field">
-                        <span>Drive Type</span>
-                        <div className="market-scan-fuel-chip-row">
-                          {driveTypeOptions.map((dt) => {
-                            const active = driveTypes.includes(dt);
-                            return (
-                              <button key={dt} type="button"
-                                className={`market-scan-fuel-chip${active ? " is-active" : ""}`}
-                                onClick={() => setDriveTypes((c) => c.includes(dt) ? c.filter(d => d !== dt) : [...c, dt])}>
-                                {dt}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ) : null}
-                  </>
-                ) : null}
               </div>
 
               {/* Fuel Focus */}

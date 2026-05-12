@@ -8272,8 +8272,8 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 .version-comparison-filter-grid .vc-col-2  { grid-column: span 2; }
+.version-comparison-filter-grid .vc-col-4  { grid-column: span 4; }
 .version-comparison-filter-grid .vc-col-5  { grid-column: span 5; }
-.version-comparison-filter-grid .vc-col-8  { grid-column: span 8; }
 .version-comparison-filter-grid .vc-col-14 { grid-column: span 14; }
 
 @media (max-width: 1023px) {
