@@ -424,9 +424,14 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     () => availableChatModels(metadata),
     [metadata],
   );
-  const promptSuggestions = useMemo(
-    () => activeSession.latestResponse?.suggestedPrompts ?? metadata?.suggestedPrompts ?? [],
-    [activeSession.latestResponse, metadata],
+  const promptSuggestions = useMemo(() => {
+    const fromResponse = activeSession.latestResponse?.suggestedPrompts;
+    if (fromResponse?.length) return fromResponse;
+    const lastAssistant = [...activeSession.messages].reverse().find(m => m.role === "assistant" && m.suggestedPrompts?.length);
+    if (lastAssistant?.suggestedPrompts?.length) return lastAssistant.suggestedPrompts;
+    return metadata?.suggestedPrompts ?? [];
+  },
+    [activeSession.latestResponse, activeSession.messages, metadata],
   );
   const providerSummary = activeSession.latestResponse?.provider
     ? [
@@ -585,9 +590,8 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     try {
       await api.countryChatStream(
         { country, question, history, model: selectedChatModel },
-        (statusText) => {
-          streamedContent = statusText;
-          updateMessage({ content: streamedContent, answerMode: "thinking" });
+        (_statusText) => {
+          updateMessage({ answerMode: "thinking" });
         },
         (token) => {
           streamedContent += token;

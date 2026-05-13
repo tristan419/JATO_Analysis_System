@@ -8,6 +8,47 @@ import {
   buildCountryChatAnswerSections,
 } from "../contexts/countryChatHelpers";
 
+function renderMarkdown(md: string): string {
+  let html = md
+    // Escape HTML first
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    // Headers
+    .replace(/^#### (.+)$/gm, "<h4>$1</h4>")
+    .replace(/^### (.+)$/gm, "<h3>$1</h3>")
+    .replace(/^## (.+)$/gm, "<h2>$1</h2>")
+    .replace(/^# (.+)$/gm, "<h1>$1</h1>")
+    // Bold and italic
+    .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    // Inline code
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    // Horizontal rules
+    .replace(/^---$/gm, "<hr>")
+    // Tables — convert markdown tables to HTML
+    .replace(/^\|(.+)\|$/gm, (line) => {
+      const cells = line.split("|").filter(c => c.trim()).map(c => c.trim());
+      const isHeader = /^:?-{3,}:?$/.test(cells[0] || "");
+      if (isHeader) return ""; // skip separator row
+      const tag = line.includes("---") ? "" : "td";
+      return `<tr>${cells.map(c => `<${tag}>${c}</${tag}>`).join("")}</tr>`;
+    })
+    // Lists
+    .replace(/^[\s]*[-*+] (.+)$/gm, "<li>$1</li>")
+    .replace(/^[\s]*\d+\. (.+)$/gm, "<li>$1</li>")
+    // Paragraphs — double newlines
+    .replace(/\n\n/g, "</p><p>")
+    // Single newlines → <br>
+    .replace(/\n/g, "<br>");
+
+  // Wrap consecutive <li> in <ul>
+  html = html.replace(/(<li>.*?<\/li>(\s*<br>\s*)?)+/g, "<ul>$&</ul>");
+  // Wrap consecutive <tr> in <table>
+  html = html.replace(/(<tr>.*?<\/tr>(\s*<br>\s*)?)+/g, "<table>$&</table>");
+
+  return `<p>${html}</p>`;
+}
+
 const DEEPSEEK_INPUT_PRICE_PER_1M = 1.0;
 const DEEPSEEK_CACHE_HIT_PRICE_PER_1M = 0.2;
 const DEEPSEEK_OUTPUT_PRICE_PER_1M = 2.0;
@@ -168,7 +209,7 @@ export function CountryChatGroundedAnswer({
   const grounding = message.grounding;
   const isAssistant = message.role === "assistant";
   if (!grounding && !isAssistant) {
-    return <div className="copilot-message-body">{message.content}</div>;
+    return <div className="copilot-message-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />;
   }
 
   const evidenceTables = compact
@@ -232,7 +273,7 @@ export function CountryChatGroundedAnswer({
           <div className="copilot-answer-section-head">
             <strong>{grounding ? "直接回答" : "助手回答"}</strong>
           </div>
-          <div className="copilot-answer-lead">{answerSections.lead}</div>
+          <div className="copilot-answer-lead" dangerouslySetInnerHTML={{ __html: renderMarkdown(answerSections.lead) }} />
           {answerPath.focusTags.length > 0 ? (
             <div className="copilot-answer-focus">
               <span className="copilot-answer-focus-label">范围</span>
