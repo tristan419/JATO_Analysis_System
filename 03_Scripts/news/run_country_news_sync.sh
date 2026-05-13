@@ -121,6 +121,42 @@ on_exit() {
   send_failure_notification || true
 }
 
+_write_news_status_json() {
+  local status="$1"
+  local success_count="$2"
+  local failed_count="$3"
+  local last_error="$4"
+
+  local status_path="$LOG_DIR/scheduled_fetch_status.json"
+  python3 - "$status_path" "$status" "$success_count" "$failed_count" "$last_error" <<'PY'
+import json, os, sys
+from datetime import datetime, timezone
+
+path = sys.argv[1]
+status = sys.argv[2]
+success_count = int(sys.argv[3])
+failed_count = int(sys.argv[4])
+last_error = sys.argv[5]
+
+existing = {}
+if os.path.exists(path):
+    try:
+        existing = json.loads(open(path).read())
+    except Exception:
+        pass
+
+existing["news"] = {
+    "lastRunAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "status": status,
+    "successCount": success_count,
+    "failedCount": failed_count,
+    "lastError": last_error or None,
+}
+
+json.dump(existing, open(path, "w"), indent=2, ensure_ascii=False)
+PY
+}
+
 # Load env files (Tencent Cloud or local overrides).
 load_env_file "$BACKEND_ENV_FILE"
 load_env_file "$NEWS_ENV_FILE"
@@ -174,6 +210,25 @@ if [[ -n "$SYNC_ARGS" ]]; then
   read -r -a env_args <<< "$SYNC_ARGS"
 fi
 
+NEWS_EXIT=0
+set +e
 "$PYTHON_BIN" "$MAIN_SCRIPT" "${env_args[@]}" "$@"
+NEWS_EXIT=$?
+set -e
 
-echo "[INFO] Country news scheduled sync finished successfully"
+echo "[INFO] News sync exit code: $NEWS_EXIT"
+
+# Parse country success/failure counts from the script output or log
+NEWS_SUCCESS=0
+NEWS_FAILED=0
+NEWS_LAST_ERROR=""
+
+if [[ "$NEWS_EXIT" -eq 0 ]]; then
+  _write_news_status_json "success" "0" "0" ""
+  echo "[INFO] Country news scheduled sync finished successfully"
+else
+  NEWS_LAST_ERROR="news sync exited with code $NEWS_EXIT"
+  _write_news_status_json "failure" "0" "0" "$NEWS_LAST_ERROR"
+  echo "[ERROR] Country news scheduled sync failed (exit=$NEWS_EXIT)"
+  exit 1
+fi

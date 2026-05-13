@@ -92,6 +92,46 @@ print(json.dumps(payload, ensure_ascii=False, indent=2))
 PY
 }
 
+_write_voc_status_json() {
+  local status_path="$1"
+  local status="$2"
+  local raw_count="$3"
+  local enriched_count="$4"
+  local last_error="$5"
+  local started_at="$6"
+
+  python - <<'PY' "$status_path" "$status" "$raw_count" "$enriched_count" "$last_error" "$started_at"
+import json, os, sys
+from datetime import datetime, timezone
+
+path = sys.argv[1]
+status = sys.argv[2]
+raw_count = int(sys.argv[3])
+enriched_count = int(sys.argv[4])
+last_error = sys.argv[5]
+started_at = sys.argv[6] if len(sys.argv) > 6 else datetime.now(timezone.utc).isoformat()
+
+existing = {}
+if os.path.exists(path):
+    try:
+        existing = json.loads(open(path).read())
+    except Exception:
+        pass
+
+existing["voc"] = {
+    "lastRunAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "status": status,
+    "successCount": raw_count,
+    "enrichedCount": enriched_count,
+    "failedCount": 0,
+    "lastError": last_error or None,
+}
+
+json.dump(existing, open(path, "w"), indent=2, ensure_ascii=False)
+print(f"[INFO] Status written: {path}")
+PY
+}
+
 load_env_file "$BACKEND_ENV_FILE"
 load_env_file "$VOC_ENV_FILE"
 
@@ -158,6 +198,9 @@ VOC_ENRICH_RUN+=(
 ln -sfn "$LOG_FILE" "$LATEST_LOG_LINK"
 mkdir -p "$(dirname "$RAW_SUMMARY_PATH")" "$(dirname "$ENRICHED_SUMMARY_PATH")" "$OUTPUT_ROOT_ABS"
 
+STATUS_JSON="$LOG_DIR/scheduled_fetch_status.json"
+RAW_FAILED_SOURCES="$LOG_DIR/voc-failed-sources.json"
+
 echo "[INFO] VOC forum scheduled sync runner"
 echo "[INFO] Host: $HOST_NAME"
 echo "[INFO] Started: $JOB_STARTED_AT"
@@ -173,20 +216,90 @@ echo "[INFO] Enrich: $JATO_VOC_ENRICH"
 echo "[INFO] Log file: $LOG_FILE"
 
 cd "$REPO_DIR"
-"${VOC_FETCH_RUN[@]}"
 
+# --- VOC fetch (soft-failure: per-source errors do not kill the job) ---
+VOC_FETCH_EXIT=0
+set +e
+"${VOC_FETCH_RUN[@]}"
+VOC_FETCH_EXIT=$?
+set -e
+
+echo "[INFO] VOC fetch exit code: $VOC_FETCH_EXIT"
+
+RAW_COUNT=0
+if [[ -d "$OUTPUT_ROOT_ABS" ]]; then
+  RAW_COUNT="$(find "$OUTPUT_ROOT_ABS" -type f -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+fi
+
+if [[ "$RAW_COUNT" -eq 0 ]]; then
+  echo "[ERROR] VOC fetch produced zero raw artifacts — failing job"
+  _write_voc_status_json "$STATUS_JSON" "failure" 0 0 "zero raw artifacts" "$JOB_STARTED_AT"
+  exit 1
+fi
+
+echo "[INFO] VOC raw artifacts: $RAW_COUNT"
+
+if [[ -f "$RAW_SUMMARY_PATH" ]]; then
+  python - <<'PY' > "$RAW_FAILED_SOURCES" 2>/dev/null || true
+import json, sys
+try:
+    data = json.load(open(sys.argv[1] if len(sys.argv) > 1 else "/dev/stdin"))
+    failed = [
+        {"source": s.get("source",""), "country": s.get("country",""), "error": s.get("error","")}
+        for s in (data if isinstance(data, list) else [data])
+        if s.get("status") == "failed" or s.get("error")
+    ]
+    json.dump({"failedSources": failed, "failedCount": len(failed)}, sys.stdout, indent=2)
+except Exception:
+    pass
+PY "$RAW_SUMMARY_PATH"
+fi
+
+VOC_FAILED_SOURCE_COUNT=0
+if [[ -f "$RAW_FAILED_SOURCES" ]]; then
+  VOC_FAILED_SOURCE_COUNT="$(python -c "import json; d=json.load(open('$RAW_FAILED_SOURCES')); print(d.get('failedCount',0))" 2>/dev/null || echo 0)"
+fi
+
+# --- Sync raw to PostgreSQL staging ---
 if is_truthy "$JATO_VOC_SYNC_TO_STORE"; then
   echo "[INFO] Sync raw VOC artifacts to PostgreSQL staging"
+  set +e
   run_voc_store_sync "$OUTPUT_ROOT_ABS" "$JATO_VOC_COUNTRIES"
+  STORE_EXIT=$?
+  set -e
+  if [[ "$STORE_EXIT" -ne 0 ]]; then
+    echo "[WARN] VOC staging sync exited with code $STORE_EXIT"
+  fi
 else
   echo "[INFO] Skip raw-to-store sync because JATO_VOC_SYNC_TO_STORE=$JATO_VOC_SYNC_TO_STORE"
 fi
 
+# --- VOC enrichment ---
 if is_truthy "$JATO_VOC_ENRICH"; then
   echo "[INFO] Build VOC enriched signals and deck artifacts"
+  set +e
   "${VOC_ENRICH_RUN[@]}"
+  ENRICH_EXIT=$?
+  set -e
+  if [[ "$ENRICH_EXIT" -ne 0 ]]; then
+    echo "[WARN] VOC enrichment exited with code $ENRICH_EXIT"
+  fi
 else
   echo "[INFO] Skip VOC enrichment because JATO_VOC_ENRICH=$JATO_VOC_ENRICH"
 fi
 
-echo "[INFO] VOC forum scheduled sync finished successfully"
+# --- Write status artifact ---
+ENRICHED_COUNT=0
+if [[ -f "$ENRICHED_SUMMARY_PATH" ]]; then
+  ENRICHED_COUNT="$(python -c "import json; d=json.load(open('$ENRICHED_SUMMARY_PATH')); print(d.get('total', len(d) if isinstance(d,list) else 1))" 2>/dev/null || echo 0)"
+fi
+
+if [[ "$VOC_FETCH_EXIT" -eq 0 && "$VOC_FAILED_SOURCE_COUNT" -eq 0 ]]; then
+  _write_voc_status_json "$STATUS_JSON" "success" "$RAW_COUNT" "$ENRICHED_COUNT" "" "$JOB_STARTED_AT"
+elif [[ "$RAW_COUNT" -gt 0 ]]; then
+  _write_voc_status_json "$STATUS_JSON" "partial_success" "$RAW_COUNT" "$ENRICHED_COUNT" "$VOC_FAILED_SOURCE_COUNT sources failed" "$JOB_STARTED_AT"
+else
+  _write_voc_status_json "$STATUS_JSON" "failure" "$RAW_COUNT" "$ENRICHED_COUNT" "fetch produced zero artifacts" "$JOB_STARTED_AT"
+fi
+
+echo "[INFO] VOC forum scheduled sync finished"

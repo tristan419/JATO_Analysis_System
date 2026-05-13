@@ -1,49 +1,25 @@
 name: country-news-sync
 
 on:
-  schedule:
-    - cron: "15 */6 * * *"
   workflow_dispatch:
     inputs:
-      persist:
-        description: "Write to database (true) or dry-run (false)"
+      dry_run:
+        description: "Dry-run (no database persist)"
         required: false
-        default: "false"
+        default: "true"
+      workers:
+        description: "Parallel country workers"
+        required: false
+        default: "4"
+      countries:
+        description: "Country codes (comma-separated, empty=all)"
+        required: false
+        default: ""
 
 jobs:
-  dry-run:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r 06_AppPlatform/backend/requirements.txt
-          pip install -e 07_ScrapingToolkit
-
-      - name: Country news sync dry-run
-        env:
-          APP_DATABASE_ENABLED: "false"
-          APP_COUNTRY_NEWS_LIVE_FETCH: "false"
-        run: |
-          python 03_Scripts/sync_country_news_digest.py --dry-run --workers 4 --no-gemini
-
-  persist:
-    if: >-
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.persist == 'true')
+  sync:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: dry-run
 
     steps:
       - name: Checkout
@@ -60,10 +36,60 @@ jobs:
           pip install -r 06_AppPlatform/backend/requirements.txt
           pip install -e 07_ScrapingToolkit
 
-      - name: Country news sync persist
+      - name: Diagnostics
+        run: |
+          echo "=== News sync diagnostics ==="
+          echo "dry_run=${{ github.event.inputs.dry_run || 'true' }}"
+          echo "workers=${{ github.event.inputs.workers || '4' }}"
+          echo "countries=${{ github.event.inputs.countries || '<all>' }}"
+          echo "APP_DATABASE_ENABLED=${APP_DATABASE_ENABLED:-unset}"
+          python - <<'PY'
+          import os
+          db = os.getenv("APP_DATABASE_URL", "")
+          gemini = os.getenv("GEMINI_API_KEY", "")
+          print("APP_DATABASE_URL_SET:", bool(db))
+          print("APP_DATABASE_URL_LEN:", len(db))
+          print("GEMINI_API_KEY_SET:", bool(gemini))
+          print("APP_COUNTRY_NEWS_LIVE_FETCH:", os.getenv("APP_COUNTRY_NEWS_LIVE_FETCH", "unset"))
+          PY
+
+      - name: Country news sync
         env:
-          APP_DATABASE_ENABLED: "true"
+          APP_DATABASE_ENABLED: >-
+            ${{
+              github.event.inputs.dry_run != 'true' && 'true' || 'false'
+            }}
           APP_DATABASE_URL: ${{ secrets.APP_DATABASE_URL }}
+          APP_COUNTRY_NEWS_LIVE_FETCH: "false"
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          python 03_Scripts/sync_country_news_digest.py --workers 4
+          DRY_RUN_FLAG=""
+          if [ "${{ github.event.inputs.dry_run || 'true' }}" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+          fi
+
+          COUNTRY_ARGS=()
+          if [ -n "${{ github.event.inputs.countries }}" ]; then
+            IFS=',' read -ra CODES <<< "${{ github.event.inputs.countries }}"
+            for code in "${CODES[@]}"; do
+              trimmed="$(echo "$code" | xargs)"
+              if [ -n "$trimmed" ]; then
+                COUNTRY_ARGS+=(--country "$trimmed")
+              fi
+            done
+          fi
+
+          python 03_Scripts/sync_country_news_digest.py \
+            $DRY_RUN_FLAG \
+            --workers "${{ github.event.inputs.workers || '4' }}" \
+            --no-gemini \
+            "${COUNTRY_ARGS[@]}"
+
+      - name: Upload diagnostics artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: news-sync-failure-${{ github.run_id }}
+          path: |
+            03_Scripts/logs/
+          if-no-files-found: warn
