@@ -1,14 +1,18 @@
-"""Answer Composer — builds structured answers from evidence packs."""
+"""Answer Composer — builds structured answers from evidence packs.
+
+Block selection is driven by a simple principle: only include data that
+both EXISTS in the snapshot AND is RELEVANT to the user's question.
+"""
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
 class AnswerBlock(BaseModel):
-    block_type: Literal["summary", "table", "chart", "evidence", "limitation", "tax_estimate", "recommendation"] = "summary"
+    block_type: str = "summary"
     title: str = ""
     content: str = ""
     data: dict[str, Any] | None = None
@@ -22,6 +26,162 @@ class StructuredAnswer(BaseModel):
     answer_mode: str = "quick_answer"
 
 
+# ── Question analysis ────────────────────────────────────────────
+
+def _lowered(question: str) -> str:
+    return (question or "").lower()
+
+
+def _has_any(lowered: str, keywords: tuple[str, ...]) -> bool:
+    return any(kw in lowered for kw in keywords)
+
+
+# ── Data availability checks ─────────────────────────────────────
+
+def _has_ranking(snapshot: dict) -> bool:
+    brands = snapshot.get("topBrands", [])
+    return isinstance(brands, list) and len(brands) >= 2
+
+
+def _has_powertrain(snapshot: dict) -> bool:
+    pt = snapshot.get("powertrainMix", [])
+    return isinstance(pt, list) and len(pt) >= 2
+
+
+def _has_cross_tabs(snapshot: dict) -> bool:
+    ct = snapshot.get("crossTabs", {})
+    return isinstance(ct, dict) and bool(ct.get("availableDimensions"))
+
+
+def _has_segment(snapshot: dict) -> bool:
+    seg = snapshot.get("segmentMatrix", {})
+    rows = seg.get("rows", []) if isinstance(seg, dict) else []
+    return len(rows) >= 2
+
+
+def _has_msrp(snapshot: dict) -> bool:
+    return bool(snapshot.get("preciseLookup"))
+
+
+# ── Question relevance checks ────────────────────────────────────
+
+def _asks_ranking(lowered: str) -> bool:
+    return _has_any(lowered, (
+        "排名", "top", "前", "卖得好", "卖的最好", "畅销", "哪些", "什么车",
+        "ranking", "best", "top brand", "popular",
+    ))
+
+
+def _asks_powertrain(lowered: str) -> bool:
+    return _has_any(lowered, (
+        "bev", "phev", "hev", "mhev", "ice", "电动", "混动", "插混",
+        "纯电", "燃油", "动力", "powertrain", "新能源", "nev",
+    ))
+
+
+def _asks_segment(lowered: str) -> bool:
+    return _has_any(lowered, (
+        "suv", "sedan", "轿车", "越野", "segment", "细分", "级别",
+        "a级", "b级", "c级", "紧凑", "中型", "大型",
+    ))
+
+
+def _asks_causal(lowered: str) -> bool:
+    return _has_any(lowered, (
+        "为什么", "原因", "为何", "下滑", "上升", "下降", "下跌",
+        "why", "decline", "drop", "growth", "factor", "驱动", "影响",
+    ))
+
+
+def _asks_tax(lowered: str) -> bool:
+    return _has_any(lowered, (
+        "税", "补贴", "malus", "bonus", "碳", "co2", "排放",
+        "tax", "subsidy", "incentive", "政策",
+    ))
+
+
+def _asks_price(lowered: str) -> bool:
+    return _has_any(lowered, (
+        "价格", "多少钱", "价位", "msrp", "price", "定价", "售价",
+        "月供", "金融",
+    ))
+
+
+def _asks_compare(lowered: str) -> bool:
+    return _has_any(lowered, (
+        "对比", "比较", "哪个好", "区别", "差异", "vs", "versus",
+        "compare", "comparison", "difference",
+    ))
+
+
+def _is_simple_fact(lowered: str) -> bool:
+    """Simple fact questions: single KPI, no analysis needed."""
+    if _asks_causal(lowered) or _asks_compare(lowered) or _asks_segment(lowered):
+        return False
+    if _asks_ranking(lowered) or _asks_powertrain(lowered):
+        return False  # even if short, these deserve structured output
+    return len(lowered.split()) <= 10
+
+
+# ── Block builders ───────────────────────────────────────────────
+
+def _build_ranking_table(snapshot: dict) -> AnswerBlock:
+    brands = snapshot.get("topBrands", [])
+    rows = "\n".join(
+        f"| {b.get('label', '?')} | {int(b.get('value', 0)):,} |"
+        for b in brands[:5]
+    )
+    return AnswerBlock(
+        block_type="table", title="品牌排名",
+        content=f"| 品牌 | 销量 |\n| --- | --- |\n{rows}",
+    )
+
+
+def _build_powertrain_table(snapshot: dict) -> AnswerBlock:
+    pt = snapshot.get("powertrainMix", [])
+    rows = "\n".join(
+        f"| {p.get('label', '?')} | {int(p.get('value', 0)):,} |"
+        for p in pt[:6]
+    )
+    return AnswerBlock(
+        block_type="table", title="动力结构",
+        content=f"| 动力 | 销量 |\n| --- | --- |\n{rows}",
+    )
+
+
+def _build_cross_tab_block(snapshot: dict) -> AnswerBlock | None:
+    ct = snapshot.get("crossTabs", {})
+    drive_by_fuel = ct.get("driveByFuel", [])
+    if not drive_by_fuel:
+        return None
+    lines = []
+    for row in drive_by_fuel[:5]:
+        idx = row.get("_index", "?")
+        pct_4wd = row.get("4WD_pct", 0)
+        lines.append(f"- {idx}: 四驱占比 **{pct_4wd}%**")
+    return AnswerBlock(
+        block_type="evidence", title="驱动 × 动力交叉",
+        content="\n".join(lines),
+    )
+
+
+def _build_segment_block(snapshot: dict) -> AnswerBlock | None:
+    seg = snapshot.get("segmentMatrix", {})
+    rows = seg.get("rows", []) if isinstance(seg, dict) else []
+    if not rows:
+        return None
+    lines = "\n".join(
+        f"| {r.get('segment', '?')} | {int(r.get('currentMonth', 0)):,} | {r.get('mom', '?')}% |"
+        for r in rows[:8]
+    )
+    return AnswerBlock(
+        block_type="table", title="细分市场",
+        content=f"| 细分 | 当月销量 | MoM |\n| --- | --- | --- |\n{lines}",
+    )
+
+
+# ── Main composer ────────────────────────────────────────────────
+
 def compose_answer(
     evidence_pack=None,
     source_plan=None,
@@ -33,117 +193,96 @@ def compose_answer(
     blocks: list[AnswerBlock] = []
     limitations: list[str] = []
     recommendations: list[str] = []
+    lowered = _lowered(question)
+    is_simple = _is_simple_fact(lowered)
 
-    # Summary from overview
+    # ── 1. Always: summary (compact for simple questions) ──
     overview = snapshot.get("overviewSummary", {})
     kpis = snapshot.get("kpis", {})
-    if overview or kpis:
-        summary_parts = []
-        if overview.get("headline"):
-            summary_parts.append(overview["headline"])
-        elif kpis:
-            summary_parts.append(
-                f"{country} 市场：{kpis.get('brandCount', '?')} 个品牌，"
-                f"{kpis.get('modelCount', '?')} 个车型。"
-            )
-        blocks.append(AnswerBlock(
-            block_type="summary",
-            title="市场概况",
-            content=" ".join(summary_parts) or f"{country} 市场数据快照。",
-        ))
-
-    # Brand ranking table
-    top_brands = snapshot.get("topBrands", [])
-    if isinstance(top_brands, list) and top_brands:
-        brands_text = "\n".join(
-            f"| {b.get('label', '?')} | {b.get('value', 0):,} |"
-            for b in top_brands[:5]
+    if overview.get("headline"):
+        summary_text = overview["headline"]
+    elif kpis:
+        summary_text = (
+            f"{country}：{kpis.get('brandCount', '?')} 品牌，"
+            f"{kpis.get('modelCount', '?')} 车型"
         )
-        blocks.append(AnswerBlock(
-            block_type="table",
-            title="Top 5 品牌",
-            content=f"| 品牌 | 销量 |\n| --- | --- |\n{brands_text}",
-        ))
+    else:
+        summary_text = f"{country} 市场数据"
 
-    # Powertrain mix
-    powertrain = snapshot.get("powertrainMix", [])
-    if isinstance(powertrain, list) and powertrain:
-        pt_text = "\n".join(
-            f"| {p.get('label', '?')} | {p.get('value', 0):,} |"
-            for p in powertrain[:6]
-        )
-        blocks.append(AnswerBlock(
-            block_type="table",
-            title="动力结构",
-            content=f"| 动力 | 销量 |\n| --- | --- |\n{pt_text}",
-        ))
+    blocks.append(AnswerBlock(block_type="summary", title="市场概况", content=summary_text))
 
-    # Cross-tab insights
-    cross_tabs = snapshot.get("crossTabs", {})
-    if isinstance(cross_tabs, dict):
-        drive_by_fuel = cross_tabs.get("driveByFuel", [])
-        if drive_by_fuel:
-            lines = []
-            for row in drive_by_fuel[:5]:
-                idx = row.get("_index", "?")
-                pct_4wd = row.get("4WD_pct", 0)
-                lines.append(f"- {idx}: 4WD 占比 {pct_4wd}%")
-            blocks.append(AnswerBlock(
-                block_type="evidence",
-                title="驱动 × 动力交叉",
-                content="\n".join(lines) or "数据不可用",
-            ))
+    # ── 2. Ranking: only if user asks AND data exists ──
+    if _has_ranking(snapshot) and _asks_ranking(lowered) and not is_simple:
+        blocks.append(_build_ranking_table(snapshot))
+    elif _has_ranking(snapshot) and _asks_ranking(lowered) and is_simple:
+        # Simple question → just name the top in summary, no table
+        top = (snapshot.get("topBrands") or [{}])[0]
+        blocks[0].content += f"，头部品牌 {top.get('label', '?')}"
 
-    # Evidence pack sources
-    if evidence_pack:
+    # ── 3. Powertrain: only if relevant ──
+    if _has_powertrain(snapshot) and _asks_powertrain(lowered):
+        blocks.append(_build_powertrain_table(snapshot))
+
+    # ── 4. Cross-tabs: only for causal/analytical questions ──
+    if _has_cross_tabs(snapshot) and (_asks_causal(lowered) or _asks_segment(lowered)):
+        ct_block = _build_cross_tab_block(snapshot)
+        if ct_block:
+            blocks.append(ct_block)
+
+    # ── 5. Segment: only for segment questions ──
+    if _has_segment(snapshot) and _asks_segment(lowered):
+        seg_block = _build_segment_block(snapshot)
+        if seg_block:
+            blocks.append(seg_block)
+
+    # ── 6. Strategy/comparison gets evidence coverage ──
+    has_strategy = _asks_causal(lowered) or _asks_compare(lowered) or _asks_tax(lowered)
+    if has_strategy and evidence_pack:
         sources = getattr(evidence_pack, "sources", [])
         if sources:
             src_lines = [f"- {s.source_name or s.source_id} ({s.coverage})" for s in sources]
             blocks.append(AnswerBlock(
-                block_type="evidence",
-                title="证据覆盖",
+                block_type="evidence", title="证据来源",
                 content="\n".join(src_lines),
             ))
-        for lim in getattr(evidence_pack, "limitations", []):
-            limitations.append(lim)
 
-    # Source plan
-    if source_plan:
-        plan_lines = [f"- {item.source_id} ({item.source_lane})" for item in getattr(source_plan, "items", [])]
-        if plan_lines:
-            blocks.append(AnswerBlock(
-                block_type="evidence",
-                title="数据源计划",
-                content="\n".join(plan_lines),
-            ))
-
-    # Tax estimate if available
-    if evidence_pack:
+    # ── 7. Tax estimate ──
+    if _asks_tax(lowered) and evidence_pack:
         tables = getattr(evidence_pack, "tables", [])
         for table in tables:
             if table.get("title") == "税负估算":
                 blocks.append(AnswerBlock(
-                    block_type="tax_estimate",
-                    title="税负估算",
-                    content="",
-                    data=table,
+                    block_type="tax_estimate", title="税负估算", content="", data=table,
                 ))
 
-    # Build summary
-    summary = f"{country} 市场分析" if country else "市场分析"
-    if overview.get("subheadline"):
-        summary = overview["subheadline"]
+    # ── Determine answer_mode from actual blocks ──
+    block_types = {b.block_type for b in blocks}
+    if len(blocks) <= 2:
+        answer_mode = "quick_answer"
+    elif "tax_estimate" in block_types:
+        answer_mode = "strategy_brief"
+    elif block_types >= {"table", "evidence"}:
+        answer_mode = "markdown_report"
+    elif "table" in block_types:
+        answer_mode = "kpi_answer"
+    else:
+        answer_mode = "quick_answer"
 
-    # Recommendations
-    if limitations:
+    # ── Limitations ──
+    if evidence_pack:
+        for lim in getattr(evidence_pack, "limitations", []):
+            limitations.append(lim)
+    if not _has_cross_tabs(snapshot) and _asks_causal(lowered):
+        limitations.append("交叉维度数据不可用，因果分析受限。")
+
+    # ── Recommendations only for strategy questions ──
+    if has_strategy and limitations:
         recommendations.append("建议获取更完整的证据后再做策略判断。")
-    if not cross_tabs:
-        recommendations.append("交叉维度数据缺失，建议检查数据源配置。")
 
     return StructuredAnswer(
-        summary=summary,
+        summary=summary_text,
         blocks=blocks,
         limitations=limitations,
         recommendations=recommendations,
-        answer_mode="quick_answer" if len(blocks) <= 3 else "markdown_report",
+        answer_mode=answer_mode,
     )
