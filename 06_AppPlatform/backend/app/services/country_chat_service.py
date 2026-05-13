@@ -18,6 +18,7 @@ from app.infra import parquet_repository as repo
 from app.copilot_governance.answer_composer import compose_answer
 from app.copilot_governance.audit import build_audit_record
 from app.copilot_governance.evidence_pack import build_evidence_pack_from_snapshot
+from app.copilot_governance.fact_checker import check_answer_facts
 from app.copilot_governance.source_plan import plan_sources
 from app.scraper import enable_external_scraper_package
 from app.services import query_service
@@ -1272,7 +1273,7 @@ def answer_country_question(
             "sourcePlan": source_plan.model_dump(),
             "evidencePack": evidence_pack.model_dump(),
             "governanceTrace": governance_trace,
-            "structuredAnswer": structured_answer.model_dump(),
+            "structuredAnswer": _inject_fact_check(structured_answer, direct_answer_payload["answer"], snapshot),
             "auditId": build_audit_record(
                 country=normalized_country, question=normalized_question,
                 intent=intent, intent_route=route_plan["intentRoute"],
@@ -1421,7 +1422,7 @@ def answer_country_question(
         "sourcePlan": source_plan.model_dump(),
         "evidencePack": evidence_pack.model_dump(),
         "governanceTrace": governance_trace,
-        "structuredAnswer": structured_answer.model_dump(),
+        "structuredAnswer": _inject_fact_check(structured_answer, answer, snapshot),
         "auditId": build_audit_record(
             country=normalized_country, question=normalized_question,
             intent=intent, intent_route=route_plan["intentRoute"],
@@ -9360,6 +9361,16 @@ def _suggestions_for_intent(
     if specific:
         return specific
     return list(COUNTRY_PROMPT_SUGGESTIONS)
+
+
+def _inject_fact_check(structured_answer, answer: str, snapshot: dict) -> dict:
+    fc = check_answer_facts(answer, snapshot)
+    if fc.unverifiable_claims > 0:
+        for issue in fc.issues:
+            structured_answer.limitations.append(f"⚠ 数据核验: {issue.claim} — {issue.detail}")
+        if fc.status == "fail":
+            structured_answer.recommendations.append("多项数据无法在 JATO 快照中验证，建议核实来源。")
+    return structured_answer.model_dump()
 
 
 def _parse_report_suggestions(answer: str) -> list[str]:
