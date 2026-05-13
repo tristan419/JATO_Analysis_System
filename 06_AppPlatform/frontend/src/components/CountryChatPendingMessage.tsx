@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { renderMarkdown } from "../contexts/countryChatHelpers";
 
 const FUN_WAITING_PHRASES = [
   "翻阅销量档案中...",
@@ -12,7 +13,7 @@ const FUN_WAITING_PHRASES = [
 ];
 
 export function CountryChatPendingMessage({
-  question,
+  question: _question,
   streamingContent = "",
   compact = false,
 }: {
@@ -30,21 +31,20 @@ export function CountryChatPendingMessage({
     return () => window.clearInterval(timer);
   }, [streamingContent]);
 
-  // Show actual streaming content if available
   if (streamingContent) {
-    const lines = streamingContent.split("\n").filter(Boolean);
-    const preview = lines.slice(-3).join("\n");
+    const html = renderMarkdown(streamingContent);
     return (
       <div className={`copilot-loading${compact ? " is-compact" : ""}`}>
         <div className="copilot-loading-kicker">DeepSeek 正在生成</div>
-        <div className="copilot-loading-current" style={{ maxHeight: 120, overflow: "hidden", whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.5 }}>
-          {preview.length > 300 ? preview.slice(-300) : preview || "..."}
-        </div>
+        <div
+          className="copilot-loading-current"
+          style={{ maxHeight: 300, overflow: "hidden", fontSize: 13, lineHeight: 1.6 }}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
       </div>
     );
   }
 
-  // Otherwise show waiting phrases (during snapshot building)
   return (
     <div className={`copilot-loading${compact ? " is-compact" : ""}`}>
       <div className="copilot-loading-kicker">准备数据中</div>

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from collections import Counter
 from typing import Any
@@ -2053,11 +2054,41 @@ def _build_external_search_grounding(
     }
 
 
+_SNAPSHOT_CACHE: dict[str, tuple[str, dict[str, Any]]] = {}
+_SNAPSHOT_CACHE_LOCK = threading.Lock()
+
+
+def _cached_snapshot(country: str, news_payload_override=None) -> dict[str, Any] | None:
+    """Return cached snapshot if dataset hasn't changed. Skip cache if news refresh."""
+    if news_payload_override is not None:
+        return None
+    token = repo.current_dataset_token()
+    with _SNAPSHOT_CACHE_LOCK:
+        entry = _SNAPSHOT_CACHE.get(country)
+        if entry and entry[0] == token:
+            return dict(entry[1])
+    return None
+
+
+def _cache_snapshot(country: str, snapshot: dict[str, Any]) -> None:
+    if snapshot.get("news_payload_override") is not None:
+        return
+    token = repo.current_dataset_token()
+    with _SNAPSHOT_CACHE_LOCK:
+        _SNAPSHOT_CACHE[country] = (token, snapshot)
+        if len(_SNAPSHOT_CACHE) > 16:
+            oldest = min(_SNAPSHOT_CACHE, key=lambda k: len(_SNAPSHOT_CACHE[k][1]))
+            _SNAPSHOT_CACHE.pop(oldest, None)
+
+
 def build_country_snapshot(
     country: str,
     user_params: dict[str, Any] | None = None,
     news_payload_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    cached = _cached_snapshot(country, news_payload_override)
+    if cached is not None:
+        return cached
     country_col = _resolve_country_column()
     if not country_col:
         raise ValueError("数据集中未找到国家字段")
@@ -2145,6 +2176,7 @@ def build_country_snapshot(
         log.warning("Market Scan deck unavailable for %s, skipping", country)
         snapshot["crossTabs"] = {}
 
+    _cache_snapshot(country, snapshot)
     return snapshot
 
 
