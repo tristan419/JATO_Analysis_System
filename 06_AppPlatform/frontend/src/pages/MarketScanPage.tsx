@@ -1978,7 +1978,20 @@ function OverviewSection({
   const trendItems = customRangeActive
     ? page.trend.items.filter((item) => periodWithinRange(item.period, timeRange))
     : page.trend.items;
+  const trendChartRef = useRef<HTMLDivElement | null>(null);
   const [focusedTrendFuel, setFocusedTrendFuel] = useState<string | null>(null);
+  async function handleExportChartPng(ref: React.RefObject<HTMLDivElement | null>, filename: string) {
+    const el = ref.current;
+    if (!el) return;
+    try {
+      const { toPng } = await import("html-to-image");
+      const dataUrl = await toPng(el, { cacheBust: true, pixelRatio: 2, backgroundColor: "#ffffff" });
+      const link = document.createElement("a");
+      link.href = dataUrl;
+      link.download = `${filename}.png`;
+      link.click();
+    } catch (err) { console.warn("Chart export failed", err); }
+  }
   const activeTrendShareFuel = focusedTrendFuel && fuelOrder.includes(focusedTrendFuel)
     ? focusedTrendFuel
     : fuelOrder.length === 1
@@ -1997,9 +2010,10 @@ function OverviewSection({
         eyebrow="Trend"
         title="Rolling 12M Volume / Powertrain"
         subtitle="上方保留 Rolling 12M 双柱趋势；下方直接汇总结论、结构驱动与下月观察点。"
+        actions={<button type="button" className="btn btn-ghost btn-sm" onClick={() => { void handleExportChartPng(trendChartRef, "trend-rolling12m"); }}>Export PNG</button>}
       >
         <div className="market-scan-overview-trend-stack">
-          <div className="market-scan-overview-trend-chart" onDoubleClickCapture={handleTrendLegendDoubleClick}>
+          <div className="market-scan-overview-trend-chart" ref={trendChartRef} onDoubleClickCapture={handleTrendLegendDoubleClick}>
             <PlotlyChart
               data={applyOverviewTrendExportToTraces(
                 buildOverviewTrendData(trendItems, fuelOrder, showDataLabels),
