@@ -10,7 +10,7 @@
 - `保待办`：所有待办统一保留在原看板文档中，不分散到新文件。
 - `低耦合`：专题文档只存专题信息，主索引只做导航与状态摘要。
 
-## 2. 当前项目快照（2026-05-11）
+## 2. 当前项目快照（2026-05-14）
 
 - 阶段：`Phase 4 — Fullstack 主线`
 - 架构：FastAPI + React + TypeScript（Streamlit 看板功能已全部迁移完成）
@@ -21,6 +21,7 @@
   - Country Copilot: snapshot → report 重构，交叉维度因果分析（drive×fuel, registration×fuel, segment×fuel），6-section 报告提示（核心发现→数据证据→因果分析→市场背景→趋势展望→进一步建议），流式 SSE 响应，Token 花费展示（RMB）
   - CurrentPrice 直查 MSRP、engineering variant diff、`JatoMsrpLink + MatchOverride` 生命周期闭环
   - AI News & VOC 智能管线文档（crawler 采集 + LLM 增强）
+  - **Version Comparison 版型气泡图 Smart Label System**：Label Mode 四模式（Clean / Smart Top / Selected / All）、优先级分层（P0–P3）、防重叠过滤、确定性 jitter、点击选中 + 框选、按优先级分透明度
 - 进行中：**MSRP 官方价格补全系统** — Batch 1+2（7 国 209 个 source）dry-run 通过 92/209 (44.0%)；版本 reconcile 层；sales truth 接入 diff answer；review/workbench mismatch UI。
 - 搁置：全球可视化（地球项目）不再继续；Round 3 剩余项保留为待办，不继续实现。
 
@@ -67,6 +68,8 @@ Markdown_Readme/
 | `01_DevWorkflow/PR_CHECKLIST.md` | 开发规范 | Active | 每次功能变更必须逐项勾选的 PR 清单 |
 | `01_DevWorkflow/COUNTRY_COPILOT_INTELLIGENCE_IMPLEMENTATION_2026-04-15.md` | 开发规范 | Active | Country Copilot 智能增强实施计划、已实现 tranche 与剩余缺口 |
 | `01_DevWorkflow/COUNTRY_COPILOT_INTENT_AND_HYBRID_RETRIEVAL_2026-04-17.md` | 开发规范/AI | Active | Copilot Snapshot / Dynamic / Live 架构、grounded answer 与 direct-answer 路由 |
+| `01_DevWorkflow/COUNTRY_COPILOT_GOVERNED_ANALYTICAL_COPILOT_PRD_2026-05-11.md` | 产品/AI | Active | Country Copilot 治理化分析助手 PRD：tool-first 取证 → 强制最终答复、visible answer path、6-section 报告 |
+| `01_DevWorkflow/version_comparison_cross_segment_model_picker_prd.md` | 产品/前端 | Active | Version Comparison 跨 Segment Model Picker + Smart Label System PRD |
 | **02_DataETL/** | | | |
 | `02_DataETL/ETL.md` | 实现 | Active | 数据处理主链路（Raw → ETL → 分区 → 刷新） |
 | `02_DataETL/ETL_Baseline_Patch_Migration_Checklist_2026-04-10.md` | 实现 | Active | Baseline / Patch 迁移执行清单 |
@@ -154,10 +157,11 @@ Markdown_Readme/
 ### 迁移历史（仅追溯）
 `_archived/STREAMLIT_TO_FULLSTACK_MIGRATION.md` → `_archived/STREAMLIT_VS_REACT_COMPARISON.md` → `_archived/REACT_STREAMLIT_GAP_ANALYSIS.md` → [`../Streamlit/README.md`](../Streamlit/README.md)
 
-## 5.1 当前关注点（2026-04-19）
+## 5.1 当前关注点（2026-05-14）
 
 - Fullstack 迁移已完成，Streamlit 文档全部归档至 `Streamlit/`。
 - 全球可视化（地球项目）已搁置，`JATO_GLOBAL_VISUALIZATION.md` 保留但不再推进。
+- **Version Comparison 版型气泡图 Smart Label System 已完成**：Label Mode 四模式切换（Clean / Smart Top / Selected / All）、P0–P3 优先级分层、确定性 jitter + greedy 防重叠、click/框选交互、按优先级分透明度。详情见 `01_DevWorkflow/version_comparison_cross_segment_model_picker_prd.md` §20。
 - **MSRP 官方价格补全系统**：Batch 1+2（7 国）dry-run 已完成，92/209 通过 (44.0%)。下一步是将通过的 source promote 到 `sources/` 目录。
 - Country Copilot 已从“只给大盘”升级到 **grounded answer + direct answer**：窄问题优先走 `positioning-focus` / `segment-fuel-focus` / `precise-lookup`，并返回 `answerMode + grounding`。
 - `positioningMap` 已补第一层 **peer corridor / residual**：不仅给 Length × MSRP × Sales 散点，还统一返回 sales-weighted peer P25 / median / P75、target residual 与 `below / within / above corridor` 判断，供 Dashboard 与 Country Copilot 共用。

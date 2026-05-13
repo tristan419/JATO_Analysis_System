@@ -1292,3 +1292,56 @@ Version Comparison should support both strict same-segment comparison and real-w
 10. 当 selectedModels 跨 Segment 时，显示 mixed-segment warning。
 ```
 
+---
+
+# 20. Smart Label System（版型气泡图智能标签）
+
+> 实施日期：2026-05-14
+> 落地文件：`06_AppPlatform/frontend/src/pages/VersionComparisonPage.tsx`
+
+## 20.1 目标
+
+当前版型气泡图所有 Version label 同时显示，密度过高难以阅读。Smart Label System 将标签升级为分层、防重叠、可交互的智能标签。
+
+## 20.2 Label Mode 控件
+
+四模式按钮组：
+
+| Mode | 标签行为 | 适用场景 |
+|------|---------|---------|
+| **Smart Top** (默认) | 仅显示优先度 ≥2 的标签 | 日常分析 |
+| **Clean** | 仅显示 Model 轴下标注，不显示 Version label | 概览/导出 |
+| **Selected** | 仅显示用户点击/框选选中的 Version | 聚焦对比 |
+| **All** | 显示全部标签（仍做防重叠和透明度分层） | Debug / 数据检查 |
+
+状态持久化：URL 参数 `?labelMode=smart_top`。默认值不写入 URL。
+
+## 20.3 Label Priority 分层
+
+每个 Version 气泡计算 `labelPriority`（0–3）：
+
+| Priority | 条件 | 视觉权重 |
+|----------|------|---------|
+| **3** | 用户选中 / 各 Model Top 1 销量 / 最高最低 MSRP | `rgba(15,23,42,0.97)` · 10px |
+| **2** | 各 Model Top 2–3 销量 / 各 Powertrain Top 1 销量 | `rgba(51,65,85,0.72)` · 9px |
+| **1** | 普通 Version | `rgba(51,65,85,0.38)` · 9px |
+| **0** | 长尾（bottom 20% 销量） | `rgba(51,65,85,0.22)` · 8px |
+
+## 20.4 防重叠机制
+
+1. **确定性 Jitter**：基于 `hash(model + version)` 生成一致的微小偏移（x: ±0.8% 数据范围, y: ±1% 数据范围）
+2. **Greedy 重叠过滤**：按 priority 降序排列，与已放置标签距离过近（x < 2.2% 范围且 y < 2.8% 范围）的低优先级标签被隐藏
+
+## 20.5 交互
+
+- **Click**：点击气泡切换该 Version 的选中状态（tog​​gle），选中版本自动升级为 Priority 3
+- **Box/Lasso Select**：框选/套索批量选中 Version
+- **清除已选**：工具栏按钮一键清除全部选中
+- **Hover**：hover 事件跟踪（`hoveredBubble` state），用于后续 dimming 增强
+
+## 20.6 Plotly 实现
+
+- **Marker traces**：每个 Powertrain 一条，显示气泡圆圈（含 legend + hovertemplate）
+- **Label traces**：按 priority 分组，每条 trace 跨所有 Powertrain，`showlegend: false`, `hoverinfo: "skip"`, `textfont.color` 用 rgba 控制透明度
+- **拆分收益**：Label trace 不参与 legend，切换 labelMode 时无需重建 marker trace
+

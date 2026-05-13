@@ -410,6 +410,10 @@
 | Version散点 (Length×MSRP) | N/A | ✅ |
 | color by Powertrain/Trim | N/A | ✅ |
 | 从筛选器快选Model | N/A | ✅ |
+| Smart Label System (四种模式) | N/A | ✅ 2026-05 |
+| Label Priority 分层 (P0–P3) | N/A | ✅ |
+| 防重叠过滤 + Jitter | N/A | ✅ |
+| Click 选中 + Box/Lasso 框选 | N/A | ✅ |
 
 **React独有功能 ✅**
 
@@ -703,7 +707,7 @@
 
 | 功能 | 说明 |
 |------|------|
-| ✅ 版型气泡图 (Model Version Bubble) | 输入Model名→查看不同版型的 Length×MSRP 散点分布 |
+| ✅ 版型气泡图 (Model Version Bubble) | 输入Model名→查看不同版型的 Length×MSRP 散点分布 + Smart Label System (Clean/Smart Top/Selected/All 四模式, P0–P3 优先级分层, 防重叠+jitter, click/框选交互) |
 | ✅ OJ定位定价图 (Positioning Map) | KMeans聚类 + 目标车型标记 + 手动竞品指定 + 聚类Top3 |
 | ✅ 零销量版型过滤 | 明细表有 "仅显示有销量版型" checkbox |
 | ✅ 系列图例 pill 控件 | 时序分组图有可点击的彩色 pill 按钮切换单系列显隐 |
