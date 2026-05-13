@@ -3119,16 +3119,7 @@ export function MarketScanPage() {
 
         {deck ? (
           <div className="market-scan-content" aria-busy={loading}>
-            {loading ? (
-              <div className="market-scan-refresh-layer">
-                <LoadingSurface
-                  mode="overlay"
-                  kicker="Refreshing"
-                  label="正在刷新当前 Market Scan 结果"
-                  detail="已命中相同条件时会优先走后端缓存。"
-                />
-              </div>
-            ) : null}
+            {loading ? <MarketScanDeckSkeleton /> : null}
             <div className="market-scan-slide-shell-actions">
               <div className="market-scan-slide-shell-meta">
                 <span className={`market-scan-toolbar-chip slide-edit-shell-chip${slideEditMode ? " is-active" : ""}`}>

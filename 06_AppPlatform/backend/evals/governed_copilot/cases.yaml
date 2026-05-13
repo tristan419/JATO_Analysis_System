@@ -40,8 +40,9 @@ cases:
     question: "瑞典 XC60 多少钱？"
     country: "瑞典"
     expected_intent: "precise-lookup"
-    expected_execution_mode: "canonical_only"
+    expected_execution_mode: "hybrid"
     expected_sources:
+      - jato_sales_parquet
       - current_price_postgres
 
   - id: cz_voc
@@ -64,9 +65,10 @@ cases:
     question: "挪威最近有什么汽车新闻？"
     country: "挪威"
     expected_intent: "market-context"
-    expected_execution_mode: "evidence_only"
+    expected_execution_mode: "hybrid"
     expected_sources:
       - news_digest
+      - country_profiles
 
   - id: se_strategy
     question: "J7 SHS 在瑞典能不能卖？政策怎么样 用户反馈如何"
@@ -159,11 +161,9 @@ cases:
     question: "匈牙利 BEV 补贴多少钱？"
     country: "匈牙利"
     expected_intent: "policy_tax"
-    expected_execution_mode: "hybrid"
+    expected_execution_mode: "evidence_only"
     expected_sources:
       - country_profiles
-    optional_sources:
-      - current_price_postgres
 
   - id: nl_bijtelling
     question: "荷兰 bijtelling BEV 公司车税率多少？"

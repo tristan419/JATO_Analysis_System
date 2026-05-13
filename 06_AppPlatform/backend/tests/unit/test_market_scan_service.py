@@ -290,15 +290,16 @@ def test_drilldown_payload_includes_month_rolling12_and_ytd_variants() -> None:
         }
     )
 
-    payload = market_scan_service._build_drilldown_payload(
+    drilldown_map = market_scan_service._build_all_drilldowns(
         frame=frame,
         available_periods=["2025-04", "2026-01", "2026-02", "2026-03", "2026-04"],
         resolved_period="2026-04",
         same_month_last_year_period="2025-04",
-        segment_value="SUV A0",
+        segment_values=["SUV A0"],
         fuel_panels=("BEV", "PHEV"),
         ranking_limit=10,
     )
+    payload = drilldown_map["SUV A0"]
 
     assert payload["monthTotalRanking"]["title"] == "Monthly Total Model Ranking"
     assert payload["monthTotalRanking"]["items"][0]["model"] == "EX30"

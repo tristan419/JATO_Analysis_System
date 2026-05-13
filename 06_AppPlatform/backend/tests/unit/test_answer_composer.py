@@ -1,10 +1,8 @@
-"""Tests for the answer composer module."""
-
-from __future__ import annotations
+"""Tests for answer composer — data-driven, no keyword matching."""
 
 from app.copilot_governance.answer_composer import compose_answer, StructuredAnswer
 
-SNAPSHOT_BASE = {
+SNAPSHOT_FULL = {
     "kpis": {"brandCount": 10, "modelCount": 50},
     "topBrands": [
         {"label": "Volvo", "value": 1000},
@@ -20,53 +18,39 @@ SNAPSHOT_BASE = {
         "availableDimensions": ["drive_type"],
         "driveByFuel": [
             {"_index": "BEV", "4WD_pct": 35.2, "_total": 5000},
-            {"_index": "ICE", "4WD_pct": 25.8, "_total": 3000},
         ],
     },
     "overviewSummary": {"headline": "Sweden market summary"},
+    "segmentMatrix": {"rows": [{"segment": "SUV-A", "currentMonth": 1234}]},
 }
 
 
 class TestComposeAnswer:
-    def test_simple_fact_question_minimal_blocks(self):
-        """'你好' → quick answer, no tables."""
-        answer = compose_answer(snapshot=SNAPSHOT_BASE, country="Sweden", question="你好")
-        assert answer.answer_mode == "quick_answer"
-        assert len(answer.blocks) <= 2
-
-    def test_bev_share_gets_powertrain_block(self):
-        """'BEV占比' → powertrain question, gets table."""
-        answer = compose_answer(snapshot=SNAPSHOT_BASE, country="Sweden", question="BEV占比多少")
-        assert any(b.block_type == "table" and "动力" in b.title for b in answer.blocks)
-
-    def test_ranking_question_gets_table(self):
-        """'什么车卖得好' → has ranking table."""
-        answer = compose_answer(snapshot=SNAPSHOT_BASE, country="Sweden", question="什么车卖的最好")
-        assert any(b.block_type == "table" and "品牌" in b.title for b in answer.blocks)
-
-    def test_powertrain_question_gets_powertrain_table(self):
-        """'动力结构' → powertrain table."""
-        answer = compose_answer(snapshot=SNAPSHOT_BASE, country="Sweden", question="动力结构是什么")
-        assert any(b.block_type == "table" and "动力" in b.title for b in answer.blocks)
-
-    def test_causal_question_gets_cross_tab(self):
-        """'为什么BEV下滑' → cross-tab evidence."""
-        answer = compose_answer(snapshot=SNAPSHOT_BASE, country="Sweden", question="为什么BEV销量下滑")
-        assert any(b.block_type == "evidence" and "交叉" in b.title for b in answer.blocks)
-
-    def test_tax_question_marks_strategy(self):
-        """Tax question → strategy_brief mode."""
-        answer = compose_answer(snapshot=SNAPSHOT_BASE, country="Sweden", question="瑞典碳税怎么算")
-        assert answer.answer_mode in ("strategy_brief", "quick_answer")
-
     def test_empty_snapshot_still_works(self):
-        answer = compose_answer(snapshot={}, country="Sweden", question="你好")
+        answer = compose_answer(snapshot={}, country="Sweden")
         assert isinstance(answer, StructuredAnswer)
-        assert answer.blocks
+        assert len(answer.blocks) >= 1  # summary always
 
-    def test_question_type_detection(self):
-        from app.copilot_governance.answer_composer import _is_simple_fact
-        assert _is_simple_fact("你好") is True
-        assert _is_simple_fact("销量怎么样") is True
-        assert _is_simple_fact("为什么bev下滑 驱动因素") is False
-        assert _is_simple_fact("什么车卖的最好") is False  # ranking
+    def test_full_snapshot_produces_all_blocks(self):
+        answer = compose_answer(snapshot=SNAPSHOT_FULL, country="Sweden")
+        assert len(answer.blocks) >= 4  # summary + brand + powertrain + cross-tab + segment
+        block_types = {b.block_type for b in answer.blocks}
+        assert "table" in block_types
+
+    def test_sparse_snapshot_produces_fewer_blocks(self):
+        sparse = {"kpis": {"brandCount": 5}}
+        answer = compose_answer(snapshot=sparse, country="Norway")
+        assert len(answer.blocks) <= 2  # summary only, no data to show
+
+    def test_cross_tab_with_data_produces_evidence(self):
+        answer = compose_answer(snapshot=SNAPSHOT_FULL, country="Sweden")
+        assert any(b.block_type == "evidence" and "驱动" in b.title for b in answer.blocks)
+
+    def test_powertrain_data_produces_table(self):
+        snapshot = {"powertrainMix": [{"label": "BEV", "value": 100}, {"label": "ICE", "value": 50}]}
+        answer = compose_answer(snapshot=snapshot)
+        assert any(b.block_type == "table" and "动力" in b.title for b in answer.blocks)
+
+    def test_answer_mode_derived_from_block_count(self):
+        assert compose_answer(snapshot={}).answer_mode == "quick_answer"
+        assert compose_answer(snapshot=SNAPSHOT_FULL).answer_mode == "markdown_report"

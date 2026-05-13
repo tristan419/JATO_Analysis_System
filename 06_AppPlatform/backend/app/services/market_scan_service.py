@@ -3081,174 +3081,212 @@ def _build_custom_range_fuel_trend(
     return {"items": items}
 
 
-def _build_drilldown_payload(
+def _empty_drilldown_payload(segment_value: str) -> dict[str, Any]:
+    return {
+        "segment": segment_value,
+        "segmentLabel": _segment_display_label(segment_value),
+        "title": f"{_segment_display_label(segment_value)} 车型",
+        "summaryText": "当前筛选下没有该细分市场的可用数据。",
+        "monthTotalRanking": {"title": "Monthly Total Model Ranking", "items": []},
+        "rolling12TotalRanking": {"title": "Rolling 12M Total Model Ranking", "items": []},
+        "totalRanking": {"title": "YTD Total Model Ranking", "items": []},
+        "monthFuelTrend": {"items": []},
+        "rolling12FuelTrend": {"items": []},
+        "ytdFuelTrend": {"items": []},
+        "fuelPanels": [],
+    }
+
+
+def precompute_model_rankings(
+    frame: pd.DataFrame,
+    current_month_columns: list[str],
+    same_month_columns: list[str],
+    current_ytd_columns: list[str],
+    prior_ytd_columns: list[str],
+    current_rolling12_columns: list[str],
+    prior_rolling12_columns: list[str],
+    custom_range_columns: list[str],
+    prior_custom_range_columns: list[str],
+    fuel_order: list[str],
+) -> list[dict[str, Any]]:
+    """Group by [segment, model] once and compute all window volumes."""
+    grouped = frame.groupby(["__segment_raw", "__model"], dropna=False, sort=False)
+    stats: list[dict[str, Any]] = []
+    for (segment, model), group in grouped:
+        month_vol = float(_series_sum(group, current_month_columns).sum())
+        ytd_vol = float(_series_sum(group, current_ytd_columns).sum())
+        rolling_vol = float(_series_sum(group, current_rolling12_columns).sum())
+        if ytd_vol <= 0 and month_vol <= 0 and rolling_vol <= 0:
+            continue
+        stats.append({
+            "segment": str(segment).strip(),
+            "model": str(model).strip(),
+            "monthVolume": month_vol,
+            "monthPrior": float(_series_sum(group, same_month_columns).sum()),
+            "ytdVolume": ytd_vol,
+            "ytdPrior": float(_series_sum(group, prior_ytd_columns).sum()),
+            "rollingVolume": rolling_vol,
+            "rollingPrior": float(_series_sum(group, prior_rolling12_columns).sum()),
+            "customVolume": float(_series_sum(group, custom_range_columns).sum()) if custom_range_columns else 0,
+            "customPrior": float(_series_sum(group, prior_custom_range_columns).sum()) if prior_custom_range_columns else 0,
+            "fuelMix": {
+                fuel: float(_series_sum(group[group["__powertrain"] == fuel], current_ytd_columns).sum())
+                for fuel in fuel_order
+            },
+            "driveMix": {
+                dt: float(_series_sum(group[group["__drive_type"] == dt], current_ytd_columns).sum())
+                for dt in ("2WD", "4WD", "OTHER")
+            },
+            "registrationMix": _registration_mix_payload(group, current_ytd_columns),
+        })
+    return stats
+
+
+def model_stats_to_ranking(
+    stats: list[dict[str, Any]],
+    segment: str,
+    vol_key: str,
+    prior_key: str,
+    fuel_order: list[str],
+    ranking_limit: int,
+) -> list[dict[str, Any]]:
+    """Convert pre-computed model stats into ranked items for a single segment."""
+    items = [s for s in stats if s["segment"] == segment]
+    if not items:
+        return []
+    total = sum(s[vol_key] for s in items)
+    if total <= 0:
+        return []
+    # Compute shares locally — avoid mutating shared stats dicts
+    with_share = [(s, s[vol_key] / total) for s in items]
+    with_share.sort(key=lambda x: (-x[1], -x[0][vol_key], x[0]["model"]))
+    max_share = with_share[0][1] or 1.0
+    result = []
+    for rank, (s, share) in enumerate(with_share[:max(1, int(ranking_limit))], start=1):
+        result.append({
+            "model": s["model"],
+            "volume": s[vol_key],
+            "sharePct": share,
+            "shareDisplay": f"{share * 100:.1f}%",
+            "yoy": _delta_payload(s[vol_key], s[prior_key]),
+            "fuelMix": s["fuelMix"],
+            "driveMix": s["driveMix"],
+            "registrationMix": s["registrationMix"],
+            "driveSharePct": _safe_share(s["driveMix"].get("4WD", 0), s[vol_key]),
+            "driveShareDisplay": f"{_safe_share(s['driveMix'].get('4WD', 0), s[vol_key]) * 100:.1f}%",
+            "rank": rank,
+            "barPct": _safe_share(share, max_share),
+        })
+    return result
+
+
+def _build_all_drilldowns(
     frame: pd.DataFrame,
     available_periods: list[str],
     resolved_period: str,
     same_month_last_year_period: str | None,
-    segment_value: str,
+    segment_values: list[str],
     fuel_panels: tuple[str, ...],
     ranking_limit: int,
     custom_range_periods: list[str] | None = None,
-) -> dict[str, Any]:
-    segment_frame = frame[frame["__segment_raw"] == segment_value].copy()
-    if segment_frame.empty:
-        return {
-            "segment": segment_value,
-            "segmentLabel": _segment_display_label(segment_value),
-            "title": f"{_segment_display_label(segment_value)} 车型",
-            "summaryText": "当前筛选下没有该细分市场的可用数据。",
-            "monthTotalRanking": {"title": "Monthly Total Model Ranking", "items": []},
-            "rolling12TotalRanking": {"title": "Rolling 12M Total Model Ranking", "items": []},
-            "totalRanking": {"title": "YTD Total Model Ranking", "items": []},
-            "monthFuelTrend": {"items": []},
-            "rolling12FuelTrend": {"items": []},
-            "ytdFuelTrend": {"items": []},
-            "fuelPanels": [],
-        }
-
+) -> dict[str, dict[str, Any]]:
+    """Compute drilldown payloads for multiple segments in a single model-level groupby pass."""
     year_text, month_text = resolved_period.split("-", 1)
     month_number = int(month_text)
+
     current_month_columns = [_period_to_month_column(resolved_period)]
     same_month_columns = [_period_to_month_column(same_month_last_year_period)] if same_month_last_year_period else []
-    current_ytd_columns = [_period_to_month_column(period) for period in _ytd_periods(available_periods, resolved_period)]
-    prior_ytd_columns = [_period_to_month_column(period) for period in _ytd_periods(available_periods, _shift_period(resolved_period, -12))] if same_month_last_year_period else []
-    current_rolling12_columns = [
-        _period_to_month_column(period)
-        for period in _window_periods_if_present(available_periods, resolved_period, 12)
-    ]
-    prior_rolling12_columns = [
-        _period_to_month_column(period)
-        for period in _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
-    ]
-    custom_range_columns = [_period_to_month_column(period) for period in (custom_range_periods or [])]
-    prior_custom_range_periods = (
-        _shifted_periods_if_present(custom_range_periods, available_periods, -12)
-        if custom_range_periods
-        else []
-    )
-    prior_custom_range_columns = [_period_to_month_column(period) for period in prior_custom_range_periods]
-    available_fuels = _available_fuel_types(segment_frame)
+    current_ytd_columns = [_period_to_month_column(p) for p in _ytd_periods(available_periods, resolved_period)]
+    prior_ytd_columns = [_period_to_month_column(p) for p in _ytd_periods(available_periods, _shift_period(resolved_period, -12))] if same_month_last_year_period else []
+    current_rolling12_columns = [_period_to_month_column(p) for p in _window_periods_if_present(available_periods, resolved_period, 12)]
+    prior_rolling12_columns = [_period_to_month_column(p) for p in _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)]
+    custom_range_columns = [_period_to_month_column(p) for p in (custom_range_periods or [])]
+    prior_custom_range_periods = _shifted_periods_if_present(custom_range_periods, available_periods, -12) if custom_range_periods else []
+    prior_custom_range_columns = [_period_to_month_column(p) for p in prior_custom_range_periods]
 
-    total_ranking = _build_total_ranking_items(
-        segment_frame,
-        current_columns=current_ytd_columns,
-        prior_columns=prior_ytd_columns,
+    available_fuels = _available_fuel_types(frame)
+
+    # ONE groupby pass over all segments
+    all_stats = precompute_model_rankings(
+        frame,
+        current_month_columns, same_month_columns,
+        current_ytd_columns, prior_ytd_columns,
+        current_rolling12_columns, prior_rolling12_columns,
+        custom_range_columns, prior_custom_range_columns,
         fuel_order=available_fuels,
-        ranking_limit=ranking_limit,
     )
-    month_total_ranking = _build_total_ranking_items(
-        segment_frame,
-        current_columns=current_month_columns,
-        prior_columns=same_month_columns,
-        fuel_order=available_fuels,
-        ranking_limit=ranking_limit,
-    )
-    rolling12_total_ranking = _build_total_ranking_items(
-        segment_frame,
-        current_columns=current_rolling12_columns,
-        prior_columns=prior_rolling12_columns,
-        fuel_order=available_fuels,
-        ranking_limit=ranking_limit,
-    )
-    custom_range_total_ranking = _build_total_ranking_items(
-        segment_frame,
-        current_columns=custom_range_columns,
-        prior_columns=prior_custom_range_columns,
-        fuel_order=available_fuels,
-        ranking_limit=ranking_limit,
-    ) if custom_range_periods else []
-    segment_total_ytd = _total_volume(segment_frame, current_ytd_columns)
-    segment_total_month = _total_volume(segment_frame, current_month_columns)
-    segment_total_rolling12 = _total_volume(segment_frame, current_rolling12_columns)
-    segment_total_custom_range = _total_volume(segment_frame, custom_range_columns)
-    fuel_panel_items = []
-    for fuel_type in fuel_panels:
-        fuel_panel_items.append(
-            {
+
+    result: dict[str, dict[str, Any]] = {}
+    for seg in segment_values:
+        seg_frame = frame[frame["__segment_raw"] == seg]
+        if seg_frame.empty or not any(s["segment"] == seg for s in all_stats):
+            result[seg] = _empty_drilldown_payload(seg)
+            continue
+
+        seg_stats = [s for s in all_stats if s["segment"] == seg]
+        seg_fuels = _available_fuel_types(seg_frame)
+        seg_total_ytd = sum(s["ytdVolume"] for s in seg_stats)
+        seg_total_month = sum(s["monthVolume"] for s in seg_stats)
+        seg_total_rolling = sum(s["rollingVolume"] for s in seg_stats)
+        seg_total_custom = sum(s["customVolume"] for s in seg_stats)
+
+        # Fuel panels: per-fuel rankings (each still needs a sub-groupby, but scoped to segment)
+        fuel_panel_items = []
+        for fuel_type in fuel_panels:
+            fuel_frame = seg_frame[seg_frame["__powertrain"] == fuel_type]
+            fuel_panel_items.append({
                 "fuelType": fuel_type,
                 "ytdTitle": f"{fuel_type} 1-{month_number}月累计",
                 "rolling12Title": f"{fuel_type} 近12个月 · 截至 {_short_period_label(resolved_period)}",
-                "monthTitle": f"{fuel_type} { _short_period_label(resolved_period) }",
+                "monthTitle": f"{fuel_type} {_short_period_label(resolved_period)}",
                 "ytdRanking": _build_single_fuel_ranking_items(
-                    segment_frame,
-                    fuel_type=fuel_type,
-                    current_columns=current_ytd_columns,
-                    prior_columns=prior_ytd_columns,
-                    segment_total=segment_total_ytd,
-                    ranking_limit=ranking_limit,
+                    fuel_frame, fuel_type=fuel_type, current_columns=current_ytd_columns,
+                    prior_columns=prior_ytd_columns, segment_total=seg_total_ytd, ranking_limit=ranking_limit,
                 ),
                 "rolling12Ranking": _build_single_fuel_ranking_items(
-                    segment_frame,
-                    fuel_type=fuel_type,
-                    current_columns=current_rolling12_columns,
-                    prior_columns=prior_rolling12_columns,
-                    segment_total=segment_total_rolling12,
-                    ranking_limit=ranking_limit,
+                    fuel_frame, fuel_type=fuel_type, current_columns=current_rolling12_columns,
+                    prior_columns=prior_rolling12_columns, segment_total=seg_total_rolling, ranking_limit=ranking_limit,
                 ),
                 "monthRanking": _build_single_fuel_ranking_items(
-                    segment_frame,
-                    fuel_type=fuel_type,
-                    current_columns=current_month_columns,
-                    prior_columns=same_month_columns,
-                    segment_total=segment_total_month,
-                    ranking_limit=ranking_limit,
+                    fuel_frame, fuel_type=fuel_type, current_columns=current_month_columns,
+                    prior_columns=same_month_columns, segment_total=seg_total_month, ranking_limit=ranking_limit,
                 ),
-                "customRangeTitle": (
-                    f"{fuel_type} {_short_period_label(custom_range_periods[0])}"
-                    if custom_range_periods and custom_range_periods[0] == custom_range_periods[-1]
-                    else (
-                        f"{fuel_type} {_short_period_label(custom_range_periods[0])} - {_short_period_label(custom_range_periods[-1])}"
-                        if custom_range_periods
-                        else None
-                    )
-                ),
-                "customRangeRanking": _build_single_fuel_ranking_items(
-                    segment_frame,
-                    fuel_type=fuel_type,
-                    current_columns=custom_range_columns,
-                    prior_columns=prior_custom_range_columns,
-                    segment_total=segment_total_custom_range,
-                    ranking_limit=ranking_limit,
-                ) if custom_range_periods else [],
-            }
-        )
+            })
 
-    headline_model = rolling12_total_ranking[0]["model"] if rolling12_total_ranking else "市场"
-    headline_yoy = rolling12_total_ranking[0]["yoy"]["display"] if rolling12_total_ranking else "-"
-    return {
-        "segment": segment_value,
-        "segmentLabel": _segment_display_label(segment_value),
-        "title": f"{_segment_display_label(segment_value)} 车型 {year_text}年1-{month_number}月",
-        "summaryText": f"{headline_model} 目前领跑 {_segment_display_label(segment_value)}，近12个月同比 {headline_yoy}。",
-        "monthTotalRanking": {
-            "title": "Monthly Total Model Ranking",
-            "items": month_total_ranking,
-        },
-        "rolling12TotalRanking": {
-            "title": "Rolling 12M Total Model Ranking",
-            "items": rolling12_total_ranking,
-        },
-        "customRangeTotalRanking": {
-            "title": "Custom Range Total Model Ranking",
-            "items": custom_range_total_ranking,
-        } if custom_range_periods else None,
-        "totalRanking": {
-            "title": "YTD Total Model Ranking",
-            "items": total_ranking,
-        },
-        "monthFuelTrend": _build_month_fuel_trend(segment_frame, available_fuels, resolved_period, available_periods),
-        "rolling12FuelTrend": _build_rolling12_fuel_trend(segment_frame, available_fuels, resolved_period, available_periods),
-        "ytdFuelTrend": _build_ytd_fuel_trend(segment_frame, available_fuels, resolved_period, available_periods),
-        "customRangeFuelTrend": {
-            **_build_custom_range_fuel_trend(
-                segment_frame,
-                available_fuels,
-                custom_range_periods,
-            ),
-        } if custom_range_periods else None,
-        "fuelPanels": fuel_panel_items,
-    }
+        rolling12_total = model_stats_to_ranking(all_stats, seg, "rollingVolume", "rollingPrior", seg_fuels, ranking_limit)
+        headline_model = rolling12_total[0]["model"] if rolling12_total else "市场"
+        headline_yoy = rolling12_total[0]["yoy"]["display"] if rolling12_total else "-"
+
+        result[seg] = {
+            "segment": seg,
+            "segmentLabel": _segment_display_label(seg),
+            "title": f"{_segment_display_label(seg)} 车型 {year_text}年1-{month_number}月",
+            "summaryText": f"{headline_model} 目前领跑 {_segment_display_label(seg)}，近12个月同比 {headline_yoy}。",
+            "monthTotalRanking": {
+                "title": "Monthly Total Model Ranking",
+                "items": model_stats_to_ranking(all_stats, seg, "monthVolume", "monthPrior", seg_fuels, ranking_limit),
+            },
+            "rolling12TotalRanking": {
+                "title": "Rolling 12M Total Model Ranking",
+                "items": rolling12_total,
+            },
+            "customRangeTotalRanking": {
+                "title": "Custom Range Total Model Ranking",
+                "items": model_stats_to_ranking(all_stats, seg, "customVolume", "customPrior", seg_fuels, ranking_limit),
+            } if custom_range_periods else None,
+            "totalRanking": {
+                "title": "YTD Total Model Ranking",
+                "items": model_stats_to_ranking(all_stats, seg, "ytdVolume", "ytdPrior", seg_fuels, ranking_limit),
+            },
+            "monthFuelTrend": _build_month_fuel_trend(seg_frame, seg_fuels, resolved_period, available_periods),
+            "rolling12FuelTrend": _build_rolling12_fuel_trend(seg_frame, seg_fuels, resolved_period, available_periods),
+            "ytdFuelTrend": _build_ytd_fuel_trend(seg_frame, seg_fuels, resolved_period, available_periods),
+            "customRangeFuelTrend": {
+                **_build_custom_range_fuel_trend(seg_frame, seg_fuels, custom_range_periods),
+            } if custom_range_periods else None,
+            "fuelPanels": fuel_panel_items,
+        }
+    return result
 
 
 def query_market_scan_deck(
@@ -3966,6 +4004,21 @@ def _query_market_scan_deck_impl(
         },
     }
 
+    drilldown_segments = list(dict.fromkeys(
+        s for s in [resolved_drilldown_segment, suv_a_segment, suv_b_segment]
+        if s and s in available_segments
+    ))
+    drilldown_map = _build_all_drilldowns(
+        filtered_frame,
+        available_periods=available_periods,
+        resolved_period=resolved_period,
+        same_month_last_year_period=same_month_last_year_period,
+        segment_values=drilldown_segments,
+        fuel_panels=DRILLDOWN_PANEL_FUELS,
+        ranking_limit=ranking_limit,
+        custom_range_periods=custom_periods,
+    )
+
     return {
         "metadata": metadata,
         "results": {
@@ -3997,36 +4050,9 @@ def _query_market_scan_deck_impl(
                 body_window_months=body_window_months,
                 custom_range_periods=custom_periods,
             ),
-            "drilldown": _build_drilldown_payload(
-                filtered_frame,
-                available_periods=available_periods,
-                resolved_period=resolved_period,
-                same_month_last_year_period=same_month_last_year_period,
-                segment_value=resolved_drilldown_segment,
-                fuel_panels=DRILLDOWN_PANEL_FUELS,
-                ranking_limit=ranking_limit,
-                custom_range_periods=custom_periods,
-            ),
-            "suvA": _build_drilldown_payload(
-                filtered_frame,
-                available_periods=available_periods,
-                resolved_period=resolved_period,
-                same_month_last_year_period=same_month_last_year_period,
-                segment_value=suv_a_segment,
-                fuel_panels=DRILLDOWN_PANEL_FUELS,
-                ranking_limit=ranking_limit,
-                custom_range_periods=custom_periods,
-            ),
-            "suvB": _build_drilldown_payload(
-                filtered_frame,
-                available_periods=available_periods,
-                resolved_period=resolved_period,
-                same_month_last_year_period=same_month_last_year_period,
-                segment_value=suv_b_segment,
-                fuel_panels=DRILLDOWN_PANEL_FUELS,
-                ranking_limit=ranking_limit,
-                custom_range_periods=custom_periods,
-            ),
+            "drilldown": drilldown_map.get(resolved_drilldown_segment) or _empty_drilldown_payload(resolved_drilldown_segment),
+            "suvA": drilldown_map.get(suv_a_segment) or _empty_drilldown_payload(suv_a_segment),
+            "suvB": drilldown_map.get(suv_b_segment) or _empty_drilldown_payload(suv_b_segment),
             "crossTabs": _safe_build_cross_tabs(
                 filtered_frame,
                 columns=columns,

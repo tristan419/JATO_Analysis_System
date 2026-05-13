@@ -54,4 +54,5 @@ LEGACY_TO_GOVERNED_INTENT: dict[str, str] = {
     "competitive": "comparison",
     "pricing-summary": "pricing_strategy",
     "general-summary": "country_report",
+    "precise-lookup": "pricing_strategy",
 }
