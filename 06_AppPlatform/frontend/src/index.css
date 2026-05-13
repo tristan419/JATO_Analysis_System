@@ -7910,6 +7910,41 @@ table.data-table tr.data-table-group-row.contains-selection td {
   height: 430px;
 }
 
+/* --- Markdown table styles --- */
+.markdown-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+
+.markdown-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.markdown-table th {
+  background: #f8fafc;
+  color: #334155;
+  font-weight: 700;
+  border: 1px solid #e2e8f0;
+  padding: 8px 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.markdown-table td {
+  border: 1px solid #e2e8f0;
+  padding: 8px 10px;
+  color: #475569;
+  vertical-align: top;
+}
+
+.markdown-table tr:nth-child(even) td {
+  background: #f8fafc;
+}
+
 .version-comparison-selection-bank {
   grid-column: 1 / -1;
   display: flex;
@@ -7937,6 +7972,16 @@ table.data-table tr.data-table-group-row.contains-selection td {
   color: #1e3a8a;
   font-size: 11px;
   font-weight: 600;
+}
+
+/* --- Version Comparison: Label Mode Toolbar --- */
+.version-comparison-label-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 4px;
+  min-height: 28px;
 }
 
 .version-comparison-empty {

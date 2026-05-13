@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import type { Data, Layout, Config } from "plotly.js";
+import type { Data, Layout, Config, PlotMouseEvent, PlotSelectionEvent } from "plotly.js";
 import Plotly from "plotly.js-cartesian-dist-min";
 import createPlotlyComponent from "react-plotly.js/factory";
 
@@ -13,11 +13,15 @@ interface Props {
   config?: Partial<Config>;
   height?: number;
   style?: CSSProperties;
+  onHover?: (event: Readonly<PlotMouseEvent>) => void;
+  onUnhover?: (event: Readonly<PlotMouseEvent>) => void;
+  onClick?: (event: Readonly<PlotMouseEvent>) => void;
+  onSelected?: (event: Readonly<PlotSelectionEvent>) => void;
 }
 
 export type PlotlyChartProps = Props;
 
-export function PlotlyChart({ data, layout, config, height = 450, style }: Props) {
+export function PlotlyChart({ data, layout, config, height = 450, style, onHover, onUnhover, onClick, onSelected }: Props) {
   return (
     <Plot
       data={data}
@@ -25,6 +29,10 @@ export function PlotlyChart({ data, layout, config, height = 450, style }: Props
       config={{ ...BASE_CHART_CONFIG, ...config } as Config}
       useResizeHandler
       style={{ width: "100%", ...style }}
+      onHover={onHover}
+      onUnhover={onUnhover}
+      onClick={onClick}
+      onSelected={onSelected}
     />
   );
 }

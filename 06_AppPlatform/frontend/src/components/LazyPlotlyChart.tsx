@@ -53,3 +53,5 @@ export function LazyPlotlyChart(props: PlotlyChartProps) {
     </Suspense>
   );
 }
+
+export type { PlotlyChartProps } from "./PlotlyChart";

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import type { Data, Layout as PlotlyLayout } from "plotly.js";
+import type { Data, Layout as PlotlyLayout, PlotMouseEvent, PlotSelectionEvent } from "plotly.js";
 
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
@@ -38,6 +38,18 @@ const COMPARISON_MODE_OPTIONS: Array<{ value: VersionComparisonMode; label: stri
   { value: "same_segment", label: "同级别对比" },
   { value: "free_comparison", label: "自由对比" },
 ];
+
+type LabelMode = "clean" | "smart_top" | "selected" | "all";
+const LABEL_MODE_OPTIONS: Array<{ value: LabelMode; label: string; hint: string }> = [
+  { value: "smart_top", label: "Smart Top", hint: "重点版本" },
+  { value: "clean", label: "Clean", hint: "仅Model" },
+  { value: "selected", label: "Selected", hint: "已选版本" },
+  { value: "all", label: "All", hint: "全部版本" },
+];
+
+function isLabelMode(value: string | null): value is LabelMode {
+  return LABEL_MODE_OPTIONS.some((item) => item.value === value);
+}
 const EXPORT_PRESETS = [
   { key: "hd+", label: "1600 x 900", width: 1600, height: 900 },
   { key: "fhd", label: "1920 x 1080", width: 1920, height: 1080 },
@@ -57,6 +69,46 @@ function formatMetricValue(value: number | string): string {
     return value.toLocaleString("en-US");
   }
   return String(value ?? "-");
+}
+
+function hashString(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function jitter(key: string, amplitude: number): number {
+  return ((hashString(key) % 1000) / 1000) * amplitude * 2 - amplitude;
+}
+
+interface LabelPos {
+  key: string;
+  x: number;
+  y: number;
+  priority: number;
+}
+
+function filterOverlappingLabels(labels: LabelPos[], xRange: number, yRange: number): Set<string> {
+  const hidden = new Set<string>();
+  if (labels.length <= 1) return hidden;
+  const sorted = [...labels].sort((a, b) => b.priority - a.priority);
+  const placed: Array<{ x: number; y: number }> = [];
+  const xThreshold = xRange * 0.022;
+  const yThreshold = yRange * 0.028;
+  for (const label of sorted) {
+    const overlaps = placed.some(
+      (p) => Math.abs(p.x - label.x) < xThreshold && Math.abs(p.y - label.y) < yThreshold,
+    );
+    if (overlaps) {
+      hidden.add(label.key);
+    } else {
+      placed.push({ x: label.x, y: label.y });
+    }
+  }
+  return hidden;
 }
 
 function sanitizeFileNameSegment(value: string): string {
@@ -127,38 +179,157 @@ function buildPriceBandTraces(items: PositioningPricingPriceBandItem[], fuelOrde
   }) as Data);
 }
 
-function buildVersionBubbleTraces(items: VersionComparisonBubbleItem[]): Data[] {
+interface BuildBubbleTracesOpts {
+  labelMode: LabelMode;
+  selectedKeys: Set<string>;
+}
+
+interface LabelInfo {
+  item: VersionComparisonBubbleItem;
+  key: string;
+  priority: number;
+  showLabel: boolean;
+  jitterX: number;
+  jitterY: number;
+}
+
+const PRIORITY_STYLE: Record<number, { opacity: number; size: number; color: string }> = {
+  3: { opacity: 0.97, size: 10, color: "rgba(15,23,42,0.97)" },
+  2: { opacity: 0.70, size: 9,  color: "rgba(51,65,85,0.72)" },
+  1: { opacity: 0.35, size: 9,  color: "rgba(51,65,85,0.38)" },
+  0: { opacity: 0.20, size: 8,  color: "rgba(51,65,85,0.22)" },
+};
+
+function buildVersionBubbleTraces(items: VersionComparisonBubbleItem[], opts: BuildBubbleTracesOpts): Data[] {
+  const { labelMode, selectedKeys } = opts;
+  if (items.length === 0) return [];
+
   const sizing = buildBubbleSizing(items.map((item) => item.sales), {
     maxDiameter: 58,
     minDiameter: 10,
   });
+
   const seenPowertrains = Array.from(new Set(items.map((item) => item.powertrain)));
   const powertrains = [
     ...DEFAULT_FUEL_TYPES.filter((fuel) => seenPowertrains.includes(fuel)),
     ...seenPowertrains.filter((fuel) => !DEFAULT_FUEL_TYPES.includes(fuel)),
   ];
-  return powertrains.map((powertrain) => {
+
+  // --- Key helpers ---
+  const itemKey = (item: VersionComparisonBubbleItem) => `${item.model}||${item.version}`;
+  const asCustomdata = (item: VersionComparisonBubbleItem, key: string) => [
+    item.model, item.version, item.trim, item.powertrain,
+    item.sales, item.msrpMin, item.msrpMax, item.length, key,
+  ];
+
+  // --- Ranges for jitter & overlap ---
+  const xVals = items.map((i) => i.length);
+  const yVals = items.map((i) => i.msrp);
+  const xRange = Math.max(...xVals) - Math.min(...xVals) || 1;
+  const yRange = Math.max(...yVals) - Math.min(...yVals) || 1;
+
+  // --- Model top-3 sales ---
+  const modelGroups = new Map<string, VersionComparisonBubbleItem[]>();
+  items.forEach((item) => {
+    const arr = modelGroups.get(item.model) || [];
+    arr.push(item);
+    modelGroups.set(item.model, arr);
+  });
+  const modelTopKeys = new Map<string, Set<string>>(); // model -> set of top-2/3 keys (excludes top-1)
+  const modelTop1Key = new Map<string, string>(); // model -> top-1 key
+  modelGroups.forEach((group, model) => {
+    const sorted = [...group].sort((a, b) => b.sales - a.sales);
+    modelTop1Key.set(model, itemKey(sorted[0]));
+    modelTopKeys.set(model, new Set(sorted.slice(1, 3).map(itemKey)));
+  });
+
+  // --- Powertrain top-1 sales ---
+  const ptGroups = new Map<string, VersionComparisonBubbleItem[]>();
+  items.forEach((item) => {
+    const arr = ptGroups.get(item.powertrain) || [];
+    arr.push(item);
+    ptGroups.set(item.powertrain, arr);
+  });
+  const ptTopKey = new Map<string, string>(); // powertrain -> key of top-1
+  ptGroups.forEach((group, pt) => {
+    const top = group.reduce((a, b) => (a.sales > b.sales ? a : b));
+    ptTopKey.set(pt, itemKey(top));
+  });
+
+  // --- Global MSRP extremes ---
+  const maxMsrpItem = items.reduce((a, b) => (a.msrp > b.msrp ? a : b));
+  const minMsrpItem = items.reduce((a, b) => (a.msrp < b.msrp ? a : b));
+  const maxMsrpKey = itemKey(maxMsrpItem);
+  const minMsrpKey = itemKey(minMsrpItem);
+
+  // --- Long-tail threshold (bottom 20% by sales) ---
+  const salesSorted = [...items].map((i) => i.sales).sort((a, b) => a - b);
+  const longTailCutoff = salesSorted[Math.floor(salesSorted.length * 0.2)];
+
+  // --- Priority computation ---
+  const labelInfos: LabelInfo[] = items.map((item) => {
+    const key = itemKey(item);
+    let priority = 1;
+
+    const isModelTop1 = modelTop1Key.get(item.model) === key;
+
+    if (selectedKeys.has(key)) {
+      priority = 3;
+    } else if (isModelTop1 || key === maxMsrpKey || key === minMsrpKey) {
+      priority = 3;
+    } else if (modelTopKeys.get(item.model)?.has(key)) {
+      priority = 2;
+    } else if (ptTopKey.get(item.powertrain) === key) {
+      priority = 2;
+    } else if (item.sales <= longTailCutoff) {
+      priority = 0;
+    }
+
+    let showLabel = true;
+    if (labelMode === "clean") {
+      showLabel = false;
+    } else if (labelMode === "smart_top") {
+      showLabel = priority >= 2;
+    } else if (labelMode === "selected") {
+      showLabel = selectedKeys.has(key);
+    } // "all" → showLabel stays true
+
+    const jx = jitter(key, xRange * 0.008);
+    const jy = jitter(key + "_y", yRange * 0.01);
+
+    return { item, key, priority, showLabel, jitterX: jx, jitterY: jy };
+  });
+
+  // --- Overlap filter ---
+  const visibleLabels = labelInfos.filter((l) => l.showLabel);
+  const hiddenByOverlap = filterOverlappingLabels(
+    visibleLabels.map((l) => ({
+      key: l.key,
+      x: l.item.length + l.jitterX,
+      y: l.item.msrp + l.jitterY,
+      priority: l.priority,
+    })),
+    xRange,
+    yRange,
+  );
+  labelInfos.forEach((l) => {
+    if (hiddenByOverlap.has(l.key)) l.showLabel = false;
+  });
+
+  // --- Build traces ---
+  const traces: Data[] = [];
+
+  // 1. Marker traces (bubbles — one per powertrain, in legend)
+  powertrains.forEach((powertrain) => {
     const subset = items.filter((item) => item.powertrain === powertrain);
-    return {
+    traces.push({
       type: "scatter",
-      mode: "text+markers",
+      mode: "markers",
       name: powertrain,
       x: subset.map((item) => item.length),
       y: subset.map((item) => item.msrp),
-      text: subset.map((item) => item.version),
-      textposition: "top center",
-      textfont: { size: 9, color: "#334155" },
       cliponaxis: false,
-      customdata: subset.map((item) => [
-        item.model,
-        item.version,
-        item.trim,
-        item.powertrain,
-        item.sales,
-        item.msrpMin,
-        item.msrpMax,
-        item.length,
-      ]),
+      customdata: subset.map((item) => asCustomdata(item, itemKey(item))),
       marker: {
         color: fuelColor(powertrain),
         opacity: 0.82,
@@ -172,8 +343,32 @@ function buildVersionBubbleTraces(items: VersionComparisonBubbleItem[]): Data[] 
         "Model: %{customdata[0]}<br>Version: %{customdata[1]}<br>Trim: %{customdata[2]}<br>动力: %{customdata[3]}"
         + "<br>Length: %{customdata[7]:,.0f} mm<br>MSRP: %{y:,.0f}<br>MSRP范围: %{customdata[5]:,.0f}-%{customdata[6]:,.0f}"
         + "<br>Sales: %{customdata[4]:,.0f}<extra></extra>",
-    } as Data;
+    } as Data);
   });
+
+  // 2. Label traces — one per priority level across all powertrains
+  [3, 2, 1, 0].forEach((priority) => {
+    const labelItems = labelInfos.filter((l) => l.priority === priority && l.showLabel);
+    if (labelItems.length === 0) return;
+
+    const style = PRIORITY_STYLE[priority];
+    traces.push({
+      type: "scatter",
+      mode: "text",
+      name: `label-p${priority}`,
+      showlegend: false,
+      x: labelItems.map((l) => l.item.length + l.jitterX),
+      y: labelItems.map((l) => l.item.msrp + l.jitterY),
+      text: labelItems.map((l) => l.item.version),
+      textposition: "top center",
+      textfont: { size: style.size, color: style.color, family: "Inter, sans-serif" },
+      cliponaxis: false,
+      customdata: labelItems.map((l) => asCustomdata(l.item, l.key)),
+      hoverinfo: "skip",
+    } as Data);
+  });
+
+  return traces;
 }
 
 function buildModelLengthAnnotations(items: VersionComparisonBubbleItem[]): NonNullable<Partial<PlotlyLayout>["annotations"]> {
@@ -379,6 +574,12 @@ export function VersionComparisonPage() {
     const raw = searchParams.get("segments");
     return raw ? raw.split(",").filter(Boolean) : [];
   });
+  const [labelMode, setLabelMode] = useState<LabelMode>(() => {
+    const raw = searchParams.get("labelMode");
+    return isLabelMode(raw) ? raw : "smart_top";
+  });
+  const [selectedBubbles, setSelectedBubbles] = useState<Set<string>>(new Set());
+  const [hoveredBubble, setHoveredBubble] = useState<string | null>(null);
   const countryOptions = deck?.metadata.availableCountries ?? [];
 
   const syncUrlParams = useCallback(() => {
@@ -404,8 +605,9 @@ export function VersionComparisonPage() {
     if (lengthMin !== null && comparisonMode !== "same_segment") params.set("lengthMin", String(lengthMin));
     if (lengthMax !== null && comparisonMode !== "same_segment") params.set("lengthMax", String(lengthMax));
     if (selectedSegments.length > 0 && comparisonMode !== "same_segment") params.set("segments", selectedSegments.join(","));
+    if (labelMode !== "smart_top") params.set("labelMode", labelMode);
     setSearchParams(params, { replace: true });
-  }, [msrpMax, msrpMin, priceBandSize, salesMode, comparisonMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, selectedTimeRange, bodyType, driveTypes, lengthMin, lengthMax, selectedSegments, setSearchParams]);
+  }, [msrpMax, msrpMin, priceBandSize, salesMode, comparisonMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, selectedTimeRange, bodyType, driveTypes, lengthMin, lengthMax, selectedSegments, labelMode, setSearchParams]);
 
   useEffect(() => {
     syncUrlParams();
@@ -628,8 +830,8 @@ export function VersionComparisonPage() {
     [activeFuelTypes, page],
   );
   const bubbleTraces = useMemo(
-    () => (page ? buildVersionBubbleTraces(page.bubbleChart.items) : []),
-    [page],
+    () => (page ? buildVersionBubbleTraces(page.bubbleChart.items, { labelMode, selectedKeys: selectedBubbles }) : []),
+    [page, labelMode, selectedBubbles],
   );
   const bubbleAnnotations = useMemo(
     () => (page ? buildModelLengthAnnotations(page.bubbleChart.items) : []),
@@ -694,6 +896,47 @@ export function VersionComparisonPage() {
       }
       return [...current, modelValue];
     });
+  }
+
+  function handleBubbleHover(event: Readonly<PlotMouseEvent>) {
+    const pt = event.points?.[0] as unknown as Record<string, unknown> | undefined;
+    const cd = pt?.customdata as unknown[] | undefined;
+    if (cd && cd.length >= 9) {
+      setHoveredBubble(String(cd[8]));
+    }
+  }
+
+  function handleBubbleUnhover() {
+    setHoveredBubble(null);
+  }
+
+  function handleBubbleClick(event: Readonly<PlotMouseEvent>) {
+    const pt = event.points?.[0] as unknown as Record<string, unknown> | undefined;
+    const cd = pt?.customdata as unknown[] | undefined;
+    if (!cd || cd.length < 9) return;
+    const key = String(cd[8]);
+    setSelectedBubbles((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }
+
+  function handleBubbleSelect(event: Readonly<PlotSelectionEvent>) {
+    if (!event.points) return;
+    const keys: string[] = [];
+    for (const p of event.points) {
+      const cd = (p as unknown as Record<string, unknown>).customdata as unknown[] | undefined;
+      if (cd && cd.length >= 9) {
+        keys.push(String(cd[8]));
+      }
+    }
+    if (keys.length === 0) return;
+    setSelectedBubbles((prev) => new Set([...prev, ...keys]));
   }
 
   async function handleExportSlide() {
@@ -1236,6 +1479,30 @@ export function VersionComparisonPage() {
                         subtitle="横轴为车长，轴下标出对应 Model，气泡文字显示 version，颜色按动总区分。"
                       >
                         <div className="positioning-pricing-chart">
+                          <div className="version-comparison-label-toolbar">
+                            <div className="btn-group btn-group--sm">
+                              {LABEL_MODE_OPTIONS.map((opt) => (
+                                <button
+                                  key={opt.value}
+                                  type="button"
+                                  className={`btn btn-sm ${labelMode === opt.value ? "btn-primary" : "btn-ghost"}`}
+                                  onClick={() => setLabelMode(opt.value)}
+                                  title={opt.hint}
+                                >
+                                  {opt.label}
+                                </button>
+                              ))}
+                            </div>
+                            {selectedBubbles.size > 0 ? (
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-ghost"
+                                onClick={() => setSelectedBubbles(new Set())}
+                              >
+                                清除已选 ({selectedBubbles.size})
+                              </button>
+                            ) : null}
+                          </div>
                           {bubbleTraces.length > 0 ? (
                             <PlotlyChart
                               data={bubbleTraces}
@@ -1245,7 +1512,11 @@ export function VersionComparisonPage() {
                                 page.priceBands.bandSize,
                                 bubbleAnnotations,
                               )}
-                              height={430}
+                              height={400}
+                              onHover={handleBubbleHover}
+                              onUnhover={handleBubbleUnhover}
+                              onClick={handleBubbleClick}
+                              onSelected={handleBubbleSelect}
                             />
                           ) : (
                             <LoadingSurface
