@@ -1,12 +1,12 @@
 {
   "summary": {
-    "registeredPipelines": 10,
+    "registeredPipelines": 12,
     "discoveredSystemd": 9,
     "discoveredAirflow": 3,
     "discoveredGitHubActions": 5,
     "discoveredScripts": 54,
     "duplicateSchedulingRisks": 3,
-    "missingRegistryEntries": 10,
+    "missingRegistryEntries": 8,
     "statusCoverageGaps": 3,
     "highRiskFindings": 1
   },
@@ -97,6 +97,24 @@
       "name": "Deploy Fullstack to Tencent Cloud (GitHub Actions)",
       "type": "github_action",
       "path": ".github/workflows/deploy-fullstack-tencent.yml",
+      "registryStatus": "registered",
+      "risk": "high",
+      "status": "unknown"
+    },
+    {
+      "pipelineId": "pipeline.ci.github",
+      "name": "CI (GitHub Actions)",
+      "type": "github_action",
+      "path": ".github/workflows/ci.yml",
+      "registryStatus": "registered",
+      "risk": "low",
+      "status": "unknown"
+    },
+    {
+      "pipelineId": "pipeline.deploy.ec2_legacy_github",
+      "name": "Deploy to EC2 (Legacy, GitHub Actions)",
+      "type": "github_action",
+      "path": ".github/workflows/deploy-ec2-auto-update.yml",
       "registryStatus": "registered",
       "risk": "high",
       "status": "unknown"
@@ -415,19 +433,6 @@
     {
       "severity": "WARNING",
       "area": "Registry Coverage",
-      "finding": "Discovered github_action not in Pipeline Registry: ci (.github/workflows/ci.yml)",
-      "item": {
-        "name": "ci",
-        "path": ".github/workflows/ci.yml",
-        "type": "github_action",
-        "hasSchedule": false,
-        "hasDispatch": false,
-        "crons": []
-      }
-    },
-    {
-      "severity": "WARNING",
-      "area": "Registry Coverage",
       "finding": "Discovered github_action not in Pipeline Registry: country-news-sync (.github/workflows/country-news-sync.yml)",
       "item": {
         "name": "country-news-sync",
@@ -445,19 +450,6 @@
       "item": {
         "name": "deploy-aws-ecs",
         "path": ".github/workflows/deploy-aws-ecs.yml",
-        "type": "github_action",
-        "hasSchedule": false,
-        "hasDispatch": true,
-        "crons": []
-      }
-    },
-    {
-      "severity": "WARNING",
-      "area": "Registry Coverage",
-      "finding": "Discovered github_action not in Pipeline Registry: deploy-ec2-auto-update (.github/workflows/deploy-ec2-auto-update.yml)",
-      "item": {
-        "name": "deploy-ec2-auto-update",
-        "path": ".github/workflows/deploy-ec2-auto-update.yml",
         "type": "github_action",
         "hasSchedule": false,
         "hasDispatch": true,
@@ -495,21 +487,21 @@
     {
       "severity": "MEDIUM",
       "area": "Stale Artifact",
-      "finding": "Artifact 'JATO Full Archive (Parquet)' last modified 691h ago (>7d)",
+      "finding": "Artifact 'JATO Full Archive (Parquet)' last modified 693h ago (>7d)",
       "artifactId": "artifact.jato.parquet",
       "path": "04_Processed_data/jato_full_archive.parquet"
     },
     {
       "severity": "MEDIUM",
       "area": "Stale Artifact",
-      "finding": "Artifact 'JATO Partitioned Dataset' last modified 691h ago (>7d)",
+      "finding": "Artifact 'JATO Partitioned Dataset' last modified 693h ago (>7d)",
       "artifactId": "artifact.jato.partitioned",
       "path": "04_Processed_data/partitioned_dataset_v1/"
     },
     {
       "severity": "MEDIUM",
       "area": "Stale Artifact",
-      "finding": "Artifact 'JATO Monthly Update Job' last modified 180h ago (>7d)",
+      "finding": "Artifact 'JATO Monthly Update Job' last modified 182h ago (>7d)",
       "artifactId": "artifact.jato.monthly_update_job",
       "path": "04_Processed_data/ops/jato_monthly_update_jobs/"
     },

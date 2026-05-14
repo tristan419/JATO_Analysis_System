@@ -4,17 +4,27 @@
 
 - **Base:** `main~5`
 - **Head:** `HEAD`
-- **Files changed:** 18
+- **Files changed:** 7
 - **Risk Score:** 60/100 (NEEDS_REVIEW)
-- **Generated at:** 2026-05-14T13:31:41Z
-- **Blockers:** 0 | **Needs Review:** 1 | **Warnings:** 0 | **Info:** 0
+- **Generated at:** 2026-05-14T15:50:45Z
+- **Blockers:** 0 | **Needs Review:** 1 | **Warnings:** 1 | **Info:** 1
 
 ## Findings
 
 | Severity | Area | Finding | Suggested Fix |
 |---|---|---|---|
-| 🟠 NEEDS_REVIEW | Scheduling | New schedule added. Verify it does not duplicate existing schedules in Pipeline Registry. | Check hermes/pipeline_registry.yaml for duplicate scheduling. See gap.pipeline.duplicate_news_scheduling for an existing |
+| 🟠 NEEDS_REVIEW | API Contract | Backend API routes or schemas changed but frontend types/index.ts was not updated | Verify frontend types match the updated backend serializers. |
+| 🟡 WARNING | Registry Gap | Backend API routes changed but Feature Registry was not updated | Update hermes/feature_registry.yaml with any new or modified features. |
+| 🔵 INFO | Documentation | Code changes detected but no documentation files were updated | Review if Markdown_Readme/ docs need updating for the changes. |
 
 ## Required Actions
 
-- [ ] **[NEEDS_REVIEW]** Scheduling: Check hermes/pipeline_registry.yaml for duplicate scheduling. See gap.pipeline.duplicate_news_scheduling for an existing example.
+- [ ] **[NEEDS_REVIEW]** API Contract: Verify frontend types match the updated backend serializers.
+
+### Warnings (1)
+
+- [ ] [Registry Gap] Update hermes/feature_registry.yaml with any new or modified features.
+
+### Info (1)
+
+- [Documentation] Code changes detected but no documentation files were updated

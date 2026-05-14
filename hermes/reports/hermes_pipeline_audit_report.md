@@ -1,18 +1,18 @@
 # Hermes Pipeline Audit Report
 
-**Generated:** 2026-05-14T13:44:43Z
+**Generated:** 2026-05-14T15:50:45Z
 
 ## 1. Summary
 
 | Metric | Value |
 |---|---|
-| Registered pipelines | 10 |
+| Registered pipelines | 12 |
 | Discovered systemd units | 9 |
 | Discovered Airflow DAGs | 3 |
 | Discovered GitHub Actions | 5 |
 | Discovered scripts/runners | 54 |
 | Duplicate scheduling risks | 3 |
-| Missing registry entries | 10 |
+| Missing registry entries | 8 |
 | Status coverage gaps | 3 |
 | High-risk findings | 1 |
 
@@ -30,6 +30,8 @@
 | pipeline.perf.nightly_github | github_action | registered | .github/workflows/nightly-performance.yml | low |
 | pipeline.jato.etl | etl_job | registered | 03_Scripts/data_pipeline/ | low |
 | pipeline.deploy.tencent_github | github_action | registered | .github/workflows/deploy-fullstack-tencent.yml | high |
+| pipeline.ci.github | github_action | registered | .github/workflows/ci.yml | low |
+| pipeline.deploy.ec2_legacy_github | github_action | registered | .github/workflows/deploy-ec2-auto-update.yml | high |
 
 ## 3. Duplicate Scheduling Risks
 
@@ -95,22 +97,20 @@ _Source failure tracking is adequate._
 | WARNING | Registry Coverage | Discovered systemd_timer not in Pipeline Registry: jato-msrp-dryrun (03_Scripts/deploy/systemd/jato-msrp-dryrun.timer) |
 | WARNING | Registry Coverage | Discovered systemd_timer not in Pipeline Registry: jato-msrp-ingest (03_Scripts/deploy/systemd/jato-msrp-ingest.timer) |
 | WARNING | Registry Coverage | Discovered systemd_timer not in Pipeline Registry: jato-voc-forum-sync (03_Scripts/deploy/systemd/jato-voc-forum-sync.timer) |
-| WARNING | Registry Coverage | Discovered github_action not in Pipeline Registry: ci (.github/workflows/ci.yml) |
 | WARNING | Registry Coverage | Discovered github_action not in Pipeline Registry: country-news-sync (.github/workflows/country-news-sync.yml) |
 | WARNING | Registry Coverage | Discovered github_action not in Pipeline Registry: deploy-aws-ecs (.github/workflows/deploy-aws-ecs.yml) |
-| WARNING | Registry Coverage | Discovered github_action not in Pipeline Registry: deploy-ec2-auto-update (.github/workflows/deploy-ec2-auto-update.yml) |
 | HIGH | Duplicate Scheduling | Country News Sync exists in both systemd timer and Airflow DAG |
 | MEDIUM | Duplicate Scheduling | Country News Sync has GitHub Actions workflow: ['country-news-sync']. Verify it is workflow_dispatch only (no schedule). |
 | LOW | Scheduling Overlap | MSRP has both systemd timers (production) and Airflow DAG (manual-only). Acceptable — no schedule conflict. |
-| MEDIUM | Stale Artifact | Artifact 'JATO Full Archive (Parquet)' last modified 691h ago (>7d) |
-| MEDIUM | Stale Artifact | Artifact 'JATO Partitioned Dataset' last modified 691h ago (>7d) |
-| MEDIUM | Stale Artifact | Artifact 'JATO Monthly Update Job' last modified 180h ago (>7d) |
+| MEDIUM | Stale Artifact | Artifact 'JATO Full Archive (Parquet)' last modified 693h ago (>7d) |
+| MEDIUM | Stale Artifact | Artifact 'JATO Partitioned Dataset' last modified 693h ago (>7d) |
+| MEDIUM | Stale Artifact | Artifact 'JATO Monthly Update Job' last modified 182h ago (>7d) |
 | INFO | Artifact Consumer Gap | Artifact 'Scheduled Fetch Status' references consumer 'feature.data_management (future)' not found in Feature Registry |
 | MEDIUM | Unscheduled Source | source.news.batch_b: Batch B has NO scheduled fetch — only Batch A is scheduled |
 
 ## 8. Recommended Registry Updates
 
-- [ ] Pipeline Registry: add 10 missing pipeline(s)
+- [ ] Pipeline Registry: add 8 missing pipeline(s)
 - [ ] Pipeline Registry: update duplicate scheduling notes
 - [ ] Review and update artifact freshness statuses
 

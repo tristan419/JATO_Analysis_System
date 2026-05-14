@@ -1,13 +1,25 @@
 {
   "base": "main~5",
   "head": "HEAD",
-  "filesChanged": 18,
+  "filesChanged": 7,
   "findings": [
     {
       "severity": "NEEDS_REVIEW",
-      "area": "Scheduling",
-      "finding": "New schedule added. Verify it does not duplicate existing schedules in Pipeline Registry.",
-      "suggestedFix": "Check hermes/pipeline_registry.yaml for duplicate scheduling. See gap.pipeline.duplicate_news_scheduling for an existing example."
+      "area": "API Contract",
+      "finding": "Backend API routes or schemas changed but frontend types/index.ts was not updated",
+      "suggestedFix": "Verify frontend types match the updated backend serializers."
+    },
+    {
+      "severity": "WARNING",
+      "area": "Registry Gap",
+      "finding": "Backend API routes changed but Feature Registry was not updated",
+      "suggestedFix": "Update hermes/feature_registry.yaml with any new or modified features."
+    },
+    {
+      "severity": "INFO",
+      "area": "Documentation",
+      "finding": "Code changes detected but no documentation files were updated",
+      "suggestedFix": "Review if Markdown_Readme/ docs need updating for the changes."
     }
   ],
   "summary": {
@@ -15,7 +27,7 @@
     "riskScore": 60,
     "blockerCount": 0,
     "needsReviewCount": 1,
-    "warningCount": 0,
-    "infoCount": 0
+    "warningCount": 1,
+    "infoCount": 1
   }
 }

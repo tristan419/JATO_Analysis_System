@@ -1,58 +1,58 @@
 {
-  "generatedAt": "2026-05-14T14:19:10Z",
+  "generatedAt": "2026-05-14T15:50:45Z",
   "currency": "CNY",
   "summary": {
-    "totalEstimatedCostCny": 0.1319,
-    "totalInputTokens": 48500,
-    "totalOutputTokens": 8700,
+    "totalEstimatedCostCny": 0.2638,
+    "totalInputTokens": 97000,
+    "totalOutputTokens": 17400,
     "totalCacheHitInputTokens": 0,
-    "totalCacheMissInputTokens": 48500,
+    "totalCacheMissInputTokens": 97000,
     "cacheHitRatio": 0.0,
     "budgetCny": 500,
     "budgetStatus": "ok"
   },
   "byModel": {
     "deepseek-v4-flash": {
-      "records": 5,
-      "inputTokens": 23500,
-      "outputTokens": 4700,
-      "estimatedCostCny": 0.0329,
+      "records": 10,
+      "inputTokens": 47000,
+      "outputTokens": 9400,
+      "estimatedCostCny": 0.0658,
       "discountActive": false,
       "discountValidUntil": ""
     },
     "deepseek-v4-pro": {
-      "records": 1,
-      "inputTokens": 25000,
-      "outputTokens": 4000,
-      "estimatedCostCny": 0.099,
+      "records": 2,
+      "inputTokens": 50000,
+      "outputTokens": 8000,
+      "estimatedCostCny": 0.198,
       "discountActive": true,
       "discountValidUntil": "2026-05-31T23:59:00+08:00"
     }
   },
   "byAnswerMode": {
     "direct_lookup": {
-      "records": 2,
-      "estimatedCostCny": 0.0074,
+      "records": 4,
+      "estimatedCostCny": 0.0148,
       "modelMix": "deepseek-v4-flash"
     },
     "grounded_analysis": {
-      "records": 1,
-      "estimatedCostCny": 0.016,
+      "records": 2,
+      "estimatedCostCny": 0.032,
       "modelMix": "deepseek-v4-flash"
     },
     "deep_report": {
-      "records": 1,
-      "estimatedCostCny": 0.099,
+      "records": 2,
+      "estimatedCostCny": 0.198,
       "modelMix": "deepseek-v4-pro"
     },
     "hypothesis": {
-      "records": 1,
-      "estimatedCostCny": 0.0074,
+      "records": 2,
+      "estimatedCostCny": 0.0148,
       "modelMix": "deepseek-v4-flash"
     },
     "insufficient_evidence": {
-      "records": 1,
-      "estimatedCostCny": 0.0021,
+      "records": 2,
+      "estimatedCostCny": 0.0042,
       "modelMix": "deepseek-v4-flash"
     }
   },
@@ -83,6 +83,40 @@
       "shouldCache": true,
       "shouldEnterKnowledgeBase": true,
       "createdAt": "2026-05-14T14:05:12Z",
+      "model": "deepseek-v4-pro",
+      "cacheHitInputTokens": 0,
+      "cacheMissInputTokens": 25000,
+      "cacheHitRatio": 0.0,
+      "estimatedCostCny": 0.099,
+      "discountActive": true,
+      "hasCacheSplit": false
+    },
+    {
+      "answerId": "answer.20260514155045.3979f6",
+      "question": "瑞典消费者为什么选择电动车？",
+      "answerMode": "deep_report",
+      "modelUsed": "deepseek-v4-pro",
+      "promptVersion": "unversioned",
+      "toolsUsed": [
+        "query_market_scan",
+        "read_voc_enriched",
+        "read_news_digest"
+      ],
+      "evidenceIds": [
+        "evidence.jato.sweden_bev_share",
+        "evidence.voc.sweden_ev_motivation",
+        "evidence.news.sweden_subsidy_2026"
+      ],
+      "groundednessScore": 0.9,
+      "citationCoverageScore": 1.0,
+      "hallucinationRiskScore": 0.3,
+      "actionabilityScore": 0.8,
+      "inputTokens": 25000,
+      "outputTokens": 4000,
+      "estimatedCostUsd": 0.05742,
+      "shouldCache": true,
+      "shouldEnterKnowledgeBase": true,
+      "createdAt": "2026-05-14T15:50:45Z",
       "model": "deepseek-v4-pro",
       "cacheHitInputTokens": 0,
       "cacheMissInputTokens": 25000,
@@ -126,6 +160,40 @@
       "hasCacheSplit": false
     },
     {
+      "answerId": "answer.20260514155045.03d0b8",
+      "question": "Can J7 PHEV sell well in Sweden compared to Kodiaq and Tiguan?",
+      "answerMode": "grounded_analysis",
+      "modelUsed": "deepseek-v4-flash",
+      "promptVersion": "unversioned",
+      "toolsUsed": [
+        "query_market_scan",
+        "query_positioning_map",
+        "read_msrp_current"
+      ],
+      "evidenceIds": [
+        "evidence.jato.sweden_suv_c_segment",
+        "evidence.msrp.j7_phev_se",
+        "evidence.msrp.kodiaq_se"
+      ],
+      "groundednessScore": 0.9,
+      "citationCoverageScore": 1.0,
+      "hallucinationRiskScore": 0.3,
+      "actionabilityScore": 0.8,
+      "inputTokens": 12000,
+      "outputTokens": 2000,
+      "estimatedCostUsd": 0.00224,
+      "shouldCache": true,
+      "shouldEnterKnowledgeBase": true,
+      "createdAt": "2026-05-14T15:50:45Z",
+      "model": "deepseek-v4-flash",
+      "cacheHitInputTokens": 0,
+      "cacheMissInputTokens": 12000,
+      "cacheHitRatio": 0.0,
+      "estimatedCostCny": 0.016,
+      "discountActive": false,
+      "hasCacheSplit": false
+    },
+    {
       "answerId": "answer.20260514140512.cc3369",
       "question": "J7 PHEV 在挪威会卖得好吗？",
       "answerMode": "hypothesis",
@@ -145,6 +213,34 @@
       "shouldCache": false,
       "shouldEnterKnowledgeBase": false,
       "createdAt": "2026-05-14T14:05:12Z",
+      "model": "deepseek-v4-flash",
+      "cacheHitInputTokens": 0,
+      "cacheMissInputTokens": 5000,
+      "cacheHitRatio": 0.0,
+      "estimatedCostCny": 0.0074,
+      "discountActive": false,
+      "hasCacheSplit": false
+    },
+    {
+      "answerId": "answer.20260514155045.2e7660",
+      "question": "J7 PHEV 在挪威会卖得好吗？",
+      "answerMode": "hypothesis",
+      "modelUsed": "deepseek-v4-flash",
+      "promptVersion": "unversioned",
+      "toolsUsed": [
+        "query_market_scan"
+      ],
+      "evidenceIds": [],
+      "groundednessScore": 0.5,
+      "citationCoverageScore": 0.0,
+      "hallucinationRiskScore": 0.3,
+      "actionabilityScore": 0.3,
+      "inputTokens": 5000,
+      "outputTokens": 1200,
+      "estimatedCostUsd": 0.001036,
+      "shouldCache": false,
+      "shouldEnterKnowledgeBase": false,
+      "createdAt": "2026-05-14T15:50:45Z",
       "model": "deepseek-v4-flash",
       "cacheHitInputTokens": 0,
       "cacheMissInputTokens": 5000,
@@ -185,6 +281,37 @@
       "hasCacheSplit": false
     },
     {
+      "answerId": "answer.20260514155045.b027ea",
+      "question": "瑞典 BEV 市场 Q1 2026 销量排名",
+      "answerMode": "direct_lookup",
+      "modelUsed": "deepseek-v4-flash",
+      "promptVersion": "unversioned",
+      "toolsUsed": [
+        "query_market_scan",
+        "jato_parquet_read"
+      ],
+      "evidenceIds": [
+        "evidence.jato.sweden_bev_q1"
+      ],
+      "groundednessScore": 1.0,
+      "citationCoverageScore": 0.5,
+      "hallucinationRiskScore": 0.3,
+      "actionabilityScore": 0.8,
+      "inputTokens": 3000,
+      "outputTokens": 800,
+      "estimatedCostUsd": 0.000644,
+      "shouldCache": true,
+      "shouldEnterKnowledgeBase": true,
+      "createdAt": "2026-05-14T15:50:45Z",
+      "model": "deepseek-v4-flash",
+      "cacheHitInputTokens": 0,
+      "cacheMissInputTokens": 3000,
+      "cacheHitRatio": 0.0,
+      "estimatedCostCny": 0.0046,
+      "discountActive": false,
+      "hasCacheSplit": false
+    },
+    {
       "answerId": "answer.20260514140512.779f4a",
       "question": "瑞典和挪威的 MSRP 对比",
       "answerMode": "direct_lookup",
@@ -216,28 +343,33 @@
       "hasCacheSplit": false
     },
     {
-      "answerId": "answer.20260514140512.60a2e7",
-      "question": "VOC forum 中有没有提到 J7 的续航焦虑？",
-      "answerMode": "insufficient_evidence",
+      "answerId": "answer.20260514155045.a942a1",
+      "question": "瑞典和挪威的 MSRP 对比",
+      "answerMode": "direct_lookup",
       "modelUsed": "deepseek-v4-flash",
       "promptVersion": "unversioned",
-      "toolsUsed": [],
-      "evidenceIds": [],
-      "groundednessScore": 0.0,
-      "citationCoverageScore": 0.0,
-      "hallucinationRiskScore": 0.4,
-      "actionabilityScore": 0.0,
-      "inputTokens": 1500,
-      "outputTokens": 300,
-      "estimatedCostUsd": 0.000294,
-      "shouldCache": false,
-      "shouldEnterKnowledgeBase": false,
-      "createdAt": "2026-05-14T14:05:12Z",
+      "toolsUsed": [
+        "read_msrp_current"
+      ],
+      "evidenceIds": [
+        "evidence.msrp.j7_se",
+        "evidence.msrp.j7_no"
+      ],
+      "groundednessScore": 1.0,
+      "citationCoverageScore": 1.0,
+      "hallucinationRiskScore": 0.3,
+      "actionabilityScore": 0.8,
+      "inputTokens": 2000,
+      "outputTokens": 400,
+      "estimatedCostUsd": 0.000392,
+      "shouldCache": true,
+      "shouldEnterKnowledgeBase": true,
+      "createdAt": "2026-05-14T15:50:45Z",
       "model": "deepseek-v4-flash",
       "cacheHitInputTokens": 0,
-      "cacheMissInputTokens": 1500,
+      "cacheMissInputTokens": 2000,
       "cacheHitRatio": 0.0,
-      "estimatedCostCny": 0.0021,
+      "estimatedCostCny": 0.0028,
       "discountActive": false,
       "hasCacheSplit": false
     }
