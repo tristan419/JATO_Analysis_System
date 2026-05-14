@@ -304,14 +304,22 @@ fi
 echo "[INFO] Validate Node.js version"
 CURRENT_STEP="Validate Node.js version"
 log_section "$CURRENT_STEP"
+node -v
+npm -v
 node - <<'EOF'
 const [major, minor, patch] = process.versions.node.split('.').map(Number);
-const ok = (major === 20 && minor >= 10) || (major === 22 && minor >= 0) || major > 22;
+// Must match engines in 06_AppPlatform/frontend/package.json
+const ok = (
+  (major === 20 && minor >= 19) ||
+  (major === 22 && minor >= 12) ||
+  major > 22
+);
 if (!ok) {
-  console.error(`[ERROR] Node.js ${process.versions.node} detected. Need 20.10+ or 22.x+.`);
+  console.error(`[ERROR] Node.js ${process.versions.node} detected.`);
+  console.error('[ERROR] Required: >=20.19.0 <21 or >=22.12.0 (see frontend package.json engines)');
   process.exit(1);
 }
-console.log(`[INFO] Node.js ${process.versions.node}`);
+console.log(`[INFO] Node.js ${process.versions.node} — matches frontend engines requirement`);
 EOF
 
 echo "[INFO] Update repository"
