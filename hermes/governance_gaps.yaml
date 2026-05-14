@@ -33,10 +33,10 @@ gaps:
       - "Airflow DAG: cron 15 6 * * * (06:15 UTC)"
       - "Both write to ops.country_news_digest table"
       - "Risk of double ingestion, duplicate articles, wasted API calls"
-    recommendedAction: "Decide single production scheduler. Recommended: keep systemd timer (runs on server, direct DB access). Deprecate Airflow DAG or change to manual-only."
-    status: open
+    recommendedAction: "Decision documented in PIPELINE_SCHEDULER_DECISION_2026-05-14.md §3. Systemd = production scheduler. Airflow should be manual-only. Next step: verify Airflow DAG schedule on production instance and pause if active."
+    status: in_progress
     owner: ""
-    notes: "GitHub Actions schedule was already removed (2026-05-14). Airflow DAG is the remaining duplicate."
+    notes: "GitHub Actions schedule already removed (2026-05-14). Airflow DAG is the remaining duplicate. Phase 4.5 decision recorded. Actual scheduler change requires server access."
 
   - gapId: gap.pipeline.news_batch_b_unscheduled
     title: "News Batch B (12 countries) has no scheduled fetch"

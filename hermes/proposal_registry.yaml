@@ -25,7 +25,7 @@ proposals:
   - proposalId: proposal.pipeline.news_dedup
     type: pipeline_dedup
     title: "Resolve duplicate Country News Sync scheduling"
-    summary: "Decide single production scheduler for Country News Sync. Recommended: keep systemd timer (runs on server with direct DB access), deprecate Airflow DAG or change to manual-only. Document decision in ADR."
+    summary: "Decision documented in PIPELINE_SCHEDULER_DECISION_2026-05-14.md §3. Systemd timer = production scheduler. Airflow DAG = manual fallback (should be set to schedule=None). Next step: verify and pause Airflow DAG on production instance."
     affectedFeatures:
       - "feature.country_copilot"
       - "feature.data_management"
@@ -36,11 +36,11 @@ proposals:
       - "source.news.batch_a"
     affectedPrompts: []
     riskLevel: medium
-    expectedImpact: "Eliminates double ingestion risk. Reduces operational complexity. Saves ~6h of redundant RSS fetch per day."
+    expectedImpact: "Eliminates double ingestion risk. Reduces operational complexity."
     rollbackPlan: "Re-enable Airflow DAG schedule if systemd timer proves unreliable."
-    status: draft
+    status: pending_review
     createdAt: "2026-05-14"
-    notes: "GitHub Actions schedule already removed 2026-05-14. This proposal resolves the remaining systemd/Airflow duplication."
+    notes: "GitHub Actions schedule already removed 2026-05-14. Decision recorded. Actual Airflow DAG pause requires server access to verify and change schedule."
 
   - proposalId: proposal.env.startup_validation
     type: env_hardening

@@ -1,11 +1,14 @@
 # Hermes Pipeline Registry
 # Phase 1 — seeded from REPOSITORY_ASSET_MAP.md (2026-05-14)
+# Phase 4.5 — scheduler roles and decisions added (2026-05-14)
 
 pipelines:
   # --- systemd Timers ---
   - pipelineId: pipeline.news.country_systemd
     name: "Country News Sync (systemd timer)"
     type: systemd_timer
+    role: production_scheduler
+    schedulerDecision: "Systemd timer is the recommended production scheduler for Country News Sync (direct DB access, no network hop). See PIPELINE_SCHEDULER_DECISION_2026-05-14.md §3."
     path: "03_Scripts/deploy/systemd/jato-country-news-sync.service"
     trigger: "jato-country-news-sync.timer"
     schedule: "OnCalendar=*-*-* 23:15:00 UTC"
@@ -27,7 +30,7 @@ pipelines:
     riskLevel: medium
     governanceStatus: registered
     knownIssues:
-      - "Duplicate scheduling risk: same function exists in Airflow DAG jato_country_news_sync at 06:15 UTC"
+      - "Duplicate scheduling risk: same function exists in Airflow DAG jato_country_news_sync at 06:15 UTC. Decision: systemd is production, Airflow should be manual fallback."
       - "Google News RSS blocked from Tencent Cloud China server — falls back to stale cache"
     lastObserved:
       lastRunAt: "2026-05-13T15:18:03Z"
@@ -40,6 +43,8 @@ pipelines:
   - pipelineId: pipeline.voc.forum_systemd
     name: "VOC Forum Sync (systemd timer)"
     type: systemd_timer
+    role: production_scheduler
+    schedulerDecision: "Systemd timer is the sole scheduler for VOC. No Airflow or GitHub Actions overlap. See PIPELINE_SCHEDULER_DECISION_2026-05-14.md §5."
     path: "03_Scripts/deploy/systemd/jato-voc-forum-sync.service"
     trigger: "jato-voc-forum-sync.timer"
     schedule: "OnCalendar=*-*-* 01:45:00 UTC"
@@ -82,6 +87,8 @@ pipelines:
   - pipelineId: pipeline.msrp.dryrun_systemd
     name: "MSRP Dry-run (systemd timer)"
     type: systemd_timer
+    role: production_scheduler
+    schedulerDecision: "Systemd timer is production scheduler for MSRP. Airflow DAG is manual fallback (schedule=None). Acceptable overlap. See PIPELINE_SCHEDULER_DECISION_2026-05-14.md §4."
     path: "03_Scripts/deploy/systemd/jato-msrp-sync@.service"
     trigger: "jato-msrp-dryrun.timer"
     schedule: "OnCalendar=*-*-* 03:30:00 UTC"
@@ -148,8 +155,10 @@ pipelines:
   - pipelineId: pipeline.news.country_airflow
     name: "Country News Sync (Airflow DAG)"
     type: airflow_dag
+    role: manual_fallback_or_experimental
+    schedulerDecision: "Airflow DAG should not run as duplicate production scheduler. Recommended: set schedule=None (manual-only) and use as fallback. See PIPELINE_SCHEDULER_DECISION_2026-05-14.md §3."
     path: "airflow/dags/jato_country_news_sync.py"
-    trigger: "schedule"
+    trigger: "schedule (needs verification: may be paused/manual on prod)"
     schedule: "cron: 15 6 * * * (06:15 UTC)"
     producer: "HTTP POST to /v1/assistant/country/news/refresh"
     outputs:
@@ -166,9 +175,10 @@ pipelines:
     riskLevel: medium
     governanceStatus: needs_review
     knownIssues:
-      - "DUPLICATE SCHEDULING: same function as pipeline.news.country_systemd at 23:15 UTC"
+      - "DUPLICATE SCHEDULING with pipeline.news.country_systemd (23:15 UTC). Decision: systemd is production, Airflow should be manual fallback."
       - "Calls backend API (circular dependency: Airflow → Backend → DB)"
       - "Requires Airflow stack to be running"
+      - "Needs verification: confirm Airflow DAG schedule is paused/manual on production instance"
     lastObserved:
       lastRunAt: null
       lastSuccessAt: null
