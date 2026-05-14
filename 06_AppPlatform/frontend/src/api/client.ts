@@ -1471,6 +1471,23 @@ export const api = {
     request<{ item: DataManagementVocSyncResponse }>("/data-management/voc/sync", {
       method: "POST"
     }).then((response) => response.item),
+
+  /* ── Hermes Governance ──────────────────────────── */
+  hermesOverview: () =>
+    request<Record<string, unknown>>("/hermes/overview").then((r) => r as Record<string, unknown>),
+  hermesPipelineHealth: () =>
+    request<Record<string, unknown>>("/hermes/pipeline-health").then((r) => r as Record<string, unknown>),
+  hermesSourceQuality: () =>
+    request<Record<string, unknown>>("/hermes/source-quality").then((r) => r as Record<string, unknown>),
+  hermesCost: () =>
+    request<Record<string, unknown>>("/hermes/cost").then((r) => r as Record<string, unknown>),
+  hermesProposals: (status?: string) => {
+    const q = status ? `?status=${status}` : "";
+    return request<unknown[]>(`/hermes/proposals${q}`).then((r) => r as unknown[]);
+  },
+  hermesFeatures: () =>
+    request<unknown[]>(`/hermes/features`).then((r) => r as unknown[]),
+
   patchItem: (id: string, payload: Partial<Omit<CrudItem, "id">>) =>
     request<{ item: CrudItem }>(`/crud/items/${id}`, {
       method: "PATCH",

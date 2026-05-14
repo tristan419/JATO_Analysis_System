@@ -15,6 +15,7 @@ from app.api.routes.msrp_links import router as msrp_links_router
 from app.api.routes.msrp_workflow import router as msrp_workflow_router
 from app.api.routes.platform_db import router as platform_db_router
 from app.api.routes.review import router as review_router
+from app.api.routes.hermes import router as hermes_router
 from app.api.routes.review_cases import router as review_cases_router
 from app.core.config import API_PREFIX, APP_NAME, APP_VERSION, CORS_ORIGINS
 
@@ -43,3 +44,4 @@ app.include_router(msrp_workflow_router, prefix=API_PREFIX)
 app.include_router(msrp_monthly_update_router, prefix=API_PREFIX)
 app.include_router(review_router, prefix=API_PREFIX)
 app.include_router(review_cases_router, prefix=API_PREFIX)
+app.include_router(hermes_router, prefix=API_PREFIX)

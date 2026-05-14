@@ -22,6 +22,7 @@ import {
 } from "../utils/dataManagement";
 
 type CrudEntityTab = "msrp-sources" | "engineering-projects" | "review-overrides";
+type DataSubpage = "overview" | "hermes" | "voc";
 const DEFAULT_RECENT_ITEMS_VISIBLE = 6;
 
 interface SourceFilters {
@@ -210,6 +211,9 @@ export function DataManagementPage() {
   const [vocCountry, setVocCountry] = useState("");
 
   const [crudTab, setCrudTab] = useState<CrudEntityTab>("msrp-sources");
+  const [subpage, setSubpage] = useState<DataSubpage>("overview");
+  const [hermesOverview, setHermesOverview] = useState<Record<string, unknown> | null>(null);
+  const [hermesLoading, setHermesLoading] = useState(false);
   const [crudLoading, setCrudLoading] = useState(false);
   const [crudError, setCrudError] = useState("");
   const [crudNotice, setCrudNotice] = useState("");
@@ -326,6 +330,15 @@ export function DataManagementPage() {
       void loadCrudData(crudTab);
     }
   }, [crudTab, overview?.database.connected]);
+
+  useEffect(() => {
+    if (subpage !== "hermes" || hermesOverview) return;
+    setHermesLoading(true);
+    api.hermesOverview()
+      .then(setHermesOverview)
+      .catch(() => setHermesOverview({}))
+      .finally(() => setHermesLoading(false));
+  }, [subpage, hermesOverview]);
 
   const activityColumns = useMemo(
     () => buildActivityHeatmapColumns(overview?.activity.days ?? []),
@@ -669,7 +682,35 @@ export function DataManagementPage() {
 
       {error ? <div className="error-banner">{error}</div> : null}
 
-      {loading && !overview ? (
+      <div className="admin-tabs" style={{ marginBottom: 16 }}>
+        <button type="button" className={`admin-tab${subpage === "overview" ? " is-active" : ""}`} onClick={() => setSubpage("overview")}>Overview</button>
+        <button type="button" className={`admin-tab${subpage === "hermes" ? " is-active" : ""}`} onClick={() => setSubpage("hermes")}>Hermes Governance</button>
+        <button type="button" className={`admin-tab${subpage === "voc" ? " is-active" : ""}`} onClick={() => setSubpage("voc")}>VOC 观察台</button>
+      </div>
+
+      {subpage === "hermes" ? (
+        <div className="card crud-card">
+          <div className="admin-card-header"><div><h2>Hermes Governance</h2></div></div>
+          {hermesLoading ? (
+            <LoadingSurface mode="inline" label="Loading Hermes..." kicker="Governance" />
+          ) : hermesOverview ? (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, padding: 16 }}>
+              <div className="metric-chip"><span>Registries</span><strong>{Object.values(hermesOverview.registries as Record<string,number> || {}).filter((v: number) => v > 0).length}</strong></div>
+              <div className="metric-chip"><span>Reports</span><strong>{Object.values(hermesOverview.reports as Record<string,boolean> || {}).filter(Boolean).length}</strong></div>
+              <div className="metric-chip"><span>Proposals Open</span><strong>{(hermesOverview.proposals as Record<string,number>)?.pending || 0}</strong></div>
+              <div className="metric-chip"><span>Gaps Open</span><strong>{(hermesOverview.gaps as Record<string,number>)?.open || 0}</strong></div>
+              <div className="metric-chip"><span>Pipelines</span><strong>{(hermesOverview.registries as Record<string,number>)?.pipeline || 0}</strong></div>
+              <div className="metric-chip"><span>Features</span><strong>{(hermesOverview.registries as Record<string,number>)?.feature || 0}</strong></div>
+              <div className="metric-chip"><span>Sources</span><strong>{(hermesOverview.registries as Record<string,number>)?.source || 0}</strong></div>
+              <div className="metric-chip"><span>Proposals Done</span><strong>{(hermesOverview.proposals as Record<string,number>)?.implemented || 0}</strong></div>
+            </div>
+          ) : (
+            <p style={{ padding: 16, color: "#64748b" }}>Hermes registry not available. Run Phase 0–5 first.</p>
+          )}
+        </div>
+      ) : null}
+
+      {subpage !== "hermes" && loading && !overview ? (
         <LoadingSurface
           mode="overlay"
           label="正在读取数据总览"
@@ -678,7 +719,7 @@ export function DataManagementPage() {
         />
       ) : null}
 
-      {overview ? (
+      {subpage !== "hermes" && overview ? (
         <>
           <div className="card crud-card">
             <div className="admin-card-header">
