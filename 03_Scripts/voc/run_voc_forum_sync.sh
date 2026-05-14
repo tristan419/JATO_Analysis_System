@@ -100,7 +100,7 @@ _write_voc_status_json() {
   local last_error="$5"
   local started_at="$6"
 
-  python - "$status_path" "$status" "$raw_count" "$enriched_count" "$last_error" "$started_at" <<'PY'
+  "$PYTHON_BIN" - "$status_path" "$status" "$raw_count" "$enriched_count" "$last_error" "$started_at" <<'PY'
 import json, os, sys
 from datetime import datetime, timezone
 
@@ -240,7 +240,7 @@ fi
 echo "[INFO] VOC raw artifacts: $RAW_COUNT"
 
 if [[ -f "$RAW_SUMMARY_PATH" ]]; then
-  python - "$RAW_SUMMARY_PATH" > "$RAW_FAILED_SOURCES" 2>/dev/null <<'PY' || true
+  "$PYTHON_BIN" - "$RAW_SUMMARY_PATH" > "$RAW_FAILED_SOURCES" 2>/dev/null <<'PY' || true
 import json, sys
 try:
     data = json.load(open(sys.argv[1]))
@@ -257,7 +257,7 @@ fi
 
 VOC_FAILED_SOURCE_COUNT=0
 if [[ -f "$RAW_FAILED_SOURCES" ]]; then
-  VOC_FAILED_SOURCE_COUNT="$(python -c "import json; d=json.load(open('$RAW_FAILED_SOURCES')); print(d.get('failedCount',0))" 2>/dev/null || echo 0)"
+  VOC_FAILED_SOURCE_COUNT="$("$PYTHON_BIN" -c "import json; d=json.load(open('$RAW_FAILED_SOURCES')); print(d.get('failedCount',0))" 2>/dev/null || echo 0)"
 fi
 
 # --- Sync raw to PostgreSQL staging ---
@@ -291,7 +291,7 @@ fi
 # --- Write status artifact ---
 ENRICHED_COUNT=0
 if [[ -f "$ENRICHED_SUMMARY_PATH" ]]; then
-  ENRICHED_COUNT="$(python -c "import json; d=json.load(open('$ENRICHED_SUMMARY_PATH')); print(d.get('total', len(d) if isinstance(d,list) else 1))" 2>/dev/null || echo 0)"
+  ENRICHED_COUNT="$("$PYTHON_BIN" -c "import json; d=json.load(open('$ENRICHED_SUMMARY_PATH')); print(d.get('total', len(d) if isinstance(d,list) else 1))" 2>/dev/null || echo 0)"
 fi
 
 if [[ "$VOC_FETCH_EXIT" -eq 0 && "$VOC_FAILED_SOURCE_COUNT" -eq 0 ]]; then
