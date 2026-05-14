@@ -213,6 +213,11 @@ export function DataManagementPage() {
   const [crudTab, setCrudTab] = useState<CrudEntityTab>("msrp-sources");
   const [subpage, setSubpage] = useState<DataSubpage>("overview");
   const [hermesOverview, setHermesOverview] = useState<Record<string, unknown> | null>(null);
+  const [hermesPipelines, setHermesPipelines] = useState<Record<string, unknown> | null>(null);
+  const [hermesSources, setHermesSources] = useState<Record<string, unknown> | null>(null);
+  const [hermesCost, setHermesCost] = useState<Record<string, unknown> | null>(null);
+  const [hermesProposals, setHermesProposals] = useState<unknown[]>([]);
+  const [hermesFeatures, setHermesFeatures] = useState<unknown[]>([]);
   const [hermesLoading, setHermesLoading] = useState(false);
   const [crudLoading, setCrudLoading] = useState(false);
   const [crudError, setCrudError] = useState("");
@@ -334,10 +339,14 @@ export function DataManagementPage() {
   useEffect(() => {
     if (subpage !== "hermes" || hermesOverview) return;
     setHermesLoading(true);
-    api.hermesOverview()
-      .then(setHermesOverview)
-      .catch(() => setHermesOverview({}))
-      .finally(() => setHermesLoading(false));
+    Promise.allSettled([
+      api.hermesOverview().then(setHermesOverview),
+      api.hermesPipelineHealth().then(setHermesPipelines),
+      api.hermesSourceQuality().then(setHermesSources),
+      api.hermesCost().then(setHermesCost),
+      api.hermesProposals().then(setHermesProposals),
+      api.hermesFeatures().then(setHermesFeatures),
+    ]).finally(() => setHermesLoading(false));
   }, [subpage, hermesOverview]);
 
   const activityColumns = useMemo(
@@ -689,25 +698,188 @@ export function DataManagementPage() {
       </div>
 
       {subpage === "hermes" ? (
-        <div className="card crud-card">
-          <div className="admin-card-header"><div><h2>Hermes Governance</h2></div></div>
-          {hermesLoading ? (
-            <LoadingSurface mode="inline" label="Loading Hermes..." kicker="Governance" />
-          ) : hermesOverview ? (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, padding: 16 }}>
-              <div className="metric-chip"><span>Registries</span><strong>{Object.values(hermesOverview.registries as Record<string,number> || {}).filter((v: number) => v > 0).length}</strong></div>
-              <div className="metric-chip"><span>Reports</span><strong>{Object.values(hermesOverview.reports as Record<string,boolean> || {}).filter(Boolean).length}</strong></div>
-              <div className="metric-chip"><span>Proposals Open</span><strong>{(hermesOverview.proposals as Record<string,number>)?.pending || 0}</strong></div>
-              <div className="metric-chip"><span>Gaps Open</span><strong>{(hermesOverview.gaps as Record<string,number>)?.open || 0}</strong></div>
-              <div className="metric-chip"><span>Pipelines</span><strong>{(hermesOverview.registries as Record<string,number>)?.pipeline || 0}</strong></div>
-              <div className="metric-chip"><span>Features</span><strong>{(hermesOverview.registries as Record<string,number>)?.feature || 0}</strong></div>
-              <div className="metric-chip"><span>Sources</span><strong>{(hermesOverview.registries as Record<string,number>)?.source || 0}</strong></div>
-              <div className="metric-chip"><span>Proposals Done</span><strong>{(hermesOverview.proposals as Record<string,number>)?.implemented || 0}</strong></div>
+        hermesLoading ? (
+          <LoadingSurface mode="inline" label="Loading Hermes governance data..." kicker="Hermes" />
+        ) : (
+          <>
+            {/* ---------- 当前状态 ---------- */}
+            <div className="card crud-card">
+              <div className="admin-card-header"><div><h2>Current Status</h2></div></div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, padding: 16 }}>
+                <div className="metric-chip"><span>Pipelines Registered</span><strong>{(hermesOverview?.registries as Record<string,number>)?.pipeline || 0}</strong></div>
+                <div className="metric-chip"><span>Features</span><strong>{(hermesOverview?.registries as Record<string,number>)?.feature || 0}</strong></div>
+                <div className="metric-chip"><span>Sources Tracked</span><strong>{(hermesOverview?.registries as Record<string,number>)?.source || 0}</strong></div>
+                <div className="metric-chip"><span>Reports Available</span><strong>{Object.values(hermesOverview?.reports as Record<string,boolean> || {}).filter(Boolean).length}</strong></div>
+              </div>
             </div>
-          ) : (
-            <p style={{ padding: 16, color: "#64748b" }}>Hermes registry not available. Run Phase 0–5 first.</p>
-          )}
-        </div>
+
+            {/* ---------- Pipeline Health ---------- */}
+            <div className="card crud-card">
+              <div className="admin-card-header"><div><h2>Pipeline Health</h2></div></div>
+              <div style={{ padding: 16 }}>
+                {(hermesPipelines as Record<string,unknown>)?.summary ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 12 }}>
+                    <div className="metric-chip"><span>Registered</span><strong>{String((hermesPipelines as Record<string,unknown>).summary?.registeredPipelines || 0)}</strong></div>
+                    <div className="metric-chip"><span>Duplicate Risks</span><strong style={{color: (hermesPipelines as Record<string,unknown>).summary?.duplicateSchedulingRisks > 0 ? "#ef4444" : "#22c55e"}}>{String((hermesPipelines as Record<string,unknown>).summary?.duplicateSchedulingRisks || 0)}</strong></div>
+                    <div className="metric-chip"><span>High Risk</span><strong style={{color: (hermesPipelines as Record<string,unknown>).summary?.highRiskFindings > 0 ? "#ef4444" : "#22c55e"}}>{String((hermesPipelines as Record<string,unknown>).summary?.highRiskFindings || 0)}</strong></div>
+                    <div className="metric-chip"><span>Status Gaps</span><strong>{String((hermesPipelines as Record<string,unknown>).summary?.statusCoverageGaps || 0)}</strong></div>
+                  </div>
+                ) : null}
+                {((hermesPipelines as Record<string,unknown>)?.allPipelines as unknown[])?.length > 0 ? (
+                  <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+                    <thead><tr style={{background:"#f8fafc"}}><th style={{padding:"6px 10px",textAlign:"left"}}>Pipeline</th><th style={{padding:"6px 10px"}}>Type</th><th style={{padding:"6px 10px"}}>Role</th><th style={{padding:"6px 10px"}}>Risk</th></tr></thead>
+                    <tbody>
+                      {((hermesPipelines as Record<string,unknown>)?.allPipelines as unknown[]).slice(0, 12).map((p: unknown) => {
+                        const pipe = p as Record<string,unknown>;
+                        const risk = String(pipe.risk || "low");
+                        const color = risk === "high" ? "#ef4444" : risk === "medium" ? "#f59e0b" : "#22c55e";
+                        return (
+                          <tr key={String(pipe.pipelineId || "")} style={{borderTop:"1px solid #e2e8f0"}}>
+                            <td style={{padding:"6px 10px",fontWeight:500}}>{String(pipe.name || pipe.pipelineId || "")}</td>
+                            <td style={{padding:"6px 10px",color:"#64748b",fontSize:11}}>{String(pipe.type || "")}</td>
+                            <td style={{padding:"6px 10px",color:"#64748b",fontSize:11}}>{String(pipe.role || pipe.registryStatus || "")}</td>
+                            <td style={{padding:"6px 10px",color,fontWeight:600}}>{risk}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : <p style={{color:"#64748b",padding:"0 16px 16px"}}>Run hermes_pipeline_audit.py to generate pipeline health data.</p>}
+              </div>
+            </div>
+
+            {/* ---------- Source Quality ---------- */}
+            <div className="card crud-card">
+              <div className="admin-card-header"><div><h2>Source Quality</h2></div></div>
+              <div style={{ padding: 16 }}>
+                {(hermesSources as Record<string,unknown>)?.summary ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 12 }}>
+                    <div className="metric-chip"><span>Total</span><strong>{String((hermesSources as Record<string,unknown>).summary?.totalSources || 0)}</strong></div>
+                    <div className="metric-chip"><span>Watch</span><strong style={{color:"#f59e0b"}}>{String((hermesSources as Record<string,unknown>).summary?.watch || 0)}</strong></div>
+                    <div className="metric-chip"><span>Degraded</span><strong style={{color:"#ef4444"}}>{String((hermesSources as Record<string,unknown>).summary?.degraded || 0)}</strong></div>
+                    <div className="metric-chip"><span>High Risk</span><strong style={{color:"#ef4444"}}>{String((hermesSources as Record<string,unknown>).summary?.highRisk || 0)}</strong></div>
+                  </div>
+                ) : null}
+                {((hermesSources as Record<string,unknown>)?.sources as unknown[])?.length > 0 ? (
+                  <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+                    <thead><tr style={{background:"#f8fafc"}}><th style={{padding:"6px 10px",textAlign:"left"}}>Source</th><th style={{padding:"6px 10px"}}>Type</th><th style={{padding:"6px 10px"}}>Status</th><th style={{padding:"6px 10px"}}>Score</th></tr></thead>
+                    <tbody>
+                      {((hermesSources as Record<string,unknown>)?.sources as unknown[]).slice(0, 8).map((s: unknown) => {
+                        const src = s as Record<string,unknown>;
+                        const status = String(src.status || "?");
+                        const color = status === "degraded" ? "#ef4444" : status === "watch" ? "#f59e0b" : "#22c55e";
+                        return (
+                          <tr key={String(src.sourceId || "")} style={{borderTop:"1px solid #e2e8f0"}}>
+                            <td style={{padding:"6px 10px",fontWeight:500}}>{String(src.name || src.sourceId || "")}</td>
+                            <td style={{padding:"6px 10px",color:"#64748b",fontSize:11}}>{String(src.sourceType || "")}</td>
+                            <td style={{padding:"6px 10px",color,fontWeight:600}}>{status}</td>
+                            <td style={{padding:"6px 10px",color: (src.qualityScore as number) < 40 ? "#ef4444" : (src.qualityScore as number) < 70 ? "#f59e0b" : "#22c55e",fontWeight:600}}>{String(src.qualityScore || "?")}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : <p style={{color:"#64748b",padding:"0 16px 16px"}}>Run hermes_source_quality.py to generate source quality data.</p>}
+              </div>
+            </div>
+
+            {/* ---------- Cost ---------- */}
+            <div className="card crud-card">
+              <div className="admin-card-header"><div><h2>Cost Report</h2></div></div>
+              <div style={{ padding: 16 }}>
+                {(hermesCost as Record<string,unknown>)?.summary ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 12 }}>
+                    <div className="metric-chip"><span>Total Cost</span><strong>{(hermesCost as Record<string,unknown>).summary?.totalEstimatedCostCny as number ?? 0} CNY</strong></div>
+                    <div className="metric-chip"><span>Budget</span><strong>{(hermesCost as Record<string,unknown>).summary?.budgetCny as number ?? 500} CNY</strong></div>
+                    <div className="metric-chip"><span>Status</span><strong style={{color: (hermesCost as Record<string,unknown>).summary?.budgetStatus === "exceeded" ? "#ef4444" : (hermesCost as Record<string,unknown>).summary?.budgetStatus === "warning" ? "#f59e0b" : "#22c55e"}}>{String((hermesCost as Record<string,unknown>).summary?.budgetStatus || "ok")}</strong></div>
+                    <div className="metric-chip"><span>Cache Hit</span><strong>{String(Math.round(((hermesCost as Record<string,unknown>).summary?.cacheHitRatio as number || 0) * 100))}%</strong></div>
+                  </div>
+                ) : null}
+                {((hermesCost as Record<string,unknown>)?.byModel as Record<string,unknown>) ? (
+                  <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+                    <thead><tr style={{background:"#f8fafc"}}><th style={{padding:"6px 10px",textAlign:"left"}}>Model</th><th style={{padding:"6px 10px"}}>Records</th><th style={{padding:"6px 10px"}}>Input Tokens</th><th style={{padding:"6px 10px"}}>Cost (CNY)</th></tr></thead>
+                    <tbody>
+                      {Object.entries((hermesCost as Record<string,unknown>).byModel as Record<string,unknown>).map(([model, data]) => {
+                        const d = data as Record<string,unknown>;
+                        return (
+                          <tr key={model} style={{borderTop:"1px solid #e2e8f0"}}>
+                            <td style={{padding:"6px 10px",fontWeight:500}}>{model}</td>
+                            <td style={{padding:"6px 10px"}}>{String(d.records || 0)}</td>
+                            <td style={{padding:"6px 10px"}}>{Number(d.inputTokens || 0).toLocaleString()}</td>
+                            <td style={{padding:"6px 10px",fontWeight:600}}>{Number(d.estimatedCostCny || 0).toFixed(4)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : <p style={{color:"#64748b",padding:"0 16px 16px"}}>Run hermes_cost_report.py to generate cost data.</p>}
+              </div>
+            </div>
+
+            {/* ---------- 已完成 (Proposals + Gaps) ---------- */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              <div className="card crud-card">
+                <div className="admin-card-header"><div><h2>Proposals (已实施 vs 待处理)</h2></div></div>
+                <div style={{ padding: 16 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12, marginBottom: 12 }}>
+                    <div className="metric-chip"><span>Total</span><strong>{(hermesOverview?.proposals as Record<string,number>)?.total || 0}</strong></div>
+                    <div className="metric-chip"><span style={{color:"#22c55e"}}>Implemented</span><strong style={{color:"#22c55e"}}>{(hermesOverview?.proposals as Record<string,number>)?.implemented || 0}</strong></div>
+                    <div className="metric-chip"><span style={{color:"#f59e0b"}}>Pending Review</span><strong style={{color:"#f59e0b"}}>{(hermesOverview?.proposals as Record<string,number>)?.pending || 0}</strong></div>
+                    <div className="metric-chip"><span>Draft</span><strong>{(hermesOverview?.proposals as Record<string,number>)?.draft || 0}</strong></div>
+                  </div>
+                  {hermesProposals.length > 0 ? (
+                    <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                      <thead><tr style={{background:"#f8fafc"}}><th style={{padding:"4px 8px",textAlign:"left"}}>Proposal</th><th style={{padding:"4px 8px"}}>Status</th></tr></thead>
+                      <tbody>
+                        {hermesProposals.slice(0, 10).map((p: unknown) => {
+                          const prop = p as Record<string,unknown>;
+                          const st = String(prop.status || "");
+                          const color = st === "implemented" ? "#22c55e" : st === "pending_review" ? "#f59e0b" : "#94a3b8";
+                          return (
+                            <tr key={String(prop.proposalId || "")} style={{borderTop:"1px solid #e2e8f0"}}>
+                              <td style={{padding:"4px 8px"}}>{String(prop.title || prop.proposalId || "").slice(0, 60)}</td>
+                              <td style={{padding:"4px 8px",color,fontWeight:600,fontSize:11}}>{st}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="card crud-card">
+                <div className="admin-card-header"><div><h2>Governance Gaps (已解决 vs 未解决)</h2></div></div>
+                <div style={{ padding: 16 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12, marginBottom: 12 }}>
+                    <div className="metric-chip"><span>Total</span><strong>{(hermesOverview?.gaps as Record<string,number>)?.total || 0}</strong></div>
+                    <div className="metric-chip"><span style={{color:"#22c55e"}}>Resolved</span><strong style={{color:"#22c55e"}}>{(hermesOverview?.gaps as Record<string,number>)?.resolved || 0}</strong></div>
+                    <div className="metric-chip"><span style={{color:"#ef4444"}}>Open</span><strong style={{color:"#ef4444"}}>{(hermesOverview?.gaps as Record<string,number>)?.open || 0}</strong></div>
+                    <div className="metric-chip"><span>In Progress</span><strong>{(hermesOverview?.gaps as Record<string,number>)?.total - (hermesOverview?.gaps as Record<string,number>)?.open - (hermesOverview?.gaps as Record<string,number>)?.resolved || 0}</strong></div>
+                  </div>
+                  {hermesFeatures.length > 0 ? (
+                    <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                      <thead><tr style={{background:"#f8fafc"}}><th style={{padding:"4px 8px",textAlign:"left"}}>Feature</th><th style={{padding:"4px 8px"}}>Status</th></tr></thead>
+                      <tbody>
+                        {hermesFeatures.slice(0, 10).map((f: unknown) => {
+                          const feat = f as Record<string,unknown>;
+                          const st = String(feat.status || "");
+                          const color = st === "active" ? "#22c55e" : st === "beta" ? "#3b82f6" : st === "archived" ? "#94a3b8" : "#f59e0b";
+                          return (
+                            <tr key={String(feat.featureId || "")} style={{borderTop:"1px solid #e2e8f0"}}>
+                              <td style={{padding:"4px 8px"}}>{String(feat.name || feat.featureId || "").slice(0, 55)}</td>
+                              <td style={{padding:"4px 8px",color,fontWeight:600,fontSize:11}}>{st}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </>
+        )
       ) : null}
 
       {subpage !== "hermes" && loading && !overview ? (
