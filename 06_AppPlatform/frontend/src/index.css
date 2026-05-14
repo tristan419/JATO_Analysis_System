@@ -7968,6 +7968,17 @@ table.data-table tr.data-table-group-row.contains-selection td {
 .ranking-popover-model-chip:hover { background: rgba(28,105,212,0.04); }
 .ranking-popover-model-chip span:first-child { font-weight: 700; color: #1e293b; }
 .ranking-popover-model-chip span:last-child { color: #64748b; }
+.ranking-popover-models-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.ranking-popover-sort { display: flex; gap: 2px; }
+.ranking-popover-sort-chip { padding: 2px 8px; border: 1px solid rgba(15,23,42,0.08); border-radius: 10px; background: transparent; font-family: inherit; font-size: 10px; font-weight: 600; color: #94a3b8; cursor: pointer; }
+.ranking-popover-sort-chip.is-active { background: rgba(28,105,212,0.08); border-color: rgba(28,105,212,0.25); color: #1c69d4; }
+.ranking-popover-models-list { max-height: 280px; overflow-y: auto; }
+.ranking-popover-model-chip-name { font-weight: 700; color: #1e293b; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ranking-popover-model-chip-stats { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.ranking-popover-model-chip-sales { color: #64748b; white-space: nowrap; }
+.ranking-popover-model-chip-growth { font-weight: 600; font-size: 10px; white-space: nowrap; }
+.ranking-popover-model-chip-growth.is-positive { color: #16a34a; }
+.ranking-popover-model-chip-growth.is-negative { color: #dc2626; }
 
 .version-comparison-selection-bank {
   grid-column: 1 / -1;

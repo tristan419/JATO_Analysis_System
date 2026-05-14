@@ -3345,8 +3345,13 @@ def query_ranking_trend(
     msrp_max: float | None = None,
     length_min: float | None = None,
     length_max: float | None = None,
+    sort_by: str = "sales",
 ) -> dict[str, Any]:
-    """Return monthly trend data for a brand (or brand+model) under current filters."""
+    """Return monthly trend data for a brand (or brand+model) under current filters.
+
+    *sort_by*: ``"sales"`` (total across all months, default) or ``"growth"``
+    (latest-month YoY % change).
+    """
     columns = _get_columns()
     country_options = _country_options(repo.current_dataset_token())
     selected_country = _normalize_country_lookup(country, country_options)
@@ -3375,7 +3380,6 @@ def query_ranking_trend(
     if segment:
         frame = frame[frame["__segment_raw"] == segment]
     if fuel_types:
-        # Support both comma-separated single string and list
         resolved: list[str] = []
         for f in fuel_types:
             for part in str(f).split(","):
@@ -3409,10 +3413,9 @@ def query_ranking_trend(
                         "sourceTable": source_table, "filtersApplied": True},
             "summary": {"currentMonthSales": 0, "ytdSales": 0, "marketShare": 0, "rankChange": 0},
             "trend": [],
-            "topModels": [],
+            "models": [],
         }
 
-    # Monthly aggregation: sales, msrp
     month_cols = [c for c in columns.month_columns if c in frame.columns]
     month_records = []
     for mc in month_cols:
@@ -3435,7 +3438,7 @@ def query_ranking_trend(
                         "sourceTable": source_table, "filtersApplied": True},
             "summary": {"currentMonthSales": 0, "ytdSales": 0, "marketShare": 0, "rankChange": 0},
             "trend": [],
-            "topModels": [],
+            "models": [],
         }
 
     month_records.sort(key=lambda r: r["month"])
@@ -3446,11 +3449,6 @@ def query_ranking_trend(
             if r["month"][:4] == year
         )
 
-    # Market share: compute total market sales per month from the full frame
-    # (before brand/model filter)
-    if segment:
-        market_frame = frame  # already filtered; need full segment
-    # For share computation, re-load unfiltered data
     market_month_totals: dict[str, float] = {}
     for mc in month_cols:
         market_month_totals[mc] = float(pd.to_numeric(frame[mc], errors="coerce").fillna(0.0).sum())
@@ -3464,23 +3462,52 @@ def query_ranking_trend(
     prev = month_records[-2] if len(month_records) >= 2 else {}
     ytd_total = latest.get("ytdSales", 0)
 
-    # Top Models (only when brand-level, no model specified)
-    top_models = []
+    # All models with per-model metrics (only when brand-level)
+    all_models: list[dict[str, Any]] = []
     if entity_type == "brand":
+        # Latest month and same-month-last-year columns for growth calc
+        latest_month_col = month_records[-1]["month"] if month_records else None
+        latest_year = int(latest_month_col[:4]) if latest_month_col else 0
+        prev_year_month = f"{latest_year - 1}{latest_month_col[4:]}" if latest_month_col else None
+        prev_year_col = prev_year_month if prev_year_month in month_cols else None
+
         model_agg = frame.groupby("__model")
-        model_sales = []
+        model_sales: list[dict[str, Any]] = []
         for m_name, m_group in model_agg:
-            ms = float(sum(
+            total_sales = float(sum(
                 pd.to_numeric(m_group[mc], errors="coerce").fillna(0.0).sum()
                 for mc in month_cols
             ))
-            if ms > 0:
-                model_sales.append({"model": str(m_name).strip(), "sales": ms})
-        model_sales.sort(key=lambda x: -x["sales"])
+            if total_sales <= 0:
+                continue
+            latest_sales = float(pd.to_numeric(m_group[latest_month_col], errors="coerce").fillna(0.0).sum()) if latest_month_col else 0.0
+            prev_year_sales = float(pd.to_numeric(m_group[prev_year_col], errors="coerce").fillna(0.0).sum()) if prev_year_col else 0.0
+            growth = round((latest_sales / prev_year_sales - 1) * 100, 1) if prev_year_sales > 0 else 0.0
+            model_sales.append({
+                "model": str(m_name).strip(),
+                "sales": total_sales,
+                "latestSales": latest_sales,
+                "growth": growth,
+            })
+
         total_brand = sum(m["sales"] for m in model_sales)
-        top_models = [
-            {**m, "shareWithinBrand": round(m["sales"] / total_brand, 4) if total_brand > 0 else 0}
-            for m in model_sales[:5]
+        for m in model_sales:
+            m["shareWithinBrand"] = round(m["sales"] / total_brand, 4) if total_brand > 0 else 0
+
+        # Sort
+        if sort_by == "growth":
+            model_sales.sort(key=lambda x: (-x["growth"], -x["sales"]))
+        else:
+            model_sales.sort(key=lambda x: -x["sales"])
+
+        all_models = [
+            {
+                "model": m["model"],
+                "sales": m["sales"],
+                "shareWithinBrand": m["shareWithinBrand"],
+                "growth": m["growth"],
+            }
+            for m in model_sales
         ]
 
     return {
@@ -3503,7 +3530,8 @@ def query_ranking_trend(
             ),
         },
         "trend": month_records,
-        "topModels": top_models,
+        "topModels": all_models,
+        "models": all_models,
     }
 
 

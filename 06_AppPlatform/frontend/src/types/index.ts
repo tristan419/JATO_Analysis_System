@@ -922,7 +922,8 @@ export interface RankingTrendResponse {
     rankChange: number;
   };
   trend: RankingTrendPoint[];
-  topModels?: { model: string; sales: number; shareWithinBrand: number }[];
+  topModels?: { model: string; sales: number; shareWithinBrand: number; growth?: number }[];
+  models?: { model: string; sales: number; shareWithinBrand: number; growth?: number }[];
 }
 
 export interface VersionComparisonDeckRequest {

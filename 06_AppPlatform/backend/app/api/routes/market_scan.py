@@ -97,6 +97,7 @@ def ranking_trend(
     msrp_max: float | None = Query(default=None),
     length_min: float | None = Query(default=None),
     length_max: float | None = Query(default=None),
+    sort_by: str = Query(default="sales"),
     _=Depends(require_min_role("viewer")),
 ) -> dict:
     return query_ranking_trend(
@@ -110,6 +111,7 @@ def ranking_trend(
         msrp_max=msrp_max,
         length_min=length_min,
         length_max=length_max,
+        sort_by=sort_by,
     )
 
 

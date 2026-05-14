@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import type { RankingTrendResponse } from "../types";
 import { api } from "../api/client";
 import { LazyPlotlyChart as PlotlyChart } from "./LazyPlotlyChart";
 import { LoadingSurface } from "./LoadingSurface";
+
+type SortMode = "sales" | "growth";
 
 interface Props {
   open: boolean;
@@ -21,6 +23,11 @@ function formatSales(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n));
 }
 
+function formatGrowth(n: number): string {
+  if (n === 0) return "0%";
+  return `${n > 0 ? "+" : ""}${n.toFixed(1)}%`;
+}
+
 export function RankingTrendPopover({
   open, brand, model, sourceTable, country, segment,
   fuelTypes, onClose, onBack, onModelClick,
@@ -28,6 +35,7 @@ export function RankingTrendPopover({
   const [data, setData] = useState<RankingTrendResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [sortBy, setSortBy] = useState<SortMode>("sales");
 
   useEffect(() => {
     if (!open) return;
@@ -40,7 +48,7 @@ export function RankingTrendPopover({
     if (!open || !brand) return;
     setLoading(true);
     setError("");
-    const params: Record<string, string> = { country, brand, source_table: sourceTable };
+    const params: Record<string, string> = { country, brand, source_table: sourceTable, sort_by: sortBy };
     if (model) params.model = model;
     if (segment) params.segment = segment;
     if (fuelTypes?.length) params.fuel_types = fuelTypes.join(",");
@@ -48,7 +56,10 @@ export function RankingTrendPopover({
       .then(setData)
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [open, brand, model, sourceTable, country, segment, fuelTypes]);
+  }, [open, brand, model, sourceTable, country, segment, fuelTypes, sortBy]);
+
+  // Use models[] (all) if available, fall back to topModels[] (legacy)
+  const allModels = useMemo(() => data?.models ?? data?.topModels ?? [], [data]);
 
   if (!open) return null;
 
@@ -121,17 +132,48 @@ export function RankingTrendPopover({
                 <div className="market-scan-empty">无趋势数据</div>
               ) : null}
 
-              {data?.topModels?.length && !model ? (
+              {allModels.length > 0 && !model ? (
                 <div className="ranking-popover-models">
-                  <span className="ranking-popover-section-label">Top Models</span>
-                  {data.topModels.map((m) => (
-                    <button key={m.model} type="button"
-                      className="ranking-popover-model-chip"
-                      onClick={() => onModelClick?.(m.model)}>
-                      <span>{m.model}</span>
-                      <span>{formatSales(m.sales)} · {(m.shareWithinBrand * 100).toFixed(0)}%</span>
-                    </button>
-                  ))}
+                  <div className="ranking-popover-models-head">
+                    <span className="ranking-popover-section-label">
+                      Models ({allModels.length})
+                    </span>
+                    <div className="ranking-popover-sort">
+                      <button
+                        type="button"
+                        className={`ranking-popover-sort-chip${sortBy === "sales" ? " is-active" : ""}`}
+                        onClick={() => setSortBy("sales")}
+                      >
+                        销量
+                      </button>
+                      <button
+                        type="button"
+                        className={`ranking-popover-sort-chip${sortBy === "growth" ? " is-active" : ""}`}
+                        onClick={() => setSortBy("growth")}
+                      >
+                        增长
+                      </button>
+                    </div>
+                  </div>
+                  <div className="ranking-popover-models-list">
+                    {allModels.map((m) => (
+                      <button key={m.model} type="button"
+                        className="ranking-popover-model-chip"
+                        onClick={() => onModelClick?.(m.model)}>
+                        <span className="ranking-popover-model-chip-name">{m.model}</span>
+                        <span className="ranking-popover-model-chip-stats">
+                          <span className="ranking-popover-model-chip-sales">
+                            {formatSales(m.sales)} · {(m.shareWithinBrand * 100).toFixed(0)}%
+                          </span>
+                          {sortBy === "growth" && (
+                            <span className={`ranking-popover-model-chip-growth${(m.growth ?? 0) > 0 ? " is-positive" : (m.growth ?? 0) < 0 ? " is-negative" : ""}`}>
+                              {formatGrowth(m.growth ?? 0)}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               ) : null}
             </>
