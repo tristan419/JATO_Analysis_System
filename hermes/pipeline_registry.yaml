@@ -307,8 +307,10 @@ pipelines:
   - pipelineId: pipeline.deploy.tencent_github
     name: "Deploy Fullstack to Tencent Cloud (GitHub Actions)"
     type: github_action
+    role: production_deploy
+    schedulerDecision: "Primary production deployment workflow. Cancelled runs (due to cancel-in-progress on fast consecutive pushes) are NOT deployment failures. See CI_DEPLOY_WORKFLOW_GOVERNANCE_2026-05-14.md."
     path: ".github/workflows/deploy-fullstack-tencent.yml"
-    trigger: "push to main (filtered paths)"
+    trigger: "push to main (filtered paths: 06_AppPlatform/, 07_ScrapingToolkit/, 03_Scripts/, hermes/)"
     schedule: "None (event-driven)"
     producer: "03_Scripts/ops/deploy_fullstack_server.sh"
     outputs:
@@ -320,15 +322,78 @@ pipelines:
       - "GitHub Secrets: DEEPSEEK_API_KEY"
     relatedFeatureIds: []
     status: active
-    riskLevel: high
+    riskLevel: medium
     governanceStatus: registered
     knownIssues:
+      - "Fast consecutive pushes may cancel previous runs due to cancel-in-progress: true. Cancelled runs should NOT be interpreted as failed deployments."
       - "Deploy overwrites server files via tar — git history on server is stale"
       - "SKIP_GIT_SYNC=true means no git pull on server"
     lastObserved:
       lastRunAt: null
-      lastSuccessAt: "2026-05-13T16:13:38Z"
+      lastSuccessAt: "2026-05-14T14:19:36Z"
       lastFailureAt: null
       lastFailureReason: null
     owner: ""
-    notes: "Auto-deploys on push to main when 06_AppPlatform/, 07_ScrapingToolkit/, or 03_Scripts/ change."
+    notes: "Auto-deploys on push to main. Trigger paths include hermes/ as of 2026-05-14."
+
+  - pipelineId: pipeline.ci.github
+    name: "CI (GitHub Actions)"
+    type: github_action
+    role: diagnostics_or_quality_gate
+    schedulerDecision: "Currently failing due to pre-existing code style issues. Should not be treated as a Hermes or deploy failure. See CI_DEPLOY_WORKFLOW_GOVERNANCE_2026-05-14.md."
+    path: ".github/workflows/ci.yml"
+    trigger: "push to any branch, pull_request"
+    schedule: "None (event-driven)"
+    producer: "style_check.py, py_compile, regression checks, compileall"
+    outputs:
+      - "Code quality gate (style, compile, regression)"
+    consumers:
+      - "Developer workflow"
+    dependsOn:
+      - "requirements.txt"
+    relatedFeatureIds: []
+    status: active
+    riskLevel: medium
+    governanceStatus: needs_review
+    knownIssues:
+      - "Consistently failing on every push due to pre-existing code style/check issues."
+      - "Should be split into non-blocking diagnostics first, then gradually restored as quality gate."
+      - "Not caused by Hermes. Pre-existing condition."
+    lastObserved:
+      lastRunAt: null
+      lastSuccessAt: null
+      lastFailureAt: "2026-05-14T14:19:36Z"
+      lastFailureReason: "Pre-existing style check failures"
+    owner: ""
+    notes: "Three jobs: smoke (style/compile/regression), fullstack-backend (compileall), fullstack-frontend (check:frontend)."
+
+  - pipelineId: pipeline.deploy.ec2_legacy_github
+    name: "Deploy to EC2 (Legacy, GitHub Actions)"
+    type: github_action
+    role: legacy_deploy
+    schedulerDecision: "Legacy Streamlit EC2 deployment workflow. Target server likely no longer exists. Candidate for deprecation or conversion to workflow_dispatch only. See CI_DEPLOY_WORKFLOW_GOVERNANCE_2026-05-14.md."
+    path: ".github/workflows/deploy-ec2-auto-update.yml"
+    trigger: "push to main, workflow_dispatch"
+    schedule: "None (event-driven)"
+    producer: "SSH to EC2 → git pull → pip install → restart streamlit"
+    outputs:
+      - "Deployed Streamlit dashboard on legacy EC2 (likely obsolete)"
+    consumers:
+      - "Legacy Streamlit dashboard (if still running)"
+    dependsOn:
+      - "GitHub Secrets: SSH_HOST, SSH_USER, SSH_PRIVATE_KEY/SSH_PASSWORD (legacy EC2)"
+    relatedFeatureIds: []
+    status: active
+    riskLevel: high
+    governanceStatus: deprecated_candidate
+    knownIssues:
+      - "Consistently failing on every push. Target EC2 server likely no longer exists."
+      - "Creates misleading red X on GitHub Actions page, confusing deploy health assessment."
+      - "Should be converted to workflow_dispatch only or disabled after confirming obsolete."
+    lastObserved:
+      lastRunAt: null
+      lastSuccessAt: null
+      lastFailureAt: "2026-05-14T14:19:36Z"
+      lastFailureReason: "SSH connection failed — target server likely obsolete"
+    owner: ""
+    notes: "Do NOT delete without explicit confirmation. Convert to workflow_dispatch only as safe first step."

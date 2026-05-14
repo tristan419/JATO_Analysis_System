@@ -170,6 +170,37 @@ gaps:
     owner: ""
     notes: ""
 
+  # --- CI / Deploy Workflow Gaps ---
+  - gapId: gap.ci.preexisting_failures
+    title: "CI workflow consistently failing due to pre-existing code style issues"
+    category: test
+    severity: medium
+    affectedAssets:
+      - "pipeline.ci.github"
+    evidence:
+      - "ci.yml consistently fails on every push since before Hermes introduction"
+      - "Three jobs: smoke (style/compile/regression) fails, fullstack-frontend fails"
+      - "Not caused by Hermes changes"
+    recommendedAction: "Short-term: convert CI to non-blocking diagnostics. Long-term: split into smaller checks (YAML validation, frontend typecheck, backend smoke) and restore gradually."
+    status: open
+    owner: ""
+    notes: "Phase 5.6 classified. CI failures should not be confused with deployment failures."
+
+  - gapId: gap.deploy.legacy_ec2_workflow
+    title: "Legacy deploy-ssh-auto-update workflow consistently failing"
+    category: pipeline
+    severity: high
+    affectedAssets:
+      - "pipeline.deploy.ec2_legacy_github"
+    evidence:
+      - "deploy-ssh-auto-update consistently fails on every push"
+      - "Target EC2 server likely no longer exists"
+      - "Creates misleading red X on GitHub Actions page"
+    recommendedAction: "Convert to workflow_dispatch only as safe first step. Disable entirely after confirming EC2 instance is obsolete."
+    status: open
+    owner: ""
+    notes: "Phase 5.6 classified. Do NOT delete workflow without explicit confirmation."
+
   # --- Feature Gaps ---
   - gapId: gap.feature.no_owner_tracking
     title: "No feature owner tracking"

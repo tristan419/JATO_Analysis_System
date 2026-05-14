@@ -99,6 +99,38 @@ proposals:
     createdAt: "2026-05-14"
     notes: "voc-failed-sources.json generation scaffold added 2026-05-14. This proposal tracks actual per-source data."
 
+  - proposalId: proposal.ci.non_blocking_diagnostics
+    type: test_coverage
+    title: "Convert CI from failing quality gate to non-blocking diagnostics"
+    summary: "Current CI consistently fails due to pre-existing style issues. Short-term: split into non-blocking diagnostic stages. Long-term: restore as quality gate with focused checks (YAML validation, frontend typecheck, backend smoke)."
+    affectedFeatures: []
+    affectedPipelines:
+      - "pipeline.ci.github"
+    affectedSources: []
+    affectedPrompts: []
+    riskLevel: medium
+    expectedImpact: "Removes misleading red X noise from GitHub Actions page. Enables incremental quality gate restoration."
+    rollbackPlan: "Re-enable full CI checks."
+    status: draft
+    createdAt: "2026-05-14"
+    notes: "Phase 5.6 proposal. Do NOT delete CI workflow."
+
+  - proposalId: proposal.deploy.disable_legacy_ec2
+    type: pipeline_dedup
+    title: "Disable or convert legacy deploy-ssh-auto-update to manual-only"
+    summary: "Legacy EC2 deploy workflow consistently fails. Target server likely obsolete. Convert to workflow_dispatch only or disable entirely after confirmation."
+    affectedFeatures: []
+    affectedPipelines:
+      - "pipeline.deploy.ec2_legacy_github"
+    affectedSources: []
+    affectedPrompts: []
+    riskLevel: high
+    expectedImpact: "Removes misleading red X from GitHub Actions page. Eliminates failed SSH connections to non-existent server."
+    rollbackPlan: "Re-enable workflow if EC2 instance is restored."
+    status: pending_review
+    createdAt: "2026-05-14"
+    notes: "Phase 5.6 proposal. Do NOT delete workflow file without explicit confirmation."
+
   - proposalId: proposal.backlog.triage_prd_features
     type: backlog_triage
     title: "Triage PRD-only features: presence_websocket and ranking_trend"
