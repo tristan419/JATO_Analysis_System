@@ -219,6 +219,7 @@ export function DataManagementPage() {
   const [hermesProposals, setHermesProposals] = useState<unknown[]>([]);
   const [hermesFeatures, setHermesFeatures] = useState<unknown[]>([]);
   const [hermesToolchain, setHermesToolchain] = useState<Record<string, unknown> | null>(null);
+  const [hermesArch, setHermesArch] = useState<Record<string, unknown> | null>(null);
   const [hermesLoading, setHermesLoading] = useState(false);
   const [crudLoading, setCrudLoading] = useState(false);
   const [crudError, setCrudError] = useState("");
@@ -348,6 +349,7 @@ export function DataManagementPage() {
       api.hermesProposals().then(setHermesProposals),
       api.hermesFeatures().then(setHermesFeatures),
       api.hermesToolchain().then(setHermesToolchain),
+      api.hermesArchitecture().then(setHermesArch),
     ]).finally(() => setHermesLoading(false));
   }, [subpage, hermesOverview]);
 
@@ -751,6 +753,82 @@ export function DataManagementPage() {
                     })}
                   </div>
                 </div>
+              </div>
+            </div>
+
+            {/* ---------- 4 Governors: Who Does What ---------- */}
+            <div className="card crud-card">
+              <div className="admin-card-header"><div><h2>4 Hermes Governors — Who Should I Ask?</h2></div></div>
+              <div style={{ padding: 16 }}>
+                {(hermesArch?.modules as unknown[])?.length > 0 ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12, marginBottom: 16 }}>
+                    {(hermesArch.modules as unknown[]).map((m: unknown) => {
+                      const mod = m as Record<string,unknown>;
+                      const scripts = (mod.scripts as string[]) || [];
+                      const answers = (mod.answers as string[]) || [];
+                      const icon = String(mod.icon || "");
+                      const colors: Record<string,string> = {code:"#3b82f6",pipeline:"#f59e0b",intelligence:"#8b5cf6",knowledge:"#22c55e"};
+                      return (
+                        <div key={String(mod.governor)} style={{
+                          background: "#f8fafc", borderRadius: 8, padding: "14px 16px",
+                          borderLeft: `4px solid ${colors[icon] || "#94a3b8"}`,
+                        }}>
+                          <div style={{fontWeight:700,fontSize:15,marginBottom:2,color:colors[icon]}}>{mod.governor}</div>
+                          <div style={{color:"#64748b",fontSize:11,marginBottom:8}}>{mod.phase} · {scripts.join(", ")}</div>
+                          <div style={{fontSize:12,color:"#334155",marginBottom:4,fontWeight:600}}>Answers:</div>
+                          {answers.map((a: string, i: number) => (
+                            <div key={i} style={{fontSize:11,color:"#475569",padding:"1px 0",paddingLeft:8,borderLeft:"2px solid #e2e8f0",marginBottom:2}}>{a}</div>
+                          ))}
+                          <div style={{marginTop:8,fontSize:10,color:"#94a3b8"}}>Trigger: {mod.triggers}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+
+                {/* Work Routing Table */}
+                {(hermesArch?.routing as unknown[])?.length > 0 ? (
+                  <div>
+                    <strong style={{display:"block",marginBottom:8,fontSize:14}}>Work Routing Guide</strong>
+                    <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                      <thead><tr style={{background:"#f1f5f9"}}>
+                        <th style={{padding:"6px 10px",textAlign:"left"}}>I want to...</th>
+                        <th style={{padding:"6px 10px",textAlign:"left"}}>Ask</th>
+                        <th style={{padding:"6px 10px",textAlign:"left",fontFamily:"monospace",fontSize:11}}>Command</th>
+                      </tr></thead>
+                      <tbody>
+                        {(hermesArch.routing as unknown[]).slice(0, 10).map((r: unknown, i: number) => {
+                          const row = r as Record<string,unknown>;
+                          return (
+                            <tr key={i} style={{borderTop:"1px solid #e2e8f0"}}>
+                              <td style={{padding:"6px 10px",fontWeight:500}}>{String(row.task)}</td>
+                              <td style={{padding:"6px 10px",color:"#3b82f6",fontWeight:600,fontSize:11}}>{String(row.ask)}</td>
+                              <td style={{padding:"6px 10px",fontFamily:"monospace",fontSize:11,color:"#475569"}}>{String(row.run)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            {/* ---------- Dependency Graph ---------- */}
+            <div className="card crud-card">
+              <div className="admin-card-header"><div><h2>How They Connect</h2></div></div>
+              <div style={{ padding: 16 }}>
+                {((hermesArch?.dependencies as unknown[]) || []).map((d: unknown, i: number) => {
+                  const dep = d as Record<string,unknown>;
+                  return (
+                    <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"5px 0",fontSize:12,borderBottom:"1px solid #f1f5f9"}}>
+                      <span style={{fontFamily:"monospace",fontWeight:600,color:"#3b82f6",minWidth:180}}>{String(dep.from)}</span>
+                      <span style={{color:"#94a3b8"}}>→</span>
+                      <span style={{fontFamily:"monospace",fontWeight:600,color:"#f59e0b",minWidth:140}}>{String(dep.to)}</span>
+                      <span style={{color:"#64748b",fontSize:11}}>{String(dep.what)}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 

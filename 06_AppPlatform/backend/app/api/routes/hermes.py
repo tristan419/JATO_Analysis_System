@@ -190,6 +190,107 @@ def hermes_toolchain() -> dict:
     }
 
 
+@router.get("/architecture")
+def hermes_architecture() -> dict:
+    """Return the Hermes governance architecture — modules, dependencies, and work routing."""
+    modules = [
+        {
+            "governor": "Code Governor",
+            "icon": "code",
+            "phase": "Phase 2-3",
+            "scripts": ["hermes_intake.py", "hermes_code_audit.py"],
+            "inputs": ["PRD.md", "git diff (base..HEAD)", "hermes/*.yaml registries"],
+            "outputs": ["intake report (.md + .json)", "code audit report (.md + .json)"],
+            "answers": [
+                "这个 PRD 会影响哪些功能/管道/源/prompt？",
+                "Claude Code 改完有没有漏 registry/docs/tests？",
+                "有没有 secret 泄露或 schema 变更无 migration？",
+            ],
+            "triggers": "每次写新 PRD 或 push 代码后手动运行",
+        },
+        {
+            "governor": "Pipeline Governor",
+            "icon": "pipeline",
+            "phase": "Phase 4-4.5",
+            "scripts": ["hermes_pipeline_audit.py"],
+            "inputs": ["hermes/pipeline_registry.yaml", ".github/workflows/", "airflow/dags/", "03_Scripts/deploy/systemd/", "scheduled_fetch_status.json"],
+            "outputs": ["pipeline health report (.md)", "pipeline_health.json"],
+            "answers": [
+                "哪些 pipeline 在生产？哪些是手动后备？",
+                "Country News 有没有重复调度？",
+                "哪个 artifact 被哪个 feature 消费？",
+                "VOC 源错误有没有被结构化追踪？",
+            ],
+            "triggers": "定期运行（建议每周）或 pipeline 变更后",
+        },
+        {
+            "governor": "Intelligence Governor",
+            "icon": "intelligence",
+            "phase": "Phase 5-5.5",
+            "scripts": ["hermes_source_quality.py", "hermes_evidence_writer.py", "hermes_answer_audit.py", "hermes_cost_report.py"],
+            "inputs": ["hermes/source_registry.yaml", "hermes/answer_audit.jsonl", "hermes/model_pricing.yaml", "VOC/News/MSRP artifacts"],
+            "outputs": ["source quality report (.json)", "evidence_ledger.jsonl", "answer audit (.jsonl)", "cost report (.json)"],
+            "answers": [
+                "VOC/News/MSRP 源质量如何？哪个该降级？",
+                "国家助手回答有没有证据？幻觉风险多高？",
+                "Flash vs Pro 各花了多少钱？有没有超预算？",
+                "哪些 evidence 可以跨回答复用？",
+            ],
+            "triggers": "每次 VOC/News 管道运行后，或国家助手回答后",
+        },
+        {
+            "governor": "Knowledge Governor",
+            "icon": "knowledge",
+            "phase": "Phase 1 + ongoing",
+            "scripts": ["hermes_registry_loader.py", "hermes_text_matcher.py", "hermes/*.yaml"],
+            "inputs": ["REPOSITORY_ASSET_MAP.md", "CLAUDE.md", "Markdown_Readme/", "hermes/*.yaml"],
+            "outputs": ["8 registry YAML files (71+ entries)", "feature/pipeline/source/prompt/artifact registries"],
+            "answers": [
+                "系统里到底有什么功能/管道/源/prompt？",
+                "哪个功能没有 owner？哪个管道没有注册？",
+                "新 PRD 和现有功能有没有重叠？",
+                "GitNexus / Roadmap / CLAUDE.md 是否一致？",
+            ],
+            "triggers": "每次新增功能/管道/源/prompt 后更新 registry",
+        },
+    ]
+
+    # Dependency graph: who reads/writes what
+    deps = [
+        {"from": "hermes_registry_loader.py", "to": "ALL scripts", "what": "reads hermes/*.yaml → returns typed dicts"},
+        {"from": "hermes_text_matcher.py", "to": "hermes_intake.py", "what": "keyword extraction + scoring engine"},
+        {"from": "hermes_intake.py", "to": "developer", "what": "PRD → impact report → Claude Code brief"},
+        {"from": "Claude Code", "to": "hermes_code_audit.py", "what": "git diff → 10-rule audit scan"},
+        {"from": "hermes_pipeline_audit.py", "to": "developer", "what": "scans systemd/Airflow/GH Actions → health report"},
+        {"from": "hermes_source_quality.py", "to": "developer", "what": "scores VOC/News/MSRP source health 0-100"},
+        {"from": "hermes_evidence_writer.py", "to": "hermes_answer_audit.py", "what": "JSONL evidence → answer groundedness scoring"},
+        {"from": "hermes_cost_report.py", "to": "developer", "what": "audit records + pricing → budget tracking"},
+        {"from": "hermes API (/v1/hermes/*)", "to": "DataManagementPage", "what": "JSON → UI dashboard"},
+        {"from": "systemd timers", "to": "hermes_pipeline_audit.py", "what": "pipeline runtime data → health report"},
+        {"from": "VOC fetcher", "to": "hermes_source_quality.py", "what": "runtime errors → source quality scores"},
+        {"from": "Country Copilot", "to": "hermes_answer_audit.py", "what": "answers → answer audit records"},
+    ]
+
+    # Work routing guide
+    routing = [
+        {"task": "我要写新功能 PRD", "ask": "Hermes Code Governor (Phase 2)", "run": "python 03_Scripts/hermes/hermes_intake.py prd.md", "gets": "影响分析报告 + Claude Code 开发 brief"},
+        {"task": "Claude Code 刚改完代码", "ask": "Hermes Code Governor (Phase 3)", "run": "python 03_Scripts/hermes/hermes_code_audit.py --base main --head HEAD", "gets": "diff 风险报告（secret/registry/schema/schedule）"},
+        {"task": "我想看所有 pipeline 健康状态", "ask": "Hermes Pipeline Governor (Phase 4)", "run": "python 03_Scripts/hermes/hermes_pipeline_audit.py", "gets": "管道健康报告 + pipeline_health.json"},
+        {"task": "VOC 源抓取质量如何", "ask": "Hermes Intelligence Governor (Phase 5)", "run": "python 03_Scripts/hermes/hermes_source_quality.py", "gets": "源质量评分表（healthy/watch/degraded）"},
+        {"task": "国家助手回答有没有幻觉", "ask": "Hermes Intelligence Governor (Phase 5)", "run": "python 03_Scripts/hermes/hermes_answer_audit.py --sample", "gets": "回答审计报告（groundedness/hallucination/cost）"},
+        {"task": "Flash/Pro 花了多少钱", "ask": "Hermes Intelligence Governor (Phase 5.5)", "run": "python 03_Scripts/hermes/hermes_cost_report.py", "gets": "成本报告（按模型/模式分拆 + 预算追踪）"},
+        {"task": "系统里到底注册了哪些功能/源/管道", "ask": "Hermes Knowledge Governor (Phase 1)", "run": "cat hermes/{feature,pipeline,source}_registry.yaml", "gets": "YAML 总账本"},
+        {"task": "部署一直失败是为什么", "ask": "Hermes Code Governor (Phase 3)", "run": "python 03_Scripts/hermes/hermes_code_audit.py + 看 GitHub Actions logs", "gets": "部署失败诊断报告"},
+        {"task": "在 Data Management UI 看 Hermes", "ask": "Hermes Phase 6", "run": "访问 /data-management → Hermes Governance 标签", "gets": "可视化治理看板"},
+    ]
+
+    return {
+        "modules": modules,
+        "dependencies": deps,
+        "routing": routing,
+    }
+
+
 @router.get("/evidence-ledger")
 def hermes_evidence_ledger(
     limit: int = Query(20, ge=1, le=100),

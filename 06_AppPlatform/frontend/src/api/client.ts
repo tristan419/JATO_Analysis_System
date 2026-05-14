@@ -1489,6 +1489,8 @@ export const api = {
     request<unknown[]>(`/hermes/features`).then((r) => r as unknown[]),
   hermesToolchain: () =>
     request<Record<string, unknown>>("/hermes/toolchain").then((r) => r as Record<string, unknown>),
+  hermesArchitecture: () =>
+    request<Record<string, unknown>>("/hermes/architecture").then((r) => r as Record<string, unknown>),
 
   patchItem: (id: string, payload: Partial<Omit<CrudItem, "id">>) =>
     request<{ item: CrudItem }>(`/crud/items/${id}`, {
