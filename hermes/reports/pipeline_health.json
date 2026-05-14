@@ -1,0 +1,529 @@
+{
+  "summary": {
+    "registeredPipelines": 10,
+    "discoveredSystemd": 9,
+    "discoveredAirflow": 3,
+    "discoveredGitHubActions": 5,
+    "discoveredScripts": 54,
+    "duplicateSchedulingRisks": 3,
+    "missingRegistryEntries": 10,
+    "statusCoverageGaps": 3,
+    "highRiskFindings": 1
+  },
+  "allPipelines": [
+    {
+      "pipelineId": "pipeline.news.country_systemd",
+      "name": "Country News Sync (systemd timer)",
+      "type": "systemd_timer",
+      "path": "03_Scripts/deploy/systemd/jato-country-news-sync.service",
+      "registryStatus": "registered",
+      "risk": "medium",
+      "status": "unknown"
+    },
+    {
+      "pipelineId": "pipeline.voc.forum_systemd",
+      "name": "VOC Forum Sync (systemd timer)",
+      "type": "systemd_timer",
+      "path": "03_Scripts/deploy/systemd/jato-voc-forum-sync.service",
+      "registryStatus": "registered",
+      "risk": "medium",
+      "status": "unknown"
+    },
+    {
+      "pipelineId": "pipeline.msrp.dryrun_systemd",
+      "name": "MSRP Dry-run (systemd timer)",
+      "type": "systemd_timer",
+      "path": "03_Scripts/deploy/systemd/jato-msrp-sync@.service",
+      "registryStatus": "registered",
+      "risk": "medium",
+      "status": "unknown"
+    },
+    {
+      "pipelineId": "pipeline.msrp.ingest_systemd",
+      "name": "MSRP Ingest (systemd timer)",
+      "type": "systemd_timer",
+      "path": "03_Scripts/deploy/systemd/jato-msrp-sync@.service",
+      "registryStatus": "registered",
+      "risk": "high",
+      "status": "unknown"
+    },
+    {
+      "pipelineId": "pipeline.news.country_airflow",
+      "name": "Country News Sync (Airflow DAG)",
+      "type": "airflow_dag",
+      "path": "airflow/dags/jato_country_news_sync.py",
+      "registryStatus": "registered",
+      "risk": "medium",
+      "status": "unknown"
+    },
+    {
+      "pipelineId": "pipeline.msrp.airflow",
+      "name": "MSRP Low Concurrency (Airflow DAG)",
+      "type": "airflow_dag",
+      "path": "airflow/dags/jato_msrp_low_concurrency.py",
+      "registryStatus": "registered",
+      "risk": "medium",
+      "status": "unknown"
+    },
+    {
+      "pipelineId": "pipeline.scraping_toolkit.airflow",
+      "name": "Scraping Toolkit Manual (Airflow DAG)",
+      "type": "airflow_dag",
+      "path": "airflow/dags/jato_scraping_toolkit_manual.py",
+      "registryStatus": "registered",
+      "risk": "medium",
+      "status": "unknown"
+    },
+    {
+      "pipelineId": "pipeline.perf.nightly_github",
+      "name": "Nightly Performance Gate (GitHub Actions)",
+      "type": "github_action",
+      "path": ".github/workflows/nightly-performance.yml",
+      "registryStatus": "registered",
+      "risk": "low",
+      "status": "unknown"
+    },
+    {
+      "pipelineId": "pipeline.jato.etl",
+      "name": "JATO ETL Pipeline",
+      "type": "etl_job",
+      "path": "03_Scripts/data_pipeline/",
+      "registryStatus": "registered",
+      "risk": "low",
+      "status": "unknown"
+    },
+    {
+      "pipelineId": "pipeline.deploy.tencent_github",
+      "name": "Deploy Fullstack to Tencent Cloud (GitHub Actions)",
+      "type": "github_action",
+      "path": ".github/workflows/deploy-fullstack-tencent.yml",
+      "registryStatus": "registered",
+      "risk": "high",
+      "status": "unknown"
+    }
+  ],
+  "duplicateScheduling": [
+    {
+      "severity": "HIGH",
+      "area": "Duplicate Scheduling",
+      "finding": "Country News Sync exists in both systemd timer and Airflow DAG",
+      "pipelines": {
+        "systemd": [
+          "jato-country-news-sync",
+          "jato-country-news-sync"
+        ],
+        "airflow": [
+          "jato_country_news_sync"
+        ]
+      },
+      "recommendation": "Decide single production scheduler. Recommended: keep systemd timer (runs on server, direct DB access). Deprecate Airflow DAG or change to manual-only.",
+      "gapRef": "gap.pipeline.duplicate_news_scheduling"
+    },
+    {
+      "severity": "MEDIUM",
+      "area": "Duplicate Scheduling",
+      "finding": "Country News Sync has GitHub Actions workflow: ['country-news-sync']. Verify it is workflow_dispatch only (no schedule).",
+      "recommendation": "Ensure GitHub Actions news workflow is manual-only, not scheduled."
+    },
+    {
+      "severity": "LOW",
+      "area": "Scheduling Overlap",
+      "finding": "MSRP has both systemd timers (production) and Airflow DAG (manual-only). Acceptable — no schedule conflict.",
+      "recommendation": "Keep current setup. Airflow DAG provides manual trigger alternative."
+    }
+  ],
+  "artifactMap": [
+    {
+      "artifactId": "artifact.jato.parquet",
+      "name": "JATO Full Archive (Parquet)",
+      "path": "04_Processed_data/jato_full_archive.parquet",
+      "producers": [
+        "pipeline.jato.etl"
+      ],
+      "consumers": [
+        "feature.dashboard",
+        "feature.market_scan",
+        "feature.country_copilot",
+        "feature.positioning_pricing",
+        "feature.version_comparison",
+        "feature.specification"
+      ],
+      "freshness": "stale"
+    },
+    {
+      "artifactId": "artifact.jato.partitioned",
+      "name": "JATO Partitioned Dataset",
+      "path": "04_Processed_data/partitioned_dataset_v1/",
+      "producers": [
+        "pipeline.jato.etl"
+      ],
+      "consumers": [
+        "feature.dashboard",
+        "feature.market_scan",
+        "feature.country_copilot"
+      ],
+      "freshness": "stale"
+    },
+    {
+      "artifactId": "artifact.jato.summaries",
+      "name": "Precomputed Summaries",
+      "path": "04_Processed_data/summaries/",
+      "producers": [
+        "pipeline.jato.etl"
+      ],
+      "consumers": [
+        "feature.dashboard"
+      ],
+      "freshness": "server_only"
+    },
+    {
+      "artifactId": "artifact.jato.monthly_update_job",
+      "name": "JATO Monthly Update Job",
+      "path": "04_Processed_data/ops/jato_monthly_update_jobs/",
+      "producers": [],
+      "consumers": [
+        "feature.jato_monthly_update"
+      ],
+      "freshness": "stale"
+    },
+    {
+      "artifactId": "artifact.news.digest",
+      "name": "Country News Digest",
+      "path": "PostgreSQL: ops.country_news_digest",
+      "producers": [
+        "pipeline.news.country_systemd",
+        "pipeline.news.country_airflow"
+      ],
+      "consumers": [
+        "feature.country_copilot"
+      ],
+      "freshness": "unknown"
+    },
+    {
+      "artifactId": "artifact.news.articles",
+      "name": "Country News Articles",
+      "path": "PostgreSQL: ops.country_news_article",
+      "producers": [
+        "pipeline.news.country_systemd"
+      ],
+      "consumers": [
+        "feature.country_copilot"
+      ],
+      "freshness": "unknown"
+    },
+    {
+      "artifactId": "artifact.voc.raw",
+      "name": "VOC Raw Forum Documents",
+      "path": "04_Processed_data/voc/ (raw)",
+      "producers": [
+        "pipeline.voc.forum_systemd"
+      ],
+      "consumers": [
+        "feature.customer_insights",
+        "feature.country_copilot"
+      ],
+      "freshness": "server_only"
+    },
+    {
+      "artifactId": "artifact.voc.enriched",
+      "name": "VOC Enriched Signals",
+      "path": "04_Processed_data/voc/ (enriched)",
+      "producers": [
+        "pipeline.voc.forum_systemd"
+      ],
+      "consumers": [
+        "feature.customer_insights",
+        "feature.country_copilot"
+      ],
+      "freshness": "server_only"
+    },
+    {
+      "artifactId": "artifact.voc.deck",
+      "name": "VOC Country Deck",
+      "path": "04_Processed_data/voc/ (deck)",
+      "producers": [
+        "pipeline.voc.forum_systemd"
+      ],
+      "consumers": [
+        "feature.customer_insights"
+      ],
+      "freshness": "server_only"
+    },
+    {
+      "artifactId": "artifact.voc.hev_benchmark",
+      "name": "Nordic HEV Benchmark Excel",
+      "path": "04_Processed_data/voc/se/ (HEV benchmark)",
+      "producers": [],
+      "consumers": [
+        "feature.nordic_hev_insights"
+      ],
+      "freshness": "server_only"
+    },
+    {
+      "artifactId": "artifact.msrp.observations",
+      "name": "MSRP Observations",
+      "path": "PostgreSQL: msrp.msrp_observation",
+      "producers": [
+        "pipeline.msrp.ingest_systemd"
+      ],
+      "consumers": [
+        "feature.msrp_workbench",
+        "feature.current_price",
+        "feature.review_workbench"
+      ],
+      "freshness": "unknown"
+    },
+    {
+      "artifactId": "artifact.msrp.current_prices",
+      "name": "Current Prices",
+      "path": "PostgreSQL: msrp.current_price",
+      "producers": [
+        "pipeline.msrp.ingest_systemd"
+      ],
+      "consumers": [
+        "feature.current_price",
+        "feature.country_copilot"
+      ],
+      "freshness": "unknown"
+    },
+    {
+      "artifactId": "artifact.status_json",
+      "name": "Scheduled Fetch Status",
+      "path": "03_Scripts/logs/scheduled_fetch_status.json",
+      "producers": [
+        "pipeline.news.country_systemd",
+        "pipeline.voc.forum_systemd"
+      ],
+      "consumers": [
+        "feature.data_management (future)"
+      ],
+      "freshness": "fresh"
+    },
+    {
+      "artifactId": "artifact.gitnexus.visual_zip",
+      "name": "GitNexus Visual ZIP",
+      "path": "Generated by 03_Scripts/package_gitnexus_visual_zip.sh",
+      "producers": [],
+      "consumers": [
+        "feature.gitnexus"
+      ],
+      "freshness": "server_only"
+    }
+  ],
+  "statusCoverage": {
+    "exists": true,
+    "coveredPipelines": [
+      {
+        "pipeline": "news",
+        "status": "failure",
+        "lastRunAt": "2026-05-13T22:15:07Z",
+        "successCount": 0,
+        "failedCount": 0
+      }
+    ],
+    "missingCoverage": [
+      {
+        "pipeline": "voc",
+        "finding": "Pipeline 'voc' has no entry in scheduled_fetch_status.json"
+      },
+      {
+        "pipeline": "msrp",
+        "finding": "Pipeline 'msrp' has no entry in scheduled_fetch_status.json"
+      },
+      {
+        "pipeline": "jato_etl",
+        "finding": "Pipeline 'jato_etl' has no entry in scheduled_fetch_status.json"
+      }
+    ]
+  },
+  "sourceFailureTracking": [],
+  "allFindings": [
+    {
+      "severity": "WARNING",
+      "area": "Registry Coverage",
+      "finding": "Discovered systemd_service not in Pipeline Registry: jato-dashboard@ (03_Scripts/deploy/systemd/jato-dashboard@.service)",
+      "item": {
+        "name": "jato-dashboard@",
+        "path": "03_Scripts/deploy/systemd/jato-dashboard@.service",
+        "type": "systemd_service",
+        "schedule": null,
+        "execStart": "/opt/JATO_Analysis_System-main/.venv/bin/python -m streamlit run /opt/JATO_Analysis_System-main/05_DashBoard/app.py --server.address 0.0.0.0 --server.port %i --server.headless true --browser.gatherUsageStats false",
+        "contentSchedule": false
+      }
+    },
+    {
+      "severity": "WARNING",
+      "area": "Registry Coverage",
+      "finding": "Discovered systemd_service not in Pipeline Registry: jato-fullstack-backend@ (03_Scripts/deploy/systemd/jato-fullstack-backend@.service)",
+      "item": {
+        "name": "jato-fullstack-backend@",
+        "path": "03_Scripts/deploy/systemd/jato-fullstack-backend@.service",
+        "type": "systemd_service",
+        "schedule": null,
+        "execStart": "/opt/JATO_Analysis_System-main/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port %i --workers ${APP_BACKEND_WORKERS}",
+        "contentSchedule": false
+      }
+    },
+    {
+      "severity": "WARNING",
+      "area": "Registry Coverage",
+      "finding": "Discovered systemd_timer not in Pipeline Registry: jato-country-news-sync (03_Scripts/deploy/systemd/jato-country-news-sync.timer)",
+      "item": {
+        "name": "jato-country-news-sync",
+        "path": "03_Scripts/deploy/systemd/jato-country-news-sync.timer",
+        "type": "systemd_timer",
+        "schedule": "*-*-* 23:15:00",
+        "triggersUnit": null
+      }
+    },
+    {
+      "severity": "WARNING",
+      "area": "Registry Coverage",
+      "finding": "Discovered systemd_timer not in Pipeline Registry: jato-msrp-dryrun (03_Scripts/deploy/systemd/jato-msrp-dryrun.timer)",
+      "item": {
+        "name": "jato-msrp-dryrun",
+        "path": "03_Scripts/deploy/systemd/jato-msrp-dryrun.timer",
+        "type": "systemd_timer",
+        "schedule": "*-*-* 03:30:00",
+        "triggersUnit": "jato-msrp-sync@dryrun.service"
+      }
+    },
+    {
+      "severity": "WARNING",
+      "area": "Registry Coverage",
+      "finding": "Discovered systemd_timer not in Pipeline Registry: jato-msrp-ingest (03_Scripts/deploy/systemd/jato-msrp-ingest.timer)",
+      "item": {
+        "name": "jato-msrp-ingest",
+        "path": "03_Scripts/deploy/systemd/jato-msrp-ingest.timer",
+        "type": "systemd_timer",
+        "schedule": "Sat 05:30:00",
+        "triggersUnit": "jato-msrp-sync@ingest.service"
+      }
+    },
+    {
+      "severity": "WARNING",
+      "area": "Registry Coverage",
+      "finding": "Discovered systemd_timer not in Pipeline Registry: jato-voc-forum-sync (03_Scripts/deploy/systemd/jato-voc-forum-sync.timer)",
+      "item": {
+        "name": "jato-voc-forum-sync",
+        "path": "03_Scripts/deploy/systemd/jato-voc-forum-sync.timer",
+        "type": "systemd_timer",
+        "schedule": "*-*-* 01:45:00",
+        "triggersUnit": null
+      }
+    },
+    {
+      "severity": "WARNING",
+      "area": "Registry Coverage",
+      "finding": "Discovered github_action not in Pipeline Registry: ci (.github/workflows/ci.yml)",
+      "item": {
+        "name": "ci",
+        "path": ".github/workflows/ci.yml",
+        "type": "github_action",
+        "hasSchedule": false,
+        "hasDispatch": false,
+        "crons": []
+      }
+    },
+    {
+      "severity": "WARNING",
+      "area": "Registry Coverage",
+      "finding": "Discovered github_action not in Pipeline Registry: country-news-sync (.github/workflows/country-news-sync.yml)",
+      "item": {
+        "name": "country-news-sync",
+        "path": ".github/workflows/country-news-sync.yml",
+        "type": "github_action",
+        "hasSchedule": false,
+        "hasDispatch": true,
+        "crons": []
+      }
+    },
+    {
+      "severity": "WARNING",
+      "area": "Registry Coverage",
+      "finding": "Discovered github_action not in Pipeline Registry: deploy-aws-ecs (.github/workflows/deploy-aws-ecs.yml)",
+      "item": {
+        "name": "deploy-aws-ecs",
+        "path": ".github/workflows/deploy-aws-ecs.yml",
+        "type": "github_action",
+        "hasSchedule": false,
+        "hasDispatch": true,
+        "crons": []
+      }
+    },
+    {
+      "severity": "WARNING",
+      "area": "Registry Coverage",
+      "finding": "Discovered github_action not in Pipeline Registry: deploy-ec2-auto-update (.github/workflows/deploy-ec2-auto-update.yml)",
+      "item": {
+        "name": "deploy-ec2-auto-update",
+        "path": ".github/workflows/deploy-ec2-auto-update.yml",
+        "type": "github_action",
+        "hasSchedule": false,
+        "hasDispatch": true,
+        "crons": []
+      }
+    },
+    {
+      "severity": "HIGH",
+      "area": "Duplicate Scheduling",
+      "finding": "Country News Sync exists in both systemd timer and Airflow DAG",
+      "pipelines": {
+        "systemd": [
+          "jato-country-news-sync",
+          "jato-country-news-sync"
+        ],
+        "airflow": [
+          "jato_country_news_sync"
+        ]
+      },
+      "recommendation": "Decide single production scheduler. Recommended: keep systemd timer (runs on server, direct DB access). Deprecate Airflow DAG or change to manual-only.",
+      "gapRef": "gap.pipeline.duplicate_news_scheduling"
+    },
+    {
+      "severity": "MEDIUM",
+      "area": "Duplicate Scheduling",
+      "finding": "Country News Sync has GitHub Actions workflow: ['country-news-sync']. Verify it is workflow_dispatch only (no schedule).",
+      "recommendation": "Ensure GitHub Actions news workflow is manual-only, not scheduled."
+    },
+    {
+      "severity": "LOW",
+      "area": "Scheduling Overlap",
+      "finding": "MSRP has both systemd timers (production) and Airflow DAG (manual-only). Acceptable — no schedule conflict.",
+      "recommendation": "Keep current setup. Airflow DAG provides manual trigger alternative."
+    },
+    {
+      "severity": "MEDIUM",
+      "area": "Stale Artifact",
+      "finding": "Artifact 'JATO Full Archive (Parquet)' last modified 691h ago (>7d)",
+      "artifactId": "artifact.jato.parquet",
+      "path": "04_Processed_data/jato_full_archive.parquet"
+    },
+    {
+      "severity": "MEDIUM",
+      "area": "Stale Artifact",
+      "finding": "Artifact 'JATO Partitioned Dataset' last modified 691h ago (>7d)",
+      "artifactId": "artifact.jato.partitioned",
+      "path": "04_Processed_data/partitioned_dataset_v1/"
+    },
+    {
+      "severity": "MEDIUM",
+      "area": "Stale Artifact",
+      "finding": "Artifact 'JATO Monthly Update Job' last modified 180h ago (>7d)",
+      "artifactId": "artifact.jato.monthly_update_job",
+      "path": "04_Processed_data/ops/jato_monthly_update_jobs/"
+    },
+    {
+      "severity": "INFO",
+      "area": "Artifact Consumer Gap",
+      "finding": "Artifact 'Scheduled Fetch Status' references consumer 'feature.data_management (future)' not found in Feature Registry",
+      "artifactId": "artifact.status_json"
+    },
+    {
+      "severity": "MEDIUM",
+      "area": "Unscheduled Source",
+      "finding": "source.news.batch_b: Batch B has NO scheduled fetch — only Batch A is scheduled",
+      "recommendation": "Add source.news.batch_b to an existing systemd timer or create a new one."
+    }
+  ]
+}
