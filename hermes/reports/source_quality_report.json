@@ -1,0 +1,173 @@
+{
+  "generatedAt": "2026-05-14T14:05:12Z",
+  "summary": {
+    "totalSources": 7,
+    "healthy": 0,
+    "watch": 4,
+    "degraded": 3,
+    "highRisk": 1,
+    "unstructuredFailures": 2
+  },
+  "sources": [
+    {
+      "sourceId": "source.msrp.batch_a",
+      "name": "MSRP Batch A (SUV Top30 — 7 countries)",
+      "sourceType": "msrp",
+      "country": "SE,FI,NO,DK,HU,HR,AT,CZ",
+      "status": "degraded",
+      "governanceStatus": "registered",
+      "qualityScore": 30,
+      "successCount": 92,
+      "failedCount": 117,
+      "lastSuccessAt": null,
+      "lastFailureAt": null,
+      "lastFailureReason": null,
+      "risk": "high",
+      "reasons": [
+        "repeated failures (failedCount=117)",
+        "no recent success recorded",
+        "incomplete metadata (2/3 quality fields null)"
+      ],
+      "recommendation": "Consider degrading or reducing frequency. Issues: repeated failures (failedCount=117); no recent success recorded"
+    },
+    {
+      "sourceId": "source.voc.batch_a",
+      "name": "VOC Nordic Forum Batch A",
+      "sourceType": "forum",
+      "country": "SE,FI,NO,DK,AT,CZ,HR,HU",
+      "status": "degraded",
+      "governanceStatus": "registered",
+      "qualityScore": 40,
+      "successCount": 0,
+      "failedCount": 8,
+      "lastSuccessAt": "2026-05-14T07:54:31Z",
+      "lastFailureAt": null,
+      "lastFailureReason": null,
+      "risk": "medium",
+      "reasons": [
+        "repeated failures (failedCount=8)",
+        "incomplete metadata (3/3 quality fields null)",
+        "blocking issue: Single source timeout/403 can fail entire batch (soft-failur"
+      ],
+      "recommendation": "Consider degrading or reducing frequency. Issues: repeated failures (failedCount=8); incomplete metadata (3/3 quality fields null)"
+    },
+    {
+      "sourceId": "source.news.batch_b",
+      "name": "News RSS/Atom Batch B (Western + Southern Europe)",
+      "sourceType": "news",
+      "country": "DE,FR,IT,ES,BE,NL,PL,PT,RO,SI,SK,GR",
+      "status": "degraded",
+      "governanceStatus": "needs_review",
+      "qualityScore": 55,
+      "successCount": 0,
+      "failedCount": 0,
+      "lastSuccessAt": null,
+      "lastFailureAt": null,
+      "lastFailureReason": null,
+      "risk": "medium",
+      "reasons": [
+        "no recent success recorded",
+        "governanceStatus=needs_review",
+        "incomplete metadata (3/3 quality fields null)"
+      ],
+      "recommendation": "Consider degrading or reducing frequency. Issues: no recent success recorded; governanceStatus=needs_review"
+    },
+    {
+      "sourceId": "source.news.batch_a",
+      "name": "News RSS/Atom Batch A (Nordic + Central Europe)",
+      "sourceType": "news",
+      "country": "SE,FI,HU,NO,DK,AT,CZ,HR",
+      "status": "watch",
+      "governanceStatus": "registered",
+      "qualityScore": 70,
+      "successCount": 21,
+      "failedCount": 0,
+      "lastSuccessAt": "2026-05-13T15:18:03Z",
+      "lastFailureAt": null,
+      "lastFailureReason": null,
+      "risk": "low",
+      "reasons": [
+        "incomplete metadata (3/3 quality fields null)",
+        "blocking issue: Google News RSS blocked from Tencent Cloud China server (Net",
+        "blocking issue: Falls back to stale cached articles when RSS unreachable"
+      ],
+      "recommendation": "Watch. Issues: incomplete metadata (3/3 quality fields null); blocking issue: Google News RSS blocked from Tencent Cloud China server (Net"
+    },
+    {
+      "sourceId": "source.msrp.production",
+      "name": "MSRP Production Sources",
+      "sourceType": "msrp",
+      "country": "SE,DE",
+      "status": "watch",
+      "governanceStatus": "registered",
+      "qualityScore": 70,
+      "successCount": 0,
+      "failedCount": 0,
+      "lastSuccessAt": null,
+      "lastFailureAt": null,
+      "lastFailureReason": null,
+      "risk": "low",
+      "reasons": [
+        "no recent success recorded",
+        "incomplete metadata (3/3 quality fields null)"
+      ],
+      "recommendation": "Watch. Issues: no recent success recorded; incomplete metadata (3/3 quality fields null)"
+    },
+    {
+      "sourceId": "source.msrp.evkx",
+      "name": "EVKX BEV Catalog",
+      "sourceType": "official",
+      "country": "multi",
+      "status": "watch",
+      "governanceStatus": "registered",
+      "qualityScore": 70,
+      "successCount": 0,
+      "failedCount": 0,
+      "lastSuccessAt": null,
+      "lastFailureAt": null,
+      "lastFailureReason": null,
+      "risk": "low",
+      "reasons": [
+        "no recent success recorded",
+        "incomplete metadata (3/3 quality fields null)"
+      ],
+      "recommendation": "Watch. Issues: no recent success recorded; incomplete metadata (3/3 quality fields null)"
+    },
+    {
+      "sourceId": "source.msrp.drafts_suv_top30",
+      "name": "MSRP Source Drafts (SUV Top30 per country)",
+      "sourceType": "msrp",
+      "country": "SE,FI,NO,DK,HU,HR,AT,CZ",
+      "status": "watch",
+      "governanceStatus": "registered",
+      "qualityScore": 70,
+      "successCount": 0,
+      "failedCount": 0,
+      "lastSuccessAt": null,
+      "lastFailureAt": null,
+      "lastFailureReason": null,
+      "risk": "low",
+      "reasons": [
+        "no recent success recorded",
+        "incomplete metadata (3/3 quality fields null)"
+      ],
+      "recommendation": "Watch. Issues: no recent success recorded; incomplete metadata (3/3 quality fields null)"
+    }
+  ],
+  "unstructuredFailures": [
+    {
+      "sourceId": "source.voc.batch_a",
+      "name": "VOC Nordic Forum Batch A",
+      "failedCount": 8,
+      "finding": "8 failures without per-source structured tracking (sourceId, url, error type, retryable)",
+      "recommendation": "Add per-source failed_sources.json output to the crawler. Track source code, error type, and timestamp per failure."
+    },
+    {
+      "sourceId": "source.msrp.batch_a",
+      "name": "MSRP Batch A (SUV Top30 — 7 countries)",
+      "failedCount": 117,
+      "finding": "117 failures without per-source structured tracking (sourceId, url, error type, retryable)",
+      "recommendation": "Add per-source failed_sources.json output to the crawler. Track source code, error type, and timestamp per failure."
+    }
+  ]
+}
