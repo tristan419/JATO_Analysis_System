@@ -1,0 +1,125 @@
+# Hermes Model Pricing Config
+# User-provided. Verify against DeepSeek billing console.
+# Do NOT store API keys in this file.
+
+currency: CNY
+pricingSource: "User-provided DeepSeek V4 Flash / Pro price table"
+lastUpdated: "2026-05-14"
+
+models:
+  deepseek-v4-flash:
+    displayName: "DeepSeek V4 Flash"
+    baseUrlOpenAI: "https://api.deepseek.com"
+    baseUrlAnthropic: "https://api.deepseek.com/anthropic"
+    contextLength: 1000000
+    maxOutputTokens: 384000
+    supportsJsonOutput: true
+    supportsToolCalls: true
+    supportsThinkingMode: true
+    supportsFIM: "non_thinking_only"
+    pricing:
+      inputCacheHitCnyPerMillionTokens: 0.02
+      inputCacheMissCnyPerMillionTokens: 1.0
+      outputCnyPerMillionTokens: 2.0
+      discount:
+        active: false
+        note: "Flash standard pricing. No discount period."
+
+  deepseek-v4-pro:
+    displayName: "DeepSeek V4 Pro"
+    baseUrlOpenAI: "https://api.deepseek.com"
+    baseUrlAnthropic: "https://api.deepseek.com/anthropic"
+    contextLength: 1000000
+    maxOutputTokens: 384000
+    supportsJsonOutput: true
+    supportsToolCalls: true
+    supportsThinkingMode: true
+    supportsFIM: "non_thinking_only"
+    pricing:
+      inputCacheHitCnyPerMillionTokens: 0.025
+      inputCacheMissCnyPerMillionTokens: 3.0
+      outputCnyPerMillionTokens: 6.0
+      original:
+        inputCacheHitCnyPerMillionTokens: 0.1
+        inputCacheMissCnyPerMillionTokens: 12.0
+        outputCnyPerMillionTokens: 24.0
+      discount:
+        active: true
+        rate: 0.25
+        discountLabel: "2.5折优惠"
+        validUntil: "2026-05-31T23:59:00+08:00"
+        note: "After discount expires, Pro costs ~4x more. Review before 2026-05-31."
+
+# --- Routing Defaults ---
+routingDefaults:
+  direct_lookup:
+    model: "deepseek-v4-flash"
+    allowPro: false
+    reason: "Factual metric query. No synthesis needed."
+  short_answer:
+    model: "deepseek-v4-flash"
+    allowPro: false
+    reason: "Simple Q&A. Flash is sufficient."
+  grounded_analysis:
+    model: "deepseek-v4-flash"
+    allowPro: true
+    proCondition: "multi_source_conflict_or_strategy_judgement"
+    reason: "Flash for evidence gathering. Pro only when multi-source conflict or strategic synthesis needed."
+  deep_report:
+    model: "deepseek-v4-pro"
+    allowPro: true
+    reason: "Complex multi-section report. Pro for synthesis quality."
+  hypothesis:
+    model: "deepseek-v4-flash"
+    allowPro: false
+    reason: "Speculative answer. Keep cost low."
+  insufficient_evidence:
+    model: "deepseek-v4-flash"
+    allowPro: false
+    reason: "No evidence available. Should not consume Pro budget."
+
+# --- Hermes Internal Tasks ---
+hermesTasks:
+  prdIntake:
+    model: "none"
+    reason: "Deterministic keyword matching. No LLM needed."
+  codeAudit:
+    model: "none"
+    reason: "Deterministic diff scanning. No LLM needed."
+  pipelineAudit:
+    model: "none"
+    reason: "Deterministic registry cross-reference. No LLM needed."
+  sourceQuality:
+    model: "none"
+    reason: "Deterministic scoring. No LLM needed."
+  evidenceExtraction:
+    model: "none"
+    reason: "Deterministic artifact parsing. No LLM."
+  answerAudit:
+    model: "none"
+    reason: "Deterministic scoring. No LLM."
+  proposalExplanation:
+    model: "deepseek-v4-flash"
+    reason: "Light summary of structured proposal data."
+
+# --- Crawler / Pipeline Tasks ---
+crawlerTasks:
+  vocTagging:
+    model: "deepseek-v4-flash"
+    reason: "Sentiment/tag classification on forum text."
+  newsSummary:
+    model: "deepseek-v4-flash"
+    reason: "RSS article summarization per country."
+  msrpExtraction:
+    model: "none"
+    reason: "CSS/JSON extraction. Rules-based."
+  crossSourceStrategy:
+    model: "deepseek-v4-pro"
+    reason: "Multi-source strategic analysis."
+
+# --- Monthly Budget ---
+monthlyBudget:
+  currency: CNY
+  totalBudgetCny: 500
+  warningThresholdRatio: 0.75
+  exceededThresholdRatio: 1.0
