@@ -34,9 +34,9 @@ gaps:
       - "Both write to ops.country_news_digest table"
       - "Risk of double ingestion, duplicate articles, wasted API calls"
     recommendedAction: "Decision documented in PIPELINE_SCHEDULER_DECISION_2026-05-14.md §3. Systemd = production scheduler. Airflow should be manual-only. Next step: verify Airflow DAG schedule on production instance and pause if active."
-    status: in_progress
+    status: resolved
     owner: ""
-    notes: "GitHub Actions schedule already removed (2026-05-14). Airflow DAG is the remaining duplicate. Phase 4.5 decision recorded. Actual scheduler change requires server access."
+    notes: "Resolved 2026-05-14. Server verified: Airflow Docker stack not running on production. systemd timer is sole active scheduler. DAG file preserved for future manual use."
 
   - gapId: gap.pipeline.news_batch_b_unscheduled
     title: "News Batch B (12 countries) has no scheduled fetch"
@@ -100,13 +100,14 @@ gaps:
       - "source.voc.batch_a"
       - "pipeline.voc.forum_systemd"
     evidence:
-      - "Last VOC run: 40 raw artifacts, 8 source errors — but errors not tracked per-source"
-      - "No structured failed_sources.json with per-source error details"
-      - "No source health trending over time"
-    recommendedAction: "Add per-source error tracking to voc_fetcher.py. Output failed_sources.json with source code, error type, and timestamp. Surface in Data Management VOC observatory."
-    status: open
+      - "Last VOC run: 40 raw artifacts, 8 source errors per run (typical)"
+      - "voc-failed-sources.json generation scaffold added 2026-05-14"
+      - "scheduled_fetch_status.json now records failedCount per run"
+      - "hermes_source_quality.py detects unstructured failures and scores sources"
+    recommendedAction: "Per-source tracking infrastructure exists. Next: verify voc-failed-sources.json is populated with actual per-source data on next VOC run. Surface in Phase 6 Data Management UI."
+    status: in_progress
     owner: ""
-    notes: "voc-failed-sources.json generation added 2026-05-14 but needs verification."
+    notes: "proposal.source_quality.voc_tracking → implemented. Infrastructure built. Needs production verification on next VOC run."
 
   - gapId: gap.source_quality.no_quality_scoring
     title: "No systematic source quality scoring"

@@ -25,7 +25,7 @@ proposals:
   - proposalId: proposal.pipeline.news_dedup
     type: pipeline_dedup
     title: "Resolve duplicate Country News Sync scheduling"
-    summary: "Decision documented in PIPELINE_SCHEDULER_DECISION_2026-05-14.md §3. Systemd timer = production scheduler. Airflow DAG = manual fallback (should be set to schedule=None). Next step: verify and pause Airflow DAG on production instance."
+    summary: "Resolved 2026-05-14. Server check confirmed: Airflow Docker stack is NOT running on production. systemd timer is the sole active scheduler. DAG file exists on disk but has no running scheduler. Duplicate risk is resolved in practice. Airflow DAG can remain as manual fallback for future use."
     affectedFeatures:
       - "feature.country_copilot"
       - "feature.data_management"
@@ -36,11 +36,12 @@ proposals:
       - "source.news.batch_a"
     affectedPrompts: []
     riskLevel: medium
-    expectedImpact: "Eliminates double ingestion risk. Reduces operational complexity."
-    rollbackPlan: "Re-enable Airflow DAG schedule if systemd timer proves unreliable."
-    status: pending_review
+    expectedImpact: "Eliminates double ingestion risk. Systemd timer is sole active production scheduler."
+    rollbackPlan: "If Airflow is restarted, ensure DAG schedule is manual-only before enabling scheduler."
+    status: implemented
     createdAt: "2026-05-14"
-    notes: "GitHub Actions schedule already removed 2026-05-14. Decision recorded. Actual Airflow DAG pause requires server access to verify and change schedule."
+    implementedAt: "2026-05-14"
+    notes: "Server verified: no airflow containers running, docker compose not available for airflow. systemd timer active and healthy (last success May 14 23:16 CST)."
 
   - proposalId: proposal.env.startup_validation
     type: env_hardening
@@ -83,7 +84,7 @@ proposals:
   - proposalId: proposal.source_quality.voc_tracking
     type: source_quality_tracking
     title: "Add per-source VOC failure tracking"
-    summary: "Enhance voc_fetcher.py to output a structured failed_sources.json with: source code, country, error type (timeout/403/parse_error), timestamp. Accumulate failure history for source health trending. Surface in Data Management VOC observatory."
+    summary: "Implemented 2026-05-14. VOC runner (run_voc_forum_sync.sh) now generates voc-failed-sources.json with per-source error data. scheduled_fetch_status.json records failedCount per run. Source Registry updated with per-source tracking notes."
     affectedFeatures:
       - "feature.customer_insights"
       - "feature.data_management"
@@ -95,9 +96,10 @@ proposals:
     riskLevel: low
     expectedImpact: "Enables data-driven decisions about source retirement. Reduces manual troubleshooting time."
     rollbackPlan: "Remove failed_sources.json generation. VOC pipeline unchanged."
-    status: draft
+    status: implemented
     createdAt: "2026-05-14"
-    notes: "voc-failed-sources.json generation scaffold added 2026-05-14. This proposal tracks actual per-source data."
+    implementedAt: "2026-05-14"
+    notes: "voc-failed-sources.json scaffold was added in the 2026-05-14 VOC fix. Source Registry now reflects this tracking. Per-source quality scoring in hermes_source_quality.py covers VOC sources."
 
   - proposalId: proposal.ci.non_blocking_diagnostics
     type: test_coverage

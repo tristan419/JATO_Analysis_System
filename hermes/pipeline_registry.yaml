@@ -156,10 +156,10 @@ pipelines:
     name: "Country News Sync (Airflow DAG)"
     type: airflow_dag
     role: manual_fallback_or_experimental
-    schedulerDecision: "Airflow DAG should not run as duplicate production scheduler. Recommended: set schedule=None (manual-only) and use as fallback. See PIPELINE_SCHEDULER_DECISION_2026-05-14.md §3."
+    schedulerDecision: "Airflow Docker stack NOT running on production server (verified 2026-05-14). DAG file exists but no scheduler executes it. systemd timer is sole active scheduler. DAG preserved for future manual use if Airflow is restarted. See PIPELINE_SCHEDULER_DECISION_2026-05-14.md §3."
     path: "airflow/dags/jato_country_news_sync.py"
-    trigger: "schedule (needs verification: may be paused/manual on prod)"
-    schedule: "cron: 15 6 * * * (06:15 UTC)"
+    trigger: "schedule (NOT active — no Airflow scheduler running on prod)"
+    schedule: "cron: 15 6 * * * (06:15 UTC) — DAG schedule, but scheduler not running"
     producer: "HTTP POST to /v1/assistant/country/news/refresh"
     outputs:
       - "PostgreSQL: ops.country_news_digest"
@@ -171,21 +171,19 @@ pipelines:
       - "docker-compose airflow stack running"
     relatedFeatureIds:
       - "feature.country_copilot"
-    status: active
-    riskLevel: medium
-    governanceStatus: needs_review
+    status: inactive_on_prod
+    riskLevel: low
+    governanceStatus: registered
     knownIssues:
-      - "DUPLICATE SCHEDULING with pipeline.news.country_systemd (23:15 UTC). Decision: systemd is production, Airflow should be manual fallback."
-      - "Calls backend API (circular dependency: Airflow → Backend → DB)"
-      - "Requires Airflow stack to be running"
-      - "Needs verification: confirm Airflow DAG schedule is paused/manual on production instance"
+      - "Airflow Docker stack not running on production (verified 2026-05-14). DAG not executing."
+      - "Calls backend API (circular dependency: Airflow → Backend → DB) if restarted"
     lastObserved:
-      lastRunAt: null
+      lastRunAt: "never (scheduler not running)"
       lastSuccessAt: null
       lastFailureAt: null
-      lastFailureReason: null
+      lastFailureReason: "Airflow scheduler not running on production"
     owner: ""
-    notes: "Redundant with systemd timer. Consider deprecating or changing to manual-only."
+    notes: "DAG file preserved for future manual use. If Airflow is restarted, ensure schedule is manual-only before enabling scheduler."
 
   - pipelineId: pipeline.msrp.airflow
     name: "MSRP Low Concurrency (Airflow DAG)"
