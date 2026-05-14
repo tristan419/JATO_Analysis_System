@@ -218,6 +218,7 @@ export function DataManagementPage() {
   const [hermesCost, setHermesCost] = useState<Record<string, unknown> | null>(null);
   const [hermesProposals, setHermesProposals] = useState<unknown[]>([]);
   const [hermesFeatures, setHermesFeatures] = useState<unknown[]>([]);
+  const [hermesToolchain, setHermesToolchain] = useState<Record<string, unknown> | null>(null);
   const [hermesLoading, setHermesLoading] = useState(false);
   const [crudLoading, setCrudLoading] = useState(false);
   const [crudError, setCrudError] = useState("");
@@ -346,6 +347,7 @@ export function DataManagementPage() {
       api.hermesCost().then(setHermesCost),
       api.hermesProposals().then(setHermesProposals),
       api.hermesFeatures().then(setHermesFeatures),
+      api.hermesToolchain().then(setHermesToolchain),
     ]).finally(() => setHermesLoading(false));
   }, [subpage, hermesOverview]);
 
@@ -702,6 +704,56 @@ export function DataManagementPage() {
           <LoadingSurface mode="inline" label="Loading Hermes governance data..." kicker="Hermes" />
         ) : (
           <>
+            {/* ---------- Tool Chain: How Hermes Works ---------- */}
+            <div className="card crud-card">
+              <div className="admin-card-header"><div><h2>How Hermes Works</h2></div></div>
+              <div style={{ padding: 16 }}>
+                {(hermesToolchain?.workflow as unknown[])?.length > 0 ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20, alignItems: "flex-start" }}>
+                    {(hermesToolchain.workflow as unknown[]).map((step: unknown) => {
+                      const s = step as Record<string,unknown>;
+                      return (
+                        <div key={Number(s.step)} style={{
+                          flex: "0 0 180px", background: "#f8fafc", borderRadius: 8,
+                          padding: "10px 12px", borderLeft: "3px solid #3b82f6", fontSize: 12,
+                        }}>
+                          <div style={{fontWeight:700,color:"#3b82f6",marginBottom:2}}>{s.phase}</div>
+                          <div style={{fontWeight:600,marginBottom:4}}>{s.action}</div>
+                          <div style={{color:"#64748b",fontSize:11}}>{s.description}</div>
+                          <div style={{color:"#94a3b8",fontSize:10,marginTop:4,fontFamily:"monospace"}}>{s.script}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+
+                {/* Scripts + Registries + Reports in 3 columns */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, fontSize: 13 }}>
+                  <div>
+                    <strong style={{display:"block",marginBottom:8}}>Scripts ({(hermesToolchain?.scriptCount as number) || 0})</strong>
+                    {((hermesToolchain?.scripts as unknown[]) || []).map((s: unknown) => {
+                      const sc = s as Record<string,unknown>;
+                      return <div key={String(sc.name)} style={{padding:"3px 0",fontFamily:"monospace",fontSize:11,color:"#475569"}}>{String(sc.name)}</div>;
+                    })}
+                  </div>
+                  <div>
+                    <strong style={{display:"block",marginBottom:8}}>Registries ({(hermesToolchain?.registryCount as number) || 0})</strong>
+                    {((hermesToolchain?.registries as unknown[]) || []).map((r: unknown) => {
+                      const reg = r as Record<string,unknown>;
+                      return <div key={String(reg.name)} style={{padding:"3px 0",fontFamily:"monospace",fontSize:11,color:"#475569"}}>{String(reg.name)}</div>;
+                    })}
+                  </div>
+                  <div>
+                    <strong style={{display:"block",marginBottom:8}}>Reports ({(hermesToolchain?.reportCount as number) || 0})</strong>
+                    {((hermesToolchain?.reports as unknown[]) || []).map((r: unknown) => {
+                      const rep = r as Record<string,unknown>;
+                      return <div key={String(rep.name)} style={{padding:"3px 0",fontFamily:"monospace",fontSize:11,color:"#475569"}}>{String(rep.name)}</div>;
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* ---------- 当前状态 ---------- */}
             <div className="card crud-card">
               <div className="admin-card-header"><div><h2>Current Status</h2></div></div>

@@ -140,6 +140,56 @@ def hermes_features() -> list[dict]:
     return data.get("features", []) if data else []
 
 
+@router.get("/toolchain")
+def hermes_toolchain() -> dict:
+    """Return the Hermes tool chain inventory — what scripts exist and how they connect."""
+    scripts_dir = PROJECT_ROOT / "03_Scripts" / "hermes"
+    scripts: list[dict] = []
+    for f in sorted(scripts_dir.glob("*.py")):
+        if f.name.startswith("_"):
+            continue
+        scripts.append({
+            "name": f.name,
+            "path": str(f.relative_to(PROJECT_ROOT)),
+            "sizeBytes": f.stat().st_size,
+        })
+
+    registries = [
+        {"name": f.name, "path": str(f.relative_to(PROJECT_ROOT))}
+        for f in sorted(HERMES_DIR.glob("*.yaml"))
+    ]
+
+    reports = [
+        {"name": f.name, "path": str(f.relative_to(PROJECT_ROOT))}
+        for f in sorted(REPORTS_DIR.glob("*.json"))
+    ] if REPORTS_DIR.is_dir() else []
+
+    # Development workflow steps
+    workflow = [
+        {"step": 1, "phase": "Phase 0", "script": "asset_map", "action": "REPOSITORY_ASSET_MAP.md", "description": "Full repository inventory scan"},
+        {"step": 2, "phase": "Phase 1", "script": "registries", "action": "hermes/*.yaml (8 files)", "description": "Registry foundation — 71 seed entries"},
+        {"step": 3, "phase": "Phase 2", "script": "hermes_intake.py", "action": "PRD → impact report", "description": "Pre-development impact analysis"},
+        {"step": 4, "phase": "—", "script": "Claude Code", "action": "implementation", "description": "Develop feature per PRD + intake report"},
+        {"step": 5, "phase": "Phase 3", "script": "hermes_code_audit.py", "action": "git diff → audit report", "description": "Post-development diff scan (10 rules)"},
+        {"step": 6, "phase": "Phase 4", "script": "hermes_pipeline_audit.py", "action": "pipeline health report", "description": "Cross-reference systemd/Airflow/GH Actions/artifacts"},
+        {"step": 7, "phase": "Phase 5", "script": "hermes_source_quality.py", "action": "source quality scores", "description": "Score VOC/News/MSRP source health"},
+        {"step": 8, "phase": "Phase 5", "script": "hermes_evidence_writer.py", "action": "evidence_ledger.jsonl", "description": "Extract fact/quote/event evidence"},
+        {"step": 9, "phase": "Phase 5", "script": "hermes_answer_audit.py", "action": "answer_audit.jsonl", "description": "Audit Country Assistant answers"},
+        {"step": 10, "phase": "Phase 5.5", "script": "hermes_cost_report.py", "action": "cost_report.json", "description": "Track Flash/Pro token costs vs budget"},
+        {"step": 11, "phase": "Phase 6", "script": "hermes API + UI", "action": "/data-management → Hermes tab", "description": "Governance dashboard"},
+    ]
+
+    return {
+        "scripts": scripts,
+        "registries": registries,
+        "reports": reports,
+        "workflow": workflow,
+        "scriptCount": len(scripts),
+        "registryCount": len(registries),
+        "reportCount": len(reports),
+    }
+
+
 @router.get("/evidence-ledger")
 def hermes_evidence_ledger(
     limit: int = Query(20, ge=1, le=100),
