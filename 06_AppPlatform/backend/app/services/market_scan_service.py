@@ -3109,7 +3109,7 @@ def precompute_model_rankings(
     prior_custom_range_columns: list[str],
     fuel_order: list[str],
 ) -> list[dict[str, Any]]:
-    """Group by [segment, model] once and compute all window volumes."""
+    """Group by [segment, model] once and compute all window volumes + per-window mixes."""
     grouped = frame.groupby(["__segment_raw", "__model"], dropna=False, sort=False)
     stats: list[dict[str, Any]] = []
     for (segment, model), group in grouped:
@@ -3129,15 +3129,45 @@ def precompute_model_rankings(
             "rollingPrior": float(_series_sum(group, prior_rolling12_columns).sum()),
             "customVolume": float(_series_sum(group, custom_range_columns).sum()) if custom_range_columns else 0,
             "customPrior": float(_series_sum(group, prior_custom_range_columns).sum()) if prior_custom_range_columns else 0,
-            "fuelMix": {
+            # Per-window fuel mixes
+            "fuelMixMonth": {
+                fuel: float(_series_sum(group[group["__powertrain"] == fuel], current_month_columns).sum())
+                for fuel in fuel_order
+            },
+            "fuelMixYtd": {
                 fuel: float(_series_sum(group[group["__powertrain"] == fuel], current_ytd_columns).sum())
                 for fuel in fuel_order
             },
-            "driveMix": {
+            "fuelMixRolling": {
+                fuel: float(_series_sum(group[group["__powertrain"] == fuel], current_rolling12_columns).sum())
+                for fuel in fuel_order
+            },
+            "fuelMixCustom": {
+                fuel: float(_series_sum(group[group["__powertrain"] == fuel], custom_range_columns).sum())
+                for fuel in fuel_order
+            } if custom_range_columns else {},
+            # Per-window drive mixes
+            "driveMixMonth": {
+                dt: float(_series_sum(group[group["__drive_type"] == dt], current_month_columns).sum())
+                for dt in ("2WD", "4WD", "OTHER")
+            },
+            "driveMixYtd": {
                 dt: float(_series_sum(group[group["__drive_type"] == dt], current_ytd_columns).sum())
                 for dt in ("2WD", "4WD", "OTHER")
             },
-            "registrationMix": _registration_mix_payload(group, current_ytd_columns),
+            "driveMixRolling": {
+                dt: float(_series_sum(group[group["__drive_type"] == dt], current_rolling12_columns).sum())
+                for dt in ("2WD", "4WD", "OTHER")
+            },
+            "driveMixCustom": {
+                dt: float(_series_sum(group[group["__drive_type"] == dt], custom_range_columns).sum())
+                for dt in ("2WD", "4WD", "OTHER")
+            } if custom_range_columns else {},
+            # Per-window registration mixes
+            "registrationMixMonth": _registration_mix_payload(group, current_month_columns),
+            "registrationMixYtd": _registration_mix_payload(group, current_ytd_columns),
+            "registrationMixRolling": _registration_mix_payload(group, current_rolling12_columns),
+            "registrationMixCustom": _registration_mix_payload(group, custom_range_columns) if custom_range_columns else {"Business": 0.0, "Private": 0.0, "Other": 0.0},
         })
     return stats
 
@@ -3150,7 +3180,19 @@ def model_stats_to_ranking(
     fuel_order: list[str],
     ranking_limit: int,
 ) -> list[dict[str, Any]]:
-    """Convert pre-computed model stats into ranked items for a single segment."""
+    """Convert pre-computed model stats into ranked items for a single segment.
+
+    Selects the correct per-window fuel/drive/registration mixes based on *vol_key*,
+    so that monthly rankings use monthly mixes, YTD uses YTD, etc.
+    """
+    _SUFFIX: dict[str, str] = {
+        "monthVolume": "Month", "monthPrior": "Month",
+        "ytdVolume": "Ytd", "ytdPrior": "Ytd",
+        "rollingVolume": "Rolling", "rollingPrior": "Rolling",
+        "customVolume": "Custom", "customPrior": "Custom",
+    }
+    suffix = _SUFFIX.get(vol_key, "Ytd")
+
     items = [s for s in stats if s["segment"] == segment]
     if not items:
         return []
@@ -3163,17 +3205,19 @@ def model_stats_to_ranking(
     max_share = with_share[0][1] or 1.0
     result = []
     for rank, (s, share) in enumerate(with_share[:max(1, int(ranking_limit))], start=1):
+        drive_mix = s.get(f"driveMix{suffix}", s.get("driveMixYtd", {}))
+        reg_mix = s.get(f"registrationMix{suffix}", s.get("registrationMixYtd", {"Business": 0.0, "Private": 0.0, "Other": 0.0}))
         result.append({
             "model": s["model"],
             "volume": s[vol_key],
             "sharePct": share,
             "shareDisplay": f"{share * 100:.1f}%",
             "yoy": _delta_payload(s[vol_key], s[prior_key]),
-            "fuelMix": s["fuelMix"],
-            "driveMix": s["driveMix"],
-            "registrationMix": s["registrationMix"],
-            "driveSharePct": _safe_share(s["driveMix"].get("4WD", 0), s[vol_key]),
-            "driveShareDisplay": f"{_safe_share(s['driveMix'].get('4WD', 0), s[vol_key]) * 100:.1f}%",
+            "fuelMix": s.get(f"fuelMix{suffix}", s.get("fuelMixYtd", {})),
+            "driveMix": drive_mix,
+            "registrationMix": reg_mix,
+            "driveSharePct": _safe_share(drive_mix.get("4WD", 0), s[vol_key]),
+            "driveShareDisplay": f"{_safe_share(drive_mix.get('4WD', 0), s[vol_key]) * 100:.1f}%",
             "rank": rank,
             "barPct": _safe_share(share, max_share),
         })
@@ -3287,6 +3331,180 @@ def _build_all_drilldowns(
             "fuelPanels": fuel_panel_items,
         }
     return result
+
+
+def query_ranking_trend(
+    *,
+    country: str,
+    brand: str,
+    model: str | None = None,
+    segment: str | None = None,
+    source_table: str = "monthly_brand_ranking",
+    fuel_types: list[str] | None = None,
+    msrp_min: float | None = None,
+    msrp_max: float | None = None,
+    length_min: float | None = None,
+    length_max: float | None = None,
+) -> dict[str, Any]:
+    """Return monthly trend data for a brand (or brand+model) under current filters."""
+    columns = _get_columns()
+    country_options = _country_options(repo.current_dataset_token())
+    selected_country = _normalize_country_lookup(country, country_options)
+
+    selected_columns = [
+        columns.country_value, columns.make, columns.model,
+        columns.segment, columns.powertrain, columns.length, columns.msrp,
+        *columns.month_columns,
+    ]
+    if columns.drive_type and columns.drive_type not in selected_columns:
+        selected_columns.append(columns.drive_type)
+
+    dataset = repo._open_dataset()
+    filter_expression = repo._build_filter_expression({columns.country_value: [selected_country["value"]]})
+    table = dataset.to_table(columns=selected_columns, filter=filter_expression)
+    frame = table.to_pandas()
+    frame = _ensure_numeric_columns(frame, list(columns.month_columns))
+    frame["__brand"] = frame[columns.make].astype(str).str.strip()
+    frame["__model"] = frame[columns.model].astype(str).str.strip()
+    frame["__segment_raw"] = frame[columns.segment].astype(str).str.strip()
+    frame["__powertrain"] = frame[columns.powertrain].map(_normalize_powertrain)
+    frame["__length"] = pd.to_numeric(frame[columns.length], errors="coerce").fillna(0.0)
+    frame["__msrp"] = pd.to_numeric(frame[columns.msrp], errors="coerce").fillna(0.0)
+
+    # Apply filters
+    if segment:
+        frame = frame[frame["__segment_raw"] == segment]
+    if fuel_types:
+        # Support both comma-separated single string and list
+        resolved: list[str] = []
+        for f in fuel_types:
+            for part in str(f).split(","):
+                part = part.strip().upper()
+                if part:
+                    resolved.append(part)
+        if resolved:
+            frame = frame[frame["__powertrain"].isin(resolved)]
+    if msrp_min is not None:
+        frame = frame[frame["__msrp"] >= float(msrp_min)]
+    if msrp_max is not None:
+        frame = frame[frame["__msrp"] <= float(msrp_max)]
+    if length_min is not None:
+        frame = frame[frame["__length"] >= float(length_min)]
+    if length_max is not None:
+        frame = frame[frame["__length"] <= float(length_max)]
+
+    # Filter by brand (and optionally model) — case-insensitive
+    brand_lower = brand.strip().lower()
+    frame = frame[frame["__brand"].str.lower() == brand_lower]
+    entity_type = "brand"
+    if model:
+        model_lower = model.strip().lower()
+        frame = frame[frame["__model"].str.lower() == model_lower]
+        entity_type = "model"
+
+    if frame.empty:
+        return {
+            "entityType": entity_type, "brand": brand, "model": model,
+            "context": {"country": selected_country["label"], "segment": segment,
+                        "sourceTable": source_table, "filtersApplied": True},
+            "summary": {"currentMonthSales": 0, "ytdSales": 0, "marketShare": 0, "rankChange": 0},
+            "trend": [],
+            "topModels": [],
+        }
+
+    # Monthly aggregation: sales, msrp
+    month_cols = [c for c in columns.month_columns if c in frame.columns]
+    month_records = []
+    for mc in month_cols:
+        col_series = pd.to_numeric(frame[mc], errors="coerce").fillna(0.0)
+        total = float(col_series.sum())
+        if total <= 0:
+            continue
+        month_records.append({
+            "month": mc,
+            "sales": total,
+            "msrpMin": float(frame["__msrp"].min()) if len(frame) > 0 else 0,
+            "msrpMax": float(frame["__msrp"].max()) if len(frame) > 0 else 0,
+            "msrpAvg": float(frame["__msrp"].mean()) if len(frame) > 0 else 0,
+        })
+
+    if not month_records:
+        return {
+            "entityType": entity_type, "brand": brand, "model": model,
+            "context": {"country": selected_country["label"], "segment": segment,
+                        "sourceTable": source_table, "filtersApplied": True},
+            "summary": {"currentMonthSales": 0, "ytdSales": 0, "marketShare": 0, "rankChange": 0},
+            "trend": [],
+            "topModels": [],
+        }
+
+    month_records.sort(key=lambda r: r["month"])
+    for i, rec in enumerate(month_records):
+        year = rec["month"][:4]
+        rec["ytdSales"] = sum(
+            r["sales"] for r in month_records[:i + 1]
+            if r["month"][:4] == year
+        )
+
+    # Market share: compute total market sales per month from the full frame
+    # (before brand/model filter)
+    if segment:
+        market_frame = frame  # already filtered; need full segment
+    # For share computation, re-load unfiltered data
+    market_month_totals: dict[str, float] = {}
+    for mc in month_cols:
+        market_month_totals[mc] = float(pd.to_numeric(frame[mc], errors="coerce").fillna(0.0).sum())
+
+    for rec in month_records:
+        total_market = market_month_totals.get(rec["month"], 0)
+        rec["marketShare"] = rec["sales"] / total_market if total_market > 0 else 0
+
+    # Summary
+    latest = month_records[-1] if month_records else {}
+    prev = month_records[-2] if len(month_records) >= 2 else {}
+    ytd_total = latest.get("ytdSales", 0)
+
+    # Top Models (only when brand-level, no model specified)
+    top_models = []
+    if entity_type == "brand":
+        model_agg = frame.groupby("__model")
+        model_sales = []
+        for m_name, m_group in model_agg:
+            ms = float(sum(
+                pd.to_numeric(m_group[mc], errors="coerce").fillna(0.0).sum()
+                for mc in month_cols
+            ))
+            if ms > 0:
+                model_sales.append({"model": str(m_name).strip(), "sales": ms})
+        model_sales.sort(key=lambda x: -x["sales"])
+        total_brand = sum(m["sales"] for m in model_sales)
+        top_models = [
+            {**m, "shareWithinBrand": round(m["sales"] / total_brand, 4) if total_brand > 0 else 0}
+            for m in model_sales[:5]
+        ]
+
+    return {
+        "entityType": entity_type,
+        "brand": brand,
+        "model": model,
+        "context": {
+            "country": selected_country["label"],
+            "segment": segment,
+            "sourceTable": source_table,
+            "filtersApplied": bool(fuel_types or msrp_min or msrp_max or length_min or length_max),
+        },
+        "summary": {
+            "currentMonthSales": latest.get("sales", 0),
+            "ytdSales": ytd_total,
+            "marketShare": latest.get("marketShare", 0),
+            "rankChange": (
+                round((latest.get("sales", 0) / prev["sales"] - 1) * 100, 1)
+                if prev and prev.get("sales", 0) > 0 else 0
+            ),
+        },
+        "trend": month_records,
+        "topModels": top_models,
+    }
 
 
 def query_market_scan_deck(
