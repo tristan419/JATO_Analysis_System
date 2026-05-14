@@ -1,0 +1,310 @@
+{
+  "prdFile": "Markdown_Readme/Fullstack/01_DevWorkflow/ranking_trend_drilldown_prd.md",
+  "title": "Ranking Table Drilldown Trend — 方案 C",
+  "generatedAt": "2026-05-14T12:11:11Z",
+  "matchedFeatures": [
+    {
+      "id": "feature.msrp_workbench",
+      "name": "MSRP Workbench",
+      "score": 0.45,
+      "confidence": "low",
+      "reasons": [
+        "route match: ['/msrp']",
+        "API match",
+        "name match: MSRP Workbench",
+        "data source match",
+        "artifact match",
+        "docs/deps/issue match"
+      ]
+    },
+    {
+      "id": "feature.current_price",
+      "name": "Current Price",
+      "score": 0.4,
+      "confidence": "low",
+      "reasons": [
+        "route match: ['/msrp (current-prices tab)']",
+        "API match",
+        "name match: Current Price",
+        "data source match",
+        "artifact match",
+        "docs/deps/issue match"
+      ]
+    },
+    {
+      "id": "feature.jato_monthly_update",
+      "name": "JATO Monthly Update Pipeline",
+      "score": 0.38,
+      "confidence": "low",
+      "reasons": [
+        "route match: ['/msrp/monthly-update']",
+        "API match"
+      ]
+    },
+    {
+      "id": "feature.ranking_trend_drilldown",
+      "name": "Ranking Trend Drilldown",
+      "score": 0.34,
+      "confidence": "low",
+      "reasons": [
+        "API match",
+        "name match: Ranking Trend Drilldown",
+        "docs/deps/issue match"
+      ]
+    },
+    {
+      "id": "feature.country_copilot",
+      "name": "Country Copilot / Country Chat",
+      "score": 0.11,
+      "confidence": "low",
+      "reasons": [
+        "API match",
+        "data source match",
+        "docs/deps/issue match"
+      ]
+    },
+    {
+      "id": "feature.market_scan",
+      "name": "Market Scan",
+      "score": 0.1,
+      "confidence": "low",
+      "reasons": [
+        "API match"
+      ]
+    },
+    {
+      "id": "feature.dashboard",
+      "name": "Dashboard",
+      "score": 0.07,
+      "confidence": "low",
+      "reasons": [
+        "name match: Dashboard"
+      ]
+    },
+    {
+      "id": "feature.review_workbench",
+      "name": "Review Workbench",
+      "score": 0.06,
+      "confidence": "low",
+      "reasons": [
+        "data source match",
+        "artifact match",
+        "docs/deps/issue match"
+      ]
+    },
+    {
+      "id": "feature.positioning_pricing",
+      "name": "Positioning & Pricing",
+      "score": 0.01,
+      "confidence": "low",
+      "reasons": [
+        "docs/deps/issue match"
+      ]
+    }
+  ],
+  "matchedPipelines": [
+    {
+      "id": "pipeline.msrp.ingest_systemd",
+      "name": "MSRP Ingest (systemd timer)",
+      "score": 0.4,
+      "confidence": "low",
+      "reasons": [
+        "pipelineId match",
+        "path match: 03_Scripts/deploy/systemd/jato-msrp-sync@.service",
+        "name match: MSRP Ingest (systemd timer)",
+        "output match",
+        "trigger/schedule/consumer match"
+      ]
+    },
+    {
+      "id": "pipeline.msrp.dryrun_systemd",
+      "name": "MSRP Dry-run (systemd timer)",
+      "score": 0.33,
+      "confidence": "low",
+      "reasons": [
+        "pipelineId match",
+        "path match: 03_Scripts/deploy/systemd/jato-msrp-sync@.service",
+        "name match: MSRP Dry-run (systemd timer)",
+        "trigger/schedule/consumer match"
+      ]
+    },
+    {
+      "id": "pipeline.msrp.airflow",
+      "name": "MSRP Low Concurrency (Airflow DAG)",
+      "score": 0.23,
+      "confidence": "low",
+      "reasons": [
+        "pipelineId match",
+        "name match: MSRP Low Concurrency (Airflow DAG)",
+        "output match"
+      ]
+    },
+    {
+      "id": "pipeline.news.country_airflow",
+      "name": "Country News Sync (Airflow DAG)",
+      "score": 0.05,
+      "confidence": "low",
+      "reasons": [
+        "trigger/schedule/consumer match",
+        "known issue match"
+      ]
+    },
+    {
+      "id": "pipeline.perf.nightly_github",
+      "name": "Nightly Performance Gate (GitHub Actions)",
+      "score": 0.05,
+      "confidence": "low",
+      "reasons": [
+        "trigger/schedule/consumer match"
+      ]
+    },
+    {
+      "id": "pipeline.jato.etl",
+      "name": "JATO ETL Pipeline",
+      "score": 0.02,
+      "confidence": "low",
+      "reasons": [
+        "trigger/schedule/consumer match"
+      ]
+    }
+  ],
+  "matchedSources": [
+    {
+      "id": "source.msrp.batch_a",
+      "name": "MSRP Batch A (SUV Top30 — 7 countries)",
+      "score": 0.31,
+      "confidence": "low",
+      "reasons": [
+        "sourceId match",
+        "name match: MSRP Batch A (SUV Top30 — 7 countries)",
+        "type/country/path match"
+      ]
+    },
+    {
+      "id": "source.msrp.production",
+      "name": "MSRP Production Sources",
+      "score": 0.24,
+      "confidence": "low",
+      "reasons": [
+        "sourceId match",
+        "name match: MSRP Production Sources",
+        "type/country/path match"
+      ]
+    },
+    {
+      "id": "source.msrp.drafts_suv_top30",
+      "name": "MSRP Source Drafts (SUV Top30 per country)",
+      "score": 0.24,
+      "confidence": "low",
+      "reasons": [
+        "sourceId match",
+        "name match: MSRP Source Drafts (SUV Top30 per country)",
+        "type/country/path match"
+      ]
+    },
+    {
+      "id": "source.msrp.evkx",
+      "name": "EVKX BEV Catalog",
+      "score": 0.12,
+      "confidence": "low",
+      "reasons": [
+        "sourceId match"
+      ]
+    }
+  ],
+  "matchedPrompts": [],
+  "matchedArtifacts": [
+    {
+      "id": "artifact.msrp.observations",
+      "name": "MSRP Observations",
+      "score": 0.3,
+      "confidence": "low",
+      "reasons": [
+        "artifactId match",
+        "name match: MSRP Observations",
+        "path/pipeline match",
+        "consumer/producer match"
+      ]
+    },
+    {
+      "id": "artifact.msrp.current_prices",
+      "name": "Current Prices",
+      "score": 0.23,
+      "confidence": "low",
+      "reasons": [
+        "artifactId match",
+        "path/pipeline match",
+        "consumer/producer match"
+      ]
+    },
+    {
+      "id": "artifact.status_json",
+      "name": "Scheduled Fetch Status",
+      "score": 0.07,
+      "confidence": "low",
+      "reasons": [
+        "name match: Scheduled Fetch Status"
+      ]
+    },
+    {
+      "id": "artifact.jato.parquet",
+      "name": "JATO Full Archive (Parquet)",
+      "score": 0.01,
+      "confidence": "low",
+      "reasons": [
+        "consumer/producer match"
+      ]
+    },
+    {
+      "id": "artifact.jato.partitioned",
+      "name": "JATO Partitioned Dataset",
+      "score": 0.01,
+      "confidence": "low",
+      "reasons": [
+        "consumer/producer match"
+      ]
+    },
+    {
+      "id": "artifact.jato.summaries",
+      "name": "Precomputed Summaries",
+      "score": 0.01,
+      "confidence": "low",
+      "reasons": [
+        "consumer/producer match"
+      ]
+    }
+  ],
+  "riskAssessment": [
+    {
+      "area": "Backend",
+      "risk": "medium",
+      "reason": "keyword: api, endpoint"
+    },
+    {
+      "area": "Frontend",
+      "risk": "low",
+      "reason": "keyword: frontend, chart, plotly"
+    },
+    {
+      "area": "Pipeline",
+      "risk": "medium",
+      "reason": "keyword: fetch"
+    },
+    {
+      "area": "Docs",
+      "risk": "low",
+      "reason": "PRD should identify docs to update"
+    }
+  ],
+  "requiredRegistryUpdates": [
+    "features registry: 9 matches",
+    "pipelines registry: 6 matches",
+    "sources registry: 4 matches",
+    "artifacts registry: 6 matches"
+  ],
+  "requiredTests": [
+    "Backend unit tests",
+    "Frontend component tests"
+  ],
+  "claudeCodeTaskBrief": "Feature: Ranking Table Drilldown Trend — 方案 C\nGoal: See PRD for full requirements.\nDo not auto-deploy. Do not modify production env."
+}
