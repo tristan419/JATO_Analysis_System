@@ -1,0 +1,21 @@
+{
+  "base": "main~5",
+  "head": "HEAD",
+  "filesChanged": 18,
+  "findings": [
+    {
+      "severity": "NEEDS_REVIEW",
+      "area": "Scheduling",
+      "finding": "New schedule added. Verify it does not duplicate existing schedules in Pipeline Registry.",
+      "suggestedFix": "Check hermes/pipeline_registry.yaml for duplicate scheduling. See gap.pipeline.duplicate_news_scheduling for an existing example."
+    }
+  ],
+  "summary": {
+    "riskLevel": "NEEDS_REVIEW",
+    "riskScore": 60,
+    "blockerCount": 0,
+    "needsReviewCount": 1,
+    "warningCount": 0,
+    "infoCount": 0
+  }
+}
