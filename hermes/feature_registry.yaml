@@ -470,7 +470,7 @@ features:
   # --- Planned / PRD-Only Features ---
   - featureId: feature.presence_websocket
     name: "Presence WebSocket (Real-time Collaboration)"
-    status: planned
+    status: archived
     implementationStatus: prd_only
     riskLevel: low
     routes: []
@@ -492,12 +492,13 @@ features:
 
   - featureId: feature.ranking_trend_drilldown
     name: "Ranking Trend Drilldown"
-    status: planned
-    implementationStatus: prd_only
+    status: beta
+    implementationStatus: partial
     riskLevel: low
-    routes: []
+    routes:
+      - "/market-scan (RankingTrendDrawer)"
     backendApis:
-      - "GET /v1/market-scan/ranking-trend (exists)"
+      - "GET /v1/market-scan/ranking-trend (implemented)"
     scheduledJobs: []
     dataSources:
       - "JATO partitioned parquet"
@@ -508,10 +509,11 @@ features:
     dependencies:
       - "pipeline.jato.etl"
     owner: ""
-    governanceStatus: needs_review
+    governanceStatus: registered
     knownIssues:
-      - "PRD exists but full implementation not found"
-      - "Backend API exists (ranking-trend) but frontend drawer component may be incomplete"
+      - "Backend API implemented: GET /v1/market-scan/ranking-trend"
+      - "Frontend component exists: RankingTrendDrawer.tsx (7.4KB)"
+      - "Needs integration testing and docs update"
     lastChangedAt: null
     lastAuditAt: "2026-05-14"
     notes: "Drawer pattern for Brand/Model trend exploration. RankingTrendDrawer.tsx component exists."

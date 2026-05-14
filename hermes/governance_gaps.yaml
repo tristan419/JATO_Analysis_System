@@ -134,12 +134,11 @@ gaps:
     evidence:
       - "01_DevWorkflow/presence_websocket_prd.md exists"
       - "01_DevWorkflow/ranking_trend_drilldown_prd.md exists"
-      - "Neither feature has backend or frontend implementation found in Phase 0 scan"
-      - "RankingTrendDrawer.tsx exists but may be incomplete"
-    recommendedAction: "Triage: decide to implement, defer, or archive each PRD. Update feature status accordingly."
-    status: open
+      - "Hermes Intake confirmed: ranking_trend has backend API + frontend component (partial). presence_websocket has no code."
+    recommendedAction: "Triaged 2026-05-14. presence_websocket → archived. ranking_trend → beta (partial implementation found)."
+    status: resolved
     owner: ""
-    notes: ""
+    notes: "proposal.backlog.triage_prd_features → implemented."
 
   # --- Documentation Gaps ---
   - gapId: gap.docs.no_runbook
@@ -197,9 +196,9 @@ gaps:
       - "Target EC2 server likely no longer exists"
       - "Creates misleading red X on GitHub Actions page"
     recommendedAction: "Convert to workflow_dispatch only as safe first step. Disable entirely after confirming EC2 instance is obsolete."
-    status: open
+    status: resolved
     owner: ""
-    notes: "Phase 5.6 classified. Do NOT delete workflow without explicit confirmation."
+    notes: "Resolved 2026-05-14. Push trigger commented out in deploy-ec2-auto-update.yml. Workflow file preserved. proposal.deploy.disable_legacy_ec2 → implemented."
 
   # --- Feature Gaps ---
   - gapId: gap.feature.no_owner_tracking

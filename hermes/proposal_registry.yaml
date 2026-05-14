@@ -118,7 +118,7 @@ proposals:
   - proposalId: proposal.deploy.disable_legacy_ec2
     type: pipeline_dedup
     title: "Disable or convert legacy deploy-ssh-auto-update to manual-only"
-    summary: "Legacy EC2 deploy workflow consistently fails. Target server likely obsolete. Convert to workflow_dispatch only or disable entirely after confirmation."
+    summary: "Legacy EC2 deploy workflow consistently fails. Converted to workflow_dispatch only on 2026-05-14. Push trigger commented out, workflow file preserved."
     affectedFeatures: []
     affectedPipelines:
       - "pipeline.deploy.ec2_legacy_github"
@@ -126,15 +126,16 @@ proposals:
     affectedPrompts: []
     riskLevel: high
     expectedImpact: "Removes misleading red X from GitHub Actions page. Eliminates failed SSH connections to non-existent server."
-    rollbackPlan: "Re-enable workflow if EC2 instance is restored."
-    status: pending_review
+    rollbackPlan: "Uncomment push trigger in deploy-ec2-auto-update.yml if EC2 instance is restored."
+    status: implemented
     createdAt: "2026-05-14"
-    notes: "Phase 5.6 proposal. Do NOT delete workflow file without explicit confirmation."
+    implementedAt: "2026-05-14"
+    notes: "Phase 5.6 executed. Push trigger commented out. Workflow file preserved. workflow_dispatch still available for manual use."
 
   - proposalId: proposal.backlog.triage_prd_features
     type: backlog_triage
     title: "Triage PRD-only features: presence_websocket and ranking_trend"
-    summary: "Review the two PRD-only features. For each: decide to implement (with timeline), defer (with conditions), or archive (with reason). Update Feature Registry status accordingly."
+    summary: "Triaged 2026-05-14. presence_websocket → archived (no code, defer indefinitely). ranking_trend → beta (API + component already exist, partial implementation found). Feature Registry updated."
     affectedFeatures:
       - "feature.presence_websocket"
       - "feature.ranking_trend_drilldown"
@@ -144,6 +145,7 @@ proposals:
     riskLevel: low
     expectedImpact: "Clarifies roadmap. Prevents stale PRDs from accumulating."
     rollbackPlan: "Re-open PRD if business need emerges."
-    status: draft
+    status: implemented
     createdAt: "2026-05-14"
-    notes: "RankingTrendDrawer.tsx already exists as a partial implementation."
+    implementedAt: "2026-05-14"
+    notes: "presence_websocket archived. ranking_trend promoted to beta (partial). Hermes Intake confirmed: ranking_trend has backend API + frontend component."

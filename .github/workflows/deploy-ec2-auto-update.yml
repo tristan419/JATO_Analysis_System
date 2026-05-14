@@ -1,8 +1,8 @@
-name: deploy-ssh-auto-update
+name: deploy-ssh-auto-update  # DEPRECATED: legacy EC2, target server may not exist
 
 on:
-  push:
-    branches: ["main"]
+  # push:        # Disabled by Hermes Phase 5.6 — EC2 target likely obsolete
+  #   branches: ["main"]
   workflow_dispatch:
 
 concurrency:
