@@ -1,0 +1,326 @@
+# Hermes Artifact Registry
+# Phase 1 — seeded from REPOSITORY_ASSET_MAP.md (2026-05-14)
+
+artifacts:
+  # --- JATO Data Artifacts ---
+  - artifactId: artifact.jato.parquet
+    name: "JATO Full Archive (Parquet)"
+    pipeline: jato_etl
+    path: "04_Processed_data/jato_full_archive.parquet"
+    schemaVersion: "elt_worker.py output (unversioned)"
+    country: "all"
+    period: "monthly"
+    recordCount: null
+    qualityScore: null
+    freshnessStatus: needs verification
+    upstreamSources:
+      - "01_RAW_DATA/*.xlsx (monthly JATO export)"
+    producerPipelines:
+      - "pipeline.jato.etl"
+    consumerFeatures:
+      - "feature.dashboard"
+      - "feature.market_scan"
+      - "feature.country_copilot"
+      - "feature.positioning_pricing"
+      - "feature.version_comparison"
+      - "feature.specification"
+    governanceStatus: registered
+    knownIssues:
+      - "No automated refresh trigger"
+      - "No schema version"
+    generatedAt: null
+    notes: "Foundation data asset. All analytical features depend on this."
+
+  - artifactId: artifact.jato.partitioned
+    name: "JATO Partitioned Dataset"
+    pipeline: jato_etl
+    path: "04_Processed_data/partitioned_dataset_v1/"
+    schemaVersion: "build_partitioned_dataset.py output (unversioned)"
+    country: "all"
+    period: "monthly"
+    recordCount: null
+    qualityScore: null
+    freshnessStatus: needs verification
+    upstreamSources:
+      - "artifact.jato.parquet"
+    producerPipelines:
+      - "pipeline.jato.etl"
+    consumerFeatures:
+      - "feature.dashboard"
+      - "feature.market_scan"
+      - "feature.country_copilot"
+    governanceStatus: registered
+    knownIssues:
+      - "No schema version"
+    generatedAt: null
+    notes: "Hive-partitioned by country/year/month."
+
+  - artifactId: artifact.jato.summaries
+    name: "Precomputed Summaries"
+    pipeline: jato_etl
+    path: "04_Processed_data/summaries/"
+    schemaVersion: "precompute_summaries.py output (unversioned)"
+    country: "per-country + global"
+    period: "monthly"
+    recordCount: null
+    qualityScore: null
+    freshnessStatus: needs verification
+    upstreamSources:
+      - "artifact.jato.partitioned"
+    producerPipelines:
+      - "pipeline.jato.etl"
+    consumerFeatures:
+      - "feature.dashboard"
+    governanceStatus: registered
+    knownIssues:
+      - "No automated refresh trigger"
+    generatedAt: null
+    notes: "Pre-aggregated summaries for dashboard performance."
+
+  - artifactId: artifact.jato.monthly_update_job
+    name: "JATO Monthly Update Job"
+    pipeline: jato_etl
+    path: "04_Processed_data/ops/jato_monthly_update_jobs/"
+    schemaVersion: "unversioned"
+    country: "all"
+    period: "monthly"
+    recordCount: null
+    qualityScore: null
+    freshnessStatus: needs verification
+    upstreamSources:
+      - "01_RAW_DATA/new/*.xlsx"
+    producerPipelines: []
+    consumerFeatures:
+      - "feature.jato_monthly_update"
+    governanceStatus: registered
+    knownIssues: []
+    generatedAt: null
+    notes: "Uploaded XLSX → ingest → review → publish → rollback lifecycle."
+
+  # --- News Artifacts ---
+  - artifactId: artifact.news.digest
+    name: "Country News Digest"
+    pipeline: news
+    path: "PostgreSQL: ops.country_news_digest"
+    schemaVersion: "SQLAlchemy model (unversioned)"
+    country: "per-country"
+    period: "daily"
+    recordCount: null
+    qualityScore: null
+    freshnessStatus: needs verification
+    upstreamSources:
+      - "source.news.batch_a"
+      - "source.news.batch_b"
+    producerPipelines:
+      - "pipeline.news.country_systemd"
+      - "pipeline.news.country_airflow"
+    consumerFeatures:
+      - "feature.country_copilot"
+    governanceStatus: registered
+    knownIssues:
+      - "Dual producers (systemd + Airflow) — risk of duplicate writes"
+    generatedAt: null
+    notes: "Per-country news digest with Gemini enrichment (headline, summary, highlights)."
+
+  - artifactId: artifact.news.articles
+    name: "Country News Articles"
+    pipeline: news
+    path: "PostgreSQL: ops.country_news_article"
+    schemaVersion: "SQLAlchemy model (unversioned)"
+    country: "per-country"
+    period: "daily"
+    recordCount: null
+    qualityScore: null
+    freshnessStatus: needs verification
+    upstreamSources:
+      - "source.news.batch_a"
+      - "source.news.batch_b"
+    producerPipelines:
+      - "pipeline.news.country_systemd"
+    consumerFeatures:
+      - "feature.country_copilot"
+    governanceStatus: registered
+    knownIssues: []
+    generatedAt: null
+    notes: "Individual news articles with source_url, tags, and raw payload."
+
+  # --- VOC Artifacts ---
+  - artifactId: artifact.voc.raw
+    name: "VOC Raw Forum Documents"
+    pipeline: voc
+    path: "04_Processed_data/voc/ (raw)"
+    schemaVersion: "voc_fetcher.py output (unversioned)"
+    country: "per-country (SE,FI,NO,DK,AT,CZ,HR,HU)"
+    period: "daily"
+    recordCount: 40
+    qualityScore: null
+    freshnessStatus: fresh
+    upstreamSources:
+      - "source.voc.batch_a"
+    producerPipelines:
+      - "pipeline.voc.forum_systemd"
+    consumerFeatures:
+      - "feature.customer_insights"
+      - "feature.country_copilot"
+    governanceStatus: registered
+    knownIssues:
+      - "8 source errors per run — not systematically tracked"
+    generatedAt: "2026-05-14T07:54:31Z"
+    notes: "~40 raw documents per run across 8 countries. Uses Trafilatura for text extraction."
+
+  - artifactId: artifact.voc.enriched
+    name: "VOC Enriched Signals"
+    pipeline: voc
+    path: "04_Processed_data/voc/ (enriched)"
+    schemaVersion: "voc_enricher.py output (unversioned)"
+    country: "per-country"
+    period: "daily"
+    recordCount: null
+    qualityScore: null
+    freshnessStatus: fresh
+    upstreamSources:
+      - "artifact.voc.raw"
+    producerPipelines:
+      - "pipeline.voc.forum_systemd"
+    consumerFeatures:
+      - "feature.customer_insights"
+      - "feature.country_copilot"
+    governanceStatus: registered
+    knownIssues: []
+    generatedAt: "2026-05-14T07:54:31Z"
+    notes: "Sentiment, pain points, product/competitor mentions, theme tags, persona cohorts."
+
+  - artifactId: artifact.voc.deck
+    name: "VOC Country Deck"
+    pipeline: voc
+    path: "04_Processed_data/voc/ (deck)"
+    schemaVersion: "voc_enricher.py output (unversioned)"
+    country: "per-country"
+    period: "daily"
+    recordCount: null
+    qualityScore: null
+    freshnessStatus: fresh
+    upstreamSources:
+      - "artifact.voc.enriched"
+    producerPipelines:
+      - "pipeline.voc.forum_systemd"
+    consumerFeatures:
+      - "feature.customer_insights"
+    governanceStatus: registered
+    knownIssues: []
+    generatedAt: "2026-05-14T07:54:31Z"
+    notes: "customer_insight_deck.json per country."
+
+  - artifactId: artifact.voc.hev_benchmark
+    name: "Nordic HEV Benchmark Excel"
+    pipeline: voc
+    path: "04_Processed_data/voc/se/ (HEV benchmark)"
+    schemaVersion: "unversioned"
+    country: "SE"
+    period: "manual"
+    recordCount: null
+    qualityScore: null
+    freshnessStatus: unknown
+    upstreamSources:
+      - "Manual generation"
+    producerPipelines: []
+    consumerFeatures:
+      - "feature.nordic_hev_insights"
+    governanceStatus: registered
+    knownIssues:
+      - "Must be manually regenerated"
+    generatedAt: null
+    notes: "Generated by generate_sweden_hev_benchmark_excel.py."
+
+  # --- MSRP Artifacts ---
+  - artifactId: artifact.msrp.observations
+    name: "MSRP Observations"
+    pipeline: msrp
+    path: "PostgreSQL: msrp.msrp_observation"
+    schemaVersion: "SQLAlchemy model (unversioned)"
+    country: "per-country"
+    period: "weekly"
+    recordCount: null
+    qualityScore: null
+    freshnessStatus: needs verification
+    upstreamSources:
+      - "source.msrp.batch_a"
+      - "source.msrp.production"
+    producerPipelines:
+      - "pipeline.msrp.ingest_systemd"
+    consumerFeatures:
+      - "feature.msrp_workbench"
+      - "feature.current_price"
+      - "feature.review_workbench"
+    governanceStatus: registered
+    knownIssues:
+      - "92/209 sources passing (44.0%)"
+    generatedAt: null
+    notes: "Scraped price observations with match status, MSRP, FX rates, confidence scoring."
+
+  - artifactId: artifact.msrp.current_prices
+    name: "Current Prices"
+    pipeline: msrp
+    path: "PostgreSQL: msrp.current_price"
+    schemaVersion: "SQLAlchemy model (unversioned)"
+    country: "per-country"
+    period: "weekly (materialized)"
+    recordCount: null
+    qualityScore: null
+    freshnessStatus: needs verification
+    upstreamSources:
+      - "artifact.msrp.observations"
+    producerPipelines:
+      - "pipeline.msrp.ingest_systemd"
+    consumerFeatures:
+      - "feature.current_price"
+      - "feature.country_copilot"
+    governanceStatus: registered
+    knownIssues: []
+    generatedAt: null
+    notes: "Current effective price per (country, brand, model, trim, powertrain)."
+
+  # --- Governance Artifacts ---
+  - artifactId: artifact.status_json
+    name: "Scheduled Fetch Status"
+    pipeline: news
+    path: "03_Scripts/logs/scheduled_fetch_status.json"
+    schemaVersion: "1.0 (2026-05-14)"
+    country: "all"
+    period: "per-run"
+    recordCount: null
+    qualityScore: null
+    freshnessStatus: fresh
+    upstreamSources:
+      - "pipeline.news.country_systemd"
+      - "pipeline.voc.forum_systemd"
+    producerPipelines:
+      - "pipeline.news.country_systemd"
+      - "pipeline.voc.forum_systemd"
+    consumerFeatures:
+      - "feature.data_management (future)"
+    governanceStatus: registered
+    knownIssues:
+      - "Only VOC writes to this file currently; News writes separately"
+    generatedAt: "2026-05-14T07:54:31Z"
+    notes: "JSON with lastRunAt, status, successCount, failedCount, lastError per pipeline."
+
+  # --- GitNexus Artifacts ---
+  - artifactId: artifact.gitnexus.visual_zip
+    name: "GitNexus Visual ZIP"
+    pipeline: gitnexus
+    path: "Generated by 03_Scripts/package_gitnexus_visual_zip.sh"
+    schemaVersion: "unversioned"
+    country: "N/A"
+    period: "manual"
+    recordCount: null
+    qualityScore: null
+    freshnessStatus: unknown
+    upstreamSources: []
+    producerPipelines: []
+    consumerFeatures:
+      - "feature.gitnexus"
+    governanceStatus: registered
+    knownIssues: []
+    generatedAt: null
+    notes: "ZIP packaging of repo subset for GitNexus visualization."

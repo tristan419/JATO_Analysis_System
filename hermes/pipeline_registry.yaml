@@ -1,0 +1,324 @@
+# Hermes Pipeline Registry
+# Phase 1 — seeded from REPOSITORY_ASSET_MAP.md (2026-05-14)
+
+pipelines:
+  # --- systemd Timers ---
+  - pipelineId: pipeline.news.country_systemd
+    name: "Country News Sync (systemd timer)"
+    type: systemd_timer
+    path: "03_Scripts/deploy/systemd/jato-country-news-sync.service"
+    trigger: "jato-country-news-sync.timer"
+    schedule: "OnCalendar=*-*-* 23:15:00 UTC"
+    producer: "03_Scripts/news/run_country_news_sync.sh → sync_country_news_digest.py"
+    outputs:
+      - "PostgreSQL: ops.country_news_digest"
+      - "PostgreSQL: ops.country_news_article"
+      - "03_Scripts/logs/scheduled_fetch_status.json"
+    consumers:
+      - "feature.country_copilot"
+      - "feature.data_management"
+    dependsOn:
+      - "/etc/jato-fullstack/backend.env (APP_DATABASE_URL)"
+      - "/etc/jato-fullstack/country-news.env"
+    relatedFeatureIds:
+      - "feature.country_copilot"
+      - "feature.data_management"
+    status: active
+    riskLevel: medium
+    governanceStatus: registered
+    knownIssues:
+      - "Duplicate scheduling risk: same function exists in Airflow DAG jato_country_news_sync at 06:15 UTC"
+      - "Google News RSS blocked from Tencent Cloud China server — falls back to stale cache"
+    lastObserved:
+      lastRunAt: "2026-05-13T15:18:03Z"
+      lastSuccessAt: "2026-05-13T15:18:03Z"
+      lastFailureAt: null
+      lastFailureReason: null
+    owner: ""
+    notes: "Production scheduler for news. Previously duplicated by GitHub Actions schedule (removed 2026-05-14)."
+
+  - pipelineId: pipeline.voc.forum_systemd
+    name: "VOC Forum Sync (systemd timer)"
+    type: systemd_timer
+    path: "03_Scripts/deploy/systemd/jato-voc-forum-sync.service"
+    trigger: "jato-voc-forum-sync.timer"
+    schedule: "OnCalendar=*-*-* 01:45:00 UTC"
+    producer: "03_Scripts/voc/run_voc_forum_sync.sh → voc_fetcher.py → voc_enricher.py"
+    outputs:
+      - "04_Processed_data/voc/ (raw artifacts)"
+      - "04_Processed_data/voc/ (enriched signals)"
+      - "04_Processed_data/voc/ (deck artifacts)"
+      - "PostgreSQL: ops.voc_source_run"
+      - "PostgreSQL: ops.voc_raw_document"
+      - "03_Scripts/logs/scheduled_fetch_status.json"
+    consumers:
+      - "feature.customer_insights"
+      - "feature.country_copilot"
+      - "feature.data_management"
+    dependsOn:
+      - "/etc/jato-fullstack/backend.env (APP_DATABASE_URL)"
+      - "/etc/jato-fullstack/voc.env"
+      - ".venv/bin/python (scraping toolkit installed)"
+    relatedFeatureIds:
+      - "feature.customer_insights"
+      - "feature.nordic_hev_insights"
+      - "feature.country_copilot"
+      - "feature.data_management"
+    status: active
+    riskLevel: medium
+    governanceStatus: registered
+    knownIssues:
+      - "8 source errors per run — not tracked per-source"
+      - "Soft-failure handling added 2026-05-14 (single source failure no longer kills entire batch)"
+      - "Requires chmod +x on runner scripts (fixed 2026-05-14)"
+    lastObserved:
+      lastRunAt: "2026-05-14T07:54:31Z"
+      lastSuccessAt: "2026-05-14T07:54:31Z"
+      lastFailureAt: "2026-05-14T01:47:20Z"
+      lastFailureReason: "status=203/EXEC (missing execute permission) + heredoc syntax error + bare python in PATH"
+    owner: ""
+    notes: "40 raw artifacts, 70 documents, 24 source runs in last successful execution."
+
+  - pipelineId: pipeline.msrp.dryrun_systemd
+    name: "MSRP Dry-run (systemd timer)"
+    type: systemd_timer
+    path: "03_Scripts/deploy/systemd/jato-msrp-sync@.service"
+    trigger: "jato-msrp-dryrun.timer"
+    schedule: "OnCalendar=*-*-* 03:30:00 UTC"
+    producer: "03_Scripts/run_msrp_low_concurrency.sh → batch_dryrun.py"
+    outputs:
+      - "Dry-run reports (stdout/logs)"
+    consumers:
+      - "feature.msrp_workbench"
+    dependsOn:
+      - "/etc/jato-fullstack/msrp.env"
+      - "07_ScrapingToolkit/source_drafts/"
+    relatedFeatureIds:
+      - "feature.msrp_workbench"
+    status: active
+    riskLevel: low
+    governanceStatus: registered
+    knownIssues: []
+    lastObserved:
+      lastRunAt: null
+      lastSuccessAt: null
+      lastFailureAt: null
+      lastFailureReason: null
+    owner: ""
+    notes: "Tests all draft sources without writing to database."
+
+  - pipelineId: pipeline.msrp.ingest_systemd
+    name: "MSRP Ingest (systemd timer)"
+    type: systemd_timer
+    path: "03_Scripts/deploy/systemd/jato-msrp-sync@.service"
+    trigger: "jato-msrp-ingest.timer"
+    schedule: "OnCalendar=Sat 05:30:00 UTC"
+    producer: "03_Scripts/run_msrp_low_concurrency.sh → batch_ingest.py"
+    outputs:
+      - "PostgreSQL: msrp.msrp_observation"
+      - "PostgreSQL: msrp.current_price (after materialize)"
+    consumers:
+      - "feature.msrp_workbench"
+      - "feature.current_price"
+      - "feature.review_workbench"
+      - "feature.country_copilot"
+    dependsOn:
+      - "/etc/jato-fullstack/backend.env (APP_DATABASE_URL)"
+      - "/etc/jato-fullstack/msrp.env"
+      - "pipeline.msrp.dryrun_systemd (dry-run must pass first)"
+    relatedFeatureIds:
+      - "feature.msrp_workbench"
+      - "feature.current_price"
+      - "feature.review_workbench"
+    status: active
+    riskLevel: high
+    governanceStatus: registered
+    knownIssues:
+      - "Writes production pricing data — high blast radius"
+      - "92/209 sources passing dry-run (44.0%)"
+    lastObserved:
+      lastRunAt: null
+      lastSuccessAt: null
+      lastFailureAt: null
+      lastFailureReason: null
+    owner: ""
+    notes: "Weekly ingest. Only sources that pass dry-run should be promoted."
+
+  # --- Airflow DAGs ---
+  - pipelineId: pipeline.news.country_airflow
+    name: "Country News Sync (Airflow DAG)"
+    type: airflow_dag
+    path: "airflow/dags/jato_country_news_sync.py"
+    trigger: "schedule"
+    schedule: "cron: 15 6 * * * (06:15 UTC)"
+    producer: "HTTP POST to /v1/assistant/country/news/refresh"
+    outputs:
+      - "PostgreSQL: ops.country_news_digest"
+    consumers:
+      - "feature.country_copilot"
+    dependsOn:
+      - "JATO_API_BASE env var"
+      - "JATO_API_TOKEN env var"
+      - "docker-compose airflow stack running"
+    relatedFeatureIds:
+      - "feature.country_copilot"
+    status: active
+    riskLevel: medium
+    governanceStatus: needs_review
+    knownIssues:
+      - "DUPLICATE SCHEDULING: same function as pipeline.news.country_systemd at 23:15 UTC"
+      - "Calls backend API (circular dependency: Airflow → Backend → DB)"
+      - "Requires Airflow stack to be running"
+    lastObserved:
+      lastRunAt: null
+      lastSuccessAt: null
+      lastFailureAt: null
+      lastFailureReason: null
+    owner: ""
+    notes: "Redundant with systemd timer. Consider deprecating or changing to manual-only."
+
+  - pipelineId: pipeline.msrp.airflow
+    name: "MSRP Low Concurrency (Airflow DAG)"
+    type: airflow_dag
+    path: "airflow/dags/jato_msrp_low_concurrency.py"
+    trigger: "manual"
+    schedule: "None (manual only)"
+    producer: "03_Scripts/run_msrp_low_concurrency.sh"
+    outputs:
+      - "MSRP dry-run or ingest results"
+    consumers:
+      - "feature.msrp_workbench"
+    dependsOn:
+      - "docker-compose airflow stack running"
+    relatedFeatureIds:
+      - "feature.msrp_workbench"
+    status: active
+    riskLevel: low
+    governanceStatus: registered
+    knownIssues: []
+    lastObserved:
+      lastRunAt: null
+      lastSuccessAt: null
+      lastFailureAt: null
+      lastFailureReason: null
+    owner: ""
+    notes: "Manual-only — no schedule conflict with systemd timers."
+
+  - pipelineId: pipeline.scraping_toolkit.airflow
+    name: "Scraping Toolkit Manual (Airflow DAG)"
+    type: airflow_dag
+    path: "airflow/dags/jato_scraping_toolkit_manual.py"
+    trigger: "manual"
+    schedule: "None (manual only)"
+    producer: "03_Scripts/run_scraping_tool.sh → 07_ScrapingToolkit/run.py"
+    outputs:
+      - "On-demand scrape results"
+    consumers: []
+    dependsOn:
+      - "docker-compose airflow stack running"
+    relatedFeatureIds: []
+    status: active
+    riskLevel: low
+    governanceStatus: registered
+    knownIssues: []
+    lastObserved:
+      lastRunAt: null
+      lastSuccessAt: null
+      lastFailureAt: null
+      lastFailureReason: null
+    owner: ""
+    notes: "Generic manual trigger for any scraping toolkit command."
+
+  # --- GitHub Actions ---
+  - pipelineId: pipeline.perf.nightly_github
+    name: "Nightly Performance Gate (GitHub Actions)"
+    type: github_action
+    path: ".github/workflows/nightly-performance.yml"
+    trigger: "schedule"
+    schedule: "cron: 30 1 * * * (01:30 UTC)"
+    producer: "03_Scripts/diagnostics/ci_nightly_performance_check.py"
+    outputs:
+      - "Performance benchmark results (stdout/logs)"
+    consumers:
+      - "CI/CD monitoring"
+    dependsOn:
+      - "requirements.txt"
+      - "JATO parquet data"
+    relatedFeatureIds: []
+    status: active
+    riskLevel: low
+    governanceStatus: registered
+    knownIssues: []
+    lastObserved:
+      lastRunAt: null
+      lastSuccessAt: null
+      lastFailureAt: "2026-05-13T04:59:43Z"
+      lastFailureReason: "needs verification"
+    owner: ""
+    notes: "Performance regression gate. Fails if speedup below minimum threshold."
+
+  # --- ETL Pipeline ---
+  - pipelineId: pipeline.jato.etl
+    name: "JATO ETL Pipeline"
+    type: etl_job
+    path: "03_Scripts/data_pipeline/"
+    trigger: "manual"
+    schedule: "None (manual execution)"
+    producer: "prepare_monthly_raw_update.py → elt_worker.py → build_partitioned_dataset.py → precompute_summaries.py"
+    outputs:
+      - "04_Processed_data/jato_full_archive.parquet"
+      - "04_Processed_data/partitioned_dataset_v1/"
+      - "04_Processed_data/summaries/"
+    consumers:
+      - "All analytical features (Dashboard, MarketScan, CountryCopilot, etc.)"
+    dependsOn:
+      - "01_RAW_DATA/*.xlsx (monthly JATO export)"
+    relatedFeatureIds:
+      - "feature.dashboard"
+      - "feature.market_scan"
+      - "feature.country_copilot"
+      - "feature.positioning_pricing"
+      - "feature.version_comparison"
+    status: active
+    riskLevel: medium
+    governanceStatus: registered
+    knownIssues:
+      - "No automated trigger — must be run manually"
+      - "No integration test validating output schema"
+    lastObserved:
+      lastRunAt: null
+      lastSuccessAt: null
+      lastFailureAt: null
+      lastFailureReason: null
+    owner: ""
+    notes: "Foundation of all analytical features. Manual execution only."
+
+  # --- Deploy Pipeline ---
+  - pipelineId: pipeline.deploy.tencent_github
+    name: "Deploy Fullstack to Tencent Cloud (GitHub Actions)"
+    type: github_action
+    path: ".github/workflows/deploy-fullstack-tencent.yml"
+    trigger: "push to main (filtered paths)"
+    schedule: "None (event-driven)"
+    producer: "03_Scripts/ops/deploy_fullstack_server.sh"
+    outputs:
+      - "Deployed fullstack on ojeur.cloud"
+    consumers:
+      - "All production users"
+    dependsOn:
+      - "GitHub Secrets: SSH_HOST, SSH_USER, SSH_PRIVATE_KEY"
+      - "GitHub Secrets: DEEPSEEK_API_KEY"
+    relatedFeatureIds: []
+    status: active
+    riskLevel: high
+    governanceStatus: registered
+    knownIssues:
+      - "Deploy overwrites server files via tar — git history on server is stale"
+      - "SKIP_GIT_SYNC=true means no git pull on server"
+    lastObserved:
+      lastRunAt: null
+      lastSuccessAt: "2026-05-13T16:13:38Z"
+      lastFailureAt: null
+      lastFailureReason: null
+    owner: ""
+    notes: "Auto-deploys on push to main when 06_AppPlatform/, 07_ScrapingToolkit/, or 03_Scripts/ change."

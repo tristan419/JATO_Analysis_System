@@ -1,0 +1,236 @@
+# Hermes Source Registry
+# Phase 1 — seeded from REPOSITORY_ASSET_MAP.md (2026-05-14)
+
+sources:
+  # --- VOC Forum Sources ---
+  - sourceId: source.voc.batch_a
+    name: "VOC Nordic Forum Batch A"
+    sourceType: forum
+    country: "SE,FI,NO,DK,AT,CZ,HR,HU"
+    url: null
+    path: "07_ScrapingToolkit/voc_sources/batch_a.yaml"
+    crawlerStrategy: "trafilatura"
+    fallbackStrategy: "lxml"
+    language: "sv,fi,no,da,de,cs,hr,hu"
+    targetBrands: []
+    targetModels: []
+    targetSegments: []
+    status: active
+    governanceStatus: registered
+    knownIssues:
+      - "8 source errors per run (May 14 observation) — not tracked per-source"
+      - "Single source timeout/403 can fail entire batch (soft-failure added 2026-05-14)"
+    lastObserved:
+      successCount: null
+      failedCount: 8
+      lastSuccessAt: "2026-05-14T07:54:31Z"
+      lastFailureAt: null
+      lastFailureReason: null
+    quality:
+      successRate: null
+      timeoutRate: null
+      http403Rate: null
+      extractionQualityScore: null
+      usefulContentRate: null
+      duplicateRate: null
+    owner: ""
+    notes: "8 countries, 24 source runs. Produces ~40 raw artifacts per run."
+
+  # --- News Sources ---
+  - sourceId: source.news.batch_a
+    name: "News RSS/Atom Batch A (Nordic + Central Europe)"
+    sourceType: news
+    country: "SE,FI,HU,NO,DK,AT,CZ,HR"
+    url: null
+    path: "07_ScrapingToolkit/news_sources/batch_a.yaml"
+    crawlerStrategy: "rss_atom"
+    fallbackStrategy: "rss-fallback (stale cache)"
+    language: "sv,fi,hu,no,da,de,cs,hr"
+    targetBrands: []
+    targetModels: []
+    targetSegments: []
+    status: active
+    governanceStatus: registered
+    knownIssues:
+      - "Google News RSS blocked from Tencent Cloud China server (Network is unreachable)"
+      - "Falls back to stale cached articles when RSS unreachable"
+    lastObserved:
+      successCount: 21
+      failedCount: null
+      lastSuccessAt: "2026-05-13T15:18:03Z"
+      lastFailureAt: null
+      lastFailureReason: null
+    quality:
+      successRate: null
+      timeoutRate: null
+      http403Rate: null
+      extractionQualityScore: null
+      usefulContentRate: null
+      duplicateRate: null
+    owner: ""
+    notes: "Scheduled via systemd timer (23:15 UTC). Duplicated by Airflow DAG (06:15 UTC)."
+
+  - sourceId: source.news.batch_b
+    name: "News RSS/Atom Batch B (Western + Southern Europe)"
+    sourceType: news
+    country: "DE,FR,IT,ES,BE,NL,PL,PT,RO,SI,SK,GR"
+    url: null
+    path: "07_ScrapingToolkit/news_sources/batch_b.yaml"
+    crawlerStrategy: "rss_atom"
+    fallbackStrategy: "rss-fallback (stale cache)"
+    language: "de,fr,it,es,nl,pl,pt,ro,sl,sk,el"
+    targetBrands: []
+    targetModels: []
+    targetSegments: []
+    status: active
+    governanceStatus: needs_review
+    knownIssues:
+      - "Batch B has NO scheduled fetch — only Batch A is scheduled"
+      - "12 countries without automated news coverage"
+    lastObserved:
+      successCount: null
+      failedCount: null
+      lastSuccessAt: null
+      lastFailureAt: null
+      lastFailureReason: null
+    quality:
+      successRate: null
+      timeoutRate: null
+      http403Rate: null
+      extractionQualityScore: null
+      usefulContentRate: null
+      duplicateRate: null
+    owner: ""
+    notes: "Config exists but not wired to any scheduler."
+
+  # --- MSRP Sources ---
+  - sourceId: source.msrp.batch_a
+    name: "MSRP Batch A (SUV Top30 — 7 countries)"
+    sourceType: msrp
+    country: "SE,FI,NO,DK,HU,HR,AT,CZ"
+    url: null
+    path: "07_ScrapingToolkit/msrp_batches/batch_a.yaml"
+    crawlerStrategy: "scrapling_web"
+    fallbackStrategy: "playwright_card_flow"
+    language: "sv,fi,no,da,hu,hr,de,cs"
+    targetBrands: []
+    targetModels: []
+    targetSegments: ["SUV"]
+    status: active
+    governanceStatus: registered
+    knownIssues:
+      - "92/209 sources passing dry-run (44.0%)"
+      - "CSS selectors need per-brand maintenance"
+    lastObserved:
+      successCount: 92
+      failedCount: 117
+      lastSuccessAt: null
+      lastFailureAt: null
+      lastFailureReason: null
+    quality:
+      successRate: 0.44
+      timeoutRate: null
+      http403Rate: null
+      extractionQualityScore: null
+      usefulContentRate: null
+      duplicateRate: null
+    owner: ""
+    notes: "Dry-run daily 03:30 UTC, ingest weekly Sat 05:30 UTC."
+
+  - sourceId: source.msrp.production
+    name: "MSRP Production Sources"
+    sourceType: msrp
+    country: "SE,DE"
+    url: null
+    path: "07_ScrapingToolkit/sources/"
+    crawlerStrategy: "scrapling_web"
+    fallbackStrategy: null
+    language: "sv,de"
+    targetBrands: ["Volvo", "BMW"]
+    targetModels: ["XC60"]
+    targetSegments: []
+    status: active
+    governanceStatus: registered
+    knownIssues: []
+    lastObserved:
+      successCount: null
+      failedCount: null
+      lastSuccessAt: null
+      lastFailureAt: null
+      lastFailureReason: null
+    quality:
+      successRate: null
+      timeoutRate: null
+      http403Rate: null
+      extractionQualityScore: null
+      usefulContentRate: null
+      duplicateRate: null
+    owner: ""
+    notes: "3 production sources: volvo_se_xc60.yaml, bmw_de.yaml, _template.yaml"
+
+  # --- EVKX Catalog ---
+  - sourceId: source.msrp.evkx
+    name: "EVKX BEV Catalog"
+    sourceType: official
+    country: "multi"
+    url: "https://evkx.net"
+    path: "07_ScrapingToolkit/jato_scraper/evkx_catalog.py"
+    crawlerStrategy: "http_json"
+    fallbackStrategy: null
+    language: "en"
+    targetBrands: []
+    targetModels: []
+    targetSegments: ["BEV"]
+    status: active
+    governanceStatus: registered
+    knownIssues:
+      - "No scheduled fetch — manual only"
+    lastObserved:
+      successCount: null
+      failedCount: null
+      lastSuccessAt: null
+      lastFailureAt: null
+      lastFailureReason: null
+    quality:
+      successRate: null
+      timeoutRate: null
+      http403Rate: null
+      extractionQualityScore: null
+      usefulContentRate: null
+      duplicateRate: null
+    owner: ""
+    notes: "CLI: jato-evkx-fetch. Imports EV reference data into MSRP review workflow."
+
+  # --- MSRP Source Drafts ---
+  - sourceId: source.msrp.drafts_suv_top30
+    name: "MSRP Source Drafts (SUV Top30 per country)"
+    sourceType: msrp
+    country: "SE,FI,NO,DK,HU,HR,AT,CZ"
+    url: null
+    path: "07_ScrapingToolkit/source_drafts/suv_only_country_model_top30/"
+    crawlerStrategy: "needs verification"
+    fallbackStrategy: null
+    language: "needs verification"
+    targetBrands: []
+    targetModels: []
+    targetSegments: ["SUV"]
+    status: active
+    governanceStatus: registered
+    knownIssues:
+      - "~30 drafts per country, many with TODO keyword placeholders"
+      - "Batch fill scripts already executed for most countries"
+    lastObserved:
+      successCount: null
+      failedCount: null
+      lastSuccessAt: null
+      lastFailureAt: null
+      lastFailureReason: null
+    quality:
+      successRate: null
+      timeoutRate: null
+      http403Rate: null
+      extractionQualityScore: null
+      usefulContentRate: null
+      duplicateRate: null
+    owner: ""
+    notes: "Generated by generate_msrp_source_drafts.py from candidate scope reports."

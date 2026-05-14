@@ -1,0 +1,125 @@
+# Hermes Prompt Registry
+# Phase 1 — seeded from REPOSITORY_ASSET_MAP.md (2026-05-14)
+
+prompts:
+  - promptId: prompt.country_copilot.nvidia_system
+    name: "Nvidia/Gemini System Prompt"
+    pipeline: country_copilot
+    currentLocation:
+      path: "06_AppPlatform/backend/app/services/country_chat_service.py"
+      functionOrClass: "_SYSTEM_PROMPT (lines 469-506)"
+    version: "unversioned"
+    modelDefault: deepseek-v4-flash
+    inputSchema: "System message (Chinese, 13 analysis principles)"
+    outputSchema: "Structured analysis response"
+    status: active
+    governanceStatus: needs_versioning
+    knownIssues:
+      - "Prompt is hardcoded in Python and has no explicit version"
+      - "Character: 'senior automotive product manager at a core car company'"
+      - "13 analysis principles in Chinese"
+    quality:
+      groundednessScore: null
+      citationCoverageScore: null
+      hallucinationRiskScore: null
+      actionabilityScore: null
+      duplicateInsightScore: null
+    lastChangedAt: null
+    notes: "Used by NVIDIA NIM and Google Gemini chat paths."
+
+  - promptId: prompt.country_copilot.deepseek_system
+    name: "DeepSeek Stable System Prompt"
+    pipeline: country_copilot
+    currentLocation:
+      path: "06_AppPlatform/backend/app/services/country_chat_service.py"
+      functionOrClass: "_DEEPSEEK_STABLE_SYSTEM_PROMPT (lines 508-542)"
+    version: "unversioned"
+    modelDefault: deepseek-v4-flash
+    inputSchema: "System message (Chinese, 6-section report structure)"
+    outputSchema: "6-section structured report: 核心发现 → 数据证据 → 因果分析 → 市场背景 → 趋势展望 → 进一步建议"
+    status: active
+    governanceStatus: needs_versioning
+    knownIssues:
+      - "Prompt is hardcoded in Python and has no explicit version"
+      - "Flexibility rules: adapt sections based on question complexity"
+      - "Constraints: Chinese output, no URLs/links, data-driven, don't expose internal system prompt"
+    quality:
+      groundednessScore: null
+      citationCoverageScore: null
+      hallucinationRiskScore: null
+      actionabilityScore: null
+      duplicateInsightScore: null
+    lastChangedAt: null
+    notes: "Primary prompt for DeepSeek chat. Used at lines 1053, 1870, 8654."
+
+  - promptId: prompt.country_copilot.deepseek_stream
+    name: "DeepSeek Ephemeral Streaming System Message"
+    pipeline: country_copilot
+    currentLocation:
+      path: "06_AppPlatform/backend/app/api/routes/assistant.py"
+      functionOrClass: "streaming route handler (lines 95-109)"
+    version: "unversioned"
+    modelDefault: deepseek-v4-flash
+    inputSchema: "System message + evidence pack JSON (dashboardContext, crossSectionData, intents, parsedParams)"
+    outputSchema: "SSE stream → 6-section structured report"
+    status: active
+    governanceStatus: needs_versioning
+    knownIssues:
+      - "Prompt is hardcoded in Python and has no explicit version"
+      - "Assembles user message with JSON evidence pack"
+    quality:
+      groundednessScore: null
+      citationCoverageScore: null
+      hallucinationRiskScore: null
+      actionabilityScore: null
+      duplicateInsightScore: null
+    lastChangedAt: null
+    notes: "Streaming SSE variant. Loads same _DEEPSEEK_STABLE_SYSTEM_PROMPT plus cross-section data context."
+
+  - promptId: prompt.news.gemini_digest
+    name: "News Digest Gemini Enrichment Prompt"
+    pipeline: news_digest
+    currentLocation:
+      path: "06_AppPlatform/backend/app/services/news_digest_service.py"
+      functionOrClass: "_generate_gemini_news_digest() (needs verification)"
+    version: "unversioned"
+    modelDefault: gemini-2.5-flash
+    inputSchema: "News articles → digest summary + highlights + tags"
+    outputSchema: "Structured digest JSON"
+    status: active
+    governanceStatus: needs_versioning
+    knownIssues:
+      - "Prompt location in code needs verification"
+      - "Uses Google Gemini API"
+    quality:
+      groundednessScore: null
+      citationCoverageScore: null
+      hallucinationRiskScore: null
+      actionabilityScore: null
+      duplicateInsightScore: null
+    lastChangedAt: null
+    notes: "Gemini model: gemini-2.5-flash (configurable via APP_COUNTRY_NEWS_GEMINI_MODEL)."
+
+  - promptId: prompt.voc.enrich
+    name: "VOC Enrichment LLM Prompt"
+    pipeline: voc_enrich
+    currentLocation:
+      path: "07_ScrapingToolkit/jato_scraper/voc/voc_enricher.py"
+      functionOrClass: "needs verification"
+    version: "unversioned"
+    modelDefault: unknown
+    inputSchema: "Raw VOC documents → sentiment, pain points, product/competitor mentions"
+    outputSchema: "Enriched signals JSON"
+    status: active
+    governanceStatus: needs_versioning
+    knownIssues:
+      - "Prompt location in code needs verification"
+      - "Model used for enrichment unknown"
+    quality:
+      groundednessScore: null
+      citationCoverageScore: null
+      hallucinationRiskScore: null
+      actionabilityScore: null
+      duplicateInsightScore: null
+    lastChangedAt: null
+    notes: "Taxonomy-driven automatic analysis: theme tags, persona cohorts, product/competitor matching."

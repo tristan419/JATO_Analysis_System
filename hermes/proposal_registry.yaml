@@ -1,0 +1,117 @@
+# Hermes Proposal Registry
+# Phase 1 — initial proposals based on Phase 0 governance gaps
+# IMPORTANT: All proposals require human review. Do not auto-execute.
+
+proposals:
+  - proposalId: proposal.prompt.versioning
+    type: prompt_versioning
+    title: "Version the 3 hardcoded Country Copilot prompts"
+    summary: "Extract the 3 inline prompt strings from country_chat_service.py and routes/assistant.py into versioned template files. Add prompt version to Prompt Registry. Create prompt changelog."
+    affectedFeatures:
+      - "feature.country_copilot"
+    affectedPipelines: []
+    affectedSources: []
+    affectedPrompts:
+      - "prompt.country_copilot.nvidia_system"
+      - "prompt.country_copilot.deepseek_system"
+      - "prompt.country_copilot.deepseek_stream"
+    riskLevel: low
+    expectedImpact: "Prompt changes become independently trackable. No functional change to LLM behavior."
+    rollbackPlan: "Revert to inline prompt strings. Templates are wrappers only."
+    status: draft
+    createdAt: "2026-05-14"
+    notes: "Do not change prompt content in this proposal. Extract only."
+
+  - proposalId: proposal.pipeline.news_dedup
+    type: pipeline_dedup
+    title: "Resolve duplicate Country News Sync scheduling"
+    summary: "Decide single production scheduler for Country News Sync. Recommended: keep systemd timer (runs on server with direct DB access), deprecate Airflow DAG or change to manual-only. Document decision in ADR."
+    affectedFeatures:
+      - "feature.country_copilot"
+      - "feature.data_management"
+    affectedPipelines:
+      - "pipeline.news.country_systemd"
+      - "pipeline.news.country_airflow"
+    affectedSources:
+      - "source.news.batch_a"
+    affectedPrompts: []
+    riskLevel: medium
+    expectedImpact: "Eliminates double ingestion risk. Reduces operational complexity. Saves ~6h of redundant RSS fetch per day."
+    rollbackPlan: "Re-enable Airflow DAG schedule if systemd timer proves unreliable."
+    status: draft
+    createdAt: "2026-05-14"
+    notes: "GitHub Actions schedule already removed 2026-05-14. This proposal resolves the remaining systemd/Airflow duplication."
+
+  - proposalId: proposal.env.startup_validation
+    type: env_hardening
+    title: "Add startup validation for critical environment variables"
+    summary: "Add fast-fail validation at backend startup that checks: APP_DATABASE_ENABLED=true requires APP_DATABASE_URL non-empty. DEEPSEEK_API_KEY required if Country Copilot is enabled. Output clear error messages instead of silent failures or confusing RuntimeErrors."
+    affectedFeatures:
+      - "feature.country_copilot"
+      - "feature.data_management"
+    affectedPipelines:
+      - "pipeline.news.country_systemd"
+      - "pipeline.voc.forum_systemd"
+    affectedSources: []
+    affectedPrompts: []
+    riskLevel: low
+    expectedImpact: "Faster diagnosis of misconfigured deployments. Prevents silent failures in scheduled jobs."
+    rollbackPlan: "Remove validation checks. Backend starts with previous behavior."
+    status: draft
+    createdAt: "2026-05-14"
+    notes: "Do not print secret values in validation messages."
+
+  - proposalId: proposal.test.integration_contract
+    type: test_coverage
+    title: "Add minimum integration and contract tests"
+    summary: "Add: (1) API contract tests for 3 critical endpoints (market-scan/deck, assistant/country/chat, analysis/query). (2) One end-to-end pipeline test: ETL → Market Scan API → frontend type check. (3) Frontend type snapshot test vs backend serializer output."
+    affectedFeatures:
+      - "feature.market_scan"
+      - "feature.country_copilot"
+      - "feature.dashboard"
+    affectedPipelines:
+      - "pipeline.jato.etl"
+    affectedSources: []
+    affectedPrompts: []
+    riskLevel: medium
+    expectedImpact: "Catches API contract breaks before deployment. Reduces regression risk for critical user-facing features."
+    rollbackPlan: "Tests are additive. Remove if they cause CI flakiness."
+    status: draft
+    createdAt: "2026-05-14"
+    notes: "Start small — 3 contract tests + 1 E2E test. Expand incrementally."
+
+  - proposalId: proposal.source_quality.voc_tracking
+    type: source_quality_tracking
+    title: "Add per-source VOC failure tracking"
+    summary: "Enhance voc_fetcher.py to output a structured failed_sources.json with: source code, country, error type (timeout/403/parse_error), timestamp. Accumulate failure history for source health trending. Surface in Data Management VOC observatory."
+    affectedFeatures:
+      - "feature.customer_insights"
+      - "feature.data_management"
+    affectedPipelines:
+      - "pipeline.voc.forum_systemd"
+    affectedSources:
+      - "source.voc.batch_a"
+    affectedPrompts: []
+    riskLevel: low
+    expectedImpact: "Enables data-driven decisions about source retirement. Reduces manual troubleshooting time."
+    rollbackPlan: "Remove failed_sources.json generation. VOC pipeline unchanged."
+    status: draft
+    createdAt: "2026-05-14"
+    notes: "voc-failed-sources.json generation scaffold added 2026-05-14. This proposal tracks actual per-source data."
+
+  - proposalId: proposal.backlog.triage_prd_features
+    type: backlog_triage
+    title: "Triage PRD-only features: presence_websocket and ranking_trend"
+    summary: "Review the two PRD-only features. For each: decide to implement (with timeline), defer (with conditions), or archive (with reason). Update Feature Registry status accordingly."
+    affectedFeatures:
+      - "feature.presence_websocket"
+      - "feature.ranking_trend_drilldown"
+    affectedPipelines: []
+    affectedSources: []
+    affectedPrompts: []
+    riskLevel: low
+    expectedImpact: "Clarifies roadmap. Prevents stale PRDs from accumulating."
+    rollbackPlan: "Re-open PRD if business need emerges."
+    status: draft
+    createdAt: "2026-05-14"
+    notes: "RankingTrendDrawer.tsx already exists as a partial implementation."

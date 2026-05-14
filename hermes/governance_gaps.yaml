@@ -1,0 +1,186 @@
+# Hermes Governance Gaps Registry
+# Phase 1 — all gaps identified in Phase 0 REPOSITORY_ASSET_MAP.md
+
+gaps:
+  # --- Prompt Gaps ---
+  - gapId: gap.prompt.unversioned_python_prompts
+    title: "3 LLM prompts hardcoded in Python without versioning"
+    category: prompt
+    severity: medium
+    affectedAssets:
+      - "prompt.country_copilot.nvidia_system"
+      - "prompt.country_copilot.deepseek_system"
+      - "prompt.country_copilot.deepseek_stream"
+    evidence:
+      - "All prompts are inline string constants in country_chat_service.py and routes/assistant.py"
+      - "No version scheme, no changelog, no prompt template files"
+      - "Prompt changes cannot be tracked independently of code changes"
+    recommendedAction: "Extract prompts to versioned template files. Add prompt version to Prompt Registry. Track changes in prompt changelog."
+    status: open
+    owner: ""
+    notes: ""
+
+  # --- Pipeline Gaps ---
+  - gapId: gap.pipeline.duplicate_news_scheduling
+    title: "Country News Sync duplicated between systemd timer and Airflow DAG"
+    category: pipeline
+    severity: high
+    affectedAssets:
+      - "pipeline.news.country_systemd"
+      - "pipeline.news.country_airflow"
+    evidence:
+      - "systemd timer: OnCalendar=*-*-* 23:15:00 UTC"
+      - "Airflow DAG: cron 15 6 * * * (06:15 UTC)"
+      - "Both write to ops.country_news_digest table"
+      - "Risk of double ingestion, duplicate articles, wasted API calls"
+    recommendedAction: "Decide single production scheduler. Recommended: keep systemd timer (runs on server, direct DB access). Deprecate Airflow DAG or change to manual-only."
+    status: open
+    owner: ""
+    notes: "GitHub Actions schedule was already removed (2026-05-14). Airflow DAG is the remaining duplicate."
+
+  - gapId: gap.pipeline.news_batch_b_unscheduled
+    title: "News Batch B (12 countries) has no scheduled fetch"
+    category: pipeline
+    severity: medium
+    affectedAssets:
+      - "source.news.batch_b"
+      - "feature.country_copilot"
+    evidence:
+      - "Batch B config exists at 07_ScrapingToolkit/news_sources/batch_b.yaml"
+      - "No systemd timer or Airflow DAG triggers Batch B"
+      - "12 Western/Southern European countries without automated news coverage"
+    recommendedAction: "Add Batch B to existing news systemd timer, or create separate timer with offset schedule to avoid overwhelming RSS sources."
+    status: open
+    owner: ""
+    notes: ""
+
+  # --- Environment Gaps ---
+  - gapId: gap.env.empty_critical_vars
+    title: "Critical env vars empty or commented out in example files"
+    category: env
+    severity: high
+    affectedAssets:
+      - "jato-fullstack-backend.env.example"
+      - "All systemd services depending on backend.env"
+    evidence:
+      - "APP_DATABASE_ENABLED=false (default — prevents all DB writes)"
+      - "APP_DATABASE_URL= (empty)"
+      - "DEEPSEEK_API_KEY= (commented out in 2026-05-14 fix)"
+      - "GEMINI_API_KEY= (commented out)"
+      - "No clear setup instructions for production values"
+    recommendedAction: "Add startup validation that fails fast with clear error if DB is enabled but URL is empty. Add setup instructions in TENCENT_CLOUD_DEPLOY.md."
+    status: open
+    owner: ""
+    notes: "Partially addressed 2026-05-14: secrets commented out in example. Still needs startup validation."
+
+  # --- Test Gaps ---
+  - gapId: gap.test.missing_integration_contract_tests
+    title: "No integration tests or contract tests"
+    category: test
+    severity: medium
+    affectedAssets:
+      - "All backend services"
+      - "All frontend pages"
+    evidence:
+      - "tests/unit/ directory has 40 test files — all unit tests"
+      - "No tests/integration/ directory found"
+      - "No contract tests between frontend types and backend serializers"
+      - "No pipeline end-to-end tests"
+    recommendedAction: "Add at minimum: (1) API contract tests for critical endpoints, (2) one end-to-end pipeline test for the most critical flow (e.g., JATO ETL → Market Scan API → Frontend render)."
+    status: open
+    owner: ""
+    notes: ""
+
+  # --- Source Quality Gaps ---
+  - gapId: gap.source_quality.voc_errors_untracked
+    title: "VOC source errors not systematically tracked"
+    category: source_quality
+    severity: medium
+    affectedAssets:
+      - "source.voc.batch_a"
+      - "pipeline.voc.forum_systemd"
+    evidence:
+      - "Last VOC run: 40 raw artifacts, 8 source errors — but errors not tracked per-source"
+      - "No structured failed_sources.json with per-source error details"
+      - "No source health trending over time"
+    recommendedAction: "Add per-source error tracking to voc_fetcher.py. Output failed_sources.json with source code, error type, and timestamp. Surface in Data Management VOC observatory."
+    status: open
+    owner: ""
+    notes: "voc-failed-sources.json generation added 2026-05-14 but needs verification."
+
+  - gapId: gap.source_quality.no_quality_scoring
+    title: "No systematic source quality scoring"
+    category: source_quality
+    severity: medium
+    affectedAssets:
+      - "All source types (news, voc, msrp)"
+    evidence:
+      - "Source Registry quality fields are all null"
+      - "No successRate, timeoutRate, http403Rate, extractionQualityScore tracked"
+      - "No source health dashboard"
+    recommendedAction: "Implement per-source quality scoring in crawler output. Write scores to Source Registry. Add source health view to Data Management."
+    status: open
+    owner: ""
+    notes: ""
+
+  # --- Backlog Gaps ---
+  - gapId: gap.backlog.prd_only_features
+    title: "Two PRDs written but not implemented"
+    category: backlog
+    severity: low
+    affectedAssets:
+      - "feature.presence_websocket"
+      - "feature.ranking_trend_drilldown"
+    evidence:
+      - "01_DevWorkflow/presence_websocket_prd.md exists"
+      - "01_DevWorkflow/ranking_trend_drilldown_prd.md exists"
+      - "Neither feature has backend or frontend implementation found in Phase 0 scan"
+      - "RankingTrendDrawer.tsx exists but may be incomplete"
+    recommendedAction: "Triage: decide to implement, defer, or archive each PRD. Update feature status accordingly."
+    status: open
+    owner: ""
+    notes: ""
+
+  # --- Documentation Gaps ---
+  - gapId: gap.docs.no_runbook
+    title: "No operational runbook for scheduled fetch failure recovery"
+    category: docs
+    severity: medium
+    affectedAssets:
+      - "All scheduled pipelines"
+    evidence:
+      - "No runbook document found in 04_DevOps/ or elsewhere"
+      - "No documented recovery procedure for: VOC 203/EXEC, news DB connection failure, MSRP dry-run 404s"
+    recommendedAction: "Create SCHEDULED_FETCH_OPERATIONS.md with: manual test commands, journalctl troubleshooting, artifact paths, failure recovery steps."
+    status: open
+    owner: ""
+    notes: ""
+
+  - gapId: gap.docs.no_adr
+    title: "No Architecture Decision Log (ADR)"
+    category: docs
+    severity: low
+    affectedAssets:
+      - "All architectural decisions"
+    evidence:
+      - "No ADR directory or file found"
+      - "Key decisions (DeepSeek vs NVIDIA, systemd vs Airflow, Parquet vs DuckDB) not documented with rationale"
+    recommendedAction: "Create hermes/audits/adr/ directory. Write ADR-0001 for the first architectural decision. Backfill critical past decisions."
+    status: open
+    owner: ""
+    notes: ""
+
+  # --- Feature Gaps ---
+  - gapId: gap.feature.no_owner_tracking
+    title: "No feature owner tracking"
+    category: feature
+    severity: low
+    affectedAssets:
+      - "All 12+ features"
+    evidence:
+      - "All feature registry entries have owner: ''"
+      - "No accountability for feature maintenance"
+    recommendedAction: "Assign owners to each feature. Update Feature Registry."
+    status: open
+    owner: ""
+    notes: ""
