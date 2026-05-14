@@ -100,7 +100,7 @@ _write_voc_status_json() {
   local last_error="$5"
   local started_at="$6"
 
-  python - <<'PY' "$status_path" "$status" "$raw_count" "$enriched_count" "$last_error" "$started_at"
+  python - "$status_path" "$status" "$raw_count" "$enriched_count" "$last_error" "$started_at" <<'PY'
 import json, os, sys
 from datetime import datetime, timezone
 
@@ -240,10 +240,10 @@ fi
 echo "[INFO] VOC raw artifacts: $RAW_COUNT"
 
 if [[ -f "$RAW_SUMMARY_PATH" ]]; then
-  python - <<'PY' > "$RAW_FAILED_SOURCES" 2>/dev/null || true
+  python - "$RAW_SUMMARY_PATH" > "$RAW_FAILED_SOURCES" 2>/dev/null <<'PY' || true
 import json, sys
 try:
-    data = json.load(open(sys.argv[1] if len(sys.argv) > 1 else "/dev/stdin"))
+    data = json.load(open(sys.argv[1]))
     failed = [
         {"source": s.get("source",""), "country": s.get("country",""), "error": s.get("error","")}
         for s in (data if isinstance(data, list) else [data])
@@ -252,7 +252,7 @@ try:
     json.dump({"failedSources": failed, "failedCount": len(failed)}, sys.stdout, indent=2)
 except Exception:
     pass
-PY "$RAW_SUMMARY_PATH"
+PY
 fi
 
 VOC_FAILED_SOURCE_COUNT=0
