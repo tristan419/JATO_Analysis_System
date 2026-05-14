@@ -37,6 +37,7 @@ import type {
   JatoMonthlyUpdateUpload,
   MarketScanDeckRequest,
   MarketScanDeckResponse,
+  RankingTrendResponse,
   ModelVersionsResponse,
   OverviewResponse,
   PositioningPricingDeckRequest,
@@ -1388,6 +1389,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  rankingTrend: (params: Record<string, string>) => {
+    const qs = new URLSearchParams(params).toString();
+    return request<RankingTrendResponse>(`/market-scan/ranking-trend?${qs}`);
+  },
   positioningPricingDeck: (payload: PositioningPricingDeckRequest = {}) =>
     request<PositioningPricingDeckResponse>("/market-scan/positioning-pricing-deck", {
       method: "POST",

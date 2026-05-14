@@ -14,6 +14,7 @@ from app.services.customer_insight_service import (
 )
 from app.services.market_scan_service import (
     query_market_scan_deck,
+    query_ranking_trend,
     query_positioning_pricing_deck,
     query_version_comparison_deck,
 )
@@ -81,6 +82,34 @@ def version_comparison_deck(
         segments=payload.segments,
         length_min=payload.length_min,
         length_max=payload.length_max,
+    )
+
+
+@router.get("/ranking-trend")
+def ranking_trend(
+    country: str = Query(...),
+    brand: str = Query(...),
+    model: str | None = Query(default=None),
+    segment: str | None = Query(default=None),
+    source_table: str = Query(default="monthly_brand_ranking"),
+    fuel_types: list[str] | None = Query(default=None),
+    msrp_min: float | None = Query(default=None),
+    msrp_max: float | None = Query(default=None),
+    length_min: float | None = Query(default=None),
+    length_max: float | None = Query(default=None),
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    return query_ranking_trend(
+        country=country,
+        brand=brand,
+        model=model,
+        segment=segment,
+        source_table=source_table,
+        fuel_types=fuel_types,
+        msrp_min=msrp_min,
+        msrp_max=msrp_max,
+        length_min=length_min,
+        length_max=length_max,
     )
 
 

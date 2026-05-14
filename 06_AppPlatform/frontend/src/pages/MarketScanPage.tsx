@@ -46,6 +46,7 @@ import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefault
 import { useArrowCountryNavigation } from "../utils/useArrowCountryNavigation";
 import { useFixedCanvasPreview } from "../utils/useFixedCanvasPreview";
 import { SlideFitSummary } from "../components/SlideFitSummary";
+import { RankingTrendPopover } from "../components/RankingTrendDrawer";
 import {
   buildDefaultMarketScanSlideLayouts,
   buildMarketScanSlideFitAssessment,
@@ -700,211 +701,14 @@ function filterMatrixBySalesMode(
 }
 
 function buildHeroMetrics(
-  deck: MarketScanDeckResponse,
-  pageKey: MarketScanPageKey,
-  salesMode: MarketScanSalesMode,
-  customRangeActive = false,
+  _deck: MarketScanDeckResponse,
+  _pageKey: MarketScanPageKey,
+  _salesMode: MarketScanSalesMode,
+  _customRangeActive = false,
 ): HeroMetric[] {
-  if (pageKey === "overview") {
-    const { summary } = deck.results.overview;
-    if (customRangeActive && summary.customRangeYoY) {
-      return [
-        {
-          label: summary.customRangeLabel || "自定义区间",
-          value: formatVolume(summary.customRangeVolume),
-          detail: "区间累计销量",
-        },
-        {
-          label: "自定义区间 YoY",
-          value: summary.customRangeYoY.display,
-          detail: "区间累计同比",
-          tone: summary.customRangeYoY.tone,
-        },
-        {
-          label: "Rolling 12M",
-          value: formatVolume(summary.rolling12Volume),
-          detail: `截至 ${deck.metadata.labels.currentMonthShort}`,
-        },
-        {
-          label: "Rolling 12M YoY",
-          value: summary.rolling12YoY.display,
-          detail: "近12个月同比",
-          tone: summary.rolling12YoY.tone,
-        },
-      ];
-    }
-    if (salesMode === "ytd") {
-      return [
-        {
-          label: "YTD",
-          value: formatVolume(summary.ytdVolume),
-          detail: `截至 ${deck.metadata.labels.currentMonthShort}`,
-        },
-        {
-          label: "YTD YoY",
-          value: summary.ytdYoY.display,
-          detail: "累计同比",
-          tone: summary.ytdYoY.tone,
-        },
-        {
-          label: "Rolling 12M",
-          value: formatVolume(summary.rolling12Volume),
-          detail: `截至 ${deck.metadata.labels.currentMonthShort}`,
-        },
-        {
-          label: "Rolling 12M YoY",
-          value: summary.rolling12YoY.display,
-          detail: "近12个月同比",
-          tone: summary.rolling12YoY.tone,
-        },
-      ];
-    }
-    if (salesMode === "rolling12") {
-      return [
-        {
-          label: "Rolling 12M",
-          value: formatVolume(summary.rolling12Volume),
-          detail: `截至 ${deck.metadata.labels.currentMonthShort}`,
-        },
-        {
-          label: "Rolling 12M YoY",
-          value: summary.rolling12YoY.display,
-          detail: "近12个月同比",
-          tone: summary.rolling12YoY.tone,
-        },
-        {
-          label: deck.metadata.labels.currentMonthShort,
-          value: formatVolume(summary.currentMonthVolume),
-          detail: "当月销量",
-        },
-        {
-          label: "YoY",
-          value: summary.currentMonthYoY.display,
-          detail: "当月同比",
-          tone: summary.currentMonthYoY.tone,
-        },
-      ];
-    }
-    return [
-      {
-        label: deck.metadata.labels.currentMonthShort,
-        value: formatVolume(summary.currentMonthVolume),
-        detail: "当月销量",
-      },
-      {
-        label: "YoY",
-        value: summary.currentMonthYoY.display,
-        detail: "当月同比",
-        tone: summary.currentMonthYoY.tone,
-      },
-      {
-        label: "YTD",
-        value: formatVolume(summary.ytdVolume),
-        detail: `截至 ${deck.metadata.labels.currentMonthShort}`,
-      },
-      {
-        label: "YTD YoY",
-        value: summary.ytdYoY.display,
-        detail: "累计同比",
-        tone: summary.ytdYoY.tone,
-      },
-    ];
-  }
-
-  if (pageKey === "origin") {
-    const currentRow = customRangeActive
-      ? (deck.results.origin.customRangeMatrixRow ?? undefined)
-      : matrixRow(deck.results.origin.matrix, marketScanVolumeMetricKey(salesMode, false));
-    const deltaRow = customRangeActive
-      ? (deck.results.origin.customRangeYoYMatrixRow ?? undefined)
-      : matrixRow(deck.results.origin.matrix, marketScanDeltaMetricKey(salesMode, false));
-    const leader = topCell(currentRow);
-    const total = currentRow?.cells.reduce((sum, cell) => sum + Number(cell.value ?? 0), 0) ?? 0;
-    const deltaLeader = topCell(deltaRow);
-    const customRangeLabel = deck.results.overview.summary.customRangeLabel;
-    return [
-      {
-        label: marketScanWindowLabel(salesMode, deck.metadata.labels.currentMonthShort, customRangeActive ? customRangeLabel : undefined),
-        value: formatVolume(total),
-        detail: marketScanWindowDetail(salesMode, deck.metadata.labels.currentMonthShort, customRangeActive),
-      },
-      {
-        label: "Leading Origin",
-        value: leader?.key ?? "-",
-        detail: leader ? `${formatVolume(leader.value)} 台` : "暂无数据",
-      },
-      {
-        label: marketScanDeltaLabel(salesMode, customRangeActive),
-        value: deltaLeader?.key ?? "-",
-        detail: deltaLeader ? deltaRow?.cells.find((cell) => cell.key === deltaLeader.key)?.display ?? "-" : "暂无变化",
-      },
-    ];
-  }
-
-  if (pageKey === "segment") {
-    const currentRow = matrixRow(deck.results.segment.matrix, marketScanVolumeMetricKey(salesMode, customRangeActive));
-    const leader = topCell(currentRow);
-    const lastPoint = deck.results.segment.bodyShareTrend.items[
-      deck.results.segment.bodyShareTrend.items.length - 1
-    ];
-    return [
-      {
-        label: deck.metadata.labels.currentMonthShort,
-        value: formatPercent(lastPoint?.suvSharePct ?? null),
-        detail: "SUV 占比",
-      },
-      {
-        label: "Sedan Share",
-        value: formatPercent(lastPoint?.sedanSharePct ?? null),
-        detail: "轿车占比",
-      },
-      {
-        label: "Top Bucket",
-        value: leader?.key ?? "-",
-        detail: leader
-          ? `${formatVolume(leader.value)} ${marketScanVolumeSuffix(salesMode, customRangeActive)}`
-          : "暂无数据",
-      },
-    ];
-  }
-
-  const drilldown = deck.results[pageKey] as MarketScanDrilldownPage;
-  const activeWindow = marketScanActiveDrilldownWindow(
-    drilldown,
-    salesMode,
-    customRangeActive,
-    deck.results.overview.summary.customRangeLabel,
-  );
-  const activeRanking = activeWindow.ranking;
-  const activeFuelTrend = activeWindow.fuelTrend;
-  const leader = activeRanking.items[0];
-  const lastTrend = activeFuelTrend.items[activeFuelTrend.items.length - 1];
-  return [
-    {
-      label: drilldown.segmentLabel,
-      value: leader ? rankingItemLabel(leader) : "-",
-      detail: leader ? `榜首 ${formatVolume(leader.volume)} 台` : "暂无榜首车型",
-    },
-    {
-      label: "Leader Share",
-      value: leader ? formatPercent(leader.sharePct) : "-",
-      detail: "榜首份额",
-    },
-    {
-      label: activeWindow.heroWindowLabel,
-      value: lastTrend?.label
-        ?? (
-          activeWindow.heroWindowValue
-          || (salesMode === "month"
-            ? deck.metadata.labels.currentMonthShort
-            : salesMode === "ytd"
-              ? "YTD"
-              : `L12M ${deck.metadata.labels.currentMonthShort}`)
-        ),
-      detail: lastTrend ? `${formatVolume(lastTrend.totalVolume)} 台` : "暂无销量趋势",
-    },
-  ];
+  return [];
 }
+
 
 function pageNarrative(deck: MarketScanDeckResponse, pageKey: MarketScanPageKey): string {
   if (deck.metadata.customRangeActive) {
@@ -1767,9 +1571,11 @@ function RankingGroup({
 function BrandModelRankingGroup({
   group,
   compact = false,
+  onBrandClick,
 }: {
   group: MarketScanRankingGroup;
   compact?: boolean;
+  onBrandClick?: (brand: string, sourceTable: string) => void;
 }) {
   if (group.items.length === 0) {
     return <div className="market-scan-empty">暂无排行数据。</div>;
@@ -1791,15 +1597,21 @@ function BrandModelRankingGroup({
           })
           .join(" | ");
 
+        const label = rankingItemLabel(item);
         return (
           <article
-            key={`${rankingItemLabel(item)}-${item.rank}`}
-            className="market-scan-ranking-row market-scan-ranking-row--monthly"
+            key={`${label}-${item.rank}`}
+            className="market-scan-ranking-row market-scan-ranking-row--monthly market-scan-ranking-row--clickable"
+            title={`View ${label} trend →`}
+            role="button"
+            tabIndex={0}
+            onClick={() => onBrandClick?.(label, group.title.includes("YTD") ? "ytd_brand_ranking" : "monthly_brand_ranking")}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onBrandClick?.(label, group.title.includes("YTD") ? "ytd_brand_ranking" : "monthly_brand_ranking"); } }}
           >
             <div className="market-scan-ranking-row-rank">{String(item.rank).padStart(2, "0")}</div>
             <div className="market-scan-ranking-row-info">
               <div className="market-scan-ranking-row-head">
-                <span className="market-scan-ranking-row-name">{rankingItemLabel(item)}</span>
+                <span className="market-scan-ranking-row-name">{label}</span>
                 <div className="market-scan-ranking-row-nums">
                   <span>{formatVolume(item.volume)}</span>
                   <span className="market-scan-tag">{marketShareLabel(item)}</span>
@@ -1962,6 +1774,7 @@ function OverviewSection({
   showDataLabels,
   exportSettings,
   compact = false,
+  onBrandClick,
 }: {
   labels: MarketScanDeckResponse["metadata"]["labels"];
   page: MarketScanOverviewPage;
@@ -1972,6 +1785,7 @@ function OverviewSection({
   showDataLabels: boolean;
   exportSettings: ExportSettings;
   compact?: boolean;
+  onBrandClick?: (brand: string, sourceTable: string) => void;
 }) {
   const insight = buildOverviewInsight(page);
   const rankingGroups = marketScanOverviewRankingGroups(page, salesMode, customRangeActive);
@@ -2044,7 +1858,8 @@ function OverviewSection({
           eyebrow={index === 0 ? "Ranking · Active" : "Ranking · Alt"}
           title={group.title}
         >
-          <BrandModelRankingGroup group={group} compact={compact} />
+          <BrandModelRankingGroup group={group} compact={compact}
+            onBrandClick={onBrandClick} />
         </Panel>
       ))}
     </div>
@@ -2538,6 +2353,9 @@ export function MarketScanPage() {
   const [exportingSlide, setExportingSlide] = useState(false);
   const [exportSettings, setExportSettings] = useState<ExportSettings>({ ...DEFAULT_MARKET_SCAN_EXPORT });
   const [exportToolsOpen, setExportToolsOpen] = useState(false);
+  const [trendDrawer, setTrendDrawer] = useState<{
+    open: boolean; brand: string; model?: string; sourceTable: string;
+  }>({ open: false, brand: "", sourceTable: "monthly_brand_ranking" });
   const [slideEditMode, setSlideEditMode] = useState(false);
   const [slideLayouts, setSlideLayouts] = useState<Record<MarketScanPageKey, SlideLayoutSettings>>(
     () => readStoredSlideLayouts(
@@ -2794,6 +2612,7 @@ export function MarketScanPage() {
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
+          onBrandClick={(brand, sourceTable) => setTrendDrawer({ open: true, brand, sourceTable })}
         />
       );
     }
@@ -2918,6 +2737,7 @@ export function MarketScanPage() {
   }
 
   return (
+    <>
     <div className="market-scan-shell">
       <div className="market-scan-main">
         <CollapsibleDeckHero
@@ -3261,5 +3081,18 @@ export function MarketScanPage() {
         ) : null}
       </div>
     </div>
+    <RankingTrendPopover
+      open={trendDrawer.open}
+      brand={trendDrawer.brand}
+      model={trendDrawer.model}
+      sourceTable={trendDrawer.sourceTable}
+      country={selectedCountry || ""}
+      segment={activePage === "drilldown" ? selectedDrilldownSegment : undefined}
+      fuelTypes={selectedFuelTypes}
+      onClose={() => setTrendDrawer({ open: false, brand: "", sourceTable: "monthly_brand_ranking" })}
+      onBack={trendDrawer.model ? () => setTrendDrawer((p) => ({ ...p, model: undefined })) : undefined}
+      onModelClick={(m) => setTrendDrawer((p) => ({ ...p, model: m }))}
+    />
+    </>
   );
 }

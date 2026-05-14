@@ -895,6 +895,36 @@ export interface VersionComparisonDeckResponse {
   page: VersionComparisonPage;
 }
 
+export interface RankingTrendPoint {
+  month: string;
+  sales: number;
+  ytdSales: number;
+  marketShare: number;
+  msrpMin: number;
+  msrpMax: number;
+  msrpAvg: number;
+}
+
+export interface RankingTrendResponse {
+  entityType: "brand" | "model";
+  brand: string;
+  model?: string | null;
+  context: {
+    country: string;
+    segment?: string | null;
+    sourceTable: string;
+    filtersApplied: boolean;
+  };
+  summary: {
+    currentMonthSales: number;
+    ytdSales: number;
+    marketShare: number;
+    rankChange: number;
+  };
+  trend: RankingTrendPoint[];
+  topModels?: { model: string; sales: number; shareWithinBrand: number }[];
+}
+
 export interface VersionComparisonDeckRequest {
   country?: string | null;
   target_period?: string | null;

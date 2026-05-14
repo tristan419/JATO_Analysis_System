@@ -7945,6 +7945,30 @@ table.data-table tr.data-table-group-row.contains-selection td {
   background: #f8fafc;
 }
 
+.market-scan-ranking-row--clickable { cursor: pointer; }
+.market-scan-ranking-row--clickable:hover { border-color: rgba(28,105,212,0.25); background: linear-gradient(180deg, rgba(28,105,212,0.04) 0%, rgba(28,105,212,0.02) 100%); }
+.market-scan-ranking-row--clickable:focus-visible { outline: 2px solid #0653b6; outline-offset: -2px; }
+
+/* --- Ranking Trend Popover --- */
+.ranking-popover-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(15,23,42,0.12); }
+.ranking-popover { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 480px; max-height: 85vh; background: #fff; border: 1px solid rgba(15,23,42,0.12); box-shadow: 0 12px 40px rgba(15,23,42,0.15); display: flex; flex-direction: column; z-index: 61; }
+.ranking-popover-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid rgba(15,23,42,0.06); flex-shrink: 0; }
+.ranking-popover-head-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ranking-popover-back { width: 24px; height: 24px; border: 1px solid rgba(15,23,42,0.12); background: #fff; font-size: 14px; cursor: pointer; border-radius: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.ranking-popover-title { font-size: 13px; font-weight: 700; color: #1e293b; display: block; }
+.ranking-popover-subtitle { font-size: 11px; color: #64748b; }
+.ranking-popover-close { width: 24px; height: 24px; border: none; background: transparent; font-size: 18px; color: #94a3b8; cursor: pointer; flex-shrink: 0; }
+.ranking-popover-body { padding: 10px 14px; overflow-y: auto; }
+.ranking-popover-summary { display: flex; gap: 16px; padding: 6px 0 8px; font-size: 11px; color: #64748b; }
+.ranking-popover-summary strong { color: #1e293b; font-weight: 700; }
+.ranking-popover-chart { margin-bottom: 8px; }
+.ranking-popover-section-label { display: block; font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+.ranking-popover-models { border-top: 1px solid rgba(15,23,42,0.06); padding-top: 8px; }
+.ranking-popover-model-chip { display: flex; justify-content: space-between; width: 100%; padding: 5px 8px; border: none; border-bottom: 1px solid rgba(15,23,42,0.04); background: transparent; cursor: pointer; font-family: inherit; font-size: 11px; text-align: left; }
+.ranking-popover-model-chip:hover { background: rgba(28,105,212,0.04); }
+.ranking-popover-model-chip span:first-child { font-weight: 700; color: #1e293b; }
+.ranking-popover-model-chip span:last-child { color: #64748b; }
+
 .version-comparison-selection-bank {
   grid-column: 1 / -1;
   display: flex;
