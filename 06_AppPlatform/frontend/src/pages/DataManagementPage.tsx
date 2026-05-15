@@ -1013,31 +1013,6 @@ export function DataManagementPage() {
         />
       ) : null}
 
-      {subpage === "admin" && overview ? (
-        <>
-          {/* Admin: CRUD entities moved from Overview */}
-          <div className="admin-tabs">
-            <button type="button" className={`admin-tab${crudTab === "msrp-sources" ? " is-active" : ""}`} onClick={() => setCrudTab("msrp-sources")}>MSRP Sources</button>
-            <button type="button" className={`admin-tab${crudTab === "engineering-projects" ? " is-active" : ""}`} onClick={() => setCrudTab("engineering-projects")}>Engineering</button>
-            <button type="button" className={`admin-tab${crudTab === "review-overrides" ? " is-active" : ""}`} onClick={() => setCrudTab("review-overrides")}>Review Overrides</button>
-          </div>
-          {crudTab === "msrp-sources" ? (
-            <div className="card crud-card"><div className="admin-card-header"><div><h2>MSRP Sources</h2></div></div>
-              <div style={{padding:16}}><p style={{color:"#64748b",fontSize:12}}>CRUD for MSRP sources. Full form available in the /msrp page.</p></div>
-            </div>
-          ) : crudTab === "engineering-projects" ? (
-            <div className="card crud-card"><div className="admin-card-header"><div><h2>Engineering Projects</h2></div></div>
-              <div style={{padding:16}}><p style={{color:"#64748b",fontSize:12}}>CRUD for engineering projects. Full form available in the /engineering page.</p></div>
-            </div>
-          ) : (
-            <div className="card crud-card"><div className="admin-card-header"><div><h2>Review Overrides</h2></div></div>
-              <div style={{padding:16}}><p style={{color:"#64748b",fontSize:12}}>CRUD for review overrides. Full form available in the /review page.</p></div>
-            </div>
-          )}
-          <AdminToolsNav />
-        </>
-      ) : null}
-
       {subpage !== "hermes" && subpage !== "admin" && overview ? (
         <>
           {/* Hermes summary strip — Overview only */}
@@ -1098,7 +1073,12 @@ export function DataManagementPage() {
               </div>
             </div>
           </div>
+        </>
+      ) : null}
 
+      {/* ═══════════ ADMIN TAB: domains, CRUD, Airflow, files, VOC sync ═══════════ */}
+      {subpage === "admin" && overview ? (
+        <>
           <div className="data-management-domain-grid">
             {overview.domains.map((domain) => (
               <article key={domain.key} className="card crud-card data-management-domain-card">
