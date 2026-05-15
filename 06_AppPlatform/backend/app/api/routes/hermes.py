@@ -1,22 +1,51 @@
 """Hermes Governance Layer — API routes.
 
-Reads Hermes JSON reports and registry files. Read-only. No modifications.
+Read/write Hermes JSON reports, registry files, and script execution.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 
 router = APIRouter(prefix="/hermes", tags=["hermes"])
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 HERMES_DIR = PROJECT_ROOT / "hermes"
+SCRIPTS_DIR = PROJECT_ROOT / "03_Scripts" / "hermes"
 REPORTS_DIR = HERMES_DIR / "reports"
+
+HERMES_SCRIPTS = {
+    "pipeline-audit": {"script": "hermes_pipeline_audit.py", "label": "Pipeline Audit", "desc": "Scan systemd/Airflow/GH Actions → health report"},
+    "source-quality": {"script": "hermes_source_quality.py", "label": "Source Quality", "desc": "Score VOC/News/MSRP source health 0-100"},
+    "cost-report":    {"script": "hermes_cost_report.py",    "label": "Cost Report",    "desc": "Flash/Pro cost vs 500 CNY budget"},
+    "code-audit":     {"script": "hermes_code_audit.py",     "label": "Code Audit",     "desc": "git diff → 10-rule scan", "args": ["--base", "main", "--head", "HEAD"]},
+    "intake":         {"script": "hermes_intake.py",         "label": "PRD Intake",      "desc": "PRD → impact report (needs --prd arg)", "args": []},
+    "evidence":       {"script": "hermes_evidence_writer.py","label": "Evidence Writer", "desc": "Extract facts from artifacts → JSONL"},
+    "answer-audit":   {"script": "hermes_answer_audit.py",   "label": "Answer Audit",    "desc": "Generate sample answer audits"},
+}
+
+HELP_TEXT = """
+Hermes CLI — available commands:
+
+  pipeline-audit  Scan systemd/Airflow/GH Actions → health report
+  source-quality  Score VOC/News/MSRP source health 0-100
+  cost-report     Flash/Pro cost vs 500 CNY budget
+  code-audit      git diff → 10-rule audit scan
+  intake          PRD impact analysis (needs --prd)
+  evidence        Extract structured evidence → JSONL
+  answer-audit    Generate sample answer audits
+
+Usage: POST /v1/hermes/run/{command}
+       GET  /v1/hermes/run/{command}/help
+"""
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -288,6 +317,70 @@ def hermes_architecture() -> dict:
         "modules": modules,
         "dependencies": deps,
         "routing": routing,
+    }
+
+
+# ── Script Execution ──────────────────────────────────────────────
+
+@router.get("/run/{command}/help")
+def hermes_run_help(command: str):
+    """Return help for a specific Hermes command."""
+    if command == "all":
+        return PlainTextResponse(HELP_TEXT)
+    info = HERMES_SCRIPTS.get(command)
+    if not info:
+        raise HTTPException(404, f"Unknown command: {command}. Try: {', '.join(HERMES_SCRIPTS)}")
+    return {
+        "command": command,
+        "script": info["script"],
+        "label": info["label"],
+        "desc": info["desc"],
+        "defaultArgs": info.get("args", []),
+    }
+
+
+@router.post("/run/{command}")
+def hermes_run(command: str):
+    """Execute a Hermes script and return its output."""
+    if command not in HERMES_SCRIPTS:
+        raise HTTPException(400, f"Unknown command: {command}. Available: {', '.join(HERMES_SCRIPTS)}")
+
+    info = HERMES_SCRIPTS[command]
+    script_path = SCRIPTS_DIR / info["script"]
+    if not script_path.is_file():
+        raise HTTPException(500, f"Script not found: {script_path}")
+
+    args = info.get("args", [])
+    cmd = [sys.executable, str(script_path)] + list(args)
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(PROJECT_ROOT),
+            capture_output=True, text=True, timeout=120,
+        )
+        return {
+            "command": command,
+            "script": info["script"],
+            "exitCode": result.returncode,
+            "stdout": result.stdout[-8000:],
+            "stderr": result.stderr[-2000:],
+            "status": "success" if result.returncode == 0 else "failed",
+        }
+    except subprocess.TimeoutExpired:
+        return {"command": command, "exitCode": -1, "stdout": "", "stderr": "Timeout after 120s", "status": "timeout"}
+    except Exception as exc:
+        return {"command": command, "exitCode": -1, "stdout": "", "stderr": str(exc), "status": "error"}
+
+
+@router.get("/run")
+def hermes_list_commands():
+    """List all available Hermes run commands."""
+    return {
+        "commands": {
+            cmd: {"label": info["label"], "desc": info["desc"], "hasDefaultArgs": bool(info.get("args"))}
+            for cmd, info in HERMES_SCRIPTS.items()
+        }
     }
 
 

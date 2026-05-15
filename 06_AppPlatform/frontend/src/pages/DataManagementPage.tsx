@@ -832,6 +832,42 @@ export function DataManagementPage() {
               </div>
             </div>
 
+            {/* ---------- Operations: Run Hermes Scripts ---------- */}
+            <div className="card crud-card">
+              <div className="admin-card-header"><div><h2>Operations — Run Hermes Scripts from UI</h2></div></div>
+              <div style={{ padding: 16 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+                  {["pipeline-audit","source-quality","cost-report","code-audit","evidence","answer-audit"].map((cmd) => (
+                    <button key={cmd} type="button" className="btn btn-sm btn-primary"
+                      style={{ fontSize: 12 }}
+                      onClick={() => {
+                        setHermesLoading(true);
+                        api.hermesRun(cmd).then((res) => {
+                          const el = document.getElementById(`hermes-run-output-${cmd}`);
+                          if (el) el.textContent = JSON.stringify(res, null, 2);
+                          // Refresh related data
+                          if (cmd === "pipeline-audit") api.hermesPipelineHealth().then(setHermesPipelines);
+                          if (cmd === "source-quality") api.hermesSourceQuality().then(setHermesSources);
+                          if (cmd === "cost-report") api.hermesCost().then(setHermesCost);
+                        }).catch((e) => {
+                          const el = document.getElementById(`hermes-run-output-${cmd}`);
+                          if (el) el.textContent = String(e);
+                        }).finally(() => setHermesLoading(false));
+                      }}
+                    >
+                      Run {cmd.replace("-"," ")}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ background: "#1e293b", color: "#e2e8f0", borderRadius: 8, padding: 12, fontFamily: "monospace", fontSize: 11, maxHeight: 200, overflow: "auto", whiteSpace: "pre-wrap" }}>
+                  {(["pipeline-audit","source-quality","cost-report","code-audit","evidence","answer-audit"] as string[]).map((cmd) => (
+                    <div key={cmd} id={`hermes-run-output-${cmd}`} style={{ display: "none" }} />
+                  ))}
+                  <span style={{ color: "#64748b" }}>Click a Run button above. Output appears here.</span>
+                </div>
+              </div>
+            </div>
+
             {/* ---------- 当前状态 ---------- */}
             <div className="card crud-card">
               <div className="admin-card-header"><div><h2>Current Status</h2></div></div>

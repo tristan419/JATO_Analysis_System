@@ -31,3 +31,4 @@ tmp/
 # local vector DB artifacts
 04_Processed_data/chroma_db/
 .gitnexus
+.hermes_server_snapshot/
