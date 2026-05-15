@@ -3,9 +3,11 @@ import { Navigate, createBrowserRouter, RouterProvider } from "react-router-dom"
 
 import { SharedFilterScopeProvider } from "./contexts/SharedFilterScopeContext";
 import { CountryChatProvider } from "./contexts/CountryChatContext";
+import { AuthProvider } from "./contexts/AuthContext";
 import { Layout } from "./components/Layout";
 import { LoadingSurface } from "./components/LoadingSurface";
 import { DashboardPage } from "./pages/DashboardPage";
+import { LoginPage } from "./pages/LoginPage";
 
 const DataManagementPage = lazy(() =>
   import("./pages/DataManagementPage").then((module) => ({ default: module.DataManagementPage }))
@@ -57,13 +59,23 @@ function withPageLoader(node: ReactNode) {
 
 const router = createBrowserRouter([
   {
+    path: "/login",
+    element: (
+      <AuthProvider>
+        <LoginPage />
+      </AuthProvider>
+    ),
+  },
+  {
     path: "/",
     element: (
-      <SharedFilterScopeProvider>
-        <CountryChatProvider>
-          <Layout />
-        </CountryChatProvider>
-      </SharedFilterScopeProvider>
+      <AuthProvider>
+        <SharedFilterScopeProvider>
+          <CountryChatProvider>
+            <Layout />
+          </CountryChatProvider>
+        </SharedFilterScopeProvider>
+      </AuthProvider>
     ),
     children: [
       { index: true, element: <DashboardPage /> },
