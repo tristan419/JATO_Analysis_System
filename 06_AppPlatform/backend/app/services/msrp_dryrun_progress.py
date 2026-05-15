@@ -159,12 +159,39 @@ def _list_historical_runs() -> list[dict[str, Any]]:
             continue
         try:
             data = json.loads(report_file.read_text())
-            # Prefer explicit savedAt, fall back to file mtime
             saved_at = data.get("savedAt")
             if saved_at:
                 ts = saved_at
             else:
                 ts = datetime.fromtimestamp(report_file.stat().st_mtime, tz=timezone.utc).isoformat()
+
+            # Per-country breakdown from results array
+            by_country: dict[str, dict[str, int]] = {}
+            for r in data.get("results") or []:
+                cc = str(r.get("country", "")).strip().lower()
+                if not cc:
+                    continue
+                if cc not in by_country:
+                    by_country[cc] = {"pass": 0, "empty": 0, "fail": 0, "total": 0}
+                st = r.get("status", "empty")
+                if st in ("pass", "dry_run"):
+                    by_country[cc]["pass"] += 1
+                elif st == "empty":
+                    by_country[cc]["empty"] += 1
+                else:
+                    by_country[cc]["fail"] += 1
+                by_country[cc]["total"] += 1
+
+            countries_detail = [
+                {
+                    "countryCode": c, "countryLabel": _country_label(c),
+                    "total": v["total"], "pass": v["pass"],
+                    "empty": v["empty"], "fail": v["fail"],
+                    "passRate": round(v["pass"] / max(v["total"], 1) * 100, 1),
+                }
+                for c, v in sorted(by_country.items())
+            ]
+
             runs.append({
                 "batch": data.get("batch", ""),
                 "countries": data.get("countries", []),
@@ -176,11 +203,11 @@ def _list_historical_runs() -> list[dict[str, Any]]:
                 "passRate": round(data.get("pass", 0) / max(data.get("total", 1), 1) * 100, 1),
                 "timestamp": ts if isinstance(ts, str) else ts.isoformat() if hasattr(ts, 'isoformat') else str(ts),
                 "file": report_file.name,
+                "countriesDetail": countries_detail,
             })
         except (json.JSONDecodeError, KeyError):
             continue
 
-    # Limit to 30 most recent
     return runs[:30]
 
 

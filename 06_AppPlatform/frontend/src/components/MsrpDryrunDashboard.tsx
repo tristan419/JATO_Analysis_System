@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { Fragment, useEffect, useState, useCallback } from "react";
 import { api } from "../api/client";
 
 interface DryrunSource {
@@ -39,6 +39,16 @@ interface DryrunCurrent {
   reason?: string;
 }
 
+interface DryrunHistoryCountry {
+  countryCode: string;
+  countryLabel: string;
+  total: number;
+  pass: number;
+  empty: number;
+  fail: number;
+  passRate: number;
+}
+
 interface DryrunHistoryRun {
   batch: string;
   countries: string[];
@@ -50,6 +60,7 @@ interface DryrunHistoryRun {
   passRate: number;
   timestamp: string;
   file: string;
+  countriesDetail?: DryrunHistoryCountry[];
 }
 
 interface DryrunDashboard {
@@ -85,6 +96,7 @@ export function MsrpDryrunDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [expandedCountry, setExpandedCountry] = useState<string | null>(null);
+  const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
 
   const fetchData = useCallback(async () => {
@@ -241,14 +253,13 @@ export function MsrpDryrunDashboard() {
       {/* ── History ── */}
       {history.length > 0 && (
         <div className="dryrun-history">
-          <h4>History ({history.length} runs)</h4>
-          <div className="dryrun-history-table-wrap">
+          <h4>History ({history.length} runs, click to expand)</h4>
+          <div className="dryrun-history-table-wrap" style={{ maxHeight: expandedHistory ? '60vh' : '240px' }}>
             <table className="dryrun-history-table">
               <thead>
                 <tr>
                   <th>Time</th>
                   <th>Batch</th>
-                  <th>Countries</th>
                   <th>Sources</th>
                   <th>Pass</th>
                   <th>Empty</th>
@@ -258,16 +269,41 @@ export function MsrpDryrunDashboard() {
               </thead>
               <tbody>
                 {history.map((r) => (
-                  <tr key={r.file}>
-                    <td>{formatTime(r.timestamp)}</td>
-                    <td>{r.batch}</td>
-                    <td>{r.countries?.length ?? 0}</td>
-                    <td>{r.total}</td>
-                    <td className="is-pass">{r.pass}</td>
-                    <td className="is-empty">{r.empty}</td>
-                    <td className="is-fail">{r.fail}</td>
-                    <td><strong>{r.passRate}%</strong></td>
-                  </tr>
+                  <>
+                    <tr
+                      key={r.file}
+                      className={`dryrun-history-row${expandedHistory === r.file ? ' is-expanded' : ''}`}
+                      onClick={() => setExpandedHistory(expandedHistory === r.file ? null : r.file)}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <td>{formatTime(r.timestamp)}</td>
+                      <td>{r.batch}</td>
+                      <td>{r.total}</td>
+                      <td className="is-pass">{r.pass}</td>
+                      <td className="is-empty">{r.empty}</td>
+                      <td className="is-fail">{r.fail}</td>
+                      <td><strong>{r.passRate}%</strong></td>
+                    </tr>
+                    {expandedHistory === r.file && r.countriesDetail && r.countriesDetail.length > 0 && (
+                      <tr key={`${r.file}-detail`} className="dryrun-history-detail-row">
+                        <td colSpan={7}>
+                          <div className="dryrun-history-detail-grid">
+                            {r.countriesDetail.map((c) => (
+                              <div key={c.countryCode} className="dryrun-history-country-chip">
+                                <span className="dryrun-history-country-name">
+                                  {c.countryCode.toUpperCase()} {c.countryLabel}
+                                </span>
+                                <ProgressBar pct={c.passRate} tone={c.passRate >= 50 ? 'green' : c.passRate >= 20 ? 'amber' : 'red'} />
+                                <span className="dryrun-history-country-nums">
+                                  {c.pass}/{c.total} pass · {c.empty} empty · {c.fail} fail
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 ))}
               </tbody>
             </table>

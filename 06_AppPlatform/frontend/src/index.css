@@ -8065,6 +8065,13 @@ table.data-table tr.data-table-group-row.contains-selection td {
 .dryrun-history-table .is-pass { color: #16a34a; font-weight: 600; }
 .dryrun-history-table .is-empty { color: #d97706; }
 .dryrun-history-table .is-fail { color: #dc2626; }
+.dryrun-history-row:hover { background: rgba(28,105,212,0.04); }
+.dryrun-history-row.is-expanded { background: rgba(28,105,212,0.06); }
+.dryrun-history-detail-row td { padding: 8px 12px !important; background: rgba(248,250,252,0.8); }
+.dryrun-history-detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px; }
+.dryrun-history-country-chip { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px; border: 1px solid rgba(15,23,42,0.06); border-radius: 6px; background: #fff; }
+.dryrun-history-country-name { font-size: 10px; font-weight: 600; color: #334155; }
+.dryrun-history-country-nums { font-size: 9px; color: #94a3b8; }
 
 /* --- Ranking Trend Popover --- */
 .ranking-popover-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(15,23,42,0.12); }
