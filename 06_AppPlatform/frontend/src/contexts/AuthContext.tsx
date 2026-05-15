@@ -39,6 +39,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => localStorage.getItem(STORAGE_TOKEN) || null,
   );
 
+  // Handle Feishu OAuth callback (token in URL params)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlToken = params.get("token");
+    const urlUser = params.get("username");
+    const urlRole = params.get("role");
+    if (urlToken && urlUser) {
+      localStorage.setItem(STORAGE_TOKEN, urlToken);
+      localStorage.setItem(STORAGE_USER, urlUser);
+      localStorage.setItem(STORAGE_ROLE, urlRole || "viewer");
+      localStorage.removeItem("shared-filter-scope");
+      setToken(urlToken);
+      setUser({ username: urlUser, role: urlRole || "viewer" });
+      // Clean URL
+      const newUrl = window.location.pathname;
+      window.history.replaceState({}, "", newUrl);
+    }
+  }, []);
+
   const login = useCallback(async (username: string, password: string) => {
     const res = await fetch("/v1/auth/login", {
       method: "POST",

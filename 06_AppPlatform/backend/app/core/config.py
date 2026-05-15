@@ -138,6 +138,15 @@ if _raw_token_role_map:
 if not TOKEN_ROLE_MAP and AUTH_TOKEN:
     TOKEN_ROLE_MAP[AUTH_TOKEN] = "editor"
 
+# ── Feishu OAuth ──
+FEISHU_APP_ID = os.getenv("APP_FEISHU_APP_ID", "").strip()
+FEISHU_APP_SECRET = os.getenv("APP_FEISHU_APP_SECRET", "").strip()
+FEISHU_ENABLED = bool(FEISHU_APP_ID and FEISHU_APP_SECRET)
+FEISHU_REDIRECT_URI = os.getenv(
+    "APP_FEISHU_REDIRECT_URI",
+    "http://127.0.0.1:8000/v1/auth/feishu/callback",
+).strip()
+
 CORS_ORIGINS: list[str] = [
     origin.strip()
     for origin in os.getenv(

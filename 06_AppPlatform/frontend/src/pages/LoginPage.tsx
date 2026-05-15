@@ -144,6 +144,44 @@ export function LoginPage() {
         >
           {submitting ? "Signing in..." : "Sign in"}
         </button>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "16px 0" }}>
+          <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }} />
+          <span style={{ fontSize: 10, color: "#475569" }}>OR</span>
+          <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }} />
+        </div>
+
+        <button
+          type="button"
+          onClick={async () => {
+            try {
+              const res = await fetch("/v1/auth/feishu/auth-url?redirect=" + encodeURIComponent(redirect));
+              if (!res.ok) throw new Error("Feishu not available");
+              const { url } = await res.json();
+              window.location.href = url;
+            } catch {
+              setError("飞书登录暂不可用");
+            }
+          }}
+          style={{
+            width: "100%",
+            padding: "10px 0",
+            borderRadius: 10,
+            border: "1px solid rgba(255,255,255,0.08)",
+            background: "rgba(255,255,255,0.04)",
+            color: "#e2e8f0",
+            fontSize: 14,
+            fontWeight: 500,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+          }}
+        >
+          <span style={{ color: "#3370ff", fontSize: 16 }}>▷</span>
+          飞书登录
+        </button>
       </form>
     </div>
   );
