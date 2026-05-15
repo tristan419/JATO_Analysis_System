@@ -195,17 +195,41 @@ export function MsrpDryrunDashboard() {
                   {c.pass}/{c.total} pass · {c.empty} empty · {c.fail} fail
                 </span>
 
-                {/* Expanded source list */}
-                {expandedCountry === c.countryCode && c.sources.length > 0 && (
-                  <div className="dryrun-source-list" onClick={(e) => e.stopPropagation()}>
-                    {c.sources.map((s) => (
-                      <div key={s.sourceCode} className={`dryrun-source-row is-${s.status}`}>
-                        <span>{STATUS_ICON[s.status]}</span>
-                        <span className="dryrun-source-code" title={s.sourceCode}>{s.sourceCode.replace(/_se_draft_scrapling|_fi_draft_scrapling|_no_draft_scrapling|_dk_draft_scrapling|_hu_draft_scrapling|_hr_draft_scrapling|_at_draft_scrapling|_cz_draft_scrapling|_de_draft_scrapling|_fr_draft_scrapling|_it_draft_scrapling|_pl_draft_scrapling/g, "").replace(/_/g, " ")}</span>
-                        <span className="dryrun-source-stat">valid={s.valid}</span>
-                        <span className="dryrun-source-elapsed">{formatElapsed(s.elapsedSeconds)}</span>
-                      </div>
-                    ))}
+                {/* Expanded source detail panel */}
+                {expandedCountry === c.countryCode && (
+                  <div className="dryrun-source-panel" onClick={(e) => e.stopPropagation()}>
+                    <div className="dryrun-source-panel-head">
+                      <span>{c.sources.length} sources</span>
+                      <span className="dryrun-source-panel-legend">
+                        <span className="is-pass">✅ pass</span>
+                        <span className="is-empty">⬚ empty</span>
+                        <span className="is-fail">❌ fail</span>
+                      </span>
+                    </div>
+                    <div className="dryrun-source-list">
+                      {c.sources.map((s) => {
+                        const cleanName = s.sourceCode
+                          .replace(/_se_draft_scrapling|_fi_draft_scrapling|_no_draft_scrapling|_dk_draft_scrapling|_hu_draft_scrapling|_hr_draft_scrapling|_at_draft_scrapling|_cz_draft_scrapling|_de_draft_scrapling|_fr_draft_scrapling|_it_draft_scrapling|_pl_draft_scrapling/g, "")
+                          .replace(/_/g, " ");
+                        const barPct = s.valid > 0 ? Math.min(100, (s.valid / Math.max(s.extracted, 1)) * 100) : 0;
+                        return (
+                          <div key={s.sourceCode} className={`dryrun-source-row is-${s.status}`}>
+                            <span className="dryrun-source-icon">{STATUS_ICON[s.status]}</span>
+                            <span className="dryrun-source-code" title={s.sourceCode}>{cleanName}</span>
+                            <span className="dryrun-source-bar-wrap">
+                              <span
+                                className={`dryrun-source-bar-fill is-${s.status}`}
+                                style={{ width: `${Math.max(2, barPct)}%` }}
+                              />
+                            </span>
+                            <span className="dryrun-source-stat">
+                              {s.valid > 0 ? <><strong>{s.valid}</strong> valid</> : <span className="dryrun-source-stat-muted">0</span>}
+                            </span>
+                            <span className="dryrun-source-elapsed">{formatElapsed(s.elapsedSeconds)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </button>

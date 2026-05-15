@@ -8035,14 +8035,28 @@ table.data-table tr.data-table-group-row.contains-selection td {
 .dryrun-progress-bar { display: block; height: 4px; border-radius: 2px; background: rgba(148,163,184,0.12); overflow: hidden; }
 .dryrun-progress-fill { display: block; height: 100%; border-radius: 2px; transition: width 0.3s; }
 
-.dryrun-source-list { margin-top: 8px; max-height: 200px; overflow-y: auto; border-top: 1px solid rgba(15,23,42,0.06); padding-top: 6px; display: flex; flex-direction: column; gap: 2px; }
-.dryrun-source-row { display: flex; align-items: center; gap: 6px; padding: 2px 4px; font-size: 10px; border-radius: 4px; }
-.dryrun-source-row.is-pass { color: #16a34a; }
-.dryrun-source-row.is-empty { color: #d97706; }
-.dryrun-source-row.is-fail { color: #dc2626; }
-.dryrun-source-code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #475569; font-weight: 500; }
-.dryrun-source-stat { color: #94a3b8; white-space: nowrap; }
-.dryrun-source-elapsed { color: #94a3b8; white-space: nowrap; font-size: 9px; }
+.dryrun-source-panel { margin-top: 8px; border-top: 1px solid rgba(15,23,42,0.08); padding-top: 8px; }
+.dryrun-source-panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 10px; color: #94a3b8; }
+.dryrun-source-panel-legend { display: flex; gap: 8px; }
+.dryrun-source-panel-legend .is-pass { color: #16a34a; }
+.dryrun-source-panel-legend .is-empty { color: #d97706; }
+.dryrun-source-panel-legend .is-fail { color: #dc2626; }
+.dryrun-source-list { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.dryrun-source-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; font-size: 10px; border-radius: 4px; background: rgba(248,250,252,0.6); }
+.dryrun-source-row:nth-child(even) { background: rgba(248,250,252,1); }
+.dryrun-source-row.is-pass { border-left: 3px solid #16a34a; }
+.dryrun-source-row.is-empty { border-left: 3px solid #d97706; }
+.dryrun-source-row.is-fail { border-left: 3px solid #dc2626; }
+.dryrun-source-icon { font-size: 10px; flex-shrink: 0; width: 16px; text-align: center; }
+.dryrun-source-code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #334155; font-weight: 500; font-size: 10px; }
+.dryrun-source-bar-wrap { width: 60px; height: 4px; border-radius: 2px; background: rgba(148,163,184,0.12); flex-shrink: 0; overflow: hidden; }
+.dryrun-source-bar-fill { display: block; height: 100%; border-radius: 2px; }
+.dryrun-source-bar-fill.is-pass { background: #16a34a; }
+.dryrun-source-bar-fill.is-empty { background: #e2e8f0; }
+.dryrun-source-bar-fill.is-fail { background: #dc2626; }
+.dryrun-source-stat { font-size: 10px; color: #475569; white-space: nowrap; min-width: 52px; text-align: right; }
+.dryrun-source-stat-muted { color: #cbd5e1; }
+.dryrun-source-elapsed { color: #94a3b8; white-space: nowrap; font-size: 9px; min-width: 36px; text-align: right; }
 
 .dryrun-history-table-wrap { max-height: 200px; overflow-y: auto; }
 .dryrun-history-table { width: 100%; border-collapse: collapse; font-size: 11px; }
