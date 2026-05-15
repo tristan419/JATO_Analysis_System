@@ -15,6 +15,10 @@ EnvironmentFile=-/etc/jato-fullstack/country-news.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/JATO_Analysis_System-main/06_AppPlatform/backend
 Environment=REPO_DIR=/opt/JATO_Analysis_System-main
+Environment=http_proxy=http://127.0.0.1:7897
+Environment=https_proxy=http://127.0.0.1:7897
+Environment=HTTP_PROXY=http://127.0.0.1:7897
+Environment=HTTPS_PROXY=http://127.0.0.1:7897
 
 ExecStart=/opt/JATO_Analysis_System-main/03_Scripts/run_country_news_sync.sh
 
