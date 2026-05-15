@@ -17,7 +17,8 @@ from fastapi.responses import PlainTextResponse
 
 router = APIRouter(prefix="/hermes", tags=["hermes"])
 
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
+# routes/hermes.py → api/routes → app/api → backend/app → 06_AppPlatform → repo_root
+PROJECT_ROOT = Path(__file__).resolve().parents[5]
 HERMES_DIR = PROJECT_ROOT / "hermes"
 SCRIPTS_DIR = PROJECT_ROOT / "03_Scripts" / "hermes"
 REPORTS_DIR = HERMES_DIR / "reports"
