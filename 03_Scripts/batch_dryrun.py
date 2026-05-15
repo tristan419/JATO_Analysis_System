@@ -178,21 +178,35 @@ def main():
         t = c["pass"] + c["empty"] + c["fail"]
         print(f"{cc:8s} {c['pass']:6d} {c['empty']:6d} {c['fail']:6d} {t:6d}")
 
-    # Save report
-    report_path = Path(__file__).parent / "diagnostics" / "artifacts" / "dryrun_report.json"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(report_path, "w") as f:
-        json.dump({
-            "batch": batch,
-            "countries": countries,
-            "total": total,
-            "pass": pass_count,
-            "empty": empty_count,
-            "fail": fail_count,
-            "errors": error_count,
-            "results": results,
-        }, f, indent=2)
-    print(f"\nReport saved to {report_path}")
+    # Save report (timestamped + latest symlink for history)
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    report_dir = Path(__file__).parent / "diagnostics" / "artifacts"
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    report_payload = {
+        "batch": batch,
+        "countries": countries,
+        "total": total,
+        "pass": pass_count,
+        "empty": empty_count,
+        "fail": fail_count,
+        "errors": error_count,
+        "results": results,
+        "savedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Timestamped copy for history
+    history_path = report_dir / f"dryrun_report_{ts}.json"
+    with open(history_path, "w") as f:
+        json.dump(report_payload, f, indent=2)
+
+    # Also overwrite latest for backward compat
+    latest_path = report_dir / "dryrun_report.json"
+    with open(latest_path, "w") as f:
+        json.dump(report_payload, f, indent=2)
+
+    print(f"\nReport saved to {latest_path} (history: {history_path.name})")
 
     if STRICT_EXIT and (fail_count > 0 or error_count > 0):
         raise SystemExit(1)

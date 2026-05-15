@@ -145,15 +145,26 @@ def _parse_current_progress(log_path: Path | None = None) -> dict[str, Any]:
 
 
 def _list_historical_runs() -> list[dict[str, Any]]:
-    """List past dryrun reports from artifact JSON files."""
+    """List past dryrun reports from timestamped artifact JSON files.
+
+    Skips dryrun_report.json (the latest-run shortcut) to avoid duplicates.
+    """
     runs: list[dict[str, Any]] = []
     if not ARTIFACT_DIR.exists():
         return runs
 
-    for report_file in sorted(ARTIFACT_DIR.glob("dryrun_report*.json"), reverse=True):
+    for report_file in sorted(ARTIFACT_DIR.glob("dryrun_report_*.json"), reverse=True):
+        # Skip the non-timestamped latest copy if it was picked up
+        if report_file.name == "dryrun_report.json":
+            continue
         try:
             data = json.loads(report_file.read_text())
-            mtime = report_file.stat().st_mtime
+            # Prefer explicit savedAt, fall back to file mtime
+            saved_at = data.get("savedAt")
+            if saved_at:
+                ts = saved_at
+            else:
+                ts = datetime.fromtimestamp(report_file.stat().st_mtime, tz=timezone.utc).isoformat()
             runs.append({
                 "batch": data.get("batch", ""),
                 "countries": data.get("countries", []),
@@ -163,13 +174,14 @@ def _list_historical_runs() -> list[dict[str, Any]]:
                 "fail": data.get("fail", 0),
                 "errors": data.get("errors", 0),
                 "passRate": round(data.get("pass", 0) / max(data.get("total", 1), 1) * 100, 1),
-                "timestamp": datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
+                "timestamp": ts if isinstance(ts, str) else ts.isoformat() if hasattr(ts, 'isoformat') else str(ts),
                 "file": report_file.name,
             })
         except (json.JSONDecodeError, KeyError):
             continue
 
-    return runs
+    # Limit to 30 most recent
+    return runs[:30]
 
 
 def get_dryrun_dashboard() -> dict[str, Any]:
