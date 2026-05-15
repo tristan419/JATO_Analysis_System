@@ -11838,3 +11838,33 @@ table.data-table tr.data-table-group-row.contains-selection td {
   padding: 1px 5px;
   border-radius: 3px;
 }
+
+/* ── Presence Widget (Dynamic Island) ── */
+
+@keyframes presence-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.55); }
+}
+
+.presence-dot {
+  animation: presence-breathe 2.6s ease-in-out infinite;
+}
+
+.pw-island {
+  touch-action: none;
+}
+
+.pw-island.is-dragging {
+  cursor: grabbing !important;
+}
+
+.pw-island.is-snapped:hover {
+  opacity: 0.75 !important;
+}
+
+/* Pill hover glow when not dragging */
+.pw-island:not(.is-dragging):not(.is-expanded):hover {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* Collapse animation handled by anime.js width tween + outBack easing */

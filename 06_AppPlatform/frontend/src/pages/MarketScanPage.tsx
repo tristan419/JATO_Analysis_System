@@ -13,6 +13,7 @@ import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
+import { usePageTransition } from "../hooks/usePageTransition";
 import { DeckPeriodTimeline } from "../components/DeckPeriodTimeline";
 import {
   DEFAULT_EXPORT,
@@ -2536,6 +2537,7 @@ export function MarketScanPage() {
   const showDataLabels = exportSettings.dataLabelMode !== "off";
   const labelDigits = Math.max(0, Math.min(4, exportSettings.decimalPlaces ?? 1));
   const heroMetrics = deck ? buildHeroMetrics(deck, activePage, salesMode, customRangeActive) : [];
+  usePageTransition(activePage, ".market-scan-slide-content");
   const narrative = deck ? pageNarrative(deck, activePage) : "按国家、月份与动力组合切换市场扫描页。";
   const activeTab = TAB_ITEMS.find((item) => item.key === activePage) ?? TAB_ITEMS[0];
   const previewWidth = normalizeMarketScanExportDimension(exportSettings.exportWidth, 1920, 400);

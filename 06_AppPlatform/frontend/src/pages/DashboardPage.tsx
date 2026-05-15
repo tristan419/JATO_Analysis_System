@@ -756,7 +756,7 @@ export function DashboardPage() {
         ease: "outExpo",
       });
     } catch {
-      /* decorative only — never break the page */
+      /* decorative only */
     }
   }, []);
 

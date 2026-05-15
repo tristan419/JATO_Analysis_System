@@ -6,6 +6,7 @@ import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { LoopingCountStrip } from "../components/LoopingCountStrip";
 import { RollingTickerCard } from "../components/RollingTickerCard";
+import { useStaggerEntrance } from "../hooks/useStaggerEntrance";
 import { ReviewDeliveryPanel } from "../components/ReviewDeliveryPanel";
 import {
   TextSearchFilters,
@@ -354,6 +355,7 @@ export function ReviewCasesPage() {
   const [heroCollapsed, setHeroCollapsed] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const refreshCasesRequestRef = useRef(0);
+  const tbodyRef = useRef<HTMLTableSectionElement | null>(null);
 
   /* filters */
   const [statusFilter, setStatusFilter] = useState("");
@@ -558,6 +560,7 @@ export function ReviewCasesPage() {
   const approvedCount = cases.filter((c) => c.reviewStatus === "approved").length;
   const rejectedCount = cases.filter((c) => c.reviewStatus === "rejected").length;
   const caseGroups = groupReviewCases(cases);
+  useStaggerEntrance(tbodyRef, cases.length > 0 && !loading, { selector: ".data-table-group-row" });
   const reviewCountries = Array.from(new Set(cases.map((c) => c.country)))
     .sort((left, right) => left.localeCompare(right));
   const filteredCountries = new Set(cases.map((c) => c.country)).size;
@@ -783,7 +786,7 @@ export function ReviewCasesPage() {
                 <th style={{ width: 240 }}>操作</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody ref={tbodyRef}>
               {caseGroups.map((group) => {
                 const expanded = isGroupExpanded(group);
                 const actionableCases = group.items.filter((reviewCase) => isActionableStatus(reviewCase.reviewStatus));

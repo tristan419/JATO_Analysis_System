@@ -476,18 +476,20 @@ features:
 
   # --- Planned / PRD-Only Features ---
   - featureId: feature.presence_websocket
-    name: "Presence (Phase 1: REST Heartbeat)"
-    status: beta
-    implementationStatus: partial
+    name: "Presence (在线人数 + WebSocket)"
+    status: active
+    implementationStatus: phase1_complete
     riskLevel: low
     routes:
-      - "Layout (all pages) — presence indicator"
+      - "Layout (all pages) — top-bar indicator"
     backendApis:
       - "POST /v1/presence/heartbeat"
       - "GET /v1/presence/online"
     scheduledJobs: []
     dataSources: []
-    artifacts: []
+    artifacts:
+      - "app/services/presence_service.py"
+      - "hooks/usePresence.ts"
     docs:
       - "01_DevWorkflow/presence_websocket_prd.md"
     tests: []
@@ -495,11 +497,10 @@ features:
     owner: ""
     governanceStatus: registered
     knownIssues:
-      - "Phase 1 (REST heartbeat) implemented 2026-05-15"
-      - "Phase 2 (WebSocket) not yet implemented"
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Phase 1: REST heartbeat. Phase 2: WebSocket. Not yet implemented."
+      - "Phase 2 (WebSocket real-time push) pending"
+    lastChangedAt: "2026-05-15"
+    lastAuditAt: "2026-05-15"
+    notes: "Phase 1 完善完成: presence_service.py 单例 + usePresence.ts hook + session_id + 同页人数(same_page)。顶栏显示 'X online · Y here'。Phase 2 WebSocket 待启动。"
 
   - featureId: feature.ranking_trend_drilldown
     name: "Ranking Trend Drilldown"
@@ -586,6 +587,35 @@ features:
     lastChangedAt: null
     lastAuditAt: "2026-05-14"
     notes: "Standalone scraping toolkit: MSRP, news, VOC, EVKX. 7 CLI entry points."
+
+  - featureId: feature.ui_animation_toolkit
+    name: "UI Animation Toolkit (anime.js)"
+    status: beta
+    implementationStatus: phase1_rollout
+    riskLevel: low
+    routes:
+      - "/ — Dashboard Hero 标题淡入"
+      - "/market-scan — Tab 切换 content fade-in"
+      - "/review-cases — 审核列表行 stagger 入场"
+    backendApis: []
+    scheduledJobs: []
+    dataSources: []
+    artifacts:
+      - "hooks/useStaggerEntrance.ts"
+      - "hooks/usePageTransition.ts"
+    docs:
+      - "Fullstack/01_DevWorkflow/ (this feature — inline Claude Code PRD)"
+    tests: []
+    dependencies:
+      - "npm:animejs@^4"
+    owner: ""
+    governanceStatus: registered
+    knownIssues:
+      - "buildHeroMetrics() 返回空数组，MarketScan hero 指标卡片 stagger 暂未接入"
+      - "待铺: 排名列表 stagger、燃料芯片 stagger、Hero 折叠过渡"
+    lastChangedAt: "2026-05-15"
+    lastAuditAt: "2026-05-15"
+    notes: "基于 anime.js v4 的声明式动效工具箱。已交付: DashboardPage hero 淡入(animate直接调用)、MarketScanPage tab切换(content fade-in via usePageTransition)、ReviewCasesPage 列表行交错入场(via useStaggerEntrance)。零额外网络开销(anime.js 17KB gzip 已打入vendor bundle)，纯GPU合成属性(opacity/transform)，服务器零负载。"
 
   - featureId: feature.gitnexus
     name: "GitNexus (Code Intelligence)"

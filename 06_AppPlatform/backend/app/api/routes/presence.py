@@ -1,48 +1,57 @@
-"""Presence API — Phase 1: REST heartbeat.
-
-Lightweight user presence tracking. No WebSocket yet (Phase 2).
-"""
+"""Presence API — Phase 1: REST heartbeat with auth-aware identity."""
 
 from __future__ import annotations
 
-import time
-from typing import Any
+from fastapi import APIRouter, Body, Depends, Query
+from pydantic import BaseModel
 
-from fastapi import APIRouter, Header, Query
+from app.core.security import UserContext, get_optional_user
+from app.services.presence_service import presence_store
 
 router = APIRouter(prefix="/presence", tags=["presence"])
 
-# In-memory store: {user_id: {"lastSeen": timestamp, "page": str}}
-_store: dict[str, dict[str, Any]] = {}
-HEARTBEAT_TTL_SECONDS = 60
 
-
-def _clean_stale() -> None:
-    """Remove users who haven't sent a heartbeat in TTL seconds."""
-    now = time.time()
-    stale = [uid for uid, v in _store.items() if now - v["lastSeen"] > HEARTBEAT_TTL_SECONDS]
-    for uid in stale:
-        del _store[uid]
+class HeartbeatPayload(BaseModel):
+    session_id: str
+    user_name: str = "anonymous"
+    current_page: str = "unknown"
 
 
 @router.post("/heartbeat")
 def presence_heartbeat(
-    page: str = Query("unknown", description="Current page/route the user is on"),
-    x_user_name: str = Header("anonymous", alias="X-User-Name"),
+    payload: HeartbeatPayload | None = Body(None),
+    user: UserContext = Depends(get_optional_user),
+    page: str = Query("unknown", description="Current page (fallback)"),
 ) -> dict:
-    """Register a heartbeat. Call every 30s from the frontend."""
-    user = x_user_name.strip() or "anonymous"
-    _store[user] = {"lastSeen": time.time(), "page": page, "user": user}
-    _clean_stale()
-    return {"status": "ok", "online": len(_store)}
+    """Register a heartbeat. Call every 30s from the frontend.
+
+    User identity is resolved from X-Auth-Token header when available,
+    falling back to the payload user_name for unauthenticated clients.
+    """
+    if payload:
+        session_id = payload.session_id
+        user_name = (
+            user.name if user.name != "anonymous" else payload.user_name
+        )
+        current_page = payload.current_page
+    else:
+        session_id = user.name
+        user_name = user.name
+        current_page = page
+
+    return presence_store.heartbeat(
+        session_id=session_id,
+        user_name=user_name,
+        current_page=current_page,
+        role=user.role,
+    )
 
 
 @router.get("/online")
-def presence_online() -> dict:
-    """List currently online users."""
-    _clean_stale()
-    users = [
-        {"user": v["user"], "page": v["page"], "lastSeen": v["lastSeen"]}
-        for v in _store.values()
-    ]
-    return {"online": len(users), "users": sorted(users, key=lambda u: u["user"])}
+def presence_online(
+    page: str | None = Query(
+        None, description="Filter same_page count by page"
+    ),
+) -> dict:
+    """List currently online users, optionally scoped to a page."""
+    return presence_store.get_online(current_page=page)
