@@ -107,7 +107,9 @@ features:
     artifacts:
       - "artifact.jato.parquet"
     docs:
-      - "version_comparison PRD §14 (chart rules)"
+      - "WORKFLOWS/BUSINESS_PRESENTATION_DECK.md"
+      - "WORKFLOWS/BUSINESS_PIPELINE_WORKFLOWS.md"
+      - "01_DevWorkflow/version_comparison_cross_segment_model_picker_prd.md §14"
     tests: []
     dependencies:
       - "pipeline.jato.etl"
@@ -134,6 +136,7 @@ features:
       - "artifact.jato.parquet"
     docs:
       - "01_DevWorkflow/version_comparison_cross_segment_model_picker_prd.md"
+      - "MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md"
     tests: []
     dependencies:
       - "pipeline.jato.etl"
@@ -247,7 +250,9 @@ features:
       - "04_Processed_data/voc/se/ (HEV benchmark Excel)"
     artifacts:
       - "artifact.voc.hev_benchmark"
-    docs: []
+    docs:
+      - "02_DataETL/AI_NEWS_VOC_INTELLIGENCE_PIPELINE_2026-05-09.md"
+      - "02_DataETL/VOC_FORUM_IMPLEMENTATION_STATUS_2026-04-19.md"
     tests: []
     dependencies:
       - "Manual Excel generation (generate_sweden_hev_benchmark_excel.py)"
@@ -388,7 +393,9 @@ features:
       - "PostgreSQL: msrp.msrp_observation"
     artifacts:
       - "artifact.msrp.observations"
-    docs: []
+    docs:
+      - "MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md"
+      - "MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md"
     tests:
       - "Backend: test_review_service.py"
       - "Backend: test_review_workbench_service.py"
@@ -520,6 +527,40 @@ features:
     notes: "Drawer pattern for Brand/Model trend exploration. RankingTrendDrawer.tsx component exists."
 
   # --- Tooling / Infrastructure ---
+  - featureId: feature.competitor_monitoring
+    name: "Competitor Monitoring (竞品监控)"
+    status: active
+    implementationStatus: implemented
+    riskLevel: low
+    routes:
+      - "/market-scan"
+      - "/positioning-pricing"
+      - "/copilot"
+    backendApis:
+      - "POST /v1/market-scan/deck"
+      - "POST /v1/market-scan/positioning-pricing-deck"
+      - "POST /v1/assistant/country/chat"
+    scheduledJobs: []
+    dataSources:
+      - "JATO partitioned parquet"
+      - "PostgreSQL: msrp.current_price"
+    artifacts:
+      - "artifact.jato.parquet"
+      - "artifact.msrp.current_prices"
+    docs:
+      - "WORKFLOWS/BUSINESS_PRESENTATION_DECK.md"
+      - "WORKFLOWS/BUSINESS_PIPELINE_WORKFLOWS.md"
+    tests: []
+    dependencies:
+      - "feature.market_scan"
+      - "feature.positioning_pricing"
+      - "feature.country_copilot"
+      - "feature.msrp_workbench"
+    owner: ""
+    governanceStatus: registered
+    knownIssues:
+      - "Emergent capability spanning multiple features. No dedicated page — composed from Market Scan + Positioning + Copilot."
+
   - featureId: feature.scraping_toolkit
     name: "Scraping Toolkit"
     status: active
