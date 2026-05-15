@@ -342,7 +342,7 @@ export function DataManagementPage() {
   }, [crudTab, overview?.database.connected]);
 
   useEffect(() => {
-    if (subpage !== "hermes" || hermesOverview) return;
+    if ((subpage !== "hermes" && subpage !== "overview") || hermesOverview) return;
     setHermesLoading(true);
     Promise.allSettled([
       api.hermesOverview().then(setHermesOverview),
@@ -1139,6 +1139,21 @@ export function DataManagementPage() {
 
       {subpage !== "hermes" && overview ? (
         <>
+          {/* Hermes summary strip — always visible on Overview & VOC */}
+          {subpage === "overview" && (
+            <div className="card crud-card">
+              <div className="admin-card-header"><div><h2>Hermes Governance Snapshot <span style={{fontSize:12,fontWeight:400,color:"#64748b"}}>— full details in Hermes tab</span></h2></div></div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 12, padding: 16 }}>
+                <div className="metric-chip"><span>Pipelines</span><strong style={{color: (hermesPipelines as Record<string,unknown>)?.summary?.highRiskFindings > 0 ? "#ef4444" : "#22c55e"}}>{(hermesOverview?.registries as Record<string,number>)?.pipeline || "?"}</strong></div>
+                <div className="metric-chip"><span>Sources</span><strong style={{color: (hermesSources as Record<string,unknown>)?.summary?.degraded > 0 ? "#ef4444" : "#22c55e"}}>{(hermesOverview?.registries as Record<string,number>)?.source || "?"}</strong></div>
+                <div className="metric-chip"><span>Features</span><strong>{(hermesOverview?.registries as Record<string,number>)?.feature || "?"}</strong></div>
+                <div className="metric-chip"><span>Proposals Done</span><strong style={{color:"#22c55e"}}>{(hermesOverview?.proposals as Record<string,number>)?.implemented || 0}/{(hermesOverview?.proposals as Record<string,number>)?.total || 0}</strong></div>
+                <div className="metric-chip"><span>Gaps Open</span><strong style={{color: (hermesOverview?.gaps as Record<string,number>)?.open > 0 ? "#ef4444" : "#22c55e"}}>{(hermesOverview?.gaps as Record<string,number>)?.open || 0}</strong></div>
+                <div className="metric-chip"><span>Cost</span><strong style={{color: (hermesCost as Record<string,unknown>)?.summary?.budgetStatus === "exceeded" ? "#ef4444" : "#22c55e"}}>{(hermesCost as Record<string,unknown>)?.summary?.totalEstimatedCostCny as number ?? 0} CNY</strong></div>
+              </div>
+            </div>
+          )}
+
           <div className="card crud-card">
             <div className="admin-card-header">
               <div>
@@ -1266,6 +1281,57 @@ export function DataManagementPage() {
                         {vocSyncBusy ? "同步中…" : "同步 VOC 到 PostgreSQL"}
                       </button>
                     </div>
+
+                    {/* VOC source traceability — clickable source cards */}
+                    <div style={{marginTop:16}}>
+                      <strong style={{fontSize:13,display:"block",marginBottom:8}}>VOC Sources — click to trace</strong>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:8}}>
+                        {((hermesSources as Record<string,unknown>)?.sources as unknown[])
+                          ?.filter((s: unknown) => String((s as Record<string,unknown>).sourceType || "").includes("voc") || String((s as Record<string,unknown>).sourceId || "").includes("voc"))
+                          .map((s: unknown) => {
+                            const src = s as Record<string,unknown>;
+                            const status = String(src.status || "?");
+                            const color = status === "degraded" ? "#ef4444" : status === "watch" ? "#f59e0b" : "#22c55e";
+                            return (
+                              <div key={String(src.sourceId)} style={{padding:"10px 12px",borderRadius:8,border:"1px solid #e2e8f0",cursor:"pointer",borderLeft:`3px solid ${color}`}}
+                                onClick={() => {
+                                  setSelectedSource(src);
+                                  setSourceDetailOpen(true);
+                                  api.hermesSourceDetail(String(src.sourceId || "")).then(setSourceDetail).catch(() => setSourceDetail(null));
+                                }}>
+                                <div style={{fontWeight:600,fontSize:13,marginBottom:4}}>{String(src.name).slice(0,40)}</div>
+                                <div style={{display:"flex",gap:8,fontSize:11,color:"#64748b"}}>
+                                  <span>Score: <strong style={{color}}>{String(src.qualityScore)}</strong></span>
+                                  <span>{String(src.country || "").slice(0,25)}</span>
+                                  <span style={{color}}>{status}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        {!((hermesSources as Record<string,unknown>)?.sources as unknown[])?.filter((s: unknown) => String((s as Record<string,unknown>).sourceType || "").includes("voc")).length && (
+                          <span style={{fontSize:11,color:"#94a3b8"}}>No VOC sources in registry. Run hermes_source_quality.py.</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Source Detail Panel (shared with Hermes tab logic) */}
+                    {sourceDetailOpen && selectedSource ? (
+                      <div style={{marginTop:12,background:"#f8fafc",borderRadius:8,padding:14,border:"1px solid #e2e8f0"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                          <strong>{String(selectedSource.name || selectedSource.sourceId)}</strong>
+                          <button type="button" className="btn btn-sm btn-ghost" onClick={() => {setSourceDetailOpen(false);setSourceDetail(null);}}>Close</button>
+                        </div>
+                        {sourceDetail ? (
+                          <div style={{fontSize:12}}>
+                            <div><strong>Path:</strong> <span style={{fontFamily:"monospace",fontSize:11}}>{String(selectedSource.path || "?")}</span></div>
+                            <div><strong>Evidence:</strong> {(sourceDetail.linkedEvidenceCount as number) || 0} records | <strong>Pipelines:</strong> {(sourceDetail.linkedPipelines as unknown[])?.length || 0}</div>
+                            {(selectedSource.knownIssues as unknown[])?.length > 0 && (
+                              <div style={{color:"#ef4444",marginTop:4}}>{(selectedSource.knownIssues as unknown[]).map((issue: unknown, i: number) => <div key={i}>- {String(issue).slice(0,120)}</div>)}</div>
+                            )}
+                          </div>
+                        ) : <span style={{color:"#64748b"}}>Loading...</span>}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
                 {renderDomainRecentItems(
