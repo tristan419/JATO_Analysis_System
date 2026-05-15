@@ -64,20 +64,25 @@ def hermes_overview() -> dict:
         "proposals": {"total": 0, "implemented": 0, "pending": 0, "draft": 0},
         "gaps": {"total": 0, "open": 0, "resolved": 0},
     }
+    try:
+        import yaml as _yaml
+    except ImportError:
+        return {"error": "PyYAML not installed in backend venv. Run: pip install pyyaml"}
 
     # Registry counts
     for name in ["source", "pipeline", "feature", "prompt", "artifact"]:
         fname = f"{name}_registry.yaml"
         path = HERMES_DIR / fname
-        if path.is_file():
-            try:
-                import yaml
-                data = yaml.safe_load(path.read_text())
-                key = f"{name}s" if not name.endswith("s") else name
-                items = data.get(key, data.get(f"{name}s", [])) if data else []
-                overview["registries"][name] = len(items) if isinstance(items, list) else 0
-            except Exception:
-                overview["registries"][name] = -1
+        if not path.is_file():
+            overview["registries"][name] = -2  # file not found
+            continue
+        try:
+            data = _yaml.safe_load(path.read_text())
+            key = f"{name}s" if not name.endswith("s") else name
+            items = data.get(key, []) if data else []
+            overview["registries"][name] = len(items) if isinstance(items, list) else 0
+        except Exception as exc:
+            overview["registries"][name] = -1  # parse error
 
     # Report availability
     report_files = {
@@ -93,8 +98,7 @@ def hermes_overview() -> dict:
     prop_path = HERMES_DIR / "proposal_registry.yaml"
     if prop_path.is_file():
         try:
-            import yaml
-            data = yaml.safe_load(prop_path.read_text())
+            data = _yaml.safe_load(prop_path.read_text())
             proposals = data.get("proposals", []) if data else []
             overview["proposals"]["total"] = len(proposals)
             overview["proposals"]["implemented"] = sum(1 for p in proposals if p.get("status") == "implemented")
@@ -107,8 +111,7 @@ def hermes_overview() -> dict:
     gaps_path = HERMES_DIR / "governance_gaps.yaml"
     if gaps_path.is_file():
         try:
-            import yaml
-            data = yaml.safe_load(gaps_path.read_text())
+            data = _yaml.safe_load(gaps_path.read_text())
             gaps = data.get("gaps", []) if data else []
             overview["gaps"]["total"] = len(gaps)
             overview["gaps"]["open"] = sum(1 for g in gaps if g.get("status") == "open")
