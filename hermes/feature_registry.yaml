@@ -469,12 +469,15 @@ features:
 
   # --- Planned / PRD-Only Features ---
   - featureId: feature.presence_websocket
-    name: "Presence WebSocket (Real-time Collaboration)"
-    status: archived
-    implementationStatus: prd_only
+    name: "Presence (Phase 1: REST Heartbeat)"
+    status: beta
+    implementationStatus: partial
     riskLevel: low
-    routes: []
-    backendApis: []
+    routes:
+      - "Layout (all pages) — presence indicator"
+    backendApis:
+      - "POST /v1/presence/heartbeat"
+      - "GET /v1/presence/online"
     scheduledJobs: []
     dataSources: []
     artifacts: []
@@ -483,9 +486,10 @@ features:
     tests: []
     dependencies: []
     owner: ""
-    governanceStatus: needs_review
+    governanceStatus: registered
     knownIssues:
-      - "PRD exists but implementation not found in Phase 0 asset map"
+      - "Phase 1 (REST heartbeat) implemented 2026-05-15"
+      - "Phase 2 (WebSocket) not yet implemented"
     lastChangedAt: null
     lastAuditAt: "2026-05-14"
     notes: "Phase 1: REST heartbeat. Phase 2: WebSocket. Not yet implemented."

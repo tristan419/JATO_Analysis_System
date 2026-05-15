@@ -1,12 +1,29 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 
 import { CountryChatWidget } from "./CountryChatWidget";
 import { PAGE_NAV_ITEMS } from "../utils/pageNavigation";
 
+function usePresence() {
+  const [online, setOnline] = useState(0);
+  const sendHeartbeat = useCallback(() => {
+    fetch(`/v1/presence/heartbeat?page=${encodeURIComponent(window.location.pathname)}`, {
+      method: "POST",
+      headers: { "X-User-Name": "operator" },
+    }).then((r) => r.json()).then((d) => setOnline(d.online || 0)).catch(() => {});
+  }, []);
+  useEffect(() => {
+    sendHeartbeat();
+    const interval = setInterval(sendHeartbeat, 30000);
+    return () => clearInterval(interval);
+  }, [sendHeartbeat]);
+  return online;
+}
+
 export function Layout() {
   const location = useLocation();
   const [navOpen, setNavOpen] = useState(false);
+  const presenceOnline = usePresence();
 
   const isActive = (path: string) =>
     path === "/" ? location.pathname === "/" : location.pathname.startsWith(path);
@@ -23,6 +40,11 @@ export function Layout() {
             <span className="top-bar-brand-eyebrow">JATO Analysis System</span>
             <span className="top-bar-brand-title">Market Intelligence Control Deck</span>
           </div>
+          {presenceOnline > 0 && (
+            <span style={{fontSize:11,color:"#22c55e",marginLeft:"auto",marginRight:12,whiteSpace:"nowrap"}}>
+              {presenceOnline} online
+            </span>
+          )}
           <button
             type="button"
             className={`top-bar-menu-toggle${navOpen ? " is-open" : ""}`}

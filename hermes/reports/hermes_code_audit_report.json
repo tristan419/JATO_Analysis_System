@@ -1,33 +1,14 @@
 {
-  "base": "main~5",
+  "base": "main",
   "head": "HEAD",
-  "filesChanged": 7,
-  "findings": [
-    {
-      "severity": "NEEDS_REVIEW",
-      "area": "API Contract",
-      "finding": "Backend API routes or schemas changed but frontend types/index.ts was not updated",
-      "suggestedFix": "Verify frontend types match the updated backend serializers."
-    },
-    {
-      "severity": "WARNING",
-      "area": "Registry Gap",
-      "finding": "Backend API routes changed but Feature Registry was not updated",
-      "suggestedFix": "Update hermes/feature_registry.yaml with any new or modified features."
-    },
-    {
-      "severity": "INFO",
-      "area": "Documentation",
-      "finding": "Code changes detected but no documentation files were updated",
-      "suggestedFix": "Review if Markdown_Readme/ docs need updating for the changes."
-    }
-  ],
+  "filesChanged": 0,
+  "findings": [],
   "summary": {
-    "riskLevel": "NEEDS_REVIEW",
-    "riskScore": 60,
+    "riskLevel": "LOW",
+    "riskScore": 5,
     "blockerCount": 0,
-    "needsReviewCount": 1,
-    "warningCount": 1,
-    "infoCount": 1
+    "needsReviewCount": 0,
+    "warningCount": 0,
+    "infoCount": 0
   }
 }
