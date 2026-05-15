@@ -220,6 +220,9 @@ export function DataManagementPage() {
   const [hermesFeatures, setHermesFeatures] = useState<unknown[]>([]);
   const [hermesToolchain, setHermesToolchain] = useState<Record<string, unknown> | null>(null);
   const [hermesArch, setHermesArch] = useState<Record<string, unknown> | null>(null);
+  const [hermesActivity, setHermesActivity] = useState<Record<string, unknown> | null>(null);
+  const [hermesCostHeatmap, setHermesCostHeatmap] = useState<Record<string, unknown> | null>(null);
+  const [hermesDaily, setHermesDaily] = useState<Record<string, unknown> | null>(null);
   const [selectedSource, setSelectedSource] = useState<Record<string, unknown> | null>(null);
   const [sourceDetail, setSourceDetail] = useState<Record<string, unknown> | null>(null);
   const [sourceDetailOpen, setSourceDetailOpen] = useState(false);
@@ -353,6 +356,9 @@ export function DataManagementPage() {
       api.hermesFeatures().then(setHermesFeatures),
       api.hermesToolchain().then(setHermesToolchain),
       api.hermesArchitecture().then(setHermesArch),
+      api.hermesActivityHeatmap().then(setHermesActivity),
+      api.hermesCostHeatmap().then(setHermesCostHeatmap),
+      api.hermesDailySummary().then(setHermesDaily),
     ]).finally(() => setHermesLoading(false));
   }, [subpage, hermesOverview]);
 
@@ -896,6 +902,68 @@ export function DataManagementPage() {
                     <div key={cmd} id={`hermes-run-output-${cmd}`} style={{ display: "none" }} />
                   ))}
                   <span style={{ color: "#64748b" }}>Click a Run button above. Output appears here.</span>
+                </div>
+              </div>
+            </div>
+
+            {/* ---------- Activity & Cost Heatmaps ---------- */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              <div className="card crud-card">
+                <div className="admin-card-header"><div><h2>Activity Heatmap (30d) — Hermes Script Runs</h2></div></div>
+                <div style={{ padding: 16 }}>
+                  {hermesActivity ? (
+                    <>
+                      <div style={{display:"flex",gap:8,marginBottom:12,fontSize:12,color:"#64748b"}}>
+                        <span>Total: {(hermesActivity.totalRecords as number) || 0} runs</span>
+                        <span>Last: {String((hermesActivity.lastRun as Record<string,unknown>)?.timestamp || "never").slice(0,16)}</span>
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(28px,1fr))",gap:3}}>
+                        {((hermesActivity.days as unknown[]) || []).map((d: unknown) => {
+                          const day = d as Record<string,unknown>;
+                          const count = (day.count as number) || 0;
+                          const intensity = count === 0 ? "#f1f5f9" : count === 1 ? "#93c5fd" : count <= 3 ? "#3b82f6" : count <= 6 ? "#1d4ed8" : "#1e3a5f";
+                          return <div key={String(day.date)} title={`${String(day.date)}: ${count} runs`}
+                            style={{aspectRatio:"1",background:intensity,borderRadius:3,minWidth:24}} />;
+                        })}
+                      </div>
+                    </>
+                  ) : <span style={{color:"#94a3b8",fontSize:12}}>No activity data yet. Run a Hermes script to populate.</span>}
+                </div>
+              </div>
+
+              <div className="card crud-card">
+                <div className="admin-card-header"><div><h2>Cost Heatmap (30d) — 20 CNY/day, 500 CNY/month</h2></div></div>
+                <div style={{ padding: 16 }}>
+                  {hermesCostHeatmap ? (
+                    <>
+                      <div style={{display:"flex",gap:8,marginBottom:12,fontSize:12}}>
+                        <span style={{fontWeight:600,color: (hermesCostHeatmap.monthlyStatus === "exceeded" || (hermesCostHeatmap.alerts as unknown[])?.length > 0) ? "#ef4444" : "#22c55e"}}>
+                          Total: {(hermesCostHeatmap.totalCny as number)?.toFixed(2)} CNY
+                        </span>
+                        <span style={{color:"#64748b"}}>Budget: {String(hermesCostHeatmap.monthlyBudgetCny)} CNY/mo</span>
+                        {hermesCostHeatmap.emailSent ? <span style={{color:"#f59e0b"}}>Alert emailed to {(hermesCostHeatmap.alertEmail as string)}</span> : null}
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(28px,1fr))",gap:3}}>
+                        {((hermesCostHeatmap.days as unknown[]) || []).map((d: unknown) => {
+                          const day = d as Record<string,unknown>;
+                          const cost = (day.costCny as number) || 0;
+                          const over = day.overDailyBudget;
+                          const intensity = cost === 0 ? "#f1f5f9" : cost < 5 ? "#bbf7d0" : cost < 10 ? "#4ade80" : cost < 20 ? "#f59e0b" : "#ef4444";
+                          return <div key={String(day.date)} title={`${String(day.date)}: ${cost.toFixed(2)} CNY${over ? " OVER DAILY BUDGET" : ""}`}
+                            style={{aspectRatio:"1",background:intensity,borderRadius:3,minWidth:24,border: over ? "2px solid #ef4444" : "none"}} />;
+                        })}
+                      </div>
+                      <div style={{display:"flex",gap:12,marginTop:8,fontSize:11,color:"#64748b"}}>
+                        <span>0 CNY</span><span style={{flex:1,background:"linear-gradient(to right,#f1f5f9,#bbf7d0,#4ade80,#f59e0b,#ef4444)",height:8,borderRadius:4}} />
+                        <span>20+ CNY</span>
+                      </div>
+                      {(hermesCostHeatmap.alerts as unknown[])?.length > 0 && (
+                        <div style={{marginTop:8,padding:"8px 12px",background:"#fef2f2",borderRadius:6,fontSize:12,color:"#ef4444"}}>
+                          {(hermesCostHeatmap.alerts as unknown[]).map((a: unknown, i: number) => <div key={i}>{String(a)}</div>)}
+                        </div>
+                      )}
+                    </>
+                  ) : <span style={{color:"#94a3b8",fontSize:12}}>No cost data yet.</span>}
                 </div>
               </div>
             </div>

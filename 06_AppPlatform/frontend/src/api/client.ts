@@ -1499,6 +1499,12 @@ export const api = {
     request<Record<string, unknown>>(`/hermes/source/${encodeURIComponent(sourceId)}`).then((r) => r as Record<string, unknown>),
   hermesSourceHealthHistory: (sourceId: string) =>
     request<Record<string, unknown>>(`/hermes/source/${encodeURIComponent(sourceId)}/health-history`).then((r) => r as Record<string, unknown>),
+  hermesActivityHeatmap: (days?: number) =>
+    request<Record<string, unknown>>(`/hermes/activity-heatmap?days=${days || 30}`).then((r) => r as Record<string, unknown>),
+  hermesCostHeatmap: (days?: number) =>
+    request<Record<string, unknown>>(`/hermes/cost-heatmap?days=${days || 30}`).then((r) => r as Record<string, unknown>),
+  hermesDailySummary: () =>
+    request<Record<string, unknown>>("/hermes/daily-summary").then((r) => r as Record<string, unknown>),
 
   patchItem: (id: string, payload: Partial<Omit<CrudItem, "id">>) =>
     request<{ item: CrudItem }>(`/crud/items/${id}`, {

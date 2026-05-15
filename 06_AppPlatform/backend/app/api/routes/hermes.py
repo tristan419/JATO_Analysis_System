@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import json
 import os
+import smtplib
 import subprocess
 import sys
+from datetime import datetime, timezone
+from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +25,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[5]
 HERMES_DIR = PROJECT_ROOT / "hermes"
 SCRIPTS_DIR = PROJECT_ROOT / "03_Scripts" / "hermes"
 REPORTS_DIR = HERMES_DIR / "reports"
+ACTIVITY_LOG = HERMES_DIR / "activity_log.jsonl"
+BUDGET_DAILY_CNY = 20
+BUDGET_MONTHLY_CNY = 500
+ALERT_EMAIL = "tristanlyk@gmail.com"
 
 HERMES_SCRIPTS = {
     "pipeline-audit": {"script": "hermes_pipeline_audit.py", "label": "Pipeline Audit", "desc": "Scan systemd/Airflow/GH Actions → health report"},
@@ -357,12 +364,15 @@ def hermes_run(command: str):
     args = info.get("args", [])
     cmd = [sys.executable, str(script_path)] + list(args)
 
+    started_at = datetime.now(timezone.utc).isoformat()
     try:
         result = subprocess.run(
             cmd,
             cwd=str(PROJECT_ROOT),
             capture_output=True, text=True, timeout=120,
         )
+        # Log activity
+        _log_activity(command, info["script"], result.returncode, started_at)
         return {
             "command": command,
             "script": info["script"],
@@ -452,6 +462,186 @@ def hermes_source_health_history(source_id: str) -> dict:
         "sourceId": source_id,
         "qualityScore": source_score,
         "fetchStatus": status.get("voc", {}) if status else {},
+    }
+
+
+# ── Activity & Cost Heatmap ────────────────────────────────────────
+
+def _log_activity(command: str, script: str, exit_code: int, started_at: str) -> None:
+    """Append an activity record to the activity log."""
+    record = {
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "command": command,
+        "script": script,
+        "exitCode": exit_code,
+        "startedAt": started_at,
+    }
+    try:
+        ACTIVITY_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(ACTIVITY_LOG, "a") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _send_budget_alert(subject: str, body: str) -> bool:
+    """Try to send a budget alert email. Returns True if sent."""
+    smtp_host = os.getenv("HERMES_SMTP_HOST", "")
+    smtp_port = int(os.getenv("HERMES_SMTP_PORT", "587"))
+    smtp_user = os.getenv("HERMES_SMTP_USER", "")
+    smtp_pass = os.getenv("HERMES_SMTP_PASS", "")
+    if not smtp_host or not smtp_user:
+        return False
+    try:
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["Subject"] = f"[Hermes Budget Alert] {subject}"
+        msg["From"] = smtp_user
+        msg["To"] = ALERT_EMAIL
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as s:
+            s.starttls()
+            s.login(smtp_user, smtp_pass)
+            s.send_message(msg)
+        return True
+    except Exception:
+        return False
+
+
+@router.get("/activity-heatmap")
+def hermes_activity_heatmap(days: int = 30) -> dict:
+    """Return Hermes activity data for heatmap visualization."""
+    records: list[dict] = []
+    if ACTIVITY_LOG.is_file():
+        for line in ACTIVITY_LOG.read_text().strip().split("\n"):
+            if line.strip():
+                try:
+                    records.append(json.loads(line))
+                except Exception:
+                    pass
+
+    from collections import Counter
+    date_counts = Counter(r["timestamp"][:10] for r in records)
+    command_counts = Counter(r["command"] for r in records)
+
+    # Build daily grid for last N days
+    today = datetime.now(timezone.utc).date()
+    days_list: list[dict] = []
+    for i in range(days):
+        d = today.replace(day=1) if False else today
+        from datetime import timedelta
+        d = today - timedelta(days=days - 1 - i)
+        ds = d.strftime("%Y-%m-%d")
+        days_list.append({"date": ds, "count": date_counts.get(ds, 0)})
+
+    return {
+        "totalRecords": len(records),
+        "days": days_list,
+        "byCommand": dict(command_counts),
+        "lastRun": records[-1] if records else None,
+    }
+
+
+@router.get("/cost-heatmap")
+def hermes_cost_heatmap(days: int = 30) -> dict:
+    """Return daily cost data for heatmap visualization."""
+    audit_path = HERMES_DIR / "answer_audit.jsonl"
+    daily_costs: dict[str, float] = {}
+    by_model: dict[str, float] = {}
+
+    if audit_path.is_file():
+        for line in audit_path.read_text().strip().split("\n"):
+            if line.strip():
+                try:
+                    rec = json.loads(line)
+                    date = rec.get("createdAt", "")[:10]
+                    model = rec.get("modelUsed", "unknown")
+                    input_t = rec.get("inputTokens", 0) or 0
+                    output_t = rec.get("outputTokens", 0) or 0
+                    # Flash pricing
+                    cost = (input_t / 1_000_000) * 1.0 + (output_t / 1_000_000) * 2.0
+                    if "pro" in model:
+                        cost = (input_t / 1_000_000) * 3.0 + (output_t / 1_000_000) * 6.0
+                    daily_costs[date] = daily_costs.get(date, 0) + cost
+                    by_model[model] = by_model.get(model, 0) + cost
+                except Exception:
+                    pass
+
+    from datetime import timedelta
+    today = datetime.now(timezone.utc).date()
+    days_list: list[dict] = []
+    total = 0.0
+    for i in range(days):
+        d = today - timedelta(days=days - 1 - i)
+        ds = d.strftime("%Y-%m-%d")
+        cost = round(daily_costs.get(ds, 0), 4)
+        total += cost
+        over_daily = cost > BUDGET_DAILY_CNY
+        days_list.append({"date": ds, "costCny": cost, "overDailyBudget": over_daily})
+
+    over_monthly = total > BUDGET_MONTHLY_CNY
+    monthly_status = "ok"
+    alerts: list[str] = []
+    if over_monthly:
+        monthly_status = "exceeded"
+        alerts.append(f"Monthly cost {total:.2f} CNY exceeds {BUDGET_MONTHLY_CNY} CNY budget")
+    elif total > BUDGET_MONTHLY_CNY * 0.75:
+        monthly_status = "warning"
+        alerts.append(f"Monthly cost {total:.2f} CNY at {total/BUDGET_MONTHLY_CNY*100:.0f}% of {BUDGET_MONTHLY_CNY} CNY budget")
+
+    # Send email alert if budget exceeded
+    if alerts:
+        body = f"Hermes Cost Alert\n\nMonthly total: {total:.2f} CNY / {BUDGET_MONTHLY_CNY} CNY\nDaily budget: {BUDGET_DAILY_CNY} CNY\n\nAlerts:\n"
+        body += "\n".join(f"- {a}" for a in alerts)
+        body += f"\n\nView: https://www.ojeur.cloud/data-management → Hermes Governance"
+        email_sent = _send_budget_alert("Budget Alert", body)
+    else:
+        email_sent = False
+
+    return {
+        "days": days_list,
+        "totalCny": round(total, 4),
+        "dailyBudgetCny": BUDGET_DAILY_CNY,
+        "monthlyBudgetCny": BUDGET_MONTHLY_CNY,
+        "monthlyStatus": monthly_status,
+        "byModelCny": {k: round(v, 4) for k, v in by_model.items()},
+        "alerts": alerts,
+        "emailSent": email_sent,
+        "alertEmail": ALERT_EMAIL,
+    }
+
+
+@router.get("/daily-summary")
+def hermes_daily_summary() -> dict:
+    """Return a combined activity+cost summary for today."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # Activity today
+    activity_today = 0
+    if ACTIVITY_LOG.is_file():
+        for line in ACTIVITY_LOG.read_text().strip().split("\n"):
+            if line.strip() and today in line:
+                activity_today += 1
+
+    # Cost today
+    cost_cny = 0.0
+    audit_path = HERMES_DIR / "answer_audit.jsonl"
+    if audit_path.is_file():
+        for line in audit_path.read_text().strip().split("\n"):
+            if line.strip() and today in line:
+                try:
+                    rec = json.loads(line)
+                    input_t = rec.get("inputTokens", 0) or 0
+                    output_t = rec.get("outputTokens", 0) or 0
+                    cost_cny += (input_t / 1_000_000) * 1.0 + (output_t / 1_000_000) * 2.0
+                except Exception:
+                    pass
+
+    return {
+        "date": today,
+        "activityCount": activity_today,
+        "costCny": round(cost_cny, 4),
+        "dailyBudgetCny": BUDGET_DAILY_CNY,
+        "monthlyBudgetCny": BUDGET_MONTHLY_CNY,
+        "costStatus": "ok" if cost_cny <= BUDGET_DAILY_CNY else "over_daily",
     }
 
 

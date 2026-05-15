@@ -117,9 +117,12 @@ crawlerTasks:
     model: "deepseek-v4-pro"
     reason: "Multi-source strategic analysis."
 
-# --- Monthly Budget ---
+# --- Budget (alert only, no hard limit) ---
 monthlyBudget:
   currency: CNY
+  dailyBudgetCny: 20
   totalBudgetCny: 500
   warningThresholdRatio: 0.75
   exceededThresholdRatio: 1.0
+  hardLimit: false
+  alertEmail: "tristanlyk@gmail.com"
