@@ -87,10 +87,13 @@ if [[ "${#COUNTRIES[@]}" -eq 0 ]]; then
   exit 1
 fi
 
+CONCURRENCY="${JATO_MSRP_CONCURRENCY:-2}"
+
 echo "[INFO] MSRP low-concurrency runner"
 echo "[INFO] Repo: $REPO_DIR"
 echo "[INFO] Mode: $MODE"
 echo "[INFO] Countries: ${COUNTRIES[*]}"
+echo "[INFO] Concurrency: $CONCURRENCY (JATO_MSRP_CONCURRENCY)"
 echo "[INFO] Backend env: $BACKEND_ENV_FILE"
 echo "[INFO] MSRP env: $MSRP_ENV_FILE"
 echo "[INFO] API base: $JATO_API_BASE"
@@ -98,36 +101,95 @@ echo "[INFO] Log file: $LOG_FILE"
 echo "[INFO] Auto review: $AUTO_REVIEW"
 echo "[INFO] Auto materialize: $AUTO_MATERIALIZE"
 
-failures=0
 total="${#COUNTRIES[@]}"
-for index in "${!COUNTRIES[@]}"; do
-  country="${COUNTRIES[$index]}"
-  echo
-  echo "[RUN] $((index + 1))/$total country=$country mode=$MODE"
-  extra_args=()
-  if [[ "$MODE" == "ingest" ]]; then
-    if is_truthy "$AUTO_REVIEW"; then
-      extra_args+=(--auto-review --decided-by "$AUTO_REVIEW_DECIDED_BY" --auto-review-limit "$AUTO_REVIEW_LIMIT")
-    fi
-    if is_truthy "$AUTO_MATERIALIZE"; then
-      extra_args+=(--materialize --materialize-limit "$MATERIALIZE_LIMIT")
-    fi
-  fi
-  if "$PYTHON_BIN" "$TARGET_SCRIPT" "$country" "${extra_args[@]}"; then
-    echo "[OK] country=$country"
-  else
-    failures=$((failures + 1))
-    echo "[FAIL] country=$country"
-    if is_truthy "$STOP_ON_FAILURE"; then
-      echo "[INFO] Stopping because JATO_MSRP_STOP_ON_FAILURE=$STOP_ON_FAILURE"
-      exit 1
-    fi
-  fi
+active=0
+country_idx=0
+failures=0
+declare -a pids=()
+declare -A pid_country=()
 
-  if (( index + 1 < total )) && [[ "$PAUSE_SECONDS" != "0" ]]; then
-    echo "[INFO] Cooling down ${PAUSE_SECONDS}s before next country"
-    sleep "$PAUSE_SECONDS"
+while (( country_idx < total || active > 0 )); do
+  # Start new jobs while under concurrency limit
+  while (( active < CONCURRENCY && country_idx < total )); do
+    country="${COUNTRIES[$country_idx]}"
+    country_log="${LOG_DIR}/msrp-${MODE}-${country}-$(date +%Y%m%d-%H%M%S).log"
+    echo "[RUN] $((country_idx + 1))/$total country=$country mode=$MODE (parallel slot $((active + 1))/$CONCURRENCY)"
+
+    extra_args=()
+    if [[ "$MODE" == "ingest" ]]; then
+      if is_truthy "$AUTO_REVIEW"; then
+        extra_args+=(--auto-review --decided-by "$AUTO_REVIEW_DECIDED_BY" --auto-review-limit "$AUTO_REVIEW_LIMIT")
+      fi
+      if is_truthy "$AUTO_MATERIALIZE"; then
+        extra_args+=(--materialize --materialize-limit "$MATERIALIZE_LIMIT")
+      fi
+    fi
+
+    (
+      if "$PYTHON_BIN" "$TARGET_SCRIPT" "$country" "${extra_args[@]}"; then
+        echo "[OK] country=$country"
+        exit 0
+      else
+        echo "[FAIL] country=$country"
+        exit 1
+      fi
+    ) > "$country_log" 2>&1 &
+
+    pids+=($!)
+    pid_country[$!]="$country"
+    active=$((active + 1))
+    country_idx=$((country_idx + 1))
+  done
+
+  # Wait for any child to finish
+  if (( active > 0 )); then
+    if wait -n "${pids[@]}" 2>/dev/null; then
+      finished_pid=$!
+    else
+      # Find which pid finished
+      for pid in "${pids[@]}"; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+          finished_pid=$pid
+          break
+        fi
+      done
+    fi
+
+    # Find and remove finished pid
+    new_pids=()
+    for pid in "${pids[@]}"; do
+      if [[ "$pid" == "$finished_pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+        wait "$pid" 2>/dev/null && true
+        rc=$?
+        finished_country="${pid_country[$pid]:-?}"
+        if [[ $rc -ne 0 ]]; then
+          failures=$((failures + 1))
+          if is_truthy "$STOP_ON_FAILURE"; then
+            echo "[INFO] Stopping because JATO_MSRP_STOP_ON_FAILURE=true"
+            # Kill remaining children
+            for rpid in "${new_pids[@]}"; do
+              kill "$rpid" 2>/dev/null || true
+            done
+            wait 2>/dev/null
+            exit 1
+          fi
+        fi
+        active=$((active - 1))
+      else
+        new_pids+=("$pid")
+      fi
+    done
+    pids=("${new_pids[@]}")
   fi
+done
+
+# Collect per-country logs into main log
+for country in "${COUNTRIES[@]}"; do
+  for clog in "$LOG_DIR"/msrp-${MODE}-${country}-*.log; do
+    if [[ -f "$clog" ]]; then
+      cat "$clog" >> "$LOG_FILE"
+    fi
+  done
 done
 
 if (( failures > 0 )); then
@@ -135,4 +197,4 @@ if (( failures > 0 )); then
   exit 1
 fi
 
-echo "[INFO] Completed successfully"
+echo "[INFO] Completed successfully (parallel ×${CONCURRENCY})"

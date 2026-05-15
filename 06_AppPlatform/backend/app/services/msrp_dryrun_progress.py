@@ -47,8 +47,14 @@ def _list_log_files() -> list[Path]:
 
 
 def _parse_current_progress(log_path: Path | None = None) -> dict[str, Any]:
-    """Parse the latest (or specified) dryrun log for live progress."""
+    """Parse the latest dryrun progress — supports both parallel per-country logs
+    (msrp-dryrun-{country}-*.log) and legacy sequential logs (msrp-dryrun-*.log)."""
     if log_path is None:
+        # First try parallel per-country logs
+        country_logs = sorted(LOG_DIR.glob("msrp-dryrun-??-*.log"), reverse=True) if LOG_DIR.exists() else []
+        if country_logs:
+            return _parse_parallel_progress(country_logs)
+        # Fall back to sequential log
         files = _list_log_files()
         if not files:
             return {"available": False, "reason": "no_log_files"}
@@ -57,6 +63,90 @@ def _parse_current_progress(log_path: Path | None = None) -> dict[str, Any]:
     if not log_path.exists():
         return {"available": False, "reason": "log_not_found", "path": str(log_path)}
 
+    return _parse_sequential_log(log_path)
+
+
+def _parse_parallel_progress(country_logs: list[Path]) -> dict[str, Any]:
+    """Parse per-country parallel dryrun logs."""
+    countries = []
+    total_sources = total_pass = total_empty = total_fail = 0
+    running = _is_running()
+
+    for log_path in sorted(country_logs):
+        # Extract country code from filename: msrp-dryrun-se-20260515-HHMMSS.log
+        name = log_path.name
+        parts = name.replace("msrp-dryrun-", "").split("-")
+        if len(parts) < 1:
+            continue
+        cc = parts[0]
+        if len(cc) != 2 or not cc.isalpha():
+            # Not a country log, might be the main log
+            if name.startswith("msrp-dryrun-20"):
+                continue  # skip main sequential logs
+            continue
+
+        text = log_path.read_text(errors="replace")
+        ts = _parse_log_timestamp(name)
+
+        sources = []
+        for m in re.finditer(
+            r"\[\s*(\d+)/(\d+)\]\s*(\S+)\s+(\S+)\s+valid=(\d+)\s+extracted=(\d+)\s+rejected=(\d+)\s+\(([\d.]+)s\)",
+            text,
+        ):
+            emoji = m.group(3)
+            sources.append({
+                "index": int(m.group(1)),
+                "totalInCountry": int(m.group(2)),
+                "sourceCode": m.group(4),
+                "status": "pass" if "✅" in emoji else ("empty" if "⬚" in emoji else "fail"),
+                "valid": int(m.group(5)),
+                "extracted": int(m.group(6)),
+                "rejected": int(m.group(7)),
+                "elapsedSeconds": float(m.group(8)),
+            })
+
+        summary_m = re.search(
+            r"Results:\s*(\d+)/(\d+)\s+PASS,\s*(\d+)\s+empty,\s*(\d+)\s+rejected-all,\s*(\d+)\s+errors",
+            text,
+        )
+        pass_count = int(summary_m.group(1)) if summary_m else 0
+        total = int(summary_m.group(2)) if summary_m else len(sources)
+        empty_count = int(summary_m.group(3)) if summary_m else 0
+        fail_count = int(summary_m.group(5)) if summary_m else 0
+
+        countries.append({
+            "countryCode": cc,
+            "countryLabel": _country_label(cc),
+            "total": total,
+            "pass": pass_count,
+            "empty": empty_count,
+            "fail": fail_count,
+            "completed": bool(summary_m),
+            "passRate": round(pass_count / max(total, 1) * 100, 1),
+            "sources": sources,
+        })
+        total_sources += total
+        total_pass += pass_count
+        total_empty += empty_count
+        total_fail += fail_count
+
+    return {
+        "available": True,
+        "running": running,
+        "logFile": f"{len(country_logs)} country logs",
+        "startedAt": datetime.fromtimestamp(min(l.stat().st_mtime for l in country_logs), tz=timezone.utc).isoformat() if country_logs else None,
+        "countries": countries,
+        "totalSources": total_sources,
+        "totalPass": total_pass,
+        "totalEmpty": total_empty,
+        "totalFail": total_fail,
+        "overallPassRate": round(total_pass / max(total_sources, 1) * 100, 1) if total_sources > 0 else 0,
+        "recentResults": [],
+    }
+
+
+def _parse_sequential_log(log_path: Path) -> dict[str, Any]:
+    """Parse legacy sequential dryrun log."""
     text = log_path.read_text(errors="replace")
     ts = _parse_log_timestamp(log_path.name)
 
