@@ -16,7 +16,7 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, Header, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 router = APIRouter(prefix="/hermes", tags=["hermes"])
@@ -522,8 +522,10 @@ def _log_activity(command: str, script: str, exit_code: int, started_at: str) ->
         ACTIVITY_LOG.parent.mkdir(parents=True, exist_ok=True)
         with open(ACTIVITY_LOG, "a") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    except Exception as exc:
+        # Log to stderr so the error is visible in server logs
+        import sys as _sys
+        print(f"[hermes] Failed to write activity log: {exc}", file=_sys.stderr)
 
 
 def _send_budget_alert(subject: str, body: str) -> bool:
@@ -945,3 +947,438 @@ def hermes_markdown_diagrams(
     if file_filter:
         result = [d for d in result if file_filter.lower() in d["file"].lower()]
     return result
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Hermes Chat Gateway
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@router.post("/chat")
+def hermes_chat(payload: dict = Body(...)) -> dict:
+    """Natural-language entry point for Hermes.
+
+    **Request**::
+
+        {
+          "message": "show open governance gaps",
+          "sessionId": "optional-existing-session",
+          "context": {"userRole": "user|admin|developer"}
+        }
+
+    **Response** — ``replyType`` determines shape:
+
+    - ``direct_answer``: ``answer`` + ``dataRefs``
+    - ``run_created``: ``answer`` + ``runId`` + ``tasks`` + ``command``
+    - ``clarification_needed``: ``answer`` + ``suggestedActions``
+    - ``blocked_by_policy``: ``answer`` + block reason
+    """
+    from app.services.hermes_chat_service import (  # lazy import
+        add_message,
+        cleanup_old_sessions,
+        create_run_response,
+        create_session,
+        generate_direct_answer,
+        router as intent_router,
+    )
+    message = (payload.get("message") or "").strip()
+    if not message:
+        raise HTTPException(400, "message is required")
+
+    session_id = payload.get("sessionId") or ""
+    context: dict = payload.get("context") or {}
+
+    # Classify intent
+    classification = intent_router.classify(message, context)
+
+    # Generate response
+    intent = classification["intent"]
+    exec_mode = classification["executionMode"]
+    entities = classification.get("entities", {})
+
+    if exec_mode == "direct_answer":
+        resp = generate_direct_answer(intent, entities)
+    elif exec_mode == "create_run":
+        resp = create_run_response(intent, entities)
+    elif exec_mode == "blocked_by_policy":
+        resp = {
+            "replyType": "blocked_by_policy",
+            "answer": classification.get("blockReason", "This action is blocked by policy."),
+            "intent": intent,
+            "entities": entities,
+            "dataRefs": [],
+            "suggestedActions": [],
+        }
+    else:
+        suggested = classification.get("suggestedIntents", [])
+        resp = {
+            "replyType": "clarification_needed",
+            "answer": "I'm not sure what you want me to do. Did you mean one of these?",
+            "intent": intent,
+            "entities": entities,
+            "dataRefs": [],
+            "suggestedActions": [
+                {"label": si.replace("_", " ").title(), "action": "retry_with_intent", "intent": si}
+                for si in suggested
+            ],
+        }
+
+    resp["confidence"] = classification["confidence"]
+
+    # Session management
+    if not session_id:
+        s = create_session()
+        session_id = s["sessionId"]
+    message_id = f"msg_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    add_message(session_id, {
+        "messageId": message_id,
+        "role": "user",
+        "content": message,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    add_message(session_id, {
+        "messageId": message_id + "_resp",
+        "role": "assistant",
+        "content": resp["answer"],
+        "replyType": resp["replyType"],
+        "intent": intent,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    # Cleanup old sessions (run occasionally)
+    try:
+        cleanup_old_sessions(24)
+    except Exception:
+        pass
+
+    resp["sessionId"] = session_id
+    resp["messageId"] = message_id
+    return resp
+
+
+@router.get("/chat/sessions")
+def hermes_chat_sessions(limit: int = Query(20, ge=1, le=100)) -> list[dict]:
+    """List recent chat sessions."""
+    from app.services.hermes_chat_service import list_sessions
+    return list_sessions(limit)
+
+
+@router.get("/chat/sessions/{session_id}")
+def hermes_chat_session(session_id: str) -> dict:
+    """Get a chat session with all messages."""
+    from app.services.hermes_chat_service import get_session
+    s = get_session(session_id)
+    if s is None:
+        raise HTTPException(404, f"Session not found: {session_id}")
+    return s
+
+
+@router.get("/commands")
+def hermes_commands() -> list[dict]:
+    """Return all executable commands with parameters.
+
+    Each command includes label, description, required role, and
+    parameter schema so the frontend can render buttons or
+    auto-complete from natural-language input.
+    """
+    return [
+        {
+            "commandId": "pipeline-audit",
+            "label": "Pipeline Audit",
+            "description": "Scan systemd/Airflow/GH Actions for pipeline health.",
+            "requiredRole": "admin",
+            "mapsToIntent": "pipeline_audit",
+            "parameters": [],
+        },
+        {
+            "commandId": "source-quality",
+            "label": "Source Audit",
+            "description": "Score VOC/News/MSRP source health 0-100.",
+            "requiredRole": "admin",
+            "mapsToIntent": "source_audit",
+            "parameters": [],
+        },
+        {
+            "commandId": "cost-report",
+            "label": "Cost Report",
+            "description": "Calculate Flash/Pro token costs vs monthly budget.",
+            "requiredRole": "admin",
+            "mapsToIntent": "cost_refresh",
+            "parameters": [],
+        },
+        {
+            "commandId": "code-audit",
+            "label": "Code Audit",
+            "description": "Run 10-rule git diff audit scan.",
+            "requiredRole": "developer",
+            "mapsToIntent": "code_audit",
+            "parameters": [
+                {"name": "base", "type": "string", "required": False, "default": "main"},
+                {"name": "head", "type": "string", "required": False, "default": "HEAD"},
+            ],
+        },
+        {
+            "commandId": "evidence",
+            "label": "Evidence Writer",
+            "description": "Extract structured facts from artifacts into JSONL.",
+            "requiredRole": "admin",
+            "mapsToIntent": "evidence_refresh",
+            "parameters": [],
+        },
+        {
+            "commandId": "answer-audit",
+            "label": "Answer Audit",
+            "description": "Generate sample answer quality audits.",
+            "requiredRole": "admin",
+            "mapsToIntent": "evidence_refresh",
+            "parameters": [],
+        },
+    ]
+
+
+@router.post("/commands/execute")
+def hermes_command_execute(payload: dict = Body(...)) -> dict:
+    """Execute a Hermes command. Wraps POST /run/{command} with extra metadata.
+
+    **Request**::
+
+        {
+          "commandId": "source-quality",
+          "parameters": {},
+          "sessionId": "optional"
+        }
+
+    **Response**: same as POST /run/{command} plus ``commandId`` and ``runId``.
+    """
+    command_id = (payload.get("commandId") or "").strip()
+    if not command_id:
+        raise HTTPException(400, "commandId is required")
+    if command_id not in HERMES_SCRIPTS:
+        raise HTTPException(400, f"Unknown command: {command_id}. Available: {', '.join(HERMES_SCRIPTS)}")
+
+    info = HERMES_SCRIPTS[command_id]
+    script_path = SCRIPTS_DIR / info["script"]
+    if not script_path.is_file():
+        raise HTTPException(500, f"Script not found: {script_path}")
+
+    args = list(info.get("args", []))
+    # Merge user-supplied parameters
+    user_params: dict = payload.get("parameters") or {}
+    if "base" in user_params:
+        args[args.index("--base") + 1 if "--base" in args else len(args):] = ["--base", user_params["base"]]
+    if "head" in user_params:
+        args[args.index("--head") + 1 if "--head" in args else len(args):] = ["--head", user_params["head"]]
+
+    cmd = [sys.executable, str(script_path)] + args
+    started_at = datetime.now(timezone.utc).isoformat()
+    run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+
+    try:
+        result = subprocess.run(
+            cmd, cwd=str(PROJECT_ROOT), capture_output=True, text=True, timeout=120,
+        )
+        _log_activity(command_id, info["script"], result.returncode, started_at)
+        return {
+            "commandId": command_id,
+            "runId": run_id,
+            "script": info["script"],
+            "exitCode": result.returncode,
+            "stdout": result.stdout[-8000:],
+            "stderr": result.stderr[-2000:],
+            "status": "success" if result.returncode == 0 else "failed",
+        }
+    except subprocess.TimeoutExpired:
+        _log_activity(command_id, info["script"], -1, started_at)
+        return {
+            "commandId": command_id,
+            "runId": run_id,
+            "script": info["script"],
+            "exitCode": -1,
+            "stdout": "",
+            "stderr": "Timeout after 120 seconds",
+            "status": "timeout",
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Hermes DevSync — Development Governance Loop
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@router.post("/dev/events")
+def hermes_dev_event_post(payload: dict = Body(...)) -> dict:
+    """Append a development event (from Claude Code or other source).
+
+    **Request**::
+
+        {
+          "eventType": "implementation_completed",
+          "source": "claude_code",
+          "title": "Feature title",
+          "summary": "What was done",
+          "linkedFeatureIds": ["feature-id"],
+          "changedFiles": ["path/to/file.py"],
+          "addedEndpoints": ["POST /some/endpoint"],
+          "tests": {"backend": "647 passed"},
+          "risks": [],
+          "nextSteps": []
+        }
+    """
+    from app.services.hermes_devsync_service import append_dev_event
+    event = append_dev_event(payload)
+    return event
+
+
+@router.get("/dev/events")
+def hermes_dev_events(
+    event_type: str | None = Query(None, description="Filter: implementation_completed, test_run, ..."),
+    source: str | None = Query(None, description="Filter: claude_code, web, manual, ..."),
+    limit: int = Query(50, ge=1, le=200),
+) -> list[dict]:
+    """List development events."""
+    from app.services.hermes_devsync_service import list_dev_events
+    return list_dev_events(event_type=event_type, source=source, limit=limit)
+
+
+@router.post("/dev/sync")
+def hermes_dev_sync(
+    payload: dict = Body(default_factory=dict),
+    source: str | None = Query(None, description="Caller: github_actions, claude_code, manual"),
+    authorization: str | None = Header(None, alias="Authorization"),
+) -> dict:
+    """Trigger DevSync — read dev events, update features, generate MD, write evidence, create gaps.
+
+    **Authentication** (for GitHub Actions)::
+
+        Authorization: Bearer <HERMES_SYNC_TOKEN>
+
+    **Idempotency**: if ``commitSha`` + ``workflowRunId`` were already synced,
+    returns ``{"status": "already_synced", ...}``.
+
+    **Request body** (optional)::
+
+        {
+          "source": "github_actions",
+          "commitSha": "abc123",
+          "workflowRunId": "12345",
+          "branch": "main"
+        }
+    """
+    from app.services.hermes_devsync_service import sync_dev_events
+
+    # Token auth for GitHub Actions
+    sync_token = os.getenv("HERMES_SYNC_TOKEN", "").strip()
+    if sync_token:
+        if source == "github_actions":
+            token = ""
+            if authorization and authorization.startswith("Bearer "):
+                token = authorization[7:].strip()
+            if token != sync_token:
+                raise HTTPException(401, "Invalid or missing sync token")
+
+    # Idempotency check
+    commit_sha = payload.get("commitSha", "") if isinstance(payload, dict) else ""
+    run_id = payload.get("workflowRunId", "") if isinstance(payload, dict) else ""
+    if commit_sha and run_id:
+        idem_path = HERMES_DIR / "dev_events" / f"_sync_{commit_sha}_{run_id}.json"
+        if idem_path.is_file():
+            return {"status": "already_synced", "commitSha": commit_sha, "workflowRunId": run_id}
+
+    result = sync_dev_events()
+
+    # Write idempotency marker
+    if commit_sha and run_id:
+        try:
+            idem_path = HERMES_DIR / "dev_events" / f"_sync_{commit_sha}_{run_id}.json"
+            idem_path.parent.mkdir(parents=True, exist_ok=True)
+            idem_path.write_text(json.dumps({"syncedAt": datetime.now(timezone.utc).isoformat()}))
+        except Exception:
+            pass
+
+    return result
+
+
+@router.get("/dev/features")
+def hermes_dev_features(
+    status: str | None = Query(None),
+    category: str | None = Query(None),
+) -> list[dict]:
+    """List features from the DevSync feature registry."""
+    from app.services.hermes_devsync_service import list_features
+    return list_features(status=status, category=category)
+
+
+@router.get("/dev/features/{feature_id}")
+def hermes_dev_feature(feature_id: str) -> dict:
+    """Get a single feature by ID."""
+    from app.services.hermes_devsync_service import get_feature
+    f = get_feature(feature_id)
+    if f is None:
+        raise HTTPException(404, f"Feature not found: {feature_id}")
+    return f
+
+
+@router.get("/dev/workspace-health")
+def hermes_dev_workspace_health() -> dict:
+    """Return workspace health — uncommitted changes, unsynced events, risk level.
+
+    Detects blind spots where code changed but no dev event was written.
+    Only works when running locally (needs git + repo access).
+    """
+    import subprocess as _sp
+
+    health: dict[str, Any] = {
+        "changedFiles": [],
+        "stagedFiles": [],
+        "committedUnpushed": [],
+        "pushedUnsyncedEvents": 0,
+        "unlinkedChanges": 0,
+        "riskLevel": "low",
+        "warnings": [],
+    }
+
+    try:
+        r = _sp.run(["git", "diff", "--name-only"], cwd=str(PROJECT_ROOT),
+                     capture_output=True, text=True, timeout=10)
+        changed = [f for f in r.stdout.strip().split("\n") if f]
+        health["changedFiles"] = changed
+
+        r = _sp.run(["git", "diff", "--cached", "--name-only"], cwd=str(PROJECT_ROOT),
+                     capture_output=True, text=True, timeout=10)
+        staged = [f for f in r.stdout.strip().split("\n") if f]
+        health["stagedFiles"] = staged
+
+        r = _sp.run(["git", "log", "origin/main..HEAD", "--oneline"], cwd=str(PROJECT_ROOT),
+                     capture_output=True, text=True, timeout=10)
+        unpushed = [f for f in r.stdout.strip().split("\n") if f]
+        health["committedUnpushed"] = unpushed
+
+        code_exts = {".py", ".ts", ".tsx", ".yaml", ".yml", ".json", ".css", ".js"}
+        code_changed = [f for f in changed + staged
+                        if any(f.endswith(ext) for ext in code_exts)
+                        and "node_modules" not in f and ".venv" not in f]
+        dev_events_changed = any("dev_events.jsonl" in f for f in changed + staged)
+
+        health["unlinkedChanges"] = len(code_changed) if not dev_events_changed else 0
+
+        if health["unlinkedChanges"] > 10:
+            health["riskLevel"] = "high"
+            health["warnings"].append(
+                f"{health['unlinkedChanges']} code files changed without dev event update"
+            )
+        elif health["unlinkedChanges"] > 3:
+            health["riskLevel"] = "medium"
+            health["warnings"].append(
+                f"{health['unlinkedChanges']} code files changed without dev event update"
+            )
+        elif health["unlinkedChanges"] > 0:
+            health["riskLevel"] = "low"
+            health["warnings"].append("Some code changes not in dev events")
+
+        if len(unpushed) > 3:
+            health["riskLevel"] = "medium" if health["riskLevel"] == "low" else health["riskLevel"]
+            health["warnings"].append(f"{len(unpushed)} unpushed commits")
+
+    except Exception:
+        health["warnings"].append("git unavailable — cannot assess workspace health")
+
+    return health

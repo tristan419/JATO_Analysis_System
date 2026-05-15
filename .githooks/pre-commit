@@ -1,0 +1,4 @@
+#!/bin/bash
+# Hermes pre-commit: warn if code changed but no dev event updated.
+# Uses --warn flag — warns but never blocks commit.
+python3 03_Scripts/hermes/hermes_dev_event_check.py --warn

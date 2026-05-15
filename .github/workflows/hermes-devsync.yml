@@ -28,9 +28,11 @@ jobs:
         run: python 03_Scripts/hermes/hermes_dev_event_generator.py
 
       - name: Commit updated dev_events.jsonl
+        id: commit_dev_event
         run: |
           if git diff --quiet hermes/dev_events/dev_events.jsonl; then
             echo "No new dev event to commit."
+            echo "skipped=true" >> $GITHUB_OUTPUT
           else
             git config user.name "hermes-bot"
             git config user.email "hermes-bot@jato-analysis.local"
@@ -39,4 +41,26 @@ jobs:
             git commit -m "hermes: auto dev event from push $SHA_SHORT"
             git pull --rebase origin main
             git push origin main
+            echo "skipped=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger Hermes DevSync on server
+        if: always() && steps.commit_dev_event.outcome == 'success'
+        run: |
+          SYNC_URL="${{ secrets.HERMES_BASE_URL }}/v1/hermes/dev/sync?source=github_actions"
+          echo "Calling Hermes DevSync..."
+
+          HTTP_CODE=$(curl -s -o /tmp/sync_resp.json -w "%{http_code}" \
+            --connect-timeout 10 --max-time 30 \
+            -X POST "$SYNC_URL" \
+            -H "Authorization: Bearer ${{ secrets.HERMES_SYNC_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"source\":\"github_actions\",\"commitSha\":\"$GITHUB_SHA\",\"workflowRunId\":\"$GITHUB_RUN_ID\",\"branch\":\"$GITHUB_REF_NAME\"}")
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "DevSync succeeded:"
+            python3 -c "import json; d=json.load(open('/tmp/sync_resp.json')); print(json.dumps(d, indent=2))"
+          else
+            echo "DevSync returned HTTP $HTTP_CODE (non-blocking warning)"
+            cat /tmp/sync_resp.json 2>/dev/null || true
           fi

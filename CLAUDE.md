@@ -84,8 +84,21 @@ After EVERY non-trivial implementation, bug fix, refactor, or test change, Claud
 3. **Verify** the feature appears in Hermes UI → Dev tab with correct status,
    docs, and evidence.
 
+4. **Report Hermes DevSync status** in the final summary:
+   - Dev event written: yes/no
+   - Feature updated: yes/no
+   - Markdown generated: yes/no
+   - Evidence written: yes/no
+   - Gaps created: yes/no
+   - Tests run: backend/frontend results
+
 This is NOT optional. Every implementation session must close the DevSync loop.
 Contract reference: `Markdown_Readme/Hermes/HERMES_CLAUDE_CODE_DEVSYNC_CONTRACT.md`
+
+### Automated enforcement layers
+1. **pre-commit hook**: warns if code changed but dev_events.jsonl not updated
+2. **post-commit hook**: auto-generates commit-level dev event from git diff
+3. **GitHub Actions (hermes-devsync.yml)**: on push → scans diff → generates dev event → commits it back → calls remote DevSync API
 
 ## Validation rules
 

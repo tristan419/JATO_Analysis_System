@@ -1,0 +1,4 @@
+#!/bin/bash
+# Hermes post-commit: auto-generate a dev event from the latest commit.
+python3 03_Scripts/hermes/hermes_dev_event_generator.py
+echo "[Hermes] dev event auto-generated for $(git rev-parse --short HEAD)"
