@@ -135,14 +135,12 @@ def _select_market_price(
             "selectedBy": "pricingByMarket",
         }
 
-    fallback_country = _normalize_market_name(record.get("pricingCountry"))
     fallback_amount = record.get("startPrice")
     fallback_currency = str(record.get("currency") or "").strip().upper()
-    if (
-        fallback_country == normalized_target
-        and fallback_amount not in (None, "")
-        and fallback_currency
-    ):
+    # Accept startPrice even when pricingCountry differs from target —
+    # EVKX converts prices to the requested country's currency but keeps
+    # pricingCountry as the vehicle's native market (e.g. UnitedStates).
+    if fallback_amount not in (None, "") and fallback_currency:
         return {
             "marketLabel": normalized_target,
             "rawMarketLabel": record.get("pricingCountry"),
