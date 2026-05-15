@@ -360,6 +360,23 @@ fi
 python -m pip install -e "$TOOLKIT_DIR" \
   -i "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST"
 
+echo "[INFO] Install Playwright browsers (headless chromium)"
+CURRENT_STEP="Install Playwright browsers"
+log_section "$CURRENT_STEP"
+if "$VENV_DIR/bin/python" -c "import playwright" 2>/dev/null; then
+  export http_proxy="${http_proxy:-http://127.0.0.1:7897}"
+  export https_proxy="${https_proxy:-http://127.0.0.1:7897}"
+  "$VENV_DIR/bin/playwright" install chromium 2>&1 || echo "[WARN] playwright install chromium failed — MSRP scraper may not work"
+  # Also cache for root (systemd services run as root)
+  if [[ -d "$HOME/.cache/ms-playwright" ]]; then
+    sudo -n mkdir -p /root/.cache/ms-playwright
+    sudo -n cp -a "$HOME/.cache/ms-playwright/." /root/.cache/ms-playwright/ 2>/dev/null || true
+    echo "[INFO] Playwright browser cache synced to /root/.cache/ms-playwright"
+  fi
+else
+  echo "[INFO] Playwright not installed; skipping browser install"
+fi
+
 echo "[INFO] Reconcile scraper schedulers"
 CURRENT_STEP="Reconcile scraper schedulers"
 log_section "$CURRENT_STEP"
