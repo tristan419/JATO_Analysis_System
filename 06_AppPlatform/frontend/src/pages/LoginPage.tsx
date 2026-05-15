@@ -182,6 +182,39 @@ export function LoginPage() {
           <span style={{ color: "#3370ff", fontSize: 16 }}>▷</span>
           飞书登录
         </button>
+
+        <button
+          type="button"
+          onClick={async () => {
+            try {
+              const res = await fetch("/v1/auth/google/auth-url?redirect=" + encodeURIComponent(redirect));
+              if (!res.ok) throw new Error("Google not available");
+              const { url } = await res.json();
+              window.location.href = url;
+            } catch {
+              setError("Google sign in unavailable");
+            }
+          }}
+          style={{
+            width: "100%",
+            padding: "10px 0",
+            borderRadius: 10,
+            border: "1px solid rgba(255,255,255,0.08)",
+            background: "rgba(255,255,255,0.04)",
+            color: "#e2e8f0",
+            fontSize: 14,
+            fontWeight: 500,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            marginTop: 8,
+          }}
+        >
+          <span style={{ color: "#4285f4", fontWeight: 700, fontSize: 15 }}>G</span>
+          Sign in with Google
+        </button>
       </form>
     </div>
   );

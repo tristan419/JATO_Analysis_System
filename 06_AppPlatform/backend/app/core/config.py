@@ -147,6 +147,15 @@ FEISHU_REDIRECT_URI = os.getenv(
     "http://127.0.0.1:8000/v1/auth/feishu/callback",
 ).strip()
 
+# ── Google OAuth ──
+GOOGLE_CLIENT_ID = os.getenv("APP_GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.getenv("APP_GOOGLE_CLIENT_SECRET", "").strip()
+GOOGLE_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+GOOGLE_REDIRECT_URI = os.getenv(
+    "APP_GOOGLE_REDIRECT_URI",
+    "http://127.0.0.1:8000/v1/auth/google/callback",
+).strip()
+
 CORS_ORIGINS: list[str] = [
     origin.strip()
     for origin in os.getenv(

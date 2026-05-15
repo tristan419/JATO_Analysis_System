@@ -10,7 +10,12 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.config import FEISHU_ENABLED, FEISHU_REDIRECT_URI
+from app.core.config import (
+    FEISHU_ENABLED,
+    FEISHU_REDIRECT_URI,
+    GOOGLE_ENABLED,
+    GOOGLE_REDIRECT_URI,
+)
 from app.core.security import UserContext, get_current_user, require_min_role
 from app.db.models import User
 from app.db.session import get_db_session
@@ -211,3 +216,74 @@ def _build_feishu_url(state: str, redirect: str) -> str:
         + "?" + urlencode({"state": state, "redirect": redirect})
     )
     return build_auth_url(state=state, redirect_uri=callback)
+
+
+# ── Google OAuth ─────────────────────────────────────────────────
+
+
+@router.get("/google/auth-url")
+def google_auth_url(
+    redirect: str = Query("/", description="Frontend page to return to"),
+) -> dict:
+    """Return the Google OAuth authorization URL."""
+    if not GOOGLE_ENABLED:
+        raise HTTPException(status_code=503, detail="Google login not configured")
+    state = secrets.token_urlsafe(16)
+    from app.services.google_service import build_auth_url
+
+    callback = (
+        GOOGLE_REDIRECT_URI
+        + "?" + urlencode({"state": state, "redirect": redirect})
+    )
+    url = build_auth_url(state=state, redirect_uri=callback)
+    return {"url": url, "state": state}
+
+
+@router.get("/google/callback")
+def google_callback(
+    code: str = Query(...),
+    state: str = Query(...),
+    redirect: str = Query("/"),
+    db: Session = Depends(get_db_session),
+) -> RedirectResponse:
+    """Google OAuth callback — exchange code, find/create user, redirect."""
+    if not GOOGLE_ENABLED:
+        raise HTTPException(status_code=503, detail="Google login not configured")
+
+    from app.services.google_service import exchange_code
+
+    try:
+        user_info = exchange_code(code, GOOGLE_REDIRECT_URI)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=401, detail=f"Google auth failed: {exc}"
+        ) from exc
+
+    email = str(user_info.get("email") or "").strip()
+    google_id = str(user_info.get("sub") or "")
+
+    if not email or not google_id:
+        raise HTTPException(status_code=401, detail="Missing Google account info")
+
+    # Use email prefix as username
+    username = email.split("@")[0]
+
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        from uuid import uuid4
+        from app.services.auth_service import hash_password
+
+        user = User(
+            id=uuid4(),
+            username=username,
+            password_hash=hash_password(secrets.token_urlsafe(16)),
+            role="viewer",
+            is_active=True,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    token = session_store.create(user.username, user.role)
+    frontend_url = f"{redirect}?token={token}&username={user.username}&role={user.role}"
+    return RedirectResponse(url=frontend_url)
