@@ -671,6 +671,29 @@ def hermes_feature_kanban() -> dict:
         "planned": "#f59e0b",
     }
 
+    # Phase mapping: infer phase from implementation status
+    def _infer_phase(f: dict) -> str:
+        status = f.get("status", "")
+        impl = f.get("implementationStatus", "")
+        notes = str(f.get("notes", "") or "")
+        if impl == "implemented":
+            return "Phase 6 — Deployed"
+        if impl == "partial":
+            if status == "beta":
+                return "Phase 3-4 — Beta testing"
+            return "Phase 5 — Integration"
+        if status == "planned":
+            return "Phase 2 — PRD ready"
+        if status == "archived":
+            return "Archived"
+        if impl == "prd_only":
+            return "Phase 2 — PRD only"
+        if any(k in notes.lower() for k in ["phase 0", "phase 1", "phase 2", "phase 3", "phase 4", "phase 5"]):
+            for kw in ["phase 0", "phase 1", "phase 2", "phase 3", "phase 4", "phase 5", "phase 6"]:
+                if kw in notes.lower():
+                    return kw.capitalize()
+        return "Phase 2 — Defined"
+
     for f in features:
         status = f.get("status", "unknown")
         impl = f.get("implementationStatus", "unknown")
@@ -680,6 +703,7 @@ def hermes_feature_kanban() -> dict:
             "name": f.get("name", "?"),
             "status": status,
             "implementationStatus": impl,
+            "phase": _infer_phase(f),
             "riskLevel": f.get("riskLevel", "low"),
             "routes": f.get("routes", []),
             "backendApis": (f.get("backendApis", []) or [])[:3],

@@ -785,7 +785,10 @@ export function DataManagementPage() {
                               background:"#fff",borderRadius:6,padding:"10px 12px",marginBottom:8,
                               border:"1px solid #e2e8f0",borderLeft:`3px solid ${feat.color || "#94a3b8"}`,fontSize:12,
                             }}>
-                              <div style={{fontWeight:600,marginBottom:4}}>{String(feat.name)}</div>
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                                <span style={{fontWeight:600}}>{String(feat.name)}</span>
+                                <span style={{fontSize:9,background:feat.implementationStatus==="implemented"?"#dcfce7":feat.implementationStatus==="partial"?"#dbeafe":"#fef3c7",color:feat.implementationStatus==="implemented"?"#166534":feat.implementationStatus==="partial"?"#1e40af":"#92400e",padding:"1px 6px",borderRadius:3,fontWeight:600}}>{String(feat.phase||feat.implementationStatus||"")}</span>
+                              </div>
                               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:4}}>
                                 {(feat.routes as unknown[])?.length > 0 && <span style={{fontSize:10,background:"#e0f2fe",color:"#0369a1",padding:"1px 6px",borderRadius:3}}>{(feat.routes as string[]).join(" ")}</span>}
                                 {(feat.backendApis as unknown[])?.length > 0 && <span style={{fontSize:10,background:"#fef3c7",color:"#92400e",padding:"1px 6px",borderRadius:3}}>{(feat.backendApis as string[]).length} APIs</span>}
@@ -794,7 +797,7 @@ export function DataManagementPage() {
                                 {hasTests && <span style={{color:"#22c55e"}}>Tests</span>}
                                 {hasDocs && <span style={{color:"#3b82f6"}}>Docs</span>}
                                 {hasIssues && <span style={{color:"#ef4444"}}>Issues</span>}
-                                <span style={{color:riskColor,fontWeight:600}}>{risk} risk</span>
+                                <span style={{color:riskColor,fontWeight:600}}>{risk}</span>
                               </div>
                             </div>
                           );
@@ -895,15 +898,19 @@ export function DataManagementPage() {
             {/* ── Sources sub-tab ── */}
             {hermesSubtab === "sources" && (
               <div className="card crud-card">
-                <div className="admin-card-header"><div><h2>Source Quality</h2></div></div>
+                <div className="admin-card-header"><div><h2>Source Catalog</h2></div></div>
                 <div style={{padding:16}}>
                   {(hermesSources as Record<string,unknown>)?.summary?(
-                    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:12}}>
-                      {[["Total",(hermesSources as Record<string,unknown>).summary?.totalSources,"#3b82f6"],["Watch",(hermesSources as Record<string,unknown>).summary?.watch,"#f59e0b"],["Degraded",(hermesSources as Record<string,unknown>).summary?.degraded,"#ef4444"],["High Risk",(hermesSources as Record<string,unknown>).summary?.highRisk,"#ef4444"]].map(([label,val,color])=>(
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:12,marginBottom:12}}>
+                      {[["Total",(hermesSources as Record<string,unknown>).summary?.totalSources,"#3b82f6"],["Watch",(hermesSources as Record<string,unknown>).summary?.watch,"#f59e0b"],["Degraded",(hermesSources as Record<string,unknown>).summary?.degraded,"#ef4444"],["High Risk",(hermesSources as Record<string,unknown>).summary?.highRisk,"#ef4444"],["VOC",((hermesSources as Record<string,unknown>)?.sources as unknown[])?.filter((s:unknown)=>String((s as Record<string,unknown>).sourceType).includes("voc")||String((s as Record<string,unknown>).sourceId).includes("voc")).length||0,"#8b5cf6"],["News",((hermesSources as Record<string,unknown>)?.sources as unknown[])?.filter((s:unknown)=>String((s as Record<string,unknown>).sourceType).includes("news")).length||0,"#3b82f6"]].map(([label,val,color])=>(
                         <div key={String(label)} className="metric-chip"><span>{String(label)}</span><strong style={{color:String(color)}}>{String(val||0)}</strong></div>
                       ))}
                     </div>
                   ):null}
+                  {/* Type filter */}
+                  <div style={{display:"flex",gap:6,marginBottom:12}}>
+                    {["all","voc","news","msrp","forum","official"].map((t)=>(<button key={t} type="button" className="btn btn-sm btn-ghost" style={{fontSize:11,textTransform:"capitalize"}} onClick={()=>{const cards=document.querySelectorAll("[data-source-type]");cards.forEach((c)=>{const el=c as HTMLElement;el.style.display=t==="all"||el.dataset.sourceType===t?"":"none";});}}>{t==="all"?"All":t}</button>))}
+                  </div>
                   {((hermesSources as Record<string,unknown>)?.sources as unknown[])?.length>0?(
                     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:8}}>
                       {((hermesSources as Record<string,unknown>)?.sources as unknown[]).map((s:unknown)=>{
@@ -912,7 +919,7 @@ export function DataManagementPage() {
                         const sc=status==="degraded"?"#ef4444":status==="watch"?"#f59e0b":"#22c55e";
                         const barColor=qs<40?"#ef4444":qs<70?"#f59e0b":"#22c55e";
                         return(
-                          <div key={String(src.sourceId)} style={{padding:"10px 14px",background:"#fff",borderRadius:8,border:"1px solid #e2e8f0",borderLeft:`3px solid ${sc}`,cursor:"pointer",fontSize:12}}
+                          <div key={String(src.sourceId)} data-source-type={String(src.sourceType||"").split(" ")[0]} style={{padding:"10px 14px",background:"#fff",borderRadius:8,border:"1px solid #e2e8f0",borderLeft:`3px solid ${sc}`,cursor:"pointer",fontSize:12}}
                             onClick={()=>{setSelectedSource(src);setSourceDetailOpen(true);api.hermesSourceDetail(String(src.sourceId||"")).then(setSourceDetail).catch(()=>setSourceDetail(null));}}>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                               <strong>{String(src.name).slice(0,35)}</strong>
