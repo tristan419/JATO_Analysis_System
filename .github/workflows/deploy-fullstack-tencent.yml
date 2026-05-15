@@ -175,6 +175,7 @@ jobs:
           REMOTE_EXPORTS+="export DEPLOY_ENABLE_HTTPS=$(printf '%q' "$DEPLOY_ENABLE_HTTPS"); "
           REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
           REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
+          REMOTE_EXPORTS+="export HERMES_SYNC_TOKEN=$(printf '%q' '${{ secrets.HERMES_SYNC_TOKEN }}'); "
 
           ssh -v -p "$SSH_PORT" \
             -o BatchMode=yes \
@@ -198,10 +199,12 @@ jobs:
             sudo -n mkdir -p "$(dirname "$ENV_FILE")" 2>/dev/null || true
             if sudo -n test -f "$ENV_FILE" 2>/dev/null; then
               sudo -n sed -i '/^DEEPSEEK_API_KEY=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^HERMES_SYNC_TOKEN=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_COUNTRY_CHAT_MODEL_OPTIONS=/d' "$ENV_FILE" 2>/dev/null || true
               {
                 echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY"
+                echo "HERMES_SYNC_TOKEN=$HERMES_SYNC_TOKEN"
                 echo "APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=60"
                 echo "APP_COUNTRY_CHAT_MODEL_OPTIONS=deepseek:deepseek-chat"
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
@@ -283,6 +286,7 @@ jobs:
           REMOTE_EXPORTS+="export DEPLOY_ENABLE_HTTPS=$(printf '%q' "$DEPLOY_ENABLE_HTTPS"); "
           REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
           REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
+          REMOTE_EXPORTS+="export HERMES_SYNC_TOKEN=$(printf '%q' '${{ secrets.HERMES_SYNC_TOKEN }}'); "
 
           sshpass -p "$SSH_PASSWORD" \
             ssh -v -p "$SSH_PORT" \
@@ -307,10 +311,12 @@ jobs:
             sudo -n mkdir -p "$(dirname "$ENV_FILE")" 2>/dev/null || true
             if sudo -n test -f "$ENV_FILE" 2>/dev/null; then
               sudo -n sed -i '/^DEEPSEEK_API_KEY=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^HERMES_SYNC_TOKEN=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_COUNTRY_CHAT_MODEL_OPTIONS=/d' "$ENV_FILE" 2>/dev/null || true
               {
                 echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY"
+                echo "HERMES_SYNC_TOKEN=$HERMES_SYNC_TOKEN"
                 echo "APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS=60"
                 echo "APP_COUNTRY_CHAT_MODEL_OPTIONS=deepseek:deepseek-chat"
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
