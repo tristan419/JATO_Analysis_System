@@ -4806,13 +4806,14 @@ select:focus, input:focus {
 
 .review-gantt-row {
   display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
+  grid-template-columns: 120px minmax(0, 1fr) 150px;
   gap: 10px;
   align-items: center;
 }
 
 .review-gantt-row--head {
   align-items: end;
+  grid-template-columns: 120px repeat(6, minmax(0, 1fr)) 150px;
 }
 
 .review-gantt-label {
@@ -4844,6 +4845,52 @@ select:focus, input:focus {
   text-transform: uppercase;
   color: var(--c-text-muted);
 }
+
+.review-gantt-progress-head {
+  text-align: left;
+  padding-left: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-text-muted);
+}
+
+.review-gantt-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.review-gantt-progress-track {
+  width: 64px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.review-gantt-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.review-gantt-progress-fill.is-done { background: #16a34a; }
+.review-gantt-progress-fill.is-active { background: #1c69d4; }
+.review-gantt-progress-fill.is-planned { background: #cbd5e1; }
+
+.review-gantt-progress-text {
+  font-size: 10px;
+  font-weight: 600;
+  color: #475569;
+  white-space: nowrap;
+}
+
+.review-gantt-progress-text--muted { color: #94a3b8; font-weight: 400; }
 
 .review-gantt-lane {
   display: grid;

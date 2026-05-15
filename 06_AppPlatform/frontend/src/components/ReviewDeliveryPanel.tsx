@@ -1,11 +1,24 @@
 import { useState } from "react";
 
+interface CountryStats {
+  totalCountries: number;
+  jatoCountries: number;
+}
+
+interface WorkbenchCoverage {
+  modelSource: number;
+  brandSource: number;
+  missingSource: number;
+}
+
 interface ReviewDeliveryPanelProps {
   totalCases: number;
   pendingCount: number;
   approvedCount: number;
   rejectedCount: number;
   groupCount: number;
+  countryStats?: CountryStats | null;
+  workbenchCoverage?: WorkbenchCoverage | null;
 }
 
 type DeliveryState = "done" | "active" | "planned";
@@ -21,6 +34,9 @@ interface GanttRow {
   start: number;
   span: number;
   state: DeliveryState;
+  done?: number;
+  total?: number;
+  progressPct?: number;
 }
 
 const GANTT_COLUMNS = [
@@ -42,12 +58,18 @@ function resolveDeliveryState(active: boolean, done: boolean): DeliveryState {
   return "planned";
 }
 
+function formatPct(n: number): string {
+  return `${Math.round(Math.max(0, Math.min(100, n)))}%`;
+}
+
 export function ReviewDeliveryPanel({
   totalCases,
   pendingCount,
   approvedCount,
   rejectedCount,
   groupCount,
+  countryStats,
+  workbenchCoverage,
 }: ReviewDeliveryPanelProps) {
   const [collapsed, setCollapsed] = useState(false);
   const reviewedCount = approvedCount + rejectedCount;
@@ -97,36 +119,69 @@ export function ReviewDeliveryPanel({
     },
   ] as const;
 
+  // ── Per-swimlane progress ──────────────────────────────
+  const countryTotal = countryStats?.jatoCountries ?? 0;
+  const countryDone = countryStats?.totalCountries ?? 0;
+  const countryPct = countryTotal > 0 ? (countryDone / countryTotal) * 100 : 0;
+
+  // Source cleanup: sources with coverage / total candidates
+  const sourceTotal = workbenchCoverage
+    ? workbenchCoverage.modelSource + workbenchCoverage.brandSource + workbenchCoverage.missingSource
+    : 0;
+  const sourceDone = workbenchCoverage
+    ? workbenchCoverage.modelSource + workbenchCoverage.brandSource
+    : 0;
+  const sourcePct = sourceTotal > 0 ? (sourceDone / sourceTotal) * 100 : 0;
+
+  const reviewPct = totalCases > 0 ? (reviewedCount / totalCases) * 100 : 0;
+  const materializePct = totalCases > 0 ? (approvedCount / totalCases) * 100 : 0;
+  const qaPct = reviewedCount > 0 ? (approvedCount / reviewedCount) * 100 : 0;
+
   const ganttRows: GanttRow[] = [
     {
       label: "Country rollout",
       start: 1,
       span: 2,
-      state: resolveDeliveryState(totalCases > 0, totalCases > 0),
+      state: resolveDeliveryState(countryDone > 0, countryPct >= 100),
+      done: countryDone,
+      total: countryTotal,
+      progressPct: countryPct,
     },
     {
       label: "Source cleanup",
       start: 2,
       span: 2,
-      state: resolveDeliveryState(pendingCount > 0 || totalCases > 0, pendingCount === 0 && totalCases > 0),
+      state: resolveDeliveryState(sourceDone > 0, sourcePct >= 100),
+      done: sourceDone,
+      total: sourceTotal,
+      progressPct: sourcePct,
     },
     {
       label: "Review decisions",
       start: 3,
       span: 2,
-      state: resolveDeliveryState(pendingCount > 0, totalCases > 0 && pendingCount === 0),
+      state: resolveDeliveryState(reviewedCount > 0, reviewedCount >= totalCases && totalCases > 0),
+      done: reviewedCount,
+      total: totalCases,
+      progressPct: reviewPct,
     },
     {
       label: "Materialize refresh",
       start: 5,
       span: 1,
-      state: resolveDeliveryState(approvedCount > 0, approvedCount > 0 && pendingCount === 0),
+      state: resolveDeliveryState(approvedCount > 0, approvedCount >= totalCases && totalCases > 0),
+      done: approvedCount,
+      total: totalCases,
+      progressPct: materializePct,
     },
     {
       label: "QA / anomaly pass",
       start: 6,
       span: 1,
-      state: resolveDeliveryState(reviewedCount > 0, reviewedCount > 0 && pendingCount === 0),
+      state: resolveDeliveryState(approvedCount > 0, approvedCount >= reviewedCount && reviewedCount > 0),
+      done: approvedCount,
+      total: reviewedCount,
+      progressPct: qaPct,
     },
   ];
 
@@ -237,7 +292,7 @@ export function ReviewDeliveryPanel({
           <section className="review-delivery-pane review-delivery-pane--gantt">
             <div className="review-delivery-pane-head">
               <strong>Development Gantt</strong>
-              <span className="section-note">前端审核交付节奏</span>
+              <span className="section-note">前端审核交付节奏 · 每泳道显示完成进度</span>
             </div>
             <div className="review-gantt">
               <div className="review-gantt-row review-gantt-row--head">
@@ -245,6 +300,7 @@ export function ReviewDeliveryPanel({
                 {GANTT_COLUMNS.map((column) => (
                   <span key={column} className="review-gantt-column">{column}</span>
                 ))}
+                <span className="review-gantt-progress-head">Progress</span>
               </div>
               {ganttRows.map((row) => (
                 <div key={row.label} className="review-gantt-row">
@@ -258,6 +314,25 @@ export function ReviewDeliveryPanel({
                     >
                       {row.label}
                     </span>
+                  </div>
+                  <div className="review-gantt-progress" title={row.total != null ? `${row.done ?? 0} / ${row.total}` : undefined}>
+                    {row.total != null && row.total > 0 ? (
+                      <>
+                        <span className="review-gantt-progress-track">
+                          <span
+                            className={`review-gantt-progress-fill is-${row.state}`}
+                            style={{ width: formatPct(row.progressPct ?? 0) }}
+                          />
+                        </span>
+                        <span className="review-gantt-progress-text">
+                          {row.done ?? 0}/{row.total} ({formatPct(row.progressPct ?? 0)})
+                        </span>
+                      </>
+                    ) : (
+                      <span className="review-gantt-progress-text review-gantt-progress-text--muted">
+                        —
+                      </span>
+                    )}
                   </div>
                 </div>
               ))}

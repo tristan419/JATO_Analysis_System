@@ -11,7 +11,7 @@ import {
   TextSearchFilters,
   useTextSearchFilters,
 } from "../components/TextSearchFilters";
-import type { ReviewCandidateMatch, ReviewCase, ReviewCaseDetail } from "../types";
+import type { ReviewCandidateMatch, ReviewCase, ReviewCaseDetail, ReviewWorkbench } from "../types";
 import {
   formatReviewTrimSummary,
   summarizeReviewTrimCollection,
@@ -372,6 +372,9 @@ export function ReviewCasesPage() {
   /* country stats */
   const [countryStats, setCountryStats] = useState<{ totalCountries: number; jatoCountries: number } | null>(null);
 
+  /* workbench snapshot for Gantt phase progress */
+  const [workbench, setWorkbench] = useState<ReviewWorkbench | null>(null);
+
   /* detail + decision */
   const [detail, setDetail] = useState<ReviewCaseDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -439,6 +442,15 @@ export function ReviewCasesPage() {
       setCountryStats(stats);
     } catch {
       /* non-critical */
+    }
+  }
+
+  async function refreshWorkbench() {
+    try {
+      const { item } = await api.getReviewWorkbench();
+      setWorkbench(item);
+    } catch {
+      /* non-critical — Gantt will fall back gracefully */
     }
   }
 
@@ -538,6 +550,7 @@ export function ReviewCasesPage() {
 
   useEffect(() => {
     void refreshStats();
+    void refreshWorkbench();
   }, []);
 
   /* ── derived ────────────────────────────────────── */
@@ -915,6 +928,8 @@ export function ReviewCasesPage() {
         approvedCount={approvedCount}
         rejectedCount={rejectedCount}
         groupCount={caseGroups.length}
+        countryStats={countryStats}
+        workbenchCoverage={workbench?.coverageSummary ?? null}
       />
 
       {/* ── Detail + Decision Panel ─────────────── */}
