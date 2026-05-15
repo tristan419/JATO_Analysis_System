@@ -26,6 +26,20 @@ x-airflow-common: &airflow-common
     - airflow
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: jato-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - ./redis_data:/data
+
   jato-dashboard:
     image: ${JATO_IMAGE:-jato-dashboard:local}
     build:

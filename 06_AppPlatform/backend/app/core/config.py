@@ -113,6 +113,15 @@ FILTER_OPTIONS_SNAPSHOT_TTL_SECONDS = int(
     os.getenv("APP_FILTER_OPTIONS_SNAPSHOT_TTL_SECONDS", "300")
 )
 
+REDIS_URL = os.getenv("APP_REDIS_URL", "redis://localhost:6379/0").strip()
+REDIS_ENABLED = _parse_bool_env("APP_REDIS_ENABLED", True)
+MARKET_SCAN_CACHE_TTL_SECONDS = int(
+    os.getenv("APP_MARKET_SCAN_CACHE_TTL_SECONDS", "300")
+)
+MARKET_SCAN_CACHE_SCHEMA_VERSION = int(
+    os.getenv("APP_MARKET_SCAN_CACHE_SCHEMA_VERSION", "2")
+)
+
 AUTH_ENABLED = _parse_bool_env("APP_AUTH_ENABLED", True)
 AUTH_TOKEN = os.getenv("APP_AUTH_TOKEN", "change-me")
 
