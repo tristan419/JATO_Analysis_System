@@ -744,172 +744,10 @@ export function DataManagementPage() {
           <LoadingSurface mode="inline" label="Loading Hermes governance data..." kicker="Hermes" />
         ) : (
           <>
-            {/* ---------- Tool Chain: How Hermes Works ---------- */}
-            <div className="card crud-card">
-              <div className="admin-card-header"><div><h2>How Hermes Works</h2></div></div>
-              <div style={{ padding: 16 }}>
-                {(hermesToolchain?.workflow as unknown[])?.length > 0 ? (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20, alignItems: "flex-start" }}>
-                    {(hermesToolchain.workflow as unknown[]).map((step: unknown) => {
-                      const s = step as Record<string,unknown>;
-                      return (
-                        <div key={Number(s.step)} style={{
-                          flex: "0 0 180px", background: "#f8fafc", borderRadius: 8,
-                          padding: "10px 12px", borderLeft: "3px solid #3b82f6", fontSize: 12,
-                        }}>
-                          <div style={{fontWeight:700,color:"#3b82f6",marginBottom:2}}>{s.phase}</div>
-                          <div style={{fontWeight:600,marginBottom:4}}>{s.action}</div>
-                          <div style={{color:"#64748b",fontSize:11}}>{s.description}</div>
-                          <div style={{color:"#94a3b8",fontSize:10,marginTop:4,fontFamily:"monospace"}}>{s.script}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : null}
-
-                {/* Scripts + Registries + Reports in 3 columns */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, fontSize: 13 }}>
-                  <div>
-                    <strong style={{display:"block",marginBottom:8}}>Scripts ({(hermesToolchain?.scriptCount as number) || 0})</strong>
-                    {((hermesToolchain?.scripts as unknown[]) || []).map((s: unknown) => {
-                      const sc = s as Record<string,unknown>;
-                      return <div key={String(sc.name)} style={{padding:"3px 0",fontFamily:"monospace",fontSize:11,color:"#475569"}}>{String(sc.name)}</div>;
-                    })}
-                  </div>
-                  <div>
-                    <strong style={{display:"block",marginBottom:8}}>Registries ({(hermesToolchain?.registryCount as number) || 0})</strong>
-                    {((hermesToolchain?.registries as unknown[]) || []).map((r: unknown) => {
-                      const reg = r as Record<string,unknown>;
-                      return <div key={String(reg.name)} style={{padding:"3px 0",fontFamily:"monospace",fontSize:11,color:"#475569"}}>{String(reg.name)}</div>;
-                    })}
-                  </div>
-                  <div>
-                    <strong style={{display:"block",marginBottom:8}}>Reports ({(hermesToolchain?.reportCount as number) || 0})</strong>
-                    {((hermesToolchain?.reports as unknown[]) || []).map((r: unknown) => {
-                      const rep = r as Record<string,unknown>;
-                      return <div key={String(rep.name)} style={{padding:"3px 0",fontFamily:"monospace",fontSize:11,color:"#475569"}}>{String(rep.name)}</div>;
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* ---------- 4 Governors: Who Does What ---------- */}
-            <div className="card crud-card">
-              <div className="admin-card-header"><div><h2>4 Hermes Governors — Who Should I Ask?</h2></div></div>
-              <div style={{ padding: 16 }}>
-                {(hermesArch?.modules as unknown[])?.length > 0 ? (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12, marginBottom: 16 }}>
-                    {(hermesArch.modules as unknown[]).map((m: unknown) => {
-                      const mod = m as Record<string,unknown>;
-                      const scripts = (mod.scripts as string[]) || [];
-                      const answers = (mod.answers as string[]) || [];
-                      const icon = String(mod.icon || "");
-                      const colors: Record<string,string> = {code:"#3b82f6",pipeline:"#f59e0b",intelligence:"#8b5cf6",knowledge:"#22c55e"};
-                      return (
-                        <div key={String(mod.governor)} style={{
-                          background: "#f8fafc", borderRadius: 8, padding: "14px 16px",
-                          borderLeft: `4px solid ${colors[icon] || "#94a3b8"}`,
-                        }}>
-                          <div style={{fontWeight:700,fontSize:15,marginBottom:2,color:colors[icon]}}>{mod.governor}</div>
-                          <div style={{color:"#64748b",fontSize:11,marginBottom:8}}>{mod.phase} · {scripts.join(", ")}</div>
-                          <div style={{fontSize:12,color:"#334155",marginBottom:4,fontWeight:600}}>Answers:</div>
-                          {answers.map((a: string, i: number) => (
-                            <div key={i} style={{fontSize:11,color:"#475569",padding:"1px 0",paddingLeft:8,borderLeft:"2px solid #e2e8f0",marginBottom:2}}>{a}</div>
-                          ))}
-                          <div style={{marginTop:8,fontSize:10,color:"#94a3b8"}}>Trigger: {mod.triggers}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : null}
-
-                {/* Work Routing Table */}
-                {(hermesArch?.routing as unknown[])?.length > 0 ? (
-                  <div>
-                    <strong style={{display:"block",marginBottom:8,fontSize:14}}>Work Routing Guide</strong>
-                    <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
-                      <thead><tr style={{background:"#f1f5f9"}}>
-                        <th style={{padding:"6px 10px",textAlign:"left"}}>I want to...</th>
-                        <th style={{padding:"6px 10px",textAlign:"left"}}>Ask</th>
-                        <th style={{padding:"6px 10px",textAlign:"left",fontFamily:"monospace",fontSize:11}}>Command</th>
-                      </tr></thead>
-                      <tbody>
-                        {(hermesArch.routing as unknown[]).slice(0, 10).map((r: unknown, i: number) => {
-                          const row = r as Record<string,unknown>;
-                          return (
-                            <tr key={i} style={{borderTop:"1px solid #e2e8f0"}}>
-                              <td style={{padding:"6px 10px",fontWeight:500}}>{String(row.task)}</td>
-                              <td style={{padding:"6px 10px",color:"#3b82f6",fontWeight:600,fontSize:11}}>{String(row.ask)}</td>
-                              <td style={{padding:"6px 10px",fontFamily:"monospace",fontSize:11,color:"#475569"}}>{String(row.run)}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-
-            {/* ---------- Dependency Graph ---------- */}
-            <div className="card crud-card">
-              <div className="admin-card-header"><div><h2>How They Connect</h2></div></div>
-              <div style={{ padding: 16 }}>
-                {((hermesArch?.dependencies as unknown[]) || []).map((d: unknown, i: number) => {
-                  const dep = d as Record<string,unknown>;
-                  return (
-                    <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"5px 0",fontSize:12,borderBottom:"1px solid #f1f5f9"}}>
-                      <span style={{fontFamily:"monospace",fontWeight:600,color:"#3b82f6",minWidth:180}}>{String(dep.from)}</span>
-                      <span style={{color:"#94a3b8"}}>→</span>
-                      <span style={{fontFamily:"monospace",fontWeight:600,color:"#f59e0b",minWidth:140}}>{String(dep.to)}</span>
-                      <span style={{color:"#64748b",fontSize:11}}>{String(dep.what)}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* ---------- Operations: Run Hermes Scripts ---------- */}
-            <div className="card crud-card">
-              <div className="admin-card-header"><div><h2>Operations — Run Hermes Scripts from UI</h2></div></div>
-              <div style={{ padding: 16 }}>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
-                  {["pipeline-audit","source-quality","cost-report","code-audit","evidence","answer-audit"].map((cmd) => (
-                    <button key={cmd} type="button" className="btn btn-sm btn-primary"
-                      style={{ fontSize: 12 }}
-                      onClick={() => {
-                        setHermesLoading(true);
-                        api.hermesRun(cmd).then((res) => {
-                          const el = document.getElementById(`hermes-run-output-${cmd}`);
-                          if (el) el.textContent = JSON.stringify(res, null, 2);
-                          // Refresh related data
-                          if (cmd === "pipeline-audit") api.hermesPipelineHealth().then(setHermesPipelines);
-                          if (cmd === "source-quality") api.hermesSourceQuality().then(setHermesSources);
-                          if (cmd === "cost-report") api.hermesCost().then(setHermesCost);
-                        }).catch((e) => {
-                          const el = document.getElementById(`hermes-run-output-${cmd}`);
-                          if (el) el.textContent = String(e);
-                        }).finally(() => setHermesLoading(false));
-                      }}
-                    >
-                      Run {cmd.replace("-"," ")}
-                    </button>
-                  ))}
-                </div>
-                <div style={{ background: "#1e293b", color: "#e2e8f0", borderRadius: 8, padding: 12, fontFamily: "monospace", fontSize: 11, maxHeight: 200, overflow: "auto", whiteSpace: "pre-wrap" }}>
-                  {(["pipeline-audit","source-quality","cost-report","code-audit","evidence","answer-audit"] as string[]).map((cmd) => (
-                    <div key={cmd} id={`hermes-run-output-${cmd}`} style={{ display: "none" }} />
-                  ))}
-                  <span style={{ color: "#64748b" }}>Click a Run button above. Output appears here.</span>
-                </div>
-              </div>
-            </div>
-
-            {/* ---------- Activity & Cost Heatmaps ---------- */}
+            {/* ═══════════ PRIORITY 1: Heatmaps — first thing you see ═══════════ */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
               <div className="card crud-card">
-                <div className="admin-card-header"><div><h2>Activity Heatmap (30d) — Hermes Script Runs</h2></div></div>
+                <div className="admin-card-header"><div><h2>Activity Heatmap (30d) — Hermes Usage</h2></div></div>
                 <div style={{ padding: 16 }}>
                   {hermesActivity ? (
                     <>
@@ -927,12 +765,12 @@ export function DataManagementPage() {
                         })}
                       </div>
                     </>
-                  ) : <span style={{color:"#94a3b8",fontSize:12}}>No activity data yet. Run a Hermes script to populate.</span>}
+                  ) : <span style={{color:"#94a3b8",fontSize:12}}>No activity data yet.</span>}
                 </div>
               </div>
 
               <div className="card crud-card">
-                <div className="admin-card-header"><div><h2>Cost Heatmap (30d) — 20 CNY/day, 500 CNY/month</h2></div></div>
+                <div className="admin-card-header"><div><h2>Cost Heatmap (30d) — 20 CNY/day · 500 CNY/month</h2></div></div>
                 <div style={{ padding: 16 }}>
                   {hermesCostHeatmap ? (
                     <>
@@ -941,7 +779,7 @@ export function DataManagementPage() {
                           Total: {(hermesCostHeatmap.totalCny as number)?.toFixed(2)} CNY
                         </span>
                         <span style={{color:"#64748b"}}>Budget: {String(hermesCostHeatmap.monthlyBudgetCny)} CNY/mo</span>
-                        {hermesCostHeatmap.emailSent ? <span style={{color:"#f59e0b"}}>Alert emailed to {(hermesCostHeatmap.alertEmail as string)}</span> : null}
+                        {hermesCostHeatmap.emailSent ? <span style={{color:"#f59e0b"}}>Alert emailed</span> : null}
                       </div>
                       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(28px,1fr))",gap:3}}>
                         {((hermesCostHeatmap.days as unknown[]) || []).map((d: unknown) => {
@@ -949,13 +787,12 @@ export function DataManagementPage() {
                           const cost = (day.costCny as number) || 0;
                           const over = day.overDailyBudget;
                           const intensity = cost === 0 ? "#f1f5f9" : cost < 5 ? "#bbf7d0" : cost < 10 ? "#4ade80" : cost < 20 ? "#f59e0b" : "#ef4444";
-                          return <div key={String(day.date)} title={`${String(day.date)}: ${cost.toFixed(2)} CNY${over ? " OVER DAILY BUDGET" : ""}`}
+                          return <div key={String(day.date)} title={`${String(day.date)}: ${cost.toFixed(2)} CNY${over ? " OVER 20 CNY" : ""}`}
                             style={{aspectRatio:"1",background:intensity,borderRadius:3,minWidth:24,border: over ? "2px solid #ef4444" : "none"}} />;
                         })}
                       </div>
                       <div style={{display:"flex",gap:12,marginTop:8,fontSize:11,color:"#64748b"}}>
-                        <span>0 CNY</span><span style={{flex:1,background:"linear-gradient(to right,#f1f5f9,#bbf7d0,#4ade80,#f59e0b,#ef4444)",height:8,borderRadius:4}} />
-                        <span>20+ CNY</span>
+                        <span>0</span><span style={{flex:1,background:"linear-gradient(to right,#f1f5f9,#bbf7d0,#4ade80,#f59e0b,#ef4444)",height:8,borderRadius:4}} /><span>20+</span>
                       </div>
                       {(hermesCostHeatmap.alerts as unknown[])?.length > 0 && (
                         <div style={{marginTop:8,padding:"8px 12px",background:"#fef2f2",borderRadius:6,fontSize:12,color:"#ef4444"}}>
@@ -968,7 +805,7 @@ export function DataManagementPage() {
               </div>
             </div>
 
-            {/* ---------- 当前状态 ---------- */}
+            {/* ═══════════ PRIORITY 2: Current Status ═══════════ */}
             <div className="card crud-card">
               <div className="admin-card-header"><div><h2>Current Status</h2></div></div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, padding: 16 }}>
@@ -1192,6 +1029,89 @@ export function DataManagementPage() {
                 </div>
               </div>
             </div>
+
+            {/* ═══════════ REFERENCE: How Hermes Works ═══════════ */}
+            <details style={{marginTop:16}}>
+              <summary style={{cursor:"pointer",fontSize:13,fontWeight:600,color:"#64748b",padding:"8px 0"}}>Hermes Architecture & Reference (click to expand)</summary>
+              <div style={{marginTop:12}}>
+
+            {/* Operations */}
+            <div className="card crud-card">
+              <div className="admin-card-header"><div><h2>Operations — Run Hermes Scripts</h2></div></div>
+              <div style={{ padding: 16 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+                  {["pipeline-audit","source-quality","cost-report","code-audit","evidence","answer-audit"].map((cmd) => (
+                    <button key={cmd} type="button" className="btn btn-sm btn-primary"
+                      style={{ fontSize: 12 }}
+                      onClick={() => {
+                        setHermesLoading(true);
+                        api.hermesRun(cmd).then((res) => {
+                          const el = document.getElementById(`hermes-run-output-${cmd}`);
+                          if (el) el.textContent = JSON.stringify(res, null, 2);
+                          if (cmd === "pipeline-audit") api.hermesPipelineHealth().then(setHermesPipelines);
+                          if (cmd === "source-quality") api.hermesSourceQuality().then(setHermesSources);
+                          if (cmd === "cost-report") api.hermesCost().then(setHermesCost);
+                        }).catch((e) => {
+                          const el = document.getElementById(`hermes-run-output-${cmd}`);
+                          if (el) el.textContent = String(e);
+                        }).finally(() => setHermesLoading(false));
+                      }}
+                    >Run {cmd.replace("-"," ")}</button>
+                  ))}
+                </div>
+                <div style={{ background: "#1e293b", color: "#e2e8f0", borderRadius: 8, padding: 12, fontFamily: "monospace", fontSize: 11, maxHeight: 200, overflow: "auto", whiteSpace: "pre-wrap" }}>
+                  {(["pipeline-audit","source-quality","cost-report","code-audit","evidence","answer-audit"] as string[]).map((cmd) => (
+                    <div key={cmd} id={`hermes-run-output-${cmd}`} style={{ display: "none" }} />
+                  ))}
+                  <span style={{ color: "#64748b" }}>Click a Run button above. Output appears here.</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 4 Governors */}
+            {(hermesArch?.modules as unknown[])?.length > 0 && (
+              <div className="card crud-card">
+                <div className="admin-card-header"><div><h2>4 Hermes Governors</h2></div></div>
+                <div style={{ padding: 16 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12 }}>
+                    {(hermesArch.modules as unknown[]).map((m: unknown) => {
+                      const mod = m as Record<string,unknown>;
+                      const icon = String(mod.icon || "");
+                      const colors: Record<string,string> = {code:"#3b82f6",pipeline:"#f59e0b",intelligence:"#8b5cf6",knowledge:"#22c55e"};
+                      return (
+                        <div key={String(mod.governor)} style={{background:"#f8fafc",borderRadius:8,padding:"10px 14px",borderLeft:`4px solid ${colors[icon]||"#94a3b8"}`,fontSize:12}}>
+                          <div style={{fontWeight:700,fontSize:14,color:colors[icon]}}>{mod.governor}</div>
+                          <div style={{color:"#64748b",fontSize:11}}>{(mod.answers as string[])?.[0] || ""}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* How They Connect */}
+            {((hermesArch?.dependencies as unknown[]) || []).length > 0 && (
+              <div className="card crud-card">
+                <div className="admin-card-header"><div><h2>How They Connect</h2></div></div>
+                <div style={{ padding: 16 }}>
+                  {((hermesArch?.dependencies as unknown[]) || []).slice(0, 8).map((d: unknown, i: number) => {
+                    const dep = d as Record<string,unknown>;
+                    return (
+                      <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"3px 0",fontSize:11,borderBottom:"1px solid #f1f5f9"}}>
+                        <span style={{fontFamily:"monospace",fontWeight:600,color:"#3b82f6",minWidth:150,fontSize:10}}>{String(dep.from)}</span>
+                        <span style={{color:"#94a3b8"}}>→</span>
+                        <span style={{fontFamily:"monospace",fontWeight:600,color:"#f59e0b",minWidth:120,fontSize:10}}>{String(dep.to)}</span>
+                        <span style={{color:"#64748b",fontSize:10}}>{String(dep.what)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+              </div>
+            </details>
           </>
         )
       ) : null}
