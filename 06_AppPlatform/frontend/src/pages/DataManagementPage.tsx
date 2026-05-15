@@ -3,8 +3,10 @@ import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
 import { AdminToolsNav } from "../components/AdminToolsNav";
+import { HermesAskResponseCard } from "../components/HermesAskResponseCard";
 import { HermesMermaidBlock } from "../components/HermesMermaidBlock";
 import { LoadingSurface } from "../components/LoadingSurface";
+import { MsrpDryrunDashboard } from "../components/MsrpDryrunDashboard";
 import type {
   DataManagementAirflowStatus,
   DataManagementDomain,
@@ -17,6 +19,8 @@ import type {
 import type {
   HermesActivityResponse,
   HermesArchResponse,
+  HermesChatResponse,
+  HermesChatSuggestedAction,
   HermesCostResponse,
   HermesDailySummaryResponse,
   HermesEvidenceLedgerResponse,
@@ -25,6 +29,7 @@ import type {
   HermesMermaidBlock as HermesMermaidBlockType,
   HermesOverviewResponse,
   HermesPipelineHealthResponse,
+  HermesReplyType,
   HermesSourceQualityResponse,
   HermesToolchainResponse,
 } from "../types/hermes";
@@ -37,7 +42,7 @@ import {
 } from "../utils/dataManagement";
 
 type CrudEntityTab = "msrp-sources" | "engineering-projects" | "review-overrides";
-type DataSubpage = "overview" | "hermes" | "features" | "voc" | "admin";
+type DataSubpage = "overview" | "hermes" | "features" | "voc" | "admin" | "dryrun";
 type HermesSubtab = "capabilities" | "activity" | "cost" | "roadmap" | "diagrams";
 const DEFAULT_RECENT_ITEMS_VISIBLE = 6;
 
@@ -261,6 +266,46 @@ export function DataManagementPage() {
   const [diagramModal, setDiagramModal] = useState<HermesMermaidBlockType | null>(null);
   const [diagramSearch, setDiagramSearch] = useState("");
   const [diagramFileFilter, setDiagramFileFilter] = useState("all");
+
+  // Chat state
+  const [askDraft, setAskDraft] = useState("");
+  const [askSending, setAskSending] = useState(false);
+  const [askResponse, setAskResponse] = useState<HermesChatResponse | null>(null);
+  const [askError, setAskError] = useState("");
+  const [askSessionId, setAskSessionId] = useState("");
+
+  async function sendAskMessage() {
+    const msg = askDraft.trim();
+    if (!msg || askSending) return;
+    setAskSending(true);
+    setAskError("");
+    setAskResponse(null);
+    try {
+      const resp = await api.hermesChat({
+        message: msg,
+        sessionId: askSessionId || undefined,
+        context: { userRole: "admin" },
+      });
+      setAskResponse(resp);
+      if (resp.sessionId && !askSessionId) setAskSessionId(resp.sessionId);
+      setAskDraft("");
+    } catch (e: unknown) {
+      setAskError((e as Error).message || String(e));
+    } finally {
+      setAskSending(false);
+    }
+  }
+
+  function handleAskKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendAskMessage();
+    }
+  }
+
+  function handleSuggestedPrompt(prompt: string) {
+    setAskDraft(prompt);
+  }
   const [crudLoading, setCrudLoading] = useState(false);
   const [crudError, setCrudError] = useState("");
   const [crudNotice, setCrudNotice] = useState("");
@@ -769,6 +814,7 @@ export function DataManagementPage() {
         <button type="button" className={`admin-tab${subpage === "features" ? " is-active" : ""}`} onClick={() => setSubpage("features")}>Features</button>
         <button type="button" className={`admin-tab${subpage === "voc" ? " is-active" : ""}`} onClick={() => setSubpage("voc")}>VOC</button>
         <button type="button" className={`admin-tab${subpage === "admin" ? " is-active" : ""}`} onClick={() => setSubpage("admin")}>Admin</button>
+        <button type="button" className={`admin-tab${subpage === "dryrun" ? " is-active" : ""}`} onClick={() => setSubpage("dryrun")}>MSRP Dryrun</button>
       </div>
 
       {subpage === "voc" ? (
@@ -902,6 +948,66 @@ export function DataManagementPage() {
               </div>
             )}
 
+            {/* ── Ask Hermes bar ── */}
+            <div style={{marginBottom:16}}>
+              <div className="hermes-ask-bar">
+                <input
+                  type="text"
+                  className="hermes-ask-input"
+                  placeholder="Ask Hermes anything about this system..."
+                  value={askDraft}
+                  onChange={(e) => setAskDraft(e.target.value)}
+                  onKeyDown={handleAskKeyDown}
+                  disabled={askSending}
+                />
+                <button
+                  className="btn btn-sm btn-primary"
+                  onClick={sendAskMessage}
+                  disabled={askSending || !askDraft.trim()}
+                  style={{padding:"6px 14px",borderRadius:"0 8px 8px 0"}}
+                >
+                  {askSending ? "..." : "Ask"}
+                </button>
+              </div>
+              {/* Suggested prompts */}
+              <div className="hermes-suggested-prompts" style={{marginTop:8,display:"flex",flexWrap:"wrap",gap:6}}>
+                {[
+                  "Show open governance gaps",
+                  "Run source audit",
+                  "Recent activity",
+                  "Evidence ledger past 7 days",
+                  "Cost status",
+                ].map((p) => (
+                  <button
+                    key={p}
+                    className="btn btn-sm btn-ghost"
+                    style={{fontSize:10,background:"#f1f5f9",borderRadius:4,padding:"3px 10px"}}
+                    onClick={() => handleSuggestedPrompt(p)}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+              {/* Response */}
+              {askError && (
+                <div style={{marginTop:8,padding:"8px 12px",background:"#fef2f2",borderRadius:6,fontSize:12,color:"#ef4444"}}>
+                  {askError}
+                </div>
+              )}
+              {askResponse && (
+                <HermesAskResponseCard
+                  response={askResponse}
+                  onDismiss={() => setAskResponse(null)}
+                  onSuggestedAction={(action: HermesChatSuggestedAction) => {
+                    if (action.intent) setAskDraft(action.intent.replace(/_/g, " "));
+                    if (action.command) {
+                      api.hermesCommandExecute({ commandId: action.command }).catch((e: Error) => setAskError(e.message));
+                    }
+                  }}
+                />
+              )}
+            </div>
+
             {/* Hermes summary bar */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
               <div className="card crud-card" style={{padding:12,textAlign:"center"}}>
@@ -1005,7 +1111,7 @@ export function DataManagementPage() {
                   <div className="admin-card-header"><div><h2>Run Hermes Scripts</h2></div></div>
                   <div style={{padding:12}}>
                     <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
-                      {Object.entries(HERMES_SCRIPTS_MAP).map(([cmd,label])=>(<button key={cmd} className="btn btn-sm btn-primary" style={{fontSize:11}} onClick={()=>{api.hermesRun(cmd).then((res)=>{const el=document.getElementById(`hout-${cmd}`);if(el)el.textContent=JSON.stringify(res,null,2);if(cmd==="pipeline-audit")api.hermesPipelineHealth().then(setHermesPipelines);if(cmd==="source-quality")api.hermesSourceQuality().then(setHermesSources);if(cmd==="cost-report")api.hermesCost().then(setHermesCost);}).catch((e)=>{const el=document.getElementById(`hout-${cmd}`);if(el)el.textContent=String(e);});}}>Run {label}</button>))}
+                      {Object.entries(HERMES_SCRIPTS_MAP).map(([cmd,label])=>(<button key={cmd} className="btn btn-sm btn-primary" style={{fontSize:11}} onClick={()=>{api.hermesCommandExecute({commandId:cmd}).then((res)=>{const el=document.getElementById(`hout-${cmd}`);if(el)el.textContent=`[${res.status}] exit=${res.exitCode} runId=${res.runId}\n${res.stdout||res.stderr||""}`;if(cmd==="pipeline-audit")api.hermesPipelineHealth().then(setHermesPipelines);if(cmd==="source-quality")api.hermesSourceQuality().then(setHermesSources);if(cmd==="cost-report")api.hermesCost().then(setHermesCost);}).catch((e)=>{const el=document.getElementById(`hout-${cmd}`);if(el)el.textContent=String(e);});}}>Run {label}</button>))}
                     </div>
                     <div style={{background:"#1e293b",color:"#e2e8f0",borderRadius:6,padding:10,fontFamily:"monospace",fontSize:10,maxHeight:120,overflow:"auto",whiteSpace:"pre-wrap"}}>
                       {Object.keys(HERMES_SCRIPTS_MAP).map(cmd=>(<div key={cmd} id={`hout-${cmd}`} style={{display:"none"}} />))}
@@ -2272,6 +2378,13 @@ export function DataManagementPage() {
           <AdminToolsNav />
         </>
       ) : null}
+
+      {subpage === "dryrun" ? (
+        <div className="card crud-card" style={{ padding: 16 }}>
+          <MsrpDryrunDashboard />
+        </div>
+      ) : null}
+
     </section>
   );
 }

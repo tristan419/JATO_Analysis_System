@@ -7996,6 +7996,62 @@ table.data-table tr.data-table-group-row.contains-selection td {
 .market-scan-ranking-row--clickable:hover { border-color: rgba(28,105,212,0.25); background: linear-gradient(180deg, rgba(28,105,212,0.04) 0%, rgba(28,105,212,0.02) 100%); }
 .market-scan-ranking-row--clickable:focus-visible { outline: 2px solid #0653b6; outline-offset: -2px; }
 
+/* ── MSRP Dryrun Dashboard ── */
+.dryrun-dashboard { padding: 12px 0; }
+.dryrun-dashboard-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.dryrun-dashboard-head h3 { margin: 0; font-size: 14px; color: #1e293b; }
+.dryrun-dashboard-actions { display: flex; gap: 8px; align-items: center; }
+.dryrun-badge--live { font-size: 10px; font-weight: 700; color: #16a34a; background: rgba(22,163,74,0.08); padding: 2px 8px; border-radius: 10px; animation: dryrun-pulse 2s infinite; }
+@keyframes dryrun-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+.dryrun-auto-refresh { font-size: 10px; color: #94a3b8; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+
+.dryrun-overall { margin-bottom: 16px; }
+.dryrun-overall-bar { height: 8px; border-radius: 4px; background: rgba(148,163,184,0.12); overflow: hidden; margin-bottom: 6px; }
+.dryrun-overall-segments { display: flex; height: 100%; }
+.dryrun-segment { display: flex; align-items: center; justify-content: center; font-size: 8px; color: #fff; font-weight: 700; min-width: 0; overflow: hidden; white-space: nowrap; }
+.dryrun-segment.is-pass { background: #16a34a; }
+.dryrun-segment.is-empty { background: #f59e0b; }
+.dryrun-segment.is-fail { background: #dc2626; }
+.dryrun-overall-stats { display: flex; gap: 12px; font-size: 11px; color: #475569; margin-bottom: 2px; }
+.dryrun-overall-stats .is-pass { color: #16a34a; }
+.dryrun-overall-stats .is-empty { color: #d97706; }
+.dryrun-overall-stats .is-fail { color: #dc2626; }
+.dryrun-overall-meta { font-size: 10px; color: #94a3b8; display: flex; gap: 12px; }
+
+.dryrun-countries { margin-bottom: 16px; }
+.dryrun-countries h4, .dryrun-history h4 { font-size: 12px; color: #475569; margin: 0 0 8px; }
+.dryrun-country-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+.dryrun-country-chip { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border: 1px solid rgba(15,23,42,0.08); border-radius: 8px; background: #fff; cursor: pointer; font-family: inherit; text-align: left; transition: border-color 0.15s; }
+.dryrun-country-chip:hover { border-color: rgba(28,105,212,0.2); }
+.dryrun-country-chip.is-expanded { border-color: rgba(28,105,212,0.3); grid-column: 1 / -1; }
+.dryrun-country-chip-head { display: flex; align-items: center; gap: 4px; }
+.dryrun-country-flag { font-size: 12px; }
+.dryrun-country-name { font-size: 11px; font-weight: 600; color: #1e293b; }
+.dryrun-country-rate { margin-left: auto; font-size: 11px; font-weight: 700; }
+.dryrun-country-chip.is-done .dryrun-country-rate { color: #16a34a; }
+.dryrun-country-chip.is-running .dryrun-country-rate { color: #1c69d4; }
+.dryrun-country-chip-nums { font-size: 10px; color: #94a3b8; }
+
+.dryrun-progress-bar { display: block; height: 4px; border-radius: 2px; background: rgba(148,163,184,0.12); overflow: hidden; }
+.dryrun-progress-fill { display: block; height: 100%; border-radius: 2px; transition: width 0.3s; }
+
+.dryrun-source-list { margin-top: 8px; max-height: 200px; overflow-y: auto; border-top: 1px solid rgba(15,23,42,0.06); padding-top: 6px; display: flex; flex-direction: column; gap: 2px; }
+.dryrun-source-row { display: flex; align-items: center; gap: 6px; padding: 2px 4px; font-size: 10px; border-radius: 4px; }
+.dryrun-source-row.is-pass { color: #16a34a; }
+.dryrun-source-row.is-empty { color: #d97706; }
+.dryrun-source-row.is-fail { color: #dc2626; }
+.dryrun-source-code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #475569; font-weight: 500; }
+.dryrun-source-stat { color: #94a3b8; white-space: nowrap; }
+.dryrun-source-elapsed { color: #94a3b8; white-space: nowrap; font-size: 9px; }
+
+.dryrun-history-table-wrap { max-height: 200px; overflow-y: auto; }
+.dryrun-history-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.dryrun-history-table th { text-align: left; padding: 4px 8px; font-weight: 600; color: #94a3b8; font-size: 10px; text-transform: uppercase; border-bottom: 1px solid rgba(15,23,42,0.06); position: sticky; top: 0; background: #fff; }
+.dryrun-history-table td { padding: 3px 8px; color: #475569; border-bottom: 1px solid rgba(15,23,42,0.03); }
+.dryrun-history-table .is-pass { color: #16a34a; font-weight: 600; }
+.dryrun-history-table .is-empty { color: #d97706; }
+.dryrun-history-table .is-fail { color: #dc2626; }
+
 /* --- Ranking Trend Popover --- */
 .ranking-popover-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(15,23,42,0.12); }
 .ranking-popover { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 480px; max-height: 85vh; background: #fff; border: 1px solid rgba(15,23,42,0.12); box-shadow: 0 12px 40px rgba(15,23,42,0.15); display: flex; flex-direction: column; z-index: 61; }
@@ -11704,4 +11760,67 @@ table.data-table tr.data-table-group-row.contains-selection td {
   max-height: 90vh;
   overflow: auto;
   padding: 24px;
+}
+
+/* Hermes Ask Bar */
+.hermes-ask-bar {
+  display: flex;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+
+.hermes-ask-bar:focus-within {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59,130,246,0.1);
+}
+
+.hermes-ask-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  padding: 10px 14px;
+  font-size: 13px;
+  background: transparent;
+  color: #1e293b;
+}
+
+.hermes-ask-input::placeholder {
+  color: #94a3b8;
+}
+
+.hermes-ask-input:disabled {
+  opacity: 0.5;
+}
+
+/* Suggested prompt chips */
+.hermes-suggested-prompts button {
+  cursor: pointer;
+  border: 1px solid #e2e8f0;
+  color: #475569;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.hermes-suggested-prompts button:hover {
+  background: #e2e8f0;
+  border-color: #cbd5e1;
+}
+
+/* Chat response card */
+.hermes-chat-response {
+  transition: box-shadow 0.15s;
+}
+
+.hermes-chat-response:hover {
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+
+/* Run card */
+.hermes-run-card code {
+  font-size: 11px;
+  background: #dbeafe;
+  padding: 1px 5px;
+  border-radius: 3px;
 }

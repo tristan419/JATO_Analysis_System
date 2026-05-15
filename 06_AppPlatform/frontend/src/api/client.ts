@@ -68,6 +68,13 @@ import type {
 import type {
   HermesActivityResponse,
   HermesArchResponse,
+  HermesChatResponse,
+  HermesChatRequest,
+  HermesChatSession,
+  HermesChatSessionDetail,
+  HermesCommand,
+  HermesCommandExecuteRequest,
+  HermesCommandExecuteResponse,
   HermesCostResponse,
   HermesDailySummaryResponse,
   HermesEvidenceLedgerResponse,
@@ -1535,6 +1542,24 @@ export const api = {
   hermesEvidenceLedger: (days = 7, limit = 50) =>
     request<HermesEvidenceLedgerResponse>(`/hermes/evidence-ledger?days=${days}&limit=${limit}`),
 
+  /* ── Hermes Chat ──────────────────────────────── */
+  hermesChat: (payload: HermesChatRequest) =>
+    request<HermesChatResponse>("/hermes/chat", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  hermesChatSessions: (limit = 20) =>
+    request<HermesChatSession[]>(`/hermes/chat/sessions?limit=${limit}`),
+  hermesChatSession: (sessionId: string) =>
+    request<HermesChatSessionDetail>(`/hermes/chat/sessions/${encodeURIComponent(sessionId)}`),
+  hermesCommands: () =>
+    request<HermesCommand[]>("/hermes/commands"),
+  hermesCommandExecute: (payload: HermesCommandExecuteRequest) =>
+    request<HermesCommandExecuteResponse>("/hermes/commands/execute", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
   patchItem: (id: string, payload: Partial<Omit<CrudItem, "id">>) =>
     request<{ item: CrudItem }>(`/crud/items/${id}`, {
       method: "PATCH",
@@ -1735,6 +1760,8 @@ export const api = {
       item: mapReviewWorkbench(res.item)
     }));
   },
+  getMsrpDryrunDashboard: () =>
+    request<Record<string, unknown>>("/msrp-dryrun/dashboard"),
   createReviewDecision: (caseId: string, payload: {
     decision: "approve" | "reject" | "remap";
     decided_official_model?: string;
@@ -2172,5 +2199,131 @@ export const api = {
       body: JSON.stringify({ cleanupTier }),
     }).then((res) => ({
       item: mapJatoMonthlyUpdateCleanupResult(res.item)
-    }))
+    })),
+
+  /* ── Engineering Config ────────────────────────── */
+
+  listEngineeringConfigFeatureCatalog: (params?: { category?: string; is_active?: boolean; limit?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.category) sp.set("category", params.category);
+    if (params?.is_active !== undefined) sp.set("is_active", String(params.is_active));
+    if (params?.limit) sp.set("limit", String(params.limit));
+    const q = sp.toString();
+    return request<{ rows: number; items: Record<string, unknown>[] }>(
+      `/engineering-config/feature-catalog${q ? `?${q}` : ""}`
+    );
+  },
+
+  initiateEngineeringConfigUpload: (fileName: string, totalSize: number, chunkSize?: number) => {
+    const sp = new URLSearchParams();
+    sp.set("file_name", fileName);
+    sp.set("total_size", String(totalSize));
+    if (chunkSize) sp.set("chunk_size", String(chunkSize));
+    return request<{ uploadId: string; totalChunks: number }>(
+      `/engineering-config/matrix/upload/initiate?${sp.toString()}`,
+      { method: "POST" }
+    );
+  },
+
+  uploadEngineeringConfigChunk: (uploadId: string, partNumber: number, chunk: Blob) =>
+    request<{ uploadId: string; partNumber: number; receivedBytes: number }>(
+      `/engineering-config/matrix/upload/${uploadId}/parts/${partNumber}`,
+      { method: "PUT", body: chunk, headers: { "Content-Type": "application/octet-stream" } }
+    ),
+
+  completeEngineeringConfigUpload: (uploadId: string) =>
+    request<Record<string, unknown>>(
+      `/engineering-config/matrix/upload/${uploadId}/complete`,
+      { method: "POST" }
+    ),
+
+  parseEngineeringConfigUpload: (uploadId: string) =>
+    request<Record<string, unknown>>(
+      `/engineering-config/matrix/upload/${uploadId}/parse`,
+      { method: "POST" }
+    ) as Promise<Record<string, unknown>>,
+
+  importEngineeringConfigMatrix: (uploadId: string) =>
+    request<Record<string, unknown>>(
+      `/engineering-config/matrix/upload/${uploadId}/import`,
+      { method: "POST" }
+    ),
+
+  listEngineeringConfigTrims: (params?: { brand?: string; model_name?: string; status?: string; limit?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.brand) sp.set("brand", params.brand);
+    if (params?.model_name) sp.set("model_name", params.model_name);
+    if (params?.status) sp.set("status", params.status);
+    if (params?.limit) sp.set("limit", String(params.limit ?? 200));
+    const q = sp.toString();
+    return request<{ rows: number; items: Record<string, unknown>[] }>(
+      `/engineering-config/trims${q ? `?${q}` : ""}`
+    );
+  },
+
+  getEngineeringConfigTrimDetail: (trimId: string) =>
+    request<Record<string, unknown>>(`/engineering-config/trims/${trimId}`),
+
+  compareEngineeringConfigTrims: (trimIds: string[], differencesOnly?: boolean) => {
+    const sp = new URLSearchParams();
+    sp.set("trim_ids", trimIds.join(","));
+    if (differencesOnly) sp.set("differences_only", "true");
+    return request<Record<string, unknown>>(
+      `/engineering-config/compare?${sp.toString()}`
+    );
+  },
+
+  updateEngineeringConfigFeatureValue: (valueId: string, payload: {
+    raw_value?: string;
+    updated_by?: string;
+    expected_version: number;
+    comment?: string;
+  }) =>
+    request<Record<string, unknown>>(`/engineering-config/values/${valueId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  createEngineeringConfigFeatureValue: (payload: {
+    trim_id: string;
+    feature_id: string;
+    raw_value: string;
+    updated_by?: string;
+  }) =>
+    request<Record<string, unknown>>("/engineering-config/values", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  deleteEngineeringConfigFeatureValue: (valueId: string) =>
+    request<Record<string, unknown>>(
+      `/engineering-config/values/${valueId}`,
+      { method: "DELETE" }
+    ),
+
+  updateEngineeringConfigTrim: (trimId: string, payload: {
+    brand?: string;
+    model_name?: string;
+    trim_name?: string;
+    energy_type?: string;
+    drivetrain?: string;
+    engine?: string;
+    model_year?: string;
+    status?: string;
+  }) =>
+    request<Record<string, unknown>>(
+      `/engineering-config/trims/${trimId}`,
+      { method: "PATCH", body: JSON.stringify(payload) }
+    ),
+
+  listEngineeringConfigAuditLog: (params?: { entity_type?: string; entity_id?: string; limit?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.entity_type) sp.set("entity_type", params.entity_type);
+    if (params?.entity_id) sp.set("entity_id", params.entity_id);
+    if (params?.limit) sp.set("limit", String(params.limit ?? 200));
+    const q = sp.toString();
+    return request<{ rows: number; items: Record<string, unknown>[] }>(
+      `/engineering-config/audit-log${q ? `?${q}` : ""}`
+    );
+  }
 };

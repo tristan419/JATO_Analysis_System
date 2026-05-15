@@ -19,6 +19,7 @@ from app.api.routes.hermes import router as hermes_router
 from app.api.routes.engineering_config import router as engineering_config_router
 from app.api.routes.presence import router as presence_router
 from app.api.routes.review_cases import router as review_cases_router
+from app.api.routes.msrp_dryrun_dashboard import router as msrp_dryrun_dashboard_router
 from app.core.config import API_PREFIX, APP_NAME, APP_VERSION, CORS_ORIGINS
 
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
@@ -47,5 +48,6 @@ app.include_router(msrp_workflow_router, prefix=API_PREFIX)
 app.include_router(msrp_monthly_update_router, prefix=API_PREFIX)
 app.include_router(review_router, prefix=API_PREFIX)
 app.include_router(review_cases_router, prefix=API_PREFIX)
+app.include_router(msrp_dryrun_dashboard_router, prefix=API_PREFIX)
 app.include_router(hermes_router, prefix=API_PREFIX)
 app.include_router(presence_router, prefix=API_PREFIX)
