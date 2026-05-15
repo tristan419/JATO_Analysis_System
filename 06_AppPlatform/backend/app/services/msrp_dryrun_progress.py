@@ -91,11 +91,13 @@ def _parse_current_progress(log_path: Path | None = None) -> dict[str, Any]:
             r"\[\s*(\d+)/(\d+)\]\s*(\S+)\s+(\S+)\s+valid=(\d+)\s+extracted=(\d+)\s+rejected=(\d+)\s+\(([\d.]+)s\)",
             section,
         ):
+            emoji = m.group(3)  # ✅ / ⬚ / ❌
+            source_code = m.group(4)
             sources.append({
                 "index": int(m.group(1)),
                 "totalInCountry": int(m.group(2)),
-                "sourceCode": m.group(3),
-                "status": "pass" if "✅" in m.group(4) else ("empty" if "⬚" in m.group(4) else "fail"),
+                "sourceCode": source_code,
+                "status": "pass" if "✅" in emoji else ("empty" if "⬚" in emoji else "fail"),
                 "valid": int(m.group(5)),
                 "extracted": int(m.group(6)),
                 "rejected": int(m.group(7)),
