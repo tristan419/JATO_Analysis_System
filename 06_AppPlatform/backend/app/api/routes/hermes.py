@@ -645,6 +645,71 @@ def hermes_daily_summary() -> dict:
     }
 
 
+# ── Feature Kanban ─────────────────────────────────────────────────
+
+@router.get("/feature-kanban")
+def hermes_feature_kanban() -> dict:
+    """Return features grouped by implementation status for kanban visualization."""
+    path = HERMES_DIR / "feature_registry.yaml"
+    if not path.is_file():
+        raise HTTPException(404, "Feature registry not found")
+    import yaml
+    data = yaml.safe_load(path.read_text())
+    features = data.get("features", []) if data else []
+
+    columns: dict[str, list[dict]] = {
+        "planned": [],
+        "beta": [],
+        "active": [],
+        "archived": [],
+    }
+
+    COLORS: dict[str, str] = {
+        "active": "#22c55e",
+        "beta": "#3b82f6",
+        "archived": "#94a3b8",
+        "planned": "#f59e0b",
+    }
+
+    for f in features:
+        status = f.get("status", "unknown")
+        impl = f.get("implementationStatus", "unknown")
+        column = status if status in columns else "active"
+        columns[column].append({
+            "featureId": f.get("featureId", "?"),
+            "name": f.get("name", "?"),
+            "status": status,
+            "implementationStatus": impl,
+            "riskLevel": f.get("riskLevel", "low"),
+            "routes": f.get("routes", []),
+            "backendApis": (f.get("backendApis", []) or [])[:3],
+            "tests": f.get("tests", []),
+            "docs": f.get("docs", []),
+            "knownIssues": f.get("knownIssues", []),
+            "governanceStatus": f.get("governanceStatus", "unmanaged"),
+            "color": COLORS.get(status, "#94a3b8"),
+        })
+
+    return {
+        "columns": {
+            "planned":  {"label": "Planned",  "color": "#f59e0b", "features": columns["planned"]},
+            "beta":     {"label": "Beta",     "color": "#3b82f6", "features": columns["beta"]},
+            "active":   {"label": "Active",   "color": "#22c55e", "features": columns["active"]},
+            "archived": {"label": "Archived", "color": "#94a3b8", "features": columns["archived"]},
+        },
+        "summary": {
+            "total": len(features),
+            "active": len(columns["active"]),
+            "beta": len(columns["beta"]),
+            "planned": len(columns["planned"]),
+            "archived": len(columns["archived"]),
+            "withTests": sum(1 for f in features if f.get("tests")),
+            "withDocs": sum(1 for f in features if f.get("docs")),
+            "withIssues": sum(1 for f in features if f.get("knownIssues")),
+        },
+    }
+
+
 @router.get("/evidence-ledger")
 def hermes_evidence_ledger(
     limit: int = Query(20, ge=1, le=100),

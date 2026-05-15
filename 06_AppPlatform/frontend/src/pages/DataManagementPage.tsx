@@ -22,7 +22,7 @@ import {
 } from "../utils/dataManagement";
 
 type CrudEntityTab = "msrp-sources" | "engineering-projects" | "review-overrides";
-type DataSubpage = "overview" | "hermes" | "voc";
+type DataSubpage = "overview" | "hermes" | "voc" | "features";
 const DEFAULT_RECENT_ITEMS_VISIBLE = 6;
 
 interface SourceFilters {
@@ -223,6 +223,7 @@ export function DataManagementPage() {
   const [hermesActivity, setHermesActivity] = useState<Record<string, unknown> | null>(null);
   const [hermesCostHeatmap, setHermesCostHeatmap] = useState<Record<string, unknown> | null>(null);
   const [hermesDaily, setHermesDaily] = useState<Record<string, unknown> | null>(null);
+  const [featureKanban, setFeatureKanban] = useState<Record<string, unknown> | null>(null);
   const [selectedSource, setSelectedSource] = useState<Record<string, unknown> | null>(null);
   const [sourceDetail, setSourceDetail] = useState<Record<string, unknown> | null>(null);
   const [sourceDetailOpen, setSourceDetailOpen] = useState(false);
@@ -361,6 +362,11 @@ export function DataManagementPage() {
       api.hermesDailySummary().then(setHermesDaily),
     ]).finally(() => setHermesLoading(false));
   }, [subpage, hermesOverview]);
+
+  useEffect(() => {
+    if (subpage !== "features" || featureKanban) return;
+    api.hermesFeatureKanban().then(setFeatureKanban).catch(() => {});
+  }, [subpage, featureKanban]);
 
   const activityColumns = useMemo(
     () => buildActivityHeatmapColumns(overview?.activity.days ?? []),
@@ -708,6 +714,7 @@ export function DataManagementPage() {
         <button type="button" className={`admin-tab${subpage === "overview" ? " is-active" : ""}`} onClick={() => setSubpage("overview")}>Overview</button>
         <button type="button" className={`admin-tab${subpage === "hermes" ? " is-active" : ""}`} onClick={() => setSubpage("hermes")}>Hermes Governance</button>
         <button type="button" className={`admin-tab${subpage === "voc" ? " is-active" : ""}`} onClick={() => setSubpage("voc")}>VOC 观察台</button>
+        <button type="button" className={`admin-tab${subpage === "features" ? " is-active" : ""}`} onClick={() => setSubpage("features")}>Feature Dev</button>
       </div>
 
       {subpage === "voc" ? (
@@ -735,6 +742,67 @@ export function DataManagementPage() {
             </div>
             {vocSyncError ? <div className="alert alert-error" style={{marginTop:8}}>{vocSyncError}</div> : null}
             {vocSyncNotice ? <div className="alert alert-success" style={{marginTop:8}}>{vocSyncNotice}</div> : null}
+          </div>
+        </div>
+      ) : null}
+
+      {subpage === "features" ? (
+        <div className="card crud-card">
+          <div className="admin-card-header"><div><h2>Feature Development Kanban</h2></div></div>
+          <div style={{ padding: 16 }}>
+            {featureKanban ? (
+              <>
+                <div style={{display:"flex",gap:12,marginBottom:16,fontSize:12,color:"#64748b"}}>
+                  <span>Total: {(featureKanban.summary as Record<string,number>)?.total} features</span>
+                  <span>Active: {(featureKanban.summary as Record<string,number>)?.active}</span>
+                  <span>Beta: {(featureKanban.summary as Record<string,number>)?.beta}</span>
+                  <span>Planned: {(featureKanban.summary as Record<string,number>)?.planned}</span>
+                  <span>With tests: {(featureKanban.summary as Record<string,number>)?.withTests}</span>
+                  <span>With issues: {(featureKanban.summary as Record<string,number>)?.withIssues}</span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+                  {(["planned","beta","active","archived"] as string[]).map((col) => {
+                    const column = (featureKanban.columns as Record<string,unknown>)[col] as Record<string,unknown>;
+                    const features = (column?.features as unknown[]) || [];
+                    return (
+                      <div key={col} style={{background:"#f8fafc",borderRadius:8,padding:12,minHeight:200}}>
+                        <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:column?.color as string,display:"flex",justifyContent:"space-between"}}>
+                          <span>{column?.label as string}</span>
+                          <span style={{fontSize:11,background:"#e2e8f0",borderRadius:10,padding:"0 8px"}}>{features.length}</span>
+                        </div>
+                        {features.map((f: unknown) => {
+                          const feat = f as Record<string,unknown>;
+                          const risk = String(feat.riskLevel || "low");
+                          const riskColor = risk === "high" ? "#ef4444" : risk === "medium" ? "#f59e0b" : "#22c55e";
+                          const hasTests = (feat.tests as unknown[])?.length > 0;
+                          const hasDocs = (feat.docs as unknown[])?.length > 0;
+                          const hasIssues = (feat.knownIssues as unknown[])?.length > 0;
+                          return (
+                            <div key={String(feat.featureId)} style={{
+                              background:"#fff",borderRadius:6,padding:"10px 12px",marginBottom:8,
+                              border:"1px solid #e2e8f0",borderLeft:`3px solid ${feat.color || "#94a3b8"}`,fontSize:12,
+                            }}>
+                              <div style={{fontWeight:600,marginBottom:4}}>{String(feat.name)}</div>
+                              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:4}}>
+                                {(feat.routes as unknown[])?.length > 0 && <span style={{fontSize:10,background:"#e0f2fe",color:"#0369a1",padding:"1px 6px",borderRadius:3}}>{(feat.routes as string[]).join(" ")}</span>}
+                                {(feat.backendApis as unknown[])?.length > 0 && <span style={{fontSize:10,background:"#fef3c7",color:"#92400e",padding:"1px 6px",borderRadius:3}}>{(feat.backendApis as string[]).length} APIs</span>}
+                              </div>
+                              <div style={{display:"flex",gap:8,fontSize:10,color:"#64748b"}}>
+                                {hasTests && <span style={{color:"#22c55e"}}>Tests</span>}
+                                {hasDocs && <span style={{color:"#3b82f6"}}>Docs</span>}
+                                {hasIssues && <span style={{color:"#ef4444"}}>Issues</span>}
+                                <span style={{color:riskColor,fontWeight:600}}>{risk} risk</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {features.length === 0 && <div style={{color:"#94a3b8",fontSize:11,textAlign:"center",padding:20}}>—</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            ) : <LoadingSurface mode="inline" label="Loading feature kanban..." kicker="Features" />}
           </div>
         </div>
       ) : null}
