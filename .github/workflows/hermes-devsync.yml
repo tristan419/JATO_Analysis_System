@@ -1,0 +1,36 @@
+name: hermes-devsync
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  devsync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate Hermes dev event from commit
+        run: python 03_Scripts/hermes/hermes_dev_event_generator.py
+
+      - name: Commit updated dev_events.jsonl
+        run: |
+          if git diff --quiet hermes/dev_events/dev_events.jsonl; then
+            echo "No new dev event to commit."
+          else
+            git config user.name "hermes-bot"
+            git config user.email "hermes-bot@jato-analysis.local"
+            git add hermes/dev_events/dev_events.jsonl
+            git commit -m "hermes: auto dev event from push ${GITHUB_SHA::8}"
+            git push
+          fi

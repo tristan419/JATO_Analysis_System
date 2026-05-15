@@ -68,6 +68,25 @@ Default rule:
 - Do not expose API keys, `.env` values, raw data, local paths, or generated cache files.
 - Prefer existing project patterns over new dependencies.
 
+## Hermes DevSync rule (MANDATORY after every implementation)
+
+After EVERY non-trivial implementation, bug fix, refactor, or test change, Claude Code MUST:
+
+1. **Write a dev event** to `hermes/dev_events/dev_events.jsonl` following the contract in
+   `Markdown_Readme/Hermes/HERMES_CLAUDE_CODE_DEVSYNC_CONTRACT.md`.
+
+   Required fields: `eventId`, `eventType`, `source`, `title`, `summary`,
+   `linkedFeatureIds`, `changedFiles`, `tests`, `createdAt`.
+
+2. **Trigger DevSync** by calling `POST /v1/hermes/dev/sync` (or via the
+   Dev tab → Sync Now button in the UI if the backend is running).
+
+3. **Verify** the feature appears in Hermes UI → Dev tab with correct status,
+   docs, and evidence.
+
+This is NOT optional. Every implementation session must close the DevSync loop.
+Contract reference: `Markdown_Readme/Hermes/HERMES_CLAUDE_CODE_DEVSYNC_CONTRACT.md`
+
 ## Validation rules
 
 Use targeted validation only.
