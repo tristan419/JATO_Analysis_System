@@ -2,32 +2,28 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { animate } from "animejs";
 import { usePresence, type PresenceUser } from "../hooks/usePresence";
 
-/* ── Sizing ── */
-const H = 36;
-const W_COLLAPSED = 130;
-const W_EXPANDED = 280;
+const W = 160;
+const HEADER_H = 34;
+const ROW_H = 30;
+const MAX_ROWS = 6;
 const INITIAL_TOP = 8;
 const SNAP_THRESHOLD = 60;
 const VISIBLE_HINT = 20;
 
-/* ── Role chip ── */
-const ROLE: Record<string, { label: string; bg: string }> = {
-  admin: { label: "Admin", bg: "#7f1d1d" },
-  editor: { label: "Editor", bg: "#78350f" },
-  viewer: { label: "Viewer", bg: "#1e3a5f" },
-  anonymous: { label: "Guest", bg: "#334155" },
+const ROLE_DOT: Record<string, string> = {
+  admin: "#ef4444",
+  editor: "#f59e0b",
+  viewer: "#3b82f6",
+  anonymous: "#64748b",
 };
 
-/* ── Edge snap ── */
-function edgeSnap(x: number, w: number) {
-  const margin = VISIBLE_HINT - w;
-  if (x < SNAP_THRESHOLD) return margin; // snap left
-  if (x > window.innerWidth - w - SNAP_THRESHOLD)
-    return window.innerWidth - VISIBLE_HINT; // snap right
-  return Math.max(0, Math.min(x, window.innerWidth - w));
+function edgeSnap(x: number) {
+  const margin = VISIBLE_HINT - W;
+  if (x < SNAP_THRESHOLD) return margin;
+  if (x > window.innerWidth - W - SNAP_THRESHOLD)
+    return window.innerWidth - VISIBLE_HINT;
+  return Math.max(0, Math.min(x, window.innerWidth - W));
 }
-
-/* ── Widget ── */
 
 export function PresenceWidget() {
   const { online, samePage, users } = usePresence();
@@ -35,66 +31,57 @@ export function PresenceWidget() {
   const [snapped, setSnapped] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [pos, setPos] = useState(() => ({
-    x: window.innerWidth - W_COLLAPSED - 12,
+    x: window.innerWidth - W - 12,
     y: INITIAL_TOP,
   }));
-  const widgetW = expanded ? W_EXPANDED : W_COLLAPSED;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{
-    sx: number;
-    sy: number;
-    ox: number;
-    oy: number;
-    moved: boolean;
+    sx: number; sy: number; ox: number; oy: number; moved: boolean;
   } | null>(null);
+
+  const visibleRows = Math.min(users.length, MAX_ROWS);
+  const listH = expanded ? visibleRows * ROW_H + 8 : 0;
+  const totalH = HEADER_H + listH;
 
   /* spring expand / collapse */
   useEffect(() => {
     if (!rootRef.current) return;
     try {
       animate(rootRef.current, {
-        width: expanded ? W_EXPANDED : W_COLLAPSED,
-        duration: 400,
+        height: totalH,
+        duration: 350,
         ease: expanded ? "outBack" : "inOutCubic",
       });
-    } catch {
-      /* decorative */
-    }
-  }, [expanded]);
+    } catch { /* decorative */ }
+  }, [expanded, totalH]);
 
-  /* shift into view when expanding from snapped edge */
+  /* unsnap on expand */
   useEffect(() => {
     if (!expanded || !snapped) return;
-    // unsnap so the wider expanded pill is fully visible
-    const mid = (window.innerWidth - W_EXPANDED) / 2;
+    const mid = (window.innerWidth - W) / 2;
     setPos((p) => ({ x: Math.max(8, mid), y: p.y }));
     setSnapped(false);
   }, [expanded, snapped]);
 
-  /* ── Drag handlers ── */
-  const onDown = useCallback(
-    (e: React.PointerEvent) => {
-      if (expanded) return;
-      if (snapped) {
-        // unsnap on grab
-        const mid = (window.innerWidth - W_COLLAPSED) / 2;
-        setPos((p) => ({ x: mid, y: p.y }));
-        setSnapped(false);
-      }
-      dragRef.current = {
-        sx: e.clientX,
-        sy: e.clientY,
-        ox: snapped
-          ? (window.innerWidth - W_COLLAPSED) / 2
-          : pos.x,
-        oy: pos.y,
-        moved: false,
-      };
-      setDragging(true);
-      e.currentTarget.setPointerCapture(e.pointerId);
-    },
-    [expanded, pos, snapped],
-  );
+  /* ── Drag ── */
+  const onDown = useCallback((e: React.PointerEvent) => {
+    if (expanded) return;
+    let originX = pos.x;
+    if (snapped) {
+      // slide to fully visible near the same edge, not center
+      originX = pos.x < 0 ? 8 : window.innerWidth - W - 8;
+      setPos((p) => ({ x: originX, y: p.y }));
+      setSnapped(false);
+    }
+    dragRef.current = {
+      sx: e.clientX, sy: e.clientY,
+      ox: originX,
+      oy: pos.y,
+      moved: false,
+    };
+    setDragging(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, [expanded, pos, snapped]);
 
   const onMove = useCallback((e: React.PointerEvent) => {
     if (!dragRef.current) return;
@@ -103,33 +90,26 @@ export function PresenceWidget() {
     if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragRef.current.moved = true;
     setPos({
       x: dragRef.current.ox + dx,
-      y: Math.max(0, Math.min(dragRef.current.oy + dy, window.innerHeight - H)),
+      y: Math.max(0, Math.min(dragRef.current.oy + dy, window.innerHeight - HEADER_H)),
     });
   }, []);
 
-  const onUp = useCallback(
-    (e: React.PointerEvent) => {
-      if (!dragRef.current) return;
-      const wasDrag = dragRef.current.moved;
-      dragRef.current = null;
-      setDragging(false);
-      e.currentTarget.releasePointerCapture(e.pointerId);
-      if (!wasDrag) {
-        setExpanded((v) => !v);
-        if (snapped) setSnapped(false);
-      } else {
-        const sx = edgeSnap(pos.x, widgetW);
-        setPos((p) => ({ x: sx, y: p.y }));
-        setSnapped(
-          sx <= VISIBLE_HINT - widgetW ||
-            sx >= window.innerWidth - VISIBLE_HINT,
-        );
-      }
-    },
-    [pos, snapped, widgetW],
-  );
+  const onUp = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    const wasDrag = dragRef.current.moved;
+    dragRef.current = null;
+    setDragging(false);
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    if (!wasDrag) {
+      setExpanded((v) => !v);
+      if (snapped) setSnapped(false);
+    } else {
+      const sx = edgeSnap(pos.x);
+      setPos((p) => ({ x: sx, y: p.y }));
+      setSnapped(sx <= VISIBLE_HINT - W || sx >= window.innerWidth - VISIBLE_HINT);
+    }
+  }, [pos, snapped]);
 
-  /* ── Render ── */
   const isOff = online === 0;
 
   return (
@@ -144,9 +124,9 @@ export function PresenceWidget() {
         left: pos.x,
         top: pos.y,
         zIndex: 9000,
-        width: widgetW,
-        height: H,
-        borderRadius: 20,
+        width: W,
+        height: HEADER_H,
+        borderRadius: 18,
         background: "#0d0d0d",
         border: "1px solid rgba(255,255,255,0.08)",
         boxShadow: dragging
@@ -165,114 +145,68 @@ export function PresenceWidget() {
         touchAction: "none",
       }}
     >
-      {/* ── Collapsed content ── */}
+      {/* Header */}
       <div
-        className="pw-island-row"
         onClick={() => expanded && setExpanded(false)}
         style={{
           display: "flex",
           alignItems: "center",
-          height: H,
-          padding: "0 14px",
+          height: HEADER_H,
+          padding: "0 12px",
           gap: 8,
           cursor: expanded ? "pointer" : "inherit",
-          whiteSpace: "nowrap",
         }}
       >
-        {/* Breathing dot */}
-        <span
-          className="presence-dot"
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: "50%",
-            background: isOff ? "#64748b" : "#30d158",
-            flexShrink: 0,
-            boxShadow: isOff
-              ? "0 0 2px rgba(100,116,139,0.4)"
-              : "0 0 7px rgba(48,209,88,0.55)",
-          }}
-        />
-
-        {/* Compact label */}
-        {!expanded && (
-          <>
-            <span style={{ fontWeight: 600, fontSize: 11, letterSpacing: "0.05em" }}>
-              LIVE
-            </span>
-            <span style={{ color: "#98989e", fontSize: 11 }}>
-              {isOff ? "offline" : online}
-            </span>
-          </>
+        <span className="presence-dot" style={{
+          width: 7, height: 7, borderRadius: "50%",
+          background: isOff ? "#64748b" : "#30d158",
+          flexShrink: 0,
+          boxShadow: isOff ? "0 0 2px rgba(100,116,139,0.4)" : "0 0 7px rgba(48,209,88,0.55)",
+        }} />
+        <span style={{ fontWeight: 600, fontSize: 11, letterSpacing: "0.05em" }}>LIVE</span>
+        <span style={{ color: "#98989e", fontSize: 11 }}>{isOff ? "offline" : online}</span>
+        {samePage > 0 && !expanded && (
+          <span style={{ color: "#52525b", fontSize: 10 }}>· {samePage}h</span>
         )}
+        <span style={{ marginLeft: "auto", fontSize: 10, color: "#52525b",
+          transition: "transform 0.3s", transform: expanded ? "rotate(180deg)" : undefined }}>▾</span>
+      </div>
 
-        {/* Expanded: horizontal user chips */}
-        {expanded && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              flex: 1,
-              overflow: "hidden",
-            }}
-          >
-            <span style={{ fontWeight: 600, fontSize: 11, letterSpacing: "0.05em", flexShrink: 0 }}>
-              LIVE
-            </span>
-            {users.length === 0 ? (
-              <span style={{ color: "#98989e", fontSize: 11 }}>no one online</span>
-            ) : (
-              users.map((u: PresenceUser) => (
-                <span
-                  key={`${u.user_name}-${u.current_page}`}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 4,
-                    padding: "2px 8px",
-                    borderRadius: 10,
-                    background: "rgba(255,255,255,0.06)",
-                    fontSize: 10,
-                    flexShrink: 0,
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  <span
-                    style={{
-                      width: 5,
-                      height: 5,
-                      borderRadius: "50%",
-                      background: ROLE[u.role]?.bg ?? "#334155",
-                      flexShrink: 0,
-                    }}
-                  />
+      {/* Vertical user list */}
+      {expanded && (
+        <div style={{
+          borderTop: "1px solid rgba(255,255,255,0.06)",
+          padding: "4px 8px",
+          maxHeight: MAX_ROWS * ROW_H,
+          overflowY: users.length > MAX_ROWS ? "auto" : "hidden",
+        }}>
+          {users.length === 0 ? (
+            <div style={{ color: "#64748b", padding: "8px 0", textAlign: "center", fontSize: 11 }}>
+              No one online
+            </div>
+          ) : (
+            users.map((u: PresenceUser) => (
+              <div key={`${u.user_name}-${u.current_page}`} style={{
+                display: "flex", alignItems: "center", gap: 6,
+                height: ROW_H, padding: "0 4px", fontSize: 11,
+              }}>
+                <span style={{
+                  width: 6, height: 6, borderRadius: "50%",
+                  background: ROLE_DOT[u.role] || "#64748b",
+                  flexShrink: 0,
+                }} />
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {u.user_name}
                 </span>
-              ))
-            )}
-          </div>
-        )}
-
-        {/* Chevon + same-page hint */}
-        {!expanded && samePage > 0 && (
-          <span style={{ color: "#52525b", fontSize: 10, flexShrink: 0 }}>
-            · {samePage}h
-          </span>
-        )}
-        <span
-          style={{
-            marginLeft: expanded ? "auto" : undefined,
-            fontSize: 10,
-            color: "#52525b",
-            flexShrink: 0,
-            transition: "transform 0.3s",
-            transform: expanded ? "rotate(180deg)" : undefined,
-          }}
-        >
-          ▾
-        </span>
-      </div>
+                <span style={{ color: "#64748b", fontSize: 10, maxWidth: 64, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {u.current_page}
+                </span>
+                <span style={{ color: "#475569", fontSize: 10, flexShrink: 0 }}>{u.last_seen_ago_s}s</span>
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -17,7 +17,11 @@ function getSessionId(): string {
 }
 
 function getUserName(): string {
-  return localStorage.getItem(USER_NAME_KEY)?.trim() || "operator";
+  return (
+    localStorage.getItem(USER_NAME_KEY)?.trim() ||
+    localStorage.getItem("jato_user_name")?.trim() ||
+    "anonymous"
+  );
 }
 
 export interface PresenceUser {

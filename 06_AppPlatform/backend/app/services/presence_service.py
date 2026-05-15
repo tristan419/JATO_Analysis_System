@@ -81,4 +81,4 @@ class PresenceStore:
 
 
 # Module-level singleton — survives between requests, dies on process restart
-presence_store = PresenceStore(ttl_seconds=120)
+presence_store = PresenceStore(ttl_seconds=30)
