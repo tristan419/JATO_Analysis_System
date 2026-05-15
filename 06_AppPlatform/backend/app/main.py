@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.assistant import router as assistant_router
+from app.api.routes.auth import router as auth_router
 from app.api.routes.analysis import router as analysis_router
 from app.api.routes.data_management import router as data_management_router
 from app.api.routes.engineering import router as engineering_router
@@ -50,4 +51,5 @@ app.include_router(review_router, prefix=API_PREFIX)
 app.include_router(review_cases_router, prefix=API_PREFIX)
 app.include_router(msrp_dryrun_dashboard_router, prefix=API_PREFIX)
 app.include_router(hermes_router, prefix=API_PREFIX)
+app.include_router(auth_router, prefix=API_PREFIX)
 app.include_router(presence_router, prefix=API_PREFIX)

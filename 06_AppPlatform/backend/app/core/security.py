@@ -4,6 +4,7 @@ from typing import Callable
 from fastapi import Depends, Header, HTTPException
 
 from app.core.config import AUTH_ENABLED, TOKEN_ROLE_MAP
+from app.services.auth_service import session_store
 
 
 ROLE_LEVEL = {
@@ -29,17 +30,20 @@ def get_current_user(
             name=str(x_user_name).strip() or "anonymous",
         )
 
-    if not x_auth_token or x_auth_token not in TOKEN_ROLE_MAP:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    if x_auth_token:
+        session = session_store.lookup(x_auth_token)
+        if session:
+            return UserContext(role=session.role, name=session.username)
+        if x_auth_token in TOKEN_ROLE_MAP:
+            role = TOKEN_ROLE_MAP[x_auth_token]
+            if role not in ROLE_LEVEL:
+                raise HTTPException(status_code=403, detail="Invalid role")
+            return UserContext(
+                role=role,
+                name=str(x_user_name).strip() or "anonymous",
+            )
 
-    role = TOKEN_ROLE_MAP[x_auth_token]
-    if role not in ROLE_LEVEL:
-        raise HTTPException(status_code=403, detail="Invalid role")
-
-    return UserContext(
-        role=role,
-        name=str(x_user_name).strip() or "anonymous",
-    )
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 def require_min_role(min_role: str) -> Callable:
@@ -60,28 +64,18 @@ def get_optional_user(
     x_auth_token: str | None = Header(default=None),
     x_user_name: str = Header(default="anonymous"),
 ) -> UserContext:
-    """Resolve user identity without rejecting unauthenticated requests.
+    name = str(x_user_name).strip() or "anonymous"
 
-    Used by presence / public endpoints that want to capture real identity
-    when available but still allow anonymous access.
-    """
     if not AUTH_ENABLED:
-        return UserContext(
-            role="admin",
-            name=str(x_user_name).strip() or "anonymous",
-        )
-    if not x_auth_token or x_auth_token not in TOKEN_ROLE_MAP:
-        return UserContext(
-            role="anonymous",
-            name=str(x_user_name).strip() or "anonymous",
-        )
-    role = TOKEN_ROLE_MAP[x_auth_token]
-    if role not in ROLE_LEVEL:
-        return UserContext(
-            role="anonymous",
-            name=str(x_user_name).strip() or "anonymous",
-        )
-    return UserContext(
-        role=role,
-        name=str(x_user_name).strip() or "anonymous",
-    )
+        return UserContext(role="admin", name=name)
+
+    if x_auth_token:
+        session = session_store.lookup(x_auth_token)
+        if session:
+            return UserContext(role=session.role, name=session.username)
+        if x_auth_token in TOKEN_ROLE_MAP:
+            role = TOKEN_ROLE_MAP[x_auth_token]
+            if role in ROLE_LEVEL:
+                return UserContext(role=role, name=name)
+
+    return UserContext(role="anonymous", name=name)
