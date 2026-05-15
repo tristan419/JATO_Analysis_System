@@ -388,6 +388,73 @@ def hermes_list_commands():
     }
 
 
+# ── Source Drill-down ─────────────────────────────────────────────
+
+@router.get("/source/{source_id}")
+def hermes_source_detail(source_id: str) -> dict:
+    """Return full detail for a single source including linked evidence."""
+    path = HERMES_DIR / "source_registry.yaml"
+    if not path.is_file():
+        raise HTTPException(404, "Source registry not found")
+    import yaml
+    data = yaml.safe_load(path.read_text())
+    sources = data.get("sources", []) if data else []
+    source = next((s for s in sources if s.get("sourceId") == source_id), None)
+    if not source:
+        raise HTTPException(404, f"Source not found: {source_id}")
+
+    # Linked evidence from ledger
+    evidence: list[dict] = []
+    ev_path = HERMES_DIR / "evidence_ledger.jsonl"
+    if ev_path.is_file():
+        for line in ev_path.read_text().strip().split("\n"):
+            if line.strip():
+                try:
+                    rec = json.loads(line)
+                    if source_id in str(rec.get("sourceRef", "")) or source_id in str(rec.get("artifactId", "")):
+                        evidence.append(rec)
+                except Exception:
+                    pass
+
+    # Find producing/consuming pipelines
+    pipe_path = HERMES_DIR / "pipeline_registry.yaml"
+    pipelines: list[dict] = []
+    if pipe_path.is_file():
+        pipe_data = yaml.safe_load(pipe_path.read_text())
+        for p in (pipe_data.get("pipelines", []) if pipe_data else []):
+            for out in (p.get("outputs", []) or []):
+                if source_id in str(out) or source.get("name","") in str(out):
+                    pipelines.append({"pipelineId": p.get("pipelineId"), "name": p.get("name"), "type": p.get("type")})
+                    break
+
+    return {
+        "source": source,
+        "linkedEvidence": evidence,
+        "linkedEvidenceCount": len(evidence),
+        "linkedPipelines": pipelines,
+    }
+
+
+@router.get("/source/{source_id}/health-history")
+def hermes_source_health_history(source_id: str) -> dict:
+    """Return health history for a source (from status JSON and quality report)."""
+    sq = _read_json(REPORTS_DIR / "source_quality_report.json")
+    source_score = None
+    if sq:
+        for s in sq.get("sources", []):
+            if s.get("sourceId") == source_id:
+                source_score = s
+                break
+
+    status = _read_json(PROJECT_ROOT / "03_Scripts" / "logs" / "scheduled_fetch_status.json")
+
+    return {
+        "sourceId": source_id,
+        "qualityScore": source_score,
+        "fetchStatus": status.get("voc", {}) if status else {},
+    }
+
+
 @router.get("/evidence-ledger")
 def hermes_evidence_ledger(
     limit: int = Query(20, ge=1, le=100),

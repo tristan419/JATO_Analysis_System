@@ -220,6 +220,9 @@ export function DataManagementPage() {
   const [hermesFeatures, setHermesFeatures] = useState<unknown[]>([]);
   const [hermesToolchain, setHermesToolchain] = useState<Record<string, unknown> | null>(null);
   const [hermesArch, setHermesArch] = useState<Record<string, unknown> | null>(null);
+  const [selectedSource, setSelectedSource] = useState<Record<string, unknown> | null>(null);
+  const [sourceDetail, setSourceDetail] = useState<Record<string, unknown> | null>(null);
+  const [sourceDetailOpen, setSourceDetailOpen] = useState(false);
   const [hermesLoading, setHermesLoading] = useState(false);
   const [crudLoading, setCrudLoading] = useState(false);
   const [crudError, setCrudError] = useState("");
@@ -701,6 +704,35 @@ export function DataManagementPage() {
         <button type="button" className={`admin-tab${subpage === "voc" ? " is-active" : ""}`} onClick={() => setSubpage("voc")}>VOC 观察台</button>
       </div>
 
+      {subpage === "voc" ? (
+        <div className="card crud-card">
+          <div className="admin-card-header"><div><h2>VOC Operations</h2></div></div>
+          <div style={{ padding: 16 }}>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+              <button type="button" className="btn btn-sm btn-primary"
+                disabled={vocSyncBusy}
+                onClick={() => {
+                  setVocSyncBusy(true); setVocSyncError(""); setVocSyncNotice("");
+                  api.syncVocRawToStore().then((res) => {
+                    setVocSyncNotice(`Synced: ${(res as Record<string,unknown>).countryCount || "?"} countries, ${(res as Record<string,unknown>).documentCount || "?"} documents`);
+                  }).catch((e) => setVocSyncError(String(e))).finally(() => setVocSyncBusy(false));
+                }}>
+                {vocSyncBusy ? "Syncing..." : "Sync VOC to PostgreSQL"}
+              </button>
+              <button type="button" className="btn btn-sm btn-ghost"
+                onClick={() => { setVocCountry(""); loadVocOverview(undefined, { silent: true }); }}>
+                Refresh VOC Overview
+              </button>
+              <span style={{ fontSize: 12, color: "#64748b" }}>
+                VOC timer: daily 01:45 UTC. Last run: check journalctl on server.
+              </span>
+            </div>
+            {vocSyncError ? <div className="alert alert-error" style={{marginTop:8}}>{vocSyncError}</div> : null}
+            {vocSyncNotice ? <div className="alert alert-success" style={{marginTop:8}}>{vocSyncNotice}</div> : null}
+          </div>
+        </div>
+      ) : null}
+
       {subpage === "hermes" ? (
         hermesLoading ? (
           <LoadingSurface mode="inline" label="Loading Hermes governance data..." kicker="Hermes" />
@@ -935,8 +967,13 @@ export function DataManagementPage() {
                         const status = String(src.status || "?");
                         const color = status === "degraded" ? "#ef4444" : status === "watch" ? "#f59e0b" : "#22c55e";
                         return (
-                          <tr key={String(src.sourceId || "")} style={{borderTop:"1px solid #e2e8f0"}}>
-                            <td style={{padding:"6px 10px",fontWeight:500}}>{String(src.name || src.sourceId || "")}</td>
+                          <tr key={String(src.sourceId || "")} style={{borderTop:"1px solid #e2e8f0",cursor:"pointer"}}
+                            onClick={() => {
+                              setSelectedSource(src);
+                              setSourceDetailOpen(true);
+                              api.hermesSourceDetail(String(src.sourceId || "")).then(setSourceDetail).catch(() => setSourceDetail(null));
+                            }}>
+                            <td style={{padding:"6px 10px",fontWeight:500,color:"#3b82f6"}}>{String(src.name || src.sourceId || "")}</td>
                             <td style={{padding:"6px 10px",color:"#64748b",fontSize:11}}>{String(src.sourceType || "")}</td>
                             <td style={{padding:"6px 10px",color,fontWeight:600}}>{status}</td>
                             <td style={{padding:"6px 10px",color: (src.qualityScore as number) < 40 ? "#ef4444" : (src.qualityScore as number) < 70 ? "#f59e0b" : "#22c55e",fontWeight:600}}>{String(src.qualityScore || "?")}</td>
@@ -946,6 +983,49 @@ export function DataManagementPage() {
                     </tbody>
                   </table>
                 ) : <p style={{color:"#64748b",padding:"0 16px 16px"}}>Run hermes_source_quality.py to generate source quality data.</p>}
+
+                {/* Source Detail Panel */}
+                {sourceDetailOpen && selectedSource ? (
+                  <div style={{margin:"0 16px 16px",background:"#f8fafc",borderRadius:8,padding:16,border:"1px solid #e2e8f0"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                      <strong style={{fontSize:14}}>{String(selectedSource.name || selectedSource.sourceId)}</strong>
+                      <button type="button" className="btn btn-sm btn-ghost" onClick={() => {setSourceDetailOpen(false);setSourceDetail(null);}}>Close</button>
+                    </div>
+                    {sourceDetail ? (
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,fontSize:12}}>
+                        <div>
+                          <div style={{marginBottom:8}}><strong>Type:</strong> {String(selectedSource.sourceType)} | <strong>Country:</strong> {String(selectedSource.country || "?")}</div>
+                          <div style={{marginBottom:8}}><strong>Status:</strong> {String(selectedSource.status)} | <strong>Governance:</strong> {String(selectedSource.governanceStatus)}</div>
+                          <div style={{marginBottom:8}}><strong>Path:</strong> <span style={{fontFamily:"monospace",fontSize:11}}>{String(selectedSource.path || "?")}</span></div>
+                          {String((selectedSource as Record<string,unknown>).notes || "") && <div style={{marginBottom:8,color:"#64748b"}}><strong>Notes:</strong> {String((selectedSource as Record<string,unknown>).notes)}</div>}
+                          <div style={{marginBottom:8}}><strong>Linked Evidence:</strong> {(sourceDetail.linkedEvidenceCount as number) || 0} records</div>
+                          {((sourceDetail.linkedPipelines as unknown[]) || []).length > 0 && (
+                            <div style={{marginBottom:8}}><strong>Pipelines:</strong> {(sourceDetail.linkedPipelines as unknown[]).map((p: unknown) => String((p as Record<string,unknown>).name || (p as Record<string,unknown>).pipelineId)).join(", ")}</div>
+                          )}
+                        </div>
+                        <div>
+                          {(selectedSource.knownIssues as unknown[])?.length > 0 && (
+                            <div style={{marginBottom:8}}>
+                              <strong style={{color:"#ef4444"}}>Known Issues:</strong>
+                              {(selectedSource.knownIssues as unknown[]).map((issue: unknown, i: number) => (
+                                <div key={i} style={{color:"#ef4444",fontSize:11,marginTop:2}}>{String(issue)}</div>
+                              ))}
+                            </div>
+                          )}
+                          {((sourceDetail.linkedEvidence as unknown[]) || []).length > 0 && (
+                            <div>
+                              <strong>Evidence Records:</strong>
+                              {(sourceDetail.linkedEvidence as unknown[]).slice(0, 3).map((e: unknown, i: number) => {
+                                const ev = e as Record<string,unknown>;
+                                return <div key={i} style={{fontSize:11,color:"#475569",marginTop:4,padding:"4px 8px",background:"#fff",borderRadius:4}}>{String(ev.claim || ev.evidenceType || "").slice(0, 100)}</div>;
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : <p style={{color:"#64748b"}}>Loading source details...</p>}
+                  </div>
+                ) : null}
               </div>
             </div>
 

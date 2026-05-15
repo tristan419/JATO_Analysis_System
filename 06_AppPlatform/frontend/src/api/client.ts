@@ -1495,6 +1495,10 @@ export const api = {
     request<Record<string, unknown>>(`/hermes/run/${command}`, { method: "POST" }).then((r) => r as Record<string, unknown>),
   hermesListCommands: () =>
     request<Record<string, unknown>>("/hermes/run").then((r) => r as Record<string, unknown>),
+  hermesSourceDetail: (sourceId: string) =>
+    request<Record<string, unknown>>(`/hermes/source/${encodeURIComponent(sourceId)}`).then((r) => r as Record<string, unknown>),
+  hermesSourceHealthHistory: (sourceId: string) =>
+    request<Record<string, unknown>>(`/hermes/source/${encodeURIComponent(sourceId)}/health-history`).then((r) => r as Record<string, unknown>),
 
   patchItem: (id: string, payload: Partial<Omit<CrudItem, "id">>) =>
     request<{ item: CrudItem }>(`/crud/items/${id}`, {
