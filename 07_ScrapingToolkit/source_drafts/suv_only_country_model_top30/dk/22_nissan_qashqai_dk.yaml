@@ -1,12 +1,12 @@
 source_code: nissan_qashqai_dk_draft_scrapling
 country: 丹麦
 brand: NISSAN
-source_url: https://www.nissan.dk/vozidla/nove-vozy/qashqai.html
+source_url: https://www.nissan.dk/koretojer/nye-biler/qashqai.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.nissan.dk/vozidla/nove-vozy/qashqai.html
+  url: https://www.nissan.dk/koretojer/nye-biler/qashqai.html
   tier: stealth
   headless: true
   network_idle: true
@@ -92,6 +92,7 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from NISSAN template]
+  [URL language corrected]
 bootstrap_meta:
   country_model_rank: 22
   suggested_scope_kind: single_model

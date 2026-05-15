@@ -1,12 +1,12 @@
 source_code: toyota_yaris_cross_it_draft_scrapling
 country: 意大利
 brand: TOYOTA
-source_url: https://www.toyota.it/nova-auta/yaris-cross
+source_url: https://www.toyota.it/auto/yaris-cross
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.toyota.it/nova-auta/yaris-cross
+  url: https://www.toyota.it/auto/yaris-cross
   tier: stealth
   headless: true
   network_idle: true
@@ -84,6 +84,7 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from TOYOTA template]
+  [URL language corrected]
 bootstrap_meta:
   country_model_rank: 2
   suggested_scope_kind: single_model

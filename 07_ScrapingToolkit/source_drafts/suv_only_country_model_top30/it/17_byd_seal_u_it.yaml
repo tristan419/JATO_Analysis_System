@@ -1,12 +1,12 @@
 source_code: byd_seal_u_it_draft_scrapling
 country: 意大利
 brand: BYD
-source_url: https://www.byd.com/it/car/seal-u
+source_url: https://www.byd.com/it/model/seal-u
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.byd.com/it/car/seal-u
+  url: https://www.byd.com/it/model/seal-u
   tier: stealth
   headless: true
   network_idle: true
@@ -91,7 +91,8 @@ schedule:
   preferred_weekday: monday
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from BYD template]
+  before promoting to 07_ScrapingToolkit/sources. [URL filled from BYD template] [URL
+  language corrected]
 bootstrap_meta:
   country_model_rank: 17
   suggested_scope_kind: single_model

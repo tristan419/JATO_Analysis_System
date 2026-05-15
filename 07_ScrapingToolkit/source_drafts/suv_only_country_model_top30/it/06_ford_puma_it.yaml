@@ -1,12 +1,12 @@
 source_code: ford_puma_it_draft_scrapling
 country: 意大利
 brand: FORD
-source_url: https://www.ford.it/osobni-vozy/nova-puma
+source_url: https://www.ford.it/auto/puma
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.ford.it/osobni-vozy/nova-puma
+  url: https://www.ford.it/auto/puma
   tier: stealth
   headless: true
   network_idle: true
@@ -100,6 +100,7 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from FORD template]
+  [URL language corrected]
 bootstrap_meta:
   country_model_rank: 6
   suggested_scope_kind: single_model

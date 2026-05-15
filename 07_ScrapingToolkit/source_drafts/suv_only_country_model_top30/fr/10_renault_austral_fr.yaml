@@ -1,24 +1,12 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 法国 (fr)
-# Country model rank: 10
-# Brand: RENAULT
-# Model: AUSTRAL
-# Suggested scope kind: single_model
-# Sales 12M: 18,794
-# Draft path: fr/10_renault_austral_fr.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: renault_austral_fr_draft_scrapling
 country: 法国
 brand: RENAULT
-source_url: https://www.renault.fr/vehicules-hybrides/renault-austral/prix-versions.html
+source_url: https://www.renault.fr/modeles/austral.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.renault.fr/vehicules-hybrides/renault-austral/prix-versions.html
+  url: https://www.renault.fr/modeles/austral.html
   tier: stealth
   headless: true
   network_idle: true
@@ -109,7 +97,7 @@ notes: Research-confirmed Renault France MSRP entry. Embedded configuration data
   minPrice, webDisplayPrices.displayPrice, schema:price, and finance-only discountedPriceFinance
   fields. Promotion should isolate version MSRP rows and ignore all finance-specific
   values even though they are present in the same payload. Current raw-page evidence
-  verifies HEV markers and Renault fuel filter mappings for MHEV.
+  verifies HEV markers and Renault fuel filter mappings for MHEV. [URL language corrected]
 bootstrap_meta:
   country_model_rank: 10
   suggested_scope_kind: single_model

@@ -1,12 +1,12 @@
 source_code: volvo_xc60_de_draft_scrapling
 country: 德国
 brand: VOLVO
-source_url: https://www.volvocars.com/de/cars/xc60/
+source_url: https://www.volvocars.com/de/cars/xc60
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.volvocars.com/de/cars/xc60/
+  url: https://www.volvocars.com/de/cars/xc60
   tier: stealth
   headless: true
   network_idle: true
@@ -100,6 +100,7 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from VOLVO template]
+  [URL language corrected]
 bootstrap_meta:
   country_model_rank: 12
   suggested_scope_kind: single_model

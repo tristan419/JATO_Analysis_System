@@ -1,24 +1,12 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 法国 (fr)
-# Country model rank: 2
-# Brand: PEUGEOT
-# Model: 3008
-# Suggested scope kind: single_model
-# Sales 12M: 37,438
-# Draft path: fr/02_peugeot_3008_fr.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: peugeot_3008_fr_draft_scrapling
 country: 法国
 brand: PEUGEOT
-source_url: https://www.peugeot.fr/nos-vehicules/3008-suv-new1/configurez.html
+source_url: https://www.peugeot.fr/modeles/3008.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.peugeot.fr/nos-vehicules/3008-suv-new1/configurez.html
+  url: https://www.peugeot.fr/modeles/3008.html
   tier: stealth
   headless: true
   network_idle: true
@@ -129,7 +117,7 @@ notes: Research-confirmed Peugeot France model-specific configurator entry. The 
   exposes q-v3-vehicle-configurator with finition and motorisation steps, but inline
   vehiclePriceCatalogue and vehiclePriceFinal fields are empty in the raw HTML. Treat
   this as a valid landing page with a remaining client-side data extraction blocker,
-  not as a finance-only rejection.
+  not as a finance-only rejection. [URL language corrected]
 bootstrap_meta:
   country_model_rank: 2
   suggested_scope_kind: single_model

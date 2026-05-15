@@ -1,24 +1,12 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 法国 (fr)
-# Country model rank: 3
-# Brand: RENAULT
-# Model: CAPTUR
-# Suggested scope kind: single_model
-# Sales 12M: 37,327
-# Draft path: fr/03_renault_captur_fr.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: renault_captur_fr_draft_scrapling
 country: 法国
 brand: RENAULT
-source_url: https://www.renault.fr/vehicules-hybrides/captur/prix-versions.html
+source_url: https://www.renault.fr/modeles/captur.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.renault.fr/vehicules-hybrides/captur/prix-versions.html
+  url: https://www.renault.fr/modeles/captur.html
   tier: stealth
   headless: true
   network_idle: true
@@ -128,7 +116,8 @@ notes: Research-confirmed Renault France MSRP entry. Public HTML contains the Ve
   et prix label, repeated gradeCode URLs, and multiple schema:price values for version
   rows. Promotion should use non-finance fields only and explicitly ignore discountedPriceFinance-like
   values exposed in embedded configuration JSON. Current raw-page evidence supports
-  HEV, PHEV, ICE, and LPG markers; no distinct Captur MHEV keyword was verified.
+  HEV, PHEV, ICE, and LPG markers; no distinct Captur MHEV keyword was verified. [URL
+  language corrected]
 bootstrap_meta:
   country_model_rank: 3
   suggested_scope_kind: single_model

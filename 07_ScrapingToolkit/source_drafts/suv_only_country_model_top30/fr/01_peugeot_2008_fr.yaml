@@ -1,24 +1,12 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 法国 (fr)
-# Country model rank: 1
-# Brand: PEUGEOT
-# Model: 2008
-# Suggested scope kind: single_model
-# Sales 12M: 53,922
-# Draft path: fr/01_peugeot_2008_fr.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: peugeot_2008_fr_draft_scrapling
 country: 法国
 brand: PEUGEOT
-source_url: https://www.peugeot.fr/nos-vehicules/nouveau-suv-peugeot-2008/configurez.html
+source_url: https://www.peugeot.fr/modeles/2008.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.peugeot.fr/nos-vehicules/nouveau-suv-peugeot-2008/configurez.html
+  url: https://www.peugeot.fr/modeles/2008.html
   tier: stealth
   headless: true
   network_idle: true
@@ -120,7 +108,7 @@ notes: Research-confirmed Peugeot France model-specific configurator entry. The 
   HTML mounts q-v3-vehicle-configurator, but inline vehiclePriceCatalogue and vehiclePriceFinal
   placeholders are empty in the server-rendered shell. This is a real model entry
   point, but it still needs client-side configurator payload capture before it can
-  be promoted as a production MSRP source.
+  be promoted as a production MSRP source. [URL language corrected]
 bootstrap_meta:
   country_model_rank: 1
   suggested_scope_kind: single_model

@@ -1,12 +1,12 @@
 source_code: skoda_elroq_fi_draft_scrapling
 country: 芬兰
 brand: SKODA
-source_url: https://www.skoda.fi/modely/elroq/elroq
+source_url: https://www.skoda.fi/mallisto/elroq
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.skoda.fi/modely/elroq/elroq
+  url: https://www.skoda.fi/mallisto/elroq
   tier: stealth
   headless: true
   network_idle: true
@@ -84,6 +84,7 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from SKODA template]
+  [URL language corrected]
 bootstrap_meta:
   country_model_rank: 6
   suggested_scope_kind: single_model
