@@ -14,11 +14,10 @@ gaps:
     evidence:
       - "All prompts are inline string constants in country_chat_service.py and routes/assistant.py"
       - "No version scheme, no changelog, no prompt template files"
-      - "Prompt changes cannot be tracked independently of code changes"
-    recommendedAction: "Extract prompts to versioned template files. Add prompt version to Prompt Registry. Track changes in prompt changelog."
-    status: open
+    recommendedAction: "Extract prompts to versioned template files."
+    status: resolved
     owner: ""
-    notes: ""
+    notes: "Resolved 2026-05-15. 2 main prompts extracted to hermes/prompts/ with v1. Code loads from files with hardcoded fallback. proposal.prompt.versioning → implemented."
 
   # --- Pipeline Gaps ---
   - gapId: gap.pipeline.duplicate_news_scheduling

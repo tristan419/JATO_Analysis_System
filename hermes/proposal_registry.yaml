@@ -6,7 +6,7 @@ proposals:
   - proposalId: proposal.prompt.versioning
     type: prompt_versioning
     title: "Version the 3 hardcoded Country Copilot prompts"
-    summary: "Extract the 3 inline prompt strings from country_chat_service.py and routes/assistant.py into versioned template files. Add prompt version to Prompt Registry. Create prompt changelog."
+    summary: "Implemented 2026-05-15. Extracted 2 main prompts to hermes/prompts/ (country_copilot_nvidia_v1.txt, country_copilot_deepseek_v1.txt). country_chat_service.py loads from files with hardcoded fallback. Prompts are now independently versionable."
     affectedFeatures:
       - "feature.country_copilot"
     affectedPipelines: []
@@ -17,10 +17,11 @@ proposals:
       - "prompt.country_copilot.deepseek_stream"
     riskLevel: low
     expectedImpact: "Prompt changes become independently trackable. No functional change to LLM behavior."
-    rollbackPlan: "Revert to inline prompt strings. Templates are wrappers only."
-    status: draft
+    rollbackPlan: "Revert to inline prompt strings."
+    status: implemented
     createdAt: "2026-05-14"
-    notes: "Do not change prompt content in this proposal. Extract only."
+    implementedAt: "2026-05-15"
+    notes: "Prompts live at hermes/prompts/. To update a prompt: edit the .txt file, bump version in filename, commit."
 
   - proposalId: proposal.pipeline.news_dedup
     type: pipeline_dedup

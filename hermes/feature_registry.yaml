@@ -496,13 +496,13 @@ features:
 
   - featureId: feature.ranking_trend_drilldown
     name: "Ranking Trend Drilldown"
-    status: beta
-    implementationStatus: partial
+    status: active
+    implementationStatus: implemented
     riskLevel: low
     routes:
-      - "/market-scan (RankingTrendDrawer)"
+      - "/market-scan (RankingTrendPopover)"
     backendApis:
-      - "GET /v1/market-scan/ranking-trend (implemented)"
+      - "GET /v1/market-scan/ranking-trend"
     scheduledJobs: []
     dataSources:
       - "JATO partitioned parquet"
@@ -514,10 +514,7 @@ features:
       - "pipeline.jato.etl"
     owner: ""
     governanceStatus: registered
-    knownIssues:
-      - "Backend API implemented: GET /v1/market-scan/ranking-trend"
-      - "Frontend component exists: RankingTrendDrawer.tsx (7.4KB)"
-      - "Needs integration testing and docs update"
+    knownIssues: []
     lastChangedAt: null
     lastAuditAt: "2026-05-14"
     notes: "Drawer pattern for Brand/Model trend exploration. RankingTrendDrawer.tsx component exists."
