@@ -1,216 +1,461 @@
-# Hermes Governance Gaps Registry
-# Phase 1 — all gaps identified in Phase 0 REPOSITORY_ASSET_MAP.md
-
 gaps:
-  # --- Prompt Gaps ---
-  - gapId: gap.prompt.unversioned_python_prompts
-    title: "3 LLM prompts hardcoded in Python without versioning"
-    category: prompt
-    severity: medium
-    affectedAssets:
-      - "prompt.country_copilot.nvidia_system"
-      - "prompt.country_copilot.deepseek_system"
-      - "prompt.country_copilot.deepseek_stream"
-    evidence:
-      - "All prompts are inline string constants in country_chat_service.py and routes/assistant.py"
-      - "No version scheme, no changelog, no prompt template files"
-    recommendedAction: "Extract prompts to versioned template files."
-    status: resolved
-    owner: ""
-    notes: "Resolved 2026-05-15. 2 main prompts extracted to hermes/prompts/ with v1. Code loads from files with hardcoded fallback. proposal.prompt.versioning → implemented."
-
-  # --- Pipeline Gaps ---
-  - gapId: gap.pipeline.duplicate_news_scheduling
-    title: "Country News Sync duplicated between systemd timer and Airflow DAG"
-    category: pipeline
-    severity: high
-    affectedAssets:
-      - "pipeline.news.country_systemd"
-      - "pipeline.news.country_airflow"
-    evidence:
-      - "systemd timer: OnCalendar=*-*-* 23:15:00 UTC"
-      - "Airflow DAG: cron 15 6 * * * (06:15 UTC)"
-      - "Both write to ops.country_news_digest table"
-      - "Risk of double ingestion, duplicate articles, wasted API calls"
-    recommendedAction: "Decision documented in PIPELINE_SCHEDULER_DECISION_2026-05-14.md §3. Systemd = production scheduler. Airflow should be manual-only. Next step: verify Airflow DAG schedule on production instance and pause if active."
-    status: resolved
-    owner: ""
-    notes: "Resolved 2026-05-14. Server verified: Airflow Docker stack not running on production. systemd timer is sole active scheduler. DAG file preserved for future manual use."
-
-  - gapId: gap.pipeline.news_batch_b_unscheduled
-    title: "News Batch B (12 countries) has no scheduled fetch"
-    category: pipeline
-    severity: medium
-    affectedAssets:
-      - "source.news.batch_b"
-      - "feature.country_copilot"
-    evidence:
-      - "Batch B config exists at 07_ScrapingToolkit/news_sources/batch_b.yaml"
-      - "No systemd timer or Airflow DAG triggers Batch B"
-      - "12 Western/Southern European countries without automated news coverage"
-    recommendedAction: "Add Batch B to existing news systemd timer, or create separate timer with offset schedule to avoid overwhelming RSS sources."
-    status: open
-    owner: ""
-    notes: ""
-
-  # --- Environment Gaps ---
-  - gapId: gap.env.empty_critical_vars
-    title: "Critical env vars empty or commented out in example files"
-    category: env
-    severity: high
-    affectedAssets:
-      - "jato-fullstack-backend.env.example"
-      - "All systemd services depending on backend.env"
-    evidence:
-      - "APP_DATABASE_ENABLED=false (default — prevents all DB writes)"
-      - "APP_DATABASE_URL= (empty)"
-      - "DEEPSEEK_API_KEY= (commented out in 2026-05-14 fix)"
-      - "GEMINI_API_KEY= (commented out)"
-      - "No clear setup instructions for production values"
-    recommendedAction: "Add startup validation that fails fast with clear error if DB is enabled but URL is empty. Add setup instructions in TENCENT_CLOUD_DEPLOY.md."
-    status: open
-    owner: ""
-    notes: "Partially addressed 2026-05-14: secrets commented out in example. Still needs startup validation."
-
-  # --- Test Gaps ---
-  - gapId: gap.test.missing_integration_contract_tests
-    title: "No integration tests or contract tests"
-    category: test
-    severity: medium
-    affectedAssets:
-      - "All backend services"
-      - "All frontend pages"
-    evidence:
-      - "tests/unit/ directory has 40 test files — all unit tests"
-      - "No tests/integration/ directory found"
-      - "No contract tests between frontend types and backend serializers"
-      - "No pipeline end-to-end tests"
-    recommendedAction: "Add at minimum: (1) API contract tests for critical endpoints, (2) one end-to-end pipeline test for the most critical flow (e.g., JATO ETL → Market Scan API → Frontend render)."
-    status: open
-    owner: ""
-    notes: ""
-
-  # --- Source Quality Gaps ---
-  - gapId: gap.source_quality.voc_errors_untracked
-    title: "VOC source errors not systematically tracked"
-    category: source_quality
-    severity: medium
-    affectedAssets:
-      - "source.voc.batch_a"
-      - "pipeline.voc.forum_systemd"
-    evidence:
-      - "Last VOC run: 40 raw artifacts, 8 source errors per run (typical)"
-      - "voc-failed-sources.json generation scaffold added 2026-05-14"
-      - "scheduled_fetch_status.json now records failedCount per run"
-      - "hermes_source_quality.py detects unstructured failures and scores sources"
-    recommendedAction: "Per-source tracking infrastructure exists. Next: verify voc-failed-sources.json is populated with actual per-source data on next VOC run. Surface in Phase 6 Data Management UI."
-    status: in_progress
-    owner: ""
-    notes: "proposal.source_quality.voc_tracking → implemented. Infrastructure built. Needs production verification on next VOC run."
-
-  - gapId: gap.source_quality.no_quality_scoring
-    title: "No systematic source quality scoring"
-    category: source_quality
-    severity: medium
-    affectedAssets:
-      - "All source types (news, voc, msrp)"
-    evidence:
-      - "Source Registry quality fields are all null"
-      - "No successRate, timeoutRate, http403Rate, extractionQualityScore tracked"
-      - "No source health dashboard"
-    recommendedAction: "Implement per-source quality scoring in crawler output. Write scores to Source Registry. Add source health view to Data Management."
-    status: open
-    owner: ""
-    notes: ""
-
-  # --- Backlog Gaps ---
-  - gapId: gap.backlog.prd_only_features
-    title: "Two PRDs written but not implemented"
-    category: backlog
-    severity: low
-    affectedAssets:
-      - "feature.presence_websocket"
-      - "feature.ranking_trend_drilldown"
-    evidence:
-      - "01_DevWorkflow/presence_websocket_prd.md exists"
-      - "01_DevWorkflow/ranking_trend_drilldown_prd.md exists"
-      - "Hermes Intake confirmed: ranking_trend has backend API + frontend component (partial). presence_websocket has no code."
-    recommendedAction: "Triaged 2026-05-14. presence_websocket → archived. ranking_trend → beta (partial implementation found)."
-    status: resolved
-    owner: ""
-    notes: "proposal.backlog.triage_prd_features → implemented."
-
-  # --- Documentation Gaps ---
-  - gapId: gap.docs.no_runbook
-    title: "No operational runbook for scheduled fetch failure recovery"
-    category: docs
-    severity: medium
-    affectedAssets:
-      - "All scheduled pipelines"
-    evidence:
-      - "No runbook document found in 04_DevOps/ or elsewhere"
-      - "No documented recovery procedure for: VOC 203/EXEC, news DB connection failure, MSRP dry-run 404s"
-    recommendedAction: "Create SCHEDULED_FETCH_OPERATIONS.md with: manual test commands, journalctl troubleshooting, artifact paths, failure recovery steps."
-    status: open
-    owner: ""
-    notes: ""
-
-  - gapId: gap.docs.no_adr
-    title: "No Architecture Decision Log (ADR)"
-    category: docs
-    severity: low
-    affectedAssets:
-      - "All architectural decisions"
-    evidence:
-      - "No ADR directory or file found"
-      - "Key decisions (DeepSeek vs NVIDIA, systemd vs Airflow, Parquet vs DuckDB) not documented with rationale"
-    recommendedAction: "Create hermes/audits/adr/ directory. Write ADR-0001 for the first architectural decision. Backfill critical past decisions."
-    status: open
-    owner: ""
-    notes: ""
-
-  # --- CI / Deploy Workflow Gaps ---
-  - gapId: gap.ci.preexisting_failures
-    title: "CI workflow consistently failing due to pre-existing code style issues"
-    category: test
-    severity: medium
-    affectedAssets:
-      - "pipeline.ci.github"
-    evidence:
-      - "ci.yml consistently fails on every push since before Hermes introduction"
-      - "Three jobs: smoke (style/compile/regression) fails, fullstack-frontend fails"
-      - "Not caused by Hermes changes"
-    recommendedAction: "Short-term: convert CI to non-blocking diagnostics. Long-term: split into smaller checks (YAML validation, frontend typecheck, backend smoke) and restore gradually."
-    status: open
-    owner: ""
-    notes: "Phase 5.6 classified. CI failures should not be confused with deployment failures."
-
-  - gapId: gap.deploy.legacy_ec2_workflow
-    title: "Legacy deploy-ssh-auto-update workflow consistently failing"
-    category: pipeline
-    severity: high
-    affectedAssets:
-      - "pipeline.deploy.ec2_legacy_github"
-    evidence:
-      - "deploy-ssh-auto-update consistently fails on every push"
-      - "Target EC2 server likely no longer exists"
-      - "Creates misleading red X on GitHub Actions page"
-    recommendedAction: "Convert to workflow_dispatch only as safe first step. Disable entirely after confirming EC2 instance is obsolete."
-    status: resolved
-    owner: ""
-    notes: "Resolved 2026-05-14. Push trigger commented out in deploy-ec2-auto-update.yml. Workflow file preserved. proposal.deploy.disable_legacy_ec2 → implemented."
-
-  # --- Feature Gaps ---
-  - gapId: gap.feature.no_owner_tracking
-    title: "No feature owner tracking"
-    category: feature
-    severity: low
-    affectedAssets:
-      - "All 12+ features"
-    evidence:
-      - "All feature registry entries have owner: ''"
-      - "No accountability for feature maintenance"
-    recommendedAction: "Assign owners to each feature. Update Feature Registry."
-    status: open
-    owner: ""
-    notes: ""
+- gapId: gap.prompt.unversioned_python_prompts
+  title: 3 LLM prompts hardcoded in Python without versioning
+  category: prompt
+  severity: medium
+  affectedAssets:
+  - prompt.country_copilot.nvidia_system
+  - prompt.country_copilot.deepseek_system
+  - prompt.country_copilot.deepseek_stream
+  evidence:
+  - All prompts are inline string constants in country_chat_service.py and routes/assistant.py
+  - No version scheme, no changelog, no prompt template files
+  recommendedAction: Extract prompts to versioned template files.
+  status: resolved
+  owner: ''
+  notes: Resolved 2026-05-15. 2 main prompts extracted to hermes/prompts/ with v1.
+    Code loads from files with hardcoded fallback. proposal.prompt.versioning → implemented.
+- gapId: gap.pipeline.duplicate_news_scheduling
+  title: Country News Sync duplicated between systemd timer and Airflow DAG
+  category: pipeline
+  severity: high
+  affectedAssets:
+  - pipeline.news.country_systemd
+  - pipeline.news.country_airflow
+  evidence:
+  - 'systemd timer: OnCalendar=*-*-* 23:15:00 UTC'
+  - 'Airflow DAG: cron 15 6 * * * (06:15 UTC)'
+  - Both write to ops.country_news_digest table
+  - Risk of double ingestion, duplicate articles, wasted API calls
+  recommendedAction: 'Decision documented in PIPELINE_SCHEDULER_DECISION_2026-05-14.md
+    §3. Systemd = production scheduler. Airflow should be manual-only. Next step:
+    verify Airflow DAG schedule on production instance and pause if active.'
+  status: resolved
+  owner: ''
+  notes: 'Resolved 2026-05-14. Server verified: Airflow Docker stack not running on
+    production. systemd timer is sole active scheduler. DAG file preserved for future
+    manual use.'
+- gapId: gap.pipeline.news_batch_b_unscheduled
+  title: News Batch B (12 countries) has no scheduled fetch
+  category: pipeline
+  severity: medium
+  affectedAssets:
+  - source.news.batch_b
+  - feature.country_copilot
+  evidence:
+  - Batch B config exists at 07_ScrapingToolkit/news_sources/batch_b.yaml
+  - No systemd timer or Airflow DAG triggers Batch B
+  - 12 Western/Southern European countries without automated news coverage
+  recommendedAction: Add Batch B to existing news systemd timer, or create separate
+    timer with offset schedule to avoid overwhelming RSS sources.
+  status: open
+  owner: ''
+  notes: ''
+- gapId: gap.env.empty_critical_vars
+  title: Critical env vars empty or commented out in example files
+  category: env
+  severity: high
+  affectedAssets:
+  - jato-fullstack-backend.env.example
+  - All systemd services depending on backend.env
+  evidence:
+  - APP_DATABASE_ENABLED=false (default — prevents all DB writes)
+  - APP_DATABASE_URL= (empty)
+  - DEEPSEEK_API_KEY= (commented out in 2026-05-14 fix)
+  - GEMINI_API_KEY= (commented out)
+  - No clear setup instructions for production values
+  recommendedAction: Add startup validation that fails fast with clear error if DB
+    is enabled but URL is empty. Add setup instructions in TENCENT_CLOUD_DEPLOY.md.
+  status: open
+  owner: ''
+  notes: 'Partially addressed 2026-05-14: secrets commented out in example. Still
+    needs startup validation.'
+- gapId: gap.test.missing_integration_contract_tests
+  title: No integration tests or contract tests
+  category: test
+  severity: medium
+  affectedAssets:
+  - All backend services
+  - All frontend pages
+  evidence:
+  - tests/unit/ directory has 40 test files — all unit tests
+  - No tests/integration/ directory found
+  - No contract tests between frontend types and backend serializers
+  - No pipeline end-to-end tests
+  recommendedAction: 'Add at minimum: (1) API contract tests for critical endpoints,
+    (2) one end-to-end pipeline test for the most critical flow (e.g., JATO ETL →
+    Market Scan API → Frontend render).'
+  status: open
+  owner: ''
+  notes: ''
+- gapId: gap.source_quality.voc_errors_untracked
+  title: VOC source errors not systematically tracked
+  category: source_quality
+  severity: medium
+  affectedAssets:
+  - source.voc.batch_a
+  - pipeline.voc.forum_systemd
+  evidence:
+  - 'Last VOC run: 40 raw artifacts, 8 source errors per run (typical)'
+  - voc-failed-sources.json generation scaffold added 2026-05-14
+  - scheduled_fetch_status.json now records failedCount per run
+  - hermes_source_quality.py detects unstructured failures and scores sources
+  recommendedAction: 'Per-source tracking infrastructure exists. Next: verify voc-failed-sources.json
+    is populated with actual per-source data on next VOC run. Surface in Phase 6 Data
+    Management UI.'
+  status: in_progress
+  owner: ''
+  notes: proposal.source_quality.voc_tracking → implemented. Infrastructure built.
+    Needs production verification on next VOC run.
+- gapId: gap.source_quality.no_quality_scoring
+  title: No systematic source quality scoring
+  category: source_quality
+  severity: medium
+  affectedAssets:
+  - All source types (news, voc, msrp)
+  evidence:
+  - Source Registry quality fields are all null
+  - No successRate, timeoutRate, http403Rate, extractionQualityScore tracked
+  - No source health dashboard
+  recommendedAction: Implement per-source quality scoring in crawler output. Write
+    scores to Source Registry. Add source health view to Data Management.
+  status: open
+  owner: ''
+  notes: ''
+- gapId: gap.backlog.prd_only_features
+  title: Two PRDs written but not implemented
+  category: backlog
+  severity: low
+  affectedAssets:
+  - feature.presence_websocket
+  - feature.ranking_trend_drilldown
+  evidence:
+  - 01_DevWorkflow/presence_websocket_prd.md exists
+  - 01_DevWorkflow/ranking_trend_drilldown_prd.md exists
+  - 'Hermes Intake confirmed: ranking_trend has backend API + frontend component (partial).
+    presence_websocket has no code.'
+  recommendedAction: Triaged 2026-05-14. presence_websocket → archived. ranking_trend
+    → beta (partial implementation found).
+  status: resolved
+  owner: ''
+  notes: proposal.backlog.triage_prd_features → implemented.
+- gapId: gap.docs.no_runbook
+  title: No operational runbook for scheduled fetch failure recovery
+  category: docs
+  severity: medium
+  affectedAssets:
+  - All scheduled pipelines
+  evidence:
+  - No runbook document found in 04_DevOps/ or elsewhere
+  - 'No documented recovery procedure for: VOC 203/EXEC, news DB connection failure,
+    MSRP dry-run 404s'
+  recommendedAction: 'Create SCHEDULED_FETCH_OPERATIONS.md with: manual test commands,
+    journalctl troubleshooting, artifact paths, failure recovery steps.'
+  status: open
+  owner: ''
+  notes: ''
+- gapId: gap.docs.no_adr
+  title: No Architecture Decision Log (ADR)
+  category: docs
+  severity: low
+  affectedAssets:
+  - All architectural decisions
+  evidence:
+  - No ADR directory or file found
+  - Key decisions (DeepSeek vs NVIDIA, systemd vs Airflow, Parquet vs DuckDB) not
+    documented with rationale
+  recommendedAction: Create hermes/audits/adr/ directory. Write ADR-0001 for the first
+    architectural decision. Backfill critical past decisions.
+  status: open
+  owner: ''
+  notes: ''
+- gapId: gap.ci.preexisting_failures
+  title: CI workflow consistently failing due to pre-existing code style issues
+  category: test
+  severity: medium
+  affectedAssets:
+  - pipeline.ci.github
+  evidence:
+  - ci.yml consistently fails on every push since before Hermes introduction
+  - 'Three jobs: smoke (style/compile/regression) fails, fullstack-frontend fails'
+  - Not caused by Hermes changes
+  recommendedAction: 'Short-term: convert CI to non-blocking diagnostics. Long-term:
+    split into smaller checks (YAML validation, frontend typecheck, backend smoke)
+    and restore gradually.'
+  status: open
+  owner: ''
+  notes: Phase 5.6 classified. CI failures should not be confused with deployment
+    failures.
+- gapId: gap.deploy.legacy_ec2_workflow
+  title: Legacy deploy-ssh-auto-update workflow consistently failing
+  category: pipeline
+  severity: high
+  affectedAssets:
+  - pipeline.deploy.ec2_legacy_github
+  evidence:
+  - deploy-ssh-auto-update consistently fails on every push
+  - Target EC2 server likely no longer exists
+  - Creates misleading red X on GitHub Actions page
+  recommendedAction: Convert to workflow_dispatch only as safe first step. Disable
+    entirely after confirming EC2 instance is obsolete.
+  status: resolved
+  owner: ''
+  notes: Resolved 2026-05-14. Push trigger commented out in deploy-ec2-auto-update.yml.
+    Workflow file preserved. proposal.deploy.disable_legacy_ec2 → implemented.
+- gapId: gap.feature.no_owner_tracking
+  title: No feature owner tracking
+  category: feature
+  severity: low
+  affectedAssets:
+  - All 12+ features
+  evidence:
+  - 'All feature registry entries have owner: '''''
+  - No accountability for feature maintenance
+  recommendedAction: Assign owners to each feature. Update Feature Registry.
+  status: open
+  owner: ''
+  notes: ''
+- gapId: gap.devsync.feature.presence_websocket.missing_docs
+  title: Feature 'Presence WebSocket + UI animations + online user count' has no documentation
+  category: docs
+  severity: medium
+  status: open
+  affectedAssets:
+  - feature.presence_websocket
+  evidence:
+  - 'DevSync auto-detected: feature implemented but no docs linked.'
+  recommendedAction: Write docs for feature.presence_websocket or link existing docs
+    in features.yaml.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.feature.ui_animations.missing_docs
+  title: Feature 'Presence WebSocket + UI animations + online user count' has no documentation
+  category: docs
+  severity: medium
+  status: open
+  affectedAssets:
+  - feature.ui_animations
+  evidence:
+  - 'DevSync auto-detected: feature implemented but no docs linked.'
+  recommendedAction: Write docs for feature.ui_animations or link existing docs in
+    features.yaml.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.hermes-devsync.missing_docs
+  title: Feature 'Hermes DevSync implementation' has no documentation
+  category: docs
+  severity: medium
+  status: open
+  affectedAssets:
+  - hermes-devsync
+  evidence:
+  - 'DevSync auto-detected: feature implemented but no docs linked.'
+  recommendedAction: Write docs for hermes-devsync or link existing docs in features.yaml.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.hermes-dev-ui.missing_docs
+  title: Feature 'Hermes DevSync implementation' has no documentation
+  category: docs
+  severity: medium
+  status: open
+  affectedAssets:
+  - hermes-dev-ui
+  evidence:
+  - 'DevSync auto-detected: feature implemented but no docs linked.'
+  recommendedAction: Write docs for hermes-dev-ui or link existing docs in features.yaml.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.hermes-chat-gateway.missing_docs
+  title: Feature 'Hermes Chat Gateway implementation complete' has no documentation
+  category: docs
+  severity: medium
+  status: open
+  affectedAssets:
+  - hermes-chat-gateway
+  evidence:
+  - 'DevSync auto-detected: feature implemented but no docs linked.'
+  recommendedAction: Write docs for hermes-chat-gateway or link existing docs in features.yaml.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.hermes-command-gateway.missing_docs
+  title: Feature 'Hermes Chat Gateway implementation complete' has no documentation
+  category: docs
+  severity: medium
+  status: open
+  affectedAssets:
+  - hermes-command-gateway
+  evidence:
+  - 'DevSync auto-detected: feature implemented but no docs linked.'
+  recommendedAction: Write docs for hermes-command-gateway or link existing docs in
+    features.yaml.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.backend.missing_docs
+  title: Feature 'Parallel batch dryrun + per-country log parsing' has no documentation
+  category: docs
+  severity: medium
+  status: open
+  affectedAssets:
+  - backend
+  evidence:
+  - 'DevSync auto-detected: feature implemented but no docs linked.'
+  recommendedAction: Write docs for backend or link existing docs in features.yaml.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.backend.missing_tests
+  title: Feature 'Parallel batch dryrun + per-country log parsing' has no test results
+    recorded
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - backend
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for backend.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.frontend.missing_docs
+  title: 'Feature ''History drill-down: click to expand per-country breakdown'' has
+    no documentation'
+  category: docs
+  severity: medium
+  status: open
+  affectedAssets:
+  - frontend
+  evidence:
+  - 'DevSync auto-detected: feature implemented but no docs linked.'
+  recommendedAction: Write docs for frontend or link existing docs in features.yaml.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.frontend.missing_tests
+  title: 'Feature ''History drill-down: click to expand per-country breakdown'' has
+    no test results recorded'
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - frontend
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for frontend.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.presence-websocket.missing_docs
+  title: 'Feature ''feat: login system with PBKDF2 auth, session tokens, and AuthContext''
+    has no documentation'
+  category: docs
+  severity: medium
+  status: open
+  affectedAssets:
+  - presence-websocket
+  evidence:
+  - 'DevSync auto-detected: feature implemented but no docs linked.'
+  recommendedAction: Write docs for presence-websocket or link existing docs in features.yaml.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.presence-websocket.missing_tests
+  title: 'Feature ''feat: login system with PBKDF2 auth, session tokens, and AuthContext''
+    has no test results recorded'
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - presence-websocket
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for presence-websocket.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.scraping-toolkit.missing_docs
+  title: 'Feature ''Fix URL path language for DE/FR/IT/PL/FI/DK: 111 URLs corrected''
+    has no documentation'
+  category: docs
+  severity: medium
+  status: open
+  affectedAssets:
+  - scraping-toolkit
+  evidence:
+  - 'DevSync auto-detected: feature implemented but no docs linked.'
+  recommendedAction: Write docs for scraping-toolkit or link existing docs in features.yaml.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.scraping-toolkit.missing_tests
+  title: 'Feature ''Fix URL path language for DE/FR/IT/PL/FI/DK: 111 URLs corrected''
+    has no test results recorded'
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - scraping-toolkit
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for scraping-toolkit.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.hermes-chat-gateway.missing_tests
+  title: 'Feature ''hermes: full automation loop — sync auth, hooks, workspace health''
+    has no test results recorded'
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - hermes-chat-gateway
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for hermes-chat-gateway.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.hermes-scripts.missing_docs
+  title: 'Feature ''hermes: full automation loop — sync auth, hooks, workspace health''
+    has no documentation'
+  category: docs
+  severity: medium
+  status: open
+  affectedAssets:
+  - hermes-scripts
+  evidence:
+  - 'DevSync auto-detected: feature implemented but no docs linked.'
+  recommendedAction: Write docs for hermes-scripts or link existing docs in features.yaml.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.hermes-scripts.missing_tests
+  title: 'Feature ''hermes: full automation loop — sync auth, hooks, workspace health''
+    has no test results recorded'
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - hermes-scripts
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for hermes-scripts.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.fix-add-write-permissions-and-pull-before-push-for.missing_docs
+  title: 'Feature ''fix: add write permissions and pull-before-push for hermes-devsync
+    workflow'' has no documentation'
+  category: docs
+  severity: medium
+  status: open
+  affectedAssets:
+  - fix-add-write-permissions-and-pull-before-push-for
+  evidence:
+  - 'DevSync auto-detected: feature implemented but no docs linked.'
+  recommendedAction: Write docs for fix-add-write-permissions-and-pull-before-push-for
+    or link existing docs in features.yaml.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.fix-add-write-permissions-and-pull-before-push-for.missing_tests
+  title: 'Feature ''fix: add write permissions and pull-before-push for hermes-devsync
+    workflow'' has no test results recorded'
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - fix-add-write-permissions-and-pull-before-push-for
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for fix-add-write-permissions-and-pull-before-push-for.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.

@@ -13,9 +13,9 @@ It is split into three layers:
 ```mermaid
 flowchart TD
   subgraph Inputs[Source inputs and storage]
-    A1[01_RAW_DATA baseline / patches / archives]
-    A2[04_Processed_data parquet / precomputed aggregates / candidate scope]
-    A3[02_Config_MetaData]
+    A1[01_RAW_DATA\nbaseline / patches / archives]
+    A2[04_Processed_data\nparquet + aggregates + candidate scope]
+    A3[02_Config_MetaData\nfield mapping + config xlsx]
     A4[App DB]
   end
 
@@ -23,16 +23,16 @@ flowchart TD
     B1[candidate_scope.py]
     B2[source_bootstrap.py]
     B3[source_drafts/*.yaml]
-    B4[03_Scripts/batch_dryrun.py]
-    B5[03_Scripts/batch_ingest.py]
-    B6[03_Scripts/run_msrp_low_concurrency.sh]
-    B7[03_Scripts/run_scraping_tool.sh]
-    B8[03_Scripts/import_evkx_catalog.py]
+    B4[batch_dryrun.py]
+    B5[batch_ingest.py]
+    B6[run_msrp_low_concurrency.sh]
+    B7[run_scraping_tool.sh]
+    B8[import_evkx_catalog.py]
     B9[dryrun_report.json + batch logs]
   end
 
   subgraph Toolkit[07_ScrapingToolkit]
-    C1[sources/*.yaml promoted MSRP sources]
+    C1[sources/*.yaml\npromoted MSRP sources]
     C2[news_sources/*.yaml]
     C3[voc_sources/*.yaml]
     C4[run.py / jato-scrape]
@@ -40,10 +40,10 @@ flowchart TD
     C6[jato-voc-plan]
     C7[run_evkx.py]
     C8[config_loader + presets]
-    C9[extractors: scrapling / playwright / http_json]
+    C9[extractors\nscrapling / playwright / http_json]
     C10[validation + EUR conversion]
     C11[dry-run summary JSON]
-    C12[ensure source + live MSRP ingest]
+    C12[ensure source\n+ live MSRP ingest]
     C13[EVKX JSON output]
     C14[news batch payload]
     C15[VOC plan paths]
@@ -65,14 +65,26 @@ flowchart TD
     E5[scrape_batch + observations]
     E6[review cases + overrides]
     E7[CurrentPrice + PriceHistory]
-    E8[country news refresh endpoint]
-    E9[CountryNewsDigest + CountryNewsArticle]
+    E8[country news refresh]
+    E9[NewsDigest + NewsArticle]
     E10[monthly update upload + jobs]
     E11[analytics overview APIs]
     E12[advanced chart / deck pages]
     E13[Country Copilot]
     E14[projects / overrides / ops state]
-    E15[EVKX import review flow]
+    E15[EVKX import review]
+    E16[Eng Config Page\n5-tab CRUD + compare]
+    E17[ConfigVersion\ndraft → published → archived]
+    E18[TrimFeatureValue\n+ ConfigAuditLog]
+    E19[identity_key match\n+ diff preview]
+  end
+
+  subgraph EngConfig[Engineering Config Pipeline]
+    G1[ConfigFieldMappingParser\n308 fields x 10 categories]
+    G2[EngineeringConfigMatrixParser\nfeature x trim matrix]
+    G3[config_availability.py\nSTANDARD / OPTIONAL / VALUE...]
+    G4[Upload flow\nparse → match → preview → confirm]
+    G5[engineering_config schema\n5 tables versioned]
   end
 
   subgraph Legacy[05_DashBoard legacy viewer]
@@ -137,6 +149,7 @@ flowchart TD
   A3 --> E11
   A3 --> E12
   A3 --> E13
+  A3 --> G1
 
   A4 --> E1
   A4 --> E5
@@ -156,15 +169,31 @@ flowchart TD
   E1 --> D1
   E1 --> D4
   E1 --> D5
+  E1 --> E16
+
+  G1 --> G2
+  G2 --> G3
+  G3 --> G4
+  G4 --> G5
+  G4 --> E19
+  G5 --> A4
+  G5 --> E17
+  E19 --> E17
+  E17 --> E18
+  E16 --> E17
+  E16 --> E18
+  E16 --> E19
 
   classDef business fill:#fef3c7,stroke:#d97706,color:#111827,stroke-width:2px;
   classDef orchestration fill:#dbeafe,stroke:#2563eb,color:#111827,stroke-width:1.5px;
   classDef store fill:#dcfce7,stroke:#16a34a,color:#111827,stroke-width:1.5px;
+  classDef engconfig fill:#fce7f3,stroke:#db2777,color:#111827,stroke-width:1.5px;
   classDef legacy fill:#f3e8ff,stroke:#7c3aed,color:#111827,stroke-width:1.5px;
 
   class A1,A2,A3,A4,B1,B2,B3,B4,B5,B6,B7,B8,B9,C1,C2,C3,C4,C5,C6,C7,C8,C9,C10,C11,C12,C13,C14,C15,E1,E2,E3,E4,E5,E6,E7,E8,E9,E10,E11,E12,E13,E14,E15 business;
   class D1,D2,D3,D4,D5 orchestration;
-  class A2,A4,B9,C11,C13,C14,C15,E5,E6,E7,E9,E10,E14,E15 store;
+  class A2,A4,B9,C11,C13,C14,C15,E5,E6,E7,E9,E10,E14,E15,G5 store;
+  class G1,G2,G3,G4,G5,E16,E17,E18,E19 engconfig;
   class F1 legacy;
 ```
 
@@ -173,6 +202,7 @@ Legend:
 - Yellow = main business layer
 - Green = important data/output landing points
 - Blue = orchestration
+- Pink = engineering config management
 - Purple = legacy
 
 ## 2. AppPlatform runtime interaction chain
@@ -192,8 +222,8 @@ sequenceDiagram
   BE->>DS: read parquet / distincts / precomputed country aggregates
   BE-->>FE: KPI cards + trend data + filter state
 
-  U->>FE: Open Market Scan / Positioning / Version Comparison / Customer Insights
-  FE->>BE: advanced chart / grouped series / positioning / market-scan APIs
+  U->>FE: Market Scan / Positioning / Version Comparison
+  FE->>BE: advanced chart / grouped series / positioning APIs
   BE->>DS: compute derived analytical views
   BE-->>FE: charts / deck-ready page state
 
@@ -201,25 +231,41 @@ sequenceDiagram
   FE->>BE: /assistant/country/chat
   BE->>DS: build country snapshot from analysis data
   BE->>DB: optional MSRP lookup
-  BE->>EXT: optional news refresh and wiki/news enrichment
+  BE->>EXT: optional news/wiki enrichment
   BE-->>FE: grounded response + snapshot + chart/deck payload
 
   U->>FE: Open Data Management
   FE->>BE: /data-management/overview + CRUD actions
   BE->>DB: sources / projects / overrides / ops state
-  BE->>AF: start/stop/open local Airflow when requested
+  BE->>AF: start/stop/open local Airflow
   BE-->>FE: system status + admin state
 
   U->>FE: Review MSRP workflow
-  FE->>BE: list current prices / review cases / materialize actions
-  BE->>DB: observations -> review cases -> current price / history
+  FE->>BE: list current prices / review cases / materialize
+  BE->>DB: observations → review cases → current price / history
   BE-->>FE: refreshed review / price state
 
   U->>FE: Upload monthly JATO Excel
   FE->>BE: resumable upload + create monthly-update job
-  BE->>AF: prepare -> compare -> refresh
+  BE->>AF: prepare → compare → refresh
   BE->>DB: persist job state and outputs
   BE-->>FE: job progress / result / cleanup state
+
+  U->>FE: Engineering Config Management
+  FE->>BE: chunked upload → parse → match → preview → confirm
+  BE->>BE: FieldMappingParser + MatrixParser
+  BE->>BE: identity_key match + diff generation
+  BE->>DB: ConfigVersion draft + TrimFeatureValue + AuditLog
+  BE-->>FE: diff preview / draft created
+
+  U->>FE: Matrix Edit / Compare / Diff History
+  FE->>BE: PATCH values / GET compare / GET audit-log
+  BE->>DB: trim_feature_values + config_audit_log
+  BE-->>FE: updated cells / comparison table / diff timeline
+
+  Admin->>BE: POST /versions/{id}/publish
+  BE->>DB: draft → published, archive previous
+  BE-->>FE: published version active
 ```
 
 ### 2.1 Country Copilot current architecture
@@ -227,30 +273,21 @@ sequenceDiagram
 ```mermaid
 flowchart TD
   U[User question] --> P1[Extract params + infer intents]
-  P1 --> P2[Route planner<br/>market-scan / positioning / precise-lookup / market-context]
+  P1 --> P2[Route planner\nmarket-scan / positioning / lookup]
   P2 --> P3[Build country snapshot]
   P3 --> P4[Lazy enrich by route]
   P4 --> P5{Snapshot-first answer?}
 
   P5 -->|Yes| D1[Direct answer builder]
-  D1 --> D2[Grounding layers + evidence tables + render hints]
+  D1 --> D2[Grounding + evidence tables]
   D2 --> R[Response]
 
-  P5 -->|No| M1[Execution plan / source plan]
-  M1 --> M2[Planner prefetch<br/>news wiki / local wiki]
-  M2 --> M3[Model path<br/>NVIDIA or Gemini]
+  P5 -->|No| M1[Execution plan]
+  M1 --> M2[Planner prefetch\nnews wiki / local wiki]
+  M2 --> M3[Model path\nNVIDIA or Gemini]
   M3 --> M4[Grounded answer]
   M4 --> D2
 ```
-
-**What this means now**
-
-- The current assistant is already **scope-first**, not free-form chat-first.
-- `market-scan-scope`, `positioning-focus`, and `precise-lookup` are answered from the correct page/data scope first.
-- A new explicit **execution plan** now sits between routing and model answering:
-  - it lists the planned evidence sources
-  - marks which ones are already ready vs need prefetch
-  - prefetches `news_wiki` / `local_wiki` before the model path when needed
 
 ### 2.2 Target top-tier internal knowledge assistant architecture
 
@@ -259,10 +296,10 @@ flowchart LR
   Q[User query] --> A[Query understanding]
   A --> B[Planner / orchestrator]
   B --> C1[Dashboard / structured data]
-  B --> C2[Internal wiki / vector retrieval]
-  B --> C3[News / external intelligence]
+  B --> C2[Internal wiki / vectors]
+  B --> C3[News / external intel]
   B --> C4[SQL / app DB]
-  B --> C5[Permissions / ACL filter]
+  B --> C5[Permissions / ACL]
 
   C1 --> D[Evidence packer / reranker]
   C2 --> D
@@ -271,67 +308,33 @@ flowchart LR
   C5 --> D
 
   D --> E[LLM synthesis]
-  E --> F[Answer + citations + confidence + next actions]
+  E --> F[Answer + citations + confidence]
 ```
-
-**Gap view**
-
-1. Current Country Copilot already has strong **route + scope + structured evidence**.
-2. The first top-tier upgrade is the **planner/orchestrator** layer.
-3. The planner should decide, before generation:
-   - whether the answer is direct or model-grounded
-   - which source stack to use
-   - which evidence to prefetch
-   - which tools are still allowed after prefetch
 
 ### 2.3 Planner-first upgrade now implemented
 
 ```mermaid
 flowchart TD
   A[Route detected] --> B[Build executionPlan]
-  B --> C[sourcePlan:<br/>snapshot core / page scope / trim-sales / msrp / news-wiki / vehicle-wiki]
+  B --> C[sourcePlan\nsnapshot / scope / msrp / news / wiki]
   C --> D{Need model path?}
-  D -->|No| E[Use snapshot-first direct answer]
+  D -->|No| E[Snapshot-first direct answer]
   D -->|Yes| F[Prefetch planner evidence]
-  F --> G[Pass executionPlan + prefetchedEvidence to model]
-  G --> H[Return grounded answer + executionPlan]
+  F --> G[Pass plan + evidence to model]
+  G --> H[Grounded answer + executionPlan]
 ```
-
-**Planner-first principle**
-
-- The model is no longer the first component deciding where to look.
-- The backend planner now decides the evidence stack first, then gives the model a bounded plan.
-- This is the first step from **analytics copilot** toward a **top-tier internal knowledge assistant**.
 
 ### 2.4 Trust layer + hybrid retrieval now implemented
 
 ```mermaid
 flowchart TD
-  A[executionPlan] --> B[sourcePlan<br/>snapshot / dashboard / scope / DB / wiki / news]
+  A[executionPlan] --> B[sourcePlan\nsnapshot / dashboard / DB / wiki]
   B --> C[Planner evidence packs]
   C --> D[Model or direct answer]
   D --> E[Grounding]
-  E --> F[Trust layer<br/>confidence / sufficiency / missing facts / coverage]
-  E --> G[Execution plan visualization<br/>source status / orchestration mode / prefetched tools]
+  E --> F[Trust layer\nconfidence / sufficiency / missing]
+  E --> G[Execution plan viz\nsource status / prefetch / tools]
 ```
-
-**What changed in this step**
-
-- Country Copilot now carries a visible **trust layer** in grounding, not just hidden backend routing.
-- Planner context is now **hybrid retrieval** oriented:
-  - dashboard analytics
-  - page/scope evidence
-  - DB current price state
-  - prefetched wiki/news facts
-- The frontend can now show **how the answer was assembled**, including:
-  - orchestration mode
-  - source readiness / prefetch state
-  - missing facts when evidence is still thin
-- This closes the next four gaps after planner-first:
-  1. trust layer
-  2. hybrid retrieval packaging
-  3. execution-plan visualization
-  4. regression coverage for the new planner contract
 
 ## 3. GitNexus independent code-intelligence chain
 
@@ -353,8 +356,8 @@ sequenceDiagram
   else Analyze new repo
     WEB->>CLI: POST /api/analyze
     CLI->>WORKER: fork analyze-worker
-    WORKER->>WORKER: scan -> parse -> imports/calls/heritage -> communities/processes
-    WORKER->>STORE: write LadybugDB + meta.json + global registry
+    WORKER->>WORKER: scan → parse → imports/calls/heritage
+    WORKER->>STORE: write LadybugDB + meta.json + registry
     WEB->>CLI: SSE progress stream
     WEB->>CLI: GET /api/repo + GET /api/graph
   end
@@ -363,11 +366,8 @@ sequenceDiagram
   WEB->>WEB: initialize agent + embeddings
 
   U->>WEB: search / inspect / focus / process view / AI chat
-  WEB->>CLI: /api/search
-  WEB->>CLI: /api/query
-  WEB->>CLI: /api/file
-  WEB->>CLI: scoped /api/graph
-  CLI-->>WEB: search hits + query rows + code slices + focused subgraphs
+  WEB->>CLI: /api/search / /api/query / /api/file / scoped graph
+  CLI-->>WEB: search hits + query rows + code slices + subgraphs
 ```
 
 ## Interpretation
@@ -375,6 +375,17 @@ sequenceDiagram
 ### Main business chain
 
 `01_RAW_DATA / 04_Processed_data / 03_Scripts / 07_ScrapingToolkit / airflow / 06_AppPlatform`
+
+### Engineering Configuration Management
+
+The Engineering Config system ingests vehicle configuration matrix Excel files:
+
+1. **ConfigFieldMappingParser** — `配置字段映射表.xlsx` → 308 standard features across 10 categories
+2. **EngineeringConfigMatrixParser** — `在售可控资源表.xlsx` → feature × trim matrix with availability classification
+3. **Upload flow**: chunked upload → parse → identity_key match → diff preview → confirm as Draft
+4. **Versioning**: `draft → published → archived` — never directly overwrites Published
+5. **Frontend**: 5-tab page (trims / compare / matrix editor / upload / diff history) with role-based visibility
+6. **Identity key**: `material_no|vehicle_code|market|model_year|trim_name`
 
 ### Supporting but non-mainline chains
 

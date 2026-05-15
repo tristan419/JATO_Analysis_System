@@ -2249,6 +2249,27 @@ export const api = {
       { method: "POST" }
     ),
 
+  matchEngineeringConfigUpload: (uploadId: string) =>
+    request<Record<string, unknown>>(`/engineering-config/matrix/upload/${uploadId}/match`, { method: "POST" }),
+
+  getEngineeringConfigUploadPreview: (uploadId: string) =>
+    request<Record<string, unknown>>(`/engineering-config/matrix/upload/${uploadId}/preview`),
+
+  confirmEngineeringConfigUpload: (uploadId: string) =>
+    request<Record<string, unknown>>(`/engineering-config/matrix/upload/${uploadId}/confirm`, { method: "POST" }),
+
+  publishEngineeringConfigVersion: (versionId: string) =>
+    request<Record<string, unknown>>(`/engineering-config/versions/${versionId}/publish`, { method: "POST" }),
+
+  createEngineeringConfigFeatureValue: (payload: { trim_id: string; feature_id: string; raw_value: string; updated_by?: string }) =>
+    request<Record<string, unknown>>("/engineering-config/values", { method: "POST", body: JSON.stringify(payload) }),
+
+  deleteEngineeringConfigFeatureValue: (valueId: string) =>
+    request<Record<string, unknown>>(`/engineering-config/values/${valueId}`, { method: "DELETE" }),
+
+  updateEngineeringConfigTrim: (trimId: string, payload: { brand?: string; model_name?: string; trim_name?: string; energy_type?: string; drivetrain?: string; engine?: string; model_year?: string; status?: string }) =>
+    request<Record<string, unknown>>(`/engineering-config/trims/${trimId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+
   listEngineeringConfigTrims: (params?: { brand?: string; model_name?: string; status?: string; limit?: number }) => {
     const sp = new URLSearchParams();
     if (params?.brand) sp.set("brand", params.brand);
@@ -2283,38 +2304,6 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
-
-  createEngineeringConfigFeatureValue: (payload: {
-    trim_id: string;
-    feature_id: string;
-    raw_value: string;
-    updated_by?: string;
-  }) =>
-    request<Record<string, unknown>>("/engineering-config/values", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-
-  deleteEngineeringConfigFeatureValue: (valueId: string) =>
-    request<Record<string, unknown>>(
-      `/engineering-config/values/${valueId}`,
-      { method: "DELETE" }
-    ),
-
-  updateEngineeringConfigTrim: (trimId: string, payload: {
-    brand?: string;
-    model_name?: string;
-    trim_name?: string;
-    energy_type?: string;
-    drivetrain?: string;
-    engine?: string;
-    model_year?: string;
-    status?: string;
-  }) =>
-    request<Record<string, unknown>>(
-      `/engineering-config/trims/${trimId}`,
-      { method: "PATCH", body: JSON.stringify(payload) }
-    ),
 
   listEngineeringConfigAuditLog: (params?: { entity_type?: string; entity_id?: string; limit?: number }) => {
     const sp = new URLSearchParams();

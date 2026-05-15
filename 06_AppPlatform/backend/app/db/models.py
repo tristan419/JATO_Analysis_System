@@ -1300,6 +1300,7 @@ class VehicleTrim(Base):
         Index("ix_vehicle_trims_brand", "brand"),
         Index("ix_vehicle_trims_model", "model_name"),
         Index("ix_vehicle_trims_status", "status"),
+        Index("ix_vehicle_trims_identity_key", "identity_key"),
         {"schema": "engineering_config"},
     )
 
@@ -1313,6 +1314,10 @@ class VehicleTrim(Base):
         ForeignKey("ops.import_batches.import_batch_id"),
         nullable=True,
     )
+    identity_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    material_no: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vehicle_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    market: Mapped[str | None] = mapped_column(Text, nullable=True)
     brand: Mapped[str] = mapped_column(Text, nullable=False)
     model_name: Mapped[str] = mapped_column(Text, nullable=False)
     trim_name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1424,6 +1429,35 @@ class ConfigAuditLog(Base):
         default="manual",
     )
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ConfigVersion(Base):
+    __tablename__ = "config_versions"
+    __table_args__ = (
+        Index("ix_config_versions_identity_key", "identity_key"),
+        Index("ix_config_versions_status", "status"),
+        Index("ix_config_versions_trim_created", "trim_id", "created_at_utc"),
+        {"schema": "engineering_config"},
+    )
+    version_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    trim_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("engineering_config.vehicle_trims.trim_id"), nullable=False)
+    identity_key: Mapped[str] = mapped_column(Text, nullable=False)
+    material_no: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vehicle_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    market: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_year: Mapped[str | None] = mapped_column(Text, nullable=True)
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    model_name: Mapped[str] = mapped_column(Text, nullable=False)
+    trim_name: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="draft")
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    source_upload_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("ops.import_batches.import_batch_id"), nullable=True)
+    parent_version_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("engineering_config.config_versions.version_id"), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    published_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 # ── Auth ──

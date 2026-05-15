@@ -2078,6 +2078,49 @@ def _build_positioning_page_payload(
     }
 
 
+def _build_period_column_mappings(
+    available_periods: list[str],
+    resolved_period: str,
+    prior_period: str | None,
+    same_month_last_year_period: str | None,
+    custom_range_periods: list[str] | None,
+) -> dict[str, Any]:
+    """Build all standard period-to-month-column mappings once."""
+    current_period_columns = [_period_to_month_column(resolved_period)]
+    prior_period_columns = [_period_to_month_column(prior_period)] if prior_period else []
+    same_month_columns = [_period_to_month_column(same_month_last_year_period)] if same_month_last_year_period else []
+    current_ytd_columns = [_period_to_month_column(p) for p in _ytd_periods(available_periods, resolved_period)]
+    prior_ytd_columns = (
+        [_period_to_month_column(p) for p in _ytd_periods(available_periods, _shift_period(resolved_period, -12))]
+        if same_month_last_year_period else []
+    )
+    current_rolling12_columns = [
+        _period_to_month_column(p) for p in _window_periods_if_present(available_periods, resolved_period, 12)
+    ]
+    prior_rolling12_columns = [
+        _period_to_month_column(p)
+        for p in _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
+    ]
+    custom_range_columns = [_period_to_month_column(p) for p in (custom_range_periods or [])]
+    prior_custom_range_periods = (
+        _shifted_periods_if_present(custom_range_periods, available_periods, -12)
+        if custom_range_periods else []
+    )
+    prior_custom_range_columns = [_period_to_month_column(p) for p in prior_custom_range_periods]
+    return {
+        "current_period_columns": current_period_columns,
+        "prior_period_columns": prior_period_columns,
+        "same_month_columns": same_month_columns,
+        "current_ytd_columns": current_ytd_columns,
+        "prior_ytd_columns": prior_ytd_columns,
+        "current_rolling12_columns": current_rolling12_columns,
+        "prior_rolling12_columns": prior_rolling12_columns,
+        "custom_range_columns": custom_range_columns,
+        "prior_custom_range_columns": prior_custom_range_columns,
+        "prior_custom_range_periods": prior_custom_range_periods,
+    }
+
+
 def _build_overview_payload(
     frame: pd.DataFrame,
     selected_fuels: list[str],
@@ -2135,33 +2178,43 @@ def _build_overview_payload(
             }
         )
 
-    current_period_columns = [_period_to_month_column(resolved_period)]
-    prior_period_columns = [_period_to_month_column(prior_period)] if prior_period else []
-    same_month_columns = [_period_to_month_column(same_month_last_year_period)] if same_month_last_year_period else []
-    current_ytd_periods = _ytd_periods(available_periods, resolved_period)
-    prior_ytd_periods = _ytd_periods(available_periods, _shift_period(resolved_period, -12)) if same_month_last_year_period else []
-    current_ytd_columns = [_period_to_month_column(period) for period in current_ytd_periods]
-    prior_ytd_columns = [_period_to_month_column(period) for period in prior_ytd_periods]
-    current_rolling12_periods = _window_periods_if_present(available_periods, resolved_period, 12)
-    prior_rolling12_periods = _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
-    current_rolling12_columns = [_period_to_month_column(period) for period in current_rolling12_periods]
-    prior_rolling12_columns = [_period_to_month_column(period) for period in prior_rolling12_periods]
-    custom_range_columns = [_period_to_month_column(period) for period in (custom_range_periods or [])]
-    prior_custom_range_periods = (
-        _shifted_periods_if_present(custom_range_periods, available_periods, -12)
-        if custom_range_periods
-        else []
+    _pcm = _build_period_column_mappings(
+        available_periods, resolved_period, prior_period,
+        same_month_last_year_period, custom_range_periods,
     )
-    prior_custom_range_columns = [_period_to_month_column(period) for period in prior_custom_range_periods]
+    current_period_columns = _pcm["current_period_columns"]
+    prior_period_columns = _pcm["prior_period_columns"]
+    same_month_columns = _pcm["same_month_columns"]
+    current_ytd_columns = _pcm["current_ytd_columns"]
+    prior_ytd_columns = _pcm["prior_ytd_columns"]
+    current_rolling12_columns = _pcm["current_rolling12_columns"]
+    prior_rolling12_columns = _pcm["prior_rolling12_columns"]
+    custom_range_columns = _pcm["custom_range_columns"]
+    prior_custom_range_columns = _pcm["prior_custom_range_columns"]
 
-    current_month_total = _total_volume(frame, current_period_columns)
-    same_month_total = _total_volume(frame, same_month_columns)
-    current_ytd_total = _total_volume(frame, current_ytd_columns)
-    prior_ytd_total = _total_volume(frame, prior_ytd_columns)
-    current_rolling12_total = _total_volume(frame, current_rolling12_columns)
-    prior_rolling12_total = _total_volume(frame, prior_rolling12_columns)
-    custom_range_total = _total_volume(frame, custom_range_columns)
-    prior_custom_range_total = _total_volume(frame, prior_custom_range_columns)
+    # Precompute all volume totals in one pass
+    _total_sets = {
+        "current_month": current_period_columns,
+        "same_month": same_month_columns,
+        "current_ytd": current_ytd_columns,
+        "prior_ytd": prior_ytd_columns,
+        "current_rolling12": current_rolling12_columns,
+        "prior_rolling12": prior_rolling12_columns,
+        "custom_range": custom_range_columns,
+        "prior_custom_range": prior_custom_range_columns,
+    }
+    _totals: dict[str, float] = {}
+    for _key, _cols in _total_sets.items():
+        _totals[_key] = _total_volume(frame, _cols)
+
+    current_month_total = _totals["current_month"]
+    same_month_total = _totals["same_month"]
+    current_ytd_total = _totals["current_ytd"]
+    prior_ytd_total = _totals["prior_ytd"]
+    current_rolling12_total = _totals["current_rolling12"]
+    prior_rolling12_total = _totals["prior_rolling12"]
+    custom_range_total = _totals["custom_range"]
+    prior_custom_range_total = _totals["prior_custom_range"]
 
     year_text, month_text = resolved_period.split("-", 1)
     month_number = int(month_text)
@@ -2288,26 +2341,20 @@ def _build_origin_payload(
             )
         series.append({"origin": origin, "points": points})
 
-    current_column = _period_to_month_column(resolved_period)
-    prior_column = _period_to_month_column(prior_period) if prior_period else None
-    same_month_column = _period_to_month_column(same_month_last_year_period) if same_month_last_year_period else None
-    current_ytd_columns = [_period_to_month_column(period) for period in _ytd_periods(available_periods, resolved_period)]
-    prior_ytd_columns = [_period_to_month_column(period) for period in _ytd_periods(available_periods, _shift_period(resolved_period, -12))] if same_month_last_year_period else []
-    current_rolling12_columns = [
-        _period_to_month_column(period)
-        for period in _window_periods_if_present(available_periods, resolved_period, 12)
-    ]
-    prior_rolling12_columns = [
-        _period_to_month_column(period)
-        for period in _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
-    ]
-    custom_range_columns = [_period_to_month_column(period) for period in (custom_range_periods or [])]
-    prior_custom_range_periods = (
-        _shifted_periods_if_present(custom_range_periods, available_periods, -12)
-        if custom_range_periods
-        else []
+    _pcm = _build_period_column_mappings(
+        available_periods, resolved_period, prior_period,
+        same_month_last_year_period, custom_range_periods,
     )
-    prior_custom_range_columns = [_period_to_month_column(period) for period in prior_custom_range_periods]
+    current_column = _pcm["current_period_columns"][0] if _pcm["current_period_columns"] else None
+    prior_column = _pcm["prior_period_columns"][0] if _pcm["prior_period_columns"] else None
+    same_month_column = _pcm["same_month_columns"][0] if _pcm["same_month_columns"] else None
+    current_ytd_columns = _pcm["current_ytd_columns"]
+    prior_ytd_columns = _pcm["prior_ytd_columns"]
+    current_rolling12_columns = _pcm["current_rolling12_columns"]
+    prior_rolling12_columns = _pcm["prior_rolling12_columns"]
+    custom_range_columns = _pcm["custom_range_columns"]
+    prior_custom_range_periods = _pcm["prior_custom_range_periods"]
+    prior_custom_range_columns = _pcm["prior_custom_range_columns"]
 
     current_total = float(grouped[current_column].sum()) if current_column in grouped.columns else 0.0
     prior_total = float(grouped[prior_column].sum()) if prior_column and prior_column in grouped.columns else 0.0
@@ -2345,16 +2392,30 @@ def _build_origin_payload(
     summary_frame["current"] = grouped[current_column] if current_column in grouped.columns else 0.0
     summary_frame["prior"] = grouped[prior_column] if prior_column and prior_column in grouped.columns else 0.0
     summary_frame["same_month"] = grouped[same_month_column] if same_month_column and same_month_column in grouped.columns else 0.0
-    current_ytd_grouped = _volume_by_group(frame, "__origin", current_ytd_columns)
-    prior_ytd_grouped = _volume_by_group(frame, "__origin", prior_ytd_columns)
-    current_rolling12_grouped = _volume_by_group(frame, "__origin", current_rolling12_columns)
-    prior_rolling12_grouped = _volume_by_group(frame, "__origin", prior_rolling12_columns)
+
+    # Consolidate 6 origin-level groupbys into one pass
+    _origin_all_cols: list[str] = []
+    for _cols in (
+        current_ytd_columns, prior_ytd_columns,
+        current_rolling12_columns, prior_rolling12_columns,
+        custom_range_columns, prior_custom_range_columns,
+    ):
+        for _c in _cols:
+            if _c not in _origin_all_cols:
+                _origin_all_cols.append(_c)
+    _origin_grouped_all = _volume_by_group(frame, "__origin", _origin_all_cols) if _origin_all_cols else pd.DataFrame()
+
+    current_ytd_grouped = _origin_grouped_all[[c for c in current_ytd_columns if c in _origin_grouped_all.columns]]
+    prior_ytd_grouped = _origin_grouped_all[[c for c in prior_ytd_columns if c in _origin_grouped_all.columns]]
+    current_rolling12_grouped = _origin_grouped_all[[c for c in current_rolling12_columns if c in _origin_grouped_all.columns]]
+    prior_rolling12_grouped = _origin_grouped_all[[c for c in prior_rolling12_columns if c in _origin_grouped_all.columns]]
+    current_custom_range_grouped = _origin_grouped_all[[c for c in custom_range_columns if c in _origin_grouped_all.columns]]
+    prior_custom_range_grouped = _origin_grouped_all[[c for c in prior_custom_range_columns if c in _origin_grouped_all.columns]]
+
     summary_frame["ytd"] = current_ytd_grouped.sum(axis=1) if not current_ytd_grouped.empty else 0.0
     summary_frame["prior_ytd"] = prior_ytd_grouped.sum(axis=1) if not prior_ytd_grouped.empty else 0.0
     summary_frame["rolling12"] = current_rolling12_grouped.sum(axis=1) if not current_rolling12_grouped.empty else 0.0
     summary_frame["prior_rolling12"] = prior_rolling12_grouped.sum(axis=1) if not prior_rolling12_grouped.empty else 0.0
-    current_custom_range_grouped = _volume_by_group(frame, "__origin", custom_range_columns)
-    prior_custom_range_grouped = _volume_by_group(frame, "__origin", prior_custom_range_columns)
     summary_frame["custom_range"] = current_custom_range_grouped.sum(axis=1) if not current_custom_range_grouped.empty else 0.0
     summary_frame["prior_custom_range"] = prior_custom_range_grouped.sum(axis=1) if not prior_custom_range_grouped.empty else 0.0
     summary_frame = summary_frame.fillna(0.0)
@@ -2448,36 +2509,45 @@ def _build_segment_payload(
             },
         }
 
-    current_column = _period_to_month_column(resolved_period)
-    prior_column = _period_to_month_column(prior_period) if prior_period else None
-    same_month_column = _period_to_month_column(same_month_last_year_period) if same_month_last_year_period else None
-    current_ytd_columns = [_period_to_month_column(period) for period in _ytd_periods(available_periods, resolved_period)]
-    prior_ytd_columns = [_period_to_month_column(period) for period in _ytd_periods(available_periods, _shift_period(resolved_period, -12))] if same_month_last_year_period else []
-    current_rolling12_columns = [
-        _period_to_month_column(period)
-        for period in _window_periods_if_present(available_periods, resolved_period, 12)
-    ]
-    prior_rolling12_columns = [
-        _period_to_month_column(period)
-        for period in _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
-    ]
-    custom_range_columns = [_period_to_month_column(period) for period in (custom_range_periods or [])]
-    prior_custom_range_periods = (
-        _shifted_periods_if_present(custom_range_periods, available_periods, -12)
-        if custom_range_periods
-        else []
+    _pcm = _build_period_column_mappings(
+        available_periods, resolved_period, prior_period,
+        same_month_last_year_period, custom_range_periods,
     )
-    prior_custom_range_columns = [_period_to_month_column(period) for period in prior_custom_range_periods]
+    current_column = _pcm["current_period_columns"][0] if _pcm["current_period_columns"] else None
+    prior_column = _pcm["prior_period_columns"][0] if _pcm["prior_period_columns"] else None
+    same_month_column = _pcm["same_month_columns"][0] if _pcm["same_month_columns"] else None
+    current_ytd_columns = _pcm["current_ytd_columns"]
+    prior_ytd_columns = _pcm["prior_ytd_columns"]
+    current_rolling12_columns = _pcm["current_rolling12_columns"]
+    prior_rolling12_columns = _pcm["prior_rolling12_columns"]
+    custom_range_columns = _pcm["custom_range_columns"]
+    prior_custom_range_periods = _pcm["prior_custom_range_periods"]
+    prior_custom_range_columns = _pcm["prior_custom_range_columns"]
 
-    grouped_current = _volume_by_group(working, "__segment_bucket", [current_column])
-    grouped_prior = _volume_by_group(working, "__segment_bucket", [prior_column] if prior_column else [])
-    grouped_same_month = _volume_by_group(working, "__segment_bucket", [same_month_column] if same_month_column else [])
-    grouped_ytd = _volume_by_group(working, "__segment_bucket", current_ytd_columns)
-    grouped_prior_ytd = _volume_by_group(working, "__segment_bucket", prior_ytd_columns)
-    grouped_rolling12 = _volume_by_group(working, "__segment_bucket", current_rolling12_columns)
-    grouped_prior_rolling12 = _volume_by_group(working, "__segment_bucket", prior_rolling12_columns)
-    grouped_custom_range = _volume_by_group(working, "__segment_bucket", custom_range_columns)
-    grouped_prior_custom_range = _volume_by_group(working, "__segment_bucket", prior_custom_range_columns)
+    # Consolidate all 9 groupby calls into a single pass over all needed columns
+    _seg_all_cols: list[str] = []
+    for _cols in (
+        [current_column] if current_column else [],
+        [prior_column] if prior_column else [],
+        [same_month_column] if same_month_column else [],
+        current_ytd_columns, prior_ytd_columns,
+        current_rolling12_columns, prior_rolling12_columns,
+        custom_range_columns, prior_custom_range_columns,
+    ):
+        for _c in _cols:
+            if _c not in _seg_all_cols:
+                _seg_all_cols.append(_c)
+    _grouped_all = _volume_by_group(working, "__segment_bucket", _seg_all_cols) if _seg_all_cols else pd.DataFrame()
+
+    grouped_current = _grouped_all[[current_column]] if current_column and current_column in _grouped_all.columns else pd.DataFrame()
+    grouped_prior = _grouped_all[[prior_column]] if prior_column and prior_column in _grouped_all.columns else pd.DataFrame()
+    grouped_same_month = _grouped_all[[same_month_column]] if same_month_column and same_month_column in _grouped_all.columns else pd.DataFrame()
+    grouped_ytd = _grouped_all[[c for c in current_ytd_columns if c in _grouped_all.columns]]
+    grouped_prior_ytd = _grouped_all[[c for c in prior_ytd_columns if c in _grouped_all.columns]]
+    grouped_rolling12 = _grouped_all[[c for c in current_rolling12_columns if c in _grouped_all.columns]]
+    grouped_prior_rolling12 = _grouped_all[[c for c in prior_rolling12_columns if c in _grouped_all.columns]]
+    grouped_custom_range = _grouped_all[[c for c in custom_range_columns if c in _grouped_all.columns]]
+    grouped_prior_custom_range = _grouped_all[[c for c in prior_custom_range_columns if c in _grouped_all.columns]]
 
     matrix_rows = []
     for metric_key, label in [
@@ -3109,68 +3179,112 @@ def precompute_model_rankings(
     prior_custom_range_columns: list[str],
     fuel_order: list[str],
 ) -> list[dict[str, Any]]:
-    """Group by [segment, model] once and compute all window volumes + per-window mixes."""
-    grouped = frame.groupby(["__segment_raw", "__model"], dropna=False, sort=False)
+    """Group by [segment, model] once and compute all window volumes + per-window mixes.
+
+    Optimized: pre-group by [segment, model, powertrain], [segment, model, drive_type],
+    and [segment, model, registration_type] to avoid per-group filter operations.
+    """
+    all_vol_cols: list[str] = list(dict.fromkeys(
+        current_month_columns + same_month_columns +
+        current_ytd_columns + prior_ytd_columns +
+        current_rolling12_columns + prior_rolling12_columns +
+        custom_range_columns + prior_custom_range_columns
+    ))
+
+    def _row_sum(row, cols):
+        present = [c for c in cols if c in row.index]
+        if not present:
+            return 0.0
+        return float(row[present].sum())
+
+    model_vols = frame.groupby(["__segment_raw", "__model"], dropna=False, sort=False)[all_vol_cols].sum()
+
+    have_powertrain = "__powertrain" in frame.columns
+    if have_powertrain:
+        fuel_grouped = frame.groupby(
+            ["__segment_raw", "__model", "__powertrain"], dropna=False, sort=False
+        )[all_vol_cols].sum()
+
+    have_drive = "__drive_type" in frame.columns
+    if have_drive:
+        drive_grouped = frame.groupby(
+            ["__segment_raw", "__model", "__drive_type"], dropna=False, sort=False
+        )[all_vol_cols].sum()
+
+    have_reg = "__registration_type" in frame.columns
+    if have_reg:
+        reg_grouped = frame.groupby(
+            ["__segment_raw", "__model", "__registration_type"], dropna=False, sort=False
+        )[all_vol_cols].sum()
+
+    def _colsum(df, idx, cols):
+        try:
+            row = df.loc[idx]
+            return float(row[cols].sum().sum()) if isinstance(row, pd.DataFrame) else float(row[cols].sum())
+        except (KeyError, TypeError):
+            return 0.0
+
     stats: list[dict[str, Any]] = []
-    for (segment, model), group in grouped:
-        month_vol = float(_series_sum(group, current_month_columns).sum())
-        ytd_vol = float(_series_sum(group, current_ytd_columns).sum())
-        rolling_vol = float(_series_sum(group, current_rolling12_columns).sum())
+    for (segment, model) in model_vols.index:
+        row = model_vols.loc[(segment, model)]
+        month_vol = _row_sum(row, current_month_columns)
+        ytd_vol = _row_sum(row, current_ytd_columns)
+        rolling_vol = _row_sum(row, current_rolling12_columns)
         if ytd_vol <= 0 and month_vol <= 0 and rolling_vol <= 0:
             continue
-        stats.append({
-            "segment": str(segment).strip(),
-            "model": str(model).strip(),
-            "monthVolume": month_vol,
-            "monthPrior": float(_series_sum(group, same_month_columns).sum()),
-            "ytdVolume": ytd_vol,
-            "ytdPrior": float(_series_sum(group, prior_ytd_columns).sum()),
-            "rollingVolume": rolling_vol,
-            "rollingPrior": float(_series_sum(group, prior_rolling12_columns).sum()),
-            "customVolume": float(_series_sum(group, custom_range_columns).sum()) if custom_range_columns else 0,
-            "customPrior": float(_series_sum(group, prior_custom_range_columns).sum()) if prior_custom_range_columns else 0,
-            # Per-window fuel mixes
-            "fuelMixMonth": {
-                fuel: float(_series_sum(group[group["__powertrain"] == fuel], current_month_columns).sum())
-                for fuel in fuel_order
-            },
-            "fuelMixYtd": {
-                fuel: float(_series_sum(group[group["__powertrain"] == fuel], current_ytd_columns).sum())
-                for fuel in fuel_order
-            },
-            "fuelMixRolling": {
-                fuel: float(_series_sum(group[group["__powertrain"] == fuel], current_rolling12_columns).sum())
-                for fuel in fuel_order
-            },
-            "fuelMixCustom": {
-                fuel: float(_series_sum(group[group["__powertrain"] == fuel], custom_range_columns).sum())
-                for fuel in fuel_order
-            } if custom_range_columns else {},
-            # Per-window drive mixes
-            "driveMixMonth": {
-                dt: float(_series_sum(group[group["__drive_type"] == dt], current_month_columns).sum())
-                for dt in ("2WD", "4WD", "OTHER")
-            },
-            "driveMixYtd": {
-                dt: float(_series_sum(group[group["__drive_type"] == dt], current_ytd_columns).sum())
-                for dt in ("2WD", "4WD", "OTHER")
-            },
-            "driveMixRolling": {
-                dt: float(_series_sum(group[group["__drive_type"] == dt], current_rolling12_columns).sum())
-                for dt in ("2WD", "4WD", "OTHER")
-            },
-            "driveMixCustom": {
-                dt: float(_series_sum(group[group["__drive_type"] == dt], custom_range_columns).sum())
-                for dt in ("2WD", "4WD", "OTHER")
-            } if custom_range_columns else {},
-            # Per-window registration mixes
-            "registrationMixMonth": _registration_mix_payload(group, current_month_columns),
-            "registrationMixYtd": _registration_mix_payload(group, current_ytd_columns),
-            "registrationMixRolling": _registration_mix_payload(group, current_rolling12_columns),
-            "registrationMixCustom": _registration_mix_payload(group, custom_range_columns) if custom_range_columns else {"Business": 0.0, "Private": 0.0, "Other": 0.0},
-        })
-    return stats
 
+        seg_str = str(segment).strip()
+        mod_str = str(model).strip()
+        base_key = (segment, model)
+
+        entry: dict[str, Any] = {
+            "segment": seg_str, "model": mod_str,
+            "monthVolume": month_vol, "monthPrior": _row_sum(row, same_month_columns),
+            "ytdVolume": ytd_vol, "ytdPrior": _row_sum(row, prior_ytd_columns),
+            "rollingVolume": rolling_vol, "rollingPrior": _row_sum(row, prior_rolling12_columns),
+            "customVolume": _row_sum(row, custom_range_columns) if custom_range_columns else 0,
+            "customPrior": _row_sum(row, prior_custom_range_columns) if prior_custom_range_columns else 0,
+        }
+
+        if have_powertrain:
+            entry["fuelMixMonth"] = {fuel: _colsum(fuel_grouped, base_key + (fuel,), current_month_columns) for fuel in fuel_order}
+            entry["fuelMixYtd"] = {fuel: _colsum(fuel_grouped, base_key + (fuel,), current_ytd_columns) for fuel in fuel_order}
+            entry["fuelMixRolling"] = {fuel: _colsum(fuel_grouped, base_key + (fuel,), current_rolling12_columns) for fuel in fuel_order}
+            if custom_range_columns:
+                entry["fuelMixCustom"] = {fuel: _colsum(fuel_grouped, base_key + (fuel,), custom_range_columns) for fuel in fuel_order}
+            else:
+                entry["fuelMixCustom"] = {}
+        else:
+            for k in ("fuelMixMonth", "fuelMixYtd", "fuelMixRolling", "fuelMixCustom"):
+                entry[k] = {}
+
+        if have_drive:
+            entry["driveMixMonth"] = {dt: _colsum(drive_grouped, base_key + (dt,), current_month_columns) for dt in ("2WD", "4WD", "OTHER")}
+            entry["driveMixYtd"] = {dt: _colsum(drive_grouped, base_key + (dt,), current_ytd_columns) for dt in ("2WD", "4WD", "OTHER")}
+            entry["driveMixRolling"] = {dt: _colsum(drive_grouped, base_key + (dt,), current_rolling12_columns) for dt in ("2WD", "4WD", "OTHER")}
+            if custom_range_columns:
+                entry["driveMixCustom"] = {dt: _colsum(drive_grouped, base_key + (dt,), custom_range_columns) for dt in ("2WD", "4WD", "OTHER")}
+            else:
+                entry["driveMixCustom"] = {}
+        else:
+            for k in ("driveMixMonth", "driveMixYtd", "driveMixRolling", "driveMixCustom"):
+                entry[k] = {}
+
+        if have_reg:
+            entry["registrationMixMonth"] = {rt: _colsum(reg_grouped, base_key + (rt,), current_month_columns) for rt in ("Business", "Private", "Other")}
+            entry["registrationMixYtd"] = {rt: _colsum(reg_grouped, base_key + (rt,), current_ytd_columns) for rt in ("Business", "Private", "Other")}
+            entry["registrationMixRolling"] = {rt: _colsum(reg_grouped, base_key + (rt,), current_rolling12_columns) for rt in ("Business", "Private", "Other")}
+            if custom_range_columns:
+                entry["registrationMixCustom"] = {rt: _colsum(reg_grouped, base_key + (rt,), custom_range_columns) for rt in ("Business", "Private", "Other")}
+            else:
+                entry["registrationMixCustom"] = {"Business": 0.0, "Private": 0.0, "Other": 0.0}
+        else:
+            default_reg = {"Business": 0.0, "Private": 0.0, "Other": 0.0}
+            for k in ("registrationMixMonth", "registrationMixYtd", "registrationMixRolling", "registrationMixCustom"):
+                entry[k] = dict(default_reg)
+
+        stats.append(entry)
+    return stats
 
 def model_stats_to_ranking(
     stats: list[dict[str, Any]],
@@ -3238,18 +3352,24 @@ def _build_all_drilldowns(
     year_text, month_text = resolved_period.split("-", 1)
     month_number = int(month_text)
 
-    current_month_columns = [_period_to_month_column(resolved_period)]
-    same_month_columns = [_period_to_month_column(same_month_last_year_period)] if same_month_last_year_period else []
-    current_ytd_columns = [_period_to_month_column(p) for p in _ytd_periods(available_periods, resolved_period)]
-    prior_ytd_columns = [_period_to_month_column(p) for p in _ytd_periods(available_periods, _shift_period(resolved_period, -12))] if same_month_last_year_period else []
-    current_rolling12_columns = [_period_to_month_column(p) for p in _window_periods_if_present(available_periods, resolved_period, 12)]
-    prior_rolling12_columns = [_period_to_month_column(p) for p in _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)]
-    custom_range_columns = [_period_to_month_column(p) for p in (custom_range_periods or [])]
-    prior_custom_range_periods = _shifted_periods_if_present(custom_range_periods, available_periods, -12) if custom_range_periods else []
-    prior_custom_range_columns = [_period_to_month_column(p) for p in prior_custom_range_periods]
+    _pcm = _build_period_column_mappings(
+        available_periods, resolved_period, None,
+        same_month_last_year_period, custom_range_periods,
+    )
+    current_month_columns = _pcm["current_period_columns"]
+    same_month_columns = _pcm["same_month_columns"]
+    current_ytd_columns = _pcm["current_ytd_columns"]
+    prior_ytd_columns = _pcm["prior_ytd_columns"]
+    current_rolling12_columns = _pcm["current_rolling12_columns"]
+    prior_rolling12_columns = _pcm["prior_rolling12_columns"]
+    custom_range_columns = _pcm["custom_range_columns"]
+    prior_custom_range_periods = _pcm["prior_custom_range_periods"]
+    prior_custom_range_columns = _pcm["prior_custom_range_columns"]
 
     available_fuels = _available_fuel_types(frame)
+    available_fuels = _available_fuel_types(frame)
 
+    t_dd_start = time.monotonic()
     # ONE groupby pass over all segments
     all_stats = precompute_model_rankings(
         frame,
@@ -3260,6 +3380,9 @@ def _build_all_drilldowns(
         fuel_order=available_fuels,
     )
 
+    t_precomp = time.monotonic()
+    logger.info("MarketScan [%s] drilldown precompute_model_rankings: %.3fs  (%d stats)",
+                resolved_period, t_precomp - t_dd_start, len(all_stats))
     result: dict[str, dict[str, Any]] = {}
     for seg in segment_values:
         seg_frame = frame[frame["__segment_raw"] == seg]
@@ -3547,32 +3670,79 @@ def query_market_scan_deck(
     drilldown_segment: str | None,
 ) -> dict[str, Any]:
     ranking_limit = max(MIN_MARKET_SCAN_RANKING_LIMIT, int(ranking_limit))
+    dataset_token = repo.current_dataset_token()
+
+    # --- in-process cache (fast path) ---
     time_range_key = ""
     if time_range:
         time_range_key = f"{time_range.get('start', '')}:{time_range.get('end', '')}"
-    cache_key = f"{country}|{target_period}|{time_range_key}|{','.join(sorted(fuel_types))}|{trend_window_months}|{origin_window_months}|{body_window_months}|{ranking_limit}|{drilldown_segment}"
+    local_key = f"{country}|{target_period}|{time_range_key}|{','.join(sorted(fuel_types))}|{trend_window_months}|{origin_window_months}|{body_window_months}|{ranking_limit}|{drilldown_segment}"
     now = time.monotonic()
-    dataset_token = repo.current_dataset_token()
-    cached = _deck_cache.get(cache_key)
-    if cached is not None:
-        cached_at, cached_token, cached_result = cached
-        if cached_token == dataset_token and (now - cached_at) < _DECK_CACHE_TTL_SECONDS:
-            return cached_result
+    local_cached = _deck_cache.get(local_key)
+    if local_cached is not None:
+        local_cached_at, local_cached_token, local_cached_result = local_cached
+        if local_cached_token == dataset_token and (now - local_cached_at) < _DECK_CACHE_TTL_SECONDS:
+            logger.info("MarketScan [%s] local-cache HIT", target_period or "latest")
+            return local_cached_result
 
+    # --- Redis cache (shared across workers) ---
+    redis_client = get_redis_client()
+    if redis_client is not None:
+        columns = _get_columns()
+        available_periods = _available_periods(columns)
+        resolved_period = _resolve_period(target_period, available_periods)
+        cache_key = build_deck_cache_key(
+            country or "", resolved_period, time_range,
+            fuel_types, ranking_limit, dataset_token,
+        )
+        t_cache_start = time.monotonic()
+        cached = get_cached_deck(redis_client, cache_key)
+        t_cache_read = time.monotonic()
+        if cached is not None:
+            logger.info("MarketScan [%s] redis HIT (%.3fs read)", resolved_period, t_cache_read - t_cache_start)
+            with _deck_cache_lock:
+                _deck_cache[local_key] = (now, dataset_token, cached)
+            return cached
+        logger.info("MarketScan [%s] redis MISS", resolved_period)
+        if not acquire_compute_lock(redis_client, cache_key):
+            waited = wait_for_cache(redis_client, cache_key)
+            if waited is not None:
+                logger.info("MarketScan [%s] redis waiter GOT cache from peer", resolved_period)
+                with _deck_cache_lock:
+                    _deck_cache[local_key] = (now, dataset_token, waited)
+                return waited
+
+    # --- Compute ---
+    t_compute_start = time.monotonic()
     result = _query_market_scan_deck_impl(
         country, target_period, time_range, fuel_types,
         trend_window_months, origin_window_months, body_window_months,
         ranking_limit, drilldown_segment,
     )
+    t_compute_end = time.monotonic()
+    _resolved_label = result.get("metadata", {}).get("resolvedPeriod", target_period or "?")
+    logger.info("MarketScan [%s] compute: %.3fs", _resolved_label, t_compute_end - t_compute_start)
 
+    # --- Store ---
     with _deck_cache_lock:
-        _deck_cache[cache_key] = (now, dataset_token, result)
+        _deck_cache[local_key] = (now, dataset_token, result)
         if len(_deck_cache) > 32:
             oldest_key = min(_deck_cache, key=lambda k: _deck_cache[k][0])
             _deck_cache.pop(oldest_key, None)
 
-    return result
+    if redis_client is not None:
+        try:
+            resolved_p = result.get("metadata", {}).get("resolvedPeriod", target_period or "latest")
+            cache_key = build_deck_cache_key(
+                country or "", resolved_p, time_range,
+                fuel_types, ranking_limit, dataset_token,
+            )
+            set_cached_deck(redis_client, cache_key, result)
+            release_compute_lock(redis_client, cache_key)
+        except Exception:
+            pass
 
+    return result
 
 def query_positioning_pricing_deck(
     *,
@@ -4152,6 +4322,7 @@ def _query_market_scan_deck_impl(
     ranking_limit: int,
     drilldown_segment: str | None,
 ) -> dict[str, Any]:
+    t_start = time.monotonic()
     columns = _get_columns()
     available_periods = _available_periods(columns)
     resolved_period = _resolve_period(target_period, available_periods)
@@ -4163,16 +4334,37 @@ def _query_market_scan_deck_impl(
     if prior_period not in available_periods:
         prior_period = None
 
+    # --- Precompute needed month columns for parquet pruning ---
+    trend_periods = _window_periods(available_periods, resolved_period, max(trend_window_months, origin_window_months, body_window_months))
+    ytd_periods = _ytd_periods(available_periods, resolved_period)
+    prior_ytd_periods = _ytd_periods(available_periods, _shift_period(resolved_period, -12)) if same_month_last_year_period else []
+    r12_periods = _window_periods_if_present(available_periods, resolved_period, 12)
+    prior_r12_periods = _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
+    same_month_periods: list[str] = [same_month_last_year_period] if same_month_last_year_period else []
+    prior_periods: list[str] = [prior_period] if prior_period else []
+    custom_periods_resolved: list[str] = custom_periods or []
+    prior_custom_periods = _shifted_periods_if_present(custom_periods_resolved, available_periods, -12) if custom_periods_resolved else []
+
+    _needed_periods: set[str] = set()
+    for _periods in (trend_periods, ytd_periods, prior_ytd_periods, r12_periods, prior_r12_periods,
+                      same_month_periods, prior_periods, custom_periods_resolved, prior_custom_periods):
+        _needed_periods.update(_periods)
+    if _needed_periods:
+        _sorted_needed = sorted(_needed_periods)
+        _safety_start = _shift_period(_sorted_needed[0], -2)
+        _safety_end = _shift_period(_sorted_needed[-1], 2)
+        for p in available_periods:
+            if _safety_start <= p <= _safety_end:
+                _needed_periods.add(p)
+    needed_month_columns = [_period_to_month_column(p) for p in _needed_periods if p in available_periods]
+
     country_options = _country_options(repo.current_dataset_token())
     selected_country = _normalize_country_lookup(country, country_options)
 
     selected_columns = [
-        columns.country_value,
-        columns.make,
-        columns.model,
-        columns.segment,
-        columns.powertrain,
-        *columns.month_columns,
+        columns.country_value, columns.make, columns.model,
+        columns.segment, columns.powertrain,
+        *needed_month_columns,
     ]
     if columns.country_label and columns.country_label not in selected_columns:
         selected_columns.append(columns.country_label)
@@ -4187,7 +4379,7 @@ def _query_market_scan_deck_impl(
     filter_expression = repo._build_filter_expression({columns.country_value: [selected_country["value"]]})
     table = dataset.to_table(columns=selected_columns, filter=filter_expression)
     frame = table.to_pandas()
-    frame = _ensure_numeric_columns(frame, list(columns.month_columns))
+    frame = _ensure_numeric_columns(frame, needed_month_columns)
     frame["__brand"] = frame[columns.make].astype(str).str.strip()
     frame["__model"] = frame[columns.model].astype(str).str.strip()
     frame["__segment_raw"] = frame[columns.segment].astype(str).str.strip()
@@ -4196,22 +4388,23 @@ def _query_market_scan_deck_impl(
     frame["__drive_type"] = frame[columns.drive_type].map(_normalize_drive_type) if columns.drive_type and columns.drive_type in frame.columns else "OTHER"
     frame["__registration_type"] = (
         frame[columns.registration_type].map(_normalize_registration_type)
-        if columns.registration_type and columns.registration_type in frame.columns else
-        "Other"
+        if columns.registration_type and columns.registration_type in frame.columns else "Other"
     )
 
     available_fuels = _available_fuel_types(frame)
     selected_fuels = _normalize_selected_fuels(fuel_types, available_fuels)
     filtered_frame = frame[frame["__powertrain"].isin(selected_fuels)].copy()
 
+    t_setup = time.monotonic()
+    logger.info("MarketScan [%s] setup+parquet: %.3fs  (loaded %d month columns of %d available)",
+                resolved_period, t_setup - t_start, len(needed_month_columns), len(columns.month_columns))
+
     available_segments = sorted(
         {segment for segment in filtered_frame["__segment_raw"].dropna().tolist() if str(segment).strip()},
         key=lambda segment: _segment_display_label(str(segment)),
     )
     resolved_drilldown_segment = _resolve_segment_value(
-        drilldown_segment,
-        available_segments,
-        DEFAULT_DRILLDOWN_SEGMENT,
+        drilldown_segment, available_segments, DEFAULT_DRILLDOWN_SEGMENT,
     )
     suv_a_segment = _resolve_segment_value("SUV A", available_segments, "SUV A")
     suv_b_segment = _resolve_segment_value("SUV B", available_segments, "SUV B")
@@ -4221,20 +4414,12 @@ def _query_market_scan_deck_impl(
     month_number = int(month_text)
     metadata = {
         "protocolVersion": "market-scan/v1",
-        "requestedPeriod": target_period,
-        "resolvedPeriod": resolved_period,
-        "selectedTimeRange": {
-            "start": custom_periods[0],
-            "end": custom_periods[-1],
-        } if custom_periods else None,
-        "customRangeActive": bool(custom_periods),
-        "latestPeriod": available_periods[-1],
-        "priorPeriod": prior_period,
-        "sameMonthLastYearPeriod": same_month_last_year_period,
-        "selectedCountry": selected_country["value"],
-        "selectedCountryLabel": selected_country["label"],
-        "selectedFuelTypes": selected_fuels,
-        "selectedDrilldownSegment": resolved_drilldown_segment,
+        "requestedPeriod": target_period, "resolvedPeriod": resolved_period,
+        "selectedTimeRange": {"start": custom_periods[0], "end": custom_periods[-1]} if custom_periods else None,
+        "customRangeActive": bool(custom_periods), "latestPeriod": available_periods[-1],
+        "priorPeriod": prior_period, "sameMonthLastYearPeriod": same_month_last_year_period,
+        "selectedCountry": selected_country["value"], "selectedCountryLabel": selected_country["label"],
+        "selectedFuelTypes": selected_fuels, "selectedDrilldownSegment": resolved_drilldown_segment,
         "availableCountries": country_options,
         "availablePeriods": [{"value": period, "label": _short_period_label(period)} for period in available_periods],
         "availableFuelTypes": available_fuels,
@@ -4244,66 +4429,62 @@ def _query_market_scan_deck_impl(
             "currentMonthShort": _short_period_label(resolved_period),
             "previousMonthShort": _short_period_label(prior_period) if prior_period else "-",
             "sameMonthLastYearShort": _short_period_label(same_month_last_year_period) if same_month_last_year_period else "-",
-            "currentYtd": f"{year_text[2:4]}YTD",
-            "priorYtd": f"{previous_year_text[2:4]}YTD",
+            "currentYtd": f"{year_text[2:4]}YTD", "priorYtd": f"{previous_year_text[2:4]}YTD",
             "ytdWindow": f"1-{month_number}月",
         },
     }
+
+    t_meta = time.monotonic()
+    logger.info("MarketScan [%s] metadata: %.3fs", resolved_period, t_meta - t_setup)
 
     drilldown_segments = list(dict.fromkeys(
         s for s in [resolved_drilldown_segment, suv_a_segment, suv_b_segment]
         if s and s in available_segments
     ))
     drilldown_map = _build_all_drilldowns(
-        filtered_frame,
-        available_periods=available_periods,
-        resolved_period=resolved_period,
-        same_month_last_year_period=same_month_last_year_period,
-        segment_values=drilldown_segments,
-        fuel_panels=DRILLDOWN_PANEL_FUELS,
-        ranking_limit=ranking_limit,
+        filtered_frame, available_periods=available_periods, resolved_period=resolved_period,
+        same_month_last_year_period=same_month_last_year_period, segment_values=drilldown_segments,
+        fuel_panels=DRILLDOWN_PANEL_FUELS, ranking_limit=ranking_limit, custom_range_periods=custom_periods,
+    )
+    t_drilldown = time.monotonic()
+    logger.info("MarketScan [%s] drilldown: %.3fs", resolved_period, t_drilldown - t_meta)
+
+    results: dict[str, Any] = {}
+    results["overview"] = _build_overview_payload(
+        filtered_frame, selected_fuels=selected_fuels, available_periods=available_periods,
+        resolved_period=resolved_period, prior_period=prior_period,
+        same_month_last_year_period=same_month_last_year_period, ranking_limit=ranking_limit,
         custom_range_periods=custom_periods,
     )
+    t_overview = time.monotonic()
+    logger.info("MarketScan [%s] overview: %.3fs", resolved_period, t_overview - t_drilldown)
 
-    return {
-        "metadata": metadata,
-        "results": {
-            "overview": _build_overview_payload(
-                filtered_frame,
-                selected_fuels=selected_fuels,
-                available_periods=available_periods,
-                resolved_period=resolved_period,
-                prior_period=prior_period,
-                same_month_last_year_period=same_month_last_year_period,
-                ranking_limit=ranking_limit,
-                custom_range_periods=custom_periods,
-            ),
-            "origin": _build_origin_payload(
-                filtered_frame,
-                available_periods=available_periods,
-                resolved_period=resolved_period,
-                prior_period=prior_period,
-                same_month_last_year_period=same_month_last_year_period,
-                origin_window_months=origin_window_months,
-                custom_range_periods=custom_periods,
-            ),
-            "segment": _build_segment_payload(
-                filtered_frame,
-                available_periods=available_periods,
-                resolved_period=resolved_period,
-                prior_period=prior_period,
-                same_month_last_year_period=same_month_last_year_period,
-                body_window_months=body_window_months,
-                custom_range_periods=custom_periods,
-            ),
-            "drilldown": drilldown_map.get(resolved_drilldown_segment) or _empty_drilldown_payload(resolved_drilldown_segment),
-            "suvA": drilldown_map.get(suv_a_segment) or _empty_drilldown_payload(suv_a_segment),
-            "suvB": drilldown_map.get(suv_b_segment) or _empty_drilldown_payload(suv_b_segment),
-            "crossTabs": _safe_build_cross_tabs(
-                filtered_frame,
-                columns=columns,
-                selected_fuels=selected_fuels,
-                sales_column=_period_to_month_column(resolved_period),
-            ),
-        },
-    }
+    results["origin"] = _build_origin_payload(
+        filtered_frame, available_periods=available_periods, resolved_period=resolved_period,
+        prior_period=prior_period, same_month_last_year_period=same_month_last_year_period,
+        origin_window_months=origin_window_months, custom_range_periods=custom_periods,
+    )
+    t_origin = time.monotonic()
+    logger.info("MarketScan [%s] origin: %.3fs", resolved_period, t_origin - t_overview)
+
+    results["segment"] = _build_segment_payload(
+        filtered_frame, available_periods=available_periods, resolved_period=resolved_period,
+        prior_period=prior_period, same_month_last_year_period=same_month_last_year_period,
+        body_window_months=body_window_months, custom_range_periods=custom_periods,
+    )
+    t_segment = time.monotonic()
+    logger.info("MarketScan [%s] segment: %.3fs", resolved_period, t_segment - t_origin)
+
+    results["drilldown"] = drilldown_map.get(resolved_drilldown_segment) or _empty_drilldown_payload(resolved_drilldown_segment)
+    results["suvA"] = drilldown_map.get(suv_a_segment) or _empty_drilldown_payload(suv_a_segment)
+    results["suvB"] = drilldown_map.get(suv_b_segment) or _empty_drilldown_payload(suv_b_segment)
+
+    results["crossTabs"] = _safe_build_cross_tabs(
+        filtered_frame, columns=columns, selected_fuels=selected_fuels,
+        sales_column=_period_to_month_column(resolved_period),
+    )
+    t_cross = time.monotonic()
+    logger.info("MarketScan [%s] crossTabs: %.3fs", resolved_period, t_cross - t_segment)
+    logger.info("MarketScan [%s] TOTAL: %.3fs", resolved_period, t_cross - t_start)
+
+    return {"metadata": metadata, "results": results}

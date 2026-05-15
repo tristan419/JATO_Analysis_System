@@ -53,6 +53,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_TOKEN, data.token);
     localStorage.setItem(STORAGE_USER, data.username);
     localStorage.setItem(STORAGE_ROLE, data.role);
+    localStorage.removeItem("shared-filter-scope");
+    localStorage.removeItem("dashboard-cache");
     setToken(data.token);
     setUser({ username: data.username, role: data.role });
   }, []);

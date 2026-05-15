@@ -11,11 +11,16 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
-from app.api.schemas import ConfigFeatureValueUpdate
+from app.api.schemas import (
+    ConfigFeatureValueCreate,
+    ConfigFeatureValueUpdate,
+    VehicleTrimUpdate,
+)
 from app.core.config import PROJECT_ROOT
 from app.core.security import require_min_role
 from app.db.models import (
     ConfigAuditLog,
+    ConfigVersion,
     FeatureCatalog,
     ImportBatch,
     TrimFeatureValue,
@@ -26,6 +31,7 @@ from app.infra import engineering_config_repository as repo
 from app.services.config_availability import classify_availability
 from app.services.config_field_mapping_parser import parse_field_mapping
 from app.services.engineering_config_matrix_parser import parse_config_matrix
+from app.services.identity_key_service import build_identity_key
 
 router = APIRouter(prefix="/engineering-config", tags=["engineering_config"])
 
@@ -230,6 +236,121 @@ def parse_uploaded_matrix(
         "unmatchedFeatures": meta["unmatchedFeatures"],
         "sampleValues": result["values"][:20],
     }
+
+
+@router.post("/matrix/upload/{upload_id}/match")
+def match_upload_against_versions(
+    upload_id: str, session: Session = Depends(get_db_session), _=Depends(require_min_role("editor")),
+) -> dict:
+    meta = _load_session_meta(upload_id)
+    if meta["status"] != "parsed":
+        raise HTTPException(status_code=409, detail="Upload must be parsed before matching")
+    source_path = Path(meta["assembledPath"])
+    features = repo.list_feature_catalog(session, is_active=True, limit=1000)
+    catalog_dicts = [{"category": f.category, "standard_field_name": f.standard_field_name, "feature_code": f.feature_code} for f in features]
+    result = parse_config_matrix(source_path, feature_catalog=catalog_dicts or None)
+    from sqlalchemy import select as sa_select, desc as sa_desc
+
+    match_results = []
+    for t in result["trims"]:
+        ik = build_identity_key(vehicle_code=t.get("model_name", ""), trim_name=t.get("trim_name", ""))
+        info = {"fullTrimName": t.get("full_trim_name", ""), "identityKey": ik, "isNew": True, "hasDraftConflict": False}
+        if ik:
+            pub = session.execute(sa_select(ConfigVersion).where(ConfigVersion.identity_key == ik, ConfigVersion.status == "published").order_by(sa_desc(ConfigVersion.created_at_utc)).limit(1)).scalars().first()
+            if pub: info.update({"isNew": False, "latestPublishedVersionId": str(pub.version_id)})
+            draft = session.execute(sa_select(ConfigVersion).where(ConfigVersion.identity_key == ik, ConfigVersion.status == "draft").limit(1)).scalars().first()
+            if draft: info.update({"hasDraftConflict": True, "existingDraftVersionId": str(draft.version_id)})
+        match_results.append(info)
+
+    meta["matchResults"] = match_results; meta["status"] = "matched"; _save_session_meta(upload_id, meta)
+    new = sum(1 for m in match_results if m["isNew"]); existing = sum(1 for m in match_results if not m["isNew"]); conflicts = sum(1 for m in match_results if m["hasDraftConflict"])
+    return {"uploadId": upload_id, "matchResults": match_results, "summary": {"totalTrims": len(match_results), "newTrims": new, "existingTrims": existing, "draftConflicts": conflicts}}
+
+
+@router.get("/matrix/upload/{upload_id}/preview")
+def get_upload_preview(
+    upload_id: str, session: Session = Depends(get_db_session), _=Depends(require_min_role("editor")),
+) -> dict:
+    meta = _load_session_meta(upload_id)
+    if meta["status"] not in {"matched", "parsed"}:
+        raise HTTPException(status_code=409, detail="Upload must be matched or parsed first")
+    source_path = Path(meta["assembledPath"])
+    features = repo.list_feature_catalog(session, is_active=True, limit=1000)
+    catalog_dicts = [{"category": f.category, "standard_field_name": f.standard_field_name, "feature_code": f.feature_code} for f in features]
+    result = parse_config_matrix(source_path, feature_catalog=catalog_dicts or None)
+    match_results = meta.get("matchResults", []); mr_by_trim = {m["fullTrimName"]: m for m in match_results}
+    from sqlalchemy import select as sa_select
+
+    diff_rows: list[dict] = []
+    for t in result["trims"]:
+        ftn = t.get("full_trim_name", ""); mr = mr_by_trim.get(ftn, {})
+        if mr.get("isNew") or not mr.get("latestPublishedVersionId"): continue
+        pub_ver = session.get(ConfigVersion, UUID(mr["latestPublishedVersionId"]))
+        if pub_ver is None: continue
+        pub_vals = repo.list_trim_feature_values(session, pub_ver.trim_id)
+        pub_map: dict[str, dict] = {}
+        for v in pub_vals:
+            feat = session.get(FeatureCatalog, v.feature_id)
+            pub_map[feat.feature_code if feat else ""] = {"rawValue": v.raw_value, "availability": v.availability}
+        for nv in [v for v in result["values"] if v["full_trim_name"] == ftn]:
+            code = nv.get("feature_code", ""); old = pub_map.get(code)
+            dt = "NEW_FEATURE" if old is None else ("CHANGED" if old["rawValue"] != nv["raw_value"] or old["availability"] != nv["availability"] else "UNCHANGED")
+            diff_rows.append({"category": nv.get("category", ""), "featureName": nv.get("feature_name", ""), "featureCode": code, "oldValue": old["rawValue"] if old else None, "oldAvailability": old["availability"] if old else None, "newValue": nv.get("raw_value", ""), "newAvailability": nv.get("availability", ""), "diffType": dt})
+
+    changed = sum(1 for d in diff_rows if d["diffType"] == "CHANGED"); new_feat = sum(1 for d in diff_rows if d["diffType"] == "NEW_FEATURE")
+    return {"uploadId": upload_id, "summary": {**result["summary"], "newTrims": sum(1 for m in match_results if m.get("isNew")), "existingTrims": sum(1 for m in match_results if not m.get("isNew")), "draftConflicts": sum(1 for m in match_results if m.get("hasDraftConflict")), "changedValues": changed, "newFeatures": new_feat}, "diffRows": diff_rows[:200], "warnings": result["warnings"][:50], "unmatchedFeatures": [{"category": c, "fieldName": f} for c, f in result["unmatched_features"][:50]]}
+
+
+@router.post("/matrix/upload/{upload_id}/confirm")
+def confirm_upload_as_draft(
+    upload_id: str, session: Session = Depends(get_db_session), _=Depends(require_min_role("editor")),
+) -> dict:
+    meta = _load_session_meta(upload_id)
+    if meta["status"] not in {"matched", "parsed"}:
+        raise HTTPException(status_code=409, detail="Upload must be parsed/matched first")
+    source_path = Path(meta["assembledPath"])
+    features = repo.list_feature_catalog(session, is_active=True, limit=1000)
+    catalog_dicts = [{"category": f.category, "standard_field_name": f.standard_field_name, "feature_code": f.feature_code} for f in features]
+    result = parse_config_matrix(source_path, feature_catalog=catalog_dicts or None)
+
+    import_batch = ImportBatch(domain="engineering_config", source_file_name=meta["fileName"], source_file_path=meta["assembledPath"], import_status="pending", row_count=0, error_count=0, triggered_by="api", started_at_utc=datetime.now(timezone.utc))
+    repo.add_import_batch(session, import_batch); session.flush()
+    feature_by_code = {f.feature_code: f for f in features}; created = 0
+
+    for t in result["trims"]:
+        ik = build_identity_key(vehicle_code=t.get("model_name", ""), trim_name=t.get("trim_name", "")) or ""
+        existing = repo.get_vehicle_trim_by_full_name(session, t["full_trim_name"])
+        if existing: existing.identity_key = ik; existing.source_upload_id = import_batch.import_batch_id; trim_obj = existing
+        else: trim_obj = VehicleTrim(source_upload_id=import_batch.import_batch_id, identity_key=ik, brand=t["brand"], model_name=t["model_name"], trim_name=t["trim_name"], full_trim_name=t["full_trim_name"], status="active"); repo.add_vehicle_trim(session, trim_obj); session.flush()
+
+        ver = ConfigVersion(trim_id=trim_obj.trim_id, identity_key=ik, brand=t["brand"], model_name=t["model_name"], trim_name=t["trim_name"], status="draft", version_no=1, source_upload_id=import_batch.import_batch_id, created_by="api")
+        session.add(ver); session.flush(); created += 1
+
+        for v in [v for v in result["values"] if v["full_trim_name"] == t["full_trim_name"]]:
+            feat = feature_by_code.get(v.get("feature_code", ""))
+            if not feat: continue
+            session.add(TrimFeatureValue(trim_id=trim_obj.trim_id, feature_id=feat.feature_id, raw_value=v.get("raw_value", ""), normalized_value=v.get("normalized_value"), availability=v.get("availability", "UNKNOWN"), unit=v.get("unit"), source_row=v.get("source_row", 0), source_column=v.get("source_column", ""), source_upload_id=import_batch.import_batch_id, version=1))
+
+    import_batch.import_status = "success"; import_batch.row_count = result["summary"]["value_record_count"]; import_batch.finished_at_utc = datetime.now(timezone.utc)
+    try: session.commit()
+    except Exception as exc: session.rollback(); raise HTTPException(status_code=409, detail=f"Confirm failed: {exc}")
+    meta["status"] = "draft_created"; _save_session_meta(upload_id, meta)
+    return {"uploadId": upload_id, "importBatchId": str(import_batch.import_batch_id), "createdVersions": created, "valueRecordCount": result["summary"]["value_record_count"]}
+
+
+@router.post("/versions/{version_id}/publish")
+def publish_version(
+    version_id: str, session: Session = Depends(get_db_session), _=Depends(require_min_role("admin")),
+) -> dict:
+    from sqlalchemy import select as sa_select
+    ver = session.execute(sa_select(ConfigVersion).where(ConfigVersion.version_id == UUID(version_id))).scalars().first()
+    if ver is None: raise HTTPException(status_code=404, detail="Version not found")
+    if ver.status != "draft": raise HTTPException(status_code=409, detail="Only draft versions can be published")
+    prev = session.execute(sa_select(ConfigVersion).where(ConfigVersion.identity_key == ver.identity_key, ConfigVersion.status == "published").limit(1)).scalars().first()
+    if prev: prev.status = "archived"
+    ver.status = "published"; ver.published_by = "admin"; ver.published_at_utc = datetime.now(timezone.utc)
+    session.commit()
+    return {"versionId": str(ver.version_id), "status": "published", "identityKey": ver.identity_key, "archivedPreviousVersionId": str(prev.version_id) if prev else None}
 
 
 @router.post("/matrix/upload/{upload_id}/import")
@@ -614,6 +735,43 @@ def update_feature_value(
 
     session.commit()
     return {"valueId": value_id, "availability": availability, "normalizedValue": normalized}
+
+
+@router.post("/values")
+def create_feature_value(
+    payload: ConfigFeatureValueCreate, session: Session = Depends(get_db_session), _=Depends(require_min_role("editor")),
+) -> dict:
+    trim = repo.get_vehicle_trim(session, UUID(payload.trim_id))
+    if trim is None: raise HTTPException(status_code=404, detail="Trim not found")
+    feat = session.get(FeatureCatalog, UUID(payload.feature_id))
+    if feat is None: raise HTTPException(status_code=404, detail="Feature not found")
+    availability, normalized, unit = classify_availability(payload.raw_value)
+    tfv = TrimFeatureValue(trim_id=trim.trim_id, feature_id=feat.feature_id, raw_value=payload.raw_value, normalized_value=normalized, availability=availability, unit=unit, source_row=0, source_column="manual", version=1, updated_by=payload.updated_by)
+    session.add(tfv)
+    repo.add_audit_log(session, ConfigAuditLog(entity_type="trim_feature_value", entity_id=tfv.value_id, field_name="raw_value", new_value=payload.raw_value, changed_by=payload.updated_by, source="manual", comment="Created"))
+    try: session.commit(); session.refresh(tfv)
+    except Exception as exc: session.rollback(); raise HTTPException(status_code=409, detail=f"Create failed: {exc}")
+    return {"valueId": str(tfv.value_id), "availability": availability, "normalizedValue": normalized}
+
+
+@router.delete("/values/{value_id}")
+def delete_feature_value(
+    value_id: str, session: Session = Depends(get_db_session), _=Depends(require_min_role("editor")),
+) -> dict:
+    success = repo.delete_trim_feature_value(session, UUID(value_id))
+    if not success: raise HTTPException(status_code=404, detail="Feature value not found")
+    session.commit()
+    return {"valueId": value_id, "deleted": True}
+
+
+@router.patch("/trims/{trim_id}")
+def update_vehicle_trim(
+    trim_id: str, payload: VehicleTrimUpdate, session: Session = Depends(get_db_session), _=Depends(require_min_role("editor")),
+) -> dict:
+    trim = repo.update_vehicle_trim(session, UUID(trim_id), **payload.model_dump(exclude_none=True))
+    if trim is None: raise HTTPException(status_code=404, detail="Trim not found")
+    session.commit(); session.refresh(trim)
+    return {"trimId": str(trim.trim_id), "brand": trim.brand, "modelName": trim.model_name, "trimName": trim.trim_name, "fullTrimName": trim.full_trim_name, "energyType": trim.energy_type, "drivetrain": trim.drivetrain, "status": trim.status}
 
 
 @router.get("/audit-log")

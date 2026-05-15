@@ -244,6 +244,24 @@ class ConfigFeatureValueUpdate(BaseModel):
     comment: str | None = None
 
 
+class ConfigFeatureValueCreate(BaseModel):
+    trim_id: str
+    feature_id: str
+    raw_value: str
+    updated_by: str | None = None
+
+
+class VehicleTrimUpdate(BaseModel):
+    brand: str | None = None
+    model_name: str | None = None
+    trim_name: str | None = None
+    energy_type: str | None = None
+    drivetrain: str | None = None
+    engine: str | None = None
+    model_year: str | None = None
+    status: str | None = None
+
+
 class MsrpSourceCreate(BaseModel):
     source_code: str
     country: str

@@ -168,3 +168,23 @@ def list_audit_logs(
         stmt = stmt.where(ConfigAuditLog.entity_id == entity_id)
     stmt = stmt.limit(min(limit, 1000))
     return list(session.execute(stmt).scalars().all())
+
+
+def delete_trim_feature_value(session: Session, value_id: UUID) -> bool:
+    val = session.get(TrimFeatureValue, value_id)
+    if val is None:
+        return False
+    session.delete(val)
+    return True
+
+
+def update_vehicle_trim(
+    session: Session, trim_id: UUID, **kwargs: object
+) -> VehicleTrim | None:
+    trim = session.get(VehicleTrim, trim_id)
+    if trim is None:
+        return None
+    for key, value in kwargs.items():
+        if value is not None and hasattr(trim, key):
+            setattr(trim, key, value)
+    return trim

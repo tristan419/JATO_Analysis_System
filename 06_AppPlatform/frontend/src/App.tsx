@@ -34,6 +34,9 @@ const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((module) => 
 const SpecificationPage = lazy(() =>
   import("./pages/SpecificationPage").then((module) => ({ default: module.SpecificationPage }))
 );
+const EngineeringConfigPage = lazy(() =>
+  import("./pages/EngineeringConfigPage").then((module) => ({ default: module.EngineeringConfigPage }))
+);
 
 function withPageLoader(node: ReactNode) {
   return (
@@ -77,6 +80,7 @@ const router = createBrowserRouter([
       { path: "customer-insights", element: withPageLoader(<CustomerInsightsPage />) },
       { path: "customer-hev", element: withPageLoader(<NordicHevInsightsPage />) },
       { path: "copilot", element: withPageLoader(<CountryChatPage />) },
+      { path: "engineering-config", element: withPageLoader(<EngineeringConfigPage />) },
       { path: "*", element: withPageLoader(<NotFoundPage />) }
     ]
   }
