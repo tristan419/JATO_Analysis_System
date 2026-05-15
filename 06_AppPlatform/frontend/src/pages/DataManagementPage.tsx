@@ -766,43 +766,68 @@ export function DataManagementPage() {
                 <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
                   {(["planned","beta","active","archived"] as string[]).map((col) => {
                     const column = (featureKanban.columns as Record<string,unknown>)[col] as Record<string,unknown>;
-                    const features = (column?.features as unknown[]) || [];
+                    const allFeatures = (column?.features as unknown[]) || [];
+                    const showAll = allFeatures.length <= 10;
+                    const visibleFeatures = showAll ? allFeatures : allFeatures.slice(0, 10);
                     return (
-                      <div key={col} style={{background:"#f8fafc",borderRadius:8,padding:12,minHeight:200}}>
+                      <div key={col} style={{background:"#f8fafc",borderRadius:8,padding:12}}>
                         <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:column?.color as string,display:"flex",justifyContent:"space-between"}}>
                           <span>{column?.label as string}</span>
-                          <span style={{fontSize:11,background:"#e2e8f0",borderRadius:10,padding:"0 8px"}}>{features.length}</span>
+                          <span style={{fontSize:11,background:"#e2e8f0",borderRadius:10,padding:"0 8px"}}>{allFeatures.length}</span>
                         </div>
-                        {features.map((f: unknown) => {
+                        <div style={{maxHeight:520,overflowY:"auto",paddingRight:4}}>
+                        {visibleFeatures.map((f: unknown, idx: number) => {
                           const feat = f as Record<string,unknown>;
                           const risk = String(feat.riskLevel || "low");
                           const riskColor = risk === "high" ? "#ef4444" : risk === "medium" ? "#f59e0b" : "#22c55e";
                           const hasTests = (feat.tests as unknown[])?.length > 0;
                           const hasDocs = (feat.docs as unknown[])?.length > 0;
                           const hasIssues = (feat.knownIssues as unknown[])?.length > 0;
+                          const deps = (feat.dependencies as string[]) || [];
                           return (
-                            <div key={String(feat.featureId)} style={{
-                              background:"#fff",borderRadius:6,padding:"10px 12px",marginBottom:8,
-                              border:"1px solid #e2e8f0",borderLeft:`3px solid ${feat.color || "#94a3b8"}`,fontSize:12,
-                            }}>
-                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                                <span style={{fontWeight:600}}>{String(feat.name)}</span>
-                                <span style={{fontSize:9,background:feat.implementationStatus==="implemented"?"#dcfce7":feat.implementationStatus==="partial"?"#dbeafe":"#fef3c7",color:feat.implementationStatus==="implemented"?"#166534":feat.implementationStatus==="partial"?"#1e40af":"#92400e",padding:"1px 6px",borderRadius:3,fontWeight:600}}>{String(feat.phase||feat.implementationStatus||"")}</span>
+                            <div key={String(feat.featureId)}>
+                              {/* Dependency connector dot + line */}
+                              {deps.length > 0 && (
+                                <div style={{display:"flex",alignItems:"center",gap:4,marginBottom:2,paddingLeft:8}}>
+                                  <div style={{width:6,height:6,borderRadius:"50%",background:"#94a3b8"}} />
+                                  <div style={{fontSize:9,color:"#94a3b8"}}>{deps.map((d: string) => d.replace("feature.","")).join(", ")}</div>
+                                </div>
+                              )}
+                              <div style={{
+                                background:"#fff",borderRadius:6,padding:"10px 12px",marginBottom:8,
+                                border:"1px solid #e2e8f0",borderLeft:`3px solid ${feat.color || "#94a3b8"}`,fontSize:12,
+                                marginLeft: deps.length > 0 ? 12 : 0,
+                              }}>
+                                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                                  <span style={{fontWeight:600,fontSize:11}}>{String(feat.name)}</span>
+                                  <span style={{fontSize:8,background:feat.implementationStatus==="implemented"?"#dcfce7":feat.implementationStatus==="partial"?"#dbeafe":"#fef3c7",color:feat.implementationStatus==="implemented"?"#166534":feat.implementationStatus==="partial"?"#1e40af":"#92400e",padding:"1px 5px",borderRadius:3,fontWeight:600,whiteSpace:"nowrap"}}>{String(feat.phase||feat.implementationStatus||"")}</span>
+                                </div>
+                                <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:3}}>
+                                  {(feat.routes as unknown[])?.length > 0 && <span style={{fontSize:9,background:"#e0f2fe",color:"#0369a1",padding:"0 5px",borderRadius:2}}>{(feat.routes as string[]).join(" ")}</span>}
+                                  {(feat.backendApis as unknown[])?.length > 0 && <span style={{fontSize:9,background:"#fef3c7",color:"#92400e",padding:"0 5px",borderRadius:2}}>{(feat.backendApis as string[]).length} APIs</span>}
+                                </div>
+                                <div style={{display:"flex",gap:6,fontSize:9,color:"#64748b"}}>
+                                  {hasTests && <span style={{color:"#22c55e"}}>Tests</span>}
+                                  {hasDocs && <span style={{color:"#3b82f6"}}>Docs</span>}
+                                  {hasIssues && <span style={{color:"#ef4444"}}>Issues</span>}
+                                  <span style={{color:riskColor,fontWeight:600}}>{risk}</span>
+                                </div>
                               </div>
-                              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:4}}>
-                                {(feat.routes as unknown[])?.length > 0 && <span style={{fontSize:10,background:"#e0f2fe",color:"#0369a1",padding:"1px 6px",borderRadius:3}}>{(feat.routes as string[]).join(" ")}</span>}
-                                {(feat.backendApis as unknown[])?.length > 0 && <span style={{fontSize:10,background:"#fef3c7",color:"#92400e",padding:"1px 6px",borderRadius:3}}>{(feat.backendApis as string[]).length} APIs</span>}
-                              </div>
-                              <div style={{display:"flex",gap:8,fontSize:10,color:"#64748b"}}>
-                                {hasTests && <span style={{color:"#22c55e"}}>Tests</span>}
-                                {hasDocs && <span style={{color:"#3b82f6"}}>Docs</span>}
-                                {hasIssues && <span style={{color:"#ef4444"}}>Issues</span>}
-                                <span style={{color:riskColor,fontWeight:600}}>{risk}</span>
-                              </div>
+                              {/* Connector line between cards with deps */}
+                              {idx < visibleFeatures.length - 1 && deps.length > 0 && (
+                                <div style={{width:2,height:4,background:"#e2e8f0",marginLeft:10}} />
+                              )}
                             </div>
                           );
                         })}
-                        {features.length === 0 && <div style={{color:"#94a3b8",fontSize:11,textAlign:"center",padding:20}}>—</div>}
+                        </div>
+                        {allFeatures.length > 10 && (
+                          <button type="button" className="btn btn-sm btn-ghost" style={{width:"100%",marginTop:8,fontSize:11}}
+                            onClick={() => {}}>
+                            +{allFeatures.length - 10} more
+                          </button>
+                        )}
+                        {allFeatures.length === 0 && <div style={{color:"#94a3b8",fontSize:11,textAlign:"center",padding:20}}>—</div>}
                       </div>
                     );
                   })}
@@ -875,7 +900,7 @@ export function DataManagementPage() {
                     </div>
                   ):null}
                   {((hermesPipelines as Record<string,unknown>)?.allPipelines as unknown[])?.length>0?(
-                    <div style={{display:"grid",gap:6}}>
+                    <div style={{display:"grid",gap:6,maxHeight:500,overflowY:"auto",paddingRight:4}}>
                       {((hermesPipelines as Record<string,unknown>)?.allPipelines as unknown[]).slice(0,12).map((p:unknown)=>{
                         const pipe=p as Record<string,unknown>;
                         const risk=String(pipe.risk||"low");
@@ -912,7 +937,7 @@ export function DataManagementPage() {
                     {["all","voc","news","msrp","forum","official"].map((t)=>(<button key={t} type="button" className="btn btn-sm btn-ghost" style={{fontSize:11,textTransform:"capitalize"}} onClick={()=>{const cards=document.querySelectorAll("[data-source-type]");cards.forEach((c)=>{const el=c as HTMLElement;el.style.display=t==="all"||el.dataset.sourceType===t?"":"none";});}}>{t==="all"?"All":t}</button>))}
                   </div>
                   {((hermesSources as Record<string,unknown>)?.sources as unknown[])?.length>0?(
-                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:8}}>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:8,maxHeight:500,overflowY:"auto",paddingRight:4}}>
                       {((hermesSources as Record<string,unknown>)?.sources as unknown[]).map((s:unknown)=>{
                         const src=s as Record<string,unknown>;
                         const status=String(src.status||"?");const qs=src.qualityScore as number||0;
