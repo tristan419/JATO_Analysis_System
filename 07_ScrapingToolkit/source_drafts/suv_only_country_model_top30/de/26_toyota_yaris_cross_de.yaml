@@ -6,7 +6,7 @@ source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/de/toyota/yaris_cross
+  url: https://www.toyota.de/nova-auta/yaris-cross
   tier: stealth
   headless: true
   network_idle: true

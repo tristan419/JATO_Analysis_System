@@ -6,7 +6,7 @@ source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/it/toyota/c_hr
+  url: https://www.toyota.it/nova-auta/toyota-c-hr
   tier: stealth
   headless: true
   network_idle: true

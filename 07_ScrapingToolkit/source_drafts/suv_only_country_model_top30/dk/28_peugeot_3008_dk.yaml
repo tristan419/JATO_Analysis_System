@@ -6,7 +6,7 @@ source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/dk/peugeot/3008
+  url: https://www.peugeot.dk/unsere-modelle/neuer-3008.html
   tier: stealth
   headless: true
   network_idle: true

@@ -6,7 +6,7 @@ source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/dk/volvo/ex40
+  url: https://www.volvocars.com/dk/build/ex40-electric/
   tier: stealth
   headless: true
   network_idle: true

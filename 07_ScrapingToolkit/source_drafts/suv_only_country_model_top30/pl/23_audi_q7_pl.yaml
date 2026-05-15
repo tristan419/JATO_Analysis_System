@@ -6,7 +6,7 @@ source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/pl/audi/q7
+  url: https://www.audi.pl/no/web/no/modeller/q4-e-tron.html
   tier: stealth
   headless: true
   network_idle: true

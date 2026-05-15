@@ -6,7 +6,7 @@ source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/fr/nissan/juke
+  url: https://www.nissan.fr/biler/nye-biler/ariya.html
   tier: stealth
   headless: true
   network_idle: true

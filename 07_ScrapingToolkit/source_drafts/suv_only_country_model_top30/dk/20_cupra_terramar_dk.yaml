@@ -6,7 +6,7 @@ source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/dk/cupra/terramar
+  url: https://www.cupraofficial.dk/modelle/terramar
   tier: stealth
   headless: true
   network_idle: true

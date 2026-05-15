@@ -6,7 +6,7 @@ source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/de/skoda/enyaq
+  url: https://www.skoda.de/modely/enyaq/enyaq
   tier: stealth
   headless: true
   network_idle: true

@@ -6,7 +6,7 @@ source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/it/mercedes/gla
+  url: https://www.mercedes-benz.it/passengercars/models/suv/eqa/overview.html
   tier: stealth
   headless: true
   network_idle: true

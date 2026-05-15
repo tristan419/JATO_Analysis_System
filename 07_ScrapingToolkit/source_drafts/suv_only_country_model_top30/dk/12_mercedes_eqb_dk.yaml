@@ -6,7 +6,7 @@ source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/dk/mercedes/eqb
+  url: https://www.mercedes-benz.dk/passengercars/models/suv/eqb/overview.html
   tier: stealth
   headless: true
   network_idle: true

@@ -6,7 +6,7 @@ source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/it/mg/zs
+  url: https://www.mgmotor.it/modely/mg-zs
   tier: stealth
   headless: true
   network_idle: true

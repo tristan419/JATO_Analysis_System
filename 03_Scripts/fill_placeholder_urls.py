@@ -131,13 +131,10 @@ def main():
                     new_url = adapt_url(any_url, cc)
 
             if new_url:
-                # Update the YAML
-                if 'source_url' in cfg:
-                    cfg['source_url'] = new_url
-                elif 'profile' in cfg and 'url' in cfg['profile']:
+                # Update both source_url AND profile.url
+                cfg['source_url'] = new_url
+                if 'profile' in cfg and isinstance(cfg['profile'], dict):
                     cfg['profile']['url'] = new_url
-                else:
-                    cfg['source_url'] = new_url
 
                 # Add notes about URL source
                 cfg['notes'] = (cfg.get('notes', '') + f' [URL filled from {brand} template]').strip()

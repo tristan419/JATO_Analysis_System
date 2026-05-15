@@ -6,7 +6,7 @@ source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/fr/bmw/x1
+  url: https://www.bmw.fr/de/modelle/x-modelle/x1.html
   tier: stealth
   headless: true
   network_idle: true

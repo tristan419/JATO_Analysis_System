@@ -6,7 +6,7 @@ source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/pl/volvo/xc40
+  url: https://www.volvocars.com/pl/build/xc40/
   tier: stealth
   headless: true
   network_idle: true
