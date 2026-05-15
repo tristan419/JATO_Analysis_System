@@ -25,10 +25,10 @@ is_truthy() {
 
 resolve_countries() {
   case "$1" in
-    batch_a|a) printf '%s\n' se fi no dk hu hr at cz ;;
+    batch_a|a) printf '%s\n' se fi no dk hu hr at cz de fr it pl ;;
     1) printf '%s\n' se hr ;;
     2) printf '%s\n' hu no at cz ch ;;
-    all) printf '%s\n' se hr hu no at cz ch ;;
+    all) printf '%s\n' se hr hu no at cz ch de fr it pl ;;
     *) tr ',' '\n' <<<"$1" | sed 's/^ *//;s/ *$//' | sed '/^$/d' ;;
   esac
 }

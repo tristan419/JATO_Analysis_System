@@ -237,6 +237,13 @@ class ConfigImportRunRequest(BaseModel):
     notes: str | None = None
 
 
+class ConfigFeatureValueUpdate(BaseModel):
+    raw_value: str | None = None
+    updated_by: str | None = None
+    expected_version: int = 1
+    comment: str | None = None
+
+
 class MsrpSourceCreate(BaseModel):
     source_code: str
     country: str

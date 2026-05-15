@@ -1251,3 +1251,176 @@ class ReviewDecision(Base):
         nullable=False,
         server_default=func.now(),
     )
+
+
+# ── engineering_config schema ──────────────────────────────────────
+
+
+class FeatureCatalog(Base):
+    __tablename__ = "feature_catalog"
+    __table_args__ = (
+        UniqueConstraint(
+            "category",
+            "standard_field_name",
+            name="uq_feature_catalog_category_field",
+        ),
+        Index("ix_feature_catalog_category", "category"),
+        Index("ix_feature_catalog_feature_code", "feature_code"),
+        {"schema": "engineering_config"},
+    )
+
+    feature_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    category: Mapped[str] = mapped_column(Text, nullable=False)
+    standard_field_name: Mapped[str] = mapped_column(Text, nullable=False)
+    feature_code: Mapped[str] = mapped_column(Text, nullable=False)
+    unit: Mapped[str | None] = mapped_column(Text, nullable=True)
+    data_type: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="string",
+    )
+    aliases: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class VehicleTrim(Base):
+    __tablename__ = "vehicle_trims"
+    __table_args__ = (
+        Index("ix_vehicle_trims_brand", "brand"),
+        Index("ix_vehicle_trims_model", "model_name"),
+        Index("ix_vehicle_trims_status", "status"),
+        {"schema": "engineering_config"},
+    )
+
+    trim_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    source_upload_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("ops.import_batches.import_batch_id"),
+        nullable=True,
+    )
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    model_name: Mapped[str] = mapped_column(Text, nullable=False)
+    trim_name: Mapped[str] = mapped_column(Text, nullable=False)
+    full_trim_name: Mapped[str] = mapped_column(Text, nullable=False)
+    energy_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    drivetrain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    engine: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_year: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="active",
+    )
+    created_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class TrimFeatureValue(Base):
+    __tablename__ = "trim_feature_values"
+    __table_args__ = (
+        UniqueConstraint(
+            "trim_id",
+            "feature_id",
+            name="uq_trim_feature_values_trim_feature",
+        ),
+        Index("ix_trim_feature_values_trim", "trim_id"),
+        Index("ix_trim_feature_values_feature", "feature_id"),
+        Index("ix_trim_feature_values_availability", "availability"),
+        {"schema": "engineering_config"},
+    )
+
+    value_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    trim_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("engineering_config.vehicle_trims.trim_id"),
+        nullable=False,
+    )
+    feature_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("engineering_config.feature_catalog.feature_id"),
+        nullable=False,
+    )
+    raw_value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    availability: Mapped[str] = mapped_column(Text, nullable=False)
+    unit: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_row: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_column: Mapped[str] = mapped_column(Text, nullable=False)
+    source_upload_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("ops.import_batches.import_batch_id"),
+        nullable=True,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ConfigAuditLog(Base):
+    __tablename__ = "config_audit_log"
+    __table_args__ = (
+        Index("ix_config_audit_log_entity", "entity_type", "entity_id"),
+        Index("ix_config_audit_log_changed_at", "changed_at_utc"),
+        {"schema": "engineering_config"},
+    )
+
+    audit_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    field_name: Mapped[str] = mapped_column(Text, nullable=False)
+    old_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changed_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    source: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="manual",
+    )
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import smtplib
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
@@ -167,6 +168,47 @@ def hermes_proposals(
     if status:
         proposals = [p for p in proposals if p.get("status") == status]
     return proposals
+
+
+@router.get("/gaps")
+def hermes_gaps(
+    status: str | None = Query(
+        None,
+        description="Filter by status: open, resolved, in_progress. "
+                    "Omit for all statuses.",
+    ),
+    category: str | None = Query(
+        None,
+        description="Filter by category: prompt, pipeline, env, test, "
+                    "source_quality, backlog, docs, feature. "
+                    "Omit for all categories.",
+    ),
+) -> list[dict]:
+    """List governance gaps from the registry.
+
+    Returns all gaps when no filters are provided.  Filters are independent
+    (AND logic) — combining ``?status=open&category=test`` returns only
+    open gaps in the test category.
+
+    **Empty states**:
+        - YAML file missing → ``[]`` (200)
+        - No gaps match filters → ``[]`` (200)
+        - Unknown status/category → ``[]`` (200; safe ignore)
+    """
+    path = HERMES_DIR / "governance_gaps.yaml"
+    if not path.is_file():
+        return []
+    import yaml
+    try:
+        data = yaml.safe_load(path.read_text())
+    except Exception:
+        return []
+    gaps: list[dict] = data.get("gaps", []) if data else []
+    if status:
+        gaps = [g for g in gaps if g.get("status") == status]
+    if category:
+        gaps = [g for g in gaps if g.get("category") == category]
+    return gaps
 
 
 @router.get("/features")
@@ -736,12 +778,34 @@ def hermes_feature_kanban() -> dict:
 
 @router.get("/evidence-ledger")
 def hermes_evidence_ledger(
-    limit: int = Query(20, ge=1, le=100),
-) -> list[dict]:
-    """Return recent evidence ledger entries."""
+    limit: int = Query(20, ge=1, le=100, description="Max records to return (1-100)"),
+    days: int = Query(7, ge=1, le=90, description="Lookback window in days (1-90)"),
+) -> dict:
+    """Return recent evidence ledger entries with type breakdown.
+
+    **Query parameters**:
+
+    - ``limit`` (default 20, max 100): number of records in the response.
+    - ``days`` (default 7, max 90): filter to entries within this lookback
+      window (midnight-aligned UTC).
+
+    **Response shape**::
+
+        {
+          "totalCount": 143,        // all-time count (ignores days filter)
+          "records": [...],         // recent entries, sorted newest-first
+          "byType": {"fact": 12, "event": 3},
+          "rangeStart": "2026-05-08T...",  // oldest in filtered set
+          "rangeEnd": "2026-05-15T..."     // newest in filtered set
+        }
+
+    **Empty states**:
+        - JSONL file missing → ``{totalCount:0, records:[], byType:{}, rangeStart:"", rangeEnd:""}``
+        - No entries in lookback → ``records:[]``, ``byType:{}``, range fields ``""``
+    """
     path = HERMES_DIR / "evidence_ledger.jsonl"
     if not path.is_file():
-        return []
+        return {"totalCount": 0, "records": [], "byType": {}, "rangeStart": "", "rangeEnd": ""}
     entries: list[dict] = []
     for line in path.read_text().strip().split("\n"):
         if line.strip():
@@ -750,4 +814,134 @@ def hermes_evidence_ledger(
             except Exception:
                 pass
     entries.sort(key=lambda e: e.get("createdAt", ""), reverse=True)
-    return entries[:limit]
+    all_count = len(entries)
+    if days:
+        cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        cutoff = cutoff - timedelta(days=days - 1)
+        cutoff_str = cutoff.isoformat()
+        entries = [e for e in entries if (e.get("createdAt") or "") >= cutoff_str]
+    by_type: dict[str, int] = {}
+    for e in entries:
+        t = e.get("type") or "unknown"
+        by_type[t] = by_type.get(t, 0) + 1
+    return {
+        "totalCount": all_count,
+        "records": entries[:limit],
+        "byType": by_type,
+        "rangeStart": entries[-1].get("createdAt", "") if entries else "",
+        "rangeEnd": entries[0].get("createdAt", "") if entries else "",
+    }
+
+
+# Cache for markdown diagram scan
+_md_diagrams_cache: dict[str, Any] = {"data": None, "mtimes": {}}
+
+MERMAID_BLOCK_RE = re.compile(r"```mermaid\s*\n([\s\S]*?)```", re.MULTILINE)
+
+
+@router.get("/markdown-diagrams")
+def hermes_markdown_diagrams(
+    file_filter: str | None = Query(
+        None,
+        description="Substring match on file path (case-insensitive). "
+                    "Omit to return diagrams from all files.",
+    ),
+) -> list[dict]:
+    """Scan Markdown_Readme/ for mermaid diagram blocks.
+
+    Recursively walks ``Markdown_Readme/``, extracts every fenced
+    `` ```mermaid `` block, and returns them as structured records ready
+    for client-side rendering.
+
+    **Caching**: results are cached in-memory.  The cache is invalidated
+    automatically when any scanned file's ``st_mtime`` changes or a file
+    is added/removed.
+
+    **Response shape** — each list element::
+
+        {
+          "file": "Markdown_Readme/Fullstack/WORKFLOWS/ETL.md",
+          "title": "Monthly pipeline stages",   // nearest preceding heading
+          "diagramIndex": 0,
+          "raw": "flowchart TD\\n  A --> B\\n  ...",
+          "type": "flowchart"                   // inferred from first line
+        }
+
+    **Empty states**:
+        - ``Markdown_Readme/`` missing → ``[]`` (200)
+        - No mermaid blocks found → ``[]`` (200)
+    """
+    md_root = PROJECT_ROOT / "Markdown_Readme"
+    if not md_root.is_dir():
+        return []
+
+    # Check if cache is valid (no mtime changes, no file deletions)
+    cache_valid = _md_diagrams_cache["data"] is not None
+    if cache_valid:
+        for fpath_str, cached_mtime in list(_md_diagrams_cache["mtimes"].items()):
+            p = Path(fpath_str)
+            if not p.is_file() or p.stat().st_mtime != cached_mtime:
+                cache_valid = False
+                break
+
+    if not cache_valid:
+        diagrams: list[dict] = []
+        mtimes: dict[str, float] = {}
+        for md_file in sorted(md_root.rglob("*.md")):
+            try:
+                content = md_file.read_text()
+            except Exception:
+                continue
+            blocks = MERMAID_BLOCK_RE.findall(content)
+            if not blocks:
+                continue
+            rel_path = str(md_file.relative_to(PROJECT_ROOT))
+            mtimes[rel_path] = md_file.stat().st_mtime
+            # Find heading preceding each mermaid block
+            remaining = content
+            for idx, block_src in enumerate(blocks):
+                block_src = block_src.strip()
+                if not block_src:
+                    continue  # skip empty blocks
+                # Determine diagram type from first line
+                first_line = block_src.split("\n")[0].strip()
+                dtype = "flowchart"
+                if first_line.startswith("sequenceDiagram"):
+                    dtype = "sequenceDiagram"
+                elif first_line.startswith("flowchart") or first_line.startswith("graph"):
+                    dtype = "flowchart"
+                elif first_line.startswith("classDiagram"):
+                    dtype = "classDiagram"
+                elif first_line.startswith("stateDiagram"):
+                    dtype = "stateDiagram"
+                elif first_line.startswith("gantt"):
+                    dtype = "gantt"
+                elif first_line.startswith("pie"):
+                    dtype = "pie"
+                # Try to find a heading preceding this block in remaining text
+                title = ""
+                block_pos = remaining.find("```mermaid")
+                if block_pos > 0:
+                    before = remaining[:block_pos]
+                    headings = re.findall(r"^#{1,4}\s+(.+)$", before, re.MULTILINE)
+                    if headings:
+                        title = headings[-1].strip()
+                    # Advance past this block so next iteration looks at subsequent text
+                    end_pos = remaining.find("```", block_pos + len("```mermaid") + len(block_src))
+                    if end_pos < 0:
+                        end_pos = block_pos + len("```mermaid") + len(block_src)
+                    remaining = remaining[end_pos + 3:]
+                diagrams.append({
+                    "file": rel_path,
+                    "title": title,
+                    "diagramIndex": idx,
+                    "raw": block_src,
+                    "type": dtype,
+                })
+        _md_diagrams_cache["data"] = diagrams
+        _md_diagrams_cache["mtimes"] = mtimes
+
+    result: list[dict] = _md_diagrams_cache["data"]  # type: ignore[assignment]
+    if file_filter:
+        result = [d for d in result if file_filter.lower() in d["file"].lower()]
+    return result

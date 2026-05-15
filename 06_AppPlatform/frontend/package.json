@@ -16,8 +16,10 @@
     "check:frontend": "npm run check:types && npm run test:unit && npm run build && npm run check:router-regression"
   },
   "dependencies": {
+    "animejs": "^4.4.1",
     "buffer": "^6.0.3",
     "html-to-image": "^1.11.13",
+    "mermaid": "^11.15.0",
     "plotly.js": "^3.5.0",
     "plotly.js-cartesian-dist-min": "^3.5.0",
     "react": "^19.1.0",

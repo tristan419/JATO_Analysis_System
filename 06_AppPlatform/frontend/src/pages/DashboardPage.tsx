@@ -2,6 +2,8 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Data, Layout } from "plotly.js";
 
+import { animate } from "animejs";
+
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { CollapsibleFilterSidebar } from "../components/CollapsibleFilterSidebar";
@@ -744,6 +746,19 @@ export function DashboardPage() {
     if (columns.length === 0) return;
     setCachedPageValue(DASHBOARD_CACHE_KEY, dashboardCacheSnapshot, PAGE_CACHE_TTL_MS);
   }, [columns.length, dashboardCacheSnapshot]);
+
+  useEffect(() => {
+    try {
+      animate(".dashboard-hero-head", {
+        opacity: [0, 1],
+        translateY: [12, 0],
+        duration: 600,
+        ease: "outExpo",
+      });
+    } catch {
+      /* decorative only — never break the page */
+    }
+  }, []);
 
   /* palette helper */
   const tsPalette = useMemo(() => getExportPalette(tsExport.colorScheme), [tsExport.colorScheme]);

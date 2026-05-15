@@ -66,6 +66,20 @@ import type {
   MsrpSource,
 } from "../types/dataManagement";
 import type {
+  HermesActivityResponse,
+  HermesArchResponse,
+  HermesCostResponse,
+  HermesDailySummaryResponse,
+  HermesEvidenceLedgerResponse,
+  HermesFeatureKanbanResponse,
+  HermesGap,
+  HermesMermaidBlock,
+  HermesOverviewResponse,
+  HermesPipelineHealthResponse,
+  HermesSourceQualityResponse,
+  HermesToolchainResponse,
+} from "../types/hermes";
+import type {
   CountryChatDeckResponse,
   CountryChatMetadataResponse,
   CountryChatNewsOpsStatus,
@@ -1474,39 +1488,52 @@ export const api = {
 
   /* ── Hermes Governance ──────────────────────────── */
   hermesOverview: () =>
-    request<Record<string, unknown>>("/hermes/overview").then((r) => r as Record<string, unknown>),
+    request<HermesOverviewResponse>("/hermes/overview"),
   hermesPipelineHealth: () =>
-    request<Record<string, unknown>>("/hermes/pipeline-health").then((r) => r as Record<string, unknown>),
+    request<HermesPipelineHealthResponse>("/hermes/pipeline-health"),
   hermesSourceQuality: () =>
-    request<Record<string, unknown>>("/hermes/source-quality").then((r) => r as Record<string, unknown>),
+    request<HermesSourceQualityResponse>("/hermes/source-quality"),
   hermesCost: () =>
-    request<Record<string, unknown>>("/hermes/cost").then((r) => r as Record<string, unknown>),
+    request<HermesCostResponse>("/hermes/cost"),
   hermesProposals: (status?: string) => {
-    const q = status ? `?status=${status}` : "";
-    return request<unknown[]>(`/hermes/proposals${q}`).then((r) => r as unknown[]);
+    const q = status ? `?status=${encodeURIComponent(status)}` : "";
+    return request<Record<string, unknown>[]>(`/hermes/proposals${q ? `?${q}` : ""}`);
   },
   hermesFeatures: () =>
-    request<unknown[]>(`/hermes/features`).then((r) => r as unknown[]),
+    request<Record<string, unknown>[]>("/hermes/features"),
+  hermesGaps: (status?: string, category?: string) => {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    if (category) params.set("category", category);
+    const q = params.toString();
+    return request<HermesGap[]>(`/hermes/gaps${q ? `?${q}` : ""}`);
+  },
+  hermesMarkdownDiagrams: (fileFilter?: string) => {
+    const q = fileFilter ? `?file_filter=${encodeURIComponent(fileFilter)}` : "";
+    return request<HermesMermaidBlock[]>(`/hermes/markdown-diagrams${q}`);
+  },
   hermesToolchain: () =>
-    request<Record<string, unknown>>("/hermes/toolchain").then((r) => r as Record<string, unknown>),
+    request<HermesToolchainResponse>("/hermes/toolchain"),
   hermesArchitecture: () =>
-    request<Record<string, unknown>>("/hermes/architecture").then((r) => r as Record<string, unknown>),
+    request<HermesArchResponse>("/hermes/architecture"),
   hermesRun: (command: string) =>
-    request<Record<string, unknown>>(`/hermes/run/${command}`, { method: "POST" }).then((r) => r as Record<string, unknown>),
+    request<Record<string, unknown>>(`/hermes/run/${command}`, { method: "POST" }),
   hermesListCommands: () =>
-    request<Record<string, unknown>>("/hermes/run").then((r) => r as Record<string, unknown>),
+    request<Record<string, unknown>>("/hermes/run"),
   hermesSourceDetail: (sourceId: string) =>
-    request<Record<string, unknown>>(`/hermes/source/${encodeURIComponent(sourceId)}`).then((r) => r as Record<string, unknown>),
+    request<Record<string, unknown>>(`/hermes/source/${encodeURIComponent(sourceId)}`),
   hermesSourceHealthHistory: (sourceId: string) =>
-    request<Record<string, unknown>>(`/hermes/source/${encodeURIComponent(sourceId)}/health-history`).then((r) => r as Record<string, unknown>),
+    request<Record<string, unknown>>(`/hermes/source/${encodeURIComponent(sourceId)}/health-history`),
   hermesActivityHeatmap: (days?: number) =>
-    request<Record<string, unknown>>(`/hermes/activity-heatmap?days=${days || 30}`).then((r) => r as Record<string, unknown>),
+    request<HermesActivityResponse>(`/hermes/activity-heatmap?days=${days || 30}`),
   hermesCostHeatmap: (days?: number) =>
-    request<Record<string, unknown>>(`/hermes/cost-heatmap?days=${days || 30}`).then((r) => r as Record<string, unknown>),
+    request<HermesCostResponse>(`/hermes/cost-heatmap?days=${days || 30}`),
   hermesDailySummary: () =>
-    request<Record<string, unknown>>("/hermes/daily-summary").then((r) => r as Record<string, unknown>),
+    request<HermesDailySummaryResponse>("/hermes/daily-summary"),
   hermesFeatureKanban: () =>
-    request<Record<string, unknown>>("/hermes/feature-kanban").then((r) => r as Record<string, unknown>),
+    request<HermesFeatureKanbanResponse>("/hermes/feature-kanban"),
+  hermesEvidenceLedger: (days = 7, limit = 50) =>
+    request<HermesEvidenceLedgerResponse>(`/hermes/evidence-ledger?days=${days}&limit=${limit}`),
 
   patchItem: (id: string, payload: Partial<Omit<CrudItem, "id">>) =>
     request<{ item: CrudItem }>(`/crud/items/${id}`, {

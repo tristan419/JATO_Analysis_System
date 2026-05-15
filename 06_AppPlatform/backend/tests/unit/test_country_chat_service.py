@@ -348,6 +348,9 @@ def _patch_base(monkeypatch):
         "get_country_news_payload",
         lambda country, **kwargs: copy.deepcopy(_build_stub_news_payload(country)),
     )
+    # Clear snapshot cache between tests to prevent stale cached results
+    with country_chat_service._SNAPSHOT_CACHE_LOCK:
+        country_chat_service._SNAPSHOT_CACHE.clear()
 
 
 # --------------- snapshot tests ---------------

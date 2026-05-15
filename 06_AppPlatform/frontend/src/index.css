@@ -11632,3 +11632,76 @@ table.data-table tr.data-table-group-row.contains-selection td {
     align-items: flex-start;
   }
 }
+
+/* Hermes subtab group labels */
+.hermes-subtab-group-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Mermaid block container */
+.hermes-mermaid-block {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+  overflow: auto;
+}
+
+.hermes-mermaid-block .mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Diagram gallery card */
+.hermes-diagram-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: box-shadow 0.15s;
+}
+
+.hermes-diagram-card:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.hermes-diagram-card-header {
+  padding: 10px 14px;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.hermes-diagram-card-body {
+  padding: 12px;
+  min-height: 100px;
+}
+
+/* Modal overlay */
+.hermes-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.hermes-modal-content {
+  background: #fff;
+  border-radius: 12px;
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow: auto;
+  padding: 24px;
+}

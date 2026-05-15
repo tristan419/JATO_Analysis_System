@@ -552,9 +552,79 @@ export function parseCountryChatHandoffSearch(search: string): CountryChatHandof
   };
 }
 
+/**
+ * Security note:
+ * renderMarkdown intentionally escapes raw HTML BEFORE applying markdown
+ * replacements. This prevents LLM-generated HTML such as <script> or
+ * <img onerror=...> from becoming executable. Do not move escapeHtml after
+ * markdown rendering unless a trusted sanitizer such as DOMPurify is added.
+ *
+ * Supported syntax: h1-h4, bold, italic, inline code, hr, unordered/ordered
+ * lists, markdown tables (GFM-style), line breaks.
+ */
+
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function isTableRow(line: string): boolean {
+  return /^\s*\|.+\|\s*$/.test(line);
+}
+
+function isTableSeparator(line: string): boolean {
+  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+}
+
+function splitTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function renderTableBlock(lines: string[]): string {
+  const header = splitTableRow(lines[0]);
+  const bodyRows = lines.slice(2).map(splitTableRow);
+  const thead = `<thead><tr>${header.map((c) => `<th>${c}</th>`).join("")}</tr></thead>`;
+  const tbody = `<tbody>${bodyRows
+    .map((row) => `<tr>${row.map((c) => `<td>${c}</td>`).join("")}</tr>`)
+    .join("")}</tbody>`;
+  return `<div class="markdown-table-wrap"><table class="markdown-table">${thead}${tbody}</table></div>`;
+}
+
+function renderTablesInMarkdown(md: string): string {
+  const lines = md.split("\n");
+  const output: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const current = lines[i];
+    const next = i + 1 < lines.length ? lines[i + 1] : "";
+    if (isTableRow(current) && isTableSeparator(next)) {
+      const tableLines = [current, next];
+      i += 2;
+      while (i < lines.length && isTableRow(lines[i])) {
+        tableLines.push(lines[i]);
+        i += 1;
+      }
+      output.push(renderTableBlock(tableLines));
+      continue;
+    }
+    output.push(current);
+    i += 1;
+  }
+  return output.join("\n");
+}
+
 export function renderMarkdown(md: string): string {
-  let html = md
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  // Security-critical: escape HTML first, then generate only controlled tags
+  let html = escapeHtml(md);
+  html = renderTablesInMarkdown(html);
+  html = html
     .replace(/^#### (.+)$/gm, "<h4>$1</h4>")
     .replace(/^### (.+)$/gm, "<h3>$1</h3>")
     .replace(/^## (.+)$/gm, "<h2>$1</h2>")

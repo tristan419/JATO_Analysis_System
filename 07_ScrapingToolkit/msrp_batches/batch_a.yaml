@@ -35,3 +35,19 @@ countries:
     country_label: Czech Republic / 捷克
     source_path: ../source_drafts/suv_only_country_model_top30/cz
     notes: 30 source drafts in the current country pack.
+  - country_code: DE
+    country_label: Germany / 德国
+    source_path: ../source_drafts/suv_only_country_model_top30/de
+    notes: 27 source drafts in the current country pack.
+  - country_code: FR
+    country_label: France / 法国
+    source_path: ../source_drafts/suv_only_country_model_top30/fr
+    notes: 30 source drafts in the current country pack.
+  - country_code: IT
+    country_label: Italy / 意大利
+    source_path: ../source_drafts/suv_only_country_model_top30/it
+    notes: 30 source drafts in the current country pack.
+  - country_code: PL
+    country_label: Poland / 波兰
+    source_path: ../source_drafts/suv_only_country_model_top30/pl
+    notes: 30 source drafts in the current country pack.
