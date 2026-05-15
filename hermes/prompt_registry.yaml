@@ -7,25 +7,24 @@ prompts:
     pipeline: country_copilot
     currentLocation:
       path: "06_AppPlatform/backend/app/services/country_chat_service.py"
-      functionOrClass: "_SYSTEM_PROMPT (lines 469-506)"
-    version: "unversioned"
-    modelDefault: deepseek-v4-flash
-    inputSchema: "System message (Chinese, 13 analysis principles)"
-    outputSchema: "Structured analysis response"
-    status: active
-    governanceStatus: needs_versioning
+      functionOrClass: "_SYSTEM_PROMPT_HARDCODED (fallback only)"
+    version: "v1 (hermes/prompts/, file deleted 2026-05-15)"
+    modelDefault: deprecated
+    inputSchema: "N/A"
+    outputSchema: "N/A"
+    status: deprecated
+    governanceStatus: deprecated
     knownIssues:
-      - "Prompt is hardcoded in Python and has no explicit version"
-      - "Character: 'senior automotive product manager at a core car company'"
-      - "13 analysis principles in Chinese"
+      - "NVIDIA and Gemini deprecated 2026-05-15 per user feedback."
+      - "DeepSeek is the only active LLM provider."
     quality:
       groundednessScore: null
       citationCoverageScore: null
       hallucinationRiskScore: null
       actionabilityScore: null
       duplicateInsightScore: null
-    lastChangedAt: null
-    notes: "Used by NVIDIA NIM and Google Gemini chat paths."
+    lastChangedAt: "2026-05-15"
+    notes: "Deprecated. Only DeepSeek is used for Country Copilot."
 
   - promptId: prompt.country_copilot.deepseek_system
     name: "DeepSeek Stable System Prompt"

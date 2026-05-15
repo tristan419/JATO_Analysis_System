@@ -6,6 +6,7 @@ currency: CNY
 pricingSource: "User-provided DeepSeek V4 Flash / Pro price table"
 lastUpdated: "2026-05-14"
 
+# Only DeepSeek is active. NVIDIA and Gemini were deprecated 2026-05-15.
 models:
   deepseek-v4-flash:
     displayName: "DeepSeek V4 Flash"
@@ -49,6 +50,16 @@ models:
         discountLabel: "2.5折优惠"
         validUntil: "2026-05-31T23:59:00+08:00"
         note: "After discount expires, Pro costs ~4x more. Review before 2026-05-31."
+
+  # Deprecated 2026-05-15 — user feedback: not useful
+  nvidia-nim:
+    status: deprecated
+    deprecatedAt: "2026-05-15"
+    reason: "User feedback: NVIDIA and Gemini not performing well for this use case."
+  google-gemini:
+    status: deprecated
+    deprecatedAt: "2026-05-15"
+    reason: "User feedback: NVIDIA and Gemini not performing well for this use case."
 
 # --- Routing Defaults ---
 routingDefaults:
