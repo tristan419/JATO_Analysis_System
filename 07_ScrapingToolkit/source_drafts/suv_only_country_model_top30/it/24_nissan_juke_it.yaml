@@ -1,19 +1,7 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 意大利 (it)
-# Country model rank: 24
-# Brand: NISSAN
-# Model: JUKE
-# Suggested scope kind: single_model
-# Sales 12M: 11,005
-# Draft path: it/24_nissan_juke_it.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: nissan_juke_it_draft_scrapling
 country: 意大利
 brand: NISSAN
-source_url: https://todo.invalid/it/nissan/juke
+source_url: https://www.nissan.it/biler/nye-biler/ariya.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
@@ -111,7 +99,7 @@ schedule:
   preferred_weekday: monday
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources.
+  before promoting to 07_ScrapingToolkit/sources. [URL filled from NISSAN template]
 bootstrap_meta:
   country_model_rank: 24
   suggested_scope_kind: single_model

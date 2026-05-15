@@ -1,19 +1,7 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 德国 (de)
-# Country model rank: 30
-# Brand: DACIA
-# Model: DUSTER
-# Suggested scope kind: single_model
-# Sales 12M: 14,520
-# Draft path: de/30_dacia_duster_de.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: dacia_duster_de_draft_scrapling
 country: 德国
 brand: DACIA
-source_url: https://todo.invalid/de/dacia/duster
+source_url: https://www.dacia.de/hybridni-elektricke-vozy/duster-suv.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
@@ -119,7 +107,7 @@ schedule:
   preferred_weekday: monday
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources.
+  before promoting to 07_ScrapingToolkit/sources. [URL filled from DACIA template]
 bootstrap_meta:
   country_model_rank: 30
   suggested_scope_kind: single_model

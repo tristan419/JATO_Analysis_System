@@ -1,19 +1,7 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 芬兰 (fi)
-# Country model rank: 18
-# Brand: SKODA
-# Model: KODIAQ
-# Suggested scope kind: single_model
-# Sales 12M: 626
-# Draft path: fi/18_skoda_kodiaq_fi.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: skoda_kodiaq_fi_draft_scrapling
 country: 芬兰
 brand: SKODA
-source_url: https://todo.invalid/fi/skoda/kodiaq
+source_url: https://www.skoda.fi/modely/kodiaq/kodiaq
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
@@ -111,7 +99,7 @@ schedule:
   preferred_weekday: monday
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources.
+  before promoting to 07_ScrapingToolkit/sources. [URL filled from SKODA template]
 bootstrap_meta:
   country_model_rank: 18
   suggested_scope_kind: single_model
