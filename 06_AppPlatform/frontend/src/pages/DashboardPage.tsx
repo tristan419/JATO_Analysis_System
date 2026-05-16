@@ -116,11 +116,22 @@ export function DashboardPage() {
     resetFilters,
   } = useSharedFilterScope();
 
+  /* auto-select all countries on first load */
+  const countryAutoApplied = useRef(false);
+  useEffect(() => {
+    if (!filtersReady || countryAutoApplied.current) return;
+    const countryOptions = optionsMap.country ?? [];
+    if (countryOptions.length > 0 && selections.country.length === 0) {
+      countryAutoApplied.current = true;
+      void onFilterChange("country", countryOptions);
+    }
+  }, [filtersReady, optionsMap.country, selections.country, onFilterChange]);
+
   /* time-series controls */
-  const [activeTab, setActiveTab] = useState<"year"|"month">(() => cachedPage?.activeTab ?? "year");
+  const [activeTab, setActiveTab] = useState<"year"|"month">(() => cachedPage?.activeTab ?? "month");
   const [chartType, setChartType] = useState<"line"|"bar">(() => cachedPage?.chartType ?? "line");
-  const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">(() => cachedPage?.tsMode ?? "\u603b\u548c");
-  const [tsGroupDim, setTsGroupDim] = useState(() => cachedPage?.tsGroupDim ?? "\u52a8\u603b\u89c4\u6574");
+  const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">(() => cachedPage?.tsMode ?? "\u5206\u7ec4");
+  const [tsGroupDim, setTsGroupDim] = useState(() => cachedPage?.tsGroupDim ?? "\u56fd\u5bb6");
   const [tsShareSplit, setTsShareSplit] = useState<TimeSeriesShareSplitDimension>(
     () => cachedPage?.tsShareSplit ?? "total",
   );
