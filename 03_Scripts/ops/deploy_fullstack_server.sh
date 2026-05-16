@@ -444,17 +444,17 @@ fi
 echo "[INFO] Verify backend health"
 CURRENT_STEP="Verify backend health"
 log_section "$CURRENT_STEP"
-for i in $(seq 1 10); do
+for i in $(seq 1 15); do
   if curl -fsS "http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null 2>&1; then
     echo "[INFO] Health check passed on attempt $i"
     break
   fi
-  if [[ "$i" -eq 10 ]]; then
-    echo "[ERROR] Health check failed after 10 attempts"
+  if [[ "$i" -eq 15 ]]; then
+    echo "[ERROR] Health check failed after 15 attempts"
     exit 1
   fi
-  echo "[INFO] Health check attempt $i failed, retrying in 3s …"
-  sleep 3
+  echo "[INFO] Health check attempt $i failed, retrying in 5s …"
+  sleep 5
 done
 
 echo "[INFO] Current revision"
