@@ -220,6 +220,8 @@ def _build_feishu_url(state: str, redirect: str) -> str:
 
 # ── Google OAuth ─────────────────────────────────────────────────
 
+import json as _json
+
 
 @router.get("/google/auth-url")
 def google_auth_url(
@@ -228,27 +230,34 @@ def google_auth_url(
     """Return the Google OAuth authorization URL."""
     if not GOOGLE_ENABLED:
         raise HTTPException(status_code=503, detail="Google login not configured")
-    state = secrets.token_urlsafe(16)
+    # Encode redirect destination into the state param (Google passes it back)
+    state = _json.dumps({
+        "redirect": redirect,
+        "nonce": secrets.token_urlsafe(8),
+    })
     from app.services.google_service import build_auth_url
 
-    callback = (
-        GOOGLE_REDIRECT_URI
-        + "?" + urlencode({"state": state, "redirect": redirect})
-    )
-    url = build_auth_url(state=state, redirect_uri=callback)
-    return {"url": url, "state": state}
+    url = build_auth_url(state=state, redirect_uri=GOOGLE_REDIRECT_URI)
+    return {"url": url}
 
 
 @router.get("/google/callback")
 def google_callback(
     code: str = Query(...),
     state: str = Query(...),
-    redirect: str = Query("/"),
     db: Session = Depends(get_db_session),
 ) -> RedirectResponse:
     """Google OAuth callback — exchange code, find/create user, redirect."""
     if not GOOGLE_ENABLED:
         raise HTTPException(status_code=503, detail="Google login not configured")
+
+    # Decode redirect destination from state
+    redirect = "/"
+    try:
+        state_data = _json.loads(state)
+        redirect = state_data.get("redirect", "/")
+    except (_json.JSONDecodeError, TypeError):
+        pass
 
     from app.services.google_service import exchange_code
 
