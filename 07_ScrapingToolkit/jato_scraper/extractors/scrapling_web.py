@@ -1214,30 +1214,85 @@ class ScraplingExtractor(BaseExtractor):
     def extract(self) -> list[RawObservation]:
         page = self._fetch()
         if page is None:
+            self._write_audit([], None, error="fetch_failed")
             return []
+
+        attempted: list[dict[str, Any]] = []
+        p = self.profile
+        results: list[RawObservation] = []
+
         # Strategy 1: attribute-embedded JSON (most reliable for React SPAs)
-        if self.profile.attr_json:
+        if p.attr_json:
             results = self._extract_from_attr_json(page)
+            attempted.append({
+                "strategy": "attr_json",
+                "status": "success" if results else "no_match",
+                "observations_count": len(results),
+            })
             if results:
+                self._write_audit(results, "attr_json", attempted=attempted)
                 return results
             log.warning(
                 "Attribute-JSON extraction yielded nothing, "
                 "trying next strategy"
             )
+
         # Strategy 2: ld+json script tags
-        if self.profile.json_script_selector:
+        if p.json_script_selector:
             results = self._extract_from_json(page)
+            attempted.append({
+                "strategy": "json_script_selector",
+                "status": "success" if results else "no_match",
+                "observations_count": len(results),
+            })
             if results:
+                self._write_audit(results, "json_script_selector", attempted=attempted)
                 return results
             log.warning("JSON extraction yielded nothing, falling back to CSS")
+
         # Strategy 3: CSS selectors on visible text
-        if self.profile.css:
-            return self._extract_from_css(page)
+        if p.css:
+            results = self._extract_from_css(page)
+            attempted.append({
+                "strategy": "css_selectors",
+                "status": "success" if results else "no_match",
+                "observations_count": len(results),
+            })
+            self._write_audit(results, "css_selectors" if results else None, attempted=attempted)
+            return results
+
         log.error(
             "No extraction strategy configured for %s",
             self.config.source_code,
         )
+        self._write_audit([], None, attempted=attempted, error="no_strategy_configured")
         return []
+
+    def _write_audit(
+        self,
+        results: list[RawObservation],
+        winning_strategy: str | None,
+        *,
+        attempted: list[dict[str, Any]] | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Emit one extractor audit event per source per run (if run_id is set)."""
+        if not self.run_id:
+            return
+        p = self.profile
+        event = build_audit_event(
+            run_id=self.run_id,
+            source_code=self.config.source_code,
+            brand=self.config.brand,
+            country=self.config.country,
+            url=p.url,
+            attempted_strategies=attempted or [],
+            winning_strategy=winning_strategy,
+            observations=results,
+            tier=p.tier or "http",
+            error=error,
+        )
+        write_audit_event(event)
 
     def _fetch(self) -> Any | None:
         p = self.profile

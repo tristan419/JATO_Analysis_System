@@ -10,6 +10,7 @@ import re
 import requests
 from pypdf import PdfReader
 
+from jato_scraper.audit import build_audit_event, write_audit_event
 from jato_scraper.base import BaseExtractor, ExtractorConfig, RawObservation
 
 log = logging.getLogger(__name__)
@@ -88,6 +89,7 @@ class PdfTextExtractor(BaseExtractor):
     def extract(self) -> list[RawObservation]:
         text = self._extract_text()
         if not text:
+            self._write_audit([], None, error="pdf_text_extraction_failed")
             return []
         results: list[RawObservation] = []
         seen: set[tuple[str, str, float]] = set()
@@ -105,7 +107,37 @@ class PdfTextExtractor(BaseExtractor):
                     continue
                 seen.add(dedupe_key)
                 results.append(observation)
+        self._write_audit(results, "pdf_text" if results else None)
         return results
+
+    def _write_audit(
+        self,
+        results: list[RawObservation],
+        winning_strategy: str | None,
+        *,
+        error: str | None = None,
+    ) -> None:
+        if not self.run_id:
+            return
+        p = self.profile
+        attempted = [{
+            "strategy": "pdf_text",
+            "status": "success" if results else ("error" if error else "no_match"),
+            "observations_count": len(results),
+        }]
+        event = build_audit_event(
+            run_id=self.run_id,
+            source_code=self.config.source_code,
+            brand=self.config.brand,
+            country=self.config.country,
+            url=p.url,
+            attempted_strategies=attempted,
+            winning_strategy=winning_strategy,
+            observations=results,
+            tier="http",
+            error=error,
+        )
+        write_audit_event(event)
 
     def _fetch_pdf_bytes(self) -> bytes | None:
         try:

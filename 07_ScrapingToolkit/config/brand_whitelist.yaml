@@ -1,0 +1,71 @@
+# Brand whitelist rollout configuration for MSRP extraction.
+#
+# Controls which brands get JSON-LD extraction enabled and in which wave.
+# Per the April 12 MSRP SUV Top30 Plan §5.2 (Brand Feasibility Matrix):
+#   - 12 brands verified via schema.org ld+json -> wave_alpha + wave_beta
+#   - 8 brands are ld+json dead ends -> wave_gamma (manual/CSS only)
+#   - VW Group brands use playwright_card_flow -> separate path
+#
+# Usage:
+#   The ScraplingExtractor reads this config to decide whether to attempt
+#   json_script_selector for a given brand. If a brand is not in any wave,
+#   it defaults to CSS-only extraction.
+
+rollout:
+  mode: brand_whitelist
+  description: >
+    Wave-based rollout of JSON-LD extraction. Brands in alpha/beta have
+    json_script_selector configured. Brands in gamma need manual CSS
+    or PDF fallback. VW Group brands use playwright_card_flow extractor.
+
+  # Wave Alpha — highest confidence (tested April 2026 dry-run, 70%+ pass rate)
+  wave_alpha:
+    - TOYOTA
+    - DACIA
+    - SKODA
+    - VOLVO
+    - FORD
+
+  # Wave Beta — confirmed ld+json present, lower coverage in initial tests
+  wave_beta:
+    - MERCEDES
+    - HYUNDAI
+    - KIA
+    - PEUGEOT
+    - NISSAN
+    - OPEL
+    - RENAULT
+
+  # Wave Gamma — ld+json dead ends (need CSS or PDF fallback)
+  wave_gamma:
+    - VOLKSWAGEN    # Uses playwright_card_flow, not scrapling
+    - BMW           # ld+json present but irregular schema
+    - AUDI          # ld+json present but uses different structure
+    - CUPRA         # Limited ld+json
+    - SEAT          # Limited ld+json
+    - PORSCHE       # Limited ld+json
+
+# Extraction priority chain (applied inside ScraplingExtractor)
+strategy_chain:
+  - attr_json               # HTML attribute-embedded JSON (React SPAs)
+  - json_script_selector    # schema.org ld+json script tags
+  - css_selectors           # Visible DOM text with CSS selectors
+  - pdf_fallback            # PDF price list (not yet integrated into ScraplingExtractor)
+
+# Audit logging
+audit:
+  enabled: true
+  output_dir: artifacts/extractor_audit
+  format: jsonl  # One JSON object per line per source per run
+
+# Smoke test configuration
+smoke_test:
+  country: SE
+  brands_per_country: 1  # One source per brand for fast smoke testing
+  required_pass_rate: 0.85
+  assertions:
+    - json_script_selector in attempted_strategies
+    - winning_strategy is json_script_selector (when ld+json present)
+    - observations_count >= 1
+    - coverage_level in [L2_ENTRY_OR_RANGE_PRICE, L3_FULL_TRIM_PRICE]
+    - every source produces audit log entry

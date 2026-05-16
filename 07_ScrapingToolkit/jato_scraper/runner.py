@@ -276,12 +276,14 @@ def run_scrape(
     user_name: str | None = None,
 ) -> dict[str, Any]:
     resolved_codes = _resolve_source_codes(source_codes)
-    summary: dict[str, Any] = {"sources": {}, "ok": True}
+    run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    summary: dict[str, Any] = {"sources": {}, "ok": True, "run_id": run_id}
     for code in resolved_codes:
         log.info("── Scraping %s ──", code)
         source_result: dict[str, Any] = {"status": "error"}
         try:
             extractor = registry.get(code)
+            extractor.run_id = run_id
         except KeyError as exc:
             log.error("%s", exc)
             source_result["error"] = str(exc)

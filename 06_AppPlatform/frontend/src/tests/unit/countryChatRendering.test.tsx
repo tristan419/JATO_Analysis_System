@@ -167,8 +167,8 @@ describe("CountryChatPendingMessage", () => {
     );
 
     expect(markup).toContain("copilot-loading is-compact");
-    expect(markup).toContain("正在做车型胜因分析");
-    expect(markup).toContain("1. 锁定车型与细分页 scope");
-    expect(markup).toContain("2. 读取 Market Scan 排名与份额");
+    expect(markup).toContain("准备数据中");
+    expect(markup).toContain("翻阅销量档案中...");
+    expect(markup).toContain("copilot-loading-step");
   });
 });

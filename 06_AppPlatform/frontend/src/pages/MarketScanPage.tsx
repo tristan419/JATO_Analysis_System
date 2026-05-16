@@ -2341,7 +2341,13 @@ function DrilldownSection({
   );
 }
 
-export function MarketScanPage() {
+export function MarketScanPage({
+  initialActivePage,
+  initialDrilldownSegment,
+}: {
+  initialActivePage?: MarketScanPageKey;
+  initialDrilldownSegment?: string;
+} = {}) {
   const [searchParams, setSearchParams] = useSearchParams();
   const marketScanLabelModeOptions = useMemo(
     () => buildExportLabelModeOptions({ showValue: true, showSeries: false }),
@@ -2367,6 +2373,7 @@ export function MarketScanPage() {
   const [heroCollapsed, setHeroCollapsed] = useState(false);
   const [activePage, setActivePage] = useState<MarketScanPageKey>(
     () => {
+      if (initialActivePage) return initialActivePage;
       const requestedPage = searchParams.get("activePage");
       return isMarketScanPageKey(requestedPage) ? requestedPage : "overview";
     },
@@ -2393,7 +2400,7 @@ export function MarketScanPage() {
     },
   );
   const [selectedDrilldownSegment, setSelectedDrilldownSegment] = useState(
-    () => searchParams.get("drilldownSegment") || "SUV A0",
+    () => initialDrilldownSegment || searchParams.get("drilldownSegment") || "SUV A0",
   );
   const [rankingLimit, setRankingLimit] = useState(
     () => {

@@ -21,6 +21,10 @@ def test_load_msrp_batch_config_reads_batch_a_country_packs() -> None:
         "HR",
         "AT",
         "CZ",
+        "DE",
+        "FR",
+        "IT",
+        "PL",
     ]
     assert batch.countries[0].country_label == "Sweden / 瑞典"
     assert len(batch.countries[0].source_refs) == 1

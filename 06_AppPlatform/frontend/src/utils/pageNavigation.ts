@@ -164,7 +164,7 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
   {
     id: "dashboard",
     label: "Dashboard",
-    sublabel: "仪表盘",
+    sublabel: "JATO看板",
     type: "link",
     to: "/dashboard",
   },
