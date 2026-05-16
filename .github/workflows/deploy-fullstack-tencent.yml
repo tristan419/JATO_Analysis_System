@@ -188,6 +188,9 @@ jobs:
 
           REPO_DIR="/opt/JATO_Analysis_System-main"
           ENV_FILE="/etc/jato-fullstack/backend.env"
+          LOCAL_NO_PROXY_HOSTS="localhost,127.0.0.1,::1"
+          export no_proxy="${no_proxy:+$no_proxy,}$LOCAL_NO_PROXY_HOSTS"
+          export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$LOCAL_NO_PROXY_HOSTS"
 
           sudo mkdir -p "$REPO_DIR"
           sudo chown -R "$USER":"$USER" "$REPO_DIR"
@@ -218,12 +221,14 @@ jobs:
           export VITE_API_BASE="/v1"
           export VITE_USER_ROLE="viewer"
           export VITE_USER_NAME="github-actions"
+          set +e
           bash 03_Scripts/deploy_fullstack_server.sh 2>&1
           DEPLOY_RC=$?
+          set -e
 
           FRONTEND_ROOT="$REPO_DIR/06_AppPlatform/frontend/dist"
 
-          if [ -n "$DEPLOY_SERVER_NAME" ] && [ "$DEPLOY_SERVER_NAME" != "_" ]; then
+          if [ "$DEPLOY_RC" -eq 0 ] && [ -n "$DEPLOY_SERVER_NAME" ] && [ "$DEPLOY_SERVER_NAME" != "_" ]; then
             if [ "${DEPLOY_ENABLE_HTTPS,,}" = "true" ]; then
               sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
                 CERTBOT_EMAIL="$DEPLOY_CERTBOT_EMAIL" CERTBOT_RENEW_DRY_RUN=false \
@@ -241,20 +246,24 @@ jobs:
           fi
 
           DIST="$REPO_DIR/06_AppPlatform/frontend/dist"
+          mkdir -p "$DIST"
           {
             echo "deploy_exit_code=$DEPLOY_RC"
             echo "timestamp=$(date -u)"
             echo "---systemctl---"
             sudo -n systemctl status jato-fullstack-backend@8000 --no-pager 2>&1 || true
             echo "---healthz---"
-            curl -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
+            curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
             echo "---nginx---"
             sudo -n systemctl status nginx --no-pager 2>&1 | head -5 || true
             echo "---index.html---"
             head -1 "$DIST/index.html" 2>&1 || echo "INDEX_MISSING"
           } > "$DIST/_deploy_status.txt" 2>&1
 
-          curl -fsS http://127.0.0.1:8000/healthz >/dev/null
+          if [ "$DEPLOY_RC" -ne 0 ]; then
+            exit "$DEPLOY_RC"
+          fi
+          curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz >/dev/null
           EOF
 
       - name: Deploy on server via SSH
@@ -300,6 +309,9 @@ jobs:
 
           REPO_DIR="/opt/JATO_Analysis_System-main"
           ENV_FILE="/etc/jato-fullstack/backend.env"
+          LOCAL_NO_PROXY_HOSTS="localhost,127.0.0.1,::1"
+          export no_proxy="${no_proxy:+$no_proxy,}$LOCAL_NO_PROXY_HOSTS"
+          export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$LOCAL_NO_PROXY_HOSTS"
 
           sudo mkdir -p "$REPO_DIR"
           sudo chown -R "$USER":"$USER" "$REPO_DIR"
@@ -330,12 +342,14 @@ jobs:
           export VITE_API_BASE="/v1"
           export VITE_USER_ROLE="viewer"
           export VITE_USER_NAME="github-actions"
+          set +e
           bash 03_Scripts/deploy_fullstack_server.sh 2>&1
           DEPLOY_RC=$?
+          set -e
 
           FRONTEND_ROOT="$REPO_DIR/06_AppPlatform/frontend/dist"
 
-          if [ -n "$DEPLOY_SERVER_NAME" ] && [ "$DEPLOY_SERVER_NAME" != "_" ]; then
+          if [ "$DEPLOY_RC" -eq 0 ] && [ -n "$DEPLOY_SERVER_NAME" ] && [ "$DEPLOY_SERVER_NAME" != "_" ]; then
             if [ "${DEPLOY_ENABLE_HTTPS,,}" = "true" ]; then
               sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
                 CERTBOT_EMAIL="$DEPLOY_CERTBOT_EMAIL" CERTBOT_RENEW_DRY_RUN=false \
@@ -353,18 +367,22 @@ jobs:
           fi
 
           DIST="$REPO_DIR/06_AppPlatform/frontend/dist"
+          mkdir -p "$DIST"
           {
             echo "deploy_exit_code=$DEPLOY_RC"
             echo "timestamp=$(date -u)"
             echo "---systemctl---"
             sudo -n systemctl status jato-fullstack-backend@8000 --no-pager 2>&1 || true
             echo "---healthz---"
-            curl -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
+            curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
             echo "---nginx---"
             sudo -n systemctl status nginx --no-pager 2>&1 | head -5 || true
             echo "---index.html---"
             head -1 "$DIST/index.html" 2>&1 || echo "INDEX_MISSING"
           } > "$DIST/_deploy_status.txt" 2>&1
 
-          curl -fsS http://127.0.0.1:8000/healthz >/dev/null
+          if [ "$DEPLOY_RC" -ne 0 ]; then
+            exit "$DEPLOY_RC"
+          fi
+          curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz >/dev/null
           EOF

@@ -84,6 +84,9 @@ else
   echo "[WARN] backend env file missing: $BACKEND_ENV_FILE"
 fi
 
+section "proxy env"
+run_shell "env | grep -E '^(http_proxy|https_proxy|HTTP_PROXY|HTTPS_PROXY|no_proxy|NO_PROXY)=' | sed -E 's#(https?://)[^/@]+@#\\1***@#' || true"
+
 section "frontend dist"
 if [[ -d "$FRONTEND_DIST_DIR" ]]; then
   run_shell "ls -lah '$FRONTEND_DIST_DIR' | sed -n '1,20p'"
@@ -112,8 +115,8 @@ else
 fi
 
 section "health checks"
-run_shell "curl -i --max-time 10 'http://127.0.0.1:${BACKEND_PORT}/healthz'"
-run_shell "curl -i --max-time 10 'http://127.0.0.1/healthz'"
+run_shell "curl --noproxy '*' -i --max-time 10 'http://127.0.0.1:${BACKEND_PORT}/healthz'"
+run_shell "curl --noproxy '*' -i --max-time 10 'http://127.0.0.1/healthz'"
 
 section "ports"
 run_shell "ss -ltnp | grep -E '(:80|:${BACKEND_PORT})\\b' || true"

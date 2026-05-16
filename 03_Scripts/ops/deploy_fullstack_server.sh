@@ -24,6 +24,9 @@ VITE_USER_NAME="${VITE_USER_NAME:-anonymous}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://mirrors.cloud.tencent.com/npm/}"
 PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
+LOCAL_NO_PROXY_HOSTS="localhost,127.0.0.1,::1"
+export no_proxy="${no_proxy:+$no_proxy,}$LOCAL_NO_PROXY_HOSTS"
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$LOCAL_NO_PROXY_HOSTS"
 
 resolve_repo_dir() {
   if [[ -n "${REPO_DIR:-}" ]]; then
@@ -364,9 +367,13 @@ echo "[INFO] Install Playwright browsers (headless chromium)"
 CURRENT_STEP="Install Playwright browsers"
 log_section "$CURRENT_STEP"
 if "$VENV_DIR/bin/python" -c "import playwright" 2>/dev/null; then
-  export http_proxy="${http_proxy:-http://127.0.0.1:7897}"
-  export https_proxy="${https_proxy:-http://127.0.0.1:7897}"
-  "$VENV_DIR/bin/playwright" install chromium 2>&1 || echo "[WARN] playwright install chromium failed — MSRP scraper may not work"
+  (
+    export http_proxy="${http_proxy:-http://127.0.0.1:7897}"
+    export https_proxy="${https_proxy:-http://127.0.0.1:7897}"
+    export no_proxy="${no_proxy:-$LOCAL_NO_PROXY_HOSTS}"
+    export NO_PROXY="${NO_PROXY:-$LOCAL_NO_PROXY_HOSTS}"
+    "$VENV_DIR/bin/playwright" install chromium 2>&1
+  ) || echo "[WARN] playwright install chromium failed — MSRP scraper may not work"
   # Also cache for root (systemd services run as root)
   if [[ -d "$HOME/.cache/ms-playwright" ]]; then
     sudo -n mkdir -p /root/.cache/ms-playwright
@@ -445,7 +452,7 @@ echo "[INFO] Verify backend health"
 CURRENT_STEP="Verify backend health"
 log_section "$CURRENT_STEP"
 for i in $(seq 1 15); do
-  if curl -fsS "http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null 2>&1; then
+  if curl --noproxy '*' -fsS "http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null 2>&1; then
     echo "[INFO] Health check passed on attempt $i"
     break
   fi
