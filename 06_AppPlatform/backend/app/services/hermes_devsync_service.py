@@ -398,23 +398,45 @@ def _kanban_registry_path() -> Path:
     return _root() / "hermes" / "feature_registry.yaml"
 
 
+def _is_git_commit_title(name: str) -> bool:
+    """Return True if the name looks like a git commit message."""
+    if not name:
+        return True
+    return name.startswith("fix:") or name.startswith("feat:") or name.startswith("hermes:") or name.startswith("trigger:") or len(name) > 60
+
+
 def _sync_to_kanban(feature_ids: list[str]) -> int:
-    """Upsert DevSync features into the kanban feature_registry.yaml."""
+    """Upsert DevSync features into the kanban feature_registry.yaml.
+
+    Rules:
+    - One featureId = one kanban entry (deduplication)
+    - Original kanban names are preserved (never overwritten with git commit titles)
+    - New features get a clean name derived from the DevSync featureId
+    - Status/implementationStatus updated from DevSync data
+    """
     import yaml
 
-    # Load all DevSync features
     dev_features = {f["featureId"]: f for f in list_features()}
-    if not dev_features:
-        return 0
 
-    # Load kanban registry
     kp = _kanban_registry_path()
     kanban_data: dict[str, Any] = {}
     if kp.is_file():
         kanban_data = yaml.safe_load(kp.read_text()) or {}
     kanban_features: list[dict] = kanban_data.get("features", [])
 
-    # Build index of existing kanban features
+    # Deduplicate existing kanban entries by featureId (keep first)
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for kf in kanban_features:
+        fid = kf.get("featureId", "")
+        if fid and fid in seen:
+            continue  # skip duplicate
+        if fid:
+            seen.add(fid)
+        deduped.append(kf)
+    kanban_features = deduped
+
+    # Build index
     kanban_index: dict[str, int] = {}
     for i, kf in enumerate(kanban_features):
         fid = kf.get("featureId", "")
@@ -422,24 +444,20 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
             kanban_index[fid] = i
 
     count = 0
-    for fid in feature_ids:
+    for fid in set(feature_ids):  # deduplicate input
         df = dev_features.get(fid)
         if not df:
             continue
 
-        # Map DevSync status to kanban fields
         ds_status = df.get("status", "implemented")
         kanban_status = "active"
         impl_status = "implemented"
         if ds_status in ("planned", "idea"):
-            kanban_status = "planned"
-            impl_status = "planned"
-        elif ds_status in ("in_progress",):
-            kanban_status = "beta"
-            impl_status = "partial"
+            kanban_status = "planned"; impl_status = "planned"
+        elif ds_status == "in_progress":
+            kanban_status = "beta"; impl_status = "partial"
         elif ds_status in ("blocked", "deprecated"):
-            kanban_status = "archived"
-            impl_status = "partial"
+            kanban_status = "archived"; impl_status = "partial"
 
         risk = "low"
         if df.get("gaps"):
@@ -447,9 +465,27 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
         if any("missing_tests" in g for g in (df.get("gaps") or [])):
             risk = "medium"
 
+        # Determine a clean name
+        dv_title = df.get("title", "")
+        if fid in kanban_index:
+            existing_name = kanban_features[kanban_index[fid]].get("name", "")
+            # Keep existing name if it's good; only replace if empty or looks like commit msg
+            if existing_name and not _is_git_commit_title(existing_name):
+                clean_name = existing_name
+            elif dv_title and not _is_git_commit_title(dv_title):
+                clean_name = dv_title
+            else:
+                clean_name = existing_name or fid.replace("-", " ").title()
+        else:
+            # New feature: use DevSync title if clean, otherwise derive from featureId
+            if dv_title and not _is_git_commit_title(dv_title):
+                clean_name = dv_title
+            else:
+                clean_name = fid.replace("-", " ").title()
+
         kanban_entry = {
             "featureId": fid,
-            "name": df.get("title", fid),
+            "name": clean_name,
             "status": kanban_status,
             "implementationStatus": impl_status,
             "riskLevel": risk,
@@ -469,14 +505,16 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
 
         if fid in kanban_index:
             existing = kanban_features[kanban_index[fid]]
-            # Merge — preserve existing fields not overwritten by DevSync
-            merged = {**kanban_entry, "routes": existing.get("routes", []),
-                      "scheduledJobs": existing.get("scheduledJobs", []),
-                      "dataSources": existing.get("dataSources", []),
-                      "artifacts": existing.get("artifacts", []),
-                      "dependencies": existing.get("dependencies", []),
-                      "owner": existing.get("owner", ""),
-                      "name": existing.get("name") or kanban_entry["name"]}
+            merged = {
+                **kanban_entry,
+                "name": clean_name,
+                "routes": existing.get("routes", []),
+                "scheduledJobs": existing.get("scheduledJobs", []),
+                "dataSources": existing.get("dataSources", []),
+                "artifacts": existing.get("artifacts", []),
+                "dependencies": existing.get("dependencies", []),
+                "owner": existing.get("owner", ""),
+            }
             kanban_features[kanban_index[fid]] = merged
         else:
             kanban_features.append(kanban_entry)
