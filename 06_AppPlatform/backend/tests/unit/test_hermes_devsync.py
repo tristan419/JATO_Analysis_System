@@ -64,6 +64,75 @@ class TestFeatures:
         assert len(list_features(status="done")) == 1
         assert len(list_features(category="fe")) == 1
 
+    def test_list_cleans_duplicate_event_titles(self, tmp_path):
+        from app.services.hermes_devsync_service import list_features
+        p = tmp_path / "hermes" / "registry" / "features.yaml"
+        p.write_text(
+            "features:\n"
+            "- featureId: backend\n"
+            "  title: 'feat: UI animation toolkit + Presence Phase 1'\n"
+            "  status: implemented\n"
+            "- featureId: frontend\n"
+            "  title: 'feat: UI animation toolkit + Presence Phase 1'\n"
+            "  status: implemented\n"
+            "- featureId: presence-websocket\n"
+            "  title: 'feat: UI animation toolkit + Presence Phase 1'\n"
+            "  status: implemented\n"
+        )
+
+        titles = [f["title"] for f in list_features()]
+        assert titles == ["Backend", "Frontend", "Presence WebSocket"]
+
+    def test_upsert_cleans_commit_style_title(self, tmp_path):
+        from app.services.hermes_devsync_service import upsert_feature, list_features
+        upsert_feature({
+            "featureId": "hermes-devsync",
+            "title": "fix: add write permissions and pull-before-push",
+            "status": "implemented",
+        })
+        assert list_features()[0]["title"] == "Hermes DevSync"
+
+    def test_list_merges_canonical_feature_ids(self, tmp_path):
+        from app.services.hermes_devsync_service import list_features
+        p = tmp_path / "hermes" / "registry" / "features.yaml"
+        p.write_text(
+            "features:\n"
+            "- featureId: feature.presence_websocket\n"
+            "  title: Presence WebSocket\n"
+            "  linkedEventIds: [manual]\n"
+            "  endpoints: []\n"
+            "- featureId: presence-websocket\n"
+            "  title: Presence WebSocket\n"
+            "  linkedEventIds: [git]\n"
+            "  endpoints: [GET /online]\n"
+        )
+
+        features = list_features()
+        assert len(features) == 1
+        assert features[0]["featureId"] == "feature.presence_websocket"
+        assert features[0]["linkedEventIds"] == ["manual", "git"]
+        assert features[0]["endpoints"] == ["GET /online"]
+
+    def test_upsert_matches_canonical_feature_ids(self, tmp_path):
+        from app.services.hermes_devsync_service import list_features, upsert_feature
+        upsert_feature({
+            "featureId": "feature.presence_websocket",
+            "title": "Presence WebSocket",
+            "linkedEventIds": ["manual"],
+        })
+        upserted = upsert_feature({
+            "featureId": "presence-websocket",
+            "title": "feat: presence websocket polish",
+            "linkedEventIds": ["git"],
+            "endpoints": ["GET /online"],
+        })
+
+        features = list_features()
+        assert len(features) == 1
+        assert upserted["featureId"] == "feature.presence_websocket"
+        assert upserted["title"] == "Presence WebSocket"
+        assert features[0]["linkedEventIds"] == ["manual", "git"]
+
 
 class TestGaps:
     def test_missing_docs_gap(self, tmp_path):

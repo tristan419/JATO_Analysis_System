@@ -98,14 +98,125 @@ def _load_features() -> list[dict[str, Any]]:
         return []
     import yaml
     data = yaml.safe_load(p.read_text())
-    return data.get("features", []) if data else []
+    features = data.get("features", []) if data else []
+    return _normalize_feature_records(features)
 
 
 def _save_features(features: list[dict[str, Any]]) -> None:
     p = _features_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     import yaml
+    features = _normalize_feature_records(features)
     p.write_text(yaml.safe_dump({"features": features}, allow_unicode=True, sort_keys=False))
+
+
+_FEATURE_TITLE_WORDS = {
+    "api": "API",
+    "apis": "APIs",
+    "auth": "Auth",
+    "backend": "Backend",
+    "chat": "Chat",
+    "command": "Command",
+    "dev": "Dev",
+    "devsync": "DevSync",
+    "frontend": "Frontend",
+    "gateway": "Gateway",
+    "hermes": "Hermes",
+    "scraping": "Scraping",
+    "sentinel": "Sentinel",
+    "sync": "Sync",
+    "toolkit": "Toolkit",
+    "ui": "UI",
+    "websocket": "WebSocket",
+    "workspace": "Workspace",
+}
+
+
+def _feature_title_from_id(feature_id: str) -> str:
+    clean_id = _canonical_feature_id(feature_id)
+    parts = [p for p in re.split(r"[-_.]+", clean_id) if p]
+    if not parts:
+        return str(feature_id or "").strip()
+
+    words: list[str] = []
+    for part in parts:
+        lower = part.lower()
+        words.append(_FEATURE_TITLE_WORDS.get(lower, part.capitalize()))
+    return " ".join(words)
+
+
+def _canonical_feature_id(feature_id: str) -> str:
+    clean_id = re.sub(r"^feature[._-]", "", str(feature_id or "").strip())
+    return re.sub(r"[-_.]+", "-", clean_id).strip("-")
+
+
+def _feature_ids_match(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    return _canonical_feature_id(left) == _canonical_feature_id(right)
+
+
+def _merge_feature_records(
+    base: dict[str, Any],
+    incoming: dict[str, Any],
+) -> dict[str, Any]:
+    merged = {**base, **incoming}
+    for key in (
+        "linkedEventIds", "endpoints", "frontend", "backend", "risks",
+        "nextSteps", "docs", "gaps",
+    ):
+        values: list[Any] = []
+        for item in list(base.get(key, []) or []) + list(incoming.get(key, []) or []):
+            if item not in values:
+                values.append(item)
+        if values:
+            merged[key] = values
+    if base.get("tests") or incoming.get("tests"):
+        merged["tests"] = {**(base.get("tests") or {}), **(incoming.get("tests") or {})}
+    if base.get("featureId"):
+        merged["featureId"] = base["featureId"]
+    if base.get("title"):
+        merged["title"] = base["title"]
+    return merged
+
+
+def _normalize_feature_records(
+    features: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    title_counts: dict[str, int] = {}
+    for feature in features:
+        title = str(feature.get("title") or "").strip()
+        if title:
+            title_counts[title] = title_counts.get(title, 0) + 1
+
+    seen: dict[str, int] = {}
+    normalized: list[dict[str, Any]] = []
+    for feature in features:
+        record = dict(feature)
+        fid = str(record.get("featureId") or "").strip()
+        title = str(record.get("title") or "").strip()
+        if fid and (
+            not title or title_counts.get(title, 0) > 1 or _is_git_commit_title(title)
+        ):
+            record["title"] = _feature_title_from_id(fid)
+
+        if not fid:
+            normalized.append(record)
+            continue
+
+        lookup_id = _canonical_feature_id(fid)
+        existing_idx = seen.get(lookup_id)
+        if existing_idx is None:
+            seen[lookup_id] = len(normalized)
+            normalized.append(record)
+        else:
+            normalized[existing_idx] = _merge_feature_records(
+                normalized[existing_idx],
+                record,
+            )
+    return normalized
 
 
 def list_features(
@@ -122,27 +233,27 @@ def list_features(
 
 def get_feature(feature_id: str) -> dict[str, Any] | None:
     for f in _load_features():
-        if f.get("featureId") == feature_id:
+        if _feature_ids_match(str(f.get("featureId") or ""), feature_id):
             return f
     return None
 
 
 def upsert_feature(feature_data: dict[str, Any]) -> dict[str, Any]:
     features = _load_features()
-    fid = feature_data.get("featureId", "")
+    fid = str(feature_data.get("featureId", ""))
     now = datetime.now(timezone.utc).isoformat()
     for i, f in enumerate(features):
-        if f.get("featureId") == fid:
-            merged = {**f, **feature_data}
+        if _feature_ids_match(str(f.get("featureId") or ""), fid):
+            merged = _merge_feature_records(f, feature_data)
             merged["lastUpdatedAt"] = now
             features[i] = merged
             _save_features(features)
-            return merged
+            return get_feature(fid) or merged
     feature_data.setdefault("createdAt", now)
     feature_data["lastUpdatedAt"] = now
     features.append(feature_data)
     _save_features(features)
-    return feature_data
+    return get_feature(fid) or _normalize_feature_records([feature_data])[0]
 
 
 # ── Feature ID inference ──────────────────────────────────────────────
@@ -416,7 +527,11 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
     """
     import yaml
 
-    dev_features = {f["featureId"]: f for f in list_features()}
+    dev_features = {
+        _canonical_feature_id(str(f["featureId"])): f
+        for f in list_features()
+        if f.get("featureId")
+    }
 
     kp = _kanban_registry_path()
     kanban_data: dict[str, Any] = {}
@@ -424,30 +539,37 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
         kanban_data = yaml.safe_load(kp.read_text()) or {}
     kanban_features: list[dict] = kanban_data.get("features", [])
 
-    # Deduplicate existing kanban entries by featureId (keep first)
+    # Deduplicate existing kanban entries by canonical featureId (keep first)
     seen: set[str] = set()
     deduped: list[dict] = []
     for kf in kanban_features:
-        fid = kf.get("featureId", "")
-        if fid and fid in seen:
+        fid = str(kf.get("featureId", ""))
+        lookup_id = _canonical_feature_id(fid)
+        if lookup_id and lookup_id in seen:
             continue  # skip duplicate
-        if fid:
-            seen.add(fid)
+        if lookup_id:
+            seen.add(lookup_id)
         deduped.append(kf)
     kanban_features = deduped
 
     # Build index
     kanban_index: dict[str, int] = {}
     for i, kf in enumerate(kanban_features):
-        fid = kf.get("featureId", "")
-        if fid:
-            kanban_index[fid] = i
+        fid = str(kf.get("featureId", ""))
+        lookup_id = _canonical_feature_id(fid)
+        if lookup_id:
+            kanban_index[lookup_id] = i
 
     count = 0
     for fid in set(feature_ids):  # deduplicate input
-        df = dev_features.get(fid)
+        lookup_id = _canonical_feature_id(str(fid))
+        df = dev_features.get(lookup_id)
         if not df:
             continue
+        entry_feature_id = str(df.get("featureId") or fid)
+        existing_idx = kanban_index.get(lookup_id)
+        if existing_idx is not None:
+            entry_feature_id = str(kanban_features[existing_idx].get("featureId") or entry_feature_id)
 
         ds_status = df.get("status", "implemented")
         kanban_status = "active"
@@ -467,8 +589,8 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
 
         # Determine a clean name
         dv_title = df.get("title", "")
-        if fid in kanban_index:
-            existing_name = kanban_features[kanban_index[fid]].get("name", "")
+        if existing_idx is not None:
+            existing_name = kanban_features[existing_idx].get("name", "")
             # Keep existing name if it's good; only replace if empty or looks like commit msg
             if existing_name and not _is_git_commit_title(existing_name):
                 clean_name = existing_name
@@ -484,7 +606,7 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
                 clean_name = fid.replace("-", " ").title()
 
         kanban_entry = {
-            "featureId": fid,
+            "featureId": entry_feature_id,
             "name": clean_name,
             "status": kanban_status,
             "implementationStatus": impl_status,
@@ -503,8 +625,8 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
             "lastAuditAt": df.get("lastUpdatedAt", ""),
         }
 
-        if fid in kanban_index:
-            existing = kanban_features[kanban_index[fid]]
+        if existing_idx is not None:
+            existing = kanban_features[existing_idx]
             merged = {
                 **kanban_entry,
                 "name": clean_name,
@@ -515,7 +637,7 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
                 "dependencies": existing.get("dependencies", []),
                 "owner": existing.get("owner", ""),
             }
-            kanban_features[kanban_index[fid]] = merged
+            kanban_features[existing_idx] = merged
         else:
             kanban_features.append(kanban_entry)
         count += 1
