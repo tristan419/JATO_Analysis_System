@@ -4,7 +4,7 @@ brand: KIA
 source_url: https://www.kia.com/se/nya-bilar/ev6/upptack/
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: playwright
+extractor_type: scrapling
 profile:
   url: https://www.kia.com/se/nya-bilar/ev6/upptack/
   headless: true
@@ -72,6 +72,14 @@ profile:
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
   json_script_selector: script[type='application/ld+json']
+  css:
+    vehicle_container: body
+    model: h2, h3
+    trim: h3
+    price: '[class*="price"]'
+  tier: stealth
+  network_idle: true
+  impersonate: chrome
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -79,10 +87,10 @@ schedule:
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (SE market). CSS
   selectors still require browser-based inspection before promotion. [Switched to
-  playwright_card_flow with kia_trim_overview_playwright.yaml]
+  playwright_card_flow with kia_trim_overview_playwright.yaml] [Reverted to scrapling
+  — playwright preset needs per-brand tuning]
 bootstrap_meta:
   country_model_rank: 25
   suggested_scope_kind: single_model
   sales_12m: 2063.0
   model: EV6
-profile_preset: ../_shared/presets/kia_trim_overview_playwright.yaml

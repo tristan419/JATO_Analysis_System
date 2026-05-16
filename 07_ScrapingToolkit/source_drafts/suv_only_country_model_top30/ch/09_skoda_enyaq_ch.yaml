@@ -4,7 +4,7 @@ brand: SKODA
 source_url: https://www.skoda.ch/models/enyaq/enyaq
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: playwright
+extractor_type: scrapling
 profile:
   url: https://www.skoda.ch/models/enyaq/enyaq
   headless: true
@@ -72,6 +72,14 @@ profile:
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
   json_script_selector: script[type="application/json"]
+  css:
+    vehicle_container: body
+    model: h2, h3
+    trim: h3
+    price: '[class*="price"]'
+  tier: stealth
+  network_idle: true
+  impersonate: chrome
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -80,9 +88,9 @@ schedule:
 notes: Keywords filled from official manufacturer website research (CH market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
   applied from brand probe] [Switched to playwright_card_flow with skoda_trim_overview_playwright.yaml]
+  [Reverted to scrapling — playwright preset needs per-brand tuning]
 bootstrap_meta:
   country_model_rank: 9
   suggested_scope_kind: single_model
   sales_12m: 2785.0
   model: ENYAQ
-profile_preset: ../_shared/presets/skoda_trim_overview_playwright.yaml
