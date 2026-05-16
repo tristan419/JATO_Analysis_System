@@ -76,6 +76,7 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
+  json_script_selector: script[type='application/ld+json']
   css:
     vehicle_container: body
     model: h2, h3

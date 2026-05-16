@@ -1,7 +1,7 @@
 """Add role_upgrade_requests table.
 
-Revision ID: 20260516_0016
-Revises: 20260515_0015
+Revision ID: 20260516_0017
+Revises: 20260516_0016
 Create Date: 2026-05-16
 """
 
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 
-revision = "20260516_0016"
-down_revision = "20260515_0015"
+revision = "20260516_0017"
+down_revision = "20260516_0016"
 branch_labels = None
 depends_on = None
 

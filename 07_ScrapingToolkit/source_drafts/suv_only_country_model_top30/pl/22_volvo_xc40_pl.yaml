@@ -11,6 +11,7 @@ profile:
   headless: true
   network_idle: true
   impersonate: chrome
+  json_script_selector: script[type='application/ld+json']
   css:
     vehicle_container: body
     model: h1
