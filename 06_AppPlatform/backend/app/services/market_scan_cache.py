@@ -1,0 +1,58 @@
+"""Redis-backed cache for MarketScan deck responses."""
+from __future__ import annotations
+import hashlib, json, logging, time
+from typing import Any
+from redis import Redis
+from redis.exceptions import ResponseError
+from app.core.config import MARKET_SCAN_CACHE_SCHEMA_VERSION, MARKET_SCAN_CACHE_TTL_SECONDS
+logger = logging.getLogger(__name__)
+_SCHEMA = MARKET_SCAN_CACHE_SCHEMA_VERSION
+_TTL = MARKET_SCAN_CACHE_TTL_SECONDS
+_LOCK_TTL = 30
+_RETRY_DELAY = 0.2
+_MAX_RETRIES = 3
+
+def build_deck_cache_key(country, period, time_range, fuel_types, ranking_limit, dataset_token):
+    tr = ""
+    if time_range:
+        tr = f"{time_range.get('start','')}:{time_range.get('end','')}"
+    fuels = ",".join(sorted(fuel_types))
+    token = hashlib.sha256(dataset_token.encode()).hexdigest()[:12] if dataset_token else "notoken"
+    return f"ms:deck:v{_SCHEMA}:{country}:{period or 'latest'}:{tr or 'default'}:{fuels}:rl{ranking_limit}:dt{token}"
+
+def get_cached_deck(client, key):
+    try:
+        raw = client.get(key)
+        return json.loads(raw) if raw is not None else None
+    except Exception as exc:
+        logger.warning("Cache read error %s: %s", key, exc)
+        return None
+
+def set_cached_deck(client, key, payload, ttl=None):
+    try:
+        client.setex(key, ttl or _TTL, json.dumps(payload, ensure_ascii=False, default=str))
+        return True
+    except Exception as exc:
+        logger.warning("Cache write error %s: %s", key, exc)
+        return False
+
+def acquire_compute_lock(client, key):
+    try:
+        ok = client.setnx(f"{key}:lock", "1")
+        if ok:
+            client.expire(f"{key}:lock", _LOCK_TTL)
+        return bool(ok)
+    except Exception:
+        return True
+
+def release_compute_lock(client, key):
+    try: client.delete(f"{key}:lock")
+    except Exception: pass
+
+def wait_for_cache(client, key, retries=_MAX_RETRIES, delay=_RETRY_DELAY):
+    for _ in range(retries):
+        time.sleep(delay)
+        c = get_cached_deck(client, key)
+        if c is not None:
+            return c
+    return None

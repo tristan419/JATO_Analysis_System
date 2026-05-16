@@ -1,7 +1,6 @@
 import { ChangeEvent, DragEvent, FormEvent, KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../api/client";
-import { AdminToolsNav } from "../components/AdminToolsNav";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { LoadingSurface } from "../components/LoadingSurface";
 import type {
@@ -1406,7 +1405,6 @@ export function JatoMonthlyUpdatePage() {
           )}
         </div>
       </div>
-      <AdminToolsNav />
     </section>
   );
 }

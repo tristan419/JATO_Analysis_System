@@ -122,7 +122,7 @@ MARKET_SCAN_CACHE_SCHEMA_VERSION = int(
     os.getenv("APP_MARKET_SCAN_CACHE_SCHEMA_VERSION", "2")
 )
 
-AUTH_ENABLED = _parse_bool_env("APP_AUTH_ENABLED", True)
+AUTH_ENABLED = _parse_bool_env("APP_AUTH_ENABLED", False)
 AUTH_TOKEN = os.getenv("APP_AUTH_TOKEN", "change-me")
 
 # Token → role mapping: "token1:admin,token2:editor,token3:viewer"

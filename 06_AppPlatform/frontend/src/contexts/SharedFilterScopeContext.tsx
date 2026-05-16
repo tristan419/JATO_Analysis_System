@@ -90,7 +90,7 @@ export interface SharedFilterScopeValue {
 const SharedFilterScopeContext = createContext<SharedFilterScopeValue | null>(null);
 
 export function shouldSyncDashboardSearchToLocation(pathname: string): boolean {
-  return pathname === "/" || pathname === "/specification";
+  return pathname === "/" || pathname === "/dashboard" || pathname === "/specification";
 }
 
 export function createSharedSelections(
@@ -329,6 +329,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
         const initialSelections = hasSelections(initialFromSearch)
           ? initialFromSearch
           : createSharedSelections({
+              country: topLevelOptions.country ?? [],
               powertrain: getDefaultPowertrainValues(
                 topLevelOptions.powertrain ?? [],
               ),

@@ -1,7 +1,6 @@
 import { ChangeEvent, FormEvent, Fragment, useEffect, useRef, useState } from "react";
 
 import { api } from "../api/client";
-import { AdminToolsNav } from "../components/AdminToolsNav";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { LoopingCountStrip } from "../components/LoopingCountStrip";
@@ -1324,7 +1323,6 @@ export function ReviewCasesPage() {
           )}
         </div>
       )}
-      <AdminToolsNav />
     </section>
   );
 }

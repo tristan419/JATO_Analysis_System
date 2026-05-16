@@ -1,0 +1,2 @@
+{"id": "notif_20260516_070019_0f7129", "severity": "high", "source": "devsync", "title": "Missing Docs", "body": "13 features have no documentation.", "actions": ["View details"], "status": "new", "createdAt": "2026-05-16T07:00:19.581609+00:00"}
+{"id": "notif_20260516_070019_029a7f", "severity": "high", "source": "gaps", "title": "High Gaps", "body": "8 high-severity gaps open.", "actions": ["View details"], "status": "new", "createdAt": "2026-05-16T07:00:19.587478+00:00"}

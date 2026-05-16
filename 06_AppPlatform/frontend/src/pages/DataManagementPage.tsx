@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
-import { AdminToolsNav } from "../components/AdminToolsNav";
 import { HermesAskResponseCard } from "../components/HermesAskResponseCard";
 import { HermesMermaidBlock } from "../components/HermesMermaidBlock";
 import { LoadingSurface } from "../components/LoadingSurface";
@@ -2453,7 +2452,6 @@ export function DataManagementPage() {
               </div>
             )}
           </div>
-          <AdminToolsNav />
         </>
       ) : null}
 

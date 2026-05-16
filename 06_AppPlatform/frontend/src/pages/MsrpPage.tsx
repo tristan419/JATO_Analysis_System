@@ -1,7 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 
 import { api } from "../api/client";
-import { AdminToolsNav } from "../components/AdminToolsNav";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { PriceHistoryTimeline } from "../components/PriceHistoryTimeline";
@@ -820,7 +819,6 @@ export function MsrpPage() {
         </div>
       )}
 
-      <AdminToolsNav />
     </section>
   );
 }

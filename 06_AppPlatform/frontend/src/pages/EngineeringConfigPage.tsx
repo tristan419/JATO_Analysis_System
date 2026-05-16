@@ -1,6 +1,5 @@
 import { useState, useCallback, useEffect, type DragEvent, type ChangeEvent } from "react";
 import { LoadingSurface } from "../components/LoadingSurface";
-import { AdminToolsNav } from "../components/AdminToolsNav";
 import { ConfigComparisonTable } from "../components/ConfigComparisonTable";
 import { ConfigMatrixEditor } from "../components/ConfigMatrixEditor";
 import { ConfigDiffPanel } from "../components/ConfigDiffPanel";
@@ -121,7 +120,6 @@ export function EngineeringConfigPage() {
 
       {!loading && tab === "detail" && selTrim && <div className="card"><div className="card-header">{selTrim.trim.fullTrimName} <button className="btn btn-sm btn-secondary" style={{ marginLeft: 12 }} onClick={() => setTab("trims")}>返回</button></div><div className="card-body">{Object.entries(selTrim.featuresByCategory).map(([cat, fvs]) => <details key={cat} open><summary>{cat} ({fvs.length})</summary><table className="data-table"><thead><tr><th>配置项</th><th>值</th><th>状态</th></tr></thead><tbody>{fvs.map((fv) => <tr key={fv.valueId}><td>{fv.featureName}</td><td>{fv.rawValue || "-"}</td><td><span className={`chip ${AVAIL_CLASSES[fv.availability]}`}>{AVAIL_LABELS[fv.availability]}</span></td></tr>)}</tbody></table></details>)}</div></div>}
 
-      <AdminToolsNav />
     </section>
   );
 }

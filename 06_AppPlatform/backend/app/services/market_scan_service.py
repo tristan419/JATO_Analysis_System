@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
@@ -16,10 +17,45 @@ except ImportError:  # pragma: no cover - optional runtime dependency
 
 from app.db.session import get_engine
 from app.infra import parquet_repository as repo
+from app.infra.redis_client import get_redis_client
+from app.services.market_scan_cache import (
+    acquire_compute_lock,
+    build_deck_cache_key,
+    get_cached_deck,
+    release_compute_lock,
+    set_cached_deck,
+    wait_for_cache,
+)
+
+logger = logging.getLogger(__name__)
 
 _DECK_CACHE_TTL_SECONDS = 300
 _deck_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
 _deck_cache_lock = threading.Lock()
+
+def build_deck_cache_key(*args, **kwargs):
+    from app.services.market_scan_cache import build_deck_cache_key as _bck
+    return _bck(*args, **kwargs)
+
+def get_cached_deck(client, key):
+    from app.services.market_scan_cache import get_cached_deck as _gcd
+    return _gcd(client, key)
+
+def acquire_compute_lock(client, key):
+    from app.services.market_scan_cache import acquire_compute_lock as _acl
+    return _acl(client, key)
+
+def wait_for_cache(client, key):
+    from app.services.market_scan_cache import wait_for_cache as _wfc
+    return _wfc(client, key)
+
+def set_cached_deck(client, key, payload, ttl=None):
+    from app.services.market_scan_cache import set_cached_deck as _scd
+    return _scd(client, key, payload, ttl)
+
+def release_compute_lock(client, key):
+    from app.services.market_scan_cache import release_compute_lock as _rcl
+    _rcl(client, key)
 
 MONTH_NAME_TO_NUMBER = {
     "Jan": 1,
@@ -3688,29 +3724,32 @@ def query_market_scan_deck(
     # --- Redis cache (shared across workers) ---
     redis_client = get_redis_client()
     if redis_client is not None:
-        columns = _get_columns()
-        available_periods = _available_periods(columns)
-        resolved_period = _resolve_period(target_period, available_periods)
-        cache_key = build_deck_cache_key(
-            country or "", resolved_period, time_range,
-            fuel_types, ranking_limit, dataset_token,
-        )
-        t_cache_start = time.monotonic()
-        cached = get_cached_deck(redis_client, cache_key)
-        t_cache_read = time.monotonic()
-        if cached is not None:
-            logger.info("MarketScan [%s] redis HIT (%.3fs read)", resolved_period, t_cache_read - t_cache_start)
-            with _deck_cache_lock:
-                _deck_cache[local_key] = (now, dataset_token, cached)
-            return cached
-        logger.info("MarketScan [%s] redis MISS", resolved_period)
-        if not acquire_compute_lock(redis_client, cache_key):
-            waited = wait_for_cache(redis_client, cache_key)
-            if waited is not None:
-                logger.info("MarketScan [%s] redis waiter GOT cache from peer", resolved_period)
+        try:
+            columns = _get_columns()
+            available_periods = _available_periods(columns)
+            resolved_period = _resolve_period(target_period, available_periods)
+            cache_key = build_deck_cache_key(
+                country or "", resolved_period, time_range,
+                fuel_types, ranking_limit, dataset_token,
+            )
+            t_cache_start = time.monotonic()
+            cached = get_cached_deck(redis_client, cache_key)
+            t_cache_read = time.monotonic()
+            if cached is not None:
+                logger.info("MarketScan [%s] redis HIT (%.3fs read)", resolved_period, t_cache_read - t_cache_start)
                 with _deck_cache_lock:
-                    _deck_cache[local_key] = (now, dataset_token, waited)
-                return waited
+                    _deck_cache[local_key] = (now, dataset_token, cached)
+                return cached
+            logger.info("MarketScan [%s] redis MISS", resolved_period)
+            if not acquire_compute_lock(redis_client, cache_key):
+                waited = wait_for_cache(redis_client, cache_key)
+                if waited is not None:
+                    logger.info("MarketScan [%s] redis waiter GOT cache from peer", resolved_period)
+                    with _deck_cache_lock:
+                        _deck_cache[local_key] = (now, dataset_token, waited)
+                    return waited
+        except Exception:
+            pass
 
     # --- Compute ---
     t_compute_start = time.monotonic()

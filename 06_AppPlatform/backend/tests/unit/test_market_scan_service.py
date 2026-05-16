@@ -339,6 +339,7 @@ def test_query_market_scan_deck_clamps_ranking_limit_to_top10(monkeypatch: pytes
         return {"ok": True}
 
     market_scan_service._deck_cache.clear()
+    monkeypatch.setattr(market_scan_service, "_get_redis_client_safe", lambda: None)
     monkeypatch.setattr(market_scan_service.repo, "current_dataset_token", lambda: "test-token")
     monkeypatch.setattr(market_scan_service, "_query_market_scan_deck_impl", _stub_query_market_scan_deck_impl)
 

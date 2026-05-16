@@ -1,7 +1,6 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api/client";
-import { AdminToolsNav } from "../components/AdminToolsNav";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { LoadingSurface } from "../components/LoadingSurface";
 import type { CrudItem } from "../types";
@@ -292,7 +291,6 @@ export function CrudPage() {
           </div>
         </div>
       </div>
-      <AdminToolsNav />
     </section>
   );
 }
