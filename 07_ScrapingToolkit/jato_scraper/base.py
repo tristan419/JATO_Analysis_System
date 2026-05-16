@@ -76,6 +76,7 @@ class BaseExtractor(ABC):
 
     def __init__(self, config: ExtractorConfig) -> None:
         self.config = config
+        self.run_id: str | None = None
 
     @property
     def extractor_name(self) -> str:

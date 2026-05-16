@@ -9,6 +9,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from jato_scraper.audit import build_audit_event, write_audit_event
 from jato_scraper.base import BaseExtractor, ExtractorConfig, RawObservation
 
 log = logging.getLogger(__name__)

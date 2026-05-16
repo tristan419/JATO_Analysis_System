@@ -366,9 +366,6 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
       } catch (err) { console.log("[SFS] boot ERROR:", err);
         if (!isAbortError(err)) setError((err as Error).message);
       } finally {
-        if (bootOptionsAbortRef.current === controller) {
-          bootOptionsAbortRef.current = null;
-        }
         setLoading(false);
       }
     })();
@@ -382,8 +379,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
 
   useEffect(() => {
     return () => {
-      bootOptionsAbortRef.current?.abort();
-      syncOptionsAbortRef.current?.abort();
+        syncOptionsAbortRef.current?.abort();
     };
   }, []);
 
