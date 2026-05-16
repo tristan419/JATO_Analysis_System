@@ -262,7 +262,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     setLoading(true);
     setError("");
     try {
-      const overviewResponse = await api.overview({
+              const overviewResponse = await api.overview({
         filters: buildFilterPayload(),
         prefer_precomputed: true,
         top_n: 120,
@@ -350,7 +350,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
           resolvedColumns,
           syncedSelections,
         );
-        const overviewResponse = await api.overview({
+                const overviewResponse = await api.overview({
           filters: initialFilters,
           prefer_precomputed: true,
           top_n: 120,
@@ -437,7 +437,6 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
       yearSeries,
     ],
   );
-
   useEffect(() => {
     if (!filtersReady || columns.length === 0) return;
     setCachedPageValue(
