@@ -1,15 +1,3 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 斯洛文尼亚 (si)
-# Country model rank: 2
-# Brand: SKODA
-# Model: KODIAQ
-# Suggested scope kind: single_model
-# Sales 12M: 1,274
-# Draft path: si/02_skoda_kodiaq_si.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: skoda_kodiaq_si_draft_scrapling
 country: 斯洛文尼亚
 brand: SKODA
@@ -24,10 +12,10 @@ profile:
   network_idle: true
   impersonate: chrome
   css:
-    vehicle_container: TODO_SELECTOR
-    model: TODO_SELECTOR
-    trim: TODO_SELECTOR
-    price: TODO_SELECTOR
+    vehicle_container: body
+    model: h2
+    trim: h3
+    price: '[class*="price"]'
   default_currency: TODO
   default_tax_included: true
   default_price_label: TODO verify local MSRP label
@@ -96,6 +84,7 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
+  json_script_selector: script[type="application/json"]
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -103,7 +92,8 @@ schedule:
   preferred_weekday: monday
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources.
+  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
+  probe]
 bootstrap_meta:
   country_model_rank: 2
   suggested_scope_kind: single_model

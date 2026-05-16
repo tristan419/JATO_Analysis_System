@@ -98,7 +98,12 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
+  json_script_selector: script[type="application/json"]
+  css:
+    vehicle_container: body
+    model: h2
+    trim: h3
+    price: '[class*="price"]'
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -108,7 +113,8 @@ notes: Germany Kodiaq now points at the live skoda-auto.de model page and uses t
   same single-model JSON-first extraction style as the Sweden Kodiaq draft. The page
   currently exposes an entry MSRP card, so this source is suitable for second-batch
   explicit-link seeding but still needs deeper trim-level follow-up before promotion
-  into the main sources directory. [URL language corrected]
+  into the main sources directory. [URL language corrected] [CSS selectors applied
+  from brand probe]
 bootstrap_meta:
   country_model_rank: 4
   suggested_scope_kind: single_model

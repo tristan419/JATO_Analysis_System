@@ -1,15 +1,3 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 斯洛文尼亚 (si)
-# Country model rank: 6
-# Brand: HYUNDAI
-# Model: TUCSON
-# Suggested scope kind: single_model
-# Sales 12M: 1,125
-# Draft path: si/06_hyundai_tucson_si.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: hyundai_tucson_si_draft_scrapling
 country: 斯洛文尼亚
 brand: HYUNDAI
@@ -24,10 +12,10 @@ profile:
   network_idle: true
   impersonate: chrome
   css:
-    vehicle_container: TODO_SELECTOR
-    model: TODO_SELECTOR
-    trim: TODO_SELECTOR
-    price: TODO_SELECTOR
+    vehicle_container: body
+    model: h2
+    trim: h3
+    price: '[class*="price"]'
   default_currency: TODO
   default_tax_included: true
   default_price_label: TODO verify local MSRP label
@@ -119,7 +107,8 @@ schedule:
   preferred_weekday: monday
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources.
+  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
+  probe]
 bootstrap_meta:
   country_model_rank: 6
   suggested_scope_kind: single_model

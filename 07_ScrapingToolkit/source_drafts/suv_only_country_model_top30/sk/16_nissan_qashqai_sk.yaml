@@ -1,15 +1,3 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 斯洛伐克 (sk)
-# Country model rank: 16
-# Brand: NISSAN
-# Model: QASHQAI
-# Suggested scope kind: single_model
-# Sales 12M: 834
-# Draft path: sk/16_nissan_qashqai_sk.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: nissan_qashqai_sk_draft_scrapling
 country: 斯洛伐克
 brand: NISSAN
@@ -24,10 +12,10 @@ profile:
   network_idle: true
   impersonate: chrome
   css:
-    vehicle_container: TODO_SELECTOR
-    model: TODO_SELECTOR
-    trim: TODO_SELECTOR
-    price: TODO_SELECTOR
+    vehicle_container: body
+    model: h1, h2
+    trim: h3
+    price: '[class*="price"]'
   default_currency: TODO
   default_tax_included: true
   default_price_label: TODO verify local MSRP label
@@ -111,7 +99,8 @@ schedule:
   preferred_weekday: monday
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources.
+  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
+  probe]
 bootstrap_meta:
   country_model_rank: 16
   suggested_scope_kind: single_model

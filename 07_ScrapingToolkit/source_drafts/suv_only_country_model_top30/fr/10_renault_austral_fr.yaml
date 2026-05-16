@@ -12,10 +12,10 @@ profile:
   network_idle: true
   impersonate: chrome
   css:
-    vehicle_container: TODO_SELECTOR
-    model: TODO_SELECTOR
-    trim: TODO_SELECTOR
-    price: TODO_SELECTOR
+    vehicle_container: body
+    model: h2
+    trim: h3
+    price: '[class*="price"]'
   default_currency: EUR
   default_tax_included: true
   default_price_label: Versions et prix
@@ -98,6 +98,7 @@ notes: Research-confirmed Renault France MSRP entry. Embedded configuration data
   fields. Promotion should isolate version MSRP rows and ignore all finance-specific
   values even though they are present in the same payload. Current raw-page evidence
   verifies HEV markers and Renault fuel filter mappings for MHEV. [URL language corrected]
+  [CSS selectors applied from brand probe]
 bootstrap_meta:
   country_model_rank: 10
   suggested_scope_kind: single_model

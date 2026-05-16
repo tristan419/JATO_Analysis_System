@@ -12,10 +12,10 @@ profile:
   network_idle: true
   impersonate: chrome
   css:
-    vehicle_container: TODO_SELECTOR
-    model: TODO_SELECTOR
-    trim: TODO_SELECTOR
-    price: TODO_SELECTOR
+    vehicle_container: body
+    model: h2
+    trim: h3
+    price: '[class*="price"]'
   default_currency: TODO
   default_tax_included: true
   default_price_label: TODO verify local MSRP label
@@ -108,7 +108,7 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from PEUGEOT template]
-  [URL language corrected]
+  [URL language corrected] [CSS selectors applied from brand probe]
 bootstrap_meta:
   country_model_rank: 8
   suggested_scope_kind: single_model

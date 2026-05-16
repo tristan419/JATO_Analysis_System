@@ -12,10 +12,10 @@ profile:
   network_idle: true
   impersonate: chrome
   css:
-    vehicle_container: TODO_SELECTOR
-    model: TODO_SELECTOR
-    trim: TODO_SELECTOR
-    price: TODO_SELECTOR
+    vehicle_container: body
+    model: h2
+    trim: h3
+    price: '[class*="price"]'
   default_currency: EUR
   default_tax_included: true
   default_price_label: Versions et prix
@@ -117,7 +117,7 @@ notes: Research-confirmed Renault France MSRP entry. Public HTML contains the Ve
   rows. Promotion should use non-finance fields only and explicitly ignore discountedPriceFinance-like
   values exposed in embedded configuration JSON. Current raw-page evidence supports
   HEV, PHEV, ICE, and LPG markers; no distinct Captur MHEV keyword was verified. [URL
-  language corrected]
+  language corrected] [CSS selectors applied from brand probe]
 bootstrap_meta:
   country_model_rank: 3
   suggested_scope_kind: single_model

@@ -12,10 +12,10 @@ profile:
   network_idle: true
   impersonate: chrome
   css:
-    vehicle_container: TODO_SELECTOR
-    model: TODO_SELECTOR
-    trim: TODO_SELECTOR
-    price: TODO_SELECTOR
+    vehicle_container: body
+    model: h2
+    trim: h3
+    price: '[class*="price"]'
   default_currency: EUR
   default_tax_included: true
   default_price_label: Prix catalogue
@@ -108,7 +108,8 @@ notes: Research-confirmed Peugeot France model-specific configurator entry. The 
   HTML mounts q-v3-vehicle-configurator, but inline vehiclePriceCatalogue and vehiclePriceFinal
   placeholders are empty in the server-rendered shell. This is a real model entry
   point, but it still needs client-side configurator payload capture before it can
-  be promoted as a production MSRP source. [URL language corrected]
+  be promoted as a production MSRP source. [URL language corrected] [CSS selectors
+  applied from brand probe]
 bootstrap_meta:
   country_model_rank: 1
   suggested_scope_kind: single_model

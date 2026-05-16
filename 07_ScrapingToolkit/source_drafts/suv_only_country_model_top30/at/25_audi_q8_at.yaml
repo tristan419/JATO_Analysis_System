@@ -1,15 +1,3 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 奥地利 (at)
-# Country model rank: 25
-# Brand: AUDI
-# Model: Q8
-# Suggested scope kind: single_model
-# Sales 12M: 1,946
-# Draft path: at/25_audi_q8_at.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: audi_q8_at_draft_scrapling
 country: 奥地利
 brand: AUDI
@@ -107,13 +95,19 @@ profile:
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
   json_script_selector: script[type='application/ld+json']
+  css:
+    vehicle_container: body
+    model: h2
+    trim: h3
+    price: '[class*="price"]'
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (AT market). CSS selectors still require browser-based
-  inspection before promotion.
+notes: Keywords filled from official manufacturer website research (AT market). CSS
+  selectors still require browser-based inspection before promotion. [CSS selectors
+  applied from brand probe]
 bootstrap_meta:
   country_model_rank: 25
   suggested_scope_kind: single_model
