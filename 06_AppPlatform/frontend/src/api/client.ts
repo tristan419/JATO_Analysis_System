@@ -1444,6 +1444,18 @@ export const api = {
     });
     return request<CustomerInsightDeckResponse>(`/market-scan/nordic-hev-customer-deck?${search.toString()}`);
   },
+  nordicPhevCustomerDeck: (mode: CustomerInsightMode = "benchmark", countries?: string[]) => {
+    const search = new URLSearchParams();
+    search.set("mode", mode);
+    (countries ?? []).forEach((country) => { if (country.trim()) { search.append("countries", country.trim().toUpperCase()); } });
+    return request<CustomerInsightDeckResponse>(`/market-scan/nordic-phev-customer-deck?${search.toString()}`);
+  },
+  nordicBevCustomerDeck: (mode: CustomerInsightMode = "benchmark", countries?: string[]) => {
+    const search = new URLSearchParams();
+    search.set("mode", mode);
+    (countries ?? []).forEach((country) => { if (country.trim()) { search.append("countries", country.trim().toUpperCase()); } });
+    return request<CustomerInsightDeckResponse>(`/market-scan/nordic-bev-customer-deck?${search.toString()}`);
+  },
   listItems: (params?: {
     page?: number;
     page_size?: number;
@@ -2314,5 +2326,27 @@ export const api = {
     return request<{ rows: number; items: Record<string, unknown>[] }>(
       `/engineering-config/audit-log${q ? `?${q}` : ""}`
     );
-  }
+  },
+
+  /* ── Role Upgrade ──────────────────────────── */
+
+  requestRoleUpgrade: (payload: { requested_role: string; reason?: string }) =>
+    request<Record<string, unknown>>("/auth/role-upgrade/request", {
+      method: "POST", body: JSON.stringify(payload),
+    }),
+
+  listRoleUpgradeRequests: (params?: { status?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.status) sp.set("status", params.status);
+    const q = sp.toString();
+    return request<Record<string, unknown>>(
+      `/auth/role-upgrade/requests${q ? `?${q}` : ""}`
+    );
+  },
+
+  reviewRoleUpgradeRequest: (requestId: string, payload: { status: string }) =>
+    request<Record<string, unknown>>(
+      `/auth/role-upgrade/requests/${requestId}`,
+      { method: "PATCH", body: JSON.stringify(payload) }
+    ),
 };

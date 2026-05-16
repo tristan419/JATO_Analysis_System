@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -16,8 +17,13 @@ from app.core.config import (
     GOOGLE_ENABLED,
     GOOGLE_REDIRECT_URI,
 )
-from app.core.security import UserContext, get_current_user, require_min_role
-from app.db.models import User
+from app.core.security import (
+    ROLE_LEVEL,
+    UserContext,
+    get_current_user,
+    require_min_role,
+)
+from app.db.models import RoleUpgradeRequest, User
 from app.db.session import get_db_session
 from app.services.auth_service import (
     authenticate,
@@ -142,6 +148,121 @@ def update_user_role(
     return {"id": str(user.id), "username": user.username, "role": user.role}
 
 
+# ── Role Upgrade Requests ────────────────────────────────────────
+
+
+class RoleUpgradeRequestBody(BaseModel):
+    requested_role: str
+    reason: str = ""
+
+
+class ReviewUpgradeBody(BaseModel):
+    status: str  # "approved" or "rejected"
+
+
+@router.post("/role-upgrade/request")
+def request_role_upgrade(
+    body: RoleUpgradeRequestBody,
+    db: Session = Depends(get_db_session),
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    if body.requested_role not in ("editor", "admin"):
+        raise HTTPException(status_code=400, detail="Invalid requested role")
+    if ROLE_LEVEL.get(body.requested_role, 0) <= ROLE_LEVEL.get(user.role, 0):
+        raise HTTPException(status_code=400, detail="Cannot downgrade or request same level")
+
+    existing = (
+        db.query(RoleUpgradeRequest)
+        .filter(
+            RoleUpgradeRequest.user_id == user.name,  # username as join
+            RoleUpgradeRequest.status == "pending",
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="You already have a pending request")
+
+    db_user = db.query(User).filter(User.username == user.name).first()
+    req = RoleUpgradeRequest(
+        user_id=db_user.id if db_user else None,
+        username=user.name,
+        current_role=user.role,
+        requested_role=body.requested_role,
+        reason=body.reason,
+        status="pending",
+    )
+    db.add(req)
+    db.commit()
+    return {
+        "requestId": str(req.request_id),
+        "username": req.username,
+        "requestedRole": req.requested_role,
+        "status": req.status,
+    }
+
+
+@router.get("/role-upgrade/requests")
+def list_role_upgrade_requests(
+    status: str | None = Query(None),
+    db: Session = Depends(get_db_session),
+    _: UserContext = Depends(require_min_role("admin")),
+) -> dict:
+    q = db.query(RoleUpgradeRequest).order_by(RoleUpgradeRequest.created_at_utc.desc())
+    if status:
+        q = q.filter(RoleUpgradeRequest.status == status)
+    items = q.limit(50).all()
+    return {
+        "requests": [
+            {
+                "requestId": str(r.request_id),
+                "username": r.username,
+                "currentRole": r.current_role,
+                "requestedRole": r.requested_role,
+                "reason": r.reason,
+                "status": r.status,
+                "createdAtUtc": r.created_at_utc.isoformat(),
+            }
+            for r in items
+        ]
+    }
+
+
+@router.patch("/role-upgrade/requests/{request_id}")
+def review_role_upgrade(
+    request_id: str,
+    body: ReviewUpgradeBody,
+    db: Session = Depends(get_db_session),
+    admin: UserContext = Depends(require_min_role("admin")),
+) -> dict:
+    if body.status not in ("approved", "rejected"):
+        raise HTTPException(status_code=400, detail="Status must be approved or rejected")
+
+    req = db.query(RoleUpgradeRequest).filter(
+        RoleUpgradeRequest.request_id == request_id
+    ).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req.status != "pending":
+        raise HTTPException(status_code=409, detail="Request already reviewed")
+
+    req.status = body.status
+    req.reviewed_by = admin.name
+    req.reviewed_at_utc = datetime.now(timezone.utc)
+
+    if body.status == "approved":
+        db_user = db.query(User).filter(User.username == req.username).first()
+        if db_user:
+            db_user.role = req.requested_role
+
+    db.commit()
+    return {
+        "requestId": str(req.request_id),
+        "status": req.status,
+        "username": req.username,
+        "newRole": req.requested_role if body.status == "approved" else req.current_role,
+    }
+
+
 # ── Feishu OAuth ─────────────────────────────────────────────────
 
 
@@ -201,10 +322,10 @@ def feishu_callback(
         db.commit()
         db.refresh(user)
 
+    import os as _os2  # noqa: F811
     token = session_store.create(user.username, user.role)
-
-    # Redirect to frontend with token in URL fragment
-    frontend_url = f"{redirect}?token={token}&username={user.username}&role={user.role}"
+    origin = _os2.getenv("APP_FRONTEND_ORIGIN", "http://127.0.0.1:5173")
+    frontend_url = f"{origin}{redirect}?token={token}&username={user.username}&role={user.role}"
     return RedirectResponse(url=frontend_url)
 
 
@@ -293,6 +414,8 @@ def google_callback(
         db.commit()
         db.refresh(user)
 
+    import os as _os
     token = session_store.create(user.username, user.role)
-    frontend_url = f"{redirect}?token={token}&username={user.username}&role={user.role}"
+    origin = _os.getenv("APP_FRONTEND_ORIGIN", "http://127.0.0.1:5173")
+    frontend_url = f"{origin}{redirect}?token={token}&username={user.username}&role={user.role}"
     return RedirectResponse(url=frontend_url)

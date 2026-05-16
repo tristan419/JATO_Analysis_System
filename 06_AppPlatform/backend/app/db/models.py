@@ -1493,3 +1493,30 @@ class User(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class RoleUpgradeRequest(Base):
+    __tablename__ = "role_upgrade_requests"
+    __table_args__ = (
+        Index("ix_role_upgrade_requests_status", "status"),
+        Index("ix_role_upgrade_requests_user", "user_id"),
+        {"schema": "auth"},
+    )
+    request_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("auth.users.id"), nullable=False
+    )
+    username: Mapped[str] = mapped_column(Text, nullable=False)
+    current_role: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_role: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    reviewed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at_utc: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
