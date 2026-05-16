@@ -261,7 +261,7 @@ def count_distinct(column: str, filters: dict[str, list[str]]) -> int:
 def load_slice(
     columns: list[str] | None,
     filters: dict[str, list[str]],
-    limit: int = MAX_RAW_ROWS,
+    limit: int | None = MAX_RAW_ROWS,
     offset: int = 0,
 ) -> pd.DataFrame:
     dataset = _open_dataset()
@@ -269,12 +269,14 @@ def load_slice(
         columns=columns,
         filter=_build_filter_expression(filters),
     )
-    start = max(0, int(offset))
-    take_n = max(1, int(limit))
-    # Skip rows efficiently via head/take instead of loading all then slicing
-    table = scanner.head(start + take_n)
-    if start > 0:
-        table = table.slice(start)
+    if limit is None:
+        table = scanner.to_table()
+    else:
+        start = max(0, int(offset))
+        take_n = max(1, int(limit))
+        table = scanner.head(start + take_n)
+        if start > 0:
+            table = table.slice(start)
     return table.to_pandas().reset_index(drop=True)
 
 

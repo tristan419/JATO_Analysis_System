@@ -12,13 +12,16 @@ _LOCK_TTL = 30
 _RETRY_DELAY = 0.2
 _MAX_RETRIES = 3
 
-def build_deck_cache_key(country, period, time_range, fuel_types, ranking_limit, dataset_token):
+def build_deck_cache_key(country, period, time_range, fuel_types, ranking_limit, dataset_token,
+                         trend_window_months=24, origin_window_months=24, body_window_months=24,
+                         drilldown_segment=None):
     tr = ""
     if time_range:
         tr = f"{time_range.get('start','')}:{time_range.get('end','')}"
     fuels = ",".join(sorted(fuel_types))
     token = hashlib.sha256(dataset_token.encode()).hexdigest()[:12] if dataset_token else "notoken"
-    return f"ms:deck:v{_SCHEMA}:{country}:{period or 'latest'}:{tr or 'default'}:{fuels}:rl{ranking_limit}:dt{token}"
+    ds = drilldown_segment or "none"
+    return f"ms:deck:v{_SCHEMA}:{country}:{period or 'latest'}:{tr or 'default'}:{fuels}:rl{ranking_limit}:tw{trend_window_months}:ow{origin_window_months}:bw{body_window_months}:ds{ds}:dt{token}"
 
 def get_cached_deck(client, key):
     try:

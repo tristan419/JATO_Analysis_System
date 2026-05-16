@@ -522,7 +522,7 @@ def _query_grouped_share_time_series(
     if len(load_cols) <= 1:
         return {"grain": normalized_grain, "rows": 0, "items": []}
 
-    df = repo.load_slice(columns=load_cols, filters=filters, limit=500_000, offset=0)
+    df = repo.load_slice(columns=load_cols, filters=filters, limit=None, offset=0)
     if df.empty or group_column not in df.columns:
         return {"grain": normalized_grain, "rows": 0, "items": []}
 
@@ -999,7 +999,7 @@ def query_grouped_time_series(
     if len(load_cols) <= 1:
         return {"grain": normalized_grain, "rows": 0, "items": []}
 
-    df = repo.load_slice(columns=load_cols, filters=filters, limit=500_000, offset=0)
+    df = repo.load_slice(columns=load_cols, filters=filters, limit=None, offset=0)
     if df.empty or group_by not in df.columns:
         return {"grain": normalized_grain, "rows": 0, "items": []}
 

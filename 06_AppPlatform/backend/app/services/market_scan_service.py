@@ -3731,6 +3731,10 @@ def query_market_scan_deck(
             cache_key = build_deck_cache_key(
                 country or "", resolved_period, time_range,
                 fuel_types, ranking_limit, dataset_token,
+                trend_window_months=trend_window_months,
+                origin_window_months=origin_window_months,
+                body_window_months=body_window_months,
+                drilldown_segment=drilldown_segment,
             )
             t_cache_start = time.monotonic()
             cached = get_cached_deck(redis_client, cache_key)
@@ -3775,6 +3779,10 @@ def query_market_scan_deck(
             cache_key = build_deck_cache_key(
                 country or "", resolved_p, time_range,
                 fuel_types, ranking_limit, dataset_token,
+                trend_window_months=trend_window_months,
+                origin_window_months=origin_window_months,
+                body_window_months=body_window_months,
+                drilldown_segment=drilldown_segment,
             )
             set_cached_deck(redis_client, cache_key, result)
             release_compute_lock(redis_client, cache_key)
