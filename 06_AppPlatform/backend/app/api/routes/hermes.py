@@ -16,8 +16,10 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from fastapi.responses import PlainTextResponse
+
+from app.core.security import require_min_role
 
 router = APIRouter(prefix="/hermes", tags=["hermes"])
 
@@ -64,7 +66,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 @router.get("/overview")
-def hermes_overview() -> dict:
+def hermes_overview(_=Depends(require_min_role("viewer"))) -> dict:
     """Return a consolidated Hermes governance overview."""
     overview: dict[str, Any] = {
         "registries": {},
@@ -131,31 +133,31 @@ def hermes_overview() -> dict:
 
 
 @router.get("/pipeline-health")
-def hermes_pipeline_health() -> dict:
+def hermes_pipeline_health(_=Depends(require_min_role("viewer"))) -> dict:
     """Return the latest pipeline health report."""
     return _read_json(REPORTS_DIR / "pipeline_health.json")
 
 
 @router.get("/source-quality")
-def hermes_source_quality() -> dict:
+def hermes_source_quality(_=Depends(require_min_role("viewer"))) -> dict:
     """Return the latest source quality report."""
     return _read_json(REPORTS_DIR / "source_quality_report.json")
 
 
 @router.get("/cost")
-def hermes_cost_report() -> dict:
+def hermes_cost_report(_=Depends(require_min_role("viewer"))) -> dict:
     """Return the latest cost report."""
     return _read_json(REPORTS_DIR / "cost_report.json")
 
 
 @router.get("/code-audit")
-def hermes_code_audit() -> dict:
+def hermes_code_audit(_=Depends(require_min_role("viewer"))) -> dict:
     """Return the latest code audit report."""
     return _read_json(REPORTS_DIR / "hermes_code_audit_report.json")
 
 
 @router.get("/proposals")
-def hermes_proposals(
+def hermes_proposals(_=Depends(require_min_role("viewer")),
     status: str | None = Query(None, description="Filter by status: draft, pending_review, implemented"),
 ) -> list[dict]:
     """Return proposals from the registry."""
@@ -171,7 +173,7 @@ def hermes_proposals(
 
 
 @router.get("/gaps")
-def hermes_gaps(
+def hermes_gaps(_=Depends(require_min_role("viewer")),
     status: str | None = Query(
         None,
         description="Filter by status: open, resolved, in_progress. "
@@ -212,7 +214,7 @@ def hermes_gaps(
 
 
 @router.get("/features")
-def hermes_features() -> list[dict]:
+def hermes_features(_=Depends(require_min_role("viewer"))) -> list[dict]:
     """Return features from the registry."""
     path = HERMES_DIR / "feature_registry.yaml"
     if not path.is_file():
@@ -223,7 +225,7 @@ def hermes_features() -> list[dict]:
 
 
 @router.get("/toolchain")
-def hermes_toolchain() -> dict:
+def hermes_toolchain(_=Depends(require_min_role("viewer"))) -> dict:
     """Return the Hermes tool chain inventory — what scripts exist and how they connect."""
     scripts_dir = PROJECT_ROOT / "03_Scripts" / "hermes"
     scripts: list[dict] = []
@@ -273,7 +275,7 @@ def hermes_toolchain() -> dict:
 
 
 @router.get("/architecture")
-def hermes_architecture() -> dict:
+def hermes_architecture(_=Depends(require_min_role("viewer"))) -> dict:
     """Return the Hermes governance architecture — modules, dependencies, and work routing."""
     modules = [
         {
@@ -376,7 +378,7 @@ def hermes_architecture() -> dict:
 # ── Script Execution ──────────────────────────────────────────────
 
 @router.get("/run/{command}/help")
-def hermes_run_help(command: str):
+def hermes_run_help(command: str, _=Depends(require_min_role("viewer"))):
     """Return help for a specific Hermes command."""
     if command == "all":
         return PlainTextResponse(HELP_TEXT)
@@ -393,7 +395,7 @@ def hermes_run_help(command: str):
 
 
 @router.post("/run/{command}")
-def hermes_run(command: str):
+def hermes_run(command: str, _=Depends(require_min_role("admin"))):
     """Execute a Hermes script and return its output."""
     if command not in HERMES_SCRIPTS:
         raise HTTPException(400, f"Unknown command: {command}. Available: {', '.join(HERMES_SCRIPTS)}")
@@ -443,7 +445,7 @@ def hermes_list_commands():
 # ── Source Drill-down ─────────────────────────────────────────────
 
 @router.get("/source/{source_id}")
-def hermes_source_detail(source_id: str) -> dict:
+def hermes_source_detail(source_id: str, _=Depends(require_min_role("viewer"))) -> dict:
     """Return full detail for a single source including linked evidence."""
     path = HERMES_DIR / "source_registry.yaml"
     if not path.is_file():
@@ -488,7 +490,7 @@ def hermes_source_detail(source_id: str) -> dict:
 
 
 @router.get("/source/{source_id}/health-history")
-def hermes_source_health_history(source_id: str) -> dict:
+def hermes_source_health_history(source_id: str, _=Depends(require_min_role("viewer"))) -> dict:
     """Return health history for a source (from status JSON and quality report)."""
     sq = _read_json(REPORTS_DIR / "source_quality_report.json")
     source_score = None
@@ -551,7 +553,7 @@ def _send_budget_alert(subject: str, body: str) -> bool:
 
 
 @router.get("/activity-heatmap")
-def hermes_activity_heatmap(days: int = 30) -> dict:
+def hermes_activity_heatmap(days: int = 30, _=Depends(require_min_role("viewer"))) -> dict:
     """Return Hermes activity data for heatmap visualization."""
     records: list[dict] = []
     if ACTIVITY_LOG.is_file():
@@ -585,7 +587,7 @@ def hermes_activity_heatmap(days: int = 30) -> dict:
 
 
 @router.get("/cost-heatmap")
-def hermes_cost_heatmap(days: int = 30) -> dict:
+def hermes_cost_heatmap(days: int = 30, _=Depends(require_min_role("viewer"))) -> dict:
     """Return daily cost data for heatmap visualization."""
     audit_path = HERMES_DIR / "answer_audit.jsonl"
     daily_costs: dict[str, float] = {}
@@ -654,7 +656,7 @@ def hermes_cost_heatmap(days: int = 30) -> dict:
 
 
 @router.get("/daily-summary")
-def hermes_daily_summary() -> dict:
+def hermes_daily_summary(_=Depends(require_min_role("viewer"))) -> dict:
     """Return a combined activity+cost summary for today."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -692,7 +694,7 @@ def hermes_daily_summary() -> dict:
 # ── Feature Kanban ─────────────────────────────────────────────────
 
 @router.get("/feature-kanban")
-def hermes_feature_kanban() -> dict:
+def hermes_feature_kanban(_=Depends(require_min_role("viewer"))) -> dict:
     """Return features grouped by implementation status for kanban visualization."""
     path = HERMES_DIR / "feature_registry.yaml"
     if not path.is_file():
@@ -842,7 +844,7 @@ MERMAID_BLOCK_RE = re.compile(r"```mermaid\s*\n([\s\S]*?)```", re.MULTILINE)
 
 
 @router.get("/markdown-diagrams")
-def hermes_markdown_diagrams(
+def hermes_markdown_diagrams(_=Depends(require_min_role("viewer")),
     file_filter: str | None = Query(
         None,
         description="Substring match on file path (case-insensitive). "
@@ -955,7 +957,7 @@ def hermes_markdown_diagrams(
 
 
 @router.post("/chat")
-def hermes_chat(payload: dict = Body(...)) -> dict:
+def hermes_chat(payload: dict = Body(...), _=Depends(require_min_role("admin"))) -> dict:
     """Natural-language entry point for Hermes.
 
     **Request**::
@@ -1056,14 +1058,14 @@ def hermes_chat(payload: dict = Body(...)) -> dict:
 
 
 @router.get("/chat/sessions")
-def hermes_chat_sessions(limit: int = Query(20, ge=1, le=100)) -> list[dict]:
+def hermes_chat_sessions(limit: int = Query(20, ge=1, le=100), _=Depends(require_min_role("viewer"))) -> list[dict]:
     """List recent chat sessions."""
     from app.services.hermes_chat_service import list_sessions
     return list_sessions(limit)
 
 
 @router.get("/chat/sessions/{session_id}")
-def hermes_chat_session(session_id: str) -> dict:
+def hermes_chat_session(session_id: str, _=Depends(require_min_role("viewer"))) -> dict:
     """Get a chat session with all messages."""
     from app.services.hermes_chat_service import get_session
     s = get_session(session_id)
@@ -1073,7 +1075,7 @@ def hermes_chat_session(session_id: str) -> dict:
 
 
 @router.get("/commands")
-def hermes_commands() -> list[dict]:
+def hermes_commands(_=Depends(require_min_role("viewer"))) -> list[dict]:
     """Return all executable commands with parameters.
 
     Each command includes label, description, required role, and
@@ -1136,7 +1138,7 @@ def hermes_commands() -> list[dict]:
 
 
 @router.post("/commands/execute")
-def hermes_command_execute(payload: dict = Body(...)) -> dict:
+def hermes_command_execute(payload: dict = Body(...), _=Depends(require_min_role("admin"))) -> dict:
     """Execute a Hermes command. Wraps POST /run/{command} with extra metadata.
 
     **Request**::
@@ -1205,7 +1207,7 @@ def hermes_command_execute(payload: dict = Body(...)) -> dict:
 
 
 @router.post("/dev/events")
-def hermes_dev_event_post(payload: dict = Body(...)) -> dict:
+def hermes_dev_event_post(payload: dict = Body(...), _=Depends(require_min_role("admin"))) -> dict:
     """Append a development event (from Claude Code or other source).
 
     **Request**::
@@ -1308,7 +1310,7 @@ def hermes_dev_features(
 
 
 @router.get("/dev/features/{feature_id}")
-def hermes_dev_feature(feature_id: str) -> dict:
+def hermes_dev_feature(feature_id: str, _=Depends(require_min_role("admin"))) -> dict:
     """Get a single feature by ID."""
     from app.services.hermes_devsync_service import get_feature
     f = get_feature(feature_id)
@@ -1318,7 +1320,7 @@ def hermes_dev_feature(feature_id: str) -> dict:
 
 
 @router.get("/dev/workspace-health")
-def hermes_dev_workspace_health() -> dict:
+def hermes_dev_workspace_health(_=Depends(require_min_role("viewer"))) -> dict:
     """Return workspace health — uncommitted changes, unsynced events, risk level.
 
     Detects blind spots where code changed but no dev event was written.
@@ -1382,3 +1384,35 @@ def hermes_dev_workspace_health() -> dict:
         health["warnings"].append("git unavailable — cannot assess workspace health")
 
     return health
+
+
+# ═══════════════════════════════════════════════════════════════
+# Hermes Sentinel — Unified Proactive Monitoring
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.get("/sentinel/status")
+def hermes_sentinel_status(_=Depends(require_min_role("viewer"))) -> dict:
+    """Run all probes, return aggregated Sentinel status."""
+    from app.services.hermes_sentinel_service import run_all_probes
+    return run_all_probes()
+
+
+@router.get("/sentinel/notifications")
+def hermes_sentinel_notifications(_=Depends(require_min_role("viewer")),
+    limit: int = Query(50, ge=1, le=200),
+    status: str | None = Query(None),
+) -> list[dict]:
+    """List recent sentinel notifications."""
+    from app.services.hermes_sentinel_service import get_notifications
+    return get_notifications(limit=limit, status=status)
+
+
+@router.post("/sentinel/ack/{notification_id}")
+def hermes_sentinel_ack(notification_id: str, _=Depends(require_min_role("viewer"))) -> dict:
+    """Mark a notification as acknowledged."""
+    from app.services.hermes_sentinel_service import ack_notification
+    n = ack_notification(notification_id)
+    if n is None:
+        raise HTTPException(404, f"Notification not found: {notification_id}")
+    return n

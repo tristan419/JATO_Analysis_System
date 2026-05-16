@@ -234,3 +234,23 @@ export interface HermesFeatureKanbanResponse {
   };
   columns: Record<string, HermesKanbanColumn>;
 }
+
+// === Hermes Chat ===
+export type HermesReplyType = "direct_answer" | "run_created" | "clarification_needed" | "blocked_by_policy";
+export interface HermesChatRequest { message: string; sessionId?: string; context?: { userRole?: "user"|"admin"|"developer"; country?: string; model?: string }; }
+export interface HermesChatSuggestedAction { label: string; action: string; intent?: string; runId?: string; command?: string; }
+export interface HermesChatResponse { sessionId: string; messageId: string; replyType: HermesReplyType; answer: string; intent: string; confidence: number; entities: Record<string, string[]>; runId?: string; command?: string; tasks?: string[]; dataRefs: string[]; suggestedActions: HermesChatSuggestedAction[]; }
+export interface HermesChatSession { sessionId: string; createdAt: string; updatedAt: string; messageCount: number; }
+export interface HermesChatSessionDetail { sessionId: string; createdAt: string; updatedAt: string; messages: HermesChatMessage[]; }
+export interface HermesChatMessage { messageId: string; role: "user"|"assistant"; content: string; replyType?: string; timestamp: string; }
+
+// === Hermes Commands ===
+export interface HermesCommand { commandId: string; label: string; description: string; requiredRole: "user"|"admin"|"developer"; mapsToIntent: string; parameters: { name: string; type: "string"; required: boolean; default?: string }[]; }
+export interface HermesCommandExecuteRequest { commandId: string; parameters?: Record<string, string>; sessionId?: string; }
+export interface HermesCommandExecuteResponse { commandId: string; runId: string; script: string; exitCode: number; stdout: string; stderr: string; status: "success"|"failed"|"timeout"|"error"; }
+
+// === Hermes DevSync ===
+export type HermesFeatureStatus = "idea"|"planned"|"in_progress"|"implemented"|"verified"|"done"|"blocked"|"deprecated";
+export interface HermesDevEvent { eventId: string; eventType: string; source: string; title: string; summary: string; linkedFeatureIds: string[]; changedFiles: string[]; addedFiles?: string[]; addedEndpoints?: string[]; frontendChanges?: string[]; backendChanges?: string[]; tests?: Record<string, string>; risks?: string[]; nextSteps?: string[]; createdAt: string; }
+export interface HermesDevFeature { featureId: string; title: string; status: HermesFeatureStatus; category: string; source: string; summary: string; linkedEventIds: string[]; endpoints: string[]; frontend: string[]; backend: string[]; tests: Record<string, string>; docs: string[]; evidenceIds: string[]; gaps: string[]; createdAt: string; lastUpdatedAt: string; }
+export interface HermesDevSyncResult { synced: number; featuresUpdated: string[]; featuresCreated: string[]; docsGenerated: number; evidenceWritten: number; gapsCreated: number; }

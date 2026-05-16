@@ -263,6 +263,8 @@ export function DataManagementPage() {
   const [sourceDetailOpen, setSourceDetailOpen] = useState(false);
   const [hermesLoading, setHermesLoading] = useState(false);
   const [hermesTabError, setHermesTabError] = useState("");
+  const [sentinelStatus, setSentinelStatus] = useState<Record<string, unknown> | null>(null);
+  const [sentinelOpen, setSentinelOpen] = useState(false);
   const [diagramModal, setDiagramModal] = useState<HermesMermaidBlockType | null>(null);
   const [diagramSearch, setDiagramSearch] = useState("");
   const [diagramFileFilter, setDiagramFileFilter] = useState("all");
@@ -465,6 +467,17 @@ export function DataManagementPage() {
     if (subpage !== "features" || featureKanban) return;
     api.hermesFeatureKanban().then(setFeatureKanban).catch(() => {});
   }, [subpage, featureKanban]);
+
+  // Sentinel polling
+  useEffect(() => {
+    if (subpage !== "hermes" && subpage !== "overview") return;
+    const poll = () => {
+      fetch("/v1/hermes/sentinel/status").then(r => r.json()).then(setSentinelStatus).catch(() => {});
+    };
+    poll();
+    const iv = setInterval(poll, 10000);
+    return () => clearInterval(iv);
+  }, [subpage]);
 
   const activityColumns = useMemo(
     () => buildActivityHeatmapColumns(overview?.activity.days ?? []),
@@ -1007,6 +1020,71 @@ export function DataManagementPage() {
                 />
               )}
             </div>
+
+            {/* Sentinel status bar */}
+            {sentinelStatus && (
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+                <button className="btn btn-sm" style={{
+                  fontSize:12,fontWeight:600,padding:"6px 14px",borderRadius:6,
+                  background: (sentinelStatus.overall as string) === "critical" ? "#fef2f2" :
+                             (sentinelStatus.overall as string) === "warning" ? "#fffbeb" : "#f0fdf4",
+                  color: (sentinelStatus.overall as string) === "critical" ? "#ef4444" :
+                         (sentinelStatus.overall as string) === "warning" ? "#f59e0b" : "#22c55e",
+                  border: "1px solid currentColor",
+                }} onClick={() => setSentinelOpen(!sentinelOpen)}>
+                  {(sentinelStatus.overall as string) === "critical" ? "!" :
+                   (sentinelStatus.overall as string) === "warning" ? "~" : ""}
+                  &nbsp;
+                  {(sentinelStatus.unreadCount as number) > 0
+                    ? `${sentinelStatus.unreadCount} alerts`
+                    : "All clear"}
+                </button>
+                <span style={{fontSize:11,color:"#94a3b8"}}>
+                  {sentinelStatus.checkedAt ? `Updated ${(sentinelStatus.checkedAt as string).slice(11,16)}` : ""}
+                </span>
+              </div>
+            )}
+
+            {/* Sentinel inbox panel */}
+            {sentinelOpen && sentinelStatus && (
+              <div className="card crud-card" style={{marginBottom:12,padding:12,maxHeight:400,overflowY:"auto"}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                  <strong style={{fontSize:13}}>Sentinel Notifications</strong>
+                  <button className="btn btn-sm btn-ghost" style={{fontSize:10}} onClick={() => setSentinelOpen(false)}>Close</button>
+                </div>
+                {(sentinelStatus.notifications as unknown[] || []).length === 0 ? (
+                  <span style={{color:"#94a3b8",fontSize:11}}>No new alerts. All probes passing.</span>
+                ) : (
+                  <div style={{display:"grid",gap:6}}>
+                    {((sentinelStatus.notifications as unknown[]) || []).map((n: unknown) => {
+                      const notif = n as Record<string,unknown>;
+                      const sev = String(notif.severity || "low");
+                      const c = sev === "high" || sev === "critical" ? "#ef4444" : sev === "medium" ? "#f59e0b" : "#3b82f6";
+                      return (
+                        <div key={String(notif.id)} style={{padding:"8px 12px",background:"#f8fafc",borderRadius:6,borderLeft:`3px solid ${c}`,fontSize:12}}>
+                          <div style={{fontWeight:600,color:c,marginBottom:2}}>{String(notif.title)}</div>
+                          <div style={{color:"#475569",fontSize:11}}>{String(notif.body)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {/* Probe summary */}
+                <div style={{marginTop:12,display:"flex",gap:8,flexWrap:"wrap"}}>
+                  {((sentinelStatus.probes as unknown[]) || []).map((p: unknown) => {
+                    const probe = p as Record<string,unknown>;
+                    const status = String(probe.overall || "ok");
+                    const dot = status === "critical" ? "#ef4444" : status === "warning" ? "#f59e0b" : "#22c55e";
+                    return (
+                      <span key={String(probe.probe)} style={{fontSize:10,display:"flex",alignItems:"center",gap:4}}>
+                        <span style={{width:6,height:6,borderRadius:"50%",background:dot,display:"inline-block"}} />
+                        {String(probe.probe)}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Hermes summary bar */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
