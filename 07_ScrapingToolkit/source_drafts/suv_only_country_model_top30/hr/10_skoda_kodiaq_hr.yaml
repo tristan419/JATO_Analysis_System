@@ -4,13 +4,10 @@ brand: SKODA
 source_url: https://www.skoda.hr/modeli/kodiaq
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: playwright
 profile:
   url: https://www.skoda.hr/modeli/kodiaq
-  tier: stealth
   headless: true
-  network_idle: true
-  impersonate: chrome
   default_currency: EUR
   default_tax_included: true
   default_price_label: Preporučena maloprodajna cijena s PDV-om
@@ -95,11 +92,6 @@ profile:
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
   json_script_selector: script[type="application/json"]
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -107,9 +99,10 @@ schedule:
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (HR market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+  applied from brand probe] [Switched to playwright_card_flow with skoda_trim_overview_playwright.yaml]
 bootstrap_meta:
   country_model_rank: 10
   suggested_scope_kind: single_model
   sales_12m: 1053.0
   model: KODIAQ
+profile_preset: ../_shared/presets/skoda_trim_overview_playwright.yaml

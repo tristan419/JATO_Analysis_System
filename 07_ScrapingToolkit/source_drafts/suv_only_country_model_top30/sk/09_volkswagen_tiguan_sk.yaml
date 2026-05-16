@@ -4,13 +4,10 @@ brand: VOLKSWAGEN
 source_url: https://www.vw.sk/modely
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
-profile_preset: ../_shared/presets/porsche_holding_volkswagen_model_overview_scrapling.yaml
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
 profile:
   url: https://www.vw.sk/modely
-  css:
-    include_if_text_contains:
-    - Tiguan
   default_price_label: Od s DPH
   fixed_model: TIGUAN
   fixed_jato_model: TIGUAN
@@ -22,7 +19,8 @@ schedule:
   preferred_weekday: monday
 notes: Uses the Porsche Holding all-model overview page on `vw.sk/modely` and filters
   to the Tiguan card by container text. The legacy `volkswagen.sk` all-model route
-  now redirects away from the card page in this environment.
+  now redirects away from the card page in this environment. [Switched to playwright_card_flow
+  with volkswagen_configurator_trim_overview_playwright.yaml]
 bootstrap_meta:
   country_model_rank: 9
   suggested_scope_kind: single_model

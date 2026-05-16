@@ -4,18 +4,10 @@ brand: TOYOTA
 source_url: https://www.toyota.fi/autot/yaris-cross
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: playwright
 profile:
   url: https://www.toyota.fi/autot/yaris-cross
-  tier: stealth
   headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
   default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
@@ -84,9 +76,11 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from TOYOTA template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+  [URL language corrected] [CSS selectors applied from brand probe] [Switched to playwright_card_flow
+  with toyota_trim_overview_playwright.yaml]
 bootstrap_meta:
   country_model_rank: 1
   suggested_scope_kind: single_model
   sales_12m: 2865.0
   model: YARIS CROSS
+profile_preset: ../_shared/presets/toyota_trim_overview_playwright.yaml

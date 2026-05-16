@@ -1,15 +1,3 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 比利时 (be)
-# Country model rank: 7
-# Brand: VOLKSWAGEN
-# Model: ID.4
-# Suggested scope kind: single_model
-# Sales 12M: 5,161
-# Draft path: be/07_volkswagen_id_4_be.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: volkswagen_id_4_be_draft_scrapling
 country: 比利时
 brand: VOLKSWAGEN
@@ -17,7 +5,7 @@ source_url: https://www.volkswagen.be/nl/configurator.html/__app/id-4.app
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_playwright.yaml
+profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
 profile:
   url: https://www.volkswagen.be/nl/configurator.html/__app/id-4.app
   cookie_reject_selector: null
@@ -39,11 +27,11 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Browser probing on 2026-04-13 confirmed the Belgium configurator entry at
-  id-4.app and a stable trim -> BATTERIJEN flow with engine-card pricing labeled
-  "Prijs incl. BTW". The shared Playwright preset now dismisses the Volkswagen
-  overlay stack up front, so this draft no longer depends on showroom CSS
-  selectors.
+notes: Browser probing on 2026-04-13 confirmed the Belgium configurator entry at id-4.app
+  and a stable trim -> BATTERIJEN flow with engine-card pricing labeled "Prijs incl.
+  BTW". The shared Playwright preset now dismisses the Volkswagen overlay stack up
+  front, so this draft no longer depends on showroom CSS selectors. [Switched to playwright_card_flow
+  with volkswagen_configurator_trim_overview_playwright.yaml]
 bootstrap_meta:
   country_model_rank: 7
   suggested_scope_kind: single_model

@@ -1,0 +1,25 @@
+# Toyota trim overview — probe-verified on toyota.se
+# Prices use .cash-price class, trim info in accessory cards
+browser: chromium
+headless: true
+wait_until: domcontentloaded
+page_timeout_ms: 120000
+viewport_width: 1440
+viewport_height: 1200
+initial_ready_selector: '.cash-price, [class*="price"], h2'
+initial_ready_timeout_ms: 60000
+startup_dismiss_selectors:
+  - '#onetrust-reject-all-handler'
+  - '#ensRejectAll'
+  - '[data-testid="cookie-accept"]'
+cookie_banner_selector: '#onetrust-banner-sdk'
+cookie_reject_selector: '#onetrust-reject-all-handler'
+trim_card_selector: '[class*="accessory-card"], [class*="model-card"], [class*="grade"], article'
+trim_name_selector: 'h3, h4, [class*="title"]'
+detail_price_selector: '.cash-price, [class*="cash-price"], [class*="price"]'
+trim_card_wait_ms: 1200
+extract_from_trim_cards: true
+combine_trim_and_powertrain: true
+default_tax_included: true
+match_confidence: 0.78
+match_status: review_required

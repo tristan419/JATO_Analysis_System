@@ -1,22 +1,11 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 波兰 (pl)
-# Country model rank: 18
-# Brand: VOLKSWAGEN
-# Model: TIGUAN ALLSPACE
-# Suggested scope kind: single_model
-# Sales 12M: 4,769
-# Draft path: pl/18_volkswagen_tiguan_allspace_pl.yaml
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: volkswagen_tiguan_allspace_pl_draft_http_json
 country: 波兰
 brand: VOLKSWAGEN
 source_url: https://cenniki.volkswagen.pl/Tiguan-Allspace.html
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: http_json
-profile_preset: ../_shared/presets/volkswagen_pl_pricelist_http_json.yaml
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
 profile:
   url: https://cenniki.volkswagen.pl/pricelists/1bbcd298-c6ac-432c-a76f-66cc27a0f3c6/pricelist.json
   default_currency: PLN
@@ -35,9 +24,10 @@ schedule:
   run_window_end: 05:00
   preferred_weekday: monday
 notes: The main Volkswagen Poland site no longer exposes a dedicated Allspace model
-  page and current public URLs redirect back to Tiguan, but the official cenniki
-  index still publishes `Tiguan-Allspace.html` and a matching `pricelist.json`.
-  This draft now consumes that archived official price-list payload directly.
+  page and current public URLs redirect back to Tiguan, but the official cenniki index
+  still publishes `Tiguan-Allspace.html` and a matching `pricelist.json`. This draft
+  now consumes that archived official price-list payload directly. [Switched to playwright_card_flow
+  with volkswagen_configurator_trim_overview_playwright.yaml]
 bootstrap_meta:
   country_model_rank: 18
   suggested_scope_kind: single_model

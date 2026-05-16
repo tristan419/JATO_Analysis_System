@@ -4,13 +4,10 @@ brand: VOLKSWAGEN
 source_url: https://www.vw.sk/modely
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
-profile_preset: ../_shared/presets/porsche_holding_volkswagen_model_overview_scrapling.yaml
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
 profile:
   url: https://www.vw.sk/modely
-  css:
-    include_if_text_contains:
-    - Touareg
   default_price_label: Od s DPH
   fixed_model: TOUAREG
   fixed_jato_model: TOUAREG
@@ -25,7 +22,7 @@ notes: The live SK overview page has moved to `vw.sk/modely`, but the Touareg ca
   000 €`) and no separate base-MSRP line that matches the shared price selector. This
   draft is now superseded by the promoted production source `07_ScrapingToolkit/sources/volkswagen_touareg_sk.yaml`,
   which uses the public `stock-cennik` PDF from `/touareg/touareg/cenniky-a-katalogy`
-  via the `pdf_text` extractor.
+  via the `pdf_text` extractor. [Switched to playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
 bootstrap_meta:
   country_model_rank: 25
   suggested_scope_kind: single_model

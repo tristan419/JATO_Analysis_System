@@ -4,8 +4,8 @@ brand: VOLKSWAGEN
 source_url: https://www.volkswagen.pl/pl/modele/t-roc.html
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
-profile_preset: ../_shared/presets/volkswagen_pl_special_price_scrapling.yaml
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
 profile:
   url: https://www.volkswagen.pl/pl/modele/t-roc.html
   default_currency: PLN
@@ -32,7 +32,8 @@ notes: The raw HTML exposes a stable `car-technical-data-section-v2` block where
   first list item is `Cena specjalna` and the finance metrics follow in a separate
   technical-data list. This draft intentionally extracts the total campaign price
   and excludes monthly-payment copy, but still needs a semantic review before promotion
-  because the page label is promotional rather than explicit catalog MSRP.
+  because the page label is promotional rather than explicit catalog MSRP. [Switched
+  to playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
 bootstrap_meta:
   country_model_rank: 19
   suggested_scope_kind: single_model

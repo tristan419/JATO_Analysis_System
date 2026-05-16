@@ -1,23 +1,11 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 奥地利 (at)
-# Country model rank: 10
-# Brand: VOLKSWAGEN
-# Model: T-CROSS
-# Suggested scope kind: single_model
-# Sales 12M: 2,853
-# Draft path: at/10_volkswagen_t_cross_at.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: volkswagen_t_cross_at_draft_scrapling
 country: 奥地利
 brand: VOLKSWAGEN
 source_url: https://www.volkswagen.at/modelle/t-cross
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
-profile_preset: ../_shared/presets/volkswagen_model_page_scrapling.yaml
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
 profile:
   url: https://www.volkswagen.at/modelle/t-cross
   default_currency: EUR
@@ -37,8 +25,9 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (AT market). CSS selectors still require browser-based
-  inspection before promotion.
+notes: Keywords filled from official manufacturer website research (AT market). CSS
+  selectors still require browser-based inspection before promotion. [Switched to
+  playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
 bootstrap_meta:
   country_model_rank: 10
   suggested_scope_kind: single_model

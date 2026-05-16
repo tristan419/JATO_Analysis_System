@@ -4,13 +4,10 @@ brand: HYUNDAI
 source_url: https://www.hyundai.com/no/no/bilmodeller/ioniq-5.html
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: playwright
 profile:
   url: https://www.hyundai.com/no/no/bilmodeller/ioniq-5.html
-  tier: stealth
   headless: true
-  network_idle: true
-  impersonate: chrome
   default_currency: NOK
   default_tax_included: true
   default_price_label: Veiledende pris inkl. mva
@@ -75,11 +72,6 @@ profile:
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
   json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -87,9 +79,10 @@ schedule:
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (NO market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+  applied from brand probe] [Switched to playwright_card_flow with kia_trim_overview_playwright.yaml]
 bootstrap_meta:
   country_model_rank: 16
   suggested_scope_kind: single_model
   sales_12m: 2234.0
   model: IONIQ 5
+profile_preset: ../_shared/presets/kia_trim_overview_playwright.yaml

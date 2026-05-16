@@ -4,15 +4,10 @@ brand: VOLKSWAGEN
 source_url: https://todo.invalid/gr/volkswagen/t_cross
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
-profile_preset: ../_shared/presets/volkswagen_model_page_scrapling.yaml
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
 profile:
   url: https://todo.invalid/gr/volkswagen/t_cross
-  css:
-    vehicle_container: TODO_SELECTOR
-    model: TODO_SELECTOR
-    trim: TODO_SELECTOR
-    price: TODO_SELECTOR
   default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
@@ -31,7 +26,8 @@ schedule:
   preferred_weekday: monday
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources.
+  before promoting to 07_ScrapingToolkit/sources. [Switched to playwright_card_flow
+  with volkswagen_configurator_trim_overview_playwright.yaml]
 bootstrap_meta:
   country_model_rank: 15
   suggested_scope_kind: single_model

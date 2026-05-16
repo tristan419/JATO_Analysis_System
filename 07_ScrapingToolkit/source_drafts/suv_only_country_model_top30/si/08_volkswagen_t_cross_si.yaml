@@ -4,13 +4,10 @@ brand: VOLKSWAGEN
 source_url: https://www.volkswagen.si/modeli-in-konfigurator/vsi-modeli
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
-profile_preset: ../_shared/presets/porsche_holding_volkswagen_model_overview_scrapling.yaml
+extractor_type: playwright
+profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
 profile:
   url: https://www.volkswagen.si/modeli-in-konfigurator/vsi-modeli
-  css:
-    include_if_text_contains:
-    - T-Cross
   default_price_label: Od z DDV
   fixed_model: T-CROSS
   fixed_jato_model: T-CROSS
@@ -22,7 +19,7 @@ schedule:
   preferred_weekday: monday
 notes: Uses the Porsche Holding all-model overview page and filters to the T-Cross
   card by container text. This keeps the draft runnable without hard-coding an unstable
-  single-model configurator route.
+  single-model configurator route. [Switched to playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
 bootstrap_meta:
   country_model_rank: 8
   suggested_scope_kind: single_model
