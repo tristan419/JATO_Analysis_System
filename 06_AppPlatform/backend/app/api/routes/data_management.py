@@ -29,7 +29,7 @@ def get_airflow_status(
 
 @router.post("/airflow/start")
 def start_airflow(
-    _user: UserContext = Depends(require_min_role("editor")),
+    _user: UserContext = Depends(require_min_role("admin")),
 ) -> dict[str, object]:
     try:
         return {"item": start_airflow_stack()}
@@ -41,7 +41,7 @@ def start_airflow(
 
 @router.post("/airflow/stop")
 def stop_airflow(
-    _user: UserContext = Depends(require_min_role("editor")),
+    _user: UserContext = Depends(require_min_role("admin")),
 ) -> dict[str, object]:
     try:
         return {"item": stop_airflow_stack()}
@@ -53,7 +53,7 @@ def stop_airflow(
 
 @router.post("/voc/sync")
 def sync_voc_raw(
-    _user: UserContext = Depends(require_min_role("editor")),
+    _user: UserContext = Depends(require_min_role("admin")),
 ) -> dict[str, object]:
     try:
         return {"item": sync_voc_raw_to_store()}

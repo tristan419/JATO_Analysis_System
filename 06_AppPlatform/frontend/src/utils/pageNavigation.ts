@@ -103,3 +103,143 @@ export function shouldIgnorePageNavigationTarget(
   }
   return false;
 }
+
+/* ── Mega Menu data types ─────────────────────────────── */
+
+export type MenuRole = "viewer" | "editor" | "admin";
+
+const ROLE_LEVEL: Record<MenuRole, number> = { viewer: 1, editor: 2, admin: 3 };
+
+export interface MegaMenuSubItem {
+  label: string;
+  sublabel: string;
+  to: string;
+  minRole?: MenuRole;
+}
+
+export interface MegaMenuGroup {
+  title: string;
+  items: MegaMenuSubItem[];
+}
+
+export type MegaMenuItem =
+  | { id: string; label: string; sublabel: string; type: "link"; to: string; minRole?: MenuRole }
+  | { id: string; label: string; sublabel: string; type: "dropdown"; items: MegaMenuSubItem[]; minRole?: MenuRole }
+  | { id: string; label: string; sublabel: string; type: "mega"; groups: MegaMenuGroup[]; minRole?: MenuRole };
+
+export function filterMenuByRole(items: MegaMenuItem[], userRole: string): MegaMenuItem[] {
+  const level = ROLE_LEVEL[userRole as MenuRole] ?? 0;
+  return items
+    .filter((item) => {
+      const min = ROLE_LEVEL[item.minRole ?? "viewer"];
+      return level >= min;
+    })
+    .map((item) => {
+      if (item.type === "dropdown") {
+        return {
+          ...item,
+          items: item.items.filter((sub) => {
+            const subMin = ROLE_LEVEL[sub.minRole ?? "viewer"];
+            return level >= subMin;
+          }),
+        };
+      }
+      if (item.type === "mega") {
+        return {
+          ...item,
+          groups: item.groups.map((group) => ({
+            ...group,
+            items: group.items.filter((sub) => {
+              const subMin = ROLE_LEVEL[sub.minRole ?? "viewer"];
+              return level >= subMin;
+            }),
+          })),
+        };
+      }
+      return item;
+    });
+}
+
+export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
+  {
+    id: "dashboard",
+    label: "Dashboard",
+    sublabel: "仪表盘",
+    type: "link",
+    to: "/dashboard",
+  },
+  {
+    id: "market-scan",
+    label: "Market Scan",
+    sublabel: "市场扫描",
+    type: "dropdown",
+    items: [
+      { label: "Market Overview", sublabel: "市场总览", to: "/market/overview" },
+      { label: "Segment Analysis", sublabel: "细分市场", to: "/market/segments" },
+      { label: "Brand Ranking", sublabel: "品牌排名", to: "/market/ranking/brand" },
+      { label: "Model Ranking", sublabel: "车型排名", to: "/market/ranking/model" },
+      { label: "Powertrain Mix", sublabel: "动力结构", to: "/market/powertrain" },
+    ],
+  },
+  {
+    id: "product-deck",
+    label: "Product Deck",
+    sublabel: "产品平台",
+    type: "mega",
+    groups: [
+      {
+        title: "Pricing & Positioning / 价格与定位",
+        items: [
+          { label: "Current MSRP", sublabel: "当前价格", to: "/product/current-msrp" },
+          { label: "Pricing", sublabel: "定位定价", to: "/product/pricing" },
+        ],
+      },
+      {
+        title: "Product & Customer / 产品与客户洞察",
+        items: [
+          { label: "Compare", sublabel: "版型对比", to: "/product/compare" },
+          { label: "Customer Insight", sublabel: "看客户", to: "/product/customer-insight" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "data-ops",
+    label: "Data Ops",
+    sublabel: "数据运维",
+    type: "mega",
+    groups: [
+      {
+        title: "Data View / 数据查看",
+        items: [
+          { label: "Spec Detail", sublabel: "规格明细", to: "/data/spec-detail" },
+          { label: "Data Overview", sublabel: "数据总览", to: "/data/overview" },
+        ],
+      },
+      {
+        title: "Data Workflow / 数据流程",
+        items: [
+          { label: "Config Import", sublabel: "配置导入", to: "/data/config-import", minRole: "editor" },
+          { label: "Matching Review", sublabel: "匹配审核", to: "/data/matching-review", minRole: "editor" },
+          { label: "JATO Monthly Update", sublabel: "JATO 月更", to: "/data/jato-monthly-update", minRole: "editor" },
+          { label: "Eng Config", sublabel: "工程配置", to: "/engineering-config", minRole: "viewer" },
+        ],
+      },
+    ],
+  },
+];
+
+const MEGA_MENU_ROUTE_MAP: Record<string, string> = {
+  "/dashboard": "dashboard",
+  "/market": "market-scan",
+  "/product": "product-deck",
+  "/data": "data-ops",
+};
+
+export function getActiveMegaMenuId(pathname: string): string | null {
+  if (pathname === "/" || pathname === "/dashboard") return "dashboard";
+  for (const [prefix, id] of Object.entries(MEGA_MENU_ROUTE_MAP)) {
+    if (pathname === prefix || pathname.startsWith(`${prefix}/`)) return id;
+  }
+  return null;
+}

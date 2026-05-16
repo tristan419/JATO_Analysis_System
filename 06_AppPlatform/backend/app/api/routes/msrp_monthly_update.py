@@ -90,7 +90,7 @@ def get_monthly_update_review(
 @router.post("/monthly-update-jobs/{job_id}/publish")
 def post_publish_monthly_update_job(
     job_id: str,
-    user: UserContext = Depends(require_min_role("editor")),
+    user: UserContext = Depends(require_min_role("admin")),
 ) -> dict[str, object]:
     return {
         "item": publish_jato_monthly_update_job(
@@ -103,7 +103,7 @@ def post_publish_monthly_update_job(
 @router.post("/monthly-update-jobs/{job_id}/rollback")
 def post_rollback_monthly_update_job(
     job_id: str,
-    user: UserContext = Depends(require_min_role("editor")),
+    user: UserContext = Depends(require_min_role("admin")),
 ) -> dict[str, object]:
     return {
         "item": rollback_jato_monthly_update_job(
@@ -168,7 +168,7 @@ def post_monthly_update_upload_complete(
 @router.post("/monthly-update-maintenance/cleanup")
 def post_monthly_update_cleanup(
     payload: dict[str, object] | None = None,
-    user: UserContext = Depends(require_min_role("editor")),
+    user: UserContext = Depends(require_min_role("admin")),
 ) -> dict[str, object]:
     return {
         "item": run_jato_monthly_update_cleanup(
@@ -187,7 +187,7 @@ def get_monthly_update_maintenance_status(
 
 @router.post("/monthly-update-maintenance/promote-baseline")
 def post_monthly_update_promote_baseline(
-    user: UserContext = Depends(require_min_role("editor")),
+    user: UserContext = Depends(require_min_role("admin")),
 ) -> dict[str, object]:
     return {
         "item": promote_current_active_to_baseline(triggered_by=user.name)
