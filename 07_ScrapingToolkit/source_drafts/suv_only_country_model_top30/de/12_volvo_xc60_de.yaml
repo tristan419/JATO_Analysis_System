@@ -16,9 +16,9 @@ profile:
     model: h1
     trim: '[class*="variant"], [class*="trim"], h2'
     price: '[class*="price"], [data-automation*="price"]'
-  default_currency: TODO
+  default_currency: EUR
   default_tax_included: true
-  default_price_label: TODO verify local MSRP label
+  default_price_label: Preis
   fixed_model: XC60
   fixed_jato_model: XC60
   fixed_jato_powertrain: null

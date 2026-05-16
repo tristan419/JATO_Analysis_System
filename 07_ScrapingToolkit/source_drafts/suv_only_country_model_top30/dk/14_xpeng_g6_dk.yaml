@@ -16,9 +16,9 @@ profile:
     model: h1
     trim: h2
     price: '[class*="price"]'
-  default_currency: TODO
+  default_currency: DKK
   default_tax_included: true
-  default_price_label: TODO verify local MSRP label
+  default_price_label: MSRP
   fixed_model: G6
   fixed_jato_model: G6
   fixed_jato_powertrain: null

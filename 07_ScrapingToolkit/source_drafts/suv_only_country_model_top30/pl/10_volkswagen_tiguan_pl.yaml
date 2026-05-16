@@ -1,14 +1,3 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 波兰 (pl)
-# Country model rank: 10
-# Brand: VOLKSWAGEN
-# Model: TIGUAN
-# Suggested scope kind: single_model
-# Sales 12M: 5,679
-# Draft path: pl/10_volkswagen_tiguan_pl.yaml
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: volkswagen_tiguan_pl_draft_scrapling
 country: 波兰
 brand: VOLKSWAGEN
@@ -37,17 +26,17 @@ profile:
       powertrain: ICE
       keywords:
       - TODO_ICE_KEYWORD
+  default_price_label: MSRP
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: The raw HTML exposes a stable `car-technical-data-section-v2` block where
-  the first list item is `Cena specjalna` and the finance metrics follow in a
-  separate technical-data list. This draft intentionally extracts the total
-  campaign price and excludes monthly-payment copy, but still needs a semantic
-  review before promotion because the page label is promotional rather than
-  explicit catalog MSRP.
+notes: The raw HTML exposes a stable `car-technical-data-section-v2` block where the
+  first list item is `Cena specjalna` and the finance metrics follow in a separate
+  technical-data list. This draft intentionally extracts the total campaign price
+  and excludes monthly-payment copy, but still needs a semantic review before promotion
+  because the page label is promotional rather than explicit catalog MSRP.
 bootstrap_meta:
   country_model_rank: 10
   suggested_scope_kind: single_model

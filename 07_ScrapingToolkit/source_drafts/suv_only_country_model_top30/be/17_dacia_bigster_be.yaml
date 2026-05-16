@@ -16,9 +16,9 @@ profile:
     model: h2
     trim: h3
     price: '[class*="price"]'
-  default_currency: TODO
+  default_currency: EUR
   default_tax_included: true
-  default_price_label: TODO verify local MSRP label
+  default_price_label: MSRP
   fixed_model: BIGSTER
   fixed_jato_model: BIGSTER
   fixed_jato_powertrain: null

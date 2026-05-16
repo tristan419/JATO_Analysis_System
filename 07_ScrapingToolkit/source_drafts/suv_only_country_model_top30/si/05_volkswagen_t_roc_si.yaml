@@ -1,14 +1,3 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 斯洛文尼亚 (si)
-# Country model rank: 5
-# Brand: VOLKSWAGEN
-# Model: T-ROC
-# Suggested scope kind: single_model
-# Sales 12M: 1,165
-# Draft path: si/05_volkswagen_t_roc_si.yaml
-# Porsche Holding Volkswagen family page exposes static model overview cards with
-# entry MSRP and a deep link into the configurator. This draft now filters the
-# shared overview page down to the T-Roc card.
 source_code: volkswagen_t_roc_si_draft_scrapling
 country: 斯洛文尼亚
 brand: VOLKSWAGEN
@@ -25,13 +14,14 @@ profile:
   default_price_label: Od z DDV
   fixed_model: T-ROC
   fixed_jato_model: T-ROC
+  default_currency: EUR
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Uses the Porsche Holding all-model overview page and filters to the T-Roc
-  card by container text. This keeps the draft runnable without hard-coding an unstable
+notes: Uses the Porsche Holding all-model overview page and filters to the T-Roc card
+  by container text. This keeps the draft runnable without hard-coding an unstable
   single-model configurator route.
 bootstrap_meta:
   country_model_rank: 5

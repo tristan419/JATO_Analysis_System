@@ -1,14 +1,3 @@
-# Draft MSRP source scaffold generated from candidate scope report.
-# Country: 斯洛文尼亚 (si)
-# Country model rank: 8
-# Brand: VOLKSWAGEN
-# Model: T-CROSS
-# Suggested scope kind: single_model
-# Sales 12M: 974
-# Draft path: si/08_volkswagen_t_cross_si.yaml
-# Porsche Holding Volkswagen family page exposes static model overview cards with
-# entry MSRP and a deep link into the configurator. This draft now filters the
-# shared overview page down to the T-Cross card.
 source_code: volkswagen_t_cross_si_draft_scrapling
 country: 斯洛文尼亚
 brand: VOLKSWAGEN
@@ -25,6 +14,7 @@ profile:
   default_price_label: Od z DDV
   fixed_model: T-CROSS
   fixed_jato_model: T-CROSS
+  default_currency: EUR
 schedule:
   frequency: manual_only
   run_window_start: 00:00
