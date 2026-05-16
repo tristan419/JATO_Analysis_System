@@ -8,7 +8,6 @@ from typing import Any
 
 import requests
 
-from jato_scraper.audit import build_audit_event, write_audit_event
 from jato_scraper.base import BaseExtractor, ExtractorConfig, RawObservation
 
 log = logging.getLogger(__name__)
@@ -62,45 +61,33 @@ class HttpJsonExtractor(BaseExtractor):
     def extract(self) -> list[RawObservation]:
         raw_json = self._fetch()
         if raw_json is None:
-            self._write_audit([], None, error="fetch_failed")
+            self.record_strategy_audit(
+                url=self.profile.url,
+                strategy="http_json",
+                observations=[],
+                winning_strategy=None,
+                error="fetch_failed",
+            )
             return []
         vehicles = self._navigate(raw_json)
         if vehicles is None:
-            self._write_audit([], None, error="navigation_failed")
+            self.record_strategy_audit(
+                url=self.profile.url,
+                strategy="http_json",
+                observations=[],
+                winning_strategy=None,
+                error="navigation_failed",
+            )
             return []
         vehicles = self._expand_items(vehicles)
         results = self._map(vehicles)
-        self._write_audit(results, "http_json")
-        return results
-
-    def _write_audit(
-        self,
-        results: list[RawObservation],
-        winning_strategy: str | None,
-        *,
-        error: str | None = None,
-    ) -> None:
-        if not self.run_id:
-            return
-        p = self.profile
-        attempted = [{
-            "strategy": "http_json",
-            "status": "success" if results else ("error" if error else "no_match"),
-            "observations_count": len(results),
-        }]
-        event = build_audit_event(
-            run_id=self.run_id,
-            source_code=self.config.source_code,
-            brand=self.config.brand,
-            country=self.config.country,
-            url=p.url,
-            attempted_strategies=attempted,
-            winning_strategy=winning_strategy,
+        self.record_strategy_audit(
+            url=self.profile.url,
+            strategy="http_json",
             observations=results,
-            tier="http",
-            error=error,
+            winning_strategy="http_json" if results else None,
         )
-        write_audit_event(event)
+        return results
 
     def _fetch(self) -> dict | list | None:
         p = self.profile

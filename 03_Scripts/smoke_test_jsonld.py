@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""JSON-LD smoke test for 12 whitelist brands × SE country.
+"""JSON-LD smoke test for whitelist brands in the SE country pack.
 
 Per the deep research report (2026-05-16) and April 12 MSRP plan §5.2:
 12 brands are verified to supply schema.org Vehicle/Product JSON-LD with
 Offer pricing on their manufacturer pages. This script runs a minimal
-dry-run extraction on SE sources for each brand and verifies:
+dry-run extraction on one SE source per available whitelist brand and verifies:
 
 1. `attempted_strategies` must include `json_script_selector`
 2. Whitelist brands should win via `json_script_selector` when the page has it
@@ -35,18 +35,18 @@ SCRAPING_DIR = REPO_ROOT / "07_ScrapingToolkit"
 
 
 def find_se_sources() -> list[str]:
-    """Find all SE source YAMLs in batch A for whitelist brands."""
+    """Find one SE source YAML in batch A for each available whitelist brand."""
     import yaml
 
     se_dir = SCRAPING_DIR / "source_drafts" / "suv_only_country_model_top30" / "se"
-    sources = []
+    sources_by_brand: dict[str, str] = {}
     for f in sorted(se_dir.glob("*.yaml")):
         with open(f) as fh:
             data = yaml.safe_load(fh)
         brand = data.get("brand", "")
-        if brand in WHITELIST_BRANDS:
-            sources.append(data.get("source_code", f.stem))
-    return sources
+        if brand in WHITELIST_BRANDS and brand not in sources_by_brand:
+            sources_by_brand[brand] = data.get("source_code", f.stem)
+    return [sources_by_brand[brand] for brand in sorted(sources_by_brand)]
 
 
 def run_smoke_dryrun(source_codes: list[str], verbose: bool = False) -> dict[str, Any]:

@@ -14,7 +14,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from jato_scraper.audit import build_audit_event, write_audit_event
 from jato_scraper.base import BaseExtractor, ExtractorConfig, RawObservation
 
 try:
@@ -205,37 +204,15 @@ class PlaywrightCardFlowExtractor(BaseExtractor):
                 context.close()
                 browser.close()
 
-        self._write_audit(observations, "playwright_card_flow" if observations else None, error=fetch_error)
-        return observations
-
-    def _write_audit(
-        self,
-        results: list[RawObservation],
-        winning_strategy: str | None,
-        *,
-        error: str | None = None,
-    ) -> None:
-        if not self.run_id:
-            return
-        p = self.profile
-        attempted = [{
-            "strategy": "playwright_card_flow",
-            "status": "success" if results else ("error" if error else "no_match"),
-            "observations_count": len(results),
-        }]
-        event = build_audit_event(
-            run_id=self.run_id,
-            source_code=self.config.source_code,
-            brand=self.config.brand,
-            country=self.config.country,
-            url=p.url,
-            attempted_strategies=attempted,
-            winning_strategy=winning_strategy,
-            observations=results,
+        self.record_strategy_audit(
+            url=self.profile.url,
+            strategy="playwright_card_flow",
+            observations=observations,
+            winning_strategy="playwright_card_flow" if observations else None,
             tier="dynamic",
-            error=error,
+            error=fetch_error,
         )
-        write_audit_event(event)
+        return observations
 
     def _has_direct_detail_flow(self, page) -> bool:
         self._goto(page)

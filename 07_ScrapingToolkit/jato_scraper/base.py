@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from jato_scraper.audit import build_audit_event, write_audit_event
+
 
 @dataclass(frozen=True)
 class ExtractorConfig:
@@ -85,6 +87,59 @@ class BaseExtractor(ABC):
     @property
     def extractor_version(self) -> str:
         return "0.1.0"
+
+    def record_audit_event(
+        self,
+        *,
+        url: str,
+        attempted_strategies: list[dict[str, Any]],
+        winning_strategy: str | None,
+        observations: list[RawObservation],
+        tier: str = "http",
+        error: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        """Write the common extractor audit event when a run_id is available."""
+        if not self.run_id:
+            return
+        event = build_audit_event(
+            run_id=self.run_id,
+            source_code=self.config.source_code,
+            brand=self.config.brand,
+            country=self.config.country,
+            url=url,
+            attempted_strategies=attempted_strategies,
+            winning_strategy=winning_strategy,
+            observations=observations,
+            tier=tier,
+            error=error,
+            extra=extra,
+        )
+        write_audit_event(event)
+
+    def record_strategy_audit(
+        self,
+        *,
+        url: str,
+        strategy: str,
+        observations: list[RawObservation],
+        winning_strategy: str | None,
+        tier: str = "http",
+        error: str | None = None,
+    ) -> None:
+        status = "success" if observations else ("error" if error else "no_match")
+        self.record_audit_event(
+            url=url,
+            attempted_strategies=[{
+                "strategy": strategy,
+                "status": status,
+                "observations_count": len(observations),
+            }],
+            winning_strategy=winning_strategy,
+            observations=observations,
+            tier=tier,
+            error=error,
+        )
 
     @abstractmethod
     def extract(self) -> list[RawObservation]:

@@ -9,7 +9,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from jato_scraper.audit import build_audit_event, write_audit_event
 from jato_scraper.base import BaseExtractor, ExtractorConfig, RawObservation
 
 log = logging.getLogger(__name__)
@@ -1214,7 +1213,14 @@ class ScraplingExtractor(BaseExtractor):
     def extract(self) -> list[RawObservation]:
         page = self._fetch()
         if page is None:
-            self._write_audit([], None, error="fetch_failed")
+            self.record_audit_event(
+                url=self.profile.url,
+                attempted_strategies=[],
+                winning_strategy=None,
+                observations=[],
+                tier=self.profile.tier or "http",
+                error="fetch_failed",
+            )
             return []
 
         attempted: list[dict[str, Any]] = []
@@ -1230,7 +1236,13 @@ class ScraplingExtractor(BaseExtractor):
                 "observations_count": len(results),
             })
             if results:
-                self._write_audit(results, "attr_json", attempted=attempted)
+                self.record_audit_event(
+                    url=p.url,
+                    attempted_strategies=attempted,
+                    winning_strategy="attr_json",
+                    observations=results,
+                    tier=p.tier or "http",
+                )
                 return results
             log.warning(
                 "Attribute-JSON extraction yielded nothing, "
@@ -1246,7 +1258,13 @@ class ScraplingExtractor(BaseExtractor):
                 "observations_count": len(results),
             })
             if results:
-                self._write_audit(results, "json_script_selector", attempted=attempted)
+                self.record_audit_event(
+                    url=p.url,
+                    attempted_strategies=attempted,
+                    winning_strategy="json_script_selector",
+                    observations=results,
+                    tier=p.tier or "http",
+                )
                 return results
             log.warning("JSON extraction yielded nothing, falling back to CSS")
 
@@ -1258,41 +1276,28 @@ class ScraplingExtractor(BaseExtractor):
                 "status": "success" if results else "no_match",
                 "observations_count": len(results),
             })
-            self._write_audit(results, "css_selectors" if results else None, attempted=attempted)
+            self.record_audit_event(
+                url=p.url,
+                attempted_strategies=attempted,
+                winning_strategy="css_selectors" if results else None,
+                observations=results,
+                tier=p.tier or "http",
+            )
             return results
 
         log.error(
             "No extraction strategy configured for %s",
             self.config.source_code,
         )
-        self._write_audit([], None, attempted=attempted, error="no_strategy_configured")
-        return []
-
-    def _write_audit(
-        self,
-        results: list[RawObservation],
-        winning_strategy: str | None,
-        *,
-        attempted: list[dict[str, Any]] | None = None,
-        error: str | None = None,
-    ) -> None:
-        """Emit one extractor audit event per source per run (if run_id is set)."""
-        if not self.run_id:
-            return
-        p = self.profile
-        event = build_audit_event(
-            run_id=self.run_id,
-            source_code=self.config.source_code,
-            brand=self.config.brand,
-            country=self.config.country,
+        self.record_audit_event(
             url=p.url,
-            attempted_strategies=attempted or [],
-            winning_strategy=winning_strategy,
-            observations=results,
+            attempted_strategies=attempted,
+            winning_strategy=None,
+            observations=[],
             tier=p.tier or "http",
-            error=error,
+            error="no_strategy_configured",
         )
-        write_audit_event(event)
+        return []
 
     def _fetch(self) -> Any | None:
         p = self.profile
