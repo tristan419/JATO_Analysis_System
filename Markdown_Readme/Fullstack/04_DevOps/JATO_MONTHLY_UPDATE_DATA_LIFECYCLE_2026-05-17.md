@@ -184,6 +184,12 @@ When changing frontend MarketScan/Dashboard:
 - If values differ, first compare selected filters/fuel types/time range before assuming data corruption.
 - Do not add UI-side correction factors for backend data issues.
 
+When changing frontend monthly update page (`JatoMonthlyUpdatePage.tsx`):
+
+- Publish button must be disabled when job is already published (`isSelectedJobPublished`) and when user has not reviewed (`reviewBundle?.jobId !== selectedJob?.jobId`).
+- Upload submit button must be disabled when another job is queued or running (`hasActiveJob`).
+- Do not remove the review-before-publish gate without replacing it with an equivalent confirmation step.
+
 ## Known Failure Patterns
 
 | Pattern | Likely cause | Fix |

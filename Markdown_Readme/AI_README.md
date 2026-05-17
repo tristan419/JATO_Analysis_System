@@ -92,7 +92,7 @@ data_wangler/          = Single compareO9.html utility
 | `CountryChatPage` | `/copilot` | Country Copilot (mobile-first, grounded answers) |
 | `CustomerInsightsPage` | `/customer-insights` | Benchmark Excel + Forum VOC Live dual mode |
 | `DataManagementPage` | `/data-management` | System overview, Airflow controls, VOC observatory |
-| `JatoMonthlyUpdatePage` | `/monthly-update` | Monthly JATO upload + refresh jobs |
+| `JatoMonthlyUpdatePage` | `/monthly-update` | Monthly JATO upload + refresh jobs with UX guardrails (publish requires review, upload disabled during active job) |
 | `LoginPage` | `/login` | Auth + role upgrade |
 | `CrudPage` | `/crud` | Generic CRUD |
 | `NotFoundPage` | `*` | 404 |
