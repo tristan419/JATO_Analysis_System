@@ -31,6 +31,7 @@ CLOUD_USER="${CLOUD_USER:-root}"
 CLOUD_REPO="${CLOUD_REPO:-/opt/JATO_Analysis_System-main}"
 CLOUD_DATA_DIR="${CLOUD_REPO}/04_Processed_data"
 BACKEND_SERVICE="${BACKEND_SERVICE:-jato-fullstack-backend@8000}"
+ALLOW_STALE_LOCAL_DATA_SYNC="${ALLOW_STALE_LOCAL_DATA_SYNC:-false}"
 
 # ── 本地路径 ──
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,6 +56,150 @@ log_ok()    { printf "${GREEN}  ✅ %s${NC}\n" "$1"; }
 log_warn()  { printf "${YELLOW}  ⚠️  %s${NC}\n" "$1"; }
 log_fail()  { printf "${RED}  ❌ %s${NC}\n" "$1"; }
 log_info()  { printf "  %s\n" "$1"; }
+
+is_truthy() {
+  case "${1,,}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+check_cloud_active_not_newer() {
+  local remote_summary_json
+
+  if is_truthy "$ALLOW_STALE_LOCAL_DATA_SYNC"; then
+    log_warn "跳过云端 freshness 防护，因为 ALLOW_STALE_LOCAL_DATA_SYNC=$ALLOW_STALE_LOCAL_DATA_SYNC"
+    return 0
+  fi
+
+  remote_summary_json="$(mktemp)"
+  log_step "2.5/6 检查本地候选是否会回退云端 active 数据..."
+  ssh -o ConnectTimeout=30 "$SSH_ALIAS" CLOUD_REPO="$CLOUD_REPO" "bash -s" > "$remote_summary_json" <<'REMOTE_SCRIPT'
+set -Eeuo pipefail
+cd "$CLOUD_REPO"
+PYTHON_BIN=".venv/bin/python"
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="python3"
+fi
+"$PYTHON_BIN" - <<'PY'
+import json
+from pathlib import Path
+
+import pandas as pd
+
+MONTHS = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+}
+
+path = Path("04_Processed_data/jato_full_archive.parquet")
+if not path.exists():
+    print(json.dumps({"exists": False}, ensure_ascii=False))
+    raise SystemExit(0)
+
+df = pd.read_parquet(path)
+country_col = "国家"
+month_cols = [
+    col for col in df.columns
+    if isinstance(col, str)
+    and len(col.split()) == 2
+    and col.split()[0].isdigit()
+    and col.split()[1] in MONTHS
+]
+
+countries: dict[str, dict[str, object]] = {}
+for country, sub in df.groupby(country_col, dropna=True):
+    totals: dict[str, float] = {}
+    for col in month_cols:
+        value = float(pd.to_numeric(sub[col], errors="coerce").fillna(0).sum())
+        if value:
+            totals[col] = value
+    latest = next(reversed(totals), None)
+    countries[str(country)] = {"latest": latest, "totals": totals}
+
+print(json.dumps({"exists": True, "countries": countries}, ensure_ascii=False))
+PY
+REMOTE_SCRIPT
+
+  python3 - "$LOCAL_PARQUET" "$remote_summary_json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+import pandas as pd
+
+MONTHS = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+}
+
+
+def period_key(label: str | None) -> tuple[int, int]:
+    if not label:
+        return (0, 0)
+    parts = label.split()
+    if len(parts) != 2 or not parts[0].isdigit():
+        return (0, 0)
+    return (int(parts[0]), MONTHS.get(parts[1], 0))
+
+
+def summarize(path: Path) -> dict[str, dict[str, object]]:
+    df = pd.read_parquet(path)
+    month_cols = [
+        col for col in df.columns
+        if isinstance(col, str)
+        and len(col.split()) == 2
+        and col.split()[0].isdigit()
+        and col.split()[1] in MONTHS
+    ]
+    countries: dict[str, dict[str, object]] = {}
+    for country, sub in df.groupby("国家", dropna=True):
+        totals: dict[str, float] = {}
+        for col in month_cols:
+            value = float(pd.to_numeric(sub[col], errors="coerce").fillna(0).sum())
+            if value:
+                totals[col] = value
+        countries[str(country)] = {"latest": next(reversed(totals), None), "totals": totals}
+    return countries
+
+
+local_path = Path(sys.argv[1])
+remote_summary = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+if not remote_summary.get("exists"):
+    print("  云端尚无 active parquet，允许首次同步。")
+    raise SystemExit(0)
+
+local_countries = summarize(local_path)
+remote_countries = remote_summary.get("countries") or {}
+regressions: list[str] = []
+
+for country, remote_info in remote_countries.items():
+    local_info = local_countries.get(country)
+    remote_latest = str(remote_info.get("latest") or "")
+    if local_info is None:
+        regressions.append(f"{country}: 云端有 {remote_latest or '-'}，本地候选缺失该国家")
+        continue
+    local_latest = str(local_info.get("latest") or "")
+    if period_key(remote_latest) > period_key(local_latest):
+        regressions.append(f"{country}: 云端 {remote_latest} > 本地候选 {local_latest or '-'}")
+
+if regressions:
+    print("  ERROR: 本地候选会覆盖/回退云端网页月更后的 active 数据。", file=sys.stderr)
+    print("  请先运行: bash 03_Scripts/sync_monthly_update_runtime_from_cloud.sh", file=sys.stderr)
+    print("  然后基于同步后的本地 active parquet 再执行上传。", file=sys.stderr)
+    print("  如确认要强制覆盖，可设置 ALLOW_STALE_LOCAL_DATA_SYNC=true。", file=sys.stderr)
+    for item in regressions[:20]:
+        print(f"    - {item}", file=sys.stderr)
+    if len(regressions) > 20:
+        print(f"    ... and {len(regressions) - 20} more", file=sys.stderr)
+    raise SystemExit(1)
+
+print("  本地候选未检测到国家月份回退。")
+PY
+
+  rm -f "$remote_summary_json"
+  log_ok "云端 active freshness 防护通过"
+}
 
 # ── 确保 new/ 和 archive/ 目录存在 ──
 mkdir -p "$NEW_DIR" "$ARCHIVE_DIR"
@@ -254,6 +399,8 @@ fi
 
 partition_count=$(find "$LOCAL_PARTITIONS" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
 log_ok "分区构建完成: ${partition_count} 个国家分区"
+
+check_cloud_active_not_newer
 
 # ═══════════════════════════════════════════════════════════════════
 #  Step 3: 归档 xlsx 到 archive/

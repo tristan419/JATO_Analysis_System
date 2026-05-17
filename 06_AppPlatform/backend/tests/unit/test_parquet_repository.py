@@ -60,3 +60,40 @@ def test_time_series_month_returns_latest_rows(monkeypatch) -> None:
 
     assert result["time"].tolist() == ["2025 Dec", "2026 Jan", "2026 Feb"]
     assert result["value"].tolist() == [70.0, 110.0, 150.0]
+
+
+def test_count_rows_falls_back_to_full_parquet_when_partition_files_exceed_manifest(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    processed_root = tmp_path / "04_Processed_data"
+    full_parquet = processed_root / "jato_full_archive.parquet"
+    partitioned_root = processed_root / "partitioned_dataset_v1"
+    partition_dir = partitioned_root / "国家=%E7%91%9E%E5%85%B8"
+    processed_root.mkdir(parents=True)
+    partition_dir.mkdir(parents=True)
+
+    pd.DataFrame({"国家": ["瑞典"], "2026 Mar": [26576]}).to_parquet(
+        full_parquet,
+        index=False,
+    )
+    pd.DataFrame({"2026 Mar": [26576]}).to_parquet(
+        partition_dir / "part-a.parquet",
+        index=False,
+    )
+    pd.DataFrame({"2026 Mar": [26576]}).to_parquet(
+        partition_dir / "part-b.parquet",
+        index=False,
+    )
+    (partitioned_root / "manifest.json").write_text(
+        '{"parquetFileCount": 1}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(parquet_repository, "PARQUET_PATH", full_parquet)
+    monkeypatch.setattr(parquet_repository, "PARTITIONED_PATH", partitioned_root)
+    monkeypatch.setattr(parquet_repository, "_dataset_cache", None)
+    monkeypatch.setattr(parquet_repository, "_dataset_cache_token", None)
+
+    assert parquet_repository._resolve_dataset_path() == full_parquet
+    assert parquet_repository.count_rows({}) == 1

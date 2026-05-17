@@ -274,6 +274,46 @@ def test_overview_payload_includes_suv_fuel_mix_for_trend() -> None:
     assert latest["suvTotalVolume"] == pytest.approx(218.0)
 
 
+def test_overview_payload_supports_custom_range_prior_label() -> None:
+    frame = pd.DataFrame(
+        {
+            "__brand": ["VOLVO", "BMW"],
+            "__model": ["EX30", "X3"],
+            "__powertrain": ["BEV", "ICE"],
+            "__segment_raw": ["SUV A0", "SUV A"],
+            "2025 Jan": [50.0, 30.0],
+            "2025 Feb": [60.0, 40.0],
+            "2025 Mar": [70.0, 50.0],
+            "2026 Jan": [100.0, 80.0],
+            "2026 Feb": [120.0, 90.0],
+            "2026 Mar": [140.0, 110.0],
+        }
+    )
+
+    payload = market_scan_service._build_overview_payload(
+        frame=frame,
+        selected_fuels=["BEV", "ICE"],
+        available_periods=[
+            "2025-01",
+            "2025-02",
+            "2025-03",
+            "2026-01",
+            "2026-02",
+            "2026-03",
+        ],
+        resolved_period="2026-03",
+        prior_period="2026-02",
+        same_month_last_year_period="2025-03",
+        ranking_limit=10,
+        custom_range_periods=["2026-01", "2026-02", "2026-03"],
+    )
+
+    assert payload["summary"]["customRangeVolume"] == pytest.approx(640.0)
+    assert payload["summary"]["customRangeLabel"] == "26.01 - 26.03"
+    assert payload["customRangeBrandRanking"]["priorLabel"] == "25.01 - 25.03"
+    assert payload["customRangeBrandRanking"]["items"][0]["brand"] == "VOLVO"
+
+
 def test_drilldown_payload_includes_month_rolling12_and_ytd_variants() -> None:
     frame = pd.DataFrame(
         {
@@ -417,6 +457,12 @@ def test_normalize_period_range_returns_custom_interval_and_skips_default_latest
         {"start": "2026-02", "end": "2026-02"},
         "2026-02",
     ) is None
+    assert market_scan_service._resolve_period("2026 Mar", available_periods) == "2026-03"
+    assert market_scan_service._normalize_period_range(
+        available_periods,
+        {"start": "2026 Jan", "end": "2026 Mar"},
+        "2026-04",
+    ) == ["2026-01", "2026-02", "2026-03"]
 
 
 def test_resolve_positioning_sales_window_prefers_custom_range() -> None:

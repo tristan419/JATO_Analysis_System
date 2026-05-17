@@ -1,36 +1,31 @@
 # Workflow Docs
 
-This folder contains workflow maps for the current JATO analysis system from two angles:
+This folder contains workflow maps for the current JATO analysis system from three angles:
 
-1. **Business presentation / deck view**
-   - `BUSINESS_PRESENTATION_DECK.md`
-2. **Business-facing pipeline view**
-   - `BUSINESS_PIPELINE_WORKFLOWS.md`
-3. **Technical/system view**
-   - `REPOSITORY_SYSTEM_WORKFLOW.md`
+1. **Business presentation / deck view** — `BUSINESS_PRESENTATION_DECK.md`
+   - What the business wants to achieve
+   - Which business workflows matter most
+   - How to explain the system in a stakeholder presentation
 
-Recommended reading order:
+2. **Business-facing pipeline view** — `BUSINESS_PIPELINE_WORKFLOWS.md`
+   - How JATO monthly import becomes usable analysis data
+   - How MSRP scraping becomes pricing intelligence
+   - How market scan / positioning / competitor monitoring are implemented
+   - How country scan / Copilot are grounded by data + news + prices
+   - How engineering config management works (parse → match → diff → publish)
 
-1. `BUSINESS_PRESENTATION_DECK.md`
-2. `BUSINESS_PIPELINE_WORKFLOWS.md`
-3. `REPOSITORY_SYSTEM_WORKFLOW.md`
+3. **Technical/system view** — `REPOSITORY_SYSTEM_WORKFLOW.md`
+   - Full Mermaid diagrams: business/data chain, AppPlatform runtime, GitNexus chain
+   - Where scripts, DAGs, data outputs, and app endpoints fit together
+   - Country Copilot routing architecture (current + target + planner-first)
 
-The business document answers:
+4. **Diagram index** — `DIAGRAMS_INDEX.md`
+   - Central index of all Mermaid diagrams across documentation
+   - Cross-reference to source documents for each diagram
 
-- How JATO monthly import becomes usable analysis data
-- How MSRP scraping becomes pricing intelligence
-- How market scan / positioning / competitor monitoring are implemented on the current pipeline
-- How country scan / Copilot are grounded by data + news + prices
+## Recommended reading order
 
-The presentation/deck document answers:
-
-- What the business actually wants to achieve
-- Which business workflows matter most
-- How those workflows map onto the current JATO pipeline
-- How to explain the system in a business-review or stakeholder presentation
-
-The technical document answers:
-
-- How the repository is split into data, scripts, scraping, orchestration, application, legacy dashboard, and GitNexus
-- Where the important scripts, DAGs, data outputs, and app endpoints fit together
-- How Country Copilot currently routes/scopes questions and how its new planner-first architecture is moving toward a top-tier internal knowledge assistant pattern
+1. `BUSINESS_PRESENTATION_DECK.md` — business context first
+2. `BUSINESS_PIPELINE_WORKFLOWS.md` — pipeline details
+3. `REPOSITORY_SYSTEM_WORKFLOW.md` — technical deep-dive
+4. `DIAGRAMS_INDEX.md` — visual reference

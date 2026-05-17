@@ -1,14 +1,14 @@
 {
-  "generatedAtUtc": "2026-04-15T18:21:26.681888+00:00",
+  "generatedAtUtc": "2026-04-21T02:16:52.819318+00:00",
   "manifestSchemaVersion": "1.1",
   "pipelineVersion": "1.0",
-  "sourceParquet": "04_Processed_data/jato_full_archive.parquet",
+  "sourceParquet": "04_Processed_data/staging/2026-03-r3-mixed/jato_full_archive.parquet",
   "sourceManifestSchemaVersion": "1.1",
-  "outputDatasetDir": "04_Processed_data/partitioned_dataset_v1",
+  "outputDatasetDir": "04_Processed_data/staging/2026-03-r3-mixed/partitioned_dataset_v1",
   "partitionColumns": [
     "国家"
   ],
-  "rows": 950999,
+  "rows": 989912,
   "columns": 96,
   "parquetFileCount": 21,
   "partitionDirectoryCount": 21,
@@ -36,95 +36,95 @@
     "国家=%E8%A5%BF%E7%8F%AD%E7%89%99"
   ],
   "partitionStats": {
+    "国家=%E5%8C%88%E7%89%99%E5%88%A9": {
+      "rows": 36377,
+      "signature": "1308984348581616366"
+    },
+    "国家=%E6%B3%A2%E5%85%B0": {
+      "rows": 53846,
+      "signature": "12063260659783718452"
+    },
+    "国家=%E5%BE%B7%E5%9B%BD": {
+      "rows": 137191,
+      "signature": "10149132228156059530"
+    },
+    "国家=%E8%8A%AC%E5%85%B0": {
+      "rows": 27873,
+      "signature": "8093703167641377504"
+    },
+    "国家=%E4%B8%B9%E9%BA%A6": {
+      "rows": 24240,
+      "signature": "10178662246186763716"
+    },
+    "国家=%E6%96%AF%E6%B4%9B%E4%BC%90%E5%85%8B": {
+      "rows": 33785,
+      "signature": "8872099241081819881"
+    },
+    "国家=%E5%A5%A5%E5%9C%B0%E5%88%A9": {
+      "rows": 58054,
+      "signature": "3019642915115037309"
+    },
     "国家=%E8%A5%BF%E7%8F%AD%E7%89%99": {
       "rows": 74921,
-      "signature": "716827227938842753"
+      "signature": "2979800471530761625"
     },
     "国家=%E8%8D%B7%E5%85%B0": {
       "rows": 46478,
-      "signature": "15464254989578287640"
+      "signature": "4329887502889881674"
     },
     "国家=%E5%85%8B%E7%BD%97%E5%9C%B0%E4%BA%9A": {
       "rows": 24929,
-      "signature": "2665896333281828683"
+      "signature": "4679269515852903361"
     },
     "国家=%E5%B8%8C%E8%85%8A": {
       "rows": 17954,
-      "signature": "12295202930390827724"
+      "signature": "11375339086264112268"
     },
     "国家=%E7%BD%97%E9%A9%AC%E5%B0%BC%E4%BA%9A": {
       "rows": 30930,
-      "signature": "2801873113393548625"
+      "signature": "12165091496880282497"
     },
     "国家=%E6%8D%B7%E5%85%8B": {
       "rows": 41296,
-      "signature": "8104158406815079568"
+      "signature": "1250742407941102896"
     },
     "国家=%E6%84%8F%E5%A4%A7%E5%88%A9": {
       "rows": 100302,
-      "signature": "5081328472748905268"
+      "signature": "8366911939680428524"
     },
     "国家=%E6%B3%95%E5%9B%BD": {
       "rows": 68067,
-      "signature": "14613272405121785635"
+      "signature": "6773477091932509487"
     },
     "国家=%E8%91%A1%E8%90%84%E7%89%99": {
       "rows": 29299,
-      "signature": "3790963271729566279"
+      "signature": "11448867304027928155"
     },
     "国家=%E7%91%9E%E5%A3%AB": {
       "rows": 54023,
-      "signature": "4378868566069693662"
+      "signature": "6236966868929548298"
     },
     "国家=%E7%91%9E%E5%85%B8": {
       "rows": 33327,
-      "signature": "5434243611655693485"
+      "signature": "6965918375414429933"
     },
     "国家=%E6%8C%AA%E5%A8%81": {
       "rows": 14596,
-      "signature": "1510660782921918943"
-    },
-    "国家=%E5%8C%88%E7%89%99%E5%88%A9": {
-      "rows": 35789,
-      "signature": "2595897173498662869"
-    },
-    "国家=%E4%B8%B9%E9%BA%A6": {
-      "rows": 23565,
-      "signature": "6785502541633027635"
+      "signature": "108961929826269893"
     },
     "国家=%E6%AF%94%E5%88%A9%E6%97%B6": {
       "rows": 62143,
-      "signature": "3110852235020241580"
-    },
-    "国家=%E6%B3%A2%E5%85%B0": {
-      "rows": 51936,
-      "signature": "9817436572176788195"
-    },
-    "国家=%E5%BE%B7%E5%9B%BD": {
-      "rows": 123779,
-      "signature": "880496249332289060"
-    },
-    "国家=%E5%A5%A5%E5%9C%B0%E5%88%A9": {
-      "rows": 56781,
-      "signature": "157501528010578164"
-    },
-    "国家=%E8%8A%AC%E5%85%B0": {
-      "rows": 17337,
-      "signature": "3134230936963629194"
-    },
-    "国家=%E6%96%AF%E6%B4%9B%E4%BC%90%E5%85%8B": {
-      "rows": 23266,
-      "signature": "14146836961471683637"
+      "signature": "3618588357718030676"
     },
     "国家=%E6%96%AF%E6%B4%9B%E6%96%87%E5%B0%BC%E4%BA%9A": {
       "rows": 20281,
-      "signature": "13835850031369058031"
+      "signature": "10651467503775824469"
     }
   },
-  "parquetTotalBytes": 43547082,
-  "elapsedSeconds": 5.176,
+  "parquetTotalBytes": 43455144,
+  "elapsedSeconds": 13.949,
   "validationSummary": {
-    "inputRows": 950999,
+    "inputRows": 989912,
     "inputColumns": 96,
     "partitionCardinality": {
       "国家": 21

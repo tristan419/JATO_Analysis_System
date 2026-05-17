@@ -1,8 +1,9 @@
+import json
+import logging
+import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
-import json
-import time
-import threading
 
 import pandas as pd
 import pyarrow.dataset as ds
@@ -20,9 +21,59 @@ from app.core.config import (
 )
 
 # ── Dataset singleton (reuse across requests) ──
+LOGGER = logging.getLogger(__name__)
 _dataset_cache: ds.Dataset | None = None
 _dataset_cache_token: str | None = None
 _dataset_lock = threading.Lock()
+
+
+def _partition_manifest_parquet_count(path: Path) -> int | None:
+    manifest_path = path / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        LOGGER.warning(
+            "Partitioned dataset manifest is unreadable: %s",
+            manifest_path,
+        )
+        return None
+
+    raw_count = payload.get("parquetFileCount")
+    if raw_count is None:
+        return None
+    try:
+        return int(raw_count)
+    except (TypeError, ValueError):
+        LOGGER.warning(
+            "Partitioned dataset manifest has invalid parquetFileCount: %r",
+            raw_count,
+        )
+        return None
+
+
+def _partition_file_count(path: Path) -> int:
+    return sum(1 for _ in path.rglob("*.parquet"))
+
+
+def _partition_manifest_matches_files(path: Path) -> bool:
+    expected_count = _partition_manifest_parquet_count(path)
+    if expected_count is None:
+        return True
+
+    actual_count = _partition_file_count(path)
+    if actual_count == expected_count:
+        return True
+
+    LOGGER.warning(
+        "Ignoring partitioned dataset because manifest parquetFileCount=%s "
+        "but actual parquet files=%s: %s",
+        expected_count,
+        actual_count,
+        path,
+    )
+    return False
 
 
 def _resolve_dataset_path() -> Path:
@@ -30,7 +81,10 @@ def _resolve_dataset_path() -> Path:
         PARTITIONED_PATH.is_dir()
         and (PARTITIONED_PATH / "manifest.json").exists()
     ):
-        return PARTITIONED_PATH
+        if _partition_manifest_matches_files(PARTITIONED_PATH):
+            return PARTITIONED_PATH
+        if PARQUET_PATH.is_file():
+            return PARQUET_PATH
     if (
         PARTITIONED_PATH.is_dir()
         and next(PARTITIONED_PATH.rglob("*.parquet"), None)

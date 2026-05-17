@@ -61,6 +61,7 @@ Markdown_Readme/
 | 文档 | 领域 | 状态 | 说明 |
 | --- | --- | --- | --- |
 | `ROADMAP.md` | 总览 | Active | 唯一主索引 |
+| `../AI_README.md` | 总览/AI | Active | 面向 AI Agent 的结构化快速索引（模块/路由/页面/数据流/外部服务） |
 | `ARCHITECTURE_REVIEW_2026-04-17.md` | 架构评审 | Active | 跨域架构评审与 P0/P1/P2 改动建议（含后续实现增量说明） |
 | `PRODUCT_DEEPDIVE_2026-04-17.md` | 产品/架构 | Active | 六问答卷：跨源 join / MSRP 抓取+配置差异 / Copilot 精准化 / 多源对账 / 统一抓取 |
 | **01_DevWorkflow/** | | | |
@@ -71,12 +72,18 @@ Markdown_Readme/
 | `01_DevWorkflow/COUNTRY_COPILOT_INTENT_AND_HYBRID_RETRIEVAL_2026-04-17.md` | 开发规范/AI | Active | Copilot Snapshot / Dynamic / Live 架构、grounded answer 与 direct-answer 路由 |
 | `01_DevWorkflow/COUNTRY_COPILOT_GOVERNED_ANALYTICAL_COPILOT_PRD_2026-05-11.md` | 产品/AI | Active | Country Copilot 治理化分析助手 PRD：tool-first 取证 → 强制最终答复、visible answer path、6-section 报告 |
 | `01_DevWorkflow/version_comparison_cross_segment_model_picker_prd.md` | 产品/前端 | Active | Version Comparison 跨 Segment Model Picker + Smart Label System PRD |
+| `01_DevWorkflow/ranking_trend_drilldown_prd.md` | 产品/前端 | Active | Ranking Trend 排名趋势下钻 PRD |
+| `01_DevWorkflow/presence_websocket_prd.md` | 产品/前端 | Active | Presence 用户在线状态 WebSocket PRD |
 | **Hermes (Governance Layer)** | | | |
 | `Hermes/HERMES_IMPLEMENTATION_PLAN_2026-05-14.md` | 治理 | Active | Hermes 8 阶段实施方案，5 模块架构 |
 | `Hermes/REPOSITORY_ASSET_MAP.md` | 治理 | Active | 全量仓库资产地图（Phase 0 产出） |
 | `Hermes/HERMES_PRD_TEMPLATE.md` | 治理/规范 | Active | Hermes 兼容 PRD 模板（含 Governance 区块） |
-| `../hermes/` (8 YAML registries) | 治理 | Active | Source / Pipeline / Feature / Prompt / Artifact / Gaps / Proposal 总账本 |
-| `03_Scripts/hermes/` (4 Python modules) | 治理/工具 | Active | Intake CLI + Code Audit CLI + Registry Loader + Text Matcher |
+| `Hermes/CI_DEPLOY_WORKFLOW_GOVERNANCE_2026-05-14.md` | 治理/CI | Active | CI/CD 部署工作流治理规范 |
+| `Hermes/MODEL_ROUTING_POLICY_2026-05-14.md` | 治理/AI | Active | LLM 模型路由策略与 provider 选择 |
+| `Hermes/PIPELINE_SCHEDULER_DECISION_2026-05-14.md` | 治理/调度 | Active | Pipeline 调度器决策记录 |
+| `Hermes/SERVER_ARTIFACT_SYNC_POLICY_2026-05-14.md` | 治理/同步 | Active | 服务器 Artifact 同步策略 |
+| `../hermes/` (8 YAML registries + 3 JSONL ledgers) | 治理 | Active | Source / Pipeline / Feature / Prompt / Artifact / Gaps / Proposal 总账本 + evidence/answer/sentinel 流水 |
+| `03_Scripts/hermes/` (13 Python modules) | 治理/工具 | Active | Intake CLI + Code Audit CLI + Pipeline Audit CLI + Registry Loader + Evidence Writer + Answer Audit + Cost Report + Source Quality + Text Matcher + Dev Event Generator/Checker + Server Snapshot Sync |
 | **02_DataETL/** | | | |
 | `02_DataETL/ETL.md` | 实现 | Active | 数据处理主链路（Raw → ETL → 分区 → 刷新） |
 | `02_DataETL/ETL_Baseline_Patch_Migration_Checklist_2026-04-10.md` | 实现 | Active | Baseline / Patch 迁移执行清单 |
@@ -101,6 +108,7 @@ Markdown_Readme/
 | `MSRP/04_Execution/MSRP_XC60_EXECUTION_RESULT_2026-04-11.md` | 验证/MSRP | Active | XC60 执行结果 |
 | `MSRP/04_Execution/MSRP_XC60_SCRAPE_PREVIEW_2026-04-11.md` | 验证/MSRP | History | XC60 拓取预览（已执行） |
 | `MSRP/04_Execution/MSRP_BATCH1_SOURCE_RESEARCH_2026-04-11.md` | 验证/MSRP | Active | Batch-1 品牌调研结果 |
+| `MSRP/04_Execution/MSRP_SWEDEN_VOLKSWAGEN_BATCH_RESULT_2026-04-18.md` | 执行/MSRP | Active | 瑞典 Volkswagen 批次执行结果 |
 | `MSRP/05_Backlog/MSRP_COUNTRY_BRAND_SOURCE_PRIORITY_PLAN_2026-04-11.md` | Backlog/MSRP | **Archived** | 旧 country×brand 计划（已被 SUV Top30 替代） |
 | **03_Database/** | | | |
 | `03_Database/PLATFORM_STACK_AND_DATABASE_BOUNDARY_2026-04-10.md` | 架构 | Active | 平台技术栈与数据库边界设计 |
@@ -111,8 +119,19 @@ Markdown_Readme/
 | **04_DevOps/** | | | |
 | `04_DevOps/TENCENT_CLOUD_DEPLOY.md` | 运维/部署 | Active | 腾讯云 Ubuntu Fullstack 部署 |
 | `04_DevOps/MANUAL_CICD.md` | 运维/发布 | Active | Fullstack 手动 CI/CD 与线上修复 |
+| `04_DevOps/JATO_MONTHLY_UPDATE_DATA_LIFECYCLE_2026-05-17.md` | 运维/数据 | Active | JATO 月更 active Parquet 生命周期、网页上传发布规则、MarketScan/Dashboard 数据排查记录 |
 | `04_DevOps/FULLSTACK_LOCAL_DEBUG.md` | 运维/调试 | Active | Fullstack 本地联调与问题排查 |
 | `04_DevOps/GIT_PROXY_SWITCH.md` | 运维/工具 | Active | Git 代理快速切换 |
+| `04_DevOps/FULLSTACK_DEPLOY_BEGINNER_GUIDE_2026-04-14.md` | 运维/部署 | Active | Fullstack 部署入门指南 |
+| `04_DevOps/FULLSTACK_PERFORMANCE_SUMMARY_2026-04-14.md` | 运维/性能 | Active | Fullstack 性能优化总结 |
+| `04_DevOps/MSRP_LOCAL_SYNC_AUTOMATION.md` | 运维/MSRP | Active | MSRP 本地同步自动化方案 |
+| `04_DevOps/PROXY_AND_SCRAPER_DEBUG_2026-05-15.md` | 运维/调试 | Active | 代理与抓取器调试指南 |
+| `04_DevOps/deep-research-report-scraping.md` | 运维/抓取 | Active | 深度研究报告抓取方案 |
+| **WORKFLOWS/** | | | |
+| `WORKFLOWS/BUSINESS_PIPELINE_WORKFLOWS.md` | 业务/流程 | Active | 业务流程透视：JATO 导入→分析→MSRP→定位→竞品监控→国家扫描 |
+| `WORKFLOWS/BUSINESS_PRESENTATION_DECK.md` | 业务/汇报 | Active | 业务视角的系统能力汇报 Deck |
+| `WORKFLOWS/REPOSITORY_SYSTEM_WORKFLOW.md` | 技术/架构 | Active | 仓库级系统工作流（含 Mermaid 图）：三层执行链 + AppPlatform 交互 + GitNexus |
+| `WORKFLOWS/DIAGRAMS_INDEX.md` | 技术/图表 | Active | 系统架构图 / 数据流图索引 |
 | **_archived/** | | | |
 | `_archived/JATO_GLOBAL_VISUALIZATION.md` | 产品/规划 | Shelved | 全球可视化总控方案（不再继续） |
 | `_archived/STREAMLIT_TO_FULLSTACK_MIGRATION.md` | 迁移 | History | Streamlit → Fullstack 迁移蓝图 |

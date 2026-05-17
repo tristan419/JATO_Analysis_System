@@ -51,6 +51,12 @@ SAFE_CLEANUP_TIER = "safe"
 CAUTIOUS_CLEANUP_TIER = "cautious"
 PROTECTED_CLEANUP_TIER = "protected"
 ALLOWED_CLEANUP_TIERS = {SAFE_CLEANUP_TIER, CAUTIOUS_CLEANUP_TIER}
+SALES_DOUBLING_RATIO_MIN = 1.98
+SALES_DOUBLING_RATIO_MAX = 2.02
+SALES_DOUBLING_MIN_REFERENCE_SALES = 1000.0
+SALES_DOUBLING_MIN_ABSOLUTE_DELTA = 1000.0
+SALES_DOUBLING_MIN_MONTH_COUNT = 2
+SALES_DOUBLING_SAMPLE_LIMIT = 6
 _WRITE_LOCK = threading.Lock()
 _RUNNING_THREADS: dict[str, threading.Thread] = {}
 
@@ -256,6 +262,146 @@ def _collect_country_monthly_sales(
             if (serialized := _serialize_numeric_value(values.get(month))) is not None
         }
     return result
+
+
+def _collect_frame_countries(frame: pd.DataFrame, *, path_label: str) -> list[str]:
+    country_column = _find_country_column(list(frame.columns))
+    if country_column is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{path_label} 缺少国家列，无法执行 publish 销量防重校验。",
+        )
+    values = frame[country_column].astype("string").fillna("").str.strip()
+    return _ordered_distinct_strings(values.tolist())
+
+
+def _is_near_sales_doubling(
+    *,
+    reference_sales: int | float | None,
+    candidate_sales: int | float | None,
+) -> tuple[bool, float | None]:
+    if reference_sales is None or candidate_sales is None:
+        return False, None
+    reference = float(reference_sales)
+    candidate = float(candidate_sales)
+    if reference < SALES_DOUBLING_MIN_REFERENCE_SALES:
+        return False, None
+    if abs(candidate - reference) < SALES_DOUBLING_MIN_ABSOLUTE_DELTA:
+        return False, None
+    ratio = candidate / reference if reference else 0.0
+    if SALES_DOUBLING_RATIO_MIN <= ratio <= SALES_DOUBLING_RATIO_MAX:
+        return True, ratio
+    return False, ratio
+
+
+def _find_publish_sales_doubling_anomalies(
+    *,
+    active_parquet_path: Path,
+    candidate_parquet_path: Path,
+) -> list[dict[str, Any]]:
+    """Detect likely duplicate country merges before candidate data becomes active."""
+    active_frame = _load_monthly_sales_frame(
+        active_parquet_path,
+        path_label="当前 active 数据集",
+    )
+    candidate_frame = _load_monthly_sales_frame(
+        candidate_parquet_path,
+        path_label="candidate 数据集",
+    )
+    active_countries = set(
+        _collect_frame_countries(active_frame, path_label="当前 active 数据集")
+    )
+    candidate_countries = set(
+        _collect_frame_countries(candidate_frame, path_label="candidate 数据集")
+    )
+    countries = sorted(active_countries & candidate_countries)
+    if not countries:
+        return []
+
+    active_totals = _collect_country_monthly_sales(
+        active_frame,
+        countries=countries,
+        path_label="当前 active 数据集",
+    )
+    candidate_totals = _collect_country_monthly_sales(
+        candidate_frame,
+        countries=countries,
+        path_label="candidate 数据集",
+    )
+
+    anomalies: list[dict[str, Any]] = []
+    for country in countries:
+        reference_months = active_totals.get(country, {})
+        candidate_months = candidate_totals.get(country, {})
+        common_months = sorted(
+            set(reference_months.keys()) & set(candidate_months.keys()),
+            key=_time_sort_key,
+        )
+        suspicious_months: list[dict[str, Any]] = []
+        for month in common_months:
+            reference_sales = reference_months.get(month)
+            candidate_sales = candidate_months.get(month)
+            is_doubled, ratio = _is_near_sales_doubling(
+                reference_sales=reference_sales,
+                candidate_sales=candidate_sales,
+            )
+            if not is_doubled:
+                continue
+            suspicious_months.append(
+                {
+                    "month": month,
+                    "referenceSales": reference_sales,
+                    "candidateSales": candidate_sales,
+                    "ratio": round(float(ratio or 0), 3),
+                }
+            )
+
+        if len(suspicious_months) < SALES_DOUBLING_MIN_MONTH_COUNT:
+            continue
+
+        recent_months = common_months[-12:]
+        reference_rolling = sum(
+            float(reference_months.get(month) or 0) for month in recent_months
+        )
+        candidate_rolling = sum(
+            float(candidate_months.get(month) or 0) for month in recent_months
+        )
+        rolling_ratio = (
+            candidate_rolling / reference_rolling if reference_rolling else None
+        )
+        anomalies.append(
+            {
+                "country": country,
+                "suspiciousMonthCount": len(suspicious_months),
+                "sampleMonths": suspicious_months[:SALES_DOUBLING_SAMPLE_LIMIT],
+                "referenceRolling12": _serialize_numeric_value(reference_rolling),
+                "candidateRolling12": _serialize_numeric_value(candidate_rolling),
+                "rolling12Ratio": (
+                    round(float(rolling_ratio), 3)
+                    if rolling_ratio is not None
+                    else None
+                ),
+            }
+        )
+    return anomalies
+
+
+def _render_sales_doubling_anomalies(anomalies: list[dict[str, Any]]) -> str:
+    rendered_items: list[str] = []
+    for item in anomalies[:5]:
+        country = str(item.get("country", ""))
+        sample_months = item.get("sampleMonths")
+        months = []
+        if isinstance(sample_months, list):
+            for month_item in sample_months[:3]:
+                if isinstance(month_item, dict):
+                    months.append(str(month_item.get("month", "")))
+        month_text = ",".join(month for month in months if month) or "-"
+        ratio = item.get("rolling12Ratio")
+        ratio_text = f", rolling12={ratio}x" if ratio is not None else ""
+        rendered_items.append(f"{country}({month_text}{ratio_text})")
+    extra = " 等" if len(anomalies) > 5 else ""
+    return "；".join(rendered_items) + extra
 
 
 def _resolve_review_reference_dataset(
@@ -1574,6 +1720,19 @@ def publish_jato_monthly_update_job(
                 detail=(
                     "publish 会让当前 active 数据回退，请先更换 baseline 或重建 candidate："
                     f"{rendered}{extra}"
+                ),
+            )
+        sales_doubling_anomalies = _find_publish_sales_doubling_anomalies(
+            active_parquet_path=active_paths["parquet"],
+            candidate_parquet_path=source_paths["parquet"],
+        )
+        if sales_doubling_anomalies:
+            rendered = _render_sales_doubling_anomalies(sales_doubling_anomalies)
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "publish 检测到 candidate 疑似重复合并，多个重叠月份销量约为 "
+                    f"当前 active 的 2x：{rendered}。请先重建 candidate 或回滚到正确 active。"
                 ),
             )
 

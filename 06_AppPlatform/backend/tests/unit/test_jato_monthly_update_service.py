@@ -1418,10 +1418,22 @@ def test_publish_monthly_update_job_blocks_country_regression(
             {"国家": "德国", "Model": "ID.4", "2026 Jan": 11, "2026 Mar": 21},
         ],
     )
-    (processed_root / "manifest.json").write_text('{"version":"active"}', encoding="utf-8")
-    (processed_root / "dataset_fingerprint.json").write_text('{"hash":"active"}', encoding="utf-8")
-    (processed_root / "refresh_job_report.json").write_text('{"jobStatus":"active"}', encoding="utf-8")
-    (active_partition / "part-000.parquet").write_text("active-partition", encoding="utf-8")
+    (processed_root / "manifest.json").write_text(
+        '{"version":"active"}',
+        encoding="utf-8",
+    )
+    (processed_root / "dataset_fingerprint.json").write_text(
+        '{"hash":"active"}',
+        encoding="utf-8",
+    )
+    (processed_root / "refresh_job_report.json").write_text(
+        '{"jobStatus":"active"}',
+        encoding="utf-8",
+    )
+    (active_partition / "part-000.parquet").write_text(
+        "active-partition",
+        encoding="utf-8",
+    )
 
     staging_root = processed_root / "staging" / "2026-03-mixed"
     staging_partition = staging_root / "partitioned_dataset_v1"
@@ -1433,10 +1445,22 @@ def test_publish_monthly_update_job_blocks_country_regression(
             {"国家": "德国", "Model": "ID.4", "2026 Jan": 11, "2026 Mar": 21},
         ],
     )
-    (staging_root / "manifest.json").write_text('{"version":"candidate"}', encoding="utf-8")
-    (staging_root / "dataset_fingerprint.json").write_text('{"hash":"candidate"}', encoding="utf-8")
-    (staging_root / "refresh_job_report.json").write_text('{"jobStatus":"success"}', encoding="utf-8")
-    (staging_partition / "part-000.parquet").write_text("candidate-partition", encoding="utf-8")
+    (staging_root / "manifest.json").write_text(
+        '{"version":"candidate"}',
+        encoding="utf-8",
+    )
+    (staging_root / "dataset_fingerprint.json").write_text(
+        '{"hash":"candidate"}',
+        encoding="utf-8",
+    )
+    (staging_root / "refresh_job_report.json").write_text(
+        '{"jobStatus":"success"}',
+        encoding="utf-8",
+    )
+    (staging_partition / "part-000.parquet").write_text(
+        "candidate-partition",
+        encoding="utf-8",
+    )
 
     job_id = "jato-update-regression"
     upload_path = job_root / job_id / "uploads" / "patch.xlsx"
@@ -1470,6 +1494,100 @@ def test_publish_monthly_update_job_blocks_country_regression(
     assert exc_info.value.status_code == 409
     assert "瑞典" in str(exc_info.value.detail)
     assert "2026 Mar -> 2026 Jan" in str(exc_info.value.detail)
+
+
+def test_publish_monthly_update_job_blocks_likely_doubled_sales(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    processed_root = project_root / "04_Processed_data"
+    job_root = processed_root / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+
+    active_partition = processed_root / "partitioned_dataset_v1"
+    active_partition.mkdir(parents=True, exist_ok=True)
+    _write_dataset_parquet(
+        processed_root / "jato_full_archive.parquet",
+        [
+            {
+                "国家": "瑞典",
+                "Model": "EX30",
+                "2026 Jan": 16041,
+                "2026 Feb": 19341,
+                "2026 Mar": 26576,
+            }
+        ],
+    )
+    (processed_root / "manifest.json").write_text('{"version":"active"}', encoding="utf-8")
+    (processed_root / "dataset_fingerprint.json").write_text('{"hash":"active"}', encoding="utf-8")
+    (processed_root / "refresh_job_report.json").write_text('{"jobStatus":"active"}', encoding="utf-8")
+    (active_partition / "part-000.parquet").write_text("active-partition", encoding="utf-8")
+
+    staging_root = processed_root / "staging" / "2026-03-mixed"
+    staging_partition = staging_root / "partitioned_dataset_v1"
+    staging_partition.mkdir(parents=True, exist_ok=True)
+    _write_dataset_parquet(
+        staging_root / "jato_full_archive.parquet",
+        [
+            {
+                "国家": "瑞典",
+                "Model": "EX30",
+                "2026 Jan": 32082,
+                "2026 Feb": 38682,
+                "2026 Mar": 53152,
+            }
+        ],
+    )
+    (staging_root / "manifest.json").write_text('{"version":"candidate"}', encoding="utf-8")
+    (staging_root / "dataset_fingerprint.json").write_text('{"hash":"candidate"}', encoding="utf-8")
+    (staging_root / "refresh_job_report.json").write_text('{"jobStatus":"success"}', encoding="utf-8")
+    (staging_partition / "part-000.parquet").write_text("candidate-partition", encoding="utf-8")
+
+    job_id = "jato-update-doubled"
+    upload_path = job_root / job_id / "uploads" / "patch.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"fake")
+    state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id=job_id,
+        month="2026-03",
+        triggered_by="tester",
+        upload_filename="patch.xlsx",
+        stored_upload_path=upload_path,
+    )
+    state["status"] = "success"
+    state["phase"] = "completed"
+    state["artifacts"] = {
+        "stagingOutputPath": "04_Processed_data/staging/2026-03-mixed/jato_full_archive.parquet",
+        "manifestPath": "04_Processed_data/staging/2026-03-mixed/manifest.json",
+        "partitionOutputPath": "04_Processed_data/staging/2026-03-mixed/partitioned_dataset_v1",
+        "fingerprintPath": "04_Processed_data/staging/2026-03-mixed/dataset_fingerprint.json",
+        "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
+    }
+    state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    jato_monthly_update_service._persist_job_state(state)
+
+    with pytest.raises(HTTPException) as exc_info:
+        jato_monthly_update_service.publish_jato_monthly_update_job(
+            job_id=job_id,
+            triggered_by="publisher",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "重复合并" in str(exc_info.value.detail)
+    assert "瑞典" in str(exc_info.value.detail)
+    active_records = pd.read_parquet(
+        processed_root / "jato_full_archive.parquet"
+    ).to_dict("records")
+    assert active_records == [
+        {
+            "国家": "瑞典",
+            "Model": "EX30",
+            "2026 Jan": 16041,
+            "2026 Feb": 19341,
+            "2026 Mar": 26576,
+        }
+    ]
 
 
 def test_rollback_monthly_update_job_restores_publish_backup(

@@ -234,6 +234,29 @@ def _period_to_month_column(period: str) -> str:
     return f"{int(year_text):04d} {NUMBER_TO_MONTH_NAME[int(month_text)]}"
 
 
+def _normalize_period_text(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    normalized = text.replace("/", "-").replace(".", "-")
+    if len(normalized) == 7 and normalized[4] == "-":
+        year_text, month_text = normalized.split("-", 1)
+        if year_text.isdigit() and month_text.isdigit():
+            month_number = int(month_text)
+            if 1 <= month_number <= 12:
+                return f"{int(year_text):04d}-{month_number:02d}"
+
+    parts = text.split()
+    if len(parts) == 2 and parts[0].isdigit():
+        month_name = parts[1][:3].title()
+        month_number = MONTH_NAME_TO_NUMBER.get(month_name)
+        if month_number:
+            return f"{int(parts[0]):04d}-{month_number:02d}"
+
+    return None
+
+
 def _period_to_timestamp(period: str) -> pd.Timestamp:
     return pd.Period(period, freq="M").to_timestamp()
 
@@ -366,10 +389,8 @@ def _resolve_period(requested_period: str | None, available_periods: list[str]) 
     if not requested_period:
         return available_periods[-1]
 
-    normalized = requested_period.strip().replace("/", "-").replace(".", "-")
-    if len(normalized) == 7 and normalized[4] == "-":
-        target = normalized
-    else:
+    target = _normalize_period_text(requested_period)
+    if target is None:
         return available_periods[-1]
 
     if target in available_periods:
@@ -1296,8 +1317,18 @@ def _normalize_period_range(
     end = str(time_range.get("end") or "").strip() or resolved_period
     if not start and not end:
         return None
-    start_period = start if start in available_periods else available_periods[0]
-    end_period = end if end in available_periods else resolved_period
+    normalized_start = _normalize_period_text(start)
+    normalized_end = _normalize_period_text(end)
+    start_period = (
+        normalized_start
+        if normalized_start in available_periods
+        else available_periods[0]
+    )
+    end_period = (
+        normalized_end
+        if normalized_end in available_periods
+        else resolved_period
+    )
     start_index = available_periods.index(start_period)
     end_index = available_periods.index(end_period)
     if start_index > end_index:
@@ -2226,6 +2257,7 @@ def _build_overview_payload(
     current_rolling12_columns = _pcm["current_rolling12_columns"]
     prior_rolling12_columns = _pcm["prior_rolling12_columns"]
     custom_range_columns = _pcm["custom_range_columns"]
+    prior_custom_range_periods = _pcm["prior_custom_range_periods"]
     prior_custom_range_columns = _pcm["prior_custom_range_columns"]
 
     # Precompute all volume totals in one pass
@@ -2845,6 +2877,149 @@ def _build_single_fuel_ranking_items(  # noqa: keep volume-based sort
     return items[: max(1, int(ranking_limit))]
 
 
+def _precompute_single_fuel_panel_rankings(
+    frame: pd.DataFrame,
+    windows: dict[str, tuple[list[str], list[str]]],
+    ranking_limit: int,
+) -> dict[tuple[str, str, str], list[dict[str, Any]]]:
+    if frame.empty:
+        return {}
+
+    limit = max(1, int(ranking_limit))
+    result: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    base_data = {
+        "__segment_raw": frame["__segment_raw"].astype(str).str.strip(),
+        "__powertrain": frame["__powertrain"].astype(str).str.strip(),
+        "__model": frame["__model"].astype(str).str.strip(),
+        "__drive_type": (
+            frame["__drive_type"].astype(str).str.strip()
+            if "__drive_type" in frame.columns
+            else "OTHER"
+        ),
+        "__registration_type": (
+            frame["__registration_type"].astype(str).str.strip()
+            if "__registration_type" in frame.columns
+            else "Other"
+        ),
+    }
+    group_keys = ["__segment_raw", "__powertrain", "__model"]
+
+    def _mix_payload(
+        grouped: pd.Series,
+        key: tuple[str, str, str],
+        categories: tuple[str, ...],
+    ) -> dict[str, float]:
+        try:
+            rows = grouped.xs(key, level=group_keys)
+        except KeyError:
+            return {category: 0.0 for category in categories}
+        return {
+            category: float(rows.get(category, 0.0))
+            for category in categories
+        }
+
+    for window_key, (current_columns, prior_columns) in windows.items():
+        current = _series_sum(frame, current_columns)
+        if not bool((current > 0).any()):
+            continue
+
+        working = pd.DataFrame(
+            {
+                **base_data,
+                "__current": current,
+                "__prior": _series_sum(frame, prior_columns),
+            }
+        )
+        working = working[working["__current"] > 0]
+        if working.empty:
+            continue
+
+        segment_totals = working.groupby(
+            "__segment_raw",
+            dropna=False,
+            sort=False,
+        )["__current"].sum()
+        model_grouped = working.groupby(
+            group_keys,
+            dropna=False,
+            sort=False,
+        )[["__current", "__prior"]].sum(numeric_only=True)
+        drive_grouped = working.groupby(
+            [*group_keys, "__drive_type"],
+            dropna=False,
+            sort=False,
+        )["__current"].sum()
+        registration_grouped = working.groupby(
+            [*group_keys, "__registration_type"],
+            dropna=False,
+            sort=False,
+        )["__current"].sum()
+
+        for (segment, fuel_type), rows in model_grouped.groupby(
+            level=["__segment_raw", "__powertrain"],
+            sort=False,
+        ):
+            segment_text = str(segment)
+            fuel_text = str(fuel_type)
+            segment_total = float(segment_totals.get(segment_text, 0.0))
+            ranked_rows: list[tuple[str, float, float]] = []
+            for (_, _, model), row in rows.iterrows():
+                current_value = float(row["__current"])
+                if current_value <= 0:
+                    continue
+                ranked_rows.append(
+                    (
+                        str(model),
+                        current_value,
+                        float(row["__prior"]),
+                    )
+                )
+            ranked_rows.sort(key=lambda item: (-item[1], item[0]))
+            if not ranked_rows:
+                continue
+
+            max_volume = ranked_rows[0][1] or 1.0
+            items: list[dict[str, Any]] = []
+            for rank, (model, current_value, prior_value) in enumerate(
+                ranked_rows[:limit],
+                start=1,
+            ):
+                mix_key = (segment_text, fuel_text, model)
+                drive_mix = _mix_payload(
+                    drive_grouped,
+                    mix_key,
+                    ("2WD", "4WD", "OTHER"),
+                )
+                registration_mix = _mix_payload(
+                    registration_grouped,
+                    mix_key,
+                    ("Business", "Private", "Other"),
+                )
+                drive_share_pct = _safe_share(
+                    drive_mix.get("4WD", 0.0),
+                    current_value,
+                )
+                items.append(
+                    {
+                        "model": model,
+                        "volume": current_value,
+                        "sharePct": _safe_share(current_value, segment_total),
+                        "shareDisplay": (
+                            f"{_safe_share(current_value, segment_total) * 100:.1f}%"
+                        ),
+                        "yoy": _delta_payload(current_value, prior_value),
+                        "driveSharePct": drive_share_pct,
+                        "driveMix": drive_mix,
+                        "registrationMix": registration_mix,
+                        "rank": rank,
+                        "barPct": _safe_share(current_value, max_volume),
+                    }
+                )
+            result[(segment_text, fuel_text, window_key)] = items
+
+    return result
+
+
 def _build_cross_tab_pct(
     frame: pd.DataFrame,
     *,
@@ -3402,13 +3577,14 @@ def _build_all_drilldowns(
     prior_custom_range_periods = _pcm["prior_custom_range_periods"]
     prior_custom_range_columns = _pcm["prior_custom_range_columns"]
 
-    available_fuels = _available_fuel_types(frame)
-    available_fuels = _available_fuel_types(frame)
+    target_segments = set(segment_values)
+    ranking_frame = frame[frame["__segment_raw"].isin(target_segments)]
+    available_fuels = _available_fuel_types(ranking_frame)
 
     t_dd_start = time.monotonic()
-    # ONE groupby pass over all segments
+    # ONE groupby pass over only the segments needed by this deck.
     all_stats = precompute_model_rankings(
-        frame,
+        ranking_frame,
         current_month_columns, same_month_columns,
         current_ytd_columns, prior_ytd_columns,
         current_rolling12_columns, prior_rolling12_columns,
@@ -3419,6 +3595,15 @@ def _build_all_drilldowns(
     t_precomp = time.monotonic()
     logger.info("MarketScan [%s] drilldown precompute_model_rankings: %.3fs  (%d stats)",
                 resolved_period, t_precomp - t_dd_start, len(all_stats))
+    fuel_panel_rankings = _precompute_single_fuel_panel_rankings(
+        ranking_frame,
+        {
+            "month": (current_month_columns, same_month_columns),
+            "ytd": (current_ytd_columns, prior_ytd_columns),
+            "rolling12": (current_rolling12_columns, prior_rolling12_columns),
+        },
+        ranking_limit=ranking_limit,
+    )
     result: dict[str, dict[str, Any]] = {}
     for seg in segment_values:
         seg_frame = frame[frame["__segment_raw"] == seg]
@@ -3428,32 +3613,18 @@ def _build_all_drilldowns(
 
         seg_stats = [s for s in all_stats if s["segment"] == seg]
         seg_fuels = _available_fuel_types(seg_frame)
-        seg_total_ytd = sum(s["ytdVolume"] for s in seg_stats)
-        seg_total_month = sum(s["monthVolume"] for s in seg_stats)
-        seg_total_rolling = sum(s["rollingVolume"] for s in seg_stats)
-        seg_total_custom = sum(s["customVolume"] for s in seg_stats)
 
-        # Fuel panels: per-fuel rankings (each still needs a sub-groupby, but scoped to segment)
+        # Fuel panels reuse the precomputed per-segment/fuel/model rankings.
         fuel_panel_items = []
         for fuel_type in fuel_panels:
-            fuel_frame = seg_frame[seg_frame["__powertrain"] == fuel_type]
             fuel_panel_items.append({
                 "fuelType": fuel_type,
                 "ytdTitle": f"{fuel_type} 1-{month_number}月累计",
                 "rolling12Title": f"{fuel_type} 近12个月 · 截至 {_short_period_label(resolved_period)}",
                 "monthTitle": f"{fuel_type} {_short_period_label(resolved_period)}",
-                "ytdRanking": _build_single_fuel_ranking_items(
-                    fuel_frame, fuel_type=fuel_type, current_columns=current_ytd_columns,
-                    prior_columns=prior_ytd_columns, segment_total=seg_total_ytd, ranking_limit=ranking_limit,
-                ),
-                "rolling12Ranking": _build_single_fuel_ranking_items(
-                    fuel_frame, fuel_type=fuel_type, current_columns=current_rolling12_columns,
-                    prior_columns=prior_rolling12_columns, segment_total=seg_total_rolling, ranking_limit=ranking_limit,
-                ),
-                "monthRanking": _build_single_fuel_ranking_items(
-                    fuel_frame, fuel_type=fuel_type, current_columns=current_month_columns,
-                    prior_columns=same_month_columns, segment_total=seg_total_month, ranking_limit=ranking_limit,
-                ),
+                "ytdRanking": fuel_panel_rankings.get((seg, fuel_type, "ytd"), []),
+                "rolling12Ranking": fuel_panel_rankings.get((seg, fuel_type, "rolling12"), []),
+                "monthRanking": fuel_panel_rankings.get((seg, fuel_type, "month"), []),
             })
 
         rolling12_total = model_stats_to_ranking(all_stats, seg, "rollingVolume", "rollingPrior", seg_fuels, ranking_limit)
@@ -3723,6 +3894,7 @@ def query_market_scan_deck(
 
     # --- Redis cache (shared across workers) ---
     redis_client = get_redis_client()
+    acquired_cache_lock_key: str | None = None
     if redis_client is not None:
         try:
             columns = _get_columns()
@@ -3745,7 +3917,9 @@ def query_market_scan_deck(
                     _deck_cache[local_key] = (now, dataset_token, cached)
                 return cached
             logger.info("MarketScan [%s] redis MISS", resolved_period)
-            if not acquire_compute_lock(redis_client, cache_key):
+            if acquire_compute_lock(redis_client, cache_key):
+                acquired_cache_lock_key = cache_key
+            else:
                 waited = wait_for_cache(redis_client, cache_key)
                 if waited is not None:
                     logger.info("MarketScan [%s] redis waiter GOT cache from peer", resolved_period)
@@ -3757,11 +3931,16 @@ def query_market_scan_deck(
 
     # --- Compute ---
     t_compute_start = time.monotonic()
-    result = _query_market_scan_deck_impl(
-        country, target_period, time_range, fuel_types,
-        trend_window_months, origin_window_months, body_window_months,
-        ranking_limit, drilldown_segment,
-    )
+    try:
+        result = _query_market_scan_deck_impl(
+            country, target_period, time_range, fuel_types,
+            trend_window_months, origin_window_months, body_window_months,
+            ranking_limit, drilldown_segment,
+        )
+    except Exception:
+        if redis_client is not None and acquired_cache_lock_key is not None:
+            release_compute_lock(redis_client, acquired_cache_lock_key)
+        raise
     t_compute_end = time.monotonic()
     _resolved_label = result.get("metadata", {}).get("resolvedPeriod", target_period or "?")
     logger.info("MarketScan [%s] compute: %.3fs", _resolved_label, t_compute_end - t_compute_start)
@@ -3785,9 +3964,11 @@ def query_market_scan_deck(
                 drilldown_segment=drilldown_segment,
             )
             set_cached_deck(redis_client, cache_key, result)
-            release_compute_lock(redis_client, cache_key)
         except Exception:
             pass
+        finally:
+            if acquired_cache_lock_key is not None:
+                release_compute_lock(redis_client, acquired_cache_lock_key)
 
     return result
 
