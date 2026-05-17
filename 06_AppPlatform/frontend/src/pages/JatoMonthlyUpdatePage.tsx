@@ -510,6 +510,7 @@ export function JatoMonthlyUpdatePage() {
   const canRollbackSelectedJob = Boolean(
     selectedJob?.publication?.publishedAt && !selectedJob?.publication?.rolledBackAt
   );
+  const hasReviewedSelectedJob = reviewBundle?.jobId === selectedJob?.jobId;
   const availableReviewCountries = reviewBundle
     ? Array.from(
       new Set(
@@ -697,7 +698,7 @@ export function JatoMonthlyUpdatePage() {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={submitting || uploadFile === null}
+              disabled={submitting || uploadFile === null || hasActiveJob}
             >
               {submitting ? "上传并启动中..." : "启动月更任务"}
             </button>
@@ -982,14 +983,18 @@ export function JatoMonthlyUpdatePage() {
                       className="btn btn-primary"
                       onClick={() => void handlePublishJob(selectedJob)}
                       disabled={
-                        publishingJobId === selectedJob.jobId
+                        isSelectedJobPublished
+                        || !hasReviewedSelectedJob
+                        || publishingJobId === selectedJob.jobId
                         || hasActiveJob
                       }
                     >
                       {isSelectedJobPublished
                         ? "Published"
-                        : publishingJobId === selectedJob.jobId
-                          ? "Publishing..."
+                        : !hasReviewedSelectedJob
+                          ? "先 Review 再 Publish"
+                          : publishingJobId === selectedJob.jobId
+                            ? "Publishing..."
                             : "Publish Candidate"}
                     </button>
                   )}
