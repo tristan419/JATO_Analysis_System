@@ -153,6 +153,9 @@ async function readErrorMessage(response: Response): Promise<string> {
     if (typeof parsed.detail === "string" && parsed.detail.trim()) {
       return parsed.detail;
     }
+    if (typeof parsed.detail === "object" && parsed.detail !== null) {
+      return JSON.stringify(parsed.detail);
+    }
     if (typeof parsed.message === "string" && parsed.message.trim()) {
       return parsed.message;
     }

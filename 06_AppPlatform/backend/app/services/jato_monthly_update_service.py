@@ -1717,10 +1717,21 @@ def publish_jato_monthly_update_job(
             extra = " 等" if len(regressions) > 5 else ""
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "publish 会让当前 active 数据回退，请先更换 baseline 或重建 candidate："
-                    f"{rendered}{extra}"
-                ),
+                detail={
+                    "blockerType": "country_regression",
+                    "message": (
+                        "publish 会让当前 active 数据回退，请先更换 baseline 或重建 candidate："
+                        f"{rendered}{extra}"
+                    ),
+                    "regressions": [
+                        {
+                            "country": r["country"],
+                            "activeLatestMonth": r["activeLatestMonth"],
+                            "candidateLatestMonth": r["candidateLatestMonth"],
+                        }
+                        for r in regressions
+                    ],
+                },
             )
         sales_doubling_anomalies = _find_publish_sales_doubling_anomalies(
             active_parquet_path=active_paths["parquet"],
@@ -1730,10 +1741,22 @@ def publish_jato_monthly_update_job(
             rendered = _render_sales_doubling_anomalies(sales_doubling_anomalies)
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "publish 检测到 candidate 疑似重复合并，多个重叠月份销量约为 "
-                    f"当前 active 的 2x：{rendered}。请先重建 candidate 或回滚到正确 active。"
-                ),
+                detail={
+                    "blockerType": "sales_doubling",
+                    "message": (
+                        "publish 检测到 candidate 疑似重复合并，多个重叠月份销量约为 "
+                        f"当前 active 的 2x：{rendered}。请先重建 candidate 或回滚到正确 active。"
+                    ),
+                    "anomalies": [
+                        {
+                            "country": a["country"],
+                            "suspiciousMonthCount": a["suspiciousMonthCount"],
+                            "sampleMonths": a["sampleMonths"][:3],
+                            "rolling12Ratio": a["rolling12Ratio"],
+                        }
+                        for a in sales_doubling_anomalies
+                    ],
+                },
             )
 
     published_at = _utc_now()

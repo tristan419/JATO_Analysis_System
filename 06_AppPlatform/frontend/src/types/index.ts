@@ -1727,6 +1727,33 @@ export interface JatoMonthlyUpdateUploadProgress {
   detail?: string | null;
 }
 
+export interface PublishCountryRegression {
+  country: string;
+  activeLatestMonth: string | null;
+  candidateLatestMonth: string | null;
+}
+
+export interface PublishSalesDoublingSampleMonth {
+  month: string;
+  referenceSales: number | null;
+  candidateSales: number | null;
+  ratio: number;
+}
+
+export interface PublishSalesDoublingAnomaly {
+  country: string;
+  suspiciousMonthCount: number;
+  sampleMonths: PublishSalesDoublingSampleMonth[];
+  rolling12Ratio: number | null;
+}
+
+export interface PublishBlocker {
+  blockerType: "country_regression" | "sales_doubling";
+  message: string;
+  regressions?: PublishCountryRegression[];
+  anomalies?: PublishSalesDoublingAnomaly[];
+}
+
 export interface DataManagementDatabaseStatus {
   enabled: boolean;
   connected: boolean;

@@ -12,6 +12,7 @@ import type {
   JatoMonthlyUpdateReviewBundle,
   JatoMonthlyUpdateStorageMetric,
   JatoMonthlyUpdateUploadProgress,
+  PublishBlocker,
 } from "../types";
 import {
   buildMonthlyUpdateArtifactEntries,
@@ -150,6 +151,8 @@ export function JatoMonthlyUpdatePage() {
     useState<JatoMonthlyUpdateUploadProgress | null>(null);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [heroCollapsed, setHeroCollapsed] = useState(false);
+  const [publishBlocker, setPublishBlocker] = useState<PublishBlocker | null>(null);
+  const [infoCollapsed, setInfoCollapsed] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const refreshJobs = useCallback(async (preferredJobId?: string, silent = false) => {
@@ -232,6 +235,7 @@ export function JatoMonthlyUpdatePage() {
     setReviewBundle(null);
     setReviewLoadingJobId(null);
     setSelectedReviewCountry(null);
+    setPublishBlocker(null);
   }, [selectedJobId]);
 
   const hasActiveJob = shouldPollMonthlyUpdateJobs(jobs);
@@ -435,6 +439,27 @@ export function JatoMonthlyUpdatePage() {
     }
   }
 
+  function parsePublishBlocker(error: unknown): PublishBlocker | null {
+    const msg = error instanceof Error ? error.message : String(error);
+    const spaceIndex = msg.indexOf(" ");
+    if (spaceIndex < 0) return null;
+    const detailStr = msg.slice(spaceIndex + 1).trim();
+    if (!detailStr) return null;
+    try {
+      const parsed = JSON.parse(detailStr) as Record<string, unknown>;
+      if (
+        typeof parsed.blockerType === "string"
+        && (parsed.blockerType === "country_regression" || parsed.blockerType === "sales_doubling")
+        && typeof parsed.message === "string"
+      ) {
+        return parsed as unknown as PublishBlocker;
+      }
+    } catch {
+      // not a structured blocker — generic error
+    }
+    return null;
+  }
+
   async function handlePublishJob(job: JatoMonthlyUpdateJob) {
     const confirmed = window.confirm(
       "将把当前 staging candidate promote 为 active 数据集，并自动备份现有 active parquet / manifest / partitioned_dataset_v1 / fingerprint。继续吗？"
@@ -445,6 +470,7 @@ export function JatoMonthlyUpdatePage() {
     setPublishingJobId(job.jobId);
     setError("");
     setNotice("");
+    setPublishBlocker(null);
     try {
       const response = await api.publishJatoMonthlyUpdateJob(job.jobId);
       setSelectedJob(response.item);
@@ -456,7 +482,12 @@ export function JatoMonthlyUpdatePage() {
       await refreshMaintenanceStatus(true);
       await loadJobDetail(response.item.jobId, true);
     } catch (err) {
-      setError((err as Error).message);
+      const blocker = parsePublishBlocker(err);
+      if (blocker) {
+        setPublishBlocker(blocker);
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
       setPublishingJobId(null);
     }
@@ -734,6 +765,63 @@ export function JatoMonthlyUpdatePage() {
             </div>
           )}
         </form>
+      </div>
+
+      <div className="card crud-card">
+        <div className="detail-section-head">
+          <div>
+            <div className="card-title">How JATO Monthly Update Works</div>
+            <p className="section-note">
+              月更前向递增原则、严格 Publish 规则和 Smart Merge 选项的简要说明。
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            onClick={() => setInfoCollapsed((c) => !c)}
+          >
+            {infoCollapsed ? "展开说明" : "收起说明"}
+          </button>
+        </div>
+        {!infoCollapsed && (
+          <div className="monthly-update-info-body">
+            <section>
+              <h4>Forward-Only Principle（前向递增原则）</h4>
+              <p>
+                每次 JATO 月更上传的数据只会推进国家的 latest month，不会回退。如果 candidate 中某个国家的最新数据月比 active 更早，视为 <strong>regression</strong>，普通 Publish 会被阻止。
+              </p>
+            </section>
+            <section>
+              <h4>Country Regression Check（国家回退检查）</h4>
+              <p>
+                Publish 前系统逐国家比较 active 与 candidate 的 latest month。如果 candidate 的 latest month 早于 active 的 latest month，Publish 被阻止。此时需要重新上传包含该国家正确月份的 Excel，或使用 Smart Merge。
+              </p>
+            </section>
+            <section>
+              <h4>Smart-Merged Candidate（Smart Merge 候选）</h4>
+              <p>
+                当出现 regression 时，可以选择 Smart Merge：回退国家沿用 active 数据，前进/持平国家使用 patch 数据，未上传国家沿用 active。Smart Merge 创建新 candidate，<em>仍需要 Review → Publish，不直接修改 active。</em>（功能开发中）
+              </p>
+            </section>
+            <section>
+              <h4>Sales Doubling Protection（2x 重复销量防护）</h4>
+              <p>
+                Publish 前还会检查 candidate 中重叠月份的销量是否接近 active 的 2x。如果多个重叠月份疑似翻倍，说明可能存在分区文件重复合并或 active/staging 状态不一致。<strong>这种情况 Smart Merge 不可用。</strong>必须重建 candidate 或回滚到正确 active。
+              </p>
+            </section>
+            <section>
+              <h4>Worked Example（示例）</h4>
+              <pre className="monthly-update-pre">
+{`Active:       [SE:2026-03] [DE:2026-03] [FR:2026-03] [NL:2026-01]
+Upload:       [SE:2026-02] [DE:2026-03] [NL:2026-02] (FR not in upload)
+Candidate:    [SE:2026-02] [DE:2026-03] [NL:2026-02] [FR:(active)2026-03]
+→ SE regression (2026-03 → 2026-02) → Publish blocked
+Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR:active 2026-03]
+→ SE stays at active, all others advance → Review → Publish`}
+              </pre>
+            </section>
+          </div>
+        )}
       </div>
 
       <div className="card crud-card">
@@ -1092,6 +1180,78 @@ export function JatoMonthlyUpdatePage() {
                   {selectedJob.publication?.rolledBackBy || "-"}
                   {" · restore-pre backup "}
                   {selectedJob.publication?.rollbackBackupDir || "-"}
+                </div>
+              )}
+
+              {publishBlocker && selectedJob && (
+                <div className="monthly-update-blocker-panel">
+                  <div className="detail-section-head">
+                    <div>
+                      <div className="card-title">Publish Blocked</div>
+                      <p className="section-note">{publishBlocker.message}</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => setPublishBlocker(null)}
+                    >
+                      关闭
+                    </button>
+                  </div>
+
+                  {publishBlocker.blockerType === "country_regression" && publishBlocker.regressions && (
+                    <>
+                      <div className="card-title" style={{ marginTop: 10, marginBottom: 8 }}>Country Regressions</div>
+                      <div className="table-wrapper">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>Country</th>
+                              <th>Active Latest Month</th>
+                              <th>Candidate Latest Month</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {publishBlocker.regressions.map((reg) => (
+                              <tr key={reg.country}>
+                                <td><strong>{reg.country}</strong></td>
+                                <td>{reg.activeLatestMonth ?? "-"}</td>
+                                <td>{reg.candidateLatestMonth ?? "-"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="monthly-update-blocker-actions" style={{ marginTop: 12 }}>
+                        <button type="button" className="btn btn-secondary" disabled>
+                          重新上传修正 Excel
+                        </button>
+                        <button type="button" className="btn btn-secondary" disabled title="功能开发中">
+                          创建 Smart-Merged Candidate
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                  {publishBlocker.blockerType === "sales_doubling" && publishBlocker.anomalies && (
+                    <>
+                      <div className="alert alert-warning" style={{ marginTop: 10 }}>
+                        <strong>Sales Doubling Detected</strong>
+                        <p style={{ margin: "4px 0 0" }}>
+                          注意：candidate 数据疑似重复合并，重叠月份销量约为当前 active 的 2x。
+                          在重建 candidate 之前不要执行 publish。
+                        </p>
+                      </div>
+                      <div className="monthly-update-blocker-actions" style={{ marginTop: 12 }}>
+                        <button type="button" className="btn btn-secondary" disabled>
+                          重新上传 / 重建 Candidate
+                        </button>
+                        <button type="button" className="btn btn-secondary" disabled>
+                          查看 Integrity 详情
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 

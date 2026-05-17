@@ -38,6 +38,36 @@ Backend stack notes:
 - `partitioned_dataset_v1` is a serving artifact derived from `jato_full_archive.parquet`.
 - If `partitioned_dataset_v1/manifest.json.parquetFileCount` does not equal actual `*.parquet` file count, the backend should avoid trusting the partition directory.
 
+## Publish Guards Flowchart
+
+```mermaid
+flowchart TD
+    A[Upload JATO xlsx] --> B[Prepare / Compare / Refresh]
+    B --> C{Job success?}
+    C -- No --> D[Show error in UI]
+    C -- Yes --> E{Already published?}
+    E -- Yes --> F[Show already-published status]
+    E -- No --> G{Refresh successful?}
+    G -- No --> H[Show refresh error]
+    G -- Yes --> I{Staging artifacts exist?}
+    I -- No --> J[Show missing artifacts error]
+    I -- Yes --> K{Files on disk?}
+    K -- No --> L[Show missing files error]
+    K -- Yes --> M{Country regression?}
+    M -- Yes --> N[Show resolution panel:
+    regression table +
+    re-upload / Smart Merge]
+    M -- No --> O{Sales doubling?}
+    O -- Yes --> P[Show resolution panel:
+    critical warning +
+    rebuild / integrity buttons]
+    O -- No --> Q[Publish staging → active]
+    Q --> R[Backup previous active]
+    R --> S[Copy staging artifacts to active paths]
+    S --> T[Dataset token changes]
+    T --> U[Dashboard / MarketScan read new active]
+```
+
 ## Expected Monthly Update Behavior
 
 When a monthly xlsx contains only a subset of countries:
