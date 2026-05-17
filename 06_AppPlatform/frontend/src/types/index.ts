@@ -672,6 +672,7 @@ export interface MarketScanDeckResults {
   origin: MarketScanOriginPage;
   segment: MarketScanSegmentPage;
   drilldown: MarketScanDrilldownPage;
+  suvAll: MarketScanDrilldownPage;
   suvA: MarketScanDrilldownPage;
   suvB: MarketScanDrilldownPage;
 }

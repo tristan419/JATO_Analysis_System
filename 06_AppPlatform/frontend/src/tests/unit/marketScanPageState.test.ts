@@ -304,6 +304,7 @@ function makeDeck(): MarketScanDeckResponse {
       origin: makeOriginPage(),
       segment: makeSegmentPage(),
       drilldown,
+      suvAll: drilldown,
       suvA: drilldown,
       suvB: drilldown,
     },

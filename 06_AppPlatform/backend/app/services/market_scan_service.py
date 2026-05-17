@@ -104,6 +104,7 @@ SEDAN_SEGMENT_SHARE_ORDER = (
     "SD-C",
 )
 DEFAULT_DRILLDOWN_SEGMENT = "SUV A0"
+ALL_SUV_DRILLDOWN_KEY = "__ALL_SUV__"
 FALLBACK_DRILLDOWN_FUELS = ("BEV", "PHEV")
 MIN_MARKET_SCAN_RANKING_LIMIT = 10
 POSITIONING_BUBBLE_LIMIT = 60
@@ -4678,6 +4679,29 @@ def _query_market_scan_deck_impl(
     logger.info("MarketScan [%s] drilldown: %.3fs", resolved_period, t_drilldown - t_meta)
 
     results: dict[str, Any] = {}
+
+    # All-SUV drilldown (aggregates all SUV-prefixed segments)
+    suv_frame = filtered_frame[filtered_frame["__segment_raw"].str.startswith("SUV", na=False)].copy()
+    if not suv_frame.empty:
+        suv_frame["__segment_raw"] = ALL_SUV_DRILLDOWN_KEY
+        suv_all_map = _build_all_drilldowns(
+            suv_frame, available_periods=available_periods, resolved_period=resolved_period,
+            same_month_last_year_period=same_month_last_year_period,
+            segment_values=[ALL_SUV_DRILLDOWN_KEY],
+            fuel_panels=DRILLDOWN_PANEL_FUELS, ranking_limit=ranking_limit,
+            custom_range_periods=custom_periods,
+        )
+        suv_all_result = suv_all_map.get(ALL_SUV_DRILLDOWN_KEY)
+        if suv_all_result:
+            suv_all_result["segmentLabel"] = "全SUV"
+            suv_all_result["title"] = f"全SUV 车型 {year_text}年1-{month_number}月"
+            suv_all_result["summaryText"] = suv_all_result.get("summaryText", "").replace(
+                ALL_SUV_DRILLDOWN_KEY, "全SUV"
+            )
+        results["suvAll"] = suv_all_result or _empty_drilldown_payload(ALL_SUV_DRILLDOWN_KEY)
+    else:
+        results["suvAll"] = _empty_drilldown_payload(ALL_SUV_DRILLDOWN_KEY)
+
     results["overview"] = _build_overview_payload(
         filtered_frame, selected_fuels=selected_fuels, available_periods=available_periods,
         resolved_period=resolved_period, prior_period=prior_period,

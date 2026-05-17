@@ -26,6 +26,7 @@ export function buildDefaultMarketScanSlideLayouts(): Record<
     origin: { ...DEFAULT_SLIDE_LAYOUT },
     segment: { ...DEFAULT_SLIDE_LAYOUT },
     drilldown: { ...DEFAULT_SLIDE_LAYOUT },
+    suvAll: { ...DEFAULT_SLIDE_LAYOUT },
     suvA: { ...DEFAULT_SLIDE_LAYOUT },
     suvB: { ...DEFAULT_SLIDE_LAYOUT },
   };

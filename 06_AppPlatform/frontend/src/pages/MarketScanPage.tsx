@@ -98,8 +98,9 @@ const TAB_ITEMS: Array<{
   { key: "origin", code: "02", label: "Origin", sublabel: "车系走势" },
   { key: "segment", code: "03", label: "Segment", sublabel: "级别结构" },
   { key: "drilldown", code: "04", label: "Drilldown", sublabel: "细分下钻" },
-  { key: "suvA", code: "05", label: "SUV-A", sublabel: "A级 SUV" },
-  { key: "suvB", code: "06", label: "SUV-B", sublabel: "B级 SUV" },
+  { key: "suvAll", code: "05", label: "SUV", sublabel: "全SUV" },
+  { key: "suvA", code: "06", label: "SUV-A", sublabel: "A级 SUV" },
+  { key: "suvB", code: "07", label: "SUV-B", sublabel: "B级 SUV" },
 ];
 
 const DEFAULT_MARKET_SCAN_EXPORT: ExportSettings = {
@@ -2656,6 +2657,22 @@ export function MarketScanPage({
       return (
         <DrilldownSection
           page={deck.results.drilldown}
+          fuelOrder={deck.metadata.selectedFuelTypes}
+          salesMode={salesMode}
+          customRangeActive={customRangeActive}
+          customRangeLabel={deck.results.overview.summary.customRangeLabel}
+          showDataLabels={showDataLabels}
+          exportSettings={exportSettings}
+          compact={compact}
+          rankingLimit={rankingLimit}
+          onRankingLimitChange={compact ? undefined : setRankingLimit}
+        />
+      );
+    }
+    if (activePage === "suvAll") {
+      return (
+        <DrilldownSection
+          page={deck.results.suvAll}
           fuelOrder={deck.metadata.selectedFuelTypes}
           salesMode={salesMode}
           customRangeActive={customRangeActive}
