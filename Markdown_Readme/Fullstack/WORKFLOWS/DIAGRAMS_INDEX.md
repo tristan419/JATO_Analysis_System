@@ -63,6 +63,15 @@ flowchart TD — upload → prepare → compare → candidate → review → pub
 flowchart TD — YAML → scraping strategies → observations → review → price history
 ```
 
+### 2.5 JATO Monthly Update Publish Guards
+**File:** [../04_DevOps/JATO_MONTHLY_UPDATE_DATA_LIFECYCLE_2026-05-17.md](../04_DevOps/JATO_MONTHLY_UPDATE_DATA_LIFECYCLE_2026-05-17.md)
+```
+flowchart TD — Upload → Prepare/Compare/Refresh → 7 publish precheck gates
+  (missing artifacts, country regression → Resolution Panel,
+  sales doubling → Critical Warning, partition inconsistency) →
+  Publish → Backup → Replace active → Dataset token → Dashboard/MarketScan
+```
+
 ---
 
 ## Category 3: Business Workflows
