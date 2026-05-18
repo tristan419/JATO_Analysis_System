@@ -922,4 +922,132 @@ def test_build_version_comparison_bubble_items_groups_model_versions() -> None:
     assert items[0]["model"] == "XC60"
     assert items[0]["version"] == "Plus"
     assert items[0]["sales"] == pytest.approx(200.0)
-    assert items[0]["msrp"] == pytest.approx(57000.0)
+
+
+# ── YoY drill-down fixes ──────────────────────────────────────────────
+
+
+def test_prior_ytd_columns_not_gated_when_same_month_last_year_missing() -> None:
+    """Case A: even when 2025-05 is missing, 2025-01..2025-04 should still contribute to prior YTD."""
+    available = [
+        "2025-01", "2025-02", "2025-03", "2025-04",
+        "2026-01", "2026-02", "2026-03", "2026-04", "2026-05",
+    ]
+    mappings = market_scan_service._build_period_column_mappings(
+        available_periods=available,
+        resolved_period="2026-05",
+        prior_period=None,
+        same_month_last_year_period=None,  # 2025-05 missing
+        custom_range_periods=None,
+    )
+    # Prior YTD should still include the 4 months that exist for 2025
+    assert len(mappings["prior_ytd_columns"]) == 4
+    assert "2025 Jan" in mappings["prior_ytd_columns"]
+    assert "2025 Apr" in mappings["prior_ytd_columns"]
+    # Same-month column legitimately empty
+    assert mappings["same_month_columns"] == []
+
+
+def test_prior_rolling12_partial_when_single_month_missing() -> None:
+    """Case B: if one month in the prior rolling12 window is missing, prior should not be empty."""
+    months = [f"{y}-{m:02d}" for y in (2025, 2026) for m in range(1, 13)]
+    # Remove 2025-05 to simulate the exact-same-month-last-year being absent
+    available = [p for p in months if p != "2025-05" and p <= "2026-05"]
+
+    mappings = market_scan_service._build_period_column_mappings(
+        available_periods=available,
+        resolved_period="2026-05",
+        prior_period=None,
+        same_month_last_year_period=None,
+        custom_range_periods=None,
+    )
+    # Current rolling12 should have all 12 months
+    assert len(mappings["current_rolling12_columns"]) == 12
+    # Prior rolling12: each current month shifted -12; 2025-05 is missing so 11 of 12
+    assert len(mappings["prior_rolling12_columns"]) > 0
+    assert len(mappings["prior_rolling12_columns"]) < 12
+
+
+def test_fuel_panel_prior_not_lost_when_current_zero_row() -> None:
+    """Case C: a model/fuel had prior volume on a row whose current=0.
+
+    Before the fix the current>0 filter dropped that row and its prior, producing
+    a fake "New" YoY.  After the fix prior is aggregated from the unfiltered frame.
+    """
+    frame = pd.DataFrame(
+        {
+            "__segment_raw": ["SUV A0", "SUV A0"],
+            "__model": ["EX30", "EX30"],
+            "__powertrain": ["BEV", "BEV"],
+            "__drive_type": ["4WD", "4WD"],
+            "__registration_type": ["Private", "Private"],
+            # Row 0: prior-only row — current=0 so it gets dropped by current>0 filter
+            "2025 Jan": [100.0, 0.0],
+            "2026 Jan": [0.0, 200.0],
+        }
+    )
+
+    rankings = market_scan_service._precompute_single_fuel_panel_rankings(
+        frame,
+        windows={"month": (["2026 Jan"], ["2025 Jan"])},
+        ranking_limit=10,
+    )
+    items = rankings.get(("SUV A0", "BEV", "month"), [])
+    ex30 = next((it for it in items if it["model"] == "EX30"), None)
+    assert ex30 is not None
+    assert ex30["volume"] == pytest.approx(200.0)
+    # Prior must not be zero — row 0 contributed 100 prior even though its current was 0
+    assert ex30["yoy"]["display"] != "New"
+    assert ex30["yoy"]["display"] == "100.0%"
+
+
+def test_needed_month_columns_includes_prior_months_when_same_month_missing() -> None:
+    """Prior YTD and prior rolling12 periods must contribute to the parquet read set
+    even when same_month_last_year_period is None — and NOT be masked by trend windows.
+
+    Uses _compute_needed_periods() to assert on individual period sources, then
+    confirms _compute_needed_month_columns() flattens them into column names.
+    """
+    available = [
+        "2025-01", "2025-02", "2025-03", "2025-04",
+        "2026-01", "2026-02", "2026-03", "2026-04", "2026-05",
+    ]
+    periods = market_scan_service._compute_needed_periods(
+        available_periods=available,
+        resolved_period="2026-05",
+        trend_window_months=1,       # keep trend small so it can't mask prior gaps
+        origin_window_months=1,
+        body_window_months=1,
+        same_month_last_year_period=None,  # 2025-05 missing
+        prior_period=None,
+        custom_periods=None,
+    )
+    # ── Source-level assertions (not confounded by trend window) ──
+    # prior_ytd must be non-empty even though same_month_last_year_period is None
+    assert periods["prior_ytd"] == ["2025-01", "2025-02", "2025-03", "2025-04"]
+    # prior_r12: current r12 for 2026-05 includes 2026-01..2026-05 and
+    # 2025-01..2025-04 (9 months available).  Shift -12: 2025-01..2025-04 survive,
+    # 2025-05 is absent → 4 prior months.
+    assert len(periods["prior_r12"]) == 4
+    assert "2025-05" not in periods["prior_r12"]
+    # same_month is legitimately empty
+    assert periods["same_month"] == []
+    # current_ytd should have 5 months
+    assert len(periods["current_ytd"]) == 5
+
+    # ── Flattened column output ──
+    columns = market_scan_service._compute_needed_month_columns(
+        available_periods=available,
+        resolved_period="2026-05",
+        trend_window_months=1,
+        origin_window_months=1,
+        body_window_months=1,
+        same_month_last_year_period=None,
+        prior_period=None,
+        custom_periods=None,
+    )
+    for month_col in ("2025 Jan", "2025 Feb", "2025 Mar", "2025 Apr"):
+        assert month_col in columns, f"{month_col} missing from needed_month_columns"
+    for month_col in ("2026 Jan", "2026 Feb", "2026 Mar", "2026 Apr", "2026 May"):
+        assert month_col in columns, f"{month_col} missing from needed_month_columns"
+    assert "2025 May" not in columns

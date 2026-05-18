@@ -2158,17 +2158,13 @@ def _build_period_column_mappings(
     prior_period_columns = [_period_to_month_column(prior_period)] if prior_period else []
     same_month_columns = [_period_to_month_column(same_month_last_year_period)] if same_month_last_year_period else []
     current_ytd_columns = [_period_to_month_column(p) for p in _ytd_periods(available_periods, resolved_period)]
-    prior_ytd_columns = (
-        [_period_to_month_column(p) for p in _ytd_periods(available_periods, _shift_period(resolved_period, -12))]
-        if same_month_last_year_period else []
-    )
-    current_rolling12_columns = [
-        _period_to_month_column(p) for p in _window_periods_if_present(available_periods, resolved_period, 12)
+    prior_ytd_columns = [
+        _period_to_month_column(p) for p in _ytd_periods(available_periods, _shift_period(resolved_period, -12))
     ]
-    prior_rolling12_columns = [
-        _period_to_month_column(p)
-        for p in _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
-    ]
+    current_rolling12_periods = _window_periods_if_present(available_periods, resolved_period, 12)
+    current_rolling12_columns = [_period_to_month_column(p) for p in current_rolling12_periods]
+    prior_rolling12_periods = _shifted_periods_if_present(current_rolling12_periods, available_periods, -12)
+    prior_rolling12_columns = [_period_to_month_column(p) for p in prior_rolling12_periods]
     custom_range_columns = [_period_to_month_column(p) for p in (custom_range_periods or [])]
     prior_custom_range_periods = (
         _shifted_periods_if_present(custom_range_periods, available_periods, -12)
@@ -2931,6 +2927,12 @@ def _precompute_single_fuel_panel_rankings(
                 "__prior": _series_sum(frame, prior_columns),
             }
         )
+        # Compute prior from ALL rows before current>0 filter drops rows that
+        # had prior volume but zero current (would undercount prior → fake "New").
+        prior_by_model = working.groupby(
+            group_keys, dropna=False, sort=False
+        )["__prior"].sum()
+
         working = working[working["__current"] > 0]
         if working.empty:
             continue
@@ -2944,7 +2946,9 @@ def _precompute_single_fuel_panel_rankings(
             group_keys,
             dropna=False,
             sort=False,
-        )[["__current", "__prior"]].sum(numeric_only=True)
+        )[["__current"]].sum()
+        # Attach prior from unfiltered aggregation so YoY is not undercounted
+        model_grouped["__prior"] = prior_by_model.reindex(model_grouped.index, fill_value=0.0)
         drive_grouped = working.groupby(
             [*group_keys, "__drive_type"],
             dropna=False,
@@ -4540,6 +4544,85 @@ def _query_version_comparison_deck_impl(
     }
 
 
+def _compute_needed_periods(
+    *,
+    available_periods: list[str],
+    resolved_period: str,
+    trend_window_months: int,
+    origin_window_months: int,
+    body_window_months: int,
+    same_month_last_year_period: str | None,
+    prior_period: str | None,
+    custom_periods: list[str] | None,
+) -> dict[str, list[str]]:
+    """Return categorized period lists that must be read from parquet.
+
+    Each value is a list of ``YYYY-MM`` period strings.  The caller flattens
+    and converts to month-column names.  Kept as a separate function so tests
+    can assert on *which* logic brought a given period into the read set.
+    """
+    return {
+        "trend": _window_periods(
+            available_periods, resolved_period,
+            max(trend_window_months, origin_window_months, body_window_months),
+        ),
+        "current_ytd": _ytd_periods(available_periods, resolved_period),
+        "prior_ytd": _ytd_periods(available_periods, _shift_period(resolved_period, -12)),
+        "current_r12": _window_periods_if_present(available_periods, resolved_period, 12),
+        "prior_r12": _shifted_periods_if_present(
+            _window_periods_if_present(available_periods, resolved_period, 12),
+            available_periods, -12,
+        ),
+        "same_month": [same_month_last_year_period] if same_month_last_year_period else [],
+        "prior_month": [prior_period] if prior_period else [],
+        "custom": custom_periods or [],
+        "prior_custom": (
+            _shifted_periods_if_present(custom_periods, available_periods, -12)
+            if custom_periods else []
+        ),
+    }
+
+
+def _compute_needed_month_columns(
+    *,
+    available_periods: list[str],
+    resolved_period: str,
+    trend_window_months: int,
+    origin_window_months: int,
+    body_window_months: int,
+    same_month_last_year_period: str | None,
+    prior_period: str | None,
+    custom_periods: list[str] | None,
+) -> list[str]:
+    """Return the set of month-column names that must be read from parquet.
+
+    Includes current and prior windows for YTD, rolling-12, trend, custom range,
+    and a safety buffer of ±2 months around the needed range.  The caller passes
+    the result as ``selected_columns`` to :meth:`dataset.to_table`.
+    """
+    periods = _compute_needed_periods(
+        available_periods=available_periods,
+        resolved_period=resolved_period,
+        trend_window_months=trend_window_months,
+        origin_window_months=origin_window_months,
+        body_window_months=body_window_months,
+        same_month_last_year_period=same_month_last_year_period,
+        prior_period=prior_period,
+        custom_periods=custom_periods,
+    )
+    _needed_periods: set[str] = set()
+    for _periods in periods.values():
+        _needed_periods.update(_periods)
+    if _needed_periods:
+        _sorted_needed = sorted(_needed_periods)
+        _safety_start = _shift_period(_sorted_needed[0], -2)
+        _safety_end = _shift_period(_sorted_needed[-1], 2)
+        for p in available_periods:
+            if _safety_start <= p <= _safety_end:
+                _needed_periods.add(p)
+    return [_period_to_month_column(p) for p in _needed_periods if p in available_periods]
+
+
 def _query_market_scan_deck_impl(
     country: str | None,
     target_period: str | None,
@@ -4564,28 +4647,16 @@ def _query_market_scan_deck_impl(
         prior_period = None
 
     # --- Precompute needed month columns for parquet pruning ---
-    trend_periods = _window_periods(available_periods, resolved_period, max(trend_window_months, origin_window_months, body_window_months))
-    ytd_periods = _ytd_periods(available_periods, resolved_period)
-    prior_ytd_periods = _ytd_periods(available_periods, _shift_period(resolved_period, -12)) if same_month_last_year_period else []
-    r12_periods = _window_periods_if_present(available_periods, resolved_period, 12)
-    prior_r12_periods = _window_periods_if_present(available_periods, _shift_period(resolved_period, -12), 12)
-    same_month_periods: list[str] = [same_month_last_year_period] if same_month_last_year_period else []
-    prior_periods: list[str] = [prior_period] if prior_period else []
-    custom_periods_resolved: list[str] = custom_periods or []
-    prior_custom_periods = _shifted_periods_if_present(custom_periods_resolved, available_periods, -12) if custom_periods_resolved else []
-
-    _needed_periods: set[str] = set()
-    for _periods in (trend_periods, ytd_periods, prior_ytd_periods, r12_periods, prior_r12_periods,
-                      same_month_periods, prior_periods, custom_periods_resolved, prior_custom_periods):
-        _needed_periods.update(_periods)
-    if _needed_periods:
-        _sorted_needed = sorted(_needed_periods)
-        _safety_start = _shift_period(_sorted_needed[0], -2)
-        _safety_end = _shift_period(_sorted_needed[-1], 2)
-        for p in available_periods:
-            if _safety_start <= p <= _safety_end:
-                _needed_periods.add(p)
-    needed_month_columns = [_period_to_month_column(p) for p in _needed_periods if p in available_periods]
+    needed_month_columns = _compute_needed_month_columns(
+        available_periods=available_periods,
+        resolved_period=resolved_period,
+        trend_window_months=trend_window_months,
+        origin_window_months=origin_window_months,
+        body_window_months=body_window_months,
+        same_month_last_year_period=same_month_last_year_period,
+        prior_period=prior_period,
+        custom_periods=custom_periods,
+    )
 
     country_options = _country_options(repo.current_dataset_token())
     selected_country = _normalize_country_lookup(country, country_options)
