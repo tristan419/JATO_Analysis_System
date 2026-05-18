@@ -176,6 +176,22 @@ sudo nano /etc/jato-fullstack/backend.env
 - `JATO_PARTITIONED_PATH=/opt/JATO_Analysis_System-main/04_Processed_data/partitioned_dataset_v1`
 - `APP_CRUD_DATA_PATH=/opt/JATO_Analysis_System-main/04_Processed_data/app_entities.json`
 
+启动时会执行后端环境变量校验：
+
+- `APP_DATABASE_ENABLED=true` 时，`APP_DATABASE_URL` 不能为空，否则后端会直接启动失败。
+- `APP_DATABASE_URL` 已填写但 `APP_DATABASE_ENABLED=false` 时，只记录 warning，因为这通常表示 DB 写入被临时关闭。
+- `APP_STARTUP_VALIDATION_MODE=warn` 适合本地或临时调试；`strict` 适合生产发布前检查。
+- 如果生产要求 Country Copilot 必须可用，设置 `APP_COUNTRY_COPILOT_REQUIRE_LLM_KEY=true`，并在服务器本地填写 `DEEPSEEK_API_KEY`。
+- 校验日志只输出变量名和缺失原因，不输出 secret 值。
+
+线上需要 News/VOC/MSRP 写 PostgreSQL 时，后端 env 至少应包含：
+
+```bash
+APP_DATABASE_ENABLED=true
+APP_DATABASE_URL=postgresql+asyncpg://<user>:<password>@127.0.0.1:5432/jato
+APP_STARTUP_VALIDATION_MODE=strict
+```
+
 ## 4.1 MSRP 任务环境变量
 
 如果你要在这台腾讯云机器上跑 MSRP 批任务，建议单独再放一个任务 env 文件，而不是把批处理参数混进前端或 systemd 服务模板里：

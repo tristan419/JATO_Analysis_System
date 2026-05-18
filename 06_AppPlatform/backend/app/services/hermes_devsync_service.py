@@ -131,6 +131,32 @@ _FEATURE_TITLE_WORDS = {
     "workspace": "Workspace",
 }
 
+_FEATURE_ID_ALIASES = {
+    "country-copilot": "feature.country_copilot",
+    "data-management-ui": "feature.data_management",
+    "docs-add-frontend-monthly-update-ux-guardrails-to": "feature.jato_monthly_update",
+    "docs-add-publish-guards-flowchart-to-diagrams-inde": "feature.jato_monthly_update",
+    "fix-add-write-permissions-and-pull-before-push-for": "hermes-devsync",
+    "backend-infra": "feature.market_scan",
+    "backend-query-service": "feature.dashboard",
+    "hermes-command-gateway": "hermes-chat-gateway",
+    "hermes-dev-ui": "hermes-devsync",
+    "hermes-scripts": "hermes-devsync",
+    "jato-monthly-update": "feature.jato_monthly_update",
+    "market-scan": "feature.market_scan",
+    "msrp-pricing": "feature.msrp_workbench",
+    "presence-websocket": "feature.presence_websocket",
+    "review-workbench": "feature.review_workbench",
+    "redis-cache": "feature.market_scan",
+    "scraping-toolkit": "feature.scraping_toolkit",
+    "time-series-lens": "feature.dashboard",
+    "ui-animations": "feature.ui_animation_toolkit",
+    "ui-animation-toolkit": "feature.ui_animation_toolkit",
+}
+
+_NOISY_GENERIC_FEATURE_IDS = {"backend", "frontend"}
+_NOISY_COMMIT_FEATURE_PREFIXES = ("fix-", "merge-", "trigger-", "docs-")
+
 
 def _feature_title_from_id(feature_id: str) -> str:
     clean_id = _canonical_feature_id(feature_id)
@@ -145,9 +171,104 @@ def _feature_title_from_id(feature_id: str) -> str:
     return " ".join(words)
 
 
-def _canonical_feature_id(feature_id: str) -> str:
-    clean_id = re.sub(r"^feature[._-]", "", str(feature_id or "").strip())
+def _feature_lookup_key(feature_id: str) -> str:
+    clean_id = re.sub(r"^feature[._-]", "", str(feature_id or "").strip().lower())
     return re.sub(r"[-_.]+", "-", clean_id).strip("-")
+
+
+def _canonical_feature_id(feature_id: str) -> str:
+    lookup_id = _feature_lookup_key(feature_id)
+    alias_target = _FEATURE_ID_ALIASES.get(lookup_id)
+    if alias_target:
+        target_lookup_id = _feature_lookup_key(alias_target)
+        if target_lookup_id != lookup_id:
+            return _canonical_feature_id(alias_target)
+    return lookup_id
+
+
+def _canonical_record_feature_id(feature_id: str) -> str:
+    raw_id = str(feature_id or "").strip()
+    lookup_id = _feature_lookup_key(raw_id)
+    alias_target = _FEATURE_ID_ALIASES.get(lookup_id)
+    if alias_target:
+        return alias_target
+    return raw_id
+
+
+def _append_unique(values: list[Any], value: Any) -> None:
+    if value and value not in values:
+        values.append(value)
+
+
+def _is_noisy_commit_feature_id(feature_id: str) -> bool:
+    raw_lookup_id = _feature_lookup_key(feature_id)
+    if raw_lookup_id in _FEATURE_ID_ALIASES:
+        return False
+    return raw_lookup_id.startswith(_NOISY_COMMIT_FEATURE_PREFIXES)
+
+
+def _is_noisy_generic_feature_record(feature: dict[str, Any]) -> bool:
+    fid = str(feature.get("featureId") or "")
+    if feature.get("source") != "git_commit":
+        return False
+    if _canonical_feature_id(fid) in _NOISY_GENERIC_FEATURE_IDS:
+        return True
+    return _is_noisy_commit_feature_id(fid)
+
+
+def _clean_generated_doc_refs(feature: dict[str, Any]) -> dict[str, Any]:
+    fid = str(feature.get("featureId") or "")
+    if not fid:
+        return feature
+    if feature.get("aliases"):
+        feature["title"] = _feature_title_from_id(fid)
+    docs = list(feature.get("docs", []) or [])
+    if not docs:
+        return feature
+    canonical_doc_ref = f"Markdown_Readme/features/{fid}.md"
+    cleaned: list[str] = []
+    for doc in docs:
+        doc_ref = str(doc)
+        if doc_ref.startswith("Markdown_Readme/features/") and doc_ref != canonical_doc_ref:
+            continue
+        _append_unique(cleaned, doc_ref)
+    feature["docs"] = cleaned
+    return feature
+
+
+def _known_aliases_for_feature_id(feature_id: str) -> list[str]:
+    lookup_id = _canonical_feature_id(feature_id)
+    aliases: list[str] = []
+    for alias, target in _FEATURE_ID_ALIASES.items():
+        if _canonical_feature_id(target) != lookup_id:
+            continue
+        _append_unique(aliases, alias)
+        if str(target).startswith("feature."):
+            _append_unique(aliases, f"feature.{alias.replace('-', '_')}")
+    return aliases
+
+
+def _is_low_quality_summary(summary: str) -> bool:
+    first_line = summary.strip().splitlines()[0].strip().lower() if summary.strip() else ""
+    return (
+        not first_line
+        or first_line == "merge"
+        or first_line.startswith("merge:")
+        or first_line.startswith("trigger ")
+        or first_line.startswith("trigger:")
+    )
+
+
+def _summary_quality(record: dict[str, Any]) -> float:
+    summary = str(record.get("summary") or "").strip()
+    if not summary:
+        return -100.0
+    score = min(len(summary), 800) / 100.0
+    if record.get("source") == "claude_code":
+        score += 20.0
+    if _is_low_quality_summary(summary):
+        score -= 50.0
+    return score
 
 
 def _feature_ids_match(left: str, right: str) -> bool:
@@ -165,12 +286,11 @@ def _merge_feature_records(
     merged = {**base, **incoming}
     for key in (
         "linkedEventIds", "endpoints", "frontend", "backend", "risks",
-        "nextSteps", "docs", "gaps",
+        "nextSteps", "docs", "gaps", "aliases",
     ):
         values: list[Any] = []
         for item in list(base.get(key, []) or []) + list(incoming.get(key, []) or []):
-            if item not in values:
-                values.append(item)
+            _append_unique(values, item)
         if values:
             merged[key] = values
     if base.get("tests") or incoming.get("tests"):
@@ -179,6 +299,11 @@ def _merge_feature_records(
         merged["featureId"] = base["featureId"]
     if base.get("title"):
         merged["title"] = base["title"]
+    incoming_summary = str(incoming.get("summary") or "").strip()
+    if incoming_summary and _summary_quality(incoming) >= _summary_quality(base):
+        merged["summary"] = incoming_summary
+    elif base.get("summary"):
+        merged["summary"] = base["summary"]
     return merged
 
 
@@ -195,7 +320,20 @@ def _normalize_feature_records(
     normalized: list[dict[str, Any]] = []
     for feature in features:
         record = dict(feature)
-        fid = str(record.get("featureId") or "").strip()
+        original_fid = str(record.get("featureId") or "").strip()
+        fid = _canonical_record_feature_id(original_fid)
+        if fid and original_fid and fid != original_fid:
+            record["featureId"] = fid
+            record["title"] = _feature_title_from_id(fid)
+            aliases = list(record.get("aliases", []) or [])
+            _append_unique(aliases, original_fid)
+            record["aliases"] = aliases
+        elif fid:
+            record["featureId"] = fid
+
+        if _is_noisy_generic_feature_record(record):
+            continue
+
         title = str(record.get("title") or "").strip()
         if fid and (
             not title or title_counts.get(title, 0) > 1 or _is_git_commit_title(title)
@@ -210,12 +348,13 @@ def _normalize_feature_records(
         existing_idx = seen.get(lookup_id)
         if existing_idx is None:
             seen[lookup_id] = len(normalized)
-            normalized.append(record)
+            normalized.append(_clean_generated_doc_refs(record))
         else:
             normalized[existing_idx] = _merge_feature_records(
                 normalized[existing_idx],
                 record,
             )
+            normalized[existing_idx] = _clean_generated_doc_refs(normalized[existing_idx])
     return normalized
 
 
@@ -240,6 +379,10 @@ def get_feature(feature_id: str) -> dict[str, Any] | None:
 
 def upsert_feature(feature_data: dict[str, Any]) -> dict[str, Any]:
     features = _load_features()
+    normalized_feature_data = _normalize_feature_records([feature_data])
+    if not normalized_feature_data:
+        return feature_data
+    feature_data = normalized_feature_data[0]
     fid = str(feature_data.get("featureId", ""))
     now = datetime.now(timezone.utc).isoformat()
     for i, f in enumerate(features):
@@ -260,10 +403,120 @@ def upsert_feature(feature_data: dict[str, Any]) -> dict[str, Any]:
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
+_FEATURE_PATH_RULES: list[tuple[tuple[str, ...], str, int]] = [
+    ((".github/workflows/hermes-devsync.yml", ".githooks/", "03_Scripts/hermes/hermes_dev_event", "hermes_devsync_service.py"), "hermes-devsync", 100),
+    (("hermes_chat_service.py", "HermesAskResponseCard", "POST /hermes/chat"), "hermes-chat-gateway", 100),
+    (("backend/app/api/routes/presence.py", "presence_service.py", "PresenceWidget", "usePresence"), "feature.presence_websocket", 100),
+    (("usePageTransition", "useStaggerEntrance", "anime"), "feature.ui_animation_toolkit", 90),
+    (("jato_monthly_update_service.py", "JatoMonthlyUpdatePage", "JATO_MONTHLY_UPDATE_DATA_LIFECYCLE"), "feature.jato_monthly_update", 100),
+    (("MarketScanPage", "market_scan_service.py"), "feature.market_scan", 100),
+    (("engineering_config", "EngineeringConfigPage", "ConfigMatrix"), "feature.engineering", 100),
+    (("CountryChatPage", "country_chat_service.py", "assistant/country"), "feature.country_copilot", 100),
+    (("07_ScrapingToolkit",), "feature.scraping_toolkit", 90),
+    (("frontend/",), "frontend", 1),
+    (("backend/",), "backend", 1),
+]
+
+_FEATURE_TITLE_RULES: list[tuple[tuple[str, ...], str, int]] = [
+    (("hermes", "devsync"), "hermes-devsync", 100),
+    (("hermes", "chat"), "hermes-chat-gateway", 100),
+    (("hermes", "command"), "hermes-chat-gateway", 95),
+    (("jato", "monthly"), "feature.jato_monthly_update", 100),
+    (("market", "scan"), "feature.market_scan", 95),
+    (("engineering", "config"), "feature.engineering", 120),
+    (("presence",), "feature.presence_websocket", 90),
+    (("animation",), "feature.ui_animation_toolkit", 70),
+    (("scraping",), "feature.scraping_toolkit", 80),
+]
+
 
 def infer_feature_id(title: str) -> str:
     slug = _SLUG_RE.sub("-", title.lower()).strip("-")
-    return slug[:60]
+    alias_target = _FEATURE_ID_ALIASES.get(slug[:50]) or _FEATURE_ID_ALIASES.get(slug[:60])
+    return alias_target or slug[:60]
+
+
+def _infer_feature_ids_from_event(event: dict[str, Any]) -> list[str]:
+    scores: dict[str, int] = {}
+    changed_files = [str(f) for f in (event.get("changedFiles", []) or [])]
+    searchable_files = changed_files + [str(f) for f in (event.get("frontendChanges", []) or [])]
+    searchable_files += [str(f) for f in (event.get("backendChanges", []) or [])]
+    for fpath in searchable_files:
+        for patterns, feature_id, weight in _FEATURE_PATH_RULES:
+            if any(pattern in fpath for pattern in patterns):
+                scores[feature_id] = scores.get(feature_id, 0) + weight
+
+    normalized_title = str(event.get("title") or "").lower()
+    for keywords, feature_id, weight in _FEATURE_TITLE_RULES:
+        if all(keyword in normalized_title for keyword in keywords):
+            scores[feature_id] = scores.get(feature_id, 0) + weight
+
+    ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    max_score = ranked[0][1] if ranked else 0
+    feature_ids = [
+        _canonical_record_feature_id(fid)
+        for fid, score in ranked
+        if score > 1 and score >= max_score * 0.65
+    ]
+    return _dedupe_feature_ids(feature_ids)
+
+
+def _dedupe_feature_ids(feature_ids: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for fid in feature_ids:
+        canonical_fid = _canonical_record_feature_id(fid)
+        lookup_id = _canonical_feature_id(canonical_fid)
+        if not lookup_id or lookup_id in seen:
+            continue
+        seen.add(lookup_id)
+        result.append(canonical_fid)
+
+    has_specific = any(_canonical_feature_id(fid) not in _NOISY_GENERIC_FEATURE_IDS for fid in result)
+    if has_specific:
+        result = [
+            fid for fid in result
+            if _canonical_feature_id(fid) not in _NOISY_GENERIC_FEATURE_IDS
+        ]
+    return result
+
+
+def _filter_event_feature_ids(feature_ids: list[str], event: dict[str, Any]) -> list[str]:
+    if event.get("source") != "git_commit":
+        return feature_ids
+    return [
+        fid for fid in feature_ids
+        if _canonical_feature_id(fid) not in _NOISY_GENERIC_FEATURE_IDS
+        and not _is_noisy_commit_feature_id(fid)
+    ]
+
+
+def _linked_feature_ids_for_event(event: dict[str, Any]) -> list[str]:
+    explicit_ids = _dedupe_feature_ids(list(event.get("linkedFeatureIds", []) or []))
+    inferred_ids = _infer_feature_ids_from_event(event)
+
+    if event.get("source") == "git_commit" and inferred_ids:
+        return _filter_event_feature_ids(inferred_ids, event)
+
+    if not explicit_ids:
+        if inferred_ids:
+            return _filter_event_feature_ids(inferred_ids, event)
+        if event.get("source") == "git_commit":
+            return []
+        inferred = infer_feature_id(event.get("title", ""))
+        return _dedupe_feature_ids([inferred]) if inferred else []
+
+    explicit_has_only_generic = all(
+        _canonical_feature_id(fid) in _NOISY_GENERIC_FEATURE_IDS
+        for fid in explicit_ids
+    )
+    if explicit_has_only_generic and inferred_ids:
+        return _filter_event_feature_ids(inferred_ids, event)
+
+    if event.get("source") != "git_commit":
+        return explicit_ids
+
+    return _filter_event_feature_ids(_dedupe_feature_ids(explicit_ids + inferred_ids), event)
 
 
 # ── Markdown Generation ───────────────────────────────────────────────
@@ -317,6 +570,22 @@ def generate_feature_markdown(feature: dict[str, Any]) -> Path:
     return path
 
 
+def _relative_project_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(_root().resolve()))
+    except ValueError:
+        return str(path)
+
+
+def _ensure_feature_doc_link(feature: dict[str, Any], doc_path: Path) -> dict[str, Any]:
+    docs = list(feature.get("docs", []) or [])
+    doc_ref = _relative_project_path(doc_path)
+    _append_unique(docs, doc_ref)
+    if docs == list(feature.get("docs", []) or []):
+        return feature
+    return upsert_feature({**feature, "docs": docs})
+
+
 # ── Gap Creation ──────────────────────────────────────────────────────
 
 def _load_gaps() -> list[dict[str, Any]]:
@@ -339,8 +608,91 @@ def _gap_exists(gap_id: str) -> bool:
     return any(g.get("gapId") == gap_id for g in _load_gaps())
 
 
+def _feature_gap_id_candidates(feature: dict[str, Any], suffix: str) -> list[str]:
+    ids = [str(feature.get("featureId") or "")]
+    ids += [str(alias) for alias in (feature.get("aliases", []) or [])]
+    ids += _known_aliases_for_feature_id(str(feature.get("featureId") or ""))
+    candidates: list[str] = []
+    for fid in ids:
+        _append_unique(candidates, f"gap.devsync.{fid}.{suffix}")
+    return candidates
+
+
+def _resolve_existing_devsync_gaps(
+    feature: dict[str, Any],
+    suffix: str,
+    reason: str,
+) -> int:
+    gap_ids = set(_feature_gap_id_candidates(feature, suffix))
+    gaps = _load_gaps()
+    changed = 0
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    for gap in gaps:
+        if gap.get("gapId") not in gap_ids:
+            continue
+        if gap.get("status") == "resolved":
+            continue
+        gap["status"] = "resolved"
+        notes = str(gap.get("notes") or "").strip()
+        resolution = f"Resolved {now}: {reason}"
+        gap["notes"] = f"{notes} {resolution}".strip() if notes else resolution
+        changed += 1
+    if changed:
+        _save_gaps(gaps)
+    return changed
+
+
+def reconcile_feature_gaps(feature: dict[str, Any]) -> int:
+    resolved = 0
+    if feature.get("docs"):
+        resolved += _resolve_existing_devsync_gaps(
+            feature,
+            "missing_docs",
+            "DevSync feature now has documentation linked.",
+        )
+    if feature.get("tests"):
+        resolved += _resolve_existing_devsync_gaps(
+            feature,
+            "missing_tests",
+            "DevSync feature now has test results recorded.",
+        )
+    return resolved
+
+
+def retire_noisy_devsync_gaps() -> int:
+    gaps = _load_gaps()
+    changed = 0
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    for gap in gaps:
+        gap_id = str(gap.get("gapId") or "")
+        if not gap_id.startswith("gap.devsync.") or gap.get("status") == "resolved":
+            continue
+        feature_part = gap_id.removeprefix("gap.devsync.").rsplit(".", 1)[0]
+        if (
+            _canonical_feature_id(feature_part) not in _NOISY_GENERIC_FEATURE_IDS
+            and not _is_noisy_commit_feature_id(feature_part)
+        ):
+            continue
+        gap["status"] = "resolved"
+        notes = str(gap.get("notes") or "").strip()
+        resolution = (
+            f"Resolved {now}: closed as DevSync featureId inference noise; "
+            "future git events without a reliable feature match are no longer registered."
+        )
+        gap["notes"] = f"{notes} {resolution}".strip() if notes else resolution
+        changed += 1
+    if changed:
+        _save_gaps(gaps)
+    return changed
+
+
 def create_missing_docs_gap(feature: dict[str, Any]) -> dict[str, Any] | None:
     fid = feature.get("featureId", "")
+    if (
+        _canonical_feature_id(str(fid)) in _NOISY_GENERIC_FEATURE_IDS
+        or _is_noisy_commit_feature_id(str(fid))
+    ):
+        return None
     gap_id = f"gap.devsync.{fid}.missing_docs"
     if _gap_exists(gap_id):
         return None
@@ -364,6 +716,11 @@ def create_missing_docs_gap(feature: dict[str, Any]) -> dict[str, Any] | None:
 
 def create_missing_tests_gap(feature: dict[str, Any]) -> dict[str, Any] | None:
     fid = feature.get("featureId", "")
+    if (
+        _canonical_feature_id(str(fid)) in _NOISY_GENERIC_FEATURE_IDS
+        or _is_noisy_commit_feature_id(str(fid))
+    ):
+        return None
     gap_id = f"gap.devsync.{fid}.missing_tests"
     if _gap_exists(gap_id):
         return None
@@ -387,9 +744,26 @@ def create_missing_tests_gap(feature: dict[str, Any]) -> dict[str, Any] | None:
 
 # ── Evidence Record ───────────────────────────────────────────────────
 
+def _evidence_exists(evidence_id: str) -> bool:
+    p = _evidence_ledger_path()
+    if not p.is_file():
+        return False
+    for line in p.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            if json.loads(line).get("evidenceId") == evidence_id:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def write_dev_evidence_record(event: dict[str, Any], feature: dict[str, Any]) -> dict[str, Any]:
+    feature_lookup_id = _canonical_feature_id(str(feature.get("featureId", ""))) or "unknown"
+    evidence_id = f"evidence.{event.get('eventId', 'unknown')}.{feature_lookup_id}"
     record = {
-        "evidenceId": f"evidence.{event.get('eventId', 'unknown')}",
+        "evidenceId": evidence_id,
         "evidenceType": "dev_event",
         "claim": f"Feature '{feature.get('title', '')}' {event.get('eventType', '')}: {event.get('summary', '')[:200]}",
         "sourceRef": f"dev_events.jsonl::{event.get('eventId', '')}",
@@ -397,6 +771,8 @@ def write_dev_evidence_record(event: dict[str, Any], feature: dict[str, Any]) ->
         "confidence": 1.0, "supportCount": 0, "contradictionCount": 0,
         "createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if _evidence_exists(evidence_id):
+        return record
     p = _evidence_ledger_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "a") as fh:
@@ -446,13 +822,11 @@ def sync_dev_events() -> dict[str, Any]:
     gaps_count = 0
 
     for event in events:
-        linked_ids: list[str] = event.get("linkedFeatureIds", []) or []
-        if not linked_ids:
-            inferred = infer_feature_id(event.get("title", ""))
-            if inferred:
-                linked_ids = [inferred]
+        linked_ids = _linked_feature_ids_for_event(event)
 
         for fid in linked_ids:
+            if _canonical_feature_id(fid) in _NOISY_GENERIC_FEATURE_IDS:
+                continue
             existing = get_feature(fid)
             feature_data = {
                 "featureId": fid,
@@ -476,11 +850,14 @@ def sync_dev_events() -> dict[str, Any]:
             else:
                 feats_created.append(fid)
 
+            doc_path = generate_feature_markdown(upserted)
+            upserted = _ensure_feature_doc_link(upserted, doc_path)
             generate_feature_markdown(upserted)
             docs_count += 1
             write_dev_evidence_record(event, upserted)
             evidence_count += 1
 
+            gaps_count += reconcile_feature_gaps(upserted)
             doc_gap = create_missing_docs_gap(upserted)
             test_gap = create_missing_tests_gap(upserted)
             if doc_gap:
@@ -490,6 +867,8 @@ def sync_dev_events() -> dict[str, Any]:
                 upsert_feature({**upserted, "gaps": gs})
             if test_gap:
                 gaps_count += 1
+
+    gaps_count += retire_noisy_devsync_gaps()
 
     # Sync to kanban feature_registry.yaml
     kanban_synced = _sync_to_kanban(feats_created + feats_updated)
@@ -513,7 +892,26 @@ def _is_git_commit_title(name: str) -> bool:
     """Return True if the name looks like a git commit message."""
     if not name:
         return True
-    return name.startswith("fix:") or name.startswith("feat:") or name.startswith("hermes:") or name.startswith("trigger:") or len(name) > 60
+    lower = name.strip().lower()
+    return (
+        lower == "merge"
+        or lower.startswith("fix:")
+        or lower.startswith("fix ")
+        or lower.startswith("feat:")
+        or lower.startswith("feat ")
+        or lower.startswith("docs:")
+        or lower.startswith("docs ")
+        or lower.startswith("merge:")
+        or lower.startswith("merge ")
+        or lower.startswith("refactor:")
+        or lower.startswith("refactor ")
+        or lower.startswith("chore:")
+        or lower.startswith("chore ")
+        or lower.startswith("hermes:")
+        or lower.startswith("trigger:")
+        or lower.startswith("trigger ")
+        or len(name) > 60
+    )
 
 
 def _sync_to_kanban(feature_ids: list[str]) -> int:

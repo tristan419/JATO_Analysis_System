@@ -25,22 +25,39 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEV_EVENTS_PATH = REPO_ROOT / "hermes" / "dev_events" / "dev_events.jsonl"
 
-# File path patterns → likely feature areas
-FEATURE_INFERENCE: list[tuple[list[str], str]] = [
-    (["frontend/src/pages/DashboardPage", "frontend/src/pages/DataManagementPage"], "data-management-ui"),
-    (["frontend/src/pages/CountryChatPage", "backend/app/services/country_chat"], "country-copilot"),
-    (["frontend/src/pages/MarketScanPage", "backend/app/services/market_scan"], "market-scan"),
-    (["frontend/src/pages/MsrpPage", "backend/app/api/routes/msrp"], "msrp-pricing"),
-    (["frontend/src/pages/ReviewCasesPage", "backend/app/api/routes/review"], "review-workbench"),
-    (["backend/app/api/routes/presence", "frontend/src/components/Layout", "presence"], "presence-websocket"),
-    (["backend/app/services/hermes_chat_service", "backend/app/api/routes/hermes"], "hermes-chat-gateway"),
-    (["backend/app/services/hermes_devsync_service"], "hermes-devsync"),
-    (["07_ScrapingToolkit"], "scraping-toolkit"),
-    (["03_Scripts/hermes"], "hermes-scripts"),
-    (["airflow"], "airflow-pipelines"),
-    (["frontend/"], "frontend"),
-    (["backend/"], "backend"),
+# File path patterns → likely feature areas. Specific feature matches carry much
+# higher weight than generic frontend/backend matches.
+FEATURE_INFERENCE: list[tuple[list[str], str, int]] = [
+    ([".github/workflows/hermes-devsync.yml", ".githooks/", "03_Scripts/hermes/hermes_dev_event", "backend/app/services/hermes_devsync_service"], "hermes-devsync", 100),
+    (["backend/app/services/hermes_chat_service", "HermesAskResponseCard"], "hermes-chat-gateway", 100),
+    (["backend/app/api/routes/presence", "backend/app/services/presence_service", "PresenceWidget", "usePresence"], "feature.presence_websocket", 100),
+    (["usePageTransition", "useStaggerEntrance", "anime"], "feature.ui_animation_toolkit", 90),
+    (["backend/app/services/jato_monthly_update_service", "JatoMonthlyUpdatePage", "JATO_MONTHLY_UPDATE_DATA_LIFECYCLE"], "feature.jato_monthly_update", 100),
+    (["frontend/src/pages/DashboardPage", "frontend/src/pages/DataManagementPage"], "feature.data_management", 80),
+    (["frontend/src/pages/CountryChatPage", "backend/app/services/country_chat"], "feature.country_copilot", 100),
+    (["frontend/src/pages/MarketScanPage", "backend/app/services/market_scan"], "feature.market_scan", 100),
+    (["frontend/src/pages/MsrpPage", "backend/app/api/routes/msrp"], "feature.msrp_workbench", 100),
+    (["frontend/src/pages/ReviewCasesPage", "backend/app/api/routes/review"], "feature.review_workbench", 100),
+    (["engineering_config", "EngineeringConfigPage", "ConfigMatrix"], "feature.engineering", 100),
+    (["07_ScrapingToolkit"], "feature.scraping_toolkit", 90),
+    (["airflow"], "airflow-pipelines", 50),
+    (["frontend/"], "frontend", 1),
+    (["backend/"], "backend", 1),
 ]
+
+TITLE_INFERENCE: list[tuple[list[str], str, int]] = [
+    (["hermes", "devsync"], "hermes-devsync", 100),
+    (["hermes", "chat"], "hermes-chat-gateway", 100),
+    (["hermes", "command"], "hermes-chat-gateway", 95),
+    (["jato", "monthly"], "feature.jato_monthly_update", 100),
+    (["market", "scan"], "feature.market_scan", 95),
+    (["engineering", "config"], "feature.engineering", 120),
+    (["presence"], "feature.presence_websocket", 90),
+    (["animation"], "feature.ui_animation_toolkit", 70),
+    (["scraping"], "feature.scraping_toolkit", 80),
+]
+
+GENERIC_FEATURE_IDS = {"backend", "frontend"}
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -88,13 +105,23 @@ def infer_features(files: list[str], subject: str) -> list[str]:
     """Infer likely feature IDs from changed files and commit subject."""
     scores: dict[str, int] = {}
     for fpath in files:
-        for patterns, feat_id in FEATURE_INFERENCE:
+        for patterns, feat_id, weight in FEATURE_INFERENCE:
             for pat in patterns:
                 if pat in fpath:
-                    scores[feat_id] = scores.get(feat_id, 0) + 1
+                    scores[feat_id] = scores.get(feat_id, 0) + weight
+
+    normalized_subject = subject.lower()
+    for keywords, feat_id, weight in TITLE_INFERENCE:
+        if all(keyword in normalized_subject for keyword in keywords):
+            scores[feat_id] = scores.get(feat_id, 0) + weight
+
     # Deduplicate and sort by score
-    ranked = sorted(scores.items(), key=lambda x: -x[1])
-    features = [fid for fid, _ in ranked[:3]]
+    ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
+    max_score = ranked[0][1] if ranked else 0
+    features = [fid for fid, score in ranked if score > 1 and score >= max_score * 0.65]
+    if any(fid not in GENERIC_FEATURE_IDS for fid in features):
+        features = [fid for fid in features if fid not in GENERIC_FEATURE_IDS]
+    features = features[:3]
     if not features:
         # Fallback: slugify subject
         import re

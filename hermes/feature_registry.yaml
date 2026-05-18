@@ -1,643 +1,681 @@
-# Hermes Feature Registry
-# Phase 1 — seeded from REPOSITORY_ASSET_MAP.md (2026-05-14)
-
 features:
-  # --- Core Analytical Features ---
-  - featureId: feature.dashboard
-    name: "Dashboard"
-    status: active
-    implementationStatus: implemented
-    riskLevel: low
-    routes:
-      - "/"
-    backendApis:
-      - "POST /v1/analysis/query"
-      - "POST /v1/analysis/time-series"
-      - "POST /v1/analysis/overview"
-      - "GET /v1/analysis/data-freshness"
-      - "POST /v1/filters/options"
-    scheduledJobs: []
-    dataSources:
-      - "JATO partitioned parquet"
-      - "04_Processed_data/summaries/"
-    artifacts:
-      - "artifact.jato.parquet"
-      - "artifact.jato.partitioned"
-    docs:
-      - "UI/Dashboard_Layout_Baseline_2026-04-10.md"
-      - "UI/Dashboard_Shared_Filter_Reuse.md"
-    tests:
-      - "Frontend: sharedFilterScopeHelpers.test.ts"
-    dependencies:
-      - "pipeline.jato.etl"
-    owner: ""
-    governanceStatus: registered
-    knownIssues: []
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Main analysis dashboard with KPIs, charts, and cascading filters."
-
-  - featureId: feature.specification
-    name: "Specification / Data Explorer"
-    status: active
-    implementationStatus: implemented
-    riskLevel: low
-    routes:
-      - "/specification"
-    backendApis:
-      - "POST /v1/analysis/detail"
-      - "POST /v1/analysis/detail-csv"
-    scheduledJobs: []
-    dataSources:
-      - "JATO partitioned parquet"
-    artifacts:
-      - "artifact.jato.parquet"
-    docs:
-      - "UI/UI_SPECIFICATION_V1.md"
-    tests: []
-    dependencies:
-      - "pipeline.jato.etl"
-    owner: ""
-    governanceStatus: registered
-    knownIssues: []
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Paginated data explorer with CSV export."
-
-  - featureId: feature.market_scan
-    name: "Market Scan"
-    status: active
-    implementationStatus: implemented
-    riskLevel: low
-    routes:
-      - "/market-scan"
-    backendApis:
-      - "POST /v1/market-scan/deck"
-      - "GET /v1/market-scan/ranking-trend"
-    scheduledJobs: []
-    dataSources:
-      - "JATO partitioned parquet"
-    artifacts:
-      - "artifact.jato.parquet"
-    docs:
-      - "WORKFLOWS/BUSINESS_PIPELINE_WORKFLOWS.md"
-    tests:
-      - "Backend: test_market_scan_service.py"
-    dependencies:
-      - "pipeline.jato.etl"
-    owner: ""
-    governanceStatus: registered
-    knownIssues: []
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Multi-tab market analysis: overview, origin, segment, drilldown."
-
-  - featureId: feature.positioning_pricing
-    name: "Positioning & Pricing"
-    status: active
-    implementationStatus: implemented
-    riskLevel: low
-    routes:
-      - "/positioning-pricing"
-    backendApis:
-      - "POST /v1/market-scan/positioning-pricing-deck"
-    scheduledJobs: []
-    dataSources:
-      - "JATO partitioned parquet"
-    artifacts:
-      - "artifact.jato.parquet"
-    docs:
-      - "WORKFLOWS/BUSINESS_PRESENTATION_DECK.md"
-      - "WORKFLOWS/BUSINESS_PIPELINE_WORKFLOWS.md"
-      - "01_DevWorkflow/version_comparison_cross_segment_model_picker_prd.md §14"
-    tests: []
-    dependencies:
-      - "pipeline.jato.etl"
-    owner: ""
-    governanceStatus: registered
-    knownIssues: []
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Price band analysis and powertrain bubble charts."
-
-  - featureId: feature.version_comparison
-    name: "Version Comparison"
-    status: active
-    implementationStatus: implemented
-    riskLevel: low
-    routes:
-      - "/version-comparison"
-    backendApis:
-      - "POST /v1/market-scan/version-comparison-deck"
-    scheduledJobs: []
-    dataSources:
-      - "JATO partitioned parquet"
-    artifacts:
-      - "artifact.jato.parquet"
-    docs:
-      - "01_DevWorkflow/version_comparison_cross_segment_model_picker_prd.md"
-      - "MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md"
-    tests: []
-    dependencies:
-      - "pipeline.jato.etl"
-    owner: ""
-    governanceStatus: registered
-    knownIssues: []
-    lastChangedAt: "2026-05-14"
-    lastAuditAt: "2026-05-14"
-    notes: "Cross-segment model version comparison with Smart Label System (Phase 1 complete: Label Mode, P0-P3 priority, anti-overlap, jitter, click/select)."
-
-  # --- AI / Intelligence Features ---
-  - featureId: feature.country_copilot
-    name: "Country Copilot / Country Chat"
-    status: active
-    implementationStatus: implemented
-    riskLevel: medium
-    routes:
-      - "/copilot"
-    backendApis:
-      - "GET /v1/assistant/country/metadata"
-      - "POST /v1/assistant/country/chat/stream"
-      - "POST /v1/assistant/country/chat"
-      - "POST /v1/assistant/country/chart-deck"
-      - "GET /v1/assistant/country/news/status"
-      - "POST /v1/assistant/country/news/refresh"
-    scheduledJobs:
-      - "pipeline.news.country_systemd"
-      - "pipeline.news.country_airflow"
-    dataSources:
-      - "JATO partitioned parquet"
-      - "PostgreSQL: ops.country_news_digest"
-      - "PostgreSQL: msrp.current_price"
-      - "PostgreSQL: ops.voc_raw_document"
-    artifacts:
-      - "artifact.jato.parquet"
-      - "artifact.news.digest"
-      - "artifact.voc.deck"
-    docs:
-      - "01_DevWorkflow/COUNTRY_COPILOT_INTELLIGENCE_IMPLEMENTATION_2026-04-15.md"
-      - "01_DevWorkflow/COUNTRY_COPILOT_INTENT_AND_HYBRID_RETRIEVAL_2026-04-17.md"
-      - "01_DevWorkflow/COUNTRY_COPILOT_GOVERNED_ANALYTICAL_COPILOT_PRD_2026-05-11.md"
-    tests:
-      - "Backend: test_country_chat_models.py"
-      - "Backend: test_country_chat_service.py"
-      - "Backend: test_country_service.py"
-      - "Backend: test_copilot_eval_harness.py"
-      - "Frontend: countryChatRendering.test.tsx"
-    dependencies:
-      - "pipeline.jato.etl"
-      - "pipeline.news.country_systemd"
-      - "pipeline.voc.forum_systemd"
-      - "pipeline.msrp.ingest_systemd"
-      - "DeepSeek API (api.deepseek.com)"
-    owner: ""
-    governanceStatus: registered
-    knownIssues:
-      - "3 LLM prompts hardcoded in Python, not versioned"
-      - "3 overlapping PRD documents"
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "LLM-powered Chinese-language country market analysis with SSE streaming. Governed Copilot v2 with tool-first evidence collection."
-
-  # --- VOC / Customer Features ---
-  - featureId: feature.customer_insights
-    name: "Customer Insights / VOC Live"
-    status: active
-    implementationStatus: implemented
-    riskLevel: medium
-    routes:
-      - "/customer-insights"
-    backendApis:
-      - "GET /v1/market-scan/nordic-customer-deck"
-    scheduledJobs:
-      - "pipeline.voc.forum_systemd"
-    dataSources:
-      - "04_Processed_data/voc/"
-      - "PostgreSQL: ops.voc_source_run"
-      - "PostgreSQL: ops.voc_raw_document"
-      - "01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
-    artifacts:
-      - "artifact.voc.raw"
-      - "artifact.voc.enriched"
-      - "artifact.voc.deck"
-    docs:
-      - "02_DataETL/VOC_FORUM_IMPLEMENTATION_STATUS_2026-04-19.md"
-      - "02_DataETL/AI_NEWS_VOC_INTELLIGENCE_PIPELINE_2026-05-09.md"
-    tests:
-      - "Backend: test_customer_insight_service.py"
-      - "Frontend: customerInsightsPage.test.tsx"
-    dependencies:
-      - "pipeline.voc.forum_systemd"
-    owner: ""
-    governanceStatus: registered
-    knownIssues:
-      - "VOC source errors (8/run) not tracked per-source"
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Nordic benchmark Excel + Forum VOC Live dual mode. Evidence cards with scraped content preview."
-
-  - featureId: feature.nordic_hev_insights
-    name: "Nordic HEV Customer Insights"
-    status: active
-    implementationStatus: implemented
-    riskLevel: medium
-    routes:
-      - "/customer-hev"
-    backendApis:
-      - "GET /v1/market-scan/nordic-hev-customer-deck"
-    scheduledJobs: []
-    dataSources:
-      - "04_Processed_data/voc/se/ (HEV benchmark Excel)"
-    artifacts:
-      - "artifact.voc.hev_benchmark"
-    docs:
-      - "02_DataETL/AI_NEWS_VOC_INTELLIGENCE_PIPELINE_2026-05-09.md"
-      - "02_DataETL/VOC_FORUM_IMPLEMENTATION_STATUS_2026-04-19.md"
-    tests: []
-    dependencies:
-      - "Manual Excel generation (generate_sweden_hev_benchmark_excel.py)"
-    owner: ""
-    governanceStatus: registered
-    knownIssues:
-      - "HEV benchmark Excel must be manually regenerated"
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "HEV-specific customer insights for Nordic markets."
-
-  # --- Admin / Data Features ---
-  - featureId: feature.data_management
-    name: "Data Management"
-    status: active
-    implementationStatus: implemented
-    riskLevel: low
-    routes:
-      - "/data-management"
-    backendApis:
-      - "GET /v1/data-management/overview"
-      - "GET /v1/data-management/airflow/status"
-      - "POST /v1/data-management/airflow/start"
-      - "POST /v1/data-management/airflow/stop"
-      - "POST /v1/data-management/voc/sync"
-      - "GET /v1/data-management/voc/overview"
-    scheduledJobs: []
-    dataSources:
-      - "Disk inventory"
-      - "PostgreSQL health"
-      - "Airflow status"
-    artifacts:
-      - "artifact.status_json"
-    docs:
-      - "04_DevOps/TENCENT_CLOUD_DEPLOY.md"
-    tests:
-      - "Backend: test_data_management_routes.py"
-      - "Backend: test_data_management_service.py"
-    dependencies: []
-    owner: ""
-    governanceStatus: registered
-    knownIssues:
-      - "Hermes governance tab not yet integrated"
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Admin overview: file/table inventory, CRUD, Airflow controls, VOC observatory."
-
-  # --- MSRP Features ---
-  - featureId: feature.msrp_workbench
-    name: "MSRP Workbench"
-    status: active
-    implementationStatus: implemented
-    riskLevel: medium
-    routes:
-      - "/msrp"
-    backendApis:
-      - "GET /v1/msrp/sources"
-      - "POST /v1/msrp/sources"
-      - "GET /v1/msrp/sources/observations"
-      - "POST /v1/msrp/current-prices/materialize"
-    scheduledJobs:
-      - "pipeline.msrp.dryrun_systemd"
-      - "pipeline.msrp.ingest_systemd"
-    dataSources:
-      - "PostgreSQL: msrp.msrp_source"
-      - "PostgreSQL: msrp.msrp_observation"
-      - "07_ScrapingToolkit/source_drafts/"
-    artifacts:
-      - "artifact.msrp.observations"
-      - "artifact.msrp.current_prices"
-    docs:
-      - "MSRP/README.md"
-      - "MSRP/01_Requirements/ through MSRP/05_Backlog/ (16 docs)"
-    tests:
-      - "Backend: test_msrp_admin_service.py"
-      - "Backend: test_msrp_workflow_service.py"
-      - "Backend: test_msrp_mapping_service.py"
-    dependencies:
-      - "pipeline.msrp.dryrun_systemd"
-      - "pipeline.msrp.ingest_systemd"
-      - "07_ScrapingToolkit/"
-    owner: ""
-    governanceStatus: registered
-    knownIssues:
-      - "92/209 sources passing (44.0%) — majority still failing"
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Full MSRP lifecycle: source management → scrape → observation → current price."
-
-  - featureId: feature.current_price
-    name: "Current Price"
-    status: active
-    implementationStatus: implemented
-    riskLevel: low
-    routes:
-      - "/msrp (current-prices tab)"
-    backendApis:
-      - "GET /v1/msrp/current-prices"
-      - "GET /v1/msrp/price-history"
-      - "POST /v1/msrp/current-prices/{id}/remap"
-    scheduledJobs: []
-    dataSources:
-      - "PostgreSQL: msrp.current_price"
-      - "PostgreSQL: msrp.price_history"
-    artifacts:
-      - "artifact.msrp.current_prices"
-    docs:
-      - "MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md"
-    tests: []
-    dependencies:
-      - "pipeline.msrp.ingest_systemd"
-    owner: ""
-    governanceStatus: registered
-    knownIssues: []
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Current effective price per country/brand/model/trim/powertrain."
-
-  - featureId: feature.review_workbench
-    name: "Review Workbench"
-    status: active
-    implementationStatus: implemented
-    riskLevel: low
-    routes:
-      - "/review"
-    backendApis:
-      - "GET /v1/review/cases"
-      - "GET /v1/review/cases/stats"
-      - "GET /v1/review/cases/workbench"
-      - "GET /v1/review/cases/{id}"
-      - "POST /v1/review/cases/{id}/decisions"
-      - "GET /v1/review/overrides"
-      - "POST /v1/review/overrides"
-    scheduledJobs: []
-    dataSources:
-      - "PostgreSQL: review.review_case"
-      - "PostgreSQL: review.match_override"
-      - "PostgreSQL: msrp.msrp_observation"
-    artifacts:
-      - "artifact.msrp.observations"
-    docs:
-      - "MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md"
-      - "MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md"
-    tests:
-      - "Backend: test_review_service.py"
-      - "Backend: test_review_workbench_service.py"
-    dependencies:
-      - "pipeline.msrp.ingest_systemd"
-    owner: ""
-    governanceStatus: registered
-    knownIssues: []
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Human-in-the-loop review of unmatched MSRP observations."
-
-  - featureId: feature.engineering
-    name: "Engineering Config Management"
-    status: active
-    implementationStatus: implemented
-    riskLevel: low
-    routes:
-      - "/engineering"
-    backendApis:
-      - "GET /v1/engineering/projects"
-      - "POST /v1/engineering/projects"
-      - "GET /v1/engineering/projects/imports"
-      - "GET /v1/engineering/projects/variants"
-    scheduledJobs: []
-    dataSources:
-      - "PostgreSQL: engineering.config_project"
-      - "PostgreSQL: engineering.config_variant"
-      - "PostgreSQL: engineering.config_base_variant"
-    artifacts: []
-    docs:
-      - "03_Database/PLATFORM_STACK_AND_DATABASE_BOUNDARY_2026-04-10.md"
-    tests:
-      - "Backend: test_engineering_routes.py"
-      - "Backend: test_engineering_normalization_service.py"
-    dependencies: []
-    owner: ""
-    governanceStatus: registered
-    knownIssues: []
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Excel import → normalization → variant diff for vehicle config comparison."
-
-  - featureId: feature.jato_monthly_update
-    name: "JATO Monthly Update Pipeline"
-    status: active
-    implementationStatus: implemented
-    riskLevel: medium
-    routes:
-      - "/msrp/monthly-update"
-    backendApis:
-      - "POST /v1/msrp/monthly-update-uploads/initiate"
-      - "PUT /v1/msrp/monthly-update-uploads/{id}/parts/{num}"
-      - "POST /v1/msrp/monthly-update-uploads/{id}/complete"
-      - "POST /v1/msrp/monthly-update-jobs/from-upload"
-      - "GET /v1/msrp/monthly-update-jobs/{id}/review"
-      - "POST /v1/msrp/monthly-update-jobs/{id}/publish"
-      - "POST /v1/msrp/monthly-update-jobs/{id}/rollback"
-    scheduledJobs: []
-    dataSources:
-      - "Uploaded XLSX files"
-      - "PostgreSQL: jato_monthly_update jobs"
-    artifacts:
-      - "artifact.jato.monthly_update_job"
-    docs:
-      - "02_DataETL/ETL.md"
-    tests:
-      - "Backend: test_jato_monthly_update_routes.py"
-      - "Backend: test_jato_monthly_update_service.py"
-    dependencies:
-      - "pipeline.jato.etl"
-    owner: ""
-    governanceStatus: registered
-    knownIssues: []
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Chunked file upload with SHA-256 verification and resume. Full job lifecycle."
-
-  # --- Planned / PRD-Only Features ---
-  - featureId: feature.presence_websocket
-    name: "Presence (在线人数 + WebSocket)"
-    status: active
-    implementationStatus: phase1_complete
-    riskLevel: low
-    routes:
-      - "Layout (all pages) — top-bar indicator"
-    backendApis:
-      - "POST /v1/presence/heartbeat"
-      - "GET /v1/presence/online"
-    scheduledJobs: []
-    dataSources: []
-    artifacts:
-      - "app/services/presence_service.py"
-      - "hooks/usePresence.ts"
-    docs:
-      - "01_DevWorkflow/presence_websocket_prd.md"
-    tests: []
-    dependencies: []
-    owner: ""
-    governanceStatus: registered
-    knownIssues:
-      - "Phase 2 (WebSocket real-time push) pending"
-    lastChangedAt: "2026-05-15"
-    lastAuditAt: "2026-05-15"
-    notes: "Phase 1 完善完成: presence_service.py 单例 + usePresence.ts hook + session_id + 同页人数(same_page)。顶栏显示 'X online · Y here'。Phase 2 WebSocket 待启动。"
-
-  - featureId: feature.ranking_trend_drilldown
-    name: "Ranking Trend Drilldown"
-    status: active
-    implementationStatus: implemented
-    riskLevel: low
-    routes:
-      - "/market-scan (RankingTrendPopover)"
-    backendApis:
-      - "GET /v1/market-scan/ranking-trend"
-    scheduledJobs: []
-    dataSources:
-      - "JATO partitioned parquet"
-    artifacts: []
-    docs:
-      - "01_DevWorkflow/ranking_trend_drilldown_prd.md"
-    tests: []
-    dependencies:
-      - "pipeline.jato.etl"
-    owner: ""
-    governanceStatus: registered
-    knownIssues: []
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Drawer pattern for Brand/Model trend exploration. RankingTrendDrawer.tsx component exists."
-
-  # --- Tooling / Infrastructure ---
-  - featureId: feature.competitor_monitoring
-    name: "Competitor Monitoring (竞品监控)"
-    status: active
-    implementationStatus: implemented
-    riskLevel: low
-    routes:
-      - "/market-scan"
-      - "/positioning-pricing"
-      - "/copilot"
-    backendApis:
-      - "POST /v1/market-scan/deck"
-      - "POST /v1/market-scan/positioning-pricing-deck"
-      - "POST /v1/assistant/country/chat"
-    scheduledJobs: []
-    dataSources:
-      - "JATO partitioned parquet"
-      - "PostgreSQL: msrp.current_price"
-    artifacts:
-      - "artifact.jato.parquet"
-      - "artifact.msrp.current_prices"
-    docs:
-      - "WORKFLOWS/BUSINESS_PRESENTATION_DECK.md"
-      - "WORKFLOWS/BUSINESS_PIPELINE_WORKFLOWS.md"
-    tests: []
-    dependencies:
-      - "feature.market_scan"
-      - "feature.positioning_pricing"
-      - "feature.country_copilot"
-      - "feature.msrp_workbench"
-    owner: ""
-    governanceStatus: registered
-    knownIssues:
-      - "Emergent capability spanning multiple features. No dedicated page — composed from Market Scan + Positioning + Copilot."
-
-  - featureId: feature.scraping_toolkit
-    name: "Scraping Toolkit"
-    status: active
-    implementationStatus: implemented
-    riskLevel: medium
-    routes: []
-    backendApis: []
-    scheduledJobs:
-      - "pipeline.msrp.dryrun_systemd"
-      - "pipeline.msrp.ingest_systemd"
-      - "pipeline.voc.forum_systemd"
-      - "pipeline.news.country_systemd"
-    dataSources: []
-    artifacts: []
-    docs:
-      - "07_ScrapingToolkit/README.md"
-    tests:
-      - "07_ScrapingToolkit/tests/ (12 test files)"
-    dependencies: []
-    owner: ""
-    governanceStatus: registered
-    knownIssues: []
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Standalone scraping toolkit: MSRP, news, VOC, EVKX. 7 CLI entry points."
-
-  - featureId: feature.ui_animation_toolkit
-    name: "UI Animation Toolkit (anime.js)"
-    status: beta
-    implementationStatus: phase1_rollout
-    riskLevel: low
-    routes:
-      - "/ — Dashboard Hero 标题淡入"
-      - "/market-scan — Tab 切换 content fade-in"
-      - "/review-cases — 审核列表行 stagger 入场"
-    backendApis: []
-    scheduledJobs: []
-    dataSources: []
-    artifacts:
-      - "hooks/useStaggerEntrance.ts"
-      - "hooks/usePageTransition.ts"
-    docs:
-      - "Fullstack/01_DevWorkflow/ (this feature — inline Claude Code PRD)"
-    tests: []
-    dependencies:
-      - "npm:animejs@^4"
-    owner: ""
-    governanceStatus: registered
-    knownIssues:
-      - "buildHeroMetrics() 返回空数组，MarketScan hero 指标卡片 stagger 暂未接入"
-      - "待铺: 排名列表 stagger、燃料芯片 stagger、Hero 折叠过渡"
-    lastChangedAt: "2026-05-15"
-    lastAuditAt: "2026-05-15"
-    notes: "基于 anime.js v4 的声明式动效工具箱。已交付: DashboardPage hero 淡入(animate直接调用)、MarketScanPage tab切换(content fade-in via usePageTransition)、ReviewCasesPage 列表行交错入场(via useStaggerEntrance)。零额外网络开销(anime.js 17KB gzip 已打入vendor bundle)，纯GPU合成属性(opacity/transform)，服务器零负载。"
-
-  - featureId: feature.gitnexus
-    name: "GitNexus (Code Intelligence)"
-    status: active
-    implementationStatus: implemented
-    riskLevel: low
-    routes: []
-    backendApis: []
-    scheduledJobs: []
-    dataSources: []
-    artifacts:
-      - "artifact.gitnexus.visual_zip"
-    docs:
-      - "08_GitNexus/README.md"
-      - "08_GitNexus/ARCHITECTURE.md"
-    tests:
-      - "08_GitNexus/eval/"
-    dependencies: []
-    owner: ""
-    governanceStatus: registered
-    knownIssues:
-      - "Separate product within monorepo — not integrated with JATO mainline"
-    lastChangedAt: null
-    lastAuditAt: "2026-05-14"
-    notes: "Code intelligence product: knowledge graph, search, AI chat over codebases. Independent Docker deployment."
+- featureId: feature.dashboard
+  name: Dashboard
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - /
+  backendApis: []
+  scheduledJobs: []
+  dataSources:
+  - JATO partitioned parquet
+  - 04_Processed_data/summaries/
+  artifacts:
+  - artifact.jato.parquet
+  - artifact.jato.partitioned
+  docs:
+  - Markdown_Readme/features/feature.dashboard.md
+  tests:
+  - backend
+  - frontendTsc
+  - frontendBuild
+  - frontendVitest
+  - backendPytest
+  dependencies:
+  - pipeline.jato.etl
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Unlimited scan on very large filtered datasets (>5M rows) could increase memory
+    usage
+  - Other load_slice callers with 200_000 limit may have similar partition-truncation
+    risk for different query types
+  lastAuditAt: '2026-05-18T01:28:10.749833+00:00'
+- featureId: feature.specification
+  name: Specification / Data Explorer
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - /specification
+  backendApis:
+  - POST /v1/analysis/detail
+  - POST /v1/analysis/detail-csv
+  scheduledJobs: []
+  dataSources:
+  - JATO partitioned parquet
+  artifacts:
+  - artifact.jato.parquet
+  docs:
+  - UI/UI_SPECIFICATION_V1.md
+  tests: []
+  dependencies:
+  - pipeline.jato.etl
+  owner: ''
+  governanceStatus: registered
+  knownIssues: []
+  lastChangedAt: null
+  lastAuditAt: '2026-05-14'
+  notes: Paginated data explorer with CSV export.
+- featureId: feature.market_scan
+  name: Market Scan
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - /market-scan
+  backendApis: []
+  scheduledJobs: []
+  dataSources:
+  - JATO partitioned parquet
+  artifacts:
+  - artifact.jato.parquet
+  docs:
+  - Markdown_Readme/features/feature.market_scan.md
+  tests:
+  - backend
+  - frontendTsc
+  - frontendBuild
+  - frontendVitest
+  - backendPytest
+  dependencies:
+  - pipeline.jato.etl
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Server must be redeployed for cache schema version bump to take effect
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  - prior_rolling12_columns derived from current rolling12 shift means window sizes
+    may differ by 1-2 months when data gaps exist, but avoids entire window being
+    empty
+  lastAuditAt: '2026-05-18T01:28:11.476912+00:00'
+- featureId: feature.positioning_pricing
+  name: Positioning & Pricing
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - /positioning-pricing
+  backendApis:
+  - POST /v1/market-scan/positioning-pricing-deck
+  scheduledJobs: []
+  dataSources:
+  - JATO partitioned parquet
+  artifacts:
+  - artifact.jato.parquet
+  docs:
+  - WORKFLOWS/BUSINESS_PRESENTATION_DECK.md
+  - WORKFLOWS/BUSINESS_PIPELINE_WORKFLOWS.md
+  - 01_DevWorkflow/version_comparison_cross_segment_model_picker_prd.md §14
+  tests: []
+  dependencies:
+  - pipeline.jato.etl
+  owner: ''
+  governanceStatus: registered
+  knownIssues: []
+  lastChangedAt: null
+  lastAuditAt: '2026-05-14'
+  notes: Price band analysis and powertrain bubble charts.
+- featureId: feature.version_comparison
+  name: Version Comparison
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - /version-comparison
+  backendApis:
+  - POST /v1/market-scan/version-comparison-deck
+  scheduledJobs: []
+  dataSources:
+  - JATO partitioned parquet
+  artifacts:
+  - artifact.jato.parquet
+  docs:
+  - 01_DevWorkflow/version_comparison_cross_segment_model_picker_prd.md
+  - MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md
+  tests: []
+  dependencies:
+  - pipeline.jato.etl
+  owner: ''
+  governanceStatus: registered
+  knownIssues: []
+  lastChangedAt: '2026-05-14'
+  lastAuditAt: '2026-05-14'
+  notes: 'Cross-segment model version comparison with Smart Label System (Phase 1
+    complete: Label Mode, P0-P3 priority, anti-overlap, jitter, click/select).'
+- featureId: feature.country_copilot
+  name: Country Copilot / Country Chat
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - /copilot
+  backendApis: []
+  scheduledJobs:
+  - pipeline.news.country_systemd
+  - pipeline.news.country_airflow
+  dataSources:
+  - JATO partitioned parquet
+  - 'PostgreSQL: ops.country_news_digest'
+  - 'PostgreSQL: msrp.current_price'
+  - 'PostgreSQL: ops.voc_raw_document'
+  artifacts:
+  - artifact.jato.parquet
+  - artifact.news.digest
+  - artifact.voc.deck
+  docs:
+  - Markdown_Readme/features/feature.country_copilot.md
+  tests:
+  - backendPytest
+  dependencies:
+  - pipeline.jato.etl
+  - pipeline.news.country_systemd
+  - pipeline.voc.forum_systemd
+  - pipeline.msrp.ingest_systemd
+  - DeepSeek API (api.deepseek.com)
+  owner: ''
+  governanceStatus: registered
+  knownIssues: []
+  lastAuditAt: '2026-05-18T01:28:09.686559+00:00'
+- featureId: feature.customer_insights
+  name: Customer Insights / VOC Live
+  status: active
+  implementationStatus: implemented
+  riskLevel: medium
+  routes:
+  - /customer-insights
+  backendApis:
+  - GET /v1/market-scan/nordic-customer-deck
+  scheduledJobs:
+  - pipeline.voc.forum_systemd
+  dataSources:
+  - 04_Processed_data/voc/
+  - 'PostgreSQL: ops.voc_source_run'
+  - 'PostgreSQL: ops.voc_raw_document'
+  - 01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx
+  artifacts:
+  - artifact.voc.raw
+  - artifact.voc.enriched
+  - artifact.voc.deck
+  docs:
+  - 02_DataETL/VOC_FORUM_IMPLEMENTATION_STATUS_2026-04-19.md
+  - 02_DataETL/AI_NEWS_VOC_INTELLIGENCE_PIPELINE_2026-05-09.md
+  tests:
+  - 'Backend: test_customer_insight_service.py'
+  - 'Frontend: customerInsightsPage.test.tsx'
+  dependencies:
+  - pipeline.voc.forum_systemd
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - VOC source errors (8/run) not tracked per-source
+  lastChangedAt: null
+  lastAuditAt: '2026-05-14'
+  notes: Nordic benchmark Excel + Forum VOC Live dual mode. Evidence cards with scraped
+    content preview.
+- featureId: feature.nordic_hev_insights
+  name: Nordic HEV Customer Insights
+  status: active
+  implementationStatus: implemented
+  riskLevel: medium
+  routes:
+  - /customer-hev
+  backendApis:
+  - GET /v1/market-scan/nordic-hev-customer-deck
+  scheduledJobs: []
+  dataSources:
+  - 04_Processed_data/voc/se/ (HEV benchmark Excel)
+  artifacts:
+  - artifact.voc.hev_benchmark
+  docs:
+  - 02_DataETL/AI_NEWS_VOC_INTELLIGENCE_PIPELINE_2026-05-09.md
+  - 02_DataETL/VOC_FORUM_IMPLEMENTATION_STATUS_2026-04-19.md
+  tests: []
+  dependencies:
+  - Manual Excel generation (generate_sweden_hev_benchmark_excel.py)
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - HEV benchmark Excel must be manually regenerated
+  lastChangedAt: null
+  lastAuditAt: '2026-05-14'
+  notes: HEV-specific customer insights for Nordic markets.
+- featureId: feature.data_management
+  name: Data Management
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - /data-management
+  backendApis:
+  - GET /v1/data-management/overview
+  - GET /v1/data-management/airflow/status
+  - POST /v1/data-management/airflow/start
+  - POST /v1/data-management/airflow/stop
+  - POST /v1/data-management/voc/sync
+  - GET /v1/data-management/voc/overview
+  scheduledJobs: []
+  dataSources:
+  - Disk inventory
+  - PostgreSQL health
+  - Airflow status
+  artifacts:
+  - artifact.status_json
+  docs:
+  - 04_DevOps/TENCENT_CLOUD_DEPLOY.md
+  tests:
+  - 'Backend: test_data_management_routes.py'
+  - 'Backend: test_data_management_service.py'
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Hermes governance tab not yet integrated
+  lastChangedAt: null
+  lastAuditAt: '2026-05-14'
+  notes: 'Admin overview: file/table inventory, CRUD, Airflow controls, VOC observatory.'
+- featureId: feature.msrp_workbench
+  name: MSRP Workbench
+  status: active
+  implementationStatus: implemented
+  riskLevel: medium
+  routes:
+  - /msrp
+  backendApis:
+  - GET /v1/msrp/sources
+  - POST /v1/msrp/sources
+  - GET /v1/msrp/sources/observations
+  - POST /v1/msrp/current-prices/materialize
+  scheduledJobs:
+  - pipeline.msrp.dryrun_systemd
+  - pipeline.msrp.ingest_systemd
+  dataSources:
+  - 'PostgreSQL: msrp.msrp_source'
+  - 'PostgreSQL: msrp.msrp_observation'
+  - 07_ScrapingToolkit/source_drafts/
+  artifacts:
+  - artifact.msrp.observations
+  - artifact.msrp.current_prices
+  docs:
+  - MSRP/README.md
+  - MSRP/01_Requirements/ through MSRP/05_Backlog/ (16 docs)
+  tests:
+  - 'Backend: test_msrp_admin_service.py'
+  - 'Backend: test_msrp_workflow_service.py'
+  - 'Backend: test_msrp_mapping_service.py'
+  dependencies:
+  - pipeline.msrp.dryrun_systemd
+  - pipeline.msrp.ingest_systemd
+  - 07_ScrapingToolkit/
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - 92/209 sources passing (44.0%) — majority still failing
+  lastChangedAt: null
+  lastAuditAt: '2026-05-14'
+  notes: 'Full MSRP lifecycle: source management → scrape → observation → current
+    price.'
+- featureId: feature.current_price
+  name: Current Price
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - /msrp (current-prices tab)
+  backendApis:
+  - GET /v1/msrp/current-prices
+  - GET /v1/msrp/price-history
+  - POST /v1/msrp/current-prices/{id}/remap
+  scheduledJobs: []
+  dataSources:
+  - 'PostgreSQL: msrp.current_price'
+  - 'PostgreSQL: msrp.price_history'
+  artifacts:
+  - artifact.msrp.current_prices
+  docs:
+  - MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md
+  tests: []
+  dependencies:
+  - pipeline.msrp.ingest_systemd
+  owner: ''
+  governanceStatus: registered
+  knownIssues: []
+  lastChangedAt: null
+  lastAuditAt: '2026-05-14'
+  notes: Current effective price per country/brand/model/trim/powertrain.
+- featureId: feature.review_workbench
+  name: Review Workbench
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - /review
+  backendApis:
+  - GET /v1/review/cases
+  - GET /v1/review/cases/stats
+  - GET /v1/review/cases/workbench
+  - GET /v1/review/cases/{id}
+  - POST /v1/review/cases/{id}/decisions
+  - GET /v1/review/overrides
+  - POST /v1/review/overrides
+  scheduledJobs: []
+  dataSources:
+  - 'PostgreSQL: review.review_case'
+  - 'PostgreSQL: review.match_override'
+  - 'PostgreSQL: msrp.msrp_observation'
+  artifacts:
+  - artifact.msrp.observations
+  docs:
+  - MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md
+  - MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md
+  tests:
+  - 'Backend: test_review_service.py'
+  - 'Backend: test_review_workbench_service.py'
+  dependencies:
+  - pipeline.msrp.ingest_systemd
+  owner: ''
+  governanceStatus: registered
+  knownIssues: []
+  lastChangedAt: null
+  lastAuditAt: '2026-05-14'
+  notes: Human-in-the-loop review of unmatched MSRP observations.
+- featureId: feature.engineering
+  name: Engineering Config Management
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - /engineering
+  backendApis:
+  - GET /feature-catalog
+  - POST /feature-catalog/upload
+  - POST /matrix/upload/initiate
+  - PUT /matrix/upload/{upload_id}/parts/{part_number}
+  - POST /matrix/upload/{upload_id}/complete
+  - POST /matrix/upload/{upload_id}/parse
+  - POST /matrix/upload/{upload_id}/match
+  - GET /matrix/upload/{upload_id}/preview
+  - POST /matrix/upload/{upload_id}/confirm
+  - POST /versions/{version_id}/publish
+  scheduledJobs: []
+  dataSources:
+  - 'PostgreSQL: engineering.config_project'
+  - 'PostgreSQL: engineering.config_variant'
+  - 'PostgreSQL: engineering.config_base_variant'
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/feature.engineering.md
+  tests:
+  - backendPytest
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  lastAuditAt: '2026-05-18T01:28:12.425562+00:00'
+- featureId: feature.jato_monthly_update
+  name: JATO Monthly Update Pipeline
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - /msrp/monthly-update
+  backendApis: []
+  scheduledJobs: []
+  dataSources:
+  - Uploaded XLSX files
+  - 'PostgreSQL: jato_monthly_update jobs'
+  artifacts:
+  - artifact.jato.monthly_update_job
+  docs:
+  - Markdown_Readme/features/feature.jato_monthly_update.md
+  tests:
+  - backendPytest
+  dependencies:
+  - pipeline.jato.etl
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  lastAuditAt: '2026-05-18T01:28:13.166086+00:00'
+- featureId: feature.presence_websocket
+  name: Presence (在线人数 + WebSocket)
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - Layout (all pages) — top-bar indicator
+  backendApis:
+  - POST /heartbeat
+  - GET /online
+  scheduledJobs: []
+  dataSources: []
+  artifacts:
+  - app/services/presence_service.py
+  - hooks/usePresence.ts
+  docs:
+  - Markdown_Readme/features/feature.presence_websocket.md
+  tests:
+  - backend
+  - frontendTsc
+  - frontendBuild
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Dev event written retroactively — not during original implementation session
+  - Tests not yet verified for presence changes
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  lastAuditAt: '2026-05-18T01:28:12.801666+00:00'
+- featureId: feature.ranking_trend_drilldown
+  name: Ranking Trend Drilldown
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - /market-scan (RankingTrendPopover)
+  backendApis:
+  - GET /v1/market-scan/ranking-trend
+  scheduledJobs: []
+  dataSources:
+  - JATO partitioned parquet
+  artifacts: []
+  docs:
+  - 01_DevWorkflow/ranking_trend_drilldown_prd.md
+  tests: []
+  dependencies:
+  - pipeline.jato.etl
+  owner: ''
+  governanceStatus: registered
+  knownIssues: []
+  lastChangedAt: null
+  lastAuditAt: '2026-05-14'
+  notes: Drawer pattern for Brand/Model trend exploration. RankingTrendDrawer.tsx
+    component exists.
+- featureId: feature.competitor_monitoring
+  name: Competitor Monitoring (竞品监控)
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - /market-scan
+  - /positioning-pricing
+  - /copilot
+  backendApis:
+  - POST /v1/market-scan/deck
+  - POST /v1/market-scan/positioning-pricing-deck
+  - POST /v1/assistant/country/chat
+  scheduledJobs: []
+  dataSources:
+  - JATO partitioned parquet
+  - 'PostgreSQL: msrp.current_price'
+  artifacts:
+  - artifact.jato.parquet
+  - artifact.msrp.current_prices
+  docs:
+  - WORKFLOWS/BUSINESS_PRESENTATION_DECK.md
+  - WORKFLOWS/BUSINESS_PIPELINE_WORKFLOWS.md
+  tests: []
+  dependencies:
+  - feature.market_scan
+  - feature.positioning_pricing
+  - feature.country_copilot
+  - feature.msrp_workbench
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Emergent capability spanning multiple features. No dedicated page — composed from
+    Market Scan + Positioning + Copilot.
+- featureId: feature.scraping_toolkit
+  name: Scraping Toolkit
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis: []
+  scheduledJobs:
+  - pipeline.msrp.dryrun_systemd
+  - pipeline.msrp.ingest_systemd
+  - pipeline.voc.forum_systemd
+  - pipeline.news.country_systemd
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/feature.scraping_toolkit.md
+  tests:
+  - scrapingToolkitPytest
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  lastAuditAt: '2026-05-18T01:28:12.984264+00:00'
+- featureId: feature.ui_animation_toolkit
+  name: UI Animation Toolkit (anime.js)
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes:
+  - / — Dashboard Hero 标题淡入
+  - /market-scan — Tab 切换 content fade-in
+  - /review-cases — 审核列表行 stagger 入场
+  backendApis: []
+  scheduledJobs: []
+  dataSources: []
+  artifacts:
+  - hooks/useStaggerEntrance.ts
+  - hooks/usePageTransition.ts
+  docs:
+  - Markdown_Readme/features/feature.ui_animation_toolkit.md
+  tests:
+  - backend
+  - frontendTsc
+  - frontendBuild
+  dependencies:
+  - npm:animejs@^4
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Dev event written retroactively — not during original implementation session
+  - Tests not yet verified for presence changes
+  lastAuditAt: '2026-05-18T01:28:11.969786+00:00'
+- featureId: feature.gitnexus
+  name: GitNexus (Code Intelligence)
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis: []
+  scheduledJobs: []
+  dataSources: []
+  artifacts:
+  - artifact.gitnexus.visual_zip
+  docs:
+  - 08_GitNexus/README.md
+  - 08_GitNexus/ARCHITECTURE.md
+  tests:
+  - 08_GitNexus/eval/
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Separate product within monorepo — not integrated with JATO mainline
+  lastChangedAt: null
+  lastAuditAt: '2026-05-14'
+  notes: 'Code intelligence product: knowledge graph, search, AI chat over codebases.
+    Independent Docker deployment.'
+- featureId: hermes-devsync
+  name: Hermes DevSync
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis:
+  - POST /hermes/dev/events
+  - GET /hermes/dev/events
+  - POST /hermes/dev/sync
+  - GET /hermes/dev/features
+  - GET /hermes/dev/features/{featureId}
+  - GET /overview
+  - GET /pipeline-health
+  - GET /source-quality
+  - GET /cost
+  - GET /code-audit
+  - GET /proposals
+  - GET /gaps
+  - GET /features
+  - GET /toolchain
+  - GET /architecture
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/hermes-devsync.md
+  tests:
+  - backend
+  - frontendTsc
+  - frontendBuild
+  - frontendVitest
+  - ciContract
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  - Feature ID inference from title is heuristic-based
+  - No git hook or CI/CD integration yet
+  - DevSync requires manual trigger (Sync Now button or API call)
+  - Frontend diagnostics can still fail visibly inside the job logs; they no longer
+    fail the workflow conclusion.
+  lastAuditAt: '2026-05-18T01:28:12.893019+00:00'
+- featureId: hermes-chat-gateway
+  name: Hermes Chat Gateway
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis:
+  - POST /hermes/chat
+  - GET /hermes/chat/sessions
+  - GET /hermes/chat/sessions/{sessionId}
+  - GET /hermes/commands
+  - POST /hermes/commands/execute
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/hermes-chat-gateway.md
+  tests:
+  - backend
+  - frontendTsc
+  - frontendBuild
+  - frontendVitest
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Not yet connected to real queue-worker execution
+  - Claude Code dev events not yet auto-synced into Hermes
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  lastAuditAt: '2026-05-18T01:28:12.243482+00:00'

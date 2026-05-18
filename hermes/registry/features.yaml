@@ -1,166 +1,221 @@
 features:
-- featureId: feature.presence_websocket
-  title: Presence WebSocket + UI animations + online user count
+- featureId: feature.jato_monthly_update
+  title: Jato Monthly Update
   status: implemented
-  category: frontend
-  source: claude_code
-  summary: Enhanced presence tracking with WebSocket support, UI animations for online
-    user transitions, and real-time online user count badge in Layout header. Also
-    includes dryrun dashboard progress bars and per-source visualization improvements.
+  category: backend
+  source: git_commit
+  summary: "feat: JATO monthly update — publish blocker classification + resolution\
+    \ panels + info flowchart\n- Backend: publish_jato_monthly_update_job() now returns\
+    \ structured 409\n  detail for country_regression (regressions[]) and sales_doubling\n\
+    \  (anomalies[]) instead of flat string messages\n- Frontend types: new PublishBlocker,\
+    \ PublishCountryRegression,\n  PublishSalesDoublingAnomaly, PublishSalesDoublingSampleMonth\
+    \ interfaces\n- Frontend API: readErrorMessage preserves object detail as JSON\
+    \ string\n- Frontend page: Resolution Panel renders in Job Detail when publish\
+    \ is\n  blocked — country regression"
   linkedEventIds:
-  - dev_evt_20260515_003
+  - dev_evt_20260517_082454_62bb03
+  - dev_evt_20260517_082427_6191d6
+  - dev_evt_20260517_072443_e5a3c6
+  - dev_evt_20260517_072417_ebd2b6
+  - dev_evt_20260517_063812_fdf6ee
+  - dev_evt_20260517_063739_22786c
+  - dev_evt_20260517_052537_10ca5c
+  - dev_evt_20260517_052331_210c20
+  - dev_evt_20260518_004957_370678
   endpoints: []
   frontend:
-  - Online user count badge animation
-  - Layout header presence indicator transitions
-  - Dashboard page presence integration
+  - 06_AppPlatform/frontend/src/api/client.ts
+  - 06_AppPlatform/frontend/src/index.css
+  - 06_AppPlatform/frontend/src/pages/JatoMonthlyUpdatePage.tsx
+  - 06_AppPlatform/frontend/src/types/index.ts
   backend:
-  - Presence heartbeat endpoint enhancements
-  - Engineering config availability updates
-  - Config field mapping parser improvements
+  - 06_AppPlatform/backend/app/services/jato_monthly_update_service.py
   tests:
-    backend: pending
-    frontendTsc: pending
-    frontendBuild: pending
+    backendPytest: 57 passed (test_jato_monthly_update_service.py, test_market_scan_service.py,
+      test_parquet_repository.py)
   risks:
-  - Dev event written retroactively — not during original implementation session
-  - Tests not yet verified for presence changes
+  - Auto-generated dev event from git commit — tests not auto-verified.
   nextSteps:
-  - Run backend tests
-  - Run frontend type check and build
-  - Verify online count badge in UI
-  createdAt: '2026-05-15T15:11:41.805182+00:00'
-  lastUpdatedAt: '2026-05-15T15:33:48.582507+00:00'
-  gaps:
-  - gap.devsync.feature.presence_websocket.missing_docs
-- featureId: feature.ui_animations
-  title: Presence WebSocket + UI animations + online user count
+  - Run tests
+  - Verify in Hermes UI Dev tab
+  createdAt: '2026-05-18T00:48:25.663700+00:00'
+  lastUpdatedAt: '2026-05-18T01:28:13.166086+00:00'
+  docs:
+  - Markdown_Readme/features/feature.jato_monthly_update.md
+- featureId: feature.market_scan
+  title: Market Scan
   status: implemented
-  category: frontend
-  source: claude_code
-  summary: Enhanced presence tracking with WebSocket support, UI animations for online
-    user transitions, and real-time online user count badge in Layout header. Also
-    includes dryrun dashboard progress bars and per-source visualization improvements.
+  category: backend
+  source: git_commit
+  summary: 'feat: Mega Menu navigation + Dashboard all-countries default + backend
+    fixes
+
+    Navigation: 4-module mega menu (Dashboard, Market Scan, Product Deck, Data Ops)
+
+    - Market Scan: simple dropdown with 5 sub-items
+
+    - Product Deck: 2-column mega menu (Pricing/Positioning + Product/Customer)
+
+    - Data Ops: 2-column mega menu (Data View + Data Workflow)
+
+    - Copilot: moved from top nav to AI icon in user area
+
+    - AdminToolsNav: removed, links merged into Data Ops mega menu
+
+    - Mobile: hamburger drawer with accordion sections
+
+
+    Customer Insight: merged Customer + Hybrid into single page with
+
+    Cus'
   linkedEventIds:
-  - dev_evt_20260515_003
+  - dev_evt_20260516_002
+  - dev_evt_20260516_122928_8df87f
+  - dev_evt_20260516_071246_cf7c72
+  - dev_evt_20260518_010411_331753
+  - dev_evt_20260518_012715_a1b2c3
   endpoints: []
   frontend:
-  - Online user count badge animation
-  - Layout header presence indicator transitions
-  - Dashboard page presence integration
+  - 06_AppPlatform/frontend/src/App.tsx
+  - 06_AppPlatform/frontend/src/components/Layout.tsx
+  - 06_AppPlatform/frontend/src/contexts/SharedFilterScopeContext.tsx
+  - 06_AppPlatform/frontend/src/index.css
+  - 06_AppPlatform/frontend/src/pages/CrudPage.tsx
+  - 06_AppPlatform/frontend/src/pages/DataManagementPage.tsx
+  - 06_AppPlatform/frontend/src/pages/EngineeringConfigPage.tsx
+  - 06_AppPlatform/frontend/src/pages/EngineeringPage.tsx
+  - 06_AppPlatform/frontend/src/pages/JatoMonthlyUpdatePage.tsx
+  - 06_AppPlatform/frontend/src/pages/MsrpPage.tsx
   backend:
-  - Presence heartbeat endpoint enhancements
-  - Engineering config availability updates
-  - Config field mapping parser improvements
+  - 'config.py: MARKET_SCAN_CACHE_SCHEMA_VERSION 2→3 to invalidate server Redis cache'
+  - 'market_scan_cache.py: build_deck_cache_key now includes trend_window_months,
+    origin_window_months, body_window_months, drilldown_segment in cache key'
+  - 'market_scan_service.py: both Redis cache call sites now pass the 4 additional
+    params'
+  - 'test_market_scan_service.py: fixed broken _get_redis_client_safe → get_redis_client
+    patch'
+  - 06_AppPlatform/backend/app/core/config.py
+  - 06_AppPlatform/backend/app/infra/parquet_repository.py
+  - 06_AppPlatform/backend/app/services/market_scan_cache.py
+  - 06_AppPlatform/backend/app/services/market_scan_service.py
+  - 06_AppPlatform/backend/app/services/query_service.py
+  - 06_AppPlatform/backend/tests/unit/test_market_scan_service.py
+  - 06_AppPlatform/backend/app/infra/redis_client.py
+  - 06_AppPlatform/backend/tests/integration/test_api_contracts.py
   tests:
-    backend: pending
-    frontendTsc: pending
-    frontendBuild: pending
+    backend: 54 passed (market_scan + cache + deck)
+    frontendTsc: not run
+    frontendBuild: not run
+    frontendVitest: not run
+    backendPytest: 5 passed (tests/integration/test_api_contracts.py)
   risks:
-  - Dev event written retroactively — not during original implementation session
-  - Tests not yet verified for presence changes
+  - Server must be redeployed for cache schema version bump to take effect
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  - prior_rolling12_columns derived from current rolling12 shift means window sizes
+    may differ by 1-2 months when data gaps exist, but avoids entire window being
+    empty
   nextSteps:
-  - Run backend tests
-  - Run frontend type check and build
-  - Verify online count badge in UI
-  createdAt: '2026-05-15T15:11:41.837023+00:00'
-  lastUpdatedAt: '2026-05-15T15:33:48.635346+00:00'
-  gaps:
-  - gap.devsync.feature.ui_animations.missing_docs
+  - Redeploy to server → old ms:deck:v2:* cache keys become stale, v3 keys used
+  - Compare local vs server Sweden March data after redeploy
+  - Monitor Redis cache hit rate on server
+  - Run tests
+  - Verify in Hermes UI Dev tab
+  - Wire contract tests into CI diagnostics
+  - Expand only when a regression repeats
+  - 'Verify in UI: drill-down fuel panel YoY values no longer all New'
+  - Trigger Hermes DevSync
+  createdAt: '2026-05-18T00:48:25.927769+00:00'
+  lastUpdatedAt: '2026-05-18T01:28:11.476912+00:00'
+  docs:
+  - Markdown_Readme/features/feature.market_scan.md
+- featureId: feature.dashboard
+  title: Dashboard
+  status: implemented
+  category: backend
+  source: claude_code
+  summary: 'Root cause: load_slice(limit=500_000) used scanner.head() which on hive-partitioned
+    datasets (by country) reads partitions alphabetically. The first 6 countries filled
+    the 500k limit, causing the remaining 15 countries to be completely missing from
+    grouped time-series aggregation. Fix: added limit=None support to load_slice (uses
+    scanner.to_table() for unlimited scan) and changed query_grouped_time_series +
+    _query_grouped_share_time_series to pass limit=None instead of 500_000.'
+  linkedEventIds:
+  - dev_evt_20260516_001
+  - dev_evt_20260518_010411_331753
+  endpoints: []
+  frontend: []
+  backend:
+  - 'parquet_repository.py: load_slice now supports limit=None to disable row truncation
+    via scanner.to_table()'
+  - 'query_service.py: query_grouped_time_series and _query_grouped_share_time_series
+    now pass limit=None for complete aggregation'
+  - 06_AppPlatform/backend/tests/integration/test_api_contracts.py
+  tests:
+    backend: 17 passed (related unit tests)
+    frontendTsc: not run
+    frontendBuild: not run
+    frontendVitest: not run
+    backendPytest: 5 passed (tests/integration/test_api_contracts.py)
+  risks:
+  - Unlimited scan on very large filtered datasets (>5M rows) could increase memory
+    usage
+  - Other load_slice callers with 200_000 limit may have similar partition-truncation
+    risk for different query types
+  nextSteps:
+  - Deploy to server and verify Top 10 shows all countries
+  - Consider applying same fix to other load_slice callers (200_000 limits)
+  - Consider pushing group-by aggregation to PyArrow for better memory efficiency
+  - Wire contract tests into CI diagnostics
+  - Expand only when a regression repeats
+  createdAt: '2026-05-18T00:48:25.990657+00:00'
+  lastUpdatedAt: '2026-05-18T01:28:10.749833+00:00'
+  docs:
+  - Markdown_Readme/features/feature.dashboard.md
+- featureId: feature.scraping_toolkit
+  title: Scraping Toolkit
+  status: implemented
+  category: governance
+  source: git_commit
+  summary: 'fix: replace abort controller with bootId counter for React StrictMode
+    safety
+
+    React StrictMode double-mounts components in dev. The abort controller
+
+    pattern caused the second boot''s async work to be aborted by the first
+
+    mount''s cleanup. Replaced with a bootId counter — old boots silently
+
+    return instead of aborting.
+
+
+    Also removed debug logs.'
+  linkedEventIds:
+  - dev_evt_20260516_131818_3bbee9
+  - dev_evt_20260516_081730_8a37be
+  - dev_evt_20260516_071632_3ef73a
+  - dev_evt_20260516_065240_e2818b
+  - dev_evt_20260516_062934_dc26b4
+  - dev_evt_20260515_140416_e678b8
+  - dev_evt_20260515_100541_942877
+  - dev_evt_20260518_004958_72da72
+  endpoints: []
+  frontend:
+  - 06_AppPlatform/frontend/src/contexts/SharedFilterScopeContext.tsx
+  backend:
+  - 06_AppPlatform/backend/alembic/versions/20260516_0016_role_upgrade_requests.py
+  tests:
+    scrapingToolkitPytest: 34 passed (07_ScrapingToolkit/tests)
+  risks:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  nextSteps:
+  - Run tests
+  - Verify in Hermes UI Dev tab
+  createdAt: '2026-05-18T00:48:26.058133+00:00'
+  lastUpdatedAt: '2026-05-18T01:28:12.984264+00:00'
+  docs:
+  - Markdown_Readme/features/feature.scraping_toolkit.md
 - featureId: hermes-devsync
-  title: Hermes DevSync implementation
-  status: implemented
-  category: governance
-  source: claude_code
-  summary: 'Added development governance loop: Claude Code writes dev events to JSONL,
-    Hermes DevSync reads them and upserts features in registry, generates Markdown
-    docs, writes evidence records, and creates governance gaps for missing docs/tests.
-    New Dev tab in Hermes UI with feature registry table, dev events feed, missing
-    items detection, and Sync Now button. CLAUDE.md updated with mandatory DevSync
-    rule.'
-  linkedEventIds:
-  - dev_evt_20260515_002
-  endpoints:
-  - POST /hermes/dev/events
-  - GET /hermes/dev/events
-  - POST /hermes/dev/sync
-  - GET /hermes/dev/features
-  - GET /hermes/dev/features/{featureId}
-  frontend:
-  - Dev subtab with feature registry table
-  - Dev events feed with changed file counts
-  - Missing governance items (No Docs/Tests/Evidence/Gaps)
-  - Feature detail modal
-  - Sync Now button
-  backend:
-  - hermes_devsync_service.py with full sync pipeline
-  - 5 new dev endpoints in hermes.py
-  tests:
-    backend: 101 Hermes tests pass (29 devsync + 36 chat + 36 routes)
-    frontendTsc: clean
-    frontendBuild: succeeds (DataManagementPage 95kB)
-    frontendVitest: 5/5 devsync types pass
-  risks:
-  - Feature ID inference from title is heuristic-based
-  - No git hook or CI/CD integration yet
-  - DevSync requires manual trigger (Sync Now button or API call)
-  nextSteps:
-  - Add git post-commit hook for auto dev event generation
-  - Integrate with GitHub Actions CI/CD
-  - Add stale feature detection
-  - Wire Claude Code session end hook to auto-write dev events
-  createdAt: '2026-05-15T15:11:41.866495+00:00'
-  lastUpdatedAt: '2026-05-15T15:33:48.685258+00:00'
-  gaps:
-  - gap.devsync.hermes-devsync.missing_docs
-- featureId: hermes-dev-ui
-  title: Hermes DevSync implementation
-  status: implemented
-  category: governance
-  source: claude_code
-  summary: 'Added development governance loop: Claude Code writes dev events to JSONL,
-    Hermes DevSync reads them and upserts features in registry, generates Markdown
-    docs, writes evidence records, and creates governance gaps for missing docs/tests.
-    New Dev tab in Hermes UI with feature registry table, dev events feed, missing
-    items detection, and Sync Now button. CLAUDE.md updated with mandatory DevSync
-    rule.'
-  linkedEventIds:
-  - dev_evt_20260515_002
-  endpoints:
-  - POST /hermes/dev/events
-  - GET /hermes/dev/events
-  - POST /hermes/dev/sync
-  - GET /hermes/dev/features
-  - GET /hermes/dev/features/{featureId}
-  frontend:
-  - Dev subtab with feature registry table
-  - Dev events feed with changed file counts
-  - Missing governance items (No Docs/Tests/Evidence/Gaps)
-  - Feature detail modal
-  - Sync Now button
-  backend:
-  - hermes_devsync_service.py with full sync pipeline
-  - 5 new dev endpoints in hermes.py
-  tests:
-    backend: 101 Hermes tests pass (29 devsync + 36 chat + 36 routes)
-    frontendTsc: clean
-    frontendBuild: succeeds (DataManagementPage 95kB)
-    frontendVitest: 5/5 devsync types pass
-  risks:
-  - Feature ID inference from title is heuristic-based
-  - No git hook or CI/CD integration yet
-  - DevSync requires manual trigger (Sync Now button or API call)
-  nextSteps:
-  - Add git post-commit hook for auto dev event generation
-  - Integrate with GitHub Actions CI/CD
-  - Add stale feature detection
-  - Wire Claude Code session end hook to auto-write dev events
-  createdAt: '2026-05-15T15:11:41.899798+00:00'
-  lastUpdatedAt: '2026-05-15T15:33:48.734254+00:00'
-  gaps:
-  - gap.devsync.hermes-dev-ui.missing_docs
-- featureId: hermes-chat-gateway
-  title: 'hermes: full automation loop — sync auth, hooks, workspace health'
+  title: Hermes DevSync
   status: implemented
   category: governance
   source: git_commit
@@ -189,8 +244,22 @@ features:
 
     Local gua'
   linkedEventIds:
+  - dev_evt_20260516_101640_0a45d6
+  - dev_evt_20260516_101615_9187bd
+  - dev_evt_20260516_084652_b49e9d
+  - dev_evt_20260516_043306_eaf36c
+  - dev_evt_20260515_002
+  - dev_evt_20260515_154843_f46cad
+  - dev_evt_20260515_114917_6765da
   - dev_evt_20260515_112609_6c993d
+  - dev_evt_20260515_104148_1d371a
+  - dev_evt_20260518_010516_2813cf
   endpoints:
+  - POST /hermes/dev/events
+  - GET /hermes/dev/events
+  - POST /hermes/dev/sync
+  - GET /hermes/dev/features
+  - GET /hermes/dev/features/{featureId}
   - GET /overview
   - GET /pipeline-health
   - GET /source-quality
@@ -201,30 +270,147 @@ features:
   - GET /features
   - GET /toolchain
   - GET /architecture
-  frontend: []
+  frontend:
+  - Dev subtab with feature registry table
+  - Dev events feed with changed file counts
+  - Missing governance items (No Docs/Tests/Evidence/Gaps)
+  - Feature detail modal
+  - Sync Now button
+  - 06_AppPlatform/frontend/src/components/HermesAskResponseCard.tsx
   backend:
+  - 06_AppPlatform/backend/app/services/hermes_devsync_service.py
+  - 06_AppPlatform/backend/tests/unit/test_hermes_devsync.py
+  - hermes_devsync_service.py with full sync pipeline
+  - 5 new dev endpoints in hermes.py
+  - 06_AppPlatform/backend/app/services/hermes_chat_service.py
+  - 06_AppPlatform/backend/tests/unit/test_hermes_chat.py
+  - 06_AppPlatform/backend/app/core/config.py
+  - 06_AppPlatform/backend/requirements.txt
   - 06_AppPlatform/backend/app/api/routes/hermes.py
-  tests: {}
+  tests:
+    backend: 101 Hermes tests pass (29 devsync + 36 chat + 36 routes)
+    frontendTsc: clean
+    frontendBuild: succeeds (DataManagementPage 95kB)
+    frontendVitest: 5/5 devsync types pass
+    ciContract: backend compile and tests/integration/test_api_contracts.py remain
+      blocking in ci.yml
   risks:
   - Auto-generated dev event from git commit — tests not auto-verified.
+  - Feature ID inference from title is heuristic-based
+  - No git hook or CI/CD integration yet
+  - DevSync requires manual trigger (Sync Now button or API call)
+  - Frontend diagnostics can still fail visibly inside the job logs; they no longer
+    fail the workflow conclusion.
   nextSteps:
   - Run tests
   - Verify in Hermes UI Dev tab
-  createdAt: '2026-05-15T15:11:41.938895+00:00'
-  lastUpdatedAt: '2026-05-15T15:33:49.799712+00:00'
-  gaps:
-  - gap.devsync.hermes-chat-gateway.missing_docs
-- featureId: hermes-command-gateway
+  - Add git post-commit hook for auto dev event generation
+  - Integrate with GitHub Actions CI/CD
+  - Add stale feature detection
+  - Wire Claude Code session end hook to auto-write dev events
+  - Restore specific frontend/typecheck gates after pre-existing failures are fixed
+  - Keep deploy workflows blocking
+  createdAt: '2026-05-18T00:48:26.179851+00:00'
+  lastUpdatedAt: '2026-05-18T01:28:12.893019+00:00'
+  docs:
+  - Markdown_Readme/features/hermes-devsync.md
+- featureId: feature.presence_websocket
+  title: Presence WebSocket
+  status: implemented
+  category: frontend
+  source: git_commit
+  summary: Enhanced presence tracking with WebSocket support, UI animations for online
+    user transitions, and real-time online user count badge in Layout header. Also
+    includes dryrun dashboard progress bars and per-source visualization improvements.
+  linkedEventIds:
+  - dev_evt_20260515_003
+  - dev_evt_20260515_110251_d9f95e
+  endpoints:
+  - POST /heartbeat
+  - GET /online
+  frontend:
+  - Online user count badge animation
+  - Layout header presence indicator transitions
+  - Dashboard page presence integration
+  - 06_AppPlatform/frontend/src/components/Layout.tsx
+  - 06_AppPlatform/frontend/src/index.css
+  - 06_AppPlatform/frontend/src/pages/DashboardPage.tsx
+  - 06_AppPlatform/frontend/src/pages/MarketScanPage.tsx
+  - 06_AppPlatform/frontend/src/pages/ReviewCasesPage.tsx
+  - 06_AppPlatform/frontend/src/components/PresenceWidget.tsx
+  - 06_AppPlatform/frontend/src/hooks/usePageTransition.ts
+  - 06_AppPlatform/frontend/src/hooks/usePresence.ts
+  backend:
+  - Presence heartbeat endpoint enhancements
+  - Engineering config availability updates
+  - Config field mapping parser improvements
+  - 06_AppPlatform/backend/app/api/routes/presence.py
+  - 06_AppPlatform/backend/app/core/security.py
+  - 06_AppPlatform/backend/app/services/presence_service.py
+  tests:
+    backend: pending
+    frontendTsc: pending
+    frontendBuild: pending
+  risks:
+  - Dev event written retroactively — not during original implementation session
+  - Tests not yet verified for presence changes
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  nextSteps:
+  - Run backend tests
+  - Run frontend type check and build
+  - Verify online count badge in UI
+  - Run tests
+  - Verify in Hermes UI Dev tab
+  createdAt: '2026-05-18T00:48:26.700403+00:00'
+  lastUpdatedAt: '2026-05-18T01:28:12.801666+00:00'
+  docs:
+  - Markdown_Readme/features/feature.presence_websocket.md
+- featureId: feature.ui_animation_toolkit
+  title: UI Animation Toolkit
+  status: implemented
+  category: frontend
+  source: claude_code
+  summary: Enhanced presence tracking with WebSocket support, UI animations for online
+    user transitions, and real-time online user count badge in Layout header. Also
+    includes dryrun dashboard progress bars and per-source visualization improvements.
+  linkedEventIds:
+  - dev_evt_20260515_003
+  endpoints: []
+  frontend:
+  - Online user count badge animation
+  - Layout header presence indicator transitions
+  - Dashboard page presence integration
+  backend:
+  - Presence heartbeat endpoint enhancements
+  - Engineering config availability updates
+  - Config field mapping parser improvements
+  tests:
+    backend: pending
+    frontendTsc: pending
+    frontendBuild: pending
+  risks:
+  - Dev event written retroactively — not during original implementation session
+  - Tests not yet verified for presence changes
+  nextSteps:
+  - Run backend tests
+  - Run frontend type check and build
+  - Verify online count badge in UI
+  createdAt: '2026-05-18T00:48:26.783927+00:00'
+  lastUpdatedAt: '2026-05-18T01:28:11.969786+00:00'
+  docs:
+  - Markdown_Readme/features/feature.ui_animation_toolkit.md
+- featureId: hermes-chat-gateway
   title: Hermes Chat Gateway implementation complete
   status: implemented
   category: governance
-  source: claude_code
+  source: git_commit
   summary: Web users can now ask Hermes natural-language questions via POST /hermes/chat.
     Added intent router (16 intents, rules-based, zero LLM cost), command execution
     layer (POST /hermes/commands/execute), session management (JSON file-based), and
     Ask Hermes bar in frontend with suggested prompts and structured response cards.
   linkedEventIds:
   - dev_evt_20260515_001
+  - dev_evt_20260515_154843_f46cad
   endpoints:
   - POST /hermes/chat
   - GET /hermes/chat/sessions
@@ -236,10 +422,15 @@ features:
   - Suggested prompt chips
   - HermesAskResponseCard component
   - Run buttons wired through commands/execute
+  - 06_AppPlatform/frontend/src/components/HermesAskResponseCard.tsx
   backend:
   - hermes_chat_service.py with intent router
   - 5 new endpoints in hermes.py
   - Activity log bug fix (no longer silent error swallowing)
+  - 06_AppPlatform/backend/app/services/hermes_chat_service.py
+  - 06_AppPlatform/backend/app/services/hermes_devsync_service.py
+  - 06_AppPlatform/backend/tests/unit/test_hermes_chat.py
+  - 06_AppPlatform/backend/tests/unit/test_hermes_devsync.py
   tests:
     backend: 647 passed
     frontendTsc: clean
@@ -248,237 +439,20 @@ features:
   risks:
   - Not yet connected to real queue-worker execution
   - Claude Code dev events not yet auto-synced into Hermes
+  - Auto-generated dev event from git commit — tests not auto-verified.
   nextSteps:
   - Implement Hermes DevSync
   - Create feature registry
   - Auto-generate markdown docs for each feature
   - Add Dev tab to Hermes UI
-  createdAt: '2026-05-15T15:11:41.984311+00:00'
-  lastUpdatedAt: '2026-05-15T15:33:48.834304+00:00'
-  gaps:
-  - gap.devsync.hermes-command-gateway.missing_docs
-- featureId: backend
-  title: 'feat: UI animation toolkit (anime.js) + Presence Phase 1 with Dynamic Island'
-  status: implemented
-  category: frontend
-  source: git_commit
-  summary: "feat: UI animation toolkit (anime.js) + Presence Phase 1 with Dynamic\
-    \ Island\n- Add anime.js v4 animation toolkit with 3 reusable hooks:\n  useStaggerEntrance\
-    \ (staggered list entrance), usePageTransition\n  (tab-switch fade), and inline\
-    \ animate() for hero sections\n- Apply animations to Dashboard (hero fade-in),\
-    \ MarketScan\n  (tab content transition), and ReviewCases (row stagger)\n- Build\
-    \ Presence Phase 1: PresenceStore singleton, auth-aware\n  heartbeat via get_optional_user,\
-    \ per-tab sessionStorage IDs\n- Redesign PresenceWidget as draggable Apple Dynamic\
-    \ Island\n  pill with br"
-  linkedEventIds:
-  - dev_evt_20260515_110251_d9f95e
-  endpoints:
-  - POST /heartbeat
-  - GET /online
-  frontend:
-  - 06_AppPlatform/frontend/src/components/Layout.tsx
-  - 06_AppPlatform/frontend/src/index.css
-  - 06_AppPlatform/frontend/src/pages/DashboardPage.tsx
-  - 06_AppPlatform/frontend/src/pages/MarketScanPage.tsx
-  - 06_AppPlatform/frontend/src/pages/ReviewCasesPage.tsx
-  - 06_AppPlatform/frontend/src/components/PresenceWidget.tsx
-  - 06_AppPlatform/frontend/src/hooks/usePageTransition.ts
-  - 06_AppPlatform/frontend/src/hooks/usePresence.ts
-  backend:
-  - 06_AppPlatform/backend/app/api/routes/presence.py
-  - 06_AppPlatform/backend/app/core/security.py
-  - 06_AppPlatform/backend/app/services/presence_service.py
-  tests: {}
-  risks:
-  - Auto-generated dev event from git commit — tests not auto-verified.
-  nextSteps:
   - Run tests
   - Verify in Hermes UI Dev tab
-  createdAt: '2026-05-15T15:11:42.035359+00:00'
-  lastUpdatedAt: '2026-05-15T15:33:50.056247+00:00'
-  gaps:
-  - gap.devsync.backend.missing_docs
-- featureId: frontend
-  title: 'feat: UI animation toolkit (anime.js) + Presence Phase 1 with Dynamic Island'
-  status: implemented
-  category: frontend
-  source: git_commit
-  summary: "feat: UI animation toolkit (anime.js) + Presence Phase 1 with Dynamic\
-    \ Island\n- Add anime.js v4 animation toolkit with 3 reusable hooks:\n  useStaggerEntrance\
-    \ (staggered list entrance), usePageTransition\n  (tab-switch fade), and inline\
-    \ animate() for hero sections\n- Apply animations to Dashboard (hero fade-in),\
-    \ MarketScan\n  (tab content transition), and ReviewCases (row stagger)\n- Build\
-    \ Presence Phase 1: PresenceStore singleton, auth-aware\n  heartbeat via get_optional_user,\
-    \ per-tab sessionStorage IDs\n- Redesign PresenceWidget as draggable Apple Dynamic\
-    \ Island\n  pill with br"
-  linkedEventIds:
-  - dev_evt_20260515_110251_d9f95e
-  endpoints:
-  - POST /heartbeat
-  - GET /online
-  frontend:
-  - 06_AppPlatform/frontend/src/components/Layout.tsx
-  - 06_AppPlatform/frontend/src/index.css
-  - 06_AppPlatform/frontend/src/pages/DashboardPage.tsx
-  - 06_AppPlatform/frontend/src/pages/MarketScanPage.tsx
-  - 06_AppPlatform/frontend/src/pages/ReviewCasesPage.tsx
-  - 06_AppPlatform/frontend/src/components/PresenceWidget.tsx
-  - 06_AppPlatform/frontend/src/hooks/usePageTransition.ts
-  - 06_AppPlatform/frontend/src/hooks/usePresence.ts
-  backend:
-  - 06_AppPlatform/backend/app/api/routes/presence.py
-  - 06_AppPlatform/backend/app/core/security.py
-  - 06_AppPlatform/backend/app/services/presence_service.py
-  tests: {}
-  risks:
-  - Auto-generated dev event from git commit — tests not auto-verified.
-  nextSteps:
-  - Run tests
-  - Verify in Hermes UI Dev tab
-  createdAt: '2026-05-15T15:11:42.103288+00:00'
-  lastUpdatedAt: '2026-05-15T15:33:49.952962+00:00'
-  gaps:
-  - gap.devsync.frontend.missing_docs
-- featureId: presence-websocket
-  title: 'feat: UI animation toolkit (anime.js) + Presence Phase 1 with Dynamic Island'
-  status: implemented
-  category: frontend
-  source: git_commit
-  summary: "feat: UI animation toolkit (anime.js) + Presence Phase 1 with Dynamic\
-    \ Island\n- Add anime.js v4 animation toolkit with 3 reusable hooks:\n  useStaggerEntrance\
-    \ (staggered list entrance), usePageTransition\n  (tab-switch fade), and inline\
-    \ animate() for hero sections\n- Apply animations to Dashboard (hero fade-in),\
-    \ MarketScan\n  (tab content transition), and ReviewCases (row stagger)\n- Build\
-    \ Presence Phase 1: PresenceStore singleton, auth-aware\n  heartbeat via get_optional_user,\
-    \ per-tab sessionStorage IDs\n- Redesign PresenceWidget as draggable Apple Dynamic\
-    \ Island\n  pill with br"
-  linkedEventIds:
-  - dev_evt_20260515_110251_d9f95e
-  endpoints:
-  - POST /heartbeat
-  - GET /online
-  frontend:
-  - 06_AppPlatform/frontend/src/components/Layout.tsx
-  - 06_AppPlatform/frontend/src/index.css
-  - 06_AppPlatform/frontend/src/pages/DashboardPage.tsx
-  - 06_AppPlatform/frontend/src/pages/MarketScanPage.tsx
-  - 06_AppPlatform/frontend/src/pages/ReviewCasesPage.tsx
-  - 06_AppPlatform/frontend/src/components/PresenceWidget.tsx
-  - 06_AppPlatform/frontend/src/hooks/usePageTransition.ts
-  - 06_AppPlatform/frontend/src/hooks/usePresence.ts
-  backend:
-  - 06_AppPlatform/backend/app/api/routes/presence.py
-  - 06_AppPlatform/backend/app/core/security.py
-  - 06_AppPlatform/backend/app/services/presence_service.py
-  tests: {}
-  risks:
-  - Auto-generated dev event from git commit — tests not auto-verified.
-  nextSteps:
-  - Run tests
-  - Verify in Hermes UI Dev tab
-  createdAt: '2026-05-15T15:11:42.286559+00:00'
-  lastUpdatedAt: '2026-05-15T15:33:50.004789+00:00'
-  gaps:
-  - gap.devsync.presence-websocket.missing_docs
-- featureId: scraping-toolkit
-  title: 'Fix: update profile.url alongside source_url in all placeholder sources'
-  status: implemented
-  category: governance
-  source: git_commit
-  summary: 'Fix: update profile.url alongside source_url in all placeholder sources'
-  linkedEventIds:
-  - dev_evt_20260515_100541_942877
-  endpoints: []
-  frontend: []
-  backend: []
-  tests: {}
-  risks:
-  - Auto-generated dev event from git commit — tests not auto-verified.
-  nextSteps:
-  - Run tests
-  - Verify in Hermes UI Dev tab
-  createdAt: '2026-05-15T15:11:42.376369+00:00'
-  lastUpdatedAt: '2026-05-15T15:33:50.159542+00:00'
-  gaps:
-  - gap.devsync.scraping-toolkit.missing_docs
-- featureId: hermes-scripts
-  title: 'hermes: full automation loop — sync auth, hooks, workspace health'
-  status: implemented
-  category: governance
-  source: git_commit
-  summary: 'hermes: full automation loop — sync auth, hooks, workspace health
-
-    Backend:
-
-    - POST /hermes/dev/sync: Bearer token auth + idempotency (commitSha/runId)
-
-    - GET /hermes/dev/workspace-health: detects uncommitted code without dev events
-
-
-    GitHub Actions (hermes-devsync.yml):
-
-    - After generating dev event, calls remote DevSync API with token
-
-    - Non-blocking — warns if server unreachable, never fails CI
-
-
-    Git hooks (.githooks/):
-
-    - pre-commit: warns if code changed but dev_events.jsonl not updated
-
-    - post-commit: auto-generates commit-level dev event from git diff
-
-
-    Local gua'
-  linkedEventIds:
-  - dev_evt_20260515_112609_6c993d
-  endpoints:
-  - GET /overview
-  - GET /pipeline-health
-  - GET /source-quality
-  - GET /cost
-  - GET /code-audit
-  - GET /proposals
-  - GET /gaps
-  - GET /features
-  - GET /toolchain
-  - GET /architecture
-  frontend: []
-  backend:
-  - 06_AppPlatform/backend/app/api/routes/hermes.py
-  tests: {}
-  risks:
-  - Auto-generated dev event from git commit — tests not auto-verified.
-  nextSteps:
-  - Run tests
-  - Verify in Hermes UI Dev tab
-  createdAt: '2026-05-15T15:11:42.875463+00:00'
-  lastUpdatedAt: '2026-05-15T15:33:49.901632+00:00'
-  gaps:
-  - gap.devsync.hermes-scripts.missing_docs
-- featureId: fix-add-write-permissions-and-pull-before-push-for
-  title: 'fix: add write permissions and pull-before-push for hermes-devsync workflow'
-  status: implemented
-  category: governance
-  source: git_commit
-  summary: 'fix: add write permissions and pull-before-push for hermes-devsync workflow'
-  linkedEventIds:
-  - dev_evt_20260515_104148_1d371a
-  endpoints: []
-  frontend: []
-  backend: []
-  tests: {}
-  risks:
-  - Auto-generated dev event from git commit — tests not auto-verified.
-  nextSteps:
-  - Run tests
-  - Verify in Hermes UI Dev tab
-  createdAt: '2026-05-15T15:11:43.167305+00:00'
-  lastUpdatedAt: '2026-05-15T15:33:50.107879+00:00'
-  gaps:
-  - gap.devsync.fix-add-write-permissions-and-pull-before-push-for.missing_docs
-- featureId: market-scan
-  title: 'feat: Engineering Configuration Management System — upload, diff, publish'
+  createdAt: '2026-05-18T00:48:26.945003+00:00'
+  lastUpdatedAt: '2026-05-18T01:28:12.243482+00:00'
+  docs:
+  - Markdown_Readme/features/hermes-chat-gateway.md
+- featureId: feature.engineering
+  title: Engineering
   status: implemented
   category: frontend
   source: git_commit
@@ -499,6 +473,7 @@ features:
     - DB: engineering_config schema (5 tables) + ConfigVe'
   linkedEventIds:
   - dev_evt_20260515_151422_2c7708
+  - dev_evt_20260518_005341_846531
   endpoints:
   - GET /feature-catalog
   - POST /feature-catalog/upload
@@ -527,13 +502,39 @@ features:
   - 06_AppPlatform/backend/app/services/market_scan_service.py
   - 06_AppPlatform/backend/alembic/versions/20260515_0015_config_version_table.py
   - 06_AppPlatform/backend/app/services/identity_key_service.py
-  tests: {}
+  tests:
+    backendPytest: 24 passed (engineering routes, serializers, normalization, variant
+      diff, config loader)
   risks:
   - Auto-generated dev event from git commit — tests not auto-verified.
   nextSteps:
   - Run tests
   - Verify in Hermes UI Dev tab
-  createdAt: '2026-05-15T15:33:49.176337+00:00'
-  lastUpdatedAt: '2026-05-15T15:33:49.260582+00:00'
-  gaps:
-  - gap.devsync.market-scan.missing_docs
+  createdAt: '2026-05-18T00:48:27.198103+00:00'
+  lastUpdatedAt: '2026-05-18T01:28:12.425562+00:00'
+  docs:
+  - Markdown_Readme/features/feature.engineering.md
+- featureId: feature.country_copilot
+  title: Add minimum integration API contract tests
+  status: implemented
+  category: backend
+  source: codex
+  summary: Added route-level TestClient contract tests for Market Scan deck custom
+    time range, Analysis query, Country Chat, request validation, and frontend API
+    path/type sync.
+  linkedEventIds:
+  - dev_evt_20260518_010411_331753
+  endpoints: []
+  frontend: []
+  backend:
+  - 06_AppPlatform/backend/tests/integration/test_api_contracts.py
+  tests:
+    backendPytest: 5 passed (tests/integration/test_api_contracts.py)
+  risks: []
+  nextSteps:
+  - Wire contract tests into CI diagnostics
+  - Expand only when a regression repeats
+  createdAt: '2026-05-18T01:04:11.943713+00:00'
+  lastUpdatedAt: '2026-05-18T01:28:09.686559+00:00'
+  docs:
+  - Markdown_Readme/features/feature.country_copilot.md

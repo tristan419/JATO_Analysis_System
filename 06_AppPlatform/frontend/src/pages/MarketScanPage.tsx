@@ -2452,6 +2452,7 @@ export function MarketScanPage({
   });
 
   useEffect(() => {
+    const controller = new AbortController();
     const requestId = ++requestRef.current;
     setLoading(true);
     setError("");
@@ -2466,7 +2467,7 @@ export function MarketScanPage({
       body_window_months: 24,
       ranking_limit: normalizeMarketScanRankingLimit(rankingLimit),
       drilldown_segment: selectedDrilldownSegment || undefined,
-    })
+    }, controller.signal)
       .then((response) => {
         if (requestId !== requestRef.current) {
           return;
@@ -2477,6 +2478,9 @@ export function MarketScanPage({
         if (requestId !== requestRef.current) {
           return;
         }
+        if (reason.name === "AbortError") {
+          return;
+        }
         setError(reason.message);
       })
       .finally(() => {
@@ -2484,6 +2488,8 @@ export function MarketScanPage({
           setLoading(false);
         }
       });
+
+    return () => controller.abort();
   }, [rankingLimit, reloadToken, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
 
   useEffect(() => {

@@ -59,9 +59,10 @@ proposals:
     riskLevel: low
     expectedImpact: "Faster diagnosis of misconfigured deployments. Prevents silent failures in scheduled jobs."
     rollbackPlan: "Remove validation checks. Backend starts with previous behavior."
-    status: draft
+    status: implemented
     createdAt: "2026-05-14"
-    notes: "Do not print secret values in validation messages."
+    implementedAt: "2026-05-18"
+    notes: "Implemented in app/core/startup_validation.py and app/main.py. DB-enabled-with-empty-URL is a startup error; Country Copilot LLM key can be enforced with APP_COUNTRY_COPILOT_REQUIRE_LLM_KEY or strict validation mode. Messages print variable names only, never secret values."
 
   - proposalId: proposal.test.integration_contract
     type: test_coverage
@@ -78,9 +79,10 @@ proposals:
     riskLevel: medium
     expectedImpact: "Catches API contract breaks before deployment. Reduces regression risk for critical user-facing features."
     rollbackPlan: "Tests are additive. Remove if they cause CI flakiness."
-    status: draft
+    status: implemented
     createdAt: "2026-05-14"
-    notes: "Start small — 3 contract tests + 1 E2E test. Expand incrementally."
+    implementedAt: "2026-05-18"
+    notes: "Implemented 2026-05-18 in 06_AppPlatform/backend/tests/integration/test_api_contracts.py. Coverage includes Market Scan deck custom time-range contract, Analysis query route contract, Country Chat route contract, backend request validation, and a frontend API path/type sync smoke check."
 
   - proposalId: proposal.source_quality.voc_tracking
     type: source_quality_tracking
@@ -114,9 +116,10 @@ proposals:
     riskLevel: medium
     expectedImpact: "Removes misleading red X noise from GitHub Actions page. Enables incremental quality gate restoration."
     rollbackPlan: "Re-enable full CI checks."
-    status: draft
+    status: implemented
     createdAt: "2026-05-14"
-    notes: "Phase 5.6 proposal. Do NOT delete CI workflow."
+    implementedAt: "2026-05-18"
+    notes: "Implemented 2026-05-18 in .github/workflows/ci.yml. Pre-existing smoke and frontend checks now run as non-blocking diagnostics via continue-on-error. Backend compile remains blocking, and the new tests/integration/test_api_contracts.py suite is added as a blocking backend API contract check with pytest/httpx installed only in CI. Deploy workflows were not changed."
 
   - proposalId: proposal.deploy.disable_legacy_ec2
     type: pipeline_dedup

@@ -1312,12 +1312,36 @@ def _normalize_period_range(
     time_range: dict[str, str] | None,
     resolved_period: str,
 ) -> list[str] | None:
+    return _resolve_period_range_detail(
+        available_periods,
+        time_range,
+        resolved_period,
+    )["periods"]
+
+
+def _resolve_period_range_detail(
+    available_periods: list[str],
+    time_range: dict[str, str] | None,
+    resolved_period: str,
+) -> dict[str, Any]:
     if not time_range:
-        return None
+        return {
+            "periods": None,
+            "requestedTimeRange": None,
+            "resolvedTimeRange": None,
+            "timeRangeFallbackApplied": False,
+            "rangeReordered": False,
+        }
     start = str(time_range.get("start") or "").strip()
     end = str(time_range.get("end") or "").strip() or resolved_period
     if not start and not end:
-        return None
+        return {
+            "periods": None,
+            "requestedTimeRange": None,
+            "resolvedTimeRange": None,
+            "timeRangeFallbackApplied": False,
+            "rangeReordered": False,
+        }
     normalized_start = _normalize_period_text(start)
     normalized_end = _normalize_period_text(end)
     start_period = (
@@ -1332,12 +1356,126 @@ def _normalize_period_range(
     )
     start_index = available_periods.index(start_period)
     end_index = available_periods.index(end_period)
+    range_reordered = start_index > end_index
     if start_index > end_index:
         start_index, end_index = end_index, start_index
     periods = available_periods[start_index:end_index + 1]
-    if len(periods) <= 1:
-        return None
-    return periods
+    active_periods = periods if len(periods) > 1 else None
+    requested_range = {"start": start, "end": end}
+    resolved_range = (
+        {"start": periods[0], "end": periods[-1]}
+        if periods
+        else None
+    )
+    fallback_applied = (
+        (normalized_start != start_period)
+        or (normalized_end != end_period)
+        or range_reordered
+    )
+    return {
+        "periods": active_periods,
+        "requestedTimeRange": requested_range,
+        "resolvedTimeRange": resolved_range,
+        "timeRangeFallbackApplied": fallback_applied,
+        "rangeReordered": range_reordered,
+    }
+
+
+def _country_request_matches(
+    requested_country: str | None,
+    selected_country: dict[str, str],
+) -> bool:
+    requested = str(requested_country or "").strip().lower()
+    if not requested:
+        return True
+    return requested in {
+        selected_country["value"].strip().lower(),
+        selected_country["label"].strip().lower(),
+    }
+
+
+def _build_market_scan_data_quality(
+    *,
+    requested_country: str | None,
+    selected_country: dict[str, str],
+    requested_period: str | None,
+    resolved_period: str,
+    range_detail: dict[str, Any],
+    requested_fuels: list[str],
+    available_fuels: list[str],
+    selected_fuels: list[str],
+    source_row_count: int,
+    filtered_row_count: int,
+) -> dict[str, Any]:
+    normalized_requested_period = _normalize_period_text(requested_period)
+    period_fallback_applied = bool(str(requested_period or "").strip()) and (
+        normalized_requested_period != resolved_period
+    )
+    country_fallback_applied = not _country_request_matches(requested_country, selected_country)
+    normalized_requested_fuels = [
+        str(value).strip().upper()
+        for value in requested_fuels
+        if str(value).strip()
+    ]
+    unavailable_fuels = [
+        fuel for fuel in normalized_requested_fuels
+        if fuel not in available_fuels
+    ]
+    requested_available_fuels = [
+        fuel for fuel in available_fuels
+        if fuel in normalized_requested_fuels
+    ]
+    fuel_fallback_applied = bool(normalized_requested_fuels) and not requested_available_fuels
+    excluded_fuel_rows = max(0, int(source_row_count) - int(filtered_row_count))
+
+    warnings: list[str] = []
+    if country_fallback_applied:
+        warnings.append(
+            f"Requested country {requested_country} is unavailable. Showing {selected_country['label']}."
+        )
+    if period_fallback_applied:
+        warnings.append(
+            f"Requested period {requested_period} is unavailable. Showing {resolved_period}."
+        )
+    if range_detail.get("timeRangeFallbackApplied"):
+        resolved_range = range_detail.get("resolvedTimeRange")
+        if isinstance(resolved_range, dict):
+            warnings.append(
+                "Requested custom range was normalized to "
+                f"{resolved_range.get('start')} - {resolved_range.get('end')}."
+            )
+    if unavailable_fuels:
+        warnings.append(
+            "Requested fuel filters are unavailable in this country: "
+            + ", ".join(unavailable_fuels)
+            + "."
+        )
+    if excluded_fuel_rows:
+        warnings.append(
+            f"MarketScan fuel scope excludes {excluded_fuel_rows} source rows outside the selected fuel set; dashboard all-market totals can differ."
+        )
+
+    return {
+        "requestedCountry": requested_country,
+        "resolvedCountry": selected_country["value"],
+        "resolvedCountryLabel": selected_country["label"],
+        "countryFallbackApplied": country_fallback_applied,
+        "requestedPeriod": requested_period,
+        "normalizedRequestedPeriod": normalized_requested_period,
+        "resolvedPeriod": resolved_period,
+        "periodFallbackApplied": period_fallback_applied,
+        "requestedTimeRange": range_detail.get("requestedTimeRange"),
+        "resolvedTimeRange": range_detail.get("resolvedTimeRange"),
+        "timeRangeFallbackApplied": bool(range_detail.get("timeRangeFallbackApplied")),
+        "requestedFuelTypes": normalized_requested_fuels,
+        "resolvedFuelTypes": selected_fuels,
+        "unavailableFuelTypes": unavailable_fuels,
+        "fuelFallbackApplied": fuel_fallback_applied,
+        "fuelRowsExcluded": excluded_fuel_rows,
+        "totalSourceRows": int(source_row_count),
+        "filteredSourceRows": int(filtered_row_count),
+        "warnings": warnings,
+    }
 
 
 def _shifted_periods_if_present(
@@ -4561,6 +4699,13 @@ def _compute_needed_periods(
     and converts to month-column names.  Kept as a separate function so tests
     can assert on *which* logic brought a given period into the read set.
     """
+    # Rolling12 fuel trend goes back (resolved_year-2, same month), which is
+    # older than the regular trend window, so pull those periods explicitly.
+    target = pd.Period(resolved_period, freq="M")
+    earliest_fuel_trend_end = f"{target.year - 2}-{target.month:02d}"
+    rolling12_trend_periods = _window_periods_if_present(
+        available_periods, earliest_fuel_trend_end, 12,
+    )
     return {
         "trend": _window_periods(
             available_periods, resolved_period,
@@ -4580,6 +4725,7 @@ def _compute_needed_periods(
             _shifted_periods_if_present(custom_periods, available_periods, -12)
             if custom_periods else []
         ),
+        "rolling12_trend": rolling12_trend_periods,
     }
 
 
@@ -4638,7 +4784,8 @@ def _query_market_scan_deck_impl(
     columns = _get_columns()
     available_periods = _available_periods(columns)
     resolved_period = _resolve_period(target_period, available_periods)
-    custom_periods = _normalize_period_range(available_periods, time_range, resolved_period)
+    range_detail = _resolve_period_range_detail(available_periods, time_range, resolved_period)
+    custom_periods = range_detail["periods"]
     same_month_last_year_period = _shift_period(resolved_period, -12)
     if same_month_last_year_period not in available_periods:
         same_month_last_year_period = None
@@ -4694,6 +4841,18 @@ def _query_market_scan_deck_impl(
     available_fuels = _available_fuel_types(frame)
     selected_fuels = _normalize_selected_fuels(fuel_types, available_fuels)
     filtered_frame = frame[frame["__powertrain"].isin(selected_fuels)].copy()
+    data_quality = _build_market_scan_data_quality(
+        requested_country=country,
+        selected_country=selected_country,
+        requested_period=target_period,
+        resolved_period=resolved_period,
+        range_detail=range_detail,
+        requested_fuels=fuel_types,
+        available_fuels=available_fuels,
+        selected_fuels=selected_fuels,
+        source_row_count=len(frame),
+        filtered_row_count=len(filtered_frame),
+    )
 
     t_setup = time.monotonic()
     logger.info("MarketScan [%s] setup+parquet: %.3fs  (loaded %d month columns of %d available)",
@@ -4720,6 +4879,7 @@ def _query_market_scan_deck_impl(
         "priorPeriod": prior_period, "sameMonthLastYearPeriod": same_month_last_year_period,
         "selectedCountry": selected_country["value"], "selectedCountryLabel": selected_country["label"],
         "selectedFuelTypes": selected_fuels, "selectedDrilldownSegment": resolved_drilldown_segment,
+        "dataQuality": data_quality,
         "availableCountries": country_options,
         "availablePeriods": [{"value": period, "label": _short_period_label(period)} for period in available_periods],
         "availableFuelTypes": available_fuels,
@@ -4810,4 +4970,4 @@ def _query_market_scan_deck_impl(
     logger.info("MarketScan [%s] crossTabs: %.3fs", resolved_period, t_cross - t_segment)
     logger.info("MarketScan [%s] TOTAL: %.3fs", resolved_period, t_cross - t_start)
 
-    return {"metadata": metadata, "results": results}
+    return {"metadata": metadata, "dataQuality": data_quality, "results": results}

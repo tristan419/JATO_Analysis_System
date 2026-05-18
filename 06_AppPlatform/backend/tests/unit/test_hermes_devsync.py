@@ -133,6 +133,53 @@ class TestFeatures:
         assert upserted["title"] == "Presence WebSocket"
         assert features[0]["linkedEventIds"] == ["manual", "git"]
 
+    def test_alias_feature_ids_merge_into_canonical_feature(self, tmp_path):
+        from app.services.hermes_devsync_service import list_features, upsert_feature
+        upsert_feature({
+            "featureId": "hermes-chat-gateway",
+            "title": "Hermes Chat Gateway",
+            "linkedEventIds": ["chat"],
+        })
+        upsert_feature({
+            "featureId": "hermes-command-gateway",
+            "title": "Hermes Command Gateway",
+            "linkedEventIds": ["command"],
+            "endpoints": ["POST /hermes/commands/execute"],
+        })
+
+        features = list_features()
+        assert len(features) == 1
+        assert features[0]["featureId"] == "hermes-chat-gateway"
+        assert "hermes-command-gateway" in features[0]["aliases"]
+        assert features[0]["linkedEventIds"] == ["chat", "command"]
+
+    def test_hermes_scripts_aliases_to_devsync(self, tmp_path):
+        from app.services.hermes_devsync_service import list_features, upsert_feature
+        upsert_feature({"featureId": "hermes-devsync", "title": "Hermes DevSync"})
+        upsert_feature({"featureId": "hermes-scripts", "title": "Hermes Scripts"})
+
+        features = list_features()
+        assert len(features) == 1
+        assert features[0]["featureId"] == "hermes-devsync"
+        assert "hermes-scripts" in features[0]["aliases"]
+
+    def test_noisy_git_commit_backend_frontend_features_are_filtered(self, tmp_path):
+        from app.services.hermes_devsync_service import list_features
+        p = tmp_path / "hermes" / "registry" / "features.yaml"
+        p.write_text(
+            "features:\n"
+            "- featureId: backend\n"
+            "  title: 'feat: generic backend noise'\n"
+            "  source: git_commit\n"
+            "- featureId: frontend\n"
+            "  title: 'feat: generic frontend noise'\n"
+            "  source: git_commit\n"
+            "- featureId: hermes-devsync\n"
+            "  title: Hermes DevSync\n"
+        )
+
+        assert [f["featureId"] for f in list_features()] == ["hermes-devsync"]
+
 
 class TestGaps:
     def test_missing_docs_gap(self, tmp_path):
@@ -150,6 +197,44 @@ class TestGaps:
         gap = create_missing_tests_gap({"featureId": "f1", "title": "F1", "tests": {}})
         assert gap is not None
         assert gap["severity"] == "high"
+
+    def test_gap_resolves_when_docs_or_tests_are_recorded(self, tmp_path):
+        from app.services.hermes_devsync_service import (
+            create_missing_docs_gap,
+            create_missing_tests_gap,
+            reconcile_feature_gaps,
+        )
+
+        feature = {"featureId": "hermes-devsync", "title": "Hermes DevSync"}
+        create_missing_docs_gap({**feature, "docs": []})
+        create_missing_tests_gap({**feature, "tests": {}})
+
+        resolved = reconcile_feature_gaps({
+            **feature,
+            "docs": ["Markdown_Readme/features/hermes-devsync.md"],
+            "tests": {"backend": "passed"},
+        })
+
+        import yaml
+        gaps = yaml.safe_load((tmp_path / "hermes" / "governance_gaps.yaml").read_text())["gaps"]
+        assert resolved == 2
+        assert {g["status"] for g in gaps} == {"resolved"}
+
+    def test_noisy_commit_gaps_are_retired(self, tmp_path):
+        from app.services.hermes_devsync_service import retire_noisy_devsync_gaps
+
+        (tmp_path / "hermes" / "governance_gaps.yaml").write_text(
+            "gaps:\n"
+            "- gapId: gap.devsync.fix-health-check-15-retries-x-5s.missing_tests\n"
+            "  title: noisy\n"
+            "  status: open\n"
+        )
+
+        assert retire_noisy_devsync_gaps() == 1
+
+        import yaml
+        gaps = yaml.safe_load((tmp_path / "hermes" / "governance_gaps.yaml").read_text())["gaps"]
+        assert gaps[0]["status"] == "resolved"
 
 
 class TestMarkdown:
@@ -185,5 +270,42 @@ class TestSync:
         assert len(feats) >= 1
         md = tmp_path / "Markdown_Readme" / "features" / "test-feature.md"
         assert md.is_file()
+        assert feats[0]["docs"] == ["Markdown_Readme/features/test-feature.md"]
         ev = tmp_path / "hermes" / "evidence_ledger.jsonl"
         assert ev.is_file()
+
+    def test_sync_prefers_specific_inferred_feature_over_generic_links(self, tmp_path):
+        from app.services.hermes_devsync_service import append_dev_event, list_features, sync_dev_events
+        append_dev_event(_make_event(
+            "e1",
+            title="feat: JATO monthly update guardrails",
+            linkedFeatureIds=["frontend", "backend"],
+            changedFiles=[
+                "06_AppPlatform/backend/app/services/jato_monthly_update_service.py",
+                "06_AppPlatform/frontend/src/pages/JatoMonthlyUpdatePage.tsx",
+            ],
+            frontendChanges=["06_AppPlatform/frontend/src/pages/JatoMonthlyUpdatePage.tsx"],
+            backendChanges=["06_AppPlatform/backend/app/services/jato_monthly_update_service.py"],
+            tests={},
+        ))
+
+        sync_dev_events()
+
+        features = list_features()
+        assert [f["featureId"] for f in features] == ["feature.jato_monthly_update"]
+
+    def test_sync_skips_noisy_git_commit_without_specific_feature(self, tmp_path):
+        from app.services.hermes_devsync_service import append_dev_event, list_features, sync_dev_events
+        append_dev_event(_make_event(
+            "e1",
+            source="git_commit",
+            title="fix: health check 15 retries x 5s",
+            linkedFeatureIds=["fix-health-check-15-retries-x-5s"],
+            changedFiles=["03_Scripts/ops/deploy_fullstack_server.sh"],
+            tests={},
+        ))
+
+        result = sync_dev_events()
+
+        assert result["featuresCreated"] == []
+        assert list_features() == []

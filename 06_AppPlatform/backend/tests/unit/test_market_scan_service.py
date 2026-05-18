@@ -465,6 +465,36 @@ def test_normalize_period_range_returns_custom_interval_and_skips_default_latest
     ) == ["2026-01", "2026-02", "2026-03"]
 
 
+def test_market_scan_data_quality_reports_fallbacks_and_fuel_scope() -> None:
+    available_periods = ["2026-01", "2026-02", "2026-03"]
+    range_detail = market_scan_service._resolve_period_range_detail(
+        available_periods,
+        {"start": "2026-01", "end": "2026-04"},
+        "2026-03",
+    )
+
+    quality = market_scan_service._build_market_scan_data_quality(
+        requested_country="Atlantis",
+        selected_country={"value": "瑞典", "label": "Sweden"},
+        requested_period="2026-04",
+        resolved_period="2026-03",
+        range_detail=range_detail,
+        requested_fuels=["BEV", "Hydrogen"],
+        available_fuels=["BEV", "ICE"],
+        selected_fuels=["BEV"],
+        source_row_count=12,
+        filtered_row_count=10,
+    )
+
+    assert quality["countryFallbackApplied"] is True
+    assert quality["periodFallbackApplied"] is True
+    assert quality["timeRangeFallbackApplied"] is True
+    assert quality["resolvedTimeRange"] == {"start": "2026-01", "end": "2026-03"}
+    assert quality["unavailableFuelTypes"] == ["HYDROGEN"]
+    assert quality["fuelRowsExcluded"] == 2
+    assert len(quality["warnings"]) == 5
+
+
 def test_resolve_positioning_sales_window_prefers_custom_range() -> None:
     available_periods = ["2026-01", "2026-02", "2026-03", "2026-04"]
 
@@ -1035,6 +1065,8 @@ def test_needed_month_columns_includes_prior_months_when_same_month_missing() ->
     assert periods["same_month"] == []
     # current_ytd should have 5 months
     assert len(periods["current_ytd"]) == 5
+    # rolling12_trend key must exist (may be empty if earliest end not in available)
+    assert "rolling12_trend" in periods
 
     # ── Flattened column output ──
     columns = market_scan_service._compute_needed_month_columns(

@@ -1408,10 +1408,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  marketScanDeck: (payload: MarketScanDeckRequest = {}) =>
+  marketScanDeck: (payload: MarketScanDeckRequest = {}, signal?: AbortSignal) =>
     request<MarketScanDeckResponse>("/market-scan/deck", {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal,
     }),
   rankingTrend: (params: Record<string, string>) => {
     const qs = new URLSearchParams(params).toString();
