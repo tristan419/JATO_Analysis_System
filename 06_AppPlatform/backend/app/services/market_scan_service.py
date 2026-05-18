@@ -3450,13 +3450,22 @@ def _build_rolling12_fuel_trend(
         end_period = f"{year}-{target.month:02d}"
         rolling_periods = _window_periods_if_present(available_periods, end_period, 12)
         period_columns = [_period_to_month_column(period) for period in rolling_periods]
-        total = _total_volume(frame, period_columns)
+        # Count how many of the 12 expected months actually exist in the frame
+        present_columns = [c for c in period_columns if c in frame.columns]
+        month_count = len(present_columns)
+        total = float(frame[present_columns].sum(axis=1).sum()) if present_columns else 0.0
         label = f"L12M {str(year)[2:4]}.{target.month:02d}"
         fuel_mix = {
-            fuel: float(_total_volume(frame[frame["__powertrain"] == fuel], period_columns))
+            fuel: float(_total_volume(frame[frame["__powertrain"] == fuel], present_columns))
             for fuel in fuel_order
         }
-        items.append({"label": label, "totalVolume": total, "fuelMix": fuel_mix})
+        items.append({
+            "label": label,
+            "totalVolume": total,
+            "fuelMix": fuel_mix,
+            "monthCount": month_count,
+            "coverageRatio": month_count / 12 if month_count > 0 else 0.0,
+        })
     return {"items": items}
 
 
@@ -4699,13 +4708,17 @@ def _compute_needed_periods(
     and converts to month-column names.  Kept as a separate function so tests
     can assert on *which* logic brought a given period into the read set.
     """
-    # Rolling12 fuel trend goes back (resolved_year-2, same month), which is
-    # older than the regular trend window, so pull those periods explicitly.
+    # Rolling12 fuel trend draws three 12-month bars ending at
+    # (resolved_year, month), (resolved_year-1, month), (resolved_year-2, month).
+    # Explicitly collect all three windows so column pruning never starves them.
     target = pd.Period(resolved_period, freq="M")
-    earliest_fuel_trend_end = f"{target.year - 2}-{target.month:02d}"
-    rolling12_trend_periods = _window_periods_if_present(
-        available_periods, earliest_fuel_trend_end, 12,
-    )
+    rolling12_trend_periods: set[str] = set()
+    for year_offset in (0, -12, -24):
+        end = target + year_offset
+        end_str = f"{end.year:04d}-{end.month:02d}"
+        rolling12_trend_periods.update(
+            _window_periods_if_present(available_periods, end_str, 12)
+        )
     return {
         "trend": _window_periods(
             available_periods, resolved_period,
@@ -4725,7 +4738,7 @@ def _compute_needed_periods(
             _shifted_periods_if_present(custom_periods, available_periods, -12)
             if custom_periods else []
         ),
-        "rolling12_trend": rolling12_trend_periods,
+        "rolling12_trend": sorted(rolling12_trend_periods),
     }
 
 

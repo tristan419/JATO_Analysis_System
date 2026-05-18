@@ -1065,7 +1065,6 @@ def test_needed_month_columns_includes_prior_months_when_same_month_missing() ->
     assert periods["same_month"] == []
     # current_ytd should have 5 months
     assert len(periods["current_ytd"]) == 5
-    # rolling12_trend key must exist (may be empty if earliest end not in available)
     assert "rolling12_trend" in periods
 
     # ── Flattened column output ──
@@ -1084,3 +1083,97 @@ def test_needed_month_columns_includes_prior_months_when_same_month_missing() ->
     for month_col in ("2026 Jan", "2026 Feb", "2026 Mar", "2026 Apr", "2026 May"):
         assert month_col in columns, f"{month_col} missing from needed_month_columns"
     assert "2025 May" not in columns
+
+
+def test_rolling12_trend_periods_cover_all_three_windows() -> None:
+    """L12M bars need 3 full 12-month windows: target, target-12m, target-24m.
+
+    Without explicit inclusion, trend_window_months=24 omits months older than
+    24 months from resolved_period, starving the earliest L12M bar.
+    """
+    # 39 months of history: 2023-01 through 2026-03
+    available = [f"{y}-{m:02d}" for y in range(2023, 2027) for m in range(1, 13) if (y, m) <= (2026, 3)]
+
+    periods = market_scan_service._compute_needed_periods(
+        available_periods=available,
+        resolved_period="2026-03",
+        trend_window_months=24,
+        origin_window_months=24,
+        body_window_months=24,
+        same_month_last_year_period="2025-03",
+        prior_period="2026-02",
+        custom_periods=None,
+    )
+
+    rt = periods["rolling12_trend"]
+    # L12M 24.03 needs 2023-04 through 2024-03 — all 12 must be present
+    for m in range(4, 13):
+        assert f"2023-{m:02d}" in rt, f"2023-{m:02d} missing from rolling12_trend"
+    for m in range(1, 4):
+        assert f"2024-{m:02d}" in rt, f"2024-{m:02d} missing from rolling12_trend"
+    # L12M 25.03 needs 2024-04 onward
+    for m in range(4, 13):
+        assert f"2024-{m:02d}" in rt, f"2024-{m:02d} missing from rolling12_trend"
+    # L12M 26.03 needs 2025-04 onward
+    for m in range(4, 13):
+        assert f"2025-{m:02d}" in rt, f"2025-{m:02d} missing from rolling12_trend"
+
+    # 2023-01 through 2023-03 should NOT be included (outside the 3 windows)
+    assert "2023-01" not in rt
+    assert "2023-03" not in rt
+
+    # Verify the columns pass through to _compute_needed_month_columns
+    columns = market_scan_service._compute_needed_month_columns(
+        available_periods=available,
+        resolved_period="2026-03",
+        trend_window_months=24,
+        origin_window_months=24,
+        body_window_months=24,
+        same_month_last_year_period="2025-03",
+        prior_period="2026-02",
+        custom_periods=None,
+    )
+    assert "2023 Apr" in columns
+    assert "2024 Mar" in columns
+
+
+def test_rolling12_fuel_trend_includes_month_count() -> None:
+    """Each L12M bar must report monthCount and coverageRatio for data quality."""
+    from app.services.market_scan_service import NUMBER_TO_MONTH_NAME
+    month_names = [NUMBER_TO_MONTH_NAME[i] for i in range(1, 13)]  # Jan..Dec
+    frame = pd.DataFrame(
+        {
+            "__segment_raw": ["SUV A"] * 24,
+            "__powertrain": (["BEV"] * 12) + (["PHEV"] * 12),
+            **{f"2025 {m}": [10.0] * 24 for m in month_names},
+            **{f"2026 {m}": [10.0] * 24 for m in month_names[:3]},
+        },
+    )
+
+    available = ["2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06",
+                  "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12",
+                  "2026-01", "2026-02", "2026-03"]
+
+    result = market_scan_service._build_rolling12_fuel_trend(
+        frame=frame,
+        fuel_order=["BEV", "PHEV"],
+        resolved_period="2026-03",
+        available_periods=available,
+    )
+    items = result["items"]
+    assert len(items) == 3
+    labels = [it["label"] for it in items]
+    assert labels == ["L12M 24.03", "L12M 25.03", "L12M 26.03"]
+
+    # L12M 24.03: 2024-04 through 2025-03 — but no 2024 columns in frame
+    assert items[0]["monthCount"] < 12
+    assert items[0]["coverageRatio"] < 1.0
+
+    # L12M 26.03: 2025-04 through 2026-03 — all 12 should be present (or less if data truncates)
+    assert items[2]["monthCount"] > 0
+
+    # Every item must have monthCount and coverageRatio
+    for it in items:
+        assert "monthCount" in it
+        assert "coverageRatio" in it
+        assert 0 <= it["coverageRatio"] <= 1.0
