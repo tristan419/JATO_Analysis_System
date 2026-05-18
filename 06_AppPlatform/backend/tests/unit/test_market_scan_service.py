@@ -922,6 +922,7 @@ def test_build_version_comparison_bubble_items_groups_model_versions() -> None:
     assert items[0]["model"] == "XC60"
     assert items[0]["version"] == "Plus"
     assert items[0]["sales"] == pytest.approx(200.0)
+    assert items[0]["msrp"] == pytest.approx(57000.0)
 
 
 # ── YoY drill-down fixes ──────────────────────────────────────────────
