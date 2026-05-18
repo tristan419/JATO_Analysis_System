@@ -665,6 +665,13 @@ export interface MarketScanDrilldownPage {
     items: MarketScanFuelTrendItem[];
   } | null;
   fuelPanels: MarketScanFuelPanel[];
+  originFuelPanels?: MarketScanOriginFuelPanelGroup[];
+}
+
+export interface MarketScanOriginFuelPanelGroup {
+  origin: string;
+  originLabel: string;
+  fuelPanels: MarketScanFuelPanel[];
 }
 
 export interface MarketScanDeckResults {

@@ -7313,13 +7313,13 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 .market-scan-tab {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 0 0 auto;
-  align-items: flex-start;
-  min-width: 96px;
-  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  flex: 0 0 260px;
+  min-height: 72px;
+  padding: 12px 14px;
   border: 1px solid rgba(15, 23, 42, 0.1);
   background: rgba(255, 255, 255, 0.72);
   color: #334155;
@@ -7327,7 +7327,7 @@ table.data-table tr.data-table-group-row.contains-selection td {
   cursor: pointer;
   scroll-snap-align: start;
   transition: border-color var(--transition), background var(--transition), transform var(--transition);
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .market-scan-tab:hover {
@@ -7361,11 +7361,13 @@ table.data-table tr.data-table-group-row.contains-selection td {
   font-size: 14px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .market-scan-tab-copy span {
   color: #64748b;
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .market-scan-state-card {

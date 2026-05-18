@@ -3701,6 +3701,28 @@ def model_stats_to_ranking(
     return result
 
 
+def _build_origin_fuel_panel_items(
+    seg: str,
+    fuel_panels: tuple[str, ...],
+    precomputed: dict[tuple[str, str, str], list[dict[str, Any]]],
+    month_number: int,
+    resolved_period: str,
+) -> list[dict[str, Any]]:
+    """Build fuel panel items for a specific origin from precomputed rankings."""
+    items: list[dict[str, Any]] = []
+    for fuel_type in fuel_panels:
+        items.append({
+            "fuelType": fuel_type,
+            "ytdTitle": f"{fuel_type} 1-{month_number}月累计",
+            "rolling12Title": f"{fuel_type} 近12个月 · 截至 {_short_period_label(resolved_period)}",
+            "monthTitle": f"{fuel_type} {_short_period_label(resolved_period)}",
+            "ytdRanking": precomputed.get((seg, fuel_type, "ytd"), []),
+            "rolling12Ranking": precomputed.get((seg, fuel_type, "rolling12"), []),
+            "monthRanking": precomputed.get((seg, fuel_type, "month"), []),
+        })
+    return items
+
+
 def _build_all_drilldowns(
     frame: pd.DataFrame,
     available_periods: list[str],
@@ -3756,6 +3778,22 @@ def _build_all_drilldowns(
         },
         ranking_limit=ranking_limit,
     )
+
+    # China-origin fuel panels (same ranking format, filtered to __origin == "中系")
+    china_fuel_rankings: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    if "__origin" in ranking_frame.columns:
+        china_frame = ranking_frame[ranking_frame["__origin"] == "中系"]
+        if not china_frame.empty:
+            china_fuel_rankings = _precompute_single_fuel_panel_rankings(
+                china_frame,
+                {
+                    "month": (current_month_columns, same_month_columns),
+                    "ytd": (current_ytd_columns, prior_ytd_columns),
+                    "rolling12": (current_rolling12_columns, prior_rolling12_columns),
+                },
+                ranking_limit=ranking_limit,
+            )
+
     result: dict[str, dict[str, Any]] = {}
     for seg in segment_values:
         seg_frame = frame[frame["__segment_raw"] == seg]
@@ -3811,6 +3849,15 @@ def _build_all_drilldowns(
                 **_build_custom_range_fuel_trend(seg_frame, seg_fuels, custom_range_periods),
             } if custom_range_periods else None,
             "fuelPanels": fuel_panel_items,
+            "originFuelPanels": [
+                {
+                    "origin": "China",
+                    "originLabel": "中系",
+                    "fuelPanels": _build_origin_fuel_panel_items(
+                        seg, fuel_panels, china_fuel_rankings, month_number, resolved_period,
+                    ),
+                }
+            ],
         }
     return result
 

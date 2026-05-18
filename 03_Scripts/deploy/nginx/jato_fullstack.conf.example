@@ -74,8 +74,16 @@ server {
         add_header Cache-Control "public, max-age=31536000, immutable" always;
     }
 
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
-        add_header Cache-Control "no-store" always;
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
     }
 }

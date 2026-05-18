@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/write_build_meta.cjs",
     "preview": "vite preview",
     "check:types": "tsc --noEmit",
     "test:unit": "vitest run src/tests/unit",
