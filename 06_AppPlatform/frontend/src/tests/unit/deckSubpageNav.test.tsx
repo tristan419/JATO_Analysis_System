@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 
 import { DeckSubpageNav } from "../../components/DeckSubpageNav";
@@ -30,22 +30,36 @@ function TestHarness({ initialKey = "overview" }: { initialKey?: (typeof ITEMS)[
   );
 }
 
+// scrollIntoView is not implemented in jsdom
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+});
+
 describe("DeckSubpageNav", () => {
   afterEach(() => {
     cleanup();
   });
 
-  it("navigates to adjacent subpages through the step buttons", () => {
-    render(<TestHarness initialKey="origin" />);
-
-    fireEvent.click(screen.getByLabelText("下一页：03 Segment"));
-    expect(screen.getByText("Active page: segment")).toBeTruthy();
-
-    fireEvent.click(screen.getByLabelText("上一页：02 Origin"));
-    expect(screen.getByText("Active page: origin")).toBeTruthy();
+  it("renders all tab buttons", () => {
+    render(<TestHarness />);
+    expect(screen.getByText("Overview")).toBeTruthy();
+    expect(screen.getByText("Origin")).toBeTruthy();
+    expect(screen.getByText("Segment")).toBeTruthy();
   });
 
-  it("supports left/right subpage navigation without wrapping", () => {
+  it("highlights the active tab", () => {
+    render(<TestHarness initialKey="origin" />);
+    const originTab = screen.getByText("Origin").closest("button");
+    expect(originTab?.className).toContain("is-active");
+  });
+
+  it("navigates on tab click", () => {
+    render(<TestHarness initialKey="overview" />);
+    fireEvent.click(screen.getByText("Segment"));
+    expect(screen.getByText("Active page: segment")).toBeTruthy();
+  });
+
+  it("supports left/right arrow key navigation without wrapping", () => {
     render(<TestHarness initialKey="overview" />);
 
     fireEvent.keyDown(window, { key: "ArrowLeft" });
@@ -74,13 +88,14 @@ describe("DeckSubpageNav", () => {
     expect(screen.getByText("Active page: origin")).toBeTruthy();
   });
 
-  it("disables previous and next buttons at the ends", () => {
+  it("does not wrap navigation at edges", () => {
     render(<TestHarness initialKey="overview" />);
-    expect((screen.getByLabelText("已经是第一页") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(screen.getByText("Active page: overview")).toBeTruthy();
 
     cleanup();
-
     render(<TestHarness initialKey="segment" />);
-    expect((screen.getByLabelText("已经是最后一页") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(screen.getByText("Active page: segment")).toBeTruthy();
   });
 });

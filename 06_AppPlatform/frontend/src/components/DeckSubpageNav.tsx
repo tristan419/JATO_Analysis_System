@@ -1,7 +1,6 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useRef } from "react";
 
 import {
-  getAdjacentKeyedItem,
   getHorizontalNavigationDirectionFromKey,
   shouldIgnorePageNavigationTarget,
 } from "../utils/pageNavigation";
@@ -28,15 +27,21 @@ export function DeckSubpageNav<Key extends string>({
   ariaLabel,
   tabsClassName,
 }: DeckSubpageNavProps<Key>) {
-  const previousItem = useMemo(
-    () => getAdjacentKeyedItem(items, activeKey, -1),
-    [activeKey, items],
-  );
-  const nextItem = useMemo(
-    () => getAdjacentKeyedItem(items, activeKey, 1),
-    [activeKey, items],
-  );
+  const stripRef = useRef<HTMLDivElement>(null);
 
+  // Auto-scroll active tab into view on change
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    const activeButton = strip.querySelector<HTMLButtonElement>(
+      ".market-scan-tab.is-active",
+    );
+    if (activeButton) {
+      activeButton.scrollIntoView({ inline: "center", behavior: "smooth" });
+    }
+  }, [activeKey]);
+
+  // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
@@ -53,62 +58,34 @@ export function DeckSubpageNav<Key extends string>({
       if (direction === null || shouldIgnorePageNavigationTarget(event.target)) {
         return;
       }
-      const target = direction < 0 ? previousItem : nextItem;
-      if (!target) {
-        return;
-      }
+      const activeIndex = items.findIndex((item) => item.key === activeKey);
+      if (activeIndex === -1) return;
+      const targetIndex = activeIndex + (direction < 0 ? -1 : 1);
+      if (targetIndex < 0 || targetIndex >= items.length) return;
       event.preventDefault();
-      onSelect(target.key);
+      onSelect(items[targetIndex].key);
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [nextItem, onSelect, previousItem]);
+  }, [activeKey, items, onSelect]);
 
   return (
-    <div className="deck-subpage-nav">
-      <button
-        type="button"
-        className="deck-subpage-step"
-        onClick={() => previousItem && onSelect(previousItem.key)}
-        disabled={!previousItem}
-        aria-label={previousItem ? `上一页：${previousItem.code} ${previousItem.label}` : "已经是第一页"}
-      >
-        <span className="deck-subpage-step-arrow">←</span>
-        <span className="deck-subpage-step-copy">
-          <span className="deck-subpage-step-meta">上一页</span>
-          <strong>{previousItem?.sublabel ?? "Start"}</strong>
-        </span>
-      </button>
-      <nav className={tabsClassName} aria-label={ariaLabel}>
-        {items.map((item) => (
-          <button
-            key={item.key}
-            type="button"
-            className={`market-scan-tab${activeKey === item.key ? " is-active" : ""}`}
-            onClick={() => onSelect(item.key)}
-          >
-            <span className="market-scan-tab-code">{item.code}</span>
-            <span className="market-scan-tab-copy">
-              <strong>{item.label}</strong>
-              <span>{item.sublabel}</span>
-            </span>
-          </button>
-        ))}
-      </nav>
-      <button
-        type="button"
-        className="deck-subpage-step deck-subpage-step--next"
-        onClick={() => nextItem && onSelect(nextItem.key)}
-        disabled={!nextItem}
-        aria-label={nextItem ? `下一页：${nextItem.code} ${nextItem.label}` : "已经是最后一页"}
-      >
-        <span className="deck-subpage-step-copy">
-          <span className="deck-subpage-step-meta">下一页</span>
-          <strong>{nextItem?.sublabel ?? "End"}</strong>
-        </span>
-        <span className="deck-subpage-step-arrow">→</span>
-      </button>
-    </div>
+    <nav className={tabsClassName} aria-label={ariaLabel} ref={stripRef}>
+      {items.map((item) => (
+        <button
+          key={item.key}
+          type="button"
+          className={`market-scan-tab${activeKey === item.key ? " is-active" : ""}`}
+          onClick={() => onSelect(item.key)}
+        >
+          <span className="market-scan-tab-code">{item.code}</span>
+          <span className="market-scan-tab-copy">
+            <strong>{item.label}</strong>
+            <span>{item.sublabel}</span>
+          </span>
+        </button>
+      ))}
+    </nav>
   );
 }

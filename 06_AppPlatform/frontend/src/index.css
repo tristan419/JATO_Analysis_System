@@ -7223,16 +7223,14 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 .market-scan-tab-strip {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: nowrap;
   gap: 8px;
-}
-
-.deck-subpage-nav {
-  display: grid;
-  grid-template-columns: minmax(120px, 160px) minmax(0, 1fr) minmax(120px, 160px);
-  gap: 8px;
-  align-items: stretch;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 2px;
 }
 
 .deck-subpage-step {
@@ -7305,24 +7303,31 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 .positioning-pricing-tab-strip {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: nowrap;
   gap: 8px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
 }
 
 .market-scan-tab {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  min-height: 72px;
-  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  min-width: 96px;
+  padding: 10px 14px;
   border: 1px solid rgba(15, 23, 42, 0.1);
   background: rgba(255, 255, 255, 0.72);
   color: #334155;
   text-align: left;
   cursor: pointer;
+  scroll-snap-align: start;
   transition: border-color var(--transition), background var(--transition), transform var(--transition);
+  white-space: nowrap;
 }
 
 .market-scan-tab:hover {
@@ -7334,6 +7339,7 @@ table.data-table tr.data-table-group-row.contains-selection td {
   border-color: rgba(15, 118, 110, 0.36);
   background: linear-gradient(135deg, rgba(15, 118, 110, 0.14) 0%, rgba(255, 255, 255, 0.9) 72%);
   color: #0f172a;
+  box-shadow: 0 1px 3px rgba(15, 118, 110, 0.12);
 }
 
 .market-scan-tab-code {
@@ -10905,12 +10911,8 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 @media (max-width: 1280px) {
-  .deck-subpage-nav {
-    grid-template-columns: minmax(104px, 132px) minmax(0, 1fr) minmax(104px, 132px);
-  }
-
   .market-scan-tab-strip {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
   }
 
   .market-scan-skeleton-grid--metrics {

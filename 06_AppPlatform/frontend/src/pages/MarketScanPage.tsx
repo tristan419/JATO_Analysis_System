@@ -97,8 +97,8 @@ const TAB_ITEMS: Array<{
   { key: "overview", code: "01", label: "Overview", sublabel: "市场总量" },
   { key: "origin", code: "02", label: "Origin", sublabel: "车系走势" },
   { key: "segment", code: "03", label: "Segment", sublabel: "级别结构" },
-  { key: "drilldown", code: "04", label: "Drilldown", sublabel: "细分下钻" },
-  { key: "suvAll", code: "05", label: "SUV", sublabel: "全SUV" },
+  { key: "suvAll", code: "04", label: "SUV", sublabel: "全SUV" },
+  { key: "drilldown", code: "05", label: "Drilldown", sublabel: "A0级 SUV" },
   { key: "suvA", code: "06", label: "SUV-A", sublabel: "A级 SUV" },
   { key: "suvB", code: "07", label: "SUV-B", sublabel: "B级 SUV" },
 ];
