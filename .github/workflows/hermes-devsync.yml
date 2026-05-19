@@ -55,7 +55,7 @@ jobs:
             -X POST "$SYNC_URL" \
             -H "Authorization: Bearer ${{ secrets.HERMES_SYNC_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"source\":\"github_actions\",\"commitSha\":\"$GITHUB_SHA\",\"workflowRunId\":\"$GITHUB_RUN_ID\",\"branch\":\"$GITHUB_REF_NAME\"}")
+            -d "{\"source\":\"github_actions\",\"commitSha\":\"$GITHUB_SHA\",\"workflowRunId\":\"$GITHUB_RUN_ID\",\"workflowRunAttempt\":\"$GITHUB_RUN_ATTEMPT\",\"repository\":\"$GITHUB_REPOSITORY\",\"branch\":\"$GITHUB_REF_NAME\"}")
 
           if [ "$HTTP_CODE" = "200" ]; then
             echo "DevSync succeeded:"

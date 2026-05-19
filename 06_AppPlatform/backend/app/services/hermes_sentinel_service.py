@@ -53,10 +53,19 @@ def _save_notification(notif: dict[str, Any]) -> None:
         fh.write(json.dumps(notif, ensure_ascii=False) + "\n")
 
 
+def _write_notifications(notifs: list[dict[str, Any]]) -> None:
+    p = _notifications_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        "\n".join(json.dumps(n, ensure_ascii=False) for n in notifs) + ("\n" if notifs else ""),
+        encoding="utf-8",
+    )
+
+
 def _cooldown_ok(probe_name: str, minutes: int = 30) -> bool:
     """Check if enough time passed since last notification from this probe."""
     recent = [n for n in _load_notifications(20)
-              if n.get("source") == probe_name and n.get("status") != "resolved"]
+              if n.get("source") == probe_name and n.get("status") not in {"archived", "resolved"}]
     if not recent:
         return True
     newest = datetime.fromisoformat(recent[0]["createdAt"].replace("Z", "+00:00"))
@@ -77,13 +86,30 @@ def _similar_notification_exists(title: str, within_minutes: int = 60) -> bool:
     return False
 
 
-def _emit(probe: str, severity: str, title: str, body: str,
-          actions: list[str] | None = None, cooldown_min: int = 30) -> dict[str, Any] | None:
+def _emit(
+    probe: str,
+    severity: str,
+    title: str,
+    body: str,
+    actions: list[str] | None = None,
+    cooldown_min: int = 30,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Emit a notification if cooldown allows and no duplicate exists."""
     if not _cooldown_ok(probe, cooldown_min):
         return None
     if _similar_notification_exists(title, cooldown_min):
         return None
+    context = context or {}
+    action_level = str(
+        context.get("actionLevel")
+        or ("blocking" if severity in {"high", "critical"} else "needs_review")
+    )
+    blocking = bool(context.get("blocking", severity in {"high", "critical"}))
+    recommended_action = str(
+        context.get("recommendedAction")
+        or (actions[0] if actions else "Review Sentinel finding")
+    )
     notif = {
         "id": f"notif_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}",
         "severity": severity,
@@ -91,6 +117,10 @@ def _emit(probe: str, severity: str, title: str, body: str,
         "title": title,
         "body": body,
         "actions": actions or [],
+        "actionLevel": action_level,
+        "blocking": blocking,
+        "recommendedAction": recommended_action,
+        "context": context,
         "status": "new",
         "createdAt": datetime.now(timezone.utc).isoformat(),
     }
@@ -303,6 +333,59 @@ def probe_gha() -> dict[str, Any]:
     return {"probe": "gha", "overall": overall, "findings": findings}
 
 
+def probe_deploy() -> dict[str, Any]:
+    """Check whether production release metadata matches latest expected commit."""
+    from app.services.hermes_deploy_status_service import get_deploy_status
+
+    status = get_deploy_status()
+    findings: list[dict[str, Any]] = []
+    drift = status.get("drift", {}) or {}
+    release = status.get("release", {}) or {}
+    expected = status.get("expected", {}) or {}
+    last_deploy = status.get("lastDeploy", {}) or {}
+
+    if drift.get("isDrift"):
+        release_short = release.get("shortSha") or str(drift.get("releaseCommitSha", ""))[:8] or "unknown"
+        expected_short = expected.get("shortSha") or str(drift.get("expectedCommitSha", ""))[:8] or "unknown"
+        behind = drift.get("commitsBehind")
+        behind_text = f" ({behind} commits behind)" if isinstance(behind, int) and behind > 0 else ""
+        findings.append({
+            "type": "production_commit_drift",
+            "severity": "high",
+            "message": f"Production release {release_short} does not match latest expected commit {expected_short}{behind_text}.",
+            "releaseCommitSha": drift.get("releaseCommitSha"),
+            "expectedCommitSha": drift.get("expectedCommitSha"),
+            "count": behind,
+            "recommendedAction": "Open deploy-fullstack-tencent logs and redeploy or fix SSH deploy failure.",
+        })
+
+    if drift.get("releaseUnknown"):
+        findings.append({
+            "type": "missing_release_metadata",
+            "severity": "medium",
+            "message": "Latest expected commit is known, but production release metadata is missing.",
+            "expectedCommitSha": drift.get("expectedCommitSha"),
+            "recommendedAction": "Deploy a package containing hermes/deploy_release.json.",
+        })
+
+    deploy_exit_code = last_deploy.get("deployExitCode")
+    if deploy_exit_code not in {None, "", "0"}:
+        findings.append({
+            "type": "last_deploy_failed",
+            "severity": "high",
+            "message": f"Last deploy status reports exit code {deploy_exit_code}.",
+            "recommendedAction": "Inspect _deploy_status.txt and the GitHub Actions SSH deploy step output.",
+        })
+
+    overall = "ok"
+    if any(f["severity"] == "high" for f in findings):
+        overall = "critical"
+    elif findings:
+        overall = "warning"
+
+    return {"probe": "deploy", "overall": overall, "findings": findings, "status": status}
+
+
 # ── Aggregation ───────────────────────────────────────────────────────
 
 def run_all_probes() -> dict[str, Any]:
@@ -313,6 +396,7 @@ def run_all_probes() -> dict[str, Any]:
         probe_gaps(),
         probe_evidence(),
         probe_gha(),
+        probe_deploy(),
     ]
 
     # Determine overall severity
@@ -327,42 +411,60 @@ def run_all_probes() -> dict[str, Any]:
     for p in probes:
         for f in p.get("findings", []):
             sev = f.get("severity", "low")
+            context = {
+                "findingType": f.get("type", ""),
+                "actionLevel": "blocking" if sev in {"high", "critical"} else "needs_review",
+                "blocking": sev in {"high", "critical"},
+                "recommendedAction": f.get("recommendedAction") or "View details",
+                "count": f.get("count"),
+            }
             # Only emit for medium+ severity
             if sev in ("high", "critical"):
                 n = _emit(p["probe"], sev, f.get("type", "").replace("_", " ").title(),
-                          f.get("message", ""), ["View details"], cooldown_min=30)
+                          f.get("message", ""), ["View details"], cooldown_min=30,
+                          context=context)
             elif sev == "medium":
                 n = _emit(p["probe"], sev, f.get("type", "").replace("_", " ").title(),
-                          f.get("message", ""), ["View details"], cooldown_min=120)
+                          f.get("message", ""), ["View details"], cooldown_min=120,
+                          context=context)
             else:
                 n = None
             if n:
                 emitted.append(n)
 
+    mailbox_notifications = _load_notifications(100)
     return {
         "overall": overall,
         "probes": probes,
-        "notifications": emitted,
-        "unreadCount": len([n for n in _load_notifications(20) if n.get("status") == "new"]),
+        "notifications": mailbox_notifications,
+        "emittedNotifications": emitted,
+        "unreadCount": len([n for n in mailbox_notifications if n.get("status") == "new"]),
         "checkedAt": datetime.now(timezone.utc).isoformat(),
     }
 
 
 def get_notifications(limit: int = 50, status: str | None = None) -> list[dict]:
     notifs = _load_notifications(limit)
-    if status:
+    if status and status != "all":
         notifs = [n for n in notifs if n.get("status") == status]
     return notifs
 
 
-def ack_notification(notif_id: str) -> dict[str, Any] | None:
-    """Mark a notification as acknowledged."""
+def set_notification_status(notif_id: str, status: str) -> dict[str, Any] | None:
+    """Set a notification mailbox status."""
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status not in {"new", "read", "acked", "archived", "resolved"}:
+        raise ValueError(f"Unsupported notification status: {status}")
     notifs = _load_notifications(200)
     for n in notifs:
         if n.get("id") == notif_id:
-            n["status"] = "acked"
-            # Rewrite the file (small enough for now)
-            p = _notifications_path()
-            p.write_text("\n".join(json.dumps(n, ensure_ascii=False) for n in notifs) + "\n")
+            n["status"] = normalized_status
+            n["updatedAt"] = datetime.now(timezone.utc).isoformat()
+            _write_notifications(notifs)
             return n
     return None
+
+
+def ack_notification(notif_id: str) -> dict[str, Any] | None:
+    """Mark a notification as acknowledged."""
+    return set_notification_status(notif_id, "acked")

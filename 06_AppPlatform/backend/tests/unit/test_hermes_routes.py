@@ -45,6 +45,59 @@ def _write_json(path: Path, data) -> None:
     path.write_text(json.dumps(data))
 
 
+# ── /hermes/sentinel + deploy status ─────────────────────────────────
+
+class TestSentinelAndDeploy:
+    def test_set_notification_status_route(self, client, tmp_path, monkeypatch):
+        from app.services import hermes_sentinel_service as sentinel
+
+        monkeypatch.setattr(sentinel, "_project_root", tmp_path)
+        created = sentinel._emit("devsync", "medium", "Missing Docs", "Body")
+        assert created is not None
+
+        resp = client.post(
+            f"/hermes/sentinel/notifications/{created['id']}/status",
+            json={"status": "archived"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "archived"
+
+    def test_deploy_status_endpoint_reports_drift(self, client, tmp_path, monkeypatch):
+        from app.services import hermes_deploy_status_service as deploy_status
+
+        monkeypatch.setattr(deploy_status, "_project_root", tmp_path)
+        _write_json(tmp_path / "hermes" / "deploy_release.json", {
+            "commitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "shortSha": "aaaaaaaa",
+            "source": "github_actions_archive",
+        })
+        _write_json(tmp_path / "hermes" / "deploy_expected.json", {
+            "commitSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "shortSha": "bbbbbbbb",
+        })
+
+        resp = client.get("/hermes/deploy/status")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "critical"
+        assert data["drift"]["isDrift"] is True
+
+    def test_full_design_document_endpoint(self, client, tmp_path):
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir(parents=True)
+        (reports_dir / "HERMES_FULL_DESIGN_DOCUMENT.md").write_text("# Hermes\n\nDesign", encoding="utf-8")
+
+        with patch("app.api.routes.hermes.HERMES_DIR", tmp_path), patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path.parent):
+            resp = client.get("/hermes/reports/full-design-document")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["exists"] is True
+        assert "# Hermes" in data["content"]
+
+
 # ── /hermes/gaps ──────────────────────────────────────────────────────
 
 class TestGaps:

@@ -2339,24 +2339,19 @@ function DrilldownSection({
         ))}
       </div>
       {page.originFuelPanels?.map((og) => (
-        <div key={`${page.segment}-${og.origin}`}>
-          <Panel
-            eyebrow="CHINA ORIGIN"
-            title={`${og.originLabel}分动力 Top Ranking`}
-            subtitle="按当前页面口径筛选中系车型，并按 BEV / PHEV / HEV / MHEV / ICE 拆分排名。"
-          >
-            <div className="market-scan-grid market-scan-grid--five market-scan-fuel-panel-row">
-              {og.fuelPanels.map((panel) => (
-                <FuelPanel
-                  key={`${page.segment}-${og.origin}-${panel.fuelType}`}
-                  panel={panel}
-                  salesMode={salesMode}
-                  customRangeActive={customRangeActive}
-                  compact={compact}
-                />
-              ))}
-            </div>
-          </Panel>
+        <div
+          key={`${page.segment}-${og.origin}`}
+          className="market-scan-grid market-scan-grid--five market-scan-fuel-panel-row"
+        >
+          {og.fuelPanels.map((panel) => (
+            <FuelPanel
+              key={`${page.segment}-${og.origin}-${panel.fuelType}`}
+              panel={panel}
+              salesMode={salesMode}
+              customRangeActive={customRangeActive}
+              compact={compact}
+            />
+          ))}
         </div>
       ))}
     </>
@@ -2458,8 +2453,12 @@ export function MarketScanPage({
     syncUrlParams();
   }, [syncUrlParams]);
 
+  // Defer Plotly preload to idle time — avoids blocking first-screen JS parse
   useEffect(() => {
-    preloadPlotlyChartRuntime().catch(() => undefined);
+    const id = window.setTimeout(() => {
+      preloadPlotlyChartRuntime().catch(() => undefined);
+    }, 2000);
+    return () => window.clearTimeout(id);
   }, []);
 
   useEffect(() => {

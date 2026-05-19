@@ -66,6 +66,41 @@ jobs:
             exit 1
           fi
 
+          python3 - <<'PY'
+          import datetime as _dt
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          root = pathlib.Path(os.environ["GITHUB_WORKSPACE"])
+          sha = os.environ["GITHUB_SHA"]
+          try:
+              short_sha = subprocess.check_output(
+                  ["git", "rev-parse", "--short=8", "HEAD"],
+                  cwd=root,
+                  text=True,
+              ).strip()
+          except Exception:
+              short_sha = sha[:8]
+          payload = {
+              "releaseId": f"{os.environ.get('GITHUB_RUN_ID', '')}-{os.environ.get('GITHUB_RUN_ATTEMPT', '')}",
+              "commitSha": sha,
+              "shortSha": short_sha,
+              "branch": os.environ.get("GITHUB_REF_NAME", ""),
+              "repository": os.environ.get("GITHUB_REPOSITORY", ""),
+              "workflow": os.environ.get("GITHUB_WORKFLOW", ""),
+              "workflowRunId": os.environ.get("GITHUB_RUN_ID", ""),
+              "workflowRunAttempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+              "packagedAt": _dt.datetime.now(_dt.UTC).isoformat(),
+              "source": "github_actions_archive",
+          }
+          out = root / "hermes" / "deploy_release.json"
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(f"Wrote {out.relative_to(root)} for release {short_sha}")
+          PY
+
           tar cf "$RUNNER_TEMP/JATO_deploy.tar" \
             --exclude='.git' \
             --exclude='node_modules' \
@@ -254,6 +289,8 @@ jobs:
             sudo -n systemctl status jato-fullstack-backend@8000 --no-pager 2>&1 || true
             echo "---healthz---"
             curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
+            echo "---release---"
+            cat "$REPO_DIR/hermes/deploy_release.json" 2>&1 || echo "RELEASE_METADATA_MISSING"
             echo "---nginx---"
             sudo -n systemctl status nginx --no-pager 2>&1 | head -5 || true
             echo "---index.html---"
@@ -375,6 +412,8 @@ jobs:
             sudo -n systemctl status jato-fullstack-backend@8000 --no-pager 2>&1 || true
             echo "---healthz---"
             curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
+            echo "---release---"
+            cat "$REPO_DIR/hermes/deploy_release.json" 2>&1 || echo "RELEASE_METADATA_MISSING"
             echo "---nginx---"
             sudo -n systemctl status nginx --no-pager 2>&1 | head -5 || true
             echo "---index.html---"

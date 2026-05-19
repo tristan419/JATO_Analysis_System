@@ -314,6 +314,50 @@ features:
   lastUpdatedAt: '2026-05-18T01:28:12.893019+00:00'
   docs:
   - Markdown_Readme/features/hermes-devsync.md
+- featureId: feature.hermes_deploy_sentinel
+  title: Hermes Deploy Sentinel
+  status: implemented
+  category: governance
+  source: codex
+  summary: Tracks Tencent production release metadata against the latest GitHub commit
+    received by Hermes DevSync, so Sentinel can alert when production is still running
+    an older deployment after deploy-fullstack-tencent fails.
+  linkedEventIds:
+  - dev_evt_20260519_deploy_sentinel_inbox
+  endpoints:
+  - GET /hermes/deploy/status
+  - GET /hermes/sentinel/status
+  - POST /hermes/sentinel/notifications/{notification_id}/status
+  - POST /hermes/dev/sync
+  frontend:
+  - Sentinel Inbox with unread/read/archive/all filters
+  - Searchable fixed-height notification list
+  - Diagram category filters
+  - Hermes full design document reader
+  backend:
+  - 06_AppPlatform/backend/app/services/hermes_deploy_status_service.py
+  - 06_AppPlatform/backend/app/services/hermes_sentinel_service.py
+  - 06_AppPlatform/backend/app/api/routes/hermes.py
+  - .github/workflows/deploy-fullstack-tencent.yml
+  - .github/workflows/hermes-devsync.yml
+  - 03_Scripts/ops/deploy_fullstack_server.sh
+  tests:
+    backendPytest: 85 passed (Hermes deploy status, Sentinel, routes, chat, DevSync)
+    frontendTsc: npm run check:types passed
+  risks:
+  - First production deploy is required before deploy_release.json exists on Tencent.
+  - If both deploy-fullstack-tencent and hermes-devsync cannot reach the server, Hermes
+    cannot learn the latest expected commit from production alone.
+  nextSteps:
+  - Deploy to Tencent once so production has hermes/deploy_release.json and the deploy
+    probe code.
+  - Verify /v1/hermes/deploy/status after deploy.
+  - Confirm Sentinel Inbox reports production_commit_drift if expected and release commits
+    diverge.
+  createdAt: '2026-05-19T00:00:00+08:00'
+  lastUpdatedAt: '2026-05-19T00:00:00+08:00'
+  docs:
+  - Markdown_Readme/features/feature.hermes_deploy_sentinel.md
 - featureId: feature.presence_websocket
   title: Presence WebSocket
   status: implemented

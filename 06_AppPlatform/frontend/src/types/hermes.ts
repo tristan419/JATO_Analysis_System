@@ -7,6 +7,61 @@ export interface HermesMermaidBlock {
   diagramIndex: number;
   raw: string;
   type: string;
+  category?: string;
+  categoryLabel?: string;
+}
+
+// === Sentinel Inbox ===
+export type HermesSentinelSeverity = "low" | "medium" | "high" | "critical";
+export type HermesSentinelMailboxStatus = "new" | "read" | "acked" | "archived" | "resolved";
+
+export interface HermesSentinelNotification {
+  id: string;
+  severity: HermesSentinelSeverity | string;
+  source: string;
+  title: string;
+  body: string;
+  actions: string[];
+  actionLevel?: string;
+  blocking?: boolean;
+  recommendedAction?: string;
+  context?: Record<string, unknown>;
+  status: HermesSentinelMailboxStatus | string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface HermesSentinelProbe {
+  probe: string;
+  overall: "ok" | "warning" | "critical" | string;
+  findings: Array<Record<string, unknown>>;
+  status?: Record<string, unknown>;
+}
+
+export interface HermesSentinelStatusResponse {
+  overall: "ok" | "warning" | "critical" | string;
+  probes: HermesSentinelProbe[];
+  notifications: HermesSentinelNotification[];
+  emittedNotifications?: HermesSentinelNotification[];
+  unreadCount: number;
+  checkedAt: string;
+}
+
+export interface HermesFullDesignDocumentResponse {
+  exists: boolean;
+  path: string;
+  content: string;
+  updatedAt: string | null;
+}
+
+export interface HermesDeployStatusResponse {
+  status: "ok" | "warning" | "critical" | string;
+  release: Record<string, unknown>;
+  expected: Record<string, unknown>;
+  drift: Record<string, unknown>;
+  lastDeploy: Record<string, unknown>;
+  warnings: string[];
+  checkedAt: string;
 }
 
 // === Governance Gaps ===

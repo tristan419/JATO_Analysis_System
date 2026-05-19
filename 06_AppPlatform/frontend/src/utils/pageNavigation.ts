@@ -165,8 +165,16 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
     id: "dashboard",
     label: "Dashboard",
     sublabel: "JATO看板",
-    type: "link",
-    to: "/dashboard",
+    type: "mega",
+    groups: [
+      {
+        title: "JATO Board / JATO 看板",
+        items: [
+          { label: "Dashboard", sublabel: "JATO 总览", to: "/dashboard" },
+          { label: "Spec Detail", sublabel: "规格明细", to: "/data/spec-detail" },
+        ],
+      },
+    ],
   },
   {
     id: "market-scan",
@@ -212,7 +220,7 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
       {
         title: "Data View / 数据查看",
         items: [
-          { label: "Spec Detail", sublabel: "规格明细", to: "/data/spec-detail" },
+          { label: "Hermes Steward", sublabel: "Hermes 小管家", to: "/data/overview?view=hermes" },
           { label: "Data Overview", sublabel: "数据总览", to: "/data/overview" },
         ],
       },
@@ -238,6 +246,7 @@ const MEGA_MENU_ROUTE_MAP: Record<string, string> = {
 
 export function getActiveMegaMenuId(pathname: string): string | null {
   if (pathname === "/" || pathname === "/dashboard") return "dashboard";
+  if (pathname === "/data/spec-detail") return "dashboard";
   for (const [prefix, id] of Object.entries(MEGA_MENU_ROUTE_MAP)) {
     if (pathname === prefix || pathname.startsWith(`${prefix}/`)) return id;
   }

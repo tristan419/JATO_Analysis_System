@@ -56,6 +56,7 @@ FRONTEND_DIR="$REPO_DIR/06_AppPlatform/frontend"
 BACKEND_REQUIREMENTS="$BACKEND_DIR/requirements.txt"
 VENV_DIR="$REPO_DIR/.venv"
 TOOLKIT_DIR="$REPO_DIR/07_ScrapingToolkit"
+DEPLOY_RELEASE_FILE="$REPO_DIR/hermes/deploy_release.json"
 SYSTEMD_SOURCE_DIR="$REPO_DIR/03_Scripts/deploy/systemd"
 SYSTEMD_TARGET_DIR="/etc/systemd/system"
 JATO_ETC_DIR="/etc/jato-fullstack"
@@ -127,6 +128,19 @@ require_command npm
 require_command node
 
 echo "[INFO] Repository directory: $REPO_DIR"
+if [[ -f "$DEPLOY_RELEASE_FILE" ]]; then
+  echo "[INFO] Deploy release metadata:"
+  python - "$DEPLOY_RELEASE_FILE" <<'PY' || true
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text())
+print(f"[INFO] release={payload.get('shortSha') or str(payload.get('commitSha', ''))[:8]} run={payload.get('workflowRunId', '')} source={payload.get('source', '')}")
+PY
+else
+  echo "[WARN] Deploy release metadata missing: $DEPLOY_RELEASE_FILE"
+fi
 
 cleanup_known_untracked_paths() {
   local raw_pattern=""

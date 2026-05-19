@@ -9,8 +9,6 @@ import json
 import os
 import re
 import smtplib
-import subprocess
-import sys
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -20,6 +18,14 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from app.core.security import require_min_role
+from app.services.hermes_ops_runner_service import (
+    HELP_TEXT,
+    HERMES_SCRIPTS,
+    HermesRunError,
+    execute_hermes_command,
+    get_command_help,
+    list_run_commands,
+)
 
 router = APIRouter(prefix="/hermes", tags=["hermes"])
 
@@ -32,32 +38,6 @@ ACTIVITY_LOG = HERMES_DIR / "activity_log.jsonl"
 BUDGET_DAILY_CNY = 20
 BUDGET_MONTHLY_CNY = 500
 ALERT_EMAIL = "tristanlyk@gmail.com"
-
-HERMES_SCRIPTS = {
-    "pipeline-audit": {"script": "hermes_pipeline_audit.py", "label": "Pipeline Audit", "desc": "Scan systemd/Airflow/GH Actions → health report"},
-    "source-quality": {"script": "hermes_source_quality.py", "label": "Source Quality", "desc": "Score VOC/News/MSRP source health 0-100"},
-    "cost-report":    {"script": "hermes_cost_report.py",    "label": "Cost Report",    "desc": "Flash/Pro cost vs 500 CNY budget"},
-    "code-audit":     {"script": "hermes_code_audit.py",     "label": "Code Audit",     "desc": "git diff → 10-rule scan", "args": ["--base", "main", "--head", "HEAD"]},
-    "intake":         {"script": "hermes_intake.py",         "label": "PRD Intake",      "desc": "PRD → impact report (needs --prd arg)", "args": []},
-    "evidence":       {"script": "hermes_evidence_writer.py","label": "Evidence Writer", "desc": "Extract facts from artifacts → JSONL"},
-    "answer-audit":   {"script": "hermes_answer_audit.py",   "label": "Answer Audit",    "desc": "Generate sample answer audits"},
-}
-
-HELP_TEXT = """
-Hermes CLI — available commands:
-
-  pipeline-audit  Scan systemd/Airflow/GH Actions → health report
-  source-quality  Score VOC/News/MSRP source health 0-100
-  cost-report     Flash/Pro cost vs 500 CNY budget
-  code-audit      git diff → 10-rule audit scan
-  intake          PRD impact analysis (needs --prd)
-  evidence        Extract structured evidence → JSONL
-  answer-audit    Generate sample answer audits
-
-Usage: POST /v1/hermes/run/{command}
-       GET  /v1/hermes/run/{command}/help
-"""
-
 
 def _read_json(path: Path) -> dict[str, Any]:
     if not path.is_file():
@@ -382,64 +362,28 @@ def hermes_run_help(command: str, _=Depends(require_min_role("viewer"))):
     """Return help for a specific Hermes command."""
     if command == "all":
         return PlainTextResponse(HELP_TEXT)
-    info = HERMES_SCRIPTS.get(command)
-    if not info:
-        raise HTTPException(404, f"Unknown command: {command}. Try: {', '.join(HERMES_SCRIPTS)}")
-    return {
-        "command": command,
-        "script": info["script"],
-        "label": info["label"],
-        "desc": info["desc"],
-        "defaultArgs": info.get("args", []),
-    }
+    try:
+        return get_command_help(command)
+    except HermesRunError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
 
 
 @router.post("/run/{command}")
-def hermes_run(command: str, _=Depends(require_min_role("admin"))):
+def hermes_run(command: str, user=Depends(require_min_role("admin"))):
     """Execute a Hermes script and return its output."""
-    if command not in HERMES_SCRIPTS:
-        raise HTTPException(400, f"Unknown command: {command}. Available: {', '.join(HERMES_SCRIPTS)}")
-
-    info = HERMES_SCRIPTS[command]
-    script_path = SCRIPTS_DIR / info["script"]
-    if not script_path.is_file():
-        raise HTTPException(500, f"Script not found: {script_path}")
-
-    args = info.get("args", [])
-    cmd = [sys.executable, str(script_path)] + list(args)
-
-    started_at = datetime.now(timezone.utc).isoformat()
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(PROJECT_ROOT),
-            capture_output=True, text=True, timeout=120,
+        return execute_hermes_command(
+            command,
+            actor=getattr(user, "name", "unknown"),
         )
-        # Log activity
-        _log_activity(command, info["script"], result.returncode, started_at)
-        return {
-            "command": command,
-            "script": info["script"],
-            "exitCode": result.returncode,
-            "stdout": result.stdout[-8000:],
-            "stderr": result.stderr[-2000:],
-            "status": "success" if result.returncode == 0 else "failed",
-        }
-    except subprocess.TimeoutExpired:
-        return {"command": command, "exitCode": -1, "stdout": "", "stderr": "Timeout after 120s", "status": "timeout"}
-    except Exception as exc:
-        return {"command": command, "exitCode": -1, "stdout": "", "stderr": str(exc), "status": "error"}
+    except HermesRunError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
 
 
 @router.get("/run")
 def hermes_list_commands():
     """List all available Hermes run commands."""
-    return {
-        "commands": {
-            cmd: {"label": info["label"], "desc": info["desc"], "hasDefaultArgs": bool(info.get("args"))}
-            for cmd, info in HERMES_SCRIPTS.items()
-        }
-    }
+    return list_run_commands()
 
 
 # ── Source Drill-down ─────────────────────────────────────────────
@@ -843,6 +787,40 @@ _md_diagrams_cache: dict[str, Any] = {"data": None, "mtimes": {}}
 MERMAID_BLOCK_RE = re.compile(r"```mermaid\s*\n([\s\S]*?)```", re.MULTILINE)
 
 
+def _classify_hermes_diagram(file_path: str, title: str, raw: str) -> dict[str, str]:
+    haystack = f"{file_path} {title} {raw[:500]}".lower()
+    if any(token in haystack for token in ["sentinel", "notification", "inbox", "alert"]):
+        return {"category": "sentinel", "categoryLabel": "Sentinel"}
+    if any(token in haystack for token in ["devsync", "dev event", "feature registry", "evidence ledger", "governance gap"]):
+        return {"category": "devsync", "categoryLabel": "DevSync"}
+    if any(token in haystack for token in ["deploy", "github actions", "systemctl", "ssh", "tencent"]):
+        return {"category": "deploy", "categoryLabel": "Deploy"}
+    if any(token in haystack for token in ["jato", "monthly update", "market scan", "parquet", "redis"]):
+        return {"category": "data", "categoryLabel": "Data Pipeline"}
+    if any(token in haystack for token in ["chat", "command", "gateway", "run"]):
+        return {"category": "gateway", "categoryLabel": "Gateway"}
+    if any(token in haystack for token in ["source", "cost", "audit", "quality"]):
+        return {"category": "audit", "categoryLabel": "Audit"}
+    if any(token in haystack for token in ["hermes", "architecture", "core", "ledger"]):
+        return {"category": "core", "categoryLabel": "Core"}
+    return {"category": "other", "categoryLabel": "Other"}
+
+
+@router.get("/reports/full-design-document")
+def hermes_full_design_document(_=Depends(require_min_role("viewer"))) -> dict:
+    """Return the Hermes full design document as Markdown text for in-app reading."""
+    path = HERMES_DIR / "reports" / "HERMES_FULL_DESIGN_DOCUMENT.md"
+    if not path.is_file():
+        return {"exists": False, "path": str(path.relative_to(PROJECT_ROOT)), "content": "", "updatedAt": None}
+    stat = path.stat()
+    return {
+        "exists": True,
+        "path": str(path.relative_to(PROJECT_ROOT)),
+        "content": path.read_text(encoding="utf-8", errors="replace"),
+        "updatedAt": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+    }
+
+
 @router.get("/markdown-diagrams")
 def hermes_markdown_diagrams(_=Depends(require_min_role("viewer")),
     file_filter: str | None = Query(
@@ -941,6 +919,7 @@ def hermes_markdown_diagrams(_=Depends(require_min_role("viewer")),
                     "diagramIndex": idx,
                     "raw": block_src,
                     "type": dtype,
+                    **_classify_hermes_diagram(rel_path, title, block_src),
                 })
         _md_diagrams_cache["data"] = diagrams
         _md_diagrams_cache["mtimes"] = mtimes
@@ -1280,12 +1259,24 @@ def hermes_dev_sync(
     # Idempotency check
     commit_sha = payload.get("commitSha", "") if isinstance(payload, dict) else ""
     run_id = payload.get("workflowRunId", "") if isinstance(payload, dict) else ""
+    expected_deploy = None
+    if commit_sha:
+        from app.services.hermes_deploy_status_service import record_expected_deploy
+        expected_deploy = record_expected_deploy(payload, source=source or payload.get("source") or "unknown")
+
     if commit_sha and run_id:
         idem_path = HERMES_DIR / "dev_events" / f"_sync_{commit_sha}_{run_id}.json"
         if idem_path.is_file():
-            return {"status": "already_synced", "commitSha": commit_sha, "workflowRunId": run_id}
+            return {
+                "status": "already_synced",
+                "commitSha": commit_sha,
+                "workflowRunId": run_id,
+                "expectedDeploy": expected_deploy,
+            }
 
     result = sync_dev_events()
+    if expected_deploy:
+        result["expectedDeploy"] = expected_deploy
 
     # Write idempotency marker
     if commit_sha and run_id:
@@ -1297,6 +1288,13 @@ def hermes_dev_sync(
             pass
 
     return result
+
+
+@router.get("/deploy/status")
+def hermes_deploy_status(_=Depends(require_min_role("viewer"))) -> dict:
+    """Return deployed release metadata and expected GitHub commit drift."""
+    from app.services.hermes_deploy_status_service import get_deploy_status
+    return get_deploy_status()
 
 
 @router.get("/dev/features")
@@ -1413,6 +1411,24 @@ def hermes_sentinel_ack(notification_id: str, _=Depends(require_min_role("viewer
     """Mark a notification as acknowledged."""
     from app.services.hermes_sentinel_service import ack_notification
     n = ack_notification(notification_id)
+    if n is None:
+        raise HTTPException(404, f"Notification not found: {notification_id}")
+    return n
+
+
+@router.post("/sentinel/notifications/{notification_id}/status")
+def hermes_sentinel_set_notification_status(
+    notification_id: str,
+    payload: dict = Body(...),
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    """Move a Sentinel notification between inbox mailbox states."""
+    from app.services.hermes_sentinel_service import set_notification_status
+
+    try:
+        n = set_notification_status(notification_id, str(payload.get("status", "")))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     if n is None:
         raise HTTPException(404, f"Notification not found: {notification_id}")
     return n

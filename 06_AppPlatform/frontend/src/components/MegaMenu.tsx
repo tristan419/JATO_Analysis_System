@@ -37,7 +37,8 @@ function MegaMenuPanel({
 
 function MegaMenuPanelLink({ sub, onClick }: { sub: MegaMenuSubItem; onClick: () => void }) {
   const location = useLocation();
-  const active = location.pathname === sub.to || location.pathname.startsWith(`${sub.to}/`);
+  const targetPath = sub.to.split(/[?#]/, 1)[0];
+  const active = location.pathname === targetPath || location.pathname.startsWith(`${targetPath}/`);
   return (
     <Link to={sub.to} className={`mega-menu-panel-link${active ? " active" : ""}`} role="menuitem" onClick={onClick}>
       <span className="mega-menu-panel-link-label">{sub.label}</span>

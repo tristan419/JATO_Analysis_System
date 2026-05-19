@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 import { api } from "../api/client";
 import { HermesAskResponseCard } from "../components/HermesAskResponseCard";
@@ -24,11 +24,15 @@ import type {
   HermesDailySummaryResponse,
   HermesEvidenceLedgerResponse,
   HermesFeatureKanbanResponse,
+  HermesFullDesignDocumentResponse,
   HermesGap,
   HermesMermaidBlock as HermesMermaidBlockType,
   HermesOverviewResponse,
   HermesPipelineHealthResponse,
   HermesReplyType,
+  HermesSentinelMailboxStatus,
+  HermesSentinelNotification,
+  HermesSentinelStatusResponse,
   HermesSourceQualityResponse,
   HermesToolchainResponse,
 } from "../types/hermes";
@@ -43,7 +47,16 @@ import {
 type CrudEntityTab = "msrp-sources" | "engineering-projects" | "review-overrides";
 type DataSubpage = "overview" | "hermes" | "features" | "voc" | "admin" | "dryrun";
 type HermesSubtab = "capabilities" | "activity" | "cost" | "roadmap" | "diagrams";
+type SentinelInboxFilter = "new" | "read" | "archived" | "all";
 const DEFAULT_RECENT_ITEMS_VISIBLE = 6;
+
+const DATA_SUBPAGES: DataSubpage[] = ["overview", "hermes", "features", "voc", "admin", "dryrun"];
+
+function resolveDataSubpageFromLocation(search: string, hash: string): DataSubpage {
+  const params = new URLSearchParams(search);
+  const candidate = (params.get("view") || params.get("tab") || hash.replace(/^#/, "")).toLowerCase();
+  return DATA_SUBPAGES.includes(candidate as DataSubpage) ? (candidate as DataSubpage) : "overview";
+}
 
 const HERMES_SCRIPTS_MAP: Record<string, string> = {
   "pipeline-audit": "pipeline audit",
@@ -53,6 +66,39 @@ const HERMES_SCRIPTS_MAP: Record<string, string> = {
   "evidence": "evidence writer",
   "answer-audit": "answer audit",
 };
+
+const SENTINEL_FILTERS: Array<{ key: SentinelInboxFilter; label: string }> = [
+  { key: "new", label: "Unread" },
+  { key: "read", label: "Read" },
+  { key: "archived", label: "Archived" },
+  { key: "all", label: "All" },
+];
+
+function getSentinelSeverityColor(severity: string): string {
+  if (severity === "critical" || severity === "high") return "#dc2626";
+  if (severity === "medium") return "#d97706";
+  return "#2563eb";
+}
+
+function normalizeSentinelMailboxStatus(status: string): SentinelInboxFilter {
+  if (status === "archived" || status === "resolved") return "archived";
+  if (status === "read" || status === "acked") return "read";
+  return "new";
+}
+
+function matchesSentinelFilter(notification: HermesSentinelNotification, filter: SentinelInboxFilter, search: string): boolean {
+  const normalizedStatus = normalizeSentinelMailboxStatus(String(notification.status || "new"));
+  if (filter !== "all" && normalizedStatus !== filter) return false;
+  const query = search.trim().toLowerCase();
+  if (!query) return true;
+  return [
+    notification.title,
+    notification.body,
+    notification.source,
+    notification.recommendedAction ?? "",
+    String(notification.severity || ""),
+  ].some((value) => value.toLowerCase().includes(query));
+}
 
 interface SourceFilters {
   country: string;
@@ -229,6 +275,7 @@ function renderDomainRecentItems(
 }
 
 export function DataManagementPage() {
+  const location = useLocation();
   const [overview, setOverview] = useState<DataManagementOverviewResponse | null>(null);
   const [vocOverview, setVocOverview] = useState<DataManagementVocOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -240,7 +287,7 @@ export function DataManagementPage() {
   const [vocCountry, setVocCountry] = useState("");
 
   const [crudTab, setCrudTab] = useState<CrudEntityTab>("msrp-sources");
-  const [subpage, setSubpage] = useState<DataSubpage>("overview");
+  const [subpage, setSubpage] = useState<DataSubpage>(() => resolveDataSubpageFromLocation(location.search, location.hash));
   const [hermesSubtab, setHermesSubtab] = useState<HermesSubtab>("capabilities");
   const [hermesOverview, setHermesOverview] = useState<HermesOverviewResponse | null>(null);
   const [hermesPipelines, setHermesPipelines] = useState<HermesPipelineHealthResponse | null>(null);
@@ -262,11 +309,17 @@ export function DataManagementPage() {
   const [sourceDetailOpen, setSourceDetailOpen] = useState(false);
   const [hermesLoading, setHermesLoading] = useState(false);
   const [hermesTabError, setHermesTabError] = useState("");
-  const [sentinelStatus, setSentinelStatus] = useState<Record<string, unknown> | null>(null);
-  const [sentinelOpen, setSentinelOpen] = useState(false);
+  const [sentinelStatus, setSentinelStatus] = useState<HermesSentinelStatusResponse | null>(null);
+  const [sentinelFilter, setSentinelFilter] = useState<SentinelInboxFilter>("new");
+  const [sentinelSearch, setSentinelSearch] = useState("");
+  const [sentinelBusyId, setSentinelBusyId] = useState<string | null>(null);
   const [diagramModal, setDiagramModal] = useState<HermesMermaidBlockType | null>(null);
   const [diagramSearch, setDiagramSearch] = useState("");
   const [diagramFileFilter, setDiagramFileFilter] = useState("all");
+  const [diagramCategoryFilter, setDiagramCategoryFilter] = useState("all");
+  const [fullDesignDocOpen, setFullDesignDocOpen] = useState(false);
+  const [hermesDesignDoc, setHermesDesignDoc] = useState<HermesFullDesignDocumentResponse | null>(null);
+  const [hermesDesignDocError, setHermesDesignDocError] = useState("");
 
   // Chat state
   const [askDraft, setAskDraft] = useState("");
@@ -306,6 +359,19 @@ export function DataManagementPage() {
 
   function handleSuggestedPrompt(prompt: string) {
     setAskDraft(prompt);
+  }
+
+  async function updateSentinelNotificationStatus(notificationId: string, status: HermesSentinelMailboxStatus) {
+    setSentinelBusyId(notificationId);
+    try {
+      await api.hermesSetSentinelNotificationStatus(notificationId, status);
+      const nextStatus = await api.hermesSentinelStatus();
+      setSentinelStatus(nextStatus);
+    } catch (e: unknown) {
+      setHermesTabError((e as Error).message || String(e));
+    } finally {
+      setSentinelBusyId(null);
+    }
   }
   const [crudLoading, setCrudLoading] = useState(false);
   const [crudError, setCrudError] = useState("");
@@ -414,6 +480,11 @@ export function DataManagementPage() {
   }
 
   useEffect(() => {
+    const nextSubpage = resolveDataSubpageFromLocation(location.search, location.hash);
+    setSubpage((current) => (current === nextSubpage ? current : nextSubpage));
+  }, [location.hash, location.search]);
+
+  useEffect(() => {
     void loadOverview();
     void loadVocOverview();
   }, []);
@@ -471,12 +542,20 @@ export function DataManagementPage() {
   useEffect(() => {
     if (subpage !== "hermes" && subpage !== "overview") return;
     const poll = () => {
-      fetch("/v1/hermes/sentinel/status").then(r => r.json()).then(setSentinelStatus).catch(() => {});
+      api.hermesSentinelStatus().then(setSentinelStatus).catch(() => {});
     };
     poll();
     const iv = setInterval(poll, 10000);
     return () => clearInterval(iv);
   }, [subpage]);
+
+  useEffect(() => {
+    if (subpage !== "hermes" || !fullDesignDocOpen || hermesDesignDoc) return;
+    setHermesDesignDocError("");
+    api.hermesFullDesignDocument()
+      .then(setHermesDesignDoc)
+      .catch((e: Error) => setHermesDesignDocError(e.message));
+  }, [fullDesignDocOpen, hermesDesignDoc, subpage]);
 
   const activityColumns = useMemo(
     () => buildActivityHeatmapColumns(overview?.activity.days ?? []),
@@ -960,130 +1039,166 @@ export function DataManagementPage() {
               </div>
             )}
 
-            {/* ── Ask Hermes bar ── */}
-            <div style={{marginBottom:16}}>
-              <div className="hermes-ask-bar">
-                <input
-                  type="text"
-                  className="hermes-ask-input"
-                  placeholder="Ask Hermes anything about this system..."
-                  value={askDraft}
-                  onChange={(e) => setAskDraft(e.target.value)}
-                  onKeyDown={handleAskKeyDown}
-                  disabled={askSending}
-                />
-                <button
-                  className="btn btn-sm btn-primary"
-                  onClick={sendAskMessage}
-                  disabled={askSending || !askDraft.trim()}
-                  style={{padding:"6px 14px",borderRadius:"0 8px 8px 0"}}
-                >
-                  {askSending ? "..." : "Ask"}
-                </button>
-              </div>
-              {/* Suggested prompts */}
-              <div className="hermes-suggested-prompts" style={{marginTop:8,display:"flex",flexWrap:"wrap",gap:6}}>
-                {[
-                  "Show open governance gaps",
-                  "Run source audit",
-                  "Recent activity",
-                  "Evidence ledger past 7 days",
-                  "Cost status",
-                ].map((p) => (
-                  <button
-                    key={p}
-                    className="btn btn-sm btn-ghost"
-                    style={{fontSize:10,background:"#f1f5f9",borderRadius:4,padding:"3px 10px"}}
-                    onClick={() => handleSuggestedPrompt(p)}
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
-              {/* Response */}
-              {askError && (
-                <div style={{marginTop:8,padding:"8px 12px",background:"#fef2f2",borderRadius:6,fontSize:12,color:"#ef4444"}}>
-                  {askError}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(100%,360px),1fr))",gap:12,alignItems:"stretch",marginBottom:16}}>
+              <div className="card crud-card" style={{height:440,padding:12,display:"grid",gridTemplateRows:"auto 1fr auto",gap:10,overflow:"hidden"}}>
+                <div>
+                  <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:"#64748b"}}>Hermes 小管家</div>
+                  <strong style={{fontSize:16,color:"#0f172a"}}>{askSending ? "正在查询" : askResponse ? "已返回回答" : "可以继续开发"}</strong>
                 </div>
-              )}
-              {askResponse && (
-                <HermesAskResponseCard
-                  response={askResponse}
-                  onDismiss={() => setAskResponse(null)}
-                  onSuggestedAction={(action: HermesChatSuggestedAction) => {
-                    if (action.intent) setAskDraft(action.intent.replace(/_/g, " "));
-                    if (action.command) {
-                      api.hermesCommandExecute({ commandId: action.command }).catch((e: Error) => setAskError(e.message));
-                    }
-                  }}
-                />
+                <div style={{overflowY:"auto",paddingRight:2}}>
+                  {askError && (
+                    <div style={{padding:"8px 12px",background:"#fef2f2",borderRadius:6,fontSize:12,color:"#ef4444"}}>
+                      {askError}
+                    </div>
+                  )}
+                  {askResponse ? (
+                    <HermesAskResponseCard
+                      response={askResponse}
+                      onDismiss={() => setAskResponse(null)}
+                      onSuggestedAction={(action: HermesChatSuggestedAction) => {
+                        if (action.intent) setAskDraft(action.intent.replace(/_/g, " "));
+                        if (action.command) {
+                          api.hermesCommandExecute({ commandId: action.command }).catch((e: Error) => setAskError(e.message));
+                        }
+                      }}
+                    />
+                  ) : (
+                    <div style={{height:"100%",minHeight:180,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid #e2e8f0",borderRadius:6,color:"#64748b",fontSize:12}}>
+                      选择一个快捷问题，或直接输入要 Hermes 检查的事项。
+                    </div>
+                  )}
+                </div>
+                <div style={{display:"grid",gap:8}}>
+                  <div className="hermes-suggested-prompts" style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                    {[
+                      "Show open governance gaps",
+                      "Run source audit",
+                      "Recent activity",
+                      "Evidence ledger past 7 days",
+                      "Cost status",
+                    ].map((p) => (
+                      <button
+                        key={p}
+                        className="btn btn-sm btn-ghost"
+                        style={{fontSize:10,background:"#f1f5f9",borderRadius:4,padding:"3px 10px"}}
+                        onClick={() => handleSuggestedPrompt(p)}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="hermes-ask-bar">
+                    <input
+                      type="text"
+                      className="hermes-ask-input"
+                      placeholder="Ask Hermes anything about this system..."
+                      value={askDraft}
+                      onChange={(e) => setAskDraft(e.target.value)}
+                      onKeyDown={handleAskKeyDown}
+                      disabled={askSending}
+                    />
+                    <button
+                      className="btn btn-sm btn-primary"
+                      onClick={sendAskMessage}
+                      disabled={askSending || !askDraft.trim()}
+                      style={{padding:"6px 14px",borderRadius:"0 8px 8px 0"}}
+                    >
+                      {askSending ? "..." : "Ask"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {sentinelStatus ? (() => {
+                const notifications = sentinelStatus.notifications ?? [];
+                const filteredNotifications = notifications.filter((notification) =>
+                  matchesSentinelFilter(notification, sentinelFilter, sentinelSearch)
+                );
+                const countFor = (filter: SentinelInboxFilter) =>
+                  notifications.filter((notification) => matchesSentinelFilter(notification, filter, "")).length;
+                return (
+                  <div className="card crud-card" style={{height:440,padding:12,display:"grid",gridTemplateRows:"auto auto 1fr auto",gap:10,overflow:"hidden"}}>
+                    <div>
+                      <strong style={{fontSize:13}}>SENTINEL INBOX</strong>
+                      <div style={{fontSize:11,color:"#64748b"}}>{sentinelStatus.overall === "ok" ? "Clear" : String(sentinelStatus.overall).toUpperCase()} · {sentinelStatus.unreadCount ?? 0} unread</div>
+                    </div>
+                    <div style={{display:"grid",gap:8}}>
+                      <input
+                        type="search"
+                        value={sentinelSearch}
+                        onChange={(e) => setSentinelSearch(e.target.value)}
+                        placeholder="Search alerts..."
+                        style={{width:"100%",fontSize:12,padding:"7px 10px",border:"1px solid #cbd5e1",borderRadius:6}}
+                      />
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:4}}>
+                        {SENTINEL_FILTERS.map((filter) => (
+                          <button
+                            key={filter.key}
+                            type="button"
+                            className={`btn btn-sm${sentinelFilter === filter.key ? " btn-primary" : " btn-ghost"}`}
+                            style={{fontSize:11,borderRadius:6,padding:"5px 8px"}}
+                            onClick={() => setSentinelFilter(filter.key)}
+                          >
+                            {filter.label} <span style={{marginLeft:4,color:sentinelFilter === filter.key ? "inherit" : "#64748b"}}>{countFor(filter.key)}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div style={{overflowY:"auto",display:"grid",alignContent:"start",gap:8,paddingRight:2}}>
+                      {filteredNotifications.length === 0 ? (
+                        <div style={{border:"1px solid #e2e8f0",borderRadius:6,padding:"14px 12px",color:"#64748b",fontSize:12}}>
+                          No inbox items.
+                        </div>
+                      ) : filteredNotifications.map((notification) => {
+                        const severity = String(notification.severity || "low");
+                        const color = getSentinelSeverityColor(severity);
+                        const mailboxStatus = normalizeSentinelMailboxStatus(String(notification.status || "new"));
+                        return (
+                          <div key={notification.id} style={{border:"1px solid #e2e8f0",borderLeft:`4px solid ${color}`,borderRadius:6,padding:"9px 10px",background:mailboxStatus === "new" ? "#ffffff" : "#f8fafc",fontSize:12}}>
+                            <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start"}}>
+                              <div>
+                                <div style={{fontWeight:700,color,letterSpacing:0}}>{notification.title}</div>
+                                <div style={{fontSize:10,color:"#64748b",marginTop:1}}>{notification.source} · {severity.toUpperCase()} · {mailboxStatus}</div>
+                              </div>
+                              <div style={{display:"flex",gap:4,flexShrink:0}}>
+                                {mailboxStatus === "new" ? (
+                                  <button className="btn btn-sm btn-ghost" style={{fontSize:10,padding:"2px 6px"}} disabled={sentinelBusyId === notification.id} onClick={() => updateSentinelNotificationStatus(notification.id, "read")}>Read</button>
+                                ) : (
+                                  <button className="btn btn-sm btn-ghost" style={{fontSize:10,padding:"2px 6px"}} disabled={sentinelBusyId === notification.id} onClick={() => updateSentinelNotificationStatus(notification.id, "new")}>Unread</button>
+                                )}
+                                {mailboxStatus !== "archived" && (
+                                  <button className="btn btn-sm btn-ghost" style={{fontSize:10,padding:"2px 6px"}} disabled={sentinelBusyId === notification.id} onClick={() => updateSentinelNotificationStatus(notification.id, "archived")}>Archive</button>
+                                )}
+                              </div>
+                            </div>
+                            <div style={{color:"#334155",fontSize:12,marginTop:6,lineHeight:1.45}}>{notification.body}</div>
+                            {notification.recommendedAction && (
+                              <div style={{fontSize:11,color:"#475569",marginTop:6}}>Action: {notification.recommendedAction}</div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap",borderTop:"1px solid #e2e8f0",paddingTop:8}}>
+                      {(sentinelStatus.probes ?? []).map((probe) => {
+                        const status = String(probe.overall || "ok");
+                        const dot = status === "critical" ? "#dc2626" : status === "warning" ? "#d97706" : "#16a34a";
+                        return (
+                          <span key={probe.probe} style={{fontSize:10,display:"flex",alignItems:"center",gap:4}}>
+                            <span style={{width:6,height:6,borderRadius:"50%",background:dot,display:"inline-block"}} />
+                            {probe.probe}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })() : (
+                <div className="card crud-card" style={{height:440,padding:12,display:"flex",alignItems:"center",justifyContent:"center",color:"#64748b",fontSize:12}}>
+                  Loading Sentinel inbox...
+                </div>
               )}
             </div>
-
-            {/* Sentinel status bar */}
-            {sentinelStatus && (
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
-                <button className="btn btn-sm" style={{
-                  fontSize:12,fontWeight:600,padding:"6px 14px",borderRadius:6,
-                  background: (sentinelStatus.overall as string) === "critical" ? "#fef2f2" :
-                             (sentinelStatus.overall as string) === "warning" ? "#fffbeb" : "#f0fdf4",
-                  color: (sentinelStatus.overall as string) === "critical" ? "#ef4444" :
-                         (sentinelStatus.overall as string) === "warning" ? "#f59e0b" : "#22c55e",
-                  border: "1px solid currentColor",
-                }} onClick={() => setSentinelOpen(!sentinelOpen)}>
-                  {(sentinelStatus.overall as string) === "critical" ? "!" :
-                   (sentinelStatus.overall as string) === "warning" ? "~" : ""}
-                  &nbsp;
-                  {(sentinelStatus.unreadCount as number) > 0
-                    ? `${sentinelStatus.unreadCount} alerts`
-                    : "All clear"}
-                </button>
-                <span style={{fontSize:11,color:"#94a3b8"}}>
-                  {sentinelStatus.checkedAt ? `Updated ${(sentinelStatus.checkedAt as string).slice(11,16)}` : ""}
-                </span>
-              </div>
-            )}
-
-            {/* Sentinel inbox panel */}
-            {sentinelOpen && sentinelStatus && (
-              <div className="card crud-card" style={{marginBottom:12,padding:12,maxHeight:400,overflowY:"auto"}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
-                  <strong style={{fontSize:13}}>Sentinel Notifications</strong>
-                  <button className="btn btn-sm btn-ghost" style={{fontSize:10}} onClick={() => setSentinelOpen(false)}>Close</button>
-                </div>
-                {(sentinelStatus.notifications as unknown[] || []).length === 0 ? (
-                  <span style={{color:"#94a3b8",fontSize:11}}>No new alerts. All probes passing.</span>
-                ) : (
-                  <div style={{display:"grid",gap:6}}>
-                    {((sentinelStatus.notifications as unknown[]) || []).map((n: unknown) => {
-                      const notif = n as Record<string,unknown>;
-                      const sev = String(notif.severity || "low");
-                      const c = sev === "high" || sev === "critical" ? "#ef4444" : sev === "medium" ? "#f59e0b" : "#3b82f6";
-                      return (
-                        <div key={String(notif.id)} style={{padding:"8px 12px",background:"#f8fafc",borderRadius:6,borderLeft:`3px solid ${c}`,fontSize:12}}>
-                          <div style={{fontWeight:600,color:c,marginBottom:2}}>{String(notif.title)}</div>
-                          <div style={{color:"#475569",fontSize:11}}>{String(notif.body)}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-                {/* Probe summary */}
-                <div style={{marginTop:12,display:"flex",gap:8,flexWrap:"wrap"}}>
-                  {((sentinelStatus.probes as unknown[]) || []).map((p: unknown) => {
-                    const probe = p as Record<string,unknown>;
-                    const status = String(probe.overall || "ok");
-                    const dot = status === "critical" ? "#ef4444" : status === "warning" ? "#f59e0b" : "#22c55e";
-                    return (
-                      <span key={String(probe.probe)} style={{fontSize:10,display:"flex",alignItems:"center",gap:4}}>
-                        <span style={{width:6,height:6,borderRadius:"50%",background:dot,display:"inline-block"}} />
-                        {String(probe.probe)}
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
 
             {/* Hermes summary bar */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
@@ -1458,6 +1573,11 @@ export function DataManagementPage() {
               <div>
                 {/* Filter bar */}
                 <div style={{display:"flex",gap:8,marginBottom:12,alignItems:"center"}}>
+                  <select value={diagramCategoryFilter} onChange={(e) => setDiagramCategoryFilter(e.target.value)} style={{fontSize:12,padding:"4px 8px",borderRadius:4,border:"1px solid #e2e8f0"}}>
+                    <option value="all">All categories</option>
+                    {[...new Map(hermesDiagrams.map((d) => [d.category ?? "other", d.categoryLabel ?? "Other"])).entries()]
+                      .map(([category, label]) => (<option key={category} value={category}>{label}</option>))}
+                  </select>
                   <select value={diagramFileFilter} onChange={(e) => setDiagramFileFilter(e.target.value)} style={{fontSize:12,padding:"4px 8px",borderRadius:4,border:"1px solid #e2e8f0"}}>
                     <option value="all">All files ({hermesDiagrams.length} diagrams)</option>
                     {[...new Set(hermesDiagrams.map(d=>d.file))].map(f=>(<option key={f} value={f}>{f.split("/").pop()}</option>))}
@@ -1476,26 +1596,40 @@ export function DataManagementPage() {
                   /* Diagram gallery */
                   (() => {
                     const filtered = hermesDiagrams.filter(d => {
+                      if (diagramCategoryFilter !== "all" && (d.category ?? "other") !== diagramCategoryFilter) return false;
                       if (diagramFileFilter !== "all" && d.file !== diagramFileFilter) return false;
-                      if (diagramSearch && !d.title.toLowerCase().includes(diagramSearch.toLowerCase()) && !d.file.toLowerCase().includes(diagramSearch.toLowerCase())) return false;
+                      if (diagramSearch && !d.title.toLowerCase().includes(diagramSearch.toLowerCase()) && !d.file.toLowerCase().includes(diagramSearch.toLowerCase()) && !(d.categoryLabel ?? "").toLowerCase().includes(diagramSearch.toLowerCase())) return false;
                       return true;
                     });
                     if (filtered.length === 0) return <div className="card crud-card" style={{padding:24,textAlign:"center",color:"#94a3b8"}}>No diagrams match filter</div>;
+                    const grouped = filtered.reduce<Record<string, HermesMermaidBlockType[]>>((acc, block) => {
+                      const group = block.categoryLabel ?? "Other";
+                      acc[group] = acc[group] ?? [];
+                      acc[group].push(block);
+                      return acc;
+                    }, {});
                     return (
-                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(420px,1fr))",gap:16}}>
-                        {filtered.map((block,i) => (
-                          <div key={`${block.file}-${block.diagramIndex}`} className="hermes-diagram-card">
-                            <div className="hermes-diagram-card-header">
-                              <div>
-                                <span style={{fontWeight:600}}>{block.title || "Diagram " + (block.diagramIndex + 1)}</span>
-                                <span style={{marginLeft:8,color:"#94a3b8",fontSize:10}}>{block.file.split("/").pop()}</span>
-                              </div>
-                              <div style={{display:"flex",gap:4}}>
-                                <button className="btn btn-sm btn-ghost" style={{fontSize:10}} onClick={() => setDiagramModal(block)}>Expand</button>
-                              </div>
-                            </div>
-                            <div className="hermes-diagram-card-body">
-                              <HermesMermaidBlock block={block} maxHeight={400} />
+                      <div style={{display:"grid",gap:18}}>
+                        {Object.entries(grouped).map(([group, blocks]) => (
+                          <div key={group}>
+                            <div style={{fontSize:11,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:0,marginBottom:8}}>{group}</div>
+                            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(420px,1fr))",gap:16}}>
+                              {blocks.map((block) => (
+                                <div key={`${block.file}-${block.diagramIndex}`} className="hermes-diagram-card">
+                                  <div className="hermes-diagram-card-header">
+                                    <div>
+                                      <span style={{fontWeight:600}}>{block.title || "Diagram " + (block.diagramIndex + 1)}</span>
+                                      <span style={{marginLeft:8,color:"#94a3b8",fontSize:10}}>{block.file.split("/").pop()}</span>
+                                    </div>
+                                    <div style={{display:"flex",gap:4}}>
+                                      <button className="btn btn-sm btn-ghost" style={{fontSize:10}} onClick={() => setDiagramModal(block)}>Expand</button>
+                                    </div>
+                                  </div>
+                                  <div className="hermes-diagram-card-body">
+                                    <HermesMermaidBlock block={block} maxHeight={400} />
+                                  </div>
+                                </div>
+                              ))}
                             </div>
                           </div>
                         ))}
@@ -1510,7 +1644,7 @@ export function DataManagementPage() {
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
                         <div>
                           <strong>{diagramModal.title || "Diagram " + (diagramModal.diagramIndex + 1)}</strong>
-                          <div style={{fontSize:11,color:"#64748b"}}>{diagramModal.file} · type: {diagramModal.type}</div>
+                          <div style={{fontSize:11,color:"#64748b"}}>{diagramModal.file} · {diagramModal.categoryLabel ?? "Other"} · type: {diagramModal.type}</div>
                         </div>
                         <button className="btn btn-sm btn-ghost" onClick={() => setDiagramModal(null)}>Close</button>
                       </div>
@@ -1524,6 +1658,36 @@ export function DataManagementPage() {
                 )}
               </div>
             )}
+
+            <div className="card crud-card" style={{marginTop:16,padding:12}}>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                style={{width:"100%",justifyContent:"space-between",fontSize:12,fontWeight:700}}
+                onClick={() => setFullDesignDocOpen((value) => !value)}
+              >
+                <span>Hermes Full Design Document</span>
+                <span>{fullDesignDocOpen ? "Collapse" : "Expand"}</span>
+              </button>
+              {fullDesignDocOpen && (
+                <div style={{marginTop:10,borderTop:"1px solid #e2e8f0",paddingTop:10}}>
+                  {hermesDesignDocError ? (
+                    <div style={{fontSize:12,color:"#dc2626"}}>{hermesDesignDocError}</div>
+                  ) : !hermesDesignDoc ? (
+                    <div style={{fontSize:12,color:"#64748b"}}>Loading document...</div>
+                  ) : !hermesDesignDoc.exists ? (
+                    <div style={{fontSize:12,color:"#64748b"}}>Document not found: {hermesDesignDoc.path}</div>
+                  ) : (
+                    <>
+                      <div style={{fontSize:11,color:"#64748b",marginBottom:8}}>{hermesDesignDoc.path}{hermesDesignDoc.updatedAt ? ` · ${formatDataManagementTimestamp(hermesDesignDoc.updatedAt)}` : ""}</div>
+                      <pre style={{maxHeight:520,overflow:"auto",whiteSpace:"pre-wrap",fontSize:12,lineHeight:1.55,color:"#1e293b",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:6,padding:12}}>
+                        {hermesDesignDoc.content}
+                      </pre>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
           </>
         )
       ) : null}

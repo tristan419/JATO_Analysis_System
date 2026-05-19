@@ -79,10 +79,15 @@ import type {
   HermesDailySummaryResponse,
   HermesEvidenceLedgerResponse,
   HermesFeatureKanbanResponse,
+  HermesFullDesignDocumentResponse,
   HermesGap,
   HermesMermaidBlock,
   HermesOverviewResponse,
   HermesPipelineHealthResponse,
+  HermesDeployStatusResponse,
+  HermesSentinelMailboxStatus,
+  HermesSentinelNotification,
+  HermesSentinelStatusResponse,
   HermesSourceQualityResponse,
   HermesToolchainResponse,
 } from "../types/hermes";
@@ -1557,6 +1562,22 @@ export const api = {
     request<HermesFeatureKanbanResponse>("/hermes/feature-kanban"),
   hermesEvidenceLedger: (days = 7, limit = 50) =>
     request<HermesEvidenceLedgerResponse>(`/hermes/evidence-ledger?days=${days}&limit=${limit}`),
+  hermesSentinelStatus: () =>
+    request<HermesSentinelStatusResponse>("/hermes/sentinel/status"),
+  hermesSentinelNotifications: (status?: HermesSentinelMailboxStatus | "all", limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (status && status !== "all") params.set("status", status);
+    return request<HermesSentinelNotification[]>(`/hermes/sentinel/notifications?${params.toString()}`);
+  },
+  hermesSetSentinelNotificationStatus: (notificationId: string, status: HermesSentinelMailboxStatus) =>
+    request<HermesSentinelNotification>(`/hermes/sentinel/notifications/${encodeURIComponent(notificationId)}/status`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
+    }),
+  hermesDeployStatus: () =>
+    request<HermesDeployStatusResponse>("/hermes/deploy/status"),
+  hermesFullDesignDocument: () =>
+    request<HermesFullDesignDocumentResponse>("/hermes/reports/full-design-document"),
 
   /* ── Hermes Chat ──────────────────────────────── */
   hermesChat: (payload: HermesChatRequest) =>
