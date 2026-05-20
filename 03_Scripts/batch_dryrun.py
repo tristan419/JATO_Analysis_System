@@ -61,15 +61,18 @@ def _classify_dryrun_failure(
     extracted = src.get("extracted", 0)
     error_lower = error.lower()
 
-    if exception or status == "exception":
+    if status == "dry_run" and valid > 0:
+        return {"failureReason": None, "recommendedStrategy": None, "severity": "info"}
+
+    if exception or status in ("exception", "error"):
+        if "waiting for" in error_lower or "playwright" in error_lower:
+            return {"failureReason": "js_required_or_selector_timeout", "recommendedStrategy": "try_playwright_card_flow", "severity": "warning"}
         if "timeout" in error_lower:
             return {"failureReason": "http_timeout", "recommendedStrategy": "retry_or_reduce_concurrency", "severity": "warning"}
         if "403" in error_lower or "forbidden" in error_lower:
             return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
         if "selector" in error_lower or "no elements" in error_lower or "TODO_SELECTOR" in error:
             return {"failureReason": "selector_empty", "recommendedStrategy": "try_scrapling_dynamic_or_playwright", "severity": "warning"}
-        if "playwright" in error_lower or "waiting for" in error_lower:
-            return {"failureReason": "js_required_or_selector_timeout", "recommendedStrategy": "try_playwright_card_flow", "severity": "warning"}
         if "502" in error_lower or "503" in error_lower or "bad gateway" in error_lower:
             return {"failureReason": "db_or_backend_write_failed", "recommendedStrategy": "pipeline_error_not_source_error", "severity": "error"}
         return {"failureReason": "unknown", "recommendedStrategy": "diagnose_with_msrp_page_analyzer", "severity": "warning"}

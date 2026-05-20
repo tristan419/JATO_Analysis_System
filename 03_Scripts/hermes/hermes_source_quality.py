@@ -423,7 +423,7 @@ def _generate_dryrun_source_findings_table(findings: list[dict]) -> str:
         return ""
     lines: list[str] = []
     lines.append("\n## MSRP Source-Level Failure Breakdown\n")
-    lines.append("| Country | Source Code | Status | Valid | Extracted | Failure Reason | Recommended Strategy | Elapsed |")
+    lines.append("| Country | Source Code | Status | Valid | Extracted | Failure Reason | Strategy | Elapsed |")
     lines.append("|---|---|---|---|---|---|---|")
     for f in findings:
         lines.append(
