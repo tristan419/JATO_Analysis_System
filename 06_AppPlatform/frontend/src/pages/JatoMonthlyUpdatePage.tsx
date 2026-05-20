@@ -150,6 +150,11 @@ export function JatoMonthlyUpdatePage() {
   const [uploadProgress, setUploadProgress] =
     useState<JatoMonthlyUpdateUploadProgress | null>(null);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [singleCountryCountry, setSingleCountryCountry] = useState("");
+  const [singleCountryMonth, setSingleCountryMonth] = useState("");
+  const [singleCountryFile, setSingleCountryFile] = useState<File | null>(null);
+  const [singleCountryUploading, setSingleCountryUploading] = useState(false);
+  const [singleCountryMode, setSingleCountryMode] = useState(false);
   const [heroCollapsed, setHeroCollapsed] = useState(false);
   const [publishBlocker, setPublishBlocker] = useState<PublishBlocker | null>(null);
   const [smartMergingJobId, setSmartMergingJobId] = useState<string | null>(null);
@@ -260,6 +265,12 @@ export function JatoMonthlyUpdatePage() {
       setError("请选择一个 JATO Excel 文件后再启动月更任务。");
       return;
     }
+
+    if (singleCountryMode) {
+      await handleSingleCountrySubmit();
+      return;
+    }
+
     setSubmitting(true);
     setError("");
     setNotice("");
@@ -307,6 +318,52 @@ export function JatoMonthlyUpdatePage() {
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     applySelectedFile(event.target.files?.[0] ?? null);
+  }
+
+  function handleSingleCountryFileChange(event: ChangeEvent<HTMLInputElement>) {
+    setSingleCountryFile(event.target.files?.[0] ?? null);
+  }
+
+  async function handleSingleCountrySubmit() {
+    if (!uploadFile || !singleCountryCountry.trim() || !singleCountryMonth.trim()) {
+      return;
+    }
+    setSingleCountryUploading(true);
+    setError("");
+    setNotice("");
+    try {
+      const formData = new FormData();
+      formData.append("country", singleCountryCountry.trim());
+      formData.append("month", singleCountryMonth.trim());
+      formData.append("file", uploadFile);
+      const res = await fetch("/v1/msrp/monthly-update-jobs/single-country", {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const jobId: string = data.item?.jobId ?? "";
+      setNotice(
+        `单国家任务已创建：${singleCountryCountry.trim()} ${singleCountryMonth.trim()} (${jobId})`
+      );
+      setSingleCountryCountry("");
+      setSingleCountryMonth("");
+      setSingleCountryMode(false);
+      setUploadFile(null);
+      setDragActive(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+      await refreshJobs(jobId, true);
+      await loadJobDetail(jobId, true);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSingleCountryUploading(false);
+    }
   }
 
   function handleDropzoneKeyboard(event: KeyboardEvent<HTMLDivElement>) {
@@ -748,19 +805,60 @@ export function JatoMonthlyUpdatePage() {
           </div>
 
           <div className="monthly-update-form-actions">
+            <label className="monthly-update-field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <input
+                type="checkbox"
+                checked={singleCountryMode}
+                onChange={(e) => setSingleCountryMode(e.target.checked)}
+              />
+              <span>快速模式（单国家单月）— 跳过 prepare/compare，直接 refresh</span>
+            </label>
+
+            {singleCountryMode && (
+              <div className="monthly-update-field-grid" style={{ gridTemplateColumns: '1fr 1fr', marginBottom: 12 }}>
+                <label className="monthly-update-field">
+                  <span>Country</span>
+                  <input
+                    type="text"
+                    placeholder="e.g. Sweden"
+                    value={singleCountryCountry}
+                    onChange={(e) => setSingleCountryCountry(e.target.value)}
+                    required={singleCountryMode}
+                    disabled={singleCountryUploading}
+                  />
+                </label>
+                <label className="monthly-update-field">
+                  <span>Month (YYYY-MM)</span>
+                  <input
+                    type="text"
+                    placeholder="e.g. 2026-04"
+                    value={singleCountryMonth}
+                    onChange={(e) => setSingleCountryMonth(e.target.value)}
+                    required={singleCountryMode}
+                    disabled={singleCountryUploading}
+                    pattern="20\\d{2}-(0[1-9]|1[0-2])"
+                  />
+                </label>
+              </div>
+            )}
+
             <p className="monthly-update-note">
-              系统会先扫描上传文件，自动识别最新有效月份，并生成唯一批次号（如 `2026-03-r1`）。
-              上传后会先把文件落到受控目录，再复用现有 `prepare_monthly_raw_update.py`、
-              `raw_compare_review.py`、`run_data_refresh_job.py`。大文件会先分片上传、自动重试，再在服务端做分片校验和整文件
-              SHA-256 指纹后入队；刷新页面后重新选择同一文件，也会从已完成分片继续。候选数据的合成规则是：
-              已上传国家以 patch 为准直接替换，未上传国家沿用 current active。
+              {singleCountryMode
+                ? "快速模式：上传一个国家的单月 xlsx，系统跳过 prepare/raw_compare，直接用 refresh + supplement 合并到 active。上传月份必须比 active 中该国家的最新月份新。"
+                : "系统会先扫描上传文件，自动识别最新有效月份，并生成唯一批次号（如 `2026-03-r1`）。上传后会先把文件落到受控目录，再复用现有 prepare / raw_compare / refresh 管线。大文件会先分片上传、自动重试，再在服务端做分片校验和整文件 SHA-256 指纹后入队；刷新页面后重新选择同一文件，也会从已完成分片继续。候选数据的合成规则是：已上传国家以 patch 为准直接替换，未上传国家沿用 current active。"}
             </p>
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={submitting || uploadFile === null || hasActiveJob}
+              disabled={submitting || singleCountryUploading || uploadFile === null || hasActiveJob || (singleCountryMode && (!singleCountryCountry.trim() || !singleCountryMonth.trim()))}
             >
-              {submitting ? "上传并启动中..." : "启动月更任务"}
+              {submitting
+                ? "上传并启动中..."
+                : singleCountryUploading
+                  ? "上传中..."
+                  : singleCountryMode
+                    ? "启动快速月更任务"
+                    : "启动月更任务"}
             </button>
           </div>
           {submitting && uploadProgress && (

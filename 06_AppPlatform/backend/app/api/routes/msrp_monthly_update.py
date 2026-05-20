@@ -5,6 +5,7 @@ from app.services.jato_monthly_update_service import (
     complete_jato_monthly_update_upload,
     create_jato_monthly_update_job,
     create_jato_monthly_update_job_from_upload,
+    create_single_country_job,
     create_smart_merge_candidate,
     get_jato_monthly_update_upload,
     get_jato_monthly_update_job,
@@ -46,6 +47,23 @@ def post_monthly_update_job_from_upload(
     return {
         "item": create_jato_monthly_update_job_from_upload(
             upload_id=str(payload.get("uploadId", "")),
+            triggered_by=user.name,
+        )
+    }
+
+
+@router.post("/monthly-update-jobs/single-country")
+def post_single_country_job(
+    country: str = Form(...),
+    month: str = Form(...),
+    file: UploadFile = File(...),
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": create_single_country_job(
+            country=country,
+            month=month,
+            file=file,
             triggered_by=user.name,
         )
     }

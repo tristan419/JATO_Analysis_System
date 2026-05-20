@@ -2465,6 +2465,248 @@ def retry_failed_jato_monthly_update_job(
     return _serialize_job_state(payload, include_log_tail=True)
 
 
+# ── Single-Country Upload ──────────────────────────────────────────────────────
+
+
+def _run_single_country_job(job_id: str) -> None:
+    """Background runner: validates single-country upload and runs refresh pipeline."""
+    state = _load_job_state(job_id)
+    log_path = _job_log_path(job_id)
+
+    try:
+        state["status"] = "running"
+        state["phase"] = "validating"
+        _persist_job_state(state)
+
+        upload = state.get("upload") or {}
+        stored_path_value = upload.get("storedPath") if isinstance(upload, dict) else None
+        stored_upload_path = _project_path(str(stored_path_value or "").strip())
+        if stored_upload_path is None or not stored_upload_path.exists():
+            raise RuntimeError("上传文件不存在。")
+
+        country = str(state.get("country", "")).strip()
+        month = str(state.get("month", "")).strip()
+        if not country or not month:
+            raise RuntimeError("任务状态缺少 country 或 month。")
+
+        suffix = stored_upload_path.suffix.lower()
+        if suffix not in ALLOWED_UPLOAD_EXTENSIONS:
+            raise RuntimeError(f"不支持的文件格式：{suffix}，仅支持 Excel。")
+
+        # Validate uploaded file has the expected country
+        frame = _read_excel_with_fallback(stored_upload_path, sheet_name=0)
+        frame.columns = [str(c).strip() for c in frame.columns]
+        country_col = _find_country_column(list(frame.columns))
+        if country_col is None:
+            raise RuntimeError("上传文件必须包含国家列。")
+        frame[country_col] = frame[country_col].astype("string").fillna("").str.strip()
+        uploaded_countries = _ordered_distinct_strings(frame[country_col].tolist())
+        if country not in uploaded_countries:
+            raise RuntimeError(
+                f"上传文件中未找到国家「{country}」。可用国家：{', '.join(uploaded_countries)}"
+            )
+
+        _append_log(
+            log_path,
+            f"[{_utc_now().isoformat()}] 验证通过：country={country}, month={month}",
+        )
+
+        # Staging paths under job dir
+        job_dir = _job_dir(job_id)
+        staging_dir = job_dir / "staging"
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        staging_output = staging_dir / "jato_full_archive.parquet"
+        manifest_path = staging_dir / "manifest.json"
+        partition_output = staging_dir / "partitioned_dataset_v1"
+        fingerprint_path = staging_dir / "dataset_fingerprint.json"
+        report_path = staging_dir / "refresh_job_report.json"
+
+        baseline_path, baseline_source = _require_latest_baseline()
+
+        _append_log(
+            log_path,
+            f"[{_utc_now().isoformat()}] baseline: {_relative_to_project(baseline_path) or baseline_path}",
+        )
+
+        state["phase"] = "refreshing"
+        _persist_job_state(state)
+
+        refresh_args = [
+            sys.executable,
+            str(PROJECT_ROOT / "03_Scripts" / "data_pipeline" / "run_data_refresh_job.py"),
+            "--baseline-input",
+            str(baseline_path.resolve()),
+            "--patch-input-files",
+            str(stored_upload_path.resolve()),
+            "--output",
+            str(staging_output.resolve()),
+            "--manifest",
+            str(manifest_path.resolve()),
+            "--partition-output",
+            str(partition_output.resolve()),
+            "--report",
+            str(report_path.resolve()),
+            "--fingerprint",
+            str(fingerprint_path.resolve()),
+            "--incremental",
+            "--skip-benchmark",
+        ]
+
+        active_paths = _active_data_paths()
+        if active_paths["parquet"].exists():
+            refresh_args.extend(
+                [
+                    "--supplement-missing-countries-from-parquet",
+                    str(active_paths["parquet"].resolve()),
+                ]
+            )
+
+        _run_logged_command(label="单国家刷新", args=refresh_args, log_path=log_path)
+
+        refresh_report = _read_json_if_exists(str(report_path.resolve()))
+        if refresh_report is None:
+            raise RuntimeError("Refresh 完成后未找到 refresh_job_report.json。")
+
+        state["artifacts"] = {
+            "jobDir": _relative_to_project(job_dir),
+            "logPath": _relative_to_project(log_path),
+            "baselinePath": _relative_to_project(baseline_path),
+            "baselineSource": baseline_source,
+            "stagedPatchPath": _relative_to_project(stored_upload_path),
+            "supplementParquetPath": (
+                _relative_to_project(active_paths["parquet"])
+                if active_paths["parquet"].exists()
+                else None
+            ),
+            "stagingOutputPath": _relative_to_project(staging_output),
+            "manifestPath": _relative_to_project(manifest_path),
+            "partitionOutputPath": _relative_to_project(partition_output),
+            "refreshReportPath": _relative_to_project(report_path),
+            "fingerprintPath": _relative_to_project(fingerprint_path),
+            "reviewDir": None,
+            "rawCompareReportPath": None,
+            "planPath": None,
+        }
+        state["summaries"] = {
+            "refresh": _summarize_refresh_report(refresh_report),
+            "jobInfo": {
+                "country": country,
+                "month": month,
+                "type": "single_country",
+            },
+        }
+        state["plan"] = None
+        state["status"] = "success"
+        state["phase"] = "completed"
+        state["finishedAt"] = _utc_now().isoformat()
+        _persist_job_state(state)
+        _append_log(
+            log_path,
+            f"[{_utc_now().isoformat()}] 单国家任务完成：{country} {month}。可前往 Publish。",
+        )
+
+    except Exception as exc:
+        state["status"] = "failed"
+        state["phase"] = "failed"
+        state["finishedAt"] = _utc_now().isoformat()
+        state["error"] = str(exc)
+        _persist_job_state(state)
+        _append_log(log_path, "\n=== Failed ===")
+        _append_log(log_path, str(exc))
+        _append_log(log_path, traceback.format_exc())
+    finally:
+        _RUNNING_THREADS.pop(job_id, None)
+
+
+def create_single_country_job(
+    *,
+    country: str,
+    month: str,
+    file: UploadFile,
+    triggered_by: str,
+) -> dict[str, Any]:
+    """Create a lightweight single-country single-month upload job (no prepare/raw_compare)."""
+    _require_no_running_monthly_update_jobs()
+    filename = _validate_upload(file)
+    normalized_month = _normalize_month(month)
+    normalized_country = country.strip()
+    if not normalized_country:
+        raise HTTPException(status_code=400, detail="country 不能为空。")
+
+    # Upload-time check: reject if month is not newer than active
+    active_paths = _active_data_paths()
+    if active_paths["parquet"].exists():
+        try:
+            latest_months = _collect_dataset_country_latest_months(active_paths["parquet"])
+            active_latest = latest_months.get(normalized_country)
+            if active_latest and normalized_month <= active_latest:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"国家「{normalized_country}」在 active 数据集中已有 {active_latest} 月的数据，"
+                        f"上传月份 {normalized_month} 不更新。请提供晚于 {active_latest} 的月份。"
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    job_id = f"jato-sc-{uuid4().hex[:8]}"
+    job_dir = _job_dir(job_id)
+    uploads_dir = job_dir / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    stored_upload_path = uploads_dir / filename
+
+    with stored_upload_path.open("wb") as handle:
+        shutil.copyfileobj(file.file, handle)
+
+    now = _utc_now().isoformat()
+    state: dict[str, Any] = {
+        "jobId": job_id,
+        "month": normalized_month,
+        "batchId": f"{normalized_month}-{normalized_country}-single",
+        "status": "queued",
+        "phase": "queued",
+        "triggeredBy": triggered_by.strip() or "anonymous",
+        "country": normalized_country,
+        "createdAt": now,
+        "updatedAt": now,
+        "startedAt": None,
+        "finishedAt": None,
+        "error": None,
+        "upload": {
+            "originalFilename": filename,
+            "storedPath": _relative_to_project(stored_upload_path),
+            "sizeBytes": stored_upload_path.stat().st_size,
+            "sha256": _sha256_hex_for_path(stored_upload_path),
+        },
+        "plan": None,
+        "artifacts": {
+            "jobDir": _relative_to_project(job_dir),
+            "logPath": _relative_to_project(_job_log_path(job_id)),
+        },
+        "summaries": {},
+        "logPath": _relative_to_project(_job_log_path(job_id)),
+    }
+    _persist_job_state(state)
+    _append_log(
+        _job_log_path(job_id),
+        f"[{now}] 已入队单国家任务：{normalized_country} {normalized_month}",
+    )
+
+    worker = threading.Thread(
+        target=_run_single_country_job,
+        args=(job_id,),
+        name=f"jato-sc-{job_id}",
+        daemon=True,
+    )
+    _RUNNING_THREADS[job_id] = worker
+    worker.start()
+
+    return _serialize_job_state(state, include_log_tail=False)
+
+
 # ── Smart Merge ──────────────────────────────────────────────────────────────
 
 
