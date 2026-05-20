@@ -1,3 +1,5 @@
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.services import hermes_sentinel_service as sentinel
@@ -25,6 +27,7 @@ def test_run_all_probes_returns_active_notifications_during_cooldown(monkeypatch
     monkeypatch.setattr(sentinel, "probe_evidence", lambda: _ok_probe("evidence"))
     monkeypatch.setattr(sentinel, "probe_gha", lambda: _ok_probe("gha"))
     monkeypatch.setattr(sentinel, "probe_deploy", lambda: _ok_probe("deploy"))
+    monkeypatch.setattr(sentinel, "probe_pipeline_failures", lambda: _ok_probe("pipeline_failures"))
 
     first = sentinel.run_all_probes()
     assert first["overall"] == "warning"
@@ -127,3 +130,123 @@ def test_probe_workspace_no_findings_when_clean(monkeypatch):
     result = sentinel.probe_workspace()
     assert result["overall"] == "ok"
     assert result["findings"] == []
+
+
+def _write_pipeline_inputs(
+    tmp_path: Path,
+    status: dict[str, dict],
+    *,
+    source_quality_generated_at: str | None = None,
+) -> None:
+    status_path = tmp_path / "03_Scripts" / "logs" / "scheduled_fetch_status.json"
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(json.dumps(status), encoding="utf-8")
+
+    if source_quality_generated_at is not None:
+        report_path = tmp_path / "hermes" / "reports" / "source_quality_report.json"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps({"generatedAt": source_quality_generated_at}),
+            encoding="utf-8",
+        )
+
+
+def test_probe_pipeline_failures_reports_missing_status_file(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(sentinel, "_project_root", tmp_path)
+
+    result = sentinel.probe_pipeline_failures()
+
+    assert result["probe"] == "pipeline_failures"
+    assert result["overall"] == "critical"
+    assert result["findings"][0]["type"] == "missing_status_file"
+
+
+def test_probe_pipeline_failures_ok_when_all_statuses_are_fresh(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(sentinel, "_project_root", tmp_path)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_pipeline_inputs(
+        tmp_path,
+        {
+            "news": {"status": "success", "lastRunAt": now},
+            "voc": {"status": "success", "lastRunAt": now},
+            "msrp_dryrun": {"status": "success", "lastRunAt": now},
+            "msrp_ingest": {"status": "success", "lastRunAt": now},
+            "jato_etl": {"status": "success", "lastRunAt": now},
+        },
+        source_quality_generated_at=now,
+    )
+
+    result = sentinel.probe_pipeline_failures()
+
+    assert result["overall"] == "ok"
+    assert result["findings"] == []
+
+
+def test_probe_pipeline_failures_flags_failed_ingest(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(sentinel, "_project_root", tmp_path)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_pipeline_inputs(
+        tmp_path,
+        {
+            "news": {"status": "success", "lastRunAt": now},
+            "voc": {"status": "success", "lastRunAt": now},
+            "msrp_dryrun": {"status": "success", "lastRunAt": now},
+            "msrp_ingest": {"status": "failure", "lastRunAt": now},
+            "jato_etl": {"status": "success", "lastRunAt": now},
+        },
+        source_quality_generated_at=now,
+    )
+
+    result = sentinel.probe_pipeline_failures()
+
+    assert result["overall"] == "critical"
+    assert result["findings"][0]["type"] == "pipeline_msrp_ingest_failure"
+    assert result["findings"][0]["severity"] == "critical"
+
+
+def test_probe_pipeline_failures_accepts_failed_count_alias(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(sentinel, "_project_root", tmp_path)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_pipeline_inputs(
+        tmp_path,
+        {
+            "news": {"status": "success", "lastRunAt": now},
+            "voc": {
+                "status": "degraded",
+                "lastRunAt": now,
+                "successCount": 2,
+                "failedCount": 3,
+            },
+            "msrp_dryrun": {"status": "success", "lastRunAt": now},
+            "msrp_ingest": {"status": "success", "lastRunAt": now},
+            "jato_etl": {"status": "success", "lastRunAt": now},
+        },
+        source_quality_generated_at=now,
+    )
+
+    result = sentinel.probe_pipeline_failures()
+
+    assert result["overall"] == "warning"
+    assert result["findings"][0]["type"] == "pipeline_voc_degraded"
+    assert "3 failed" in result["findings"][0]["message"]
+
+
+def test_probe_pipeline_failures_flags_missing_and_stale_inputs(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(sentinel, "_project_root", tmp_path)
+    stale = (datetime.now(timezone.utc) - timedelta(hours=40)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_pipeline_inputs(
+        tmp_path,
+        {
+            "news": {"status": "success", "lastRunAt": stale},
+            "voc": {"status": "success", "lastRunAt": stale},
+        },
+        source_quality_generated_at=stale,
+    )
+
+    result = sentinel.probe_pipeline_failures()
+    finding_types = {finding["type"] for finding in result["findings"]}
+
+    assert result["overall"] == "warning"
+    assert "missing_pipeline_status" in finding_types
+    assert "pipeline_news_stale" in finding_types
+    assert "stale_source_quality_report" in finding_types

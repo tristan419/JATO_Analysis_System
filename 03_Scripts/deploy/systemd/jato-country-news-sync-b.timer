@@ -1,0 +1,10 @@
+[Unit]
+Description=JATO Country News Sync Batch B nightly timer
+
+[Timer]
+OnCalendar=*-*-* 23:45:00
+Persistent=true
+RandomizedDelaySec=180
+
+[Install]
+WantedBy=timers.target

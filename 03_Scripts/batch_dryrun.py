@@ -50,6 +50,44 @@ def _promoted_code_for_draft(code: str) -> str:
     return code.replace("_draft_scrapling", "_scrapling")
 
 
+def _write_dryrun_status(
+    countries: list[str],
+    pass_count: int,
+    empty_count: int,
+    fail_count: int,
+    error_count: int,
+) -> None:
+    """Write msrp_dryrun status to scheduled_fetch_status.json."""
+    import json as _json
+    from datetime import datetime as _datetime, timezone as _timezone
+    status_path = Path(__file__).resolve().parent / "logs" / "scheduled_fetch_status.json"
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = {}
+    if status_path.exists():
+        try:
+            existing = _json.loads(status_path.read_text())
+        except (_json.JSONDecodeError, OSError):
+            existing = {}
+    total_ok = pass_count
+    total_fail = fail_count + error_count
+    country_total = len(countries)
+    if total_fail == 0:
+        status = "success"
+    elif total_ok > 0:
+        status = "degraded"
+    else:
+        status = "failure"
+    existing["msrp_dryrun"] = {
+        "lastRunAt": _datetime.now(_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "status": status,
+        "countryCount": country_total,
+        "successCount": total_ok,
+        "failureCount": total_fail,
+    }
+    status_path.write_text(_json.dumps(existing, indent=2) + "\n")
+    print(f"[status] msrp_dryrun={status} written to {status_path}")
+
+
 def main():
     logging.basicConfig(
         level=logging.WARNING,
@@ -177,6 +215,8 @@ def main():
         c = by_country[cc]
         t = c["pass"] + c["empty"] + c["fail"]
         print(f"{cc:8s} {c['pass']:6d} {c['empty']:6d} {c['fail']:6d} {t:6d}")
+
+    _write_dryrun_status(countries, pass_count, empty_count, fail_count, error_count)
 
     # Save report (timestamped + latest symlink for history)
     from datetime import datetime, timezone

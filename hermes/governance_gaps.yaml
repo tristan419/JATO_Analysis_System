@@ -44,13 +44,12 @@ gaps:
   - feature.country_copilot
   evidence:
   - Batch B config exists at 07_ScrapingToolkit/news_sources/batch_b.yaml
-  - No systemd timer or Airflow DAG triggers Batch B
-  - 12 Western/Southern European countries without automated news coverage
-  recommendedAction: Add Batch B to existing news systemd timer, or create separate
-    timer with offset schedule to avoid overwhelming RSS sources.
-  status: open
+  - 03_Scripts/deploy/systemd/jato-country-news-sync-b.service runs DE, FR, IT, ES, BE, NL, PL, PT, RO, SI, SK, GR.
+  - 03_Scripts/deploy/systemd/jato-country-news-sync-b.timer schedules Batch B with an offset nightly run.
+  recommendedAction: Install and enable jato-country-news-sync-b.timer on production, then confirm scheduled_fetch_status.json records the next Batch B run.
+  status: resolved
   owner: ''
-  notes: ''
+  notes: 'Resolved 2026-05-20: added dedicated Batch B systemd service and timer with offset schedule to avoid overwhelming RSS sources.'
 - gapId: gap.env.empty_critical_vars
   title: Critical env vars empty or commented out in example files
   category: env
@@ -149,12 +148,15 @@ gaps:
   affectedAssets:
   - All scheduled pipelines
   evidence:
-  - Markdown_Readme/Fullstack/04_DevOps/SCHEDULED_FETCH_OPERATIONS.md now documents manual test commands, journalctl troubleshooting, artifact paths, and failure recovery steps.
-  - The runbook covers Country news sync, VOC forum sync, MSRP dry run, and MSRP ingest recovery.
+  - Markdown_Readme/Fullstack/04_DevOps/SCHEDULED_FETCH_OPERATIONS.md documents scheduled fetch failure recovery.
+  - The runbook covers manual test commands, journalctl troubleshooting, artifact paths, common failures, and escalation criteria.
+  - The documented scope includes Country news sync, VOC forum sync, MSRP dry run, and MSRP ingest recovery.
   recommendedAction: Keep this runbook updated when scheduled fetch timers, service names, or log artifact paths change.
   status: resolved
   owner: ''
-  notes: Resolved 2026-05-20 by adding the scheduled fetch operations runbook and linking it from the AI and roadmap indexes.
+  notes: 'Resolved 2026-05-20: added SCHEDULED_FETCH_OPERATIONS.md with Tencent
+    systemd timer triage, manual recovery commands, journalctl commands, artifact
+    paths, common failures, and escalation criteria.'
 - gapId: gap.docs.no_adr
   title: No Architecture Decision Log (ADR)
   category: docs

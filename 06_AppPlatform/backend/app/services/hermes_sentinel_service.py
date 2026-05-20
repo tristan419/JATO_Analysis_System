@@ -370,6 +370,169 @@ def probe_deploy() -> dict[str, Any]:
     return {"probe": "deploy", "overall": overall, "findings": findings, "status": status}
 
 
+def probe_pipeline_failures() -> dict[str, Any]:
+    """Check scraping pipeline failure state and data freshness.
+
+    Reads scheduled_fetch_status.json and source_quality_report.json
+    to detect stalled or broken pipelines.
+    """
+    findings: list[dict[str, Any]] = []
+    root = _root()
+
+    # ── 1. scheduled_fetch_status.json freshness & coverage ──
+    status_path = root / "03_Scripts" / "logs" / "scheduled_fetch_status.json"
+    known_pipelines = {"news", "voc", "msrp_dryrun", "msrp_ingest", "jato_etl"}
+
+    if not status_path.is_file():
+        findings.append({
+            "type": "missing_status_file",
+            "severity": "high",
+            "message": "scheduled_fetch_status.json does not exist.",
+            "recommendedAction": "Ensure all pipeline runners write to 03_Scripts/logs/scheduled_fetch_status.json.",
+        })
+        return {"probe": "pipeline_failures", "overall": "critical", "findings": findings}
+
+    try:
+        status_data = json.loads(status_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        findings.append({
+            "type": "corrupted_status_file",
+            "severity": "high",
+            "message": f"scheduled_fetch_status.json is unreadable: {e!s:.100s}",
+        })
+        return {"probe": "pipeline_failures", "overall": "critical", "findings": findings}
+
+    now = datetime.now(timezone.utc)
+
+    # Check for missing pipeline entries
+    for pipeline in sorted(known_pipelines):
+        if pipeline not in status_data:
+            findings.append({
+                "type": "missing_pipeline_status",
+                "severity": "medium" if pipeline != "jato_etl" else "low",
+                "message": f"Pipeline '{pipeline}' has no entry in scheduled_fetch_status.json.",
+                "pipeline": pipeline,
+                "recommendedAction": f"Ensure {pipeline} runner writes its status on completion.",
+            })
+
+    # Check each pipeline's freshness and failure state
+    for pipeline, entry in status_data.items():
+        if pipeline not in known_pipelines:
+            continue
+        status = (entry.get("status") or "unknown").strip().lower()
+        last_run_raw = entry.get("lastRunAt")
+        success_count = entry.get("successCount", 0)
+        failure_count = entry.get("failureCount", entry.get("failedCount", 0))
+
+        # Check for explicit failure
+        if status == "failure":
+            findings.append({
+                "type": f"pipeline_{pipeline}_failure",
+                "severity": "critical" if pipeline in ("msrp_ingest",) else "high",
+                "message": f"Pipeline '{pipeline}' last run status is '{status}'.",
+                "pipeline": pipeline,
+                "lastRunAt": last_run_raw,
+                "recommendedAction": f"Inspect journalctl -u {_pipeline_unit_name(pipeline)} and runner logs.",
+            })
+
+        # Check for degraded (partial failure)
+        elif status == "degraded":
+            findings.append({
+                "type": f"pipeline_{pipeline}_degraded",
+                "severity": "medium",
+                "message": f"Pipeline '{pipeline}' last run was degraded "
+                           f"({success_count} ok, {failure_count} failed).",
+                "pipeline": pipeline,
+                "lastRunAt": last_run_raw,
+                "recommendedAction": f"Review {pipeline} runner logs for per-source failures.",
+            })
+
+        # Check staleness: pipeline should have run within 2x its expected interval
+        if last_run_raw:
+            try:
+                last_dt = datetime.fromisoformat(last_run_raw.replace("Z", "+00:00"))
+                age_hours = (now - last_dt).total_seconds() / 3600
+                stale_threshold = _pipeline_stale_hours(pipeline)
+                if stale_threshold and age_hours > stale_threshold:
+                    findings.append({
+                        "type": f"pipeline_{pipeline}_stale",
+                        "severity": "high" if age_hours > stale_threshold * 2 else "medium",
+                        "message": f"Pipeline '{pipeline}' last ran {age_hours:.0f}h ago "
+                                   f"(threshold: {stale_threshold}h).",
+                        "pipeline": pipeline,
+                        "lastRunAt": last_run_raw,
+                        "ageHours": round(age_hours, 1),
+                    })
+            except (ValueError, TypeError):
+                pass
+        elif status != "unknown":
+            # Has status but no lastRunAt -- possibly never successfully run
+            findings.append({
+                "type": f"pipeline_{pipeline}_never_run",
+                "severity": "medium",
+                "message": f"Pipeline '{pipeline}' has status '{status}' but no lastRunAt timestamp.",
+                "pipeline": pipeline,
+            })
+
+    # ── 2. source_quality_report.json freshness ──
+    sq_path = root / "hermes" / "reports" / "source_quality_report.json"
+    if sq_path.is_file():
+        try:
+            sq_data = json.loads(sq_path.read_text())
+            gen_at = sq_data.get("generatedAt", "")
+            if gen_at:
+                gen_dt = datetime.fromisoformat(gen_at.replace("Z", "+00:00"))
+                sq_age = now - gen_dt
+                if sq_age > timedelta(hours=26):
+                    findings.append({
+                        "type": "stale_source_quality_report",
+                        "severity": "medium",
+                        "message": f"source_quality_report.json generated {sq_age.days}d {sq_age.seconds//3600}h ago "
+                                   f"(expected <24h).",
+                        "generatedAt": gen_at,
+                        "recommendedAction": "Check hermes-source-quality.timer is enabled and running.",
+                    })
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+    else:
+        findings.append({
+            "type": "missing_source_quality_report",
+            "severity": "low",
+            "message": "source_quality_report.json not found.",
+        })
+
+    overall = "ok"
+    if any(f["severity"] in ("critical", "high") for f in findings):
+        overall = "critical"
+    elif findings:
+        overall = "warning"
+
+    return {"probe": "pipeline_failures", "overall": overall, "findings": findings}
+
+
+def _pipeline_unit_name(pipeline: str) -> str:
+    """Map pipeline id to systemd unit name for debugging."""
+    mapping = {
+        "news": "jato-country-news-sync",
+        "voc": "jato-voc-forum-sync",
+        "msrp_dryrun": "jato-msrp-sync@dryrun",
+        "msrp_ingest": "jato-msrp-sync@ingest",
+    }
+    return mapping.get(pipeline, f"jato-{pipeline}")
+
+
+def _pipeline_stale_hours(pipeline: str) -> int | None:
+    """Return max allowed hours since last run before staleness warning."""
+    mapping = {
+        "news": 30,          # daily + 6h buffer
+        "voc": 30,           # daily + 6h buffer
+        "msrp_dryrun": 30,   # daily + 6h buffer
+        "msrp_ingest": 192,  # weekly Sat + 24h buffer (8 days)
+        "jato_etl": None,    # manual — no staleness check
+    }
+    return mapping.get(pipeline)
+
+
 # ── Aggregation ───────────────────────────────────────────────────────
 
 def run_all_probes() -> dict[str, Any]:
@@ -381,6 +544,7 @@ def run_all_probes() -> dict[str, Any]:
         probe_evidence(),
         probe_gha(),
         probe_deploy(),
+        probe_pipeline_failures(),
     ]
 
     # Determine overall severity

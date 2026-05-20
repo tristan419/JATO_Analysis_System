@@ -191,14 +191,37 @@ def _post_backend_json(
     auth_token: str | None,
     user_name: str | None,
 ) -> dict[str, object]:
-    response = requests.post(
-        f"{API_BASE}{path}",
-        json=payload,
-        headers=_auth_headers(auth_token, user_name),
-        timeout=60,
-    )
-    response.raise_for_status()
-    return response.json()
+    last_error = None
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                f"{API_BASE}{path}",
+                json=payload,
+                headers=_auth_headers(auth_token, user_name),
+                timeout=120,
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            last_error = e
+            if attempt < 2 and e.response is not None and e.response.status_code in (502, 503, 504):
+                wait = (attempt + 1) * 5
+                print(
+                    f"  [retry] {path} returned {e.response.status_code}, "
+                    f"retrying in {wait}s (attempt {attempt+1}/3)"
+                )
+                time.sleep(wait)
+                continue
+            raise
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            last_error = e
+            if attempt < 2:
+                wait = (attempt + 1) * 10
+                print(f"  [retry] {path} connection failed: {e!s:.60s}, retrying in {wait}s (attempt {attempt+1}/3)")
+                time.sleep(wait)
+                continue
+            raise
+    raise last_error  # type: ignore
 
 
 def _auto_resolve_reviews(
@@ -279,6 +302,36 @@ def _materialize_current_prices(
             result.get("materializedKeys", 0) or 0
         )
     return totals
+
+
+def _write_ingest_status(
+    countries: list[str],
+    ok_count: int,
+    empty_count: int,
+    fail_count: int,
+) -> None:
+    """Write msrp_ingest status to scheduled_fetch_status.json."""
+    import json as _json
+    from datetime import datetime as _datetime, timezone as _timezone
+    status_path = Path(__file__).resolve().parent / "logs" / "scheduled_fetch_status.json"
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = {}
+    if status_path.exists():
+        try:
+            existing = _json.loads(status_path.read_text())
+        except (_json.JSONDecodeError, OSError):
+            existing = {}
+    fail_count_total = fail_count
+    status = "success" if fail_count_total == 0 else "failure"
+    existing["msrp_ingest"] = {
+        "lastRunAt": _datetime.now(_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "status": status,
+        "countryCount": len(countries),
+        "successCount": ok_count + empty_count,
+        "failureCount": fail_count_total,
+    }
+    status_path.write_text(_json.dumps(existing, indent=2) + "\n")
+    print(f"[status] msrp_ingest={status} written to {status_path}")
 
 
 def main() -> None:
@@ -432,6 +485,7 @@ def main() -> None:
         )
 
     print(f"{'='*70}")
+    _write_ingest_status(countries, ok_count, empty_count, fail_count)
     if STRICT_EXIT and fail_count > 0:
         raise SystemExit(1)
 

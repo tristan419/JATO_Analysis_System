@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Hermes source quality audit daily (06:10 UTC, after all scraping)
+
+[Timer]
+OnCalendar=*-*-* 06:10:00
+Persistent=true
+RandomizedDelaySec=180
+
+[Install]
+WantedBy=timers.target

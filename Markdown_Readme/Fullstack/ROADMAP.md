@@ -120,7 +120,7 @@ Markdown_Readme/
 | `04_DevOps/TENCENT_CLOUD_DEPLOY.md` | 运维/部署 | Active | 腾讯云 Ubuntu Fullstack 部署 |
 | `04_DevOps/MANUAL_CICD.md` | 运维/发布 | Active | Fullstack 手动 CI/CD 与线上修复 |
 | `04_DevOps/JATO_MONTHLY_UPDATE_DATA_LIFECYCLE_2026-05-17.md` | 运维/数据 | Active | JATO 月更 active Parquet 生命周期、网页上传发布规则、MarketScan/Dashboard 数据排查记录 |
-| `04_DevOps/SCHEDULED_FETCH_OPERATIONS.md` | 运维/定时任务 | Active | 定时抓取、VOC、MSRP dry run/ingest 的故障排查与恢复 runbook |
+| `04_DevOps/SCHEDULED_FETCH_OPERATIONS.md` | 运维/抓取 | Active | 定时抓取 systemd/launchd 故障恢复、日志、手动重跑与升级标准 |
 | `04_DevOps/FULLSTACK_LOCAL_DEBUG.md` | 运维/调试 | Active | Fullstack 本地联调与问题排查 |
 | `04_DevOps/GIT_PROXY_SWITCH.md` | 运维/工具 | Active | Git 代理快速切换 |
 | `04_DevOps/FULLSTACK_DEPLOY_BEGINNER_GUIDE_2026-04-14.md` | 运维/部署 | Active | Fullstack 部署入门指南 |

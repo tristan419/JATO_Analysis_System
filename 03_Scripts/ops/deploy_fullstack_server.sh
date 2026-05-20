@@ -251,18 +251,24 @@ reconcile_scraper_schedulers() {
 
   install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-country-news-sync.service"
   install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-country-news-sync.timer"
+  install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-country-news-sync-b.service"
+  install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-country-news-sync-b.timer"
   install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-msrp-sync@.service"
   install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-msrp-dryrun.timer"
   install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-msrp-ingest.timer"
   install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-voc-forum-sync.service"
   install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-voc-forum-sync.timer"
+  install_systemd_file "$SYSTEMD_SOURCE_DIR/hermes-source-quality.service"
+  install_systemd_file "$SYSTEMD_SOURCE_DIR/hermes-source-quality.timer"
 
   sudo -n systemctl daemon-reload
 
   restart_timer_unit jato-country-news-sync.timer
+  restart_timer_unit jato-country-news-sync-b.timer
   restart_timer_unit jato-msrp-dryrun.timer
   restart_timer_unit jato-msrp-ingest.timer
   restart_timer_unit jato-voc-forum-sync.timer
+  restart_timer_unit hermes-source-quality.timer
 }
 
 CURRENT_STEP="Validate sudo access"
