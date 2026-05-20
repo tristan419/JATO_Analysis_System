@@ -102,10 +102,65 @@ def _write_dryrun_status(
     fail_count: int,
     error_count: int,
     total: int = 0,
+    results: list | None = None,
 ) -> None:
-    """Write msrp_dryrun status to scheduled_fetch_status.json."""
+    """Write dryrun status — either global status or per-country artifact."""
     import json as _json
+    import os as _os
     from datetime import datetime as _datetime, timezone as _timezone
+
+    child_run = _os.environ.get("JATO_MSRP_CHILD_RUN", "").strip().lower() in ("1", "true", "yes")
+    run_dir = _os.environ.get("JATO_MSRP_RUN_DIR", "")
+    run_id = _os.environ.get("JATO_MSRP_RUN_ID", "")
+
+    pass_pct = round(pass_count / total * 100, 1) if total > 0 else 0.0
+    if pass_pct >= 90:
+        status = "success"
+    elif pass_pct >= 50:
+        status = "degraded"
+    else:
+        status = "failure"
+
+    # ── Phase 3: Child dryrun → write per-country artifact ──
+    if child_run and run_dir and countries:
+        country = countries[0]
+        artifact_dir = Path(run_dir) / "countries"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+
+        total_ok = pass_count
+        total_fail = fail_count + error_count
+
+        failure_breakdown: dict[str, int] = {}
+        strategy_recs: dict[str, int] = {}
+        for r in (results or []):
+            reason = r.get("failureReason")
+            if reason:
+                failure_breakdown[reason] = failure_breakdown.get(reason, 0) + 1
+            strat = r.get("recommendedStrategy")
+            if strat:
+                strategy_recs[strat] = strategy_recs.get(strat, 0) + 1
+
+        artifact = {
+            "schemaVersion": "msrp_dryrun_country_v1",
+            "runId": run_id,
+            "country": country,
+            "total": total,
+            "pass": pass_count,
+            "empty": empty_count,
+            "fail": fail_count,
+            "errors": error_count,
+            "passPct": pass_pct,
+            "status": status,
+            "failureBreakdown": failure_breakdown,
+            "strategyRecommendations": strategy_recs,
+            "results": results or [],
+        }
+        artifact_path = artifact_dir / f"{country}.json"
+        artifact_path.write_text(_json.dumps(artifact, indent=2) + "\n")
+        print(f"[status] Country artifact written to {artifact_path} (child run, skipped global)")
+        return
+
+    # ── Direct run: write global scheduled_fetch_status.json ──
     status_path = Path(__file__).resolve().parent / "logs" / "scheduled_fetch_status.json"
     status_path.parent.mkdir(parents=True, exist_ok=True)
     existing = {}
@@ -117,13 +172,6 @@ def _write_dryrun_status(
     total_ok = pass_count
     total_fail = fail_count + error_count
     country_total = len(countries)
-    pass_pct = round(pass_count / total * 100, 1) if total > 0 else 0.0
-    if pass_pct >= 90:
-        status = "success"
-    elif pass_pct >= 50:
-        status = "degraded"
-    else:
-        status = "failure"
     existing["msrp_dryrun"] = {
         "lastRunAt": _datetime.now(_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "status": status,
@@ -133,7 +181,7 @@ def _write_dryrun_status(
         "failureCount": total_fail,
         "passPct": pass_pct,
         "artifactPath": "03_Scripts/diagnostics/artifacts/dryrun_report.json",
-        "schemaVersion": "msrp_dryrun_report_v2",
+        "schemaVersion": "msrp_dryrun_report_v3",
     }
     status_path.write_text(_json.dumps(existing, indent=2) + "\n")
     print(f"[status] msrp_dryrun={status} passPct={pass_pct}% written to {status_path}")
@@ -289,7 +337,7 @@ def main():
         if strat:
             strategy_recs[strat] = strategy_recs.get(strat, 0) + 1
 
-    _write_dryrun_status(countries, pass_count, empty_count, fail_count, error_count, total=total)
+    _write_dryrun_status(countries, pass_count, empty_count, fail_count, error_count, total=total, results=results)
 
     # Save report (timestamped + latest symlink for history)
     from datetime import datetime, timezone

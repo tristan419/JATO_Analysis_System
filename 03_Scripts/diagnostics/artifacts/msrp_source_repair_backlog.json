@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "msrp_source_repair_backlog_v1",
+  "generatedAt": "2026-05-20T20:15:44Z",
+  "summary": {
+    "totalSources": 0,
+    "successCount": 0,
+    "failedCount": 0,
+    "passPct": 0.0,
+    "gateThreshold": 70,
+    "gateStatus": "blocked"
+  },
+  "failureBreakdown": {},
+  "strategyRecommendations": {},
+  "backlog": []
+}

@@ -59,7 +59,7 @@ load_env_file "$MSRP_ENV_FILE"
 MODE="${JATO_MSRP_MODE:-dryrun}"
 COUNTRIES_RAW="${JATO_MSRP_COUNTRIES:-batch_a}"
 PAUSE_SECONDS="${JATO_MSRP_PAUSE_SECONDS:-20}"
-STOP_ON_FAILURE="${JATO_MSRP_STOP_ON_FAILURE:-true}"
+STOP_ON_FAILURE="${JATO_MSRP_STOP_ON_FAILURE:-false}"
 PYTHON_BIN="${JATO_MSRP_PYTHON:-$REPO_DIR/.venv/bin/python}"
 LOG_DIR="${JATO_MSRP_LOG_DIR:-$REPO_DIR/03_Scripts/logs}"
 LOCK_FILE="${JATO_MSRP_LOCK_FILE:-/tmp/jato-msrp-low-concurrency.lock}"
@@ -75,8 +75,6 @@ AUTO_REVIEW_DECIDED_BY="${JATO_AUTO_REVIEW_DECIDED_BY:-${APP_USER_NAME:-msrp-cro
 export NVAPI_KEY="${NVAPI_KEY:-${NVIDIA_API_KEY:-}}"
 
 # ── Dryrun-to-ingest gate ──────────────────────────────────────────
-# Ingest requires the latest dryrun pass rate to be >= MIN_DRYRUN_PASS_PCT.
-# This prevents ingest from blind-running when most sources are broken.
 MIN_DRYRUN_PASS_PCT="${JATO_MSRP_MIN_DRYRUN_PASS_PCT:-70}"
 DRYRUN_REPORT="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_report.json"
 
@@ -122,10 +120,18 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   exit 1
 fi
 
-mkdir -p "$LOG_DIR"
+# ── Phase 2: Per-batch run directory ───────────────────────────────
 TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
-LOG_FILE="$LOG_DIR/msrp-${MODE}-${TIMESTAMP}.log"
+RUN_ID="msrp-${MODE}-${TIMESTAMP}"
+RUN_DIR="$LOG_DIR/$RUN_ID"
+COUNTRY_ARTIFACT_DIR="$RUN_DIR/countries"
+mkdir -p "$RUN_DIR" "$COUNTRY_ARTIFACT_DIR"
+
+LOG_FILE="$RUN_DIR/run.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
+
+echo "[INFO] Run ID: $RUN_ID"
+echo "[INFO] Run dir: $RUN_DIR"
 
 if command -v flock >/dev/null 2>&1; then
   exec 9>"$LOCK_FILE"
@@ -147,7 +153,7 @@ echo "[INFO] MSRP low-concurrency runner"
 echo "[INFO] Repo: $REPO_DIR"
 echo "[INFO] Mode: $MODE"
 echo "[INFO] Countries: ${COUNTRIES[*]}"
-echo "[INFO] Concurrency: $CONCURRENCY (JATO_MSRP_CONCURRENCY)"
+echo "[INFO] Concurrency: $CONCURRENCY"
 echo "[INFO] Backend env: $BACKEND_ENV_FILE"
 echo "[INFO] MSRP env: $MSRP_ENV_FILE"
 echo "[INFO] API base: $JATO_API_BASE"
@@ -163,10 +169,11 @@ declare -a pids=()
 declare -A pid_country=()
 
 while (( country_idx < total || active > 0 )); do
-  # Start new jobs while under concurrency limit
   while (( active < CONCURRENCY && country_idx < total )); do
     country="${COUNTRIES[$country_idx]}"
-    country_log="${LOG_DIR}/msrp-${MODE}-${country}-$(date +%Y%m%d-%H%M%S).log"
+    # Phase 2: Country log goes into run dir (no glob that picks up historical)
+    country_log="$RUN_DIR/${country}.log"
+    country_artifact="$COUNTRY_ARTIFACT_DIR/${country}.json"
     echo "[RUN] $((country_idx + 1))/$total country=$country mode=$MODE (parallel slot $((active + 1))/$CONCURRENCY)"
 
     extra_args=()
@@ -180,6 +187,11 @@ while (( country_idx < total || active > 0 )); do
     fi
 
     (
+      # Phase 3: Export child-run context so batch_dryrun knows not to write global status
+      export JATO_MSRP_RUN_ID="$RUN_ID"
+      export JATO_MSRP_RUN_DIR="$RUN_DIR"
+      export JATO_MSRP_CHILD_RUN="true"
+
       if "$PYTHON_BIN" "$TARGET_SCRIPT" "$country" "${extra_args[@]}"; then
         echo "[OK] country=$country"
         exit 0
@@ -195,12 +207,10 @@ while (( country_idx < total || active > 0 )); do
     country_idx=$((country_idx + 1))
   done
 
-  # Wait for any child to finish
   if (( active > 0 )); then
     if wait -n "${pids[@]}" 2>/dev/null; then
       finished_pid=$!
     else
-      # Find which pid finished
       for pid in "${pids[@]}"; do
         if ! kill -0 "$pid" 2>/dev/null; then
           finished_pid=$pid
@@ -209,7 +219,6 @@ while (( country_idx < total || active > 0 )); do
       done
     fi
 
-    # Find and remove finished pid
     new_pids=()
     for pid in "${pids[@]}"; do
       if [[ "$pid" == "$finished_pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
@@ -220,7 +229,6 @@ while (( country_idx < total || active > 0 )); do
           failures=$((failures + 1))
           if is_truthy "$STOP_ON_FAILURE"; then
             echo "[INFO] Stopping because JATO_MSRP_STOP_ON_FAILURE=true"
-            # Kill remaining children
             for rpid in "${new_pids[@]}"; do
               kill "$rpid" 2>/dev/null || true
             done
@@ -237,18 +245,62 @@ while (( country_idx < total || active > 0 )); do
   fi
 done
 
-# Collect per-country logs into main log
+# Phase 2: Collect per-country logs from run dir only (not historical)
 for country in "${COUNTRIES[@]}"; do
-  for clog in "$LOG_DIR"/msrp-${MODE}-${country}-*.log; do
-    if [[ -f "$clog" ]]; then
-      cat "$clog" >> "$LOG_FILE"
-    fi
-  done
+  clog="$RUN_DIR/${country}.log"
+  if [[ -f "$clog" ]]; then
+    cat "$clog" >> "$LOG_FILE"
+  fi
 done
+
+# Phase 4+5: Run aggregator to produce v3 report + write global status
+echo "[INFO] Running aggregator..."
+AGGR_SCRIPT="$SCRIPT_DIR/msrp_dryrun_aggregate.py"
+if [[ -f "$AGGR_SCRIPT" ]] && [[ "$MODE" == "dryrun" ]]; then
+  if "$PYTHON_BIN" "$AGGR_SCRIPT" \
+    --run-dir "$RUN_DIR" \
+    --expected-countries "${COUNTRIES[*]}" \
+    --out-latest "$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_report.json" 2>&1; then
+    echo "[INFO] Aggregation complete"
+  else
+    echo "[WARN] Aggregation failed (non-fatal)"
+  fi
+fi
+
+# Phase 5: Write global status once (only if aggregator already ran)
+if [[ "$MODE" == "dryrun" ]]; then
+  AGGR_REPORT="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_report.json"
+  if [[ -f "$AGGR_REPORT" ]]; then
+    python3 -c "
+import json
+from datetime import datetime, timezone
+r = json.load(open('$AGGR_REPORT'))
+s = r.get('summary', {})
+status_path = '$REPO_DIR/03_Scripts/logs/scheduled_fetch_status.json'
+existing = json.load(open(status_path)) if __import__('os').path.exists(status_path) else {}
+existing['msrp_dryrun'] = {
+    'lastRunAt': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'status': s.get('status', 'unknown'),
+    'runId': r.get('runId', ''),
+    'countryCount': len(r.get('expectedCountries', [])),
+    'observedCountryCount': len(r.get('observedCountries', [])),
+    'missingCountryCount': len(r.get('missingCountries', [])),
+    'successCount': s.get('pass', 0),
+    'failureCount': (s.get('total', 0) or 0) - (s.get('pass', 0) or 0),
+    'passPct': s.get('passPct', 0.0),
+    'artifactPath': '03_Scripts/diagnostics/artifacts/dryrun_report.json',
+    'schemaVersion': 'msrp_dryrun_report_v3',
+}
+with open(status_path, 'w') as f:
+    f.write(json.dumps(existing, indent=2) + chr(10))
+print('[status] msrp_dryrun written')
+" 2>&1 || true
+  fi
+fi
 
 if (( failures > 0 )); then
   echo "[WARN] Completed with $failures failed country runs"
   exit 1
 fi
 
-echo "[INFO] Completed successfully (parallel ×${CONCURRENCY})"
+echo "[INFO] Completed successfully (run dir: $RUN_DIR)"
