@@ -6,12 +6,23 @@ from pathlib import Path
 from typing import Any
 
 
+_STREAM_CHUNK_SIZE = 64 * 1024  # 64 KB
+
+
 def sha256_hex_for_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def sha256_hex_for_path(path: Path) -> str:
-    return sha256_hex_for_bytes(path.read_bytes())
+def sha256_hex_for_path(path: Path, chunk_size: int = _STREAM_CHUNK_SIZE) -> str:
+    """Streaming SHA-256 — reads file in chunks to avoid loading entire file."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def normalize_sha256(value: Any, *, detail: str = "") -> str:

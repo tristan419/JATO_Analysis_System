@@ -1,9 +1,11 @@
 """Generic chunked upload engine — session management, SHA-256 verification, resume."""
 
 import shutil
+import threading
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from upload_toolkit.file_utils import (
     normalize_sha256,
@@ -13,11 +15,17 @@ from upload_toolkit.file_utils import (
     write_json,
 )
 
-# ── helpers ──
+_WRITE_LOCK = threading.Lock()
+
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 def _chunk_count(size_bytes: int, chunk_size: int) -> int:
     return max((size_bytes + chunk_size - 1) // chunk_size, 1)
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 # ── session management ──
@@ -65,7 +73,6 @@ def get_upload_session(
     session_root: Path,
     upload_id: str,
 ) -> dict[str, Any]:
-    """Get current upload session state."""
     return _load(session_root, upload_id)
 
 
@@ -76,12 +83,11 @@ def find_resumable_session(
     filename: str,
     size_bytes: int,
 ) -> dict[str, Any] | None:
-    """Find a resumable upload session matching the given resume key."""
     if not resume_key:
         return None
-    for state_path in session_root.glob(f"*/upload_state.json"):
+    for sp in session_root.glob(f"*/upload_state.json"):
         try:
-            payload = read_json(state_path)
+            payload = read_json(sp)
         except Exception:
             continue
         if str(payload.get("resumeKey", "")) != resume_key:
@@ -104,20 +110,30 @@ def receive_chunk(
     chunk_sha256: str | None = None,
     *,
     expected_chunk_size: int | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
-    """Receive and store a single upload chunk with optional verification."""
+    """Store a single upload chunk. Thread-safe.
+
+    Args:
+        on_progress: Optional callback fired after each chunk write.
+            Receives the updated session state dict. Useful for Redis keep-alive.
+    """
     state = _load(session_root, upload_id)
     if str(state.get("status", "")) in {"completed", "assembling"}:
         raise RuntimeError("Upload session already completed.")
 
     part_number = int(part_number)
-    if part_number < 1 or part_number > int(state.get("totalChunks", 0)):
+    total = int(state.get("totalChunks", 0))
+    if part_number < 1 or part_number > total:
         raise RuntimeError(f"Invalid part number: {part_number}")
 
     actual_sha256 = sha256_hex_for_bytes(content)
 
     if chunk_sha256:
-        expected = normalize_sha256(chunk_sha256, detail=f"X-Chunk-SHA256 header invalid for part {part_number}")
+        expected = normalize_sha256(
+            chunk_sha256,
+            detail=f"X-Chunk-SHA256 header invalid for part {part_number}",
+        )
         if actual_sha256 != expected:
             raise RuntimeError(f"Part {part_number} SHA-256 mismatch.")
 
@@ -129,17 +145,22 @@ def receive_chunk(
     chunk_path = chunk_dir / str(part_number)
     chunk_path.write_bytes(content)
 
-    received: list[int] = list(state.get("receivedChunks", []))
-    digests: dict[str, str] = dict(state.get("chunkDigests", {}))
-    if part_number not in received:
-        received.append(part_number)
-        state["uploadedBytes"] = int(state.get("uploadedBytes", 0) or 0) + len(content)
-    digests[str(part_number)] = actual_sha256
+    with _WRITE_LOCK:
+        state = _load(session_root, upload_id)
+        received: list[int] = list(state.get("receivedChunks", []))
+        digests: dict[str, str] = dict(state.get("chunkDigests", {}))
+        if part_number not in received:
+            received.append(part_number)
+            state["uploadedBytes"] = int(state.get("uploadedBytes", 0) or 0) + len(content)
+        digests[str(part_number)] = actual_sha256
+        state["receivedChunks"] = sorted(received)
+        state["chunkDigests"] = digests
+        state["status"] = "uploading"
+        _persist(session_root, upload_id, state)
 
-    state["receivedChunks"] = sorted(received)
-    state["chunkDigests"] = digests
-    state["status"] = "uploading"
-    _persist(session_root, upload_id, state)
+    if on_progress:
+        on_progress(state)
+
     return state
 
 
@@ -148,6 +169,7 @@ def complete_upload_session(
     upload_id: str,
     *,
     assembled_filename: str | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Assemble received chunks into the final file and verify SHA-256."""
     state = _load(session_root, upload_id)
@@ -160,33 +182,64 @@ def complete_upload_session(
         missing = sorted(set(range(1, total + 1)) - set(received))
         raise RuntimeError(f"Missing chunks: {missing}")
 
-    state["status"] = "assembling"
-    _persist(session_root, upload_id, state)
+    with _WRITE_LOCK:
+        state = _load(session_root, upload_id)
+        state["status"] = "assembling"
+        _persist(session_root, upload_id, state)
 
-    chunk_dir = _chunk_dir(session_root, upload_id)
-    assembled_dir = _assembled_dir(session_root, upload_id)
-    assembled_dir.mkdir(parents=True, exist_ok=True)
-    assembled_path = assembled_dir / (assembled_filename or state.get("filename", "upload.bin"))
+        chunk_dir = _chunk_dir(session_root, upload_id)
+        assembled_dir = _assembled_dir(session_root, upload_id)
+        assembled_dir.mkdir(parents=True, exist_ok=True)
+        assembled_path = assembled_dir / (
+            assembled_filename or state.get("filename", "upload.bin")
+        )
 
-    with assembled_path.open("wb") as out:
-        for part in received:
-            chunk_path = chunk_dir / str(part)
-            if not chunk_path.exists():
-                raise RuntimeError(f"Chunk file missing: {part}")
-            out.write(chunk_path.read_bytes())
+        with assembled_path.open("wb") as out:
+            for part in received:
+                chunk_path = chunk_dir / str(part)
+                if not chunk_path.exists():
+                    raise RuntimeError(f"Chunk file missing: {part}")
+                out.write(chunk_path.read_bytes())
 
-    file_sha256 = sha256_hex_for_path(assembled_path)
-    state["fileSha256"] = file_sha256
-    state["status"] = "completed"
-    _persist(session_root, upload_id, state)
+        file_sha256 = sha256_hex_for_path(assembled_path)
+        state["fileSha256"] = file_sha256
+        state["status"] = "completed"
+        _persist(session_root, upload_id, state)
+
+    if on_progress:
+        on_progress(state)
+
     return state
 
 
 def cleanup_upload_session(session_root: Path, upload_id: str) -> None:
-    """Remove all files for an upload session."""
     path = session_root / upload_id
     if path.exists():
         shutil.rmtree(path)
+
+
+def cleanup_expired_sessions(
+    session_root: Path,
+    *,
+    max_age_days: int = 90,
+) -> dict[str, Any]:
+    """Remove sessions older than max_age_days. Returns cleanup stats."""
+    cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=max_age_days)
+    removed: list[str] = []
+    for sp in sorted(session_root.glob("*/upload_state.json")):
+        try:
+            payload = read_json(sp)
+            created = payload.get("createdAt", "")
+            created_dt = datetime.fromisoformat(created) if created else None
+            if created_dt and created_dt < cutoff:
+                shutil.rmtree(sp.parent)
+                removed.append(str(payload.get("uploadId", sp.parent.name)))
+        except Exception:
+            continue
+    return {
+        "removedSessionCount": len(removed),
+        "removedSessionIds": removed,
+    }
 
 
 # ── internal paths ──
@@ -206,12 +259,6 @@ def _assembled_dir(root: Path, upload_id: str) -> Path:
 
 def _state_path(root: Path, upload_id: str) -> Path:
     return _session_dir(root, upload_id) / "upload_state.json"
-
-
-def _now() -> str:
-    from datetime import UTC, datetime
-
-    return datetime.now(UTC).isoformat()
 
 
 def _persist(root: Path, upload_id: str, state: dict[str, Any]) -> None:
