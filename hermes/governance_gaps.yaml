@@ -102,13 +102,16 @@ gaps:
   - voc-failed-sources.json generation scaffold added 2026-05-14
   - scheduled_fetch_status.json now records failedCount per run
   - hermes_source_quality.py detects unstructured failures and scores sources
+  - 03_Scripts/voc/summarize_voc_failures.py extracts current VOC summary source errors into voc-failed-sources.json
+  - run_voc_forum_sync.sh writes failedCount/failureCount and marks partial source failures as degraded
   recommendedAction: 'Per-source tracking infrastructure exists. Next: verify voc-failed-sources.json
     is populated with actual per-source data on next VOC run. Surface in Phase 6 Data
     Management UI.'
   status: in_progress
   owner: ''
   notes: proposal.source_quality.voc_tracking → implemented. Infrastructure built.
-    Needs production verification on next VOC run.
+    2026-05-20 runner now writes real failedCount/failureCount from current raw summary
+    shape. Needs production verification on next VOC run.
 - gapId: gap.source_quality.no_quality_scoring
   title: No systematic source quality scoring
   category: source_quality

@@ -72,3 +72,33 @@ def test_registry_quality_from_score_derives_rates() -> None:
     assert result["timeoutRate"] == 1.0
     assert result["http403Rate"] == 1.0
     assert result["extractionQualityScore"] == 0.5
+
+
+def test_compute_quality_score_treats_partial_success_as_degraded() -> None:
+    source = {
+        "sourceId": "source.voc.batch_a",
+        "sourceType": "voc",
+        "status": "active",
+        "governanceStatus": "registered",
+        "knownIssues": [],
+        "lastObserved": {"lastSuccessAt": "2026-05-19T01:00:00Z"},
+        "quality": {
+            "successRate": 1.0,
+            "timeoutRate": 0.0,
+            "extractionQualityScore": 0.8,
+        },
+    }
+    status_data = {
+        "voc": {
+            "status": "partial_success",
+            "successCount": 40,
+            "failedCount": 2,
+            "lastRunAt": "2026-05-20T01:45:00Z",
+        }
+    }
+
+    result = source_quality._compute_quality_score(source, status_data)
+
+    assert result["failedCount"] == 2
+    assert result["lastFailureAt"] == "2026-05-20T01:45:00Z"
+    assert "runtime status=partial_success" in result["reasons"]

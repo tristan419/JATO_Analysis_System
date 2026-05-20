@@ -22,6 +22,8 @@ from typing import Any
 from hermes_registry_loader import load_all_registries
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+DEGRADED_RUNTIME_STATUSES = {"degraded", "partial_success"}
+FAILED_RUNTIME_STATUSES = {"failure"} | DEGRADED_RUNTIME_STATUSES
 
 
 def _safe(v: Any, key: str, default: Any = None) -> Any:
@@ -89,7 +91,7 @@ def _observed_with_runtime_status(source: dict, status_data: dict | None) -> dic
     last_run_at = runtime.get("lastRunAt")
     if last_run_at and status == "success":
         observed["lastSuccessAt"] = last_run_at
-    elif last_run_at and status in {"failure", "degraded"}:
+    elif last_run_at and status in FAILED_RUNTIME_STATUSES:
         observed["lastFailureAt"] = last_run_at
         observed["lastFailureReason"] = runtime.get("lastError") or f"runtime status={status}"
 
@@ -128,9 +130,9 @@ def _compute_quality_score(source: dict, status_data: dict | None) -> dict:
     if runtime_status == "failure":
         score -= 35
         reasons.append("runtime status=failure")
-    elif runtime_status == "degraded":
+    elif runtime_status in DEGRADED_RUNTIME_STATUSES:
         score -= 20
-        reasons.append("runtime status=degraded")
+        reasons.append(f"runtime status={runtime_status}")
 
     # No recent success
     last_success = last_obs.get("lastSuccessAt")

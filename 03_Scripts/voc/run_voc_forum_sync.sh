@@ -97,10 +97,11 @@ _write_voc_status_json() {
   local status="$2"
   local raw_count="$3"
   local enriched_count="$4"
-  local last_error="$5"
-  local started_at="$6"
+  local failed_count="$5"
+  local last_error="$6"
+  local started_at="$7"
 
-  "$PYTHON_BIN" - "$status_path" "$status" "$raw_count" "$enriched_count" "$last_error" "$started_at" <<'PY'
+  "$PYTHON_BIN" - "$status_path" "$status" "$raw_count" "$enriched_count" "$failed_count" "$last_error" "$started_at" <<'PY'
 import json, os, sys
 from datetime import datetime, timezone
 
@@ -108,8 +109,9 @@ path = sys.argv[1]
 status = sys.argv[2]
 raw_count = int(sys.argv[3])
 enriched_count = int(sys.argv[4])
-last_error = sys.argv[5]
-started_at = sys.argv[6] if len(sys.argv) > 6 else datetime.now(timezone.utc).isoformat()
+failed_count = int(sys.argv[5])
+last_error = sys.argv[6]
+started_at = sys.argv[7] if len(sys.argv) > 7 else datetime.now(timezone.utc).isoformat()
 
 existing = {}
 if os.path.exists(path):
@@ -123,7 +125,8 @@ existing["voc"] = {
     "status": status,
     "successCount": raw_count,
     "enrichedCount": enriched_count,
-    "failedCount": 0,
+    "failedCount": failed_count,
+    "failureCount": failed_count,
     "lastError": last_error or None,
 }
 
@@ -233,26 +236,18 @@ fi
 
 if [[ "$RAW_COUNT" -eq 0 ]]; then
   echo "[ERROR] VOC fetch produced zero raw artifacts — failing job"
-  _write_voc_status_json "$STATUS_JSON" "failure" 0 0 "zero raw artifacts" "$JOB_STARTED_AT"
+  _write_voc_status_json "$STATUS_JSON" "failure" 0 0 0 "zero raw artifacts" "$JOB_STARTED_AT"
   exit 1
 fi
 
 echo "[INFO] VOC raw artifacts: $RAW_COUNT"
 
+rm -f "$RAW_FAILED_SOURCES"
 if [[ -f "$RAW_SUMMARY_PATH" ]]; then
-  "$PYTHON_BIN" - "$RAW_SUMMARY_PATH" > "$RAW_FAILED_SOURCES" 2>/dev/null <<'PY' || true
-import json, sys
-try:
-    data = json.load(open(sys.argv[1]))
-    failed = [
-        {"source": s.get("source",""), "country": s.get("country",""), "error": s.get("error","")}
-        for s in (data if isinstance(data, list) else [data])
-        if s.get("status") == "failed" or s.get("error")
-    ]
-    json.dump({"failedSources": failed, "failedCount": len(failed)}, sys.stdout, indent=2)
-except Exception:
-    pass
-PY
+  "$PYTHON_BIN" "$REPO_DIR/03_Scripts/voc/summarize_voc_failures.py" \
+    "$RAW_SUMMARY_PATH" \
+    --output "$RAW_FAILED_SOURCES" \
+    --repo-root "$REPO_DIR" || true
 fi
 
 VOC_FAILED_SOURCE_COUNT=0
@@ -294,12 +289,24 @@ if [[ -f "$ENRICHED_SUMMARY_PATH" ]]; then
   ENRICHED_COUNT="$("$PYTHON_BIN" -c "import json; d=json.load(open('$ENRICHED_SUMMARY_PATH')); print(d.get('total', len(d) if isinstance(d,list) else 1))" 2>/dev/null || echo 0)"
 fi
 
+VOC_LAST_ERROR=""
+if [[ "$VOC_FAILED_SOURCE_COUNT" -gt 0 ]]; then
+  VOC_LAST_ERROR="$VOC_FAILED_SOURCE_COUNT sources failed"
+fi
+if [[ "$VOC_FETCH_EXIT" -ne 0 ]]; then
+  if [[ -n "$VOC_LAST_ERROR" ]]; then
+    VOC_LAST_ERROR="$VOC_LAST_ERROR; fetch exit code $VOC_FETCH_EXIT"
+  else
+    VOC_LAST_ERROR="fetch exit code $VOC_FETCH_EXIT"
+  fi
+fi
+
 if [[ "$VOC_FETCH_EXIT" -eq 0 && "$VOC_FAILED_SOURCE_COUNT" -eq 0 ]]; then
-  _write_voc_status_json "$STATUS_JSON" "success" "$RAW_COUNT" "$ENRICHED_COUNT" "" "$JOB_STARTED_AT"
+  _write_voc_status_json "$STATUS_JSON" "success" "$RAW_COUNT" "$ENRICHED_COUNT" 0 "" "$JOB_STARTED_AT"
 elif [[ "$RAW_COUNT" -gt 0 ]]; then
-  _write_voc_status_json "$STATUS_JSON" "partial_success" "$RAW_COUNT" "$ENRICHED_COUNT" "$VOC_FAILED_SOURCE_COUNT sources failed" "$JOB_STARTED_AT"
+  _write_voc_status_json "$STATUS_JSON" "degraded" "$RAW_COUNT" "$ENRICHED_COUNT" "$VOC_FAILED_SOURCE_COUNT" "$VOC_LAST_ERROR" "$JOB_STARTED_AT"
 else
-  _write_voc_status_json "$STATUS_JSON" "failure" "$RAW_COUNT" "$ENRICHED_COUNT" "fetch produced zero artifacts" "$JOB_STARTED_AT"
+  _write_voc_status_json "$STATUS_JSON" "failure" "$RAW_COUNT" "$ENRICHED_COUNT" "$VOC_FAILED_SOURCE_COUNT" "fetch produced zero artifacts" "$JOB_STARTED_AT"
 fi
 
 echo "[INFO] VOC forum scheduled sync finished"

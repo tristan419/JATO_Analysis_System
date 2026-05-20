@@ -436,7 +436,7 @@ def probe_pipeline_failures() -> dict[str, Any]:
             })
 
         # Check for degraded (partial failure)
-        elif status == "degraded":
+        elif status in {"degraded", "partial_success"}:
             findings.append({
                 "type": f"pipeline_{pipeline}_degraded",
                 "severity": "medium",

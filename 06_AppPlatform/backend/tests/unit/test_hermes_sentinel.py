@@ -231,6 +231,33 @@ def test_probe_pipeline_failures_accepts_failed_count_alias(monkeypatch, tmp_pat
     assert "3 failed" in result["findings"][0]["message"]
 
 
+def test_probe_pipeline_failures_treats_partial_success_as_degraded(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(sentinel, "_project_root", tmp_path)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_pipeline_inputs(
+        tmp_path,
+        {
+            "news": {"status": "success", "lastRunAt": now},
+            "voc": {
+                "status": "partial_success",
+                "lastRunAt": now,
+                "successCount": 40,
+                "failedCount": 2,
+            },
+            "msrp_dryrun": {"status": "success", "lastRunAt": now},
+            "msrp_ingest": {"status": "success", "lastRunAt": now},
+            "jato_etl": {"status": "success", "lastRunAt": now},
+        },
+        source_quality_generated_at=now,
+    )
+
+    result = sentinel.probe_pipeline_failures()
+
+    assert result["overall"] == "warning"
+    assert result["findings"][0]["type"] == "pipeline_voc_degraded"
+    assert "2 failed" in result["findings"][0]["message"]
+
+
 def test_probe_pipeline_failures_flags_missing_and_stale_inputs(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(sentinel, "_project_root", tmp_path)
     stale = (datetime.now(timezone.utc) - timedelta(hours=40)).strftime("%Y-%m-%dT%H:%M:%SZ")
