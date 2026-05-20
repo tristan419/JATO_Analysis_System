@@ -90,6 +90,7 @@ import type {
   HermesSentinelNotification,
   HermesSentinelStatusResponse,
   HermesMsrpCountryProgressResponse,
+  HermesMsrpDryrunHistoryResponse,
   HermesSourceQualityResponse,
   HermesToolchainResponse,
 } from "../types/hermes";
@@ -1539,8 +1540,14 @@ export const api = {
     request<HermesPipelineHealthResponse>("/hermes/pipeline-health"),
   hermesSourceQuality: () =>
     request<HermesSourceQualityResponse>("/hermes/source-quality"),
-  hermesMsrpCountryProgress: () =>
-    request<HermesMsrpCountryProgressResponse>("/hermes/msrp-country-progress"),
+  hermesMsrpCountryProgress: (runId?: string) =>
+    request<HermesMsrpCountryProgressResponse>(
+      runId
+        ? `/hermes/msrp-country-progress?run_id=${encodeURIComponent(runId)}`
+        : "/hermes/msrp-country-progress"
+    ),
+  hermesMsrpDryrunHistory: () =>
+    request<HermesMsrpDryrunHistoryResponse>("/hermes/msrp-dryrun-history"),
   hermesCost: () =>
     request<HermesCostResponse>("/hermes/cost"),
   hermesProposals: (status?: string) => {

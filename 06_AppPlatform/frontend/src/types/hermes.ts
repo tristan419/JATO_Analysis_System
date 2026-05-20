@@ -344,3 +344,30 @@ export interface HermesMsrpCountryProgressResponse {
   topFailureReasons?: { reason: string; count: number }[];
   findings?: { type: string; severity: string; message: string }[];
 }
+
+export interface HermesMsrpDryrunHistoryRun {
+  runId: string;
+  mode: string;
+  batch: string;
+  startedAt: string;
+  finishedAt: string;
+  status: string;
+  gateStatus: string;
+  gateThreshold: number;
+  passPct: number;
+  total: number;
+  pass: number;
+  empty: number;
+  fail: number;
+  errors: number;
+  expectedCountryCount: number;
+  observedCountryCount: number;
+  missingCountryCount: number;
+  artifactPath: string;
+}
+export interface HermesMsrpDryrunHistoryResponse {
+  schemaVersion: string;
+  updatedAt: string;
+  latestRunId: string;
+  runs: HermesMsrpDryrunHistoryRun[];
+}

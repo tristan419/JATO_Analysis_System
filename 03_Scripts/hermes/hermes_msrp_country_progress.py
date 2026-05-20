@@ -214,6 +214,15 @@ def _write_outputs(result: dict, out_dir: str | None = None) -> None:
     md_path.write_text(_render_markdown(result))
     print(f"[country-progress] Markdown: {md_path}")
 
+    # Write historical copy if runId is available
+    run_id = (result.get("status") or {}).get("runId")
+    if run_id:
+        hist_json = out_base / f"msrp_country_progress_{run_id}.json"
+        hist_json.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
+        hist_md = out_base / f"msrp_country_progress_{run_id}.md"
+        hist_md.write_text(_render_markdown(result))
+        print(f"[country-progress] Historical: {hist_json}")
+
     s = result.get("status", {})
     print(f"[country-progress] overall={result['overall']}, "
           f"passPct={s.get('overallPassPct', '?')}%, "

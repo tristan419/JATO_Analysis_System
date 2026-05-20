@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 def _load_country_artifact(path: Path) -> dict | None:
     if path.is_file():
@@ -195,11 +197,51 @@ def run(
         out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
         print(f"[aggregate] Latest report: {out_path}")
 
-        # Also write timestamped copy
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        history_path = out_path.parent / f"dryrun_report_{ts}.json"
+        # Write historical copy by runId (stable name, not timestamped)
+        history_path = out_path.parent / f"dryrun_report_{run_id}.json"
         history_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
-        print(f"[aggregate] History: {history_path}")
+        print(f"[aggregate] Historical: {history_path}")
+
+        # Update dryrun_runs_index.json
+        index_path = out_path.parent / "dryrun_runs_index.json"
+        index_data: dict = {"schemaVersion": "msrp_dryrun_runs_index_v1", "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "latestRunId": run_id, "runs": []}
+        if index_path.is_file():
+            try:
+                index_data = json.loads(index_path.read_text())
+            except Exception:
+                pass
+        # Update or prepend this run
+        existing_runs = index_data.get("runs", [])
+        run_entry = {
+            "runId": run_id,
+            "mode": "dryrun",
+            "batch": report.get("batch", "batch_a"),
+            "startedAt": run_id.replace("msrp-dryrun-", "").replace("-", "T") + ":00Z",
+            "finishedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "status": summary.get("status", "unknown"),
+            "gateStatus": report["summary"]["gateStatus"],
+            "gateThreshold": report["summary"]["gateThreshold"],
+            "passPct": summary.get("passPct", 0.0),
+            "total": summary.get("total", 0),
+            "pass": summary.get("pass", 0),
+            "empty": summary.get("empty", 0),
+            "fail": summary.get("fail", 0),
+            "errors": summary.get("errors", 0),
+            "expectedCountryCount": len(expected_countries_sorted),
+            "observedCountryCount": len(artifacts),
+            "missingCountryCount": len(missing),
+            "artifactPath": f"03_Scripts/diagnostics/artifacts/dryrun_report_{run_id}.json",
+            "latestArtifactPath": str(out_path.relative_to(REPO_ROOT) if out_path else ""),
+        }
+        # Remove old entry with same runId if exists, then prepend
+        existing_runs = [r for r in existing_runs if r.get("runId") != run_id]
+        existing_runs.insert(0, run_entry)
+        # Keep max 100 runs
+        index_data["runs"] = existing_runs[:100]
+        index_data["latestRunId"] = run_id
+        index_data["updatedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        index_path.write_text(json.dumps(index_data, indent=2, ensure_ascii=False) + "\n")
+        print(f"[aggregate] Runs index updated: {index_path} ({len(index_data['runs'])} runs)")
 
     s = report["summary"]
     print(f"[aggregate] v3 report: {s['total']} sources, "

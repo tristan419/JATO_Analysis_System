@@ -130,6 +130,24 @@ def hermes_cost_report(_=Depends(require_min_role("viewer"))) -> dict:
     return _read_json(REPORTS_DIR / "cost_report.json")
 
 
+@router.get("/msrp-country-progress")
+def hermes_msrp_country_progress(
+    run_id: str | None = Query(None),
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    """Return MSRP country progress for latest or specific run_id."""
+    if run_id:
+        return _read_json(REPORTS_DIR / f"msrp_country_progress_{run_id}.json")
+    return _read_json(REPORTS_DIR / "msrp_country_progress.json")
+
+
+@router.get("/msrp-dryrun-history")
+def hermes_msrp_dryrun_history(_=Depends(require_min_role("viewer"))) -> dict:
+    """Return the MSRP dryrun runs index (history of all runs)."""
+    path = PROJECT_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_runs_index.json"
+    return _read_json(path)
+
+
 @router.get("/code-audit")
 def hermes_code_audit(_=Depends(require_min_role("viewer"))) -> dict:
     """Return the latest code audit report."""
