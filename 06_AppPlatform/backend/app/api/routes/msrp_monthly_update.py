@@ -5,6 +5,7 @@ from app.services.jato_monthly_update_service import (
     complete_jato_monthly_update_upload,
     create_jato_monthly_update_job,
     create_jato_monthly_update_job_from_upload,
+    create_smart_merge_candidate,
     get_jato_monthly_update_upload,
     get_jato_monthly_update_job,
     get_jato_monthly_update_maintenance_status,
@@ -107,6 +108,19 @@ def post_rollback_monthly_update_job(
 ) -> dict[str, object]:
     return {
         "item": rollback_jato_monthly_update_job(
+            job_id=job_id,
+            triggered_by=user.name,
+        )
+    }
+
+
+@router.post("/monthly-update-jobs/{job_id}/smart-merge")
+def post_smart_merge_candidate(
+    job_id: str,
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": create_smart_merge_candidate(
             job_id=job_id,
             triggered_by=user.name,
         )

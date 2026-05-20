@@ -152,6 +152,7 @@ export function JatoMonthlyUpdatePage() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [heroCollapsed, setHeroCollapsed] = useState(false);
   const [publishBlocker, setPublishBlocker] = useState<PublishBlocker | null>(null);
+  const [smartMergingJobId, setSmartMergingJobId] = useState<string | null>(null);
   const [infoCollapsed, setInfoCollapsed] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -520,6 +521,34 @@ export function JatoMonthlyUpdatePage() {
     }
   }
 
+  const hasSmartMerge = Boolean(selectedJob?.summaries?.smartMerge);
+  const isSmartMerging = smartMergingJobId === selectedJob?.jobId;
+
+  async function handleSmartMerge(job: JatoMonthlyUpdateJob) {
+    const confirmed = window.confirm(
+      "将对回归国家使用 active 最新数据、前进/持平国家使用 patch 数据，生成 Smart-Merged Candidate。这将在当前 staging 产物基础上重建分区、清单和指纹。继续吗？"
+    );
+    if (!confirmed) {
+      return;
+    }
+    setSmartMergingJobId(job.jobId);
+    setError("");
+    setNotice("");
+    setPublishBlocker(null);
+    try {
+      const response = await api.smartMergeJatoMonthlyUpdateCandidate(job.jobId);
+      setSelectedJob(response.item);
+      setSelectedJobId(response.item.jobId);
+      setNotice(`已触发任务 ${job.jobId} 的 Smart Merge，后台合并中，请稍候刷新查看进度。`);
+      await refreshJobs(response.item.jobId, true);
+      await loadJobDetail(response.item.jobId, true);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSmartMergingJobId(null);
+    }
+  }
+
   const successCount = jobs.filter((job) => job.status === "success").length;
   const failedCount = jobs.filter((job) => job.status === "failed").length;
   const runningCount = jobs.filter((job) => job.status === "running" || job.status === "queued").length;
@@ -800,7 +829,7 @@ export function JatoMonthlyUpdatePage() {
             <section>
               <h4>Smart-Merged Candidate（Smart Merge 候选）</h4>
               <p>
-                当出现 regression 时，可以选择 Smart Merge：回退国家沿用 active 数据，前进/持平国家使用 patch 数据，未上传国家沿用 active。Smart Merge 创建新 candidate，<em>仍需要 Review → Publish，不直接修改 active。</em>（功能开发中）
+                当出现 regression 时，可以选择 Smart Merge：回退国家沿用 active 数据，前进/持平国家使用 patch 数据，未上传国家沿用 active。Smart Merge 创建新 candidate，<em>仍需要 Review → Publish，不直接修改 active。</em>
               </p>
             </section>
             <section>
@@ -1226,8 +1255,14 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                         <button type="button" className="btn btn-secondary" disabled>
                           重新上传修正 Excel
                         </button>
-                        <button type="button" className="btn btn-secondary" disabled title="功能开发中">
-                          创建 Smart-Merged Candidate
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          disabled={isSmartMerging || hasSmartMerge}
+                          onClick={() => void handleSmartMerge(selectedJob!)}
+                          title={hasSmartMerge ? "已执行过 Smart Merge" : "对回归国家使用 active 数据创建合并候选"}
+                        >
+                          {isSmartMerging ? "合并中..." : hasSmartMerge ? "Smart Merge 已完成" : "创建 Smart-Merged Candidate"}
                         </button>
                       </div>
                     </>

@@ -1535,9 +1535,17 @@ export interface JatoMonthlyUpdateRefreshSummary {
   conflictRowCount: number;
 }
 
+export interface JatoMonthlyUpdateSmartMergeSummary {
+  mergedAt: string;
+  regressedCountryCount: number;
+  regressedCountries: string[];
+  totalRowCount: number;
+}
+
 export interface JatoMonthlyUpdateSummaries {
   rawCompare?: JatoMonthlyUpdateRawCompareSummary;
   refresh?: JatoMonthlyUpdateRefreshSummary;
+  smartMerge?: JatoMonthlyUpdateSmartMergeSummary;
 }
 
 export interface JatoMonthlyUpdateJob {

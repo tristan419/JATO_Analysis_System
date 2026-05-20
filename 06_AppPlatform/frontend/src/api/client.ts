@@ -30,6 +30,7 @@ import type {
   JatoMonthlyUpdateReviewBundle,
   JatoMonthlyUpdateReviewFinding,
   JatoMonthlyUpdateRefreshSummary,
+  JatoMonthlyUpdateSmartMergeSummary,
   JatoMonthlyUpdateSummaries,
   JatoMonthlyUpdateStorageMetric,
   JatoMonthlyUpdateUploadProgress,
@@ -604,6 +605,19 @@ function mapJatoMonthlyUpdateRefreshSummary(
   };
 }
 
+function mapJatoMonthlyUpdateSmartMergeSummary(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateSmartMergeSummary {
+  return {
+    mergedAt: String(raw.mergedAt ?? raw.mergedAt ?? ""),
+    regressedCountryCount: Number(raw.regressedCountryCount ?? 0),
+    regressedCountries: Array.isArray(raw.regressedCountries)
+      ? raw.regressedCountries.map((c) => String(c))
+      : [],
+    totalRowCount: Number(raw.totalRowCount ?? 0),
+  };
+}
+
 function mapJatoMonthlyUpdatePublication(
   raw: Record<string, unknown>
 ): JatoMonthlyUpdatePublication {
@@ -695,7 +709,10 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
       : undefined,
     refresh: summariesRaw.refresh && typeof summariesRaw.refresh === "object"
       ? mapJatoMonthlyUpdateRefreshSummary(summariesRaw.refresh as Record<string, unknown>)
-      : undefined
+      : undefined,
+    smartMerge: summariesRaw.smartMerge && typeof summariesRaw.smartMerge === "object"
+      ? mapJatoMonthlyUpdateSmartMergeSummary(summariesRaw.smartMerge as Record<string, unknown>)
+      : undefined,
   } : null;
   const publicationRaw = raw.publication && typeof raw.publication === "object"
     ? raw.publication as Record<string, unknown>
@@ -2216,6 +2233,12 @@ export const api = {
     })),
   rollbackJatoMonthlyUpdateJob: (jobId: string) =>
     request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/rollback`, {
+      method: "POST"
+    }).then((res) => ({
+      item: mapJatoMonthlyUpdateJob(res.item)
+    })),
+  smartMergeJatoMonthlyUpdateCandidate: (jobId: string) =>
+    request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/smart-merge`, {
       method: "POST"
     }).then((res) => ({
       item: mapJatoMonthlyUpdateJob(res.item)

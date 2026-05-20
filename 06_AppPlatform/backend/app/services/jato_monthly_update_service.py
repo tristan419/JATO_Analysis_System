@@ -32,6 +32,9 @@ HISTORY_ARCHIVE_ROOT = RAW_DATA_ROOT / "historyDataArchive"
 PREPARE_SCRIPT_PATH = (
     PROJECT_ROOT / "03_Scripts" / "data_pipeline" / "prepare_monthly_raw_update.py"
 )
+REBUILD_SCRIPT_PATH = (
+    PROJECT_ROOT / "03_Scripts" / "data_pipeline" / "rebuild_from_parquet.py"
+)
 STATE_FILENAME = "job_state.json"
 LOG_FILENAME = "job.log"
 UPLOAD_STATE_FILENAME = "upload_state.json"
@@ -2460,6 +2463,232 @@ def retry_failed_jato_monthly_update_job(
     payload["artifacts"]["retriedFromJobId"] = source_job_id
     _persist_job_state(payload)
     return _serialize_job_state(payload, include_log_tail=True)
+
+
+# ── Smart Merge ──────────────────────────────────────────────────────────────
+
+
+def _smart_merge_dataframes(
+    *,
+    active_path: Path,
+    candidate_path: Path,
+    regressed_countries: list[dict[str, str | None]],
+) -> pd.DataFrame:
+    """Merge active + candidate parquet data for Smart Merge.
+
+    - Regressed countries: use active data (has more recent months)
+    - Advanced/unchanged/new countries: use candidate data
+    - Countries only in active, missing in candidate: use active data
+    """
+    active_df = _load_dataset_frame(active_path)
+    candidate_df = _load_dataset_frame(candidate_path)
+    country_col = _find_country_column(list(active_df.columns))
+    if country_col is None:
+        raise HTTPException(status_code=409, detail="无法识别 active 数据集的国家列。")
+
+    active_df[country_col] = active_df[country_col].astype("string").fillna("").str.strip()
+    candidate_df[country_col] = candidate_df[country_col].astype("string").fillna("").str.strip()
+
+    regressed_set: set[str] = set()
+    for entry in regressed_countries:
+        c = str(entry.get("country", "")).strip()
+        if c:
+            regressed_set.add(c)
+
+    active_countries = set(active_df[country_col].unique())
+    candidate_countries = set(candidate_df[country_col].unique())
+    missing_from_candidate = active_countries - candidate_countries
+
+    # From candidate: keep rows for non-regressed countries
+    candidate_keep = candidate_df[~candidate_df[country_col].isin(regressed_set)].copy()
+    # From active: keep rows for regressed countries + countries missing in candidate
+    active_keep = active_df[active_df[country_col].isin(regressed_set | missing_from_candidate)].copy()
+
+    # Align columns: union of all columns from both dataframes
+    all_columns = list(dict.fromkeys(list(active_df.columns) + list(candidate_df.columns)))
+    for df in (candidate_keep, active_keep):
+        for col in all_columns:
+            if col not in df.columns:
+                df[col] = None
+
+    merged = pd.concat([candidate_keep, active_keep], ignore_index=True)
+    return merged[[col for col in all_columns if col in merged.columns]]
+
+
+def _run_smart_merge(job_id: str) -> None:
+    """Background runner: smart merge → rebuild partitions/manifest/fingerprint."""
+    state = _load_job_state(job_id)
+    log_path = _job_log_path(job_id)
+
+    try:
+        state["status"] = "running"
+        state["phase"] = "smart_merging"
+        _persist_job_state(state)
+        _append_log(log_path, f"[{_utc_now().isoformat()}] Smart Merge: 开始合并数据...")
+
+        active_paths = _active_data_paths()
+        artifacts = state.get("artifacts", {}) or {}
+        candidate_path = _project_path(str(artifacts.get("stagingOutputPath") or "").strip())
+
+        if candidate_path is None or not candidate_path.exists():
+            raise RuntimeError("找不到 candidate staging parquet。")
+        if not active_paths["parquet"].exists():
+            raise RuntimeError("找不到 active 数据集，无法执行 Smart Merge。")
+
+        regressions = _find_publish_country_regressions(
+            active_parquet_path=active_paths["parquet"],
+            candidate_parquet_path=candidate_path,
+        )
+        if not regressions:
+            _append_log(log_path, f"[{_utc_now().isoformat()}] Smart Merge: 无回归国家，不需要合并。")
+            state["status"] = "success"
+            state["phase"] = "completed"
+            state["summaries"] = {
+                **(state.get("summaries") or {}),
+                "smartMerge": {
+                    "mergedAt": _utc_now().isoformat(),
+                    "regressedCountryCount": 0,
+                    "regressedCountries": [],
+                    "totalRowCount": 0,
+                },
+            }
+            _persist_job_state(state)
+            return
+
+        merged_df = _smart_merge_dataframes(
+            active_path=active_paths["parquet"],
+            candidate_path=candidate_path,
+            regressed_countries=regressions,
+        )
+
+        # Write merged parquet to staging output (overwrite)
+        candidate_path.parent.mkdir(parents=True, exist_ok=True)
+        merged_df.to_parquet(candidate_path, index=False)
+        row_count = len(merged_df)
+        regressed_names = sorted(r["country"] for r in regressions if r.get("country"))
+        _append_log(
+            log_path,
+            f"[{_utc_now().isoformat()}] Smart Merge: 合并完成，共 {row_count} 行。"
+            f" 回归国家({len(regressed_names)}): {', '.join(regressed_names)}",
+        )
+
+        # Rebuild partition/manifest/fingerprint from merged parquet
+        job_dir = _job_dir(job_id)
+        staging_dir = candidate_path.parent
+        partition_output = _project_path(str(artifacts.get("partitionOutputPath") or "").strip())
+        manifest_path = _project_path(str(artifacts.get("manifestPath") or "").strip())
+        fingerprint_path = _project_path(str(artifacts.get("fingerprintPath") or "").strip())
+
+        if not REBUILD_SCRIPT_PATH.exists():
+            raise RuntimeError(f"找不到重建脚本: {REBUILD_SCRIPT_PATH}")
+
+        rebuild_args = [
+            sys.executable,
+            str(REBUILD_SCRIPT_PATH),
+            "--input-parquet",
+            str(candidate_path),
+            "--output-dir",
+            str(job_dir / "smart_merge"),
+            "--partition-output",
+            str(partition_output or staging_dir / "partitioned_dataset_v1"),
+            "--manifest",
+            str(manifest_path or staging_dir / "manifest.json"),
+            "--fingerprint",
+            str(fingerprint_path or staging_dir / "dataset_fingerprint.json"),
+        ]
+
+        state["phase"] = "smart_merge_rebuild"
+        _persist_job_state(state)
+        _run_logged_command(
+            label="Smart Merge rebuild",
+            args=rebuild_args,
+            log_path=log_path,
+        )
+
+        state["summaries"] = {
+            **(state.get("summaries") or {}),
+            "smartMerge": {
+                "mergedAt": _utc_now().isoformat(),
+                "regressedCountryCount": len(regressions),
+                "regressedCountries": regressed_names,
+                "totalRowCount": row_count,
+            },
+        }
+        state["status"] = "success"
+        state["phase"] = "completed"
+        state["finishedAt"] = _utc_now().isoformat()
+        _persist_job_state(state)
+        _append_log(
+            log_path,
+            f"[{_utc_now().isoformat()}] Smart Merge: 全部完成。请进入 Review → Publish。",
+        )
+
+    except Exception as exc:
+        state["status"] = "failed"
+        state["phase"] = "smart_merge_failed"
+        state["finishedAt"] = _utc_now().isoformat()
+        state["error"] = str(exc)
+        _persist_job_state(state)
+        _append_log(log_path, "\n=== Smart Merge Failed ===")
+        _append_log(log_path, str(exc))
+        _append_log(log_path, traceback.format_exc())
+    finally:
+        _RUNNING_THREADS.pop(job_id, None)
+
+
+def _launch_smart_merge_thread(job_id: str) -> None:
+    worker = threading.Thread(
+        target=_run_smart_merge,
+        args=(job_id,),
+        name=f"jato-smart-merge-{job_id}",
+        daemon=True,
+    )
+    _RUNNING_THREADS[job_id] = worker
+    worker.start()
+
+
+def create_smart_merge_candidate(
+    *,
+    job_id: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    """Smart Merge: merge regressed countries from active into candidate, then rebuild artifacts."""
+    _require_no_running_monthly_update_jobs(excluding_job_id=job_id)
+    payload = _load_job_state(job_id)
+
+    if (
+        str(payload.get("status", "")) != "success"
+        or str(payload.get("phase", "")) != "completed"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="只有 success/completed 的月更任务才能执行 Smart Merge。",
+        )
+
+    publication = payload.get("publication")
+    if isinstance(publication, dict) and publication.get("publishedAt") and not publication.get("rolledBackAt"):
+        raise HTTPException(status_code=409, detail="该月更任务已经 publish 过，不能执行 Smart Merge。")
+
+    summaries = payload.get("summaries")
+    if isinstance(summaries, dict) and summaries.get("smartMerge") is not None:
+        raise HTTPException(status_code=409, detail="该任务已执行过 Smart Merge。")
+
+    active_paths = _active_data_paths()
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise HTTPException(status_code=409, detail="当前任务缺少 staging 产物信息。")
+
+    candidate_path = _project_path(str(artifacts.get("stagingOutputPath") or "").strip())
+    if candidate_path is None or not candidate_path.exists():
+        raise HTTPException(status_code=409, detail="找不到 candidate staging parquet，不能执行 Smart Merge。")
+    if not active_paths["parquet"].exists():
+        raise HTTPException(status_code=409, detail="找不到 active 数据集，不能执行 Smart Merge。")
+
+    payload["triggeredBy"] = triggered_by.strip() or "anonymous"
+    _persist_job_state(payload)
+
+    _launch_smart_merge_thread(job_id)
+    return _serialize_job_state(payload, include_log_tail=False)
 
 
 def list_jato_monthly_update_jobs(*, limit: int = 20) -> dict[str, Any]:
