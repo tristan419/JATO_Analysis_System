@@ -209,6 +209,23 @@ class TestFeatures:
             "MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md"
         ]
 
+    def test_list_features_hydrates_legacy_feature_tests_from_seed(self, tmp_path):
+        from app.services.hermes_devsync_service import list_features
+
+        (tmp_path / "hermes" / "registry" / "features.yaml").write_text(
+            "features:\n"
+            "- featureId: feature.current_price\n"
+            "  title: Current Price\n"
+            "  tests: {}\n"
+            "  docs: []\n"
+        )
+        (tmp_path / "hermes" / "feature_registry.yaml").write_text("features: []\n")
+
+        feature = list_features()[0]
+
+        assert "Backend: test_msrp_lookup_service.py" in feature["tests"]
+        assert "Frontend: msrpCurrentPrice.test.ts" in feature["tests"]
+
 
 class TestGaps:
     def test_missing_docs_gap(self, tmp_path):
@@ -402,5 +419,12 @@ class TestSync:
         assert current_price["docs"] == [
             "MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md"
         ]
-        assert current_price["tests"] == ["Frontend: msrpCurrentPrice.test.ts"]
-        assert current_price["backendApis"] == ["GET /v1/msrp/current-prices"]
+        assert set(current_price["tests"]) == {
+            "Backend: test_msrp_lookup_service.py",
+            "Frontend: msrpCurrentPrice.test.ts",
+        }
+        assert current_price["backendApis"] == [
+            "GET /v1/msrp/current-prices",
+            "GET /v1/msrp/price-history",
+            "POST /v1/msrp/current-prices/{id}/remap",
+        ]

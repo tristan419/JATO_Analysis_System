@@ -201,7 +201,9 @@ def hermes_features(_=Depends(require_min_role("viewer"))) -> list[dict]:
         return []
     import yaml
     data = yaml.safe_load(path.read_text())
-    return data.get("features", []) if data else []
+    features = data.get("features", []) if data else []
+    from app.services.hermes_devsync_service import apply_curated_kanban_feature_evidence
+    return apply_curated_kanban_feature_evidence(features)
 
 
 @router.get("/toolchain")

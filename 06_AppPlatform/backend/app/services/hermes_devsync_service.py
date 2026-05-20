@@ -134,6 +134,72 @@ def _list_from_any(value: Any) -> list[Any]:
     return []
 
 
+_CURATED_FEATURE_EVIDENCE: dict[str, dict[str, list[str]]] = {
+    "feature.current_price": {
+        "docs": ["MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md"],
+        "tests": [
+            "Backend: test_msrp_lookup_service.py",
+            "Frontend: msrpCurrentPrice.test.ts",
+        ],
+        "backendApis": [
+            "GET /v1/msrp/current-prices",
+            "GET /v1/msrp/price-history",
+            "POST /v1/msrp/current-prices/{id}/remap",
+        ],
+    },
+    "feature.review_workbench": {
+        "docs": [
+            "MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md",
+            "MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md",
+        ],
+        "tests": [
+            "Backend: test_review_service.py",
+            "Backend: test_review_workbench_service.py",
+        ],
+        "backendApis": [
+            "GET /v1/review/cases",
+            "GET /v1/review/cases/stats",
+            "GET /v1/review/cases/workbench",
+            "GET /v1/review/cases/{id}",
+            "POST /v1/review/cases/{id}/decisions",
+            "GET /v1/review/overrides",
+            "POST /v1/review/overrides",
+        ],
+    },
+}
+
+
+def _curated_feature_evidence(feature_id: str) -> dict[str, list[str]]:
+    canonical_id = _canonical_feature_id(feature_id)
+    return (
+        _CURATED_FEATURE_EVIDENCE.get(feature_id)
+        or _CURATED_FEATURE_EVIDENCE.get(canonical_id)
+        or _CURATED_FEATURE_EVIDENCE.get(f"feature.{canonical_id.replace('-', '_')}")
+        or {}
+    )
+
+
+def _merge_list_values(*values: Any) -> list[Any]:
+    merged: list[Any] = []
+    for value in values:
+        for item in _list_from_any(value):
+            _append_unique(merged, item)
+    return merged
+
+
+def apply_curated_kanban_feature_evidence(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Overlay curated evidence for legacy Kanban entries damaged by old DevSync syncs."""
+    hydrated: list[dict[str, Any]] = []
+    for feature in features:
+        record = dict(feature)
+        seed = _curated_feature_evidence(str(record.get("featureId") or ""))
+        if seed:
+            for key in ("docs", "tests", "backendApis"):
+                record[key] = _merge_list_values(seed.get(key), record.get(key))
+        hydrated.append(record)
+    return hydrated
+
+
 _FEATURE_TITLE_WORDS = {
     "api": "API",
     "apis": "APIs",
@@ -356,18 +422,23 @@ def _load_kanban_feature_index() -> dict[str, dict[str, Any]]:
 def _hydrate_features_from_kanban(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Use manually curated kanban docs/tests when DevSync has no evidence yet."""
     kanban_index = _load_kanban_feature_index()
-    if not kanban_index:
-        return features
 
     hydrated: list[dict[str, Any]] = []
     for feature in features:
         record = dict(feature)
-        kanban = kanban_index.get(_canonical_feature_id(str(record.get("featureId") or "")))
+        fid = str(record.get("featureId") or "")
+        kanban = kanban_index.get(_canonical_feature_id(fid))
+        seed = _curated_feature_evidence(fid)
         if kanban:
             if not record.get("docs") and kanban.get("docs"):
                 record["docs"] = list(kanban.get("docs", []) or [])
             if not record.get("tests") and kanban.get("tests"):
                 record["tests"] = _test_map_from_any(kanban.get("tests"))
+        if seed:
+            if not record.get("docs") and seed.get("docs"):
+                record["docs"] = list(seed.get("docs", []) or [])
+            if not record.get("tests") and seed.get("tests"):
+                record["tests"] = _test_map_from_any(seed.get("tests"))
         hydrated.append(record)
     return hydrated
 
@@ -1068,8 +1139,16 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
             else:
                 clean_name = fid.replace("-", " ").title()
 
-        incoming_docs = list(df.get("docs", []) or [])
-        incoming_tests = list(_test_map_from_any(df.get("tests")).keys())
+        seed = _curated_feature_evidence(entry_feature_id)
+        incoming_docs = _merge_list_values(seed.get("docs"), df.get("docs", []))
+        incoming_tests = _merge_list_values(
+            seed.get("tests"),
+            list(_test_map_from_any(df.get("tests")).keys()),
+        )
+        incoming_backend_apis = _merge_list_values(
+            seed.get("backendApis"),
+            df.get("endpoints", []),
+        )
 
         kanban_entry = {
             "featureId": entry_feature_id,
@@ -1078,7 +1157,7 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
             "implementationStatus": impl_status,
             "riskLevel": risk,
             "routes": [],
-            "backendApis": df.get("endpoints", []) or [],
+            "backendApis": incoming_backend_apis,
             "scheduledJobs": [],
             "dataSources": [],
             "artifacts": [],
@@ -1100,7 +1179,7 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
             for item in _list_from_any(existing.get("tests")) + incoming_tests:
                 _append_unique(merged_tests, item)
             merged_backend_apis: list[Any] = []
-            for item in _list_from_any(existing.get("backendApis")) + _list_from_any(kanban_entry.get("backendApis")):
+            for item in _list_from_any(existing.get("backendApis")) + incoming_backend_apis:
                 _append_unique(merged_backend_apis, item)
             merged_known_issues: list[Any] = []
             for item in _list_from_any(existing.get("knownIssues")) + _list_from_any(kanban_entry.get("knownIssues")):
