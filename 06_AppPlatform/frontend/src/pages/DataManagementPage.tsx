@@ -33,6 +33,8 @@ import type {
   HermesSentinelMailboxStatus,
   HermesSentinelNotification,
   HermesSentinelStatusResponse,
+  HermesMsrpCountryProgressCountry,
+  HermesMsrpCountryProgressResponse,
   HermesSourceQualityResponse,
   HermesToolchainResponse,
 } from "../types/hermes";
@@ -292,6 +294,7 @@ export function DataManagementPage() {
   const [hermesOverview, setHermesOverview] = useState<HermesOverviewResponse | null>(null);
   const [hermesPipelines, setHermesPipelines] = useState<HermesPipelineHealthResponse | null>(null);
   const [hermesSources, setHermesSources] = useState<HermesSourceQualityResponse | null>(null);
+  const [hermesMsrpProgress, setHermesMsrpProgress] = useState<HermesMsrpCountryProgressResponse | null>(null);
   const [hermesCost, setHermesCost] = useState<HermesCostResponse | null>(null);
   const [hermesProposals, setHermesProposals] = useState<Record<string, unknown>[]>([]);
   const [hermesFeatures, setHermesFeatures] = useState<Record<string, unknown>[]>([]);
@@ -522,6 +525,7 @@ export function DataManagementPage() {
     if ((hermesSubtab === "activity" || hermesSubtab === "roadmap") && !hermesPipelines) {
       api.hermesPipelineHealth().then(setHermesPipelines).catch((e: Error) => setHermesTabError(e.message));
       api.hermesSourceQuality().then(setHermesSources).catch((e: Error) => setHermesTabError(e.message));
+      api.hermesMsrpCountryProgress().then(setHermesMsrpProgress).catch(() => {});
     }
     if (hermesSubtab === "roadmap" && hermesProposals.length === 0) {
       api.hermesProposals().then(setHermesProposals).catch((e: Error) => setHermesTabError(e.message));
@@ -1412,6 +1416,40 @@ export function DataManagementPage() {
                           })}
                         </div>
                       ) : <span style={{color:"#94a3b8",fontSize:11}}>Run source quality to populate</span>}
+                    </div>
+                  </div>
+                  {/* MSRP Country Progress */}
+                  <div className="card crud-card">
+                    <div className="admin-card-header"><div><h2>MSRP Country Progress</h2></div></div>
+                    <div style={{padding:12}}>
+                      {hermesMsrpProgress?.countries?.length ? (
+                        <div style={{display:"grid",gap:6,maxHeight:260,overflowY:"auto"}}>
+                          <div style={{fontSize:11,color:"#64748b",marginBottom:4}}>
+                            {hermesMsrpProgress?.status?.gateStatus === "blocked" ? "⛔" : "✅"} Gate {hermesMsrpProgress?.status?.gateStatus}
+                            {" · "}{hermesMsrpProgress?.status?.overallPassPct}% pass
+                            {" · "}{hermesMsrpProgress?.status?.observedCountries?.length ?? 0}/{hermesMsrpProgress?.status?.expectedCountries?.length ?? 0} countries
+                          </div>
+                          {hermesMsrpProgress.countries.slice(0,12).map((c: HermesMsrpCountryProgressCountry) => {
+                            const pct = c.passPct ?? 0;
+                            const color = pct >= 90 ? "#22c55e" : pct >= 50 ? "#f59e0b" : "#ef4444";
+                            return (
+                              <div key={c.countryCode} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 8px",background:"#fff",borderRadius:6,border:"1px solid #e2e8f0",fontSize:11}}>
+                                <div style={{width:6,height:6,borderRadius:"50%",background:color,flexShrink:0}} />
+                                <div style={{fontWeight:600,width:28,flexShrink:0}}>{c.countryCode.toUpperCase()}</div>
+                                <div style={{flex:1}}>
+                                  <div style={{display:"flex",justifyContent:"space-between"}}>
+                                    <span>{pct}%</span>
+                                    <span style={{color:"#64748b"}}>{c.pass}/{c.total}</span>
+                                  </div>
+                                  <div style={{height:4,background:"#f1f5f9",borderRadius:2,marginTop:2}}>
+                                    <div style={{height:"100%",width:Math.min(pct,100)+"%",background:color,borderRadius:2}} />
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : <span style={{color:"#94a3b8",fontSize:11}}>Run dryrun to populate</span>}
                     </div>
                   </div>
                 </div>

@@ -89,6 +89,7 @@ import type {
   HermesSentinelMailboxStatus,
   HermesSentinelNotification,
   HermesSentinelStatusResponse,
+  HermesMsrpCountryProgressResponse,
   HermesSourceQualityResponse,
   HermesToolchainResponse,
 } from "../types/hermes";
@@ -1538,6 +1539,8 @@ export const api = {
     request<HermesPipelineHealthResponse>("/hermes/pipeline-health"),
   hermesSourceQuality: () =>
     request<HermesSourceQualityResponse>("/hermes/source-quality"),
+  hermesMsrpCountryProgress: () =>
+    request<HermesMsrpCountryProgressResponse>("/hermes/msrp-country-progress"),
   hermesCost: () =>
     request<HermesCostResponse>("/hermes/cost"),
   hermesProposals: (status?: string) => {

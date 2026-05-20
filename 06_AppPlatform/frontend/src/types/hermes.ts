@@ -309,3 +309,38 @@ export type HermesFeatureStatus = "idea"|"planned"|"in_progress"|"implemented"|"
 export interface HermesDevEvent { eventId: string; eventType: string; source: string; title: string; summary: string; linkedFeatureIds: string[]; changedFiles: string[]; addedFiles?: string[]; addedEndpoints?: string[]; frontendChanges?: string[]; backendChanges?: string[]; tests?: Record<string, string>; risks?: string[]; nextSteps?: string[]; createdAt: string; }
 export interface HermesDevFeature { featureId: string; title: string; status: HermesFeatureStatus; category: string; source: string; summary: string; linkedEventIds: string[]; endpoints: string[]; frontend: string[]; backend: string[]; tests: Record<string, string>; docs: string[]; evidenceIds: string[]; gaps: string[]; createdAt: string; lastUpdatedAt: string; }
 export interface HermesDevSyncResult { synced: number; featuresUpdated: string[]; featuresCreated: string[]; docsGenerated: number; evidenceWritten: number; gapsCreated: number; }
+
+// === MSRP Country Progress ===
+export interface HermesMsrpCountryProgressCountry {
+  countryCode: string;
+  total: number;
+  pass: number;
+  empty: number;
+  fail: number;
+  errors: number;
+  passPct: number;
+  status: string;
+  topFailureReason?: string;
+  failureBreakdown?: Record<string, number>;
+  strategyRecommendations?: Record<string, number>;
+}
+export interface HermesMsrpCountryProgressResponse {
+  probe: string;
+  overall: string;
+  generatedAt: string;
+  status: {
+    runId?: string;
+    schemaVersion?: string;
+    overallPassPct?: number;
+    gateThreshold?: number;
+    gateStatus?: string;
+    expectedCountries?: string[];
+    observedCountries?: string[];
+    missingCountries?: string[];
+    duplicateCountries?: string[];
+  };
+  countries: HermesMsrpCountryProgressCountry[];
+  topBlockingCountries?: { countryCode: string; passPct: number; reason: string; recommendedAction: string }[];
+  topFailureReasons?: { reason: string; count: number }[];
+  findings?: { type: string; severity: string; message: string }[];
+}
