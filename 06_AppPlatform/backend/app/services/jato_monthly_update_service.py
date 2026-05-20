@@ -2338,6 +2338,103 @@ def _launch_job_thread(job_id: str) -> None:
     worker.start()
 
 
+def _detect_single_country_upload(path: Path) -> tuple[str, str] | None:
+    """Read uploaded xlsx and return (country, month) if single-country, else None."""
+    try:
+        frame = _read_excel_with_fallback(path, sheet_name=0)
+        frame.columns = [str(c).strip() for c in frame.columns]
+        country_col = _find_country_column(list(frame.columns))
+        if country_col is None:
+            return None
+        frame[country_col] = frame[country_col].astype("string").fillna("").str.strip()
+        countries = _ordered_distinct_strings(frame[country_col].tolist())
+        if len(countries) != 1:
+            return None
+        month = _detect_latest_month_from_dataset_frame(frame, path_label="upload")
+        return countries[0], month
+    except Exception:
+        return None
+
+
+def _queue_single_country_job(
+    *,
+    job_id: str,
+    country: str,
+    month: str,
+    triggered_by: str,
+    upload_filename: str,
+    stored_upload_path: Path,
+) -> dict[str, Any]:
+    """Create job state and launch single-country background runner."""
+    normalized_month = _normalize_month(month)
+    normalized_country = country.strip()
+
+    active_paths = _active_data_paths()
+    if active_paths["parquet"].exists():
+        try:
+            latest_months = _collect_dataset_country_latest_months(active_paths["parquet"])
+            active_latest = latest_months.get(normalized_country)
+            if active_latest and normalized_month <= active_latest:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"国家「{normalized_country}」在 active 数据集中已有 {active_latest} 月的数据，"
+                        f"上传月份 {normalized_month} 不更新。请提供晚于 {active_latest} 的月份。"
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    job_dir = _job_dir(job_id)
+    now = _utc_now().isoformat()
+    batch_id = f"{normalized_month}-{normalized_country}-single"
+    state: dict[str, Any] = {
+        "jobId": job_id,
+        "month": normalized_month,
+        "batchId": batch_id,
+        "status": "queued",
+        "phase": "queued",
+        "triggeredBy": triggered_by.strip() or "anonymous",
+        "country": normalized_country,
+        "createdAt": now,
+        "updatedAt": now,
+        "startedAt": None,
+        "finishedAt": None,
+        "error": None,
+        "upload": {
+            "originalFilename": upload_filename,
+            "storedPath": _relative_to_project(stored_upload_path),
+            "sizeBytes": stored_upload_path.stat().st_size,
+            "sha256": _sha256_hex_for_path(stored_upload_path),
+        },
+        "plan": None,
+        "artifacts": {
+            "jobDir": _relative_to_project(job_dir),
+            "logPath": _relative_to_project(_job_log_path(job_id)),
+        },
+        "summaries": {},
+        "logPath": _relative_to_project(_job_log_path(job_id)),
+    }
+    _persist_job_state(state)
+    _append_log(
+        _job_log_path(job_id),
+        f"[{now}] 已入队单国家任务：{normalized_country} {normalized_month}",
+    )
+
+    worker = threading.Thread(
+        target=_run_single_country_job,
+        args=(job_id,),
+        name=f"jato-sc-{job_id}",
+        daemon=True,
+    )
+    _RUNNING_THREADS[job_id] = worker
+    worker.start()
+
+    return _serialize_job_state(state, include_log_tail=False)
+
+
 def create_jato_monthly_update_job(
     *,
     file: UploadFile,
@@ -2352,6 +2449,22 @@ def create_jato_monthly_update_job(
 
     with stored_upload_path.open("wb") as handle:
         shutil.copyfileobj(file.file, handle)
+
+    detected = _detect_single_country_upload(stored_upload_path)
+    if detected is not None:
+        country, month = detected
+        _append_log(
+            _job_log_path(job_id),
+            f"[{_utc_now().isoformat()}] 自动识别为单国家上传：{country} {month}，走快速路径。",
+        )
+        return _queue_single_country_job(
+            job_id=job_id,
+            country=country,
+            month=month,
+            triggered_by=triggered_by,
+            upload_filename=filename,
+            stored_upload_path=stored_upload_path,
+        )
 
     return _queue_monthly_update_job_from_stored_upload(
         job_id=job_id,
@@ -2633,25 +2746,6 @@ def create_single_country_job(
     if not normalized_country:
         raise HTTPException(status_code=400, detail="country 不能为空。")
 
-    # Upload-time check: reject if month is not newer than active
-    active_paths = _active_data_paths()
-    if active_paths["parquet"].exists():
-        try:
-            latest_months = _collect_dataset_country_latest_months(active_paths["parquet"])
-            active_latest = latest_months.get(normalized_country)
-            if active_latest and normalized_month <= active_latest:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"国家「{normalized_country}」在 active 数据集中已有 {active_latest} 月的数据，"
-                        f"上传月份 {normalized_month} 不更新。请提供晚于 {active_latest} 的月份。"
-                    ),
-                )
-        except HTTPException:
-            raise
-        except Exception:
-            pass
-
     job_id = f"jato-sc-{uuid4().hex[:8]}"
     job_dir = _job_dir(job_id)
     uploads_dir = job_dir / "uploads"
@@ -2661,50 +2755,14 @@ def create_single_country_job(
     with stored_upload_path.open("wb") as handle:
         shutil.copyfileobj(file.file, handle)
 
-    now = _utc_now().isoformat()
-    state: dict[str, Any] = {
-        "jobId": job_id,
-        "month": normalized_month,
-        "batchId": f"{normalized_month}-{normalized_country}-single",
-        "status": "queued",
-        "phase": "queued",
-        "triggeredBy": triggered_by.strip() or "anonymous",
-        "country": normalized_country,
-        "createdAt": now,
-        "updatedAt": now,
-        "startedAt": None,
-        "finishedAt": None,
-        "error": None,
-        "upload": {
-            "originalFilename": filename,
-            "storedPath": _relative_to_project(stored_upload_path),
-            "sizeBytes": stored_upload_path.stat().st_size,
-            "sha256": _sha256_hex_for_path(stored_upload_path),
-        },
-        "plan": None,
-        "artifacts": {
-            "jobDir": _relative_to_project(job_dir),
-            "logPath": _relative_to_project(_job_log_path(job_id)),
-        },
-        "summaries": {},
-        "logPath": _relative_to_project(_job_log_path(job_id)),
-    }
-    _persist_job_state(state)
-    _append_log(
-        _job_log_path(job_id),
-        f"[{now}] 已入队单国家任务：{normalized_country} {normalized_month}",
+    return _queue_single_country_job(
+        job_id=job_id,
+        country=normalized_country,
+        month=normalized_month,
+        triggered_by=triggered_by,
+        upload_filename=filename,
+        stored_upload_path=stored_upload_path,
     )
-
-    worker = threading.Thread(
-        target=_run_single_country_job,
-        args=(job_id,),
-        name=f"jato-sc-{job_id}",
-        daemon=True,
-    )
-    _RUNNING_THREADS[job_id] = worker
-    worker.start()
-
-    return _serialize_job_state(state, include_log_tail=False)
 
 
 # ── Smart Merge ──────────────────────────────────────────────────────────────
