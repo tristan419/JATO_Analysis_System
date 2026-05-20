@@ -309,6 +309,7 @@ def _write_ingest_status(
     ok_count: int,
     empty_count: int,
     fail_count: int,
+    total: int = 0,
 ) -> None:
     """Write msrp_ingest status to scheduled_fetch_status.json."""
     import json as _json
@@ -321,17 +322,28 @@ def _write_ingest_status(
             existing = _json.loads(status_path.read_text())
         except (_json.JSONDecodeError, OSError):
             existing = {}
-    fail_count_total = fail_count
-    status = "success" if fail_count_total == 0 else "failure"
+    success_count = ok_count
+    failure_count_total = fail_count
+    total_count = max(total, success_count + failure_count_total)
+    ok_pct = round(success_count / total_count * 100, 1) if total_count > 0 else 0.0
+    if ok_pct >= 90:
+        status = "success"
+    elif ok_pct >= 50:
+        status = "degraded"
+    else:
+        status = "failure"
     existing["msrp_ingest"] = {
         "lastRunAt": _datetime.now(_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "status": status,
         "countryCount": len(countries),
-        "successCount": ok_count + empty_count,
-        "failureCount": fail_count_total,
+        "totalSources": total_count,
+        "successCount": success_count,
+        "emptyCount": empty_count,
+        "failureCount": failure_count_total,
+        "okPct": ok_pct,
     }
     status_path.write_text(_json.dumps(existing, indent=2) + "\n")
-    print(f"[status] msrp_ingest={status} written to {status_path}")
+    print(f"[status] msrp_ingest={status} okPct={ok_pct}% written to {status_path}")
 
 
 def main() -> None:
@@ -485,7 +497,7 @@ def main() -> None:
         )
 
     print(f"{'='*70}")
-    _write_ingest_status(countries, ok_count, empty_count, fail_count)
+    _write_ingest_status(countries, ok_count, empty_count, fail_count, total=total)
     if STRICT_EXIT and fail_count > 0:
         raise SystemExit(1)
 

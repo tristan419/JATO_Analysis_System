@@ -222,7 +222,7 @@ def _check_unstructured_failures(sources: list[dict]) -> list[dict]:
     return findings
 
 
-def _generate_report(scored: list[dict], fails: list[dict]) -> str:
+def _generate_report(scored: list[dict], fails: list[dict], source_findings: list[dict] | None = None) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     healthy = sum(1 for s in scored if s["status"] == "healthy")
     watch = sum(1 for s in scored if s["status"] == "watch")
@@ -260,7 +260,11 @@ def _generate_report(scored: list[dict], fails: list[dict]) -> str:
             lines.append(f"  - Recommendation: {f['recommendation']}")
         lines.append("")
 
-    lines.append("## 4. Registry Update Suggestions\n")
+    if source_findings:
+        lines.append(_generate_dryrun_source_findings_table(source_findings))
+
+    section_num = 5 if source_findings else 4
+    lines.append(f"## {section_num}. Registry Update Suggestions\n")
     for s in scored:
         if s["status"] in ("degraded", "disabled_candidate"):
             lines.append(f"- [ ] Update `{s['sourceId']}` status in source_registry.yaml ({s['status']})")
@@ -347,6 +351,92 @@ def _write_source_registry_scores(
     return registry_path
 
 
+def _load_dryrun_artifact() -> dict | None:
+    """Load the latest MSRP dryrun artifact for source-level failure breakdown."""
+    paths = [
+        REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_report.json",
+    ]
+    for p in paths:
+        if p.is_file():
+            try:
+                return json.loads(p.read_text())
+            except Exception:
+                pass
+    return None
+
+
+def _add_dryrun_source_findings(report: dict) -> list[dict]:
+    """Add source-level MSRP failure breakdown from the latest dryrun artifact."""
+    artifact = _load_dryrun_artifact()
+    if not artifact:
+        return []
+    results = artifact.get("results", []) or []
+    if not results:
+        return []
+
+    findings: list[dict] = []
+    seen_codes: set[str] = set()
+    for r in results:
+        code = r.get("code", "")
+        if not code or code in seen_codes:
+            continue
+        seen_codes.add(code)
+        failure_reason = r.get("failureReason")
+        if not failure_reason:
+            continue
+        findings.append({
+            "sourceCode": code,
+            "country": r.get("country", "?"),
+            "status": r.get("status", "?"),
+            "valid": r.get("valid", 0),
+            "extracted": r.get("extracted", 0),
+            "failureReason": failure_reason,
+            "recommendedStrategy": r.get("recommendedStrategy", ""),
+            "elapsed": r.get("elapsed", 0),
+        })
+
+    report["sourceLevelFindings"] = findings
+
+    # Compute failure breakdown counts and add to unstructured failures
+    if findings:
+        fail_reasons: dict[str, int] = {}
+        for f in findings:
+            reason = f["failureReason"]
+            fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
+        report["failureBreakdown"] = fail_reasons
+
+        # Add aggregate unstructured failure finding for MSRP
+        report.setdefault("unstructuredFailures", []).append({
+            "sourceId": "source.msrp.batch_a",
+            "name": "MSRP Batch A (from dryrun artifact)",
+            "failedCount": len(findings),
+            "finding": f"{len(findings)} sources with classified failures in latest dryrun.",
+            "recommendation": "Review source-level failureBreakdown and apply recommendedStrategy per source.",
+            "sourceLevelFindingsLink": True,
+        })
+
+    return findings
+
+
+def _generate_dryrun_source_findings_table(findings: list[dict]) -> str:
+    if not findings:
+        return ""
+    lines: list[str] = []
+    lines.append("\n## MSRP Source-Level Failure Breakdown\n")
+    lines.append("| Country | Source Code | Status | Valid | Extracted | Failure Reason | Recommended Strategy | Elapsed |")
+    lines.append("|---|---|---|---|---|---|---|")
+    for f in findings:
+        lines.append(
+            f"| {f['country']} | `{f['sourceCode'][:40]}` | {f['status']} "
+            f"| {f['valid']} | {f['extracted']} "
+            f"| {f['failureReason']} | {f['recommendedStrategy']} | {f['elapsed']}s |"
+        )
+    lines.append("")
+    if len(findings) > 20:
+        lines.append(f"\n_Showing all {len(findings)} findings._\n")
+    return "\n".join(lines)
+
+
 def run(registry_dir: str | None = None, status_file: str | None = None) -> dict:
     print("[Hermes Source Quality] Scoring sources...")
     registries = load_all_registries(registry_dir)
@@ -357,6 +447,11 @@ def run(registry_dir: str | None = None, status_file: str | None = None) -> dict
     scored.sort(key=lambda s: s["qualityScore"])
     fails = _check_unstructured_failures(sources)
 
+    # Load dryrun artifact for source-level MSRP failure breakdown
+    dryrun_findings = _add_dryrun_source_findings({
+        "unstructuredFailures": fails,
+    })
+
     healthy = sum(1 for s in scored if s["status"] == "healthy")
     watch = sum(1 for s in scored if s["status"] == "watch")
     degraded = sum(1 for s in scored if s["status"] == "degraded")
@@ -364,8 +459,10 @@ def run(registry_dir: str | None = None, status_file: str | None = None) -> dict
 
     print(f"  {len(scored)} sources: {healthy} healthy, {watch} watch, {degraded} degraded, {high} high-risk")
     print(f"  {len(fails)} unstructured failure groups")
+    if dryrun_findings:
+        print(f"  {len(dryrun_findings)} source-level MSRP failures from dryrun artifact")
 
-    return {
+    result = {
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "summary": {
             "totalSources": len(scored),
@@ -378,6 +475,17 @@ def run(registry_dir: str | None = None, status_file: str | None = None) -> dict
         "sources": scored,
         "unstructuredFailures": fails,
     }
+
+    # Include source-level findings if available
+    if dryrun_findings:
+        result["sourceLevelFindings"] = dryrun_findings
+        fb = {}
+        for f in dryrun_findings:
+            reason = f["failureReason"]
+            fb[reason] = fb.get(reason, 0) + 1
+        result["failureBreakdown"] = fb
+
+    return result
 
 
 def main() -> None:
@@ -399,7 +507,11 @@ def main() -> None:
 
     out_md = Path(args.out_md)
     out_md.parent.mkdir(parents=True, exist_ok=True)
-    out_md.write_text(_generate_report(results["sources"], results["unstructuredFailures"]))
+    out_md.write_text(_generate_report(
+        results["sources"],
+        results["unstructuredFailures"],
+        source_findings=results.get("sourceLevelFindings"),
+    ))
     print(f"[Hermes Source Quality] Report: {out_md}")
 
     out_json = Path(args.out_json)

@@ -50,12 +50,55 @@ def _promoted_code_for_draft(code: str) -> str:
     return code.replace("_draft_scrapling", "_scrapling")
 
 
+def _classify_dryrun_failure(
+    src: dict,
+    exception: Exception | None = None,
+) -> dict:
+    """Classify a dry-run failure and recommend next strategy."""
+    status = src.get("status", "")
+    error = str(src.get("error", "") or (str(exception) if exception else ""))
+    valid = src.get("valid", 0)
+    extracted = src.get("extracted", 0)
+    error_lower = error.lower()
+
+    if exception or status == "exception":
+        if "timeout" in error_lower:
+            return {"failureReason": "http_timeout", "recommendedStrategy": "retry_or_reduce_concurrency", "severity": "warning"}
+        if "403" in error_lower or "forbidden" in error_lower:
+            return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
+        if "selector" in error_lower or "no elements" in error_lower or "TODO_SELECTOR" in error:
+            return {"failureReason": "selector_empty", "recommendedStrategy": "try_scrapling_dynamic_or_playwright", "severity": "warning"}
+        if "playwright" in error_lower or "waiting for" in error_lower:
+            return {"failureReason": "js_required_or_selector_timeout", "recommendedStrategy": "try_playwright_card_flow", "severity": "warning"}
+        if "502" in error_lower or "503" in error_lower or "bad gateway" in error_lower:
+            return {"failureReason": "db_or_backend_write_failed", "recommendedStrategy": "pipeline_error_not_source_error", "severity": "error"}
+        return {"failureReason": "unknown", "recommendedStrategy": "diagnose_with_msrp_page_analyzer", "severity": "warning"}
+
+    if status == "empty":
+        if "TODO_SELECTOR" in error:
+            return {"failureReason": "selector_empty", "recommendedStrategy": "try_scrapling_dynamic_or_playwright", "severity": "warning"}
+        if "json" in error_lower and ("noth" in error_lower or "falling back" in error_lower):
+            return {"failureReason": "json_ld_empty", "recommendedStrategy": "try_css_or_attr_json", "severity": "warning"}
+        return {"failureReason": "no_observation_extracted", "recommendedStrategy": "diagnose_with_msrp_page_analyzer", "severity": "warning"}
+
+    if extracted > 0 and valid == 0:
+        rejected_reasons = [str(r).lower() for r in src.get("rejectedReasons", [])]
+        if any("currency" in r for r in rejected_reasons):
+            return {"failureReason": "currency_mismatch", "recommendedStrategy": "check_default_currency", "severity": "warning"}
+        if any("price" in r and ("range" in r or "out" in r) for r in rejected_reasons):
+            return {"failureReason": "price_out_of_range", "recommendedStrategy": "check_currency_and_price_semantics", "severity": "warning"}
+        return {"failureReason": "validation_rejected_all", "recommendedStrategy": "review_validation_rules", "severity": "warning"}
+
+    return {"failureReason": "unknown", "recommendedStrategy": "diagnose_with_msrp_page_analyzer", "severity": "info"}
+
+
 def _write_dryrun_status(
     countries: list[str],
     pass_count: int,
     empty_count: int,
     fail_count: int,
     error_count: int,
+    total: int = 0,
 ) -> None:
     """Write msrp_dryrun status to scheduled_fetch_status.json."""
     import json as _json
@@ -71,9 +114,10 @@ def _write_dryrun_status(
     total_ok = pass_count
     total_fail = fail_count + error_count
     country_total = len(countries)
-    if total_fail == 0:
+    pass_pct = round(pass_count / total * 100, 1) if total > 0 else 0.0
+    if pass_pct >= 90:
         status = "success"
-    elif total_ok > 0:
+    elif pass_pct >= 50:
         status = "degraded"
     else:
         status = "failure"
@@ -81,11 +125,15 @@ def _write_dryrun_status(
         "lastRunAt": _datetime.now(_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "status": status,
         "countryCount": country_total,
+        "totalSources": total,
         "successCount": total_ok,
         "failureCount": total_fail,
+        "passPct": pass_pct,
+        "artifactPath": "03_Scripts/diagnostics/artifacts/dryrun_report.json",
+        "schemaVersion": "msrp_dryrun_report_v2",
     }
     status_path.write_text(_json.dumps(existing, indent=2) + "\n")
-    print(f"[status] msrp_dryrun={status} written to {status_path}")
+    print(f"[status] msrp_dryrun={status} passPct={pass_pct}% written to {status_path}")
 
 
 def main():
@@ -158,12 +206,14 @@ def main():
                 icon = "⚠"
                 fail_count += 1
 
+            classification = _classify_dryrun_failure(src)
+
             print(
                 f"  [{i:3d}/{len(target_codes)}] {icon} {code:50s} "
                 f"valid={valid} extracted={extracted} rejected={rejected} "
                 f"({elapsed:.1f}s)"
             )
-            results.append({
+            result_entry = {
                 "country": cc,
                 "code": code,
                 "status": status,
@@ -171,9 +221,15 @@ def main():
                 "extracted": extracted,
                 "rejected": rejected,
                 "elapsed": round(elapsed, 1),
-            })
+            }
+            if classification.get("failureReason"):
+                result_entry["failureReason"] = classification["failureReason"]
+                result_entry["recommendedStrategy"] = classification["recommendedStrategy"]
+                result_entry["severity"] = classification["severity"]
+            results.append(result_entry)
         except Exception as e:
             elapsed = time.time() - t0
+            classification = _classify_dryrun_failure({}, exception=e)
             print(
                 f"  [{i:3d}/{len(target_codes)}] ❌ {code:50s} "
                 f"ERROR: {e!s:.60s}"
@@ -184,6 +240,9 @@ def main():
                 "status": "exception",
                 "error": str(e)[:200],
                 "elapsed": round(elapsed, 1),
+                "failureReason": classification.get("failureReason", "unknown"),
+                "recommendedStrategy": classification.get("recommendedStrategy", "diagnose_with_msrp_page_analyzer"),
+                "severity": classification.get("severity", "warning"),
             })
             error_count += 1
 
@@ -216,7 +275,18 @@ def main():
         t = c["pass"] + c["empty"] + c["fail"]
         print(f"{cc:8s} {c['pass']:6d} {c['empty']:6d} {c['fail']:6d} {t:6d}")
 
-    _write_dryrun_status(countries, pass_count, empty_count, fail_count, error_count)
+    # Build failure breakdown and strategy recommendations
+    failure_breakdown: dict[str, int] = {}
+    strategy_recs: dict[str, int] = {}
+    for r in results:
+        reason = r.get("failureReason")
+        if reason:
+            failure_breakdown[reason] = failure_breakdown.get(reason, 0) + 1
+        strat = r.get("recommendedStrategy")
+        if strat:
+            strategy_recs[strat] = strategy_recs.get(strat, 0) + 1
+
+    _write_dryrun_status(countries, pass_count, empty_count, fail_count, error_count, total=total)
 
     # Save report (timestamped + latest symlink for history)
     from datetime import datetime, timezone
@@ -224,7 +294,9 @@ def main():
     report_dir = Path(__file__).parent / "diagnostics" / "artifacts"
     report_dir.mkdir(parents=True, exist_ok=True)
 
+    pass_pct = round(pass_count / total * 100, 1) if total > 0 else 0.0
     report_payload = {
+        "schemaVersion": "msrp_dryrun_report_v2",
         "batch": batch,
         "countries": countries,
         "total": total,
@@ -232,6 +304,9 @@ def main():
         "empty": empty_count,
         "fail": fail_count,
         "errors": error_count,
+        "passPct": pass_pct,
+        "failureBreakdown": failure_breakdown,
+        "strategyRecommendations": strategy_recs,
         "results": results,
         "savedAt": datetime.now(timezone.utc).isoformat(),
     }

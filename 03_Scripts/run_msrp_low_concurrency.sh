@@ -23,6 +23,26 @@ is_truthy() {
   esac
 }
 
+_write_msrp_status() {
+  local pipeline="$1"
+  local status="$2"
+  local reason="$3"
+  local status_path="$REPO_DIR/03_Scripts/logs/scheduled_fetch_status.json"
+  python3 -c "
+import json,os
+from datetime import datetime,timezone
+p=os.path.expanduser('$status_path')
+d=json.loads(open(p).read()) if os.path.exists(p) else {}
+d['$pipeline']={
+    'lastRunAt': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'status': '$status',
+    'reason': '$reason',
+}
+with open(p,'w') as f: f.write(json.dumps(d,indent=2)+chr(10))
+" 2>/dev/null || true
+  echo "[status] $pipeline=$status written to $status_path"
+}
+
 resolve_countries() {
   case "$1" in
     batch_a|a) printf '%s\n' se fi no dk hu hr at cz de fr it pl ;;
@@ -53,6 +73,40 @@ AUTO_REVIEW_LIMIT="${JATO_MSRP_AUTO_REVIEW_LIMIT:-500}"
 MATERIALIZE_LIMIT="${JATO_MSRP_MATERIALIZE_LIMIT:-500}"
 AUTO_REVIEW_DECIDED_BY="${JATO_AUTO_REVIEW_DECIDED_BY:-${APP_USER_NAME:-msrp-cron}}"
 export NVAPI_KEY="${NVAPI_KEY:-${NVIDIA_API_KEY:-}}"
+
+# ── Dryrun-to-ingest gate ──────────────────────────────────────────
+# Ingest requires the latest dryrun pass rate to be >= MIN_DRYRUN_PASS_PCT.
+# This prevents ingest from blind-running when most sources are broken.
+MIN_DRYRUN_PASS_PCT="${JATO_MSRP_MIN_DRYRUN_PASS_PCT:-70}"
+DRYRUN_REPORT="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_report.json"
+
+if [[ "$MODE" == "ingest" ]]; then
+  GATE_SKIP=false
+  if [[ ! -f "$DRYRUN_REPORT" ]]; then
+    echo "[GATE] No dryrun report found at $DRYRUN_REPORT — skipping ingest."
+    GATE_SKIP=true
+  else
+    PASS_PCT=$(python3 -c "
+import json
+with open('$DRYRUN_REPORT') as f:
+    r = json.load(f)
+total = r.get('total', 0)
+ok = r.get('pass', 0)
+pct = (ok / total * 100) if total > 0 else 0
+print(f'{pct:.0f}')
+" 2>/dev/null || echo "0")
+    echo "[GATE] Latest dryrun pass rate: ${PASS_PCT}% (threshold: ${MIN_DRYRUN_PASS_PCT}%)"
+    if python3 -c "exit(0 if int('${PASS_PCT:-0}') < int('$MIN_DRYRUN_PASS_PCT') else 1)" 2>/dev/null; then
+      echo "[GATE] Pass rate ${PASS_PCT}% < ${MIN_DRYRUN_PASS_PCT}% — skipping ingest."
+      GATE_SKIP=true
+    fi
+  fi
+
+  if $GATE_SKIP; then
+    _write_msrp_status "msrp_ingest" "skipped" "Dryrun pass rate ${PASS_PCT:-0}% below threshold ${MIN_DRYRUN_PASS_PCT}%"
+    exit 0
+  fi
+fi
 
 case "$MODE" in
   dryrun) TARGET_SCRIPT="$SCRIPT_DIR/batch_dryrun.py" ;;
