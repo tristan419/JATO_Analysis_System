@@ -13,6 +13,7 @@ TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
 LOG_FILE="$LOG_DIR/country-news-sync-$TIMESTAMP.log"
 LATEST_LOG_LINK="$LOG_DIR/country-news-sync-latest.log"
 FAILURE_SUMMARY_FILE="$LOG_DIR/country-news-sync-last-failure.txt"
+STATUS_KEY="${JATO_COUNTRY_NEWS_STATUS_KEY:-news}"
 JOB_STARTED_AT="$(date '+%Y-%m-%d %H:%M:%S %z')"
 HOST_NAME="$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown-host)"
 ALERT_EMAIL="${JATO_COUNTRY_NEWS_ALERT_EMAIL:-}"
@@ -128,15 +129,16 @@ _write_news_status_json() {
   local last_error="$4"
 
   local status_path="$LOG_DIR/scheduled_fetch_status.json"
-  python3 - "$status_path" "$status" "$success_count" "$failed_count" "$last_error" <<'PY'
+  python3 - "$status_path" "$STATUS_KEY" "$status" "$success_count" "$failed_count" "$last_error" <<'PY'
 import json, os, sys
 from datetime import datetime, timezone
 
 path = sys.argv[1]
-status = sys.argv[2]
-success_count = int(sys.argv[3])
-failed_count = int(sys.argv[4])
-last_error = sys.argv[5]
+status_key = sys.argv[2]
+status = sys.argv[3]
+success_count = int(sys.argv[4])
+failed_count = int(sys.argv[5])
+last_error = sys.argv[6]
 
 existing = {}
 if os.path.exists(path):
@@ -145,7 +147,7 @@ if os.path.exists(path):
     except Exception:
         pass
 
-existing["news"] = {
+existing[status_key] = {
     "lastRunAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "status": status,
     "successCount": success_count,
@@ -199,6 +201,7 @@ echo "[INFO] Python: $PYTHON_BIN"
 echo "[INFO] Sync script: $MAIN_SCRIPT"
 echo "[INFO] Log file: $LOG_FILE"
 echo "[INFO] Lock file: $LOCK_FILE"
+echo "[INFO] Status key: $STATUS_KEY"
 echo "[INFO] Sync args: $SYNC_ARGS"
 echo "[INFO] Backend env: $BACKEND_ENV_FILE"
 echo "[INFO] News env: $NEWS_ENV_FILE"

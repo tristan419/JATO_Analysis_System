@@ -1,11 +1,11 @@
 {
-  "generatedAt": "2026-05-14T15:50:45Z",
+  "generatedAt": "2026-05-20T18:43:52Z",
   "summary": {
     "totalSources": 7,
-    "healthy": 0,
-    "watch": 4,
+    "healthy": 4,
+    "watch": 0,
     "degraded": 3,
-    "highRisk": 1,
+    "highRisk": 0,
     "unstructuredFailures": 2
   },
   "sources": [
@@ -16,19 +16,39 @@
       "country": "SE,FI,NO,DK,HU,HR,AT,CZ",
       "status": "degraded",
       "governanceStatus": "registered",
-      "qualityScore": 30,
+      "qualityScore": 40,
       "successCount": 92,
       "failedCount": 117,
       "lastSuccessAt": null,
       "lastFailureAt": null,
       "lastFailureReason": null,
-      "risk": "high",
+      "risk": "medium",
       "reasons": [
         "repeated failures (failedCount=117)",
-        "no recent success recorded",
-        "incomplete metadata (2/3 quality fields null)"
+        "no recent success recorded"
       ],
       "recommendation": "Consider degrading or reducing frequency. Issues: repeated failures (failedCount=117); no recent success recorded"
+    },
+    {
+      "sourceId": "source.news.batch_a",
+      "name": "News RSS/Atom Batch A (Nordic + Central Europe)",
+      "sourceType": "news",
+      "country": "SE,FI,HU,NO,DK,AT,CZ,HR",
+      "status": "degraded",
+      "governanceStatus": "registered",
+      "qualityScore": 45,
+      "successCount": 0,
+      "failedCount": 0,
+      "lastSuccessAt": "2026-05-13T15:18:03Z",
+      "lastFailureAt": "2026-05-19T22:15:26Z",
+      "lastFailureReason": "news sync exited with code 1",
+      "risk": "medium",
+      "reasons": [
+        "runtime status=failure",
+        "blocking issue: Google News RSS blocked from Tencent Cloud China server (Net",
+        "blocking issue: Falls back to stale cached articles when RSS unreachable"
+      ],
+      "recommendation": "Consider degrading or reducing frequency. Issues: runtime status=failure; blocking issue: Google News RSS blocked from Tencent Cloud China server (Net"
     },
     {
       "sourceId": "source.voc.batch_a",
@@ -37,7 +57,7 @@
       "country": "SE,FI,NO,DK,AT,CZ,HR,HU",
       "status": "degraded",
       "governanceStatus": "registered",
-      "qualityScore": 40,
+      "qualityScore": 50,
       "successCount": 0,
       "failedCount": 8,
       "lastSuccessAt": "2026-05-14T07:54:31Z",
@@ -46,61 +66,37 @@
       "risk": "medium",
       "reasons": [
         "repeated failures (failedCount=8)",
-        "incomplete metadata (3/3 quality fields null)",
         "blocking issue: Single source timeout/403 can fail entire batch (soft-failur"
       ],
-      "recommendation": "Consider degrading or reducing frequency. Issues: repeated failures (failedCount=8); incomplete metadata (3/3 quality fields null)"
+      "recommendation": "Consider degrading or reducing frequency. Issues: repeated failures (failedCount=8); blocking issue: Single source timeout/403 can fail entire batch (soft-failur"
     },
     {
       "sourceId": "source.news.batch_b",
       "name": "News RSS/Atom Batch B (Western + Southern Europe)",
       "sourceType": "news",
       "country": "DE,FR,IT,ES,BE,NL,PL,PT,RO,SI,SK,GR",
-      "status": "degraded",
-      "governanceStatus": "needs_review",
-      "qualityScore": 55,
+      "status": "healthy",
+      "governanceStatus": "registered",
+      "qualityScore": 80,
       "successCount": 0,
       "failedCount": 0,
       "lastSuccessAt": null,
       "lastFailureAt": null,
       "lastFailureReason": null,
-      "risk": "medium",
-      "reasons": [
-        "no recent success recorded",
-        "governanceStatus=needs_review",
-        "incomplete metadata (3/3 quality fields null)"
-      ],
-      "recommendation": "Consider degrading or reducing frequency. Issues: no recent success recorded; governanceStatus=needs_review"
-    },
-    {
-      "sourceId": "source.news.batch_a",
-      "name": "News RSS/Atom Batch A (Nordic + Central Europe)",
-      "sourceType": "news",
-      "country": "SE,FI,HU,NO,DK,AT,CZ,HR",
-      "status": "watch",
-      "governanceStatus": "registered",
-      "qualityScore": 70,
-      "successCount": 21,
-      "failedCount": 0,
-      "lastSuccessAt": "2026-05-13T15:18:03Z",
-      "lastFailureAt": null,
-      "lastFailureReason": null,
       "risk": "low",
       "reasons": [
-        "incomplete metadata (3/3 quality fields null)",
-        "blocking issue: Google News RSS blocked from Tencent Cloud China server (Net",
-        "blocking issue: Falls back to stale cached articles when RSS unreachable"
+        "no recent success recorded"
       ],
-      "recommendation": "Watch. Issues: incomplete metadata (3/3 quality fields null); blocking issue: Google News RSS blocked from Tencent Cloud China server (Net"
+      "recommendation": "Source is healthy. Continue monitoring."
     },
     {
       "sourceId": "source.msrp.production",
       "name": "MSRP Production Sources",
       "sourceType": "msrp",
       "country": "SE,DE",
-      "status": "watch",
+      "status": "healthy",
       "governanceStatus": "registered",
-      "qualityScore": 70,
+      "qualityScore": 80,
       "successCount": 0,
       "failedCount": 0,
       "lastSuccessAt": null,
@@ -108,19 +104,18 @@
       "lastFailureReason": null,
       "risk": "low",
       "reasons": [
-        "no recent success recorded",
-        "incomplete metadata (3/3 quality fields null)"
+        "no recent success recorded"
       ],
-      "recommendation": "Watch. Issues: no recent success recorded; incomplete metadata (3/3 quality fields null)"
+      "recommendation": "Source is healthy. Continue monitoring."
     },
     {
       "sourceId": "source.msrp.evkx",
       "name": "EVKX BEV Catalog",
       "sourceType": "official",
       "country": "multi",
-      "status": "watch",
+      "status": "healthy",
       "governanceStatus": "registered",
-      "qualityScore": 70,
+      "qualityScore": 80,
       "successCount": 0,
       "failedCount": 0,
       "lastSuccessAt": null,
@@ -128,19 +123,18 @@
       "lastFailureReason": null,
       "risk": "low",
       "reasons": [
-        "no recent success recorded",
-        "incomplete metadata (3/3 quality fields null)"
+        "no recent success recorded"
       ],
-      "recommendation": "Watch. Issues: no recent success recorded; incomplete metadata (3/3 quality fields null)"
+      "recommendation": "Source is healthy. Continue monitoring."
     },
     {
       "sourceId": "source.msrp.drafts_suv_top30",
       "name": "MSRP Source Drafts (SUV Top30 per country)",
       "sourceType": "msrp",
       "country": "SE,FI,NO,DK,HU,HR,AT,CZ",
-      "status": "watch",
+      "status": "healthy",
       "governanceStatus": "registered",
-      "qualityScore": 70,
+      "qualityScore": 80,
       "successCount": 0,
       "failedCount": 0,
       "lastSuccessAt": null,
@@ -148,10 +142,9 @@
       "lastFailureReason": null,
       "risk": "low",
       "reasons": [
-        "no recent success recorded",
-        "incomplete metadata (3/3 quality fields null)"
+        "no recent success recorded"
       ],
-      "recommendation": "Watch. Issues: no recent success recorded; incomplete metadata (3/3 quality fields null)"
+      "recommendation": "Source is healthy. Continue monitoring."
     }
   ],
   "unstructuredFailures": [

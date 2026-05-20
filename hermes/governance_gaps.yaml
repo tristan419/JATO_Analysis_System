@@ -116,14 +116,14 @@ gaps:
   affectedAssets:
   - All source types (news, voc, msrp)
   evidence:
-  - Source Registry quality fields are all null
-  - No successRate, timeoutRate, http403Rate, extractionQualityScore tracked
-  - No source health dashboard
-  recommendedAction: Implement per-source quality scoring in crawler output. Write
-    scores to Source Registry. Add source health view to Data Management.
-  status: open
+  - 03_Scripts/hermes/hermes_source_quality.py computes deterministic source quality scores from Source Registry and scheduled_fetch_status.json.
+  - hermes/source_registry.yaml now stores qualityScore, qualityStatus, risk, scoreGeneratedAt, successRate, failureRate, timeoutRate, http403Rate, and extractionQualityScore.
+  - hermes/reports/source_quality_report.json and .md are refreshed from the scoring script.
+  - Data Management Hermes tab already exposes Source Quality via /v1/hermes/source-quality and the existing Source Quality panel.
+  recommendedAction: Keep hermes-source-quality.timer enabled and review degraded sources in the Source Quality panel after scheduled fetch runs.
+  status: resolved
   owner: ''
-  notes: ''
+  notes: 'Resolved 2026-05-20: source quality scoring now writes registry fields and report artifacts; Batch B news status uses a separate news_batch_b key.'
 - gapId: gap.backlog.prd_only_features
   title: Two PRDs written but not implemented
   category: backlog

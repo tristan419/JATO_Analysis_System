@@ -13,6 +13,7 @@ Environment=PYTHONPATH=/opt/JATO_Analysis_System-main/06_AppPlatform/backend
 Environment=REPO_DIR=/opt/JATO_Analysis_System-main
 Environment=http_proxy=http://127.0.0.1:7897
 Environment=https_proxy=http://127.0.0.1:7897
+Environment=JATO_COUNTRY_NEWS_STATUS_KEY=news_batch_b
 Environment=JATO_COUNTRY_NEWS_SYNC_ARGS=--workers 4 --country DE --country FR --country IT --country ES --country BE --country NL --country PL --country PT --country RO --country SI --country SK --country GR
 
 ExecStart=/opt/JATO_Analysis_System-main/03_Scripts/run_country_news_sync.sh

@@ -30,6 +30,13 @@ def _safe(v: Any, key: str, default: Any = None) -> Any:
     return default
 
 
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _load_status_file(path: str | None) -> dict[str, Any] | None:
     paths = [path] if path else []
     paths.append(str(REPO_ROOT / "03_Scripts" / "logs" / "scheduled_fetch_status.json"))
@@ -42,6 +49,53 @@ def _load_status_file(path: str | None) -> dict[str, Any] | None:
     return None
 
 
+def _status_key_for_source(source: dict) -> str | None:
+    source_id = _safe(source, "sourceId", "")
+    mapping = {
+        "source.voc.batch_a": "voc",
+        "source.news.batch_a": "news",
+        "source.news.batch_b": "news_batch_b",
+        "source.msrp.batch_a": "msrp_dryrun",
+        "source.msrp.drafts_suv_top30": "msrp_dryrun",
+        "source.msrp.production": "msrp_ingest",
+    }
+    return mapping.get(source_id)
+
+
+def _runtime_status_for_source(source: dict, status_data: dict | None) -> dict[str, Any] | None:
+    if not status_data:
+        return None
+    key = _status_key_for_source(source)
+    if not key:
+        return None
+    entry = status_data.get(key)
+    return entry if isinstance(entry, dict) else None
+
+
+def _observed_with_runtime_status(source: dict, status_data: dict | None) -> dict[str, Any]:
+    observed = dict(_safe(source, "lastObserved", {}) or {})
+    runtime = _runtime_status_for_source(source, status_data)
+    if not runtime:
+        return observed
+
+    if runtime.get("successCount") is not None:
+        observed["successCount"] = _coerce_int(runtime.get("successCount"))
+
+    failed = runtime.get("failureCount", runtime.get("failedCount"))
+    if failed is not None:
+        observed["failedCount"] = _coerce_int(failed)
+
+    status = str(runtime.get("status") or "").strip().lower()
+    last_run_at = runtime.get("lastRunAt")
+    if last_run_at and status == "success":
+        observed["lastSuccessAt"] = last_run_at
+    elif last_run_at and status in {"failure", "degraded"}:
+        observed["lastFailureAt"] = last_run_at
+        observed["lastFailureReason"] = runtime.get("lastError") or f"runtime status={status}"
+
+    return observed
+
+
 def _compute_quality_score(source: dict, status_data: dict | None) -> dict:
     """Score a single source 0–100 using deterministic rules."""
     score = 100
@@ -51,8 +105,8 @@ def _compute_quality_score(source: dict, status_data: dict | None) -> dict:
     governance = _safe(source, "governanceStatus", "unmanaged")
 
     # Repeated failures
-    last_obs = _safe(source, "lastObserved", {}) or {}
-    failed = last_obs.get("failedCount", 0) or 0
+    last_obs = _observed_with_runtime_status(source, status_data)
+    failed = _coerce_int(last_obs.get("failedCount"))
     if failed > 5:
         score -= 40
         reasons.append(f"repeated failures (failedCount={failed})")
@@ -68,6 +122,15 @@ def _compute_quality_score(source: dict, status_data: dict | None) -> dict:
     elif status == "disabled":
         score -= 50
         reasons.append("status=disabled")
+
+    runtime = _runtime_status_for_source(source, status_data)
+    runtime_status = str(_safe(runtime, "status", "")).strip().lower()
+    if runtime_status == "failure":
+        score -= 35
+        reasons.append("runtime status=failure")
+    elif runtime_status == "degraded":
+        score -= 20
+        reasons.append("runtime status=degraded")
 
     # No recent success
     last_success = last_obs.get("lastSuccessAt")
@@ -118,7 +181,7 @@ def _compute_quality_score(source: dict, status_data: dict | None) -> dict:
         "status": classification,
         "governanceStatus": governance,
         "qualityScore": score,
-        "successCount": last_obs.get("successCount", 0) or 0,
+        "successCount": _coerce_int(last_obs.get("successCount")),
         "failedCount": failed,
         "lastSuccessAt": last_obs.get("lastSuccessAt"),
         "lastFailureAt": last_obs.get("lastFailureAt"),
@@ -207,6 +270,81 @@ def _generate_report(scored: list[dict], fails: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _rate(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round(numerator / denominator, 4)
+
+
+def _registry_quality_from_score(scored: dict, generated_at: str) -> dict[str, Any]:
+    success_count = _coerce_int(scored.get("successCount"))
+    failed_count = _coerce_int(scored.get("failedCount"))
+    total = success_count + failed_count
+    failure_rate = _rate(failed_count, total)
+    reasons_text = " ".join(str(r).lower() for r in scored.get("reasons", []))
+
+    if failed_count:
+        timeout_rate = failure_rate if "timeout" in reasons_text else 0.0
+        http403_rate = failure_rate if ("403" in reasons_text or "blocked" in reasons_text) else 0.0
+    else:
+        timeout_rate = 0.0
+        http403_rate = 0.0
+
+    return {
+        "qualityScore": scored["qualityScore"],
+        "qualityStatus": scored["status"],
+        "risk": scored["risk"],
+        "scoreGeneratedAt": generated_at,
+        "scoringMethod": "hermes_source_quality_v1",
+        "successRate": _rate(success_count, total),
+        "failureRate": failure_rate,
+        "timeoutRate": timeout_rate,
+        "http403Rate": http403_rate,
+        "extractionQualityScore": round(scored["qualityScore"] / 100, 4),
+        "usefulContentRate": None,
+        "duplicateRate": None,
+    }
+
+
+def _write_source_registry_scores(
+    scored: list[dict],
+    *,
+    registry_dir: str | None,
+    generated_at: str,
+) -> Path:
+    try:
+        import yaml
+    except ImportError as exc:
+        raise RuntimeError("PyYAML is required to write source registry scores") from exc
+
+    registry_base = Path(registry_dir).resolve() if registry_dir else REPO_ROOT / "hermes"
+    registry_path = registry_base / "source_registry.yaml"
+    data = yaml.safe_load(registry_path.read_text()) or {}
+    sources = data.get("sources")
+    if not isinstance(sources, list):
+        raise RuntimeError(f"Invalid source registry shape: {registry_path}")
+
+    by_id = {item["sourceId"]: item for item in scored}
+    for source in sources:
+        scored_source = by_id.get(source.get("sourceId"))
+        if not scored_source:
+            continue
+
+        last_observed = source.setdefault("lastObserved", {})
+        last_observed["successCount"] = scored_source.get("successCount")
+        last_observed["failedCount"] = scored_source.get("failedCount")
+        last_observed["lastSuccessAt"] = scored_source.get("lastSuccessAt")
+        last_observed["lastFailureAt"] = scored_source.get("lastFailureAt")
+        last_observed["lastFailureReason"] = scored_source.get("lastFailureReason")
+        source["quality"] = _registry_quality_from_score(scored_source, generated_at)
+
+    registry_path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return registry_path
+
+
 def run(registry_dir: str | None = None, status_file: str | None = None) -> dict:
     print("[Hermes Source Quality] Scoring sources...")
     registries = load_all_registries(registry_dir)
@@ -246,10 +384,16 @@ def main() -> None:
     parser.add_argument("--status-file", default=None)
     parser.add_argument("--out-json", default="hermes/reports/source_quality_report.json")
     parser.add_argument("--out-md", default="hermes/reports/source_quality_report.md")
+    parser.add_argument(
+        "--write-registry",
+        action="store_true",
+        help="Write computed quality fields back to hermes/source_registry.yaml",
+    )
     args = parser.parse_args()
     os.chdir(REPO_ROOT)
 
     results = run(args.registry_dir, args.status_file)
+    generated_at = results["generatedAt"]
 
     out_md = Path(args.out_md)
     out_md.parent.mkdir(parents=True, exist_ok=True)
@@ -259,6 +403,14 @@ def main() -> None:
     out_json = Path(args.out_json)
     out_json.write_text(json.dumps(results, indent=2, ensure_ascii=False, default=str))
     print(f"[Hermes Source Quality] JSON: {out_json}")
+
+    if args.write_registry:
+        registry_path = _write_source_registry_scores(
+            results["sources"],
+            registry_dir=args.registry_dir,
+            generated_at=generated_at,
+        )
+        print(f"[Hermes Source Quality] Registry updated: {registry_path}")
 
 
 if __name__ == "__main__":

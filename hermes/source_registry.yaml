@@ -27,10 +27,16 @@ sources:
       lastFailureAt: null
       lastFailureReason: null
     quality:
-      successRate: null
-      timeoutRate: null
-      http403Rate: null
-      extractionQualityScore: null
+      qualityScore: 50
+      qualityStatus: degraded
+      risk: medium
+      scoreGeneratedAt: "2026-05-20T18:43:52Z"
+      scoringMethod: "hermes_source_quality_v1"
+      successRate: 0.0
+      failureRate: 1.0
+      timeoutRate: 1.0
+      http403Rate: 1.0
+      extractionQualityScore: 0.5
       usefulContentRate: null
       duplicateRate: null
     owner: ""
@@ -61,10 +67,16 @@ sources:
       lastFailureAt: null
       lastFailureReason: null
     quality:
+      qualityScore: 45
+      qualityStatus: degraded
+      risk: medium
+      scoreGeneratedAt: "2026-05-20T18:43:52Z"
+      scoringMethod: "hermes_source_quality_v1"
       successRate: null
-      timeoutRate: null
-      http403Rate: null
-      extractionQualityScore: null
+      failureRate: null
+      timeoutRate: 0.0
+      http403Rate: 0.0
+      extractionQualityScore: 0.45
       usefulContentRate: null
       duplicateRate: null
     owner: ""
@@ -83,10 +95,9 @@ sources:
     targetModels: []
     targetSegments: []
     status: active
-    governanceStatus: needs_review
+    governanceStatus: registered
     knownIssues:
-      - "Batch B has NO scheduled fetch — only Batch A is scheduled"
-      - "12 countries without automated news coverage"
+      - "First scheduled Batch B run pending verification in scheduled_fetch_status.json"
     lastObserved:
       successCount: null
       failedCount: null
@@ -94,14 +105,20 @@ sources:
       lastFailureAt: null
       lastFailureReason: null
     quality:
+      qualityScore: 80
+      qualityStatus: healthy
+      risk: low
+      scoreGeneratedAt: "2026-05-20T18:43:52Z"
+      scoringMethod: "hermes_source_quality_v1"
       successRate: null
-      timeoutRate: null
-      http403Rate: null
-      extractionQualityScore: null
+      failureRate: null
+      timeoutRate: 0.0
+      http403Rate: 0.0
+      extractionQualityScore: 0.8
       usefulContentRate: null
       duplicateRate: null
     owner: ""
-    notes: "Config exists but not wired to any scheduler."
+    notes: "Scheduled via jato-country-news-sync-b.timer (23:45 UTC)."
 
   # --- MSRP Sources ---
   - sourceId: source.msrp.batch_a
@@ -128,10 +145,16 @@ sources:
       lastFailureAt: null
       lastFailureReason: null
     quality:
-      successRate: 0.44
-      timeoutRate: null
-      http403Rate: null
-      extractionQualityScore: null
+      qualityScore: 40
+      qualityStatus: degraded
+      risk: medium
+      scoreGeneratedAt: "2026-05-20T18:43:52Z"
+      scoringMethod: "hermes_source_quality_v1"
+      successRate: 0.4402
+      failureRate: 0.5598
+      timeoutRate: 0.0
+      http403Rate: 0.0
+      extractionQualityScore: 0.4
       usefulContentRate: null
       duplicateRate: null
     owner: ""
@@ -159,10 +182,16 @@ sources:
       lastFailureAt: null
       lastFailureReason: null
     quality:
+      qualityScore: 80
+      qualityStatus: healthy
+      risk: low
+      scoreGeneratedAt: "2026-05-20T18:43:52Z"
+      scoringMethod: "hermes_source_quality_v1"
       successRate: null
-      timeoutRate: null
-      http403Rate: null
-      extractionQualityScore: null
+      failureRate: null
+      timeoutRate: 0.0
+      http403Rate: 0.0
+      extractionQualityScore: 0.8
       usefulContentRate: null
       duplicateRate: null
     owner: ""
@@ -192,10 +221,16 @@ sources:
       lastFailureAt: null
       lastFailureReason: null
     quality:
+      qualityScore: 80
+      qualityStatus: healthy
+      risk: low
+      scoreGeneratedAt: "2026-05-20T18:43:52Z"
+      scoringMethod: "hermes_source_quality_v1"
       successRate: null
-      timeoutRate: null
-      http403Rate: null
-      extractionQualityScore: null
+      failureRate: null
+      timeoutRate: 0.0
+      http403Rate: 0.0
+      extractionQualityScore: 0.8
       usefulContentRate: null
       duplicateRate: null
     owner: ""
@@ -226,10 +261,16 @@ sources:
       lastFailureAt: null
       lastFailureReason: null
     quality:
+      qualityScore: 80
+      qualityStatus: healthy
+      risk: low
+      scoreGeneratedAt: "2026-05-20T18:43:52Z"
+      scoringMethod: "hermes_source_quality_v1"
       successRate: null
-      timeoutRate: null
-      http403Rate: null
-      extractionQualityScore: null
+      failureRate: null
+      timeoutRate: 0.0
+      http403Rate: 0.0
+      extractionQualityScore: 0.8
       usefulContentRate: null
       duplicateRate: null
     owner: ""
