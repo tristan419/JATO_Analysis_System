@@ -155,7 +155,14 @@ _FEATURE_ID_ALIASES = {
 }
 
 _NOISY_GENERIC_FEATURE_IDS = {"backend", "frontend"}
-_NOISY_COMMIT_FEATURE_PREFIXES = ("fix-", "merge-", "trigger-", "docs-")
+_NOISY_COMMIT_FEATURE_PREFIXES = (
+    "fix-",
+    "merge-",
+    "trigger-",
+    "docs-",
+    "hermes-auto-dev-event-",
+    "hermes-record-",
+)
 
 
 def _feature_title_from_id(feature_id: str) -> str:

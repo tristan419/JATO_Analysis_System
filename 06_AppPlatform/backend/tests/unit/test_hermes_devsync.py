@@ -228,13 +228,19 @@ class TestGaps:
             "- gapId: gap.devsync.fix-health-check-15-retries-x-5s.missing_tests\n"
             "  title: noisy\n"
             "  status: open\n"
+            "- gapId: gap.devsync.hermes-auto-dev-event-from-push-a255d000.missing_tests\n"
+            "  title: noisy hook event\n"
+            "  status: open\n"
+            "- gapId: gap.devsync.hermes-record-ops-runner-dev-event.missing_tests\n"
+            "  title: noisy record event\n"
+            "  status: open\n"
         )
 
-        assert retire_noisy_devsync_gaps() == 1
+        assert retire_noisy_devsync_gaps() == 3
 
         import yaml
         gaps = yaml.safe_load((tmp_path / "hermes" / "governance_gaps.yaml").read_text())["gaps"]
-        assert gaps[0]["status"] == "resolved"
+        assert {gap["status"] for gap in gaps} == {"resolved"}
 
 
 class TestMarkdown:
@@ -302,6 +308,31 @@ class TestSync:
             title="fix: health check 15 retries x 5s",
             linkedFeatureIds=["fix-health-check-15-retries-x-5s"],
             changedFiles=["03_Scripts/ops/deploy_fullstack_server.sh"],
+            tests={},
+        ))
+
+        result = sync_dev_events()
+
+        assert result["featuresCreated"] == []
+        assert list_features() == []
+
+    def test_sync_skips_auto_generated_dev_event_commits(self, tmp_path):
+        from app.services.hermes_devsync_service import append_dev_event, list_features, sync_dev_events
+
+        append_dev_event(_make_event(
+            "e1",
+            source="git_commit",
+            title="hermes: auto dev event from push a255d000",
+            linkedFeatureIds=["hermes-auto-dev-event-from-push-a255d000"],
+            changedFiles=["hermes/dev_events/dev_events.jsonl"],
+            tests={},
+        ))
+        append_dev_event(_make_event(
+            "e2",
+            source="git_commit",
+            title="hermes: record ops runner dev event",
+            linkedFeatureIds=["hermes-record-ops-runner-dev-event"],
+            changedFiles=["hermes/dev_events/dev_events.jsonl"],
             tests={},
         ))
 
