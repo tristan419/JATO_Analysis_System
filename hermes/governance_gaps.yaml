@@ -149,14 +149,12 @@ gaps:
   affectedAssets:
   - All scheduled pipelines
   evidence:
-  - No runbook document found in 04_DevOps/ or elsewhere
-  - 'No documented recovery procedure for: VOC 203/EXEC, news DB connection failure,
-    MSRP dry-run 404s'
-  recommendedAction: 'Create SCHEDULED_FETCH_OPERATIONS.md with: manual test commands,
-    journalctl troubleshooting, artifact paths, failure recovery steps.'
-  status: open
+  - Markdown_Readme/Fullstack/04_DevOps/SCHEDULED_FETCH_OPERATIONS.md now documents manual test commands, journalctl troubleshooting, artifact paths, and failure recovery steps.
+  - The runbook covers Country news sync, VOC forum sync, MSRP dry run, and MSRP ingest recovery.
+  recommendedAction: Keep this runbook updated when scheduled fetch timers, service names, or log artifact paths change.
+  status: resolved
   owner: ''
-  notes: ''
+  notes: Resolved 2026-05-20 by adding the scheduled fetch operations runbook and linking it from the AI and roadmap indexes.
 - gapId: gap.docs.no_adr
   title: No Architecture Decision Log (ADR)
   category: docs

@@ -194,6 +194,7 @@ Engineering Config
 | Deployment | `Fullstack/04_DevOps/TENCENT_CLOUD_DEPLOY.md` |
 | CI/CD | `Fullstack/04_DevOps/MANUAL_CICD.md` |
 | JATO monthly data lifecycle | `Fullstack/04_DevOps/JATO_MONTHLY_UPDATE_DATA_LIFECYCLE_2026-05-17.md` |
+| Scheduled fetch recovery | `Fullstack/04_DevOps/SCHEDULED_FETCH_OPERATIONS.md` |
 | Local dev | `Fullstack/04_DevOps/FULLSTACK_LOCAL_DEBUG.md` |
 | UI spec | `../UI/UI_SPECIFICATION_V1.md` |
 | Backend README | `../../06_AppPlatform/backend/README.md` |
