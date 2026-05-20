@@ -17,7 +17,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
-from app.core.security import require_min_role
+from app.core.security import ROLE_LEVEL, require_min_role
 from app.services.hermes_ops_runner_service import (
     HELP_TEXT,
     HERMES_SCRIPTS,
@@ -357,6 +357,21 @@ def hermes_architecture(_=Depends(require_min_role("viewer"))) -> dict:
 
 # ── Script Execution ──────────────────────────────────────────────
 
+
+def _check_command_role(command_id: str, user_role: str) -> None:
+    """Raise 403 if *user_role* is insufficient for a known *command_id*.
+
+    Unknown commands are not gated here — ``execute_hermes_command()``
+    validates the command and returns 400 for them.
+    """
+    info = HERMES_SCRIPTS.get(command_id)
+    if info is None:
+        return  # let execute_hermes_command return 400
+    min_role = info.get("requiredRole", "admin")
+    if ROLE_LEVEL.get(user_role, 0) < ROLE_LEVEL.get(min_role, 0):
+        raise HTTPException(403, f"Command '{command_id}' requires {min_role} role")
+
+
 @router.get("/run/{command}/help")
 def hermes_run_help(command: str, _=Depends(require_min_role("viewer"))):
     """Return help for a specific Hermes command."""
@@ -369,8 +384,9 @@ def hermes_run_help(command: str, _=Depends(require_min_role("viewer"))):
 
 
 @router.post("/run/{command}")
-def hermes_run(command: str, user=Depends(require_min_role("admin"))):
+def hermes_run(command: str, user=Depends(require_min_role("viewer"))):
     """Execute a Hermes script and return its output."""
+    _check_command_role(command, user.role)
     try:
         return execute_hermes_command(
             command,
@@ -1061,12 +1077,15 @@ def hermes_commands(_=Depends(require_min_role("viewer"))) -> list[dict]:
     parameter schema so the frontend can render buttons or
     auto-complete from natural-language input.
     """
+    def _role(cmd_id: str) -> str:
+        return HERMES_SCRIPTS.get(cmd_id, {}).get("requiredRole", "admin")
+
     return [
         {
             "commandId": "pipeline-audit",
             "label": "Pipeline Audit",
             "description": "Scan systemd/Airflow/GH Actions for pipeline health.",
-            "requiredRole": "admin",
+            "requiredRole": _role("pipeline-audit"),
             "mapsToIntent": "pipeline_audit",
             "parameters": [],
         },
@@ -1074,7 +1093,7 @@ def hermes_commands(_=Depends(require_min_role("viewer"))) -> list[dict]:
             "commandId": "source-quality",
             "label": "Source Audit",
             "description": "Score VOC/News/MSRP source health 0-100.",
-            "requiredRole": "admin",
+            "requiredRole": _role("source-quality"),
             "mapsToIntent": "source_audit",
             "parameters": [],
         },
@@ -1082,7 +1101,7 @@ def hermes_commands(_=Depends(require_min_role("viewer"))) -> list[dict]:
             "commandId": "cost-report",
             "label": "Cost Report",
             "description": "Calculate Flash/Pro token costs vs monthly budget.",
-            "requiredRole": "admin",
+            "requiredRole": _role("cost-report"),
             "mapsToIntent": "cost_refresh",
             "parameters": [],
         },
@@ -1090,7 +1109,7 @@ def hermes_commands(_=Depends(require_min_role("viewer"))) -> list[dict]:
             "commandId": "code-audit",
             "label": "Code Audit",
             "description": "Run 10-rule git diff audit scan.",
-            "requiredRole": "developer",
+            "requiredRole": _role("code-audit"),
             "mapsToIntent": "code_audit",
             "parameters": [
                 {"name": "base", "type": "string", "required": False, "default": "main"},
@@ -1101,7 +1120,7 @@ def hermes_commands(_=Depends(require_min_role("viewer"))) -> list[dict]:
             "commandId": "evidence",
             "label": "Evidence Writer",
             "description": "Extract structured facts from artifacts into JSONL.",
-            "requiredRole": "admin",
+            "requiredRole": _role("evidence"),
             "mapsToIntent": "evidence_refresh",
             "parameters": [],
         },
@@ -1109,7 +1128,7 @@ def hermes_commands(_=Depends(require_min_role("viewer"))) -> list[dict]:
             "commandId": "answer-audit",
             "label": "Answer Audit",
             "description": "Generate sample answer quality audits.",
-            "requiredRole": "admin",
+            "requiredRole": _role("answer-audit"),
             "mapsToIntent": "evidence_refresh",
             "parameters": [],
         },
@@ -1117,8 +1136,8 @@ def hermes_commands(_=Depends(require_min_role("viewer"))) -> list[dict]:
 
 
 @router.post("/commands/execute")
-def hermes_command_execute(payload: dict = Body(...), _=Depends(require_min_role("admin"))) -> dict:
-    """Execute a Hermes command. Wraps POST /run/{command} with extra metadata.
+def hermes_command_execute(payload: dict = Body(...), user=Depends(require_min_role("viewer"))) -> dict:
+    """Execute a Hermes command via the centralised ops runner.
 
     **Request**::
 
@@ -1128,56 +1147,23 @@ def hermes_command_execute(payload: dict = Body(...), _=Depends(require_min_role
           "sessionId": "optional"
         }
 
-    **Response**: same as POST /run/{command} plus ``commandId`` and ``runId``.
+    **Response**: same as ``POST /run/{command}``.
     """
     command_id = (payload.get("commandId") or "").strip()
     if not command_id:
         raise HTTPException(400, "commandId is required")
-    if command_id not in HERMES_SCRIPTS:
-        raise HTTPException(400, f"Unknown command: {command_id}. Available: {', '.join(HERMES_SCRIPTS)}")
 
-    info = HERMES_SCRIPTS[command_id]
-    script_path = SCRIPTS_DIR / info["script"]
-    if not script_path.is_file():
-        raise HTTPException(500, f"Script not found: {script_path}")
-
-    args = list(info.get("args", []))
-    # Merge user-supplied parameters
-    user_params: dict = payload.get("parameters") or {}
-    if "base" in user_params:
-        args[args.index("--base") + 1 if "--base" in args else len(args):] = ["--base", user_params["base"]]
-    if "head" in user_params:
-        args[args.index("--head") + 1 if "--head" in args else len(args):] = ["--head", user_params["head"]]
-
-    cmd = [sys.executable, str(script_path)] + args
-    started_at = datetime.now(timezone.utc).isoformat()
-    run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    _check_command_role(command_id, user.role)
 
     try:
-        result = subprocess.run(
-            cmd, cwd=str(PROJECT_ROOT), capture_output=True, text=True, timeout=120,
+        return execute_hermes_command(
+            command_id,
+            parameters=payload.get("parameters") or None,
+            actor=getattr(user, "name", "unknown"),
+            session_id=payload.get("sessionId") or "",
         )
-        _log_activity(command_id, info["script"], result.returncode, started_at)
-        return {
-            "commandId": command_id,
-            "runId": run_id,
-            "script": info["script"],
-            "exitCode": result.returncode,
-            "stdout": result.stdout[-8000:],
-            "stderr": result.stderr[-2000:],
-            "status": "success" if result.returncode == 0 else "failed",
-        }
-    except subprocess.TimeoutExpired:
-        _log_activity(command_id, info["script"], -1, started_at)
-        return {
-            "commandId": command_id,
-            "runId": run_id,
-            "script": info["script"],
-            "exitCode": -1,
-            "stdout": "",
-            "stderr": "Timeout after 120 seconds",
-            "status": "timeout",
-        }
+    except HermesRunError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1246,15 +1232,16 @@ def hermes_dev_sync(
     """
     from app.services.hermes_devsync_service import sync_dev_events
 
-    # Token auth for GitHub Actions
+    # Token auth for GitHub Actions — fail-closed
     sync_token = os.getenv("HERMES_SYNC_TOKEN", "").strip()
-    if sync_token:
-        if source == "github_actions":
-            token = ""
-            if authorization and authorization.startswith("Bearer "):
-                token = authorization[7:].strip()
-            if token != sync_token:
-                raise HTTPException(401, "Invalid or missing sync token")
+    if source == "github_actions":
+        if not sync_token:
+            raise HTTPException(401, "GitHub Actions sync requires HERMES_SYNC_TOKEN to be configured")
+        token = ""
+        if authorization and authorization.startswith("Bearer "):
+            token = authorization[7:].strip()
+        if token != sync_token:
+            raise HTTPException(401, "Invalid or missing sync token")
 
     # Idempotency check
     commit_sha = payload.get("commitSha", "") if isinstance(payload, dict) else ""
@@ -1324,63 +1311,10 @@ def hermes_dev_workspace_health(_=Depends(require_min_role("viewer"))) -> dict:
     Detects blind spots where code changed but no dev event was written.
     Only works when running locally (needs git + repo access).
     """
-    import subprocess as _sp
+    from app.services.hermes_workspace_health_service import get_workspace_health
 
-    health: dict[str, Any] = {
-        "changedFiles": [],
-        "stagedFiles": [],
-        "committedUnpushed": [],
-        "pushedUnsyncedEvents": 0,
-        "unlinkedChanges": 0,
-        "riskLevel": "low",
-        "warnings": [],
-    }
-
-    try:
-        r = _sp.run(["git", "diff", "--name-only"], cwd=str(PROJECT_ROOT),
-                     capture_output=True, text=True, timeout=10)
-        changed = [f for f in r.stdout.strip().split("\n") if f]
-        health["changedFiles"] = changed
-
-        r = _sp.run(["git", "diff", "--cached", "--name-only"], cwd=str(PROJECT_ROOT),
-                     capture_output=True, text=True, timeout=10)
-        staged = [f for f in r.stdout.strip().split("\n") if f]
-        health["stagedFiles"] = staged
-
-        r = _sp.run(["git", "log", "origin/main..HEAD", "--oneline"], cwd=str(PROJECT_ROOT),
-                     capture_output=True, text=True, timeout=10)
-        unpushed = [f for f in r.stdout.strip().split("\n") if f]
-        health["committedUnpushed"] = unpushed
-
-        code_exts = {".py", ".ts", ".tsx", ".yaml", ".yml", ".json", ".css", ".js"}
-        code_changed = [f for f in changed + staged
-                        if any(f.endswith(ext) for ext in code_exts)
-                        and "node_modules" not in f and ".venv" not in f]
-        dev_events_changed = any("dev_events.jsonl" in f for f in changed + staged)
-
-        health["unlinkedChanges"] = len(code_changed) if not dev_events_changed else 0
-
-        if health["unlinkedChanges"] > 10:
-            health["riskLevel"] = "high"
-            health["warnings"].append(
-                f"{health['unlinkedChanges']} code files changed without dev event update"
-            )
-        elif health["unlinkedChanges"] > 3:
-            health["riskLevel"] = "medium"
-            health["warnings"].append(
-                f"{health['unlinkedChanges']} code files changed without dev event update"
-            )
-        elif health["unlinkedChanges"] > 0:
-            health["riskLevel"] = "low"
-            health["warnings"].append("Some code changes not in dev events")
-
-        if len(unpushed) > 3:
-            health["riskLevel"] = "medium" if health["riskLevel"] == "low" else health["riskLevel"]
-            health["warnings"].append(f"{len(unpushed)} unpushed commits")
-
-    except Exception:
-        health["warnings"].append("git unavailable — cannot assess workspace health")
-
+    health = get_workspace_health()
+    health.setdefault("pushedUnsyncedEvents", 0)
     return health
 
 

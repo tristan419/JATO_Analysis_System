@@ -48,6 +48,14 @@ def _write_json(path: Path, data) -> None:
 # ── /hermes/sentinel + deploy status ─────────────────────────────────
 
 class TestSentinelAndDeploy:
+    def test_run_route_respects_runner_disabled(self, client, monkeypatch):
+        monkeypatch.setenv("HERMES_RUN_ENABLED", "false")
+
+        resp = client.post("/hermes/run/cost-report")
+
+        assert resp.status_code == 403
+        assert "disabled" in resp.json()["detail"]
+
     def test_set_notification_status_route(self, client, tmp_path, monkeypatch):
         from app.services import hermes_sentinel_service as sentinel
 
@@ -632,6 +640,160 @@ erDiagram
 
 
 # ── Regex unit tests (no server needed) ──────────────────────────────
+
+# ── Workspace Health route ─────────────────────────────────────────
+
+
+class TestWorkspaceHealth:
+    def test_returns_expected_structure(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.hermes_workspace_health_service.get_workspace_health",
+            lambda: {
+                "changedFiles": ["a.py"],
+                "stagedFiles": [],
+                "committedUnpushed": [],
+                "unlinkedChanges": 1,
+                "riskLevel": "low",
+                "warnings": ["Some code changes not in dev events"],
+                "gitAvailable": True,
+            },
+        )
+        resp = client.get("/hermes/dev/workspace-health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["changedFiles"] == ["a.py"]
+        assert data["unlinkedChanges"] == 1
+        assert data["riskLevel"] == "low"
+        assert data["pushedUnsyncedEvents"] == 0
+
+    def test_preserves_pushed_unsynced_events(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.hermes_workspace_health_service.get_workspace_health",
+            lambda: {
+                "changedFiles": [],
+                "stagedFiles": [],
+                "committedUnpushed": [],
+                "unlinkedChanges": 0,
+                "riskLevel": "low",
+                "warnings": [],
+                "gitAvailable": True,
+            },
+        )
+        data = client.get("/hermes/dev/workspace-health").json()
+        assert "pushedUnsyncedEvents" in data
+
+
+# ── DevSync auth fail-closed ────────────────────────────────────────
+
+
+class TestDevSyncAuthFailClosed:
+    def test_github_actions_without_sync_token_returns_401(self, client, monkeypatch):
+        monkeypatch.setenv("HERMES_SYNC_TOKEN", "")
+        resp = client.post("/hermes/dev/sync?source=github_actions", json={})
+        assert resp.status_code == 401
+        assert "HERMES_SYNC_TOKEN" in resp.json()["detail"]
+
+    def test_github_actions_invalid_token_returns_401(self, client, monkeypatch):
+        monkeypatch.setenv("HERMES_SYNC_TOKEN", "valid-token")
+        resp = client.post(
+            "/hermes/dev/sync?source=github_actions",
+            json={},
+            headers={"Authorization": "Bearer wrong-token"},
+        )
+        assert resp.status_code == 401
+
+    def test_non_github_actions_no_token_required(self, client, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_SYNC_TOKEN", "")
+        monkeypatch.setattr("app.api.routes.hermes.HERMES_DIR", tmp_path)
+        monkeypatch.setattr(
+            "app.services.hermes_devsync_service.sync_dev_events",
+            lambda: {"status": "ok", "synced": 0},
+        )
+        resp = client.post("/hermes/dev/sync?source=claude_code", json={})
+        assert resp.status_code == 200
+
+
+# ── Command execution route-consolidation tests ──────────────────────
+
+
+class TestCommandExecution:
+    def test_delegates_to_service(self, client, monkeypatch):
+        monkeypatch.setenv("HERMES_RUN_ENABLED", "true")
+        expected = {
+            "commandId": "source-quality",
+            "runId": "run_test",
+            "status": "success",
+            "exitCode": 0,
+        }
+        monkeypatch.setattr(
+            "app.api.routes.hermes.execute_hermes_command",
+            lambda command_id, *, parameters, actor, session_id: expected,
+        )
+        resp = client.post("/hermes/commands/execute", json={"commandId": "source-quality"})
+        assert resp.status_code == 200
+        assert resp.json()["commandId"] == "source-quality"
+
+    def test_missing_command_id_returns_400(self, client):
+        resp = client.post("/hermes/commands/execute", json={})
+        assert resp.status_code == 400
+
+    def test_runner_disabled_returns_403(self, client, monkeypatch):
+        monkeypatch.setenv("HERMES_RUN_ENABLED", "false")
+        resp = client.post("/hermes/commands/execute", json={"commandId": "source-quality"})
+        assert resp.status_code == 403
+
+    def test_passes_parameters_to_service(self, client, monkeypatch):
+        monkeypatch.setenv("HERMES_RUN_ENABLED", "true")
+        captured = {}
+
+        def _capture(command_id, *, parameters, actor, session_id):
+            captured.update({
+                "command_id": command_id,
+                "parameters": parameters,
+                "session_id": session_id,
+                "actor": actor,
+            })
+            return {"commandId": command_id, "runId": "r", "status": "success", "exitCode": 0}
+
+        monkeypatch.setattr("app.api.routes.hermes.execute_hermes_command", _capture)
+        client.post(
+            "/hermes/commands/execute",
+            json={
+                "commandId": "code-audit",
+                "parameters": {"base": "main", "head": "HEAD"},
+                "sessionId": "sess-123",
+            },
+        )
+        assert captured["command_id"] == "code-audit"
+        assert captured["parameters"] == {"base": "main", "head": "HEAD"}
+        assert captured["session_id"] == "sess-123"
+
+
+# ── Per-command role enforcement ────────────────────────────────────
+
+
+class TestRunEndpointRoleEnforcement:
+    def test_run_endpoint_returns_200_when_role_ok(self, client, monkeypatch):
+        monkeypatch.setenv("HERMES_RUN_ENABLED", "true")
+        monkeypatch.setattr(
+            "app.api.routes.hermes.execute_hermes_command",
+            lambda *a, **kw: {"commandId": "source-quality", "runId": "r", "status": "success", "exitCode": 0},
+        )
+        resp = client.post("/hermes/run/source-quality")
+        # AUTH_ENABLED=False → all users are admin → should pass
+        assert resp.status_code == 200
+
+    def test_commands_list_returns_required_role(self, client):
+        resp = client.get("/hermes/commands")
+        assert resp.status_code == 200
+        for cmd in resp.json():
+            assert "requiredRole" in cmd
+
+    def test_commands_code_audit_requires_developer(self, client):
+        resp = client.get("/hermes/commands")
+        code_audit = [c for c in resp.json() if c["commandId"] == "code-audit"][0]
+        assert code_audit["requiredRole"] == "developer"
+
 
 class TestMermaidRegex:
     def test_finds_single_block(self):

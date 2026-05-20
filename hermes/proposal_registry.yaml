@@ -141,6 +141,23 @@ proposals:
     implementedAt: "2026-05-19"
     notes: "Implemented with hermes_deploy_status_service.py, /hermes/deploy/status, Sentinel probe_deploy, deploy_release.json packaging, DevSync expected commit recording, and tests."
 
+  - proposalId: proposal.hermes.ops_runner_control_plane
+    type: control_plane_hardening
+    title: "Harden Hermes Ops Runner as an audited control-plane capability"
+    summary: "Move Hermes command execution into a central service with HERMES_RUN_ENABLED, per-command role gating, a single-run lock, output secret redaction, activity log entries, and linked evidence records."
+    affectedFeatures:
+      - "feature.hermes_ops_runner_control_plane"
+    affectedPipelines: []
+    affectedSources: []
+    affectedPrompts: []
+    riskLevel: medium
+    expectedImpact: "Prevents the Hermes run endpoint from behaving like an untracked subprocess shell and gives Sentinel/DevSync an auditable trail for each manual governance run."
+    rollbackPlan: "Route /hermes/run/* and /hermes/commands/execute back to direct subprocess execution and remove hermes_ops_runner_service.py; keep HERMES_RUN_ENABLED=false as the emergency stop."
+    status: implemented
+    createdAt: "2026-05-20"
+    implementedAt: "2026-05-20"
+    notes: "Implemented with hermes_ops_runner_service.py, route reuse, tests for disabled runner, redaction, lock contention, and activity/evidence writes."
+
   - proposalId: proposal.deploy.disable_legacy_ec2
     type: pipeline_dedup
     title: "Disable or convert legacy deploy-ssh-auto-update to manual-only"

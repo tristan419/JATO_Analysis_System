@@ -182,42 +182,26 @@ def probe_devsync() -> dict[str, Any]:
 
 def probe_workspace() -> dict[str, Any]:
     """Check workspace: uncommitted files, unpushed commits."""
-    import subprocess as _sp
+    from app.services.hermes_workspace_health_service import get_workspace_health
 
+    health = get_workspace_health()
     findings: list[dict] = []
-    root = str(_root())
 
-    try:
-        r = _sp.run(["git", "diff", "--name-only"], cwd=root,
-                     capture_output=True, text=True, timeout=10)
-        changed = [f for f in r.stdout.strip().split("\n") if f]
-        code_changed = [f for f in changed
-                        if any(f.endswith(ext) for ext in
-                               {".py", ".ts", ".tsx", ".yaml", ".json", ".css"})
-                        and "node_modules" not in f and ".venv" not in f]
+    if health["unlinkedChanges"] > 0:
+        findings.append({
+            "type": "unlinked_changes",
+            "severity": "high" if health["unlinkedChanges"] > 10 else "medium",
+            "message": f"{health['unlinkedChanges']} code files changed without dev event update.",
+            "count": health["unlinkedChanges"],
+        })
 
-        if code_changed:
-            dev_events_changed = any("dev_events.jsonl" in f for f in changed)
-            if not dev_events_changed:
-                findings.append({
-                    "type": "unlinked_changes",
-                    "severity": "high" if len(code_changed) > 10 else "medium",
-                    "message": f"{len(code_changed)} code files changed without dev event update.",
-                    "count": len(code_changed),
-                })
-
-        r2 = _sp.run(["git", "log", "origin/main..HEAD", "--oneline"], cwd=root,
-                      capture_output=True, text=True, timeout=10)
-        unpushed = [f for f in r2.stdout.strip().split("\n") if f]
-        if len(unpushed) > 3:
-            findings.append({
-                "type": "unpushed_commits",
-                "severity": "medium",
-                "message": f"{len(unpushed)} unpushed commits.",
-                "count": len(unpushed),
-            })
-    except Exception:
-        pass
+    if len(health["committedUnpushed"]) > 3:
+        findings.append({
+            "type": "unpushed_commits",
+            "severity": "medium",
+            "message": f"{len(health['committedUnpushed'])} unpushed commits.",
+            "count": len(health["committedUnpushed"]),
+        })
 
     overall = "ok"
     if any(f["severity"] == "high" for f in findings):

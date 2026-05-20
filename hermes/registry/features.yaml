@@ -582,3 +582,36 @@ features:
   lastUpdatedAt: '2026-05-18T01:28:09.686559+00:00'
   docs:
   - Markdown_Readme/features/feature.country_copilot.md
+- featureId: feature.hermes_ops_runner_control_plane
+  title: Hermes Ops Runner Control Plane
+  status: implemented
+  category: backend
+  source: codex
+  summary: Centralized Hermes script execution behind a controlled service with
+    HERMES_RUN_ENABLED feature flag, per-command role gate, cross-process lock,
+    secret redaction, activity logging, and evidence ledger entries.
+  linkedEventIds:
+  - dev_evt_20260520_ops_runner_control_plane
+  endpoints:
+  - POST /hermes/run/{command}
+  - POST /hermes/commands/execute
+  - GET /hermes/run
+  - GET /hermes/run/{command}/help
+  frontend: []
+  backend:
+  - 06_AppPlatform/backend/app/services/hermes_ops_runner_service.py
+  - 06_AppPlatform/backend/app/api/routes/hermes.py
+  - 03_Scripts/deploy/systemd/jato-fullstack-backend.env.example
+  tests:
+    backendPytest: 71 passed (test_hermes_ops_runner_service.py, test_hermes_routes.py,
+      test_hermes_chat.py)
+  risks:
+  - Runner remains a control-plane capability and should stay disabled in production
+    when audit commands are not needed.
+  nextSteps:
+  - Deploy to Tencent only after deciding HERMES_RUN_ENABLED production value.
+  - Verify activity_log.jsonl and evidence_ledger.jsonl receive redacted run records.
+  createdAt: '2026-05-20T00:00:00+08:00'
+  lastUpdatedAt: '2026-05-20T00:00:00+08:00'
+  docs:
+  - Markdown_Readme/features/feature.hermes_ops_runner_control_plane.md

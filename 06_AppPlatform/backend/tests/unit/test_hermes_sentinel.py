@@ -86,3 +86,44 @@ def test_probe_deploy_reports_commit_drift(monkeypatch):
     assert result["findings"][0]["type"] == "production_commit_drift"
     assert "11111111" in result["findings"][0]["message"]
     assert "22222222" in result["findings"][0]["message"]
+
+
+def test_probe_workspace_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.hermes_workspace_health_service.get_workspace_health",
+        lambda: {
+            "changedFiles": ["a.py"],
+            "stagedFiles": [],
+            "committedUnpushed": [],
+            "unlinkedChanges": 1,
+            "riskLevel": "low",
+            "warnings": ["Some code changes not in dev events"],
+            "gitAvailable": True,
+        },
+    )
+
+    result = sentinel.probe_workspace()
+    assert result["probe"] == "workspace"
+    assert result["overall"] == "warning"
+    assert len(result["findings"]) == 1
+    assert result["findings"][0]["type"] == "unlinked_changes"
+    assert result["findings"][0]["count"] == 1
+
+
+def test_probe_workspace_no_findings_when_clean(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.hermes_workspace_health_service.get_workspace_health",
+        lambda: {
+            "changedFiles": [],
+            "stagedFiles": [],
+            "committedUnpushed": [],
+            "unlinkedChanges": 0,
+            "riskLevel": "low",
+            "warnings": [],
+            "gitAvailable": True,
+        },
+    )
+
+    result = sentinel.probe_workspace()
+    assert result["overall"] == "ok"
+    assert result["findings"] == []

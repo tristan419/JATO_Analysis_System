@@ -89,6 +89,6 @@ class TestCommands:
         assert resp.status_code == 200
         assert len(resp.json()) >= 4
 
-    def test_command_execute_unknown_400(self, client, tmp_path):
-        with patch("app.api.routes.hermes.SCRIPTS_DIR", tmp_path):
-            assert client.post("/hermes/commands/execute", json={"commandId": "nonexistent"}).status_code == 400
+    def test_command_execute_unknown_400(self, client, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_RUN_ENABLED", "true")
+        assert client.post("/hermes/commands/execute", json={"commandId": "nonexistent"}).status_code == 400

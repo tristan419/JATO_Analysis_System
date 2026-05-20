@@ -28,38 +28,45 @@ HERMES_SCRIPTS: dict[str, dict[str, Any]] = {
         "script": "hermes_pipeline_audit.py",
         "label": "Pipeline Audit",
         "desc": "Scan systemd/Airflow/GH Actions -> health report",
+        "requiredRole": "admin",
     },
     "source-quality": {
         "script": "hermes_source_quality.py",
         "label": "Source Quality",
         "desc": "Score VOC/News/MSRP source health 0-100",
+        "requiredRole": "admin",
     },
     "cost-report": {
         "script": "hermes_cost_report.py",
         "label": "Cost Report",
         "desc": "Flash/Pro cost vs 500 CNY budget",
+        "requiredRole": "admin",
     },
     "code-audit": {
         "script": "hermes_code_audit.py",
         "label": "Code Audit",
         "desc": "git diff -> 10-rule scan",
         "args": ["--base", "main", "--head", "HEAD"],
+        "requiredRole": "developer",
     },
     "intake": {
         "script": "hermes_intake.py",
         "label": "PRD Intake",
         "desc": "PRD -> impact report (needs --prd arg)",
         "args": [],
+        "requiredRole": "admin",
     },
     "evidence": {
         "script": "hermes_evidence_writer.py",
         "label": "Evidence Writer",
         "desc": "Extract facts from artifacts -> JSONL",
+        "requiredRole": "admin",
     },
     "answer-audit": {
         "script": "hermes_answer_audit.py",
         "label": "Answer Audit",
         "desc": "Generate sample answer audits",
+        "requiredRole": "admin",
     },
 }
 
@@ -82,6 +89,7 @@ RUN_TIMEOUT_SECONDS = 120
 LOCK_STALE_SECONDS = 10 * 60
 
 SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"), "Bearer [REDACTED]"),
     (
         re.compile(
             r"(?i)\b(api[_-]?key|token|secret|password|passwd|authorization)"
@@ -89,7 +97,6 @@ SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         ),
         r"\1\2\3[REDACTED]",
     ),
-    (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"), "Bearer [REDACTED]"),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{8,}"), "sk-[REDACTED]"),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{12,}"), "gh_[REDACTED]"),
 ]
@@ -161,7 +168,7 @@ def _parse_bool(value: str | None, default: bool) -> bool:
 
 
 def is_runner_enabled() -> bool:
-    return _parse_bool(os.getenv("HERMES_RUN_ENABLED"), True)
+    return _parse_bool(os.getenv("HERMES_RUN_ENABLED"), False)
 
 
 def redact_secrets(text: str) -> str:
@@ -391,6 +398,7 @@ def list_run_commands() -> dict[str, Any]:
                 "label": info["label"],
                 "desc": info["desc"],
                 "hasDefaultArgs": bool(info.get("args")),
+                "requiredRole": info.get("requiredRole", "admin"),
             }
             for command_id, info in HERMES_SCRIPTS.items()
         },
