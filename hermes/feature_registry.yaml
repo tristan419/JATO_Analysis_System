@@ -335,7 +335,9 @@ features:
   - artifact.msrp.current_prices
   docs:
   - MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md
-  tests: []
+  tests:
+  - 'Backend: test_msrp_lookup_service.py'
+  - 'Frontend: msrpCurrentPrice.test.ts'
   dependencies:
   - pipeline.msrp.ingest_systemd
   owner: ''

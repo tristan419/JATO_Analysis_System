@@ -99,7 +99,7 @@ def _load_features() -> list[dict[str, Any]]:
     import yaml
     data = yaml.safe_load(p.read_text())
     features = data.get("features", []) if data else []
-    return _normalize_feature_records(features)
+    return _hydrate_features_from_kanban(_normalize_feature_records(features))
 
 
 def _save_features(features: list[dict[str, Any]]) -> None:
@@ -108,6 +108,30 @@ def _save_features(features: list[dict[str, Any]]) -> None:
     import yaml
     features = _normalize_feature_records(features)
     p.write_text(yaml.safe_dump({"features": features}, allow_unicode=True, sort_keys=False))
+
+
+def _test_map_from_any(value: Any) -> dict[str, str]:
+    if isinstance(value, dict):
+        return {str(k): str(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return {
+            str(item): "recorded in feature_registry.yaml"
+            for item in value
+            if str(item).strip()
+        }
+    if value:
+        return {str(value): "recorded in feature_registry.yaml"}
+    return {}
+
+
+def _list_from_any(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return list(value.keys())
+    if value:
+        return [value]
+    return []
 
 
 _FEATURE_TITLE_WORDS = {
@@ -300,8 +324,10 @@ def _merge_feature_records(
             _append_unique(values, item)
         if values:
             merged[key] = values
-    if base.get("tests") or incoming.get("tests"):
-        merged["tests"] = {**(base.get("tests") or {}), **(incoming.get("tests") or {})}
+    base_tests = _test_map_from_any(base.get("tests"))
+    incoming_tests = _test_map_from_any(incoming.get("tests"))
+    if base_tests or incoming_tests:
+        merged["tests"] = {**base_tests, **incoming_tests}
     if base.get("featureId"):
         merged["featureId"] = base["featureId"]
     if base.get("title"):
@@ -312,6 +338,38 @@ def _merge_feature_records(
     elif base.get("summary"):
         merged["summary"] = base["summary"]
     return merged
+
+
+def _load_kanban_feature_index() -> dict[str, dict[str, Any]]:
+    kp = _kanban_registry_path()
+    if not kp.is_file():
+        return {}
+    import yaml
+    data = yaml.safe_load(kp.read_text()) or {}
+    return {
+        _canonical_feature_id(str(feature.get("featureId") or "")): feature
+        for feature in data.get("features", [])
+        if feature.get("featureId")
+    }
+
+
+def _hydrate_features_from_kanban(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Use manually curated kanban docs/tests when DevSync has no evidence yet."""
+    kanban_index = _load_kanban_feature_index()
+    if not kanban_index:
+        return features
+
+    hydrated: list[dict[str, Any]] = []
+    for feature in features:
+        record = dict(feature)
+        kanban = kanban_index.get(_canonical_feature_id(str(record.get("featureId") or "")))
+        if kanban:
+            if not record.get("docs") and kanban.get("docs"):
+                record["docs"] = list(kanban.get("docs", []) or [])
+            if not record.get("tests") and kanban.get("tests"):
+                record["tests"] = _test_map_from_any(kanban.get("tests"))
+        hydrated.append(record)
+    return hydrated
 
 
 def _normalize_feature_records(
@@ -538,7 +596,7 @@ def generate_feature_markdown(feature: dict[str, Any]) -> Path:
     endpoints = feature.get("endpoints", []) or []
     frontend = feature.get("frontend", []) or []
     backend = feature.get("backend", []) or []
-    tests = feature.get("tests", {}) or {}
+    tests = _test_map_from_any(feature.get("tests"))
     docs_list = feature.get("docs", []) or []
     linked_events = feature.get("linkedEventIds", []) or []
     risks = feature.get("risks", []) or []
@@ -1010,6 +1068,9 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
             else:
                 clean_name = fid.replace("-", " ").title()
 
+        incoming_docs = list(df.get("docs", []) or [])
+        incoming_tests = list(_test_map_from_any(df.get("tests")).keys())
+
         kanban_entry = {
             "featureId": entry_feature_id,
             "name": clean_name,
@@ -1021,8 +1082,8 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
             "scheduledJobs": [],
             "dataSources": [],
             "artifacts": [],
-            "docs": df.get("docs", []) or [],
-            "tests": list(df.get("tests", {}).keys()) if df.get("tests") else [],
+            "docs": incoming_docs,
+            "tests": incoming_tests,
             "dependencies": [],
             "owner": "",
             "governanceStatus": "registered",
@@ -1032,15 +1093,31 @@ def _sync_to_kanban(feature_ids: list[str]) -> int:
 
         if existing_idx is not None:
             existing = kanban_features[existing_idx]
+            merged_docs: list[Any] = []
+            for item in _list_from_any(existing.get("docs")) + incoming_docs:
+                _append_unique(merged_docs, item)
+            merged_tests: list[Any] = []
+            for item in _list_from_any(existing.get("tests")) + incoming_tests:
+                _append_unique(merged_tests, item)
+            merged_backend_apis: list[Any] = []
+            for item in _list_from_any(existing.get("backendApis")) + _list_from_any(kanban_entry.get("backendApis")):
+                _append_unique(merged_backend_apis, item)
+            merged_known_issues: list[Any] = []
+            for item in _list_from_any(existing.get("knownIssues")) + _list_from_any(kanban_entry.get("knownIssues")):
+                _append_unique(merged_known_issues, item)
             merged = {
                 **kanban_entry,
                 "name": clean_name,
                 "routes": existing.get("routes", []),
+                "backendApis": merged_backend_apis,
                 "scheduledJobs": existing.get("scheduledJobs", []),
                 "dataSources": existing.get("dataSources", []),
                 "artifacts": existing.get("artifacts", []),
                 "dependencies": existing.get("dependencies", []),
                 "owner": existing.get("owner", ""),
+                "docs": merged_docs,
+                "tests": merged_tests,
+                "knownIssues": merged_known_issues,
             }
             kanban_features[existing_idx] = merged
         else:

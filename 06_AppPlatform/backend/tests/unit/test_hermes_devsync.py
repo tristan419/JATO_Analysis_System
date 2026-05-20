@@ -180,6 +180,35 @@ class TestFeatures:
 
         assert [f["featureId"] for f in list_features()] == ["hermes-devsync"]
 
+    def test_list_features_hydrates_missing_tests_from_kanban(self, tmp_path):
+        from app.services.hermes_devsync_service import list_features
+
+        (tmp_path / "hermes" / "registry" / "features.yaml").write_text(
+            "features:\n"
+            "- featureId: feature.review_workbench\n"
+            "  title: Review Workbench\n"
+            "  tests: {}\n"
+            "  docs: []\n"
+        )
+        (tmp_path / "hermes" / "feature_registry.yaml").write_text(
+            "features:\n"
+            "- featureId: feature.review_workbench\n"
+            "  name: Review Workbench\n"
+            "  tests:\n"
+            "  - 'Backend: test_review_workbench_service.py'\n"
+            "  docs:\n"
+            "  - MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md\n"
+        )
+
+        feature = list_features()[0]
+
+        assert feature["tests"] == {
+            "Backend: test_review_workbench_service.py": "recorded in feature_registry.yaml"
+        }
+        assert feature["docs"] == [
+            "MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md"
+        ]
+
 
 class TestGaps:
     def test_missing_docs_gap(self, tmp_path):
@@ -340,3 +369,38 @@ class TestSync:
 
         assert result["featuresCreated"] == []
         assert list_features() == []
+
+    def test_sync_to_kanban_preserves_curated_docs_and_tests(self, tmp_path):
+        import yaml
+        from app.services.hermes_devsync_service import _sync_to_kanban, upsert_feature
+
+        (tmp_path / "hermes" / "feature_registry.yaml").write_text(
+            "features:\n"
+            "- featureId: feature.current_price\n"
+            "  name: Current Price\n"
+            "  backendApis:\n"
+            "  - GET /v1/msrp/current-prices\n"
+            "  docs:\n"
+            "  - MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md\n"
+            "  tests:\n"
+            "  - 'Frontend: msrpCurrentPrice.test.ts'\n"
+        )
+        upsert_feature({
+            "featureId": "feature.current_price",
+            "title": "feat: current price touch-up",
+            "status": "implemented",
+            "docs": [],
+            "tests": {},
+        })
+
+        assert _sync_to_kanban(["feature.current_price"]) == 1
+
+        features = yaml.safe_load(
+            (tmp_path / "hermes" / "feature_registry.yaml").read_text(),
+        )["features"]
+        current_price = features[0]
+        assert current_price["docs"] == [
+            "MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md"
+        ]
+        assert current_price["tests"] == ["Frontend: msrpCurrentPrice.test.ts"]
+        assert current_price["backendApis"] == ["GET /v1/msrp/current-prices"]
