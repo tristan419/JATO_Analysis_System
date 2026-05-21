@@ -1466,7 +1466,11 @@ def _serialize_job_state(
 ) -> dict[str, Any]:
     item = {
         "jobId": str(payload.get("jobId", "")),
-        "month": str(payload.get("month", "")),
+        "month": (
+            None
+            if payload.get("month") in {None, ""}
+            else str(payload.get("month"))
+        ),
         "batchId": (
             None
             if payload.get("batchId") in {None, ""}
@@ -2299,44 +2303,47 @@ def _queue_monthly_update_job_from_stored_upload(
 ) -> dict[str, Any]:
     if stored_upload_path.stat().st_size <= 0:
         raise HTTPException(status_code=400, detail="上传文件为空，无法启动月更任务。")
-    normalized_file_sha256 = (
-        _normalize_sha256(file_sha256, detail="文件 SHA-256 无效。")
-        if file_sha256
-        else _sha256_hex_for_path(stored_upload_path)
-    )
-    detected_month = _detect_latest_month_from_upload(stored_upload_path)
-    batch_id = _allocate_batch_id(detected_month)
-    baseline_path, baseline_source = _require_latest_baseline()
 
-    state = _prepare_initial_job_state(
-        job_id=job_id,
-        month=detected_month,
-        batch_id=batch_id,
-        triggered_by=triggered_by.strip() or "anonymous",
-        upload_filename=upload_filename,
-        stored_upload_path=stored_upload_path,
-        file_sha256=normalized_file_sha256,
-        baseline_path=baseline_path,
-        baseline_source=baseline_source,
-    )
+    now = _utc_now().isoformat()
+    artifacts: dict[str, Any] = {
+        "jobDir": _relative_to_project(_job_dir(job_id)),
+        "logPath": _relative_to_project(_job_log_path(job_id)),
+    }
+    state: dict[str, Any] = {
+        "jobId": job_id,
+        "month": None,
+        "batchId": None,
+        "status": "queued",
+        "phase": "detecting_month",
+        "triggeredBy": triggered_by.strip() or "anonymous",
+        "createdAt": now,
+        "updatedAt": now,
+        "startedAt": None,
+        "finishedAt": None,
+        "error": None,
+        "upload": {
+            "originalFilename": upload_filename,
+            "storedPath": _relative_to_project(stored_upload_path),
+            "sizeBytes": stored_upload_path.stat().st_size,
+            "sha256": file_sha256,
+        },
+        "plan": None,
+        "artifacts": artifacts,
+        "summaries": {},
+        "logPath": _relative_to_project(_job_log_path(job_id)),
+    }
     _persist_job_state(state)
     _append_log(
         _job_log_path(job_id),
-        (
-            f"[{_utc_now().isoformat()}] queued monthly update batch {batch_id} "
-            f"for detected latest month {detected_month}"
-        ),
+        f"[{now}] queued monthly update — detecting month in background",
     )
     _launch_job_thread(job_id)
-    return _serialize_job_state(state, include_log_tail=True)
+    return _serialize_job_state(state, include_log_tail=False)
 
 
 def _run_job(job_id: str) -> None:
     state = _load_job_state(job_id)
     log_path = _job_log_path(job_id)
-    batch_id = str(state.get("batchId") or state.get("month") or "").strip()
-    if not batch_id:
-        raise RuntimeError("任务缺少批次标识")
     upload_payload = state.get("upload")
     if not isinstance(upload_payload, dict):
         raise RuntimeError("任务缺少 upload 信息")
@@ -2346,8 +2353,32 @@ def _run_job(job_id: str) -> None:
     stored_upload_path = PROJECT_ROOT / str(stored_path_value)
 
     state["status"] = "running"
-    state["phase"] = "preparing"
     state["startedAt"] = _utc_now().isoformat()
+
+    # Phase 0: Detect month and allocate batch (moved from request thread)
+    if not state.get("month"):
+        state["phase"] = "detecting_month"
+        _persist_job_state(state)
+        _append_log(log_path, "[detecting_month] Reading Excel to detect latest month...")
+        detected_month = _detect_latest_month_from_upload(stored_upload_path)
+        batch_id = _allocate_batch_id(detected_month)
+        baseline_path, baseline_source = _require_latest_baseline()
+        if isinstance(state.get("artifacts"), dict):
+            state["artifacts"]["baselinePath"] = _relative_to_project(baseline_path)
+            state["artifacts"]["baselineSource"] = baseline_source
+        state["month"] = detected_month
+        state["batchId"] = batch_id
+        _persist_job_state(state)
+        _append_log(
+            log_path,
+            f"[detecting_month] Detected month: {detected_month}, batch: {batch_id}",
+        )
+
+    batch_id = str(state.get("batchId") or "")
+    if not batch_id:
+        raise RuntimeError("任务缺少批次标识")
+
+    state["phase"] = "preparing"
     _persist_job_state(state)
 
     try:
@@ -2602,22 +2633,6 @@ def create_jato_monthly_update_job(
 
     with stored_upload_path.open("wb") as handle:
         shutil.copyfileobj(file.file, handle)
-
-    detected = _detect_single_country_upload(stored_upload_path)
-    if detected is not None:
-        country, month = detected
-        _append_log(
-            _job_log_path(job_id),
-            f"[{_utc_now().isoformat()}] 自动识别为单国家上传：{country} {month}，走快速路径。",
-        )
-        return _queue_single_country_job(
-            job_id=job_id,
-            country=country,
-            month=month,
-            triggered_by=triggered_by,
-            upload_filename=filename,
-            stored_upload_path=stored_upload_path,
-        )
 
     return _queue_monthly_update_job_from_stored_upload(
         job_id=job_id,

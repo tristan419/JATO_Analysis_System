@@ -978,12 +978,12 @@ def test_chunked_upload_session_can_be_completed_and_queued(
     )
 
     assert job["status"] == "queued"
-    assert job["month"] == "2026-03"
-    assert job["batchId"] == "2026-03-r1"
+    assert job["month"] is None  # deferred to _run_job background thread
+    assert job["batchId"] is None
+    assert job["phase"] == "detecting_month"
     assert job["upload"]["sizeBytes"] == 10
     assert job["upload"]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
-    assert job["artifacts"]["baselinePath"] == "01_RAW_DATA/historyDataArchive/baseline/JATO-2026.1-full-baseline.xlsx"
-    assert job["artifacts"]["baselineSource"] == "archive"
+    # baseline not bound until _run_job detects month
     stored_path = job_root / job["jobId"] / "uploads" / "patch.xlsx"
     assert stored_path.read_bytes() == b"abcdefghij"
     assert not (job_root / "_upload_sessions" / upload_id).exists()
@@ -1040,14 +1040,12 @@ def test_retry_failed_job_reuses_stored_upload_copy(
 
     assert retried["jobId"] != "jato-update-failed"
     assert retried["status"] == "queued"
-    assert retried["month"] == "2026-03"
-    assert retried["batchId"] == "2026-03-r2"
+    assert retried["month"] is None  # deferred to _run_job background thread
+    assert retried["batchId"] is None
+    assert retried["phase"] == "detecting_month"
     assert retried["triggeredBy"] == "retry-user"
     assert retried["upload"]["originalFilename"] == "patch.xlsx"
     assert retried["upload"]["sha256"] == hashlib.sha256(b"retry-me").hexdigest()
-    assert retried["artifacts"]["baselinePath"] == (
-        "01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx"
-    )
     assert retried["artifacts"]["retriedFromJobId"] == "jato-update-failed"
 
     retried_upload = job_root / retried["jobId"] / "uploads" / "patch.xlsx"

@@ -86,12 +86,12 @@ def test_create_monthly_update_job_route_persists_job(
 
     assert response.status_code == 200
     payload = response.json()["item"]
-    assert payload["month"] == "2026-03"
-    assert payload["batchId"] == "2026-03-r1"
+    assert payload["month"] is None  # deferred to _run_job
+    assert payload["batchId"] is None
     assert payload["status"] == "queued"
+    assert payload["phase"] == "detecting_month"
     assert payload["triggeredBy"] == "tester"
     assert payload["upload"]["originalFilename"] == "patch.xlsx"
-    assert payload["artifacts"]["baselinePath"] == "01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx"
     assert len(list(job_root.glob("*/job_state.json"))) == 1
 
 
@@ -372,11 +372,10 @@ def test_chunked_monthly_update_upload_routes_create_job(
     assert create_response.status_code == 200
     payload = create_response.json()["item"]
     assert payload["status"] == "queued"
-    assert payload["batchId"] == "2026-03-r1"
+    assert payload["batchId"] is None  # deferred to _run_job
+    assert payload["phase"] == "detecting_month"
     assert payload["upload"]["sizeBytes"] == 10
     assert payload["upload"]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
-    assert payload["artifacts"]["baselinePath"] == "01_RAW_DATA/historyDataArchive/baseline/JATO-2026.1-full-baseline.xlsx"
-    assert payload["artifacts"]["baselineSource"] == "archive"
 
 
 def test_retry_failed_monthly_update_job_route_requeues_existing_upload(
@@ -432,7 +431,8 @@ def test_retry_failed_monthly_update_job_route_requeues_existing_upload(
     payload = response.json()["item"]
     assert payload["jobId"] != source_job_id
     assert payload["status"] == "queued"
-    assert payload["batchId"] == "2026-03-r2"
+    assert payload["batchId"] is None  # deferred to _run_job
+    assert payload["phase"] == "detecting_month"
     assert payload["triggeredBy"] == "tester"
     assert payload["upload"]["sha256"] == hashlib.sha256(b"retry-me").hexdigest()
     assert payload["artifacts"]["retriedFromJobId"] == source_job_id
