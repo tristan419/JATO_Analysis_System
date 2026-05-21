@@ -130,7 +130,7 @@ require_command node
 echo "[INFO] Repository directory: $REPO_DIR"
 if [[ -f "$DEPLOY_RELEASE_FILE" ]]; then
   echo "[INFO] Deploy release metadata:"
-  python - "$DEPLOY_RELEASE_FILE" <<'PY' || true
+  python3 - "$DEPLOY_RELEASE_FILE" <<'PY' || true
 import json
 import sys
 from pathlib import Path
@@ -442,6 +442,16 @@ export VITE_API_BASE
 export VITE_AUTH_TOKEN
 export VITE_USER_ROLE
 export VITE_USER_NAME
+if [[ -z "${DEPLOY_COMMIT_SHA:-}" && -f "$DEPLOY_RELEASE_FILE" ]]; then
+  DEPLOY_COMMIT_SHA="$(
+    node - "$DEPLOY_RELEASE_FILE" <<'JS' || true
+const fs = require("fs");
+const payload = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+process.stdout.write(payload.commitSha || "");
+JS
+  )"
+fi
+export DEPLOY_COMMIT_SHA
 npm run build
 
 if [[ ! -f "$FRONTEND_DIR/dist/index.html" ]]; then

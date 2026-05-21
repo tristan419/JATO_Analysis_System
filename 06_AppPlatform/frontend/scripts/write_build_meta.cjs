@@ -10,7 +10,10 @@ const meta = {
 };
 
 try {
-  meta.commit = execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
+  meta.commit =
+    process.env.DEPLOY_COMMIT_SHA ||
+    process.env.GITHUB_SHA ||
+    execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
 } catch {
   // not a git repo or no git available
 }
