@@ -102,6 +102,36 @@ function matchesSentinelFilter(notification: HermesSentinelNotification, filter:
   ].some((value) => value.toLowerCase().includes(query));
 }
 
+function readSentinelContextString(context: Record<string, unknown> | undefined, key: string): string {
+  const value = context?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function readSentinelContextCount(context: Record<string, unknown> | undefined, key: string): string {
+  const value = context?.[key];
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "string" && value.trim()) return value.trim();
+  return "";
+}
+
+function getSentinelPipelineDetails(notification: HermesSentinelNotification): Array<{ label: string; value: string }> {
+  const context = notification.context;
+  const details = [
+    { label: "Pipeline", value: readSentinelContextString(context, "pipeline") },
+    { label: "Status", value: readSentinelContextString(context, "pipelineStatus") },
+    { label: "Last run", value: readSentinelContextString(context, "lastRunAt") },
+    { label: "Failed", value: readSentinelContextCount(context, "failedCount") },
+    { label: "Warnings", value: readSentinelContextCount(context, "warningCount") },
+  ];
+  return details.filter((item) => item.value);
+}
+
+function getSentinelArtifactRefs(notification: HermesSentinelNotification): string[] {
+  const refs = notification.context?.artifactRefs;
+  if (!Array.isArray(refs)) return [];
+  return refs.filter((item): item is string => typeof item === "string" && item.trim().length > 0).slice(0, 3);
+}
+
 interface SourceFilters {
   country: string;
   brand: string;
@@ -1157,6 +1187,8 @@ export function DataManagementPage() {
                         const severity = String(notification.severity || "low");
                         const color = getSentinelSeverityColor(severity);
                         const mailboxStatus = normalizeSentinelMailboxStatus(String(notification.status || "new"));
+                        const pipelineDetails = getSentinelPipelineDetails(notification);
+                        const artifactRefs = getSentinelArtifactRefs(notification);
                         return (
                           <div key={notification.id} style={{border:"1px solid #e2e8f0",borderLeft:`4px solid ${color}`,borderRadius:6,padding:"9px 10px",background:mailboxStatus === "new" ? "#ffffff" : "#f8fafc",fontSize:12}}>
                             <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start"}}>
@@ -1178,6 +1210,21 @@ export function DataManagementPage() {
                             <div style={{color:"#334155",fontSize:12,marginTop:6,lineHeight:1.45}}>{notification.body}</div>
                             {notification.recommendedAction && (
                               <div style={{fontSize:11,color:"#475569",marginTop:6}}>Action: {notification.recommendedAction}</div>
+                            )}
+                            {pipelineDetails.length > 0 && (
+                              <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:6,marginTop:8}}>
+                                {pipelineDetails.map((detail) => (
+                                  <div key={`${notification.id}-${detail.label}`} style={{border:"1px solid #e2e8f0",borderRadius:4,padding:"5px 6px",minWidth:0}}>
+                                    <div style={{fontSize:9,color:"#64748b",textTransform:"uppercase"}}>{detail.label}</div>
+                                    <div style={{fontSize:11,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={detail.value}>{detail.value}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {artifactRefs.length > 0 && (
+                              <div style={{fontSize:10,color:"#64748b",marginTop:6,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={artifactRefs.join(" · ")}>
+                                Artifacts: {artifactRefs.join(" · ")}
+                              </div>
                             )}
                           </div>
                         );

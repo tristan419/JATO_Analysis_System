@@ -477,6 +477,20 @@ def run_all_probes() -> dict[str, Any]:
                 "recommendedAction": f.get("recommendedAction") or "View details",
                 "count": f.get("count"),
             }
+            for key in (
+                "pipeline",
+                "lastRunAt",
+                "failedCount",
+                "warningCount",
+                "artifactRefs",
+                "statusRecord",
+            ):
+                if key in f:
+                    context[key] = f.get(key)
+            status_record = f.get("statusRecord")
+            if isinstance(status_record, dict):
+                context["pipelineStatus"] = status_record.get("status")
+                context["statusPath"] = status_record.get("statusPath")
             # Only emit for medium+ severity
             if sev in ("high", "critical"):
                 n = _emit(p["probe"], sev, f.get("type", "").replace("_", " ").title(),
