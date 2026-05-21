@@ -11334,6 +11334,41 @@ table.data-table tr.data-table-group-row.contains-selection td {
   margin-bottom: 0;
 }
 
+.monthly-update-maintenance-feedback {
+  margin-top: 14px;
+  margin-bottom: 0;
+}
+
+.monthly-update-maintenance-confirm {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(28, 105, 212, 0.24);
+  background: rgba(28, 105, 212, 0.06);
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.monthly-update-maintenance-confirm > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.monthly-update-maintenance-confirm strong {
+  color: var(--c-text-primary);
+  font-size: 13px;
+}
+
+.monthly-update-maintenance-confirm span {
+  color: var(--c-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .monthly-update-cleanup-actions {
   display: flex;
   align-items: center;

@@ -120,6 +120,10 @@ function formatCleanupTierLabel(tier: "safe" | "cautious"): string {
   return tier === "cautious" ? "谨慎删" : "安全删";
 }
 
+type PendingMaintenanceAction =
+  | { kind: "promote-baseline" }
+  | { kind: "cleanup"; cleanupTier: "safe" | "cautious" };
+
 export function JatoMonthlyUpdatePage() {
   const [jobs, setJobs] = useState<JatoMonthlyUpdateJob[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
@@ -144,6 +148,10 @@ export function JatoMonthlyUpdatePage() {
   const [notice, setNotice] = useState("");
   const [cleanupResult, setCleanupResult] =
     useState<JatoMonthlyUpdateCleanupResult | null>(null);
+  const [pendingMaintenanceAction, setPendingMaintenanceAction] =
+    useState<PendingMaintenanceAction | null>(null);
+  const [maintenanceNotice, setMaintenanceNotice] = useState("");
+  const [maintenanceError, setMaintenanceError] = useState("");
   const [selectedCleanupTier, setSelectedCleanupTier] =
     useState<"safe" | "cautious">("safe");
   const [maintenanceStatus, setMaintenanceStatus] =
@@ -347,62 +355,81 @@ export function JatoMonthlyUpdatePage() {
     applySelectedFile(files[0]);
   }
 
-  async function handleCleanup() {
+  function requestCleanup() {
     if (hasActiveJob) {
-      setError("存在运行中的月更任务，请等待完成后再执行一键清理。");
+      setMaintenanceError("存在运行中的月更任务，请等待完成后再执行一键清理。");
+      setMaintenanceNotice("");
       return;
     }
-    const confirmationMessage = selectedCleanupTier === "cautious"
-      ? "将执行“谨慎删”：除安全删外，还会删除 raw compare reviews、staging outputs、refresh backups 和 archived baselines/patches。会影响回看和 rollback，但不会删除当前 active baseline、当前 active dataset、当前 latest patch batch。继续吗？"
-      : "将执行“安全删”：归档旧 baseline/patch，删除 upload session cache，以及所有已结束任务（success / failed）的临时上传副本。当前激活 baseline、最新 patch 批次、staging、refresh backups 和报告文件会保留；清理后 failed 任务不能直接 retry，需要重新上传。继续吗？";
-    const confirmed = window.confirm(confirmationMessage);
-    if (!confirmed) {
+    setError("");
+    setMaintenanceError("");
+    setMaintenanceNotice(`${formatCleanupTierLabel(selectedCleanupTier)}已就绪，请在下方确认执行。`);
+    setPendingMaintenanceAction({ kind: "cleanup", cleanupTier: selectedCleanupTier });
+  }
+
+  async function executeCleanup(cleanupTier: "safe" | "cautious") {
+    if (hasActiveJob) {
+      setMaintenanceError("存在运行中的月更任务，请等待完成后再执行一键清理。");
       return;
     }
     setCleanupRunning(true);
     setError("");
     setNotice("");
+    setMaintenanceError("");
+    setMaintenanceNotice(`${formatCleanupTierLabel(cleanupTier)}执行中，请等待结果返回。`);
+    setPendingMaintenanceAction(null);
     try {
-      const response = await api.runJatoMonthlyUpdateCleanup(selectedCleanupTier);
+      const response = await api.runJatoMonthlyUpdateCleanup(cleanupTier);
       setCleanupResult(response.item);
-      setNotice(
+      const successMessage =
         `${formatCleanupTierLabel(response.item.cleanupTier)}完成：释放 ${formatMonthlyUpdateFileSize(response.item.freedBytes)}，归档 baseline ${response.item.archivedBaselineCount} 个，归档 patch 目录 ${response.item.archivedPatchDirCount} 个，清理 upload session ${response.item.removedUploadSessionDirCount} 个，清理上传副本 ${response.item.removedJobUploadDirCount} 个。`
-      );
+      setMaintenanceNotice(successMessage);
+      setNotice(successMessage);
       await refreshJobs(selectedJobId ?? undefined, true);
       await refreshMaintenanceStatus(true);
       if (selectedJobId) {
         await loadJobDetail(selectedJobId, true);
       }
     } catch (err) {
-      setError((err as Error).message);
+      setMaintenanceError((err as Error).message);
     } finally {
       setCleanupRunning(false);
     }
   }
 
-  async function handlePromoteBaseline() {
+  function requestPromoteBaseline() {
     if (hasActiveJob) {
-      setError("存在运行中的月更任务，请等待完成后再保存新的 baseline。");
+      setMaintenanceError("存在运行中的月更任务，请等待完成后再保存新的 baseline。");
+      setMaintenanceNotice("");
       return;
     }
-    const confirmed = window.confirm(
-      "将读取当前 active parquet，导出一份新的 baseline xlsx（Data Export sheet），并自动归档旧 active baseline。继续吗？"
-    );
-    if (!confirmed) {
+    setError("");
+    setMaintenanceError("");
+    setMaintenanceNotice("保存当前 active 为 baseline 已就绪，请在下方确认执行。");
+    setPendingMaintenanceAction({ kind: "promote-baseline" });
+  }
+
+  async function executePromoteBaseline() {
+    if (hasActiveJob) {
+      setMaintenanceError("存在运行中的月更任务，请等待完成后再保存新的 baseline。");
       return;
     }
     setPromotingBaseline(true);
     setError("");
     setNotice("");
+    setMaintenanceError("");
+    setMaintenanceNotice("正在从当前 active parquet 导出 baseline xlsx，数据量较大时需要等待一段时间。");
+    setPendingMaintenanceAction(null);
     try {
       const response = await api.promoteCurrentActiveToJatoBaseline();
       setBaselinePromotion(response.item);
-      setNotice(
+      const successMessage =
         `已保存新的 baseline：${response.item.baselinePath ?? "-"}；latest month ${response.item.detectedLatestMonth ?? "-"}；自动归档旧 baseline ${response.item.archivedBaselineCount} 个。`
-      );
+      setMaintenanceNotice(successMessage);
+      setNotice(successMessage);
       await refreshMaintenanceStatus(true);
     } catch (err) {
-      setError((err as Error).message);
+      setMaintenanceError((err as Error).message);
     } finally {
       setPromotingBaseline(false);
     }
@@ -674,6 +701,17 @@ export function JatoMonthlyUpdatePage() {
   const safeCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "safe") ?? [];
   const cautiousCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "cautious") ?? [];
   const protectedCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "protected") ?? [];
+  const maintenanceBusy = cleanupRunning || promotingBaseline;
+  const pendingMaintenanceTitle = pendingMaintenanceAction?.kind === "promote-baseline"
+    ? "确认保存当前 active 为 baseline"
+    : pendingMaintenanceAction
+      ? `确认执行${formatCleanupTierLabel(pendingMaintenanceAction.cleanupTier)}`
+      : "";
+  const pendingMaintenanceDescription = pendingMaintenanceAction?.kind === "promote-baseline"
+    ? "系统会读取当前 active parquet，导出新的 baseline xlsx，并把旧 active baseline 自动归档。"
+    : pendingMaintenanceAction?.cleanupTier === "cautious"
+      ? "谨慎删会在安全删之外删除 raw compare reviews、staging outputs、refresh backups 和 archived baselines/patches；当前 active baseline、active dataset 和最新 patch batch 会保留。"
+      : "安全删会归档旧 baseline/patch，删除 upload session cache 和已结束任务的临时上传副本；当前 active baseline、最新 patch batch、staging、refresh backups 和报告会保留。";
 
   return (
     <section className="crud-shell">
@@ -941,41 +979,87 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
             </p>
           </div>
           <div className="monthly-update-cleanup-actions">
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => void handlePromoteBaseline()}
-              disabled={promotingBaseline || hasActiveJob}
-            >
-              {promotingBaseline ? "保存中..." : "保存当前 active 为 baseline"}
-            </button>
+	            <button
+	              type="button"
+	              className="btn btn-secondary"
+	              onClick={requestPromoteBaseline}
+	              disabled={maintenanceBusy || hasActiveJob}
+	            >
+	              {promotingBaseline ? "保存中..." : "保存当前 active 为 baseline"}
+	            </button>
             <div className="filter-group" style={{ minWidth: 180 }}>
               <label>一键清理级别</label>
               <select
-                value={selectedCleanupTier}
-                onChange={(event) => setSelectedCleanupTier(event.target.value as "safe" | "cautious")}
-                disabled={cleanupRunning || hasActiveJob}
-              >
-                <option value="safe">安全删（推荐）</option>
-                <option value="cautious">谨慎删</option>
+	                value={selectedCleanupTier}
+	                onChange={(event) => setSelectedCleanupTier(event.target.value as "safe" | "cautious")}
+	                disabled={maintenanceBusy || hasActiveJob}
+	              >
+	                <option value="safe">安全删（推荐）</option>
+	                <option value="cautious">谨慎删</option>
               </select>
             </div>
             <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => void handleCleanup()}
-              disabled={cleanupRunning || hasActiveJob}
-            >
-              {cleanupRunning ? "清理中..." : `执行${formatCleanupTierLabel(selectedCleanupTier)}`}
-            </button>
+	              type="button"
+	              className="btn btn-secondary"
+	              onClick={requestCleanup}
+	              disabled={maintenanceBusy || hasActiveJob}
+	            >
+	              {cleanupRunning ? "清理中..." : `执行${formatCleanupTierLabel(selectedCleanupTier)}`}
+	            </button>
           </div>
         </div>
-        <div className="alert alert-warning monthly-update-reminder">
-          <strong>建议保留策略：</strong> baseline 目录只保留一个当前激活最新 baseline；旧 baseline 和旧 patch 做归档，
-          不要继续堆在 active 目录里；job 目录中的已结束任务临时上传副本可清理。
-        </div>
-        {maintenanceStatus && (
-          <div className="monthly-update-cleanup-result">
+	        <div className="alert alert-warning monthly-update-reminder">
+	          <strong>建议保留策略：</strong> baseline 目录只保留一个当前激活最新 baseline；旧 baseline 和旧 patch 做归档，
+	          不要继续堆在 active 目录里；job 目录中的已结束任务临时上传副本可清理。
+	        </div>
+	        {maintenanceError && (
+	          <div className="alert alert-error monthly-update-maintenance-feedback">
+	            {maintenanceError}
+	          </div>
+	        )}
+	        {maintenanceNotice && !maintenanceError && (
+	          <div className="alert alert-info monthly-update-maintenance-feedback">
+	            {maintenanceNotice}
+	          </div>
+	        )}
+	        {pendingMaintenanceAction && (
+	          <div className="monthly-update-maintenance-confirm">
+	            <div>
+	              <strong>{pendingMaintenanceTitle}</strong>
+	              <span>{pendingMaintenanceDescription}</span>
+	            </div>
+	            <div className="crud-row-actions">
+	              <button
+	                type="button"
+	                className="btn btn-primary"
+	                disabled={maintenanceBusy || hasActiveJob}
+	                onClick={() => {
+	                  if (pendingMaintenanceAction.kind === "promote-baseline") {
+	                    void executePromoteBaseline();
+	                    return;
+	                  }
+	                  void executeCleanup(pendingMaintenanceAction.cleanupTier);
+	                }}
+	              >
+	                确认执行
+	              </button>
+	              <button
+	                type="button"
+	                className="btn btn-secondary"
+	                disabled={maintenanceBusy}
+	                onClick={() => {
+	                  setPendingMaintenanceAction(null);
+	                  setMaintenanceNotice("");
+	                  setMaintenanceError("");
+	                }}
+	              >
+	                取消
+	              </button>
+	            </div>
+	          </div>
+	        )}
+	        {maintenanceStatus && (
+	          <div className="monthly-update-cleanup-result">
             <div className="monthly-update-cleanup-result-head">
               <span className="card-title">Runtime Snapshot</span>
               <span className="section-note">

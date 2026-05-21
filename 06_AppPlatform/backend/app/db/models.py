@@ -1697,6 +1697,28 @@ class CountrySkuFobResolved(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+class CountryFobSourceMapping(TimestampMixin, Base):
+    __tablename__ = "country_fob_source_mapping"
+    __table_args__ = (
+        Index(
+            "uq_ordering_country_fob_source_mapping_active",
+            "target_country_code", "target_payment_term_code",
+            unique=True,
+            postgresql_where=text("is_active = true"),
+        ),
+        {"schema": "ordering"},
+    )
+
+    country_fob_source_mapping_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    target_country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    target_payment_term_code: Mapped[str] = mapped_column(Text, nullable=False)
+    source_country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class OrderQuantityCell(TimestampMixin, Base):
     __tablename__ = "order_quantity_cell"
     __table_args__ = (
