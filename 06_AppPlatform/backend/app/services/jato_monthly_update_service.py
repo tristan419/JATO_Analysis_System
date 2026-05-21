@@ -2293,28 +2293,47 @@ def complete_jato_monthly_update_upload(*, upload_id: str) -> dict[str, Any]:
     return _serialize_upload_session(state)
 
 
+def _parse_month_from_filename(filename: str) -> str | None:
+    """Try to extract YYYY-MM from filename. Returns None if not found."""
+    import re
+
+    name = Path(filename).stem
+    patterns = [
+        r"(20\d{2})[._-](\d{1,2})",     # 2026.4, 2026-04, 2026_3
+        r"(20\d{2})\s*[年-]\s*(\d{1,2})",  # 2026年4, 2026-3
+    ]
+    for pat in patterns:
+        m = re.search(pat, name)
+        if m:
+            year = int(m.group(1))
+            month_num = int(m.group(2))
+            if 1 <= month_num <= 12 and 2020 <= year <= 2030:
+                return f"{year}-{month_num:02d}"
+    return None
+
+
 def _queue_monthly_update_job_from_stored_upload(
     *,
     job_id: str,
     triggered_by: str,
     upload_filename: str,
     stored_upload_path: Path,
+    month: str,
     file_sha256: str | None = None,
 ) -> dict[str, Any]:
     if stored_upload_path.stat().st_size <= 0:
         raise HTTPException(status_code=400, detail="上传文件为空，无法启动月更任务。")
 
+    normalized_month = _normalize_month(month)
+    batch_id = _allocate_batch_id(normalized_month)
+
     now = _utc_now().isoformat()
-    artifacts: dict[str, Any] = {
-        "jobDir": _relative_to_project(_job_dir(job_id)),
-        "logPath": _relative_to_project(_job_log_path(job_id)),
-    }
     state: dict[str, Any] = {
         "jobId": job_id,
-        "month": None,
-        "batchId": None,
+        "month": normalized_month,
+        "batchId": batch_id,
         "status": "queued",
-        "phase": "detecting_month",
+        "phase": "queued",
         "triggeredBy": triggered_by.strip() or "anonymous",
         "createdAt": now,
         "updatedAt": now,
@@ -2328,17 +2347,23 @@ def _queue_monthly_update_job_from_stored_upload(
             "sha256": file_sha256,
         },
         "plan": None,
-        "artifacts": artifacts,
+        "artifacts": {
+            "jobDir": _relative_to_project(_job_dir(job_id)),
+            "logPath": _relative_to_project(_job_log_path(job_id)),
+        },
         "summaries": {},
         "logPath": _relative_to_project(_job_log_path(job_id)),
     }
     _persist_job_state(state)
     _append_log(
         _job_log_path(job_id),
-        f"[{now}] queued monthly update — detecting month in background",
+        f"[{now}] queued monthly update batch {batch_id} for month {normalized_month}",
     )
     _launch_job_thread(job_id)
     return _serialize_job_state(state, include_log_tail=False)
+
+# Large file guard for direct multipart upload (not chunked)
+_MAX_DIRECT_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 def _run_job(job_id: str) -> None:
@@ -2355,30 +2380,11 @@ def _run_job(job_id: str) -> None:
     state["status"] = "running"
     state["startedAt"] = _utc_now().isoformat()
 
+    batch_id = str(state.get("batchId") or "")
+    if not batch_id:
+        raise RuntimeError("任务缺少批次标识")
+
     try:
-        # Phase 0: Detect month and allocate batch (moved from request thread)
-        if not state.get("month"):
-            state["phase"] = "detecting_month"
-            _persist_job_state(state)
-            _append_log(log_path, "[detecting_month] Reading Excel to detect latest month...")
-            detected_month = _detect_latest_month_from_upload(stored_upload_path)
-            batch_id = _allocate_batch_id(detected_month)
-            baseline_path, baseline_source = _require_latest_baseline()
-            if isinstance(state.get("artifacts"), dict):
-                state["artifacts"]["baselinePath"] = _relative_to_project(baseline_path)
-                state["artifacts"]["baselineSource"] = baseline_source
-            state["month"] = detected_month
-            state["batchId"] = batch_id
-            _persist_job_state(state)
-            _append_log(
-                log_path,
-                f"[detecting_month] Detected month: {detected_month}, batch: {batch_id}",
-            )
-
-        batch_id = str(state.get("batchId") or "")
-        if not batch_id:
-            raise RuntimeError("任务缺少批次标识")
-
         state["phase"] = "preparing"
         _persist_job_state(state)
         artifacts = state.get("artifacts")
@@ -2625,6 +2631,16 @@ def create_jato_monthly_update_job(
 ) -> dict[str, Any]:
     filename = _validate_upload(file)
 
+    file_size = file.size or 0
+    if file_size > _MAX_DIRECT_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"文件 {file_size / 1024 / 1024:.0f}MB 超过 {_MAX_DIRECT_UPLOAD_BYTES / 1024 / 1024:.0f}MB，"
+                "请使用分片上传（chunked upload）。"
+            ),
+        )
+
     job_id = f"jato-update-{uuid4().hex[:8]}"
     uploads_dir = _job_dir(job_id) / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -2633,11 +2649,16 @@ def create_jato_monthly_update_job(
     with stored_upload_path.open("wb") as handle:
         shutil.copyfileobj(file.file, handle)
 
+    month = (
+        _parse_month_from_filename(filename)
+        or datetime.now().strftime("%Y-%m")
+    )
     return _queue_monthly_update_job_from_stored_upload(
         job_id=job_id,
         triggered_by=triggered_by,
         upload_filename=filename,
         stored_upload_path=stored_upload_path,
+        month=month,
     )
 
 
@@ -2645,6 +2666,7 @@ def create_jato_monthly_update_job_from_upload(
     *,
     upload_id: str,
     triggered_by: str,
+    month: str | None = None,
 ) -> dict[str, Any]:
     state = _load_upload_session(upload_id)
     if str(state.get("status", "")) != "completed":
@@ -2659,6 +2681,16 @@ def create_jato_monthly_update_job_from_upload(
         detail="上传文件指纹缺失，请重新完成组装。",
     )
 
+    resolved_month = (
+        month
+        or _parse_month_from_filename(filename)
+    )
+    if not resolved_month:
+        raise HTTPException(
+            status_code=400,
+            detail="无法从文件名解析月份，请在上传时明确指定 month 参数。",
+        )
+
     job_id = f"jato-update-{uuid4().hex[:8]}"
     uploads_dir = _job_dir(job_id) / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -2670,6 +2702,7 @@ def create_jato_monthly_update_job_from_upload(
             triggered_by=triggered_by,
             upload_filename=filename,
             stored_upload_path=stored_upload_path,
+            month=resolved_month,
             file_sha256=file_sha256,
         )
     except Exception:
@@ -2721,12 +2754,19 @@ def retry_failed_jato_monthly_update_job(
     uploads_dir.mkdir(parents=True, exist_ok=True)
     stored_upload_path = uploads_dir / filename
     shutil.copy2(source_upload_path, stored_upload_path)
+    source_month = str(source_state.get("month") or "").strip()
+    retry_month = (
+        source_month
+        or _parse_month_from_filename(filename)
+        or datetime.now().strftime("%Y-%m")
+    )
     try:
         result = _queue_monthly_update_job_from_stored_upload(
             job_id=job_id,
             triggered_by=triggered_by,
             upload_filename=filename,
             stored_upload_path=stored_upload_path,
+            month=retry_month,
             file_sha256=(
                 str(source_upload.get("sha256"))
                 if source_upload.get("sha256") is not None

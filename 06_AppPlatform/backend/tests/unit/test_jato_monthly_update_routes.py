@@ -86,10 +86,10 @@ def test_create_monthly_update_job_route_persists_job(
 
     assert response.status_code == 200
     payload = response.json()["item"]
-    assert payload["month"] is None  # deferred to _run_job
-    assert payload["batchId"] is None
+    assert payload["month"] is not None  # from filename parse or mock
+    assert payload["batchId"] is not None
     assert payload["status"] == "queued"
-    assert payload["phase"] == "detecting_month"
+    assert payload["phase"] == "queued"
     assert payload["triggeredBy"] == "tester"
     assert payload["upload"]["originalFilename"] == "patch.xlsx"
     assert len(list(job_root.glob("*/job_state.json"))) == 1
@@ -303,7 +303,7 @@ def test_chunked_monthly_update_upload_routes_create_job(
     initiate_response = client.post(
         "/v1/msrp/monthly-update-uploads/initiate",
         headers=_headers(),
-        json={"filename": "patch.xlsx", "sizeBytes": 10, "resumeKey": "resume-key-1"},
+        json={"filename": "JATO-2026.03-patch.xlsx", "sizeBytes": 10, "resumeKey": "resume-key-1"},
     )
     assert initiate_response.status_code == 200
     upload_id = initiate_response.json()["item"]["uploadId"]
@@ -311,7 +311,7 @@ def test_chunked_monthly_update_upload_routes_create_job(
     reinitiate_response = client.post(
         "/v1/msrp/monthly-update-uploads/initiate",
         headers=_headers(),
-        json={"filename": "patch.xlsx", "sizeBytes": 10, "resumeKey": "resume-key-1"},
+        json={"filename": "JATO-2026.03-patch.xlsx", "sizeBytes": 10, "resumeKey": "resume-key-1"},
     )
     assert reinitiate_response.status_code == 200
     assert reinitiate_response.json()["item"]["uploadId"] == upload_id
@@ -372,8 +372,8 @@ def test_chunked_monthly_update_upload_routes_create_job(
     assert create_response.status_code == 200
     payload = create_response.json()["item"]
     assert payload["status"] == "queued"
-    assert payload["batchId"] is None  # deferred to _run_job
-    assert payload["phase"] == "detecting_month"
+    assert payload["batchId"] is not None  # from filename parse "JATO-2026.03-patch"
+    assert payload["phase"] == "queued"
     assert payload["upload"]["sizeBytes"] == 10
     assert payload["upload"]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
 
@@ -431,8 +431,8 @@ def test_retry_failed_monthly_update_job_route_requeues_existing_upload(
     payload = response.json()["item"]
     assert payload["jobId"] != source_job_id
     assert payload["status"] == "queued"
-    assert payload["batchId"] is None  # deferred to _run_job
-    assert payload["phase"] == "detecting_month"
+    assert payload["batchId"] is not None  # from source job state month
+    assert payload["phase"] == "queued"
     assert payload["triggeredBy"] == "tester"
     assert payload["upload"]["sha256"] == hashlib.sha256(b"retry-me").hexdigest()
     assert payload["artifacts"]["retriedFromJobId"] == source_job_id

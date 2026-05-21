@@ -44,10 +44,12 @@ def post_monthly_update_job_from_upload(
     payload: dict[str, object],
     user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
+    month_raw = payload.get("month")
     return {
         "item": create_jato_monthly_update_job_from_upload(
             upload_id=str(payload.get("uploadId", "")),
             triggered_by=user.name,
+            month=str(month_raw).strip() if month_raw else None,
         )
     }
 

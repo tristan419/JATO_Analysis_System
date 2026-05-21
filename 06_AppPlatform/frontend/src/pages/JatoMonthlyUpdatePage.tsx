@@ -137,6 +137,7 @@ export function JatoMonthlyUpdatePage() {
   const [reviewBundle, setReviewBundle] = useState<JatoMonthlyUpdateReviewBundle | null>(null);
   const [selectedReviewCountry, setSelectedReviewCountry] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const [uploadMonth, setUploadMonth] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [cleanupResult, setCleanupResult] =
@@ -265,7 +266,7 @@ export function JatoMonthlyUpdatePage() {
     setNotice("");
     setUploadProgress(null);
     try {
-      const response = await api.createJatoMonthlyUpdateJob(uploadFile, setUploadProgress);
+      const response = await api.createJatoMonthlyUpdateJob(uploadFile, setUploadProgress, uploadMonth ?? undefined);
       setNotice(
         `已创建任务 ${response.item.jobId}，自动识别最新数据月 ${response.item.month || "-"}，批次 ${response.item.batchId || "-"}，后台开始串行执行 prepare / compare / refresh。`
       );
@@ -748,6 +749,19 @@ export function JatoMonthlyUpdatePage() {
           </div>
 
           <div className="monthly-update-form-actions">
+            <label style={{ display: "block", marginBottom: 12, fontSize: 12, fontWeight: 600, color: "#555" }}>
+              数据月份（可选，不填则从文件名自动解析；如 "2026-04"）
+              <input
+                type="text"
+                placeholder="2026-04"
+                value={uploadMonth ?? ""}
+                onChange={(e) => setUploadMonth(e.target.value.trim() || null)}
+                style={{
+                  display: "block", marginTop: 4, padding: "8px 12px",
+                  border: "1px solid #d1d5db", borderRadius: 8, fontSize: 14, width: 200,
+                }}
+              />
+            </label>
             <p className="monthly-update-note">
               系统会自动识别上传文件中的国家数量：仅 1 个国家则走快速路径（跳过 prepare/compare，直接 refresh + supplement），多个国家则走完整批次管线。快速路径会自动检查上传月份必须比 active 中该国家的最新月份新。
             </p>

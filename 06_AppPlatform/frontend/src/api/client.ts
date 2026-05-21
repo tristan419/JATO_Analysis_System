@@ -2096,7 +2096,8 @@ export const api = {
     }),
   createJatoMonthlyUpdateJob: async (
     file: File,
-    onProgress?: (progress: JatoMonthlyUpdateUploadProgress) => void
+    onProgress?: (progress: JatoMonthlyUpdateUploadProgress) => void,
+    month?: string,
   ) => {
     const probeSha256 = await sha256ForBlob(
       file.slice(0, Math.min(file.size, MONTHLY_UPDATE_RESUME_PROBE_BYTES))
@@ -2223,8 +2224,9 @@ export const api = {
     const item = await request<{ item: Record<string, unknown> }>("/msrp/monthly-update-jobs/from-upload", {
       method: "POST",
       body: JSON.stringify({
-        uploadId: session.uploadId
-      })
+        uploadId: session.uploadId,
+        month: month || undefined,
+      }),
     }).then((res) => mapJatoMonthlyUpdateJob(res.item));
     clearStoredMonthlyUpdateUploadId(resumeKey);
 
