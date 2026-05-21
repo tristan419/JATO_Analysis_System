@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 
 from app.core.security import UserContext, require_min_role
 from app.services.jato_monthly_update_service import (
+    cancel_jato_monthly_update_job,
     complete_jato_monthly_update_upload,
     create_jato_monthly_update_job,
     create_jato_monthly_update_job_from_upload,
@@ -15,6 +16,7 @@ from app.services.jato_monthly_update_service import (
     list_jato_monthly_update_jobs,
     promote_current_active_to_baseline,
     publish_jato_monthly_update_job,
+    recheck_jato_monthly_update_job,
     rollback_jato_monthly_update_job,
     retry_failed_jato_monthly_update_job,
     run_jato_monthly_update_cleanup,
@@ -95,6 +97,32 @@ def post_retry_monthly_update_job(
     return {
         "item": retry_failed_jato_monthly_update_job(
             source_job_id=job_id,
+            triggered_by=user.name,
+        )
+    }
+
+
+@router.post("/monthly-update-jobs/{job_id}/recheck")
+def post_recheck_monthly_update_job(
+    job_id: str,
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": recheck_jato_monthly_update_job(
+            job_id=job_id,
+            triggered_by=user.name,
+        )
+    }
+
+
+@router.post("/monthly-update-jobs/{job_id}/cancel")
+def post_cancel_monthly_update_job(
+    job_id: str,
+    user: UserContext = Depends(require_min_role("admin")),
+) -> dict[str, object]:
+    return {
+        "item": cancel_jato_monthly_update_job(
+            job_id=job_id,
             triggered_by=user.name,
         )
     }

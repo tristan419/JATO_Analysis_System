@@ -1548,6 +1548,35 @@ export interface JatoMonthlyUpdateSummaries {
   smartMerge?: JatoMonthlyUpdateSmartMergeSummary;
 }
 
+export interface JatoMonthlyUpdateCurrentProcess {
+  pid: number;
+  label: string;
+  command: string;
+  startedAt: string;
+  lastHeartbeatAt: string;
+}
+
+export interface JatoMonthlyUpdateRuntimeCheck {
+  checkedAt: string;
+  statusAtCheck?: string;
+  phaseAtCheck?: string;
+  threadAlive?: boolean;
+  processPid?: number | null;
+  processAlive?: boolean;
+  log?: Record<string, unknown>;
+  artifacts?: Array<Record<string, unknown>>;
+  resolvedAs?: string;
+  resolvedBy?: string;
+  resolvedAt?: string;
+}
+
+export interface JatoMonthlyUpdateCancellation {
+  cancelledAt: string;
+  cancelledBy: string;
+  phaseAtCancel: string;
+  termination?: Record<string, unknown>;
+}
+
 export interface JatoMonthlyUpdateJob {
   jobId: string;
   month: string;
@@ -1565,6 +1594,9 @@ export interface JatoMonthlyUpdateJob {
   artifacts: JatoMonthlyUpdateArtifacts | null;
   summaries: JatoMonthlyUpdateSummaries | null;
   publication?: JatoMonthlyUpdatePublication | null;
+  currentProcess?: JatoMonthlyUpdateCurrentProcess | null;
+  runtimeCheck?: JatoMonthlyUpdateRuntimeCheck | null;
+  cancellation?: JatoMonthlyUpdateCancellation | null;
   logPath?: string | null;
   logTail?: string | null;
 }

@@ -747,6 +747,15 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
   const publicationRaw = raw.publication && typeof raw.publication === "object"
     ? raw.publication as Record<string, unknown>
     : null;
+  const currentProcessRaw = raw.currentProcess && typeof raw.currentProcess === "object"
+    ? raw.currentProcess as Record<string, unknown>
+    : null;
+  const runtimeCheckRaw = raw.runtimeCheck && typeof raw.runtimeCheck === "object"
+    ? raw.runtimeCheck as Record<string, unknown>
+    : null;
+  const cancellationRaw = raw.cancellation && typeof raw.cancellation === "object"
+    ? raw.cancellation as Record<string, unknown>
+    : null;
 
   return {
     jobId: String(raw.jobId ?? ""),
@@ -765,6 +774,42 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
     artifacts,
     summaries,
     publication: publicationRaw ? mapJatoMonthlyUpdatePublication(publicationRaw) : null,
+    currentProcess: currentProcessRaw ? {
+      pid: Number(currentProcessRaw.pid ?? 0),
+      label: String(currentProcessRaw.label ?? ""),
+      command: String(currentProcessRaw.command ?? ""),
+      startedAt: String(currentProcessRaw.startedAt ?? ""),
+      lastHeartbeatAt: String(currentProcessRaw.lastHeartbeatAt ?? ""),
+    } : null,
+    runtimeCheck: runtimeCheckRaw ? {
+      checkedAt: String(runtimeCheckRaw.checkedAt ?? ""),
+      statusAtCheck: runtimeCheckRaw.statusAtCheck === undefined ? undefined : String(runtimeCheckRaw.statusAtCheck),
+      phaseAtCheck: runtimeCheckRaw.phaseAtCheck === undefined ? undefined : String(runtimeCheckRaw.phaseAtCheck),
+      threadAlive: runtimeCheckRaw.threadAlive === undefined ? undefined : Boolean(runtimeCheckRaw.threadAlive),
+      processPid: runtimeCheckRaw.processPid === undefined || runtimeCheckRaw.processPid === null
+        ? null
+        : Number(runtimeCheckRaw.processPid),
+      processAlive: runtimeCheckRaw.processAlive === undefined ? undefined : Boolean(runtimeCheckRaw.processAlive),
+      log: runtimeCheckRaw.log && typeof runtimeCheckRaw.log === "object"
+        ? runtimeCheckRaw.log as Record<string, unknown>
+        : undefined,
+      artifacts: Array.isArray(runtimeCheckRaw.artifacts)
+        ? runtimeCheckRaw.artifacts.filter((item): item is Record<string, unknown> => (
+            typeof item === "object" && item !== null
+          ))
+        : undefined,
+      resolvedAs: runtimeCheckRaw.resolvedAs === undefined ? undefined : String(runtimeCheckRaw.resolvedAs),
+      resolvedBy: runtimeCheckRaw.resolvedBy === undefined ? undefined : String(runtimeCheckRaw.resolvedBy),
+      resolvedAt: runtimeCheckRaw.resolvedAt === undefined ? undefined : String(runtimeCheckRaw.resolvedAt),
+    } : null,
+    cancellation: cancellationRaw ? {
+      cancelledAt: String(cancellationRaw.cancelledAt ?? ""),
+      cancelledBy: String(cancellationRaw.cancelledBy ?? ""),
+      phaseAtCancel: String(cancellationRaw.phaseAtCancel ?? ""),
+      termination: cancellationRaw.termination && typeof cancellationRaw.termination === "object"
+        ? cancellationRaw.termination as Record<string, unknown>
+        : undefined,
+    } : null,
     logPath: raw.logPath === undefined || raw.logPath === null ? null : String(raw.logPath),
     logTail: raw.logTail === undefined || raw.logTail === null ? null : String(raw.logTail)
   };
@@ -2261,6 +2306,18 @@ export const api = {
     })),
   retryFailedJatoMonthlyUpdateJob: (jobId: string) =>
     request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/retry`, {
+      method: "POST"
+    }).then((res) => ({
+      item: mapJatoMonthlyUpdateJob(res.item)
+    })),
+  recheckJatoMonthlyUpdateJob: (jobId: string) =>
+    request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/recheck`, {
+      method: "POST"
+    }).then((res) => ({
+      item: mapJatoMonthlyUpdateJob(res.item)
+    })),
+  cancelJatoMonthlyUpdateJob: (jobId: string) =>
+    request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/cancel`, {
       method: "POST"
     }).then((res) => ({
       item: mapJatoMonthlyUpdateJob(res.item)

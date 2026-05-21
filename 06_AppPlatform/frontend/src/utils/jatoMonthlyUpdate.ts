@@ -108,6 +108,9 @@ export function getMonthlyUpdateStatusBadgeClass(status: string): string {
   if (status === "failed") {
     return "badge-danger";
   }
+  if (status === "cancelled") {
+    return "badge-inactive";
+  }
   if (status === "running" || status === "queued") {
     return "badge-warning";
   }

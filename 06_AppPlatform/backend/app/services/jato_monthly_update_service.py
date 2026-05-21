@@ -4,11 +4,13 @@ import hashlib
 import json
 import os
 import re
+import signal
 import shlex
 import shutil
 import subprocess
 import sys
 import threading
+import time
 import traceback
 from datetime import UTC, datetime
 from pathlib import Path
@@ -63,6 +65,13 @@ SALES_DOUBLING_MIN_MONTH_COUNT = 2
 SALES_DOUBLING_SAMPLE_LIMIT = 6
 _WRITE_LOCK = threading.Lock()
 _RUNNING_THREADS: dict[str, threading.Thread] = {}
+RUNNING_JOB_STATUSES = {"queued", "running"}
+PROCESS_TERMINATE_GRACE_SECONDS = 8
+RUNNING_LOG_STALE_SECONDS = 15 * 60
+
+
+class _JobCancelled(RuntimeError):
+    pass
 
 
 def _utc_now() -> datetime:
@@ -679,6 +688,169 @@ def _persist_job_state(payload: dict[str, Any]) -> None:
     payload["updatedAt"] = _utc_now().isoformat()
     with _WRITE_LOCK:
         _write_json(_job_state_path(job_id), payload)
+
+
+def _thread_is_alive(job_id: str) -> bool:
+    worker = _RUNNING_THREADS.get(job_id)
+    return bool(worker and worker.is_alive())
+
+
+def _current_process_pid(payload: dict[str, Any]) -> int | None:
+    current = payload.get("currentProcess")
+    if not isinstance(current, dict):
+        return None
+    try:
+        pid = int(current.get("pid") or 0)
+    except (TypeError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def _process_exists(pid: int | None) -> bool:
+    if pid is None or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _set_current_process(
+    *,
+    job_id: str,
+    pid: int,
+    label: str,
+    command: str,
+) -> None:
+    payload = _load_job_state(job_id)
+    now = _utc_now().isoformat()
+    payload["currentProcess"] = {
+        "pid": pid,
+        "label": label,
+        "command": command,
+        "startedAt": now,
+        "lastHeartbeatAt": now,
+    }
+    _persist_job_state(payload)
+
+
+def _touch_current_process_heartbeat(
+    *,
+    job_id: str,
+    pid: int,
+) -> None:
+    payload = _load_job_state(job_id)
+    current = payload.get("currentProcess")
+    if not isinstance(current, dict) or int(current.get("pid") or 0) != pid:
+        return
+    current["lastHeartbeatAt"] = _utc_now().isoformat()
+    payload["currentProcess"] = current
+    _persist_job_state(payload)
+
+
+def _clear_current_process(
+    *,
+    job_id: str,
+    pid: int | None = None,
+) -> None:
+    payload = _load_job_state(job_id)
+    current = payload.get("currentProcess")
+    if pid is not None and isinstance(current, dict) and int(current.get("pid") or 0) != pid:
+        return
+    payload["currentProcess"] = None
+    _persist_job_state(payload)
+
+
+def _ensure_job_not_cancelled(job_id: str) -> None:
+    payload = _load_job_state(job_id)
+    if str(payload.get("status") or "") == "cancelled":
+        raise _JobCancelled(str(payload.get("error") or f"Job {job_id} cancelled."))
+
+
+def _infer_job_id_from_log_path(log_path: Path) -> str | None:
+    job_id = log_path.parent.name
+    return job_id if (_job_state_path(job_id)).exists() else None
+
+
+def _terminate_process_group(pid: int) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "pid": pid,
+        "sigtermSent": False,
+        "sigkillSent": False,
+        "processAliveBefore": _process_exists(pid),
+        "processAliveAfter": False,
+    }
+    if not result["processAliveBefore"]:
+        return result
+    try:
+        os.killpg(pid, signal.SIGTERM)
+        result["sigtermSent"] = True
+    except ProcessLookupError:
+        result["processAliveAfter"] = False
+        return result
+    except OSError as exc:
+        result["error"] = str(exc)
+        result["processAliveAfter"] = _process_exists(pid)
+        return result
+
+    deadline = time.monotonic() + PROCESS_TERMINATE_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        if not _process_exists(pid):
+            result["processAliveAfter"] = False
+            return result
+        time.sleep(0.2)
+
+    if _process_exists(pid):
+        try:
+            os.killpg(pid, signal.SIGKILL)
+            result["sigkillSent"] = True
+        except ProcessLookupError:
+            pass
+        except OSError as exc:
+            result["error"] = str(exc)
+    result["processAliveAfter"] = _process_exists(pid)
+    return result
+
+
+def _job_log_probe(log_path: Path) -> dict[str, Any]:
+    if not log_path.exists():
+        return {
+            "path": _relative_to_project(log_path),
+            "exists": False,
+            "updatedAt": None,
+            "ageSeconds": None,
+            "stale": True,
+        }
+    updated = datetime.fromtimestamp(log_path.stat().st_mtime, UTC)
+    age_seconds = max(0, int((_utc_now() - updated).total_seconds()))
+    return {
+        "path": _relative_to_project(log_path),
+        "exists": True,
+        "updatedAt": updated.isoformat(),
+        "ageSeconds": age_seconds,
+        "stale": age_seconds > RUNNING_LOG_STALE_SECONDS,
+    }
+
+
+def _artifact_probe(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
+    probes: list[dict[str, Any]] = []
+    for key in ("planPath", "rawCompareReportPath", "refreshReportPath", "stagingOutputPath"):
+        value = artifacts.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        path = _project_path(value)
+        probes.append({
+            "key": key,
+            "path": value,
+            "exists": bool(path and path.exists()),
+        })
+    return probes
 
 
 def _normalize_month(value: str) -> str:
@@ -1427,7 +1599,15 @@ def _write_jato_etl_pipeline_status(state: dict[str, Any]) -> None:
         summaries = state.get("summaries") if isinstance(state.get("summaries"), dict) else {}
         refresh = summaries.get("refresh") if isinstance(summaries.get("refresh"), dict) else {}
         job_status = str(state.get("status") or "unknown").strip().lower()
-        status = "success" if job_status == "success" else "failed" if job_status == "failed" else "unknown"
+        status = (
+            "success"
+            if job_status == "success"
+            else "failed"
+            if job_status == "failed"
+            else "degraded"
+            if job_status == "cancelled"
+            else "unknown"
+        )
         message = str(state.get("error") or "").strip()
         if not message:
             message = (
@@ -1441,11 +1621,11 @@ def _write_jato_etl_pipeline_status(state: dict[str, Any]) -> None:
             "lastRunAt": state.get("finishedAt") or state.get("updatedAt") or state.get("startedAt"),
             "startedAt": state.get("startedAt"),
             "finishedAt": state.get("finishedAt"),
-            "exitCode": 0 if status == "success" else 1 if status == "failed" else None,
+            "exitCode": 0 if status == "success" else 1 if status == "failed" else 130 if status == "degraded" else None,
             "durationSeconds": _status_duration_seconds(state.get("startedAt"), state.get("finishedAt")),
             "recordsProcessed": refresh.get("rowCount", 0),
             "failedCount": 1 if status == "failed" else 0,
-            "warningCount": 0,
+            "warningCount": 1 if status == "degraded" else 0,
             "artifactRefs": _jato_etl_artifact_refs(state),
             "source": "app.services.jato_monthly_update_service",
             "message": message,
@@ -1500,6 +1680,21 @@ def _serialize_job_state(
         "publication": (
             payload.get("publication")
             if isinstance(payload.get("publication"), dict)
+            else None
+        ),
+        "currentProcess": (
+            payload.get("currentProcess")
+            if isinstance(payload.get("currentProcess"), dict)
+            else None
+        ),
+        "runtimeCheck": (
+            payload.get("runtimeCheck")
+            if isinstance(payload.get("runtimeCheck"), dict)
+            else None
+        ),
+        "cancellation": (
+            payload.get("cancellation")
+            if isinstance(payload.get("cancellation"), dict)
             else None
         ),
     }
@@ -2049,7 +2244,11 @@ def _run_logged_command(
     label: str,
     args: list[str],
     log_path: Path,
+    job_id: str | None = None,
 ) -> None:
+    tracking_job_id = job_id or _infer_job_id_from_log_path(log_path)
+    if tracking_job_id:
+        _ensure_job_not_cancelled(tracking_job_id)
     rendered_command = " ".join(shlex.quote(arg) for arg in args)
     _append_log(log_path, f"\n=== {label} ===\n$ {rendered_command}")
     env = dict(os.environ)
@@ -2062,17 +2261,35 @@ def _run_logged_command(
         text=True,
         bufsize=1,
         env=env,
+        start_new_session=True,
     )
+    if tracking_job_id:
+        _set_current_process(
+            job_id=tracking_job_id,
+            pid=process.pid,
+            label=label,
+            command=rendered_command,
+        )
+    last_heartbeat = time.monotonic()
     try:
         if process.stdout is not None:
             for line in process.stdout:
                 _append_log(log_path, line.rstrip("\n"))
+                if tracking_job_id and (time.monotonic() - last_heartbeat) >= 5:
+                    _touch_current_process_heartbeat(job_id=tracking_job_id, pid=process.pid)
+                    last_heartbeat = time.monotonic()
     finally:
         if process.stdout is not None:
             process.stdout.close()
     return_code = process.wait()
+    if tracking_job_id:
+        _clear_current_process(job_id=tracking_job_id, pid=process.pid)
     if return_code != 0:
+        if tracking_job_id:
+            _ensure_job_not_cancelled(tracking_job_id)
         raise RuntimeError(f"{label} 失败，退出码 {return_code}")
+    if tracking_job_id:
+        _ensure_job_not_cancelled(tracking_job_id)
 
 
 def _prepare_initial_job_state(
@@ -2368,6 +2585,9 @@ _MAX_DIRECT_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 def _run_job(job_id: str) -> None:
     state = _load_job_state(job_id)
+    if str(state.get("status") or "") == "cancelled":
+        _RUNNING_THREADS.pop(job_id, None)
+        return
     log_path = _job_log_path(job_id)
     upload_payload = state.get("upload")
     if not isinstance(upload_payload, dict):
@@ -2424,6 +2644,7 @@ def _run_job(job_id: str) -> None:
         if not PREPARE_SCRIPT_PATH.exists():
             raise RuntimeError(f"找不到脚本: {_relative_to_project(PREPARE_SCRIPT_PATH)}")
 
+        _ensure_job_not_cancelled(job_id)
         prepare_args = [
             sys.executable,
             str(PREPARE_SCRIPT_PATH),
@@ -2436,7 +2657,11 @@ def _run_job(job_id: str) -> None:
             "--patch",
             str(stored_upload_path),
         ]
-        _run_logged_command(label="Prepare monthly update", args=prepare_args, log_path=log_path)
+        _run_logged_command(
+            label="Prepare monthly update",
+            args=prepare_args,
+            log_path=log_path,
+        )
 
         plan_path = PROJECT_ROOT / "01_RAW_DATA" / "patches" / batch_id / "monthly_update_plan.md"
         if not plan_path.exists():
@@ -2479,8 +2704,13 @@ def _run_job(job_id: str) -> None:
 
         state["phase"] = "raw_compare"
         _persist_job_state(state)
+        _ensure_job_not_cancelled(job_id)
         compare_args = _command_to_args(str(parsed_plan["compareCommand"]))
-        _run_logged_command(label="Raw compare review", args=compare_args, log_path=log_path)
+        _run_logged_command(
+            label="Raw compare review",
+            args=compare_args,
+            log_path=log_path,
+        )
         raw_compare_report = _read_json_if_exists(parsed_plan.get("rawCompareReportPath"))
         if raw_compare_report is None:
             raise RuntimeError("raw compare 完成后未找到 raw_compare_report.json")
@@ -2491,8 +2721,13 @@ def _run_job(job_id: str) -> None:
 
         state["phase"] = "refresh"
         _persist_job_state(state)
+        _ensure_job_not_cancelled(job_id)
         refresh_args = _command_to_args(str(parsed_plan["refreshCommand"]))
-        _run_logged_command(label="Candidate refresh", args=refresh_args, log_path=log_path)
+        _run_logged_command(
+            label="Candidate refresh",
+            args=refresh_args,
+            log_path=log_path,
+        )
         refresh_report = _read_json_if_exists(parsed_plan.get("refreshReportPath"))
         if refresh_report is None:
             raise RuntimeError("refresh 完成后未找到 refresh_job_report.json")
@@ -2502,6 +2737,16 @@ def _run_job(job_id: str) -> None:
         state["finishedAt"] = _utc_now().isoformat()
         _persist_job_state(state)
         _write_jato_etl_pipeline_status(state)
+    except _JobCancelled as exc:
+        state = _load_job_state(job_id)
+        state["status"] = "cancelled"
+        state["phase"] = "cancelled"
+        state["finishedAt"] = state.get("finishedAt") or _utc_now().isoformat()
+        state["error"] = str(exc)
+        state["currentProcess"] = None
+        _persist_job_state(state)
+        _write_jato_etl_pipeline_status(state)
+        _append_log(log_path, f"[{_utc_now().isoformat()}] Cancelled: {exc}")
     except Exception as exc:
         state["status"] = "failed"
         state["phase"] = "failed"
@@ -2791,6 +3036,9 @@ def retry_failed_jato_monthly_update_job(
 def _run_single_country_job(job_id: str) -> None:
     """Background runner: validates single-country upload and runs refresh pipeline."""
     state = _load_job_state(job_id)
+    if str(state.get("status") or "") == "cancelled":
+        _RUNNING_THREADS.pop(job_id, None)
+        return
     log_path = _job_log_path(job_id)
 
     try:
@@ -2850,6 +3098,7 @@ def _run_single_country_job(job_id: str) -> None:
 
         state["phase"] = "refreshing"
         _persist_job_state(state)
+        _ensure_job_not_cancelled(job_id)
 
         refresh_args = [
             sys.executable,
@@ -2881,7 +3130,11 @@ def _run_single_country_job(job_id: str) -> None:
                 ]
             )
 
-        _run_logged_command(label="单国家刷新", args=refresh_args, log_path=log_path)
+        _run_logged_command(
+            label="单国家刷新",
+            args=refresh_args,
+            log_path=log_path,
+        )
 
         refresh_report = _read_json_if_exists(str(report_path.resolve()))
         if refresh_report is None:
@@ -2926,6 +3179,16 @@ def _run_single_country_job(job_id: str) -> None:
             f"[{_utc_now().isoformat()}] 单国家任务完成：{country} {month}。可前往 Publish。",
         )
 
+    except _JobCancelled as exc:
+        state = _load_job_state(job_id)
+        state["status"] = "cancelled"
+        state["phase"] = "cancelled"
+        state["finishedAt"] = state.get("finishedAt") or _utc_now().isoformat()
+        state["error"] = str(exc)
+        state["currentProcess"] = None
+        _persist_job_state(state)
+        _write_jato_etl_pipeline_status(state)
+        _append_log(log_path, f"[{_utc_now().isoformat()}] Cancelled: {exc}")
     except Exception as exc:
         state["status"] = "failed"
         state["phase"] = "failed"
@@ -3027,6 +3290,9 @@ def _smart_merge_dataframes(
 def _run_smart_merge(job_id: str) -> None:
     """Background runner: smart merge → rebuild partitions/manifest/fingerprint."""
     state = _load_job_state(job_id)
+    if str(state.get("status") or "") == "cancelled":
+        _RUNNING_THREADS.pop(job_id, None)
+        return
     log_path = _job_log_path(job_id)
 
     try:
@@ -3108,6 +3374,7 @@ def _run_smart_merge(job_id: str) -> None:
 
         state["phase"] = "smart_merge_rebuild"
         _persist_job_state(state)
+        _ensure_job_not_cancelled(job_id)
         _run_logged_command(
             label="Smart Merge rebuild",
             args=rebuild_args,
@@ -3132,6 +3399,16 @@ def _run_smart_merge(job_id: str) -> None:
             f"[{_utc_now().isoformat()}] Smart Merge: 全部完成。请进入 Review → Publish。",
         )
 
+    except _JobCancelled as exc:
+        state = _load_job_state(job_id)
+        state["status"] = "cancelled"
+        state["phase"] = "cancelled"
+        state["finishedAt"] = state.get("finishedAt") or _utc_now().isoformat()
+        state["error"] = str(exc)
+        state["currentProcess"] = None
+        _persist_job_state(state)
+        _write_jato_etl_pipeline_status(state)
+        _append_log(log_path, f"[{_utc_now().isoformat()}] Cancelled: {exc}")
     except Exception as exc:
         state["status"] = "failed"
         state["phase"] = "smart_merge_failed"
@@ -3198,6 +3475,119 @@ def create_smart_merge_candidate(
 
     _launch_smart_merge_thread(job_id)
     return _serialize_job_state(payload, include_log_tail=False)
+
+
+def _build_runtime_check(payload: dict[str, Any]) -> dict[str, Any]:
+    job_id = str(payload.get("jobId") or "")
+    pid = _current_process_pid(payload)
+    process_alive = _process_exists(pid)
+    thread_alive = _thread_is_alive(job_id)
+    checked_at = _utc_now().isoformat()
+    return {
+        "checkedAt": checked_at,
+        "statusAtCheck": str(payload.get("status") or ""),
+        "phaseAtCheck": str(payload.get("phase") or ""),
+        "threadAlive": thread_alive,
+        "processPid": pid,
+        "processAlive": process_alive,
+        "log": _job_log_probe(_job_log_path(job_id)),
+        "artifacts": _artifact_probe(payload),
+    }
+
+
+def recheck_jato_monthly_update_job(
+    *,
+    job_id: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    payload = _load_job_state(job_id)
+    runtime_check = _build_runtime_check(payload)
+    payload["runtimeCheck"] = runtime_check
+
+    status = str(payload.get("status") or "")
+    if status in RUNNING_JOB_STATUSES:
+        current_process = payload.get("currentProcess")
+        process_was_expected = isinstance(current_process, dict)
+        has_live_worker = bool(runtime_check["threadAlive"] or runtime_check["processAlive"])
+        if process_was_expected and not runtime_check["processAlive"]:
+            has_live_worker = False
+
+        if not has_live_worker:
+            now = _utc_now().isoformat()
+            payload["status"] = "failed"
+            payload["phase"] = "stale_failed"
+            payload["finishedAt"] = now
+            payload["currentProcess"] = None
+            payload["error"] = (
+                "Stale monthly update job: job_state still said running/queued, "
+                "but no live background worker or subprocess was found."
+            )
+            payload["runtimeCheck"] = {
+                **runtime_check,
+                "resolvedAs": "stale_failed",
+                "resolvedBy": triggered_by.strip() or "anonymous",
+                "resolvedAt": now,
+            }
+            _append_log(
+                _job_log_path(job_id),
+                (
+                    f"[{now}] Recheck marked job as stale_failed by "
+                    f"{triggered_by.strip() or 'anonymous'}."
+                ),
+            )
+            _write_jato_etl_pipeline_status(payload)
+
+    _persist_job_state(payload)
+    return _serialize_job_state(payload, include_log_tail=True)
+
+
+def cancel_jato_monthly_update_job(
+    *,
+    job_id: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    payload = _load_job_state(job_id)
+    status = str(payload.get("status") or "")
+    if status not in RUNNING_JOB_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail="只有 queued/running 的月更任务可以终止。",
+        )
+
+    pid = _current_process_pid(payload)
+    termination = _terminate_process_group(pid) if pid is not None else {
+        "pid": None,
+        "sigtermSent": False,
+        "sigkillSent": False,
+        "processAliveBefore": False,
+        "processAliveAfter": False,
+        "message": "No current subprocess recorded.",
+    }
+    now = _utc_now().isoformat()
+    actor = triggered_by.strip() or "anonymous"
+    phase = str(payload.get("phase") or "unknown")
+    payload["status"] = "cancelled"
+    payload["phase"] = "cancelled"
+    payload["finishedAt"] = now
+    payload["error"] = f"Cancelled by {actor} during {phase}"
+    payload["currentProcess"] = None
+    payload["cancellation"] = {
+        "cancelledAt": now,
+        "cancelledBy": actor,
+        "phaseAtCancel": phase,
+        "termination": termination,
+    }
+    payload["runtimeCheck"] = _build_runtime_check(payload)
+    _persist_job_state(payload)
+    _write_jato_etl_pipeline_status(payload)
+    _append_log(
+        _job_log_path(job_id),
+        (
+            f"[{now}] Cancelled by {actor} during {phase}. "
+            f"termination={json.dumps(termination, ensure_ascii=False)}"
+        ),
+    )
+    return _serialize_job_state(payload, include_log_tail=True)
 
 
 def list_jato_monthly_update_jobs(*, limit: int = 20) -> dict[str, Any]:

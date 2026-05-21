@@ -108,6 +108,7 @@ describe("jato monthly update helpers", () => {
   it("maps statuses to existing badge classes", () => {
     expect(getMonthlyUpdateStatusBadgeClass("success")).toBe("badge-active");
     expect(getMonthlyUpdateStatusBadgeClass("failed")).toBe("badge-danger");
+    expect(getMonthlyUpdateStatusBadgeClass("cancelled")).toBe("badge-inactive");
     expect(getMonthlyUpdateStatusBadgeClass("running")).toBe("badge-warning");
     expect(getMonthlyUpdateStatusBadgeClass("queued")).toBe("badge-warning");
     expect(getMonthlyUpdateStatusBadgeClass("completed")).toBe("badge-inactive");

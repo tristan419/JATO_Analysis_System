@@ -1317,6 +1317,136 @@ def test_get_review_bundle_reads_compare_outputs(tmp_path: Path, monkeypatch) ->
     ]
 
 
+def test_recheck_monthly_update_job_marks_missing_worker_stale_failed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+    monkeypatch.setattr(jato_monthly_update_service, "_process_exists", lambda _pid: False)
+    monkeypatch.setattr(jato_monthly_update_service, "_thread_is_alive", lambda _job_id: False)
+    monkeypatch.setattr(jato_monthly_update_service, "_write_jato_etl_pipeline_status", lambda _state: None)
+
+    job_id = "jato-update-stale"
+    upload_path = job_root / job_id / "uploads" / "patch.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"fake")
+    state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id=job_id,
+        month="2026-04",
+        triggered_by="tester",
+        upload_filename="patch.xlsx",
+        stored_upload_path=upload_path,
+    )
+    state["status"] = "running"
+    state["phase"] = "raw_compare"
+    state["currentProcess"] = {
+        "pid": 999999,
+        "label": "Raw compare review",
+        "command": "python raw_compare.py",
+        "startedAt": "2026-05-21T03:00:00+00:00",
+        "lastHeartbeatAt": "2026-05-21T03:00:10+00:00",
+    }
+    jato_monthly_update_service._persist_job_state(state)
+
+    result = jato_monthly_update_service.recheck_jato_monthly_update_job(
+        job_id=job_id,
+        triggered_by="admin",
+    )
+
+    assert result["status"] == "failed"
+    assert result["phase"] == "stale_failed"
+    assert result["currentProcess"] is None
+    assert result["runtimeCheck"]["resolvedAs"] == "stale_failed"
+    assert "Stale monthly update job" in result["error"]
+
+
+def test_cancel_monthly_update_job_terminates_process_group(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+    monkeypatch.setattr(jato_monthly_update_service, "_write_jato_etl_pipeline_status", lambda _state: None)
+    termination = {
+        "pid": 12345,
+        "sigtermSent": True,
+        "sigkillSent": False,
+        "processAliveBefore": True,
+        "processAliveAfter": False,
+    }
+    monkeypatch.setattr(jato_monthly_update_service, "_terminate_process_group", lambda _pid: termination)
+
+    job_id = "jato-update-cancel"
+    upload_path = job_root / job_id / "uploads" / "patch.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"fake")
+    state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id=job_id,
+        month="2026-04",
+        triggered_by="tester",
+        upload_filename="patch.xlsx",
+        stored_upload_path=upload_path,
+    )
+    state["status"] = "running"
+    state["phase"] = "raw_compare"
+    state["currentProcess"] = {
+        "pid": 12345,
+        "label": "Raw compare review",
+        "command": "python raw_compare.py",
+        "startedAt": "2026-05-21T03:00:00+00:00",
+        "lastHeartbeatAt": "2026-05-21T03:00:10+00:00",
+    }
+    jato_monthly_update_service._persist_job_state(state)
+
+    result = jato_monthly_update_service.cancel_jato_monthly_update_job(
+        job_id=job_id,
+        triggered_by="admin",
+    )
+
+    assert result["status"] == "cancelled"
+    assert result["phase"] == "cancelled"
+    assert result["currentProcess"] is None
+    assert result["cancellation"]["cancelledBy"] == "admin"
+    assert result["cancellation"]["termination"] == termination
+    assert "Cancelled by admin during raw_compare" == result["error"]
+
+
+def test_publish_monthly_update_job_blocks_cancelled_job(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+
+    job_id = "jato-update-cancelled"
+    upload_path = job_root / job_id / "uploads" / "patch.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"fake")
+    state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id=job_id,
+        month="2026-04",
+        triggered_by="tester",
+        upload_filename="patch.xlsx",
+        stored_upload_path=upload_path,
+    )
+    state["status"] = "cancelled"
+    state["phase"] = "cancelled"
+    jato_monthly_update_service._persist_job_state(state)
+
+    with pytest.raises(HTTPException) as exc_info:
+        jato_monthly_update_service.publish_jato_monthly_update_job(
+            job_id=job_id,
+            triggered_by="publisher",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "success/completed" in str(exc_info.value.detail)
+
+
 def test_publish_monthly_update_job_promotes_staging_outputs(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -438,6 +438,59 @@ def test_retry_failed_monthly_update_job_route_requeues_existing_upload(
     assert payload["artifacts"]["retriedFromJobId"] == source_job_id
 
 
+def test_recheck_monthly_update_job_route_returns_updated_job(monkeypatch) -> None:
+    monkeypatch.setattr(
+        msrp_monthly_update,
+        "recheck_jato_monthly_update_job",
+        lambda *, job_id, triggered_by: {
+            "jobId": job_id,
+            "status": "failed",
+            "phase": "stale_failed",
+            "triggeredBy": triggered_by,
+            "runtimeCheck": {"resolvedAs": "stale_failed"},
+        },
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/msrp/monthly-update-jobs/jato-update-1234abcd/recheck",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["item"]
+    assert payload["jobId"] == "jato-update-1234abcd"
+    assert payload["phase"] == "stale_failed"
+    assert payload["runtimeCheck"]["resolvedAs"] == "stale_failed"
+    assert payload["triggeredBy"] == "tester"
+
+
+def test_cancel_monthly_update_job_route_returns_cancelled_job(monkeypatch) -> None:
+    monkeypatch.setattr(
+        msrp_monthly_update,
+        "cancel_jato_monthly_update_job",
+        lambda *, job_id, triggered_by: {
+            "jobId": job_id,
+            "status": "cancelled",
+            "phase": "cancelled",
+            "error": f"Cancelled by {triggered_by} during raw_compare",
+            "cancellation": {"cancelledBy": triggered_by},
+        },
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/msrp/monthly-update-jobs/jato-update-1234abcd/cancel",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["item"]
+    assert payload["jobId"] == "jato-update-1234abcd"
+    assert payload["status"] == "cancelled"
+    assert payload["cancellation"]["cancelledBy"] == "tester"
+
+
 def test_get_monthly_update_review_route_returns_review_bundle(monkeypatch) -> None:
     monkeypatch.setattr(
         msrp_monthly_update,

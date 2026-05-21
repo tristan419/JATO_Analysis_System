@@ -130,6 +130,8 @@ export function JatoMonthlyUpdatePage() {
   const [cleanupRunning, setCleanupRunning] = useState(false);
   const [maintenanceLoading, setMaintenanceLoading] = useState(false);
   const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
+  const [recheckingJobId, setRecheckingJobId] = useState<string | null>(null);
+  const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
   const [publishingJobId, setPublishingJobId] = useState<string | null>(null);
   const [rollingBackJobId, setRollingBackJobId] = useState<string | null>(null);
   const [promotingBaseline, setPromotingBaseline] = useState(false);
@@ -406,6 +408,62 @@ export function JatoMonthlyUpdatePage() {
     }
   }
 
+  async function handleRecheckJob(job: JatoMonthlyUpdateJob) {
+    setRecheckingJobId(job.jobId);
+    setError("");
+    setNotice("");
+    try {
+      const response = await api.recheckJatoMonthlyUpdateJob(job.jobId);
+      setSelectedJob(response.item);
+      setSelectedJobId(response.item.jobId);
+      const runtime = response.item.runtimeCheck;
+      setNotice(
+        runtime?.resolvedAs === "stale_failed"
+          ? `刷新查验完成：任务 ${job.jobId} 已标记为 stale_failed。`
+          : `刷新查验完成：任务 ${job.jobId} 状态已更新。`
+      );
+      await refreshJobs(response.item.jobId, true);
+      await loadJobDetail(response.item.jobId, true);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRecheckingJobId(null);
+    }
+  }
+
+  async function handleCancelJob(job: JatoMonthlyUpdateJob) {
+    const confirmed = window.confirm(
+      [
+        "确认终止当前 JATO 月更任务？",
+        "",
+        `Job: ${job.jobId}`,
+        `Phase: ${formatMonthlyUpdatePhase(job.phase)}`,
+        `Batch: ${job.batchId || job.plan?.batchId || "-"}`,
+        "",
+        "这会停止后台脚本，并将任务标记为 cancelled。已生成的 staging/review 临时产物不会自动 publish。",
+      ].join("\n")
+    );
+    if (!confirmed) {
+      return;
+    }
+    setCancellingJobId(job.jobId);
+    setError("");
+    setNotice("");
+    try {
+      const response = await api.cancelJatoMonthlyUpdateJob(job.jobId);
+      setSelectedJob(response.item);
+      setSelectedJobId(response.item.jobId);
+      setNotice(`已终止任务 ${job.jobId}。`);
+      await refreshJobs(response.item.jobId, true);
+      await loadJobDetail(response.item.jobId, true);
+      await refreshMaintenanceStatus(true);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setCancellingJobId(null);
+    }
+  }
+
   async function handleRetryFailedJob(job: JatoMonthlyUpdateJob) {
     setRetryingJobId(job.jobId);
     setError("");
@@ -564,6 +622,17 @@ export function JatoMonthlyUpdatePage() {
     && selectedJob.status === "success"
     && selectedJob.phase === "completed"
   );
+  const canCancelSelectedJob = Boolean(
+    selectedJob
+    && (selectedJob.status === "queued" || selectedJob.status === "running")
+  );
+  const selectedRuntimeLog = selectedJob?.runtimeCheck?.log;
+  const selectedRuntimeLogUpdatedAt = selectedRuntimeLog && typeof selectedRuntimeLog.updatedAt === "string"
+    ? selectedRuntimeLog.updatedAt
+    : null;
+  const selectedRuntimeLogAge = selectedRuntimeLog && typeof selectedRuntimeLog.ageSeconds === "number"
+    ? selectedRuntimeLog.ageSeconds
+    : null;
   const hasSelectedJobBeenRolledBack = Boolean(selectedJob?.publication?.rolledBackAt);
   const isSelectedJobPublished = Boolean(
     selectedJob?.publication?.publishedAt && !selectedJob?.publication?.rolledBackAt
@@ -1090,6 +1159,24 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
             </div>
             {selectedJob && (
                 <div className="crud-row-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => void handleRecheckJob(selectedJob)}
+                    disabled={recheckingJobId === selectedJob.jobId}
+                  >
+                    {recheckingJobId === selectedJob.jobId ? "查验中..." : "刷新查验"}
+                  </button>
+                  {canCancelSelectedJob && (
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      onClick={() => void handleCancelJob(selectedJob)}
+                      disabled={cancellingJobId === selectedJob.jobId}
+                    >
+                      {cancellingJobId === selectedJob.jobId ? "终止中..." : "终止任务"}
+                    </button>
+                  )}
                   {canReviewSelectedJob && (
                     <button
                       type="button"
@@ -1197,6 +1284,30 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                   <strong>{formatMonthlyUpdateTimestamp(selectedJob.finishedAt)}</strong>
                 </div>
               </div>
+
+              {selectedJob.currentProcess && (
+                <div className="alert alert-info">
+                  当前子进程：PID {selectedJob.currentProcess.pid}
+                  {" · "}
+                  {selectedJob.currentProcess.label || "-"}
+                  {" · heartbeat "}
+                  {formatMonthlyUpdateTimestamp(selectedJob.currentProcess.lastHeartbeatAt)}
+                </div>
+              )}
+
+              {selectedJob.runtimeCheck && (
+                <div className="alert alert-info">
+                  刷新查验：{formatMonthlyUpdateTimestamp(selectedJob.runtimeCheck.checkedAt)}
+                  {" · process "}
+                  {selectedJob.runtimeCheck.processAlive ? "alive" : "not found"}
+                  {" · thread "}
+                  {selectedJob.runtimeCheck.threadAlive ? "alive" : "not found"}
+                  {" · log "}
+                  {formatMonthlyUpdateTimestamp(selectedRuntimeLogUpdatedAt)}
+                  {selectedRuntimeLogAge !== null ? ` (${formatMonthlyUpdateSeconds(selectedRuntimeLogAge)})` : ""}
+                  {selectedJob.runtimeCheck.resolvedAs ? ` · ${selectedJob.runtimeCheck.resolvedAs}` : ""}
+                </div>
+              )}
 
               {selectedJob.error && (
                 <div className="alert alert-error">{selectedJob.error}</div>
