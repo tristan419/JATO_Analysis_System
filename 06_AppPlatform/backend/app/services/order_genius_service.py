@@ -209,9 +209,33 @@ def _resolve_fob_for_sku(
                 break
 
     if uploaded_fob is None:
-        raise ValueError(
-            f"No FOB column for {country_code} in SKU {sku.material_code}"
+        # Check explicit fallback mapping (e.g. RO → HR)
+        fallback_src = repo.get_country_fob_source_mapping(
+            session, country_code, payment_term_code,
         )
+        if fallback_src:
+            # Try direct match first, then normalised name match
+            uploaded_fob = country_fobs.get(fallback_src)
+            if uploaded_fob is None:
+                for col_name, fob_val in country_fobs.items():
+                    if _normalise_country_name(col_name) in (
+                        fallback_src,
+                        _normalise_country_name(fallback_src),
+                    ):
+                        uploaded_fob = fob_val
+                        break
+            if uploaded_fob is not None:
+                fob_source_country = fallback_src
+            else:
+                raise ValueError(
+                    f"No FOB column for {country_code} or fallback "
+                    f"{fallback_src} in SKU {sku.material_code}"
+                )
+        else:
+            raise ValueError(
+                f"No FOB column for {country_code} in SKU "
+                f"{sku.material_code}"
+            )
 
     uploaded_fob_eur = float(uploaded_fob)
 

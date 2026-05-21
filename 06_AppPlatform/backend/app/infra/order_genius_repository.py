@@ -402,12 +402,11 @@ def upsert_fob_resolved(
         session, fob.country_code, fob.material_code, fob.payment_term_code,
     )
     if existing:
-        existing.base_fob_eur = fob.base_fob_eur
-        existing.payment_term_adjustment_eur = fob.payment_term_adjustment_eur
-        existing.colour_surcharge_eur = fob.colour_surcharge_eur
+        existing.uploaded_fob_eur = fob.uploaded_fob_eur
         existing.final_fob_eur = fob.final_fob_eur
         existing.baseline_version_id = fob.baseline_version_id
         existing.fob_source_mode = fob.fob_source_mode
+        existing.fob_source_country_code = fob.fob_source_country_code
         existing.is_active = True
         return existing
     session.add(fob)
@@ -462,6 +461,24 @@ def list_active_fob_material_codes(
             CountrySkuFobResolved.payment_term_code == payment_term_code,
         )
     return {row[0] for row in session.execute(stmt).all()}
+
+
+def get_country_fob_source_mapping(
+    session: Session,
+    target_country_code: str,
+    target_payment_term_code: str,
+) -> str | None:
+    """Return the source country_code for a fallback mapping, or None."""
+    from sqlalchemy import text as sa_text
+    stmt = sa_text(
+        "SELECT source_country_code FROM ordering.country_fob_source_mapping "
+        "WHERE target_country_code = :target AND target_payment_term_code = :pt "
+        "AND is_active = true LIMIT 1"
+    )
+    row = session.execute(
+        stmt, {"target": target_country_code, "pt": target_payment_term_code}
+    ).fetchone()
+    return row[0] if row else None
 
 
 # ── OrderQuantityCell ──────────────────────────────────────────────────

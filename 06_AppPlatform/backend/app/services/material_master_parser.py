@@ -85,6 +85,7 @@ def _extract_bom_template(bom_raw: str) -> str | None:
 
 # Country alias mapping for normalisation
 COUNTRY_ALIAS_MAP: dict[str, str] = {
+    # Typo/alias → correct name
     "crotia": "Croatia",
     "hu": "Hungary",
     "波的": "Poland",
@@ -94,10 +95,17 @@ COUNTRY_ALIAS_MAP: dict[str, str] = {
     "greece": "Greece",
     "hungary": "Hungary",
     "croatia": "Croatia",
+    # ISO codes → country names (for fallback mapping)
+    "hr": "Croatia",
     "cz": "Czech Republic",
     "se": "Sweden",
     "ro": "Romania",
     "fi": "Finland",
+    "gr": "Greece",
+    "at": "Austria",
+    "hu_iso": "Hungary",
+    "lv": "Latvia",
+    "pl": "Poland",
 }
 
 
