@@ -43,6 +43,7 @@ const router = createBrowserRouter([
     { path: "market/ranking/model", element: withPageLoader(<MarketModelRankingPage />) },
     { path: "market/powertrain", element: withPageLoader(<MarketPowertrainPage />) },
     { path: "product/current-msrp", element: withPageLoader(<MsrpPage />) },
+    { path: "product/order-genius", element: withPageLoader(<OrderGeniusPage />) },
     { path: "product/pricing", element: withPageLoader(<PositioningPricingPage />) },
     { path: "product/compare", element: withPageLoader(<VersionComparisonPage />) },
     { path: "product/customer-insight", element: withPageLoader(<CustomerInsightsPage />) },

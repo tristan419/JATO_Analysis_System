@@ -193,6 +193,7 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
         title: "Pricing & Positioning / 价格与定位",
         items: [
           { label: "COC Match", sublabel: "COC 比对", to: "/product/coc-match", minRole: "viewer" },
+          { label: "Order Genius", sublabel: "订单矩阵", to: "/product/order-genius", minRole: "editor" },
           { label: "Current MSRP", sublabel: "当前价格", to: "/product/current-msrp" },
           { label: "Pricing", sublabel: "定位定价", to: "/product/pricing" },
         ],

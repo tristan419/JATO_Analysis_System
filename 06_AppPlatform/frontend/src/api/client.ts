@@ -2719,8 +2719,20 @@ export const api = {
       { method: "POST", body: JSON.stringify({ notes }) },
     ),
 
-  getOrderGeniusOptions: (country: string) => {
-    const qs = new URLSearchParams({ country });
+  getOrderGeniusOptions: (params: {
+    country: string;
+    brand?: string;
+    model?: string;
+    powertrain?: string;
+    version?: string;
+    colour?: string;
+  }) => {
+    const qs = new URLSearchParams({ country: params.country });
+    if (params.brand) qs.set("brand", params.brand);
+    if (params.model) qs.set("model", params.model);
+    if (params.powertrain) qs.set("powertrain", params.powertrain);
+    if (params.version) qs.set("version", params.version);
+    if (params.colour) qs.set("colour", params.colour);
     return request<OrderGeniusOptions>(
       `/order-genius/options?${qs.toString()}`,
     );

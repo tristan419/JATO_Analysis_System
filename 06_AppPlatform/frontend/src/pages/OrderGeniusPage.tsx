@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type KeyboardEvent,
+} from "react";
 
 import { api } from "../api/client";
 import type {
@@ -16,6 +25,16 @@ const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
+
+function formatOrderGeniusFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function OrderGeniusPage() {
   // ── Filter state ──────────────────────────────────────────────────
@@ -41,6 +60,7 @@ export function OrderGeniusPage() {
   const [uploadSessionId, setUploadSessionId] = useState("");
   const [uploadStatus, setUploadStatus] = useState("");
   const [uploadPreview, setUploadPreview] = useState<MaterialUploadPreview | null>(null);
+  const [uploadDragActive, setUploadDragActive] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [publishResult, setPublishResult] = useState<PublishBaselineResponse | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -67,17 +87,17 @@ export function OrderGeniusPage() {
     if (!selectedCountry) return;
     setLoading(true);
     setError("");
-    const params = new URLSearchParams();
-    params.set("country", selectedCountry);
-    if (brandFilter) params.set("brand", brandFilter);
-    if (modelFilter) params.set("model", modelFilter);
-    if (powertrainFilter) params.set("powertrain", powertrainFilter);
-    if (versionFilter) params.set("version", versionFilter);
-    if (colourFilter) params.set("colour", colourFilter);
     api
-      .getOrderGeniusOptions(selectedCountry)
+      .getOrderGeniusOptions({
+        country: selectedCountry,
+        brand: brandFilter || undefined,
+        model: modelFilter || undefined,
+        powertrain: powertrainFilter || undefined,
+        version: versionFilter || undefined,
+        colour: colourFilter || undefined,
+      })
       .then(setOptions)
-      .catch((e) => setError(String(e)))
+      .catch((e: unknown) => setError(getErrorMessage(e)))
       .finally(() => setLoading(false));
   }, [selectedCountry, brandFilter, modelFilter, powertrainFilter, versionFilter, colourFilter]);
 
@@ -98,7 +118,7 @@ export function OrderGeniusPage() {
         materialCodeSearch: materialSearch || undefined,
       })
       .then(setMatrix)
-      .catch((e) => setError(String(e)))
+      .catch((e: unknown) => setError(getErrorMessage(e)))
       .finally(() => setLoading(false));
   }, [
     selectedCountry, selectedYear, brandFilter, modelFilter,
@@ -111,9 +131,40 @@ export function OrderGeniusPage() {
 
   // ── Upload handlers ───────────────────────────────────────────────
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  function selectUploadFile(file: File): void {
+    setUploadFile(file);
+    setUploadSessionId("");
+    setUploadStatus("");
+    setUploadPreview(null);
+    setPublishResult(null);
+    setUploadProgress("");
+    setError("");
+  }
+
+  const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
-    if (f) setUploadFile(f);
+    if (f) selectUploadFile(f);
+  };
+
+  const handleUploadDragState = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setUploadDragActive(event.type !== "dragleave");
+  };
+
+  const handleUploadDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setUploadDragActive(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) selectUploadFile(file);
+  };
+
+  const handleUploadDropzoneKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      fileInputRef.current?.click();
+    }
   };
 
   const handleUpload = async () => {
@@ -154,7 +205,7 @@ export function OrderGeniusPage() {
       setUploadPreview(preview);
       setUploadProgress("");
     } catch (err) {
-      setError(String(err));
+      setError(getErrorMessage(err));
       setUploadProgress("");
     }
   };
@@ -169,7 +220,7 @@ export function OrderGeniusPage() {
       setUploadStatus("Published!");
       loadMatrix();
     } catch (err) {
-      setError(String(err));
+      setError(getErrorMessage(err));
     } finally {
       setPublishing(false);
     }
@@ -249,7 +300,7 @@ export function OrderGeniusPage() {
       });
       loadMatrix();
     } catch (err) {
-      setCellErrors((prev) => ({ ...prev, [key]: String(err) }));
+      setCellErrors((prev) => ({ ...prev, [key]: getErrorMessage(err) }));
     } finally {
       setSavingCells((prev) => {
         const next = new Set(prev);
@@ -271,7 +322,7 @@ export function OrderGeniusPage() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      setError(`Export failed: ${String(err)}`);
+      setError(`Export failed: ${getErrorMessage(err)}`);
     }
   };
 
@@ -409,13 +460,34 @@ export function OrderGeniusPage() {
       {showUpload ? (
         <div className="card crud-card" style={{ padding: 16, marginBottom: 16 }}>
           <h3 style={{ marginTop: 0 }}>Material Master Upload</h3>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".xlsx,.xlsm,.xls"
-              onChange={handleFileSelect}
-            />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xlsm,.xls"
+            onChange={handleFileSelect}
+            className="monthly-update-file-input"
+          />
+          <div
+            className={`monthly-update-dropzone${uploadDragActive ? " is-dragging" : ""}${uploadFile ? " has-file" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => fileInputRef.current?.click()}
+            onKeyDown={handleUploadDropzoneKeyboard}
+            onDragEnter={handleUploadDragState}
+            onDragOver={handleUploadDragState}
+            onDragLeave={handleUploadDragState}
+            onDrop={handleUploadDrop}
+          >
+            <strong>
+              {uploadFile ? uploadFile.name : "拖拽 Material Master Excel 到这里，或点击选择文件"}
+            </strong>
+            <span>
+              {uploadFile
+                ? `${formatOrderGeniusFileSize(uploadFile.size)} · 上传后会分片解析并生成发布预览。`
+                : "支持 .xlsx / .xlsm / .xls；适用于 OMODA&JAECOO Order Material Codes 文件。"}
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
             <button
               type="button"
               className="btn btn-sm btn-primary"
