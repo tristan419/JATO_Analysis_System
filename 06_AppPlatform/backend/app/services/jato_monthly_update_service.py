@@ -2355,33 +2355,32 @@ def _run_job(job_id: str) -> None:
     state["status"] = "running"
     state["startedAt"] = _utc_now().isoformat()
 
-    # Phase 0: Detect month and allocate batch (moved from request thread)
-    if not state.get("month"):
-        state["phase"] = "detecting_month"
-        _persist_job_state(state)
-        _append_log(log_path, "[detecting_month] Reading Excel to detect latest month...")
-        detected_month = _detect_latest_month_from_upload(stored_upload_path)
-        batch_id = _allocate_batch_id(detected_month)
-        baseline_path, baseline_source = _require_latest_baseline()
-        if isinstance(state.get("artifacts"), dict):
-            state["artifacts"]["baselinePath"] = _relative_to_project(baseline_path)
-            state["artifacts"]["baselineSource"] = baseline_source
-        state["month"] = detected_month
-        state["batchId"] = batch_id
-        _persist_job_state(state)
-        _append_log(
-            log_path,
-            f"[detecting_month] Detected month: {detected_month}, batch: {batch_id}",
-        )
-
-    batch_id = str(state.get("batchId") or "")
-    if not batch_id:
-        raise RuntimeError("任务缺少批次标识")
-
-    state["phase"] = "preparing"
-    _persist_job_state(state)
-
     try:
+        # Phase 0: Detect month and allocate batch (moved from request thread)
+        if not state.get("month"):
+            state["phase"] = "detecting_month"
+            _persist_job_state(state)
+            _append_log(log_path, "[detecting_month] Reading Excel to detect latest month...")
+            detected_month = _detect_latest_month_from_upload(stored_upload_path)
+            batch_id = _allocate_batch_id(detected_month)
+            baseline_path, baseline_source = _require_latest_baseline()
+            if isinstance(state.get("artifacts"), dict):
+                state["artifacts"]["baselinePath"] = _relative_to_project(baseline_path)
+                state["artifacts"]["baselineSource"] = baseline_source
+            state["month"] = detected_month
+            state["batchId"] = batch_id
+            _persist_job_state(state)
+            _append_log(
+                log_path,
+                f"[detecting_month] Detected month: {detected_month}, batch: {batch_id}",
+            )
+
+        batch_id = str(state.get("batchId") or "")
+        if not batch_id:
+            raise RuntimeError("任务缺少批次标识")
+
+        state["phase"] = "preparing"
+        _persist_job_state(state)
         artifacts = state.get("artifacts")
         baseline_relative_path = (
             artifacts.get("baselinePath")
