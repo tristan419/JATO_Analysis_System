@@ -609,6 +609,64 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _invalidate_jato_publish_runtime_caches() -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "marketScanDeckLocal": {"enabled": False, "clearedCount": 0},
+        "marketScanDeckRedis": {"enabled": False, "deletedCount": 0},
+        "datasetToken": {
+            "enabled": True,
+            "message": "Parquet repository dataset token changes with active data artifacts.",
+        },
+    }
+    try:
+        from app.infra.redis_client import get_redis_client
+        from app.services.market_scan_cache import invalidate_market_scan_deck_cache
+        from app.services.market_scan_service import clear_market_scan_local_cache
+
+        result["marketScanDeckLocal"] = clear_market_scan_local_cache()
+        result["marketScanDeckRedis"] = invalidate_market_scan_deck_cache(get_redis_client())
+    except Exception as exc:
+        result["error"] = str(exc)
+        result["message"] = (
+            "Runtime cache invalidation failed; dataset-token cache keys should still "
+            "avoid stale MarketScan data."
+        )
+    return result
+
+
+def _write_jato_publish_cache_invalidation_evidence(
+    *,
+    job_id: str,
+    published_at: datetime,
+    triggered_by: str,
+    cache_invalidation: dict[str, Any],
+    active_paths: dict[str, Path],
+) -> None:
+    ledger_path = PROJECT_ROOT / "hermes" / "evidence_ledger.jsonl"
+    stamp = published_at.strftime("%Y%m%dT%H%M%SZ")
+    record = {
+        "evidenceId": f"evidence.jato_monthly_update.cache_invalidation.{job_id}.{stamp}",
+        "evidenceType": "runtime_cache_invalidation",
+        "claim": "JATO monthly publish invalidated MarketScan runtime caches.",
+        "sourceRef": f"jato_monthly_update_job::{job_id}",
+        "artifactId": "feature.jato_monthly_update",
+        "confidence": 1.0,
+        "supportCount": 1,
+        "contradictionCount": 0,
+        "createdAt": published_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "details": {
+            "publishedBy": triggered_by.strip() or "anonymous",
+            "cacheInvalidation": cache_invalidation,
+            "activeParquetPath": _relative_to_project(active_paths.get("parquet")),
+            "activeManifestPath": _relative_to_project(active_paths.get("manifest")),
+            "activePartitionPath": _relative_to_project(active_paths.get("partition")),
+        },
+    }
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    with ledger_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def _load_job_state(job_id: str) -> dict[str, Any]:
     path = _job_state_path(job_id)
     if not path.exists():
@@ -1868,6 +1926,7 @@ def publish_jato_monthly_update_job(
         shutil.rmtree(active_paths["partition"])
     shutil.copytree(source_paths["partition"], active_paths["partition"])
 
+    cache_invalidation = _invalidate_jato_publish_runtime_caches()
     payload["publication"] = {
         "publishedAt": published_at.isoformat(),
         "publishedBy": triggered_by.strip() or "anonymous",
@@ -1877,8 +1936,22 @@ def publish_jato_monthly_update_job(
         "activePartitionPath": _relative_to_project(active_paths["partition"]),
         "activeFingerprintPath": _relative_to_project(active_paths["fingerprint"]),
         "activeRefreshReportPath": _relative_to_project(active_paths["refreshReport"]),
+        "cacheInvalidation": cache_invalidation,
     }
     _persist_job_state(payload)
+    try:
+        _write_jato_publish_cache_invalidation_evidence(
+            job_id=job_id,
+            published_at=published_at,
+            triggered_by=triggered_by,
+            cache_invalidation=cache_invalidation,
+            active_paths=active_paths,
+        )
+    except Exception as exc:
+        _append_log(
+            _job_log_path(job_id),
+            f"[{_utc_now().isoformat()}] Hermes evidence write failed after publish: {exc}",
+        )
     _append_log(
         _job_log_path(job_id),
         (

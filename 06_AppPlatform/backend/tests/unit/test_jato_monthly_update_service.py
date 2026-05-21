@@ -1374,6 +1374,21 @@ def test_publish_monthly_update_job_promotes_staging_outputs(
     }
     state["summaries"] = {"refresh": {"jobStatus": "success"}}
     jato_monthly_update_service._persist_job_state(state)
+    evidence_calls = []
+    cache_invalidation = {
+        "marketScanDeckLocal": {"enabled": True, "clearedCount": 1},
+        "marketScanDeckRedis": {"enabled": True, "deletedCount": 2},
+    }
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_invalidate_jato_publish_runtime_caches",
+        lambda: cache_invalidation,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_write_jato_publish_cache_invalidation_evidence",
+        lambda **kwargs: evidence_calls.append(kwargs),
+    )
 
     published = jato_monthly_update_service.publish_jato_monthly_update_job(
         job_id=job_id,
@@ -1382,6 +1397,9 @@ def test_publish_monthly_update_job_promotes_staging_outputs(
 
     assert published["publication"]["publishedBy"] == "publisher"
     assert published["publication"]["backupDir"].startswith("04_Processed_data/.refresh_backups/manual-promote-")
+    assert published["publication"]["cacheInvalidation"] == cache_invalidation
+    assert evidence_calls[0]["job_id"] == job_id
+    assert evidence_calls[0]["cache_invalidation"] == cache_invalidation
     assert pd.read_parquet(processed_root / "jato_full_archive.parquet").to_dict("records") == [
         {"国家": "瑞典", "Model": "EX30", "2026 Jan": 10, "2026 Mar": 12}
     ]

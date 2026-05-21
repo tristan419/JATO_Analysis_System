@@ -33,6 +33,12 @@ _DECK_CACHE_TTL_SECONDS = 300
 _deck_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
 _deck_cache_lock = threading.Lock()
 
+def clear_market_scan_local_cache() -> dict[str, Any]:
+    with _deck_cache_lock:
+        cleared_count = len(_deck_cache)
+        _deck_cache.clear()
+    return {"enabled": True, "clearedCount": cleared_count}
+
 def build_deck_cache_key(*args, **kwargs):
     from app.services.market_scan_cache import build_deck_cache_key as _bck
     return _bck(*args, **kwargs)

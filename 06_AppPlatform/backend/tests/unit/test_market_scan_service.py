@@ -399,6 +399,15 @@ def test_query_market_scan_deck_clamps_ranking_limit_to_top10(monkeypatch: pytes
     assert observed["ranking_limit"] == 10
 
 
+def test_clear_market_scan_local_cache_removes_cached_decks() -> None:
+    market_scan_service._deck_cache["Sweden|2026-03"] = (1.0, "token", {"ok": True})
+
+    result = market_scan_service.clear_market_scan_local_cache()
+
+    assert result == {"enabled": True, "clearedCount": 1}
+    assert market_scan_service._deck_cache == {}
+
+
 def test_normalize_positioning_sales_mode_defaults_to_month() -> None:
     assert market_scan_service._normalize_positioning_sales_mode(None) == "month"
     assert market_scan_service._normalize_positioning_sales_mode("bad-mode") == "month"

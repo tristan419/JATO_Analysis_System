@@ -59,3 +59,48 @@ def wait_for_cache(client, key, retries=_MAX_RETRIES, delay=_RETRY_DELAY):
         if c is not None:
             return c
     return None
+
+def invalidate_market_scan_deck_cache(
+    client: Redis | None,
+    *,
+    schema_version: int | None = None,
+) -> dict[str, Any]:
+    schema = schema_version or _SCHEMA
+    pattern = f"ms:deck:v{schema}:*"
+    if client is None:
+        return {
+            "enabled": False,
+            "pattern": pattern,
+            "deletedCount": 0,
+            "message": "Redis client unavailable; dataset-token cache keys will expire naturally.",
+        }
+
+    deleted_count = 0
+    batch_count = 0
+    batch: list[Any] = []
+    try:
+        for key in client.scan_iter(match=pattern, count=250):
+            batch.append(key)
+            if len(batch) >= 100:
+                deleted_count += int(client.delete(*batch) or 0)
+                batch_count += 1
+                batch = []
+        if batch:
+            deleted_count += int(client.delete(*batch) or 0)
+            batch_count += 1
+        return {
+            "enabled": True,
+            "pattern": pattern,
+            "deletedCount": deleted_count,
+            "batchCount": batch_count,
+        }
+    except Exception as exc:
+        logger.warning("MarketScan Redis invalidation failed for %s: %s", pattern, exc)
+        return {
+            "enabled": True,
+            "pattern": pattern,
+            "deletedCount": deleted_count,
+            "batchCount": batch_count,
+            "error": str(exc),
+            "message": "Redis invalidation failed; dataset-token cache keys will expire naturally.",
+        }
