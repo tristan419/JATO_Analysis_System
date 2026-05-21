@@ -93,6 +93,7 @@ COC_MATCH_JOB_ROOT = Path(
     )
 ).resolve()
 DATABASE_URL = os.getenv("APP_DATABASE_URL", "").strip()
+
 DATABASE_ENABLED = _parse_bool_env(
     "APP_DATABASE_ENABLED",
     bool(DATABASE_URL),
