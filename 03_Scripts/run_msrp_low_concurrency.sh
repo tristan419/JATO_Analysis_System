@@ -40,6 +40,12 @@ d['$pipeline']={
 }
 with open(p,'w') as f: f.write(json.dumps(d,indent=2)+chr(10))
 " 2>/dev/null || true
+  python3 "$REPO_DIR/03_Scripts/hermes/pipeline_status_writer.py" "$pipeline" \
+    --status "$status" \
+    --source "03_Scripts/run_msrp_low_concurrency.sh" \
+    --message "$reason" \
+    --artifact-ref "03_Scripts/logs/scheduled_fetch_status.json" \
+    --repo-root "$REPO_DIR" 2>/dev/null || true
   echo "[status] $pipeline=$status written to $status_path"
 }
 
@@ -293,6 +299,28 @@ existing['msrp_dryrun'] = {
 }
 with open(status_path, 'w') as f:
     f.write(json.dumps(existing, indent=2) + chr(10))
+status_dir = '$REPO_DIR/hermes/reports/pipeline_status'
+__import__('os').makedirs(status_dir, exist_ok=True)
+status_record = {
+    'pipelineId': 'msrp_dryrun',
+    'status': s.get('status', 'unknown'),
+    'lastRunAt': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'finishedAt': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'exitCode': 0,
+    'durationSeconds': 0,
+    'recordsProcessed': s.get('total', 0),
+    'failedCount': (s.get('total', 0) or 0) - (s.get('pass', 0) or 0),
+    'warningCount': len(r.get('missingCountries', [])),
+    'artifactRefs': ['03_Scripts/diagnostics/artifacts/dryrun_report.json'],
+    'source': '03_Scripts/run_msrp_low_concurrency.sh',
+    'message': 'aggregated dryrun report',
+    'runId': r.get('runId', ''),
+    'countryCount': len(r.get('expectedCountries', [])),
+    'observedCountryCount': len(r.get('observedCountries', [])),
+    'missingCountryCount': len(r.get('missingCountries', [])),
+}
+with open(status_dir + '/msrp_dryrun.json', 'w') as f:
+    f.write(json.dumps(status_record, indent=2) + chr(10))
 print('[status] msrp_dryrun written')
 " 2>&1 || true
   fi

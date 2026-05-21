@@ -155,10 +155,13 @@ def test_probe_pipeline_failures_reports_missing_status_file(monkeypatch, tmp_pa
     monkeypatch.setattr(sentinel, "_project_root", tmp_path)
 
     result = sentinel.probe_pipeline_failures()
+    finding_types = {finding["type"] for finding in result["findings"]}
 
     assert result["probe"] == "pipeline_failures"
-    assert result["overall"] == "critical"
-    assert result["findings"][0]["type"] == "missing_status_file"
+    assert result["overall"] == "warning"
+    assert "pipeline_jato_etl_missing" in finding_types
+    assert "pipeline_msrp_dryrun_missing" in finding_types
+    assert result["findings"][0]["statusRecord"]["status"] == "missing"
 
 
 def test_probe_pipeline_failures_ok_when_all_statuses_are_fresh(monkeypatch, tmp_path: Path):
@@ -200,7 +203,7 @@ def test_probe_pipeline_failures_flags_failed_ingest(monkeypatch, tmp_path: Path
     result = sentinel.probe_pipeline_failures()
 
     assert result["overall"] == "critical"
-    assert result["findings"][0]["type"] == "pipeline_msrp_ingest_failure"
+    assert result["findings"][0]["type"] == "pipeline_msrp_ingest_failed"
     assert result["findings"][0]["severity"] == "critical"
 
 
@@ -227,7 +230,7 @@ def test_probe_pipeline_failures_accepts_failed_count_alias(monkeypatch, tmp_pat
     result = sentinel.probe_pipeline_failures()
 
     assert result["overall"] == "warning"
-    assert result["findings"][0]["type"] == "pipeline_voc_degraded"
+    assert result["findings"][0]["type"] == "pipeline_voc_forum_sync_degraded"
     assert "3 failed" in result["findings"][0]["message"]
 
 
@@ -254,7 +257,7 @@ def test_probe_pipeline_failures_treats_partial_success_as_degraded(monkeypatch,
     result = sentinel.probe_pipeline_failures()
 
     assert result["overall"] == "warning"
-    assert result["findings"][0]["type"] == "pipeline_voc_degraded"
+    assert result["findings"][0]["type"] == "pipeline_voc_forum_sync_degraded"
     assert "2 failed" in result["findings"][0]["message"]
 
 
@@ -274,6 +277,6 @@ def test_probe_pipeline_failures_flags_missing_and_stale_inputs(monkeypatch, tmp
     finding_types = {finding["type"] for finding in result["findings"]}
 
     assert result["overall"] == "warning"
-    assert "missing_pipeline_status" in finding_types
-    assert "pipeline_news_stale" in finding_types
-    assert "stale_source_quality_report" in finding_types
+    assert "pipeline_msrp_dryrun_missing" in finding_types
+    assert "pipeline_country_news_sync_stale" in finding_types
+    assert "pipeline_source_quality_stale" in finding_types

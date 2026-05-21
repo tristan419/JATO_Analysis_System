@@ -105,6 +105,37 @@ class TestSentinelAndDeploy:
         assert data["exists"] is True
         assert "# Hermes" in data["content"]
 
+    def test_pipeline_status_list_endpoint(self, client, tmp_path, monkeypatch):
+        from app.services import hermes_pipeline_status_service as pipeline_status
+
+        monkeypatch.setattr(pipeline_status, "_project_root", tmp_path)
+        pipeline_status.write_pipeline_status({
+            "pipelineId": "msrp_dryrun",
+            "status": "success",
+            "lastRunAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "recordsProcessed": 12,
+        })
+
+        resp = client.get("/hermes/pipeline/status")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        dryrun = [item for item in data if item["pipelineId"] == "msrp_dryrun"][0]
+        assert dryrun["status"] == "success"
+        assert dryrun["recordsProcessed"] == 12
+
+    def test_pipeline_status_detail_endpoint(self, client, tmp_path, monkeypatch):
+        from app.services import hermes_pipeline_status_service as pipeline_status
+
+        monkeypatch.setattr(pipeline_status, "_project_root", tmp_path)
+
+        resp = client.get("/hermes/pipeline/status/msrp_ingest")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["pipelineId"] == "msrp_ingest"
+        assert data["status"] == "missing"
+
 
 # ── /hermes/gaps ──────────────────────────────────────────────────────
 

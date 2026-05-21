@@ -118,6 +118,23 @@ def hermes_pipeline_health(_=Depends(require_min_role("viewer"))) -> dict:
     return _read_json(REPORTS_DIR / "pipeline_health.json")
 
 
+@router.get("/pipeline/status")
+def hermes_pipeline_statuses(_=Depends(require_min_role("viewer"))) -> list[dict]:
+    """Return standard Hermes pipeline runtime status records."""
+    from app.services.hermes_pipeline_status_service import list_pipeline_statuses
+    return list_pipeline_statuses(include_missing=True)
+
+
+@router.get("/pipeline/status/{pipeline_id}")
+def hermes_pipeline_status(
+    pipeline_id: str,
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    """Return one standard Hermes pipeline runtime status record."""
+    from app.services.hermes_pipeline_status_service import get_pipeline_status
+    return get_pipeline_status(pipeline_id)
+
+
 @router.get("/source-quality")
 def hermes_source_quality(_=Depends(require_min_role("viewer"))) -> dict:
     """Return the latest source quality report."""

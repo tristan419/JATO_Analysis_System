@@ -18,6 +18,11 @@ _toolkit_dir = str(
 )
 if _toolkit_dir not in sys.path:
     sys.path.insert(0, _toolkit_dir)
+_hermes_script_dir = str(Path(__file__).resolve().parent / "hermes")
+if _hermes_script_dir not in sys.path:
+    sys.path.insert(0, _hermes_script_dir)
+
+from pipeline_status_writer import write_pipeline_status
 
 _TOOLKIT_ROOT = Path(__file__).resolve().parent.parent / "07_ScrapingToolkit"
 _DRAFTS_DIR = _TOOLKIT_ROOT / "source_drafts" / "suv_only_country_model_top30"
@@ -184,6 +189,22 @@ def _write_dryrun_status(
         "schemaVersion": "msrp_dryrun_report_v3",
     }
     status_path.write_text(_json.dumps(existing, indent=2) + "\n")
+    write_pipeline_status(
+        pipeline_id="msrp_dryrun",
+        status=status,
+        records_processed=total,
+        failed_count=total_fail,
+        warning_count=empty_count,
+        artifact_refs=["03_Scripts/diagnostics/artifacts/dryrun_report.json"],
+        source="03_Scripts/batch_dryrun.py",
+        message=f"passPct={pass_pct}%",
+        extra={
+            "countryCount": country_total,
+            "successCount": total_ok,
+            "passPct": pass_pct,
+            "schemaVersion": "msrp_dryrun_report_v3",
+        },
+    )
     print(f"[status] msrp_dryrun={status} passPct={pass_pct}% written to {status_path}")
 
 

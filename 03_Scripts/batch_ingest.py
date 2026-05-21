@@ -26,6 +26,11 @@ _toolkit_dir = str(
 )
 if _toolkit_dir not in sys.path:
     sys.path.insert(0, _toolkit_dir)
+_hermes_script_dir = str(Path(__file__).resolve().parent / "hermes")
+if _hermes_script_dir not in sys.path:
+    sys.path.insert(0, _hermes_script_dir)
+
+from pipeline_status_writer import write_pipeline_status
 
 from jato_scraper.runner import run_scrape
 
@@ -343,6 +348,24 @@ def _write_ingest_status(
         "okPct": ok_pct,
     }
     status_path.write_text(_json.dumps(existing, indent=2) + "\n")
+    write_pipeline_status(
+        pipeline_id="msrp_ingest",
+        status=status,
+        records_processed=total_count,
+        failed_count=failure_count_total,
+        warning_count=empty_count,
+        artifact_refs=["03_Scripts/logs/scheduled_fetch_status.json"],
+        source="03_Scripts/batch_ingest.py",
+        message=f"okPct={ok_pct}%",
+        extra={
+            "countryCount": len(countries),
+            "successCount": success_count,
+            "emptyCount": empty_count,
+            "okPct": ok_pct,
+            "requiresReview": True,
+            "dryRunBeforeIngest": True,
+        },
+    )
     print(f"[status] msrp_ingest={status} okPct={ok_pct}% written to {status_path}")
 
 

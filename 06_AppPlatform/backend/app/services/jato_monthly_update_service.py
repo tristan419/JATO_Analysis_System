@@ -23,6 +23,7 @@ from app.core.config import (
     JATO_MONTHLY_UPDATE_UPLOAD_CHUNK_SIZE_BYTES,
     PROJECT_ROOT,
 )
+from app.services.hermes_pipeline_status_service import write_pipeline_status
 
 MONTHLY_UPDATE_JOB_ROOT = JATO_MONTHLY_UPDATE_JOB_ROOT
 RAW_DATA_ROOT = PROJECT_ROOT / "01_RAW_DATA"
@@ -1323,6 +1324,83 @@ def _summarize_refresh_report(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _parse_status_dt(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed
+    except (TypeError, ValueError):
+        return None
+
+
+def _status_duration_seconds(started_at: Any, finished_at: Any) -> int:
+    started = _parse_status_dt(started_at)
+    finished = _parse_status_dt(finished_at)
+    if not started or not finished:
+        return 0
+    return max(0, int((finished - started).total_seconds()))
+
+
+def _jato_etl_artifact_refs(state: dict[str, Any]) -> list[str]:
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    refs: list[str] = []
+    for key in (
+        "logPath",
+        "planPath",
+        "rawCompareReportPath",
+        "stagingOutputPath",
+        "manifestPath",
+        "partitionOutputPath",
+        "refreshReportPath",
+        "fingerprintPath",
+    ):
+        value = artifacts.get(key)
+        if isinstance(value, str) and value.strip():
+            refs.append(value.strip())
+    return refs
+
+
+def _write_jato_etl_pipeline_status(state: dict[str, Any]) -> None:
+    """Publish JATO monthly update runtime status for Hermes Sentinel."""
+    try:
+        summaries = state.get("summaries") if isinstance(state.get("summaries"), dict) else {}
+        refresh = summaries.get("refresh") if isinstance(summaries.get("refresh"), dict) else {}
+        job_status = str(state.get("status") or "unknown").strip().lower()
+        status = "success" if job_status == "success" else "failed" if job_status == "failed" else "unknown"
+        message = str(state.get("error") or "").strip()
+        if not message:
+            message = (
+                f"jobId={state.get('jobId', '')} "
+                f"month={state.get('month', '')} phase={state.get('phase', '')}"
+            ).strip()
+
+        write_pipeline_status({
+            "pipelineId": "jato_etl",
+            "status": status,
+            "lastRunAt": state.get("finishedAt") or state.get("updatedAt") or state.get("startedAt"),
+            "startedAt": state.get("startedAt"),
+            "finishedAt": state.get("finishedAt"),
+            "exitCode": 0 if status == "success" else 1 if status == "failed" else None,
+            "durationSeconds": _status_duration_seconds(state.get("startedAt"), state.get("finishedAt")),
+            "recordsProcessed": refresh.get("rowCount", 0),
+            "failedCount": 1 if status == "failed" else 0,
+            "warningCount": 0,
+            "artifactRefs": _jato_etl_artifact_refs(state),
+            "source": "app.services.jato_monthly_update_service",
+            "message": message,
+            "jobId": state.get("jobId"),
+            "month": state.get("month"),
+            "batchId": state.get("batchId"),
+            "phase": state.get("phase"),
+            "triggeredBy": state.get("triggeredBy"),
+        })
+    except Exception:
+        return
+
+
 def _serialize_job_state(
     payload: dict[str, Any],
     *,
@@ -2314,12 +2392,14 @@ def _run_job(job_id: str) -> None:
         state["phase"] = "completed"
         state["finishedAt"] = _utc_now().isoformat()
         _persist_job_state(state)
+        _write_jato_etl_pipeline_status(state)
     except Exception as exc:
         state["status"] = "failed"
         state["phase"] = "failed"
         state["finishedAt"] = _utc_now().isoformat()
         state["error"] = str(exc)
         _persist_job_state(state)
+        _write_jato_etl_pipeline_status(state)
         _append_log(log_path, "\n=== Failed ===")
         _append_log(log_path, str(exc))
         _append_log(log_path, traceback.format_exc())
@@ -2713,6 +2793,7 @@ def _run_single_country_job(job_id: str) -> None:
         state["phase"] = "completed"
         state["finishedAt"] = _utc_now().isoformat()
         _persist_job_state(state)
+        _write_jato_etl_pipeline_status(state)
         _append_log(
             log_path,
             f"[{_utc_now().isoformat()}] 单国家任务完成：{country} {month}。可前往 Publish。",
@@ -2724,6 +2805,7 @@ def _run_single_country_job(job_id: str) -> None:
         state["finishedAt"] = _utc_now().isoformat()
         state["error"] = str(exc)
         _persist_job_state(state)
+        _write_jato_etl_pipeline_status(state)
         _append_log(log_path, "\n=== Failed ===")
         _append_log(log_path, str(exc))
         _append_log(log_path, traceback.format_exc())
