@@ -13,6 +13,7 @@ const EngineeringPage = lazy(() => import("./pages/EngineeringPage").then(m => (
 const ReviewCasesPage = lazy(() => import("./pages/ReviewCasesPage").then(m => ({ default: m.ReviewCasesPage })));
 const MsrpPage = lazy(() => import("./pages/MsrpPage").then(m => ({ default: m.MsrpPage })));
 const JatoMonthlyUpdatePage = lazy(() => import("./pages/JatoMonthlyUpdatePage").then(m => ({ default: m.JatoMonthlyUpdatePage })));
+const CocMatchPage = lazy(() => import("./pages/CocMatchPage").then(m => ({ default: m.CocMatchPage })));
 const PositioningPricingPage = lazy(() => import("./pages/PositioningPricingPage").then(m => ({ default: m.PositioningPricingPage })));
 const VersionComparisonPage = lazy(() => import("./pages/VersionComparisonPage").then(m => ({ default: m.VersionComparisonPage })));
 const CustomerInsightsPage = lazy(() => import("./pages/CustomerInsightsPage").then(m => ({ default: m.CustomerInsightsPage })));
@@ -49,6 +50,7 @@ const router = createBrowserRouter([
     { path: "data/config-import", element: withPageLoader(<EngineeringPage />) },
     { path: "data/matching-review", element: withPageLoader(<ReviewCasesPage />) },
     { path: "data/jato-monthly-update", element: withPageLoader(<JatoMonthlyUpdatePage />) },
+    { path: "data/coc-match", element: withPageLoader(<CocMatchPage />) },
     { path: "copilot", element: withPageLoader(<CountryChatPage />) },
     { path: "engineering-config", element: withPageLoader(<EngineeringConfigPage />) },
     { path: "market-scan", element: <Navigate to="/market/overview" replace /> },

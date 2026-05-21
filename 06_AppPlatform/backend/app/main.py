@@ -21,6 +21,7 @@ from app.api.routes.engineering_config import router as engineering_config_route
 from app.api.routes.presence import router as presence_router
 from app.api.routes.review_cases import router as review_cases_router
 from app.api.routes.msrp_dryrun_dashboard import router as msrp_dryrun_dashboard_router
+from app.api.routes.coc_match import router as coc_match_router
 from app.core.config import API_PREFIX, APP_NAME, APP_VERSION, CORS_ORIGINS
 from app.core.startup_validation import run_startup_validation
 
@@ -55,3 +56,4 @@ app.include_router(msrp_dryrun_dashboard_router, prefix=API_PREFIX)
 app.include_router(hermes_router, prefix=API_PREFIX)
 app.include_router(auth_router, prefix=API_PREFIX)
 app.include_router(presence_router, prefix=API_PREFIX)
+app.include_router(coc_match_router, prefix=API_PREFIX)

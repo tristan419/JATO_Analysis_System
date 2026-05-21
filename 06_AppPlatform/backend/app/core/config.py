@@ -86,6 +86,12 @@ JATO_MONTHLY_UPDATE_UPLOAD_CHUNK_SIZE_BYTES = max(
     int(os.getenv("APP_JATO_MONTHLY_UPDATE_UPLOAD_CHUNK_SIZE_BYTES", str(8 * 1024 * 1024))),
     1024 * 1024,
 )
+COC_MATCH_JOB_ROOT = Path(
+    os.getenv(
+        "APP_COC_MATCH_JOB_ROOT",
+        str(PROJECT_ROOT / "04_Processed_data" / "ops" / "coc_match"),
+    )
+).resolve()
 DATABASE_URL = os.getenv("APP_DATABASE_URL", "").strip()
 DATABASE_ENABLED = _parse_bool_env(
     "APP_DATABASE_ENABLED",

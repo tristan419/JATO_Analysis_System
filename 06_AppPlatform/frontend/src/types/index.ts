@@ -1951,3 +1951,26 @@ export interface RvFinanceResponse {
   rate?: number;
   presets?: Record<string, Partial<RvFinanceVehicle>>;
 }
+
+/* ---- COC Match ---- */
+
+export interface CocMatchJob {
+  jobId: string;
+  status: string;
+  country: string;
+  month: string;
+  fileExt: string;
+  excelFilename: string;
+  archiveFilename: string;
+  totalRows?: number;
+  matchedCount?: number;
+  missingCount?: number;
+  coverageRate?: number;
+  previousRun?: { month: string; matched: number; total: number } | null;
+  diffSummary?: { gained: number; lost: number; newEntries: number } | null;
+  triggeredBy: string;
+  error?: string | null;
+  createdAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+}

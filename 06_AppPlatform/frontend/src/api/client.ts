@@ -1,6 +1,7 @@
 import type {
   AdvancedChartResponse,
   AnalysisQuery,
+  CocMatchJob,
   ConfigImportBatch,
   ConfigVariant,
   CustomerInsightDeckResponse,
@@ -635,6 +636,33 @@ function mapJatoMonthlyUpdatePublication(
     rolledBackAt: raw.rolledBackAt === undefined || raw.rolledBackAt === null ? null : String(raw.rolledBackAt),
     rolledBackBy: raw.rolledBackBy === undefined || raw.rolledBackBy === null ? null : String(raw.rolledBackBy),
     rollbackBackupDir: raw.rollbackBackupDir === undefined || raw.rollbackBackupDir === null ? null : String(raw.rollbackBackupDir)
+  };
+}
+
+function mapCocMatchJob(raw: Record<string, unknown>): CocMatchJob {
+  return {
+    jobId: String(raw.jobId ?? ""),
+    status: String(raw.status ?? ""),
+    country: String(raw.country ?? ""),
+    month: String(raw.month ?? ""),
+    fileExt: String(raw.fileExt ?? ""),
+    excelFilename: String(raw.excelFilename ?? ""),
+    archiveFilename: String(raw.archiveFilename ?? ""),
+    totalRows: raw.totalRows === undefined ? undefined : Number(raw.totalRows),
+    matchedCount: raw.matchedCount === undefined ? undefined : Number(raw.matchedCount),
+    missingCount: raw.missingCount === undefined ? undefined : Number(raw.missingCount),
+    coverageRate: raw.coverageRate === undefined ? undefined : Number(raw.coverageRate),
+    previousRun: raw.previousRun && typeof raw.previousRun === "object"
+      ? (raw.previousRun as { month: string; matched: number; total: number })
+      : null,
+    diffSummary: raw.diffSummary && typeof raw.diffSummary === "object"
+      ? (raw.diffSummary as { gained: number; lost: number; newEntries: number })
+      : null,
+    triggeredBy: String(raw.triggeredBy ?? ""),
+    error: raw.error === undefined ? null : String(raw.error),
+    createdAt: String(raw.createdAt ?? ""),
+    startedAt: raw.startedAt === undefined ? null : String(raw.startedAt),
+    finishedAt: raw.finishedAt === undefined ? null : String(raw.finishedAt),
   };
 }
 
@@ -2407,4 +2435,168 @@ export const api = {
       `/auth/role-upgrade/requests/${requestId}`,
       { method: "PATCH", body: JSON.stringify(payload) }
     ),
+
+  /* ── COC Match ────────────────────────────── */
+
+  /** Simple POST — both files < 50 MB. */
+  cocMatchCreateJob: (
+    excel: File,
+    archive: File,
+    country: string,
+    fileExt: string,
+    month?: string,
+  ) => {
+    const fd = new FormData();
+    fd.append("excel", excel);
+    fd.append("archive", archive);
+    fd.append("country", country);
+    fd.append("file_ext", fileExt);
+    if (month) fd.append("month", month);
+    return request<{ item: Record<string, unknown> }>("/coc-match/jobs", {
+      method: "POST",
+      body: fd,
+    }).then((res) => ({ item: mapCocMatchJob(res.item) }));
+  },
+
+  /** Initiate a chunked upload session for a large file. */
+  cocMatchInitiateUpload: (
+    filename: string,
+    sizeBytes: number,
+    resumeKey?: string,
+  ) =>
+    request<{ item: Record<string, unknown> }>(
+      "/coc-match/upload-sessions/initiate",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          filename,
+          sizeBytes,
+          resumeKey: resumeKey || undefined,
+        }),
+      }
+    ).then((res) => res.item),
+
+  /** Upload a single chunk. Returns the updated session state. */
+  cocMatchUploadChunk: async (
+    uploadId: string,
+    partNumber: number,
+    blob: Blob,
+  ): Promise<Record<string, unknown>> => {
+    const sha256 = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer())
+      .then((buf) => Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join(""));
+    return request<{ item: Record<string, unknown> }>(
+      `/coc-match/upload-sessions/${uploadId}/parts/${partNumber}`,
+      {
+        method: "PUT",
+        body: blob,
+        headers: { "X-Chunk-SHA256": sha256, "Content-Type": "application/octet-stream" },
+      }
+    ).then((res) => res.item);
+  },
+
+  /** Complete a chunked upload session. */
+  cocMatchCompleteUpload: (uploadId: string) =>
+    request<{ item: Record<string, unknown> }>(
+      `/coc-match/upload-sessions/${uploadId}/complete`,
+      { method: "POST" }
+    ).then((res) => res.item),
+
+  /** Create a COC match job from two completed chunked upload sessions. */
+  cocMatchCreateJobFromUpload: (
+    excelUploadId: string,
+    archiveUploadId: string,
+    excelFilename: string,
+    archiveFilename: string,
+    country: string,
+    fileExt: string,
+    month?: string,
+  ) => {
+    const body: Record<string, unknown> = {
+      excelUploadId,
+      archiveUploadId,
+      excelFilename,
+      archiveFilename,
+      country,
+      fileExt,
+    };
+    if (month) body.month = month;
+    return request<{ item: Record<string, unknown> }>("/coc-match/jobs/batch", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }).then((res) => ({ item: mapCocMatchJob(res.item) }));
+  },
+
+  /**
+   * Smart upload: auto-decides simple POST vs chunked based on file size.
+   * Files >= 50 MB are uploaded via chunked sessions; smaller files use direct POST.
+   */
+  cocMatchUploadAndCreateJob: async (
+    excel: File,
+    archive: File,
+    country: string,
+    fileExt: string,
+    month?: string,
+  ): Promise<{ item: CocMatchJob }> => {
+    const CHUNK_THRESHOLD = 50 * 1024 * 1024; // 50 MB
+    const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB
+
+    const needsChunkedExcel = excel.size >= CHUNK_THRESHOLD;
+    const needsChunkedArchive = archive.size >= CHUNK_THRESHOLD;
+
+    // Small files: simple POST
+    if (!needsChunkedExcel && !needsChunkedArchive) {
+      return api.cocMatchCreateJob(excel, archive, country, fileExt, month);
+    }
+
+    // Large files: chunked upload per file
+    const uploadFile = async (file: File): Promise<string> => {
+      const session = await api.cocMatchInitiateUpload(
+        file.name,
+        file.size,
+        `coc-resume-${file.name}-${file.size}`,
+      );
+      const uploadId = String(session.uploadId ?? session.uploadId);
+      const received: number[] = (session.receivedChunks as number[]) || [];
+      const totalChunks = Number(session.totalChunks ?? 1);
+
+      for (let i = 1; i <= totalChunks; i++) {
+        if (received.includes(i)) continue;
+        const start = (i - 1) * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const blob = file.slice(start, end);
+        await api.cocMatchUploadChunk(uploadId, i, blob);
+      }
+
+      await api.cocMatchCompleteUpload(uploadId);
+      return uploadId;
+    };
+
+    const excelUploadId = await uploadFile(excel);
+    const archiveUploadId = await uploadFile(archive);
+
+    return api.cocMatchCreateJobFromUpload(
+      excelUploadId,
+      archiveUploadId,
+      excel.name,
+      archive.name,
+      country,
+      fileExt,
+      month,
+    );
+  },
+
+  cocMatchListJobs: (limit = 20) =>
+    request<{ items: Record<string, unknown>[] }>(
+      `/coc-match/jobs?limit=${limit}`
+    ),
+
+  cocMatchGetJob: (jobId: string) =>
+    request<{ item: Record<string, unknown> }>(`/coc-match/jobs/${jobId}`)
+      .then((res) => ({ item: mapCocMatchJob(res.item) })),
+
+  cocMatchRetryJob: (jobId: string) =>
+    request<{ item: Record<string, unknown> }>(
+      `/coc-match/jobs/${jobId}/retry`,
+      { method: "POST" }
+    ).then((res) => ({ item: mapCocMatchJob(res.item) })),
 };

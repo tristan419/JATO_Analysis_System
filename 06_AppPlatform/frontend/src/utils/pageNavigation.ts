@@ -231,6 +231,7 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
           { label: "Matching Review", sublabel: "匹配审核", to: "/data/matching-review", minRole: "editor" },
           { label: "JATO Monthly Update", sublabel: "JATO 月更", to: "/data/jato-monthly-update", minRole: "editor" },
           { label: "Eng Config", sublabel: "工程配置", to: "/engineering-config", minRole: "viewer" },
+          { label: "COC Match", sublabel: "COC 比对", to: "/data/coc-match", minRole: "editor" },
         ],
       },
     ],
