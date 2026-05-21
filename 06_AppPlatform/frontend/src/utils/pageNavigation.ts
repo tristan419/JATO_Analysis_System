@@ -180,14 +180,8 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
     id: "market-scan",
     label: "Market Scan",
     sublabel: "市场扫描",
-    type: "dropdown",
-    items: [
-      { label: "Market Overview", sublabel: "市场总览", to: "/market/overview" },
-      { label: "Segment Analysis", sublabel: "细分市场", to: "/market/segments" },
-      { label: "Brand Ranking", sublabel: "品牌排名", to: "/market/ranking/brand" },
-      { label: "Model Ranking", sublabel: "车型排名", to: "/market/ranking/model" },
-      { label: "Powertrain Mix", sublabel: "动力结构", to: "/market/powertrain" },
-    ],
+    type: "link",
+    to: "/market/overview",
   },
   {
     id: "product-deck",
