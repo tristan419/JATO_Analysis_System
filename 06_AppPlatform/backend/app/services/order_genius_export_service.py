@@ -64,7 +64,8 @@ def generate_order_genius_excel(
         A BytesIO buffer containing the .xlsx file.
     """
     wb = openpyxl.Workbook()
-    wb.remove(wb.active)  # remove default sheet
+    # Keep one default sheet to avoid openpyxl "at least one sheet" error.
+    # We'll remove it after adding real sheets, or rename it.
 
     # Group rows by powertrain
     groups: dict[str, list[dict]] = {}
@@ -76,6 +77,18 @@ def generate_order_genius_excel(
     sorted_keys = sorted(
         [k for k in groups if k != "Other"]
     ) + (["Other"] if "Other" in groups else [])
+
+    if not sorted_keys:
+        # Empty matrix — keep the default sheet with a placeholder
+        ws = wb.active
+        ws.title = "No Data"
+        ws.cell(row=1, column=1, value=f"No order data for {country_name} ({country_code}) {year}")
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return output
+
+    wb.remove(wb.active)  # remove default sheet
 
     for pt_key in sorted_keys:
         pt_rows = groups[pt_key]

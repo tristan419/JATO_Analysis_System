@@ -105,13 +105,14 @@ def preview_material_master_upload(
 @router.post("/material-master-uploads/{upload_id}/publish")
 def publish_material_master(
     upload_id: str,
-    body: PublishBaselineRequest = PublishBaselineRequest(),
+    body: dict | None = None,
     session: Session = Depends(get_db_session),
-    user: str = Depends(require_min_role("admin")),
+    user=Depends(require_min_role("admin")),
 ) -> dict:
     try:
+        notes = body.get("notes") if body else None
         result = upload_svc.publish_upload(
-            session, upload_id, user.name, body.notes
+            session, upload_id, user.name, notes
         )
         session.commit()
         return result
@@ -246,20 +247,20 @@ def get_order_genius_matrix(
 
 @router.patch("/quantity-cell")
 def patch_quantity_cell(
-    body: QuantityCellUpdate,
+    body: dict,
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
     try:
         result = update_quantity_cell(
             session,
-            country_code=body.country_code,
-            order_year=body.order_year,
-            order_month=body.order_month,
-            material_code=body.material_code,
-            quantity=body.quantity,
+            country_code=body.get("countryCode", body.get("country_code", "")),
+            order_year=body.get("orderYear", body.get("order_year", 0)),
+            order_month=body.get("orderMonth", body.get("order_month", 0)),
+            material_code=body.get("materialCode", body.get("material_code", "")),
+            quantity=body.get("quantity", 0),
             updated_by=user.name,
-            expected_version=body.row_version,
+            expected_version=body.get("rowVersion", body.get("row_version", 1)),
         )
         session.commit()
         return result
@@ -276,7 +277,7 @@ def patch_quantity_cell(
 @router.patch("/material-skus/{material_code}/remark")
 def patch_sku_remark(
     material_code: str,
-    body: RemarkUpdate,
+    body: dict,
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
@@ -284,9 +285,9 @@ def patch_sku_remark(
         result = update_remark(
             session,
             material_code=material_code,
-            remark=body.remark,
+            remark=body.get("remark", ""),
             changed_by=user.name,
-            expected_version=body.row_version,
+            expected_version=body.get("rowVersion", body.get("row_version", 1)),
         )
         session.commit()
         return result
@@ -316,14 +317,15 @@ def get_sku_fob(
 
 @router.post("/export")
 def export_order_genius(
-    body: ExportRequest,
+    body: dict,
     session: Session = Depends(get_db_session),
     _=Depends(require_min_role("viewer")),
 ) -> StreamingResponse:
-    buf = export_matrix(
-        session, body.country, body.year, body.include_historical_with_quantity
-    )
-    filename = f"Order_Genius_{body.country}-{body.year}.xlsx"
+    country = body.get("country", "")
+    year = body.get("year", 2026)
+    include_hist = body.get("includeHistoricalWithQuantity", True)
+    buf = export_matrix(session, country, year, include_hist)
+    filename = f"Order_Genius_{country}-{year}.xlsx"
     return StreamingResponse(
         buf,
         media_type=(
