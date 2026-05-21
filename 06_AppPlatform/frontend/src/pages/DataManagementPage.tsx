@@ -47,12 +47,12 @@ import {
 } from "../utils/dataManagement";
 
 type CrudEntityTab = "msrp-sources" | "engineering-projects" | "review-overrides";
-type DataSubpage = "overview" | "hermes" | "features" | "voc" | "admin" | "dryrun";
+type DataSubpage = "overview" | "hermes" | "features" | "voc" | "admin" | "dryrun" | "order-genius" | "material-master";
 type HermesSubtab = "capabilities" | "activity" | "cost" | "roadmap" | "diagrams";
 type SentinelInboxFilter = "new" | "read" | "archived" | "all";
 const DEFAULT_RECENT_ITEMS_VISIBLE = 6;
 
-const DATA_SUBPAGES: DataSubpage[] = ["overview", "hermes", "features", "voc", "admin", "dryrun"];
+const DATA_SUBPAGES: DataSubpage[] = ["overview", "hermes", "features", "voc", "admin", "dryrun", "order-genius", "material-master"];
 
 function resolveDataSubpageFromLocation(search: string, hash: string): DataSubpage {
   const params = new URLSearchParams(search);
@@ -940,6 +940,8 @@ export function DataManagementPage() {
         <button type="button" className={`admin-tab${subpage === "voc" ? " is-active" : ""}`} onClick={() => setSubpage("voc")}>VOC</button>
         <button type="button" className={`admin-tab${subpage === "admin" ? " is-active" : ""}`} onClick={() => setSubpage("admin")}>Admin</button>
         <button type="button" className={`admin-tab${subpage === "dryrun" ? " is-active" : ""}`} onClick={() => setSubpage("dryrun")}>MSRP Dryrun</button>
+        <button type="button" className={`admin-tab${subpage === "order-genius" ? " is-active" : ""}`} onClick={() => setSubpage("order-genius")}>Order Genius</button>
+        <button type="button" className={`admin-tab${subpage === "material-master" ? " is-active" : ""}`} onClick={() => setSubpage("material-master")}>Material Master</button>
       </div>
 
       {subpage === "voc" ? (
@@ -2707,6 +2709,26 @@ export function DataManagementPage() {
       {subpage === "dryrun" ? (
         <div className="card crud-card" style={{ padding: 16 }}>
           <MsrpDryrunDashboard />
+        </div>
+      ) : null}
+
+      {subpage === "order-genius" ? (
+        <div className="card crud-card" style={{ padding: 24 }}>
+          <h2>Order Genius</h2>
+          <p style={{color:"#64748b"}}>Country order matrix, monthly quantity editing, and Excel export.</p>
+          <Link to="/data/order-genius" className="btn btn-sm btn-primary" style={{marginTop:12,display:"inline-block"}}>
+            Open Order Genius
+          </Link>
+        </div>
+      ) : null}
+
+      {subpage === "material-master" ? (
+        <div className="card crud-card" style={{ padding: 24 }}>
+          <h2>Material Master Upload</h2>
+          <p style={{color:"#64748b"}}>Upload OMODA &amp; JAECOO Material Master XLSX files to publish new SKU baselines.</p>
+          <Link to="/data/order-genius" className="btn btn-sm btn-primary" style={{marginTop:12,display:"inline-block"}}>
+            Open Material Master
+          </Link>
         </div>
       ) : null}
 

@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -1518,5 +1519,231 @@ class RoleUpgradeRequest(Base):
         DateTime(timezone=True), nullable=True
     )
     created_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+# ── ordering schema ──────────────────────────────────────────────────
+
+
+class MaterialBaselineVersion(Base):
+    __tablename__ = "material_baseline_version"
+    __table_args__ = {"schema": "ordering"}
+
+    baseline_version_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    source_upload_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    source_file_name: Mapped[str] = mapped_column(Text, nullable=False)
+    source_file_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    baseline_name: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="published")
+    published_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class MaterialSkuMaster(TimestampMixin, Base):
+    __tablename__ = "material_sku_master"
+    __table_args__ = (
+        UniqueConstraint(
+            "baseline_version_id", "material_code",
+            name="uq_ordering_sku_baseline_material",
+        ),
+        Index("ix_ordering_sku_lookup", "brand", "model_name", "version", "exterior_color_code"),
+        Index("ix_ordering_sku_material_code", "material_code"),
+        Index("ix_ordering_sku_active", "is_active", "lifecycle_status"),
+        {"schema": "ordering"},
+    )
+
+    material_sku_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    baseline_version_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("ordering.material_baseline_version.baseline_version_id"),
+        nullable=False,
+    )
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    model_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_name: Mapped[str] = mapped_column(Text, nullable=False)
+    powertrain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[str] = mapped_column(Text, nullable=False)
+    exterior_color_name: Mapped[str] = mapped_column(Text, nullable=False)
+    exterior_color_code: Mapped[str] = mapped_column(Text, nullable=False)
+    exterior_color_type: Mapped[str] = mapped_column(Text, nullable=False)
+    interior_color_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bom_template: Mapped[str | None] = mapped_column(Text, nullable=True)
+    material_code: Mapped[str] = mapped_column(Text, nullable=False)
+    lifecycle_status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    effective_from_month: Mapped[str | None] = mapped_column(Text, nullable=True)
+    effective_to_month: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    source_sheet_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_row_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    raw_payload_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class CountryPaymentTermMaster(TimestampMixin, Base):
+    __tablename__ = "country_payment_term_master"
+    __table_args__ = (
+        Index(
+            "uq_ordering_country_payment_active",
+            "country_code",
+            unique=True,
+            postgresql_where=text("is_active = true"),
+        ),
+        {"schema": "ordering"},
+    )
+
+    country_payment_term_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    country_name: Mapped[str] = mapped_column(Text, nullable=False)
+    payment_term_code: Mapped[str] = mapped_column(Text, nullable=False)
+    payment_method: Mapped[str] = mapped_column(Text, nullable=False)
+    lc_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PaymentTermPriceRule(TimestampMixin, Base):
+    __tablename__ = "payment_term_price_rule"
+    __table_args__ = (
+        Index(
+            "uq_ordering_payment_term_rule_active",
+            "payment_term_code",
+            unique=True,
+            postgresql_where=text("is_active = true"),
+        ),
+        {"schema": "ordering"},
+    )
+
+    payment_term_rule_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    payment_term_code: Mapped[str] = mapped_column(Text, nullable=False)
+    payment_method: Mapped[str] = mapped_column(Text, nullable=False)
+    lc_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    fob_adjustment_eur: Mapped[float] = mapped_column(
+        Numeric(12, 2), nullable=False, default=0
+    )
+    adjustment_rate: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class BrandColourSurchargeRule(TimestampMixin, Base):
+    __tablename__ = "brand_colour_surcharge_rule"
+    __table_args__ = (
+        Index(
+            "uq_ordering_colour_surcharge_active",
+            "brand", "colour_type",
+            unique=True,
+            postgresql_where=text("is_active = true"),
+        ),
+        {"schema": "ordering"},
+    )
+
+    colour_surcharge_rule_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    colour_type: Mapped[str] = mapped_column(Text, nullable=False)
+    surcharge_eur: Mapped[float] = mapped_column(
+        Numeric(12, 2), nullable=False, default=0
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class CountrySkuFobResolved(TimestampMixin, Base):
+    __tablename__ = "country_sku_fob_resolved"
+    __table_args__ = (
+        Index(
+            "uq_ordering_country_sku_fob_active",
+            "country_code", "material_code",
+            unique=True,
+            postgresql_where=text("is_active = true"),
+        ),
+        {"schema": "ordering"},
+    )
+
+    country_sku_fob_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    baseline_version_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("ordering.material_baseline_version.baseline_version_id"),
+        nullable=False,
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    material_code: Mapped[str] = mapped_column(Text, nullable=False)
+    payment_term_code: Mapped[str] = mapped_column(Text, nullable=False)
+    base_fob_eur: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    payment_term_adjustment_eur: Mapped[float] = mapped_column(
+        Numeric(12, 2), nullable=False, default=0
+    )
+    colour_surcharge_eur: Mapped[float] = mapped_column(
+        Numeric(12, 2), nullable=False, default=0
+    )
+    final_fob_eur: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class OrderQuantityCell(TimestampMixin, Base):
+    __tablename__ = "order_quantity_cell"
+    __table_args__ = (
+        UniqueConstraint(
+            "country_code", "order_year", "order_month", "material_code",
+            name="uq_ordering_quantity_cell",
+        ),
+        CheckConstraint(
+            "order_month BETWEEN 1 AND 12",
+            name="ck_ordering_quantity_month",
+        ),
+        CheckConstraint(
+            "quantity >= 0",
+            name="ck_ordering_quantity_non_negative",
+        ),
+        {"schema": "ordering"},
+    )
+
+    order_quantity_cell_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    order_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    order_month: Mapped[int] = mapped_column(Integer, nullable=False)
+    material_code: Mapped[str] = mapped_column(Text, nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fob_eur: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class MaterialSkuRemarkHistory(Base):
+    __tablename__ = "material_sku_remark_history"
+    __table_args__ = (
+        Index(
+            "ix_ordering_remark_history_code_updated",
+            "material_code", "updated_at_utc",
+        ),
+        {"schema": "ordering"},
+    )
+
+    remark_history_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    material_code: Mapped[str] = mapped_column(Text, nullable=False)
+    old_remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

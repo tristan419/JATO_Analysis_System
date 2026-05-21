@@ -96,6 +96,21 @@ import type {
   HermesToolchainResponse,
 } from "../types/hermes";
 import type {
+  BaselineVersion,
+  ColourSurchargeRule,
+  CountryPaymentTerm,
+  MaterialUploadPreview,
+  MaterialUploadSession,
+  MatrixResponse,
+  OrderGeniusOptions,
+  PaymentTermRule,
+  PublishBaselineResponse,
+  QuantityCellResponse,
+  QuantityCellUpdate,
+  RemarkResponse,
+  RemarkUpdate,
+} from "../types/orderGenius";
+import type {
   CountryChatDeckResponse,
   CountryChatMetadataResponse,
   CountryChatNewsOpsStatus,
@@ -2658,4 +2673,119 @@ export const api = {
       `/coc-match/jobs/${jobId}/retry`,
       { method: "POST" }
     ).then((res) => ({ item: mapCocMatchJob(res.item) })),
+
+  // ── Order Genius ────────────────────────────────────────────────
+
+  initiateMaterialMasterUpload: (fileName: string, totalSize: number) =>
+    request<MaterialUploadSession>(
+      `/order-genius/material-master-uploads/initiate?file_name=${encodeURIComponent(fileName)}&total_size=${totalSize}`,
+      { method: "POST" }
+    ),
+
+  uploadMaterialMasterChunk: async (
+    uploadId: string,
+    partNumber: number,
+    blob: Blob,
+  ) =>
+    request<Record<string, unknown>>(
+      `/order-genius/material-master-uploads/${uploadId}/parts/${partNumber}`,
+      {
+        method: "PUT",
+        body: blob,
+        headers: { "Content-Type": "application/octet-stream" },
+      },
+    ),
+
+  completeMaterialMasterUpload: (uploadId: string) =>
+    request<Record<string, unknown>>(
+      `/order-genius/material-master-uploads/${uploadId}/complete`,
+      { method: "POST" },
+    ),
+
+  parseMaterialMasterUpload: (uploadId: string) =>
+    request<Record<string, unknown>>(
+      `/order-genius/material-master-uploads/${uploadId}/parse`,
+      { method: "POST" },
+    ),
+
+  getMaterialMasterPreview: (uploadId: string) =>
+    request<MaterialUploadPreview>(
+      `/order-genius/material-master-uploads/${uploadId}/preview`,
+    ),
+
+  publishMaterialMaster: (uploadId: string, notes?: string) =>
+    request<PublishBaselineResponse>(
+      `/order-genius/material-master-uploads/${uploadId}/publish`,
+      { method: "POST", body: JSON.stringify({ notes }) },
+    ),
+
+  getOrderGeniusOptions: (country: string) => {
+    const qs = new URLSearchParams({ country });
+    return request<OrderGeniusOptions>(
+      `/order-genius/options?${qs.toString()}`,
+    );
+  },
+
+  getOrderGeniusMatrix: (params: {
+    country: string;
+    year: number;
+    brand?: string;
+    model?: string;
+    powertrain?: string;
+    version?: string;
+    colour?: string;
+    materialCodeSearch?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    qs.set("country", params.country);
+    qs.set("year", String(params.year));
+    if (params.brand) qs.set("brand", params.brand);
+    if (params.model) qs.set("model", params.model);
+    if (params.powertrain) qs.set("powertrain", params.powertrain);
+    if (params.version) qs.set("version", params.version);
+    if (params.colour) qs.set("colour", params.colour);
+    if (params.materialCodeSearch)
+      qs.set("material_code_search", params.materialCodeSearch);
+    return request<MatrixResponse>(
+      `/order-genius/matrix?${qs.toString()}`,
+    );
+  },
+
+  updateQuantityCell: (payload: QuantityCellUpdate) =>
+    request<QuantityCellResponse>("/order-genius/quantity-cell", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  updateSkuRemark: (materialCode: string, payload: RemarkUpdate) =>
+    request<RemarkResponse>(
+      `/order-genius/material-skus/${encodeURIComponent(materialCode)}/remark`,
+      { method: "PATCH", body: JSON.stringify(payload) },
+    ),
+
+  getSkuFob: (materialCode: string, country: string) =>
+    request<Record<string, unknown>>(
+      `/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob?country=${encodeURIComponent(country)}`,
+    ),
+
+  exportOrderGenius: (country: string, year: number) =>
+    requestBlob("/order-genius/export", {
+      method: "POST",
+      body: JSON.stringify({ country, year }),
+      headers: { "Content-Type": "application/json" },
+    }),
+
+  getOrderGeniusPaymentTerms: () =>
+    request<{ items: PaymentTermRule[] }>("/order-genius/payment-terms"),
+
+  getOrderGeniusColourSurcharges: () =>
+    request<{ items: ColourSurchargeRule[] }>(
+      "/order-genius/colour-surcharges",
+    ),
+
+  getOrderGeniusCountries: () =>
+    request<{ items: CountryPaymentTerm[] }>("/order-genius/countries"),
+
+  getOrderGeniusBaselines: () =>
+    request<{ items: BaselineVersion[] }>("/order-genius/baselines"),
 };
