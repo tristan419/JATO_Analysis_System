@@ -122,10 +122,17 @@ def publish_baseline(
 
     session.flush()
 
-    # 4. Resolve FOB for all countries with payment terms
+    # 4. Resolve FOB — only for countries that have FOB data in the Excel.
+    # Default: explicit_price_by_payment_term.
+    # Excel FOB = final price for that country's payment term.
+    # LC is a price dimension, NOT a global adjustment formula.
+    fob_source_mode = "explicit_price_by_payment_term"
     countries = repo.list_country_payment_terms(session)
     fob_count = 0
+    fob_skipped: set[str] = set()
+    fob_resolved: set[str] = set()
     for country_pt in countries:
+        any_for_country = False
         for sku in new_skus:
             try:
                 _resolve_fob_for_sku(
@@ -133,16 +140,25 @@ def publish_baseline(
                     country_pt.country_code,
                     sku,
                     baseline.baseline_version_id,
+                    fob_source_mode,
                 )
                 fob_count += 1
-            except Exception:
-                pass  # skip if no base FOB or rule missing
+                any_for_country = True
+            except (ValueError, KeyError):
+                pass  # SKU has no FOB column for this country
+        if any_for_country:
+            fob_resolved.add(country_pt.country_code)
+        else:
+            fob_skipped.add(country_pt.country_code)
 
     return {
         "baseline_version_id": str(baseline.baseline_version_id),
         "baseline_name": baseline_name,
         "sku_count": len(new_skus),
         "fob_count": fob_count,
+        "fob_source_mode": fob_source_mode,
+        "fob_resolved_countries": sorted(fob_resolved),
+        "fob_skipped_countries": sorted(fob_skipped),
         "status": "published",
     }
 
@@ -155,24 +171,65 @@ def _resolve_fob_for_sku(
     country_code: str,
     sku: MaterialSkuMaster,
     baseline_version_id: UUID,
+    fob_source_mode: str = "explicit_price_by_payment_term",
 ) -> CountrySkuFobResolved:
-    from app.db.models import CountrySkuFobResolved
+    """Resolve FOB for a country+SKU pair.
 
-    # Get payment term adjustment
+    Pricing model (corrected):
+    - LC is NOT a global adjustment formula. It is a price dimension/key.
+    - FOB = resolved by: country_code + material_code + payment_term_code
+    - payment_term_price_rule is NOT used for calculation.
+    - Colour surcharge only applies in uploaded_base_plus_colour mode.
+    """
+    from app.db.models import CountrySkuFobResolved
+    from app.services.material_master_parser import _normalise_country_name
+
     country_pt = repo.get_country_payment_term(session, country_code)
     payment_term_code = country_pt.payment_term_code if country_pt else "TT"
-    pt_rule = repo.get_payment_term_rule(session, payment_term_code)
-    payment_adjustment = float(pt_rule.fob_adjustment_eur) if pt_rule else 0.0
+    country_name = country_pt.country_name if country_pt else country_code
 
-    # Get colour surcharge
-    surcharge = repo.get_brand_colour_surcharge(
-        session, sku.brand, sku.exterior_color_type
-    )
-    colour_surcharge = float(surcharge.surcharge_eur) if surcharge else 0.0
+    # Look up country-specific FOB from parsed Excel data
+    country_fobs: dict[str, float] = {}
+    if sku.raw_payload_json:
+        country_fobs = sku.raw_payload_json.get("country_fobs", {})
 
-    # Calculate final FOB
-    base_fob = _get_base_fob_from_sku(sku)
-    final_fob = base_fob + payment_adjustment + colour_surcharge
+    # Match FOB by country code or normalised name
+    uploaded_fob: float | None = None
+    matched_col: str | None = None
+    if country_code in country_fobs:
+        uploaded_fob = country_fobs[country_code]
+        matched_col = country_code
+    else:
+        for col_name, fob_val in country_fobs.items():
+            if _normalise_country_name(col_name) in (
+                country_name, country_code,
+            ):
+                uploaded_fob = fob_val
+                matched_col = col_name
+                break
+
+    if uploaded_fob is None:
+        raise ValueError(
+            f"No FOB column for {country_code} in SKU {sku.material_code}"
+        )
+
+    uploaded_fob_eur = float(uploaded_fob)
+
+    if fob_source_mode == "uploaded_base_plus_colour":
+        # Excel FOB is base/single-colour — apply dual-colour surcharge only.
+        # LC is NOT added here — it is already part of the uploaded FOB value.
+        surcharge = repo.get_brand_colour_surcharge(
+            session, sku.brand, sku.exterior_color_type,
+        )
+        colour_surcharge = float(surcharge.surcharge_eur) if surcharge else 0.0
+        final_fob = uploaded_fob_eur + colour_surcharge
+        fob_source_country = country_code
+    else:
+        # uploaded_final_fob or explicit_price_by_payment_term:
+        # The uploaded FOB IS the final FOB for this country+payment_term.
+        colour_surcharge = 0.0
+        final_fob = uploaded_fob_eur
+        fob_source_country = country_code
 
     fob = CountrySkuFobResolved(
         country_sku_fob_id=uuid_module.uuid4(),
@@ -180,10 +237,10 @@ def _resolve_fob_for_sku(
         country_code=country_code,
         material_code=sku.material_code,
         payment_term_code=payment_term_code,
-        base_fob_eur=base_fob,
-        payment_term_adjustment_eur=payment_adjustment,
-        colour_surcharge_eur=colour_surcharge,
+        uploaded_fob_eur=uploaded_fob_eur,
         final_fob_eur=final_fob,
+        fob_source_country_code=fob_source_country,
+        fob_source_mode=fob_source_mode,
         is_active=True,
     )
     return repo.upsert_fob_resolved(session, fob)
@@ -228,10 +285,12 @@ def _fob_to_dict(fob: CountrySkuFobResolved) -> dict:
         "country_code": fob.country_code,
         "material_code": fob.material_code,
         "payment_term_code": fob.payment_term_code,
-        "base_fob_eur": float(fob.base_fob_eur),
-        "payment_term_adjustment_eur": float(fob.payment_term_adjustment_eur),
-        "colour_surcharge_eur": float(fob.colour_surcharge_eur),
+        "uploaded_fob_eur": (
+            float(fob.uploaded_fob_eur) if fob.uploaded_fob_eur else None
+        ),
         "final_fob_eur": float(fob.final_fob_eur),
+        "fob_source_mode": fob.fob_source_mode,
+        "fob_source_country_code": fob.fob_source_country_code,
     }
 
 
@@ -278,11 +337,11 @@ def build_matrix(
         material_code_search=material_code_search,
     )
 
-    # Get FOB for these SKUs in this country
+    # Get FOB for these SKUs — filtered by country's default payment term
     fob_map: dict[str, CountrySkuFobResolved] = {}
     for sku in active_skus:
         fob = repo.get_fob_for_country_sku(
-            session, country_code, sku.material_code
+            session, country_code, sku.material_code, payment_term_code,
         )
         if fob:
             fob_map[sku.material_code] = fob
@@ -399,14 +458,16 @@ def build_options(
 
     Only includes SKUs that have resolved FOB for the given country.
     """
-    fob_codes = repo.list_active_fob_material_codes(session, country_code)
+    country_pt = repo.get_country_payment_term(session, country_code)
+    pt_code = country_pt.payment_term_code if country_pt else None
+    fob_codes = repo.list_active_fob_material_codes(
+        session, country_code, pt_code,
+    )
 
     # Get all active SKUs for this country (filtered by FOB availability)
     all_active = repo.list_active_skus(session, brand=brand, model_name=model_name,
                                        powertrain=powertrain, version=version)
     skus = [s for s in all_active if s.material_code in fob_codes]
-
-    country_pt = repo.get_country_payment_term(session, country_code)
 
     # Collect distinct values from the filtered skus
     brands = sorted(set(s.brand for s in skus))

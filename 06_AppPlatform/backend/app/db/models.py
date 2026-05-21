@@ -1666,7 +1666,7 @@ class CountrySkuFobResolved(TimestampMixin, Base):
     __table_args__ = (
         Index(
             "uq_ordering_country_sku_fob_active",
-            "country_code", "material_code",
+            "country_code", "material_code", "payment_term_code",
             unique=True,
             postgresql_where=text("is_active = true"),
         ),
@@ -1684,14 +1684,16 @@ class CountrySkuFobResolved(TimestampMixin, Base):
     country_code: Mapped[str] = mapped_column(Text, nullable=False)
     material_code: Mapped[str] = mapped_column(Text, nullable=False)
     payment_term_code: Mapped[str] = mapped_column(Text, nullable=False)
-    base_fob_eur: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
-    payment_term_adjustment_eur: Mapped[float] = mapped_column(
-        Numeric(12, 2), nullable=False, default=0
-    )
-    colour_surcharge_eur: Mapped[float] = mapped_column(
-        Numeric(12, 2), nullable=False, default=0
+    uploaded_fob_eur: Mapped[float | None] = mapped_column(
+        Numeric(12, 2), nullable=True,
     )
     final_fob_eur: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    fob_source_country_code: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+    )
+    fob_source_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, default="explicit_price_by_payment_term",
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 

@@ -399,15 +399,15 @@ def upsert_fob_resolved(
     fob: CountrySkuFobResolved,
 ) -> CountrySkuFobResolved:
     existing = get_fob_for_country_sku(
-        session, fob.country_code, fob.material_code
+        session, fob.country_code, fob.material_code, fob.payment_term_code,
     )
     if existing:
-        existing.payment_term_code = fob.payment_term_code
         existing.base_fob_eur = fob.base_fob_eur
         existing.payment_term_adjustment_eur = fob.payment_term_adjustment_eur
         existing.colour_surcharge_eur = fob.colour_surcharge_eur
         existing.final_fob_eur = fob.final_fob_eur
         existing.baseline_version_id = fob.baseline_version_id
+        existing.fob_source_mode = fob.fob_source_mode
         existing.is_active = True
         return existing
     session.add(fob)
@@ -415,33 +415,52 @@ def upsert_fob_resolved(
 
 
 def get_fob_for_country_sku(
-    session: Session, country_code: str, material_code: str
+    session: Session,
+    country_code: str,
+    material_code: str,
+    payment_term_code: str | None = None,
 ) -> CountrySkuFobResolved | None:
     stmt = select(CountrySkuFobResolved).where(
         CountrySkuFobResolved.country_code == country_code,
         CountrySkuFobResolved.material_code == material_code,
         CountrySkuFobResolved.is_active == True,
     )
+    if payment_term_code:
+        stmt = stmt.where(
+            CountrySkuFobResolved.payment_term_code == payment_term_code,
+        )
     return session.execute(stmt).scalars().first()
 
 
 def list_fob_by_country(
-    session: Session, country_code: str
+    session: Session,
+    country_code: str,
+    payment_term_code: str | None = None,
 ) -> list[CountrySkuFobResolved]:
     stmt = select(CountrySkuFobResolved).where(
         CountrySkuFobResolved.country_code == country_code,
         CountrySkuFobResolved.is_active == True,
     )
+    if payment_term_code:
+        stmt = stmt.where(
+            CountrySkuFobResolved.payment_term_code == payment_term_code,
+        )
     return list(session.execute(stmt).scalars().all())
 
 
 def list_active_fob_material_codes(
-    session: Session, country_code: str
+    session: Session,
+    country_code: str,
+    payment_term_code: str | None = None,
 ) -> set[str]:
     stmt = select(CountrySkuFobResolved.material_code).where(
         CountrySkuFobResolved.country_code == country_code,
         CountrySkuFobResolved.is_active == True,
     )
+    if payment_term_code:
+        stmt = stmt.where(
+            CountrySkuFobResolved.payment_term_code == payment_term_code,
+        )
     return {row[0] for row in session.execute(stmt).all()}
 
 
