@@ -109,17 +109,17 @@ def generate_order_genius_excel(
         # Data rows
         for row_idx, row in enumerate(pt_rows):
             excel_row = row_idx + 3
-            is_historical = row.get("lifecycle_status") == "historical"
+            is_historical = row.get("lifecycleStatus") == "historical"
             row_font = HISTORICAL_FONT if is_historical else NORMAL_FONT
             row_fill = STRIPED_FILL if row_idx % 2 == 1 else None
 
             # Fixed columns
             values = [
-                row.get("model_name", ""),
+                row.get("modelName", ""),
                 row.get("version", ""),
                 row.get("colour", ""),
-                row.get("material_code", ""),
-                row.get("fob_eur"),
+                row.get("materialCode", ""),
+                row.get("fobEur"),
             ]
 
             for col_idx, val in enumerate(values, 1):

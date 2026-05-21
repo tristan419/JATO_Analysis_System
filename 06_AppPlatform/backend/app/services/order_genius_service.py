@@ -162,13 +162,13 @@ def _resolve_fob_for_sku(
     country_pt = repo.get_country_payment_term(session, country_code)
     payment_term_code = country_pt.payment_term_code if country_pt else "TT"
     pt_rule = repo.get_payment_term_rule(session, payment_term_code)
-    payment_adjustment = pt_rule.fob_adjustment_eur if pt_rule else 0.0
+    payment_adjustment = float(pt_rule.fob_adjustment_eur) if pt_rule else 0.0
 
     # Get colour surcharge
     surcharge = repo.get_brand_colour_surcharge(
         session, sku.brand, sku.exterior_color_type
     )
-    colour_surcharge = surcharge.surcharge_eur if surcharge else 0.0
+    colour_surcharge = float(surcharge.surcharge_eur) if surcharge else 0.0
 
     # Calculate final FOB
     base_fob = _get_base_fob_from_sku(sku)
@@ -321,16 +321,16 @@ def build_matrix(
             }
 
         rows.append({
-            "material_code": sku.material_code,
+            "materialCode": sku.material_code,
             "brand": sku.brand,
-            "model_name": sku.model_name,
+            "modelName": sku.model_name,
             "version": sku.version,
             "colour": sku.exterior_color_name,
             "powertrain": sku.powertrain,
-            "fob_eur": float(fob.final_fob_eur) if fob else None,
-            "lifecycle_status": "active",
+            "fobEur": float(fob.final_fob_eur) if fob else None,
+            "lifecycleStatus": "active",
             "editable": True,
-            "display_style": None,
+            "displayStyle": None,
             "remark": sku.remark,
             "months": row_months,
             "ttl": row_ttl,
@@ -361,28 +361,28 @@ def build_matrix(
 
         if has_any or row_ttl > 0:
             rows.append({
-                "material_code": mc,
+                "materialCode": mc,
                 "brand": hist_sku.brand,
-                "model_name": hist_sku.model_name,
+                "modelName": hist_sku.model_name,
                 "version": hist_sku.version,
                 "colour": hist_sku.exterior_color_name,
                 "powertrain": hist_sku.powertrain,
-                "fob_eur": float(fob.final_fob_eur) if fob else None,
-                "lifecycle_status": "historical",
+                "fobEur": float(fob.final_fob_eur) if fob else None,
+                "lifecycleStatus": "historical",
                 "editable": False,
-                "display_style": "strikethrough",
+                "displayStyle": "strikethrough",
                 "remark": hist_sku.remark,
                 "months": row_months,
                 "ttl": row_ttl,
             })
 
     return {
-        "country_code": country_code,
-        "country_name": country_name,
-        "payment_term_code": payment_term_code,
+        "countryCode": country_code,
+        "countryName": country_name,
+        "paymentTermCode": payment_term_code,
         "year": year,
         "rows": rows,
-        "total_rows": len(rows),
+        "totalRows": len(rows),
     }
 
 
@@ -436,8 +436,8 @@ def build_options(
     material_codes = sorted(set(s.material_code for s in skus))
 
     return {
-        "country_code": country_code,
-        "payment_term_code": (
+        "countryCode": country_code,
+        "paymentTermCode": (
             country_pt.payment_term_code if country_pt else None
         ),
         "brands": brands,
@@ -445,7 +445,7 @@ def build_options(
         "powertrains": pts,
         "versions": vers,
         "colours": colours,
-        "material_codes": material_codes,
+        "materialCodes": material_codes,
     }
 
 
@@ -539,7 +539,7 @@ def export_matrix(
 ) -> io.BytesIO:
     """Generate the Order Genius Excel workbook."""
     matrix = build_matrix(session, country_code, year)
-    country_name = matrix.get("country_name", country_code)
+    country_name = matrix.get("countryName", country_code)
     return generate_order_genius_excel(
         matrix["rows"], country_code, country_name, year,
         include_historical_with_quantity,
