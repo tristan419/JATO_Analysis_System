@@ -1684,6 +1684,13 @@ class CountrySkuFobResolved(TimestampMixin, Base):
     country_code: Mapped[str] = mapped_column(Text, nullable=False)
     material_code: Mapped[str] = mapped_column(Text, nullable=False)
     payment_term_code: Mapped[str] = mapped_column(Text, nullable=False)
+    base_fob_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    payment_term_adjustment_eur: Mapped[float | None] = mapped_column(
+        Numeric(12, 2), nullable=True,
+    )
+    colour_surcharge_eur: Mapped[float | None] = mapped_column(
+        Numeric(12, 2), nullable=True,
+    )
     uploaded_fob_eur: Mapped[float | None] = mapped_column(
         Numeric(12, 2), nullable=True,
     )
