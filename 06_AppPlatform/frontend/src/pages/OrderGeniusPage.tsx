@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -51,6 +52,7 @@ export function OrderGeniusPage() {
   const [versionFilter, setVersionFilter] = useState("");
   const [colourFilter, setColourFilter] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
+  const [groupByProduct, setGroupByProduct] = useState(true);
 
   const [options, setOptions] = useState<OrderGeniusOptions | null>(null);
   const [matrix, setMatrix] = useState<MatrixResponse | null>(null);
@@ -463,11 +465,24 @@ export function OrderGeniusPage() {
 
         <input
           type="text"
+          list="material-suggestions"
           placeholder="Material code..."
           value={materialSearch}
           onChange={(e) => setMaterialSearch(e.target.value)}
-          style={{ minWidth: 140 }}
+          style={{ minWidth: 160 }}
         />
+        <datalist id="material-suggestions">
+          {matrix?.rows.map((r) => (
+            <option key={r.materialCode} value={r.materialCode}>
+              {r.remark ? `${r.materialCode} (${r.remark})` : r.materialCode}
+            </option>
+          ))}
+        </datalist>
+
+        <label style={{ cursor: "pointer", fontSize: 12, color: "#475569", display: "flex", alignItems: "center", gap: 4 }}>
+          <input type="checkbox" checked={groupByProduct} onChange={(e) => setGroupByProduct(e.target.checked)} />
+          Group by product
+        </label>
 
         <button type="button" className="btn btn-sm btn-primary" onClick={loadMatrix}>
           Refresh
@@ -646,22 +661,18 @@ export function OrderGeniusPage() {
                 {visibleColumns.remark && <th style={{ minWidth: 160 }}>Remark</th>}
               </tr>
             </thead>
-            <tbody>
-              {matrix.rows.map((row) => (
-                <OrderGeniusRow
-                  key={row.materialCode}
-                  row={row}
-                  editingCells={editingCells}
-                  savingCells={savingCells}
-                  cellErrors={cellErrors}
-                  onStartEdit={startEdit}
-                  onCellChange={handleCellChange}
-                  onCellSave={handleCellSave}
-                  visibleColumns={visibleColumns}
-                  selectedMonth={selectedMonth}
-                />
-              ))}
-            </tbody>
+            <OrderGeniusBody
+              rows={matrix.rows}
+              groupByProduct={groupByProduct}
+              editingCells={editingCells}
+              savingCells={savingCells}
+              cellErrors={cellErrors}
+              onStartEdit={startEdit}
+              onCellChange={handleCellChange}
+              onCellSave={handleCellSave}
+              visibleColumns={visibleColumns}
+              selectedMonth={selectedMonth}
+            />
           </table>
         </div>
       ) : (
@@ -711,7 +722,7 @@ function OrderGeniusRow({
         {row.version}
       </td>
       <td style={{ ...textStyle, position: "sticky", left: 180, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap" }}>
-        {row.colour}
+        {row.colour}{row.colourCode ? <span style={{ color: "#94a3b8", fontSize: 10, marginLeft: 4 }}>{row.colourCode}</span> : null}
       </td>
       {visibleColumns.materialCode && (
         <td style={{ ...textStyle, position: "sticky", left: 280, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap", fontFamily: "monospace" }}>
@@ -757,3 +768,91 @@ function OrderGeniusRow({
     </tr>
   );
 }
+
+// ── Powertrain colour map ────────────────────────────────────────────────
+
+const PT_COLORS: Record<string, string> = {
+  BEV: "#16a34a", EV: "#16a34a", PHEV: "#2563eb", SHS: "#2563eb",
+  HEV: "#d97706", MHEV: "#ca8a04", ICE: "#4b5563", LPG: "#6b7280",
+};
+function ptColor(pt: string | null): string { return PT_COLORS[pt ?? ""] ?? "#9ca3af"; }
+
+// ── Body component with optional product grouping ──────────────────────
+
+function OrderGeniusBody({
+  rows, groupByProduct, editingCells, savingCells, cellErrors,
+  onStartEdit, onCellChange, onCellSave, visibleColumns, selectedMonth,
+}: {
+  rows: MaterialSkuMatrixRow[];
+  groupByProduct: boolean;
+  editingCells: Record<string, string>;
+  savingCells: Set<string>;
+  cellErrors: Record<string, string>;
+  onStartEdit: (code: string, m: number) => void;
+  onCellChange: (code: string, m: number, v: string) => void;
+  onCellSave: (code: string, m: number, ver: number) => void;
+  visibleColumns: typeof VISIBLE_COLS_DEFAULTS;
+  selectedMonth: number | null;
+}) {
+  if (!groupByProduct) {
+    return (
+      <tbody>
+        {rows.map((r) => (
+          <OrderGeniusRow key={r.materialCode} row={r}
+            editingCells={editingCells} savingCells={savingCells} cellErrors={cellErrors}
+            onStartEdit={onStartEdit} onCellChange={onCellChange} onCellSave={onCellSave}
+            visibleColumns={visibleColumns} selectedMonth={selectedMonth} />
+        ))}
+      </tbody>
+    );
+  }
+
+  // Group by brand+model+version+powertrain
+  const key = (r: MaterialSkuMatrixRow) => `${r.brand}|${r.modelName}|${r.version}|${r.powertrain ?? ""}`;
+  const groups = new Map<string, MaterialSkuMatrixRow[]>();
+  for (const r of rows) { const k = key(r); if (!groups.has(k)) groups.set(k, []); groups.get(k)!.push(r); }
+  const sorted = [...groups.entries()].sort(([, a], [, b]) =>
+    (a.some((r) => r.lifecycleStatus === "active") ? 0 : 1) - (b.some((r) => r.lifecycleStatus === "active") ? 0 : 1)
+  );
+
+  const groupTtl = (grp: MaterialSkuMatrixRow[]) => {
+    const activeMonths = MONTHS.map((_, i) => i + 1).filter((m) => selectedMonth == null || m === selectedMonth);
+    return activeMonths.reduce((s, m) => s + grp.reduce((sum, r) => sum + (r.months[String(m)]?.quantity ?? 0), 0), 0);
+  };
+
+  return (
+    <tbody>
+      {sorted.map(([groupKey, grp]) => {
+        const first = grp[0];
+        const color = ptColor(first.powertrain);
+        const gTtl = groupTtl(grp);
+        const gapRows = grp.sort((a, b) => {
+          if (a.lifecycleStatus !== b.lifecycleStatus) return a.lifecycleStatus === "active" ? -1 : 1;
+          return a.colour.localeCompare(b.colour);
+        });
+        return (
+          <Fragment key={groupKey}>
+            <tr style={{ backgroundColor: `${color}15`, borderTop: `2px solid ${color}` }}>
+              <td colSpan={3} style={{ padding: "6px 8px", fontWeight: 700, color }}>
+                {first.brand} {first.modelName} {first.version}
+                <span style={{ fontWeight: 400, color: "#64748b", marginLeft: 8 }}>
+                  {first.powertrain} · {grp.length} colours · {gTtl.toLocaleString()} units
+                </span>
+              </td>
+              <td colSpan={16} style={{ padding: "6px 8px" }}>
+                {first.remark ? <span style={{ fontSize: 11, color: "#64748b" }}>📝 {first.remark}</span> : null}
+              </td>
+            </tr>
+            {gapRows.map((r) => (
+              <OrderGeniusRow key={r.materialCode} row={r}
+                editingCells={editingCells} savingCells={savingCells} cellErrors={cellErrors}
+                onStartEdit={onStartEdit} onCellChange={onCellChange} onCellSave={onCellSave}
+                visibleColumns={visibleColumns} selectedMonth={selectedMonth} />
+            ))}
+          </Fragment>
+        );
+      })}
+    </tbody>
+  );
+}
+

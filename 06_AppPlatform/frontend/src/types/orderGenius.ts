@@ -21,6 +21,7 @@ export interface MaterialSkuMatrixRow {
   modelName: string;
   version: string;
   colour: string;
+  colourCode: string;
   powertrain: string | null;
   fobEur: number | null;
   lifecycleStatus: string;
