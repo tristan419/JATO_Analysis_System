@@ -41,6 +41,10 @@ export function OrderGeniusPage() {
   const [countries, setCountries] = useState<CountryPaymentTerm[]>([]);
   const [selectedCountry, setSelectedCountry] = useState("");
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState<number | null>(null); // null = all months
+  const [visibleColumns, setVisibleColumns] = useState({
+    months: true, amount: true, ttlQty: true, ttlAmount: true, fob: true, materialCode: true, remark: true,
+  });
   const [brandFilter, setBrandFilter] = useState("");
   const [modelFilter, setModelFilter] = useState("");
   const [powertrainFilter, setPowertrainFilter] = useState("");
@@ -408,11 +412,16 @@ export function OrderGeniusPage() {
           ))}
         </select>
 
-        {selectedPaymentTerm ? (
-          <span style={{ fontSize: 13, color: "#64748b" }}>
-            Payment: {selectedPaymentTerm}
-          </span>
-        ) : null}
+        <select
+          value={selectedMonth ?? ""}
+          onChange={(e) => setSelectedMonth(e.target.value ? Number(e.target.value) : null)}
+          style={{ minWidth: 100 }}
+        >
+          <option value="">All months</option>
+          {MONTHS.map((m, i) => (
+            <option key={m} value={i + 1}>{m}</option>
+          ))}
+        </select>
 
         {options?.brands ? (
           <select
@@ -590,6 +599,21 @@ export function OrderGeniusPage() {
         </div>
       ) : null}
 
+      {/* ── Column visibility ───────────────────────────────────────── */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 8, fontSize: 12 }}>
+        {(["months","amount","ttlQty","ttlAmount","fob","materialCode","remark"] as const).map((col) => (
+          <label key={col} style={{ cursor: "pointer", color: "#475569" }}>
+            <input
+              type="checkbox"
+              checked={visibleColumns[col]}
+              onChange={() => setVisibleColumns((v) => ({ ...v, [col]: !v[col] }))}
+              style={{ marginRight: 4 }}
+            />
+            {{ months: "Months", amount: "Amount", ttlQty: "TTL Qty", ttlAmount: "TTL Amt", fob: "FOB", materialCode: "Material", remark: "Remark" }[col]}
+          </label>
+        ))}
+      </div>
+
       {/* ── Matrix grid ────────────────────────────────────────────── */}
       {loading ? (
         <div style={{ padding: 32, textAlign: "center", color: "#64748b" }}>
@@ -600,23 +624,26 @@ export function OrderGeniusPage() {
           <table className="data-table" style={{ fontSize: 12 }}>
             <thead>
               <tr>
-                <th style={{ position: "sticky", left: 0, background: "#f1f5f9", zIndex: 2 }}>
-                  Model
-                </th>
-                <th style={{ position: "sticky", left: 80, background: "#f1f5f9", zIndex: 2 }}>
-                  Version
-                </th>
-                <th style={{ position: "sticky", left: 180, background: "#f1f5f9", zIndex: 2 }}>
-                  Colour
-                </th>
-                <th style={{ position: "sticky", left: 280, background: "#f1f5f9", zIndex: 2 }}>
-                  Material Code
-                </th>
-                <th style={{ position: "sticky", left: 410, background: "#f1f5f9", zIndex: 2 }}>
-                  FOB(EUR)
-                </th>
-                {MONTHS.map((m) => (<th key={m}>{m}</th>))}
-                <th>TTL</th>
+                <th style={{ position: "sticky", left: 0, background: "#f1f5f9", zIndex: 2 }}>Model</th>
+                <th style={{ position: "sticky", left: 80, background: "#f1f5f9", zIndex: 2 }}>Version</th>
+                <th style={{ position: "sticky", left: 180, background: "#f1f5f9", zIndex: 2 }}>Colour</th>
+                {visibleColumns.materialCode && (
+                  <th style={{ position: "sticky", left: 280, background: "#f1f5f9", zIndex: 2 }}>Material Code</th>
+                )}
+                {visibleColumns.fob && (
+                  <th style={{ position: "sticky", left: 410, background: "#f1f5f9", zIndex: 2 }}>FOB (EUR)</th>
+                )}
+                {visibleColumns.months && MONTHS
+                  .filter((_, i) => selectedMonth == null || i + 1 === selectedMonth)
+                  .map((m) => (<th key={m}>{m}</th>))
+                }
+                {visibleColumns.amount && MONTHS
+                  .filter((_, i) => selectedMonth == null || i + 1 === selectedMonth)
+                  .map((m) => (<th key={`amt-${m}`} style={{ color: "#0f766e" }}>{m} €</th>))
+                }
+                {visibleColumns.ttlQty && <th>TTL</th>}
+                {visibleColumns.ttlAmount && <th style={{ color: "#0f766e" }}>TTL €</th>}
+                {visibleColumns.remark && <th style={{ minWidth: 160 }}>Remark</th>}
               </tr>
             </thead>
             <tbody>
@@ -630,6 +657,8 @@ export function OrderGeniusPage() {
                   onStartEdit={startEdit}
                   onCellChange={handleCellChange}
                   onCellSave={handleCellSave}
+                  visibleColumns={visibleColumns}
+                  selectedMonth={selectedMonth}
                 />
               ))}
             </tbody>
@@ -648,14 +677,12 @@ export function OrderGeniusPage() {
 
 // ── Row component ──────────────────────────────────────────────────────
 
+const VISIBLE_COLS_DEFAULTS = { months: true, amount: true, ttlQty: true, ttlAmount: true, fob: true, materialCode: true, remark: true };
+
 function OrderGeniusRow({
-  row,
-  editingCells,
-  savingCells,
-  cellErrors,
-  onStartEdit,
-  onCellChange,
-  onCellSave,
+  row, editingCells, savingCells, cellErrors,
+  onStartEdit, onCellChange, onCellSave,
+  visibleColumns, selectedMonth,
 }: {
   row: MaterialSkuMatrixRow;
   editingCells: Record<string, string>;
@@ -664,8 +691,13 @@ function OrderGeniusRow({
   onStartEdit: (materialCode: string, month: number) => void;
   onCellChange: (materialCode: string, month: number, value: string) => void;
   onCellSave: (materialCode: string, month: number, version: number) => void;
+  visibleColumns: typeof VISIBLE_COLS_DEFAULTS;
+  selectedMonth: number | null;
 }) {
   const isHistorical = row.lifecycleStatus === "historical";
+  const fob = row.fobEur ?? 0;
+  const activeMonths = MONTHS.map((_, i) => i + 1).filter((m) => selectedMonth == null || m === selectedMonth);
+  const monthTotal = activeMonths.reduce((sum, m) => sum + (row.months[String(m)]?.quantity ?? 0), 0);
   const textStyle: React.CSSProperties = isHistorical
     ? { textDecoration: "line-through", color: "#9ca3af" }
     : {};
@@ -681,78 +713,47 @@ function OrderGeniusRow({
       <td style={{ ...textStyle, position: "sticky", left: 180, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap" }}>
         {row.colour}
       </td>
-      <td style={{ ...textStyle, position: "sticky", left: 280, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap", fontFamily: "monospace" }}>
-        {row.materialCode}
-      </td>
-      <td style={{ ...textStyle, position: "sticky", left: 410, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap", textAlign: "right" }}>
-        {row.fobEur != null ? row.fobEur.toLocaleString() : "-"}
-      </td>
-      {MONTHS.map((_, idx) => {
-        const month = idx + 1;
+      {visibleColumns.materialCode && (
+        <td style={{ ...textStyle, position: "sticky", left: 280, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap", fontFamily: "monospace" }}>
+          {row.materialCode}
+        </td>
+      )}
+      {visibleColumns.fob && (
+        <td style={{ ...textStyle, position: "sticky", left: 410, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap", textAlign: "right" }}>
+          {row.fobEur != null ? row.fobEur.toLocaleString() : "-"}
+        </td>
+      )}
+      {visibleColumns.months && activeMonths.map((month) => {
         const key = `${row.materialCode}_${month}`;
         const monthData = row.months[String(month)];
         const qty = monthData?.quantity ?? 0;
         const isEditing = key in editingCells;
         const isSaving = savingCells.has(key);
         const errMsg = cellErrors[key];
-
         return (
-          <td
-            key={month}
-            style={{
-              textAlign: "center",
-              minWidth: 50,
-              cursor: row.editable ? "pointer" : "default",
-            }}
-            onClick={() => {
-              if (row.editable && !isEditing) {
-                onStartEdit(row.materialCode, month);
-              }
-            }}
+          <td key={month} style={{ textAlign: "center", minWidth: 50, cursor: row.editable ? "pointer" : "default" }}
+            onClick={() => { if (row.editable && !isEditing) onStartEdit(row.materialCode, month); }}
           >
             {isEditing ? (
-              <input
-                type="number"
-                min={0}
-                style={{
-                  width: 48,
-                  textAlign: "center",
-                  border: errMsg ? "1px solid #dc2626" : "1px solid #3b82f6",
-                  borderRadius: 4,
-                }}
-                defaultValue={qty}
-                autoFocus
-                onBlur={(e) => {
-                  onCellChange(row.materialCode, month, e.target.value);
-                  onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1);
-                  }
-                  if (e.key === "Escape") {
-                    onCellChange(row.materialCode, month, "");
-                    onCellSave(row.materialCode, month, 1);
-                  }
-                }}
-                onChange={(e) =>
-                  onCellChange(row.materialCode, month, e.target.value)
-                }
+              <input type="number" min={0} style={{ width: 48, textAlign: "center", border: errMsg ? "1px solid #dc2626" : "1px solid #3b82f6", borderRadius: 4 }}
+                defaultValue={qty} autoFocus
+                onBlur={(e) => { onCellChange(row.materialCode, month, e.target.value); onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1); }}
+                onKeyDown={(e) => { if (e.key === "Enter") onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1); if (e.key === "Escape") { onCellChange(row.materialCode, month, ""); onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1); } }}
+                onChange={(e) => onCellChange(row.materialCode, month, e.target.value)}
               />
-            ) : (
-              <span
-                style={{
-                  color: errMsg ? "#dc2626" : isSaving ? "#3b82f6" : undefined,
-                }}
-                title={errMsg}
-              >
-                {qty}
-              </span>
-            )}
+            ) : <span style={{ color: errMsg ? "#dc2626" : isSaving ? "#3b82f6" : undefined }} title={errMsg}>{qty}</span>}
           </td>
         );
       })}
-      <td style={{ fontWeight: 600, textAlign: "center" }}>{row.ttl}</td>
+      {visibleColumns.amount && activeMonths.map((month) => {
+        const qty = row.months[String(month)]?.quantity ?? 0;
+        return <td key={`amt-${month}`} style={{ textAlign: "right", color: "#0f766e", ...textStyle }}>{(qty * fob).toLocaleString()}</td>;
+      })}
+      {visibleColumns.ttlQty && <td style={{ fontWeight: 700, textAlign: "center", ...textStyle }}>{monthTotal || "-"}</td>}
+      {visibleColumns.ttlAmount && <td style={{ fontWeight: 700, textAlign: "right", color: "#0f766e", ...textStyle }}>{(monthTotal * fob).toLocaleString()}</td>}
+      {visibleColumns.remark && (
+        <td style={{ ...textStyle, fontSize: 11, color: "#64748b", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>{row.remark || ""}</td>
+      )}
     </tr>
   );
 }
