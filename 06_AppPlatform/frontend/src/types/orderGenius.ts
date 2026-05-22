@@ -28,6 +28,8 @@ export interface MaterialSkuMatrixRow {
   editable: boolean;
   displayStyle: string | null;
   remark: string | null;
+  effectiveFrom?: string | null;
+  effectiveTo?: string | null;
   months: Record<string, MonthCell>;
   ttl: number;
 }

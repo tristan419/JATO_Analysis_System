@@ -580,3 +580,35 @@ def list_remark_history(
         .limit(limit)
     )
     return list(session.execute(stmt).scalars().all())
+
+
+def get_material_lifecycle(
+    session: Session, country_code: str, material_code: str,
+) -> list["MaterialLifecycle"]:
+    from app.db.models import MaterialLifecycle
+
+    stmt = (
+        select(MaterialLifecycle)
+        .where(
+            MaterialLifecycle.country_code == country_code,
+            MaterialLifecycle.material_code == material_code,
+        )
+        .order_by(MaterialLifecycle.valid_from.desc())
+    )
+    return list(session.execute(stmt).scalars().all())
+
+
+def list_lifecycle_for_product(
+    session: Session, country_code: str, product_identity: str,
+) -> list["MaterialLifecycle"]:
+    from app.db.models import MaterialLifecycle
+
+    stmt = (
+        select(MaterialLifecycle)
+        .where(
+            MaterialLifecycle.country_code == country_code,
+            MaterialLifecycle.product_identity == product_identity,
+        )
+        .order_by(MaterialLifecycle.valid_from.desc())
+    )
+    return list(session.execute(stmt).scalars().all())

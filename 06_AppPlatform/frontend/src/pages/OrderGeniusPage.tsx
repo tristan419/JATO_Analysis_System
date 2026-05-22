@@ -726,7 +726,14 @@ function OrderGeniusRow({
       </td>
       {visibleColumns.materialCode && (
         <td style={{ ...textStyle, position: "sticky", left: 280, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap", fontFamily: "monospace" }}>
-          {row.materialCode}
+          <div>{row.materialCode}</div>
+          {(row.effectiveFrom || row.effectiveTo) ? (
+            <div style={{ fontSize: 9, color: isHistorical ? "#9ca3af" : "#64748b" }}>
+              {row.effectiveFrom ?? "?"} → {row.effectiveTo || "至今"}
+            </div>
+          ) : row.lifecycleStatus !== "active" ? (
+            <div style={{ fontSize: 9, color: "#9ca3af" }}>Historical</div>
+          ) : null}
         </td>
       )}
       {visibleColumns.fob && (

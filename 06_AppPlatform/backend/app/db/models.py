@@ -1778,3 +1778,58 @@ class MaterialSkuRemarkHistory(Base):
     updated_at_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class MaterialLifecycle(Base):
+    """Country-level material validity timeline.
+
+    Tracks which material_code was active for a given product identity
+    in a specific country during a time window.  Supports material
+    switch-over visibility and historical quantity lookups.
+    """
+
+    __tablename__ = "material_lifecycle"
+    __table_args__ = (
+        Index(
+            "ix_ordering_lifecycle_country_product",
+            "country_code", "product_identity",
+        ),
+        Index(
+            "ix_ordering_lifecycle_material_code",
+            "material_code",
+        ),
+        {"schema": "ordering"},
+    )
+
+    lifecycle_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    material_code: Mapped[str] = mapped_column(Text, nullable=False)
+    product_identity: Mapped[str] = mapped_column(
+        Text, nullable=False,
+        comment="brand|model_name|version|powertrain",
+    )
+    valid_from: Mapped[date] = mapped_column(Date, nullable=False)
+    valid_to: Mapped[date | None] = mapped_column(
+        Date, nullable=True,
+        comment="NULL = currently active",
+    )
+    lifecycle_status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="active",
+        comment="active | phased_out | replaced",
+    )
+    replaced_by_code: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="Replacement material code",
+    )
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"MaterialLifecycle({self.country_code} {self.material_code} "
+            f"{self.valid_from} → {self.valid_to or 'present'})"
+        )

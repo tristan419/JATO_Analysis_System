@@ -417,6 +417,8 @@ def build_matrix(
             "editable": True,
             "displayStyle": None,
             "remark": sku.remark,
+            "effectiveFrom": sku.effective_from_month,
+            "effectiveTo": sku.effective_to_month,
             "months": row_months,
             "ttl": row_ttl,
         })
@@ -459,6 +461,8 @@ def build_matrix(
                 "editable": False,
                 "displayStyle": "strikethrough",
                 "remark": hist_sku.remark,
+                "effectiveFrom": hist_sku.effective_from_month,
+                "effectiveTo": hist_sku.effective_to_month,
                 "months": row_months,
                 "ttl": row_ttl,
             })

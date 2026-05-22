@@ -312,6 +312,34 @@ def get_sku_fob(
     return fob
 
 
+@router.get("/material-lifecycle")
+def get_lifecycle(
+    country: str,
+    material_code: str = "",
+    product_identity: str = "",
+    session: Session = Depends(get_db_session),
+) -> list[dict]:
+    rows = []
+    if product_identity:
+        rows = repo.list_lifecycle_for_product(session, country, product_identity)
+    elif material_code:
+        rows = repo.get_material_lifecycle(session, country, material_code)
+    return [
+        {
+            "lifecycleId": str(r.lifecycle_id),
+            "countryCode": r.country_code,
+            "materialCode": r.material_code,
+            "productIdentity": r.product_identity,
+            "validFrom": r.valid_from.isoformat() if r.valid_from else None,
+            "validTo": r.valid_to.isoformat() if r.valid_to else None,
+            "lifecycleStatus": r.lifecycle_status,
+            "replacedByCode": r.replaced_by_code,
+            "remark": r.remark,
+        }
+        for r in rows
+    ]
+
+
 # ── Excel Export ──────────────────────────────────────────────────────
 
 
