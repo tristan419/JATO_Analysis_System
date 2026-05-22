@@ -401,6 +401,7 @@ def build_matrix(
             row_months[str(month)] = {
                 "quantity": qty,
                 "is_editable": True,
+                "rowVersion": cell.row_version if cell else 1,
             }
 
         rows.append({
@@ -440,6 +441,7 @@ def build_matrix(
             row_months[str(month)] = {
                 "quantity": qty,
                 "is_editable": False,
+                "rowVersion": cell.row_version if cell else 1,
             }
 
         if has_any or row_ttl > 0:

@@ -292,13 +292,30 @@ export function OrderGeniusPage() {
     };
 
     try {
-      await api.updateQuantityCell(payload);
+      const result = await api.updateQuantityCell(payload);
+      // Patch local matrix state with new quantity + rowVersion (no full reload)
+      setMatrix((prev) => {
+        if (!prev) return prev;
+        const rows = prev.rows.map((r) => {
+          if (r.materialCode !== materialCode) return r;
+          const months = { ...r.months };
+          months[String(month)] = {
+            quantity: qty,
+            isEditable: true,
+            rowVersion: result.rowVersion,
+          };
+          const newTtl = Object.values(months).reduce(
+            (sum, m) => sum + m.quantity, 0,
+          );
+          return { ...r, months, ttl: newTtl };
+        });
+        return { ...prev, rows };
+      });
       setEditingCells((prev) => {
         const next = { ...prev };
         delete next[key];
         return next;
       });
-      loadMatrix();
     } catch (err) {
       setCellErrors((prev) => ({ ...prev, [key]: getErrorMessage(err) }));
     } finally {
@@ -707,11 +724,11 @@ function OrderGeniusRow({
                 autoFocus
                 onBlur={(e) => {
                   onCellChange(row.materialCode, month, e.target.value);
-                  onCellSave(row.materialCode, month, 1);
+                  onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1);
                 }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
-                    onCellSave(row.materialCode, month, 1);
+                    onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1);
                   }
                   if (e.key === "Escape") {
                     onCellChange(row.materialCode, month, "");

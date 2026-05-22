@@ -12,6 +12,7 @@ export interface OrderGeniusOptions {
 export interface MonthCell {
   quantity: number;
   isEditable: boolean;
+  rowVersion: number;
 }
 
 export interface MaterialSkuMatrixRow {
