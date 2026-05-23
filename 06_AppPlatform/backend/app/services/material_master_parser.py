@@ -335,11 +335,18 @@ def parse_material_master_xlsx(file_path: Path) -> dict:
             row["brand"] = ""
 
         # Extract powertrain from model name or sheet
+        from app.services.powertrain_normalizer import normalize_powertrain
+
         sn = row["sheet_name"].upper()
-        for pt in ["BEV", "EV", "SHS", "HEV", "PHEV", "ICE"]:
+        mn = row.get("model_name", "").upper()
+        raw_pt = None
+        # Longest-first: PHEV/SHS/MHEV before HEV/EV to avoid substring collision
+        for pt in ("SHS", "PHEV", "MHEV", "HEV", "BEV", "EV", "ICE"):
             if pt in sn or pt in mn:
-                row["powertrain"] = pt
+                raw_pt = pt
                 break
+        if raw_pt:
+            row["powertrain"] = normalize_powertrain(raw_pt)
 
     total_warnings = warnings + [
         f"Row {r['row_index']} ({r['sheet_name']}): {w}"

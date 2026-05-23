@@ -778,9 +778,10 @@ function OrderGeniusRow({
 
 // ── Powertrain colour map ────────────────────────────────────────────────
 
+// Powertrain family colors — must match powertrain_normalizer.py POWERTRAIN_COLORS
 const PT_COLORS: Record<string, string> = {
-  BEV: "#16a34a", EV: "#16a34a", PHEV: "#2563eb", SHS: "#2563eb",
-  HEV: "#d97706", MHEV: "#ca8a04", ICE: "#4b5563", LPG: "#6b7280",
+  EV: "#16a34a", BEV: "#16a34a", HEV: "#d97706", PHEV: "#2563eb", SHS: "#2563eb",
+  MHEV: "#ca8a04", ICE: "#4b5563", LPG: "#6b7280", REEV: "#0d9488", FCV: "#0891b2",
 };
 function ptColor(pt: string | null): string { return PT_COLORS[pt ?? ""] ?? "#9ca3af"; }
 
