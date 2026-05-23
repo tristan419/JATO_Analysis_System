@@ -349,6 +349,7 @@ def get_lifecycle(
 @router.get("/payment-terms/countries")
 def list_country_payment_term_admin(
     session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("admin")),
 ) -> dict:
     """Return all payment term records (active + historical) for Admin panel."""
     rows = repo.list_all_payment_terms(session)
@@ -472,6 +473,7 @@ def check_payment_term_impact(
     validFrom: str = "",
     validTo: str = "",
     session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("admin")),
 ) -> dict:
     """Preview impact of a payment term change on FOB and orders."""
     return _check_fob_impact(session, country, oldPaymentTerm, newPaymentTerm,
