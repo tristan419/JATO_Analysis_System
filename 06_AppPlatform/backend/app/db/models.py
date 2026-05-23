@@ -1841,3 +1841,34 @@ class MaterialLifecycle(Base):
             f"MaterialLifecycle({self.country_code} {self.material_code} "
             f"{self.valid_from} → {self.valid_to or 'present'})"
         )
+
+
+class PaymentTermAuditLog(Base):
+    """Immutable audit trail for payment term changes."""
+
+    __tablename__ = "payment_term_audit_log"
+    __table_args__ = (
+        Index("ix_ordering_pt_audit_country", "country_code"),
+        {"schema": "ordering"},
+    )
+
+    audit_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(
+        Text, nullable=False,
+        comment="create | update | close | correct",
+    )
+    old_payment_term_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_payment_term_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    old_valid_from: Mapped[str | None] = mapped_column(Text, nullable=True)
+    old_valid_to: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_valid_from: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_valid_to: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    impacted_order_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

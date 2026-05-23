@@ -332,6 +332,26 @@ def list_distinct_material_codes(
 # ── Payment Terms ──────────────────────────────────────────────────────
 
 
+def list_all_payment_terms(
+    session: Session,
+) -> list[CountryPaymentTermMaster]:
+    stmt = select(CountryPaymentTermMaster).order_by(
+        CountryPaymentTermMaster.country_code,
+        CountryPaymentTermMaster.valid_from_month.desc().nulls_last(),
+    )
+    return list(session.execute(stmt).scalars().all())
+
+
+def create_payment_term(
+    session: Session, **kw,
+) -> CountryPaymentTermMaster:
+    row = CountryPaymentTermMaster(
+        country_payment_term_id=uuid4(), **kw,
+    )
+    session.add(row)
+    return row
+
+
 def get_country_payment_term(
     session: Session, country_code: str, order_month: str | None = None,
 ) -> CountryPaymentTermMaster | None:

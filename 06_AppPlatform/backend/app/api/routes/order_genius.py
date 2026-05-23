@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import io
+from uuid import UUID
 import uuid as uuid_module
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.api.order_genius_schemas import (
@@ -18,6 +20,7 @@ from app.api.order_genius_schemas import (
 )
 from app.core.config import PROJECT_ROOT
 from app.core.security import require_min_role
+from app.db.models import CountryPaymentTermMaster, PaymentTermAuditLog
 from app.db.session import get_db_session
 from app.infra import order_genius_repository as repo
 from app.services import material_master_upload_service as upload_svc
@@ -338,6 +341,200 @@ def get_lifecycle(
         }
         for r in rows
     ]
+
+
+# ── Payment Term Admin ──────────────────────────────────────────────
+
+
+@router.get("/payment-terms/countries")
+def list_country_payment_term_admin(
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Return all payment term records (active + historical) for Admin panel."""
+    rows = repo.list_all_payment_terms(session)
+    return {
+        "items": [
+            {
+                "id": str(r.country_payment_term_id),
+                "countryCode": r.country_code,
+                "countryName": r.country_name,
+                "paymentTermCode": r.payment_term_code,
+                "paymentMethod": r.payment_method,
+                "lcDays": r.lc_days,
+                "validFrom": r.valid_from_month,
+                "validTo": r.valid_to_month,
+                "isActive": r.is_active,
+                "remark": r.remark,
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.post("/payment-terms/countries")
+def create_payment_term(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("admin")),
+) -> dict:
+    """Create a new payment term for a country."""
+    code = body["countryCode"]
+    if _has_overlap(session, code, body.get("validFrom"), body.get("validTo")):
+        raise HTTPException(status_code=409, detail="Overlap with existing active term")
+    row = repo.create_payment_term(
+        session,
+        country_code=code,
+        country_name=body.get("countryName", code),
+        payment_term_code=body["paymentTermCode"],
+        payment_method=body.get("paymentMethod", "LC"),
+        lc_days=body.get("lcDays", 0),
+        valid_from=body.get("validFrom"),
+        valid_to=body.get("validTo"),
+        remark=body.get("remark"),
+    )
+    session.commit()
+    _audit(session, code, "create", actor=user.name, new_pt=row.payment_term_code,
+           new_from=row.valid_from_month, new_to=row.valid_to_month)
+    session.commit()
+    return {"id": str(row.country_payment_term_id)}
+
+
+@router.patch("/payment-terms/countries/{term_id}")
+def update_payment_term(
+    term_id: str,
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("admin")),
+) -> dict:
+    """Update a payment term. If modifying historical months, returns impact."""
+    row = session.get(CountryPaymentTermMaster, UUID(term_id))
+    if not row:
+        raise HTTPException(status_code=404)
+
+    is_correction = body.get("correction", False)
+    old_pt = row.payment_term_code
+    old_from = row.valid_from_month
+    old_to = row.valid_to_month
+
+    if body.get("validFrom") is not None:
+        row.valid_from_month = body["validFrom"]
+    if body.get("validTo") is not None:
+        row.valid_to_month = body["validTo"]
+    if body.get("paymentTermCode"):
+        row.payment_term_code = body["paymentTermCode"]
+    if body.get("remark") is not None:
+        row.remark = body["remark"]
+    row.is_active = body.get("isActive", row.is_active)
+
+    impact = _check_fob_impact(session, row.country_code, old_pt, row.payment_term_code,
+                                row.valid_from_month, row.valid_to_month)
+
+    session.commit()
+    action = "correct" if is_correction else "update"
+    _audit(session, row.country_code, action, actor=user.name,
+           old_pt=old_pt, new_pt=row.payment_term_code,
+           old_from=old_from, old_to=old_to,
+           new_from=row.valid_from_month, new_to=row.valid_to_month,
+           impacted=impact.get("orderMonths", 0))
+    session.commit()
+    return {"id": str(row.country_payment_term_id), "impact": impact}
+
+
+@router.post("/payment-terms/countries/{term_id}/close")
+def close_payment_term(
+    term_id: str,
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("admin")),
+) -> dict:
+    """End a payment term's validity at a given month."""
+    row = session.get(CountryPaymentTermMaster, UUID(term_id))
+    if not row:
+        raise HTTPException(status_code=404)
+    end_month = body.get("endMonth")  # YYYY-MM
+    if not end_month:
+        raise HTTPException(status_code=400, detail="endMonth required")
+    row.valid_to_month = end_month
+    if body.get("deactivate"):
+        row.is_active = False
+    session.commit()
+    _audit(session, row.country_code, "close", actor=user.name,
+           old_pt=row.payment_term_code, old_from=row.valid_from_month, old_to=end_month)
+    session.commit()
+    return {"id": str(row.country_payment_term_id)}
+
+
+@router.get("/payment-terms/countries/impact")
+def check_payment_term_impact(
+    country: str,
+    oldPaymentTerm: str,
+    newPaymentTerm: str,
+    validFrom: str = "",
+    validTo: str = "",
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Preview impact of a payment term change on FOB and orders."""
+    return _check_fob_impact(session, country, oldPaymentTerm, newPaymentTerm,
+                              validFrom, validTo)
+
+
+def _has_overlap(session: Session, country: str, vf: str | None, vt: str | None) -> bool:
+    if not vf:
+        return False
+    conditions = ["country_code = :c", "is_active = true"]
+    params = {"c": country}
+    if vt:
+        conditions.append("valid_from_month <= :vt AND (valid_to_month IS NULL OR valid_to_month >= :vf)")
+        params["vt"] = vt
+        params["vf"] = vf
+    else:
+        conditions.append("(valid_to_month IS NULL OR valid_to_month >= :vf)")
+        params["vf"] = vf
+    sql = f"SELECT 1 FROM ordering.country_payment_term_master WHERE {' AND '.join(conditions)} LIMIT 1"
+    r = session.execute(text(sql), params).fetchone()
+    return r is not None
+
+
+def _check_fob_impact(session: Session, country: str, old_pt: str, new_pt: str,
+                      vf: str | None, vt: str | None) -> dict:
+    """Count FOB rows and order rows potentially affected by a PT change."""
+    months = []
+    if vf:
+        months = [vf]
+        if vt:
+            months.append(vt)
+    fob_count = 0
+    order_count = 0
+    if months:
+        r = session.execute(
+            text("SELECT COUNT(*) FROM ordering.country_sku_fob_resolved "
+                 "WHERE country_code=:c AND payment_term_code=:p"),
+            {"c": country, "p": old_pt},
+        ).fetchone()
+        fob_count = r[0] if r else 0
+        r = session.execute(
+            text("SELECT COUNT(DISTINCT order_year||'-'||LPAD(order_month::text,2,'0')) "
+                 "FROM ordering.order_quantity_cell "
+                 "WHERE country_code=:c AND order_year||'-'||LPAD(order_month::text,2,'0') BETWEEN :vf AND COALESCE(:vt,:vf)"),
+            {"c": country, "vf": vf, "vt": vt or vf},
+        ).fetchone()
+        order_count = r[0] if r else 0
+    return {
+        "fobRows": fob_count,
+        "orderMonths": order_count,
+        "message": (
+            f"Changing {country} payment term from {old_pt} to {new_pt}. "
+            f"{fob_count} FOB rows, {order_count} order months affected. "
+            "Order snapshots WILL NOT be recalculated. "
+            "Run FOB Check separately if FOB values need correction."
+        ) if (fob_count or order_count) else None,
+    }
+
+
+def _audit(session: Session, country: str, action: str, **kw) -> None:
+    session.add(PaymentTermAuditLog(
+        country_code=country, action=action, **kw,
+    ))
 
 
 # ── Excel Export ──────────────────────────────────────────────────────
