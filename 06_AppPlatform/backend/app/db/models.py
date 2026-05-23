@@ -1610,6 +1610,14 @@ class CountryPaymentTermMaster(TimestampMixin, Base):
     payment_method: Mapped[str] = mapped_column(Text, nullable=False)
     lc_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    valid_from_month: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="YYYY-MM when this term became effective",
+    )
+    valid_to_month: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="YYYY-MM when this term ended; NULL = still effective",
+    )
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
