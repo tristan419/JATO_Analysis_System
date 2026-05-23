@@ -1,6 +1,7 @@
-# Order Genius Implementation Roadmap
+# Order Genius Implementation Roadmap (V1)
 
-> Status: P0 done. P1-P5 pending. Updated 2026-05-22.
+> Status: P0-P5 complete. V2 spec at [ORDER_GENIUS_V2_SPEC.md](./ORDER_GENIUS_V2_SPEC.md).
+> Updated 2026-05-23.
 
 ## Architecture overview
 
