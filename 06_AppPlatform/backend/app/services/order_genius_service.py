@@ -345,8 +345,9 @@ def build_matrix(
 
     Returns rows with Model, Version, Colour, Material Code, FOB, Jan-Dec, TTL.
     """
-    # Get country payment term
-    country_pt = repo.get_country_payment_term(session, country_code)
+    # Get country payment term valid for this order year
+    order_month_hint = f"{year}-01"  # use January of the order year
+    country_pt = repo.get_country_payment_term(session, country_code, order_month_hint)
     payment_term_code = country_pt.payment_term_code if country_pt else None
     country_name = country_pt.country_name if country_pt else None
 

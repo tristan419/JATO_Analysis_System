@@ -333,12 +333,25 @@ def list_distinct_material_codes(
 
 
 def get_country_payment_term(
-    session: Session, country_code: str
+    session: Session, country_code: str, order_month: str | None = None,
 ) -> CountryPaymentTermMaster | None:
+    """Return the payment term for *country_code*.
+
+    When *order_month* is given (YYYY-MM), the term valid at that time is
+    returned.  Otherwise the currently active term is returned.
+    """
     stmt = select(CountryPaymentTermMaster).where(
         CountryPaymentTermMaster.country_code == country_code,
         CountryPaymentTermMaster.is_active == True,
     )
+    if order_month:
+        stmt = stmt.where(
+            CountryPaymentTermMaster.valid_from_month <= order_month,
+            (
+                CountryPaymentTermMaster.valid_to_month.is_(None)
+                | (CountryPaymentTermMaster.valid_to_month >= order_month)
+            ),
+        )
     return session.execute(stmt).scalars().first()
 
 
