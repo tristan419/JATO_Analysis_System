@@ -53,6 +53,7 @@ export function OrderGeniusPage() {
   const [colourFilter, setColourFilter] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
   const [groupByProduct, setGroupByProduct] = useState(true);
+  const [showPtAdmin, setShowPtAdmin] = useState(false);
 
   const [options, setOptions] = useState<OrderGeniusOptions | null>(null);
   const [matrix, setMatrix] = useState<MatrixResponse | null>(null);
@@ -484,6 +485,12 @@ export function OrderGeniusPage() {
           Group by product
         </label>
 
+        <button type="button" className="btn btn-sm btn-ghost"
+                onClick={() => setShowPtAdmin(!showPtAdmin)}
+                style={showPtAdmin ? { background: "#0f766e", color: "#fff" } : undefined}>
+          {showPtAdmin ? "Hide PT Admin" : "Payment Terms"}
+        </button>
+
         <button type="button" className="btn btn-sm btn-primary" onClick={loadMatrix}>
           Refresh
         </button>
@@ -682,6 +689,9 @@ export function OrderGeniusPage() {
             : "Select a country to view the order matrix."}
         </div>
       )}
+
+      {/* ── Payment Terms Admin ────────────────────────────────────── */}
+      {showPtAdmin && <PaymentTermAdminPanel />}
     </section>
   );
 }
@@ -861,6 +871,145 @@ function OrderGeniusBody({
         );
       })}
     </tbody>
+  );
+}
+
+// ── Payment Terms Admin Panel ──────────────────────────────────────────
+
+function PaymentTermAdminPanel() {
+  const [pts, setPts] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [impact, setImpact] = useState<Record<string, any> | null>(null);
+  const [confirmMsg, setConfirmMsg] = useState("");
+
+  const authHeaders = (): Record<string, string> => {
+    const t = localStorage.getItem("jato_auth_token");
+    return t ? { "X-Auth-Token": t } : {};
+  };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/v1/order-genius/payment-terms/countries", { headers: authHeaders() });
+      if (res.ok) setPts((await res.json()).items || []);
+    } catch { /* */ }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const startEdit = (row: any) => {
+    setEditingId(row.id);
+    setEditForm({ paymentTermCode: row.paymentTermCode, validFrom: row.validFrom || "", validTo: row.validTo || "", remark: row.remark || "" });
+    setImpact(null);
+    setConfirmMsg("");
+  };
+
+  const cancelEdit = () => { setEditingId(null); setImpact(null); setConfirmMsg(""); };
+
+  const saveEdit = async (row: any) => {
+    const isCorrect = row.validFrom && row.validFrom < "2026-07";
+    if (isCorrect && !confirmMsg) {
+      try {
+        const params = new URLSearchParams({ country: row.countryCode, oldPaymentTerm: row.paymentTermCode, newPaymentTerm: editForm.paymentTermCode || row.paymentTermCode, validFrom: editForm.validFrom || row.validFrom || "", validTo: editForm.validTo || row.validTo || "" });
+        const res = await fetch("/v1/order-genius/payment-terms/countries/impact?" + params, { headers: authHeaders() });
+        if (res.ok) {
+          const imp = await res.json();
+          setImpact(imp);
+          if (imp.fobRows > 0 || imp.orderMonths > 0) {
+            setConfirmMsg(imp.message || "This change affects existing data. Confirm?");
+            return;
+          }
+        }
+      } catch { /* */ }
+    }
+    try {
+      const res = await fetch("/v1/order-genius/payment-terms/countries/" + row.id, {
+        method: "PATCH", headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ ...editForm, correction: isCorrect }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      cancelEdit();
+      load();
+    } catch (e) { alert(getErrorMessage(e)); }
+  };
+
+  const confirmSave = () => { setConfirmMsg(""); const row = pts.find((r: any) => r.id === editingId); if (row) saveEdit(row); };
+
+  if (loading) return <div style={{ padding: 16, color: "#64748b" }}>Loading payment terms...</div>;
+
+  return (
+    <div className="card crud-card" style={{ padding: 16, marginTop: 16 }}>
+      <h3 style={{ margin: "0 0 12px" }}>Payment Terms Admin</h3>
+      <p style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
+        Modifications to historical periods show impact but do NOT recalculate existing order snapshots.
+      </p>
+      {confirmMsg ? (
+        <div style={{ background: "#fef3c7", border: "1px solid #f59e0b", padding: 12, marginBottom: 12, borderRadius: 6 }}>
+          <strong>⚠️ Impact Warning</strong>
+          <p style={{ fontSize: 13, margin: "4px 0" }}>{confirmMsg}</p>
+          {impact ? <p style={{ fontSize: 12, color: "#64748b" }}>FOB rows: {impact.fobRows} · Order months: {impact.orderMonths}</p> : null}
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button className="btn btn-sm btn-primary" onClick={confirmSave}>Confirm & Save</button>
+            <button className="btn btn-sm btn-ghost" onClick={cancelEdit}>Cancel</button>
+          </div>
+        </div>
+      ) : null}
+      <div style={{ overflowX: "auto" }}>
+        <table className="data-table" style={{ fontSize: 12 }}>
+          <thead>
+            <tr>
+              <th>Country</th><th>Term</th><th>Valid From</th><th>Valid To</th><th>Status</th><th>Remark</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {pts.map((row: any) => {
+              const isEditing = editingId === row.id;
+              return (
+                <tr key={row.id} style={!row.isActive ? { opacity: 0.6 } : undefined}>
+                  <td>{row.countryCode} {row.countryName}</td>
+                  <td>
+                    {isEditing ? (
+                      <select value={editForm.paymentTermCode} onChange={(e) => setEditForm({ ...editForm, paymentTermCode: e.target.value })} style={{ width: 80 }}>
+                        {["TT","LC60","LC90","LC120"].map((pt) => <option key={pt} value={pt}>{pt}</option>)}
+                      </select>
+                    ) : row.paymentTermCode}
+                  </td>
+                  <td>
+                    {isEditing ? (
+                      <input type="text" value={editForm.validFrom} onChange={(e) => setEditForm({ ...editForm, validFrom: e.target.value })} style={{ width: 80 }} placeholder="YYYY-MM" />
+                    ) : (row.validFrom || "—")}
+                  </td>
+                  <td>
+                    {isEditing ? (
+                      <input type="text" value={editForm.validTo} onChange={(e) => setEditForm({ ...editForm, validTo: e.target.value })} style={{ width: 80 }} placeholder="YYYY-MM or blank" />
+                    ) : (row.validTo || "至今")}
+                  </td>
+                  <td style={{ color: row.isActive ? "#16a34a" : "#9ca3af" }}>{row.isActive ? "Active" : "Inactive"}</td>
+                  <td style={{ maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {isEditing ? (
+                      <input type="text" value={editForm.remark} onChange={(e) => setEditForm({ ...editForm, remark: e.target.value })} style={{ width: 120 }} />
+                    ) : (row.remark || "")}
+                  </td>
+                  <td>
+                    {isEditing ? (
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button className="btn btn-sm btn-primary" onClick={() => saveEdit(row)}>Save</button>
+                        <button className="btn btn-sm btn-ghost" onClick={cancelEdit}>Cancel</button>
+                      </div>
+                    ) : (
+                      <button className="btn btn-sm btn-ghost" onClick={() => startEdit(row)} disabled={!row.isActive && !row.validFrom}>Edit</button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
