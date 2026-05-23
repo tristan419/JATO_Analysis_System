@@ -66,6 +66,8 @@ def seed() -> None:
         )
 
         # --- Country payment terms ---
+        # 2026-05-23: corrected to latest business values.
+        # RO: LC90→LC120, SE: LC60→LC90, HU/FI/LV/PL/AT/CZ/GR: TT→LC90
         conn.execute(
             text(
                 """
@@ -74,22 +76,29 @@ def seed() -> None:
                      payment_term_code, payment_method, lc_days,
                      is_active, created_at_utc, updated_at_utc)
                 VALUES
-                    (gen_random_uuid(), 'RO', 'Romania',         'LC90',  'LC', 90,  true, now(), now()),
-                    (gen_random_uuid(), 'CZ', 'Czech Republic',  'TT',    'TT', 0,   true, now(), now()),
-                    (gen_random_uuid(), 'SE', 'Sweden',          'LC60',  'LC', 60,  true, now(), now()),
-                    (gen_random_uuid(), 'FI', 'Finland',         'LC120', 'LC', 120, true, now(), now()),
+                    (gen_random_uuid(), 'AT', 'Austria',         'LC90',  'LC', 90,  true, now(), now()),
+                    (gen_random_uuid(), 'BG', 'Bulgaria',        'LC120', 'LC', 120, true, now(), now()),
+                    (gen_random_uuid(), 'CZ', 'Czech Republic',  'LC90',  'LC', 90,  true, now(), now()),
+                    (gen_random_uuid(), 'FI', 'Finland',         'LC90',  'LC', 90,  true, now(), now()),
+                    (gen_random_uuid(), 'GR', 'Greece',          'LC90',  'LC', 90,  true, now(), now()),
                     (gen_random_uuid(), 'HR', 'Croatia',         'TT',    'TT', 0,   true, now(), now()),
-                    (gen_random_uuid(), 'GR', 'Greece',          'TT',    'TT', 0,   true, now(), now()),
-                    (gen_random_uuid(), 'AT', 'Austria',         'TT',    'TT', 0,   true, now(), now()),
-                    (gen_random_uuid(), 'HU', 'Hungary',         'TT',    'TT', 0,   true, now(), now()),
-                    (gen_random_uuid(), 'LV', 'Latvia',          'TT',    'TT', 0,   true, now(), now()),
-                    (gen_random_uuid(), 'PL', 'Poland',          'TT',    'TT', 0,   true, now(), now())
-                ON CONFLICT DO NOTHING
+                    (gen_random_uuid(), 'HU', 'Hungary',         'LC90',  'LC', 90,  true, now(), now()),
+                    (gen_random_uuid(), 'LV', 'Latvia',          'LC90',  'LC', 90,  true, now(), now()),
+                    (gen_random_uuid(), 'PL', 'Poland',          'LC90',  'LC', 90,  true, now(), now()),
+                    (gen_random_uuid(), 'RO', 'Romania',         'LC120', 'LC', 120, true, now(), now()),
+                    (gen_random_uuid(), 'SE', 'Sweden',          'LC90',  'LC', 90,  true, now(), now())
+                ON CONFLICT (country_code) DO UPDATE SET
+                    payment_term_code = EXCLUDED.payment_term_code,
+                    payment_method    = EXCLUDED.payment_method,
+                    lc_days           = EXCLUDED.lc_days,
+                    is_active         = true,
+                    updated_at_utc    = now()
                 """
             )
         )
 
         # --- Explicit FOB source mappings ---
+        # RO uses Croatia FOB — updated to LC120 (was LC90).
         conn.execute(
             text(
                 """
@@ -98,11 +107,13 @@ def seed() -> None:
                      target_payment_term_code, source_country_code, is_active,
                      remark, created_at_utc, updated_at_utc)
                 VALUES
-                    (gen_random_uuid(), 'RO', 'LC90',  'HR', true,
+                    (gen_random_uuid(), 'RO', 'LC120', 'HR', true,
                      'Romania uses Croatia uploaded FOB when RO price is absent', now(), now()),
                     (gen_random_uuid(), 'FI', 'LC120', 'SE', true,
                      'Finland uses Sweden uploaded FOB when FI price is absent', now(), now())
-                ON CONFLICT DO NOTHING
+                ON CONFLICT (target_country_code, target_payment_term_code)
+                WHERE is_active = true
+                DO NOTHING
                 """
             )
         )
