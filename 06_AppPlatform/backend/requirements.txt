@@ -14,3 +14,4 @@ psycopg[binary]==3.2.9
 python-calamine>=0.3.1
 scrapling[fetchers]>=0.4
 redis[hiredis]>=5.0
+requests>=2.32
