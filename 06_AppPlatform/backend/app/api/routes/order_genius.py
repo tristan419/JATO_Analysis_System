@@ -389,8 +389,8 @@ def create_payment_term(
         payment_term_code=body["paymentTermCode"],
         payment_method=body.get("paymentMethod", "LC"),
         lc_days=body.get("lcDays", 0),
-        valid_from=body.get("validFrom"),
-        valid_to=body.get("validTo"),
+        valid_from_month=body.get("validFrom"),
+        valid_to_month=body.get("validTo"),
         remark=body.get("remark"),
     )
     session.commit()

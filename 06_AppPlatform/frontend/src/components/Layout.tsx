@@ -1,14 +1,25 @@
 import { useEffect } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../contexts/AuthContext";
 import { CountryChatWidget } from "./CountryChatWidget";
 import { MegaMenu } from "./MegaMenu";
 import { PresenceWidget } from "./PresenceWidget";
 
 export function Layout() {
+  const { user, profileLoaded } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+
   useEffect(() => {
     document.documentElement.style.scrollBehavior = "auto";
     return () => { document.documentElement.style.scrollBehavior = ""; };
   }, []);
+
+  useEffect(() => {
+    if (!profileLoaded || !user || user.profileComplete) return;
+    if (location.pathname === "/account/country-setup") return;
+    navigate("/account/country-setup", { replace: true });
+  }, [location.pathname, navigate, profileLoaded, user]);
 
   return (
     <div className="app-root">

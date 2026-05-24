@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import (
@@ -50,6 +50,62 @@ class LoginResponse(BaseModel):
     token: str
     username: str
     role: str
+    primaryCountry: str | None = None
+    secondaryCountries: list[str] = Field(default_factory=list)
+    preferredLandingPage: str | None = None
+    profileComplete: bool = False
+
+
+class UserProfileBody(BaseModel):
+    primary_country: str | None = Field(default=None, alias="primaryCountry")
+    secondary_countries: list[str] = Field(
+        default_factory=list,
+        alias="secondaryCountries",
+    )
+    preferred_landing_page: str | None = Field(
+        default=None,
+        alias="preferredLandingPage",
+    )
+
+    model_config = {"populate_by_name": True}
+
+
+def _normalize_country_code(value: str | None) -> str | None:
+    code = str(value or "").strip().upper()
+    if not code:
+        return None
+    if len(code) > 8:
+        raise HTTPException(status_code=400, detail="Invalid country code")
+    return code
+
+
+def _normalize_secondary_countries(
+    values: list[str] | None,
+    primary: str | None,
+) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw in values or []:
+        code = _normalize_country_code(raw)
+        if not code or code == primary or code in seen:
+            continue
+        seen.add(code)
+        result.append(code)
+    return result
+
+
+def _user_payload(user: User) -> dict:
+    secondary = user.secondary_country_codes or []
+    return {
+        "id": str(user.id),
+        "username": user.username,
+        "role": user.role,
+        "isActive": user.is_active,
+        "primaryCountry": user.primary_country_code,
+        "secondaryCountries": secondary,
+        "preferredLandingPage": user.preferred_landing_page,
+        "profileComplete": bool(user.primary_country_code),
+    }
 
 
 @router.post("/login")
@@ -68,6 +124,10 @@ def login(
         token=token,
         username=user.username,
         role=user.role,
+        primaryCountry=user.primary_country_code,
+        secondaryCountries=user.secondary_country_codes or [],
+        preferredLandingPage=user.preferred_landing_page,
+        profileComplete=bool(user.primary_country_code),
     )
 
 
@@ -99,9 +159,48 @@ def register(
 
 
 @router.get("/me")
-def me(user: UserContext = Depends(get_current_user)) -> dict:
+def me(
+    db: Session = Depends(get_db_session),
+    user: UserContext = Depends(get_current_user),
+) -> dict:
     """Return the current authenticated user."""
-    return {"username": user.name, "role": user.role}
+    db_user = db.query(User).filter(User.username == user.name).first()
+    if not db_user:
+        return {
+            "username": user.name,
+            "role": user.role,
+            "primaryCountry": None,
+            "secondaryCountries": [],
+            "preferredLandingPage": None,
+            "profileComplete": False,
+        }
+    return _user_payload(db_user)
+
+
+@router.patch("/me/profile")
+def update_my_profile(
+    body: UserProfileBody,
+    db: Session = Depends(get_db_session),
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Update the current user's country preferences."""
+    db_user = db.query(User).filter(User.username == user.name).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    primary = _normalize_country_code(body.primary_country)
+    db_user.primary_country_code = primary
+    db_user.secondary_country_codes = _normalize_secondary_countries(
+        body.secondary_countries,
+        primary,
+    )
+    db_user.preferred_landing_page = (
+        str(body.preferred_landing_page).strip()
+        if body.preferred_landing_page
+        else None
+    )
+    db.commit()
+    db.refresh(db_user)
+    return _user_payload(db_user)
 
 
 @router.post("/logout")
@@ -148,6 +247,33 @@ def update_user_role(
     return {"id": str(user.id), "username": user.username, "role": user.role}
 
 
+@router.patch("/users/{user_id}/profile")
+def update_user_profile(
+    user_id: str,
+    body: UserProfileBody,
+    db: Session = Depends(get_db_session),
+    _: UserContext = Depends(require_min_role("admin")),
+) -> dict:
+    """Update a user's country preferences. Admin only."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    primary = _normalize_country_code(body.primary_country)
+    user.primary_country_code = primary
+    user.secondary_country_codes = _normalize_secondary_countries(
+        body.secondary_countries,
+        primary,
+    )
+    user.preferred_landing_page = (
+        str(body.preferred_landing_page).strip()
+        if body.preferred_landing_page
+        else None
+    )
+    db.commit()
+    db.refresh(user)
+    return _user_payload(user)
+
+
 # ── Role Upgrade Requests ────────────────────────────────────────
 
 
@@ -166,15 +292,18 @@ def request_role_upgrade(
     db: Session = Depends(get_db_session),
     user: UserContext = Depends(get_current_user),
 ) -> dict:
-    if body.requested_role not in ("editor", "admin"):
-        raise HTTPException(status_code=400, detail="Invalid requested role")
+    if body.requested_role != "editor":
+        raise HTTPException(
+            status_code=400,
+            detail="Users can only request editor access; admin is assigned manually.",
+        )
     if ROLE_LEVEL.get(body.requested_role, 0) <= ROLE_LEVEL.get(user.role, 0):
         raise HTTPException(status_code=400, detail="Cannot downgrade or request same level")
 
     existing = (
         db.query(RoleUpgradeRequest)
         .filter(
-            RoleUpgradeRequest.user_id == user.name,  # username as join
+            RoleUpgradeRequest.username == user.name,
             RoleUpgradeRequest.status == "pending",
         )
         .first()
@@ -183,8 +312,10 @@ def request_role_upgrade(
         raise HTTPException(status_code=409, detail="You already have a pending request")
 
     db_user = db.query(User).filter(User.username == user.name).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="Stored user not found")
     req = RoleUpgradeRequest(
-        user_id=db_user.id if db_user else None,
+        user_id=db_user.id,
         username=user.name,
         current_role=user.role,
         requested_role=body.requested_role,
@@ -250,6 +381,11 @@ def review_role_upgrade(
     req.reviewed_at_utc = datetime.now(timezone.utc)
 
     if body.status == "approved":
+        if req.requested_role != "editor":
+            raise HTTPException(
+                status_code=400,
+                detail="Only editor requests can be approved through this flow",
+            )
         db_user = db.query(User).filter(User.username == req.username).first()
         if db_user:
             db_user.role = req.requested_role

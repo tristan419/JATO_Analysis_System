@@ -8,16 +8,29 @@ import {
   type ReactNode,
 } from "react";
 
-interface User {
+export interface User {
   username: string;
   role: string;
+  primaryCountry: string | null;
+  secondaryCountries: string[];
+  preferredLandingPage: string | null;
+  profileComplete: boolean;
 }
 
 interface AuthContextValue {
   user: User | null;
   token: string | null;
+  profileLoaded: boolean;
   login: (username: string, password: string) => Promise<void>;
+  refreshUser: () => Promise<void>;
+  updateProfile: (payload: UserProfileUpdate) => Promise<User>;
   logout: () => void;
+}
+
+export interface UserProfileUpdate {
+  primaryCountry: string | null;
+  secondaryCountries: string[];
+  preferredLandingPage?: string | null;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -25,11 +38,73 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const STORAGE_TOKEN = "jato_auth_token";
 const STORAGE_USER = "jato_user_name";
 const STORAGE_ROLE = "jato_user_role";
+const STORAGE_PRIMARY_COUNTRY = "jato_primary_country";
+const STORAGE_SECONDARY_COUNTRIES = "jato_secondary_countries";
+const STORAGE_PREFERRED_LANDING = "jato_preferred_landing_page";
+
+function normalizeUserPayload(data: Record<string, unknown>): User {
+  const secondary = Array.isArray(data.secondaryCountries)
+    ? data.secondaryCountries.map((item) => String(item)).filter(Boolean)
+    : [];
+  const primaryCountry = data.primaryCountry
+    ? String(data.primaryCountry)
+    : null;
+  return {
+    username: String(data.username ?? ""),
+    role: String(data.role ?? "viewer"),
+    primaryCountry,
+    secondaryCountries: secondary,
+    preferredLandingPage: data.preferredLandingPage
+      ? String(data.preferredLandingPage)
+      : null,
+    profileComplete: Boolean(data.profileComplete ?? primaryCountry),
+  };
+}
+
+function storeUser(user: User): void {
+  localStorage.setItem(STORAGE_USER, user.username);
+  localStorage.setItem(STORAGE_ROLE, user.role);
+  if (user.primaryCountry) {
+    localStorage.setItem(STORAGE_PRIMARY_COUNTRY, user.primaryCountry);
+  } else {
+    localStorage.removeItem(STORAGE_PRIMARY_COUNTRY);
+  }
+  localStorage.setItem(
+    STORAGE_SECONDARY_COUNTRIES,
+    JSON.stringify(user.secondaryCountries),
+  );
+  if (user.preferredLandingPage) {
+    localStorage.setItem(STORAGE_PREFERRED_LANDING, user.preferredLandingPage);
+  } else {
+    localStorage.removeItem(STORAGE_PREFERRED_LANDING);
+  }
+}
 
 function loadUser(): User | null {
   const username = localStorage.getItem(STORAGE_USER);
   const role = localStorage.getItem(STORAGE_ROLE);
-  if (username && role) return { username, role };
+  if (username && role) {
+    let secondaryCountries: string[] = [];
+    try {
+      const parsed = JSON.parse(
+        localStorage.getItem(STORAGE_SECONDARY_COUNTRIES) || "[]",
+      );
+      if (Array.isArray(parsed)) {
+        secondaryCountries = parsed.map((item) => String(item)).filter(Boolean);
+      }
+    } catch {
+      secondaryCountries = [];
+    }
+    const primaryCountry = localStorage.getItem(STORAGE_PRIMARY_COUNTRY);
+    return {
+      username,
+      role,
+      primaryCountry,
+      secondaryCountries,
+      preferredLandingPage: localStorage.getItem(STORAGE_PREFERRED_LANDING),
+      profileComplete: Boolean(primaryCountry),
+    };
+  }
   return null;
 }
 
@@ -38,6 +113,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(
     () => localStorage.getItem(STORAGE_TOKEN) || null,
   );
+  const [profileLoaded, setProfileLoaded] = useState(false);
+
+  const applyUser = useCallback((nextUser: User) => {
+    storeUser(nextUser);
+    setUser(nextUser);
+  }, []);
+
+  const refreshUser = useCallback(async () => {
+    const currentToken = localStorage.getItem(STORAGE_TOKEN);
+    if (!currentToken) {
+      setProfileLoaded(true);
+      return;
+    }
+    const res = await fetch("/v1/auth/me", {
+      headers: {
+        "X-Auth-Token": currentToken,
+        "X-User-Name": localStorage.getItem(STORAGE_USER) || "anonymous",
+      },
+    });
+    if (!res.ok) {
+      setProfileLoaded(true);
+      return;
+    }
+    const data = await res.json();
+    applyUser(normalizeUserPayload(data as Record<string, unknown>));
+    setProfileLoaded(true);
+  }, [applyUser]);
 
   // Handle Feishu OAuth callback (token in URL params)
   useEffect(() => {
@@ -47,16 +149,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const urlRole = params.get("role");
     if (urlToken && urlUser) {
       localStorage.setItem(STORAGE_TOKEN, urlToken);
-      localStorage.setItem(STORAGE_USER, urlUser);
-      localStorage.setItem(STORAGE_ROLE, urlRole || "viewer");
       localStorage.removeItem("shared-filter-scope");
       setToken(urlToken);
-      setUser({ username: urlUser, role: urlRole || "viewer" });
+      applyUser({
+        username: urlUser,
+        role: urlRole || "viewer",
+        primaryCountry: null,
+        secondaryCountries: [],
+        preferredLandingPage: null,
+        profileComplete: false,
+      });
       // Clean URL
       const newUrl = window.location.pathname;
       window.history.replaceState({}, "", newUrl);
     }
-  }, []);
+  }, [applyUser]);
+
+  useEffect(() => {
+    setProfileLoaded(false);
+    void refreshUser();
+  }, [refreshUser, token]);
 
   const login = useCallback(async (username: string, password: string) => {
     const res = await fetch("/v1/auth/login", {
@@ -69,24 +181,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(msg || "Login failed");
     }
     const data = await res.json();
+    const nextUser = normalizeUserPayload(data as Record<string, unknown>);
     localStorage.setItem(STORAGE_TOKEN, data.token);
-    localStorage.setItem(STORAGE_USER, data.username);
-    localStorage.setItem(STORAGE_ROLE, data.role);
     localStorage.removeItem("shared-filter-scope");
     localStorage.removeItem("dashboard-cache");
     setToken(data.token);
-    setUser({ username: data.username, role: data.role });
-  }, []);
+    applyUser(nextUser);
+  }, [applyUser]);
+
+  const updateProfile = useCallback(async (payload: UserProfileUpdate) => {
+    const currentToken = localStorage.getItem(STORAGE_TOKEN);
+    const res = await fetch("/v1/auth/me/profile", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...(currentToken ? { "X-Auth-Token": currentToken } : {}),
+        "X-User-Name": localStorage.getItem(STORAGE_USER) || "anonymous",
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const msg = await res.text();
+      throw new Error(msg || "Profile update failed");
+    }
+    const nextUser = normalizeUserPayload(await res.json() as Record<string, unknown>);
+    applyUser(nextUser);
+    return nextUser;
+  }, [applyUser]);
 
   const logout = useCallback(() => {
     localStorage.removeItem(STORAGE_TOKEN);
     localStorage.removeItem(STORAGE_USER);
     localStorage.removeItem(STORAGE_ROLE);
+    localStorage.removeItem(STORAGE_PRIMARY_COUNTRY);
+    localStorage.removeItem(STORAGE_SECONDARY_COUNTRIES);
+    localStorage.removeItem(STORAGE_PREFERRED_LANDING);
     setToken(null);
     setUser(null);
   }, []);
 
-  const value = useMemo(() => ({ user, token, login, logout }), [user, token, login, logout]);
+  const value = useMemo(
+    () => ({ user, token, profileLoaded, login, refreshUser, updateProfile, logout }),
+    [user, token, profileLoaded, login, refreshUser, updateProfile, logout],
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

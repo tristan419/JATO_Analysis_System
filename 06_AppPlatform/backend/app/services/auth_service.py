@@ -142,6 +142,9 @@ def list_users(db: Session) -> list[dict]:
             "username": u.username,
             "role": u.role,
             "is_active": u.is_active,
+            "primary_country_code": u.primary_country_code,
+            "secondary_country_codes": u.secondary_country_codes or [],
+            "preferred_landing_page": u.preferred_landing_page,
             "created_at_utc": u.created_at_utc.isoformat() if u.created_at_utc else None,
         }
         for u in users

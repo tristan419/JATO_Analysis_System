@@ -6,6 +6,7 @@ BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@8000}"
 BACKEND_PORT="${BACKEND_PORT:-}"
 BACKEND_ENV_FILE="${BACKEND_ENV_FILE:-/etc/jato-fullstack/backend.env}"
 RUN_DATABASE_MIGRATIONS="${RUN_DATABASE_MIGRATIONS:-auto}"
+RUN_PRE_DEPLOY_BACKUP="${RUN_PRE_DEPLOY_BACKUP:-auto}"
 REMOTE_NAME="${REMOTE_NAME:-}"
 REPO_REMOTE_URL="${REPO_REMOTE_URL:-git@github.com:tristan419/JATO_Analysis_System.git}"
 SKIP_GIT_SYNC="${SKIP_GIT_SYNC:-false}"
@@ -13,6 +14,7 @@ DEPLOY_PRUNE_UNTRACKED="${DEPLOY_PRUNE_UNTRACKED:-true}"
 DEPLOY_UNTRACKED_CLEAN_PATTERNS="${DEPLOY_UNTRACKED_CLEAN_PATTERNS:-04_Processed_data/.refresh_backups/pre-sync-* Markdown_Readme/Fullstack/*.md Markdown_Readme/Streamlit/*.md}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIAGNOSTIC_SCRIPT="$SCRIPT_DIR/print_fullstack_server_diagnostics.sh"
+BACKUP_SCRIPT="$SCRIPT_DIR/backup_production_data.sh"
 CURRENT_STEP="initialization"
 
 VITE_API_BASE="${VITE_API_BASE:-/v1}"
@@ -225,6 +227,32 @@ install_env_file_if_missing() {
   echo "[INFO] Installed default env file: $target_path"
 }
 
+run_pre_deploy_backup() {
+  if [[ "$RUN_PRE_DEPLOY_BACKUP" == "false" || "$RUN_PRE_DEPLOY_BACKUP" == "0" ]]; then
+    echo "[INFO] Skipping pre-deploy backup because RUN_PRE_DEPLOY_BACKUP=$RUN_PRE_DEPLOY_BACKUP"
+    return 0
+  fi
+
+  if [[ ! -f "$BACKUP_SCRIPT" ]]; then
+    echo "[WARN] Pre-deploy backup script missing: $BACKUP_SCRIPT"
+    return 0
+  fi
+
+  echo "[INFO] Running pre-deploy production data backup"
+  if run_privileged_bash 'REPO_DIR="$1" BACKEND_ENV_FILE="$2" bash "$3"' "$REPO_DIR" "$BACKEND_ENV_FILE" "$BACKUP_SCRIPT"; then
+    echo "[INFO] Pre-deploy backup completed"
+    return 0
+  fi
+
+  if [[ "$RUN_PRE_DEPLOY_BACKUP" == "true" || "$RUN_PRE_DEPLOY_BACKUP" == "1" ]]; then
+    echo "[ERROR] Pre-deploy backup failed"
+    return 1
+  fi
+
+  echo "[WARN] Pre-deploy backup failed; continuing because RUN_PRE_DEPLOY_BACKUP=$RUN_PRE_DEPLOY_BACKUP"
+  return 0
+}
+
 restart_timer_unit() {
   local timer_name="$1"
 
@@ -408,6 +436,11 @@ echo "[INFO] Reconcile scraper schedulers"
 CURRENT_STEP="Reconcile scraper schedulers"
 log_section "$CURRENT_STEP"
 reconcile_scraper_schedulers
+
+echo "[INFO] Run pre-deploy backup when configured"
+CURRENT_STEP="Run pre-deploy backup"
+log_section "$CURRENT_STEP"
+run_pre_deploy_backup
 
 echo "[INFO] Run database migrations when configured"
 CURRENT_STEP="Run database migrations"

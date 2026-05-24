@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
+import type { CountryPaymentTerm } from "../types/orderGenius";
 
 type Tab = "users" | "requests" | "matrix" | "audit";
 
@@ -12,6 +13,21 @@ const TABS: { key: Tab; label: string }[] = [
 ];
 
 const ROLES = ["viewer", "editor", "admin"] as const;
+
+interface AccessUser {
+  id: string;
+  username: string;
+  role: string;
+  is_active?: boolean;
+  isActive?: boolean;
+  primary_country_code?: string | null;
+  primaryCountry?: string | null;
+  secondary_country_codes?: string[];
+  secondaryCountries?: string[];
+  preferred_landing_page?: string | null;
+  preferredLandingPage?: string | null;
+  created_at_utc?: string | null;
+}
 
 const PERMISSION_MATRIX: { feature: string; viewer: boolean; editor: boolean; admin: boolean }[] = [
   { feature: "Dashboard / Market Scan 查看", viewer: true, editor: true, admin: true },
@@ -31,7 +47,8 @@ const PERMISSION_MATRIX: { feature: string; viewer: boolean; editor: boolean; ad
 export function AccessControlPage() {
   const { user } = useAuth();
   const [tab, setTab] = useState<Tab>("users");
-  const [users, setUsers] = useState<any[]>([]);
+  const [users, setUsers] = useState<AccessUser[]>([]);
+  const [countries, setCountries] = useState<CountryPaymentTerm[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -41,13 +58,18 @@ export function AccessControlPage() {
   const loadUsers = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const res = await api.get<any>("/auth/users");
+      const res = await api.get<{ users: AccessUser[] }>("/auth/users");
       setUsers(res.users || []);
-    } catch (e: any) { setError(e.message || "Failed to load"); }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : "Failed to load"); }
     setLoading(false);
   }, []);
 
   useEffect(() => { loadUsers(); }, [loadUsers]);
+  useEffect(() => {
+    api.getOrderGeniusCountries()
+      .then((res) => setCountries(res.items || []))
+      .catch(() => setCountries([]));
+  }, []);
 
   const createUser = async () => {
     if (!newUser.username || newUser.password.length < 6) return setError("Username required, password min 6 chars");
@@ -57,14 +79,33 @@ export function AccessControlPage() {
       setShowCreate(false);
       setNewUser({ username: "", password: "", role: "viewer" });
       loadUsers();
-    } catch (e: any) { setError(e.message || "Create failed"); }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : "Create failed"); }
   };
 
   const updateRole = async (userId: string, role: string) => {
     try {
       await api.patch(`/auth/users/${userId}/role`, { role });
       loadUsers();
-    } catch (e: any) { setError(e.message || "Update failed"); }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : "Update failed"); }
+  };
+
+  const updateProfile = async (
+    targetUser: AccessUser,
+    primaryCountry: string,
+    secondaryRaw: string,
+  ) => {
+    try {
+      const secondaryCountries = secondaryRaw
+        .split(",")
+        .map((item) => item.trim().toUpperCase())
+        .filter(Boolean);
+      await api.patch(`/auth/users/${targetUser.id}/profile`, {
+        primaryCountry: primaryCountry || null,
+        secondaryCountries,
+        preferredLandingPage: targetUser.preferredLandingPage ?? targetUser.preferred_landing_page ?? "/dashboard",
+      });
+      loadUsers();
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : "Profile update failed"); }
   };
 
   return (
@@ -103,9 +144,23 @@ export function AccessControlPage() {
           )}
           {loading ? <p style={{ color: "#64748b" }}>Loading...</p> : (
             <table className="data-table" style={{ fontSize: 13 }}>
-              <thead><tr><th>Username</th><th>Role</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Role</th>
+                  <th>Primary Country</th>
+                  <th>Secondary</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
               <tbody>
-                {users.map((u: any) => (
+                {users.map((u) => {
+                  const active = u.isActive ?? u.is_active ?? true;
+                  const primary = u.primaryCountry ?? u.primary_country_code ?? "";
+                  const secondary = u.secondaryCountries ?? u.secondary_country_codes ?? [];
+                  return (
                   <tr key={u.id}>
                     <td>{u.username}</td>
                     <td>
@@ -114,14 +169,36 @@ export function AccessControlPage() {
                         {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
                       </select>
                     </td>
-                    <td style={{ color: u.is_active ? "#16a34a" : "#dc2626" }}>{u.is_active ? "Active" : "Inactive"}</td>
+                    <td>
+                      <select
+                        value={primary}
+                        onChange={(e) => updateProfile(u, e.target.value, secondary.join(","))}
+                        style={{ padding: "2px 4px", fontSize: 12, minWidth: 120 }}
+                      >
+                        <option value="">Unset</option>
+                        {countries.map((country) => (
+                          <option key={country.countryCode} value={country.countryCode}>
+                            {country.countryCode} {country.countryName}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        defaultValue={secondary.join(",")}
+                        placeholder="SE,CZ"
+                        onBlur={(e) => updateProfile(u, primary, e.target.value)}
+                        style={{ width: 110, padding: "2px 4px", fontSize: 12 }}
+                      />
+                    </td>
+                    <td style={{ color: active ? "#16a34a" : "#dc2626" }}>{active ? "Active" : "Inactive"}</td>
                     <td style={{ fontSize: 11, color: "#64748b" }}>{u.created_at_utc?.slice(0, 10) || "—"}</td>
                     <td>
                       <button className="btn btn-sm btn-ghost" disabled={u.username === user?.username}
                         onClick={() => {/* TODO: deactivate */}}>Deactivate</button>
                     </td>
                   </tr>
-                ))}
+                );})}
               </tbody>
             </table>
           )}
@@ -145,9 +222,9 @@ export function AccessControlPage() {
               {PERMISSION_MATRIX.map((row) => (
                 <tr key={row.feature}>
                   <td>{row.feature}</td>
-                  <td style={{ textAlign: "center" }}>{row.viewer ? "✅" : "—"}</td>
-                  <td style={{ textAlign: "center" }}>{row.editor ? "✅" : "—"}</td>
-                  <td style={{ textAlign: "center" }}>{row.admin ? "✅" : "—"}</td>
+                  <td style={{ textAlign: "center" }}>{row.viewer ? "Yes" : "No"}</td>
+                  <td style={{ textAlign: "center" }}>{row.editor ? "Yes" : "No"}</td>
+                  <td style={{ textAlign: "center" }}>{row.admin ? "Yes" : "No"}</td>
                 </tr>
               ))}
             </tbody>

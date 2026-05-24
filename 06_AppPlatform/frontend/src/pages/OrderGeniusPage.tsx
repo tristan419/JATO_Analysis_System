@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import { api } from "../api/client";
+import { useAuth } from "../contexts/AuthContext";
 import type {
   CountryPaymentTerm,
   MaterialSkuMatrixRow,
@@ -38,6 +39,7 @@ function getErrorMessage(error: unknown): string {
 }
 
 export function OrderGeniusPage() {
+  const { user } = useAuth();
   // ── Filter state ──────────────────────────────────────────────────
   const [countries, setCountries] = useState<CountryPaymentTerm[]>([]);
   const [selectedCountry, setSelectedCountry] = useState("");
@@ -83,11 +85,16 @@ export function OrderGeniusPage() {
       .then((res) => {
         setCountries(res.items);
         if (res.items.length > 0 && !selectedCountry) {
-          setSelectedCountry(res.items[0].countryCode);
+          const preferred = user?.primaryCountry
+            && res.items.some((item) => item.countryCode === user.primaryCountry)
+            ? user.primaryCountry
+            : null;
+          const anonymousDefault = res.items.find((item) => item.countryCode === "SE");
+          setSelectedCountry(preferred ?? anonymousDefault?.countryCode ?? res.items[0].countryCode);
         }
       })
       .catch(() => setError("Failed to load countries"));
-  }, []);
+  }, [selectedCountry, user?.primaryCountry]);
 
   // ── Load options ──────────────────────────────────────────────────
   useEffect(() => {
@@ -1012,4 +1019,3 @@ function PaymentTermAdminPanel() {
     </div>
   );
 }
-

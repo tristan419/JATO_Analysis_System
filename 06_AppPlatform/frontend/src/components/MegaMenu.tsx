@@ -121,7 +121,8 @@ export function MegaMenu() {
             <>
               <span className="mega-menu-username">{user.username}</span>
               <span className="mega-menu-role">{user.role}</span>
-              {user.role !== "admin" && (
+              <Link to="/account/country-setup" className="mega-menu-signin">国家偏好</Link>
+              {user.role === "viewer" && (
                 <button type="button" className="mega-menu-signin" onClick={() => setShowUpgrade(true)}>申请升级</button>
               )}
               {user.role === "admin" && (
@@ -151,6 +152,7 @@ export function MegaMenu() {
               <div className="mega-menu-drawer-auth">
                 <span className="mega-menu-username">{user.username}</span>
                 <span className="mega-menu-role">{user.role}</span>
+                <Link to="/account/country-setup" className="mega-menu-signin" onClick={() => setNavOpen(false)}>国家偏好</Link>
                 <button type="button" className="mega-menu-signout" onClick={() => { logout(); setNavOpen(false); }}>Sign out</button>
               </div>
             ) : (

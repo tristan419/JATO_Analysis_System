@@ -71,28 +71,47 @@ def seed() -> None:
         conn.execute(
             text(
                 """
+                WITH desired(country_code, country_name, payment_term_code, payment_method, lc_days) AS (
+                    VALUES
+                    ('AT', 'Austria',         'LC90',  'LC', 90),
+                    ('BG', 'Bulgaria',        'LC120', 'LC', 120),
+                    ('CZ', 'Czech Republic',  'LC90',  'LC', 90),
+                    ('FI', 'Finland',         'LC90',  'LC', 90),
+                    ('GR', 'Greece',          'LC90',  'LC', 90),
+                    ('HR', 'Croatia',         'TT',    'TT', 0),
+                    ('HU', 'Hungary',         'LC90',  'LC', 90),
+                    ('LV', 'Latvia',          'LC90',  'LC', 90),
+                    ('PL', 'Poland',          'LC90',  'LC', 90),
+                    ('RO', 'Romania',         'LC120', 'LC', 120),
+                    ('SE', 'Sweden',          'LC90',  'LC', 90)
+                ),
+                updated AS (
+                    UPDATE ordering.country_payment_term_master c
+                    SET country_name = d.country_name,
+                        payment_term_code = d.payment_term_code,
+                        payment_method = d.payment_method,
+                        lc_days = d.lc_days,
+                        is_active = true,
+                        updated_at_utc = now()
+                    FROM desired d
+                    WHERE c.country_code = d.country_code
+                      AND c.is_active = true
+                    RETURNING c.country_code
+                )
                 INSERT INTO ordering.country_payment_term_master
                     (country_payment_term_id, country_code, country_name,
                      payment_term_code, payment_method, lc_days,
-                     is_active, created_at_utc, updated_at_utc)
-                VALUES
-                    (gen_random_uuid(), 'AT', 'Austria',         'LC90',  'LC', 90,  true, now(), now()),
-                    (gen_random_uuid(), 'BG', 'Bulgaria',        'LC120', 'LC', 120, true, now(), now()),
-                    (gen_random_uuid(), 'CZ', 'Czech Republic',  'LC90',  'LC', 90,  true, now(), now()),
-                    (gen_random_uuid(), 'FI', 'Finland',         'LC90',  'LC', 90,  true, now(), now()),
-                    (gen_random_uuid(), 'GR', 'Greece',          'LC90',  'LC', 90,  true, now(), now()),
-                    (gen_random_uuid(), 'HR', 'Croatia',         'TT',    'TT', 0,   true, now(), now()),
-                    (gen_random_uuid(), 'HU', 'Hungary',         'LC90',  'LC', 90,  true, now(), now()),
-                    (gen_random_uuid(), 'LV', 'Latvia',          'LC90',  'LC', 90,  true, now(), now()),
-                    (gen_random_uuid(), 'PL', 'Poland',          'LC90',  'LC', 90,  true, now(), now()),
-                    (gen_random_uuid(), 'RO', 'Romania',         'LC120', 'LC', 120, true, now(), now()),
-                    (gen_random_uuid(), 'SE', 'Sweden',          'LC90',  'LC', 90,  true, now(), now())
-                ON CONFLICT (country_code) DO UPDATE SET
-                    payment_term_code = EXCLUDED.payment_term_code,
-                    payment_method    = EXCLUDED.payment_method,
-                    lc_days           = EXCLUDED.lc_days,
-                    is_active         = true,
-                    updated_at_utc    = now()
+                     is_active, valid_from_month, created_at_utc, updated_at_utc)
+                SELECT gen_random_uuid(), d.country_code, d.country_name,
+                       d.payment_term_code, d.payment_method, d.lc_days,
+                       true, '2024-01', now(), now()
+                FROM desired d
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM ordering.country_payment_term_master c
+                    WHERE c.country_code = d.country_code
+                      AND c.is_active = true
+                )
                 """
             )
         )

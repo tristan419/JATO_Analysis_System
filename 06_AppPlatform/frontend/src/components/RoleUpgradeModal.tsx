@@ -7,7 +7,7 @@ interface Props {
 }
 
 export function RoleUpgradeModal({ currentRole, onClose }: Props) {
-  const [role, setRole] = useState(currentRole === "viewer" ? "editor" : "admin");
+  const [role, setRole] = useState("editor");
   const [reason, setReason] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [msg, setMsg] = useState("");
@@ -43,8 +43,10 @@ export function RoleUpgradeModal({ currentRole, onClose }: Props) {
                 <label>申请角色</label>
                 <select className="input" value={role} onChange={(e) => setRole(e.target.value)}>
                   {currentRole === "viewer" && <option value="editor">Editor（编辑者）</option>}
-                  <option value="admin">Admin（管理员）</option>
                 </select>
+                <p style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
+                  Admin 权限只能由现有管理员在 Access Control 中手动分配。
+                </p>
               </div>
               <div className="form-group">
                 <label>申请理由</label>
