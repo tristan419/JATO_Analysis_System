@@ -27,6 +27,7 @@ const MarketBrandRankingPage = lazy(() => import("./pages/MarketBrandRankingPage
 const MarketModelRankingPage = lazy(() => import("./pages/MarketModelRankingPage").then(m => ({ default: m.MarketModelRankingPage })));
 const MarketPowertrainPage = lazy(() => import("./pages/MarketPowertrainPage").then(m => ({ default: m.MarketPowertrainPage })));
 const OrderGeniusPage = lazy(() => import("./pages/OrderGeniusPage").then(m => ({ default: m.OrderGeniusPage })));
+const AccessControlPage = lazy(() => import("./pages/AccessControlPage").then(m => ({ default: m.AccessControlPage })));
 
 function withPageLoader(node: ReactNode) {
   return (<Suspense fallback={<div className="app-loading-shell"><LoadingSurface mode="overlay" label="正在加载页面" detail="准备下一个工作视图与路由资源" kicker="Route" /></div>}>{node}</Suspense>);
@@ -53,6 +54,7 @@ const router = createBrowserRouter([
     { path: "data/matching-review", element: withPageLoader(<ReviewCasesPage />) },
     { path: "data/jato-monthly-update", element: withPageLoader(<JatoMonthlyUpdatePage />) },
     { path: "data/order-genius", element: withPageLoader(<OrderGeniusPage />) },
+    { path: "admin/access-control", element: withPageLoader(<AccessControlPage />) },
     { path: "product/coc-match", element: withPageLoader(<CocMatchPage />) },
     { path: "copilot", element: withPageLoader(<CountryChatPage />) },
     { path: "engineering-config", element: withPageLoader(<EngineeringConfigPage />) },

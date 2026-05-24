@@ -1311,6 +1311,13 @@ function mapReviewWorkbench(raw: Record<string, unknown>): ReviewWorkbench {
 }
 
 export const api = {
+  // Generic typed HTTP helpers — use for endpoints without dedicated methods
+  get: <T>(path: string, init?: RequestInit) => request<T>(path, { method: "GET", ...init }),
+  post: <T>(path: string, body?: unknown, init?: RequestInit) =>
+    request<T>(path, { method: "POST", body: body != null ? JSON.stringify(body) : undefined, ...init }),
+  patch: <T>(path: string, body?: unknown, init?: RequestInit) =>
+    request<T>(path, { method: "PATCH", body: body != null ? JSON.stringify(body) : undefined, ...init }),
+
   columns: () => request<{ items: string[] }>("/metadata/columns"),
   filterOptions: (payload: FilterOptionsPayload, init?: RequestInit) =>
     request<{ column: string; options: string[] }>(
