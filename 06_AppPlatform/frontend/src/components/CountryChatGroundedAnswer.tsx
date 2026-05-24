@@ -159,6 +159,12 @@ function renderEvidenceCell(cell: string, column: string): ReactNode {
   return cell;
 }
 
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item)).filter(Boolean)
+    : [];
+}
+
 export function CountryChatGroundedAnswer({
   message,
   compact = false,
@@ -172,9 +178,12 @@ export function CountryChatGroundedAnswer({
     return <div className="copilot-message-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />;
   }
 
+  const groundingEvidenceTables = Array.isArray(grounding?.evidenceTables)
+    ? grounding.evidenceTables
+    : [];
   const evidenceTables = compact
-    ? grounding?.evidenceTables.slice(0, 2) ?? []
-    : grounding?.evidenceTables ?? [];
+    ? groundingEvidenceTables.slice(0, 2)
+    : groundingEvidenceTables;
   const fallbackAnswerPath = buildCountryChatAnswerPath({
     country: message.country ?? message.contextSnapshot?.country,
     intentRoute: message.intentRoute,
@@ -193,15 +202,19 @@ export function CountryChatGroundedAnswer({
     summary: grounding?.summary,
     reasoningNotes: grounding?.reasoningNotes,
   });
-  const keyFindings = grounding?.keyFindings ?? [];
-  const layers = grounding?.layers ?? [];
+  const keyFindings = asStringArray(grounding?.keyFindings);
+  const layers = Array.isArray(grounding?.layers) ? grounding.layers : [];
   const trust = grounding?.trust;
+  const missingFacts = asStringArray(trust?.missingFacts);
   const executionPlan = message.executionPlan;
+  const sourcePlan = Array.isArray(executionPlan?.sourcePlan)
+    ? executionPlan.sourcePlan
+    : [];
   const executionSources = compact
-    ? executionPlan?.sourcePlan?.slice(0, 4) ?? []
-    : executionPlan?.sourcePlan ?? [];
-  const prefetchedToolNames = executionPlan?.prefetchedToolNames ?? [];
-  const allowedToolNames = executionPlan?.allowedToolNames ?? [];
+    ? sourcePlan.slice(0, 4)
+    : sourcePlan;
+  const prefetchedToolNames = asStringArray(executionPlan?.prefetchedToolNames);
+  const allowedToolNames = asStringArray(executionPlan?.allowedToolNames);
   const showAnswerPath = isAssistant && (
     answerPath.focusTags.length > 0
     || answerPath.steps.length > 0
@@ -316,9 +329,9 @@ export function CountryChatGroundedAnswer({
           {trust.routeRationale ? (
             <p className="copilot-answer-note">{trust.routeRationale}</p>
           ) : null}
-          {trust.missingFacts.length > 0 ? (
+          {missingFacts.length > 0 ? (
             <ul className="copilot-trust-missing-list">
-              {trust.missingFacts.slice(0, compact ? 2 : 3).map((item) => (
+              {missingFacts.slice(0, compact ? 2 : 3).map((item) => (
                 <li key={item}>{item}</li>
               ))}
             </ul>
@@ -407,33 +420,37 @@ export function CountryChatGroundedAnswer({
             <strong>数据依据</strong>
           </div>
           <div className="copilot-grounded-answer-tables">
-            {evidenceTables.map((table) => (
-              <div key={table.title} className="copilot-grounded-answer-table-wrap">
-                <div className="copilot-grounded-answer-table-title">{table.title}</div>
-                <div className="copilot-grounded-answer-scroll">
-                  <table className="copilot-grounded-answer-table">
-                    <thead>
-                      <tr>
-                        {table.columns.map((column) => (
-                          <th key={column}>{column}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {table.rows.map((row, rowIndex) => (
-                        <tr key={`${table.title}-${rowIndex}`}>
-                          {row.map((cell, cellIndex) => (
-                            <td key={`${table.title}-${rowIndex}-${cellIndex}`}>
-                              {renderEvidenceCell(cell, table.columns[cellIndex] ?? "")}
-                            </td>
+            {evidenceTables.map((table) => {
+              const columns = table.columns ?? [];
+              const rows = table.rows ?? [];
+              return (
+                <div key={table.title} className="copilot-grounded-answer-table-wrap">
+                  <div className="copilot-grounded-answer-table-title">{table.title}</div>
+                  <div className="copilot-grounded-answer-scroll">
+                    <table className="copilot-grounded-answer-table">
+                      <thead>
+                        <tr>
+                          {columns.map((column) => (
+                            <th key={column}>{column}</th>
                           ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {rows.map((row, rowIndex) => (
+                          <tr key={`${table.title}-${rowIndex}`}>
+                            {row.map((cell, cellIndex) => (
+                              <td key={`${table.title}-${rowIndex}-${cellIndex}`}>
+                                {renderEvidenceCell(cell, columns[cellIndex] ?? "")}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       ) : null}

@@ -1,5 +1,5 @@
 import { Suspense, lazy, type ReactNode } from "react";
-import { Navigate, createBrowserRouter, RouterProvider } from "react-router-dom";
+import { Navigate, createBrowserRouter, RouterProvider, useLocation } from "react-router-dom";
 import { SharedFilterScopeProvider } from "./contexts/SharedFilterScopeContext";
 import { CountryChatProvider } from "./contexts/CountryChatContext";
 import { AuthProvider } from "./contexts/AuthContext";
@@ -34,10 +34,15 @@ function withPageLoader(node: ReactNode) {
   return (<Suspense fallback={<div className="app-loading-shell"><LoadingSurface mode="overlay" label="正在加载页面" detail="准备下一个工作视图与路由资源" kicker="Route" /></div>}>{node}</Suspense>);
 }
 
+function RedirectPreserveSearch({ to }: { to: string }) {
+  const location = useLocation();
+  return <Navigate to={`${to}${location.search}${location.hash}`} replace />;
+}
+
 const router = createBrowserRouter([
   { path: "/login", element: (<AuthProvider><LoginPage /></AuthProvider>) },
   { path: "/", element: (<AuthProvider><SharedFilterScopeProvider><CountryChatProvider><Layout /></CountryChatProvider></SharedFilterScopeProvider></AuthProvider>), children: [
-    { index: true, element: <Navigate to="/dashboard" replace /> },
+    { index: true, element: <DashboardPage /> },
     { path: "dashboard", element: <DashboardPage /> },
     { path: "market/overview", element: withPageLoader(<MarketOverviewPage />) },
     { path: "market/segments", element: withPageLoader(<MarketSegmentsPage />) },
@@ -60,18 +65,18 @@ const router = createBrowserRouter([
     { path: "product/coc-match", element: withPageLoader(<CocMatchPage />) },
     { path: "copilot", element: withPageLoader(<CountryChatPage />) },
     { path: "engineering-config", element: withPageLoader(<EngineeringConfigPage />) },
-    { path: "market-scan", element: <Navigate to="/market/overview" replace /> },
-    { path: "msrp", element: <Navigate to="/product/current-msrp" replace /> },
-    { path: "msrp/monthly-update", element: <Navigate to="/data/jato-monthly-update" replace /> },
-    { path: "positioning-pricing", element: <Navigate to="/product/pricing" replace /> },
-    { path: "version-comparison", element: <Navigate to="/product/compare" replace /> },
-    { path: "customer-insights", element: <Navigate to="/product/customer-insight" replace /> },
-    { path: "customer-hev", element: <Navigate to="/product/customer-insight" replace /> },
-    { path: "specification", element: <Navigate to="/data/spec-detail" replace /> },
-    { path: "data-management", element: <Navigate to="/data/overview" replace /> },
-    { path: "engineering", element: <Navigate to="/data/config-import" replace /> },
-    { path: "review", element: <Navigate to="/data/matching-review" replace /> },
-    { path: "crud", element: <Navigate to="/data/overview" replace /> },
+    { path: "market-scan", element: <RedirectPreserveSearch to="/market/overview" /> },
+    { path: "msrp", element: <RedirectPreserveSearch to="/product/current-msrp" /> },
+    { path: "msrp/monthly-update", element: <RedirectPreserveSearch to="/data/jato-monthly-update" /> },
+    { path: "positioning-pricing", element: <RedirectPreserveSearch to="/product/pricing" /> },
+    { path: "version-comparison", element: <RedirectPreserveSearch to="/product/compare" /> },
+    { path: "customer-insights", element: <RedirectPreserveSearch to="/product/customer-insight" /> },
+    { path: "customer-hev", element: <RedirectPreserveSearch to="/product/customer-insight" /> },
+    { path: "specification", element: withPageLoader(<SpecificationPage />) },
+    { path: "data-management", element: withPageLoader(<DataManagementPage />) },
+    { path: "engineering", element: <RedirectPreserveSearch to="/data/config-import" /> },
+    { path: "review", element: <RedirectPreserveSearch to="/data/matching-review" /> },
+    { path: "crud", element: <RedirectPreserveSearch to="/data-management" /> },
     { path: "*", element: withPageLoader(<NotFoundPage />) },
   ]},
 ]);

@@ -102,7 +102,7 @@ export function DashboardPage() {
     loading,
     optionsSyncPending,
     error: sharedError,
-    activeFilters,
+    activeFilters: rawActiveFilters,
     activeFilterSummary,
     specificationHref,
     dashboardSearch,
@@ -115,17 +115,22 @@ export function DashboardPage() {
     onFilterChange,
     resetFilters,
   } = useSharedFilterScope();
+  const activeFilters = rawActiveFilters ?? [];
+  const hasFilterSearchParams = useMemo(() => {
+    const params = new URLSearchParams(currentSearch);
+    return FILTER_ORDER.some(({ key }) => params.has(key));
+  }, [currentSearch]);
 
   /* auto-select all countries on first load */
   const countryAutoApplied = useRef(false);
   useEffect(() => {
-    if (!filtersReady || countryAutoApplied.current) return;
+    if (!filtersReady || countryAutoApplied.current || hasFilterSearchParams) return;
     const countryOptions = optionsMap.country ?? [];
     if (countryOptions.length > 0 && selections.country.length === 0) {
       countryAutoApplied.current = true;
       void onFilterChange("country", countryOptions);
     }
-  }, [filtersReady, optionsMap.country, selections.country, onFilterChange]);
+  }, [filtersReady, hasFilterSearchParams, optionsMap.country, selections.country, onFilterChange]);
 
   /* time-series controls */
   const [activeTab, setActiveTab] = useState<"year"|"month">(() => cachedPage?.activeTab ?? "month");
@@ -138,7 +143,9 @@ export function DashboardPage() {
   const [tsTopN, setTsTopN] = useState(() => cachedPage?.tsTopN ?? 10);
   const [tsTopNEnabled, setTsTopNEnabled] = useState(() => cachedPage?.tsTopNEnabled ?? true);
   const [tsIncludeOthers, setTsIncludeOthers] = useState(() => cachedPage?.tsIncludeOthers ?? false);
-  const [groupedItems, setGroupedItems] = useState<GroupedTimeSeriesItem[]>(() => cachedPage?.groupedItems ?? []);
+  const [groupedItems, setGroupedItems] = useState<GroupedTimeSeriesItem[]>(
+    () => ensureArray(cachedPage?.groupedItems),
+  );
   const [groupedLoading, setGroupedLoading] = useState(false);
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(() => new Set(cachedPage?.hiddenSeries ?? []));
   const [othersDetail, setOthersDetail] = useState<OthersDetailItem[]>(() => cachedPage?.othersDetail ?? []);
@@ -315,7 +322,11 @@ export function DashboardPage() {
             include_others: tsIncludeOthers,
             time_range: timeRangePayload,
           });
-          if (!cancelled) { setGroupedItems(r.items); setHiddenSeries(new Set()); setOthersDetail(r.others_detail ?? []); }
+          if (!cancelled) {
+            setGroupedItems(ensureArray(r.items));
+            setHiddenSeries(new Set());
+            setOthersDetail(ensureArray(r.others_detail));
+          }
         } catch (e) { if (!cancelled) setError((e as Error).message); }
         finally { if (!cancelled) setGroupedLoading(false); }
       }, 300);
@@ -434,7 +445,7 @@ export function DashboardPage() {
       ? [activeFilterSummaryText]
       : activeFilters.length === 0
       ? ["Default powertrain lens"]
-      : activeFilters.map(({ key, label }) => `${label}: ${summarizeScopeValues(selections[key])}`);
+      : activeFilters.map(({ key, label }) => `${label}: ${summarizeScopeValues(selections[key] ?? [])}`);
     return [...filterTokens, `Time window: ${timeWindowLabel}`];
   }, [activeFilterSummaryText, activeFilters, dashboardBootstrapping, selections, timeWindowLabel]);
   const activeFilterCount = activeFilters.length;

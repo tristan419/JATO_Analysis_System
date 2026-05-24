@@ -45,6 +45,9 @@ export function CopilotGovernancePanel({
   if (!sourcePlan && !evidencePack && !structuredAnswer) return null;
 
   const blocks = structuredAnswer?.blocks ?? [];
+  const structuredLimitations = structuredAnswer?.limitations ?? [];
+  const evidenceSources = evidencePack?.sources ?? [];
+  const evidenceLimitations = evidencePack?.limitations ?? [];
 
   return (
     <details className="copilot-answer-section is-collapsible">
@@ -52,7 +55,7 @@ export function CopilotGovernancePanel({
         <strong>治理面板</strong>
         <span className="copilot-answer-section-kicker">
           {sourcePlan?.execution_mode ?? "unknown"}
-          {evidencePack ? ` · ${evidencePack.sources.length} sources` : ""}
+          {evidencePack ? ` · ${evidenceSources.length} sources` : ""}
           {blocks.length > 0 ? ` · ${blocks.length} blocks` : ""}
         </span>
       </summary>
@@ -68,9 +71,9 @@ export function CopilotGovernancePanel({
         </div>
       ) : null}
 
-      {structuredAnswer?.limitations?.length ? (
+      {structuredLimitations.length ? (
         <div style={{ fontSize: 12, color: "#ef4444", marginBottom: 4 }}>
-          ⚠ {structuredAnswer.limitations.join(" · ")}
+          Warning: {structuredLimitations.join(" · ")}
         </div>
       ) : null}
 
@@ -111,18 +114,18 @@ export function CopilotGovernancePanel({
         </div>
       ) : null}
 
-      {evidencePack?.sources?.length ? (
+      {evidenceSources.length ? (
         <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>
           <strong>Evidence Coverage:</strong>{" "}
-          {evidencePack.sources
+          {evidenceSources
             .map((s) => `${s.source_id} (${s.coverage})`)
             .join(", ")}
         </div>
       ) : null}
 
-      {evidencePack?.limitations?.length ? (
+      {evidenceLimitations.length ? (
         <div style={{ fontSize: 12, color: "#ef4444", marginTop: 4 }}>
-          Limitations: {evidencePack.limitations.join("; ")}
+          Limitations: {evidenceLimitations.join("; ")}
         </div>
       ) : null}
     </details>

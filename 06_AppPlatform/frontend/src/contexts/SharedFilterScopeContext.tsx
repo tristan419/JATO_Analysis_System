@@ -226,13 +226,13 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     [selections],
   );
   const activeFilters = useMemo(
-    () => FILTER_ORDER.filter(({ key }) => selections[key].length > 0),
+    () => FILTER_ORDER.filter(({ key }) => (selections[key] ?? []).length > 0),
     [selections],
   );
   const activeFilterSummary = useMemo(() => {
     if (activeFilters.length === 0) return "Default powertrain lens";
     return activeFilters
-      .map(({ key, label }) => `${label}: ${summarizeScopeValues(selections[key])}`)
+      .map(({ key, label }) => `${label}: ${summarizeScopeValues(selections[key] ?? [])}`)
       .join(" · ");
   }, [activeFilters, selections]);
 

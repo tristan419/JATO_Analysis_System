@@ -54,10 +54,12 @@ const DEFAULT_RECENT_ITEMS_VISIBLE = 6;
 
 const DATA_SUBPAGES: DataSubpage[] = ["overview", "hermes", "features", "voc", "admin", "dryrun", "order-genius", "material-master"];
 
-function resolveDataSubpageFromLocation(search: string, hash: string): DataSubpage {
+function resolveDataSubpageFromLocation(search: string, hash: string, pathname = ""): DataSubpage {
   const params = new URLSearchParams(search);
   const candidate = (params.get("view") || params.get("tab") || hash.replace(/^#/, "")).toLowerCase();
-  return DATA_SUBPAGES.includes(candidate as DataSubpage) ? (candidate as DataSubpage) : "overview";
+  if (DATA_SUBPAGES.includes(candidate as DataSubpage)) return candidate as DataSubpage;
+  if (pathname === "/data-management") return "admin";
+  return "overview";
 }
 
 const HERMES_SCRIPTS_MAP: Record<string, string> = {
@@ -319,7 +321,7 @@ export function DataManagementPage() {
   const [vocCountry, setVocCountry] = useState("");
 
   const [crudTab, setCrudTab] = useState<CrudEntityTab>("msrp-sources");
-  const [subpage, setSubpage] = useState<DataSubpage>(() => resolveDataSubpageFromLocation(location.search, location.hash));
+  const [subpage, setSubpage] = useState<DataSubpage>(() => resolveDataSubpageFromLocation(location.search, location.hash, location.pathname));
   const [hermesSubtab, setHermesSubtab] = useState<HermesSubtab>("capabilities");
   const [hermesOverview, setHermesOverview] = useState<HermesOverviewResponse | null>(null);
   const [hermesPipelines, setHermesPipelines] = useState<HermesPipelineHealthResponse | null>(null);
@@ -513,9 +515,9 @@ export function DataManagementPage() {
   }
 
   useEffect(() => {
-    const nextSubpage = resolveDataSubpageFromLocation(location.search, location.hash);
+    const nextSubpage = resolveDataSubpageFromLocation(location.search, location.hash, location.pathname);
     setSubpage((current) => (current === nextSubpage ? current : nextSubpage));
-  }, [location.hash, location.search]);
+  }, [location.hash, location.pathname, location.search]);
 
   useEffect(() => {
     void loadOverview();
