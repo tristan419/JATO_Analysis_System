@@ -29,6 +29,16 @@ interface AccessUser {
   created_at_utc?: string | null;
 }
 
+interface RoleUpgradeRequestItem {
+  requestId: string;
+  username: string;
+  currentRole: string;
+  requestedRole: string;
+  reason: string;
+  status: string;
+  createdAtUtc: string;
+}
+
 const PERMISSION_MATRIX: { feature: string; viewer: boolean; editor: boolean; admin: boolean }[] = [
   { feature: "Dashboard / Market Scan 查看", viewer: true, editor: true, admin: true },
   { feature: "Order Genius 查看", viewer: true, editor: true, admin: true },
@@ -48,6 +58,10 @@ export function AccessControlPage() {
   const { user } = useAuth();
   const [tab, setTab] = useState<Tab>("users");
   const [users, setUsers] = useState<AccessUser[]>([]);
+  const [requests, setRequests] = useState<RoleUpgradeRequestItem[]>([]);
+  const [requestStatus, setRequestStatus] = useState("pending");
+  const [requestsLoading, setRequestsLoading] = useState(false);
+  const [reviewingRequestId, setReviewingRequestId] = useState<string | null>(null);
   const [countries, setCountries] = useState<CountryPaymentTerm[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -64,7 +78,35 @@ export function AccessControlPage() {
     setLoading(false);
   }, []);
 
+  const loadRequests = useCallback(async (status = requestStatus) => {
+    setRequestsLoading(true);
+    setError("");
+    try {
+      const res = await api.listRoleUpgradeRequests(status === "all" ? undefined : { status });
+      const rawRequests = Array.isArray(res.requests) ? res.requests : [];
+      setRequests(rawRequests.map((item) => {
+        const raw = item as Record<string, unknown>;
+        return {
+          requestId: String(raw.requestId ?? ""),
+          username: String(raw.username ?? ""),
+          currentRole: String(raw.currentRole ?? ""),
+          requestedRole: String(raw.requestedRole ?? ""),
+          reason: String(raw.reason ?? ""),
+          status: String(raw.status ?? ""),
+          createdAtUtc: String(raw.createdAtUtc ?? ""),
+        };
+      }).filter((item) => item.requestId));
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to load role requests");
+    } finally {
+      setRequestsLoading(false);
+    }
+  }, [requestStatus]);
+
   useEffect(() => { loadUsers(); }, [loadUsers]);
+  useEffect(() => {
+    if (tab === "requests") void loadRequests();
+  }, [loadRequests, tab]);
   useEffect(() => {
     api.getOrderGeniusCountries()
       .then((res) => setCountries(res.items || []))
@@ -106,6 +148,19 @@ export function AccessControlPage() {
       });
       loadUsers();
     } catch (e: unknown) { setError(e instanceof Error ? e.message : "Profile update failed"); }
+  };
+
+  const reviewRequest = async (requestId: string, status: "approved" | "rejected") => {
+    setReviewingRequestId(requestId);
+    setError("");
+    try {
+      await api.reviewRoleUpgradeRequest(requestId, { status });
+      await Promise.all([loadRequests(), loadUsers()]);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Role request review failed");
+    } finally {
+      setReviewingRequestId(null);
+    }
   };
 
   return (
@@ -207,9 +262,88 @@ export function AccessControlPage() {
 
       {tab === "requests" && (
         <div className="card crud-card" style={{ padding: 16 }}>
-          <h3 style={{ margin: "0 0 12px" }}>Role Upgrade Requests</h3>
-          <p style={{ color: "#64748b", fontSize: 13 }}>Requests are managed via the existing role-upgrade endpoint. Full admin review UI coming in a future update.</p>
-          {/* Future: fetch and display pending role-upgrade requests */}
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 12, alignItems: "center" }}>
+            <div>
+              <h3 style={{ margin: "0 0 4px" }}>Role Upgrade Requests</h3>
+              <p style={{ color: "#64748b", fontSize: 13, margin: 0 }}>
+                Viewer users can request editor access. Admin approval updates the user role immediately.
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <select
+                value={requestStatus}
+                onChange={(e) => {
+                  const nextStatus = e.target.value;
+                  setRequestStatus(nextStatus);
+                  void loadRequests(nextStatus);
+                }}
+                style={{ padding: "5px 8px", fontSize: 12 }}
+              >
+                <option value="pending">Pending</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+                <option value="all">All</option>
+              </select>
+              <button className="btn btn-sm btn-secondary" onClick={() => void loadRequests()}>
+                Refresh
+              </button>
+            </div>
+          </div>
+          {requestsLoading ? <p style={{ color: "#64748b" }}>Loading requests...</p> : null}
+          {!requestsLoading && requests.length === 0 ? (
+            <div className="alert" style={{ marginTop: 8 }}>
+              No {requestStatus === "all" ? "" : requestStatus} role requests.
+            </div>
+          ) : null}
+          {requests.length > 0 ? (
+            <table className="data-table" style={{ fontSize: 13 }}>
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Current</th>
+                  <th>Requested</th>
+                  <th>Reason</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {requests.map((request) => {
+                  const pending = request.status === "pending";
+                  const busy = reviewingRequestId === request.requestId;
+                  return (
+                    <tr key={request.requestId}>
+                      <td>{request.username}</td>
+                      <td>{request.currentRole}</td>
+                      <td>{request.requestedRole}</td>
+                      <td style={{ maxWidth: 360, whiteSpace: "normal" }}>{request.reason || "-"}</td>
+                      <td>{request.status}</td>
+                      <td style={{ fontSize: 11, color: "#64748b" }}>{request.createdAtUtc.slice(0, 10) || "—"}</td>
+                      <td>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button
+                            className="btn btn-sm btn-primary"
+                            disabled={!pending || busy}
+                            onClick={() => void reviewRequest(request.requestId, "approved")}
+                          >
+                            Approve
+                          </button>
+                          <button
+                            className="btn btn-sm btn-ghost"
+                            disabled={!pending || busy}
+                            onClick={() => void reviewRequest(request.requestId, "rejected")}
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : null}
         </div>
       )}
 
