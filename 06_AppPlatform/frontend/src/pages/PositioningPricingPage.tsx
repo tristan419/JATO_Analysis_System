@@ -47,6 +47,7 @@ const DEFAULT_LENGTH_STEP = 50;
 const DEFAULT_TOP_N = 50;
 const DEFAULT_BUBBLE_SCALE = 2;
 type PositioningLayoutDirection = "row" | "column";
+type PositioningExportSettingsPanel = "priceBands" | "bubble";
 
 const DEFAULT_POSITIONING_LAYOUT_DIRECTION: PositioningLayoutDirection = "row";
 const DEFAULT_POSITIONING_SPLIT_RATIO = 50;
@@ -62,6 +63,14 @@ const POSITIONING_ROW_HEIGHT_CHROME = 650;
 const POSITIONING_COLUMN_HEIGHT_CHROME = 830;
 const TOP_N_OPTIONS = [30, 50, 100] as const;
 const BUBBLE_SCALE_OPTIONS = [1, 2, 3, 4] as const;
+const POSITIONING_EXPORT_SETTINGS_TABS: Array<{
+  key: PositioningExportSettingsPanel;
+  label: string;
+  caption: string;
+}> = [
+  { key: "priceBands", label: "Price Bands", caption: "累计价格带" },
+  { key: "bubble", label: "Powertrain Bubble", caption: "动力气泡图" },
+];
 const POSITIONING_CHART_MARGIN = { l: 96, r: 24, t: 16, b: 62 } as const;
 const POSITIONING_AXIS_TITLE_STANDOFF = 12;
 const DEFAULT_POSITIONING_EXPORT: ExportSettings = {
@@ -507,6 +516,7 @@ export function PositioningPricingPage() {
   const [exportError, setExportError] = useState("");
   const [exportingSlide, setExportingSlide] = useState(false);
   const [exportToolsOpen, setExportToolsOpen] = useState(false);
+  const [activeExportSettingsPanel, setActiveExportSettingsPanel] = useState<PositioningExportSettingsPanel>("priceBands");
   const [exportPresetKey, setExportPresetKey] = useState<(typeof EXPORT_PRESETS)[number]["key"]>("fhd");
   const [priceBandExport, setPriceBandExport] = useState<ExportSettings>(DEFAULT_PRICE_BAND_EXPORT);
   const [bubbleExport, setBubbleExport] = useState<ExportSettings>(DEFAULT_BUBBLE_EXPORT);
@@ -1231,77 +1241,117 @@ export function PositioningPricingPage() {
               </div>
             </div>
 
-            <section className="market-scan-export-drawer">
+            <section className={`market-scan-export-drawer positioning-pricing-export-drawer${exportToolsOpen ? " is-open" : ""}`}>
               <button
                 type="button"
                 className="market-scan-export-toggle"
                 onClick={() => setExportToolsOpen((value) => !value)}
                 aria-expanded={exportToolsOpen}
               >
-                <span>导出当前页 PNG</span>
-                <span>{exportToolsOpen ? "收起" : "展开"}</span>
+                <span>导出当前页 / 图表设置</span>
+                <span>{exportToolsOpen ? "收起设置" : "打开设置"}</span>
               </button>
               {exportToolsOpen ? (
-                <div className="market-scan-toolbar market-scan-toolbar--bottom">
-                  <div className="market-scan-toolbar-group market-scan-toolbar-group--settings">
-                    <label className="market-scan-field">
-                      <span>导出尺寸</span>
-                      <select
-                        value={exportPresetKey}
-                        onChange={(event) => setExportPresetKey(event.target.value as (typeof EXPORT_PRESETS)[number]["key"])}
-                      >
-                        {EXPORT_PRESETS.map((preset) => (
-                          <option key={preset.key} value={preset.key}>
-                            {preset.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="market-scan-field">
-                      <span>气泡倍率</span>
-                      <select
-                        value={bubbleScale}
-                        onChange={(event) => setBubbleScale(Number(event.target.value))}
-                      >
-                        {BUBBLE_SCALE_OPTIONS.map((option) => (
-                          <option key={option} value={option}>
-                            ×{option}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className="market-scan-field">
-                      <span>Price Bands</span>
-                      <ExportPanel
-                        value={priceBandExport}
-                        onChange={setPriceBandExport}
-                        seriesNames={activeFuelTypes}
-                        labelModeOptions={PRICE_BAND_LABEL_MODE_OPTIONS}
-                        showExportButton={false}
-                        showDimensionControls={false}
-                      />
-                    </div>
-                    <div className="market-scan-field">
-                      <span>Powertrain Bubble</span>
-                      <ExportPanel
-                        value={bubbleExport}
-                        onChange={setBubbleExport}
-                        seriesNames={activeFuelTypes}
-                        labelModeOptions={BUBBLE_LABEL_MODE_OPTIONS}
-                        showExportButton={false}
-                        showDimensionControls={false}
-                      />
+                <aside className="positioning-pricing-export-panel" aria-label="Positioning Pricing export settings">
+                  <header className="positioning-pricing-export-panel-head">
+                    <div>
+                      <span className="market-scan-panel-eyebrow">Export Settings</span>
+                      <h3>导出与图表样式</h3>
                     </div>
                     <button
                       type="button"
-                      className="btn btn-primary btn-sm"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setExportToolsOpen(false)}
+                    >
+                      关闭
+                    </button>
+                  </header>
+
+                  <div className="positioning-pricing-export-panel-body">
+                    <div className="positioning-pricing-export-quick-grid">
+                      <label className="market-scan-field">
+                        <span>导出尺寸</span>
+                        <select
+                          value={exportPresetKey}
+                          onChange={(event) => setExportPresetKey(event.target.value as (typeof EXPORT_PRESETS)[number]["key"])}
+                        >
+                          {EXPORT_PRESETS.map((preset) => (
+                            <option key={preset.key} value={preset.key}>
+                              {preset.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="market-scan-field">
+                        <span>气泡倍率</span>
+                        <select
+                          value={bubbleScale}
+                          onChange={(event) => setBubbleScale(Number(event.target.value))}
+                        >
+                          {BUBBLE_SCALE_OPTIONS.map((option) => (
+                            <option key={option} value={option}>
+                              ×{option}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+
+                    <button
+                      type="button"
+                      className={`btn btn-primary btn-liquid positioning-pricing-export-primary${exportingSlide ? " is-loading" : ""}`}
                       onClick={() => { void handleExportSlide(); }}
                       disabled={exportingSlide}
                     >
-                      {exportingSlide ? "正在导出 PNG..." : "导出当前页 PNG"}
+                      <span className="btn-liquid-label">{exportingSlide ? "正在导出 PNG..." : "导出当前页 PNG"}</span>
+                      {exportingSlide ? <span className="btn-liquid-loader" aria-hidden="true" /> : null}
                     </button>
+
+                    <div className="positioning-pricing-export-tabs" role="tablist" aria-label="图表导出设置">
+                      {POSITIONING_EXPORT_SETTINGS_TABS.map((tab) => {
+                        const active = tab.key === activeExportSettingsPanel;
+                        return (
+                          <button
+                            key={tab.key}
+                            type="button"
+                            className={`positioning-pricing-export-tab${active ? " is-active" : ""}`}
+                            onClick={() => setActiveExportSettingsPanel(tab.key)}
+                            role="tab"
+                            aria-selected={active}
+                          >
+                            <span>{tab.label}</span>
+                            <small>{tab.caption}</small>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="positioning-pricing-export-settings-card">
+                      {activeExportSettingsPanel === "priceBands" ? (
+                        <ExportPanel
+                          value={priceBandExport}
+                          onChange={setPriceBandExport}
+                          seriesNames={activeFuelTypes}
+                          labelModeOptions={PRICE_BAND_LABEL_MODE_OPTIONS}
+                          showExportButton={false}
+                          showDimensionControls={false}
+                          collapsible={false}
+                        />
+                      ) : (
+                        <ExportPanel
+                          value={bubbleExport}
+                          onChange={setBubbleExport}
+                          seriesNames={activeFuelTypes}
+                          labelModeOptions={BUBBLE_LABEL_MODE_OPTIONS}
+                          showExportButton={false}
+                          showDimensionControls={false}
+                          collapsible={false}
+                        />
+                      )}
+                    </div>
                   </div>
-                  <div className="market-scan-toolbar-meta">
+
+                  <footer className="market-scan-toolbar-meta positioning-pricing-export-meta">
                     <span className="market-scan-toolbar-chip">{exportPreset.width} x {positioningCanvasHeight}</span>
                     <span className="market-scan-toolbar-chip">{deck.metadata.labels.salesModeLabel}</span>
                     <span className="market-scan-toolbar-chip">{activeTab.label}</span>
@@ -1310,8 +1360,8 @@ export function PositioningPricingPage() {
                     <span className="market-scan-toolbar-chip">气泡 ×{bubbleScale}</span>
                     <span className="market-scan-toolbar-chip">{deck.metadata.selectedCountryLabel}</span>
                     <span className="market-scan-toolbar-chip">{deck.metadata.resolvedPeriod}</span>
-                  </div>
-                </div>
+                  </footer>
+                </aside>
               ) : null}
             </section>
           </div>

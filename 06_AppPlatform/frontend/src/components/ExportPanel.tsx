@@ -355,6 +355,8 @@ interface Props {
   labelModeOptions?: ExportLabelMode[];
   showExportButton?: boolean;
   showDimensionControls?: boolean;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
 }
 
 export function ExportPanel({
@@ -365,11 +367,14 @@ export function ExportPanel({
   labelModeOptions,
   showExportButton = true,
   showDimensionControls = true,
+  collapsible = true,
+  defaultOpen = false,
 }: Props) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const set = <K extends keyof ExportSettings>(k: K, v: ExportSettings[K]) => onChange({ ...s, [k]: v });
   const resolvedLabelModes = labelModeOptions && labelModeOptions.length > 0 ? labelModeOptions : DEFAULT_LABEL_MODES;
   const safeLabelMode = resolvedLabelModes.includes(s.dataLabelMode) ? s.dataLabelMode : "off";
+  const bodyOpen = !collapsible || open;
 
   useEffect(() => {
     if (safeLabelMode !== s.dataLabelMode) {
@@ -378,11 +383,13 @@ export function ExportPanel({
   }, [onChange, s, safeLabelMode]);
 
   return (
-    <div className="export-panel">
-      <button className="btn btn-sm btn-secondary" onClick={() => setOpen(!open)}>
-        {open ? "▾ 收起导出设置" : "▸ 导出图设置"}
-      </button>
-      {open && (
+    <div className={`export-panel${collapsible ? "" : " export-panel--static"}`}>
+      {collapsible ? (
+        <button type="button" className="btn btn-sm btn-secondary" onClick={() => setOpen(!open)}>
+          {open ? "▾ 收起导出设置" : "▸ 导出图设置"}
+        </button>
+      ) : null}
+      {bodyOpen ? (
         <div className="export-panel-body">
           <div className="export-row">
             <label><input type="checkbox" checked={s.showXGrid} onChange={e => set("showXGrid", e.target.checked)} /> X网格线</label>
@@ -496,7 +503,7 @@ export function ExportPanel({
             </div>
           ) : null}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
