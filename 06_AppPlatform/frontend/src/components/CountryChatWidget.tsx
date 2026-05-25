@@ -49,6 +49,12 @@ function snapToEdge(
   return { x: snappedX, y: Math.max(8, Math.min(y, window.innerHeight - size - 8)) };
 }
 
+function snappedOffset(snappedX: number, size: number): number {
+  // tuck mostly off-screen, leaving only VISIBLE_HINT visible
+  if (snappedX <= 20) return VISIBLE_HINT - size;
+  return window.innerWidth - VISIBLE_HINT;
+}
+
 function clampWidgetSize(width: number, height: number): { width: number; height: number } {
   const maxWidth = Math.max(320, Math.min(760, window.innerWidth - 32));
   const maxHeight = Math.max(380, Math.min(880, window.innerHeight - 32));
@@ -65,6 +71,9 @@ function clampWidgetSize(width: number, height: number): { width: number; height
 const FAB_SIZE = 72;
 const INITIAL_RIGHT = 20;
 const INITIAL_BOTTOM = 24;
+const VISIBLE_HINT = 22;       // px visible when auto-hidden at edge
+const SNAP_THRESHOLD = 70;     // px from edge to trigger snap
+const AUTO_HIDE_MS = 5000;     // ms idle before auto-hiding
 const WIDGET_SIZE_PRESETS = [
   { id: "compact", label: "紧凑", width: 360, height: 500 },
   { id: "default", label: "标准", width: 420, height: 620 },
@@ -177,6 +186,8 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
   }));
   const [dragging, setDragging] = useState(false);
   const [resizing, setResizing] = useState(false);
+  const [snapped, setSnapped] = useState(false);
+  const autoHideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragRef = useRef<{
     startX: number;
     startY: number;
@@ -184,6 +195,30 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
     originY: number;
     moved: boolean;
   } | null>(null);
+
+  // Auto-hide timer: after AUTO_HIDE_MS idle while collapsed, snap to edge
+  const resetAutoHide = useCallback(() => {
+    if (autoHideRef.current) clearTimeout(autoHideRef.current);
+    if (widgetExpanded || dragging) return;
+    autoHideRef.current = setTimeout(() => {
+      const snappedEdge = snapToEdge(fabPos.x, fabPos.y, FAB_SIZE);
+      setFabPos({ x: snappedOffset(snappedEdge.x, FAB_SIZE), y: snappedEdge.y });
+      setSnapped(true);
+    }, AUTO_HIDE_MS);
+  }, [widgetExpanded, dragging, fabPos]);
+
+  useEffect(() => {
+    resetAutoHide();
+    return () => { if (autoHideRef.current) clearTimeout(autoHideRef.current); };
+  }, [resetAutoHide]);
+
+  // Unsnap on hover when snapped
+  const onFabHover = useCallback(() => {
+    if (!snapped || dragging) return;
+    const mid = (window.innerWidth - FAB_SIZE) / 2;
+    setFabPos((p) => ({ x: Math.max(16, mid), y: p.y }));
+    setSnapped(false);
+  }, [snapped, dragging]);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -223,13 +258,23 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
     (e: React.PointerEvent) => {
       if (!dragRef.current) return;
       const wasDrag = dragRef.current.moved;
-      const finalPos = snapToEdge(fabPos.x, fabPos.y, FAB_SIZE);
-      setFabPos(finalPos);
+      const snappedEdge = snapToEdge(fabPos.x, fabPos.y, FAB_SIZE);
+      const distFromEdge = Math.min(
+        Math.abs(fabPos.x - snappedEdge.x),
+        Math.abs(fabPos.x - (window.innerWidth - FAB_SIZE - 16)),
+      );
       dragRef.current = null;
       setDragging(false);
       e.currentTarget.releasePointerCapture(e.pointerId);
       if (!wasDrag) {
         setWidgetExpanded(true);
+        setSnapped(false);
+      } else if (distFromEdge < SNAP_THRESHOLD) {
+        setFabPos({ x: snappedOffset(snappedEdge.x, FAB_SIZE), y: snappedEdge.y });
+        setSnapped(true);
+      } else {
+        setFabPos(fabPos);
+        setSnapped(false);
       }
     },
     [fabPos, setWidgetExpanded],
@@ -347,11 +392,19 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
     return (
       <button
         type="button"
-        className={`ccw-fab${dragging ? " is-dragging" : ""}`}
-        style={{ left: fabPos.x, top: fabPos.y }}
+        className={`ccw-fab${dragging ? " is-dragging" : ""}${snapped ? " is-snapped" : ""}`}
+        style={{
+          left: fabPos.x,
+          top: fabPos.y,
+          opacity: snapped ? 0.38 : 1,
+          transition: dragging
+            ? "none"
+            : "left 0.35s cubic-bezier(0.22,1,0.36,1), top 0.35s cubic-bezier(0.22,1,0.36,1), opacity 0.25s ease",
+        }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onMouseEnter={onFabHover}
         aria-label="打开国家助手"
       >
         <AssistantMark active={false} size={FAB_SIZE - 8} />
