@@ -1441,10 +1441,12 @@ export const api = {
     onDone: (suggestions: string[]) => void,
     onError: (error: string) => void,
   ): Promise<void> => {
-    const API_BASE = "/v1";
     const response = await fetch(`${API_BASE}/assistant/country/chat/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: buildHeaders(
+        { headers: { Accept: "text/event-stream" } },
+        { includeJsonContentType: true }
+      ),
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
