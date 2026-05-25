@@ -205,6 +205,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(msg || "Profile update failed");
     }
     const nextUser = normalizeUserPayload(await res.json() as Record<string, unknown>);
+    localStorage.removeItem("shared-filter-scope");
+    localStorage.removeItem("dashboard-cache");
     applyUser(nextUser);
     return nextUser;
   }, [applyUser]);

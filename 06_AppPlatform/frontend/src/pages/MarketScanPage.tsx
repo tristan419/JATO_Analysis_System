@@ -13,6 +13,7 @@ import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
+import { useAuth } from "../contexts/AuthContext";
 import { usePageTransition } from "../hooks/usePageTransition";
 import { DeckPeriodTimeline } from "../components/DeckPeriodTimeline";
 import {
@@ -56,6 +57,7 @@ import {
   toggleMarketScanSlideEditModeState,
   updateMarketScanActiveSlideLayout,
 } from "../utils/marketScanPageState";
+import { countryCodeToDatasetCountry } from "../utils/jatoCountries";
 import type {
   MarketScanBodyShareTrendItem,
   MarketScanChannelMixItem,
@@ -152,6 +154,10 @@ const DEFAULT_MARKET_SCAN_CHANNEL_OPTIONS: MarketScanChannelMixOption[] = [
   { value: DEFAULT_MARKET_SCAN_CHANNEL_VIEW, label: "按车系" },
 ];
 const MARKET_SCAN_SLIDE_LAYOUT_STORAGE_KEY = "market-scan";
+
+function resolveDefaultMarketScanCountry(primaryCountryCode: string | null | undefined): string {
+  return countryCodeToDatasetCountry(primaryCountryCode) ?? DEFAULT_MARKET_SCAN_COUNTRY;
+}
 
 function isMarketScanPageKey(value: string | null): value is MarketScanPageKey {
   return value !== null && TAB_ITEMS.some((item) => item.key === value);
@@ -2366,6 +2372,7 @@ export function MarketScanPage({
   initialDrilldownSegment?: string;
 } = {}) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { user } = useAuth();
   const marketScanLabelModeOptions = useMemo(
     () => buildExportLabelModeOptions({ showValue: true, showSeries: false }),
     [],
@@ -2396,7 +2403,7 @@ export function MarketScanPage({
     },
   );
   const [selectedCountry, setSelectedCountry] = useState<string | null>(
-    () => searchParams.get("country") || DEFAULT_MARKET_SCAN_COUNTRY,
+    () => searchParams.get("country") || resolveDefaultMarketScanCountry(user?.primaryCountry),
   );
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(
     () => searchParams.get("period"),

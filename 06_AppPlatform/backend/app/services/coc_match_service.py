@@ -110,6 +110,15 @@ def match_cocs(
     return matched, missing
 
 
+def find_archive_only_files(
+    rows: list[dict[str, str]],
+    file_set: set[str],
+) -> list[dict[str, str]]:
+    """Return archive filenames that do not have a row in the Excel registry."""
+    excel_chassis = {row["chassis"] for row in rows}
+    return [{"filename": filename} for filename in sorted(file_set - excel_chassis)]
+
+
 # ── SQLite DB ──────────────────────────────────────────────────────
 
 COC_DB_PATH = COC_MATCH_JOB_ROOT / "coc_match_history.db"
@@ -219,6 +228,7 @@ def build_html_report(
     rows: list[dict[str, Any]],
     matched: list[dict[str, Any]],
     missing: list[dict[str, Any]],
+    archive_only_files: list[dict[str, str]],
     country: str,
     month: str,
     prev_run: Any,
@@ -227,6 +237,7 @@ def build_html_report(
     total = len(rows)
     has = len(matched)
     no = len(missing)
+    archive_only_count = len(archive_only_files)
     rate = has / total * 100 if total else 0
 
     # ── Missing by Model ──
@@ -283,8 +294,17 @@ def build_html_report(
             <td>{info['country']}</td>
         </tr>"""
 
+    archive_only_rows_html = ""
+    for item in archive_only_files:
+        archive_only_rows_html += f"""
+        <tr class="archive-only">
+            <td>{item['filename']}</td>
+            <td>压缩包内存在，但 Excel 注册表无对应底盘号</td>
+        </tr>"""
+
     # ── All data JSON (for JS) ──
     all_data_json = json.dumps(rows, ensure_ascii=False)
+    archive_only_json = json.dumps(archive_only_files, ensure_ascii=False)
 
     # ── Diff section ──
     diff_section = ""
@@ -336,6 +356,7 @@ def build_html_report(
     # ── JS code (built separately to avoid f-string escape hell) ──
     js_code = """<script>
 const allData = """ + all_data_json + """;
+const archiveOnlyData = """ + archive_only_json + """;
 
 function renderAll(data) {
     const tbody = document.getElementById("all-tbody");
@@ -388,12 +409,21 @@ function exportMissing() {
     downloadCSV("missing_coc.csv", missing);
 }
 
+function exportArchiveOnly() {
+    const rows = archiveOnlyData.map(r => ({
+        chassis: r.filename,
+        model: "archive-only",
+        country: ""
+    }));
+    downloadCSV("archive_only_coc.csv", rows);
+}
+
 function exportAll() {
     downloadCSV("all_coc.csv", allData);
 }
 
 function showTab(tab) {
-    ["missing","matched","all","lost"].forEach(t => {
+    ["missing","matched","all","lost","extra"].forEach(t => {
         const s = document.getElementById("section-"+t);
         const b = document.getElementById("tab-"+t);
         if (s) s.classList.add("hidden");
@@ -424,13 +454,14 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans
 h1 {{ font-size: 24px; margin-bottom: 8px; color: #1a1a1a; }}
 h2 {{ font-size: 18px; margin-bottom: 16px; color: #1a1a1a; }}
 .subtitle {{ color: #666; font-size: 14px; margin-bottom: 24px; }}
-.cards {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }}
+.cards {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 32px; }}
 .card {{ background: white; border-radius: 12px; padding: 24px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }}
 .card .number {{ font-size: 36px; font-weight: 700; }}
 .card .label {{ font-size: 14px; color: #666; margin-top: 4px; }}
 .card.total .number {{ color: #1a1a1a; }}
 .card.has .number {{ color: #16a34a; }}
 .card.missing .number {{ color: #dc2626; }}
+.card.extra .number {{ color: #c2410c; }}
 .card.rate .number {{ color: #2563eb; }}
 .progress-bar {{ background: white; border-radius: 12px; padding: 20px 24px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }}
 .progress-label {{ display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }}
@@ -460,6 +491,8 @@ tr.missing td:first-child {{ color: #dc2626; font-weight: 500; }}
 tr.missing.lost {{ background: #fde8e8; }}
 tr.missing.new-entry {{ background: #fff7ed; }}
 tr.missing.new-entry td:first-child {{ color: #c2410c; }}
+tr.archive-only {{ background: #fff7ed; }}
+tr.archive-only td:first-child {{ color: #c2410c; font-weight: 500; }}
 tr.model-header td {{ background: #fafafa; padding: 8px 24px; font-size: 13px; color: #666; }}
 .hidden {{ display: none; }}
 .diff-tag {{ font-size: 11px; padding: 1px 6px; border-radius: 4px; margin-left: 6px; font-weight: 500; }}
@@ -471,12 +504,13 @@ tr.model-header td {{ background: #fafafa; padding: 8px 24px; font-size: 13px; c
 <body>
 <div class="container">
 <h1>{title}</h1>
-<p class="subtitle">注册表 {total} 条 · 已有 PDF {has} 条 · 覆盖率 {rate:.1f}%</p>
+<p class="subtitle">注册表 {total} 条 · 已有 PDF {has} 条 · 压缩包多余文件 {archive_only_count} 条 · 覆盖率 {rate:.1f}%</p>
 
 <div class="cards">
     <div class="card total"><div class="number">{total}</div><div class="label">注册表总数</div></div>
     <div class="card has"><div class="number">{has}</div><div class="label">已有 PDF</div></div>
     <div class="card missing"><div class="number">{no}</div><div class="label">缺失 PDF</div></div>
+    <div class="card extra"><div class="number">{archive_only_count}</div><div class="label">压缩包多余</div></div>
     <div class="card rate"><div class="number">{rate:.1f}%</div><div class="label">覆盖率</div></div>
 </div>
 
@@ -494,6 +528,7 @@ tr.model-header td {{ background: #fafafa; padding: 8px 24px; font-size: 13px; c
 <div class="toolbar">
     <div class="tabs">
         <button class="tab active" id="tab-missing" onclick="showTab('missing')">缺失 <strong>({no})</strong></button>
+        <button class="tab" id="tab-extra" onclick="showTab('extra')">压缩包多余 <strong>({archive_only_count})</strong></button>
         <button class="tab" id="tab-matched" onclick="showTab('matched')">已有 <strong>({has})</strong></button>
         <button class="tab" id="tab-all" onclick="showTab('all')">全部 <strong>({total})</strong></button>"""
 
@@ -504,6 +539,7 @@ tr.model-header td {{ background: #fafafa; padding: 8px 24px; font-size: 13px; c
     html += f"""
     </div>
     <button class="btn-export danger" onclick="exportMissing()">导出缺失 COC</button>
+    <button class="btn-export default" onclick="exportArchiveOnly()">导出压缩包多余</button>
     <button class="btn-export default" onclick="exportAll()">导出全部</button>
 </div>
 
@@ -516,6 +552,14 @@ tr.model-header td {{ background: #fafafa; padding: 8px 24px; font-size: 13px; c
     <table>
         <thead><tr><th>Chassis Number</th><th>Model</th><th>Country</th><th>Has PDF</th></tr></thead>
         <tbody>{missing_rows_html}</tbody>
+    </table>
+</div>
+
+<div class="section hidden" id="section-extra">
+    <div class="section-header">压缩包中存在、但 Excel 注册表中没有的文件</div>
+    <table>
+        <thead><tr><th>Archive Filename</th><th>Reason</th></tr></thead>
+        <tbody>{archive_only_rows_html}</tbody>
     </table>
 </div>
 
@@ -592,7 +636,11 @@ class CocMatchJobRunner(BaseJobRunner):
 
         # Step 3: Match
         matched, missing = match_cocs(rows, file_set)
-        self.log(f"  Matched: {len(matched)}, Missing: {len(missing)}")
+        archive_only_files = find_archive_only_files(rows, file_set)
+        self.log(
+            f"  Matched: {len(matched)}, Missing: {len(missing)}, "
+            f"Archive-only: {len(archive_only_files)}"
+        )
 
         # Step 4: Save to DB
         conn = _init_coc_db()
@@ -608,7 +656,16 @@ class CocMatchJobRunner(BaseJobRunner):
         conn.close()
 
         # Step 6: Build HTML report
-        html = build_html_report(rows, matched, missing, self.country, self.month, prev, diff)
+        html = build_html_report(
+            rows,
+            matched,
+            missing,
+            archive_only_files,
+            self.country,
+            self.month,
+            prev,
+            diff,
+        )
         report_path = self.state_dir / self.job_id / "report.html"
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(html, encoding="utf-8")
@@ -622,6 +679,7 @@ class CocMatchJobRunner(BaseJobRunner):
         state["totalRows"] = len(rows)
         state["matchedCount"] = len(matched)
         state["missingCount"] = len(missing)
+        state["extraFileCount"] = len(archive_only_files)
         state["coverageRate"] = round(len(matched) / len(rows) * 100, 1) if rows else 0
         if prev:
             state["previousRun"] = {"month": prev[1], "matched": prev[3], "total": prev[2]}
@@ -706,6 +764,7 @@ def create_coc_match_job(
         "totalRows": None,
         "matchedCount": None,
         "missingCount": None,
+        "extraFileCount": None,
         "coverageRate": None,
         "previousRun": None,
         "diffSummary": None,
@@ -894,6 +953,7 @@ def create_coc_match_job_from_upload(
         "totalRows": None,
         "matchedCount": None,
         "missingCount": None,
+        "extraFileCount": None,
         "coverageRate": None,
         "previousRun": None,
         "diffSummary": None,

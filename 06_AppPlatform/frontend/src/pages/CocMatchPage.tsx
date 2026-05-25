@@ -290,7 +290,7 @@ export function CocMatchPage() {
               <div>
                 <strong style={{ color: "#16a34a" }}>比对完成</strong>
                 <span style={{ color: "#666", marginLeft: 8 }}>
-                  共 {currentJob.totalRows} 条 · 匹配 {currentJob.matchedCount} · 缺失 {currentJob.missingCount} · 覆盖率 {currentJob.coverageRate}%
+                  共 {currentJob.totalRows} 条 · 匹配 {currentJob.matchedCount} · 缺失 {currentJob.missingCount} · 压缩包多余 {currentJob.extraFileCount ?? 0} · 覆盖率 {currentJob.coverageRate}%
                 </span>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
@@ -356,6 +356,7 @@ export function CocMatchPage() {
                   <th style={thStyle}>总行数</th>
                   <th style={thStyle}>匹配</th>
                   <th style={thStyle}>缺失</th>
+                  <th style={thStyle}>压缩包多余</th>
                   <th style={thStyle}>覆盖率</th>
                   <th style={thStyle}>创建时间</th>
                   <th style={thStyle}>操作</th>
@@ -372,6 +373,7 @@ export function CocMatchPage() {
                     <td style={tdStyle}>{job.totalRows ?? "-"}</td>
                     <td style={tdStyle}>{job.matchedCount ?? "-"}</td>
                     <td style={tdStyle}>{job.missingCount ?? "-"}</td>
+                    <td style={tdStyle}>{job.extraFileCount ?? "-"}</td>
                     <td style={tdStyle}>
                       {job.coverageRate != null ? `${job.coverageRate}%` : "-"}
                     </td>

@@ -1,21 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { api } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
-import type { CountryPaymentTerm } from "../types/orderGenius";
-
-const FALLBACK_COUNTRIES: CountryPaymentTerm[] = [
-  { countryCode: "SE", countryName: "Sweden", paymentTermCode: "LC90", paymentMethod: "LC", lcDays: 90 },
-  { countryCode: "CZ", countryName: "Czech Republic", paymentTermCode: "LC90", paymentMethod: "LC", lcDays: 90 },
-  { countryCode: "SK", countryName: "Slovakia", paymentTermCode: "LC90", paymentMethod: "LC", lcDays: 90 },
-  { countryCode: "RO", countryName: "Romania", paymentTermCode: "LC120", paymentMethod: "LC", lcDays: 120 },
-];
+import { JATO_COUNTRIES, formatJatoCountryOption } from "../utils/jatoCountries";
 
 export function CountrySetupPage() {
   const { user, updateProfile } = useAuth();
   const navigate = useNavigate();
-  const [countries, setCountries] = useState<CountryPaymentTerm[]>([]);
   const [primaryCountry, setPrimaryCountry] = useState(user?.primaryCountry ?? "");
   const [secondaryCountries, setSecondaryCountries] = useState<string[]>(
     user?.secondaryCountries ?? [],
@@ -24,22 +15,14 @@ export function CountrySetupPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    api.getOrderGeniusCountries()
-      .then((res) => setCountries(res.items.length > 0 ? res.items : FALLBACK_COUNTRIES))
-      .catch(() => setCountries(FALLBACK_COUNTRIES));
-  }, []);
-
-  useEffect(() => {
     if (!user) return;
     setPrimaryCountry(user.primaryCountry ?? "");
     setSecondaryCountries(user.secondaryCountries);
   }, [user]);
 
-  const availableCountries = countries.length > 0 ? countries : FALLBACK_COUNTRIES;
-
   const secondaryOptions = useMemo(
-    () => availableCountries.filter((country) => country.countryCode !== primaryCountry),
-    [availableCountries, primaryCountry],
+    () => JATO_COUNTRIES.filter((country) => country.countryCode !== primaryCountry),
+    [primaryCountry],
   );
 
   function toggleSecondary(countryCode: string): void {
@@ -76,7 +59,7 @@ export function CountrySetupPage() {
     <section className="crud-shell">
       <header className="crud-hero">
         <h1>Country Setup</h1>
-        <p>选择主国家和可快速切换的副国家。后续订单、问答和国家页面会优先读取这个偏好。</p>
+        <p>选择你负责的 JATO 国家范围。JATO 看板和 MarketScan 默认读取主国家，Order Genius 后续会读取主国家加副国家。</p>
       </header>
 
       <div className="card crud-card" style={{ padding: 20, maxWidth: 760 }}>
@@ -92,9 +75,9 @@ export function CountrySetupPage() {
             style={{ minWidth: 260 }}
           >
             <option value="">Select country...</option>
-            {availableCountries.map((country) => (
+            {JATO_COUNTRIES.map((country) => (
               <option key={country.countryCode} value={country.countryCode}>
-                {country.countryName} ({country.countryCode})
+                {formatJatoCountryOption(country)}
               </option>
             ))}
           </select>
@@ -102,7 +85,7 @@ export function CountrySetupPage() {
 
         <div style={{ marginBottom: 16 }}>
           <span style={{ display: "block", fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
-            Secondary Countries / 副国家
+            Secondary Countries / 副国家（可选）
           </span>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
             {secondaryOptions.map((country) => (
@@ -112,7 +95,7 @@ export function CountrySetupPage() {
                   checked={secondaryCountries.includes(country.countryCode)}
                   onChange={() => toggleSecondary(country.countryCode)}
                 />
-                <span>{country.countryName} ({country.countryCode})</span>
+                <span>{formatJatoCountryOption(country)}</span>
               </label>
             ))}
           </div>

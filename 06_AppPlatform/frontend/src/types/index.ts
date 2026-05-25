@@ -1997,6 +1997,7 @@ export interface CocMatchJob {
   totalRows?: number;
   matchedCount?: number;
   missingCount?: number;
+  extraFileCount?: number;
   coverageRate?: number;
   previousRun?: { month: string; matched: number; total: number } | null;
   diffSummary?: { gained: number; lost: number; newEntries: number } | null;

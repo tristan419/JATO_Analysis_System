@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
-import type { CountryPaymentTerm } from "../types/orderGenius";
+import {
+  JATO_COUNTRIES,
+  formatJatoCountryOption,
+  type JatoCountryOption,
+} from "../utils/jatoCountries";
 
 type Tab = "users" | "requests" | "matrix" | "audit";
 
@@ -62,7 +66,7 @@ export function AccessControlPage() {
   const [requestStatus, setRequestStatus] = useState("pending");
   const [requestsLoading, setRequestsLoading] = useState(false);
   const [reviewingRequestId, setReviewingRequestId] = useState<string | null>(null);
-  const [countries, setCountries] = useState<CountryPaymentTerm[]>([]);
+  const [countries] = useState<JatoCountryOption[]>(JATO_COUNTRIES);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -107,12 +111,6 @@ export function AccessControlPage() {
   useEffect(() => {
     if (tab === "requests") void loadRequests();
   }, [loadRequests, tab]);
-  useEffect(() => {
-    api.getOrderGeniusCountries()
-      .then((res) => setCountries(res.items || []))
-      .catch(() => setCountries([]));
-  }, []);
-
   const createUser = async () => {
     if (!newUser.username || newUser.password.length < 6) return setError("Username required, password min 6 chars");
     setError("");
@@ -233,7 +231,7 @@ export function AccessControlPage() {
                         <option value="">Unset</option>
                         {countries.map((country) => (
                           <option key={country.countryCode} value={country.countryCode}>
-                            {country.countryCode} {country.countryName}
+                            {formatJatoCountryOption(country)}
                           </option>
                         ))}
                       </select>
