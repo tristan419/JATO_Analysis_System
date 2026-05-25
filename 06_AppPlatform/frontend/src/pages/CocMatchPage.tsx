@@ -102,6 +102,7 @@ export function CocMatchPage() {
   const [currentJob, setCurrentJob] = useState<CocMatchJob | null>(null);
   const [jobList, setJobList] = useState<CocMatchJob[]>([]);
   const [pollId, setPollId] = useState<string | null>(null);
+  const [reportAction, setReportAction] = useState<string | null>(null);
   const pollingRef = useRef(false);
   const jobsCountryFilter = country.trim().toUpperCase();
 
@@ -190,6 +191,49 @@ export function CocMatchPage() {
       setPollId(res.item.jobId);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "重试失败");
+    }
+  };
+
+  const handleOpenReport = async (jobId: string) => {
+    const actionId = `${jobId}:view`;
+    const reportWindow = window.open("", "_blank");
+    if (!reportWindow) {
+      setError("浏览器阻止了新窗口，请允许弹窗后重试。");
+      return;
+    }
+    setReportAction(actionId);
+    setError(null);
+    try {
+      const blob = await api.cocMatchGetReport(jobId);
+      const url = URL.createObjectURL(blob);
+      reportWindow.location.href = url;
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err: unknown) {
+      reportWindow.close();
+      setError(err instanceof Error ? err.message : "查看报告失败");
+    } finally {
+      setReportAction(null);
+    }
+  };
+
+  const handleDownloadReport = async (jobId: string) => {
+    const actionId = `${jobId}:download`;
+    setReportAction(actionId);
+    setError(null);
+    try {
+      const blob = await api.cocMatchGetReport(jobId, true);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `coc_report_${jobId}.html`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "下载报告失败");
+    } finally {
+      setReportAction(null);
     }
   };
 
@@ -310,20 +354,23 @@ export function CocMatchPage() {
                 </span>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <a href={`/v1/coc-match/jobs/${currentJob.jobId}/report`} target="_blank" rel="noopener noreferrer"
+                <button onClick={() => handleOpenReport(currentJob.jobId)}
+                  disabled={reportAction !== null}
                   style={{
                     padding: "8px 20px", background: "#16a34a", color: "white", borderRadius: 8,
-                    textDecoration: "none", fontWeight: 600, fontSize: 14,
+                    border: "none", fontWeight: 600, fontSize: 14, cursor: reportAction ? "wait" : "pointer",
                   }}>
-                  查看报告
-                </a>
-                <a href={`/v1/coc-match/jobs/${currentJob.jobId}/report?download=1`}
+                  {reportAction === `${currentJob.jobId}:view` ? "打开中..." : "查看报告"}
+                </button>
+                <button onClick={() => handleDownloadReport(currentJob.jobId)}
+                  disabled={reportAction !== null}
                   style={{
                     padding: "8px 20px", background: "white", color: "#16a34a", borderRadius: 8,
-                    border: "2px solid #16a34a", textDecoration: "none", fontWeight: 600, fontSize: 14,
+                    border: "2px solid #16a34a", fontWeight: 600, fontSize: 14,
+                    cursor: reportAction ? "wait" : "pointer",
                   }}>
-                  下载报告
-                </a>
+                  {reportAction === `${currentJob.jobId}:download` ? "下载中..." : "下载报告"}
+                </button>
               </div>
             </div>
           </div>
@@ -399,15 +446,25 @@ export function CocMatchPage() {
                     <td style={tdStyle}>
                       {job.status === "success" && (
                         <span style={{ fontSize: 13, whiteSpace: "nowrap" }}>
-                          <a href={`/v1/coc-match/jobs/${job.jobId}/report`} target="_blank" rel="noopener noreferrer"
-                            style={{ color: "#2563eb", cursor: "pointer", textDecoration: "underline" }}>
-                            查看
-                          </a>
+                          <button onClick={() => handleOpenReport(job.jobId)}
+                            disabled={reportAction !== null}
+                            style={{
+                              color: "#2563eb", cursor: reportAction ? "wait" : "pointer",
+                              textDecoration: "underline", background: "none", border: "none", padding: 0,
+                              fontSize: 13,
+                            }}>
+                            {reportAction === `${job.jobId}:view` ? "打开中" : "查看"}
+                          </button>
                           <span style={{ color: "#d1d5db", margin: "0 4px" }}>|</span>
-                          <a href={`/v1/coc-match/jobs/${job.jobId}/report?download=1`}
-                            style={{ color: "#16a34a", cursor: "pointer", textDecoration: "underline" }}>
-                            下载
-                          </a>
+                          <button onClick={() => handleDownloadReport(job.jobId)}
+                            disabled={reportAction !== null}
+                            style={{
+                              color: "#16a34a", cursor: reportAction ? "wait" : "pointer",
+                              textDecoration: "underline", background: "none", border: "none", padding: 0,
+                              fontSize: 13,
+                            }}>
+                            {reportAction === `${job.jobId}:download` ? "下载中" : "下载"}
+                          </button>
                         </span>
                       )}
                       {job.status === "failed" && (

@@ -2756,6 +2756,11 @@ export const api = {
     request<{ item: Record<string, unknown> }>(`/coc-match/jobs/${jobId}`)
       .then((res) => ({ item: mapCocMatchJob(res.item) })),
 
+  cocMatchGetReport: (jobId: string, download = false) => {
+    const qs = download ? "?download=1" : "";
+    return requestBlob(`/coc-match/jobs/${encodeURIComponent(jobId)}/report${qs}`);
+  },
+
   cocMatchRetryJob: (jobId: string) =>
     request<{ item: Record<string, unknown> }>(
       `/coc-match/jobs/${jobId}/retry`,
