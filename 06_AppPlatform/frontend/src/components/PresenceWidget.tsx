@@ -28,10 +28,10 @@ function edgeSnap(x: number) {
 export function PresenceWidget() {
   const { online, samePage, users } = usePresence();
   const [expanded, setExpanded] = useState(false);
-  const [snapped, setSnapped] = useState(false);
+  const [snapped, setSnapped] = useState(true);
   const [dragging, setDragging] = useState(false);
   const [pos, setPos] = useState(() => ({
-    x: window.innerWidth - W - 12,
+    x: window.innerWidth - VISIBLE_HINT,
     y: INITIAL_TOP,
   }));
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -55,11 +55,15 @@ export function PresenceWidget() {
     } catch { /* decorative */ }
   }, [expanded, totalH]);
 
-  /* unsnap on expand */
+  /* unsnap on expand — slide to nearest edge */
   useEffect(() => {
     if (!expanded || !snapped) return;
-    const mid = (window.innerWidth - W) / 2;
-    setPos((p) => ({ x: Math.max(8, mid), y: p.y }));
+    setPos((p) => ({
+      x: p.x > window.innerWidth / 2
+        ? window.innerWidth - W - 8
+        : 8,
+      y: p.y,
+    }));
     setSnapped(false);
   }, [expanded, snapped]);
 

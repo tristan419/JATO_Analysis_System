@@ -181,12 +181,12 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
 
   /* --- Drag state --- */
   const [fabPos, setFabPos] = useState<{ x: number; y: number }>(() => ({
-    x: window.innerWidth - FAB_SIZE - INITIAL_RIGHT,
+    x: window.innerWidth - VISIBLE_HINT,
     y: window.innerHeight - FAB_SIZE - INITIAL_BOTTOM,
   }));
   const [dragging, setDragging] = useState(false);
   const [resizing, setResizing] = useState(false);
-  const [snapped, setSnapped] = useState(false);
+  const [snapped, setSnapped] = useState(true);
   const autoHideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragRef = useRef<{
     startX: number;
