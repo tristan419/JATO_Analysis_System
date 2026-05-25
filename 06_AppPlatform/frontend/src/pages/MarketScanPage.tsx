@@ -37,7 +37,7 @@ import {
   buildSegmentInsight,
   type MarketInsightSnapshot,
 } from "../utils/marketScanInsights";
-import { SERIES_COLORS, fuelColor, originColor } from "../utils/colors";
+import { SERIES_COLORS, fuelColor, originColor, setFuelColorOverrides, setOriginColorOverrides } from "../utils/colors";
 import {
   DEFAULT_SLIDE_LAYOUT,
   readStoredSlideLayouts,
@@ -2384,6 +2384,12 @@ export function MarketScanPage({
   const [exportingSlide, setExportingSlide] = useState(false);
   const [exportSettings, setExportSettings] = useState<ExportSettings>({ ...DEFAULT_MARKET_SCAN_EXPORT });
   const [exportToolsOpen, setExportToolsOpen] = useState(false);
+
+  // Cascading color: changing fuel/origin color in export panel → all charts update
+  useEffect(() => {
+    setFuelColorOverrides(exportSettings.seriesColors ?? {});
+    setOriginColorOverrides(exportSettings.seriesColors ?? {});
+  }, [exportSettings.seriesColors]);
   const [trendDrawer, setTrendDrawer] = useState<{
     open: boolean; brand: string; model?: string; sourceTable: string;
   }>({ open: false, brand: "", sourceTable: "monthly_brand_ranking" });

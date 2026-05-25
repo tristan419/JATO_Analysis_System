@@ -208,16 +208,6 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
     ],
   },
   {
-    id: "admin",
-    label: "Admin",
-    sublabel: "管理",
-    type: "dropdown",
-    minRole: "admin",
-    items: [
-      { label: "Access Control", sublabel: "权限管理", to: "/admin/access-control", minRole: "admin" },
-    ],
-  },
-  {
     id: "data-ops",
     label: "Data Ops",
     sublabel: "数据运维",
@@ -237,6 +227,7 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
           { label: "Matching Review", sublabel: "匹配审核", to: "/data/matching-review", minRole: "editor" },
           { label: "JATO Monthly Update", sublabel: "JATO 月更", to: "/data/jato-monthly-update", minRole: "editor" },
           { label: "Eng Config", sublabel: "工程配置", to: "/engineering-config", minRole: "viewer" },
+          { label: "Access Control", sublabel: "权限管理", to: "/admin/access-control", minRole: "admin" },
         ],
       },
     ],
@@ -248,6 +239,7 @@ const MEGA_MENU_ROUTE_MAP: Record<string, string> = {
   "/market": "market-scan",
   "/product": "product-deck",
   "/data": "data-ops",
+  "/admin": "data-ops",
 };
 
 export function getActiveMegaMenuId(pathname: string): string | null {

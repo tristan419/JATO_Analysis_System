@@ -43,21 +43,36 @@ export function normalizePowertrainName(value: string): string {
   return value.trim().toUpperCase();
 }
 
-/** Return powertrain color if name matches, else fallback */
-export function ptColor(name: string, fallback: string): string {
-  return POWERTRAIN_COLORS[name] ?? POWERTRAIN_COLORS[name.toUpperCase()] ?? fallback;
-}
-
 /** Assign color to a series: powertrain-aware when `isPowertrain` is true */
 export function seriesColor(name: string, idx: number, palette: string[], isPowertrain: boolean): string {
   if (isPowertrain) return ptColor(name, palette[idx % palette.length]);
   return palette[idx % palette.length];
 }
 
+// Module-level color overrides — set by pages that have export color customization
+let _fuelOverrides: Record<string, string> = {};
+let _originOverrides: Record<string, string> = {};
+
+export function setFuelColorOverrides(overrides: Record<string, string>): void {
+  _fuelOverrides = { ...overrides };
+}
+
+export function setOriginColorOverrides(overrides: Record<string, string>): void {
+  _originOverrides = { ...overrides };
+}
+
 export function fuelColor(fuel: string): string {
+  if (_fuelOverrides[fuel]) return _fuelOverrides[fuel];
   return FUEL_COLORS[fuel] ?? "#94a3b8";
 }
 
 export function originColor(origin: string): string {
+  if (_originOverrides[origin]) return _originOverrides[origin];
   return ORIGIN_COLORS[origin] ?? "#64748b";
 }
+
+export function ptColor(name: string, fallback: string): string {
+  if (_fuelOverrides[name]) return _fuelOverrides[name];
+  return POWERTRAIN_COLORS[name] ?? POWERTRAIN_COLORS[name.toUpperCase()] ?? fallback;
+}
+
