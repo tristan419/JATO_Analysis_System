@@ -20,6 +20,36 @@ class UserContext:
     name: str
 
 
+def _anonymous_viewer(x_user_name: str = "anonymous") -> UserContext:
+    return UserContext(
+        role="viewer",
+        name=str(x_user_name).strip() or "anonymous",
+    )
+
+
+def _token_user(
+    x_auth_token: str | None,
+    x_user_name: str = "anonymous",
+) -> UserContext | None:
+    if not x_auth_token:
+        return None
+
+    session = session_store.lookup(x_auth_token)
+    if session and session.role in ROLE_LEVEL:
+        return UserContext(role=session.role, name=session.username)
+
+    if x_auth_token in TOKEN_ROLE_MAP:
+        role = TOKEN_ROLE_MAP[x_auth_token]
+        if role not in ROLE_LEVEL:
+            raise HTTPException(status_code=403, detail="Invalid role")
+        return UserContext(
+            role=role,
+            name=str(x_user_name).strip() or "anonymous",
+        )
+
+    return None
+
+
 def get_current_user(
     x_auth_token: str | None = Header(default=None),
     x_user_name: str = Header(default="anonymous"),
@@ -30,20 +60,7 @@ def get_current_user(
             name=str(x_user_name).strip() or "anonymous",
         )
 
-    if x_auth_token:
-        session = session_store.lookup(x_auth_token)
-        if session:
-            return UserContext(role=session.role, name=session.username)
-        if x_auth_token in TOKEN_ROLE_MAP:
-            role = TOKEN_ROLE_MAP[x_auth_token]
-            if role not in ROLE_LEVEL:
-                raise HTTPException(status_code=403, detail="Invalid role")
-            return UserContext(
-                role=role,
-                name=str(x_user_name).strip() or "anonymous",
-            )
-
-    raise HTTPException(status_code=401, detail="Unauthorized")
+    return _token_user(x_auth_token, x_user_name) or _anonymous_viewer(x_user_name)
 
 
 def require_min_role(min_role: str) -> Callable:
@@ -69,16 +86,7 @@ def get_optional_user(
     if not AUTH_ENABLED:
         return UserContext(role="admin", name=name)
 
-    if x_auth_token:
-        session = session_store.lookup(x_auth_token)
-        if session:
-            return UserContext(role=session.role, name=session.username)
-        if x_auth_token in TOKEN_ROLE_MAP:
-            role = TOKEN_ROLE_MAP[x_auth_token]
-            if role in ROLE_LEVEL:
-                return UserContext(role=role, name=name)
-
-    return UserContext(role="anonymous", name=name)
+    return _token_user(x_auth_token, name) or _anonymous_viewer(name)
 
 
 def optional_viewer(user: UserContext = Depends(get_optional_user)) -> UserContext:
