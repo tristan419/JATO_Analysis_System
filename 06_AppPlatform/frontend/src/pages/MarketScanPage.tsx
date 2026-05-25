@@ -2382,15 +2382,31 @@ export function MarketScanPage({
   const [error, setError] = useState("");
   const [exportError, setExportError] = useState("");
   const [exportingSlide, setExportingSlide] = useState(false);
-  const [exportSettings, setExportSettings] = useState<ExportSettings>({ ...DEFAULT_MARKET_SCAN_EXPORT });
+  const [exportSettings, setExportSettings] = useState<ExportSettings>(() => {
+    const base = { ...DEFAULT_MARKET_SCAN_EXPORT };
+    try {
+      const saved = localStorage.getItem("ms_color_overrides");
+      if (saved) base.seriesColors = JSON.parse(saved);
+    } catch { /* ignore corrupt localStorage */ }
+    return base;
+  });
   const [exportToolsOpen, setExportToolsOpen] = useState(false);
 
   // Cascading color: changing fuel/origin color in export panel → all charts update.
-  // Only overrides for explicitly-changed series are set; other fuels keep defaults.
+  // Uses a version counter so React re-renders when module-level overrides change.
+  const [colorVersion, setColorVersion] = useState(0);
   useEffect(() => {
     setFuelColorOverrides(exportSettings.seriesColors ?? {});
     setOriginColorOverrides(exportSettings.seriesColors ?? {});
+    setColorVersion(v => v + 1); // trigger re-render after overrides are applied
     return () => { setFuelColorOverrides({}); setOriginColorOverrides({}); };
+  }, [exportSettings.seriesColors]);
+
+  // Persist seriesColors to localStorage for cross-session recall
+  useEffect(() => {
+    if (Object.keys(exportSettings.seriesColors ?? {}).length > 0) {
+      localStorage.setItem("ms_color_overrides", JSON.stringify(exportSettings.seriesColors));
+    }
   }, [exportSettings.seriesColors]);
   const [trendDrawer, setTrendDrawer] = useState<{
     open: boolean; brand: string; model?: string; sourceTable: string;
