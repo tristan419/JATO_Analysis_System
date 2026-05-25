@@ -196,27 +196,30 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
     moved: boolean;
   } | null>(null);
 
-  // Auto-hide timer: after AUTO_HIDE_MS idle while collapsed, snap to edge
-  const resetAutoHide = useCallback(() => {
+  // Auto-hide timer: after AUTO_HIDE_MS idle while collapsed, snap to edge.
+  // Uses functional setFabPos so the timer doesn't restart on position changes.
+  useEffect(() => {
     if (autoHideRef.current) clearTimeout(autoHideRef.current);
     if (widgetExpanded || dragging) return;
     autoHideRef.current = setTimeout(() => {
-      const snappedEdge = snapToEdge(fabPos.x, fabPos.y, FAB_SIZE);
-      setFabPos({ x: snappedOffset(snappedEdge.x, FAB_SIZE), y: snappedEdge.y });
+      setFabPos((p) => {
+        const edge = snapToEdge(p.x, p.y, FAB_SIZE);
+        return { x: snappedOffset(edge.x, FAB_SIZE), y: edge.y };
+      });
       setSnapped(true);
     }, AUTO_HIDE_MS);
-  }, [widgetExpanded, dragging, fabPos]);
-
-  useEffect(() => {
-    resetAutoHide();
     return () => { if (autoHideRef.current) clearTimeout(autoHideRef.current); };
-  }, [resetAutoHide]);
+  }, [widgetExpanded, dragging]);
 
-  // Unsnap on hover when snapped
+  // Unsnap on hover — slide to nearest fully-visible edge, NOT center
   const onFabHover = useCallback(() => {
     if (!snapped || dragging) return;
-    const mid = (window.innerWidth - FAB_SIZE) / 2;
-    setFabPos((p) => ({ x: Math.max(16, mid), y: p.y }));
+    setFabPos((p) => ({
+      x: p.x > window.innerWidth / 2
+        ? window.innerWidth - FAB_SIZE - 16
+        : 16,
+      y: p.y,
+    }));
     setSnapped(false);
   }, [snapped, dragging]);
 
