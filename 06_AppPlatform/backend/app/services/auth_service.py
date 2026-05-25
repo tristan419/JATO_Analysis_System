@@ -1,12 +1,14 @@
-"""Auth service — password hashing, login sessions, user CRUD."""
+"""Auth service — password hashing, JWT sessions, user CRUD."""
 
 from __future__ import annotations
 
 import hashlib
+import hmac
+import json as _json
+import os
 import secrets
-import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -47,51 +49,71 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
-# ── In-memory session token store ─────────────────────────────────
+# ── JWT session tokens (multi-worker safe, survives restarts) ─────
+
+import base64
+
+_JWT_SECRET = os.getenv("APP_JWT_SECRET", "change-me-jwt-secret").encode()
+_JWT_TTL = 24 * 3600  # 24 hours
+
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+
+def _b64url_decode(data: str) -> bytes:
+    padded = data + "=" * (4 - len(data) % 4) if len(data) % 4 else data
+    return base64.urlsafe_b64decode(padded)
+
+
+def jwt_encode(payload: dict, ttl: int = _JWT_TTL) -> str:
+    """HS256 JWT: header.payload.signature."""
+    header = _b64url_encode(_json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    body = _b64url_encode(_json.dumps({
+        **payload, "exp": int(time.time()) + ttl, "iat": int(time.time()),
+    }).encode())
+    sig = hmac.new(_JWT_SECRET, f"{header}.{body}".encode(), "sha256").digest()
+    return f"{header}.{body}.{_b64url_encode(sig)}"
+
+
+def jwt_decode(token: str) -> dict | None:
+    """Verify and decode a JWT. Returns payload dict or None."""
+    try:
+        header, body, sig = token.split(".")
+        expected = hmac.new(_JWT_SECRET, f"{header}.{body}".encode(), "sha256").digest()
+        if not secrets.compare_digest(_b64url_decode(sig), expected):
+            return None
+        payload = _json.loads(_b64url_decode(body))
+        if payload.get("exp", 0) < time.time():
+            return None
+        return payload
+    except Exception:
+        return None
 
 
 @dataclass
 class SessionToken:
     username: str
     role: str
-    created_at: float = field(default_factory=time.time)
 
 
 class SessionStore:
-    """In-memory token → user mapping. Survives requests, dies on restart."""
-
-    def __init__(self, ttl_hours: int = 24) -> None:
-        self._tokens: dict[str, SessionToken] = {}
-        self._ttl = ttl_hours * 3600
-        self._lock = threading.Lock()
+    """Stateless JWT session store — no in-memory state, multi-worker safe."""
 
     def create(self, username: str, role: str) -> str:
-        """Generate a new session token and return it."""
-        token = secrets.token_urlsafe(32)
-        with self._lock:
-            self._cleanup()
-            self._tokens[token] = SessionToken(username=username, role=role)
-        return token
+        return jwt_encode({"username": username, "role": role})
 
     def lookup(self, token: str) -> SessionToken | None:
-        """Resolve a token to a session, or None if expired/unknown."""
-        with self._lock:
-            self._cleanup()
-            return self._tokens.get(token)
+        payload = jwt_decode(token)
+        if not payload:
+            return None
+        return SessionToken(
+            username=payload.get("username", ""),
+            role=payload.get("role", "viewer"),
+        )
 
     def revoke(self, token: str) -> None:
-        with self._lock:
-            self._tokens.pop(token, None)
-
-    def _cleanup(self) -> None:
-        now = time.time()
-        expired = [
-            tok
-            for tok, sess in self._tokens.items()
-            if now - sess.created_at > self._ttl
-        ]
-        for tok in expired:
-            del self._tokens[tok]
+        pass  # JWT is self-expiring; add a blocklist here if needed
 
 
 session_store = SessionStore()
