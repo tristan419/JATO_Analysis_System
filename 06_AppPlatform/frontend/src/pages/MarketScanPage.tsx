@@ -3124,6 +3124,7 @@ export function MarketScanPage({
                       onChange={setExportSettings}
                       labelModeOptions={marketScanLabelModeOptions}
                       showExportButton={false}
+                      seriesNames={selectedFuelTypes}
                     />
                   </div>
                   <div className="market-scan-toolbar-meta">
