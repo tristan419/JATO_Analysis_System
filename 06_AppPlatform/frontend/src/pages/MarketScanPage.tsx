@@ -2385,10 +2385,12 @@ export function MarketScanPage({
   const [exportSettings, setExportSettings] = useState<ExportSettings>({ ...DEFAULT_MARKET_SCAN_EXPORT });
   const [exportToolsOpen, setExportToolsOpen] = useState(false);
 
-  // Cascading color: changing fuel/origin color in export panel → all charts update
+  // Cascading color: changing fuel/origin color in export panel → all charts update.
+  // Only overrides for explicitly-changed series are set; other fuels keep defaults.
   useEffect(() => {
     setFuelColorOverrides(exportSettings.seriesColors ?? {});
     setOriginColorOverrides(exportSettings.seriesColors ?? {});
+    return () => { setFuelColorOverrides({}); setOriginColorOverrides({}); };
   }, [exportSettings.seriesColors]);
   const [trendDrawer, setTrendDrawer] = useState<{
     open: boolean; brand: string; model?: string; sourceTable: string;
