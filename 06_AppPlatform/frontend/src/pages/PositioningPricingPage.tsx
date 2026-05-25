@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
@@ -46,6 +46,20 @@ const DEFAULT_LENGTH_MAX = 5000;
 const DEFAULT_LENGTH_STEP = 50;
 const DEFAULT_TOP_N = 50;
 const DEFAULT_BUBBLE_SCALE = 2;
+type PositioningLayoutDirection = "row" | "column";
+
+const DEFAULT_POSITIONING_LAYOUT_DIRECTION: PositioningLayoutDirection = "row";
+const DEFAULT_POSITIONING_SPLIT_RATIO = 50;
+const DEFAULT_POSITIONING_CHART_HEIGHT = 430;
+const MIN_POSITIONING_SPLIT_RATIO = 30;
+const MAX_POSITIONING_SPLIT_RATIO = 70;
+const MIN_POSITIONING_CHART_HEIGHT = 280;
+const MAX_POSITIONING_CHART_HEIGHT = 800;
+const POSITIONING_LAYOUT_DIRECTION_STORAGE_KEY = "pos_layout_dir";
+const POSITIONING_SPLIT_RATIO_STORAGE_KEY = "pos_layout_split";
+const POSITIONING_CHART_HEIGHT_STORAGE_KEY = "pos_layout_height";
+const POSITIONING_ROW_HEIGHT_CHROME = 650;
+const POSITIONING_COLUMN_HEIGHT_CHROME = 830;
 const TOP_N_OPTIONS = [30, 50, 100] as const;
 const BUBBLE_SCALE_OPTIONS = [1, 2, 3, 4] as const;
 const POSITIONING_CHART_MARGIN = { l: 96, r: 24, t: 16, b: 62 } as const;
@@ -104,6 +118,66 @@ const PRICE_OVERLAY_REASON_LABELS: Record<string, string> = {
   "no-overlay-matches": "当前页未命中 reviewed price",
   "duckdb-overlay-failed": "DuckDB overlay 执行失败",
 };
+
+type PositioningGridStyle = CSSProperties & {
+  "--positioning-chart-height": string;
+  "--positioning-split-ratio": string;
+  "--positioning-remainder-ratio": string;
+};
+
+function isPositioningLayoutDirection(value: unknown): value is PositioningLayoutDirection {
+  return value === "row" || value === "column";
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function readStoredJson(key: string): unknown {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function readStoredLayoutDirection(): PositioningLayoutDirection {
+  const stored = readStoredJson(POSITIONING_LAYOUT_DIRECTION_STORAGE_KEY);
+  return isPositioningLayoutDirection(stored) ? stored : DEFAULT_POSITIONING_LAYOUT_DIRECTION;
+}
+
+function readStoredNumber(key: string, fallback: number, min: number, max: number): number {
+  const stored = readStoredJson(key);
+  const value = typeof stored === "number" ? stored : Number(stored);
+  return Number.isFinite(value) ? clampNumber(value, min, max) : fallback;
+}
+
+function writeStoredJson(key: string, value: string | number): void {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function resolvePositioningCanvasHeight(
+  presetHeight: number,
+  layoutDirection: PositioningLayoutDirection,
+  chartHeight: number,
+): number {
+  const contentHeight = layoutDirection === "column"
+    ? chartHeight * 2 + POSITIONING_COLUMN_HEIGHT_CHROME
+    : chartHeight + POSITIONING_ROW_HEIGHT_CHROME;
+  return Math.max(presetHeight, contentHeight);
+}
+
+function buildPositioningGridStyle(
+  splitRatio: number,
+  chartHeight: number,
+): PositioningGridStyle {
+  return {
+    "--positioning-chart-height": `${chartHeight}px`,
+    "--positioning-split-ratio": `${splitRatio}fr`,
+    "--positioning-remainder-ratio": `${100 - splitRatio}fr`,
+  };
+}
 const TAB_ITEMS: Array<{
   key: PositioningPricingPageKey;
   code: string;
@@ -273,6 +347,7 @@ function buildBubbleTraces(
   items: PositioningPricingBubbleItem[],
   fuelOrder: string[],
   bubbleScale: number,
+  labelFontSize = 9,
 ): Data[] {
   const sizing = buildBubbleSizing(items.map((item) => item.sales), {
     maxDiameter: 28 * bubbleScale,
@@ -291,7 +366,7 @@ function buildBubbleTraces(
       x: fuelItems.map((item) => item.length),
       y: fuelItems.map((item) => item.msrpMin),
       textposition: labelPosition,
-      textfont: { size: 9, color: "#334155" },
+      textfont: { size: labelFontSize, color: "#334155" },
       cliponaxis: false,
       customdata: fuelItems.map((item) => [
         item.model,
@@ -490,6 +565,23 @@ export function PositioningPricingPage() {
     const raw = searchParams.get("lengthMax");
     return raw ? Number(raw) : DEFAULT_LENGTH_MAX;
   });
+  const [layoutDirection, setLayoutDirection] = useState<PositioningLayoutDirection>(readStoredLayoutDirection);
+  const [splitRatio, setSplitRatio] = useState<number>(() => (
+    readStoredNumber(
+      POSITIONING_SPLIT_RATIO_STORAGE_KEY,
+      DEFAULT_POSITIONING_SPLIT_RATIO,
+      MIN_POSITIONING_SPLIT_RATIO,
+      MAX_POSITIONING_SPLIT_RATIO,
+    )
+  ));
+  const [chartHeight, setChartHeight] = useState<number>(() => (
+    readStoredNumber(
+      POSITIONING_CHART_HEIGHT_STORAGE_KEY,
+      DEFAULT_POSITIONING_CHART_HEIGHT,
+      MIN_POSITIONING_CHART_HEIGHT,
+      MAX_POSITIONING_CHART_HEIGHT,
+    )
+  ));
   const countryOptions = deck?.metadata.availableCountries ?? [];
 
   const syncUrlParams = useCallback(() => {
@@ -604,11 +696,19 @@ export function PositioningPricingPage() {
   const page = deck?.pages[activePage];
   const activeTab = TAB_ITEMS.find((item) => item.key === activePage) ?? TAB_ITEMS[0];
   const exportPreset = EXPORT_PRESETS.find((item) => item.key === exportPresetKey) ?? EXPORT_PRESETS[1];
+  const positioningCanvasHeight = resolvePositioningCanvasHeight(exportPreset.height, layoutDirection, chartHeight);
   const slidePreview = useFixedCanvasPreview({
     width: exportPreset.width,
-    height: exportPreset.height,
+    height: positioningCanvasHeight,
     exporting: exportingSlide,
   });
+  const positioningGridClassName = [
+    "market-scan-grid",
+    "market-scan-grid--two-wide",
+    "positioning-pricing-grid",
+    `positioning-pricing-grid--${layoutDirection}`,
+  ].join(" ");
+  const positioningGridStyle = buildPositioningGridStyle(splitRatio, chartHeight);
   const barTraces = useMemo(
     () => (page ? applyPositioningExportToTraces(buildPriceBandTraces(page, activeFuelTypes), priceBandExport) : []),
     [activeFuelTypes, page, priceBandExport],
@@ -617,7 +717,7 @@ export function PositioningPricingPage() {
     () => (
       page
         ? applyPositioningExportToTraces(
-            buildBubbleTraces(page.bubbleChart.items, activeFuelTypes, bubbleScale),
+            buildBubbleTraces(page.bubbleChart.items, activeFuelTypes, bubbleScale, bubbleExport.fontSize),
             bubbleExport,
           )
         : []
@@ -638,6 +738,44 @@ export function PositioningPricingPage() {
     });
   }
 
+  function handleLayoutDirectionChange(event: ChangeEvent<HTMLSelectElement>): void {
+    const nextDirection = event.target.value;
+    if (!isPositioningLayoutDirection(nextDirection)) {
+      return;
+    }
+    setLayoutDirection(nextDirection);
+    writeStoredJson(POSITIONING_LAYOUT_DIRECTION_STORAGE_KEY, nextDirection);
+  }
+
+  function handleSplitRatioChange(event: ChangeEvent<HTMLInputElement>): void {
+    const nextRatio = clampNumber(
+      Number(event.target.value),
+      MIN_POSITIONING_SPLIT_RATIO,
+      MAX_POSITIONING_SPLIT_RATIO,
+    );
+    setSplitRatio(nextRatio);
+    writeStoredJson(POSITIONING_SPLIT_RATIO_STORAGE_KEY, nextRatio);
+  }
+
+  function handleChartHeightChange(event: ChangeEvent<HTMLInputElement>): void {
+    const nextHeight = clampNumber(
+      Number(event.target.value),
+      MIN_POSITIONING_CHART_HEIGHT,
+      MAX_POSITIONING_CHART_HEIGHT,
+    );
+    setChartHeight(nextHeight);
+    writeStoredJson(POSITIONING_CHART_HEIGHT_STORAGE_KEY, nextHeight);
+  }
+
+  function resetPositioningLayoutControls(): void {
+    setLayoutDirection(DEFAULT_POSITIONING_LAYOUT_DIRECTION);
+    setSplitRatio(DEFAULT_POSITIONING_SPLIT_RATIO);
+    setChartHeight(DEFAULT_POSITIONING_CHART_HEIGHT);
+    writeStoredJson(POSITIONING_LAYOUT_DIRECTION_STORAGE_KEY, DEFAULT_POSITIONING_LAYOUT_DIRECTION);
+    writeStoredJson(POSITIONING_SPLIT_RATIO_STORAGE_KEY, DEFAULT_POSITIONING_SPLIT_RATIO);
+    writeStoredJson(POSITIONING_CHART_HEIGHT_STORAGE_KEY, DEFAULT_POSITIONING_CHART_HEIGHT);
+  }
+
   async function handleExportSlide() {
     if (!slideRef.current || !deck || !page) {
       return;
@@ -652,17 +790,18 @@ export function PositioningPricingPage() {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       });
       const { toPng } = await import("html-to-image");
+      const exportHeight = Math.max(positioningCanvasHeight, Math.ceil(slideRef.current.scrollHeight));
       const dataUrl = await toPng(slideRef.current, {
         cacheBust: true,
         pixelRatio: 2,
         backgroundColor: "#eef4f7",
         width: exportPreset.width,
-        height: exportPreset.height,
+        height: exportHeight,
         canvasWidth: exportPreset.width,
-        canvasHeight: exportPreset.height,
+        canvasHeight: exportHeight,
         style: {
           width: `${exportPreset.width}px`,
-          height: `${exportPreset.height}px`,
+          height: `${exportHeight}px`,
         },
       });
       const link = document.createElement("a");
@@ -843,6 +982,39 @@ export function PositioningPricingPage() {
                     }}
                   />
                 </label>
+                <label className="market-scan-field">
+                  <span>布局</span>
+                  <select
+                    value={layoutDirection}
+                    onChange={handleLayoutDirectionChange}
+                  >
+                    <option value="row">并排</option>
+                    <option value="column">上下</option>
+                  </select>
+                </label>
+                {layoutDirection === "row" ? (
+                  <label className="market-scan-field">
+                    <span>比例 {splitRatio}/{100 - splitRatio}</span>
+                    <input
+                      type="range"
+                      min={MIN_POSITIONING_SPLIT_RATIO}
+                      max={MAX_POSITIONING_SPLIT_RATIO}
+                      value={splitRatio}
+                      onChange={handleSplitRatioChange}
+                    />
+                  </label>
+                ) : null}
+                <label className="market-scan-field">
+                  <span>高度 {chartHeight}px</span>
+                  <input
+                    type="range"
+                    min={MIN_POSITIONING_CHART_HEIGHT}
+                    max={MAX_POSITIONING_CHART_HEIGHT}
+                    step={10}
+                    value={chartHeight}
+                    onChange={handleChartHeightChange}
+                  />
+                </label>
                 <div className="market-scan-field market-scan-field-actions">
                   <span>Deck</span>
                   <div className="btn-group">
@@ -879,6 +1051,7 @@ export function PositioningPricingPage() {
                         setBubbleExport(DEFAULT_BUBBLE_EXPORT);
                         setBubbleScale(DEFAULT_BUBBLE_SCALE);
                         setActivePage("overview");
+                        resetPositioningLayoutControls();
                       }}
                     >
                       Reset
@@ -1000,62 +1173,57 @@ export function PositioningPricingPage() {
                   </div>
 
                   <div className="market-scan-slide-content">
-                    <div className="market-scan-callout positioning-pricing-summary">
-                      {page.subtitle}：左侧按 MSRP 区间看销量堆叠，右侧按车长区间过滤后用最低 MSRP 看动力气泡定位。
-                    </div>
-                    {priceTruthLayer ? (
-                      <div className="market-scan-callout positioning-pricing-summary">
-                        <strong>{priceTruthLayer.title}：</strong>
-                        {priceTruthLayer.detail}
+                    <div
+                      className={positioningGridClassName}
+                      style={positioningGridStyle}
+                    >
+                      <div className="positioning-pricing-panel-slot">
+                        <Panel
+                          eyebrow="Price Bands"
+                          title="累计价格带"
+                        >
+                          <div className="positioning-pricing-chart">
+                            {barTraces.length > 0 ? (
+                              <PlotlyChart
+                                data={barTraces}
+                                layout={applyPositioningExportToLayout(priceBandLayout(page, priceBandExport), priceBandExport)}
+                                height={chartHeight}
+                              />
+                            ) : (
+                              <LoadingSurface
+                                mode="inline"
+                                kicker="Bands"
+                                label="暂无价格带数据"
+                                detail="当前国家 / 月份 / 动力条件下没有可堆叠的价格带销量。"
+                              />
+                            )}
+                          </div>
+                        </Panel>
                       </div>
-                    ) : null}
 
-                    <div className="market-scan-grid market-scan-grid--two-wide positioning-pricing-grid">
-                      <Panel
-                        eyebrow="Price Bands"
-                        title="累计价格带"
-                        
-                      >
-                        <div className="positioning-pricing-chart">
-                          {barTraces.length > 0 ? (
-                            <PlotlyChart
-                              data={barTraces}
-                              layout={applyPositioningExportToLayout(priceBandLayout(page, priceBandExport), priceBandExport)}
-                              height={430}
-                            />
-                          ) : (
-                            <LoadingSurface
-                              mode="inline"
-                              kicker="Bands"
-                              label="暂无价格带数据"
-                              detail="当前国家 / 月份 / 动力条件下没有可堆叠的价格带销量。"
-                            />
-                          )}
-                        </div>
-                      </Panel>
-
-                      <Panel
-                        eyebrow="Powertrain Bubble"
-                        title="动力气泡图"
-                        
-                      >
-                        <div className="positioning-pricing-chart">
-                          {bubbleTraces.length > 0 ? (
-                            <PlotlyChart
-                              data={bubbleTraces}
-                              layout={applyPositioningExportToLayout(bubbleLayout(page), bubbleExport)}
-                              height={430}
-                            />
-                          ) : (
-                            <LoadingSurface
-                              mode="inline"
-                              kicker="Bubble"
-                              label="暂无气泡图数据"
-                              detail="当前页没有符合条件的销量气泡。"
-                            />
-                          )}
-                        </div>
-                      </Panel>
+                      <div className="positioning-pricing-panel-slot">
+                        <Panel
+                          eyebrow="Powertrain Bubble"
+                          title="动力气泡图"
+                        >
+                          <div className="positioning-pricing-chart">
+                            {bubbleTraces.length > 0 ? (
+                              <PlotlyChart
+                                data={bubbleTraces}
+                                layout={applyPositioningExportToLayout(bubbleLayout(page), bubbleExport)}
+                                height={chartHeight}
+                              />
+                            ) : (
+                              <LoadingSurface
+                                mode="inline"
+                                kicker="Bubble"
+                                label="暂无气泡图数据"
+                                detail="当前页没有符合条件的销量气泡。"
+                              />
+                            )}
+                          </div>
+                        </Panel>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1134,7 +1302,7 @@ export function PositioningPricingPage() {
                     </button>
                   </div>
                   <div className="market-scan-toolbar-meta">
-                    <span className="market-scan-toolbar-chip">{exportPreset.width} x {exportPreset.height}</span>
+                    <span className="market-scan-toolbar-chip">{exportPreset.width} x {positioningCanvasHeight}</span>
                     <span className="market-scan-toolbar-chip">{deck.metadata.labels.salesModeLabel}</span>
                     <span className="market-scan-toolbar-chip">{activeTab.label}</span>
                     <span className="market-scan-toolbar-chip">Bands 标签 {priceBandExport.dataLabelMode}</span>

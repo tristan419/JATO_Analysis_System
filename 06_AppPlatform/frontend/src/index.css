@@ -7852,6 +7852,9 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 .positioning-pricing-slide-frame {
+  aspect-ratio: auto !important;
+  min-height: 480px;
+  overflow: visible;
   background:
     radial-gradient(circle at top right, rgba(59, 130, 246, 0.1) 0%, rgba(59, 130, 246, 0) 28%),
     radial-gradient(circle at bottom left, rgba(34, 197, 94, 0.08) 0%, rgba(34, 197, 94, 0) 24%),
@@ -7969,8 +7972,24 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 .positioning-pricing-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 4fr);
+  grid-template-columns:
+    minmax(0, var(--positioning-split-ratio, 1fr))
+    minmax(0, var(--positioning-remainder-ratio, 1fr));
   min-height: 0;
+}
+
+.positioning-pricing-grid--column {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.positioning-pricing-panel-slot {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.positioning-pricing-panel-slot .market-scan-panel {
+  width: 100%;
 }
 
 .positioning-pricing-grid .market-scan-panel,
@@ -7992,7 +8011,7 @@ table.data-table tr.data-table-group-row.contains-selection td {
 
 .positioning-pricing-slide-frame .positioning-pricing-grid .market-scan-panel {
   display: grid;
-  grid-template-rows: 82px 430px;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
 }
 
@@ -8001,13 +8020,14 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 .positioning-pricing-slide-frame .positioning-pricing-grid .market-scan-panel-body {
-  height: 430px;
-  overflow: hidden;
+  height: var(--positioning-chart-height, 430px);
+  overflow: visible;
 }
 
 .positioning-pricing-slide-frame .positioning-pricing-chart {
   flex: none;
-  height: 430px;
+  height: var(--positioning-chart-height, 430px);
+  min-height: var(--positioning-chart-height, 430px);
 }
 
 /* --- Markdown table styles --- */
@@ -11061,6 +11081,16 @@ table.data-table tr.data-table-group-row.contains-selection td {
 
 .market-scan-slide-frame.is-exporting .market-scan-grid--two-wide {
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+}
+
+.market-scan-slide-frame.is-exporting .positioning-pricing-grid--row {
+  grid-template-columns:
+    minmax(0, var(--positioning-split-ratio, 1fr))
+    minmax(0, var(--positioning-remainder-ratio, 1fr));
+}
+
+.market-scan-slide-frame.is-exporting .positioning-pricing-grid--column {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .market-scan-slide-frame.is-exporting .market-scan-grid--three {
