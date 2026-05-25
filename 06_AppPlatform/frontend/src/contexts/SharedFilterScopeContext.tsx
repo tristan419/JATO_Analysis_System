@@ -157,17 +157,6 @@ function summarizeScopeValues(values: string[]): string {
   return `${values.slice(0, 2).join(" · ")} +${values.length - 2}`;
 }
 
-function resolveDefaultCountrySelection(
-  primaryCountryCode: string | null | undefined,
-  countryOptions: string[],
-): string[] {
-  const preferredCountry = countryCodeToDatasetCountry(primaryCountryCode);
-  if (preferredCountry && countryOptions.includes(preferredCountry)) {
-    return [preferredCountry];
-  }
-  return countryOptions;
-}
-
 export function SharedFilterScopeProvider({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -217,7 +206,6 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
   const bootDone = useRef(false);
   const bootCompleted = useRef(Boolean(cachedScope));
   const bootAttemptRef = useRef(0);
-  const previousPrimaryCountryRef = useRef<string | null>(user?.primaryCountry ?? null);
   const optionsCacheRef = useRef(
     new Map<string, { expiresAt: number; options: string[] }>(),
   );
@@ -341,10 +329,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
         const initialSelections = hasSelections(initialFromSearch)
           ? initialFromSearch
           : createSharedSelections({
-              country: resolveDefaultCountrySelection(
-                user?.primaryCountry,
-                topLevelOptions.country ?? [],
-              ),
+              country: topLevelOptions.country ?? [],
               powertrain: getDefaultPowertrainValues(
                 topLevelOptions.powertrain ?? [],
               ),
@@ -494,36 +479,6 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     [loadFilterOptions, res],
   );
 
-  useEffect(() => {
-    const nextPrimaryCountry = user?.primaryCountry ?? null;
-    if (previousPrimaryCountryRef.current === nextPrimaryCountry) return;
-    previousPrimaryCountryRef.current = nextPrimaryCountry;
-    if (!filtersReady || columns.length === 0 || optionsSyncPending) return;
-
-    const nextCountrySelection = resolveDefaultCountrySelection(
-      nextPrimaryCountry,
-      optionsMap.country ?? [],
-    );
-    const currentCountrySelection = selections.country ?? [];
-    const selectionChanged =
-      nextCountrySelection.length !== currentCountrySelection.length
-      || nextCountrySelection.some((value, index) => value !== currentCountrySelection[index]);
-    if (!selectionChanged) return;
-
-    void applySelections(
-      { ...selections, country: nextCountrySelection },
-      "country",
-    );
-  }, [
-    applySelections,
-    columns.length,
-    filtersReady,
-    optionsMap.country,
-    optionsSyncPending,
-    selections,
-    user?.primaryCountry,
-  ]);
-
   const onFilterChange = useCallback(
     async (dimKey: FilterKey, newVals: string[]) => {
       const nextSelections: FilterSelections = {
@@ -538,10 +493,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
   const resetFilters = useCallback(() => {
     const defaults = getDefaultPowertrainValues(optionsMap.powertrain ?? []);
     const nextSelections = createSharedSelections({
-      country: resolveDefaultCountrySelection(
-        user?.primaryCountry,
-        optionsMap.country ?? [],
-      ),
+      country: optionsMap.country ?? [],
       powertrain: defaults,
     });
     void applySelections(nextSelections, "powertrain");
