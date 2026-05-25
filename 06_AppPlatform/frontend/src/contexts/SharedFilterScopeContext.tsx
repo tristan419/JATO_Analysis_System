@@ -537,9 +537,15 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
 
   const resetFilters = useCallback(() => {
     const defaults = getDefaultPowertrainValues(optionsMap.powertrain ?? []);
-    const nextSelections = createSharedSelections({ powertrain: defaults });
+    const nextSelections = createSharedSelections({
+      country: resolveDefaultCountrySelection(
+        user?.primaryCountry,
+        optionsMap.country ?? [],
+      ),
+      powertrain: defaults,
+    });
     void applySelections(nextSelections, "powertrain");
-  }, [applySelections, optionsMap.powertrain]);
+  }, [applySelections, optionsMap.country, optionsMap.powertrain, user?.primaryCountry]);
 
   const value = useMemo<SharedFilterScopeValue>(
     () => ({
