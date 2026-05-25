@@ -7,7 +7,7 @@ from app.api.schemas import (
     PositioningPricingDeckRequest,
     VersionComparisonDeckRequest,
 )
-from app.core.security import require_min_role
+from app.core.security import optional_viewer
 from app.services.customer_insight_service import (
     query_nordic_customer_deck,
     query_nordic_hev_customer_deck,
@@ -25,7 +25,7 @@ router = APIRouter(prefix="/market-scan", tags=["market-scan"])
 @router.post("/deck")
 def market_scan_deck(
     payload: MarketScanDeckRequest,
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return query_market_scan_deck(
         country=payload.country,
@@ -43,7 +43,7 @@ def market_scan_deck(
 @router.post("/positioning-pricing-deck")
 def positioning_pricing_deck(
     payload: PositioningPricingDeckRequest,
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return query_positioning_pricing_deck(
         country=payload.country,
@@ -63,7 +63,7 @@ def positioning_pricing_deck(
 @router.post("/version-comparison-deck")
 def version_comparison_deck(
     payload: VersionComparisonDeckRequest,
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return query_version_comparison_deck(
         country=payload.country,
@@ -98,7 +98,7 @@ def ranking_trend(
     length_min: float | None = Query(default=None),
     length_max: float | None = Query(default=None),
     sort_by: str = Query(default="sales"),
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return query_ranking_trend(
         country=country,
@@ -119,7 +119,7 @@ def ranking_trend(
 def nordic_customer_deck(
     mode: Literal["benchmark", "forum_live"] = "benchmark",
     countries: list[str] | None = Query(default=None),
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return query_nordic_customer_deck(mode=mode, country_codes=countries)
 
@@ -128,6 +128,6 @@ def nordic_customer_deck(
 def nordic_hev_customer_deck(
     mode: Literal["benchmark", "forum_live"] = "benchmark",
     countries: list[str] | None = Query(default=None),
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return query_nordic_hev_customer_deck(mode=mode, country_codes=countries)

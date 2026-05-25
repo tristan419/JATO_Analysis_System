@@ -418,8 +418,8 @@ def _normalize_country_lookup(country: str | None, country_options: list[dict[st
         (
             option
             for option in country_options
-            if option["label"].strip().lower() == "hungary"
-            or option["value"].strip() == "匈牙利"
+            if option["label"].strip().lower() == "sweden"
+            or option["value"].strip() == "瑞典"
         ),
         country_options[0],
     )
@@ -3243,10 +3243,12 @@ def build_causal_cross_tabs(
             selected_columns.append(extra_col)
     selected_columns.append(sales_column)
     dataset = repo._open_dataset()
-    filter_expression = repo._build_filter_expression(
-        {columns.country_value: [selected_country["value"]]}
+    table = dataset.to_table(
+        columns=selected_columns,
+        filter=repo._build_filter_expression(
+            {columns.country_value: [selected_country["value"]]}
+        )
     )
-    table = dataset.to_table(columns=selected_columns, filter=filter_expression)
     frame = table.to_pandas()
     frame["__powertrain"] = frame[columns.powertrain].map(_normalize_powertrain)
     frame["__segment_raw"] = frame[columns.segment].astype(str).str.strip()

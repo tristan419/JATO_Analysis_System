@@ -1998,6 +1998,8 @@ export interface CocMatchJob {
   matchedCount?: number;
   missingCount?: number;
   extraFileCount?: number;
+  differenceType?: string | null;
+  hasBidirectionalMismatch?: boolean;
   coverageRate?: number;
   previousRun?: { month: string; matched: number; total: number } | null;
   diffSummary?: { gained: number; lost: number; newEntries: number } | null;

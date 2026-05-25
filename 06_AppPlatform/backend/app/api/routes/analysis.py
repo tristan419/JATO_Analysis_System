@@ -13,7 +13,7 @@ from app.api.schemas import (
     TimeSeriesRequest,
 )
 from app.core.config import MAX_DETAIL_PAGE_SIZE, MAX_EXPORT_ROWS
-from app.core.security import require_min_role
+from app.core.security import optional_viewer
 from app.services.query_service import (
     export_detail_csv,
     get_data_freshness,
@@ -34,7 +34,7 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 @router.post("/query")
 def query(
     payload: AnalysisRequest,
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return query_analysis(
         filters=payload.filters,
@@ -48,7 +48,7 @@ def query(
 @router.post("/time-series")
 def time_series(
     payload: TimeSeriesRequest,
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return query_time_series(
         filters=payload.filters,
@@ -60,7 +60,7 @@ def time_series(
 @router.post("/overview")
 def overview(
     payload: OverviewRequest,
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return query_overview(
         filters=payload.filters,
@@ -71,7 +71,7 @@ def overview(
 
 @router.get("/data-freshness")
 def data_freshness(
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return {"items": get_data_freshness()}
 
@@ -79,7 +79,7 @@ def data_freshness(
 @router.post("/detail")
 def detail(
     payload: DetailQueryRequest,
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     page_size = min(max(1, int(payload.page_size)), MAX_DETAIL_PAGE_SIZE)
     return query_detail(
@@ -94,7 +94,7 @@ def detail(
 @router.post("/detail-csv")
 def detail_csv(
     payload: DetailCsvRequest,
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> Response:
     max_rows = min(max(1, int(payload.max_rows)), MAX_EXPORT_ROWS)
     csv_bytes = export_detail_csv(
@@ -117,7 +117,7 @@ def detail_csv(
 @router.post("/time-series-grouped")
 def time_series_grouped(
     payload: GroupedTimeSeriesRequest,
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return query_grouped_time_series(
         filters=payload.filters,
@@ -135,7 +135,7 @@ def time_series_grouped(
 @router.post("/advanced-chart")
 def advanced_chart(
     payload: AdvancedChartRequest,
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return query_advanced_chart(
         group=payload.group,
@@ -152,7 +152,7 @@ def advanced_chart(
 @router.post("/model-versions")
 def model_versions(
     payload: ModelVersionsRequest,
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return query_model_versions(
         filters=payload.filters,
@@ -167,7 +167,7 @@ def model_versions(
 @router.post("/positioning-map")
 def positioning_map(
     payload: PositioningMapRequest,
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return query_positioning_map(
         filters=payload.filters,
@@ -186,7 +186,7 @@ def positioning_map(
 @router.post("/rv-finance")
 def rv_finance(
     payload: RvFinanceRequest,
-    _=Depends(require_min_role("viewer")),
+    _=Depends(optional_viewer),
 ) -> dict:
     return query_rv_finance(
         vehicles=[v.model_dump() for v in payload.vehicles],

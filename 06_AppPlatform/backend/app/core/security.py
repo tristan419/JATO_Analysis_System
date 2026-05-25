@@ -79,3 +79,8 @@ def get_optional_user(
                 return UserContext(role=role, name=name)
 
     return UserContext(role="anonymous", name=name)
+
+
+def optional_viewer(user: UserContext = Depends(get_optional_user)) -> UserContext:
+    """Allow anonymous read access while preserving authenticated user context."""
+    return user

@@ -400,6 +400,7 @@ def test_query_market_scan_deck_clamps_ranking_limit_to_top10(monkeypatch: pytes
 
 
 def test_clear_market_scan_local_cache_removes_cached_decks() -> None:
+    market_scan_service._deck_cache.clear()
     market_scan_service._deck_cache["Sweden|2026-03"] = (1.0, "token", {"ok": True})
 
     result = market_scan_service.clear_market_scan_local_cache()
@@ -502,6 +503,18 @@ def test_market_scan_data_quality_reports_fallbacks_and_fuel_scope() -> None:
     assert quality["unavailableFuelTypes"] == ["HYDROGEN"]
     assert quality["fuelRowsExcluded"] == 2
     assert len(quality["warnings"]) == 5
+
+
+def test_market_scan_default_country_is_sweden() -> None:
+    selected = market_scan_service._normalize_country_lookup(
+        None,
+        [
+            {"value": "匈牙利", "label": "Hungary"},
+            {"value": "瑞典", "label": "Sweden"},
+        ],
+    )
+
+    assert selected == {"value": "瑞典", "label": "Sweden"}
 
 
 def test_resolve_positioning_sales_window_prefers_custom_range() -> None:

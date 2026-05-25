@@ -2474,7 +2474,7 @@ export function MarketScanPage({
 
   useArrowCountryNavigation({
     options: countryOptions,
-    activeValue: selectedCountry || DEFAULT_MARKET_SCAN_COUNTRY,
+    activeValue: selectedCountry || deck?.metadata.selectedCountry || DEFAULT_MARKET_SCAN_COUNTRY,
     onSelect: (value) => setSelectedCountry(value || null),
   });
 

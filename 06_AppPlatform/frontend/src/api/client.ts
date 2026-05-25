@@ -667,6 +667,8 @@ function mapCocMatchJob(raw: Record<string, unknown>): CocMatchJob {
     matchedCount: raw.matchedCount === undefined ? undefined : Number(raw.matchedCount),
     missingCount: raw.missingCount === undefined ? undefined : Number(raw.missingCount),
     extraFileCount: raw.extraFileCount === undefined ? undefined : Number(raw.extraFileCount),
+    differenceType: raw.differenceType === undefined || raw.differenceType === null ? null : String(raw.differenceType),
+    hasBidirectionalMismatch: Boolean(raw.hasBidirectionalMismatch),
     coverageRate: raw.coverageRate === undefined ? undefined : Number(raw.coverageRate),
     previousRun: raw.previousRun && typeof raw.previousRun === "object"
       ? (raw.previousRun as { month: string; matched: number; total: number })

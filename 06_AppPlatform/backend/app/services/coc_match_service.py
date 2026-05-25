@@ -119,6 +119,19 @@ def find_archive_only_files(
     return [{"filename": filename} for filename in sorted(file_set - excel_chassis)]
 
 
+def classify_coc_difference(
+    missing_count: int,
+    archive_only_count: int,
+) -> str:
+    if missing_count > 0 and archive_only_count > 0:
+        return "bidirectional_mismatch"
+    if missing_count > 0:
+        return "missing_archive_files"
+    if archive_only_count > 0:
+        return "archive_only_files"
+    return "matched"
+
+
 # ── SQLite DB ──────────────────────────────────────────────────────
 
 COC_DB_PATH = COC_MATCH_JOB_ROOT / "coc_match_history.db"
@@ -238,7 +251,14 @@ def build_html_report(
     has = len(matched)
     no = len(missing)
     archive_only_count = len(archive_only_files)
+    difference_type = classify_coc_difference(no, archive_only_count)
     rate = has / total * 100 if total else 0
+    difference_label = {
+        "matched": "完全一致",
+        "missing_archive_files": "Excel 有、压缩包缺失",
+        "archive_only_files": "压缩包有、Excel 缺码",
+        "bidirectional_mismatch": "双向不一致",
+    }[difference_type]
 
     # ── Missing by Model ──
     missing_by_model: defaultdict[str, list] = defaultdict(list)
@@ -504,14 +524,23 @@ tr.model-header td {{ background: #fafafa; padding: 8px 24px; font-size: 13px; c
 <body>
 <div class="container">
 <h1>{title}</h1>
-<p class="subtitle">注册表 {total} 条 · 已有 PDF {has} 条 · 压缩包多余文件 {archive_only_count} 条 · 覆盖率 {rate:.1f}%</p>
+<p class="subtitle">注册表 {total} 条 · 已有 PDF {has} 条 · Excel 缺码文件 {archive_only_count} 条 · 差异类型 {difference_label} · 覆盖率 {rate:.1f}%</p>
 
 <div class="cards">
     <div class="card total"><div class="number">{total}</div><div class="label">注册表总数</div></div>
     <div class="card has"><div class="number">{has}</div><div class="label">已有 PDF</div></div>
     <div class="card missing"><div class="number">{no}</div><div class="label">缺失 PDF</div></div>
-    <div class="card extra"><div class="number">{archive_only_count}</div><div class="label">压缩包多余</div></div>
+    <div class="card extra"><div class="number">{archive_only_count}</div><div class="label">Excel 缺码</div></div>
     <div class="card rate"><div class="number">{rate:.1f}%</div><div class="label">覆盖率</div></div>
+</div>
+
+<div class="progress-bar">
+    <div class="progress-label">
+        <span>差异类型</span><span>{difference_label}</span>
+    </div>
+    <div style="font-size:13px;color:#666;line-height:1.5;">
+        单边缺失或双向不一致都会继续生成完整报告；请分别查看“缺失”和“Excel 缺码”页签。
+    </div>
 </div>
 
 <div class="progress-bar">
@@ -528,7 +557,7 @@ tr.model-header td {{ background: #fafafa; padding: 8px 24px; font-size: 13px; c
 <div class="toolbar">
     <div class="tabs">
         <button class="tab active" id="tab-missing" onclick="showTab('missing')">缺失 <strong>({no})</strong></button>
-        <button class="tab" id="tab-extra" onclick="showTab('extra')">压缩包多余 <strong>({archive_only_count})</strong></button>
+        <button class="tab" id="tab-extra" onclick="showTab('extra')">Excel 缺码 <strong>({archive_only_count})</strong></button>
         <button class="tab" id="tab-matched" onclick="showTab('matched')">已有 <strong>({has})</strong></button>
         <button class="tab" id="tab-all" onclick="showTab('all')">全部 <strong>({total})</strong></button>"""
 
@@ -539,7 +568,7 @@ tr.model-header td {{ background: #fafafa; padding: 8px 24px; font-size: 13px; c
     html += f"""
     </div>
     <button class="btn-export danger" onclick="exportMissing()">导出缺失 COC</button>
-    <button class="btn-export default" onclick="exportArchiveOnly()">导出压缩包多余</button>
+    <button class="btn-export default" onclick="exportArchiveOnly()">导出 Excel 缺码</button>
     <button class="btn-export default" onclick="exportAll()">导出全部</button>
 </div>
 
@@ -637,9 +666,10 @@ class CocMatchJobRunner(BaseJobRunner):
         # Step 3: Match
         matched, missing = match_cocs(rows, file_set)
         archive_only_files = find_archive_only_files(rows, file_set)
+        difference_type = classify_coc_difference(len(missing), len(archive_only_files))
         self.log(
             f"  Matched: {len(matched)}, Missing: {len(missing)}, "
-            f"Archive-only: {len(archive_only_files)}"
+            f"Archive-only: {len(archive_only_files)}, Difference: {difference_type}"
         )
 
         # Step 4: Save to DB
@@ -680,6 +710,8 @@ class CocMatchJobRunner(BaseJobRunner):
         state["matchedCount"] = len(matched)
         state["missingCount"] = len(missing)
         state["extraFileCount"] = len(archive_only_files)
+        state["differenceType"] = difference_type
+        state["hasBidirectionalMismatch"] = difference_type == "bidirectional_mismatch"
         state["coverageRate"] = round(len(matched) / len(rows) * 100, 1) if rows else 0
         if prev:
             state["previousRun"] = {"month": prev[1], "matched": prev[3], "total": prev[2]}
@@ -765,6 +797,8 @@ def create_coc_match_job(
         "matchedCount": None,
         "missingCount": None,
         "extraFileCount": None,
+        "differenceType": None,
+        "hasBidirectionalMismatch": False,
         "coverageRate": None,
         "previousRun": None,
         "diffSummary": None,
@@ -954,6 +988,8 @@ def create_coc_match_job_from_upload(
         "matchedCount": None,
         "missingCount": None,
         "extraFileCount": None,
+        "differenceType": None,
+        "hasBidirectionalMismatch": False,
         "coverageRate": None,
         "previousRun": None,
         "diffSummary": None,

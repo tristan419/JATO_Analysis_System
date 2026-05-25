@@ -27,6 +27,16 @@ function statusColor(s: string): string {
   return "#6b7280";
 }
 
+function cocDifferenceLabel(type: string | null | undefined): string {
+  const labels: Record<string, string> = {
+    matched: "完全一致",
+    missing_archive_files: "Excel 有、压缩包缺失",
+    archive_only_files: "压缩包有、Excel 缺码",
+    bidirectional_mismatch: "双向不一致",
+  };
+  return type ? (labels[type] ?? type) : "-";
+}
+
 /* ── Dropzone component ────────────────────────── */
 
 function Dropzone({
@@ -290,7 +300,10 @@ export function CocMatchPage() {
               <div>
                 <strong style={{ color: "#16a34a" }}>比对完成</strong>
                 <span style={{ color: "#666", marginLeft: 8 }}>
-                  共 {currentJob.totalRows} 条 · 匹配 {currentJob.matchedCount} · 缺失 {currentJob.missingCount} · 压缩包多余 {currentJob.extraFileCount ?? 0} · 覆盖率 {currentJob.coverageRate}%
+                  共 {currentJob.totalRows} 条 · 匹配 {currentJob.matchedCount} · 缺失 {currentJob.missingCount} · Excel 缺码 {currentJob.extraFileCount ?? 0} · 覆盖率 {currentJob.coverageRate}%
+                </span>
+                <span style={{ color: currentJob.hasBidirectionalMismatch ? "#c2410c" : "#666", marginLeft: 8 }}>
+                  {cocDifferenceLabel(currentJob.differenceType)}
                 </span>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
@@ -356,7 +369,8 @@ export function CocMatchPage() {
                   <th style={thStyle}>总行数</th>
                   <th style={thStyle}>匹配</th>
                   <th style={thStyle}>缺失</th>
-                  <th style={thStyle}>压缩包多余</th>
+                  <th style={thStyle}>Excel 缺码</th>
+                  <th style={thStyle}>差异类型</th>
                   <th style={thStyle}>覆盖率</th>
                   <th style={thStyle}>创建时间</th>
                   <th style={thStyle}>操作</th>
@@ -374,6 +388,7 @@ export function CocMatchPage() {
                     <td style={tdStyle}>{job.matchedCount ?? "-"}</td>
                     <td style={tdStyle}>{job.missingCount ?? "-"}</td>
                     <td style={tdStyle}>{job.extraFileCount ?? "-"}</td>
+                    <td style={tdStyle}>{cocDifferenceLabel(job.differenceType)}</td>
                     <td style={tdStyle}>
                       {job.coverageRate != null ? `${job.coverageRate}%` : "-"}
                     </td>
