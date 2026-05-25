@@ -216,8 +216,8 @@ function marketScanSeriesKey(trace: Partial<Data>): string | null {
 function buildMarketScanSeriesColors(traces: Data[], exportSettings: ExportSettings): Record<string, string> {
   const manualColors = exportSettings.seriesColors ?? {};
   const usePalette = exportSettings.colorScheme !== DEFAULT_MARKET_SCAN_EXPORT.colorScheme;
-  if (!usePalette && Object.keys(manualColors).length === 0) {
-    return manualColors;
+  if (!usePalette) {
+    return { ...manualColors };
   }
 
   const palette = getExportPalette(exportSettings.colorScheme);
