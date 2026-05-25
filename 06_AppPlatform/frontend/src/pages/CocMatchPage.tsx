@@ -103,20 +103,23 @@ export function CocMatchPage() {
   const [jobList, setJobList] = useState<CocMatchJob[]>([]);
   const [pollId, setPollId] = useState<string | null>(null);
   const pollingRef = useRef(false);
+  const jobsCountryFilter = country.trim().toUpperCase();
 
-  // Load job list on mount
+  // Load recent jobs; when a country code is entered, show that country's history.
   useEffect(() => {
-    api.cocMatchListJobs(20).then((res) => {
-      setJobList(res.items as unknown as CocMatchJob[]);
+    let cancelled = false;
+    api.cocMatchListJobs(20, jobsCountryFilter || undefined).then((res) => {
+      if (!cancelled) setJobList(res.items);
     }).catch(() => {});
-  }, []);
+    return () => { cancelled = true; };
+  }, [jobsCountryFilter]);
 
   // Refresh job list when a job finishes
   const refreshJobs = useCallback(() => {
-    api.cocMatchListJobs(20).then((res) => {
-      setJobList(res.items as unknown as CocMatchJob[]);
+    api.cocMatchListJobs(20, jobsCountryFilter || undefined).then((res) => {
+      setJobList(res.items);
     }).catch(() => {});
-  }, []);
+  }, [jobsCountryFilter]);
 
   // Poll job status
   useEffect(() => {
@@ -356,7 +359,7 @@ export function CocMatchPage() {
         </div>
         {jobList.length === 0 ? (
           <div style={{ padding: "24px", textAlign: "center", color: "#999", fontSize: 14 }}>
-            暂无比对记录
+            {jobsCountryFilter ? `暂无 ${jobsCountryFilter} 的比对记录` : "暂无比对记录"}
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>

@@ -117,10 +117,11 @@ def post_coc_upload_complete(
 @router.get("/jobs")
 def get_coc_match_jobs(
     limit: int = Query(default=20, ge=1, le=50),
+    country: str | None = Query(default=None),
     _user: UserContext = Depends(require_min_role("viewer")),
 ) -> dict[str, object]:
     """List COC match jobs, most recent first."""
-    return list_coc_match_jobs(limit=limit)
+    return list_coc_match_jobs(limit=limit, country=country)
 
 
 @router.get("/jobs/{job_id}")

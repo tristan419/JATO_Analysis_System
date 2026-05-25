@@ -212,7 +212,12 @@ export function OrderGeniusPage() {
 
       setUploadProgress("Parsing...");
       const parseResult = await api.parseMaterialMasterUpload(session.uploadId);
-      setUploadStatus(`Parsed: ${(parseResult as Record<string, unknown>).totalRows || 0} rows`);
+      const parsedRows = Number(
+        (parseResult as Record<string, unknown>).totalRows
+        ?? (parseResult as Record<string, unknown>).total_rows
+        ?? 0,
+      );
+      setUploadStatus(`Parsed: ${parsedRows} rows`);
 
       setUploadProgress("Loading preview...");
       const preview = await api.getMaterialMasterPreview(session.uploadId);

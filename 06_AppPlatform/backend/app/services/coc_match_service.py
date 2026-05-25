@@ -5,10 +5,11 @@ processing and file utilities.
 """
 
 import json
-import os
 import sqlite3
+import shutil
 import subprocess
 import uuid
+import zipfile
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -72,24 +73,192 @@ def list_archive_files(
 
 
 def _list_rar_files(rar_path: Path, extensions: list[str]) -> set[str]:
-    result = subprocess.run(["lsar", str(rar_path)], capture_output=True, text=True)
+    for command in (
+        ["lsar", str(rar_path)],
+        ["bsdtar", "-tf", str(rar_path)],
+        ["unar", "-l", str(rar_path)],
+        ["unrar", "lb", str(rar_path)],
+        ["7z", "l", "-ba", str(rar_path)],
+        ["7zz", "l", "-ba", str(rar_path)],
+    ):
+        listed = _list_archive_files_with_command(command, extensions)
+        if listed:
+            return listed
+
+    listed = _list_rar_files_python(rar_path, extensions)
+    if listed:
+        return listed
+
+    raise ValueError(
+        "无法读取 RAR 文件列表：服务器缺少可用 RAR 工具，且内置解析未能识别文件名。"
+    )
+
+
+def _list_archive_files_with_command(
+    command: list[str],
+    extensions: list[str],
+) -> set[str]:
+    if shutil.which(command[0]) is None:
+        return set()
+
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return set()
+    if result.returncode != 0:
+        return set()
+
     names: set[str] = set()
     for line in result.stdout.splitlines():
-        line = line.strip()
-        if any(line.lower().endswith(ext) for ext in extensions):
-            basename = os.path.basename(line)
-            names.add(os.path.splitext(basename)[0])
+        stem = _archive_member_stem(line.strip(), extensions)
+        if stem:
+            names.add(stem)
     return names
 
 
 def _list_zip_files(zip_path: Path, extensions: list[str]) -> set[str]:
-    result = subprocess.run(["unzip", "-l", str(zip_path)], capture_output=True)
     names: set[str] = set()
-    for line in result.stdout.decode("utf-8", errors="replace").splitlines():
-        line = line.strip()
-        if any(line.lower().endswith(ext) for ext in extensions):
-            basename = os.path.basename(line)
-            names.add(os.path.splitext(basename)[0])
+    with zipfile.ZipFile(zip_path) as zf:
+        for member in zf.namelist():
+            stem = _archive_member_stem(member, extensions)
+            if stem:
+                names.add(stem)
+    return names
+
+
+def _archive_member_stem(member_name: str, extensions: list[str]) -> str | None:
+    """Return archive member basename without suffix when it matches extensions."""
+    normalized = member_name.strip().replace("\\", "/")
+    if not normalized or normalized.endswith("/"):
+        return None
+    lower = normalized.lower()
+    matched_ext = next((ext for ext in extensions if lower.endswith(ext.lower())), None)
+    if matched_ext is None:
+        return None
+    basename = normalized.rsplit("/", 1)[-1]
+    return basename[: -len(matched_ext)]
+
+
+def _read_rar_vint(data: bytes, offset: int) -> tuple[int, int]:
+    value = 0
+    shift = 0
+    start = offset
+    while offset < len(data):
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return value, offset
+        shift += 7
+        if offset - start > 10:
+            break
+    raise ValueError("Invalid RAR variable integer")
+
+
+def _decode_rar_name(raw: bytes) -> str:
+    for encoding in ("utf-8", "cp437", "latin-1"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _list_rar_files_python(rar_path: Path, extensions: list[str]) -> set[str]:
+    data = rar_path.read_bytes()
+    if data.startswith(b"Rar!\x1a\x07\x01\x00"):
+        return _list_rar5_files_python(data, extensions)
+    if data.startswith(b"Rar!\x1a\x07\x00"):
+        return _list_rar4_files_python(data, extensions)
+    return set()
+
+
+def _list_rar5_files_python(data: bytes, extensions: list[str]) -> set[str]:
+    names: set[str] = set()
+    offset = 8
+    while offset + 5 < len(data):
+        header_start = offset
+        offset += 4  # CRC32
+        try:
+            header_size, offset = _read_rar_vint(data, offset)
+            size_field_end = offset
+            header_end = header_start + 4 + (size_field_end - header_start - 4) + header_size
+            header_type, offset = _read_rar_vint(data, offset)
+            header_flags, offset = _read_rar_vint(data, offset)
+            if header_flags & 0x0001:
+                _extra_size, offset = _read_rar_vint(data, offset)
+            data_size = 0
+            if header_flags & 0x0002:
+                data_size, offset = _read_rar_vint(data, offset)
+        except (IndexError, ValueError):
+            break
+
+        if header_type == 2:
+            try:
+                file_flags, cursor = _read_rar_vint(data, offset)
+                _unpacked_size, cursor = _read_rar_vint(data, cursor)
+                _attributes, cursor = _read_rar_vint(data, cursor)
+                if file_flags & 0x0002:
+                    cursor += 4
+                if file_flags & 0x0004:
+                    cursor += 4
+                _compression_info, cursor = _read_rar_vint(data, cursor)
+                _host_os, cursor = _read_rar_vint(data, cursor)
+                name_size, cursor = _read_rar_vint(data, cursor)
+                raw_name = data[cursor : cursor + name_size]
+            except (IndexError, ValueError):
+                raw_name = b""
+            stem = _archive_member_stem(_decode_rar_name(raw_name), extensions)
+            if stem:
+                names.add(stem)
+
+        next_offset = header_end + data_size
+        if next_offset <= header_start:
+            break
+        offset = next_offset
+    return names
+
+
+def _list_rar4_files_python(data: bytes, extensions: list[str]) -> set[str]:
+    names: set[str] = set()
+    offset = 7
+    while offset + 7 <= len(data):
+        header_start = offset
+        try:
+            header_type = data[offset + 2]
+            header_flags = int.from_bytes(data[offset + 3 : offset + 5], "little")
+            header_size = int.from_bytes(data[offset + 5 : offset + 7], "little")
+        except IndexError:
+            break
+
+        cursor = offset + 7
+        add_size = 0
+        if header_flags & 0x8000 and cursor + 4 <= len(data):
+            add_size = int.from_bytes(data[cursor : cursor + 4], "little")
+
+        if header_type == 0x74 and cursor + 25 <= len(data):
+            pack_size = int.from_bytes(data[cursor : cursor + 4], "little")
+            name_size = int.from_bytes(data[cursor + 19 : cursor + 21], "little")
+            name_cursor = cursor + 25
+            if header_flags & 0x0100:
+                name_cursor += 8
+            raw_name = data[name_cursor : name_cursor + name_size]
+            stem = _archive_member_stem(_decode_rar_name(raw_name), extensions)
+            if stem:
+                names.add(stem)
+            add_size = pack_size
+
+        if header_type == 0x7B:
+            break
+        next_offset = header_start + header_size + add_size
+        if next_offset <= header_start:
+            break
+        offset = next_offset
     return names
 
 
@@ -1017,8 +1186,15 @@ def create_coc_match_job_from_upload(
     return load_job_state(state_path(COC_MATCH_JOB_ROOT, job_id))
 
 
-def list_coc_match_jobs(limit: int = 20) -> dict[str, Any]:
+def list_coc_match_jobs(limit: int = 20, country: str | None = None) -> dict[str, Any]:
     payloads = list_job_payloads(COC_MATCH_JOB_ROOT)
+    if country:
+        country_filter = country.strip().upper()
+        payloads = [
+            payload
+            for payload in payloads
+            if str(payload.get("country", "")).strip().upper() == country_filter
+        ]
     payloads.sort(key=lambda p: str(p.get("createdAt", "")), reverse=True)
     return {"items": payloads[:limit]}
 

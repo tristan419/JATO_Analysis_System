@@ -100,6 +100,7 @@ import type {
   ColourSurchargeRule,
   CountryPaymentTerm,
   MaterialUploadPreview,
+  MaterialUploadPreviewRow,
   MaterialUploadSession,
   MatrixResponse,
   OrderGeniusOptions,
@@ -681,6 +682,79 @@ function mapCocMatchJob(raw: Record<string, unknown>): CocMatchJob {
     createdAt: String(raw.createdAt ?? ""),
     startedAt: raw.startedAt === undefined ? null : String(raw.startedAt),
     finishedAt: raw.finishedAt === undefined ? null : String(raw.finishedAt),
+  };
+}
+
+function mapMaterialUploadSession(raw: Record<string, unknown>): MaterialUploadSession {
+  const uploadedRaw = raw.uploadedChunks ?? raw.uploaded_chunks;
+  return {
+    uploadId: String(raw.uploadId ?? raw.upload_id ?? ""),
+    fileName: String(raw.fileName ?? raw.file_name ?? ""),
+    totalSize: Number(raw.totalSize ?? raw.total_size ?? 0),
+    chunkSize: Number(raw.chunkSize ?? raw.chunk_size ?? 0),
+    totalChunks: Number(raw.totalChunks ?? raw.total_chunks ?? 0),
+    uploadedChunks: Array.isArray(uploadedRaw)
+      ? uploadedRaw.map((item) => Number(item)).filter((item) => Number.isFinite(item))
+      : [],
+    status: String(raw.status ?? ""),
+  };
+}
+
+function mapMaterialUploadPreviewRow(raw: Record<string, unknown>): MaterialUploadPreviewRow {
+  const warningsRaw = raw.warnings;
+  const interiorColorRaw = raw.interiorColorName ?? raw.interior_color_name;
+  const bomTemplateRaw = raw.bomTemplate ?? raw.bom_template;
+  const baseFobRaw = raw.baseFobEur ?? raw.base_fob_eur;
+  return {
+    rowIndex: Number(raw.rowIndex ?? raw.row_index ?? 0),
+    sheetName: String(raw.sheetName ?? raw.sheet_name ?? ""),
+    brand: String(raw.brand ?? ""),
+    modelName: String(raw.modelName ?? raw.model_name ?? ""),
+    version: String(raw.version ?? ""),
+    exteriorColorName: String(raw.exteriorColorName ?? raw.exterior_color_name ?? ""),
+    exteriorColorCode: String(raw.exteriorColorCode ?? raw.exterior_color_code ?? ""),
+    exteriorColorType: String(raw.exteriorColorType ?? raw.exterior_color_type ?? ""),
+    interiorColorName: interiorColorRaw === undefined || interiorColorRaw === null
+      ? null
+      : String(interiorColorRaw),
+    bomTemplate: bomTemplateRaw === undefined || bomTemplateRaw === null
+      ? null
+      : String(bomTemplateRaw),
+    materialCode: String(raw.materialCode ?? raw.material_code ?? ""),
+    baseFobEur: baseFobRaw === undefined || baseFobRaw === null
+      ? null
+      : Number(baseFobRaw),
+    powertrain: raw.powertrain === undefined || raw.powertrain === null ? null : String(raw.powertrain),
+    warnings: Array.isArray(warningsRaw) ? warningsRaw.map((item) => String(item)) : [],
+  };
+}
+
+function mapMaterialUploadPreview(raw: Record<string, unknown>): MaterialUploadPreview {
+  const rowsRaw = raw.rows;
+  const warningsRaw = raw.warnings;
+  const sheetNamesRaw = raw.sheetNames ?? raw.sheet_names;
+  return {
+    uploadId: String(raw.uploadId ?? raw.upload_id ?? ""),
+    totalRows: Number(raw.totalRows ?? raw.total_rows ?? 0),
+    newSkus: Number(raw.newSkus ?? raw.new_skus ?? 0),
+    existingSkus: Number(raw.existingSkus ?? raw.existing_skus ?? 0),
+    sheetNames: Array.isArray(sheetNamesRaw) ? sheetNamesRaw.map((item) => String(item)) : [],
+    rows: Array.isArray(rowsRaw)
+      ? rowsRaw
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        .map(mapMaterialUploadPreviewRow)
+      : [],
+    warnings: Array.isArray(warningsRaw) ? warningsRaw.map((item) => String(item)) : [],
+  };
+}
+
+function mapPublishBaselineResponse(raw: Record<string, unknown>): PublishBaselineResponse {
+  return {
+    baselineVersionId: String(raw.baselineVersionId ?? raw.baseline_version_id ?? ""),
+    baselineName: String(raw.baselineName ?? raw.baseline_name ?? ""),
+    skuCount: Number(raw.skuCount ?? raw.sku_count ?? 0),
+    fobCount: Number(raw.fobCount ?? raw.fob_count ?? 0),
+    status: String(raw.status ?? ""),
   };
 }
 
@@ -2669,10 +2743,14 @@ export const api = {
     );
   },
 
-  cocMatchListJobs: (limit = 20) =>
-    request<{ items: Record<string, unknown>[] }>(
-      `/coc-match/jobs?limit=${limit}`
-    ),
+  cocMatchListJobs: (limit = 20, country?: string) => {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    const normalizedCountry = country?.trim().toUpperCase();
+    if (normalizedCountry) qs.set("country", normalizedCountry);
+    return request<{ items: Record<string, unknown>[] }>(
+      `/coc-match/jobs?${qs.toString()}`
+    ).then((res) => ({ items: res.items.map(mapCocMatchJob) }));
+  },
 
   cocMatchGetJob: (jobId: string) =>
     request<{ item: Record<string, unknown> }>(`/coc-match/jobs/${jobId}`)
@@ -2687,10 +2765,10 @@ export const api = {
   // ── Order Genius ────────────────────────────────────────────────
 
   initiateMaterialMasterUpload: (fileName: string, totalSize: number) =>
-    request<MaterialUploadSession>(
+    request<Record<string, unknown>>(
       `/order-genius/material-master-uploads/initiate?file_name=${encodeURIComponent(fileName)}&total_size=${totalSize}`,
       { method: "POST" }
-    ),
+    ).then(mapMaterialUploadSession),
 
   uploadMaterialMasterChunk: async (
     uploadId: string,
@@ -2719,15 +2797,15 @@ export const api = {
     ),
 
   getMaterialMasterPreview: (uploadId: string) =>
-    request<MaterialUploadPreview>(
+    request<Record<string, unknown>>(
       `/order-genius/material-master-uploads/${uploadId}/preview`,
-    ),
+    ).then(mapMaterialUploadPreview),
 
   publishMaterialMaster: (uploadId: string, notes?: string) =>
-    request<PublishBaselineResponse>(
+    request<Record<string, unknown>>(
       `/order-genius/material-master-uploads/${uploadId}/publish`,
       { method: "POST", body: JSON.stringify({ notes }) },
-    ),
+    ).then(mapPublishBaselineResponse),
 
   getOrderGeniusOptions: (params: {
     country: string;

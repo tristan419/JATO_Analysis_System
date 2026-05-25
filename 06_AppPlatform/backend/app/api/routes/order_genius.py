@@ -61,7 +61,10 @@ def get_material_master_upload_session(
     upload_id: str,
     _=Depends(require_min_role("editor")),
 ) -> dict:
-    return upload_svc.get_session(upload_id)
+    try:
+        return upload_svc.get_session(upload_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @router.put("/material-master-uploads/{upload_id}/parts/{part_number}")
@@ -72,7 +75,12 @@ async def upload_material_master_chunk(
     _=Depends(require_min_role("editor")),
 ) -> dict:
     chunk_data = await request.body()
-    return upload_svc.upload_chunk(upload_id, part_number, chunk_data)
+    try:
+        return upload_svc.upload_chunk(upload_id, part_number, chunk_data)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post("/material-master-uploads/{upload_id}/complete")
@@ -80,7 +88,12 @@ def complete_material_master_upload(
     upload_id: str,
     _=Depends(require_min_role("editor")),
 ) -> dict:
-    return upload_svc.complete_upload(upload_id)
+    try:
+        return upload_svc.complete_upload(upload_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post("/material-master-uploads/{upload_id}/parse")
@@ -88,7 +101,12 @@ def parse_material_master_upload(
     upload_id: str,
     _=Depends(require_min_role("editor")),
 ) -> dict:
-    return upload_svc.parse_upload(upload_id)
+    try:
+        return upload_svc.parse_upload(upload_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.get("/material-master-uploads/{upload_id}/preview")
