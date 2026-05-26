@@ -34,7 +34,8 @@ export interface DashboardPageCache {
   yearSeries: TimeSeriesPoint[];
   monthSeries: TimeSeriesPoint[];
   activeTab: "year" | "month";
-  chartType: "line" | "bar";
+  chartType: "line" | "bar" | "rank";
+  rankLimit: number;
   tsMode: "总和" | "分组";
   tsGroupDim: string;
   tsShareSplit: TimeSeriesShareSplitDimension;

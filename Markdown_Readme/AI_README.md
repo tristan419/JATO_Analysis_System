@@ -215,3 +215,67 @@ Engineering Config
 - **API style:** RESTful, JSON request/response, prefix `/v1/`
 - **Auth:** Token-based, optional per env (`APP_AUTH_ENABLED`), roles: viewer/editor/admin
 - **Git:** main branch, pre-commit + post-commit hooks, GitHub Actions CI/CD
+
+## Shared UI abstractions (deck controls + chart labels)
+
+> See detailed docs: `Fullstack/04_DevOps/DECK_CONTROLS_EXPORT_INTERACTION_REUSE_2026-05-26.md`
+
+### Deck control drawers (reusable across pages)
+
+| Component | File | Purpose |
+|---|---|---|
+| `DeckFloatingDrawer` | `components/deckControls/DeckFloatingDrawer.tsx` | Fixed floating drawer (top-right), toggle + glass panel |
+| `DeckExportDrawer` | `components/deckControls/DeckExportDrawer.tsx` | Export settings drawer (bottom-right), same pattern |
+| `DeckControlTabs` | `components/deckControls/DeckControlTabs.tsx` | Tab strip inside drawer, generic `<Key>` |
+| `DebouncedNumberInput` | `components/deckControls/DebouncedNumberInput.tsx` | Draft string → debounce 1.2s → commit, avoids NaN on clear |
+
+Usage: `PositioningPricingPage`, `DashboardPage`. Mutual exclusion pattern — opening one drawer closes the other.
+
+### ExportPanel integration pattern
+
+```tsx
+<DeckExportDrawer open={open} onOpenChange={handler}>
+  <ExportPanel showExportButton={false} showDimensionControls={false} collapsible={false} />
+</DeckExportDrawer>
+```
+
+Multi-section pages (Dashboard): use section tabs + `activeDeckSection` state to switch ExportPanel.
+
+### Dashboard layout controls
+
+- `deckChartHeight` (default 500px, range 300-900) + `deckChartWidth` (default 0=auto, range 0-1400)
+- localStorage persistence under `dashboard-deck-chart-height` / `dashboard-deck-chart-width`
+- All `PlotlyChart` `height` props use `deckChartHeight`
+- Width: 0=auto fill container, >0 sets container `maxWidth`
+
+### Bar label formatting (shared)
+
+| Function | File | Signature |
+|---|---|---|
+| `formatCompactBarLabel` | `utils/plotlyDefaults.ts` | `(volume: number, share: number) => "12,345台 · 23.5%"` |
+| `barLabelPosition` | `utils/plotlyDefaults.ts` | `(orientation?) => "h" → "middle right", default → "outside"` |
+
+Used by: `ExportPanel.tsx` (percent mode), `DashboardPage.tsx` (ranking chart), `MarketScanPage.tsx` (migration target).
+
+### Percent data label mode
+
+Two behaviors in `applyDataLabelsToTraces` (`ExportPanel.tsx`):
+- **Multi-trace**: cross-trace share at each x-position (e.g., BEV % of all powertrains in Jan)
+- **Single-trace**: share of own total across all x-positions (e.g., Jan % of annual total)
+
+Horizontal bar auto-detection: `orientation === "h"` → uses `formatCompactBarLabel` + `cliponaxis: false`.
+
+### Ranking bar chart pattern
+
+Horizontal bar (`orientation: "h"`) + separate scatter text trace for labels. Key layout:
+- `yaxis.automargin: true` (no explicit `l` margin — avoids label cutoff at large font sizes)
+- `r: 160` margin for right-side labels
+- Both traces need `cliponaxis: false`
+- Dynamic height: `Math.max(deckChartHeight, Math.min(1200, items * 26 + 50))`
+
+### CSS pitfalls (avoid repeating)
+
+1. **Don't `max-height` a JS-height-driven container** — use `overflow: auto` without fixed `max-height`
+2. **Don't set explicit `margin.l` with `automargin`** — Plotly automargin only expands, can't shrink explicit margins
+3. **`cliponaxis: false` on ALL label-carrying traces** — bar + scatter text both need it
+4. **Don't set `layout.width` in Plotly** — breaks `useResizeHandler` responsiveness; use CSS `maxWidth` on container instead

@@ -52,3 +52,15 @@ export function buildCategoryAxis(
     ...extra,
   };
 }
+
+/* ── Bar chart label formatting ─────────────────────── */
+
+/** Compact label used in horizontal bar rankings: "12,345台 · 23.5%" */
+export function formatCompactBarLabel(volume: number, share: number): string {
+  return `${volume.toLocaleString()}台 · ${(share * 100).toFixed(1)}%`;
+}
+
+/** Default label position for bar charts */
+export function barLabelPosition(orientation?: string): string {
+  return orientation === "h" ? "middle right" : "outside";
+}

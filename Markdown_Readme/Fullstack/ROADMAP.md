@@ -10,7 +10,7 @@
 - `保待办`：所有待办统一保留在原看板文档中，不分散到新文件。
 - `低耦合`：专题文档只存专题信息，主索引只做导航与状态摘要。
 
-## 2. 当前项目快照（2026-05-14）
+## 2. 当前项目快照（2026-05-26）
 
 - 阶段：`Phase 4 — Fullstack 主线`
 - 架构：FastAPI + React + TypeScript（Streamlit 看板功能已全部迁移完成）
@@ -128,6 +128,7 @@ Markdown_Readme/
 | `04_DevOps/MSRP_LOCAL_SYNC_AUTOMATION.md` | 运维/MSRP | Active | MSRP 本地同步自动化方案 |
 | `04_DevOps/PROXY_AND_SCRAPER_DEBUG_2026-05-15.md` | 运维/调试 | Active | 代理与抓取器调试指南 |
 | `04_DevOps/deep-research-report-scraping.md` | 运维/抓取 | Active | 深度研究报告抓取方案 |
+| `04_DevOps/DECK_CONTROLS_EXPORT_INTERACTION_REUSE_2026-05-26.md` | UI/复用 | Active | Deck 控制抽屉、ExportPanel 集成、条形图标签、percent 数据标签、排名条形图、版式控制、CSS 避坑（Dashboard + PositioningPricing + MarketScan + VersionComparison 四页复用方案） |
 | **WORKFLOWS/** | | | |
 | `WORKFLOWS/BUSINESS_PIPELINE_WORKFLOWS.md` | 业务/流程 | Active | 业务流程透视：JATO 导入→分析→MSRP→定位→竞品监控→国家扫描 |
 | `WORKFLOWS/BUSINESS_PRESENTATION_DECK.md` | 业务/汇报 | Active | 业务视角的系统能力汇报 Deck |
@@ -181,10 +182,13 @@ Markdown_Readme/
 ### 运维 / 部署
 `04_DevOps/TENCENT_CLOUD_DEPLOY.md` → `04_DevOps/MANUAL_CICD.md` → `04_DevOps/FULLSTACK_LOCAL_DEBUG.md` → `04_DevOps/GIT_PROXY_SWITCH.md`
 
+### UI 组件复用（Deck Controls）
+`04_DevOps/DECK_CONTROLS_EXPORT_INTERACTION_REUSE_2026-05-26.md` → `../../06_AppPlatform/frontend/src/components/deckControls/` → `../../06_AppPlatform/frontend/src/utils/plotlyDefaults.ts` → `../UI/Dashboard_Shared_Filter_Reuse.md`
+
 ### 迁移历史（仅追溯）
 `_archived/STREAMLIT_TO_FULLSTACK_MIGRATION.md` → `_archived/STREAMLIT_VS_REACT_COMPARISON.md` → `_archived/REACT_STREAMLIT_GAP_ANALYSIS.md` → [`../Streamlit/README.md`](../Streamlit/README.md)
 
-## 5.1 当前关注点（2026-05-14）
+## 5.1 当前关注点（2026-05-26）
 
 - Fullstack 迁移已完成，Streamlit 文档全部归档至 `Streamlit/`。
 - 全球可视化（地球项目）已搁置，`JATO_GLOBAL_VISUALIZATION.md` 保留但不再推进。
@@ -202,6 +206,11 @@ Markdown_Readme/
 - `/data-management` 页面已提供 **local-only Airflow start/stop/open-UI controls**，仅作为本地 orchestration 辅助层，不改变核心抓取 / 刷新主链路。
 - VOC forum pipeline 已落地 **raw → heuristic enriched → country deck artifact**：`jato-voc-fetch` 现已升级到 **Trafilatura-first main-text extraction + lxml fallback**，并在 raw artifact 记录 `textExtraction.method`，同时开始保留 fetch-time `contentUnits`；`jato-voc-enrich` 继续产出 `enriched/customer_insight_signals.json` 与 `deck/customer_insight_deck.json`，且 enrichment 已补 **taxonomy-driven automatic analysis**（theme tags、persona cohorts、product/competitor matching、heuristic auto scores、cross analysis、content-unit transaction-based association graph with Fisher/FDR validation and replication axes）；当前 batch_a 八国本地实跑已可产出 43 docs / 68 analysis units，而隔离 refetch smoke run 已在 SE / NO / HU / HR / AT / CZ 看到 `fetch_lxml_block` units，但整体仍需继续前推 comment/reply structure preservation；`CustomerInsightsPage` 现已补 **Benchmark Excel / Forum VOC Live** 双模式，live 模式展示 observed-only forum deck，并支持按已生成 country deck 做 country-focus 查看，且 evidence card 可直接展开查看抓取正文预览与 observation 句子；`/data-management` 现已补 **VOC 观察台**，可按国家查看 raw / enriched / deck artifact、source runs、staging 同步与 VOC 文档路径；benchmark 继续承载样本画像。
 - VOC 已补一份正式状态文档 `02_DataETL/VOC_FORUM_IMPLEMENTATION_STATUS_2026-04-19.md`，用于汇总 research 结论、已做项与后续执行顺序。
+- **Dashboard Deck Controls 复用体系已完成**：`DeckFloatingDrawer`（窗口/图表/版式三 tab）+ `DeckExportDrawer`（03/04/05/06 section 切换）全局浮动抽屉，共享 state 与页面内联控件实时同步；版式控制（高度 slider 500px 默认 + 宽度 auto-fill）localStorage 持久化；`DebouncedNumberInput` 统一所有数字输入（1.2s debounce）。
+- **排名条形图模式已完成**：Time-Series Lens 新增 `chartType: "rank"`，分组数据聚合为水平条形图排名，右侧 `formatCompactBarLabel` 标签（`12,345台 · 23.5%`），`rankLimit` 控制条目数，自动滚动。
+- **percent 数据标签双模式已完成**：多 trace 跨 trace 占比（同时间点互占比）+ 单 trace 跨时间占比，自动检测 `orientation` 切换水平/垂直格式。
+- **条形图标签共享函数已抽取**：`formatCompactBarLabel` / `barLabelPosition` 在 `utils/plotlyDefaults.ts`，ExportPanel / DashboardPage / MarketScanPage 三处统一使用。
+- **CSS 避坑已文档化**：max-height 裁切、automargin 与显式 margin 冲突、cliponaxis 双 trace 遗漏、Plotly layout.width 破坏响应式。详见 `04_DevOps/DECK_CONTROLS_EXPORT_INTERACTION_REUSE_2026-05-26.md`。
 
 ## 5.2 2026-04-17 新增规划（六问答卷）
 

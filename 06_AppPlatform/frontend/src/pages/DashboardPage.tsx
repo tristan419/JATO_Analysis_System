@@ -11,6 +11,10 @@ import { LoadingActionButton } from "../components/LoadingActionButton";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
+import { DebouncedNumberInput } from "../components/deckControls/DebouncedNumberInput";
+import { DeckControlTabs, type DeckControlTabItem } from "../components/deckControls/DeckControlTabs";
+import { DeckExportDrawer } from "../components/deckControls/DeckExportDrawer";
+import { DeckFloatingDrawer } from "../components/deckControls/DeckFloatingDrawer";
 import { useSharedFilterScope } from "../contexts/SharedFilterScopeContext";
 import {
   FILTER_ORDER,
@@ -23,7 +27,7 @@ import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, app
 import { buildBubbleSizing } from "../utils/bubbleSizing";
 import { SERIES_COLORS as COLORS, POWERTRAIN_COLORS, DEFAULT_POWERTRAINS, normalizePowertrainName, ptColor, seriesColor } from "../utils/colors";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
-import { buildCategoryAxis } from "../utils/plotlyDefaults";
+import { buildCategoryAxis, formatCompactBarLabel } from "../utils/plotlyDefaults";
 import { parseMonthLabel, toTimeOrdinal, compareTimeLabels } from "../utils/timeFormatting";
 import {
   type BubbleGroupDimension,
@@ -134,7 +138,8 @@ export function DashboardPage() {
 
   /* time-series controls */
   const [activeTab, setActiveTab] = useState<"year"|"month">(() => cachedPage?.activeTab ?? "month");
-  const [chartType, setChartType] = useState<"line"|"bar">(() => cachedPage?.chartType ?? "line");
+  const [chartType, setChartType] = useState<"line"|"bar"|"rank">(() => cachedPage?.chartType ?? "line");
+  const [rankLimit, setRankLimit] = useState(() => cachedPage?.rankLimit ?? 20);
   const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">(() => cachedPage?.tsMode ?? "\u5206\u7ec4");
   const [tsGroupDim, setTsGroupDim] = useState(() => cachedPage?.tsGroupDim ?? "\u56fd\u5bb6");
   const [tsShareSplit, setTsShareSplit] = useState<TimeSeriesShareSplitDimension>(
@@ -220,6 +225,30 @@ export function DashboardPage() {
 
   /* export settings (one per chart section) */
   const [tsExport, setTsExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
+  const [deckExportDrawerOpen, setDeckExportDrawerOpen] = useState(false);
+  const [deckControlDrawerOpen, setDeckControlDrawerOpen] = useState(false);
+  const [deckChartHeight, setDeckChartHeight] = useState(() => {
+    try { const v = localStorage.getItem("dashboard-deck-chart-height"); if (v) return Number(v); } catch {}
+    return 500;
+  });
+  const [deckChartWidth, setDeckChartWidth] = useState(() => {
+    try { const v = localStorage.getItem("dashboard-deck-chart-width"); if (v) return Number(v); } catch {}
+    return 0;
+  });
+  const handleControlDrawerOpen = (open: boolean) => {
+    if (open) setDeckExportDrawerOpen(false);
+    setDeckControlDrawerOpen(open);
+  };
+  const handleExportDrawerOpen = (open: boolean) => {
+    if (open) setDeckControlDrawerOpen(false);
+    setDeckExportDrawerOpen(open);
+  };
+  useEffect(() => {
+    try { localStorage.setItem("dashboard-deck-chart-height", String(deckChartHeight)); } catch {}
+  }, [deckChartHeight]);
+  useEffect(() => {
+    try { localStorage.setItem("dashboard-deck-chart-width", String(deckChartWidth)); } catch {}
+  }, [deckChartWidth]);
   const [advExport, setAdvExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
   const [mvExport, setMvExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
   const [pmExport, setPmExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
@@ -252,6 +281,24 @@ export function DashboardPage() {
     }, 150);
     return () => window.clearTimeout(timer);
   }, []);
+
+  /* deck section selector for global export drawer */
+  type DeckSectionKey = "timeSeries" | "advanced" | "modelVersion" | "positioning";
+  const [activeDeckSection, setActiveDeckSection] = useState<DeckSectionKey>("timeSeries");
+  const DECK_SECTION_TABS: { key: DeckSectionKey; label: string }[] = [
+    { key: "timeSeries", label: "03 Time-Series" },
+    { key: "advanced", label: "04 Advanced" },
+    { key: "modelVersion", label: "05 Model Version" },
+    { key: "positioning", label: "06 Positioning" },
+  ];
+
+  /* control drawer tabs */
+  const [deckControlTab, setDeckControlTab] = useState<"window" | "chart" | "layout">("window");
+  const DECK_CONTROL_TABS: DeckControlTabItem<"window" | "chart" | "layout">[] = [
+    { key: "window", label: "窗口", caption: "时间范围" },
+    { key: "chart", label: "图表", caption: "切换与分组" },
+    { key: "layout", label: "版式", caption: "图表高度" },
+  ];
 
   useEffect(() => {
     if (!loading) {
@@ -318,7 +365,7 @@ export function DashboardPage() {
             grain: activeTab,
             group_by: tsGroupDim,
             share_split_by: shareSplitBy,
-            top_n: tsTopNEnabled ? tsTopN : 9999,
+            top_n: chartType === "rank" ? rankLimit : (tsTopNEnabled ? tsTopN : 9999),
             include_others: tsIncludeOthers,
             time_range: timeRangePayload,
           });
@@ -331,7 +378,7 @@ export function DashboardPage() {
         finally { if (!cancelled) setGroupedLoading(false); }
       }, 300);
       return () => { cancelled = true; clearTimeout(timer); setGroupedLoading(false); };
-  }, [tsMode, tsGroupDim, tsShareSplit, activeTab, tsTopN, tsTopNEnabled, tsIncludeOthers, filterPayloadStr, columns.length, timeRangePayload]);
+  }, [tsMode, tsGroupDim, tsShareSplit, activeTab, tsTopN, tsTopNEnabled, tsIncludeOthers, chartType, rankLimit, filterPayloadStr, columns.length, timeRangePayload]);
 
   /* advanced chart */
   async function loadAdvChart() {
@@ -595,6 +642,25 @@ export function DashboardPage() {
     [filteredGrouped],
   );
 
+  /* ranking data: aggregate across time window, rank by total volume */
+  const rankingData = useMemo(() => {
+    if (chartType !== "rank" || !isGrouped) return [] as { name: string; volume: number; share: number }[];
+    const totals = new Map<string, number>();
+    for (const item of filteredGrouped) {
+      if (!hiddenSeries.has(item.series)) {
+        totals.set(item.series, (totals.get(item.series) ?? 0) + item.value);
+      }
+    }
+    const grandTotal = Array.from(totals.values()).reduce((s, v) => s + v, 0) || 1;
+    return Array.from(totals.entries())
+      .map(([name, volume]) => ({ name, volume, share: volume / grandTotal }))
+      .sort((a, b) => b.volume - a.volume);
+  }, [chartType, isGrouped, filteredGrouped, hiddenSeries]);
+  const rankingSliced = useMemo(
+    () => rankingData.slice(0, rankLimit),
+    [rankingData, rankLimit],
+  );
+
   /* B7: time-window KPI — compute sales from filtered time series */
   const timeWindowSales = useMemo(() => {
     if (!timeRange) return kpis?.cumulativeSales;
@@ -636,6 +702,7 @@ export function DashboardPage() {
     monthSeries,
     activeTab,
     chartType,
+    rankLimit,
     tsMode,
     tsGroupDim,
     tsShareSplit,
@@ -722,6 +789,7 @@ export function DashboardPage() {
     advRangeStep,
     advTopN,
     chartType,
+    rankLimit,
     columns,
     dashboardSearch,
     filteredRowCount,
@@ -1056,7 +1124,7 @@ export function DashboardPage() {
     : `${advItems.length} rows`;
 
   return (
-    <div className="dashboard-layout">
+    <div className="dashboard-layout" style={{ "--deck-chart-max-width": deckChartWidth > 0 ? `${deckChartWidth}px` : "100%" } as React.CSSProperties}>
       <CollapsibleFilterSidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((current) => !current)}
@@ -1263,52 +1331,14 @@ export function DashboardPage() {
               </div>
               <span className="chart-controls-sep" />
               <label className="chart-mode-label"><input type="radio" name="chartType" value="line" checked={chartType==="line"} onChange={()=>setChartType("line")} />{" \u6298\u7ebf"}</label>
-              <label className="chart-mode-label"><input type="radio" name="chartType" value="bar" checked={chartType==="bar"} onChange={()=>setChartType("bar")} />{" \u7d2f\u79ef\u6761\u5f62"}</label>
+              <label className="chart-mode-label"><input type="radio" name="chartType" value="bar" checked={chartType==="bar"} onChange={()=>setChartType("bar")} />{" \u7d2f\u79ef\u67f1\u72b6"}</label>
+              <label className="chart-mode-label"><input type="radio" name="chartType" value="rank" checked={chartType==="rank"} onChange={()=>{setChartType("rank"); if(tsMode==="\u603b\u548c") setTsMode("\u5206\u7ec4");}} />{" \u6392\u540d"}</label>
             </div>
           </div>
 
-          {/* grouped controls */}
-          {isGrouped && (
-            <div className="ts-group-bar">
-              <div className="filter-group"><label>{"\u5206\u7ec4\u7ef4\u5ea6"}</label>
-                <select value={tsGroupDim} onChange={e=>setTsGroupDim(e.target.value)}>
-                  {GROUP_BY_OPTIONS.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
-                </select>
-              </div>
-              {!isShareGrouped ? (
-                <>
-                  <label className="chart-mode-label" style={{gap:6}}>
-                    <input type="checkbox" checked={tsTopNEnabled} onChange={e=>setTsTopNEnabled(e.target.checked)} />
-                    {"\u542f\u7528 Top N"}
-                  </label>
-                  {tsTopNEnabled && <div className="filter-group"><label>Top N</label>
-                    <input type="number" value={tsTopN} min={3} max={30} style={{width:56}} onChange={e=>setTsTopN(Math.max(3,Math.min(30,Number(e.target.value)||10)))} />
-                  </div>}
-                  <label className="chart-mode-label" style={{gap:6}}>
-                    <input type="checkbox" checked={tsIncludeOthers} onChange={e=>setTsIncludeOthers(e.target.checked)} />
-                    {"\u56fe\u4e2d\u663e\u793a\u201c\u5176\u4ed6\u201d"}
-                  </label>
-                </>
-              ) : (
-                <>
-                  <div className="filter-group"><label>拆分视角</label>
-                    <select value={tsShareSplit} onChange={e=>setTsShareSplit(e.target.value as TimeSeriesShareSplitDimension)}>
-                      {TIME_SERIES_SHARE_SPLIT_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
-                    </select>
-                  </div>
-                  <span className="ts-mode-hint">拆分后的每条线都按各自子组重算占比，不应用 Top N / 其他 合并。</span>
-                </>
-              )}
-              {groupedLoading && (
-                <LoadingSurface
-                  mode="inline"
-                  label="正在刷新分组序列"
-                  detail={!isShareGrouped && tsTopNEnabled ? `${tsGroupDim} · Top ${tsTopN}` : tsGroupDim}
-                />
-              )}
-            </div>
+          {groupedLoading && (
+            <LoadingSurface mode="inline" label="正在刷新分组序列" detail={tsGroupDim} />
           )}
-          {!isGrouped && <div className="ts-mode-hint">{"\u5207\u6362\u5230\u201c\u5206\u7ec4\u201d\u540e\uff0c\u53ef\u6309\u52a8\u603b/\u7ec6\u5206/\u54c1\u724c/Model \u5206\u8272\u663e\u793a\u3002"}</div>}
 
           {/* series pills (click to toggle visibility) */}
           {isGrouped && allSeriesNames.length > 0 && (() => {
@@ -1328,7 +1358,7 @@ export function DashboardPage() {
           })()}
 
           {/* single-series */}
-          {!isGrouped && aggregatedSingle.length > 0 && (
+          {!isGrouped && chartType !== "rank" && aggregatedSingle.length > 0 && (
             <div ref={el => { tsChartRef.current = el; }}>
               <PlotlyChart
                 data={applyDataLabelsToTraces([chartType === "line" ? {
@@ -1347,13 +1377,13 @@ export function DashboardPage() {
                   xaxis: buildCategoryAxis(singleTimeLabels, { tickangle: -45 }),
                   yaxis: { title: { text: "Sales" } },
                 }, tsExport)}
-                height={400}
+                height={deckChartHeight}
               />
             </div>
           )}
 
           {/* multi-series grouped */}
-          {isGrouped && filteredGrouped.length > 0 && (() => {
+          {isGrouped && chartType !== "rank" && filteredGrouped.length > 0 && (() => {
             const isPt = tsGroupDim === "\u52a8\u603b\u89c4\u6574";
             let traces: Data[] = visibleSeries.map((name, i) => {
               const seriesData = filteredGrouped.filter(g => g.series === name);
@@ -1377,20 +1407,86 @@ export function DashboardPage() {
                 <PlotlyChart
                   data={traces}
                   layout={applyExportToLayout({
-                    barmode: chartType === "bar" ? (isShareGrouped ? "group" : "relative") : undefined,
+                      barmode: chartType === "bar" ? (isShareGrouped ? "group" : "relative") : undefined,
                     xaxis: buildCategoryAxis(groupedTimeLabels, { tickangle: -45 }),
                     yaxis: isShareGrouped
                       ? { title: { text: "Share (%)" }, range: [0, 100], ticksuffix: "%" }
                       : { title: { text: "Sales" } },
                   }, tsExport)}
-                  height={450}
+                  height={deckChartHeight}
                 />
               </div>
             );
           })()}
 
-          {!isGrouped && aggregatedSingle.length===0 && !loading && <div className="chart-empty">{"\u6682\u65e0\u8d8b\u52bf\u6570\u636e"}</div>}
-          {isGrouped && filteredGrouped.length===0 && !groupedLoading && <div className="chart-empty">{"\u5207\u6362\u5206\u7ec4\u7ef4\u5ea6\u6216\u8c03\u6574\u7b5b\u9009\u6761\u4ef6"}</div>}
+          {!isGrouped && chartType !== "rank" && aggregatedSingle.length===0 && !loading && <div className="chart-empty">{"\u6682\u65e0\u8d8b\u52bf\u6570\u636e"}</div>}
+          {isGrouped && chartType !== "rank" && filteredGrouped.length===0 && !groupedLoading && <div className="chart-empty">{"\u5207\u6362\u5206\u7ec4\u7ef4\u5ea6\u6216\u8c03\u6574\u7b5b\u9009\u6761\u4ef6"}</div>}
+
+          {/* ranking horizontal bar chart */}
+          {chartType === "rank" && isGrouped && rankingSliced.length > 0 && (() => {
+            const reversed = [...rankingSliced].reverse();
+            const maxVol = rankingSliced[0]?.volume ?? 1;
+            const chartHeight = Math.max(deckChartHeight, Math.min(1200, rankingSliced.length * 26 + 50));
+            const trace: Data = {
+              type: "bar",
+              orientation: "h",
+              name: tsGroupDim,
+              showlegend: false,
+              x: reversed.map((item) => item.volume),
+              y: reversed.map((item) => item.name),
+              marker: {
+                color: reversed.map((_, i) => {
+                  const idx = allSeriesNames.indexOf(reversed[i].name);
+                  return seriesColor(reversed[i].name, idx, tsPalette, tsGroupDim === "\u52a8\u603b\u89c4\u6574");
+                }),
+              },
+              hovertemplate: "%{y}<br>\u9500\u91cf %{x:,.0f} \u53f0<br>\u5360\u6bd4 %{customdata:.1%}<extra></extra>",
+              customdata: reversed.map((item) => item.share),
+            };
+            const labelTrace: Data = {
+              type: "scatter",
+              mode: "text",
+              name: "Labels",
+              x: reversed.map((item) => item.volume + maxVol * 0.03),
+              y: reversed.map((item) => item.name),
+              text: reversed.map((item) => formatCompactBarLabel(item.volume, item.share)),
+              textposition: "middle right",
+              textfont: { size: tsExport.labelFontSize ?? tsExport.fontSize, color: "#334155" },
+              cliponaxis: false,
+              hoverinfo: "skip",
+              showlegend: false,
+            };
+            const shareValues = trace.customdata as number[];
+            const processedBar = applyDataLabelsToTraces([trace], tsExport)[0];
+            if (shareValues && tsExport.dataLabelMode !== "off") {
+              (processedBar as Record<string, unknown>).customdata = shareValues;
+            }
+            const hasBarLabels = tsExport.dataLabelMode !== "off";
+            const traces = hasBarLabels ? [processedBar] : [processedBar, labelTrace];
+            return (
+              <div className="ts-ranking-chart-shell" ref={el => { tsChartRef.current = el; }}>
+                <PlotlyChart
+                  data={traces}
+                  layout={applyExportToLayout({
+                    barmode: "relative",
+                    bargap: 0.15,
+                    margin: { r: 180, t: 24, b: 30 },
+                    xaxis: { title: { text: "Sales" }, automargin: true, fixedrange: true, showgrid: false, rangemode: "tozero" as const },
+                    yaxis: { automargin: true, fixedrange: true, showgrid: false, ticks: "" as const },
+                  }, tsExport)}
+                  height={chartHeight}
+                />
+              </div>
+            );
+          })()}
+
+          {chartType === "rank" && isGrouped && rankingData.length === 0 && !groupedLoading && (
+            <div className="chart-empty">{"\u5207\u6362\u5206\u7ec4\u7ef4\u5ea6\u6216\u8c03\u6574\u7b5b\u9009\u6761\u4ef6"}</div>
+          )}
+
+          {!isGrouped && chartType === "rank" && (
+            <div className="ts-mode-hint">\u5207\u6362\u5230\u300c\u5206\u7ec4\u300d\u6a21\u5f0f\u540e\u53ef\u67e5\u770b\u6392\u540d\u6761\u5f62\u56fe\u3002</div>
+          )}
 
           {/* B11: "其他"明细表 — 展示被合并进"其他"的各分组明细 */}
           {isGrouped && tsIncludeOthers && othersDetail.length > 0 && (
@@ -1413,7 +1509,6 @@ export function DashboardPage() {
             </details>
           )}
 
-          <ExportPanel value={tsExport} onChange={setTsExport} graphDiv={tsChartRef.current} seriesNames={isGrouped ? visibleSeries : undefined} labelModeOptions={tsLabelModeOptions} />
           </div>
         </div>
 
@@ -1819,7 +1914,7 @@ export function DashboardPage() {
                         <PlotlyChart
                           data={applySeriesColors(applyDataLabelsToTraces(traces, advExport), advExport.seriesColors)}
                           layout={applyExportToLayout({
-                            xaxis: { title: { text: ax.xLabel } },
+                                      xaxis: { title: { text: ax.xLabel } },
                             yaxis: { title: { text: ax.yLabel } },
                             showlegend: false,
                             margin: { t: 18, b: 40, l: 50, r: 10 },
@@ -1839,7 +1934,7 @@ export function DashboardPage() {
                 <PlotlyChart
                   data={applySeriesColors(applyDataLabelsToTraces(traces, advExport), advExport.seriesColors)}
                   layout={applyExportToLayout({
-                    xaxis: { title: { text: ax.xLabel } },
+                      xaxis: { title: { text: ax.xLabel } },
                     yaxis: { title: { text: ax.yLabel } },
                     ...(advChart === "length_vs_price" ? {
                       shapes: [
@@ -1865,7 +1960,7 @@ export function DashboardPage() {
                       ],
                     } : {}),
                   }, advExport)}
-                  height={500}
+                  height={deckChartHeight}
                 />
               </div>
             );
@@ -2140,7 +2235,7 @@ export function DashboardPage() {
                       ? { yaxis: { title: { text: xKey }, autorange: "reversed" as const }, xaxis: { title: { text: "Sales" } } }
                       : { xaxis: { title: { text: xKey }, tickangle: -45 }, yaxis: { title: { text: "Sales" } } }),
                   }, advExport)}
-                  height={450}
+                  height={deckChartHeight}
                 />
               </div>
             );
@@ -2163,10 +2258,10 @@ export function DashboardPage() {
                 <PlotlyChart
                   data={applyDataLabelsToTraces(traces, advExport)}
                   layout={applyExportToLayout({
-                    xaxis: { title: { text: "\u4ef7\u683c\u5e26" }, tickangle: -45 },
+                      xaxis: { title: { text: "\u4ef7\u683c\u5e26" }, tickangle: -45 },
                     yaxis: { title: { text: "Sales" } },
                   }, advExport)}
-                  height={450}
+                  height={deckChartHeight}
                 />
               </div>
             );
@@ -2187,10 +2282,10 @@ export function DashboardPage() {
                 <PlotlyChart
                   data={applyDataLabelsToTraces(heatTraces, advExport)}
                   layout={applyExportToLayout({
-                    xaxis: { title: { text: "Month" } },
+                      xaxis: { title: { text: "Month" } },
                     yaxis: { title: { text: "Year" }, autorange: "reversed" as const },
                   }, advExport)}
-                  height={400}
+                  height={deckChartHeight}
                 />
               </div>
             );
@@ -2204,7 +2299,6 @@ export function DashboardPage() {
           )}
 
           {advChart!=="rv_finance_dashboard" && advItems.length===0 && !advLoading && <div className="chart-empty">{"\u70b9\u51fb\u300c\u52a0\u8f7d\u56fe\u8868\u300d\u67e5\u770b\u5206\u6790\u7ed3\u679c"}</div>}
-          <ExportPanel value={advExport} onChange={setAdvExport} graphDiv={advChartRef.current} labelModeOptions={advLabelModeOptions} />
           </div>
         </div>
 
@@ -2303,16 +2397,15 @@ export function DashboardPage() {
                 <PlotlyChart
                   data={traces}
                   layout={applyExportToLayout({
-                    xaxis: { title: { text: "车长(mm)" } },
+                      xaxis: { title: { text: "车长(mm)" } },
                     yaxis: { title: { text: "MSRP" } },
                   }, mvExport)}
-                  height={500}
+                  height={deckChartHeight}
                 />
               </div>
             );
           })()}
           {mvItems.length===0 && !mvLoading && <div className="chart-empty">{"\u8f93\u5165 Model \u540d\u79f0\u5e76\u70b9\u51fb\u300c\u52a0\u8f7d\u7248\u578b\u300d"}</div>}
-          <ExportPanel value={mvExport} onChange={setMvExport} graphDiv={mvChartRef.current} labelModeOptions={mvLabelModeOptions} />
           </div>
         </div>
 
@@ -2454,16 +2547,15 @@ export function DashboardPage() {
                 <PlotlyChart
                   data={traces}
                   layout={applyExportToLayout({
-                    xaxis: { title: { text: "\u8f66\u957f(mm)" } },
+                      xaxis: { title: { text: "\u8f66\u957f(mm)" } },
                     yaxis: { title: { text: "MSRP" } },
                   }, pmExport)}
-                  height={520}
+                  height={deckChartHeight}
                 />
               </div>
             );
           })()}
           {pmItems.length===0 && !pmLoading && <div className="chart-empty">{"\u8f93\u5165\u76ee\u6807\u8f66\u578b\u53c2\u6570\u6216\u76f4\u63a5\u70b9\u51fb\u300c\u52a0\u8f7d\u5b9a\u4f4d\u56fe\u300d\u67e5\u770b\u5f53\u524d\u7b5b\u9009\u8fb9\u754c\u5185\u5b9a\u4ef7"}</div>}
-          <ExportPanel value={pmExport} onChange={setPmExport} graphDiv={pmChartRef.current} labelModeOptions={pmLabelModeOptions} />
           </div>
         </div>
 
@@ -2495,6 +2587,213 @@ export function DashboardPage() {
           </div>
         </div>
       </section>
+
+      {/* global control drawer — Time-Series quick controls + layout */}
+      <DeckFloatingDrawer
+          className="dashboard-control-drawer"
+          open={deckControlDrawerOpen}
+          onOpenChange={handleControlDrawerOpen}
+          triggerPrimary="筛选 / 版式"
+          triggerSecondaryOpen="收起控制"
+          triggerSecondaryClosed="打开控制"
+          eyebrow="Dashboard"
+          title="控制与版式"
+          ariaLabel="Dashboard deck controls"
+        >
+          <DeckControlTabs
+            tabs={DECK_CONTROL_TABS}
+            activeKey={deckControlTab}
+            onChange={setDeckControlTab}
+            ariaLabel="Dashboard control tabs"
+          />
+
+          {deckControlTab === "window" ? (
+            <div>
+              <TimeAxis
+                labels={timeLabels}
+                value={timeRange}
+                onChange={setTimeRange}
+                grain={activeTab}
+                onGrainChange={setActiveTab}
+                showTitle={false}
+                monthGrain={monthGrain}
+                onMonthGrainChange={setMonthGrain}
+              />
+            </div>
+          ) : deckControlTab === "chart" ? (
+            <div>
+              <div className="deck-export-section-tabs">
+                {DECK_SECTION_TABS.map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    className={`tab-btn${activeDeckSection === tab.key ? " active" : ""}`}
+                    onClick={() => setActiveDeckSection(tab.key)}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <div className="positioning-pricing-control-grid">
+                {activeDeckSection === "timeSeries" && (
+                  <>
+                    <label className="market-scan-field">
+                      <span>Year / Month</span>
+                      <div className="tab-bar">
+                        <button className={`tab-btn${activeTab==="year"?" active":""}`} onClick={()=>setActiveTab("year")}>年度</button>
+                        <button className={`tab-btn${activeTab==="month"?" active":""}`} onClick={()=>setActiveTab("month")}>月度</button>
+                      </div>
+                    </label>
+                    <label className="market-scan-field">
+                      <span>Series</span>
+                      <div className="tab-bar">
+                        <button className={`tab-btn${tsMode==="总和"?" active":""}`} onClick={()=>setTsMode("总和")}>总和</button>
+                        <button className={`tab-btn${tsMode==="分组"?" active":""}`} onClick={()=>setTsMode("分组")}>分组</button>
+                      </div>
+                    </label>
+                    <label className="market-scan-field positioning-pricing-control-field--wide">
+                      <span>Chart</span>
+                      <div className="tab-bar">
+                        <button className={`tab-btn${chartType==="line"?" active":""}`} onClick={()=>setChartType("line")}>折线</button>
+                        <button className={`tab-btn${chartType==="bar"?" active":""}`} onClick={()=>setChartType("bar")}>柱状</button>
+                        <button className={`tab-btn${chartType==="rank"?" active":""}`} onClick={()=>{setChartType("rank"); if(tsMode==="总和") setTsMode("分组");}}>排名</button>
+                      </div>
+                    </label>
+                    {isGrouped && (
+                      <label className="market-scan-field">
+                        <span>分组维度</span>
+                        <select value={tsGroupDim} onChange={e=>setTsGroupDim(e.target.value)}>
+                          {GROUP_BY_OPTIONS.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+                        </select>
+                      </label>
+                    )}
+                    {isGrouped && !isShareGrouped && (
+                      <label className="market-scan-field">
+                        <span>{chartType === "rank" ? "Rank" : "Top N"}</span>
+                        {chartType === "rank" ? (
+                          <DebouncedNumberInput value={rankLimit} onCommit={(v) => v !== null && setRankLimit(v)} min={5} max={100} delayMs={1200} />
+                        ) : (
+                          <DebouncedNumberInput value={tsTopN} onCommit={(v) => v !== null && setTsTopN(v)} min={3} max={30} delayMs={1200} />
+                        )}
+                      </label>
+                    )}
+                  </>
+                )}
+                {activeDeckSection === "advanced" && (
+                  <>
+                    <label className="market-scan-field">
+                      <span>分析组</span>
+                      <select value={advGroup} onChange={e=>setAdvGroup(e.target.value)}>
+                        {ADV_GROUPS.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+                      </select>
+                    </label>
+                    <label className="market-scan-field">
+                      <span>图表</span>
+                      <select value={advChart} onChange={e=>setAdvChart(e.target.value)}>
+                        {(ADV_CHARTS[advGroup]??[]).map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+                      </select>
+                    </label>
+                    <label className="market-scan-field">
+                      <span>Top N</span>
+                      <DebouncedNumberInput value={advTopN} onCommit={(v) => v !== null && setAdvTopN(v)} min={5} max={100} delayMs={1200} />
+                    </label>
+                  </>
+                )}
+                {activeDeckSection === "modelVersion" && (
+                  <label className="market-scan-field positioning-pricing-control-field--wide">
+                    <span>Model Name</span>
+                    <input type="text" value={mvModelName} onChange={e=>setMvModelName(e.target.value)} placeholder="输入 Model 名称" className="market-scan-field-input" />
+                  </label>
+                )}
+                {activeDeckSection === "positioning" && (
+                  <>
+                    <label className="market-scan-field">
+                      <span>Target Length</span>
+                      <DebouncedNumberInput value={pmTargetLength ? Number(pmTargetLength) : null} onCommit={(v) => v !== null && setPmTargetLength(String(v))} min={3000} max={6000} step={100} allowEmpty delayMs={1200} />
+                    </label>
+                    <label className="market-scan-field">
+                      <span>Target MSRP</span>
+                      <DebouncedNumberInput value={pmTargetMsrp ? Number(pmTargetMsrp) : null} onCommit={(v) => v !== null && setPmTargetMsrp(String(v))} min={0} max={500000} step={1000} allowEmpty delayMs={1200} />
+                    </label>
+                    <label className="market-scan-field">
+                      <span>Top N</span>
+                      <DebouncedNumberInput value={pmTopN} onCommit={(v) => v !== null && setPmTopN(v)} min={10} max={200} delayMs={1200} />
+                    </label>
+                  </>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="positioning-pricing-control-grid">
+              <label className="market-scan-field positioning-pricing-control-field--wide">
+                <span>图表高度 {deckChartHeight}px</span>
+                <input
+                  type="range"
+                  min={300}
+                  max={900}
+                  step={10}
+                  value={deckChartHeight}
+                  onChange={(e) => setDeckChartHeight(Number(e.target.value))}
+                />
+              </label>
+              <label className="market-scan-field positioning-pricing-control-field--wide">
+                <span>图表宽度 {deckChartWidth === 0 ? "auto" : `${deckChartWidth}px`}</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={2000}
+                  step={20}
+                  value={deckChartWidth}
+                  onChange={(e) => setDeckChartWidth(Number(e.target.value))}
+                />
+                {deckChartWidth === 0 && <span className="ts-mode-hint">填满容器</span>}
+              </label>
+              <div className="market-scan-field market-scan-field-actions positioning-pricing-control-field--wide">
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setDeckChartHeight(500); setDeckChartWidth(0); }}>
+                  Reset 尺寸
+                </button>
+              </div>
+            </div>
+          )}
+        </DeckFloatingDrawer>
+
+      {/* global export drawer — user picks which section to configure */}
+      <DeckExportDrawer
+          className="dashboard-export-drawer"
+          open={deckExportDrawerOpen}
+          onOpenChange={handleExportDrawerOpen}
+          triggerPrimary="导出图设置"
+          triggerSecondaryOpen="收起设置"
+          triggerSecondaryClosed="打开设置"
+          eyebrow={DECK_SECTION_TABS.find(t => t.key === activeDeckSection)?.label ?? "Deck Export"}
+          title="导出与图表样式"
+          ariaLabel="Dashboard deck export settings"
+        >
+          <div className="tab-bar deck-export-section-tabs">
+            {DECK_SECTION_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                className={`tab-btn${activeDeckSection === tab.key ? " active" : ""}`}
+                onClick={() => setActiveDeckSection(tab.key)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          {activeDeckSection === "timeSeries" && (
+            <ExportPanel value={tsExport} onChange={setTsExport} graphDiv={tsChartRef.current} seriesNames={isGrouped ? visibleSeries : undefined} labelModeOptions={tsLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+          )}
+          {activeDeckSection === "advanced" && (
+            <ExportPanel value={advExport} onChange={setAdvExport} graphDiv={advChartRef.current} labelModeOptions={advLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+          )}
+          {activeDeckSection === "modelVersion" && (
+            <ExportPanel value={mvExport} onChange={setMvExport} graphDiv={mvChartRef.current} labelModeOptions={mvLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+          )}
+          {activeDeckSection === "positioning" && (
+            <ExportPanel value={pmExport} onChange={setPmExport} graphDiv={pmChartRef.current} labelModeOptions={pmLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+          )}
+        </DeckExportDrawer>
     </div>
   );
 }

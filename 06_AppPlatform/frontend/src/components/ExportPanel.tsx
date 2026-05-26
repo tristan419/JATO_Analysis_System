@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Data, Layout } from "plotly.js";
 
 import { POWERTRAIN_COLORS as FIXED_POWERTRAIN_COLORS } from "../utils/colors";
+import { formatCompactBarLabel, barLabelPosition } from "../utils/plotlyDefaults";
 import { DebouncedNumberInput } from "./deckControls";
 
 export type ExportLabelMode =
@@ -11,7 +12,8 @@ export type ExportLabelMode =
   | "model"
   | "sales"
   | "model+value"
-  | "model+sales";
+  | "model+sales"
+  | "percent";
 export type ExportLabelOverlapStrategy = "all" | "smart_top" | "selected" | "clean" | "none" | "smart";
 
 export interface ExportLabelModeAvailability {
@@ -58,7 +60,7 @@ export interface ExportSettings {
 }
 
 export const DEFAULT_EXPORT: ExportSettings = {
-  showXGrid: true, showYGrid: true, showAxisLine: true, showLegend: true,
+  showXGrid: false, showYGrid: false, showAxisLine: true, showLegend: true,
   legendPosition: "right", colorScheme: "default", fontSize: 12, labelFontSize: 12,
   gridColor: "#E5E7EB", axisColor: "#6B7280",
   xTickFormat: "", yTickFormat: "",
@@ -91,7 +93,7 @@ const TICK_FORMATS: { v: string; l: string }[] = [
   { v: "", l: "保留原始" }, { v: "d", l: "整数" }, { v: ",.0f", l: "千分位整数" },
   { v: ",.1f", l: "千分位1位" }, { v: ".0%", l: "百分比(0-1)" }, { v: ".2s", l: "科学计数" },
 ];
-const DEFAULT_LABEL_MODES: ExportLabelMode[] = ["off","value","series","model","sales","model+value","model+sales"];
+const DEFAULT_LABEL_MODES: ExportLabelMode[] = ["off","value","series","model","sales","model+value","model+sales","percent"];
 const LABEL_MODE_LABELS: Record<ExportLabelMode, string> = {
   off: "关闭",
   value: "value",
@@ -100,6 +102,7 @@ const LABEL_MODE_LABELS: Record<ExportLabelMode, string> = {
   sales: "sales",
   "model+value": "model+value",
   "model+sales": "model+sales",
+  percent: "percent",
 };
 const LABEL_POSITIONS = ["auto","inside","outside","top","top center","middle","bottom center"];
 const LABEL_OVERLAP_STRATEGIES: Array<{ value: ExportLabelOverlapStrategy; label: string }> = [
@@ -120,6 +123,7 @@ export function buildExportLabelModeOptions({
   if (showSeries) modes.push("series");
   if (showModel) modes.push("model");
   if (showSales) modes.push("sales");
+  if (showValue) modes.push("percent");
   if (showModel && showValue) modes.push("model+value");
   if (showModel && showSales) modes.push("model+sales");
   return modes;
@@ -616,11 +620,31 @@ function applyDataLabelsToTrace(trace: Data, settings: ExportSettings): Data {
       t.texttemplate = `${formatAt(prepared.fieldIndex.model)}: ${numericAt(prepared.fieldIndex.sales)}`;
       t.textposition = pos || "top";
       break;
+    case "percent": {
+      const isH = t.orientation === "h";
+      const rawVals = isH ? (t.x ?? []) : (t.y ?? []);
+      const count = Array.isArray(rawVals) ? rawVals.length : 0;
+      const vals = toFiniteNumberArray(rawVals, count);
+      const total = vals ? vals.reduce((s, v) => s + v, 0) : 1;
+      if (isH) {
+        t.text = (vals ?? []).map((v) => formatCompactBarLabel(v, total > 0 ? v / total : 0));
+        t.textposition = pos || barLabelPosition("h");
+        t.cliponaxis = false;
+      } else {
+        t.text = (vals ?? []).map((v) => total > 0 ? `${((v / total) * 100).toFixed(1)}%` : "0%");
+        t.textposition = pos || barLabelPosition();
+      }
+      t.texttemplate = "%{text}";
+      break;
+    }
     default:
       break;
   }
   if (t.type === "bar") {
     t.textangle = 0;
+    if (t.orientation === "h") {
+      t.cliponaxis = false;
+    }
   } else if (t.mode && typeof t.mode === "string") {
     const parts = new Set(t.mode.split("+"));
     parts.add("text");
@@ -632,6 +656,58 @@ function applyDataLabelsToTrace(trace: Data, settings: ExportSettings): Data {
 /* ── B9: apply data labels to trace-level properties ── */
 export function applyDataLabelsToTraces(traces: Data[], settings: ExportSettings): Data[] {
   if (settings.dataLabelMode === "off") return traces;
+
+  /* percent mode */
+  if (settings.dataLabelMode === "percent" && traces.length > 0) {
+    const first = traces[0] as Record<string, unknown>;
+    const isH = first.orientation === "h";
+    const multiTrace = traces.length > 1;
+    const totalsByKey = new Map<string, number>();
+
+    if (multiTrace) {
+      /* multi-trace: cross-trace share at each time point */
+      for (const trace of traces) {
+        const t = trace as Record<string, unknown>;
+        const keys = isH ? (Array.isArray(t.y) ? t.y.map(String) : []) : (Array.isArray(t.x) ? t.x.map(String) : []);
+        const vals = isH ? (Array.isArray(t.x) ? t.x.map(Number) : []) : (Array.isArray(t.y) ? t.y.map(Number) : []);
+        for (let i = 0; i < Math.min(keys.length, vals.length); i++) {
+          const k = keys[i];
+          totalsByKey.set(k, (totalsByKey.get(k) ?? 0) + (Number.isFinite(vals[i]) ? vals[i] : 0));
+        }
+      }
+    }
+
+    const decimalPlaces = settings.decimalPlaces ?? 0;
+    return traces.map((trace) => {
+      const t = { ...trace } as Record<string, unknown>;
+      const keys = isH ? (Array.isArray(t.y) ? t.y.map(String) : []) : (Array.isArray(t.x) ? t.x.map(String) : []);
+      const vals = isH ? (Array.isArray(t.x) ? t.x.map(Number) : []) : (Array.isArray(t.y) ? t.y.map(Number) : []);
+      const isBar = t.type === "bar";
+      if (multiTrace) {
+        /* share of all traces at same key (time / label position) */
+        t.text = keys.map((k, i) => {
+          const total = totalsByKey.get(k) ?? 1;
+          const v = Number.isFinite(vals[i]) ? vals[i] : 0;
+          if (isH) return formatCompactBarLabel(v, total > 0 ? v / total : 0);
+          return total > 0 ? `${((v / total) * 100).toFixed(decimalPlaces)}%` : "0%";
+        });
+      } else {
+        /* single trace: share of own total across all keys */
+        const ownTotal = vals.reduce((s, v) => s + (Number.isFinite(v) ? v : 0), 0);
+        t.text = vals.map((v) => {
+          const n = Number.isFinite(v) ? v : 0;
+          if (isH) return formatCompactBarLabel(n, ownTotal > 0 ? n / ownTotal : 0);
+          return ownTotal > 0 ? `${((n / ownTotal) * 100).toFixed(decimalPlaces)}%` : "0%";
+        });
+      }
+      t.texttemplate = "%{text}";
+      t.textposition = isH ? barLabelPosition("h") : "top";
+      t.textfont = { size: resolveLabelFontSize(settings), color: "#334155" };
+      if (isBar) { t.textangle = 0; if (isH) t.cliponaxis = false; }
+      return t as Data;
+    });
+  }
+
   const labelStrategy = normalizeExportLabelStrategy(settings.dataLabelOverlapStrategy);
   if (labelStrategy === "clean") {
     return traces.map((trace) => clearTraceLabels({ ...trace } as Record<string, unknown>) as Data);
