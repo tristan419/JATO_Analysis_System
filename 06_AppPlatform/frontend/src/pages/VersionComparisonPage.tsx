@@ -94,7 +94,7 @@ const MAX_VC_SPLIT_RATIO = 99;
 const MIN_VC_CHART_HEIGHT = 280;
 const MAX_VC_CHART_HEIGHT = 800;
 const VC_LAYOUT_DIRECTION_STORAGE_KEY = "vc_layout_dir";
-const VC_SPLIT_RATIO_STORAGE_KEY = "vc_layout_split";
+const VC_SPLIT_RATIO_STORAGE_KEY = "vc_layout_split_v2";
 const VC_CHART_HEIGHT_STORAGE_KEY = "vc_layout_height";
 const VC_LAYOUT_STORAGE_KEYS = {
   direction: VC_LAYOUT_DIRECTION_STORAGE_KEY,
