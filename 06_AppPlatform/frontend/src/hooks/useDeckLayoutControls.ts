@@ -72,6 +72,9 @@ function readStoredLayoutDirection(key: string, fallback: DeckLayoutDirection): 
 
 function readStoredNumber(key: string, fallback: number, min: number, max: number): number {
   const stored = readStoredJson(key);
+  if (stored === null) {
+    return fallback;
+  }
   const value = typeof stored === "number" ? stored : Number(stored);
   return Number.isFinite(value) ? clampNumber(value, min, max) : fallback;
 }
