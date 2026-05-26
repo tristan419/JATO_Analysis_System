@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Data, Layout } from "plotly.js";
 
 import { POWERTRAIN_COLORS as FIXED_POWERTRAIN_COLORS } from "../utils/colors";
+import { DebouncedNumberInput } from "./deckControls";
 
 export type ExportLabelMode =
   | "off"
@@ -11,6 +12,7 @@ export type ExportLabelMode =
   | "sales"
   | "model+value"
   | "model+sales";
+export type ExportLabelOverlapStrategy = "all" | "smart_top" | "selected" | "clean" | "none" | "smart";
 
 export interface ExportLabelModeAvailability {
   showValue?: boolean;
@@ -36,6 +38,7 @@ export interface ExportSettings {
   legendPosition: "right" | "top" | "bottom" | "left";
   colorScheme: string;
   fontSize: number;
+  labelFontSize?: number;
   gridColor: string;
   axisColor: string;
   xTickFormat: string;
@@ -49,19 +52,21 @@ export interface ExportSettings {
   exportHeight: number;
   dataLabelMode: ExportLabelMode;
   dataLabelPosition: string;
+  dataLabelOverlapStrategy: ExportLabelOverlapStrategy;
   decimalPlaces: number;
   seriesColors: Record<string, string>;
 }
 
 export const DEFAULT_EXPORT: ExportSettings = {
   showXGrid: true, showYGrid: true, showAxisLine: true, showLegend: true,
-  legendPosition: "right", colorScheme: "default", fontSize: 12,
+  legendPosition: "right", colorScheme: "default", fontSize: 12, labelFontSize: 12,
   gridColor: "#E5E7EB", axisColor: "#6B7280",
   xTickFormat: "", yTickFormat: "",
   paperBg: "#FFFFFF", plotBg: "#FFFFFF",
   chartTitle: "", xTitle: "", yTitle: "",
   exportWidth: 1200, exportHeight: 800,
   dataLabelMode: "off", dataLabelPosition: "auto",
+  dataLabelOverlapStrategy: "all",
   decimalPlaces: 0,
   seriesColors: {},
 };
@@ -96,7 +101,13 @@ const LABEL_MODE_LABELS: Record<ExportLabelMode, string> = {
   "model+value": "model+value",
   "model+sales": "model+sales",
 };
-const LABEL_POSITIONS = ["auto","inside","outside","top","middle"];
+const LABEL_POSITIONS = ["auto","inside","outside","top","top center","middle","bottom center"];
+const LABEL_OVERLAP_STRATEGIES: Array<{ value: ExportLabelOverlapStrategy; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "smart_top", label: "Smart Top" },
+  { value: "selected", label: "Selected" },
+  { value: "clean", label: "Clean" },
+];
 
 export function buildExportLabelModeOptions({
   showValue = true,
@@ -194,6 +205,122 @@ function resolveExportLabelMetadata(trace: Record<string, unknown>): ExportTrace
   return {};
 }
 
+function normalizeExportLabelStrategy(strategy: ExportLabelOverlapStrategy | undefined): ExportLabelOverlapStrategy {
+  if (strategy === "smart") return "smart_top";
+  if (strategy === "none" || !strategy) return "all";
+  return strategy;
+}
+
+function resolveLabelFontSize(settings: ExportSettings): number {
+  return settings.labelFontSize ?? settings.fontSize;
+}
+
+function hashString(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i += 1) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function jitter(key: string, amplitude: number): number {
+  return ((hashString(key) % 1000) / 1000) * amplitude * 2 - amplitude;
+}
+
+interface PreparedExportLabels {
+  customdata: unknown[][];
+  modelValues: ExportLabelValue[];
+  salesValues: ExportLabelValue[];
+  valueValues: ExportLabelValue[];
+  seriesValues: ExportLabelValue[];
+  fieldIndex: {
+    model: number;
+    sales: number;
+    value: number;
+    series: number;
+  };
+  text: string[];
+}
+
+function buildLabelText(
+  mode: ExportLabelMode,
+  modelValues: ExportLabelValue[],
+  salesValues: ExportLabelValue[],
+  valueValues: ExportLabelValue[],
+  seriesValues: ExportLabelValue[],
+  decimalPlaces: number,
+): string[] {
+  return modelValues.map((model, index) => {
+    const formattedModel = formatLabelValue(model, decimalPlaces);
+    const formattedSales = formatLabelValue(salesValues[index], decimalPlaces);
+    const formattedValue = formatLabelValue(valueValues[index], decimalPlaces);
+    switch (mode) {
+      case "value":
+        return formattedValue;
+      case "series":
+        return formatLabelValue(seriesValues[index], decimalPlaces);
+      case "model":
+        return formattedModel;
+      case "sales":
+        return formattedSales;
+      case "model+value":
+        return formattedModel ? `${formattedModel}: ${formattedValue}` : formattedValue;
+      case "model+sales":
+        return formattedModel ? `${formattedModel}: ${formattedSales}` : formattedSales;
+      case "off":
+      default:
+        return "";
+    }
+  });
+}
+
+function prepareExportLabels(
+  trace: Record<string, unknown>,
+  pointCount: number,
+  settings: ExportSettings,
+): PreparedExportLabels {
+  const labels = resolveExportLabelMetadata(trace);
+  const originalRows = normalizeCustomdataRows(trace.customdata, pointCount);
+  const baseOffset = originalRows.reduce((max, row) => Math.max(max, row.length), 0);
+  const modelValues = normalizeFieldValues(labels.model, pointCount, index => {
+    if (Array.isArray(trace.text)) return trace.text[index] as ExportLabelValue;
+    return typeof trace.text === "string" ? trace.text : "";
+  });
+  const salesValues = normalizeFieldValues(labels.sales, pointCount, index => inferTraceSales(trace, index));
+  const valueValues = normalizeFieldValues(labels.value, pointCount, index => inferTraceValue(trace, index));
+  const seriesValues = normalizeFieldValues(labels.series, pointCount, () => String(trace.name ?? ""));
+  const customdata = originalRows.map((row, index) => [
+    ...row,
+    modelValues[index],
+    salesValues[index],
+    valueValues[index],
+    seriesValues[index],
+  ]);
+
+  return {
+    customdata,
+    modelValues,
+    salesValues,
+    valueValues,
+    seriesValues,
+    fieldIndex: {
+      model: baseOffset,
+      sales: baseOffset + 1,
+      value: baseOffset + 2,
+      series: baseOffset + 3,
+    },
+    text: buildLabelText(
+      settings.dataLabelMode,
+      modelValues,
+      salesValues,
+      valueValues,
+      seriesValues,
+      settings.decimalPlaces ?? 0,
+    ),
+  };
+}
+
 export function applyExportToLayout(
   layout: Partial<Layout>,
   s: ExportSettings,
@@ -243,83 +370,296 @@ function getSeriesDefaultColor(name: string, fallback: string): string {
   return FIXED_POWERTRAIN_COLORS[name.toUpperCase()] ?? fallback;
 }
 
-/* ── B9: apply data labels to trace-level properties ── */
-export function applyDataLabelsToTraces(traces: Data[], s: ExportSettings): Data[] {
-  if (s.dataLabelMode === "off") return traces;
-  const pos = s.dataLabelPosition === "auto" ? undefined : s.dataLabelPosition;
-  const decimalPlaces = s.decimalPlaces ?? 0;
-  return traces.map(tr => {
-    const t = { ...tr } as any;
-    if (t.type === "heatmap" || t.type === "contour") return t as Data;
-    const pointCount = inferPointCount(t);
-    if (pointCount === 0) return t as Data;
+interface SmartLabelCandidate {
+  key: string;
+  x: number;
+  y: number;
+  text: string;
+  sales: number;
+  series: string;
+  customdata: unknown[];
+  priority: number;
+  jitterX: number;
+  jitterY: number;
+}
 
-    const labels = resolveExportLabelMetadata(t);
-    const originalRows = normalizeCustomdataRows(t.customdata, pointCount);
-    const baseOffset = originalRows.reduce((max, row) => Math.max(max, row.length), 0);
-    const modelValues = normalizeFieldValues(labels.model, pointCount, index => {
-      if (Array.isArray(t.text)) return t.text[index] as ExportLabelValue;
-      return typeof t.text === "string" ? t.text : "";
-    });
-    const salesValues = normalizeFieldValues(labels.sales, pointCount, index => inferTraceSales(t, index));
-    const valueValues = normalizeFieldValues(labels.value, pointCount, index => inferTraceValue(t, index));
-    const seriesValues = normalizeFieldValues(labels.series, pointCount, () => String(t.name ?? ""));
+const SMART_LABEL_STYLE: Record<number, { sizeOffset: number; color: string }> = {
+  3: { sizeOffset: 0, color: "rgba(15,23,42,0.96)" },
+  2: { sizeOffset: -1, color: "rgba(51,65,85,0.72)" },
+  1: { sizeOffset: -2, color: "rgba(51,65,85,0.44)" },
+  0: { sizeOffset: -3, color: "rgba(51,65,85,0.26)" },
+};
 
-    t.customdata = originalRows.map((row, index) => [
-      ...row,
-      modelValues[index],
-      salesValues[index],
-      valueValues[index],
-      seriesValues[index],
-    ]);
+function toFiniteNumberArray(raw: unknown, pointCount: number): number[] | null {
+  if (!Array.isArray(raw) || raw.length < pointCount) return null;
+  const values = raw.slice(0, pointCount).map((value) => Number(value));
+  return values.every((value) => Number.isFinite(value)) ? values : null;
+}
 
-    const fieldIndex = {
-      model: baseOffset,
-      sales: baseOffset + 1,
-      value: baseOffset + 2,
-      series: baseOffset + 3,
-    };
-    const formatAt = (index: number) => `%{customdata[${index}]}`;
-    const numericAt = (index: number) => `%{customdata[${index}]}`;
+function canUseSmartScatterLabels(trace: Record<string, unknown>): boolean {
+  if (trace.type !== "scatter") return false;
+  const mode = typeof trace.mode === "string" ? trace.mode : "";
+  return mode.split("+").includes("markers");
+}
 
-    switch (s.dataLabelMode) {
-      case "value":
-        t.text = valueValues.map(value => formatLabelValue(value, decimalPlaces));
-        t.texttemplate = "%{text}";
-        t.textposition = pos || (t.type === "bar" ? "outside" : "top");
-        break;
-      case "series":
-        t.texttemplate = formatAt(fieldIndex.series);
-        t.textposition = pos || "top";
-        break;
-      case "model":
-        t.texttemplate = formatAt(fieldIndex.model);
-        t.textposition = pos || "top";
-        break;
-      case "sales":
-        t.text = salesValues.map(value => formatLabelValue(value, decimalPlaces));
-        t.texttemplate = "%{text}";
-        t.textposition = pos || "top";
-        break;
-      case "model+value":
-        t.texttemplate = `${formatAt(fieldIndex.model)}: ${numericAt(fieldIndex.value)}`;
-        t.textposition = pos || "top";
-        break;
-      case "model+sales":
-        t.texttemplate = `${formatAt(fieldIndex.model)}: ${numericAt(fieldIndex.sales)}`;
-        t.textposition = pos || "top";
-        break;
-      default: break;
-    }
-    if (t.type === "bar") {
-      t.textangle = 0;
-    } else if (t.mode && typeof t.mode === "string") {
-      const parts = new Set(t.mode.split("+"));
-      parts.add("text");
-      t.mode = [...parts].join("+");
-    }
-    return t as Data;
+function clearTraceLabels(trace: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...trace };
+  delete next.text;
+  delete next.texttemplate;
+  delete next.textposition;
+  delete next.textfont;
+  if (typeof next.mode === "string") {
+    const modeParts = next.mode.split("+").filter((part) => part !== "text");
+    next.mode = modeParts.length > 0 ? modeParts.join("+") : next.mode;
+  }
+  return next;
+}
+
+function resolveSmartTextPosition(position: string): string {
+  switch (position) {
+    case "bottom center":
+    case "top center":
+      return position;
+    case "middle":
+    case "inside":
+      return "middle center";
+    case "auto":
+    case "outside":
+    case "top":
+    default:
+      return "top center";
+  }
+}
+
+function collectSmartLabelCandidates(
+  trace: Record<string, unknown>,
+  traceIndex: number,
+  prepared: PreparedExportLabels,
+  xValues: number[],
+  yValues: number[],
+): SmartLabelCandidate[] {
+  const xRange = Math.max(...xValues) - Math.min(...xValues) || 1;
+  const yRange = Math.max(...yValues) - Math.min(...yValues) || 1;
+  return prepared.text.flatMap((text, index) => {
+    if (!text.trim()) return [];
+    const key = [
+      traceIndex,
+      index,
+      prepared.seriesValues[index] ?? "",
+      prepared.modelValues[index] ?? "",
+      xValues[index],
+      yValues[index],
+    ].join("|");
+    const sales = Number(prepared.salesValues[index]);
+    return [{
+      key,
+      x: xValues[index],
+      y: yValues[index],
+      text,
+      sales: Number.isFinite(sales) ? sales : 0,
+      series: formatLabelValue(prepared.seriesValues[index], 0),
+      customdata: prepared.customdata[index],
+      priority: 1,
+      jitterX: jitter(key, xRange * 0.008),
+      jitterY: jitter(`${key}_y`, yRange * 0.01),
+    }];
   });
+}
+
+function rankSmartLabelCandidates(candidates: SmartLabelCandidate[]): SmartLabelCandidate[] {
+  if (candidates.length === 0) return candidates;
+  const salesSorted = [...candidates].map((item) => item.sales).sort((a, b) => a - b);
+  const longTailCutoff = salesSorted[Math.floor(salesSorted.length * 0.2)] ?? -Infinity;
+  const maxSales = Math.max(...candidates.map((item) => item.sales));
+  const maxY = Math.max(...candidates.map((item) => item.y));
+  const minY = Math.min(...candidates.map((item) => item.y));
+  const topBySeries = new Map<string, Set<string>>();
+
+  Array.from(new Set(candidates.map((item) => item.series))).forEach((series) => {
+    const ranked = candidates
+      .filter((item) => item.series === series)
+      .sort((a, b) => b.sales - a.sales);
+    topBySeries.set(series, new Set(ranked.slice(0, 3).map((item) => item.key)));
+  });
+
+  return candidates.map((candidate) => {
+    let priority = 1;
+    const seriesTop = topBySeries.get(candidate.series);
+    if (candidate.sales === maxSales || candidate.y === maxY || candidate.y === minY) {
+      priority = 3;
+    } else if (seriesTop?.has(candidate.key)) {
+      const seriesRank = candidates
+        .filter((item) => item.series === candidate.series)
+        .sort((a, b) => b.sales - a.sales)
+        .findIndex((item) => item.key === candidate.key);
+      priority = seriesRank === 0 ? 3 : 2;
+    } else if (candidate.sales <= longTailCutoff) {
+      priority = 0;
+    }
+    return { ...candidate, priority };
+  });
+}
+
+function filterOverlappingSmartLabels(
+  candidates: SmartLabelCandidate[],
+  xRange: number,
+  yRange: number,
+): Set<string> {
+  const hidden = new Set<string>();
+  if (candidates.length <= 1) return hidden;
+  const sorted = [...candidates].sort((a, b) => b.priority - a.priority);
+  const placed: Array<{ x: number; y: number }> = [];
+  const xThreshold = xRange * 0.022;
+  const yThreshold = yRange * 0.028;
+  sorted.forEach((candidate) => {
+    const x = candidate.x + candidate.jitterX;
+    const y = candidate.y + candidate.jitterY;
+    const overlaps = placed.some(
+      (point) => Math.abs(point.x - x) < xThreshold && Math.abs(point.y - y) < yThreshold,
+    );
+    if (overlaps) {
+      hidden.add(candidate.key);
+    } else {
+      placed.push({ x, y });
+    }
+  });
+  return hidden;
+}
+
+function buildSmartLabelTraces(
+  candidates: SmartLabelCandidate[],
+  settings: ExportSettings,
+  strategy: ExportLabelOverlapStrategy,
+): Data[] {
+  const minPriority = strategy === "selected" ? 3 : 2;
+  const visibleCandidates = candidates.filter((candidate) => candidate.priority >= minPriority);
+  if (visibleCandidates.length === 0) return [];
+  const xValues = visibleCandidates.map((item) => item.x);
+  const yValues = visibleCandidates.map((item) => item.y);
+  const hidden = filterOverlappingSmartLabels(
+    visibleCandidates,
+    Math.max(...xValues) - Math.min(...xValues) || 1,
+    Math.max(...yValues) - Math.min(...yValues) || 1,
+  );
+  const visible = visibleCandidates.filter((candidate) => !hidden.has(candidate.key));
+  const textposition = resolveSmartTextPosition(settings.dataLabelPosition);
+  const labelFontSize = resolveLabelFontSize(settings);
+  return [3, 2, 1, 0].flatMap((priority) => {
+    const items = visible.filter((candidate) => candidate.priority === priority);
+    if (items.length === 0) return [];
+    const style = SMART_LABEL_STYLE[priority];
+    return [{
+      type: "scatter",
+      mode: "text",
+      name: `label-p${priority}`,
+      showlegend: false,
+      x: items.map((item) => item.x + item.jitterX),
+      y: items.map((item) => item.y + item.jitterY),
+      text: items.map((item) => item.text),
+      textposition,
+      textfont: {
+        size: Math.max(7, labelFontSize + style.sizeOffset),
+        color: style.color,
+      },
+      cliponaxis: false,
+      customdata: items.map((item) => item.customdata),
+      hoverinfo: "skip",
+    } as Data];
+  });
+}
+
+function applyDataLabelsToTrace(trace: Data, settings: ExportSettings): Data {
+  const pos = settings.dataLabelPosition === "auto" ? undefined : settings.dataLabelPosition;
+  const decimalPlaces = settings.decimalPlaces ?? 0;
+  const t = { ...trace } as Record<string, unknown>;
+  if (t.type === "heatmap" || t.type === "contour") return t as Data;
+  const pointCount = inferPointCount(t);
+  if (pointCount === 0) return t as Data;
+
+  const prepared = prepareExportLabels(t, pointCount, settings);
+  t.customdata = prepared.customdata;
+  t.textfont = {
+    ...(
+      t.textfont && typeof t.textfont === "object" && !Array.isArray(t.textfont)
+        ? t.textfont as Record<string, unknown>
+        : {}
+    ),
+    size: resolveLabelFontSize(settings),
+  };
+  const formatAt = (index: number) => `%{customdata[${index}]}`;
+  const numericAt = (index: number) => `%{customdata[${index}]}`;
+
+  switch (settings.dataLabelMode) {
+    case "value":
+      t.text = prepared.valueValues.map(value => formatLabelValue(value, decimalPlaces));
+      t.texttemplate = "%{text}";
+      t.textposition = pos || (t.type === "bar" ? "outside" : "top");
+      break;
+    case "series":
+      t.texttemplate = formatAt(prepared.fieldIndex.series);
+      t.textposition = pos || "top";
+      break;
+    case "model":
+      t.texttemplate = formatAt(prepared.fieldIndex.model);
+      t.textposition = pos || "top";
+      break;
+    case "sales":
+      t.text = prepared.salesValues.map(value => formatLabelValue(value, decimalPlaces));
+      t.texttemplate = "%{text}";
+      t.textposition = pos || "top";
+      break;
+    case "model+value":
+      t.texttemplate = `${formatAt(prepared.fieldIndex.model)}: ${numericAt(prepared.fieldIndex.value)}`;
+      t.textposition = pos || "top";
+      break;
+    case "model+sales":
+      t.texttemplate = `${formatAt(prepared.fieldIndex.model)}: ${numericAt(prepared.fieldIndex.sales)}`;
+      t.textposition = pos || "top";
+      break;
+    default:
+      break;
+  }
+  if (t.type === "bar") {
+    t.textangle = 0;
+  } else if (t.mode && typeof t.mode === "string") {
+    const parts = new Set(t.mode.split("+"));
+    parts.add("text");
+    t.mode = [...parts].join("+");
+  }
+  return t as Data;
+}
+
+/* ── B9: apply data labels to trace-level properties ── */
+export function applyDataLabelsToTraces(traces: Data[], settings: ExportSettings): Data[] {
+  if (settings.dataLabelMode === "off") return traces;
+  const labelStrategy = normalizeExportLabelStrategy(settings.dataLabelOverlapStrategy);
+  if (labelStrategy === "clean") {
+    return traces.map((trace) => clearTraceLabels({ ...trace } as Record<string, unknown>) as Data);
+  }
+  if (labelStrategy !== "smart_top" && labelStrategy !== "selected") {
+    return traces.map((trace) => applyDataLabelsToTrace(trace, settings));
+  }
+
+  const smartCandidates: SmartLabelCandidate[] = [];
+  const baseTraces = traces.map((trace, traceIndex) => {
+    const t = { ...trace } as Record<string, unknown>;
+    const pointCount = inferPointCount(t);
+    const xValues = toFiniteNumberArray(t.x, pointCount);
+    const yValues = toFiniteNumberArray(t.y, pointCount);
+    if (!canUseSmartScatterLabels(t) || pointCount === 0 || !xValues || !yValues) {
+      return applyDataLabelsToTrace(trace, settings);
+    }
+    const prepared = prepareExportLabels(t, pointCount, settings);
+    smartCandidates.push(...collectSmartLabelCandidates(t, traceIndex, prepared, xValues, yValues));
+    const markerTrace = clearTraceLabels(t);
+    markerTrace.customdata = prepared.customdata;
+    return markerTrace as Data;
+  });
+
+  return [
+    ...baseTraces,
+    ...buildSmartLabelTraces(rankSmartLabelCandidates(smartCandidates), settings, labelStrategy),
+  ];
 }
 
 /* ── B10: apply per-series manual colors ── */
@@ -374,6 +714,7 @@ export function ExportPanel({
   const set = <K extends keyof ExportSettings>(k: K, v: ExportSettings[K]) => onChange({ ...s, [k]: v });
   const resolvedLabelModes = labelModeOptions && labelModeOptions.length > 0 ? labelModeOptions : DEFAULT_LABEL_MODES;
   const safeLabelMode = resolvedLabelModes.includes(s.dataLabelMode) ? s.dataLabelMode : "off";
+  const safeLabelStrategy = normalizeExportLabelStrategy(s.dataLabelOverlapStrategy);
   const bodyOpen = !collapsible || open;
 
   useEffect(() => {
@@ -410,8 +751,26 @@ export function ExportPanel({
               </select>
             </div>
             <div className="filter-group"><label>字号</label>
-              <input type="number" value={s.fontSize} min={8} max={24} style={{ width: 50 }}
-                onChange={e => set("fontSize", Number(e.target.value) || 12)} />
+              <DebouncedNumberInput
+                value={s.fontSize}
+                min={8}
+                max={24}
+                style={{ width: 50 }}
+                onCommit={(value) => {
+                  if (value !== null) set("fontSize", value);
+                }}
+              />
+            </div>
+            <div className="filter-group"><label>标签字号</label>
+              <DebouncedNumberInput
+                value={resolveLabelFontSize(s)}
+                min={7}
+                max={28}
+                style={{ width: 50 }}
+                onCommit={(value) => {
+                  if (value !== null) set("labelFontSize", value);
+                }}
+              />
             </div>
           </div>
           <div className="export-row">
@@ -457,12 +816,28 @@ export function ExportPanel({
           {showDimensionControls ? (
             <div className="export-row">
               <div className="filter-group"><label>导出宽度</label>
-                <input type="number" value={s.exportWidth} min={400} max={2400} step={100} style={{ width: 70 }}
-                  onChange={e => set("exportWidth", Number(e.target.value) || 1200)} />
+                <DebouncedNumberInput
+                  value={s.exportWidth}
+                  min={400}
+                  max={2400}
+                  step={100}
+                  style={{ width: 70 }}
+                  onCommit={(value) => {
+                    if (value !== null) set("exportWidth", value);
+                  }}
+                />
               </div>
               <div className="filter-group"><label>导出高度</label>
-                <input type="number" value={s.exportHeight} min={300} max={1800} step={100} style={{ width: 70 }}
-                  onChange={e => set("exportHeight", Number(e.target.value) || 800)} />
+                <DebouncedNumberInput
+                  value={s.exportHeight}
+                  min={300}
+                  max={1800}
+                  step={100}
+                  style={{ width: 70 }}
+                  onCommit={(value) => {
+                    if (value !== null) set("exportHeight", value);
+                  }}
+                />
               </div>
             </div>
           ) : null}
@@ -477,9 +852,26 @@ export function ExportPanel({
                 {LABEL_POSITIONS.map(p => <option key={p} value={p}>{p === "auto" ? "自动" : p}</option>)}
               </select>
             </div>
+            <div className="filter-group"><label>标签策略</label>
+              <select
+                value={safeLabelStrategy}
+                onChange={e => set("dataLabelOverlapStrategy", e.target.value as ExportLabelOverlapStrategy)}
+              >
+                {LABEL_OVERLAP_STRATEGIES.map(item => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+            </div>
             <div className="filter-group"><label>小数位</label>
-              <input type="number" value={s.decimalPlaces} min={0} max={4} style={{ width: 50 }}
-                onChange={e => set("decimalPlaces", Math.max(0, Math.min(4, Number(e.target.value) || 0)))} />
+              <DebouncedNumberInput
+                value={s.decimalPlaces}
+                min={0}
+                max={4}
+                style={{ width: 50 }}
+                onCommit={(value) => {
+                  if (value !== null) set("decimalPlaces", value);
+                }}
+              />
             </div>
           </div>
           {seriesNames && seriesNames.length > 0 && seriesNames.length <= 30 && (

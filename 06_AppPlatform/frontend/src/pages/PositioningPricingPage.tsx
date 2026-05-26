@@ -1,11 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
-import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { DeckPeriodTimeline } from "../components/DeckPeriodTimeline";
 import { DeckSubpageNav } from "../components/DeckSubpageNav";
+import {
+  DebouncedNumberInput,
+  DeckControlTabs,
+  DeckExportDrawer,
+  DeckFloatingDrawer,
+  type DeckControlTabItem,
+} from "../components/deckControls";
 import {
   DEFAULT_EXPORT,
   ExportPanel,
@@ -34,6 +40,7 @@ import { fuelColor } from "../utils/colors";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
 import { useArrowCountryNavigation } from "../utils/useArrowCountryNavigation";
 import { useFixedCanvasPreview } from "../utils/useFixedCanvasPreview";
+import { useDeckLayoutControls, type DeckLayoutDirection } from "../hooks/useDeckLayoutControls";
 
 const DEFAULT_FUEL_TYPES = ["BEV", "HEV", "PHEV", "MHEV", "ICE"];
 const DEFAULT_COUNTRY = "瑞典";
@@ -44,32 +51,62 @@ const DEFAULT_PRICE_BAND_SIZE = 1000;
 const DEFAULT_LENGTH_MIN = 4000;
 const DEFAULT_LENGTH_MAX = 5000;
 const DEFAULT_LENGTH_STEP = 50;
-const DEFAULT_TOP_N = 50;
+const DEFAULT_TOP_N = 30;
+const MIN_TOP_N = 1;
+const MAX_TOP_N = 200;
+const MAX_MSRP_INPUT = 10000000;
+const MAX_LENGTH_INPUT = 10000;
+const MAX_PRICE_BAND_SIZE = 200000;
 const DEFAULT_BUBBLE_SCALE = 2;
-type PositioningLayoutDirection = "row" | "column";
 type PositioningExportSettingsPanel = "priceBands" | "bubble";
+type PositioningControlPanel = "filters" | "range" | "layout";
 
-const DEFAULT_POSITIONING_LAYOUT_DIRECTION: PositioningLayoutDirection = "row";
-const DEFAULT_POSITIONING_SPLIT_RATIO = 50;
+const DEFAULT_POSITIONING_LAYOUT_DIRECTION: DeckLayoutDirection = "row";
+const DEFAULT_POSITIONING_SPLIT_RATIO = 20;
 const DEFAULT_POSITIONING_CHART_HEIGHT = 430;
-const MIN_POSITIONING_SPLIT_RATIO = 30;
-const MAX_POSITIONING_SPLIT_RATIO = 70;
+const MIN_POSITIONING_SPLIT_RATIO = 1;
+const MAX_POSITIONING_SPLIT_RATIO = 99;
 const MIN_POSITIONING_CHART_HEIGHT = 280;
 const MAX_POSITIONING_CHART_HEIGHT = 800;
 const POSITIONING_LAYOUT_DIRECTION_STORAGE_KEY = "pos_layout_dir";
 const POSITIONING_SPLIT_RATIO_STORAGE_KEY = "pos_layout_split";
 const POSITIONING_CHART_HEIGHT_STORAGE_KEY = "pos_layout_height";
+const POSITIONING_LAYOUT_STORAGE_KEYS = {
+  direction: POSITIONING_LAYOUT_DIRECTION_STORAGE_KEY,
+  splitRatio: POSITIONING_SPLIT_RATIO_STORAGE_KEY,
+  chartHeight: POSITIONING_CHART_HEIGHT_STORAGE_KEY,
+} as const;
+const POSITIONING_LAYOUT_DEFAULTS = {
+  direction: DEFAULT_POSITIONING_LAYOUT_DIRECTION,
+  splitRatio: DEFAULT_POSITIONING_SPLIT_RATIO,
+  chartHeight: DEFAULT_POSITIONING_CHART_HEIGHT,
+} as const;
+const POSITIONING_LAYOUT_RANGES = {
+  splitRatio: {
+    min: MIN_POSITIONING_SPLIT_RATIO,
+    max: MAX_POSITIONING_SPLIT_RATIO,
+  },
+  chartHeight: {
+    min: MIN_POSITIONING_CHART_HEIGHT,
+    max: MAX_POSITIONING_CHART_HEIGHT,
+  },
+} as const;
+const POSITIONING_LAYOUT_CSS_VARIABLES = {
+  chartHeight: "--positioning-chart-height",
+  splitRatio: "--positioning-split-ratio",
+  remainderRatio: "--positioning-remainder-ratio",
+} as const;
 const POSITIONING_ROW_HEIGHT_CHROME = 650;
 const POSITIONING_COLUMN_HEIGHT_CHROME = 830;
-const TOP_N_OPTIONS = [30, 50, 100] as const;
 const BUBBLE_SCALE_OPTIONS = [1, 2, 3, 4] as const;
-const POSITIONING_EXPORT_SETTINGS_TABS: Array<{
-  key: PositioningExportSettingsPanel;
-  label: string;
-  caption: string;
-}> = [
+const POSITIONING_EXPORT_SETTINGS_TABS: Array<DeckControlTabItem<PositioningExportSettingsPanel>> = [
   { key: "priceBands", label: "Price Bands", caption: "累计价格带" },
   { key: "bubble", label: "Powertrain Bubble", caption: "动力气泡图" },
+];
+const POSITIONING_CONTROL_TABS: Array<DeckControlTabItem<PositioningControlPanel>> = [
+  { key: "filters", label: "筛选", caption: "国家 / 月份 / 口径" },
+  { key: "range", label: "范围", caption: "价格 / 车长 / 步长" },
+  { key: "layout", label: "版式", caption: "布局 / 高度 / 动力" },
 ];
 const POSITIONING_CHART_MARGIN = { l: 96, r: 24, t: 16, b: 62 } as const;
 const POSITIONING_AXIS_TITLE_STANDOFF = 12;
@@ -80,6 +117,7 @@ const DEFAULT_POSITIONING_EXPORT: ExportSettings = {
   showAxisLine: false,
   legendPosition: "right",
   fontSize: 11,
+  labelFontSize: 9,
   xTickFormat: "d",
   yTickFormat: "d",
   exportWidth: 960,
@@ -95,6 +133,7 @@ const DEFAULT_BUBBLE_EXPORT: ExportSettings = {
   ...DEFAULT_POSITIONING_EXPORT,
   dataLabelMode: "model",
   dataLabelPosition: "top",
+  dataLabelOverlapStrategy: "all",
 };
 const PRICE_BAND_LABEL_MODE_OPTIONS = buildExportLabelModeOptions({
   showValue: true,
@@ -128,47 +167,24 @@ const PRICE_OVERLAY_REASON_LABELS: Record<string, string> = {
   "duckdb-overlay-failed": "DuckDB overlay 执行失败",
 };
 
-type PositioningGridStyle = CSSProperties & {
-  "--positioning-chart-height": string;
-  "--positioning-split-ratio": string;
-  "--positioning-remainder-ratio": string;
-};
-
-function isPositioningLayoutDirection(value: unknown): value is PositioningLayoutDirection {
-  return value === "row" || value === "column";
-}
-
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function readStoredJson(key: string): unknown {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
+function readTopNInput(value: string | null): number {
+  if (!value) {
+    return DEFAULT_TOP_N;
   }
-}
-
-function readStoredLayoutDirection(): PositioningLayoutDirection {
-  const stored = readStoredJson(POSITIONING_LAYOUT_DIRECTION_STORAGE_KEY);
-  return isPositioningLayoutDirection(stored) ? stored : DEFAULT_POSITIONING_LAYOUT_DIRECTION;
-}
-
-function readStoredNumber(key: string, fallback: number, min: number, max: number): number {
-  const stored = readStoredJson(key);
-  const value = typeof stored === "number" ? stored : Number(stored);
-  return Number.isFinite(value) ? clampNumber(value, min, max) : fallback;
-}
-
-function writeStoredJson(key: string, value: string | number): void {
-  localStorage.setItem(key, JSON.stringify(value));
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_TOP_N;
+  }
+  return Math.trunc(clampNumber(parsed, MIN_TOP_N, MAX_TOP_N));
 }
 
 function resolvePositioningCanvasHeight(
   presetHeight: number,
-  layoutDirection: PositioningLayoutDirection,
+  layoutDirection: DeckLayoutDirection,
   chartHeight: number,
 ): number {
   const contentHeight = layoutDirection === "column"
@@ -177,16 +193,6 @@ function resolvePositioningCanvasHeight(
   return Math.max(presetHeight, contentHeight);
 }
 
-function buildPositioningGridStyle(
-  splitRatio: number,
-  chartHeight: number,
-): PositioningGridStyle {
-  return {
-    "--positioning-chart-height": `${chartHeight}px`,
-    "--positioning-split-ratio": `${splitRatio}fr`,
-    "--positioning-remainder-ratio": `${100 - splitRatio}fr`,
-  };
-}
 const TAB_ITEMS: Array<{
   key: PositioningPricingPageKey;
   code: string;
@@ -516,12 +522,13 @@ export function PositioningPricingPage() {
   const [exportError, setExportError] = useState("");
   const [exportingSlide, setExportingSlide] = useState(false);
   const [exportToolsOpen, setExportToolsOpen] = useState(false);
-  const [activeExportSettingsPanel, setActiveExportSettingsPanel] = useState<PositioningExportSettingsPanel>("priceBands");
+  const [activeExportSettingsPanel, setActiveExportSettingsPanel] = useState<PositioningExportSettingsPanel>("bubble");
+  const [controlToolsOpen, setControlToolsOpen] = useState(false);
+  const [activeControlPanel, setActiveControlPanel] = useState<PositioningControlPanel>("filters");
   const [exportPresetKey, setExportPresetKey] = useState<(typeof EXPORT_PRESETS)[number]["key"]>("fhd");
   const [priceBandExport, setPriceBandExport] = useState<ExportSettings>(DEFAULT_PRICE_BAND_EXPORT);
   const [bubbleExport, setBubbleExport] = useState<ExportSettings>(DEFAULT_BUBBLE_EXPORT);
   const [bubbleScale, setBubbleScale] = useState<number>(DEFAULT_BUBBLE_SCALE);
-  const [heroCollapsed, setHeroCollapsed] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const slideRef = useRef<HTMLDivElement | null>(null);
   const [activePage, setActivePage] = useState<PositioningPricingPageKey>(
@@ -551,10 +558,7 @@ export function PositioningPricingPage() {
       return raw ? raw.split(",") : DEFAULT_FUEL_TYPES;
     },
   );
-  const [topN, setTopN] = useState<number>(() => {
-    const raw = Number(searchParams.get("topN") || DEFAULT_TOP_N);
-    return TOP_N_OPTIONS.includes(raw as typeof TOP_N_OPTIONS[number]) ? raw : DEFAULT_TOP_N;
-  });
+  const [topN, setTopN] = useState<number>(() => readTopNInput(searchParams.get("topN")));
   const [msrpMin, setMsrpMin] = useState<number | null>(() => {
     const raw = searchParams.get("msrpMin");
     return raw ? Number(raw) : DEFAULT_MSRP_MIN;
@@ -575,23 +579,21 @@ export function PositioningPricingPage() {
     const raw = searchParams.get("lengthMax");
     return raw ? Number(raw) : DEFAULT_LENGTH_MAX;
   });
-  const [layoutDirection, setLayoutDirection] = useState<PositioningLayoutDirection>(readStoredLayoutDirection);
-  const [splitRatio, setSplitRatio] = useState<number>(() => (
-    readStoredNumber(
-      POSITIONING_SPLIT_RATIO_STORAGE_KEY,
-      DEFAULT_POSITIONING_SPLIT_RATIO,
-      MIN_POSITIONING_SPLIT_RATIO,
-      MAX_POSITIONING_SPLIT_RATIO,
-    )
-  ));
-  const [chartHeight, setChartHeight] = useState<number>(() => (
-    readStoredNumber(
-      POSITIONING_CHART_HEIGHT_STORAGE_KEY,
-      DEFAULT_POSITIONING_CHART_HEIGHT,
-      MIN_POSITIONING_CHART_HEIGHT,
-      MAX_POSITIONING_CHART_HEIGHT,
-    )
-  ));
+  const {
+    layoutDirection,
+    splitRatio,
+    chartHeight,
+    gridStyle: positioningGridStyle,
+    setLayoutDirection,
+    setSplitRatio,
+    setChartHeight,
+    resetLayout: resetPositioningLayoutControls,
+  } = useDeckLayoutControls({
+    storageKeys: POSITIONING_LAYOUT_STORAGE_KEYS,
+    defaults: POSITIONING_LAYOUT_DEFAULTS,
+    ranges: POSITIONING_LAYOUT_RANGES,
+    cssVariables: POSITIONING_LAYOUT_CSS_VARIABLES,
+  });
   const countryOptions = deck?.metadata.availableCountries ?? [];
 
   const syncUrlParams = useCallback(() => {
@@ -698,7 +700,6 @@ export function PositioningPricingPage() {
   const currentCountry = selectedCountry ?? deck?.metadata.selectedCountry ?? DEFAULT_COUNTRY;
   const resolvedTimeRange = selectedTimeRange ?? deck?.metadata.selectedTimeRange ?? null;
   const customRangeActive = isCustomTimeRange(resolvedTimeRange);
-  const currentPeriod = resolvedTimeRange?.end ?? selectedPeriod ?? deck?.metadata.resolvedPeriod ?? "";
   const fuelOptions = deck?.metadata.availableFuelTypes ?? DEFAULT_FUEL_TYPES;
   const activeFuelTypes = selectedFuelTypes.length > 0
     ? selectedFuelTypes
@@ -718,7 +719,6 @@ export function PositioningPricingPage() {
     "positioning-pricing-grid",
     `positioning-pricing-grid--${layoutDirection}`,
   ].join(" ");
-  const positioningGridStyle = buildPositioningGridStyle(splitRatio, chartHeight);
   const barTraces = useMemo(
     () => (page ? applyPositioningExportToTraces(buildPriceBandTraces(page, activeFuelTypes), priceBandExport) : []),
     [activeFuelTypes, page, priceBandExport],
@@ -727,13 +727,31 @@ export function PositioningPricingPage() {
     () => (
       page
         ? applyPositioningExportToTraces(
-            buildBubbleTraces(page.bubbleChart.items, activeFuelTypes, bubbleScale, bubbleExport.fontSize),
+            buildBubbleTraces(page.bubbleChart.items, activeFuelTypes, bubbleScale, bubbleExport.labelFontSize ?? bubbleExport.fontSize),
             bubbleExport,
           )
         : []
     ),
     [activeFuelTypes, bubbleExport, bubbleScale, page],
   );
+  const priceBandChartKey = [
+    "price",
+    priceBandExport.dataLabelMode,
+    priceBandExport.dataLabelPosition,
+    priceBandExport.dataLabelOverlapStrategy,
+    priceBandExport.fontSize,
+    priceBandExport.labelFontSize ?? priceBandExport.fontSize,
+    priceBandExport.decimalPlaces,
+  ].join("-");
+  const bubbleChartKey = [
+    "priceBands",
+    bubbleExport.dataLabelMode,
+    bubbleExport.dataLabelPosition,
+    bubbleExport.dataLabelOverlapStrategy,
+    bubbleExport.fontSize,
+    bubbleExport.labelFontSize ?? bubbleExport.fontSize,
+    bubbleExport.decimalPlaces,
+  ].join("-");
   const priceTruthLayer = useMemo(
     () => buildPositioningTruthLayer(deck?.metadata.priceOverlay),
     [deck],
@@ -748,42 +766,20 @@ export function PositioningPricingPage() {
     });
   }
 
-  function handleLayoutDirectionChange(event: ChangeEvent<HTMLSelectElement>): void {
-    const nextDirection = event.target.value;
-    if (!isPositioningLayoutDirection(nextDirection)) {
-      return;
+  function handleControlDrawerOpenChange(open: boolean): void {
+    setControlToolsOpen(open);
+    if (open) {
+      setExportToolsOpen(false);
+      setActiveControlPanel("filters");
     }
-    setLayoutDirection(nextDirection);
-    writeStoredJson(POSITIONING_LAYOUT_DIRECTION_STORAGE_KEY, nextDirection);
   }
 
-  function handleSplitRatioChange(event: ChangeEvent<HTMLInputElement>): void {
-    const nextRatio = clampNumber(
-      Number(event.target.value),
-      MIN_POSITIONING_SPLIT_RATIO,
-      MAX_POSITIONING_SPLIT_RATIO,
-    );
-    setSplitRatio(nextRatio);
-    writeStoredJson(POSITIONING_SPLIT_RATIO_STORAGE_KEY, nextRatio);
-  }
-
-  function handleChartHeightChange(event: ChangeEvent<HTMLInputElement>): void {
-    const nextHeight = clampNumber(
-      Number(event.target.value),
-      MIN_POSITIONING_CHART_HEIGHT,
-      MAX_POSITIONING_CHART_HEIGHT,
-    );
-    setChartHeight(nextHeight);
-    writeStoredJson(POSITIONING_CHART_HEIGHT_STORAGE_KEY, nextHeight);
-  }
-
-  function resetPositioningLayoutControls(): void {
-    setLayoutDirection(DEFAULT_POSITIONING_LAYOUT_DIRECTION);
-    setSplitRatio(DEFAULT_POSITIONING_SPLIT_RATIO);
-    setChartHeight(DEFAULT_POSITIONING_CHART_HEIGHT);
-    writeStoredJson(POSITIONING_LAYOUT_DIRECTION_STORAGE_KEY, DEFAULT_POSITIONING_LAYOUT_DIRECTION);
-    writeStoredJson(POSITIONING_SPLIT_RATIO_STORAGE_KEY, DEFAULT_POSITIONING_SPLIT_RATIO);
-    writeStoredJson(POSITIONING_CHART_HEIGHT_STORAGE_KEY, DEFAULT_POSITIONING_CHART_HEIGHT);
+  function handleExportDrawerOpenChange(open: boolean): void {
+    setExportToolsOpen(open);
+    if (open) {
+      setControlToolsOpen(false);
+      setActiveExportSettingsPanel("bubble");
+    }
   }
 
   async function handleExportSlide() {
@@ -833,16 +829,8 @@ export function PositioningPricingPage() {
   return (
     <div className="positioning-pricing-shell">
       <div className="positioning-pricing-main">
-        <CollapsibleDeckHero
-          collapsed={heroCollapsed}
-          onToggle={() => setHeroCollapsed((current) => !current)}
-          expandedLabel="展开定位定价控制区"
-          collapsedLabel="收起定位定价控制区"
-          expandedTitle="展开定位定价控制区"
-          collapsedTitle="收起定位定价控制区"
-          className="header-card dashboard-hero market-scan-hero positioning-pricing-hero"
-          shellClassName="dashboard-hero-shell market-scan-hero-shell"
-          head={(
+        <section className="header-card dashboard-hero market-scan-hero positioning-pricing-hero positioning-pricing-summary-hero">
+          <div className="dashboard-hero-head positioning-pricing-summary-head">
             <div className="dashboard-hero-copy market-scan-hero-copy">
               <span className="page-kicker">Positioning Pricing</span>
               <h1>{deck?.metadata.labels.pageTitle ?? "定位定价"}</h1>
@@ -864,24 +852,68 @@ export function PositioningPricingPage() {
                 {loading && deck ? <span className="market-scan-hero-chip market-scan-hero-chip--live">Refreshing</span> : null}
               </div>
             </div>
+          </div>
+        </section>
+
+        <DeckFloatingDrawer
+          open={controlToolsOpen}
+          onOpenChange={handleControlDrawerOpenChange}
+          triggerPrimary="筛选 / 布局"
+          triggerSecondaryOpen="收起控制"
+          triggerSecondaryClosed="打开控制"
+          eyebrow="Controls"
+          title="筛选与版式"
+          ariaLabel="Positioning Pricing controls"
+          footer={(
+            <>
+              <span className="market-scan-toolbar-chip">{deck?.metadata.selectedCountryLabel ?? currentCountry}</span>
+              <span className="market-scan-toolbar-chip">{customRangeActive ? "自定义区间" : (deck?.metadata.labels.salesModeLabel ?? "当月")}</span>
+              <span className="market-scan-toolbar-chip">Top {topN}</span>
+              <span className="market-scan-toolbar-chip">{layoutDirection === "row" ? `并排 ${splitRatio}/${100 - splitRatio}` : "上下"}</span>
+            </>
           )}
-          body={(
-            <div className="market-scan-hero-body-grid">
-              <div className="market-scan-controls-grid positioning-pricing-controls-grid">
-                <label className="market-scan-field">
-                  <span>Country</span>
-                  <select
-                    value={currentCountry}
-                    onChange={(event) => setSelectedCountry(event.target.value || null)}
-                    disabled={!deck}
-                  >
-                    {(deck?.metadata.availableCountries ?? []).map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+        >
+          <DeckControlTabs
+            tabs={POSITIONING_CONTROL_TABS}
+            activeKey={activeControlPanel}
+            onChange={setActiveControlPanel}
+            ariaLabel="定位定价控制"
+            className="positioning-pricing-control-tabs"
+            tabClassName="positioning-pricing-control-tab"
+          />
+
+          {activeControlPanel === "filters" ? (
+            <div className="positioning-pricing-control-grid">
+              <label className="market-scan-field">
+                <span>Country</span>
+                <select
+                  value={currentCountry}
+                  onChange={(event) => setSelectedCountry(event.target.value || null)}
+                  disabled={!deck}
+                >
+                  {(deck?.metadata.availableCountries ?? []).map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="market-scan-field">
+                <span>Top N</span>
+                <DebouncedNumberInput
+                  value={topN}
+                  onCommit={(value) => {
+                    if (value !== null) {
+                      setTopN(value);
+                    }
+                  }}
+                  min={MIN_TOP_N}
+                  max={MAX_TOP_N}
+                  step={1}
+                  placeholder={String(DEFAULT_TOP_N)}
+                />
+              </label>
+              <div className="market-scan-field positioning-pricing-control-field--wide">
                 <DeckPeriodTimeline
                   options={deck?.metadata.availablePeriods ?? []}
                   value={resolvedTimeRange ?? (selectedPeriod ? { start: selectedPeriod, end: selectedPeriod } : null)}
@@ -891,185 +923,137 @@ export function PositioningPricingPage() {
                   }}
                   disabled={!deck}
                 />
-                <div className="market-scan-field">
-                  <span>销量口径</span>
-                  <div className="btn-group">
-                    {SALES_MODE_OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        className={`btn btn-sm ${!customRangeActive && salesMode === option.value ? "btn-primary" : "btn-ghost"}`}
-                        onClick={() => {
-                          setSelectedTimeRange(null);
-                          setSalesMode(option.value);
-                        }}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                    {customRangeActive ? (
-                      <span className="btn btn-sm btn-primary">
-                        {resolvedTimeRange ? `${resolvedTimeRange.start} - ${resolvedTimeRange.end}` : "自定义区间"}
-                      </span>
-                    ) : null}
-                  </div>
-                  {customRangeActive ? (
-                    <small className="market-scan-field-hint">当前时间轴就是激活中的销量口径；点击三档按钮会退出自定义区间。</small>
-                  ) : null}
-                </div>
-                <label className="market-scan-field">
-                  <span>Top N</span>
-                  <select value={topN} onChange={(event) => setTopN(Number(event.target.value))}>
-                    {TOP_N_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        Top {option}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="market-scan-field">
-                  <span>MSRP Min</span>
-                  <input
-                    type="number"
-                    min={0}
-                    step={1000}
-                    value={msrpMin ?? ""}
-                    placeholder={String(page?.priceBands.range.min ?? "")}
-                    onChange={(event) => {
-                      setMsrpMin(event.target.value ? Number(event.target.value) : null);
-                    }}
-                  />
-                </label>
-                <label className="market-scan-field">
-                  <span>MSRP Max</span>
-                  <input
-                    type="number"
-                    min={0}
-                    step={1000}
-                    value={msrpMax ?? ""}
-                    placeholder={String(page?.priceBands.range.max ?? "")}
-                    onChange={(event) => {
-                      setMsrpMax(event.target.value ? Number(event.target.value) : null);
-                    }}
-                  />
-                </label>
-                <label className="market-scan-field">
-                  <span>Length Min</span>
-                  <input
-                    type="number"
-                    min={0}
-                    step={DEFAULT_LENGTH_STEP}
-                    value={lengthMin ?? ""}
-                    placeholder={String(page?.lengthRange.min ?? "")}
-                    onChange={(event) => {
-                      setLengthMin(event.target.value ? Number(event.target.value) : null);
-                    }}
-                  />
-                </label>
-                <label className="market-scan-field">
-                  <span>Length Max</span>
-                  <input
-                    type="number"
-                    min={0}
-                    step={DEFAULT_LENGTH_STEP}
-                    value={lengthMax ?? ""}
-                    placeholder={String(page?.lengthRange.max ?? "")}
-                    onChange={(event) => {
-                      setLengthMax(event.target.value ? Number(event.target.value) : null);
-                    }}
-                  />
-                </label>
-                <label className="market-scan-field">
-                  <span>Step</span>
-                  <input
-                    type="number"
-                    min={500}
-                    step={500}
-                    value={priceBandSize ?? ""}
-                    placeholder={String(page?.priceBands.bandSize ?? "")}
-                    onChange={(event) => {
-                      setPriceBandSize(event.target.value ? Number(event.target.value) : null);
-                    }}
-                  />
-                </label>
-                <label className="market-scan-field">
-                  <span>布局</span>
-                  <select
-                    value={layoutDirection}
-                    onChange={handleLayoutDirectionChange}
-                  >
-                    <option value="row">并排</option>
-                    <option value="column">上下</option>
-                  </select>
-                </label>
-                {layoutDirection === "row" ? (
-                  <label className="market-scan-field">
-                    <span>比例 {splitRatio}/{100 - splitRatio}</span>
-                    <input
-                      type="range"
-                      min={MIN_POSITIONING_SPLIT_RATIO}
-                      max={MAX_POSITIONING_SPLIT_RATIO}
-                      value={splitRatio}
-                      onChange={handleSplitRatioChange}
-                    />
-                  </label>
-                ) : null}
-                <label className="market-scan-field">
-                  <span>高度 {chartHeight}px</span>
-                  <input
-                    type="range"
-                    min={MIN_POSITIONING_CHART_HEIGHT}
-                    max={MAX_POSITIONING_CHART_HEIGHT}
-                    step={10}
-                    value={chartHeight}
-                    onChange={handleChartHeightChange}
-                  />
-                </label>
-                <div className="market-scan-field market-scan-field-actions">
-                  <span>Deck</span>
-                  <div className="btn-group">
+              </div>
+              <div className="market-scan-field positioning-pricing-control-field--wide">
+                <span>销量口径</span>
+                <div className="btn-group">
+                  {SALES_MODE_OPTIONS.map((option) => (
                     <button
+                      key={option.value}
                       type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => setReloadToken((value) => value + 1)}
-                    >
-                      Refresh
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
-                      onClick={() => { void handleExportSlide(); }}
-                      disabled={!deck || !page || exportingSlide}
-                    >
-                      {exportingSlide ? "正在导出 PNG..." : "导出当前页 PNG"}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
+                      className={`btn btn-sm ${!customRangeActive && salesMode === option.value ? "btn-primary" : "btn-ghost"}`}
                       onClick={() => {
-                        setSelectedCountry(DEFAULT_COUNTRY);
-                        setSelectedPeriod(null);
-                        setSalesMode(DEFAULT_SALES_MODE);
-                        setSelectedFuelTypes(DEFAULT_FUEL_TYPES);
-                        setTopN(DEFAULT_TOP_N);
-                        setMsrpMin(DEFAULT_MSRP_MIN);
-                        setMsrpMax(DEFAULT_MSRP_MAX);
-                        setPriceBandSize(DEFAULT_PRICE_BAND_SIZE);
-                        setLengthMin(DEFAULT_LENGTH_MIN);
-                        setLengthMax(DEFAULT_LENGTH_MAX);
-                        setPriceBandExport(DEFAULT_PRICE_BAND_EXPORT);
-                        setBubbleExport(DEFAULT_BUBBLE_EXPORT);
-                        setBubbleScale(DEFAULT_BUBBLE_SCALE);
-                        setActivePage("overview");
-                        resetPositioningLayoutControls();
+                        setSelectedTimeRange(null);
+                        setSalesMode(option.value);
                       }}
                     >
-                      Reset
+                      {option.label}
                     </button>
-                  </div>
+                  ))}
+                  {customRangeActive ? (
+                    <span className="btn btn-sm btn-primary">
+                      {resolvedTimeRange ? `${resolvedTimeRange.start} - ${resolvedTimeRange.end}` : "自定义区间"}
+                    </span>
+                  ) : null}
                 </div>
+                {customRangeActive ? (
+                  <small className="market-scan-field-hint">当前时间轴就是激活中的销量口径；点击三档按钮会退出自定义区间。</small>
+                ) : null}
               </div>
-              <div className="market-scan-fuel-bank">
+            </div>
+          ) : null}
+
+          {activeControlPanel === "range" ? (
+            <div className="positioning-pricing-control-grid">
+              <label className="market-scan-field">
+                <span>MSRP Min</span>
+                <DebouncedNumberInput
+                  value={msrpMin}
+                  min={0}
+                  max={MAX_MSRP_INPUT}
+                  step={1000}
+                  allowEmpty
+                  placeholder={String(page?.priceBands.range.min ?? "")}
+                  onCommit={setMsrpMin}
+                />
+              </label>
+              <label className="market-scan-field">
+                <span>MSRP Max</span>
+                <DebouncedNumberInput
+                  value={msrpMax}
+                  min={0}
+                  max={MAX_MSRP_INPUT}
+                  step={1000}
+                  allowEmpty
+                  placeholder={String(page?.priceBands.range.max ?? "")}
+                  onCommit={setMsrpMax}
+                />
+              </label>
+              <label className="market-scan-field">
+                <span>Length Min</span>
+                <DebouncedNumberInput
+                  value={lengthMin}
+                  min={0}
+                  max={MAX_LENGTH_INPUT}
+                  step={DEFAULT_LENGTH_STEP}
+                  allowEmpty
+                  placeholder={String(page?.lengthRange.min ?? "")}
+                  onCommit={setLengthMin}
+                />
+              </label>
+              <label className="market-scan-field">
+                <span>Length Max</span>
+                <DebouncedNumberInput
+                  value={lengthMax}
+                  min={0}
+                  max={MAX_LENGTH_INPUT}
+                  step={DEFAULT_LENGTH_STEP}
+                  allowEmpty
+                  placeholder={String(page?.lengthRange.max ?? "")}
+                  onCommit={setLengthMax}
+                />
+              </label>
+              <label className="market-scan-field positioning-pricing-control-field--wide">
+                <span>Step</span>
+                <DebouncedNumberInput
+                  value={priceBandSize}
+                  min={500}
+                  max={MAX_PRICE_BAND_SIZE}
+                  step={500}
+                  allowEmpty
+                  placeholder={String(page?.priceBands.bandSize ?? "")}
+                  onCommit={setPriceBandSize}
+                />
+              </label>
+            </div>
+          ) : null}
+
+          {activeControlPanel === "layout" ? (
+            <div className="positioning-pricing-control-grid">
+              <label className="market-scan-field">
+                <span>布局</span>
+                <select
+                  value={layoutDirection}
+                  onChange={(event) => setLayoutDirection(event.target.value === "column" ? "column" : "row")}
+                >
+                  <option value="row">并排</option>
+                  <option value="column">上下</option>
+                </select>
+              </label>
+              {layoutDirection === "row" ? (
+                <label className="market-scan-field">
+                  <span>比例 {splitRatio}/{100 - splitRatio}</span>
+                  <input
+                    type="range"
+                    min={MIN_POSITIONING_SPLIT_RATIO}
+                    max={MAX_POSITIONING_SPLIT_RATIO}
+                    value={splitRatio}
+                    onChange={(event) => setSplitRatio(Number(event.target.value))}
+                  />
+                </label>
+              ) : null}
+              <label className="market-scan-field positioning-pricing-control-field--wide">
+                <span>高度 {chartHeight}px</span>
+                <input
+                  type="range"
+                  min={MIN_POSITIONING_CHART_HEIGHT}
+                  max={MAX_POSITIONING_CHART_HEIGHT}
+                  step={10}
+                  value={chartHeight}
+                  onChange={(event) => setChartHeight(Number(event.target.value))}
+                />
+              </label>
+              <div className="market-scan-fuel-bank positioning-pricing-control-field--wide">
                 <span className="market-scan-fuel-bank-label">Fuel Focus</span>
                 <div className="market-scan-fuel-chip-row">
                   {fuelOptions.map((fuel) => {
@@ -1096,9 +1080,52 @@ export function PositioningPricingPage() {
                   })}
                 </div>
               </div>
+              <div className="market-scan-field market-scan-field-actions positioning-pricing-control-field--wide">
+                <span>Deck</span>
+                <div className="btn-group">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setReloadToken((value) => value + 1)}
+                  >
+                    Refresh
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => { void handleExportSlide(); }}
+                    disabled={!deck || !page || exportingSlide}
+                  >
+                    {exportingSlide ? "正在导出 PNG..." : "导出当前页 PNG"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => {
+                      setSelectedCountry(DEFAULT_COUNTRY);
+                      setSelectedPeriod(null);
+                      setSalesMode(DEFAULT_SALES_MODE);
+                      setSelectedFuelTypes(DEFAULT_FUEL_TYPES);
+                      setTopN(DEFAULT_TOP_N);
+                      setMsrpMin(DEFAULT_MSRP_MIN);
+                      setMsrpMax(DEFAULT_MSRP_MAX);
+                      setPriceBandSize(DEFAULT_PRICE_BAND_SIZE);
+                      setLengthMin(DEFAULT_LENGTH_MIN);
+                      setLengthMax(DEFAULT_LENGTH_MAX);
+                      setPriceBandExport(DEFAULT_PRICE_BAND_EXPORT);
+                      setBubbleExport(DEFAULT_BUBBLE_EXPORT);
+                      setBubbleScale(DEFAULT_BUBBLE_SCALE);
+                      setActivePage("overview");
+                      resetPositioningLayoutControls();
+                    }}
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
             </div>
-          )}
-        />
+          ) : null}
+        </DeckFloatingDrawer>
 
         <DeckSubpageNav
           items={TAB_ITEMS}
@@ -1195,6 +1222,7 @@ export function PositioningPricingPage() {
                           <div className="positioning-pricing-chart">
                             {barTraces.length > 0 ? (
                               <PlotlyChart
+                                key={priceBandChartKey}
                                 data={barTraces}
                                 layout={applyPositioningExportToLayout(priceBandLayout(page, priceBandExport), priceBandExport)}
                                 height={chartHeight}
@@ -1219,6 +1247,7 @@ export function PositioningPricingPage() {
                           <div className="positioning-pricing-chart">
                             {bubbleTraces.length > 0 ? (
                               <PlotlyChart
+                                key={bubbleChartKey}
                                 data={bubbleTraces}
                                 layout={applyPositioningExportToLayout(bubbleLayout(page), bubbleExport)}
                                 height={chartHeight}
@@ -1241,33 +1270,28 @@ export function PositioningPricingPage() {
               </div>
             </div>
 
-            <section className={`market-scan-export-drawer positioning-pricing-export-drawer${exportToolsOpen ? " is-open" : ""}`}>
-              <button
-                type="button"
-                className="market-scan-export-toggle"
-                onClick={() => setExportToolsOpen((value) => !value)}
-                aria-expanded={exportToolsOpen}
-              >
-                <span>导出当前页 / 图表设置</span>
-                <span>{exportToolsOpen ? "收起设置" : "打开设置"}</span>
-              </button>
-              {exportToolsOpen ? (
-                <aside className="positioning-pricing-export-panel" aria-label="Positioning Pricing export settings">
-                  <header className="positioning-pricing-export-panel-head">
-                    <div>
-                      <span className="market-scan-panel-eyebrow">Export Settings</span>
-                      <h3>导出与图表样式</h3>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => setExportToolsOpen(false)}
-                    >
-                      关闭
-                    </button>
-                  </header>
-
-                  <div className="positioning-pricing-export-panel-body">
+            <DeckExportDrawer
+              open={exportToolsOpen}
+              onOpenChange={handleExportDrawerOpenChange}
+              triggerPrimary="导出当前页 / 图表设置"
+              triggerSecondaryOpen="收起设置"
+              triggerSecondaryClosed="打开设置"
+              eyebrow="Export Settings"
+              title="导出与图表样式"
+              ariaLabel="Positioning Pricing export settings"
+              footer={(
+                <>
+                  <span className="market-scan-toolbar-chip">{exportPreset.width} x {positioningCanvasHeight}</span>
+                  <span className="market-scan-toolbar-chip">{deck.metadata.labels.salesModeLabel}</span>
+                  <span className="market-scan-toolbar-chip">{activeTab.label}</span>
+                  <span className="market-scan-toolbar-chip">Bands 标签 {priceBandExport.dataLabelMode}</span>
+                  <span className="market-scan-toolbar-chip">Bubble 标签 {bubbleExport.dataLabelMode}</span>
+                  <span className="market-scan-toolbar-chip">气泡 ×{bubbleScale}</span>
+                  <span className="market-scan-toolbar-chip">{deck.metadata.selectedCountryLabel}</span>
+                  <span className="market-scan-toolbar-chip">{deck.metadata.resolvedPeriod}</span>
+                </>
+              )}
+            >
                     <div className="positioning-pricing-export-quick-grid">
                       <label className="market-scan-field">
                         <span>导出尺寸</span>
@@ -1307,24 +1331,14 @@ export function PositioningPricingPage() {
                       {exportingSlide ? <span className="btn-liquid-loader" aria-hidden="true" /> : null}
                     </button>
 
-                    <div className="positioning-pricing-export-tabs" role="tablist" aria-label="图表导出设置">
-                      {POSITIONING_EXPORT_SETTINGS_TABS.map((tab) => {
-                        const active = tab.key === activeExportSettingsPanel;
-                        return (
-                          <button
-                            key={tab.key}
-                            type="button"
-                            className={`positioning-pricing-export-tab${active ? " is-active" : ""}`}
-                            onClick={() => setActiveExportSettingsPanel(tab.key)}
-                            role="tab"
-                            aria-selected={active}
-                          >
-                            <span>{tab.label}</span>
-                            <small>{tab.caption}</small>
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <DeckControlTabs
+                      tabs={POSITIONING_EXPORT_SETTINGS_TABS}
+                      activeKey={activeExportSettingsPanel}
+                      onChange={setActiveExportSettingsPanel}
+                      ariaLabel="图表导出设置"
+                      className="positioning-pricing-export-tabs"
+                      tabClassName="positioning-pricing-export-tab"
+                    />
 
                     <div className="positioning-pricing-export-settings-card">
                       {activeExportSettingsPanel === "priceBands" ? (
@@ -1349,21 +1363,7 @@ export function PositioningPricingPage() {
                         />
                       )}
                     </div>
-                  </div>
-
-                  <footer className="market-scan-toolbar-meta positioning-pricing-export-meta">
-                    <span className="market-scan-toolbar-chip">{exportPreset.width} x {positioningCanvasHeight}</span>
-                    <span className="market-scan-toolbar-chip">{deck.metadata.labels.salesModeLabel}</span>
-                    <span className="market-scan-toolbar-chip">{activeTab.label}</span>
-                    <span className="market-scan-toolbar-chip">Bands 标签 {priceBandExport.dataLabelMode}</span>
-                    <span className="market-scan-toolbar-chip">Bubble 标签 {bubbleExport.dataLabelMode}</span>
-                    <span className="market-scan-toolbar-chip">气泡 ×{bubbleScale}</span>
-                    <span className="market-scan-toolbar-chip">{deck.metadata.selectedCountryLabel}</span>
-                    <span className="market-scan-toolbar-chip">{deck.metadata.resolvedPeriod}</span>
-                  </footer>
-                </aside>
-              ) : null}
-            </section>
+            </DeckExportDrawer>
           </div>
         ) : null}
       </div>

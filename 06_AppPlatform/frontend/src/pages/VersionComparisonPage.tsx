@@ -3,7 +3,24 @@ import { useSearchParams } from "react-router-dom";
 import type { Data, Layout as PlotlyLayout, PlotMouseEvent, PlotSelectionEvent } from "plotly.js";
 
 import { api } from "../api/client";
-import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
+import {
+  DebouncedNumberInput,
+  DeckControlTabs,
+  DeckExportDrawer,
+  DeckFloatingDrawer,
+  type DeckControlTabItem,
+} from "../components/deckControls";
+import {
+  DEFAULT_EXPORT,
+  ExportPanel,
+  applyDataLabelsToTraces,
+  applyExportToLayout,
+  applySeriesColors,
+  buildExportLabelModeOptions,
+  getExportPalette,
+  withExportLabels,
+  type ExportSettings,
+} from "../components/ExportPanel";
 import { DeckPeriodTimeline } from "../components/DeckPeriodTimeline";
 import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { LoadingSurface } from "../components/LoadingSurface";
@@ -22,11 +39,15 @@ import { fuelColor } from "../utils/colors";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
 import { useArrowCountryNavigation } from "../utils/useArrowCountryNavigation";
 import { useFixedCanvasPreview } from "../utils/useFixedCanvasPreview";
+import { useDeckLayoutControls, type DeckLayoutDirection } from "../hooks/useDeckLayoutControls";
 
 const DEFAULT_FUEL_TYPES = ["BEV", "HEV", "PHEV", "MHEV", "ICE"];
 const DEFAULT_COUNTRY = "瑞典";
 const DEFAULT_SALES_MODE: PositioningPricingSalesMode = "month";
 const DEFAULT_PRICE_BAND_SIZE = 1000;
+const MIN_PRICE_BAND_SIZE = 500;
+const MAX_PRICE_BAND_SIZE = 200000;
+const MAX_MSRP_INPUT = 1000000;
 const DEFAULT_EXPORT_PRESET = "fhd";
 const MAX_SELECTED_MODELS = 10;
 const SALES_MODE_OPTIONS: Array<{ value: PositioningPricingSalesMode; label: string }> = [
@@ -50,6 +71,130 @@ const LABEL_MODE_OPTIONS: Array<{ value: LabelMode; label: string; hint: string 
 function isLabelMode(value: string | null): value is LabelMode {
   return LABEL_MODE_OPTIONS.some((item) => item.value === value);
 }
+
+type VersionComparisonControlPanel = "filters" | "range" | "layout";
+type VersionComparisonExportPanel = "priceBands" | "bubble";
+
+const VC_CONTROL_TABS: Array<DeckControlTabItem<VersionComparisonControlPanel>> = [
+  { key: "filters", label: "筛选", caption: "模式 / 国家 / 车型" },
+  { key: "range", label: "范围", caption: "MSRP / 步长 / 动力" },
+  { key: "layout", label: "版式", caption: "布局 / 比例 / 高度" },
+];
+
+const VC_EXPORT_TABS: Array<DeckControlTabItem<VersionComparisonExportPanel>> = [
+  { key: "priceBands", label: "Price Bands", caption: "累计价格带" },
+  { key: "bubble", label: "Powertrain Bubble", caption: "动力气泡图" },
+];
+
+const DEFAULT_VC_LAYOUT_DIRECTION: DeckLayoutDirection = "row";
+const DEFAULT_VC_SPLIT_RATIO = 20;
+const DEFAULT_VC_CHART_HEIGHT = 430;
+const MIN_VC_SPLIT_RATIO = 1;
+const MAX_VC_SPLIT_RATIO = 99;
+const MIN_VC_CHART_HEIGHT = 280;
+const MAX_VC_CHART_HEIGHT = 800;
+const VC_LAYOUT_DIRECTION_STORAGE_KEY = "vc_layout_dir";
+const VC_SPLIT_RATIO_STORAGE_KEY = "vc_layout_split";
+const VC_CHART_HEIGHT_STORAGE_KEY = "vc_layout_height";
+const VC_LAYOUT_STORAGE_KEYS = {
+  direction: VC_LAYOUT_DIRECTION_STORAGE_KEY,
+  splitRatio: VC_SPLIT_RATIO_STORAGE_KEY,
+  chartHeight: VC_CHART_HEIGHT_STORAGE_KEY,
+} as const;
+const VC_LAYOUT_DEFAULTS = {
+  direction: DEFAULT_VC_LAYOUT_DIRECTION,
+  splitRatio: DEFAULT_VC_SPLIT_RATIO,
+  chartHeight: DEFAULT_VC_CHART_HEIGHT,
+} as const;
+const VC_LAYOUT_RANGES = {
+  splitRatio: { min: MIN_VC_SPLIT_RATIO, max: MAX_VC_SPLIT_RATIO },
+  chartHeight: { min: MIN_VC_CHART_HEIGHT, max: MAX_VC_CHART_HEIGHT },
+} as const;
+const VC_LAYOUT_CSS_VARIABLES = {
+  chartHeight: "--vc-chart-height",
+  splitRatio: "--vc-split-ratio",
+  remainderRatio: "--vc-remainder-ratio",
+} as const;
+
+const DEFAULT_VC_PRICE_BAND_EXPORT: ExportSettings = {
+  ...DEFAULT_EXPORT,
+  showXGrid: false,
+  showYGrid: false,
+  showAxisLine: false,
+  legendPosition: "right",
+  fontSize: 11,
+  labelFontSize: 9,
+  xTickFormat: "d",
+  yTickFormat: "d",
+  exportWidth: 960,
+  exportHeight: 430,
+  decimalPlaces: 0,
+  dataLabelMode: "off",
+};
+
+const DEFAULT_VC_BUBBLE_EXPORT: ExportSettings = {
+  ...DEFAULT_VC_PRICE_BAND_EXPORT,
+  dataLabelMode: "off",
+};
+
+const VC_LABEL_MODE_OPTIONS = buildExportLabelModeOptions({
+  showValue: true,
+  showSeries: true,
+  showModel: true,
+  showSales: true,
+});
+
+function vcBubbleSeriesKey(trace: Data): string | null {
+  const name = (trace as { name?: unknown }).name;
+  return typeof name === "string" && name.trim() && !name.startsWith("label-p") ? name : null;
+}
+
+function buildVcSeriesColors(traces: Data[], exportSettings: ExportSettings): Record<string, string> {
+  const manualColors = exportSettings.seriesColors ?? {};
+  if (exportSettings.colorScheme === DEFAULT_VC_PRICE_BAND_EXPORT.colorScheme) {
+    return manualColors;
+  }
+  const palette = getExportPalette(exportSettings.colorScheme);
+  const resolved: Record<string, string> = { ...manualColors };
+  const assigned = new Set(Object.keys(manualColors));
+  let paletteIndex = 0;
+  traces.forEach((trace) => {
+    const key = vcBubbleSeriesKey(trace);
+    if (!key || assigned.has(key)) return;
+    resolved[key] = palette[paletteIndex % palette.length];
+    assigned.add(key);
+    paletteIndex += 1;
+  });
+  return resolved;
+}
+
+function applyVcExportToTraces(traces: Data[], exportSettings: ExportSettings): Data[] {
+  const labeled = applyDataLabelsToTraces(traces, exportSettings);
+  const colorOverrides = buildVcSeriesColors(traces, exportSettings);
+  return applySeriesColors(labeled, colorOverrides);
+}
+
+function applyVcExportToLayout(
+  layout: Partial<PlotlyLayout>,
+  exportSettings: ExportSettings,
+): Partial<PlotlyLayout> {
+  return applyExportToLayout(layout, { ...exportSettings, chartTitle: "" });
+}
+
+const VC_ROW_HEIGHT_CHROME = 650;
+const VC_COLUMN_HEIGHT_CHROME = 830;
+
+function resolveVcCanvasHeight(
+  presetHeight: number,
+  layoutDirection: DeckLayoutDirection,
+  chartHeight: number,
+): number {
+  const contentHeight = layoutDirection === "column"
+    ? chartHeight * 2 + VC_COLUMN_HEIGHT_CHROME
+    : chartHeight + VC_ROW_HEIGHT_CHROME;
+  return Math.max(presetHeight, contentHeight);
+}
+
 const EXPORT_PRESETS = [
   { key: "hd+", label: "1600 x 900", width: 1600, height: 900 },
   { key: "fhd", label: "1920 x 1080", width: 1920, height: 1080 },
@@ -166,17 +311,25 @@ function MetricCard({ metric }: { metric: PositioningPricingMetric }) {
 }
 
 function buildPriceBandTraces(items: PositioningPricingPriceBandItem[], fuelOrder: string[]): Data[] {
-  return fuelOrder.map((fuel) => ({
-    type: "bar",
-    orientation: "h",
-    name: fuel,
-    y: items.map((item) => item.bandMid),
-    x: items.map((item) => item.fuelMix[fuel] ?? 0),
-    width: items.map((item) => Math.max(item.bandWidth * 0.84, 500)),
-    customdata: items.map((item) => [item.label]),
-    marker: { color: fuelColor(fuel) },
-    hovertemplate: `%{customdata[0]}<br>${fuel}: %{x:,.0f} 台<extra></extra>`,
-  }) as Data);
+  return fuelOrder.map((fuel) => {
+    const salesValues = items.map((item) => item.fuelMix[fuel] ?? 0);
+    return withExportLabels({
+      type: "bar",
+      orientation: "h",
+      name: fuel,
+      y: items.map((item) => item.bandMid),
+      x: salesValues,
+      width: items.map((item) => Math.max(item.bandWidth * 0.84, 500)),
+      customdata: items.map((item) => [item.label]),
+      marker: { color: fuelColor(fuel) },
+      hovertemplate: `%{customdata[0]}<br>${fuel}: %{x:,.0f} 台<extra></extra>`,
+    } as Data, {
+      model: items.map((item) => item.label),
+      sales: salesValues,
+      value: salesValues,
+      series: items.map(() => fuel),
+    });
+  });
 }
 
 interface BuildBubbleTracesOpts {
@@ -417,18 +570,21 @@ function priceBandLayout(
   return {
     ...CHART_LAYOUT,
     barmode: "stack",
-    margin: { l: 84, r: 20, t: 16, b: 118 },
+    margin: { l: 96, r: 80, t: 16, b: 62 },
     legend: {
-      orientation: "h",
-      x: 0,
+      orientation: "v",
+      x: 1.02,
       xanchor: "left",
-      y: -0.18,
+      y: 1,
       yanchor: "top",
       font: { size: 9 },
-      itemwidth: 30,
-      itemsizing: "constant",
     },
-    xaxis: { title: { text: "Sales" }, zeroline: false },
+    xaxis: {
+      title: { text: "Sales" },
+      automargin: true,
+      showgrid: false,
+      zeroline: false,
+    },
     yaxis: {
       title: { text: "MSRP" },
       range: [rangeMin, rangeMax],
@@ -436,6 +592,7 @@ function priceBandLayout(
       dtick: step,
       tickformat: ",d",
       automargin: true,
+      showgrid: false,
       zeroline: false,
     },
   };
@@ -449,10 +606,19 @@ function versionBubbleLayout(
 ): Partial<PlotlyLayout> {
   return {
     ...CHART_LAYOUT,
-    margin: { l: 58, r: 24, t: 16, b: 118 },
+    margin: { l: 96, r: 80, t: 16, b: 62 },
+    legend: {
+      orientation: "v",
+      x: 1.02,
+      xanchor: "left",
+      y: 1,
+      yanchor: "top",
+      font: { size: 9 },
+    },
     xaxis: {
       tickformat: ",d",
       automargin: true,
+      showgrid: false,
       zeroline: false,
     },
     yaxis: {
@@ -461,6 +627,8 @@ function versionBubbleLayout(
       tick0: rangeMin,
       dtick: step,
       tickformat: ",d",
+      automargin: true,
+      showgrid: false,
       zeroline: false,
     },
     annotations,
@@ -504,8 +672,12 @@ export function VersionComparisonPage() {
   const [exportError, setExportError] = useState("");
   const [exportingSlide, setExportingSlide] = useState(false);
   const [exportToolsOpen, setExportToolsOpen] = useState(false);
+  const [controlToolsOpen, setControlToolsOpen] = useState(false);
+  const [activeControlPanel, setActiveControlPanel] = useState<VersionComparisonControlPanel>("filters");
+  const [activeExportSettingsPanel, setActiveExportSettingsPanel] = useState<VersionComparisonExportPanel>("bubble");
+  const [priceBandExport, setPriceBandExport] = useState<ExportSettings>(DEFAULT_VC_PRICE_BAND_EXPORT);
+  const [bubbleExport, setBubbleExport] = useState<ExportSettings>(DEFAULT_VC_BUBBLE_EXPORT);
   const [exportPresetKey, setExportPresetKey] = useState<(typeof EXPORT_PRESETS)[number]["key"]>(DEFAULT_EXPORT_PRESET);
-  const [heroCollapsed, setHeroCollapsed] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -576,10 +748,26 @@ export function VersionComparisonPage() {
   });
   const [labelMode, setLabelMode] = useState<LabelMode>(() => {
     const raw = searchParams.get("labelMode");
-    return isLabelMode(raw) ? raw : "smart_top";
+    return isLabelMode(raw) ? raw : "all";
   });
   const [selectedBubbles, setSelectedBubbles] = useState<Set<string>>(new Set());
   const [hoveredBubble, setHoveredBubble] = useState<string | null>(null);
+  const {
+    layoutDirection,
+    splitRatio,
+    chartHeight,
+    gridStyle: vcGridStyle,
+    setLayoutDirection,
+    setSplitRatio,
+    setChartHeight,
+    resetLayout: resetVcLayoutControls,
+  } = useDeckLayoutControls({
+    storageKeys: VC_LAYOUT_STORAGE_KEYS,
+    defaults: VC_LAYOUT_DEFAULTS,
+    ranges: VC_LAYOUT_RANGES,
+    cssVariables: VC_LAYOUT_CSS_VARIABLES,
+  });
+
   const countryOptions = deck?.metadata.availableCountries ?? [];
 
   const syncUrlParams = useCallback(() => {
@@ -774,9 +962,10 @@ export function VersionComparisonPage() {
   }, [msrpMax, msrpMin, page, priceBandSize, priceControlsTouched]);
 
   const exportPreset = EXPORT_PRESETS.find((item) => item.key === exportPresetKey) ?? EXPORT_PRESETS[1];
+  const vcCanvasHeight = resolveVcCanvasHeight(exportPreset.height, layoutDirection, chartHeight);
   const slidePreview = useFixedCanvasPreview({
     width: exportPreset.width,
-    height: exportPreset.height,
+    height: vcCanvasHeight,
     exporting: exportingSlide,
   });
 
@@ -826,12 +1015,12 @@ export function VersionComparisonPage() {
   }, [searchedOptions, activeModels]);
 
   const barTraces = useMemo(
-    () => (page ? buildPriceBandTraces(page.priceBands.items, activeFuelTypes) : []),
-    [activeFuelTypes, page],
+    () => (page ? applyVcExportToTraces(buildPriceBandTraces(page.priceBands.items, activeFuelTypes), priceBandExport) : []),
+    [activeFuelTypes, priceBandExport, page],
   );
   const bubbleTraces = useMemo(
-    () => (page ? buildVersionBubbleTraces(page.bubbleChart.items, { labelMode, selectedKeys: selectedBubbles }) : []),
-    [page, labelMode, selectedBubbles],
+    () => (page ? applyVcExportToTraces(buildVersionBubbleTraces(page.bubbleChart.items, { labelMode, selectedKeys: selectedBubbles }), bubbleExport) : []),
+    [bubbleExport, labelMode, page, selectedBubbles],
   );
   const bubbleAnnotations = useMemo(
     () => (page ? buildModelLengthAnnotations(page.bubbleChart.items) : []),
@@ -845,6 +1034,22 @@ export function VersionComparisonPage() {
       }
       return [...current, fuel];
     });
+  }
+
+  function handleControlDrawerOpenChange(open: boolean): void {
+    setControlToolsOpen(open);
+    if (open) {
+      setExportToolsOpen(false);
+      setActiveControlPanel("filters");
+    }
+  }
+
+  function handleExportDrawerOpenChange(open: boolean): void {
+    setExportToolsOpen(open);
+    if (open) {
+      setControlToolsOpen(false);
+      setActiveExportSettingsPanel("bubble");
+    }
   }
 
   function handleAddModel() {
@@ -958,12 +1163,12 @@ export function VersionComparisonPage() {
         pixelRatio: 2,
         backgroundColor: "#eef4f7",
         width: exportPreset.width,
-        height: exportPreset.height,
+        height: vcCanvasHeight,
         canvasWidth: exportPreset.width,
-        canvasHeight: exportPreset.height,
+        canvasHeight: vcCanvasHeight,
         style: {
           width: `${exportPreset.width}px`,
-          height: `${exportPreset.height}px`,
+          height: `${vcCanvasHeight}px`,
         },
       });
       const link = document.createElement("a");
@@ -985,16 +1190,8 @@ export function VersionComparisonPage() {
   return (
     <div className="positioning-pricing-shell">
       <div className="positioning-pricing-main">
-        <CollapsibleDeckHero
-          collapsed={heroCollapsed}
-          onToggle={() => setHeroCollapsed((current) => !current)}
-          expandedLabel="展开版型对比控制区"
-          collapsedLabel="收起版型对比控制区"
-          expandedTitle="展开版型对比控制区"
-          collapsedTitle="收起版型对比控制区"
-          className="header-card dashboard-hero market-scan-hero positioning-pricing-hero"
-          shellClassName="dashboard-hero-shell market-scan-hero-shell"
-          head={(
+        <section className="header-card dashboard-hero market-scan-hero positioning-pricing-hero">
+          <div className="dashboard-hero-head positioning-pricing-summary-head">
             <div className="dashboard-hero-copy market-scan-hero-copy">
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
                 <div>
@@ -1019,6 +1216,7 @@ export function VersionComparisonPage() {
                       setMsrpMin(null); setMsrpMax(null); setPriceBandSize(DEFAULT_PRICE_BAND_SIZE);
                       setBodyType(null); setDriveTypes([]); setSelectedSegments([]);
                       setModelSearchQuery(""); setSegmentSearchQuery("");
+                      resetVcLayoutControls();
                     }}>Reset</button>
                 </div>
               </div>
@@ -1032,283 +1230,333 @@ export function VersionComparisonPage() {
                 {isMixedSegment ? <span className="market-scan-hero-chip market-scan-hero-chip--warn">跨Segment</span> : null}
               </div>
             </div>
-          )}
-          body={(
-            <div className="market-scan-hero-body-grid">
-              <div className="version-comparison-filter-grid">
-                {/* Mode selector */}
-                <div className="vc-col-14">
-                  <div className="market-scan-field">
-                    <span>对比模式</span>
-                    <div className="btn-group">
-                      {COMPARISON_MODE_OPTIONS.map((option) => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={`btn btn-sm ${comparisonMode === option.value ? "btn-primary" : "btn-ghost"}`}
-                          onClick={() => setComparisonMode(option.value)}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
+          </div>
+        </section>
 
-                {/* Filter Row 1: Country(2) + Period(5) + Segment(2) + Add Model(5) */}
-                <div className="vc-col-2 market-scan-field version-comparison-model-picker-field" ref={countryPickerRef}>
-                  <span>Country</span>
-                  <div className="version-comparison-model-picker">
-                    <div className="version-comparison-model-picker-input-row">
-                      <input
-                        type="text"
-                        className="version-comparison-model-search"
-                        placeholder="搜索国家..."
-                        value={countrySearchQuery || deck?.metadata.selectedCountryLabel || currentCountry}
-                        onChange={(event) => {
-                          setCountrySearchQuery(event.target.value);
-                          setCountryPickerOpen(true);
-                        }}
-                        onFocus={() => {
-                          setCountrySearchQuery("");
-                          setCountryPickerOpen(true);
-                        }}
-                        disabled={!deck}
-                      />
-                    </div>
-                    {countryPickerOpen && searchedCountryOptions.length > 0 ? (
-                      <div className="version-comparison-model-dropdown">
-                        {searchedCountryOptions.slice(0, 40).map((option) => {
-                          const isSelected = option.value === (selectedCountry || DEFAULT_COUNTRY);
-                          return (
-                            <button
-                              key={option.value}
-                              type="button"
-                              className={`version-comparison-model-option${isSelected ? " is-selected" : ""}`}
-                              onClick={() => {
-                                setSelectedCountry(option.value);
-                                setCountrySearchQuery("");
-                                setCountryPickerOpen(false);
-                              }}
-                            >
-                              <span className={`version-comparison-model-checkbox${isSelected ? " is-checked" : ""}`}>
-                                {isSelected ? "✓" : ""}
-                              </span>
-                              <span className="version-comparison-model-option-name">{option.label}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                    {countryPickerOpen && searchedCountryOptions.length === 0 && countrySearchQuery.trim() ? (
-                      <div className="version-comparison-model-dropdown">
-                        <div className="version-comparison-model-empty">无匹配国家</div>
-                      </div>
-                    ) : null}
-                  </div>
+        <DeckFloatingDrawer
+          open={controlToolsOpen}
+          onOpenChange={handleControlDrawerOpenChange}
+          triggerPrimary="筛选 / 布局"
+          triggerSecondaryOpen="收起控制"
+          triggerSecondaryClosed="打开控制"
+          eyebrow="Controls"
+          title="筛选与版式"
+          ariaLabel="Version Comparison controls"
+          footer={(
+            <>
+              <span className="market-scan-toolbar-chip">{deck?.metadata.selectedCountryLabel ?? currentCountry}</span>
+              <span className="market-scan-toolbar-chip">{activeModeLabel}</span>
+              <span className="market-scan-toolbar-chip">Models {activeModels.length}/{MAX_SELECTED_MODELS}</span>
+              <span className="market-scan-toolbar-chip">{layoutDirection === "row" ? `并排 ${splitRatio}/${100 - splitRatio}` : "上下"}</span>
+            </>
+          )}
+        >
+          <DeckControlTabs
+            tabs={VC_CONTROL_TABS}
+            activeKey={activeControlPanel}
+            onChange={setActiveControlPanel}
+            ariaLabel="版型对比控制"
+          />
+
+          {activeControlPanel === "filters" ? (
+            <div className="deck-panel-grid">
+              <div className="market-scan-field deck-panel-grid__wide">
+                <span>对比模式</span>
+                <div className="btn-group">
+                  {COMPARISON_MODE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`btn btn-sm ${comparisonMode === option.value ? "btn-primary" : "btn-ghost"}`}
+                      onClick={() => setComparisonMode(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
                 </div>
-                <div className="vc-col-5 market-scan-field">
-                  <div className="version-comparison-period-row">
-                    <DeckPeriodTimeline
-                      options={deck?.metadata.availablePeriods ?? []}
-                      value={resolvedTimeRange ?? (selectedPeriod ? { start: selectedPeriod, end: selectedPeriod } : null)}
-                      onChange={(value) => {
-                        setSelectedTimeRange(isCustomTimeRange(value) ? value : null);
-                        setSelectedPeriod(value?.end ?? null);
+              </div>
+
+              <div className="market-scan-field version-comparison-model-picker-field" ref={countryPickerRef}>
+                <span>Country</span>
+                <div className="version-comparison-model-picker">
+                  <div className="version-comparison-model-picker-input-row">
+                    <input
+                      type="text"
+                      className="version-comparison-model-search"
+                      placeholder="搜索国家..."
+                      value={countrySearchQuery || deck?.metadata.selectedCountryLabel || currentCountry}
+                      onChange={(event) => {
+                        setCountrySearchQuery(event.target.value);
+                        setCountryPickerOpen(true);
+                      }}
+                      onFocus={() => {
+                        setCountrySearchQuery("");
+                        setCountryPickerOpen(true);
                       }}
                       disabled={!deck}
                     />
-                    <div className="btn-group version-comparison-sales-mode-group">
-                      {SALES_MODE_OPTIONS.map((option) => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={`btn btn-sm ${!customRangeActive && salesMode === option.value ? "btn-primary" : "btn-ghost"}`}
-                          onClick={() => {
-                            setSelectedTimeRange(null);
-                            setSalesMode(option.value);
-                          }}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                      {customRangeActive ? (
-                        <span className="btn btn-sm btn-primary">
-                          {resolvedTimeRange ? `${resolvedTimeRange.start} - ${resolvedTimeRange.end}` : "自定义区间"}
-                        </span>
-                      ) : null}
-                    </div>
                   </div>
-                  {customRangeActive ? (
-                    <small className="market-scan-field-hint">已切换自定义区间；点击当月/YTD/近12个月退出。</small>
+                  {countryPickerOpen && searchedCountryOptions.length > 0 ? (
+                    <div className="version-comparison-model-dropdown">
+                      {searchedCountryOptions.slice(0, 40).map((option) => {
+                        const isSelected = option.value === (selectedCountry || DEFAULT_COUNTRY);
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={`version-comparison-model-option${isSelected ? " is-selected" : ""}`}
+                            onClick={() => {
+                              setSelectedCountry(option.value);
+                              setCountrySearchQuery("");
+                              setCountryPickerOpen(false);
+                            }}
+                          >
+                            <span className={`version-comparison-model-checkbox${isSelected ? " is-checked" : ""}`}>
+                              {isSelected ? "✓" : ""}
+                            </span>
+                            <span className="version-comparison-model-option-name">{option.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  {countryPickerOpen && searchedCountryOptions.length === 0 && countrySearchQuery.trim() ? (
+                    <div className="version-comparison-model-dropdown">
+                      <div className="version-comparison-model-empty">无匹配国家</div>
+                    </div>
                   ) : null}
                 </div>
-
-                {/* Row 2: Segment (col-3) + Add Model (col-9) */}
-                <div className="vc-col-2 market-scan-field version-comparison-model-picker-field" ref={segmentPickerRef}>
-                  <span>{comparisonMode === "same_segment" ? "Segment" : `Segment${selectedSegments.length > 0 ? ` (${selectedSegments.length})` : ""}`}</span>
-                  <div className="version-comparison-model-picker">
-                    <div className="version-comparison-model-picker-input-row">
-                      <input
-                        type="text"
-                        className="version-comparison-model-search"
-                        placeholder={comparisonMode === "same_segment" ? (currentSegment || "搜索 Segment...") : "多选 Segment..."}
-                        value={segmentSearchQuery}
-                        onChange={(event) => {
-                          setSegmentSearchQuery(event.target.value);
-                          setSegmentPickerOpen(true);
-                        }}
-                        onFocus={() => {
-                          setSegmentSearchQuery("");
-                          setSegmentPickerOpen(true);
-                        }}
-                        disabled={!deck}
-                      />
-                    </div>
-                    {segmentPickerOpen && searchedSegmentOptions.length > 0 ? (
-                      <div className="version-comparison-model-dropdown">
-                        {comparisonMode !== "same_segment" ? (
-                          <div className="version-comparison-model-dropdown-actions">
-                            <button type="button" className="version-comparison-batch-btn"
-                              onClick={() => setSelectedSegments(searchedSegmentOptions.map(s => s.value))}>全选</button>
-                            <button type="button" className="version-comparison-batch-btn"
-                              onClick={() => { const v = new Set(searchedSegmentOptions.map(s => s.value)); setSelectedSegments(c => c.filter(s => !v.has(s))); }}>取消</button>
-                            <button type="button" className="version-comparison-batch-btn"
-                              onClick={() => setSelectedSegments([])}>清空</button>
-                            <span className="version-comparison-dropdown-count">
-                              {searchedSegmentOptions.length} 项 · {selectedSegments.length} 已选
-                            </span>
-                          </div>
-                        ) : null}
-                        {searchedSegmentOptions.slice(0, 30).map((seg) => {
-                          const active = comparisonMode === "same_segment"
-                            ? seg.value === currentSegment
-                            : selectedSegments.includes(seg.value);
-                          return (
-                            <button
-                              key={seg.value}
-                              type="button"
-                              className={`version-comparison-model-option${active ? " is-selected" : ""}`}
-                              onClick={() => {
-                                if (comparisonMode === "same_segment") {
-                                  setSelectedSegment(seg.value);
-                                  setSelectedModels([]);
-                                  setSegmentSearchQuery("");
-                                  setSegmentPickerOpen(false);
-                                } else {
-                                  setSelectedSegments((current) =>
-                                    current.includes(seg.value)
-                                      ? current.filter((s) => s !== seg.value)
-                                      : [...current, seg.value]
-                                  );
-                                }
-                              }}
-                            >
-                              <span className={`version-comparison-model-checkbox${active ? " is-checked" : ""}`}>
-                                {active ? "✓" : ""}
-                              </span>
-                              <span className="version-comparison-model-option-name">{seg.label}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                    {segmentPickerOpen && searchedSegmentOptions.length === 0 && segmentSearchQuery.trim() ? (
-                      <div className="version-comparison-model-dropdown">
-                        <div className="version-comparison-model-empty">无匹配 Segment</div>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="vc-col-5 market-scan-field version-comparison-model-picker-field" ref={modelPickerRef}>
-                  <span>Add Model {maxModelsReached ? `(${MAX_SELECTED_MODELS}/${MAX_SELECTED_MODELS})` : `(${activeModels.length}/${MAX_SELECTED_MODELS})`}</span>
-                  <div className="version-comparison-model-picker">
-                    <div className="version-comparison-model-picker-input-row">
-                      <input
-                        type="text"
-                        className="version-comparison-model-search"
-                        placeholder={maxModelsReached ? `最多 ${MAX_SELECTED_MODELS} 个` : "搜索品牌或车型名称..."}
-                        value={modelSearchQuery}
-                        onChange={(event) => {
-                          setModelSearchQuery(event.target.value);
-                          setModelPickerOpen(true);
-                        }}
-                        onFocus={() => setModelPickerOpen(true)}
-                        disabled={!deck || maxModelsReached}
-                      />
-                    </div>
-                    {modelPickerOpen && searchedOptions.length > 0 ? (
-                      <div className="version-comparison-model-dropdown">
-                        <div className="version-comparison-model-dropdown-actions">
-                          <button type="button" className="version-comparison-batch-btn"
-                            onClick={handleSelectAllVisible} disabled={maxModelsReached}>全选</button>
-                          <button type="button" className="version-comparison-batch-btn"
-                            onClick={handleDeselectAllVisible}>取消</button>
-                          <span className="version-comparison-dropdown-count">
-                            {searchedOptions.length} 项 · {activeModels.length}/{MAX_SELECTED_MODELS} 已选
-                          </span>
-                        </div>
-                        {searchedOptions.slice(0, 50).map((option) => {
-                          const isSelected = activeModels.includes(option.value);
-                          return (
-                            <button
-                              key={option.value}
-                              type="button"
-                              className={`version-comparison-model-option${option.value === modelToAdd ? " is-active" : ""}${isSelected ? " is-selected" : ""}`}
-                              onClick={() => { handleToggleModel(option.value); setModelToAdd(option.value); }}
-                              onMouseEnter={() => setModelToAdd(option.value)}
-                            >
-                              <span className={`version-comparison-model-checkbox${isSelected ? " is-checked" : ""}`}>
-                                {isSelected ? "✓" : ""}
-                              </span>
-                              <div className="version-comparison-model-option-body">
-                                <div className="version-comparison-model-option-main">
-                                  <span className="version-comparison-model-option-name">{option.label}</span>
-                                  {isSelected ? <span className="version-comparison-model-option-added">已添加</span> : null}
-                                </div>
-                                <div className="version-comparison-model-option-meta">
-                                  {option.segment ? <span>{option.segment}</span> : null}
-                                  {option.powertrain ? <span>{option.powertrain}</span> : null}
-                                  {option.lengthMm > 0 ? <span>{option.lengthMm} mm</span> : null}
-                                  {option.driveType ? <span>{option.driveType}</span> : null}
-                                </div>
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                    {modelPickerOpen && searchedOptions.length === 0 && modelSearchQuery.trim() ? (
-                      <div className="version-comparison-model-dropdown">
-                        <div className="version-comparison-model-empty">无匹配车型</div>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-
-                {/* Filter Row 2: MSRP Min(3) + MSRP Max(3) + Step(3) */}
-                <label className="vc-col-4 market-scan-field">
-                  <span>MSRP Min</span>
-                  <input type="text" inputMode="numeric" className="version-comparison-number-input"
-                    value={msrpMin ?? ""} placeholder={String(page?.priceBands.range.min ?? "")}
-                    onChange={(event) => { setPriceControlsTouched(true); const raw = event.target.value.replace(/[^0-9]/g, ""); setMsrpMin(raw ? Number(raw) : null); }} />
-                </label>
-                <label className="vc-col-5 market-scan-field">
-                  <span>MSRP Max</span>
-                  <input type="text" inputMode="numeric" className="version-comparison-number-input"
-                    value={msrpMax ?? ""} placeholder={String(page?.priceBands.range.max ?? "")}
-                    onChange={(event) => { setPriceControlsTouched(true); const raw = event.target.value.replace(/[^0-9]/g, ""); setMsrpMax(raw ? Number(raw) : null); }} />
-                </label>
-                <label className="vc-col-5 market-scan-field">
-                  <span>Step</span>
-                  <input type="text" inputMode="numeric" className="version-comparison-number-input"
-                    value={priceBandSize ?? ""} placeholder={String(page?.priceBands.bandSize ?? "")}
-                    onChange={(event) => { setPriceControlsTouched(true); const raw = event.target.value.replace(/[^0-9]/g, ""); setPriceBandSize(raw ? Number(raw) : null); }} />
-                </label>
               </div>
 
-              {/* Fuel Focus */}
-              <div className="market-scan-fuel-bank">
+              <div className="market-scan-field version-comparison-model-picker-field" ref={segmentPickerRef}>
+                <span>{comparisonMode === "same_segment" ? "Segment" : `Segment${selectedSegments.length > 0 ? ` (${selectedSegments.length})` : ""}`}</span>
+                <div className="version-comparison-model-picker">
+                  <div className="version-comparison-model-picker-input-row">
+                    <input
+                      type="text"
+                      className="version-comparison-model-search"
+                      placeholder={comparisonMode === "same_segment" ? (currentSegment || "搜索 Segment...") : "多选 Segment..."}
+                      value={segmentSearchQuery}
+                      onChange={(event) => {
+                        setSegmentSearchQuery(event.target.value);
+                        setSegmentPickerOpen(true);
+                      }}
+                      onFocus={() => {
+                        setSegmentSearchQuery("");
+                        setSegmentPickerOpen(true);
+                      }}
+                      disabled={!deck}
+                    />
+                  </div>
+                  {segmentPickerOpen && searchedSegmentOptions.length > 0 ? (
+                    <div className="version-comparison-model-dropdown">
+                      {comparisonMode !== "same_segment" ? (
+                        <div className="version-comparison-model-dropdown-actions">
+                          <button type="button" className="version-comparison-batch-btn"
+                            onClick={() => setSelectedSegments(searchedSegmentOptions.map(s => s.value))}>全选</button>
+                          <button type="button" className="version-comparison-batch-btn"
+                            onClick={() => { const v = new Set(searchedSegmentOptions.map(s => s.value)); setSelectedSegments(c => c.filter(s => !v.has(s))); }}>取消</button>
+                          <button type="button" className="version-comparison-batch-btn"
+                            onClick={() => setSelectedSegments([])}>清空</button>
+                          <span className="version-comparison-dropdown-count">
+                            {searchedSegmentOptions.length} 项 · {selectedSegments.length} 已选
+                          </span>
+                        </div>
+                      ) : null}
+                      {searchedSegmentOptions.slice(0, 30).map((seg) => {
+                        const active = comparisonMode === "same_segment"
+                          ? seg.value === currentSegment
+                          : selectedSegments.includes(seg.value);
+                        return (
+                          <button
+                            key={seg.value}
+                            type="button"
+                            className={`version-comparison-model-option${active ? " is-selected" : ""}`}
+                            onClick={() => {
+                              if (comparisonMode === "same_segment") {
+                                setSelectedSegment(seg.value);
+                                setSelectedModels([]);
+                                setSegmentSearchQuery("");
+                                setSegmentPickerOpen(false);
+                              } else {
+                                setSelectedSegments((current) =>
+                                  current.includes(seg.value)
+                                    ? current.filter((s) => s !== seg.value)
+                                    : [...current, seg.value]
+                                );
+                              }
+                            }}
+                          >
+                            <span className={`version-comparison-model-checkbox${active ? " is-checked" : ""}`}>
+                              {active ? "✓" : ""}
+                            </span>
+                            <span className="version-comparison-model-option-name">{seg.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  {segmentPickerOpen && searchedSegmentOptions.length === 0 && segmentSearchQuery.trim() ? (
+                    <div className="version-comparison-model-dropdown">
+                      <div className="version-comparison-model-empty">无匹配 Segment</div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="market-scan-field deck-panel-grid__wide">
+                <span>时间与口径</span>
+                <div className="btn-group" style={{ marginBottom: 8 }}>
+                  {SALES_MODE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`btn btn-sm ${!customRangeActive && salesMode === option.value ? "btn-primary" : "btn-ghost"}`}
+                      onClick={() => {
+                        setSelectedTimeRange(null);
+                        setSalesMode(option.value);
+                      }}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                  {customRangeActive ? (
+                    <span className="btn btn-sm btn-primary">
+                      {resolvedTimeRange ? `${resolvedTimeRange.start} - ${resolvedTimeRange.end}` : "自定义区间"}
+                    </span>
+                  ) : null}
+                </div>
+                <DeckPeriodTimeline
+                  options={deck?.metadata.availablePeriods ?? []}
+                  value={resolvedTimeRange ?? (selectedPeriod ? { start: selectedPeriod, end: selectedPeriod } : null)}
+                  onChange={(value) => {
+                    setSelectedTimeRange(isCustomTimeRange(value) ? value : null);
+                    setSelectedPeriod(value?.end ?? null);
+                  }}
+                  disabled={!deck}
+                />
+                {customRangeActive ? (
+                  <small className="market-scan-field-hint">已切换自定义区间；点击当月/YTD/近12个月退出。</small>
+                ) : null}
+              </div>
+
+              <div className="market-scan-field version-comparison-model-picker-field deck-panel-grid__wide" ref={modelPickerRef}>
+                <span>Add Model {maxModelsReached ? `(${MAX_SELECTED_MODELS}/${MAX_SELECTED_MODELS})` : `(${activeModels.length}/${MAX_SELECTED_MODELS})`}</span>
+                <div className="version-comparison-model-picker">
+                  <div className="version-comparison-model-picker-input-row">
+                    <input
+                      type="text"
+                      className="version-comparison-model-search"
+                      placeholder={maxModelsReached ? `最多 ${MAX_SELECTED_MODELS} 个` : "搜索品牌或车型名称..."}
+                      value={modelSearchQuery}
+                      onChange={(event) => {
+                        setModelSearchQuery(event.target.value);
+                        setModelPickerOpen(true);
+                      }}
+                      onFocus={() => setModelPickerOpen(true)}
+                      disabled={!deck || maxModelsReached}
+                    />
+                  </div>
+                  {modelPickerOpen && searchedOptions.length > 0 ? (
+                    <div className="version-comparison-model-dropdown">
+                      <div className="version-comparison-model-dropdown-actions">
+                        <button type="button" className="version-comparison-batch-btn"
+                          onClick={handleSelectAllVisible} disabled={maxModelsReached}>全选</button>
+                        <button type="button" className="version-comparison-batch-btn"
+                          onClick={handleDeselectAllVisible}>取消</button>
+                        <span className="version-comparison-dropdown-count">
+                          {searchedOptions.length} 项 · {activeModels.length}/{MAX_SELECTED_MODELS} 已选
+                        </span>
+                      </div>
+                      {searchedOptions.slice(0, 50).map((option) => {
+                        const isSelected = activeModels.includes(option.value);
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={`version-comparison-model-option${option.value === modelToAdd ? " is-active" : ""}${isSelected ? " is-selected" : ""}`}
+                            onClick={() => { handleToggleModel(option.value); setModelToAdd(option.value); }}
+                            onMouseEnter={() => setModelToAdd(option.value)}
+                          >
+                            <span className={`version-comparison-model-checkbox${isSelected ? " is-checked" : ""}`}>
+                              {isSelected ? "✓" : ""}
+                            </span>
+                            <div className="version-comparison-model-option-body">
+                              <div className="version-comparison-model-option-main">
+                                <span className="version-comparison-model-option-name">{option.label}</span>
+                                {isSelected ? <span className="version-comparison-model-option-added">已添加</span> : null}
+                              </div>
+                              <div className="version-comparison-model-option-meta">
+                                {option.segment ? <span>{option.segment}</span> : null}
+                                {option.powertrain ? <span>{option.powertrain}</span> : null}
+                                {option.lengthMm > 0 ? <span>{option.lengthMm} mm</span> : null}
+                                {option.driveType ? <span>{option.driveType}</span> : null}
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  {modelPickerOpen && searchedOptions.length === 0 && modelSearchQuery.trim() ? (
+                    <div className="version-comparison-model-dropdown">
+                      <div className="version-comparison-model-empty">无匹配车型</div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {activeControlPanel === "range" ? (
+            <div className="deck-panel-grid">
+              <label className="market-scan-field">
+                <span>MSRP Min</span>
+                <DebouncedNumberInput
+                  value={msrpMin}
+                  min={0}
+                  max={MAX_MSRP_INPUT}
+                  step={1000}
+                  allowEmpty
+                  inputMode="numeric"
+                  className="version-comparison-number-input"
+                  placeholder={String(page?.priceBands.range.min ?? "")}
+                  onDraftChange={() => setPriceControlsTouched(true)}
+                  onCommit={setMsrpMin}
+                />
+              </label>
+              <label className="market-scan-field">
+                <span>MSRP Max</span>
+                <DebouncedNumberInput
+                  value={msrpMax}
+                  min={0}
+                  max={MAX_MSRP_INPUT}
+                  step={1000}
+                  allowEmpty
+                  inputMode="numeric"
+                  className="version-comparison-number-input"
+                  placeholder={String(page?.priceBands.range.max ?? "")}
+                  onDraftChange={() => setPriceControlsTouched(true)}
+                  onCommit={setMsrpMax}
+                />
+              </label>
+              <label className="market-scan-field">
+                <span>Step</span>
+                <DebouncedNumberInput
+                  value={priceBandSize}
+                  min={MIN_PRICE_BAND_SIZE}
+                  max={MAX_PRICE_BAND_SIZE}
+                  step={500}
+                  allowEmpty
+                  inputMode="numeric"
+                  className="version-comparison-number-input"
+                  placeholder={String(page?.priceBands.bandSize ?? "")}
+                  onDraftChange={() => setPriceControlsTouched(true)}
+                  onCommit={setPriceBandSize}
+                />
+              </label>
+
+              <div className="market-scan-fuel-bank deck-panel-grid__wide">
                 <span className="market-scan-fuel-bank-label">Fuel Focus</span>
                 <div className="market-scan-fuel-chip-row">
                   {fuelOptions.map((fuel) => {
@@ -1336,8 +1584,7 @@ export function VersionComparisonPage() {
                 </div>
               </div>
 
-              {/* Selected Models */}
-              <div className="version-comparison-selection-bank">
+              <div className="version-comparison-selection-bank deck-panel-grid__wide">
                 <div className="version-comparison-selection-header">
                   <span className="market-scan-fuel-bank-label">Selected Models ({activeModels.length}/{MAX_SELECTED_MODELS})</span>
                   {activeModels.length > 0 ? (
@@ -1371,8 +1618,46 @@ export function VersionComparisonPage() {
                 ) : null}
               </div>
             </div>
-          )}
-        />
+          ) : null}
+
+          {activeControlPanel === "layout" ? (
+            <div className="deck-panel-grid">
+              <label className="market-scan-field">
+                <span>布局</span>
+                <select
+                  value={layoutDirection}
+                  onChange={(event) => setLayoutDirection(event.target.value === "column" ? "column" : "row")}
+                >
+                  <option value="row">并排</option>
+                  <option value="column">上下</option>
+                </select>
+              </label>
+              {layoutDirection === "row" ? (
+                <label className="market-scan-field">
+                  <span>比例 {splitRatio}/{100 - splitRatio}</span>
+                  <input
+                    type="range"
+                    min={MIN_VC_SPLIT_RATIO}
+                    max={MAX_VC_SPLIT_RATIO}
+                    value={splitRatio}
+                    onChange={(event) => setSplitRatio(Number(event.target.value))}
+                  />
+                </label>
+              ) : null}
+              <label className="market-scan-field deck-panel-grid__wide">
+                <span>高度 {chartHeight}px</span>
+                <input
+                  type="range"
+                  min={MIN_VC_CHART_HEIGHT}
+                  max={MAX_VC_CHART_HEIGHT}
+                  step={10}
+                  value={chartHeight}
+                  onChange={(event) => setChartHeight(Number(event.target.value))}
+                />
+              </label>
+            </div>
+          ) : null}
+        </DeckFloatingDrawer>
 
         {error ? (
           <section className="market-scan-state-card market-scan-state-card--error">
@@ -1449,75 +1734,54 @@ export function VersionComparisonPage() {
                       {page.subtitle}：左侧按 MSRP 价格带看累计销量，右侧下钻到选中 Model 的 version / trim 粒度。
                     </div>
 
-                    <div className="market-scan-grid market-scan-grid--two-wide positioning-pricing-grid">
-                      <Panel
-                        eyebrow="Price Bands"
-                        title="累计价格带"
-                        subtitle="纵轴为 MSRP 区间，横轴为销量，按动力堆叠。"
-                      >
-                        <div className="positioning-pricing-chart">
-                          {barTraces.length > 0 ? (
-                            <PlotlyChart
-                              data={barTraces}
-                              layout={priceBandLayout(page.priceBands.range.min, page.priceBands.range.max, page.priceBands.bandSize)}
-                              height={430}
-                            />
-                          ) : (
-                            <LoadingSurface
-                              mode="inline"
-                              kicker="Bands"
-                              label="暂无价格带数据"
-                              detail="当前 segment / model 组合下没有可堆叠的价格带销量。"
-                            />
-                          )}
-                        </div>
-                      </Panel>
-
-                      <Panel
-                        eyebrow="Version Drilldown"
-                        title="版型细分气泡图"
-                        subtitle="横轴为车长，轴下标出对应 Model，气泡文字显示 version，颜色按动总区分。"
-                      >
-                        <div className="positioning-pricing-chart">
-                          <div className="version-comparison-label-toolbar">
-                            <div className="btn-group btn-group--sm">
-                              {LABEL_MODE_OPTIONS.map((opt) => (
-                                <button
-                                  key={opt.value}
-                                  type="button"
-                                  className={`btn btn-sm ${labelMode === opt.value ? "btn-primary" : "btn-ghost"}`}
-                                  onClick={() => setLabelMode(opt.value)}
-                                  title={opt.hint}
-                                >
-                                  {opt.label}
-                                </button>
-                              ))}
-                            </div>
-                            {selectedBubbles.size > 0 ? (
-                              <button
-                                type="button"
-                                className="btn btn-sm btn-ghost"
-                                onClick={() => setSelectedBubbles(new Set())}
-                              >
-                                清除已选 ({selectedBubbles.size})
-                              </button>
-                            ) : null}
+                    <div className={`market-scan-grid market-scan-grid--two-wide version-comparison-grid version-comparison-grid--${layoutDirection}`} style={vcGridStyle}>
+                      <div className="positioning-pricing-panel-slot">
+                        <Panel
+                          eyebrow="Price Bands"
+                          title="累计价格带"
+                          subtitle="纵轴为 MSRP 区间，横轴为销量，按动力堆叠。"
+                        >
+                          <div className="positioning-pricing-chart">
+                            {barTraces.length > 0 ? (
+                              <PlotlyChart
+                                data={barTraces}
+                                layout={applyVcExportToLayout(priceBandLayout(page.priceBands.range.min, page.priceBands.range.max, page.priceBands.bandSize), priceBandExport)}
+                                height={chartHeight}
+                              />
+                            ) : (
+                              <LoadingSurface
+                                mode="inline"
+                                kicker="Bands"
+                                label="暂无价格带数据"
+                                detail="当前 segment / model 组合下没有可堆叠的价格带销量。"
+                              />
+                            )}
                           </div>
-                          {bubbleTraces.length > 0 ? (
-                            <PlotlyChart
-                              data={bubbleTraces}
-                              layout={versionBubbleLayout(
-                                page.priceBands.range.min,
-                                page.priceBands.range.max,
-                                page.priceBands.bandSize,
-                                bubbleAnnotations,
-                              )}
-                              height={400}
-                              onHover={handleBubbleHover}
-                              onUnhover={handleBubbleUnhover}
-                              onClick={handleBubbleClick}
-                              onSelected={handleBubbleSelect}
-                            />
+                        </Panel>
+                      </div>
+
+                      <div className="positioning-pricing-panel-slot">
+                        <Panel
+                          eyebrow="Version Drilldown"
+                          title="版型细分气泡图"
+                          subtitle="横轴为车长，轴下标出对应 Model，气泡文字显示 version，颜色按动总区分。"
+                        >
+                          <div className="positioning-pricing-chart">
+                            {bubbleTraces.length > 0 ? (
+                              <PlotlyChart
+                                data={bubbleTraces}
+                                layout={applyVcExportToLayout(versionBubbleLayout(
+                                  page.priceBands.range.min,
+                                  page.priceBands.range.max,
+                                  page.priceBands.bandSize,
+                                  bubbleAnnotations,
+                                ), bubbleExport)}
+                                height={chartHeight}
+                                onHover={handleBubbleHover}
+                                onUnhover={handleBubbleUnhover}
+                                onClick={handleBubbleClick}
+                                onSelected={handleBubbleSelect}
+                              />
                           ) : (
                             <LoadingSurface
                               mode="inline"
@@ -1534,51 +1798,102 @@ export function VersionComparisonPage() {
                 </div>
               </div>
             </div>
+            </div>
 
-            <section className="market-scan-export-drawer">
+            <DeckExportDrawer
+              open={exportToolsOpen}
+              onOpenChange={handleExportDrawerOpenChange}
+              triggerPrimary="导出当前页 / 图表设置"
+              triggerSecondaryOpen="收起设置"
+              triggerSecondaryClosed="打开设置"
+              eyebrow="Export Settings"
+              title="导出与图表样式"
+              ariaLabel="Version comparison export settings"
+              footer={(
+                <>
+                  <span className="market-scan-toolbar-chip">{exportPreset.width} x {vcCanvasHeight}</span>
+                  <span className="market-scan-toolbar-chip">{deck.metadata.labels.salesModeLabel}</span>
+                  <span className="market-scan-toolbar-chip">Bands 标签 {priceBandExport.dataLabelMode}</span>
+                  <span className="market-scan-toolbar-chip">Bubble 标签 {bubbleExport.dataLabelMode}</span>
+                  <span className="market-scan-toolbar-chip">{deck.metadata.selectedModels.length}/{MAX_SELECTED_MODELS} Models</span>
+                </>
+              )}
+            >
+              <div className="deck-export-quick-grid">
+                <label className="market-scan-field">
+                  <span>导出尺寸</span>
+                  <select
+                    value={exportPresetKey}
+                    onChange={(event) => setExportPresetKey(event.target.value as (typeof EXPORT_PRESETS)[number]["key"])}
+                  >
+                    {EXPORT_PRESETS.map((preset) => (
+                      <option key={preset.key} value={preset.key}>
+                        {preset.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="market-scan-field">
+                  <span>气泡标签</span>
+                  <select value={labelMode} onChange={(event) => setLabelMode(event.target.value as LabelMode)}>
+                    {LABEL_MODE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
               <button
                 type="button"
-                className="market-scan-export-toggle"
-                onClick={() => setExportToolsOpen((value) => !value)}
-                aria-expanded={exportToolsOpen}
+                className={`btn btn-primary btn-liquid deck-export-primary${exportingSlide ? " is-loading" : ""}`}
+                onClick={() => { void handleExportSlide(); }}
+                disabled={exportingSlide}
               >
-                <span>导出当前页 PNG</span>
-                <span>{exportToolsOpen ? "收起" : "展开"}</span>
+                <span className="btn-liquid-label">{exportingSlide ? "正在导出 PNG..." : "导出当前页 PNG"}</span>
+                {exportingSlide ? <span className="btn-liquid-loader" aria-hidden="true" /> : null}
               </button>
-              {exportToolsOpen ? (
-                <div className="market-scan-toolbar market-scan-toolbar--bottom">
-                  <div className="market-scan-toolbar-group market-scan-toolbar-group--settings">
-                    <label className="market-scan-field">
-                      <span>导出尺寸</span>
-                      <select
-                        value={exportPresetKey}
-                        onChange={(event) => setExportPresetKey(event.target.value as (typeof EXPORT_PRESETS)[number]["key"])}
-                      >
-                        {EXPORT_PRESETS.map((preset) => (
-                          <option key={preset.key} value={preset.key}>
-                            {preset.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
-                      onClick={() => { void handleExportSlide(); }}
-                      disabled={exportingSlide}
-                    >
-                      {exportingSlide ? "正在导出 PNG..." : "导出当前页 PNG"}
-                    </button>
-                  </div>
-                  <div className="market-scan-toolbar-meta">
-                    <span className="market-scan-toolbar-chip">{exportPreset.width} x {exportPreset.height}</span>
-                    <span className="market-scan-toolbar-chip">{deck.metadata.labels.salesModeLabel}</span>
-                    <span className="market-scan-toolbar-chip">{deck.metadata.selectedSegment || "-"}</span>
-                    <span className="market-scan-toolbar-chip">{deck.metadata.selectedModels.length}/{MAX_SELECTED_MODELS} Models</span>
-                  </div>
-                </div>
+
+              <DeckControlTabs
+                tabs={VC_EXPORT_TABS}
+                activeKey={activeExportSettingsPanel}
+                onChange={setActiveExportSettingsPanel}
+                ariaLabel="图表导出设置"
+              />
+
+              {selectedBubbles.size > 0 ? (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  style={{ marginTop: 8 }}
+                  onClick={() => setSelectedBubbles(new Set())}
+                >
+                  清除已选气泡 ({selectedBubbles.size})
+                </button>
               ) : null}
-            </section>
+
+              <div className="positioning-pricing-export-settings-card">
+                {activeExportSettingsPanel === "priceBands" ? (
+                  <ExportPanel
+                    value={priceBandExport}
+                    onChange={setPriceBandExport}
+                    seriesNames={activeFuelTypes}
+                    labelModeOptions={VC_LABEL_MODE_OPTIONS}
+                    showExportButton={false}
+                    showDimensionControls={false}
+                    collapsible={false}
+                  />
+                ) : (
+                  <ExportPanel
+                    value={bubbleExport}
+                    onChange={setBubbleExport}
+                    seriesNames={activeFuelTypes}
+                    labelModeOptions={VC_LABEL_MODE_OPTIONS}
+                    showExportButton={false}
+                    showDimensionControls={false}
+                    collapsible={false}
+                  />
+                )}
+              </div>
+            </DeckExportDrawer>
           </div>
         ) : null}
       </div>

@@ -12,7 +12,6 @@ import { useSearchParams } from "react-router-dom";
 import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
-import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { useAuth } from "../contexts/AuthContext";
 import { usePageTransition } from "../hooks/usePageTransition";
 import { DeckPeriodTimeline } from "../components/DeckPeriodTimeline";
@@ -27,6 +26,7 @@ import {
   type ExportSettings,
 } from "../components/ExportPanel";
 import { DeckSubpageNav } from "../components/DeckSubpageNav";
+import { DebouncedNumberInput, DeckExportDrawer, DeckFloatingDrawer } from "../components/deckControls";
 import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { SlideLayoutEditor } from "../components/SlideLayoutEditor";
@@ -119,7 +119,7 @@ const DEFAULT_MARKET_SCAN_EXPORT: ExportSettings = {
 };
 const MARKET_SCAN_OVERVIEW_TREND_MARGIN = { l: 52, r: 24, t: 20, b: 48 } as const;
 const MIN_MARKET_SCAN_RANKING_LIMIT = 10;
-const MARKET_SCAN_RANKING_LIMIT_OPTIONS = [10, 15, 20, 30] as const;
+const MAX_MARKET_SCAN_RANKING_LIMIT = 100;
 const SUV_SEGMENT_SHARE_ORDER = ["SUV-A00", "SUV-A0", "SUV-A", "≥SUV-B"] as const;
 const SUV_SEGMENT_SHARE_META: Record<(typeof SUV_SEGMENT_SHARE_ORDER)[number], { label: string; color: string }> = {
   "SUV-A00": { label: "SUV-A00", color: "#0f766e" },
@@ -2258,14 +2258,17 @@ function DrilldownSection({
           actions={onRankingLimitChange ? (
             <label className="market-scan-ranking-limit-control">
               Top
-              <select
+              <DebouncedNumberInput
                 value={normalizedRankingLimit}
-                onChange={(e) => onRankingLimitChange(normalizeMarketScanRankingLimit(e.target.value))}
-              >
-                {MARKET_SCAN_RANKING_LIMIT_OPTIONS.map((n) => (
-                  <option key={n} value={n}>{n}</option>
-                ))}
-              </select>
+                min={MIN_MARKET_SCAN_RANKING_LIMIT}
+                max={MAX_MARKET_SCAN_RANKING_LIMIT}
+                step={1}
+                onCommit={(value) => {
+                  if (value !== null) {
+                    onRankingLimitChange(normalizeMarketScanRankingLimit(value));
+                  }
+                }}
+              />
             </label>
           ) : null}
         >
@@ -2391,6 +2394,7 @@ export function MarketScanPage({
     return base;
   });
   const [exportToolsOpen, setExportToolsOpen] = useState(false);
+  const [controlToolsOpen, setControlToolsOpen] = useState(false);
 
   // Cascading color: changing fuel/origin color in export panel → all charts update.
   // Uses a version counter so React re-renders when module-level overrides change.
@@ -2418,7 +2422,6 @@ export function MarketScanPage({
       buildDefaultMarketScanSlideLayouts(),
     ),
   );
-  const [heroCollapsed, setHeroCollapsed] = useState(false);
   const [activePage, setActivePage] = useState<MarketScanPageKey>(
     () => {
       if (initialActivePage) return initialActivePage;
@@ -2647,6 +2650,9 @@ export function MarketScanPage({
     });
     setSlideEditMode(next.slideEditMode);
     setExportToolsOpen(next.exportToolsOpen);
+    if (next.exportToolsOpen) {
+      setControlToolsOpen(false);
+    }
   }
 
   function handleSlideLayoutChange(patch: Partial<SlideLayoutSettings>) {
@@ -2663,6 +2669,20 @@ export function MarketScanPage({
 
   function toggleFuel(fuel: string) {
     setSelectedFuelTypes((current) => toggleMarketScanFuelSelection(current, fuel));
+  }
+
+  function handleControlDrawerOpenChange(open: boolean): void {
+    setControlToolsOpen(open);
+    if (open) {
+      setExportToolsOpen(false);
+    }
+  }
+
+  function handleExportDrawerOpenChange(open: boolean): void {
+    setExportToolsOpen(open);
+    if (open) {
+      setControlToolsOpen(false);
+    }
   }
 
   function renderActivePageContent(compact = false) {
@@ -2825,16 +2845,8 @@ export function MarketScanPage({
     <>
     <div className="market-scan-shell">
       <div className="market-scan-main">
-        <CollapsibleDeckHero
-          collapsed={heroCollapsed}
-          onToggle={() => setHeroCollapsed((current) => !current)}
-          expandedLabel="展开市场扫描控制区"
-          collapsedLabel="收起市场扫描控制区"
-          expandedTitle="展开市场扫描控制区"
-          collapsedTitle="收起市场扫描控制区"
-          className="header-card dashboard-hero market-scan-hero"
-          shellClassName="dashboard-hero-shell market-scan-hero-shell"
-          head={(
+        <section className="header-card dashboard-hero market-scan-hero positioning-pricing-hero">
+          <div className="dashboard-hero-head positioning-pricing-summary-head">
             <div className="dashboard-hero-copy market-scan-hero-copy">
               <span className="page-kicker">Market Scan</span>
               <h1>{deck?.metadata.labels.pageTitle ?? "Market Scan Deck"}</h1>
@@ -2859,151 +2871,170 @@ export function MarketScanPage({
                   <span className="market-scan-hero-chip market-scan-hero-chip--live">Refreshing</span>
                 ) : null}
               </div>
-            </div>
-          )}
-          body={(
-            <div className="market-scan-hero-body-grid">
-              <div className="market-scan-controls-grid">
-                <label className="market-scan-field">
-                  <span>Country</span>
-                  <select
-                    value={currentCountry}
-                    onChange={(event) => setSelectedCountry(event.target.value || null)}
-                    disabled={!deck}
-                  >
-                    {(deck?.metadata.availableCountries ?? []).map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <DeckPeriodTimeline
-                  options={deck?.metadata.availablePeriods ?? []}
-                  value={resolvedTimeRange ?? (selectedPeriod ? { start: selectedPeriod, end: selectedPeriod } : null)}
-                  onChange={(value) => {
-                    setSelectedTimeRange(isCustomTimeRange(value) ? value : null);
-                    setSelectedPeriod(value?.end ?? null);
-                  }}
-                  disabled={!deck}
-                />
-
-                <div className="market-scan-field">
-                  <span>销量口径</span>
-                  <div className="btn-group">
-                    {MARKET_SCAN_SALES_MODE_OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        className={`btn btn-sm ${!customRangeActive && salesMode === option.value ? "btn-primary" : "btn-ghost"}`}
-                        onClick={() => {
-                          setSelectedTimeRange(null);
-                          setSalesMode(option.value);
-                        }}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                    {customRangeActive ? (
-                      <span className="btn btn-sm btn-primary">
-                        {deck?.results.overview.summary.customRangeLabel ?? "自定义区间"}
-                      </span>
-                    ) : null}
-                  </div>
-                  {customRangeActive ? (
-                    <small className="market-scan-field-hint">
-                      当前时间轴就是激活中的销量口径；点击当月 / YTD / 近12个月会退出自定义区间。
-                    </small>
-                  ) : null}
+              {heroMetrics.length > 0 ? (
+                <div className="market-scan-hero-metrics">
+                  {heroMetrics.map((metric) => (
+                    <MetricCard
+                      key={`${metric.label}-${metric.detail}`}
+                      label={metric.label}
+                      value={metric.value}
+                      detail={metric.detail}
+                      tone={metric.tone}
+                    />
+                  ))}
                 </div>
+              ) : null}
+            </div>
+          </div>
+        </section>
 
-                <label className="market-scan-field">
-                  <span>Drilldown</span>
-                  <select
-                    value={selectedDrilldownSegment}
-                    onChange={(event) => setSelectedDrilldownSegment(event.target.value)}
-                    disabled={!deck}
+        <DeckFloatingDrawer
+          open={controlToolsOpen}
+          onOpenChange={handleControlDrawerOpenChange}
+          triggerPrimary="市场筛选"
+          triggerSecondaryOpen="收起筛选"
+          triggerSecondaryClosed="打开筛选"
+          eyebrow="Controls"
+          title="市场扫描筛选"
+          ariaLabel="Market Scan controls"
+          footer={(
+            <>
+              <span className="market-scan-toolbar-chip">{deck?.metadata.selectedCountryLabel ?? currentCountry}</span>
+              <span className="market-scan-toolbar-chip">{customRangeActive ? "自定义区间" : (MARKET_SCAN_SALES_MODE_OPTIONS.find((o) => o.value === salesMode)?.label ?? "当月")}</span>
+              <span className="market-scan-toolbar-chip">动力 {activeFuelTypes.length}</span>
+              <span className="market-scan-toolbar-chip">下钻 {deck?.metadata.selectedDrilldownSegment ?? selectedDrilldownSegment}</span>
+            </>
+          )}
+        >
+          <div className="deck-panel-grid">
+            <label className="market-scan-field">
+              <span>Country</span>
+              <select
+                value={currentCountry}
+                onChange={(event) => setSelectedCountry(event.target.value || null)}
+                disabled={!deck}
+              >
+                {(deck?.metadata.availableCountries ?? []).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="market-scan-field">
+              <span>Drilldown</span>
+              <select
+                value={selectedDrilldownSegment}
+                onChange={(event) => setSelectedDrilldownSegment(event.target.value)}
+                disabled={!deck}
+              >
+                {(deck?.metadata.availableSegments ?? []).map((segment) => (
+                  <option key={segment.value} value={segment.value}>
+                    {segment.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="market-scan-field deck-panel-grid__wide">
+              <span>销量口径</span>
+              <div className="btn-group">
+                {MARKET_SCAN_SALES_MODE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`btn btn-sm ${!customRangeActive && salesMode === option.value ? "btn-primary" : "btn-ghost"}`}
+                    onClick={() => {
+                      setSelectedTimeRange(null);
+                      setSalesMode(option.value);
+                    }}
                   >
-                    {(deck?.metadata.availableSegments ?? []).map((segment) => (
-                      <option key={segment.value} value={segment.value}>
-                        {segment.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    {option.label}
+                  </button>
+                ))}
+                {customRangeActive ? (
+                  <span className="btn btn-sm btn-primary">
+                    {deck?.results.overview.summary.customRangeLabel ?? "自定义区间"}
+                  </span>
+                ) : null}
+              </div>
+              {customRangeActive ? (
+                <small className="market-scan-field-hint">
+                  当前时间轴就是激活中的销量口径；点击当月 / YTD / 近12个月会退出自定义区间。
+                </small>
+              ) : null}
+            </div>
 
-                <div className="market-scan-field market-scan-field-actions">
-                  <span>Deck</span>
-                  <div className="btn-group">
+            <div className="market-scan-field deck-panel-grid__wide">
+              <DeckPeriodTimeline
+                options={deck?.metadata.availablePeriods ?? []}
+                value={resolvedTimeRange ?? (selectedPeriod ? { start: selectedPeriod, end: selectedPeriod } : null)}
+                onChange={(value) => {
+                  setSelectedTimeRange(isCustomTimeRange(value) ? value : null);
+                  setSelectedPeriod(value?.end ?? null);
+                }}
+                disabled={!deck}
+              />
+            </div>
+
+            <div className="market-scan-fuel-bank deck-panel-grid__wide">
+              <span className="market-scan-fuel-bank-label">Fuel Focus</span>
+              <div className="market-scan-fuel-chip-row">
+                {fuelOptions.map((fuel) => {
+                  const active = activeFuelTypes.includes(fuel);
+                  return (
                     <button
+                      key={fuel}
                       type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => setReloadToken((value) => value + 1)}
-                    >
-                      Refresh
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => {
-                        setSelectedCountry(null);
-                        setSelectedPeriod(null);
-                        setSalesMode(DEFAULT_MARKET_SCAN_SALES_MODE);
-                        setSelectedFuelTypes(DEFAULT_FUEL_TYPES);
-                        setSelectedDrilldownSegment("SUV A0");
-                        setRankingLimit(MIN_MARKET_SCAN_RANKING_LIMIT);
-                        setActivePage("overview");
+                      className={`market-scan-fuel-chip${active ? " is-active" : ""}`}
+                      onClick={() => toggleFuel(fuel)}
+                      style={{
+                        borderColor: active ? fuelColor(fuel) : undefined,
+                        background: active ? `${fuelColor(fuel)}16` : undefined,
                       }}
                     >
-                      Reset
+                      <span
+                        className="market-scan-fuel-dot"
+                        style={{ backgroundColor: fuelColor(fuel) }}
+                        aria-hidden="true"
+                      />
+                      {fuel}
                     </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="market-scan-fuel-bank">
-                <span className="market-scan-fuel-bank-label">Fuel Focus</span>
-                <div className="market-scan-fuel-chip-row">
-                  {fuelOptions.map((fuel) => {
-                    const active = activeFuelTypes.includes(fuel);
-                    return (
-                      <button
-                        key={fuel}
-                        type="button"
-                        className={`market-scan-fuel-chip${active ? " is-active" : ""}`}
-                        onClick={() => toggleFuel(fuel)}
-                        style={{
-                          borderColor: active ? fuelColor(fuel) : undefined,
-                          background: active ? `${fuelColor(fuel)}16` : undefined,
-                        }}
-                      >
-                        <span
-                          className="market-scan-fuel-dot"
-                          style={{ backgroundColor: fuelColor(fuel) }}
-                          aria-hidden="true"
-                        />
-                        {fuel}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="market-scan-hero-metrics">
-                {heroMetrics.map((metric) => (
-                  <MetricCard
-                    key={`${metric.label}-${metric.detail}`}
-                    label={metric.label}
-                    value={metric.value}
-                    detail={metric.detail}
-                    tone={metric.tone}
-                  />
-                ))}
+                  );
+                })}
               </div>
             </div>
-          )}
-        />
+
+            <div className="market-scan-field market-scan-field-actions deck-panel-grid__wide">
+              <span>Deck</span>
+              <div className="btn-group">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setReloadToken((value) => value + 1)}
+                >
+                  Refresh
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => {
+                    setSelectedCountry(null);
+                    setSelectedPeriod(null);
+                    setSalesMode(DEFAULT_MARKET_SCAN_SALES_MODE);
+                    setSelectedFuelTypes(DEFAULT_FUEL_TYPES);
+                    setSelectedDrilldownSegment("SUV A0");
+                    setRankingLimit(MIN_MARKET_SCAN_RANKING_LIMIT);
+                    setActivePage("overview");
+                  }}
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+          </div>
+        </DeckFloatingDrawer>
 
         <DeckSubpageNav
           items={TAB_ITEMS}
@@ -3099,70 +3130,70 @@ export function MarketScanPage({
                 </div>
               </div>
             </div>
-            <section className="market-scan-export-drawer">
+            <DeckExportDrawer
+              open={exportToolsOpen}
+              onOpenChange={handleExportDrawerOpenChange}
+              triggerPrimary="导出当前页 / 导出图设置"
+              triggerSecondaryOpen="收起"
+              triggerSecondaryClosed="展开"
+              eyebrow="Export Settings"
+              title="导出与图表样式"
+              ariaLabel="Market Scan export settings"
+              footer={(
+                <>
+                  <span className="market-scan-toolbar-chip">Slide Layout</span>
+                  <span className="market-scan-toolbar-chip">{exportSettings.exportWidth} x {exportSettings.exportHeight}</span>
+                  <span className="market-scan-toolbar-chip">标签 {showDataLabels ? "On" : "Off"}</span>
+                  <span className="market-scan-toolbar-chip">{activeTab.label}</span>
+                  {slideFitAssessment ? (
+                    <span className={`market-scan-toolbar-chip slide-fit-chip slide-fit-chip--${slideFitAssessment.status}`}>
+                      {slideFitAssessment.status === "safe"
+                        ? "Fit Safe"
+                        : slideFitAssessment.status === "compress"
+                          ? "Need Trim"
+                          : `Split ${slideFitAssessment.splitSlides}`}
+                    </span>
+                  ) : null}
+                </>
+              )}
+            >
               <button
                 type="button"
-                className="market-scan-export-toggle"
-                onClick={() => setExportToolsOpen((value) => !value)}
-                aria-expanded={exportToolsOpen}
+                className={`btn btn-primary btn-liquid deck-export-primary${exportingSlide ? " is-loading" : ""}`}
+                onClick={() => { void handleExportSlide(); }}
+                disabled={exportingSlide}
               >
-                <span>导出当前页 / 导出图设置</span>
-                <span>{exportToolsOpen ? "收起" : "展开"}</span>
+                <span className="btn-liquid-label">{exportingSlide ? "正在导出 PNG..." : "导出当前页 PNG"}</span>
+                {exportingSlide ? <span className="btn-liquid-loader" aria-hidden="true" /> : null}
               </button>
-              {exportToolsOpen ? (
-                <div className="market-scan-toolbar market-scan-toolbar--bottom">
-                  <div className="market-scan-toolbar-group market-scan-toolbar-group--settings">
-                    <div className="market-scan-toolbar-actions">
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-sm"
-                        onClick={() => { void handleExportSlide(); }}
-                        disabled={exportingSlide}
-                      >
-                        {exportingSlide ? "正在导出 PNG..." : "导出当前页 PNG"}
-                      </button>
-                      <button
-                        type="button"
-                        className={`btn btn-sm ${slideEditMode ? "btn-secondary" : "btn-ghost"}`}
-                        onClick={handleToggleSlideEditMode}
-                      >
-                        {slideEditMode ? "退出 Edit" : "一键 Edit"}
-                      </button>
-                    </div>
-                    {slideEditMode ? (
-                      <SlideLayoutEditor
-                        value={activeSlideLayout}
-                        onChange={handleSlideLayoutChange}
-                        onReset={handleSlideLayoutReset}
-                      />
-                    ) : null}
-                    {slideFitAssessment ? <SlideFitSummary assessment={slideFitAssessment} /> : null}
-                    <ExportPanel
-                      value={exportSettings}
-                      onChange={setExportSettings}
-                      labelModeOptions={marketScanLabelModeOptions}
-                      showExportButton={false}
-                      seriesNames={selectedFuelTypes}
-                    />
-                  </div>
-                  <div className="market-scan-toolbar-meta">
-                    <span className="market-scan-toolbar-chip">Slide Layout</span>
-                    <span className="market-scan-toolbar-chip">{exportSettings.exportWidth} x {exportSettings.exportHeight}</span>
-                    <span className="market-scan-toolbar-chip">标签 {showDataLabels ? "On" : "Off"}</span>
-                    <span className="market-scan-toolbar-chip">{activeTab.label}</span>
-                    {slideFitAssessment ? (
-                      <span className={`market-scan-toolbar-chip slide-fit-chip slide-fit-chip--${slideFitAssessment.status}`}>
-                        {slideFitAssessment.status === "safe"
-                          ? "Fit Safe"
-                          : slideFitAssessment.status === "compress"
-                            ? "Need Trim"
-                            : `Split ${slideFitAssessment.splitSlides}`}
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
+
+              <div className="deck-export-quick-grid">
+                <button
+                  type="button"
+                  className={`btn btn-sm ${slideEditMode ? "btn-secondary" : "btn-ghost"}`}
+                  onClick={handleToggleSlideEditMode}
+                >
+                  {slideEditMode ? "退出 Edit" : "一键 Edit"}
+                </button>
+              </div>
+
+              {slideEditMode ? (
+                <SlideLayoutEditor
+                  value={activeSlideLayout}
+                  onChange={handleSlideLayoutChange}
+                  onReset={handleSlideLayoutReset}
+                />
               ) : null}
-            </section>
+              {slideFitAssessment ? <SlideFitSummary assessment={slideFitAssessment} /> : null}
+              <ExportPanel
+                value={exportSettings}
+                onChange={setExportSettings}
+                labelModeOptions={marketScanLabelModeOptions}
+                showExportButton={false}
+                collapsible={false}
+                seriesNames={selectedFuelTypes}
+              />
+            </DeckExportDrawer>
           </div>
         ) : null}
       </div>
