@@ -1,6 +1,6 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import type { Data, Layout } from "plotly.js";
+import type { Data, Layout, PlotMouseEvent } from "plotly.js";
 
 import { animate } from "animejs";
 
@@ -260,6 +260,48 @@ export function DashboardPage() {
   const [pmExport, setPmExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
   const tsChartRef = useRef<HTMLDivElement | null>(null);
   const advChartRef = useRef<HTMLDivElement | null>(null);
+  // --- interactive "selected" label strategy for Advanced scatter charts ---
+  const [selectedAdvKeys, setSelectedAdvKeys] = useState<Map<string, { x: number; y: number; text: string }>>(new Map());
+  useEffect(() => {
+    if (advExport.dataLabelOverlapStrategy !== "selected") {
+      setSelectedAdvKeys(new Map());
+    }
+  }, [advExport.dataLabelOverlapStrategy]);
+  const handleAdvClick = useCallback((event: Readonly<PlotMouseEvent>) => {
+    if (advExport.dataLabelOverlapStrategy !== "selected") return;
+    const pts = event.points ?? [];
+    if (pts.length === 0) return;
+    const point = pts[0];
+    const series = typeof point.data?.name === "string" ? point.data.name : "";
+    const text = typeof point.text === "string" ? point.text : "";
+    if (!series || !text) return;
+    const key = `${series}|${text}`;
+    const x = Number(point.x);
+    const y = Number(point.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    setSelectedAdvKeys((prev) => {
+      const next = new Map(prev);
+      if (next.has(key)) { next.delete(key); } else { next.set(key, { x, y, text }); }
+      return next;
+    });
+  }, [advExport.dataLabelOverlapStrategy]);
+  const selectedAdvLabelTraces: Data[] = useMemo(() => {
+    if (selectedAdvKeys.size === 0) return [];
+    const entries = [...selectedAdvKeys.values()];
+    return [{
+      type: "scatter",
+      mode: "text",
+      name: "clicked-labels",
+      showlegend: false,
+      x: entries.map((e) => e.x),
+      y: entries.map((e) => e.y),
+      text: entries.map((e) => e.text),
+      textposition: "top",
+      textfont: { size: 9, color: "#1d4ed8" },
+      cliponaxis: false,
+      hoverinfo: "skip",
+    } as Data];
+  }, [selectedAdvKeys]);
   const mvChartRef = useRef<HTMLDivElement | null>(null);
   const pmChartRef = useRef<HTMLDivElement | null>(null);
 
@@ -1938,7 +1980,8 @@ export function DashboardPage() {
             return (
               <div ref={el => { advChartRef.current = el; }}>
                 <PlotlyChart
-                  data={applySeriesColors(applyDataLabelsToTraces(traces, advExport), advExport.seriesColors)}
+                  key={`adv-scatter-${selectedAdvKeys.size}`}
+                  data={[...applySeriesColors(applyDataLabelsToTraces(traces, advExport), advExport.seriesColors), ...selectedAdvLabelTraces]}
                   layout={applyExportToLayout({
                       xaxis: { title: { text: ax.xLabel } },
                     yaxis: { title: { text: ax.yLabel } },
@@ -1966,6 +2009,7 @@ export function DashboardPage() {
                       ],
                     } : {}),
                   }, advExport)}
+                  onClick={handleAdvClick}
                   height={deckChartHeight}
                 />
               </div>
@@ -2702,6 +2746,18 @@ export function DashboardPage() {
                     <label className="market-scan-field">
                       <span>Top N</span>
                       <DebouncedNumberInput value={advTopN} onCommit={(v) => v !== null && setAdvTopN(v)} min={5} max={100} delayMs={1200} />
+                    </label>
+                    <label className="market-scan-field">
+                      <span>标签策略</span>
+                      <select
+                        value={advExport.dataLabelOverlapStrategy}
+                        onChange={(e) => setAdvExport((prev) => ({ ...prev, dataLabelOverlapStrategy: e.target.value as ExportSettings["dataLabelOverlapStrategy"] }))}
+                      >
+                        <option value="all">All</option>
+                        <option value="smart_top">Smart Top</option>
+                        <option value="selected">Selected</option>
+                        <option value="clean">Clean</option>
+                      </select>
                     </label>
                   </>
                 )}

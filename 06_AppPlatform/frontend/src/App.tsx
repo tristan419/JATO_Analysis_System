@@ -1,4 +1,4 @@
-import { Suspense, lazy, type ReactNode } from "react";
+import { Suspense, lazy, Component, type ReactNode } from "react";
 import { Navigate, createBrowserRouter, RouterProvider, useLocation } from "react-router-dom";
 import { SharedFilterScopeProvider } from "./contexts/SharedFilterScopeContext";
 import { CountryChatProvider } from "./contexts/CountryChatContext";
@@ -52,8 +52,31 @@ const OrderGeniusPage = lazy(() => import("./pages/OrderGeniusPage").then(m => (
 const AccessControlPage = lazy(() => import("./pages/AccessControlPage").then(m => ({ default: m.AccessControlPage })));
 const ProfilePage = lazy(() => import("./pages/ProfilePage").then(m => ({ default: m.ProfilePage })));
 
+class ChunkErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+  state = { hasError: false };
+  static getDerivedStateFromError() { return { hasError: true }; }
+  componentDidCatch(error: Error) {
+    const msg = error?.message ?? "";
+    if (/importing a module script|Failed to fetch dynamically imported module|error loading dynamically imported module/i.test(msg)) {
+      window.location.reload();
+    }
+  }
+  render() {
+    if (this.state.hasError) {
+      return (<div className="app-loading-shell"><LoadingSurface mode="overlay" label="正在重新加载" detail="模块热更新后自动刷新" kicker="Route" /></div>);
+    }
+    return this.props.children;
+  }
+}
+
 function withPageLoader(node: ReactNode) {
-  return (<Suspense fallback={<div className="app-loading-shell"><LoadingSurface mode="overlay" label="正在加载页面" detail="准备下一个工作视图与路由资源" kicker="Route" /></div>}>{node}</Suspense>);
+  return (
+    <ChunkErrorBoundary>
+      <Suspense fallback={<div className="app-loading-shell"><LoadingSurface mode="overlay" label="正在加载页面" detail="准备下一个工作视图与路由资源" kicker="Route" /></div>}>
+        {node}
+      </Suspense>
+    </ChunkErrorBoundary>
+  );
 }
 
 function RedirectPreserveSearch({ to }: { to: string }) {

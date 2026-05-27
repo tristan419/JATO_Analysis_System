@@ -408,7 +408,8 @@ function canUseSmartScatterLabels(trace: Record<string, unknown>): boolean {
 
 function clearTraceLabels(trace: Record<string, unknown>): Record<string, unknown> {
   const next = { ...trace };
-  delete next.text;
+  // Keep text array so Plotly click events still carry point.text,
+  // but remove rendering properties so labels don't draw.
   delete next.texttemplate;
   delete next.textposition;
   delete next.textfont;
