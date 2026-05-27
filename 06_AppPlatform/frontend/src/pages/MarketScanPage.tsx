@@ -13,6 +13,7 @@ import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
+import { useFuelChipClick } from "../hooks/useFuelChipClick";
 import { usePageTransition } from "../hooks/usePageTransition";
 import { DeckPeriodTimeline } from "../components/DeckPeriodTimeline";
 import {
@@ -53,7 +54,6 @@ import {
   buildDefaultMarketScanSlideLayouts,
   buildMarketScanSlideFitAssessment,
   resetMarketScanActiveSlideLayout,
-  toggleMarketScanFuelSelection,
   toggleMarketScanSlideEditModeState,
   updateMarketScanActiveSlideLayout,
 } from "../utils/marketScanPageState";
@@ -2478,6 +2478,7 @@ export function MarketScanPage({
     setRenderedTabs(prev => { const next = prev.filter(k => k !== activePage); next.push(activePage); return next.slice(-2); });
   }, [activePage]);
   const deckCache = useRef<Partial<Record<MarketScanPageKey, MarketScanDeckResponse>>>({});
+  const deckCacheKey = useRef<Partial<Record<MarketScanPageKey, string>>>({});
   const requestRef = useRef(0);
   const slideRef = useRef<HTMLDivElement | null>(null);
   const countryOptions = deck?.metadata.availableCountries ?? [];
@@ -2528,9 +2529,11 @@ export function MarketScanPage({
     let active = true;
     const requestId = ++requestRef.current;
 
-    // Fast path: use per-view cache if already loaded
+    // Fast path: use per-view cache if params haven't changed
+    const paramKey = `${selectedCountry || "_"}|${selectedFuelTypes.slice().sort().join(",")}|${selectedPeriod || "_"}|${JSON.stringify(selectedTimeRange)}|${selectedDrilldownSegment || "_"}|${rankingLimit}`;
     const cachedView = deckCache.current[activePage];
-    if (cachedView) {
+    const cachedKey = deckCacheKey.current[activePage];
+    if (cachedView && cachedKey === paramKey) {
       setDeck(cachedView);
       setLoading(false);
       return () => { active = false; };
@@ -2556,8 +2559,9 @@ export function MarketScanPage({
           return;
         }
         deckCache.current[activePage] = response;
+        deckCacheKey.current[activePage] = paramKey;
         const keys = Object.keys(deckCache.current) as MarketScanPageKey[];
-        if (keys.length > 2) { const oldest = keys.find(k => k !== activePage); if (oldest) delete deckCache.current[oldest]; }
+        if (keys.length > 2) { const oldest = keys.find(k => k !== activePage); if (oldest) { delete deckCache.current[oldest]; delete deckCacheKey.current[oldest]; } }
         setDeck(response);
       })
       .catch((reason: Error) => {
@@ -2699,9 +2703,7 @@ export function MarketScanPage({
     );
   }
 
-  function toggleFuel(fuel: string) {
-    setSelectedFuelTypes((current) => toggleMarketScanFuelSelection(current, fuel));
-  }
+  const { toggle, isolate } = useFuelChipClick(fuelOptions, setSelectedFuelTypes);
 
   function handleControlDrawerOpenChange(open: boolean): void {
     setControlToolsOpen(open);
@@ -3030,7 +3032,9 @@ export function MarketScanPage({
                       key={fuel}
                       type="button"
                       className={`market-scan-fuel-chip${active ? " is-active" : ""}`}
-                      onClick={() => toggleFuel(fuel)}
+                      onClick={() => toggle(fuel)}
+                      onDoubleClick={() => isolate(fuel)}
+                      title="双击只看此动力"
                       style={{
                         borderColor: active ? fuelColor(fuel) : undefined,
                         background: active ? `${fuelColor(fuel)}16` : undefined,

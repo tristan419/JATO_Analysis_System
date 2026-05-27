@@ -40,6 +40,7 @@ import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefault
 import { useArrowCountryNavigation } from "../utils/useArrowCountryNavigation";
 import { useFixedCanvasPreview } from "../utils/useFixedCanvasPreview";
 import { useDeckLayoutControls, type DeckLayoutDirection } from "../hooks/useDeckLayoutControls";
+import { useFuelChipClick } from "../hooks/useFuelChipClick";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
 
 const DEFAULT_FUEL_TYPES = ["BEV", "HEV", "PHEV", "MHEV", "ICE"];
@@ -1028,21 +1029,7 @@ export function VersionComparisonPage() {
     [page],
   );
 
-  function toggleFuel(fuel: string) {
-    setSelectedFuelTypes((current) => {
-      if (current.includes(fuel)) {
-        return current.length > 1 ? current.filter((item) => item !== fuel) : current;
-      }
-      return [...current, fuel];
-    });
-  }
-
-  function isolateFuel(fuel: string) {
-    setSelectedFuelTypes((current) => {
-      if (current.length === 1 && current[0] === fuel) return fuelOptions;
-      return [fuel];
-    });
-  }
+  const { toggle, isolate } = useFuelChipClick(fuelOptions, setSelectedFuelTypes);
 
   function handleControlDrawerOpenChange(open: boolean): void {
     setControlToolsOpen(open);
@@ -1574,8 +1561,8 @@ export function VersionComparisonPage() {
                         key={fuel}
                         type="button"
                         className={`market-scan-fuel-chip${active ? " is-active" : ""}`}
-                        onClick={() => toggleFuel(fuel)}
-                        onDoubleClick={() => isolateFuel(fuel)}
+                        onClick={() => toggle(fuel)}
+                        onDoubleClick={() => isolate(fuel)}
                         title="双击只看此动力"
                         style={{
                           borderColor: active ? fuelColor(fuel) : undefined,
