@@ -535,18 +535,17 @@ function buildSmartLabelTraces(
   settings: ExportSettings,
   strategy: ExportLabelOverlapStrategy,
 ): Data[] {
-  const minPriority = strategy === "selected" ? 3 : 2;
+  if (strategy === "selected") return []; // labels come from user clicks, not static priority
+  const minPriority = 2;
   const visibleCandidates = candidates.filter((candidate) => candidate.priority >= minPriority);
   if (visibleCandidates.length === 0) return [];
   const xValues = visibleCandidates.map((item) => item.x);
   const yValues = visibleCandidates.map((item) => item.y);
-  const hidden = strategy === "selected"
-    ? new Set<string>()
-    : filterOverlappingSmartLabels(
-        visibleCandidates,
-        Math.max(...xValues) - Math.min(...xValues) || 1,
-        Math.max(...yValues) - Math.min(...yValues) || 1,
-      );
+  const hidden = filterOverlappingSmartLabels(
+    visibleCandidates,
+    Math.max(...xValues) - Math.min(...xValues) || 1,
+    Math.max(...yValues) - Math.min(...yValues) || 1,
+  );
   const visible = visibleCandidates.filter((candidate) => !hidden.has(candidate.key));
   const textposition = resolveSmartTextPosition(settings.dataLabelPosition);
   const labelFontSize = resolveLabelFontSize(settings);

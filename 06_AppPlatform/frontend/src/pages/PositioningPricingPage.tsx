@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import type { Data, Layout as PlotlyLayout } from "plotly.js";
+import type { Data, Layout as PlotlyLayout, PlotMouseEvent } from "plotly.js";
 
 import { api } from "../api/client";
 import { DeckPeriodTimeline } from "../components/DeckPeriodTimeline";
@@ -746,6 +746,55 @@ export function PositioningPricingPage() {
     ),
     [activeFuelTypes, bubbleExport, bubbleScale, msrpMode, page],
   );
+
+  // --- interactive "selected" label strategy: click to toggle bubble labels ---
+  const [selectedBubbleKeys, setSelectedBubbleKeys] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (bubbleExport.dataLabelOverlapStrategy !== "selected") {
+      setSelectedBubbleKeys(new Set());
+    }
+  }, [bubbleExport.dataLabelOverlapStrategy]);
+  const handleBubbleClick = useCallback((event: Readonly<PlotMouseEvent>) => {
+    if (bubbleExport.dataLabelOverlapStrategy !== "selected") return;
+    const pts = event.points ?? [];
+    if (pts.length === 0) return;
+    const point = pts[0];
+    const fuel = typeof point.data?.name === "string" ? point.data.name : "";
+    const cd = point.customdata;
+    const model = Array.isArray(cd) && cd.length > 0 ? String(cd[0]) : "";
+    if (!fuel || !model) return;
+    const key = `${fuel}|${model}`;
+    setSelectedBubbleKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) { next.delete(key); } else { next.add(key); }
+      return next;
+    });
+  }, [bubbleExport.dataLabelOverlapStrategy]);
+  const selectedBubbleLabelTraces: Data[] = useMemo(() => {
+    if (selectedBubbleKeys.size === 0 || !page) return [];
+    const allItems = page.bubbleChart.items;
+    const msrpField = msrpMode === "median" ? "msrp" as const : "msrpMin" as const;
+    const matched = allItems.filter((item) => {
+      const fuel = String(item.powertrain ?? "");
+      const model = (item.model ?? "").trim();
+      return selectedBubbleKeys.has(`${fuel}|${model}`);
+    });
+    if (matched.length === 0) return [];
+    return [{
+      type: "scatter",
+      mode: "text",
+      name: "clicked-labels",
+      showlegend: false,
+      x: matched.map((item) => item.length),
+      y: matched.map((item) => item[msrpField]),
+      text: matched.map((item) => (item.model ?? "").trim()),
+      textposition: bubbleExport.dataLabelPosition || "top",
+      textfont: { size: (bubbleExport.labelFontSize ?? bubbleExport.fontSize) ?? 9, color: "#1d4ed8" },
+      cliponaxis: false,
+      hoverinfo: "skip",
+    } as Data];
+  }, [selectedBubbleKeys, page, msrpMode, bubbleExport]);
+
   const priceBandChartKey = [
     "price",
     priceBandExport.dataLabelMode,
@@ -763,7 +812,13 @@ export function PositioningPricingPage() {
     bubbleExport.fontSize,
     bubbleExport.labelFontSize ?? bubbleExport.fontSize,
     bubbleExport.decimalPlaces,
+    selectedBubbleKeys.size,
+    ...[...selectedBubbleKeys].sort(),
   ].join("-");
+  const bubbleChartData = useMemo(
+    () => [...bubbleTraces, ...selectedBubbleLabelTraces],
+    [bubbleTraces, selectedBubbleLabelTraces],
+  );
   const priceTruthLayer = useMemo(
     () => buildPositioningTruthLayer(deck?.metadata.priceOverlay),
     [deck],
@@ -1276,8 +1331,9 @@ export function PositioningPricingPage() {
                             {bubbleTraces.length > 0 ? (
                               <PlotlyChart
                                 key={bubbleChartKey}
-                                data={bubbleTraces}
+                                data={bubbleChartData}
                                 layout={applyPositioningExportToLayout(bubbleLayout(page), bubbleExport)}
+                                onClick={handleBubbleClick}
                                 height={chartHeight}
                               />
                             ) : (
