@@ -22,6 +22,11 @@ interface AccessUser {
   id: string;
   username: string;
   role: string;
+  email?: string | null;
+  display_name?: string | null;
+  displayName?: string | null;
+  oauth_provider?: string | null;
+  oauthProvider?: string | null;
   is_active?: boolean;
   isActive?: boolean;
   primary_country_code?: string | null;
@@ -148,6 +153,13 @@ export function AccessControlPage() {
     } catch (e: unknown) { setError(e instanceof Error ? e.message : "Profile update failed"); }
   };
 
+  const toggleActive = async (userId: string) => {
+    try {
+      await api.patch(`/auth/users/${userId}/toggle-active`);
+      loadUsers();
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : "Toggle failed"); }
+  };
+
   const reviewRequest = async (requestId: string, status: "approved" | "rejected") => {
     setReviewingRequestId(requestId);
     setError("");
@@ -199,10 +211,12 @@ export function AccessControlPage() {
             <table className="data-table" style={{ fontSize: 13 }}>
               <thead>
                 <tr>
+                  <th>Display Name</th>
                   <th>Username</th>
+                  <th>Email</th>
+                  <th>OAuth</th>
                   <th>Role</th>
                   <th>Primary Country</th>
-                  <th>Secondary</th>
                   <th>Status</th>
                   <th>Created</th>
                   <th>Actions</th>
@@ -215,7 +229,10 @@ export function AccessControlPage() {
                   const secondary = u.secondaryCountries ?? u.secondary_country_codes ?? [];
                   return (
                   <tr key={u.id}>
-                    <td>{u.username}</td>
+                    <td style={{ fontWeight: 500 }}>{u.displayName ?? u.display_name ?? u.username}</td>
+                    <td style={{ fontSize: 12, color: "#64748b" }}>{u.username}</td>
+                    <td style={{ fontSize: 12 }}>{u.email ?? "—"}</td>
+                    <td style={{ fontSize: 11, color: "#64748b" }}>{u.oauthProvider ?? u.oauth_provider ?? "password"}</td>
                     <td>
                       <select value={u.role} onChange={(e) => updateRole(u.id, e.target.value)}
                         style={{ padding: "2px 4px", fontSize: 12 }}>
@@ -236,19 +253,15 @@ export function AccessControlPage() {
                         ))}
                       </select>
                     </td>
-                    <td>
-                      <input
-                        defaultValue={secondary.join(",")}
-                        placeholder="SE,CZ"
-                        onBlur={(e) => updateProfile(u, primary, e.target.value)}
-                        style={{ width: 110, padding: "2px 4px", fontSize: 12 }}
-                      />
-                    </td>
-                    <td style={{ color: active ? "#16a34a" : "#dc2626" }}>{active ? "Active" : "Inactive"}</td>
+                    <td style={{ color: active ? "#16a34a" : "#dc2626", fontWeight: 500 }}>{active ? "Active" : "Inactive"}</td>
                     <td style={{ fontSize: 11, color: "#64748b" }}>{u.created_at_utc?.slice(0, 10) || "—"}</td>
                     <td>
-                      <button className="btn btn-sm btn-ghost" disabled={u.username === user?.username}
-                        onClick={() => {/* TODO: deactivate */}}>Deactivate</button>
+                      <button className="btn btn-sm btn-ghost"
+                        disabled={u.username === user?.username}
+                        onClick={() => toggleActive(u.id)}
+                        style={{ color: active ? "#dc2626" : "#16a34a" }}>
+                        {active ? "Deactivate" : "Activate"}
+                      </button>
                     </td>
                   </tr>
                 );})}

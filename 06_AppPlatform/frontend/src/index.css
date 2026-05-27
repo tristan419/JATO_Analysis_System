@@ -224,7 +224,7 @@ button, input, select, textarea {
 .mega-menu-panel-link.active{border-left-color:var(--c-primary);color:var(--c-primary)}
 .mega-menu-panel-link-label{font-size:13px;font-weight:600}
 .mega-menu-panel-link-sublabel{color:var(--c-shell-muted);font-size:11px}
-.mega-menu-user{display:flex;align-items:center;gap:10px;margin-left:16px;padding-left:16px;border-left:1px solid #252a31;font-size:11px;color:#94a3b8;white-space:nowrap}
+.mega-menu-user{position:relative;display:flex;align-items:center;gap:10px;margin-left:16px;padding-left:16px;border-left:1px solid #252a31;font-size:11px;color:#94a3b8;white-space:nowrap}
 .mega-menu-ai-btn{display:flex;align-items:center;justify-content:center;padding:4px;color:var(--c-shell-muted);transition:color var(--transition)}
 .mega-menu-ai-btn:hover{color:var(--c-primary)}
 .mega-menu-username{color:#e2e8f0;font-weight:500}
@@ -236,6 +236,25 @@ button, input, select, textarea {
 .mega-menu-overlay{display:none}
 .mega-menu-drawer{display:none}
 @media(max-width:768px){.mega-menu{display:none}.mega-menu-overlay{display:block;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:58}.mega-menu-drawer{display:block;position:fixed;top:0;left:0;bottom:0;width:300px;max-width:85vw;background:var(--c-bg-deep);border-right:1px solid #252a31;z-index:59;overflow-y:auto;transform:translateX(-100%);transition:transform 220ms cubic-bezier(0.22,0.61,0.36,1)}.mega-menu-drawer.is-open{transform:translateX(0)}.mega-menu-drawer-inner{padding:16px 0}.mega-menu-drawer-link{display:flex;flex-direction:column;gap:2px;padding:14px 20px;color:var(--c-shell-text);text-decoration:none;border-left:3px solid transparent}.mega-menu-drawer-link.active{border-left-color:var(--c-primary);background:rgba(28,105,212,0.08)}.mega-menu-drawer-link-label{font-size:14px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase}.mega-menu-drawer-link-sublabel{color:var(--c-shell-muted);font-size:12px}.mega-menu-drawer-accordion-trigger{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;width:100%;padding:14px 20px;background:none;border:none;border-left:3px solid transparent;color:var(--c-shell-text);cursor:pointer;text-align:left;position:relative}.mega-menu-drawer-accordion-trigger.active{border-left-color:var(--c-primary)}.mega-menu-drawer-accordion-trigger .mega-menu-chevron{position:absolute;right:16px;top:50%;transform:translateY(-50%)}.mega-menu-drawer-accordion-trigger .mega-menu-chevron.is-open{transform:translateY(-50%) rotate(180deg)}.mega-menu-drawer-accordion-label{font-size:14px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase}.mega-menu-drawer-accordion-sublabel{color:var(--c-shell-muted);font-size:12px}.mega-menu-drawer-accordion-panel{max-height:0;overflow:hidden;transition:max-height 220ms ease}.mega-menu-drawer-accordion-panel.is-open{max-height:600px}.mega-menu-drawer-group{padding:8px 0}.mega-menu-drawer-group-title{display:block;padding:4px 20px 4px 28px;font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--c-shell-muted)}.mega-menu-drawer-sublink{display:block;padding:10px 20px 10px 28px;color:var(--c-shell-text);text-decoration:none;font-size:13px;transition:color var(--transition),background var(--transition)}.mega-menu-drawer-sublink:hover{color:var(--c-primary)}.mega-menu-drawer-user{margin-top:16px;padding:16px 20px;border-top:1px solid #252a31;display:flex;flex-direction:column;gap:12px}.mega-menu-drawer-ai{display:flex;align-items:center;gap:8px;color:var(--c-shell-muted);text-decoration:none;font-size:13px}.mega-menu-drawer-auth{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.top-bar-menu-toggle{display:flex}}
+.mega-menu-profile-trigger{position:relative}
+.mega-menu-profile-btn{display:flex;align-items:center;gap:8px;padding:0;background:none;border:none;color:#94a3b8;cursor:pointer;font-size:11px}
+.mega-menu-profile-btn:hover{color:#e2e8f0}
+.mega-menu-avatar{width:22px;height:22px;border-radius:50%;object-fit:cover;flex-shrink:0}
+.mega-menu-avatar-fallback{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#1c69d4;color:#fff;font-size:10px;font-weight:700;flex-shrink:0}
+.mega-menu-profile-popover{position:absolute;top:calc(100% + 8px);right:0;z-index:55;width:260px;background:#000;border:1px solid #334155;border-radius:8px;box-shadow:0 16px 32px rgba(0,0,0,0.6);overflow:hidden}
+.mega-menu-profile-popover-header{display:flex;align-items:center;gap:12px;padding:16px;border-bottom:1px solid #334155}
+.mega-menu-profile-popover-avatar{width:40px;height:40px;border-radius:50%;object-fit:cover;flex-shrink:0}
+.mega-menu-profile-popover-avatar-fallback{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:50%;background:#1c69d4;color:#fff;font-size:16px;font-weight:700;flex-shrink:0}
+.mega-menu-profile-popover-name{font-size:14px;font-weight:700;color:#f1f5f9}
+.mega-menu-profile-popover-email{font-size:11px;color:#94a3b8;margin-top:2px}
+.mega-menu-profile-popover-body{display:flex;flex-direction:column;gap:6px;padding:12px 16px;border-bottom:1px solid #334155}
+.mega-menu-profile-popover-row{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#94a3b8}
+.mega-menu-profile-popover-row span:first-child{color:#64748b}
+.mega-menu-profile-popover-actions{display:flex;flex-direction:column;gap:2px;padding:8px}
+.mega-menu-profile-popover-action{display:block;width:100%;padding:8px 12px;background:none;border:none;border-radius:4px;color:#e2e8f0;font-size:12px;text-align:left;text-decoration:none;cursor:pointer;transition:background .15s}
+.mega-menu-profile-popover-action:hover{background:rgba(255,255,255,0.06)}
+.mega-menu-profile-popover-signout{color:#ef4444}
+.mega-menu-profile-popover-signout:hover{background:rgba(239,68,68,0.08)}
 /* ── Customer Insight audience tabs ───────────────────── */
 .customer-insight-audience-tabs{display:flex;gap:4px;margin-bottom:12px;flex-wrap:wrap}
 .customer-insight-audience-tab{display:flex;flex-direction:column;gap:2px;padding:10px 20px;background:var(--c-surface);border:1px solid var(--c-border-soft);color:var(--c-text-secondary);cursor:pointer;text-align:left;transition:border-color var(--transition),color var(--transition),background var(--transition)}
@@ -7983,6 +8002,9 @@ table.data-table tr.data-table-group-row.contains-selection td {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.market-scan-slide-tab-cache { position: relative; min-height: 0; display: flex; flex-direction: column; }
+.market-scan-slide-tab-cache-item { min-height: 0; flex: 1; }
+.market-scan-slide-tab-cache-item:not(.is-active) { position: absolute; left: -9999px; width: 100%; visibility: hidden; pointer-events: none; }
 .market-scan-slide-content {
   min-height: 0;
   display: flex;
@@ -11264,6 +11286,22 @@ table.data-table tr.data-table-group-row.contains-selection td {
   gap: 10px;
 }
 
+.market-scan-slide-frame .market-scan-slide-content > .market-scan-panel {
+  height: auto;
+}
+
+.market-scan-slide-frame .market-scan-slide-content > .market-scan-panel > .market-scan-panel-body {
+  flex: 0 0 auto;
+}
+
+.market-scan-slide-frame .market-scan-slide-tab-cache-item > .market-scan-panel {
+  height: auto;
+}
+
+.market-scan-slide-frame .market-scan-slide-tab-cache-item > .market-scan-panel > .market-scan-panel-body {
+  flex: 0 0 auto;
+}
+
 .market-scan-slide-frame .market-scan-panel-head h2 {
   font-size: 15px;
 }
@@ -11451,11 +11489,27 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 .market-scan-slide-frame--segment .market-scan-panel--insight-summary {
-  padding: 6px 8px;
+  padding: 4px 8px;
+  gap: 4px;
+}
+.market-scan-slide-frame--segment .market-scan-panel--insight-summary .market-scan-panel-head {
+  gap: 4px;
+}
+.market-scan-slide-frame--segment .market-scan-panel--insight-summary .market-scan-panel-head h2 {
+  font-size: 12px;
+  margin: 0;
+}
+.market-scan-slide-frame--segment .market-scan-panel--insight-summary .market-scan-panel-eyebrow {
+  font-size: 7px;
+  letter-spacing: 0.1em;
 }
 
 .market-scan-slide-frame--segment .market-scan-insight-summary-layout {
-  gap: 5px;
+  gap: 3px;
+}
+.market-scan-slide-frame--segment .market-scan-insight-channel-block {
+  gap: 3px;
+  padding-top: 4px;
 }
 
 .market-scan-slide-frame--segment .market-scan-panel--insight-summary .market-scan-insight--dense {

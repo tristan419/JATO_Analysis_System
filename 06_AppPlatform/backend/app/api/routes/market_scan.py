@@ -37,6 +37,7 @@ def market_scan_deck(
         body_window_months=payload.body_window_months,
         ranking_limit=payload.ranking_limit,
         drilldown_segment=payload.drilldown_segment,
+        view=payload.view,
     )
 
 

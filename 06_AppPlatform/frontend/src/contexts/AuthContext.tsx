@@ -11,6 +11,10 @@ import {
 export interface User {
   username: string;
   role: string;
+  email: string | null;
+  oauthProvider: string | null;
+  avatarUrl: string | null;
+  displayName: string | null;
   primaryCountry: string | null;
   secondaryCountries: string[];
   preferredLandingPage: string | null;
@@ -31,6 +35,7 @@ export interface UserProfileUpdate {
   primaryCountry: string | null;
   secondaryCountries: string[];
   preferredLandingPage?: string | null;
+  displayName?: string | null;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -52,6 +57,10 @@ function normalizeUserPayload(data: Record<string, unknown>): User {
   return {
     username: String(data.username ?? ""),
     role: String(data.role ?? "viewer"),
+    email: data.email ? String(data.email) : null,
+    oauthProvider: data.oauthProvider ? String(data.oauthProvider) : null,
+    avatarUrl: data.avatarUrl ? String(data.avatarUrl) : null,
+    displayName: data.displayName ? String(data.displayName) : null,
     primaryCountry,
     secondaryCountries: secondary,
     preferredLandingPage: data.preferredLandingPage
@@ -99,6 +108,10 @@ function loadUser(): User | null {
     return {
       username,
       role,
+      email: null,
+      oauthProvider: null,
+      avatarUrl: null,
+      displayName: null,
       primaryCountry,
       secondaryCountries,
       preferredLandingPage: localStorage.getItem(STORAGE_PREFERRED_LANDING),
@@ -141,12 +154,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfileLoaded(true);
   }, [applyUser]);
 
-  // Handle Feishu OAuth callback (token in URL params)
+  // Handle OAuth callback (token in URL params from Google / Feishu)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlToken = params.get("token");
     const urlUser = params.get("username");
     const urlRole = params.get("role");
+    const isNewUser = params.get("isNewUser") === "true";
     if (urlToken && urlUser) {
       localStorage.setItem(STORAGE_TOKEN, urlToken);
       localStorage.removeItem("shared-filter-scope");
@@ -154,14 +168,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       applyUser({
         username: urlUser,
         role: urlRole || "viewer",
+        email: null,
+        oauthProvider: "google",
+        avatarUrl: null,
+        displayName: null,
         primaryCountry: null,
         secondaryCountries: [],
         preferredLandingPage: null,
         profileComplete: false,
       });
-      // Clean URL
-      const newUrl = window.location.pathname;
-      window.history.replaceState({}, "", newUrl);
+      // Clean URL params and redirect new users to country setup
+      if (isNewUser) {
+        window.location.replace("/account/profile");
+      } else {
+        window.history.replaceState({}, "", window.location.pathname);
+      }
     }
   }, [applyUser]);
 
@@ -198,7 +219,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...(currentToken ? { "X-Auth-Token": currentToken } : {}),
         "X-User-Name": localStorage.getItem(STORAGE_USER) || "anonymous",
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, displayName: payload.displayName }),
     });
     if (!res.ok) {
       const msg = await res.text();

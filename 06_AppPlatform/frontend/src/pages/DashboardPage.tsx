@@ -16,6 +16,7 @@ import { DeckControlTabs, type DeckControlTabItem } from "../components/deckCont
 import { DeckExportDrawer } from "../components/deckControls/DeckExportDrawer";
 import { DeckFloatingDrawer } from "../components/deckControls/DeckFloatingDrawer";
 import { useSharedFilterScope } from "../contexts/SharedFilterScopeContext";
+import { useResolvedCountry } from "../hooks/useResolvedCountry";
 import {
   FILTER_ORDER,
 } from "../dashboardFilters";
@@ -125,16 +126,21 @@ export function DashboardPage() {
     return FILTER_ORDER.some(({ key }) => params.has(key));
   }, [currentSearch]);
 
-  /* auto-select all countries on first load */
+  /* auto-select the user's primary country on first load (fallback: all countries) */
+  const { country: defaultCountryZh } = useResolvedCountry("zh");
   const countryAutoApplied = useRef(false);
   useEffect(() => {
     if (!filtersReady || countryAutoApplied.current || hasFilterSearchParams) return;
     const countryOptions = optionsMap.country ?? [];
     if (countryOptions.length > 0 && selections.country.length === 0) {
       countryAutoApplied.current = true;
-      void onFilterChange("country", countryOptions);
+      const preferred =
+        defaultCountryZh && countryOptions.includes(defaultCountryZh)
+          ? [defaultCountryZh]
+          : countryOptions;
+      void onFilterChange("country", preferred);
     }
-  }, [filtersReady, hasFilterSearchParams, optionsMap.country, selections.country, onFilterChange]);
+  }, [filtersReady, hasFilterSearchParams, optionsMap.country, selections.country, onFilterChange, defaultCountryZh]);
 
   /* time-series controls */
   const [activeTab, setActiveTab] = useState<"year"|"month">(() => cachedPage?.activeTab ?? "month");

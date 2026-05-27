@@ -42,8 +42,8 @@ function matrixLabels(matrix: MarketScanMatrix): string[] {
   return [...matrix.columns, ...matrix.rows.map((row) => row.label)];
 }
 
-function narrativeBlockCount(text: string): number {
-  const normalized = text.trim();
+function narrativeBlockCount(text: string | undefined): number {
+  const normalized = (text ?? "").trim();
   if (!normalized) {
     return 0;
   }
@@ -81,85 +81,91 @@ export function buildMarketScanSlideFitAssessment({
     const page = deck.results.overview;
     chartCount = 3;
     primaryItemCount = Math.max(
-      page.monthlyBrandRanking.items.length,
-      page.ytdBrandRanking.items.length,
-      page.rolling12BrandRanking.items.length,
+      page?.monthlyBrandRanking?.items?.length ?? 0,
+      page?.ytdBrandRanking?.items?.length ?? 0,
+      page?.rolling12BrandRanking?.items?.length ?? 0,
     );
-    secondaryItemCount = page.trend.items.length;
+    secondaryItemCount = page?.trend?.items?.length ?? 0;
     seriesCount = deck.metadata.selectedFuelTypes.length;
     labels = [
-      ...page.trend.items.map((item) => item.label),
-      ...rankingLabels(page.monthlyBrandRanking.items),
-      ...rankingLabels(page.ytdBrandRanking.items),
-      ...rankingLabels(page.rolling12BrandRanking.items),
+      ...(page?.trend?.items ?? []).map((item: { label: string }) => item.label),
+      ...rankingLabels(page?.monthlyBrandRanking?.items ?? []),
+      ...rankingLabels(page?.ytdBrandRanking?.items ?? []),
+      ...rankingLabels(page?.rolling12BrandRanking?.items ?? []),
     ];
   } else if (activePage === "origin") {
     const page = deck.results.origin;
-    chartCount = 2 + Math.min(2, page.brandTrend.groups.length);
+    const groups = page?.brandTrend?.groups ?? [];
+    const series = page?.trend?.series ?? [];
+    chartCount = 2 + Math.min(2, groups.length);
     primaryItemCount = Math.max(
-      page.trend.series.length,
-      ...page.brandTrend.groups.map((group) => group.series.length),
-      page.matrix.rows.length,
+      series.length,
+      ...groups.map((g) => g.series?.length ?? 0),
+      page?.matrix?.rows?.length ?? 0,
+      0,
     );
-    secondaryItemCount = page.matrix.columns.length + page.matrix.rows.length;
+    secondaryItemCount = (page?.matrix?.columns?.length ?? 0) + (page?.matrix?.rows?.length ?? 0);
     seriesCount = Math.max(
-      page.trend.series.length,
-      ...page.brandTrend.groups.map((group) => group.series.length),
+      series.length,
+      ...groups.map((g) => g.series?.length ?? 0),
+      0,
     );
     labels = [
-      ...page.trend.series.map((item) => item.origin),
-      ...page.brandTrend.groups.flatMap((group) => [
-        group.origin,
-        ...group.series.flatMap((item) => (item.brand ? [item.brand] : [])),
+      ...series.map((s) => s.origin ?? "").filter(Boolean),
+      ...groups.flatMap((g) => [
+        g.origin ?? "",
+        ...(g.series ?? []).flatMap((s) => (s.brand ? [s.brand] : [])),
       ]),
-      ...matrixLabels(page.matrix),
+      ...matrixLabels(page?.matrix ?? { columns: [], rows: [] } as MarketScanMatrix),
     ];
   } else if (activePage === "segment") {
     const page = deck.results.segment;
     chartCount = 3;
     primaryItemCount = Math.max(
-      page.bodyShareTrend.items.length,
-      page.suvSegmentShareTrend.items.length,
+      page?.bodyShareTrend?.items?.length ?? 0,
+      page?.suvSegmentShareTrend?.items?.length ?? 0,
     );
-    secondaryItemCount = page.matrix.rows.length + page.matrix.columns.length;
+    secondaryItemCount = (page?.matrix?.rows?.length ?? 0) + (page?.matrix?.columns?.length ?? 0);
     seriesCount = 4;
     labels = [
-      ...page.bodyShareTrend.items.map((item) => item.label),
-      ...page.suvSegmentShareTrend.items.map((item) => item.label),
-      ...matrixLabels(page.matrix),
+      ...(page?.bodyShareTrend?.items ?? []).map((item: { label: string }) => item.label),
+      ...(page?.suvSegmentShareTrend?.items ?? []).map((item: { label: string }) => item.label),
+      ...matrixLabels(page?.matrix ?? { columns: [], rows: [] } as MarketScanMatrix),
     ];
   } else {
-    const page = deck.results[activePage] as MarketScanDrilldownPage;
-    chartCount = 2 + page.fuelPanels.length;
+    const page = deck.results[activePage] as MarketScanDrilldownPage | undefined;
+    const panels = page?.fuelPanels ?? [];
+    chartCount = 2 + panels.length;
     primaryItemCount = Math.max(
-      page.monthTotalRanking.items.length,
-      page.totalRanking.items.length,
-      page.rolling12TotalRanking.items.length,
-      ...page.fuelPanels.map((panel) => panel.monthRanking.length),
-      ...page.fuelPanels.map((panel) => panel.ytdRanking.length),
-      ...page.fuelPanels.map((panel) => panel.rolling12Ranking.length),
+      page?.monthTotalRanking?.items?.length ?? 0,
+      page?.totalRanking?.items?.length ?? 0,
+      page?.rolling12TotalRanking?.items?.length ?? 0,
+      ...panels.map((p) => p.monthRanking?.length ?? 0),
+      ...panels.map((p) => p.ytdRanking?.length ?? 0),
+      ...panels.map((p) => p.rolling12Ranking?.length ?? 0),
+      0,
     );
     secondaryItemCount = Math.max(
-      page.monthFuelTrend.items.length,
-      page.ytdFuelTrend.items.length,
-      page.rolling12FuelTrend.items.length,
+      page?.monthFuelTrend?.items?.length ?? 0,
+      page?.ytdFuelTrend?.items?.length ?? 0,
+      page?.rolling12FuelTrend?.items?.length ?? 0,
     );
     seriesCount = Math.max(
       deck.metadata.selectedFuelTypes.length,
-      page.fuelPanels.length,
+      panels.length,
     );
     labels = [
-      ...rankingLabels(page.monthTotalRanking.items),
-      ...rankingLabels(page.totalRanking.items),
-      ...rankingLabels(page.rolling12TotalRanking.items),
-      ...page.monthFuelTrend.items.map((item) => item.label),
-      ...page.ytdFuelTrend.items.map((item) => item.label),
-      ...page.rolling12FuelTrend.items.map((item) => item.label),
-      ...page.fuelPanels.flatMap((panel) => [
-        panel.fuelType,
-        ...rankingLabels(panel.monthRanking),
-        ...rankingLabels(panel.ytdRanking),
-        ...rankingLabels(panel.rolling12Ranking),
+      ...rankingLabels(page?.monthTotalRanking?.items ?? []),
+      ...rankingLabels(page?.totalRanking?.items ?? []),
+      ...rankingLabels(page?.rolling12TotalRanking?.items ?? []),
+      ...(page?.monthFuelTrend?.items ?? []).map((item: { label: string }) => item.label),
+      ...(page?.ytdFuelTrend?.items ?? []).map((item: { label: string }) => item.label),
+      ...(page?.rolling12FuelTrend?.items ?? []).map((item: { label: string }) => item.label),
+      ...panels.flatMap((p) => [
+        p.fuelType,
+        ...rankingLabels(p.monthRanking ?? []),
+        ...rankingLabels(p.ytdRanking ?? []),
+        ...rankingLabels(p.rolling12Ranking ?? []),
       ]),
     ];
   }

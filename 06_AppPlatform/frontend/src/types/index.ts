@@ -701,6 +701,7 @@ export interface MarketScanDeckRequest {
   body_window_months?: number;
   ranking_limit?: number;
   drilldown_segment?: string | null;
+  view?: string | null;
 }
 
 export interface MarketScanPeriodRange {

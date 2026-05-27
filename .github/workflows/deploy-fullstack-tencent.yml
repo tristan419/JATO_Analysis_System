@@ -211,6 +211,8 @@ jobs:
           REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
           REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
           REMOTE_EXPORTS+="export HERMES_SYNC_TOKEN=$(printf '%q' '${{ secrets.HERMES_SYNC_TOKEN }}'); "
+          REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_ID }}'); "
+          REMOTE_EXPORTS+="export GOOGLE_CLIENT_SECRET=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_SECRET }}'); "
 
           ssh -v -p "$SSH_PORT" \
             -o BatchMode=yes \
@@ -247,6 +249,24 @@ jobs:
                 echo "APP_COUNTRY_CHAT_MODEL_OPTIONS=deepseek:deepseek-chat"
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
               echo "[INFO] DeepSeek config updated"
+            fi
+          fi
+
+          if [ -n "${GOOGLE_CLIENT_ID:-}" ]; then
+            echo "[INFO] Configuring Google OAuth in backend env..."
+            sudo -n mkdir -p "$(dirname "$ENV_FILE")" 2>/dev/null || true
+            if sudo -n test -f "$ENV_FILE" 2>/dev/null; then
+              sudo -n sed -i '/^APP_GOOGLE_CLIENT_ID=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_GOOGLE_CLIENT_SECRET=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_GOOGLE_REDIRECT_URI=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_FRONTEND_ORIGIN=/d' "$ENV_FILE" 2>/dev/null || true
+              {
+                echo "APP_GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID"
+                echo "APP_GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET"
+                echo "APP_GOOGLE_REDIRECT_URI=https://www.ojeur.cloud/v1/auth/google/callback"
+                echo "APP_FRONTEND_ORIGIN=https://www.ojeur.cloud"
+              } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
+              echo "[INFO] Google OAuth config updated"
             fi
           fi
 
@@ -333,6 +353,8 @@ jobs:
           REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
           REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
           REMOTE_EXPORTS+="export HERMES_SYNC_TOKEN=$(printf '%q' '${{ secrets.HERMES_SYNC_TOKEN }}'); "
+          REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_ID }}'); "
+          REMOTE_EXPORTS+="export GOOGLE_CLIENT_SECRET=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_SECRET }}'); "
 
           sshpass -p "$SSH_PASSWORD" \
             ssh -v -p "$SSH_PORT" \
@@ -370,6 +392,24 @@ jobs:
                 echo "APP_COUNTRY_CHAT_MODEL_OPTIONS=deepseek:deepseek-chat"
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
               echo "[INFO] DeepSeek config updated"
+            fi
+          fi
+
+          if [ -n "${GOOGLE_CLIENT_ID:-}" ]; then
+            echo "[INFO] Configuring Google OAuth in backend env..."
+            sudo -n mkdir -p "$(dirname "$ENV_FILE")" 2>/dev/null || true
+            if sudo -n test -f "$ENV_FILE" 2>/dev/null; then
+              sudo -n sed -i '/^APP_GOOGLE_CLIENT_ID=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_GOOGLE_CLIENT_SECRET=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_GOOGLE_REDIRECT_URI=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_FRONTEND_ORIGIN=/d' "$ENV_FILE" 2>/dev/null || true
+              {
+                echo "APP_GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID"
+                echo "APP_GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET"
+                echo "APP_GOOGLE_REDIRECT_URI=https://www.ojeur.cloud/v1/auth/google/callback"
+                echo "APP_FRONTEND_ORIGIN=https://www.ojeur.cloud"
+              } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
+              echo "[INFO] Google OAuth config updated"
             fi
           fi
 

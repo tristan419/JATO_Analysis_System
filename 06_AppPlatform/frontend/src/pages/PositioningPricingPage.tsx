@@ -41,9 +41,9 @@ import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefault
 import { useArrowCountryNavigation } from "../utils/useArrowCountryNavigation";
 import { useFixedCanvasPreview } from "../utils/useFixedCanvasPreview";
 import { useDeckLayoutControls, type DeckLayoutDirection } from "../hooks/useDeckLayoutControls";
+import { useResolvedCountry } from "../hooks/useResolvedCountry";
 
 const DEFAULT_FUEL_TYPES = ["BEV", "HEV", "PHEV", "MHEV", "ICE"];
-const DEFAULT_COUNTRY = "瑞典";
 const DEFAULT_SALES_MODE: PositioningPricingSalesMode = "month";
 const DEFAULT_MSRP_MIN = 20000;
 const DEFAULT_MSRP_MAX = 60000;
@@ -516,6 +516,7 @@ function applyPositioningExportToLayout(
 
 export function PositioningPricingPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { country: defaultCountry } = useResolvedCountry("zh");
   const [deck, setDeck] = useState<PositioningPricingDeckResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -538,7 +539,7 @@ export function PositioningPricingPage() {
     },
   );
   const [selectedCountry, setSelectedCountry] = useState<string | null>(
-    () => searchParams.get("country") || DEFAULT_COUNTRY,
+    () => searchParams.get("country") || defaultCountry,
   );
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(
     () => searchParams.get("period"),
@@ -630,7 +631,7 @@ export function PositioningPricingPage() {
 
   useArrowCountryNavigation({
     options: countryOptions,
-    activeValue: selectedCountry || DEFAULT_COUNTRY,
+    activeValue: selectedCountry || defaultCountry,
     onSelect: (value) => setSelectedCountry(value || null),
   });
 
@@ -697,7 +698,7 @@ export function PositioningPricingPage() {
     }
   }, [deck, selectedCountry, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
 
-  const currentCountry = selectedCountry ?? deck?.metadata.selectedCountry ?? DEFAULT_COUNTRY;
+  const currentCountry = selectedCountry ?? deck?.metadata.selectedCountry ?? defaultCountry;
   const resolvedTimeRange = selectedTimeRange ?? deck?.metadata.selectedTimeRange ?? null;
   const customRangeActive = isCustomTimeRange(resolvedTimeRange);
   const fuelOptions = deck?.metadata.availableFuelTypes ?? DEFAULT_FUEL_TYPES;
@@ -763,6 +764,15 @@ export function PositioningPricingPage() {
         return current.length > 1 ? current.filter((item) => item !== fuel) : current;
       }
       return [...current, fuel];
+    });
+  }
+
+  function isolateFuel(fuel: string) {
+    setSelectedFuelTypes((current) => {
+      if (current.length === 1 && current[0] === fuel) {
+        return fuelOptions;
+      }
+      return [fuel];
     });
   }
 
@@ -1064,6 +1074,8 @@ export function PositioningPricingPage() {
                         type="button"
                         className={`market-scan-fuel-chip${active ? " is-active" : ""}`}
                         onClick={() => toggleFuel(fuel)}
+                        onDoubleClick={() => isolateFuel(fuel)}
+                        title="双击只看此动力"
                         style={{
                           borderColor: active ? fuelColor(fuel) : undefined,
                           background: active ? `${fuelColor(fuel)}16` : undefined,
@@ -1102,7 +1114,7 @@ export function PositioningPricingPage() {
                     type="button"
                     className="btn btn-ghost btn-sm"
                     onClick={() => {
-                      setSelectedCountry(DEFAULT_COUNTRY);
+                      setSelectedCountry(defaultCountry);
                       setSelectedPeriod(null);
                       setSalesMode(DEFAULT_SALES_MODE);
                       setSelectedFuelTypes(DEFAULT_FUEL_TYPES);

@@ -45,3 +45,21 @@ export function countryCodeToDatasetCountry(countryCode: string | null | undefin
 export function formatJatoCountryOption(country: JatoCountryOption): string {
   return `${country.countryNameZh} / ${country.countryName} (${country.countryCode})`;
 }
+
+/** Fallback country for admin, anonymous, or unset profile. */
+export const FALLBACK_COUNTRY_ISO = "SE";
+export const FALLBACK_COUNTRY_ZH = "瑞典";
+
+/**
+ * Resolve the default country from a user profile ISO code.
+ * Falls back to Sweden when the primaryCountry is unset or unrecognized.
+ */
+export function resolveDefaultCountry(
+  primaryCountry: string | null | undefined,
+  representation: "zh" | "iso",
+): string {
+  if (representation === "iso") {
+    return getJatoCountryByCode(primaryCountry)?.countryCode ?? FALLBACK_COUNTRY_ISO;
+  }
+  return countryCodeToDatasetCountry(primaryCountry) ?? FALLBACK_COUNTRY_ZH;
+}

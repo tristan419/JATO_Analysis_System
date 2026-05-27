@@ -4082,6 +4082,7 @@ def query_market_scan_deck(
     body_window_months: int,
     ranking_limit: int,
     drilldown_segment: str | None,
+    view: str | None = None,
 ) -> dict[str, Any]:
     ranking_limit = max(MIN_MARKET_SCAN_RANKING_LIMIT, int(ranking_limit))
     dataset_token = repo.current_dataset_token()
@@ -4090,7 +4091,8 @@ def query_market_scan_deck(
     time_range_key = ""
     if time_range:
         time_range_key = f"{time_range.get('start', '')}:{time_range.get('end', '')}"
-    local_key = f"{country}|{target_period}|{time_range_key}|{','.join(sorted(fuel_types))}|{trend_window_months}|{origin_window_months}|{body_window_months}|{ranking_limit}|{drilldown_segment}"
+    view_key = view or "all"
+    local_key = f"{country}|{target_period}|{time_range_key}|{','.join(sorted(fuel_types))}|{trend_window_months}|{origin_window_months}|{body_window_months}|{ranking_limit}|{drilldown_segment}|{view_key}"
     now = time.monotonic()
     local_cached = _deck_cache.get(local_key)
     if local_cached is not None:
@@ -4114,6 +4116,7 @@ def query_market_scan_deck(
                 origin_window_months=origin_window_months,
                 body_window_months=body_window_months,
                 drilldown_segment=drilldown_segment,
+                view=view,
             )
             t_cache_start = time.monotonic()
             cached = get_cached_deck(redis_client, cache_key)
@@ -4142,7 +4145,7 @@ def query_market_scan_deck(
         result = _query_market_scan_deck_impl(
             country, target_period, time_range, fuel_types,
             trend_window_months, origin_window_months, body_window_months,
-            ranking_limit, drilldown_segment,
+            ranking_limit, drilldown_segment, view=view,
         )
     except Exception:
         if redis_client is not None and acquired_cache_lock_key is not None:
@@ -4169,6 +4172,7 @@ def query_market_scan_deck(
                 origin_window_months=origin_window_months,
                 body_window_months=body_window_months,
                 drilldown_segment=drilldown_segment,
+                view=view,
             )
             set_cached_deck(redis_client, cache_key, result)
         except Exception:
@@ -4847,6 +4851,7 @@ def _query_market_scan_deck_impl(
     body_window_months: int,
     ranking_limit: int,
     drilldown_segment: str | None,
+    view: str | None = None,
 ) -> dict[str, Any]:
     t_start = time.monotonic()
     columns = _get_columns()
@@ -4965,77 +4970,117 @@ def _query_market_scan_deck_impl(
     t_meta = time.monotonic()
     logger.info("MarketScan [%s] metadata: %.3fs", resolved_period, t_meta - t_setup)
 
-    drilldown_segments = list(dict.fromkeys(
-        s for s in [resolved_drilldown_segment, suv_a_segment, suv_b_segment]
-        if s and s in available_segments
-    ))
-    drilldown_map = _build_all_drilldowns(
-        filtered_frame, available_periods=available_periods, resolved_period=resolved_period,
-        same_month_last_year_period=same_month_last_year_period, segment_values=drilldown_segments,
-        fuel_panels=DRILLDOWN_PANEL_FUELS, ranking_limit=ranking_limit, custom_range_periods=custom_periods,
-    )
-    t_drilldown = time.monotonic()
-    logger.info("MarketScan [%s] drilldown: %.3fs", resolved_period, t_drilldown - t_meta)
-
     results: dict[str, Any] = {}
+    # Fill all keys with empty payloads so the response shape is always consistent
+    empty_dd = _empty_drilldown_payload(resolved_drilldown_segment)
+    empty_suv_a = _empty_drilldown_payload(suv_a_segment)
+    empty_suv_b = _empty_drilldown_payload(suv_b_segment)
+    empty_suv_all = _empty_drilldown_payload(ALL_SUV_DRILLDOWN_KEY)
 
-    # All-SUV drilldown (aggregates all SUV-prefixed segments)
-    suv_frame = filtered_frame[filtered_frame["__segment_raw"].str.startswith("SUV", na=False)].copy()
-    if not suv_frame.empty:
+    def _build_one_drilldown(seg: str) -> dict[str, Any]:
+        segs = [seg] if seg in available_segments else []
+        if not segs:
+            return _empty_drilldown_payload(seg)
+        dd_map = _build_all_drilldowns(
+            filtered_frame, available_periods=available_periods, resolved_period=resolved_period,
+            same_month_last_year_period=same_month_last_year_period, segment_values=segs,
+            fuel_panels=DRILLDOWN_PANEL_FUELS, ranking_limit=ranking_limit, custom_range_periods=custom_periods,
+        )
+        return dd_map.get(seg) or _empty_drilldown_payload(seg)
+
+    def _build_suv_all() -> dict[str, Any]:
+        suv_frame = filtered_frame[filtered_frame["__segment_raw"].str.startswith("SUV", na=False)].copy()
+        if suv_frame.empty:
+            return _empty_drilldown_payload(ALL_SUV_DRILLDOWN_KEY)
         suv_frame["__segment_raw"] = ALL_SUV_DRILLDOWN_KEY
-        suv_all_map = _build_all_drilldowns(
+        suv_map = _build_all_drilldowns(
             suv_frame, available_periods=available_periods, resolved_period=resolved_period,
             same_month_last_year_period=same_month_last_year_period,
             segment_values=[ALL_SUV_DRILLDOWN_KEY],
             fuel_panels=DRILLDOWN_PANEL_FUELS, ranking_limit=ranking_limit,
             custom_range_periods=custom_periods,
         )
-        suv_all_result = suv_all_map.get(ALL_SUV_DRILLDOWN_KEY)
-        if suv_all_result:
-            suv_all_result["segmentLabel"] = "全SUV"
-            suv_all_result["title"] = f"全SUV 车型 {year_text}年1-{month_number}月"
-            suv_all_result["summaryText"] = suv_all_result.get("summaryText", "").replace(
-                ALL_SUV_DRILLDOWN_KEY, "全SUV"
-            )
-        results["suvAll"] = suv_all_result or _empty_drilldown_payload(ALL_SUV_DRILLDOWN_KEY)
-    else:
-        results["suvAll"] = _empty_drilldown_payload(ALL_SUV_DRILLDOWN_KEY)
+        r = suv_map.get(ALL_SUV_DRILLDOWN_KEY)
+        if r:
+            r["segmentLabel"] = "全SUV"
+            r["title"] = f"全SUV 车型 {year_text}年1-{month_number}月"
+            r["summaryText"] = r.get("summaryText", "").replace(ALL_SUV_DRILLDOWN_KEY, "全SUV")
+        return r or _empty_drilldown_payload(ALL_SUV_DRILLDOWN_KEY)
 
-    results["overview"] = _build_overview_payload(
-        filtered_frame, selected_fuels=selected_fuels, available_periods=available_periods,
-        resolved_period=resolved_period, prior_period=prior_period,
-        same_month_last_year_period=same_month_last_year_period, ranking_limit=ranking_limit,
-        custom_range_periods=custom_periods,
-    )
-    t_overview = time.monotonic()
-    logger.info("MarketScan [%s] overview: %.3fs", resolved_period, t_overview - t_drilldown)
+    if view is None:
+        # Legacy: compute everything (backward compatible)
+        drilldown_segments = list(dict.fromkeys(
+            s for s in [resolved_drilldown_segment, suv_a_segment, suv_b_segment]
+            if s and s in available_segments
+        ))
+        drilldown_map = _build_all_drilldowns(
+            filtered_frame, available_periods=available_periods, resolved_period=resolved_period,
+            same_month_last_year_period=same_month_last_year_period, segment_values=drilldown_segments,
+            fuel_panels=DRILLDOWN_PANEL_FUELS, ranking_limit=ranking_limit, custom_range_periods=custom_periods,
+        )
+        results["suvAll"] = _build_suv_all()
+        results["overview"] = _build_overview_payload(
+            filtered_frame, selected_fuels=selected_fuels, available_periods=available_periods,
+            resolved_period=resolved_period, prior_period=prior_period,
+            same_month_last_year_period=same_month_last_year_period, ranking_limit=ranking_limit,
+            custom_range_periods=custom_periods,
+        )
+        results["origin"] = _build_origin_payload(
+            filtered_frame, available_periods=available_periods, resolved_period=resolved_period,
+            prior_period=prior_period, same_month_last_year_period=same_month_last_year_period,
+            origin_window_months=origin_window_months, custom_range_periods=custom_periods,
+        )
+        results["segment"] = _build_segment_payload(
+            filtered_frame, available_periods=available_periods, resolved_period=resolved_period,
+            prior_period=prior_period, same_month_last_year_period=same_month_last_year_period,
+            body_window_months=body_window_months, custom_range_periods=custom_periods,
+        )
+        results["drilldown"] = drilldown_map.get(resolved_drilldown_segment) or empty_dd
+        results["suvA"] = drilldown_map.get(suv_a_segment) or empty_suv_a
+        results["suvB"] = drilldown_map.get(suv_b_segment) or empty_suv_b
+        results["crossTabs"] = _safe_build_cross_tabs(
+            filtered_frame, columns=columns, selected_fuels=selected_fuels,
+            sales_column=_period_to_month_column(resolved_period),
+        )
+    elif view == "overview":
+        results["overview"] = _build_overview_payload(
+            filtered_frame, selected_fuels=selected_fuels, available_periods=available_periods,
+            resolved_period=resolved_period, prior_period=prior_period,
+            same_month_last_year_period=same_month_last_year_period, ranking_limit=ranking_limit,
+            custom_range_periods=custom_periods,
+        )
+    elif view == "origin":
+        results["origin"] = _build_origin_payload(
+            filtered_frame, available_periods=available_periods, resolved_period=resolved_period,
+            prior_period=prior_period, same_month_last_year_period=same_month_last_year_period,
+            origin_window_months=origin_window_months, custom_range_periods=custom_periods,
+        )
+    elif view == "segment":
+        results["segment"] = _build_segment_payload(
+            filtered_frame, available_periods=available_periods, resolved_period=resolved_period,
+            prior_period=prior_period, same_month_last_year_period=same_month_last_year_period,
+            body_window_months=body_window_months, custom_range_periods=custom_periods,
+        )
+    elif view == "drilldown":
+        results["drilldown"] = _build_one_drilldown(resolved_drilldown_segment)
+    elif view == "suvAll":
+        results["suvAll"] = _build_suv_all()
+    elif view == "suvA":
+        results["suvA"] = _build_one_drilldown(suv_a_segment)
+    elif view == "suvB":
+        results["suvB"] = _build_one_drilldown(suv_b_segment)
 
-    results["origin"] = _build_origin_payload(
-        filtered_frame, available_periods=available_periods, resolved_period=resolved_period,
-        prior_period=prior_period, same_month_last_year_period=same_month_last_year_period,
-        origin_window_months=origin_window_months, custom_range_periods=custom_periods,
-    )
-    t_origin = time.monotonic()
-    logger.info("MarketScan [%s] origin: %.3fs", resolved_period, t_origin - t_overview)
+    # Fill missing keys with empty payloads so frontend shape is consistent
+    results.setdefault("overview", {})
+    results.setdefault("origin", {})
+    results.setdefault("segment", {})
+    results.setdefault("drilldown", empty_dd)
+    results.setdefault("suvAll", empty_suv_all)
+    results.setdefault("suvA", empty_suv_a)
+    results.setdefault("suvB", empty_suv_b)
+    results.setdefault("crossTabs", {})
 
-    results["segment"] = _build_segment_payload(
-        filtered_frame, available_periods=available_periods, resolved_period=resolved_period,
-        prior_period=prior_period, same_month_last_year_period=same_month_last_year_period,
-        body_window_months=body_window_months, custom_range_periods=custom_periods,
-    )
-    t_segment = time.monotonic()
-    logger.info("MarketScan [%s] segment: %.3fs", resolved_period, t_segment - t_origin)
-
-    results["drilldown"] = drilldown_map.get(resolved_drilldown_segment) or _empty_drilldown_payload(resolved_drilldown_segment)
-    results["suvA"] = drilldown_map.get(suv_a_segment) or _empty_drilldown_payload(suv_a_segment)
-    results["suvB"] = drilldown_map.get(suv_b_segment) or _empty_drilldown_payload(suv_b_segment)
-
-    results["crossTabs"] = _safe_build_cross_tabs(
-        filtered_frame, columns=columns, selected_fuels=selected_fuels,
-        sales_column=_period_to_month_column(resolved_period),
-    )
-    t_cross = time.monotonic()
-    logger.info("MarketScan [%s] crossTabs: %.3fs", resolved_period, t_cross - t_segment)
-    logger.info("MarketScan [%s] TOTAL: %.3fs", resolved_period, t_cross - t_start)
+    t_done = time.monotonic()
+    logger.info("MarketScan [%s] compute view=%s: %.3fs", resolved_period, view or "all", t_done - t_meta)
 
     return {"metadata": metadata, "dataQuality": data_quality, "results": results}

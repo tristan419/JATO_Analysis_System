@@ -82,7 +82,7 @@ import type {
 
 type MarketScanSalesMode = "month" | "ytd" | "rolling12";
 
-const DEFAULT_FUEL_TYPES = ["ICE", "MHEV", "HEV", "PHEV", "BEV", "LPG"];
+const DEFAULT_FUEL_TYPES = ["ICE", "MHEV", "HEV", "PHEV", "BEV"];
 const DEFAULT_MARKET_SCAN_COUNTRY = "瑞典";
 const DEFAULT_MARKET_SCAN_SALES_MODE: MarketScanSalesMode = "month";
 const MARKET_SCAN_SALES_MODE_OPTIONS: Array<{ value: MarketScanSalesMode; label: string }> = [
@@ -695,6 +695,7 @@ function filterMatrixBySalesMode(
   salesMode: MarketScanSalesMode,
   customRangeActive = false,
 ): MarketScanMatrix {
+  if (!matrix?.rows) return { columns: [], rows: [] };
   const visibleMetricKeys = customRangeActive
     ? new Set(["custom_range", "custom_range_yoy"])
     : salesMode === "month"
@@ -720,18 +721,18 @@ function buildHeroMetrics(
 
 function pageNarrative(deck: MarketScanDeckResponse, pageKey: MarketScanPageKey): string {
   if (deck.metadata.customRangeActive) {
-    return `当前页面已切换为 ${deck.results.overview.summary.customRangeLabel || "自定义区间"} 累计口径。`;
+    return `当前页面已切换为 ${deck.results.overview?.summary?.customRangeLabel || "自定义区间"} 累计口径。`;
   }
   if (pageKey === "overview") {
-    return deck.results.overview.summary.subheadline;
+    return deck.results.overview?.summary?.subheadline ?? "";
   }
   if (pageKey === "origin") {
-    return deck.results.origin.summaryText;
+    return deck.results.origin?.summaryText ?? "";
   }
   if (pageKey === "segment") {
-    return deck.results.segment.summaryText;
+    return deck.results.segment?.summaryText ?? "";
   }
-  return (deck.results[pageKey] as MarketScanDrilldownPage).summaryText;
+  return (deck.results[pageKey] as MarketScanDrilldownPage | undefined)?.summaryText ?? "";
 }
 
 function buildSparseText(
@@ -1795,6 +1796,7 @@ function OverviewSection({
   compact?: boolean;
   onBrandClick?: (brand: string, sourceTable: string) => void;
 }) {
+  if (!page?.trend?.items?.length) return null;
   const insight = buildOverviewInsight(page);
   const rankingGroups = marketScanOverviewRankingGroups(page, salesMode, customRangeActive);
   const trendItems = customRangeActive
@@ -1891,6 +1893,7 @@ function OriginSection({
   exportSettings: ExportSettings;
   compact?: boolean;
 }) {
+  if (!page?.trend?.series?.length) return null;
   const insight = buildOriginInsight(page);
   const filteredMatrix = customRangeActive
     ? {
@@ -2039,6 +2042,7 @@ function SegmentSection({
   exportSettings: ExportSettings;
   compact?: boolean;
 }) {
+  if (!page?.bodyShareTrend?.items || !page?.suvSegmentShareTrend?.items) return null;
   const insight = buildSegmentInsight(page);
   const filteredMatrix = filterMatrixBySalesMode(page.matrix, salesMode, customRangeActive);
   const bodyShareItems = customRangeActive
@@ -2062,7 +2066,7 @@ function SegmentSection({
   const channelChartHeight = compact
     ? (activeChannelView.viewKey === "overall" ? 78 : 112)
     : (activeChannelView.viewKey === "overall" ? 132 : 180);
-  const trendChartHeight = compact ? 226 : 400;
+  const trendChartHeight = compact ? 350 : 400;
   return (
     <>
       <ConclusionInsightPanel
@@ -2239,6 +2243,7 @@ function DrilldownSection({
   rankingLimit?: number;
   onRankingLimitChange?: (limit: number) => void;
 }) {
+  if (!page?.monthTotalRanking?.items?.length) return null;
   const normalizedRankingLimit = normalizeMarketScanRankingLimit(rankingLimit);
   const insight = buildDrilldownInsight(page);
   const activeWindow = marketScanActiveDrilldownWindow(page, salesMode, customRangeActive, customRangeLabel);
@@ -2424,13 +2429,19 @@ export function MarketScanPage({
   );
   const [activePage, setActivePage] = useState<MarketScanPageKey>(
     () => {
-      if (initialActivePage) return initialActivePage;
-      const requestedPage = searchParams.get("activePage");
-      return isMarketScanPageKey(requestedPage) ? requestedPage : "overview";
+      const urlPage = searchParams.get("activePage");
+      if (isMarketScanPageKey(urlPage)) return urlPage;
+      try { const saved = sessionStorage.getItem("ms_activePage"); if (isMarketScanPageKey(saved)) return saved; } catch { /* ignore */ }
+      return initialActivePage || "overview";
     },
   );
   const [selectedCountry, setSelectedCountry] = useState<string | null>(
-    () => searchParams.get("country") || resolveDefaultMarketScanCountry(user?.primaryCountry),
+    () => {
+      const urlCountry = searchParams.get("country");
+      if (urlCountry) return urlCountry;
+      try { const saved = sessionStorage.getItem("ms_country"); if (saved) return saved; } catch { /* ignore */ }
+      return resolveDefaultMarketScanCountry(user?.primaryCountry);
+    },
   );
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(
     () => searchParams.get("period"),
@@ -2460,6 +2471,13 @@ export function MarketScanPage({
     },
   );
   const [reloadToken, setReloadToken] = useState(0);
+  const [renderedTabs, setRenderedTabs] = useState<MarketScanPageKey[]>(() => [activePage || "overview"]);
+
+  // Keep renderedTabs in sync with activePage (covers initial mount + tab clicks)
+  useEffect(() => {
+    setRenderedTabs(prev => { const next = prev.filter(k => k !== activePage); next.push(activePage); return next.slice(-2); });
+  }, [activePage]);
+  const deckCache = useRef<Partial<Record<MarketScanPageKey, MarketScanDeckResponse>>>({});
   const requestRef = useRef(0);
   const slideRef = useRef<HTMLDivElement | null>(null);
   const countryOptions = deck?.metadata.availableCountries ?? [];
@@ -2481,6 +2499,7 @@ export function MarketScanPage({
     const defaultFt = DEFAULT_FUEL_TYPES.slice().sort().join(",");
     if (ft !== defaultFt) params.set("fuelTypes", selectedFuelTypes.join(","));
     setSearchParams(params, { replace: true });
+    try { sessionStorage.setItem("ms_activePage", activePage); if (selectedCountry) sessionStorage.setItem("ms_country", selectedCountry); } catch { /* ignore */ }
   }, [activePage, rankingLimit, salesMode, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, selectedTimeRange, setSearchParams]);
 
   useEffect(() => {
@@ -2508,6 +2527,15 @@ export function MarketScanPage({
   useEffect(() => {
     let active = true;
     const requestId = ++requestRef.current;
+
+    // Fast path: use per-view cache if already loaded
+    const cachedView = deckCache.current[activePage];
+    if (cachedView) {
+      setDeck(cachedView);
+      setLoading(false);
+      return () => { active = false; };
+    }
+
     setLoading(true);
     setError("");
 
@@ -2521,11 +2549,15 @@ export function MarketScanPage({
       body_window_months: 24,
       ranking_limit: normalizeMarketScanRankingLimit(rankingLimit),
       drilldown_segment: selectedDrilldownSegment || undefined,
+      view: activePage,
     })
       .then((response) => {
         if (!active || requestId !== requestRef.current) {
           return;
         }
+        deckCache.current[activePage] = response;
+        const keys = Object.keys(deckCache.current) as MarketScanPageKey[];
+        if (keys.length > 2) { const oldest = keys.find(k => k !== activePage); if (oldest) delete deckCache.current[oldest]; }
         setDeck(response);
       })
       .catch((reason: Error) => {
@@ -2546,7 +2578,7 @@ export function MarketScanPage({
     return () => {
       active = false;
     };
-  }, [rankingLimit, reloadToken, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
+  }, [activePage, rankingLimit, reloadToken, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
 
   useEffect(() => {
     if (!deck) {
@@ -2685,16 +2717,26 @@ export function MarketScanPage({
     }
   }
 
-  function renderActivePageContent(compact = false) {
-    if (!deck) {
-      return null;
-    }
-    if (activePage === "overview") {
+  function renderTabContent(pageKey: MarketScanPageKey, compact = false) {
+    const d = deckCache.current[pageKey] ?? deck;
+    if (!d) return null;
+    const viewLoaded = (() => {
+      const ov = d.results.overview as unknown as Record<string, unknown> | undefined;
+      const ori = d.results.origin as unknown as Record<string, unknown> | undefined;
+      const seg = d.results.segment as unknown as Record<string, unknown> | undefined;
+      const dd = d.results[pageKey] as unknown as Record<string, unknown> | undefined;
+      if (pageKey === "overview") return ov?.trend != null;
+      if (pageKey === "origin") return ori?.trend != null;
+      if (pageKey === "segment") return seg?.matrix != null;
+      return dd?.monthTotalRanking != null;
+    })();
+    if (!viewLoaded) return <MarketScanDeckSkeleton />;
+    if (pageKey === "overview") {
       return (
         <OverviewSection
-          labels={deck.metadata.labels}
-          page={deck.results.overview}
-          fuelOrder={deck.metadata.selectedFuelTypes}
+          labels={d.metadata.labels}
+          page={d.results.overview}
+          fuelOrder={d.metadata.selectedFuelTypes}
           salesMode={salesMode}
           customRangeActive={customRangeActive}
           timeRange={resolvedTimeRange}
@@ -2708,7 +2750,7 @@ export function MarketScanPage({
     if (activePage === "origin") {
       return (
         <OriginSection
-          page={deck.results.origin}
+          page={d.results.origin}
           salesMode={salesMode}
           customRangeActive={customRangeActive}
           timeRange={resolvedTimeRange}
@@ -2721,7 +2763,7 @@ export function MarketScanPage({
     if (activePage === "segment") {
       return (
         <SegmentSection
-          page={deck.results.segment}
+          page={d.results.segment}
           salesMode={salesMode}
           customRangeActive={customRangeActive}
           timeRange={resolvedTimeRange}
@@ -2735,11 +2777,11 @@ export function MarketScanPage({
     if (activePage === "drilldown") {
       return (
         <DrilldownSection
-          page={deck.results.drilldown}
-          fuelOrder={deck.metadata.selectedFuelTypes}
+          page={d.results.drilldown}
+          fuelOrder={d.metadata.selectedFuelTypes}
           salesMode={salesMode}
           customRangeActive={customRangeActive}
-          customRangeLabel={deck.results.overview.summary.customRangeLabel}
+          customRangeLabel={d.results.overview?.summary?.customRangeLabel}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -2751,11 +2793,11 @@ export function MarketScanPage({
     if (activePage === "suvAll") {
       return (
         <DrilldownSection
-          page={deck.results.suvAll}
-          fuelOrder={deck.metadata.selectedFuelTypes}
+          page={d.results.suvAll}
+          fuelOrder={d.metadata.selectedFuelTypes}
           salesMode={salesMode}
           customRangeActive={customRangeActive}
-          customRangeLabel={deck.results.overview.summary.customRangeLabel}
+          customRangeLabel={d.results.overview?.summary?.customRangeLabel}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -2767,11 +2809,11 @@ export function MarketScanPage({
     if (activePage === "suvA") {
       return (
         <DrilldownSection
-          page={deck.results.suvA}
-          fuelOrder={deck.metadata.selectedFuelTypes}
+          page={d.results.suvA}
+          fuelOrder={d.metadata.selectedFuelTypes}
           salesMode={salesMode}
           customRangeActive={customRangeActive}
-          customRangeLabel={deck.results.overview.summary.customRangeLabel}
+          customRangeLabel={d.results.overview?.summary?.customRangeLabel}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -2782,11 +2824,11 @@ export function MarketScanPage({
     }
     return (
         <DrilldownSection
-          page={deck.results.suvB}
-          fuelOrder={deck.metadata.selectedFuelTypes}
+          page={d.results.suvB}
+          fuelOrder={d.metadata.selectedFuelTypes}
           salesMode={salesMode}
           customRangeActive={customRangeActive}
-          customRangeLabel={deck.results.overview.summary.customRangeLabel}
+          customRangeLabel={d.results.overview?.summary?.customRangeLabel}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
         compact={compact}
@@ -3124,7 +3166,13 @@ export function MarketScanPage({
                     </div>
                   ) : null}
                   <div className="market-scan-slide-content">
-                    {renderActivePageContent(true)}
+                    <div className="market-scan-slide-tab-cache">
+                      {renderedTabs.map((key) => (
+                        <div key={key} className={`market-scan-slide-tab-cache-item${key === activePage ? " is-active" : ""}`}>
+                          {renderTabContent(key, true)}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
                 </div>

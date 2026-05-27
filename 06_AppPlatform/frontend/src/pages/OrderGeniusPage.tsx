@@ -11,7 +11,7 @@ import {
 } from "react";
 
 import { api } from "../api/client";
-import { useAuth } from "../contexts/AuthContext";
+import { useResolvedCountry } from "../hooks/useResolvedCountry";
 import type {
   CountryPaymentTerm,
   MaterialSkuMatrixRow,
@@ -39,10 +39,11 @@ function getErrorMessage(error: unknown): string {
 }
 
 export function OrderGeniusPage() {
-  const { user } = useAuth();
+  const { allCountriesISO } = useResolvedCountry("iso");
   // ── Filter state ──────────────────────────────────────────────────
   const [countries, setCountries] = useState<CountryPaymentTerm[]>([]);
-  const [selectedCountry, setSelectedCountry] = useState("");
+  const [selectedCountries, setSelectedCountries] = useState<string[]>(allCountriesISO);
+  const primaryCountry = selectedCountries[0] ?? "SE";
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState<number | null>(null); // null = all months
   const [visibleColumns, setVisibleColumns] = useState({
@@ -58,7 +59,7 @@ export function OrderGeniusPage() {
   const [showPtAdmin, setShowPtAdmin] = useState(false);
 
   const [options, setOptions] = useState<OrderGeniusOptions | null>(null);
-  const [matrix, setMatrix] = useState<MatrixResponse | null>(null);
+  const [matrices, setMatrices] = useState<Record<string, MatrixResponse>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -80,30 +81,34 @@ export function OrderGeniusPage() {
   const [cellErrors, setCellErrors] = useState<Record<string, string>>({});
 
   // ── Load countries ────────────────────────────────────────────────
+  const countryInitDone = useRef(false);
   useEffect(() => {
     api.getOrderGeniusCountries()
       .then((res) => {
         setCountries(res.items);
-        if (res.items.length > 0 && !selectedCountry) {
-          const preferred = user?.primaryCountry
-            && res.items.some((item) => item.countryCode === user.primaryCountry)
-            ? user.primaryCountry
-            : null;
-          const anonymousDefault = res.items.find((item) => item.countryCode === "SE");
-          setSelectedCountry(preferred ?? anonymousDefault?.countryCode ?? res.items[0].countryCode);
+        if (res.items.length > 0 && !countryInitDone.current) {
+          countryInitDone.current = true;
+          const validCodes = new Set(res.items.map((c) => c.countryCode));
+          const resolved = allCountriesISO.filter((c) => validCodes.has(c));
+          if (resolved.length === 0) {
+            const fallback = res.items.find((c) => c.countryCode === "SE");
+            setSelectedCountries(fallback ? [fallback.countryCode] : [res.items[0].countryCode]);
+          } else {
+            setSelectedCountries(resolved);
+          }
         }
       })
       .catch(() => setError("Failed to load countries"));
-  }, [selectedCountry, user?.primaryCountry]);
+  }, [allCountriesISO]);
 
-  // ── Load options ──────────────────────────────────────────────────
+  // ── Load options (use primary country for filter dropdowns) ────────
   useEffect(() => {
-    if (!selectedCountry) return;
+    if (!primaryCountry) return;
     setLoading(true);
     setError("");
     api
       .getOrderGeniusOptions({
-        country: selectedCountry,
+        country: primaryCountry,
         brand: brandFilter || undefined,
         model: modelFilter || undefined,
         powertrain: powertrainFilter || undefined,
@@ -113,35 +118,63 @@ export function OrderGeniusPage() {
       .then(setOptions)
       .catch((e: unknown) => setError(getErrorMessage(e)))
       .finally(() => setLoading(false));
-  }, [selectedCountry, brandFilter, modelFilter, powertrainFilter, versionFilter, colourFilter]);
+  }, [primaryCountry, brandFilter, modelFilter, powertrainFilter, versionFilter, colourFilter]);
 
-  // ── Load matrix ───────────────────────────────────────────────────
-  const loadMatrix = useCallback(() => {
-    if (!selectedCountry) return;
+  // ── Load matrices for all selected countries ────────────────────────
+  const loadMatrices = useCallback(() => {
+    if (selectedCountries.length === 0) return;
     setLoading(true);
     setError("");
-    api
-      .getOrderGeniusMatrix({
-        country: selectedCountry,
-        year: selectedYear,
-        brand: brandFilter || undefined,
-        model: modelFilter || undefined,
-        powertrain: powertrainFilter || undefined,
-        version: versionFilter || undefined,
-        colour: colourFilter || undefined,
-        materialCodeSearch: materialSearch || undefined,
+    const params = {
+      year: selectedYear,
+      brand: brandFilter || undefined,
+      model: modelFilter || undefined,
+      powertrain: powertrainFilter || undefined,
+      version: versionFilter || undefined,
+      colour: colourFilter || undefined,
+      materialCodeSearch: materialSearch || undefined,
+    };
+    Promise.all(
+      selectedCountries.map((country) =>
+        api
+          .getOrderGeniusMatrix({ country, ...params })
+          .then((matrix) => [country, matrix] as const)
+          .catch(() => [country, null] as const),
+      ),
+    )
+      .then((results) => {
+        const next: Record<string, MatrixResponse> = {};
+        for (const [country, matrix] of results) {
+          if (matrix) next[country] = matrix;
+        }
+        setMatrices(next);
       })
-      .then(setMatrix)
       .catch((e: unknown) => setError(getErrorMessage(e)))
       .finally(() => setLoading(false));
   }, [
-    selectedCountry, selectedYear, brandFilter, modelFilter,
+    selectedCountries, selectedYear, brandFilter, modelFilter,
     powertrainFilter, versionFilter, colourFilter, materialSearch,
   ]);
 
   useEffect(() => {
-    loadMatrix();
-  }, [loadMatrix]);
+    loadMatrices();
+  }, [loadMatrices]);
+
+  // ── Combined matrix data ───────────────────────────────────────────
+  const combinedMatrix = useMemo(() => {
+    const allRows: (MaterialSkuMatrixRow & { _countryCode: string })[] = [];
+    let totalRows = 0;
+    for (const country of selectedCountries) {
+      const m = matrices[country];
+      if (m) {
+        totalRows += m.totalRows;
+        for (const row of m.rows) {
+          allRows.push({ ...row, _countryCode: country });
+        }
+      }
+    }
+    return { rows: allRows, totalRows };
+  }, [matrices, selectedCountries]);
 
   // ── Upload handlers ───────────────────────────────────────────────
 
@@ -237,7 +270,7 @@ export function OrderGeniusPage() {
       const result = await api.publishMaterialMaster(uploadSessionId);
       setPublishResult(result);
       setUploadStatus("Published!");
-      loadMatrix();
+      loadMatrices();
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -275,6 +308,7 @@ export function OrderGeniusPage() {
     materialCode: string,
     month: number,
     currentVersion: number,
+    countryCode?: string,
   ) => {
     const raw = editingCells[cellKey(materialCode, month)];
     if (raw === "") {
@@ -301,8 +335,10 @@ export function OrderGeniusPage() {
       return next;
     });
 
+    const resolvedCountry = countryCode ?? primaryCountry;
+
     const payload: QuantityCellUpdate = {
-      countryCode: selectedCountry,
+      countryCode: resolvedCountry,
       orderYear: selectedYear,
       orderMonth: month,
       materialCode,
@@ -313,9 +349,10 @@ export function OrderGeniusPage() {
     try {
       const result = await api.updateQuantityCell(payload);
       // Patch local matrix state with new quantity + rowVersion (no full reload)
-      setMatrix((prev) => {
-        if (!prev) return prev;
-        const rows = prev.rows.map((r) => {
+      setMatrices((prev) => {
+        const target = prev[resolvedCountry];
+        if (!target) return prev;
+        const rows = target.rows.map((r) => {
           if (r.materialCode !== materialCode) return r;
           const months = { ...r.months };
           months[String(month)] = {
@@ -328,7 +365,7 @@ export function OrderGeniusPage() {
           );
           return { ...r, months, ttl: newTtl };
         });
-        return { ...prev, rows };
+        return { ...prev, [resolvedCountry]: { ...target, rows } };
       });
       setEditingCells((prev) => {
         const next = { ...prev };
@@ -350,11 +387,11 @@ export function OrderGeniusPage() {
 
   const handleExport = async () => {
     try {
-      const blob = await api.exportOrderGenius(selectedCountry, selectedYear);
+      const blob = await api.exportOrderGenius(primaryCountry, selectedYear);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `Order_Genius_${selectedCountry}-${selectedYear}.xlsx`;
+      a.download = `Order_Genius_${primaryCountry}-${selectedYear}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -366,9 +403,9 @@ export function OrderGeniusPage() {
 
   const selectedPaymentTerm = useMemo(
     () =>
-      countries.find((c) => c.countryCode === selectedCountry)
+      countries.find((c) => c.countryCode === primaryCountry)
         ?.paymentTermCode ?? null,
-    [countries, selectedCountry],
+    [countries, primaryCountry],
   );
 
   return (
@@ -397,25 +434,51 @@ export function OrderGeniusPage() {
           marginBottom: 16,
         }}
       >
-        <select
-          value={selectedCountry}
-          onChange={(e) => {
-            setSelectedCountry(e.target.value);
-            setBrandFilter("");
-            setModelFilter("");
-            setPowertrainFilter("");
-            setVersionFilter("");
-            setColourFilter("");
-          }}
-          style={{ minWidth: 100 }}
-        >
-          <option value="">-- Country --</option>
-          {countries.map((c) => (
-            <option key={c.countryCode} value={c.countryCode}>
-              {c.countryName} ({c.paymentTermCode})
-            </option>
-          ))}
-        </select>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 12, color: "#64748b", marginRight: 4 }}>Countries:</span>
+          {countries.map((c) => {
+            const active = selectedCountries.includes(c.countryCode);
+            return (
+              <button
+                key={c.countryCode}
+                type="button"
+                onClick={() => {
+                  setSelectedCountries((prev) => {
+                    if (active) {
+                      const next = prev.filter((x) => x !== c.countryCode);
+                      return next.length > 0 ? next : prev;
+                    }
+                    return [...prev, c.countryCode];
+                  });
+                  setBrandFilter("");
+                  setModelFilter("");
+                  setPowertrainFilter("");
+                  setVersionFilter("");
+                  setColourFilter("");
+                }}
+                style={{
+                  padding: "3px 10px",
+                  borderRadius: 14,
+                  border: active ? "1.5px solid #3b82f6" : "1px solid #cbd5e1",
+                  background: active ? "#eff6ff" : "#fff",
+                  color: active ? "#1d4ed8" : "#475569",
+                  fontSize: 12,
+                  fontWeight: active ? 600 : 400,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+                title={`${c.countryName} (${c.paymentTermCode})`}
+              >
+                {c.countryName}
+                {selectedCountries.length > 1 && active ? (
+                  <span style={{ marginLeft: 4, opacity: 0.6 }}>
+                    {selectedCountries.indexOf(c.countryCode) + 1}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
 
         <select
           value={selectedYear}
@@ -485,7 +548,7 @@ export function OrderGeniusPage() {
           style={{ minWidth: 160 }}
         />
         <datalist id="material-suggestions">
-          {matrix?.rows.map((r) => (
+          {combinedMatrix.rows.map((r) => (
             <option key={r.materialCode} value={r.materialCode}>
               {r.remark ? `${r.materialCode} (${r.remark})` : r.materialCode}
             </option>
@@ -503,11 +566,11 @@ export function OrderGeniusPage() {
           {showPtAdmin ? "Hide PT Admin" : "Payment Terms"}
         </button>
 
-        <button type="button" className="btn btn-sm btn-primary" onClick={loadMatrix}>
+        <button type="button" className="btn btn-sm btn-primary" onClick={loadMatrices}>
           Refresh
         </button>
         <button type="button" className="btn btn-sm btn-ghost" onClick={handleExport}
-                disabled={!matrix || matrix.totalRows === 0}>
+                disabled={combinedMatrix.totalRows === 0}>
           Export XLSX
         </button>
         <button type="button" className="btn btn-sm btn-ghost"
@@ -653,19 +716,22 @@ export function OrderGeniusPage() {
         <div style={{ padding: 32, textAlign: "center", color: "#64748b" }}>
           Loading...
         </div>
-      ) : matrix && matrix.totalRows > 0 ? (
+      ) : combinedMatrix.totalRows > 0 ? (
         <div style={{ overflowX: "auto", maxHeight: "70vh" }}>
           <table className="data-table" style={{ fontSize: 12 }}>
             <thead>
               <tr>
-                <th style={{ position: "sticky", left: 0, background: "#f1f5f9", zIndex: 2 }}>Model</th>
-                <th style={{ position: "sticky", left: 80, background: "#f1f5f9", zIndex: 2 }}>Version</th>
-                <th style={{ position: "sticky", left: 180, background: "#f1f5f9", zIndex: 2 }}>Colour</th>
+                {selectedCountries.length > 1 && (
+                  <th style={{ position: "sticky", left: 0, background: "#f1f5f9", zIndex: 2 }}>Country</th>
+                )}
+                <th style={{ position: "sticky", left: selectedCountries.length > 1 ? 56 : 0, background: "#f1f5f9", zIndex: 2 }}>Model</th>
+                <th style={{ position: "sticky", left: selectedCountries.length > 1 ? 136 : 80, background: "#f1f5f9", zIndex: 2 }}>Version</th>
+                <th style={{ position: "sticky", left: selectedCountries.length > 1 ? 236 : 180, background: "#f1f5f9", zIndex: 2 }}>Colour</th>
                 {visibleColumns.materialCode && (
-                  <th style={{ position: "sticky", left: 280, background: "#f1f5f9", zIndex: 2 }}>Material Code</th>
+                  <th style={{ position: "sticky", left: selectedCountries.length > 1 ? 336 : 280, background: "#f1f5f9", zIndex: 2 }}>Material Code</th>
                 )}
                 {visibleColumns.fob && (
-                  <th style={{ position: "sticky", left: 410, background: "#f1f5f9", zIndex: 2 }}>FOB (EUR)</th>
+                  <th style={{ position: "sticky", left: selectedCountries.length > 1 ? 466 : 410, background: "#f1f5f9", zIndex: 2 }}>FOB (EUR)</th>
                 )}
                 {visibleColumns.months && MONTHS
                   .filter((_, i) => selectedMonth == null || i + 1 === selectedMonth)
@@ -681,7 +747,7 @@ export function OrderGeniusPage() {
               </tr>
             </thead>
             <OrderGeniusBody
-              rows={matrix.rows}
+              rows={combinedMatrix.rows}
               groupByProduct={groupByProduct}
               editingCells={editingCells}
               savingCells={savingCells}
@@ -691,12 +757,13 @@ export function OrderGeniusPage() {
               onCellSave={handleCellSave}
               visibleColumns={visibleColumns}
               selectedMonth={selectedMonth}
+              showCountry={selectedCountries.length > 1}
             />
           </table>
         </div>
       ) : (
         <div style={{ padding: 32, textAlign: "center", color: "#64748b" }}>
-          {selectedCountry
+          {selectedCountries.length > 0
             ? "No data. Upload a Material Master file to get started."
             : "Select a country to view the order matrix."}
         </div>
@@ -715,17 +782,18 @@ const VISIBLE_COLS_DEFAULTS = { months: true, amount: true, ttlQty: true, ttlAmo
 function OrderGeniusRow({
   row, editingCells, savingCells, cellErrors,
   onStartEdit, onCellChange, onCellSave,
-  visibleColumns, selectedMonth,
+  visibleColumns, selectedMonth, showCountry,
 }: {
-  row: MaterialSkuMatrixRow;
+  row: MaterialSkuMatrixRow & { _countryCode?: string };
   editingCells: Record<string, string>;
   savingCells: Set<string>;
   cellErrors: Record<string, string>;
   onStartEdit: (materialCode: string, month: number) => void;
   onCellChange: (materialCode: string, month: number, value: string) => void;
-  onCellSave: (materialCode: string, month: number, version: number) => void;
+  onCellSave: (materialCode: string, month: number, version: number, countryCode?: string) => void;
   visibleColumns: typeof VISIBLE_COLS_DEFAULTS;
   selectedMonth: number | null;
+  showCountry?: boolean;
 }) {
   const isHistorical = row.lifecycleStatus === "historical";
   const fob = row.fobEur ?? 0;
@@ -735,19 +803,25 @@ function OrderGeniusRow({
     ? { textDecoration: "line-through", color: "#9ca3af" }
     : {};
 
+  const _countryCode = (row as unknown as Record<string, unknown>)._countryCode as string | undefined;
   return (
     <tr style={isHistorical ? { backgroundColor: "#f9fafb" } : undefined}>
-      <td style={{ ...textStyle, position: "sticky", left: 0, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap" }}>
+      {showCountry ? (
+        <td style={{ ...textStyle, position: "sticky", left: 0, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap", fontFamily: "monospace", fontSize: 11 }}>
+          {_countryCode ?? ""}
+        </td>
+      ) : null}
+      <td style={{ ...textStyle, position: "sticky", left: showCountry ? 56 : 0, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap" }}>
         {row.modelName}
       </td>
-      <td style={{ ...textStyle, position: "sticky", left: 80, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap" }}>
+      <td style={{ ...textStyle, position: "sticky", left: showCountry ? 136 : 80, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap" }}>
         {row.version}
       </td>
-      <td style={{ ...textStyle, position: "sticky", left: 180, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap" }}>
+      <td style={{ ...textStyle, position: "sticky", left: showCountry ? 236 : 180, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap" }}>
         {row.colour}{row.colourCode ? <span style={{ color: "#94a3b8", fontSize: 10, marginLeft: 4 }}>{row.colourCode}</span> : null}
       </td>
       {visibleColumns.materialCode && (
-        <td style={{ ...textStyle, position: "sticky", left: 280, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap", fontFamily: "monospace" }}>
+        <td style={{ ...textStyle, position: "sticky", left: showCountry ? 336 : 280, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap", fontFamily: "monospace" }}>
           <div>{row.materialCode}</div>
           {(row.effectiveFrom || row.effectiveTo) ? (
             <div style={{ fontSize: 9, color: isHistorical ? "#9ca3af" : "#64748b" }}>
@@ -759,7 +833,7 @@ function OrderGeniusRow({
         </td>
       )}
       {visibleColumns.fob && (
-        <td style={{ ...textStyle, position: "sticky", left: 410, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap", textAlign: "right" }}>
+        <td style={{ ...textStyle, position: "sticky", left: showCountry ? 466 : 410, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap", textAlign: "right" }}>
           {row.fobEur != null ? row.fobEur.toLocaleString() : "-"}
         </td>
       )}
@@ -777,8 +851,8 @@ function OrderGeniusRow({
             {isEditing ? (
               <input type="number" min={0} style={{ width: 48, textAlign: "center", border: errMsg ? "1px solid #dc2626" : "1px solid #3b82f6", borderRadius: 4 }}
                 defaultValue={qty} autoFocus
-                onBlur={(e) => { onCellChange(row.materialCode, month, e.target.value); onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1); }}
-                onKeyDown={(e) => { if (e.key === "Enter") onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1); if (e.key === "Escape") { onCellChange(row.materialCode, month, ""); onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1); } }}
+                onBlur={(e) => { onCellChange(row.materialCode, month, e.target.value); onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1, _countryCode); }}
+                onKeyDown={(e) => { if (e.key === "Enter") onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1, _countryCode); if (e.key === "Escape") { onCellChange(row.materialCode, month, ""); onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1, _countryCode); } }}
                 onChange={(e) => onCellChange(row.materialCode, month, e.target.value)}
               />
             ) : <span style={{ color: errMsg ? "#dc2626" : isSaving ? "#3b82f6" : undefined }} title={errMsg}>{qty}</span>}
@@ -812,17 +886,19 @@ function ptColor(pt: string | null): string { return PT_COLORS[pt ?? ""] ?? "#9c
 function OrderGeniusBody({
   rows, groupByProduct, editingCells, savingCells, cellErrors,
   onStartEdit, onCellChange, onCellSave, visibleColumns, selectedMonth,
+  showCountry,
 }: {
-  rows: MaterialSkuMatrixRow[];
+  rows: (MaterialSkuMatrixRow & { _countryCode?: string })[];
   groupByProduct: boolean;
   editingCells: Record<string, string>;
   savingCells: Set<string>;
   cellErrors: Record<string, string>;
   onStartEdit: (code: string, m: number) => void;
   onCellChange: (code: string, m: number, v: string) => void;
-  onCellSave: (code: string, m: number, ver: number) => void;
+  onCellSave: (code: string, m: number, ver: number, countryCode?: string) => void;
   visibleColumns: typeof VISIBLE_COLS_DEFAULTS;
   selectedMonth: number | null;
+  showCountry?: boolean;
 }) {
   if (!groupByProduct) {
     return (
@@ -831,24 +907,28 @@ function OrderGeniusBody({
           <OrderGeniusRow key={r.materialCode} row={r}
             editingCells={editingCells} savingCells={savingCells} cellErrors={cellErrors}
             onStartEdit={onStartEdit} onCellChange={onCellChange} onCellSave={onCellSave}
-            visibleColumns={visibleColumns} selectedMonth={selectedMonth} />
+            visibleColumns={visibleColumns} selectedMonth={selectedMonth}
+            showCountry={showCountry} />
         ))}
       </tbody>
     );
   }
 
   // Group by brand+model+version+powertrain
-  const key = (r: MaterialSkuMatrixRow) => `${r.brand}|${r.modelName}|${r.version}|${r.powertrain ?? ""}`;
-  const groups = new Map<string, MaterialSkuMatrixRow[]>();
+  type RowWithCountry = MaterialSkuMatrixRow & { _countryCode?: string };
+  const key = (r: RowWithCountry) => `${r._countryCode ?? ""}|${r.brand}|${r.modelName}|${r.version}|${r.powertrain ?? ""}`;
+  const groups = new Map<string, RowWithCountry[]>();
   for (const r of rows) { const k = key(r); if (!groups.has(k)) groups.set(k, []); groups.get(k)!.push(r); }
   const sorted = [...groups.entries()].sort(([, a], [, b]) =>
     (a.some((r) => r.lifecycleStatus === "active") ? 0 : 1) - (b.some((r) => r.lifecycleStatus === "active") ? 0 : 1)
   );
 
-  const groupTtl = (grp: MaterialSkuMatrixRow[]) => {
+  const groupTtl = (grp: RowWithCountry[]) => {
     const activeMonths = MONTHS.map((_, i) => i + 1).filter((m) => selectedMonth == null || m === selectedMonth);
     return activeMonths.reduce((s, m) => s + grp.reduce((sum, r) => sum + (r.months[String(m)]?.quantity ?? 0), 0), 0);
   };
+
+  const stickyCols = (showCountry ? 1 : 0) + 3; // country + model + version + colour
 
   return (
     <tbody>
@@ -863,7 +943,8 @@ function OrderGeniusBody({
         return (
           <Fragment key={groupKey}>
             <tr style={{ backgroundColor: `${color}15`, borderTop: `2px solid ${color}` }}>
-              <td colSpan={3} style={{ padding: "6px 8px", fontWeight: 700, color }}>
+              <td colSpan={stickyCols} style={{ padding: "6px 8px", fontWeight: 700, color }}>
+                {showCountry ? <span style={{ fontFamily: "monospace", fontSize: 11, marginRight: 8 }}>{first._countryCode}</span> : null}
                 {first.brand} {first.modelName} {first.version}
                 <span style={{ fontWeight: 400, color: "#64748b", marginLeft: 8 }}>
                   {first.powertrain} · {grp.length} colours · {gTtl.toLocaleString()} units
@@ -877,7 +958,8 @@ function OrderGeniusBody({
               <OrderGeniusRow key={r.materialCode} row={r}
                 editingCells={editingCells} savingCells={savingCells} cellErrors={cellErrors}
                 onStartEdit={onStartEdit} onCellChange={onCellChange} onCellSave={onCellSave}
-                visibleColumns={visibleColumns} selectedMonth={selectedMonth} />
+                visibleColumns={visibleColumns} selectedMonth={selectedMonth}
+                showCountry={showCountry} />
             ))}
           </Fragment>
         );

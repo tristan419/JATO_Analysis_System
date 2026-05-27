@@ -8,6 +8,28 @@ import { LoadingSurface } from "./components/LoadingSurface";
 import { DashboardPage } from "./pages/DashboardPage";
 import { LoginPage } from "./pages/LoginPage";
 
+/** Consume OAuth token params before any provider mounts, avoiding aborted fetches. */
+function OAuthGate({ children }: { children: ReactNode }) {
+  // This runs during render, BEFORE any child effects (SharedFilterScope etc.)
+  // so we can redirect before those effects fire and get aborted.
+  const params = new URLSearchParams(window.location.search);
+  const urlToken = params.get("token");
+  if (urlToken) {
+    const urlUser = params.get("username") || "anonymous";
+    const urlRole = params.get("role") || "viewer";
+    const isNewUser = params.get("isNewUser") === "true";
+    localStorage.setItem("jato_auth_token", urlToken);
+    localStorage.setItem("jato_user_name", urlUser);
+    localStorage.setItem("jato_user_role", urlRole);
+    localStorage.removeItem("shared-filter-scope");
+    const target = isNewUser ? "/account/profile" : "/dashboard";
+    // Sync redirect — aborts current render before any child effects run
+    window.location.replace(target);
+    return null;
+  }
+  return <>{children}</>;
+}
+
 const DataManagementPage = lazy(() => import("./pages/DataManagementPage").then(m => ({ default: m.DataManagementPage })));
 const EngineeringPage = lazy(() => import("./pages/EngineeringPage").then(m => ({ default: m.EngineeringPage })));
 const ReviewCasesPage = lazy(() => import("./pages/ReviewCasesPage").then(m => ({ default: m.ReviewCasesPage })));
@@ -28,7 +50,7 @@ const MarketModelRankingPage = lazy(() => import("./pages/MarketModelRankingPage
 const MarketPowertrainPage = lazy(() => import("./pages/MarketPowertrainPage").then(m => ({ default: m.MarketPowertrainPage })));
 const OrderGeniusPage = lazy(() => import("./pages/OrderGeniusPage").then(m => ({ default: m.OrderGeniusPage })));
 const AccessControlPage = lazy(() => import("./pages/AccessControlPage").then(m => ({ default: m.AccessControlPage })));
-const CountrySetupPage = lazy(() => import("./pages/CountrySetupPage").then(m => ({ default: m.CountrySetupPage })));
+const ProfilePage = lazy(() => import("./pages/ProfilePage").then(m => ({ default: m.ProfilePage })));
 
 function withPageLoader(node: ReactNode) {
   return (<Suspense fallback={<div className="app-loading-shell"><LoadingSurface mode="overlay" label="正在加载页面" detail="准备下一个工作视图与路由资源" kicker="Route" /></div>}>{node}</Suspense>);
@@ -41,7 +63,7 @@ function RedirectPreserveSearch({ to }: { to: string }) {
 
 const router = createBrowserRouter([
   { path: "/login", element: (<AuthProvider><LoginPage /></AuthProvider>) },
-  { path: "/", element: (<AuthProvider><SharedFilterScopeProvider><CountryChatProvider><Layout /></CountryChatProvider></SharedFilterScopeProvider></AuthProvider>), children: [
+  { path: "/", element: (<AuthProvider><OAuthGate><SharedFilterScopeProvider><CountryChatProvider><Layout /></CountryChatProvider></SharedFilterScopeProvider></OAuthGate></AuthProvider>), children: [
     { index: true, element: <DashboardPage /> },
     { path: "dashboard", element: <DashboardPage /> },
     { path: "market/overview", element: withPageLoader(<MarketOverviewPage />) },
@@ -61,7 +83,7 @@ const router = createBrowserRouter([
     { path: "data/jato-monthly-update", element: withPageLoader(<JatoMonthlyUpdatePage />) },
     { path: "data/order-genius", element: withPageLoader(<OrderGeniusPage />) },
     { path: "admin/access-control", element: withPageLoader(<AccessControlPage />) },
-    { path: "account/country-setup", element: withPageLoader(<CountrySetupPage />) },
+    { path: "account/profile", element: withPageLoader(<ProfilePage />) },
     { path: "product/coc-match", element: withPageLoader(<CocMatchPage />) },
     { path: "copilot", element: withPageLoader(<CountryChatPage />) },
     { path: "engineering-config", element: withPageLoader(<EngineeringConfigPage />) },

@@ -455,6 +455,7 @@ function watchoutCard(
 }
 
 export function buildOverviewInsight(page: MarketScanOverviewPage): MarketInsightSnapshot {
+  if (!page?.trend?.items?.length) return { headline: "", summary: "", tone: "neutral", cards: [] };
   const ordered = orderedTrendItems(page.trend.items);
   const latest = ordered[ordered.length - 1];
   const currentYoY = deltaValue(page.summary.currentMonthYoY);
@@ -546,6 +547,7 @@ function buildOriginBrandRead(group: MarketScanOriginBrandGroup | undefined): Ma
 }
 
 export function buildOriginInsight(page: MarketScanOriginPage): MarketInsightSnapshot {
+  if (!page?.matrix?.rows?.length) return { headline: "", summary: "", tone: "neutral", cards: [] };
   const currentRow = matrixRow(page.matrix, "current_volume");
   const yoyRow = matrixRow(page.matrix, "yoy");
   const rolling12Row = matrixRow(page.matrix, "rolling12");
@@ -639,6 +641,7 @@ function compareBodyShare(
 }
 
 export function buildSegmentInsight(page: MarketScanSegmentPage): MarketInsightSnapshot {
+  if (!page?.matrix?.rows?.length) return { headline: "", summary: "", tone: "neutral", cards: [] };
   const latestBody = lastItem(page.bodyShareTrend.items);
   const compareBody = page.bodyShareTrend.items.length >= 6
     ? page.bodyShareTrend.items[page.bodyShareTrend.items.length - 6]
@@ -753,6 +756,7 @@ function buildFuelPanelLeaderRead(panel: MarketScanFuelPanel | undefined) {
 }
 
 export function buildDrilldownInsight(page: MarketScanDrilldownPage): MarketInsightSnapshot {
+  if (!page?.monthTotalRanking?.items?.length) return { headline: "", summary: "", tone: "neutral", cards: [] };
   const totalLeader = page.rolling12TotalRanking.items[0];
   const totalTop3Share = page.rolling12TotalRanking.items.slice(0, 3).reduce((sum, item) => sum + (item.sharePct ?? 0), 0);
   const dominantFuel = buildFuelDominanceRead(page.rolling12FuelTrend.items);

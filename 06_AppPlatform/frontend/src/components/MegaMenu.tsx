@@ -89,6 +89,8 @@ export function MegaMenu() {
   const [navOpen, setNavOpen] = useState(false);
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileRef = useRef<HTMLDivElement | null>(null);
   const activeId = getActiveMegaMenuId(location.pathname);
   const closeAll = useCallback(() => setOpenId(null), []);
 
@@ -98,6 +100,17 @@ export function MegaMenu() {
   );
 
   useEffect(() => { setNavOpen(false); setOpenId(null); }, [location.pathname]);
+
+  useEffect(() => {
+    if (!profileOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
+        setProfileOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [profileOpen]);
 
   function toggleDropdown(id: string) { setOpenId((prev) => (prev === id ? null : id)); }
 
@@ -118,18 +131,58 @@ export function MegaMenu() {
         <div className="mega-menu-user">
           <Link to="/copilot" className="mega-menu-ai-btn" aria-label="Country Assistant" title="Country Assistant"><AssistantMark size={22} /></Link>
           {user ? (
-            <>
-              <span className="mega-menu-username">{user.username}</span>
-              <span className="mega-menu-role">{user.role}</span>
-              <Link to="/account/country-setup" className="mega-menu-signin">国家偏好</Link>
-              {user.role === "viewer" && (
-                <button type="button" className="mega-menu-signin" onClick={() => setShowUpgrade(true)}>申请升级</button>
+            <div className="mega-menu-profile-trigger" ref={profileRef}>
+              <button
+                type="button"
+                className="mega-menu-profile-btn"
+                onClick={() => setProfileOpen((v) => !v)}
+                aria-expanded={profileOpen}
+              >
+                {user.avatarUrl ? (
+                  <img src={user.avatarUrl} alt="" className="mega-menu-avatar" referrerPolicy="no-referrer" />
+                ) : (
+                  <span className="mega-menu-avatar mega-menu-avatar-fallback">{user.displayName?.[0] ?? user.username[0]}</span>
+                )}
+                <span className="mega-menu-username">{user.displayName ?? user.username}</span>
+              </button>
+              {profileOpen && (
+                <div className="mega-menu-profile-popover">
+                  <div className="mega-menu-profile-popover-header">
+                    {user.avatarUrl ? (
+                      <img src={user.avatarUrl} alt="" className="mega-menu-profile-popover-avatar" referrerPolicy="no-referrer" />
+                    ) : (
+                      <span className="mega-menu-profile-popover-avatar mega-menu-profile-popover-avatar-fallback">{user.displayName?.[0] ?? user.username[0]}</span>
+                    )}
+                    <div>
+                      <div className="mega-menu-profile-popover-name">{user.displayName ?? user.username}</div>
+                      <div className="mega-menu-profile-popover-email">{user.email ?? user.username}</div>
+                    </div>
+                  </div>
+                  <div className="mega-menu-profile-popover-body">
+                    <div className="mega-menu-profile-popover-row">
+                      <span>Role</span>
+                      <span className="mega-menu-role">{user.role}</span>
+                    </div>
+                    {user.primaryCountry ? (
+                      <div className="mega-menu-profile-popover-row">
+                        <span>Country</span>
+                        <span>{user.primaryCountry}{user.secondaryCountries.length > 0 ? ` +${user.secondaryCountries.length}` : ""}</span>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="mega-menu-profile-popover-actions">
+                    <Link to="/account/profile" className="mega-menu-profile-popover-action" onClick={() => setProfileOpen(false)}>Edit Profile</Link>
+                    {user.role === "viewer" && (
+                      <button type="button" className="mega-menu-profile-popover-action" onClick={() => { setProfileOpen(false); setShowUpgrade(true); }}>Request Upgrade</button>
+                    )}
+                    {user.role === "admin" && (
+                      <button type="button" className="mega-menu-profile-popover-action" onClick={() => { setProfileOpen(false); setShowAdminPanel(!showAdminPanel); }}>Admin Panel</button>
+                    )}
+                    <button type="button" className="mega-menu-profile-popover-action mega-menu-profile-popover-signout" onClick={logout}>Sign Out</button>
+                  </div>
+                </div>
               )}
-              {user.role === "admin" && (
-                <button type="button" className="mega-menu-signin" onClick={() => setShowAdminPanel(!showAdminPanel)}>管理申请</button>
-              )}
-              <button type="button" className="mega-menu-signout" onClick={logout}>Sign out</button>
-            </>
+            </div>
           ) : (
             <Link to="/login" className="mega-menu-signin">Sign in</Link>
           )}
@@ -150,9 +203,13 @@ export function MegaMenu() {
             <Link to="/copilot" className="mega-menu-drawer-ai" onClick={() => setNavOpen(false)}><AssistantMark size={20} /><span>Country Assistant</span></Link>
             {user ? (
               <div className="mega-menu-drawer-auth">
-                <span className="mega-menu-username">{user.username}</span>
+                {user.avatarUrl ? (
+                  <img src={user.avatarUrl} alt="" className="mega-menu-avatar" referrerPolicy="no-referrer" style={{ width: 32, height: 32 }} />
+                ) : null}
+                <span className="mega-menu-username">{user.displayName ?? user.username}</span>
                 <span className="mega-menu-role">{user.role}</span>
-                <Link to="/account/country-setup" className="mega-menu-signin" onClick={() => setNavOpen(false)}>国家偏好</Link>
+                {user.email ? <span style={{ fontSize: 11, color: "#94a3b8" }}>{user.email}</span> : null}
+                <Link to="/account/profile" className="mega-menu-signin" onClick={() => setNavOpen(false)}>国家偏好</Link>
                 <button type="button" className="mega-menu-signout" onClick={() => { logout(); setNavOpen(false); }}>Sign out</button>
               </div>
             ) : (

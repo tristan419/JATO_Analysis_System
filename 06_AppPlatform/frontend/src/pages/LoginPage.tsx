@@ -237,7 +237,7 @@ export function LoginPage() {
           }}
         >
           <span style={{ color: "#4285f4", fontWeight: 700 }}>G</span>
-          Sign in with Google
+          Continue with Google
         </button>
       </form>
     </div>

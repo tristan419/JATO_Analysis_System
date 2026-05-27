@@ -50,6 +50,10 @@ class LoginResponse(BaseModel):
     token: str
     username: str
     role: str
+    email: str | None = None
+    oauthProvider: str | None = None
+    avatarUrl: str | None = None
+    displayName: str | None = None
     primaryCountry: str | None = None
     secondaryCountries: list[str] = Field(default_factory=list)
     preferredLandingPage: str | None = None
@@ -66,6 +70,7 @@ class UserProfileBody(BaseModel):
         default=None,
         alias="preferredLandingPage",
     )
+    display_name: str | None = Field(default=None, alias="displayName")
 
     model_config = {"populate_by_name": True}
 
@@ -101,6 +106,10 @@ def _user_payload(user: User) -> dict:
         "username": user.username,
         "role": user.role,
         "isActive": user.is_active,
+        "email": user.email,
+        "oauthProvider": user.oauth_provider,
+        "avatarUrl": user.avatar_url,
+        "displayName": user.display_name,
         "primaryCountry": user.primary_country_code,
         "secondaryCountries": secondary,
         "preferredLandingPage": user.preferred_landing_page,
@@ -124,6 +133,10 @@ def login(
         token=token,
         username=user.username,
         role=user.role,
+        email=user.email,
+        oauthProvider=user.oauth_provider,
+        avatarUrl=user.avatar_url,
+        displayName=user.display_name,
         primaryCountry=user.primary_country_code,
         secondaryCountries=user.secondary_country_codes or [],
         preferredLandingPage=user.preferred_landing_page,
@@ -198,6 +211,9 @@ def update_my_profile(
         if body.preferred_landing_page
         else None
     )
+    if body.display_name is not None:
+        dn = str(body.display_name).strip()
+        db_user.display_name = dn if dn else None
     db.commit()
     db.refresh(db_user)
     return _user_payload(db_user)
@@ -269,6 +285,25 @@ def update_user_profile(
         if body.preferred_landing_page
         else None
     )
+    if body.display_name is not None:
+        dn = str(body.display_name).strip()
+        user.display_name = dn if dn else None
+    db.commit()
+    db.refresh(user)
+    return _user_payload(user)
+
+
+@router.patch("/users/{user_id}/toggle-active")
+def toggle_user_active(
+    user_id: str,
+    db: Session = Depends(get_db_session),
+    _: UserContext = Depends(require_min_role("admin")),
+) -> dict:
+    """Toggle a user's is_active flag. Admin only."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.is_active = not user.is_active
     db.commit()
     db.refresh(user)
     return _user_payload(user)
@@ -526,32 +561,98 @@ def google_callback(
         ) from exc
 
     email = str(user_info.get("email") or "").strip()
-    google_id = str(user_info.get("sub") or "")
+    google_id = str(user_info.get("id") or "")
+    name = str(user_info.get("name") or "").strip()
+    picture = str(user_info.get("picture") or "").strip()
 
     if not email or not google_id:
         raise HTTPException(status_code=401, detail="Missing Google account info")
 
-    # Use email prefix as username
-    username = email.split("@")[0]
-
-    user = db.query(User).filter(User.username == username).first()
-    if not user:
-        from uuid import uuid4
-        from app.services.auth_service import hash_password
-
-        user = User(
-            id=uuid4(),
-            username=username,
-            password_hash=hash_password(secrets.token_urlsafe(16)),
-            role="viewer",
-            is_active=True,
+    # 1. Find by OAuth subject (returning Google user)
+    user = (
+        db.query(User)
+        .filter(
+            User.oauth_provider == "google",
+            User.oauth_subject == google_id,
         )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+        .first()
+    )
+    is_new = False
+
+    if user:
+        # Sync avatar and email from Google (preserve user-set display_name)
+        dirty = False
+        if picture and user.avatar_url != picture:
+            user.avatar_url = picture
+            dirty = True
+        if email and user.email != email:
+            user.email = email
+            dirty = True
+        # Keep display_name if user has customized it; only set if null
+        if name and not user.display_name:
+            user.display_name = name
+            dirty = True
+        if dirty:
+            db.commit()
+            db.refresh(user)
+    else:
+        # 2. Find by email (existing password user linking Google for first time)
+        user = db.query(User).filter(User.email == email).first()
+        if user:
+            # Link Google account to existing user
+            user.oauth_provider = "google"
+            user.oauth_subject = google_id
+            if picture and not user.avatar_url:
+                user.avatar_url = picture
+            if email:
+                user.email = email
+            if name and not user.display_name:
+                user.display_name = name
+            db.commit()
+            db.refresh(user)
+        else:
+            # 3. Create new user (first-time Google registration)
+            from uuid import uuid4
+            from app.services.auth_service import hash_password
+
+            base_username = email.split("@")[0]
+            username = base_username
+            # Ensure unique username
+            existing = (
+                db.query(User).filter(User.username == username).first()
+            )
+            suffix = 1
+            while existing:
+                username = f"{base_username}{suffix}"
+                existing = (
+                    db.query(User)
+                    .filter(User.username == username)
+                    .first()
+                )
+                suffix += 1
+
+            user = User(
+                id=uuid4(),
+                username=username,
+                email=email,
+                display_name=name or None,
+                password_hash=hash_password(secrets.token_urlsafe(16)),
+                role="viewer",
+                is_active=True,
+                oauth_provider="google",
+                oauth_subject=google_id,
+                avatar_url=picture or None,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            is_new = True
 
     import os as _os
     token = session_store.create(user.username, user.role)
     origin = _os.getenv("APP_FRONTEND_ORIGIN", "http://127.0.0.1:5173")
-    frontend_url = f"{origin}{redirect}?token={token}&username={user.username}&role={user.role}"
+    params = f"token={token}&username={user.username}&role={user.role}"
+    if is_new:
+        params += "&isNewUser=true"
+    frontend_url = f"{origin}{redirect}?{params}"
     return RedirectResponse(url=frontend_url)

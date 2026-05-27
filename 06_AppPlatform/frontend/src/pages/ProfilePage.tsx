@@ -4,9 +4,10 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { JATO_COUNTRIES, formatJatoCountryOption } from "../utils/jatoCountries";
 
-export function CountrySetupPage() {
+export function ProfilePage() {
   const { user, updateProfile } = useAuth();
   const navigate = useNavigate();
+  const [displayName, setDisplayName] = useState(user?.displayName ?? "");
   const [primaryCountry, setPrimaryCountry] = useState(user?.primaryCountry ?? "");
   const [secondaryCountries, setSecondaryCountries] = useState<string[]>(
     user?.secondaryCountries ?? [],
@@ -16,6 +17,7 @@ export function CountrySetupPage() {
 
   useEffect(() => {
     if (!user) return;
+    setDisplayName(user.displayName ?? "");
     setPrimaryCountry(user.primaryCountry ?? "");
     setSecondaryCountries(user.secondaryCountries);
   }, [user]);
@@ -46,6 +48,7 @@ export function CountrySetupPage() {
         primaryCountry,
         secondaryCountries: secondaryCountries.filter((code) => code !== primaryCountry),
         preferredLandingPage: "/dashboard",
+        displayName: displayName.trim() || null,
       });
       navigate("/dashboard", { replace: true });
     } catch (err) {
@@ -58,12 +61,48 @@ export function CountrySetupPage() {
   return (
     <section className="crud-shell">
       <header className="crud-hero">
-        <h1>Country Setup</h1>
-        <p>选择你负责的 JATO 国家范围。JATO 看板和 MarketScan 默认读取主国家，Order Genius 后续会读取主国家加副国家。</p>
+        <h1>Profile</h1>
+        <p>管理你的 JATO 账户资料与国家偏好。</p>
       </header>
 
       <div className="card crud-card" style={{ padding: 20, maxWidth: 760 }}>
         {error ? <div className="alert alert-error" style={{ marginBottom: 12 }}>{error}</div> : null}
+
+        {/* Profile overview */}
+        <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #e5e7eb" }}>
+          {user?.avatarUrl ? (
+            <img src={user.avatarUrl} alt="" style={{ width: 56, height: 56, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} referrerPolicy="no-referrer" />
+          ) : (
+            <span style={{ width: 56, height: 56, borderRadius: "50%", background: "#1c69d4", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 700, flexShrink: 0 }}>
+              {user?.displayName?.[0] ?? user?.username?.[0] ?? "?"}
+            </span>
+          )}
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#1e293b" }}>{user?.displayName ?? user?.username ?? ""}</div>
+            <div style={{ fontSize: 13, color: "#64748b" }}>{user?.email ?? user?.username ?? ""}</div>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
+              {user?.oauthProvider === "google" ? "Google Account" : "Password Account"} · {user?.role}
+            </div>
+          </div>
+        </div>
+
+        {/* Display name */}
+        <label style={{ display: "block", marginBottom: 20 }}>
+          <span style={{ display: "block", fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
+            Display Name / 显示名称
+          </span>
+          <input
+            type="text"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder={user?.username ?? "Enter your display name"}
+            maxLength={64}
+            style={{ width: "100%", maxWidth: 320, padding: "8px 12px", borderRadius: 4, border: "1px solid #d1d5db", fontSize: 14 }}
+          />
+          <span style={{ fontSize: 11, color: "#94a3b8", marginTop: 4, display: "block" }}>
+            留空则显示账号名 ({user?.username})
+          </span>
+        </label>
 
         <label style={{ display: "block", marginBottom: 16 }}>
           <span style={{ display: "block", fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
@@ -103,7 +142,7 @@ export function CountrySetupPage() {
 
         <div style={{ display: "flex", gap: 8 }}>
           <button type="button" className="btn btn-sm btn-primary" onClick={saveProfile} disabled={saving}>
-            {saving ? "Saving..." : "Save Country Preferences"}
+            {saving ? "Saving..." : "Save Profile"}
           </button>
           {user?.profileComplete ? (
             <button type="button" className="btn btn-sm btn-ghost" onClick={() => navigate(-1)}>

@@ -1491,6 +1491,11 @@ class User(Base):
         server_default=text("'[]'::jsonb"),
     )
     preferred_landing_page: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    oauth_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    oauth_subject: Mapped[str | None] = mapped_column(Text, nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

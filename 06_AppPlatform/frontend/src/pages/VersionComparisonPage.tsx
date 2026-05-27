@@ -40,9 +40,9 @@ import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefault
 import { useArrowCountryNavigation } from "../utils/useArrowCountryNavigation";
 import { useFixedCanvasPreview } from "../utils/useFixedCanvasPreview";
 import { useDeckLayoutControls, type DeckLayoutDirection } from "../hooks/useDeckLayoutControls";
+import { useResolvedCountry } from "../hooks/useResolvedCountry";
 
 const DEFAULT_FUEL_TYPES = ["BEV", "HEV", "PHEV", "MHEV", "ICE"];
-const DEFAULT_COUNTRY = "瑞典";
 const DEFAULT_SALES_MODE: PositioningPricingSalesMode = "month";
 const DEFAULT_PRICE_BAND_SIZE = 1000;
 const MIN_PRICE_BAND_SIZE = 500;
@@ -666,6 +666,7 @@ function searchCountryOptions(options: { value: string; label: string }[], query
 
 export function VersionComparisonPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { country: defaultCountry } = useResolvedCountry("zh");
   const [deck, setDeck] = useState<VersionComparisonDeckResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -691,7 +692,7 @@ export function VersionComparisonPage() {
   const segmentPickerRef = useRef<HTMLDivElement | null>(null);
   const countryPickerRef = useRef<HTMLDivElement | null>(null);
 
-  const [selectedCountry, setSelectedCountry] = useState<string | null>(() => searchParams.get("country") || DEFAULT_COUNTRY);
+  const [selectedCountry, setSelectedCountry] = useState<string | null>(() => searchParams.get("country") || defaultCountry);
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(() => searchParams.get("period"));
   const [selectedTimeRange, setSelectedTimeRange] = useState<MarketScanPeriodRange | null>(
     () => readSearchTimeRange(searchParams),
@@ -807,7 +808,7 @@ export function VersionComparisonPage() {
 
   useArrowCountryNavigation({
     options: countryOptions,
-    activeValue: selectedCountry || DEFAULT_COUNTRY,
+    activeValue: selectedCountry || defaultCountry,
     onSelect: (value) => setSelectedCountry(value || null),
   });
 
@@ -927,7 +928,7 @@ export function VersionComparisonPage() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [modelPickerOpen, segmentPickerOpen, countryPickerOpen]);
 
-  const currentCountry = selectedCountry ?? deck?.metadata.selectedCountry ?? DEFAULT_COUNTRY;
+  const currentCountry = selectedCountry ?? deck?.metadata.selectedCountry ?? defaultCountry;
   const resolvedTimeRange = selectedTimeRange ?? deck?.metadata.selectedTimeRange ?? null;
   const customRangeActive = isCustomTimeRange(resolvedTimeRange);
   const currentPeriod = resolvedTimeRange?.end ?? selectedPeriod ?? deck?.metadata.resolvedPeriod ?? "";
@@ -1033,6 +1034,13 @@ export function VersionComparisonPage() {
         return current.length > 1 ? current.filter((item) => item !== fuel) : current;
       }
       return [...current, fuel];
+    });
+  }
+
+  function isolateFuel(fuel: string) {
+    setSelectedFuelTypes((current) => {
+      if (current.length === 1 && current[0] === fuel) return fuelOptions;
+      return [fuel];
     });
   }
 
@@ -1209,7 +1217,7 @@ export function VersionComparisonPage() {
                   </button>
                   <button type="button" className="btn btn-ghost btn-sm"
                     onClick={() => {
-                      setSelectedCountry(DEFAULT_COUNTRY); setSelectedPeriod(null);
+                      setSelectedCountry(defaultCountry); setSelectedPeriod(null);
                       setSalesMode(DEFAULT_SALES_MODE); setComparisonMode("same_segment");
                       setSelectedSegment(null); setSelectedModels([]);
                       setSelectedFuelTypes(DEFAULT_FUEL_TYPES); setPriceControlsTouched(false);
@@ -1299,7 +1307,7 @@ export function VersionComparisonPage() {
                   {countryPickerOpen && searchedCountryOptions.length > 0 ? (
                     <div className="version-comparison-model-dropdown">
                       {searchedCountryOptions.slice(0, 40).map((option) => {
-                        const isSelected = option.value === (selectedCountry || DEFAULT_COUNTRY);
+                        const isSelected = option.value === (selectedCountry || defaultCountry);
                         return (
                           <button
                             key={option.value}
@@ -1567,6 +1575,8 @@ export function VersionComparisonPage() {
                         type="button"
                         className={`market-scan-fuel-chip${active ? " is-active" : ""}`}
                         onClick={() => toggleFuel(fuel)}
+                        onDoubleClick={() => isolateFuel(fuel)}
+                        title="双击只看此动力"
                         style={{
                           borderColor: active ? fuelColor(fuel) : undefined,
                           background: active ? `${fuelColor(fuel)}16` : undefined,
