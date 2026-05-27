@@ -540,11 +540,13 @@ function buildSmartLabelTraces(
   if (visibleCandidates.length === 0) return [];
   const xValues = visibleCandidates.map((item) => item.x);
   const yValues = visibleCandidates.map((item) => item.y);
-  const hidden = filterOverlappingSmartLabels(
-    visibleCandidates,
-    Math.max(...xValues) - Math.min(...xValues) || 1,
-    Math.max(...yValues) - Math.min(...yValues) || 1,
-  );
+  const hidden = strategy === "selected"
+    ? new Set<string>()
+    : filterOverlappingSmartLabels(
+        visibleCandidates,
+        Math.max(...xValues) - Math.min(...xValues) || 1,
+        Math.max(...yValues) - Math.min(...yValues) || 1,
+      );
   const visible = visibleCandidates.filter((candidate) => !hidden.has(candidate.key));
   const textposition = resolveSmartTextPosition(settings.dataLabelPosition);
   const labelFontSize = resolveLabelFontSize(settings);
