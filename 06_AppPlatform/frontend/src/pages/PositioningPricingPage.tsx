@@ -364,11 +364,15 @@ function buildBubbleTraces(
   fuelOrder: string[],
   bubbleScale: number,
   labelFontSize = 9,
+  msrpMode: "min" | "median" = "min",
 ): Data[] {
   const sizing = buildBubbleSizing(items.map((item) => item.sales), {
     maxDiameter: 28 * bubbleScale,
     minDiameter: 4,
   });
+  const msrpField = msrpMode === "median" ? "msrp" as const : "msrpMin" as const;
+  const msrpLabel = msrpMode === "median" ? "中位 MSRP" : "最低 MSRP";
+  const otherLabel = msrpMode === "median" ? "最低 MSRP" : "中位 MSRP";
   return fuelOrder.flatMap((fuel) => {
     const fuelItems = items.filter((item) => item.powertrain === fuel);
     if (fuelItems.length === 0) {
@@ -380,7 +384,7 @@ function buildBubbleTraces(
       mode: "markers",
       name: fuel,
       x: fuelItems.map((item) => item.length),
-      y: fuelItems.map((item) => item.msrpMin),
+      y: fuelItems.map((item) => item[msrpField]),
       textposition: labelPosition,
       textfont: { size: labelFontSize, color: "#334155" },
       cliponaxis: false,
@@ -388,7 +392,7 @@ function buildBubbleTraces(
         item.model,
         item.brand,
         item.segment,
-        item.msrp,
+        msrpMode === "median" ? item.msrpMin : item.msrp,
         item.msrpMax,
         item.sales,
         item.variantCount,
@@ -403,13 +407,13 @@ function buildBubbleTraces(
         sizemin: sizing.sizemin,
       },
       hovertemplate:
-        "Model: %{customdata[0]}<br>Brand: %{customdata[1]}<br>Segment: %{customdata[2]}<br>Length: %{x:,.0f} mm"
-        + "<br>最低 MSRP: %{y:,.0f}<br>组内中位 MSRP: %{customdata[3]:,.0f}<br>最高 MSRP: %{customdata[4]:,.0f}"
+        `Model: %{customdata[0]}<br>Brand: %{customdata[1]}<br>Segment: %{customdata[2]}<br>Length: %{x:,.0f} mm`
+        + `<br>${msrpLabel}: %{y:,.0f}<br>${otherLabel}: %{customdata[3]:,.0f}<br>最高 MSRP: %{customdata[4]:,.0f}`
         + "<br>Sales: %{customdata[5]:,.0f}<br>聚合版型数: %{customdata[6]:,.0f}<extra>%{fullData.name}</extra>",
     } as Data, {
       model: fuelItems.map((item) => item.model.trim()),
       sales: fuelItems.map((item) => item.sales),
-      value: fuelItems.map((item) => item.msrpMin),
+      value: fuelItems.map((item) => item[msrpField]),
       series: fuelItems.map(() => fuel),
     })];
   });
@@ -573,6 +577,10 @@ export function PositioningPricingPage() {
     const raw = searchParams.get("priceBandSize");
     return raw ? Number(raw) : DEFAULT_PRICE_BAND_SIZE;
   });
+  const [msrpMode, setMsrpMode] = useState<"min" | "median">(() => {
+    const raw = searchParams.get("msrpMode");
+    return raw === "median" ? "median" : "min";
+  });
   const [lengthMin, setLengthMin] = useState<number | null>(() => {
     const raw = searchParams.get("lengthMin");
     return raw ? Number(raw) : DEFAULT_LENGTH_MIN;
@@ -614,13 +622,14 @@ export function PositioningPricingPage() {
     if (lengthMin !== null) params.set("lengthMin", String(lengthMin));
     if (lengthMax !== null) params.set("lengthMax", String(lengthMax));
     if (priceBandSize !== null) params.set("priceBandSize", String(priceBandSize));
+    if (msrpMode !== "min") params.set("msrpMode", msrpMode);
     const fuels = selectedFuelTypes.slice().sort().join(",");
     const defaultFuels = DEFAULT_FUEL_TYPES.slice().sort().join(",");
     if (fuels && fuels !== defaultFuels) {
       params.set("fuelTypes", selectedFuelTypes.join(","));
     }
     setSearchParams(params, { replace: true });
-  }, [activePage, lengthMax, lengthMin, msrpMax, msrpMin, priceBandSize, salesMode, selectedCountry, selectedFuelTypes, selectedPeriod, selectedTimeRange, setSearchParams, topN]);
+  }, [activePage, lengthMax, lengthMin, msrpMax, msrpMin, msrpMode, priceBandSize, salesMode, selectedCountry, selectedFuelTypes, selectedPeriod, selectedTimeRange, setSearchParams, topN]);
 
   useEffect(() => {
     syncUrlParams();
@@ -651,6 +660,7 @@ export function PositioningPricingPage() {
       length_min: lengthMin,
       length_max: lengthMax,
       price_band_size: priceBandSize,
+      msrp_mode: msrpMode,
     })
       .then((response) => {
         setDeck(response);
@@ -729,12 +739,12 @@ export function PositioningPricingPage() {
     () => (
       page
         ? applyPositioningExportToTraces(
-            buildBubbleTraces(page.bubbleChart.items, activeFuelTypes, bubbleScale, bubbleExport.labelFontSize ?? bubbleExport.fontSize),
+            buildBubbleTraces(page.bubbleChart.items, activeFuelTypes, bubbleScale, bubbleExport.labelFontSize ?? bubbleExport.fontSize, msrpMode),
             bubbleExport,
           )
         : []
     ),
-    [activeFuelTypes, bubbleExport, bubbleScale, page],
+    [activeFuelTypes, bubbleExport, bubbleScale, msrpMode, page],
   );
   const priceBandChartKey = [
     "price",
@@ -950,6 +960,27 @@ export function PositioningPricingPage() {
 
           {activeControlPanel === "range" ? (
             <div className="positioning-pricing-control-grid">
+              <label className="market-scan-field positioning-pricing-control-field--wide">
+                <span>MSRP 口径</span>
+                <div className="btn-group" style={{ width: "100%" }}>
+                  <button
+                    type="button"
+                    className={`btn btn-sm${msrpMode === "min" ? " btn-primary" : " btn-ghost"}`}
+                    style={{ flex: 1, fontSize: 11 }}
+                    onClick={() => setMsrpMode("min")}
+                  >
+                    最低 MSRP
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm${msrpMode === "median" ? " btn-primary" : " btn-ghost"}`}
+                    style={{ flex: 1, fontSize: 11 }}
+                    onClick={() => setMsrpMode("median")}
+                  >
+                    中位 MSRP
+                  </button>
+                </div>
+              </label>
               <label className="market-scan-field">
                 <span>MSRP Min</span>
                 <DebouncedNumberInput
@@ -1106,6 +1137,7 @@ export function PositioningPricingPage() {
                       setTopN(DEFAULT_TOP_N);
                       setMsrpMin(DEFAULT_MSRP_MIN);
                       setMsrpMax(DEFAULT_MSRP_MAX);
+                      setMsrpMode("min");
                       setPriceBandSize(DEFAULT_PRICE_BAND_SIZE);
                       setLengthMin(DEFAULT_LENGTH_MIN);
                       setLengthMax(DEFAULT_LENGTH_MAX);

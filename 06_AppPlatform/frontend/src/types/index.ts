@@ -812,6 +812,7 @@ export interface PositioningPricingDeckRequest {
   top_n?: number;
   msrp_min?: number | null;
   msrp_max?: number | null;
+  msrp_mode?: "min" | "median";
   length_min?: number | null;
   length_max?: number | null;
   price_band_size?: number | null;
