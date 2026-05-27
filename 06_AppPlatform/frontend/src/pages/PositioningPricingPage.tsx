@@ -1089,8 +1089,7 @@ export function PositioningPricingPage() {
                         key={fuel}
                         type="button"
                         className={`market-scan-fuel-chip${active ? " is-active" : ""}`}
-                        onClick={() => toggle(fuel)}
-                        onDoubleClick={() => isolate(fuel)}
+                        onClick={(e) => { if (e.detail >= 2) { isolate(fuel); } else { toggle(fuel); } }}
                         title="双击只看此动力"
                         style={{
                           borderColor: active ? fuelColor(fuel) : undefined,
