@@ -117,8 +117,9 @@ class MarketScanDeckRequest(BaseModel):
     origin_window_months: int = 30
     body_window_months: int = 30
     ranking_limit: int = Field(default=10, ge=10)
-    drilldown_segment: str | None = None
-    view: str | None = None  # "overview" | "origin" | "segment" | "drilldown" | "suvAll" | "suvA" | "suvB"
+    drilldown_segments: list[str] = Field(default_factory=list)
+    body_types: list[str] = Field(default_factory=list)
+    view: str | None = None  # "overview" | "origin" | "segment" | "drilldown" | "suvAll" | "suvA" | "suvB" | "bodyType"
 
 
 class PositioningPricingDeckRequest(BaseModel):

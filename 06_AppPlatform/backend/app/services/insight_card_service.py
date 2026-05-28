@@ -175,7 +175,8 @@ def _generate_cards(country: str) -> list[InsightCard]:
             origin_window_months=12,
             body_window_months=12,
             ranking_limit=15,
-            drilldown_segment=None,
+            drilldown_segments=[],
+            body_types=[],
         )
     except Exception:
         log.warning("Cannot generate insight cards for %s – deck unavailable", country)

@@ -103,6 +103,7 @@ const TAB_ITEMS: Array<{
   { key: "drilldown", code: "05", label: "Drilldown", sublabel: "A0级 SUV" },
   { key: "suvA", code: "06", label: "SUV-A", sublabel: "A级 SUV" },
   { key: "suvB", code: "07", label: "SUV-B", sublabel: "B级 SUV" },
+  { key: "bodyType", code: "08", label: "Body", sublabel: "车身形式" },
 ];
 
 const DEFAULT_MARKET_SCAN_EXPORT: ExportSettings = {
@@ -2372,6 +2373,12 @@ function DrilldownSection({
   );
 }
 
+function searchDrilldownOptions(options: { value: string; label: string }[], query: string): { value: string; label: string }[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return options;
+  return options.filter((s) => s.label.toLowerCase().includes(q) || s.value.toLowerCase().includes(q));
+}
+
 export function MarketScanPage({
   initialActivePage,
   initialDrilldownSegment,
@@ -2461,9 +2468,24 @@ export function MarketScanPage({
       return ft ? ft.split(",") : DEFAULT_FUEL_TYPES;
     },
   );
-  const [selectedDrilldownSegment, setSelectedDrilldownSegment] = useState(
-    () => initialDrilldownSegment || searchParams.get("drilldownSegment") || "SUV A0",
+  const [selectedDrilldownSegments, setSelectedDrilldownSegments] = useState<string[]>(
+    () => {
+      const fromUrl = searchParams.get("drilldownSegments");
+      if (fromUrl) return fromUrl.split(",").filter(Boolean);
+      if (initialDrilldownSegment) return [initialDrilldownSegment];
+      return ["SUV A0"];
+    },
   );
+  const [drilldownSearchQuery, setDrilldownSearchQuery] = useState("");
+  const [drilldownPickerOpen, setDrilldownPickerOpen] = useState(false);
+  const [selectedBodyTypes, setSelectedBodyTypes] = useState<string[]>(
+    () => {
+      const fromUrl = searchParams.get("bodyTypes");
+      return fromUrl ? fromUrl.split(",").filter(Boolean) : [];
+    },
+  );
+  const [bodyTypeSearchQuery, setBodyTypeSearchQuery] = useState("");
+  const [bodyTypePickerOpen, setBodyTypePickerOpen] = useState(false);
   const [rankingLimit, setRankingLimit] = useState(
     () => {
       const rl = searchParams.get("rankingLimit");
@@ -2481,6 +2503,8 @@ export function MarketScanPage({
   const deckCacheKey = useRef<Partial<Record<MarketScanPageKey, string>>>({});
   const requestRef = useRef(0);
   const slideRef = useRef<HTMLDivElement | null>(null);
+  const drilldownPickerRef = useRef<HTMLDivElement | null>(null);
+  const bodyTypePickerRef = useRef<HTMLDivElement | null>(null);
   const countryOptions = deck?.metadata.availableCountries ?? [];
 
   // Sync filter state back to URL search params
@@ -2494,14 +2518,17 @@ export function MarketScanPage({
     }
     if (activePage !== "overview") params.set("activePage", activePage);
     if (salesMode !== DEFAULT_MARKET_SCAN_SALES_MODE) params.set("salesMode", salesMode);
-    if (selectedDrilldownSegment !== "SUV A0") params.set("drilldownSegment", selectedDrilldownSegment);
+    const dsSorted = selectedDrilldownSegments.slice().sort().join(",");
+    if (dsSorted !== "SUV A0") params.set("drilldownSegments", dsSorted);
+    const btSorted = selectedBodyTypes.slice().sort().join(",");
+    if (btSorted) params.set("bodyTypes", btSorted);
     if (rankingLimit !== MIN_MARKET_SCAN_RANKING_LIMIT) params.set("rankingLimit", String(rankingLimit));
     const ft = selectedFuelTypes.slice().sort().join(",");
     const defaultFt = DEFAULT_FUEL_TYPES.slice().sort().join(",");
     if (ft !== defaultFt) params.set("fuelTypes", selectedFuelTypes.join(","));
     setSearchParams(params, { replace: true });
     try { sessionStorage.setItem("ms_activePage", activePage); if (selectedCountry) sessionStorage.setItem("ms_country", selectedCountry); } catch { /* ignore */ }
-  }, [activePage, rankingLimit, salesMode, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, selectedTimeRange, setSearchParams]);
+  }, [activePage, rankingLimit, salesMode, selectedBodyTypes, selectedCountry, selectedDrilldownSegments, selectedFuelTypes, selectedPeriod, selectedTimeRange, setSearchParams]);
 
   useEffect(() => {
     syncUrlParams();
@@ -2525,12 +2552,40 @@ export function MarketScanPage({
     onSelect: (value) => setSelectedCountry(value || null),
   });
 
+  const segmentOptions = deck?.metadata.availableSegments ?? [];
+  const searchedDrilldownOptions = useMemo(
+    () => searchDrilldownOptions(segmentOptions, drilldownSearchQuery),
+    [segmentOptions, drilldownSearchQuery],
+  );
+
+  const bodyTypeOptions = deck?.metadata.availableBodyTypes ?? [];
+  const searchedBodyTypeOptions = useMemo(
+    () => searchDrilldownOptions(bodyTypeOptions, bodyTypeSearchQuery),
+    [bodyTypeOptions, bodyTypeSearchQuery],
+  );
+
+  // Close pickers on outside click
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (drilldownPickerRef.current && !drilldownPickerRef.current.contains(event.target as Node)) {
+        setDrilldownPickerOpen(false);
+      }
+      if (bodyTypePickerRef.current && !bodyTypePickerRef.current.contains(event.target as Node)) {
+        setBodyTypePickerOpen(false);
+      }
+    }
+    if (drilldownPickerOpen || bodyTypePickerOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [drilldownPickerOpen, bodyTypePickerOpen]);
+
   useEffect(() => {
     let active = true;
     const requestId = ++requestRef.current;
 
     // Fast path: use per-view cache if params haven't changed
-    const paramKey = `${selectedCountry || "_"}|${selectedFuelTypes.slice().sort().join(",")}|${selectedPeriod || "_"}|${JSON.stringify(selectedTimeRange)}|${selectedDrilldownSegment || "_"}|${rankingLimit}`;
+    const paramKey = `${selectedCountry || "_"}|${selectedFuelTypes.slice().sort().join(",")}|${selectedPeriod || "_"}|${JSON.stringify(selectedTimeRange)}|${selectedDrilldownSegments.slice().sort().join(",") || "_"}|${selectedBodyTypes.slice().sort().join(",") || "_"}|${rankingLimit}`;
     const cachedView = deckCache.current[activePage];
     const cachedKey = deckCacheKey.current[activePage];
     if (cachedView && cachedKey === paramKey) {
@@ -2551,7 +2606,8 @@ export function MarketScanPage({
       origin_window_months: 24,
       body_window_months: 24,
       ranking_limit: normalizeMarketScanRankingLimit(rankingLimit),
-      drilldown_segment: selectedDrilldownSegment || undefined,
+      drilldown_segments: selectedDrilldownSegments.length > 0 ? selectedDrilldownSegments : undefined,
+      body_types: selectedBodyTypes.length > 0 ? selectedBodyTypes : undefined,
       view: activePage,
     })
       .then((response) => {
@@ -2582,7 +2638,7 @@ export function MarketScanPage({
     return () => {
       active = false;
     };
-  }, [activePage, rankingLimit, reloadToken, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
+  }, [activePage, rankingLimit, reloadToken, selectedBodyTypes, selectedCountry, selectedDrilldownSegments, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
 
   useEffect(() => {
     if (!deck) {
@@ -2616,13 +2672,20 @@ export function MarketScanPage({
       }
     }
 
-    if (
-      selectedDrilldownSegment
-      && !deck.metadata.availableSegments.some(
-        (option) => option.value === selectedDrilldownSegment,
-      )
-    ) {
-      setSelectedDrilldownSegment(deck.metadata.selectedDrilldownSegment);
+    if (selectedDrilldownSegments.length > 0) {
+      const availableSet = new Set(deck.metadata.availableSegments.map((s) => s.value));
+      const valid = selectedDrilldownSegments.filter((s) => availableSet.has(s));
+      if (valid.length !== selectedDrilldownSegments.length) {
+        setSelectedDrilldownSegments(valid.length > 0 ? valid : deck.metadata.selectedDrilldownSegments);
+      }
+    }
+
+    if (selectedBodyTypes.length > 0) {
+      const availableBtSet = new Set(deck.metadata.availableBodyTypes.map((b) => b.value));
+      const validBt = selectedBodyTypes.filter((b) => availableBtSet.has(b));
+      if (validBt.length !== selectedBodyTypes.length) {
+        setSelectedBodyTypes(validBt);
+      }
     }
 
     const availableFuelSet = new Set(deck.metadata.availableFuelTypes);
@@ -2630,7 +2693,7 @@ export function MarketScanPage({
     if (normalizedFuelTypes.length !== selectedFuelTypes.length && deck.metadata.selectedFuelTypes.length > 0) {
       setSelectedFuelTypes(deck.metadata.selectedFuelTypes);
     }
-  }, [deck, selectedCountry, selectedDrilldownSegment, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
+  }, [deck, selectedBodyTypes, selectedCountry, selectedDrilldownSegments, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
 
   const currentCountry = selectedCountry ?? deck?.metadata.selectedCountry ?? "";
   const resolvedTimeRange = selectedTimeRange ?? deck?.metadata.selectedTimeRange ?? null;
@@ -2824,6 +2887,22 @@ export function MarketScanPage({
         />
       );
     }
+    if (activePage === "bodyType") {
+      return (
+        <DrilldownSection
+          page={d.results.bodyType}
+          fuelOrder={d.metadata.selectedFuelTypes}
+          salesMode={salesMode}
+          customRangeActive={customRangeActive}
+          customRangeLabel={d.results.overview?.summary?.customRangeLabel}
+          showDataLabels={showDataLabels}
+          exportSettings={exportSettings}
+          compact={compact}
+          rankingLimit={rankingLimit}
+          onRankingLimitChange={compact ? undefined : setRankingLimit}
+        />
+      );
+    }
     return (
         <DrilldownSection
           page={d.results.suvB}
@@ -2909,7 +2988,7 @@ export function MarketScanPage({
                   动力 {activeFuelTypes.join(" / ")}
                 </span>
                 <span className="market-scan-hero-chip">
-                  下钻 {deck?.metadata.selectedDrilldownSegment ?? selectedDrilldownSegment}
+                  下钻 {(deck?.metadata.selectedDrilldownSegments ?? selectedDrilldownSegments).join(", ")}
                 </span>
                 {loading && deck ? (
                   <span className="market-scan-hero-chip market-scan-hero-chip--live">Refreshing</span>
@@ -2946,7 +3025,7 @@ export function MarketScanPage({
               <span className="market-scan-toolbar-chip">{deck?.metadata.selectedCountryLabel ?? currentCountry}</span>
               <span className="market-scan-toolbar-chip">{customRangeActive ? "自定义区间" : (MARKET_SCAN_SALES_MODE_OPTIONS.find((o) => o.value === salesMode)?.label ?? "当月")}</span>
               <span className="market-scan-toolbar-chip">动力 {activeFuelTypes.length}</span>
-              <span className="market-scan-toolbar-chip">下钻 {deck?.metadata.selectedDrilldownSegment ?? selectedDrilldownSegment}</span>
+              <span className="market-scan-toolbar-chip">下钻 {(deck?.metadata.selectedDrilldownSegments ?? selectedDrilldownSegments).join(", ")}</span>
             </>
           )}
         >
@@ -2966,20 +3045,135 @@ export function MarketScanPage({
               </select>
             </label>
 
-            <label className="market-scan-field">
-              <span>Drilldown</span>
-              <select
-                value={selectedDrilldownSegment}
-                onChange={(event) => setSelectedDrilldownSegment(event.target.value)}
-                disabled={!deck}
-              >
-                {(deck?.metadata.availableSegments ?? []).map((segment) => (
-                  <option key={segment.value} value={segment.value}>
-                    {segment.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="market-scan-field version-comparison-model-picker-field" ref={drilldownPickerRef}>
+              <span>Drilldown{selectedDrilldownSegments.length > 0 ? ` (${selectedDrilldownSegments.length})` : ""}</span>
+              <div className="version-comparison-model-picker">
+                <div className="version-comparison-model-picker-input-row">
+                  <input
+                    type="text"
+                    className="version-comparison-model-search"
+                    placeholder="多选 Segment..."
+                    value={drilldownSearchQuery}
+                    onChange={(event) => {
+                      setDrilldownSearchQuery(event.target.value);
+                      setDrilldownPickerOpen(true);
+                    }}
+                    onFocus={() => {
+                      setDrilldownSearchQuery("");
+                      setDrilldownPickerOpen(true);
+                    }}
+                    disabled={!deck}
+                  />
+                </div>
+                {drilldownPickerOpen && searchedDrilldownOptions.length > 0 ? (
+                  <div className="version-comparison-model-dropdown">
+                    <div className="version-comparison-model-dropdown-actions">
+                      <button type="button" className="version-comparison-batch-btn"
+                        onClick={() => setSelectedDrilldownSegments(searchedDrilldownOptions.map(s => s.value))}>全选</button>
+                      <button type="button" className="version-comparison-batch-btn"
+                        onClick={() => { const v = new Set(searchedDrilldownOptions.map(s => s.value)); setSelectedDrilldownSegments(c => c.filter(s => !v.has(s))); }}>取消</button>
+                      <button type="button" className="version-comparison-batch-btn"
+                        onClick={() => setSelectedDrilldownSegments([])}>清空</button>
+                      <span className="version-comparison-dropdown-count">
+                        {searchedDrilldownOptions.length} 项 · {selectedDrilldownSegments.length} 已选
+                      </span>
+                    </div>
+                    {searchedDrilldownOptions.slice(0, 30).map((seg) => {
+                      const active = selectedDrilldownSegments.includes(seg.value);
+                      return (
+                        <button
+                          key={seg.value}
+                          type="button"
+                          className={`version-comparison-model-option${active ? " is-selected" : ""}`}
+                          onClick={() => {
+                            setSelectedDrilldownSegments((current) =>
+                              current.includes(seg.value)
+                                ? current.filter((s) => s !== seg.value)
+                                : [...current, seg.value]
+                            );
+                          }}
+                        >
+                          <span className={`version-comparison-model-checkbox${active ? " is-checked" : ""}`}>
+                            {active ? "✓" : ""}
+                          </span>
+                          <span className="version-comparison-model-option-name">{seg.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {drilldownPickerOpen && searchedDrilldownOptions.length === 0 && drilldownSearchQuery.trim() ? (
+                  <div className="version-comparison-model-dropdown">
+                    <div className="version-comparison-model-empty">无匹配 Segment</div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="market-scan-field version-comparison-model-picker-field" ref={bodyTypePickerRef}>
+              <span>Body Type{selectedBodyTypes.length > 0 ? ` (${selectedBodyTypes.length})` : ""}</span>
+              <div className="version-comparison-model-picker">
+                <div className="version-comparison-model-picker-input-row">
+                  <input
+                    type="text"
+                    className="version-comparison-model-search"
+                    placeholder="多选 Body Type..."
+                    value={bodyTypeSearchQuery}
+                    onChange={(event) => {
+                      setBodyTypeSearchQuery(event.target.value);
+                      setBodyTypePickerOpen(true);
+                    }}
+                    onFocus={() => {
+                      setBodyTypeSearchQuery("");
+                      setBodyTypePickerOpen(true);
+                    }}
+                    disabled={!deck}
+                  />
+                </div>
+                {bodyTypePickerOpen && searchedBodyTypeOptions.length > 0 ? (
+                  <div className="version-comparison-model-dropdown">
+                    <div className="version-comparison-model-dropdown-actions">
+                      <button type="button" className="version-comparison-batch-btn"
+                        onClick={() => setSelectedBodyTypes(searchedBodyTypeOptions.map(s => s.value))}>全选</button>
+                      <button type="button" className="version-comparison-batch-btn"
+                        onClick={() => { const v = new Set(searchedBodyTypeOptions.map(s => s.value)); setSelectedBodyTypes(c => c.filter(s => !v.has(s))); }}>取消</button>
+                      <button type="button" className="version-comparison-batch-btn"
+                        onClick={() => setSelectedBodyTypes([])}>清空</button>
+                      <span className="version-comparison-dropdown-count">
+                        {searchedBodyTypeOptions.length} 项 · {selectedBodyTypes.length} 已选
+                      </span>
+                    </div>
+                    {searchedBodyTypeOptions.slice(0, 30).map((bt) => {
+                      const active = selectedBodyTypes.includes(bt.value);
+                      return (
+                        <button
+                          key={bt.value}
+                          type="button"
+                          className={`version-comparison-model-option${active ? " is-selected" : ""}`}
+                          onClick={() => {
+                            setSelectedBodyTypes((current) =>
+                              current.includes(bt.value)
+                                ? current.filter((s) => s !== bt.value)
+                                : [...current, bt.value]
+                            );
+                          }}
+                        >
+                          <span className={`version-comparison-model-checkbox${active ? " is-checked" : ""}`}>
+                            {active ? "✓" : ""}
+                          </span>
+                          <span className="version-comparison-model-option-name">{bt.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {bodyTypePickerOpen && searchedBodyTypeOptions.length === 0 && bodyTypeSearchQuery.trim() ? (
+                  <div className="version-comparison-model-dropdown">
+                    <div className="version-comparison-model-empty">无匹配 Body Type</div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
 
             <div className="market-scan-field deck-panel-grid__wide">
               <span>销量口径</span>
@@ -3069,7 +3263,8 @@ export function MarketScanPage({
                     setSelectedPeriod(null);
                     setSalesMode(DEFAULT_MARKET_SCAN_SALES_MODE);
                     setSelectedFuelTypes(DEFAULT_FUEL_TYPES);
-                    setSelectedDrilldownSegment("SUV A0");
+                    setSelectedDrilldownSegments(["SUV A0"]);
+                    setSelectedBodyTypes([]);
                     setRankingLimit(MIN_MARKET_SCAN_RANKING_LIMIT);
                     setActivePage("overview");
                   }}
@@ -3151,7 +3346,7 @@ export function MarketScanPage({
                     <span className="market-scan-slide-tag">国家 {deck.metadata.selectedCountryLabel}</span>
                     <span className="market-scan-slide-tag">月份 {deck.metadata.labels.currentMonthShort}</span>
                     <span className="market-scan-slide-tag">动力 {activeFuelTypes.join(" / ")}</span>
-                    <span className="market-scan-slide-tag">下钻 {deck.metadata.selectedDrilldownSegment}</span>
+                    <span className="market-scan-slide-tag">下钻 {deck.metadata.selectedDrilldownSegments.join(", ")}</span>
                   </div>
                 </header>
                 <div className="market-scan-slide-body">
@@ -3255,7 +3450,7 @@ export function MarketScanPage({
       model={trendDrawer.model}
       sourceTable={trendDrawer.sourceTable}
       country={selectedCountry || ""}
-      segment={activePage === "drilldown" ? selectedDrilldownSegment : undefined}
+      segment={activePage === "drilldown" ? selectedDrilldownSegments[0] : undefined}
       fuelTypes={selectedFuelTypes}
       onClose={() => setTrendDrawer({ open: false, brand: "", sourceTable: "monthly_brand_ranking" })}
       onBack={trendDrawer.model ? () => setTrendDrawer((p) => ({ ...p, model: undefined })) : undefined}

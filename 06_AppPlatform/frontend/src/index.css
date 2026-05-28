@@ -216,6 +216,9 @@ button, input, select, textarea {
 .mega-menu-panel{display:none;position:absolute;top:100%;left:0;background:var(--c-bg-panel);border:1px solid #252a31;box-shadow:0 16px 32px rgba(0,0,0,0.35);z-index:51;padding:12px 0;min-width:240px}
 .mega-menu-panel--sm{min-width:240px}
 .mega-menu-panel--lg{display:none;left:0;min-width:520px;padding:16px 20px;grid-template-columns:repeat(2,minmax(220px,1fr));gap:20px}
+/* Flip panel leftwards when it overflows the right edge */
+.mega-menu-dropdown.flip-left .mega-menu-panel{left:auto;right:0}
+.mega-menu-dropdown.flip-left .mega-menu-panel--lg{left:auto;right:0}
 @media(hover:hover){.mega-menu-dropdown:hover .mega-menu-panel{display:block}.mega-menu-dropdown:hover .mega-menu-panel--lg{display:grid}.mega-menu-dropdown .mega-menu-panel{display:none}.mega-menu-dropdown .mega-menu-panel--lg{display:none}.mega-menu-dropdown.is-open .mega-menu-panel{display:block}.mega-menu-dropdown.is-open .mega-menu-panel--lg{display:grid}}
 @media(hover:none){.mega-menu-dropdown .mega-menu-panel{display:none}.mega-menu-dropdown .mega-menu-panel--lg{display:none}.mega-menu-dropdown.is-open .mega-menu-panel{display:block}.mega-menu-dropdown.is-open .mega-menu-panel--lg{display:grid}}
 .mega-menu-column-title{font-size:10px;font-weight:700;letter-spacing:0.10em;text-transform:uppercase;color:var(--c-shell-muted);margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #252a31}
@@ -13003,6 +13006,67 @@ table.data-table tr.data-table-group-row.contains-selection td {
 
 .pw-island.is-snapped:hover {
   opacity: 0.75 !important;
+}
+
+/* ── AG Grid Order Genius custom styles ──────────────────────────── */
+
+.og-grid-wrapper {
+  --ag-font-family: inherit;
+  --ag-font-size: 12px;
+  --ag-header-background-color: #f1f5f9;
+  --ag-row-hover-color: #f0f4ff;
+  --ag-selected-row-background-color: #e8f0fe;
+  --ag-odd-row-background-color: #fafbfc;
+  --ag-border-color: #e2e8f0;
+  --ag-cell-horizontal-padding: 6px;
+}
+
+.og-historical-row {
+  text-decoration: line-through;
+  color: #9ca3af !important;
+  background-color: #f9fafb;
+}
+
+.og-cell-error {
+  color: #dc2626 !important;
+  font-weight: 600;
+}
+
+.og-cell-saving {
+  color: #3b82f6 !important;
+}
+
+.og-group-header-row {
+  font-weight: 700 !important;
+  --ag-row-hover-color: transparent;
+  cursor: default !important;
+}
+
+.og-country-cell {
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.og-material-cell {
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.og-ttl-cell {
+  font-weight: 700;
+}
+
+.og-ttl-amount-cell {
+  font-weight: 700;
+  color: #0f766e;
+}
+
+.og-remark-cell {
+  font-size: 11px;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Pill hover glow when not dragging */

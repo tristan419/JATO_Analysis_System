@@ -14,15 +14,16 @@ _MAX_RETRIES = 3
 
 def build_deck_cache_key(country, period, time_range, fuel_types, ranking_limit, dataset_token,
                          trend_window_months=24, origin_window_months=24, body_window_months=24,
-                         drilldown_segment=None, view=None):
+                         drilldown_segments=None, body_types=None, view=None):
     tr = ""
     if time_range:
         tr = f"{time_range.get('start','')}:{time_range.get('end','')}"
     fuels = ",".join(sorted(fuel_types))
     token = hashlib.sha256(dataset_token.encode()).hexdigest()[:12] if dataset_token else "notoken"
-    ds = drilldown_segment or "none"
+    ds = ",".join(sorted(drilldown_segments)) if drilldown_segments else "none"
+    bt = ",".join(sorted(body_types)) if body_types else "none"
     vw = view or "all"
-    return f"ms:deck:v{_SCHEMA}:{country}:{period or 'latest'}:{tr or 'default'}:{fuels}:rl{ranking_limit}:tw{trend_window_months}:ow{origin_window_months}:bw{body_window_months}:ds{ds}:vw{vw}:dt{token}"
+    return f"ms:deck:v{_SCHEMA}:{country}:{period or 'latest'}:{tr or 'default'}:{fuels}:rl{ranking_limit}:tw{trend_window_months}:ow{origin_window_months}:bw{body_window_months}:ds{ds}:bt{bt}:vw{vw}:dt{token}"
 
 def get_cached_deck(client, key):
     try:

@@ -10,7 +10,7 @@ import {
   type MegaMenuSubItem,
 } from "../utils/pageNavigation";
 import { AssistantMark } from "./AssistantMark";
-import { RoleUpgradeModal, AdminRequestsPanel } from "./RoleUpgradeModal";
+import { RoleUpgradeModal } from "./RoleUpgradeModal";
 
 function MegaMenuPanel({
   item, open, onClose,
@@ -55,6 +55,7 @@ function MegaMenuDropdown({
   const isActive = activeId === item.id;
   const ref = useRef<HTMLDivElement>(null);
   const hoverSupported = useRef(window.matchMedia("(hover: hover)").matches);
+  const [flipLeft, setFlipLeft] = useState(false);
 
   useEffect(() => {
     function handleClick(e: MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); }
@@ -68,8 +69,26 @@ function MegaMenuDropdown({
     return () => document.removeEventListener("keydown", handleKey);
   }, [open, onClose]);
 
+  // Flip panel leftwards when it overflows the right edge of the viewport
+  useEffect(() => {
+    if (!open) { setFlipLeft(false); return; }
+    const timer = requestAnimationFrame(() => {
+      const panel = ref.current?.querySelector(".mega-menu-panel--lg, .mega-menu-panel") as HTMLElement | null;
+      if (!panel) return;
+      const rect = panel.getBoundingClientRect();
+      setFlipLeft(rect.right > window.innerWidth);
+    });
+    return () => cancelAnimationFrame(timer);
+  }, [open]);
+
+  const dropdownClass = [
+    "mega-menu-dropdown",
+    open ? "is-open" : "",
+    flipLeft ? "flip-left" : "",
+  ].filter(Boolean).join(" ");
+
   return (
-    <div className={`mega-menu-dropdown${open ? " is-open" : ""}`} ref={ref}
+    <div className={dropdownClass} ref={ref}
       onMouseEnter={() => { if (hoverSupported.current && !open) onToggle(); }}
       onMouseLeave={() => { if (hoverSupported.current && open) onClose(); }}>
       <button type="button" className={`mega-menu-trigger${isActive ? " active" : ""}`} aria-haspopup="true" aria-expanded={open} onClick={onToggle}>
@@ -88,7 +107,6 @@ export function MegaMenu() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [navOpen, setNavOpen] = useState(false);
   const [showUpgrade, setShowUpgrade] = useState(false);
-  const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const profileRef = useRef<HTMLDivElement | null>(null);
   const activeId = getActiveMegaMenuId(location.pathname);
@@ -175,9 +193,6 @@ export function MegaMenu() {
                     {user.role === "viewer" && (
                       <button type="button" className="mega-menu-profile-popover-action" onClick={() => { setProfileOpen(false); setShowUpgrade(true); }}>Request Upgrade</button>
                     )}
-                    {user.role === "admin" && (
-                      <button type="button" className="mega-menu-profile-popover-action" onClick={() => { setProfileOpen(false); setShowAdminPanel(!showAdminPanel); }}>Admin Panel</button>
-                    )}
                     <button type="button" className="mega-menu-profile-popover-action mega-menu-profile-popover-signout" onClick={logout}>Sign Out</button>
                   </div>
                 </div>
@@ -186,7 +201,6 @@ export function MegaMenu() {
           ) : (
             <Link to="/login" className="mega-menu-signin">Sign in</Link>
           )}
-          {showAdminPanel && <AdminRequestsPanel />}
         </div>
       </nav>
 

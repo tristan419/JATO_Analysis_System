@@ -11,6 +11,7 @@ ROLE_LEVEL = {
     "viewer": 1,
     "editor": 2,
     "admin": 3,
+    "developer": 3,
 }
 
 

@@ -47,6 +47,7 @@ export function cloneFilterSelections(source: FilterSelections): FilterSelection
     return next;
   }, {
     country: [],
+    body_type: [],
     segment: [],
     powertrain: [],
     make: [],

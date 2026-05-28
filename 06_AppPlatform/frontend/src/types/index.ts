@@ -427,11 +427,13 @@ export interface MarketScanMetadata {
   selectedCountry: string;
   selectedCountryLabel: string;
   selectedFuelTypes: string[];
-  selectedDrilldownSegment: string;
+  selectedDrilldownSegments: string[];
+  selectedBodyTypes: string[];
   availableCountries: MarketScanCountryOption[];
   availablePeriods: MarketScanCountryOption[];
   availableFuelTypes: string[];
   availableSegments: MarketScanCountryOption[];
+  availableBodyTypes: MarketScanCountryOption[];
   labels: MarketScanMetadataLabels;
 }
 
@@ -682,6 +684,7 @@ export interface MarketScanDeckResults {
   suvAll: MarketScanDrilldownPage;
   suvA: MarketScanDrilldownPage;
   suvB: MarketScanDrilldownPage;
+  bodyType: MarketScanDrilldownPage;
 }
 
 export type MarketScanPageKey = keyof MarketScanDeckResults;
@@ -700,7 +703,8 @@ export interface MarketScanDeckRequest {
   origin_window_months?: number;
   body_window_months?: number;
   ranking_limit?: number;
-  drilldown_segment?: string | null;
+  drilldown_segments?: string[];
+  body_types?: string[];
   view?: string | null;
 }
 

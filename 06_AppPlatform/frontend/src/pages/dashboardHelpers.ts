@@ -133,6 +133,7 @@ export const ADV_CHARTS: Record<string, { v: string; l: string }[]> = {
 export const GROUP_BY_OPTIONS = [
   { v: "动总规整", l: "动力总成" },
   { v: "细分市场（按车长）", l: "细分市场" },
+  { v: "Body type", l: "车身形式" },
   { v: "Make", l: "品牌" },
   { v: "Model", l: "Model" },
   { v: "Version name", l: "Version" },

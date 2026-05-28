@@ -2291,7 +2291,8 @@ def build_country_snapshot(
             origin_window_months=12,
             body_window_months=12,
             ranking_limit=15,
-            drilldown_segment=None,
+            drilldown_segments=[],
+            body_types=[],
         )
         _inject_deck_panels(snapshot, deck)
     except Exception:  # noqa: BLE001
@@ -2734,7 +2735,8 @@ def _resolve_segment_drilldown(
             origin_window_months=12,
             body_window_months=12,
             ranking_limit=15,
-            drilldown_segment=resolved_segment,
+            drilldown_segments=[resolved_segment] if resolved_segment else [],
+            body_types=[],
         )
     except Exception:  # noqa: BLE001
         log.warning(

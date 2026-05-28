@@ -1154,6 +1154,16 @@ def _normalize_segment_lookup(value: str) -> str:
     return value.replace("-", "").replace(" ", "").upper()
 
 
+def _resolve_body_type_list(requested: list[str], available: list[str]) -> list[str]:
+    """Resolve requested body type names to those actually available in the data."""
+    if not available:
+        return []
+    if not requested:
+        return []
+    available_set = {bt.strip() for bt in available}
+    return [bt for bt in requested if bt.strip() in available_set]
+
+
 def _resolve_segment_value(requested_segment: str | None, available_segments: list[str], fallback: str) -> str:
     if not available_segments:
         return fallback
@@ -1166,6 +1176,27 @@ def _resolve_segment_value(requested_segment: str | None, available_segments: li
     if fallback_hit:
         return fallback_hit
     return available_segments[0]
+
+
+def _resolve_segment_list(requested: list[str], available_segments: list[str], fallbacks: list[str]) -> list[str]:
+    """Resolve a list of requested segment names to those actually available."""
+    if not available_segments:
+        return fallbacks
+    normalized_lookup = {_normalize_segment_lookup(segment): segment for segment in available_segments}
+    resolved = []
+    for seg in requested:
+        hit = normalized_lookup.get(_normalize_segment_lookup(seg))
+        if hit and hit not in resolved:
+            resolved.append(hit)
+    if not resolved:
+        for fb in fallbacks:
+            hit = normalized_lookup.get(_normalize_segment_lookup(fb))
+            if hit:
+                resolved.append(hit)
+                break
+        if not resolved:
+            resolved.append(available_segments[0])
+    return resolved
 
 
 def _segment_display_label(segment: str) -> str:
@@ -4081,7 +4112,8 @@ def query_market_scan_deck(
     origin_window_months: int,
     body_window_months: int,
     ranking_limit: int,
-    drilldown_segment: str | None,
+    drilldown_segments: list[str],
+    body_types: list[str],
     view: str | None = None,
 ) -> dict[str, Any]:
     ranking_limit = max(MIN_MARKET_SCAN_RANKING_LIMIT, int(ranking_limit))
@@ -4092,7 +4124,9 @@ def query_market_scan_deck(
     if time_range:
         time_range_key = f"{time_range.get('start', '')}:{time_range.get('end', '')}"
     view_key = view or "all"
-    local_key = f"{country}|{target_period}|{time_range_key}|{','.join(sorted(fuel_types))}|{trend_window_months}|{origin_window_months}|{body_window_months}|{ranking_limit}|{drilldown_segment}|{view_key}"
+    ds_key = ",".join(sorted(drilldown_segments)) if drilldown_segments else "_"
+    bt_key = ",".join(sorted(body_types)) if body_types else "_"
+    local_key = f"{country}|{target_period}|{time_range_key}|{','.join(sorted(fuel_types))}|{trend_window_months}|{origin_window_months}|{body_window_months}|{ranking_limit}|{ds_key}|{bt_key}|{view_key}"
     now = time.monotonic()
     local_cached = _deck_cache.get(local_key)
     if local_cached is not None:
@@ -4115,7 +4149,8 @@ def query_market_scan_deck(
                 trend_window_months=trend_window_months,
                 origin_window_months=origin_window_months,
                 body_window_months=body_window_months,
-                drilldown_segment=drilldown_segment,
+                drilldown_segments=drilldown_segments,
+                body_types=body_types,
                 view=view,
             )
             t_cache_start = time.monotonic()
@@ -4145,7 +4180,7 @@ def query_market_scan_deck(
         result = _query_market_scan_deck_impl(
             country, target_period, time_range, fuel_types,
             trend_window_months, origin_window_months, body_window_months,
-            ranking_limit, drilldown_segment, view=view,
+            ranking_limit, drilldown_segments, body_types, view=view,
         )
     except Exception:
         if redis_client is not None and acquired_cache_lock_key is not None:
@@ -4171,7 +4206,8 @@ def query_market_scan_deck(
                 trend_window_months=trend_window_months,
                 origin_window_months=origin_window_months,
                 body_window_months=body_window_months,
-                drilldown_segment=drilldown_segment,
+                drilldown_segments=drilldown_segments,
+                body_types=body_types,
                 view=view,
             )
             set_cached_deck(redis_client, cache_key, result)
@@ -4850,7 +4886,8 @@ def _query_market_scan_deck_impl(
     origin_window_months: int,
     body_window_months: int,
     ranking_limit: int,
-    drilldown_segment: str | None,
+    drilldown_segments: list[str],
+    body_types: list[str],
     view: str | None = None,
 ) -> dict[str, Any]:
     t_start = time.monotonic()
@@ -4894,6 +4931,8 @@ def _query_market_scan_deck_impl(
         selected_columns.append(columns.drive_type)
     if columns.registration_type and columns.registration_type not in selected_columns:
         selected_columns.append(columns.registration_type)
+    if columns.body_type and columns.body_type not in selected_columns:
+        selected_columns.append(columns.body_type)
 
     dataset = repo._open_dataset()
     filter_expression = repo._build_filter_expression({columns.country_value: [selected_country["value"]]})
@@ -4909,6 +4948,10 @@ def _query_market_scan_deck_impl(
     frame["__registration_type"] = (
         frame[columns.registration_type].map(_normalize_registration_type)
         if columns.registration_type and columns.registration_type in frame.columns else "Other"
+    )
+    frame["__body_type"] = (
+        frame[columns.body_type].astype(str).str.strip()
+        if columns.body_type and columns.body_type in frame.columns else ""
     )
 
     available_fuels = _available_fuel_types(frame)
@@ -4935,11 +4978,22 @@ def _query_market_scan_deck_impl(
         {segment for segment in filtered_frame["__segment_raw"].dropna().tolist() if str(segment).strip()},
         key=lambda segment: _segment_display_label(str(segment)),
     )
-    resolved_drilldown_segment = _resolve_segment_value(
-        drilldown_segment, available_segments, DEFAULT_DRILLDOWN_SEGMENT,
+
+    # Resolve requested drilldown segments (filter to those actually available)
+    resolved_drilldown_segments = _resolve_segment_list(
+        drilldown_segments, available_segments, [DEFAULT_DRILLDOWN_SEGMENT],
     )
+    # For backward compat: first segment used where single-segment resolution was needed
+    resolved_drilldown_segment = resolved_drilldown_segments[0] if resolved_drilldown_segments else DEFAULT_DRILLDOWN_SEGMENT
     suv_a_segment = _resolve_segment_value("SUV A", available_segments, "SUV A")
     suv_b_segment = _resolve_segment_value("SUV B", available_segments, "SUV B")
+
+    # Body type resolution
+    available_body_types = sorted({bt for bt in filtered_frame["__body_type"].unique() if bt})
+    resolved_body_types = _resolve_body_type_list(body_types, available_body_types)
+    # When no body types selected, default to all available
+    if not resolved_body_types and available_body_types:
+        resolved_body_types = available_body_types
 
     year_text, month_text = resolved_period.split("-", 1)
     previous_year_text = str(int(year_text) - 1)
@@ -4951,12 +5005,14 @@ def _query_market_scan_deck_impl(
         "customRangeActive": bool(custom_periods), "latestPeriod": available_periods[-1],
         "priorPeriod": prior_period, "sameMonthLastYearPeriod": same_month_last_year_period,
         "selectedCountry": selected_country["value"], "selectedCountryLabel": selected_country["label"],
-        "selectedFuelTypes": selected_fuels, "selectedDrilldownSegment": resolved_drilldown_segment,
+        "selectedFuelTypes": selected_fuels, "selectedDrilldownSegments": resolved_drilldown_segments,
+        "selectedBodyTypes": resolved_body_types,
         "dataQuality": data_quality,
         "availableCountries": country_options,
         "availablePeriods": [{"value": period, "label": _short_period_label(period)} for period in available_periods],
         "availableFuelTypes": available_fuels,
         "availableSegments": [{"value": segment, "label": _segment_display_label(segment)} for segment in available_segments],
+        "availableBodyTypes": [{"value": bt, "label": bt} for bt in available_body_types],
         "labels": {
             "pageTitle": f"{selected_country['label']} {int(year_text)}年{month_number}月市场扫描",
             "currentMonthShort": _short_period_label(resolved_period),
@@ -4972,7 +5028,8 @@ def _query_market_scan_deck_impl(
 
     results: dict[str, Any] = {}
     # Fill all keys with empty payloads so the response shape is always consistent
-    empty_dd = _empty_drilldown_payload(resolved_drilldown_segment)
+    first_dd = resolved_drilldown_segments[0] if resolved_drilldown_segments else resolved_drilldown_segment
+    empty_dd = _empty_drilldown_payload(first_dd)
     empty_suv_a = _empty_drilldown_payload(suv_a_segment)
     empty_suv_b = _empty_drilldown_payload(suv_b_segment)
     empty_suv_all = _empty_drilldown_payload(ALL_SUV_DRILLDOWN_KEY)
@@ -4987,6 +5044,72 @@ def _query_market_scan_deck_impl(
             fuel_panels=DRILLDOWN_PANEL_FUELS, ranking_limit=ranking_limit, custom_range_periods=custom_periods,
         )
         return dd_map.get(seg) or _empty_drilldown_payload(seg)
+
+    def _build_multi_drilldown(segs: list[str]) -> dict[str, Any]:
+        """Build a combined drilldown for multiple segments."""
+        valid_segs = [s for s in segs if s in available_segments]
+        if not valid_segs:
+            return _empty_drilldown_payload(", ".join(segs))
+        if len(valid_segs) == 1:
+            return _build_one_drilldown(valid_segs[0])
+        combined_key = ", ".join(valid_segs)
+        sub_frame = filtered_frame[filtered_frame["__segment_raw"].isin(valid_segs)].copy()
+        if sub_frame.empty:
+            return _empty_drilldown_payload(combined_key)
+        sub_frame["__segment_raw"] = combined_key
+        dd_map = _build_all_drilldowns(
+            sub_frame, available_periods=available_periods, resolved_period=resolved_period,
+            same_month_last_year_period=same_month_last_year_period, segment_values=[combined_key],
+            fuel_panels=DRILLDOWN_PANEL_FUELS, ranking_limit=ranking_limit, custom_range_periods=custom_periods,
+        )
+        result = dd_map.get(combined_key)
+        if result:
+            result["segmentLabel"] = combined_key
+            result["title"] = f"{combined_key} {year_text}年{month_text}月"
+            result["summaryText"] = result.get("summaryText", "").replace(combined_key, combined_key)
+        return result or _empty_drilldown_payload(combined_key)
+
+    def _build_one_body_drilldown(bt: str) -> dict[str, Any]:
+        """Build a drilldown filtered to a single body type, combining all segments."""
+        bt_frame = filtered_frame[filtered_frame["__body_type"] == bt].copy()
+        if bt_frame.empty:
+            return _empty_drilldown_payload(bt)
+        # Treat all segments within this body type as one combined group
+        bt_frame["__segment_raw"] = bt
+        dd_map = _build_all_drilldowns(
+            bt_frame, available_periods=available_periods, resolved_period=resolved_period,
+            same_month_last_year_period=same_month_last_year_period, segment_values=[bt],
+            fuel_panels=DRILLDOWN_PANEL_FUELS, ranking_limit=ranking_limit, custom_range_periods=custom_periods,
+        )
+        result = dd_map.get(bt)
+        if result:
+            result["segmentLabel"] = bt
+            result["title"] = f"{bt} {year_text}年{month_text}月"
+        return result or _empty_drilldown_payload(bt)
+
+    def _build_multi_body_drilldown(bts: list[str]) -> dict[str, Any]:
+        """Build a combined drilldown for multiple body types."""
+        valid_bts = [b for b in bts if b in available_body_types]
+        if not valid_bts:
+            return _empty_drilldown_payload(", ".join(bts))
+        if len(valid_bts) == 1:
+            return _build_one_body_drilldown(valid_bts[0])
+        combined_key = ", ".join(valid_bts)
+        bt_frame = filtered_frame[filtered_frame["__body_type"].isin(valid_bts)].copy()
+        if bt_frame.empty:
+            return _empty_drilldown_payload(combined_key)
+        # Treat all rows as one combined group (same pattern as _build_suv_all)
+        bt_frame["__segment_raw"] = combined_key
+        dd_map = _build_all_drilldowns(
+            bt_frame, available_periods=available_periods, resolved_period=resolved_period,
+            same_month_last_year_period=same_month_last_year_period, segment_values=[combined_key],
+            fuel_panels=DRILLDOWN_PANEL_FUELS, ranking_limit=ranking_limit, custom_range_periods=custom_periods,
+        )
+        result = dd_map.get(combined_key)
+        if result:
+            result["segmentLabel"] = combined_key
+            result["title"] = f"{combined_key} {year_text}年{month_text}月"
+        return result or _empty_drilldown_payload(combined_key)
 
     def _build_suv_all() -> dict[str, Any]:
         suv_frame = filtered_frame[filtered_frame["__segment_raw"].str.startswith("SUV", na=False)].copy()
@@ -5062,13 +5185,16 @@ def _query_market_scan_deck_impl(
             body_window_months=body_window_months, custom_range_periods=custom_periods,
         )
     elif view == "drilldown":
-        results["drilldown"] = _build_one_drilldown(resolved_drilldown_segment)
+        results["drilldown"] = _build_multi_drilldown(resolved_drilldown_segments)
     elif view == "suvAll":
         results["suvAll"] = _build_suv_all()
     elif view == "suvA":
         results["suvA"] = _build_one_drilldown(suv_a_segment)
     elif view == "suvB":
         results["suvB"] = _build_one_drilldown(suv_b_segment)
+    elif view == "bodyType":
+        effective_bts = resolved_body_types if resolved_body_types else available_body_types
+        results["bodyType"] = _build_multi_body_drilldown(effective_bts) if effective_bts else _empty_drilldown_payload("Unknown")
 
     # Fill missing keys with empty payloads so frontend shape is consistent
     results.setdefault("overview", {})
@@ -5078,6 +5204,7 @@ def _query_market_scan_deck_impl(
     results.setdefault("suvAll", empty_suv_all)
     results.setdefault("suvA", empty_suv_a)
     results.setdefault("suvB", empty_suv_b)
+    results.setdefault("bodyType", empty_dd)
     results.setdefault("crossTabs", {})
 
     t_done = time.monotonic()

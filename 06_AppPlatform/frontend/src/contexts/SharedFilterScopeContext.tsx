@@ -43,6 +43,7 @@ export type ResolvedFilterColumns = Record<FilterKey, string | null>;
 
 export const TOP_LEVEL_FILTER_KEYS = [
   "country",
+  "body_type",
   "segment",
   "powertrain",
 ] as const satisfies readonly FilterKey[];
@@ -101,6 +102,7 @@ export function createSharedSelections(
   const base = createEmptySelections();
   return {
     country: [...(source?.country ?? base.country)],
+    body_type: [...(source?.body_type ?? base.body_type)],
     segment: [...(source?.segment ?? base.segment)],
     powertrain: [...(source?.powertrain ?? base.powertrain)],
     make: [...(source?.make ?? base.make)],
@@ -117,6 +119,7 @@ export function resolveFilterColumns(columns: string[]): ResolvedFilterColumns {
     },
     {
       country: null,
+      body_type: null,
       segment: null,
       powertrain: null,
       make: null,

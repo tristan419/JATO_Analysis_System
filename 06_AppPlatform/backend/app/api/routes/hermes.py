@@ -989,7 +989,7 @@ def hermes_markdown_diagrams(_=Depends(require_min_role("viewer")),
 
 
 @router.post("/chat")
-def hermes_chat(payload: dict = Body(...), _=Depends(require_min_role("admin"))) -> dict:
+def hermes_chat(payload: dict = Body(...), _=Depends(require_min_role("viewer"))) -> dict:
     """Natural-language entry point for Hermes.
 
     **Request**::
@@ -1332,7 +1332,7 @@ def hermes_dev_features(
 
 
 @router.get("/dev/features/{feature_id}")
-def hermes_dev_feature(feature_id: str, _=Depends(require_min_role("admin"))) -> dict:
+def hermes_dev_feature(feature_id: str, _=Depends(require_min_role("viewer"))) -> dict:
     """Get a single feature by ID."""
     from app.services.hermes_devsync_service import get_feature
     f = get_feature(feature_id)

@@ -90,35 +90,35 @@ function storeUser(user: User): void {
 }
 
 function loadUser(): User | null {
-  const username = localStorage.getItem(STORAGE_USER);
-  const role = localStorage.getItem(STORAGE_ROLE);
-  if (username && role) {
-    let secondaryCountries: string[] = [];
-    try {
-      const parsed = JSON.parse(
-        localStorage.getItem(STORAGE_SECONDARY_COUNTRIES) || "[]",
-      );
-      if (Array.isArray(parsed)) {
-        secondaryCountries = parsed.map((item) => String(item)).filter(Boolean);
-      }
-    } catch {
-      secondaryCountries = [];
+  const username = localStorage.getItem(STORAGE_USER) || import.meta.env.VITE_USER_NAME || "anonymous";
+  const role = localStorage.getItem(STORAGE_ROLE) || "viewer";
+  // When running with the dev token (auth disabled), default to admin so
+  // the local dev experience matches production admin behavior.
+  const effectiveRole = import.meta.env.VITE_AUTH_TOKEN ? "admin" : role;
+  let secondaryCountries: string[] = [];
+  try {
+    const parsed = JSON.parse(
+      localStorage.getItem(STORAGE_SECONDARY_COUNTRIES) || "[]",
+    );
+    if (Array.isArray(parsed)) {
+      secondaryCountries = parsed.map((item) => String(item)).filter(Boolean);
     }
-    const primaryCountry = localStorage.getItem(STORAGE_PRIMARY_COUNTRY);
-    return {
-      username,
-      role,
-      email: null,
-      oauthProvider: null,
-      avatarUrl: null,
-      displayName: null,
-      primaryCountry,
-      secondaryCountries,
-      preferredLandingPage: localStorage.getItem(STORAGE_PREFERRED_LANDING),
-      profileComplete: Boolean(primaryCountry),
-    };
+  } catch {
+    secondaryCountries = [];
   }
-  return null;
+  const primaryCountry = localStorage.getItem(STORAGE_PRIMARY_COUNTRY);
+  return {
+    username,
+    role: effectiveRole,
+    email: null,
+    oauthProvider: null,
+    avatarUrl: null,
+    displayName: null,
+    primaryCountry,
+    secondaryCountries,
+    preferredLandingPage: localStorage.getItem(STORAGE_PREFERRED_LANDING),
+    profileComplete: Boolean(primaryCountry),
+  };
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -134,15 +134,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshUser = useCallback(async () => {
-    const currentToken = localStorage.getItem(STORAGE_TOKEN);
-    if (!currentToken) {
-      setProfileLoaded(true);
-      return;
-    }
+    const currentToken = (
+      localStorage.getItem(STORAGE_TOKEN)
+      || import.meta.env.VITE_AUTH_TOKEN
+      || ""
+    ).trim();
     const res = await fetch("/v1/auth/me", {
       headers: {
-        "X-Auth-Token": currentToken,
-        "X-User-Name": localStorage.getItem(STORAGE_USER) || "anonymous",
+        ...(currentToken ? { "X-Auth-Token": currentToken } : {}),
+        "X-User-Name": localStorage.getItem(STORAGE_USER) || import.meta.env.VITE_USER_NAME || "anonymous",
       },
     });
     if (!res.ok) {

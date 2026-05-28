@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import (
+    AUTH_ENABLED,
     FEISHU_ENABLED,
     FEISHU_REDIRECT_URI,
     GOOGLE_ENABLED,
@@ -187,7 +188,12 @@ def me(
             "preferredLandingPage": None,
             "profileComplete": False,
         }
-    return _user_payload(db_user)
+    payload = _user_payload(db_user)
+    # When auth is disabled, the context role (admin) takes precedence over the DB role
+    # so that local development always sees full admin permissions.
+    if not AUTH_ENABLED:
+        payload["role"] = user.role
+    return payload
 
 
 @router.patch("/me/profile")

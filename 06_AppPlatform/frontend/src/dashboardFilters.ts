@@ -1,5 +1,6 @@
 export const FILTER_KEYS = [
   "country",
+  "body_type",
   "segment",
   "powertrain",
   "make",
@@ -12,6 +13,7 @@ export type FilterSelections = Record<FilterKey, string[]>;
 
 export const DIM: Record<FilterKey, string[]> = {
   country: ["国家", "Country", "country"],
+  body_type: ["Body type", "Body Type", "body type", "车身形式"],
   segment: ["细分市场（按车长）", "细分市场", "segment"],
   powertrain: ["动总规整", "powertrain", "Powertrain"],
   make: ["Make", "品牌", "make"],
@@ -21,6 +23,7 @@ export const DIM: Record<FilterKey, string[]> = {
 
 export const FILTER_ORDER: { key: FilterKey; label: string }[] = [
   { key: "country", label: "国家" },
+  { key: "body_type", label: "车身形式" },
   { key: "segment", label: "细分市场" },
   { key: "powertrain", label: "动总规整" },
   { key: "make", label: "品牌" },
@@ -37,6 +40,7 @@ function normalizePowertrainName(value: string): string {
 export function createEmptySelections(): FilterSelections {
   return {
     country: [],
+    body_type: [],
     segment: [],
     powertrain: [],
     make: [],

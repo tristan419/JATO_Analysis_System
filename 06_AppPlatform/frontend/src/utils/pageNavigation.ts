@@ -192,17 +192,17 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
       {
         title: "Pricing & Positioning / 价格与定位",
         items: [
-          { label: "COC Match", sublabel: "COC 比对", to: "/product/coc-match", minRole: "viewer" },
-          { label: "Order Genius", sublabel: "订单矩阵", to: "/product/order-genius", minRole: "editor" },
-          { label: "Current MSRP", sublabel: "当前价格", to: "/product/current-msrp" },
           { label: "Pricing", sublabel: "定位定价", to: "/product/pricing" },
+          { label: "Compare", sublabel: "版型对比", to: "/product/compare" },
+          { label: "Customer Insight", sublabel: "看客户", to: "/product/customer-insight" },
+          { label: "Current MSRP", sublabel: "当前价格", to: "/product/current-msrp" },
         ],
       },
       {
-        title: "Product & Customer / 产品与客户洞察",
+        title: "Product Toolkit / 产品工具包",
         items: [
-          { label: "Compare", sublabel: "版型对比", to: "/product/compare" },
-          { label: "Customer Insight", sublabel: "看客户", to: "/product/customer-insight" },
+          { label: "Order Genius", sublabel: "订单矩阵", to: "/product/order-genius", minRole: "editor" },
+          { label: "COC Match", sublabel: "COC 比对", to: "/product/coc-match", minRole: "viewer" },
         ],
       },
     ],
