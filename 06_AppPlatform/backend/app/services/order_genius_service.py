@@ -11,7 +11,15 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.infra import order_genius_repository as repo
-from app.services.material_master_parser import parse_material_master_xlsx
+from app.services.material_master_parser import parse_material_master_xlsx, _infer_interior_from_tail_code
+
+
+def _infer_interior_from_bom(bom_template: str | None) -> str | None:
+    """Try tail-code inference, returning interior name or None."""
+    if not bom_template:
+        return None
+    result = _infer_interior_from_tail_code(bom_template)
+    return result[0] if result else None
 from app.services.order_genius_export_service import generate_order_genius_excel
 from app.services.order_quantity_parser import (
     OrderQuantityImport,
@@ -262,9 +270,9 @@ def publish_baseline(
             colour_code_confirmed=row.get("colour_code_confirmed", True),
             colour_tier=row.get("colour_tier") or _derive_colour_tier(row.get("exterior_color_type", "single")),
             edition_tag=row.get("edition_tag"),
-            interior_color_name=row.get("interior_color_name"),
+            interior_color_name=row.get("interior_color_name") or _infer_interior_from_bom(row.get("bom_template")),
             interior_colour_code=row.get("interior_colour_code"),
-            interior_package=row.get("interior_package"),
+            interior_package=row.get("interior_package") or row.get("interior_color_name"),
             bom_template=row.get("bom_template"),
             material_code=mc,
             lifecycle_status="active",

@@ -104,16 +104,6 @@ export interface CellAttributionResponse {
   error?: string;
 }
 
-export interface TransferLink {
-  source: number;
-  target: number;
-  value: number;
-}
-
-export interface TransferNode {
-  label: string;
-}
-
 export interface AdvancedAnalysisNestedShiftShareRequest extends AdvancedAnalysisBaseRequest {
   base_period?: string;
   hierarchy?: string[];
@@ -215,6 +205,11 @@ export interface AdvancedAnalysisTransferMartRequest extends AdvancedAnalysisBas
   top_n?: number;
 }
 
+export interface AdvancedAnalysisCompetitorSetRequest extends AdvancedAnalysisTransferMartRequest {
+  target_model?: string;
+  profile_specs?: CompetitorProfileSpecs;
+}
+
 export interface TransferMartScopeSummary {
   total_sales_tgt: number;
   total_sales_base: number;
@@ -289,6 +284,7 @@ export interface ModelTimeseries {
 export interface TransferMartResponse {
   base_period: string;
   target_period: string;
+  sales_mode?: AdvancedAnalysisSalesMode;
   scope_summary: TransferMartScopeSummary;
   market_waterfall: TransferMartWaterfallItem[];
   winners: TransferMartModel[];
@@ -301,6 +297,110 @@ export interface TransferMartResponse {
   powertrain_timeseries: TransferMartTimeseriesItem[];
   model_timeseries: ModelTimeseries[];
   error?: string;
+}
+
+export interface CompetitorModelProfile {
+  make?: string;
+  segment?: string;
+  body_type?: string;
+  powertrain?: string;
+  registration_type?: string;
+  drive_type?: string;
+  origin?: string;
+  length_mm?: number;
+  msrp?: number;
+  ev_range?: number;
+  fuel_consumption?: number;
+  co2_emission?: number;
+  battery_kwh?: number;
+}
+
+export type CompetitorProductSpecKey =
+  | "length_mm"
+  | "msrp"
+  | "ev_range"
+  | "fuel_consumption"
+  | "co2_emission"
+  | "battery_kwh";
+
+export type CompetitorProfileSpecs = Partial<Record<CompetitorProductSpecKey, number>>;
+
+export interface CompetitorMatchEvidence {
+  field: string;
+  label: string;
+  target: string | number;
+  candidate: string | number;
+  score: number;
+  detail: string;
+}
+
+export type CompetitorRole = "target" | "likely_source" | "likely_recipient" | "co_winner" | "co_loser" | "adjacent";
+
+export interface CompetitorModel {
+  model: string;
+  make: string;
+  profile: CompetitorModelProfile;
+  sales_tgt: number;
+  sales_base: number;
+  dV: number;
+  share_tgt: number;
+  share_base: number;
+  share_change: number;
+  pure_share_shift: number;
+  similarity_score: number;
+  shared_dims: string[];
+  match_evidence: CompetitorMatchEvidence[];
+  role: CompetitorRole;
+  estimated_flow: number;
+}
+
+export interface CompetitorBattleFlow {
+  source: string;
+  target: string;
+  value: number;
+  similarity_score: number;
+  reason: string;
+}
+
+export interface ModelChannelTimeseriesItem {
+  model: string;
+  period: string;
+  channel: string;
+  volume: number;
+  total_volume: number;
+  share: number;
+}
+
+export interface CompetitorSetResponse {
+  base_period: string;
+  target_period: string;
+  sales_mode?: AdvancedAnalysisSalesMode;
+  analysis_mode?: "profile" | "target_model";
+  target_model: string;
+  target: CompetitorModel;
+  competitors: CompetitorModel[];
+  battle_flows: CompetitorBattleFlow[];
+  profile_dimensions: string[];
+  model_options: string[];
+  model_channel_timeseries: ModelChannelTimeseriesItem[];
+  scope_model_count: number;
+  error?: string;
+}
+
+export type AdvancedAnalysisProfileDimension =
+  | "segment"
+  | "body_type"
+  | "powertrain"
+  | "registration_type"
+  | "drive_type"
+  | "origin"
+  | "make";
+
+export type AdvancedAnalysisProfileOptions = Record<AdvancedAnalysisProfileDimension | "model", string[]>;
+
+export interface AdvancedAnalysisProfileOptionsResponse {
+  country?: string;
+  options: AdvancedAnalysisProfileOptions;
 }
 
 // ── Drill-down types (legacy) ──

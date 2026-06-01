@@ -1,17 +1,27 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
 import { LazyPlotlyChart as PlotlyChart } from "../components/LazyPlotlyChart";
 import { LoadingSurface } from "../components/LoadingSurface";
+import { SearchSelectFilter } from "../components/SearchSelectFilter";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
 import { SERIES_COLORS } from "../utils/colors";
 import { DEFAULT_EXPORT, ExportPanel, downloadPng, type ExportSettings } from "../components/ExportPanel";
 import { DeckExportDrawer, DeckFloatingDrawer } from "../components/deckControls";
 import type {
+  AdvancedAnalysisCompetitorSetRequest,
+  AdvancedAnalysisProfileDimension,
+  AdvancedAnalysisProfileOptions,
+  AdvancedAnalysisProfileOptionsResponse,
   AdvancedAnalysisSalesMode,
   AdvancedAnalysisTransferMartRequest,
+  CompetitorProductSpecKey,
+  CompetitorProfileSpecs,
+  CompetitorSetResponse,
+  ModelChannelTimeseriesItem,
   TransferMartModel,
   TransferMartResponse,
 } from "../types/advancedAnalysis";
@@ -23,6 +33,38 @@ const COUNTRY_OPTIONS = ["瑞典","挪威","丹麦","芬兰","德国","英国","
 const CHART_MARGIN = { l: 52, r: 24, t: 20, b: 48 } as const;
 const DEFAULT_AA_EXPORT: ExportSettings = { ...DEFAULT_EXPORT, exportWidth: 1920, exportHeight: 1080, dataLabelMode: "value", fontSize: 11 };
 const COLORS = { growth: "#10b981", decline: "#ef4444", stable: "#94a3b8", market: "#3b82f6", share: "#10b981", mix: "#f59e0b", interaction: "#8b5cf6", winner: "#10b981", loser: "#ef4444" };
+const RESPONSIVE_TWO_COL: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 16, marginBottom: 16 };
+const PROFILE_DIMENSIONS: Array<{ key: AdvancedAnalysisProfileDimension; label: string; showSuvShortcut?: boolean }> = [
+  { key: "segment", label: "Segment", showSuvShortcut: true },
+  { key: "body_type", label: "Body Type", showSuvShortcut: true },
+  { key: "powertrain", label: "Powertrain" },
+  { key: "registration_type", label: "Channel" },
+  { key: "drive_type", label: "Drive" },
+  { key: "origin", label: "Origin" },
+  { key: "make", label: "Make" },
+];
+const PRODUCT_SPEC_INPUTS: Array<{ key: CompetitorProductSpecKey; label: string; placeholder: string; suffix: string }> = [
+  { key: "length_mm", label: "Length", placeholder: "e.g. 4424", suffix: "mm" },
+  { key: "msrp", label: "MSRP", placeholder: "e.g. 36000", suffix: "" },
+  { key: "ev_range", label: "EV Range", placeholder: "e.g. 430", suffix: "km" },
+  { key: "fuel_consumption", label: "Fuel Cons.", placeholder: "e.g. 6.8", suffix: "L/100km" },
+  { key: "co2_emission", label: "CO2", placeholder: "e.g. 135", suffix: "g/km" },
+  { key: "battery_kwh", label: "Battery", placeholder: "e.g. 61", suffix: "kWh" },
+];
+const EMPTY_PROFILE_OPTIONS: AdvancedAnalysisProfileOptions = {
+  segment: [],
+  body_type: [],
+  powertrain: [],
+  registration_type: [],
+  drive_type: [],
+  origin: [],
+  make: [],
+  model: [],
+};
+
+type DecompositionKey = "market_carryover" | "channel_mix" | "drive_mix" | "powertrain_mix" | "pure_share_shift" | "interaction";
+type SortKey = "model" | "dV" | "pure_share_shift" | DecompositionKey;
+type RoleColorKey = "likely_source" | "likely_recipient" | "co_winner" | "co_loser" | "adjacent" | "target";
 
 /* ── Helpers ── */
 
@@ -31,6 +73,86 @@ function stateColor(s: string): string { return s === "growth" ? COLORS.growth :
 function getGraphDiv(): HTMLElement | null { return document.querySelector(".chart-card .js-plotly-plot") as HTMLElement | null; }
 function fmtNum(n: number): string { return n.toLocaleString(undefined, { maximumFractionDigits: 0 }); }
 function fmtPct(n: number): string { return `${(n * 100).toFixed(1)}%`; }
+function fmtBp(n: number): string { return `${(n * 10000).toFixed(0)} bp`; }
+function dominantComponent(model: TransferMartModel): string {
+  const components: Array<{ label: string; value: number }> = [
+    { label: "market carryover", value: model.market_carryover },
+    { label: "channel mix", value: model.channel_mix },
+    { label: "drive mix", value: model.drive_mix },
+    { label: "powertrain mix", value: model.powertrain_mix },
+    { label: "competitive share shift", value: model.pure_share_shift },
+    { label: "interaction", value: model.interaction },
+  ];
+  return components.sort((a, b) => Math.abs(b.value) - Math.abs(a.value))[0]?.label ?? "net volume change";
+}
+function roleColor(role: RoleColorKey): string {
+  if (role === "likely_source") return COLORS.loser;
+  if (role === "likely_recipient") return COLORS.winner;
+  if (role === "co_winner") return "#0ea5e9";
+  if (role === "co_loser") return "#f97316";
+  if (role === "target") return "#1e293b";
+  return "#64748b";
+}
+function emptyProfileSelections(): Record<AdvancedAnalysisProfileDimension, string[]> {
+  return {
+    segment: [],
+    body_type: [],
+    powertrain: [],
+    registration_type: [],
+    drive_type: [],
+    origin: [],
+    make: [],
+  };
+}
+function emptyProfileSpecs(): Record<CompetitorProductSpecKey, string> {
+  return {
+    length_mm: "",
+    msrp: "",
+    ev_range: "",
+    fuel_consumption: "",
+    co2_emission: "",
+    battery_kwh: "",
+  };
+}
+function buildProfileSpecs(values: Record<CompetitorProductSpecKey, string>): CompetitorProfileSpecs {
+  return PRODUCT_SPEC_INPUTS.reduce<CompetitorProfileSpecs>((acc, item) => {
+    const numeric = Number(values[item.key]);
+    if (Number.isFinite(numeric) && (numeric > 0 || item.key === "co2_emission")) {
+      acc[item.key] = numeric;
+    }
+    return acc;
+  }, {});
+}
+function selectedSpecCount(values: Record<CompetitorProductSpecKey, string>): number {
+  return Object.keys(buildProfileSpecs(values)).length;
+}
+function readCsvParam(searchParams: URLSearchParams, key: string): string[] {
+  const raw = searchParams.get(key);
+  return raw ? raw.split(",").map(item => item.trim()).filter(Boolean) : [];
+}
+function selectedProfileCount(selections: Record<AdvancedAnalysisProfileDimension, string[]>): number {
+  return PROFILE_DIMENSIONS.reduce((sum, dim) => sum + selections[dim.key].length, 0);
+}
+function selectedProfileLabel(selections: Record<AdvancedAnalysisProfileDimension, string[]>): string {
+  const parts = PROFILE_DIMENSIONS
+    .map(dim => {
+      const values = selections[dim.key];
+      if (values.length === 0) return "";
+      return `${dim.label}: ${values.slice(0, 3).join("/")}${values.length > 3 ? "+" : ""}`;
+    })
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : "All market profile";
+}
+function formatProfileSpecValue(field: CompetitorProductSpecKey, value?: number): string {
+  if (value === undefined || value === null || Number.isNaN(value)) return "-";
+  if (field === "length_mm") return `${value.toFixed(0)} mm`;
+  if (field === "msrp") return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (field === "ev_range") return `${value.toFixed(0)} km`;
+  if (field === "fuel_consumption") return value.toFixed(1);
+  if (field === "co2_emission") return `${value.toFixed(0)} g/km`;
+  if (field === "battery_kwh") return `${value.toFixed(1)} kWh`;
+  return `${value}`;
+}
 
 /* ── Page ── */
 
@@ -46,63 +168,92 @@ export function AdvancedAnalysisPage() {
     { value: "ytd", label: "YTD" },
     { value: "rolling12", label: "近12月" },
   ];
-  const [powertrainFilter, setPowertrainFilter] = useState<string[]>([]);
-  const [channelFilter, setChannelFilter] = useState("");
-  const [driveFilter, setDriveFilter] = useState("");
-  const [segmentFilter, setSegmentFilter] = useState(() => searchParams.get("seg") || "");
-  const [availableSegments, setAvailableSegments] = useState<string[]>([]);
+  const [profileSelections, setProfileSelections] = useState<Record<AdvancedAnalysisProfileDimension, string[]>>(() => ({
+    ...emptyProfileSelections(),
+    segment: readCsvParam(searchParams, "seg"),
+    body_type: readCsvParam(searchParams, "body"),
+    powertrain: readCsvParam(searchParams, "powertrain"),
+    registration_type: readCsvParam(searchParams, "channel"),
+    drive_type: readCsvParam(searchParams, "drive"),
+    origin: readCsvParam(searchParams, "origin"),
+    make: readCsvParam(searchParams, "make"),
+  }));
+  const [profileSpecs, setProfileSpecs] = useState<Record<CompetitorProductSpecKey, string>>(() => emptyProfileSpecs());
+  const [profileOptions, setProfileOptions] = useState<AdvancedAnalysisProfileOptions>(EMPTY_PROFILE_OPTIONS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<TransferMartResponse | null>(null);
-  const [dataB, setDataB] = useState<TransferMartResponse | null>(null);
+  const [competitorData, setCompetitorData] = useState<CompetitorSetResponse | null>(null);
+  const [targetModel, setTargetModel] = useState(() => searchParams.get("model") || "");
   const [filterOpen, setFilterOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportSettings, setExportSettings] = useState<ExportSettings>(DEFAULT_AA_EXPORT);
-
-  const PT_OPTIONS = ["BEV","HEV","PHEV","ICE","MHEV","REEV","FCV"];
-  const CH_OPTIONS = ["","Business","Private"];
-  const DR_OPTIONS = ["","4WD","2WD"];
 
   // URL sync
   useEffect(() => {
     const p = new URLSearchParams();
     if (country) p.set("country", country);
     if (period) p.set("period", period);
-    if (segmentFilter) p.set("seg", segmentFilter);
+    if (profileSelections.segment.length > 0) p.set("seg", profileSelections.segment.join(","));
+    if (profileSelections.body_type.length > 0) p.set("body", profileSelections.body_type.join(","));
+    if (profileSelections.powertrain.length > 0) p.set("powertrain", profileSelections.powertrain.join(","));
+    if (profileSelections.registration_type.length > 0) p.set("channel", profileSelections.registration_type.join(","));
+    if (profileSelections.drive_type.length > 0) p.set("drive", profileSelections.drive_type.join(","));
+    if (profileSelections.origin.length > 0) p.set("origin", profileSelections.origin.join(","));
+    if (profileSelections.make.length > 0) p.set("make", profileSelections.make.join(","));
+    if (targetModel) p.set("model", targetModel);
     setSearchParams(p, { replace: true });
     try { sessionStorage.setItem("aa_country", country); } catch { /* ignore */ }
-  }, [country, period, segmentFilter, setSearchParams]);
+  }, [country, period, profileSelections, targetModel, setSearchParams]);
 
-  // Load available segments when country changes
+  // Load profile options when country changes
   useEffect(() => {
-    api.get<{ segments: string[] }>(`/advanced-analysis/segments?country=${encodeURIComponent(country)}`)
-      .then(r => setAvailableSegments(r.segments || []))
-      .catch(() => setAvailableSegments([]));
+    api.get<AdvancedAnalysisProfileOptionsResponse>(`/advanced-analysis/profile-options?country=${encodeURIComponent(country)}`)
+      .then(r => setProfileOptions({ ...EMPTY_PROFILE_OPTIONS, ...(r.options || {}) }))
+      .catch(() => setProfileOptions(EMPTY_PROFILE_OPTIONS));
   }, [country]);
 
   // Fetch data
   const buildScope = useCallback(() => {
     const s: Array<{ dim: string; value: string }> = [];
-    if (segmentFilter) s.push({ dim: "segment", value: segmentFilter });
-    if (channelFilter) s.push({ dim: "registration_type", value: channelFilter });
-    if (driveFilter) s.push({ dim: "drive_type", value: driveFilter });
-    for (const pt of powertrainFilter) s.push({ dim: "powertrain", value: pt });
+    for (const dim of PROFILE_DIMENSIONS) {
+      for (const value of profileSelections[dim.key]) {
+        s.push({ dim: dim.key, value });
+      }
+    }
     return s;
-  }, [segmentFilter, channelFilter, driveFilter, powertrainFilter]);
+  }, [profileSelections]);
 
   const fetchData = useCallback(async () => {
     setLoading(true); setError(null);
     try {
       const scope = buildScope();
-      const payload: AdvancedAnalysisTransferMartRequest = { country, target_period: period || undefined, sales_mode: timeMode, scope_filters: scope, top_n: 25 };
-      setData(await api.post<TransferMartResponse>("/advanced-analysis/transfer-mart", payload));
-      if (compareMode && periodB) {
-        const payloadB: AdvancedAnalysisTransferMartRequest = { country, target_period: periodB, sales_mode: timeMode, scope_filters: scope, top_n: 25 };
-        setDataB(await api.post<TransferMartResponse>("/advanced-analysis/transfer-mart", payloadB));
-      } else { setDataB(null); }
+      const targetPeriod = compareMode && periodB ? periodB : period;
+      const basePeriod = compareMode && period && periodB ? period : undefined;
+      const payload: AdvancedAnalysisTransferMartRequest = {
+        country,
+        target_period: targetPeriod || undefined,
+        base_period: basePeriod,
+        sales_mode: timeMode,
+        scope_filters: scope,
+        fuel_types: [],
+        top_n: 25,
+      };
+      const competitorPayload: AdvancedAnalysisCompetitorSetRequest = {
+        ...payload,
+        target_model: targetModel || undefined,
+        profile_specs: buildProfileSpecs(profileSpecs),
+        top_n: 12,
+      };
+      const [martResult, competitorResult] = await Promise.all([
+        api.post<TransferMartResponse>("/advanced-analysis/transfer-mart", payload),
+        api.post<CompetitorSetResponse>("/advanced-analysis/competitor-set", competitorPayload),
+      ]);
+      setData(martResult);
+      setCompetitorData(competitorResult);
     } catch (e: unknown) { setError(e instanceof Error ? e.message : "Failed"); }
     finally { setLoading(false); }
-  }, [country, period, timeMode, buildScope, compareMode, periodB]);
+  }, [country, period, timeMode, buildScope, compareMode, periodB, targetModel, profileSpecs]);
   useEffect(() => { fetchData(); }, [fetchData]);
 
   // Drawer mutual exclusion
@@ -116,27 +267,17 @@ export function AdvancedAnalysisPage() {
     if (!s || !data) return null;
     const topW = data.winners?.[0];
     const topL = data.losers?.[0];
-    // Find the dominant decomposition component for the top winner
-    const wComp = topW ? (
-      Math.abs(topW.market_carryover) > Math.abs(topW.pure_share_shift) && Math.abs(topW.market_carryover) > Math.abs(topW.channel_mix) ? "market growth" :
-      Math.abs(topW.channel_mix) > Math.abs(topW.drive_mix) && Math.abs(topW.channel_mix) > Math.abs(topW.powertrain_mix) ? "channel mix shift" :
-      Math.abs(topW.pure_share_shift) > Math.abs(topW.powertrain_mix) ? "competitive share gain" : "powertrain mix shift"
-    ) : null;
-    const lComp = topL ? (
-      Math.abs(topL.market_carryover) > Math.abs(topL.pure_share_shift) ? "market contraction" :
-      Math.abs(topL.channel_mix) < topL.channel_mix ? "channel mix headwind" : "competitive share loss"
-    ) : null;
-    const scopeDesc = [channelFilter, driveFilter, ...powertrainFilter, segmentFilter].filter(Boolean).join("+") || "total market";
+    const scopeDesc = selectedProfileLabel(profileSelections);
     return {
       state: s.market_state,
       dM: s.dM,
       yoy: s.yoy_pct,
-      topW: topW ? { model: topW.model, gain: topW.dV, driver: wComp } : null,
-      topL: topL ? { model: topL.model, loss: topL.dV, driver: lComp } : null,
+      topW: topW ? { model: topW.model, gain: topW.dV, driver: dominantComponent(topW) } : null,
+      topL: topL ? { model: topL.model, loss: topL.dV, driver: dominantComponent(topL) } : null,
       scope: scopeDesc,
       modelCount: data.models.length,
     };
-  }, [data, s, channelFilter, driveFilter, powertrainFilter, segmentFilter]);
+  }, [data, s, profileSelections]);
 
   return (
     <div className="market-scan-page">
@@ -145,21 +286,26 @@ export function AdvancedAnalysisPage() {
         <div className="dashboard-hero-head">
           <div className="dashboard-hero-copy market-scan-hero-copy">
             <span className="page-kicker">Advanced Analysis</span>
-            <h1>Share Transfer &amp; Gain/Loss Attribution</h1>
-            <p>One-page conclusion: where growth comes from, who gains share, who loses it, and why — decomposed into market carryover, channel/drive/powertrain mix effects, and pure competitive shift.</p>
+            <h1>Profile-Based Competitive Transfer</h1>
+            <p>Describe a product profile with reusable filters, then read share transfer, channel quality, and the closest competitive battlefield.</p>
             {s && (
               <div className="market-scan-hero-ribbon">
                 <span className="market-scan-hero-chip" style={{ color: stateColor(s.market_state), fontWeight: 700 }}>
-                  {s.market_state === "growth" ? "↑ Growth" : s.market_state === "decline" ? "↓ Decline" : "→ Stable"}
+                  {s.market_state === "growth" ? "Growth" : s.market_state === "decline" ? "Decline" : "Stable"}
                 </span>
                 <span className="market-scan-hero-chip">ΔM {s.dM > 0 ? "+" : ""}{fmtNum(s.dM)}</span>
                 <span className="market-scan-hero-chip">YoY {fmtPct(s.yoy_pct)}</span>
                 <span className="market-scan-hero-chip">{country}</span>
-                <span className="market-scan-hero-chip">{period || "Latest"}</span>
-                {channelFilter && <span className="market-scan-hero-chip" style={{ background: "#dbeafe" }}>Ch: {channelFilter}</span>}
-                {driveFilter && <span className="market-scan-hero-chip" style={{ background: "#dbeafe" }}>Dr: {driveFilter}</span>}
-                {powertrainFilter.length > 0 && <span className="market-scan-hero-chip" style={{ background: "#dbeafe" }}>PT: {powertrainFilter.join("+")}</span>}
-                {segmentFilter && <span className="market-scan-hero-chip" style={{ background: "#fef3c7" }}>Seg: {segmentFilter}</span>}
+                <span className="market-scan-hero-chip">{compareMode && periodB ? `${period || "Auto base"} -> ${periodB}` : period || "Latest"}</span>
+                <span className="market-scan-hero-chip" style={{ background: "#e0f2fe" }}>Profile {selectedProfileCount(profileSelections)}</span>
+                {selectedSpecCount(profileSpecs) > 0 && <span className="market-scan-hero-chip" style={{ background: "#ecfdf5" }}>Specs {selectedSpecCount(profileSpecs)}</span>}
+                {(targetModel || competitorData?.target_model) && (
+                  <span className="market-scan-hero-chip" style={{ background: "#e0f2fe" }}>
+                    {competitorData?.analysis_mode === "profile"
+                      ? competitorData.target_model
+                      : `Target: ${targetModel || competitorData?.target_model}`}
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -170,9 +316,9 @@ export function AdvancedAnalysisPage() {
       {narrative && (
         <div style={{ padding: "12px 16px", background: "linear-gradient(90deg, #f0fdf4, #f8fafc, #fef2f2)", borderBottom: "1px solid #e2e8f0", fontSize: 13, lineHeight: 1.6 }}>
           <strong style={{ color: stateColor(narrative.state) }}>
-            {narrative.state === "growth" ? "📈 Growth market" : narrative.state === "decline" ? "📉 Declining market" : "📊 Stable market"}
+            {narrative.state === "growth" ? "Growth market" : narrative.state === "decline" ? "Declining market" : "Stable market"}
           </strong>
-          {" — "}In <strong>{narrative.scope}</strong>, total volume changed by <strong>{narrative.dM > 0 ? "+" : ""}{fmtNum(narrative.dM)}</strong> units (YoY {fmtPct(narrative.yoy)}).
+          {" - "}In <strong>{narrative.scope}</strong>, total volume changed by <strong>{narrative.dM > 0 ? "+" : ""}{fmtNum(narrative.dM)}</strong> units (YoY {fmtPct(narrative.yoy)}).
           {narrative.topW && <> <strong style={{ color: COLORS.winner }}>{narrative.topW.model}</strong> gained <strong>+{fmtNum(narrative.topW.gain)}</strong>, driven primarily by <strong>{narrative.topW.driver}</strong>.</>}
           {narrative.topL && <> <strong style={{ color: COLORS.loser }}>{narrative.topL.model}</strong> lost <strong>{fmtNum(narrative.topL.loss)}</strong>, hurt by <strong>{narrative.topL.driver}</strong>.</>}
           {" "}<span style={{ color: "#94a3b8" }}>({narrative.modelCount} models analyzed)</span>
@@ -182,13 +328,13 @@ export function AdvancedAnalysisPage() {
       {/* Floating drawers */}
       <DeckFloatingDrawer open={filterOpen} onOpenChange={hFO} triggerPrimary="分析筛选" triggerSecondaryOpen="收起" triggerSecondaryClosed="打开"
         eyebrow="Controls" title="筛选条件" ariaLabel="Filters"
-        footer={<div className="market-scan-toolbar-meta"><span className="market-scan-toolbar-chip">{country}</span><span className="market-scan-toolbar-chip">{period || "Latest"}</span>{segmentFilter && <span className="market-scan-toolbar-chip">{segmentFilter}</span>}</div>}
+        footer={<div className="market-scan-toolbar-meta"><span className="market-scan-toolbar-chip">{country}</span><span className="market-scan-toolbar-chip">{period || "Latest"}</span><span className="market-scan-toolbar-chip">Profile {selectedProfileCount(profileSelections)}</span><span className="market-scan-toolbar-chip">Specs {selectedSpecCount(profileSpecs)}</span></div>}
       >
         <div className="deck-panel-grid">
           <label className="market-scan-field"><span>Country</span>
             <select value={country} onChange={e => setCountry(e.target.value)}>{COUNTRY_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}</select>
           </label>
-          <label className="market-scan-field"><span>Period</span>
+          <label className="market-scan-field"><span>{compareMode ? "Period A" : "Period"}</span>
             <input type="month" value={period} onChange={e => { setPeriod(e.target.value); setTimeMode("month"); }}
               style={{ minHeight: 40, width: "100%", padding: "10px 12px", border: "1px solid rgba(15,23,42,0.12)", borderRadius: 6, fontSize: 13 }} />
           </label>
@@ -205,35 +351,52 @@ export function AdvancedAnalysisPage() {
               ))}
             </div>
           </label>
-          <label className="market-scan-field"><span>Channel</span>
-            <select value={channelFilter} onChange={e => setChannelFilter(e.target.value)}>
-              <option value="">All Channels</option>
-              {CH_OPTIONS.filter(c => c).map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
+          <label className="market-scan-field deck-panel-grid__wide"><span>Target Model</span>
+            <input
+              list="aa-target-model-options"
+              value={targetModel}
+              onChange={e => setTargetModel(e.target.value)}
+              placeholder="Optional: choose an in-system model, or leave empty for profile mode"
+              style={{ minHeight: 40, width: "100%", padding: "10px 12px", border: "1px solid rgba(15,23,42,0.12)", borderRadius: 6, fontSize: 13 }}
+            />
+            <datalist id="aa-target-model-options">
+              {Array.from(new Set([...(competitorData?.model_options || []), ...profileOptions.model, ...(data?.models.map(m => m.model) || [])])).map(model => <option key={model} value={model} />)}
+            </datalist>
           </label>
-          <label className="market-scan-field"><span>Drive</span>
-            <select value={driveFilter} onChange={e => setDriveFilter(e.target.value)}>
-              <option value="">All Drive Types</option>
-              {DR_OPTIONS.filter(d => d).map(d => <option key={d} value={d}>{d}</option>)}
-            </select>
-          </label>
-          <label className="market-scan-field deck-panel-grid__wide"><span>Powertrain</span>
-            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-              {PT_OPTIONS.map(pt => (
-                <label key={pt} style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 3, cursor: "pointer", padding: "2px 6px", borderRadius: 4, background: powertrainFilter.includes(pt) ? "#dbeafe" : "#f1f5f9" }}>
-                  <input type="checkbox" checked={powertrainFilter.includes(pt)} onChange={() => setPowertrainFilter(prev => prev.includes(pt) ? prev.filter(p => p !== pt) : [...prev, pt])} style={{ margin: 0 }} />
-                  {pt}
+          <div className="market-scan-field deck-panel-grid__wide">
+            <span>Known Product Specs</span>
+            <div className="aa-spec-input-grid">
+              {PRODUCT_SPEC_INPUTS.map(item => (
+                <label key={item.key} className="aa-spec-input">
+                  <span>{item.label}</span>
+                  <div className="aa-spec-input-control">
+                    <input
+                      type="number"
+                      min={item.key === "co2_emission" ? 0 : 1}
+                      step={item.key === "fuel_consumption" || item.key === "battery_kwh" ? 0.1 : 1}
+                      inputMode="decimal"
+                      value={profileSpecs[item.key]}
+                      onChange={e => setProfileSpecs(current => ({ ...current, [item.key]: e.target.value }))}
+                      placeholder={item.placeholder}
+                    />
+                    {item.suffix && <em>{item.suffix}</em>}
+                  </div>
                 </label>
               ))}
             </div>
-          </label>
-          <label className="market-scan-field deck-panel-grid__wide"><span>Segment</span>
-            <select value={segmentFilter} onChange={e => setSegmentFilter(e.target.value)}
-              style={{ minHeight: 40, width: "100%", padding: "10px 12px", border: "1px solid rgba(15,23,42,0.12)", borderRadius: 6, fontSize: 13 }}>
-              <option value="">All Segments (total market)</option>
-              {availableSegments.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </label>
+          </div>
+          <div className="deck-panel-grid__wide" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+            {PROFILE_DIMENSIONS.map(dim => (
+              <SearchSelectFilter
+                key={dim.key}
+                label={dim.label}
+                options={profileOptions[dim.key] || []}
+                selected={profileSelections[dim.key]}
+                showSuvShortcut={dim.showSuvShortcut}
+                onChange={values => setProfileSelections(current => ({ ...current, [dim.key]: values }))}
+              />
+            ))}
+          </div>
           <label className="market-scan-field deck-panel-grid__wide" style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span>Compare A vs B</span>
             <input type="checkbox" checked={compareMode} onChange={e => setCompareMode(e.target.checked)} />
@@ -248,7 +411,7 @@ export function AdvancedAnalysisPage() {
             <span>Deck</span>
             <div className="btn-group">
               <button type="button" className="btn btn-secondary btn-sm" onClick={fetchData}>Refresh</button>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setSegmentFilter(""); setChannelFilter(""); setDriveFilter(""); setPowertrainFilter([]); setPeriodB(""); setCompareMode(false); setError(null); }}>Reset All</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setProfileSelections(emptyProfileSelections()); setProfileSpecs(emptyProfileSpecs()); setTargetModel(""); setPeriodB(""); setCompareMode(false); setError(null); }}>Reset All</button>
             </div>
           </div>
         </div>
@@ -267,9 +430,27 @@ export function AdvancedAnalysisPage() {
 
       {data && !data.error && (
         <div style={{ padding: "12px 16px 24px" }}>
-          {/* Row 1: Market Waterfall + Winner/Loser Butterfly */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-            <ChartCard title="Market Decomposition Waterfall" subtitle={`${data.base_period} → ${data.target_period}`}>
+          {competitorData && !competitorData.error && (
+            <>
+              <div style={RESPONSIVE_TWO_COL}>
+                <ChartCard title={`${competitorData.target_model} Sales x Channel Quality`} subtitle="Business/Private volume bars with total sales and channel share overlays">
+                  <ModelChannelOverlayChart data={competitorData.model_channel_timeseries} targetModel={competitorData.target_model} />
+                </ChartCard>
+                <ChartCard title="Competitive Battlefield" subtitle="Similar products ranked by likely gain/loss pressure">
+                  <CompetitorBattleChart data={competitorData} />
+                </ChartCard>
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <ChartCard title="Competitor Match Matrix" subtitle="Field-level match: product profile, specs, sales shift, and channel pressure">
+                  <CompetitorMatrix data={competitorData} />
+                </ChartCard>
+              </div>
+            </>
+          )}
+
+          {/* Market context */}
+          <div style={RESPONSIVE_TWO_COL}>
+            <ChartCard title="Market Decomposition Waterfall" subtitle={`${data.base_period} -> ${data.target_period}`}>
               <MarketWaterfallChart data={data} />
             </ChartCard>
             <ChartCard title="Winner / Loser Butterfly" subtitle="By pure share shift">
@@ -277,35 +458,32 @@ export function AdvancedAnalysisPage() {
             </ChartCard>
           </div>
 
-          {/* Row 2: Channel Volume + Indexed Share (side-by-side, no dual axis) */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+          {/* Market channel context */}
+          <div style={RESPONSIVE_TWO_COL}>
             <ChartCard title="Channel Volume (Stacked)" subtitle="Business / Private absolute volume">
               <ChannelVolumeChart ts={data.channel_timeseries} />
             </ChartCard>
-            <ChartCard title="Channel Share (Indexed, base=100)" subtitle="Relative share change — avoids dual-axis distortion">
+            <ChartCard title="Channel Share (Indexed, base=100)" subtitle="Relative share change without dual-axis distortion">
               <ChannelShareChart ts={data.channel_timeseries} />
             </ChartCard>
           </div>
 
-          {/* Row 3: Transfer Ledger — page center, answers "who exactly" */}
+          {/* Transfer Ledger */}
           <div style={{ marginBottom: 16 }}>
-            <ChartCard title="Transfer Ledger" subtitle={`${data.models.length} models ranked by |ΔV| — click row to see decomposition`}>
+            <ChartCard title="Transfer Ledger" subtitle={`${data.models.length} models ranked by |dV|`}>
               <TransferLedger models={data.models} basePeriod={data.base_period} targetPeriod={data.target_period} tsData={data.model_timeseries} />
             </ChartCard>
           </div>
 
-          {/* Row 4: Powertrain + Sankey */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+          {/* Structure context */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 16, marginBottom: 16 }}>
             <ChartCard title="Powertrain Cumulative" subtitle="BEV / HEV / PHEV / ICE stacked volume">
               <PowertrainStackedChart ts={data.powertrain_timeseries} />
             </ChartCard>
-            <ChartCard title="Model Transfer Sankey" subtitle={`Estimated share flows (top donors → recipients)`} note="Estimated transfer, not observed switching">
-              <SankeyChart winners={data.winners} losers={data.losers} />
-            </ChartCard>
           </div>
 
-          {/* Row 5: Heatmap + Momentum */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+          {/* Cell pressure and persistence */}
+          <div style={RESPONSIVE_TWO_COL}>
             <ChartCard title="Channel × Drive Heatmap" subtitle="Net volume shift per cell">
               <HeatmapChart cells={data.channel_drive_heatmap} />
             </ChartCard>
@@ -321,16 +499,16 @@ export function AdvancedAnalysisPage() {
             </ChartCard>
           </div>
 
-          {/* Compare mode: Period A vs Period B delta */}
-          {compareMode && dataB && !dataB.error && (
+          {/* Compare mode: Period A vs Period B direct decomposition */}
+          {compareMode && period && periodB && (
             <div style={{ marginBottom: 16, padding: 12, background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0" }}>
               <h4 style={{ margin: "0 0 8px", fontSize: 13 }}>
-                Δ Comparison: {data.target_period} → {dataB.target_period}
+                Period Comparison: {data.base_period}{" -> "}{data.target_period}
               </h4>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, fontSize: 12 }}>
-                <div><strong>Market ΔM:</strong> <span style={{ color: (dataB.scope_summary.dM - data.scope_summary.dM) >= 0 ? COLORS.winner : COLORS.loser }}>{(dataB.scope_summary.dM - data.scope_summary.dM) > 0 ? "+" : ""}{fmtNum(dataB.scope_summary.dM - data.scope_summary.dM)}</span></div>
-                <div><strong>Winners in B:</strong> {dataB.winners.slice(0, 3).map(w => w.model).join(", ") || "—"}</div>
-                <div><strong>Losers in B:</strong> {dataB.losers.slice(0, 3).map(l => l.model).join(", ") || "—"}</div>
+                <div><strong>Market ΔM:</strong> <span style={{ color: data.scope_summary.dM >= 0 ? COLORS.winner : COLORS.loser }}>{data.scope_summary.dM > 0 ? "+" : ""}{fmtNum(data.scope_summary.dM)}</span></div>
+                <div><strong>Top winners:</strong> {data.winners.slice(0, 3).map(w => w.model).join(", ") || "-"}</div>
+                <div><strong>Top losers:</strong> {data.losers.slice(0, 3).map(l => l.model).join(", ") || "-"}</div>
               </div>
             </div>
           )}
@@ -340,9 +518,8 @@ export function AdvancedAnalysisPage() {
 
       {!loading && !error && !data && (
         <div style={{ padding: 60, textAlign: "center", color: "#64748b" }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>📊</div>
           <h3>Share Transfer Analysis</h3>
-          <p>Open 分析筛选 → select country + period → click Refresh</p>
+          <p>No analysis result for the current scope.</p>
         </div>
       )}
     </div>
@@ -351,7 +528,7 @@ export function AdvancedAnalysisPage() {
 
 /* ── ChartCard wrapper ── */
 
-function ChartCard({ title, subtitle, note, children }: { title: string; subtitle?: string; note?: string; children: React.ReactNode }) {
+function ChartCard({ title, subtitle, note, children }: { title: string; subtitle?: string; note?: string; children: ReactNode }) {
   return (
     <div className="chart-card" style={{ padding: 12 }}>
       <div style={{ marginBottom: 8 }}>
@@ -360,6 +537,177 @@ function ChartCard({ title, subtitle, note, children }: { title: string; subtitl
       </div>
       {children}
       {note && <div style={{ marginTop: 8, fontSize: 10, color: "#94a3b8", fontStyle: "italic" }}>{note}</div>}
+    </div>
+  );
+}
+
+/* Product competitor view */
+
+function ModelChannelOverlayChart({ data, targetModel }: { data: ModelChannelTimeseriesItem[]; targetModel: string }) {
+  const chart = useMemo(() => {
+    const rows = data.filter(row => row.model === targetModel);
+    if (rows.length === 0) return null;
+    const periods = [...new Set(rows.map(row => row.period))].sort();
+    const channels = [...new Set(rows.map(row => row.channel))].sort((a, b) => {
+      const order = ["Business", "Private", "Other"];
+      return (order.indexOf(a) < 0 ? 99 : order.indexOf(a)) - (order.indexOf(b) < 0 ? 99 : order.indexOf(b));
+    });
+    const channelColors: Record<string, string> = { Business: "#2563eb", Private: "#16a34a", Other: "#94a3b8" };
+    const traces: Data[] = channels.map(channel => ({
+      x: periods,
+      y: periods.map(period => rows.find(row => row.period === period && row.channel === channel)?.volume || 0),
+      type: "bar" as const,
+      name: `${channel} volume`,
+      marker: { color: channelColors[channel] || "#94a3b8" },
+      hovertemplate: `%{x}<br>${channel}: %{y:,.0f}<extra></extra>`,
+    }));
+    traces.push({
+      x: periods,
+      y: periods.map(period => rows.find(row => row.period === period)?.total_volume || 0),
+      type: "scatter",
+      mode: "lines+markers",
+      name: "Total sales",
+      line: { color: "#0f172a", width: 2.5 },
+      marker: { color: "#0f172a", size: 5 },
+      hovertemplate: "%{x}<br>Total: %{y:,.0f}<extra></extra>",
+    });
+    for (const channel of ["Business", "Private"]) {
+      if (!channels.includes(channel)) continue;
+      traces.push({
+        x: periods,
+        y: periods.map(period => rows.find(row => row.period === period && row.channel === channel)?.share || 0),
+        type: "scatter",
+        mode: "lines",
+        name: `${channel} share`,
+        yaxis: "y2",
+        line: { color: channelColors[channel], width: 2, dash: "dot" },
+        hovertemplate: `%{x}<br>${channel} share: %{y:.1%}<extra></extra>`,
+      });
+    }
+    const layout: Partial<PlotlyLayout> = {
+      ...CHART_LAYOUT,
+      margin: { l: 54, r: 58, t: 20, b: 72 },
+      barmode: "stack" as const,
+      yaxis: { title: { text: "Sales volume" } },
+      yaxis2: { title: { text: "Channel share" }, overlaying: "y", side: "right", range: [0, 1], tickformat: ".0%" },
+      legend: { orientation: "h", y: 1.22, x: 0 },
+      hovermode: "x unified",
+    };
+    return { traces, layout };
+  }, [data, targetModel]);
+
+  if (!chart) return <div style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>No channel series for target model</div>;
+  return <PlotlyChart data={chart.traces} layout={chart.layout} style={{ width: "100%", height: 330 }} />;
+}
+
+function CompetitorBattleChart({ data }: { data: CompetitorSetResponse }) {
+  const chart = useMemo(() => {
+    const rows = data.competitors.slice(0, 12);
+    if (rows.length === 0) return null;
+    const hasFlow = rows.some(row => row.estimated_flow > 0);
+    const sorted = [...rows].sort((a, b) => {
+      const av = hasFlow ? a.estimated_flow : Math.abs(a.pure_share_shift);
+      const bv = hasFlow ? b.estimated_flow : Math.abs(b.pure_share_shift);
+      return av - bv;
+    });
+    const values = sorted.map(row => hasFlow ? row.estimated_flow : row.pure_share_shift);
+    const traces: Data[] = [{
+      y: sorted.map(row => row.model),
+      x: values,
+      type: "bar",
+      orientation: "h",
+      marker: { color: sorted.map(row => roleColor(row.role)) },
+      text: sorted.map(row => `${row.similarity_score.toFixed(0)}% match`),
+      textposition: "auto" as const,
+      customdata: sorted.map(row => [row.pure_share_shift, row.dV, row.match_evidence?.slice(0, 3).map(item => item.detail).join("<br>") || row.shared_dims.join(", ")]),
+      hovertemplate: [
+        "%{y}",
+        hasFlow ? "<br>Estimated flow: %{x:,.0f}" : "<br>Share shift: %{x:+,.0f}",
+        "<br>Pure share shift: %{customdata[0]:+,.0f}",
+        "<br>dV: %{customdata[1]:+,.0f}",
+        "<br>%{customdata[2]}",
+        "<extra></extra>",
+      ].join(""),
+    }];
+    const layout: Partial<PlotlyLayout> = {
+      ...CHART_LAYOUT,
+      margin: { l: 112, r: 24, t: 20, b: 44 },
+      xaxis: { title: { text: hasFlow ? "Estimated competitive flow" : "Pure share shift" }, zeroline: true },
+      yaxis: { automargin: true },
+      showlegend: false,
+    };
+    return { traces, layout };
+  }, [data]);
+
+  if (!chart) return <div style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>No competitor set for target model</div>;
+  return <PlotlyChart data={chart.traces} layout={chart.layout} style={{ width: "100%", height: 330 }} />;
+}
+
+function CompetitorMatrix({ data }: { data: CompetitorSetResponse }) {
+  const categoricalDims = ["powertrain", "segment", "body_type", "registration_type", "drive_type", "origin"] as const;
+  const specDims = PRODUCT_SPEC_INPUTS.filter(item => ["length_mm", "msrp", "ev_range", "fuel_consumption", "co2_emission", "battery_kwh"].includes(item.key));
+  const targetProfile = data.target.profile;
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+        <thead>
+          <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e2e8f0" }}>
+            <th style={thStyle}>Competitor</th>
+            <th style={{ ...thStyle, textAlign: "right" }}>Match</th>
+            <th style={{ ...thStyle, textAlign: "right" }}>dV</th>
+            <th style={{ ...thStyle, textAlign: "right" }}>Share Shift</th>
+            <th style={{ ...thStyle, textAlign: "right" }}>Flow</th>
+            <th style={{ ...thStyle, minWidth: 220 }}>Evidence</th>
+            {categoricalDims.map(dim => <th key={dim} style={thStyle}>{dim.replace("_", " ")}</th>)}
+            {specDims.map(item => <th key={item.key} style={thStyle}>{item.label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {data.competitors.slice(0, 12).map(row => {
+            const evidenceByField = new Map((row.match_evidence || []).map(item => [item.field, item]));
+            const topEvidence = (row.match_evidence || []).slice(0, 3);
+            return (
+              <tr key={row.model} style={{ borderBottom: "1px solid #eef2f7" }}>
+                <td style={{ ...tdStyle, fontWeight: 700, color: roleColor(row.role), minWidth: 132 }}>
+                  <div>{row.model}</div>
+                  {row.make && <div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 600 }}>{row.make}</div>}
+                </td>
+                <td style={{ ...tdStyle, textAlign: "right" }}>{row.similarity_score.toFixed(0)}%</td>
+                <td style={{ ...tdStyle, textAlign: "right", color: row.dV >= 0 ? COLORS.winner : COLORS.loser }}>{row.dV > 0 ? "+" : ""}{fmtNum(row.dV)}</td>
+                <td style={{ ...tdStyle, textAlign: "right", color: row.pure_share_shift >= 0 ? COLORS.winner : COLORS.loser }}>{row.pure_share_shift > 0 ? "+" : ""}{fmtNum(row.pure_share_shift)}</td>
+                <td style={{ ...tdStyle, textAlign: "right" }}>{row.estimated_flow > 0 ? fmtNum(row.estimated_flow) : "-"}</td>
+                <td style={{ ...tdStyle, minWidth: 220, color: "#334155" }}>
+                  {topEvidence.length > 0
+                    ? topEvidence.map(item => (
+                      <span key={`${row.model}-${item.field}`} style={{ display: "block", lineHeight: 1.45 }}>
+                        {item.detail} <strong>{item.score.toFixed(0)}%</strong>
+                      </span>
+                    ))
+                    : row.shared_dims.join(", ") || "-"}
+                </td>
+                {categoricalDims.map(dim => {
+                  const targetValues = String(targetProfile[dim] || "").split(" / ").map(value => value.trim()).filter(Boolean);
+                  const same = Boolean(row.profile[dim] && (targetValues.length === 0 || targetValues.includes(String(row.profile[dim]))));
+                  return (
+                    <td key={dim} style={{ ...tdStyle, background: same ? "#ecfdf5" : "transparent", color: same ? "#166534" : "#64748b" }}>
+                      {row.profile[dim] || "-"}
+                    </td>
+                  );
+                })}
+                {specDims.map(item => {
+                  const evidence = evidenceByField.get(item.key);
+                  const same = Boolean(evidence && evidence.score >= 65);
+                  return (
+                    <td key={item.key} style={{ ...tdStyle, background: same ? "#ecfeff" : "transparent", color: same ? "#155e75" : "#64748b", whiteSpace: "nowrap" }}>
+                      {formatProfileSpecValue(item.key, row.profile[item.key])}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -395,43 +743,10 @@ function MarketWaterfallChart({ data }: { data: TransferMartResponse }) {
 
 function ButterflyChart({ winners, losers }: { winners: TransferMartModel[]; losers: TransferMartModel[] }) {
   const chart = useMemo(() => {
-    const topW = winners.slice(0, 10);
-    const topL = losers.slice(0, 10).reverse(); // most negative last → display bottom-to-top
-
-    // Winners (right side, positive)
-    const wTraces: Data[] = [{
-      y: topW.map(m => m.model), x: topW.map(m => m.pure_share_shift), type: "bar", orientation: "h",
-      name: "Winners", marker: { color: COLORS.winner },
-      xaxis: "x", hovertemplate: "%{y}: +%{x:,.0f}<extra></extra>",
-    }];
-    // Losers (left side, negative)
-    const lTraces: Data[] = [{
-      y: topL.map(m => m.model), x: topL.map(m => m.pure_share_shift), type: "bar", orientation: "h",
-      name: "Losers", marker: { color: COLORS.loser },
-      xaxis: "x2", hovertemplate: "%{y}: %{x:,.0f}<extra></extra>",
-    }];
-
-    const layout: Partial<PlotlyLayout> = {
-      ...CHART_LAYOUT, margin: { l: 100, r: 24, t: 20, b: 32 },
-      grid: { rows: 1, columns: 2, roworder: "top to bottom" },
-      xaxis: { title: { text: "Share Shift" }, domain: [0, 0.45], autorange: "reversed" },
-      xaxis2: { title: { text: "Share Shift" }, domain: [0.55, 1] },
-      yaxis: { autorange: "reversed" },
-      yaxis2: { anchor: "x2", autorange: "reversed" },
-      showlegend: false,
-    };
-    return { traces: [...lTraces, ...wTraces], layout };
-  }, [winners, losers]);
-
-  if (winners.length === 0 && losers.length === 0) return <div style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>No data</div>;
-
-  // Fallback: simple grouped bar if subplots are tricky
-  const merged = [
-    ...losers.slice(0, 10).map(m => ({ model: m.model, val: m.pure_share_shift, kind: "Loser" })),
-    ...winners.slice(0, 10).map(m => ({ model: m.model, val: m.pure_share_shift, kind: "Winner" })),
-  ].sort((a, b) => b.val - a.val);
-
-  const sChart = useMemo(() => {
+    const merged = [
+      ...losers.slice(0, 10).map(m => ({ model: m.model, val: m.pure_share_shift, kind: "Loser" })),
+      ...winners.slice(0, 10).map(m => ({ model: m.model, val: m.pure_share_shift, kind: "Winner" })),
+    ].sort((a, b) => b.val - a.val);
     const traces: Data[] = [{
       x: merged.map(m => m.model), y: merged.map(m => m.val), type: "bar",
       marker: { color: merged.map(m => m.kind === "Winner" ? COLORS.winner : COLORS.loser) },
@@ -446,7 +761,9 @@ function ButterflyChart({ winners, losers }: { winners: TransferMartModel[]; los
     return { traces, layout };
   }, [winners, losers]);
 
-  return <PlotlyChart data={sChart.traces} layout={sChart.layout} style={{ width: "100%", height: 300 }} />;
+  if (winners.length === 0 && losers.length === 0) return <div style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>No data</div>;
+
+  return <PlotlyChart data={chart.traces} layout={chart.layout} style={{ width: "100%", height: 300 }} />;
 }
 
 /* ── Chart 3: Sankey ── */
@@ -461,8 +778,8 @@ function SankeyChart({ winners, losers }: { winners: TransferMartModel[]; losers
     const nodeMap: Record<string, number> = {};
     const links: Array<{ source: number; target: number; value: number }> = [];
 
-    for (const l of topL) { nodeMap[l.model] = nodes.length; nodes.push({ label: l.model + " ↘", color: COLORS.loser }); }
-    for (const w of topW) { nodeMap[w.model] = nodes.length; nodes.push({ label: "↗ " + w.model, color: COLORS.winner }); }
+    for (const l of topL) { nodeMap[l.model] = nodes.length; nodes.push({ label: `${l.model} loss`, color: COLORS.loser }); }
+    for (const w of topW) { nodeMap[w.model] = nodes.length; nodes.push({ label: `${w.model} gain`, color: COLORS.winner }); }
 
     const totalLoss = topL.reduce((s, l) => s + Math.abs(l.pure_share_shift), 0);
     if (totalLoss > 0) {
@@ -502,8 +819,7 @@ function HeatmapChart({ cells }: { cells: TransferMartResponse["channel_drive_he
       colorscale: [[0, COLORS.loser], [0.5, "#f8fafc"], [1, COLORS.winner]],
       zmin: -maxAbs, zmax: maxAbs,
       hovertemplate: "%{y} × %{x}<br>Net Shift: %{z:+,.0f}<extra></extra>",
-      text: z.map(row => row.map(v => `${v > 0 ? "+" : ""}${fmtNum(v)}`)),
-    }] as unknown as Data[];
+    }];
     const layout: Partial<PlotlyLayout> = {
       ...CHART_LAYOUT, margin: { l: 80, r: 24, t: 20, b: 48 },
       xaxis: { title: { text: "Drive Type" }, side: "bottom" },
@@ -653,7 +969,7 @@ function PowertrainStackedChart({ ts }: { ts: TransferMartResponse["powertrain_t
 /* ── Bottom: Transfer Ledger ── */
 
 function TransferLedger({ models, basePeriod, targetPeriod, tsData }: { models: TransferMartModel[]; basePeriod: string; targetPeriod: string; tsData: TransferMartResponse["model_timeseries"] }) {
-  const [sortKey, setSortKey] = useState<string>("dV");
+  const [sortKey, setSortKey] = useState<SortKey>("dV");
   const [sortDir, setSortDir] = useState<-1 | 1>(-1);
   const [expanded, setExpanded] = useState<string | null>(null);
   const tsMap = useMemo(() => {
@@ -665,26 +981,27 @@ function TransferLedger({ models, basePeriod, targetPeriod, tsData }: { models: 
   const sorted = useMemo(() => {
     const arr = [...models];
     arr.sort((a, b) => {
-      const av = (a as unknown as Record<string, number>)[sortKey] || 0;
-      const bv = (b as unknown as Record<string, number>)[sortKey] || 0;
-      return (av - bv) * sortDir;
+      if (sortKey === "model") {
+        return a.model.localeCompare(b.model) * sortDir;
+      }
+      return (a[sortKey] - b[sortKey]) * sortDir;
     });
     return arr;
   }, [models, sortKey, sortDir]);
 
-  const handleSort = (key: string) => {
+  const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => (d * -1) as -1 | 1);
     else { setSortKey(key); setSortDir(-1); }
   };
 
-  const cols: Array<{ key: string; label: string }> = [
+  const cols: Array<{ key: SortKey; label: string }> = [
     { key: "model", label: "Model" }, { key: "dV", label: "Δ Vol" }, { key: "pure_share_shift", label: "Share Shift" },
     { key: "market_carryover", label: "Market" }, { key: "channel_mix", label: "Channel" },
     { key: "drive_mix", label: "Drive" }, { key: "powertrain_mix", label: "PWT" },
     { key: "interaction", label: "Int." },
   ];
 
-  const decompOrder: Array<{ key: string; label: string; color: string }> = [
+  const decompOrder: Array<{ key: DecompositionKey; label: string; color: string }> = [
     { key: "market_carryover", label: "Market Carryover", color: COLORS.market },
     { key: "channel_mix", label: "Channel Mix", color: COLORS.mix },
     { key: "drive_mix", label: "Drive Mix", color: COLORS.mix },
@@ -702,7 +1019,7 @@ function TransferLedger({ models, basePeriod, targetPeriod, tsData }: { models: 
             {cols.map(c => (
               <th key={c.key} onClick={() => handleSort(c.key)}
                 style={{ ...thStyle, cursor: "pointer", color: sortKey === c.key ? "#1e293b" : "#64748b" }}>
-                {c.label}{sortKey === c.key ? (sortDir === -1 ? " ↓" : " ↑") : ""}
+                {c.label}{sortKey === c.key ? (sortDir === -1 ? " desc" : " asc") : ""}
               </th>
             ))}
             <th style={{ ...thStyle, width: 80 }}>Trend</th>
@@ -717,7 +1034,7 @@ function TransferLedger({ models, basePeriod, targetPeriod, tsData }: { models: 
               <Fragment key={m.model}>
                 <tr onClick={() => setExpanded(isExp ? null : m.model)}
                   style={{ borderBottom: "1px solid #f1f5f9", background: m.dV > 0 ? "#f0fdf4" : m.dV < 0 ? "#fef2f2" : "transparent", cursor: "pointer" }}>
-                  <td style={{ ...tdStyle, textAlign: "center", color: "#94a3b8" }}>{isExp ? "▼" : "▶"}</td>
+                  <td style={{ ...tdStyle, textAlign: "center", color: "#94a3b8" }}>{isExp ? "v" : ">"}</td>
                   <td style={{ ...tdStyle, fontWeight: 600 }}>{m.model}</td>
                   <td style={{ ...tdStyle, textAlign: "right", color: m.dV >= 0 ? COLORS.winner : COLORS.loser }}>{m.dV > 0 ? "+" : ""}{fmtNum(m.dV)}</td>
                   <td style={{ ...tdStyle, textAlign: "right", color: m.pure_share_shift >= 0 ? COLORS.winner : COLORS.loser }}>{m.pure_share_shift > 0 ? "+" : ""}{fmtNum(m.pure_share_shift)}</td>
@@ -729,7 +1046,7 @@ function TransferLedger({ models, basePeriod, targetPeriod, tsData }: { models: 
                   <td style={{ ...tdStyle, width: 80 }}>
                     {(() => {
                       const vals = tsMap.get(m.model);
-                      if (!vals || vals.length < 2) return <span style={{ color: "#cbd5e1" }}>—</span>;
+                      if (!vals || vals.length < 2) return <span style={{ color: "#cbd5e1" }}>-</span>;
                       const max = Math.max(...vals, 1);
                       const min = Math.min(...vals, 0);
                       const range = max - min || 1;
@@ -754,7 +1071,7 @@ function TransferLedger({ models, basePeriod, targetPeriod, tsData }: { models: 
                       </div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
                         {decompOrder.map(d => {
-                          const val = (m as any)[d.key] || 0;
+                          const val = m[d.key];
                           const pct = total > 0 ? Math.abs(val) / total * 100 : 0;
                           if (Math.abs(val) < 0.5) return null;
                           return (
@@ -786,5 +1103,5 @@ function TransferLedger({ models, basePeriod, targetPeriod, tsData }: { models: 
   );
 }
 
-const thStyle: React.CSSProperties = { padding: "7px 10px", textAlign: "left", fontWeight: 600, fontSize: 11, textTransform: "uppercase", whiteSpace: "nowrap" };
-const tdStyle: React.CSSProperties = { padding: "5px 10px", fontSize: 11, whiteSpace: "nowrap" };
+const thStyle: CSSProperties = { padding: "7px 10px", textAlign: "left", fontWeight: 600, fontSize: 11, textTransform: "uppercase", whiteSpace: "nowrap" };
+const tdStyle: CSSProperties = { padding: "5px 10px", fontSize: 11, whiteSpace: "nowrap" };

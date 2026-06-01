@@ -510,3 +510,12 @@ class AdvancedAnalysisTransferMartRequest(AdvancedAnalysisBaseRequest):
     sales_mode: Literal["month", "ytd", "rolling12"] = "month"
     scope_filters: list[dict[str, str]] = Field(default_factory=list)
     top_n: int = Field(default=25, ge=5, le=100)
+
+
+class AdvancedAnalysisCompetitorSetRequest(AdvancedAnalysisBaseRequest):
+    base_period: str | None = None
+    sales_mode: Literal["month", "ytd", "rolling12"] = "month"
+    scope_filters: list[dict[str, str]] = Field(default_factory=list)
+    target_model: str | None = None
+    profile_specs: dict[str, float] = Field(default_factory=dict)
+    top_n: int = Field(default=12, ge=5, le=50)

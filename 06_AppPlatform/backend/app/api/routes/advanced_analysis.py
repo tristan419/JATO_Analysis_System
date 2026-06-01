@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.schemas import (
     AdvancedAnalysisCellAttributionRequest,
+    AdvancedAnalysisCompetitorSetRequest,
     AdvancedAnalysisDrilldownRequest,
     AdvancedAnalysisKpiRequest,
     AdvancedAnalysisNestedShiftShareRequest,
@@ -14,6 +15,7 @@ from app.core.security import optional_viewer
 from app.services.advanced_analysis_service import (
     clear_advanced_analysis_cache,
     compute_cell_attribution,
+    compute_competitor_set,
     compute_drilldown,
     compute_kpi_table,
     compute_transfer_mart,
@@ -21,6 +23,7 @@ from app.services.advanced_analysis_service import (
     compute_probabilistic_transfer_matrix,
     compute_seasonal_decomposition,
     compute_shift_share_decomposition,
+    list_profile_filter_options,
 )
 
 router = APIRouter(prefix="/advanced-analysis", tags=["advanced-analysis"])
@@ -132,6 +135,23 @@ def advanced_analysis_transfer_mart(payload: AdvancedAnalysisTransferMartRequest
     )
 
 
+@router.post("/competitor-set")
+def advanced_analysis_competitor_set(payload: AdvancedAnalysisCompetitorSetRequest, _=Depends(optional_viewer)) -> dict:
+    return compute_competitor_set(
+        country=payload.country,
+        target_period=payload.target_period,
+        time_range=payload.time_range,
+        fuel_types=payload.fuel_types,
+        segments=payload.segments,
+        scope_filters=payload.scope_filters,
+        base_period=payload.base_period,
+        sales_mode=payload.sales_mode,
+        target_model=payload.target_model,
+        profile_specs=payload.profile_specs,
+        top_n=payload.top_n,
+    )
+
+
 @router.get("/segments")
 def list_available_segments(
     country: str = Query(default="瑞典"),
@@ -141,6 +161,14 @@ def list_available_segments(
     fact = build_fact_sales_monthly(country=country)
     segments = sorted(fact["segment"].dropna().unique().tolist()) if "segment" in fact.columns else []
     return {"country": country, "segments": segments}
+
+
+@router.get("/profile-options")
+def advanced_analysis_profile_options(
+    country: str = Query(default="瑞典"),
+    _=Depends(optional_viewer),
+) -> dict:
+    return list_profile_filter_options(country=country)
 
 
 @router.delete("/cache")

@@ -12,6 +12,7 @@ from app.infra import parquet_repository as repo
 from app.services.market_scan_service import (
     _get_columns,
     _month_column_to_period,
+    _resolve_existing_column,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,163 @@ def _normalize_registration(raw: str) -> str:
     return "Other"
 
 
+def _apply_scope_filters(fact: pd.DataFrame, scope_filters: list[dict[str, str]] | None) -> pd.DataFrame:
+    """Apply page scope filters, treating repeated dimensions as OR selections."""
+    if not scope_filters:
+        return fact
+    values_by_dim: dict[str, set[str]] = {}
+    for scope_filter in scope_filters:
+        dim = scope_filter.get("dim")
+        value = scope_filter.get("value")
+        if dim and value and dim in fact.columns:
+            values_by_dim.setdefault(dim, set()).add(value)
+    filtered = fact
+    for dim, values in values_by_dim.items():
+        filtered = filtered[filtered[dim].isin(values)]
+    return filtered
+
+
+PROFILE_FILTER_DIMS = ["segment", "body_type", "powertrain", "registration_type", "drive_type", "origin", "make"]
+PRODUCT_SPEC_CANDIDATES: dict[str, list[str]] = {
+    "length_mm": ["length (mm)", "车长(mm)", "车长", "length"],
+    "msrp": ["MSRP规整", "MSRP including delivery charge", "MSRP", "MSRP区间"],
+    "ev_range": ["Battery range", "Electric range", "Electric range (km)", "WLTP electric range", "Range (km)"],
+    "fuel_consumption": ["Fuel consumption combined", "WLTP Consumption combined", "Combined fuel consumption", "Fuel economy combined", "Consumption combined"],
+    "co2_emission": ["WLTP Emission combined", "CO2 level - (g/km) combined", "CO2 combined"],
+    "battery_kwh": ["Useable battery kilowatt hour (kWh)", "Battery kwh", "Battery capacity"],
+}
+PRODUCT_SPEC_LABELS: dict[str, str] = {
+    "length_mm": "Length",
+    "msrp": "MSRP",
+    "ev_range": "EV range",
+    "fuel_consumption": "Fuel consumption",
+    "co2_emission": "CO2",
+    "battery_kwh": "Battery",
+}
+CATEGORICAL_MATCH_WEIGHTS: dict[str, float] = {
+    "powertrain": 28.0,
+    "segment": 16.0,
+    "body_type": 10.0,
+    "registration_type": 6.0,
+    "drive_type": 6.0,
+    "origin": 4.0,
+    "make": 2.0,
+}
+NUMERIC_MATCH_WEIGHTS: dict[str, float] = {
+    "length_mm": 14.0,
+    "msrp": 12.0,
+    "ev_range": 10.0,
+    "fuel_consumption": 6.0,
+    "co2_emission": 4.0,
+    "battery_kwh": 4.0,
+}
+NUMERIC_MATCH_TOLERANCES: dict[str, float] = {
+    "length_mm": 450.0,
+    "msrp": 5000.0,
+    "ev_range": 120.0,
+    "fuel_consumption": 1.0,
+    "co2_emission": 40.0,
+    "battery_kwh": 20.0,
+}
+
+
+def _scope_filter_values(scope_filters: list[dict[str, str]] | None) -> dict[str, set[str]]:
+    values_by_dim: dict[str, set[str]] = {}
+    for scope_filter in scope_filters or []:
+        dim = scope_filter.get("dim")
+        value = scope_filter.get("value")
+        if dim and value:
+            values_by_dim.setdefault(dim, set()).add(value)
+    return values_by_dim
+
+
+def _resolve_product_spec_columns(column_names: list[str]) -> dict[str, str]:
+    return {
+        field: column
+        for field, candidates in PRODUCT_SPEC_CANDIDATES.items()
+        if (column := _resolve_existing_column(candidates, column_names))
+    }
+
+
+def _coerce_numeric_series(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.to_numeric(series, errors="coerce")
+    extracted = (
+        series.astype(str)
+        .str.replace(",", "", regex=False)
+        .str.extract(r"(-?\d+(?:\.\d+)?)", expand=False)
+    )
+    return pd.to_numeric(extracted, errors="coerce")
+
+
+def _numeric_value(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(numeric):
+        return None
+    return numeric
+
+
+def _normalize_profile_specs(profile_specs: dict[str, Any] | None) -> dict[str, float]:
+    normalized: dict[str, float] = {}
+    for field in NUMERIC_MATCH_WEIGHTS:
+        value = _numeric_value((profile_specs or {}).get(field))
+        if value is None:
+            continue
+        if value > 0 or field == "co2_emission":
+            normalized[field] = value
+    return normalized
+
+
+def _numeric_match_score(field: str, target_value: float, candidate_value: float) -> float:
+    tolerance = NUMERIC_MATCH_TOLERANCES[field]
+    if field in {"msrp", "fuel_consumption"}:
+        tolerance = max(tolerance, abs(target_value) * 0.25)
+    diff = abs(candidate_value - target_value)
+    return max(0.0, 1.0 - diff / (tolerance * 2.0))
+
+
+def _format_spec_value(field: str, value: float) -> str:
+    if field == "length_mm":
+        return f"{value:.0f} mm"
+    if field == "msrp":
+        return f"{value:,.0f}"
+    if field == "ev_range":
+        return f"{value:.0f} km"
+    if field == "fuel_consumption":
+        return f"{value:.1f}"
+    if field == "co2_emission":
+        return f"{value:.0f} g/km"
+    if field == "battery_kwh":
+        return f"{value:.1f} kWh"
+    return f"{value:.1f}"
+
+
+def list_profile_filter_options(country: str | None = None) -> dict[str, Any]:
+    """Return normalized profile dimensions used by Advanced Analysis filters."""
+    key = _cache_key("profile_options", country=country)
+
+    def _compute():
+        fact = build_fact_sales_monthly(country=country)
+        options: dict[str, list[str]] = {}
+        for dim in [*PROFILE_FILTER_DIMS, "model"]:
+            if dim not in fact.columns:
+                options[dim] = []
+                continue
+            values = (
+                fact[dim]
+                .dropna()
+                .astype(str)
+                .map(lambda value: value.strip())
+            )
+            options[dim] = sorted(value for value in values.unique().tolist() if value)
+        return {"country": country, "options": options}
+
+    return _cached_or_compute(key, _compute)
+
+
 def build_fact_sales_monthly(
     country: str | None = None,
     fuel_types: list[str] | None = None,
@@ -77,11 +235,12 @@ def build_fact_sales_monthly(
     """Wide-to-long transformation producing a normalized fact table."""
     cols = _get_columns()
     column_names = repo.list_columns()
+    spec_columns = _resolve_product_spec_columns(column_names)
 
     # Build the set of columns to load
     id_cols = [cols.country_value, cols.segment, cols.make, cols.model, cols.powertrain]
-    for opt in [cols.drive_type, cols.registration_type, cols.body_type, cols.origin]:
-        if opt and opt in column_names:
+    for opt in [cols.drive_type, cols.registration_type, cols.body_type, cols.origin, *spec_columns.values()]:
+        if opt and opt in column_names and opt not in id_cols:
             id_cols.append(opt)
 
     month_cols = [c for c in cols.month_columns if c in column_names]
@@ -103,14 +262,9 @@ def build_fact_sales_monthly(
         df = df[df[cols.segment].isin(segments)]
 
     id_vars = [cols.country_value, cols.segment, cols.make, cols.model, cols.powertrain]
-    if cols.drive_type and cols.drive_type in df.columns:
-        id_vars.append(cols.drive_type)
-    if cols.registration_type and cols.registration_type in df.columns:
-        id_vars.append(cols.registration_type)
-    if cols.body_type and cols.body_type in df.columns:
-        id_vars.append(cols.body_type)
-    if cols.origin and cols.origin in df.columns:
-        id_vars.append(cols.origin)
+    for opt in [cols.drive_type, cols.registration_type, cols.body_type, cols.origin, *spec_columns.values()]:
+        if opt and opt in df.columns and opt not in id_vars:
+            id_vars.append(opt)
 
     available = [c for c in id_vars if c in df.columns]
     available_month_cols = [c for c in month_cols if c in df.columns]
@@ -137,10 +291,16 @@ def build_fact_sales_monthly(
         rename_map[cols.body_type] = "body_type"
     if cols.origin and cols.origin in available:
         rename_map[cols.origin] = "origin"
+    for field, raw_col in spec_columns.items():
+        if raw_col in available:
+            rename_map[raw_col] = field
 
     long = long.rename(columns=rename_map)
     long["period"] = long["month_col"].apply(_month_column_to_period)
     long["sales"] = pd.to_numeric(long["sales"], errors="coerce").fillna(0.0)
+    for field in PRODUCT_SPEC_CANDIDATES:
+        if field in long.columns:
+            long[field] = _coerce_numeric_series(long[field])
 
     if "drive_type" in long.columns:
         long["drive_type"] = long["drive_type"].apply(_normalize_drive)
@@ -801,14 +961,8 @@ def compute_drilldown(
     def _compute():
         fact = build_fact_sales_monthly(country=country, fuel_types=fuel_types)
 
-        # Apply scope filters
-        used_dims: set[str] = set()
-        for f in scope_filters:
-            dim = f["dim"]
-            val = f["value"]
-            if dim in fact.columns:
-                fact = fact[fact[dim] == val]
-                used_dims.add(dim)
+        used_dims = {f["dim"] for f in scope_filters if f.get("dim") in fact.columns}
+        fact = _apply_scope_filters(fact, scope_filters)
 
         if len(fact) == 0:
             return {"error": "No data for selected scope"}
@@ -983,14 +1137,13 @@ def compute_transfer_mart(
     cache_kwargs = dict(country=country, target_period=target_period,
                         fuel_types=",".join(fuel_types or []),
                         segments=",".join(segments or []),
-                        scope=sf_key, base=base_period, sales_mode=sales_mode)
+                        scope=sf_key, base=base_period, sales_mode=sales_mode, top_n=top_n)
     key = _cache_key("transfer_mart", **cache_kwargs)
 
     def _compute():
-        source_fact = build_fact_sales_monthly(country=country, fuel_types=fuel_types, segments=segments)
-        for f in scope_filters:
-            if f["dim"] in source_fact.columns:
-                source_fact = source_fact[source_fact[f["dim"]] == f["value"]]
+        raw_fact = build_fact_sales_monthly(country=country, fuel_types=fuel_types, segments=segments)
+        selected_values = _scope_filter_values(scope_filters)
+        source_fact = _apply_scope_filters(raw_fact, scope_filters)
         if len(source_fact) == 0:
             return {"error": "No data for selected scope"}
 
@@ -1299,6 +1452,483 @@ def compute_transfer_mart(
             "channel_timeseries": channel_ts,
             "powertrain_timeseries": pwt_ts,
             "model_timeseries": model_ts,
+        }
+
+    return _cached_or_compute(key, _compute)
+
+
+def _model_metrics_from_fact(fact: pd.DataFrame, base: str, tgt: str) -> pd.DataFrame:
+    model_market = fact.groupby(["model", "period"], as_index=False)["sales"].sum()
+    total_by_period = fact.groupby("period", as_index=False)["sales"].sum().rename(columns={"sales": "M"})
+    model_market = model_market.merge(total_by_period, on="period", how="left")
+    model_market["share"] = np.where(model_market["M"] > 0, model_market["sales"] / model_market["M"], 0.0)
+
+    model_base = model_market[model_market["period"] == base].copy()
+    model_tgt = model_market[model_market["period"] == tgt].copy()
+    merged = model_tgt.merge(
+        model_base[["model", "sales", "M", "share"]],
+        on="model", how="outer", suffixes=("", "_0"),
+    )
+    for col in ["sales_0", "M_0", "share_0"]:
+        merged[col] = merged[col].fillna(0.0)
+    merged["sales"] = merged["sales"].fillna(0.0)
+    merged["M"] = merged["M"].fillna(0.0)
+    merged["share"] = merged["share"].fillna(0.0)
+    merged["dV"] = merged["sales"] - merged["sales_0"]
+    merged["dM"] = merged["M"] - merged["M_0"]
+    merged["ds"] = merged["share"] - merged["share_0"]
+    merged["market_carryover"] = merged["share_0"] * merged["dM"]
+    merged["pure_share_shift"] = merged["M_0"] * merged["ds"]
+    merged["interaction"] = merged["ds"] * merged["dM"]
+    return merged.replace([np.inf, -np.inf], 0.0).fillna(0.0)
+
+
+def _dominant_model_profiles(fact: pd.DataFrame, base: str, tgt: str) -> dict[str, dict[str, Any]]:
+    profile_dims = ["make", "segment", "body_type", "powertrain", "registration_type", "drive_type", "origin"]
+    available_dims = [dim for dim in profile_dims if dim in fact.columns]
+    numeric_dims = [field for field in NUMERIC_MATCH_WEIGHTS if field in fact.columns]
+    profiles: dict[str, dict[str, Any]] = {
+        str(model): {} for model in fact["model"].dropna().unique().tolist()
+    }
+
+    def _fill_from_period(period: str) -> None:
+        period_fact = fact[fact["period"] == period]
+        if len(period_fact) == 0:
+            return
+        for dim in available_dims:
+            ranked = (
+                period_fact.groupby(["model", dim], as_index=False, dropna=False)["sales"]
+                .sum()
+                .sort_values(["model", "sales"], ascending=[True, False])
+            )
+            ranked = ranked.drop_duplicates("model")
+            for _, row in ranked.iterrows():
+                model = str(row.get("model", ""))
+                value = row.get(dim)
+                if not model or pd.isna(value):
+                    continue
+                profiles.setdefault(model, {})
+                if dim not in profiles[model]:
+                    profiles[model][dim] = str(value)
+
+    def _weighted_average(group: pd.DataFrame, field: str) -> float:
+        weights = pd.to_numeric(group["sales"], errors="coerce").fillna(0.0).clip(lower=0.0)
+        if float(weights.sum()) > 0:
+            return float(np.average(group[field], weights=weights))
+        return float(group[field].median())
+
+    def _fill_numeric_from_period(period: str) -> None:
+        period_fact = fact[fact["period"] == period]
+        if len(period_fact) == 0:
+            return
+        for field in numeric_dims:
+            numeric = period_fact[["model", "sales", field]].copy()
+            numeric[field] = pd.to_numeric(numeric[field], errors="coerce")
+            numeric = numeric.dropna(subset=[field])
+            if field not in {"co2_emission", "fuel_consumption"}:
+                numeric = numeric[numeric[field] > 0]
+            if len(numeric) == 0:
+                continue
+            for model, group in numeric.groupby("model", dropna=False):
+                value = _weighted_average(group, field)
+                model_key = str(model)
+                if not model_key or not np.isfinite(value):
+                    continue
+                profiles.setdefault(model_key, {})
+                if field not in profiles[model_key]:
+                    profiles[model_key][field] = round(float(value), 2)
+
+    _fill_from_period(tgt)
+    _fill_from_period(base)
+    _fill_numeric_from_period(tgt)
+    _fill_numeric_from_period(base)
+    return profiles
+
+
+def _model_channel_timeseries(source_fact: pd.DataFrame, models: list[str]) -> list[dict[str, Any]]:
+    if "registration_type" not in source_fact.columns or not models:
+        return []
+    model_fact = source_fact[source_fact["model"].isin(models)]
+    if len(model_fact) == 0:
+        return []
+
+    channel_rows = (
+        model_fact.groupby(["model", "period", "registration_type"], as_index=False)["sales"]
+        .sum()
+        .sort_values(["model", "period", "registration_type"])
+    )
+    total_rows = (
+        model_fact.groupby(["model", "period"], as_index=False)["sales"]
+        .sum()
+        .rename(columns={"sales": "total_sales"})
+    )
+    channel_rows = channel_rows.merge(total_rows, on=["model", "period"], how="left")
+    channel_rows["share"] = np.where(
+        channel_rows["total_sales"] > 0,
+        channel_rows["sales"] / channel_rows["total_sales"],
+        0.0,
+    )
+
+    rows: list[dict[str, Any]] = []
+    for _, row in channel_rows.iterrows():
+        rows.append({
+            "model": str(row.get("model", "")),
+            "period": str(row.get("period", "")),
+            "channel": str(row.get("registration_type", "")),
+            "volume": float(row.get("sales", 0.0)),
+            "total_volume": float(row.get("total_sales", 0.0)),
+            "share": float(row.get("share", 0.0)),
+        })
+    return rows
+
+
+def _profile_channel_timeseries(source_fact: pd.DataFrame, label: str) -> list[dict[str, Any]]:
+    if "registration_type" not in source_fact.columns or len(source_fact) == 0:
+        return []
+    channel_rows = (
+        source_fact.groupby(["period", "registration_type"], as_index=False)["sales"]
+        .sum()
+        .sort_values(["period", "registration_type"])
+    )
+    total_rows = (
+        source_fact.groupby("period", as_index=False)["sales"]
+        .sum()
+        .rename(columns={"sales": "total_sales"})
+    )
+    channel_rows = channel_rows.merge(total_rows, on="period", how="left")
+    channel_rows["share"] = np.where(
+        channel_rows["total_sales"] > 0,
+        channel_rows["sales"] / channel_rows["total_sales"],
+        0.0,
+    )
+    rows: list[dict[str, Any]] = []
+    for _, row in channel_rows.iterrows():
+        rows.append({
+            "model": label,
+            "period": str(row.get("period", "")),
+            "channel": str(row.get("registration_type", "")),
+            "volume": float(row.get("sales", 0.0)),
+            "total_volume": float(row.get("total_sales", 0.0)),
+            "share": float(row.get("share", 0.0)),
+        })
+    return rows
+
+
+def _profile_label(selected_values: dict[str, set[str]]) -> str:
+    parts: list[str] = []
+    for dim in PROFILE_FILTER_DIMS:
+        values = sorted(selected_values.get(dim, set()))
+        if values:
+            parts.append("/".join(values[:3]) + ("+" if len(values) > 3 else ""))
+    return "Selected Profile" if not parts else "Profile: " + " · ".join(parts[:4])
+
+
+def compute_competitor_set(
+    country: str | None = None,
+    target_period: str | None = None,
+    time_range: dict[str, str] | None = None,
+    fuel_types: list[str] | None = None,
+    segments: list[str] | None = None,
+    scope_filters: list[dict[str, str]] | None = None,
+    base_period: str | None = None,
+    sales_mode: str = "month",
+    target_model: str | None = None,
+    profile_specs: dict[str, Any] | None = None,
+    top_n: int = 12,
+) -> dict[str, Any]:
+    """Build a product-centric competitive set using model profile similarity."""
+    if scope_filters is None:
+        scope_filters = []
+    if sales_mode not in {"month", "ytd", "rolling12"}:
+        sales_mode = "month"
+
+    sf_key = "|".join(f"{f['dim']}={f['value']}" for f in scope_filters) if scope_filters else "_root"
+    normalized_specs = _normalize_profile_specs(profile_specs)
+    spec_key = "|".join(f"{field}={normalized_specs[field]:.4g}" for field in sorted(normalized_specs))
+    cache_kwargs = dict(
+        country=country,
+        target_period=target_period,
+        fuel_types=",".join(fuel_types or []),
+        segments=",".join(segments or []),
+        scope=sf_key,
+        base=base_period,
+        sales_mode=sales_mode,
+        target_model=target_model,
+        profile_specs=spec_key,
+        top_n=top_n,
+        time_range=f"{time_range['start']}_{time_range['end']}" if time_range else "",
+    )
+    key = _cache_key("competitor_set", **cache_kwargs)
+
+    def _compute():
+        raw_fact = build_fact_sales_monthly(country=country, fuel_types=fuel_types, segments=segments)
+        selected_values = _scope_filter_values(scope_filters)
+        source_fact = _apply_scope_filters(raw_fact, scope_filters)
+        if len(source_fact) == 0:
+            return {"error": "No data for selected scope"}
+
+        periods = sorted(source_fact["period"].unique())
+        if len(periods) < 2:
+            return {"error": "Need at least 2 periods"}
+        tgt = target_period or (time_range["end"] if time_range else periods[-1])
+        if tgt not in periods:
+            tgt = periods[-1]
+        base = base_period or _shift_period(tgt, -12, periods) or periods[0]
+        if base not in periods:
+            base = _shift_period(tgt, -12, periods) or periods[0]
+
+        fact = _aggregate_fact_for_sales_mode(source_fact, periods, tgt, base, sales_mode)
+        metrics = _model_metrics_from_fact(fact, base, tgt)
+        if len(metrics) == 0:
+            return {"error": "No model metrics for selected scope"}
+
+        metrics_by_model = {str(row.get("model")): row for _, row in metrics.iterrows()}
+        profiles = _dominant_model_profiles(fact, base, tgt)
+        available_models = sorted(metrics_by_model.keys())
+        if not available_models:
+            return {"error": "No models for selected scope"}
+
+        selected_model = target_model if target_model in metrics_by_model else None
+        profile_mode = selected_model is None
+        selected_label = _profile_label(selected_values) if profile_mode else selected_model
+
+        selected_dims = [dim for dim in CATEGORICAL_MATCH_WEIGHTS if selected_values.get(dim)]
+        available_numeric_fields = [field for field in NUMERIC_MATCH_WEIGHTS if field in fact.columns]
+        if profile_mode:
+            target_profile = {
+                dim: " / ".join(sorted(selected_values.get(dim, set())))
+                for dim in selected_dims
+            }
+            target_shift = 0.0
+        else:
+            target_row = metrics_by_model[selected_model]
+            target_profile = profiles.get(selected_model, {})
+            target_shift = float(target_row.get("pure_share_shift", 0.0))
+
+        for field, value in normalized_specs.items():
+            target_profile[field] = round(value, 2)
+
+        target_specs: dict[str, float] = {}
+        for field in available_numeric_fields:
+            selected_spec = normalized_specs.get(field)
+            profile_spec = _numeric_value(target_profile.get(field))
+            target_value = selected_spec if selected_spec is not None else profile_spec
+            if target_value is not None:
+                target_specs[field] = target_value
+                target_profile[field] = round(target_value, 2)
+
+        active_categorical_dims = selected_dims or ([] if profile_mode else [dim for dim in CATEGORICAL_MATCH_WEIGHTS if dim in target_profile])
+        active_numeric_dims = [field for field in NUMERIC_MATCH_WEIGHTS if field in target_specs]
+        active_dims = [*active_categorical_dims, *active_numeric_dims]
+        total_weight = (
+            sum(CATEGORICAL_MATCH_WEIGHTS[dim] for dim in active_categorical_dims)
+            + sum(NUMERIC_MATCH_WEIGHTS[field] for field in active_numeric_dims)
+        ) or 1.0
+
+        competitor_rows: list[dict[str, Any]] = []
+        for model, row in metrics_by_model.items():
+            if not profile_mode and model == selected_model:
+                continue
+            profile = profiles.get(model, {})
+            shared_dims: list[str] = []
+            match_evidence: list[dict[str, Any]] = []
+            score_sum = 0.0
+
+            for dim in active_categorical_dims:
+                candidate_value = profile.get(dim)
+                if not candidate_value:
+                    continue
+                target_values = selected_values.get(dim, set()) if selected_dims else {str(target_profile.get(dim, ""))}
+                target_values = {value for value in target_values if value}
+                if candidate_value not in target_values:
+                    continue
+                shared_dims.append(dim)
+                score_sum += CATEGORICAL_MATCH_WEIGHTS[dim]
+                label = dim.replace("_", " ").title()
+                match_evidence.append({
+                    "field": dim,
+                    "label": label,
+                    "target": " / ".join(sorted(target_values)),
+                    "candidate": str(candidate_value),
+                    "score": 100.0,
+                    "detail": f"{label}: same {candidate_value}",
+                })
+
+            for field in active_numeric_dims:
+                target_value = target_specs[field]
+                candidate_value = _numeric_value(profile.get(field))
+                if candidate_value is None:
+                    continue
+                field_score = _numeric_match_score(field, target_value, candidate_value)
+                if field_score <= 0:
+                    continue
+                score_sum += NUMERIC_MATCH_WEIGHTS[field] * field_score
+                if field_score >= 0.65:
+                    shared_dims.append(field)
+                if field_score >= 0.45:
+                    label = PRODUCT_SPEC_LABELS[field]
+                    match_evidence.append({
+                        "field": field,
+                        "label": label,
+                        "target": round(float(target_value), 2),
+                        "candidate": round(float(candidate_value), 2),
+                        "score": round(field_score * 100.0, 1),
+                        "detail": f"{label}: {_format_spec_value(field, target_value)} vs {_format_spec_value(field, candidate_value)}",
+                    })
+
+            similarity = score_sum / total_weight * 100.0
+            if similarity <= 0 and active_dims:
+                continue
+
+            competitor_shift = float(row.get("pure_share_shift", 0.0))
+            role = "adjacent"
+            if profile_mode:
+                role = "likely_recipient" if competitor_shift >= 0 else "likely_source"
+            else:
+                if target_shift >= 0 and competitor_shift < 0:
+                    role = "likely_source"
+                elif target_shift < 0 and competitor_shift > 0:
+                    role = "likely_recipient"
+                elif target_shift >= 0 and competitor_shift >= 0:
+                    role = "co_winner"
+                elif target_shift < 0 and competitor_shift < 0:
+                    role = "co_loser"
+
+            competitor_rows.append({
+                "model": model,
+                "make": profile.get("make", ""),
+                "profile": profile,
+                "sales_tgt": float(row.get("sales", 0.0)),
+                "sales_base": float(row.get("sales_0", 0.0)),
+                "dV": float(row.get("dV", 0.0)),
+                "share_tgt": float(row.get("share", 0.0)),
+                "share_base": float(row.get("share_0", 0.0)),
+                "share_change": float(row.get("ds", 0.0)),
+                "pure_share_shift": competitor_shift,
+                "similarity_score": round(similarity, 1),
+                "shared_dims": shared_dims,
+                "match_evidence": match_evidence,
+                "role": role,
+                "estimated_flow": 0.0,
+            })
+
+        if not profile_mode and target_shift >= 0:
+            flow_pool = [
+                row for row in competitor_rows
+                if row["pure_share_shift"] < 0 and row["similarity_score"] >= 25
+            ]
+            denominator = sum(abs(row["pure_share_shift"]) * row["similarity_score"] for row in flow_pool)
+            for row in flow_pool:
+                row["estimated_flow"] = (
+                    abs(target_shift) * abs(row["pure_share_shift"]) * row["similarity_score"] / denominator
+                    if denominator > 0 else 0.0
+                )
+        elif not profile_mode:
+            flow_pool = [
+                row for row in competitor_rows
+                if row["pure_share_shift"] > 0 and row["similarity_score"] >= 25
+            ]
+            denominator = sum(row["pure_share_shift"] * row["similarity_score"] for row in flow_pool)
+            for row in flow_pool:
+                row["estimated_flow"] = (
+                    abs(target_shift) * row["pure_share_shift"] * row["similarity_score"] / denominator
+                    if denominator > 0 else 0.0
+                )
+
+        def _rank_score(row: dict[str, Any]) -> float:
+            return (
+                row["estimated_flow"] * 5.0
+                + abs(row["pure_share_shift"]) * (row["similarity_score"] / 100.0)
+                + abs(row["dV"]) * 0.15
+            )
+
+        competitor_rows.sort(key=_rank_score, reverse=True)
+        competitors = competitor_rows[:top_n]
+
+        battle_flows = []
+        if not profile_mode:
+            for row in competitors:
+                if row["estimated_flow"] <= 0:
+                    continue
+                if target_shift >= 0:
+                    source = row["model"]
+                    target = selected_model
+                else:
+                    source = selected_model
+                    target = row["model"]
+                battle_flows.append({
+                    "source": source,
+                    "target": target,
+                    "value": round(float(row["estimated_flow"]), 1),
+                    "similarity_score": row["similarity_score"],
+                    "reason": ", ".join(evidence.get("detail", evidence.get("field", "")) for evidence in row.get("match_evidence", [])[:3]),
+                })
+
+        if profile_mode:
+            total_tgt = float(fact[fact["period"] == tgt]["sales"].sum())
+            total_base = float(fact[fact["period"] == base]["sales"].sum())
+            target_metrics = {
+                "model": selected_label,
+                "make": "",
+                "profile": target_profile,
+                "sales_tgt": total_tgt,
+                "sales_base": total_base,
+                "dV": total_tgt - total_base,
+                "share_tgt": 1.0,
+                "share_base": 1.0,
+                "share_change": 0.0,
+                "pure_share_shift": 0.0,
+                "similarity_score": 100.0 if active_dims else 0.0,
+                "shared_dims": active_dims,
+                "match_evidence": [],
+                "role": "target",
+                "estimated_flow": 0.0,
+            }
+        else:
+            target_row = metrics_by_model[selected_model]
+            target_metrics = {
+                "model": selected_model,
+                "make": target_profile.get("make", ""),
+                "profile": target_profile,
+                "sales_tgt": float(target_row.get("sales", 0.0)),
+                "sales_base": float(target_row.get("sales_0", 0.0)),
+                "dV": float(target_row.get("dV", 0.0)),
+                "share_tgt": float(target_row.get("share", 0.0)),
+                "share_base": float(target_row.get("share_0", 0.0)),
+                "share_change": float(target_row.get("ds", 0.0)),
+                "pure_share_shift": target_shift,
+                "similarity_score": 100.0,
+                "shared_dims": active_dims,
+                "match_evidence": [],
+                "role": "target",
+                "estimated_flow": 0.0,
+            }
+
+        model_options = (
+            metrics.assign(_abs_shift=metrics["pure_share_shift"].abs())
+            .sort_values(["_abs_shift", "sales"], ascending=[False, False])
+            .head(80)["model"]
+            .astype(str)
+            .tolist()
+        )
+        chart_models = ([] if profile_mode else [selected_model]) + [row["model"] for row in competitors[:5]]
+        model_channel_timeseries = _model_channel_timeseries(source_fact, chart_models)
+        if profile_mode:
+            model_channel_timeseries = _profile_channel_timeseries(source_fact, selected_label) + model_channel_timeseries
+
+        return {
+            "base_period": base,
+            "target_period": tgt,
+            "sales_mode": sales_mode,
+            "analysis_mode": "profile" if profile_mode else "target_model",
+            "target_model": selected_label,
+            "target": target_metrics,
+            "competitors": competitors,
+            "battle_flows": battle_flows,
+            "profile_dimensions": active_dims,
+            "model_options": model_options,
+            "model_channel_timeseries": model_channel_timeseries,
+            "scope_model_count": len(metrics),
         }
 
     return _cached_or_compute(key, _compute)
