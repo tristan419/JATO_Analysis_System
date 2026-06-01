@@ -1,0 +1,21 @@
+{
+  "sessionId": "session_20260527_152233_7b2287",
+  "createdAt": "2026-05-27T15:22:33.429252+00:00",
+  "updatedAt": "2026-05-27T15:22:33.430453+00:00",
+  "messages": [
+    {
+      "messageId": "msg_20260527_152233",
+      "role": "user",
+      "content": "Recent activity",
+      "timestamp": "2026-05-27T15:22:33.429971+00:00"
+    },
+    {
+      "messageId": "msg_20260527_152233_resp",
+      "role": "assistant",
+      "content": "This information is available on the Activity tab below.",
+      "replyType": "direct_answer",
+      "intent": "run_status_query",
+      "timestamp": "2026-05-27T15:22:33.430382+00:00"
+    }
+  ]
+}

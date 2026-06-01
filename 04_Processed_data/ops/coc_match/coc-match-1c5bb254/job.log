@@ -1,0 +1,10 @@
+[2026-05-26T09:28:48.362427+00:00] Country: CZ, Month: 2026-05, Ext: .pdf
+[2026-05-26T09:28:48.362670+00:00] Excel: /Users/litristan/Downloads/JATO_Analysis_System/04_Processed_data/ops/coc_match/coc-match-1c5bb254/excel-missing pdf files - list of vins 21-5-26.xlsx
+[2026-05-26T09:28:48.362871+00:00] Archive: /Users/litristan/Downloads/JATO_Analysis_System/04_Processed_data/ops/coc_match/coc-match-1c5bb254/archive-27.rar
+[2026-05-26T09:28:48.363441+00:00] Reading Excel...
+[2026-05-26T09:28:48.374833+00:00]   29 rows loaded
+[2026-05-26T09:28:48.374982+00:00] Listing archive (ext=.pdf)...
+[2026-05-26T09:28:48.414797+00:00]   27 unique filenames
+[2026-05-26T09:28:48.415066+00:00]   Matched: 27, Missing: 2, Archive-only: 0, Difference: missing_archive_files
+[2026-05-26T09:28:48.421388+00:00] Report: /Users/litristan/Downloads/JATO_Analysis_System/04_Processed_data/ops/coc_match/coc-match-1c5bb254/report.html
+[2026-05-26T09:28:48.421867+00:00] Done!

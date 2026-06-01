@@ -1,0 +1,21 @@
+{
+  "sessionId": "session_20260527_151423_9cafa5",
+  "createdAt": "2026-05-27T15:14:23.457981+00:00",
+  "updatedAt": "2026-05-27T15:14:23.459905+00:00",
+  "messages": [
+    {
+      "messageId": "msg_20260527_151423",
+      "role": "user",
+      "content": "test",
+      "timestamp": "2026-05-27T15:14:23.458903+00:00"
+    },
+    {
+      "messageId": "msg_20260527_151423_resp",
+      "role": "assistant",
+      "content": "I'm not sure what you want me to do. Did you mean one of these?",
+      "replyType": "clarification_needed",
+      "intent": "unknown",
+      "timestamp": "2026-05-27T15:14:23.459706+00:00"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "sessionId": "session_20260527_151508_a044d1",
+  "createdAt": "2026-05-27T15:15:08.429515+00:00",
+  "updatedAt": "2026-05-27T15:15:08.430267+00:00",
+  "messages": [
+    {
+      "messageId": "msg_20260527_151508",
+      "role": "user",
+      "content": "show governance gaps",
+      "timestamp": "2026-05-27T15:15:08.430027+00:00"
+    },
+    {
+      "messageId": "msg_20260527_151508_resp",
+      "role": "assistant",
+      "content": "当前有 2 个 open governance gaps，33 个已解决（共 36 个）。",
+      "replyType": "direct_answer",
+      "intent": "gap_query",
+      "timestamp": "2026-05-27T15:15:08.430226+00:00"
+    }
+  ]
+}
