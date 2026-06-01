@@ -1587,7 +1587,13 @@ class MaterialSkuMaster(TimestampMixin, Base):
     exterior_color_name: Mapped[str] = mapped_column(Text, nullable=False)
     exterior_color_code: Mapped[str] = mapped_column(Text, nullable=False)
     exterior_color_type: Mapped[str] = mapped_column(Text, nullable=False)
+    colour_hex: Mapped[str | None] = mapped_column(Text, nullable=True)
+    colour_code_confirmed: Mapped[bool] = mapped_column(Boolean, default=True)
+    colour_tier: Mapped[str] = mapped_column(Text, default="single", comment="single | dual | special")
     interior_color_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    interior_colour_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    interior_package: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edition_tag: Mapped[str | None] = mapped_column(Text, nullable=True)
     bom_template: Mapped[str | None] = mapped_column(Text, nullable=True)
     material_code: Mapped[str] = mapped_column(Text, nullable=False)
     lifecycle_status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
@@ -1884,4 +1890,72 @@ class PaymentTermAuditLog(Base):
     actor: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class FobResolvedHistory(Base):
+    """Immutable audit trail for every FOB value change during baseline publish.
+
+    Written BEFORE the upsert so old/new values are captured in one row.
+    """
+
+    __tablename__ = "fob_resolved_history"
+    __table_args__ = (
+        Index("ix_ordering_fob_history_code", "material_code"),
+        Index("ix_ordering_fob_history_country_code", "country_code", "material_code"),
+        {"schema": "ordering"},
+    )
+
+    fob_history_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4,
+    )
+    country_sku_fob_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), nullable=False,
+    )
+    baseline_version_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), nullable=True,
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    material_code: Mapped[str] = mapped_column(Text, nullable=False)
+    payment_term_code: Mapped[str] = mapped_column(Text, nullable=False)
+    old_uploaded_fob_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    new_uploaded_fob_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    old_final_fob_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    new_final_fob_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    changed_by: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="trigger name, e.g. publish_baseline",
+    )
+    changed_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+
+class QuantityCellHistory(Base):
+    """Immutable audit trail for every order quantity cell edit."""
+
+    __tablename__ = "quantity_cell_history"
+    __table_args__ = (
+        Index(
+            "ix_ordering_qty_history_cell",
+            "country_code", "order_year", "order_month", "material_code",
+        ),
+        {"schema": "ordering"},
+    )
+
+    quantity_history_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4,
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    order_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    order_month: Mapped[int] = mapped_column(Integer, nullable=False)
+    material_code: Mapped[str] = mapped_column(Text, nullable=False)
+    old_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    new_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    old_fob_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    new_fob_eur: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    changed_by: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="username who made the change",
+    )
+    changed_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
     )

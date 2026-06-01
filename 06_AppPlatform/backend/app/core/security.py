@@ -9,6 +9,7 @@ from app.services.auth_service import session_store
 
 ROLE_LEVEL = {
     "viewer": 1,
+    "order_filler": 1,
     "editor": 2,
     "admin": 3,
     "developer": 3,
@@ -56,6 +57,11 @@ def get_current_user(
     x_user_name: str = Header(default="anonymous"),
 ) -> UserContext:
     if not AUTH_ENABLED:
+        # Even in dev mode, try token resolution first so role-specific
+        # testing (order_filler, editor, etc.) works with real login tokens.
+        token_user = _token_user(x_auth_token, x_user_name)
+        if token_user:
+            return token_user
         return UserContext(
             role="admin",
             name=str(x_user_name).strip() or "anonymous",
@@ -78,6 +84,35 @@ def require_min_role(min_role: str) -> Callable:
     return dependency
 
 
+def require_roles(*allowed_roles: str) -> Callable:
+    """Require the user's role to be in the explicit allowed list (level-agnostic)."""
+
+    def dependency(
+        user: UserContext = Depends(get_current_user),
+    ) -> UserContext:
+        if user.role not in allowed_roles:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        return user
+
+    return dependency
+
+
+def validate_country_access(session, username: str, role: str, country: str) -> None:
+    """Raise 403 if an order_filler user tries to access a country they aren't assigned to."""
+    if role != "order_filler":
+        return
+    if not country:
+        raise HTTPException(status_code=403, detail="Country required for order_filler accounts")
+    from app.db.models import User
+    db_user = session.query(User).filter(User.username == username).first()
+    if not db_user:
+        raise HTTPException(status_code=403, detail="User not found")
+    allowed = [db_user.primary_country_code] + (db_user.secondary_country_codes or [])
+    allowed = [c for c in allowed if c]
+    if country.upper() not in [a.upper() for a in allowed]:
+        raise HTTPException(status_code=403, detail=f"Access denied for country: {country}")
+
+
 def get_optional_user(
     x_auth_token: str | None = Header(default=None),
     x_user_name: str = Header(default="anonymous"),
@@ -85,6 +120,9 @@ def get_optional_user(
     name = str(x_user_name).strip() or "anonymous"
 
     if not AUTH_ENABLED:
+        token_user = _token_user(x_auth_token, name)
+        if token_user:
+            return token_user
         return UserContext(role="admin", name=name)
 
     return _token_user(x_auth_token, name) or _anonymous_viewer(name)

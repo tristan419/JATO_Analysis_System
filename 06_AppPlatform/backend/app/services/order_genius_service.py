@@ -13,9 +13,159 @@ from sqlalchemy.orm import Session
 from app.infra import order_genius_repository as repo
 from app.services.material_master_parser import parse_material_master_xlsx
 from app.services.order_genius_export_service import generate_order_genius_excel
+from app.services.order_quantity_parser import (
+    OrderQuantityImport,
+    parse_order_quantity_xlsx,
+)
+from app.services.powertrain_normalizer import normalize_powertrain
+
+
+def _extract_canonical_pt(sku: object) -> str:
+    """Extract canonical powertrain from SKU data — model name is authoritative over DB field."""
+    raw_pt = str(getattr(sku, "powertrain", "") or "").upper()
+    model = str(getattr(sku, "model_name", "") or "").upper()
+    combined = f"{model} {raw_pt}"
+    # Order: PHEV/SHS before HEV, BEV before EV
+    if "PHEV" in combined or "SHS" in combined or "PLUG" in combined:
+        return "PHEV"
+    if "MHEV" in combined or "MILD HYBRID" in combined:
+        return "MHEV"
+    if "REEV" in combined or "EREV" in combined or "RANGE EXTEND" in combined:
+        return "REEV"
+    if "FCEV" in combined or "FCV" in combined or "FUEL CELL" in combined:
+        return "FCV"
+    if "HEV" in combined or "HYBRID ELECTRIC" in combined:
+        return "HEV"
+    if "BEV" in combined or "BATTERY ELECTRIC" in combined:
+        return "BEV"
+    if "EV" in combined or "ELECTRIC" in combined:
+        return "BEV"
+    if "ICE" in combined or "PETROL" in combined or "DIESEL" in combined or "LPG" in combined:
+        return "ICE"
+    return normalize_powertrain(raw_pt) if raw_pt else "Other"
+
+
+def _derive_colour_tier(exterior_color_type: str) -> str:
+    """Auto-classify colour_tier from exterior_color_type.
+    single → single, dual → dual, matte/black edition/etc → special"""
+    if not exterior_color_type:
+        return "single"
+    ct = str(exterior_color_type).strip().lower()
+    if ct in ("single", "solid", "mono"):
+        return "single"
+    if ct in ("dual", "two-tone", "dual tone", "bi-color", "bi colour"):
+        return "dual"
+    # matte, black edition, pearl, metallic, special finishes → special
+    return "special"
 
 
 # ── Upload orchestration ───────────────────────────────────────────────
+
+
+def _assign_fob_based_tiers(
+    session: Session,
+    skus: list[MaterialSkuMaster],
+) -> int:
+    """After FOB resolution, group SKUs by (bom_template, country) and assign colour_tier
+    based on FOB levels within each group.
+
+    Within each group, unique FOB values are sorted:
+      1 FOB level  → all 'single'
+      2 FOB levels → lower FOB = 'single', higher = 'dual'
+      3+ FOB levels → lowest = 'single', middle(s) = 'dual', highest = 'special'
+    """
+    from collections import defaultdict
+
+    from app.db.models import CountrySkuFobResolved
+
+    updated = 0
+    if not skus:
+        return updated
+
+    # Collect all FOB data for these SKUs (keyed by material_code, not material_sku_id)
+    material_codes = [s.material_code for s in skus]
+    code_to_sku: dict[str, MaterialSkuMaster] = {s.material_code: s for s in skus}
+    all_fobs = session.query(CountrySkuFobResolved).filter(
+        CountrySkuFobResolved.material_code.in_(material_codes),
+        CountrySkuFobResolved.is_active == True,
+    ).all()
+
+    # Step 1: For each (bom_template, country), find the base FOB
+    bom_base_fob: dict[tuple[str, str], float] = {}
+    bom_fobs: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
+    for fob in all_fobs:
+        sku = code_to_sku.get(fob.material_code)
+        if not sku or fob.final_fob_eur is None:
+            continue
+        bt = sku.bom_template or sku.material_code
+        key = (bt, fob.country_code)
+        bom_fobs[key][sku.material_code] = float(fob.final_fob_eur)
+    for key, mc_fobs in bom_fobs.items():
+        bom_base_fob[key] = min(mc_fobs.values())
+
+    # Step 2: Cross-BOM base FOB per (model+version, country)
+    mv_base_fob: dict[tuple[str, str], float] = {}
+    mv_fobs: dict[tuple[str, str], list[float]] = defaultdict(list)
+    for fob in all_fobs:
+        sku = code_to_sku.get(fob.material_code)
+        if not sku or fob.final_fob_eur is None:
+            continue
+        mv = f"{sku.model_name or ''}|{sku.version or ''}"
+        key = (mv, fob.country_code)
+        mv_fobs[key].append(float(fob.final_fob_eur))
+    for key, fobs in mv_fobs.items():
+        mv_base_fob[key] = min(fobs)
+
+    # Step 3: Compute paint surcharge per SKU
+    surcharge_map: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
+    for fob in all_fobs:
+        sku = code_to_sku.get(fob.material_code)
+        if not sku or fob.final_fob_eur is None:
+            continue
+        bt = sku.bom_template or sku.material_code
+        mv = f"{sku.model_name or ''}|{sku.version or ''}"
+        key = (mv, fob.country_code)
+        own_base = bom_base_fob.get((bt, fob.country_code))
+        bom_mcs = list(bom_fobs.get((bt, fob.country_code), {}).keys())
+        if own_base is not None and len(bom_mcs) >= 2:
+            base = own_base
+        else:
+            base = mv_base_fob.get(key)
+        if base is None or base == 0:
+            continue
+        surcharge = float(fob.final_fob_eur) - base
+        surcharge_map[key][sku.material_code] = surcharge
+
+    # Step 4: Assign tiers based on surcharge levels
+    for (mv, country), mc_surcharges in surcharge_map.items():
+        unique_sc = sorted(set(mc_surcharges.values()))
+
+        # Map surcharge → tier
+        sc_to_tier: dict[float, str] = {}
+        if len(unique_sc) == 1:
+            # Single FOB level: all single
+            sc_to_tier[unique_sc[0]] = "single"
+        elif len(unique_sc) == 2:
+            sc_to_tier[unique_sc[0]] = "single"
+            sc_to_tier[unique_sc[1]] = "dual"
+        else:
+            sc_to_tier[unique_sc[0]] = "single"
+            for sc in unique_sc[1:-1]:
+                sc_to_tier[sc] = "dual"
+            sc_to_tier[unique_sc[-1]] = "special"
+
+        for mc, sc in mc_surcharges.items():
+            tier = sc_to_tier.get(sc)
+            if tier is None:
+                continue
+            sku = code_to_sku.get(mc)
+            if sku and sku.colour_tier != tier:
+                sku.colour_tier = tier
+                updated += 1
+
+    if updated:
+        session.flush()
+    return updated
 
 
 def preview_parsed_upload(
@@ -82,13 +232,22 @@ def publish_baseline(
     )
     session.flush()  # get baseline_version_id
 
-    # 2. Insert new SKUs
+    # 2. Insert new SKUs (skip if already active with same data)
     from app.db.models import MaterialSkuMaster
 
+    existing_codes = set(
+        repo.get_sku_by_material_code_any_status(session, r.get("material_code", "")).material_code
+        for r in rows if repo.get_sku_by_material_code_any_status(session, r.get("material_code", ""))
+    )
     new_material_codes: list[str] = []
     new_skus: list[MaterialSkuMaster] = []
     for row in rows:
         mc = row.get("material_code", "")
+        # Skip if already active — idempotent publish
+        existing = repo.get_sku_by_material_code(session, mc)
+        if existing:
+            new_material_codes.append(mc)
+            continue
         sku = MaterialSkuMaster(
             material_sku_id=uuid_module.uuid4(),
             baseline_version_id=baseline.baseline_version_id,
@@ -100,7 +259,12 @@ def publish_baseline(
             exterior_color_name=row.get("exterior_color_name", ""),
             exterior_color_code=row.get("exterior_color_code", ""),
             exterior_color_type=row.get("exterior_color_type", "single"),
+            colour_code_confirmed=row.get("colour_code_confirmed", True),
+            colour_tier=row.get("colour_tier") or _derive_colour_tier(row.get("exterior_color_type", "single")),
+            edition_tag=row.get("edition_tag"),
             interior_color_name=row.get("interior_color_name"),
+            interior_colour_code=row.get("interior_colour_code"),
+            interior_package=row.get("interior_package"),
             bom_template=row.get("bom_template"),
             material_code=mc,
             lifecycle_status="active",
@@ -151,6 +315,9 @@ def publish_baseline(
         else:
             fob_skipped.add(country_pt.country_code)
 
+    # 5. Assign colour_tier based on FOB levels (FOB-based tier detection)
+    tier_updates = _assign_fob_based_tiers(session, new_skus)
+
     return {
         "baseline_version_id": str(baseline.baseline_version_id),
         "baseline_name": baseline_name,
@@ -159,6 +326,7 @@ def publish_baseline(
         "fob_source_mode": fob_source_mode,
         "fob_resolved_countries": sorted(fob_resolved),
         "fob_skipped_countries": sorted(fob_skipped),
+        "tier_updates": tier_updates,
         "status": "published",
     }
 
@@ -351,12 +519,11 @@ def build_matrix(
     payment_term_code = country_pt.payment_term_code if country_pt else None
     country_name = country_pt.country_name if country_pt else None
 
-    # Get active SKUs matching filters
+    # Get active SKUs matching filters (powertrain filtered in Python for canonical matching)
     active_skus = repo.list_active_skus(
         session,
         brand=brand,
         model_name=model_name,
-        powertrain=powertrain,
         version=version,
         exterior_color_code=colour,
         material_code_search=material_code_search,
@@ -375,6 +542,11 @@ def build_matrix(
     skus_with_fob = [
         s for s in active_skus if s.material_code in fob_map
     ]
+
+    # Filter by canonical powertrain (model-name-aware, not raw DB field)
+    if powertrain:
+        canonical_pt = normalize_powertrain(powertrain)
+        skus_with_fob = [s for s in skus_with_fob if _extract_canonical_pt(s) == canonical_pt]
 
     # Get quantities for this country+year
     all_quantities = repo.list_quantities_for_country_year(
@@ -412,6 +584,10 @@ def build_matrix(
             "version": sku.version,
             "colour": sku.exterior_color_name,
             "colourCode": sku.exterior_color_code,
+            "interiorColorName": sku.interior_color_name,
+            "interiorColourCode": sku.interior_colour_code,
+            "interiorPackage": sku.interior_package,
+            "editionTag": sku.edition_tag,
             "powertrain": sku.powertrain,
             "fobEur": float(fob.final_fob_eur) if fob else None,
             "lifecycleStatus": "active",
@@ -424,12 +600,23 @@ def build_matrix(
             "ttl": row_ttl,
         })
 
-    # Add historical rows with quantity data
+    # Add historical rows with quantity data (respect brand/model/version/colour filters)
     for mc in historical_codes:
         if mc in fob_map:
             continue  # already included as active
         hist_sku = repo.get_sku_by_material_code_any_status(session, mc)
         if not hist_sku:
+            continue
+        # Apply filters to historical rows too
+        if brand and hist_sku.brand != brand:
+            continue
+        if model_name and hist_sku.model_name != model_name:
+            continue
+        if version and hist_sku.version != version:
+            continue
+        if colour and hist_sku.exterior_color_code != colour:
+            continue
+        if powertrain and _extract_canonical_pt(hist_sku) != normalize_powertrain(powertrain):
             continue
         fob = repo.get_fob_for_country_sku(session, country_code, mc)
 
@@ -456,6 +643,10 @@ def build_matrix(
                 "version": hist_sku.version,
                 "colour": hist_sku.exterior_color_name,
                 "colourCode": hist_sku.exterior_color_code,
+                "interiorColorName": hist_sku.interior_color_name,
+                "interiorColourCode": hist_sku.interior_colour_code,
+                "interiorPackage": hist_sku.interior_package,
+                "editionTag": hist_sku.edition_tag,
                 "powertrain": hist_sku.powertrain,
                 "fobEur": float(fob.final_fob_eur) if fob else None,
                 "lifecycleStatus": "historical",
@@ -498,9 +689,14 @@ def build_options(
     )
 
     # Get all active SKUs for this country (filtered by FOB availability)
+    # Don't filter powertrain at DB level — DB has raw values, we filter by canonical after
     all_active = repo.list_active_skus(session, brand=brand, model_name=model_name,
-                                       powertrain=powertrain, version=version)
+                                       version=version)
     skus = [s for s in all_active if s.material_code in fob_codes]
+
+    # Filter by canonical powertrain (model-name-aware)
+    if powertrain:
+        skus = [s for s in skus if _extract_canonical_pt(s) == normalize_powertrain(powertrain)]
 
     # Collect distinct values from the filtered skus
     brands = sorted(set(s.brand for s in skus))
@@ -513,20 +709,44 @@ def build_options(
 
     if model_name:
         pts = sorted(set(
-            s.powertrain for s in skus
+            _extract_canonical_pt(s) for s in skus
             if s.model_name == model_name and s.powertrain
+        ))
+    elif brand:
+        pts = sorted(set(
+            _extract_canonical_pt(s) for s in skus
+            if s.brand == brand and s.powertrain
         ))
     else:
         pts = sorted(set(
-            s.powertrain for s in skus if s.powertrain
+            _extract_canonical_pt(s) for s in skus if s.powertrain
         ))
 
     if version:
         vers = sorted(set(s.version for s in skus))
+    elif brand or model_name:
+        # Cascade: versions filtered by upstream selections
+        filtered = skus
+        if brand:
+            filtered = [s for s in filtered if s.brand == brand]
+        if model_name:
+            filtered = [s for s in filtered if s.model_name == model_name]
+        vers = sorted(set(s.version for s in filtered))
     else:
         vers = sorted(set(s.version for s in skus))
 
-    colours = sorted(set(s.exterior_color_name for s in skus))
+    # Cascade colours: filtered by all upstream selections
+    colour_source = skus
+    if brand:
+        colour_source = [s for s in colour_source if s.brand == brand]
+    if model_name:
+        colour_source = [s for s in colour_source if s.model_name == model_name]
+    if powertrain:
+        canonical_pt = normalize_powertrain(powertrain)
+        colour_source = [s for s in colour_source if _extract_canonical_pt(s) == canonical_pt]
+    if version:
+        colour_source = [s for s in colour_source if s.version == version]
+    colours = sorted(set(s.exterior_color_name for s in colour_source))
     material_codes = sorted(set(s.material_code for s in skus))
 
     return {
@@ -630,11 +850,197 @@ def export_matrix(
     country_code: str,
     year: int,
     include_historical_with_quantity: bool = True,
+    brand: str | None = None,
+    model_name: str | None = None,
+    powertrain: str | None = None,
+    version: str | None = None,
+    colour: str | None = None,
+    quantities_only: bool = False,
 ) -> io.BytesIO:
     """Generate the Order Genius Excel workbook."""
-    matrix = build_matrix(session, country_code, year)
+    matrix = build_matrix(session, country_code, year,
+                          brand=brand, model_name=model_name,
+                          powertrain=powertrain, version=version, colour=colour)
+    rows = matrix["rows"]
+    if quantities_only:
+        rows = [r for r in rows if any(
+            (r.get("months", {}).get(str(m), {}).get("quantity", 0) or 0) > 0
+            for m in range(1, 13)
+        )]
     country_name = matrix.get("countryName", country_code)
     return generate_order_genius_excel(
-        matrix["rows"], country_code, country_name, year,
+        rows, country_code, country_name, year,
         include_historical_with_quantity,
     )
+
+
+# ── Order Quantity Import (round-trip: export → edit → re-import) ─────
+
+
+def preview_order_quantity_import(
+    session: Session,
+    parsed: OrderQuantityImport,
+) -> dict:
+    """Match parsed rows against the database and return a preview diff.
+
+    Returns a dict with:
+      - countryCode, year
+      - matchedRows: rows with existing quantity cells found
+      - newRows: material codes not found in the system
+      - fobChanges: rows where Excel FOB differs from current system FOB
+      - totalCells: total quantity cells in the import
+      - errorCells: cells with parse errors
+      - errors: file-level errors
+    """
+    result: dict = {
+        "countryCode": parsed.country_code,
+        "year": parsed.year,
+        "matchedRows": [],
+        "newRows": [],
+        "fobChanges": [],
+        "totalCells": 0,
+        "errorCells": 0,
+        "errors": parsed.errors.copy(),
+    }
+
+    if parsed.errors:
+        return result
+
+    # Get all active SKUs + FOB for this country
+    country_pt = repo.get_country_payment_term(session, parsed.country_code)
+    pt_code = country_pt.payment_term_code if country_pt else None
+
+    for row in parsed.rows:
+        # Check if material code exists
+        existing_sku = repo.get_sku_by_material_code(session, row.material_code)
+        if not existing_sku:
+            result["newRows"].append({
+                "materialCode": row.material_code,
+                "modelName": row.model_name,
+                "version": row.version,
+                "colour": row.colour,
+                "reason": "Material code not found in system",
+            })
+            continue
+
+        # Check FOB divergence
+        current_fob = None
+        if pt_code:
+            fob_record = repo.get_fob_for_country_sku(
+                session, parsed.country_code, row.material_code, pt_code,
+            )
+            if fob_record:
+                current_fob = float(fob_record.final_fob_eur)
+
+        fob_changed = False
+        if row.fob_eur is not None and current_fob is not None:
+            if abs(row.fob_eur - current_fob) > 0.01:
+                fob_changed = True
+                result["fobChanges"].append({
+                    "materialCode": row.material_code,
+                    "excelFob": row.fob_eur,
+                    "systemFob": current_fob,
+                })
+
+        matched_cells = []
+        for cell in row.cells:
+            result["totalCells"] += 1
+            if cell.error:
+                result["errorCells"] += 1
+
+            # Find existing quantity cell
+            existing_qty = repo.get_quantity_cell(
+                session, parsed.country_code, parsed.year, cell.month, row.material_code,
+            )
+            old_qty = existing_qty.quantity if existing_qty else None
+            old_row_version = existing_qty.row_version if existing_qty else 0
+
+            if cell.quantity != (old_qty or 0) or cell.error:
+                matched_cells.append({
+                    "month": cell.month,
+                    "oldQuantity": old_qty,
+                    "newQuantity": cell.quantity,
+                    "error": cell.error,
+                    "rowVersion": old_row_version,
+                })
+
+        if matched_cells:
+            result["matchedRows"].append({
+                "materialCode": row.material_code,
+                "modelName": row.model_name or (existing_sku.model_name if existing_sku else ""),
+                "version": row.version or (existing_sku.version if existing_sku else ""),
+                "colour": row.colour or (existing_sku.exterior_color_name if existing_sku else ""),
+                "excelFob": row.fob_eur,
+                "systemFob": current_fob,
+                "fobChanged": fob_changed,
+                "lifecycleStatus": existing_sku.lifecycle_status if existing_sku else "unknown",
+                "cells": matched_cells,
+                "rowErrors": row.errors,
+            })
+
+    return result
+
+
+def apply_order_quantity_import(
+    session: Session,
+    parsed: OrderQuantityImport,
+    username: str,
+) -> dict:
+    """Apply confirmed quantity changes from an imported Excel.
+
+    Returns {"appliedCells": int, "skippedCells": int, "errors": [...]}
+    """
+    applied = 0
+    skipped = 0
+    errors: list[str] = []
+
+    country_pt = repo.get_country_payment_term(session, parsed.country_code)
+    pt_code = country_pt.payment_term_code if country_pt else None
+
+    for row in parsed.rows:
+        existing_sku = repo.get_sku_by_material_code(session, row.material_code)
+        if not existing_sku:
+            skipped += len(row.cells)
+            errors.append(f"{row.material_code}: material code not found in active SKU master")
+            continue
+
+        # Resolve current FOB for quantity cells
+        fob_eur = 0.0
+        if pt_code:
+            fob_record = repo.get_fob_for_country_sku(
+                session, parsed.country_code, row.material_code, pt_code,
+            )
+            if fob_record:
+                fob_eur = float(fob_record.final_fob_eur)
+
+        for cell in row.cells:
+            if cell.error:
+                skipped += 1
+                continue
+
+            existing = repo.get_quantity_cell(
+                session, parsed.country_code, parsed.year, cell.month, row.material_code,
+            )
+            expected_version = existing.row_version if existing else 0
+
+            result = repo.upsert_quantity_cell(
+                session,
+                country_code=parsed.country_code,
+                order_year=parsed.year,
+                order_month=cell.month,
+                material_code=row.material_code,
+                quantity=cell.quantity,
+                fob_eur=fob_eur,
+                updated_by=username,
+                expected_version=expected_version,
+            )
+            if result:
+                applied += 1
+            else:
+                errors.append(
+                    f"{row.material_code} M{cell.month}: optimistic lock failure "
+                    f"(expected version {expected_version})"
+                )
+                skipped += 1
+
+    return {"appliedCells": applied, "skippedCells": skipped, "errors": errors}

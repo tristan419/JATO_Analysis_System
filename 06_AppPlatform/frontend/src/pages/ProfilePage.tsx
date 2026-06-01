@@ -7,6 +7,7 @@ import { JATO_COUNTRIES, formatJatoCountryOption } from "../utils/jatoCountries"
 export function ProfilePage() {
   const { user, updateProfile } = useAuth();
   const navigate = useNavigate();
+  const isOrderFiller = user?.role === "order_filler";
   const [displayName, setDisplayName] = useState(user?.displayName ?? "");
   const [primaryCountry, setPrimaryCountry] = useState(user?.primaryCountry ?? "");
   const [secondaryCountries, setSecondaryCountries] = useState<string[]>(
@@ -104,41 +105,54 @@ export function ProfilePage() {
           </span>
         </label>
 
-        <label style={{ display: "block", marginBottom: 16 }}>
-          <span style={{ display: "block", fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
-            Primary Country / 主国家
-          </span>
-          <select
-            value={primaryCountry}
-            onChange={(event) => setPrimaryCountry(event.target.value)}
-            style={{ minWidth: 260 }}
-          >
-            <option value="">Select country...</option>
-            {JATO_COUNTRIES.map((country) => (
-              <option key={country.countryCode} value={country.countryCode}>
-                {formatJatoCountryOption(country)}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div style={{ marginBottom: 16 }}>
-          <span style={{ display: "block", fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
-            Secondary Countries / 副国家（可选）
-          </span>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
-            {secondaryOptions.map((country) => (
-              <label key={country.countryCode} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
-                <input
-                  type="checkbox"
-                  checked={secondaryCountries.includes(country.countryCode)}
-                  onChange={() => toggleSecondary(country.countryCode)}
-                />
-                <span>{formatJatoCountryOption(country)}</span>
-              </label>
-            ))}
+        {isOrderFiller ? (
+          <div style={{ marginBottom: 16, padding: 12, background: "#fef3c7", borderRadius: 6, border: "1px solid #f59e0b" }}>
+            <span style={{ fontSize: 13, color: "#92400e" }}>
+              Your country assignments are managed by your administrator. Contact an admin to change your primary or secondary countries.
+            </span>
+            <div style={{ marginTop: 8, fontSize: 12, color: "#a16207" }}>
+              Primary: {primaryCountry || "Not set"} &middot; Secondary: {secondaryCountries.length > 0 ? secondaryCountries.join(", ") : "None"}
+            </div>
           </div>
-        </div>
+        ) : (
+          <>
+            <label style={{ display: "block", marginBottom: 16 }}>
+              <span style={{ display: "block", fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
+                Primary Country / 主国家
+              </span>
+              <select
+                value={primaryCountry}
+                onChange={(event) => setPrimaryCountry(event.target.value)}
+                style={{ minWidth: 260 }}
+              >
+                <option value="">Select country...</option>
+                {JATO_COUNTRIES.map((country) => (
+                  <option key={country.countryCode} value={country.countryCode}>
+                    {formatJatoCountryOption(country)}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div style={{ marginBottom: 16 }}>
+              <span style={{ display: "block", fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+                Secondary Countries / 副国家（可选）
+              </span>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+                {secondaryOptions.map((country) => (
+                  <label key={country.countryCode} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={secondaryCountries.includes(country.countryCode)}
+                      onChange={() => toggleSecondary(country.countryCode)}
+                    />
+                    <span>{formatJatoCountryOption(country)}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
 
         <div style={{ display: "flex", gap: 8 }}>
           <button type="button" className="btn btn-sm btn-primary" onClick={saveProfile} disabled={saving}>

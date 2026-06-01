@@ -16,6 +16,8 @@
     "check:frontend": "npm run check:types && npm run test:unit && npm run build && npm run check:router-regression"
   },
   "dependencies": {
+    "ag-grid-community": "^35.3.0",
+    "ag-grid-react": "^35.3.0",
     "animejs": "^4.4.1",
     "buffer": "^6.0.3",
     "html-to-image": "^1.11.13",

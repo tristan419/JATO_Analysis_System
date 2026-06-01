@@ -4,6 +4,7 @@ import { SharedFilterScopeProvider } from "./contexts/SharedFilterScopeContext";
 import { CountryChatProvider } from "./contexts/CountryChatContext";
 import { AuthProvider } from "./contexts/AuthContext";
 import { Layout } from "./components/Layout";
+import { RequireRole } from "./components/RequireRole";
 import { LoadingSurface } from "./components/LoadingSurface";
 import { DashboardPage } from "./pages/DashboardPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -48,6 +49,7 @@ const MarketSegmentsPage = lazy(() => import("./pages/MarketSegmentsPage").then(
 const MarketBrandRankingPage = lazy(() => import("./pages/MarketBrandRankingPage").then(m => ({ default: m.MarketBrandRankingPage })));
 const MarketModelRankingPage = lazy(() => import("./pages/MarketModelRankingPage").then(m => ({ default: m.MarketModelRankingPage })));
 const MarketPowertrainPage = lazy(() => import("./pages/MarketPowertrainPage").then(m => ({ default: m.MarketPowertrainPage })));
+const AdvancedAnalysisPage = lazy(() => import("./pages/AdvancedAnalysisPage").then(m => ({ default: m.AdvancedAnalysisPage })));
 const OrderGeniusPage = lazy(() => import("./pages/OrderGeniusPage").then(m => ({ default: m.OrderGeniusPage })));
 const AccessControlPage = lazy(() => import("./pages/AccessControlPage").then(m => ({ default: m.AccessControlPage })));
 const ProfilePage = lazy(() => import("./pages/ProfilePage").then(m => ({ default: m.ProfilePage })));
@@ -86,7 +88,7 @@ function RedirectPreserveSearch({ to }: { to: string }) {
 
 const router = createBrowserRouter([
   { path: "/login", element: (<AuthProvider><LoginPage /></AuthProvider>) },
-  { path: "/", element: (<AuthProvider><OAuthGate><SharedFilterScopeProvider><CountryChatProvider><Layout /></CountryChatProvider></SharedFilterScopeProvider></OAuthGate></AuthProvider>), children: [
+  { path: "/", element: (<AuthProvider><OAuthGate><SharedFilterScopeProvider><CountryChatProvider><RequireRole><Layout /></RequireRole></CountryChatProvider></SharedFilterScopeProvider></OAuthGate></AuthProvider>), children: [
     { index: true, element: <DashboardPage /> },
     { path: "dashboard", element: <DashboardPage /> },
     { path: "market/overview", element: withPageLoader(<MarketOverviewPage />) },
@@ -94,6 +96,8 @@ const router = createBrowserRouter([
     { path: "market/ranking/brand", element: withPageLoader(<MarketBrandRankingPage />) },
     { path: "market/ranking/model", element: withPageLoader(<MarketModelRankingPage />) },
     { path: "market/powertrain", element: withPageLoader(<MarketPowertrainPage />) },
+    { path: "market/transfer", element: withPageLoader(<AdvancedAnalysisPage />) },
+    { path: "market/advanced-analysis", element: withPageLoader(<AdvancedAnalysisPage />) },
     { path: "product/current-msrp", element: withPageLoader(<MsrpPage />) },
     { path: "product/order-genius", element: withPageLoader(<OrderGeniusPage />) },
     { path: "product/pricing", element: withPageLoader(<PositioningPricingPage />) },

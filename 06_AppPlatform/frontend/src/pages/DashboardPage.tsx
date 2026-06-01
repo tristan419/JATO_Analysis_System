@@ -296,7 +296,7 @@ export function DashboardPage() {
       x: entries.map((e) => e.x),
       y: entries.map((e) => e.y),
       text: entries.map((e) => e.text),
-      textposition: "top",
+      textposition: "top center",
       textfont: { size: 9, color: "#1d4ed8" },
       cliponaxis: false,
       hoverinfo: "skip",

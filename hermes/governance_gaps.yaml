@@ -44,12 +44,16 @@ gaps:
   - feature.country_copilot
   evidence:
   - Batch B config exists at 07_ScrapingToolkit/news_sources/batch_b.yaml
-  - 03_Scripts/deploy/systemd/jato-country-news-sync-b.service runs DE, FR, IT, ES, BE, NL, PL, PT, RO, SI, SK, GR.
-  - 03_Scripts/deploy/systemd/jato-country-news-sync-b.timer schedules Batch B with an offset nightly run.
-  recommendedAction: Install and enable jato-country-news-sync-b.timer on production, then confirm scheduled_fetch_status.json records the next Batch B run.
+  - 03_Scripts/deploy/systemd/jato-country-news-sync-b.service runs DE, FR, IT, ES,
+    BE, NL, PL, PT, RO, SI, SK, GR.
+  - 03_Scripts/deploy/systemd/jato-country-news-sync-b.timer schedules Batch B with
+    an offset nightly run.
+  recommendedAction: Install and enable jato-country-news-sync-b.timer on production,
+    then confirm scheduled_fetch_status.json records the next Batch B run.
   status: resolved
   owner: ''
-  notes: 'Resolved 2026-05-20: added dedicated Batch B systemd service and timer with offset schedule to avoid overwhelming RSS sources.'
+  notes: 'Resolved 2026-05-20: added dedicated Batch B systemd service and timer with
+    offset schedule to avoid overwhelming RSS sources.'
 - gapId: gap.env.empty_critical_vars
   title: Critical env vars empty or commented out in example files
   category: env
@@ -89,7 +93,10 @@ gaps:
     Market Scan API → Frontend render).'
   status: resolved
   owner: ''
-  notes: 'Resolved 2026-05-18: added route-level API contract tests in 06_AppPlatform/backend/tests/integration/test_api_contracts.py for Market Scan deck, Analysis query, and Country Chat. The suite also covers Market Scan custom time-range handling, request validation, and frontend API path/type sync smoke checks.'
+  notes: 'Resolved 2026-05-18: added route-level API contract tests in 06_AppPlatform/backend/tests/integration/test_api_contracts.py
+    for Market Scan deck, Analysis query, and Country Chat. The suite also covers
+    Market Scan custom time-range handling, request validation, and frontend API path/type
+    sync smoke checks.'
 - gapId: gap.source_quality.voc_errors_untracked
   title: VOC source errors not systematically tracked
   category: source_quality
@@ -102,8 +109,10 @@ gaps:
   - voc-failed-sources.json generation scaffold added 2026-05-14
   - scheduled_fetch_status.json now records failedCount per run
   - hermes_source_quality.py detects unstructured failures and scores sources
-  - 03_Scripts/voc/summarize_voc_failures.py extracts current VOC summary source errors into voc-failed-sources.json
-  - run_voc_forum_sync.sh writes failedCount/failureCount and marks partial source failures as degraded
+  - 03_Scripts/voc/summarize_voc_failures.py extracts current VOC summary source errors
+    into voc-failed-sources.json
+  - run_voc_forum_sync.sh writes failedCount/failureCount and marks partial source
+    failures as degraded
   recommendedAction: 'Per-source tracking infrastructure exists. Next: verify voc-failed-sources.json
     is populated with actual per-source data on next VOC run. Surface in Phase 6 Data
     Management UI.'
@@ -119,14 +128,20 @@ gaps:
   affectedAssets:
   - All source types (news, voc, msrp)
   evidence:
-  - 03_Scripts/hermes/hermes_source_quality.py computes deterministic source quality scores from Source Registry and scheduled_fetch_status.json.
-  - hermes/source_registry.yaml now stores qualityScore, qualityStatus, risk, scoreGeneratedAt, successRate, failureRate, timeoutRate, http403Rate, and extractionQualityScore.
-  - hermes/reports/source_quality_report.json and .md are refreshed from the scoring script.
-  - Data Management Hermes tab already exposes Source Quality via /v1/hermes/source-quality and the existing Source Quality panel.
-  recommendedAction: Keep hermes-source-quality.timer enabled and review degraded sources in the Source Quality panel after scheduled fetch runs.
+  - 03_Scripts/hermes/hermes_source_quality.py computes deterministic source quality
+    scores from Source Registry and scheduled_fetch_status.json.
+  - hermes/source_registry.yaml now stores qualityScore, qualityStatus, risk, scoreGeneratedAt,
+    successRate, failureRate, timeoutRate, http403Rate, and extractionQualityScore.
+  - hermes/reports/source_quality_report.json and .md are refreshed from the scoring
+    script.
+  - Data Management Hermes tab already exposes Source Quality via /v1/hermes/source-quality
+    and the existing Source Quality panel.
+  recommendedAction: Keep hermes-source-quality.timer enabled and review degraded
+    sources in the Source Quality panel after scheduled fetch runs.
   status: resolved
   owner: ''
-  notes: 'Resolved 2026-05-20: source quality scoring now writes registry fields and report artifacts; Batch B news status uses a separate news_batch_b key.'
+  notes: 'Resolved 2026-05-20: source quality scoring now writes registry fields and
+    report artifacts; Batch B news status uses a separate news_batch_b key.'
 - gapId: gap.backlog.prd_only_features
   title: Two PRDs written but not implemented
   category: backlog
@@ -151,15 +166,19 @@ gaps:
   affectedAssets:
   - All scheduled pipelines
   evidence:
-  - Markdown_Readme/Fullstack/04_DevOps/SCHEDULED_FETCH_OPERATIONS.md documents scheduled fetch failure recovery.
-  - The runbook covers manual test commands, journalctl troubleshooting, artifact paths, common failures, and escalation criteria.
-  - The documented scope includes Country news sync, VOC forum sync, MSRP dry run, and MSRP ingest recovery.
-  recommendedAction: Keep this runbook updated when scheduled fetch timers, service names, or log artifact paths change.
+  - Markdown_Readme/Fullstack/04_DevOps/SCHEDULED_FETCH_OPERATIONS.md documents scheduled
+    fetch failure recovery.
+  - The runbook covers manual test commands, journalctl troubleshooting, artifact
+    paths, common failures, and escalation criteria.
+  - The documented scope includes Country news sync, VOC forum sync, MSRP dry run,
+    and MSRP ingest recovery.
+  recommendedAction: Keep this runbook updated when scheduled fetch timers, service
+    names, or log artifact paths change.
   status: resolved
   owner: ''
-  notes: 'Resolved 2026-05-20: added SCHEDULED_FETCH_OPERATIONS.md with Tencent
-    systemd timer triage, manual recovery commands, journalctl commands, artifact
-    paths, common failures, and escalation criteria.'
+  notes: 'Resolved 2026-05-20: added SCHEDULED_FETCH_OPERATIONS.md with Tencent systemd
+    timer triage, manual recovery commands, journalctl commands, artifact paths, common
+    failures, and escalation criteria.'
 - gapId: gap.docs.no_adr
   title: No Architecture Decision Log (ADR)
   category: docs
@@ -190,7 +209,10 @@ gaps:
     and restore gradually.'
   status: resolved
   owner: ''
-  notes: 'Resolved 2026-05-18: .github/workflows/ci.yml now keeps backend compile and API contract tests blocking, while pre-existing smoke/style/regression and fullstack frontend checks run as non-blocking diagnostics. pytest/httpx are installed only in CI for contract tests. Deploy workflows remain blocking and unchanged.'
+  notes: 'Resolved 2026-05-18: .github/workflows/ci.yml now keeps backend compile
+    and API contract tests blocking, while pre-existing smoke/style/regression and
+    fullstack frontend checks run as non-blocking diagnostics. pytest/httpx are installed
+    only in CI for contract tests. Deploy workflows remain blocking and unchanged.'
 - gapId: gap.deploy.legacy_ec2_workflow
   title: Legacy deploy-ssh-auto-update workflow consistently failing
   category: pipeline
@@ -538,4 +560,129 @@ gaps:
   recommendedAction: Run and record tests for hermes-devsync.
   owner: ''
   notes: 'Created automatically by Hermes DevSync. Resolved 2026-05-18: DevSync feature
+    now has test results recorded.'
+- gapId: gap.devsync.feature.permission_management.missing_tests
+  title: Feature 'Permission Management' has no test results recorded
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - feature.permission_management
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for feature.permission_management.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.chore-hermes-sync.missing_tests
+  title: Feature 'Chore Hermes Sync' has no test results recorded
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - chore-hermes-sync
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for chore-hermes-sync.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.chore-retry-deploy.missing_tests
+  title: Feature 'Chore Retry Deploy' has no test results recorded
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - chore-retry-deploy
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for chore-retry-deploy.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.chore-record-coc-match-dev-event.missing_tests
+  title: Feature 'Chore Record Coc Match Dev Event' has no test results recorded
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - chore-record-coc-match-dev-event
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for chore-record-coc-match-dev-event.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.chore-hermes-record-sentinel-inbox-dev-event.missing_tests
+  title: 'Feature ''chore(hermes): record sentinel inbox dev event'' has no test results
+    recorded'
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - chore-hermes-record-sentinel-inbox-dev-event
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for chore-hermes-record-sentinel-inbox-dev-event.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.feat-upload-toolkit-redis-progress-callback-factor.missing_tests
+  title: 'Feature ''feat(upload-toolkit): Redis progress callback factory'' has no
+    test results recorded'
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - feat-upload-toolkit-redis-progress-callback-factor
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for feat-upload-toolkit-redis-progress-callback-factor.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.feat-upload-toolkit-thread-safety-stale-cleanup-st.missing_tests
+  title: Feature 'Feat Upload Toolkit Thread Safety Stale Cleanup St' has no test
+    results recorded
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - feat-upload-toolkit-thread-safety-stale-cleanup-st
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for feat-upload-toolkit-thread-safety-stale-cleanup-st.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.feat-extract-upload-toolkit-reusable-chunked-uploa.missing_tests
+  title: Feature 'Feat Extract Upload Toolkit Reusable Chunked Uploa' has no test
+    results recorded
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - feat-extract-upload-toolkit-reusable-chunked-uploa
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for feat-extract-upload-toolkit-reusable-chunked-uploa.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.hermes-intelligence-governor.missing_tests
+  title: Feature 'Hermes Intelligence Governor' has no test results recorded
+  category: test
+  severity: high
+  status: open
+  affectedAssets:
+  - hermes-intelligence-governor
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for hermes-intelligence-governor.
+  owner: ''
+  notes: Created automatically by Hermes DevSync.
+- gapId: gap.devsync.hermes-pipeline-governor.missing_tests
+  title: Feature 'Hermes Pipeline Governor' has no test results recorded
+  category: test
+  severity: high
+  status: resolved
+  affectedAssets:
+  - hermes-pipeline-governor
+  evidence:
+  - 'DevSync auto-detected: feature registered but no test results.'
+  recommendedAction: Run and record tests for hermes-pipeline-governor.
+  owner: ''
+  notes: 'Created automatically by Hermes DevSync. Resolved 2026-05-29: DevSync feature
     now has test results recorded.'

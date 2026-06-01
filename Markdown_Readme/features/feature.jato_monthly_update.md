@@ -17,9 +17,69 @@ feat: JATO monthly update — publish blocker classification + resolution panels
 - Frontend page: Resolution Panel renders in Job Detail when publish is
   blocked — country regression
 
+## Endpoints
+
+- `POST /monthly-update-jobs`
+- `POST /monthly-update-jobs/from-upload`
+- `POST /monthly-update-jobs/single-country`
+- `GET /monthly-update-jobs`
+- `GET /monthly-update-jobs/{job_id}`
+- `POST /monthly-update-jobs/{job_id}/retry`
+- `POST /monthly-update-jobs/{job_id}/recheck`
+- `POST /monthly-update-jobs/{job_id}/cancel`
+- `GET /monthly-update-jobs/{job_id}/review`
+- `POST /monthly-update-jobs/{job_id}/publish`
+- `POST /v1/msrp/monthly-update-jobs/{job_id}/recheck`
+- `POST /v1/msrp/monthly-update-jobs/{job_id}/cancel`
+- `POST /monthly-update-jobs/{job_id}/rollback`
+- `POST /monthly-update-jobs/{job_id}/smart-merge`
+- `GET /overview`
+- `GET /pipeline-health`
+- `GET /pipeline/status`
+- `GET /pipeline/status/{pipeline_id}`
+- `GET /source-quality`
+- `GET /cost`
+- `GET /msrp-country-progress`
+- `GET /msrp-dryrun-history`
+- `GET /code-audit`
+- `GET /proposals`
+- `GET /v1/hermes/pipeline/status`
+- `GET /v1/hermes/pipeline/status/{pipelineId}`
+- `POST /v1/msrp/monthly-update-jobs/{job_id}/smart-merge`
+- `POST /v1/msrp/monthly-update-jobs/single-country`
+- `POST /monthly-update-uploads/initiate`
+
 ## Backend
 
 - 06_AppPlatform/backend/app/services/jato_monthly_update_service.py
+- 06_AppPlatform/backend/app/db/models.py
+- 06_AppPlatform/backend/alembic/versions/20260521_0019_order_genius_price_dimension_mapping.py
+- 06_AppPlatform/backend/scripts/seed_order_genius_rules.py
+- 06_AppPlatform/backend/app/api/routes/msrp_monthly_update.py
+- 06_AppPlatform/backend/tests/unit/test_jato_monthly_update_routes.py
+- 06_AppPlatform/backend/tests/unit/test_jato_monthly_update_service.py
+- JATO monthly update service now persists currentProcess for subprocesses, rechecks stale running jobs, terminates process groups on cancel, and keeps cancelled jobs outside the publish path.
+- 06_AppPlatform/backend/app/services/market_scan_cache.py
+- 06_AppPlatform/backend/app/services/market_scan_service.py
+- 06_AppPlatform/backend/app/api/routes/hermes.py
+- 06_AppPlatform/backend/app/services/hermes_sentinel_service.py
+- 06_AppPlatform/backend/tests/unit/test_hermes_routes.py
+- 06_AppPlatform/backend/tests/unit/test_hermes_sentinel.py
+- 06_AppPlatform/backend/app/services/hermes_pipeline_status_service.py
+- 06_AppPlatform/backend/tests/unit/test_hermes_pipeline_status_service.py
+- FastAPI Hermes router exposes pipeline status endpoints
+- Hermes pipeline status service reads standard JSON, legacy scheduled status, source quality report, and JATO monthly update job_state
+- Sentinel pipeline probe classifies standard status records
+- JATO monthly update writes jato_etl status on job success/failure
+- Added _smart_merge_dataframes() — merges active+candidate at country level, keeping regressed countries from active
+- Added _run_smart_merge() — background thread that creates merged parquet then rebuilds partitions/manifest/fingerprint
+- Added create_smart_merge_candidate() — public API with validation guards (no double-merge, only for success/completed jobs)
+- Added POST /v1/msrp/monthly-update-jobs/{job_id}/smart-merge route with editor-level auth
+- Created rebuild_from_parquet.py helper script called as subprocess to rebuild derived artifacts
+- create_single_country_job() — lightweight job creation with country/month metadata
+- _run_single_country_job() — background runner: validate country, skip prepare/compare, run refresh with supplement
+- Upload-time validation: reject if uploaded month <= active latest for that country
+- POST /v1/msrp/monthly-update-jobs/single-country route
 
 ## Frontend
 
@@ -27,10 +87,26 @@ feat: JATO monthly update — publish blocker classification + resolution panels
 - 06_AppPlatform/frontend/src/index.css
 - 06_AppPlatform/frontend/src/pages/JatoMonthlyUpdatePage.tsx
 - 06_AppPlatform/frontend/src/types/index.ts
+- 06_AppPlatform/frontend/src/tests/unit/jatoMonthlyUpdate.test.ts
+- 06_AppPlatform/frontend/src/utils/jatoMonthlyUpdate.ts
+- JATO Monthly Update Job Detail now shows 刷新查验 and 终止任务 controls plus runtime process/recheck details.
+- 06_AppPlatform/frontend/src/pages/MarketScanPage.tsx
+- Added Smart Merge button to country_regression blocker panel with loading/complete states
+- Added hasSmartMerge state variable to disable re-merge after completion
+- Updated info section to remove '功能开发中' label for Smart Merge
+- Checkbox on existing upload form to enable single-country quick mode with country/month fields
 
 ## Tests
 
 - **backendPytest**: 57 passed (test_jato_monthly_update_service.py, test_market_scan_service.py, test_parquet_repository.py)
+- **backend**: 31/31 jato tests pass
+- **frontend**: npm run check:types && npm run build
+- **syntax**: py_compile passed; bash -n run_msrp_low_concurrency.sh passed
+- **jsonl**: hermes/dev_events/dev_events.jsonl and hermes/evidence_ledger.jsonl valid
+- **compile**: PYTHONPATH=. ../../.venv/bin/python -m py_compile app/services/market_scan_cache.py app/services/market_scan_service.py app/services/jato_monthly_update_service.py
+- **frontendTsc**: clean
+- **frontendVitest**: 129/129 passed
+- **integration**: 5/5 passed
 
 ## Linked Dev Events
 
@@ -43,6 +119,21 @@ feat: JATO monthly update — publish blocker classification + resolution panels
 - `dev_evt_20260517_052537_10ca5c`
 - `dev_evt_20260517_052331_210c20`
 - `dev_evt_20260518_004957_370678`
+- `dev_evt_20260521_143417_32cda0`
+- `dev_evt_20260521_143251_0987aa`
+- `dev_evt_20260521_063642_f7b7d1`
+- `dev_evt_20260521_062858_jato_cancel_recheck`
+- `dev_evt_20260521_055134_d4545f`
+- `dev_evt_20260521_051712_3992c8`
+- `dev_evt_20260521_045430_6cfce1`
+- `dev_evt_20260521_035712_334439`
+- `dev_evt_20260521_035118_marketscan_cache`
+- `dev_evt_20260521_005711_50c02c`
+- `dev_evt_20260521_005355_pipeline_status`
+- `dev_evt_20260520_193112_2b9fc3`
+- `dev_evt_20260520_smart_merge`
+- `dev_evt_20260520_single_country`
+- `dev_evt_20260520_090749_6ea97f`
 
 ## Docs
 
@@ -51,10 +142,28 @@ feat: JATO monthly update — publish blocker classification + resolution panels
 ## Risks
 
 - Auto-generated dev event from git commit — tests not auto-verified.
+- Cancel can kill tracked subprocess groups; direct in-thread validation remains best-effort until it reaches a cancellation checkpoint.
+- MarketScan first request after a real JATO publish still performs one cold compute; Redis/local warm path should be fast after that.
+- Existing runtime pipelines must run once to create fresh standard status files for MSRP dryrun/ingest; Hermes still falls back to legacy scheduled status until then.
+- Smart Merge rebuilds partition/manifest/fingerprint via subprocess — if the rebuild script fails, the job enters smart_merge_failed phase and user must retry
+- Works only for country_regression blocker, not sales_doubling (which indicates deeper data integrity issue)
+- No CSV upload support — only xlsx
+- Upload-time month check is best-effort; publish guard still runs separately
 
 ## Next Steps
 
 - Run tests
 - Verify in Hermes UI Dev tab
+- Deploy to cloud
+- Use UI recheck on jato-update-dc0fd9ed, then cancel if still running before creating 2026-04-r2
+- Deploy and verify /v1/hermes/deploy/status
+- After next JATO publish, inspect job publication.cacheInvalidation and Hermes evidence ledger
+- Deploy to Tencent cloud
+- Verify /v1/hermes/pipeline/status and Sentinel pipeline findings
+- Deploy and verify Smart Merge in staging with a test regression scenario
+- Consider adding Smart Merge status indicator to job detail panel (e.g., 'Smart Merged' badge)
+- Frontend re-upload button in blocker panel still disabled — can be future enhancement
+- Deploy and test on production
+- Verify subsequent batch upload behavior with previously single-country-updated countries
 
-*Auto-generated by Hermes DevSync. Last updated: 2026-05-18T01:28:13.166086+00:00*
+*Auto-generated by Hermes DevSync. Last updated: 2026-05-29T06:03:38.913411+00:00*

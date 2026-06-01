@@ -157,7 +157,7 @@ def register(
         raise HTTPException(status_code=400, detail="Username too short")
     if len(body.password) < 6:
         raise HTTPException(status_code=400, detail="Password too short (min 6)")
-    if body.role not in ("admin", "editor", "viewer"):
+    if body.role not in ("admin", "editor", "viewer", "order_filler"):
         raise HTTPException(status_code=400, detail="Invalid role")
 
     try:
@@ -206,6 +206,28 @@ def update_my_profile(
     db_user = db.query(User).filter(User.username == user.name).first()
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # order_filler users cannot modify their own country assignments — only admin can
+    if db_user.role == "order_filler":
+        new_primary = _normalize_country_code(body.primary_country)
+        new_secondary = _normalize_secondary_countries(body.secondary_countries, new_primary)
+        current_secondary = db_user.secondary_country_codes or []
+        if (new_primary != db_user.primary_country_code or
+                new_secondary != current_secondary):
+            raise HTTPException(status_code=403, detail="Country assignments are managed by your administrator")
+        # Allow display name and preferred landing page changes
+        db_user.preferred_landing_page = (
+            str(body.preferred_landing_page).strip()
+            if body.preferred_landing_page
+            else None
+        )
+        if body.display_name is not None:
+            dn = str(body.display_name).strip()
+            db_user.display_name = dn if dn else None
+        db.commit()
+        db.refresh(db_user)
+        return _user_payload(db_user)
+
     primary = _normalize_country_code(body.primary_country)
     db_user.primary_country_code = primary
     db_user.secondary_country_codes = _normalize_secondary_countries(
@@ -257,7 +279,7 @@ def update_user_role(
     _: UserContext = Depends(require_min_role("admin")),
 ) -> dict:
     """Update a user's role. Admin only."""
-    if body.role not in ("admin", "editor", "viewer"):
+    if body.role not in ("admin", "editor", "viewer", "order_filler"):
         raise HTTPException(status_code=400, detail="Invalid role")
 
     user = db.query(User).filter(User.id == user_id).first()
@@ -299,6 +321,24 @@ def update_user_profile(
     return _user_payload(user)
 
 
+@router.delete("/users/{user_id}")
+def delete_user(
+    user_id: str,
+    db: Session = Depends(get_db_session),
+    admin: UserContext = Depends(require_min_role("admin")),
+) -> dict:
+    """Hard-delete a user. Admin only. Cannot delete yourself."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.username == admin.name:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    username = user.username
+    db.delete(user)
+    db.commit()
+    return {"id": str(user_id), "username": username, "deleted": True}
+
+
 @router.patch("/users/{user_id}/toggle-active")
 def toggle_user_active(
     user_id: str,
@@ -313,6 +353,28 @@ def toggle_user_active(
     db.commit()
     db.refresh(user)
     return _user_payload(user)
+
+
+class ResetPasswordBody(BaseModel):
+    password: str = Field(min_length=6)
+
+
+@router.patch("/users/{user_id}/password")
+def reset_user_password(
+    user_id: str,
+    body: ResetPasswordBody,
+    db: Session = Depends(get_db_session),
+    _: UserContext = Depends(require_min_role("admin")),
+) -> dict:
+    """Reset a user's password. Admin only."""
+    from app.services.auth_service import hash_password
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.password_hash = hash_password(body.password)
+    db.commit()
+    return {"id": str(user_id), "username": user.username, "passwordReset": True}
 
 
 # ── Role Upgrade Requests ────────────────────────────────────────

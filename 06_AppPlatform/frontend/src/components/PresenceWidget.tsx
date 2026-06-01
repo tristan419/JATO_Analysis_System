@@ -38,6 +38,21 @@ export function PresenceWidget() {
   const dragRef = useRef<{
     sx: number; sy: number; ox: number; oy: number; moved: boolean;
   } | null>(null);
+  const snappedRef = useRef(snapped);
+  snappedRef.current = snapped;
+
+  /* Reposition on window resize / fullscreen change */
+  useEffect(() => {
+    const handle = () => {
+      if (snappedRef.current) {
+        setPos(p => ({ x: p.x < 0 ? VISIBLE_HINT - W : window.innerWidth - VISIBLE_HINT, y: Math.min(p.y, window.innerHeight - HEADER_H) }));
+      } else {
+        setPos(p => ({ x: Math.max(0, Math.min(p.x, window.innerWidth - W)), y: Math.min(p.y, window.innerHeight - HEADER_H) }));
+      }
+    };
+    window.addEventListener("resize", handle);
+    return () => window.removeEventListener("resize", handle);
+  }, []);
 
   const visibleRows = Math.min(users.length, MAX_ROWS);
   const listH = expanded ? visibleRows * ROW_H + 8 : 0;

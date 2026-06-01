@@ -589,6 +589,13 @@ def hermes_cost_heatmap(days: int = 30, _=Depends(require_min_role("viewer"))) -
     audit_path = HERMES_DIR / "answer_audit.jsonl"
     daily_costs: dict[str, float] = {}
     by_model: dict[str, float] = {}
+    by_source: dict[str, float] = {}
+
+    # DeepSeek pricing (CNY per 1M tokens)
+    FLASH_INPUT_PRICE = 1.0
+    FLASH_OUTPUT_PRICE = 2.0
+    PRO_INPUT_PRICE = 3.0
+    PRO_OUTPUT_PRICE = 6.0
 
     if audit_path.is_file():
         for line in audit_path.read_text().strip().split("\n"):
@@ -597,14 +604,17 @@ def hermes_cost_heatmap(days: int = 30, _=Depends(require_min_role("viewer"))) -
                     rec = json.loads(line)
                     date = rec.get("createdAt", "")[:10]
                     model = rec.get("modelUsed", "unknown")
+                    source = rec.get("source", "hermes")
                     input_t = rec.get("inputTokens", 0) or 0
                     output_t = rec.get("outputTokens", 0) or 0
-                    # Flash pricing
-                    cost = (input_t / 1_000_000) * 1.0 + (output_t / 1_000_000) * 2.0
-                    if "pro" in model:
-                        cost = (input_t / 1_000_000) * 3.0 + (output_t / 1_000_000) * 6.0
+                    # Flash vs Pro pricing
+                    if "pro" in str(model).lower():
+                        cost = (input_t / 1_000_000) * PRO_INPUT_PRICE + (output_t / 1_000_000) * PRO_OUTPUT_PRICE
+                    else:
+                        cost = (input_t / 1_000_000) * FLASH_INPUT_PRICE + (output_t / 1_000_000) * FLASH_OUTPUT_PRICE
                     daily_costs[date] = daily_costs.get(date, 0) + cost
-                    by_model[model] = by_model.get(model, 0) + cost
+                    by_model[str(model)] = by_model.get(str(model), 0) + cost
+                    by_source[str(source)] = by_source.get(str(source), 0) + cost
                 except Exception:
                     pass
 
@@ -645,7 +655,8 @@ def hermes_cost_heatmap(days: int = 30, _=Depends(require_min_role("viewer"))) -
         "dailyBudgetCny": BUDGET_DAILY_CNY,
         "monthlyBudgetCny": BUDGET_MONTHLY_CNY,
         "monthlyStatus": monthly_status,
-        "byModelCny": {k: round(v, 4) for k, v in by_model.items()},
+        "byModelCny": {k: round(v, 4) for k, v in sorted(by_model.items(), key=lambda x: -x[1])},
+        "bySourceCny": {k: round(v, 4) for k, v in sorted(by_source.items(), key=lambda x: -x[1])},
         "alerts": alerts,
         "emailSent": email_sent,
         "alertEmail": ALERT_EMAIL,

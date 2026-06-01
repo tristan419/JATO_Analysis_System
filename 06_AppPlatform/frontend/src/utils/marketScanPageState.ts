@@ -29,6 +29,7 @@ export function buildDefaultMarketScanSlideLayouts(): Record<
     suvAll: { ...DEFAULT_SLIDE_LAYOUT },
     suvA: { ...DEFAULT_SLIDE_LAYOUT },
     suvB: { ...DEFAULT_SLIDE_LAYOUT },
+    bodyType: { ...DEFAULT_SLIDE_LAYOUT },
   };
 }
 

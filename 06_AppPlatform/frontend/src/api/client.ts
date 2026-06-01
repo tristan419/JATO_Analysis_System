@@ -108,6 +108,8 @@ import type {
   PublishBaselineResponse,
   QuantityCellResponse,
   QuantityCellUpdate,
+  QuantityImportPreview,
+  QuantityImportResult,
   RemarkResponse,
   RemarkUpdate,
 } from "../types/orderGenius";
@@ -1394,6 +1396,8 @@ export const api = {
     request<T>(path, { method: "POST", body: body != null ? JSON.stringify(body) : undefined, ...init }),
   patch: <T>(path: string, body?: unknown, init?: RequestInit) =>
     request<T>(path, { method: "PATCH", body: body != null ? JSON.stringify(body) : undefined, ...init }),
+  delete: <T>(path: string, init?: RequestInit) =>
+    request<T>(path, { method: "DELETE", ...init }),
 
   columns: () => request<{ items: string[] }>("/metadata/columns"),
   filterOptions: (payload: FilterOptionsPayload, init?: RequestInit) =>
@@ -2875,10 +2879,10 @@ export const api = {
       `/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob?country=${encodeURIComponent(country)}`,
     ),
 
-  exportOrderGenius: (country: string, year: number) =>
+  exportOrderGenius: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; quantitiesOnly?: boolean }) =>
     requestBlob("/order-genius/export", {
       method: "POST",
-      body: JSON.stringify({ country, year }),
+      body: JSON.stringify({ country, year, ...opts }),
       headers: { "Content-Type": "application/json" },
     }),
 
@@ -2895,4 +2899,61 @@ export const api = {
 
   getOrderGeniusBaselines: () =>
     request<{ items: BaselineVersion[] }>("/order-genius/baselines"),
+
+  previewOrderQuantityImport: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<QuantityImportPreview>(
+      "/order-genius/import-quantities/preview",
+      { method: "POST", body: form },
+    );
+  },
+
+  applyOrderQuantityImport: (importId: string) =>
+    request<QuantityImportResult>(
+      `/order-genius/import-quantities/${encodeURIComponent(importId)}/apply`,
+      { method: "POST" },
+    ),
+
+  // BOM Admin
+  getBomAdmin: (params?: { brand?: string; search?: string; country?: string }) => {
+    const qs = params ? new URLSearchParams(Object.entries(params).filter(([_,v]) => v != null) as any).toString() : "";
+    return request<{ items: any[]; countries: string[] }>("/order-genius/bom-admin" + (qs ? "?" + qs : ""));
+  },
+
+  updateSkuLifecycle: (materialCode: string, body: { lifecycleStatus: string; effectiveFrom?: string; effectiveTo?: string; rowVersion: number }) =>
+    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/lifecycle`, { method: "PATCH", body: JSON.stringify(body) }),
+
+  updateSkuFob: (materialCode: string, body: { countryCode: string; finalFobEur: number; paymentTermCode?: string }) =>
+    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob`, { method: "PATCH", body: JSON.stringify(body) }),
+
+  getSkuFobDetail: (materialCode: string, country: string) =>
+    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob?country=${encodeURIComponent(country)}`),
+
+  createPaymentTerm: (body: { countryCode: string; countryName: string; paymentTermCode: string; paymentMethod: string; lcDays: number }) =>
+    request<any>("/order-genius/payment-terms/countries", { method: "POST", body: JSON.stringify(body) }),
+
+  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourType?: string; powertrain?: string }) =>
+    request<any>("/order-genius/material-skus", { method: "POST", body: JSON.stringify(body) }),
+
+  updateColourHex: (materialCode: string, colourHex: string | null) =>
+    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/colour-hex`, { method: "PATCH", body: JSON.stringify({ colourHex }) }),
+
+  confirmColourCode: (materialCode: string) =>
+    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/confirm-colour-code`, { method: "PATCH" }),
+
+  updateColourCode: (materialCode: string, colourCode: string) =>
+    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/colour-code`, { method: "PATCH", body: JSON.stringify({ colourCode }) }),
+
+  updateMaterialCode: (oldCode: string, newCode: string) =>
+    request<any>(`/order-genius/material-skus/${encodeURIComponent(oldCode)}/material-code`, { method: "PATCH", body: JSON.stringify({ materialCode: newCode }) }),
+
+  updateColourTier: (materialCode: string, colourTier: string) =>
+    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/colour-tier`, { method: "PATCH", body: JSON.stringify({ colourTier }) }),
+
+  deleteMaterialSku: (materialCode: string) =>
+    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}`, { method: "DELETE" }),
+
+  updateSkuInterior: (materialCode: string, body: { interiorColorName?: string | null; editionTag?: string | null; interiorColourCode?: string | null }) =>
+    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/interior`, { method: "PATCH", body: JSON.stringify(body) }),
 };

@@ -9078,6 +9078,8 @@ def _stream_deepseek_chat_completion(
         },
         method="POST",
     )
+    usage_info: dict[str, int] = {}
+    total_content = ""
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
             for line in response:
@@ -9089,16 +9091,35 @@ def _stream_deepseek_chat_completion(
                     break
                 try:
                     chunk = json.loads(data)
+                    # Capture usage from final chunk (DeepSeek sends usage in last chunk with empty choices)
+                    u = chunk.get("usage")
+                    if isinstance(u, dict):
+                        usage_info = {
+                            "prompt_tokens": int(u.get("prompt_tokens") or 0),
+                            "completion_tokens": int(u.get("completion_tokens") or 0),
+                            "total_tokens": int(u.get("total_tokens") or 0),
+                        }
                     choices = chunk.get("choices")
                     if isinstance(choices, list) and choices:
                         delta = choices[0].get("delta", {})
                         content = delta.get("content", "")
                         if content:
+                            total_content += content
                             yield content
                 except (json.JSONDecodeError, KeyError, IndexError):
                     continue
     except (HTTPError, URLError, TimeoutError) as exc:
         raise RuntimeError(f"DeepSeek 流式请求失败: {_http_error_summary(exc)}") from exc
+    # Log usage for cost tracking (best-effort)
+    try:
+        input_tokens = usage_info.get("prompt_tokens") or max(1, sum(len(str(m.get("content", ""))) for m in messages) // 4)
+        output_tokens = usage_info.get("completion_tokens") or max(1, len(total_content) // 4)
+        _persist_llm_usage_to_audit_log(
+            model=model, input_tokens=input_tokens,
+            output_tokens=output_tokens, source="country_copilot",
+        )
+    except Exception:
+        pass
 
 
 def _http_error_summary(exc: Exception) -> str:
@@ -9134,6 +9155,32 @@ def _extract_openai_chat_response_text(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _persist_llm_usage_to_audit_log(
+    *,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    source: str = "country_copilot",
+) -> None:
+    """Append an audit record to hermes/answer_audit.jsonl for cost tracking."""
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    try:
+        audit_path = Path(__file__).resolve().parents[4] / "hermes" / "answer_audit.jsonl"
+        record = {
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "modelUsed": model,
+            "inputTokens": input_tokens,
+            "outputTokens": output_tokens,
+            "source": source,
+        }
+        with open(audit_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass  # cost logging is best-effort, never break the main flow
+
+
 def _record_deepseek_usage(snapshot: dict[str, Any], payload: dict[str, Any]) -> None:
     usage = payload.get("usage") if isinstance(payload, dict) else None
     if not isinstance(usage, dict):
@@ -9144,11 +9191,14 @@ def _record_deepseek_usage(snapshot: dict[str, Any], payload: dict[str, Any]) ->
     prompt_hit = int(_coerce_optional_float(usage.get("prompt_cache_hit_tokens")) or 0)
     prompt_miss = int(_coerce_optional_float(usage.get("prompt_cache_miss_tokens")) or 0)
     total_prompt = int(_coerce_optional_float(usage.get("prompt_tokens")) or 0)
+    completion = int(_coerce_optional_float(usage.get("completion_tokens")) or 0)
+    total_tokens = int(_coerce_optional_float(usage.get("total_tokens")) or 0)
+    model = payload.get("model", "") or "deepseek-chat"
     analysis_meta["modelUsage"] = {
         "provider": "deepseek",
         "promptTokens": total_prompt,
-        "completionTokens": int(_coerce_optional_float(usage.get("completion_tokens")) or 0),
-        "totalTokens": int(_coerce_optional_float(usage.get("total_tokens")) or 0),
+        "completionTokens": completion,
+        "totalTokens": total_tokens,
         "promptCacheHitTokens": prompt_hit,
         "promptCacheMissTokens": prompt_miss,
         "promptCacheHitRatio": (
@@ -9157,6 +9207,13 @@ def _record_deepseek_usage(snapshot: dict[str, Any], payload: dict[str, Any]) ->
             else None
         ),
     }
+    # Persist to audit log for Hermes cost tracking
+    _persist_llm_usage_to_audit_log(
+        model=model,
+        input_tokens=total_prompt,
+        output_tokens=completion,
+        source="country_copilot",
+    )
 
 
 def _should_enable_gemini_google_search(

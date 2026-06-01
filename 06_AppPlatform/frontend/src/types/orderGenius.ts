@@ -22,6 +22,10 @@ export interface MaterialSkuMatrixRow {
   version: string;
   colour: string;
   colourCode: string;
+  interiorColorName?: string | null;
+  interiorColourCode?: string | null;
+  interiorPackage?: string | null;
+  editionTag?: string | null;
   powertrain: string | null;
   fobEur: number | null;
   lifecycleStatus: string;
@@ -153,4 +157,60 @@ export interface BaselineVersion {
   publishedBy: string | null;
   publishedAtUtc: string | null;
   createdAtUtc: string;
+}
+
+export interface QuantityImportCell {
+  month: number;
+  oldQuantity: number | null;
+  newQuantity: number;
+  error: string;
+  rowVersion: number;
+}
+
+export interface QuantityImportRow {
+  materialCode: string;
+  modelName: string;
+  version: string;
+  colour: string;
+  excelFob: number | null;
+  systemFob: number | null;
+  fobChanged: boolean;
+  lifecycleStatus: string;
+  cells: QuantityImportCell[];
+  rowErrors: string[];
+}
+
+export interface QuantityImportFobChange {
+  materialCode: string;
+  excelFob: number;
+  systemFob: number;
+}
+
+export interface QuantityImportNewRow {
+  materialCode: string;
+  modelName: string;
+  version: string;
+  colour: string;
+  reason: string;
+}
+
+export interface QuantityImportPreview {
+  importId: string;
+  countryCode: string;
+  year: number;
+  matchedRows: QuantityImportRow[];
+  newRows: QuantityImportNewRow[];
+  fobChanges: QuantityImportFobChange[];
+  totalCells: number;
+  errorCells: number;
+  errors: string[];
+  status: "ok" | "warning" | "error";
+}
+
+export interface QuantityImportResult {
+  importId: string;
+  status: string;
+  appliedCells: number;
+  skippedCells: number;
+  errors: string[];
 }

@@ -106,9 +106,9 @@ export function shouldIgnorePageNavigationTarget(
 
 /* ── Mega Menu data types ─────────────────────────────── */
 
-export type MenuRole = "viewer" | "editor" | "admin";
+export type MenuRole = "viewer" | "order_filler" | "editor" | "admin";
 
-const ROLE_LEVEL: Record<MenuRole, number> = { viewer: 1, editor: 2, admin: 3 };
+const ROLE_LEVEL: Record<MenuRole, number> = { viewer: 0, order_filler: 1, editor: 2, admin: 3 };
 
 export interface MegaMenuSubItem {
   label: string;
@@ -160,18 +160,79 @@ export function filterMenuByRole(items: MegaMenuItem[], userRole: string): MegaM
     });
 }
 
+function menuPathname(to: string): string {
+  return to.split("?")[0] || "/";
+}
+
+function collectMenuPaths(items: MegaMenuItem[]): string[] {
+  const paths: string[] = [];
+  for (const item of items) {
+    if (item.type === "link") {
+      paths.push(menuPathname(item.to));
+    } else if (item.type === "dropdown") {
+      paths.push(...item.items.map((subItem) => menuPathname(subItem.to)));
+    } else {
+      for (const group of item.groups) {
+        paths.push(...group.items.map((subItem) => menuPathname(subItem.to)));
+      }
+    }
+  }
+  return [...new Set(paths)];
+}
+
+export function getMenuPathsForRole(userRole: string): string[] {
+  return collectMenuPaths(filterMenuByRole(MEGA_MENU_ITEMS, userRole));
+}
+
+const ROUTE_ROLE_OVERRIDES: Record<string, MenuRole> = {
+  "/copilot": "viewer",
+  "/market/segments": "viewer",
+  "/market/ranking/brand": "viewer",
+  "/market/ranking/model": "viewer",
+  "/market/powertrain": "viewer",
+  "/market/transfer": "viewer",
+  "/market-scan": "viewer",
+  "/msrp": "viewer",
+  "/msrp/monthly-update": "editor",
+  "/positioning-pricing": "viewer",
+  "/version-comparison": "viewer",
+  "/customer-insights": "viewer",
+  "/customer-hev": "viewer",
+  "/specification": "viewer",
+  "/data-management": "viewer",
+  "/data/order-genius": "order_filler",
+  "/engineering": "editor",
+  "/review": "editor",
+  "/crud": "viewer",
+};
+
+export function isRouteAllowedForRole(pathname: string, userRole: string): boolean {
+  if (pathname === "/" || pathname.startsWith("/login") || pathname === "/account/profile") {
+    return true;
+  }
+  const level = ROLE_LEVEL[userRole as MenuRole] ?? ROLE_LEVEL.viewer;
+  const override = Object.entries(ROUTE_ROLE_OVERRIDES).sort(
+    ([a], [b]) => b.length - a.length,
+  ).find(([path]) => matchesNavPath(pathname, path));
+  if (override) {
+    return level >= ROLE_LEVEL[override[1]];
+  }
+  return getMenuPathsForRole(userRole).some((path) => matchesNavPath(pathname, path));
+}
+
 export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
   {
     id: "dashboard",
     label: "Dashboard",
     sublabel: "JATO看板",
     type: "mega",
+    minRole: "viewer",
     groups: [
       {
         title: "JATO Board / JATO 看板",
         items: [
-          { label: "Dashboard", sublabel: "JATO 总览", to: "/dashboard" },
-          { label: "Spec Detail", sublabel: "规格明细", to: "/data/spec-detail" },
+          { label: "Dashboard", sublabel: "JATO 总览", to: "/dashboard", minRole: "viewer" },
+          { label: "Spec Detail", sublabel: "规格明细", to: "/data/spec-detail", minRole: "viewer" },
         ],
       },
     ],
@@ -180,14 +241,24 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
     id: "market-scan",
     label: "Market Scan",
     sublabel: "市场扫描",
-    type: "link",
-    to: "/market/overview",
+    type: "mega",
+    minRole: "viewer",
+    groups: [
+      {
+        title: "Market Analysis / 市场分析",
+        items: [
+          { label: "Overview", sublabel: "市场总览", to: "/market/overview", minRole: "viewer" },
+          { label: "Advanced Analysis", sublabel: "高级分析", to: "/market/advanced-analysis", minRole: "viewer" },
+        ],
+      },
+    ],
   },
   {
     id: "product-deck",
     label: "Product Deck",
     sublabel: "产品平台",
     type: "mega",
+    minRole: "viewer",
     groups: [
       {
         title: "Pricing & Positioning / 价格与定位",
@@ -201,7 +272,7 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
       {
         title: "Product Toolkit / 产品工具包",
         items: [
-          { label: "Order Genius", sublabel: "订单矩阵", to: "/product/order-genius", minRole: "editor" },
+          { label: "Order Genius", sublabel: "订单矩阵", to: "/product/order-genius", minRole: "order_filler" },
           { label: "COC Match", sublabel: "COC 比对", to: "/product/coc-match", minRole: "viewer" },
         ],
       },

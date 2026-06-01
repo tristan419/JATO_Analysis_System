@@ -18,6 +18,7 @@ import openpyxl
 
 DUAL_COLOUR_PATTERNS = [
     r"/",
+    r"&",
     r"dual",
     r"two.tone",
     r"two tone",
@@ -35,19 +36,62 @@ def _detect_colour_type(colour_name: str) -> str:
     return "single"
 
 
+def _detect_edition_tag(raw_colour_name: str) -> str | None:
+    m = re.search(r"[（(](black\s*edition)[)）]", raw_colour_name, re.IGNORECASE)
+    return m.group(1).strip().title() if m else None
+
+
+def _detect_colour_tier(
+    colour_name: str, colour_type: str, edition_tag: str | None = None
+) -> str:
+    if edition_tag:
+        return "special"
+    if colour_type == "dual":
+        return "dual"
+    lower = colour_name.lower()
+    if "matte black" in lower:
+        return "special"
+    if "matte gray" in lower or "matte grey" in lower:
+        return "special"
+    return "single"
+
+
+def _extract_interior_colour_code(interior_name: str | None) -> str | None:
+    if not interior_name or not interior_name.strip():
+        return None
+    words = re.split(r"[\s\-_/&]+", interior_name.strip())
+    if len(words) >= 2:
+        return (words[0][0] + words[-1][0]).upper()
+    return words[0][:2].upper() if words else None
+
+
 def _extract_colour_code(colour_name: str) -> str:
     """Extract colour code from a name like 'Phantom gray（GV）' or 'White (BW)'.
 
     Supports both Chinese （） and ASCII () brackets.
+    For descriptions like 'Matte black（Black edition）', falls back to
+    generating a code from the colour name initials.
     """
     # Chinese brackets
-    m = re.search(r"（([A-Za-z0-9]+)）", colour_name)
+    m = re.search(r"（([^）]+)）", colour_name)
     if m:
-        return m.group(1).upper()
-    # ASCII brackets
-    m = re.search(r"\(([A-Za-z0-9]+)\)", colour_name)
+        code = m.group(1).strip().upper()
+        # If it looks like a real code (short, no spaces), use it
+        if len(code) <= 4 and " " not in code:
+            return code
+        # Otherwise try ASCII brackets
+    m = re.search(r"\(([^)]+)\)", colour_name)
     if m:
-        return m.group(1).upper()
+        code = m.group(1).strip().upper()
+        if len(code) <= 4 and " " not in code:
+            return code
+    # Fallback: generate code from colour name initials
+    # e.g. "Phantom gray" → "PG", "Carbon crystal black" → "CB"
+    words = re.sub(r"[（(][^)）]+[)）]", "", colour_name).strip().split()
+    if len(words) >= 2:
+        return (words[0][0] + words[-1][0]).upper()
+    elif words:
+        return words[0][:2].upper()
     return ""
 
 
@@ -59,9 +103,8 @@ def _clean_colour_name(colour_name: str) -> str:
 
 
 def _extract_bom_template(bom_raw: str) -> str | None:
-    """Extract the BOM line containing '**' from potentially multi-line text.
-
-    Also strips trailing Chinese/comments after the BOM code.
+    """Extract the first BOM line containing '**' from potentially multi-line text.
+    Strips trailing Chinese/comments. Returns just the BOM pattern.
     """
     if not bom_raw:
         return None
@@ -69,9 +112,6 @@ def _extract_bom_template(bom_raw: str) -> str | None:
     for line in lines:
         line = line.strip()
         if "**" in line:
-            # Strip trailing non-alphanumeric commentary
-            # e.g. "T71607V**MM0006（总代法规升级）" -> "T71607V**MM0006"
-            # Keep only the BOM pattern: alphanum + ** + alphanum
             m = re.match(r"([A-Za-z0-9]+\*\*[A-Za-z0-9]+)", line)
             if m:
                 return m.group(1)
@@ -80,6 +120,19 @@ def _extract_bom_template(bom_raw: str) -> str | None:
         line = line.strip()
         if line:
             return line
+    return None
+
+
+def _extract_bom_remark(bom_raw: str) -> str | None:
+    """Extract remark from BOM cell parentheses. e.g. 'T7000SW**MY0001（法规升级）' → '法规升级'"""
+    if not bom_raw:
+        return None
+    lines = bom_raw.strip().split("\n")
+    for line in lines:
+        if "**" in line:
+            m = re.search(r"[（(]([^)）]+)[)）]", line)
+            if m:
+                return m.group(1).strip()
     return None
 
 
@@ -127,6 +180,7 @@ def parse_material_master_xlsx(file_path: Path) -> dict:
     wb = openpyxl.load_workbook(file_path, data_only=True)
     all_rows: list[dict] = []
     warnings: list[str] = []
+    interior_by_bom_template: dict[str, str] = {}
 
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
@@ -185,12 +239,46 @@ def parse_material_master_xlsx(file_path: Path) -> dict:
             )
             continue
 
-        # Parse data rows with carry-forward for model fields
+        # ── Pass 1: collect interior → BOM-template mappings ──────
+        # Must run BEFORE the main pass because interior rows may appear
+        # after colour rows in the Excel — a forward-reference problem.
+        _pass1_model: dict[str, str] = {"code_name": "", "full_name": "", "configuration": "", "bom": ""}
+        for i in range(header_idx + 1, len(raw_rows)):
+            row = raw_rows[i]
+            if idx_int_colour < 0 or len(row) <= max(idx_int_colour, idx_bom if idx_bom >= 0 else 0):
+                continue
+            int_val = row[idx_int_colour]
+            if int_val is None or not str(int_val).strip():
+                continue
+            # Carry-forward model fields
+            if idx_code_name >= 0 and idx_code_name < len(row) and row[idx_code_name]:
+                _pass1_model["code_name"] = str(row[idx_code_name]).strip()
+            if idx_full_name >= 0 and idx_full_name < len(row) and row[idx_full_name]:
+                _pass1_model["full_name"] = str(row[idx_full_name]).strip()
+            if idx_config >= 0 and idx_config < len(row) and row[idx_config]:
+                _pass1_model["configuration"] = str(row[idx_config]).strip()
+            if idx_bom >= 0 and idx_bom < len(row) and row[idx_bom]:
+                _pass1_model["bom"] = str(row[idx_bom]).strip()
+            bom_raw = _pass1_model.get("bom", "")
+            bom_tmpl = _extract_bom_template(bom_raw) if bom_raw else None
+            raw_int = str(int_val).strip()
+            if bom_tmpl and "**" in bom_tmpl and raw_int:
+                existing = interior_by_bom_template.get(bom_tmpl)
+                if existing and existing != raw_int:
+                    warnings.append(
+                        f"Sheet '{sheet_name}' row {i + 1}: BOM template {bom_tmpl} "
+                        f"has conflicting interiors '{existing}' and '{raw_int}'"
+                    )
+                interior_by_bom_template[bom_tmpl] = raw_int
+
+        # ── Pass 2: parse data rows with carry-forward for model fields
         current_model: dict[str, str] = {
             "code_name": "",
             "full_name": "",
             "configuration": "",
             "bom": "",
+            "interior_color": "",
+            "interior_bom_template": "",
         }
 
         for i in range(header_idx + 1, len(raw_rows)):
@@ -243,6 +331,28 @@ def parse_material_master_xlsx(file_path: Path) -> dict:
             if bom_str:
                 current_model["bom"] = bom_str
 
+            # BOM template is the stable binding key for colour variants.
+            bom_raw = current_model.get("bom", "")
+            bom_template = _extract_bom_template(bom_raw) if bom_raw else None
+            bom_remark = _extract_bom_remark(bom_raw) if bom_raw else None
+
+            raw_interior = (
+                str(row[idx_int_colour]).strip()
+                if idx_int_colour >= 0 and row[idx_int_colour] is not None
+                else ""
+            )
+            if raw_interior:
+                current_model["interior_color"] = raw_interior
+                current_model["interior_bom_template"] = bom_template or ""
+                if bom_template and "**" in bom_template:
+                    existing = interior_by_bom_template.get(bom_template)
+                    if existing and existing != raw_interior:
+                        warnings.append(
+                            f"Sheet '{sheet_name}' row {i + 1}: BOM template {bom_template} "
+                            f"has conflicting interiors '{existing}' and '{raw_interior}'"
+                        )
+                    interior_by_bom_template[bom_template] = raw_interior
+
             # Extract colour
             raw_colour = (
                 str(row[idx_ext_colour]).strip()
@@ -253,19 +363,24 @@ def parse_material_master_xlsx(file_path: Path) -> dict:
                 continue  # rows without colour are skipped
 
             colour_code = _extract_colour_code(raw_colour)
+            # Auto-generated codes (no brackets in original Excel) need user confirmation
+            colour_code_confirmed = bool(re.search(r"[（(][A-Za-z0-9]{1,4}[)）]", raw_colour))
             colour_name = _clean_colour_name(raw_colour)
             colour_type = _detect_colour_type(raw_colour)
+            edition_tag = _detect_edition_tag(raw_colour)
+            colour_tier = _detect_colour_tier(colour_name, colour_type, edition_tag)
 
-            # Interior colour
-            raw_interior = (
-                str(row[idx_int_colour]).strip()
-                if idx_int_colour >= 0 and row[idx_int_colour] is not None
-                else ""
-            )
-
-            # BOM template
-            bom_raw = current_model.get("bom", "")
-            bom_template = _extract_bom_template(bom_raw) if bom_raw else None
+            # Interior colour is bound to the BOM template containing **.
+            if not raw_interior and bom_template and "**" in bom_template:
+                raw_interior = interior_by_bom_template.get(bom_template, "")
+            elif (
+                not raw_interior
+                and current_model.get("interior_color")
+                and current_model.get("interior_bom_template") == (bom_template or "")
+            ):
+                raw_interior = current_model["interior_color"]
+            interior_colour_code = _extract_interior_colour_code(raw_interior) if raw_interior else None
+            interior_package = raw_interior or None
 
             # Generate material code
             material_code = ""
@@ -313,8 +428,14 @@ def parse_material_master_xlsx(file_path: Path) -> dict:
                 "exterior_color_name": colour_name,
                 "exterior_color_code": colour_code,
                 "exterior_color_type": colour_type,
+                "colour_code_confirmed": colour_code_confirmed,
+                "colour_tier": colour_tier,
+                "edition_tag": edition_tag,
                 "interior_color_name": raw_interior or None,
+                "interior_colour_code": interior_colour_code,
+                "interior_package": interior_package,
                 "bom_template": bom_template,
+                "remark": bom_remark or "",
                 "material_code": material_code,
                 "base_fob_eur": base_fob_eur,
                 "powertrain": None,  # from sheet name or code_name
@@ -324,12 +445,13 @@ def parse_material_master_xlsx(file_path: Path) -> dict:
 
     wb.close()
 
-    # Post-processing: detect brand from model name
+    # Post-processing: detect brand from model name (with typo tolerance)
     for row in all_rows:
         mn = row["model_name"].upper()
-        if "JAECOO" in mn:
+        sn = row.get("sheet_name", "").upper()
+        if "JAECOO" in mn or "JECOO" in mn or "JAECOO" in sn:
             row["brand"] = "JAECOO"
-        elif "OMODA" in mn:
+        elif "OMODA" in mn or "OMODA" in sn:
             row["brand"] = "OMODA"
         else:
             row["brand"] = ""

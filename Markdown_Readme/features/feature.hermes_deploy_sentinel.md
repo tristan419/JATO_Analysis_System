@@ -1,24 +1,84 @@
 # Hermes Deploy Sentinel
 
-## Purpose
+## Status
+implemented
 
-Detect production version drift: GitHub `main` has advanced, but Tencent production is still running an older deployed archive because the deploy workflow failed or did not restart cleanly.
+## Category
+governance · source: codex
 
-## Data Flow
+## Summary
+Reconnected deploy release/expected commit tracking, added /hermes/deploy/status, added Sentinel probe_deploy, expanded notification mailbox states, and updated the Hermes UI to show a fixed-height searchable Sentinel Inbox with unread/read/archive/all filters. Also added Hermes full design document reading and categorized diagram filtering.
 
-1. `deploy-fullstack-tencent.yml` writes `hermes/deploy_release.json` before packaging the deploy archive.
-2. Tencent deployment extracts that file with the release artifact.
-3. `hermes-devsync.yml` calls `/v1/hermes/dev/sync` with the latest pushed `commitSha`.
-4. Hermes records that expected commit in `hermes/deploy_expected.json`.
-5. `/v1/hermes/deploy/status` compares release vs expected.
-6. Sentinel `probe_deploy` emits `production_commit_drift` when they diverge.
+## Endpoints
 
-## Important Boundary
+- `GET /hermes/deploy/status`
+- `GET /hermes/sentinel/status`
+- `POST /hermes/sentinel/notifications/{notification_id}/status`
+- `POST /hermes/dev/sync`
 
-Hermes does not deploy code. It reports drift and evidence. GitHub Actions or manual SCP/systemctl still perform the actual deployment.
+## Backend
 
-## Verification
+- 06_AppPlatform/backend/app/services/hermes_deploy_status_service.py
+- 06_AppPlatform/backend/app/services/hermes_sentinel_service.py
+- 06_AppPlatform/backend/app/api/routes/hermes.py
+- .github/workflows/deploy-fullstack-tencent.yml
+- .github/workflows/hermes-devsync.yml
+- 03_Scripts/ops/deploy_fullstack_server.sh
+- Reused the existing _is_noisy_commit_feature_id path for feature normalization, gap creation, and gap retirement
+- Made Alembic role_upgrade_requests migration idempotent using SQLAlchemy inspector and PostgreSQL IF NOT EXISTS indexes
+- DevSync records expected deploy commits
+- Deploy workflow writes hermes/deploy_release.json into the archive
+- Sentinel deploy probe compares release and expected commits
+- Notification records include action level, blocking flag, recommended action, and mailbox states
 
-- `pytest tests/unit/test_hermes_deploy_status_service.py tests/unit/test_hermes_sentinel.py tests/unit/test_hermes_routes.py -q`
-- Full target backend subset: `169 passed`
-- Frontend type check: `npm run check:types`
+## Frontend
+
+- Sentinel Inbox with unread/read/archive/all filters
+- Searchable fixed-height notification list
+- Diagram category filters
+- Hermes full design document reader
+- Sentinel Inbox uses unread/read/archive/all filters with search and fixed-height scrolling
+- Hermes diagrams can be filtered by category
+- Hermes full design document is readable in a collapsible bottom panel
+
+## Tests
+
+- **backendPytest**: Hermes/API focused tests pending
+- **frontendTsc**: npm run check:types passed
+- **pyCompile**: role upgrade migration compiled
+- **backendHermesPytest**: 85 passed
+- **workflowYaml**: deploy-fullstack-tencent.yml and hermes-devsync.yml parsed
+- **shellSyntax**: deploy_fullstack_server.sh bash -n passed
+
+## Linked Dev Events
+
+- `dev_evt_20260519_deploy_sentinel_inbox`
+- `dev_evt_20260520_devsync_auto_event_noise_filter`
+- `dev_evt_20260520_deploy_migration_idempotence`
+
+## Docs
+
+- Markdown_Readme/features/feature.hermes_deploy_sentinel.md
+
+## Risks
+
+- First production deploy is required before deploy_release.json exists on Tencent.
+- If both deploy-fullstack-tencent and hermes-devsync cannot reach the server, Hermes cannot learn the latest expected commit from production alone.
+- Only auto-generated bookkeeping featureIds are filtered; real Hermes feature ids such as hermes-devsync and hermes-chat-gateway remain registered.
+- If production table schema differs from the migration definition, Alembic will now advance without reconciling columns; current deploy log only showed DuplicateTable, not schema mismatch.
+- Server must be redeployed before production has deploy_release.json and the new deploy probe
+- If both deploy and DevSync cannot reach Tencent, server-side Hermes cannot infer the latest GitHub commit
+
+## Next Steps
+
+- Deploy to Tencent once so production has hermes/deploy_release.json and the deploy probe code.
+- Verify /v1/hermes/deploy/status after deploy.
+- Confirm Sentinel Inbox reports production_commit_drift if expected and release commits diverge.
+- Deploy and run DevSync once so production Sentinel retires existing auto-event missing_tests gaps
+- Run focused backend tests
+- Push and verify deploy-fullstack-tencent reaches health checks
+- Deploy to Tencent
+- Verify /v1/hermes/deploy/status
+- Verify Sentinel Inbox receives production_commit_drift when expected and release diverge
+
+*Auto-generated by Hermes DevSync. Last updated: 2026-05-29T06:03:24.464463+00:00*

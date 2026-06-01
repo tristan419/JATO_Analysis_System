@@ -457,3 +457,56 @@ class JatoMsrpLinkPatch(BaseModel):
     link_source: str | None = None
     is_active: bool | None = None
     notes: str | None = None
+
+
+# ── Advanced Analysis ──
+
+class AdvancedAnalysisBaseRequest(BaseModel):
+    country: str | None = None
+    target_period: str | None = None
+    time_range: dict[str, str] | None = None
+    fuel_types: list[str] = Field(default_factory=list)
+    segments: list[str] = Field(default_factory=list)
+
+
+class AdvancedAnalysisKpiRequest(AdvancedAnalysisBaseRequest):
+    group_by: list[str] = Field(default_factory=lambda: ["segment", "model"])
+    top_n: int = Field(default=50, ge=5, le=500)
+
+
+class AdvancedAnalysisShiftShareRequest(AdvancedAnalysisBaseRequest):
+    base_period: str | None = None
+    cell_dims: list[str] = Field(default_factory=lambda: ["segment"])
+
+
+class AdvancedAnalysisSeasonalRequest(AdvancedAnalysisBaseRequest):
+    model_filter: str | None = None
+    segment_filter: str | None = None
+
+
+class AdvancedAnalysisCellAttributionRequest(AdvancedAnalysisBaseRequest):
+    cell_dims: list[str] = Field(default_factory=lambda: ["segment", "registration_type", "drive_type"])
+    top_n_cells: int = Field(default=20, ge=5, le=100)
+
+
+class AdvancedAnalysisTransferMatrixRequest(AdvancedAnalysisBaseRequest):
+    cell_dims: list[str] = Field(default_factory=lambda: ["segment"])
+    top_n_models: int = Field(default=20, ge=5, le=100)
+
+
+class AdvancedAnalysisNestedShiftShareRequest(AdvancedAnalysisBaseRequest):
+    base_period: str | None = None
+    hierarchy: list[str] = Field(default_factory=lambda: ["segment", "registration_type", "drive_type"])
+
+
+class AdvancedAnalysisDrilldownRequest(AdvancedAnalysisBaseRequest):
+    base_period: str | None = None
+    scope_filters: list[dict[str, str]] = Field(default_factory=list)
+    top_n: int = Field(default=20, ge=5, le=100)
+
+
+class AdvancedAnalysisTransferMartRequest(AdvancedAnalysisBaseRequest):
+    base_period: str | None = None
+    sales_mode: Literal["month", "ytd", "rolling12"] = "month"
+    scope_filters: list[dict[str, str]] = Field(default_factory=list)
+    top_n: int = Field(default=25, ge=5, le=100)

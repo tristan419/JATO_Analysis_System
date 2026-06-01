@@ -309,6 +309,7 @@ function makeDeck(): MarketScanDeckResponse {
       suvAll: drilldown,
       suvA: drilldown,
       suvB: drilldown,
+      bodyType: drilldown,
     },
   };
 }

@@ -7,7 +7,7 @@ from uuid import UUID
 import uuid as uuid_module
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -19,19 +19,23 @@ from app.api.order_genius_schemas import (
     RemarkUpdate,
 )
 from app.core.config import PROJECT_ROOT
-from app.core.security import require_min_role
+from app.core.security import require_min_role, require_roles, validate_country_access
 from app.db.models import CountryPaymentTermMaster, PaymentTermAuditLog
 from app.db.session import get_db_session
 from app.infra import order_genius_repository as repo
 from app.services import material_master_upload_service as upload_svc
+from app.services.backup_utils import backup_ordering_schema
 from app.services.order_genius_service import (
+    apply_order_quantity_import,
     build_matrix,
     build_options,
     export_matrix,
     get_fob_for_sku,
+    preview_order_quantity_import,
     update_quantity_cell,
     update_remark,
 )
+from app.services.order_quantity_parser import parse_order_quantity_xlsx
 
 router = APIRouter(prefix="/order-genius", tags=["order_genius"])
 
@@ -131,6 +135,7 @@ def publish_material_master(
     user=Depends(require_min_role("admin")),
 ) -> dict:
     try:
+        backup_ordering_schema("publish_baseline")
         notes = body.get("notes") if body else None
         result = upload_svc.publish_upload(
             session, upload_id, user.name, notes
@@ -154,7 +159,7 @@ def publish_material_master(
 @router.get("/payment-terms")
 def list_payment_terms(
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("viewer")),
+    _=Depends(require_roles("viewer", "editor", "admin")),
 ) -> dict:
     rules = repo.list_payment_term_rules(session)
     return {
@@ -178,7 +183,7 @@ def list_payment_terms(
 @router.get("/colour-surcharges")
 def list_colour_surcharges(
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("viewer")),
+    _=Depends(require_roles("viewer", "editor", "admin")),
 ) -> dict:
     rules = repo.list_colour_surcharges(session)
     return {
@@ -198,9 +203,20 @@ def list_colour_surcharges(
 @router.get("/countries")
 def list_countries_with_payment_terms(
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("viewer")),
+    user=Depends(require_min_role("viewer")),
 ) -> dict:
     countries = repo.list_country_payment_terms(session)
+
+    # order_filler users can only see their assigned countries
+    if user.role == "order_filler":
+        from app.db.models import User as UserModel
+        db_user = session.query(UserModel).filter(UserModel.username == user.name).first()
+        if db_user:
+            allowed = {db_user.primary_country_code} if db_user.primary_country_code else set()
+            for sc in (db_user.secondary_country_codes or []):
+                allowed.add(sc)
+            countries = [c for c in countries if c.country_code in allowed]
+
     return {
         "items": [
             {
@@ -227,8 +243,9 @@ def get_order_genius_options(
     version: str | None = Query(default=None),
     colour: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("viewer")),
+    user=Depends(require_min_role("viewer")),
 ) -> dict:
+    validate_country_access(session, user.name, user.role, country)
     return build_options(
         session,
         country_code=country,
@@ -251,8 +268,9 @@ def get_order_genius_matrix(
     colour: str | None = Query(default=None),
     material_code_search: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("viewer")),
+    user=Depends(require_min_role("viewer")),
 ) -> dict:
+    validate_country_access(session, user.name, user.role, country)
     return build_matrix(
         session,
         country_code=country,
@@ -270,12 +288,14 @@ def get_order_genius_matrix(
 def patch_quantity_cell(
     body: dict,
     session: Session = Depends(get_db_session),
-    user=Depends(require_min_role("editor")),
+    user=Depends(require_roles("editor", "admin", "order_filler")),
 ) -> dict:
     try:
+        country_code = body.get("countryCode", body.get("country_code", ""))
+        validate_country_access(session, user.name, user.role, country_code)
         result = update_quantity_cell(
             session,
-            country_code=body.get("countryCode", body.get("country_code", "")),
+            country_code=country_code,
             order_year=body.get("orderYear", body.get("order_year", 0)),
             order_month=body.get("orderMonth", body.get("order_month", 0)),
             material_code=body.get("materialCode", body.get("material_code", "")),
@@ -293,6 +313,133 @@ def patch_quantity_cell(
         if "Concurrent" in msg:
             raise HTTPException(status_code=409, detail=msg)
         raise HTTPException(status_code=400, detail=msg)
+
+
+@router.patch("/material-skus/{material_code}/colour-hex")
+def patch_sku_colour_hex(
+    material_code: str,
+    body: dict,
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Update the custom colour hex for a material SKU."""
+    sku = repo.get_sku_by_material_code(session, material_code)
+    if not sku:
+        raise HTTPException(status_code=404, detail="Material code not found")
+    sku.colour_hex = body.get("colourHex") or None
+    session.commit()
+    return {"materialCode": sku.material_code, "colourHex": sku.colour_hex}
+
+
+@router.patch("/material-skus/{material_code}/confirm-colour-code")
+def confirm_colour_code(
+    material_code: str,
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Mark a material SKU's colour code as confirmed (not auto-generated)."""
+    sku = repo.get_sku_by_material_code(session, material_code)
+    if not sku:
+        raise HTTPException(status_code=404)
+    sku.colour_code_confirmed = True
+    session.commit()
+    return {"materialCode": sku.material_code, "colourCodeConfirmed": True}
+
+
+@router.patch("/material-skus/{material_code}/colour-code")
+def patch_colour_code(
+    material_code: str,
+    body: dict,
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Update colour code and regenerate material code."""
+    sku = repo.get_sku_by_material_code(session, material_code)
+    if not sku:
+        raise HTTPException(status_code=404)
+    new_code = body.get("colourCode", "").upper()
+    if new_code and "**" in (sku.material_code or ""):
+        sku.material_code = sku.material_code.replace("**", new_code)
+    sku.exterior_color_code = new_code
+    sku.colour_code_confirmed = True
+    session.commit()
+    return {"materialCode": sku.material_code, "colourCode": new_code}
+
+
+@router.patch("/material-skus/{material_code}/material-code")
+def patch_material_code(
+    material_code: str,
+    body: dict,
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Update material code directly and regenerate if pattern contains **."""
+    new_mc = body.get("materialCode", "").strip()
+    if not new_mc:
+        raise HTTPException(status_code=400, detail="materialCode is required")
+    sku = repo.get_sku_by_material_code(session, material_code)
+    if not sku:
+        raise HTTPException(status_code=404)
+    # If new code has ** placeholder, fill with current colour code
+    if "**" in new_mc and sku.exterior_color_code:
+        new_mc = new_mc.replace("**", sku.exterior_color_code)
+    repo.update_sku_material_code(session, material_code, new_mc)
+    session.commit()
+    return {"oldMaterialCode": material_code, "materialCode": new_mc}
+
+
+@router.patch("/material-skus/{material_code}/colour-tier")
+def patch_sku_colour_tier(
+    material_code: str,
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    colour_tier = body.get("colourTier", body.get("colour_tier", "single"))
+    if colour_tier not in ("single", "dual", "special"):
+        raise HTTPException(status_code=400, detail="colour_tier must be single, dual, or special")
+    ok = repo.update_sku_colour_tier(session, material_code, colour_tier)
+    if not ok:
+        raise HTTPException(status_code=404, detail="SKU not found")
+    session.commit()
+    return {"materialCode": material_code, "colourTier": colour_tier}
+
+
+@router.patch("/material-skus/{material_code}/interior")
+def patch_sku_interior(
+    material_code: str,
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    """Update interior fields for a material SKU."""
+    from sqlalchemy import update as sa_update
+    from app.db.models import MaterialSkuMaster
+
+    vals = {}
+    if "interiorColorName" in body:
+        vals["interior_color_name"] = body["interiorColorName"] or None
+    if "interiorColourCode" in body:
+        vals["interior_colour_code"] = body["interiorColourCode"] or None
+    if "interiorPackage" in body:
+        vals["interior_package"] = body["interiorPackage"] or None
+    if "editionTag" in body:
+        vals["edition_tag"] = body["editionTag"] or None
+    if not vals:
+        raise HTTPException(status_code=400, detail="No interior fields provided")
+
+    result = session.execute(
+        sa_update(MaterialSkuMaster)
+        .where(MaterialSkuMaster.material_code == material_code)
+        .values(**vals)
+    )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="SKU not found")
+    session.commit()
+    return {"materialCode": material_code, "interiorColorName": vals.get("interior_color_name"),
+            "interiorColourCode": vals.get("interior_colour_code"),
+            "interiorPackage": vals.get("interior_package"),
+            "editionTag": vals.get("edition_tag")}
 
 
 @router.patch("/material-skus/{material_code}/remark")
@@ -331,6 +478,160 @@ def get_sku_fob(
     if not fob:
         raise HTTPException(status_code=404, detail="FOB not resolved for this SKU")
     return fob
+
+
+@router.patch("/material-skus/{material_code}/lifecycle")
+def patch_sku_lifecycle(
+    material_code: str,
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    """Update a material SKU's lifecycle status (active/historical/phase_out)."""
+    result = repo.update_sku_lifecycle(
+        session,
+        material_code=material_code,
+        lifecycle_status=body.get("lifecycleStatus", "active"),
+        effective_from=body.get("effectiveFrom"),
+        effective_to=body.get("effectiveTo"),
+        expected_version=body.get("rowVersion", 1),
+    )
+    if result is None:
+        sku = repo.get_sku_by_material_code_any_status(session, material_code)
+        if not sku:
+            raise HTTPException(status_code=404, detail="Material code not found")
+        raise HTTPException(status_code=409, detail="Concurrent update conflict")
+    session.commit()
+    return {
+        "materialCode": result.material_code,
+        "lifecycleStatus": result.lifecycle_status,
+        "rowVersion": result.row_version,
+        "effectiveFrom": result.effective_from,
+        "effectiveTo": result.effective_to,
+    }
+
+
+@router.delete("/material-skus/{material_code}")
+def delete_material_sku(
+    material_code: str,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("admin")),
+) -> dict:
+    """Hard-delete a material SKU and its FOB records (admin only)."""
+    deleted = repo.delete_sku(session, material_code)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Material code not found")
+    # Also clean up FOB records
+    from sqlalchemy import delete as sa_delete
+    from app.db.models import CountrySkuFobResolved
+    session.execute(
+        sa_delete(CountrySkuFobResolved).where(
+            CountrySkuFobResolved.material_code == material_code
+        )
+    )
+    session.commit()
+    return {"materialCode": material_code, "deleted": True}
+
+
+@router.patch("/material-skus/{material_code}/fob")
+def patch_sku_fob(
+    material_code: str,
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    """Update or create FOB for a material code in a specific country. Send 0 or null to clear."""
+    country = body.get("countryCode", "")
+    fob_raw = body.get("finalFobEur")
+    if not country:
+        raise HTTPException(status_code=400, detail="countryCode is required")
+    fob_val = fob_raw if fob_raw is None else float(fob_raw)
+    pt_code = body.get("paymentTermCode")
+    result = repo.update_sku_fob_for_country(
+        session, material_code, country, fob_val, pt_code,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Could not update FOB")
+    session.commit()
+    return {
+        "materialCode": result.material_code,
+        "countryCode": result.country_code,
+        "finalFobEur": float(result.final_fob_eur) if result.final_fob_eur is not None else None,
+        "paymentTermCode": result.payment_term_code,
+    }
+
+
+@router.post("/material-skus")
+def create_material_sku(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("admin")),
+) -> dict:
+    """Create a new material SKU manually (BOM Admin)."""
+    from uuid import uuid4
+    from app.db.models import MaterialSkuMaster
+    sku = MaterialSkuMaster(
+        material_sku_id=uuid4(),
+        material_code=body["materialCode"],
+        brand=body.get("brand", ""),
+        model_name=body.get("modelName", ""),
+        version=body.get("version", ""),
+        exterior_color_name=body.get("colour", ""),
+        exterior_color_code=body.get("colourCode", ""),
+        exterior_color_type=body.get("colourType", "single"),
+        powertrain=body.get("powertrain", "Other"),
+        lifecycle_status="active",
+        is_active=True,
+        is_published=False,
+        baseline_version_id=UUID("00000000-0000-0000-0000-000000000000"),
+    )
+    session.add(sku)
+    session.commit()
+    return {"materialCode": sku.material_code, "id": str(sku.material_sku_id)}
+
+
+@router.get("/bom-admin")
+def get_bom_admin(
+    brand: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    country: str | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Return BOM data with FOB per country, for the BOM admin panel."""
+    items, countries = repo.list_bom_with_fob(session, brand=brand, search=search, country_code=country)
+    return {"items": items, "countries": countries}
+
+
+@router.get("/material-skus-admin")
+def list_material_skus_admin(
+    country: str | None = Query(default=None),
+    brand: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """List all SKUs for the BOM admin panel."""
+    rows = repo.list_all_material_skus_for_admin(
+        session, country_code=country, brand=brand, search=search,
+    )
+    return {
+        "items": [
+            {
+                "materialCode": r.material_code,
+                "brand": r.brand,
+                "modelName": r.model_name,
+                "version": r.version,
+                "colour": r.exterior_color_name or "",
+                "lifecycleStatus": r.lifecycle_status,
+                "isActive": r.is_active,
+                "effectiveFrom": r.effective_from_month,
+                "effectiveTo": r.effective_to_month,
+                "rowVersion": r.row_version,
+            }
+            for r in rows
+        ],
+    }
 
 
 @router.get("/material-lifecycle")
@@ -412,8 +713,8 @@ def create_payment_term(
         remark=body.get("remark"),
     )
     session.commit()
-    _audit(session, code, "create", actor=user.name, new_pt=row.payment_term_code,
-           new_from=row.valid_from_month, new_to=row.valid_to_month)
+    _audit(session, code, "create", actor=user.name, new_payment_term_code=row.payment_term_code,
+           new_valid_from=row.valid_from_month, new_valid_to=row.valid_to_month)
     session.commit()
     return {"id": str(row.country_payment_term_id)}
 
@@ -451,10 +752,10 @@ def update_payment_term(
     session.commit()
     action = "correct" if is_correction else "update"
     _audit(session, row.country_code, action, actor=user.name,
-           old_pt=old_pt, new_pt=row.payment_term_code,
-           old_from=old_from, old_to=old_to,
-           new_from=row.valid_from_month, new_to=row.valid_to_month,
-           impacted=impact.get("orderMonths", 0))
+           old_payment_term_code=old_pt, new_payment_term_code=row.payment_term_code,
+           old_valid_from=old_from, old_valid_to=old_to,
+           new_valid_from=row.valid_from_month, new_valid_to=row.valid_to_month,
+           impacted_order_months=impact.get("orderMonths", 0))
     session.commit()
     return {"id": str(row.country_payment_term_id), "impact": impact}
 
@@ -478,7 +779,7 @@ def close_payment_term(
         row.is_active = False
     session.commit()
     _audit(session, row.country_code, "close", actor=user.name,
-           old_pt=row.payment_term_code, old_from=row.valid_from_month, old_to=end_month)
+           old_payment_term_code=row.payment_term_code, old_valid_from=row.valid_from_month, old_valid_to=end_month)
     session.commit()
     return {"id": str(row.country_payment_term_id)}
 
@@ -564,13 +865,26 @@ def _audit(session: Session, country: str, action: str, **kw) -> None:
 def export_order_genius(
     body: dict,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("viewer")),
+    user=Depends(require_min_role("viewer")),
 ) -> StreamingResponse:
     country = body.get("country", "")
+    validate_country_access(session, user.name, user.role, country)
     year = body.get("year", 2026)
     include_hist = body.get("includeHistoricalWithQuantity", True)
-    buf = export_matrix(session, country, year, include_hist)
-    filename = f"Order_Genius_{country}-{year}.xlsx"
+    brand = body.get("brand")
+    model = body.get("model")
+    powertrain = body.get("powertrain")
+    version = body.get("version")
+    colour = body.get("colour")
+    quantities_only = body.get("quantitiesOnly", False)
+    buf = export_matrix(session, country, year, include_hist,
+                        brand=brand, model_name=model, powertrain=powertrain,
+                        version=version, colour=colour,
+                        quantities_only=quantities_only)
+    from datetime import date as _date
+    today = _date.today().strftime("%Y%m%d")
+    suffix = '_filtered' if (brand or model or powertrain) else ''
+    filename = f"{country}_{year}_{today}{suffix}.xlsx"
     return StreamingResponse(
         buf,
         media_type=(
@@ -607,3 +921,151 @@ def list_baselines(
             for b in baselines
         ],
     }
+
+
+# ── Order Quantity Import (round-trip: export → edit → re-import) ─────
+
+_IMPORT_SESSION_DIR = PROJECT_ROOT / "04_Processed_data" / "ops" / "order_quantity_imports"
+
+
+@router.post("/import-quantities/preview")
+def preview_quantity_import(
+    file: UploadFile = File(...),
+    session: Session = Depends(get_db_session),
+    user=Depends(require_roles("editor", "admin", "order_filler")),
+) -> dict:
+    """Upload an exported Order Genius XLSX, parse it, and return a preview diff."""
+    import json
+    import uuid as _uuid
+    import shutil
+
+    _IMPORT_SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    import_id = str(_uuid.uuid4())
+    tmp_path = _IMPORT_SESSION_DIR / f"{import_id}.xlsx"
+
+    try:
+        with tmp_path.open("wb") as f:
+            shutil.copyfileobj(file.file, f)
+    finally:
+        file.file.close()
+
+    try:
+        parsed = parse_order_quantity_xlsx(tmp_path)
+    except Exception as e:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"Failed to parse file: {e}")
+
+    validate_country_access(session, user.name, user.role, parsed.country_code)
+
+    if parsed.errors and not parsed.rows:
+        tmp_path.unlink(missing_ok=True)
+        return {
+            "importId": import_id,
+            "countryCode": parsed.country_code,
+            "year": parsed.year,
+            "matchedRows": [],
+            "newRows": [],
+            "fobChanges": [],
+            "totalCells": 0,
+            "errorCells": 0,
+            "errors": parsed.errors,
+            "status": "error",
+        }
+
+    preview = preview_order_quantity_import(session, parsed)
+
+    # Save parsed data as JSON for the apply step
+    json_path = _IMPORT_SESSION_DIR / f"{import_id}.json"
+    rows_data = []
+    for row in parsed.rows:
+        rows_data.append({
+            "material_code": row.material_code,
+            "fob_eur": row.fob_eur,
+            "model_name": row.model_name,
+            "version": row.version,
+            "colour": row.colour,
+            "cells": [
+                {
+                    "material_code": c.material_code,
+                    "month": c.month,
+                    "quantity": c.quantity,
+                    "fob_eur": c.fob_eur,
+                    "error": c.error,
+                }
+                for c in row.cells
+            ],
+            "errors": row.errors,
+        })
+    with json_path.open("w") as f:
+        json.dump({
+            "country_code": parsed.country_code,
+            "year": parsed.year,
+            "rows": rows_data,
+        }, f)
+
+    preview["importId"] = import_id
+    preview["status"] = "ok" if not preview["errors"] else "warning"
+    return preview
+
+
+@router.post("/import-quantities/{import_id}/apply")
+def apply_quantity_import(
+    import_id: str,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_roles("editor", "admin", "order_filler")),
+) -> dict:
+    """Apply a previously previewed quantity import."""
+    import json
+
+    json_path = _IMPORT_SESSION_DIR / f"{import_id}.json"
+    xlsx_path = _IMPORT_SESSION_DIR / f"{import_id}.xlsx"
+
+    if not json_path.exists():
+        raise HTTPException(status_code=404, detail="Import session not found or expired")
+
+    try:
+        with json_path.open() as f:
+            data = json.load(f)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Failed to read import session data")
+
+    validate_country_access(session, user.name, user.role, data.get("country_code", ""))
+
+    from app.services.order_quantity_parser import ImportedQuantityCell, ImportedRow, OrderQuantityImport
+
+    rows = []
+    for rd in data["rows"]:
+        cells = [
+            ImportedQuantityCell(
+                material_code=cd["material_code"],
+                month=cd["month"],
+                quantity=cd["quantity"],
+                fob_eur=cd.get("fob_eur"),
+                error=cd.get("error", ""),
+            )
+            for cd in rd["cells"]
+        ]
+        rows.append(ImportedRow(
+            material_code=rd["material_code"],
+            fob_eur=rd.get("fob_eur"),
+            model_name=rd.get("model_name", ""),
+            version=rd.get("version", ""),
+            colour=rd.get("colour", ""),
+            cells=cells,
+            errors=rd.get("errors", []),
+        ))
+
+    parsed = OrderQuantityImport(
+        country_code=data["country_code"],
+        year=data["year"],
+        rows=rows,
+    )
+
+    result = apply_order_quantity_import(session, parsed, user.name)
+    session.commit()
+
+    # Cleanup session files
+    json_path.unlink(missing_ok=True)
+    xlsx_path.unlink(missing_ok=True)
+
+    return {"importId": import_id, "status": "applied", **result}

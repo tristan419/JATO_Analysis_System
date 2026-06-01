@@ -22,24 +22,153 @@ features:
   - dev_evt_20260517_052537_10ca5c
   - dev_evt_20260517_052331_210c20
   - dev_evt_20260518_004957_370678
-  endpoints: []
+  - dev_evt_20260521_143417_32cda0
+  - dev_evt_20260521_143251_0987aa
+  - dev_evt_20260521_063642_f7b7d1
+  - dev_evt_20260521_062858_jato_cancel_recheck
+  - dev_evt_20260521_055134_d4545f
+  - dev_evt_20260521_051712_3992c8
+  - dev_evt_20260521_045430_6cfce1
+  - dev_evt_20260521_035712_334439
+  - dev_evt_20260521_035118_marketscan_cache
+  - dev_evt_20260521_005711_50c02c
+  - dev_evt_20260521_005355_pipeline_status
+  - dev_evt_20260520_193112_2b9fc3
+  - dev_evt_20260520_smart_merge
+  - dev_evt_20260520_single_country
+  - dev_evt_20260520_090749_6ea97f
+  endpoints:
+  - POST /monthly-update-jobs
+  - POST /monthly-update-jobs/from-upload
+  - POST /monthly-update-jobs/single-country
+  - GET /monthly-update-jobs
+  - GET /monthly-update-jobs/{job_id}
+  - POST /monthly-update-jobs/{job_id}/retry
+  - POST /monthly-update-jobs/{job_id}/recheck
+  - POST /monthly-update-jobs/{job_id}/cancel
+  - GET /monthly-update-jobs/{job_id}/review
+  - POST /monthly-update-jobs/{job_id}/publish
+  - POST /v1/msrp/monthly-update-jobs/{job_id}/recheck
+  - POST /v1/msrp/monthly-update-jobs/{job_id}/cancel
+  - POST /monthly-update-jobs/{job_id}/rollback
+  - POST /monthly-update-jobs/{job_id}/smart-merge
+  - GET /overview
+  - GET /pipeline-health
+  - GET /pipeline/status
+  - GET /pipeline/status/{pipeline_id}
+  - GET /source-quality
+  - GET /cost
+  - GET /msrp-country-progress
+  - GET /msrp-dryrun-history
+  - GET /code-audit
+  - GET /proposals
+  - GET /v1/hermes/pipeline/status
+  - GET /v1/hermes/pipeline/status/{pipelineId}
+  - POST /v1/msrp/monthly-update-jobs/{job_id}/smart-merge
+  - POST /v1/msrp/monthly-update-jobs/single-country
+  - POST /monthly-update-uploads/initiate
   frontend:
   - 06_AppPlatform/frontend/src/api/client.ts
   - 06_AppPlatform/frontend/src/index.css
   - 06_AppPlatform/frontend/src/pages/JatoMonthlyUpdatePage.tsx
   - 06_AppPlatform/frontend/src/types/index.ts
+  - 06_AppPlatform/frontend/src/tests/unit/jatoMonthlyUpdate.test.ts
+  - 06_AppPlatform/frontend/src/utils/jatoMonthlyUpdate.ts
+  - JATO Monthly Update Job Detail now shows 刷新查验 and 终止任务 controls plus runtime process/recheck
+    details.
+  - 06_AppPlatform/frontend/src/pages/MarketScanPage.tsx
+  - Added Smart Merge button to country_regression blocker panel with loading/complete
+    states
+  - Added hasSmartMerge state variable to disable re-merge after completion
+  - Updated info section to remove '功能开发中' label for Smart Merge
+  - Checkbox on existing upload form to enable single-country quick mode with country/month
+    fields
   backend:
   - 06_AppPlatform/backend/app/services/jato_monthly_update_service.py
+  - 06_AppPlatform/backend/app/db/models.py
+  - 06_AppPlatform/backend/alembic/versions/20260521_0019_order_genius_price_dimension_mapping.py
+  - 06_AppPlatform/backend/scripts/seed_order_genius_rules.py
+  - 06_AppPlatform/backend/app/api/routes/msrp_monthly_update.py
+  - 06_AppPlatform/backend/tests/unit/test_jato_monthly_update_routes.py
+  - 06_AppPlatform/backend/tests/unit/test_jato_monthly_update_service.py
+  - JATO monthly update service now persists currentProcess for subprocesses, rechecks
+    stale running jobs, terminates process groups on cancel, and keeps cancelled jobs
+    outside the publish path.
+  - 06_AppPlatform/backend/app/services/market_scan_cache.py
+  - 06_AppPlatform/backend/app/services/market_scan_service.py
+  - 06_AppPlatform/backend/app/api/routes/hermes.py
+  - 06_AppPlatform/backend/app/services/hermes_sentinel_service.py
+  - 06_AppPlatform/backend/tests/unit/test_hermes_routes.py
+  - 06_AppPlatform/backend/tests/unit/test_hermes_sentinel.py
+  - 06_AppPlatform/backend/app/services/hermes_pipeline_status_service.py
+  - 06_AppPlatform/backend/tests/unit/test_hermes_pipeline_status_service.py
+  - FastAPI Hermes router exposes pipeline status endpoints
+  - Hermes pipeline status service reads standard JSON, legacy scheduled status, source
+    quality report, and JATO monthly update job_state
+  - Sentinel pipeline probe classifies standard status records
+  - JATO monthly update writes jato_etl status on job success/failure
+  - Added _smart_merge_dataframes() — merges active+candidate at country level, keeping
+    regressed countries from active
+  - Added _run_smart_merge() — background thread that creates merged parquet then
+    rebuilds partitions/manifest/fingerprint
+  - Added create_smart_merge_candidate() — public API with validation guards (no double-merge,
+    only for success/completed jobs)
+  - Added POST /v1/msrp/monthly-update-jobs/{job_id}/smart-merge route with editor-level
+    auth
+  - Created rebuild_from_parquet.py helper script called as subprocess to rebuild
+    derived artifacts
+  - create_single_country_job() — lightweight job creation with country/month metadata
+  - '_run_single_country_job() — background runner: validate country, skip prepare/compare,
+    run refresh with supplement'
+  - 'Upload-time validation: reject if uploaded month <= active latest for that country'
+  - POST /v1/msrp/monthly-update-jobs/single-country route
   tests:
     backendPytest: 57 passed (test_jato_monthly_update_service.py, test_market_scan_service.py,
       test_parquet_repository.py)
+    backend: 31/31 jato tests pass
+    frontend: npm run check:types && npm run build
+    syntax: py_compile passed; bash -n run_msrp_low_concurrency.sh passed
+    jsonl: hermes/dev_events/dev_events.jsonl and hermes/evidence_ledger.jsonl valid
+    compile: PYTHONPATH=. ../../.venv/bin/python -m py_compile app/services/market_scan_cache.py
+      app/services/market_scan_service.py app/services/jato_monthly_update_service.py
+    frontendTsc: clean
+    frontendVitest: 129/129 passed
+    integration: 5/5 passed
   risks:
   - Auto-generated dev event from git commit — tests not auto-verified.
+  - Cancel can kill tracked subprocess groups; direct in-thread validation remains
+    best-effort until it reaches a cancellation checkpoint.
+  - MarketScan first request after a real JATO publish still performs one cold compute;
+    Redis/local warm path should be fast after that.
+  - Existing runtime pipelines must run once to create fresh standard status files
+    for MSRP dryrun/ingest; Hermes still falls back to legacy scheduled status until
+    then.
+  - Smart Merge rebuilds partition/manifest/fingerprint via subprocess — if the rebuild
+    script fails, the job enters smart_merge_failed phase and user must retry
+  - Works only for country_regression blocker, not sales_doubling (which indicates
+    deeper data integrity issue)
+  - No CSV upload support — only xlsx
+  - Upload-time month check is best-effort; publish guard still runs separately
   nextSteps:
   - Run tests
   - Verify in Hermes UI Dev tab
+  - Deploy to cloud
+  - Use UI recheck on jato-update-dc0fd9ed, then cancel if still running before creating
+    2026-04-r2
+  - Deploy and verify /v1/hermes/deploy/status
+  - After next JATO publish, inspect job publication.cacheInvalidation and Hermes
+    evidence ledger
+  - Deploy to Tencent cloud
+  - Verify /v1/hermes/pipeline/status and Sentinel pipeline findings
+  - Deploy and verify Smart Merge in staging with a test regression scenario
+  - Consider adding Smart Merge status indicator to job detail panel (e.g., 'Smart
+    Merged' badge)
+  - Frontend re-upload button in blocker panel still disabled — can be future enhancement
+  - Deploy and test on production
+  - Verify subsequent batch upload behavior with previously single-country-updated
+    countries
   createdAt: '2026-05-18T00:48:25.663700+00:00'
-  lastUpdatedAt: '2026-05-18T01:28:13.166086+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:38.913411+00:00'
   docs:
   - Markdown_Readme/features/feature.jato_monthly_update.md
 - featureId: feature.market_scan
@@ -74,7 +203,61 @@ features:
   - dev_evt_20260516_071246_cf7c72
   - dev_evt_20260518_010411_331753
   - dev_evt_20260518_012715_a1b2c3
-  endpoints: []
+  - dev_evt_20260528_061720_2bca16
+  - dev_evt_20260527_070400_84c642
+  - dev_evt_20260527_063828_5687e5
+  - dev_evt_20260526_042207_c429f4
+  - dev_evt_20260525_050249_4bea9c
+  - dev_evt_20260525_045749_df69c4
+  - dev_evt_20260525_032159_006a4c
+  - dev_evt_20260525_031510_803464
+  - dev_evt_20260525_030110_9f9d68
+  - dev_evt_20260525_013357_4e9234
+  - dev_evt_20260525_010353_30420d
+  - dev_evt_20260521_035526_d9beec
+  - dev_evt_20260521_035355_427158
+  - dev_evt_20260521_035118_marketscan_cache
+  - dev_evt_20260521_025707_a340be
+  - dev_evt_20260519_160805_cefbac
+  - dev_evt_20260518_105214_7ac590
+  - dev_evt_20260518_075835_9e198b
+  - dev_evt_20260518_071315_9c42b4
+  - dev_evt_20260518_065247_86c39f
+  - dev_evt_20260518_015944_60fde5
+  - dev_evt_20260518_015712_09f43c
+  - dev_evt_20260518_015438_704a7b
+  - dev_evt_20260518_015302_666396
+  endpoints:
+  - POST /login
+  - POST /register
+  - GET /me
+  - PATCH /me/profile
+  - POST /logout
+  - GET /users
+  - PATCH /users/{user_id}/role
+  - PATCH /users/{user_id}/profile
+  - PATCH /users/{user_id}/toggle-active
+  - POST /role-upgrade/request
+  - POST /query
+  - POST /time-series
+  - POST /overview
+  - GET /data-freshness
+  - POST /detail
+  - POST /detail-csv
+  - POST /time-series-grouped
+  - POST /advanced-chart
+  - POST /model-versions
+  - POST /positioning-map
+  - GET /overview
+  - GET /pipeline-health
+  - GET /source-quality
+  - GET /cost
+  - GET /code-audit
+  - GET /proposals
+  - GET /gaps
+  - GET /features
+  - GET /toolchain
+  - GET /architecture
   frontend:
   - 06_AppPlatform/frontend/src/App.tsx
   - 06_AppPlatform/frontend/src/components/Layout.tsx
@@ -86,6 +269,35 @@ features:
   - 06_AppPlatform/frontend/src/pages/EngineeringPage.tsx
   - 06_AppPlatform/frontend/src/pages/JatoMonthlyUpdatePage.tsx
   - 06_AppPlatform/frontend/src/pages/MsrpPage.tsx
+  - 06_AppPlatform/frontend/src/components/MegaMenu.tsx
+  - 06_AppPlatform/frontend/src/contexts/AuthContext.tsx
+  - 06_AppPlatform/frontend/src/dashboardFilters.ts
+  - 06_AppPlatform/frontend/src/pages/MarketScanPage.tsx
+  - 06_AppPlatform/frontend/src/pages/dashboardHelpers.ts
+  - 06_AppPlatform/frontend/src/tests/unit/marketScanPageState.test.ts
+  - 06_AppPlatform/frontend/src/types/index.ts
+  - 06_AppPlatform/frontend/src/utils/filterOptions.ts
+  - 06_AppPlatform/frontend/src/pages/PositioningPricingPage.tsx
+  - 06_AppPlatform/frontend/src/pages/VersionComparisonPage.tsx
+  - 06_AppPlatform/frontend/src/hooks/useFuelChipClick.ts
+  - 06_AppPlatform/frontend/src/components/ExportPanel.tsx
+  - 06_AppPlatform/frontend/src/components/deckControls/DebouncedNumberInput.tsx
+  - 06_AppPlatform/frontend/src/components/deckControls/DeckControlTabs.tsx
+  - 06_AppPlatform/frontend/src/components/deckControls/DeckExportDrawer.tsx
+  - 06_AppPlatform/frontend/src/components/deckControls/DeckFloatingDrawer.tsx
+  - 06_AppPlatform/frontend/src/components/deckControls/index.ts
+  - 06_AppPlatform/frontend/src/utils/colors.ts
+  - 06_AppPlatform/frontend/src/utils/pageNavigation.ts
+  - 06_AppPlatform/frontend/src/api/client.ts
+  - 06_AppPlatform/frontend/src/pages/CocMatchPage.tsx
+  - 06_AppPlatform/frontend/src/pages/AccessControlPage.tsx
+  - 06_AppPlatform/frontend/src/pages/CountrySetupPage.tsx
+  - 06_AppPlatform/frontend/src/utils/jatoCountries.ts
+  - 06_AppPlatform/frontend/src/types/hermes.ts
+  - 06_AppPlatform/frontend/scripts/write_build_meta.cjs
+  - 06_AppPlatform/frontend/package.json
+  - 06_AppPlatform/frontend/src/components/DeckSubpageNav.tsx
+  - 06_AppPlatform/frontend/src/tests/unit/deckSubpageNav.test.tsx
   backend:
   - 'config.py: MARKET_SCAN_CACHE_SCHEMA_VERSION 2→3 to invalidate server Redis cache'
   - 'market_scan_cache.py: build_deck_cache_key now includes trend_window_months,
@@ -102,18 +314,51 @@ features:
   - 06_AppPlatform/backend/tests/unit/test_market_scan_service.py
   - 06_AppPlatform/backend/app/infra/redis_client.py
   - 06_AppPlatform/backend/tests/integration/test_api_contracts.py
+  - 06_AppPlatform/backend/app/api/routes/auth.py
+  - 06_AppPlatform/backend/app/api/routes/hermes.py
+  - 06_AppPlatform/backend/app/api/routes/market_scan.py
+  - 06_AppPlatform/backend/app/api/schemas.py
+  - 06_AppPlatform/backend/app/core/security.py
+  - 06_AppPlatform/backend/app/services/country_chat_service.py
+  - 06_AppPlatform/backend/app/services/insight_card_service.py
+  - 06_AppPlatform/backend/app/api/routes/analysis.py
+  - 06_AppPlatform/backend/app/api/routes/filters.py
+  - 06_AppPlatform/backend/app/api/routes/metadata.py
+  - 06_AppPlatform/backend/app/services/coc_match_service.py
+  - 06_AppPlatform/backend/tests/unit/test_coc_match_service.py
+  - 06_AppPlatform/backend/app/services/jato_monthly_update_service.py
+  - 06_AppPlatform/backend/tests/unit/test_jato_monthly_update_service.py
+  - 06_AppPlatform/backend/tests/unit/test_market_scan_cache.py
+  - 06_AppPlatform/backend/app/services/hermes_sentinel_service.py
+  - 06_AppPlatform/backend/tests/unit/test_hermes_routes.py
+  - 06_AppPlatform/backend/app/core/startup_validation.py
+  - 06_AppPlatform/backend/app/services/hermes_deploy_status_service.py
+  - 06_AppPlatform/backend/app/services/hermes_ops_runner_service.py
+  - 06_AppPlatform/backend/tests/audit_metric_correctness.py
+  - 06_AppPlatform/backend/tests/unit/test_hermes_deploy_status_service.py
+  - 06_AppPlatform/backend/tests/unit/test_hermes_sentinel.py
+  - 03_Scripts/deploy/systemd/jato-fullstack-backend.env.example
+  - 06_AppPlatform/backend/app/main.py
+  - 06_AppPlatform/backend/app/services/hermes_devsync_service.py
+  - 06_AppPlatform/backend/tests/unit/test_hermes_devsync.py
   tests:
     backend: 54 passed (market_scan + cache + deck)
     frontendTsc: not run
     frontendBuild: not run
     frontendVitest: not run
     backendPytest: 5 passed (tests/integration/test_api_contracts.py)
+    frontend: npm run check:types && npm run build
+    compile: PYTHONPATH=. ../../.venv/bin/python -m py_compile app/services/market_scan_cache.py
+      app/services/market_scan_service.py app/services/jato_monthly_update_service.py
+    jsonl: hermes/dev_events/dev_events.jsonl and hermes/evidence_ledger.jsonl valid
   risks:
   - Server must be redeployed for cache schema version bump to take effect
   - Auto-generated dev event from git commit — tests not auto-verified.
   - prior_rolling12_columns derived from current rolling12 shift means window sizes
     may differ by 1-2 months when data gaps exist, but avoids entire window being
     empty
+  - MarketScan first request after a real JATO publish still performs one cold compute;
+    Redis/local warm path should be fast after that.
   nextSteps:
   - Redeploy to server → old ms:deck:v2:* cache keys become stale, v3 keys used
   - Compare local vs server Sweden March data after redeploy
@@ -124,8 +369,11 @@ features:
   - Expand only when a regression repeats
   - 'Verify in UI: drill-down fuel panel YoY values no longer all New'
   - Trigger Hermes DevSync
+  - Deploy and verify /v1/hermes/deploy/status
+  - After next JATO publish, inspect job publication.cacheInvalidation and Hermes
+    evidence ledger
   createdAt: '2026-05-18T00:48:25.927769+00:00'
-  lastUpdatedAt: '2026-05-18T01:28:11.476912+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:33.840023+00:00'
   docs:
   - Markdown_Readme/features/feature.market_scan.md
 - featureId: feature.dashboard
@@ -168,7 +416,7 @@ features:
   - Wire contract tests into CI diagnostics
   - Expand only when a regression repeats
   createdAt: '2026-05-18T00:48:25.990657+00:00'
-  lastUpdatedAt: '2026-05-18T01:28:10.749833+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:31.589915+00:00'
   docs:
   - Markdown_Readme/features/feature.dashboard.md
 - featureId: feature.scraping_toolkit
@@ -176,19 +424,14 @@ features:
   status: implemented
   category: governance
   source: git_commit
-  summary: 'fix: replace abort controller with bootId counter for React StrictMode
-    safety
-
-    React StrictMode double-mounts components in dev. The abort controller
-
-    pattern caused the second boot''s async work to be aborted by the first
-
-    mount''s cleanup. Replaced with a bootId counter — old boots silently
-
-    return instead of aborting.
-
-
-    Also removed debug logs.'
+  summary: "feat(hermes): fuse source strategy governance into scraping toolkit\n\
+    Add failure classification, 3-state pipeline status, dryrun artifact v2,\nsource-level\
+    \ quality findings, and gated ingest across 5 layers:\n\n- batch_dryrun.py: classify_dryrun_failure()\
+    \ with 12-failure taxonomy\n  and recommended strategy per source. Dryrun report\
+    \ v2 with\n  schemaVersion, failureBreakdown, strategyRecommendations, passPct.\n\
+    \  Status file passPct-based 3-state logic (>=90 success, >=50 degraded).\n\n\
+    - batch_ingest.py: okPct-based 3-state status logic.\n\n- run_msrp_low_concurrency.sh:\
+    \ dr"
   linkedEventIds:
   - dev_evt_20260516_131818_3bbee9
   - dev_evt_20260516_081730_8a37be
@@ -198,20 +441,40 @@ features:
   - dev_evt_20260515_140416_e678b8
   - dev_evt_20260515_100541_942877
   - dev_evt_20260518_004958_72da72
-  endpoints: []
+  - dev_evt_20260524_145343_4bccd6
+  - dev_evt_20260521_005355_pipeline_status
+  - dev_evt_20260520_191844_5d5e49
+  endpoints:
+  - GET /v1/hermes/pipeline/status
+  - GET /v1/hermes/pipeline/status/{pipelineId}
   frontend:
   - 06_AppPlatform/frontend/src/contexts/SharedFilterScopeContext.tsx
   backend:
   - 06_AppPlatform/backend/alembic/versions/20260516_0016_role_upgrade_requests.py
+  - 06_AppPlatform/backend/requirements.txt
+  - FastAPI Hermes router exposes pipeline status endpoints
+  - Hermes pipeline status service reads standard JSON, legacy scheduled status, source
+    quality report, and JATO monthly update job_state
+  - Sentinel pipeline probe classifies standard status records
+  - JATO monthly update writes jato_etl status on job success/failure
   tests:
     scrapingToolkitPytest: 34 passed (07_ScrapingToolkit/tests)
+    backend: '113 passed: test_hermes_pipeline_status_service.py, test_hermes_sentinel.py,
+      test_hermes_routes.py, test_hermes_source_quality_script.py, test_batch_dryrun_classifier.py,
+      test_jato_monthly_update_service.py'
+    syntax: py_compile passed; bash -n run_msrp_low_concurrency.sh passed
   risks:
   - Auto-generated dev event from git commit — tests not auto-verified.
+  - Existing runtime pipelines must run once to create fresh standard status files
+    for MSRP dryrun/ingest; Hermes still falls back to legacy scheduled status until
+    then.
   nextSteps:
   - Run tests
   - Verify in Hermes UI Dev tab
+  - Deploy to Tencent cloud
+  - Verify /v1/hermes/pipeline/status and Sentinel pipeline findings
   createdAt: '2026-05-18T00:48:26.058133+00:00'
-  lastUpdatedAt: '2026-05-18T01:28:12.984264+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:38.340783+00:00'
   docs:
   - Markdown_Readme/features/feature.scraping_toolkit.md
 - featureId: hermes-devsync
@@ -254,6 +517,16 @@ features:
   - dev_evt_20260515_112609_6c993d
   - dev_evt_20260515_104148_1d371a
   - dev_evt_20260518_010516_2813cf
+  - dev_evt_20260524_151130_392b50
+  - dev_evt_20260521_010458_pipeline_inbox_detail
+  - dev_evt_20260521_005355_pipeline_status
+  - dev_evt_20260520_191405_0af5b7
+  - dev_evt_20260520_devsync_curated_seed_overlay
+  - dev_evt_20260520_190732_1e0a34
+  - dev_evt_20260520_devsync_preserve_curated_tests
+  - dev_evt_20260520_061437_771e4c
+  - dev_evt_20260520_devsync_auto_event_noise_filter
+  - dev_evt_20260519_deploy_sentinel_inbox
   endpoints:
   - POST /hermes/dev/events
   - GET /hermes/dev/events
@@ -270,6 +543,8 @@ features:
   - GET /features
   - GET /toolchain
   - GET /architecture
+  - GET /v1/hermes/pipeline/status
+  - GET /v1/hermes/pipeline/status/{pipelineId}
   frontend:
   - Dev subtab with feature registry table
   - Dev events feed with changed file counts
@@ -277,6 +552,12 @@ features:
   - Feature detail modal
   - Sync Now button
   - 06_AppPlatform/frontend/src/components/HermesAskResponseCard.tsx
+  - 'DataManagementPage.tsx: Sentinel Inbox notification cards render compact pipeline
+    detail fields from notification.context'
+  - Sentinel Inbox uses unread/read/archive/all filters with search and fixed-height
+    scrolling
+  - Hermes diagrams can be filtered by category
+  - Hermes full design document is readable in a collapsible bottom panel
   backend:
   - 06_AppPlatform/backend/app/services/hermes_devsync_service.py
   - 06_AppPlatform/backend/tests/unit/test_hermes_devsync.py
@@ -287,6 +568,29 @@ features:
   - 06_AppPlatform/backend/app/core/config.py
   - 06_AppPlatform/backend/requirements.txt
   - 06_AppPlatform/backend/app/api/routes/hermes.py
+  - Sentinel notifications include pipeline, statusRecord, lastRunAt, failedCount,
+    warningCount, artifactRefs, pipelineStatus, and statusPath context
+  - FastAPI Hermes router exposes pipeline status endpoints
+  - Hermes pipeline status service reads standard JSON, legacy scheduled status, source
+    quality report, and JATO monthly update job_state
+  - Sentinel pipeline probe classifies standard status records
+  - JATO monthly update writes jato_etl status on job success/failure
+  - Added curated evidence seed for feature.current_price and feature.review_workbench
+  - DevSync hydration now works even when Kanban runtime registry is empty or damaged
+  - /hermes/features overlays curated docs/tests/backendApis for the two seeded legacy
+    features
+  - DevSync list_features hydrates missing docs/tests from curated Kanban feature
+    registry
+  - _sync_to_kanban preserves curated docs/tests/backendApis/knownIssues when DevSync
+    event fields are empty
+  - Current Price feature registry now records backend and frontend test references
+  - Reused the existing _is_noisy_commit_feature_id path for feature normalization,
+    gap creation, and gap retirement
+  - DevSync records expected deploy commits
+  - Deploy workflow writes hermes/deploy_release.json into the archive
+  - Sentinel deploy probe compares release and expected commits
+  - Notification records include action level, blocking flag, recommended action,
+    and mailbox states
   tests:
     backend: 101 Hermes tests pass (29 devsync + 36 chat + 36 routes)
     frontendTsc: clean
@@ -294,6 +598,15 @@ features:
     frontendVitest: 5/5 devsync types pass
     ciContract: backend compile and tests/integration/test_api_contracts.py remain
       blocking in ci.yml
+    frontend: npm run check:types passed; npm run build passed
+    syntax: py_compile passed for hermes_devsync_service.py; feature_registry.yaml
+      parses
+    ops: 2 passed (VOC failure summary helper)
+    backendPytest: 82 passed (test_hermes_devsync.py, test_hermes_sentinel.py, test_hermes_routes.py)
+    pyCompile: hermes_devsync_service.py compiled
+    backendHermesPytest: 85 passed
+    workflowYaml: deploy-fullstack-tencent.yml and hermes-devsync.yml parsed
+    shellSyntax: deploy_fullstack_server.sh bash -n passed
   risks:
   - Auto-generated dev event from git commit — tests not auto-verified.
   - Feature ID inference from title is heuristic-based
@@ -301,6 +614,22 @@ features:
   - DevSync requires manual trigger (Sync Now button or API call)
   - Frontend diagnostics can still fail visibly inside the job logs; they no longer
     fail the workflow conclusion.
+  - Existing notifications emitted before this change will not have enriched context
+    until Sentinel emits a fresh pipeline notification.
+  - Existing runtime pipelines must run once to create fresh standard status files
+    for MSRP dryrun/ingest; Hermes still falls back to legacy scheduled status until
+    then.
+  - The seed is intentionally narrow; broader canonical feature evidence should still
+    live in registries and dev events.
+  - Production DevSync runtime registry will stop warning after this deploy because
+    Sentinel can hydrate tests from Kanban; any genuinely missing tests still remain
+    visible.
+  - Only auto-generated bookkeeping featureIds are filtered; real Hermes feature ids
+    such as hermes-devsync and hermes-chat-gateway remain registered.
+  - Server must be redeployed before production has deploy_release.json and the new
+    deploy probe
+  - If both deploy and DevSync cannot reach Tencent, server-side Hermes cannot infer
+    the latest GitHub commit
   nextSteps:
   - Run tests
   - Verify in Hermes UI Dev tab
@@ -310,8 +639,20 @@ features:
   - Wire Claude Code session end hook to auto-write dev events
   - Restore specific frontend/typecheck gates after pre-existing failures are fixed
   - Keep deploy workflows blocking
+  - Deploy and verify Sentinel Inbox pipeline notifications show details on cloud
+  - Deploy to Tencent cloud
+  - Verify /v1/hermes/pipeline/status and Sentinel pipeline findings
+  - Deploy and verify Sentinel devsync missing_tests clears online
+  - Deploy and verify /v1/hermes/sentinel/status no longer reports feature.current_price
+    or feature.review_workbench missing_tests
+  - Deploy and run DevSync once so production Sentinel retires existing auto-event
+    missing_tests gaps
+  - Deploy to Tencent
+  - Verify /v1/hermes/deploy/status
+  - Verify Sentinel Inbox receives production_commit_drift when expected and release
+    diverge
   createdAt: '2026-05-18T00:48:26.179851+00:00'
-  lastUpdatedAt: '2026-05-18T01:28:12.893019+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:38.072523+00:00'
   docs:
   - Markdown_Readme/features/hermes-devsync.md
 - featureId: feature.hermes_deploy_sentinel
@@ -319,11 +660,15 @@ features:
   status: implemented
   category: governance
   source: codex
-  summary: Tracks Tencent production release metadata against the latest GitHub commit
-    received by Hermes DevSync, so Sentinel can alert when production is still running
-    an older deployment after deploy-fullstack-tencent fails.
+  summary: Reconnected deploy release/expected commit tracking, added /hermes/deploy/status,
+    added Sentinel probe_deploy, expanded notification mailbox states, and updated
+    the Hermes UI to show a fixed-height searchable Sentinel Inbox with unread/read/archive/all
+    filters. Also added Hermes full design document reading and categorized diagram
+    filtering.
   linkedEventIds:
   - dev_evt_20260519_deploy_sentinel_inbox
+  - dev_evt_20260520_devsync_auto_event_noise_filter
+  - dev_evt_20260520_deploy_migration_idempotence
   endpoints:
   - GET /hermes/deploy/status
   - GET /hermes/sentinel/status
@@ -334,6 +679,10 @@ features:
   - Searchable fixed-height notification list
   - Diagram category filters
   - Hermes full design document reader
+  - Sentinel Inbox uses unread/read/archive/all filters with search and fixed-height
+    scrolling
+  - Hermes diagrams can be filtered by category
+  - Hermes full design document is readable in a collapsible bottom panel
   backend:
   - 06_AppPlatform/backend/app/services/hermes_deploy_status_service.py
   - 06_AppPlatform/backend/app/services/hermes_sentinel_service.py
@@ -341,21 +690,51 @@ features:
   - .github/workflows/deploy-fullstack-tencent.yml
   - .github/workflows/hermes-devsync.yml
   - 03_Scripts/ops/deploy_fullstack_server.sh
+  - Reused the existing _is_noisy_commit_feature_id path for feature normalization,
+    gap creation, and gap retirement
+  - Made Alembic role_upgrade_requests migration idempotent using SQLAlchemy inspector
+    and PostgreSQL IF NOT EXISTS indexes
+  - DevSync records expected deploy commits
+  - Deploy workflow writes hermes/deploy_release.json into the archive
+  - Sentinel deploy probe compares release and expected commits
+  - Notification records include action level, blocking flag, recommended action,
+    and mailbox states
   tests:
-    backendPytest: 85 passed (Hermes deploy status, Sentinel, routes, chat, DevSync)
+    backendPytest: Hermes/API focused tests pending
     frontendTsc: npm run check:types passed
+    pyCompile: role upgrade migration compiled
+    backendHermesPytest: 85 passed
+    workflowYaml: deploy-fullstack-tencent.yml and hermes-devsync.yml parsed
+    shellSyntax: deploy_fullstack_server.sh bash -n passed
   risks:
   - First production deploy is required before deploy_release.json exists on Tencent.
   - If both deploy-fullstack-tencent and hermes-devsync cannot reach the server, Hermes
     cannot learn the latest expected commit from production alone.
+  - Only auto-generated bookkeeping featureIds are filtered; real Hermes feature ids
+    such as hermes-devsync and hermes-chat-gateway remain registered.
+  - If production table schema differs from the migration definition, Alembic will
+    now advance without reconciling columns; current deploy log only showed DuplicateTable,
+    not schema mismatch.
+  - Server must be redeployed before production has deploy_release.json and the new
+    deploy probe
+  - If both deploy and DevSync cannot reach Tencent, server-side Hermes cannot infer
+    the latest GitHub commit
   nextSteps:
   - Deploy to Tencent once so production has hermes/deploy_release.json and the deploy
     probe code.
   - Verify /v1/hermes/deploy/status after deploy.
-  - Confirm Sentinel Inbox reports production_commit_drift if expected and release commits
-    diverge.
+  - Confirm Sentinel Inbox reports production_commit_drift if expected and release
+    commits diverge.
+  - Deploy and run DevSync once so production Sentinel retires existing auto-event
+    missing_tests gaps
+  - Run focused backend tests
+  - Push and verify deploy-fullstack-tencent reaches health checks
+  - Deploy to Tencent
+  - Verify /v1/hermes/deploy/status
+  - Verify Sentinel Inbox receives production_commit_drift when expected and release
+    diverge
   createdAt: '2026-05-19T00:00:00+08:00'
-  lastUpdatedAt: '2026-05-19T00:00:00+08:00'
+  lastUpdatedAt: '2026-05-29T06:03:24.464463+00:00'
   docs:
   - Markdown_Readme/features/feature.hermes_deploy_sentinel.md
 - featureId: feature.presence_websocket
@@ -369,6 +748,7 @@ features:
   linkedEventIds:
   - dev_evt_20260515_003
   - dev_evt_20260515_110251_d9f95e
+  - dev_evt_20260525_095736_404399
   endpoints:
   - POST /heartbeat
   - GET /online
@@ -384,6 +764,7 @@ features:
   - 06_AppPlatform/frontend/src/components/PresenceWidget.tsx
   - 06_AppPlatform/frontend/src/hooks/usePageTransition.ts
   - 06_AppPlatform/frontend/src/hooks/usePresence.ts
+  - 06_AppPlatform/frontend/src/components/CountryChatWidget.tsx
   backend:
   - Presence heartbeat endpoint enhancements
   - Engineering config availability updates
@@ -406,7 +787,7 @@ features:
   - Run tests
   - Verify in Hermes UI Dev tab
   createdAt: '2026-05-18T00:48:26.700403+00:00'
-  lastUpdatedAt: '2026-05-18T01:28:12.801666+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:37.803741+00:00'
   docs:
   - Markdown_Readme/features/feature.presence_websocket.md
 - featureId: feature.ui_animation_toolkit
@@ -440,7 +821,7 @@ features:
   - Run frontend type check and build
   - Verify online count badge in UI
   createdAt: '2026-05-18T00:48:26.783927+00:00'
-  lastUpdatedAt: '2026-05-18T01:28:11.969786+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:35.284535+00:00'
   docs:
   - Markdown_Readme/features/feature.ui_animation_toolkit.md
 - featureId: hermes-chat-gateway
@@ -492,7 +873,7 @@ features:
   - Run tests
   - Verify in Hermes UI Dev tab
   createdAt: '2026-05-18T00:48:26.945003+00:00'
-  lastUpdatedAt: '2026-05-18T01:28:12.243482+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:36.128232+00:00'
   docs:
   - Markdown_Readme/features/hermes-chat-gateway.md
 - featureId: feature.engineering
@@ -555,7 +936,7 @@ features:
   - Run tests
   - Verify in Hermes UI Dev tab
   createdAt: '2026-05-18T00:48:27.198103+00:00'
-  lastUpdatedAt: '2026-05-18T01:28:12.425562+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:36.658886+00:00'
   docs:
   - Markdown_Readme/features/feature.engineering.md
 - featureId: feature.country_copilot
@@ -579,17 +960,18 @@ features:
   - Wire contract tests into CI diagnostics
   - Expand only when a regression repeats
   createdAt: '2026-05-18T01:04:11.943713+00:00'
-  lastUpdatedAt: '2026-05-18T01:28:09.686559+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:28.511036+00:00'
   docs:
   - Markdown_Readme/features/feature.country_copilot.md
 - featureId: feature.hermes_ops_runner_control_plane
   title: Hermes Ops Runner Control Plane
   status: implemented
-  category: backend
+  category: governance
   source: codex
-  summary: Centralized Hermes script execution behind a controlled service with
-    HERMES_RUN_ENABLED feature flag, per-command role gate, cross-process lock,
-    secret redaction, activity logging, and evidence ledger entries.
+  summary: Centralized Hermes command execution in hermes_ops_runner_service.py with
+    HERMES_RUN_ENABLED, per-command route gating, cross-process lock, secret redaction,
+    activity log entries, and evidence ledger records. /hermes/run/{command} and /hermes/commands/execute
+    now share the same execution path.
   linkedEventIds:
   - dev_evt_20260520_ops_runner_control_plane
   endpoints:
@@ -602,16 +984,820 @@ features:
   - 06_AppPlatform/backend/app/services/hermes_ops_runner_service.py
   - 06_AppPlatform/backend/app/api/routes/hermes.py
   - 03_Scripts/deploy/systemd/jato-fullstack-backend.env.example
+  - Added centralized Ops Runner service
+  - Added runner feature flag, lock, secret redaction, activity logging, and evidence
+    logging
+  - Reused the runner from both Hermes execution endpoints
   tests:
     backendPytest: 71 passed (test_hermes_ops_runner_service.py, test_hermes_routes.py,
       test_hermes_chat.py)
+    pyCompile: hermes.py and hermes_ops_runner_service.py passed
   risks:
   - Runner remains a control-plane capability and should stay disabled in production
     when audit commands are not needed.
+  - Production must intentionally set HERMES_RUN_ENABLED; false keeps Hermes read-only,
+    true enables admin-triggered audit commands.
   nextSteps:
   - Deploy to Tencent only after deciding HERMES_RUN_ENABLED production value.
   - Verify activity_log.jsonl and evidence_ledger.jsonl receive redacted run records.
+  - Run full Hermes/JATO backend subset
+  - Verify production env value before deploy
   createdAt: '2026-05-20T00:00:00+08:00'
-  lastUpdatedAt: '2026-05-20T00:00:00+08:00'
+  lastUpdatedAt: '2026-05-29T06:03:23.896819+00:00'
   docs:
   - Markdown_Readme/features/feature.hermes_ops_runner_control_plane.md
+- featureId: feature.advanced_analysis
+  title: Advanced Analysis
+  status: implemented
+  category: governance
+  source: claude_code
+  summary: 'New Advanced Analysis page as a standalone sub-page under MarketScan MegaMenu.
+
+
+    Backend:
+
+    - New advanced_analysis_service.py with 6 functions: build_fact_sales_monthly
+    (wide-to-long), compute_kpi_table (YoY/MoM/YTD/R12/share), compute_shift_share_decomposition
+    (dV = s0*dM + M0*ds + ds*dM), compute_cell_attribution (segment x channel x drive
+    heatmap), compute_seasonal_decomposition (STL), compute_probabilistic_transfer_matrix
+    (Sankey input)
+
+    - New route /v1/advanced-analysis with 5 endpoints: /kpi, /shift-share, /seasonal,
+    /cell-attribution, /transfer-matrix
+
+    - Reuses existing ColumnMap and parquet_repository patterns from market_scan_service
+
+
+    Frontend:
+
+    - New AdvancedAnalysisPage.tsx with 3 tabs: KPI Overview (trend + YoY chart +
+    table), Shift-Share (waterfall + winner/loser tables), Cell Attribution (heatmap
+    + table)
+
+    - Country selector, period input, refresh controls
+
+    - MarketScan MegaMenu converted from ''link'' to ''mega'' dropdown exposing all
+    sub-pages including Advanced Analysis
+
+    - New /market/advanced-analysis route with lazy loading
+
+    - TypeScript types in advancedAnalysis.ts
+
+
+    Phase 1 of the deep research report implementation plan.'
+  linkedEventIds:
+  - dev_evt_20260529_120000_aa01
+  - dev_evt_20260529_120100_aa02
+  - dev_evt_20260529_120200_aa03
+  - dev_evt_20260529_120300_aa04
+  endpoints:
+  - POST /v1/advanced-analysis/kpi
+  - POST /v1/advanced-analysis/shift-share
+  - POST /v1/advanced-analysis/seasonal
+  - POST /v1/advanced-analysis/cell-attribution
+  - POST /v1/advanced-analysis/transfer-matrix
+  - DELETE /v1/advanced-analysis/cache
+  - POST /v1/advanced-analysis/nested-shift-share
+  - POST /v1/advanced-analysis/drilldown
+  frontend:
+  - 06_AppPlatform/frontend/src/types/advancedAnalysis.ts
+  - 06_AppPlatform/frontend/src/pages/AdvancedAnalysisPage.tsx
+  - 06_AppPlatform/frontend/src/utils/pageNavigation.ts
+  - 06_AppPlatform/frontend/src/App.tsx
+  backend:
+  - 06_AppPlatform/backend/app/api/schemas.py
+  - 06_AppPlatform/backend/app/services/advanced_analysis_service.py
+  - 06_AppPlatform/backend/app/api/routes/advanced_analysis.py
+  - 06_AppPlatform/backend/app/main.py
+  tests:
+    tsc: pass (no errors in new files, pre-existing errors in DashboardPage/OrderGeniusPage
+      only)
+    playwright: pass (5 tabs, sub-modes, dashboard mode all render)
+  risks:
+  - Service not yet tested against live parquet data - backend restart needed to load
+    new route
+  - STL decomposition requires statsmodels package (graceful error if missing)
+  - DeckPeriodTimeline not used - replaced with simple text input for period selection
+    (less UX polish, fully functional)
+  - Sankey and heatmap Plotly trace types required 'as unknown as Data[]' cast due
+    to strict @types/plotly.js
+  - Nested shift-share endpoint is computationally heavy for deep hierarchies + many
+    models
+  - statsmodels STL import is optional - graceful error if missing
+  - Drill-down requires correct segment/reg/drive value formatting (spaces not hyphens)
+  - Deep filtering may produce empty results if exact combination doesn't exist in
+    data
+  nextSteps:
+  - Restart backend or hot-reload to register new route
+  - Navigate to /market/advanced-analysis and verify tabs render
+  - Test with real data for Sweden, period 2025-01
+  - Write backend unit tests for shift-share decomposition
+  - Navigate to /market/advanced-analysis and test all 5 tabs with live data
+  - Consider adding model/segment filter inputs to Seasonal tab for drill-down decomposition
+  - Deploy and test with real Sweden data
+  - 'Phase 3: Panel FE regression (linearmodels.PanelOLS)'
+  - 'Phase 3: Counterfactual prediction + residual attribution'
+  - 'Test with real analysts: Sweden -> SUV A0 -> Private -> 4WD -> model level'
+  - Add 'Skip to Models' button for early model-level analysis
+  - Consider adding powertrain fuel-type chip filter in the filter drawer
+  createdAt: '2026-05-29T03:58:32.893435+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:01.682612+00:00'
+  docs:
+  - Markdown_Readme/features/feature.advanced_analysis.md
+- featureId: feature.permission_management
+  title: Permission Management
+  status: implemented
+  category: governance
+  source: codex
+  summary: Proposed app/core/permissions.py with FUNCTION_PERMISSIONS dict mapping
+    feature names to minimum roles. Route files call require_permission('feature.name')
+    instead of require_min_role('editor'). One-file edit to change permissions. 12
+    feature groups covered.
+  linkedEventIds:
+  - dev_evt_20260525_052800_perm2
+  endpoints: []
+  frontend: []
+  backend: []
+  tests: {}
+  risks: []
+  nextSteps:
+  - Create app/core/permissions.py
+  - Replace require_min_role() calls in route files
+  createdAt: '2026-05-29T03:58:33.843420+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:03.559655+00:00'
+  docs:
+  - Markdown_Readme/features/feature.permission_management.md
+- featureId: chore-hermes-sync
+  title: Chore Hermes Sync
+  status: implemented
+  category: governance
+  source: git_commit
+  summary: 'chore: hermes sync'
+  linkedEventIds:
+  - dev_evt_20260521_104029_971685
+  endpoints: []
+  frontend: []
+  backend: []
+  tests: {}
+  risks:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  nextSteps:
+  - Run tests
+  - Verify in Hermes UI Dev tab
+  createdAt: '2026-05-29T03:58:35.820111+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:07.408132+00:00'
+  docs:
+  - Markdown_Readme/features/chore-hermes-sync.md
+- featureId: order_genius
+  title: Order Genius
+  status: implemented
+  category: frontend
+  source: claude_code
+  summary: 'Added fullstack Order Genius module: (1) ordering schema with 8 tables
+    (material_baseline_version, material_sku_master, country_payment_term_master,
+    payment_term_price_rule, brand_colour_surcharge_rule, country_sku_fob_resolved,
+    order_quantity_cell, material_sku_remark_history), (2) XLSX upload/parse/preview/publish
+    flow with chunk upload, (3) FOB resolution with payment term adjustments and colour
+    surcharges, (4) Order Genius matrix API with options/matrix/quantity-cell/remark
+    endpoints, (5) Excel export with per-powertrain sheets, (6) React frontend page
+    with filter bar, editable grid, and upload panel.'
+  linkedEventIds:
+  - dev_evt_20260521_091139_bf27d3
+  endpoints: []
+  frontend: []
+  backend: []
+  tests:
+    ? 'Backend: 66 unit tests pass (1 pre-existing failure unrelated). Frontend: TypeScript
+      compilation passes for new code (2 pre-existing errors in JatoMonthlyUpdatePage).
+      FastAPI app loads with 17 Order Genius routes registered.'
+    : recorded in feature_registry.yaml
+  risks: []
+  nextSteps: []
+  createdAt: '2026-05-29T03:58:36.094888+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:07.677615+00:00'
+  docs:
+  - Markdown_Readme/features/order_genius.md
+- featureId: feature.hermes_sentinel
+  title: 'feat(jato): add monthly update recheck and cancel controls'
+  status: implemented
+  category: backend
+  source: claude_code
+  summary: 'Added probe_pipeline_failures() to Hermes Sentinel Governor, the only
+    module that proactively alerts.
+
+
+    Checks:
+
+    - scheduled_fetch_status.json exists and is readable
+
+    - All 5 expected pipelines (news, voc, msrp_dryrun, msrp_ingest, jato_etl) have
+    status entries
+
+    - Per-pipeline failure detection (critical for msrp_ingest, high for others)
+
+    - Degraded pipeline detection (medium, partial success)
+
+    - Pipeline staleness (daily: 30h threshold, weekly ingest: 192h)
+
+    - source_quality_report.json freshness (<24h)
+
+
+    Also added:
+
+    - Intelligence Governor daily timer: hermes-source-quality.timer (06:10 UTC)
+
+    - News Batch B systemd timer: jato-country-news-sync-b.timer (23:45 UTC)
+
+    - Systemd unit files in 03_Scripts/deploy/systemd/'
+  linkedEventIds:
+  - dev_evt_20260521_062858_jato_cancel_recheck
+  - dev_evt_20260521_035118_marketscan_cache
+  - dev_evt_20260520_devsync_curated_seed_overlay
+  - dev_evt_20260520_devsync_preserve_curated_tests
+  - dev_evt_20260520_voc_failure_tracking_closure
+  - dev_evt_20260520_source_quality_registry_scoring
+  - dev_evt_20260520_sentinel_pipeline_probes
+  endpoints:
+  - POST /v1/msrp/monthly-update-jobs/{job_id}/recheck
+  - POST /v1/msrp/monthly-update-jobs/{job_id}/cancel
+  frontend:
+  - JATO Monthly Update Job Detail now shows 刷新查验 and 终止任务 controls plus runtime process/recheck
+    details.
+  - 06_AppPlatform/frontend/src/pages/MarketScanPage.tsx
+  backend:
+  - JATO monthly update service now persists currentProcess for subprocesses, rechecks
+    stale running jobs, terminates process groups on cancel, and keeps cancelled jobs
+    outside the publish path.
+  - 06_AppPlatform/backend/app/services/jato_monthly_update_service.py
+  - 06_AppPlatform/backend/app/services/market_scan_cache.py
+  - 06_AppPlatform/backend/app/services/market_scan_service.py
+  - Added curated evidence seed for feature.current_price and feature.review_workbench
+  - DevSync hydration now works even when Kanban runtime registry is empty or damaged
+  - /hermes/features overlays curated docs/tests/backendApis for the two seeded legacy
+    features
+  - DevSync list_features hydrates missing docs/tests from curated Kanban feature
+    registry
+  - _sync_to_kanban preserves curated docs/tests/backendApis/knownIssues when DevSync
+    event fields are empty
+  - Current Price feature registry now records backend and frontend test references
+  - VOC runner now writes real failedCount/failureCount into scheduled_fetch_status.json
+  - Sentinel pipeline probe treats partial_success as degraded for backward compatibility
+  - Source Quality Governor treats partial_success as degraded runtime status
+  - Hermes source quality script now maps runtime status entries to sources and supports
+    --write-registry
+  - Country news runner supports JATO_COUNTRY_NEWS_STATUS_KEY so Batch B no longer
+    overwrites Batch A status
+  - Added probe_pipeline_failures() to Hermes Sentinel service
+  - Added focused unit coverage for pipeline failure probes
+  - Updated MSRP dry run and ingest scripts to write scheduled_fetch_status.json entries
+  - Updated deploy script to install and restart Batch B and source-quality timers
+  tests:
+    backend: 34 passed (test_hermes_sentinel.py + test_hermes_devsync.py)
+    frontend: npm run check:types && npm run build
+    syntax: py_compile passed for sentinel and MSRP batch scripts; bash -n passed
+      for deploy script
+    jsonl: hermes/dev_events/dev_events.jsonl and hermes/evidence_ledger.jsonl valid
+    compile: PYTHONPATH=. ../../.venv/bin/python -m py_compile app/services/market_scan_cache.py
+      app/services/market_scan_service.py app/services/jato_monthly_update_service.py
+    ops: 2 passed (VOC failure summary helper)
+    data: source_registry.yaml and governance_gaps.yaml parse; source_quality_report.json
+      parses
+  risks:
+  - Cancel can kill tracked subprocess groups; direct in-thread validation remains
+    best-effort until it reaches a cancellation checkpoint.
+  - MarketScan first request after a real JATO publish still performs one cold compute;
+    Redis/local warm path should be fast after that.
+  - The seed is intentionally narrow; broader canonical feature evidence should still
+    live in registries and dev events.
+  - Production DevSync runtime registry will stop warning after this deploy because
+    Sentinel can hydrate tests from Kanban; any genuinely missing tests still remain
+    visible.
+  - Gap remains in_progress until the next production VOC scheduled run proves voc-failed-sources.json
+    contains live per-source errors.
+  - Source quality rates remain deterministic estimates from available counts and
+    known issues; detailed per-source crawler error types still depend on future runner
+    output.
+  - Sentinel probe may generate notifications until msrp pipeline runs write status
+    file
+  nextSteps:
+  - Deploy to cloud
+  - Use UI recheck on jato-update-dc0fd9ed, then cancel if still running before creating
+    2026-04-r2
+  - Deploy and verify /v1/hermes/deploy/status
+  - After next JATO publish, inspect job publication.cacheInvalidation and Hermes
+    evidence ledger
+  - Deploy and verify Sentinel devsync missing_tests clears online
+  - Deploy and verify /v1/hermes/sentinel/status no longer reports feature.current_price
+    or feature.review_workbench missing_tests
+  - Deploy and verify /v1/hermes/sentinel/status still reports deploy ok
+  - After next VOC timer run, inspect 03_Scripts/logs/voc-failed-sources.json and
+    close gap.source_quality.voc_errors_untracked if populated
+  - Deploy and verify /v1/hermes/source-quality generatedAt is current
+  - Confirm next Batch B news run writes news_batch_b in scheduled_fetch_status.json
+  - Deploy and verify pipeline_failures probe appears in /v1/hermes/sentinel/status
+  - Confirm production systemd timers are enabled after deploy
+  - Verify msrp_dryrun/msrp_ingest entries appear in scheduled_fetch_status.json after
+    next scheduled run
+  createdAt: '2026-05-29T03:58:36.646340+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:20.396435+00:00'
+  docs:
+  - Markdown_Readme/features/feature.hermes_sentinel.md
+- featureId: chore-retry-deploy
+  title: Chore Retry Deploy
+  status: implemented
+  category: governance
+  source: git_commit
+  summary: 'chore: retry deploy'
+  linkedEventIds:
+  - dev_evt_20260521_040532_0b18f6
+  endpoints: []
+  frontend: []
+  backend: []
+  tests: {}
+  risks:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  nextSteps:
+  - Run tests
+  - Verify in Hermes UI Dev tab
+  createdAt: '2026-05-29T03:58:37.451033+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:09.805750+00:00'
+  docs:
+  - Markdown_Readme/features/chore-retry-deploy.md
+- featureId: chore-record-coc-match-dev-event
+  title: Chore Record Coc Match Dev Event
+  status: implemented
+  category: governance
+  source: git_commit
+  summary: 'chore: record coc-match dev event'
+  linkedEventIds:
+  - dev_evt_20260521_023755_2b5452
+  endpoints: []
+  frontend: []
+  backend: []
+  tests: {}
+  risks:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  nextSteps:
+  - Run tests
+  - Verify in Hermes UI Dev tab
+  createdAt: '2026-05-29T03:58:38.949833+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:12.193126+00:00'
+  docs:
+  - Markdown_Readme/features/chore-record-coc-match-dev-event.md
+- featureId: chore-hermes-record-sentinel-inbox-dev-event
+  title: 'chore(hermes): record sentinel inbox dev event'
+  status: implemented
+  category: governance
+  source: git_commit
+  summary: 'chore(hermes): record sentinel inbox dev event'
+  linkedEventIds:
+  - dev_evt_20260521_010813_6c1ee6
+  endpoints: []
+  frontend: []
+  backend: []
+  tests: {}
+  risks:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  nextSteps:
+  - Run tests
+  - Verify in Hermes UI Dev tab
+  createdAt: '2026-05-29T03:58:39.264710+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:12.461490+00:00'
+  docs:
+  - Markdown_Readme/features/chore-hermes-record-sentinel-inbox-dev-event.md
+- featureId: feature.data_management
+  title: 'feat(hermes): show pipeline status details in Sentinel Inbox'
+  status: implemented
+  category: governance
+  source: codex
+  summary: Extended Sentinel notification context with pipeline status fields and
+    rendered compact pipeline details inside Sentinel Inbox cards. The fixed-height
+    searchable inbox layout remains unchanged; pipeline notifications now show pipelineId,
+    status, lastRunAt, failed/warning counts, and artifact refs.
+  linkedEventIds:
+  - dev_evt_20260521_010458_pipeline_inbox_detail
+  endpoints: []
+  frontend:
+  - 'DataManagementPage.tsx: Sentinel Inbox notification cards render compact pipeline
+    detail fields from notification.context'
+  backend:
+  - Sentinel notifications include pipeline, statusRecord, lastRunAt, failedCount,
+    warningCount, artifactRefs, pipelineStatus, and statusPath context
+  tests:
+    backend: '65 passed: test_hermes_sentinel.py, test_hermes_routes.py'
+    frontend: npm run check:types passed; npm run build passed
+    syntax: py_compile passed for hermes_sentinel_service.py
+  risks:
+  - Existing notifications emitted before this change will not have enriched context
+    until Sentinel emits a fresh pipeline notification.
+  nextSteps:
+  - Deploy and verify Sentinel Inbox pipeline notifications show details on cloud
+  createdAt: '2026-05-29T03:58:39.721577+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:13.069270+00:00'
+  docs:
+  - 04_DevOps/TENCENT_CLOUD_DEPLOY.md
+  - Markdown_Readme/features/feature.data_management.md
+- featureId: feat-upload-toolkit-redis-progress-callback-factor
+  title: 'feat(upload-toolkit): Redis progress callback factory'
+  status: implemented
+  category: governance
+  source: git_commit
+  summary: 'feat(upload-toolkit): Redis progress callback factory
+
+    make_redis_progress_callback(redis_client, ttl=900) returns an
+
+    on_progress hook that keeps the upload session alive in Redis via
+
+    SETEX. Caller passes the Redis client — no hardcoded host/port.'
+  linkedEventIds:
+  - dev_evt_20260520_202113_aad4e7
+  endpoints: []
+  frontend: []
+  backend: []
+  tests: {}
+  risks:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  nextSteps:
+  - Run tests
+  - Verify in Hermes UI Dev tab
+  createdAt: '2026-05-29T03:58:40.771629+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:14.543561+00:00'
+  docs:
+  - Markdown_Readme/features/feat-upload-toolkit-redis-progress-callback-factor.md
+- featureId: feat-upload-toolkit-thread-safety-stale-cleanup-st
+  title: Feat Upload Toolkit Thread Safety Stale Cleanup St
+  status: implemented
+  category: governance
+  source: git_commit
+  summary: 'feat(upload-toolkit): thread safety, stale cleanup, streaming hash, tests
+
+    - Thread safety: _WRITE_LOCK protects concurrent receive_chunk/complete
+
+    - Stale cleanup: cleanup_expired_sessions(max_age_days=90)
+
+    - Streaming hash: sha256_hex_for_path reads in 64KB chunks
+
+    - Progress callback: optional on_progress hook on receive_chunk/complete
+
+    - Tests: 19 tests covering session lifecycle, chunk upload, cleanup'
+  linkedEventIds:
+  - dev_evt_20260520_201808_b875a2
+  endpoints: []
+  frontend: []
+  backend: []
+  tests: {}
+  risks:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  nextSteps:
+  - Run tests
+  - Verify in Hermes UI Dev tab
+  createdAt: '2026-05-29T03:58:41.093362+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:14.899789+00:00'
+  docs:
+  - Markdown_Readme/features/feat-upload-toolkit-thread-safety-stale-cleanup-st.md
+- featureId: feat-extract-upload-toolkit-reusable-chunked-uploa
+  title: Feat Extract Upload Toolkit Reusable Chunked Uploa
+  status: implemented
+  category: governance
+  source: git_commit
+  summary: "feat: extract upload toolkit — reusable chunked upload + job engine\n\
+    New 03_Scripts/upload_toolkit/ package with three modules:\n- file_utils.py: SHA-256\
+    \ hashing, file validation, atomic JSON I/O\n- upload_engine.py: chunked upload\
+    \ sessions with resume, chunk\n  verification, and assembly\n- job_engine.py:\
+    \ job state machine, background thread runner,\n  BaseJobRunner abstract class,\
+    \ log utilities\n\nDomain-agnostic. JATO code unchanged."
+  linkedEventIds:
+  - dev_evt_20260520_195414_549e7e
+  endpoints: []
+  frontend: []
+  backend: []
+  tests: {}
+  risks:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  nextSteps:
+  - Run tests
+  - Verify in Hermes UI Dev tab
+  createdAt: '2026-05-29T03:58:41.394357+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:15.174023+00:00'
+  docs:
+  - Markdown_Readme/features/feat-extract-upload-toolkit-reusable-chunked-uploa.md
+- featureId: hermes-intelligence-governor
+  title: Hermes Intelligence Governor
+  status: implemented
+  category: backend
+  source: claude_code
+  summary: 'Fusion upgrade across 5 layers — no new crawler, no new registry, no bypass
+    of existing architecture.
+
+
+    Phase 1-3: batch_dryrun.py + batch_ingest.py
+
+    - classify_dryrun_failure(): taxonomy of 12 failure reasons (http_timeout, forbidden_403,
+    selector_empty, js_required, json_ld_empty, etc.)
+
+    - Each dryrun result now includes failureReason + recommendedStrategy + severity
+
+    - Dryrun report upgraded to schemaVersion=v2 with failureBreakdown and strategyRecommendations
+
+    - Status file passPct-based 3-state logic: >=90 success, >=50 degraded, <50 failure
+
+    - batch_ingest.py okPct same 3-state logic
+
+
+    Phase 4: hermes_source_quality.py
+
+    - Reads latest dryrun artifact for source-level failure breakdown
+
+    - Generates sourceLevelFindings in JSON and Markdown reports
+
+    - Adds MSRP Source-Level Failure Breakdown table to quality report
+
+
+    Phase 5: hermes/source_registry.yaml
+
+    - Extended 3 MSRP sources with strategyProfile (discovery/acquisition/extraction/ingestPolicy)
+
+    - Added runtimeDiagnostics with artifact path and taxonomy version'
+  linkedEventIds:
+  - dev_evt_20260521_fusion_upgrade
+  endpoints: []
+  frontend: []
+  backend:
+  - 06_AppPlatform/backend/app/services/hermes_sentinel_service.py
+  tests: {}
+  risks:
+  - Failed sources in dryrun now classified and visible — may surface previously silent
+    problems
+  nextSteps:
+  - Verify 03:30 dryrun writes v2 report with failureReason fields
+  - Verify source quality report includes source-level findings
+  createdAt: '2026-05-29T03:58:42.332382+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:16.357035+00:00'
+  docs:
+  - Markdown_Readme/features/hermes-intelligence-governor.md
+- featureId: hermes-pipeline-governor
+  title: Hermes Pipeline Governor
+  status: implemented
+  category: governance
+  source: claude_code
+  summary: 'Diagnosed MSRP ingest all-12-country failure root cause: batch_ingest.py
+    auto-resolve POST to backend returned 502 (transient), no retry logic, no status
+    file written. Also fixed batch_dryrun.py status coverage and STOP_ON_FAILURE default.
+
+
+    Changes:
+
+    - batch_ingest.py: _post_backend_json now retries 3x on 502/503/504/connection
+    errors
+
+    - batch_ingest.py: writes msrp_ingest status to scheduled_fetch_status.json
+
+    - batch_dryrun.py: writes msrp_dryrun status to scheduled_fetch_status.json
+
+    - run_msrp_low_concurrency.sh: STOP_ON_FAILURE default changed to false
+
+    - Playwright chromium browser installed on production server
+
+
+    Before: scheduled_fetch_status.json only covered news+voc. msrp invisible to Pipeline
+    Governor.
+
+    After: msrp_dryrun and msrp_ingest status written on every run, with retry resilience.'
+  linkedEventIds:
+  - dev_evt_20260521_fusion_upgrade
+  - dev_evt_20260520_voc_failure_tracking_closure
+  - dev_evt_20260520_source_quality_registry_scoring
+  - dev_evt_20260520_sentinel_pipeline_probes
+  - dev_evt_20260520_msrp_ingest_fix
+  endpoints: []
+  frontend: []
+  backend:
+  - 06_AppPlatform/backend/app/services/hermes_sentinel_service.py
+  - VOC runner now writes real failedCount/failureCount into scheduled_fetch_status.json
+  - Sentinel pipeline probe treats partial_success as degraded for backward compatibility
+  - Source Quality Governor treats partial_success as degraded runtime status
+  - Hermes source quality script now maps runtime status entries to sources and supports
+    --write-registry
+  - Country news runner supports JATO_COUNTRY_NEWS_STATUS_KEY so Batch B no longer
+    overwrites Batch A status
+  - Added probe_pipeline_failures() to Hermes Sentinel service
+  - Added focused unit coverage for pipeline failure probes
+  - Updated MSRP dry run and ingest scripts to write scheduled_fetch_status.json entries
+  - Updated deploy script to install and restart Batch B and source-quality timers
+  tests:
+    backend: 34 passed (test_hermes_sentinel.py + test_hermes_devsync.py)
+    ops: 2 passed (VOC failure summary helper)
+    syntax: py_compile passed for sentinel and MSRP batch scripts; bash -n passed
+      for deploy script
+    data: source_registry.yaml and governance_gaps.yaml parse; source_quality_report.json
+      parses
+  risks:
+  - Failed sources in dryrun now classified and visible — may surface previously silent
+    problems
+  - Gap remains in_progress until the next production VOC scheduled run proves voc-failed-sources.json
+    contains live per-source errors.
+  - Source quality rates remain deterministic estimates from available counts and
+    known issues; detailed per-source crawler error types still depend on future runner
+    output.
+  - Sentinel probe may generate notifications until msrp pipeline runs write status
+    file
+  - batch_ingest.py retry increases timeout from 60s to 120s per attempt, max 3 attempts
+  - STOP_ON_FAILURE default changed from true to false; dryrun may take longer but
+    all countries run
+  - Status file is overwritten (merge with existing) not locked; concurrent writes
+    may race
+  nextSteps:
+  - Verify 03:30 dryrun writes v2 report with failureReason fields
+  - Verify source quality report includes source-level findings
+  - Deploy and verify /v1/hermes/sentinel/status still reports deploy ok
+  - After next VOC timer run, inspect 03_Scripts/logs/voc-failed-sources.json and
+    close gap.source_quality.voc_errors_untracked if populated
+  - Deploy and verify /v1/hermes/source-quality generatedAt is current
+  - Confirm next Batch B news run writes news_batch_b in scheduled_fetch_status.json
+  - Deploy and verify pipeline_failures probe appears in /v1/hermes/sentinel/status
+  - Confirm production systemd timers are enabled after deploy
+  - Verify msrp_dryrun/msrp_ingest entries appear in scheduled_fetch_status.json after
+    next scheduled run
+  - Monitor next MSRP nightly dryrun for status file output
+  - Monitor next MSRP weekly ingest (Saturday) for auto-resolve fix
+  - Verify msrp entries appear in scheduled_fetch_status.json after next run
+  createdAt: '2026-05-29T03:58:42.633910+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:22.420179+00:00'
+  docs:
+  - Markdown_Readme/features/hermes-pipeline-governor.md
+- featureId: feature.msrp_workbench
+  title: Msrp Workbench
+  status: implemented
+  category: governance
+  source: claude_code
+  summary: 'Diagnosed MSRP ingest all-12-country failure root cause: batch_ingest.py
+    auto-resolve POST to backend returned 502 (transient), no retry logic, no status
+    file written. Also fixed batch_dryrun.py status coverage and STOP_ON_FAILURE default.
+
+
+    Changes:
+
+    - batch_ingest.py: _post_backend_json now retries 3x on 502/503/504/connection
+    errors
+
+    - batch_ingest.py: writes msrp_ingest status to scheduled_fetch_status.json
+
+    - batch_dryrun.py: writes msrp_dryrun status to scheduled_fetch_status.json
+
+    - run_msrp_low_concurrency.sh: STOP_ON_FAILURE default changed to false
+
+    - Playwright chromium browser installed on production server
+
+
+    Before: scheduled_fetch_status.json only covered news+voc. msrp invisible to Pipeline
+    Governor.
+
+    After: msrp_dryrun and msrp_ingest status written on every run, with retry resilience.'
+  linkedEventIds:
+  - dev_evt_20260521_fusion_upgrade
+  - dev_evt_20260520_sentinel_pipeline_probes
+  - dev_evt_20260520_msrp_ingest_fix
+  endpoints: []
+  frontend: []
+  backend:
+  - 06_AppPlatform/backend/app/services/hermes_sentinel_service.py
+  - Added probe_pipeline_failures() to Hermes Sentinel service
+  - Added focused unit coverage for pipeline failure probes
+  - Updated MSRP dry run and ingest scripts to write scheduled_fetch_status.json entries
+  - Updated deploy script to install and restart Batch B and source-quality timers
+  tests:
+    'Backend: test_msrp_admin_service.py': recorded in feature_registry.yaml
+    'Backend: test_msrp_workflow_service.py': recorded in feature_registry.yaml
+    'Backend: test_msrp_mapping_service.py': recorded in feature_registry.yaml
+    backend: 34 passed (test_hermes_sentinel.py + test_hermes_devsync.py)
+    syntax: py_compile passed for sentinel and MSRP batch scripts; bash -n passed
+      for deploy script
+  risks:
+  - Failed sources in dryrun now classified and visible — may surface previously silent
+    problems
+  - Sentinel probe may generate notifications until msrp pipeline runs write status
+    file
+  - batch_ingest.py retry increases timeout from 60s to 120s per attempt, max 3 attempts
+  - STOP_ON_FAILURE default changed from true to false; dryrun may take longer but
+    all countries run
+  - Status file is overwritten (merge with existing) not locked; concurrent writes
+    may race
+  nextSteps:
+  - Verify 03:30 dryrun writes v2 report with failureReason fields
+  - Verify source quality report includes source-level findings
+  - Deploy and verify pipeline_failures probe appears in /v1/hermes/sentinel/status
+  - Confirm production systemd timers are enabled after deploy
+  - Verify msrp_dryrun/msrp_ingest entries appear in scheduled_fetch_status.json after
+    next scheduled run
+  - Monitor next MSRP nightly dryrun for status file output
+  - Monitor next MSRP weekly ingest (Saturday) for auto-resolve fix
+  - Verify msrp entries appear in scheduled_fetch_status.json after next run
+  createdAt: '2026-05-29T03:58:42.992283+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:21.583511+00:00'
+  docs:
+  - MSRP/README.md
+  - MSRP/01_Requirements/ through MSRP/05_Backlog/ (16 docs)
+  - Markdown_Readme/features/feature.msrp_workbench.md
+- featureId: feature.current_price
+  title: Current Price
+  status: implemented
+  category: governance
+  source: claude_code
+  summary: 'Diagnosed MSRP ingest all-12-country failure root cause: batch_ingest.py
+    auto-resolve POST to backend returned 502 (transient), no retry logic, no status
+    file written. Also fixed batch_dryrun.py status coverage and STOP_ON_FAILURE default.
+
+
+    Changes:
+
+    - batch_ingest.py: _post_backend_json now retries 3x on 502/503/504/connection
+    errors
+
+    - batch_ingest.py: writes msrp_ingest status to scheduled_fetch_status.json
+
+    - batch_dryrun.py: writes msrp_dryrun status to scheduled_fetch_status.json
+
+    - run_msrp_low_concurrency.sh: STOP_ON_FAILURE default changed to false
+
+    - Playwright chromium browser installed on production server
+
+
+    Before: scheduled_fetch_status.json only covered news+voc. msrp invisible to Pipeline
+    Governor.
+
+    After: msrp_dryrun and msrp_ingest status written on every run, with retry resilience.'
+  linkedEventIds:
+  - dev_evt_20260520_msrp_ingest_fix
+  endpoints: []
+  frontend: []
+  backend: []
+  tests:
+    'Backend: test_msrp_lookup_service.py': recorded in feature_registry.yaml
+    'Frontend: msrpCurrentPrice.test.ts': recorded in feature_registry.yaml
+  risks:
+  - batch_ingest.py retry increases timeout from 60s to 120s per attempt, max 3 attempts
+  - STOP_ON_FAILURE default changed from true to false; dryrun may take longer but
+    all countries run
+  - Status file is overwritten (merge with existing) not locked; concurrent writes
+    may race
+  nextSteps:
+  - Monitor next MSRP nightly dryrun for status file output
+  - Monitor next MSRP weekly ingest (Saturday) for auto-resolve fix
+  - Verify msrp entries appear in scheduled_fetch_status.json after next run
+  createdAt: '2026-05-29T03:58:46.929439+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:21.854534+00:00'
+  docs:
+  - MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md
+  - Markdown_Readme/features/feature.current_price.md
+- featureId: feature.review_workbench
+  title: Review Workbench
+  status: implemented
+  category: governance
+  source: claude_code
+  summary: 'Diagnosed MSRP ingest all-12-country failure root cause: batch_ingest.py
+    auto-resolve POST to backend returned 502 (transient), no retry logic, no status
+    file written. Also fixed batch_dryrun.py status coverage and STOP_ON_FAILURE default.
+
+
+    Changes:
+
+    - batch_ingest.py: _post_backend_json now retries 3x on 502/503/504/connection
+    errors
+
+    - batch_ingest.py: writes msrp_ingest status to scheduled_fetch_status.json
+
+    - batch_dryrun.py: writes msrp_dryrun status to scheduled_fetch_status.json
+
+    - run_msrp_low_concurrency.sh: STOP_ON_FAILURE default changed to false
+
+    - Playwright chromium browser installed on production server
+
+
+    Before: scheduled_fetch_status.json only covered news+voc. msrp invisible to Pipeline
+    Governor.
+
+    After: msrp_dryrun and msrp_ingest status written on every run, with retry resilience.'
+  linkedEventIds:
+  - dev_evt_20260520_msrp_ingest_fix
+  endpoints: []
+  frontend: []
+  backend: []
+  tests:
+    'Backend: test_review_service.py': recorded in feature_registry.yaml
+    'Backend: test_review_workbench_service.py': recorded in feature_registry.yaml
+  risks:
+  - batch_ingest.py retry increases timeout from 60s to 120s per attempt, max 3 attempts
+  - STOP_ON_FAILURE default changed from true to false; dryrun may take longer but
+    all countries run
+  - Status file is overwritten (merge with existing) not locked; concurrent writes
+    may race
+  nextSteps:
+  - Monitor next MSRP nightly dryrun for status file output
+  - Monitor next MSRP weekly ingest (Saturday) for auto-resolve fix
+  - Verify msrp entries appear in scheduled_fetch_status.json after next run
+  createdAt: '2026-05-29T03:58:47.274681+00:00'
+  lastUpdatedAt: '2026-05-29T06:03:22.125072+00:00'
+  docs:
+  - MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md
+  - MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md
+  - Markdown_Readme/features/feature.review_workbench.md

@@ -17,42 +17,44 @@ from typing import Final
 
 # Order matters: longer / more-specific patterns MUST come first.
 _POWERTRAIN_PATTERNS: Final[list[tuple[str, str]]] = [
-    ("PHEV", "PHEV"),
+    # Order matters — exact/specific patterns before short ones
     ("PLUG-IN HYBRID", "PHEV"),
     ("PLUG IN HYBRID", "PHEV"),
+    ("PHEV", "PHEV"),
     ("SHS", "PHEV"),
-    ("MHEV", "MHEV"),
     ("MILD HYBRID", "MHEV"),
-    ("HEV", "HEV"),
+    ("MHEV", "MHEV"),
     ("HYBRID ELECTRIC VEHICLE", "HEV"),
-    ("EREV", "REEV"),
+    ("HEV", "HEV"),
     ("RANGE EXTENDED", "REEV"),
-    ("BEV", "EV"),
-    ("BATTERY ELECTRIC", "EV"),
-    ("FCEV", "FCV"),
+    ("EREV", "REEV"),
+    ("BATTERY ELECTRIC", "BEV"),
+    ("BEV", "BEV"),
+    ("ELECTRIC", "BEV"),
+    ("EV", "BEV"),
     ("FUEL CELL", "FCV"),
+    ("FCEV", "FCV"),
     ("LPG", "LPG"),
-    ("EV", "EV"),
-    ("ELECTRIC", "EV"),
-    ("ICE", "ICE"),
     ("COMBUSTION", "ICE"),
     ("PETROL", "ICE"),
     ("DIESEL", "ICE"),
     ("GASOLINE", "ICE"),
+    ("ICE", "ICE"),
 ]
 
-# Powertrain family → display color (for frontend product blocks)
+# Canonical powertrain → display color (used by frontend PT_COLORS)
 POWERTRAIN_COLORS: Final[dict[str, str]] = {
-    "EV": "#16a34a",
     "BEV": "#16a34a",
     "HEV": "#d97706",
     "PHEV": "#2563eb",
-    "SHS": "#2563eb",
     "MHEV": "#ca8a04",
     "ICE": "#4b5563",
     "LPG": "#6b7280",
     "REEV": "#0d9488",
     "FCV": "#0891b2",
+    # Legacy aliases
+    "EV": "#16a34a",
+    "SHS": "#2563eb",
 }
 
 

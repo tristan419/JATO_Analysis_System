@@ -101,6 +101,11 @@ class MaterialSkuMatrixRow(BaseModel):
     model_name: str
     version: str
     colour: str
+    colourCode: str | None = None
+    interiorColorName: str | None = None
+    interiorColourCode: str | None = None
+    interiorPackage: str | None = None
+    editionTag: str | None = None
     powertrain: str | None = None
     fob_eur: float | None = None
     lifecycle_status: str

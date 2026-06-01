@@ -11,7 +11,11 @@ import {
 } from "react";
 
 import { api } from "../api/client";
+import { useAuth } from "../contexts/AuthContext";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
+import type { CellValueChangedEvent } from "ag-grid-community";
+import { OrderGeniusGrid, type OrderGeniusGridRow } from "../components/OrderGeniusGrid";
+import { DeckFloatingDrawer } from "../components/deckControls/DeckFloatingDrawer";
 import type {
   CountryPaymentTerm,
   MaterialSkuMatrixRow,
@@ -20,6 +24,8 @@ import type {
   OrderGeniusOptions,
   PublishBaselineResponse,
   QuantityCellUpdate,
+  QuantityImportPreview,
+  QuantityImportResult,
 } from "../types/orderGenius";
 
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -39,11 +45,46 @@ function getErrorMessage(error: unknown): string {
 }
 
 export function OrderGeniusPage() {
+  const { user } = useAuth();
   const { allCountriesISO } = useResolvedCountry("iso");
+  const userCountries = (() => {
+    const codes = [...(user?.secondaryCountries ?? [])];
+    if (user?.primaryCountry && !codes.includes(user.primaryCountry)) {
+      codes.unshift(user.primaryCountry);
+    }
+    return codes;
+  })();
+  const isAdmin = user?.role === "admin";
   // ── Filter state ──────────────────────────────────────────────────
   const [countries, setCountries] = useState<CountryPaymentTerm[]>([]);
   const [selectedCountries, setSelectedCountries] = useState<string[]>(allCountriesISO);
   const primaryCountry = selectedCountries[0] ?? "SE";
+  const [countrySearchQuery, setCountrySearchQuery] = useState("");
+  const [countryPickerOpen, setCountryPickerOpen] = useState(false);
+  const countryPickerRef = useRef<HTMLDivElement | null>(null);
+
+  const searchedCountryOptions = useMemo(() => {
+    const q = countrySearchQuery.trim().toLowerCase();
+    let filtered = countries;
+    // Non-admin users only see their assigned countries
+    if (!isAdmin && userCountries.length > 0) {
+      filtered = countries.filter((c) => userCountries.includes(c.countryCode));
+    }
+    return filtered
+      .filter((c) => !q || c.countryName.toLowerCase().includes(q) || c.countryCode.toLowerCase().includes(q))
+      .map((c) => ({ value: c.countryCode, label: c.countryName }));
+  }, [countries, countrySearchQuery, isAdmin, userCountries]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (countryPickerRef.current && !countryPickerRef.current.contains(event.target as Node)) {
+        setCountryPickerOpen(false);
+        setCountrySearchQuery("");
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState<number | null>(null); // null = all months
   const [visibleColumns, setVisibleColumns] = useState({
@@ -57,6 +98,10 @@ export function OrderGeniusPage() {
   const [materialSearch, setMaterialSearch] = useState("");
   const [groupByProduct, setGroupByProduct] = useState(true);
   const [showPtAdmin, setShowPtAdmin] = useState(false);
+  const [showBomAdmin, setShowBomAdmin] = useState(false);
+  const [showDeck, setShowDeck] = useState(true);
+  const [consolidatedView, setConsolidatedView] = useState(false);
+  const [hideEmptyRows, setHideEmptyRows] = useState(false);
 
   const [options, setOptions] = useState<OrderGeniusOptions | null>(null);
   const [matrices, setMatrices] = useState<Record<string, MatrixResponse>>({});
@@ -75,10 +120,27 @@ export function OrderGeniusPage() {
   const [publishResult, setPublishResult] = useState<PublishBaselineResponse | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── Quantity editing ──────────────────────────────────────────────
-  const [editingCells, setEditingCells] = useState<Record<string, string>>({});
+  // ── Quantity import ────────────────────────────────────────────────
+  const [showQtyImport, setShowQtyImport] = useState(false);
+  const [qtyImportFile, setQtyImportFile] = useState<File | null>(null);
+  const [qtyImportPreview, setQtyImportPreview] = useState<QuantityImportPreview | null>(null);
+  const [qtyImportLoading, setQtyImportLoading] = useState(false);
+  const [qtyImportResult, setQtyImportResult] = useState<QuantityImportResult | null>(null);
+  const [qtyImportDragActive, setQtyImportDragActive] = useState(false);
+  const qtyImportInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Quantity editing state ───────────────────────────────────────
   const [savingCells, setSavingCells] = useState<Set<string>>(new Set());
   const [cellErrors, setCellErrors] = useState<Record<string, string>>({});
+  const gridApiRef = useRef<any>(null);
+  useEffect(() => {
+    if (gridApiRef.current) {
+      setTimeout(() => {
+        gridApiRef.current.refreshCells({ force: true });
+        gridApiRef.current.resetRowHeights();
+      }, 100);
+    }
+  }, [visibleColumns]);
 
   // ── Load countries ────────────────────────────────────────────────
   const countryInitDone = useRef(false);
@@ -175,6 +237,268 @@ export function OrderGeniusPage() {
     }
     return { rows: allRows, totalRows };
   }, [matrices, selectedCountries]);
+
+  // ── Grid data + cell editing ──────────────────────────────────────
+
+  const flatRows = ((): OrderGeniusGridRow[] => {
+    const makeRow = (r: MaterialSkuMatrixRow & { _countryCode?: string }): OrderGeniusGridRow => {
+      const row: OrderGeniusGridRow = {
+        materialCode: r.materialCode,
+        modelName: r.modelName,
+        version: r.version,
+        colour: r.colour,
+        interiorColorName: (r as any).interiorColorName,
+        fobEur: r.fobEur ?? null,
+        lifecycleStatus: r.lifecycleStatus,
+        editable: r.editable,
+        remark: r.remark,
+        _countryCode: (r as any)._countryCode,
+        _versions: {},
+        _errors: {},
+        _saving: new Set(),
+      } as any;
+      const months = r.months || {};
+      for (let m = 1; m <= 12; m++) {
+        const md = months[String(m)];
+        (row as any)[`month_${m}`] = md?.quantity ?? 0;
+        row._versions[`month_${m}`] = md?.rowVersion ?? 0;
+      }
+      return row;
+    };
+
+    // Extract canonical powertrain: model name is the authoritative source (DB field may be stale)
+    const canonPt = (row: MaterialSkuMatrixRow & { _countryCode?: string }): string => {
+      const rawPt = ((row as any).powertrain || "").toUpperCase();
+      const model = (row.modelName || "").toUpperCase();
+      const sheet = ((row as any).sheet_name || "").toUpperCase();
+      const combined = `${sheet} ${model} ${rawPt}`;
+      // Order matters: PHEV/SHS before HEV, BEV before EV
+      if (combined.includes("PHEV") || combined.includes("SHS") || combined.includes("PLUG")) return "PHEV";
+      if (combined.includes("MHEV") || combined.includes("MILD HYBRID")) return "MHEV";
+      if (combined.includes("REEV") || combined.includes("EREV") || combined.includes("RANGE EXTEND")) return "REEV";
+      if (combined.includes("FCEV") || combined.includes("FCV") || combined.includes("FUEL CELL")) return "FCV";
+      if (combined.includes("HEV") || combined.includes("HYBRID ELECTRIC")) return "HEV";
+      if (combined.includes("BEV") || combined.includes("BATTERY ELECTRIC")) return "BEV";
+      if (combined.includes("EV") || combined.includes("ELECTRIC")) return "BEV";
+      if (combined.includes("ICE") || combined.includes("PETROL") || combined.includes("DIESEL") || combined.includes("GASOLINE") || combined.includes("LPG") || combined.includes("COMBUSTION")) return "ICE";
+      return rawPt || "Other";
+    };
+
+    if (!groupByProduct) {
+      return combinedMatrix.rows.map(makeRow);
+    }
+
+    // Deduplicate by full row identity
+    const seen = new Set<string>();
+    const deduped: (MaterialSkuMatrixRow & { _countryCode?: string })[] = [];
+    for (const r of combinedMatrix.rows) {
+      const dk = `${(r as any)._countryCode || ""}|${r.materialCode}|${r.lifecycleStatus}|${r.modelName}|${r.version}|${r.colour}|${(r as any).interiorColorName || ""}`;
+      if (!seen.has(dk)) { seen.add(dk); deduped.push(r); }
+    }
+
+    // Group by: brand | modelName | version | canonicalPowertrain
+    const groups = new Map<string, (MaterialSkuMatrixRow & { _countryCode?: string })[]>();
+    for (const r of deduped) {
+      if (!r.modelName || !r.version) continue; // skip rows without core data
+      const pt = canonPt(r);
+      const brand = (r as any).brand || r.modelName?.split(" ")[0] || "";
+      const key = `${brand}|${r.modelName}|${r.version}|${pt}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(r);
+    }
+
+    const result: OrderGeniusGridRow[] = [];
+    for (const [groupKey, groupRows] of groups) {
+      if (groupRows.length === 0) continue;
+      const [brand, modelName, version, pt] = groupKey.split('|');
+      if (!modelName || !pt || pt === 'Other') continue;
+      const color = PT_COLORS[pt] ?? "#9ca3af";
+      // Sort: active rows first, then by colour
+      groupRows.sort((a, b) => {
+        if (a.lifecycleStatus !== b.lifecycleStatus) return a.lifecycleStatus === "active" ? -1 : 1;
+        return (a.colour || "").localeCompare(b.colour || "");
+      });
+      // Sum TTL for the group (from month data)
+      let groupTtl = 0;
+      for (const r of groupRows) {
+        const months = r.months || {};
+        for (let m = 1; m <= 12; m++) groupTtl += months[String(m)]?.quantity ?? 0;
+      }
+      // Group header row (use group key as materialCode so getRowId is unique)
+      const header: any = {
+        materialCode: `__grp_${groupKey.replace(/[^a-zA-Z0-9]/g, '_')}`,
+        modelName: `${brand} ${modelName} ${version}`,
+        version: "",
+        colour: "",
+        fobEur: null,
+        lifecycleStatus: "active",
+        editable: false,
+        remark: "",
+        _countryCode: (groupRows[0] as any)._countryCode,
+        _versions: {},
+        _errors: {},
+        _saving: new Set(),
+        __type: "groupHeader",
+        __groupLabel: `${brand} ${modelName} · ${pt} · ${groupRows.length} colours · ${groupTtl.toLocaleString()} units`,
+        __groupColor: color,
+      };
+      for (let m = 1; m <= 12; m++) header[`month_${m}`] = 0;
+      result.push(header);
+      // Child rows
+      for (const r of groupRows) {
+        result.push(makeRow(r));
+      }
+    }
+    return result;
+  })();
+
+  const cellKey = (materialCode: string, month: number) =>
+    `${materialCode}_${month}`;
+
+  // Stable refs so callback identity doesn't change on re-render (prevents grid flash)
+  const selCountriesRef = useRef(selectedCountries); selCountriesRef.current = selectedCountries;
+  const selYearRef = useRef(selectedYear); selYearRef.current = selectedYear;
+  const loadMatricesRef = useRef(loadMatrices); loadMatricesRef.current = loadMatrices;
+
+  const handleCellValueChanged = useCallback(
+    async (event: CellValueChangedEvent<OrderGeniusGridRow>) => {
+      const { data, colDef, newValue } = event;
+      const field = colDef.field as string;
+      if (!field?.startsWith("month_") || !data) return;
+      if (data.__type === "groupHeader") return;
+
+      const month = parseInt(field.replace("month_", ""), 10);
+      const key = cellKey(data.materialCode, month);
+      const oldQty = data._versions[field];
+      const qty = Number(newValue) || 0;
+
+      setSavingCells((prev) => new Set(prev).add(key));
+      setCellErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+
+      const countryCode = data._countryCode || selCountriesRef.current[0] || "SE";
+      const payload: QuantityCellUpdate = {
+        countryCode,
+        orderYear: selYearRef.current,
+        orderMonth: month,
+        materialCode: data.materialCode,
+        quantity: qty,
+        rowVersion: oldQty,
+      };
+
+      try {
+        const result = await api.updateQuantityCell(payload);
+        setMatrices((prev) => {
+          const target = prev[countryCode];
+          if (!target) return prev;
+          const rows = target.rows.map((r) => {
+            if (r.materialCode !== data.materialCode) return r;
+            const months = { ...r.months };
+            months[String(month)] = {
+              quantity: qty,
+              isEditable: true,
+              rowVersion: result.rowVersion,
+            };
+            const newTtl = Object.values(months).reduce((s, m) => s + m.quantity, 0);
+            return { ...r, months, ttl: newTtl };
+          });
+          return { ...prev, [countryCode]: { ...target, rows } };
+        });
+      } catch (err: unknown) {
+        const msg = getErrorMessage(err);
+        setCellErrors((prev) => ({ ...prev, [key]: msg }));
+        if (msg.toLowerCase().includes("conflict") || msg.includes("409")) {
+          loadMatricesRef.current();
+        }
+      } finally {
+        setSavingCells((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      }
+    },
+    [], // stable — all dynamic values via refs
+  );
+
+  // ── Consolidated planning view (multi-country) ──────────────────
+  const displayRows = useMemo(() => {
+    let filtered = flatRows.filter((r: any) => {
+      const modelOk = r.modelName?.trim() && !/^[\d\s]+$/.test(r.modelName?.trim() || '');
+      if (r.__type === "groupHeader") return modelOk && r.__groupLabel;
+      return modelOk;
+    });
+    // Hide empty rows and their parent group headers
+    if (hideEmptyRows) {
+      // Determine which months to check (single month or all)
+      const monthsToCheck = selectedMonth ? [selectedMonth] : Array.from({length:12},(_,i)=>i+1);
+      const rowHasData = (r: any) => monthsToCheck.some((m: number) => (r[`month_${m}`] || 0) > 0);
+      // Mark which group headers have data rows underneath
+      let currentGroupKey = "";
+      const activeGroups = new Set<string>();
+      for (const r of filtered) {
+        if (r.__type === "groupHeader") { currentGroupKey = r.__groupLabel || r.materialCode || ""; continue; }
+        if (r.__type === "consolidated_parent") continue;
+        if (rowHasData(r) && currentGroupKey) activeGroups.add(currentGroupKey);
+      }
+      // Keep only active groups and their data rows
+      filtered = filtered.filter((r: any) => {
+        if (r.__type === "groupHeader") {
+          const gk = r.__groupLabel || r.materialCode || "";
+          return activeGroups.has(gk);
+        }
+        if (r.__type === "consolidated_parent") return true;
+        return rowHasData(r);
+      });
+    }
+    if (!consolidatedView || selectedCountries.length <= 1) return filtered;
+
+    // Group by product identity (model+version+material), sum across countries
+    const groups = new Map<string, { parent: OrderGeniusGridRow; children: OrderGeniusGridRow[] }>();
+    for (const row of filtered) {
+      if (row.__type === "groupHeader") continue;
+      const key = `${row.modelName}|${row.version}|${row.materialCode}`;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          parent: {
+            ...row,
+            materialCode: row.materialCode,
+            modelName: row.modelName,
+            version: row.version,
+            _countryCode: "",
+            _saving: new Set(),
+            _errors: {},
+            __type: "consolidated_parent",
+          },
+          children: [],
+        });
+      }
+      const g = groups.get(key)!;
+      g.children.push(row);
+      // Sum month quantities
+      for (let m = 1; m <= 12; m++) {
+        g.parent[`month_${m}`] = (g.parent[`month_${m}`] || 0) + (row[`month_${m}`] || 0);
+      }
+    }
+
+    const result: OrderGeniusGridRow[] = [];
+    for (const [, g] of groups) {
+      const ttl = Array.from({ length: 12 }, (_, idx) => g.parent[`month_${idx + 1}`] || 0)
+        .reduce((sum, quantity) => sum + quantity, 0);
+      g.parent.__groupLabel = `${g.parent.modelName} · ${g.parent.version} · ${g.children.length} countries · TTL ${ttl}`;
+      result.push(g.parent);
+      if (g.children.length > 1) {
+        for (const child of g.children) {
+          child._indent = true;
+          result.push(child);
+        }
+      }
+    }
+    return result;
+  }, [flatRows, consolidatedView, selectedCountries, hideEmptyRows, selectedMonth]);
 
   // ── Upload handlers ───────────────────────────────────────────────
 
@@ -288,112 +612,112 @@ export function OrderGeniusPage() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  // ── Quantity cell editing ─────────────────────────────────────────
+  // ── Quantity import handlers ───────────────────────────────────────
 
-  const cellKey = (materialCode: string, month: number) =>
-    `${materialCode}_${month}`;
-
-  const startEdit = (materialCode: string, month: number) => {
-    setEditingCells((prev) => ({ ...prev, [cellKey(materialCode, month)]: "" }));
+  const handleQtyImportFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    processQtyImportFile(f);
   };
 
-  const handleCellChange = (materialCode: string, month: number, v: string) => {
-    setEditingCells((prev) => ({
-      ...prev,
-      [cellKey(materialCode, month)]: v,
-    }));
+  const handleQtyImportDragState = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setQtyImportDragActive(event.type !== "dragleave");
   };
 
-  const handleCellSave = async (
-    materialCode: string,
-    month: number,
-    currentVersion: number,
-    countryCode?: string,
-  ) => {
-    const raw = editingCells[cellKey(materialCode, month)];
-    if (raw === "") {
-      setEditingCells((prev) => {
-        const next = { ...prev };
-        delete next[cellKey(materialCode, month)];
-        return next;
-      });
-      return;
+  const handleQtyImportDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setQtyImportDragActive(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) processQtyImportFile(file);
+  };
+
+  const handleQtyImportDropzoneKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      qtyImportInputRef.current?.click();
     }
-    const qty = parseInt(raw, 10);
-    if (isNaN(qty) || qty < 0) {
-      setCellErrors((prev) => ({
-        ...prev,
-        [cellKey(materialCode, month)]: "Invalid number",
-      }));
-      return;
-    }
-    const key = cellKey(materialCode, month);
-    setSavingCells((prev) => new Set(prev).add(key));
-    setCellErrors((prev) => {
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
+  };
 
-    const resolvedCountry = countryCode ?? primaryCountry;
+  const processQtyImportFile = (f: File) => {
+    setQtyImportFile(f);
+    setQtyImportPreview(null);
+    setQtyImportResult(null);
+    setQtyImportLoading(true);
+    api.previewOrderQuantityImport(f)
+      .then((preview) => setQtyImportPreview(preview))
+      .catch((err: unknown) => setError(getErrorMessage(err)))
+      .finally(() => setQtyImportLoading(false));
+    if (qtyImportInputRef.current) qtyImportInputRef.current.value = "";
+  };
 
-    const payload: QuantityCellUpdate = {
-      countryCode: resolvedCountry,
-      orderYear: selectedYear,
-      orderMonth: month,
-      materialCode,
-      quantity: qty,
-      rowVersion: currentVersion,
-    };
-
+  const handleQtyImportApply = async () => {
+    if (!qtyImportPreview?.importId) return;
+    setQtyImportLoading(true);
     try {
-      const result = await api.updateQuantityCell(payload);
-      // Patch local matrix state with new quantity + rowVersion (no full reload)
-      setMatrices((prev) => {
-        const target = prev[resolvedCountry];
-        if (!target) return prev;
-        const rows = target.rows.map((r) => {
-          if (r.materialCode !== materialCode) return r;
-          const months = { ...r.months };
-          months[String(month)] = {
-            quantity: qty,
-            isEditable: true,
-            rowVersion: result.rowVersion,
-          };
-          const newTtl = Object.values(months).reduce(
-            (sum, m) => sum + m.quantity, 0,
-          );
-          return { ...r, months, ttl: newTtl };
-        });
-        return { ...prev, [resolvedCountry]: { ...target, rows } };
-      });
-      setEditingCells((prev) => {
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
-    } catch (err) {
-      setCellErrors((prev) => ({ ...prev, [key]: getErrorMessage(err) }));
+      const result = await api.applyOrderQuantityImport(qtyImportPreview.importId);
+      setQtyImportResult(result);
+      loadMatrices();
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     } finally {
-      setSavingCells((prev) => {
-        const next = new Set(prev);
-        next.delete(key);
-        return next;
-      });
+      setQtyImportLoading(false);
     }
+  };
+
+  const closeQtyImport = () => {
+    setShowQtyImport(false);
+    setQtyImportFile(null);
+    setQtyImportPreview(null);
+    setQtyImportResult(null);
   };
 
   // ── Export ─────────────────────────────────────────────────────────
 
+  const [mergeExport, setMergeExport] = useState(false);
+
   const handleExport = async () => {
     try {
-      const blob = await api.exportOrderGenius(primaryCountry, selectedYear);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `Order_Genius_${primaryCountry}-${selectedYear}.xlsx`;
-      a.click();
-      URL.revokeObjectURL(url);
+      if (selectedCountries.length > 1 && mergeExport) {
+        // Merged export: download one file per country with multi-country columns
+        for (const country of selectedCountries) {
+          const blob = await api.exportOrderGenius(country, selectedYear, {
+            brand: brandFilter || undefined,
+            model: modelFilter || undefined,
+            powertrain: powertrainFilter || undefined,
+            version: versionFilter || undefined,
+            colour: colourFilter || undefined,
+            quantitiesOnly: true,
+          });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `Order_Genius_${country}-${selectedYear}_filtered.xlsx`;
+          a.click();
+          URL.revokeObjectURL(url);
+          if (selectedCountries.length > 1) await new Promise((r) => setTimeout(r, 300));
+        }
+      } else {
+        for (const country of selectedCountries) {
+          const blob = await api.exportOrderGenius(country, selectedYear, {
+            brand: brandFilter || undefined,
+            model: modelFilter || undefined,
+            powertrain: powertrainFilter || undefined,
+            version: versionFilter || undefined,
+            colour: colourFilter || undefined,
+            quantitiesOnly: true,
+          });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `Order_Genius_${country}-${selectedYear}_filtered.xlsx`;
+          a.click();
+          URL.revokeObjectURL(url);
+          if (selectedCountries.length > 1) await new Promise((r) => setTimeout(r, 300));
+        }
+      }
     } catch (err) {
       setError(`Export failed: ${getErrorMessage(err)}`);
     }
@@ -418,6 +742,16 @@ export function OrderGeniusPage() {
         </p>
       </header>
 
+      <DeckFloatingDrawer
+        open={showDeck}
+        onOpenChange={setShowDeck}
+        triggerPrimary="筛选 / 操作"
+        triggerSecondaryOpen="收起面板"
+        triggerSecondaryClosed="打开面板"
+        eyebrow="Order Genius"
+        title="筛选与操作"
+        ariaLabel="Order Genius controls"
+      >
       {error ? (
         <div className="alert alert-error" style={{ marginBottom: 16 }}>
           {error}
@@ -434,50 +768,51 @@ export function OrderGeniusPage() {
           marginBottom: 16,
         }}
       >
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
-          <span style={{ fontSize: 12, color: "#64748b", marginRight: 4 }}>Countries:</span>
-          {countries.map((c) => {
-            const active = selectedCountries.includes(c.countryCode);
-            return (
-              <button
-                key={c.countryCode}
-                type="button"
-                onClick={() => {
-                  setSelectedCountries((prev) => {
-                    if (active) {
-                      const next = prev.filter((x) => x !== c.countryCode);
-                      return next.length > 0 ? next : prev;
-                    }
-                    return [...prev, c.countryCode];
-                  });
-                  setBrandFilter("");
-                  setModelFilter("");
-                  setPowertrainFilter("");
-                  setVersionFilter("");
-                  setColourFilter("");
-                }}
-                style={{
-                  padding: "3px 10px",
-                  borderRadius: 14,
-                  border: active ? "1.5px solid #3b82f6" : "1px solid #cbd5e1",
-                  background: active ? "#eff6ff" : "#fff",
-                  color: active ? "#1d4ed8" : "#475569",
-                  fontSize: 12,
-                  fontWeight: active ? 600 : 400,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-                title={`${c.countryName} (${c.paymentTermCode})`}
-              >
-                {c.countryName}
-                {selectedCountries.length > 1 && active ? (
-                  <span style={{ marginLeft: 4, opacity: 0.6 }}>
-                    {selectedCountries.indexOf(c.countryCode) + 1}
-                  </span>
-                ) : null}
-              </button>
-            );
-          })}
+        <div className="market-scan-field version-comparison-model-picker-field" ref={countryPickerRef} style={{ minWidth: 200 }}>
+          <span>Countries{selectedCountries.length > 0 ? ` (${selectedCountries.length})` : ""}</span>
+          <div className="version-comparison-model-picker">
+            <div className="version-comparison-model-picker-input-row">
+              <input type="text" className="version-comparison-model-search"
+                placeholder={`${selectedCountries.length} 个国家已选 — 搜索...`}
+                value={countrySearchQuery}
+                onChange={(e) => { setCountrySearchQuery(e.target.value); setCountryPickerOpen(true); }}
+                onFocus={() => { setCountrySearchQuery(""); setCountryPickerOpen(true); }}
+                disabled={countries.length === 0} />
+            </div>
+            {countryPickerOpen && searchedCountryOptions.length > 0 ? (
+              <div className="version-comparison-model-dropdown">
+                <div className="version-comparison-model-dropdown-actions">
+                  <button type="button" className="version-comparison-batch-btn"
+                    onClick={() => setSelectedCountries(searchedCountryOptions.map((o) => o.value))}>全选</button>
+                  <button type="button" className="version-comparison-batch-btn"
+                    onClick={() => { const vals = new Set(searchedCountryOptions.map((o) => o.value)); setSelectedCountries((prev) => prev.filter((c) => !vals.has(c))); }}>取消</button>
+                  <button type="button" className="version-comparison-batch-btn"
+                    onClick={() => setSelectedCountries([])}>清空</button>
+                  <span className="version-comparison-dropdown-count">{searchedCountryOptions.length} 项 · {selectedCountries.length} 已选</span>
+                </div>
+                {searchedCountryOptions.slice(0, 30).map((opt) => {
+                  const active = selectedCountries.includes(opt.value);
+                  return (
+                    <button key={opt.value} type="button"
+                      className={`version-comparison-model-option${active ? " is-selected" : ""}`}
+                      onClick={() => {
+                        setSelectedCountries((prev) => {
+                          if (active) { const next = prev.filter((x) => x !== opt.value); return next.length > 0 ? next : prev; }
+                          return [...prev, opt.value];
+                        });
+                        setBrandFilter(""); setModelFilter(""); setPowertrainFilter(""); setVersionFilter(""); setColourFilter("");
+                      }}>
+                      <span className={`version-comparison-model-checkbox${active ? " is-checked" : ""}`}>{active ? "✓" : ""}</span>
+                      <span className="version-comparison-model-option-name">{opt.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+            {countryPickerOpen && searchedCountryOptions.length === 0 && countrySearchQuery.trim() ? (
+              <div className="version-comparison-model-dropdown"><div className="version-comparison-model-empty">无匹配国家</div></div>
+            ) : null}
+          </div>
         </div>
 
         <select
@@ -559,12 +894,31 @@ export function OrderGeniusPage() {
           <input type="checkbox" checked={groupByProduct} onChange={(e) => setGroupByProduct(e.target.checked)} />
           Group by product
         </label>
+        <label style={{ cursor: "pointer", fontSize: 12, color: "#64748b", display: "flex", alignItems: "center", gap: 4 }}>
+          <input type="checkbox" checked={hideEmptyRows} onChange={(e) => setHideEmptyRows(e.target.checked)} />
+          Hide empty rows
+        </label>
+        {selectedCountries.length > 1 && (
+          <label style={{ cursor: "pointer", fontSize: 12, color: "#0f766e", display: "flex", alignItems: "center", gap: 4 }}>
+            <input type="checkbox" checked={consolidatedView} onChange={(e) => setConsolidatedView(e.target.checked)} />
+            Consolidated
+          </label>
+        )}
 
-        <button type="button" className="btn btn-sm btn-ghost"
-                onClick={() => setShowPtAdmin(!showPtAdmin)}
-                style={showPtAdmin ? { background: "#0f766e", color: "#fff" } : undefined}>
-          {showPtAdmin ? "Hide PT Admin" : "Payment Terms"}
-        </button>
+        {isAdmin && (
+          <button type="button" className="btn btn-sm btn-ghost"
+                  onClick={() => setShowPtAdmin(!showPtAdmin)}
+                  style={showPtAdmin ? { background: "#0f766e", color: "#fff" } : undefined}>
+            {showPtAdmin ? "Hide PT Admin" : "Payment Terms"}
+          </button>
+        )}
+        {isAdmin && (
+          <button type="button" className="btn btn-sm btn-ghost"
+                  onClick={() => setShowBomAdmin(!showBomAdmin)}
+                  style={showBomAdmin ? { background: "#b45309", color: "#fff" } : undefined}>
+            {showBomAdmin ? "Hide BOM Admin" : "BOM Admin"}
+          </button>
+        )}
 
         <button type="button" className="btn btn-sm btn-primary" onClick={loadMatrices}>
           Refresh
@@ -574,10 +928,110 @@ export function OrderGeniusPage() {
           Export XLSX
         </button>
         <button type="button" className="btn btn-sm btn-ghost"
-                onClick={() => setShowUpload(!showUpload)}>
-          {showUpload ? "Hide Upload" : "Upload Material Master"}
+                onClick={() => { setShowQtyImport(true); setQtyImportFile(null); setQtyImportPreview(null); setQtyImportResult(null); }}>
+          Import Quantities
         </button>
+        {isAdmin && (
+          <button type="button" className="btn btn-sm btn-ghost"
+                  onClick={() => setShowUpload(!showUpload)}>
+            {showUpload ? "Hide Upload" : "Upload Material Master"}
+          </button>
+        )}
       </div>
+
+      {/* ── Quantity Import Modal ────────────────────────────────── */}
+      {showQtyImport ? (
+        <div className="card crud-card" style={{ padding: 16, marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <h3 style={{ margin: 0 }}>Import Order Quantities</h3>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={closeQtyImport}>Close</button>
+          </div>
+          {!qtyImportPreview ? (
+            <div>
+              <p style={{ fontSize: 13, color: "#64748b", marginBottom: 12 }}>
+                Upload an exported Order Genius XLSX file with edited quantities.
+                The system will match by (Country, Year, Month, Material Code) and show a diff preview before applying changes.
+              </p>
+              <input ref={qtyImportInputRef} type="file" accept=".xlsx" onChange={handleQtyImportFile} className="monthly-update-file-input" />
+              <div
+                className={`monthly-update-dropzone${qtyImportDragActive ? " is-dragging" : ""}${qtyImportFile ? " has-file" : ""}`}
+                role="button" tabIndex={0}
+                onClick={() => qtyImportInputRef.current?.click()}
+                onKeyDown={handleQtyImportDropzoneKeyboard}
+                onDragEnter={handleQtyImportDragState}
+                onDragOver={handleQtyImportDragState}
+                onDragLeave={handleQtyImportDragState}
+                onDrop={handleQtyImportDrop}
+              >
+                <strong>{qtyImportFile ? qtyImportFile.name : "拖拽 Order Quantity Excel 到这里，或点击选择文件"}</strong>
+                <span>{qtyImportFile ? `${(qtyImportFile.size / 1024).toFixed(1)} KB · 上传后会解析并显示差异预览。` : "支持 .xlsx；导出的 Order Genius 文件可直接回传。"}</span>
+              </div>
+              {qtyImportLoading ? <div style={{ fontSize: 13, color: "#64748b", marginTop: 8 }}>Parsing file...</div> : null}
+            </div>
+          ) : qtyImportResult ? (
+            <div style={{ background: "#f0fdf4", border: "1px solid #86efac", padding: 12, borderRadius: 6 }}>
+              <strong>Import Applied</strong>
+              <p style={{ fontSize: 13, margin: "4px 0" }}>{qtyImportResult.appliedCells} cells updated{qtyImportResult.skippedCells > 0 ? `, ${qtyImportResult.skippedCells} skipped` : ""}</p>
+              {qtyImportResult.errors.length > 0 ? (
+                <div style={{ fontSize: 12, color: "#dc2626", maxHeight: 120, overflow: "auto" }}>
+                  {qtyImportResult.errors.slice(0, 10).map((e, i) => (<div key={i}>{e}</div>))}
+                </div>
+              ) : null}
+              <button type="button" className="btn btn-sm btn-primary" onClick={closeQtyImport} style={{ marginTop: 8 }}>Done</button>
+            </div>
+          ) : (
+            <div>
+              <div style={{ display: "flex", gap: 16, marginBottom: 12, fontSize: 13 }}>
+                <span>Country: <strong>{qtyImportPreview.countryCode}</strong></span>
+                <span>Year: <strong>{qtyImportPreview.year}</strong></span>
+                <span>Total cells: <strong>{qtyImportPreview.totalCells}</strong></span>
+                {qtyImportPreview.errorCells > 0 ? <span style={{ color: "#dc2626" }}>Errors: <strong>{qtyImportPreview.errorCells}</strong></span> : null}
+                <span style={{ color: qtyImportPreview.newRows.length > 0 ? "#d97706" : "#16a34a" }}>
+                  Matched: <strong>{qtyImportPreview.matchedRows.length}</strong>
+                  {qtyImportPreview.newRows.length > 0 ? ` · New: ${qtyImportPreview.newRows.length}` : ""}
+                </span>
+              </div>
+              {qtyImportPreview.fobChanges.length > 0 ? (
+                <div style={{ background: "#fef3c7", border: "1px solid #f59e0b", padding: 8, marginBottom: 12, borderRadius: 4, fontSize: 12 }}>
+                  <strong>FOB mismatch</strong> — {qtyImportPreview.fobChanges.length} codes have different FOB. System FOB will be used.
+                </div>
+              ) : null}
+              {qtyImportPreview.errors.length > 0 ? (
+                <div style={{ background: "#fef2f2", padding: 8, marginBottom: 12, borderRadius: 4, fontSize: 12 }}>
+                  {qtyImportPreview.errors.map((e, i) => (<div key={i} style={{ color: "#dc2626" }}>{e}</div>))}
+                </div>
+              ) : null}
+              <div style={{ maxHeight: 360, overflow: "auto", marginBottom: 12 }}>
+                <table className="data-table" style={{ fontSize: 11 }}>
+                  <thead><tr><th>Material</th><th>Model</th><th>Month</th><th>Old</th><th>New</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {qtyImportPreview.matchedRows.flatMap((row) =>
+                      row.cells.map((cell) => (
+                        <tr key={`${row.materialCode}_${cell.month}`} style={cell.error ? { background: "#fef2f2" } : undefined}>
+                          <td style={{ fontFamily: "monospace" }}>{row.materialCode}</td>
+                          <td>{row.modelName}</td>
+                          <td style={{ textAlign: "center" }}>{cell.month}</td>
+                          <td style={{ textAlign: "center" }}>{cell.oldQuantity ?? "-"}</td>
+                          <td style={{ textAlign: "center", fontWeight: cell.oldQuantity !== cell.newQuantity ? 700 : undefined }}>{cell.newQuantity}</td>
+                          <td style={{ fontSize: 10 }}>{cell.error ? <span style={{ color: "#dc2626" }}>{cell.error}</span> : cell.oldQuantity === cell.newQuantity ? "unchanged" : cell.oldQuantity == null ? "new" : `${cell.newQuantity - (cell.oldQuantity ?? 0) > 0 ? "+" : ""}${cell.newQuantity - (cell.oldQuantity ?? 0)}`}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" className="btn btn-sm btn-primary"
+                  disabled={qtyImportLoading || qtyImportPreview.status === "error" || qtyImportPreview.matchedRows.length === 0}
+                  onClick={handleQtyImportApply}>
+                  {qtyImportLoading ? "Applying..." : `Apply ${qtyImportPreview.matchedRows.reduce((s, r) => s + r.cells.filter((c) => !c.error).length, 0)} changes`}
+                </button>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={closeQtyImport}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
 
       {/* ── Upload panel ───────────────────────────────────────────── */}
       {showUpload ? (
@@ -710,57 +1164,22 @@ export function OrderGeniusPage() {
           </label>
         ))}
       </div>
+      </DeckFloatingDrawer>
 
-      {/* ── Matrix grid ────────────────────────────────────────────── */}
+      {/* ── Matrix grid (AG Grid) ─────────────────────────────────── */}
       {loading ? (
         <div style={{ padding: 32, textAlign: "center", color: "#64748b" }}>
           Loading...
         </div>
       ) : combinedMatrix.totalRows > 0 ? (
-        <div style={{ overflowX: "auto", maxHeight: "70vh" }}>
-          <table className="data-table" style={{ fontSize: 12 }}>
-            <thead>
-              <tr>
-                {selectedCountries.length > 1 && (
-                  <th style={{ position: "sticky", left: 0, background: "#f1f5f9", zIndex: 2 }}>Country</th>
-                )}
-                <th style={{ position: "sticky", left: selectedCountries.length > 1 ? 56 : 0, background: "#f1f5f9", zIndex: 2 }}>Model</th>
-                <th style={{ position: "sticky", left: selectedCountries.length > 1 ? 136 : 80, background: "#f1f5f9", zIndex: 2 }}>Version</th>
-                <th style={{ position: "sticky", left: selectedCountries.length > 1 ? 236 : 180, background: "#f1f5f9", zIndex: 2 }}>Colour</th>
-                {visibleColumns.materialCode && (
-                  <th style={{ position: "sticky", left: selectedCountries.length > 1 ? 336 : 280, background: "#f1f5f9", zIndex: 2 }}>Material Code</th>
-                )}
-                {visibleColumns.fob && (
-                  <th style={{ position: "sticky", left: selectedCountries.length > 1 ? 466 : 410, background: "#f1f5f9", zIndex: 2 }}>FOB (EUR)</th>
-                )}
-                {visibleColumns.months && MONTHS
-                  .filter((_, i) => selectedMonth == null || i + 1 === selectedMonth)
-                  .map((m) => (<th key={m}>{m}</th>))
-                }
-                {visibleColumns.amount && MONTHS
-                  .filter((_, i) => selectedMonth == null || i + 1 === selectedMonth)
-                  .map((m) => (<th key={`amt-${m}`} style={{ color: "#0f766e" }}>{m} €</th>))
-                }
-                {visibleColumns.ttlQty && <th>TTL</th>}
-                {visibleColumns.ttlAmount && <th style={{ color: "#0f766e" }}>TTL €</th>}
-                {visibleColumns.remark && <th style={{ minWidth: 160 }}>Remark</th>}
-              </tr>
-            </thead>
-            <OrderGeniusBody
-              rows={combinedMatrix.rows}
-              groupByProduct={groupByProduct}
-              editingCells={editingCells}
-              savingCells={savingCells}
-              cellErrors={cellErrors}
-              onStartEdit={startEdit}
-              onCellChange={handleCellChange}
-              onCellSave={handleCellSave}
-              visibleColumns={visibleColumns}
-              selectedMonth={selectedMonth}
-              showCountry={selectedCountries.length > 1}
-            />
-          </table>
-        </div>
+        <OrderGeniusGrid
+          rows={displayRows}
+          selectedMonth={selectedMonth}
+          visibleColumns={visibleColumns}
+          showCountry={selectedCountries.length > 1}
+          onCellValueChanged={handleCellValueChanged}
+          onGridReady={(api) => { gridApiRef.current = api; }}
+        />
       ) : (
         <div style={{ padding: 32, textAlign: "center", color: "#64748b" }}>
           {selectedCountries.length > 0
@@ -771,104 +1190,28 @@ export function OrderGeniusPage() {
 
       {/* ── Payment Terms Admin ────────────────────────────────────── */}
       {showPtAdmin && <PaymentTermAdminPanel />}
+      {showBomAdmin && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 1000,
+          display: "flex", alignItems: "flex-start", justifyContent: "center",
+          padding: "3vh 2vw",
+        }}>
+          <div style={{
+            position: "absolute", inset: 0,
+            background: "rgba(15,23,42,0.35)",
+          }} onClick={() => setShowBomAdmin(false)} />
+          <div style={{
+            position: "relative", width: "96vw", maxWidth: 1600, maxHeight: "94vh",
+            overflow: "auto", borderRadius: 16,
+            background: "#fff",
+            boxShadow: "0 25px 80px rgba(15,23,42,0.3)",
+            WebkitOverflowScrolling: "touch",
+          }}>
+            <BomAdminPanel />
+          </div>
+        </div>
+      )}
     </section>
-  );
-}
-
-// ── Row component ──────────────────────────────────────────────────────
-
-const VISIBLE_COLS_DEFAULTS = { months: true, amount: true, ttlQty: true, ttlAmount: true, fob: true, materialCode: true, remark: true };
-
-function OrderGeniusRow({
-  row, editingCells, savingCells, cellErrors,
-  onStartEdit, onCellChange, onCellSave,
-  visibleColumns, selectedMonth, showCountry,
-}: {
-  row: MaterialSkuMatrixRow & { _countryCode?: string };
-  editingCells: Record<string, string>;
-  savingCells: Set<string>;
-  cellErrors: Record<string, string>;
-  onStartEdit: (materialCode: string, month: number) => void;
-  onCellChange: (materialCode: string, month: number, value: string) => void;
-  onCellSave: (materialCode: string, month: number, version: number, countryCode?: string) => void;
-  visibleColumns: typeof VISIBLE_COLS_DEFAULTS;
-  selectedMonth: number | null;
-  showCountry?: boolean;
-}) {
-  const isHistorical = row.lifecycleStatus === "historical";
-  const fob = row.fobEur ?? 0;
-  const activeMonths = MONTHS.map((_, i) => i + 1).filter((m) => selectedMonth == null || m === selectedMonth);
-  const monthTotal = activeMonths.reduce((sum, m) => sum + (row.months[String(m)]?.quantity ?? 0), 0);
-  const textStyle: React.CSSProperties = isHistorical
-    ? { textDecoration: "line-through", color: "#9ca3af" }
-    : {};
-
-  const _countryCode = (row as unknown as Record<string, unknown>)._countryCode as string | undefined;
-  return (
-    <tr style={isHistorical ? { backgroundColor: "#f9fafb" } : undefined}>
-      {showCountry ? (
-        <td style={{ ...textStyle, position: "sticky", left: 0, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap", fontFamily: "monospace", fontSize: 11 }}>
-          {_countryCode ?? ""}
-        </td>
-      ) : null}
-      <td style={{ ...textStyle, position: "sticky", left: showCountry ? 56 : 0, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap" }}>
-        {row.modelName}
-      </td>
-      <td style={{ ...textStyle, position: "sticky", left: showCountry ? 136 : 80, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap" }}>
-        {row.version}
-      </td>
-      <td style={{ ...textStyle, position: "sticky", left: showCountry ? 236 : 180, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap" }}>
-        {row.colour}{row.colourCode ? <span style={{ color: "#94a3b8", fontSize: 10, marginLeft: 4 }}>{row.colourCode}</span> : null}
-      </td>
-      {visibleColumns.materialCode && (
-        <td style={{ ...textStyle, position: "sticky", left: showCountry ? 336 : 280, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap", fontFamily: "monospace" }}>
-          <div>{row.materialCode}</div>
-          {(row.effectiveFrom || row.effectiveTo) ? (
-            <div style={{ fontSize: 9, color: isHistorical ? "#9ca3af" : "#64748b" }}>
-              {row.effectiveFrom ?? "?"} → {row.effectiveTo || "至今"}
-            </div>
-          ) : row.lifecycleStatus !== "active" ? (
-            <div style={{ fontSize: 9, color: "#9ca3af" }}>Historical</div>
-          ) : null}
-        </td>
-      )}
-      {visibleColumns.fob && (
-        <td style={{ ...textStyle, position: "sticky", left: showCountry ? 466 : 410, background: isHistorical ? "#f9fafb" : "#fff", whiteSpace: "nowrap", textAlign: "right" }}>
-          {row.fobEur != null ? row.fobEur.toLocaleString() : "-"}
-        </td>
-      )}
-      {visibleColumns.months && activeMonths.map((month) => {
-        const key = `${row.materialCode}_${month}`;
-        const monthData = row.months[String(month)];
-        const qty = monthData?.quantity ?? 0;
-        const isEditing = key in editingCells;
-        const isSaving = savingCells.has(key);
-        const errMsg = cellErrors[key];
-        return (
-          <td key={month} style={{ textAlign: "center", minWidth: 50, cursor: row.editable ? "pointer" : "default" }}
-            onClick={() => { if (row.editable && !isEditing) onStartEdit(row.materialCode, month); }}
-          >
-            {isEditing ? (
-              <input type="number" min={0} style={{ width: 48, textAlign: "center", border: errMsg ? "1px solid #dc2626" : "1px solid #3b82f6", borderRadius: 4 }}
-                defaultValue={qty} autoFocus
-                onBlur={(e) => { onCellChange(row.materialCode, month, e.target.value); onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1, _countryCode); }}
-                onKeyDown={(e) => { if (e.key === "Enter") onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1, _countryCode); if (e.key === "Escape") { onCellChange(row.materialCode, month, ""); onCellSave(row.materialCode, month, monthData?.rowVersion ?? 1, _countryCode); } }}
-                onChange={(e) => onCellChange(row.materialCode, month, e.target.value)}
-              />
-            ) : <span style={{ color: errMsg ? "#dc2626" : isSaving ? "#3b82f6" : undefined }} title={errMsg}>{qty}</span>}
-          </td>
-        );
-      })}
-      {visibleColumns.amount && activeMonths.map((month) => {
-        const qty = row.months[String(month)]?.quantity ?? 0;
-        return <td key={`amt-${month}`} style={{ textAlign: "right", color: "#0f766e", ...textStyle }}>{(qty * fob).toLocaleString()}</td>;
-      })}
-      {visibleColumns.ttlQty && <td style={{ fontWeight: 700, textAlign: "center", ...textStyle }}>{monthTotal || "-"}</td>}
-      {visibleColumns.ttlAmount && <td style={{ fontWeight: 700, textAlign: "right", color: "#0f766e", ...textStyle }}>{(monthTotal * fob).toLocaleString()}</td>}
-      {visibleColumns.remark && (
-        <td style={{ ...textStyle, fontSize: 11, color: "#64748b", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>{row.remark || ""}</td>
-      )}
-    </tr>
   );
 }
 
@@ -881,104 +1224,754 @@ const PT_COLORS: Record<string, string> = {
 };
 function ptColor(pt: string | null): string { return PT_COLORS[pt ?? ""] ?? "#9ca3af"; }
 
-// ── Body component with optional product grouping ──────────────────────
+// ── Payment Terms Admin Panel ──────────────────────────────────────────
 
-function OrderGeniusBody({
-  rows, groupByProduct, editingCells, savingCells, cellErrors,
-  onStartEdit, onCellChange, onCellSave, visibleColumns, selectedMonth,
-  showCountry,
-}: {
-  rows: (MaterialSkuMatrixRow & { _countryCode?: string })[];
-  groupByProduct: boolean;
-  editingCells: Record<string, string>;
-  savingCells: Set<string>;
-  cellErrors: Record<string, string>;
-  onStartEdit: (code: string, m: number) => void;
-  onCellChange: (code: string, m: number, v: string) => void;
-  onCellSave: (code: string, m: number, ver: number, countryCode?: string) => void;
-  visibleColumns: typeof VISIBLE_COLS_DEFAULTS;
-  selectedMonth: number | null;
-  showCountry?: boolean;
-}) {
-  if (!groupByProduct) {
-    return (
-      <tbody>
-        {rows.map((r) => (
-          <OrderGeniusRow key={r.materialCode} row={r}
-            editingCells={editingCells} savingCells={savingCells} cellErrors={cellErrors}
-            onStartEdit={onStartEdit} onCellChange={onCellChange} onCellSave={onCellSave}
-            visibleColumns={visibleColumns} selectedMonth={selectedMonth}
-            showCountry={showCountry} />
-        ))}
-      </tbody>
-    );
-  }
+// ── BOM Admin Panel ──────────────────────────────────────────────────
 
-  // Group by brand+model+version+powertrain
-  type RowWithCountry = MaterialSkuMatrixRow & { _countryCode?: string };
-  const key = (r: RowWithCountry) => `${r._countryCode ?? ""}|${r.brand}|${r.modelName}|${r.version}|${r.powertrain ?? ""}`;
-  const groups = new Map<string, RowWithCountry[]>();
-  for (const r of rows) { const k = key(r); if (!groups.has(k)) groups.set(k, []); groups.get(k)!.push(r); }
-  const sorted = [...groups.entries()].sort(([, a], [, b]) =>
-    (a.some((r) => r.lifecycleStatus === "active") ? 0 : 1) - (b.some((r) => r.lifecycleStatus === "active") ? 0 : 1)
-  );
-
-  const groupTtl = (grp: RowWithCountry[]) => {
-    const activeMonths = MONTHS.map((_, i) => i + 1).filter((m) => selectedMonth == null || m === selectedMonth);
-    return activeMonths.reduce((s, m) => s + grp.reduce((sum, r) => sum + (r.months[String(m)]?.quantity ?? 0), 0), 0);
+function BomAdminPanel() {
+  const [skus, setSkus] = useState<any[]>([]);
+  const [countries, setCountries] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchText, setSearchText] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [editFob, setEditFob] = useState<{ materialCodes: string[]; countryCode: string; fob: number | null } | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [showAddMaterial, setShowAddMaterial] = useState(false);
+  const [newMaterial, setNewMaterial] = useState({ materialCode: "", brand: "", modelName: "", version: "", colour: "", colourCode: "", powertrain: "ICE" });
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [dragSku, setDragSku] = useState<string | null>(null);
+  const [dragOverTier, setDragOverTier] = useState<string | null>(null);
+  const dragEnterCount = useRef(0);
+  const dragMaterialCode = useRef<string | null>(null); // bypass dataTransfer quirks
+  const [addColourKey, setAddColourKey] = useState<string | null>(null); // "{bomTemplate}|{tierName}" to show inline form
+  const addColourCodeRef = useRef<HTMLInputElement>(null);
+  const addColourNameRef = useRef<HTMLInputElement>(null);
+  const [editingBoms, setEditingBoms] = useState<Set<string>>(new Set());
+  const toggleEditBom = (key: string) => {
+    setEditingBoms(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   };
 
-  const stickyCols = (showCountry ? 1 : 0) + 3; // country + model + version + colour
+  // Double-confirm delete state + performance refs
+  const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(new Set());
+  const pendingDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadRef = useRef(false);  // prevent concurrent loads
+  const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);  // debounce loads
+
+
+  // Color name → hex mapping for paint swatches
+  const colourToHex = (name: string): string[] => {
+    const n = name.toLowerCase();
+    const map: Record<string, string> = {
+      'carbon crystal black': '#1a1a1a', 'black': '#1a1a1a', 'new carbon black': '#1c1c1c',
+      'khaki white': '#f0ece0', 'new khaki white': '#f5f0e8', 'white': '#f5f5f0',
+      'moonlight silver': '#d4d0c8', 'silver': '#c0c0c0', 'aviation silver': '#c8c0b8',
+      'olive gray': '#8a8a7a', 'gray': '#808080', 'fjord grey': '#6e7a7a', 'matte gray': '#5a5a5a', 'matte gray（black edition）': '#3a3a3a',
+      'blood red': '#8b0000', 'red': '#cc0000',
+      'aurora green': '#2ecc71', 'aquatic green': '#1abc9c', 'alpine green': '#27ae60',
+      'mist green': '#82b74b', 'misty green': '#7daa4a', 'model green': '#3a7d44',
+      'glacier blue': '#5b8db8', 'blue': '#1a5276',
+    };
+    // Check exact match first, then partial
+    if (map[n]) return [map[n]];
+    for (const [k, v] of Object.entries(map)) {
+      if (n.includes(k)) return [v];
+    }
+    return ['#94a3b8']; // default gray
+  };
+
+  // Get swatch colors for a color name (handles dual colors with &)
+  const getSwatchColors = (name: string): string[] => {
+    const parts = name.split(/[&／]/);
+    return parts.flatMap(p => colourToHex(p.trim()));
+  };
+
+  // NL always first, then alphabetical
+  const sortedCountries = useMemo(() => {
+    const rest = countries.filter(c => c !== 'NL').sort();
+    return countries.includes('NL') ? ['NL', ...rest] : rest;
+  }, [countries]);
+
+  const load = useCallback(async (s?: string) => {
+    if (loadRef.current) return;  // skip if already loading
+    loadRef.current = true;
+    setLoading(true);
+    try {
+      const isCountry = s && /^[A-Z]{2}$/.test(s);
+      const params: any = {};
+      if (s) {
+        if (isCountry) params.country = s;
+        else params.search = s;
+      }
+      const res = await api.getBomAdmin(Object.keys(params).length > 0 ? params : undefined);
+      setSkus(res.items || []);
+      setCountries(res.countries || []);
+    } catch (e) { console.error('[BOM Admin]', e); }
+    finally { loadRef.current = false; setLoading(false); }
+  }, []);
+
+  const scheduleLoad = useCallback((delay = 0) => {
+    if (loadRef.current) return;
+    if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
+    loadTimerRef.current = setTimeout(() => load(), delay);
+  }, [load]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Clear pending deletes after 3s timeout
+  useEffect(() => {
+    if (pendingDeletes.size === 0) return;
+    if (pendingDeleteTimer.current) clearTimeout(pendingDeleteTimer.current);
+    pendingDeleteTimer.current = setTimeout(() => setPendingDeletes(new Set()), 3000);
+    return () => { if (pendingDeleteTimer.current) clearTimeout(pendingDeleteTimer.current); };
+  }, [pendingDeletes]);
+
+  // Debounced search — auto-triggers 1.2s after user stops typing
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchText.trim()), 1200);
+    return () => clearTimeout(timer);
+  }, [searchText]);
+
+  useEffect(() => {
+    load(debouncedSearch || undefined);
+  }, [debouncedSearch]);
+
+  const handleFobSave = async () => {
+    if (!editFob) return;
+    try {
+      for (const mc of editFob.materialCodes) {
+        await api.updateSkuFob(mc, { countryCode: editFob.countryCode, finalFobEur: editFob.fob ?? undefined } as any);
+      }
+      setEditFob(null); scheduleLoad(200);
+    } catch (e) { alert(getErrorMessage(e)); }
+  };
+
+  const toggleGroup = (key: string) => {
+    setExpandedGroups(prev => { const next = new Set(prev); next.has(key) ? next.delete(key) : next.add(key); return next; });
+  };
+
+  // Shared colour chip renderer used by BOM rows
+  const renderColourChip = (s: any, isHist: boolean, editing: boolean) => {
+    const customHexRaw = s.colourHex || '';
+    const customHexParts = customHexRaw ? customHexRaw.split('|') : [];
+    const hasCustomDual = customHexParts.length >= 2;
+    const computed = getSwatchColors(s.colour || '');
+    const isDual = computed.length >= 2 || hasCustomDual;
+    // For display: custom overrides computed
+    const hex1 = customHexParts[0] || computed[0] || '#94a3b8';
+    const hex2 = customHexParts[1] || (hasCustomDual ? undefined : computed[1]);
+    const displayHex = (!isDual || hasCustomDual) ? hex1 : undefined;
+    const isDragging = dragSku === s.materialCode;
+    const brand = s.brand || '';
+
+    const openColourPicker = (defaultHex: string, callback: (val: string) => void) => {
+      const inp = document.createElement('input');
+      inp.type = 'color';
+      inp.value = defaultHex;
+      inp.style.position = 'fixed'; inp.style.opacity = '0';
+      document.body.appendChild(inp);
+      inp.click();
+      inp.addEventListener('change', () => { callback(inp.value); inp.remove(); });
+      inp.addEventListener('blur', () => inp.remove());
+    };
+
+    return (
+      <span key={s.materialCode}
+        draggable={editing}
+        onDragStart={editing ? (e: any) => {
+          e.dataTransfer.effectAllowed = 'move';
+          dragMaterialCode.current = s.materialCode;
+          setDragSku(s.materialCode);
+        } : undefined}
+        onDragEnd={editing ? () => { setDragSku(null); setDragOverTier(null); dragMaterialCode.current = null; } : undefined}
+        title={`${s.colour}${s.colourCode ? ` (${s.colourCode})` : ''}${isDual ? ' · 双色' : ''} · Tier: ${s.colourTier || 'single'} — Drag to reclassify, Click to edit colour`}
+        style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 10, color: isHist ? '#9ca3af' : '#475569', cursor: isDragging ? 'grabbing' : 'grab', opacity: isDragging ? 0.4 : 1 }}
+        onClick={(e) => {
+          if (dragSku) return;
+          e.stopPropagation();
+          if (isDual) {
+            // Dual-tone: pick both colours sequentially
+            openColourPicker(hex1, (val1) => {
+              openColourPicker(hex2 || val1, async (val2) => {
+                const combined = `${val1}|${val2}`;
+                try { await api.updateColourHex(s.materialCode, combined); load(); } catch {}
+              });
+            });
+          } else {
+            // Single colour
+            openColourPicker(hex1, async (val) => {
+              try { await api.updateColourHex(s.materialCode, val || null); load(); } catch {}
+            });
+          }
+        }}>
+        <span style={{
+          display: "inline-block", width: 16, height: 16, borderRadius: 3, flexShrink: 0,
+          border: customHexRaw ? '2px solid #3b82f6' : '1px solid #d1d5db',
+          background: isDual
+            ? `linear-gradient(135deg, ${hex1} 50%, ${hex2 || hex1} 50%)`
+            : displayHex || hex1,
+          opacity: isHist ? 0.5 : 1,
+        }} />
+        {s.colourCodeConfirmed === false ? (
+          <span title="Unconfirmed colour code — click to confirm" style={{ fontWeight: 700, whiteSpace: "nowrap", color: '#dc2626', cursor: 'pointer', textDecoration: 'underline' }}
+            onClick={async (e2: any) => { e2.stopPropagation();
+              const newCode = prompt('Enter correct colour code:', s.colourCode || '');
+              if (newCode) { try { await api.updateColourCode(s.materialCode, newCode.toUpperCase()); load(); } catch {} }
+              else { try { await api.confirmColourCode(s.materialCode); load(); } catch {} }
+            }}>
+            {s.colourCode || s.colour}
+          </span>
+        ) : editing ? (
+          <span title="Click to edit colour code" style={{ fontWeight: 500, whiteSpace: "nowrap", fontSize: 9, color: s.colourTier === 'special' ? '#d97706' : s.colourTier === 'dual' ? '#2563eb' : '#16a34a', cursor: 'pointer' }}
+            onClick={async (e2: any) => { e2.stopPropagation();
+              const newCode = prompt('Edit colour code (leave blank to unconfirm):', s.colourCode || '');
+              if (newCode != null) { try { await api.updateColourCode(s.materialCode, newCode.toUpperCase()); load(); } catch {} }
+            }}>
+            {s.colourCode || s.colour}
+          </span>
+        ) : (
+          <span title={`${s.colour} · ${s.colourType === 'dual' ? '双色 +' + (brand === 'JAECOO' ? '300' : '200') + '€' : s.colourType === 'special' ? '特殊色 +' + (brand === 'JAECOO' ? '300' : '200') + '€' : '单色'} · Tier: ${s.colourTier || 'single'}`}
+            style={{ fontWeight: 500, whiteSpace: "nowrap", fontSize: 9, color: s.colourTier === 'special' ? '#d97706' : s.colourTier === 'dual' ? '#2563eb' : '#16a34a' }}>
+            {s.colourCode || s.colour}
+          </span>
+        )}
+        {editing ? (
+          pendingDeletes.has(s.materialCode) ? (
+            <span title="Click again to confirm delete" style={{ cursor: 'pointer', color: '#fff', fontSize: 9, marginLeft: 1, fontWeight: 700, background: '#dc2626', borderRadius: 2, padding: '1px 3px' }}
+              onClick={async (e2: any) => {
+                e2.stopPropagation();
+                try { await api.deleteMaterialSku(s.materialCode); setPendingDeletes(prev => { const n = new Set(prev); n.delete(s.materialCode); return n; }); scheduleLoad(300); } catch {}
+              }}>Del?</span>
+          ) : (
+            <span title="Delete this colour" style={{ cursor: 'pointer', color: '#ef4444', fontSize: 10, marginLeft: 1, fontWeight: 700 }}
+              onClick={(e2: any) => {
+                e2.stopPropagation();
+                setPendingDeletes(new Set([s.materialCode]));
+              }}>×</span>
+          )
+        ) : null}
+      </span>
+    );
+  };
+
+  // Derive BOM template from material codes: find common prefix + ** + suffix
+  const deriveTemplate = (codes: string[]): string => {
+    if (codes.length === 0) return '';
+    if (codes.length === 1) return codes[0];
+    let prefix = codes[0];
+    let rev = codes[0].split('').reverse().join('');
+    for (const c of codes.slice(1)) {
+      let i = 0; while (i < prefix.length && i < c.length && prefix[i] === c[i]) i++;
+      prefix = prefix.substring(0, i);
+      const crev = c.split('').reverse().join('');
+      let j = 0; while (j < rev.length && j < crev.length && rev[j] === crev[j]) j++;
+      rev = rev.substring(0, j);
+    }
+    const suffix = rev.split('').reverse().join('');
+    if (prefix && suffix && prefix.length + suffix.length < (codes[0]?.length || 0)) {
+      return prefix + '**' + suffix;
+    }
+    return prefix + suffix || codes[0];
+  };
+
+  // Two-level grouping: model+powertrain → version, with multiple BOM template rows per version
+  const modelGroups = useMemo(() => {
+    const map = new Map<string, { brand: string; modelName: string; pt: string; versions: Map<string, any[]> }>();
+    for (const s of skus) {
+      const pt = (s.modelName || '').toUpperCase().includes('HEV') ? 'HEV' :
+                 (s.modelName || '').toUpperCase().includes('SHS') ? 'PHEV' :
+                 (s.modelName || '').toUpperCase().includes('BEV') || (s.modelName || '').toUpperCase().includes(' EV') ? 'BEV' :
+                 (s.modelName || '').toUpperCase().includes('ICE') ? 'ICE' : 'Other';
+      const mk = `${s.brand}|${s.modelName}|${pt}`;
+      if (!map.has(mk)) map.set(mk, { brand: s.brand, modelName: s.modelName, pt, versions: new Map() });
+      const vk = s.version || 'Default';
+      if (!map.get(mk)!.versions.has(vk)) map.get(mk)!.versions.set(vk, []);
+      // Skip duplicates: same material_code + colour only once per version
+      const existing = map.get(mk)!.versions.get(vk)!;
+      if (!existing.some((x: any) => x.materialCode === s.materialCode)) {
+        existing.push(s);
+      }
+    }
+    return map;
+  }, [skus]);
+
+  // Group SKUs within a version by BOM template (using stored bomTemplate from DB)
+  // Returns: Map<bomTemplate, { single: SKU[], dual: SKU[], special: SKU[] }>
+  const groupByTemplate = (vSkus: any[]): Map<string, { single: any[]; dual: any[]; special: any[] }> => {
+    const byPeriod = new Map<string, any[]>();
+    for (const s of vSkus) {
+      const period = `${s.effectiveFrom || 'any'}_${s.effectiveTo || 'any'}`;
+      // Use stored bomTemplate from DB; fall back to single-code derive
+      const bt = s.bomTemplate || deriveTemplate([s.materialCode]);
+      const gk = `${bt}|${period}`;
+      if (!byPeriod.has(gk)) byPeriod.set(gk, []);
+      byPeriod.get(gk)!.push(s);
+    }
+    const result = new Map<string, { single: any[]; dual: any[]; special: any[] }>();
+    for (const [gk, gSkus] of byPeriod) {
+      const bt = gk.split('|')[0];
+      const entry = result.get(bt) || { single: [], dual: [], special: [] };
+      for (const s of gSkus) {
+        const tier = s.colourTier || 'single';
+        if (tier === 'special') entry.special.push(s);
+        else if (tier === 'dual') entry.dual.push(s);
+        else entry.single.push(s);
+      }
+      result.set(bt, entry);
+    }
+    return result;
+  };
+
+  if (loading) return <div style={{ padding: 16, color: "#64748b" }}>Loading BOM data...</div>;
 
   return (
-    <tbody>
-      {sorted.map(([groupKey, grp]) => {
-        const first = grp[0];
-        const color = ptColor(first.powertrain);
-        const gTtl = groupTtl(grp);
-        const gapRows = grp.sort((a, b) => {
-          if (a.lifecycleStatus !== b.lifecycleStatus) return a.lifecycleStatus === "active" ? -1 : 1;
-          return a.colour.localeCompare(b.colour);
-        });
-        return (
-          <Fragment key={groupKey}>
-            <tr style={{ backgroundColor: `${color}15`, borderTop: `2px solid ${color}` }}>
-              <td colSpan={stickyCols} style={{ padding: "6px 8px", fontWeight: 700, color }}>
-                {showCountry ? <span style={{ fontFamily: "monospace", fontSize: 11, marginRight: 8 }}>{first._countryCode}</span> : null}
-                {first.brand} {first.modelName} {first.version}
-                <span style={{ fontWeight: 400, color: "#64748b", marginLeft: 8 }}>
-                  {first.powertrain} · {grp.length} colours · {gTtl.toLocaleString()} units
-                </span>
-              </td>
-              <td colSpan={16} style={{ padding: "6px 8px" }}>
-                {first.remark ? <span style={{ fontSize: 11, color: "#64748b" }}>📝 {first.remark}</span> : null}
-              </td>
-            </tr>
-            {gapRows.map((r) => (
-              <OrderGeniusRow key={r.materialCode} row={r}
-                editingCells={editingCells} savingCells={savingCells} cellErrors={cellErrors}
-                onStartEdit={onStartEdit} onCellChange={onCellChange} onCellSave={onCellSave}
-                visibleColumns={visibleColumns} selectedMonth={selectedMonth}
-                showCountry={showCountry} />
-            ))}
-          </Fragment>
-        );
-      })}
-    </tbody>
+    <div style={{ padding: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, position: "sticky", top: 0, background: "rgba(255,255,255,0.95)", backdropFilter: "blur(8px)", zIndex: 1, padding: "8px 0", borderBottom: "1px solid #e2e8f0" }}>
+        <h3 style={{ margin: 0 }}>BOM / Material Master</h3>
+        <span style={{ fontSize: 12, color: "#64748b" }}>{skus.length} SKUs · {modelGroups.size} models · {sortedCountries.length} countries</span>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input ref={searchInputRef} type="text" placeholder="Search model / material / country (e.g. JAECOO7, T716, SE) — auto 1.2s" value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
+          style={{ minWidth: 340 }} />
+        <button className="btn btn-sm btn-ghost" onClick={() => { setSearchText(''); load(); }}>Clear</button>
+        <button className="btn btn-sm btn-ghost" onClick={() => { setShowAddMaterial(!showAddMaterial); }}
+          style={{ marginLeft: 'auto' }}>+ Material</button>
+      </div>
+      {showAddMaterial && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 8, padding: 6, background: '#f8fafc', borderRadius: 4, flexWrap: "wrap", alignItems: "center" }}>
+          <input type="text" placeholder="Material Code" value={newMaterial.materialCode}
+            onChange={e => setNewMaterial({...newMaterial, materialCode: e.target.value})}
+            style={{ width: 160, fontSize: 11, fontFamily: 'monospace' }} />
+          <input type="text" placeholder="Brand" value={newMaterial.brand}
+            onChange={e => setNewMaterial({...newMaterial, brand: e.target.value})}
+            style={{ width: 80, fontSize: 11 }} />
+          <input type="text" placeholder="Model" value={newMaterial.modelName}
+            onChange={e => setNewMaterial({...newMaterial, modelName: e.target.value})}
+            style={{ width: 120, fontSize: 11 }} />
+          <input type="text" placeholder="Version" value={newMaterial.version}
+            onChange={e => setNewMaterial({...newMaterial, version: e.target.value})}
+            style={{ width: 100, fontSize: 11 }} />
+          <input type="text" placeholder="Colour" value={newMaterial.colour}
+            onChange={e => setNewMaterial({...newMaterial, colour: e.target.value})}
+            style={{ width: 100, fontSize: 11 }} />
+          <input type="text" placeholder="Code" value={newMaterial.colourCode}
+            onChange={e => setNewMaterial({...newMaterial, colourCode: e.target.value})}
+            style={{ width: 50, fontSize: 11 }} />
+          <select value={newMaterial.powertrain} onChange={e => setNewMaterial({...newMaterial, powertrain: e.target.value})}
+            style={{ fontSize: 11, width: 70 }}>
+            {['BEV','HEV','PHEV','ICE','MHEV','REEV'].map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <button className="btn btn-sm btn-primary" onClick={async () => {
+            if (!newMaterial.materialCode) return;
+            try {
+              await api.createMaterialSku({...newMaterial, colourType: 'single'});
+              setShowAddMaterial(false); setNewMaterial({materialCode:'',brand:'',modelName:'',version:'',colour:'',colourCode:'',powertrain:'ICE'}); load();
+            } catch(e) { alert(getErrorMessage(e)); }
+          }}>Add</button>
+          <button className="btn btn-sm btn-ghost" onClick={() => setShowAddMaterial(false)}>Cancel</button>
+        </div>
+      )}
+      <div style={{ overflowX: "auto", maxHeight: "60vh" }}>
+        {[...modelGroups.entries()].sort(([a], [b]) => {
+          // OMODA before JAECOO, then by model number (smaller first)
+          const ba = a.split('|')[0] || '';
+          const bb = b.split('|')[0] || '';
+          if (ba !== bb) return ba === 'OMODA' ? -1 : ba === 'JAECOO' ? 1 : ba.localeCompare(bb);
+          // Extract number from model name for numeric sort
+          const na = parseInt((a.match(/\d+/) || ['0'])[0]) || 0;
+          const nb = parseInt((b.match(/\d+/) || ['0'])[0]) || 0;
+          return na - nb;
+        }).map(([mk, mg]) => {
+          const expanded = expandedGroups.has(mk);
+          return (
+            <div key={mk} style={{ marginBottom: 2 }}>
+              <div onClick={() => toggleGroup(mk)}
+                style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", cursor: "pointer",
+                  background: `${PT_COLORS[mg.pt] ?? '#9ca3af'}15`, borderLeft: `4px solid ${PT_COLORS[mg.pt] ?? '#9ca3af'}`, borderRadius: 2, fontWeight: 700, fontSize: 13 }}>
+                <span style={{ fontSize: 14 }}>{expanded ? '▾' : '▸'}</span>
+                <span style={{ color: PT_COLORS[mg.pt] ?? '#9ca3af' }}>{mg.brand} {mg.modelName}</span>
+                <span style={{ fontWeight: 400, color: "#64748b", fontSize: 11 }}>· {mg.pt} · {mg.versions.size} versions</span>
+              </div>
+              {expanded && [...mg.versions.entries()].sort(([a],[b]) => a.localeCompare(b)).map(([vk, vSkus]) => {
+                const templates = groupByTemplate(vSkus);
+                const sortedTemplates = [...templates.entries()].sort(([a], [b]) => a.localeCompare(b));
+                return (
+                  <div key={mk + '|' + vk} style={{ marginLeft: 20, marginBottom: 8 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#334155', padding: '4px 0', marginBottom: 2 }}>
+                      {vk} · {vSkus.length} colour-SKUs · {templates.size} BOM templates
+                    </div>
+                    <table className="data-table bom-admin-table" style={{ fontSize: 11, width: "auto", minWidth: "100%" }}>
+                      <thead>
+                        <tr style={{ position: "sticky", top: 0, zIndex: 2 }}>
+                          <th style={{ minWidth: 150, position: "sticky", left: 0, zIndex: 3, background: "#f8fafc" }}>BOM</th>
+                          <th style={{ minWidth: 90, position: "sticky", left: 150, zIndex: 3, background: "#f8fafc" }}>Interior</th>
+                          <th style={{ minWidth: 120, position: "sticky", left: 240, zIndex: 3, background: "#f8fafc" }}>Single</th>
+                          <th style={{ minWidth: 100, position: "sticky", left: 360, zIndex: 3, background: "#f8fafc" }}>Dual</th>
+                          <th style={{ minWidth: 70, position: "sticky", left: 460, zIndex: 3, background: "#f8fafc" }}>Special</th>
+                          <th style={{ minWidth: 70 }}>Lifecycle</th>
+                          <th style={{ width: 55 }}></th>
+                          <th style={{ width: 38 }}>Edit</th>
+                          <th style={{ width: 65 }}>From</th>
+                          <th style={{ width: 65 }}>To</th>
+                          {sortedCountries.map(c => (
+                            <th key={c} style={{ width: 75, textAlign: "right", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
+                              {c}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedTemplates.map(([bomTemplate, tiers]) => {
+                          const allSkus = [...tiers.single, ...tiers.dual, ...tiers.special];
+                          const ref = allSkus[0];
+                          const isHist = ref.lifecycleStatus === 'historical';
+                          const isPhaseOut = ref.lifecycleStatus === 'phase_out';
+                          const allCodes = allSkus.map((s: any) => s.materialCode);
+                          const intName = (ref as any).interiorColorName || '';
+                          const edTag = (ref as any).editionTag || '';
+                          const sourceInfo = (ref as any).sourcePayload || {};
+                          const sourceSheet = (ref as any).sourceSheetName || sourceInfo.sheet_name || '';
+                          const sourceRow = (ref as any).sourceRowNumber ?? sourceInfo.row_index;
+                          const sourceWarnings = sourceInfo.warnings || [];
+                          // Helper: render a tier cell with colour chips and drop zone
+                          const editing = editingBoms.has(bomTemplate);
+                          const renderTierCell = (tierName: string, tierSkus: any[], borderColor: string, bgColor: string) => {
+                            const isOver = editing && dragOverTier === tierName && dragSku && !tierSkus.some((s: any) => s.materialCode === dragSku);
+                            const dragProps = editing ? {
+                              onDragOver: (e: any) => {
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = 'move';
+                                if (dragSku && !tierSkus.some((s: any) => s.materialCode === dragSku)) {
+                                  setDragOverTier(tierName);
+                                }
+                              },
+                              onDragEnter: () => { dragEnterCount.current++; },
+                              onDragLeave: () => {
+                                dragEnterCount.current--;
+                                if (dragEnterCount.current <= 0) {
+                                  dragEnterCount.current = 0;
+                                  setDragOverTier(null);
+                                }
+                              },
+                              onDrop: async (e: any) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                dragEnterCount.current = 0;
+                                const mc = dragMaterialCode.current;
+                                setDragSku(null);
+                                setDragOverTier(null);
+                                dragMaterialCode.current = null;
+                                if (mc && tierName && !tierSkus.some((s: any) => s.materialCode === mc)) {
+                                  try { await api.updateColourTier(mc, tierName); load(); } catch (e) { console.error('Drag drop failed', e); }
+                                }
+                              },
+                            } : {};
+                            const tierLeft: Record<string, number> = { single: 240, dual: 360, special: 460 };
+                            return (
+                              <td
+                                {...dragProps}
+                                style={{
+                                  padding: '3px 5px',
+                                  background: isOver ? bgColor : '#fff',
+                                  outline: isOver ? `2px dashed ${borderColor}` : 'none',
+                                  outlineOffset: -2,
+                                  minWidth: 80,
+                                  verticalAlign: 'top',
+                                  position: 'sticky',
+                                  left: tierLeft[tierName] ?? 0,
+                                  zIndex: 1,
+                                }}>
+                                <div style={{ display: "flex", gap: 3, flexWrap: "wrap", alignItems: "center" }}>
+                                  {tierSkus.length === 0 ? (
+                                    <span style={{ fontSize: 9, color: '#cbd5e1' }}>—</span>
+                                  ) : (
+                                    tierSkus.map((s: any) => renderColourChip(s, isHist, editing))
+                                  )}
+                                  {editing ? (<span title={`Add colour to ${tierName} tier`}
+                                    style={{ cursor: 'pointer', color: '#94a3b8', fontSize: 12, fontWeight: 700, padding: '0 3px' }}
+                                    onClick={(e2: any) => {
+                                      e2.stopPropagation();
+                                      const key = `${bomTemplate}|${tierName}`;
+                                      setAddColourKey(addColourKey === key ? null : key);
+                                      if (addColourKey !== key) {
+                                        setTimeout(() => addColourCodeRef.current?.focus(), 50);
+                                      }
+                                    }}>＋</span>) : null}
+                                </div>
+                                {isOver ? <div style={{ fontSize: 9, color: borderColor, marginTop: 2 }}>Drop to reclassify</div> : null}
+                                {editing && addColourKey === `${bomTemplate}|${tierName}` ? (
+                                  <div style={{ display: 'flex', gap: 3, marginTop: 3, alignItems: 'center' }}
+                                    onClick={(e2: any) => e2.stopPropagation()}>
+                                    <input ref={addColourCodeRef} type="text" placeholder="Code" maxLength={2}
+                                      style={{ width: 28, fontSize: 10, padding: '1px 3px', textTransform: 'uppercase' }}
+                                      onKeyDown={async (e2) => {
+                                        if (e2.key === 'Enter') addColourNameRef.current?.focus();
+                                        if (e2.key === 'Escape') setAddColourKey(null);
+                                      }} />
+                                    <input ref={addColourNameRef} type="text" placeholder="Name"
+                                      style={{ width: 70, fontSize: 10, padding: '1px 3px' }}
+                                      onKeyDown={async (e2) => {
+                                        if (e2.key === 'Escape') setAddColourKey(null);
+                                        if (e2.key !== 'Enter') return;
+                                        const code = addColourCodeRef.current?.value?.trim().toUpperCase() || '';
+                                        const name = addColourNameRef.current?.value?.trim() || '';
+                                        if (!code || !name) return;
+                                        const newMat = (bomTemplate || '').includes('**')
+                                          ? bomTemplate.replace('**', code)
+                                          : (ref as any).materialCode?.replace(/[A-Z]{2}/, code) || '';
+                                        if (!newMat) return;
+                                        try {
+                                          await api.createMaterialSku({
+                                            materialCode: newMat,
+                                            brand: (ref as any).brand || '',
+                                            modelName: (ref as any).modelName || '',
+                                            version: (ref as any).version || '',
+                                            colour: name, colourCode: code, colourType: 'single',
+                                            powertrain: (ref as any).powertrain || 'ICE',
+                                          });
+                                          await api.updateColourTier(newMat, tierName);
+                                          const intN = (ref as any).interiorColorName;
+                                          if (intN) await api.updateSkuInterior(newMat, { interiorColorName: intN, editionTag: (ref as any).editionTag || null });
+                                          setAddColourKey(null);
+                                          load();
+                                        } catch (err) { /* */ }
+                                      }} />
+                                    <span style={{ cursor: 'pointer', fontSize: 10, color: '#16a34a' }}
+                                      onClick={async () => {
+                                        const code = addColourCodeRef.current?.value?.trim().toUpperCase() || '';
+                                        const name = addColourNameRef.current?.value?.trim() || '';
+                                        if (!code || !name) return;
+                                        const newMat = (bomTemplate || '').includes('**')
+                                          ? bomTemplate.replace('**', code)
+                                          : (ref as any).materialCode?.replace(/[A-Z]{2}/, code) || '';
+                                        if (!newMat) return;
+                                        try {
+                                          await api.createMaterialSku({
+                                            materialCode: newMat,
+                                            brand: (ref as any).brand || '',
+                                            modelName: (ref as any).modelName || '',
+                                            version: (ref as any).version || '',
+                                            colour: name, colourCode: code, colourType: 'single',
+                                            powertrain: (ref as any).powertrain || 'ICE',
+                                          });
+                                          await api.updateColourTier(newMat, tierName);
+                                          const intN = (ref as any).interiorColorName;
+                                          if (intN) await api.updateSkuInterior(newMat, { interiorColorName: intN, editionTag: (ref as any).editionTag || null });
+                                          setAddColourKey(null);
+                                          load();
+                                        } catch (err) { /* */ }
+                                      }}>✓</span>
+                                    <span style={{ cursor: 'pointer', fontSize: 10, color: '#94a3b8' }}
+                                      onClick={() => setAddColourKey(null)}>✕</span>
+                                  </div>
+                                ) : null}
+                                {editing && tierSkus.length === 0 ? (
+                                  <div style={{ fontSize: 8, color: '#cbd5e1' }}>Drag here or click ＋</div>
+                                ) : null}
+                              </td>
+                            );
+                          };
+                          return (
+                            <tr key={bomTemplate}
+                              style={isHist ? { opacity: 0.55, textDecoration: "line-through" }
+                                   : isPhaseOut ? { opacity: 0.75 } : undefined}>
+                              <td style={{ borderLeft: `3px solid ${isHist ? '#9ca3af' : isPhaseOut ? '#d97706' : '#16a34a'}`,
+                                color: isHist ? '#9ca3af' : '#1e293b', maxWidth: 160, minWidth: 130,
+                                position: "sticky", left: 0, zIndex: 1, background: "white" }}>
+                                {editingBoms.has(bomTemplate) ? (
+                                  <input type="text" defaultValue={bomTemplate}
+                                    placeholder="BOM / Material Code"
+                                    onBlur={async (e) => {
+                                      const v = e.target.value.trim();
+                                      if (!v || v === bomTemplate) return;
+                                      // Update ALL SKUs sharing this BOM template
+                                      for (const s of allSkus) {
+                                        try { await api.updateMaterialCode(s.materialCode, v); } catch {}
+                                      }
+                                      load();
+                                    }}
+                                    style={{ fontFamily: "monospace", fontSize: 11, width: "100%", minWidth: 130 }} />
+                                ) : (
+                                  <div style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                                    title={bomTemplate}>{bomTemplate}</div>
+                                )}
+                                <div style={{ fontSize: 8, color: sourceWarnings.length ? '#d97706' : '#94a3b8', marginTop: 1 }}>
+                                  {sourceSheet}·R{sourceRow} {sourceWarnings.length > 0 ? `⚠${sourceWarnings.length}` : ''}
+                                </div>
+                              </td>
+                              <td style={{ position: "sticky", left: 150, zIndex: 1, background: "white", minWidth: 90 }}>
+                                {editingBoms.has(bomTemplate) ? (
+                                  <input type="text" defaultValue={intName + (edTag ? ` · ${edTag}` : '')}
+                                    placeholder="Interior"
+                                    onBlur={async (e) => {
+                                      const v = e.target.value.trim();
+                                      if (!v || v === intName + (edTag ? ` · ${edTag}` : '')) return;
+                                      const edMatch = v.match(/^(.*?)\s*·\s*(.+)$/);
+                                      const newInterior = edMatch ? edMatch[1].trim() : v;
+                                      const newEdition = edMatch ? edMatch[2].trim() : null;
+                                      for (const s of allSkus) {
+                                        try { await api.updateSkuInterior(s.materialCode, { interiorColorName: newInterior || null, editionTag: newEdition }); } catch {}
+                                      }
+                                      load();
+                                    }}
+                                    style={{ fontSize: 10, width: '100%', minWidth: 80 }} />
+                                ) : (
+                                  <span style={{ fontSize: 10, color: intName ? '#1e293b' : '#cbd5e1' }}>
+                                    {intName || '—'}{edTag ? <span style={{ color: '#7c3aed' }}> · {edTag}</span> : null}
+                                  </span>
+                                )}
+                              </td>
+                              {renderTierCell('single', tiers.single, '#16a34a', '#f0fdf4')}
+                              {renderTierCell('dual', tiers.dual, '#2563eb', '#eff6ff')}
+                              {renderTierCell('special', tiers.special, '#d97706', '#fffbeb')}
+                              <td>
+                                {editingBoms.has(bomTemplate) ? (
+                                  <select value={ref.lifecycleStatus || 'active'}
+                                    onChange={async (e) => {
+                                      const v = e.target.value;
+                                      for (const s of allSkus) {
+                                        try { await api.updateSkuLifecycle(s.materialCode, { lifecycleStatus: v, rowVersion: s.rowVersion }); } catch {}
+                                      }
+                                      load();
+                                    }}
+                                    style={{ fontSize: 10, width: 80 }}>
+                                    <option value="active">Active</option>
+                                    <option value="phase_out">Phase Out</option>
+                                    <option value="historical">Historical</option>
+                                  </select>
+                                ) : (
+                                  <span style={{ fontSize: 10, fontWeight: 600,
+                                    color: isHist ? '#9ca3af' : isPhaseOut ? '#d97706' : '#16a34a' }}>
+                                    {ref.lifecycleStatus || 'active'}
+                                  </span>
+                                )}
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                {pendingDeletes.has(bomTemplate) ? (
+                                  <button className="btn btn-sm" title="Click again to confirm delete"
+                                    style={{ fontSize: 10, padding: "1px 6px", color: '#fff', background: '#dc2626' }}
+                                    onClick={async () => {
+                                      for (const s of allSkus) {
+                                        try { await api.deleteMaterialSku(s.materialCode); } catch {}
+                                      }
+                                      setPendingDeletes(prev => { const n = new Set(prev); n.delete(bomTemplate); return n; });
+                                      scheduleLoad(300);
+                                    }}>Confirm?</button>
+                                ) : (
+                                  <button className="btn btn-sm btn-ghost" title="Delete permanently — double-click"
+                                    style={{ fontSize: 10, padding: "1px 6px", color: '#dc2626' }}
+                                    onClick={() => setPendingDeletes(new Set([bomTemplate]))}>Delete</button>
+                                )}
+                              </td>
+                              <td style={{ textAlign: 'center' }}>
+                                <button className="btn btn-sm btn-ghost"
+                                  style={{ fontSize: 10, padding: '1px 4px', color: editingBoms.has(bomTemplate) ? '#16a34a' : '#64748b' }}
+                                  onClick={() => toggleEditBom(bomTemplate)}>
+                                  {editingBoms.has(bomTemplate) ? 'Save' : 'Edit'}
+                                </button>
+                              </td>
+                              <td>
+                                {editingBoms.has(bomTemplate) ? (
+                                  <input type="text" placeholder="YYYY-MM" defaultValue={ref.effectiveFrom || ''}
+                                    onBlur={async (e) => {
+                                      const v = e.target.value || null;
+                                      for (const s of allSkus) {
+                                        try { await api.updateSkuLifecycle(s.materialCode, { lifecycleStatus: s.lifecycleStatus, effectiveFrom: v ?? undefined, rowVersion: s.rowVersion }); } catch {}
+                                      }
+                                    }}
+                                    style={{ width: 60, fontSize: 10 }} />
+                                ) : (
+                                  <span style={{ fontSize: 10, color: ref.effectiveFrom ? '#1e293b' : '#cbd5e1' }}>{ref.effectiveFrom || '—'}</span>
+                                )}
+                              </td>
+                              <td>
+                                {editingBoms.has(bomTemplate) ? (
+                                  <input type="text" placeholder="YYYY-MM" defaultValue={ref.effectiveTo || ''}
+                                    onBlur={async (e) => {
+                                      const v = e.target.value || null;
+                                      for (const s of allSkus) {
+                                        try { await api.updateSkuLifecycle(s.materialCode, { lifecycleStatus: s.lifecycleStatus, effectiveTo: v ?? undefined, rowVersion: s.rowVersion }); } catch {}
+                                      }
+                                    }}
+                                    style={{ width: 60, fontSize: 10 }} />
+                                ) : (
+                                  <span style={{ fontSize: 10, color: ref.effectiveTo ? '#1e293b' : '#cbd5e1' }}>{ref.effectiveTo || '—'}</span>
+                                )}
+                              </td>
+                              {sortedCountries.map(c => {
+                                const fob = ref.fobByCountry?.[c];
+                                const baseFob = fob?.uploadedFobEur ?? fob?.finalFobEur;
+                                const hasFob = fob != null && baseFob != null && baseFob > 0;
+                                const hasSurcharge = fob?.colourSurchargeEur && fob.colourSurchargeEur > 0;
+                                return (
+                                  <td key={c} style={{ textAlign: "right", cursor: "pointer", padding: "2px 4px" }}
+                                    onClick={() => setEditFob({ materialCodes: allCodes, countryCode: c, fob: baseFob ?? null })}>
+                                    <span style={{ color: hasFob ? "#0f766e" : "#cbd5e1", fontWeight: hasFob ? 600 : 400 }}>
+                                      {hasFob ? baseFob!.toLocaleString() : "-"}
+                                      {hasSurcharge ? <sup style={{ color: '#d97706', fontSize: 9 }}> +{fob.colourSurchargeEur}</sup> : null}
+                                    </span>
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+      {editFob && (
+        <div style={{ marginTop: 10, padding: 8, background: "#f1f5f9", borderRadius: 4, display: "flex", gap: 8, alignItems: "center" }}>
+          <span style={{ fontFamily: "monospace", fontSize: 11 }}>{editFob.materialCodes.length} material codes</span>
+          <span style={{ fontSize: 12 }}>in</span>
+          <input type="text" value={editFob.countryCode}
+            onChange={(e) => setEditFob({ ...editFob, countryCode: e.target.value.toUpperCase() })}
+            style={{ width: 50, fontSize: 12, textAlign: "center" }} />
+          <span style={{ fontSize: 12 }}>FOB €</span>
+          <input type="number" value={editFob.fob ?? ""}
+            onChange={(e) => setEditFob({ ...editFob, fob: e.target.value === "" ? null : Number(e.target.value) })}
+            style={{ width: 100, fontSize: 12 }} />
+          <button className="btn btn-sm btn-primary" onClick={handleFobSave}>Save to all {editFob.materialCodes.length}</button>
+          <button className="btn btn-sm btn-ghost" onClick={() => setEditFob(null)}>Cancel</button>
+        </div>
+      )}
+    </div>
   );
 }
-
-// ── Payment Terms Admin Panel ──────────────────────────────────────────
 
 function PaymentTermAdminPanel() {
   const [pts, setPts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [editForm, setEditForm] = useState<any>({});
   const [impact, setImpact] = useState<Record<string, any> | null>(null);
   const [confirmMsg, setConfirmMsg] = useState("");
+  const [showAddPt, setShowAddPt] = useState(false);
+  const [newPt, setNewPt] = useState({ countryCode: "", countryName: "", paymentTermCode: "TT" });
 
-  const authHeaders = (): Record<string, string> => {
+  const addPaymentTerm = async () => {
+    if (!newPt.countryCode || !newPt.countryName) return;
+    const t = localStorage.getItem("jato_auth_token");
+    const h: Record<string, string> = { "Content-Type": "application/json" };
+    if (t) h["X-Auth-Token"] = t;
+    try {
+      const res = await fetch("/v1/order-genius/payment-terms/countries", {
+        method: "POST", headers: h,
+        body: JSON.stringify({ countryCode: newPt.countryCode.toUpperCase(), countryName: newPt.countryName, paymentTermCode: newPt.paymentTermCode, paymentMethod: "TT" }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setNewPt({ countryCode: "", countryName: "", paymentTermCode: "TT" });
+      setShowAddPt(false);
+      load();
+    } catch (e) { alert(getErrorMessage(e)); }
+  };
+
+  const authHdrs = (): Record<string, string> => {
     const t = localStorage.getItem("jato_auth_token");
     return t ? { "X-Auth-Token": t } : {};
   };
@@ -986,7 +1979,7 @@ function PaymentTermAdminPanel() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/v1/order-genius/payment-terms/countries", { headers: authHeaders() });
+      const res = await fetch("/v1/order-genius/payment-terms/countries", { headers: authHdrs() });
       if (res.ok) setPts((await res.json()).items || []);
     } catch { /* */ }
     setLoading(false);
@@ -996,7 +1989,7 @@ function PaymentTermAdminPanel() {
 
   const startEdit = (row: any) => {
     setEditingId(row.id);
-    setEditForm({ paymentTermCode: row.paymentTermCode, validFrom: row.validFrom || "", validTo: row.validTo || "", remark: row.remark || "" });
+    setEditForm({ paymentTermCode: row.paymentTermCode, validFrom: row.validFrom || "", validTo: row.validTo || "", remark: row.remark || "", isActive: row.isActive });
     setImpact(null);
     setConfirmMsg("");
   };
@@ -1008,7 +2001,7 @@ function PaymentTermAdminPanel() {
     if (isCorrect && !confirmMsg) {
       try {
         const params = new URLSearchParams({ country: row.countryCode, oldPaymentTerm: row.paymentTermCode, newPaymentTerm: editForm.paymentTermCode || row.paymentTermCode, validFrom: editForm.validFrom || row.validFrom || "", validTo: editForm.validTo || row.validTo || "" });
-        const res = await fetch("/v1/order-genius/payment-terms/countries/impact?" + params, { headers: authHeaders() });
+        const res = await fetch("/v1/order-genius/payment-terms/countries/impact?" + params, { headers: authHdrs() });
         if (res.ok) {
           const imp = await res.json();
           setImpact(imp);
@@ -1021,7 +2014,7 @@ function PaymentTermAdminPanel() {
     }
     try {
       const res = await fetch("/v1/order-genius/payment-terms/countries/" + row.id, {
-        method: "PATCH", headers: { ...authHeaders(), "Content-Type": "application/json" },
+        method: "PATCH", headers: { ...authHdrs(), "Content-Type": "application/json" },
         body: JSON.stringify({ ...editForm, correction: isCorrect }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -1040,6 +2033,25 @@ function PaymentTermAdminPanel() {
       <p style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
         Modifications to historical periods show impact but do NOT recalculate existing order snapshots.
       </p>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", justifyContent: "flex-end" }}>
+        <button className="btn btn-sm btn-ghost" onClick={() => setShowAddPt(!showAddPt)}>+ Country</button>
+        {showAddPt && (
+          <>
+            <input type="text" placeholder="Code (e.g. ES)" value={newPt.countryCode}
+              onChange={e => setNewPt({ ...newPt, countryCode: e.target.value.toUpperCase() })}
+              style={{ width: 100, fontSize: 12, padding: "4px 8px" }} />
+            <input type="text" placeholder="Name (e.g. Spain)" value={newPt.countryName}
+              onChange={e => setNewPt({ ...newPt, countryName: e.target.value })}
+              style={{ width: 120, fontSize: 12, padding: "4px 8px" }} />
+            <select value={newPt.paymentTermCode} onChange={e => setNewPt({ ...newPt, paymentTermCode: e.target.value })}
+              style={{ fontSize: 12, padding: "4px 8px" }}>
+              {["TT","LC60","LC90","LC120"].map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <button className="btn btn-sm btn-primary" onClick={addPaymentTerm}>Add</button>
+            <button className="btn btn-sm btn-ghost" onClick={() => setShowAddPt(false)}>Cancel</button>
+          </>
+        )}
+      </div>
       {confirmMsg ? (
         <div style={{ background: "#fef3c7", border: "1px solid #f59e0b", padding: 12, marginBottom: 12, borderRadius: 6 }}>
           <strong>⚠️ Impact Warning</strong>
@@ -1081,7 +2093,17 @@ function PaymentTermAdminPanel() {
                       <input type="text" value={editForm.validTo} onChange={(e) => setEditForm({ ...editForm, validTo: e.target.value })} style={{ width: 80 }} placeholder="YYYY-MM or blank" />
                     ) : (row.validTo || "至今")}
                   </td>
-                  <td style={{ color: row.isActive ? "#16a34a" : "#9ca3af" }}>{row.isActive ? "Active" : "Inactive"}</td>
+                  <td>
+                    {isEditing ? (
+                      <label style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+                        <input type="checkbox" checked={editForm.isActive ?? row.isActive}
+                          onChange={(e) => setEditForm({ ...editForm, isActive: e.target.checked })} />
+                        {editForm.isActive ?? row.isActive ? "Active" : "Inactive"}
+                      </label>
+                    ) : (
+                      <span style={{ color: row.isActive ? "#16a34a" : "#9ca3af" }}>{row.isActive ? "Active" : "Inactive"}</span>
+                    )}
+                  </td>
                   <td style={{ maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis" }}>
                     {isEditing ? (
                       <input type="text" value={editForm.remark} onChange={(e) => setEditForm({ ...editForm, remark: e.target.value })} style={{ width: 120 }} />
@@ -1092,9 +2114,15 @@ function PaymentTermAdminPanel() {
                       <div style={{ display: "flex", gap: 4 }}>
                         <button className="btn btn-sm btn-primary" onClick={() => saveEdit(row)}>Save</button>
                         <button className="btn btn-sm btn-ghost" onClick={cancelEdit}>Cancel</button>
+                        <button className="btn btn-sm btn-ghost" style={{ color: "#dc2626" }} onClick={async () => {
+                          if (!confirm(`Close payment term for ${row.countryCode}? This deactivates it.`)) return;
+                          const t = localStorage.getItem("jato_auth_token");
+                          await fetch(`/v1/order-genius/payment-terms/countries/${row.id}/close`, { method: "POST", headers: { "X-Auth-Token": t || "", "Content-Type": "application/json" }, body: "{}" });
+                          setEditingId(null); load();
+                        }}>Delete</button>
                       </div>
                     ) : (
-                      <button className="btn btn-sm btn-ghost" onClick={() => startEdit(row)} disabled={!row.isActive && !row.validFrom}>Edit</button>
+                      <button className="btn btn-sm btn-ghost" onClick={() => startEdit(row)}>Edit</button>
                     )}
                   </td>
                 </tr>

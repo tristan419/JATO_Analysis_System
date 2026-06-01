@@ -52,6 +52,7 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       proxy: {
         "/v1": devProxyTarget,
+        "/metadata": devProxyTarget,
         "/healthz": devProxyTarget,
       },
     },

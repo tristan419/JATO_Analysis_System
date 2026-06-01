@@ -31,7 +31,7 @@ features:
     usage
   - Other load_slice callers with 200_000 limit may have similar partition-truncation
     risk for different query types
-  lastAuditAt: '2026-05-18T01:28:10.749833+00:00'
+  lastAuditAt: '2026-05-29T06:03:31.589915+00:00'
 - featureId: feature.specification
   name: Specification / Data Explorer
   status: active
@@ -65,7 +65,37 @@ features:
   riskLevel: low
   routes:
   - /market-scan
-  backendApis: []
+  backendApis:
+  - POST /login
+  - POST /register
+  - GET /me
+  - PATCH /me/profile
+  - POST /logout
+  - GET /users
+  - PATCH /users/{user_id}/role
+  - PATCH /users/{user_id}/profile
+  - PATCH /users/{user_id}/toggle-active
+  - POST /role-upgrade/request
+  - POST /query
+  - POST /time-series
+  - POST /overview
+  - GET /data-freshness
+  - POST /detail
+  - POST /detail-csv
+  - POST /time-series-grouped
+  - POST /advanced-chart
+  - POST /model-versions
+  - POST /positioning-map
+  - GET /overview
+  - GET /pipeline-health
+  - GET /source-quality
+  - GET /cost
+  - GET /code-audit
+  - GET /proposals
+  - GET /gaps
+  - GET /features
+  - GET /toolchain
+  - GET /architecture
   scheduledJobs: []
   dataSources:
   - JATO partitioned parquet
@@ -79,6 +109,9 @@ features:
   - frontendBuild
   - frontendVitest
   - backendPytest
+  - frontend
+  - compile
+  - jsonl
   dependencies:
   - pipeline.jato.etl
   owner: ''
@@ -89,7 +122,9 @@ features:
   - prior_rolling12_columns derived from current rolling12 shift means window sizes
     may differ by 1-2 months when data gaps exist, but avoids entire window being
     empty
-  lastAuditAt: '2026-05-18T01:28:11.476912+00:00'
+  - MarketScan first request after a real JATO publish still performs one cold compute;
+    Redis/local warm path should be fast after that.
+  lastAuditAt: '2026-05-29T06:03:33.840023+00:00'
 - featureId: feature.positioning_pricing
   name: Positioning & Pricing
   status: active
@@ -177,7 +212,7 @@ features:
   owner: ''
   governanceStatus: registered
   knownIssues: []
-  lastAuditAt: '2026-05-18T01:28:09.686559+00:00'
+  lastAuditAt: '2026-05-29T06:03:28.511036+00:00'
 - featureId: feature.customer_insights
   name: Customer Insights / VOC Live
   status: active
@@ -264,22 +299,26 @@ features:
   - artifact.status_json
   docs:
   - 04_DevOps/TENCENT_CLOUD_DEPLOY.md
+  - Markdown_Readme/features/feature.data_management.md
   tests:
   - 'Backend: test_data_management_routes.py'
   - 'Backend: test_data_management_service.py'
+  - backend
+  - frontend
+  - syntax
   dependencies: []
   owner: ''
   governanceStatus: registered
   knownIssues:
   - Hermes governance tab not yet integrated
-  lastChangedAt: null
-  lastAuditAt: '2026-05-14'
-  notes: 'Admin overview: file/table inventory, CRUD, Airflow controls, VOC observatory.'
+  - Existing notifications emitted before this change will not have enriched context
+    until Sentinel emits a fresh pipeline notification.
+  lastAuditAt: '2026-05-29T06:03:13.069270+00:00'
 - featureId: feature.msrp_workbench
   name: MSRP Workbench
   status: active
   implementationStatus: implemented
-  riskLevel: medium
+  riskLevel: low
   routes:
   - /msrp
   backendApis:
@@ -300,10 +339,13 @@ features:
   docs:
   - MSRP/README.md
   - MSRP/01_Requirements/ through MSRP/05_Backlog/ (16 docs)
+  - Markdown_Readme/features/feature.msrp_workbench.md
   tests:
   - 'Backend: test_msrp_admin_service.py'
   - 'Backend: test_msrp_workflow_service.py'
   - 'Backend: test_msrp_mapping_service.py'
+  - backend
+  - syntax
   dependencies:
   - pipeline.msrp.dryrun_systemd
   - pipeline.msrp.ingest_systemd
@@ -312,10 +354,16 @@ features:
   governanceStatus: registered
   knownIssues:
   - 92/209 sources passing (44.0%) — majority still failing
-  lastChangedAt: null
-  lastAuditAt: '2026-05-14'
-  notes: 'Full MSRP lifecycle: source management → scrape → observation → current
-    price.'
+  - Failed sources in dryrun now classified and visible — may surface previously silent
+    problems
+  - Sentinel probe may generate notifications until msrp pipeline runs write status
+    file
+  - batch_ingest.py retry increases timeout from 60s to 120s per attempt, max 3 attempts
+  - STOP_ON_FAILURE default changed from true to false; dryrun may take longer but
+    all countries run
+  - Status file is overwritten (merge with existing) not locked; concurrent writes
+    may race
+  lastAuditAt: '2026-05-29T06:03:21.583511+00:00'
 - featureId: feature.current_price
   name: Current Price
   status: active
@@ -335,6 +383,7 @@ features:
   - artifact.msrp.current_prices
   docs:
   - MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md
+  - Markdown_Readme/features/feature.current_price.md
   tests:
   - 'Backend: test_msrp_lookup_service.py'
   - 'Frontend: msrpCurrentPrice.test.ts'
@@ -342,10 +391,13 @@ features:
   - pipeline.msrp.ingest_systemd
   owner: ''
   governanceStatus: registered
-  knownIssues: []
-  lastChangedAt: null
-  lastAuditAt: '2026-05-14'
-  notes: Current effective price per country/brand/model/trim/powertrain.
+  knownIssues:
+  - batch_ingest.py retry increases timeout from 60s to 120s per attempt, max 3 attempts
+  - STOP_ON_FAILURE default changed from true to false; dryrun may take longer but
+    all countries run
+  - Status file is overwritten (merge with existing) not locked; concurrent writes
+    may race
+  lastAuditAt: '2026-05-29T06:03:21.854534+00:00'
 - featureId: feature.review_workbench
   name: Review Workbench
   status: active
@@ -371,6 +423,7 @@ features:
   docs:
   - MSRP/03_Implementation/MSRP_VERSION_MATRIX_AND_MULTI_SOURCE_2026-04-17.md
   - MSRP/03_Implementation/MSRP_OVERRIDE_AND_PRICE_HISTORY_2026-04-11.md
+  - Markdown_Readme/features/feature.review_workbench.md
   tests:
   - 'Backend: test_review_service.py'
   - 'Backend: test_review_workbench_service.py'
@@ -378,10 +431,13 @@ features:
   - pipeline.msrp.ingest_systemd
   owner: ''
   governanceStatus: registered
-  knownIssues: []
-  lastChangedAt: null
-  lastAuditAt: '2026-05-14'
-  notes: Human-in-the-loop review of unmatched MSRP observations.
+  knownIssues:
+  - batch_ingest.py retry increases timeout from 60s to 120s per attempt, max 3 attempts
+  - STOP_ON_FAILURE default changed from true to false; dryrun may take longer but
+    all countries run
+  - Status file is overwritten (merge with existing) not locked; concurrent writes
+    may race
+  lastAuditAt: '2026-05-29T06:03:22.125072+00:00'
 - featureId: feature.engineering
   name: Engineering Config Management
   status: active
@@ -415,7 +471,7 @@ features:
   governanceStatus: registered
   knownIssues:
   - Auto-generated dev event from git commit — tests not auto-verified.
-  lastAuditAt: '2026-05-18T01:28:12.425562+00:00'
+  lastAuditAt: '2026-05-29T06:03:36.658886+00:00'
 - featureId: feature.jato_monthly_update
   name: JATO Monthly Update Pipeline
   status: active
@@ -423,7 +479,36 @@ features:
   riskLevel: low
   routes:
   - /msrp/monthly-update
-  backendApis: []
+  backendApis:
+  - POST /monthly-update-jobs
+  - POST /monthly-update-jobs/from-upload
+  - POST /monthly-update-jobs/single-country
+  - GET /monthly-update-jobs
+  - GET /monthly-update-jobs/{job_id}
+  - POST /monthly-update-jobs/{job_id}/retry
+  - POST /monthly-update-jobs/{job_id}/recheck
+  - POST /monthly-update-jobs/{job_id}/cancel
+  - GET /monthly-update-jobs/{job_id}/review
+  - POST /monthly-update-jobs/{job_id}/publish
+  - POST /v1/msrp/monthly-update-jobs/{job_id}/recheck
+  - POST /v1/msrp/monthly-update-jobs/{job_id}/cancel
+  - POST /monthly-update-jobs/{job_id}/rollback
+  - POST /monthly-update-jobs/{job_id}/smart-merge
+  - GET /overview
+  - GET /pipeline-health
+  - GET /pipeline/status
+  - GET /pipeline/status/{pipeline_id}
+  - GET /source-quality
+  - GET /cost
+  - GET /msrp-country-progress
+  - GET /msrp-dryrun-history
+  - GET /code-audit
+  - GET /proposals
+  - GET /v1/hermes/pipeline/status
+  - GET /v1/hermes/pipeline/status/{pipelineId}
+  - POST /v1/msrp/monthly-update-jobs/{job_id}/smart-merge
+  - POST /v1/msrp/monthly-update-jobs/single-country
+  - POST /monthly-update-uploads/initiate
   scheduledJobs: []
   dataSources:
   - Uploaded XLSX files
@@ -434,13 +519,34 @@ features:
   - Markdown_Readme/features/feature.jato_monthly_update.md
   tests:
   - backendPytest
+  - backend
+  - frontend
+  - syntax
+  - jsonl
+  - compile
+  - frontendTsc
+  - frontendVitest
+  - integration
   dependencies:
   - pipeline.jato.etl
   owner: ''
   governanceStatus: registered
   knownIssues:
   - Auto-generated dev event from git commit — tests not auto-verified.
-  lastAuditAt: '2026-05-18T01:28:13.166086+00:00'
+  - Cancel can kill tracked subprocess groups; direct in-thread validation remains
+    best-effort until it reaches a cancellation checkpoint.
+  - MarketScan first request after a real JATO publish still performs one cold compute;
+    Redis/local warm path should be fast after that.
+  - Existing runtime pipelines must run once to create fresh standard status files
+    for MSRP dryrun/ingest; Hermes still falls back to legacy scheduled status until
+    then.
+  - Smart Merge rebuilds partition/manifest/fingerprint via subprocess — if the rebuild
+    script fails, the job enters smart_merge_failed phase and user must retry
+  - Works only for country_regression blocker, not sales_doubling (which indicates
+    deeper data integrity issue)
+  - No CSV upload support — only xlsx
+  - Upload-time month check is best-effort; publish guard still runs separately
+  lastAuditAt: '2026-05-29T06:03:38.913411+00:00'
 - featureId: feature.presence_websocket
   name: Presence (在线人数 + WebSocket)
   status: active
@@ -469,7 +575,7 @@ features:
   - Dev event written retroactively — not during original implementation session
   - Tests not yet verified for presence changes
   - Auto-generated dev event from git commit — tests not auto-verified.
-  lastAuditAt: '2026-05-18T01:28:12.801666+00:00'
+  lastAuditAt: '2026-05-29T06:03:37.803741+00:00'
 - featureId: feature.ranking_trend_drilldown
   name: Ranking Trend Drilldown
   status: active
@@ -535,7 +641,9 @@ features:
   implementationStatus: implemented
   riskLevel: low
   routes: []
-  backendApis: []
+  backendApis:
+  - GET /v1/hermes/pipeline/status
+  - GET /v1/hermes/pipeline/status/{pipelineId}
   scheduledJobs:
   - pipeline.msrp.dryrun_systemd
   - pipeline.msrp.ingest_systemd
@@ -547,12 +655,17 @@ features:
   - Markdown_Readme/features/feature.scraping_toolkit.md
   tests:
   - scrapingToolkitPytest
+  - backend
+  - syntax
   dependencies: []
   owner: ''
   governanceStatus: registered
   knownIssues:
   - Auto-generated dev event from git commit — tests not auto-verified.
-  lastAuditAt: '2026-05-18T01:28:12.984264+00:00'
+  - Existing runtime pipelines must run once to create fresh standard status files
+    for MSRP dryrun/ingest; Hermes still falls back to legacy scheduled status until
+    then.
+  lastAuditAt: '2026-05-29T06:03:38.340783+00:00'
 - featureId: feature.ui_animation_toolkit
   name: UI Animation Toolkit (anime.js)
   status: active
@@ -581,7 +694,7 @@ features:
   knownIssues:
   - Dev event written retroactively — not during original implementation session
   - Tests not yet verified for presence changes
-  lastAuditAt: '2026-05-18T01:28:11.969786+00:00'
+  lastAuditAt: '2026-05-29T06:03:35.284535+00:00'
 - featureId: feature.gitnexus
   name: GitNexus (Code Intelligence)
   status: active
@@ -629,6 +742,8 @@ features:
   - GET /features
   - GET /toolchain
   - GET /architecture
+  - GET /v1/hermes/pipeline/status
+  - GET /v1/hermes/pipeline/status/{pipelineId}
   scheduledJobs: []
   dataSources: []
   artifacts: []
@@ -640,6 +755,14 @@ features:
   - frontendBuild
   - frontendVitest
   - ciContract
+  - frontend
+  - syntax
+  - ops
+  - backendPytest
+  - pyCompile
+  - backendHermesPytest
+  - workflowYaml
+  - shellSyntax
   dependencies: []
   owner: ''
   governanceStatus: registered
@@ -650,7 +773,23 @@ features:
   - DevSync requires manual trigger (Sync Now button or API call)
   - Frontend diagnostics can still fail visibly inside the job logs; they no longer
     fail the workflow conclusion.
-  lastAuditAt: '2026-05-18T01:28:12.893019+00:00'
+  - Existing notifications emitted before this change will not have enriched context
+    until Sentinel emits a fresh pipeline notification.
+  - Existing runtime pipelines must run once to create fresh standard status files
+    for MSRP dryrun/ingest; Hermes still falls back to legacy scheduled status until
+    then.
+  - The seed is intentionally narrow; broader canonical feature evidence should still
+    live in registries and dev events.
+  - Production DevSync runtime registry will stop warning after this deploy because
+    Sentinel can hydrate tests from Kanban; any genuinely missing tests still remain
+    visible.
+  - Only auto-generated bookkeeping featureIds are filtered; real Hermes feature ids
+    such as hermes-devsync and hermes-chat-gateway remain registered.
+  - Server must be redeployed before production has deploy_release.json and the new
+    deploy probe
+  - If both deploy and DevSync cannot reach Tencent, server-side Hermes cannot infer
+    the latest GitHub commit
+  lastAuditAt: '2026-05-29T06:03:38.072523+00:00'
 - featureId: hermes-chat-gateway
   name: Hermes Chat Gateway
   status: active
@@ -680,4 +819,384 @@ features:
   - Not yet connected to real queue-worker execution
   - Claude Code dev events not yet auto-synced into Hermes
   - Auto-generated dev event from git commit — tests not auto-verified.
-  lastAuditAt: '2026-05-18T01:28:12.243482+00:00'
+  lastAuditAt: '2026-05-29T06:03:36.128232+00:00'
+- featureId: chore-retry-deploy
+  name: Chore Retry Deploy
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis: []
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/chore-retry-deploy.md
+  tests: []
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  lastAuditAt: '2026-05-29T06:03:09.805750+00:00'
+- featureId: feat-upload-toolkit-redis-progress-callback-factor
+  name: 'feat(upload-toolkit): Redis progress callback factory'
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis: []
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/feat-upload-toolkit-redis-progress-callback-factor.md
+  tests: []
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  lastAuditAt: '2026-05-29T06:03:14.543561+00:00'
+- featureId: feat-extract-upload-toolkit-reusable-chunked-uploa
+  name: Feat Extract Upload Toolkit Reusable Chunked Uploa
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis: []
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/feat-extract-upload-toolkit-reusable-chunked-uploa.md
+  tests: []
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  lastAuditAt: '2026-05-29T06:03:15.174023+00:00'
+- featureId: feature.hermes_sentinel
+  name: 'feat(jato): add monthly update recheck and cancel controls'
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis:
+  - POST /v1/msrp/monthly-update-jobs/{job_id}/recheck
+  - POST /v1/msrp/monthly-update-jobs/{job_id}/cancel
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/feature.hermes_sentinel.md
+  tests:
+  - backend
+  - frontend
+  - syntax
+  - jsonl
+  - compile
+  - ops
+  - data
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Cancel can kill tracked subprocess groups; direct in-thread validation remains
+    best-effort until it reaches a cancellation checkpoint.
+  - MarketScan first request after a real JATO publish still performs one cold compute;
+    Redis/local warm path should be fast after that.
+  - The seed is intentionally narrow; broader canonical feature evidence should still
+    live in registries and dev events.
+  - Production DevSync runtime registry will stop warning after this deploy because
+    Sentinel can hydrate tests from Kanban; any genuinely missing tests still remain
+    visible.
+  - Gap remains in_progress until the next production VOC scheduled run proves voc-failed-sources.json
+    contains live per-source errors.
+  - Source quality rates remain deterministic estimates from available counts and
+    known issues; detailed per-source crawler error types still depend on future runner
+    output.
+  - Sentinel probe may generate notifications until msrp pipeline runs write status
+    file
+  lastAuditAt: '2026-05-29T06:03:20.396435+00:00'
+- featureId: feature.hermes_ops_runner_control_plane
+  name: Hermes Ops Runner Control Plane
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis:
+  - POST /hermes/run/{command}
+  - POST /hermes/commands/execute
+  - GET /hermes/run
+  - GET /hermes/run/{command}/help
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/feature.hermes_ops_runner_control_plane.md
+  tests:
+  - backendPytest
+  - pyCompile
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Runner remains a control-plane capability and should stay disabled in production
+    when audit commands are not needed.
+  - Production must intentionally set HERMES_RUN_ENABLED; false keeps Hermes read-only,
+    true enables admin-triggered audit commands.
+  lastAuditAt: '2026-05-29T06:03:23.896819+00:00'
+- featureId: chore-hermes-record-sentinel-inbox-dev-event
+  name: 'chore(hermes): record sentinel inbox dev event'
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis: []
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/chore-hermes-record-sentinel-inbox-dev-event.md
+  tests: []
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  lastAuditAt: '2026-05-29T06:03:12.461490+00:00'
+- featureId: feature.hermes_deploy_sentinel
+  name: Hermes Deploy Sentinel
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis:
+  - GET /hermes/deploy/status
+  - GET /hermes/sentinel/status
+  - POST /hermes/sentinel/notifications/{notification_id}/status
+  - POST /hermes/dev/sync
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/feature.hermes_deploy_sentinel.md
+  tests:
+  - backendPytest
+  - frontendTsc
+  - pyCompile
+  - backendHermesPytest
+  - workflowYaml
+  - shellSyntax
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - First production deploy is required before deploy_release.json exists on Tencent.
+  - If both deploy-fullstack-tencent and hermes-devsync cannot reach the server, Hermes
+    cannot learn the latest expected commit from production alone.
+  - Only auto-generated bookkeeping featureIds are filtered; real Hermes feature ids
+    such as hermes-devsync and hermes-chat-gateway remain registered.
+  - If production table schema differs from the migration definition, Alembic will
+    now advance without reconciling columns; current deploy log only showed DuplicateTable,
+    not schema mismatch.
+  - Server must be redeployed before production has deploy_release.json and the new
+    deploy probe
+  - If both deploy and DevSync cannot reach Tencent, server-side Hermes cannot infer
+    the latest GitHub commit
+  lastAuditAt: '2026-05-29T06:03:24.464463+00:00'
+- featureId: feat-upload-toolkit-thread-safety-stale-cleanup-st
+  name: Feat Upload Toolkit Thread Safety Stale Cleanup St
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis: []
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/feat-upload-toolkit-thread-safety-stale-cleanup-st.md
+  tests: []
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  lastAuditAt: '2026-05-29T06:03:14.899789+00:00'
+- featureId: hermes-pipeline-governor
+  name: Hermes Pipeline Governor
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis: []
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/hermes-pipeline-governor.md
+  tests:
+  - backend
+  - ops
+  - syntax
+  - data
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Failed sources in dryrun now classified and visible — may surface previously silent
+    problems
+  - Gap remains in_progress until the next production VOC scheduled run proves voc-failed-sources.json
+    contains live per-source errors.
+  - Source quality rates remain deterministic estimates from available counts and
+    known issues; detailed per-source crawler error types still depend on future runner
+    output.
+  - Sentinel probe may generate notifications until msrp pipeline runs write status
+    file
+  - batch_ingest.py retry increases timeout from 60s to 120s per attempt, max 3 attempts
+  - STOP_ON_FAILURE default changed from true to false; dryrun may take longer but
+    all countries run
+  - Status file is overwritten (merge with existing) not locked; concurrent writes
+    may race
+  lastAuditAt: '2026-05-29T06:03:22.420179+00:00'
+- featureId: order_genius
+  name: Order Genius
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis: []
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/order_genius.md
+  tests:
+  - 'Backend: 66 unit tests pass (1 pre-existing failure unrelated). Frontend: TypeScript
+    compilation passes for new code (2 pre-existing errors in JatoMonthlyUpdatePage).
+    FastAPI app loads with 17 Order Genius routes registered.'
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues: []
+  lastAuditAt: '2026-05-29T06:03:07.677615+00:00'
+- featureId: chore-hermes-sync
+  name: Chore Hermes Sync
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis: []
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/chore-hermes-sync.md
+  tests: []
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  lastAuditAt: '2026-05-29T06:03:07.408132+00:00'
+- featureId: hermes-intelligence-governor
+  name: Hermes Intelligence Governor
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis: []
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/hermes-intelligence-governor.md
+  tests: []
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Failed sources in dryrun now classified and visible — may surface previously silent
+    problems
+  lastAuditAt: '2026-05-29T06:03:16.357035+00:00'
+- featureId: feature.permission_management
+  name: Permission Management
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis: []
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/feature.permission_management.md
+  tests: []
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues: []
+  lastAuditAt: '2026-05-29T06:03:03.559655+00:00'
+- featureId: feature.advanced_analysis
+  name: Advanced Analysis
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis:
+  - POST /v1/advanced-analysis/kpi
+  - POST /v1/advanced-analysis/shift-share
+  - POST /v1/advanced-analysis/seasonal
+  - POST /v1/advanced-analysis/cell-attribution
+  - POST /v1/advanced-analysis/transfer-matrix
+  - DELETE /v1/advanced-analysis/cache
+  - POST /v1/advanced-analysis/nested-shift-share
+  - POST /v1/advanced-analysis/drilldown
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/feature.advanced_analysis.md
+  tests:
+  - tsc
+  - playwright
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Service not yet tested against live parquet data - backend restart needed to load
+    new route
+  - STL decomposition requires statsmodels package (graceful error if missing)
+  - DeckPeriodTimeline not used - replaced with simple text input for period selection
+    (less UX polish, fully functional)
+  - Sankey and heatmap Plotly trace types required 'as unknown as Data[]' cast due
+    to strict @types/plotly.js
+  - Nested shift-share endpoint is computationally heavy for deep hierarchies + many
+    models
+  - statsmodels STL import is optional - graceful error if missing
+  - Drill-down requires correct segment/reg/drive value formatting (spaces not hyphens)
+  - Deep filtering may produce empty results if exact combination doesn't exist in
+    data
+  lastAuditAt: '2026-05-29T06:03:01.682612+00:00'
+- featureId: chore-record-coc-match-dev-event
+  name: Chore Record Coc Match Dev Event
+  status: active
+  implementationStatus: implemented
+  riskLevel: low
+  routes: []
+  backendApis: []
+  scheduledJobs: []
+  dataSources: []
+  artifacts: []
+  docs:
+  - Markdown_Readme/features/chore-record-coc-match-dev-event.md
+  tests: []
+  dependencies: []
+  owner: ''
+  governanceStatus: registered
+  knownIssues:
+  - Auto-generated dev event from git commit — tests not auto-verified.
+  lastAuditAt: '2026-05-29T06:03:12.193126+00:00'

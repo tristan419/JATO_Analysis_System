@@ -1527,6 +1527,21 @@ export function DataManagementPage() {
                             return <div key={d.date} title={`${d.date}: ${cost.toFixed(1)} CNY`} style={{aspectRatio:"1",background:c,borderRadius:2,border:d.overDailyBudget?"2px solid #ef4444":"none"}} />;
                           })}
                         </div>
+                        {/* Source breakdown */}
+                        {(hermesCostHeatmap as Record<string,unknown>).bySourceCny && Object.keys((hermesCostHeatmap as Record<string,unknown>).bySourceCny as Record<string,unknown>).length > 0 && (
+                          <div style={{marginTop:12}}>
+                            <div style={{fontSize:11,fontWeight:600,marginBottom:4}}>By Source</div>
+                            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                              {Object.entries((hermesCostHeatmap as Record<string,unknown>).bySourceCny as Record<string,unknown>).map(([source,cost]) => (
+                                <span key={source} style={{fontSize:10,fontWeight:600,
+                                  background:source==="country_copilot"?"#fef3c7":source==="hermes"?"#dbeafe":"#f1f5f9",
+                                  borderRadius:4,padding:"4px 10px"}}>
+                                  {source==="country_copilot"?"Country Copilot":source==="hermes"?"Hermes":source}: {Number(cost).toFixed(2)} CNY
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                         {/* Model breakdown */}
                         {hermesCostHeatmap.byModelCny && Object.keys(hermesCostHeatmap.byModelCny).length > 0 && (
                           <div style={{marginTop:12}}>
