@@ -318,19 +318,33 @@ export function OrderGeniusPage() {
         if (a.lifecycleStatus !== b.lifecycleStatus) return a.lifecycleStatus === "active" ? -1 : 1;
         return (a.colour || "").localeCompare(b.colour || "");
       });
-      // Sum TTL for the group (from month data)
+      // Sum TTL, monthly totals, and weighted avg FOB for the group
       let groupTtl = 0;
+      let totalQtyForFob = 0;
+      let fobWeightedSum = 0;
+      const monthlySums: number[] = new Array(13).fill(0); // index 1-12
       for (const r of groupRows) {
         const months = r.months || {};
-        for (let m = 1; m <= 12; m++) groupTtl += months[String(m)]?.quantity ?? 0;
+        let childQty = 0;
+        for (let m = 1; m <= 12; m++) {
+          const q = months[String(m)]?.quantity ?? 0;
+          monthlySums[m] += q;
+          groupTtl += q;
+          childQty += q;
+        }
+        if (childQty > 0 && (r.fobEur ?? 0) > 0) {
+          totalQtyForFob += childQty;
+          fobWeightedSum += childQty * (r.fobEur ?? 0);
+        }
       }
+      const avgFob = totalQtyForFob > 0 ? fobWeightedSum / totalQtyForFob : (groupRows[0]?.fobEur ?? null);
       // Group header row (use group key as materialCode so getRowId is unique)
       const header: any = {
         materialCode: `__grp_${groupKey.replace(/[^a-zA-Z0-9]/g, '_')}`,
         modelName: `${brand} ${modelName} ${version}`,
         version: "",
         colour: "",
-        fobEur: null,
+        fobEur: avgFob,
         lifecycleStatus: "active",
         editable: false,
         remark: "",
@@ -342,7 +356,7 @@ export function OrderGeniusPage() {
         __groupLabel: `${brand} ${modelName} · ${pt} · ${groupRows.length} colours · ${groupTtl.toLocaleString()} units`,
         __groupColor: color,
       };
-      for (let m = 1; m <= 12; m++) header[`month_${m}`] = 0;
+      for (let m = 1; m <= 12; m++) header[`month_${m}`] = monthlySums[m];
       result.push(header);
       // Child rows
       for (const r of groupRows) {
