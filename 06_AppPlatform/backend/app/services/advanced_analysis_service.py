@@ -26,6 +26,7 @@ from app.services.market_scan_service import (
 logger = logging.getLogger(__name__)
 
 _CACHE_TTL_SECONDS = 1800
+_CACHE_MAX_ENTRIES = max(1, int(os.getenv("APP_ADVANCED_ANALYSIS_CACHE_MAX_ENTRIES", "48")))
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _cache_lock = threading.Lock()
 _WARMUP_RUN = False
@@ -123,16 +124,24 @@ def _cached_or_compute(key: str, compute_fn, ttl: int = _CACHE_TTL_SECONDS) -> d
     # Try disk cache before computing
     disk_result = _load_precomputed(key, ttl)
     if disk_result is not None:
-        with _cache_lock:
-            _cache[key] = (now, disk_result)
+        _store_memory_cache(key, disk_result, now)
         return disk_result
 
     result = compute_fn()
-    with _cache_lock:
-        _cache[key] = (now, result)
+    _store_memory_cache(key, result)
     # Persist to disk for next cold start
     _save_precomputed(key, result)
     return result
+
+
+def _store_memory_cache(key: str, result: dict[str, Any], timestamp: float | None = None) -> None:
+    with _cache_lock:
+        _cache[key] = (timestamp or time.time(), result)
+        while len(_cache) > _CACHE_MAX_ENTRIES:
+            oldest_key = min(_cache, key=lambda item: _cache[item][0])
+            if oldest_key == key and len(_cache) == 1:
+                break
+            _cache.pop(oldest_key, None)
 
 
 def _normalize_drive(raw: str) -> str:

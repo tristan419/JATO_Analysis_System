@@ -208,9 +208,23 @@ export function AdvancedAnalysisPage() {
 
   // Load profile options when country changes
   useEffect(() => {
-    api.get<AdvancedAnalysisProfileOptionsResponse>(`/advanced-analysis/profile-options?country=${encodeURIComponent(country)}`)
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      api.get<AdvancedAnalysisProfileOptionsResponse>(
+        `/advanced-analysis/profile-options?country=${encodeURIComponent(country)}`,
+        { signal: controller.signal },
+      )
       .then(r => setProfileOptions({ ...EMPTY_PROFILE_OPTIONS, ...(r.options || {}) }))
-      .catch(() => setProfileOptions(EMPTY_PROFILE_OPTIONS));
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        if (error instanceof Error && error.name === "AbortError") return;
+        setProfileOptions(EMPTY_PROFILE_OPTIONS);
+      });
+    }, 250);
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
   }, [country]);
 
   // Fetch data
@@ -224,7 +238,7 @@ export function AdvancedAnalysisPage() {
     return s;
   }, [profileSelections]);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true); setError(null);
     try {
       const scope = buildScope();
@@ -245,16 +259,39 @@ export function AdvancedAnalysisPage() {
         profile_specs: buildProfileSpecs(profileSpecs),
         top_n: 12,
       };
-      const [martResult, competitorResult] = await Promise.all([
-        api.post<TransferMartResponse>("/advanced-analysis/transfer-mart", payload),
-        api.post<CompetitorSetResponse>("/advanced-analysis/competitor-set", competitorPayload),
-      ]);
+      const martResult = await api.post<TransferMartResponse>(
+        "/advanced-analysis/transfer-mart",
+        payload,
+        { signal },
+      );
+      if (signal?.aborted) return;
+      const competitorResult = await api.post<CompetitorSetResponse>(
+        "/advanced-analysis/competitor-set",
+        competitorPayload,
+        { signal },
+      );
+      if (signal?.aborted) return;
       setData(martResult);
       setCompetitorData(competitorResult);
-    } catch (e: unknown) { setError(e instanceof Error ? e.message : "Failed"); }
-    finally { setLoading(false); }
+    } catch (e: unknown) {
+      if (signal?.aborted) return;
+      if (e instanceof Error && e.name === "AbortError") return;
+      setError(e instanceof Error ? e.message : "Failed");
+    }
+    finally {
+      if (!signal?.aborted) setLoading(false);
+    }
   }, [country, period, timeMode, buildScope, compareMode, periodB, targetModel, profileSpecs]);
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      void fetchData(controller.signal);
+    }, 500);
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [fetchData]);
 
   // Drawer mutual exclusion
   const hFO = useCallback((o: boolean) => { setFilterOpen(o); if (o) setExportOpen(false); }, []);
@@ -410,7 +447,7 @@ export function AdvancedAnalysisPage() {
           <div className="market-scan-field market-scan-field-actions deck-panel-grid__wide">
             <span>Deck</span>
             <div className="btn-group">
-              <button type="button" className="btn btn-secondary btn-sm" onClick={fetchData}>Refresh</button>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => void fetchData()}>Refresh</button>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setProfileSelections(emptyProfileSelections()); setProfileSpecs(emptyProfileSpecs()); setTargetModel(""); setPeriodB(""); setCompareMode(false); setError(null); }}>Reset All</button>
             </div>
           </div>
