@@ -142,11 +142,14 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/github_actions_tencent_key
           chmod 600 ~/.ssh/github_actions_tencent_key
 
-          scp -v -P "$SSH_PORT" \
+          timeout 120s scp -v -P "$SSH_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             -o ConnectTimeout=20 \
+            -o ConnectionAttempts=2 \
+            -o ServerAliveInterval=10 \
+            -o ServerAliveCountMax=2 \
             -i ~/.ssh/github_actions_tencent_key \
             "$RUNNER_TEMP/JATO_deploy.tar.gz" \
             "$SSH_USER@$SSH_HOST:/tmp/JATO_deploy.tar.gz"
@@ -171,12 +174,15 @@ jobs:
           sudo apt-get install -y sshpass
 
           sshpass -p "$SSH_PASSWORD" \
-            scp -v -P "$SSH_PORT" \
+            timeout 120s scp -v -P "$SSH_PORT" \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             -o ConnectTimeout=20 \
+            -o ConnectionAttempts=2 \
+            -o ServerAliveInterval=10 \
+            -o ServerAliveCountMax=2 \
             "$RUNNER_TEMP/JATO_deploy.tar.gz" \
             "$SSH_USER@$SSH_HOST:/tmp/JATO_deploy.tar.gz"
 
@@ -217,11 +223,14 @@ jobs:
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_SECRET=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_SECRET }}'); "
           REMOTE_EXPORTS+="export GOOGLE_OAUTH_PROXY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_PROXY_URL }}'); "
 
-          ssh -v -p "$SSH_PORT" \
+          timeout 180s ssh -v -p "$SSH_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             -o ConnectTimeout=20 \
+            -o ConnectionAttempts=2 \
+            -o ServerAliveInterval=10 \
+            -o ServerAliveCountMax=2 \
             -i ~/.ssh/github_actions_tencent_key \
             "$SSH_USER@$SSH_HOST" "${REMOTE_EXPORTS}bash -s" <<'EOF'
           set -euo pipefail
@@ -369,12 +378,15 @@ jobs:
           REMOTE_EXPORTS+="export GOOGLE_OAUTH_PROXY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_PROXY_URL }}'); "
 
           sshpass -p "$SSH_PASSWORD" \
-            ssh -v -p "$SSH_PORT" \
+            timeout 180s ssh -v -p "$SSH_PORT" \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             -o ConnectTimeout=20 \
+            -o ConnectionAttempts=2 \
+            -o ServerAliveInterval=10 \
+            -o ServerAliveCountMax=2 \
             "$SSH_USER@$SSH_HOST" "${REMOTE_EXPORTS}bash -s" <<'EOF'
           set -euo pipefail
 
