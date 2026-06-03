@@ -142,7 +142,7 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/github_actions_tencent_key
           chmod 600 ~/.ssh/github_actions_tencent_key
 
-          timeout 120s scp -v -P "$SSH_PORT" \
+          timeout 600s scp -O -v -P "$SSH_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
@@ -174,7 +174,7 @@ jobs:
           sudo apt-get install -y sshpass
 
           sshpass -p "$SSH_PASSWORD" \
-            timeout 120s scp -v -P "$SSH_PORT" \
+            timeout 600s scp -O -v -P "$SSH_PORT" \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
             -o StrictHostKeyChecking=no \
