@@ -47,6 +47,13 @@ const STORAGE_PRIMARY_COUNTRY = "jato_primary_country";
 const STORAGE_SECONDARY_COUNTRIES = "jato_secondary_countries";
 const STORAGE_PREFERRED_LANDING = "jato_preferred_landing_page";
 
+function loginUrlAfterLogout(): string {
+  if (window.location.hostname === "ojeur.cloud" || window.location.hostname === "www.ojeur.cloud") {
+    return "https://www.ojeur.cloud/login";
+  }
+  return `${window.location.origin}/login`;
+}
+
 function normalizeUserPayload(data: Record<string, unknown>): User {
   const secondary = Array.isArray(data.secondaryCountries)
     ? data.secondaryCountries.map((item) => String(item)).filter(Boolean)
@@ -233,6 +240,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applyUser]);
 
   const logout = useCallback(() => {
+    const currentToken = localStorage.getItem(STORAGE_TOKEN);
+    if (currentToken) {
+      void fetch("/v1/auth/logout", {
+        method: "POST",
+        keepalive: true,
+        headers: {
+          "X-Auth-Token": currentToken,
+          "X-User-Name": localStorage.getItem(STORAGE_USER) || "anonymous",
+        },
+      }).catch(() => undefined);
+    }
     localStorage.removeItem(STORAGE_TOKEN);
     localStorage.removeItem(STORAGE_USER);
     localStorage.removeItem(STORAGE_ROLE);
@@ -241,6 +259,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(STORAGE_PREFERRED_LANDING);
     setToken(null);
     setUser(null);
+    window.location.assign(loginUrlAfterLogout());
   }, []);
 
   const value = useMemo(

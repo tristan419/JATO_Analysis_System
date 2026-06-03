@@ -33,6 +33,7 @@ describe("order filler navigation", () => {
     expect(paths).toContain("/market/overview");
     expect(paths).toContain("/market/advanced-analysis");
     expect(paths).toContain("/product/order-genius");
+    expect(paths).toContain("/product/order-genius/vehicle-allocation");
     expect(paths).toContain("/data/spec-detail");
     expect(paths).toContain("/product/pricing");
     expect(paths).toContain("/product/compare");
@@ -57,6 +58,8 @@ describe("order filler navigation", () => {
     expect(isRouteAllowedForRole("/data/spec-detail", "order_filler")).toBe(true);
     expect(isRouteAllowedForRole("/market/transfer", "order_filler")).toBe(true);
     expect(isRouteAllowedForRole("/data/order-genius", "order_filler")).toBe(true);
+    expect(isRouteAllowedForRole("/product/order-genius/vehicle-allocation", "order_filler")).toBe(true);
+    expect(isRouteAllowedForRole("/product/order-genius/vehicle-allocation", "viewer")).toBe(false);
     expect(isRouteAllowedForRole("/data/config-import", "order_filler")).toBe(false);
     expect(isRouteAllowedForRole("/admin/access-control", "order_filler")).toBe(false);
   });

@@ -6,8 +6,6 @@ import { AuthProvider } from "./contexts/AuthContext";
 import { Layout } from "./components/Layout";
 import { RequireRole } from "./components/RequireRole";
 import { LoadingSurface } from "./components/LoadingSurface";
-import { DashboardPage } from "./pages/DashboardPage";
-import { LoginPage } from "./pages/LoginPage";
 
 /** Consume OAuth token params before any provider mounts, avoiding aborted fetches. */
 function OAuthGate({ children }: { children: ReactNode }) {
@@ -32,8 +30,10 @@ function OAuthGate({ children }: { children: ReactNode }) {
 }
 
 const DataManagementPage = lazy(() => import("./pages/DataManagementPage").then(m => ({ default: m.DataManagementPage })));
+const DashboardPage = lazy(() => import("./pages/DashboardPage").then(m => ({ default: m.DashboardPage })));
 const EngineeringPage = lazy(() => import("./pages/EngineeringPage").then(m => ({ default: m.EngineeringPage })));
 const ReviewCasesPage = lazy(() => import("./pages/ReviewCasesPage").then(m => ({ default: m.ReviewCasesPage })));
+const LoginPage = lazy(() => import("./pages/LoginPage").then(m => ({ default: m.LoginPage })));
 const MsrpPage = lazy(() => import("./pages/MsrpPage").then(m => ({ default: m.MsrpPage })));
 const JatoMonthlyUpdatePage = lazy(() => import("./pages/JatoMonthlyUpdatePage").then(m => ({ default: m.JatoMonthlyUpdatePage })));
 const CocMatchPage = lazy(() => import("./pages/CocMatchPage").then(m => ({ default: m.CocMatchPage })));
@@ -51,6 +51,7 @@ const MarketModelRankingPage = lazy(() => import("./pages/MarketModelRankingPage
 const MarketPowertrainPage = lazy(() => import("./pages/MarketPowertrainPage").then(m => ({ default: m.MarketPowertrainPage })));
 const AdvancedAnalysisPage = lazy(() => import("./pages/AdvancedAnalysisPage").then(m => ({ default: m.AdvancedAnalysisPage })));
 const OrderGeniusPage = lazy(() => import("./pages/OrderGeniusPage").then(m => ({ default: m.OrderGeniusPage })));
+const OrderGeniusVehicleAllocationPage = lazy(() => import("./pages/OrderGeniusVehicleAllocationPage").then(m => ({ default: m.OrderGeniusVehicleAllocationPage })));
 const AccessControlPage = lazy(() => import("./pages/AccessControlPage").then(m => ({ default: m.AccessControlPage })));
 const ProfilePage = lazy(() => import("./pages/ProfilePage").then(m => ({ default: m.ProfilePage })));
 
@@ -87,10 +88,10 @@ function RedirectPreserveSearch({ to }: { to: string }) {
 }
 
 const router = createBrowserRouter([
-  { path: "/login", element: (<AuthProvider><LoginPage /></AuthProvider>) },
+  { path: "/login", element: (<AuthProvider>{withPageLoader(<LoginPage />)}</AuthProvider>) },
   { path: "/", element: (<AuthProvider><OAuthGate><SharedFilterScopeProvider><CountryChatProvider><RequireRole><Layout /></RequireRole></CountryChatProvider></SharedFilterScopeProvider></OAuthGate></AuthProvider>), children: [
-    { index: true, element: <DashboardPage /> },
-    { path: "dashboard", element: <DashboardPage /> },
+    { index: true, element: withPageLoader(<DashboardPage />) },
+    { path: "dashboard", element: withPageLoader(<DashboardPage />) },
     { path: "market/overview", element: withPageLoader(<MarketOverviewPage />) },
     { path: "market/segments", element: withPageLoader(<MarketSegmentsPage />) },
     { path: "market/ranking/brand", element: withPageLoader(<MarketBrandRankingPage />) },
@@ -100,6 +101,7 @@ const router = createBrowserRouter([
     { path: "market/advanced-analysis", element: withPageLoader(<AdvancedAnalysisPage />) },
     { path: "product/current-msrp", element: withPageLoader(<MsrpPage />) },
     { path: "product/order-genius", element: withPageLoader(<OrderGeniusPage />) },
+    { path: "product/order-genius/vehicle-allocation", element: withPageLoader(<OrderGeniusVehicleAllocationPage />) },
     { path: "product/pricing", element: withPageLoader(<PositioningPricingPage />) },
     { path: "product/compare", element: withPageLoader(<VersionComparisonPage />) },
     { path: "product/customer-insight", element: withPageLoader(<CustomerInsightsPage />) },

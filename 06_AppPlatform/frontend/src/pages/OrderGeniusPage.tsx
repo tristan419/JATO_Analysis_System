@@ -14,7 +14,11 @@ import { api } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
 import type { CellValueChangedEvent } from "ag-grid-community";
-import { OrderGeniusGrid, type OrderGeniusGridRow } from "../components/OrderGeniusGrid";
+import {
+  getOrderGeniusRowId,
+  OrderGeniusGrid,
+  type OrderGeniusGridRow,
+} from "../components/OrderGeniusGrid";
 import { DeckFloatingDrawer } from "../components/deckControls/DeckFloatingDrawer";
 import type {
   CountryPaymentTerm,
@@ -44,6 +48,97 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function cleanText(value: string): string | null {
+  const text = value.trim();
+  return text ? text : null;
+}
+
+function normalizeAccountCode(value: string): string {
+  return value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12);
+}
+
+function uniqueCountryCodes(rows: OrderGeniusGridRow[]): string[] {
+  const result: string[] = [];
+  for (const row of rows) {
+    const countryCode = (row._countryCode || "").trim().toUpperCase();
+    if (countryCode && !result.includes(countryCode)) result.push(countryCode);
+  }
+  return result;
+}
+
+function suggestedOrderingAccountCode(countries: string[]): string {
+  const sorted = [...countries].sort();
+  if (sorted.includes("FI") && sorted.includes("SE")) return "NORDIC";
+  return sorted.join("").slice(0, 12) || "ACCOUNT";
+}
+
+type MatrixRowWithCountry = MaterialSkuMatrixRow & { _countryCode?: string; sheet_name?: string | null };
+type ProductGroupEntry = [string, MatrixRowWithCountry[]];
+
+interface PiBatchForm {
+  officialPiNo: string;
+  orderDate: string;
+  shipName: string;
+  eta: string;
+  orderingAccountCode: string;
+  orderingAccountName: string;
+  portOfDischarge: string;
+  shipmentBatchCode: string;
+}
+
+type PiBatchMode = "by_country" | "by_account";
+
+interface PiBatchAllocation {
+  countryCode: string;
+  quantity: number;
+  fobEur: number | null;
+}
+
+interface PiBatchLineItem {
+  materialCode: string;
+  quantity: number;
+  fobEur: number | null;
+  modelName: string;
+  version: string;
+  exteriorColorName: string;
+  interiorColorName: string | null;
+  allocations?: PiBatchAllocation[];
+}
+
+function brandDisplayRank(brand: string): number {
+  const upper = brand.toUpperCase();
+  if (upper.includes("OMODA")) return 0;
+  if (upper.includes("JAECOO")) return 1;
+  return 2;
+}
+
+function firstModelNumber(value: string): number {
+  const match = value.match(/\d+/);
+  return match ? Number(match[0]) : Number.MAX_SAFE_INTEGER;
+}
+
+function compareProductGroupEntries(a: ProductGroupEntry, b: ProductGroupEntry): number {
+  const [brandA = "", modelA = "", versionA = "", ptA = ""] = a[0].split("|");
+  const [brandB = "", modelB = "", versionB = "", ptB = ""] = b[0].split("|");
+  const brandRankDiff = brandDisplayRank(brandA) - brandDisplayRank(brandB);
+  if (brandRankDiff !== 0) return brandRankDiff;
+  const brandDiff = brandA.localeCompare(brandB);
+  if (brandDiff !== 0) return brandDiff;
+  const modelNumberDiff = firstModelNumber(modelA) - firstModelNumber(modelB);
+  if (modelNumberDiff !== 0) return modelNumberDiff;
+  return modelA.localeCompare(modelB) || versionA.localeCompare(versionB) || ptA.localeCompare(ptB);
+}
+
+function formatProductModelName(brand: string, modelName: string, version?: string): string {
+  const cleanBrand = brand.trim();
+  const cleanModel = modelName.trim();
+  const modelStartsWithBrand = cleanBrand
+    ? cleanModel.toUpperCase().startsWith(cleanBrand.toUpperCase())
+    : false;
+  const baseName = modelStartsWithBrand ? cleanModel : `${cleanBrand} ${cleanModel}`.trim();
+  return [baseName, version?.trim()].filter(Boolean).join(" ");
+}
+
 export function OrderGeniusPage() {
   const { user } = useAuth();
   const { allCountriesISO } = useResolvedCountry("iso");
@@ -55,6 +150,7 @@ export function OrderGeniusPage() {
     return codes;
   })();
   const isAdmin = user?.role === "admin";
+  const canFillOrders = user?.role === "admin" || user?.role === "editor" || user?.role === "order_filler";
   // ── Filter state ──────────────────────────────────────────────────
   const [countries, setCountries] = useState<CountryPaymentTerm[]>([]);
   const [selectedCountries, setSelectedCountries] = useState<string[]>(allCountriesISO);
@@ -97,6 +193,7 @@ export function OrderGeniusPage() {
   const [colourFilter, setColourFilter] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
   const [groupByProduct, setGroupByProduct] = useState(true);
+  const [expandedProductGroups, setExpandedProductGroups] = useState<Set<string>>(() => new Set());
   const [showPtAdmin, setShowPtAdmin] = useState(false);
   const [showBomAdmin, setShowBomAdmin] = useState(false);
   const [showDeck, setShowDeck] = useState(true);
@@ -133,6 +230,24 @@ export function OrderGeniusPage() {
   const [savingCells, setSavingCells] = useState<Set<string>>(new Set());
   const [cellErrors, setCellErrors] = useState<Record<string, string>>({});
   const gridApiRef = useRef<any>(null);
+
+  // ── PI batch creation ─────────────────────────────────────────────
+  const [piSelectedRowIds, setPiSelectedRowIds] = useState<Set<string>>(new Set());
+  const [piBatchQuantities, setPiBatchQuantities] = useState<Record<string, number>>({});
+  const [piBatchMode, setPiBatchMode] = useState<PiBatchMode>("by_country");
+  const [piBatchForm, setPiBatchForm] = useState<PiBatchForm>({
+    officialPiNo: "",
+    orderDate: "",
+    shipName: "",
+    eta: "",
+    orderingAccountCode: "",
+    orderingAccountName: "",
+    portOfDischarge: "",
+    shipmentBatchCode: "",
+  });
+  const [orderingAccountCodeEdited, setOrderingAccountCodeEdited] = useState(false);
+  const [creatingPiBatch, setCreatingPiBatch] = useState(false);
+  const [piBatchNotice, setPiBatchNotice] = useState("");
   useEffect(() => {
     if (gridApiRef.current) {
       setTimeout(() => {
@@ -224,7 +339,7 @@ export function OrderGeniusPage() {
 
   // ── Combined matrix data ───────────────────────────────────────────
   const combinedMatrix = useMemo(() => {
-    const allRows: (MaterialSkuMatrixRow & { _countryCode: string })[] = [];
+    const allRows: MatrixRowWithCountry[] = [];
     let totalRows = 0;
     for (const country of selectedCountries) {
       const m = matrices[country];
@@ -241,36 +356,37 @@ export function OrderGeniusPage() {
   // ── Grid data + cell editing ──────────────────────────────────────
 
   const flatRows = ((): OrderGeniusGridRow[] => {
-    const makeRow = (r: MaterialSkuMatrixRow & { _countryCode?: string }): OrderGeniusGridRow => {
+    const makeRow = (r: MatrixRowWithCountry): OrderGeniusGridRow => {
       const row: OrderGeniusGridRow = {
         materialCode: r.materialCode,
         modelName: r.modelName,
         version: r.version,
         colour: r.colour,
-        interiorColorName: (r as any).interiorColorName,
+        interiorColorName: r.interiorColorName,
         fobEur: r.fobEur ?? null,
         lifecycleStatus: r.lifecycleStatus,
         editable: r.editable,
-        remark: r.remark,
-        _countryCode: (r as any)._countryCode,
+        remark: r.remark ?? undefined,
+        _countryCode: r._countryCode,
         _versions: {},
         _errors: {},
         _saving: new Set(),
-      } as any;
+      };
       const months = r.months || {};
       for (let m = 1; m <= 12; m++) {
+        const monthKey = `month_${m}` as `month_${number}`;
         const md = months[String(m)];
-        (row as any)[`month_${m}`] = md?.quantity ?? 0;
-        row._versions[`month_${m}`] = md?.rowVersion ?? 0;
+        row[monthKey] = md?.quantity ?? 0;
+        row._versions[monthKey] = md?.rowVersion ?? 0;
       }
       return row;
     };
 
     // Extract canonical powertrain: model name is the authoritative source (DB field may be stale)
-    const canonPt = (row: MaterialSkuMatrixRow & { _countryCode?: string }): string => {
-      const rawPt = ((row as any).powertrain || "").toUpperCase();
+    const canonPt = (row: MatrixRowWithCountry): string => {
+      const rawPt = (row.powertrain || "").toUpperCase();
       const model = (row.modelName || "").toUpperCase();
-      const sheet = ((row as any).sheet_name || "").toUpperCase();
+      const sheet = (row.sheet_name || "").toUpperCase();
       const combined = `${sheet} ${model} ${rawPt}`;
       // Order matters: PHEV/SHS before HEV, BEV before EV
       if (combined.includes("PHEV") || combined.includes("SHS") || combined.includes("PLUG")) return "PHEV";
@@ -290,33 +406,36 @@ export function OrderGeniusPage() {
 
     // Deduplicate by full row identity
     const seen = new Set<string>();
-    const deduped: (MaterialSkuMatrixRow & { _countryCode?: string })[] = [];
+    const deduped: MatrixRowWithCountry[] = [];
     for (const r of combinedMatrix.rows) {
-      const dk = `${(r as any)._countryCode || ""}|${r.materialCode}|${r.lifecycleStatus}|${r.modelName}|${r.version}|${r.colour}|${(r as any).interiorColorName || ""}`;
+      const dk = `${r._countryCode || ""}|${r.materialCode}|${r.lifecycleStatus}|${r.modelName}|${r.version}|${r.colour}|${r.interiorColorName || ""}`;
       if (!seen.has(dk)) { seen.add(dk); deduped.push(r); }
     }
 
     // Group by: brand | modelName | version | canonicalPowertrain
-    const groups = new Map<string, (MaterialSkuMatrixRow & { _countryCode?: string })[]>();
+    const groups = new Map<string, MatrixRowWithCountry[]>();
     for (const r of deduped) {
       if (!r.modelName || !r.version) continue; // skip rows without core data
       const pt = canonPt(r);
-      const brand = (r as any).brand || r.modelName?.split(" ")[0] || "";
+      const brand = r.brand || r.modelName?.split(" ")[0] || "";
       const key = `${brand}|${r.modelName}|${r.version}|${pt}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(r);
     }
 
     const result: OrderGeniusGridRow[] = [];
-    for (const [groupKey, groupRows] of groups) {
+    const sortedGroups = [...groups.entries()].sort(compareProductGroupEntries);
+    for (const [groupKey, groupRows] of sortedGroups) {
       if (groupRows.length === 0) continue;
       const [brand, modelName, version, pt] = groupKey.split('|');
       if (!modelName || !pt || pt === 'Other') continue;
       const color = PT_COLORS[pt] ?? "#9ca3af";
-      // Sort: active rows first, then by colour
+      // Sort: active rows first, then by colour and interior variant.
       groupRows.sort((a, b) => {
         if (a.lifecycleStatus !== b.lifecycleStatus) return a.lifecycleStatus === "active" ? -1 : 1;
-        return (a.colour || "").localeCompare(b.colour || "");
+        return (a.colour || "").localeCompare(b.colour || "")
+          || (a.interiorColorName || "").localeCompare(b.interiorColorName || "")
+          || a.materialCode.localeCompare(b.materialCode);
       });
       // Sum TTL, monthly totals, and weighted avg FOB for the group
       let groupTtl = 0;
@@ -338,29 +457,36 @@ export function OrderGeniusPage() {
         }
       }
       const avgFob = totalQtyForFob > 0 ? fobWeightedSum / totalQtyForFob : (groupRows[0]?.fobEur ?? null);
+      const expanded = expandedProductGroups.has(groupKey);
+      const displayName = formatProductModelName(brand, modelName, version);
+      const labelName = formatProductModelName(brand, modelName);
       // Group header row (use group key as materialCode so getRowId is unique)
-      const header: any = {
+      const header: OrderGeniusGridRow = {
         materialCode: `__grp_${groupKey.replace(/[^a-zA-Z0-9]/g, '_')}`,
-        modelName: `${brand} ${modelName} ${version}`,
+        modelName: displayName,
         version: "",
         colour: "",
         fobEur: avgFob,
         lifecycleStatus: "active",
         editable: false,
         remark: "",
-        _countryCode: (groupRows[0] as any)._countryCode,
+        _countryCode: groupRows[0]?._countryCode,
         _versions: {},
         _errors: {},
         _saving: new Set(),
         __type: "groupHeader",
-        __groupLabel: `${brand} ${modelName} · ${pt} · ${groupRows.length} colours · ${groupTtl.toLocaleString()} units`,
+        __groupLabel: `${labelName} · ${version} · ${pt} · ${groupRows.length} variants · ${groupTtl.toLocaleString()} units`,
         __groupColor: color,
+        __groupKey: groupKey,
+        __expanded: expanded,
       };
       for (let m = 1; m <= 12; m++) header[`month_${m}`] = monthlySums[m];
       result.push(header);
       // Child rows
-      for (const r of groupRows) {
-        result.push(makeRow(r));
+      if (expanded || (consolidatedView && selectedCountries.length > 1)) {
+        for (const r of groupRows) {
+          result.push(makeRow(r));
+        }
       }
     }
     return result;
@@ -373,6 +499,15 @@ export function OrderGeniusPage() {
   const selCountriesRef = useRef(selectedCountries); selCountriesRef.current = selectedCountries;
   const selYearRef = useRef(selectedYear); selYearRef.current = selectedYear;
   const loadMatricesRef = useRef(loadMatrices); loadMatricesRef.current = loadMatrices;
+
+  const toggleProductGroup = useCallback((groupKey: string) => {
+    setExpandedProductGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      return next;
+    });
+  }, []);
 
   const handleCellValueChanged = useCallback(
     async (event: CellValueChangedEvent<OrderGeniusGridRow>) => {
@@ -440,30 +575,18 @@ export function OrderGeniusPage() {
 
   // ── Consolidated planning view (multi-country) ──────────────────
   const displayRows = useMemo(() => {
-    let filtered = flatRows.filter((r: any) => {
-      const modelOk = r.modelName?.trim() && !/^[\d\s]+$/.test(r.modelName?.trim() || '');
-      if (r.__type === "groupHeader") return modelOk && r.__groupLabel;
+    let filtered = flatRows.filter((r) => {
+      const modelName = r.modelName?.trim() || "";
+      const modelOk = modelName && !/^[\d\s]+$/.test(modelName);
+      if (r.__type === "groupHeader") return Boolean(modelOk && r.__groupLabel);
       return modelOk;
     });
-    // Hide empty rows and their parent group headers
+    // Group headers already carry monthly sums, so empty filtering works while children are collapsed.
     if (hideEmptyRows) {
-      // Determine which months to check (single month or all)
       const monthsToCheck = selectedMonth ? [selectedMonth] : Array.from({length:12},(_,i)=>i+1);
-      const rowHasData = (r: any) => monthsToCheck.some((m: number) => (r[`month_${m}`] || 0) > 0);
-      // Mark which group headers have data rows underneath
-      let currentGroupKey = "";
-      const activeGroups = new Set<string>();
-      for (const r of filtered) {
-        if (r.__type === "groupHeader") { currentGroupKey = r.__groupLabel || r.materialCode || ""; continue; }
-        if (r.__type === "consolidated_parent") continue;
-        if (rowHasData(r) && currentGroupKey) activeGroups.add(currentGroupKey);
-      }
-      // Keep only active groups and their data rows
-      filtered = filtered.filter((r: any) => {
-        if (r.__type === "groupHeader") {
-          const gk = r.__groupLabel || r.materialCode || "";
-          return activeGroups.has(gk);
-        }
+      const rowHasData = (r: OrderGeniusGridRow): boolean =>
+        monthsToCheck.some((m) => (r[`month_${m}`] || 0) > 0);
+      filtered = filtered.filter((r) => {
         if (r.__type === "consolidated_parent") return true;
         return rowHasData(r);
       });
@@ -513,6 +636,82 @@ export function OrderGeniusPage() {
     }
     return result;
   }, [flatRows, consolidatedView, selectedCountries, hideEmptyRows, selectedMonth]);
+
+  const selectablePiRows = useMemo(() => {
+    if (selectedMonth == null) return [];
+    const monthField = `month_${selectedMonth}` as `month_${number}`;
+    return displayRows.filter((row) =>
+      row.__type !== "groupHeader"
+      && row.__type !== "consolidated_parent"
+      && row.lifecycleStatus !== "historical"
+      && (row[monthField] || 0) > 0,
+    );
+  }, [displayRows, selectedMonth]);
+
+  const selectablePiRowsById = useMemo(() => {
+    const result = new Map<string, OrderGeniusGridRow>();
+    for (const row of selectablePiRows) {
+      result.set(getOrderGeniusRowId(row), row);
+    }
+    return result;
+  }, [selectablePiRows]);
+
+  const selectedPiRows = useMemo(() => {
+    const result: OrderGeniusGridRow[] = [];
+    for (const rowId of piSelectedRowIds) {
+      const row = selectablePiRowsById.get(rowId);
+      if (row) result.push(row);
+    }
+    return result;
+  }, [piSelectedRowIds, selectablePiRowsById]);
+
+  const selectedPiQuantityTotal = useMemo(() => {
+    return selectedPiRows.reduce((sum, row) => {
+      const rowId = getOrderGeniusRowId(row);
+      const monthQuantity = selectedMonth == null ? 0 : row[`month_${selectedMonth}`] || 0;
+      return sum + Math.min(piBatchQuantities[rowId] ?? monthQuantity, monthQuantity);
+    }, 0);
+  }, [piBatchQuantities, selectedMonth, selectedPiRows]);
+
+  const selectedPiCountries = useMemo(() => uniqueCountryCodes(selectedPiRows), [selectedPiRows]);
+  const piBatchScopeSummary = useMemo(() => {
+    if (selectedMonth == null) return "Select one month";
+    if (selectedPiRows.length === 0) return "Select PI rows";
+    if (piBatchMode === "by_account") {
+      return `1 PI · ${selectedPiCountries.join("/") || primaryCountry}`;
+    }
+    return `${selectedPiCountries.length || 1} PI${(selectedPiCountries.length || 1) > 1 ? "s" : ""} · by country`;
+  }, [piBatchMode, primaryCountry, selectedMonth, selectedPiCountries, selectedPiRows.length]);
+
+  useEffect(() => {
+    setPiSelectedRowIds(new Set());
+    setPiBatchQuantities({});
+    setOrderingAccountCodeEdited(false);
+    setPiBatchNotice("");
+  }, [selectedMonth, selectedYear, selectedCountries]);
+
+  useEffect(() => {
+    if (piBatchMode !== "by_account" || selectedPiCountries.length === 0) return;
+    if (orderingAccountCodeEdited) return;
+    const nextSuggestion = suggestedOrderingAccountCode(selectedPiCountries);
+    setPiBatchForm((current) => {
+      if (current.orderingAccountCode === nextSuggestion) return current;
+      return {
+        ...current,
+        orderingAccountCode: nextSuggestion,
+      };
+    });
+  }, [orderingAccountCodeEdited, piBatchMode, selectedPiCountries]);
+
+  useEffect(() => {
+    setPiSelectedRowIds((current) => {
+      const next = new Set<string>();
+      current.forEach((rowId) => {
+        if (selectablePiRowsById.has(rowId)) next.add(rowId);
+      });
+      return next.size === current.size ? current : next;
+    });
+  }, [selectablePiRowsById]);
 
   // ── Upload handlers ───────────────────────────────────────────────
 
@@ -688,45 +887,222 @@ export function OrderGeniusPage() {
     setQtyImportResult(null);
   };
 
+  const togglePiBatchRow = useCallback((row: OrderGeniusGridRow, selected: boolean): void => {
+    const rowId = getOrderGeniusRowId(row);
+    const monthQuantity = selectedMonth == null ? 0 : row[`month_${selectedMonth}`] || 0;
+    setPiSelectedRowIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(rowId);
+      else next.delete(rowId);
+      return next;
+    });
+    setPiBatchQuantities((current) => {
+      const next = { ...current };
+      if (selected) next[rowId] = Math.max(1, monthQuantity);
+      else delete next[rowId];
+      return next;
+    });
+    setPiBatchNotice("");
+  }, [selectedMonth]);
+
+  const updatePiBatchQuantity = (row: OrderGeniusGridRow, quantity: number): void => {
+    const rowId = getOrderGeniusRowId(row);
+    const monthQuantity = selectedMonth == null ? 0 : row[`month_${selectedMonth}`] || 0;
+    const nextQuantity = Math.max(0, Math.min(Math.floor(quantity || 0), monthQuantity));
+    setPiBatchQuantities((current) => ({ ...current, [rowId]: nextQuantity }));
+    setPiBatchNotice("");
+  };
+
+  const clearPiBatchSelection = (): void => {
+    setPiSelectedRowIds(new Set());
+    setPiBatchQuantities({});
+    setOrderingAccountCodeEdited(false);
+    setPiBatchNotice("");
+  };
+
+  const handleCreatePiBatch = async (): Promise<void> => {
+    if (selectedMonth == null) {
+      setError("Select one month before creating PI");
+      return;
+    }
+    if (selectedPiRows.length === 0) {
+      setError("Select at least one order row");
+      return;
+    }
+
+    const byCountry = new Map<string, Map<string, PiBatchLineItem>>();
+    const byMaterial = new Map<string, PiBatchLineItem>();
+    for (const row of selectedPiRows) {
+      const rowId = getOrderGeniusRowId(row);
+      const monthQuantity = row[`month_${selectedMonth}`] || 0;
+      const requestedQuantity = Math.floor(piBatchQuantities[rowId] ?? monthQuantity);
+      if (requestedQuantity <= 0) continue;
+      if (requestedQuantity > monthQuantity) {
+        setError(`PI quantity exceeds order quantity: ${row.materialCode}`);
+        return;
+      }
+      const countryCode = row._countryCode || primaryCountry;
+      const items = byCountry.get(countryCode) ?? new Map<string, PiBatchLineItem>();
+      const existing = items.get(row.materialCode);
+      if (existing) {
+        existing.quantity += requestedQuantity;
+      } else {
+        items.set(row.materialCode, {
+          materialCode: row.materialCode,
+          quantity: requestedQuantity,
+          fobEur: row.fobEur,
+          modelName: row.modelName,
+          version: row.version,
+          exteriorColorName: row.colour,
+          interiorColorName: row.interiorColorName ?? null,
+        });
+      }
+      byCountry.set(countryCode, items);
+
+      const materialExisting = byMaterial.get(row.materialCode);
+      const allocation: PiBatchAllocation = {
+        countryCode,
+        quantity: requestedQuantity,
+        fobEur: row.fobEur,
+      };
+      if (materialExisting) {
+        materialExisting.quantity += requestedQuantity;
+        const existingAllocation = materialExisting.allocations?.find((item) => item.countryCode === countryCode);
+        if (existingAllocation) {
+          existingAllocation.quantity += requestedQuantity;
+        } else {
+          materialExisting.allocations = [...(materialExisting.allocations ?? []), allocation];
+        }
+      } else {
+        byMaterial.set(row.materialCode, {
+          materialCode: row.materialCode,
+          quantity: requestedQuantity,
+          fobEur: row.fobEur,
+          modelName: row.modelName,
+          version: row.version,
+          exteriorColorName: row.colour,
+          interiorColorName: row.interiorColorName ?? null,
+          allocations: [allocation],
+        });
+      }
+    }
+
+    if (byCountry.size === 0) {
+      setError("Selected PI quantity must be greater than 0");
+      return;
+    }
+    if (piBatchMode === "by_account") {
+      const accountCode = normalizeAccountCode(
+        piBatchForm.orderingAccountCode || suggestedOrderingAccountCode(selectedPiCountries),
+      );
+      if (accountCode.length < 2) {
+        setError("Ordering account code must be at least 2 letters or numbers");
+        return;
+      }
+    }
+
+    setCreatingPiBatch(true);
+    setError("");
+    setPiBatchNotice("");
+    try {
+      const createdCodes: string[] = [];
+      if (piBatchMode === "by_account") {
+        const marketCountryCodes = selectedPiCountries.length > 0 ? selectedPiCountries : [primaryCountry];
+        const accountCode = normalizeAccountCode(
+          piBatchForm.orderingAccountCode || suggestedOrderingAccountCode(marketCountryCodes),
+        );
+        const result = await api.generateVehicleAllocationFromOrderMatrix({
+          countryCode: marketCountryCodes[0],
+          orderYear: selectedYear,
+          orderMonth: selectedMonth,
+          orderingAccountCode: accountCode,
+          orderingAccountName: cleanText(piBatchForm.orderingAccountName),
+          marketCountryCodes,
+          shipmentBatchCode: cleanText(piBatchForm.shipmentBatchCode),
+          portOfDischarge: cleanText(piBatchForm.portOfDischarge),
+          officialPiNo: cleanText(piBatchForm.officialPiNo),
+          orderDate: cleanText(piBatchForm.orderDate),
+          shipName: cleanText(piBatchForm.shipName),
+          eta: cleanText(piBatchForm.eta),
+          lineItems: Array.from(byMaterial.values()),
+        });
+        createdCodes.push(result.piCode);
+      } else {
+        for (const [countryCode, lineItems] of byCountry) {
+          const result = await api.generateVehicleAllocationFromOrderMatrix({
+            countryCode,
+            orderYear: selectedYear,
+            orderMonth: selectedMonth,
+            orderingAccountCode: countryCode,
+            marketCountryCodes: [countryCode],
+            officialPiNo: cleanText(piBatchForm.officialPiNo),
+            orderDate: cleanText(piBatchForm.orderDate),
+            shipName: cleanText(piBatchForm.shipName),
+            eta: cleanText(piBatchForm.eta),
+            lineItems: Array.from(lineItems.values()),
+          });
+          createdCodes.push(result.piCode);
+        }
+      }
+      clearPiBatchSelection();
+      setPiBatchForm((current) => ({
+        ...current,
+        officialPiNo: "",
+        shipName: "",
+        eta: "",
+        shipmentBatchCode: "",
+      }));
+      setPiBatchNotice(`Created ${createdCodes.join(", ")}`);
+    } catch (err: unknown) {
+      setError(`PI batch failed: ${getErrorMessage(err)}`);
+    } finally {
+      setCreatingPiBatch(false);
+    }
+  };
+
   // ── Export ─────────────────────────────────────────────────────────
 
   const [mergeExport, setMergeExport] = useState(false);
 
+  const buildExportOptions = () => ({
+    brand: brandFilter || undefined,
+    model: modelFilter || undefined,
+    powertrain: powertrainFilter || undefined,
+    version: versionFilter || undefined,
+    colour: colourFilter || undefined,
+    materialCodeSearch: materialSearch || undefined,
+    selectedMonth: selectedMonth ?? undefined,
+    hideEmptyRows,
+  });
+
+  const exportMonthSuffix = () => selectedMonth ? `_M${String(selectedMonth).padStart(2, "0")}` : "";
+
   const handleExport = async () => {
+    const exportOptions = {
+      ...buildExportOptions(),
+      quantitiesOnly: hideEmptyRows,
+    };
+    const monthSuffix = exportMonthSuffix();
     try {
       if (selectedCountries.length > 1 && mergeExport) {
         // Merged export: download one file per country with multi-country columns
         for (const country of selectedCountries) {
-          const blob = await api.exportOrderGenius(country, selectedYear, {
-            brand: brandFilter || undefined,
-            model: modelFilter || undefined,
-            powertrain: powertrainFilter || undefined,
-            version: versionFilter || undefined,
-            colour: colourFilter || undefined,
-            quantitiesOnly: true,
-          });
+          const blob = await api.exportOrderGenius(country, selectedYear, exportOptions);
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
-          a.download = `Order_Genius_${country}-${selectedYear}_filtered.xlsx`;
+          a.download = `Order_Genius_${country}-${selectedYear}${monthSuffix}_filtered.xlsx`;
           a.click();
           URL.revokeObjectURL(url);
           if (selectedCountries.length > 1) await new Promise((r) => setTimeout(r, 300));
         }
       } else {
         for (const country of selectedCountries) {
-          const blob = await api.exportOrderGenius(country, selectedYear, {
-            brand: brandFilter || undefined,
-            model: modelFilter || undefined,
-            powertrain: powertrainFilter || undefined,
-            version: versionFilter || undefined,
-            colour: colourFilter || undefined,
-            quantitiesOnly: true,
-          });
+          const blob = await api.exportOrderGenius(country, selectedYear, exportOptions);
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
-          a.download = `Order_Genius_${country}-${selectedYear}_filtered.xlsx`;
+          a.download = `Order_Genius_${country}-${selectedYear}${monthSuffix}_filtered.xlsx`;
           a.click();
           URL.revokeObjectURL(url);
           if (selectedCountries.length > 1) await new Promise((r) => setTimeout(r, 300));
@@ -734,6 +1110,25 @@ export function OrderGeniusPage() {
       }
     } catch (err) {
       setError(`Export failed: ${getErrorMessage(err)}`);
+    }
+  };
+
+  const handlePiExport = async () => {
+    const exportOptions = buildExportOptions();
+    const monthSuffix = exportMonthSuffix();
+    try {
+      for (const country of selectedCountries) {
+        const blob = await api.exportOrderGeniusPi(country, selectedYear, exportOptions);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `PI_${country}-${selectedYear}${monthSuffix}_filtered.xlsx`;
+        a.click();
+        URL.revokeObjectURL(url);
+        if (selectedCountries.length > 1) await new Promise((r) => setTimeout(r, 300));
+      }
+    } catch (err) {
+      setError(`PI export failed: ${getErrorMessage(err)}`);
     }
   };
 
@@ -897,8 +1292,8 @@ export function OrderGeniusPage() {
           style={{ minWidth: 160 }}
         />
         <datalist id="material-suggestions">
-          {combinedMatrix.rows.map((r) => (
-            <option key={r.materialCode} value={r.materialCode}>
+          {combinedMatrix.rows.map((r, index) => (
+            <option key={`${r._countryCode || ""}-${r.materialCode}-${index}`} value={r.materialCode}>
               {r.remark ? `${r.materialCode} (${r.remark})` : r.materialCode}
             </option>
           ))}
@@ -941,16 +1336,157 @@ export function OrderGeniusPage() {
                 disabled={combinedMatrix.totalRows === 0}>
           Export XLSX
         </button>
-        <button type="button" className="btn btn-sm btn-ghost"
-                onClick={() => { setShowQtyImport(true); setQtyImportFile(null); setQtyImportPreview(null); setQtyImportResult(null); }}>
-          Import Quantities
+        <button type="button" className="btn btn-sm btn-ghost" onClick={handlePiExport}
+                disabled={combinedMatrix.totalRows === 0}>
+          Export PI
         </button>
+        {canFillOrders && (
+          <button type="button" className="btn btn-sm btn-ghost"
+                  onClick={() => { setShowQtyImport(true); setQtyImportFile(null); setQtyImportPreview(null); setQtyImportResult(null); }}>
+            Import Quantities
+          </button>
+        )}
         {isAdmin && (
           <button type="button" className="btn btn-sm btn-ghost"
                   onClick={() => setShowUpload(!showUpload)}>
             {showUpload ? "Hide Upload" : "Upload Material Master"}
           </button>
         )}
+        <div className="og-pi-batch-panel">
+          <div className="og-pi-batch-head">
+            <strong>PI Batch</strong>
+            <span title="Select one month, tick PI rows, then create PI from the selected order quantities">
+              {selectedMonth ? `${selectedPiRows.length} rows · ${selectedPiQuantityTotal} units · ${piBatchScopeSummary}` : "Select month"}
+            </span>
+          </div>
+          <div className="og-pi-batch-mode" role="group" aria-label="PI batch scope">
+            <button
+              type="button"
+              className={piBatchMode === "by_country" ? "is-active" : ""}
+              aria-pressed={piBatchMode === "by_country"}
+              title="Create one PI per market country. Use this when each country orders separately."
+              onClick={() => setPiBatchMode("by_country")}
+            >
+              By country
+            </button>
+            <button
+              type="button"
+              className={piBatchMode === "by_account" ? "is-active" : ""}
+              aria-pressed={piBatchMode === "by_account"}
+              title="Create one PI for a shared ordering account, while each car still keeps its market country."
+              onClick={() => setPiBatchMode("by_account")}
+            >
+              Ordering account
+            </button>
+          </div>
+          <div className="og-pi-batch-fields">
+            <input
+              value={piBatchForm.officialPiNo}
+              onChange={(event) => setPiBatchForm((current) => ({ ...current, officialPiNo: event.target.value }))}
+              placeholder="Official PI"
+              title="Supplier's official PI number. Can be filled later if not available now."
+            />
+            <input
+              type="date"
+              value={piBatchForm.orderDate}
+              onChange={(event) => setPiBatchForm((current) => ({ ...current, orderDate: event.target.value }))}
+              title="PI order date"
+            />
+            <input
+              value={piBatchForm.shipName}
+              onChange={(event) => setPiBatchForm((current) => ({ ...current, shipName: event.target.value }))}
+              placeholder="Ship"
+              title="Ship name for this PI batch. This can also be updated in PI vehicle allocation later."
+            />
+            <input
+              type="date"
+              value={piBatchForm.eta}
+              onChange={(event) => setPiBatchForm((current) => ({ ...current, eta: event.target.value }))}
+              title="ETA, expected arrival date at port"
+            />
+            {piBatchMode === "by_account" ? (
+              <>
+                <input
+                  value={piBatchForm.orderingAccountCode}
+                  onChange={(event) => {
+                    setOrderingAccountCodeEdited(true);
+                    setPiBatchForm((current) => ({
+                      ...current,
+                      orderingAccountCode: normalizeAccountCode(event.target.value),
+                    }));
+                  }}
+                  placeholder="Account code"
+                  title="Ordering account for the PI code, for example NORDIC when Sweden and Finland share one distributor."
+                />
+                <input
+                  value={piBatchForm.orderingAccountName}
+                  onChange={(event) => setPiBatchForm((current) => ({ ...current, orderingAccountName: event.target.value }))}
+                  placeholder="Account name"
+                  title="Readable distributor or ordering account name"
+                />
+                <input
+                  value={piBatchForm.portOfDischarge}
+                  onChange={(event) => setPiBatchForm((current) => ({ ...current, portOfDischarge: event.target.value }))}
+                  placeholder="Port"
+                  title="Destination port for the shared shipment, for example Zeebrugge"
+                />
+                <input
+                  value={piBatchForm.shipmentBatchCode}
+                  onChange={(event) => setPiBatchForm((current) => ({ ...current, shipmentBatchCode: event.target.value }))}
+                  placeholder="Batch"
+                  title="Optional internal shipment batch code for later tracking"
+                />
+              </>
+            ) : null}
+          </div>
+          {selectedPiRows.length > 0 ? (
+            <div className="og-pi-batch-lines">
+              {selectedPiRows.map((row) => {
+                const rowId = getOrderGeniusRowId(row);
+                const monthQuantity = selectedMonth == null ? 0 : row[`month_${selectedMonth}`] || 0;
+                return (
+                  <label
+                    key={rowId}
+                    title="This quantity will be linked back to the selected market country in PI allocation."
+                  >
+                    <span>
+                      {row._countryCode ? `${row._countryCode} · ` : ""}{row.materialCode}
+                      <small>{row.modelName} / {row.version} / {row.colour}</small>
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={monthQuantity}
+                      value={piBatchQuantities[rowId] ?? monthQuantity}
+                      onChange={(event) => updatePiBatchQuantity(row, Number(event.target.value))}
+                      title={`PI quantity for this row. Max ${monthQuantity}.`}
+                    />
+                  </label>
+                );
+              })}
+            </div>
+          ) : null}
+          <div className="og-pi-batch-actions">
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={creatingPiBatch || selectedMonth == null || selectedPiRows.length === 0}
+              onClick={() => void handleCreatePiBatch()}
+              title={piBatchMode === "by_account" ? "Create one PI for the ordering account and keep country allocations on each line" : "Create one PI per selected country"}
+            >
+              {creatingPiBatch ? "Creating..." : "Create PI"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              disabled={selectedPiRows.length === 0}
+              onClick={clearPiBatchSelection}
+            >
+              Clear
+            </button>
+          </div>
+          {piBatchNotice ? <div className="og-pi-batch-notice">{piBatchNotice}</div> : null}
+        </div>
       </div>
 
       {/* ── Quantity Import Modal ────────────────────────────────── */}
@@ -1189,10 +1725,14 @@ export function OrderGeniusPage() {
         <OrderGeniusGrid
           rows={displayRows}
           selectedMonth={selectedMonth}
+          selectedRowIds={piSelectedRowIds}
+          canEditQuantities={canFillOrders}
           visibleColumns={visibleColumns}
           showCountry={selectedCountries.length > 1}
           onCellValueChanged={handleCellValueChanged}
           onGridReady={(api) => { gridApiRef.current = api; }}
+          onToggleGroup={toggleProductGroup}
+          onTogglePiRow={togglePiBatchRow}
         />
       ) : (
         <div style={{ padding: 32, textAlign: "center", color: "#64748b" }}>

@@ -190,6 +190,7 @@ jobs:
           DEPLOY_SERVER_NAME: ${{ vars.DEPLOY_SERVER_NAME }}
           DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
           DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
+          VITE_ASSET_BASE_URL: ${{ vars.VITE_ASSET_BASE_URL }}
         run: |
           set -euo pipefail
           if [ -z "${SSH_PORT:-}" ]; then
@@ -209,10 +210,12 @@ jobs:
           REMOTE_EXPORTS="export DEPLOY_SERVER_NAME=$(printf '%q' "$DEPLOY_SERVER_NAME"); "
           REMOTE_EXPORTS+="export DEPLOY_ENABLE_HTTPS=$(printf '%q' "$DEPLOY_ENABLE_HTTPS"); "
           REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
+          REMOTE_EXPORTS+="export VITE_ASSET_BASE_URL=$(printf '%q' "${VITE_ASSET_BASE_URL:-}"); "
           REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
           REMOTE_EXPORTS+="export HERMES_SYNC_TOKEN=$(printf '%q' '${{ secrets.HERMES_SYNC_TOKEN }}'); "
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_ID }}'); "
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_SECRET=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_SECRET }}'); "
+          REMOTE_EXPORTS+="export GOOGLE_OAUTH_PROXY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_PROXY_URL }}'); "
 
           ssh -v -p "$SSH_PORT" \
             -o BatchMode=yes \
@@ -260,11 +263,16 @@ jobs:
               sudo -n sed -i '/^APP_GOOGLE_CLIENT_SECRET=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_GOOGLE_REDIRECT_URI=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_FRONTEND_ORIGIN=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_GOOGLE_OAUTH_PROXY_URL=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_GOOGLE_OAUTH_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true
+              GOOGLE_OAUTH_PROXY_URL="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
               {
                 echo "APP_GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID"
                 echo "APP_GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET"
                 echo "APP_GOOGLE_REDIRECT_URI=https://www.ojeur.cloud/v1/auth/google/callback"
                 echo "APP_FRONTEND_ORIGIN=https://www.ojeur.cloud"
+                echo "APP_GOOGLE_OAUTH_PROXY_URL=$GOOGLE_OAUTH_PROXY_URL"
+                echo "APP_GOOGLE_OAUTH_TIMEOUT_SECONDS=30"
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
               echo "[INFO] Google OAuth config updated"
             fi
@@ -274,6 +282,7 @@ jobs:
           export REPO_DIR SKIP_GIT_SYNC=true
           export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
           export VITE_API_BASE="/v1"
+          export VITE_ASSET_BASE_URL="${VITE_ASSET_BASE_URL:-}"
           export VITE_USER_ROLE="viewer"
           export VITE_USER_NAME="github-actions"
           set +e
@@ -333,6 +342,7 @@ jobs:
           DEPLOY_SERVER_NAME: ${{ vars.DEPLOY_SERVER_NAME }}
           DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
           DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
+          VITE_ASSET_BASE_URL: ${{ vars.VITE_ASSET_BASE_URL }}
         run: |
           set -euo pipefail
           if [ -z "${SSH_PORT:-}" ]; then
@@ -351,10 +361,12 @@ jobs:
           REMOTE_EXPORTS="export DEPLOY_SERVER_NAME=$(printf '%q' "$DEPLOY_SERVER_NAME"); "
           REMOTE_EXPORTS+="export DEPLOY_ENABLE_HTTPS=$(printf '%q' "$DEPLOY_ENABLE_HTTPS"); "
           REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
+          REMOTE_EXPORTS+="export VITE_ASSET_BASE_URL=$(printf '%q' "${VITE_ASSET_BASE_URL:-}"); "
           REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
           REMOTE_EXPORTS+="export HERMES_SYNC_TOKEN=$(printf '%q' '${{ secrets.HERMES_SYNC_TOKEN }}'); "
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_ID }}'); "
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_SECRET=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_SECRET }}'); "
+          REMOTE_EXPORTS+="export GOOGLE_OAUTH_PROXY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_PROXY_URL }}'); "
 
           sshpass -p "$SSH_PASSWORD" \
             ssh -v -p "$SSH_PORT" \
@@ -403,11 +415,16 @@ jobs:
               sudo -n sed -i '/^APP_GOOGLE_CLIENT_SECRET=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_GOOGLE_REDIRECT_URI=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_FRONTEND_ORIGIN=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_GOOGLE_OAUTH_PROXY_URL=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_GOOGLE_OAUTH_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true
+              GOOGLE_OAUTH_PROXY_URL="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
               {
                 echo "APP_GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID"
                 echo "APP_GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET"
                 echo "APP_GOOGLE_REDIRECT_URI=https://www.ojeur.cloud/v1/auth/google/callback"
                 echo "APP_FRONTEND_ORIGIN=https://www.ojeur.cloud"
+                echo "APP_GOOGLE_OAUTH_PROXY_URL=$GOOGLE_OAUTH_PROXY_URL"
+                echo "APP_GOOGLE_OAUTH_TIMEOUT_SECONDS=30"
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
               echo "[INFO] Google OAuth config updated"
             fi
@@ -417,6 +434,7 @@ jobs:
           export REPO_DIR SKIP_GIT_SYNC=true
           export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
           export VITE_API_BASE="/v1"
+          export VITE_ASSET_BASE_URL="${VITE_ASSET_BASE_URL:-}"
           export VITE_USER_ROLE="viewer"
           export VITE_USER_NAME="github-actions"
           set +e

@@ -24,6 +24,7 @@ from app.api.routes.msrp_dryrun_dashboard import router as msrp_dryrun_dashboard
 from app.api.routes.coc_match import router as coc_match_router
 from app.api.routes.advanced_analysis import router as advanced_analysis_router
 from app.api.routes.order_genius import router as order_genius_router
+from app.api.routes.order_genius_vehicle_allocation import router as order_genius_vehicle_allocation_router
 from app.core.config import API_PREFIX, APP_NAME, APP_VERSION, CORS_ORIGINS
 from app.core.startup_validation import run_startup_validation
 
@@ -60,4 +61,5 @@ app.include_router(auth_router, prefix=API_PREFIX)
 app.include_router(presence_router, prefix=API_PREFIX)
 app.include_router(coc_match_router, prefix=API_PREFIX)
 app.include_router(order_genius_router, prefix=API_PREFIX)
+app.include_router(order_genius_vehicle_allocation_router, prefix=API_PREFIX)
 app.include_router(advanced_analysis_router, prefix=API_PREFIX)

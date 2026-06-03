@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+try:
+    import duckdb as _duckdb
+except ImportError:
+    _duckdb = None
 
 from app.infra import parquet_repository as repo
 from app.services.market_scan_service import (
@@ -17,9 +25,26 @@ from app.services.market_scan_service import (
 
 logger = logging.getLogger(__name__)
 
-_CACHE_TTL_SECONDS = 600
+_CACHE_TTL_SECONDS = 1800
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _cache_lock = threading.Lock()
+_WARMUP_RUN = False
+
+
+def warmup_cache() -> dict[str, Any]:
+    """Pre-compute transfer-mart for common countries (runs once on first import)."""
+    global _WARMUP_RUN
+    if _WARMUP_RUN:
+        return {"warmed": 0}
+    _WARMUP_RUN = True
+    warmed = 0
+    for country in ["瑞典", "德国", "挪威", "丹麦", "芬兰", "英国"]:
+        try:
+            compute_transfer_mart(country=country, top_n=15)
+            warmed += 1
+        except Exception:
+            pass
+    return {"warmed": warmed}
 
 DRIVE_NORMALIZE_RULES: dict[str, list[str]] = {
     "4WD": ["awd", "4wd", "4x4", "all wheel", "quattro", "xdrive"],
@@ -31,9 +56,61 @@ REGISTRATION_NORMALIZE_RULES: dict[str, list[str]] = {
 }
 
 
+def _build_normalize_map(rules: dict[str, list[str]]) -> dict[str, str]:
+    """Flatten {label: [patterns]} into {pattern: label} for fast pandas .map()."""
+    out: dict[str, str] = {}
+    for label, patterns in rules.items():
+        for p in patterns:
+            out[p] = label
+    return out
+
+
 def _cache_key(prefix: str, **kwargs) -> str:
     raw = f"{prefix}:" + ",".join(f"{k}={v}" for k, v in sorted(kwargs.items()) if v is not None)
     return raw
+
+
+# Precomputed disk cache — survives server restarts.
+# Path mirrors config.PRECOMPUTED_DIR used by parquet_repository.load_precomputed().
+def _precomputed_dir() -> Path:
+    env = os.getenv("JATO_PRECOMPUTED_DIR", "")
+    if env:
+        return Path(env)
+    # Fallback: repo root / 04_Processed_data / summaries
+    return Path(__file__).resolve().parents[4] / "04_Processed_data" / "summaries"
+
+
+def _precomputed_path(key: str) -> Path:
+    safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", key)[:200]
+    return _precomputed_dir() / f"aa_{safe}.parquet"
+
+
+def _load_precomputed(key: str, ttl: int = _CACHE_TTL_SECONDS) -> dict[str, Any] | None:
+    path = _precomputed_path(key)
+    if not path.exists():
+        return None
+    try:
+        mtime = path.stat().st_mtime
+        if time.time() - mtime > ttl:
+            return None
+        import json as _json
+        df = pd.read_parquet(path)
+        raw = df.attrs.get("result_json")
+        return _json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
+def _save_precomputed(key: str, result: dict[str, Any]) -> None:
+    path = _precomputed_path(key)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        import json as _json
+        df = pd.DataFrame([{"k": key}])
+        df.attrs["result_json"] = _json.dumps(result, default=str)
+        df.to_parquet(path, index=False)
+    except Exception:
+        pass
 
 
 def _cached_or_compute(key: str, compute_fn, ttl: int = _CACHE_TTL_SECONDS) -> dict[str, Any]:
@@ -42,9 +119,19 @@ def _cached_or_compute(key: str, compute_fn, ttl: int = _CACHE_TTL_SECONDS) -> d
         entry = _cache.get(key)
         if entry and (now - entry[0]) < ttl:
             return entry[1]
+
+    # Try disk cache before computing
+    disk_result = _load_precomputed(key, ttl)
+    if disk_result is not None:
+        with _cache_lock:
+            _cache[key] = (now, disk_result)
+        return disk_result
+
     result = compute_fn()
     with _cache_lock:
         _cache[key] = (now, result)
+    # Persist to disk for next cold start
+    _save_precomputed(key, result)
     return result
 
 
@@ -232,49 +319,20 @@ def build_fact_sales_monthly(
     fuel_types: list[str] | None = None,
     segments: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Wide-to-long transformation producing a normalized fact table."""
+    """Wide-to-long transformation using DuckDB for performance.
+
+    Falls back to pandas if DuckDB is unavailable.
+    """
     cols = _get_columns()
     column_names = repo.list_columns()
     spec_columns = _resolve_product_spec_columns(column_names)
 
-    # Build the set of columns to load
     id_cols = [cols.country_value, cols.segment, cols.make, cols.model, cols.powertrain]
     for opt in [cols.drive_type, cols.registration_type, cols.body_type, cols.origin, *spec_columns.values()]:
         if opt and opt in column_names and opt not in id_cols:
             id_cols.append(opt)
 
     month_cols = [c for c in cols.month_columns if c in column_names]
-    load_cols = id_cols + month_cols
-
-    # Load via PyArrow, optionally filtering by country
-    dataset = repo._open_dataset()
-    if country and cols.country_value in column_names:
-        filter_expr = repo._build_filter_expression({cols.country_value: [country]})
-        table = dataset.to_table(columns=load_cols, filter=filter_expr)
-    else:
-        table = dataset.to_table(columns=load_cols)
-
-    df = table.to_pandas()
-
-    if fuel_types:
-        df = df[df[cols.powertrain].isin(fuel_types)]
-    if segments:
-        df = df[df[cols.segment].isin(segments)]
-
-    id_vars = [cols.country_value, cols.segment, cols.make, cols.model, cols.powertrain]
-    for opt in [cols.drive_type, cols.registration_type, cols.body_type, cols.origin, *spec_columns.values()]:
-        if opt and opt in df.columns and opt not in id_vars:
-            id_vars.append(opt)
-
-    available = [c for c in id_vars if c in df.columns]
-    available_month_cols = [c for c in month_cols if c in df.columns]
-
-    long = df.melt(
-        id_vars=available,
-        value_vars=available_month_cols,
-        var_name="month_col",
-        value_name="sales",
-    )
 
     rename_map = {
         cols.country_value: "country",
@@ -283,25 +341,140 @@ def build_fact_sales_monthly(
         cols.model: "model",
         cols.powertrain: "powertrain",
     }
-    if cols.drive_type and cols.drive_type in available:
+    if cols.drive_type and cols.drive_type in column_names:
         rename_map[cols.drive_type] = "drive_type"
-    if cols.registration_type and cols.registration_type in available:
+    if cols.registration_type and cols.registration_type in column_names:
         rename_map[cols.registration_type] = "registration_type"
-    if cols.body_type and cols.body_type in available:
+    if cols.body_type and cols.body_type in column_names:
         rename_map[cols.body_type] = "body_type"
-    if cols.origin and cols.origin in available:
+    if cols.origin and cols.origin in column_names:
         rename_map[cols.origin] = "origin"
     for field, raw_col in spec_columns.items():
-        if raw_col in available:
+        if raw_col in column_names:
             rename_map[raw_col] = field
 
+    # Determine the parquet path (use glob for hive-partitioned dirs)
+    parquet_path = repo._resolve_dataset_path()
+    import os as _os
+    if _os.path.isdir(str(parquet_path)):
+        parquet_path = f"{parquet_path}/**/*.parquet"
+
+    if _duckdb is not None:
+        # ── DuckDB fast path ──
+        con = _duckdb.connect()
+        try:
+            # Build SELECT column list with aliases
+            select_parts = []
+            for raw, alias in rename_map.items():
+                quoted = f'"{raw}"' if ' ' in raw or raw != raw.lower() else raw
+                select_parts.append(f'{quoted} AS {alias}')
+            for mc in month_cols:
+                quoted = f'"{mc}"'
+                select_parts.append(quoted)
+
+            # WHERE clause for country partition pruning
+            where_clauses = []
+            if country:
+                ccol = f'"{cols.country_value}"'
+                where_clauses.append(f'{ccol} = \'{country}\'')
+            if fuel_types:
+                pts = "', '".join(fuel_types)
+                where_clauses.append(f'"{cols.powertrain}" IN (\'{pts}\')')
+            if segments:
+                segs = "', '".join(segments)
+                where_clauses.append(f'"{cols.segment}" IN (\'{segs}\')')
+            where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+            # UNPIVOT month columns
+            unpivot_cols = ', '.join(f'"{c}"' for c in month_cols)
+
+            sql = f"""
+                WITH raw AS (
+                    SELECT {', '.join(select_parts)}
+                    FROM '{parquet_path}'
+                    {where_sql}
+                )
+                SELECT *,
+                    CASE
+                        WHEN "period_raw" LIKE '%Jan' THEN LEFT("period_raw", 4) || '-01'
+                        WHEN "period_raw" LIKE '%Feb' THEN LEFT("period_raw", 4) || '-02'
+                        WHEN "period_raw" LIKE '%Mar' THEN LEFT("period_raw", 4) || '-03'
+                        WHEN "period_raw" LIKE '%Apr' THEN LEFT("period_raw", 4) || '-04'
+                        WHEN "period_raw" LIKE '%May' THEN LEFT("period_raw", 4) || '-05'
+                        WHEN "period_raw" LIKE '%Jun' THEN LEFT("period_raw", 4) || '-06'
+                        WHEN "period_raw" LIKE '%Jul' THEN LEFT("period_raw", 4) || '-07'
+                        WHEN "period_raw" LIKE '%Aug' THEN LEFT("period_raw", 4) || '-08'
+                        WHEN "period_raw" LIKE '%Sep' THEN LEFT("period_raw", 4) || '-09'
+                        WHEN "period_raw" LIKE '%Oct' THEN LEFT("period_raw", 4) || '-10'
+                        WHEN "period_raw" LIKE '%Nov' THEN LEFT("period_raw", 4) || '-11'
+                        WHEN "period_raw" LIKE '%Dec' THEN LEFT("period_raw", 4) || '-12'
+                        ELSE "period_raw"
+                    END AS period
+                FROM (
+                    UNPIVOT raw
+                    ON {unpivot_cols}
+                    INTO NAME period_raw VALUE sales
+                )
+            """
+            df = con.execute(sql).df()
+            con.close()
+        except Exception as _e:
+            con.close()
+            logger.warning("DuckDB UNPIVOT failed, falling back to pandas: %s", _e)
+            return _build_fact_sales_monthly_pandas(
+                cols, column_names, spec_columns, id_cols, month_cols, rename_map,
+                country, fuel_types, segments,
+            )
+
+        # Normalize using vectorized map (much faster than .apply())
+        df["sales"] = pd.to_numeric(df["sales"], errors="coerce").fillna(0.0)
+        if "drive_type" in df.columns:
+            drive_map = _build_normalize_map(DRIVE_NORMALIZE_RULES)
+            df["drive_type"] = df["drive_type"].str.strip().str.lower().map(drive_map).fillna("OTHER")
+        else:
+            df["drive_type"] = "OTHER"
+        if "registration_type" in df.columns:
+            reg_map = _build_normalize_map(REGISTRATION_NORMALIZE_RULES)
+            df["registration_type"] = df["registration_type"].str.strip().str.lower().map(reg_map).fillna("Other")
+        else:
+            df["registration_type"] = "Other"
+        for field in PRODUCT_SPEC_CANDIDATES:
+            if field in df.columns:
+                df[field] = _coerce_numeric_series(df[field])
+        return df
+
+    return _build_fact_sales_monthly_pandas(
+        cols, column_names, spec_columns, id_cols, month_cols, rename_map,
+        country, fuel_types, segments,
+    )
+
+
+def _build_fact_sales_monthly_pandas(
+    cols, column_names, spec_columns, id_cols, month_cols, rename_map,
+    country, fuel_types, segments,
+) -> pd.DataFrame:
+    """Fallback pandas implementation (when DuckDB unavailable)."""
+    load_cols = id_cols + month_cols
+    dataset = repo._open_dataset()
+    if country and cols.country_value in column_names:
+        filter_expr = repo._build_filter_expression({cols.country_value: [country]})
+        table = dataset.to_table(columns=load_cols, filter=filter_expr)
+    else:
+        table = dataset.to_table(columns=load_cols)
+    df = table.to_pandas()
+    if fuel_types:
+        df = df[df[cols.powertrain].isin(fuel_types)]
+    if segments:
+        df = df[df[cols.segment].isin(segments)]
+    available = [c for c in id_cols if c in df.columns]
+    available_month_cols = [c for c in month_cols if c in df.columns]
+    long = df.melt(id_vars=available, value_vars=available_month_cols, var_name="month_col", value_name="sales")
     long = long.rename(columns=rename_map)
     long["period"] = long["month_col"].apply(_month_column_to_period)
     long["sales"] = pd.to_numeric(long["sales"], errors="coerce").fillna(0.0)
     for field in PRODUCT_SPEC_CANDIDATES:
         if field in long.columns:
             long[field] = _coerce_numeric_series(long[field])
-
     if "drive_type" in long.columns:
         long["drive_type"] = long["drive_type"].apply(_normalize_drive)
     else:
@@ -310,7 +483,6 @@ def build_fact_sales_monthly(
         long["registration_type"] = long["registration_type"].apply(_normalize_registration)
     else:
         long["registration_type"] = "Other"
-
     return long
 
 

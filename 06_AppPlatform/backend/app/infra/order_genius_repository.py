@@ -887,6 +887,24 @@ def list_quantities_for_country_year(
     return list(session.execute(stmt).scalars().all())
 
 
+def list_quantities_for_country_month(
+    session: Session,
+    country_code: str,
+    order_year: int,
+    order_month: int,
+    positive_only: bool = True,
+) -> list[OrderQuantityCell]:
+    stmt = select(OrderQuantityCell).where(
+        OrderQuantityCell.country_code == country_code,
+        OrderQuantityCell.order_year == order_year,
+        OrderQuantityCell.order_month == order_month,
+    )
+    if positive_only:
+        stmt = stmt.where(OrderQuantityCell.quantity > 0)
+    stmt = stmt.order_by(OrderQuantityCell.material_code)
+    return list(session.execute(stmt).scalars().all())
+
+
 # ── Remark History ─────────────────────────────────────────────────────
 
 

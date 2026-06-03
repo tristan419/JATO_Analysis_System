@@ -114,6 +114,20 @@ import type {
   RemarkUpdate,
 } from "../types/orderGenius";
 import type {
+  PiOrderDetail,
+  PiOrderFilters,
+  PiOrderHeader,
+  PiOrderLine,
+  PiVehicleUnit,
+  UpdateVehiclePayload,
+  VehicleAllocationFilters,
+  VehicleAllocationListResponse,
+  VehicleAllocationPlan,
+  VehicleAllocationSearchResult,
+  VehicleImportPreview,
+  VehicleImportResult,
+} from "../types/orderGeniusVehicle";
+import type {
   CountryChatDeckResponse,
   CountryChatMetadataResponse,
   CountryChatNewsOpsStatus,
@@ -303,6 +317,17 @@ async function sha256ForBlob(blob: Blob): Promise<string> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function appendSearchParam(
+  params: URLSearchParams,
+  key: string,
+  value: string | number | boolean | null | undefined,
+): void {
+  if (value === null || value === undefined || value === "") {
+    return;
+  }
+  params.set(key, String(value));
 }
 
 function getMonthlyUpdateUploadSessionStorageKey(resumeKey: string): string {
@@ -2879,8 +2904,15 @@ export const api = {
       `/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob?country=${encodeURIComponent(country)}`,
     ),
 
-  exportOrderGenius: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; quantitiesOnly?: boolean }) =>
+  exportOrderGenius: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; hideEmptyRows?: boolean; quantitiesOnly?: boolean }) =>
     requestBlob("/order-genius/export", {
+      method: "POST",
+      body: JSON.stringify({ country, year, ...opts }),
+      headers: { "Content-Type": "application/json" },
+    }),
+
+  exportOrderGeniusPi: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; hideEmptyRows?: boolean }) =>
+    requestBlob("/order-genius/export-pi", {
       method: "POST",
       body: JSON.stringify({ country, year, ...opts }),
       headers: { "Content-Type": "application/json" },
@@ -2914,6 +2946,132 @@ export const api = {
       `/order-genius/import-quantities/${encodeURIComponent(importId)}/apply`,
       { method: "POST" },
     ),
+
+  getVehicleAllocationPis: (params: PiOrderFilters = {}) => {
+    const qs = new URLSearchParams();
+    appendSearchParam(qs, "country", params.country);
+    appendSearchParam(qs, "month", params.month);
+    appendSearchParam(qs, "status", params.status);
+    appendSearchParam(qs, "keyword", params.keyword);
+    appendSearchParam(qs, "page", params.page);
+    appendSearchParam(qs, "page_size", params.pageSize);
+    const suffix = qs.toString();
+    return request<VehicleAllocationListResponse<PiOrderHeader>>(
+      `/order-genius/vehicle-allocation/pi${suffix ? `?${suffix}` : ""}`,
+    );
+  },
+
+  getVehicleAllocationPi: (piCode: string) =>
+    request<PiOrderDetail>(
+      `/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}`,
+    ),
+
+  createVehicleAllocationPi: (body: Record<string, unknown>) =>
+    request<PiOrderHeader>("/order-genius/vehicle-allocation/pi", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateVehicleAllocationPi: (piCode: string, body: Record<string, unknown>) =>
+    request<PiOrderHeader>(
+      `/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
+  createVehicleAllocationLine: (piCode: string, body: Record<string, unknown>) =>
+    request<PiOrderLine>(
+      `/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}/lines`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  updateVehicleAllocationLine: (piLineCode: string, body: Record<string, unknown>) =>
+    request<PiOrderLine>(
+      `/order-genius/vehicle-allocation/lines/${encodeURIComponent(piLineCode)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
+  listVehicleAllocationVehicles: (params: VehicleAllocationFilters = {}) => {
+    const qs = new URLSearchParams();
+    appendSearchParam(qs, "keyword", params.keyword);
+    appendSearchParam(qs, "pi_code", params.piCode);
+    appendSearchParam(qs, "pi_line_code", params.piLineCode);
+    appendSearchParam(qs, "car_code", params.carCode);
+    appendSearchParam(qs, "vin", params.vin);
+    appendSearchParam(qs, "material_code", params.materialCode);
+    appendSearchParam(qs, "bom", params.bom);
+    appendSearchParam(qs, "country", params.country);
+    appendSearchParam(qs, "ship_name", params.shipName);
+    appendSearchParam(qs, "allocation_status", params.allocationStatus);
+    appendSearchParam(qs, "logistics_status", params.logisticsStatus);
+    appendSearchParam(qs, "eta_from", params.etaFrom);
+    appendSearchParam(qs, "eta_to", params.etaTo);
+    appendSearchParam(qs, "ready_from", params.readyFrom);
+    appendSearchParam(qs, "ready_to", params.readyTo);
+    appendSearchParam(qs, "vin_missing_only", params.vinMissingOnly);
+    appendSearchParam(qs, "unallocated_only", params.unallocatedOnly);
+    appendSearchParam(qs, "page", params.page);
+    appendSearchParam(qs, "page_size", params.pageSize);
+    const suffix = qs.toString();
+    return request<VehicleAllocationListResponse<PiVehicleUnit>>(
+      `/order-genius/vehicle-allocation/vehicles${suffix ? `?${suffix}` : ""}`,
+    );
+  },
+
+  getVehicleAllocationVehicle: (carCode: string) =>
+    request<PiVehicleUnit>(
+      `/order-genius/vehicle-allocation/vehicles/${encodeURIComponent(carCode)}`,
+    ),
+
+  updateVehicleAllocationVehicle: (carCode: string, body: UpdateVehiclePayload) =>
+    request<PiVehicleUnit>(
+      `/order-genius/vehicle-allocation/vehicles/${encodeURIComponent(carCode)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
+  searchVehicleAllocation: (keyword: string) => {
+    const qs = new URLSearchParams({ keyword });
+    return request<VehicleAllocationSearchResult>(
+      `/order-genius/vehicle-allocation/search?${qs.toString()}`,
+    );
+  },
+
+  getVehicleAllocationOrderMatrixPlan: (country: string, year: number, month: number) => {
+    const qs = new URLSearchParams();
+    appendSearchParam(qs, "country", country);
+    appendSearchParam(qs, "year", year);
+    appendSearchParam(qs, "month", month);
+    return request<VehicleAllocationPlan>(
+      `/order-genius/vehicle-allocation/order-matrix-plan?${qs.toString()}`,
+    );
+  },
+
+  generateVehicleAllocationFromOrderMatrix: (body: Record<string, unknown>) =>
+    request<{ piCode: string; lineCount: number; vehicleCount: number }>(
+      "/order-genius/vehicle-allocation/generate-from-order-matrix",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  previewVehicleAllocationImport: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<VehicleImportPreview>(
+      "/order-genius/vehicle-allocation/import/preview",
+      { method: "POST", body: form },
+    );
+  },
+
+  applyVehicleAllocationImport: (importId: string) =>
+    request<VehicleImportResult>(
+      `/order-genius/vehicle-allocation/import/${encodeURIComponent(importId)}/apply`,
+      { method: "POST" },
+    ),
+
+  exportVehicleAllocation: (params: VehicleAllocationFilters = {}) =>
+    requestBlob("/order-genius/vehicle-allocation/export", {
+      method: "POST",
+      body: JSON.stringify(params),
+      headers: { "Content-Type": "application/json" },
+    }),
 
   // BOM Admin
   getBomAdmin: (params?: { brand?: string; search?: string; country?: string }) => {

@@ -30,6 +30,7 @@ from app.services.order_genius_service import (
     build_matrix,
     build_options,
     export_matrix,
+    export_pi_matrix,
     get_fob_for_sku,
     preview_order_quantity_import,
     update_quantity_cell,
@@ -38,6 +39,57 @@ from app.services.order_genius_service import (
 from app.services.order_quantity_parser import parse_order_quantity_xlsx
 
 router = APIRouter(prefix="/order-genius", tags=["order_genius"])
+
+
+def _body_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _selected_month_from_body(body: dict) -> int | None:
+    selected_month_raw = body.get("selectedMonth", body.get("selected_month"))
+    if selected_month_raw in (None, ""):
+        return None
+    try:
+        selected_month = int(selected_month_raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="selectedMonth must be 1-12") from exc
+    if selected_month < 1 or selected_month > 12:
+        raise HTTPException(status_code=400, detail="selectedMonth must be 1-12")
+    return selected_month
+
+
+def _export_filter_params(body: dict) -> dict:
+    return {
+        "brand": body.get("brand"),
+        "model_name": body.get("model"),
+        "powertrain": body.get("powertrain"),
+        "version": body.get("version"),
+        "colour": body.get("colour"),
+        "material_code_search": body.get("materialCodeSearch") or body.get("material_code_search"),
+        "selected_month": _selected_month_from_body(body),
+        "hide_empty_rows": _body_bool(body.get("hideEmptyRows", body.get("hide_empty_rows", False))),
+    }
+
+
+def _export_filename_suffix(filters: dict) -> str:
+    is_filtered = any([
+        filters.get("brand"),
+        filters.get("model_name"),
+        filters.get("powertrain"),
+        filters.get("version"),
+        filters.get("colour"),
+        filters.get("material_code_search"),
+        filters.get("selected_month"),
+        filters.get("hide_empty_rows"),
+    ])
+    suffix = "_filtered" if is_filtered else ""
+    if filters.get("selected_month"):
+        suffix += f"_M{filters['selected_month']:02d}"
+    return suffix
 
 
 # ── Upload helpers (filesystem-based, mirroring engineering_config) ───
@@ -159,7 +211,7 @@ def publish_material_master(
 @router.get("/payment-terms")
 def list_payment_terms(
     session: Session = Depends(get_db_session),
-    _=Depends(require_roles("viewer", "editor", "admin")),
+    _=Depends(require_min_role("viewer")),
 ) -> dict:
     rules = repo.list_payment_term_rules(session)
     return {
@@ -183,7 +235,7 @@ def list_payment_terms(
 @router.get("/colour-surcharges")
 def list_colour_surcharges(
     session: Session = Depends(get_db_session),
-    _=Depends(require_roles("viewer", "editor", "admin")),
+    _=Depends(require_min_role("viewer")),
 ) -> dict:
     rules = repo.list_colour_surcharges(session)
     return {
@@ -871,20 +923,40 @@ def export_order_genius(
     validate_country_access(session, user.name, user.role, country)
     year = body.get("year", 2026)
     include_hist = body.get("includeHistoricalWithQuantity", True)
-    brand = body.get("brand")
-    model = body.get("model")
-    powertrain = body.get("powertrain")
-    version = body.get("version")
-    colour = body.get("colour")
-    quantities_only = body.get("quantitiesOnly", False)
+    filters = _export_filter_params(body)
+    quantities_only = _body_bool(body.get("quantitiesOnly", False))
     buf = export_matrix(session, country, year, include_hist,
-                        brand=brand, model_name=model, powertrain=powertrain,
-                        version=version, colour=colour,
+                        **filters,
                         quantities_only=quantities_only)
     from datetime import date as _date
     today = _date.today().strftime("%Y%m%d")
-    suffix = '_filtered' if (brand or model or powertrain) else ''
+    suffix = _export_filename_suffix(filters)
     filename = f"{country}_{year}_{today}{suffix}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument"
+            ".spreadsheetml.sheet"
+        ),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/export-pi")
+def export_order_genius_pi(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("viewer")),
+) -> StreamingResponse:
+    country = body.get("country", "")
+    validate_country_access(session, user.name, user.role, country)
+    year = body.get("year", 2026)
+    filters = _export_filter_params(body)
+    buf = export_pi_matrix(session, country, year, **filters)
+    from datetime import date as _date
+    today = _date.today().strftime("%Y%m%d")
+    suffix = _export_filename_suffix(filters)
+    filename = f"PI_{country}_{year}_{today}{suffix}.xlsx"
     return StreamingResponse(
         buf,
         media_type=(

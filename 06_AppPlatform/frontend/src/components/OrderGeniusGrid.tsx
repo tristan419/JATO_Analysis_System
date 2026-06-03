@@ -16,6 +16,7 @@ import {
   type CellValueChangedEvent,
   type ColDef,
   type ICellEditorParams,
+  type ICellRendererParams,
   type ValueGetterParams,
 } from "ag-grid-community";
 import { AgGridReact } from "ag-grid-react";
@@ -43,6 +44,8 @@ export interface OrderGeniusGridRow {
   __groupLabel?: string;
   __groupColor?: string;
   __groupColSpan?: number;
+  __groupKey?: string;
+  __expanded?: boolean;
   // Flattened months: month_1..month_12
   [key: `month_${number}`]: number;
   // Row versions per month
@@ -56,6 +59,8 @@ export interface OrderGeniusGridRow {
 export interface OrderGeniusGridProps {
   rows: OrderGeniusGridRow[];
   selectedMonth: number | null;
+  selectedRowIds?: ReadonlySet<string>;
+  canEditQuantities: boolean;
   visibleColumns: {
     months: boolean;
     amount: boolean;
@@ -68,14 +73,70 @@ export interface OrderGeniusGridProps {
   showCountry: boolean;
   onCellValueChanged: (event: CellValueChangedEvent<OrderGeniusGridRow>) => void;
   onGridReady?: (api: any) => void;
+  onToggleGroup?: (groupKey: string) => void;
+  onTogglePiRow?: (row: OrderGeniusGridRow, selected: boolean) => void;
+}
+
+interface OrderGeniusGridContext {
+  onToggleGroup?: (groupKey: string) => void;
+}
+
+type GroupHeaderRendererProps = ICellRendererParams<OrderGeniusGridRow, string> & {
+  context?: OrderGeniusGridContext;
+};
+
+export function getOrderGeniusRowId(row: OrderGeniusGridRow): string {
+  return [
+    row._countryCode || "",
+    row.materialCode,
+    row.lifecycleStatus || "active",
+    row.version || "",
+    row.colour || "",
+    row.interiorColorName || "",
+  ].join("|");
 }
 
 export function buildOrderGeniusColumnDefs(
   showCountry: boolean,
   selectedMonth: number | null,
   vis: OrderGeniusGridProps["visibleColumns"],
+  canEditQuantities: boolean,
+  selectedRowIds?: ReadonlySet<string>,
+  onTogglePiRow?: (row: OrderGeniusGridRow, selected: boolean) => void,
 ): ColDef<OrderGeniusGridRow>[] {
   const cols: ColDef<OrderGeniusGridRow>[] = [];
+
+  if (selectedMonth != null && onTogglePiRow) {
+    const monthField = `month_${selectedMonth}` as `month_${number}`;
+    cols.push({
+      headerName: "PI",
+      headerTooltip: "Tick rows to include their selected-month quantity in PI batch creation.",
+      pinned: "left",
+      width: 52,
+      editable: false,
+      sortable: false,
+      cellClass: "og-pi-select-cell",
+      cellRenderer: (params: ICellRendererParams<OrderGeniusGridRow, unknown>) => {
+        const row = params.data;
+        if (!row || row.__type === "groupHeader" || row.__type === "consolidated_parent") {
+          return null;
+        }
+        const quantity = row[monthField] || 0;
+        const disabled = quantity <= 0 || row.lifecycleStatus === "historical";
+        const rowId = getOrderGeniusRowId(row);
+        return (
+          <input
+            type="checkbox"
+            checked={selectedRowIds?.has(rowId) ?? false}
+            disabled={disabled}
+            onChange={(event) => onTogglePiRow(row, event.currentTarget.checked)}
+            aria-label="Select PI row"
+            title={disabled ? "This row has no selectable quantity for the selected month" : "Add this row to PI batch"}
+          />
+        );
+      },
+    });
+  }
 
   if (showCountry) {
     cols.push({
@@ -162,6 +223,7 @@ export function buildOrderGeniusColumnDefs(
       width: 150,
       editable: false,
       cellClass: "og-material-cell",
+      valueFormatter: (p) => (p.data?.__type === "groupHeader" ? "" : String(p.value ?? "")),
     });
   }
 
@@ -189,7 +251,11 @@ export function buildOrderGeniusColumnDefs(
         field,
         width: 72,
         type: "numericColumn",
-        editable: (params: any) => params.data != null && params.data.__type !== "groupHeader",
+        editable: (params: any) =>
+          canEditQuantities
+          && params.data != null
+          && params.data.__type !== "groupHeader"
+          && params.data.editable !== false,
         cellEditor: "agNumberCellEditor",
         cellEditorParams: { min: 0 },
         valueFormatter: (p) => (p.value != null ? String(p.value) : "0"),
@@ -331,10 +397,36 @@ const QuantityCellEditor = forwardRef(
   },
 );
 
-export function OrderGeniusGrid({ rows, selectedMonth, visibleColumns, showCountry, onCellValueChanged, onGridReady }: OrderGeniusGridProps) {
+export function OrderGeniusGrid({
+  rows,
+  selectedMonth,
+  selectedRowIds,
+  canEditQuantities,
+  visibleColumns,
+  showCountry,
+  onCellValueChanged,
+  onGridReady,
+  onToggleGroup,
+  onTogglePiRow,
+}: OrderGeniusGridProps) {
+  const localGridApiRef = useRef<any>(null);
   const columnDefs = useMemo(
-    () => buildOrderGeniusColumnDefs(showCountry, selectedMonth, visibleColumns),
-    [showCountry, selectedMonth, visibleColumns],
+    () => buildOrderGeniusColumnDefs(
+      showCountry,
+      selectedMonth,
+      visibleColumns,
+      canEditQuantities,
+      selectedRowIds,
+      onTogglePiRow,
+    ),
+    [canEditQuantities, showCountry, selectedMonth, visibleColumns, selectedRowIds, onTogglePiRow],
+  );
+  const groupStateSignature = useMemo(
+    () => rows
+      .filter((row) => row.__type === "groupHeader")
+      .map((row) => `${row.__groupKey || row.materialCode}:${row.__expanded ? "1" : "0"}`)
+      .join("|"),
+    [rows],
   );
 
   const defaultColDef = useMemo<ColDef<OrderGeniusGridRow>>(
@@ -353,7 +445,7 @@ export function OrderGeniusGrid({ rows, selectedMonth, visibleColumns, showCount
 
   const getRowId = useCallback(
     (p: { data: OrderGeniusGridRow }) =>
-      (p.data._countryCode || "") + "|" + p.data.materialCode + "|" + (p.data.lifecycleStatus || "active") + "|" + (p.data.version || "") + "|" + (p.data.colour || "") + "|" + (p.data.interiorColorName || ""),
+      getOrderGeniusRowId(p.data),
     [],
   );
 
@@ -375,12 +467,50 @@ export function OrderGeniusGrid({ rows, selectedMonth, visibleColumns, showCount
     params.api.autoSizeAllColumns(false);
   }, []);
 
+  useEffect(() => {
+    if (!localGridApiRef.current) return;
+    localGridApiRef.current.refreshCells({ force: true, columns: ["modelName"] });
+  }, [groupStateSignature]);
+
+  const gridContext = useMemo<OrderGeniusGridContext>(
+    () => ({ onToggleGroup }),
+    [onToggleGroup],
+  );
+
   const components = useMemo(() => ({
-    groupHeaderRenderer: (props: any) => {
+    groupHeaderRenderer: (props: GroupHeaderRendererProps) => {
       const color = props.data?.__groupColor || "#9ca3af";
       const label = props.data?.__groupLabel || "";
+      const groupKey = props.data?.__groupKey || "";
+      const expanded = props.data?.__expanded ?? false;
       return (
         <div style={{ display: "flex", alignItems: "center", gap: 8, height: "100%", fontWeight: 700, fontSize: 13, paddingLeft: 4 }}>
+          <button
+            type="button"
+            aria-label={expanded ? "Collapse product group" : "Expand product group"}
+            disabled={!groupKey}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (groupKey) props.context?.onToggleGroup?.(groupKey);
+            }}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 20,
+              height: 20,
+              borderRadius: 4,
+              border: "1px solid #cbd5e1",
+              background: "#fff",
+              color,
+              cursor: groupKey ? "pointer" : "default",
+              fontWeight: 800,
+              lineHeight: 1,
+              flexShrink: 0,
+            }}
+          >
+            {expanded ? "-" : "+"}
+          </button>
           <div style={{ width: 4, height: 20, borderRadius: 2, flexShrink: 0, backgroundColor: color }} />
           <span style={{ color }}>{label}</span>
         </div>
@@ -395,13 +525,17 @@ export function OrderGeniusGrid({ rows, selectedMonth, visibleColumns, showCount
         rowData={rows}
         columnDefs={columnDefs}
         components={components}
+        context={gridContext}
         defaultColDef={defaultColDef}
         getRowId={getRowId}
         isRowSelectable={isRowSelectable}
         rowClassRules={rowClassRules}
         onCellValueChanged={onCellValueChanged}
         onFirstDataRendered={onFirstDataRendered}
-        onGridReady={(p) => onGridReady?.(p.api)}
+        onGridReady={(p) => {
+          localGridApiRef.current = p.api;
+          onGridReady?.(p.api);
+        }}
         stopEditingWhenCellsLoseFocus={true}
         undoRedoCellEditing={true}
         undoRedoCellEditingLimit={20}

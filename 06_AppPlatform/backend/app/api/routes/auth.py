@@ -118,6 +118,37 @@ def _user_payload(user: User) -> dict:
     }
 
 
+def _safe_frontend_redirect(value: str | None) -> str:
+    redirect = str(value or "/").strip() or "/"
+    if not redirect.startswith("/") or redirect.startswith("//"):
+        return "/"
+    return redirect
+
+
+def _frontend_origin() -> str:
+    import os as _os
+
+    return _os.getenv("APP_FRONTEND_ORIGIN", "http://127.0.0.1:5173").rstrip("/")
+
+
+def _frontend_url(path: str, params: dict[str, str]) -> str:
+    safe_path = _safe_frontend_redirect(path)
+    separator = "&" if "?" in safe_path else "?"
+    return f"{_frontend_origin()}{safe_path}{separator}{urlencode(params)}"
+
+
+def _oauth_error_redirect(message: str, redirect: str) -> RedirectResponse:
+    return RedirectResponse(
+        url=_frontend_url(
+            "/login",
+            {
+                "oauthError": message,
+                "redirect": _safe_frontend_redirect(redirect),
+            },
+        )
+    )
+
+
 @router.post("/login")
 def login(
     body: LoginBody, db: Session = Depends(get_db_session)
@@ -592,7 +623,7 @@ def google_auth_url(
         raise HTTPException(status_code=503, detail="Google login not configured")
     # Encode redirect destination into the state param (Google passes it back)
     state = _json.dumps({
-        "redirect": redirect,
+        "redirect": _safe_frontend_redirect(redirect),
         "nonce": secrets.token_urlsafe(8),
     })
     from app.services.google_service import build_auth_url
@@ -615,7 +646,8 @@ def google_callback(
     redirect = "/"
     try:
         state_data = _json.loads(state)
-        redirect = state_data.get("redirect", "/")
+        if isinstance(state_data, dict):
+            redirect = _safe_frontend_redirect(state_data.get("redirect", "/"))
     except (_json.JSONDecodeError, TypeError):
         pass
 
@@ -624,17 +656,15 @@ def google_callback(
     try:
         user_info = exchange_code(code, GOOGLE_REDIRECT_URI)
     except Exception as exc:
-        raise HTTPException(
-            status_code=401, detail=f"Google auth failed: {exc}"
-        ) from exc
+        return _oauth_error_redirect(f"Google auth failed: {exc}", redirect)
 
     email = str(user_info.get("email") or "").strip()
-    google_id = str(user_info.get("id") or "")
+    google_id = str(user_info.get("id") or user_info.get("sub") or "")
     name = str(user_info.get("name") or "").strip()
     picture = str(user_info.get("picture") or "").strip()
 
     if not email or not google_id:
-        raise HTTPException(status_code=401, detail="Missing Google account info")
+        return _oauth_error_redirect("Missing Google account info", redirect)
 
     # 1. Find by OAuth subject (returning Google user)
     user = (
@@ -716,11 +746,13 @@ def google_callback(
             db.refresh(user)
             is_new = True
 
-    import os as _os
     token = session_store.create(user.username, user.role)
-    origin = _os.getenv("APP_FRONTEND_ORIGIN", "http://127.0.0.1:5173")
-    params = f"token={token}&username={user.username}&role={user.role}"
+    params = {
+        "token": token,
+        "username": user.username,
+        "role": user.role,
+    }
     if is_new:
-        params += "&isNewUser=true"
-    frontend_url = f"{origin}{redirect}?{params}"
+        params["isNewUser"] = "true"
+    frontend_url = _frontend_url(redirect, params)
     return RedirectResponse(url=frontend_url)

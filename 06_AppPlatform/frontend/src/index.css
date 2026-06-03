@@ -13147,6 +13147,23 @@ table.data-table tr.data-table-group-row.contains-selection td {
   font-size: 11px;
 }
 
+.og-pi-select-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.og-pi-select-cell input {
+  width: 15px;
+  height: 15px;
+  accent-color: #1c69d4;
+  cursor: pointer;
+}
+
+.og-pi-select-cell input:disabled {
+  cursor: not-allowed;
+}
+
 .og-ttl-cell {
   font-weight: 700;
 }
@@ -13162,6 +13179,133 @@ table.data-table tr.data-table-group-row.contains-selection td {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.og-pi-batch-panel {
+  display: grid;
+  gap: 10px;
+  flex: 1 1 100%;
+  min-width: min(100%, 620px);
+  border: 1px solid #d8dee6;
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.og-pi-batch-head,
+.og-pi-batch-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.og-pi-batch-head strong {
+  font-size: 13px;
+  color: #111827;
+}
+
+.og-pi-batch-head span,
+.og-pi-batch-notice {
+  font-size: 12px;
+  color: #667085;
+}
+
+.og-pi-batch-mode {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  width: min(100%, 340px);
+  border: 1px solid #cfd6df;
+  border-radius: 6px;
+  background: #f6f8fb;
+  padding: 2px;
+}
+
+.og-pi-batch-mode button {
+  min-height: 30px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.og-pi-batch-mode button.is-active {
+  background: #1c69d4;
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+}
+
+.og-pi-batch-fields {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.og-pi-batch-fields input,
+.og-pi-batch-lines input {
+  min-width: 0;
+  border: 1px solid #cfd6df;
+  border-radius: 6px;
+  background: #fff;
+  color: #111827;
+  padding: 8px 9px;
+}
+
+.og-pi-batch-lines {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.og-pi-batch-lines label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 86px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e5eaf0;
+  border-radius: 6px;
+  padding: 7px 8px;
+}
+
+.og-pi-batch-lines span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.og-pi-batch-lines small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #667085;
+  font-weight: 500;
+}
+
+.og-pi-batch-lines input {
+  text-align: right;
+}
+
+.og-pi-batch-actions {
+  justify-content: flex-start;
+}
+
+.og-pi-batch-notice {
+  color: #16794a;
+}
+
+@media (max-width: 780px) {
+  .og-pi-batch-fields,
+  .og-pi-batch-lines label {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ── BOM Admin Table ────────────────────────────────────────── */

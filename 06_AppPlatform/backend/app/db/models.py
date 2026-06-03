@@ -1785,6 +1785,203 @@ class OrderQuantityCell(TimestampMixin, Base):
     updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class PiOrderHeader(TimestampMixin, Base):
+    __tablename__ = "pi_order_header"
+    __table_args__ = (
+        UniqueConstraint("pi_code", name="uq_pi_order_header_pi_code"),
+        UniqueConstraint(
+            "ordering_account_code", "order_month", "pi_sequence_no",
+            name="uq_pi_order_header_account_month_seq",
+        ),
+        Index("ix_pi_order_header_country_month", "country_code", "order_month"),
+        Index("ix_pi_order_header_ordering_account", "ordering_account_code", "order_month"),
+        Index("ix_pi_order_header_status", "status"),
+        {"schema": "ordering"},
+    )
+
+    pi_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    pi_code: Mapped[str] = mapped_column(Text, nullable=False)
+    official_pi_no: Mapped[str | None] = mapped_column(Text, nullable=True)
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    country_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ordering_account_code: Mapped[str] = mapped_column(Text, nullable=False)
+    ordering_account_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    market_country_codes: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
+    shipment_batch_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    port_of_discharge: Mapped[str | None] = mapped_column(Text, nullable=True)
+    order_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    order_month: Mapped[str] = mapped_column(Text, nullable=False)
+    pi_sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    shipping_schedule_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    feishu_tracking_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ship_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    etd: Mapped[date | None] = mapped_column(Date, nullable=True)
+    eta: Mapped[date | None] = mapped_column(Date, nullable=True)
+    actual_departure_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    actual_arrival_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    ready_for_pickup_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="draft")
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PiOrderLine(TimestampMixin, Base):
+    __tablename__ = "pi_order_line"
+    __table_args__ = (
+        UniqueConstraint("pi_line_code", name="uq_pi_order_line_code"),
+        UniqueConstraint(
+            "pi_id", "line_sequence_no",
+            name="uq_pi_order_line_pi_line_seq",
+        ),
+        CheckConstraint("quantity >= 0", name="ck_pi_order_line_quantity_non_negative"),
+        Index("ix_pi_order_line_pi_id", "pi_id"),
+        Index("ix_pi_order_line_material_code", "material_code"),
+        {"schema": "ordering"},
+    )
+
+    pi_line_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    pi_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("ordering.pi_order_header.pi_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    pi_code: Mapped[str] = mapped_column(Text, nullable=False)
+    pi_line_code: Mapped[str] = mapped_column(Text, nullable=False)
+    line_sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    material_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bom: Mapped[str | None] = mapped_column(Text, nullable=True)
+    brand: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    powertrain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    exterior_color_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    exterior_color_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    interior_color_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    interior_colour_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fob_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    amount_eur: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PiOrderLineAllocation(TimestampMixin, Base):
+    __tablename__ = "pi_order_line_allocation"
+    __table_args__ = (
+        UniqueConstraint(
+            "pi_line_id", "market_country_code",
+            name="uq_pi_order_line_alloc_line_country",
+        ),
+        CheckConstraint("quantity >= 0", name="ck_pi_order_line_alloc_quantity_non_negative"),
+        Index("ix_pi_order_line_alloc_line", "pi_line_id"),
+        Index("ix_pi_order_line_alloc_market_month", "market_country_code", "order_year", "order_month"),
+        Index("ix_pi_order_line_alloc_material", "material_code"),
+        {"schema": "ordering"},
+    )
+
+    pi_line_allocation_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    pi_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("ordering.pi_order_header.pi_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    pi_line_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("ordering.pi_order_line.pi_line_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    pi_code: Mapped[str] = mapped_column(Text, nullable=False)
+    pi_line_code: Mapped[str] = mapped_column(Text, nullable=False)
+    market_country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    order_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    order_month: Mapped[int] = mapped_column(Integer, nullable=False)
+    material_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fob_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PiVehicleUnit(TimestampMixin, Base):
+    __tablename__ = "pi_vehicle_unit"
+    __table_args__ = (
+        UniqueConstraint("car_code", name="uq_pi_vehicle_unit_car_code"),
+        UniqueConstraint("pi_code", "car_code", name="uq_pi_vehicle_unit_pi_car"),
+        Index(
+            "uq_pi_vehicle_unit_vin_not_null",
+            "vin",
+            unique=True,
+            postgresql_where=text("vin IS NOT NULL AND vin <> ''"),
+        ),
+        Index("ix_pi_vehicle_unit_pi_code", "pi_code"),
+        Index("ix_pi_vehicle_unit_line_code", "pi_line_code"),
+        Index("ix_pi_vehicle_unit_country_status", "country_code", "allocation_status", "logistics_status"),
+        Index("ix_pi_vehicle_unit_eta", "eta"),
+        Index("ix_pi_vehicle_unit_ready", "ready_for_pickup_date"),
+        {"schema": "ordering"},
+    )
+
+    vehicle_unit_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    pi_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("ordering.pi_order_header.pi_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    pi_line_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("ordering.pi_order_line.pi_line_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    pi_code: Mapped[str] = mapped_column(Text, nullable=False)
+    pi_line_code: Mapped[str] = mapped_column(Text, nullable=False)
+    car_code: Mapped[str] = mapped_column(Text, nullable=False)
+    vin: Mapped[str | None] = mapped_column(Text, nullable=True)
+    material_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bom: Mapped[str | None] = mapped_column(Text, nullable=True)
+    brand: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    powertrain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    exterior_color_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    exterior_color_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    interior_color_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    interior_colour_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    production_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    etd: Mapped[date | None] = mapped_column(Date, nullable=True)
+    eta: Mapped[date | None] = mapped_column(Date, nullable=True)
+    actual_departure_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    actual_arrival_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    ready_for_pickup_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    ship_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    dealer_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dealer_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    customer_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    allocation_status: Mapped[str] = mapped_column(Text, nullable=False, default="unallocated")
+    logistics_status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class MaterialSkuRemarkHistory(Base):
     __tablename__ = "material_sku_remark_history"
     __table_args__ = (

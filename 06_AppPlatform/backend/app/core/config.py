@@ -37,6 +37,16 @@ def _parse_bool_env(name: str, default: bool) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _parse_float_env(name: str, default: float) -> float:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        return float(raw_value.strip())
+    except ValueError:
+        return default
+
+
 def _default_project_root() -> Path:
     # .../06_AppPlatform/backend/app/core/config.py -> project root
     return Path(__file__).resolve().parents[4]
@@ -162,6 +172,11 @@ GOOGLE_REDIRECT_URI = os.getenv(
     "APP_GOOGLE_REDIRECT_URI",
     "http://127.0.0.1:8000/v1/auth/google/callback",
 ).strip()
+GOOGLE_OAUTH_PROXY_URL = os.getenv("APP_GOOGLE_OAUTH_PROXY_URL", "").strip()
+GOOGLE_OAUTH_TIMEOUT_SECONDS = _parse_float_env(
+    "APP_GOOGLE_OAUTH_TIMEOUT_SECONDS",
+    15.0,
+)
 
 CORS_ORIGINS: list[str] = [
     origin.strip()

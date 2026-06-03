@@ -426,7 +426,8 @@ export function AdvancedAnalysisPage() {
       </DeckExportDrawer>
 
       {error && <div style={{ padding: 16, color: "#b91c1c", background: "#fef2f2", borderRadius: 8, margin: "0 16px" }}>{error}</div>}
-      {loading && <LoadingSurface mode="overlay" label="Analyzing..." />}
+      {loading && !data && <LoadingSurface mode="overlay" label="Analyzing..." />}
+      {loading && data && <div style={{ position:"fixed",top:12,right:24,zIndex:100,padding:"4px 12px",borderRadius:6,background:"rgba(59,130,246,0.9)",color:"#fff",fontSize:11,fontWeight:600 }}>Refreshing…</div>}
 
       {data && !data.error && (
         <div style={{ padding: "12px 16px 24px" }}>

@@ -18,6 +18,7 @@ BACKUP_SCRIPT="$SCRIPT_DIR/backup_production_data.sh"
 CURRENT_STEP="initialization"
 
 VITE_API_BASE="${VITE_API_BASE:-/v1}"
+VITE_ASSET_BASE_URL="${VITE_ASSET_BASE_URL:-}"
 VITE_AUTH_TOKEN="${VITE_AUTH_TOKEN:-}"
 VITE_USER_ROLE="${VITE_USER_ROLE:-viewer}"
 VITE_USER_NAME="${VITE_USER_NAME:-anonymous}"
@@ -253,6 +254,41 @@ run_pre_deploy_backup() {
   return 0
 }
 
+precompress_frontend_assets() {
+  local dist_dir="$1"
+  local asset=""
+  local gzip_count=0
+  local brotli_count=0
+  local has_brotli=false
+
+  if [[ ! -d "$dist_dir" ]]; then
+    echo "[ERROR] Frontend dist directory missing: $dist_dir"
+    return 1
+  fi
+
+  if command -v brotli >/dev/null 2>&1; then
+    has_brotli=true
+  fi
+
+  while IFS= read -r -d '' asset; do
+    gzip -kf -9 "$asset"
+    gzip_count=$((gzip_count + 1))
+    if [[ "$has_brotli" == "true" ]]; then
+      brotli -f -q 6 "$asset"
+      brotli_count=$((brotli_count + 1))
+    fi
+  done < <(
+    find "$dist_dir" -type f \
+      \( -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' -o -name '*.wasm' \) \
+      -size +1024c -print0
+  )
+
+  echo "[INFO] Precompressed frontend assets: gzip=$gzip_count brotli=$brotli_count"
+  if [[ "$has_brotli" != "true" ]]; then
+    echo "[INFO] brotli command not found; generated gzip assets only"
+  fi
+}
+
 restart_timer_unit() {
   local timer_name="$1"
 
@@ -472,6 +508,7 @@ npm config set registry "$NPM_REGISTRY"
 echo "[INFO] npm registry → $NPM_REGISTRY"
 npm ci
 export VITE_API_BASE
+export VITE_ASSET_BASE_URL
 export VITE_AUTH_TOKEN
 export VITE_USER_ROLE
 export VITE_USER_NAME
@@ -491,6 +528,11 @@ if [[ ! -f "$FRONTEND_DIR/dist/index.html" ]]; then
   echo "[ERROR] Frontend build did not produce dist/index.html"
   exit 1
 fi
+
+echo "[INFO] Precompress frontend static assets"
+CURRENT_STEP="Precompress frontend assets"
+log_section "$CURRENT_STEP"
+precompress_frontend_assets "$FRONTEND_DIR/dist"
 
 echo "[INFO] Restart backend service"
 CURRENT_STEP="Restart backend service"

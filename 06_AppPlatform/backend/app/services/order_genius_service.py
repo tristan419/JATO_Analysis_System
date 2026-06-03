@@ -20,7 +20,10 @@ def _infer_interior_from_bom(bom_template: str | None) -> str | None:
         return None
     result = _infer_interior_from_tail_code(bom_template)
     return result[0] if result else None
-from app.services.order_genius_export_service import generate_order_genius_excel
+from app.services.order_genius_export_service import (
+    generate_order_genius_excel,
+    generate_order_genius_pi_excel,
+)
 from app.services.order_quantity_parser import (
     OrderQuantityImport,
     parse_order_quantity_xlsx,
@@ -592,6 +595,8 @@ def build_matrix(
             "version": sku.version,
             "colour": sku.exterior_color_name,
             "colourCode": sku.exterior_color_code,
+            "colourType": sku.exterior_color_type,
+            "colourTier": sku.colour_tier,
             "interiorColorName": sku.interior_color_name,
             "interiorColourCode": sku.interior_colour_code,
             "interiorPackage": sku.interior_package,
@@ -626,6 +631,8 @@ def build_matrix(
             continue
         if powertrain and _extract_canonical_pt(hist_sku) != normalize_powertrain(powertrain):
             continue
+        if material_code_search and material_code_search.lower() not in mc.lower():
+            continue
         fob = repo.get_fob_for_country_sku(session, country_code, mc)
 
         row_months: dict[str, dict] = {}
@@ -651,6 +658,8 @@ def build_matrix(
                 "version": hist_sku.version,
                 "colour": hist_sku.exterior_color_name,
                 "colourCode": hist_sku.exterior_color_code,
+                "colourType": hist_sku.exterior_color_type,
+                "colourTier": hist_sku.colour_tier,
                 "interiorColorName": hist_sku.interior_color_name,
                 "interiorColourCode": hist_sku.interior_colour_code,
                 "interiorPackage": hist_sku.interior_package,
@@ -863,22 +872,70 @@ def export_matrix(
     powertrain: str | None = None,
     version: str | None = None,
     colour: str | None = None,
+    material_code_search: str | None = None,
+    selected_month: int | None = None,
+    hide_empty_rows: bool = False,
     quantities_only: bool = False,
 ) -> io.BytesIO:
     """Generate the Order Genius Excel workbook."""
     matrix = build_matrix(session, country_code, year,
                           brand=brand, model_name=model_name,
-                          powertrain=powertrain, version=version, colour=colour)
+                          powertrain=powertrain, version=version, colour=colour,
+                          material_code_search=material_code_search)
     rows = matrix["rows"]
-    if quantities_only:
+    export_months = [selected_month] if selected_month else list(range(1, 13))
+    if quantities_only or hide_empty_rows:
         rows = [r for r in rows if any(
             (r.get("months", {}).get(str(m), {}).get("quantity", 0) or 0) > 0
-            for m in range(1, 13)
+            for m in export_months
         )]
     country_name = matrix.get("countryName", country_code)
     return generate_order_genius_excel(
         rows, country_code, country_name, year,
         include_historical_with_quantity,
+        selected_months=export_months,
+    )
+
+
+def export_pi_matrix(
+    session: Session,
+    country_code: str,
+    year: int,
+    brand: str | None = None,
+    model_name: str | None = None,
+    powertrain: str | None = None,
+    version: str | None = None,
+    colour: str | None = None,
+    material_code_search: str | None = None,
+    selected_month: int | None = None,
+    hide_empty_rows: bool = False,
+) -> io.BytesIO:
+    """Generate a PI workbook using the current Order Genius selection."""
+    matrix = build_matrix(session, country_code, year,
+                          brand=brand, model_name=model_name,
+                          powertrain=powertrain, version=version, colour=colour,
+                          material_code_search=material_code_search)
+    rows = matrix["rows"]
+    export_months = [selected_month] if selected_month else list(range(1, 13))
+    if hide_empty_rows:
+        rows = [r for r in rows if any(
+            (r.get("months", {}).get(str(m), {}).get("quantity", 0) or 0) > 0
+            for m in export_months
+        )]
+
+    nl_fobs = repo.list_fob_by_country(session, "NL")
+    nl_fob_by_material_code = {
+        fob.material_code: float(fob.final_fob_eur) if fob.final_fob_eur is not None else None
+        for fob in nl_fobs
+    }
+    country_name = matrix.get("countryName", country_code)
+    return generate_order_genius_pi_excel(
+        rows=rows,
+        country_code=country_code,
+        country_name=country_name,
+        year=year,
+        quantity_month=selected_month,
+        nl_fob_by_material_code=nl_fob_by_material_code,
     )
 
 

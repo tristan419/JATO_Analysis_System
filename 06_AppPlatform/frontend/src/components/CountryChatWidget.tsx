@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import { useCountryChat, useCountryChatOptional } from "../contexts/CountryChatContext";
@@ -6,11 +6,16 @@ import { isCountryChatMobileAccess } from "../contexts/countryChatHelpers";
 import { AssistantMark } from "./AssistantMark";
 
 type CountryChatContextValue = ReturnType<typeof useCountryChat>;
-import { CountryChatAnalysisDeck } from "./CountryChatAnalysisDeck";
 import { CountryChatGroundedAnswer } from "./CountryChatGroundedAnswer";
 import { CountryChatPendingMessage } from "./CountryChatPendingMessage";
 import { CountryChatModelSelect } from "./CountryChatModelSelect";
-import { ChatInlineCharts } from "./ChatInlineCharts";
+
+const ChatInlineCharts = lazy(() =>
+  import("./ChatInlineCharts").then((module) => ({ default: module.ChatInlineCharts }))
+);
+const CountryChatAnalysisDeck = lazy(() =>
+  import("./CountryChatAnalysisDeck").then((module) => ({ default: module.CountryChatAnalysisDeck }))
+);
 
 /* ------------------------------------------------------------------ */
 /*  Drag helpers                                                      */
@@ -534,14 +539,14 @@ function CountryChatWidgetInner({ countryChat }: { countryChat: CountryChatConte
                 <CountryChatGroundedAnswer message={message} compact />
               </div>
               {message.contextSnapshot ? (
-                <>
+                <Suspense fallback={null}>
                   <ChatInlineCharts
                     snapshot={message.contextSnapshot}
                     intents={message.focusedIntents ?? message.intents}
                     renderHints={message.renderHints}
                   />
                   <CountryChatAnalysisDeck message={message} compact />
-                </>
+                </Suspense>
               ) : null}
             </article>
           ))

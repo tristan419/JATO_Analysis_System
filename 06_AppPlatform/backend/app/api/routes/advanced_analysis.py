@@ -24,7 +24,12 @@ from app.services.advanced_analysis_service import (
     compute_seasonal_decomposition,
     compute_shift_share_decomposition,
     list_profile_filter_options,
+    warmup_cache,
 )
+
+# Pre-warm cache on module import (background, non-blocking)
+import threading as _thr
+_thr.Thread(target=warmup_cache, daemon=True).start()
 
 router = APIRouter(prefix="/advanced-analysis", tags=["advanced-analysis"])
 

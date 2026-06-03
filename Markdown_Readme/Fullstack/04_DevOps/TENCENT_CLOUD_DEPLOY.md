@@ -173,6 +173,7 @@ sudo nano /etc/jato-fullstack/backend.env
 - `APP_AUTH_ENABLED=false`
 - `APP_AUTH_TOKEN=仅在服务器本地填写；不要提交进仓库`
 - `JATO_PARQUET_PATH=/opt/JATO_Analysis_System-main/04_Processed_data/jato_full_archive.parquet`
+- `APP_GOOGLE_OAUTH_PROXY_URL=http://127.0.0.1:7897`（腾讯云大陆用于 Google OAuth token/userinfo 出站；海外机房可留空）
 - `JATO_PARTITIONED_PATH=/opt/JATO_Analysis_System-main/04_Processed_data/partitioned_dataset_v1`
 - `APP_CRUD_DATA_PATH=/opt/JATO_Analysis_System-main/04_Processed_data/app_entities.json`
 
@@ -266,6 +267,7 @@ curl -fsS http://127.0.0.1:8000/healthz
 ```bash
 cd /opt/JATO_Analysis_System-main
 VITE_API_BASE=/v1 \
+VITE_ASSET_BASE_URL= \
 VITE_USER_ROLE=viewer \
 VITE_USER_NAME=anonymous \
 bash 03_Scripts/deploy_fullstack_server.sh
@@ -274,6 +276,7 @@ bash 03_Scripts/deploy_fullstack_server.sh
 说明：
 
 - `VITE_API_BASE=/v1` 代表前端走同域 API，不把后端地址写死到构建产物里
+- `VITE_ASSET_BASE_URL` 留空时静态资源仍走源站；如果海外访问慢，可以填海外 CDN 域名，例如 `https://static.example.com/`，只让 JS/CSS/assets 走 CDN，API 仍走 `/v1`
 - `VITE_AUTH_TOKEN` 默认不建议写进前端构建产物，建议用户首次登录后在页面 Access Control 里填写 token
 - 脚本会先清掉已知白名单内的 untracked 脏树，再继续 git / build / restart；这样不会再因为 refresh backup 或临时 Markdown 残留把远端工作树弄脏
 
@@ -383,6 +386,8 @@ bash 03_Scripts/print_fullstack_server_diagnostics.sh
 
 - Secrets: `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`
 - Secrets: `DEPLOY_CERTBOT_EMAIL`（推荐，Let's Encrypt 联系邮箱）
+- Secrets: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
+- Secrets: `GOOGLE_OAUTH_PROXY_URL`（可选；腾讯云大陆默认回落到 `http://127.0.0.1:7897`）
 - Variables: `DEPLOY_REPO_DIR`
 - Variables: `FULLSTACK_BACKEND_SERVICE_NAME`
 - Variables: `DEPLOY_BRANCH`
@@ -391,6 +396,7 @@ bash 03_Scripts/print_fullstack_server_diagnostics.sh
 - Variables: `FULLSTACK_VITE_API_BASE`
 - Variables: `FULLSTACK_VITE_USER_ROLE`
 - Variables: `FULLSTACK_VITE_USER_NAME`
+- Variables: `VITE_ASSET_BASE_URL`（可选，海外 CDN 静态资源 base URL）
 - Environment / deploy script: `REPO_REMOTE_URL`
 - Environment / deploy script: `REPO_ARCHIVE_URL`
 
@@ -402,6 +408,7 @@ bash 03_Scripts/print_fullstack_server_diagnostics.sh
 - `DEPLOY_SERVER_NAME=ojeur.cloud www.ojeur.cloud`
 - `DEPLOY_ENABLE_HTTPS=true`
 - `FULLSTACK_VITE_API_BASE=/v1`
+- `VITE_ASSET_BASE_URL=`（未接 CDN 时留空；接海外 CDN 后填 CDN 域名并保留结尾 `/`）
 - `REPO_REMOTE_URL=https://gitclone.com/github.com/tristan419/JATO_Analysis_System.git`
 - `REPO_ARCHIVE_URL=https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/refs/heads/main`
 

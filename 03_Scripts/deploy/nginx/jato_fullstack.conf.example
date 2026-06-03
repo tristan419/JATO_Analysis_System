@@ -17,6 +17,7 @@ server {
     gzip_min_length 1024;
     gzip_vary on;
     gzip_proxied any;
+    gzip_static on;
     gzip_types
         text/plain
         text/css

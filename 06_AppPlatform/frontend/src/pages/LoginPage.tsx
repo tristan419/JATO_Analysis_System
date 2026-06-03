@@ -8,7 +8,7 @@ export function LoginPage() {
   const [searchParams] = useSearchParams();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => searchParams.get("oauthError") || "");
   const [submitting, setSubmitting] = useState(false);
 
   const redirect = searchParams.get("redirect") || "/";
@@ -33,11 +33,15 @@ export function LoginPage() {
       const res = await fetch(
         `/v1/auth/${provider}/auth-url?redirect=${encodeURIComponent(redirect)}`,
       );
-      if (!res.ok) throw new Error("Not available");
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(detail?.detail || "Not available");
+      }
       const { url } = await res.json();
       window.location.href = url;
-    } catch {
-      setError(`${provider} sign in unavailable`);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "Not available";
+      setError(`${provider} sign in unavailable: ${detail}`);
     }
   }
 

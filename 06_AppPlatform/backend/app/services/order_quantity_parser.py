@@ -4,7 +4,7 @@ Handles the round-trip: Export XLSX → edit offline → re-import quantities.
 
 Export format (one editable sheet per powertrain):
   Row 1: Title  — "Order Genius — {country_name} ({country_code}) {year}"
-  Row 2: Header — Model | Version | Colour | Interior | Material Code | FOB(EUR) | Jan..Dec | TTL
+  Row 2: Header — Model | Version | Colour | Interior | Material Code | FOB(EUR) | month columns | TTL
   Row 3+: Data  — one SKU per row, monthly quantities located by header name
 
 Edge cases handled:
@@ -128,11 +128,8 @@ def parse_order_quantity_xlsx(file_path: Path) -> OrderQuantityImport:
             for month, header in enumerate(MONTH_HEADERS, start=1)
             if header.lower() in header_map
         }
-        if len(month_columns) != 12:
-            missing = ", ".join(
-                header for header in MONTH_HEADERS if header.lower() not in header_map
-            )
-            errors.append(f"Sheet '{sheet_name}': missing month headers: {missing}, skipping")
+        if not month_columns:
+            errors.append(f"Sheet '{sheet_name}': missing month headers, skipping")
             continue
 
         model_col = header_map.get("model")
@@ -162,8 +159,8 @@ def parse_order_quantity_xlsx(file_path: Path) -> OrderQuantityImport:
                 colour=_cell_str(ws, row_idx, colour_col),
             )
 
-            for month in range(1, 13):
-                raw_val = ws.cell(row=row_idx, column=month_columns[month]).value
+            for month, month_col in sorted(month_columns.items()):
+                raw_val = ws.cell(row=row_idx, column=month_col).value
                 cell = _parse_quantity_cell(raw_val, material_code, month, fob_val)
                 row.cells.append(cell)
                 if cell.error:
