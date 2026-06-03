@@ -56,78 +56,82 @@ def _detect_colour_tier(
     return "single"
 
 
-# ── Tail-code → interior inference rules ──────────────────────
-# Based on material code suffix patterns from the OMODA/JAECOO master.
-# Key: the suffix AFTER the last '**' in the BOM template (the fixed tail code).
+# ── BOM-pattern → interior inference rules ───────────────────
+# Key: regex matching the FULL BOM template (with ** as literal chars).
+# The pattern includes the model-specific prefix before '**' so the same
+# tail code can resolve to different interiors on different models.
 # Value: (interior_name, interior_code)
-_TAIL_CODE_INTERIOR_RULES: dict[str, tuple[str, str]] = {
+_BOM_INTERIOR_RULES: list[tuple[str, str, str]] = [
     # JAECOO8 SHS — Luxury-AWD (5座) & Premium-AWD (7座)
-    "LX0002": ("Black-Black", "BB"),
-    "LX0008": ("Black-Black", "BB"),
-    "LX0004": ("Black-Black", "BB"),
-    "LX0009": ("Black-Black", "BB"),
-    "LX0003": ("Black-Brown", "BR"),
-    "LX0010": ("Black-Brown", "BR"),
+    (r"T6481..\*\*LX0002$", "Black-Black", "BB"),
+    (r"T6481..\*\*LX0008$", "Black-Black", "BB"),
+    (r"T6481..\*\*LX0004$", "Black-Black", "BB"),
+    (r"T6481..\*\*LX0009$", "Black-Black", "BB"),
+    (r"T6481..\*\*LX0003$", "Black-Brown", "BR"),
+    (r"T6481..\*\*LX0010$", "Black-Brown", "BR"),
+    # JAECOO8 SHS different prefix (F3 instead of QN)
+    (r"T6481F3\*\*LX0008$", "Black-Black", "BB"),
     # OMODA7 ICE — Luxury-AWD & Premium-AWD
-    "MQ00001": ("Black-Black", "BB"),
-    "MQ0001": ("Black-Black", "BB"),
-    "MQ0002": ("Black-Black", "BB"),
+    (r"T7161..\*\*MQ00001$", "Black-Black", "BB"),
+    (r"T7161..\*\*MQ0001$", "Black-Black", "BB"),
+    (r"T7161..\*\*MQ0002$", "Black-Black", "BB"),
     # OMODA7 SHS (PHEV) — Comfort/Luxury/Premium FWD
-    "MH0001": ("Black", "BK"),
-    "MH0002": ("Black", "BK"),
-    "MH0003": ("Black", "BK"),
-    # JAECOO7 SHS
-    "MH0031": ("Black-Black", "BB"),
-    "MH0035": ("Black-Black", "BB"),
+    (r"T7151..\*\*MH0001$", "Black", "BK"),
+    (r"T7151..\*\*MH0002$", "Black", "BK"),
+    (r"T7151..\*\*MH0003$", "Black", "BK"),
+    (r"T7151N.\*\*MH0001$", "Black", "BK"),
+    # JAECOO7 SHS — Premium-FWD
+    (r"T71604.\*\*MH0031$", "Black-Black", "BB"),
+    (r"T71604.\*\*MH0032$", "Black-Black", "BB"),
+    (r"T71604.\*\*MH0035$", "Black-Brown", "BR"),
+    # JAECOO7 SHS — Luxury-FWD
+    (r"T7160RG\*\*MH0001$", "Black-Black", "BB"),
     # JAECOO7 HEV — Exclusive-FWD
-    "MM0002": ("Black-Black", "BB"),
-    "MM0007": ("Black-Black", "BB"),
-    "MM0008": ("Black-Black", "BB"),
+    (r"T71607.\*\*MM0002$", "Black-Black", "BB"),
+    (r"T71607.\*\*MM0007$", "Black-Black", "BB"),
+    (r"T71607.\*\*MM0008$", "Black-Black", "BB"),
     # JAECOO5 BEV — Select-FWD
-    "MY0013": ("Black-Black", "BB"),
-    "MY0021": ("Black-Black", "BB"),
-    "MY0022": ("Black-Black", "BB"),
+    (r"T7000Z5\*\*MY0013$", "Black-Black", "BB"),
+    (r"T7000Z5\*\*MY0021$", "Black-Black", "BB"),
+    (r"T7000Z5\*\*MY0022$", "Black-Black", "BB"),
     # JAECOO5 ICE — Exclusive-FWD & Premium-FWD
-    "MM0013": ("Black-Gray", "GY"),
-    "MM0014": ("Black-Gray", "GY"),
-    "MM0015": ("Black-Black", "BB"),
+    (r"T71611C\*\*MM0013$", "Black-Black", "BB"),
+    (r"T71611C\*\*MM0014$", "Black-Gray", "GY"),
+    (r"T71611C\*\*MM0015$", "Black-Black", "BB"),
     # OMODA9 SHS
-    "LX0014": ("Black-Black", "BB"),
-    "LX0017": ("Black-Red", "BR"),
-    "LX0018": ("Black-Black", "BB"),
+    (r"T6480J1\*\*LX0014$", "Black-Black", "BB"),
+    (r"T6480J1\*\*LX0017$", "Black-Red", "BR"),
+    (r"T6480J1\*\*LX0018$", "Black-Black", "BB"),
     # OMODA5 ICE
-    "MQ0002": ("Black-Black", "BB"),
+    (r"T5260CX\*\*MQ0002$", "Black-Black", "BB"),
     # JAECOO5 ICE (T516 variants)
-    "MM0004": ("Black-Black", "BB"),
-    "MM0005": ("Black-Black", "BB"),
+    (r"T516385\*\*MM0004$", "Black-Black", "BB"),
+    (r"T516385\*\*MM0005$", "Black-Black", "BB"),
     # OMODA7 ICE (T71506 variants)
-    "MH0008": ("Black-Black", "BB"),
-    "MH0009": ("Black-Black", "BB"),
-    "MH0011": ("Black-Black", "BB"),
+    (r"T71506.\*\*MH0008$", "Black-Black", "BB"),
+    (r"T71506.\*\*MH0009$", "Black-Black", "BB"),
+    (r"T71506.\*\*MH0011$", "Black-Black", "BB"),
     # JAECOO7 HEV (T716015 variants)
-    "MH0009": ("Black-Black", "BB"),
-    "MH0010": ("Black-Black", "BB"),
+    (r"T716015\*\*MH0009$", "Black-Black", "BB"),
+    (r"T716015\*\*MH0010$", "Black-Black", "BB"),
     # OMODA7 ICE (T7000SW variants)
-    "MY0001": ("Black-Black", "BB"),
-    "MY0002": ("Black-Black", "BB"),
-    # Seat-count specific overrides (checked BEFORE generic tail code)
-    # T6481QN**LX0002 = Luxury-AWD 5座
-    # T6481F3**LX0008 = Luxury-AWD 5座
-    # T6481QN**LX0004 = Premium-AWD 7座
-    # (same interior colors, seat count stored in version/config)
-}
+    (r"T7000SW\*\*MY0001$", "Black-Black", "BB"),
+    (r"T7000SW\*\*MY0002$", "Black-Black", "BB"),
+    # JAECOO8 SHS (T7160RG variants, different prefix from JAECOO7)
+    (r"T7160RG\*\*MH0001$", "Black-Black", "BB"),
+    # JAECOO5 ICE (T71611C additional)
+    (r"T71611C\*\*MM0015$", "Black-Black", "BB"),
+]
 
 
 def _infer_interior_from_tail_code(bom_template: str | None) -> tuple[str, str] | None:
-    """Try to infer interior (name, code) from the tail code after '**' in BOM template."""
+    """Try to infer interior (name, code) by matching full BOM pattern against known rules."""
     if not bom_template or "**" not in bom_template:
         return None
-    # Extract the suffix after the last '**'
-    parts = bom_template.rsplit("**", 1)
-    if len(parts) != 2:
-        return None
-    tail = parts[1]  # e.g. "LX0003", "MH0001", "MQ00001"
-    return _TAIL_CODE_INTERIOR_RULES.get(tail)
+    for pattern, name, code in _BOM_INTERIOR_RULES:
+        if re.search(pattern, bom_template):
+            return name, code
+    return None
 
 
 def _extract_interior_colour_code(interior_name: str | None) -> str | None:

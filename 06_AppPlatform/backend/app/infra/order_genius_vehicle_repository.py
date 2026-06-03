@@ -221,6 +221,20 @@ def list_vehicles_by_line(session: Session, pi_line_code: str) -> list[PiVehicle
     ).scalars().all())
 
 
+def list_vehicles_for_bulk_update(
+    session: Session,
+    *,
+    pi_code: str,
+    pi_line_code: str | None = None,
+) -> list[PiVehicleUnit]:
+    stmt = select(PiVehicleUnit).where(PiVehicleUnit.pi_code == pi_code)
+    if pi_line_code:
+        stmt = stmt.where(PiVehicleUnit.pi_line_code == pi_line_code)
+    return list(session.execute(
+        stmt.order_by(PiVehicleUnit.pi_line_code, PiVehicleUnit.car_code)
+    ).scalars().all())
+
+
 def list_vehicles(
     session: Session,
     keyword: str | None = None,

@@ -114,6 +114,8 @@ import type {
   RemarkUpdate,
 } from "../types/orderGenius";
 import type {
+  BulkVehicleUpdatePayload,
+  BulkVehicleUpdateResult,
   PiOrderDetail,
   PiOrderFilters,
   PiOrderHeader,
@@ -3026,6 +3028,12 @@ export const api = {
     request<PiVehicleUnit>(
       `/order-genius/vehicle-allocation/vehicles/${encodeURIComponent(carCode)}`,
       { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
+  bulkUpdateVehicleAllocationVehicles: (body: BulkVehicleUpdatePayload) =>
+    request<BulkVehicleUpdateResult>(
+      "/order-genius/vehicle-allocation/vehicles/bulk-update",
+      { method: "POST", body: JSON.stringify(body) },
     ),
 
   searchVehicleAllocation: (keyword: string) => {

@@ -300,3 +300,19 @@ export interface UpdateVehiclePayload {
   logisticsStatus?: LogisticsStatus;
   remark?: string | null;
 }
+
+export interface BulkVehicleUpdatePayload {
+  piCode?: string;
+  piLineCode?: string;
+  vinList?: string[];
+  fields?: UpdateVehiclePayload;
+}
+
+export interface BulkVehicleUpdateResult {
+  piCode: string;
+  piLineCode: string | null;
+  matchedUnits: number;
+  updatedUnits: number;
+  vinAssigned: number;
+  fieldsUpdated: string[];
+}

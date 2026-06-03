@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import openpyxl
 import pytest
@@ -16,6 +17,7 @@ from app.services.order_genius_vehicle_service import (
     build_car_code,
     build_pi_code,
     build_pi_line_code,
+    bulk_update_vehicle_units,
     generate_from_order_matrix,
     get_order_matrix_allocation_plan,
     parse_car_code,
@@ -353,3 +355,87 @@ def test_combined_pi_allocations_validate_each_market_country(monkeypatch) -> No
 
     assert exc.value.status_code == 409
     assert "FI A: requested 2, remaining 1" in str(exc.value.detail)
+
+
+def test_bulk_vehicle_update_assigns_vins_to_empty_units_in_car_code_order(monkeypatch) -> None:
+    vehicles = [
+        _fake_vehicle("CAR-RO-2607-001-L01-0001"),
+        _fake_vehicle("CAR-RO-2607-001-L01-0002"),
+        _fake_vehicle("CAR-RO-2607-001-L01-0003", vin="EXISTINGVIN"),
+    ]
+    monkeypatch.setattr(vehicle_repo, "get_header_by_code", lambda session, pi_code: SimpleNamespace(pi_code=pi_code))
+    monkeypatch.setattr(vehicle_repo, "get_line_by_code", lambda session, pi_line_code: SimpleNamespace(pi_code="PI-RO-202607-001"))
+    monkeypatch.setattr(vehicle_repo, "list_vehicles_for_bulk_update", lambda session, pi_code, pi_line_code: vehicles)
+    monkeypatch.setattr(vehicle_repo, "get_vehicle_by_vin", lambda session, vin: None)
+
+    session = SimpleNamespace(flush=lambda: None)
+
+    result = bulk_update_vehicle_units(
+        session,
+        {
+            "piCode": "PI-RO-202607-001",
+            "piLineCode": "PI-RO-202607-001-L01",
+            "vinList": ["vin-a", "vin-b"],
+            "fields": {"eta": "2026-08-02", "shipName": "Baltic Star"},
+        },
+        "tester",
+    )
+
+    assert result == {
+        "piCode": "PI-RO-202607-001",
+        "piLineCode": "PI-RO-202607-001-L01",
+        "matchedUnits": 3,
+        "updatedUnits": 3,
+        "vinAssigned": 2,
+        "fieldsUpdated": ["eta", "shipName"],
+    }
+    assert [vehicle.vin for vehicle in vehicles] == ["VIN-A", "VIN-B", "EXISTINGVIN"]
+    assert [vehicle.ship_name for vehicle in vehicles] == ["Baltic Star", "Baltic Star", "Baltic Star"]
+    assert [str(vehicle.eta) for vehicle in vehicles] == ["2026-08-02", "2026-08-02", "2026-08-02"]
+
+
+def test_bulk_vehicle_update_rejects_duplicate_pasted_vins(monkeypatch) -> None:
+    monkeypatch.setattr(vehicle_repo, "get_header_by_code", lambda session, pi_code: SimpleNamespace(pi_code=pi_code))
+    monkeypatch.setattr(
+        vehicle_repo,
+        "list_vehicles_for_bulk_update",
+        lambda session, pi_code, pi_line_code: [_fake_vehicle("CAR-RO-2607-001-L01-0001")],
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        bulk_update_vehicle_units(
+            SimpleNamespace(flush=lambda: None),
+            {
+                "piCode": "PI-RO-202607-001",
+                "vinList": ["VIN-A", "VIN-A"],
+            },
+            "tester",
+        )
+
+    assert exc.value.status_code == 400
+    assert "Duplicate VINs" in str(exc.value.detail)
+
+
+def _fake_vehicle(car_code: str, vin: str | None = None) -> SimpleNamespace:
+    return SimpleNamespace(
+        vehicle_unit_id=uuid4(),
+        car_code=car_code,
+        pi_code="PI-RO-202607-001",
+        pi_line_code="PI-RO-202607-001-L01",
+        vin=vin,
+        dealer_code=None,
+        dealer_name=None,
+        customer_ref=None,
+        ship_name=None,
+        remark=None,
+        production_date=None,
+        etd=None,
+        eta=None,
+        actual_departure_date=None,
+        actual_arrival_date=None,
+        ready_for_pickup_date=None,
+        allocation_status="unallocated",
+        logistics_status="pending",
+        row_version=1,
+        updated_by=None,
+    )

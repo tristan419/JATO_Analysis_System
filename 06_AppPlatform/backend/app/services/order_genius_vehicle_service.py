@@ -380,6 +380,81 @@ def update_vehicle_unit(session: Session, car_code: str, payload: dict[str, Any]
     return vehicle_to_dict(session, vehicle)
 
 
+def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], username: str) -> dict:
+    pi_code = _clean(payload.get("piCode") or payload.get("pi_code"))
+    pi_line_code = _clean(payload.get("piLineCode") or payload.get("pi_line_code"))
+    if pi_code:
+        pi_code = pi_code.upper()
+    if pi_line_code:
+        pi_line_code = pi_line_code.upper()
+
+    if pi_line_code:
+        line = repo.get_line_by_code(session, pi_line_code)
+        if not line:
+            raise HTTPException(status_code=404, detail="PI line not found")
+        if pi_code and line.pi_code != pi_code:
+            raise HTTPException(status_code=400, detail="PI Line does not belong to PI")
+        pi_code = line.pi_code
+    if not pi_code:
+        raise HTTPException(status_code=400, detail="piCode or piLineCode is required")
+    if not repo.get_header_by_code(session, pi_code):
+        raise HTTPException(status_code=404, detail="PI not found")
+
+    vehicles = repo.list_vehicles_for_bulk_update(
+        session,
+        pi_code=pi_code,
+        pi_line_code=pi_line_code,
+    )
+    if not vehicles:
+        return {
+            "piCode": pi_code,
+            "piLineCode": pi_line_code,
+            "matchedUnits": 0,
+            "updatedUnits": 0,
+            "vinAssigned": 0,
+            "fieldsUpdated": [],
+        }
+
+    field_payload = _bulk_field_payload(payload.get("fields"))
+    vin_list = _bulk_vin_list(payload.get("vinList") or payload.get("vins"))
+    if not field_payload and not vin_list:
+        raise HTTPException(status_code=400, detail="No VINs or bulk fields provided")
+
+    empty_vin_vehicles = [vehicle for vehicle in vehicles if not _clean(vehicle.vin)]
+    if len(vin_list) > len(empty_vin_vehicles):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Pasted {len(vin_list)} VINs but only {len(empty_vin_vehicles)} vehicles "
+                "in scope have empty VIN"
+            ),
+        )
+
+    vin_by_car_code = {
+        vehicle.car_code: vin
+        for vehicle, vin in zip(empty_vin_vehicles, vin_list, strict=False)
+    }
+    updated_units = 0
+    for vehicle in vehicles:
+        vehicle_payload = dict(field_payload)
+        assigned_vin = vin_by_car_code.get(vehicle.car_code)
+        if assigned_vin:
+            vehicle_payload["vin"] = assigned_vin
+        if not vehicle_payload:
+            continue
+        _apply_vehicle_updates(session, vehicle, vehicle_payload, username)
+        updated_units += 1
+    session.flush()
+    return {
+        "piCode": pi_code,
+        "piLineCode": pi_line_code,
+        "matchedUnits": len(vehicles),
+        "updatedUnits": updated_units,
+        "vinAssigned": len(vin_list),
+        "fieldsUpdated": sorted(field_payload.keys()),
+    }
+
+
 def search_vehicle_allocation(session: Session, keyword: str) -> dict:
     kw = keyword.strip()
     if not kw:
@@ -982,6 +1057,48 @@ def _apply_vehicle_updates(session: Session, vehicle: PiVehicleUnit, payload: di
         vehicle.row_version = vehicle.row_version or 1
     else:
         vehicle.row_version = (vehicle.row_version or 1) + 1
+
+
+def _bulk_field_payload(raw_fields: Any) -> dict[str, Any]:
+    if not isinstance(raw_fields, dict):
+        return {}
+    allowed_fields = {
+        "productionDate",
+        "etd",
+        "eta",
+        "actualDepartureDate",
+        "actualArrivalDate",
+        "readyForPickupDate",
+        "shipName",
+        "dealerCode",
+        "dealerName",
+        "customerRef",
+        "allocationStatus",
+        "logisticsStatus",
+        "remark",
+    }
+    return {key: raw_fields.get(key) for key in allowed_fields if key in raw_fields}
+
+
+def _bulk_vin_list(raw_vins: Any) -> list[str]:
+    if raw_vins is None:
+        return []
+    if isinstance(raw_vins, str):
+        parts = re.split(r"[\s,;]+", raw_vins)
+    elif isinstance(raw_vins, list):
+        parts = [str(item) for item in raw_vins]
+    else:
+        raise HTTPException(status_code=400, detail="vinList must be a string or list")
+    vins = [part.strip().upper() for part in parts if part and part.strip()]
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for vin in vins:
+        if vin in seen and vin not in duplicates:
+            duplicates.append(vin)
+        seen.add(vin)
+    if duplicates:
+        raise HTTPException(status_code=400, detail=f"Duplicate VINs in paste: {', '.join(duplicates[:5])}")
+    return vins
 
 
 def _validate_import_row(row: dict[str, Any]) -> tuple[list[str], list[str]]:

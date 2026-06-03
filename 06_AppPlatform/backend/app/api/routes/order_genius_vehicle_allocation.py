@@ -18,6 +18,7 @@ from app.infra import order_genius_vehicle_repository as vehicle_repo
 from app.services.order_genius_vehicle_import_parser import parse_vehicle_allocation_xlsx
 from app.services.order_genius_vehicle_service import (
     apply_vehicle_import,
+    bulk_update_vehicle_units,
     create_pi_header,
     create_pi_line,
     export_vehicle_units,
@@ -337,6 +338,29 @@ def patch_vehicle(
     vehicle = get_vehicle_detail(session, car_code.upper())
     _validate_vehicle_access(session, user, vehicle)
     result = update_vehicle_unit(session, car_code.upper(), body, user.name)
+    session.commit()
+    return result
+
+
+@router.post("/vehicles/bulk-update")
+def bulk_update_vehicles(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user: UserContext = Depends(require_roles("order_filler", "editor", "admin")),
+) -> dict:
+    pi_code = _clean(body.get("piCode") or body.get("pi_code"))
+    pi_line_code = _clean(body.get("piLineCode") or body.get("pi_line_code"))
+    if pi_line_code:
+        line = vehicle_repo.get_line_by_code(session, pi_line_code.upper())
+        if not line:
+            raise HTTPException(status_code=404, detail="PI line not found")
+        detail = get_pi_detail(session, line.pi_code)
+    elif pi_code:
+        detail = get_pi_detail(session, pi_code.upper())
+    else:
+        raise HTTPException(status_code=400, detail="piCode or piLineCode is required")
+    _validate_pi_detail_access(session, user, detail)
+    result = bulk_update_vehicle_units(session, body, user.name)
     session.commit()
     return result
 
