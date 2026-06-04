@@ -123,7 +123,7 @@ jobs:
           tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$REQUIRED_WORKBOOK"
 
       - name: Upload archive to server
-        if: ${{ steps.auth.outputs.mode == 'key' }}
+        if: ${{ false }}
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
@@ -156,7 +156,7 @@ jobs:
             < "$RUNNER_TEMP/JATO_deploy.tar.gz"
 
       - name: Upload archive to server
-        if: ${{ steps.auth.outputs.mode == 'password' }}
+        if: ${{ false }}
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
@@ -215,17 +215,25 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/github_actions_tencent_key
           chmod 600 ~/.ssh/github_actions_tencent_key
 
+          DEPLOY_SHORT_SHA="$(git rev-parse --short=8 HEAD)"
           REMOTE_EXPORTS="export DEPLOY_SERVER_NAME=$(printf '%q' "$DEPLOY_SERVER_NAME"); "
           REMOTE_EXPORTS+="export DEPLOY_ENABLE_HTTPS=$(printf '%q' "$DEPLOY_ENABLE_HTTPS"); "
           REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
           REMOTE_EXPORTS+="export VITE_ASSET_BASE_URL=$(printf '%q' "${VITE_ASSET_BASE_URL:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_COMMIT_SHA=$(printf '%q' "${GITHUB_SHA:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_SHORT_SHA=$(printf '%q' "$DEPLOY_SHORT_SHA"); "
+          REMOTE_EXPORTS+="export DEPLOY_RELEASE_ID=$(printf '%q' "${GITHUB_RUN_ID:-}-${GITHUB_RUN_ATTEMPT:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_RUN_ID=$(printf '%q' "${GITHUB_RUN_ID:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_RUN_ATTEMPT=$(printf '%q' "${GITHUB_RUN_ATTEMPT:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_REPOSITORY=$(printf '%q' "${GITHUB_REPOSITORY:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_WORKFLOW=$(printf '%q' "${GITHUB_WORKFLOW:-}"); "
           REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
           REMOTE_EXPORTS+="export HERMES_SYNC_TOKEN=$(printf '%q' '${{ secrets.HERMES_SYNC_TOKEN }}'); "
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_ID }}'); "
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_SECRET=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_SECRET }}'); "
           REMOTE_EXPORTS+="export GOOGLE_OAUTH_PROXY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_PROXY_URL }}'); "
 
-          timeout 180s ssh -v -p "$SSH_PORT" \
+          timeout 900s ssh -v -p "$SSH_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
@@ -243,10 +251,50 @@ jobs:
           export no_proxy="${no_proxy:+$no_proxy,}$LOCAL_NO_PROXY_HOSTS"
           export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$LOCAL_NO_PROXY_HOSTS"
 
+          if [ -z "${DEPLOY_COMMIT_SHA:-}" ]; then
+            echo "[ERROR] DEPLOY_COMMIT_SHA is required for codeload deployment"
+            exit 1
+          fi
+
+          ARCHIVE_PATH="/tmp/JATO_deploy_${DEPLOY_COMMIT_SHA}.tar.gz"
+          ARCHIVE_URL="https://github.com/tristan419/JATO_Analysis_System/archive/${DEPLOY_COMMIT_SHA}.tar.gz"
+
+          rm -f "$ARCHIVE_PATH"
+          curl -fL --retry 5 --retry-delay 3 --connect-timeout 20 --max-time 300 \
+            -o "$ARCHIVE_PATH" "$ARCHIVE_URL"
+          ls -lh "$ARCHIVE_PATH"
+
           sudo mkdir -p "$REPO_DIR"
           sudo chown -R "$USER":"$USER" "$REPO_DIR"
-          sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR"
-          rm -f /tmp/JATO_deploy.tar.gz
+          sudo tar xzf "$ARCHIVE_PATH" -C "$REPO_DIR" --strip-components=1
+          rm -f "$ARCHIVE_PATH"
+
+          export REPO_DIR
+          python3 - <<'PY'
+          import datetime as _dt
+          import json
+          import os
+          import pathlib
+
+          root = pathlib.Path(os.environ["REPO_DIR"])
+          commit_sha = os.environ.get("DEPLOY_COMMIT_SHA", "")
+          payload = {
+              "releaseId": os.environ.get("DEPLOY_RELEASE_ID", ""),
+              "commitSha": commit_sha,
+              "shortSha": os.environ.get("DEPLOY_SHORT_SHA") or commit_sha[:8],
+              "branch": os.environ.get("DEPLOY_BRANCH", "main"),
+              "repository": os.environ.get("DEPLOY_REPOSITORY", "tristan419/JATO_Analysis_System"),
+              "workflow": os.environ.get("DEPLOY_WORKFLOW", "deploy-fullstack-tencent"),
+              "workflowRunId": os.environ.get("DEPLOY_RUN_ID", ""),
+              "workflowRunAttempt": os.environ.get("DEPLOY_RUN_ATTEMPT", ""),
+              "packagedAt": _dt.datetime.now(_dt.UTC).isoformat(),
+              "source": "github_codeload_archive",
+          }
+          out = root / "hermes" / "deploy_release.json"
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(f"[INFO] Wrote {out.relative_to(root)} for release {payload['shortSha']}")
+          PY
 
           if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
             echo "[INFO] Configuring DeepSeek in backend env..."
@@ -375,10 +423,18 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y sshpass
 
+          DEPLOY_SHORT_SHA="$(git rev-parse --short=8 HEAD)"
           REMOTE_EXPORTS="export DEPLOY_SERVER_NAME=$(printf '%q' "$DEPLOY_SERVER_NAME"); "
           REMOTE_EXPORTS+="export DEPLOY_ENABLE_HTTPS=$(printf '%q' "$DEPLOY_ENABLE_HTTPS"); "
           REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
           REMOTE_EXPORTS+="export VITE_ASSET_BASE_URL=$(printf '%q' "${VITE_ASSET_BASE_URL:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_COMMIT_SHA=$(printf '%q' "${GITHUB_SHA:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_SHORT_SHA=$(printf '%q' "$DEPLOY_SHORT_SHA"); "
+          REMOTE_EXPORTS+="export DEPLOY_RELEASE_ID=$(printf '%q' "${GITHUB_RUN_ID:-}-${GITHUB_RUN_ATTEMPT:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_RUN_ID=$(printf '%q' "${GITHUB_RUN_ID:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_RUN_ATTEMPT=$(printf '%q' "${GITHUB_RUN_ATTEMPT:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_REPOSITORY=$(printf '%q' "${GITHUB_REPOSITORY:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_WORKFLOW=$(printf '%q' "${GITHUB_WORKFLOW:-}"); "
           REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
           REMOTE_EXPORTS+="export HERMES_SYNC_TOKEN=$(printf '%q' '${{ secrets.HERMES_SYNC_TOKEN }}'); "
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_ID }}'); "
@@ -386,7 +442,7 @@ jobs:
           REMOTE_EXPORTS+="export GOOGLE_OAUTH_PROXY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_PROXY_URL }}'); "
 
           sshpass -p "$SSH_PASSWORD" \
-            timeout 180s ssh -v -p "$SSH_PORT" \
+            timeout 900s ssh -v -p "$SSH_PORT" \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
             -o StrictHostKeyChecking=no \
@@ -404,10 +460,50 @@ jobs:
           export no_proxy="${no_proxy:+$no_proxy,}$LOCAL_NO_PROXY_HOSTS"
           export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$LOCAL_NO_PROXY_HOSTS"
 
+          if [ -z "${DEPLOY_COMMIT_SHA:-}" ]; then
+            echo "[ERROR] DEPLOY_COMMIT_SHA is required for codeload deployment"
+            exit 1
+          fi
+
+          ARCHIVE_PATH="/tmp/JATO_deploy_${DEPLOY_COMMIT_SHA}.tar.gz"
+          ARCHIVE_URL="https://github.com/tristan419/JATO_Analysis_System/archive/${DEPLOY_COMMIT_SHA}.tar.gz"
+
+          rm -f "$ARCHIVE_PATH"
+          curl -fL --retry 5 --retry-delay 3 --connect-timeout 20 --max-time 300 \
+            -o "$ARCHIVE_PATH" "$ARCHIVE_URL"
+          ls -lh "$ARCHIVE_PATH"
+
           sudo mkdir -p "$REPO_DIR"
           sudo chown -R "$USER":"$USER" "$REPO_DIR"
-          sudo tar xzf /tmp/JATO_deploy.tar.gz -C "$REPO_DIR"
-          rm -f /tmp/JATO_deploy.tar.gz
+          sudo tar xzf "$ARCHIVE_PATH" -C "$REPO_DIR" --strip-components=1
+          rm -f "$ARCHIVE_PATH"
+
+          export REPO_DIR
+          python3 - <<'PY'
+          import datetime as _dt
+          import json
+          import os
+          import pathlib
+
+          root = pathlib.Path(os.environ["REPO_DIR"])
+          commit_sha = os.environ.get("DEPLOY_COMMIT_SHA", "")
+          payload = {
+              "releaseId": os.environ.get("DEPLOY_RELEASE_ID", ""),
+              "commitSha": commit_sha,
+              "shortSha": os.environ.get("DEPLOY_SHORT_SHA") or commit_sha[:8],
+              "branch": os.environ.get("DEPLOY_BRANCH", "main"),
+              "repository": os.environ.get("DEPLOY_REPOSITORY", "tristan419/JATO_Analysis_System"),
+              "workflow": os.environ.get("DEPLOY_WORKFLOW", "deploy-fullstack-tencent"),
+              "workflowRunId": os.environ.get("DEPLOY_RUN_ID", ""),
+              "workflowRunAttempt": os.environ.get("DEPLOY_RUN_ATTEMPT", ""),
+              "packagedAt": _dt.datetime.now(_dt.UTC).isoformat(),
+              "source": "github_codeload_archive",
+          }
+          out = root / "hermes" / "deploy_release.json"
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(f"[INFO] Wrote {out.relative_to(root)} for release {payload['shortSha']}")
+          PY
 
           if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
             echo "[INFO] Configuring DeepSeek in backend env..."
