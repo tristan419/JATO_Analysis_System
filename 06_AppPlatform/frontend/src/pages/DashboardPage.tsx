@@ -26,7 +26,7 @@ import { LazyPlotlyChart as PlotlyChart } from "../components/LazyPlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
 import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanel";
 import { buildBubbleSizing } from "../utils/bubbleSizing";
-import { SERIES_COLORS as COLORS, POWERTRAIN_COLORS, DEFAULT_POWERTRAINS, normalizePowertrainName, ptColor, seriesColor } from "../utils/colors";
+import { DEFAULT_POWERTRAINS, normalizePowertrainName, nevPowertrainColor, seriesColor } from "../utils/colors";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 import { buildCategoryAxis, formatCompactBarLabel } from "../utils/plotlyDefaults";
 import { parseMonthLabel, toTimeOrdinal, compareTimeLabels } from "../utils/timeFormatting";
@@ -63,26 +63,146 @@ const RvFinanceDashboard = lazy(() =>
   import("../components/RvFinanceDashboard").then((module) => ({ default: module.RvFinanceDashboard }))
 );
 
-function applyTimeSeriesLineColors(traces: Data[], colors: Record<string, string>): Data[] {
-  if (!colors || Object.keys(colors).length === 0) return traces;
-  return traces.map((trace) => {
-    const name = String((trace as Partial<Data>).name ?? "").trim();
-    const resolvedColor = colors[name];
-    if (!name || !resolvedColor) return trace;
-    const next = { ...trace } as Data & {
-      line?: Record<string, unknown>;
-      marker?: Record<string, unknown>;
-    };
-    if (trace.type === "scatter" && next.line) {
-      next.line = { ...next.line, color: resolvedColor };
-      return next;
+function resolveTimeSeriesSeriesColor(
+  name: string,
+  index: number,
+  palette: string[],
+  isPowertrain: boolean,
+  manualColors: Record<string, string>,
+): string {
+  const manualColor = manualColors[name];
+  if (manualColor) return manualColor;
+  const safeIndex = index >= 0 ? index : 0;
+  return seriesColor(name, safeIndex, palette, isPowertrain);
+}
+
+function uniqueNonEmptyStrings(values: readonly unknown[]): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => String(value ?? "").trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function getAdvancedScatterColorKey(chart: string): string {
+  switch (chart) {
+    case "powertrain_bubble":
+    case "nev_capacity_vs_msrp":
+    case "nev_length_vs_range":
+    case "estimated_tco":
+      return "Powertrain";
+    case "length_vs_price":
+    case "sales_vs_price":
+      return "Segment";
+    case "price_per_meter":
+      return "Brand";
+    default:
+      return "";
+  }
+}
+
+const NEV_POWERTRAIN_FILTER_CHARTS = new Set([
+  "nev_range_distribution",
+  "nev_capacity_vs_msrp",
+  "nev_length_vs_range",
+]);
+
+function usesNevPowertrainFilter(chart: string): boolean {
+  return NEV_POWERTRAIN_FILTER_CHARTS.has(chart);
+}
+
+function usesNevGreenPowertrainPalette(chart: string, colorKey: string): boolean {
+  return usesNevPowertrainFilter(chart) && colorKey === "Powertrain";
+}
+
+type DeckSectionKey = "timeSeries" | "advanced" | "modelVersion" | "positioning";
+
+interface DashboardDeckLayoutSettings {
+  height: number;
+  width: number;
+}
+
+type DashboardDeckLayouts = Record<DeckSectionKey, DashboardDeckLayoutSettings>;
+
+const DECK_SECTION_TABS: { key: DeckSectionKey; label: string }[] = [
+  { key: "timeSeries", label: "03 Time-Series" },
+  { key: "advanced", label: "04 Advanced" },
+  { key: "modelVersion", label: "05 Model Version" },
+  { key: "positioning", label: "06 Positioning" },
+];
+
+const DEFAULT_DASHBOARD_DECK_LAYOUTS: DashboardDeckLayouts = {
+  timeSeries: { height: 500, width: 0 },
+  advanced: { height: 520, width: 0 },
+  modelVersion: { height: 520, width: 0 },
+  positioning: { height: 520, width: 0 },
+};
+
+function normalizeDeckLayoutValue(
+  value: unknown,
+  fallback: DashboardDeckLayoutSettings,
+): DashboardDeckLayoutSettings {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return fallback;
+  }
+  const record = value as Record<string, unknown>;
+  const height = Number(record.height);
+  const width = Number(record.width);
+  return {
+    height: Number.isFinite(height) && height >= 300 && height <= 900
+      ? height
+      : fallback.height,
+    width: Number.isFinite(width) && width >= 0 && width <= 2000
+      ? width
+      : fallback.width,
+  };
+}
+
+function readDashboardDeckLayouts(): DashboardDeckLayouts {
+  const fallback = { ...DEFAULT_DASHBOARD_DECK_LAYOUTS };
+  try {
+    const saved = localStorage.getItem("dashboard-deck-layouts");
+    if (saved) {
+      const parsed = JSON.parse(saved) as Partial<Record<DeckSectionKey, unknown>>;
+      return {
+        timeSeries: normalizeDeckLayoutValue(parsed.timeSeries, fallback.timeSeries),
+        advanced: normalizeDeckLayoutValue(parsed.advanced, fallback.advanced),
+        modelVersion: normalizeDeckLayoutValue(parsed.modelVersion, fallback.modelVersion),
+        positioning: normalizeDeckLayoutValue(parsed.positioning, fallback.positioning),
+      };
     }
-    if (next.marker) {
-      next.marker = { ...next.marker, color: resolvedColor };
-      return next;
+
+    const legacyHeight = Number(localStorage.getItem("dashboard-deck-chart-height"));
+    const legacyWidth = Number(localStorage.getItem("dashboard-deck-chart-width"));
+    if (Number.isFinite(legacyHeight) || Number.isFinite(legacyWidth)) {
+      const migrated = normalizeDeckLayoutValue(
+        {
+          height: Number.isFinite(legacyHeight) ? legacyHeight : fallback.timeSeries.height,
+          width: Number.isFinite(legacyWidth) ? legacyWidth : fallback.timeSeries.width,
+        },
+        fallback.timeSeries,
+      );
+      return {
+        timeSeries: migrated,
+        advanced: migrated,
+        modelVersion: migrated,
+        positioning: migrated,
+      };
     }
-    return next;
-  });
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+
+function getDeckLayoutStyle(
+  layout: DashboardDeckLayoutSettings,
+): React.CSSProperties {
+  return {
+    "--deck-chart-max-width": layout.width > 0 ? `${layout.width}px` : "100%",
+  } as React.CSSProperties;
 }
 
 /* ── filter component ──────────────────────────────── */
@@ -190,6 +310,7 @@ export function DashboardPage() {
   const [advNevStackByModel, setAdvNevStackByModel] = useState(() => cachedPage?.advNevStackByModel ?? false);
   const [advNevFacetBrand, setAdvNevFacetBrand] = useState(() => cachedPage?.advNevFacetBrand ?? false);
   const [advNevMaxBrandFacets, setAdvNevMaxBrandFacets] = useState(() => cachedPage?.advNevMaxBrandFacets ?? 4);
+  const [advNevRangeQuery, setAdvNevRangeQuery] = useState(() => cachedPage?.advNevRangeQuery ?? "");
   const [advRangeStep, setAdvRangeStep] = useState(() => cachedPage?.advRangeStep ?? 50);
   const [advHeatmapScale, setAdvHeatmapScale] = useState(() => cachedPage?.advHeatmapScale ?? "Blues");
   /* TCO parameter sliders */
@@ -233,14 +354,9 @@ export function DashboardPage() {
   const [tsExport, setTsExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
   const [deckExportDrawerOpen, setDeckExportDrawerOpen] = useState(false);
   const [deckControlDrawerOpen, setDeckControlDrawerOpen] = useState(false);
-  const [deckChartHeight, setDeckChartHeight] = useState(() => {
-    try { const v = localStorage.getItem("dashboard-deck-chart-height"); if (v) return Number(v); } catch {}
-    return 500;
-  });
-  const [deckChartWidth, setDeckChartWidth] = useState(() => {
-    try { const v = localStorage.getItem("dashboard-deck-chart-width"); if (v) return Number(v); } catch {}
-    return 0;
-  });
+  const [deckLayouts, setDeckLayouts] = useState<DashboardDeckLayouts>(
+    readDashboardDeckLayouts,
+  );
   const handleControlDrawerOpen = (open: boolean) => {
     if (open) setDeckExportDrawerOpen(false);
     setDeckControlDrawerOpen(open);
@@ -250,11 +366,8 @@ export function DashboardPage() {
     setDeckExportDrawerOpen(open);
   };
   useEffect(() => {
-    try { localStorage.setItem("dashboard-deck-chart-height", String(deckChartHeight)); } catch {}
-  }, [deckChartHeight]);
-  useEffect(() => {
-    try { localStorage.setItem("dashboard-deck-chart-width", String(deckChartWidth)); } catch {}
-  }, [deckChartWidth]);
+    try { localStorage.setItem("dashboard-deck-layouts", JSON.stringify(deckLayouts)); } catch {}
+  }, [deckLayouts]);
   const [advExport, setAdvExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
   const [mvExport, setMvExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
   const [pmExport, setPmExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
@@ -330,15 +443,30 @@ export function DashboardPage() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  /* deck section selector for global export drawer */
-  type DeckSectionKey = "timeSeries" | "advanced" | "modelVersion" | "positioning";
+  /* deck section selector for global drawers */
   const [activeDeckSection, setActiveDeckSection] = useState<DeckSectionKey>("timeSeries");
-  const DECK_SECTION_TABS: { key: DeckSectionKey; label: string }[] = [
-    { key: "timeSeries", label: "03 Time-Series" },
-    { key: "advanced", label: "04 Advanced" },
-    { key: "modelVersion", label: "05 Model Version" },
-    { key: "positioning", label: "06 Positioning" },
-  ];
+  const activeDeckLayout = deckLayouts[activeDeckSection];
+  const timeSeriesDeckLayout = deckLayouts.timeSeries;
+  const advancedDeckLayout = deckLayouts.advanced;
+  const modelVersionDeckLayout = deckLayouts.modelVersion;
+  const positioningDeckLayout = deckLayouts.positioning;
+  const updateActiveDeckLayout = (
+    patch: Partial<DashboardDeckLayoutSettings>,
+  ) => {
+    setDeckLayouts((current) => ({
+      ...current,
+      [activeDeckSection]: {
+        ...current[activeDeckSection],
+        ...patch,
+      },
+    }));
+  };
+  const resetActiveDeckLayout = () => {
+    setDeckLayouts((current) => ({
+      ...current,
+      [activeDeckSection]: DEFAULT_DASHBOARD_DECK_LAYOUTS[activeDeckSection],
+    }));
+  };
 
   /* control drawer tabs */
   const [deckControlTab, setDeckControlTab] = useState<"window" | "chart" | "layout">("window");
@@ -444,7 +572,7 @@ export function DashboardPage() {
         opts.group_values = advBubbleGroupValues;
         opts.group_top_n_map = advBubbleGroupTopNMap;
       }
-      if (advChart === "nev_range_distribution" || advChart === "nev_capacity_vs_msrp") {
+      if (usesNevPowertrainFilter(advChart)) {
         opts.powertrains = advPowertrains;
       }
       if (advChart === "nev_range_distribution") {
@@ -784,6 +912,7 @@ export function DashboardPage() {
     advNevStackByModel,
     advNevFacetBrand,
     advNevMaxBrandFacets,
+    advNevRangeQuery,
     advRangeStep,
     advHeatmapScale,
     tcoYears,
@@ -831,6 +960,7 @@ export function DashboardPage() {
     advNevFacetBrand,
     advNevMaxBrandFacets,
     advNevMetricMode,
+    advNevRangeQuery,
     advNevStackByModel,
     advNevTopNEnabled,
     advPowertrains,
@@ -962,6 +1092,33 @@ export function DashboardPage() {
   const nevKpis = isPlainRecord(nevMetaRecord?.kpis) ? nevMetaRecord.kpis : null;
   const nevTopModelLimit = asMetaNumber(nevMetaRecord?.topModelLimit);
   const nevTopModelAbsShare = asMetaNumber(nevMetaRecord?.topModelAbsShare);
+  const nevRangeSamples = asMetaRecordArray(nevMetaRecord?.rangeSamples);
+  const nevRangeSampleUnit = asMetaText(nevMetaRecord?.rangeSampleUnit) || "Model";
+  const nevRangeQueryStats = useMemo(() => {
+    const target = Number(advNevRangeQuery);
+    if (!Number.isFinite(target) || target <= 0 || nevRangeSamples.length === 0) {
+      return null;
+    }
+    const samples = nevRangeSamples
+      .map((sample) => ({
+        range: asMetaNumber(sample.BatteryRange),
+        sales: Math.max(0, asMetaNumber(sample.Sales) ?? 0),
+      }))
+      .filter((sample): sample is { range: number; sales: number } => sample.range !== null && sample.range > 0);
+    if (samples.length === 0) return null;
+    const below = samples.filter((sample) => sample.range < target);
+    const totalSales = samples.reduce((sum, sample) => sum + sample.sales, 0);
+    const belowSales = below.reduce((sum, sample) => sum + sample.sales, 0);
+    return {
+      target,
+      belowCount: below.length,
+      totalCount: samples.length,
+      belowShare: below.length / samples.length,
+      belowSales,
+      totalSales,
+      belowSalesShare: totalSales > 0 ? belowSales / totalSales : null,
+    };
+  }, [advNevRangeQuery, nevRangeSamples]);
   const nevStackSeries = useMemo(() => {
     if (advChart !== "nev_range_distribution") return [] as string[];
     const series = new Set<string>();
@@ -1034,6 +1191,8 @@ export function DashboardPage() {
     const gridRows = Math.max(1, Math.ceil(facetBrands.length / gridColumns));
     const traces: Data[] = [];
     const annotations: NonNullable<Layout["annotations"]> = [];
+    const rangeQueryValue = Number(advNevRangeQuery);
+    const hasRangeQueryLine = Number.isFinite(rangeQueryValue) && rangeQueryValue > 0;
 
     facetBrands.forEach((brand, facetIndex) => {
       const axisIndex = facetIndex + 1;
@@ -1062,7 +1221,11 @@ export function DashboardPage() {
           name: series,
           x: rangeBands.map(rangeBand => valueMap.get(rangeBand) ?? 0),
           y: rangeBands,
-          marker: { color: seriesColor(series, seriesIndex, advPalette, isPowertrainStack) },
+          marker: {
+            color: isPowertrainStack
+              ? nevPowertrainColor(series, seriesIndex)
+              : seriesColor(series, seriesIndex, advPalette, false),
+          },
           hovertemplate: `${brand ? `${brand}<br>` : ""}%{y:.0f} km<br>${series}: %{x:,.0f}<extra></extra>`,
           showlegend: facetIndex === 0,
           ...(xAxisName ? { xaxis: xAxisName } : {}),
@@ -1091,6 +1254,31 @@ export function DashboardPage() {
       showlegend: true,
       margin: { t: facetBrands.length > 1 ? 76 : 48, b: 48, l: 78, r: 18 },
     };
+    if (hasRangeQueryLine) {
+      type PlotlyShapeYRef = NonNullable<NonNullable<Layout["shapes"]>[number]["yref"]>;
+      layout.shapes = facetBrands.map((_, facetIndex) => ({
+        type: "line",
+        xref: "paper",
+        x0: 0,
+        x1: 1,
+        yref: (facetIndex === 0 ? "y" : `y${facetIndex + 1}`) as PlotlyShapeYRef,
+        y0: rangeQueryValue,
+        y1: rangeQueryValue,
+        line: { color: "#dc2626", width: 2, dash: "dash" },
+      }));
+      annotations.push({
+        text: `${Math.round(rangeQueryValue).toLocaleString("en-US")} km`,
+        x: 1,
+        y: rangeQueryValue,
+        xref: "paper",
+        yref: "y",
+        showarrow: false,
+        xanchor: "right",
+        yanchor: "bottom",
+        font: { size: 11, color: "#dc2626" },
+      });
+      layout.annotations = annotations;
+    }
     if (facetBrands.length > 1) {
       layout.grid = {
         rows: gridRows,
@@ -1125,6 +1313,7 @@ export function DashboardPage() {
   }, [
     advChart,
     advItems,
+    advNevRangeQuery,
     advPalette,
     nevAxisMaxMeta,
     nevBrands,
@@ -1142,6 +1331,7 @@ export function DashboardPage() {
     switch (advChart) {
       case "powertrain_bubble": return { x:"Length", y:"MSRP", z:"Sales", color:"Powertrain", xLabel:"\u8f66\u957f(mm)", yLabel:"MSRP" };
       case "nev_capacity_vs_msrp": return { x:"BatteryCapacity", y:"MSRP", z:"Sales", color:"Powertrain", xLabel:"\u7535\u6c60\u5bb9\u91cf(kWh)", yLabel:"MSRP" };
+      case "nev_length_vs_range": return { x:"Length", y:"BatteryRange", z:"Sales", color:"Powertrain", xLabel:"\u8f66\u957f(mm)", yLabel:"\u7eaf\u7535\u7eed\u822a(km)" };
       case "length_vs_price": return { x:"Length", y:"MSRP", z:"Sales", color:"Segment", xLabel:"\u8f66\u957f(mm)", yLabel:"MSRP" };
       case "price_per_meter": return { x:"PricePerMeter", y:"Sales", z:"Sales", color:"Brand", xLabel:"\u6bcf\u7c73\u4ef7\u683c", yLabel:"\u9500\u91cf" };
       case "sales_vs_price": return { x:"MSRP", y:"Sales", z:"SegmentSharePct", color:"Segment", xLabel:"MSRP", yLabel:"\u9500\u91cf" };
@@ -1164,6 +1354,33 @@ export function DashboardPage() {
   const timeSeriesDeckVolume = isGrouped
     ? `${visibleSeries.length} / ${allSeriesNames.length || 0}`
     : String(aggregatedSingle.length);
+  const timeSeriesExportSeriesNames = useMemo(
+    () => isGrouped ? visibleSeries : ["Sales"],
+    [isGrouped, visibleSeries],
+  );
+  const advancedExportSeriesNames = useMemo(() => {
+    if (advChart === "seasonality_heatmap") return [] as string[];
+    if (advChart === "price_migration") return migrationYears;
+    if (advChart === "nev_range_distribution") return nevStackSeries;
+    if (STACKED_CHARTS.has(advChart)) return uniqueNonEmptyStrings(stackKeys);
+    if (SCATTER_CHARTS.has(advChart)) {
+      const colorKey = getAdvancedScatterColorKey(advChart);
+      return colorKey ? uniqueNonEmptyStrings(advItems.map((item) => item[colorKey])) : [];
+    }
+    if (isSimpleBar) return uniqueNonEmptyStrings(advItems.map((item) => item.label));
+    return [];
+  }, [advChart, advItems, isSimpleBar, migrationYears, nevStackSeries, stackKeys]);
+  const modelVersionExportSeriesNames = useMemo(
+    () => uniqueNonEmptyStrings(mvItems.map((item) => item[mvColorBy])),
+    [mvColorBy, mvItems],
+  );
+  const positioningExportSeriesNames = useMemo(() => {
+    const names = uniqueNonEmptyStrings(
+      pmItems.map((item) => `Cluster ${item.cluster}`),
+    );
+    if (pmTarget) names.push("目标车型");
+    return names;
+  }, [pmItems, pmTarget]);
   const advancedDeckState = advChart === "rv_finance_dashboard"
     ? "EMBEDDED"
     : advLoading ? "LOADING" : advItems.length > 0 ? "READY" : "IDLE";
@@ -1172,7 +1389,7 @@ export function DashboardPage() {
     : `${advItems.length} rows`;
 
   return (
-    <div className="dashboard-layout" style={{ "--deck-chart-max-width": deckChartWidth > 0 ? `${deckChartWidth}px` : "100%" } as React.CSSProperties}>
+    <div className="dashboard-layout">
       <CollapsibleFilterSidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((current) => !current)}
@@ -1336,7 +1553,10 @@ export function DashboardPage() {
         </div>
 
         {/* ── Time series ─────────────────────────────── */}
-        <div className="card analysis-deck-card chart-section dashboard-time-series-card dashboard-deck-card--compact-hero">
+        <div
+          className="card analysis-deck-card chart-section dashboard-time-series-card dashboard-deck-card--compact-hero"
+          style={getDeckLayoutStyle(timeSeriesDeckLayout)}
+        >
           <div className="dashboard-hero-head dashboard-deck-hero-head">
             <div className="dashboard-hero-copy dashboard-deck-hero-copy">
               <span className="panel-kicker">03 / Time-Series Lens</span>
@@ -1395,7 +1615,15 @@ export function DashboardPage() {
             <div className="ts-series-pills">
               {allSeriesNames.map((name, i) => (
                 <button key={name} className={"ts-pill"+(hiddenSeries.has(name)?" ts-pill-hidden":"")}
-                  style={{"--pill-color": seriesColor(name, i, COLORS, isPt)} as React.CSSProperties}
+                  style={{
+                    "--pill-color": resolveTimeSeriesSeriesColor(
+                      name,
+                      i,
+                      tsPalette,
+                      isPt,
+                      tsExport.seriesColors,
+                    ),
+                  } as React.CSSProperties}
                   onClick={()=>setHiddenSeries(prev=>{const n=new Set(prev);n.has(name)?n.delete(name):n.add(name);return n;})}>
                   <span className="ts-pill-dot" />{name}
                 </button>
@@ -1409,23 +1637,33 @@ export function DashboardPage() {
           {!isGrouped && chartType !== "rank" && aggregatedSingle.length > 0 && (
             <div ref={el => { tsChartRef.current = el; }}>
               <PlotlyChart
-                data={applyDataLabelsToTraces([chartType === "line" ? {
-                  x: aggregatedSingle.map(s => s.time),
-                  y: aggregatedSingle.map(s => s.value),
-                  type: "scatter", mode: "lines+markers", name: "Sales",
-                  line: { color: tsPalette[0], width: 2 },
-                  marker: { size: 5 },
-                } as Data : {
-                  x: aggregatedSingle.map(s => s.time),
-                  y: aggregatedSingle.map(s => s.value),
-                  type: "bar", name: "Sales",
-                  marker: { color: tsPalette[0] },
-                } as Data], tsExport)}
+                data={(() => {
+                  const salesColor = resolveTimeSeriesSeriesColor(
+                    "Sales",
+                    0,
+                    tsPalette,
+                    false,
+                    tsExport.seriesColors,
+                  );
+                  const trace = chartType === "line" ? {
+                    x: aggregatedSingle.map(s => s.time),
+                    y: aggregatedSingle.map(s => s.value),
+                    type: "scatter", mode: "lines+markers", name: "Sales",
+                    line: { color: salesColor, width: 2 },
+                    marker: { size: 5, color: salesColor },
+                  } as Data : {
+                    x: aggregatedSingle.map(s => s.time),
+                    y: aggregatedSingle.map(s => s.value),
+                    type: "bar", name: "Sales",
+                    marker: { color: salesColor },
+                  } as Data;
+                  return applyDataLabelsToTraces([trace], tsExport);
+                })()}
                 layout={applyExportToLayout({
                   xaxis: buildCategoryAxis(singleTimeLabels, { tickangle: -45 }),
                   yaxis: { title: { text: "Sales" } },
                 }, tsExport)}
-                height={deckChartHeight}
+                height={timeSeriesDeckLayout.height}
               />
             </div>
           )}
@@ -1433,9 +1671,16 @@ export function DashboardPage() {
           {/* multi-series grouped */}
           {isGrouped && chartType !== "rank" && filteredGrouped.length > 0 && (() => {
             const isPt = tsGroupDim === "\u52a8\u603b\u89c4\u6574";
-            let traces: Data[] = visibleSeries.map((name, i) => {
+            let traces: Data[] = visibleSeries.map((name) => {
               const seriesData = filteredGrouped.filter(g => g.series === name);
-              const c = seriesColor(name, i, tsPalette, isPt);
+              const seriesIndex = allSeriesNames.indexOf(name);
+              const c = resolveTimeSeriesSeriesColor(
+                name,
+                seriesIndex,
+                tsPalette,
+                isPt,
+                tsExport.seriesColors,
+              );
               const base: Partial<Data> = {
                 x: seriesData.map(d => d.time),
                 y: seriesData.map(d => d.value),
@@ -1446,10 +1691,7 @@ export function DashboardPage() {
               }
               return { ...base, type: "bar", marker: { color: c } } as Data;
             });
-            traces = applyTimeSeriesLineColors(
-              applyDataLabelsToTraces(traces, tsExport),
-              tsExport.seriesColors,
-            );
+            traces = applyDataLabelsToTraces(traces, tsExport);
             return (
               <div ref={el => { tsChartRef.current = el; }}>
                 <PlotlyChart
@@ -1461,7 +1703,7 @@ export function DashboardPage() {
                       ? { title: { text: "Share (%)" }, range: [0, 100], ticksuffix: "%" }
                       : { title: { text: "Sales" } },
                   }, tsExport)}
-                  height={deckChartHeight}
+                  height={timeSeriesDeckLayout.height}
                 />
               </div>
             );
@@ -1474,7 +1716,7 @@ export function DashboardPage() {
           {chartType === "rank" && isGrouped && rankingSliced.length > 0 && (() => {
             const reversed = [...rankingSliced].reverse();
             const maxVol = rankingSliced[0]?.volume ?? 1;
-            const chartHeight = Math.max(deckChartHeight, Math.min(1200, rankingSliced.length * 26 + 50));
+            const chartHeight = Math.max(timeSeriesDeckLayout.height, Math.min(1200, rankingSliced.length * 26 + 50));
             const trace: Data = {
               type: "bar",
               orientation: "h",
@@ -1483,9 +1725,15 @@ export function DashboardPage() {
               x: reversed.map((item) => item.volume),
               y: reversed.map((item) => item.name),
               marker: {
-                color: reversed.map((_, i) => {
-                  const idx = allSeriesNames.indexOf(reversed[i].name);
-                  return seriesColor(reversed[i].name, idx, tsPalette, tsGroupDim === "\u52a8\u603b\u89c4\u6574");
+                color: reversed.map((item) => {
+                  const idx = allSeriesNames.indexOf(item.name);
+                  return resolveTimeSeriesSeriesColor(
+                    item.name,
+                    idx,
+                    tsPalette,
+                    tsGroupDim === "\u52a8\u603b\u89c4\u6574",
+                    tsExport.seriesColors,
+                  );
                 }),
               },
               hovertemplate: "%{y}<br>\u9500\u91cf %{x:,.0f} \u53f0<br>\u5360\u6bd4 %{customdata:.1%}<extra></extra>",
@@ -1561,7 +1809,10 @@ export function DashboardPage() {
         </div>
 
         {/* ── Advanced analysis ───────────────────────── */}
-        <div className="card analysis-deck-card dashboard-advanced-card dashboard-deck-card--compact-hero">
+        <div
+          className="card analysis-deck-card dashboard-advanced-card dashboard-deck-card--compact-hero"
+          style={getDeckLayoutStyle(advancedDeckLayout)}
+        >
           <div className="dashboard-hero-head dashboard-deck-hero-head">
             <div className="dashboard-hero-copy dashboard-deck-hero-copy">
               <span className="panel-kicker">04 / Advanced Analysis</span>
@@ -1749,14 +2000,14 @@ export function DashboardPage() {
               </div>
             )}
             {/* NEV动总筛选 */}
-            {(advChart==="nev_range_distribution"||advChart==="nev_capacity_vs_msrp") && (
+            {usesNevPowertrainFilter(advChart) && (
               <div className="filter-group adv-control-unit adv-control-unit--wide"><label>{"\u52a8\u603b\u7c7b\u578b"}</label>
                 <div className="adv-powertrain-strip">
-                  {["BEV","PHEV","HEV","MHEV","ICE"].map(pt=>(
+                  {["BEV","PHEV","HEV","MHEV","ICE"].map((pt, index)=>(
                     <label key={pt} className={"adv-powertrain-chip"+(advPowertrains.includes(pt)?" is-active":"")}>
                       <input type="checkbox" checked={advPowertrains.includes(pt)}
                         onChange={e=>{const next=e.target.checked?[...advPowertrains,pt]:advPowertrains.filter(x=>x!==pt);setAdvPowertrains(next);}} />
-                      <span className="adv-powertrain-chip-swatch" style={{"--pt-color": POWERTRAIN_COLORS[pt]} as React.CSSProperties} />
+                      <span className="adv-powertrain-chip-swatch" style={{"--pt-color": nevPowertrainColor(pt, index)} as React.CSSProperties} />
                       <span>{pt}</span>
                     </label>
                   ))}
@@ -1775,6 +2026,9 @@ export function DashboardPage() {
                 <div className="filter-group"><label>{"\u7eed\u822a\u8f74\u4e0a\u9650"}</label>
                   <input type="number" value={advNevAxisMax} min={200} max={1500} step={50} style={{width:72}} onChange={e=>setAdvNevAxisMax(Number(e.target.value)||1000)} />
                 </div>
+                <div className="filter-group"><label>{"\u7eed\u822a\u67e5\u8be2(km)"}</label>
+                  <input type="number" value={advNevRangeQuery} min={0} max={2000} step={10} style={{width:84}} onChange={e=>setAdvNevRangeQuery(e.target.value)} />
+                </div>
                 <div className="filter-group"><label>{"\u5206\u5e03\u53e3\u5f84"}</label>
                   <select value={advNevMetricMode} onChange={e=>setAdvNevMetricMode(e.target.value as "window_sales"|"net_change")}>
                     <option value="window_sales">{"\u5f53\u524d\u65f6\u95f4\u7a97\u9500\u91cf"}</option>
@@ -1789,8 +2043,8 @@ export function DashboardPage() {
               </div>
             )}
             {/* NEV参数重置 */}
-            {(advChart==="nev_range_distribution"||advChart==="nev_capacity_vs_msrp") && (
-              <button className="btn btn-sm btn-secondary" onClick={()=>{setAdvPowertrains(["BEV","PHEV"]);setAdvTopN(advChart==="nev_range_distribution"?80:120);setAdvRangeStep(50);setAdvNevTopNEnabled(true);setAdvNevAxisMax(1000);setAdvNevMetricMode("window_sales");setAdvNevStackByModel(false);setAdvNevFacetBrand(false);setAdvNevMaxBrandFacets(4);}}>{"\u91cd\u7f6e\u53c2\u6570"}</button>
+            {usesNevPowertrainFilter(advChart) && (
+              <button className="btn btn-sm btn-secondary" onClick={()=>{setAdvPowertrains(["BEV","PHEV"]);setAdvTopN(advChart==="nev_range_distribution"?80:120);setAdvRangeStep(50);setAdvNevTopNEnabled(true);setAdvNevAxisMax(1000);setAdvNevMetricMode("window_sales");setAdvNevStackByModel(false);setAdvNevFacetBrand(false);setAdvNevMaxBrandFacets(4);setAdvNevRangeQuery("");}}>{"\u91cd\u7f6e\u53c2\u6570"}</button>
             )}
             {advChart==="nev_range_distribution" && (
               <details className="adv-disclosure adv-disclosure--panel">
@@ -1869,12 +2123,13 @@ export function DashboardPage() {
           {/* simple bar chart */}
           {isSimpleBar && advItems.length > 0 && (
             <div className="bar-chart">
-              {advItems.map(row=>{
+              {advItems.map((row, index)=>{
                 const lb=String(row.label??"-"); const val=Number(row.value??0);
                 const pct=Math.max(1,Math.round((val/maxBar)*100));
+                const fillColor = advExport.seriesColors[lb] ?? advPalette[index % advPalette.length];
                 return (<div className="bar-row" key={lb+"-"+val}>
                   <span className="bar-label">{lb}</span>
-                  <div className="bar-track"><div className="bar-fill" style={{width:pct+"%"}} /></div>
+                  <div className="bar-track"><div className="bar-fill" style={{width:pct+"%", background: fillColor}} /></div>
                   <span className="bar-value">{val.toLocaleString()}</span>
                 </div>);
               })}
@@ -1896,6 +2151,7 @@ export function DashboardPage() {
               return localCats.map((cat, i) => {
                 const subset = items.filter(r=>String(r[ax.color]??"")=== cat);
                 const isBubbleMsrp = advChart === "powertrain_bubble";
+                const useNevGreen = usesNevGreenPowertrainPalette(advChart, ax.color);
                 const bubbleYoyTemplate = isBubbleMsrp && bubbleYoyEnabled && bubbleYoyCompareYear && bubbleYoyBaseYear
                   ? `<br>${bubbleYoyBaseYear} Sales: %{customdata[4]:,.0f}<br>${bubbleYoyCompareYear} Sales: %{customdata[5]:,.0f}<br>YoY: %{customdata[6]:+.1f}%`
                   : "";
@@ -1918,7 +2174,9 @@ export function DashboardPage() {
                   mode: "markers",
                   name: cat,
                   marker: {
-                    color: seriesColor(cat, i, advPalette, isPtScatter),
+                    color: useNevGreen
+                      ? nevPowertrainColor(cat, i)
+                      : seriesColor(cat, i, advPalette, isPtScatter),
                     size: subset.map(r => Math.max(0, Number(r[ax.z] ?? 0))),
                     sizemode: scatterBubbleSizing.sizemode,
                     sizeref: scatterBubbleSizing.sizeref,
@@ -1967,7 +2225,7 @@ export function DashboardPage() {
                             showlegend: false,
                             margin: { t: 18, b: 40, l: 50, r: 10 },
                           }, advExport)}
-                          height={320}
+                          height={advancedDeckLayout.height}
                         />
                       </div>
                     );
@@ -2010,7 +2268,7 @@ export function DashboardPage() {
                     } : {}),
                   }, advExport)}
                   onClick={handleAdvClick}
-                  height={deckChartHeight}
+                  height={advancedDeckLayout.height}
                 />
               </div>
             );
@@ -2047,8 +2305,17 @@ export function DashboardPage() {
                         advExport.seriesColors,
                       )}
                       layout={applyExportToLayout(nevFacetPlot.layout, advExport)}
-                      height={nevFacetPlot.height}
+                      height={advancedDeckLayout.height}
                     />
+                  </div>
+                )}
+
+                {nevRangeQueryStats && (
+                  <div className="kpi-caption" style={{fontSize:12,color:"var(--c-text-secondary)",marginBottom:12}}>
+                    {`${Math.round(nevRangeQueryStats.target).toLocaleString("en-US")} km 以下：${nevRangeQueryStats.belowCount.toLocaleString("en-US")} / ${nevRangeQueryStats.totalCount.toLocaleString("en-US")} ${nevRangeSampleUnit}，占 ${(nevRangeQueryStats.belowShare * 100).toFixed(1)}%`}
+                    {nevRangeQueryStats.belowSalesShare !== null
+                      ? `｜按销量占 ${(nevRangeQueryStats.belowSalesShare * 100).toFixed(1)}%（${nevRangeQueryStats.belowSales.toLocaleString(undefined, { maximumFractionDigits: 0 })} / ${nevRangeQueryStats.totalSales.toLocaleString(undefined, { maximumFractionDigits: 0 })}）`
+                      : ""}
                   </div>
                 )}
 
@@ -2285,7 +2552,7 @@ export function DashboardPage() {
                       ? { yaxis: { title: { text: xKey }, autorange: "reversed" as const }, xaxis: { title: { text: "Sales" } } }
                       : { xaxis: { title: { text: xKey }, tickangle: -45 }, yaxis: { title: { text: "Sales" } } }),
                   }, advExport)}
-                  height={deckChartHeight}
+                  height={advancedDeckLayout.height}
                 />
               </div>
             );
@@ -2306,12 +2573,12 @@ export function DashboardPage() {
             return (
               <div ref={el => { advChartRef.current = el; }}>
                 <PlotlyChart
-                  data={applyDataLabelsToTraces(traces, advExport)}
+                  data={applySeriesColors(applyDataLabelsToTraces(traces, advExport), advExport.seriesColors)}
                   layout={applyExportToLayout({
                       xaxis: { title: { text: "\u4ef7\u683c\u5e26" }, tickangle: -45 },
                     yaxis: { title: { text: "Sales" } },
                   }, advExport)}
-                  height={deckChartHeight}
+                  height={advancedDeckLayout.height}
                 />
               </div>
             );
@@ -2335,7 +2602,7 @@ export function DashboardPage() {
                       xaxis: { title: { text: "Month" } },
                     yaxis: { title: { text: "Year" }, autorange: "reversed" as const },
                   }, advExport)}
-                  height={deckChartHeight}
+                  height={advancedDeckLayout.height}
                 />
               </div>
             );
@@ -2353,7 +2620,10 @@ export function DashboardPage() {
         </div>
 
         {/* ── Bug 2: Model Version Bubble ─────────────── */}
-        <div className="card analysis-deck-card dashboard-deck-card--compact-hero">
+        <div
+          className="card analysis-deck-card dashboard-deck-card--compact-hero"
+          style={getDeckLayoutStyle(modelVersionDeckLayout)}
+        >
           <div className="dashboard-hero-head dashboard-deck-hero-head">
             <div className="dashboard-hero-copy dashboard-deck-hero-copy">
               <span className="panel-kicker">05 / Single Model Lens</span>
@@ -2445,12 +2715,12 @@ export function DashboardPage() {
             return (
               <div ref={el => { mvChartRef.current = el; }}>
                 <PlotlyChart
-                  data={traces}
+                  data={applySeriesColors(applyDataLabelsToTraces(traces, mvExport), mvExport.seriesColors)}
                   layout={applyExportToLayout({
                       xaxis: { title: { text: "车长(mm)" } },
                     yaxis: { title: { text: "MSRP" } },
                   }, mvExport)}
-                  height={deckChartHeight}
+                  height={modelVersionDeckLayout.height}
                 />
               </div>
             );
@@ -2460,7 +2730,10 @@ export function DashboardPage() {
         </div>
 
         {/* ── Bug 3: OJ Positioning Map ───────────────── */}
-        <div className="card analysis-deck-card dashboard-deck-card--compact-hero">
+        <div
+          className="card analysis-deck-card dashboard-deck-card--compact-hero"
+          style={getDeckLayoutStyle(positioningDeckLayout)}
+        >
           <div className="dashboard-hero-head dashboard-deck-hero-head">
             <div className="dashboard-hero-copy dashboard-deck-hero-copy">
               <span className="panel-kicker">06 / Competitive Positioning</span>
@@ -2595,12 +2868,12 @@ export function DashboardPage() {
             return (
               <div ref={el => { pmChartRef.current = el; }}>
                 <PlotlyChart
-                  data={traces}
+                  data={applySeriesColors(applyDataLabelsToTraces(traces, pmExport), pmExport.seriesColors)}
                   layout={applyExportToLayout({
                       xaxis: { title: { text: "\u8f66\u957f(mm)" } },
                     yaxis: { title: { text: "MSRP" } },
                   }, pmExport)}
-                  height={deckChartHeight}
+                  height={positioningDeckLayout.height}
                 />
               </div>
             );
@@ -2657,6 +2930,19 @@ export function DashboardPage() {
             ariaLabel="Dashboard control tabs"
           />
 
+          <div className="deck-export-section-tabs">
+            {DECK_SECTION_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                className={`tab-btn${activeDeckSection === tab.key ? " active" : ""}`}
+                onClick={() => setActiveDeckSection(tab.key)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
           {deckControlTab === "window" ? (
             <div>
               <TimeAxis
@@ -2672,18 +2958,6 @@ export function DashboardPage() {
             </div>
           ) : deckControlTab === "chart" ? (
             <div>
-              <div className="deck-export-section-tabs">
-                {DECK_SECTION_TABS.map((tab) => (
-                  <button
-                    key={tab.key}
-                    type="button"
-                    className={`tab-btn${activeDeckSection === tab.key ? " active" : ""}`}
-                    onClick={() => setActiveDeckSection(tab.key)}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
               <div className="positioning-pricing-control-grid">
                 {activeDeckSection === "timeSeries" && (
                   <>
@@ -2788,30 +3062,30 @@ export function DashboardPage() {
           ) : (
             <div className="positioning-pricing-control-grid">
               <label className="market-scan-field positioning-pricing-control-field--wide">
-                <span>图表高度 {deckChartHeight}px</span>
+                <span>图表高度 {activeDeckLayout.height}px</span>
                 <input
                   type="range"
                   min={300}
                   max={900}
                   step={10}
-                  value={deckChartHeight}
-                  onChange={(e) => setDeckChartHeight(Number(e.target.value))}
+                  value={activeDeckLayout.height}
+                  onChange={(e) => updateActiveDeckLayout({ height: Number(e.target.value) })}
                 />
               </label>
               <label className="market-scan-field positioning-pricing-control-field--wide">
-                <span>图表宽度 {deckChartWidth === 0 ? "auto" : `${deckChartWidth}px`}</span>
+                <span>图表宽度 {activeDeckLayout.width === 0 ? "auto" : `${activeDeckLayout.width}px`}</span>
                 <input
                   type="range"
                   min={0}
                   max={2000}
                   step={20}
-                  value={deckChartWidth}
-                  onChange={(e) => setDeckChartWidth(Number(e.target.value))}
+                  value={activeDeckLayout.width}
+                  onChange={(e) => updateActiveDeckLayout({ width: Number(e.target.value) })}
                 />
-                {deckChartWidth === 0 && <span className="ts-mode-hint">填满容器</span>}
+                {activeDeckLayout.width === 0 && <span className="ts-mode-hint">填满容器</span>}
               </label>
               <div className="market-scan-field market-scan-field-actions positioning-pricing-control-field--wide">
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setDeckChartHeight(500); setDeckChartWidth(0); }}>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={resetActiveDeckLayout}>
                   Reset 尺寸
                 </button>
               </div>
@@ -2844,16 +3118,16 @@ export function DashboardPage() {
             ))}
           </div>
           {activeDeckSection === "timeSeries" && (
-            <ExportPanel value={tsExport} onChange={setTsExport} graphDiv={tsChartRef.current} seriesNames={isGrouped ? visibleSeries : undefined} labelModeOptions={tsLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+            <ExportPanel value={tsExport} onChange={setTsExport} graphDiv={tsChartRef.current} seriesNames={timeSeriesExportSeriesNames} labelModeOptions={tsLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
           )}
           {activeDeckSection === "advanced" && (
-            <ExportPanel value={advExport} onChange={setAdvExport} graphDiv={advChartRef.current} labelModeOptions={advLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+            <ExportPanel value={advExport} onChange={setAdvExport} graphDiv={advChartRef.current} seriesNames={advancedExportSeriesNames} labelModeOptions={advLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
           )}
           {activeDeckSection === "modelVersion" && (
-            <ExportPanel value={mvExport} onChange={setMvExport} graphDiv={mvChartRef.current} labelModeOptions={mvLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+            <ExportPanel value={mvExport} onChange={setMvExport} graphDiv={mvChartRef.current} seriesNames={modelVersionExportSeriesNames} labelModeOptions={mvLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
           )}
           {activeDeckSection === "positioning" && (
-            <ExportPanel value={pmExport} onChange={setPmExport} graphDiv={pmChartRef.current} labelModeOptions={pmLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+            <ExportPanel value={pmExport} onChange={setPmExport} graphDiv={pmChartRef.current} seriesNames={positioningExportSeriesNames} labelModeOptions={pmLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
           )}
         </DeckExportDrawer>
     </div>

@@ -26,7 +26,7 @@ async def post_coc_match_job(
     country: str = Form(...),
     month: str | None = Form(default=None),
     file_ext: str = Form(default=".pdf"),
-    user: UserContext = Depends(require_min_role("viewer")),
+    user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
     """Create a COC match job with two uploaded files (Excel + ZIP/RAR).
     Use this for small files (< 50 MB). For larger files use chunked upload
@@ -47,7 +47,7 @@ async def post_coc_match_job(
 @router.post("/jobs/batch")
 def post_coc_match_job_batch(
     payload: dict[str, object],
-    user: UserContext = Depends(require_min_role("viewer")),
+    user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
     """Create a COC match job from two completed chunked uploads.
     Payload: { excelUploadId, archiveUploadId, excelFilename, archiveFilename,
@@ -70,7 +70,7 @@ def post_coc_match_job_batch(
 @router.post("/upload-sessions/initiate")
 def post_coc_upload_session(
     payload: dict[str, object],
-    user: UserContext = Depends(require_min_role("viewer")),
+    user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
     """Initiate a chunked upload session for a large COC file."""
     return {
@@ -92,7 +92,7 @@ async def put_coc_upload_chunk(
     upload_id: str,
     part_number: int,
     request: Request,
-    _user: UserContext = Depends(require_min_role("viewer")),
+    _user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
     """Upload a single chunk for a COC file upload session."""
     return {
@@ -108,7 +108,7 @@ async def put_coc_upload_chunk(
 @router.post("/upload-sessions/{upload_id}/complete")
 def post_coc_upload_complete(
     upload_id: str,
-    _user: UserContext = Depends(require_min_role("viewer")),
+    _user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
     """Mark a chunked upload session as complete and assemble the file."""
     return {"item": complete_coc_match_upload(upload_id)}
@@ -154,7 +154,7 @@ def get_coc_match_report(
 @router.post("/jobs/{job_id}/retry")
 def post_retry_coc_match_job(
     job_id: str,
-    user: UserContext = Depends(require_min_role("viewer")),
+    user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
     """Retry a failed COC match job using the original files."""
     return {

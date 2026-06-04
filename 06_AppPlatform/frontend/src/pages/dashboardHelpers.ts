@@ -69,6 +69,7 @@ export interface DashboardPageCache {
   advNevStackByModel: boolean;
   advNevFacetBrand: boolean;
   advNevMaxBrandFacets: number;
+  advNevRangeQuery: string;
   advRangeStep: number;
   advHeatmapScale: string;
   tcoYears: number;
@@ -115,6 +116,7 @@ export const ADV_CHARTS: Record<string, { v: string; l: string }[]> = {
   ],
   nev_analysis: [
     { v: "nev_range_distribution", l: "续航分布" },
+    { v: "nev_length_vs_range", l: "车长 vs 纯电续航" },
     { v: "nev_capacity_vs_msrp", l: "电池容量 vs MSRP" },
   ],
   price_value: [
@@ -162,7 +164,7 @@ export const BUBBLE_GROUP_DIMENSIONS: { v: BubbleGroupDimension; l: string; data
 ];
 
 export const SCATTER_CHARTS = new Set([
-  "powertrain_bubble", "nev_capacity_vs_msrp",
+  "powertrain_bubble", "nev_capacity_vs_msrp", "nev_length_vs_range",
   "length_vs_price", "price_per_meter", "sales_vs_price", "estimated_tco",
 ]);
 

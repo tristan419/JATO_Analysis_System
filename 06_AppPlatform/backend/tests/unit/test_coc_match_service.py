@@ -6,6 +6,7 @@ from app.services.coc_match_service import (
     find_archive_only_files,
     list_archive_files,
     match_cocs,
+    read_excel_rows,
     _list_rar_files_python,
 )
 
@@ -31,6 +32,25 @@ def test_find_archive_only_files_reports_extra_archive_files() -> None:
     archive_only = find_archive_only_files(rows, {"A001", "A002", "A003", "A004"})
 
     assert archive_only == [{"filename": "A003"}, {"filename": "A004"}]
+
+
+def test_read_excel_rows_finds_vin_header_in_multi_column_sheet(tmp_path: Path) -> None:
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["Exported COC registry"])
+    sheet.append(["Order", "Model", "VIN", "Country", "Comment"])
+    sheet.append([1, "J7", "LVUGTB220TDE99425", "CZ", "ok"])
+    sheet.append([2, "J7", "LVUGTB220TDE99426", "CZ", "ok"])
+    sheet.append([3, "J7", None, "CZ", "skip"])
+    path = tmp_path / "registry.xlsx"
+    workbook.save(path)
+
+    assert read_excel_rows(path) == [
+        {"chassis": "LVUGTB220TDE99425", "model": "J7", "country": "CZ"},
+        {"chassis": "LVUGTB220TDE99426", "model": "J7", "country": "CZ"},
+    ]
 
 
 def test_classify_coc_difference_detects_one_sided_and_bidirectional() -> None:

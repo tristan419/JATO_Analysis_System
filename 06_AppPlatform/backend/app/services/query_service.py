@@ -1425,6 +1425,9 @@ def query_advanced_chart(
         if nc == "nev_capacity_vs_msrp":
             return _chart_nev_capacity_vs_msrp(filters, top_n, opts)
 
+        if nc == "nev_length_vs_range":
+            return _chart_nev_length_vs_range(filters, top_n, opts)
+
     # ── Price value ─────────────────────────────────────────────
     if ng == "price_value":
         if nc == "top_makes":
@@ -1809,6 +1812,21 @@ def _chart_nev_range_distribution(
     if df.empty:
         return {"group": "nev_analysis", "chart": "nev_range_distribution", "rows": 0, "items": []}
 
+    range_sample_group_fields = [field for field in ["Model", "Brand", "Powertrain"] if field in df.columns]
+    range_sample_unit = "Model" if "Model" in range_sample_group_fields else "Series"
+    range_samples: list[dict] = []
+    if range_sample_group_fields:
+        range_sample_frame = (
+            df.groupby(range_sample_group_fields, dropna=False)
+            .agg(
+                BatteryRange=("BatteryRange", "median"),
+                Sales=("SalesWindow", "sum"),
+            )
+            .reset_index()
+            .sort_values("Sales", ascending=False)
+        )
+        range_samples = range_sample_frame.to_dict(orient="records")
+
     df["RangeBand"] = (df["BatteryRange"] // range_step * range_step).astype(int)
     df["RangeBand"] = df["RangeBand"].clip(lower=0, upper=max(0, axis_max - range_step))
     df["RangeBandLabel"] = df["RangeBand"].map(lambda start: f"{int(start)}-{int(min(start + range_step - 1, axis_max))}")
@@ -1833,6 +1851,8 @@ def _chart_nev_range_distribution(
         "brands": selected_brands,
         "rangeStep": range_step,
         "axisMax": axis_max,
+        "rangeSamples": range_samples,
+        "rangeSampleUnit": range_sample_unit,
         "warnings": warnings,
     }
 
@@ -1990,6 +2010,85 @@ def _chart_nev_capacity_vs_msrp(
     agg = agg.sort_values("Sales", ascending=False).head(max(1, int(top_n)))
     items = agg.to_dict(orient="records")
     return {"group": "nev_analysis", "chart": "nev_capacity_vs_msrp", "rows": len(items), "items": items}
+
+
+# ── Chart: NEV Length vs Electric Range ────────────────────────
+def _chart_nev_length_vs_range(
+    filters: dict[str, list[str]], top_n: int, opts: dict,
+) -> dict:
+    columns = repo.list_columns()
+    length_col = _resolve_existing_column(LENGTH_CANDIDATES, columns)
+    range_col = _resolve_existing_column(BATTERY_RANGE_CANDIDATES, columns)
+    powertrain_col = _resolve_existing_column(POWERTRAIN_CANDIDATES, columns)
+    model_col = _resolve_existing_column(MODEL_CANDIDATES, columns)
+    make_col = _resolve_existing_column(MAKE_CANDIDATES, columns)
+    segment_col = _resolve_existing_column(SEGMENT_CANDIDATES, columns)
+    if not length_col or not range_col or not powertrain_col:
+        return {"group": "nev_analysis", "chart": "nev_length_vs_range", "rows": 0, "items": []}
+
+    year_cols = _year_columns(columns)
+    sales_scope_columns = _resolve_sales_columns_from_options(columns, opts)
+    if _has_explicit_time_range(opts) and not sales_scope_columns:
+        return {"group": "nev_analysis", "chart": "nev_length_vs_range", "rows": 0, "items": []}
+    load_cols = list(
+        dict.fromkeys(
+            [c for c in [length_col, range_col, powertrain_col, model_col, make_col, segment_col] if c]
+            + year_cols
+            + sales_scope_columns
+        )
+    )
+    df = repo.load_slice(columns=load_cols, filters=filters, limit=200_000, offset=0)
+    if df.empty:
+        return {"group": "nev_analysis", "chart": "nev_length_vs_range", "rows": 0, "items": []}
+
+    df["Length"] = pd.to_numeric(df[length_col], errors="coerce")
+    df["BatteryRange"] = pd.to_numeric(df[range_col], errors="coerce")
+    df["Powertrain"] = df[powertrain_col].astype(str).str.strip()
+    df["Sales"] = _sum_sales_columns(df, sales_scope_columns or year_cols)
+    if model_col and model_col in df.columns:
+        df["Model"] = df[model_col].astype(str).str.strip()
+    if make_col and make_col in df.columns:
+        df["Brand"] = df[make_col].astype(str).str.strip()
+    if segment_col and segment_col in df.columns:
+        df["Segment"] = df[segment_col].astype(str).str.strip()
+
+    selected_pt = opts.get("powertrains", ["BEV", "PHEV"])
+    if isinstance(selected_pt, str):
+        selected_pt = [selected_pt]
+    df = df[df["Powertrain"].isin(selected_pt)]
+    df = df.dropna(subset=["Length", "BatteryRange"])
+    df = df[(df["Length"] > 0) & (df["BatteryRange"] > 0)]
+    if df.empty:
+        return {"group": "nev_analysis", "chart": "nev_length_vs_range", "rows": 0, "items": []}
+
+    group_cols = [column for column in ["Brand", "Model", "Segment", "Powertrain"] if column in df.columns]
+    if not group_cols:
+        return {"group": "nev_analysis", "chart": "nev_length_vs_range", "rows": 0, "items": []}
+
+    agg = df.groupby(group_cols, dropna=False).agg(
+        Length=("Length", "median"),
+        BatteryRange=("BatteryRange", "median"),
+        RangeMin=("BatteryRange", "min"),
+        RangeMax=("BatteryRange", "max"),
+        Sales=("Sales", "sum"),
+    ).reset_index()
+    agg["DisplayName"] = (
+        agg["Brand"].astype(str).str.strip() + " " + agg["Model"].astype(str).str.strip()
+        if "Brand" in agg.columns and "Model" in agg.columns
+        else agg[group_cols[0]].astype(str).str.strip()
+    )
+    agg = agg.sort_values("Sales", ascending=False).head(max(1, int(top_n)))
+    items = agg.to_dict(orient="records")
+    return {
+        "group": "nev_analysis",
+        "chart": "nev_length_vs_range",
+        "rows": len(items),
+        "items": items,
+        "meta": {
+            "rangeColumn": range_col,
+            "lengthColumn": length_col,
+        },
+    }
 
 
 # ── Chart: Price Migration ─────────────────────────────────────

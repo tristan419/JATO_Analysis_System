@@ -5,9 +5,11 @@ processing and file utilities.
 """
 
 import json
+import re
 import sqlite3
 import shutil
 import subprocess
+import threading
 import uuid
 import zipfile
 from collections import defaultdict
@@ -31,20 +33,86 @@ _COC_UPLOAD_THRESHOLD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 # ── Excel → rows ───────────────────────────────────────────────────
 
+_VIN_HEADER_CANDIDATES = {
+    "vin",
+    "vinno",
+    "vinnumber",
+    "vin码",
+    "vin号",
+    "vehicleidentificationnumber",
+    "chassis",
+    "chassisno",
+    "chassisnumber",
+    "车架号",
+    "底盘号",
+}
+_MODEL_HEADER_CANDIDATES = {"model", "车型", "车型名", "modelname", "vehiclemodel"}
+_COUNTRY_HEADER_CANDIDATES = {"country", "国家", "market", "市场"}
+_HEADER_SCAN_ROWS = 20
+
+
+def _normalize_excel_header(value: object) -> str:
+    text = str(value or "").strip().lower()
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", text)
+
+
+def _find_header_index(row: tuple[object, ...], candidates: set[str]) -> int | None:
+    for index, value in enumerate(row):
+        normalized = _normalize_excel_header(value)
+        if not normalized:
+            continue
+        if normalized in candidates:
+            return index
+        if candidates is _VIN_HEADER_CANDIDATES:
+            text = str(value or "").strip().lower()
+            if re.search(r"\bvin\b", text) or "车架" in normalized or "底盘" in normalized:
+                return index
+    return None
+
+
 def read_excel_rows(excel_path: Path) -> list[dict[str, str]]:
     """Read COC registry Excel. Returns list of {chassis, model, country}."""
     import openpyxl
     wb = openpyxl.load_workbook(excel_path, data_only=True)
     ws = wb.active
+    header_row_number: int | None = None
+    vin_index: int | None = None
+    model_index: int | None = None
+    country_index: int | None = None
+
+    for idx, row in enumerate(ws.iter_rows(min_row=1, max_row=_HEADER_SCAN_ROWS, values_only=True), start=1):
+        hit = _find_header_index(row, _VIN_HEADER_CANDIDATES)
+        if hit is not None:
+            header_row_number = idx
+            vin_index = hit
+            model_index = _find_header_index(row, _MODEL_HEADER_CANDIDATES)
+            country_index = _find_header_index(row, _COUNTRY_HEADER_CANDIDATES)
+            break
+
+    if header_row_number is None or vin_index is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Excel 未找到 VIN / Chassis / 车架号 表头，请确认表格包含 VIN 列。",
+        )
+
     rows: list[dict[str, str]] = []
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        chassis = row[0]
-        if chassis is None:
+    for row in ws.iter_rows(min_row=header_row_number + 1, values_only=True):
+        chassis = row[vin_index] if vin_index < len(row) else None
+        chassis_text = str(chassis or "").strip()
+        if not chassis_text:
             continue
-        model = str(row[1]).strip() if len(row) > 1 and row[1] else ""
-        country = str(row[2]).strip() if len(row) > 2 and row[2] else ""
+        model = (
+            str(row[model_index]).strip()
+            if model_index is not None and model_index < len(row) and row[model_index]
+            else ""
+        )
+        country = (
+            str(row[country_index]).strip()
+            if country_index is not None and country_index < len(row) and row[country_index]
+            else ""
+        )
         rows.append({
-            "chassis": str(chassis).strip(),
+            "chassis": chassis_text,
             "model": model,
             "country": country,
         })
@@ -304,11 +372,16 @@ def classify_coc_difference(
 # ── SQLite DB ──────────────────────────────────────────────────────
 
 COC_DB_PATH = COC_MATCH_JOB_ROOT / "coc_match_history.db"
+_COC_DB_LOCK = threading.RLock()
+_COC_DB_BUSY_TIMEOUT_MS = 30_000
 
 
 def _init_coc_db() -> sqlite3.Connection:
     COC_MATCH_JOB_ROOT.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(COC_DB_PATH))
+    conn = sqlite3.connect(str(COC_DB_PATH), timeout=_COC_DB_BUSY_TIMEOUT_MS / 1000)
+    conn.execute(f"PRAGMA busy_timeout={_COC_DB_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -341,26 +414,31 @@ def _save_run(conn: sqlite3.Connection, country: str, month: str, rows: list[dic
     matched = sum(1 for r in rows if r["has_pdf"])
     missing = total - matched
 
-    old = conn.execute(
-        "SELECT id FROM runs WHERE country=? AND month=?", (country, month)
-    ).fetchone()
-    if old:
-        old_id = old[0]
-        conn.execute("DELETE FROM coc_status WHERE run_id=?", (old_id,))
-        conn.execute("DELETE FROM runs WHERE id=?", (old_id,))
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        old = conn.execute(
+            "SELECT id FROM runs WHERE country=? AND month=?", (country, month)
+        ).fetchone()
+        if old:
+            old_id = old[0]
+            conn.execute("DELETE FROM coc_status WHERE run_id=?", (old_id,))
+            conn.execute("DELETE FROM runs WHERE id=?", (old_id,))
 
-    conn.execute(
-        "INSERT INTO runs (country, month, total, matched, missing, created_at) VALUES (?,?,?,?,?,?)",
-        (country, month, total, matched, missing, datetime.now().isoformat()),
-    )
-    run_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO runs (country, month, total, matched, missing, created_at) VALUES (?,?,?,?,?,?)",
+            (country, month, total, matched, missing, datetime.now().isoformat()),
+        )
+        run_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    conn.executemany(
-        "INSERT INTO coc_status (run_id, chassis, model, has_pdf) VALUES (?,?,?,?)",
-        [(run_id, r["chassis"], r["model"], 1 if r["has_pdf"] else 0) for r in rows],
-    )
-    conn.commit()
-    return run_id
+        conn.executemany(
+            "INSERT INTO coc_status (run_id, chassis, model, has_pdf) VALUES (?,?,?,?)",
+            [(run_id, r["chassis"], r["model"], 1 if r["has_pdf"] else 0) for r in rows],
+        )
+        conn.commit()
+        return run_id
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _get_previous_run(conn: sqlite3.Connection, country: str, current_month: str):
@@ -841,18 +919,21 @@ class CocMatchJobRunner(BaseJobRunner):
             f"Archive-only: {len(archive_only_files)}, Difference: {difference_type}"
         )
 
-        # Step 4: Save to DB
-        conn = _init_coc_db()
-        run_id = _save_run(conn, self.country, self.month, rows)
-
-        # Step 5: Compare with previous
-        prev = _get_previous_run(conn, self.country, self.month)
-        diff = _get_diff(conn, prev[0] if prev else None, rows) if prev else {}
+        # Step 4/5: Save run history and compare with previous month.
+        # SQLite has a single writer; serialize in-process writes and let
+        # busy_timeout handle another backend process holding the file lock.
+        with _COC_DB_LOCK:
+            conn = _init_coc_db()
+            try:
+                run_id = _save_run(conn, self.country, self.month, rows)
+                prev = _get_previous_run(conn, self.country, self.month)
+                diff = _get_diff(conn, prev[0] if prev else None, rows) if prev else {}
+            finally:
+                conn.close()
         if prev:
             gained = sum(1 for v in diff.values() if v == "gained_pdf")
             g_lost = sum(1 for v in diff.values() if v == "lost_pdf")
             self.log(f"  vs {prev[1]}: +{gained} gained, -{g_lost} lost")
-        conn.close()
 
         # Step 6: Build HTML report
         html = build_html_report(

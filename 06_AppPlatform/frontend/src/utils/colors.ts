@@ -14,6 +14,26 @@ export const POWERTRAIN_COLORS: Record<string, string> = {
   BEV:  "#22c55e",
 };
 
+/** NEV filtered charts use one green color family across powertrain series. */
+export const NEV_POWERTRAIN_COLORS: Record<string, string> = {
+  BEV:  "#15803d",
+  PHEV: "#22c55e",
+  HEV:  "#65a30d",
+  MHEV: "#84cc16",
+  ICE:  "#86efac",
+};
+
+export const NEV_SERIES_COLORS = [
+  "#15803d",
+  "#22c55e",
+  "#65a30d",
+  "#84cc16",
+  "#10b981",
+  "#4ade80",
+  "#047857",
+  "#a3e635",
+];
+
 /** Canonical fuel-type palette (MarketScan uses the same colors plus LPG) */
 export const FUEL_COLORS: Record<string, string> = {
   ...POWERTRAIN_COLORS,
@@ -76,3 +96,7 @@ export function ptColor(name: string, fallback: string): string {
   return POWERTRAIN_COLORS[name] ?? POWERTRAIN_COLORS[name.toUpperCase()] ?? fallback;
 }
 
+export function nevPowertrainColor(name: string, idx: number): string {
+  const normalizedName = normalizePowertrainName(name);
+  return NEV_POWERTRAIN_COLORS[normalizedName] ?? NEV_SERIES_COLORS[idx % NEV_SERIES_COLORS.length];
+}

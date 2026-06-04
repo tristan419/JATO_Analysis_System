@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Data, Layout } from "plotly.js";
 
 import { POWERTRAIN_COLORS as FIXED_POWERTRAIN_COLORS } from "../utils/colors";
@@ -374,6 +374,135 @@ function getSeriesDefaultColor(name: string, fallback: string): string {
   return FIXED_POWERTRAIN_COLORS[name.toUpperCase()] ?? fallback;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item ?? "").trim()).filter(Boolean);
+}
+
+function isHelperTraceName(name: string): boolean {
+  return name === "Labels" || name === "Total Labels" || name.startsWith("label-p");
+}
+
+function withHexAlpha(color: string, alphaHex: string): string {
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? `${color}${alphaHex}` : color;
+}
+
+function getPointSeriesNames(trace: Record<string, unknown>): string[] {
+  const pointCount = inferPointCount(trace);
+  if (pointCount === 0) return [];
+
+  const labels = resolveExportLabelMetadata(trace);
+  const explicitSeries = labels.series
+    ?.slice(0, pointCount)
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+  if (explicitSeries && explicitSeries.length > 0) return explicitSeries;
+
+  const traceType = String(trace.type ?? "");
+  if (traceType === "pie") return toStringArray(trace.labels).slice(0, pointCount);
+
+  const axisValues = trace.orientation === "h" ? trace.y : trace.x;
+  return toStringArray(axisValues).slice(0, pointCount);
+}
+
+function canUsePointSeriesColors(trace: Record<string, unknown>): boolean {
+  const traceType = String(trace.type ?? "");
+  if (traceType === "bar" || traceType === "pie") return true;
+  if (traceType !== "scatter") return false;
+  const mode = typeof trace.mode === "string" ? trace.mode : "";
+  return mode.split("+").includes("markers");
+}
+
+function applyTraceColor(trace: Data, color: string): Data {
+  const next = { ...trace } as Data & Record<string, unknown>;
+  const marker = isRecord(next.marker) ? next.marker : null;
+  const line = isRecord(next.line) ? next.line : null;
+
+  if (marker || next.type === "bar" || next.type === "scatter") {
+    next.marker = { ...(marker ?? {}), color };
+  }
+  if (line || next.type === "scatter") {
+    next.line = { ...(line ?? {}), color };
+  }
+  if (next.type === "scatter" && typeof next.fill === "string" && next.fill !== "none") {
+    next.fillcolor = withHexAlpha(color, "26");
+  }
+  return next as Data;
+}
+
+function applyPointSeriesColors(
+  trace: Data,
+  colors: Record<string, string>,
+): Data {
+  const traceRecord = trace as Record<string, unknown>;
+  if (!canUsePointSeriesColors(traceRecord)) return trace;
+
+  const pointSeriesNames = getPointSeriesNames(traceRecord);
+  if (pointSeriesNames.length === 0) return trace;
+  if (!pointSeriesNames.some((name) => Boolean(colors[name]))) return trace;
+
+  const next = { ...trace } as Data & Record<string, unknown>;
+  const marker = isRecord(next.marker) ? next.marker : {};
+  const isPie = next.type === "pie";
+  const markerColorKey = isPie ? "colors" : "color";
+  const existingColor = marker[markerColorKey] ?? marker.color;
+  const existingColors = Array.isArray(existingColor) ? existingColor : [];
+  const fallbackColor = typeof existingColor === "string" ? existingColor : undefined;
+
+  next.marker = {
+    ...marker,
+    [markerColorKey]: pointSeriesNames.map(
+      (name, index) => colors[name] ?? existingColors[index] ?? fallbackColor,
+    ),
+  };
+  return next as Data;
+}
+
+function shouldExposePointSeriesNames(
+  trace: Record<string, unknown>,
+  traceName: string,
+  pointNames: string[],
+): boolean {
+  if (pointNames.length === 0) return false;
+  if (!traceName || trace.showlegend === false || trace.type === "pie") return true;
+  const marker = isRecord(trace.marker) ? trace.marker : {};
+  const markerColor = marker.colors ?? marker.color;
+  return Array.isArray(markerColor) && markerColor.length >= pointNames.length;
+}
+
+export function collectExportSeriesNamesFromTraces(traces: Data[]): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const addName = (name: string) => {
+    const clean = name.trim();
+    if (!clean || isHelperTraceName(clean) || seen.has(clean)) return;
+    seen.add(clean);
+    names.push(clean);
+  };
+
+  traces.forEach((trace) => {
+    const traceRecord = trace as Record<string, unknown>;
+    const traceName = typeof traceRecord.name === "string" ? traceRecord.name.trim() : "";
+    const pointNames = getPointSeriesNames(traceRecord);
+    if (shouldExposePointSeriesNames(traceRecord, traceName, pointNames)) {
+      pointNames.forEach(addName);
+      return;
+    }
+    addName(traceName);
+  });
+
+  return names;
+}
+
+function collectExportSeriesNamesFromGraphDiv(graphDiv?: HTMLElement | null): string[] {
+  const data = (graphDiv as unknown as { data?: unknown } | null | undefined)?.data;
+  return Array.isArray(data) ? collectExportSeriesNamesFromTraces(data as Data[]) : [];
+}
+
 interface SmartLabelCandidate {
   key: string;
   x: number;
@@ -743,16 +872,13 @@ export function applyDataLabelsToTraces(traces: Data[], settings: ExportSettings
 /* ── B10: apply per-series manual colors ── */
 export function applySeriesColors(traces: Data[], colors: Record<string, string>): Data[] {
   if (!colors || Object.keys(colors).length === 0) return traces;
-  return traces.map(tr => {
-    const name = (tr as any).name as string | undefined;
+  return traces.map((trace) => {
+    const traceRecord = trace as Record<string, unknown>;
+    const name = typeof traceRecord.name === "string" ? traceRecord.name.trim() : "";
     if (name && colors[name]) {
-      const t = { ...tr } as any;
-      if (t.marker) t.marker = { ...t.marker, color: colors[name] };
-      else if (t.line) t.line = { ...t.line, color: colors[name] };
-      else t.marker = { color: colors[name] };
-      return t as Data;
+      return applyTraceColor(trace, colors[name]);
     }
-    return tr;
+    return applyPointSeriesColors(trace, colors);
   });
 }
 
@@ -793,6 +919,10 @@ export function ExportPanel({
   const resolvedLabelModes = labelModeOptions && labelModeOptions.length > 0 ? labelModeOptions : DEFAULT_LABEL_MODES;
   const safeLabelMode = resolvedLabelModes.includes(s.dataLabelMode) ? s.dataLabelMode : "off";
   const safeLabelStrategy = normalizeExportLabelStrategy(s.dataLabelOverlapStrategy);
+  const resolvedSeriesNames = useMemo(
+    () => seriesNames ?? collectExportSeriesNamesFromGraphDiv(graphDiv),
+    [graphDiv, seriesNames],
+  );
   const bodyOpen = !collapsible || open;
 
   useEffect(() => {
@@ -952,10 +1082,10 @@ export function ExportPanel({
               />
             </div>
           </div>
-          {seriesNames && seriesNames.length > 0 && seriesNames.length <= 30 && (
+          {resolvedSeriesNames.length > 0 && resolvedSeriesNames.length <= 30 && (
             <div className="export-row" style={{flexWrap:"wrap",gap:4}}>
               <span style={{width:"100%",fontSize:12,color:"var(--c-text-muted)"}}>逐系列配色</span>
-              {seriesNames.map((name, i) => (
+              {resolvedSeriesNames.map((name, i) => (
                 <label key={name} style={{display:"inline-flex",alignItems:"center",gap:2,fontSize:11}}>
                   <input type="color"
                     value={s.seriesColors[name] ?? getSeriesDefaultColor(name, getExportPalette(s.colorScheme)[i % getExportPalette(s.colorScheme).length])}
