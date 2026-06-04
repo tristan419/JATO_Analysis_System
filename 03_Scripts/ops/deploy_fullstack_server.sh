@@ -114,6 +114,16 @@ write_deploy_failure_context() {
   } > "$DEPLOY_FAILURE_FILE" 2>&1 || true
 }
 
+fail_deploy() {
+  local message="$1"
+  local line_no="${2:-$LINENO}"
+
+  echo "[ERROR] $message"
+  write_deploy_failure_context "$line_no" "$message" 1
+  run_diagnostics
+  exit 1
+}
+
 on_error() {
   local line_no="$1"
   local command="$2"
@@ -141,8 +151,7 @@ fi
 require_command() {
   local name="$1"
   if ! command -v "$name" >/dev/null 2>&1; then
-    echo "[ERROR] Missing required command: $name"
-    exit 1
+    fail_deploy "Missing required command: $name" "$LINENO"
   fi
 }
 
@@ -217,8 +226,7 @@ install_systemd_file() {
   local temp_file=""
 
   if [[ ! -f "$source_path" ]]; then
-    echo "[ERROR] Missing systemd source file: $source_path"
-    exit 1
+    fail_deploy "Missing systemd source file: $source_path" "$LINENO"
   fi
 
   temp_file="$(mktemp)"
@@ -234,8 +242,7 @@ install_env_file_if_missing() {
   local temp_file=""
 
   if [[ ! -f "$source_path" ]]; then
-    echo "[ERROR] Missing env template: $source_path"
-    exit 1
+    fail_deploy "Missing env template: $source_path" "$LINENO"
   fi
 
   if sudo -n test -e "$target_path"; then
@@ -368,9 +375,7 @@ fi
 
 if [[ ! -d "$REPO_DIR/.git" ]]; then
   if [[ ! -d "$REPO_DIR" ]]; then
-    echo "[ERROR] Repository directory not found at $REPO_DIR"
-    echo "        Download the codeload archive or clone the mirror first."
-    exit 1
+    fail_deploy "Repository directory not found at $REPO_DIR" "$LINENO"
   fi
   echo "[INFO] No .git metadata found; continuing with local tree only"
 fi
@@ -389,8 +394,7 @@ if [[ "$SKIP_GIT_SYNC" != "true" && -d "$REPO_DIR/.git" ]]; then
   fi
 
   if [[ -z "$REMOTE_NAME" ]]; then
-    echo "[ERROR] No git remote found in $REPO_DIR"
-    exit 1
+    fail_deploy "No git remote found in $REPO_DIR" "$LINENO"
   fi
 
   if [[ -n "$REPO_REMOTE_URL" ]]; then
@@ -405,9 +409,7 @@ if [[ "$SKIP_GIT_SYNC" != "true" && -d "$REPO_DIR/.git" ]]; then
 fi
 
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
-  echo "[ERROR] Python virtualenv not found: $VENV_DIR"
-  echo "        Create it first with: python3 -m venv $VENV_DIR"
-  exit 1
+  fail_deploy "Python virtualenv not found: $VENV_DIR" "$LINENO"
 fi
 
 echo "[INFO] Validate Node.js version"
@@ -463,8 +465,7 @@ echo "[INFO] Install scraping toolkit"
 CURRENT_STEP="Install scraping toolkit"
 log_section "$CURRENT_STEP"
 if [[ ! -d "$TOOLKIT_DIR" ]]; then
-  echo "[ERROR] Scraping toolkit directory not found: $TOOLKIT_DIR"
-  exit 1
+  fail_deploy "Scraping toolkit directory not found: $TOOLKIT_DIR" "$LINENO"
 fi
 python -m pip install -e "$TOOLKIT_DIR" \
   -i "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST"
@@ -547,8 +548,7 @@ export DEPLOY_COMMIT_SHA
 npm run build
 
 if [[ ! -f "$FRONTEND_DIR/dist/index.html" ]]; then
-  echo "[ERROR] Frontend build did not produce dist/index.html"
-  exit 1
+  fail_deploy "Frontend build did not produce dist/index.html" "$LINENO"
 fi
 
 echo "[INFO] Precompress frontend static assets"
@@ -560,9 +560,7 @@ echo "[INFO] Restart backend service"
 CURRENT_STEP="Restart backend service"
 log_section "$CURRENT_STEP"
 if ! sudo -n systemctl cat "$BACKEND_SERVICE_NAME" >/dev/null 2>&1; then
-  echo "[ERROR] systemd service not found: $BACKEND_SERVICE_NAME"
-  echo "        Run bash 03_Scripts/tencent_fullstack_bootstrap.sh first."
-  exit 1
+  fail_deploy "systemd service not found: $BACKEND_SERVICE_NAME" "$LINENO"
 fi
 sudo -n systemctl restart "$BACKEND_SERVICE_NAME"
 sleep 2
@@ -584,8 +582,7 @@ for i in $(seq 1 15); do
     break
   fi
   if [[ "$i" -eq 15 ]]; then
-    echo "[ERROR] Health check failed after 15 attempts"
-    exit 1
+    fail_deploy "Health check failed after 15 attempts" "$LINENO"
   fi
   echo "[INFO] Health check attempt $i failed, retrying in 5s …"
   sleep 5

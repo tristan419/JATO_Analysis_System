@@ -73,7 +73,8 @@ run_shell "npm -v"
 section "repo"
 if [[ -d "$REPO_DIR/.git" ]]; then
   run_shell "git -C '$REPO_DIR' rev-parse --short HEAD"
-  run_shell "git -C '$REPO_DIR' status --short"
+  run_shell "git -C '$REPO_DIR' status --short --untracked-files=no"
+  run_shell "printf 'untracked_count=' && git -C '$REPO_DIR' ls-files --others --exclude-standard | wc -l"
 else
   echo "[WARN] repo not found: $REPO_DIR"
 fi
