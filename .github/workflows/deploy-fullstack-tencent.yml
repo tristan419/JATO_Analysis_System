@@ -252,22 +252,55 @@ jobs:
           export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$LOCAL_NO_PROXY_HOSTS"
 
           if [ -z "${DEPLOY_COMMIT_SHA:-}" ]; then
-            echo "[ERROR] DEPLOY_COMMIT_SHA is required for codeload deployment"
+            echo "[ERROR] DEPLOY_COMMIT_SHA is required for sparse deployment"
             exit 1
           fi
 
-          ARCHIVE_PATH="/tmp/JATO_deploy_${DEPLOY_COMMIT_SHA}.tar.gz"
-          ARCHIVE_URL="https://github.com/tristan419/JATO_Analysis_System/archive/${DEPLOY_COMMIT_SHA}.tar.gz"
+          RELEASE_WORKTREE="/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}"
+          RELEASE_REMOTE="https://github.com/tristan419/JATO_Analysis_System.git"
 
-          rm -f "$ARCHIVE_PATH"
-          curl -fL -C - --retry 5 --retry-delay 3 --connect-timeout 20 --max-time 900 \
-            -o "$ARCHIVE_PATH" "$ARCHIVE_URL"
-          ls -lh "$ARCHIVE_PATH"
+          rm -rf "$RELEASE_WORKTREE"
+          mkdir -p "$RELEASE_WORKTREE"
+          git -C "$RELEASE_WORKTREE" init
+          git -C "$RELEASE_WORKTREE" remote add origin "$RELEASE_REMOTE"
+          git -C "$RELEASE_WORKTREE" config advice.detachedHead false
+          git -C "$RELEASE_WORKTREE" config core.sparseCheckout true
+          git -C "$RELEASE_WORKTREE" config core.sparseCheckoutCone false
+          mkdir -p "$RELEASE_WORKTREE/.git/info"
+          cat > "$RELEASE_WORKTREE/.git/info/sparse-checkout" <<'SPARSE'
+          /03_Scripts/
+          /06_AppPlatform/
+          /07_ScrapingToolkit/
+          /hermes/
+          /01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx
+          /.nvmrc
+          /requirements.txt
+          /CODEX.md
+          SPARSE
+          git -C "$RELEASE_WORKTREE" fetch --depth=1 --filter=blob:none origin "$DEPLOY_COMMIT_SHA"
+          git -C "$RELEASE_WORKTREE" checkout --force FETCH_HEAD
 
           sudo mkdir -p "$REPO_DIR"
           sudo chown -R "$USER":"$USER" "$REPO_DIR"
-          sudo tar xzf "$ARCHIVE_PATH" -C "$REPO_DIR" --strip-components=1
-          rm -f "$ARCHIVE_PATH"
+          for release_path in 03_Scripts 06_AppPlatform 07_ScrapingToolkit hermes; do
+            if [ -e "$RELEASE_WORKTREE/$release_path" ]; then
+              rm -rf "$REPO_DIR/$release_path"
+              (cd "$RELEASE_WORKTREE" && tar cf - "$release_path") | (cd "$REPO_DIR" && tar xf -)
+            fi
+          done
+          if [ ! -f "$RELEASE_WORKTREE/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx" ]; then
+            echo "[ERROR] Sparse deploy missing required workbook"
+            exit 1
+          fi
+          mkdir -p "$REPO_DIR/01_RAW_DATA"
+          cp -f "$RELEASE_WORKTREE/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx" \
+            "$REPO_DIR/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
+          for release_file in .nvmrc requirements.txt CODEX.md; do
+            if [ -f "$RELEASE_WORKTREE/$release_file" ]; then
+              cp -f "$RELEASE_WORKTREE/$release_file" "$REPO_DIR/$release_file"
+            fi
+          done
+          rm -rf "$RELEASE_WORKTREE"
 
           export REPO_DIR
           python3 - <<'PY'
@@ -288,7 +321,7 @@ jobs:
               "workflowRunId": os.environ.get("DEPLOY_RUN_ID", ""),
               "workflowRunAttempt": os.environ.get("DEPLOY_RUN_ATTEMPT", ""),
               "packagedAt": _dt.datetime.now(_dt.UTC).isoformat(),
-              "source": "github_codeload_archive",
+              "source": "github_sparse_checkout",
           }
           out = root / "hermes" / "deploy_release.json"
           out.parent.mkdir(parents=True, exist_ok=True)
@@ -461,22 +494,55 @@ jobs:
           export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$LOCAL_NO_PROXY_HOSTS"
 
           if [ -z "${DEPLOY_COMMIT_SHA:-}" ]; then
-            echo "[ERROR] DEPLOY_COMMIT_SHA is required for codeload deployment"
+            echo "[ERROR] DEPLOY_COMMIT_SHA is required for sparse deployment"
             exit 1
           fi
 
-          ARCHIVE_PATH="/tmp/JATO_deploy_${DEPLOY_COMMIT_SHA}.tar.gz"
-          ARCHIVE_URL="https://github.com/tristan419/JATO_Analysis_System/archive/${DEPLOY_COMMIT_SHA}.tar.gz"
+          RELEASE_WORKTREE="/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}"
+          RELEASE_REMOTE="https://github.com/tristan419/JATO_Analysis_System.git"
 
-          rm -f "$ARCHIVE_PATH"
-          curl -fL -C - --retry 5 --retry-delay 3 --connect-timeout 20 --max-time 900 \
-            -o "$ARCHIVE_PATH" "$ARCHIVE_URL"
-          ls -lh "$ARCHIVE_PATH"
+          rm -rf "$RELEASE_WORKTREE"
+          mkdir -p "$RELEASE_WORKTREE"
+          git -C "$RELEASE_WORKTREE" init
+          git -C "$RELEASE_WORKTREE" remote add origin "$RELEASE_REMOTE"
+          git -C "$RELEASE_WORKTREE" config advice.detachedHead false
+          git -C "$RELEASE_WORKTREE" config core.sparseCheckout true
+          git -C "$RELEASE_WORKTREE" config core.sparseCheckoutCone false
+          mkdir -p "$RELEASE_WORKTREE/.git/info"
+          cat > "$RELEASE_WORKTREE/.git/info/sparse-checkout" <<'SPARSE'
+          /03_Scripts/
+          /06_AppPlatform/
+          /07_ScrapingToolkit/
+          /hermes/
+          /01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx
+          /.nvmrc
+          /requirements.txt
+          /CODEX.md
+          SPARSE
+          git -C "$RELEASE_WORKTREE" fetch --depth=1 --filter=blob:none origin "$DEPLOY_COMMIT_SHA"
+          git -C "$RELEASE_WORKTREE" checkout --force FETCH_HEAD
 
           sudo mkdir -p "$REPO_DIR"
           sudo chown -R "$USER":"$USER" "$REPO_DIR"
-          sudo tar xzf "$ARCHIVE_PATH" -C "$REPO_DIR" --strip-components=1
-          rm -f "$ARCHIVE_PATH"
+          for release_path in 03_Scripts 06_AppPlatform 07_ScrapingToolkit hermes; do
+            if [ -e "$RELEASE_WORKTREE/$release_path" ]; then
+              rm -rf "$REPO_DIR/$release_path"
+              (cd "$RELEASE_WORKTREE" && tar cf - "$release_path") | (cd "$REPO_DIR" && tar xf -)
+            fi
+          done
+          if [ ! -f "$RELEASE_WORKTREE/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx" ]; then
+            echo "[ERROR] Sparse deploy missing required workbook"
+            exit 1
+          fi
+          mkdir -p "$REPO_DIR/01_RAW_DATA"
+          cp -f "$RELEASE_WORKTREE/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx" \
+            "$REPO_DIR/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
+          for release_file in .nvmrc requirements.txt CODEX.md; do
+            if [ -f "$RELEASE_WORKTREE/$release_file" ]; then
+              cp -f "$RELEASE_WORKTREE/$release_file" "$REPO_DIR/$release_file"
+            fi
+          done
+          rm -rf "$RELEASE_WORKTREE"
 
           export REPO_DIR
           python3 - <<'PY'
@@ -497,7 +563,7 @@ jobs:
               "workflowRunId": os.environ.get("DEPLOY_RUN_ID", ""),
               "workflowRunAttempt": os.environ.get("DEPLOY_RUN_ATTEMPT", ""),
               "packagedAt": _dt.datetime.now(_dt.UTC).isoformat(),
-              "source": "github_codeload_archive",
+              "source": "github_sparse_checkout",
           }
           out = root / "hermes" / "deploy_release.json"
           out.parent.mkdir(parents=True, exist_ok=True)
