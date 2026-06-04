@@ -264,14 +264,13 @@ export function LeaseComparisonPage() {
 
       {/* ── Offer cards grid ── */}
       {viewMode === "cards" && (
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 12, marginBottom: 16 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 12, marginBottom: 16 }}>
-        {offers.map((o) => (
-          <div key={o.offerId} className="card crud-card"
-            style={{
-              padding: 16, cursor: "pointer", position: "relative",
-              border: compareIds.has(o.offerId) ? "2px solid #3b82f6" : (o.riskLevel === "high" ? "1px solid #f59e0b" : undefined),
-            }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 12, marginBottom: 16 }}>
+          {offers.map((o) => (
+            <div key={o.offerId} className="card crud-card"
+              style={{
+                padding: 16, cursor: "pointer", position: "relative",
+                border: compareIds.has(o.offerId) ? "2px solid #3b82f6" : (o.riskLevel === "high" ? "1px solid #f59e0b" : undefined),
+              }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
               <div>
                 <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -318,9 +317,9 @@ export function LeaseComparisonPage() {
                 )}
               </div>
             )}
-          </div>
-        ))}
-      </div>
+            </div>
+          ))}
+        </div>
       )}
 
       {/* ═══ Block E: Formula Drawer ═══ */}
