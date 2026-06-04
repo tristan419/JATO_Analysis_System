@@ -14,26 +14,6 @@ export const POWERTRAIN_COLORS: Record<string, string> = {
   BEV:  "#22c55e",
 };
 
-/** NEV filtered charts use one green color family across powertrain series. */
-export const NEV_POWERTRAIN_COLORS: Record<string, string> = {
-  BEV:  "#15803d",
-  PHEV: "#22c55e",
-  HEV:  "#65a30d",
-  MHEV: "#84cc16",
-  ICE:  "#86efac",
-};
-
-export const NEV_SERIES_COLORS = [
-  "#15803d",
-  "#22c55e",
-  "#65a30d",
-  "#84cc16",
-  "#10b981",
-  "#4ade80",
-  "#047857",
-  "#a3e635",
-];
-
 /** Canonical fuel-type palette (MarketScan uses the same colors plus LPG) */
 export const FUEL_COLORS: Record<string, string> = {
   ...POWERTRAIN_COLORS,
@@ -96,7 +76,40 @@ export function ptColor(name: string, fallback: string): string {
   return POWERTRAIN_COLORS[name] ?? POWERTRAIN_COLORS[name.toUpperCase()] ?? fallback;
 }
 
-export function nevPowertrainColor(name: string, idx: number): string {
-  const normalizedName = normalizePowertrainName(name);
-  return NEV_POWERTRAIN_COLORS[normalizedName] ?? NEV_SERIES_COLORS[idx % NEV_SERIES_COLORS.length];
+function hexToRgb(color: string): [number, number, number] | null {
+  const trimmed = color.trim().replace("#", "");
+  const expanded = trimmed.length === 3
+    ? trimmed.split("").map((part) => part + part).join("")
+    : trimmed;
+  if (!/^[0-9a-fA-F]{6}$/.test(expanded)) {
+    return null;
+  }
+  return [
+    Number.parseInt(expanded.slice(0, 2), 16),
+    Number.parseInt(expanded.slice(2, 4), 16),
+    Number.parseInt(expanded.slice(4, 6), 16),
+  ];
+}
+
+function mixHexColor(color: string, ratio: number, target: number): string {
+  const rgb = hexToRgb(color);
+  if (!rgb) return color;
+  const mixed = rgb.map((channel) => Math.round(channel + (target - channel) * ratio));
+  return `#${mixed.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function shadeHexColor(color: string, amount: number): string {
+  if (amount === 0) return color;
+  return amount > 0
+    ? mixHexColor(color, Math.min(amount, 0.55), 255)
+    : mixHexColor(color, Math.min(Math.abs(amount), 0.45), 0);
+}
+
+export function fuelFamilyColor(fuel: string, idx: number, total: number): string {
+  const baseColor = fuelColor(normalizePowertrainName(fuel));
+  if (total <= 1) return baseColor;
+  const shadeOffsets = [0.28, 0.18, 0.08, 0, -0.1, -0.2, -0.3, -0.38, -0.44, -0.5];
+  const safeIndex = Math.max(0, idx);
+  const shadeAmount = shadeOffsets[Math.min(safeIndex, shadeOffsets.length - 1)];
+  return shadeHexColor(baseColor, shadeAmount);
 }

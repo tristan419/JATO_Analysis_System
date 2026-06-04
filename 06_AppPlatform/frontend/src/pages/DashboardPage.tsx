@@ -26,7 +26,7 @@ import { LazyPlotlyChart as PlotlyChart } from "../components/LazyPlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
 import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanel";
 import { buildBubbleSizing } from "../utils/bubbleSizing";
-import { DEFAULT_POWERTRAINS, normalizePowertrainName, nevPowertrainColor, seriesColor } from "../utils/colors";
+import { DEFAULT_POWERTRAINS, fuelFamilyColor, normalizePowertrainName, seriesColor } from "../utils/colors";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 import { buildCategoryAxis, formatCompactBarLabel } from "../utils/plotlyDefaults";
 import { parseMonthLabel, toTimeOrdinal, compareTimeLabels } from "../utils/timeFormatting";
@@ -69,10 +69,15 @@ function resolveTimeSeriesSeriesColor(
   palette: string[],
   isPowertrain: boolean,
   manualColors: Record<string, string>,
+  focusedPowertrain: string | null,
+  total: number,
 ): string {
   const manualColor = manualColors[name];
   if (manualColor) return manualColor;
   const safeIndex = index >= 0 ? index : 0;
+  if (focusedPowertrain && !isPowertrain) {
+    return fuelFamilyColor(focusedPowertrain, safeIndex, total);
+  }
   return seriesColor(name, safeIndex, palette, isPowertrain);
 }
 
@@ -113,8 +118,26 @@ function usesNevPowertrainFilter(chart: string): boolean {
   return NEV_POWERTRAIN_FILTER_CHARTS.has(chart);
 }
 
-function usesNevGreenPowertrainPalette(chart: string, colorKey: string): boolean {
-  return usesNevPowertrainFilter(chart) && colorKey === "Powertrain";
+function readSinglePowertrain(values: readonly string[]): string | null {
+  const normalized = uniqueNonEmptyStrings(values.map((value) => normalizePowertrainName(String(value))));
+  return normalized.length === 1 ? normalized[0] : null;
+}
+
+function resolveAdvancedSeriesColor(
+  name: string,
+  index: number,
+  total: number,
+  palette: string[],
+  isPowertrainSeries: boolean,
+  manualColors: Record<string, string>,
+  focusedPowertrain: string | null,
+): string {
+  const manualColor = manualColors[name];
+  if (manualColor) return manualColor;
+  if (focusedPowertrain && !isPowertrainSeries) {
+    return fuelFamilyColor(focusedPowertrain, index, total);
+  }
+  return seriesColor(name, index, palette, isPowertrainSeries);
 }
 
 type DeckSectionKey = "timeSeries" | "advanced" | "modelVersion" | "positioning";
@@ -1033,6 +1056,14 @@ export function DashboardPage() {
   const advPalette = useMemo(() => getExportPalette(advExport.colorScheme), [advExport.colorScheme]);
   const mvPalette = useMemo(() => getExportPalette(mvExport.colorScheme), [mvExport.colorScheme]);
   const pmPalette = useMemo(() => getExportPalette(pmExport.colorScheme), [pmExport.colorScheme]);
+  const filterFocusedPowertrain = useMemo(
+    () => readSinglePowertrain(selections.powertrain),
+    [selections.powertrain],
+  );
+  const advancedFocusedPowertrain = useMemo(
+    () => filterFocusedPowertrain ?? (usesNevPowertrainFilter(advChart) ? readSinglePowertrain(advPowertrains) : null),
+    [advChart, advPowertrains, filterFocusedPowertrain],
+  );
   const tsLabelModeOptions = useMemo(
     () => buildExportLabelModeOptions({ showValue: true, showSeries: isGrouped }),
     [isGrouped],
@@ -1222,9 +1253,15 @@ export function DashboardPage() {
           x: rangeBands.map(rangeBand => valueMap.get(rangeBand) ?? 0),
           y: rangeBands,
           marker: {
-            color: isPowertrainStack
-              ? nevPowertrainColor(series, seriesIndex)
-              : seriesColor(series, seriesIndex, advPalette, false),
+            color: resolveAdvancedSeriesColor(
+              series,
+              seriesIndex,
+              nevStackSeries.length,
+              advPalette,
+              isPowertrainStack,
+              advExport.seriesColors,
+              advancedFocusedPowertrain,
+            ),
           },
           hovertemplate: `${brand ? `${brand}<br>` : ""}%{y:.0f} km<br>${series}: %{x:,.0f}<extra></extra>`,
           showlegend: facetIndex === 0,
@@ -1314,7 +1351,9 @@ export function DashboardPage() {
     advChart,
     advItems,
     advNevRangeQuery,
+    advExport.seriesColors,
     advPalette,
+    advancedFocusedPowertrain,
     nevAxisMaxMeta,
     nevBrands,
     nevChartTitle,
@@ -1622,6 +1661,8 @@ export function DashboardPage() {
                       tsPalette,
                       isPt,
                       tsExport.seriesColors,
+                      filterFocusedPowertrain,
+                      allSeriesNames.length,
                     ),
                   } as React.CSSProperties}
                   onClick={()=>setHiddenSeries(prev=>{const n=new Set(prev);n.has(name)?n.delete(name):n.add(name);return n;})}>
@@ -1644,6 +1685,8 @@ export function DashboardPage() {
                     tsPalette,
                     false,
                     tsExport.seriesColors,
+                    filterFocusedPowertrain,
+                    1,
                   );
                   const trace = chartType === "line" ? {
                     x: aggregatedSingle.map(s => s.time),
@@ -1680,6 +1723,8 @@ export function DashboardPage() {
                 tsPalette,
                 isPt,
                 tsExport.seriesColors,
+                filterFocusedPowertrain,
+                allSeriesNames.length,
               );
               const base: Partial<Data> = {
                 x: seriesData.map(d => d.time),
@@ -1733,6 +1778,8 @@ export function DashboardPage() {
                     tsPalette,
                     tsGroupDim === "\u52a8\u603b\u89c4\u6574",
                     tsExport.seriesColors,
+                    filterFocusedPowertrain,
+                    allSeriesNames.length,
                   );
                 }),
               },
@@ -2007,7 +2054,7 @@ export function DashboardPage() {
                     <label key={pt} className={"adv-powertrain-chip"+(advPowertrains.includes(pt)?" is-active":"")}>
                       <input type="checkbox" checked={advPowertrains.includes(pt)}
                         onChange={e=>{const next=e.target.checked?[...advPowertrains,pt]:advPowertrains.filter(x=>x!==pt);setAdvPowertrains(next);}} />
-                      <span className="adv-powertrain-chip-swatch" style={{"--pt-color": nevPowertrainColor(pt, index)} as React.CSSProperties} />
+                      <span className="adv-powertrain-chip-swatch" style={{"--pt-color": fuelFamilyColor(pt, 0, 1)} as React.CSSProperties} />
                       <span>{pt}</span>
                     </label>
                   ))}
@@ -2126,7 +2173,15 @@ export function DashboardPage() {
               {advItems.map((row, index)=>{
                 const lb=String(row.label??"-"); const val=Number(row.value??0);
                 const pct=Math.max(1,Math.round((val/maxBar)*100));
-                const fillColor = advExport.seriesColors[lb] ?? advPalette[index % advPalette.length];
+                const fillColor = resolveAdvancedSeriesColor(
+                  lb,
+                  index,
+                  advItems.length,
+                  advPalette,
+                  false,
+                  advExport.seriesColors,
+                  advancedFocusedPowertrain,
+                );
                 return (<div className="bar-row" key={lb+"-"+val}>
                   <span className="bar-label">{lb}</span>
                   <div className="bar-track"><div className="bar-fill" style={{width:pct+"%", background: fillColor}} /></div>
@@ -2151,7 +2206,6 @@ export function DashboardPage() {
               return localCats.map((cat, i) => {
                 const subset = items.filter(r=>String(r[ax.color]??"")=== cat);
                 const isBubbleMsrp = advChart === "powertrain_bubble";
-                const useNevGreen = usesNevGreenPowertrainPalette(advChart, ax.color);
                 const bubbleYoyTemplate = isBubbleMsrp && bubbleYoyEnabled && bubbleYoyCompareYear && bubbleYoyBaseYear
                   ? `<br>${bubbleYoyBaseYear} Sales: %{customdata[4]:,.0f}<br>${bubbleYoyCompareYear} Sales: %{customdata[5]:,.0f}<br>YoY: %{customdata[6]:+.1f}%`
                   : "";
@@ -2174,9 +2228,15 @@ export function DashboardPage() {
                   mode: "markers",
                   name: cat,
                   marker: {
-                    color: useNevGreen
-                      ? nevPowertrainColor(cat, i)
-                      : seriesColor(cat, i, advPalette, isPtScatter),
+                    color: resolveAdvancedSeriesColor(
+                      cat,
+                      i,
+                      localCats.length,
+                      advPalette,
+                      isPtScatter,
+                      advExport.seriesColors,
+                      advancedFocusedPowertrain,
+                    ),
                     size: subset.map(r => Math.max(0, Number(r[ax.z] ?? 0))),
                     sizemode: scatterBubbleSizing.sizemode,
                     sizeref: scatterBubbleSizing.sizeref,
@@ -2535,7 +2595,17 @@ export function DashboardPage() {
                 : { x: stackData.map(r => r[xKey] as number), y: stackData.map(r => Number(r[k] ?? 0)) }),
               type: "bar" as const,
               name: k,
-              marker: { color: seriesColor(k, i, advPalette, isPtStack) },
+              marker: {
+                color: resolveAdvancedSeriesColor(
+                  k,
+                  i,
+                  stackKeys.length,
+                  advPalette,
+                  isPtStack,
+                  advExport.seriesColors,
+                  advancedFocusedPowertrain,
+                ),
+              },
               ...(advChart === "segment_share_by_length" ? {
                 text: stackData.map(r => { const v = Number(r[k] ?? 0); const t = xTotals.get(r[xKey]) ?? 1; return t > 0 ? (v / t * 100).toFixed(0) + "%" : ""; }),
                 textposition: "inside" as const,
@@ -2561,15 +2631,26 @@ export function DashboardPage() {
           {/* price migration area/line */}
           {advChart==="price_migration" && migrationData.length > 0 && (() => {
             const isArea = advMigrationMode === "area";
-            const traces: Data[] = migrationYears.map((yr, i) => ({
-              x: migrationData.map(r => r.priceBand as number),
-              y: migrationData.map(r => Number(r[yr] ?? 0)),
-              type: "scatter" as const,
-              mode: "lines" as const,
-              ...(isArea ? { fill: "tozeroy" as const, fillcolor: advPalette[i % advPalette.length] + "26" } : {}),
-              name: yr,
-              line: { color: advPalette[i % advPalette.length], width: 2 },
-            }));
+            const traces: Data[] = migrationYears.map((yr, i) => {
+              const color = resolveAdvancedSeriesColor(
+                yr,
+                i,
+                migrationYears.length,
+                advPalette,
+                false,
+                advExport.seriesColors,
+                advancedFocusedPowertrain,
+              );
+              return {
+                x: migrationData.map(r => r.priceBand as number),
+                y: migrationData.map(r => Number(r[yr] ?? 0)),
+                type: "scatter" as const,
+                mode: "lines" as const,
+                ...(isArea ? { fill: "tozeroy" as const, fillcolor: `${color}26` } : {}),
+                name: yr,
+                line: { color, width: 2 },
+              };
+            });
             return (
               <div ref={el => { advChartRef.current = el; }}>
                 <PlotlyChart
@@ -2698,7 +2779,15 @@ export function DashboardPage() {
                 mode: "markers",
                 name: cat,
                 marker: {
-                  color: seriesColor(cat, i, mvPalette, isPtBubble),
+                  color: resolveAdvancedSeriesColor(
+                    cat,
+                    i,
+                    cats.length,
+                    mvPalette,
+                    isPtBubble,
+                    mvExport.seriesColors,
+                    filterFocusedPowertrain,
+                  ),
                   size: subset.map(r => Math.max(0, r.Sales)),
                   sizemode: mvBubbleSizing.sizemode,
                   sizeref: mvBubbleSizing.sizeref,
@@ -2834,7 +2923,15 @@ export function DashboardPage() {
                 mode: "markers",
                 name: "Cluster " + cid,
                 marker: {
-                  color: pmPalette[i % pmPalette.length],
+                  color: resolveAdvancedSeriesColor(
+                    "Cluster " + cid,
+                    i,
+                    clusterIds.length,
+                    pmPalette,
+                    false,
+                    pmExport.seriesColors,
+                    filterFocusedPowertrain,
+                  ),
                   size: subset.map(r => Math.max(0, r.Sales)),
                   sizemode: pmBubbleSizing.sizemode,
                   sizeref: pmBubbleSizing.sizeref,
