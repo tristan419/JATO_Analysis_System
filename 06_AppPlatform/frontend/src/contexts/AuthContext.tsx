@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from "react";
 
+import { apiUrl } from "../api/client";
+
 export interface User {
   username: string;
   role: string;
@@ -146,7 +148,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       || import.meta.env.VITE_AUTH_TOKEN
       || ""
     ).trim();
-    const res = await fetch("/v1/auth/me", {
+    const res = await fetch(apiUrl("/auth/me"), {
       headers: {
         ...(currentToken ? { "X-Auth-Token": currentToken } : {}),
         "X-User-Name": localStorage.getItem(STORAGE_USER) || import.meta.env.VITE_USER_NAME || "anonymous",
@@ -199,7 +201,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refreshUser, token]);
 
   const login = useCallback(async (username: string, password: string) => {
-    const res = await fetch("/v1/auth/login", {
+    const res = await fetch(apiUrl("/auth/login"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
@@ -219,7 +221,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const updateProfile = useCallback(async (payload: UserProfileUpdate) => {
     const currentToken = localStorage.getItem(STORAGE_TOKEN);
-    const res = await fetch("/v1/auth/me/profile", {
+    const res = await fetch(apiUrl("/auth/me/profile"), {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
@@ -242,7 +244,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     const currentToken = localStorage.getItem(STORAGE_TOKEN);
     if (currentToken) {
-      void fetch("/v1/auth/logout", {
+      void fetch(apiUrl("/auth/logout"), {
         method: "POST",
         keepalive: true,
         headers: {

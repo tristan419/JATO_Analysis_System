@@ -143,10 +143,16 @@ import {
   getMonthlyUpdateRetryDelayMs,
 } from "../utils/jatoMonthlyUpdate";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "/v1";
+export const API_BASE = import.meta.env.VITE_API_BASE ?? "/v1";
 const MONTHLY_UPDATE_RESUME_PROBE_BYTES = 1024 * 1024;
 const MONTHLY_UPDATE_UPLOAD_SESSION_STORAGE_PREFIX = "jato_monthly_update_upload_session:";
 const MONTHLY_UPDATE_UPLOAD_MAX_ATTEMPTS = 4;
+
+export function apiUrl(path: string): string {
+  const normalizedBase = API_BASE.endsWith("/") ? API_BASE.slice(0, -1) : API_BASE;
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${normalizedBase}${normalizedPath}`;
+}
 
 function getAuthHeaders(): Record<string, string> {
   const token = (
@@ -250,7 +256,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const promise = (async () => {
     let response: Response;
     try {
-      response = await fetch(`${API_BASE}${path}`, {
+      response = await fetch(apiUrl(path), {
         headers: buildHeaders(init, { includeJsonContentType: true }),
         ...init
       });
@@ -285,7 +291,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}${path}`, {
+    response = await fetch(apiUrl(path), {
       headers: buildHeaders(init),
       ...init
     });
@@ -1299,15 +1305,18 @@ async function requestJatoMonthlyUpdateUploadChunk(
 ): Promise<JatoMonthlyUpdateUploadSession> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}/msrp/monthly-update-uploads/${uploadId}/parts/${partNumber}`, {
-      method: "PUT",
-      headers: new Headers({
-        ...getAuthHeaders(),
-        "Content-Type": "application/octet-stream",
-        "X-Chunk-SHA256": chunkSha256
-      }),
-      body: chunk
-    });
+    response = await fetch(
+      apiUrl(`/msrp/monthly-update-uploads/${uploadId}/parts/${partNumber}`),
+      {
+        method: "PUT",
+        headers: new Headers({
+          ...getAuthHeaders(),
+          "Content-Type": "application/octet-stream",
+          "X-Chunk-SHA256": chunkSha256
+        }),
+        body: chunk
+      },
+    );
   } catch (error) {
     if (isAbortLikeError(error)) {
       throw error;
@@ -1472,7 +1481,7 @@ export const api = {
     onDone: (suggestions: string[]) => void,
     onError: (error: string) => void,
   ): Promise<void> => {
-    const response = await fetch(`${API_BASE}/assistant/country/chat/stream`, {
+    const response = await fetch(apiUrl("/assistant/country/chat/stream"), {
       method: "POST",
       headers: buildHeaders(
         { headers: { Accept: "text/event-stream" } },
@@ -2990,6 +2999,18 @@ export const api = {
     request<PiOrderLine>(
       `/order-genius/vehicle-allocation/lines/${encodeURIComponent(piLineCode)}`,
       { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
+  deleteVehicleAllocationPi: (piCode: string) =>
+    request<{ pi_code: string; deleted: boolean }>(
+      `/order-genius/vehicle-allocation/pi/${encodeURIComponent(piCode)}`,
+      { method: "DELETE" },
+    ),
+
+  deleteVehicleAllocationLine: (piLineCode: string) =>
+    request<{ pi_line_code: string; deleted: boolean }>(
+      `/order-genius/vehicle-allocation/lines/${encodeURIComponent(piLineCode)}`,
+      { method: "DELETE" },
     ),
 
   listVehicleAllocationVehicles: (params: VehicleAllocationFilters = {}) => {

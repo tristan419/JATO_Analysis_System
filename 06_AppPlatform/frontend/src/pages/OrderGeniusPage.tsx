@@ -10,7 +10,7 @@ import {
   type KeyboardEvent,
 } from "react";
 
-import { api } from "../api/client";
+import { api, apiUrl } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
 import type { CellValueChangedEvent } from "ag-grid-community";
@@ -437,26 +437,23 @@ export function OrderGeniusPage() {
           || (a.interiorColorName || "").localeCompare(b.interiorColorName || "")
           || a.materialCode.localeCompare(b.materialCode);
       });
-      // Sum TTL, monthly totals, and weighted avg FOB for the group
+      // Sum TTL, monthly totals, and floor FOB for the group
       let groupTtl = 0;
-      let totalQtyForFob = 0;
-      let fobWeightedSum = 0;
+      let floorFob: number | null = null;
       const monthlySums: number[] = new Array(13).fill(0); // index 1-12
       for (const r of groupRows) {
         const months = r.months || {};
-        let childQty = 0;
         for (let m = 1; m <= 12; m++) {
           const q = months[String(m)]?.quantity ?? 0;
           monthlySums[m] += q;
           groupTtl += q;
-          childQty += q;
         }
-        if (childQty > 0 && (r.fobEur ?? 0) > 0) {
-          totalQtyForFob += childQty;
-          fobWeightedSum += childQty * (r.fobEur ?? 0);
+        const fob = r.fobEur ?? 0;
+        if (fob > 0 && (floorFob === null || fob < floorFob)) {
+          floorFob = fob;
         }
       }
-      const avgFob = totalQtyForFob > 0 ? fobWeightedSum / totalQtyForFob : (groupRows[0]?.fobEur ?? null);
+      const groupFob = floorFob ?? (groupRows[0]?.fobEur ?? null);
       const expanded = expandedProductGroups.has(groupKey);
       const displayName = formatProductModelName(brand, modelName, version);
       const labelName = formatProductModelName(brand, modelName);
@@ -466,7 +463,7 @@ export function OrderGeniusPage() {
         modelName: displayName,
         version: "",
         colour: "",
-        fobEur: avgFob,
+        fobEur: groupFob,
         lifecycleStatus: "active",
         editable: false,
         remark: "",
@@ -2514,7 +2511,7 @@ function PaymentTermAdminPanel() {
     const h: Record<string, string> = { "Content-Type": "application/json" };
     if (t) h["X-Auth-Token"] = t;
     try {
-      const res = await fetch("/v1/order-genius/payment-terms/countries", {
+      const res = await fetch(apiUrl("/order-genius/payment-terms/countries"), {
         method: "POST", headers: h,
         body: JSON.stringify({ countryCode: newPt.countryCode.toUpperCase(), countryName: newPt.countryName, paymentTermCode: newPt.paymentTermCode, paymentMethod: "TT" }),
       });
@@ -2533,7 +2530,7 @@ function PaymentTermAdminPanel() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/v1/order-genius/payment-terms/countries", { headers: authHdrs() });
+      const res = await fetch(apiUrl("/order-genius/payment-terms/countries"), { headers: authHdrs() });
       if (res.ok) setPts((await res.json()).items || []);
     } catch { /* */ }
     setLoading(false);
@@ -2555,7 +2552,7 @@ function PaymentTermAdminPanel() {
     if (isCorrect && !confirmMsg) {
       try {
         const params = new URLSearchParams({ country: row.countryCode, oldPaymentTerm: row.paymentTermCode, newPaymentTerm: editForm.paymentTermCode || row.paymentTermCode, validFrom: editForm.validFrom || row.validFrom || "", validTo: editForm.validTo || row.validTo || "" });
-        const res = await fetch("/v1/order-genius/payment-terms/countries/impact?" + params, { headers: authHdrs() });
+        const res = await fetch(apiUrl("/order-genius/payment-terms/countries/impact?" + params), { headers: authHdrs() });
         if (res.ok) {
           const imp = await res.json();
           setImpact(imp);
@@ -2567,7 +2564,7 @@ function PaymentTermAdminPanel() {
       } catch { /* */ }
     }
     try {
-      const res = await fetch("/v1/order-genius/payment-terms/countries/" + row.id, {
+      const res = await fetch(apiUrl("/order-genius/payment-terms/countries/" + row.id), {
         method: "PATCH", headers: { ...authHdrs(), "Content-Type": "application/json" },
         body: JSON.stringify({ ...editForm, correction: isCorrect }),
       });
@@ -2671,7 +2668,7 @@ function PaymentTermAdminPanel() {
                         <button className="btn btn-sm btn-ghost" style={{ color: "#dc2626" }} onClick={async () => {
                           if (!confirm(`Close payment term for ${row.countryCode}? This deactivates it.`)) return;
                           const t = localStorage.getItem("jato_auth_token");
-                          await fetch(`/v1/order-genius/payment-terms/countries/${row.id}/close`, { method: "POST", headers: { "X-Auth-Token": t || "", "Content-Type": "application/json" }, body: "{}" });
+                          await fetch(apiUrl(`/order-genius/payment-terms/countries/${row.id}/close`), { method: "POST", headers: { "X-Auth-Token": t || "", "Content-Type": "application/json" }, body: "{}" });
                           setEditingId(null); load();
                         }}>Delete</button>
                       </div>

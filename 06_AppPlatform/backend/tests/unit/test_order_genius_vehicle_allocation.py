@@ -12,8 +12,10 @@ from app.services import order_genius_vehicle_service as vehicle_service
 from app.services.order_genius_vehicle_exporter import generate_vehicle_allocation_excel
 from app.services.order_genius_vehicle_import_parser import parse_vehicle_allocation_xlsx
 from app.services.order_genius_vehicle_service import (
+    _ensure_vehicle_units_for_line_allocations,
     _line_items_from_order_quantities,
     _line_payload_from_material,
+    _market_country_codes_for_line_items,
     build_car_code,
     build_pi_code,
     build_pi_line_code,
@@ -355,6 +357,76 @@ def test_combined_pi_allocations_validate_each_market_country(monkeypatch) -> No
 
     assert exc.value.status_code == 409
     assert "FI A: requested 2, remaining 1" in str(exc.value.detail)
+
+
+def test_combined_pi_header_market_countries_include_all_allocations() -> None:
+    market_countries = _market_country_codes_for_line_items(
+        ["SE"],
+        "SE",
+        [
+            {
+                "materialCode": "A",
+                "allocations": [
+                    {"countryCode": "SE", "quantity": 2},
+                    {"marketCountryCode": "FI", "quantity": 1},
+                ],
+            }
+        ],
+    )
+
+    assert market_countries == ["SE", "FI"]
+
+
+def test_combined_pi_vehicle_units_keep_market_country_per_allocation(monkeypatch) -> None:
+    added = []
+    header = SimpleNamespace(
+        pi_id=uuid4(),
+        pi_code="PI-NORDIC-202607-001",
+        country_code="SE",
+        order_month="2026-07",
+        pi_sequence_no=1,
+        etd=None,
+        eta=None,
+        ready_for_pickup_date=None,
+        ship_name=None,
+    )
+    line = SimpleNamespace(
+        pi_line_id=uuid4(),
+        pi_line_code="PI-NORDIC-202607-001-L01",
+        line_sequence_no=1,
+        material_code="A",
+        bom="BOM-A",
+        brand="OMODA",
+        model_name="OMODA9",
+        version="Exclusive",
+        powertrain="PHEV",
+        exterior_color_name="Black",
+        exterior_color_code="CL",
+        interior_color_name="Black",
+        interior_colour_code="BK",
+        quantity=3,
+    )
+
+    monkeypatch.setattr(vehicle_repo, "count_vehicles_for_line", lambda session, pi_line_code: 0)
+    monkeypatch.setattr(vehicle_repo, "add_vehicle", lambda session, vehicle: added.append(vehicle) or vehicle)
+
+    _ensure_vehicle_units_for_line_allocations(
+        object(),
+        header,
+        line,
+        [
+            {"countryCode": "SE", "quantity": 2},
+            {"countryCode": "FI", "quantity": 1},
+        ],
+        "tester",
+    )
+
+    assert [vehicle.country_code for vehicle in added] == ["SE", "SE", "FI"]
+    assert [vehicle.car_code for vehicle in added] == [
+        "CAR-SE-2607-001-L01-0001",
+        "CAR-SE-2607-001-L01-0002",
+        "CAR-FI-2607-001-L01-0003",
+    ]
 
 
 def test_bulk_vehicle_update_assigns_vins_to_empty_units_in_car_code_order(monkeypatch) -> None:

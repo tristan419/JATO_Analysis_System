@@ -357,3 +357,23 @@ def add_vehicle(session: Session, vehicle: PiVehicleUnit) -> PiVehicleUnit:
     session.add(vehicle)
     session.flush()
     return vehicle
+
+
+def delete_header(session: Session, pi_code: str) -> bool:
+    """Hard-delete a PI header. Cascades to lines, allocations, vehicles via FK."""
+    header = get_header_by_code(session, pi_code)
+    if not header:
+        return False
+    session.delete(header)
+    session.flush()
+    return True
+
+
+def delete_line(session: Session, pi_line_code: str) -> bool:
+    """Hard-delete a PI line. Cascades to allocations, vehicles via FK."""
+    line = get_line_by_code(session, pi_line_code)
+    if not line:
+        return False
+    session.delete(line)
+    session.flush()
+    return True

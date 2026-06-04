@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import (
+    APP_FRONTEND_ORIGIN,
     AUTH_ENABLED,
     FEISHU_ENABLED,
     FEISHU_REDIRECT_URI,
+    FRONTEND_ORIGINS,
     GOOGLE_ENABLED,
     GOOGLE_REDIRECT_URI,
 )
@@ -126,18 +128,52 @@ def _safe_frontend_redirect(value: str | None) -> str:
 
 
 def _frontend_origin() -> str:
-    import os as _os
-
-    return _os.getenv("APP_FRONTEND_ORIGIN", "http://127.0.0.1:5173").rstrip("/")
+    return APP_FRONTEND_ORIGIN.rstrip("/")
 
 
-def _frontend_url(path: str, params: dict[str, str]) -> str:
+def _origin_from_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    parsed = urlparse(value)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+
+def _allowed_frontend_origin(value: str | None) -> str | None:
+    candidate = _origin_from_url(value) or str(value or "").strip().rstrip("/")
+    if candidate and candidate in {origin.rstrip("/") for origin in FRONTEND_ORIGINS}:
+        return candidate
+    return None
+
+
+def _frontend_origin_for_request(request: Request) -> str:
+    origin = _allowed_frontend_origin(request.headers.get("origin"))
+    if origin:
+        return origin
+    referer_origin = _origin_from_url(request.headers.get("referer"))
+    origin = _allowed_frontend_origin(referer_origin)
+    return origin or _frontend_origin()
+
+
+def _frontend_url(
+    path: str,
+    params: dict[str, str],
+    origin: str | None = None,
+) -> str:
     safe_path = _safe_frontend_redirect(path)
+    frontend_origin = _allowed_frontend_origin(origin) or _frontend_origin()
+    if not params:
+        return f"{frontend_origin}{safe_path}"
     separator = "&" if "?" in safe_path else "?"
-    return f"{_frontend_origin()}{safe_path}{separator}{urlencode(params)}"
+    return f"{frontend_origin}{safe_path}{separator}{urlencode(params)}"
 
 
-def _oauth_error_redirect(message: str, redirect: str) -> RedirectResponse:
+def _oauth_error_redirect(
+    message: str,
+    redirect: str,
+    origin: str | None = None,
+) -> RedirectResponse:
     return RedirectResponse(
         url=_frontend_url(
             "/login",
@@ -145,6 +181,7 @@ def _oauth_error_redirect(message: str, redirect: str) -> RedirectResponse:
                 "oauthError": message,
                 "redirect": _safe_frontend_redirect(redirect),
             },
+            origin,
         )
     )
 
@@ -538,13 +575,14 @@ def review_role_upgrade(
 
 @router.get("/feishu/auth-url")
 def feishu_auth_url(
+    request: Request,
     redirect: str = Query("/", description="Frontend page to return to"),
 ) -> dict:
     """Return the Feishu authorization URL."""
     if not FEISHU_ENABLED:
         raise HTTPException(status_code=503, detail="Feishu login not configured")
     state = secrets.token_urlsafe(16)
-    url = _build_feishu_url(state, redirect)
+    url = _build_feishu_url(state, redirect, _frontend_origin_for_request(request))
     return {"url": url, "state": state}
 
 
@@ -553,6 +591,7 @@ def feishu_callback(
     code: str = Query(...),
     state: str = Query(...),
     redirect: str = Query("/"),
+    frontend_origin: str | None = Query(None),
     db: Session = Depends(get_db_session),
 ) -> RedirectResponse:
     """Feishu OAuth callback — exchange code, find/create user, redirect with token."""
@@ -592,19 +631,36 @@ def feishu_callback(
         db.commit()
         db.refresh(user)
 
-    import os as _os2  # noqa: F811
     token = session_store.create(user.username, user.role)
-    origin = _os2.getenv("APP_FRONTEND_ORIGIN", "http://127.0.0.1:5173")
-    frontend_url = f"{origin}{redirect}?token={token}&username={user.username}&role={user.role}"
+    frontend_url = _frontend_url(
+        redirect,
+        {
+            "token": token,
+            "username": user.username,
+            "role": user.role,
+        },
+        frontend_origin,
+    )
     return RedirectResponse(url=frontend_url)
 
 
-def _build_feishu_url(state: str, redirect: str) -> str:
+def _build_feishu_url(
+    state: str,
+    redirect: str,
+    frontend_origin: str,
+) -> str:
     from app.services.feishu_service import build_auth_url
 
     callback = (
         FEISHU_REDIRECT_URI
-        + "?" + urlencode({"state": state, "redirect": redirect})
+        + "?"
+        + urlencode(
+            {
+                "state": state,
+                "redirect": _safe_frontend_redirect(redirect),
+                "frontend_origin": frontend_origin,
+            }
+        )
     )
     return build_auth_url(state=state, redirect_uri=callback)
 
@@ -616,6 +672,7 @@ import json as _json
 
 @router.get("/google/auth-url")
 def google_auth_url(
+    request: Request,
     redirect: str = Query("/", description="Frontend page to return to"),
 ) -> dict:
     """Return the Google OAuth authorization URL."""
@@ -624,6 +681,7 @@ def google_auth_url(
     # Encode redirect destination into the state param (Google passes it back)
     state = _json.dumps({
         "redirect": _safe_frontend_redirect(redirect),
+        "frontend_origin": _frontend_origin_for_request(request),
         "nonce": secrets.token_urlsafe(8),
     })
     from app.services.google_service import build_auth_url
@@ -644,10 +702,14 @@ def google_callback(
 
     # Decode redirect destination from state
     redirect = "/"
+    frontend_origin = None
     try:
         state_data = _json.loads(state)
         if isinstance(state_data, dict):
             redirect = _safe_frontend_redirect(state_data.get("redirect", "/"))
+            frontend_origin = _allowed_frontend_origin(
+                str(state_data.get("frontend_origin") or "")
+            )
     except (_json.JSONDecodeError, TypeError):
         pass
 
@@ -656,7 +718,11 @@ def google_callback(
     try:
         user_info = exchange_code(code, GOOGLE_REDIRECT_URI)
     except Exception as exc:
-        return _oauth_error_redirect(f"Google auth failed: {exc}", redirect)
+        return _oauth_error_redirect(
+            f"Google auth failed: {exc}",
+            redirect,
+            frontend_origin,
+        )
 
     email = str(user_info.get("email") or "").strip()
     google_id = str(user_info.get("id") or user_info.get("sub") or "")
@@ -664,7 +730,11 @@ def google_callback(
     picture = str(user_info.get("picture") or "").strip()
 
     if not email or not google_id:
-        return _oauth_error_redirect("Missing Google account info", redirect)
+        return _oauth_error_redirect(
+            "Missing Google account info",
+            redirect,
+            frontend_origin,
+        )
 
     # 1. Find by OAuth subject (returning Google user)
     user = (
@@ -754,5 +824,5 @@ def google_callback(
     }
     if is_new:
         params["isNewUser"] = "true"
-    frontend_url = _frontend_url(redirect, params)
+    frontend_url = _frontend_url(redirect, params, frontend_origin)
     return RedirectResponse(url=frontend_url)

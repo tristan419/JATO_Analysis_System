@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 
+import { apiUrl } from "../api/client";
+
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const SESSION_KEY = "jato_presence_session_id";
 const USER_NAME_KEY = "jato_user_name";
@@ -55,7 +57,7 @@ export function usePresence() {
       user_name: getUserName(),
       current_page: location.pathname,
     };
-    fetch("/v1/presence/heartbeat", {
+    fetch(apiUrl("/presence/heartbeat"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

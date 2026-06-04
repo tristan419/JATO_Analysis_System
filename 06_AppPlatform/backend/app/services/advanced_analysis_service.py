@@ -323,6 +323,13 @@ def list_profile_filter_options(country: str | None = None) -> dict[str, Any]:
     return _cached_or_compute(key, _compute)
 
 
+def list_available_countries() -> dict[str, Any]:
+    """Return countries present in the active JATO parquet dataset."""
+    cols = _get_columns()
+    countries = repo.load_distinct_options(cols.country_value, {})
+    return {"countries": countries}
+
+
 def build_fact_sales_monthly(
     country: str | None = None,
     fuel_types: list[str] | None = None,

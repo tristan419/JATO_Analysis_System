@@ -266,6 +266,7 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
         items: [
           { label: "Pricing", sublabel: "定位定价", to: "/product/pricing" },
           { label: "Compare", sublabel: "版型对比", to: "/product/compare" },
+          { label: "Lease Comparison", sublabel: "租赁对比", to: "/product/lease-comparison" },
           { label: "Customer Insight", sublabel: "看客户", to: "/product/customer-insight" },
           { label: "Current MSRP", sublabel: "当前价格", to: "/product/current-msrp" },
         ],

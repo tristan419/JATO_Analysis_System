@@ -21,6 +21,8 @@ from app.services.order_genius_vehicle_service import (
     bulk_update_vehicle_units,
     create_pi_header,
     create_pi_line,
+    delete_pi,
+    delete_pi_line,
     export_vehicle_units,
     generate_from_order_matrix,
     get_order_matrix_allocation_plan,
@@ -237,6 +239,21 @@ def patch_pi_order(
     return result
 
 
+@router.delete("/pi/{pi_code}")
+def delete_pi_order(
+    pi_code: str,
+    session: Session = Depends(get_db_session),
+    _: UserContext = Depends(require_min_role("admin")),
+) -> dict:
+    """Hard-delete a PI and all its lines, allocations, vehicles. Admin only."""
+    try:
+        result = delete_pi(session, pi_code.upper())
+        session.commit()
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.post("/pi/{pi_code}/lines")
 def create_pi_order_line(
     pi_code: str,
@@ -266,6 +283,21 @@ def patch_pi_order_line(
     line = update_pi_line(session, pi_line_code.upper(), body, user.name)
     session.commit()
     return line
+
+
+@router.delete("/lines/{pi_line_code}")
+def delete_pi_order_line(
+    pi_line_code: str,
+    session: Session = Depends(get_db_session),
+    _: UserContext = Depends(require_min_role("order_filler")),
+) -> dict:
+    """Hard-delete a PI line and its allocations, vehicles."""
+    try:
+        result = delete_pi_line(session, pi_line_code.upper())
+        session.commit()
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/vehicles")

@@ -107,6 +107,22 @@ def test_transfer_mart_repeated_scope_filters_are_or_filters(monkeypatch: pytest
     assert result["losers"][0]["model"] == "Model A"
 
 
+def test_list_available_countries_uses_active_dataset_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    class StubColumns:
+        country_value = "国家"
+
+    monkeypatch.setattr(advanced_analysis_service, "_get_columns", lambda: StubColumns())
+    monkeypatch.setattr(
+        advanced_analysis_service.repo,
+        "load_distinct_options",
+        lambda column, filters: ["奥地利", "瑞典"] if column == "国家" and filters == {} else [],
+    )
+
+    result = advanced_analysis_service.list_available_countries()
+
+    assert result == {"countries": ["奥地利", "瑞典"]}
+
+
 def test_competitor_set_returns_product_battlefield_and_channel_series(monkeypatch: pytest.MonkeyPatch) -> None:
     fact = pd.DataFrame(
         [

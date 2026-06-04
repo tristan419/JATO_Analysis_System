@@ -304,6 +304,7 @@ export interface UpdateVehiclePayload {
 export interface BulkVehicleUpdatePayload {
   piCode?: string;
   piLineCode?: string;
+  carCodes?: string[];
   vinList?: string[];
   fields?: UpdateVehiclePayload;
 }

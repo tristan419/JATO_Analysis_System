@@ -11,8 +11,10 @@ import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefault
 import { SERIES_COLORS } from "../utils/colors";
 import { DEFAULT_EXPORT, ExportPanel, downloadPng, type ExportSettings } from "../components/ExportPanel";
 import { DeckExportDrawer, DeckFloatingDrawer } from "../components/deckControls";
+import { JATO_COUNTRIES, formatJatoCountryOption } from "../utils/jatoCountries";
 import type {
   AdvancedAnalysisCompetitorSetRequest,
+  AdvancedAnalysisCountriesResponse,
   AdvancedAnalysisProfileDimension,
   AdvancedAnalysisProfileOptions,
   AdvancedAnalysisProfileOptionsResponse,
@@ -29,7 +31,10 @@ import type {
 /* ── Constants ── */
 
 const DEFAULT_COUNTRY = "瑞典";
-const COUNTRY_OPTIONS = ["瑞典","挪威","丹麦","芬兰","德国","英国","法国","荷兰","比利时","意大利","西班牙"];
+const STATIC_COUNTRY_OPTIONS = JATO_COUNTRIES.map((country) => ({
+  value: country.marketScanCountry,
+  label: formatJatoCountryOption(country),
+}));
 const CHART_MARGIN = { l: 52, r: 24, t: 20, b: 48 } as const;
 const DEFAULT_AA_EXPORT: ExportSettings = { ...DEFAULT_EXPORT, exportWidth: 1920, exportHeight: 1080, dataLabelMode: "value", fontSize: 11 };
 const COLORS = { growth: "#10b981", decline: "#ef4444", stable: "#94a3b8", market: "#3b82f6", share: "#10b981", mix: "#f59e0b", interaction: "#8b5cf6", winner: "#10b981", loser: "#ef4444" };
@@ -65,6 +70,8 @@ const EMPTY_PROFILE_OPTIONS: AdvancedAnalysisProfileOptions = {
 type DecompositionKey = "market_carryover" | "channel_mix" | "drive_mix" | "powertrain_mix" | "pure_share_shift" | "interaction";
 type SortKey = "model" | "dV" | "pure_share_shift" | DecompositionKey;
 type RoleColorKey = "likely_source" | "likely_recipient" | "co_winner" | "co_loser" | "adjacent" | "target";
+type CountryOption = { value: string; label: string };
+type RankedModelOption = { model: string; score: number; index: number };
 
 /* ── Helpers ── */
 
@@ -74,6 +81,49 @@ function getGraphDiv(): HTMLElement | null { return document.querySelector(".cha
 function fmtNum(n: number): string { return n.toLocaleString(undefined, { maximumFractionDigits: 0 }); }
 function fmtPct(n: number): string { return `${(n * 100).toFixed(1)}%`; }
 function fmtBp(n: number): string { return `${(n * 10000).toFixed(0)} bp`; }
+function normalizeLookupText(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, " ")
+    .trim();
+}
+function tokenizeModelQuery(query: string): string[] {
+  return normalizeLookupText(query).split(/\s+/).filter(Boolean);
+}
+function scoreModelOption(model: string, query: string): number | null {
+  const normalizedModel = normalizeLookupText(model);
+  const normalizedQuery = normalizeLookupText(query);
+  if (!normalizedQuery) return 1;
+  const tokens = tokenizeModelQuery(query);
+  if (tokens.length === 0) return 1;
+  if (!tokens.every((token) => normalizedModel.includes(token))) return null;
+  let score = 10;
+  if (normalizedModel === normalizedQuery) score += 100;
+  if (normalizedModel.startsWith(normalizedQuery)) score += 45;
+  score += tokens.reduce((sum, token) => {
+    if (normalizedModel.startsWith(token)) return sum + 18;
+    if (normalizedModel.split(" ").some((word) => word.startsWith(token))) return sum + 12;
+    return sum + Math.max(1, 8 - normalizedModel.indexOf(token));
+  }, 0);
+  return score;
+}
+function mergeCountryOptions(datasetCountries: string[], activeCountry: string): CountryOption[] {
+  const byValue = new Map<string, CountryOption>();
+  for (const option of STATIC_COUNTRY_OPTIONS) {
+    byValue.set(option.value, option);
+  }
+  for (const country of datasetCountries) {
+    const value = country.trim();
+    if (!value || byValue.has(value)) continue;
+    byValue.set(value, { value, label: value });
+  }
+  if (activeCountry && !byValue.has(activeCountry)) {
+    byValue.set(activeCountry, { value: activeCountry, label: activeCountry });
+  }
+  return Array.from(byValue.values());
+}
 function dominantComponent(model: TransferMartModel): string {
   const components: Array<{ label: string; value: number }> = [
     { label: "market carryover", value: model.market_carryover },
@@ -159,6 +209,7 @@ function formatProfileSpecValue(field: CompetitorProductSpecKey, value?: number)
 export function AdvancedAnalysisPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [country, setCountry] = useState(() => searchParams.get("country") || (() => { try { return sessionStorage.getItem("aa_country"); } catch { return null; } })() || DEFAULT_COUNTRY);
+  const [availableCountries, setAvailableCountries] = useState<string[]>([]);
   const [period, setPeriod] = useState(() => searchParams.get("period") || "");
   const [timeMode, setTimeMode] = useState<AdvancedAnalysisSalesMode>("month");
   const [compareMode, setCompareMode] = useState(false);
@@ -185,9 +236,41 @@ export function AdvancedAnalysisPage() {
   const [data, setData] = useState<TransferMartResponse | null>(null);
   const [competitorData, setCompetitorData] = useState<CompetitorSetResponse | null>(null);
   const [targetModel, setTargetModel] = useState(() => searchParams.get("model") || "");
+  const [targetModelSearch, setTargetModelSearch] = useState(() => searchParams.get("model") || "");
   const [filterOpen, setFilterOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportSettings, setExportSettings] = useState<ExportSettings>(DEFAULT_AA_EXPORT);
+  const countryOptions = useMemo(() => mergeCountryOptions(availableCountries, country), [availableCountries, country]);
+  const targetModelCandidates = useMemo(() => {
+    const candidates = [
+      ...(competitorData?.model_options || []),
+      ...profileOptions.model,
+      ...(data?.models.map(model => model.model) || []),
+      competitorData?.target_model || "",
+      targetModel,
+    ];
+    return Array.from(new Set(candidates.map(model => model.trim()).filter(Boolean)));
+  }, [competitorData?.model_options, competitorData?.target_model, data?.models, profileOptions.model, targetModel]);
+  const targetModelMatches = useMemo(() => {
+    const ranked: RankedModelOption[] = [];
+    targetModelCandidates.forEach((model, index) => {
+      const score = scoreModelOption(model, targetModelSearch);
+      if (score === null) return;
+      ranked.push({ model, score: model === targetModel ? score + 25 : score, index });
+    });
+    return ranked
+      .sort((a, b) => b.score - a.score || a.index - b.index || a.model.localeCompare(b.model))
+      .slice(0, 16)
+      .map(option => option.model);
+  }, [targetModel, targetModelCandidates, targetModelSearch]);
+  const targetSearchTrimmed = targetModelSearch.trim();
+  const exactTargetModel = useMemo(() => {
+    if (!targetSearchTrimmed) return "";
+    const normalizedSearch = normalizeLookupText(targetSearchTrimmed);
+    return targetModelCandidates.find(model => normalizeLookupText(model) === normalizedSearch) || "";
+  }, [targetModelCandidates, targetSearchTrimmed]);
+  const suggestedTargetModel = exactTargetModel || targetModelMatches[0] || targetSearchTrimmed;
+  const canApplyTargetModel = Boolean(targetSearchTrimmed && suggestedTargetModel !== targetModel);
 
   // URL sync
   useEffect(() => {
@@ -206,9 +289,26 @@ export function AdvancedAnalysisPage() {
     try { sessionStorage.setItem("aa_country", country); } catch { /* ignore */ }
   }, [country, period, profileSelections, targetModel, setSearchParams]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    api.get<AdvancedAnalysisCountriesResponse>("/advanced-analysis/countries", { signal: controller.signal })
+      .then(response => setAvailableCountries(response.countries || []))
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        if (error instanceof Error && error.name === "AbortError") return;
+        setAvailableCountries([]);
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    setTargetModelSearch(targetModel);
+  }, [targetModel]);
+
   // Load profile options when country changes
   useEffect(() => {
     const controller = new AbortController();
+    setProfileOptions(EMPTY_PROFILE_OPTIONS);
     const timeoutId = window.setTimeout(() => {
       api.get<AdvancedAnalysisProfileOptionsResponse>(
         `/advanced-analysis/profile-options?country=${encodeURIComponent(country)}`,
@@ -226,6 +326,12 @@ export function AdvancedAnalysisPage() {
       controller.abort();
     };
   }, [country]);
+
+  useEffect(() => {
+    if (!targetModel || profileOptions.model.length === 0) return;
+    if (profileOptions.model.includes(targetModel)) return;
+    setTargetModel("");
+  }, [profileOptions.model, targetModel]);
 
   // Fetch data
   const buildScope = useCallback(() => {
@@ -369,7 +475,9 @@ export function AdvancedAnalysisPage() {
       >
         <div className="deck-panel-grid">
           <label className="market-scan-field"><span>Country</span>
-            <select value={country} onChange={e => setCountry(e.target.value)}>{COUNTRY_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}</select>
+            <select value={country} onChange={e => setCountry(e.target.value)}>
+              {countryOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
           </label>
           <label className="market-scan-field"><span>{compareMode ? "Period A" : "Period"}</span>
             <input type="month" value={period} onChange={e => { setPeriod(e.target.value); setTimeMode("month"); }}
@@ -388,18 +496,47 @@ export function AdvancedAnalysisPage() {
               ))}
             </div>
           </label>
-          <label className="market-scan-field deck-panel-grid__wide"><span>Target Model</span>
-            <input
-              list="aa-target-model-options"
-              value={targetModel}
-              onChange={e => setTargetModel(e.target.value)}
-              placeholder="Optional: choose an in-system model, or leave empty for profile mode"
-              style={{ minHeight: 40, width: "100%", padding: "10px 12px", border: "1px solid rgba(15,23,42,0.12)", borderRadius: 6, fontSize: 13 }}
-            />
-            <datalist id="aa-target-model-options">
-              {Array.from(new Set([...(competitorData?.model_options || []), ...profileOptions.model, ...(data?.models.map(m => m.model) || [])])).map(model => <option key={model} value={model} />)}
-            </datalist>
-          </label>
+          <div className="market-scan-field deck-panel-grid__wide">
+            <span>Target Model</span>
+            <div className="aa-target-model-picker">
+              <input
+                type="search"
+                value={targetModelSearch}
+                onChange={e => setTargetModelSearch(e.target.value)}
+                onKeyDown={event => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  setTargetModel(targetSearchTrimmed ? suggestedTargetModel : "");
+                }}
+                placeholder="Search target model"
+                className="aa-target-model-input"
+              />
+              <div className="aa-target-model-actions">
+                <span className="aa-target-model-status">{targetModel ? `Target: ${targetModel}` : "Profile mode"}</span>
+                {canApplyTargetModel ? (
+                  <button type="button" className="aa-target-model-action" onClick={() => setTargetModel(suggestedTargetModel)}>Apply</button>
+                ) : null}
+                {targetModel || targetModelSearch ? (
+                  <button type="button" className="aa-target-model-action" onClick={() => { setTargetModel(""); setTargetModelSearch(""); }}>Clear</button>
+                ) : null}
+              </div>
+              <div className="aa-target-model-options">
+                {targetModelMatches.map(model => (
+                  <button
+                    key={model}
+                    type="button"
+                    className={`aa-target-model-option${model === targetModel ? " is-active" : ""}`}
+                    onClick={() => setTargetModel(model)}
+                  >
+                    <span>{model}</span>
+                  </button>
+                ))}
+                {targetModelMatches.length === 0 && targetSearchTrimmed ? (
+                  <div className="aa-target-model-empty">No matching model</div>
+                ) : null}
+              </div>
+            </div>
+          </div>
           <div className="market-scan-field deck-panel-grid__wide">
             <span>Known Product Specs</span>
             <div className="aa-spec-input-grid">

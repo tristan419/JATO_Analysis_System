@@ -403,6 +403,10 @@ export interface AdvancedAnalysisProfileOptionsResponse {
   options: AdvancedAnalysisProfileOptions;
 }
 
+export interface AdvancedAnalysisCountriesResponse {
+  countries: string[];
+}
+
 // ── Drill-down types (legacy) ──
 
 export interface DrilldownResponse {

@@ -208,6 +208,11 @@ export function OrderGeniusVehicleAllocationPage() {
   const [total, setTotal] = useState(0);
   const [piHeaders, setPiHeaders] = useState<PiOrderHeader[]>([]);
   const [selectedPi, setSelectedPi] = useState<PiOrderDetail | null>(null);
+  const [deleteConfirmPi, setDeleteConfirmPi] = useState<string | null>(null);
+  // Multi-select state
+  const [selectedCarCodes, setSelectedCarCodes] = useState<Set<string>>(new Set());
+  const [batchForm, setBatchForm] = useState<Record<string, string>>({});
+  const [batchSaving, setBatchSaving] = useState(false);
   const [selectedLineCode, setSelectedLineCode] = useState<string | null>(null);
   const [selectedVehicle, setSelectedVehicle] = useState<PiVehicleUnit | null>(null);
   const [editForm, setEditForm] = useState<EditableVehicleForm | null>(null);
@@ -223,7 +228,7 @@ export function OrderGeniusVehicleAllocationPage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [piForm, setPiForm] = useState<PiForm>({
     countryCode: defaultCountry,
-    orderMonth: currentMonth(),
+    orderMonth: "",
     orderDate: "",
     officialPiNo: "",
     shipName: "",
@@ -516,6 +521,76 @@ export function OrderGeniusVehicleAllocationPage() {
       setError(err instanceof Error ? err.message : "生成 PI 失败");
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function handleDeletePi(piCode: string): Promise<void> {
+    setError(null);
+    try {
+      await api.deleteVehicleAllocationPi(piCode);
+      setDeleteConfirmPi(null);
+      setSelectedPi(null);
+      setRefreshKey((key) => key + 1);
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : "Delete failed"); }
+  }
+
+  async function handleDeleteLine(piLineCode: string): Promise<void> {
+    setError(null);
+    try {
+      await api.deleteVehicleAllocationLine(piLineCode);
+      setRefreshKey((key) => key + 1);
+      if (selectedPi) {
+        const detail = await api.getVehicleAllocationPi(selectedPi.header.piCode);
+        setPiVehicleScope(detail, detail.lines[0]?.piLineCode ?? null);
+      }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : "Delete line failed"); }
+  }
+
+  function toggleVehicleSelect(carCode: string) {
+    setSelectedCarCodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(carCode)) next.delete(carCode); else next.add(carCode);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    const allCodes = vehicles.map((v) => v.carCode);
+    if (allCodes.every((c) => selectedCarCodes.has(c))) {
+      setSelectedCarCodes(new Set());
+    } else {
+      setSelectedCarCodes(new Set(allCodes));
+    }
+  }
+
+  async function applyBatchToSelected(): Promise<void> {
+    if (selectedCarCodes.size === 0) return;
+    const fields = Object.fromEntries(
+      Object.entries(batchForm).filter(([, v]) => v && v !== "Keep"),
+    );
+    if (Object.keys(fields).length === 0) {
+      setError("请填写至少一个批量字段");
+      return;
+    }
+    setBatchSaving(true);
+    setError(null);
+    try {
+      const result = await api.bulkUpdateVehicleAllocationVehicles({
+        piCode: selectedPi?.header.piCode ?? undefined,
+        piLineCode: selectedLineCode ?? undefined,
+        carCodes: Array.from(selectedCarCodes),
+        fields,
+      });
+      setSelectedCarCodes(new Set());
+      setBatchForm({});
+      const detail = selectedPi ? await api.getVehicleAllocationPi(selectedPi.header.piCode) : null;
+      if (detail) setSelectedPi(detail);
+      setRefreshKey((key) => key + 1);
+      setNotice(`Updated ${result.updatedUnits}/${result.matchedUnits} vehicles`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "批量更新失败");
+    } finally {
+      setBatchSaving(false);
     }
   }
 
@@ -919,6 +994,22 @@ export function OrderGeniusVehicleAllocationPage() {
                   <span>{selectedPi.summary.totalUnits ?? 0} units</span>
                   <span>{selectedPi.summary.vinMissing ?? 0} no VIN</span>
                   <span>{selectedPi.summary.readyForPickup ?? 0} ready</span>
+                  {deleteConfirmPi === selectedPi.header.piCode ? (
+                    <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                      <span style={{ fontSize: 12, color: "#dc2626", fontWeight: 600 }}>Delete?</span>
+                      <button type="button" className="btn btn-sm btn-primary" style={{ background: "#dc2626", padding: "2px 10px", fontSize: 11 }}
+                        onClick={() => handleDeletePi(selectedPi.header.piCode)}>Yes</button>
+                      <button type="button" className="btn btn-sm btn-ghost" style={{ padding: "2px 10px", fontSize: 11 }}
+                        onClick={() => setDeleteConfirmPi(null)}>No</button>
+                    </span>
+                  ) : (
+                    <button type="button" className="btn btn-sm btn-ghost"
+                      onClick={() => setDeleteConfirmPi(selectedPi.header.piCode)}
+                      style={{ color: "#dc2626", fontSize: 11 }}
+                      title="Delete this PI and all its lines, allocations, and vehicles">
+                      Delete PI
+                    </button>
+                  )}
                 </div>
               </div>
               <form className="va-bulk-panel" onSubmit={(event) => void applyBulkUpdate(event)}>
@@ -962,36 +1053,83 @@ export function OrderGeniusVehicleAllocationPage() {
               </form>
               {selectedPi.lines.length > 0 ? (
                 <div className="va-line-list">
-                  <button
-                    type="button"
-                    className={`va-line-row va-line-all ${selectedLineCode === null ? "is-active" : ""}`}
-                    onClick={() => selectLineScope(null)}
-                    title="Use the whole PI as the vehicle table and batch-edit scope"
-                  >
-                    <strong>All PI</strong>
-                    <span>{selectedPi.header.piCode} · Qty {selectedPi.summary.totalUnits ?? 0}</span>
-                    <small>{selectedPi.summary.vinMissing ?? 0} no VIN</small>
-                  </button>
+                  <div className={`va-line-row va-line-all ${selectedLineCode === null ? "is-active" : ""}`}>
+                    <button type="button" className="va-line-body" onClick={() => selectLineScope(null)}
+                      title="Use the whole PI as the vehicle table and batch-edit scope">
+                      <strong>All PI</strong>
+                      <span>{selectedPi.header.piCode} · Qty {selectedPi.summary.totalUnits ?? 0}</span>
+                      <small>{selectedPi.summary.vinMissing ?? 0} no VIN</small>
+                    </button>
+                  </div>
                   {selectedPi.lines.map((line) => (
-                    <button
-                      type="button"
+                    <div
                       key={line.piLineCode}
                       className={`va-line-row ${selectedLineCode === line.piLineCode ? "is-active" : ""}`}
-                      onClick={() => selectLineScope(line.piLineCode)}
-                      title="Line quantity and market split generated from order matrix allocation"
                     >
-                      <strong>{line.piLineCode}</strong>
-                      <span>{display(line.materialCode)} · {display(line.modelName)} / {display(line.version)} · Qty {line.quantity}</span>
-                      <small>
-                        {(line.allocations ?? []).length > 0
-                          ? (line.allocations ?? []).map((allocation) => `${allocation.marketCountryCode} ${allocation.quantity}`).join(" · ")
-                          : `Market ${selectedPi.header.countryCode} ${line.quantity}`}
-                      </small>
-                    </button>
+                      <button type="button" className="va-line-body" onClick={() => selectLineScope(line.piLineCode)}
+                        title="Line quantity and market split generated from order matrix allocation">
+                        <strong>{line.piLineCode}</strong>
+                        <span>{display(line.materialCode)} · {display(line.modelName)} / {display(line.version)} · Qty {line.quantity}</span>
+                        <small>
+                          {(line.allocations ?? []).length > 0
+                            ? (line.allocations ?? []).map((allocation) => `${allocation.marketCountryCode} ${allocation.quantity}`).join(" · ")
+                            : `Market ${selectedPi.header.countryCode} ${line.quantity}`}
+                        </small>
+                      </button>
+                      <button
+                        type="button"
+                        className="va-line-delete"
+                        title="Delete this line"
+                        onClick={() => void handleDeleteLine(line.piLineCode)}
+                      >✕</button>
+                    </div>
                   ))}
                 </div>
               ) : null}
             </section>
+          )}
+
+          {/* ── Batch action bar (visible when vehicles selected) ── */}
+          {selectedCarCodes.size > 0 && (
+            <div style={{
+              display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
+              padding: "8px 12px", background: "#eff6ff", border: "1px solid #93c5fd",
+              borderRadius: 6, marginBottom: 8, fontSize: 13,
+            }}>
+              <span style={{ fontWeight: 600, color: "#1e40af" }}>{selectedCarCodes.size} selected</span>
+              <input type="date" placeholder="ETD" value={batchForm.etd ?? ""}
+                onChange={(e) => setBatchForm((f) => ({ ...f, etd: e.target.value }))}
+                style={{ padding: "3px 6px", fontSize: 12, borderRadius: 4, border: "1px solid #d1d5db" }} />
+              <input type="date" placeholder="ETA" value={batchForm.eta ?? ""}
+                onChange={(e) => setBatchForm((f) => ({ ...f, eta: e.target.value }))}
+                style={{ padding: "3px 6px", fontSize: 12, borderRadius: 4, border: "1px solid #d1d5db" }} />
+              <input type="text" placeholder="Ship name" value={batchForm.shipName ?? ""}
+                onChange={(e) => setBatchForm((f) => ({ ...f, shipName: e.target.value }))}
+                style={{ padding: "3px 6px", fontSize: 12, borderRadius: 4, border: "1px solid #d1d5db", width: 120 }} />
+              <input type="text" placeholder="Dealer code" value={batchForm.dealerCode ?? ""}
+                onChange={(e) => setBatchForm((f) => ({ ...f, dealerCode: e.target.value }))}
+                style={{ padding: "3px 6px", fontSize: 12, borderRadius: 4, border: "1px solid #d1d5db", width: 100 }} />
+              <select value={batchForm.allocationStatus ?? "Keep"}
+                onChange={(e) => setBatchForm((f) => ({ ...f, allocationStatus: e.target.value }))}
+                style={{ padding: "3px 6px", fontSize: 12, borderRadius: 4, border: "1px solid #d1d5db" }}>
+                <option value="Keep">Alloc...</option>
+                {ALLOCATION_STATUSES.map((s) => <option key={s} value={s}>{statusText(s)}</option>)}
+              </select>
+              <select value={batchForm.logisticsStatus ?? "Keep"}
+                onChange={(e) => setBatchForm((f) => ({ ...f, logisticsStatus: e.target.value }))}
+                style={{ padding: "3px 6px", fontSize: 12, borderRadius: 4, border: "1px solid #d1d5db" }}>
+                <option value="Keep">Logi...</option>
+                {LOGISTICS_STATUSES.map((s) => <option key={s} value={s}>{statusText(s)}</option>)}
+              </select>
+              <button type="button" className="btn btn-sm btn-primary" disabled={batchSaving}
+                onClick={applyBatchToSelected} style={{ fontSize: 12 }}>
+                {batchSaving ? "Applying..." : `Apply to ${selectedCarCodes.size}`}
+              </button>
+              <button type="button" className="btn btn-sm btn-ghost"
+                onClick={() => { setSelectedCarCodes(new Set()); setBatchForm({}); }} style={{ fontSize: 12 }}>
+                Clear
+              </button>
+            </div>
           )}
 
           <section className="va-table-wrap">
@@ -1007,6 +1145,12 @@ export function OrderGeniusVehicleAllocationPage() {
               <table className="va-table">
                 <thead>
                   <tr>
+                    <th style={{ width: 32 }}>
+                      <input type="checkbox"
+                        checked={vehicles.length > 0 && vehicles.every((v) => selectedCarCodes.has(v.carCode))}
+                        onChange={toggleSelectAll}
+                        style={{ margin: 0 }} />
+                    </th>
                     <th>Car Code</th>
                     <th>VIN</th>
                     <th>PI</th>
@@ -1023,30 +1167,37 @@ export function OrderGeniusVehicleAllocationPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {vehicles.map((vehicle) => (
+                  {vehicles.map((vehicle) => {
+                    const isChecked = selectedCarCodes.has(vehicle.carCode);
+                    return (
                     <tr
                       key={vehicle.carCode}
                       className={selectedVehicle?.carCode === vehicle.carCode ? "is-selected" : ""}
-                      onClick={() => selectVehicle(vehicle)}
                     >
-                      <td>{vehicle.carCode}</td>
-                      <td>{display(vehicle.vin)}</td>
-                      <td>{vehicle.piCode}</td>
-                      <td>{vehicle.countryCode}</td>
-                      <td>{display(vehicle.materialCode)}</td>
-                      <td>{display(vehicle.modelName)} / {display(vehicle.version)}</td>
-                      <td>{display(vehicle.exteriorColorName)}</td>
-                      <td>{display(vehicle.interiorColorName)}</td>
-                      <td><span className={`va-status va-status-${vehicle.allocationStatus}`}>{statusText(vehicle.allocationStatus)}</span></td>
-                      <td><span className={`va-status va-status-${vehicle.logisticsStatus}`}>{statusText(vehicle.logisticsStatus)}</span></td>
-                      <td>{display(vehicle.shipName)}</td>
-                      <td>{display(vehicle.eta)}</td>
-                      <td>{display(vehicle.readyForPickupDate)}</td>
+                      <td>
+                        <input type="checkbox" checked={isChecked}
+                          onChange={() => toggleVehicleSelect(vehicle.carCode)}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{ margin: 0 }} />
+                      </td>
+                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{vehicle.carCode}</td>
+                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.vin)}</td>
+                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{vehicle.piCode}</td>
+                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{vehicle.countryCode}</td>
+                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.materialCode)}</td>
+                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.modelName)} / {display(vehicle.version)}</td>
+                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.exteriorColorName)}</td>
+                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.interiorColorName)}</td>
+                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}><span className={`va-status va-status-${vehicle.allocationStatus}`}>{statusText(vehicle.allocationStatus)}</span></td>
+                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}><span className={`va-status va-status-${vehicle.logisticsStatus}`}>{statusText(vehicle.logisticsStatus)}</span></td>
+                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.shipName)}</td>
+                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.eta)}</td>
+                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.readyForPickupDate)}</td>
                     </tr>
-                  ))}
+                  );})}
                   {!loading && vehicles.length === 0 && (
                     <tr>
-                      <td colSpan={13} className="va-empty">{selectedPi ? "No vehicles in current scope" : "Select a PI to view vehicles"}</td>
+                      <td colSpan={14} className="va-empty">{selectedPi ? "No vehicles in current scope" : "Select a PI to view vehicles"}</td>
                     </tr>
                   )}
                 </tbody>
@@ -1138,11 +1289,14 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-bulk-fields label{display:grid;gap:5px;font-size:12px;font-weight:700;color:#475467}
         .va-line-form{display:grid;grid-template-columns:repeat(10,minmax(82px,1fr)) auto;gap:8px;margin-top:12px}
         .va-line-list{display:grid;gap:6px;margin-top:12px}
-        .va-line-row{display:grid;grid-template-columns:170px minmax(0,1fr) minmax(140px,auto);gap:8px;align-items:center;border:1px solid #e5eaf0;border-radius:6px;padding:8px;background:#fbfcfe;color:#111827;text-align:left}
+        .va-line-row{display:flex;align-items:stretch;border:1px solid #e5eaf0;border-radius:6px;background:#fbfcfe;color:#111827;overflow:hidden}
         .va-line-row.is-active{border-color:#1c69d4;background:#eef5ff}
         .va-line-all{background:#fff}
-        .va-line-row strong{font-size:12px}
-        .va-line-row span,.va-line-row small{font-size:12px;color:#667085;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .va-line-body{display:grid;grid-template-columns:170px minmax(0,1fr) minmax(150px,auto);gap:8px;align-items:center;flex:1;padding:8px;border:none;background:none;cursor:pointer;text-align:left;color:inherit;font:inherit}
+        .va-line-body strong{font-size:12px}
+        .va-line-body span,.va-line-body small{font-size:12px;color:#667085;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .va-line-delete{display:flex;align-items:center;justify-content:center;width:32px;flex-shrink:0;border:none;border-left:1px solid #e5eaf0;background:#f9fafb;color:#d1d5db;cursor:pointer;font-size:14px;padding:0}
+        .va-line-delete:hover{background:#fef2f2;color:#ef4444;border-left-color:#fecaca}
         .va-table-wrap{overflow:hidden}
         .va-table-head{padding:10px 12px;border-bottom:1px solid #e5eaf0}
         .va-table-head div{display:flex;gap:8px;align-items:center}

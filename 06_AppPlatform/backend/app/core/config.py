@@ -47,6 +47,19 @@ def _parse_float_env(name: str, default: float) -> float:
         return default
 
 
+def _parse_csv_env(name: str, default: str) -> list[str]:
+    raw_value = os.getenv(name, default)
+    return [item.strip().rstrip("/") for item in raw_value.split(",") if item.strip()]
+
+
+def _dedupe_values(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if value and value not in result:
+            result.append(value)
+    return result
+
+
 def _default_project_root() -> Path:
     # .../06_AppPlatform/backend/app/core/config.py -> project root
     return Path(__file__).resolve().parents[4]
@@ -178,11 +191,26 @@ GOOGLE_OAUTH_TIMEOUT_SECONDS = _parse_float_env(
     15.0,
 )
 
-CORS_ORIGINS: list[str] = [
-    origin.strip()
-    for origin in os.getenv(
-        "APP_CORS_ORIGINS",
-        "http://localhost:5173,http://localhost:3000",
-    ).split(",")
-    if origin.strip()
-]
+APP_FRONTEND_ORIGIN = os.getenv(
+    "APP_FRONTEND_ORIGIN",
+    "http://127.0.0.1:5173",
+).strip().rstrip("/")
+FRONTEND_ORIGINS = _dedupe_values(
+    [
+        APP_FRONTEND_ORIGIN,
+        *_parse_csv_env(
+            "APP_FRONTEND_ORIGINS",
+            "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,https://www.ojeur.cloud,https://intl.ojeur.cloud",
+        ),
+    ]
+)
+
+CORS_ORIGINS = _dedupe_values(
+    [
+        *_parse_csv_env(
+            "APP_CORS_ORIGINS",
+            "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,https://www.ojeur.cloud,https://intl.ojeur.cloud",
+        ),
+        *FRONTEND_ORIGINS,
+    ]
+)

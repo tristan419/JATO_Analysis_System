@@ -2156,3 +2156,113 @@ class QuantityCellHistory(Base):
     changed_at_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(),
     )
+
+
+# ── Lease Comparison ───────────────────────────────────────────────
+
+
+class LeaseOffer(TimestampMixin, Base):
+    """A single lease offer card — Private/Fleet/Financial leasing."""
+
+    __tablename__ = "lease_offers"
+    __table_args__ = (
+        Index("ix_leasing_offer_country", "country_code"),
+        Index("ix_leasing_offer_brand_model", "brand", "model_name"),
+        Index("ix_leasing_offer_status", "status"),
+        {"schema": "leasing"},
+    )
+
+    offer_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    currency: Mapped[str] = mapped_column(Text, nullable=False, default="EUR")
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    model_name: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    powertrain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    segment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lease_type: Mapped[str] = mapped_column(Text, nullable=False, default="private")
+    provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ── FX ──
+    fx_rate_to_eur: Mapped[float | None] = mapped_column(Numeric(14, 8), nullable=True)
+    fx_rate_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    fx_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fx_locked: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # ── Financials (original currency) ──
+    monthly_payment: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    monthly_payment_eur: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    effective_monthly_eur: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    down_payment: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    down_payment_eur: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    upfront_amount: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    upfront_treatment: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ── Lease terms ──
+    term_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mileage_per_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cap_cost: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    cap_cost_eur: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    residual_value: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    residual_value_eur: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    residual_value_percent: Mapped[float | None] = mapped_column(Numeric(8, 4), nullable=True)
+    apr_percent: Mapped[float | None] = mapped_column(Numeric(8, 4), nullable=True)
+    money_factor: Mapped[float | None] = mapped_column(Numeric(12, 8), nullable=True)
+    apr_source: Mapped[str | None] = mapped_column(Text, nullable=True, default="manual")
+
+    # ── Inclusions & flags ──
+    rv_guaranteed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    service_included: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    insurance_included: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    tyre_included: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    vat_included: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    deposit_required: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    deposit_refundable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    # ── Meta ──
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="draft")
+    source_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    effective_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    total_contract_cost_eur: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    risk_level: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_version: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class LeaseOfferVersion(TimestampMixin, Base):
+    """Immutable snapshot of a lease offer before modification."""
+
+    __tablename__ = "lease_offer_versions"
+    __table_args__ = (
+        Index("ix_leasing_version_offer", "offer_id"),
+        {"schema": "leasing"},
+    )
+
+    version_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    offer_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("leasing.lease_offers.offer_id", ondelete="CASCADE"), nullable=False,
+    )
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    change_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class LeaseCompareSet(TimestampMixin, Base):
+    """Named set of selected offer IDs for comparison."""
+
+    __tablename__ = "lease_compare_sets"
+    __table_args__ = (
+        Index("ix_leasing_compare_country", "country_code"),
+        {"schema": "leasing"},
+    )
+
+    compare_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    country_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    selected_offer_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)

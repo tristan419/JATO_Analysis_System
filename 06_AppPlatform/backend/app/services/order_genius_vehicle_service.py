@@ -191,6 +191,11 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
         _validate_line_items_against_remaining(session, country, year, month, line_items)
     if not line_items:
         raise HTTPException(status_code=400, detail="No remaining positive order quantities found for this country/month")
+    market_country_codes = _market_country_codes_for_line_items(
+        payload.get("marketCountryCodes"),
+        country,
+        line_items,
+    )
 
     header = create_pi_header(session, {
         "countryCode": country,
@@ -201,7 +206,7 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
         "orderDate": payload.get("orderDate"),
         "orderingAccountCode": payload.get("orderingAccountCode"),
         "orderingAccountName": payload.get("orderingAccountName"),
-        "marketCountryCodes": payload.get("marketCountryCodes"),
+        "marketCountryCodes": market_country_codes,
         "shipmentBatchCode": payload.get("shipmentBatchCode"),
         "portOfDischarge": payload.get("portOfDischarge"),
         "shipName": payload.get("shipName"),
@@ -414,6 +419,15 @@ def bulk_update_vehicle_units(session: Session, payload: dict[str, Any], usernam
             "vinAssigned": 0,
             "fieldsUpdated": [],
         }
+
+    # Car-code-based selection (checkbox multi-select)
+    car_codes: list[str] | None = None
+    raw_car_codes = payload.get("carCodes") or payload.get("car_codes")
+    if raw_car_codes and isinstance(raw_car_codes, list):
+        car_codes = [str(c).strip().upper() for c in raw_car_codes if c]
+    if car_codes:
+        code_set = set(car_codes)
+        vehicles = [v for v in vehicles if v.car_code in code_set]
 
     field_payload = _bulk_field_payload(payload.get("fields"))
     vin_list = _bulk_vin_list(payload.get("vinList") or payload.get("vins"))
@@ -969,6 +983,24 @@ def _line_item_allocations(item: dict[str, Any], default_country: str) -> list[d
     return list(by_country.values())
 
 
+def _market_country_codes_for_line_items(
+    raw_market_countries: Any,
+    default_country: str,
+    line_items: list[dict[str, Any]],
+) -> list[str]:
+    market_country_codes = _market_country_codes(raw_market_countries, default_country)
+    seen = set(market_country_codes)
+    for item in line_items:
+        if not isinstance(item, dict):
+            continue
+        for allocation in _line_item_allocations(item, default_country):
+            country_code = str(allocation["countryCode"]).upper()
+            if country_code not in seen:
+                market_country_codes.append(country_code)
+                seen.add(country_code)
+    return market_country_codes
+
+
 def _add_line_allocations(
     session: Session,
     header: PiOrderHeader,
@@ -1389,3 +1421,26 @@ def _validate_dates(etd: date | None, eta: date | None, ready: date | None, erro
     if ready and eta and ready < eta:
         warnings.append("Ready for Pickup Date is earlier than ETA")
     return warnings
+
+
+# ── PI Deletion ──────────────────────────────────────────────────────────
+
+
+def delete_pi(session: Session, pi_code: str) -> dict:
+    """Hard-delete a PI and all its cascading children (lines, allocations, vehicles)."""
+    header = repo.get_header_by_code(session, pi_code)
+    if not header:
+        raise ValueError("PI not found")
+    deleted_code = header.pi_code
+    repo.delete_header(session, pi_code)
+    return {"pi_code": deleted_code, "deleted": True}
+
+
+def delete_pi_line(session: Session, pi_line_code: str) -> dict:
+    """Hard-delete a PI line and its cascading children (allocations, vehicles)."""
+    line = repo.get_line_by_code(session, pi_line_code)
+    if not line:
+        raise ValueError("Line not found")
+    deleted_code = line.pi_line_code
+    repo.delete_line(session, pi_line_code)
+    return {"pi_line_code": deleted_code, "deleted": True}

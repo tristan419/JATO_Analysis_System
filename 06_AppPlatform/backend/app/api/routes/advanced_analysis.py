@@ -29,6 +29,7 @@ from app.services.advanced_analysis_service import (
     compute_probabilistic_transfer_matrix,
     compute_seasonal_decomposition,
     compute_shift_share_decomposition,
+    list_available_countries,
     list_profile_filter_options,
     warmup_cache,
 )
@@ -213,6 +214,11 @@ def advanced_analysis_profile_options(
     _=Depends(optional_viewer),
 ) -> dict:
     return _run_guarded("profile-options", lambda: list_profile_filter_options(country=country))
+
+
+@router.get("/countries")
+def advanced_analysis_countries(_=Depends(optional_viewer)) -> dict:
+    return _run_guarded("countries", list_available_countries)
 
 
 @router.delete("/cache")

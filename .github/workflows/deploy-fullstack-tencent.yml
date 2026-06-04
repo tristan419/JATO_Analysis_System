@@ -272,6 +272,8 @@ jobs:
               sudo -n sed -i '/^APP_GOOGLE_CLIENT_SECRET=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_GOOGLE_REDIRECT_URI=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_FRONTEND_ORIGIN=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_FRONTEND_ORIGINS=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_CORS_ORIGINS=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_GOOGLE_OAUTH_PROXY_URL=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_GOOGLE_OAUTH_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true
               GOOGLE_OAUTH_PROXY_URL="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
@@ -280,6 +282,8 @@ jobs:
                 echo "APP_GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET"
                 echo "APP_GOOGLE_REDIRECT_URI=https://www.ojeur.cloud/v1/auth/google/callback"
                 echo "APP_FRONTEND_ORIGIN=https://www.ojeur.cloud"
+                echo "APP_FRONTEND_ORIGINS=https://www.ojeur.cloud,https://intl.ojeur.cloud"
+                echo "APP_CORS_ORIGINS=https://www.ojeur.cloud,https://intl.ojeur.cloud,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000"
                 echo "APP_GOOGLE_OAUTH_PROXY_URL=$GOOGLE_OAUTH_PROXY_URL"
                 echo "APP_GOOGLE_OAUTH_TIMEOUT_SECONDS=30"
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
@@ -427,6 +431,8 @@ jobs:
               sudo -n sed -i '/^APP_GOOGLE_CLIENT_SECRET=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_GOOGLE_REDIRECT_URI=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_FRONTEND_ORIGIN=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_FRONTEND_ORIGINS=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_CORS_ORIGINS=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_GOOGLE_OAUTH_PROXY_URL=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_GOOGLE_OAUTH_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true
               GOOGLE_OAUTH_PROXY_URL="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
@@ -435,6 +441,8 @@ jobs:
                 echo "APP_GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET"
                 echo "APP_GOOGLE_REDIRECT_URI=https://www.ojeur.cloud/v1/auth/google/callback"
                 echo "APP_FRONTEND_ORIGIN=https://www.ojeur.cloud"
+                echo "APP_FRONTEND_ORIGINS=https://www.ojeur.cloud,https://intl.ojeur.cloud"
+                echo "APP_CORS_ORIGINS=https://www.ojeur.cloud,https://intl.ojeur.cloud,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000"
                 echo "APP_GOOGLE_OAUTH_PROXY_URL=$GOOGLE_OAUTH_PROXY_URL"
                 echo "APP_GOOGLE_OAUTH_TIMEOUT_SECONDS=30"
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true

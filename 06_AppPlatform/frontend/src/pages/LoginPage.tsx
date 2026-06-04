@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { apiUrl } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
 
 export function LoginPage() {
@@ -31,7 +32,7 @@ export function LoginPage() {
   async function handleOAuth(provider: "google") {
     try {
       const res = await fetch(
-        `/v1/auth/${provider}/auth-url?redirect=${encodeURIComponent(redirect)}`,
+        apiUrl(`/auth/${provider}/auth-url?redirect=${encodeURIComponent(redirect)}`),
       );
       if (!res.ok) {
         const detail = await res.json().catch(() => null) as { detail?: string } | null;
