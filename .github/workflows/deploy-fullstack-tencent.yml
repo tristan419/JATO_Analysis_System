@@ -266,6 +266,9 @@ jobs:
           git -C "$RELEASE_WORKTREE" config advice.detachedHead false
           git -C "$RELEASE_WORKTREE" config core.sparseCheckout true
           git -C "$RELEASE_WORKTREE" config core.sparseCheckoutCone false
+          git -C "$RELEASE_WORKTREE" config http.version HTTP/1.1
+          git -C "$RELEASE_WORKTREE" config http.lowSpeedLimit 1
+          git -C "$RELEASE_WORKTREE" config http.lowSpeedTime 600
           mkdir -p "$RELEASE_WORKTREE/.git/info"
           cat > "$RELEASE_WORKTREE/.git/info/sparse-checkout" <<'SPARSE'
           /03_Scripts/
@@ -277,7 +280,23 @@ jobs:
           /requirements.txt
           /CODEX.md
           SPARSE
-          git -C "$RELEASE_WORKTREE" fetch --depth=1 --filter=blob:none origin "$DEPLOY_COMMIT_SHA"
+          FETCH_RC=1
+          for fetch_attempt in 1 2 3 4 5; do
+            echo "[INFO] Sparse fetch attempt ${fetch_attempt}/5 for ${DEPLOY_SHORT_SHA:-$DEPLOY_COMMIT_SHA}"
+            if git -C "$RELEASE_WORKTREE" fetch --depth=1 --filter=blob:none origin "$DEPLOY_COMMIT_SHA"; then
+              FETCH_RC=0
+              break
+            fi
+            FETCH_RC=$?
+            rm -f "$RELEASE_WORKTREE/.git/FETCH_HEAD.lock" \
+              "$RELEASE_WORKTREE/.git/index.lock" \
+              "$RELEASE_WORKTREE/.git/shallow.lock"
+            sleep $((fetch_attempt * 10))
+          done
+          if [ "$FETCH_RC" -ne 0 ]; then
+            echo "[ERROR] Sparse fetch failed after retries"
+            exit "$FETCH_RC"
+          fi
           git -C "$RELEASE_WORKTREE" checkout --force FETCH_HEAD
 
           sudo mkdir -p "$REPO_DIR"
@@ -508,6 +527,9 @@ jobs:
           git -C "$RELEASE_WORKTREE" config advice.detachedHead false
           git -C "$RELEASE_WORKTREE" config core.sparseCheckout true
           git -C "$RELEASE_WORKTREE" config core.sparseCheckoutCone false
+          git -C "$RELEASE_WORKTREE" config http.version HTTP/1.1
+          git -C "$RELEASE_WORKTREE" config http.lowSpeedLimit 1
+          git -C "$RELEASE_WORKTREE" config http.lowSpeedTime 600
           mkdir -p "$RELEASE_WORKTREE/.git/info"
           cat > "$RELEASE_WORKTREE/.git/info/sparse-checkout" <<'SPARSE'
           /03_Scripts/
@@ -519,7 +541,23 @@ jobs:
           /requirements.txt
           /CODEX.md
           SPARSE
-          git -C "$RELEASE_WORKTREE" fetch --depth=1 --filter=blob:none origin "$DEPLOY_COMMIT_SHA"
+          FETCH_RC=1
+          for fetch_attempt in 1 2 3 4 5; do
+            echo "[INFO] Sparse fetch attempt ${fetch_attempt}/5 for ${DEPLOY_SHORT_SHA:-$DEPLOY_COMMIT_SHA}"
+            if git -C "$RELEASE_WORKTREE" fetch --depth=1 --filter=blob:none origin "$DEPLOY_COMMIT_SHA"; then
+              FETCH_RC=0
+              break
+            fi
+            FETCH_RC=$?
+            rm -f "$RELEASE_WORKTREE/.git/FETCH_HEAD.lock" \
+              "$RELEASE_WORKTREE/.git/index.lock" \
+              "$RELEASE_WORKTREE/.git/shallow.lock"
+            sleep $((fetch_attempt * 10))
+          done
+          if [ "$FETCH_RC" -ne 0 ]; then
+            echo "[ERROR] Sparse fetch failed after retries"
+            exit "$FETCH_RC"
+          fi
           git -C "$RELEASE_WORKTREE" checkout --force FETCH_HEAD
 
           sudo mkdir -p "$REPO_DIR"
