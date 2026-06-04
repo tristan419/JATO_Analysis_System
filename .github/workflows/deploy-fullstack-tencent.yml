@@ -333,6 +333,8 @@ jobs:
             curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
             echo "---release---"
             cat "$REPO_DIR/hermes/deploy_release.json" 2>&1 || echo "RELEASE_METADATA_MISSING"
+            echo "---deploy failure context---"
+            cat "$REPO_DIR/hermes/deploy_failure_context.txt" 2>&1 || echo "DEPLOY_FAILURE_CONTEXT_MISSING"
             echo "---nginx---"
             sudo -n systemctl status nginx --no-pager 2>&1 | head -5 || true
             echo "---index.html---"
@@ -492,6 +494,8 @@ jobs:
             curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
             echo "---release---"
             cat "$REPO_DIR/hermes/deploy_release.json" 2>&1 || echo "RELEASE_METADATA_MISSING"
+            echo "---deploy failure context---"
+            cat "$REPO_DIR/hermes/deploy_failure_context.txt" 2>&1 || echo "DEPLOY_FAILURE_CONTEXT_MISSING"
             echo "---nginx---"
             sudo -n systemctl status nginx --no-pager 2>&1 | head -5 || true
             echo "---index.html---"

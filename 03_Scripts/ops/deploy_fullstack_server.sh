@@ -60,6 +60,7 @@ BACKEND_REQUIREMENTS="$BACKEND_DIR/requirements.txt"
 VENV_DIR="$REPO_DIR/.venv"
 TOOLKIT_DIR="$REPO_DIR/07_ScrapingToolkit"
 DEPLOY_RELEASE_FILE="$REPO_DIR/hermes/deploy_release.json"
+DEPLOY_FAILURE_FILE="${DEPLOY_FAILURE_FILE:-$REPO_DIR/hermes/deploy_failure_context.txt}"
 SYSTEMD_SOURCE_DIR="$REPO_DIR/03_Scripts/deploy/systemd"
 SYSTEMD_TARGET_DIR="/etc/systemd/system"
 JATO_ETC_DIR="/etc/jato-fullstack"
@@ -96,18 +97,38 @@ run_diagnostics() {
   fi
 }
 
+write_deploy_failure_context() {
+  local line_no="$1"
+  local command="$2"
+  local rc="$3"
+  local failure_dir=""
+
+  failure_dir="$(dirname "$DEPLOY_FAILURE_FILE")"
+  mkdir -p "$failure_dir" 2>/dev/null || true
+  {
+    echo "deploy_exit_code=$rc"
+    echo "failed_step=$CURRENT_STEP"
+    echo "failed_line=$line_no"
+    echo "failed_command=$command"
+    echo "timestamp=$(date -u)"
+  } > "$DEPLOY_FAILURE_FILE" 2>&1 || true
+}
+
 on_error() {
   local line_no="$1"
   local command="$2"
+  local rc="$3"
   echo
   echo "[ERROR] deploy_fullstack_server.sh failed"
+  echo "[ERROR] exit_code=$rc"
   echo "[ERROR] step=$CURRENT_STEP"
   echo "[ERROR] line=$line_no"
   echo "[ERROR] command=$command"
+  write_deploy_failure_context "$line_no" "$command" "$rc"
   run_diagnostics
 }
 
-trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
+trap 'on_error "$LINENO" "$BASH_COMMAND" "$?"' ERR
 
 if [[ -z "$BACKEND_PORT" ]]; then
   if [[ "$BACKEND_SERVICE_NAME" =~ @([0-9]+)$ ]]; then
@@ -131,6 +152,7 @@ require_command npm
 require_command node
 
 echo "[INFO] Repository directory: $REPO_DIR"
+rm -f "$DEPLOY_FAILURE_FILE" 2>/dev/null || true
 if [[ -f "$DEPLOY_RELEASE_FILE" ]]; then
   echo "[INFO] Deploy release metadata:"
   python3 - "$DEPLOY_RELEASE_FILE" <<'PY' || true

@@ -4,6 +4,7 @@ set -u
 BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@8000}"
 BACKEND_PORT="${BACKEND_PORT:-}"
 BACKEND_ENV_FILE="${BACKEND_ENV_FILE:-/etc/jato-fullstack/backend.env}"
+BACKEND_JOURNAL_LINES="${BACKEND_JOURNAL_LINES:-40}"
 NGINX_ERROR_LOG="${NGINX_ERROR_LOG:-/var/log/nginx/error.log}"
 
 resolve_repo_dir() {
@@ -100,7 +101,7 @@ run_shell "systemctl is-active '$BACKEND_SERVICE_NAME'"
 run_shell "$SUDO systemctl --no-pager status '$BACKEND_SERVICE_NAME' | sed -n '1,80p'"
 
 section "backend journal"
-run_shell "$SUDO journalctl -u '$BACKEND_SERVICE_NAME' -n 120 --no-pager"
+run_shell "$SUDO journalctl -u '$BACKEND_SERVICE_NAME' -n '$BACKEND_JOURNAL_LINES' --no-pager"
 
 section "nginx status"
 run_shell "systemctl is-active nginx"
