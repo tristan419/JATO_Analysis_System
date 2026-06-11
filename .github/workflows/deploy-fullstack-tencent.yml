@@ -85,6 +85,9 @@ jobs:
               short_sha = sha[:8]
           payload = {
               "releaseId": f"{os.environ.get('GITHUB_RUN_ID', '')}-{os.environ.get('GITHUB_RUN_ATTEMPT', '')}",
+              "service": "jato-fullstack-backend",
+              "environment": "production",
+              "expectedCommitSha": sha,
               "commitSha": sha,
               "shortSha": short_sha,
               "branch": os.environ.get("GITHUB_REF_NAME", ""),
@@ -92,6 +95,7 @@ jobs:
               "workflow": os.environ.get("GITHUB_WORKFLOW", ""),
               "workflowRunId": os.environ.get("GITHUB_RUN_ID", ""),
               "workflowRunAttempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+              "deployMethod": "github_actions",
               "packagedAt": _dt.datetime.now(_dt.UTC).isoformat(),
               "source": "github_actions_archive",
           }
@@ -332,6 +336,9 @@ jobs:
           commit_sha = os.environ.get("DEPLOY_COMMIT_SHA", "")
           payload = {
               "releaseId": os.environ.get("DEPLOY_RELEASE_ID", ""),
+              "service": "jato-fullstack-backend",
+              "environment": "production",
+              "expectedCommitSha": commit_sha,
               "commitSha": commit_sha,
               "shortSha": os.environ.get("DEPLOY_SHORT_SHA") or commit_sha[:8],
               "branch": os.environ.get("DEPLOY_BRANCH", "main"),
@@ -339,6 +346,7 @@ jobs:
               "workflow": os.environ.get("DEPLOY_WORKFLOW", "deploy-fullstack-tencent"),
               "workflowRunId": os.environ.get("DEPLOY_RUN_ID", ""),
               "workflowRunAttempt": os.environ.get("DEPLOY_RUN_ATTEMPT", ""),
+              "deployMethod": "github_actions",
               "packagedAt": _dt.datetime.now(_dt.UTC).isoformat(),
               "source": "github_sparse_checkout",
           }
@@ -593,6 +601,9 @@ jobs:
           commit_sha = os.environ.get("DEPLOY_COMMIT_SHA", "")
           payload = {
               "releaseId": os.environ.get("DEPLOY_RELEASE_ID", ""),
+              "service": "jato-fullstack-backend",
+              "environment": "production",
+              "expectedCommitSha": commit_sha,
               "commitSha": commit_sha,
               "shortSha": os.environ.get("DEPLOY_SHORT_SHA") or commit_sha[:8],
               "branch": os.environ.get("DEPLOY_BRANCH", "main"),
@@ -600,6 +611,7 @@ jobs:
               "workflow": os.environ.get("DEPLOY_WORKFLOW", "deploy-fullstack-tencent"),
               "workflowRunId": os.environ.get("DEPLOY_RUN_ID", ""),
               "workflowRunAttempt": os.environ.get("DEPLOY_RUN_ATTEMPT", ""),
+              "deployMethod": "github_actions",
               "packagedAt": _dt.datetime.now(_dt.UTC).isoformat(),
               "source": "github_sparse_checkout",
           }

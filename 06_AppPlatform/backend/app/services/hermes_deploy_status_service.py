@@ -124,14 +124,20 @@ def record_expected_deploy(payload: dict[str, Any], *, source: str | None = None
     DevSync calls this even when code deploy later fails, which gives Hermes a
     stable source of truth for detecting production drift.
     """
-    commit_sha = _clean_sha(payload.get("commitSha") if isinstance(payload, dict) else "")
+    commit_sha = _clean_sha(
+        (payload.get("expectedCommitSha") or payload.get("commitSha") or payload.get("commit"))
+        if isinstance(payload, dict)
+        else ""
+    )
     if not commit_sha:
         return None
 
     record = {
         "commitSha": commit_sha,
+        "expectedCommitSha": commit_sha,
         "shortSha": _short_sha(commit_sha),
         "branch": str(payload.get("branch") or "").strip() if isinstance(payload, dict) else "",
+        "environment": str(payload.get("environment") or "production").strip() if isinstance(payload, dict) else "production",
         "workflowRunId": str(payload.get("workflowRunId") or "").strip() if isinstance(payload, dict) else "",
         "workflowRunAttempt": str(payload.get("workflowRunAttempt") or "").strip() if isinstance(payload, dict) else "",
         "repository": str(payload.get("repository") or "").strip() if isinstance(payload, dict) else "",
@@ -146,10 +152,22 @@ def get_release_metadata() -> dict[str, Any]:
     """Return the deployed release metadata, preferring archive metadata."""
     release = _read_json(_deploy_release_path())
     if release and not release.get("parseError"):
-        commit_sha = _clean_sha(release.get("commitSha") or release.get("gitSha"))
-        release["commitSha"] = commit_sha
-        release["shortSha"] = release.get("shortSha") or _short_sha(commit_sha)
+        expected_sha = _clean_sha(release.get("expectedCommitSha") or release.get("commitSha") or release.get("commit"))
+        actual_sha = _clean_sha(
+            release.get("actualCommitSha")
+            or release.get("actualCommit")
+            or release.get("commitSha")
+            or release.get("commit")
+            or release.get("gitSha")
+        )
+        release["expectedCommitSha"] = expected_sha
+        release["actualCommitSha"] = actual_sha
+        release["commitSha"] = actual_sha
+        release["shortSha"] = release.get("shortSha") or _short_sha(actual_sha)
+        release["actualShortSha"] = release.get("actualShortSha") or _short_sha(actual_sha)
+        release["expectedShortSha"] = release.get("expectedShortSha") or _short_sha(expected_sha)
         release["source"] = release.get("source") or "deploy_release_file"
+        release["environment"] = release.get("environment") or "production"
         release["metadataPath"] = str(_deploy_release_path().relative_to(_root()))
         release["confidence"] = "high"
         return release
@@ -158,7 +176,10 @@ def get_release_metadata() -> dict[str, Any]:
     if env_sha:
         return {
             "commitSha": env_sha,
+            "actualCommitSha": env_sha,
             "shortSha": _short_sha(env_sha),
+            "actualShortSha": _short_sha(env_sha),
+            "environment": "production",
             "source": "environment",
             "confidence": "medium",
         }
@@ -167,7 +188,10 @@ def get_release_metadata() -> dict[str, Any]:
     if git_sha:
         return {
             "commitSha": git_sha,
+            "actualCommitSha": git_sha,
             "shortSha": _short_sha(git_sha),
+            "actualShortSha": _short_sha(git_sha),
+            "environment": "production",
             "source": "git_metadata_fallback",
             "confidence": "low",
             "warning": "Git metadata may be stale for archive-based Tencent deploys.",
@@ -175,7 +199,10 @@ def get_release_metadata() -> dict[str, Any]:
 
     return {
         "commitSha": "",
+        "actualCommitSha": "",
         "shortSha": "",
+        "actualShortSha": "",
+        "environment": "production",
         "source": "unknown",
         "confidence": "none",
     }
@@ -184,9 +211,11 @@ def get_release_metadata() -> dict[str, Any]:
 def get_expected_deploy() -> dict[str, Any]:
     expected = _read_json(_deploy_expected_path())
     if expected and not expected.get("parseError"):
-        commit_sha = _clean_sha(expected.get("commitSha"))
+        commit_sha = _clean_sha(expected.get("expectedCommitSha") or expected.get("commitSha") or expected.get("commit"))
         expected["commitSha"] = commit_sha
+        expected["expectedCommitSha"] = commit_sha
         expected["shortSha"] = expected.get("shortSha") or _short_sha(commit_sha)
+        expected["environment"] = expected.get("environment") or "production"
         expected["metadataPath"] = str(_deploy_expected_path().relative_to(_root()))
         return expected
     return expected
@@ -213,25 +242,76 @@ def get_deploy_status() -> dict[str, Any]:
     expected = get_expected_deploy()
     last_deploy = get_last_deploy_status()
 
-    release_sha = release.get("commitSha", "")
-    expected_sha = expected.get("commitSha", "")
+    release_sha = release.get("actualCommitSha") or release.get("commitSha", "")
+    expected_sha = expected.get("expectedCommitSha") or expected.get("commitSha", "")
     has_expected = bool(expected_sha)
     has_release = bool(release_sha)
     is_drift = bool(has_expected and has_release and not _sha_matches(release_sha, expected_sha))
     release_unknown = bool(has_expected and not has_release)
     last_deploy_failed = last_deploy.get("deployExitCode") not in {None, "", "0"} if last_deploy.get("available") else False
+    commits_behind = _commits_between(release_sha, expected_sha) if is_drift else 0
+
+    production_condition = {
+        "id": "production_revision",
+        "status": "ok",
+        "type": "production_revision_ok",
+        "message": "Production actual commit matches the expected commit.",
+        "releaseCommitSha": release_sha,
+        "actualCommitSha": release_sha,
+        "expectedCommitSha": expected_sha,
+        "commitsBehind": commits_behind,
+        "releaseUnknown": release_unknown,
+        "isDrift": is_drift,
+        "environment": release.get("environment") or expected.get("environment") or "production",
+        "releaseMetadataPath": release.get("metadataPath"),
+        "expectedMetadataPath": expected.get("metadataPath"),
+    }
+    if is_drift:
+        production_condition.update({
+            "status": "critical",
+            "type": "production_commit_drift",
+            "message": "Production actual commit does not match the latest expected commit.",
+        })
+    elif release_unknown:
+        production_condition.update({
+            "status": "warning",
+            "type": "missing_release_metadata",
+            "message": "Expected commit is known, but production actual commit is unknown.",
+        })
+    elif not has_expected:
+        production_condition.update({
+            "status": "unknown",
+            "type": "expected_commit_missing",
+            "message": "No expected deploy commit has been recorded yet.",
+        })
+
+    deploy_pipeline_condition = {
+        "id": "deploy_pipeline",
+        "status": "ok" if last_deploy.get("available") else "unknown",
+        "type": "last_deploy_ok" if last_deploy.get("available") else "last_deploy_status_missing",
+        "message": "Last deploy status is successful." if last_deploy.get("available") else "No last deploy status file is available.",
+        "deployExitCode": last_deploy.get("deployExitCode"),
+        "lastDeployStatusPath": last_deploy.get("path"),
+        "lastDeployTimestamp": last_deploy.get("timestamp"),
+        "environment": release.get("environment") or expected.get("environment") or "production",
+    }
+    if last_deploy_failed:
+        deploy_pipeline_condition.update({
+            "status": "critical",
+            "type": "last_deploy_failed",
+            "message": "Last deploy status reports a non-zero deploy exit code.",
+        })
 
     warnings: list[str] = []
     if release.get("source") == "git_metadata_fallback":
         warnings.append("Release metadata file is missing; using git metadata fallback.")
     if release_unknown:
-        warnings.append("Expected commit is known, but deployed release commit is unknown.")
+        warnings.append("Expected commit is known, but production actual commit is unknown.")
     if is_drift:
-        warnings.append("Deployed release does not match latest expected GitHub commit.")
+        warnings.append("Production actual commit does not match latest expected GitHub commit.")
     if last_deploy_failed:
         warnings.append("Last deploy status reports a non-zero deploy exit code.")
 
-    commits_behind = _commits_between(release_sha, expected_sha) if is_drift else 0
     severity = "ok"
     if is_drift or last_deploy_failed:
         severity = "critical"
@@ -246,10 +326,15 @@ def get_deploy_status() -> dict[str, Any]:
             "isDrift": is_drift,
             "releaseUnknown": release_unknown,
             "releaseCommitSha": release_sha,
+            "actualCommitSha": release_sha,
             "expectedCommitSha": expected_sha,
             "commitsBehind": commits_behind,
         },
         "lastDeploy": last_deploy,
+        "conditions": {
+            "productionRevision": production_condition,
+            "deployPipeline": deploy_pipeline_condition,
+        },
         "warnings": warnings,
         "checkedAt": _now_iso(),
     }

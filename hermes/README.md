@@ -4,6 +4,19 @@
 > Created: 2026-05-14
 > Based on: Phase 0 REPOSITORY_ASSET_MAP.md
 
+## Alias
+
+Also known as:
+- Hermes Steward
+- Hermes 小管家
+- 小管家
+- Hermes governance assistant
+
+Canonical name in code: Hermes
+Frontend label: Hermes Steward / Hermes 小管家
+Route: `/data/overview?view=hermes`
+Backend prefix: `/v1/hermes/*`
+
 ## Purpose
 
 Hermes Phase 1 is a **registry-only layer**. It records assets, dependencies, risks, and governance gaps. It **does not** automatically modify code, infrastructure, production environment, database schema, or deployment state.
@@ -19,6 +32,15 @@ Hermes Phase 1 is a **registry-only layer**. It records assets, dependencies, ri
 | `artifact_registry.yaml` | Data artifacts (path, schema, freshness, consumers) |
 | `governance_gaps.yaml` | Known governance gaps from Phase 0 audit |
 | `proposal_registry.yaml` | Improvement proposals (draft → approved → implemented) |
+
+## Runtime Files
+
+| File | Purpose |
+|---|---|
+| `sentinel_notifications.jsonl` | Sentinel notification facts keyed by stable fingerprint-derived IDs |
+| `sentinel_notification_state.json` | User mailbox state for Sentinel notifications, including read/acked/archived/resolved; ignored by Git |
+| `deploy_release.json` | Production release metadata with expected and actual commit fields |
+| `deploy_expected.json` | Latest commit production is expected to run, usually recorded by DevSync/GitHub Actions |
 
 ## How to Update Registries
 
