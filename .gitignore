@@ -28,6 +28,7 @@ venv/
 03_Scripts/logs/
 tmp/
 .runtime_sync_backups/
+hermes/sentinel_notification_state.json
 
 # local vector DB artifacts
 04_Processed_data/chroma_db/

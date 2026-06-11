@@ -7,14 +7,18 @@ All other modules only write facts (events, evidence, gaps).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import uuid
+import tempfile
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 _project_root: Path | None = None
+_notification_state_lock = threading.RLock()
+_notification_facts_lock = threading.Lock()
 
 
 def _root() -> Path:
@@ -29,9 +33,35 @@ def _notifications_path() -> Path:
     return _root() / "hermes" / "sentinel_notifications.jsonl"
 
 
+def _notification_state_path() -> Path:
+    return _root() / "hermes" / "sentinel_notification_state.json"
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+        text=True,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 # ── Notification helpers ──────────────────────────────────────────────
 
-def _load_notifications(limit: int = 100) -> list[dict[str, Any]]:
+def _load_notification_facts() -> list[dict[str, Any]]:
     p = _notifications_path()
     if not p.is_file():
         return []
@@ -42,48 +72,129 @@ def _load_notifications(limit: int = 100) -> list[dict[str, Any]]:
                 entries.append(json.loads(line))
             except Exception:
                 pass
-    entries.sort(key=lambda e: e.get("createdAt", ""), reverse=True)
+    return entries
+
+
+def _load_notification_state() -> dict[str, dict[str, Any]]:
+    p = _notification_state_path()
+    if not p.is_file():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    notifications = data.get("notifications", data)
+    if not isinstance(notifications, dict):
+        return {}
+    return {
+        str(notification_id): state
+        for notification_id, state in notifications.items()
+        if isinstance(state, dict)
+    }
+
+
+def _write_notification_state(state: dict[str, dict[str, Any]]) -> None:
+    with _notification_state_lock:
+        _write_text_atomic(
+            _notification_state_path(),
+            json.dumps({"notifications": state}, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        )
+
+
+def _apply_notification_state(notif: dict[str, Any], state: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    current = dict(notif)
+    saved = state.get(str(current.get("id") or ""))
+    if saved:
+        current["status"] = saved.get("status", current.get("status", "new"))
+        if saved.get("updatedAt"):
+            current["updatedAt"] = saved["updatedAt"]
+        if "pinned" in saved:
+            current["pinned"] = bool(saved.get("pinned"))
+    return current
+
+
+def _load_notifications(limit: int = 100) -> list[dict[str, Any]]:
+    state = _load_notification_state()
+    entries = [_apply_notification_state(item, state) for item in _load_notification_facts()]
+    entries.sort(
+        key=lambda e: e.get("lastSeenAt") or e.get("updatedAt") or e.get("createdAt", ""),
+        reverse=True,
+    )
     return entries[:limit]
 
 
-def _save_notification(notif: dict[str, Any]) -> None:
-    p = _notifications_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "a") as fh:
-        fh.write(json.dumps(notif, ensure_ascii=False) + "\n")
+def _save_notification(notif: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    with _notification_facts_lock:
+        facts = _load_notification_facts()
+        notification_id = str(notif.get("id") or "")
+        now = str(notif.get("lastSeenAt") or datetime.now(timezone.utc).isoformat())
+        for idx, existing in enumerate(facts):
+            if str(existing.get("id") or "") != notification_id:
+                continue
+            occurrence_count = int(existing.get("occurrenceCount") or 1) + 1
+            updated = {
+                **existing,
+                **notif,
+                "createdAt": existing.get("createdAt") or notif.get("createdAt") or now,
+                "firstSeenAt": existing.get("firstSeenAt") or existing.get("createdAt") or notif.get("createdAt") or now,
+                "lastSeenAt": now,
+                "occurrenceCount": occurrence_count,
+            }
+            facts[idx] = updated
+            _write_notifications(facts)
+            return updated, False
+
+        created = {
+            **notif,
+            "firstSeenAt": notif.get("firstSeenAt") or notif.get("createdAt") or now,
+            "lastSeenAt": now,
+            "occurrenceCount": int(notif.get("occurrenceCount") or 1),
+        }
+        facts.append(created)
+        _write_notifications(facts)
+        return created, True
 
 
 def _write_notifications(notifs: list[dict[str, Any]]) -> None:
     p = _notifications_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(
+    _write_text_atomic(
+        p,
         "\n".join(json.dumps(n, ensure_ascii=False) for n in notifs) + ("\n" if notifs else ""),
-        encoding="utf-8",
     )
 
 
-def _cooldown_ok(probe_name: str, minutes: int = 30) -> bool:
-    """Check if enough time passed since last notification from this probe."""
-    recent = [n for n in _load_notifications(20)
-              if n.get("source") == probe_name and n.get("status") not in {"archived", "resolved"}]
-    if not recent:
-        return True
-    newest = datetime.fromisoformat(recent[0]["createdAt"].replace("Z", "+00:00"))
-    return datetime.now(timezone.utc) - newest > timedelta(minutes=minutes)
+def _notification_fingerprint(probe: str, title: str, context: dict[str, Any]) -> str:
+    finding_type = str(context.get("findingType") or title).strip() or "finding"
+    payload: dict[str, Any] = {
+        "probe": probe,
+        "findingType": finding_type,
+    }
+    for key in (
+        "conditionId",
+        "resourceId",
+        "environment",
+        "pipeline",
+        "statusPath",
+        "releaseCommitSha",
+        "expectedCommitSha",
+        "workflow",
+        "stage",
+        "conclusion",
+        "sourceId",
+        "gapId",
+        "artifactId",
+    ):
+        value = context.get(key)
+        if value not in (None, "", []):
+            payload[key] = value
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
 
 
-def _similar_notification_exists(title: str, within_minutes: int = 60) -> bool:
-    """Avoid duplicate alerts with the same title."""
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=within_minutes)
-    for n in _load_notifications(50):
-        if n.get("title") == title:
-            try:
-                ct = datetime.fromisoformat(n["createdAt"].replace("Z", "+00:00"))
-                if ct > cutoff:
-                    return True
-            except Exception:
-                pass
-    return False
+def _notification_id_from_fingerprint(fingerprint: str) -> str:
+    digest = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:16]
+    return f"notif_{digest}"
 
 
 def _emit(
@@ -92,15 +203,13 @@ def _emit(
     title: str,
     body: str,
     actions: list[str] | None = None,
-    cooldown_min: int = 30,
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Emit a notification if cooldown allows and no duplicate exists."""
-    if not _cooldown_ok(probe, cooldown_min):
-        return None
-    if _similar_notification_exists(title, cooldown_min):
-        return None
+    """Emit a stable notification once; update lastSeen/occurrence on repeats."""
     context = context or {}
+    fingerprint = _notification_fingerprint(probe, title, context)
+    notification_id = _notification_id_from_fingerprint(fingerprint)
+    now = datetime.now(timezone.utc).isoformat()
     action_level = str(
         context.get("actionLevel")
         or ("blocking" if severity in {"high", "critical"} else "needs_review")
@@ -111,7 +220,8 @@ def _emit(
         or (actions[0] if actions else "Review Sentinel finding")
     )
     notif = {
-        "id": f"notif_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}",
+        "id": notification_id,
+        "fingerprint": fingerprint,
         "severity": severity,
         "source": probe,
         "title": title,
@@ -122,10 +232,15 @@ def _emit(
         "recommendedAction": recommended_action,
         "context": context,
         "status": "new",
-        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "createdAt": now,
+        "firstSeenAt": now,
+        "lastSeenAt": now,
+        "occurrenceCount": 1,
     }
-    _save_notification(notif)
-    return notif
+    saved, created = _save_notification(notif)
+    if created:
+        return saved
+    return None
 
 
 # ── Probes ────────────────────────────────────────────────────────────
@@ -327,6 +442,10 @@ def probe_deploy() -> dict[str, Any]:
     release = status.get("release", {}) or {}
     expected = status.get("expected", {}) or {}
     last_deploy = status.get("lastDeploy", {}) or {}
+    conditions = status.get("conditions", {}) or {}
+    production_condition = conditions.get("productionRevision", {}) or {}
+    deploy_pipeline_condition = conditions.get("deployPipeline", {}) or {}
+    environment = release.get("environment") or expected.get("environment") or "production"
 
     if drift.get("isDrift"):
         release_short = release.get("shortSha") or str(drift.get("releaseCommitSha", ""))[:8] or "unknown"
@@ -337,8 +456,14 @@ def probe_deploy() -> dict[str, Any]:
             "type": "production_commit_drift",
             "severity": "high",
             "message": f"Production release {release_short} does not match latest expected commit {expected_short}{behind_text}.",
+            "conditionId": production_condition.get("id", "production_revision"),
+            "conditionStatus": production_condition.get("status", "critical"),
+            "resourceId": "production",
+            "environment": environment,
             "releaseCommitSha": drift.get("releaseCommitSha"),
             "expectedCommitSha": drift.get("expectedCommitSha"),
+            "releaseMetadataPath": release.get("metadataPath"),
+            "expectedMetadataPath": expected.get("metadataPath"),
             "count": behind,
             "recommendedAction": "Open deploy-fullstack-tencent logs and redeploy or fix SSH deploy failure.",
         })
@@ -348,7 +473,12 @@ def probe_deploy() -> dict[str, Any]:
             "type": "missing_release_metadata",
             "severity": "medium",
             "message": "Latest expected commit is known, but production release metadata is missing.",
+            "conditionId": production_condition.get("id", "production_revision"),
+            "conditionStatus": production_condition.get("status", "warning"),
+            "resourceId": "production",
+            "environment": environment,
             "expectedCommitSha": drift.get("expectedCommitSha"),
+            "expectedMetadataPath": expected.get("metadataPath"),
             "recommendedAction": "Deploy a package containing hermes/deploy_release.json.",
         })
 
@@ -358,6 +488,16 @@ def probe_deploy() -> dict[str, Any]:
             "type": "last_deploy_failed",
             "severity": "high",
             "message": f"Last deploy status reports exit code {deploy_exit_code}.",
+            "conditionId": deploy_pipeline_condition.get("id", "deploy_pipeline"),
+            "conditionStatus": deploy_pipeline_condition.get("status", "critical"),
+            "resourceId": "deploy-fullstack-tencent",
+            "environment": environment,
+            "workflow": "deploy-fullstack-tencent",
+            "stage": "ssh",
+            "conclusion": "failure",
+            "deployExitCode": deploy_exit_code,
+            "statusPath": last_deploy.get("path"),
+            "lastDeployTimestamp": last_deploy.get("timestamp"),
             "recommendedAction": "Inspect _deploy_status.txt and the GitHub Actions SSH deploy step output.",
         })
 
@@ -484,6 +624,23 @@ def run_all_probes() -> dict[str, Any]:
                 "warningCount",
                 "artifactRefs",
                 "statusRecord",
+                "features",
+                "gaps",
+                "resourceId",
+                "environment",
+                "releaseCommitSha",
+                "expectedCommitSha",
+                "conditionId",
+                "conditionStatus",
+                "releaseMetadataPath",
+                "expectedMetadataPath",
+                "deployExitCode",
+                "statusPath",
+                "lastDeployTimestamp",
+                "workflow",
+                "stage",
+                "conclusion",
+                "ageHours",
             ):
                 if key in f:
                     context[key] = f.get(key)
@@ -494,12 +651,10 @@ def run_all_probes() -> dict[str, Any]:
             # Only emit for medium+ severity
             if sev in ("high", "critical"):
                 n = _emit(p["probe"], sev, f.get("type", "").replace("_", " ").title(),
-                          f.get("message", ""), ["View details"], cooldown_min=30,
-                          context=context)
+                          f.get("message", ""), ["View details"], context=context)
             elif sev == "medium":
                 n = _emit(p["probe"], sev, f.get("type", "").replace("_", " ").title(),
-                          f.get("message", ""), ["View details"], cooldown_min=120,
-                          context=context)
+                          f.get("message", ""), ["View details"], context=context)
             else:
                 n = None
             if n:
@@ -531,10 +686,16 @@ def set_notification_status(notif_id: str, status: str) -> dict[str, Any] | None
     notifs = _load_notifications(200)
     for n in notifs:
         if n.get("id") == notif_id:
-            n["status"] = normalized_status
-            n["updatedAt"] = datetime.now(timezone.utc).isoformat()
-            _write_notifications(notifs)
-            return n
+            now = datetime.now(timezone.utc).isoformat()
+            with _notification_state_lock:
+                state = _load_notification_state()
+                state[notif_id] = {
+                    **state.get(notif_id, {}),
+                    "status": normalized_status,
+                    "updatedAt": now,
+                }
+                _write_notification_state(state)
+            return _apply_notification_state({**n, "status": normalized_status, "updatedAt": now}, state)
     return None
 
 
