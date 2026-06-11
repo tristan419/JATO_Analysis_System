@@ -838,6 +838,35 @@ class TestSentinelAndDeploy:
             "audi_q6_e_tron_fi_draft_scrapling",
         ]
 
+    def test_history_clusters_endpoint(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.hermes_history_service.list_history_clusters",
+            lambda level, y_axis, workstream, limit: {
+                "summary": {"level": level, "yAxis": y_axis, "clusterCount": 1},
+                "clusters": [{"clusterId": "cluster_1", "title": "Hermes"}],
+            },
+        )
+
+        resp = client.get("/hermes/history/clusters?level=feature&yAxis=workstream")
+
+        assert resp.status_code == 200
+        assert resp.json()["summary"]["clusterCount"] == 1
+
+    def test_progress_swimlanes_endpoint(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.hermes_history_service.get_progress_swimlanes",
+            lambda: {
+                "summary": {"total": 1, "blocking": 0},
+                "phases": ["PRD", "Implemented"],
+                "lanes": [{"workstream": "Hermes", "features": []}],
+            },
+        )
+
+        resp = client.get("/hermes/progress/swimlanes")
+
+        assert resp.status_code == 200
+        assert resp.json()["summary"]["total"] == 1
+
 
 # ── /hermes/gaps ──────────────────────────────────────────────────────
 

@@ -42,6 +42,17 @@ Hermes Phase 1 is a **registry-only layer**. It records assets, dependencies, ri
 | `deploy_release.json` | Production release metadata with expected and actual commit fields |
 | `deploy_expected.json` | Latest commit production is expected to run, usually recorded by DevSync/GitHub Actions |
 
+## Cockpit APIs
+
+Hermes also exposes read-only project history and progress cockpit endpoints:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /v1/hermes/history/events` | Normalized git, DevSync, evidence, Sentinel, pipeline, and deploy events |
+| `GET /v1/hermes/history/clusters` | Rule-based time clusters for History Map, with `level` and `yAxis` controls |
+| `GET /v1/hermes/progress/features` | Feature lifecycle state with phase, risk, gaps, tests, docs, and next action |
+| `GET /v1/hermes/progress/swimlanes` | Progress features grouped by workstream for the swimlane UI |
+
 ## How to Update Registries
 
 1. Edit the relevant YAML file.

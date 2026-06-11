@@ -2154,6 +2154,60 @@ def hermes_deploy_status(_=Depends(require_min_role("viewer"))) -> dict:
     return get_deploy_status()
 
 
+@router.get("/history/events")
+def hermes_history_events(
+    source: str | None = Query(None),
+    workstream: str | None = Query(None),
+    model: str | None = Query(None),
+    limit: int = Query(200, ge=1, le=500),
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    """Return normalized Hermes history events from git and governance ledgers."""
+    from app.services.hermes_history_service import list_history_events
+
+    return list_history_events(
+        source=source,
+        workstream=workstream,
+        model=model,
+        limit=limit,
+    )
+
+
+@router.get("/history/clusters")
+def hermes_history_clusters(
+    level: str = Query("feature", description="epic, workstream, feature, session, or commit"),
+    y_axis: str = Query("workstream", alias="yAxis", description="workstream, phase, risk, or session"),
+    workstream: str | None = Query(None),
+    limit: int = Query(160, ge=1, le=300),
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    """Return rule-based history clusters for the Hermes History Map."""
+    from app.services.hermes_history_service import list_history_clusters
+
+    return list_history_clusters(
+        level=level,
+        y_axis=y_axis,
+        workstream=workstream,
+        limit=limit,
+    )
+
+
+@router.get("/progress/features")
+def hermes_progress_features(_=Depends(require_min_role("viewer"))) -> list[dict]:
+    """Return feature progress states for the Hermes cockpit."""
+    from app.services.hermes_history_service import list_progress_features
+
+    return list_progress_features()
+
+
+@router.get("/progress/swimlanes")
+def hermes_progress_swimlanes(_=Depends(require_min_role("viewer"))) -> dict:
+    """Return feature progress grouped by workstream."""
+    from app.services.hermes_history_service import get_progress_swimlanes
+
+    return get_progress_swimlanes()
+
+
 @router.get("/dev/features")
 def hermes_dev_features(
     status: str | None = Query(None),

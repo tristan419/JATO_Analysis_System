@@ -487,3 +487,125 @@ export interface HermesMsrpDryrunHistoryResponse {
   latestRunId: string;
   runs: HermesMsrpDryrunHistoryRun[];
 }
+
+// === Hermes History / Progress Cockpit ===
+export type HermesHistoryLevel = "epic" | "workstream" | "feature" | "session" | "commit";
+export type HermesHistoryYAxis = "workstream" | "phase" | "risk" | "session";
+
+export interface HermesHistoryEvent {
+  eventId: string;
+  timestamp: string;
+  source: string;
+  type: string;
+  title: string;
+  summary: string;
+  featureId: string;
+  workstream: string;
+  phase: string;
+  risk: string;
+  status: string;
+  sessionId: string;
+  model: string;
+  commitSha: string;
+  files: string[];
+  tests: string[];
+  testCount: number;
+  evidenceRefs: string[];
+  gapRefs: string[];
+  artifactRefs: string[];
+}
+
+export interface HermesHistorySummary {
+  totalEvents: number;
+  sources: Record<string, number>;
+  workstreams: Record<string, number>;
+  risks: Record<string, number>;
+  models: Record<string, number>;
+  level?: HermesHistoryLevel | string;
+  yAxis?: HermesHistoryYAxis | string;
+  clusterCount?: number;
+  lanes?: string[];
+}
+
+export interface HermesHistoryEventsResponse {
+  summary: HermesHistorySummary;
+  events: HermesHistoryEvent[];
+}
+
+export interface HermesHistoryCluster {
+  clusterId: string;
+  level: HermesHistoryLevel | string;
+  yAxis: HermesHistoryYAxis | string;
+  lane: string;
+  startAt: string;
+  endAt: string;
+  title: string;
+  workstream: string;
+  phase: string;
+  risk: string;
+  status: string;
+  eventCount: number;
+  commitCount: number;
+  testCount: number;
+  evidenceCount: number;
+  gapCount: number;
+  sources: string[];
+  children: string[];
+  topFiles: string[];
+}
+
+export interface HermesHistoryClustersResponse {
+  summary: HermesHistorySummary;
+  clusters: HermesHistoryCluster[];
+}
+
+export type HermesProgressPhaseStatus = "complete" | "attention" | "pending" | string;
+
+export interface HermesProgressPhase {
+  phase: string;
+  status: HermesProgressPhaseStatus;
+  timestamp: string;
+  eventIds: string[];
+}
+
+export interface HermesProgressFeature {
+  featureId: string;
+  title: string;
+  workstream: string;
+  phase: string;
+  status: string;
+  risk: string;
+  owner: string;
+  sessionId: string;
+  lastEventAt: string;
+  lastMeaningfulEvent: string;
+  evidenceCount: number;
+  openGapCount: number;
+  testsCount: number;
+  docsCount: number;
+  commitCount: number;
+  deployStatus: string;
+  nextAction: string;
+  phases: HermesProgressPhase[];
+  evidenceRefs: string[];
+  gapRefs: string[];
+  topFiles: string[];
+}
+
+export interface HermesProgressLane {
+  workstream: string;
+  features: HermesProgressFeature[];
+}
+
+export interface HermesProgressSwimlaneResponse {
+  summary: {
+    total: number;
+    blocking: number;
+    readyForPr: number;
+    deployed: number;
+    verified: number;
+    workstreamCount: number;
+  };
+  phases: string[];
+  lanes: HermesProgressLane[];
+}
