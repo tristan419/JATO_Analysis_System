@@ -107,7 +107,7 @@ Hermes 按职责分为四个 Governor，每个 Governor 有自己的脚本、输
 |------|------|
 | **阶段** | Phase 5-5.5 |
 | **脚本** | `hermes_source_quality.py`, `hermes_evidence_writer.py`, `hermes_answer_audit.py`, `hermes_cost_report.py` |
-| **输入** | 注册表, `answer_audit.jsonl`, `model_pricing.yaml`, VOC/News/MSRP 数据 |
+| **输入** | 注册表, `answer_audit.jsonl`, `agent_usage.jsonl`, `eval/eval_usage.jsonl`, `model_pricing.yaml`, VOC/News/MSRP 数据 |
 | **输出** | source quality report, evidence ledger, answer audit, cost report |
 | **回答的问题** | 「VOC/News/MSRP 源质量如何？哪个该降级？」「国家助手回答有没有证据？幻觉风险多高？」「Flash/Pro token 花了多少钱？」 |
 | **触发** | 定期运行，与 pipeline audit 联动 |
@@ -209,7 +209,7 @@ Code Governor ──────┬──▶ Pipeline Governor ─────�
 
 **产出:** `model_pricing.yaml`，`MODEL_ROUTING_POLICY_2026-05-14.md`
 
-DeepSeek Flash vs Pro 路由策略，月度预算 500 CNY，75% 预警。
+DeepSeek Flash vs Pro 路由策略，月度预算 500 CNY，75% 预警。成本账本同时吸收 Country Copilot answer audit 和 AstrBot agent/eval usage，并按 usageId/evalId 去重，避免兼容 audit 记录重复计费。
 
 ### 3.8 Phase 5.6 — CI/Deploy 治理（2026-05-14）
 
@@ -750,7 +750,7 @@ Hermes Chat Gateway 是一个**基于规则的意图分类器**，零 LLM 成本
 | `hermes_code_audit.py` | 24K | 代码审计（10 条规则） | git diff | audit report (.md + .json) |
 | `hermes_pipeline_audit.py` | 32K | 管道健康扫描 | 注册表 + systemd + Airflow + GHA | pipeline_health.json |
 | `hermes_source_quality.py` | 12K | 源质量评分 | 注册表 + 运行日志 | source_quality_report.json |
-| `hermes_cost_report.py` | 16K | 成本追踪 | model_pricing.yaml + activity log | cost_report.json |
+| `hermes_cost_report.py` | 16K | 成本追踪 | model_pricing.yaml + answer_audit/agent_usage/eval_usage | cost_report.json |
 | `hermes_evidence_writer.py` | 12K | 证据提取 | artifacts | evidence_ledger.jsonl |
 | `hermes_answer_audit.py` | 16K | 答案审计 | Country Copilot 答案 | answer_audit.jsonl |
 | `hermes_registry_loader.py` | 4K | 注册表加载器 | 8 个 YAML 注册表 | 统一数据结构 |

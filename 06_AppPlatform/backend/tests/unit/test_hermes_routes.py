@@ -91,6 +91,11 @@ def _make_msrp_v3_report(run_id: str = "msrp-dryrun-20260611-120000") -> dict:
     }
 
 
+def _write_jsonl(path: Path, records: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+
+
 # ── /hermes/sentinel + deploy status ─────────────────────────────────
 
 class TestSentinelAndDeploy:
@@ -299,6 +304,33 @@ class TestSentinelAndDeploy:
 
         assert resp.status_code == 200
         assert resp.json()["summary"]["total"] == 1
+
+    def test_cost_heatmap_includes_astrbot_usage(self, client, tmp_path):
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _write_jsonl(
+            tmp_path / "hermes" / "agent_usage.jsonl",
+            [
+                {
+                    "usageId": "agent_usage_today",
+                    "recordedAt": now,
+                    "pricingModel": "deepseek-v4-flash",
+                    "inputTokens": 1,
+                    "outputTokens": 1,
+                    "estimatedCostCny": 0.42,
+                }
+            ],
+        )
+
+        with patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path), patch(
+            "app.api.routes.hermes.HERMES_DIR",
+            tmp_path / "hermes",
+        ):
+            resp = client.get("/hermes/cost-heatmap?days=1")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["totalCny"] == pytest.approx(0.42)
+        assert data["bySourceCny"]["astrbot"] == pytest.approx(0.42)
 
 
 # ── /hermes/gaps ──────────────────────────────────────────────────────
