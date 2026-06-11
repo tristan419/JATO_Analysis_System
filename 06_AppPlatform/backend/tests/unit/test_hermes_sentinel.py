@@ -9,7 +9,7 @@ def _ok_probe(name: str) -> dict:
     return {"probe": name, "overall": "ok", "findings": []}
 
 
-def test_run_all_probes_returns_active_notifications_during_cooldown(monkeypatch, tmp_path: Path):
+def test_run_all_probes_updates_existing_notification_without_reemitting(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(sentinel, "_project_root", tmp_path)
     monkeypatch.setattr(sentinel, "probe_devsync", lambda: {
         "probe": "devsync",
@@ -41,6 +41,9 @@ def test_run_all_probes_returns_active_notifications_during_cooldown(monkeypatch
     assert second["emittedNotifications"] == []
     assert len(second["notifications"]) == 1
     assert second["unreadCount"] == 1
+    assert second["notifications"][0]["id"] == first["notifications"][0]["id"]
+    assert second["notifications"][0]["occurrenceCount"] == 2
+    assert second["notifications"][0]["lastSeenAt"]
 
 
 def test_set_notification_status_supports_mailbox_states(monkeypatch, tmp_path: Path):
@@ -61,8 +64,63 @@ def test_set_notification_status_supports_mailbox_states(monkeypatch, tmp_path: 
     archived = sentinel.set_notification_status(created["id"], "archived")
     assert archived is not None
     assert archived["status"] == "archived"
+    assert (tmp_path / "hermes" / "sentinel_notification_state.json").is_file()
     assert sentinel.get_notifications(status="new") == []
     assert sentinel.get_notifications(status="archived")[0]["id"] == created["id"]
+
+
+def test_repeated_finding_preserves_read_state(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(sentinel, "_project_root", tmp_path)
+    monkeypatch.setattr(sentinel, "probe_devsync", lambda: {
+        "probe": "devsync",
+        "overall": "warning",
+        "findings": [{
+            "type": "missing_docs",
+            "severity": "medium",
+            "message": "1 feature has no documentation.",
+            "count": 1,
+        }],
+    })
+    monkeypatch.setattr(sentinel, "probe_workspace", lambda: _ok_probe("workspace"))
+    monkeypatch.setattr(sentinel, "probe_gaps", lambda: _ok_probe("gaps"))
+    monkeypatch.setattr(sentinel, "probe_evidence", lambda: _ok_probe("evidence"))
+    monkeypatch.setattr(sentinel, "probe_gha", lambda: _ok_probe("gha"))
+    monkeypatch.setattr(sentinel, "probe_deploy", lambda: _ok_probe("deploy"))
+    monkeypatch.setattr(sentinel, "probe_pipeline_failures", lambda: _ok_probe("pipeline_failures"))
+
+    first = sentinel.run_all_probes()
+    notification_id = first["notifications"][0]["id"]
+    read = sentinel.set_notification_status(notification_id, "read")
+    assert read is not None
+    assert read["status"] == "read"
+
+    second = sentinel.run_all_probes()
+
+    assert second["emittedNotifications"] == []
+    assert second["notifications"][0]["id"] == notification_id
+    assert second["notifications"][0]["status"] == "read"
+    assert second["notifications"][0]["occurrenceCount"] == 2
+    assert second["unreadCount"] == 0
+
+
+def test_deploy_pipeline_fingerprint_ignores_exit_code():
+    base = {
+        "findingType": "last_deploy_failed",
+        "conditionId": "deploy_pipeline",
+        "resourceId": "deploy-fullstack-tencent",
+        "environment": "production",
+        "workflow": "deploy-fullstack-tencent",
+        "stage": "ssh",
+        "conclusion": "failure",
+        "statusPath": "06_AppPlatform/frontend/dist/_deploy_status.txt",
+        "deployExitCode": "1",
+    }
+    changed_exit_code = {**base, "deployExitCode": "255"}
+
+    assert (
+        sentinel._notification_fingerprint("deploy", "Last Deploy Failed", base)
+        == sentinel._notification_fingerprint("deploy", "Last Deploy Failed", changed_exit_code)
+    )
 
 
 def test_probe_deploy_reports_commit_drift(monkeypatch):
@@ -70,16 +128,40 @@ def test_probe_deploy_reports_commit_drift(monkeypatch):
         "app.services.hermes_deploy_status_service.get_deploy_status",
         lambda: {
             "status": "critical",
-            "release": {"commitSha": "1111111111111111", "shortSha": "11111111"},
-            "expected": {"commitSha": "2222222222222222", "shortSha": "22222222"},
+            "release": {
+                "actualCommitSha": "1111111111111111",
+                "commitSha": "1111111111111111",
+                "shortSha": "11111111",
+                "metadataPath": "hermes/deploy_release.json",
+                "environment": "production",
+            },
+            "expected": {
+                "expectedCommitSha": "2222222222222222",
+                "commitSha": "2222222222222222",
+                "shortSha": "22222222",
+                "metadataPath": "hermes/deploy_expected.json",
+            },
             "drift": {
                 "isDrift": True,
                 "releaseUnknown": False,
                 "releaseCommitSha": "1111111111111111",
+                "actualCommitSha": "1111111111111111",
                 "expectedCommitSha": "2222222222222222",
                 "commitsBehind": 40,
             },
             "lastDeploy": {"available": False},
+            "conditions": {
+                "productionRevision": {
+                    "id": "production_revision",
+                    "status": "critical",
+                    "type": "production_commit_drift",
+                },
+                "deployPipeline": {
+                    "id": "deploy_pipeline",
+                    "status": "unknown",
+                    "type": "last_deploy_status_missing",
+                },
+            },
         },
     )
 
@@ -87,8 +169,66 @@ def test_probe_deploy_reports_commit_drift(monkeypatch):
 
     assert result["overall"] == "critical"
     assert result["findings"][0]["type"] == "production_commit_drift"
+    assert result["findings"][0]["conditionId"] == "production_revision"
+    assert result["findings"][0]["conditionStatus"] == "critical"
+    assert result["findings"][0]["releaseMetadataPath"] == "hermes/deploy_release.json"
     assert "11111111" in result["findings"][0]["message"]
     assert "22222222" in result["findings"][0]["message"]
+
+
+def test_probe_deploy_reports_pipeline_failure_separately_from_revision(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.hermes_deploy_status_service.get_deploy_status",
+        lambda: {
+            "status": "critical",
+            "release": {
+                "actualCommitSha": "2222222222222222",
+                "commitSha": "2222222222222222",
+                "shortSha": "22222222",
+                "environment": "production",
+            },
+            "expected": {
+                "expectedCommitSha": "2222222222222222",
+                "commitSha": "2222222222222222",
+                "shortSha": "22222222",
+            },
+            "drift": {
+                "isDrift": False,
+                "releaseUnknown": False,
+                "releaseCommitSha": "2222222222222222",
+                "actualCommitSha": "2222222222222222",
+                "expectedCommitSha": "2222222222222222",
+                "commitsBehind": 0,
+            },
+            "lastDeploy": {
+                "available": True,
+                "deployExitCode": "255",
+                "path": "06_AppPlatform/frontend/dist/_deploy_status.txt",
+                "timestamp": "Thu Jun 11 10:00:00 UTC 2026",
+            },
+            "conditions": {
+                "productionRevision": {
+                    "id": "production_revision",
+                    "status": "ok",
+                    "type": "production_revision_ok",
+                },
+                "deployPipeline": {
+                    "id": "deploy_pipeline",
+                    "status": "critical",
+                    "type": "last_deploy_failed",
+                },
+            },
+        },
+    )
+
+    result = sentinel.probe_deploy()
+
+    assert result["overall"] == "critical"
+    assert len(result["findings"]) == 1
+    assert result["findings"][0]["type"] == "last_deploy_failed"
+    assert result["findings"][0]["conditionId"] == "deploy_pipeline"
+    assert result["findings"][0]["deployExitCode"] == "255"
+    assert result["findings"][0]["statusPath"] == "06_AppPlatform/frontend/dist/_deploy_status.txt"
 
 
 def test_probe_workspace_delegates_to_service(monkeypatch):
