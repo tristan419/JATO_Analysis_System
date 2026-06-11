@@ -28,8 +28,11 @@ Reconnected deploy release/expected commit tracking, added /hermes/deploy/status
 - Made Alembic role_upgrade_requests migration idempotent using SQLAlchemy inspector and PostgreSQL IF NOT EXISTS indexes
 - DevSync records expected deploy commits
 - Deploy workflow writes hermes/deploy_release.json into the archive
-- Sentinel deploy probe compares release and expected commits
+- Deploy workflow records expectedCommitSha, and the server deploy script records actualCommitSha/deployedAt/serviceRestartedAt/healthz after health checks pass
+- /hermes/deploy/status separates productionRevision drift from deployPipeline failure conditions
+- Sentinel deploy probe compares production actual commit and expected commit
 - Notification records include action level, blocking flag, recommended action, and mailbox states
+- Sentinel notification IDs are stable fingerprint-derived IDs; repeated findings update lastSeenAt/occurrenceCount while mailbox state stays in sentinel_notification_state.json
 
 ## Frontend
 

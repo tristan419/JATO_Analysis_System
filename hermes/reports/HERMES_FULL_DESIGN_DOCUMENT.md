@@ -4,6 +4,17 @@
 > 基于: 全仓库代码、文档、注册表、git 历史分析
 > 版本: v1.0
 
+Alias:
+- Hermes Steward
+- Hermes 小管家
+- 小管家
+- Hermes governance assistant
+
+Canonical name in code: Hermes
+Frontend label: Hermes Steward / Hermes 小管家
+Route: `/data/overview?view=hermes`
+Backend prefix: `/v1/hermes/*`
+
 ---
 
 ## 目录
@@ -55,7 +66,7 @@ Hermes 是 JATO Analysis System 的**治理层（Governance Layer）**。它是�
     Registries ◀──────▶ │  pipeline_audit              │
     Claude Code ◀─────▶ │  DevSync (dev_events.jsonl)  │
     User Chat ────────▶ │  Chat Gateway (intent route) │
-                        │  Sentinel (5 probes)          │
+                        │  Sentinel (7 probes)          │
                         └──────────────────────────────┘
                                   │
                                   ▼
@@ -225,7 +236,7 @@ DeepSeek Flash vs Pro 路由策略，月度预算 500 CNY，75% 预警。
 
 **产出:**
 - `hermes_devsync_service.py` — DevSync 同步管道
-- `hermes_sentinel_service.py` — Sentinel 5 探针
+- `hermes_sentinel_service.py` — Sentinel 7 探针
 - `hermes/dev_events/dev_events.jsonl` — 开发事件账本
 - `hermes/registry/features.yaml` — DevSync 生成的特性注册表
 - GitHub Actions `hermes-devsync.yml` — 推送自动生成 dev event
@@ -421,20 +432,51 @@ governance_gaps ◀──── proposal_registry（修复方案）
 
 **路径:** `hermes/sentinel_notifications.jsonl`
 
-Sentinel 探针检测到异常时生成的通知。包含冷却机制（同探针 30 分钟内不重复，同标题 60 分钟内不重复）。
+Sentinel 探针检测到异常时生成的通知事实日志。通知 ID 来自 `probe + findingType + 稳定上下文` 的 fingerprint；同一问题重复出现时更新同一条记录的 `lastSeenAt` 和 `occurrenceCount`，不追加重复通知。
 
 ```json
 {
-  "id": "notif_20260515_120000_abc123",
+  "id": "notif_5a3b2f9d7e1c4a08",
+  "fingerprint": "{\"conditionId\":\"production_revision\",\"environment\":\"production\",\"findingType\":\"production_commit_drift\",\"probe\":\"deploy\"}",
   "severity": "medium",
   "source": "devsync",
   "title": "Missing Docs",
   "body": "15 features have no documentation.",
   "actions": ["View details"],
   "status": "new",
-  "createdAt": "2026-05-15T12:00:00Z"
+  "createdAt": "2026-05-15T12:00:00Z",
+  "firstSeenAt": "2026-05-15T12:00:00Z",
+  "lastSeenAt": "2026-05-15T12:30:00Z",
+  "occurrenceCount": 2
 }
 ```
+
+### 5.4 sentinel_notification_state.json — 通知邮箱状态
+
+**路径:** `hermes/sentinel_notification_state.json`
+
+通知的 read/acked/archived/resolved 等邮箱状态单独保存，不改写事实身份。该文件是用户态运行时状态，已加入 `.gitignore`。
+
+```json
+{
+  "notifications": {
+    "notif_5a3b2f9d7e1c4a08": {
+      "status": "read",
+      "updatedAt": "2026-05-15T12:40:00Z"
+    }
+  }
+}
+```
+
+### 5.5 Deploy runtime metadata
+
+| File | Writer | Purpose |
+|------|--------|---------|
+| `hermes/deploy_release.json` | `deploy-fullstack-tencent` archive + server deploy script | Production release metadata: service, environment, expectedCommitSha, actualCommitSha, deployMethod, deployedAt, serviceRestartedAt, healthz |
+| `hermes/deploy_expected.json` | DevSync / GitHub Actions callback | Latest commit that production is expected to run |
+| `06_AppPlatform/frontend/dist/_deploy_status.txt` | Remote deploy workflow step | Last automated deploy exit code and operational diagnostics |
+
+Hermes compares `deploy_expected.json` with the server-side `actualCommitSha` in `deploy_release.json`. `_deploy_status.txt` is tracked separately so automated deploy failure remains visible even when a manual deploy has updated production.
 
 ---
 
@@ -584,11 +626,16 @@ flowchart TD
 
 Sentinel 是 Hermes 中**唯一可以主动告警的模块**。其他模块只写事实（events、evidence、gaps）。
 
-**冷却机制:**
-- 同一探针 30 分钟内不重复通知
-- 同一标题 60 分钟内不重复通知
+**通知身份与状态:**
+- 同一 finding 使用稳定 fingerprint 生成同一个 `notif_*` ID。
+- 重复探测只更新 `lastSeenAt` 和 `occurrenceCount`，不会在 Inbox 追加重复卡片。
+- 用户邮箱状态写入 `sentinel_notification_state.json`，保留 read/acked/archived/resolved 等状态。
+- fingerprint 不使用 message、时间、occurrenceCount、recommendedAction、deployExitCode 等易变字段。
+- Deploy 与 pipeline finding 会带上 commit、conditionId、pipeline、status path、artifact refs 等上下文，便于追溯。
 
-### 8.2 五个探针
+### 8.2 当前 7 个探针
+
+The code is the source of truth for active probes; this document must be updated when probes are added or removed.
 
 | 探针 | 功能 | 检测内容 |
 |------|------|----------|
@@ -597,8 +644,21 @@ Sentinel 是 Hermes 中**唯一可以主动告警的模块**。其他模块只�
 | `probe_gaps()` | 治理漏洞 | open 状态的 high/medium severity gap 数量 |
 | `probe_evidence()` | 证据新鲜度 | evidence ledger 是否存在、是否超过 48h 未更新 |
 | `probe_gha()` | GitHub Actions | 最近 24h 是否有 DevSync 证据 |
+| `probe_deploy()` | 生产版本一致性 | expected commit、actual commit、release metadata、deploy 状态和 commit drift |
+| `probe_pipeline_failures()` | 管道运行状态 | 标准 pipeline status、legacy scheduled status、失败/降级/过期状态 |
 
-### 8.3 聚合逻辑
+### 8.3 Deploy condition split
+
+`/deploy/status` exposes two separate conditions:
+
+| Condition | Purpose | Resolution rule |
+|-----------|---------|-----------------|
+| `productionRevision` | Production actual commit vs expected commit | Can be resolved after production runs the expected commit and health/smoke checks pass |
+| `deployPipeline` | Last automated deploy status (`_deploy_status.txt`) | Can only be resolved after the automated deploy path succeeds |
+
+Manual SCP + `systemctl restart` may clear `productionRevision` drift, but it must not close a `deployPipeline` failure. Sentinel emits separate findings (`production_commit_drift`, `last_deploy_failed`) so future gap closure checks can keep those two states independent.
+
+### 8.4 聚合逻辑
 
 ```
 所有探针 ok → overall: ok
@@ -606,9 +666,9 @@ Sentinel 是 Hermes 中**唯一可以主动告警的模块**。其他模块只�
 任何探针 critical → overall: critical
 ```
 
-通知只在 severity ≥ medium 时发送。High/critical → 30min cooldown，medium → 120min cooldown。
+通知只在 severity ≥ medium 时发送。High/critical 默认是 blocking，medium 默认是 needs_review；重复 finding 更新同一条通知的出现次数和最后发现时间。
 
-### 8.4 通知示例
+### 8.5 通知示例
 
 ```
 Sentinel 检测到:
@@ -849,7 +909,7 @@ flowchart TD
         U --> V[Create governance gaps if docs/tests missing]
         V --> W[Sync to kanban feature_registry.yaml]
 
-        X[Sentinel 5 probes] --> Y[sentinel_notifications.jsonl]
+        X[Sentinel 7 probes] --> Y[sentinel_notifications.jsonl]
         Y --> Z[UI notification bell]
     end
 
@@ -1091,9 +1151,11 @@ POST /v1/hermes/dev/sync
 GET  /v1/hermes/dev/features
 GET  /v1/hermes/dev/features/{feature_id}
 GET  /v1/hermes/dev/workspace-health
+GET  /v1/hermes/deploy/status
 GET  /v1/hermes/sentinel/status
 GET  /v1/hermes/sentinel/notifications
 POST /v1/hermes/sentinel/ack/{notification_id}
+POST /v1/hermes/sentinel/notifications/{notification_id}/status
 ```
 
 ## 附录 C: Git 历史摘要
@@ -1105,6 +1167,6 @@ Hermes 开发自 2026-05-14 启动，截至 2026-05-17 已有 **60+ 次提交**�
 - **Phase 5.6:** CI/Deploy 工作流治理
 - **Phase 6:** Data Management UI 集成、Hermes 标签页
 - **Phase 6.5:** 浏览器内执行 CLI、服务器快照同步
-- **DevSync 阶段:** Claude Code 集成、Sentinel 5 探针、GitHub Actions 自动 dev event
+- **DevSync 阶段:** Claude Code 集成、Sentinel 主动探针、GitHub Actions 自动 dev event
 - **Kanban 桥接:** DevSync 自动更新 feature_registry.yaml 看板
 - **持续迭代:** 去重、名称清理、RBAC 权限控制、通知铃

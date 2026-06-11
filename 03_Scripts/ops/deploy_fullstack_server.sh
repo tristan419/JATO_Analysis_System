@@ -176,6 +176,43 @@ else
   echo "[WARN] Deploy release metadata missing: $DEPLOY_RELEASE_FILE"
 fi
 
+mark_release_deployed() {
+  local actual_commit=""
+
+  if [[ ! -f "$DEPLOY_RELEASE_FILE" ]]; then
+    echo "[WARN] Cannot update missing deploy release metadata: $DEPLOY_RELEASE_FILE"
+    return
+  fi
+
+  if [[ -d "$REPO_DIR/.git" ]]; then
+    actual_commit="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || true)"
+  fi
+
+  node - "$DEPLOY_RELEASE_FILE" "$BACKEND_SERVICE_NAME" "$actual_commit" <<'JS' || true
+const fs = require("fs");
+const [path, serviceName, actualCommitFromGit] = process.argv.slice(2);
+const payload = JSON.parse(fs.readFileSync(path, "utf8"));
+const now = new Date().toISOString();
+const expectedCommit = payload.expectedCommitSha || payload.commitSha || payload.commit || "";
+const actualCommit = actualCommitFromGit || payload.actualCommitSha || payload.actualCommit || payload.commitSha || payload.commit || "";
+
+payload.service = payload.service || serviceName || "jato-fullstack-backend";
+payload.environment = payload.environment || "production";
+payload.deployMethod = payload.deployMethod || payload.source || "manual_script";
+payload.expectedCommitSha = expectedCommit;
+payload.expectedShortSha = payload.expectedShortSha || expectedCommit.slice(0, 8);
+payload.actualCommitSha = actualCommit;
+payload.actualShortSha = actualCommit.slice(0, 8);
+payload.commitSha = actualCommit || expectedCommit;
+payload.shortSha = payload.actualShortSha || payload.expectedShortSha;
+payload.deployedAt = now;
+payload.serviceRestartedAt = now;
+payload.healthz = "ok";
+
+fs.writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+JS
+}
+
 cleanup_known_untracked_paths() {
   local raw_pattern=""
   local candidate=""
@@ -587,6 +624,7 @@ for i in $(seq 1 15); do
   echo "[INFO] Health check attempt $i failed, retrying in 5s …"
   sleep 5
 done
+mark_release_deployed
 
 echo "[INFO] Current revision"
 CURRENT_STEP="Print revision"
