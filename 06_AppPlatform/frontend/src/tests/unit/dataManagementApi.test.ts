@@ -139,6 +139,30 @@ describe("data management api", () => {
     );
   });
 
+  it("builds Hermes proposals URLs without duplicate question marks", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.hermesProposals()).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining("/hermes/proposals"),
+      expect.any(Object),
+    );
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).not.toContain("??");
+
+    await expect(api.hermesProposals("implemented")).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining("/hermes/proposals?status=implemented"),
+      expect.any(Object),
+    );
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).not.toContain("??status=implemented");
+  });
+
   it("preserves conflict detail for airflow stop errors", async () => {
     vi.stubGlobal(
       "fetch",
