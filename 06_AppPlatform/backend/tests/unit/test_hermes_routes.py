@@ -136,6 +136,35 @@ class TestSentinelAndDeploy:
         assert data["pipelineId"] == "msrp_ingest"
         assert data["status"] == "missing"
 
+    def test_msrp_country_progress_latest_missing_returns_empty_state(self, client, tmp_path):
+        reports_dir = tmp_path / "hermes" / "reports"
+        reports_dir.mkdir(parents=True)
+
+        with (
+            patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path),
+            patch("app.api.routes.hermes.REPORTS_DIR", reports_dir),
+        ):
+            resp = client.get("/hermes/msrp-country-progress")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["probe"] == "pipeline.msrp_country_progress"
+        assert data["countries"] == []
+        assert data["findings"][0]["type"] == "no_dryrun_report"
+        assert data["sourceRepairBacklog"]["groups"] == []
+
+    def test_msrp_country_progress_missing_specific_run_remains_404(self, client, tmp_path):
+        reports_dir = tmp_path / "hermes" / "reports"
+        reports_dir.mkdir(parents=True)
+
+        with (
+            patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path),
+            patch("app.api.routes.hermes.REPORTS_DIR", reports_dir),
+        ):
+            resp = client.get("/hermes/msrp-country-progress?run_id=missing-run")
+
+        assert resp.status_code == 404
+
 
 # ── /hermes/gaps ──────────────────────────────────────────────────────
 
@@ -733,7 +762,24 @@ class TestDevSyncAuthFailClosed:
         )
         assert resp.status_code == 401
 
-    def test_non_github_actions_no_token_required(self, client, monkeypatch, tmp_path):
+    def test_github_actions_sync_token_works_when_auth_enabled(self, client, monkeypatch, tmp_path):
+        monkeypatch.setattr("app.core.security.AUTH_ENABLED", True)
+        monkeypatch.setenv("HERMES_SYNC_TOKEN", "valid-token")
+        monkeypatch.setattr("app.api.routes.hermes.HERMES_DIR", tmp_path)
+        monkeypatch.setattr(
+            "app.services.hermes_devsync_service.sync_dev_events",
+            lambda: {"status": "ok", "synced": 0},
+        )
+
+        resp = client.post(
+            "/hermes/dev/sync?source=github_actions",
+            json={},
+            headers={"Authorization": "Bearer valid-token"},
+        )
+
+        assert resp.status_code == 200
+
+    def test_non_github_actions_uses_local_admin_when_auth_disabled(self, client, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_SYNC_TOKEN", "")
         monkeypatch.setattr("app.api.routes.hermes.HERMES_DIR", tmp_path)
         monkeypatch.setattr(
@@ -741,6 +787,37 @@ class TestDevSyncAuthFailClosed:
             lambda: {"status": "ok", "synced": 0},
         )
         resp = client.post("/hermes/dev/sync?source=claude_code", json={})
+        assert resp.status_code == 200
+
+    def test_non_github_actions_requires_developer_role_when_auth_enabled(self, client, monkeypatch):
+        monkeypatch.setattr("app.core.security.AUTH_ENABLED", True)
+
+        resp = client.post(
+            "/hermes/dev/sync?source=claude_code",
+            json={},
+            headers={"Authorization": "Bearer wrong-token"},
+        )
+
+        assert resp.status_code == 403
+
+    def test_non_github_actions_allows_developer_token_when_auth_enabled(self, client, monkeypatch, tmp_path):
+        from app.core import security
+
+        monkeypatch.setattr("app.core.security.AUTH_ENABLED", True)
+        monkeypatch.setitem(security.TOKEN_ROLE_MAP, "dev-token", "developer")
+        monkeypatch.setenv("HERMES_SYNC_TOKEN", "")
+        monkeypatch.setattr("app.api.routes.hermes.HERMES_DIR", tmp_path)
+        monkeypatch.setattr(
+            "app.services.hermes_devsync_service.sync_dev_events",
+            lambda: {"status": "ok", "synced": 0},
+        )
+
+        resp = client.post(
+            "/hermes/dev/sync?source=claude_code",
+            json={},
+            headers={"X-Auth-Token": "dev-token"},
+        )
+
         assert resp.status_code == 200
 
 

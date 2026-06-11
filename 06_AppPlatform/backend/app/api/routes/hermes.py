@@ -45,6 +45,31 @@ def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
+def _empty_msrp_country_progress() -> dict[str, Any]:
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {
+        "probe": "pipeline.msrp_country_progress",
+        "overall": "critical",
+        "generatedAt": now,
+        "status": {},
+        "countries": [],
+        "topBlockingCountries": [],
+        "topFailureReasons": [],
+        "sourceRepairBacklog": {
+            "schemaVersion": "msrp_source_repair_backlog_v1",
+            "runId": None,
+            "generatedAt": None,
+            "totalIssueCount": 0,
+            "groups": [],
+        },
+        "findings": [{
+            "type": "no_dryrun_report",
+            "severity": "critical",
+            "message": "No dryrun report found. MSRP dryrun may not have run yet.",
+        }],
+    }
+
+
 @router.get("/overview")
 def hermes_overview(_=Depends(require_min_role("viewer"))) -> dict:
     """Return a consolidated Hermes governance overview."""
@@ -155,7 +180,10 @@ def hermes_msrp_country_progress(
     """Return MSRP country progress for latest or specific run_id."""
     if run_id:
         return _read_json(REPORTS_DIR / f"msrp_country_progress_{run_id}.json")
-    return _read_json(REPORTS_DIR / "msrp_country_progress.json")
+    path = REPORTS_DIR / "msrp_country_progress.json"
+    if not path.is_file():
+        return _empty_msrp_country_progress()
+    return _read_json(path)
 
 
 @router.get("/msrp-dryrun-history")
