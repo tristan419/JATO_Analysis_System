@@ -158,6 +158,27 @@ proposals:
     implementedAt: "2026-05-20"
     notes: "Implemented with hermes_ops_runner_service.py, route reuse, tests for disabled runner, redaction, lock contention, and activity/evidence writes."
 
+  - proposalId: proposal.hermes_history_progress_cockpit
+    type: product_cockpit
+    title: "Hermes History Map and Progress Swimlane Cockpit"
+    summary: "Upgrade Hermes from registry/report dashboard into an interactive project history and progress cockpit. Aggregate git commits, DevSync events, feature registry, evidence, gaps, Sentinel, pipeline, and deploy metadata into a clustered timeline plus feature lifecycle swimlanes."
+    affectedFeatures:
+      - "feature.hermes_history_progress_cockpit"
+      - "hermes-devsync"
+      - "feature.hermes_deploy_sentinel"
+    affectedPipelines:
+      - "hermes-devsync"
+      - "deploy-fullstack-tencent"
+    affectedSources: []
+    affectedPrompts: []
+    riskLevel: low
+    expectedImpact: "Makes Hermes answer human project questions: what changed, which workstream advanced, which feature is ready for PR, and what remains blocked by tests, evidence, deployment, or open gaps."
+    rollbackPlan: "Remove hermes_history_service.py, /hermes/history/* and /hermes/progress/* routes, and the History/Progress tabs from the Data Management Hermes UI."
+    status: in_progress
+    createdAt: "2026-06-12"
+    implementedAt: null
+    notes: "MVP implements read-only Progress Swimlane and History Map. Model Workflow and semantic clustering are deferred until DevSync/session usage ledgers are richer."
+
   - proposalId: proposal.deploy.disable_legacy_ec2
     type: pipeline_dedup
     title: "Disable or convert legacy deploy-ssh-auto-update to manual-only"

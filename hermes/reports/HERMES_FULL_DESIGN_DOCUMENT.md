@@ -551,6 +551,15 @@ Hermes compares `deploy_expected.json` with the server-side `actualCommitSha` in
 | GET | `/sentinel/notifications?status=new` | 列出通知 | viewer+ |
 | POST | `/sentinel/ack/{notification_id}` | 确认通知 | admin+ |
 
+### 6.7 History / Progress Cockpit API
+
+| 方法 | 端点 | 描述 | 鉴权 |
+|------|------|------|------|
+| GET | `/history/events` | 聚合 git、DevSync、evidence、Sentinel、pipeline、deploy 事件 | viewer+ |
+| GET | `/history/clusters?level=feature&yAxis=workstream` | 按粒度和 Y 轴生成 History Map clusters | viewer+ |
+| GET | `/progress/features` | 功能生命周期状态、风险、测试、文档、evidence、gap、下一步 | viewer+ |
+| GET | `/progress/swimlanes` | 按 workstream 分组的 Progress Swimlane 数据 | viewer+ |
+
 ---
 
 ## 7. DevSync：Claude Code 开发治理闭环
@@ -1152,6 +1161,10 @@ GET  /v1/hermes/dev/features
 GET  /v1/hermes/dev/features/{feature_id}
 GET  /v1/hermes/dev/workspace-health
 GET  /v1/hermes/deploy/status
+GET  /v1/hermes/history/events
+GET  /v1/hermes/history/clusters
+GET  /v1/hermes/progress/features
+GET  /v1/hermes/progress/swimlanes
 GET  /v1/hermes/sentinel/status
 GET  /v1/hermes/sentinel/notifications
 POST /v1/hermes/sentinel/ack/{notification_id}
