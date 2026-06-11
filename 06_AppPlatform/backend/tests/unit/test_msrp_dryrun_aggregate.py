@@ -96,6 +96,31 @@ def test_aggregate_counts_countries():
         shutil.rmtree(run_dir, ignore_errors=True)
 
 
+def test_aggregate_writes_history_index_and_source_repair_backlog(tmp_path):
+    """Aggregator writes latest, historical, runs index, and repair backlog artifacts."""
+    run_dir = tmp_path / "msrp-dryrun-20260521-033000"
+    countries_dir = run_dir / "countries"
+    countries_dir.mkdir(parents=True)
+    (countries_dir / "se.json").write_text(json.dumps(_make_country_artifact("se", 2, 5)))
+
+    out_latest = tmp_path / "artifacts" / "dryrun_report.json"
+    result = agg_mod.run(str(run_dir), ["se"], out_latest=str(out_latest))
+
+    assert result["schemaVersion"] == "msrp_dryrun_report_v3"
+    assert out_latest.is_file()
+    assert (out_latest.parent / "dryrun_report_msrp-dryrun-20260521-033000.json").is_file()
+
+    index = json.loads((out_latest.parent / "dryrun_runs_index.json").read_text())
+    assert index["latestRunId"] == "msrp-dryrun-20260521-033000"
+    assert index["runs"][0]["runId"] == "msrp-dryrun-20260521-033000"
+    assert index["runs"][0]["runDir"].endswith("msrp-dryrun-20260521-033000")
+
+    backlog = json.loads((out_latest.parent / "msrp_source_repair_backlog.json").read_text())
+    assert backlog["runId"] == "msrp-dryrun-20260521-033000"
+    assert backlog["groups"][0]["failureReason"] == "no_observation_extracted"
+    assert backlog["groups"][0]["affectedCountries"] == ["se"]
+
+
 def test_aggregate_status_mapping():
     """Status mapping: >=90 success, >=50 degraded, <50 failure."""
     # success

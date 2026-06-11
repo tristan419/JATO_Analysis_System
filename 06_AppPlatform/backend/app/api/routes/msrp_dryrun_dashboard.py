@@ -13,10 +13,11 @@ router = APIRouter(prefix="/msrp-dryrun", tags=["msrp-dryrun"])
 
 @router.get("/dashboard")
 def dryrun_dashboard(
+    run_id: str | None = Query(None),
     _=Depends(require_min_role("viewer")),
 ) -> dict:
     """Live progress + historical runs for the MSRP dryrun pipeline."""
-    return get_dryrun_dashboard()
+    return get_dryrun_dashboard(run_id=run_id)
 
 
 @router.get("/country-detail")

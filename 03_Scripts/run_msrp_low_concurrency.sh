@@ -94,9 +94,13 @@ if [[ "$MODE" == "ingest" ]]; then
 import json
 with open('$DRYRUN_REPORT') as f:
     r = json.load(f)
-total = r.get('total', 0)
-ok = r.get('pass', 0)
-pct = (ok / total * 100) if total > 0 else 0
+s = r.get('summary') or r
+if 'passPct' in s:
+    pct = float(s.get('passPct') or 0)
+else:
+    total = s.get('total', 0)
+    ok = s.get('pass', 0)
+    pct = (ok / total * 100) if total > 0 else 0
 print(f'{pct:.0f}')
 " 2>/dev/null || echo "0")
     echo "[GATE] Latest dryrun pass rate: ${PASS_PCT}% (threshold: ${MIN_DRYRUN_PASS_PCT}%)"
@@ -127,7 +131,7 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
 fi
 
 # ── Phase 2: Per-batch run directory ───────────────────────────────
-TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
+TIMESTAMP="$(date -u '+%Y%m%d-%H%M%S')"
 RUN_ID="msrp-${MODE}-${TIMESTAMP}"
 RUN_DIR="$LOG_DIR/$RUN_ID"
 COUNTRY_ARTIFACT_DIR="$RUN_DIR/countries"
@@ -268,6 +272,14 @@ if [[ -f "$AGGR_SCRIPT" ]] && [[ "$MODE" == "dryrun" ]]; then
     --expected-countries "${COUNTRIES[*]}" \
     --out-latest "$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_report.json" 2>&1; then
     echo "[INFO] Aggregation complete"
+    HERMES_MSRP_SCRIPT="$SCRIPT_DIR/hermes/hermes_msrp_country_progress.py"
+    if [[ -f "$HERMES_MSRP_SCRIPT" ]]; then
+      if "$PYTHON_BIN" "$HERMES_MSRP_SCRIPT" --out-dir "$REPO_DIR/hermes/reports" 2>&1; then
+        echo "[INFO] Hermes MSRP country progress refreshed"
+      else
+        echo "[WARN] Hermes MSRP country progress refresh failed (non-fatal)"
+      fi
+    fi
   else
     echo "[WARN] Aggregation failed (non-fatal)"
   fi
@@ -288,13 +300,9 @@ existing['msrp_dryrun'] = {
     'lastRunAt': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'status': s.get('status', 'unknown'),
     'runId': r.get('runId', ''),
-    'countryCount': len(r.get('expectedCountries', [])),
-    'observedCountryCount': len(r.get('observedCountries', [])),
-    'missingCountryCount': len(r.get('missingCountries', [])),
-    'successCount': s.get('pass', 0),
-    'failureCount': (s.get('total', 0) or 0) - (s.get('pass', 0) or 0),
-    'passPct': s.get('passPct', 0.0),
     'artifactPath': '03_Scripts/diagnostics/artifacts/dryrun_report.json',
+    'historyIndexPath': '03_Scripts/diagnostics/artifacts/dryrun_runs_index.json',
+    'runArtifactPath': f\"03_Scripts/diagnostics/artifacts/dryrun_report_{r.get('runId', '')}.json\" if r.get('runId') else '',
     'schemaVersion': 'msrp_dryrun_report_v3',
 }
 with open(status_path, 'w') as f:

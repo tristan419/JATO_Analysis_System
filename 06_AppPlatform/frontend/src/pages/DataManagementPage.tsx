@@ -35,6 +35,9 @@ import type {
   HermesSentinelStatusResponse,
   HermesMsrpCountryProgressCountry,
   HermesMsrpCountryProgressResponse,
+  HermesMsrpDryrunHistoryResponse,
+  HermesMsrpDryrunHistoryRun,
+  HermesMsrpSourceRepairBacklogGroup,
   HermesSourceQualityResponse,
   HermesToolchainResponse,
 } from "../types/hermes";
@@ -82,6 +85,18 @@ function getSentinelSeverityColor(severity: string): string {
   if (severity === "critical" || severity === "high") return "#dc2626";
   if (severity === "medium") return "#d97706";
   return "#2563eb";
+}
+
+function getMsrpProgressColor(passPct: number): string {
+  if (passPct >= 90) return "#16a34a";
+  if (passPct >= 70) return "#ca8a04";
+  if (passPct >= 50) return "#ea580c";
+  return "#dc2626";
+}
+
+function formatHermesRunLabel(run: HermesMsrpDryrunHistoryRun): string {
+  const finished = run.finishedAt ? new Date(run.finishedAt).toLocaleString() : run.runId;
+  return `${finished} · ${run.passPct}% · ${run.gateStatus}`;
 }
 
 function normalizeSentinelMailboxStatus(status: string): SentinelInboxFilter {
@@ -327,6 +342,8 @@ export function DataManagementPage() {
   const [hermesPipelines, setHermesPipelines] = useState<HermesPipelineHealthResponse | null>(null);
   const [hermesSources, setHermesSources] = useState<HermesSourceQualityResponse | null>(null);
   const [hermesMsrpProgress, setHermesMsrpProgress] = useState<HermesMsrpCountryProgressResponse | null>(null);
+  const [hermesMsrpHistory, setHermesMsrpHistory] = useState<HermesMsrpDryrunHistoryResponse | null>(null);
+  const [hermesMsrpRunId, setHermesMsrpRunId] = useState("");
   const [hermesCost, setHermesCost] = useState<HermesCostResponse | null>(null);
   const [hermesProposals, setHermesProposals] = useState<Record<string, unknown>[]>([]);
   const [hermesFeatures, setHermesFeatures] = useState<Record<string, unknown>[]>([]);
@@ -557,7 +574,6 @@ export function DataManagementPage() {
     if ((hermesSubtab === "activity" || hermesSubtab === "roadmap") && !hermesPipelines) {
       api.hermesPipelineHealth().then(setHermesPipelines).catch((e: Error) => setHermesTabError(e.message));
       api.hermesSourceQuality().then(setHermesSources).catch((e: Error) => setHermesTabError(e.message));
-      api.hermesMsrpCountryProgress().then(setHermesMsrpProgress).catch(() => {});
     }
     if (hermesSubtab === "roadmap" && hermesProposals.length === 0) {
       api.hermesProposals().then(setHermesProposals).catch((e: Error) => setHermesTabError(e.message));
@@ -568,6 +584,20 @@ export function DataManagementPage() {
       api.hermesMarkdownDiagrams().then(setHermesDiagrams).catch((e: Error) => setHermesTabError(e.message));
     }
   }, [hermesSubtab, subpage]);
+
+  useEffect(() => {
+    if (subpage !== "hermes" || (hermesSubtab !== "activity" && hermesSubtab !== "roadmap")) return;
+    api.hermesMsrpCountryProgress(hermesMsrpRunId || undefined)
+      .then(setHermesMsrpProgress)
+      .catch(() => {});
+  }, [hermesMsrpRunId, hermesSubtab, subpage]);
+
+  useEffect(() => {
+    if (subpage !== "hermes" || (hermesSubtab !== "activity" && hermesSubtab !== "roadmap") || hermesMsrpHistory) return;
+    api.hermesMsrpDryrunHistory()
+      .then(setHermesMsrpHistory)
+      .catch(() => {});
+  }, [hermesMsrpHistory, hermesSubtab, subpage]);
 
   useEffect(() => {
     if (subpage !== "features" || featureKanban) return;
@@ -1469,38 +1499,124 @@ export function DataManagementPage() {
                       ) : <span style={{color:"#94a3b8",fontSize:11}}>Run source quality to populate</span>}
                     </div>
                   </div>
-                  {/* MSRP Country Progress */}
+                  {/* MSRP Governance Center */}
                   <div className="card crud-card">
-                    <div className="admin-card-header"><div><h2>MSRP Country Progress</h2></div></div>
+                    <div className="admin-card-header">
+                      <div><h2>MSRP Governance Center</h2></div>
+                      <select
+                        value={hermesMsrpRunId}
+                        onChange={(event) => setHermesMsrpRunId(event.target.value)}
+                        style={{minWidth:170,fontSize:11,padding:"5px 8px",border:"1px solid #cbd5e1",borderRadius:6,background:"#fff"}}
+                      >
+                        <option value="">Latest</option>
+                        {(hermesMsrpHistory?.runs ?? []).slice(0,30).map((run: HermesMsrpDryrunHistoryRun) => (
+                          <option key={run.runId} value={run.runId}>{formatHermesRunLabel(run)}</option>
+                        ))}
+                      </select>
+                    </div>
                     <div style={{padding:12}}>
-                      {hermesMsrpProgress?.countries?.length ? (
-                        <div style={{display:"grid",gap:6,maxHeight:260,overflowY:"auto"}}>
-                          <div style={{fontSize:11,color:"#64748b",marginBottom:4}}>
-                            {hermesMsrpProgress?.status?.gateStatus === "blocked" ? "⛔" : "✅"} Gate {hermesMsrpProgress?.status?.gateStatus}
-                            {" · "}{hermesMsrpProgress?.status?.overallPassPct}% pass
-                            {" · "}{hermesMsrpProgress?.status?.observedCountries?.length ?? 0}/{hermesMsrpProgress?.status?.expectedCountries?.length ?? 0} countries
-                          </div>
-                          {hermesMsrpProgress.countries.slice(0,12).map((c: HermesMsrpCountryProgressCountry) => {
-                            const pct = c.passPct ?? 0;
-                            const color = pct >= 90 ? "#22c55e" : pct >= 50 ? "#f59e0b" : "#ef4444";
-                            return (
-                              <div key={c.countryCode} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 8px",background:"#fff",borderRadius:6,border:"1px solid #e2e8f0",fontSize:11}}>
-                                <div style={{width:6,height:6,borderRadius:"50%",background:color,flexShrink:0}} />
-                                <div style={{fontWeight:600,width:28,flexShrink:0}}>{c.countryCode.toUpperCase()}</div>
-                                <div style={{flex:1}}>
-                                  <div style={{display:"flex",justifyContent:"space-between"}}>
-                                    <span>{pct}%</span>
-                                    <span style={{color:"#64748b"}}>{c.pass}/{c.total}</span>
-                                  </div>
-                                  <div style={{height:4,background:"#f1f5f9",borderRadius:2,marginTop:2}}>
-                                    <div style={{height:"100%",width:Math.min(pct,100)+"%",background:color,borderRadius:2}} />
-                                  </div>
-                                </div>
+                      {hermesMsrpProgress?.countries?.length ? (() => {
+                        const status = hermesMsrpProgress.status;
+                        const countries = hermesMsrpProgress.countries;
+                        const blockers = hermesMsrpProgress.topBlockingCountries ?? [];
+                        const failureReasons = hermesMsrpProgress.topFailureReasons ?? [];
+                        const backlogGroups = hermesMsrpProgress.sourceRepairBacklog?.groups ?? [];
+                        const issueCount = hermesMsrpProgress.sourceRepairBacklog?.totalIssueCount ?? 0;
+                        const gateColor = status?.gateStatus === "blocked" ? "#dc2626" : "#16a34a";
+                        return (
+                          <div style={{display:"grid",gap:10}}>
+                            <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:6}}>
+                              <div style={{padding:"8px 10px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6}}>
+                                <div style={{fontSize:10,color:"#64748b"}}>Pass</div>
+                                <div style={{fontSize:16,fontWeight:700,color:getMsrpProgressColor(status?.overallPassPct ?? 0)}}>{status?.overallPassPct ?? 0}%</div>
                               </div>
-                            );
-                          })}
-                        </div>
-                      ) : <span style={{color:"#94a3b8",fontSize:11}}>Run dryrun to populate</span>}
+                              <div style={{padding:"8px 10px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6}}>
+                                <div style={{fontSize:10,color:"#64748b"}}>Gate</div>
+                                <div style={{fontSize:13,fontWeight:700,color:gateColor}}>{status?.gateStatus ?? "unknown"}</div>
+                              </div>
+                              <div style={{padding:"8px 10px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6}}>
+                                <div style={{fontSize:10,color:"#64748b"}}>Countries</div>
+                                <div style={{fontSize:13,fontWeight:700}}>{status?.observedCountries?.length ?? 0}/{status?.expectedCountries?.length ?? 0}</div>
+                              </div>
+                              <div style={{padding:"8px 10px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6}}>
+                                <div style={{fontSize:10,color:"#64748b"}}>Fix Queue</div>
+                                <div style={{fontSize:13,fontWeight:700,color:issueCount > 0 ? "#ea580c" : "#16a34a"}}>{issueCount}</div>
+                              </div>
+                            </div>
+
+                            <div>
+                              <div style={{fontSize:11,fontWeight:700,marginBottom:5}}>Country Progress</div>
+                              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(92px,1fr))",gap:6,maxHeight:138,overflowY:"auto"}}>
+                                {countries.map((country: HermesMsrpCountryProgressCountry) => {
+                                  const pct = country.passPct ?? 0;
+                                  const color = getMsrpProgressColor(pct);
+                                  return (
+                                    <div key={country.countryCode} style={{padding:"6px 8px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,fontSize:11}}>
+                                      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                                        <span style={{width:6,height:6,borderRadius:"50%",background:color,flexShrink:0}} />
+                                        <span style={{fontWeight:700}}>{country.countryCode.toUpperCase()}</span>
+                                        <span style={{marginLeft:"auto",color}}>{pct}%</span>
+                                      </div>
+                                      <div style={{height:4,background:"#f1f5f9",borderRadius:2,overflow:"hidden"}}>
+                                        <div style={{height:"100%",width:`${Math.min(pct,100)}%`,background:color,borderRadius:2}} />
+                                      </div>
+                                      <div style={{marginTop:4,color:"#64748b"}}>{country.pass}/{country.total} pass</div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                              <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,padding:8}}>
+                                <div style={{fontSize:11,fontWeight:700,marginBottom:5}}>Blocking Countries</div>
+                                {blockers.length ? blockers.slice(0,5).map((item) => (
+                                  <div key={item.countryCode} style={{fontSize:11,display:"flex",justifyContent:"space-between",gap:8,marginBottom:4}}>
+                                    <span style={{fontWeight:700}}>{item.countryCode.toUpperCase()} {item.passPct}%</span>
+                                    <span style={{color:"#64748b",textAlign:"right"}}>{item.reason}</span>
+                                  </div>
+                                )) : <span style={{fontSize:11,color:"#94a3b8"}}>No blocking countries</span>}
+                              </div>
+                              <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,padding:8}}>
+                                <div style={{fontSize:11,fontWeight:700,marginBottom:5}}>Failure Reasons</div>
+                                {failureReasons.length ? failureReasons.slice(0,5).map((item) => (
+                                  <div key={item.reason} style={{fontSize:11,display:"flex",justifyContent:"space-between",gap:8,marginBottom:4}}>
+                                    <span style={{color:"#475569"}}>{item.reason}</span>
+                                    <strong>{item.count}</strong>
+                                  </div>
+                                )) : <span style={{fontSize:11,color:"#94a3b8"}}>No failure reasons</span>}
+                              </div>
+                            </div>
+
+                            <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,padding:8}}>
+                              <div style={{fontSize:11,fontWeight:700,marginBottom:5}}>Source Repair Backlog</div>
+                              {backlogGroups.length ? backlogGroups.slice(0,5).map((group: HermesMsrpSourceRepairBacklogGroup) => (
+                                <div key={group.failureReason} style={{fontSize:11,display:"grid",gridTemplateColumns:"1.2fr 38px 1.2fr",gap:8,alignItems:"center",marginBottom:5}}>
+                                  <span style={{fontWeight:600}}>{group.failureReason}</span>
+                                  <strong style={{textAlign:"right"}}>{group.count}</strong>
+                                  <span style={{color:"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={group.recommendedStrategy}>{group.recommendedStrategy}</span>
+                                </div>
+                              )) : <span style={{fontSize:11,color:"#94a3b8"}}>No source repair backlog</span>}
+                            </div>
+
+                            {(hermesMsrpHistory?.runs ?? []).length > 0 && (
+                              <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:2}}>
+                                {(hermesMsrpHistory?.runs ?? []).slice(0,8).map((run: HermesMsrpDryrunHistoryRun) => (
+                                  <button
+                                    key={run.runId}
+                                    type="button"
+                                    className="btn btn-sm btn-secondary"
+                                    style={{whiteSpace:"nowrap",fontSize:11,borderColor:hermesMsrpRunId === run.runId ? "#2563eb" : "#cbd5e1"}}
+                                    onClick={() => setHermesMsrpRunId(run.runId)}
+                                  >
+                                    {run.passPct}% · {run.gateStatus}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })() : <span style={{color:"#94a3b8",fontSize:11}}>Run dryrun to populate</span>}
                     </div>
                   </div>
                 </div>

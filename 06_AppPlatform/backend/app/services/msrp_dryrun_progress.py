@@ -10,9 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-REPO_DIR = Path(os.environ.get("REPO_DIR", "/opt/JATO_Analysis_System-main"))
+DEFAULT_REPO_DIR = Path(__file__).resolve().parents[4]
+REPO_DIR = Path(os.environ.get("REPO_DIR", str(DEFAULT_REPO_DIR)))
 LOG_DIR = REPO_DIR / "03_Scripts" / "logs"
 ARTIFACT_DIR = REPO_DIR / "03_Scripts" / "diagnostics" / "artifacts"
+LATEST_REPORT_PATH = ARTIFACT_DIR / "dryrun_report.json"
+RUNS_INDEX_PATH = ARTIFACT_DIR / "dryrun_runs_index.json"
 LOCK_FILE = Path("/tmp/jato-msrp-low-concurrency.lock")
 DRYRUN_LOG_PATTERN = re.compile(r"msrp-dryrun-(\d{8})-(\d{6})\.log")
 
@@ -37,6 +40,165 @@ def _parse_log_timestamp(filename: str) -> datetime | None:
 
 def _is_running() -> bool:
     return LOCK_FILE.exists()
+
+
+def _load_json(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _artifact_path_from_ref(path_ref: str | None) -> Path | None:
+    if not path_ref:
+        return None
+    path = Path(path_ref)
+    if not path.is_absolute():
+        path = REPO_DIR / path
+    return path
+
+
+def _load_v3_report(run_id: str | None = None) -> dict[str, Any] | None:
+    path = ARTIFACT_DIR / f"dryrun_report_{run_id}.json" if run_id else LATEST_REPORT_PATH
+    data = _load_json(path)
+    if data and data.get("schemaVersion") == "msrp_dryrun_report_v3":
+        return data
+    return None
+
+
+def _normalize_source(source: dict[str, Any], index: int, total: int) -> dict[str, Any]:
+    source_code = str(source.get("sourceCode") or source.get("code") or "")
+    status = str(source.get("status") or "")
+    if status not in {"pass", "empty", "fail"}:
+        status = "pass" if source.get("rawStatus") == "dry_run" and not source.get("failureReason") else ("empty" if source.get("rawStatus") == "empty" else "fail")
+    return {
+        "index": int(source.get("index") or index),
+        "totalInCountry": int(source.get("totalInCountry") or total),
+        "sourceCode": source_code,
+        "status": status,
+        "valid": int(source.get("valid") or 0),
+        "extracted": int(source.get("extracted") or 0),
+        "rejected": int(source.get("rejected") or 0),
+        "elapsedSeconds": float(source.get("elapsedSeconds") or source.get("elapsed") or 0),
+        "failureReason": source.get("failureReason"),
+        "recommendedStrategy": source.get("recommendedStrategy"),
+    }
+
+
+def _dedupe_countries(countries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: dict[str, dict[str, Any]] = {}
+    for country in countries:
+        code = str(country.get("countryCode") or country.get("country") or "").lower()
+        if not code or code in deduped:
+            continue
+        deduped[code] = country
+    return list(deduped.values())
+
+
+def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] | None = None) -> dict[str, Any]:
+    summary = report.get("summary") or {}
+    run_id = str(report.get("runId") or "")
+    run_meta = None
+    for run in (index_data or {}).get("runs", []):
+        if run.get("runId") == run_id:
+            run_meta = run
+            break
+
+    countries: list[dict[str, Any]] = []
+    for country in report.get("countriesDetail") or []:
+        code = str(country.get("countryCode") or "").lower()
+        sources = [
+            _normalize_source(source, index, int(country.get("total") or 0))
+            for index, source in enumerate(country.get("sources") or [], start=1)
+        ]
+        fail_count = int(country.get("fail") or 0) + int(country.get("errors") or 0)
+        countries.append({
+            "countryCode": code,
+            "countryLabel": _country_label(code),
+            "total": int(country.get("total") or 0),
+            "pass": int(country.get("pass") or 0),
+            "empty": int(country.get("empty") or 0),
+            "fail": fail_count,
+            "errors": int(country.get("errors") or 0),
+            "completed": country.get("status") != "missing",
+            "passRate": float(country.get("passPct") or 0),
+            "status": country.get("status") or "unknown",
+            "topFailureReason": country.get("topFailureReason"),
+            "failureBreakdown": country.get("failureBreakdown") or {},
+            "strategyRecommendations": country.get("strategyRecommendations") or {},
+            "sources": sources,
+        })
+
+    total_fail = int(summary.get("fail") or 0) + int(summary.get("errors") or 0)
+    return {
+        "available": True,
+        "running": _is_running(),
+        "runId": run_id,
+        "batch": report.get("batch") or "",
+        "schemaVersion": report.get("schemaVersion"),
+        "gateStatus": summary.get("gateStatus"),
+        "gateThreshold": summary.get("gateThreshold"),
+        "logFile": (run_meta or {}).get("logFile") or f"dryrun_report_{run_id}.json",
+        "startedAt": (run_meta or {}).get("startedAt") or report.get("generatedAt"),
+        "finishedAt": (run_meta or {}).get("finishedAt") or report.get("generatedAt"),
+        "countries": _dedupe_countries(countries),
+        "expectedCountries": report.get("expectedCountries") or [],
+        "observedCountries": report.get("observedCountries") or [],
+        "missingCountries": report.get("missingCountries") or [],
+        "duplicateCountries": report.get("duplicateCountries") or [],
+        "totalSources": int(summary.get("total") or 0),
+        "totalPass": int(summary.get("pass") or 0),
+        "totalEmpty": int(summary.get("empty") or 0),
+        "totalFail": total_fail,
+        "overallPassRate": float(summary.get("passPct") or 0),
+        "failureBreakdown": summary.get("failureBreakdown") or {},
+        "strategyRecommendations": summary.get("strategyRecommendations") or {},
+        "recentResults": [],
+    }
+
+
+def _history_from_runs_index() -> list[dict[str, Any]]:
+    index_data = _load_json(RUNS_INDEX_PATH)
+    if not index_data:
+        return []
+    history: list[dict[str, Any]] = []
+    for run in index_data.get("runs") or []:
+        report = None
+        artifact_path = _artifact_path_from_ref(run.get("artifactPath"))
+        if artifact_path:
+            report = _load_json(artifact_path)
+        countries_detail: list[dict[str, Any]] = []
+        if report and report.get("schemaVersion") == "msrp_dryrun_report_v3":
+            for country in report.get("countriesDetail") or []:
+                code = str(country.get("countryCode") or "").lower()
+                countries_detail.append({
+                    "countryCode": code,
+                    "countryLabel": _country_label(code),
+                    "total": int(country.get("total") or 0),
+                    "pass": int(country.get("pass") or 0),
+                    "empty": int(country.get("empty") or 0),
+                    "fail": int(country.get("fail") or 0) + int(country.get("errors") or 0),
+                    "passRate": float(country.get("passPct") or 0),
+                })
+        history.append({
+            "runId": run.get("runId") or "",
+            "batch": run.get("batch") or "",
+            "countries": (report or {}).get("expectedCountries") or [],
+            "total": int(run.get("total") or 0),
+            "pass": int(run.get("pass") or 0),
+            "empty": int(run.get("empty") or 0),
+            "fail": int(run.get("fail") or 0) + int(run.get("errors") or 0),
+            "errors": int(run.get("errors") or 0),
+            "passRate": float(run.get("passPct") or 0),
+            "timestamp": run.get("finishedAt") or run.get("startedAt") or "",
+            "file": Path(str(run.get("artifactPath") or "")).name or f"dryrun_report_{run.get('runId')}.json",
+            "gateStatus": run.get("gateStatus"),
+            "status": run.get("status"),
+            "countriesDetail": countries_detail,
+        })
+    return history[:100]
 
 
 def _list_log_files() -> list[Path]:
@@ -301,10 +463,16 @@ def _list_historical_runs() -> list[dict[str, Any]]:
     return runs[:30]
 
 
-def get_dryrun_dashboard() -> dict[str, Any]:
+def get_dryrun_dashboard(run_id: str | None = None) -> dict[str, Any]:
     """Return combined dashboard data: live progress + history."""
-    current = _parse_current_progress()
-    history = _list_historical_runs()
+    index_data = _load_json(RUNS_INDEX_PATH)
+    report = _load_v3_report(run_id)
+    if report:
+        current = _current_from_v3_report(report, index_data)
+        history = _history_from_runs_index() or _list_historical_runs()
+    else:
+        current = _parse_current_progress()
+        history = _history_from_runs_index() or _list_historical_runs()
 
     # Also list available log files for drill-down
     log_files = []
@@ -320,6 +488,8 @@ def get_dryrun_dashboard() -> dict[str, Any]:
         "current": current,
         "history": history,
         "logFiles": log_files,
+        "selectedRunId": run_id,
+        "latestRunId": (index_data or {}).get("latestRunId"),
         "serverTime": datetime.now(timezone.utc).isoformat(),
     }
 

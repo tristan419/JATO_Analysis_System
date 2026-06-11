@@ -42,6 +42,15 @@ BATCH_COUNTRIES = {
 log = logging.getLogger(__name__)
 
 
+def _is_child_run() -> bool:
+    return os.getenv("JATO_MSRP_CHILD_RUN", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _resolve_scraper_functions() -> tuple[Callable, Callable]:
     from jato_scraper.config_loader import load_all_sources
     from jato_scraper.runner import run_scrape
@@ -114,7 +123,7 @@ def _write_dryrun_status(
     import os as _os
     from datetime import datetime as _datetime, timezone as _timezone
 
-    child_run = _os.environ.get("JATO_MSRP_CHILD_RUN", "").strip().lower() in ("1", "true", "yes")
+    child_run = _is_child_run()
     run_dir = _os.environ.get("JATO_MSRP_RUN_DIR", "")
     run_id = _os.environ.get("JATO_MSRP_RUN_ID", "")
 
@@ -359,6 +368,11 @@ def main():
             strategy_recs[strat] = strategy_recs.get(strat, 0) + 1
 
     _write_dryrun_status(countries, pass_count, empty_count, fail_count, error_count, total=total, results=results)
+
+    if _is_child_run():
+        if STRICT_EXIT and (fail_count > 0 or error_count > 0):
+            raise SystemExit(1)
+        return
 
     # Save report (timestamped + latest symlink for history)
     from datetime import datetime, timezone

@@ -22,6 +22,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATUS_FILE_PATH = REPO_ROOT / "03_Scripts" / "logs" / "scheduled_fetch_status.json"
 FALLBACK_REPORT_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_report.json"
+SOURCE_REPAIR_BACKLOG_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_repair_backlog.json"
 
 
 def _load_dryrun_report() -> dict | None:
@@ -43,6 +44,21 @@ def _load_dryrun_report() -> dict | None:
         except Exception:
             pass
     return None
+
+
+def _load_source_repair_backlog() -> dict:
+    if SOURCE_REPAIR_BACKLOG_PATH.is_file():
+        try:
+            return json.loads(SOURCE_REPAIR_BACKLOG_PATH.read_text())
+        except Exception:
+            pass
+    return {
+        "schemaVersion": "msrp_source_repair_backlog_v1",
+        "runId": None,
+        "generatedAt": None,
+        "totalIssueCount": 0,
+        "groups": [],
+    }
 
 
 def _severity(pass_pct: float, gate_threshold: int, is_missing: bool) -> str:
@@ -70,6 +86,7 @@ def run(out_dir: str | None = None) -> dict:
             "countries": [],
             "topBlockingCountries": [],
             "topFailureReasons": [],
+            "sourceRepairBacklog": _load_source_repair_backlog(),
             "findings": [{
                 "type": "no_dryrun_report",
                 "severity": "critical",
@@ -195,6 +212,7 @@ def run(out_dir: str | None = None) -> dict:
         "countries": country_entries,
         "topBlockingCountries": sorted(top_blocking, key=lambda x: x["passPct"]),
         "topFailureReasons": [{"reason": r, "count": c} for r, c in top_reasons[:5]],
+        "sourceRepairBacklog": _load_source_repair_backlog(),
         "findings": findings,
     }
 
@@ -269,6 +287,20 @@ def _render_markdown(result: dict) -> str:
         for b in blocking:
             lines.append(f"| {b['countryCode']} | {b.get('reason', '?')} "
                         f"| {b.get('recommendedAction', 'Review')} |")
+        lines.append("")
+
+    backlog = result.get("sourceRepairBacklog") or {}
+    groups = backlog.get("groups") or []
+    if groups:
+        lines.append("## Source Repair Backlog\n")
+        lines.append("| Failure Reason | Count | Recommended Strategy | Affected Countries |")
+        lines.append("|---|---:|---|---|")
+        for group in groups[:10]:
+            countries = ", ".join(str(c).upper() for c in group.get("affectedCountries", []))
+            lines.append(
+                f"| {group.get('failureReason', '-')} | {group.get('count', 0)} | "
+                f"{group.get('recommendedStrategy', '-')} | {countries or '-'} |"
+            )
         lines.append("")
 
     findings = result.get("findings", [])

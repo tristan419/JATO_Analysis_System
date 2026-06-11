@@ -10,6 +10,8 @@ interface DryrunSource {
   extracted: number;
   rejected: number;
   elapsedSeconds: number;
+  failureReason?: string;
+  recommendedStrategy?: string;
 }
 
 interface DryrunCountry {
@@ -21,6 +23,11 @@ interface DryrunCountry {
   fail: number;
   completed: boolean;
   passRate: number;
+  errors?: number;
+  status?: string;
+  topFailureReason?: string;
+  failureBreakdown?: Record<string, number>;
+  strategyRecommendations?: Record<string, number>;
   sources: DryrunSource[];
 }
 
@@ -28,7 +35,16 @@ interface DryrunCurrent {
   available: boolean;
   running: boolean;
   logFile?: string;
+  runId?: string;
+  batch?: string;
+  gateStatus?: string;
+  gateThreshold?: number;
   startedAt?: string;
+  finishedAt?: string;
+  expectedCountries?: string[];
+  observedCountries?: string[];
+  missingCountries?: string[];
+  duplicateCountries?: string[];
   countries: DryrunCountry[];
   totalSources: number;
   totalPass: number;
@@ -50,6 +66,7 @@ interface DryrunHistoryCountry {
 }
 
 interface DryrunHistoryRun {
+  runId?: string;
   batch: string;
   countries: string[];
   total: number;
@@ -60,12 +77,16 @@ interface DryrunHistoryRun {
   passRate: number;
   timestamp: string;
   file: string;
+  gateStatus?: string;
+  status?: string;
   countriesDetail?: DryrunHistoryCountry[];
 }
 
 interface DryrunDashboard {
   current: DryrunCurrent;
   history: DryrunHistoryRun[];
+  selectedRunId?: string | null;
+  latestRunId?: string | null;
   serverTime: string;
 }
 
@@ -80,6 +101,16 @@ function formatTime(iso?: string): string {
 function formatElapsed(s: number): string {
   if (s < 60) return `${s.toFixed(0)}s`;
   return `${(s / 60).toFixed(1)}m`;
+}
+
+function dedupeByCountryCode(countries: DryrunCountry[]): DryrunCountry[] {
+  const seen = new Set<string>();
+  return countries.filter((country) => {
+    const code = country.countryCode.toLowerCase();
+    if (seen.has(code)) return false;
+    seen.add(code);
+    return true;
+  });
 }
 
 function ProgressBar({ pct, tone }: { pct: number; tone: "green" | "amber" | "red" }) {
@@ -97,11 +128,12 @@ export function MsrpDryrunDashboard() {
   const [error, setError] = useState("");
   const [expandedCountry, setExpandedCountry] = useState<string | null>(null);
   const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await api.getMsrpDryrunDashboard() as unknown as DryrunDashboard;
+      const res = await api.getMsrpDryrunDashboard(selectedRunId ?? undefined) as unknown as DryrunDashboard;
       setData(res);
       setError("");
     } catch (e) {
@@ -109,7 +141,7 @@ export function MsrpDryrunDashboard() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedRunId]);
 
   useEffect(() => {
     setLoading(true);
@@ -124,6 +156,8 @@ export function MsrpDryrunDashboard() {
 
   const current = data?.current;
   const history = data?.history ?? [];
+  const currentCountries = dedupeByCountryCode(current?.countries ?? []);
+  const isHistoricalSelection = Boolean(selectedRunId);
 
   return (
     <div className="dryrun-dashboard">
@@ -137,6 +171,18 @@ export function MsrpDryrunDashboard() {
             <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
             Auto (10s)
           </label>
+          {isHistoricalSelection && (
+            <button
+              type="button"
+              className="btn btn-sm btn-secondary"
+              onClick={() => {
+                setSelectedRunId(null);
+                setExpandedCountry(null);
+              }}
+            >
+              Latest
+            </button>
+          )}
           <button type="button" className="btn btn-sm btn-secondary" onClick={fetchData} disabled={loading}>
             {loading ? "..." : "Refresh"}
           </button>
@@ -175,6 +221,9 @@ export function MsrpDryrunDashboard() {
             <span><strong>{current.overallPassRate}%</strong> rate</span>
           </div>
           <div className="dryrun-overall-meta">
+            {current.runId && <span>Run: {current.runId}</span>}
+            {current.batch && <span>Batch: {current.batch}</span>}
+            {current.gateStatus && <span>Gate: {current.gateStatus}</span>}
             {current.startedAt && <span>Started: {formatTime(current.startedAt)}</span>}
             {current.logFile && <span>Log: {current.logFile}</span>}
           </div>
@@ -186,11 +235,11 @@ export function MsrpDryrunDashboard() {
       )}
 
       {/* ── Per-Country Grid ── */}
-      {current?.countries && current.countries.length > 0 && (
+      {currentCountries.length > 0 && (
         <div className="dryrun-countries">
-          <h4>Countries ({current.countries.filter((c) => c.completed).length}/{current.countries.length} done)</h4>
+          <h4>Countries ({currentCountries.filter((c) => c.completed).length}/{currentCountries.length} done)</h4>
           <div className="dryrun-country-grid">
-            {current.countries.map((c) => (
+            {currentCountries.map((c) => (
               <button
                 key={c.countryCode}
                 type="button"
@@ -206,6 +255,11 @@ export function MsrpDryrunDashboard() {
                 <span className="dryrun-country-chip-nums">
                   {c.pass}/{c.total} pass · {c.empty} empty · {c.fail} fail
                 </span>
+                {c.topFailureReason && (
+                  <span className="dryrun-country-chip-nums">
+                    Top issue: {c.topFailureReason}
+                  </span>
+                )}
 
                 {/* Expanded source detail panel */}
                 {expandedCountry === c.countryCode && (
@@ -225,7 +279,7 @@ export function MsrpDryrunDashboard() {
                           .replace(/_/g, " ");
                         const barPct = s.valid > 0 ? Math.min(100, (s.valid / Math.max(s.extracted, 1)) * 100) : 0;
                         return (
-                          <div key={s.sourceCode} className={`dryrun-source-row is-${s.status}`}>
+                          <div key={s.sourceCode || `${c.countryCode}-${s.index}`} className={`dryrun-source-row is-${s.status}`}>
                             <span className="dryrun-source-icon">{STATUS_ICON[s.status]}</span>
                             <span className="dryrun-source-code" title={s.sourceCode}>{cleanName}</span>
                             <span className="dryrun-source-bar-wrap">
@@ -237,6 +291,9 @@ export function MsrpDryrunDashboard() {
                             <span className="dryrun-source-stat">
                               {s.valid > 0 ? <><strong>{s.valid}</strong> valid</> : <span className="dryrun-source-stat-muted">0</span>}
                             </span>
+                            {s.failureReason && (
+                              <span className="dryrun-source-elapsed" title={s.recommendedStrategy}>{s.failureReason}</span>
+                            )}
                             <span className="dryrun-source-elapsed">{formatElapsed(s.elapsedSeconds)}</span>
                           </div>
                         );
@@ -269,15 +326,19 @@ export function MsrpDryrunDashboard() {
               </thead>
               <tbody>
                 {history.map((r) => (
-                  <>
+                  <Fragment key={r.runId || r.file}>
                     <tr
-                      key={r.file}
                       className={`dryrun-history-row${expandedHistory === r.file ? ' is-expanded' : ''}`}
-                      onClick={() => setExpandedHistory(expandedHistory === r.file ? null : r.file)}
+                      onClick={() => {
+                        const nextExpanded = expandedHistory === r.file ? null : r.file;
+                        setExpandedHistory(nextExpanded);
+                        setSelectedRunId(r.runId || null);
+                        setExpandedCountry(null);
+                      }}
                       style={{ cursor: 'pointer' }}
                     >
                       <td>{formatTime(r.timestamp)}</td>
-                      <td>{r.batch}</td>
+                      <td>{r.batch}{r.gateStatus ? ` · ${r.gateStatus}` : ""}</td>
                       <td>{r.total}</td>
                       <td className="is-pass">{r.pass}</td>
                       <td className="is-empty">{r.empty}</td>
@@ -303,7 +364,7 @@ export function MsrpDryrunDashboard() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 ))}
               </tbody>
             </table>

@@ -324,6 +324,23 @@ export interface HermesMsrpCountryProgressCountry {
   failureBreakdown?: Record<string, number>;
   strategyRecommendations?: Record<string, number>;
 }
+export interface HermesMsrpSourceRepairBacklogGroup {
+  failureReason: string;
+  count: number;
+  recommendedStrategy: string;
+  recommendedStrategies?: Record<string, number>;
+  affectedCountries: string[];
+  affectedCountryCount?: number;
+  sampleSources?: string[];
+  status?: string;
+}
+export interface HermesMsrpSourceRepairBacklog {
+  schemaVersion: string;
+  runId?: string | null;
+  generatedAt?: string | null;
+  totalIssueCount: number;
+  groups: HermesMsrpSourceRepairBacklogGroup[];
+}
 export interface HermesMsrpCountryProgressResponse {
   probe: string;
   overall: string;
@@ -342,6 +359,7 @@ export interface HermesMsrpCountryProgressResponse {
   countries: HermesMsrpCountryProgressCountry[];
   topBlockingCountries?: { countryCode: string; passPct: number; reason: string; recommendedAction: string }[];
   topFailureReasons?: { reason: string; count: number }[];
+  sourceRepairBacklog?: HermesMsrpSourceRepairBacklog;
   findings?: { type: string; severity: string; message: string }[];
 }
 
@@ -364,6 +382,10 @@ export interface HermesMsrpDryrunHistoryRun {
   observedCountryCount: number;
   missingCountryCount: number;
   artifactPath: string;
+  latestArtifactPath?: string;
+  reportMdPath?: string;
+  runDir?: string;
+  logFile?: string;
 }
 export interface HermesMsrpDryrunHistoryResponse {
   schemaVersion: string;

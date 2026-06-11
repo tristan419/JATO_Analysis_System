@@ -33,18 +33,29 @@ def _load_country_artifact(path: Path) -> dict | None:
     return None
 
 
-def _discover_country_artifacts(run_dir: Path) -> dict[str, dict]:
-    """Load all country artifacts from a run directory."""
+def _discover_country_artifacts(run_dir: Path) -> tuple[dict[str, dict], list[str]]:
+    """Load all country artifacts from a run directory.
+
+    The canonical country comes from the artifact body when present so a bad
+    filename cannot silently create a second country in the aggregate report.
+    """
     artifacts_dir = run_dir / "countries"
     if not artifacts_dir.is_dir():
-        return {}
+        return {}, []
     artifacts: dict[str, dict] = {}
+    duplicates: list[str] = []
     for p in sorted(artifacts_dir.glob("*.json")):
-        cc = p.stem
         data = _load_country_artifact(p)
-        if data:
-            artifacts[cc] = data
-    return artifacts
+        if not data:
+            continue
+        cc = str(data.get("country") or p.stem).strip().lower()
+        if not cc:
+            continue
+        if cc in artifacts:
+            duplicates.append(cc)
+            continue
+        artifacts[cc] = data
+    return artifacts, sorted(set(duplicates))
 
 
 def _gather_source_results(artifacts: dict[str, dict]) -> list[dict]:
@@ -60,21 +71,96 @@ def _gather_source_results(artifacts: dict[str, dict]) -> list[dict]:
     return results
 
 
-def _compute_summary(results: list[dict]) -> dict:
-    total = len(results)
-    empty = sum(1 for r in results if r.get("status") == "empty")
-    fail = sum(1 for r in results if r.get("status") in ("error", "exception"))
-    rejected = sum(1 for r in results if r.get("failureReason") == "validation_rejected_all")
-    pass_count = total - empty - fail - rejected
-    pass_count = max(0, pass_count)
-    pass_pct = round(pass_count / total * 100, 1) if total > 0 else 0.0
-
+def _status_for_pass_pct(pass_pct: float) -> str:
     if pass_pct >= 90:
-        status = "success"
-    elif pass_pct >= 50:
-        status = "degraded"
+        return "success"
+    if pass_pct >= 50:
+        return "degraded"
+    return "failure"
+
+
+def _gate_status(pass_pct: float, threshold: int) -> str:
+    return "allowed" if pass_pct >= threshold else "blocked"
+
+
+def _result_is_pass(result: dict[str, Any]) -> bool:
+    return (
+        result.get("status") == "dry_run"
+        and int(result.get("valid") or 0) > 0
+        and not result.get("failureReason")
+    )
+
+
+def _normalize_source_result(result: dict[str, Any], country_code: str) -> dict[str, Any]:
+    status = str(result.get("status") or "")
+    normalized_status = "pass" if _result_is_pass(result) else ("empty" if status == "empty" else "fail")
+    source_code = result.get("sourceCode") or result.get("code") or ""
+    return {
+        "index": int(result.get("index") or 0),
+        "totalInCountry": int(result.get("totalInCountry") or 0),
+        "country": result.get("country") or country_code,
+        "sourceCode": source_code,
+        "code": source_code,
+        "status": normalized_status,
+        "rawStatus": status,
+        "valid": int(result.get("valid") or 0),
+        "extracted": int(result.get("extracted") or 0),
+        "rejected": int(result.get("rejected") or 0),
+        "elapsedSeconds": float(result.get("elapsedSeconds") or result.get("elapsed") or 0),
+        "failureReason": result.get("failureReason"),
+        "recommendedStrategy": result.get("recommendedStrategy"),
+        "severity": result.get("severity"),
+        "error": result.get("error"),
+    }
+
+
+def _artifact_count(data: dict[str, Any], key: str, fallback: int) -> int:
+    value = data.get(key)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return fallback
+
+
+def _compute_summary(artifacts: dict[str, dict], results: list[dict]) -> dict:
+    if artifacts:
+        total = 0
+        pass_count = 0
+        empty = 0
+        fail = 0
+        errors = 0
+        for data in artifacts.values():
+            d_results = data.get("results") or []
+            total += _artifact_count(data, "total", len(d_results))
+            pass_count += _artifact_count(
+                data,
+                "pass",
+                sum(1 for r in d_results if _result_is_pass(r)),
+            )
+            empty += _artifact_count(
+                data,
+                "empty",
+                sum(1 for r in d_results if r.get("status") == "empty"),
+            )
+            fail += _artifact_count(
+                data,
+                "fail",
+                sum(1 for r in d_results if r.get("failureReason") == "validation_rejected_all"),
+            )
+            errors += _artifact_count(
+                data,
+                "errors",
+                sum(1 for r in d_results if r.get("status") in ("error", "exception")),
+            )
     else:
-        status = "failure"
+        total = len(results)
+        pass_count = sum(1 for r in results if _result_is_pass(r))
+        empty = sum(1 for r in results if r.get("status") == "empty")
+        fail = sum(1 for r in results if r.get("failureReason") == "validation_rejected_all")
+        errors = sum(1 for r in results if r.get("status") in ("error", "exception"))
+
+    pass_pct = round(pass_count / total * 100, 1) if total > 0 else 0.0
 
     failure_breakdown: dict[str, int] = {}
     strategy_recs: dict[str, int] = {}
@@ -91,9 +177,9 @@ def _compute_summary(results: list[dict]) -> dict:
         "pass": pass_count,
         "empty": empty,
         "fail": fail,
-        "errors": len([r for r in results if r.get("status") == "exception"]),
+        "errors": errors,
         "passPct": pass_pct,
-        "status": status,
+        "status": _status_for_pass_pct(pass_pct),
         "failureBreakdown": failure_breakdown,
         "strategyRecommendations": strategy_recs,
     }
@@ -102,14 +188,13 @@ def _compute_summary(results: list[dict]) -> dict:
 def _build_countries_detail(
     artifacts: dict[str, dict],
     expected: list[str],
-) -> tuple[list[dict], list[str], list[str]]:
+) -> tuple[list[dict], list[str]]:
     observed_codes = set(artifacts.keys())
     expected_set = set(expected)
     missing = sorted(expected_set - observed_codes)
-    duplicates = sorted([c for c in expected if list(artifacts.keys()).count(c) > 1])
 
     detail: list[dict] = []
-    for cc in sorted(expected):
+    for cc in sorted(set(expected) | observed_codes):
         data = artifacts.get(cc)
         if not data:
             detail.append({
@@ -117,16 +202,26 @@ def _build_countries_detail(
                 "total": 0, "pass": 0, "empty": 0, "fail": 0, "errors": 0,
                 "passPct": 0.0, "status": "missing",
                 "failureBreakdown": {}, "strategyRecommendations": {},
+                "sources": [],
+                "completed": False,
             })
             continue
         d_results = data.get("results") or []
-        total = len(d_results)
-        d_pass = sum(1 for r in d_results if r.get("failureReason") is None)
-        d_empty = sum(1 for r in d_results if r.get("status") == "empty")
-        d_fail = sum(1 for r in d_results if r.get("status") in ("error", "exception"))
-        d_errors = sum(1 for r in d_results if r.get("status") == "exception")
+        total = _artifact_count(data, "total", len(d_results))
+        d_pass = _artifact_count(data, "pass", sum(1 for r in d_results if _result_is_pass(r)))
+        d_empty = _artifact_count(data, "empty", sum(1 for r in d_results if r.get("status") == "empty"))
+        d_fail = _artifact_count(
+            data,
+            "fail",
+            sum(1 for r in d_results if r.get("failureReason") == "validation_rejected_all"),
+        )
+        d_errors = _artifact_count(
+            data,
+            "errors",
+            sum(1 for r in d_results if r.get("status") in ("error", "exception")),
+        )
         d_pct = round(d_pass / total * 100, 1) if total > 0 else 0.0
-        d_status = "success" if d_pct >= 90 else ("degraded" if d_pct >= 50 else "failure")
+        d_status = _status_for_pass_pct(d_pct)
 
         d_fb: dict[str, int] = {}
         d_sr: dict[str, int] = {}
@@ -139,6 +234,14 @@ def _build_countries_detail(
                 d_sr[strat] = d_sr.get(strat, 0) + 1
 
         top_reason = max(d_fb, key=d_fb.get) if d_fb else None
+        sources = [
+            {
+                **_normalize_source_result(result, cc),
+                "index": idx,
+                "totalInCountry": total,
+            }
+            for idx, result in enumerate(d_results, start=1)
+        ]
 
         detail.append({
             "countryCode": cc,
@@ -152,9 +255,103 @@ def _build_countries_detail(
             "topFailureReason": top_reason,
             "failureBreakdown": d_fb,
             "strategyRecommendations": d_sr,
+            "sources": sources,
+            "completed": True,
         })
 
-    return detail, missing, duplicates
+    return detail, missing
+
+
+def _parse_run_started_at(run_id: str) -> str:
+    prefix = "msrp-dryrun-"
+    if run_id.startswith(prefix):
+        raw = run_id.removeprefix(prefix)
+        try:
+            return datetime.strptime(raw, "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _relative(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
+    groups: dict[str, dict[str, Any]] = {}
+    for result in report.get("results") or []:
+        reason = result.get("failureReason")
+        if not reason:
+            continue
+        country = str(result.get("country") or "").lower()
+        source_code = result.get("sourceCode") or result.get("code") or ""
+        recommended = result.get("recommendedStrategy") or "diagnose_with_msrp_page_analyzer"
+        group = groups.setdefault(reason, {
+            "failureReason": reason,
+            "count": 0,
+            "recommendedStrategies": {},
+            "affectedCountries": set(),
+            "sources": [],
+            "status": "new",
+        })
+        group["count"] += 1
+        group["recommendedStrategies"][recommended] = group["recommendedStrategies"].get(recommended, 0) + 1
+        if country:
+            group["affectedCountries"].add(country)
+        if source_code:
+            group["sources"].append(source_code)
+
+    normalized_groups: list[dict[str, Any]] = []
+    for group in groups.values():
+        strategies = group["recommendedStrategies"]
+        recommended_strategy = max(strategies, key=strategies.get) if strategies else "diagnose_with_msrp_page_analyzer"
+        normalized_groups.append({
+            "failureReason": group["failureReason"],
+            "count": group["count"],
+            "recommendedStrategy": recommended_strategy,
+            "recommendedStrategies": strategies,
+            "affectedCountries": sorted(group["affectedCountries"]),
+            "affectedCountryCount": len(group["affectedCountries"]),
+            "sampleSources": group["sources"][:20],
+            "status": group["status"],
+        })
+    normalized_groups.sort(key=lambda item: (-int(item["count"]), str(item["failureReason"])))
+
+    payload = {
+        "schemaVersion": "msrp_source_repair_backlog_v1",
+        "runId": report.get("runId"),
+        "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "totalIssueCount": sum(int(item["count"]) for item in normalized_groups),
+        "groups": normalized_groups,
+    }
+    json_path = out_dir / "msrp_source_repair_backlog.json"
+    json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+
+    lines = [
+        "# MSRP Source Repair Backlog",
+        "",
+        f"Generated: {payload['generatedAt']}",
+        f"Run ID: {payload.get('runId') or '-'}",
+        "",
+        "| Failure reason | Count | Recommended strategy | Affected countries |",
+        "|---|---:|---|---|",
+    ]
+    for item in normalized_groups:
+        lines.append(
+            "| {reason} | {count} | {strategy} | {countries} |".format(
+                reason=item["failureReason"],
+                count=item["count"],
+                strategy=item["recommendedStrategy"],
+                countries=", ".join(str(c).upper() for c in item["affectedCountries"]) or "-",
+            )
+        )
+    lines.append("")
+    md_path = out_dir / "msrp_source_repair_backlog.md"
+    md_path.write_text("\n".join(lines))
+    print(f"[aggregate] Source repair backlog: {json_path}")
 
 
 def run(
@@ -163,15 +360,21 @@ def run(
     out_latest: str | None = None,
 ) -> dict:
     run_dir_path = Path(run_dir).resolve()
-    artifacts = _discover_country_artifacts(run_dir_path)
+    artifacts, artifact_duplicates = _discover_country_artifacts(run_dir_path)
     results = _gather_source_results(artifacts)
-    summary = _compute_summary(results)
+    summary = _compute_summary(artifacts, results)
     run_id = run_dir_path.name
 
-    expected_countries_sorted = sorted(set(expected_countries))
-    countries_detail, missing, duplicates = _build_countries_detail(
+    expected_countries_sorted = sorted({c.strip().lower() for c in expected_countries if c.strip()})
+    expected_duplicates = sorted({
+        c for c in expected_countries_sorted
+        if [x.strip().lower() for x in expected_countries].count(c) > 1
+    })
+    countries_detail, missing = _build_countries_detail(
         artifacts, expected_countries_sorted,
     )
+    duplicates = sorted(set(artifact_duplicates + expected_duplicates))
+    gate_threshold = int(os.getenv("JATO_MSRP_MIN_DRYRUN_PASS_PCT", "70"))
 
     report = {
         "schemaVersion": "msrp_dryrun_report_v3",
@@ -183,8 +386,8 @@ def run(
         "duplicateCountries": duplicates,
         "summary": {
             **summary,
-            "gateThreshold": int(os.getenv("JATO_MSRP_MIN_DRYRUN_PASS_PCT", "70")),
-            "gateStatus": "allowed" if summary["passPct"] >= int(os.getenv("JATO_MSRP_MIN_DRYRUN_PASS_PCT", "70")) else "blocked",
+            "gateThreshold": gate_threshold,
+            "gateStatus": _gate_status(summary["passPct"], gate_threshold),
         },
         "countriesDetail": countries_detail,
         "results": results,
@@ -201,6 +404,7 @@ def run(
         history_path = out_path.parent / f"dryrun_report_{run_id}.json"
         history_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
         print(f"[aggregate] Historical: {history_path}")
+        _write_source_repair_backlog(report, out_path.parent)
 
         # Update dryrun_runs_index.json
         index_path = out_path.parent / "dryrun_runs_index.json"
@@ -216,7 +420,7 @@ def run(
             "runId": run_id,
             "mode": "dryrun",
             "batch": report.get("batch", "batch_a"),
-            "startedAt": run_id.replace("msrp-dryrun-", "").replace("-", "T") + ":00Z",
+            "startedAt": _parse_run_started_at(run_id),
             "finishedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "status": summary.get("status", "unknown"),
             "gateStatus": report["summary"]["gateStatus"],
@@ -231,7 +435,10 @@ def run(
             "observedCountryCount": len(artifacts),
             "missingCountryCount": len(missing),
             "artifactPath": f"03_Scripts/diagnostics/artifacts/dryrun_report_{run_id}.json",
-            "latestArtifactPath": str(out_path.relative_to(REPO_ROOT) if out_path else ""),
+            "latestArtifactPath": _relative(out_path),
+            "reportMdPath": f"hermes/reports/msrp_country_progress_{run_id}.md",
+            "runDir": _relative(run_dir_path),
+            "logFile": _relative(run_dir_path / "run.log"),
         }
         # Remove old entry with same runId if exists, then prepend
         existing_runs = [r for r in existing_runs if r.get("runId") != run_id]

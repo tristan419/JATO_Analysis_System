@@ -1765,7 +1765,9 @@ export const api = {
   hermesCost: () =>
     request<HermesCostResponse>("/hermes/cost"),
   hermesProposals: (status?: string) => {
-    const q = status ? `?status=${encodeURIComponent(status)}` : "";
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    const q = params.toString();
     return request<Record<string, unknown>[]>(`/hermes/proposals${q ? `?${q}` : ""}`);
   },
   hermesFeatures: () =>
@@ -2038,8 +2040,12 @@ export const api = {
       item: mapReviewWorkbench(res.item)
     }));
   },
-  getMsrpDryrunDashboard: () =>
-    request<Record<string, unknown>>("/msrp-dryrun/dashboard"),
+  getMsrpDryrunDashboard: (runId?: string) =>
+    request<Record<string, unknown>>(
+      runId
+        ? `/msrp-dryrun/dashboard?run_id=${encodeURIComponent(runId)}`
+        : "/msrp-dryrun/dashboard"
+    ),
   createReviewDecision: (caseId: string, payload: {
     decision: "approve" | "reject" | "remap";
     decided_official_model?: string;

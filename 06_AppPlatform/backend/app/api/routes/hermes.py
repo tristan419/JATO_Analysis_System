@@ -17,7 +17,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
-from app.core.security import ROLE_LEVEL, require_min_role
+from app.core.security import ROLE_LEVEL, get_current_user, require_min_role
 from app.services.hermes_ops_runner_service import (
     HELP_TEXT,
     HERMES_SCRIPTS,
@@ -162,6 +162,13 @@ def hermes_msrp_country_progress(
 def hermes_msrp_dryrun_history(_=Depends(require_min_role("viewer"))) -> dict:
     """Return the MSRP dryrun runs index (history of all runs)."""
     path = PROJECT_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_runs_index.json"
+    if not path.is_file():
+        return {
+            "schemaVersion": "msrp_dryrun_runs_index_v1",
+            "updatedAt": None,
+            "latestRunId": None,
+            "runs": [],
+        }
     return _read_json(path)
 
 
@@ -1259,6 +1266,7 @@ def hermes_dev_sync(
     payload: dict = Body(default_factory=dict),
     source: str | None = Query(None, description="Caller: github_actions, claude_code, manual"),
     authorization: str | None = Header(None, alias="Authorization"),
+    user=Depends(get_current_user),
 ) -> dict:
     """Trigger DevSync — read dev events, update features, generate MD, write evidence, create gaps.
 
@@ -1290,6 +1298,8 @@ def hermes_dev_sync(
             token = authorization[7:].strip()
         if token != sync_token:
             raise HTTPException(401, "Invalid or missing sync token")
+    elif ROLE_LEVEL.get(user.role, 0) < ROLE_LEVEL["developer"]:
+        raise HTTPException(403, "Forbidden")
 
     # Idempotency check
     commit_sha = payload.get("commitSha", "") if isinstance(payload, dict) else ""
