@@ -15,10 +15,6 @@ EnvironmentFile=-/etc/jato-fullstack/msrp.env
 Environment=PYTHONUNBUFFERED=1
 Environment=REPO_DIR=/opt/JATO_Analysis_System-main
 Environment=JATO_MSRP_MODE=%i
-Environment=http_proxy=http://127.0.0.1:7897
-Environment=https_proxy=http://127.0.0.1:7897
-Environment=HTTP_PROXY=http://127.0.0.1:7897
-Environment=HTTPS_PROXY=http://127.0.0.1:7897
 
 ExecStart=/opt/JATO_Analysis_System-main/03_Scripts/run_msrp_low_concurrency.sh
 

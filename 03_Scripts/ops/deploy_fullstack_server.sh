@@ -65,6 +65,7 @@ SYSTEMD_SOURCE_DIR="$REPO_DIR/03_Scripts/deploy/systemd"
 SYSTEMD_TARGET_DIR="/etc/systemd/system"
 JATO_ETC_DIR="/etc/jato-fullstack"
 ENABLE_SCRAPER_SCHEDULERS="${ENABLE_SCRAPER_SCHEDULERS:-true}"
+BOOTSTRAP_MSRP_DRYRUN_IF_MISSING="${BOOTSTRAP_MSRP_DRYRUN_IF_MISSING:-true}"
 
 log_section() {
   printf '\n[STEP] %s\n' "$1"
@@ -365,6 +366,34 @@ restart_timer_unit() {
   sudo -n systemctl --no-pager status "$timer_name" 2>&1 | head -n 12 || true
 }
 
+bootstrap_msrp_dryrun_if_missing() {
+  local latest_report="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_report.json"
+  local runs_index="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_runs_index.json"
+  local service_name="jato-msrp-sync@dryrun.service"
+
+  if ! is_truthy "$BOOTSTRAP_MSRP_DRYRUN_IF_MISSING"; then
+    echo "[INFO] Skipping MSRP dryrun bootstrap because BOOTSTRAP_MSRP_DRYRUN_IF_MISSING=$BOOTSTRAP_MSRP_DRYRUN_IF_MISSING"
+    return 0
+  fi
+
+  if [[ -s "$latest_report" && -s "$runs_index" ]]; then
+    echo "[INFO] MSRP dryrun artifacts already exist; not bootstrapping $service_name"
+    return 0
+  fi
+
+  if sudo -n systemctl is-active --quiet "$service_name"; then
+    echo "[INFO] $service_name already running; not starting another dryrun"
+    return 0
+  fi
+
+  echo "[INFO] MSRP dryrun artifacts missing; starting $service_name asynchronously"
+  if sudo -n systemctl start --no-block "$service_name"; then
+    echo "[INFO] $service_name queued; dryrun artifacts will appear after the run finishes"
+  else
+    echo "[WARN] Failed to queue $service_name; dryrun artifacts remain missing"
+  fi
+}
+
 reconcile_scraper_schedulers() {
   if ! is_truthy "$ENABLE_SCRAPER_SCHEDULERS"; then
     echo "[INFO] Skipping scraper scheduler reconciliation because ENABLE_SCRAPER_SCHEDULERS=$ENABLE_SCRAPER_SCHEDULERS"
@@ -401,6 +430,7 @@ reconcile_scraper_schedulers() {
   restart_timer_unit jato-msrp-ingest.timer
   restart_timer_unit jato-voc-forum-sync.timer
   restart_timer_unit hermes-source-quality.timer
+  bootstrap_msrp_dryrun_if_missing
 }
 
 CURRENT_STEP="Validate sudo access"
