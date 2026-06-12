@@ -73,6 +73,59 @@ def _load_msrp_source_repair_backlog() -> dict[str, Any]:
     return backlog if isinstance(backlog, dict) else _default_source_repair_backlog()
 
 
+def _source_repair_backlog_from_current(current: dict[str, Any] | None) -> dict[str, Any]:
+    if not current:
+        return _default_source_repair_backlog()
+    groups: dict[str, dict[str, Any]] = {}
+    for country in current.get("countries") or []:
+        country_code = str(country.get("countryCode") or "").lower()
+        for source in country.get("sources") or []:
+            reason = source.get("failureReason")
+            if not reason:
+                continue
+            reason = str(reason)
+            source_code = str(source.get("sourceCode") or source.get("code") or "")
+            recommended = str(source.get("recommendedStrategy") or "diagnose_with_msrp_page_analyzer")
+            group = groups.setdefault(reason, {
+                "failureReason": reason,
+                "count": 0,
+                "recommendedStrategies": {},
+                "affectedCountries": set(),
+                "sources": [],
+                "status": "new",
+            })
+            group["count"] += 1
+            group["recommendedStrategies"][recommended] = group["recommendedStrategies"].get(recommended, 0) + 1
+            if country_code:
+                group["affectedCountries"].add(country_code)
+            if source_code:
+                group["sources"].append(source_code)
+
+    normalized_groups: list[dict[str, Any]] = []
+    for group in groups.values():
+        strategies = group["recommendedStrategies"]
+        recommended_strategy = max(strategies, key=strategies.get) if strategies else "diagnose_with_msrp_page_analyzer"
+        normalized_groups.append({
+            "failureReason": group["failureReason"],
+            "count": group["count"],
+            "recommendedStrategy": recommended_strategy,
+            "recommendedStrategies": strategies,
+            "affectedCountries": sorted(group["affectedCountries"]),
+            "affectedCountryCount": len(group["affectedCountries"]),
+            "sampleSources": group["sources"][:20],
+            "status": group["status"],
+        })
+    normalized_groups.sort(key=lambda item: (-int(item["count"]), str(item["failureReason"])))
+    return {
+        "schemaVersion": "msrp_source_repair_backlog_v1",
+        "runId": current.get("runId"),
+        "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "partial": bool(current.get("partial")),
+        "totalIssueCount": sum(int(item["count"]) for item in normalized_groups),
+        "groups": normalized_groups,
+    }
+
+
 def _load_msrp_dryrun_report(run_id: str | None = None) -> dict[str, Any] | None:
     artifact_dir = _msrp_artifacts_dir()
     path = artifact_dir / f"dryrun_report_{run_id}.json" if run_id else artifact_dir / "dryrun_report.json"
@@ -236,6 +289,8 @@ def _msrp_progress_from_partial_current(current: dict[str, Any] | None) -> dict[
         return None
 
     countries: list[dict[str, Any]] = []
+    top_blocking: list[dict[str, Any]] = []
+    failure_reasons: dict[str, int] = {}
     findings: list[dict[str, Any]] = [{
         "type": "dryrun_running_without_aggregate",
         "severity": "warning",
@@ -258,6 +313,24 @@ def _msrp_progress_from_partial_current(current: dict[str, Any] | None) -> dict[
             "strategyRecommendations": country.get("strategyRecommendations") or {},
         }
         countries.append(entry)
+        country_pct = float(entry.get("passPct") or 0.0)
+        if country.get("completed") and country_pct < 50:
+            findings.append({
+                "type": "country_low_pass_rate",
+                "severity": "critical",
+                "message": f"Country '{code}' pass rate is {country_pct}% (<50%).",
+                "country": code,
+                "passPct": country_pct,
+            })
+        if country.get("completed") and country_pct < 70:
+            top_blocking.append({
+                "countryCode": code,
+                "passPct": country_pct,
+                "reason": entry.get("topFailureReason") or "unknown",
+                "recommendedAction": f"Review {entry.get('topFailureReason') or 'failures'} for {code}",
+            })
+        for reason, count in entry["failureBreakdown"].items():
+            failure_reasons[str(reason)] = failure_reasons.get(str(reason), 0) + int(count or 0)
         if not country.get("completed"):
             findings.append({
                 "type": "country_running",
@@ -266,9 +339,13 @@ def _msrp_progress_from_partial_current(current: dict[str, Any] | None) -> dict[
                 "country": code,
             })
 
+    overall = "critical" if any(finding.get("severity") == "critical" for finding in findings) else (
+        "warning" if findings else "ok"
+    )
+
     return {
         "probe": "pipeline.msrp_country_progress",
-        "overall": "warning",
+        "overall": overall,
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "status": {
             "runId": current.get("runId"),
@@ -284,9 +361,12 @@ def _msrp_progress_from_partial_current(current: dict[str, Any] | None) -> dict[
             "duplicateCountries": [],
         },
         "countries": countries,
-        "topBlockingCountries": [],
-        "topFailureReasons": [],
-        "sourceRepairBacklog": _load_msrp_source_repair_backlog(),
+        "topBlockingCountries": sorted(top_blocking, key=lambda item: item["passPct"]),
+        "topFailureReasons": [
+            {"reason": reason, "count": count}
+            for reason, count in sorted(failure_reasons.items(), key=lambda item: (-item[1], item[0]))[:5]
+        ],
+        "sourceRepairBacklog": _source_repair_backlog_from_current(current),
         "findings": findings,
     }
 

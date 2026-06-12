@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from app.api.routes.hermes import (
     MERMAID_BLOCK_RE,
     _md_diagrams_cache,
+    _msrp_progress_from_partial_current,
     router,
 )
 
@@ -246,6 +247,82 @@ class TestSentinelAndDeploy:
         assert data["status"]["partial"] is True
         assert data["status"]["runId"] == "msrp-dryrun-20260612-070207"
         assert data["findings"][0]["type"] == "dryrun_running_without_aggregate"
+
+    def test_partial_msrp_progress_builds_repair_backlog(self):
+        current = {
+            "available": True,
+            "partial": True,
+            "running": True,
+            "runId": "msrp-dryrun-20260612-070207",
+            "schemaVersion": "msrp_dryrun_partial_v1",
+            "overallPassRate": 10.0,
+            "gateStatus": "pending",
+            "expectedCountries": ["se", "dk"],
+            "observedCountries": ["se", "dk"],
+            "missingCountries": [],
+            "countries": [
+                {
+                    "countryCode": "se",
+                    "completed": True,
+                    "total": 2,
+                    "pass": 1,
+                    "empty": 1,
+                    "fail": 0,
+                    "errors": 0,
+                    "passRate": 50.0,
+                    "status": "degraded",
+                    "topFailureReason": "http_timeout",
+                    "failureBreakdown": {"http_timeout": 1},
+                    "strategyRecommendations": {"retry_or_reduce_concurrency": 1},
+                    "sources": [
+                        {
+                            "sourceCode": "audi_q4_e_tron_se_draft_scrapling",
+                            "status": "empty",
+                            "failureReason": "http_timeout",
+                            "recommendedStrategy": "retry_or_reduce_concurrency",
+                        }
+                    ],
+                },
+                {
+                    "countryCode": "dk",
+                    "completed": True,
+                    "total": 1,
+                    "pass": 0,
+                    "empty": 1,
+                    "fail": 0,
+                    "errors": 0,
+                    "passRate": 0.0,
+                    "status": "failure",
+                    "topFailureReason": "json_ld_empty",
+                    "failureBreakdown": {"json_ld_empty": 1},
+                    "strategyRecommendations": {"try_css_or_attr_json": 1},
+                    "sources": [
+                        {
+                            "sourceCode": "source_dk",
+                            "status": "empty",
+                            "failureReason": "json_ld_empty",
+                            "recommendedStrategy": "try_css_or_attr_json",
+                        }
+                    ],
+                },
+            ],
+        }
+
+        data = _msrp_progress_from_partial_current(current)
+
+        assert data is not None
+        assert data["overall"] == "critical"
+        assert data["topFailureReasons"] == [
+            {"reason": "http_timeout", "count": 1},
+            {"reason": "json_ld_empty", "count": 1},
+        ]
+        assert data["topBlockingCountries"][0]["countryCode"] == "dk"
+        backlog = data["sourceRepairBacklog"]
+        assert backlog["partial"] is True
+        assert backlog["runId"] == "msrp-dryrun-20260612-070207"
+        assert backlog["totalIssueCount"] == 2
+        assert backlog["groups"][0]["failureReason"] == "http_timeout"
+        assert backlog["groups"][0]["sampleSources"] == ["audi_q4_e_tron_se_draft_scrapling"]
 
     def test_msrp_country_progress_missing_specific_run_remains_404(self, client, tmp_path):
         reports_dir = tmp_path / "hermes" / "reports"

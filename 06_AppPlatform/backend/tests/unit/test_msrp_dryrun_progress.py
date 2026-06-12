@@ -226,3 +226,56 @@ def test_partial_artifact_recomputes_valid_success_status_as_pass(tmp_path, monk
     assert country["status"] == "success"
     assert source["status"] == "pass"
     assert source["rawStatus"] == "success"
+
+
+def test_partial_dashboard_aggregates_expected_countries_and_failures(tmp_path, monkeypatch):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    run_dir = logs / "msrp-dryrun-20260612-100000"
+    country_dir = run_dir / "countries"
+    artifacts.mkdir()
+    country_dir.mkdir(parents=True)
+    (run_dir / "run.log").write_text(
+        "[RUN] 1/2 country=se mode=dryrun (parallel slot 1/2)\n",
+        encoding="utf-8",
+    )
+    for country in ("se", "dk"):
+        (country_dir / f"{country}.json").write_text(json.dumps({
+            "schemaVersion": "msrp_dryrun_country_v1",
+            "runId": "msrp-dryrun-20260612-100000",
+            "country": country,
+            "total": 1,
+            "pass": 0,
+            "empty": 1,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 0.0,
+            "status": "failure",
+            "failureBreakdown": {"http_timeout": 1},
+            "strategyRecommendations": {"retry_or_reduce_concurrency": 1},
+            "results": [{
+                "country": country,
+                "sourceCode": f"source_{country}",
+                "status": "empty",
+                "valid": 0,
+                "extracted": 0,
+                "rejected": 0,
+                "failureReason": "http_timeout",
+                "recommendedStrategy": "retry_or_reduce_concurrency",
+            }],
+        }), encoding="utf-8")
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+    monkeypatch.setattr(progress, "LOCK_FILE", tmp_path / "missing.lock")
+
+    dashboard = progress.get_dryrun_dashboard()
+    current = dashboard["current"]
+
+    assert current["expectedCountries"] == ["se", "dk"]
+    assert current["observedCountries"] == ["se", "dk"]
+    assert current["missingCountries"] == []
+    assert current["failureBreakdown"] == {"http_timeout": 2}
+    assert current["strategyRecommendations"] == {"retry_or_reduce_concurrency": 2}

@@ -161,6 +161,20 @@ def _source_counts(sources: list[dict[str, Any]]) -> tuple[int, int, int, int]:
     return pass_count, empty_count, fail_count, error_count
 
 
+def _aggregate_country_counter(countries: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counter: dict[str, int] = {}
+    for country in countries:
+        for name, count in (country.get(key) or {}).items():
+            if not name:
+                continue
+            try:
+                value = int(count or 0)
+            except (TypeError, ValueError):
+                continue
+            counter[str(name)] = counter.get(str(name), 0) + value
+    return dict(sorted(counter.items(), key=lambda item: (-item[1], item[0])))
+
+
 def _dedupe_countries(countries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deduped: dict[str, dict[str, Any]] = {}
     for country in countries:
@@ -467,6 +481,8 @@ def _current_from_partial_run_dir(run_id: str | None = None) -> dict[str, Any] |
     total_pass = sum(int(country.get("pass") or 0) for country in countries)
     total_empty = sum(int(country.get("empty") or 0) for country in countries)
     total_fail = sum(int(country.get("fail") or 0) + int(country.get("errors") or 0) for country in countries)
+    failure_breakdown = _aggregate_country_counter(countries, "failureBreakdown")
+    strategy_recommendations = _aggregate_country_counter(countries, "strategyRecommendations")
     started = _parse_run_dir_timestamp(run_dir.name)
     running = _is_running() or any(not country.get("completed") for country in countries)
     return {
@@ -482,7 +498,7 @@ def _current_from_partial_run_dir(run_id: str | None = None) -> dict[str, Any] |
         "startedAt": started.isoformat() if started else datetime.fromtimestamp(run_dir.stat().st_mtime, tz=timezone.utc).isoformat(),
         "finishedAt": None,
         "countries": countries,
-        "expectedCountries": expected,
+        "expectedCountries": ordered_codes,
         "observedCountries": [country["countryCode"] for country in countries if country.get("completed")],
         "missingCountries": [country["countryCode"] for country in countries if not country.get("completed")],
         "duplicateCountries": [],
@@ -491,8 +507,8 @@ def _current_from_partial_run_dir(run_id: str | None = None) -> dict[str, Any] |
         "totalEmpty": total_empty,
         "totalFail": total_fail,
         "overallPassRate": round(total_pass / max(total_sources, 1) * 100, 1) if total_sources > 0 else 0,
-        "failureBreakdown": {},
-        "strategyRecommendations": {},
+        "failureBreakdown": failure_breakdown,
+        "strategyRecommendations": strategy_recommendations,
         "recentResults": [
             source
             for country in countries[-3:]
