@@ -462,6 +462,10 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
     return PdfTextProfile(
         url=profile["url"],
         entry_patterns=entry_patterns,
+        timeout_seconds=int(profile.get("timeout_seconds", 60)),
+        retry_attempts=int(profile.get("retry_attempts", 0)),
+        retry_delay_seconds=float(profile.get("retry_delay_seconds", 0.0) or 0.0),
+        browser_download_fallback=bool(profile.get("browser_download_fallback", False)),
         default_currency=profile.get("default_currency", "EUR"),
         default_tax_included=bool(profile.get("default_tax_included", True)),
         default_price_label=profile.get(

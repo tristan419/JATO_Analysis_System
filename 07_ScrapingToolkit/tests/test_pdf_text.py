@@ -1,3 +1,7 @@
+import subprocess
+
+import requests
+
 from jato_scraper.base import ExtractorConfig
 from jato_scraper.extractors.pdf_text import (
     PdfTextEntryPattern,
@@ -84,3 +88,65 @@ def test_pdf_text_extracts_entries_and_applies_price_delta(monkeypatch):
     assert results[0].match_confidence == 0.84
     assert results[1].msrp_value == 87_590.0
     assert results[1].jato_powertrain == "PHEV"
+
+
+def test_pdf_text_uses_curl_fallback_after_requests_timeout(monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="bmw_x1_fi_draft_scrapling",
+            country="芬兰",
+            brand="BMW",
+            source_url="https://www.bmw.fi/fi/footer/osta/hinnastot-ja-esitteet.html",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(
+            url="https://example.invalid/x1.pdf",
+            timeout_seconds=2,
+            retry_attempts=1,
+            retry_delay_seconds=0,
+            browser_download_fallback=True,
+        ),
+    )
+
+    def fail_request(*_args, **_kwargs):
+        raise requests.ReadTimeout("read timed out")
+
+    monkeypatch.setattr(extractor._session, "get", fail_request)
+    fallback_timeouts = []
+
+    def fetch_with_curl(timeout):
+        fallback_timeouts.append(timeout)
+        return b"%PDF-1.7\n"
+
+    monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_curl", fetch_with_curl)
+
+    assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
+    assert fallback_timeouts == [30]
+
+
+def test_pdf_text_curl_fallback_keeps_curl_default_user_agent(monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="bmw_x1_fi_draft_scrapling",
+            country="芬兰",
+            brand="BMW",
+            source_url="https://www.bmw.fi/fi/footer/osta/hinnastot-ja-esitteet.html",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(url="https://example.invalid/x1.pdf"),
+    )
+    commands = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        output_path = command[command.index("-o") + 1]
+        with open(output_path, "wb") as f:
+            f.write(b"%PDF-1.7\n")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert extractor._fetch_pdf_bytes_with_curl(30) == b"%PDF-1.7\n"
+    assert "--user-agent" not in commands[0]

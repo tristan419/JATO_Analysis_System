@@ -8,7 +8,7 @@ extractor_type: pdf_text
 profile:
   url: https://www.bmw.fi/content/dam/bmw/marketNORDICS/bmw_fi/ladattavat/pricelist-may-2026/BMW%20iX1%20%28U11%20BEV%29%2C%20Hinnasto%2028.5.2026.pdf.coredownload.pdf
   timeout_seconds: 10
-  retry_attempts: 1
+  retry_attempts: 0
   retry_delay_seconds: 1
   browser_download_fallback: true
   default_currency: EUR

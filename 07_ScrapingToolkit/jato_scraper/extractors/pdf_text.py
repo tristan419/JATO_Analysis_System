@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 from io import BytesIO
 import logging
 import re
+import subprocess
+import tempfile
+import time
 
 import requests
 from pypdf import PdfReader
@@ -14,6 +17,7 @@ from jato_scraper.base import BaseExtractor, ExtractorConfig, RawObservation
 
 log = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 60
+DEFAULT_CURL_FALLBACK_TIMEOUT = 30
 _PRICE_RE = re.compile(r"\d[\d\s.,'\u2019]*\d|\d")
 
 
@@ -34,6 +38,10 @@ class PdfTextEntryPattern:
 class PdfTextProfile:
     url: str
     entry_patterns: tuple[PdfTextEntryPattern, ...] = field(default_factory=tuple)
+    timeout_seconds: int = DEFAULT_TIMEOUT
+    retry_attempts: int = 0
+    retry_delay_seconds: float = 0.0
+    browser_download_fallback: bool = False
     default_currency: str = "EUR"
     default_tax_included: bool = True
     default_price_label: str = "Manufacturer's Recommended Retail Price"
@@ -121,13 +129,79 @@ class PdfTextExtractor(BaseExtractor):
         return results
 
     def _fetch_pdf_bytes(self) -> bytes | None:
+        last_error: Exception | None = None
+        attempts = max(1, int(self.profile.retry_attempts or 0) + 1)
+        timeout = max(1, int(self.profile.timeout_seconds or DEFAULT_TIMEOUT))
+        for attempt in range(1, attempts + 1):
+            try:
+                response = self._session.get(self.profile.url, timeout=timeout)
+                response.raise_for_status()
+                return response.content
+            except requests.RequestException as exc:
+                last_error = exc
+                log.warning(
+                    "PDF request attempt %s/%s failed for %s: %s",
+                    attempt,
+                    attempts,
+                    self.config.source_code,
+                    exc,
+                )
+                if attempt < attempts and self.profile.retry_delay_seconds > 0:
+                    time.sleep(float(self.profile.retry_delay_seconds))
+
+        if self.profile.browser_download_fallback:
+            blob = self._fetch_pdf_bytes_with_curl(
+                max(timeout, DEFAULT_CURL_FALLBACK_TIMEOUT),
+            )
+            if blob:
+                return blob
+
+        if last_error:
+            log.error("PDF request failed for %s: %s", self.config.source_code, last_error)
+        return None
+
+    def _fetch_pdf_bytes_with_curl(self, timeout: int) -> bytes | None:
         try:
-            response = self._session.get(self.profile.url, timeout=DEFAULT_TIMEOUT)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            log.error("PDF request failed for %s: %s", self.config.source_code, exc)
+            with tempfile.NamedTemporaryFile(
+                prefix="jato_pdf_",
+                suffix=".pdf",
+            ) as tmp:
+                result = subprocess.run(
+                    [
+                        "curl",
+                        "-L",
+                        "--http1.1",
+                        "-sS",
+                        "--max-time",
+                        str(timeout),
+                        "-o",
+                        tmp.name,
+                        self.profile.url,
+                    ],
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=timeout + 5,
+                )
+                if result.returncode != 0:
+                    log.error(
+                        "PDF curl fallback failed for %s: %s",
+                        self.config.source_code,
+                        result.stderr.decode(errors="replace")[:300],
+                    )
+                    return None
+                tmp.seek(0)
+                blob = tmp.read()
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.error("PDF curl fallback failed for %s: %s", self.config.source_code, exc)
             return None
-        return response.content
+        if not blob.startswith(b"%PDF"):
+            log.error(
+                "PDF curl fallback returned non-PDF content for %s",
+                self.config.source_code,
+            )
+            return None
+        return blob
 
     def _extract_text(self) -> str:
         blob = self._fetch_pdf_bytes()
