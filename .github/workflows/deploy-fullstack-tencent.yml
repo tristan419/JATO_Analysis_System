@@ -128,6 +128,7 @@ jobs:
 
       - name: Upload archive to server
         if: ${{ steps.auth.outputs.mode == 'key' }}
+        continue-on-error: true
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
@@ -148,9 +149,10 @@ jobs:
 
           ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"
           REMOTE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
+          REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
           ls -lh "$ARCHIVE_PATH"
 
-          timeout 900s scp -q -P "$SSH_PORT" \
+          timeout 120s scp -q -P "$SSH_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
@@ -162,7 +164,7 @@ jobs:
             -o IPQoS=none \
             -i ~/.ssh/github_actions_tencent_key \
             "$ARCHIVE_PATH" \
-            "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE"
+            "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE_TMP"
 
           timeout 60s ssh -T -p "$SSH_PORT" \
             -o BatchMode=yes \
@@ -175,10 +177,11 @@ jobs:
             -o IPQoS=none \
             -i ~/.ssh/github_actions_tencent_key \
             "$SSH_USER@$SSH_HOST" \
-            "ls -lh '$REMOTE_ARCHIVE'"
+            "mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"
 
       - name: Upload archive to server
         if: ${{ steps.auth.outputs.mode == 'password' }}
+        continue-on-error: true
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
@@ -198,9 +201,10 @@ jobs:
 
           ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"
           REMOTE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
+          REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
           ls -lh "$ARCHIVE_PATH"
 
-          timeout 900s sshpass -p "$SSH_PASSWORD" \
+          timeout 120s sshpass -p "$SSH_PASSWORD" \
             scp -q -P "$SSH_PORT" \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
@@ -213,7 +217,7 @@ jobs:
             -o Compression=yes \
             -o IPQoS=none \
             "$ARCHIVE_PATH" \
-            "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE"
+            "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE_TMP"
 
           timeout 60s sshpass -p "$SSH_PASSWORD" \
             ssh -T -p "$SSH_PORT" \
@@ -227,7 +231,7 @@ jobs:
             -o ServerAliveCountMax=2 \
             -o IPQoS=none \
             "$SSH_USER@$SSH_HOST" \
-            "ls -lh '$REMOTE_ARCHIVE'"
+            "mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"
 
       - name: Deploy on server via SSH
         if: ${{ steps.auth.outputs.mode == 'key' }}
@@ -310,6 +314,10 @@ jobs:
 
           rm -rf "$RELEASE_WORKTREE"
           mkdir -p "$RELEASE_WORKTREE"
+          if [ -f "$RELEASE_ARCHIVE" ] && ! tar tzf "$RELEASE_ARCHIVE" >/dev/null 2>&1; then
+            echo "[WARN] Uploaded deploy archive is incomplete or invalid; falling back to sparse Git fetch"
+            rm -f "$RELEASE_ARCHIVE"
+          fi
           if [ -f "$RELEASE_ARCHIVE" ]; then
             echo "[INFO] Using uploaded deploy archive: $RELEASE_ARCHIVE"
             DEPLOY_SOURCE="github_actions_archive"
@@ -628,6 +636,10 @@ jobs:
 
           rm -rf "$RELEASE_WORKTREE"
           mkdir -p "$RELEASE_WORKTREE"
+          if [ -f "$RELEASE_ARCHIVE" ] && ! tar tzf "$RELEASE_ARCHIVE" >/dev/null 2>&1; then
+            echo "[WARN] Uploaded deploy archive is incomplete or invalid; falling back to sparse Git fetch"
+            rm -f "$RELEASE_ARCHIVE"
+          fi
           if [ -f "$RELEASE_ARCHIVE" ]; then
             echo "[INFO] Using uploaded deploy archive: $RELEASE_ARCHIVE"
             DEPLOY_SOURCE="github_actions_archive"
