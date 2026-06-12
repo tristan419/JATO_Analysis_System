@@ -1,22 +1,28 @@
 source_code: porsche_macan_no_draft_scrapling
 country: 挪威
 brand: PORSCHE
-source_url: https://www.porsche.com/norway/models/macan/
+source_url: https://www.porsche.com/norway/no/models/macan/macan-electric-models/macan-electric/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.porsche.com/norway/models/macan/
-  tier: stealth
+  url: https://www.porsche.com/norway/no/models/macan/macan-electric-models/macan-electric/
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
   impersonate: chrome
   default_currency: NOK
   default_tax_included: true
   default_price_label: Veiledende pris inkl. mva
   fixed_model: MACAN
   fixed_jato_model: MACAN
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
+  text_regex:
+    source_selector: p
+    entry_patterns:
+    - pattern: 'fra kr\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: Electric
+      official_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -96,7 +102,8 @@ schedule:
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (NO market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+  applied from brand probe] [Updated to Porsche NO Macan Electric official detail page
+  and text_regex extraction from from-price paragraph]
 bootstrap_meta:
   country_model_rank: 27
   suggested_scope_kind: single_model

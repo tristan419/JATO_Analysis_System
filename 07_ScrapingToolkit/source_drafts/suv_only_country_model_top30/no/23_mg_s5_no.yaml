@@ -1,22 +1,30 @@
 source_code: mg_s5_no_draft_scrapling
 country: 挪威
 brand: MG
-source_url: https://www.mgmotor.no/modeller/mg-s5
+source_url: https://www.mgmotor.eu/nn-NO/model/mgs5
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.mgmotor.no/modeller/mg-s5
-  tier: stealth
+  url: https://www.mgmotor.eu/nn-NO/model/mgs5
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
   impersonate: chrome
   default_currency: NOK
   default_tax_included: true
   default_price_label: Veiledende pris inkl. mva
   fixed_model: S5
   fixed_jato_model: S5
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
+  text_regex:
+    source_selector: 'model-page-wrapper-component[initial-model="mgs5"]'
+    include_element_html: true
+    entry_patterns:
+    - pattern: 'Fra kr\. (?P<price>\d{3}\s\d{3}),-'
+      official_trim: Comfort
+      official_powertrain: BEV
+      price_label: Veiledende kundepris levert Moss
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -87,7 +95,8 @@ schedule:
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (NO market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+  applied from brand probe] [Updated to current MG Motor Europe NO MGS5 page and
+  text_regex extraction from official hero from-price]
 bootstrap_meta:
   country_model_rank: 23
   suggested_scope_kind: single_model

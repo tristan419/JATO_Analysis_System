@@ -40,6 +40,15 @@ profile:
   json_script_selector: "script[type='application/ld+json']"
   json_vehicles_path: offers
 
+  # Regex over selected text, scripts, or opt-in raw element HTML.
+  # text_regex:
+  #   source_selector: body
+  #   include_element_html: false
+  #   entry_patterns:
+  #     - pattern: 'Trim A.*?(?P<price>\d{1,3}(?:\s\d{3})+)'
+  #       official_trim: Trim A
+  #       official_powertrain: BEV
+
   # CSS fallback strategy
   css:
     vehicle_container: ".model-card"

@@ -144,6 +144,29 @@ def _mock_page_with_descendant_text(selector: str, text: str) -> MagicMock:
     return page
 
 
+def _mock_page_with_descendant_text_and_html(
+    selector: str,
+    text: str,
+    html: str,
+) -> MagicMock:
+    page = MagicMock()
+    element = MagicMock()
+    text_result = MagicMock()
+    text_result.getall.return_value = text.split("\n")
+    element.css.return_value = text_result
+    element.get.return_value = html
+
+    def _css_side_effect(query: str):
+        if query == f"{selector} ::text":
+            return text_result
+        if query == selector:
+            return [element]
+        return MagicMock()
+
+    page.css.side_effect = _css_side_effect
+    return page
+
+
 @patch.object(ScraplingExtractor, "_fetch")
 def test_css_extract_honors_include_if_text_contains(mock_fetch) -> None:
     mock_fetch.return_value = _mock_page_with_css(
@@ -284,12 +307,62 @@ def test_text_regex_extracts_descendant_body_text(mock_fetch) -> None:
     assert results[0].msrp_value == 369_900.0
 
 
+@patch.object(ScraplingExtractor, "_fetch")
+def test_text_regex_can_include_selected_element_html(mock_fetch) -> None:
+    mock_fetch.return_value = _mock_page_with_descendant_text_and_html(
+        "model-page-wrapper-component",
+        "MGS5\n${button.modelVersionName}",
+        (
+            "<model-page-wrapper-component "
+            "initial-model=\"mgs5\" "
+            ":hero-section='{\"headerSubtitle\":\"&lt;h2&gt;"
+            "Fra kr. 294 900,-&lt;sup&gt;(3)&lt;/sup&gt;"
+            "&lt;/h2&gt;\"}'></model-page-wrapper-component>"
+        ),
+    )
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="mg_s5_no",
+            country="NO",
+            brand="MG",
+            source_url="https://example.com",
+        ),
+        ScraplingProfile(
+            url="https://example.com",
+            text_regex=TextRegexMapping(
+                source_selector="model-page-wrapper-component",
+                include_element_html=True,
+                entry_patterns=(
+                    TextRegexEntryPattern(
+                        pattern=r"Fra kr\. (?P<price>\d{3}\s\d{3}),-",
+                        official_trim="Comfort",
+                        official_powertrain="BEV",
+                    ),
+                ),
+            ),
+            default_currency="NOK",
+            fixed_model="S5",
+            fixed_jato_model="S5",
+            fixed_jato_powertrain="BEV",
+            copy_trim_to_jato_trim=True,
+        ),
+    )
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].official_model == "S5"
+    assert results[0].official_trim == "Comfort"
+    assert results[0].msrp_value == 294_900.0
+
+
 def test_config_loader_builds_scrapling_text_regex_profile() -> None:
     profile = _build_scrapling_profile(
         {
             "url": "https://example.com",
             "text_regex": {
                 "source_selector": "script",
+                "include_element_html": True,
                 "entry_patterns": [
                     {
                         "pattern": r"Active\s+(?P<price>\d{3}\.\d{3})",
@@ -303,5 +376,6 @@ def test_config_loader_builds_scrapling_text_regex_profile() -> None:
 
     assert profile.text_regex is not None
     assert profile.text_regex.source_selector == "script"
+    assert profile.text_regex.include_element_html is True
     assert len(profile.text_regex.entry_patterns) == 1
     assert profile.text_regex.entry_patterns[0].official_trim == "Active"

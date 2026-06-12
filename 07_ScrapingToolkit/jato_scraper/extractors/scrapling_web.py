@@ -61,6 +61,7 @@ class TextRegexEntryPattern:
 class TextRegexMapping:
     source_selector: str = "body"
     entry_patterns: tuple[TextRegexEntryPattern, ...] = ()
+    include_element_html: bool = False
 
 
 @dataclass(frozen=True)
@@ -1435,7 +1436,7 @@ class ScraplingExtractor(BaseExtractor):
             except Exception:
                 text_result = None
             text_parts = self._collect_text_result_values(text_result)
-            if not text_parts:
+            if not text_parts or mapping.include_element_html:
                 try:
                     text_parts.extend(self._string_values(element.get()))
                 except Exception:

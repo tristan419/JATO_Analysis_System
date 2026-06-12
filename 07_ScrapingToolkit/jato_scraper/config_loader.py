@@ -284,6 +284,9 @@ def _build_scrapling_profile(profile: dict[str, Any]) -> ScraplingProfile:
                 text_regex_raw.get("source_selector", "body")
             ).strip() or "body",
             entry_patterns=entry_patterns,
+            include_element_html=bool(
+                text_regex_raw.get("include_element_html", False)
+            ),
         )
 
     model_rules_raw = profile.get("model_rules")
