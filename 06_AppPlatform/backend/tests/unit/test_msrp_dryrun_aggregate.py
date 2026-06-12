@@ -101,7 +101,10 @@ def test_aggregate_writes_history_index_and_source_repair_backlog(tmp_path):
     run_dir = tmp_path / "msrp-dryrun-20260521-033000"
     countries_dir = run_dir / "countries"
     countries_dir.mkdir(parents=True)
-    (countries_dir / "se.json").write_text(json.dumps(_make_country_artifact("se", 2, 5)))
+    artifact = _make_country_artifact("se", 2, 5)
+    for result in artifact["results"][2:]:
+        result["sourceUrl"] = "https://www.volvocars.com/se/build/xc60-hybrid/"
+    (countries_dir / "se.json").write_text(json.dumps(artifact))
 
     out_latest = tmp_path / "artifacts" / "dryrun_report.json"
     result = agg_mod.run(str(run_dir), ["se"], out_latest=str(out_latest))
@@ -119,6 +122,9 @@ def test_aggregate_writes_history_index_and_source_repair_backlog(tmp_path):
     assert backlog["runId"] == "msrp-dryrun-20260521-033000"
     assert backlog["groups"][0]["failureReason"] == "no_observation_extracted"
     assert backlog["groups"][0]["affectedCountries"] == ["se"]
+    assert backlog["topSourceHosts"][0]["host"] == "volvocars.com"
+    assert backlog["topSourceHosts"][0]["count"] == 3
+    assert backlog["groups"][0]["topSourceHosts"][0]["host"] == "volvocars.com"
 
 
 def test_aggregate_preserves_source_diagnostics(tmp_path):

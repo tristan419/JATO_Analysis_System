@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from fastapi.responses import PlainTextResponse
@@ -64,6 +65,7 @@ def _default_source_repair_backlog() -> dict[str, Any]:
         "runId": None,
         "generatedAt": None,
         "totalIssueCount": 0,
+        "topSourceHosts": [],
         "groups": [],
     }
 
@@ -73,10 +75,37 @@ def _load_msrp_source_repair_backlog() -> dict[str, Any]:
     return backlog if isinstance(backlog, dict) else _default_source_repair_backlog()
 
 
+def _source_host(source: dict[str, Any]) -> str:
+    url = str(source.get("finalUrl") or source.get("sourceUrl") or "").strip()
+    if not url:
+        return ""
+    parsed = urlparse(url if "://" in url else f"https://{url}")
+    host = (parsed.hostname or "").lower().strip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _normalize_host_groups(hosts: dict[str, dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for host, data in hosts.items():
+        normalized.append({
+            "host": host,
+            "count": int(data.get("count") or 0),
+            "affectedCountries": sorted(data.get("affectedCountries") or []),
+            "affectedCountryCount": len(data.get("affectedCountries") or []),
+            "sampleSources": list(data.get("sources") or [])[:10],
+            "sampleUrls": list(data.get("urls") or [])[:5],
+        })
+    normalized.sort(key=lambda item: (-int(item["count"]), str(item["host"])))
+    return normalized[:limit]
+
+
 def _source_repair_backlog_from_current(current: dict[str, Any] | None) -> dict[str, Any]:
     if not current:
         return _default_source_repair_backlog()
     groups: dict[str, dict[str, Any]] = {}
+    top_hosts: dict[str, dict[str, Any]] = {}
     for country in current.get("countries") or []:
         country_code = str(country.get("countryCode") or "").lower()
         for source in country.get("sources") or []:
@@ -92,6 +121,7 @@ def _source_repair_backlog_from_current(current: dict[str, Any] | None) -> dict[
                 "recommendedStrategies": {},
                 "affectedCountries": set(),
                 "sources": [],
+                "hosts": {},
                 "status": "new",
             })
             group["count"] += 1
@@ -100,6 +130,20 @@ def _source_repair_backlog_from_current(current: dict[str, Any] | None) -> dict[
                 group["affectedCountries"].add(country_code)
             if source_code:
                 group["sources"].append(source_code)
+            host = _source_host(source)
+            url = str(source.get("finalUrl") or source.get("sourceUrl") or "").strip()
+            if host:
+                for host_bucket in (
+                    group["hosts"].setdefault(host, {"count": 0, "affectedCountries": set(), "sources": [], "urls": []}),
+                    top_hosts.setdefault(host, {"count": 0, "affectedCountries": set(), "sources": [], "urls": []}),
+                ):
+                    host_bucket["count"] += 1
+                    if country_code:
+                        host_bucket["affectedCountries"].add(country_code)
+                    if source_code:
+                        host_bucket["sources"].append(source_code)
+                    if url and url not in host_bucket["urls"]:
+                        host_bucket["urls"].append(url)
 
     normalized_groups: list[dict[str, Any]] = []
     for group in groups.values():
@@ -113,6 +157,7 @@ def _source_repair_backlog_from_current(current: dict[str, Any] | None) -> dict[
             "affectedCountries": sorted(group["affectedCountries"]),
             "affectedCountryCount": len(group["affectedCountries"]),
             "sampleSources": group["sources"][:20],
+            "topSourceHosts": _normalize_host_groups(group["hosts"]),
             "status": group["status"],
         })
     normalized_groups.sort(key=lambda item: (-int(item["count"]), str(item["failureReason"])))
@@ -122,8 +167,41 @@ def _source_repair_backlog_from_current(current: dict[str, Any] | None) -> dict[
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "partial": bool(current.get("partial")),
         "totalIssueCount": sum(int(item["count"]) for item in normalized_groups),
+        "topSourceHosts": _normalize_host_groups(top_hosts),
         "groups": normalized_groups,
     }
+
+
+def _source_repair_backlog_from_report(report: dict[str, Any]) -> dict[str, Any]:
+    current = {
+        "runId": report.get("runId"),
+        "partial": False,
+        "countries": [
+            {
+                "countryCode": str(country.get("countryCode") or "").lower(),
+                "sources": country.get("sources") or [],
+            }
+            for country in report.get("countriesDetail") or []
+        ],
+    }
+    backlog = _source_repair_backlog_from_current(current)
+    if int(backlog.get("totalIssueCount") or 0) > 0:
+        return backlog
+    return _load_msrp_source_repair_backlog()
+
+
+def _progress_has_source_host_backlog(progress: dict[str, Any] | None) -> bool:
+    if not isinstance(progress, dict):
+        return False
+    backlog = progress.get("sourceRepairBacklog")
+    if not isinstance(backlog, dict):
+        return False
+    if backlog.get("topSourceHosts"):
+        return True
+    return any(
+        isinstance(group, dict) and bool(group.get("topSourceHosts"))
+        for group in backlog.get("groups") or []
+    )
 
 
 def _load_msrp_dryrun_report(run_id: str | None = None) -> dict[str, Any] | None:
@@ -261,7 +339,7 @@ def _msrp_progress_from_report(report: dict[str, Any]) -> dict[str, Any]:
             {"reason": reason, "count": count}
             for reason, count in sorted(failure_reasons.items(), key=lambda item: -item[1])[:5]
         ],
-        "sourceRepairBacklog": _load_msrp_source_repair_backlog(),
+        "sourceRepairBacklog": _source_repair_backlog_from_report(report),
         "findings": findings,
     }
 
@@ -503,7 +581,11 @@ def hermes_msrp_country_progress(
     latest_report = _load_msrp_dryrun_report()
     static_run_id = (static_progress or {}).get("status", {}).get("runId")
     latest_run_id = (latest_report or {}).get("runId")
-    if latest_report and (_is_empty_msrp_progress(static_progress) or static_run_id != latest_run_id):
+    if latest_report and (
+        _is_empty_msrp_progress(static_progress)
+        or static_run_id != latest_run_id
+        or not _progress_has_source_host_backlog(static_progress)
+    ):
         return _msrp_progress_from_report(latest_report)
     if static_progress and not _is_empty_msrp_progress(static_progress):
         return static_progress

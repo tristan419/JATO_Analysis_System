@@ -280,6 +280,7 @@ class TestSentinelAndDeploy:
                             "status": "empty",
                             "failureReason": "http_timeout",
                             "recommendedStrategy": "retry_or_reduce_concurrency",
+                            "sourceUrl": "https://www.audi.se/se/web/sv/models/q4-e-tron.html",
                         }
                     ],
                 },
@@ -302,6 +303,7 @@ class TestSentinelAndDeploy:
                             "status": "empty",
                             "failureReason": "json_ld_empty",
                             "recommendedStrategy": "try_css_or_attr_json",
+                            "sourceUrl": "https://www.citroen.dk/modeller/c3-aircross.html",
                         }
                     ],
                 },
@@ -323,6 +325,17 @@ class TestSentinelAndDeploy:
         assert backlog["totalIssueCount"] == 2
         assert backlog["groups"][0]["failureReason"] == "http_timeout"
         assert backlog["groups"][0]["sampleSources"] == ["audi_q4_e_tron_se_draft_scrapling"]
+        assert backlog["groups"][0]["topSourceHosts"] == [
+            {
+                "host": "audi.se",
+                "count": 1,
+                "affectedCountries": ["se"],
+                "affectedCountryCount": 1,
+                "sampleSources": ["audi_q4_e_tron_se_draft_scrapling"],
+                "sampleUrls": ["https://www.audi.se/se/web/sv/models/q4-e-tron.html"],
+            }
+        ]
+        assert backlog["topSourceHosts"][0]["host"] == "audi.se"
 
     def test_msrp_country_progress_missing_specific_run_remains_404(self, client, tmp_path):
         reports_dir = tmp_path / "hermes" / "reports"
@@ -395,6 +408,90 @@ class TestSentinelAndDeploy:
         data = resp.json()
         assert data["status"]["runId"] == run_id
         assert data["countries"][0]["countryCode"] == "fi"
+
+    def test_msrp_country_progress_derives_host_backlog_from_v3_sources(
+        self,
+        client,
+        tmp_path,
+    ):
+        reports_dir = tmp_path / "hermes" / "reports"
+        artifact_dir = tmp_path / "03_Scripts" / "diagnostics" / "artifacts"
+        report = _make_msrp_v3_report()
+        report["summary"].update({
+            "pass": 0,
+            "empty": 3,
+            "passPct": 0.0,
+            "status": "failure",
+            "gateStatus": "blocked",
+        })
+        report["countriesDetail"][0].update({
+            "pass": 0,
+            "empty": 3,
+            "passPct": 0.0,
+            "status": "failure",
+            "failureBreakdown": {"http_timeout": 2, "forbidden_403": 1},
+            "strategyRecommendations": {
+                "retry_or_reduce_concurrency": 2,
+                "manual_review_or_proxy_required": 1,
+            },
+            "sources": [
+                {
+                    "sourceCode": "audi_q4_e_tron_fi_draft_scrapling",
+                    "status": "empty",
+                    "failureReason": "http_timeout",
+                    "recommendedStrategy": "retry_or_reduce_concurrency",
+                    "sourceUrl": "https://www.audi.fi/fi/web/fi/models/q4-e-tron.html",
+                },
+                {
+                    "sourceCode": "audi_q6_e_tron_fi_draft_scrapling",
+                    "status": "empty",
+                    "failureReason": "http_timeout",
+                    "recommendedStrategy": "retry_or_reduce_concurrency",
+                    "finalUrl": "https://www.audi.fi/fi/web/fi/models/q6-e-tron.html",
+                },
+                {
+                    "sourceCode": "cupra_formentor_fi_draft_scrapling",
+                    "status": "empty",
+                    "failureReason": "forbidden_403",
+                    "recommendedStrategy": "manual_review_or_proxy_required",
+                    "sourceUrl": "https://www.cupraofficial.fi/autot/formentor",
+                },
+            ],
+        })
+        _write_json(artifact_dir / "dryrun_report.json", report)
+        _write_json(reports_dir / "msrp_country_progress.json", {
+            "probe": "pipeline.msrp_country_progress",
+            "overall": "critical",
+            "status": {"runId": report["runId"]},
+            "countries": [],
+            "topBlockingCountries": [],
+            "topFailureReasons": [],
+            "sourceRepairBacklog": {
+                "schemaVersion": "msrp_source_repair_backlog_v1",
+                "runId": report["runId"],
+                "totalIssueCount": 3,
+                "groups": [{"failureReason": "http_timeout", "count": 2}],
+            },
+            "findings": [],
+        })
+
+        with patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path), patch(
+            "app.api.routes.hermes.REPORTS_DIR",
+            reports_dir,
+        ):
+            resp = client.get("/hermes/msrp-country-progress")
+
+        assert resp.status_code == 200
+        backlog = resp.json()["sourceRepairBacklog"]
+        assert backlog["totalIssueCount"] == 3
+        assert backlog["topSourceHosts"][0]["host"] == "audi.fi"
+        assert backlog["topSourceHosts"][0]["count"] == 2
+        assert backlog["groups"][0]["failureReason"] == "http_timeout"
+        assert backlog["groups"][0]["topSourceHosts"][0]["host"] == "audi.fi"
+        assert backlog["groups"][0]["topSourceHosts"][0]["sampleSources"] == [
+            "audi_q4_e_tron_fi_draft_scrapling",
+            "audi_q6_e_tron_fi_draft_scrapling",
+        ]
 
 
 # ── /hermes/gaps ──────────────────────────────────────────────────────

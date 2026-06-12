@@ -20,6 +20,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -304,8 +305,33 @@ def _relative(path: Path) -> str:
         return str(path)
 
 
+def _source_host(source: dict[str, Any]) -> str:
+    url = str(source.get("finalUrl") or source.get("sourceUrl") or "").strip()
+    if not url:
+        return ""
+    parsed = urlparse(url if "://" in url else f"https://{url}")
+    host = (parsed.hostname or "").lower().strip(".")
+    return host[4:] if host.startswith("www.") else host
+
+
+def _normalize_host_groups(hosts: dict[str, dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for host, data in hosts.items():
+        normalized.append({
+            "host": host,
+            "count": int(data.get("count") or 0),
+            "affectedCountries": sorted(data.get("affectedCountries") or []),
+            "affectedCountryCount": len(data.get("affectedCountries") or []),
+            "sampleSources": list(data.get("sources") or [])[:10],
+            "sampleUrls": list(data.get("urls") or [])[:5],
+        })
+    normalized.sort(key=lambda item: (-int(item["count"]), str(item["host"])))
+    return normalized[:limit]
+
+
 def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
     groups: dict[str, dict[str, Any]] = {}
+    top_hosts: dict[str, dict[str, Any]] = {}
     for result in report.get("results") or []:
         reason = result.get("failureReason")
         if not reason:
@@ -319,6 +345,7 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
             "recommendedStrategies": {},
             "affectedCountries": set(),
             "sources": [],
+            "hosts": {},
             "status": "new",
         })
         group["count"] += 1
@@ -327,6 +354,20 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
             group["affectedCountries"].add(country)
         if source_code:
             group["sources"].append(source_code)
+        host = _source_host(result)
+        url = str(result.get("finalUrl") or result.get("sourceUrl") or "").strip()
+        if host:
+            for host_bucket in (
+                group["hosts"].setdefault(host, {"count": 0, "affectedCountries": set(), "sources": [], "urls": []}),
+                top_hosts.setdefault(host, {"count": 0, "affectedCountries": set(), "sources": [], "urls": []}),
+            ):
+                host_bucket["count"] += 1
+                if country:
+                    host_bucket["affectedCountries"].add(country)
+                if source_code:
+                    host_bucket["sources"].append(source_code)
+                if url and url not in host_bucket["urls"]:
+                    host_bucket["urls"].append(url)
 
     normalized_groups: list[dict[str, Any]] = []
     for group in groups.values():
@@ -340,6 +381,7 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
             "affectedCountries": sorted(group["affectedCountries"]),
             "affectedCountryCount": len(group["affectedCountries"]),
             "sampleSources": group["sources"][:20],
+            "topSourceHosts": _normalize_host_groups(group["hosts"]),
             "status": group["status"],
         })
     normalized_groups.sort(key=lambda item: (-int(item["count"]), str(item["failureReason"])))
@@ -349,6 +391,7 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
         "runId": report.get("runId"),
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "totalIssueCount": sum(int(item["count"]) for item in normalized_groups),
+        "topSourceHosts": _normalize_host_groups(top_hosts),
         "groups": normalized_groups,
     }
     json_path = out_dir / "msrp_source_repair_backlog.json"
