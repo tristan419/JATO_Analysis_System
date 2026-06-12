@@ -144,8 +144,8 @@ export function HermesHistoryMap() {
       <div className="card crud-card" style={{ padding: 12 }}>
         <div className="admin-card-header">
           <div>
-            <h2>History Map</h2>
-            <p>{data?.summary.clusterCount ?? 0} clusters · {data?.summary.totalEvents ?? 0} source events · Y: {yAxis}</p>
+            <h2>Git History Cluster</h2>
+            <p>{data?.summary.clusterCount ?? 0} clusters · {data?.summary.totalEvents ?? 0} events · Y: {yAxis}</p>
           </div>
           <span className="badge">{LEVELS[levelIndex]?.label ?? "Feature"}</span>
         </div>

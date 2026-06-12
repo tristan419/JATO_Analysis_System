@@ -22,9 +22,9 @@ PRD -> Implemented -> Tested -> Deployed -> Verified -> Resolved
 
 Each feature row exposes current phase, risk, open gaps, test/doc/evidence counts, recent event, and the next action Hermes can recommend.
 
-### History Map
+### Git History Cluster
 
-The second view clusters project events over time. The first implementation uses rules instead of machine learning:
+The second view clusters git and governance events over time. The first implementation uses rules instead of machine learning:
 
 - paths under `hermes/` map to Hermes
 - `07_ScrapingToolkit`, MSRP, and monthly update paths map to JATO Monthly / MSRP
@@ -86,7 +86,7 @@ Hermes adds two subtabs under the "Understands" group:
 
 ```text
 Progress
-History Map
+Git History Cluster
 Workflow
 ```
 
