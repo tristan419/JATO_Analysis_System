@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { api } from "../api/client";
 import { HermesAskResponseCard } from "../components/HermesAskResponseCard";
@@ -62,7 +62,7 @@ type SentinelInboxFilter = "new" | "read" | "archived" | "all";
 const DEFAULT_RECENT_ITEMS_VISIBLE = 6;
 
 const DATA_SUBPAGES: DataSubpage[] = ["overview", "hermes", "features", "voc", "admin", "dryrun", "order-genius", "material-master"];
-const HERMES_SUBTABS: HermesSubtab[] = ["capabilities", "activity", "cost", "roadmap", "diagrams"];
+const HERMES_SUBTABS: HermesSubtab[] = ["capabilities", "progress", "history", "workflow", "activity", "cost", "roadmap", "diagrams"];
 
 function resolveDataSubpageFromLocation(search: string, hash: string, pathname = ""): DataSubpage {
   const params = new URLSearchParams(search);
@@ -74,9 +74,9 @@ function resolveDataSubpageFromLocation(search: string, hash: string, pathname =
 
 function resolveHermesSubtabFromLocation(search: string): HermesSubtab {
   const params = new URLSearchParams(search);
-  const candidate = (params.get("hermesTab") || params.get("hermesSubtab") || "").toLowerCase();
+  const candidate = (params.get("tab") || params.get("hermesTab") || params.get("hermesSubtab") || "").toLowerCase();
   if (HERMES_SUBTABS.includes(candidate as HermesSubtab)) return candidate as HermesSubtab;
-  return params.get("view")?.toLowerCase() === "hermes" ? "activity" : "capabilities";
+  return "history";
 }
 
 const HERMES_SCRIPTS_MAP: Record<string, string> = {
@@ -454,6 +454,7 @@ function renderDomainRecentItems(
 
 export function DataManagementPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [overview, setOverview] = useState<DataManagementOverviewResponse | null>(null);
   const [vocOverview, setVocOverview] = useState<DataManagementVocOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -661,9 +662,25 @@ export function DataManagementPage() {
     }
   }
 
+  function selectHermesSubtab(nextSubtab: HermesSubtab) {
+    setHermesSubtab(nextSubtab);
+    const params = new URLSearchParams(location.search);
+    params.set("view", "hermes");
+    params.set("tab", nextSubtab);
+    navigate({
+      pathname: location.pathname,
+      search: `?${params.toString()}`,
+      hash: location.hash,
+    });
+  }
+
   useEffect(() => {
     const nextSubpage = resolveDataSubpageFromLocation(location.search, location.hash, location.pathname);
     setSubpage((current) => (current === nextSubpage ? current : nextSubpage));
+    if (nextSubpage === "hermes") {
+      const nextHermesSubtab = resolveHermesSubtabFromLocation(location.search);
+      setHermesSubtab((current) => (current === nextHermesSubtab ? current : nextHermesSubtab));
+    }
   }, [location.hash, location.pathname, location.search]);
 
   useEffect(() => {
@@ -1484,7 +1501,7 @@ export function DataManagementPage() {
             <div className="admin-tabs" style={{marginBottom:12,display:"flex",alignItems:"center",gap:4,flexWrap:"wrap"}}>
               <span className="hermes-subtab-group-label">Can</span>
               {(["capabilities"] as HermesSubtab[]).map((st) => (
-                <button key={st} type="button" className={`admin-tab${hermesSubtab===st?" is-active":""}`} onClick={()=>setHermesSubtab(st)}>{st.charAt(0).toUpperCase()+st.slice(1)}</button>
+                <button key={st} type="button" className={`admin-tab${hermesSubtab===st?" is-active":""}`} onClick={()=>selectHermesSubtab(st)}>{st.charAt(0).toUpperCase()+st.slice(1)}</button>
               ))}
               <span className="hermes-subtab-group-label" style={{marginLeft:8}}>Understands</span>
               {(["progress","history","workflow"] as HermesSubtab[]).map((st) => (
@@ -1492,22 +1509,22 @@ export function DataManagementPage() {
                   key={st}
                   type="button"
                   className={`admin-tab${hermesSubtab===st?" is-active":""}`}
-                  onClick={()=>setHermesSubtab(st)}
+                  onClick={()=>selectHermesSubtab(st)}
                 >
                   {st === "history" ? "Git History Cluster" : st === "workflow" ? "Workflow" : "Progress"}
                 </button>
               ))}
               <span className="hermes-subtab-group-label" style={{marginLeft:8}}>Does</span>
               {(["activity","cost"] as HermesSubtab[]).map((st) => (
-                <button key={st} type="button" className={`admin-tab${hermesSubtab===st?" is-active":""}`} onClick={()=>setHermesSubtab(st)}>{st.charAt(0).toUpperCase()+st.slice(1)}</button>
+                <button key={st} type="button" className={`admin-tab${hermesSubtab===st?" is-active":""}`} onClick={()=>selectHermesSubtab(st)}>{st.charAt(0).toUpperCase()+st.slice(1)}</button>
               ))}
               <span className="hermes-subtab-group-label" style={{marginLeft:8}}>Will</span>
               {(["roadmap"] as HermesSubtab[]).map((st) => (
-                <button key={st} type="button" className={`admin-tab${hermesSubtab===st?" is-active":""}`} onClick={()=>setHermesSubtab(st)}>Roadmap</button>
+                <button key={st} type="button" className={`admin-tab${hermesSubtab===st?" is-active":""}`} onClick={()=>selectHermesSubtab(st)}>Roadmap</button>
               ))}
               <span className="hermes-subtab-group-label" style={{marginLeft:8}}>Docs</span>
               {(["diagrams"] as HermesSubtab[]).map((st) => (
-                <button key={st} type="button" className={`admin-tab${hermesSubtab===st?" is-active":""}`} onClick={()=>setHermesSubtab(st)}>Diagrams</button>
+                <button key={st} type="button" className={`admin-tab${hermesSubtab===st?" is-active":""}`} onClick={()=>selectHermesSubtab(st)}>Diagrams</button>
               ))}
             </div>
 
