@@ -64,11 +64,21 @@ profile:
     - key: powertrain_phev
       powertrain: PHEV
       keywords:
-      - TODO_PHEV_KEYWORD
+      - phev
+      - plug-in hybrid
+      - plug in hybrid
+      - plugin hybrid
+      - plug-in hybride
+      - stekkerhybride
     - key: powertrain_hev
       powertrain: HEV
       keywords:
-      - TODO_HEV_KEYWORD
+      - hev
+      - full hybrid
+      - self-charging hybrid
+      - self charging hybrid
+      - hybrid
+      - hybride
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98

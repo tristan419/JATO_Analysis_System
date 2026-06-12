@@ -1,90 +1,61 @@
 source_code: mercedes_glc_fi_draft_scrapling
 country: 芬兰
 brand: MERCEDES
-source_url: https://www.mercedes-benz.fi/passengercars/models/suv/glc/overview.html
-source_type: manufacturer_official
+source_url: https://www.mercedes-benz.fi/site/hinnastot/
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.mercedes-benz.fi/passengercars/models/suv/glc/overview.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1
-    trim: h2, h3
-    price: '[class*="price"]'
+  url: https://www.mercedes-benz.fi/static/pdfs/GLC_X254.pdf
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Kokonaishinta
   fixed_model: GLC
   fixed_jato_model: GLC
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - TODO_PHEV_KEYWORD
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - TODO_MHEV_KEYWORD
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.84
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: mercedes_fi_hinnastot
+    note: Official GLC price list PDF, total price column.
+  entry_patterns:
+  - pattern: 'GLC\s+220\s+d\s+4MATIC\s+A\s+Kevythybridi\s*/\s*Diesel.*?(?P<price>\d{2}\s\d{3},\d{2})\s+1305\s+1125'
+    official_trim: GLC 220 d 4MATIC A
+    official_powertrain: Kevythybridi / Diesel
+    jato_powertrain: MHEV
+  - pattern: 'GLC\s+450\s+d\s+4MATIC\s+A\s+Kevythybridi\s*/\s*Diesel.*?(?P<price>\d{2}\s\d{3},\d{2})\s+1705\s+1525'
+    official_trim: GLC 450 d 4MATIC A
+    official_powertrain: Kevythybridi / Diesel
+    jato_powertrain: MHEV
+  - pattern: 'GLC\s+300\s+de\s+4MATIC\s+A\s+Ladatt\.\s+Hybr\.\s*/\s*Diesel.*?(?P<price>\d{2}\s\d{3},\d{2})\s+1365\s+1245'
+    official_trim: GLC 300 de 4MATIC A
+    official_powertrain: Ladattava hybridi / Diesel
+    jato_powertrain: PHEV
+  - pattern: 'GLC\s+300\s+e\s+4MATIC\s+A\s+Ladatt\.\s+Hybr\.\s*/\s*Bensiini.*?(?P<price>\d{2}\s\d{3},\d{2})\s+1335\s+1215'
+    official_trim: GLC 300 e 4MATIC A
+    official_powertrain: Ladattava hybridi / Bensiini
+    jato_powertrain: PHEV
+  - pattern: 'GLC\s+400\s+e\s+4MATIC\s+A\s+Ladatt\.\s+Hybr\.\s*/\s*Bensiini.*?(?P<price>\d{2}\s\d{3},\d{2})\s+1395\s+1275'
+    official_trim: GLC 400 e 4MATIC A
+    official_powertrain: Ladattava hybridi / Bensiini
+    jato_powertrain: PHEV
+  - pattern: 'GLC\s+Mercedes-AMG\s+GLC\s+53\s+4MATIC\s+A\s+Kevythybridi\s*/\s*Bensiini.*?(?P<price>\d{3}\s\d{3},\d{2})\s+2205\s+2025'
+    official_trim: Mercedes-AMG GLC 53 4MATIC A
+    official_powertrain: Kevythybridi / Bensiini
+    jato_powertrain: MHEV
+  - pattern: 'GLC\s+300\s+de\s+4MATIC\s+A\s+Business\s+Edition\s+Ladatt\.\s+Hybr\.\s*/\s*Diesel.*?(?P<price>\d{2}\s\d{3},\d{2})\s+1235\s+1115'
+    official_trim: GLC 300 de 4MATIC A Business Edition
+    official_powertrain: Ladattava hybridi / Diesel
+    jato_powertrain: PHEV
+  - pattern: 'GLC\s+300\s+e\s+4MATIC\s+A\s+Business\s+Edition\s+Ladatt\.\s+Hybr\.\s*/\s*Bensiini.*?(?P<price>\d{2}\s\d{3},\d{2})\s+1215\s+1095'
+    official_trim: GLC 300 e 4MATIC A Business Edition
+    official_powertrain: Ladattava hybridi / Bensiini
+    jato_powertrain: PHEV
+  - pattern: 'GLC\s+400\s+e\s+4MATIC\s+A\s+Business\s+Edition\s+Ladatt\.\s+Hybr\.\s*/\s*Bensiini.*?(?P<price>\d{2}\s\d{3},\d{2})\s+1265\s+1145'
+    official_trim: GLC 400 e 4MATIC A Business Edition
+    official_powertrain: Ladattava hybridi / Bensiini
+    jato_powertrain: PHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -93,7 +64,8 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from MERCEDES template]
-  [CSS selectors applied from brand probe]
+  [CSS selectors applied from brand probe] [Switched to official Mercedes FI
+  Hinnastot PDF via pdf_text]
 bootstrap_meta:
   country_model_rank: 26
   suggested_scope_kind: single_model

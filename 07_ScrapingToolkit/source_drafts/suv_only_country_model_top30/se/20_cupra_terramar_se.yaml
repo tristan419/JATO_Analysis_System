@@ -1,12 +1,32 @@
 source_code: cupra_terramar_se_draft_scrapling
 country: 瑞典
 brand: CUPRA
-source_url: https://www.cupraofficial.se/modeller/terramar
+source_url: https://www.cupraofficial.se/bilar/terramar
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: playwright
 profile:
-  url: https://www.cupraofficial.se/modeller/terramar
+  url: https://www.cupraofficial.se/bilar/terramar
+  browser: chromium
+  wait_until: domcontentloaded
+  page_timeout_ms: 45000
+  viewport_width: 1440
+  viewport_height: 1200
+  initial_ready_selector: .cmp-cw-hero-big-price-box__number
+  initial_ready_timeout_ms: 45000
+  startup_dismiss_selectors:
+  - '#onetrust-reject-all-handler'
+  - '#ensRejectAll'
+  - 'button:has-text("Avvisa")'
+  - 'button:has-text("Neka")'
+  trim_card_selector: .cmp-cw-hero__top
+  trim_name_selector: h1, .cmp-cw-hero__title, .cmp-cw-hero__heading
+  detail_price_selector: .cmp-cw-hero-big-price-box__number
+  trim_card_wait_ms: 1200
+  extract_from_trim_cards: true
+  combine_trim_and_powertrain: false
+  match_confidence: 0.76
+  match_status: review_required
   tier: stealth
   headless: true
   network_idle: true

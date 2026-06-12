@@ -1,19 +1,19 @@
 source_code: hyundai_ioniq_5_dk_draft_scrapling
 country: 丹麦
 brand: HYUNDAI
-source_url: https://www.hyundai.dk/no/no/bilmodeller/ioniq-5.html
+source_url: https://www.hyundai.dk/bilmodeller/ioniq-5
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.hyundai.dk/no/no/bilmodeller/ioniq-5.html
+  url: https://www.hyundai.dk/bilmodeller/ioniq-5
   headless: true
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Fra
   fixed_model: IONIQ 5
   fixed_jato_model: IONIQ 5
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -60,7 +60,10 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - IONIQ 5
+      - elbil
+      - elektrisk
+      - BEV
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -69,6 +72,12 @@ profile:
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
   json_script_selector: script[type='application/ld+json']
+  text_regex:
+    source_selector: script
+    entry_patterns:
+    - pattern: '"name":"IONIQ 5","url":"/modeller/ioniq-5","price":"(?P<price>\d{3}\.\d{3}) kr\.","isCampaign":false'
+      official_trim: Entry
+      official_powertrain: BEV
   css:
     vehicle_container: body
     model: h2, h3
@@ -87,7 +96,8 @@ notes: Draft scaffold generated from country×model top30 backlog. Replace sourc
   before promoting to 07_ScrapingToolkit/sources. [URL filled from HYUNDAI template]
   [CSS selectors applied from brand probe] [Switched to playwright_card_flow with
   kia_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset needs
-  per-brand tuning]
+  per-brand tuning] [Updated to DK IONIQ 5 page and text_regex extraction from
+  official non-campaign model price JSON]
 bootstrap_meta:
   country_model_rank: 24
   suggested_scope_kind: single_model

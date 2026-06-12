@@ -1,16 +1,28 @@
 source_code: cupra_terramar_dk_draft_scrapling
 country: 丹麦
 brand: CUPRA
-source_url: https://www.cupraofficial.dk/modelle/terramar
+source_url: https://www.cupra.dk/prisliste/terramar/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.cupraofficial.dk/modelle/terramar
+  url: https://www.cupra.dk/prisliste/terramar/
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'CUPRA Terramar VZ 2\.0 TSI 4x4 265 HK DSG.{0,600}?Vejledende pris\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
+      official_trim: VZ 2.0 TSI 4x4 265 HK DSG
+      official_powertrain: ICE
+    - pattern: 'CUPRA Terramar 1\.5 eTSI 150 HK DSG.{0,600}?Vejledende pris\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
+      official_trim: 1.5 eTSI 150 HK DSG
+      official_powertrain: MHEV
+    - pattern: 'CUPRA Terramar 2\.0 TSI 4x4 204 HK DSG.{0,600}?Vejledende pris\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
+      official_trim: 2.0 TSI 4x4 204 HK DSG
+      official_powertrain: ICE
   css:
     vehicle_container: body
     model: h2
@@ -18,7 +30,7 @@ profile:
     price: '[class*="price"]'
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Vejledende pris
   fixed_model: TERRAMAR
   fixed_jato_model: TERRAMAR
   fixed_jato_powertrain: null
@@ -76,15 +88,18 @@ profile:
     - key: powertrain_phev
       powertrain: PHEV
       keywords:
-      - TODO_PHEV_KEYWORD
+      - e-HYBRID
+      - plug-in hybrid
     - key: powertrain_mhev
       powertrain: MHEV
       keywords:
-      - TODO_MHEV_KEYWORD
+      - eTSI
+      - mild hybrid
     - key: powertrain_ice
       powertrain: ICE
       keywords:
-      - TODO_ICE_KEYWORD
+      - TSI
+      - benzin
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -100,7 +115,8 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from CUPRA template]
-  [CSS selectors applied from brand probe]
+  [CSS selectors applied from brand probe] [Updated to cupra.dk Terramar price
+  list and text_regex extraction from Vejledende pris cards]
 bootstrap_meta:
   country_model_rank: 20
   suggested_scope_kind: single_model

@@ -23,8 +23,10 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.core.config import DATABASE_ENABLED, DATABASE_URL  # noqa: E402
 from app.db.models import (  # noqa: E402
     CurrentPrice,
+    FinanceObservation,
     MsrpObservation,
     MsrpSource,
+    PriceHistory,
     ReviewCase,
     ReviewDecision,
     ScrapeBatch,
@@ -40,6 +42,8 @@ class SourceCleanupPlan:
     review_case_ids: tuple[object, ...]
     batch_ids: tuple[object, ...]
     current_price_ids: tuple[object, ...]
+    finance_observation_ids: tuple[object, ...]
+    price_history_ids: tuple[object, ...]
     review_decision_ids: tuple[object, ...]
     orphan_batch_ids: tuple[object, ...]
 
@@ -114,6 +118,24 @@ def _collect_plan(session, source_code: str) -> SourceCleanupPlan | None:
             )
         ).scalars()
     ) if observation_ids else ()
+    finance_observation_ids = _tuple_ids(
+        session.execute(
+            select(FinanceObservation.finance_observation_id).where(
+                FinanceObservation.observation_id.in_(observation_ids)
+            )
+        ).scalars()
+    ) if observation_ids else ()
+    price_history_ids = _tuple_ids(
+        session.execute(
+            select(PriceHistory.price_history_id).where(
+                PriceHistory.started_by_observation_id.in_(observation_ids)
+                | PriceHistory.ended_by_observation_id.in_(observation_ids)
+                | PriceHistory.last_confirmed_by_observation_id.in_(
+                    observation_ids
+                )
+            )
+        ).scalars()
+    ) if observation_ids else ()
     review_decision_ids = _tuple_ids(
         session.execute(
             select(ReviewDecision.review_decision_id).where(
@@ -143,6 +165,8 @@ def _collect_plan(session, source_code: str) -> SourceCleanupPlan | None:
         review_case_ids=review_case_ids,
         batch_ids=batch_ids,
         current_price_ids=current_price_ids,
+        finance_observation_ids=finance_observation_ids,
+        price_history_ids=price_history_ids,
         review_decision_ids=review_decision_ids,
         orphan_batch_ids=tuple(orphan_batch_ids),
     )
@@ -159,6 +183,20 @@ def _apply_plan(session, plan: SourceCleanupPlan) -> None:
         session.execute(
             delete(CurrentPrice).where(
                 CurrentPrice.current_price_id.in_(plan.current_price_ids)
+            )
+        )
+    if plan.finance_observation_ids:
+        session.execute(
+            delete(FinanceObservation).where(
+                FinanceObservation.finance_observation_id.in_(
+                    plan.finance_observation_ids
+                )
+            )
+        )
+    if plan.price_history_ids:
+        session.execute(
+            delete(PriceHistory).where(
+                PriceHistory.price_history_id.in_(plan.price_history_ids)
             )
         )
     if plan.review_case_ids:
@@ -179,6 +217,21 @@ def _apply_plan(session, plan: SourceCleanupPlan) -> None:
                 ScrapeBatch.scrape_batch_id.in_(plan.orphan_batch_ids)
             )
         )
+
+
+def _delete_empty_batches(session, batch_ids: Iterable[object]) -> None:
+    for batch_id in set(batch_ids):
+        remaining = session.execute(
+            select(func.count())
+            .select_from(MsrpObservation)
+            .where(MsrpObservation.scrape_batch_id == batch_id)
+        ).scalar_one()
+        if int(remaining or 0) == 0:
+            session.execute(
+                delete(ScrapeBatch).where(
+                    ScrapeBatch.scrape_batch_id == batch_id
+                )
+            )
 
 
 def main() -> int:
@@ -218,6 +271,8 @@ def main() -> int:
                 f"reviewCases={len(plan.review_case_ids)} "
                 f"reviewDecisions={len(plan.review_decision_ids)} "
                 f"currentPrices={len(plan.current_price_ids)} "
+                f"financeObs={len(plan.finance_observation_ids)} "
+                f"priceHistory={len(plan.price_history_ids)} "
                 f"orphanBatches={len(plan.orphan_batch_ids)}"
             )
 
@@ -228,6 +283,14 @@ def main() -> int:
 
         for plan in plans:
             _apply_plan(session, plan)
+        _delete_empty_batches(
+            session,
+            (
+                batch_id
+                for plan in plans
+                for batch_id in plan.batch_ids
+            ),
+        )
 
         if disable_source_codes:
             sources = session.execute(

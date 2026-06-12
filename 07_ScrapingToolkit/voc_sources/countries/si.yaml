@@ -1,0 +1,25 @@
+country_code: SI
+country_label: Slovenia / 斯洛文尼亚
+languages: [sl, en]
+taxonomy_profile: cee_core
+sources:
+  - source_code: si_avto_magazin_comments
+    site_name: Avto Magazin
+    site_url: https://avto-magazin.metropolitan.si/
+    site_type: media_comments
+    extractor: scrapling
+    language: sl
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Focus on public article and review pages with visible reader feedback.
+    notes: Useful Slovenian source for pricing, model launches, and buyer sentiment.
+  - source_code: si_zurnal24_avto_comments
+    site_name: Zurnal24 Avto
+    site_url: https://www.zurnal24.si/avto
+    site_type: media_comments
+    extractor: playwright
+    language: sl
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Use public pages only and respect access controls; browser fetch may be required.
+    notes: Adds mainstream Slovenian reader reaction where pages expose public feedback.

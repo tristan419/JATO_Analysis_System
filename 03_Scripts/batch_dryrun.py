@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -70,10 +71,35 @@ def _classify_dryrun_failure(
 ) -> dict:
     """Classify a dry-run failure and recommend next strategy."""
     status = src.get("status", "")
-    error = str(src.get("error", "") or (str(exception) if exception else ""))
+    error = str(
+        src.get("error", "")
+        or src.get("extractorError", "")
+        or (str(exception) if exception else "")
+    )
     valid = src.get("valid", 0)
     extracted = src.get("extracted", 0)
     error_lower = error.lower()
+    final_url = str(src.get("finalUrl") or src.get("final_url") or "")
+    http_status_raw = src.get("httpStatus") or src.get("http_status")
+    try:
+        http_status = int(http_status_raw) if http_status_raw is not None else None
+    except (TypeError, ValueError):
+        http_status = None
+
+    if "404-page" in final_url.lower() or "/404" in final_url.lower():
+        return {"failureReason": "source_url_not_found", "recommendedStrategy": "update_source_url", "severity": "error"}
+    if http_status == 403:
+        return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
+    if http_status == 404:
+        return {"failureReason": "source_url_not_found", "recommendedStrategy": "update_source_url", "severity": "error"}
+    if http_status and http_status >= 400:
+        return {"failureReason": "http_error", "recommendedStrategy": "check_source_url_or_site_status", "severity": "error"}
+    if "waiting for" in error_lower or "playwright" in error_lower:
+        return {"failureReason": "js_required_or_selector_timeout", "recommendedStrategy": "try_playwright_card_flow", "severity": "warning"}
+    if "fetch_failed" in error_lower:
+        return {"failureReason": "http_error", "recommendedStrategy": "check_source_url_or_site_status", "severity": "error"}
+    if "timeout" in error_lower or "timed out" in error_lower:
+        return {"failureReason": "http_timeout", "recommendedStrategy": "retry_or_reduce_concurrency", "severity": "warning"}
 
     if status == "dry_run" and valid > 0:
         return {"failureReason": None, "recommendedStrategy": None, "severity": "info"}
@@ -107,6 +133,272 @@ def _classify_dryrun_failure(
         return {"failureReason": "validation_rejected_all", "recommendedStrategy": "review_validation_rules", "severity": "warning"}
 
     return {"failureReason": "unknown", "recommendedStrategy": "diagnose_with_msrp_page_analyzer", "severity": "info"}
+
+
+def _is_passing_result(result: dict) -> bool:
+    """Return True only when a dryrun has valid data and no classified failure."""
+    return (
+        result.get("status") == "dry_run"
+        and int(result.get("valid") or 0) > 0
+        and not result.get("failureReason")
+    )
+
+
+def _status_for_pass_pct(pass_pct: float) -> str:
+    if pass_pct >= 90:
+        return "success"
+    if pass_pct >= 50:
+        return "degraded"
+    return "failure"
+
+
+def _gate_status(pass_pct: float, threshold: int) -> str:
+    return "allowed" if pass_pct >= threshold else "blocked"
+
+
+def _failure_breakdown(results: list[dict]) -> dict[str, int]:
+    breakdown: dict[str, int] = {}
+    for result in results:
+        reason = result.get("failureReason")
+        if reason:
+            breakdown[reason] = breakdown.get(reason, 0) + 1
+    return breakdown
+
+
+def _strategy_recommendations(results: list[dict]) -> dict[str, int]:
+    recommendations: dict[str, int] = {}
+    for result in results:
+        strategy = result.get("recommendedStrategy")
+        if strategy:
+            recommendations[strategy] = recommendations.get(strategy, 0) + 1
+    return recommendations
+
+
+def _result_is_error(result: dict) -> bool:
+    return result.get("status") in {"error", "exception"}
+
+
+def _result_is_empty(result: dict) -> bool:
+    return result.get("status") == "empty"
+
+
+def _result_is_fail(result: dict) -> bool:
+    return not _is_passing_result(result) and not _result_is_empty(result) and not _result_is_error(result)
+
+
+def _summary_from_results(results: list[dict]) -> dict:
+    total = len(results)
+    pass_count = sum(1 for result in results if _is_passing_result(result))
+    empty_count = sum(1 for result in results if _result_is_empty(result))
+    error_count = sum(1 for result in results if _result_is_error(result))
+    fail_count = sum(1 for result in results if _result_is_fail(result))
+    pass_pct = round(pass_count / total * 100, 1) if total else 0.0
+    return {
+        "total": total,
+        "pass": pass_count,
+        "empty": empty_count,
+        "fail": fail_count,
+        "errors": error_count,
+        "passPct": pass_pct,
+        "status": _status_for_pass_pct(pass_pct),
+        "failureBreakdown": _failure_breakdown(results),
+        "strategyRecommendations": _strategy_recommendations(results),
+    }
+
+
+def _normalize_source_for_v3(result: dict, index: int, total: int) -> dict:
+    status = "pass" if _is_passing_result(result) else ("empty" if _result_is_empty(result) else "fail")
+    source_code = result.get("sourceCode") or result.get("code") or ""
+    payload = dict(result)
+    payload.update({
+        "index": index,
+        "totalInCountry": total,
+        "sourceCode": source_code,
+        "code": source_code,
+        "status": status,
+        "rawStatus": result.get("status"),
+        "valid": int(result.get("valid") or 0),
+        "extracted": int(result.get("extracted") or 0),
+        "rejected": int(result.get("rejected") or 0),
+        "elapsedSeconds": float(result.get("elapsedSeconds") or result.get("elapsed") or 0),
+    })
+    return payload
+
+
+def _country_detail_from_results(country: str, results: list[dict]) -> dict:
+    summary = _summary_from_results(results)
+    failure_breakdown = summary["failureBreakdown"]
+    top_reason = max(failure_breakdown, key=failure_breakdown.get) if failure_breakdown else None
+    total = int(summary["total"])
+    return {
+        "countryCode": country,
+        "total": total,
+        "pass": int(summary["pass"]),
+        "empty": int(summary["empty"]),
+        "fail": int(summary["fail"]),
+        "errors": int(summary["errors"]),
+        "passPct": float(summary["passPct"]),
+        "status": summary["status"],
+        "topFailureReason": top_reason,
+        "failureBreakdown": failure_breakdown,
+        "strategyRecommendations": summary["strategyRecommendations"],
+        "sources": [
+            _normalize_source_for_v3(result, index, total)
+            for index, result in enumerate(results, start=1)
+        ],
+        "completed": True,
+    }
+
+
+def _build_dryrun_report_payload(
+    *,
+    batch: str,
+    countries: list[str],
+    results: list[dict],
+    run_id: str,
+    generated_at: str,
+) -> dict:
+    normalized_countries = [
+        country.strip().lower()
+        for country in countries
+        if country.strip()
+    ]
+    expected_countries = sorted(set(normalized_countries))
+    observed_countries = sorted({
+        str(result.get("country") or "").strip().lower()
+        for result in results
+        if str(result.get("country") or "").strip()
+    })
+    missing_countries = sorted(set(expected_countries) - set(observed_countries))
+    duplicate_countries = sorted({
+        country
+        for country in expected_countries
+        if normalized_countries.count(country) > 1
+    })
+
+    summary = _summary_from_results(results)
+    gate_threshold = int(os.getenv("JATO_MSRP_MIN_DRYRUN_PASS_PCT", "70"))
+    summary = {
+        **summary,
+        "gateThreshold": gate_threshold,
+        "gateStatus": _gate_status(float(summary["passPct"]), gate_threshold),
+    }
+
+    countries_detail: list[dict] = []
+    for country in sorted(set(expected_countries) | set(observed_countries)):
+        country_results = [
+            result
+            for result in results
+            if str(result.get("country") or "").strip().lower() == country
+        ]
+        if not country_results:
+            countries_detail.append({
+                "countryCode": country,
+                "total": 0,
+                "pass": 0,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 0.0,
+                "status": "missing",
+                "topFailureReason": None,
+                "failureBreakdown": {},
+                "strategyRecommendations": {},
+                "sources": [],
+                "completed": False,
+            })
+            continue
+        countries_detail.append(_country_detail_from_results(country, country_results))
+
+    return {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": run_id,
+        "batch": batch,
+        "countries": expected_countries,
+        "expectedCountries": expected_countries,
+        "observedCountries": observed_countries,
+        "missingCountries": missing_countries,
+        "duplicateCountries": duplicate_countries,
+        "summary": summary,
+        "countriesDetail": countries_detail,
+        "results": results,
+        "generatedAt": generated_at,
+        "savedAt": generated_at,
+        # Backward-compatible top-level fields for older diagnostics scripts.
+        "total": summary["total"],
+        "pass": summary["pass"],
+        "empty": summary["empty"],
+        "fail": summary["fail"],
+        "errors": summary["errors"],
+        "passPct": summary["passPct"],
+        "failureBreakdown": summary["failureBreakdown"],
+        "strategyRecommendations": summary["strategyRecommendations"],
+    }
+
+
+def _relative_to_repo(path: Path) -> str:
+    repo_root = Path(__file__).resolve().parent.parent
+    try:
+        return str(path.resolve().relative_to(repo_root))
+    except ValueError:
+        return str(path)
+
+
+def _write_dryrun_runs_index(report: dict, latest_path: Path, history_path: Path) -> None:
+    index_path = latest_path.parent / "dryrun_runs_index.json"
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    index_data: dict = {
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "updatedAt": now,
+        "latestRunId": report.get("runId"),
+        "runs": [],
+    }
+    if index_path.is_file():
+        try:
+            index_data = json.loads(index_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    summary = report.get("summary") or {}
+    run_id = report.get("runId")
+    run_entry = {
+        "runId": run_id,
+        "mode": "dryrun",
+        "batch": report.get("batch", ""),
+        "startedAt": report.get("generatedAt"),
+        "finishedAt": now,
+        "status": summary.get("status", "unknown"),
+        "gateStatus": summary.get("gateStatus"),
+        "gateThreshold": summary.get("gateThreshold"),
+        "passPct": summary.get("passPct", 0.0),
+        "total": summary.get("total", 0),
+        "pass": summary.get("pass", 0),
+        "empty": summary.get("empty", 0),
+        "fail": summary.get("fail", 0),
+        "errors": summary.get("errors", 0),
+        "expectedCountryCount": len(report.get("expectedCountries") or []),
+        "observedCountryCount": len(report.get("observedCountries") or []),
+        "missingCountryCount": len(report.get("missingCountries") or []),
+        "artifactPath": _relative_to_repo(history_path),
+        "latestArtifactPath": _relative_to_repo(latest_path),
+        "reportMdPath": f"hermes/reports/msrp_country_progress_{run_id}.md",
+        "runDir": "",
+        "logFile": "",
+    }
+
+    existing_runs = [
+        run
+        for run in index_data.get("runs", [])
+        if run.get("runId") != run_id
+    ]
+    existing_runs.insert(0, run_entry)
+    index_data.update({
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "updatedAt": now,
+        "latestRunId": run_id,
+        "runs": existing_runs[:100],
+    })
+    index_path.write_text(json.dumps(index_data, indent=2, ensure_ascii=False) + "\n")
 
 
 def _write_dryrun_status(
@@ -222,6 +514,10 @@ def main():
         level=logging.WARNING,
         format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
     )
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(line_buffering=True)
     batch = sys.argv[1] if len(sys.argv) > 1 else "all"
     countries = BATCH_COUNTRIES.get(batch, batch.split(","))
     load_all_sources, run_scrape = _resolve_scraper_functions()
@@ -274,7 +570,9 @@ def main():
             rejected = src.get("rejected", 0)
             elapsed = time.time() - t0
 
-            if status == "dry_run" and valid > 0:
+            classification = _classify_dryrun_failure(src)
+
+            if status == "dry_run" and valid > 0 and not classification.get("failureReason"):
                 icon = "✅"
                 pass_count += 1
             elif status == "empty":
@@ -286,8 +584,6 @@ def main():
             else:
                 icon = "⚠"
                 fail_count += 1
-
-            classification = _classify_dryrun_failure(src)
 
             print(
                 f"  [{i:3d}/{len(target_codes)}] {icon} {code:50s} "
@@ -303,6 +599,21 @@ def main():
                 "rejected": rejected,
                 "elapsed": round(elapsed, 1),
             }
+            for key in (
+                "sourceUrl",
+                "brand",
+                "extractorName",
+                "extractorVersion",
+                "coverageLevel",
+                "auditStatus",
+                "attemptedStrategies",
+                "winningStrategy",
+                "extractorError",
+                "httpStatus",
+                "finalUrl",
+            ):
+                if key in src:
+                    result_entry[key] = src[key]
             if classification.get("failureReason"):
                 result_entry["failureReason"] = classification["failureReason"]
                 result_entry["recommendedStrategy"] = classification["recommendedStrategy"]
@@ -331,7 +642,7 @@ def main():
     total = len(target_codes)
     print(f"\n{'='*70}")
     print(f"Results: {pass_count}/{total} PASS, {empty_count} empty, "
-          f"{fail_count} rejected-all, {error_count} errors")
+          f"{fail_count} failures, {error_count} errors")
     print(f"{'='*70}")
 
     # By-country summary
@@ -340,7 +651,7 @@ def main():
     for r in results:
         cc = r["country"]
         by_country.setdefault(cc, Counter())
-        if r["status"] == "dry_run" and r.get("valid", 0) > 0:
+        if _is_passing_result(r):
             by_country[cc]["pass"] += 1
         elif r["status"] == "empty":
             by_country[cc]["empty"] += 1
@@ -374,38 +685,32 @@ def main():
             raise SystemExit(1)
         return
 
-    # Save report (timestamped + latest symlink for history)
-    from datetime import datetime, timezone
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    # Save v3 report (timestamped history + latest pointer)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    run_id = f"msrp-dryrun-{ts}"
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     report_dir = Path(__file__).parent / "diagnostics" / "artifacts"
     report_dir.mkdir(parents=True, exist_ok=True)
 
-    pass_pct = round(pass_count / total * 100, 1) if total > 0 else 0.0
-    report_payload = {
-        "schemaVersion": "msrp_dryrun_report_v2",
-        "batch": batch,
-        "countries": countries,
-        "total": total,
-        "pass": pass_count,
-        "empty": empty_count,
-        "fail": fail_count,
-        "errors": error_count,
-        "passPct": pass_pct,
-        "failureBreakdown": failure_breakdown,
-        "strategyRecommendations": strategy_recs,
-        "results": results,
-        "savedAt": datetime.now(timezone.utc).isoformat(),
-    }
+    report_payload = _build_dryrun_report_payload(
+        batch=batch,
+        countries=countries,
+        results=results,
+        run_id=run_id,
+        generated_at=generated_at,
+    )
 
     # Timestamped copy for history
-    history_path = report_dir / f"dryrun_report_{ts}.json"
+    history_path = report_dir / f"dryrun_report_{run_id}.json"
     with open(history_path, "w") as f:
-        json.dump(report_payload, f, indent=2)
+        json.dump(report_payload, f, indent=2, ensure_ascii=False)
 
     # Also overwrite latest for backward compat
     latest_path = report_dir / "dryrun_report.json"
     with open(latest_path, "w") as f:
-        json.dump(report_payload, f, indent=2)
+        json.dump(report_payload, f, indent=2, ensure_ascii=False)
+
+    _write_dryrun_runs_index(report_payload, latest_path, history_path)
 
     print(f"\nReport saved to {latest_path} (history: {history_path.name})")
 

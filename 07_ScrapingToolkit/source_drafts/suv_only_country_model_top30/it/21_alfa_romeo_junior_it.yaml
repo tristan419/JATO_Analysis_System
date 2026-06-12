@@ -72,11 +72,22 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - bev
+      - ev
+      - electric
+      - battery electric
+      - fully electric
+      - electric vehicle
+      - elettrico
+      - 100% elettrico
     - key: powertrain_mhev
       powertrain: MHEV
       keywords:
-      - TODO_MHEV_KEYWORD
+      - mhev
+      - mild hybrid
+      - mild-hybrid
+      - 48V
+      - ibrida mild hybrid
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98

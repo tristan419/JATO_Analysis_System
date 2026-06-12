@@ -1,0 +1,25 @@
+country_code: DE
+country_label: Germany / 德国
+languages: [de, en]
+taxonomy_profile: dach_core
+sources:
+  - source_code: de_auto_motor_sport_comments
+    site_name: Auto Motor und Sport
+    site_url: https://www.auto-motor-und-sport.de/
+    site_type: media_comments
+    extractor: scrapling
+    language: de
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Focus on public article, review, and visible reader-reaction pages only.
+    notes: Stable German market source for pricing, launch, ownership-cost, and reliability reactions.
+  - source_code: de_motor_talk_forum
+    site_name: Motor-Talk
+    site_url: https://www.motor-talk.de/
+    site_type: forum
+    extractor: playwright
+    language: de
+    tags: [voc, public, forum, owner, automotive]
+    public_access: true
+    compliance_notes: Collect only public threads and respect robots, rate limits, and consent boundaries.
+    notes: High-value owner forum; direct HTTP may return anti-bot responses, so browser fetch is preferred.

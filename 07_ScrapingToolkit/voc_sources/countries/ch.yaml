@@ -1,0 +1,25 @@
+country_code: CH
+country_label: Switzerland / 瑞士
+languages: [de, fr, it, en]
+taxonomy_profile: dach_core
+sources:
+  - source_code: ch_tcs_consumer_advice
+    site_name: TCS
+    site_url: https://www.tcs.ch/de/testberichte-ratgeber/ratgeber/
+    site_type: consumer_media
+    extractor: scrapling
+    language: de
+    tags: [voc, public, consumer, media, automotive]
+    public_access: true
+    compliance_notes: Restrict extraction to public consumer advice and article pages; do not target member-only services.
+    notes: Swiss consumer perspective on EV use, charging, costs, safety, and ownership issues.
+  - source_code: ch_automobil_revue_comments
+    site_name: Automobil Revue
+    site_url: https://www.automobilrevue.ch/
+    site_type: media_comments
+    extractor: scrapling
+    language: de
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Focus on public editorial and review pages with visible reader feedback.
+    notes: Adds Swiss market reaction to launches, pricing, product quality, and model comparisons.

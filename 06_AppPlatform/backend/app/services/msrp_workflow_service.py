@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.db.models import (
     CurrentPrice,
+    FinanceObservation,
     MsrpObservation,
+    MsrpSource,
     PriceHistory,
     ReviewCase,
     ReviewDecision,
@@ -23,6 +25,7 @@ from app.services.msrp_mapping_service import (
 )
 from app.services.payload_serializers import (
     current_price_payload,
+    finance_observation_payload,
     observation_payload,
     price_history_payload,
     review_case_payload,
@@ -37,6 +40,34 @@ ELIGIBLE_CURRENT_PRICE_STATUSES = {
     "override_applied",
 }
 REVIEW_REQUIRED_STATUS = "review_required"
+DEFAULT_PRICE_ALERT_THRESHOLD_PCT = 3.0
+FINANCE_CONTEXT_FIELDS = (
+    "price_semantics",
+    "monthly_payment",
+    "down_payment",
+    "down_payment_pct",
+    "term_months",
+    "apr",
+    "effective_apr",
+    "balloon_payment",
+    "finance_type",
+    "total_credit_cost",
+    "total_amount_payable",
+    "annual_mileage_limit",
+    "offer_valid_until",
+    "subsidy_amount",
+    "net_price_after_subsidy",
+    "finance_currency",
+)
+FINANCE_AMOUNT_FIELDS = {
+    "monthly_payment",
+    "down_payment",
+    "balloon_payment",
+    "total_credit_cost",
+    "total_amount_payable",
+    "subsidy_amount",
+    "net_price_after_subsidy",
+}
 
 
 def _utc_now() -> datetime:
@@ -45,6 +76,223 @@ def _utc_now() -> datetime:
 
 def _business_powertrain(value: str | None) -> str:
     return str(value or "").strip()
+
+
+def _optional_text(value: object | None) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _optional_float(value: object | None) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return float(text)
+
+
+def _optional_int(value: object | None) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return int(float(text))
+
+
+def _optional_date(value: object | None) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid finance offer_valid_until: {value}",
+        ) from exc
+
+
+def _json_safe_finance_context(context: dict[str, object]) -> dict[str, object]:
+    normalized: dict[str, object] = {}
+    for key, value in context.items():
+        if isinstance(value, (date, datetime)):
+            normalized[key] = value.isoformat()
+        else:
+            normalized[key] = value
+    return normalized
+
+
+def _finance_context_from_payload(
+    item: dict[str, object],
+    source_price_semantics: str | None = None,
+) -> dict[str, object]:
+    context: dict[str, object] = {}
+    source_context = item.get("source_context_json")
+    if isinstance(source_context, dict):
+        pricing_context = source_context.get("pricingContext")
+        if isinstance(pricing_context, dict):
+            for key in FINANCE_CONTEXT_FIELDS:
+                if pricing_context.get(key) is not None:
+                    context[key] = pricing_context[key]
+
+    for key in FINANCE_CONTEXT_FIELDS:
+        if item.get(key) is not None:
+            context[key] = item[key]
+
+    source_semantics = _optional_text(source_price_semantics)
+    context.setdefault("price_semantics", source_semantics or "base_msrp")
+
+    has_finance_values = any(
+        context.get(key) is not None
+        for key in FINANCE_CONTEXT_FIELDS
+        if key != "price_semantics"
+    )
+    if not has_finance_values and context.get("price_semantics") == "base_msrp":
+        return {}
+    return _json_safe_finance_context(context)
+
+
+def _payload_price_semantics(
+    item: dict[str, object],
+    source_price_semantics: str | None = None,
+) -> str:
+    context = _finance_context_from_payload(item, source_price_semantics)
+    if context:
+        return str(context.get("price_semantics") or "base_msrp").strip()
+    return str(source_price_semantics or "base_msrp").strip() or "base_msrp"
+
+
+def _is_current_price_semantics(price_semantics: str) -> bool:
+    return price_semantics == "base_msrp"
+
+
+def _amount_to_eur(
+    value: object | None,
+    currency: str,
+    observed_at_utc: datetime,
+    fallback_rate_to_eur: object,
+) -> float | None:
+    amount = _optional_float(value)
+    if amount is None:
+        return None
+    normalized_currency = currency.strip().upper()
+    if normalized_currency == "EUR":
+        return round(amount, 2)
+    if normalized_currency:
+        converted, _ = convert_amount_to_eur(
+            amount,
+            normalized_currency,
+            observed_at_utc,
+        )
+        return round(float(converted), 2)
+    return round(amount * float(fallback_rate_to_eur), 2)
+
+
+def _finance_observation_from_payload(
+    observation: MsrpObservation,
+    item: dict[str, object],
+    source_price_semantics: str | None = None,
+) -> FinanceObservation | None:
+    context = _finance_context_from_payload(item, source_price_semantics)
+    if not context:
+        return None
+
+    currency = str(
+        context.get("finance_currency")
+        or context.get("currency")
+        or observation.source_currency
+    ).strip().upper()
+    observed_at_utc = observation.observed_at_utc
+    return FinanceObservation(
+        observation_id=observation.observation_id,
+        scrape_batch_id=observation.scrape_batch_id,
+        country=observation.country,
+        brand=observation.brand,
+        jato_model=observation.jato_model,
+        jato_trim=observation.jato_trim,
+        jato_powertrain=observation.jato_powertrain,
+        official_model=observation.official_model,
+        official_trim=observation.official_trim,
+        official_edition=observation.official_edition,
+        official_powertrain=observation.official_powertrain,
+        price_semantics=str(
+            context.get("price_semantics") or "base_msrp"
+        ).strip(),
+        finance_type=_optional_text(context.get("finance_type")),
+        monthly_payment=_optional_float(context.get("monthly_payment")),
+        monthly_payment_eur=_amount_to_eur(
+            context.get("monthly_payment"),
+            currency,
+            observed_at_utc,
+            observation.fx_rate_to_eur,
+        ),
+        down_payment=_optional_float(context.get("down_payment")),
+        down_payment_eur=_amount_to_eur(
+            context.get("down_payment"),
+            currency,
+            observed_at_utc,
+            observation.fx_rate_to_eur,
+        ),
+        down_payment_pct=_optional_float(context.get("down_payment_pct")),
+        term_months=_optional_int(context.get("term_months")),
+        apr=_optional_float(context.get("apr")),
+        effective_apr=_optional_float(context.get("effective_apr")),
+        balloon_payment=_optional_float(context.get("balloon_payment")),
+        balloon_payment_eur=_amount_to_eur(
+            context.get("balloon_payment"),
+            currency,
+            observed_at_utc,
+            observation.fx_rate_to_eur,
+        ),
+        total_credit_cost=_optional_float(context.get("total_credit_cost")),
+        total_credit_cost_eur=_amount_to_eur(
+            context.get("total_credit_cost"),
+            currency,
+            observed_at_utc,
+            observation.fx_rate_to_eur,
+        ),
+        total_amount_payable=_optional_float(
+            context.get("total_amount_payable")
+        ),
+        total_amount_payable_eur=_amount_to_eur(
+            context.get("total_amount_payable"),
+            currency,
+            observed_at_utc,
+            observation.fx_rate_to_eur,
+        ),
+        annual_mileage_limit=_optional_int(
+            context.get("annual_mileage_limit")
+        ),
+        offer_valid_until=_optional_date(context.get("offer_valid_until")),
+        subsidy_amount=_optional_float(context.get("subsidy_amount")),
+        subsidy_amount_eur=_amount_to_eur(
+            context.get("subsidy_amount"),
+            currency,
+            observed_at_utc,
+            observation.fx_rate_to_eur,
+        ),
+        net_price_after_subsidy=_optional_float(
+            context.get("net_price_after_subsidy")
+        ),
+        net_price_after_subsidy_eur=_amount_to_eur(
+            context.get("net_price_after_subsidy"),
+            currency,
+            observed_at_utc,
+            observation.fx_rate_to_eur,
+        ),
+        currency=currency,
+        source_url=observation.source_url,
+        observed_at_utc=observed_at_utc,
+        finance_context_json=context,
+    )
 
 
 def _commit_or_conflict(
@@ -188,6 +436,11 @@ def _record_price_period(
             observation.jato_powertrain,
         )
     if open_period is not None:
+        if observation.observed_at_utc == open_period.valid_from_utc:
+            _replace_open_price_period(open_period, observation)
+            return
+        if observation.observed_at_utc < open_period.valid_from_utc:
+            return
         open_period.valid_to_utc = observation.observed_at_utc
         open_period.ended_by_observation_id = observation.observation_id
 
@@ -207,6 +460,24 @@ def _record_price_period(
         last_confirmed_by_observation_id=observation.observation_id,
     )
     msrp_repo.add_price_history(session, new_period)
+
+
+def _replace_open_price_period(
+    open_period: PriceHistory,
+    observation: MsrpObservation,
+) -> None:
+    open_period.msrp_value = observation.msrp_value
+    open_period.currency = observation.currency
+    open_period.source_msrp_value = observation.source_msrp_value
+    open_period.source_currency = observation.source_currency
+    open_period.valid_from_utc = observation.observed_at_utc
+    open_period.valid_to_utc = None
+    open_period.started_by_observation_id = observation.observation_id
+    open_period.ended_by_observation_id = None
+    open_period.last_confirmed_at_utc = observation.observed_at_utc
+    open_period.last_confirmed_by_observation_id = (
+        observation.observation_id
+    )
 
 
 def _refresh_open_price_period(
@@ -314,7 +585,13 @@ def create_scrape_batch_ingest(
     observations: list[MsrpObservation] = []
     review_cases: list[ReviewCase] = []
     current_prices: list[CurrentPrice] = []
+    sources: list[MsrpSource] = []
+    finance_observations: list[FinanceObservation] = []
+    finance_observations_skipped = 0
     price_history_enabled = msrp_repo.has_price_history_table(session)
+    finance_observations_enabled = (
+        msrp_repo.has_finance_observations_table(session)
+    )
 
     for item in observations_payload:
         source = msrp_repo.get_source(session, UUID(str(item["source_id"])))
@@ -338,6 +615,7 @@ def create_scrape_batch_ingest(
                 status_code=400,
                 detail="Observation brand must stay within scope_brands.",
             )
+        sources.append(source)
         observed_at_utc = item.get("observed_at_utc") or _utc_now()
         source_msrp_value = float(item["msrp_value"])
         source_currency = str(item.get("currency") or "").strip().upper()
@@ -411,13 +689,36 @@ def create_scrape_batch_ingest(
     msrp_repo.add_observations(session, observations)
     session.flush()
 
+    for observation, payload, source in zip(
+        observations,
+        observations_payload,
+        sources,
+        strict=False,
+    ):
+        finance_observation = _finance_observation_from_payload(
+            observation,
+            payload,
+            source.price_semantics,
+        )
+        if finance_observation is None:
+            continue
+        if finance_observations_enabled:
+            finance_observations.append(finance_observation)
+        else:
+            finance_observations_skipped += 1
+    if finance_observations:
+        msrp_repo.add_finance_observations(session, finance_observations)
+        session.flush()
+
     success_count = 0
     review_required_count = 0
     override_applied_count = 0
     link_applied_count = 0
-    for observation, payload in zip(
+    non_msrp_price_observation_count = 0
+    for observation, payload, source in zip(
         observations,
         observations_payload,
+        sources,
         strict=False,
     ):
         if observation.match_status == REVIEW_REQUIRED_STATUS:
@@ -438,6 +739,14 @@ def create_scrape_batch_ingest(
                 review_required_count += 1
                 continue
         if observation.match_status in ELIGIBLE_CURRENT_PRICE_STATUSES:
+            price_semantics = _payload_price_semantics(
+                payload,
+                source.price_semantics,
+            )
+            if not _is_current_price_semantics(price_semantics):
+                non_msrp_price_observation_count += 1
+                success_count += 1
+                continue
             current_price = materialize_current_price_from_observation(
                 session,
                 observation,
@@ -445,6 +754,14 @@ def create_scrape_batch_ingest(
             )
             if current_price is not None:
                 current_prices.append(current_price)
+                # The app session runs with autoflush disabled. Flush each
+                # materialized price so later observations in the same batch
+                # can see the current price and open history period.
+                _commit_or_conflict(
+                    session,
+                    "Scrape batch ingest hit a conflict",
+                    commit=False,
+                )
             success_count += 1
 
     batch.candidate_count = len(observations) + failed_count
@@ -472,8 +789,15 @@ def create_scrape_batch_ingest(
         "overrideAppliedCount": override_applied_count,
         "linkAppliedCount": link_applied_count,
         "currentPricesTouched": len(current_prices),
+        "nonMsrpPriceObservationCount": non_msrp_price_observation_count,
+        "financeObservationsCreated": len(finance_observations),
+        "financeObservationsSkipped": finance_observations_skipped,
         "sampleObservations": [
             observation_payload(item) for item in observations[:10]
+        ],
+        "sampleFinanceObservations": [
+            finance_observation_payload(item)
+            for item in finance_observations[:10]
         ],
         "sampleReviewCases": [
             review_case_payload(item) for item in review_cases[:10]
@@ -481,6 +805,28 @@ def create_scrape_batch_ingest(
         "sampleCurrentPrices": [
             current_price_payload(item) for item in current_prices[:10]
         ],
+    }
+
+
+def _source_by_effective_observation_id(
+    session: Session,
+    items: list[CurrentPrice],
+) -> dict[object, MsrpSource | None]:
+    observations = msrp_repo.list_observations_by_ids(
+        session,
+        [item.effective_observation_id for item in items],
+    )
+    observation_by_id = {
+        item.observation_id: item for item in observations
+    }
+    sources = msrp_repo.list_sources_by_ids(
+        session,
+        [item.source_id for item in observations],
+    )
+    source_by_id = {item.source_id: item for item in sources}
+    return {
+        observation_id: source_by_id.get(observation.source_id)
+        for observation_id, observation in observation_by_id.items()
     }
 
 
@@ -507,18 +853,10 @@ def list_current_prices(
         brand,
         jato_model,
     )
-    observations = msrp_repo.list_observations_by_ids(
+    source_by_observation_id = _source_by_effective_observation_id(
         session,
-        [item.effective_observation_id for item in items],
+        items,
     )
-    observation_by_id = {
-        item.observation_id: item for item in observations
-    }
-    sources = msrp_repo.list_sources_by_ids(
-        session,
-        [item.source_id for item in observations],
-    )
-    source_by_id = {item.source_id: item for item in sources}
     return {
         "rows": len(items),
         "total": total,
@@ -528,14 +866,1207 @@ def list_current_prices(
         "items": [
             current_price_payload(
                 item,
-                source_by_id.get(
-                    observation_by_id[item.effective_observation_id].source_id
-                )
-                if item.effective_observation_id in observation_by_id
-                else None,
+                source_by_observation_id.get(item.effective_observation_id),
             )
             for item in items
         ],
+    }
+
+
+def _increment_count(target: dict[str, int], value: object | None) -> None:
+    key = str(value or "").strip() or "unknown"
+    target[key] = target.get(key, 0) + 1
+
+
+def _summarize_finance_observations(
+    items: list[FinanceObservation],
+) -> dict[str, object]:
+    semantics_counts: dict[str, int] = {}
+    finance_type_counts: dict[str, int] = {}
+    monthly_values = [
+        float(item.monthly_payment_eur)
+        for item in items
+        if item.monthly_payment_eur is not None
+    ]
+    net_values = [
+        float(item.net_price_after_subsidy_eur)
+        for item in items
+        if item.net_price_after_subsidy_eur is not None
+    ]
+    subsidy_values = [
+        float(item.subsidy_amount_eur)
+        for item in items
+        if item.subsidy_amount_eur is not None
+    ]
+    for item in items:
+        _increment_count(semantics_counts, item.price_semantics)
+        _increment_count(finance_type_counts, item.finance_type)
+    return {
+        "priceSemanticsCounts": semantics_counts,
+        "financeTypeCounts": finance_type_counts,
+        "monthlyPaymentCount": len(monthly_values),
+        "monthlyPaymentEurMin": min(monthly_values) if monthly_values else None,
+        "monthlyPaymentEurMax": max(monthly_values) if monthly_values else None,
+        "netPriceAfterSubsidyCount": len(net_values),
+        "netPriceAfterSubsidyEurMin": (
+            min(net_values) if net_values else None
+        ),
+        "netPriceAfterSubsidyEurMax": (
+            max(net_values) if net_values else None
+        ),
+        "subsidyObservationCount": len(subsidy_values),
+    }
+
+
+def list_finance_observations(
+    session: Session,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    price_semantics: str | None,
+    finance_type: str | None,
+    has_monthly_payment: bool | None,
+    has_subsidy: bool | None,
+    has_net_price_after_subsidy: bool | None,
+    limit: int,
+    offset: int,
+) -> dict[str, object]:
+    if not msrp_repo.has_finance_observations_table(session):
+        return {
+            "rows": 0,
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+            "summary": _summarize_finance_observations([]),
+            "items": [],
+            "warning": "finance_observations_unavailable",
+        }
+    total = msrp_repo.count_finance_observations(
+        session,
+        country,
+        brand,
+        jato_model,
+        price_semantics,
+        finance_type,
+        has_monthly_payment,
+        has_subsidy,
+        has_net_price_after_subsidy,
+    )
+    items = msrp_repo.list_finance_observations(
+        session,
+        country,
+        brand,
+        jato_model,
+        price_semantics,
+        finance_type,
+        has_monthly_payment,
+        has_subsidy,
+        has_net_price_after_subsidy,
+        limit,
+        offset,
+    )
+    return {
+        "rows": len(items),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "summary": _summarize_finance_observations(items),
+        "items": [finance_observation_payload(item) for item in items],
+    }
+
+
+def _float_or_none(value: object | None) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _delta_direction(delta_value: float | None) -> str:
+    if delta_value is None:
+        return "unknown"
+    if delta_value > 0:
+        return "increase"
+    if delta_value < 0:
+        return "decrease"
+    return "unchanged"
+
+
+def _price_event_type(
+    delta_base: float | None,
+    source_currency_changed: bool,
+) -> str:
+    if source_currency_changed:
+        return "currency_change"
+    if delta_base is None:
+        return "price_change_unknown_delta"
+    if delta_base == 0:
+        return "price_confirmed"
+    return "price_change"
+
+
+def _price_alert_severity(
+    delta_pct: float | None,
+    source_currency_changed: bool,
+    threshold_pct: float,
+) -> str:
+    if source_currency_changed:
+        return "warning"
+    if delta_pct is None:
+        return "info"
+    abs_delta_pct = abs(delta_pct)
+    if abs_delta_pct >= threshold_pct * 2:
+        return "critical"
+    if abs_delta_pct >= threshold_pct:
+        return "warning"
+    return "info"
+
+
+def _price_alert_recommended_action(
+    severity: str,
+    direction: str,
+    source_currency_changed: bool,
+) -> str:
+    if source_currency_changed:
+        return "review_currency_or_source_semantics"
+    if severity in {"critical", "warning"}:
+        if direction == "decrease":
+            return "review_price_drop_and_queue_sales_effectiveness"
+        if direction == "increase":
+            return "review_price_increase_and_notify_market_team"
+        return "review_price_change_event"
+    return "keep_monitoring"
+
+
+def _summarize_price_alert_events(
+    items: list[dict[str, object]],
+) -> dict[str, object]:
+    direction_counts: dict[str, int] = {}
+    severity_counts: dict[str, int] = {}
+    threshold_alert_count = 0
+    high_priority_count = 0
+    for item in items:
+        direction = str(item.get("direction") or "unknown")
+        severity = str(item.get("severity") or "info")
+        direction_counts[direction] = direction_counts.get(direction, 0) + 1
+        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+        if bool(item.get("isThresholdAlert")):
+            threshold_alert_count += 1
+        if bool(item.get("isHighPriority")):
+            high_priority_count += 1
+    return {
+        "priceChangeEventCount": len(items),
+        "thresholdAlertCount": threshold_alert_count,
+        "highPriorityAlertCount": high_priority_count,
+        "directionCounts": direction_counts,
+        "severityCounts": severity_counts,
+    }
+
+
+def _price_alert_payload(
+    current_price: CurrentPrice,
+    latest_period: PriceHistory | None,
+    previous_period: PriceHistory | None,
+    source: MsrpSource | None,
+    threshold_pct: float = DEFAULT_PRICE_ALERT_THRESHOLD_PCT,
+) -> dict[str, object]:
+    current_source_value = _float_or_none(
+        latest_period.source_msrp_value
+        if latest_period is not None
+        else current_price.source_msrp_value
+    )
+    previous_source_value = _float_or_none(
+        previous_period.source_msrp_value
+        if previous_period is not None
+        else None
+    )
+    current_source_currency = (
+        latest_period.source_currency
+        if latest_period is not None
+        else current_price.source_currency
+    )
+    previous_source_currency = (
+        previous_period.source_currency
+        if previous_period is not None
+        else None
+    )
+    source_currency_changed = (
+        previous_source_currency is not None
+        and current_source_currency != previous_source_currency
+    )
+
+    delta_source_value = None
+    if (
+        current_source_value is not None
+        and previous_source_value is not None
+        and not source_currency_changed
+    ):
+        delta_source_value = round(
+            current_source_value - previous_source_value,
+            2,
+        )
+
+    current_eur_value = _float_or_none(
+        latest_period.msrp_value
+        if latest_period is not None
+        else current_price.current_msrp_value
+    )
+    previous_eur_value = _float_or_none(
+        previous_period.msrp_value
+        if previous_period is not None
+        else None
+    )
+    delta_eur_value = None
+    if current_eur_value is not None and previous_eur_value is not None:
+        delta_eur_value = round(current_eur_value - previous_eur_value, 2)
+
+    ratio_base = (
+        previous_source_value
+        if delta_source_value is not None and previous_source_value
+        else previous_eur_value
+    )
+    delta_base = (
+        delta_source_value
+        if delta_source_value is not None
+        else delta_eur_value
+    )
+    delta_pct = (
+        round((delta_base / ratio_base) * 100, 2)
+        if delta_base is not None and ratio_base
+        else None
+    )
+
+    direction = _delta_direction(delta_base)
+    event_type = _price_event_type(delta_base, source_currency_changed)
+    severity = _price_alert_severity(
+        delta_pct,
+        source_currency_changed,
+        threshold_pct,
+    )
+    is_threshold_alert = severity in {"critical", "warning"}
+    is_high_priority = severity == "critical"
+    changed_at = (
+        latest_period.valid_from_utc
+        if latest_period is not None
+        else current_price.last_price_change_at_utc
+    )
+    return {
+        "country": current_price_payload(current_price)["country"],
+        "brand": current_price.brand,
+        "jatoModel": current_price.jato_model,
+        "jatoTrim": current_price.jato_trim,
+        "jatoPowertrain": (
+            _business_powertrain(current_price.jato_powertrain) or None
+        ),
+        "eventType": event_type,
+        "direction": direction,
+        "severity": severity,
+        "thresholdPct": threshold_pct,
+        "isThresholdAlert": is_threshold_alert,
+        "isHighPriority": is_high_priority,
+        "recommendedAction": _price_alert_recommended_action(
+            severity,
+            direction,
+            source_currency_changed,
+        ),
+        "changedAtUtc": changed_at.isoformat() if changed_at else None,
+        "currentSourceMsrpValue": current_source_value,
+        "previousSourceMsrpValue": previous_source_value,
+        "currentSourceCurrency": current_source_currency,
+        "previousSourceCurrency": previous_source_currency,
+        "sourceCurrencyChanged": source_currency_changed,
+        "deltaSourceMsrpValue": delta_source_value,
+        "deltaMsrpValue": delta_eur_value,
+        "deltaPct": delta_pct,
+        "currentPrice": current_price_payload(current_price, source),
+        "latestPrice": (
+            price_history_payload(latest_period)
+            if latest_period is not None
+            else None
+        ),
+        "previousPrice": (
+            price_history_payload(previous_period)
+            if previous_period is not None
+            else None
+        ),
+    }
+
+
+def list_current_price_alerts(
+    session: Session,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    limit: int,
+    offset: int,
+    threshold_pct: float = DEFAULT_PRICE_ALERT_THRESHOLD_PCT,
+) -> dict[str, object]:
+    threshold_pct = max(0.0, float(threshold_pct))
+    if not msrp_repo.has_price_history_table(session):
+        return {
+            "rows": 0,
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+            "thresholdPct": threshold_pct,
+            "summary": _summarize_price_alert_events([]),
+            "items": [],
+            "warning": "price_history_unavailable",
+        }
+
+    total = msrp_repo.count_current_price_alerts(
+        session,
+        country,
+        brand,
+        jato_model,
+    )
+    items = msrp_repo.list_current_price_alerts(
+        session,
+        country,
+        brand,
+        jato_model,
+        limit,
+        offset,
+    )
+    source_by_observation_id = _source_by_effective_observation_id(
+        session,
+        items,
+    )
+
+    alert_items: list[dict[str, object]] = []
+    for item in items:
+        history = msrp_repo.list_price_history(
+            session,
+            item.country,
+            item.brand,
+            item.jato_model,
+            item.jato_trim,
+            item.jato_powertrain,
+            2,
+        )
+        latest_period = history[0] if history else None
+        previous_period = history[1] if len(history) > 1 else None
+        alert_items.append(
+            _price_alert_payload(
+                item,
+                latest_period,
+                previous_period,
+                source_by_observation_id.get(item.effective_observation_id),
+                threshold_pct,
+            )
+        )
+
+    return {
+        "rows": len(alert_items),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "thresholdPct": threshold_pct,
+        "summary": _summarize_price_alert_events(alert_items),
+        "items": alert_items,
+    }
+
+
+def build_current_price_snapshot(
+    session: Session,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    limit: int,
+    threshold_pct: float = DEFAULT_PRICE_ALERT_THRESHOLD_PCT,
+) -> dict[str, object]:
+    generated_at = _utc_now()
+    iso_year, iso_week, _ = generated_at.isocalendar()
+    current_prices = list_current_prices(
+        session,
+        country,
+        brand,
+        jato_model,
+        limit,
+        0,
+    )
+    price_alerts = list_current_price_alerts(
+        session,
+        country,
+        brand,
+        jato_model,
+        limit,
+        0,
+        threshold_pct,
+    )
+
+    return {
+        "schemaVersion": "msrp_current_price_snapshot_v1",
+        "generatedAtUtc": generated_at.isoformat(),
+        "snapshotWeek": f"{iso_year}-W{iso_week:02d}",
+        "filters": {
+            "country": country,
+            "brand": brand,
+            "jatoModel": jato_model,
+        },
+        "summary": {
+            "currentPriceCount": current_prices.get("total", 0),
+            "returnedCurrentPriceCount": current_prices.get("rows", 0),
+            "priceAlertCount": price_alerts.get("total", 0),
+            "returnedPriceAlertCount": price_alerts.get("rows", 0),
+            "priceAlertThresholdPct": price_alerts.get(
+                "thresholdPct",
+                threshold_pct,
+            ),
+            "priceAlertSummary": price_alerts.get(
+                "summary",
+                _summarize_price_alert_events(
+                    [
+                        item for item in list(price_alerts.get("items") or [])
+                        if isinstance(item, dict)
+                    ]
+                ),
+            ),
+            "limit": limit,
+        },
+        "currentPrices": current_prices.get("items", []),
+        "priceAlerts": price_alerts.get("items", []),
+        "warnings": [
+            item
+            for item in [
+                current_prices.get("warning"),
+                price_alerts.get("warning"),
+            ]
+            if item
+        ],
+    }
+
+
+def _reconciliation_key(
+    observation: MsrpObservation,
+) -> tuple[str, str, str, str, str]:
+    return (
+        observation.country,
+        observation.brand,
+        observation.jato_model,
+        observation.jato_trim,
+        _business_powertrain(observation.jato_powertrain),
+    )
+
+
+def _reconciliation_status(
+    source_count: int,
+    spread_pct: float | None,
+    threshold_pct: float,
+) -> str:
+    if source_count < 2:
+        return "single_source"
+    if spread_pct is not None and spread_pct > threshold_pct:
+        return "conflict"
+    return "aligned"
+
+
+def _reconciliation_action(status: str) -> str:
+    if status == "conflict":
+        return "review_conflicting_sources"
+    if status == "single_source":
+        return "add_secondary_source"
+    return "keep_current_price"
+
+
+def _source_observation_payload(
+    observation: MsrpObservation,
+    source: MsrpSource | None,
+) -> dict[str, object]:
+    return {
+        "observationId": str(observation.observation_id),
+        "sourceId": str(observation.source_id),
+        "sourceCode": source.source_code if source is not None else None,
+        "sourceType": source.source_type if source is not None else None,
+        "sourceMsrpValue": float(observation.source_msrp_value),
+        "sourceCurrency": observation.source_currency,
+        "msrpValue": float(observation.msrp_value),
+        "currency": observation.currency,
+        "observedAtUtc": observation.observed_at_utc.isoformat(),
+        "sourceUrl": observation.source_url,
+        "matchStatus": observation.match_status,
+        "matchConfidence": float(observation.match_confidence),
+        "sourcePayloadHash": observation.source_payload_hash,
+    }
+
+
+def _latest_reconciliation_observations(
+    observations: list[MsrpObservation],
+) -> list[MsrpObservation]:
+    latest_by_source: dict[object, MsrpObservation] = {}
+    for observation in sorted(
+        observations,
+        key=lambda item: item.observed_at_utc,
+        reverse=True,
+    ):
+        latest_by_source.setdefault(observation.source_id, observation)
+    return list(latest_by_source.values())
+
+
+def _reconciliation_metrics(
+    latest_observations: list[MsrpObservation],
+    threshold_pct: float,
+) -> dict[str, object]:
+    eur_values = [float(item.msrp_value) for item in latest_observations]
+    min_value = min(eur_values) if eur_values else None
+    max_value = max(eur_values) if eur_values else None
+    avg_value = (
+        round(sum(eur_values) / len(eur_values), 2)
+        if eur_values
+        else None
+    )
+    spread_value = (
+        round(max_value - min_value, 2)
+        if min_value is not None and max_value is not None
+        else None
+    )
+    spread_pct = (
+        round((spread_value / avg_value) * 100, 2)
+        if spread_value is not None and avg_value
+        else None
+    )
+    source_count = len(latest_observations)
+    status = _reconciliation_status(
+        source_count,
+        spread_pct,
+        threshold_pct,
+    )
+    return {
+        "sourceCount": source_count,
+        "minMsrpValue": min_value,
+        "maxMsrpValue": max_value,
+        "avgMsrpValue": avg_value,
+        "spreadValue": spread_value,
+        "spreadPct": spread_pct,
+        "status": status,
+    }
+
+
+def _source_observation_payloads(
+    latest_observations: list[MsrpObservation],
+    source_by_id: dict[object, MsrpSource],
+) -> list[dict[str, object]]:
+    return [
+        _source_observation_payload(
+            item,
+            source_by_id.get(item.source_id),
+        )
+        for item in sorted(
+            latest_observations,
+            key=lambda obs: float(obs.msrp_value),
+        )
+    ]
+
+
+def _reconciliation_review_candidates(
+    latest_observations: list[MsrpObservation],
+    source_by_id: dict[object, MsrpSource],
+    metrics: dict[str, object],
+    threshold_pct: float,
+) -> list[dict[str, object]]:
+    source_payloads = _source_observation_payloads(
+        latest_observations,
+        source_by_id,
+    )
+    return [
+        {
+            "candidateType": "source_observation",
+            "reconciliationStatus": metrics["status"],
+            "recommendedAction": _reconciliation_action(
+                str(metrics["status"])
+            ),
+            "thresholdPct": threshold_pct,
+            "spreadPct": metrics["spreadPct"],
+            "spreadValue": metrics["spreadValue"],
+            "sourceRank": index + 1,
+            **payload,
+        }
+        for index, payload in enumerate(source_payloads)
+    ]
+
+
+def _select_reconciliation_review_observation(
+    session: Session,
+    key: tuple[str, str, str, str, str],
+    latest_observations: list[MsrpObservation],
+) -> MsrpObservation:
+    current_price = msrp_repo.get_current_price_by_key(
+        session,
+        key[0],
+        key[1],
+        key[2],
+        key[3],
+        key[4],
+    )
+    if current_price is not None:
+        current_observation = msrp_repo.get_observation(
+            session,
+            current_price.effective_observation_id,
+        )
+        if current_observation is not None:
+            return current_observation
+    return sorted(
+        latest_observations,
+        key=lambda item: item.observed_at_utc,
+        reverse=True,
+    )[0]
+
+
+def _build_reconciliation_item(
+    session: Session,
+    key: tuple[str, str, str, str, str],
+    observations: list[MsrpObservation],
+    source_by_id: dict[object, MsrpSource],
+    threshold_pct: float,
+) -> dict[str, object]:
+    latest_observations = _latest_reconciliation_observations(observations)
+    metrics = _reconciliation_metrics(latest_observations, threshold_pct)
+    status = str(metrics["status"])
+
+    current_price = msrp_repo.get_current_price_by_key(
+        session,
+        key[0],
+        key[1],
+        key[2],
+        key[3],
+        key[4],
+    )
+
+    return {
+        "country": key[0],
+        "brand": key[1],
+        "jatoModel": key[2],
+        "jatoTrim": key[3],
+        "jatoPowertrain": key[4] or None,
+        "status": status,
+        "recommendedAction": _reconciliation_action(status),
+        "sourceCount": metrics["sourceCount"],
+        "observationCount": len(observations),
+        "minMsrpValue": metrics["minMsrpValue"],
+        "maxMsrpValue": metrics["maxMsrpValue"],
+        "avgMsrpValue": metrics["avgMsrpValue"],
+        "spreadValue": metrics["spreadValue"],
+        "spreadPct": metrics["spreadPct"],
+        "thresholdPct": threshold_pct,
+        "currentPrice": (
+            current_price_payload(current_price)
+            if current_price is not None
+            else None
+        ),
+        "sourceObservations": _source_observation_payloads(
+            latest_observations,
+            source_by_id,
+        ),
+    }
+
+
+def build_multi_source_reconciliation(
+    session: Session,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    limit: int,
+    threshold_pct: float = 1.0,
+) -> dict[str, object]:
+    generated_at = _utc_now()
+    observations = msrp_repo.list_reconciliation_observations(
+        session,
+        country,
+        brand,
+        jato_model,
+        limit,
+    )
+    sources = msrp_repo.list_sources_by_ids(
+        session,
+        [item.source_id for item in observations],
+    )
+    source_by_id = {item.source_id: item for item in sources}
+
+    grouped: dict[tuple[str, str, str, str, str], list[MsrpObservation]] = {}
+    for observation in observations:
+        grouped.setdefault(_reconciliation_key(observation), []).append(
+            observation
+        )
+
+    items = [
+        _build_reconciliation_item(
+            session,
+            key,
+            group,
+            source_by_id,
+            threshold_pct,
+        )
+        for key, group in grouped.items()
+    ]
+    status_order = {"conflict": 0, "single_source": 1, "aligned": 2}
+    items.sort(
+        key=lambda item: (
+            status_order.get(str(item.get("status")), 99),
+            -float(item.get("spreadPct") or 0),
+            str(item.get("country") or ""),
+            str(item.get("brand") or ""),
+            str(item.get("jatoModel") or ""),
+        )
+    )
+
+    status_counts: dict[str, int] = {}
+    for item in items:
+        status = str(item.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    return {
+        "schemaVersion": "msrp_multi_source_reconciliation_v1",
+        "generatedAtUtc": generated_at.isoformat(),
+        "filters": {
+            "country": country,
+            "brand": brand,
+            "jatoModel": jato_model,
+        },
+        "thresholdPct": threshold_pct,
+        "summary": {
+            "observationRows": len(observations),
+            "reconciliationGroupCount": len(items),
+            "statusCounts": status_counts,
+            "limit": limit,
+        },
+        "items": items,
+    }
+
+
+def queue_reconciliation_conflicts_for_review(
+    session: Session,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    limit: int,
+    threshold_pct: float = 1.0,
+    *,
+    commit: bool = True,
+) -> dict[str, object]:
+    generated_at = _utc_now()
+    observations = msrp_repo.list_reconciliation_observations(
+        session,
+        country,
+        brand,
+        jato_model,
+        limit,
+    )
+    sources = msrp_repo.list_sources_by_ids(
+        session,
+        [item.source_id for item in observations],
+    )
+    source_by_id = {item.source_id: item for item in sources}
+
+    grouped: dict[tuple[str, str, str, str, str], list[MsrpObservation]] = {}
+    for observation in observations:
+        grouped.setdefault(_reconciliation_key(observation), []).append(
+            observation
+        )
+
+    review_case_rows: list[
+        tuple[ReviewCase, MsrpObservation, MsrpSource | None]
+    ] = []
+    sample_conflicts: list[dict[str, object]] = []
+    queued_observation_ids: set[object] = set()
+    conflict_group_count = 0
+    created_count = 0
+    reused_count = 0
+
+    for key, group in grouped.items():
+        latest_observations = _latest_reconciliation_observations(group)
+        metrics = _reconciliation_metrics(latest_observations, threshold_pct)
+        if metrics["status"] != "conflict":
+            continue
+
+        conflict_group_count += 1
+        review_observation = _select_reconciliation_review_observation(
+            session,
+            key,
+            latest_observations,
+        )
+        if review_observation.observation_id in queued_observation_ids:
+            continue
+        queued_observation_ids.add(review_observation.observation_id)
+
+        existing_case = review_repo.get_review_case_by_observation(
+            session,
+            review_observation.observation_id,
+        )
+        candidate_matches = _reconciliation_review_candidates(
+            latest_observations,
+            source_by_id,
+            metrics,
+            threshold_pct,
+        )
+        review_case = _ensure_review_case(
+            session,
+            review_observation,
+            candidate_matches,
+        )
+        if existing_case is None:
+            created_count += 1
+        else:
+            reused_count += 1
+
+        review_case_rows.append(
+            (
+                review_case,
+                review_observation,
+                source_by_id.get(review_observation.source_id),
+            )
+        )
+        sample_conflicts.append(
+            {
+                "country": key[0],
+                "brand": key[1],
+                "jatoModel": key[2],
+                "jatoTrim": key[3],
+                "jatoPowertrain": key[4] or None,
+                "sourceCount": metrics["sourceCount"],
+                "spreadPct": metrics["spreadPct"],
+                "spreadValue": metrics["spreadValue"],
+                "reviewObservationId": str(
+                    review_observation.observation_id
+                ),
+            }
+        )
+
+    _commit_or_conflict(
+        session,
+        "MSRP reconciliation review case queueing hit a conflict",
+        commit=commit,
+    )
+    return {
+        "schemaVersion": "msrp_reconciliation_review_queue_v1",
+        "generatedAtUtc": generated_at.isoformat(),
+        "filters": {
+            "country": country,
+            "brand": brand,
+            "jatoModel": jato_model,
+        },
+        "thresholdPct": threshold_pct,
+        "summary": {
+            "observationRows": len(observations),
+            "reconciliationGroupCount": len(grouped),
+            "conflictGroupCount": conflict_group_count,
+            "reviewCasesQueued": len(review_case_rows),
+            "reviewCasesCreated": created_count,
+            "reviewCasesReused": reused_count,
+            "limit": limit,
+        },
+        "sampleConflicts": sample_conflicts[:50],
+        "sampleReviewCases": [
+            review_case_payload(review_case, observation, source)
+            for review_case, observation, source in review_case_rows[:50]
+        ],
+    }
+
+
+def _normalize_effectiveness_text(value: object | None) -> str:
+    return str(value or "").strip().casefold()
+
+
+def _month_from_iso_datetime(value: object | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return f"{parsed.year:04d}-{parsed.month:02d}"
+    except ValueError:
+        if len(text) >= 7 and text[4] == "-":
+            return text[:7]
+    return None
+
+
+def _offset_month(period: str, offset: int) -> str | None:
+    try:
+        year = int(period[:4])
+        month = int(period[5:7])
+    except (ValueError, IndexError):
+        return None
+    total_months = year * 12 + (month - 1) + offset
+    if total_months < 0:
+        return None
+    next_year, next_month = divmod(total_months, 12)
+    return f"{next_year:04d}-{next_month + 1:02d}"
+
+
+def _window_months(period: str, start_offset: int, count: int) -> list[str]:
+    months: list[str] = []
+    for offset in range(start_offset, start_offset + max(0, count)):
+        shifted = _offset_month(period, offset)
+        if shifted is not None:
+            months.append(shifted)
+    return months
+
+
+def _month_sales_rows(fact, months: list[str]) -> list[dict[str, object]]:
+    if fact is None or len(fact) == 0 or not months:
+        return []
+    grouped = fact.groupby("period", as_index=False)["sales"].sum()
+    sales_by_month = {
+        str(row["period"]): float(row["sales"])
+        for _, row in grouped.iterrows()
+    }
+    return [
+        {"period": month, "sales": sales_by_month[month]}
+        for month in months
+        if month in sales_by_month
+    ]
+
+
+def _average_sales(rows: list[dict[str, object]]) -> float | None:
+    values = [float(item["sales"]) for item in rows]
+    if not values:
+        return None
+    return round(sum(values) / len(values), 2)
+
+
+def _price_change_direction(alert: dict[str, object]) -> str:
+    direction = str(alert.get("direction") or "").strip().lower()
+    if direction in {"decrease", "down"}:
+        return "down"
+    if direction in {"increase", "up"}:
+        return "up"
+    delta = alert.get("deltaMsrpValue")
+    if delta is not None:
+        numeric_delta = float(delta)
+        if numeric_delta < 0:
+            return "down"
+        if numeric_delta > 0:
+            return "up"
+    return "unchanged"
+
+
+def _effectiveness_label(
+    *,
+    price_direction: str,
+    sales_delta_pct: float | None,
+    baseline_count: int,
+    post_count: int,
+    min_months: int,
+) -> str:
+    if (
+        sales_delta_pct is None
+        or baseline_count < min_months
+        or post_count < min_months
+    ):
+        return "insufficient_data"
+    threshold = 5.0
+    if sales_delta_pct >= threshold:
+        return "positive"
+    if sales_delta_pct <= -threshold:
+        return "negative"
+    if price_direction == "unchanged":
+        return "neutral"
+    return "neutral"
+
+
+def _filter_fact_for_price_event(fact, alert: dict[str, object]):
+    if fact is None or len(fact) == 0:
+        return fact
+    required = {"model", "period", "sales"}
+    if not required.issubset(set(fact.columns)):
+        return fact.iloc[0:0]
+
+    model = _normalize_effectiveness_text(alert.get("jatoModel"))
+    filtered = fact[
+        fact["model"].astype(str).map(_normalize_effectiveness_text) == model
+    ]
+    brand = _normalize_effectiveness_text(alert.get("brand"))
+    if brand and "make" in filtered.columns:
+        filtered = filtered[
+            filtered["make"].astype(str).map(_normalize_effectiveness_text)
+            == brand
+        ]
+    return filtered
+
+
+def _build_effectiveness_item(
+    *,
+    alert: dict[str, object],
+    fact,
+    generated_at: datetime,
+    baseline_window_months: int,
+    post_window_months: int,
+    post_lag_months: int,
+    min_months: int,
+) -> dict[str, object]:
+    event_month = _month_from_iso_datetime(alert.get("changedAtUtc"))
+    price_direction = _price_change_direction(alert)
+    country = str(alert.get("country") or "").strip()
+    brand = str(alert.get("brand") or "").strip()
+    model = str(alert.get("jatoModel") or "").strip()
+    trim = str(alert.get("jatoTrim") or "").strip()
+
+    baseline_months = (
+        _window_months(
+            event_month,
+            -baseline_window_months,
+            baseline_window_months,
+        )
+        if event_month
+        else []
+    )
+    post_months = (
+        _window_months(event_month, post_lag_months, post_window_months)
+        if event_month
+        else []
+    )
+    filtered_fact = _filter_fact_for_price_event(fact, alert)
+    baseline_sales = _month_sales_rows(filtered_fact, baseline_months)
+    post_sales = _month_sales_rows(filtered_fact, post_months)
+    baseline_avg = _average_sales(baseline_sales)
+    post_avg = _average_sales(post_sales)
+
+    sales_delta = None
+    sales_delta_pct = None
+    if baseline_avg is not None and post_avg is not None:
+        sales_delta = round(post_avg - baseline_avg, 2)
+        if baseline_avg:
+            sales_delta_pct = round((sales_delta / baseline_avg) * 100, 2)
+
+    label = _effectiveness_label(
+        price_direction=price_direction,
+        sales_delta_pct=sales_delta_pct,
+        baseline_count=len(baseline_sales),
+        post_count=len(post_sales),
+        min_months=min_months,
+    )
+    note = (
+        "Model-level sales proxy; JATO monthly sales is not trim-level in this "
+        "read model."
+    )
+    if label == "insufficient_data":
+        note = (
+            f"Insufficient sales months for comparison: "
+            f"baseline={len(baseline_sales)}, post={len(post_sales)}, "
+            f"required={min_months}."
+        )
+
+    analysis_id = ":".join(
+        [
+            "msrp-effectiveness",
+            _normalize_effectiveness_text(country).replace(" ", "-"),
+            _normalize_effectiveness_text(brand).replace(" ", "-"),
+            _normalize_effectiveness_text(model).replace(" ", "-"),
+            event_month or "unknown-month",
+        ]
+    )
+
+    return {
+        "analysisId": analysis_id,
+        "country": country,
+        "brand": brand,
+        "jatoModel": model,
+        "jatoTrim": trim or None,
+        "priceEventMonth": event_month,
+        "priceChangeDirection": price_direction,
+        "priceChangeValue": alert.get("deltaMsrpValue"),
+        "priceChangePct": alert.get("deltaPct"),
+        "baselineWindowMonths": baseline_months,
+        "postWindowMonths": post_months,
+        "baselineSales": baseline_sales,
+        "postSales": post_sales,
+        "baselineAvgSales": baseline_avg,
+        "postAvgSales": post_avg,
+        "salesDelta": sales_delta,
+        "salesDeltaPct": sales_delta_pct,
+        "effectivenessLabel": label,
+        "confidenceNote": note,
+        "generatedAtUtc": generated_at.isoformat(),
+        "sourcePriceAlert": alert,
+    }
+
+
+def build_price_sales_effectiveness(
+    session: Session,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    limit: int,
+    baseline_window_months: int = 3,
+    post_window_months: int = 3,
+    post_lag_months: int = 1,
+    min_months: int = 1,
+    threshold_pct: float = DEFAULT_PRICE_ALERT_THRESHOLD_PCT,
+) -> dict[str, object]:
+    generated_at = _utc_now()
+    price_alerts = list_current_price_alerts(
+        session,
+        country,
+        brand,
+        jato_model,
+        limit,
+        0,
+        threshold_pct,
+    )
+    warnings = [
+        item for item in [price_alerts.get("warning")] if item
+    ]
+    alert_items = [
+        item for item in list(price_alerts.get("items") or [])
+        if isinstance(item, dict)
+    ]
+
+    fact_cache: dict[str, object] = {}
+    items: list[dict[str, object]] = []
+    for alert in alert_items:
+        event_country = str(alert.get("country") or country or "").strip()
+        try:
+            from app.services import advanced_analysis_service
+
+            if event_country not in fact_cache:
+                fact_cache[event_country] = (
+                    advanced_analysis_service.build_fact_sales_monthly(
+                        country=event_country or None
+                    )
+                )
+            fact = fact_cache[event_country]
+        except Exception as exc:
+            warning = f"sales_fact_unavailable:{exc}"
+            if warning not in warnings:
+                warnings.append(warning)
+            fact = None
+        items.append(
+            _build_effectiveness_item(
+                alert=alert,
+                fact=fact,
+                generated_at=generated_at,
+                baseline_window_months=baseline_window_months,
+                post_window_months=post_window_months,
+                post_lag_months=post_lag_months,
+                min_months=min_months,
+            )
+        )
+
+    label_counts: dict[str, int] = {}
+    for item in items:
+        label = str(item.get("effectivenessLabel") or "unknown")
+        label_counts[label] = label_counts.get(label, 0) + 1
+
+    return {
+        "schemaVersion": "msrp_price_sales_effectiveness_v1",
+        "generatedAtUtc": generated_at.isoformat(),
+        "filters": {
+            "country": country,
+            "brand": brand,
+            "jatoModel": jato_model,
+        },
+        "window": {
+            "baselineWindowMonths": baseline_window_months,
+            "postWindowMonths": post_window_months,
+            "postLagMonths": post_lag_months,
+            "minMonths": min_months,
+        },
+        "summary": {
+            "priceEventCount": price_alerts.get("total", len(alert_items)),
+            "analyzedEventCount": len(items),
+            "labelCounts": label_counts,
+            "limit": limit,
+        },
+        "items": items,
+        "warnings": warnings,
     }
 
 

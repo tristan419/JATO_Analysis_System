@@ -1,19 +1,19 @@
 source_code: toyota_bz4x_dk_draft_scrapling
 country: 丹麦
 brand: TOYOTA
-source_url: https://www.toyota.dk/biler/bz4x
+source_url: https://modelinformation.toyota.dk/Toyota/specs/Prislister/bz4x/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.toyota.dk/biler/bz4x
+  url: https://modelinformation.toyota.dk/Toyota/specs/Prislister/bz4x/
   headless: true
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Vejledende udsalgspris inkl. lev.omk.
   fixed_model: BZ4X
   fixed_jato_model: BZ4X
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -60,7 +60,10 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - bz4x
+      - elektrisk
+      - elektrisk forbrug
+      - kWh
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -68,13 +71,31 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
+  text_regex:
+    source_selector: script
+    entry_patterns:
+    - pattern: 'Modelprogram.*?Active 57,7 kWh\s+SUV 4x2.*?Vejl\. udsalgspris inkl\. lev\.omk\.\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: Active 57,7 kWh
+      official_powertrain: BEV
+    - pattern: 'Modelprogram.*?SUV 4x2 5-dørs 165 kW, 224 hk.*?Active Tech 73,1 kWh\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: Active Tech 73,1 kWh 4x2
+      official_powertrain: BEV
+    - pattern: 'Modelprogram.*?SUV 4x2 5-dørs 165 kW, 224 hk.*?Executive 73,1 kWh\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: Executive 73,1 kWh 4x2
+      official_powertrain: BEV
+    - pattern: 'Modelprogram.*?SUV 4x2 5-dørs 165 kW, 224 hk.*?Executive Panorama 73,1 kWh\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: Executive Panorama 73,1 kWh 4x2
+      official_powertrain: BEV
+    - pattern: 'SUV 4x4.*?Active Tech 73,1 kWh\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: Active Tech 73,1 kWh AWD
+      official_powertrain: BEV
+    - pattern: 'SUV 4x4.*?Executive 73,1 kWh\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: Executive 73,1 kWh AWD
+      official_powertrain: BEV
+    - pattern: 'SUV 4x4.*?Executive Panorama 73,1 kWh\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: Executive Panorama 73,1 kWh AWD
+      official_powertrain: BEV
+  tier: http
   network_idle: true
   impersonate: chrome
 schedule:
@@ -87,7 +108,8 @@ notes: Draft scaffold generated from country×model top30 backlog. Replace sourc
   before promoting to 07_ScrapingToolkit/sources. [URL filled from TOYOTA template]
   [URL language corrected] [CSS selectors applied from brand probe] [Switched to playwright_card_flow
   with toyota_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset
-  needs per-brand tuning]
+  needs per-brand tuning] [Switched to official Toyota modelinformation iPaper
+  price-list text_regex extraction]
 bootstrap_meta:
   country_model_rank: 7
   suggested_scope_kind: single_model

@@ -41,6 +41,71 @@ def test_write_and_read_success_status(monkeypatch, tmp_path: Path):
     assert health["overall"] == "ok"
 
 
+def test_expected_pipelines_include_readiness_and_ai_smoke_statuses(monkeypatch, tmp_path: Path):
+    _set_root(monkeypatch, tmp_path)
+
+    records = pipeline_status.list_pipeline_statuses(include_missing=True)
+    pipeline_ids = {record["pipelineId"] for record in records}
+
+    assert "msrp_current_price_snapshot" in pipeline_ids
+    assert "msrp_readiness_audit" in pipeline_ids
+    assert "ai_intelligence_enrichment_smoke" in pipeline_ids
+    assert "unified_scraping_readiness" in pipeline_ids
+
+
+def test_normalize_pipeline_status_preserves_readiness_specific_fields(monkeypatch, tmp_path: Path):
+    _set_root(monkeypatch, tmp_path)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    pipeline_status.write_pipeline_status({
+        "pipelineId": "unified_scraping_readiness",
+        "status": "success",
+        "lastRunAt": now,
+        "recordsProcessed": 747,
+        "readinessStatus": "passed",
+        "contractStatus": "ok",
+        "stageStatus": "ok",
+        "jobsByKind": {"msrp": 629, "news": 68},
+        "failedStageCount": 0,
+        "mappingErrorCount": 0,
+    })
+
+    record = pipeline_status.get_pipeline_status("unified_scraping_readiness")
+    health = pipeline_status.classify_pipeline_health(record)
+
+    assert record["readinessStatus"] == "passed"
+    assert record["contractStatus"] == "ok"
+    assert record["stageStatus"] == "ok"
+    assert record["jobsByKind"]["msrp"] == 629
+    assert record["failedStageCount"] == 0
+    assert health["overall"] == "ok"
+
+
+def test_normalize_pipeline_status_preserves_goal_completion_fields(monkeypatch, tmp_path: Path):
+    _set_root(monkeypatch, tmp_path)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    pipeline_status.write_pipeline_status({
+        "pipelineId": "goal_completion_audit",
+        "status": "failed",
+        "lastRunAt": now,
+        "recordsProcessed": 5,
+        "failedCount": 1,
+        "warningCount": 1,
+        "goalCompletionStatus": "in_progress",
+        "localP0Ready": True,
+        "sourceDraftTodoPlaceholderCount": 851,
+        "productionStatus": "missing",
+    })
+
+    record = pipeline_status.get_pipeline_status("goal_completion_audit")
+
+    assert record["goalCompletionStatus"] == "in_progress"
+    assert record["localP0Ready"] is True
+    assert record["sourceDraftTodoPlaceholderCount"] == 851
+    assert record["productionStatus"] == "missing"
+
+
 def test_degraded_failed_count_maps_to_warning(monkeypatch, tmp_path: Path):
     _set_root(monkeypatch, tmp_path)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -1,27 +1,30 @@
 source_code: audi_q6_e_tron_fi_draft_scrapling
 country: 芬兰
 brand: AUDI
-source_url: https://www.audi.fi/no/web/no/mallit/q6-e-tron.html
+source_url: https://www.audi.fi/fi/models/q6-e-tron/q6-e-tron/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.audi.fi/no/web/no/mallit/q6-e-tron.html
-  tier: stealth
+  url: https://www.audi.fi/fi/models/q6-e-tron/q6-e-tron/
+  tier: http
   headless: true
   network_idle: true
   impersonate: chrome
   css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+    vehicle_container: div[class*="NumbersMode-style__ComponentContainer"]
+    model: ''
+    trim: ''
+    price: span, div
+    include_if_text_contains:
+    - hinta alk
+    - €
   default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
   fixed_model: Q6 E-TRON
   fixed_jato_model: Q6 E-TRON
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -68,7 +71,10 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - q6 e-tron
+      - e-tron
+      - sähkö
+      - electric
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98

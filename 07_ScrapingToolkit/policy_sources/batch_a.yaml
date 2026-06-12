@@ -1,0 +1,55 @@
+batch_code: policy_batch_a
+description: Nordic Four official policy and regulation sources for unified scraping contract coverage.
+countries:
+  - country_code: "SE"
+    country_label: "Sweden / 瑞典"
+    sources:
+      - source_code: "se_transport_agency_policy"
+        source_name: "Swedish Transport Agency policy notices"
+        url: "https://www.transportstyrelsen.se/en/road/Vehicles/"
+        source_kind: "government"
+        topics: ["registration", "emissions", "road_tax"]
+        fetcher: "requests"
+        extractor: "llm_extract"
+        freshness_hours: 720
+        priority: 60
+        citation_tier: 1
+  - country_code: "FI"
+    country_label: "Finland / 芬兰"
+    sources:
+      - source_code: "fi_traficom_vehicle_policy"
+        source_name: "Traficom vehicle policy and taxation notices"
+        url: "https://www.traficom.fi/en/transport/road"
+        source_kind: "government"
+        topics: ["registration", "vehicle_tax", "emissions"]
+        fetcher: "requests"
+        extractor: "llm_extract"
+        freshness_hours: 720
+        priority: 60
+        citation_tier: 1
+  - country_code: "NO"
+    country_label: "Norway / 挪威"
+    sources:
+      - source_code: "no_vegvesen_vehicle_policy"
+        source_name: "Norwegian Public Roads Administration vehicle rules"
+        url: "https://www.vegvesen.no/en/vehicles/"
+        source_kind: "government"
+        topics: ["registration", "road_rules", "vehicle_tax"]
+        fetcher: "requests"
+        extractor: "llm_extract"
+        freshness_hours: 720
+        priority: 60
+        citation_tier: 1
+  - country_code: "DK"
+    country_label: "Denmark / 丹麦"
+    sources:
+      - source_code: "dk_motorstyrelsen_vehicle_tax"
+        source_name: "Danish Motor Vehicle Agency tax guidance"
+        url: "https://motorst.dk/en-us/individuals/vehicle-taxes"
+        source_kind: "government"
+        topics: ["vehicle_tax", "registration_tax", "emissions"]
+        fetcher: "requests"
+        extractor: "llm_extract"
+        freshness_hours: 720
+        priority: 60
+        citation_tier: 1

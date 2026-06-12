@@ -39,6 +39,16 @@ import type {
   JatoMonthlyUpdateUpload,
   MarketScanDeckRequest,
   MarketScanDeckResponse,
+  MsrpFinanceObservation,
+  MsrpFinanceObservationSummary,
+  MsrpFinanceObservationsResponse,
+  MsrpReconciliationItem,
+  MsrpReconciliationResponse,
+  MsrpReconciliationReviewQueueResponse,
+  MsrpReconciliationReviewQueueSummary,
+  MsrpReconciliationQueuedConflict,
+  MsrpReconciliationSourceObservation,
+  MsrpReconciliationSummary,
   RankingTrendResponse,
   ModelVersionsResponse,
   OverviewResponse,
@@ -86,6 +96,7 @@ import type {
   HermesMermaidBlock,
   HermesOverviewResponse,
   HermesPipelineHealthResponse,
+  HermesPipelineStatusRecord,
   HermesDeployStatusResponse,
   HermesSentinelMailboxStatus,
   HermesSentinelNotification,
@@ -412,6 +423,25 @@ function mapReviewCase(raw: Record<string, unknown>): ReviewCase {
 
 function mapReviewCandidateMatch(raw: Record<string, unknown>): ReviewCandidateMatch {
   return {
+    candidateType: raw.candidateType === undefined || raw.candidateType === null ? undefined : String(raw.candidateType),
+    reconciliationStatus: raw.reconciliationStatus === undefined || raw.reconciliationStatus === null ? undefined : String(raw.reconciliationStatus),
+    recommendedAction: raw.recommendedAction === undefined || raw.recommendedAction === null ? undefined : String(raw.recommendedAction),
+    thresholdPct: raw.thresholdPct === undefined || raw.thresholdPct === null ? undefined : Number(raw.thresholdPct),
+    spreadPct: nullableNumber(raw.spreadPct),
+    spreadValue: nullableNumber(raw.spreadValue),
+    sourceRank: raw.sourceRank === undefined || raw.sourceRank === null ? undefined : Number(raw.sourceRank),
+    observationId: raw.observationId === undefined || raw.observationId === null ? undefined : String(raw.observationId),
+    sourceId: raw.sourceId === undefined || raw.sourceId === null ? undefined : String(raw.sourceId),
+    sourceCode: raw.sourceCode === undefined || raw.sourceCode === null ? null : String(raw.sourceCode),
+    sourceType: raw.sourceType === undefined || raw.sourceType === null ? null : String(raw.sourceType),
+    sourceMsrpValue: raw.sourceMsrpValue === undefined || raw.sourceMsrpValue === null ? undefined : Number(raw.sourceMsrpValue),
+    sourceCurrency: raw.sourceCurrency === undefined || raw.sourceCurrency === null ? undefined : String(raw.sourceCurrency),
+    msrpValue: raw.msrpValue === undefined || raw.msrpValue === null ? undefined : Number(raw.msrpValue),
+    observedAtUtc: raw.observedAtUtc === undefined || raw.observedAtUtc === null ? undefined : String(raw.observedAtUtc),
+    sourceUrl: raw.sourceUrl === undefined || raw.sourceUrl === null ? undefined : String(raw.sourceUrl),
+    matchStatus: raw.matchStatus === undefined || raw.matchStatus === null ? undefined : String(raw.matchStatus),
+    matchConfidence: raw.matchConfidence === undefined || raw.matchConfidence === null ? undefined : Number(raw.matchConfidence),
+    sourcePayloadHash: raw.sourcePayloadHash === undefined || raw.sourcePayloadHash === null ? null : String(raw.sourcePayloadHash),
     currentPriceId: raw.currentPriceId === undefined || raw.currentPriceId === null ? undefined : String(raw.currentPriceId),
     jatoModel: String(raw.jatoModel ?? ""),
     jatoTrim: String(raw.jatoTrim ?? ""),
@@ -562,6 +592,189 @@ function mapPriceHistory(raw: Record<string, unknown>): PriceHistoryEntry {
     lastConfirmedByObservationId: String(raw.lastConfirmedByObservationId ?? raw.startedByObservationId ?? ""),
     createdAtUtc: String(raw.createdAtUtc ?? ""),
   };
+}
+
+function nullableNumber(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function nullableString(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  const parsed = String(value);
+  return parsed.trim() ? parsed : null;
+}
+
+function mapMsrpFinanceObservation(raw: Record<string, unknown>): MsrpFinanceObservation {
+  return {
+    financeObservationId: String(raw.financeObservationId ?? ""),
+    observationId: String(raw.observationId ?? ""),
+    scrapeBatchId: String(raw.scrapeBatchId ?? ""),
+    country: String(raw.country ?? ""),
+    brand: String(raw.brand ?? ""),
+    jatoModel: String(raw.jatoModel ?? ""),
+    jatoTrim: String(raw.jatoTrim ?? ""),
+    jatoPowertrain: nullableString(raw.jatoPowertrain),
+    officialModel: String(raw.officialModel ?? ""),
+    officialTrim: String(raw.officialTrim ?? ""),
+    officialEdition: nullableString(raw.officialEdition),
+    officialPowertrain: nullableString(raw.officialPowertrain),
+    priceSemantics: String(raw.priceSemantics ?? ""),
+    financeType: nullableString(raw.financeType),
+    monthlyPayment: nullableNumber(raw.monthlyPayment),
+    monthlyPaymentEur: nullableNumber(raw.monthlyPaymentEur),
+    downPayment: nullableNumber(raw.downPayment),
+    downPaymentEur: nullableNumber(raw.downPaymentEur),
+    downPaymentPct: nullableNumber(raw.downPaymentPct),
+    termMonths: nullableNumber(raw.termMonths),
+    apr: nullableNumber(raw.apr),
+    effectiveApr: nullableNumber(raw.effectiveApr),
+    balloonPayment: nullableNumber(raw.balloonPayment),
+    balloonPaymentEur: nullableNumber(raw.balloonPaymentEur),
+    totalCreditCost: nullableNumber(raw.totalCreditCost),
+    totalCreditCostEur: nullableNumber(raw.totalCreditCostEur),
+    totalAmountPayable: nullableNumber(raw.totalAmountPayable),
+    totalAmountPayableEur: nullableNumber(raw.totalAmountPayableEur),
+    annualMileageLimit: nullableNumber(raw.annualMileageLimit),
+    offerValidUntil: nullableString(raw.offerValidUntil),
+    subsidyAmount: nullableNumber(raw.subsidyAmount),
+    subsidyAmountEur: nullableNumber(raw.subsidyAmountEur),
+    netPriceAfterSubsidy: nullableNumber(raw.netPriceAfterSubsidy),
+    netPriceAfterSubsidyEur: nullableNumber(raw.netPriceAfterSubsidyEur),
+    currency: String(raw.currency ?? ""),
+    sourceUrl: String(raw.sourceUrl ?? ""),
+    observedAtUtc: String(raw.observedAtUtc ?? ""),
+    financeContext: raw.financeContext === undefined || raw.financeContext === null
+      ? null
+      : raw.financeContext as Record<string, unknown>,
+    createdAtUtc: String(raw.createdAtUtc ?? ""),
+    updatedAtUtc: String(raw.updatedAtUtc ?? ""),
+  };
+}
+
+function mapMsrpFinanceSummary(
+  raw: Record<string, unknown> | undefined,
+): MsrpFinanceObservationSummary {
+  const priceSemanticsCounts = (
+    raw?.priceSemanticsCounts && typeof raw.priceSemanticsCounts === "object"
+      ? raw.priceSemanticsCounts
+      : {}
+  ) as Record<string, number>;
+  const financeTypeCounts = (
+    raw?.financeTypeCounts && typeof raw.financeTypeCounts === "object"
+      ? raw.financeTypeCounts
+      : {}
+  ) as Record<string, number>;
+  return {
+    priceSemanticsCounts,
+    financeTypeCounts,
+    monthlyPaymentCount: Number(raw?.monthlyPaymentCount ?? 0),
+    monthlyPaymentEurMin: nullableNumber(raw?.monthlyPaymentEurMin),
+    monthlyPaymentEurMax: nullableNumber(raw?.monthlyPaymentEurMax),
+    netPriceAfterSubsidyCount: Number(raw?.netPriceAfterSubsidyCount ?? 0),
+    netPriceAfterSubsidyEurMin: nullableNumber(raw?.netPriceAfterSubsidyEurMin),
+    netPriceAfterSubsidyEurMax: nullableNumber(raw?.netPriceAfterSubsidyEurMax),
+    subsidyObservationCount: Number(raw?.subsidyObservationCount ?? 0),
+  };
+}
+
+function mapMsrpReconciliationSourceObservation(
+  raw: Record<string, unknown>,
+): MsrpReconciliationSourceObservation {
+  return {
+    observationId: String(raw.observationId ?? ""),
+    sourceId: String(raw.sourceId ?? ""),
+    sourceCode: nullableString(raw.sourceCode),
+    sourceType: nullableString(raw.sourceType),
+    sourceMsrpValue: Number(raw.sourceMsrpValue ?? 0),
+    sourceCurrency: String(raw.sourceCurrency ?? ""),
+    msrpValue: Number(raw.msrpValue ?? 0),
+    currency: String(raw.currency ?? ""),
+    observedAtUtc: String(raw.observedAtUtc ?? ""),
+    sourceUrl: String(raw.sourceUrl ?? ""),
+    matchStatus: String(raw.matchStatus ?? ""),
+    matchConfidence: Number(raw.matchConfidence ?? 0),
+    sourcePayloadHash: nullableString(raw.sourcePayloadHash),
+  };
+}
+
+function mapMsrpReconciliationItem(
+  raw: Record<string, unknown>,
+): MsrpReconciliationItem {
+  return {
+    country: String(raw.country ?? ""),
+    brand: String(raw.brand ?? ""),
+    jatoModel: String(raw.jatoModel ?? ""),
+    jatoTrim: String(raw.jatoTrim ?? ""),
+    jatoPowertrain: nullableString(raw.jatoPowertrain),
+    status: String(raw.status ?? ""),
+    recommendedAction: String(raw.recommendedAction ?? ""),
+    sourceCount: Number(raw.sourceCount ?? 0),
+    observationCount: Number(raw.observationCount ?? 0),
+    minMsrpValue: nullableNumber(raw.minMsrpValue),
+    maxMsrpValue: nullableNumber(raw.maxMsrpValue),
+    avgMsrpValue: nullableNumber(raw.avgMsrpValue),
+    spreadValue: nullableNumber(raw.spreadValue),
+    spreadPct: nullableNumber(raw.spreadPct),
+    thresholdPct: Number(raw.thresholdPct ?? 0),
+    currentPrice: raw.currentPrice && typeof raw.currentPrice === "object"
+      ? mapCurrentPrice(raw.currentPrice as Record<string, unknown>)
+      : null,
+    sourceObservations: Array.isArray(raw.sourceObservations)
+      ? raw.sourceObservations.map((item) => mapMsrpReconciliationSourceObservation(item as Record<string, unknown>))
+      : [],
+  };
+}
+
+function mapMsrpReconciliationSummary(
+  raw: Record<string, unknown> | undefined,
+): MsrpReconciliationSummary {
+  const statusCounts = (
+    raw?.statusCounts && typeof raw.statusCounts === "object"
+      ? raw.statusCounts
+      : {}
+  ) as Record<string, number>;
+  return {
+    observationRows: Number(raw?.observationRows ?? 0),
+    reconciliationGroupCount: Number(raw?.reconciliationGroupCount ?? 0),
+    statusCounts,
+    limit: Number(raw?.limit ?? 0),
+  };
+}
+
+function mapMsrpQueuedConflict(
+  raw: Record<string, unknown>,
+): MsrpReconciliationQueuedConflict {
+  return {
+    country: String(raw.country ?? ""),
+    brand: String(raw.brand ?? ""),
+    jatoModel: String(raw.jatoModel ?? ""),
+    jatoTrim: String(raw.jatoTrim ?? ""),
+    jatoPowertrain: nullableString(raw.jatoPowertrain),
+    sourceCount: Number(raw.sourceCount ?? 0),
+    spreadPct: nullableNumber(raw.spreadPct),
+    spreadValue: nullableNumber(raw.spreadValue),
+    reviewObservationId: String(raw.reviewObservationId ?? ""),
+  };
+}
+
+function mapMsrpReviewQueueSummary(
+  raw: Record<string, unknown> | undefined,
+): MsrpReconciliationReviewQueueSummary {
+  return {
+    observationRows: Number(raw?.observationRows ?? 0),
+    reconciliationGroupCount: Number(raw?.reconciliationGroupCount ?? 0),
+    conflictGroupCount: Number(raw?.conflictGroupCount ?? 0),
+    reviewCasesQueued: Number(raw?.reviewCasesQueued ?? 0),
+    reviewCasesCreated: Number(raw?.reviewCasesCreated ?? 0),
+    reviewCasesReused: Number(raw?.reviewCasesReused ?? 0),
+    limit: Number(raw?.limit ?? 0),
+  };
+}
+
+function mapNullableFilterText(raw: Record<string, unknown>, key: string): string | null {
+  return raw[key] === undefined || raw[key] === null ? null : String(raw[key]);
 }
 
 function mapConfigProject(raw: Record<string, unknown>): ConfigProject {
@@ -1752,6 +1965,8 @@ export const api = {
     request<HermesOverviewResponse>("/hermes/overview"),
   hermesPipelineHealth: () =>
     request<HermesPipelineHealthResponse>("/hermes/pipeline-health"),
+  hermesPipelineStatuses: () =>
+    request<HermesPipelineStatusRecord[]>("/hermes/pipeline/status"),
   hermesSourceQuality: () =>
     request<HermesSourceQualityResponse>("/hermes/source-quality"),
   hermesMsrpCountryProgress: (runId?: string) =>
@@ -2048,6 +2263,7 @@ export const api = {
     ),
   createReviewDecision: (caseId: string, payload: {
     decision: "approve" | "reject" | "remap";
+    accepted_observation_id?: string;
     decided_official_model?: string;
     decided_official_trim?: string;
     note?: string;

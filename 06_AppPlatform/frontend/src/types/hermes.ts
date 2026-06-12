@@ -181,6 +181,38 @@ export interface HermesPipelineItem {
   consumers?: string[];
 }
 
+export interface HermesPipelineStatusRecord {
+  pipelineId: string;
+  status: string;
+  lastRunAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  exitCode?: number | null;
+  durationSeconds?: number;
+  recordsProcessed?: number;
+  failedCount?: number;
+  warningCount?: number;
+  artifactRefs?: string[];
+  source?: string;
+  message?: string;
+  statusPath?: string;
+  standardStatusFile?: boolean;
+  readinessStatus?: string;
+  smokeStatus?: string;
+  contractStatus?: string;
+  stageStatus?: string;
+  snapshotWeek?: string;
+  jobsByKind?: Record<string, number>;
+  statusCounts?: Record<string, number>;
+  runtimeCounts?: Record<string, number>;
+  msrpMissingRequirementKeys?: string[];
+  sourceDraftTodoPlaceholderCount?: number;
+  productionStatus?: string;
+  goalCompletionStatus?: string;
+  localP0Ready?: boolean;
+  warnings?: string[];
+}
+
 export interface HermesPipelineHealthResponse {
   summary?: Record<string, unknown>;
   pipelines?: HermesPipelineItem[];

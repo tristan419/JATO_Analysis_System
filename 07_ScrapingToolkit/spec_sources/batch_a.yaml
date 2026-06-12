@@ -1,0 +1,59 @@
+batch_code: spec_batch_a
+description: Nordic Four official configurator/spec feature sources for unified scraping contract coverage.
+countries:
+  - country_code: "SE"
+    country_label: "Sweden / 瑞典"
+    sources:
+      - source_code: "se_volvo_xc60_specs"
+        source_name: "Volvo Sweden XC60 specifications"
+        url: "https://www.volvocars.com/se/cars/xc60/specifications/"
+        source_kind: "manufacturer_official"
+        brand: "VOLVO"
+        model: "XC60"
+        topics: ["trim_features", "powertrain", "equipment"]
+        fetcher: "scrapling"
+        extractor: "css_rules"
+        freshness_hours: 168
+        priority: 75
+  - country_code: "FI"
+    country_label: "Finland / 芬兰"
+    sources:
+      - source_code: "fi_toyota_rav4_specs"
+        source_name: "Toyota Finland RAV4 specifications"
+        url: "https://www.toyota.fi/mallisto/rav4"
+        source_kind: "manufacturer_official"
+        brand: "TOYOTA"
+        model: "RAV4"
+        topics: ["trim_features", "powertrain", "equipment"]
+        fetcher: "scrapling"
+        extractor: "css_rules"
+        freshness_hours: 168
+        priority: 75
+  - country_code: "NO"
+    country_label: "Norway / 挪威"
+    sources:
+      - source_code: "no_tesla_model_y_specs"
+        source_name: "Tesla Norway Model Y specifications"
+        url: "https://www.tesla.com/no_no/modely"
+        source_kind: "manufacturer_official"
+        brand: "TESLA"
+        model: "MODEL Y"
+        topics: ["trim_features", "powertrain", "equipment"]
+        fetcher: "scrapling"
+        extractor: "css_rules"
+        freshness_hours: 168
+        priority: 75
+  - country_code: "DK"
+    country_label: "Denmark / 丹麦"
+    sources:
+      - source_code: "dk_skoda_enyaq_specs"
+        source_name: "Skoda Denmark Enyaq specifications"
+        url: "https://www.skoda.dk/modeller/enyaq/enyaq"
+        source_kind: "manufacturer_official"
+        brand: "SKODA"
+        model: "ENYAQ"
+        topics: ["trim_features", "powertrain", "equipment"]
+        fetcher: "scrapling"
+        extractor: "css_rules"
+        freshness_hours: 168
+        priority: 75

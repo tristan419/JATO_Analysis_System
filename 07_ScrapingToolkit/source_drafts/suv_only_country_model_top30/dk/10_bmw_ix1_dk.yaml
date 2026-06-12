@@ -1,16 +1,37 @@
 source_code: bmw_ix1_dk_draft_scrapling
 country: 丹麦
 brand: BMW
-source_url: https://www.bmw.dk/da/alle-modeller.html
+source_url: https://www.bmw.dk/da/generelt/produkt-tilbud/tilbud/prisoversigt.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.bmw.dk/da/alle-modeller.html
+  url: https://kampagner.bmwservicepris.dk/bmw-kampagnepriser/?embedded=intro
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'iX1 eDrive20 M Sport.{0,500}?Vejl\. Pris kr\.\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: eDrive20 M Sport
+      official_powertrain: BEV
+    - pattern: 'iX1 eDrive20 Fully Charged.{0,500}?Vejl\. Pris kr\.\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: eDrive20 Fully Charged
+      official_powertrain: BEV
+    - pattern: 'iX1 eDrive20 Supercharged.{0,500}?Vejl\. Pris kr\.\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: eDrive20 Supercharged
+      official_powertrain: BEV
+    - pattern: 'iX1 xDrive30 M Sport\*.{0,500}?Vejl\. Pris kr\.\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: xDrive30 M Sport
+      official_powertrain: BEV
+    - pattern: 'iX1 xDrive30 Fully Charged\*.{0,500}?Vejl\. Pris kr\.\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: xDrive30 Fully Charged
+      official_powertrain: BEV
+    - pattern: 'iX1 xDrive30 Supercharged\*.{0,500}?Vejl\. Pris kr\.\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: xDrive30 Supercharged
+      official_powertrain: BEV
   css:
     vehicle_container: body
     model: h1
@@ -18,10 +39,10 @@ profile:
     price: '[class*="price"]'
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Vejl. Pris
   fixed_model: IX1
   fixed_jato_model: IX1
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -68,7 +89,10 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - El
+      - electric
+      - eDrive
+      - xDrive30
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -84,7 +108,8 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from BMW template] [URL
-  language corrected] [CSS selectors applied from brand probe]
+  language corrected] [CSS selectors applied from brand probe] [Updated to BMW
+  official price overview widget and text_regex extraction from Vejl. Pris rows]
 bootstrap_meta:
   country_model_rank: 10
   suggested_scope_kind: single_model

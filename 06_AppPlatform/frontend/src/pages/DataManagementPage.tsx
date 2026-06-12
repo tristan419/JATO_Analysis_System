@@ -6,6 +6,8 @@ import { HermesAskResponseCard } from "../components/HermesAskResponseCard";
 import { HermesMermaidBlock } from "../components/HermesMermaidBlock";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { MsrpDryrunDashboard } from "../components/MsrpDryrunDashboard";
+import { MsrpFinanceObservationsPanel } from "../components/MsrpFinanceObservationsPanel";
+import { MsrpReconciliationPanel } from "../components/MsrpReconciliationPanel";
 import type {
   DataManagementAirflowStatus,
   DataManagementDomain,
@@ -29,6 +31,7 @@ import type {
   HermesMermaidBlock as HermesMermaidBlockType,
   HermesOverviewResponse,
   HermesPipelineHealthResponse,
+  HermesPipelineStatusRecord,
   HermesReplyType,
   HermesSentinelMailboxStatus,
   HermesSentinelNotification,
@@ -56,6 +59,7 @@ type SentinelInboxFilter = "new" | "read" | "archived" | "all";
 const DEFAULT_RECENT_ITEMS_VISIBLE = 6;
 
 const DATA_SUBPAGES: DataSubpage[] = ["overview", "hermes", "features", "voc", "admin", "dryrun", "order-genius", "material-master"];
+const HERMES_SUBTABS: HermesSubtab[] = ["capabilities", "activity", "cost", "roadmap", "diagrams"];
 
 function resolveDataSubpageFromLocation(search: string, hash: string, pathname = ""): DataSubpage {
   const params = new URLSearchParams(search);
@@ -63,6 +67,13 @@ function resolveDataSubpageFromLocation(search: string, hash: string, pathname =
   if (DATA_SUBPAGES.includes(candidate as DataSubpage)) return candidate as DataSubpage;
   if (pathname === "/data-management") return "admin";
   return "overview";
+}
+
+function resolveHermesSubtabFromLocation(search: string): HermesSubtab {
+  const params = new URLSearchParams(search);
+  const candidate = (params.get("hermesTab") || params.get("hermesSubtab") || "").toLowerCase();
+  if (HERMES_SUBTABS.includes(candidate as HermesSubtab)) return candidate as HermesSubtab;
+  return params.get("view")?.toLowerCase() === "hermes" ? "activity" : "capabilities";
 }
 
 const HERMES_SCRIPTS_MAP: Record<string, string> = {
@@ -73,6 +84,66 @@ const HERMES_SCRIPTS_MAP: Record<string, string> = {
   "evidence": "evidence writer",
   "answer-audit": "answer audit",
 };
+
+interface HermesPipelineDisplayRow {
+  key: string;
+  label: string;
+  status: string;
+  statusColor: string;
+  meta: string;
+  lastRunAt: string;
+}
+
+function getPipelineStatusColor(status: string, fallbackRisk = ""): string {
+  const normalized = status.toLowerCase();
+  const risk = fallbackRisk.toLowerCase();
+  if (normalized === "failed" || normalized === "missing" || risk === "high") return "#ef4444";
+  if (normalized === "degraded" || normalized === "unknown" || risk === "medium") return "#f59e0b";
+  if (normalized === "success" || normalized === "ok") return "#22c55e";
+  return "#64748b";
+}
+
+function formatPipelineLastRun(value?: string | null): string {
+  if (!value) return "never";
+  return formatDataManagementTimestamp(value);
+}
+
+function buildPipelineDisplayRows(
+  statuses: HermesPipelineStatusRecord[],
+  health: HermesPipelineHealthResponse | null,
+): HermesPipelineDisplayRow[] {
+  if (statuses.length > 0) {
+    return statuses.map((item) => {
+      const failed = item.failedCount ?? 0;
+      const warnings = item.warningCount ?? 0;
+      const metaParts = [
+        `${item.recordsProcessed ?? 0} records`,
+        failed > 0 ? `${failed} failed` : "",
+        warnings > 0 ? `${warnings} warnings` : "",
+      ].filter(Boolean);
+      return {
+        key: item.pipelineId,
+        label: item.pipelineId,
+        status: item.status,
+        statusColor: getPipelineStatusColor(item.status),
+        meta: metaParts.join(" · "),
+        lastRunAt: formatPipelineLastRun(item.lastRunAt),
+      };
+    });
+  }
+  return (health?.allPipelines ?? []).map((item) => {
+    const key = String(item.pipelineId || item.name || "pipeline");
+    const status = String(item.status || item.risk || item.riskLevel || "unknown");
+    return {
+      key,
+      label: String(item.name || item.pipelineId || key),
+      status,
+      statusColor: getPipelineStatusColor(status, String(item.risk || item.riskLevel || "")),
+      meta: String(item.type || item.role || ""),
+      lastRunAt: "",
+    };
+  });
+}
 
 const SENTINEL_FILTERS: Array<{ key: SentinelInboxFilter; label: string }> = [
   { key: "new", label: "Unread" },
@@ -337,9 +408,10 @@ export function DataManagementPage() {
 
   const [crudTab, setCrudTab] = useState<CrudEntityTab>("msrp-sources");
   const [subpage, setSubpage] = useState<DataSubpage>(() => resolveDataSubpageFromLocation(location.search, location.hash, location.pathname));
-  const [hermesSubtab, setHermesSubtab] = useState<HermesSubtab>("capabilities");
+  const [hermesSubtab, setHermesSubtab] = useState<HermesSubtab>(() => resolveHermesSubtabFromLocation(location.search));
   const [hermesOverview, setHermesOverview] = useState<HermesOverviewResponse | null>(null);
   const [hermesPipelines, setHermesPipelines] = useState<HermesPipelineHealthResponse | null>(null);
+  const [hermesPipelineStatuses, setHermesPipelineStatuses] = useState<HermesPipelineStatusRecord[]>([]);
   const [hermesSources, setHermesSources] = useState<HermesSourceQualityResponse | null>(null);
   const [hermesMsrpProgress, setHermesMsrpProgress] = useState<HermesMsrpCountryProgressResponse | null>(null);
   const [hermesMsrpHistory, setHermesMsrpHistory] = useState<HermesMsrpDryrunHistoryResponse | null>(null);
@@ -537,6 +609,11 @@ export function DataManagementPage() {
   }, [location.hash, location.pathname, location.search]);
 
   useEffect(() => {
+    const nextHermesSubtab = resolveHermesSubtabFromLocation(location.search);
+    setHermesSubtab((current) => (current === nextHermesSubtab ? current : nextHermesSubtab));
+  }, [location.search]);
+
+  useEffect(() => {
     void loadOverview();
     void loadVocOverview();
   }, []);
@@ -571,9 +648,10 @@ export function DataManagementPage() {
       api.hermesCost().then(setHermesCost).catch((e: Error) => setHermesTabError(e.message));
       api.hermesCostHeatmap().then(setHermesCostHeatmap).catch((e: Error) => setHermesTabError(e.message));
     }
-    if ((hermesSubtab === "activity" || hermesSubtab === "roadmap") && !hermesPipelines) {
-      api.hermesPipelineHealth().then(setHermesPipelines).catch((e: Error) => setHermesTabError(e.message));
-      api.hermesSourceQuality().then(setHermesSources).catch((e: Error) => setHermesTabError(e.message));
+    if (hermesSubtab === "activity" || hermesSubtab === "roadmap") {
+      if (!hermesPipelines) api.hermesPipelineHealth().then(setHermesPipelines).catch((e: Error) => setHermesTabError(e.message));
+      if (hermesPipelineStatuses.length === 0) api.hermesPipelineStatuses().then(setHermesPipelineStatuses).catch((e: Error) => setHermesTabError(e.message));
+      if (!hermesSources) api.hermesSourceQuality().then(setHermesSources).catch((e: Error) => setHermesTabError(e.message));
     }
     if (hermesSubtab === "roadmap" && hermesProposals.length === 0) {
       api.hermesProposals().then(setHermesProposals).catch((e: Error) => setHermesTabError(e.message));
@@ -583,7 +661,7 @@ export function DataManagementPage() {
     if (hermesSubtab === "diagrams" && hermesDiagrams.length === 0) {
       api.hermesMarkdownDiagrams().then(setHermesDiagrams).catch((e: Error) => setHermesTabError(e.message));
     }
-  }, [hermesSubtab, subpage]);
+  }, [featureKanban, hermesActivity, hermesCost, hermesCostHeatmap, hermesDiagrams.length, hermesEvidence, hermesGaps.length, hermesPipelineStatuses.length, hermesPipelines, hermesProposals.length, hermesSources, hermesSubtab, subpage]);
 
   useEffect(() => {
     if (subpage !== "hermes" || (hermesSubtab !== "activity" && hermesSubtab !== "roadmap")) return;
@@ -627,6 +705,7 @@ export function DataManagementPage() {
     () => buildActivityHeatmapColumns(overview?.activity.days ?? []),
     [overview]
   );
+  const pipelineDisplayRows = buildPipelineDisplayRows(hermesPipelineStatuses, hermesPipelines);
 
   const airflowStatus: DataManagementAirflowStatus | null = overview?.airflow ?? null;
   const selectedVocCountryStatus = vocOverview?.availableCountries.find(
@@ -1217,14 +1296,14 @@ export function DataManagementPage() {
                         <div style={{border:"1px solid #e2e8f0",borderRadius:6,padding:"14px 12px",color:"#64748b",fontSize:12}}>
                           No inbox items.
                         </div>
-                      ) : filteredNotifications.map((notification) => {
+                      ) : filteredNotifications.map((notification, notificationIndex) => {
                         const severity = String(notification.severity || "low");
                         const color = getSentinelSeverityColor(severity);
                         const mailboxStatus = normalizeSentinelMailboxStatus(String(notification.status || "new"));
                         const pipelineDetails = getSentinelPipelineDetails(notification);
                         const artifactRefs = getSentinelArtifactRefs(notification);
                         return (
-                          <div key={notification.id} style={{border:"1px solid #e2e8f0",borderLeft:`4px solid ${color}`,borderRadius:6,padding:"9px 10px",background:mailboxStatus === "new" ? "#ffffff" : "#f8fafc",fontSize:12}}>
+                          <div key={`${notification.id}-${notificationIndex}`} style={{border:"1px solid #e2e8f0",borderLeft:`4px solid ${color}`,borderRadius:6,padding:"9px 10px",background:mailboxStatus === "new" ? "#ffffff" : "#f8fafc",fontSize:12}}>
                             <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start"}}>
                               <div>
                                 <div style={{fontWeight:700,color,letterSpacing:0}}>{notification.title}</div>
@@ -1388,7 +1467,7 @@ export function DataManagementPage() {
                   <div className="admin-card-header"><div><h2>Run Hermes Scripts</h2></div></div>
                   <div style={{padding:12}}>
                     <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
-                      {Object.entries(HERMES_SCRIPTS_MAP).map(([cmd,label])=>(<button key={cmd} className="btn btn-sm btn-primary" style={{fontSize:11}} onClick={()=>{api.hermesCommandExecute({commandId:cmd}).then((res)=>{const el=document.getElementById(`hout-${cmd}`);if(el)el.textContent=`[${res.status}] exit=${res.exitCode} runId=${res.runId}\n${res.stdout||res.stderr||""}`;if(cmd==="pipeline-audit")api.hermesPipelineHealth().then(setHermesPipelines);if(cmd==="source-quality")api.hermesSourceQuality().then(setHermesSources);if(cmd==="cost-report")api.hermesCost().then(setHermesCost);}).catch((e)=>{const el=document.getElementById(`hout-${cmd}`);if(el)el.textContent=String(e);});}}>Run {label}</button>))}
+                      {Object.entries(HERMES_SCRIPTS_MAP).map(([cmd,label])=>(<button key={cmd} className="btn btn-sm btn-primary" style={{fontSize:11}} onClick={()=>{api.hermesCommandExecute({commandId:cmd}).then((res)=>{const el=document.getElementById(`hout-${cmd}`);if(el)el.textContent=`[${res.status}] exit=${res.exitCode} runId=${res.runId}\n${res.stdout||res.stderr||""}`;if(cmd==="pipeline-audit"){api.hermesPipelineHealth().then(setHermesPipelines);api.hermesPipelineStatuses().then(setHermesPipelineStatuses);}if(cmd==="source-quality")api.hermesSourceQuality().then(setHermesSources);if(cmd==="cost-report")api.hermesCost().then(setHermesCost);}).catch((e)=>{const el=document.getElementById(`hout-${cmd}`);if(el)el.textContent=String(e);});}}>Run {label}</button>))}
                     </div>
                     <div style={{background:"#1e293b",color:"#e2e8f0",borderRadius:6,padding:10,fontFamily:"monospace",fontSize:10,maxHeight:120,overflow:"auto",whiteSpace:"pre-wrap"}}>
                       {Object.keys(HERMES_SCRIPTS_MAP).map(cmd=>(<div key={cmd} id={`hout-${cmd}`} style={{display:"none"}} />))}
@@ -1458,16 +1537,17 @@ export function DataManagementPage() {
                   <div className="card crud-card">
                     <div className="admin-card-header"><div><h2>Pipeline Health</h2></div></div>
                     <div style={{padding:12}}>
-                      {hermesPipelines?.allPipelines?.length ? (
+                      {pipelineDisplayRows.length ? (
                         <div style={{display:"grid",gap:6,maxHeight:260,overflowY:"auto"}}>
-                          {hermesPipelines.allPipelines.slice(0,8).map((pipe) => {
-                            const risk = String(pipe.risk || pipe.riskLevel || "low");
-                            const rc = risk==="high"?"#ef4444":risk==="medium"?"#f59e0b":"#22c55e";
+                          {pipelineDisplayRows.slice(0,10).map((pipe) => {
                             return (
-                              <div key={pipe.pipelineId || pipe.name} style={{display:"flex",alignItems:"center",gap:10,padding:"6px 10px",background:"#fff",borderRadius:6,border:"1px solid #e2e8f0",fontSize:12}}>
-                                <div style={{width:8,height:8,borderRadius:"50%",background:rc,flexShrink:0}} title={risk} />
-                                <div style={{flex:1,fontWeight:500}}>{String(pipe.name || pipe.pipelineId)}</div>
-                                <div style={{fontSize:10,color:"#64748b"}}>{String(pipe.type || "")}</div>
+                              <div key={pipe.key} style={{display:"grid",gridTemplateColumns:"8px minmax(0,1fr) auto",alignItems:"center",gap:10,padding:"6px 10px",background:"#fff",borderRadius:6,border:"1px solid #e2e8f0",fontSize:12}}>
+                                <div style={{width:8,height:8,borderRadius:"50%",background:pipe.statusColor}} title={pipe.status} />
+                                <div style={{minWidth:0}}>
+                                  <div style={{fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}} title={pipe.label}>{pipe.label}</div>
+                                  <div style={{fontSize:10,color:"#64748b",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{pipe.meta || pipe.status}</div>
+                                </div>
+                                <div style={{fontSize:10,color:"#64748b",textAlign:"right",whiteSpace:"nowrap"}}>{pipe.lastRunAt || pipe.status}</div>
                               </div>
                             );
                           })}
@@ -1618,6 +1698,12 @@ export function DataManagementPage() {
                         );
                       })() : <span style={{color:"#94a3b8",fontSize:11}}>Run dryrun to populate</span>}
                     </div>
+                  </div>
+                  <div className="card crud-card" style={{gridColumn:"1 / -1"}}>
+                    <MsrpReconciliationPanel />
+                  </div>
+                  <div className="card crud-card" style={{gridColumn:"1 / -1"}}>
+                    <MsrpFinanceObservationsPanel />
                   </div>
                 </div>
               </div>

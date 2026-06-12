@@ -17,11 +17,20 @@ profile:
     - key: powertrain_mhev
       powertrain: MHEV
       keywords:
-      - TODO_MHEV_KEYWORD
+      - mhev
+      - mild hybrid
+      - mild-hybrid
+      - 48V
+      - miekka hybryda
     - key: powertrain_ice
       powertrain: ICE
       keywords:
-      - TODO_ICE_KEYWORD
+      - ice
+      - petrol
+      - gasoline
+      - diesel
+      - combustion
+      - benzyna
   default_price_label: MSRP
 schedule:
   frequency: manual_only

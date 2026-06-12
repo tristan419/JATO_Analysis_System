@@ -282,6 +282,31 @@ def _write_pipeline_inputs(
     status_path.parent.mkdir(parents=True, exist_ok=True)
     status_path.write_text(json.dumps(status), encoding="utf-8")
 
+    last_run_at = source_quality_generated_at
+    if last_run_at is None:
+        for entry in status.values():
+            if entry.get("lastRunAt"):
+                last_run_at = entry["lastRunAt"]
+                break
+    if last_run_at:
+        status_dir = tmp_path / "hermes" / "reports" / "pipeline_status"
+        status_dir.mkdir(parents=True, exist_ok=True)
+        for pipeline_id in (
+            "msrp_current_price_snapshot",
+            "msrp_readiness_audit",
+            "ai_intelligence_enrichment_smoke",
+            "unified_scraping_readiness",
+        ):
+            (status_dir / f"{pipeline_id}.json").write_text(
+                json.dumps({
+                    "pipelineId": pipeline_id,
+                    "status": "success",
+                    "lastRunAt": last_run_at,
+                    "finishedAt": last_run_at,
+                }),
+                encoding="utf-8",
+            )
+
     if source_quality_generated_at is not None:
         report_path = tmp_path / "hermes" / "reports" / "source_quality_report.json"
         report_path.parent.mkdir(parents=True, exist_ok=True)

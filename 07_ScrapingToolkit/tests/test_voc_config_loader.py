@@ -10,12 +10,22 @@ def test_load_voc_batch_config_reads_country_files() -> None:
     )
 
     assert batch.batch_code == "country_voc_batch_a"
-    assert len(batch.countries) == 8
+    assert len(batch.countries) == 15
     assert batch.countries[0].country_code == "SE"
     assert len(batch.countries[0].sources) == 3
     assert batch.countries[0].sources[0].source_code == "se_teslaclubsweden_forum"
     assert batch.countries[0].sources[1].site_type == "forum"
     assert batch.countries[0].sources[2].site_type == "media_comments"
+    country_codes = {country.country_code for country in batch.countries}
+    assert {
+        "DE",
+        "FR",
+        "IT",
+        "PL",
+        "SK",
+        "SI",
+        "CH",
+    }.issubset(country_codes)
     norway = next(country for country in batch.countries if country.country_code == "NO")
     assert norway.sources[0].language == "no"
 

@@ -1,19 +1,19 @@
 source_code: kia_ev3_fi_draft_scrapling
 country: 芬兰
 brand: KIA
-source_url: https://www.kia.com/fi/mallit/ev3/
+source_url: https://www.kia.com/fi/mallisto/ev3/tutustu/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.kia.com/fi/mallit/ev3/
+  url: https://www.kia.com/fi/mallisto/ev3/tutustu/
   headless: true
   default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
   fixed_model: EV3
   fixed_jato_model: EV3
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -60,7 +60,9 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - ev3
+      - sähkö
+      - electric
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -70,11 +72,14 @@ profile:
     force_review_for_special_edition: true
   json_script_selector: script[type='application/ld+json']
   css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
+    vehicle_container: .eutElpTrimDetail
+    model: ''
+    trim: .elp_trimname
+    price: .elp-trimlist-display
+    include_if_text_contains:
+    - €
+    - alkaen
+  tier: http
   network_idle: true
   impersonate: chrome
 schedule:

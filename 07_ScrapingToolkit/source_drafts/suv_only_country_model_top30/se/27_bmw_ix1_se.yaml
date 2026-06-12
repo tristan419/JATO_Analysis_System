@@ -1,12 +1,12 @@
 source_code: bmw_ix1_se_draft_scrapling
 country: 瑞典
 brand: BMW
-source_url: https://www.bmw.se/sv/alla-modeller/ix1.html
+source_url: https://www.bmw.se/sv/alla-modeller/i-series/ix1/bmw-ix1.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.bmw.se/sv/alla-modeller/ix1.html
+  url: https://www.bmw.se/sv/alla-modeller/i-series/ix1/bmw-ix1.html
   tier: stealth
   headless: true
   network_idle: true
@@ -76,10 +76,13 @@ profile:
     force_review_for_special_edition: true
   json_script_selector: script[type='application/ld+json']
   css:
-    vehicle_container: body
-    model: h1
-    trim: h2, h3
-    price: '[class*="price"]'
+    vehicle_container: tr.cmp-contenttable__row
+    model: td:nth-of-type(1) .cmp-text__paragraph::text
+    trim: td:nth-of-type(1) .cmp-text__paragraph::text
+    price: td:nth-of-type(2) .cmp-text__paragraph::text
+    include_if_text_contains:
+    - bmw ix1
+    - kr
 schedule:
   frequency: manual_only
   run_window_start: 00:00

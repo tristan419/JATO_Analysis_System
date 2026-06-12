@@ -1,28 +1,34 @@
 source_code: peugeot_3008_dk_draft_scrapling
 country: 丹麦
 brand: PEUGEOT
-source_url: https://www.peugeot.dk/vores-modeller/neuer-3008.html
+source_url: https://www.peugeot.dk/modeller/e-3008.html
 source_type: manufacturer_official
-price_semantics: base_msrp
+price_semantics: campaign_price
 extractor_type: scrapling
 profile:
-  url: https://www.peugeot.dk/vores-modeller/neuer-3008.html
+  url: https://www.peugeot.dk/modeller/e-3008.html
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'Allure\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
+      official_trim: Allure
+      official_powertrain: BEV
+    - pattern: 'GT\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
+      official_trim: GT
+      official_powertrain: BEV
+    - pattern: 'GT Pack\s+Nu\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
+      official_trim: GT Pack
+      official_powertrain: BEV
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Kampagnepris
   fixed_model: '3008'
   fixed_jato_model: '3008'
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -81,19 +87,25 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - electric
+      - elektrisk
+      - elbil
+      - E-3008
     - key: powertrain_phev
       powertrain: PHEV
       keywords:
-      - TODO_PHEV_KEYWORD
+      - plug-in hybrid
+      - hybrid
     - key: powertrain_mhev
       powertrain: MHEV
       keywords:
-      - TODO_MHEV_KEYWORD
+      - mild hybrid
+      - 48V
     - key: powertrain_ice
       powertrain: ICE
       keywords:
-      - TODO_ICE_KEYWORD
+      - benzin
+      - PureTech
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -109,7 +121,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from PEUGEOT template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+  [URL language corrected] [CSS selectors applied from brand probe] [Updated
+  to official E-3008 campaign price blocks; semantics marked campaign_price
+  because visible DK prices include campaign wording]
 bootstrap_meta:
   country_model_rank: 28
   suggested_scope_kind: single_model

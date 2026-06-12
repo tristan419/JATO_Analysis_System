@@ -45,23 +45,184 @@ def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
-def _empty_msrp_country_progress() -> dict[str, Any]:
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def _read_json_if_exists(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _msrp_artifacts_dir() -> Path:
+    return PROJECT_ROOT / "03_Scripts" / "diagnostics" / "artifacts"
+
+
+def _default_source_repair_backlog() -> dict[str, Any]:
+    return {
+        "schemaVersion": "msrp_source_repair_backlog_v1",
+        "runId": None,
+        "generatedAt": None,
+        "totalIssueCount": 0,
+        "groups": [],
+    }
+
+
+def _load_msrp_source_repair_backlog() -> dict[str, Any]:
+    backlog = _read_json_if_exists(_msrp_artifacts_dir() / "msrp_source_repair_backlog.json")
+    return backlog if isinstance(backlog, dict) else _default_source_repair_backlog()
+
+
+def _load_msrp_dryrun_report(run_id: str | None = None) -> dict[str, Any] | None:
+    artifact_dir = _msrp_artifacts_dir()
+    path = artifact_dir / f"dryrun_report_{run_id}.json" if run_id else artifact_dir / "dryrun_report.json"
+    report = _read_json_if_exists(path)
+    if report and report.get("schemaVersion") == "msrp_dryrun_report_v3":
+        return report
+    return None
+
+
+def _is_empty_msrp_progress(payload: dict[str, Any] | None) -> bool:
+    if not payload:
+        return True
+    status = payload.get("status") or {}
+    findings = payload.get("findings") or []
+    return (
+        not payload.get("countries")
+        and not status.get("runId")
+        and any(f.get("type") == "no_dryrun_report" for f in findings if isinstance(f, dict))
+    )
+
+
+def _msrp_progress_from_report(report: dict[str, Any]) -> dict[str, Any]:
+    summary = report.get("summary") or {}
+    gate_threshold = int(summary.get("gateThreshold") or 70)
+    gate_status = str(summary.get("gateStatus") or "blocked")
+    pass_pct = float(summary.get("passPct") or 0.0)
+    countries_detail = report.get("countriesDetail") or []
+
+    countries: list[dict[str, Any]] = []
+    top_blocking: list[dict[str, Any]] = []
+    failure_reasons: dict[str, int] = {}
+
+    for country in countries_detail:
+        code = str(country.get("countryCode") or "?").lower()
+        country_pct = float(country.get("passPct") or 0.0)
+        failure_breakdown = country.get("failureBreakdown") or {}
+        strategy_recs = country.get("strategyRecommendations") or {}
+        top_reason = max(failure_breakdown, key=failure_breakdown.get) if failure_breakdown else None
+
+        entry = {
+            "countryCode": code,
+            "total": int(country.get("total") or 0),
+            "pass": int(country.get("pass") or 0),
+            "empty": int(country.get("empty") or 0),
+            "fail": int(country.get("fail") or 0),
+            "errors": int(country.get("errors") or 0),
+            "passPct": country_pct,
+            "status": country.get("status") or "unknown",
+            "topFailureReason": top_reason,
+            "failureBreakdown": failure_breakdown,
+            "strategyRecommendations": strategy_recs,
+        }
+        countries.append(entry)
+
+        if country_pct < gate_threshold or country_pct < 50:
+            top_blocking.append({
+                "countryCode": code,
+                "passPct": country_pct,
+                "reason": top_reason or "unknown",
+                "recommendedAction": f"Review {top_reason or 'failures'} for {code}",
+            })
+
+        for reason, count in failure_breakdown.items():
+            failure_reasons[str(reason)] = failure_reasons.get(str(reason), 0) + int(count or 0)
+
+    findings: list[dict[str, Any]] = []
+    for country in report.get("missingCountries") or []:
+        findings.append({
+            "type": "missing_country",
+            "severity": "critical",
+            "message": f"Country '{country}' is missing from the dryrun run.",
+            "country": country,
+        })
+    for country in report.get("duplicateCountries") or []:
+        findings.append({
+            "type": "duplicate_country",
+            "severity": "warning",
+            "message": f"Country '{country}' appears multiple times in the same run.",
+            "country": country,
+        })
+    for country in countries:
+        country_pct = float(country.get("passPct") or 0.0)
+        if country_pct < 50:
+            findings.append({
+                "type": "country_low_pass_rate",
+                "severity": "critical",
+                "message": f"Country '{country['countryCode']}' pass rate is {country_pct}% (<50%).",
+                "country": country["countryCode"],
+                "passPct": country_pct,
+            })
+        elif country_pct < gate_threshold:
+            findings.append({
+                "type": "country_below_gate",
+                "severity": "warning",
+                "message": (
+                    f"Country '{country['countryCode']}' pass rate is "
+                    f"{country_pct}% (<{gate_threshold}% gate)."
+                ),
+                "country": country["countryCode"],
+                "passPct": country_pct,
+            })
+    if gate_status == "blocked":
+        findings.append({
+            "type": "ingest_gate_blocked",
+            "severity": "critical",
+            "message": f"Ingest gate blocked: overall pass rate {pass_pct}% < {gate_threshold}% threshold.",
+            "passPct": pass_pct,
+            "gateThreshold": gate_threshold,
+        })
+
+    overall = "critical" if any(f.get("severity") == "critical" for f in findings) else (
+        "warning" if findings else "ok"
+    )
+
+    return {
+        "probe": "pipeline.msrp_country_progress",
+        "overall": overall,
+        "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "status": {
+            "runId": report.get("runId"),
+            "schemaVersion": report.get("schemaVersion"),
+            "overallPassPct": pass_pct,
+            "gateThreshold": gate_threshold,
+            "gateStatus": gate_status,
+            "expectedCountries": report.get("expectedCountries", []),
+            "observedCountries": report.get("observedCountries", []),
+            "missingCountries": report.get("missingCountries", []),
+            "duplicateCountries": report.get("duplicateCountries", []),
+        },
+        "countries": countries,
+        "topBlockingCountries": sorted(top_blocking, key=lambda item: item["passPct"]),
+        "topFailureReasons": [
+            {"reason": reason, "count": count}
+            for reason, count in sorted(failure_reasons.items(), key=lambda item: -item[1])[:5]
+        ],
+        "sourceRepairBacklog": _load_msrp_source_repair_backlog(),
+        "findings": findings,
+    }
+
+
+def _missing_msrp_progress() -> dict[str, Any]:
     return {
         "probe": "pipeline.msrp_country_progress",
         "overall": "critical",
-        "generatedAt": now,
+        "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "status": {},
         "countries": [],
         "topBlockingCountries": [],
         "topFailureReasons": [],
-        "sourceRepairBacklog": {
-            "schemaVersion": "msrp_source_repair_backlog_v1",
-            "runId": None,
-            "generatedAt": None,
-            "totalIssueCount": 0,
-            "groups": [],
-        },
+        "sourceRepairBacklog": _default_source_repair_backlog(),
         "findings": [{
             "type": "no_dryrun_report",
             "severity": "critical",
@@ -179,11 +340,26 @@ def hermes_msrp_country_progress(
 ) -> dict:
     """Return MSRP country progress for latest or specific run_id."""
     if run_id:
-        return _read_json(REPORTS_DIR / f"msrp_country_progress_{run_id}.json")
-    path = REPORTS_DIR / "msrp_country_progress.json"
-    if not path.is_file():
-        return _empty_msrp_country_progress()
-    return _read_json(path)
+        report_path = REPORTS_DIR / f"msrp_country_progress_{run_id}.json"
+        static_progress = _read_json_if_exists(report_path)
+        if static_progress and not _is_empty_msrp_progress(static_progress):
+            return static_progress
+        dryrun_report = _load_msrp_dryrun_report(run_id)
+        if dryrun_report:
+            return _msrp_progress_from_report(dryrun_report)
+        return _read_json(report_path)
+
+    static_progress = _read_json_if_exists(REPORTS_DIR / "msrp_country_progress.json")
+    latest_report = _load_msrp_dryrun_report()
+    static_run_id = (static_progress or {}).get("status", {}).get("runId")
+    latest_run_id = (latest_report or {}).get("runId")
+    if latest_report and (_is_empty_msrp_progress(static_progress) or static_run_id != latest_run_id):
+        return _msrp_progress_from_report(latest_report)
+    if static_progress:
+        return static_progress
+    if latest_report:
+        return _msrp_progress_from_report(latest_report)
+    return _missing_msrp_progress()
 
 
 @router.get("/msrp-dryrun-history")

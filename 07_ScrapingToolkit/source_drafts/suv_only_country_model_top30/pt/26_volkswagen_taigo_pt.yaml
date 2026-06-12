@@ -18,7 +18,12 @@ profile:
     - key: powertrain_ice
       powertrain: ICE
       keywords:
-      - TODO_ICE_KEYWORD
+      - ice
+      - petrol
+      - gasoline
+      - diesel
+      - combustion
+      - gasolina
 schedule:
   frequency: manual_only
   run_window_start: 00:00

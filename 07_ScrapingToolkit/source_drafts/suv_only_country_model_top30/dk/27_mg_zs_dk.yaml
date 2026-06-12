@@ -1,16 +1,22 @@
 source_code: mg_zs_dk_draft_scrapling
 country: 丹麦
 brand: MG
-source_url: https://www.mgmotor.dk/modeller/mg-zs
+source_url: https://mgmotors.dk/biler/mg-zs-ev/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.mgmotor.dk/modeller/mg-zs
+  url: https://mgmotors.dk/biler/mg-zs-ev/
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'MG ZS EV.{0,800}?(?P<price>\d{3}\.\d{3})\s*kr\.\s+Priser fra'
+      official_trim: Entry
+      official_powertrain: BEV
   css:
     vehicle_container: body
     model: h1, h2
@@ -21,7 +27,7 @@ profile:
   default_price_label: MSRP
   fixed_model: ZS
   fixed_jato_model: ZS
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -72,11 +78,13 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - EV
+      - electric
+      - elbil
     - key: powertrain_hev
       powertrain: HEV
       keywords:
-      - TODO_HEV_KEYWORD
+      - hybrid
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -92,7 +100,8 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from MG template] [URL
-  language corrected] [CSS selectors applied from brand probe]
+  language corrected] [CSS selectors applied from brand probe] [Updated to current
+  MG ZS EV official model page and text_regex extraction from Priser fra block]
 bootstrap_meta:
   country_model_rank: 27
   suggested_scope_kind: single_model

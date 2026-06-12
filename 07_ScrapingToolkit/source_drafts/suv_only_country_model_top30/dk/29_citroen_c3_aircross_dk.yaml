@@ -1,98 +1,52 @@
 source_code: citroen_c3_aircross_dk_draft_scrapling
 country: 丹麦
 brand: CITROEN
-source_url: https://todo.invalid/dk/citroen/c3_aircross
-source_type: manufacturer_official
+source_url: https://www.citroen.dk/information/prislister/e-c3-aircross-priser_specs.html
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: http_json
 profile:
-  url: https://todo.invalid/dk/citroen/c3_aircross
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://pricelists-api.cars4ever.eu/api/models/Ny_%C3%AB-C3_Aircross/retail
+  method: GET
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Pris
   fixed_model: C3 AIRCROSS
+  fixed_official_powertrain: BEV
   fixed_jato_model: C3 AIRCROSS
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: BEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - TODO_BEV_KEYWORD
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - TODO_ICE_KEYWORD
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.88
+  match_status: review_required
+  match_reason:
+    kind: json_price_list
+    source: official_citroen_dk_cars4ever_price_list
+    note: Official Citroen Denmark price-list widget API exposes BEV e-C3 Aircross variants, trim ids, engine ids, and retail prices.
+  field_mapping:
+    vehicles_path: variants
+    model: ''
+    trim:
+    - source_path: trimId
+      collection_path: trims
+      key_path: id
+      value_path: name
+    - source_path: engineId
+      collection_path: engines
+      key_path: id
+      value_path: name
+    price: price
+    currency: ''
+    tax_included: ''
+    price_label: ''
+    availability: campaignLabel
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Draft source repaired to use Citroen Denmark's official e-C3 Aircross
+  price-list widget API from the public prislister page. The API joins variants
+  to trim and engine lookup tables through generic http_json lookup mapping.
 bootstrap_meta:
   country_model_rank: 29
   suggested_scope_kind: single_model

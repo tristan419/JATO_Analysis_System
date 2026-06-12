@@ -1,12 +1,12 @@
 source_code: audi_q4_e_tron_se_draft_scrapling
 country: 瑞典
 brand: AUDI
-source_url: https://www.audi.se/se/web/sv/models/q4-e-tron.html
+source_url: https://www.audi.se/sv/models/q4-e-tron/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.audi.se/se/web/sv/models/q4-e-tron.html
+  url: https://www.audi.se/sv/models/q4-e-tron/
   tier: stealth
   headless: true
   network_idle: true
@@ -77,10 +77,13 @@ profile:
     force_review_for_special_edition: true
   json_script_selector: script[type='application/ld+json']
   css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+    vehicle_container: div[class*="CarlineCard__HeadingSection"]
+    model: h4::text
+    trim: h4::text
+    price: p::text, span::text, div::text
+    include_if_text_contains:
+    - q4
+    - kr
 schedule:
   frequency: manual_only
   run_window_start: 00:00
