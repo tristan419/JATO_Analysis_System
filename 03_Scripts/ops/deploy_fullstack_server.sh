@@ -396,6 +396,20 @@ bootstrap_msrp_dryrun_if_missing() {
   fi
 }
 
+record_active_msrp_dryrun_status() {
+  local runs_index="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_runs_index.json"
+  local service_name="jato-msrp-sync@dryrun.service"
+
+  if [[ -s "$runs_index" ]]; then
+    return 0
+  fi
+
+  if sudo -n systemctl is-active --quiet "$service_name"; then
+    echo "[INFO] $service_name active; recording running MSRP dryrun status"
+    _write_msrp_status "msrp_dryrun" "running" "$service_name active; waiting for dryrun artifacts"
+  fi
+}
+
 reconcile_scraper_schedulers() {
   if ! is_truthy "$ENABLE_SCRAPER_SCHEDULERS"; then
     echo "[INFO] Skipping scraper scheduler reconciliation because ENABLE_SCRAPER_SCHEDULERS=$ENABLE_SCRAPER_SCHEDULERS"
@@ -566,6 +580,7 @@ echo "[INFO] Reconcile scraper schedulers"
 CURRENT_STEP="Reconcile scraper schedulers"
 log_section "$CURRENT_STEP"
 reconcile_scraper_schedulers
+record_active_msrp_dryrun_status
 
 echo "[INFO] Run pre-deploy backup when configured"
 CURRENT_STEP="Run pre-deploy backup"

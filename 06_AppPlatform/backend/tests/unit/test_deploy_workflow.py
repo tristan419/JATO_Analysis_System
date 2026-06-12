@@ -59,6 +59,8 @@ def test_deploy_bootstraps_missing_msrp_dryrun_artifacts_async() -> None:
     assert "systemctl start --no-block \"$service_name\"" in script
     assert "bootstrap_msrp_dryrun_if_missing" in script
     assert '_write_msrp_status "msrp_dryrun" "running"' in script
+    assert "record_active_msrp_dryrun_status" in script
+    assert "recording running MSRP dryrun status" in script
 
 
 def test_msrp_runner_writes_running_status_and_caps_country_runtime() -> None:
