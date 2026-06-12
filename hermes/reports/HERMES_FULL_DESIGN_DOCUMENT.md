@@ -556,7 +556,7 @@ Hermes compares `deploy_expected.json` with the server-side `actualCommitSha` in
 | 方法 | 端点 | 描述 | 鉴权 |
 |------|------|------|------|
 | GET | `/history/events` | 聚合 git、DevSync、evidence、Sentinel、pipeline、deploy、usage 事件 | viewer+ |
-| GET | `/history/clusters?level=feature&yAxis=workstream` | 按粒度和 Y 轴生成 Git History Cluster 看板数据 | viewer+ |
+| GET | `/history/clusters?level=feature&yAxis=workstream` | 生成横向 Git History Cluster 时间轴数据，包含 lane、时间跨度、语义 signals 和 file/title 相似度聚类 | viewer+ |
 | GET | `/progress/features` | 功能生命周期状态、风险、测试、文档、evidence、gap、下一步 | viewer+ |
 | GET | `/progress/swimlanes` | 按 workstream 分组的 Progress Swimlane 数据 | viewer+ |
 | GET | `/workflow/cockpit` | 按 session/model 聚合任务、文件、测试、commit、evidence、gap | viewer+ |

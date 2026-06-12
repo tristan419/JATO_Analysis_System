@@ -525,6 +525,7 @@ export interface HermesHistorySummary {
   yAxis?: HermesHistoryYAxis | string;
   clusterCount?: number;
   lanes?: string[];
+  semanticMode?: string;
 }
 
 export interface HermesHistoryEventsResponse {
@@ -549,6 +550,9 @@ export interface HermesHistoryCluster {
   testCount: number;
   evidenceCount: number;
   gapCount: number;
+  semanticLabel?: string;
+  semanticScore?: number;
+  semanticSignals?: string[];
   sources: string[];
   children: string[];
   topFiles: string[];

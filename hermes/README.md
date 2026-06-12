@@ -49,7 +49,7 @@ Hermes also exposes read-only project history and progress cockpit endpoints:
 | Endpoint | Purpose |
 |---|---|
 | `GET /v1/hermes/history/events` | Normalized git, DevSync, evidence, Sentinel, pipeline, and deploy events |
-| `GET /v1/hermes/history/clusters` | Rule-based time clusters for History Map, with `level` and `yAxis` controls |
+| `GET /v1/hermes/history/clusters` | Horizontal Git History Cluster timeline data with `level`, `yAxis`, semantic signals, and lightweight file/title similarity grouping |
 | `GET /v1/hermes/progress/features` | Feature lifecycle state with phase, risk, gaps, tests, docs, and next action |
 | `GET /v1/hermes/progress/swimlanes` | Progress features grouped by workstream for the swimlane UI |
 

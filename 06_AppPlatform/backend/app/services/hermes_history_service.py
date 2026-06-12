@@ -23,6 +23,26 @@ HISTORY_LEVELS = {"epic", "workstream", "feature", "session", "commit"}
 Y_AXIS_MODES = {"workstream", "phase", "risk", "session"}
 
 _RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3, "blocking": 4}
+_SEMANTIC_STOP_WORDS = {
+    "app",
+    "backend",
+    "codex",
+    "component",
+    "components",
+    "data",
+    "event",
+    "events",
+    "feature",
+    "frontend",
+    "history",
+    "implementation",
+    "service",
+    "services",
+    "src",
+    "test",
+    "tests",
+    "unit",
+}
 
 
 def _root() -> Path:
@@ -638,6 +658,143 @@ def _history_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _semantic_tokens_from_text(*values: Any) -> list[str]:
+    tokens: list[str] = []
+    for value in values:
+        text = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", str(value or ""))
+        for token in re.findall(r"[a-z0-9]+", text.lower()):
+            if len(token) < 3 or token in _SEMANTIC_STOP_WORDS:
+                continue
+            tokens.append(token)
+    return tokens
+
+
+def _semantic_tokens(event: dict[str, Any]) -> set[str]:
+    files = _string_list(event.get("files"))
+    return set(_semantic_tokens_from_text(
+        event.get("title"),
+        event.get("summary"),
+        event.get("featureId"),
+        event.get("workstream"),
+        event.get("type"),
+        *files,
+    ))
+
+
+def _semantic_features(events: list[dict[str, Any]]) -> set[str]:
+    features: set[str] = set()
+    for event in events:
+        feature_id = str(event.get("featureId") or "").strip()
+        if feature_id and feature_id not in {"unmapped", "unknown"}:
+            features.add(_feature_key(feature_id))
+    return features
+
+
+def _semantic_file_tokens(events: list[dict[str, Any]]) -> set[str]:
+    tokens: set[str] = set()
+    for event in events:
+        for path in _string_list(event.get("files")):
+            tokens.update(_semantic_tokens_from_text(path))
+    return tokens
+
+
+def _event_time_bounds(events: list[dict[str, Any]]) -> tuple[datetime | None, datetime | None]:
+    dates = [_parse_dt(event.get("timestamp")) for event in events]
+    parsed = [dt for dt in dates if dt is not None]
+    if not parsed:
+        return None, None
+    return min(parsed), max(parsed)
+
+
+def _time_gap_days(left: list[dict[str, Any]], right: list[dict[str, Any]]) -> int:
+    left_start, left_end = _event_time_bounds(left)
+    right_start, right_end = _event_time_bounds(right)
+    if not left_start or not left_end or not right_start or not right_end:
+        return 0
+    if left_end < right_start:
+        return (right_start - left_end).days
+    if right_end < left_start:
+        return (left_start - right_end).days
+    return 0
+
+
+def _jaccard(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def _semantic_similarity(left: list[dict[str, Any]], right: list[dict[str, Any]]) -> float:
+    left_features = _semantic_features(left)
+    right_features = _semantic_features(right)
+    if left_features & right_features:
+        return 1.0
+    token_score = _jaccard(set().union(*(_semantic_tokens(event) for event in left)), set().union(*(_semantic_tokens(event) for event in right)))
+    file_score = _jaccard(_semantic_file_tokens(left), _semantic_file_tokens(right))
+    return round((token_score * 0.65) + (file_score * 0.35), 3)
+
+
+def _same_semantic_workstream(left: list[dict[str, Any]], right: list[dict[str, Any]]) -> bool:
+    return (_dominant_value(left, "workstream") or "General") == (_dominant_value(right, "workstream") or "General")
+
+
+def _merge_history_groups_semantically(
+    grouped: dict[str, list[dict[str, Any]]],
+    level: str,
+) -> dict[str, list[dict[str, Any]]]:
+    if level not in {"feature", "session"}:
+        return grouped
+    groups = sorted(
+        grouped.items(),
+        key=lambda item: (_event_time_bounds(item[1])[0] or datetime.min.replace(tzinfo=timezone.utc), item[0]),
+    )
+    merged: list[tuple[list[str], list[dict[str, Any]]]] = []
+    for key, events in groups:
+        target_index: int | None = None
+        target_score = 0.0
+        for index, (_, existing_events) in enumerate(merged):
+            if not _same_semantic_workstream(existing_events, events):
+                continue
+            gap_days = _time_gap_days(existing_events, events)
+            feature_overlap = bool(_semantic_features(existing_events) & _semantic_features(events))
+            if gap_days > (14 if feature_overlap else 5):
+                continue
+            score = _semantic_similarity(existing_events, events)
+            if feature_overlap or score >= 0.34:
+                if score >= target_score:
+                    target_index = index
+                    target_score = score
+        if target_index is None:
+            merged.append(([key], list(events)))
+            continue
+        keys, existing_events = merged[target_index]
+        keys.append(key)
+        existing_events.extend(events)
+    return {
+        "|".join(keys): events
+        for keys, events in merged
+    }
+
+
+def _semantic_signals(events: list[dict[str, Any]]) -> list[str]:
+    counts: Counter[str] = Counter()
+    for event in events:
+        counts.update(_semantic_tokens(event))
+    return [token for token, _ in counts.most_common(8)]
+
+
+def _semantic_cohesion(events: list[dict[str, Any]]) -> float:
+    if len(events) <= 1:
+        return 1.0
+    pairs = 0
+    total = 0.0
+    for index, left in enumerate(events):
+        for right in events[index + 1:]:
+            total += _semantic_similarity([left], [right])
+            pairs += 1
+    return round(total / pairs, 3) if pairs else 1.0
+
+
 def _bucket_key(event: dict[str, Any], level: str) -> str:
     dt = _parse_dt(event.get("timestamp"))
     date_key = dt.date().isoformat() if dt else "unknown-date"
@@ -741,6 +898,9 @@ def _cluster_from_events(cluster_id: str, level: str, y_axis: str, events: list[
         "testCount": sum(int(event.get("testCount") or 0) for event in events),
         "evidenceCount": sum(len(event.get("evidenceRefs", []) or []) for event in events),
         "gapCount": sum(len(event.get("gapRefs", []) or []) for event in events),
+        "semanticLabel": _cluster_title(events, level),
+        "semanticScore": _semantic_cohesion(events),
+        "semanticSignals": _semantic_signals(events),
         "sources": sources,
         "children": children,
         "topFiles": files[:8],
@@ -761,6 +921,7 @@ def list_history_clusters(
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in events:
         grouped[_bucket_key(event, level)].append(event)
+    grouped = _merge_history_groups_semantically(grouped, level)
     clusters = [
         _cluster_from_events(f"cluster_{hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]}", level, y_axis, values)
         for key, values in grouped.items()
@@ -775,6 +936,7 @@ def list_history_clusters(
             "yAxis": y_axis,
             "clusterCount": len(clusters),
             "lanes": lanes,
+            "semanticMode": "feature_file_title_similarity" if level in {"feature", "session"} else "bucket_only",
         },
         "clusters": clusters,
     }
