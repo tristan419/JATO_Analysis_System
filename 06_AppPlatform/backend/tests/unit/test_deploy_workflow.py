@@ -89,13 +89,19 @@ def test_public_deploy_status_reports_msrp_scheduler_and_artifacts() -> None:
     assert "systemctl status jato-msrp-sync@dryrun.service" in workflow
     assert "systemctl list-timers --all 'jato-msrp*'" in workflow
     assert "---msrp env---" in workflow
-    assert "JATO_MSRP_CONCURRENCY" in workflow
-    assert "proxy_configured=" in workflow
+    assert "03_Scripts/ops/print_msrp_env_status.sh" in workflow
     assert "---msrp artifacts---" in workflow
     assert "03_Scripts/diagnostics/artifacts/dryrun_report.json" in workflow
     assert "03_Scripts/diagnostics/artifacts/dryrun_runs_index.json" in workflow
     assert "hermes/reports/msrp_country_progress.json" in workflow
     assert "hermes/reports/pipeline_status/msrp_dryrun.json" in workflow
+
+    script = (REPO_ROOT / "03_Scripts/ops/print_msrp_env_status.sh").read_text(
+        encoding="utf-8",
+    )
+    assert "JATO_MSRP_CONCURRENCY" in script
+    assert "proxy_configured=" in script
+    assert "DEEPSEEK_API_KEY" not in script
 
 
 def test_gitignore_covers_local_tooling_and_temp_artifacts() -> None:
