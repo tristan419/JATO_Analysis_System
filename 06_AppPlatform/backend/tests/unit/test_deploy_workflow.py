@@ -60,6 +60,22 @@ def test_deploy_bootstraps_missing_msrp_dryrun_artifacts_async() -> None:
     assert "bootstrap_msrp_dryrun_if_missing" in script
 
 
+def test_public_deploy_status_reports_msrp_scheduler_and_artifacts() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/deploy-fullstack-tencent.yml").read_text(
+        encoding="utf-8",
+    )
+
+    assert "---msrp scheduler---" in workflow
+    assert "systemctl status jato-msrp-dryrun.timer" in workflow
+    assert "systemctl status jato-msrp-sync@dryrun.service" in workflow
+    assert "systemctl list-timers --all 'jato-msrp*'" in workflow
+    assert "---msrp artifacts---" in workflow
+    assert "03_Scripts/diagnostics/artifacts/dryrun_report.json" in workflow
+    assert "03_Scripts/diagnostics/artifacts/dryrun_runs_index.json" in workflow
+    assert "hermes/reports/msrp_country_progress.json" in workflow
+    assert "hermes/reports/pipeline_status/msrp_dryrun.json" in workflow
+
+
 def test_gitignore_covers_local_tooling_and_temp_artifacts() -> None:
     lines = {
         line.strip()

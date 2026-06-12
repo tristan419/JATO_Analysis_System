@@ -517,6 +517,24 @@ jobs:
             cat "$REPO_DIR/hermes/deploy_failure_context.txt" 2>&1 || echo "DEPLOY_FAILURE_CONTEXT_MISSING"
             echo "---nginx---"
             sudo -n systemctl status nginx --no-pager 2>&1 | head -5 || true
+            echo "---msrp scheduler---"
+            sudo -n systemctl status jato-msrp-dryrun.timer --no-pager 2>&1 || true
+            sudo -n systemctl status jato-msrp-sync@dryrun.service --no-pager 2>&1 || true
+            echo "---msrp timers---"
+            sudo -n systemctl list-timers --all 'jato-msrp*' --no-pager 2>&1 || true
+            echo "---msrp artifacts---"
+            for artifact_path in \
+              03_Scripts/diagnostics/artifacts/dryrun_report.json \
+              03_Scripts/diagnostics/artifacts/dryrun_runs_index.json \
+              hermes/reports/msrp_country_progress.json \
+              hermes/reports/pipeline_status/msrp_dryrun.json
+            do
+              if [ -e "$REPO_DIR/$artifact_path" ]; then
+                stat -c "$artifact_path size=%s mtime=%y" "$REPO_DIR/$artifact_path" 2>&1 || true
+              else
+                echo "missing $artifact_path"
+              fi
+            done
             echo "---index.html---"
             head -1 "$DIST/index.html" 2>&1 || echo "INDEX_MISSING"
           } > "$DIST/_deploy_status.txt" 2>&1
@@ -815,6 +833,24 @@ jobs:
             cat "$REPO_DIR/hermes/deploy_failure_context.txt" 2>&1 || echo "DEPLOY_FAILURE_CONTEXT_MISSING"
             echo "---nginx---"
             sudo -n systemctl status nginx --no-pager 2>&1 | head -5 || true
+            echo "---msrp scheduler---"
+            sudo -n systemctl status jato-msrp-dryrun.timer --no-pager 2>&1 || true
+            sudo -n systemctl status jato-msrp-sync@dryrun.service --no-pager 2>&1 || true
+            echo "---msrp timers---"
+            sudo -n systemctl list-timers --all 'jato-msrp*' --no-pager 2>&1 || true
+            echo "---msrp artifacts---"
+            for artifact_path in \
+              03_Scripts/diagnostics/artifacts/dryrun_report.json \
+              03_Scripts/diagnostics/artifacts/dryrun_runs_index.json \
+              hermes/reports/msrp_country_progress.json \
+              hermes/reports/pipeline_status/msrp_dryrun.json
+            do
+              if [ -e "$REPO_DIR/$artifact_path" ]; then
+                stat -c "$artifact_path size=%s mtime=%y" "$REPO_DIR/$artifact_path" 2>&1 || true
+              else
+                echo "missing $artifact_path"
+              fi
+            done
             echo "---index.html---"
             head -1 "$DIST/index.html" 2>&1 || echo "INDEX_MISSING"
           } > "$DIST/_deploy_status.txt" 2>&1
