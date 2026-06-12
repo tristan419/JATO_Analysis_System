@@ -104,6 +104,96 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
     assert dashboard["history"][0]["runId"] == "msrp-dryrun-20260611-120000"
 
 
+def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(tmp_path, monkeypatch):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    run_dir = logs / "msrp-dryrun-20260612-125301"
+    artifacts.mkdir()
+    run_dir.mkdir(parents=True)
+
+    latest_run_id = "msrp-dryrun-20260612-070207"
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": latest_run_id,
+        "batch": "batch_a",
+        "expectedCountries": ["fi"],
+        "observedCountries": ["fi"],
+        "missingCountries": [],
+        "duplicateCountries": [],
+        "summary": {
+            "total": 1,
+            "pass": 1,
+            "empty": 0,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 100.0,
+            "status": "success",
+            "gateThreshold": 70,
+            "gateStatus": "allowed",
+        },
+        "countriesDetail": [
+            {
+                "countryCode": "fi",
+                "total": 1,
+                "pass": 1,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 100.0,
+                "status": "success",
+                "failureBreakdown": {},
+                "strategyRecommendations": {},
+                "sources": [],
+            }
+        ],
+        "results": [],
+        "generatedAt": "2026-06-12T09:31:08Z",
+    }
+    index = {
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "latestRunId": latest_run_id,
+        "runs": [
+            {
+                "runId": latest_run_id,
+                "batch": "batch_a",
+                "finishedAt": "2026-06-12T09:31:08Z",
+                "status": "success",
+                "gateStatus": "allowed",
+                "passPct": 100.0,
+                "total": 1,
+                "pass": 1,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "artifactPath": str(artifacts / f"dryrun_report_{latest_run_id}.json"),
+            }
+        ],
+    }
+
+    (artifacts / "dryrun_report.json").write_text(json.dumps({
+        "schemaVersion": "msrp_dryrun_partial_v1",
+        "runId": "msrp-dryrun-20260612-125301",
+        "running": True,
+        "partial": True,
+    }), encoding="utf-8")
+    (artifacts / f"dryrun_report_{latest_run_id}.json").write_text(json.dumps(report), encoding="utf-8")
+    (artifacts / "dryrun_runs_index.json").write_text(json.dumps(index), encoding="utf-8")
+    (run_dir / "run.log").write_text("[INFO] Countries: fi no\n", encoding="utf-8")
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+    monkeypatch.setattr(progress, "LOCK_FILE", tmp_path / "missing.lock")
+
+    dashboard = progress.get_dryrun_dashboard()
+
+    assert dashboard["current"]["schemaVersion"] == "msrp_dryrun_report_v3"
+    assert dashboard["current"]["runId"] == latest_run_id
+    assert dashboard["current"]["countries"][0]["countryCode"] == "fi"
+    assert dashboard["current"]["gateStatus"] == "allowed"
+
+
 def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path, monkeypatch):
     artifacts = tmp_path / "artifacts"
     logs = tmp_path / "logs"

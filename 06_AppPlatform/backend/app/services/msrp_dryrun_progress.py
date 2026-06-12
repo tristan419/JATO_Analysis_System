@@ -110,6 +110,31 @@ def _load_v3_report(run_id: str | None = None) -> dict[str, Any] | None:
     return None
 
 
+def _load_latest_indexed_v3_report(index_data: dict[str, Any] | None) -> dict[str, Any] | None:
+    latest_run_id = str((index_data or {}).get("latestRunId") or "")
+    if not latest_run_id:
+        return None
+
+    fallback_paths: list[Path] = [ARTIFACT_DIR / f"dryrun_report_{latest_run_id}.json"]
+    for run in (index_data or {}).get("runs") or []:
+        if run.get("runId") != latest_run_id:
+            continue
+        artifact_path = _artifact_path_from_ref(run.get("artifactPath"))
+        if artifact_path:
+            fallback_paths.insert(0, artifact_path)
+        break
+
+    seen: set[Path] = set()
+    for path in fallback_paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        data = _load_json(path)
+        if data and data.get("schemaVersion") == "msrp_dryrun_report_v3":
+            return data
+    return None
+
+
 def _normalize_source(source: dict[str, Any], index: int, total: int) -> dict[str, Any]:
     source_code = str(source.get("sourceCode") or source.get("code") or "")
     raw_status = str(source.get("rawStatus") or source.get("status") or "")
@@ -842,9 +867,26 @@ def get_dryrun_dashboard(run_id: str | None = None) -> dict[str, Any]:
     """Return combined dashboard data: live progress + history."""
     index_data = _load_json(RUNS_INDEX_PATH)
     current = None
+    latest_shortcut = _load_json(LATEST_REPORT_PATH) if run_id is None else None
     if run_id is None:
         current = _current_from_partial_run_dir() or _current_from_running_pipeline_status()
-    report = None if current and current.get("running") else _load_v3_report(run_id)
+    report = _load_v3_report(run_id)
+    if (
+        not report
+        and run_id is None
+        and (
+            not current
+            or (
+                bool(current.get("partial"))
+                and current.get("runId") == (latest_shortcut or {}).get("runId")
+                and (latest_shortcut or {}).get("schemaVersion") == "msrp_dryrun_partial_v1"
+                and not _is_running()
+            )
+        )
+    ):
+        report = _load_latest_indexed_v3_report(index_data)
+    if current and current.get("running") and (_is_running() or current.get("pipelineMessage")):
+        report = None
     if report:
         current = _current_from_v3_report(report, index_data)
         history = _history_from_runs_index() or _list_historical_runs()

@@ -1,22 +1,31 @@
 source_code: xpeng_g6_no_draft_scrapling
 country: 挪威
 brand: XPENG
-source_url: https://www.xpeng.com/no/g6
+source_url: https://store.xpeng.com/no/configurator/New_G6
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.xpeng.com/no/g6
+  url: https://store.xpeng.com/no/configurator/New_G6
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'RWD Standard Range(?:(?!AWD Performance).)*?kr\s+(?:\d{3}\.\d{3}(?:,\d{2}|,-)\s+)?(?P<price>\d{3}\.\d{3}(?:,\d{2}|,-))\s+AWD Performance'
+      official_trim: RWD Standard Range
+      official_powertrain: BEV
+    - pattern: 'AWD Performance(?:(?!Versjon RWD Standard Range).)*?kr\s+(?:\d{3}\.\d{3}(?:,\d{2}|,-)\s+)?(?P<price>\d{3}\.\d{3}(?:,\d{2}|,-))\s+Versjon RWD Standard Range'
+      official_trim: AWD Performance
+      official_powertrain: BEV
   default_currency: NOK
   default_tax_included: true
-  default_price_label: Veiledende pris inkl. mva
+  default_price_label: Official configurator current price
   fixed_model: G6
   fixed_jato_model: G6
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -87,7 +96,8 @@ schedule:
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (NO market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+  applied from brand probe] [Updated to XPENG official NO store configurator and
+  text_regex extraction from version price cards]
 bootstrap_meta:
   country_model_rank: 12
   suggested_scope_kind: single_model

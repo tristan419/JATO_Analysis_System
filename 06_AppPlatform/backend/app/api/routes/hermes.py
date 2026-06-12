@@ -225,6 +225,46 @@ def _load_msrp_dryrun_report(run_id: str | None = None) -> dict[str, Any] | None
     return None
 
 
+def _artifact_path_from_ref(path_ref: str | None) -> Path | None:
+    if not path_ref:
+        return None
+    path = Path(path_ref)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
+
+
+def _load_msrp_runs_index() -> dict[str, Any] | None:
+    index = _read_json_if_exists(_msrp_artifacts_dir() / "dryrun_runs_index.json")
+    return index if isinstance(index, dict) else None
+
+
+def _load_latest_indexed_msrp_dryrun_report() -> dict[str, Any] | None:
+    index = _load_msrp_runs_index()
+    latest_run_id = str((index or {}).get("latestRunId") or "")
+    if not latest_run_id:
+        return None
+
+    fallback_paths: list[Path] = [_msrp_artifacts_dir() / f"dryrun_report_{latest_run_id}.json"]
+    for run in (index or {}).get("runs") or []:
+        if run.get("runId") != latest_run_id:
+            continue
+        artifact_path = _artifact_path_from_ref(run.get("artifactPath"))
+        if artifact_path:
+            fallback_paths.insert(0, artifact_path)
+        break
+
+    seen: set[Path] = set()
+    for path in fallback_paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        report = _read_json_if_exists(path)
+        if report and report.get("schemaVersion") == "msrp_dryrun_report_v3":
+            return report
+    return None
+
+
 def _is_empty_msrp_progress(payload: dict[str, Any] | None) -> bool:
     if not payload:
         return True
@@ -590,7 +630,7 @@ def hermes_msrp_country_progress(
         return _read_json(report_path)
 
     static_progress = _read_json_if_exists(REPORTS_DIR / "msrp_country_progress.json")
-    latest_report = _load_msrp_dryrun_report()
+    latest_report = _load_msrp_dryrun_report() or _load_latest_indexed_msrp_dryrun_report()
     static_run_id = (static_progress or {}).get("status", {}).get("runId")
     latest_run_id = (latest_report or {}).get("runId")
     partial_progress = _partial_msrp_progress()

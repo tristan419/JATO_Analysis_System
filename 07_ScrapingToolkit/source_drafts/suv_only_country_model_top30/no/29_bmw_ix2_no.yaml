@@ -1,22 +1,31 @@
 source_code: bmw_ix2_no_draft_scrapling
 country: 挪威
 brand: BMW
-source_url: https://www.bmw.no/no/alle-modeller/ix2.html
+source_url: https://www.bmw.no/no/alle-modeller/i-series/ix2/bmw-ix2-oversikt.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.bmw.no/no/alle-modeller/ix2.html
+  url: https://www.bmw.no/no/alle-modeller/i-series/ix2/bmw-ix2-oversikt.html
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'Active Edition\s+M Sport Edition\s+Fully Charged Edition\s+Supercharged Edition\s+Pakken inkluderer:.{0,500}?BMW iX?2 eDrive20:\s*fra\s*(?P<price>\d{1,3}(?:\.\d{3})+)\s*kr'
+      official_trim: eDrive20
+      official_powertrain: BEV
+    - pattern: 'Active Edition\s+M Sport Edition\s+Fully Charged Edition\s+Supercharged Edition\s+Pakken inkluderer:.{0,500}?BMW iX?2 eDrive20:\s*fra\s*\d{1,3}(?:\.\d{3})+\s*kr\s+BMW iX2 xDrive30:\s*fra\s*(?P<price>\d{1,3}(?:\.\d{3})+)\s*kr'
+      official_trim: xDrive30
+      official_powertrain: BEV
   default_currency: NOK
   default_tax_included: true
-  default_price_label: Veiledende pris inkl. mva
+  default_price_label: Official from price
   fixed_model: IX2
   fixed_jato_model: IX2
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -87,7 +96,8 @@ schedule:
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (NO market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+  applied from brand probe] [Updated to BMW official NO iX2 overview and
+  base-section from-price text_regex]
 bootstrap_meta:
   country_model_rank: 29
   suggested_scope_kind: single_model

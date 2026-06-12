@@ -1,22 +1,34 @@
 source_code: bmw_ix_no_draft_scrapling
 country: 挪威
 brand: BMW
-source_url: https://www.bmw.no/no/alle-modeller/ix.html
+source_url: https://www.bmw.no/no/alle-modeller/m-serie/ix-m70/bmw-ix-m70.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.bmw.no/no/alle-modeller/ix.html
+  url: https://www.bmw.no/no/alle-modeller/m-serie/ix-m70/bmw-ix-m70.html
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'Smartphone oppbevaring med trådløs lading\s+BMW iX xDrive45:\s*fra\s*(?P<price>\d{1,3}(?:\.\d{3})+)\s*kr'
+      official_trim: xDrive45
+      official_powertrain: BEV
+    - pattern: 'Smartphone oppbevaring med trådløs lading\s+BMW iX xDrive45:\s*fra\s*\d{1,3}(?:\.\d{3})+\s*kr\s+BMW iX xDrive60:\s*fra\s*(?P<price>\d{1,3}(?:\.\d{3})+)\s*kr'
+      official_trim: xDrive60
+      official_powertrain: BEV
+    - pattern: 'Smartphone oppbevaring med trådløs lading\s+BMW iX xDrive45:\s*fra\s*\d{1,3}(?:\.\d{3})+\s*kr\s+BMW iX xDrive60:\s*fra\s*\d{1,3}(?:\.\d{3})+\s*kr\s+BMW iX M70(?:\s*xDrive)?:\s*fra\s*(?P<price>\d{1,3}(?:\.\d{3})+)\s*kr'
+      official_trim: M70
+      official_powertrain: BEV
   default_currency: NOK
   default_tax_included: true
-  default_price_label: Veiledende pris inkl. mva
+  default_price_label: Official from price
   fixed_model: IX
   fixed_jato_model: IX
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -87,7 +99,8 @@ schedule:
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (NO market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+  applied from brand probe] [Updated to BMW official NO iX M70 page and iX
+  base-section from-price text_regex]
 bootstrap_meta:
   country_model_rank: 22
   suggested_scope_kind: single_model

@@ -11,12 +11,18 @@ profile:
   headless: true
   network_idle: true
   impersonate: chrome
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'Pris fra.{0,1200}(?P<price>kr\s*\d{3}\s+\d{3})'
+      official_trim: Base from price
+      official_powertrain: BEV
   default_currency: NOK
   default_tax_included: true
-  default_price_label: Veiledende pris inkl. mva
+  default_price_label: Official from price
   fixed_model: '3'
   fixed_jato_model: '3'
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -87,7 +93,7 @@ schedule:
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (NO market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+  applied from brand probe] [Updated to Polestar official NO from-price text_regex]
 bootstrap_meta:
   country_model_rank: 30
   suggested_scope_kind: single_model

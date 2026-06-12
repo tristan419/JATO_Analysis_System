@@ -562,6 +562,14 @@ def main():
         sys.stdout.reconfigure(line_buffering=True)
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(line_buffering=True)
+    if len(sys.argv) > 1 and sys.argv[1] in {"-h", "--help"}:
+        print("Usage: batch_dryrun.py [all|1|2|country[,country...]]")
+        print("")
+        print("Examples:")
+        print("  batch_dryrun.py no")
+        print("  batch_dryrun.py se,fi,dk")
+        print("  batch_dryrun.py all")
+        return
     batch = sys.argv[1] if len(sys.argv) > 1 else "all"
     countries = BATCH_COUNTRIES.get(batch, batch.split(","))
     load_all_sources, run_scrape = _resolve_scraper_functions()

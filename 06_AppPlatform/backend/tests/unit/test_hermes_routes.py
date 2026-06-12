@@ -452,6 +452,72 @@ class TestSentinelAndDeploy:
         }
         assert data["sourceRepairBacklog"]["totalIssueCount"] == 3
 
+    def test_msrp_country_progress_uses_runs_index_when_latest_shortcut_is_partial(
+        self,
+        client,
+        tmp_path,
+    ):
+        reports_dir = tmp_path / "hermes" / "reports"
+        artifact_dir = tmp_path / "03_Scripts" / "diagnostics" / "artifacts"
+        run_id = "msrp-dryrun-20260612-070207"
+        partial_run_id = "msrp-dryrun-20260612-125301"
+        _write_json(reports_dir / "msrp_country_progress.json", {
+            "probe": "pipeline.msrp_country_progress",
+            "overall": "critical",
+            "status": {
+                "runId": partial_run_id,
+                "schemaVersion": "msrp_dryrun_partial_v1",
+                "running": True,
+                "partial": True,
+            },
+            "countries": [{"countryCode": "se", "passPct": 7.5}],
+            "topBlockingCountries": [],
+            "topFailureReasons": [],
+            "sourceRepairBacklog": {
+                "schemaVersion": "msrp_source_repair_backlog_v1",
+                "totalIssueCount": 0,
+                "groups": [],
+            },
+            "findings": [],
+        })
+        _write_json(artifact_dir / "dryrun_report.json", {
+            "schemaVersion": "msrp_dryrun_partial_v1",
+            "runId": partial_run_id,
+            "running": True,
+            "partial": True,
+        })
+        _write_json(artifact_dir / f"dryrun_report_{run_id}.json", _make_msrp_v3_report(run_id))
+        _write_json(artifact_dir / "dryrun_runs_index.json", {
+            "schemaVersion": "msrp_dryrun_runs_index_v1",
+            "latestRunId": run_id,
+            "runs": [
+                {
+                    "runId": run_id,
+                    "artifactPath": str(artifact_dir / f"dryrun_report_{run_id}.json"),
+                }
+            ],
+        })
+
+        with (
+            patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path),
+            patch("app.api.routes.hermes.REPORTS_DIR", reports_dir),
+            patch("app.api.routes.hermes._partial_msrp_progress", return_value={
+                "status": {
+                    "runId": partial_run_id,
+                    "running": True,
+                    "partial": True,
+                }
+            }),
+        ):
+            resp = client.get("/hermes/msrp-country-progress")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"]["schemaVersion"] == "msrp_dryrun_report_v3"
+        assert data["status"]["runId"] == run_id
+        assert data["countries"][0]["countryCode"] == "fi"
+        assert data["status"]["gateStatus"] == "allowed"
+
     def test_msrp_country_progress_run_id_falls_back_to_historical_dryrun_artifact(
         self,
         client,
