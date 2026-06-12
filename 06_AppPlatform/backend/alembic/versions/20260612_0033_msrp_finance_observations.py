@@ -1,7 +1,7 @@
 """Add MSRP finance observations."""
 
 revision = "20260612_0033"
-down_revision = "20260612_0032"
+down_revision = "20260604_0031"
 branch_labels = None
 depends_on = None
 
