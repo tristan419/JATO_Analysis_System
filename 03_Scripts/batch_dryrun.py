@@ -43,6 +43,24 @@ BATCH_COUNTRIES = {
 log = logging.getLogger(__name__)
 
 
+class _RunLogCapture(logging.Handler):
+    """Capture per-source extractor diagnostics without changing normal logging."""
+
+    def __init__(self, *, max_messages: int = 40) -> None:
+        super().__init__(level=logging.INFO)
+        self.max_messages = max_messages
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if len(self.messages) >= self.max_messages:
+            return
+        message = self.format(record)
+        self.messages.append(message)
+
+    def text(self) -> str:
+        return "\n".join(self.messages)
+
+
 def _is_child_run() -> bool:
     return os.getenv("JATO_MSRP_CHILD_RUN", "").strip().lower() in {
         "1",
@@ -88,21 +106,38 @@ def _classify_dryrun_failure(
 
     if "404-page" in final_url.lower() or "/404" in final_url.lower():
         return {"failureReason": "source_url_not_found", "recommendedStrategy": "update_source_url", "severity": "error"}
+    if status == "dry_run" and valid > 0:
+        return {"failureReason": None, "recommendedStrategy": None, "severity": "info"}
+    if (
+        "could not resolve host" in error_lower
+        or "failed to resolve" in error_lower
+        or "nameresolutionerror" in error_lower
+        or "nodename nor servname" in error_lower
+        or "err_name_not_resolved" in error_lower
+    ):
+        return {"failureReason": "dns_resolution_failed", "recommendedStrategy": "retry_or_check_dns", "severity": "warning"}
+    if (
+        "err_internet_disconnected" in error_lower
+        or "internet disconnected" in error_lower
+        or "network is unreachable" in error_lower
+        or "connection reset" in error_lower
+        or "connection refused" in error_lower
+    ):
+        return {"failureReason": "network_unavailable", "recommendedStrategy": "retry_network_or_proxy", "severity": "warning"}
     if http_status == 403:
         return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
     if http_status == 404:
         return {"failureReason": "source_url_not_found", "recommendedStrategy": "update_source_url", "severity": "error"}
     if http_status and http_status >= 400:
         return {"failureReason": "http_error", "recommendedStrategy": "check_source_url_or_site_status", "severity": "error"}
+    if "403" in error_lower or "forbidden" in error_lower:
+        return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
     if "waiting for" in error_lower or "playwright" in error_lower:
         return {"failureReason": "js_required_or_selector_timeout", "recommendedStrategy": "try_playwright_card_flow", "severity": "warning"}
     if "fetch_failed" in error_lower:
         return {"failureReason": "http_error", "recommendedStrategy": "check_source_url_or_site_status", "severity": "error"}
     if "timeout" in error_lower or "timed out" in error_lower:
         return {"failureReason": "http_timeout", "recommendedStrategy": "retry_or_reduce_concurrency", "severity": "warning"}
-
-    if status == "dry_run" and valid > 0:
-        return {"failureReason": None, "recommendedStrategy": None, "severity": "info"}
 
     if exception or status in ("exception", "error"):
         if "waiting for" in error_lower or "playwright" in error_lower:
@@ -119,6 +154,8 @@ def _classify_dryrun_failure(
 
     if status == "empty":
         if "TODO_SELECTOR" in error:
+            return {"failureReason": "selector_empty", "recommendedStrategy": "try_scrapling_dynamic_or_playwright", "severity": "warning"}
+        if "selector" in error_lower or "no elements" in error_lower:
             return {"failureReason": "selector_empty", "recommendedStrategy": "try_scrapling_dynamic_or_playwright", "severity": "warning"}
         if "json" in error_lower and ("noth" in error_lower or "falling back" in error_lower):
             return {"failureReason": "json_ld_empty", "recommendedStrategy": "try_css_or_attr_json", "severity": "warning"}
@@ -559,18 +596,25 @@ def main():
 
     for i, (cc, code) in enumerate(target_codes, 1):
         t0 = time.time()
+        log_capture = _RunLogCapture()
+        log_capture.setFormatter(logging.Formatter("%(levelname)s %(name)s — %(message)s"))
+        logging.getLogger().addHandler(log_capture)
         try:
             summary = run_scrape(
                 source_codes=[code], dry_run=True
             )
             src = summary["sources"].get(code, {})
+            captured_log_text = log_capture.text()
             status = src.get("status", "error")
             valid = src.get("valid", 0)
             extracted = src.get("extracted", 0)
             rejected = src.get("rejected", 0)
             elapsed = time.time() - t0
 
-            classification = _classify_dryrun_failure(src)
+            classification_src = src
+            if captured_log_text and not (src.get("error") or src.get("extractorError")):
+                classification_src = {**src, "extractorError": captured_log_text}
+            classification = _classify_dryrun_failure(classification_src)
 
             if status == "dry_run" and valid > 0 and not classification.get("failureReason"):
                 icon = "✅"
@@ -614,6 +658,12 @@ def main():
             ):
                 if key in src:
                     result_entry[key] = src[key]
+            if (
+                classification.get("failureReason")
+                and captured_log_text
+                and not result_entry.get("extractorError")
+            ):
+                result_entry["extractorError"] = captured_log_text[:1000]
             if classification.get("failureReason"):
                 result_entry["failureReason"] = classification["failureReason"]
                 result_entry["recommendedStrategy"] = classification["recommendedStrategy"]
@@ -637,6 +687,8 @@ def main():
                 "severity": classification.get("severity", "warning"),
             })
             error_count += 1
+        finally:
+            logging.getLogger().removeHandler(log_capture)
 
     # Summary
     total = len(target_codes)

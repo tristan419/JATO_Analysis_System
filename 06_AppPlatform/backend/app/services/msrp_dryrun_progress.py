@@ -73,7 +73,7 @@ def _normalize_source(source: dict[str, Any], index: int, total: int) -> dict[st
     status = str(source.get("status") or "")
     if status not in {"pass", "empty", "fail"}:
         status = "pass" if source.get("rawStatus") == "dry_run" and not source.get("failureReason") else ("empty" if source.get("rawStatus") == "empty" else "fail")
-    return {
+    payload = {
         "index": int(source.get("index") or index),
         "totalInCountry": int(source.get("totalInCountry") or total),
         "sourceCode": source_code,
@@ -85,6 +85,11 @@ def _normalize_source(source: dict[str, Any], index: int, total: int) -> dict[st
         "failureReason": source.get("failureReason"),
         "recommendedStrategy": source.get("recommendedStrategy"),
     }
+    for key in ("error", "extractorError", "sourceUrl", "httpStatus", "finalUrl"):
+        value = source.get(key)
+        if value not in (None, ""):
+            payload[key] = value
+    return payload
 
 
 def _dedupe_countries(countries: list[dict[str, Any]]) -> list[dict[str, Any]]:

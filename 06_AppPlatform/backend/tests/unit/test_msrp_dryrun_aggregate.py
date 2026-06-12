@@ -121,6 +121,32 @@ def test_aggregate_writes_history_index_and_source_repair_backlog(tmp_path):
     assert backlog["groups"][0]["affectedCountries"] == ["se"]
 
 
+def test_aggregate_preserves_source_diagnostics(tmp_path):
+    """Country source rows preserve diagnostics used by dashboards."""
+    run_dir = tmp_path / "msrp-dryrun-20260521-040000"
+    countries_dir = run_dir / "countries"
+    countries_dir.mkdir(parents=True)
+    artifact = _make_country_artifact("fi", 0, 1)
+    artifact["results"][0].update({
+        "failureReason": "dns_resolution_failed",
+        "recommendedStrategy": "retry_or_check_dns",
+        "extractorError": "curl: (6) Could not resolve host: www.audi.fi",
+        "sourceUrl": "https://www.audi.fi/fi/web/fi/models/q4-e-tron.html",
+        "httpStatus": 0,
+        "finalUrl": "https://www.audi.fi/fi/web/fi/models/q4-e-tron.html",
+    })
+    (countries_dir / "fi.json").write_text(json.dumps(artifact))
+
+    result = agg_mod.run(str(run_dir), ["fi"], out_latest=None)
+
+    source = result["countriesDetail"][0]["sources"][0]
+    assert source["failureReason"] == "dns_resolution_failed"
+    assert source["extractorError"] == "curl: (6) Could not resolve host: www.audi.fi"
+    assert source["sourceUrl"] == "https://www.audi.fi/fi/web/fi/models/q4-e-tron.html"
+    assert source["finalUrl"] == "https://www.audi.fi/fi/web/fi/models/q4-e-tron.html"
+    assert source["httpStatus"] == 0
+
+
 def test_aggregate_status_mapping():
     """Status mapping: >=90 success, >=50 degraded, <50 failure."""
     # success

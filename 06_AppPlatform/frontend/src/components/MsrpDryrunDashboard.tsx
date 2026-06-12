@@ -12,6 +12,11 @@ interface DryrunSource {
   elapsedSeconds: number;
   failureReason?: string;
   recommendedStrategy?: string;
+  error?: string;
+  extractorError?: string;
+  sourceUrl?: string;
+  finalUrl?: string;
+  httpStatus?: number | string;
 }
 
 interface DryrunCountry {
@@ -101,6 +106,16 @@ function formatTime(iso?: string): string {
 function formatElapsed(s: number): string {
   if (s < 60) return `${s.toFixed(0)}s`;
   return `${(s / 60).toFixed(1)}m`;
+}
+
+function sourceFailureTitle(source: DryrunSource): string | undefined {
+  const parts = [
+    source.recommendedStrategy,
+    source.extractorError || source.error,
+    source.httpStatus ? `HTTP ${source.httpStatus}` : undefined,
+    source.finalUrl || source.sourceUrl,
+  ].filter(Boolean);
+  return parts.length ? parts.join("\n\n") : undefined;
 }
 
 function dedupeByCountryCode(countries: DryrunCountry[]): DryrunCountry[] {
@@ -292,7 +307,7 @@ export function MsrpDryrunDashboard() {
                               {s.valid > 0 ? <><strong>{s.valid}</strong> valid</> : <span className="dryrun-source-stat-muted">0</span>}
                             </span>
                             {s.failureReason && (
-                              <span className="dryrun-source-elapsed" title={s.recommendedStrategy}>{s.failureReason}</span>
+                              <span className="dryrun-source-elapsed" title={sourceFailureTitle(s)}>{s.failureReason}</span>
                             )}
                             <span className="dryrun-source-elapsed">{formatElapsed(s.elapsedSeconds)}</span>
                           </div>

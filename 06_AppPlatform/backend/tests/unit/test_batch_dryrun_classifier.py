@@ -29,6 +29,32 @@ def test_classify_successful_dry_run():
     assert result["recommendedStrategy"] is None
 
 
+def test_classify_success_ignores_transient_retry_warning():
+    """A source that eventually returns valid observations stays passing."""
+    src = {
+        "status": "dry_run",
+        "valid": 1,
+        "extracted": 1,
+        "extractorError": "WARNING scrapling — Page.goto: Timeout 30000ms exceeded. Retrying in 1s...",
+    }
+    result = dryrun_mod._classify_dryrun_failure(src)
+    assert result["failureReason"] is None
+    assert result["recommendedStrategy"] is None
+
+
+def test_classify_valid_soft_404_final_url():
+    """Valid observations on a soft-404 final URL are not counted as a pass."""
+    src = {
+        "status": "dry_run",
+        "valid": 1,
+        "extracted": 1,
+        "finalUrl": "https://www.kia.com/fi/404-page/",
+    }
+    result = dryrun_mod._classify_dryrun_failure(src)
+    assert result["failureReason"] == "source_url_not_found"
+    assert result["recommendedStrategy"] == "update_source_url"
+
+
 def test_classify_empty_with_todo_selector():
     """empty status + TODO_SELECTOR → selector_empty."""
     src = {"status": "empty", "error": "TODO_SELECTOR not configured"}
@@ -61,12 +87,53 @@ def test_classify_forbidden_403():
     assert result["recommendedStrategy"] == "manual_review_or_proxy_required"
 
 
+def test_classify_empty_forbidden_403_from_captured_log():
+    """403 diagnostics on an empty result still classify as forbidden_403."""
+    src = {
+        "status": "empty",
+        "extractorError": "INFO scrapling — Fetched (403) <GET https://www.nissan.fi/>",
+    }
+    result = dryrun_mod._classify_dryrun_failure(src)
+    assert result["failureReason"] == "forbidden_403"
+    assert result["recommendedStrategy"] == "manual_review_or_proxy_required"
+
+
+def test_classify_dns_resolution_failed():
+    """DNS resolver errors are retryable network issues, not source repairs."""
+    src = {
+        "status": "empty",
+        "extractorError": "Failed to perform, curl: (6) Could not resolve host: www.audi.fi",
+    }
+    result = dryrun_mod._classify_dryrun_failure(src)
+    assert result["failureReason"] == "dns_resolution_failed"
+    assert result["recommendedStrategy"] == "retry_or_check_dns"
+
+
+def test_classify_network_unavailable():
+    """Playwright net::ERR_INTERNET_DISCONNECTED is classified separately."""
+    src = {
+        "status": "empty",
+        "extractorError": "Page.goto: net::ERR_INTERNET_DISCONNECTED at https://www.volvocars.com/",
+    }
+    result = dryrun_mod._classify_dryrun_failure(src)
+    assert result["failureReason"] == "network_unavailable"
+    assert result["recommendedStrategy"] == "retry_network_or_proxy"
+
+
 def test_classify_js_required():
     """Playwright timeout → js_required_or_selector_timeout."""
     src = {"status": "error", "error": "Locator.wait_for: Timeout 60000ms exceeded.\nwaiting for locator(\"[data-testid=trimcard]\").first to be visible"}
     result = dryrun_mod._classify_dryrun_failure(src)
     assert result["failureReason"] == "js_required_or_selector_timeout"
     assert result["recommendedStrategy"] == "try_playwright_card_flow"
+
+
+def test_classify_empty_selector_message():
+    """Empty result with no matching elements is a selector issue."""
+    src = {"status": "empty", "extractorError": "No elements found for '.gradewalk-card'"}
+    result = dryrun_mod._classify_dryrun_failure(src)
+    assert result["failureReason"] == "selector_empty"
+    assert result["recommendedStrategy"] == "try_scrapling_dynamic_or_playwright"
 
 
 def test_classify_currency_mismatch():

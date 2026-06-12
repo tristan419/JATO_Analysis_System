@@ -95,7 +95,7 @@ def _normalize_source_result(result: dict[str, Any], country_code: str) -> dict[
     status = str(result.get("status") or "")
     normalized_status = "pass" if _result_is_pass(result) else ("empty" if status == "empty" else "fail")
     source_code = result.get("sourceCode") or result.get("code") or ""
-    return {
+    payload = {
         "index": int(result.get("index") or 0),
         "totalInCountry": int(result.get("totalInCountry") or 0),
         "country": result.get("country") or country_code,
@@ -112,6 +112,22 @@ def _normalize_source_result(result: dict[str, Any], country_code: str) -> dict[
         "severity": result.get("severity"),
         "error": result.get("error"),
     }
+    for key in (
+        "extractorError",
+        "sourceUrl",
+        "httpStatus",
+        "finalUrl",
+        "extractorName",
+        "extractorVersion",
+        "coverageLevel",
+        "auditStatus",
+        "attemptedStrategies",
+        "winningStrategy",
+    ):
+        value = result.get(key)
+        if value not in (None, ""):
+            payload[key] = value
+    return payload
 
 
 def _artifact_count(data: dict[str, Any], key: str, fallback: int) -> int:

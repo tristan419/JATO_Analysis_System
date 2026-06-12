@@ -50,6 +50,10 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
                         "extracted": 1,
                         "rejected": 0,
                         "elapsedSeconds": 1.0,
+                        "extractorError": "Page.goto: net::ERR_INTERNET_DISCONNECTED",
+                        "sourceUrl": "https://www.volvocars.com/se/build/xc60-hybrid/",
+                        "finalUrl": "https://www.volvocars.com/se/build/xc60-hybrid/",
+                        "httpStatus": 0,
                     }
                 ],
             }
@@ -93,4 +97,8 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
     assert dashboard["current"]["runId"] == "msrp-dryrun-20260611-120000"
     assert dashboard["current"]["countries"][0]["countryCode"] == "se"
     assert dashboard["current"]["countries"][0]["sources"][0]["sourceCode"] == "volvo_xc60_se_draft_scrapling"
+    assert dashboard["current"]["countries"][0]["sources"][0]["extractorError"] == "Page.goto: net::ERR_INTERNET_DISCONNECTED"
+    assert dashboard["current"]["countries"][0]["sources"][0]["sourceUrl"] == "https://www.volvocars.com/se/build/xc60-hybrid/"
+    assert dashboard["current"]["countries"][0]["sources"][0]["finalUrl"] == "https://www.volvocars.com/se/build/xc60-hybrid/"
+    assert dashboard["current"]["countries"][0]["sources"][0]["httpStatus"] == 0
     assert dashboard["history"][0]["runId"] == "msrp-dryrun-20260611-120000"
