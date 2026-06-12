@@ -205,6 +205,60 @@ def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path,
     assert dashboard["history"][0]["runId"] == "msrp-dryrun-20260612-070207"
 
 
+def test_partial_run_dir_uses_logged_country_plan_before_country_starts(tmp_path, monkeypatch):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    active_run = logs / "msrp-dryrun-20260612-125301"
+    country_dir = active_run / "countries"
+    artifacts.mkdir()
+    country_dir.mkdir(parents=True)
+
+    (active_run / "run.log").write_text(
+        "\n".join([
+            "[INFO] Countries: se fi no dk",
+            "[RUN] 1/4 country=se mode=dryrun (parallel slot 1/2)",
+            "[RUN] 2/4 country=fi mode=dryrun (parallel slot 2/2)",
+        ]),
+        encoding="utf-8",
+    )
+    (country_dir / "se.json").write_text(json.dumps({
+        "schemaVersion": "msrp_dryrun_country_v1",
+        "runId": "msrp-dryrun-20260612-125301",
+        "country": "se",
+        "total": 1,
+        "pass": 1,
+        "empty": 0,
+        "fail": 0,
+        "errors": 0,
+        "passPct": 100.0,
+        "status": "success",
+        "failureBreakdown": {},
+        "strategyRecommendations": {},
+        "results": [{
+            "country": "se",
+            "sourceCode": "volvo_xc60_se_draft_scrapling",
+            "status": "pass",
+            "valid": 1,
+            "extracted": 1,
+            "rejected": 0,
+        }],
+    }), encoding="utf-8")
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+    monkeypatch.setattr(progress, "LOCK_FILE", tmp_path / "jato-msrp-low-concurrency.lock")
+
+    current = progress.get_dryrun_dashboard()["current"]
+
+    assert current["expectedCountries"] == ["se", "fi", "no", "dk"]
+    assert current["observedCountries"] == ["se"]
+    assert current["missingCountries"] == ["fi", "no", "dk"]
+    assert [country["countryCode"] for country in current["countries"]] == ["se", "fi", "no", "dk"]
+    assert [country["status"] for country in current["countries"]] == ["success", "running", "running", "running"]
+
+
 def test_dashboard_uses_running_pipeline_status_when_partial_artifacts_are_pending(tmp_path, monkeypatch):
     artifacts = tmp_path / "artifacts"
     logs = tmp_path / "logs"

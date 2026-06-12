@@ -344,6 +344,13 @@ def _expected_countries_from_run_log(run_dir: Path) -> list[str]:
     text = log_path.read_text(errors="replace")
     countries: list[str] = []
     seen: set[str] = set()
+    info_match = re.search(r"^\[INFO\]\s+Countries:\s+(.+)$", text, flags=re.MULTILINE)
+    if info_match:
+        for raw_code in re.split(r"[\s,]+", info_match.group(1).strip()):
+            code = raw_code.strip().lower()
+            if code and code not in seen:
+                countries.append(code)
+                seen.add(code)
     for match in re.finditer(r"\[RUN\]\s+\d+/\d+\s+country=(\w+)\s+mode=", text):
         code = match.group(1).strip().lower()
         if code and code not in seen:
