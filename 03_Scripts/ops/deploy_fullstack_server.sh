@@ -184,7 +184,9 @@ mark_release_deployed() {
     return
   fi
 
-  if [[ -d "$REPO_DIR/.git" ]]; then
+  if [[ "$SKIP_GIT_SYNC" == "true" && -n "${DEPLOY_COMMIT_SHA:-}" ]]; then
+    actual_commit="$DEPLOY_COMMIT_SHA"
+  elif [[ -d "$REPO_DIR/.git" ]]; then
     actual_commit="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || true)"
   fi
 

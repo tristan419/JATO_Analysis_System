@@ -301,6 +301,12 @@ jobs:
           RELEASE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
           RELEASE_REMOTE="https://github.com/tristan419/JATO_Analysis_System.git"
           DEPLOY_SOURCE="github_sparse_checkout"
+          RUNTIME_PRESERVE_DIR="$(mktemp -d /tmp/JATO_deploy_runtime.XXXXXX)"
+          RUNTIME_PRESERVE_PATHS="
+          03_Scripts/diagnostics/artifacts
+          03_Scripts/logs
+          hermes/reports
+          "
 
           rm -rf "$RELEASE_WORKTREE"
           mkdir -p "$RELEASE_WORKTREE"
@@ -350,6 +356,14 @@ jobs:
             git -C "$RELEASE_WORKTREE" checkout --force FETCH_HEAD
           fi
 
+          for runtime_path in $RUNTIME_PRESERVE_PATHS; do
+            if [ -e "$REPO_DIR/$runtime_path" ]; then
+              mkdir -p "$RUNTIME_PRESERVE_DIR/$(dirname "$runtime_path")"
+              cp -a "$REPO_DIR/$runtime_path" "$RUNTIME_PRESERVE_DIR/$runtime_path"
+              echo "[INFO] Preserved runtime path: $runtime_path"
+            fi
+          done
+
           sudo mkdir -p "$REPO_DIR"
           sudo chown -R "$USER":"$USER" "$REPO_DIR"
           for release_path in 03_Scripts 06_AppPlatform 07_ScrapingToolkit hermes; do
@@ -370,6 +384,15 @@ jobs:
               cp -f "$RELEASE_WORKTREE/$release_file" "$REPO_DIR/$release_file"
             fi
           done
+          for runtime_path in $RUNTIME_PRESERVE_PATHS; do
+            if [ -e "$RUNTIME_PRESERVE_DIR/$runtime_path" ]; then
+              rm -rf "$REPO_DIR/$runtime_path"
+              mkdir -p "$(dirname "$REPO_DIR/$runtime_path")"
+              cp -a "$RUNTIME_PRESERVE_DIR/$runtime_path" "$REPO_DIR/$runtime_path"
+              echo "[INFO] Restored runtime path: $runtime_path"
+            fi
+          done
+          rm -rf "$RUNTIME_PRESERVE_DIR"
           rm -rf "$RELEASE_WORKTREE"
 
           export REPO_DIR DEPLOY_SOURCE
@@ -576,6 +599,12 @@ jobs:
           RELEASE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
           RELEASE_REMOTE="https://github.com/tristan419/JATO_Analysis_System.git"
           DEPLOY_SOURCE="github_sparse_checkout"
+          RUNTIME_PRESERVE_DIR="$(mktemp -d /tmp/JATO_deploy_runtime.XXXXXX)"
+          RUNTIME_PRESERVE_PATHS="
+          03_Scripts/diagnostics/artifacts
+          03_Scripts/logs
+          hermes/reports
+          "
 
           rm -rf "$RELEASE_WORKTREE"
           mkdir -p "$RELEASE_WORKTREE"
@@ -625,6 +654,14 @@ jobs:
             git -C "$RELEASE_WORKTREE" checkout --force FETCH_HEAD
           fi
 
+          for runtime_path in $RUNTIME_PRESERVE_PATHS; do
+            if [ -e "$REPO_DIR/$runtime_path" ]; then
+              mkdir -p "$RUNTIME_PRESERVE_DIR/$(dirname "$runtime_path")"
+              cp -a "$REPO_DIR/$runtime_path" "$RUNTIME_PRESERVE_DIR/$runtime_path"
+              echo "[INFO] Preserved runtime path: $runtime_path"
+            fi
+          done
+
           sudo mkdir -p "$REPO_DIR"
           sudo chown -R "$USER":"$USER" "$REPO_DIR"
           for release_path in 03_Scripts 06_AppPlatform 07_ScrapingToolkit hermes; do
@@ -645,6 +682,15 @@ jobs:
               cp -f "$RELEASE_WORKTREE/$release_file" "$REPO_DIR/$release_file"
             fi
           done
+          for runtime_path in $RUNTIME_PRESERVE_PATHS; do
+            if [ -e "$RUNTIME_PRESERVE_DIR/$runtime_path" ]; then
+              rm -rf "$REPO_DIR/$runtime_path"
+              mkdir -p "$(dirname "$REPO_DIR/$runtime_path")"
+              cp -a "$RUNTIME_PRESERVE_DIR/$runtime_path" "$REPO_DIR/$runtime_path"
+              echo "[INFO] Restored runtime path: $runtime_path"
+            fi
+          done
+          rm -rf "$RUNTIME_PRESERVE_DIR"
           rm -rf "$RELEASE_WORKTREE"
 
           export REPO_DIR DEPLOY_SOURCE
