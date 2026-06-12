@@ -5,6 +5,7 @@ layer.  Import these helpers instead of redefining them per service.
 """
 from app.db.models import (
     CurrentPrice,
+    FinanceObservation,
     JatoMsrpLink,
     MatchOverride,
     MsrpObservation,
@@ -99,6 +100,69 @@ def observation_payload(
             }
         )
     return payload
+
+
+def _optional_float(value: object | None) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def finance_observation_payload(
+    item: FinanceObservation,
+) -> dict[str, object]:
+    return {
+        "financeObservationId": str(item.finance_observation_id),
+        "observationId": str(item.observation_id),
+        "scrapeBatchId": str(item.scrape_batch_id),
+        "country": to_display_country(item.country),
+        "brand": item.brand,
+        "jatoModel": item.jato_model,
+        "jatoTrim": item.jato_trim,
+        "jatoPowertrain": _optional_text(item.jato_powertrain),
+        "officialModel": item.official_model,
+        "officialTrim": item.official_trim,
+        "officialEdition": item.official_edition,
+        "officialPowertrain": item.official_powertrain,
+        "priceSemantics": item.price_semantics,
+        "financeType": item.finance_type,
+        "monthlyPayment": _optional_float(item.monthly_payment),
+        "monthlyPaymentEur": _optional_float(item.monthly_payment_eur),
+        "downPayment": _optional_float(item.down_payment),
+        "downPaymentEur": _optional_float(item.down_payment_eur),
+        "downPaymentPct": _optional_float(item.down_payment_pct),
+        "termMonths": item.term_months,
+        "apr": _optional_float(item.apr),
+        "effectiveApr": _optional_float(item.effective_apr),
+        "balloonPayment": _optional_float(item.balloon_payment),
+        "balloonPaymentEur": _optional_float(item.balloon_payment_eur),
+        "totalCreditCost": _optional_float(item.total_credit_cost),
+        "totalCreditCostEur": _optional_float(item.total_credit_cost_eur),
+        "totalAmountPayable": _optional_float(item.total_amount_payable),
+        "totalAmountPayableEur": _optional_float(
+            item.total_amount_payable_eur
+        ),
+        "annualMileageLimit": item.annual_mileage_limit,
+        "offerValidUntil": (
+            item.offer_valid_until.isoformat()
+            if item.offer_valid_until is not None
+            else None
+        ),
+        "subsidyAmount": _optional_float(item.subsidy_amount),
+        "subsidyAmountEur": _optional_float(item.subsidy_amount_eur),
+        "netPriceAfterSubsidy": _optional_float(
+            item.net_price_after_subsidy
+        ),
+        "netPriceAfterSubsidyEur": _optional_float(
+            item.net_price_after_subsidy_eur
+        ),
+        "currency": item.currency,
+        "sourceUrl": item.source_url,
+        "observedAtUtc": item.observed_at_utc.isoformat(),
+        "financeContext": item.finance_context_json,
+        "createdAtUtc": item.created_at_utc.isoformat(),
+        "updatedAtUtc": item.updated_at_utc.isoformat(),
+    }
 
 
 def current_price_payload(

@@ -6,11 +6,11 @@ module (fx_rate_to_eur field on CurrentPrice / PriceHistory).
 
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, Field
 
 _UNIFIED_CURRENCY = "EUR"
+_WARNING_CHANGE_PCT = 3.0
+_CRITICAL_CHANGE_PCT = 10.0
 
 
 class PriceAlert(BaseModel):
@@ -34,7 +34,9 @@ class PriceTrendSummary(BaseModel):
     brand: str = ""
     model: str = ""
     alerts: list[PriceAlert] = Field(default_factory=list)
-    monthly_estimates: list[MonthlyPaymentEstimate] = Field(default_factory=list)
+    monthly_estimates: list[MonthlyPaymentEstimate] = Field(
+        default_factory=list
+    )
     latest_price_eur: float | None = None
     previous_price_eur: float | None = None
     price_change_pct: float | None = None
@@ -55,26 +57,41 @@ def check_price_alerts(
     label = f"{brand} {model}".strip()
 
     if vehicle_price_eur > 60_000:
-        alerts.append(PriceAlert(
-            alert_type="price_level",
-            severity="warning",
-            title="高价位预警",
-            detail=f"{label} EUR {vehicle_price_eur:,.0f} 超过 60k 阈值。建议竞品对比和金融方案分析。",
-        ))
+        alerts.append(
+            PriceAlert(
+                alert_type="price_level",
+                severity="warning",
+                title="高价位预警",
+                detail=(
+                    f"{label} EUR {vehicle_price_eur:,.0f} 超过 60k 阈值。"
+                    "建议竞品对比和金融方案分析。"
+                ),
+            )
+        )
     elif vehicle_price_eur > 40_000:
-        alerts.append(PriceAlert(
-            alert_type="price_level",
-            severity="info",
-            title="中高价位提示",
-            detail=f"{label} EUR {vehicle_price_eur:,.0f}，处于中高价格区间。",
-        ))
+        alerts.append(
+            PriceAlert(
+                alert_type="price_level",
+                severity="info",
+                title="中高价位提示",
+                detail=(
+                    f"{label} EUR {vehicle_price_eur:,.0f}，"
+                    "处于中高价格区间。"
+                ),
+            )
+        )
     elif vehicle_price_eur < 20_000:
-        alerts.append(PriceAlert(
-            alert_type="price_level",
-            severity="info",
-            title="低价位机会",
-            detail=f"{label} EUR {vehicle_price_eur:,.0f} 低于市场均价，存在价格优势机会。",
-        ))
+        alerts.append(
+            PriceAlert(
+                alert_type="price_level",
+                severity="info",
+                title="低价位机会",
+                detail=(
+                    f"{label} EUR {vehicle_price_eur:,.0f} 低于市场均价，"
+                    "存在价格优势机会。"
+                ),
+            )
+        )
 
     return alerts
 
@@ -95,18 +112,55 @@ def estimate_monthly_payments(
     for months, rate_pct in rates.items():
         monthly_rate = rate_pct / 100 / 12
         if monthly_rate > 0:
-            payment = financed * monthly_rate * (1 + monthly_rate) ** months / ((1 + monthly_rate) ** months - 1)
+            payment = (
+                financed
+                * monthly_rate
+                * (1 + monthly_rate) ** months
+                / ((1 + monthly_rate) ** months - 1)
+            )
         else:
             payment = financed / months
-        estimates.append(MonthlyPaymentEstimate(
-            term_months=months,
-            monthly_payment_eur=round(payment, 0),
-            total_cost_eur=round(payment * months + down, 0),
-            interest_rate_pct=rate_pct,
-            down_payment_pct=down_payment_pct,
-        ))
+        estimates.append(
+            MonthlyPaymentEstimate(
+                term_months=months,
+                monthly_payment_eur=round(payment, 0),
+                total_cost_eur=round(payment * months + down, 0),
+                interest_rate_pct=rate_pct,
+                down_payment_pct=down_payment_pct,
+            )
+        )
 
     return estimates
+
+
+def _build_price_change_alert(
+    *,
+    brand: str,
+    model: str,
+    latest_price_eur: float,
+    previous_price_eur: float,
+    change_pct: float,
+) -> PriceAlert:
+    abs_change = abs(change_pct)
+    severity = "info"
+    if abs_change >= _CRITICAL_CHANGE_PCT:
+        severity = "critical"
+    elif abs_change >= _WARNING_CHANGE_PCT:
+        severity = "warning"
+
+    direction = "上调" if change_pct > 0 else "下调"
+    label = f"{brand} {model}".strip()
+    return PriceAlert(
+        alert_type="price_change",
+        severity=severity,
+        title=f"MSRP {direction}",
+        detail=(
+            f"{label} MSRP 从 EUR {previous_price_eur:,.0f} "
+            f"{direction}至 EUR {latest_price_eur:,.0f}，"
+            f"变化 {change_pct:+.1f}%。"
+        ),
+        change_pct=round(change_pct, 1),
+    )
 
 
 def analyze_price_trend(
@@ -140,6 +194,9 @@ def query_msrp_price_history(
     country: str = "",
     brand: str = "",
     model: str = "",
+    trim: str = "",
+    powertrain: str | None = None,
+    limit: int = 24,
 ) -> PriceTrendSummary:
     """Query MSRP repository for actual price history data in EUR."""
     try:
@@ -150,10 +207,12 @@ def query_msrp_price_history(
         try:
             records = msrp_repository.list_price_history(
                 session,
-                country=country,
+                country=country or None,
                 brand=brand if brand else None,
                 jato_model=model if model else None,
-                limit=24,
+                jato_trim=trim if trim else None,
+                jato_powertrain=powertrain,
+                limit=limit,
             )
             if not records:
                 return PriceTrendSummary(
@@ -167,12 +226,35 @@ def query_msrp_price_history(
 
             latest = records[0]
             price_eur = float(latest.msrp_value or 0)
-            prev_price = float(records[-1].msrp_value or 0) if len(records) > 1 else price_eur
+            prev_price = (
+                float(records[1].msrp_value or 0)
+                if len(records) > 1
+                else price_eur
+            )
 
-            alerts = check_price_alerts(country=country, brand=brand, model=model, vehicle_price_eur=price_eur)
+            alerts = check_price_alerts(
+                country=country,
+                brand=brand,
+                model=model,
+                vehicle_price_eur=price_eur,
+            )
             monthly = estimate_monthly_payments(vehicle_price_eur=price_eur)
 
-            change_pct = ((price_eur - prev_price) / prev_price * 100) if prev_price > 0 else 0
+            change_pct = (
+                ((price_eur - prev_price) / prev_price * 100)
+                if prev_price > 0
+                else 0
+            )
+            if len(records) > 1 and change_pct != 0:
+                alerts.append(
+                    _build_price_change_alert(
+                        brand=brand,
+                        model=model,
+                        latest_price_eur=price_eur,
+                        previous_price_eur=prev_price,
+                        change_pct=change_pct,
+                    )
+                )
 
             return PriceTrendSummary(
                 country=country, brand=brand, model=model,
@@ -180,7 +262,13 @@ def query_msrp_price_history(
                 latest_price_eur=price_eur,
                 previous_price_eur=prev_price,
                 price_change_pct=round(change_pct, 1),
-                trend_direction="up" if change_pct > 1 else "down" if change_pct < -1 else "stable",
+                trend_direction=(
+                    "up"
+                    if change_pct > 1
+                    else "down"
+                    if change_pct < -1
+                    else "stable"
+                ),
                 source="msrp_repository",
             )
         finally:
@@ -188,9 +276,12 @@ def query_msrp_price_history(
     except Exception as exc:
         return PriceTrendSummary(
             country=country, brand=brand, model=model,
-            alerts=[PriceAlert(
-                alert_type="error", severity="warning",
-                title="MSRP 查询失败",
-                detail=f"无法查询价格历史: {exc}",
-            )],
+            alerts=[
+                PriceAlert(
+                    alert_type="error",
+                    severity="warning",
+                    title="MSRP 查询失败",
+                    detail=f"无法查询价格历史: {exc}",
+                )
+            ],
         )

@@ -9,3 +9,10 @@ countries:
   - country_file: countries/hr.yaml
   - country_file: countries/at.yaml
   - country_file: countries/cz.yaml
+  - country_file: countries/de.yaml
+  - country_file: countries/fr.yaml
+  - country_file: countries/it.yaml
+  - country_file: countries/pl.yaml
+  - country_file: countries/sk.yaml
+  - country_file: countries/si.yaml
+  - country_file: countries/ch.yaml

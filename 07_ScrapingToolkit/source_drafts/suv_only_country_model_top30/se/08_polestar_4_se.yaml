@@ -1,12 +1,27 @@
 source_code: polestar_4_se_draft_scrapling
 country: 瑞典
 brand: POLESTAR
-source_url: https://www.polestar.com/se/polestar-4/
+source_url: https://www.polestar.com/se/polestar-4-models/polestar-4-coupe/
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: playwright
 profile:
-  url: https://www.polestar.com/se/polestar-4/
+  url: https://www.polestar.com/se/polestar-4-models/polestar-4-coupe/
+  browser: chromium
+  wait_until: domcontentloaded
+  page_timeout_ms: 45000
+  viewport_width: 1440
+  viewport_height: 1200
+  initial_ready_selector: section#hero dd
+  initial_ready_timeout_ms: 45000
+  trim_card_selector: section#hero
+  trim_name_selector: h1, h2
+  detail_price_selector: dl > div:nth-of-type(1) dd
+  trim_card_wait_ms: 1200
+  extract_from_trim_cards: true
+  combine_trim_and_powertrain: false
+  match_confidence: 0.78
+  match_status: review_required
   tier: stealth
   headless: true
   network_idle: true
@@ -16,7 +31,7 @@ profile:
   default_price_label: Rekommenderat cirkapris inkl. moms
   fixed_model: '4'
   fixed_jato_model: '4'
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true

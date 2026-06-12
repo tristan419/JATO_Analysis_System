@@ -324,6 +324,22 @@ class MsrpObservationIngest(BaseModel):
     match_reason_json: dict[str, object] | None = None
     source_context_json: dict[str, object] | None = None
     candidate_matches_json: list[dict[str, object]] | None = None
+    price_semantics: str | None = None
+    monthly_payment: float | None = None
+    down_payment: float | None = None
+    down_payment_pct: float | None = None
+    term_months: int | None = None
+    apr: float | None = None
+    effective_apr: float | None = None
+    balloon_payment: float | None = None
+    finance_type: str | None = None
+    total_credit_cost: float | None = None
+    total_amount_payable: float | None = None
+    annual_mileage_limit: int | None = None
+    offer_valid_until: date | None = None
+    subsidy_amount: float | None = None
+    net_price_after_subsidy: float | None = None
+    finance_currency: str | None = None
 
 
 class MsrpObservationCreate(MsrpObservationIngest):

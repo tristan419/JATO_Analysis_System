@@ -1,19 +1,19 @@
 source_code: toyota_yaris_cross_dk_draft_scrapling
 country: 丹麦
 brand: TOYOTA
-source_url: https://www.toyota.dk/biler/yaris-cross
+source_url: https://modelinformation.toyota.dk/Toyota/specs/Prislister/yaris-cross-prisliste/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.toyota.dk/biler/yaris-cross
+  url: https://modelinformation.toyota.dk/Toyota/specs/Prislister/yaris-cross-prisliste/
   headless: true
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Vejledende udsalgspris inkl. lev.omk.
   fixed_model: YARIS CROSS
   fixed_jato_model: YARIS CROSS
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: HEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -60,7 +60,9 @@ profile:
     - key: powertrain_hev
       powertrain: HEV
       keywords:
-      - TODO_HEV_KEYWORD
+      - hybrid
+      - 1.5 hybrid
+      - yaris cross
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -68,13 +70,22 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
+  text_regex:
+    source_selector: script
+    entry_patterns:
+    - pattern: 'Vejl\. udsalgspris inkl\. lev\.omk\.¹\s+Active\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: Active
+      official_powertrain: HEV
+    - pattern: 'Active\s+\d{3}\.\d{3}\s+Style\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: Style
+      official_powertrain: HEV
+    - pattern: 'Style\s+\d{3}\.\d{3}\s+Executive\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: Executive
+      official_powertrain: HEV
+    - pattern: 'Executive\s+\d{3}\.\d{3}\s+GR Sport\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: GR Sport
+      official_powertrain: HEV
+  tier: http
   network_idle: true
   impersonate: chrome
 schedule:
@@ -87,7 +98,8 @@ notes: Draft scaffold generated from country×model top30 backlog. Replace sourc
   before promoting to 07_ScrapingToolkit/sources. [URL filled from TOYOTA template]
   [URL language corrected] [CSS selectors applied from brand probe] [Switched to playwright_card_flow
   with toyota_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset
-  needs per-brand tuning]
+  needs per-brand tuning] [Switched to official Toyota modelinformation iPaper
+  price-list text_regex extraction]
 bootstrap_meta:
   country_model_rank: 17
   suggested_scope_kind: single_model

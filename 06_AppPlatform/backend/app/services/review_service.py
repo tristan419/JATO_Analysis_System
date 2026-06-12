@@ -48,6 +48,93 @@ def _commit_or_conflict(session: Session, detail: str) -> None:
         raise HTTPException(status_code=409, detail=detail) from exc
 
 
+def _business_powertrain(value: object | None) -> str:
+    return str(value or "").strip()
+
+
+def _source_candidate_observation_ids(review_case) -> set[UUID]:
+    candidates = review_case.candidate_matches_json or []
+    if not isinstance(candidates, list):
+        return set()
+
+    observation_ids: set[UUID] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("candidateType") != "source_observation":
+            continue
+        observation_id = str(candidate.get("observationId") or "").strip()
+        if not observation_id:
+            continue
+        try:
+            observation_ids.add(UUID(observation_id))
+        except ValueError:
+            continue
+    return observation_ids
+
+
+def _same_review_business_key(left, right) -> bool:
+    return (
+        left.country == right.country
+        and left.brand == right.brand
+        and left.jato_model == right.jato_model
+        and left.jato_trim == right.jato_trim
+        and _business_powertrain(left.jato_powertrain)
+        == _business_powertrain(right.jato_powertrain)
+    )
+
+
+def _resolve_accepted_source_observation(
+    session: Session,
+    review_case,
+    original_observation,
+    accepted_observation_id: object | None,
+):
+    accepted_text = str(accepted_observation_id or "").strip()
+    if not accepted_text:
+        return None
+
+    try:
+        accepted_uuid = UUID(accepted_text)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="accepted_observation_id must be a UUID",
+        ) from exc
+
+    candidate_ids = _source_candidate_observation_ids(review_case)
+    if accepted_uuid not in candidate_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "accepted_observation_id must reference a source "
+                "observation candidate on this review case"
+            ),
+        )
+
+    if accepted_uuid == original_observation.observation_id:
+        return original_observation
+
+    selected_observation = msrp_repository.get_observation(
+        session,
+        accepted_uuid,
+    )
+    if selected_observation is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Accepted source observation not found",
+        )
+    if not _same_review_business_key(original_observation, selected_observation):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "accepted_observation_id must stay within the review "
+                "case business key"
+            ),
+        )
+    return selected_observation
+
+
 def list_match_overrides(
     session: Session,
     country: str | None,
@@ -439,6 +526,19 @@ def create_review_decision(
             detail="decision and decided_by are required",
         )
 
+    accepted_source_observation = _resolve_accepted_source_observation(
+        session,
+        review_case,
+        observation,
+        data.get("accepted_observation_id"),
+    )
+    if accepted_source_observation is not None and decision_name != "approve":
+        raise HTTPException(
+            status_code=400,
+            detail="accepted_observation_id only applies to approve",
+        )
+    decision_observation = accepted_source_observation or observation
+
     decided_official_model = data.get("decided_official_model")
     decided_official_trim = data.get("decided_official_trim")
     if decision_name == "remap":
@@ -456,27 +556,29 @@ def create_review_decision(
     link = None
     mismatch_category: str | None = None
     if decision_name in {"approve", "remap"}:
-        previous_official_model = observation.official_model
-        previous_official_trim = observation.official_trim
-        previous_official_edition = observation.official_edition
-        previous_official_powertrain = observation.official_powertrain
-        observation.official_model = (
+        previous_official_model = decision_observation.official_model
+        previous_official_trim = decision_observation.official_trim
+        previous_official_edition = decision_observation.official_edition
+        previous_official_powertrain = decision_observation.official_powertrain
+        decision_observation.official_model = (
             str(decided_official_model).strip()
             if decided_official_model
-            else observation.official_model
+            else decision_observation.official_model
         )
-        observation.official_trim = (
+        decision_observation.official_trim = (
             str(decided_official_trim).strip()
             if decided_official_trim
-            else observation.official_trim
+            else decision_observation.official_trim
         )
-        observation.match_status = "human_approved"
+        decision_observation.match_status = "human_approved"
         review_case.review_status = "approved"
-        review_case.official_model = observation.official_model
-        review_case.official_trim = observation.official_trim
-        review_case.official_edition = observation.official_edition
-        review_case.official_powertrain = observation.official_powertrain
-        review_case.jato_powertrain = observation.jato_powertrain
+        review_case.official_model = decision_observation.official_model
+        review_case.official_trim = decision_observation.official_trim
+        review_case.official_edition = decision_observation.official_edition
+        review_case.official_powertrain = (
+            decision_observation.official_powertrain
+        )
+        review_case.jato_powertrain = decision_observation.jato_powertrain
         mismatch_category = (
             str(data.get("mismatch_reason_category") or "").strip()
             or classify_mismatch_category(
@@ -484,10 +586,14 @@ def create_review_decision(
                 raw_official_trim=previous_official_trim,
                 raw_official_edition=previous_official_edition,
                 raw_official_powertrain=previous_official_powertrain,
-                resolved_official_model=observation.official_model,
-                resolved_official_trim=observation.official_trim,
-                resolved_official_edition=observation.official_edition,
-                resolved_official_powertrain=observation.official_powertrain,
+                resolved_official_model=decision_observation.official_model,
+                resolved_official_trim=decision_observation.official_trim,
+                resolved_official_edition=(
+                    decision_observation.official_edition
+                ),
+                resolved_official_powertrain=(
+                    decision_observation.official_powertrain
+                ),
                 resolver_kind="review_decision",
             )
         )
@@ -498,15 +604,15 @@ def create_review_decision(
         )
         link = upsert_jato_msrp_link(
             session,
-            country=observation.country,
-            brand=observation.brand,
-            jato_model=observation.jato_model,
-            jato_trim=observation.jato_trim,
-            jato_powertrain=observation.jato_powertrain,
-            official_model=observation.official_model,
-            official_trim=observation.official_trim,
-            official_edition=observation.official_edition,
-            official_powertrain=observation.official_powertrain,
+            country=decision_observation.country,
+            brand=decision_observation.brand,
+            jato_model=decision_observation.jato_model,
+            jato_trim=decision_observation.jato_trim,
+            jato_powertrain=decision_observation.jato_powertrain,
+            official_model=decision_observation.official_model,
+            official_trim=decision_observation.official_trim,
+            official_edition=decision_observation.official_edition,
+            official_powertrain=decision_observation.official_powertrain,
             confidence=int(data.get("link_confidence") or 100),
             link_source=str(
                 data.get("link_source") or HUMAN_REVIEW_LINK_SOURCE
@@ -523,7 +629,7 @@ def create_review_decision(
         )
         current_price = materialize_current_price_from_observation(
             session,
-            observation,
+            decision_observation,
         )
     elif decision_name == "reject":
         observation.match_status = "rejected"
@@ -536,30 +642,54 @@ def create_review_decision(
 
     review_case.current_assignee = decided_by
     review_case.updated_at_utc = _utc_now()
-    observation.updated_at_utc = _utc_now()
-    existing_reason = observation.match_reason_json or {}
+    decision_observation.updated_at_utc = _utc_now()
+    existing_reason = decision_observation.match_reason_json or {}
     if not isinstance(existing_reason, dict):
         existing_reason = {"previous": existing_reason}
     existing_reason["reviewDecision"] = decision_name
     existing_reason["reviewNote"] = data.get("note")
     existing_reason["decidedBy"] = decided_by
+    if accepted_source_observation is not None:
+        existing_reason["acceptedSourceObservation"] = {
+            "reviewCaseObservationId": str(observation.observation_id),
+            "acceptedObservationId": str(
+                accepted_source_observation.observation_id
+            ),
+            "acceptedSourceId": str(accepted_source_observation.source_id),
+        }
     if link is not None:
         existing_reason["linkId"] = str(link.link_id)
         if mismatch_category:
             existing_reason["mismatchCategory"] = mismatch_category
-    observation.match_reason_json = existing_reason
+    decision_observation.match_reason_json = existing_reason
+
+    if decision_observation is not observation:
+        observation.updated_at_utc = _utc_now()
+        original_reason = observation.match_reason_json or {}
+        if not isinstance(original_reason, dict):
+            original_reason = {"previous": original_reason}
+        original_reason["reviewDecision"] = decision_name
+        original_reason["reviewNote"] = data.get("note")
+        original_reason["decidedBy"] = decided_by
+        original_reason["acceptedSourceObservation"] = {
+            "acceptedObservationId": str(
+                decision_observation.observation_id
+            ),
+            "acceptedSourceId": str(decision_observation.source_id),
+        }
+        observation.match_reason_json = original_reason
 
     review_decision = ReviewDecision(
         review_case_id=review_case.review_case_id,
         observation_id=observation.observation_id,
         decision=decision_name,
         decided_official_model=(
-            observation.official_model
+            decision_observation.official_model
             if decision_name in {"approve", "remap"}
             else None
         ),
         decided_official_trim=(
-            observation.official_trim
+            decision_observation.official_trim
             if decision_name in {"approve", "remap"}
             else None
         ),
@@ -575,16 +705,18 @@ def create_review_decision(
                 detail="persist_override only applies to approve/remap",
             )
         override = MatchOverride(
-            country=observation.country,
-            brand=observation.brand,
-            jato_model=observation.jato_model,
-            jato_trim=observation.jato_trim,
-            jato_powertrain=str(observation.jato_powertrain or "").strip(),
-            official_model=observation.official_model,
-            official_trim=observation.official_trim,
+            country=decision_observation.country,
+            brand=decision_observation.brand,
+            jato_model=decision_observation.jato_model,
+            jato_trim=decision_observation.jato_trim,
+            jato_powertrain=str(
+                decision_observation.jato_powertrain or ""
+            ).strip(),
+            official_model=decision_observation.official_model,
+            official_trim=decision_observation.official_trim,
             valid_from_date=(
                 data.get("valid_from_date")
-                or observation.observed_at_utc.date()
+                or decision_observation.observed_at_utc.date()
             ),
             valid_to_date=None,
             override_reason=(
@@ -610,9 +742,17 @@ def create_review_decision(
         session.refresh(link)
 
     source = msrp_repository.get_source(session, observation.source_id)
-    current_price_source = (
-        msrp_repository.get_source(session, observation.source_id)
+    current_price_observation = (
+        msrp_repository.get_observation(
+            session,
+            current_price.effective_observation_id,
+        )
         if current_price is not None
+        else None
+    )
+    current_price_source = (
+        msrp_repository.get_source(session, current_price_observation.source_id)
+        if current_price_observation is not None
         else None
     )
 
@@ -620,6 +760,11 @@ def create_review_decision(
         "reviewCase": review_case_payload(review_case, observation, source),
         "decision": review_decision_payload(review_decision),
         "observation": observation_payload(observation),
+        "acceptedObservation": (
+            observation_payload(accepted_source_observation)
+            if accepted_source_observation is not None
+            else None
+        ),
         "currentPrice": (
             current_price_payload(current_price, current_price_source)
             if current_price is not None

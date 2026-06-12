@@ -84,23 +84,44 @@ profile:
     - key: powertrain_phev
       powertrain: PHEV
       keywords:
-      - TODO_PHEV_KEYWORD
+      - phev
+      - plug-in hybrid
+      - plug in hybrid
+      - plugin hybrid
+      - hibrid plug-in
     - key: powertrain_hev
       powertrain: HEV
       keywords:
-      - TODO_HEV_KEYWORD
+      - hev
+      - full hybrid
+      - self-charging hybrid
+      - self charging hybrid
+      - hybrid
+      - hibrid
     - key: powertrain_mhev
       powertrain: MHEV
       keywords:
-      - TODO_MHEV_KEYWORD
+      - mhev
+      - mild hybrid
+      - mild-hybrid
+      - 48V
+      - hibrid usor
     - key: powertrain_ice
       powertrain: ICE
       keywords:
-      - TODO_ICE_KEYWORD
+      - ice
+      - petrol
+      - gasoline
+      - diesel
+      - combustion
+      - benzina
+      - motorina
     - key: powertrain_lpg
       powertrain: LPG
       keywords:
-      - TODO_LPG_KEYWORD
+      - lpg
+      - autogas
+      - GPL
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98

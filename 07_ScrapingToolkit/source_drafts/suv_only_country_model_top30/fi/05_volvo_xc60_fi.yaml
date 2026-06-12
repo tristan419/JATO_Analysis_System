@@ -1,28 +1,32 @@
 source_code: volvo_xc60_fi_draft_scrapling
 country: 芬兰
 brand: VOLVO
-source_url: https://www.volvocars.com/fi/cars/xc60/
+source_url: https://www.volvocars.com/fi/build/xc60-hybrid/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.volvocars.com/fi/cars/xc60/
+  url: https://www.volvocars.com/fi/build/xc60-hybrid/
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
   json_script_selector: script[type='application/ld+json']
   css:
-    vehicle_container: body
-    model: h1
-    trim: '[class*="variant"], [class*="trim"], h2'
-    price: '[class*="price"], [data-automation*="price"]'
+    vehicle_container: '[data-testid="stage-level:container"] [data-testid="selection-card"]'
+    model: ''
+    trim: '[data-testid="title"]'
+    price: '[data-testid="price"]'
+    exclude_if_selector: '[data-testid="selection-card-unavailable"]'
+  exclude_price_prefixes:
+  - 'Alkaen '
+  - Leasing
   default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
   fixed_model: XC60
   fixed_jato_model: XC60
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: PHEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -77,15 +81,23 @@ profile:
     - key: powertrain_phev
       powertrain: PHEV
       keywords:
-      - TODO_PHEV_KEYWORD
+      - xc60
+      - plug-in hybrid
+      - hybrid
+      - t6
+      - t8
+      - recharge
     - key: powertrain_mhev
       powertrain: MHEV
       keywords:
-      - TODO_MHEV_KEYWORD
+      - mild hybrid
+      - mhev
     - key: powertrain_ice
       powertrain: ICE
       keywords:
-      - TODO_ICE_KEYWORD
+      - bensiini
+      - petrol
+      - diesel
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98

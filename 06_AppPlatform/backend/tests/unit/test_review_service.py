@@ -259,6 +259,214 @@ def test_create_review_decision_persists_link_and_mismatch_category(
     assert payload["link"]["officialTrim"] == "Ultra Dark"
 
 
+def test_create_review_decision_approves_selected_source_observation(
+    monkeypatch,
+) -> None:
+    review_case_id = uuid4()
+    original_observation_id = uuid4()
+    selected_observation_id = uuid4()
+    original_source_id = uuid4()
+    selected_source_id = uuid4()
+    now = datetime(2026, 6, 12, 9, 20, tzinfo=timezone.utc)
+    review_case = SimpleNamespace(
+        review_case_id=review_case_id,
+        observation_id=original_observation_id,
+        candidate_matches_json=[
+            {
+                "candidateType": "source_observation",
+                "observationId": str(original_observation_id),
+                "sourceId": str(original_source_id),
+                "msrpValue": 50000,
+            },
+            {
+                "candidateType": "source_observation",
+                "observationId": str(selected_observation_id),
+                "sourceId": str(selected_source_id),
+                "msrpValue": 53000,
+            },
+        ],
+        review_status="open",
+        current_assignee=None,
+        official_model="ConflictProbe",
+        official_trim="Base",
+        official_edition=None,
+        official_powertrain="BEV",
+        jato_powertrain="BEV",
+        updated_at_utc=now,
+    )
+    original_observation = SimpleNamespace(
+        observation_id=original_observation_id,
+        source_id=original_source_id,
+        country="瑞典",
+        brand="CodexReview",
+        jato_model="ConflictProbe",
+        jato_trim="Base",
+        jato_powertrain="BEV",
+        official_model="ConflictProbe",
+        official_trim="Base",
+        official_edition=None,
+        official_powertrain="BEV",
+        observed_at_utc=now,
+        match_status="auto_accepted",
+        match_reason_json={},
+        updated_at_utc=now,
+    )
+    selected_observation = SimpleNamespace(
+        observation_id=selected_observation_id,
+        source_id=selected_source_id,
+        country="瑞典",
+        brand="CodexReview",
+        jato_model="ConflictProbe",
+        jato_trim="Base",
+        jato_powertrain="BEV",
+        official_model="ConflictProbe",
+        official_trim="Base",
+        official_edition=None,
+        official_powertrain="BEV",
+        observed_at_utc=now,
+        match_status="auto_accepted",
+        match_reason_json={},
+        updated_at_utc=now,
+    )
+    source_by_id = {
+        original_source_id: SimpleNamespace(
+            source_id=original_source_id,
+            source_code="primary",
+        ),
+        selected_source_id: SimpleNamespace(
+            source_id=selected_source_id,
+            source_code="pdf",
+        ),
+    }
+    link = SimpleNamespace(
+        link_id=uuid4(),
+        official_trim="Base",
+    )
+    current_price = SimpleNamespace(
+        current_price_id=uuid4(),
+        effective_observation_id=selected_observation_id,
+    )
+    added_decisions = []
+    materialized = []
+
+    monkeypatch.setattr(
+        review_service.repo,
+        "get_review_case",
+        lambda *args, **kwargs: review_case,
+    )
+
+    def _get_observation(_session, observation_id):
+        if observation_id == original_observation_id:
+            return original_observation
+        if observation_id == selected_observation_id:
+            return selected_observation
+        return None
+
+    monkeypatch.setattr(
+        review_service.msrp_repository,
+        "get_observation",
+        _get_observation,
+    )
+    monkeypatch.setattr(
+        review_service.msrp_repository,
+        "get_source",
+        lambda _session, source_id: source_by_id.get(source_id),
+    )
+    monkeypatch.setattr(
+        review_service,
+        "materialize_current_price_from_observation",
+        lambda _session, observation: (
+            materialized.append(observation) or current_price
+        ),
+    )
+    monkeypatch.setattr(
+        review_service.repo,
+        "add_review_decision",
+        lambda _session, decision: added_decisions.append(decision),
+    )
+    monkeypatch.setattr(
+        review_service,
+        "_commit_or_conflict",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        review_service,
+        "upsert_jato_msrp_link",
+        lambda *args, **kwargs: link,
+    )
+    monkeypatch.setattr(
+        review_service,
+        "review_case_payload",
+        lambda case, obs, src: {
+            "reviewCaseId": str(case.review_case_id),
+            "observationId": str(obs.observation_id),
+            "sourceCode": src.source_code,
+        },
+    )
+    monkeypatch.setattr(
+        review_service,
+        "review_decision_payload",
+        lambda decision: {
+            "observationId": str(decision.observation_id),
+            "decision": decision.decision,
+        },
+    )
+    monkeypatch.setattr(
+        review_service,
+        "observation_payload",
+        lambda observation: {
+            "observationId": str(observation.observation_id),
+            "matchStatus": observation.match_status,
+        },
+    )
+    monkeypatch.setattr(
+        review_service,
+        "current_price_payload",
+        lambda price, source: {
+            "currentPriceId": str(price.current_price_id),
+            "sourceCode": source.source_code,
+        },
+    )
+    monkeypatch.setattr(
+        review_service,
+        "override_payload",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        review_service,
+        "jato_msrp_link_payload",
+        lambda item: {"linkId": str(item.link_id)},
+    )
+
+    payload = review_service.create_review_decision(
+        SimpleNamespace(refresh=lambda *args, **kwargs: None),
+        str(review_case_id),
+        {
+            "decision": "approve",
+            "accepted_observation_id": str(selected_observation_id),
+            "decided_by": "analyst",
+            "note": "Use the official PDF value",
+        },
+    )
+
+    assert review_case.review_status == "approved"
+    assert selected_observation.match_status == "human_approved"
+    assert original_observation.match_status == "auto_accepted"
+    assert materialized == [selected_observation]
+    assert len(added_decisions) == 1
+    assert added_decisions[0].observation_id == original_observation_id
+    assert selected_observation.match_reason_json[
+        "acceptedSourceObservation"
+    ]["acceptedObservationId"] == str(selected_observation_id)
+    assert original_observation.match_reason_json[
+        "acceptedSourceObservation"
+    ]["acceptedObservationId"] == str(selected_observation_id)
+    assert payload["acceptedObservation"]["observationId"] == str(
+        selected_observation_id
+    )
+    assert payload["currentPrice"]["sourceCode"] == "pdf"
+
+
 def test_auto_resolve_review_cases_approves_link_backed_open_cases(
     monkeypatch,
 ) -> None:

@@ -1,28 +1,29 @@
 source_code: renault_scenic_dk_draft_scrapling
 country: 丹麦
 brand: RENAULT
-source_url: https://www.renault.dk/hybrid/captur-suv.html
+source_url: https://www.renault.dk/biler/elbiler/scenic-e-tech-electric
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.renault.dk/hybrid/captur-suv.html
+  url: https://www.renault.dk/biler/elbiler/scenic-e-tech-electric
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: script
+    entry_patterns:
+    - pattern: '"title":\{"value":"Scenic E-Tech electric"\},"price":\{"value":"(?P<price>\d+)"\},"isCampaign":\{"boolValue":false\}.*?"url":"/biler/elbiler/scenic-e-tech-electric"'
+      official_trim: Entry
+      official_powertrain: BEV
+      price_label: fra
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: fra
   fixed_model: SCENIC
   fixed_jato_model: SCENIC
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -69,7 +70,9 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - Scenic E-Tech electric
+      - electric
+      - elbiler
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -82,10 +85,8 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from RENAULT template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+notes: Draft source repaired to Renault Denmark's current Scenic E-Tech electric
+  page. The page embeds Sitecore car data with a non-campaign entry price.
 bootstrap_meta:
   country_model_rank: 16
   suggested_scope_kind: single_model

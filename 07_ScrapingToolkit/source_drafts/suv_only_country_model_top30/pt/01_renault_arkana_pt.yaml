@@ -72,11 +72,20 @@ profile:
     - key: powertrain_hev
       powertrain: HEV
       keywords:
-      - TODO_HEV_KEYWORD
+      - hev
+      - full hybrid
+      - self-charging hybrid
+      - self charging hybrid
+      - hybrid
+      - hibrido
     - key: powertrain_mhev
       powertrain: MHEV
       keywords:
-      - TODO_MHEV_KEYWORD
+      - mhev
+      - mild hybrid
+      - mild-hybrid
+      - 48V
+      - hibrido ligeiro
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98

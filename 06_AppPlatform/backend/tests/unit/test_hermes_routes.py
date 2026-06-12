@@ -45,6 +45,52 @@ def _write_json(path: Path, data) -> None:
     path.write_text(json.dumps(data))
 
 
+def _make_msrp_v3_report(run_id: str = "msrp-dryrun-20260611-120000") -> dict:
+    return {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": run_id,
+        "batch": "batch_a",
+        "expectedCountries": ["fi"],
+        "observedCountries": ["fi"],
+        "missingCountries": [],
+        "duplicateCountries": [],
+        "summary": {
+            "total": 30,
+            "pass": 27,
+            "empty": 3,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 90.0,
+            "status": "success",
+            "gateThreshold": 70,
+            "gateStatus": "allowed",
+        },
+        "countriesDetail": [
+            {
+                "countryCode": "fi",
+                "total": 30,
+                "pass": 27,
+                "empty": 3,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 90.0,
+                "status": "success",
+                "failureBreakdown": {
+                    "no_observation_extracted": 2,
+                    "forbidden_403": 1,
+                },
+                "strategyRecommendations": {
+                    "diagnose_with_msrp_page_analyzer": 2,
+                    "manual_review_or_proxy_required": 1,
+                },
+                "sources": [],
+            }
+        ],
+        "results": [],
+        "generatedAt": "2026-06-11T12:00:00Z",
+    }
+
+
 # ── /hermes/sentinel + deploy status ─────────────────────────────────
 
 class TestSentinelAndDeploy:
@@ -135,6 +181,66 @@ class TestSentinelAndDeploy:
         data = resp.json()
         assert data["pipelineId"] == "msrp_ingest"
         assert data["status"] == "missing"
+
+    def test_msrp_country_progress_falls_back_to_latest_dryrun_artifact(self, client, tmp_path):
+        reports_dir = tmp_path / "hermes" / "reports"
+        artifact_dir = tmp_path / "03_Scripts" / "diagnostics" / "artifacts"
+        stale_progress = {
+            "probe": "pipeline.msrp_country_progress",
+            "overall": "critical",
+            "status": {},
+            "countries": [],
+            "topBlockingCountries": [],
+            "topFailureReasons": [],
+            "findings": [{"type": "no_dryrun_report", "severity": "critical"}],
+        }
+        _write_json(reports_dir / "msrp_country_progress.json", stale_progress)
+        _write_json(artifact_dir / "dryrun_report.json", _make_msrp_v3_report())
+        _write_json(artifact_dir / "msrp_source_repair_backlog.json", {
+            "schemaVersion": "msrp_source_repair_backlog_v1",
+            "runId": "msrp-dryrun-20260611-120000",
+            "totalIssueCount": 3,
+            "groups": [],
+        })
+
+        with patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path), patch(
+            "app.api.routes.hermes.REPORTS_DIR",
+            reports_dir,
+        ):
+            resp = client.get("/hermes/msrp-country-progress")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"]["runId"] == "msrp-dryrun-20260611-120000"
+        assert data["overall"] == "ok"
+        assert data["countries"][0]["countryCode"] == "fi"
+        assert data["countries"][0]["passPct"] == 90.0
+        assert data["topFailureReasons"][0] == {
+            "reason": "no_observation_extracted",
+            "count": 2,
+        }
+        assert data["sourceRepairBacklog"]["totalIssueCount"] == 3
+
+    def test_msrp_country_progress_run_id_falls_back_to_historical_dryrun_artifact(
+        self,
+        client,
+        tmp_path,
+    ):
+        reports_dir = tmp_path / "hermes" / "reports"
+        artifact_dir = tmp_path / "03_Scripts" / "diagnostics" / "artifacts"
+        run_id = "msrp-dryrun-20260611-130000"
+        _write_json(artifact_dir / f"dryrun_report_{run_id}.json", _make_msrp_v3_report(run_id))
+
+        with patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path), patch(
+            "app.api.routes.hermes.REPORTS_DIR",
+            reports_dir,
+        ):
+            resp = client.get(f"/hermes/msrp-country-progress?run_id={run_id}")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"]["runId"] == run_id
+        assert data["countries"][0]["countryCode"] == "fi"
 
 
 # ── /hermes/gaps ──────────────────────────────────────────────────────

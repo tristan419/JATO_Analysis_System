@@ -1,93 +1,73 @@
 source_code: kia_ev6_dk_draft_scrapling
 country: 丹麦
 brand: KIA
-source_url: https://www.kia.com/dk/nye-biler/ev6/opdag/
-source_type: manufacturer_official
+source_url: https://www.kia.com/dk/modeller/ev6/prisliste/
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.kia.com/dk/nye-biler/ev6/opdag/
-  headless: true
+  url: https://api.kiaonline.dk/dokumenter/ev6-priser.pdf
+  timeout_seconds: 60
+  retry_attempts: 3
+  retry_delay_seconds: 1.0
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Normalpris inkl. leveringsomkostninger
   fixed_model: EV6
   fixed_jato_model: EV6
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: BEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - TODO_BEV_KEYWORD
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.84
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_kia_dk_prisliste
+    note: Official Kia Denmark EV6 price-list PDF exposes campaign prices and normal prices; this source captures the normal/base MSRP line.
+  entry_patterns:
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Access\s+Standard Range \(RWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+    official_trim: Access Standard Range
+    official_powertrain: BEV
+    jato_powertrain: BEV
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Access\s+Standard Range \(RWD\).*?Long Range \(RWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+    official_trim: Access Long Range
+    official_powertrain: BEV
+    jato_powertrain: BEV
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Prestige\s+Standard Range \(RWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+    official_trim: Prestige Standard Range
+    official_powertrain: BEV
+    jato_powertrain: BEV
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Prestige\s+Standard Range \(RWD\).*?Long Range \(RWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+    official_trim: Prestige Long Range
+    official_powertrain: BEV
+    jato_powertrain: BEV
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Upgrade\s+Long Range \(RWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+    official_trim: Upgrade Long Range
+    official_powertrain: BEV
+    jato_powertrain: BEV
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Upgrade\s+Long Range \(RWD\).*?Long Range Performance \(AWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+    official_trim: Upgrade Long Range Performance
+    official_powertrain: BEV
+    jato_powertrain: BEV
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?GT-Line\s+Long Range \(RWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+    official_trim: GT-Line Long Range
+    official_powertrain: BEV
+    jato_powertrain: BEV
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?GT-Line\s+Long Range \(RWD\).*?Long Range Performance \(AWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+    official_trim: GT-Line Long Range Performance
+    official_powertrain: BEV
+    jato_powertrain: BEV
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?GT\s+Long Range Performance \(AWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+    official_trim: GT Long Range Performance
+    official_powertrain: BEV
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from KIA template] [URL
-  language corrected] [CSS selectors applied from brand probe] [Switched to playwright_card_flow
-  with kia_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset
-  needs per-brand tuning]
+notes: Draft source repaired to use Kia Denmark's official EV6 prisliste PDF.
+  The PDF contains active campaign prices plus normal prices; regexes capture the
+  normal/base MSRP value after the campaign price and are anchored to Modelprogram.
 bootstrap_meta:
   country_model_rank: 26
   suggested_scope_kind: single_model

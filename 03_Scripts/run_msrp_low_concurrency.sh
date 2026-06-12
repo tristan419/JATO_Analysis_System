@@ -17,8 +17,8 @@ load_env_file() {
 }
 
 is_truthy() {
-  case "${1,,}" in
-    1|true|yes|on) return 0 ;;
+  case "$1" in
+    1|true|TRUE|True|yes|YES|Yes|on|ON|On) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -78,6 +78,12 @@ AUTO_MATERIALIZE="${JATO_MSRP_AUTO_MATERIALIZE:-true}"
 AUTO_REVIEW_LIMIT="${JATO_MSRP_AUTO_REVIEW_LIMIT:-500}"
 MATERIALIZE_LIMIT="${JATO_MSRP_MATERIALIZE_LIMIT:-500}"
 AUTO_REVIEW_DECIDED_BY="${JATO_AUTO_REVIEW_DECIDED_BY:-${APP_USER_NAME:-msrp-cron}}"
+REFRESH_CURRENT_SNAPSHOT="${JATO_MSRP_REFRESH_CURRENT_SNAPSHOT:-true}"
+CURRENT_SNAPSHOT_LIMIT="${JATO_MSRP_CURRENT_SNAPSHOT_LIMIT:-500}"
+CURRENT_SNAPSHOT_THRESHOLD_PCT="${JATO_MSRP_PRICE_ALERT_THRESHOLD_PCT:-3}"
+CURRENT_SNAPSHOT_TIMEOUT_SECONDS="${JATO_MSRP_CURRENT_SNAPSHOT_TIMEOUT_SECONDS:-30}"
+REFRESH_READINESS_AUDIT="${JATO_MSRP_REFRESH_READINESS_AUDIT:-true}"
+READINESS_AUDIT_TIMEOUT_SECONDS="${JATO_MSRP_READINESS_AUDIT_TIMEOUT_SECONDS:-30}"
 export NVAPI_KEY="${NVAPI_KEY:-${NVIDIA_API_KEY:-}}"
 
 # ── Dryrun-to-ingest gate ──────────────────────────────────────────
@@ -151,7 +157,10 @@ if command -v flock >/dev/null 2>&1; then
   fi
 fi
 
-mapfile -t COUNTRIES < <(resolve_countries "$COUNTRIES_RAW")
+COUNTRIES=()
+while IFS= read -r country; do
+  COUNTRIES+=("$country")
+done < <(resolve_countries "$COUNTRIES_RAW")
 if [[ "${#COUNTRIES[@]}" -eq 0 ]]; then
   echo "[ERROR] No countries resolved from JATO_MSRP_COUNTRIES=$COUNTRIES_RAW" >&2
   exit 1
@@ -170,13 +179,15 @@ echo "[INFO] API base: $JATO_API_BASE"
 echo "[INFO] Log file: $LOG_FILE"
 echo "[INFO] Auto review: $AUTO_REVIEW"
 echo "[INFO] Auto materialize: $AUTO_MATERIALIZE"
+echo "[INFO] Refresh current price snapshot: $REFRESH_CURRENT_SNAPSHOT"
+echo "[INFO] Refresh MSRP readiness audit: $REFRESH_READINESS_AUDIT"
 
 total="${#COUNTRIES[@]}"
 active=0
 country_idx=0
 failures=0
 declare -a pids=()
-declare -A pid_country=()
+declare -a pid_countries=()
 
 while (( country_idx < total || active > 0 )); do
   while (( active < CONCURRENCY && country_idx < total )); do
@@ -202,7 +213,11 @@ while (( country_idx < total || active > 0 )); do
       export JATO_MSRP_RUN_DIR="$RUN_DIR"
       export JATO_MSRP_CHILD_RUN="true"
 
-      if "$PYTHON_BIN" "$TARGET_SCRIPT" "$country" "${extra_args[@]}"; then
+      cmd=("$PYTHON_BIN" "$TARGET_SCRIPT" "$country")
+      if [[ "${#extra_args[@]}" -gt 0 ]]; then
+        cmd+=("${extra_args[@]}")
+      fi
+      if "${cmd[@]}"; then
         echo "[OK] country=$country"
         exit 0
       else
@@ -212,46 +227,30 @@ while (( country_idx < total || active > 0 )); do
     ) > "$country_log" 2>&1 &
 
     pids+=($!)
-    pid_country[$!]="$country"
+    pid_countries+=("$country")
     active=$((active + 1))
     country_idx=$((country_idx + 1))
   done
 
   if (( active > 0 )); then
-    if wait -n "${pids[@]}" 2>/dev/null; then
-      finished_pid=$!
-    else
-      for pid in "${pids[@]}"; do
-        if ! kill -0 "$pid" 2>/dev/null; then
-          finished_pid=$pid
-          break
-        fi
-      done
-    fi
-
-    new_pids=()
-    for pid in "${pids[@]}"; do
-      if [[ "$pid" == "$finished_pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
-        wait "$pid" 2>/dev/null && true
-        rc=$?
-        finished_country="${pid_country[$pid]:-?}"
-        if [[ $rc -ne 0 ]]; then
-          failures=$((failures + 1))
-          if is_truthy "$STOP_ON_FAILURE"; then
-            echo "[INFO] Stopping because JATO_MSRP_STOP_ON_FAILURE=true"
-            for rpid in "${new_pids[@]}"; do
-              kill "$rpid" 2>/dev/null || true
-            done
-            wait 2>/dev/null
-            exit 1
-          fi
-        fi
-        active=$((active - 1))
-      else
-        new_pids+=("$pid")
+    pid="${pids[0]}"
+    finished_country="${pid_countries[0]:-?}"
+    rc=0
+    wait "$pid" 2>/dev/null || rc=$?
+    if [[ $rc -ne 0 ]]; then
+      failures=$((failures + 1))
+      if is_truthy "$STOP_ON_FAILURE"; then
+        echo "[INFO] Stopping because JATO_MSRP_STOP_ON_FAILURE=true"
+        for rpid in "${pids[@]:1}"; do
+          kill "$rpid" 2>/dev/null || true
+        done
+        wait 2>/dev/null || true
+        exit 1
       fi
-    done
-    pids=("${new_pids[@]}")
+    fi
+    pids=("${pids[@]:1}")
+    pid_countries=("${pid_countries[@]:1}")
+    active=$((active - 1))
   fi
 done
 
@@ -331,6 +330,35 @@ with open(status_dir + '/msrp_dryrun.json', 'w') as f:
     f.write(json.dumps(status_record, indent=2) + chr(10))
 print('[status] msrp_dryrun written')
 " 2>&1 || true
+  fi
+fi
+
+CURRENT_SNAPSHOT_SCRIPT="$SCRIPT_DIR/hermes/hermes_msrp_current_price_snapshot.py"
+if is_truthy "$REFRESH_CURRENT_SNAPSHOT" && [[ -f "$CURRENT_SNAPSHOT_SCRIPT" ]]; then
+  echo "[INFO] Refreshing Hermes MSRP current price snapshot..."
+  if "$PYTHON_BIN" "$CURRENT_SNAPSHOT_SCRIPT" \
+    --api-base "$JATO_API_BASE" \
+    --out-dir "$REPO_DIR/hermes/reports" \
+    --limit "$CURRENT_SNAPSHOT_LIMIT" \
+    --threshold-pct "$CURRENT_SNAPSHOT_THRESHOLD_PCT" \
+    --timeout-seconds "$CURRENT_SNAPSHOT_TIMEOUT_SECONDS" 2>&1; then
+    echo "[INFO] Hermes MSRP current price snapshot refreshed"
+  else
+    echo "[WARN] Hermes MSRP current price snapshot refresh failed (non-fatal)"
+  fi
+fi
+
+READINESS_AUDIT_SCRIPT="$SCRIPT_DIR/diagnostics/msrp_readiness_audit.py"
+if is_truthy "$REFRESH_READINESS_AUDIT" && [[ -f "$READINESS_AUDIT_SCRIPT" ]]; then
+  echo "[INFO] Refreshing MSRP readiness audit..."
+  if "$PYTHON_BIN" "$READINESS_AUDIT_SCRIPT" \
+    --api-base "$JATO_API_BASE" \
+    --out-dir "$REPO_DIR/hermes/reports" \
+    --write-status \
+    --timeout-seconds "$READINESS_AUDIT_TIMEOUT_SECONDS" 2>&1; then
+    echo "[INFO] MSRP readiness audit refreshed"
+  else
+    echo "[WARN] MSRP readiness audit refresh failed (non-fatal)"
   fi
 fi
 

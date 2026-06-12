@@ -1,27 +1,30 @@
 source_code: audi_q4_e_tron_fi_draft_scrapling
 country: 芬兰
 brand: AUDI
-source_url: https://www.audi.fi/no/web/no/mallit/q4-e-tron.html
+source_url: https://www.audi.fi/fi/models/q4-e-tron/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.audi.fi/no/web/no/mallit/q4-e-tron.html
-  tier: stealth
+  url: https://www.audi.fi/fi/models/q4-e-tron/
+  tier: http
   headless: true
   network_idle: true
   impersonate: chrome
   css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+    vehicle_container: div[class*="CarlineCard__HeadingSection"]
+    model: h3, h4, a
+    trim: h3, h4
+    price: span[class*="Price__StyledPrice"], span[class*="Price__PriceWrapper"], span
+    include_if_text_contains:
+    - q4 e-tron
+    - alkaen
   default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
   fixed_model: Q4 E-TRON
   fixed_jato_model: Q4 E-TRON
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -68,7 +71,10 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - q4 e-tron
+      - e-tron
+      - sähkö
+      - electric
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98

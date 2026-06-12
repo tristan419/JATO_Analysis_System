@@ -326,3 +326,103 @@ countries:
         feed_url: https://www.boosted.dk/feed/
         language: da
         tags: [market, automotive, local]
+  - country_code: DE
+    country_label: Germany / 德国
+    feeds:
+      - source_code: de_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Germany+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+      - source_code: de_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Germany, German]
+      - source_code: de_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Germany, German]
+      - source_code: de_auto_motor_sport_market
+        publisher: Auto Motor und Sport
+        feed_url: https://news.google.com/rss/search?q=site%3Aauto-motor-und-sport.de+Elektroauto+Deutschland&hl=de&gl=DE&ceid=DE:de
+        language: de
+        tags: [market, automotive, local]
+  - country_code: FR
+    country_label: France / 法国
+    feeds:
+      - source_code: fr_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=France+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+      - source_code: fr_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [France, French]
+      - source_code: fr_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [France, French]
+      - source_code: fr_largus_auto_market
+        publisher: L'Argus
+        feed_url: https://news.google.com/rss/search?q=site%3Alargus.fr+voiture+electrique+France&hl=fr&gl=FR&ceid=FR:fr
+        language: fr
+        tags: [market, automotive, local]
+  - country_code: IT
+    country_label: Italy / 意大利
+    feeds:
+      - source_code: it_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Italy+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+      - source_code: it_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Italy, Italian]
+      - source_code: it_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Italy, Italian]
+      - source_code: it_vaielettrico_ev_market
+        publisher: Vaielettrico
+        feed_url: https://www.vaielettrico.it/feed/
+        language: it
+        tags: [market, ev, local]
+  - country_code: PL
+    country_label: Poland / 波兰
+    feeds:
+      - source_code: pl_google_auto_market
+        publisher: Google News
+        feed_url: https://news.google.com/rss/search?q=Poland+car+market+EV+subsidy&hl=en-GB&gl=GB&ceid=GB:en
+        language: en
+        tags: [market, policy, automotive]
+      - source_code: pl_acea_auto_policy
+        publisher: ACEA
+        feed_url: https://www.acea.auto/feed/
+        language: en
+        tags: [association, policy, automotive]
+        include_keywords: [Poland, Polish]
+      - source_code: pl_transport_environment_policy
+        publisher: Transport & Environment
+        feed_url: https://www.transportenvironment.org/articles/rss
+        language: en
+        tags: [policy, regulation, automotive]
+        include_keywords: [Poland, Polish]
+      - source_code: pl_autocentrum_auto_market
+        publisher: AutoCentrum
+        feed_url: https://www.autocentrum.pl/rss/
+        language: pl
+        tags: [market, automotive, local]

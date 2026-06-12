@@ -9,10 +9,16 @@ from app.api.schemas import (
 from app.core.security import require_min_role
 from app.db.session import get_db_session
 from app.services.msrp_workflow_service import (
+    build_current_price_snapshot,
+    build_multi_source_reconciliation,
+    build_price_sales_effectiveness,
     create_scrape_batch_ingest,
+    list_current_price_alerts,
     list_current_prices,
+    list_finance_observations,
     list_price_history,
     materialize_current_prices,
+    queue_reconciliation_conflicts_for_review,
     remap_current_price,
 )
 
@@ -45,6 +51,148 @@ def get_current_prices(
         jato_model,
         limit,
         offset,
+    )
+
+
+@router.get("/finance-observations")
+def get_finance_observations(
+    country: str | None = Query(default=None),
+    brand: str | None = Query(default=None),
+    jato_model: str | None = Query(default=None),
+    price_semantics: str | None = Query(default=None),
+    finance_type: str | None = Query(default=None),
+    has_monthly_payment: bool | None = Query(default=None),
+    has_subsidy: bool | None = Query(default=None),
+    has_net_price_after_subsidy: bool | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("viewer")),
+) -> dict[str, object]:
+    return list_finance_observations(
+        session,
+        country,
+        brand,
+        jato_model,
+        price_semantics,
+        finance_type,
+        has_monthly_payment,
+        has_subsidy,
+        has_net_price_after_subsidy,
+        limit,
+        offset,
+    )
+
+
+@router.get("/reconciliation")
+def get_multi_source_reconciliation(
+    country: str | None = Query(default=None),
+    brand: str | None = Query(default=None),
+    jato_model: str | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=5000),
+    threshold_pct: float = Query(default=1.0, ge=0.0, le=50.0),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("viewer")),
+) -> dict[str, object]:
+    return build_multi_source_reconciliation(
+        session,
+        country,
+        brand,
+        jato_model,
+        limit,
+        threshold_pct,
+    )
+
+
+@router.post("/reconciliation/review-cases")
+def post_reconciliation_review_cases(
+    country: str | None = Query(default=None),
+    brand: str | None = Query(default=None),
+    jato_model: str | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=5000),
+    threshold_pct: float = Query(default=1.0, ge=0.0, le=50.0),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": queue_reconciliation_conflicts_for_review(
+            session,
+            country,
+            brand,
+            jato_model,
+            limit,
+            threshold_pct,
+        )
+    }
+
+
+@router.get("/effectiveness")
+def get_price_sales_effectiveness(
+    country: str | None = Query(default=None),
+    brand: str | None = Query(default=None),
+    jato_model: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    threshold_pct: float = Query(default=3.0, ge=0.0, le=50.0),
+    baseline_window_months: int = Query(default=3, ge=1, le=12),
+    post_window_months: int = Query(default=3, ge=1, le=12),
+    post_lag_months: int = Query(default=1, ge=0, le=12),
+    min_months: int = Query(default=1, ge=1, le=12),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("viewer")),
+) -> dict[str, object]:
+    return build_price_sales_effectiveness(
+        session,
+        country,
+        brand,
+        jato_model,
+        limit,
+        baseline_window_months,
+        post_window_months,
+        post_lag_months,
+        min_months,
+        threshold_pct=threshold_pct,
+    )
+
+
+@router.get("/current-prices/snapshot")
+def get_current_price_snapshot(
+    country: str | None = Query(default=None),
+    brand: str | None = Query(default=None),
+    jato_model: str | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=500),
+    threshold_pct: float = Query(default=3.0, ge=0.0, le=50.0),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("viewer")),
+) -> dict[str, object]:
+    return build_current_price_snapshot(
+        session,
+        country,
+        brand,
+        jato_model,
+        limit,
+        threshold_pct,
+    )
+
+
+@router.get("/current-prices/alerts")
+def get_current_price_alerts(
+    country: str | None = Query(default=None),
+    brand: str | None = Query(default=None),
+    jato_model: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    threshold_pct: float = Query(default=3.0, ge=0.0, le=50.0),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("viewer")),
+) -> dict[str, object]:
+    return list_current_price_alerts(
+        session,
+        country,
+        brand,
+        jato_model,
+        limit,
+        offset,
+        threshold_pct,
     )
 
 

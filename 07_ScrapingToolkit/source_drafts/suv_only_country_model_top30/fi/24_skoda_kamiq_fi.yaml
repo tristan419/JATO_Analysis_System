@@ -1,19 +1,19 @@
 source_code: skoda_kamiq_fi_draft_scrapling
 country: 芬兰
 brand: SKODA
-source_url: https://www.skoda.fi/mallisto/kamiq
+source_url: https://www.skoda.fi/autot/kamiq/kamiq
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.skoda.fi/mallisto/kamiq
+  url: https://www.skoda.fi/autot/kamiq/kamiq
   headless: true
   default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
   fixed_model: KAMIQ
   fixed_jato_model: KAMIQ
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: ICE
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -60,7 +60,10 @@ profile:
     - key: powertrain_ice
       powertrain: ICE
       keywords:
-      - TODO_ICE_KEYWORD
+      - kamiq
+      - tsi
+      - bensiini
+      - petrol
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -68,12 +71,7 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
-  json_script_selector: script[type="application/json"]
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
+  json_script_selector: script[type='application/ld+json']
   tier: stealth
   network_idle: true
   impersonate: chrome

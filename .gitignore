@@ -26,6 +26,23 @@ venv/
 
 # local script logs
 03_Scripts/logs/
+03_Scripts/diagnostics/artifacts/dryrun_report_*.json
+03_Scripts/diagnostics/artifacts/dryrun_runs_index.json
+03_Scripts/diagnostics/artifacts/msrp_source_repair_backlog.*
+07_ScrapingToolkit/artifacts/
+hermes/reports/msrp_country_progress*.json
+hermes/reports/msrp_country_progress*.md
+hermes/reports/msrp_current_price_snapshot*.json
+hermes/reports/msrp_current_price_snapshot*.md
+hermes/reports/msrp_readiness_audit*.json
+hermes/reports/msrp_readiness_audit*.md
+hermes/reports/ai_intelligence_enrichment_smoke*.json
+hermes/reports/ai_intelligence_enrichment_smoke*.md
+hermes/reports/unified_scraping_readiness*.json
+hermes/reports/unified_scraping_readiness*.md
+hermes/reports/goal_completion_audit*.json
+hermes/reports/goal_completion_audit*.md
+hermes/reports/pipeline_status/
 tmp/
 .runtime_sync_backups/
 hermes/sentinel_notification_state.json

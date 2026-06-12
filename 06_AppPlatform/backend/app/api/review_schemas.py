@@ -14,6 +14,7 @@ class ReviewAutoResolveRequest(BaseModel):
 
 class ReviewDecisionCreate(BaseModel):
     decision: Literal["approve", "reject", "remap"]
+    accepted_observation_id: str | None = None
     decided_official_model: str | None = None
     decided_official_trim: str | None = None
     note: str | None = None

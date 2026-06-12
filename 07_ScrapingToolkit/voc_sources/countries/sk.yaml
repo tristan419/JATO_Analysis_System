@@ -1,0 +1,25 @@
+country_code: SK
+country_label: Slovakia / 斯洛伐克
+languages: [sk, en]
+taxonomy_profile: cee_core
+sources:
+  - source_code: sk_mojelektromobil_community
+    site_name: MojElektromobil
+    site_url: https://www.mojelektromobil.sk/
+    site_type: ev_community
+    extractor: scrapling
+    language: sk
+    tags: [voc, public, ev, community, owner]
+    public_access: true
+    compliance_notes: Restrict extraction to public EV articles and visible community discussion.
+    notes: EV-focused Slovak source for charging, battery, range, and model ownership signals.
+  - source_code: sk_autoviny_comments
+    site_name: Autoviny
+    site_url: https://www.autoviny.sk/
+    site_type: media_comments
+    extractor: scrapling
+    language: sk
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Collect public editorial and review pages with visible reader reaction only.
+    notes: Adds mainstream Slovak market reaction to pricing, launches, and ownership costs.

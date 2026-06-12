@@ -13,16 +13,20 @@ profile:
   impersonate: chrome
   json_script_selector: script[type='application/ld+json']
   css:
-    vehicle_container: body
-    model: h1
-    trim: '[class*="variant"], [class*="trim"], h2'
-    price: '[class*="price"], [data-automation*="price"]'
+    vehicle_container: '[data-testid="stage-level:container"] [data-testid="selection-card"]'
+    model: ''
+    trim: '[data-testid="title"]'
+    price: '[data-testid="price"]'
+    exclude_if_selector: '[data-testid="selection-card-unavailable"]'
+  exclude_price_prefixes:
+  - 'Fra '
+  - Leasing
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Vejledende pris
   fixed_model: EX40
   fixed_jato_model: EX40
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -33,6 +37,8 @@ profile:
     model_rule_bonus: 0.12
     trim_present_bonus: 0.1
     copy_trim_to_jato_trim_bonus: 0.09
+    exclude_price_prefixes_bonus: 0.04
+    exclude_if_selector_bonus: 0.04
     parsed_price_text_bonus: 0.03
     currency_bonus: 0.01
     price_label_bonus: 0.02
@@ -69,7 +75,11 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - ex40-electric
+      - ex40
+      - electric
+      - single motor
+      - twin motor
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -85,7 +95,7 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from VOLVO template]
-  [CSS selectors applied from brand probe]
+  [CSS selectors aligned with SE/FI Volvo EX40 build-card pattern]
 bootstrap_meta:
   country_model_rank: 18
   suggested_scope_kind: single_model

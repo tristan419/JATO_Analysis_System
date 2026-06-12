@@ -1,0 +1,59 @@
+batch_code: incentive_batch_a
+description: Nordic Four incentive and tax benefit sources for EV/PHEV pricing context.
+countries:
+  - country_code: "SE"
+    country_label: "Sweden / 瑞典"
+    sources:
+      - source_code: "se_naturvardsverket_vehicle_incentives"
+        source_name: "Swedish EPA climate and vehicle incentive updates"
+        url: "https://www.naturvardsverket.se/en/"
+        source_kind: "government"
+        topics: ["bev_incentive", "climate_bonus", "tax_benefit"]
+        applies_to: ["BEV", "PHEV"]
+        fetcher: "requests"
+        extractor: "llm_extract"
+        freshness_hours: 168
+        priority: 70
+        citation_tier: 1
+  - country_code: "FI"
+    country_label: "Finland / 芬兰"
+    sources:
+      - source_code: "fi_traficom_purchase_support"
+        source_name: "Traficom purchase and conversion support notices"
+        url: "https://www.traficom.fi/en/transport/road"
+        source_kind: "government"
+        topics: ["bev_incentive", "purchase_support", "tax_benefit"]
+        applies_to: ["BEV", "PHEV"]
+        fetcher: "requests"
+        extractor: "llm_extract"
+        freshness_hours: 168
+        priority: 70
+        citation_tier: 1
+  - country_code: "NO"
+    country_label: "Norway / 挪威"
+    sources:
+      - source_code: "no_skatteetaten_vehicle_tax_benefits"
+        source_name: "Norwegian Tax Administration vehicle tax benefits"
+        url: "https://www.skatteetaten.no/en/person/duties/cars-and-other-vehicles/"
+        source_kind: "government"
+        topics: ["vat_exemption", "vehicle_tax", "bev_incentive"]
+        applies_to: ["BEV"]
+        fetcher: "requests"
+        extractor: "llm_extract"
+        freshness_hours: 168
+        priority: 70
+        citation_tier: 1
+  - country_code: "DK"
+    country_label: "Denmark / 丹麦"
+    sources:
+      - source_code: "dk_motorstyrelsen_green_vehicle_tax"
+        source_name: "Danish green vehicle registration tax rules"
+        url: "https://motorst.dk/en-us/individuals/vehicle-taxes"
+        source_kind: "government"
+        topics: ["registration_tax", "green_tax", "bev_incentive"]
+        applies_to: ["BEV", "PHEV"]
+        fetcher: "requests"
+        extractor: "llm_extract"
+        freshness_hours: 168
+        priority: 70
+        citation_tier: 1

@@ -1,24 +1,31 @@
 source_code: cupra_formentor_dk_draft_scrapling
 country: 丹麦
 brand: CUPRA
-source_url: https://www.cupraofficial.dk/modeller/formentor
+source_url: https://www.cupraofficial.dk/biler/formentor
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.cupraofficial.dk/modeller/formentor
+  url: https://www.cupraofficial.dk/biler/formentor
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'CUPRA Formentor 1\.5 eTSI 150 HK DSG\s+vejl\. udsalgspris\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
+      official_trim: 1.5 eTSI 150 HK DSG
+      official_powertrain: MHEV
+    - pattern: 'CUPRA Formentor VZ 2\.0 TSI 4x4 333 HK DSG\s+vejl\. udsalgspris\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
+      official_trim: VZ 2.0 TSI 4x4 333 HK DSG
+      official_powertrain: ICE
+    - pattern: 'CUPRA Formentor VZ5 2\.5 TSI 4x4 390 HK DSG\s+vejl\. udsalgspris\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
+      official_trim: VZ5 2.5 TSI 4x4 390 HK DSG
+      official_powertrain: ICE
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Vejl. udsalgspris
   fixed_model: FORMENTOR
   fixed_jato_model: FORMENTOR
   fixed_jato_powertrain: null
@@ -76,15 +83,18 @@ profile:
     - key: powertrain_phev
       powertrain: PHEV
       keywords:
-      - TODO_PHEV_KEYWORD
+      - eHybrid
+      - plug-in hybrid
     - key: powertrain_mhev
       powertrain: MHEV
       keywords:
-      - TODO_MHEV_KEYWORD
+      - eTSI
+      - mild hybrid
     - key: powertrain_ice
       powertrain: ICE
       keywords:
-      - TODO_ICE_KEYWORD
+      - TSI
+      - benzin
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -100,7 +110,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from CUPRA template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+  [URL language corrected] [CSS selectors applied from brand probe] [Updated
+  to /biler/formentor and text_regex extraction from official vejl. udsalgspris
+  statements]
 bootstrap_meta:
   country_model_rank: 9
   suggested_scope_kind: single_model

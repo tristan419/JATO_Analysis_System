@@ -1,0 +1,25 @@
+country_code: IT
+country_label: Italy / 意大利
+languages: [it, en]
+taxonomy_profile: western_europe_core
+sources:
+  - source_code: it_vaielettrico_comments
+    site_name: Vaielettrico
+    site_url: https://www.vaielettrico.it/
+    site_type: ev_media_comments
+    extractor: scrapling
+    language: it
+    tags: [voc, public, ev, media, comments]
+    public_access: true
+    compliance_notes: Use public articles and visible reader comments only; do not target account-only areas.
+    notes: Strong Italian EV source for charging, incentive, total-cost, and model-experience sentiment.
+  - source_code: it_quattroruote_forum
+    site_name: Quattroruote Forum
+    site_url: https://forum.quattroruote.it/
+    site_type: forum
+    extractor: playwright
+    language: it
+    tags: [voc, public, forum, owner, automotive]
+    public_access: true
+    compliance_notes: Collect public forum threads only and respect rate limits and access restrictions.
+    notes: Broad Italian ownership source; browser fetch is preferred because direct HTTP may be blocked.

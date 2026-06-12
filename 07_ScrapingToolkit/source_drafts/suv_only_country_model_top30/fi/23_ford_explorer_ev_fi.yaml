@@ -1,82 +1,44 @@
 source_code: ford_explorer_ev_fi_draft_scrapling
 country: 芬兰
 brand: FORD
-source_url: https://www.ford.fi/autot/helelektriske-explorer
-source_type: manufacturer_official
+source_url: https://www.ford.fi/henkiloautot/electric-explorer/pricelist.html
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.ford.fi/autot/helelektriske-explorer
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.ford.fi/content/dam/guxeu/fi/documents/pricelists/cars/electric-explorer/PL-new_all_electric_explorer_2026_75.pdf
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Autoveroton suositushinta EUR
   fixed_model: EXPLORER EV
   fixed_jato_model: EXPLORER EV
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: BEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - TODO_BEV_KEYWORD
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.84
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: ford_fi_explorer_pricelist
+    note: Official Ford Finland Explorer EV price list PDF, autoveroton suositushinta column.
+  entry_patterns:
+  - pattern: '(?P<trim>RWD\s+Standard\s+Range\s+58\s+kWh\s+Style)\s+140\s*/\s*190\s+59\s+0\s+15,4\s+444\s+(?P<price>\d{2}\s\d{3})\s+525\s+465'
+    jato_powertrain: BEV
+  - pattern: '(?P<trim>RWD\s+Extended\s+Range\s+79\s+kWh\s+Select)\s+210\s*/\s*286\s+79\s+0\s+14,6\s+602\s+(?P<price>\d{2}\s\d{3})\s+615\s+555'
+    jato_powertrain: BEV
+  - pattern: '(?P<trim>AWD\s+Extended\s+Range\s+77\s+kWh\s+Select)\s+250\s*/\s*340\s+77\s+0\s+16,3\s+553\s+(?P<price>\d{2}\s\d{3})\s+645\s+585'
+    jato_powertrain: BEV
+  - pattern: '(?P<trim>AWD\s+Extended\s+Range\s+77\s+kWh\s+100v\s+Juhlamalli\s+Select)\s+250\s*/\s*340\s+77\s+0\s+16,3\s+553\s+(?P<price>\d{2}\s\d{3})\s+615\s+555'
+    jato_powertrain: BEV
+  - pattern: '(?P<trim>AWD\s+Extended\s+Range\s+77\s+kWh\s+Collection)\s+250\s*/\s*340\s+77\s+0\s+17,1\s+526\s+(?P<price>\d{2}\s\d{3})\s+655\s+595'
+    jato_powertrain: BEV
+  - pattern: '(?P<trim>RWD\s+Standard\s+Range\s+58\s+kWh\s+Premium)\s+140\s*/\s*190\s+59\s+0\s+16,2\s+417\s+(?P<price>\d{2}\s\d{3})\s+585\s+525'
+    jato_powertrain: BEV
+  - pattern: '(?P<trim>RWD\s+Extended\s+Range\s+79\s+kWh\s+Premium)\s+210\s*/\s*286\s+79\s+0\s+15,5\s+572\s+(?P<price>\d{2}\s\d{3})\s+655\s+595'
+    jato_powertrain: BEV
+  - pattern: '(?P<trim>AWD\s+Extended\s+Range\s+77\s+kWh\s+Premium)\s+250\s*/\s*340\s+77\s+0\s+17,3\s+519\s+(?P<price>\d{2}\s\d{3})\s+685\s+625'
+    jato_powertrain: BEV
+  - pattern: '(?P<trim>AWD\s+Extended\s+Range\s+77\s+kWh\s+100v\s+Juhlamalli\s+Premium)\s+250\s*/\s*340\s+77\s+0\s+17,3\s+519\s+(?P<price>\d{2}\s\d{3})\s+655\s+595'
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -85,7 +47,8 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from FORD template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+  [URL language corrected] [CSS selectors applied from brand probe] [Switched to
+  official Ford FI Explorer price-list PDF via pdf_text]
 bootstrap_meta:
   country_model_rank: 23
   suggested_scope_kind: single_model

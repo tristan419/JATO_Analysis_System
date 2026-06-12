@@ -1,99 +1,53 @@
 source_code: nissan_qashqai_dk_draft_scrapling
 country: 丹麦
 brand: NISSAN
-source_url: https://www.nissan.dk/koretojer/nye-biler/qashqai.html
-source_type: manufacturer_official
+source_url: https://www.nissan.dk/biler/nye-biler/qashqai/priser-og-specifikationer.html
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.nissan.dk/koretojer/nye-biler/qashqai.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.nissan.dk/content/dam/Nissan/dk/brochures/cpls/New_Qashqai_Kundeprisliste_MY24.pdf
+  timeout_seconds: 60
+  retry_attempts: 3
+  retry_delay_seconds: 1.0
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Vejl. udsalgspris inkl. moms og reg. afgift
   fixed_model: QASHQAI
   fixed_jato_model: QASHQAI
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: MHEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - TODO_MHEV_KEYWORD
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - TODO_ICE_KEYWORD
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_nissan_dk_customer_pricelist
+    note: Official Nissan Denmark Qashqai customer price-list PDF exposes 2026 vejledende DKK prices by MHEV trim.
+  entry_patterns:
+  - pattern: 'MHEV\s+158\s+Automatisk\s+Acenta\s+2WD\s+140\s+16,1\s+800\s+(?P<price>\d{3}\s\d{3})'
+    official_trim: Acenta
+    official_powertrain: MHEV 158 Automatisk 2WD
+    jato_powertrain: MHEV
+  - pattern: 'MHEV\s+158\s+Automatisk\s+N-Connecta\s+2WD\s+142\s+15,9\s+800\s+(?P<price>\d{3}\s\d{3})'
+    official_trim: N-Connecta
+    official_powertrain: MHEV 158 Automatisk 2WD
+    jato_powertrain: MHEV
+  - pattern: 'MHEV\s+158\s+Automatisk\s+Tekna\s+2WD\s+142\s+15,9\s+800\s+(?P<price>\d{3}\s\d{3})'
+    official_trim: Tekna
+    official_powertrain: MHEV 158 Automatisk 2WD
+    jato_powertrain: MHEV
+  - pattern: 'MHEV\s+158\s+Automatisk\s+Tekna Plus\s+2WD\s+143\s+15,9\s+800\s+(?P<price>\d{3}\s\d{3})'
+    official_trim: Tekna Plus
+    official_powertrain: MHEV 158 Automatisk 2WD
+    jato_powertrain: MHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from NISSAN template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+notes: Draft source repaired to Nissan Denmark's official Qashqai customer
+  price-list PDF. Regexes target the primary vehicle price table and avoid
+  option/accessory prices.
 bootstrap_meta:
   country_model_rank: 22
   suggested_scope_kind: single_model

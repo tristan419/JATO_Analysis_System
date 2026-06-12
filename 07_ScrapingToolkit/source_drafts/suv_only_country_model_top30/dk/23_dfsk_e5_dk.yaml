@@ -1,16 +1,22 @@
 source_code: dfsk_e5_dk_draft_scrapling
 country: 丹麦
 brand: DFSK
-source_url: https://todo.invalid/dk/dfsk/e5
+source_url: https://navor.dk/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/dk/dfsk/e5
+  url: https://navor.dk/
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
+  text_regex:
+    source_selector: title
+    entry_patterns:
+    - pattern: 'NAVOR E5.*?kun\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
+      official_trim: Entry
+      official_powertrain: PHEV
   css:
     vehicle_container: body
     model: h1
@@ -18,10 +24,10 @@ profile:
     price: '[class*="price"]'
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Fra pris
   fixed_model: E5
   fixed_jato_model: E5
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: PHEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -68,7 +74,9 @@ profile:
     - key: powertrain_phev
       powertrain: PHEV
       keywords:
-      - TODO_PHEV_KEYWORD
+      - hybrid
+      - PHEV
+      - elektrisk hybridteknologi
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -84,7 +92,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+  probe] [Updated to NAVOR Denmark official importer page; title carries 224.990
+  kr. while meta description has a conflicting 224.000 kr. value, so extraction
+  is intentionally limited to the title element]
 bootstrap_meta:
   country_model_rank: 23
   suggested_scope_kind: single_model

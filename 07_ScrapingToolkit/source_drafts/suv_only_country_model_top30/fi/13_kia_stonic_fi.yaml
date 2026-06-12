@@ -1,19 +1,19 @@
 source_code: kia_stonic_fi_draft_scrapling
 country: 芬兰
 brand: KIA
-source_url: https://www.kia.com/fi/mallit/stonic/
+source_url: https://www.kia.com/fi/mallisto/stonic-my25/tutustu/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.kia.com/fi/mallit/stonic/
+  url: https://www.kia.com/fi/mallisto/stonic-my25/tutustu/
   headless: true
   default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
   fixed_model: STONIC
   fixed_jato_model: STONIC
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: ICE
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -64,11 +64,14 @@ profile:
     - key: powertrain_mhev
       powertrain: MHEV
       keywords:
-      - TODO_MHEV_KEYWORD
+      - mild hybrid
+      - mhev
     - key: powertrain_ice
       powertrain: ICE
       keywords:
-      - TODO_ICE_KEYWORD
+      - stonic
+      - bensiini
+      - petrol
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -78,11 +81,14 @@ profile:
     force_review_for_special_edition: true
   json_script_selector: script[type='application/ld+json']
   css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
+    vehicle_container: .eutElpTrimDetail
+    model: ''
+    trim: .elp_trimname
+    price: .elp-trimlist-display
+    include_if_text_contains:
+    - €
+    - alkaen
+  tier: http
   network_idle: true
   impersonate: chrome
 schedule:

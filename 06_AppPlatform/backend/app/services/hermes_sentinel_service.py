@@ -567,6 +567,10 @@ def _pipeline_unit_name(pipeline: str) -> str:
         "voc_forum_sync": "jato-voc-forum-sync",
         "msrp_dryrun": "jato-msrp-sync@dryrun",
         "msrp_ingest": "jato-msrp-sync@ingest",
+        "msrp_current_price_snapshot": "jato-msrp-current-price-snapshot",
+        "msrp_readiness_audit": "jato-msrp-readiness-audit",
+        "ai_intelligence_enrichment_smoke": "jato-ai-intelligence-enrichment-smoke",
+        "unified_scraping_readiness": "jato-unified-scraping-readiness",
         "source_quality": "hermes-source-quality",
     }
     return mapping.get(pipeline, f"jato-{pipeline}")

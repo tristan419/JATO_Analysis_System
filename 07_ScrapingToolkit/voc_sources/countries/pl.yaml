@@ -1,0 +1,25 @@
+country_code: PL
+country_label: Poland / 波兰
+languages: [pl, en]
+taxonomy_profile: cee_core
+sources:
+  - source_code: pl_autocentrum_opinie
+    site_name: AutoCentrum
+    site_url: https://www.autocentrum.pl/
+    site_type: owner_reviews
+    extractor: scrapling
+    language: pl
+    tags: [voc, public, owner, reviews, automotive]
+    public_access: true
+    compliance_notes: Focus on public owner reviews, model pages, and visible article reactions only.
+    notes: Useful for Polish ownership reliability, running-cost, and model-specific experience signals.
+  - source_code: pl_autokacik_forum
+    site_name: Autokacik
+    site_url: https://forum.autokacik.pl/
+    site_type: forum
+    extractor: scrapling
+    language: pl
+    tags: [voc, public, forum, owner, automotive]
+    public_access: true
+    compliance_notes: Crawl only public threads and avoid personal data, restricted areas, or login-only pages.
+    notes: Broad Polish owner forum for service, reliability, price-value, and model comparison discussion.

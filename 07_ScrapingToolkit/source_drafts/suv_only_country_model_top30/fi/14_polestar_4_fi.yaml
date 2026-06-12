@@ -1,27 +1,31 @@
 source_code: polestar_4_fi_draft_scrapling
 country: 芬兰
 brand: POLESTAR
-source_url: https://www.polestar.com/fi/polestar-4/
+source_url: https://www.polestar.com/fi/polestar-4-models/polestar-4-coupe/
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: playwright
 profile:
-  url: https://www.polestar.com/fi/polestar-4/
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1
-    trim: h2
-    price: '[class*="price"]'
+  url: https://www.polestar.com/fi/polestar-4-models/polestar-4-coupe/
+  browser: chromium
+  wait_until: domcontentloaded
+  page_timeout_ms: 45000
+  viewport_width: 1440
+  viewport_height: 1200
+  initial_ready_selector: section#hero dd
+  initial_ready_timeout_ms: 45000
+  trim_card_selector: section#hero
+  trim_name_selector: h1, h2
+  detail_price_selector: dl > div:nth-of-type(1) dd
+  trim_card_wait_ms: 1200
+  extract_from_trim_cards: true
+  combine_trim_and_powertrain: false
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Suositushinta sis. alv
   fixed_model: '4'
   fixed_jato_model: '4'
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -68,7 +72,11 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - polestar 4
+      - electric
+      - sähkö
+      - single motor
+      - twin motor
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98

@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+from types import SimpleNamespace
+
+from app.db import session as db_session
+from app.infra import msrp_repository
 from app.copilot_governance.price_alert_service import (
     check_price_alerts,
     estimate_monthly_payments,
@@ -53,6 +58,71 @@ class TestPriceTrendSummary:
             assert isinstance(est.monthly_payment_eur, float)
 
     def test_query_msrp_no_db_handles_gracefully(self):
-        summary = query_msrp_price_history(country="Sweden", brand="Volvo", model="XC60")
+        summary = query_msrp_price_history(
+            country="Sweden",
+            brand="Volvo",
+            model="XC60",
+        )
         assert summary is not None
         assert summary.source == "msrp_repository"
+
+    def test_query_msrp_reads_repository_history(self, monkeypatch):
+        class FakeSession:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        fake_session = FakeSession()
+        calls: list[dict[str, object]] = []
+
+        def fake_list_price_history(session, **kwargs):
+            calls.append({"session": session, **kwargs})
+            return [
+                SimpleNamespace(msrp_value=Decimal("50000.00")),
+                SimpleNamespace(msrp_value=Decimal("55000.00")),
+            ]
+
+        monkeypatch.setattr(
+            db_session,
+            "get_session_factory",
+            lambda: lambda: fake_session,
+        )
+        monkeypatch.setattr(
+            msrp_repository,
+            "list_price_history",
+            fake_list_price_history,
+        )
+
+        summary = query_msrp_price_history(
+            country="Sweden",
+            brand="Volvo",
+            model="XC60",
+            trim="Ultra",
+            powertrain="PHEV",
+        )
+
+        assert fake_session.closed is True
+        assert calls == [
+            {
+                "session": fake_session,
+                "country": "Sweden",
+                "brand": "Volvo",
+                "jato_model": "XC60",
+                "jato_trim": "Ultra",
+                "jato_powertrain": "PHEV",
+                "limit": 24,
+            }
+        ]
+        assert summary.latest_price_eur == 50000.0
+        assert summary.previous_price_eur == 55000.0
+        assert summary.price_change_pct == -9.1
+        assert summary.trend_direction == "down"
+        assert summary.monthly_estimates
+        change_alerts = [
+            item for item in summary.alerts
+            if item.alert_type == "price_change"
+        ]
+        assert len(change_alerts) == 1
+        assert change_alerts[0].severity == "warning"
+        assert change_alerts[0].change_pct == -9.1

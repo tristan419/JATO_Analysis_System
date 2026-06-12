@@ -948,6 +948,146 @@ class MsrpObservation(TimestampMixin, Base):
     )
 
 
+class FinanceObservation(TimestampMixin, Base):
+    __tablename__ = "finance_observations"
+    __table_args__ = (
+        Index(
+            "ix_msrp_finance_observations_observation",
+            "observation_id",
+        ),
+        Index(
+            "ix_msrp_finance_observations_scrape_batch",
+            "scrape_batch_id",
+        ),
+        Index(
+            "ix_msrp_finance_observations_country_brand_model",
+            "country",
+            "brand",
+            "jato_model",
+        ),
+        Index(
+            "ix_msrp_finance_observations_semantics",
+            "price_semantics",
+            "finance_type",
+        ),
+        {"schema": "msrp"},
+    )
+
+    finance_observation_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    observation_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("msrp.observations.observation_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scrape_batch_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("msrp.scrape_batches.scrape_batch_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    country: Mapped[str] = mapped_column(Text, nullable=False)
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    jato_model: Mapped[str] = mapped_column(Text, nullable=False)
+    jato_trim: Mapped[str] = mapped_column(Text, nullable=False)
+    jato_powertrain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    official_model: Mapped[str] = mapped_column(Text, nullable=False)
+    official_trim: Mapped[str] = mapped_column(Text, nullable=False)
+    official_edition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    official_powertrain: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    price_semantics: Mapped[str] = mapped_column(Text, nullable=False)
+    finance_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    monthly_payment: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    monthly_payment_eur: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    down_payment: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    down_payment_eur: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    down_payment_pct: Mapped[float | None] = mapped_column(
+        Numeric(8, 4),
+        nullable=True,
+    )
+    term_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    apr: Mapped[float | None] = mapped_column(Numeric(8, 4), nullable=True)
+    effective_apr: Mapped[float | None] = mapped_column(
+        Numeric(8, 4),
+        nullable=True,
+    )
+    balloon_payment: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    balloon_payment_eur: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    total_credit_cost: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    total_credit_cost_eur: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    total_amount_payable: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    total_amount_payable_eur: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    annual_mileage_limit: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    offer_valid_until: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+    )
+    subsidy_amount: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    subsidy_amount_eur: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    net_price_after_subsidy: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    net_price_after_subsidy_eur: Mapped[float | None] = mapped_column(
+        Numeric(14, 2),
+        nullable=True,
+    )
+    currency: Mapped[str] = mapped_column(Text, nullable=False)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    finance_context_json: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
+
 class CurrentPrice(Base):
     __tablename__ = "current_prices"
     __table_args__ = (

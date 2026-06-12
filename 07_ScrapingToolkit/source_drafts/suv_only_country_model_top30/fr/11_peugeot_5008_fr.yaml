@@ -81,19 +81,42 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - bev
+      - ev
+      - electric
+      - battery electric
+      - fully electric
+      - electric vehicle
+      - electrique
+      - 100% electrique
+      - vehicule electrique
     - key: powertrain_phev
       powertrain: PHEV
       keywords:
-      - TODO_PHEV_KEYWORD
+      - phev
+      - plug-in hybrid
+      - plug in hybrid
+      - plugin hybrid
+      - hybride rechargeable
     - key: powertrain_mhev
       powertrain: MHEV
       keywords:
-      - TODO_MHEV_KEYWORD
+      - mhev
+      - mild hybrid
+      - mild-hybrid
+      - 48V
+      - micro-hybride
+      - hybride leger
     - key: powertrain_ice
       powertrain: ICE
       keywords:
-      - TODO_ICE_KEYWORD
+      - ice
+      - petrol
+      - gasoline
+      - diesel
+      - combustion
+      - essence
+      - thermique
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98

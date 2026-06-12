@@ -72,11 +72,23 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - bev
+      - ev
+      - electric
+      - battery electric
+      - fully electric
+      - electric vehicle
+      - elektrisch
+      - volledig elektrisch
     - key: powertrain_phev
       powertrain: PHEV
       keywords:
-      - TODO_PHEV_KEYWORD
+      - phev
+      - plug-in hybrid
+      - plug in hybrid
+      - plugin hybrid
+      - plug-in hybride
+      - stekkerhybride
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import (
     CurrentPrice,
+    FinanceObservation,
     JatoMsrpLink,
     MsrpObservation,
     MsrpSource,
@@ -221,6 +222,14 @@ def add_observations(
     return observations
 
 
+def add_finance_observations(
+    session: Session,
+    observations: list[FinanceObservation],
+) -> list[FinanceObservation]:
+    session.add_all(observations)
+    return observations
+
+
 def get_observation(
     session: Session,
     observation_id: object,
@@ -237,6 +246,129 @@ def list_observations_by_ids(
     stmt: Select[tuple[MsrpObservation]] = select(MsrpObservation).where(
         MsrpObservation.observation_id.in_(observation_ids)
     )
+    return session.execute(stmt).scalars().all()
+
+
+def has_finance_observations_table(session: Session) -> bool:
+    bind = session.get_bind()
+    if bind is None:
+        return False
+    return inspect(bind).has_table("finance_observations", schema="msrp")
+
+
+def _apply_finance_observation_filters(
+    stmt: Select,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    price_semantics: str | None,
+    finance_type: str | None,
+    has_monthly_payment: bool | None,
+    has_subsidy: bool | None,
+    has_net_price_after_subsidy: bool | None,
+) -> Select:
+    if country:
+        stmt = stmt.where(
+            func.lower(FinanceObservation.country).in_(
+                country_filter_aliases(country)
+            )
+        )
+    if brand:
+        stmt = stmt.where(
+            func.lower(FinanceObservation.brand).contains(
+                brand.strip().lower()
+            )
+        )
+    if jato_model:
+        pattern = f"%{jato_model.strip().lower()}%"
+        stmt = stmt.where(
+            or_(
+                func.lower(FinanceObservation.jato_model).like(pattern),
+                func.lower(FinanceObservation.official_model).like(pattern),
+            )
+        )
+    if price_semantics:
+        stmt = stmt.where(
+            FinanceObservation.price_semantics == price_semantics
+        )
+    if finance_type:
+        stmt = stmt.where(FinanceObservation.finance_type == finance_type)
+    if has_monthly_payment is not None:
+        stmt = stmt.where(
+            FinanceObservation.monthly_payment_eur.is_not(None)
+            if has_monthly_payment
+            else FinanceObservation.monthly_payment_eur.is_(None)
+        )
+    if has_subsidy is not None:
+        stmt = stmt.where(
+            FinanceObservation.subsidy_amount_eur.is_not(None)
+            if has_subsidy
+            else FinanceObservation.subsidy_amount_eur.is_(None)
+        )
+    if has_net_price_after_subsidy is not None:
+        stmt = stmt.where(
+            FinanceObservation.net_price_after_subsidy_eur.is_not(None)
+            if has_net_price_after_subsidy
+            else FinanceObservation.net_price_after_subsidy_eur.is_(None)
+        )
+    return stmt
+
+
+def count_finance_observations(
+    session: Session,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    price_semantics: str | None,
+    finance_type: str | None,
+    has_monthly_payment: bool | None,
+    has_subsidy: bool | None,
+    has_net_price_after_subsidy: bool | None,
+) -> int:
+    stmt = select(func.count()).select_from(FinanceObservation)
+    stmt = _apply_finance_observation_filters(
+        stmt,
+        country,
+        brand,
+        jato_model,
+        price_semantics,
+        finance_type,
+        has_monthly_payment,
+        has_subsidy,
+        has_net_price_after_subsidy,
+    )
+    return int(session.execute(stmt).scalar_one())
+
+
+def list_finance_observations(
+    session: Session,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    price_semantics: str | None,
+    finance_type: str | None,
+    has_monthly_payment: bool | None,
+    has_subsidy: bool | None,
+    has_net_price_after_subsidy: bool | None,
+    limit: int,
+    offset: int,
+) -> list[FinanceObservation]:
+    stmt: Select[tuple[FinanceObservation]] = select(FinanceObservation)
+    stmt = _apply_finance_observation_filters(
+        stmt,
+        country,
+        brand,
+        jato_model,
+        price_semantics,
+        finance_type,
+        has_monthly_payment,
+        has_subsidy,
+        has_net_price_after_subsidy,
+    )
+    stmt = stmt.order_by(
+        FinanceObservation.observed_at_utc.desc(),
+        FinanceObservation.created_at_utc.desc(),
+    ).offset(max(0, int(offset))).limit(max(1, min(int(limit), 500)))
     return session.execute(stmt).scalars().all()
 
 
@@ -346,6 +478,43 @@ def list_materializable_observations(
     return session.execute(stmt).scalars().all()
 
 
+def list_reconciliation_observations(
+    session: Session,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    limit: int,
+) -> list[MsrpObservation]:
+    stmt: Select[tuple[MsrpObservation]] = select(MsrpObservation).where(
+        MsrpObservation.match_status.in_(
+            ["auto_accepted", "human_approved", "override_applied"]
+        )
+    )
+    if country:
+        stmt = stmt.where(
+            func.lower(MsrpObservation.country).in_(
+                country_filter_aliases(country)
+            )
+        )
+    if brand:
+        stmt = stmt.where(
+            func.lower(MsrpObservation.brand).contains(brand.strip().lower())
+        )
+    if jato_model:
+        pattern = f"%{jato_model.strip().lower()}%"
+        stmt = stmt.where(
+            or_(
+                func.lower(MsrpObservation.jato_model).like(pattern),
+                func.lower(MsrpObservation.official_model).like(pattern),
+            )
+        )
+    stmt = stmt.order_by(
+        MsrpObservation.observed_at_utc.desc(),
+        MsrpObservation.created_at_utc.desc(),
+    ).limit(max(1, min(int(limit), 5000)))
+    return session.execute(stmt).scalars().all()
+
+
 def get_current_price_by_key(
     session: Session,
     country: str,
@@ -443,29 +612,8 @@ def list_current_prices(
     return session.execute(stmt).scalars().all()
 
 
-def count_current_price_alerts(
-    session: Session,
-    country: str | None,
-    brand: str | None,
-    jato_model: str | None,
-) -> int:
-    if not has_price_history_table(session):
-        return 0
-
-    filtered_current_prices = _apply_current_price_filters(
-        select(
-            CurrentPrice.country.label("country"),
-            CurrentPrice.brand.label("brand"),
-            CurrentPrice.jato_model.label("jato_model"),
-            CurrentPrice.jato_trim.label("jato_trim"),
-            CurrentPrice.jato_powertrain.label("jato_powertrain"),
-        ),
-        country,
-        brand,
-        jato_model,
-    ).subquery("filtered_current_prices")
-
-    alert_keys = (
+def _current_price_alert_keys_subquery():
+    return (
         select(
             PriceHistory.country.label("country"),
             PriceHistory.brand.label("brand"),
@@ -494,6 +642,30 @@ def count_current_price_alerts(
         .subquery("alert_keys")
     )
 
+
+def count_current_price_alerts(
+    session: Session,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+) -> int:
+    if not has_price_history_table(session):
+        return 0
+
+    filtered_current_prices = _apply_current_price_filters(
+        select(
+            CurrentPrice.country.label("country"),
+            CurrentPrice.brand.label("brand"),
+            CurrentPrice.jato_model.label("jato_model"),
+            CurrentPrice.jato_trim.label("jato_trim"),
+            CurrentPrice.jato_powertrain.label("jato_powertrain"),
+        ),
+        country,
+        brand,
+        jato_model,
+    ).subquery("filtered_current_prices")
+
+    alert_keys = _current_price_alert_keys_subquery()
     stmt = select(func.count()).select_from(
         filtered_current_prices.join(
             alert_keys,
@@ -509,6 +681,39 @@ def count_current_price_alerts(
         )
     )
     return int(session.execute(stmt).scalar_one())
+
+
+def list_current_price_alerts(
+    session: Session,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    limit: int,
+    offset: int,
+) -> list[CurrentPrice]:
+    if not has_price_history_table(session):
+        return []
+
+    alert_keys = _current_price_alert_keys_subquery()
+    stmt: Select[tuple[CurrentPrice]] = select(CurrentPrice).join(
+        alert_keys,
+        and_(
+            CurrentPrice.country == alert_keys.c.country,
+            CurrentPrice.brand == alert_keys.c.brand,
+            CurrentPrice.jato_model == alert_keys.c.jato_model,
+            CurrentPrice.jato_trim == alert_keys.c.jato_trim,
+            CurrentPrice.jato_powertrain == alert_keys.c.jato_powertrain,
+        ),
+    )
+    stmt = _apply_current_price_filters(stmt, country, brand, jato_model)
+    stmt = stmt.order_by(
+        CurrentPrice.last_price_change_at_utc.desc().nullslast(),
+        CurrentPrice.updated_at_utc.desc(),
+        CurrentPrice.country.asc(),
+        CurrentPrice.brand.asc(),
+        CurrentPrice.jato_model.asc(),
+    ).offset(max(0, int(offset))).limit(max(1, min(int(limit), 500)))
+    return session.execute(stmt).scalars().all()
 
 
 def has_price_history_table(session: Session) -> bool:

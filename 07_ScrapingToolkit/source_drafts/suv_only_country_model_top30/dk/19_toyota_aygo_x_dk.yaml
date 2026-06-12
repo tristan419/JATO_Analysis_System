@@ -1,19 +1,19 @@
 source_code: toyota_aygo_x_dk_draft_scrapling
 country: 丹麦
 brand: TOYOTA
-source_url: https://www.toyota.dk/biler/aygo-x
+source_url: https://modelinformation.toyota.dk/Toyota/specs/Prislister/aygo-x/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.toyota.dk/biler/aygo-x
+  url: https://modelinformation.toyota.dk/Toyota/specs/Prislister/aygo-x/
   headless: true
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Vejledende udsalgspris inkl. lev.omk.
   fixed_model: AYGO X
   fixed_jato_model: AYGO X
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: ICE
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -64,11 +64,13 @@ profile:
     - key: powertrain_hev
       powertrain: HEV
       keywords:
-      - TODO_HEV_KEYWORD
+      - hybrid
     - key: powertrain_ice
       powertrain: ICE
       keywords:
-      - TODO_ICE_KEYWORD
+      - benzin
+      - 1.0
+      - 72 hk
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -76,13 +78,21 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
+  text_regex:
+    source_selector: script
+    entry_patterns:
+    - pattern: 'Play\s+Vejl\. udsalgspris kr\. inkl\. lev\.omk\.\*¹\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: Play
+      official_powertrain: ICE
+      availability_text: udsolgt
+    - pattern: 'Active\s+(?P<price>\d{3}\.\d{3})\s+20\.000'
+      official_trim: Active
+      official_powertrain: ICE
+    - pattern: 'Pulse\s+(?P<price>\d{3}\.\d{3})'
+      official_trim: Pulse
+      official_powertrain: ICE
+      availability_text: udsolgt
+  tier: http
   network_idle: true
   impersonate: chrome
 schedule:
@@ -95,7 +105,8 @@ notes: Draft scaffold generated from country×model top30 backlog. Replace sourc
   before promoting to 07_ScrapingToolkit/sources. [URL filled from TOYOTA template]
   [URL language corrected] [CSS selectors applied from brand probe] [Switched to playwright_card_flow
   with toyota_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset
-  needs per-brand tuning]
+  needs per-brand tuning] [Switched to official Toyota modelinformation iPaper
+  price-list text_regex extraction; source currently exposes 2025 DK price list]
 bootstrap_meta:
   country_model_rank: 19
   suggested_scope_kind: single_model

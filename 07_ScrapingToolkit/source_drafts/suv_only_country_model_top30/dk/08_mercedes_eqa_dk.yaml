@@ -1,91 +1,46 @@
 source_code: mercedes_eqa_dk_draft_scrapling
 country: 丹麦
 brand: MERCEDES
-source_url: https://www.mercedes-benz.dk/passengercars/models/suv/eqa/overview.html
-source_type: manufacturer_official
+source_url: https://www.mercedes-benz.dk/passengercars/buy/pricelists/suv.html
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.mercedes-benz.dk/passengercars/models/suv/eqa/overview.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1
-    trim: h2, h3
-    price: '[class*="price"]'
+  url: https://www.mercedes-benz.dk/content/dam/denmark/passengercars/pricelist/2026/01_2026/standard/EQA%20EQB%20FL%20(MY806%2B056)%20prisliste%2001.01.2026%20EKSTERN.pdf
+  timeout_seconds: 10
+  retry_attempts: 1
+  retry_delay_seconds: 1.0
+  curl_download_fallback: true
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Vejl. udsalgspris
   fixed_model: EQA
   fixed_jato_model: EQA
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: BEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - TODO_BEV_KEYWORD
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.88
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_mercedes_benz_dk_prisliste
+    note: Official Mercedes-Benz Denmark SUV price-list PDF exposes 2026 EQA vejledende prices by AMG Edition trim.
+  entry_patterns:
+  - pattern: 'EQA 250\+ AMG Edition\s+140 \(190\) 385 553 146 460 (?P<price>\d{3}\.\d{3})'
+    official_trim: 250+ AMG Edition
+    official_powertrain: BEV 250+
+    jato_powertrain: BEV
+  - pattern: 'EQA 350 4MATIC AMG Edition\s+215 \(292\) 520 471 171 460 (?P<price>\d{3}\.\d{3})'
+    official_trim: 350 4MATIC AMG Edition
+    official_powertrain: BEV 350 4MATIC
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from MERCEDES template]
-  [CSS selectors applied from brand probe]
+notes: Draft source repaired to Mercedes-Benz Denmark's official SUV prislister
+  page and shared EQA/EQB kontantpris PDF. Regexes target the primary vehicle
+  price table and avoid model overview copy that does not expose MSRP values.
 bootstrap_meta:
   country_model_rank: 8
   suggested_scope_kind: single_model

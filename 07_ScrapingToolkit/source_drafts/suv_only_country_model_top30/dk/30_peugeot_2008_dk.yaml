@@ -1,28 +1,30 @@
 source_code: peugeot_2008_dk_draft_scrapling
 country: 丹麦
 brand: PEUGEOT
-source_url: https://www.peugeot.dk/modeller/2008.html
+source_url: https://www.peugeot.dk/modeller/e-2008.html
 source_type: manufacturer_official
-price_semantics: base_msrp
+price_semantics: campaign_price
 extractor_type: scrapling
 profile:
-  url: https://www.peugeot.dk/modeller/2008.html
+  url: https://www.peugeot.dk/modeller/e-2008.html
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
   json_script_selector: script[type='application/ld+json']
   css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+    vehicle_container: '.q-grid-container.hide-for-small-only.hide-for-medium-only .ht-content.q-ht-paragraph.flex-item.q-rte-container'
+    model: ''
+    trim: 'div:first-child .q-font-color-black-light'
+    price: '.q-font-color-my-brand .font-20, .q-font-color-my-brand .font-22'
+    include_if_text_contains:
+    - E-2008
   default_currency: DKK
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Kampagnepris
   fixed_model: '2008'
   fixed_jato_model: '2008'
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -73,11 +75,16 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - electric
+      - elektrisk
+      - elbil
+      - E-2008
+      - 100% ELEKTRISK
     - key: powertrain_ice
       powertrain: ICE
       keywords:
-      - TODO_ICE_KEYWORD
+      - benzin
+      - PureTech
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -93,7 +100,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from PEUGEOT template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+  [URL language corrected] [CSS selectors applied from brand probe] [Aligned
+  to official E-2008 campaign price blocks; semantics marked campaign_price
+  because visible DK prices may include Nu/Før campaign wording]
 bootstrap_meta:
   country_model_rank: 30
   suggested_scope_kind: single_model

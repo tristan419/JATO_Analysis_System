@@ -1,0 +1,25 @@
+country_code: FR
+country_label: France / 法国
+languages: [fr, en]
+taxonomy_profile: western_europe_core
+sources:
+  - source_code: fr_largus_comments
+    site_name: L'Argus
+    site_url: https://www.largus.fr/
+    site_type: media_comments
+    extractor: scrapling
+    language: fr
+    tags: [voc, public, media, comments, automotive]
+    public_access: true
+    compliance_notes: Restrict extraction to public editorial and review pages with visible reader reaction.
+    notes: Useful for French buyer reaction to pricing, incentives, leasing, and model launches.
+  - source_code: fr_automobile_propre_forum
+    site_name: Automobile Propre
+    site_url: https://forums.automobile-propre.com/
+    site_type: ev_forum
+    extractor: playwright
+    language: fr
+    tags: [voc, public, ev, forum, owner]
+    public_access: true
+    compliance_notes: Crawl public forum pages only; avoid login-required, personal, or private member content.
+    notes: EV-focused French source for charging, lease, subsidy, and ownership pain points.

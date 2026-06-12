@@ -1,22 +1,22 @@
 source_code: mercedes_eqa_se_draft_scrapling
 country: 瑞典
 brand: MERCEDES
-source_url: https://www.mercedes-benz.se/passengercars/models/suv/eqa/overview.html
+source_url: https://www.mercedes-benz.se/passengercars/models/hybrid.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.mercedes-benz.se/passengercars/models/suv/eqa/overview.html
+  url: https://www.mercedes-benz.se/passengercars/models/hybrid.html
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
   default_currency: SEK
   default_tax_included: true
-  default_price_label: Rekommenderat cirkapris inkl. moms
+  default_price_label: Från
   fixed_model: EQA
   fixed_jato_model: EQA
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -63,10 +63,10 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - eqa
-      - electric
       - elbil
       - elektrisk
+      - eqa
+      - electric
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -76,18 +76,22 @@ profile:
     force_review_for_special_edition: true
   json_script_selector: script[type='application/ld+json']
   css:
-    vehicle_container: body
-    model: h1
-    trim: h2, h3
-    price: '[class*="price"]'
+    vehicle_container: div[class*="_vmos-card__container"]
+    model: '[class*="card-header__model"]'
+    trim: '[class*="card-header__model"]'
+    price: '[class*="card__info-container"]'
+    include_if_text_contains:
+    - EQA
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (SE market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+  selectors verified against the Mercedes-Benz SE official model overview after the
+  single-model EQA detail page rendered only support content under headless fetch.
+  [CSS selectors applied from brand probe] [Switched to Mercedes-Benz SE model
+  overview for static EQA Från price]
 bootstrap_meta:
   country_model_rank: 28
   suggested_scope_kind: single_model

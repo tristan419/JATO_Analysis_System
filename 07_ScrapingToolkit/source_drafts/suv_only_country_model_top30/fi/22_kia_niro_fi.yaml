@@ -1,12 +1,12 @@
 source_code: kia_niro_fi_draft_scrapling
 country: 芬兰
 brand: KIA
-source_url: https://www.kia.com/fi/mallit/ev3/
+source_url: https://www.kia.com/fi/mallisto/niro-sg2/tutustu/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.kia.com/fi/mallit/ev3/
+  url: https://www.kia.com/fi/mallisto/niro-sg2/tutustu/
   headless: true
   default_currency: EUR
   default_tax_included: true
@@ -68,15 +68,19 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - TODO_BEV_KEYWORD
+      - niro ev
+      - sähkö
+      - electric
     - key: powertrain_phev
       powertrain: PHEV
       keywords:
-      - TODO_PHEV_KEYWORD
+      - plug-in
+      - phev
     - key: powertrain_hev
       powertrain: HEV
       keywords:
-      - TODO_HEV_KEYWORD
+      - niro
+      - hybrid
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -86,11 +90,14 @@ profile:
     force_review_for_special_edition: true
   json_script_selector: script[type='application/ld+json']
   css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
+    vehicle_container: .eutElpTrimDetail
+    model: ''
+    trim: .elp_trimname
+    price: .elp-trimlist-display
+    include_if_text_contains:
+    - €
+    - alkaen
+  tier: http
   network_idle: true
   impersonate: chrome
 schedule:

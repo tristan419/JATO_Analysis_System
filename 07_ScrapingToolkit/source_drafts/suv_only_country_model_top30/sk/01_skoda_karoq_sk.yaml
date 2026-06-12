@@ -60,7 +60,13 @@ profile:
     - key: powertrain_ice
       powertrain: ICE
       keywords:
-      - TODO_ICE_KEYWORD
+      - ice
+      - petrol
+      - gasoline
+      - diesel
+      - combustion
+      - benzin
+      - nafta
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98

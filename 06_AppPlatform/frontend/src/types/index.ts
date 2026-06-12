@@ -1260,6 +1260,25 @@ export interface MatchOverride {
 }
 
 export interface ReviewCandidateMatch {
+  candidateType?: string;
+  reconciliationStatus?: string;
+  recommendedAction?: string;
+  thresholdPct?: number;
+  spreadPct?: number | null;
+  spreadValue?: number | null;
+  sourceRank?: number;
+  observationId?: string;
+  sourceId?: string;
+  sourceCode?: string | null;
+  sourceType?: string | null;
+  sourceMsrpValue?: number;
+  sourceCurrency?: string;
+  msrpValue?: number;
+  observedAtUtc?: string;
+  sourceUrl?: string;
+  matchStatus?: string;
+  matchConfidence?: number;
+  sourcePayloadHash?: string | null;
   currentPriceId?: string;
   jatoModel: string;
   jatoTrim: string;
@@ -1464,6 +1483,165 @@ export interface PriceHistoryEntry {
   endedByObservationId: string | null;
   lastConfirmedByObservationId: string;
   createdAtUtc: string;
+}
+
+export interface MsrpFinanceObservation {
+  financeObservationId: string;
+  observationId: string;
+  scrapeBatchId: string;
+  country: string;
+  brand: string;
+  jatoModel: string;
+  jatoTrim: string;
+  jatoPowertrain: string | null;
+  officialModel: string;
+  officialTrim: string;
+  officialEdition: string | null;
+  officialPowertrain: string | null;
+  priceSemantics: string;
+  financeType: string | null;
+  monthlyPayment: number | null;
+  monthlyPaymentEur: number | null;
+  downPayment: number | null;
+  downPaymentEur: number | null;
+  downPaymentPct: number | null;
+  termMonths: number | null;
+  apr: number | null;
+  effectiveApr: number | null;
+  balloonPayment: number | null;
+  balloonPaymentEur: number | null;
+  totalCreditCost: number | null;
+  totalCreditCostEur: number | null;
+  totalAmountPayable: number | null;
+  totalAmountPayableEur: number | null;
+  annualMileageLimit: number | null;
+  offerValidUntil: string | null;
+  subsidyAmount: number | null;
+  subsidyAmountEur: number | null;
+  netPriceAfterSubsidy: number | null;
+  netPriceAfterSubsidyEur: number | null;
+  currency: string;
+  sourceUrl: string;
+  observedAtUtc: string;
+  financeContext: Record<string, unknown> | null;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+}
+
+export interface MsrpFinanceObservationSummary {
+  priceSemanticsCounts: Record<string, number>;
+  financeTypeCounts: Record<string, number>;
+  monthlyPaymentCount: number;
+  monthlyPaymentEurMin: number | null;
+  monthlyPaymentEurMax: number | null;
+  netPriceAfterSubsidyCount: number;
+  netPriceAfterSubsidyEurMin: number | null;
+  netPriceAfterSubsidyEurMax: number | null;
+  subsidyObservationCount: number;
+}
+
+export interface MsrpFinanceObservationsResponse {
+  rows: number;
+  total: number;
+  limit: number;
+  offset: number;
+  summary: MsrpFinanceObservationSummary;
+  items: MsrpFinanceObservation[];
+  warning?: string;
+}
+
+export type MsrpReconciliationStatus = "conflict" | "single_source" | "aligned" | string;
+
+export interface MsrpReconciliationSourceObservation {
+  observationId: string;
+  sourceId: string;
+  sourceCode: string | null;
+  sourceType: string | null;
+  sourceMsrpValue: number;
+  sourceCurrency: string;
+  msrpValue: number;
+  currency: string;
+  observedAtUtc: string;
+  sourceUrl: string;
+  matchStatus: string;
+  matchConfidence: number;
+  sourcePayloadHash: string | null;
+}
+
+export interface MsrpReconciliationItem {
+  country: string;
+  brand: string;
+  jatoModel: string;
+  jatoTrim: string;
+  jatoPowertrain: string | null;
+  status: MsrpReconciliationStatus;
+  recommendedAction: string;
+  sourceCount: number;
+  observationCount: number;
+  minMsrpValue: number | null;
+  maxMsrpValue: number | null;
+  avgMsrpValue: number | null;
+  spreadValue: number | null;
+  spreadPct: number | null;
+  thresholdPct: number;
+  currentPrice: CurrentPrice | null;
+  sourceObservations: MsrpReconciliationSourceObservation[];
+}
+
+export interface MsrpReconciliationSummary {
+  observationRows: number;
+  reconciliationGroupCount: number;
+  statusCounts: Record<string, number>;
+  limit: number;
+}
+
+export interface MsrpReconciliationResponse {
+  schemaVersion: string;
+  generatedAtUtc: string;
+  filters: {
+    country: string | null;
+    brand: string | null;
+    jatoModel: string | null;
+  };
+  thresholdPct: number;
+  summary: MsrpReconciliationSummary;
+  items: MsrpReconciliationItem[];
+}
+
+export interface MsrpReconciliationQueuedConflict {
+  country: string;
+  brand: string;
+  jatoModel: string;
+  jatoTrim: string;
+  jatoPowertrain: string | null;
+  sourceCount: number;
+  spreadPct: number | null;
+  spreadValue: number | null;
+  reviewObservationId: string;
+}
+
+export interface MsrpReconciliationReviewQueueSummary {
+  observationRows: number;
+  reconciliationGroupCount: number;
+  conflictGroupCount: number;
+  reviewCasesQueued: number;
+  reviewCasesCreated: number;
+  reviewCasesReused: number;
+  limit: number;
+}
+
+export interface MsrpReconciliationReviewQueueResponse {
+  schemaVersion: string;
+  generatedAtUtc: string;
+  filters: {
+    country: string | null;
+    brand: string | null;
+    jatoModel: string | null;
+  };
+  thresholdPct: number;
+  summary: MsrpReconciliationReviewQueueSummary;
+  sampleConflicts: MsrpReconciliationQueuedConflict[];
+  sampleReviewCases: ReviewCase[];
 }
 
 export interface JatoMonthlyUpdateUpload {
