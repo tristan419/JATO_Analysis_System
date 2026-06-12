@@ -366,6 +366,44 @@ restart_timer_unit() {
   sudo -n systemctl --no-pager status "$timer_name" 2>&1 | head -n 12 || true
 }
 
+_write_msrp_status() {
+  local pipeline="$1"
+  local status="$2"
+  local reason="$3"
+  local status_path="$REPO_DIR/03_Scripts/logs/scheduled_fetch_status.json"
+
+  mkdir -p "$(dirname "$status_path")" "$REPO_DIR/hermes/reports/pipeline_status" 2>/dev/null || true
+  python3 - "$status_path" "$pipeline" "$status" "$reason" <<'PY' 2>/dev/null || true
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+status_path, pipeline, status, reason = sys.argv[1:5]
+payload = {}
+if os.path.exists(status_path):
+    try:
+        with open(status_path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (json.JSONDecodeError, OSError):
+        payload = {}
+payload[pipeline] = {
+    "lastRunAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "status": status,
+    "reason": reason,
+}
+with open(status_path, "w", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload, indent=2) + "\n")
+PY
+  python3 "$REPO_DIR/03_Scripts/hermes/pipeline_status_writer.py" "$pipeline" \
+    --status "$status" \
+    --source "03_Scripts/ops/deploy_fullstack_server.sh" \
+    --message "$reason" \
+    --artifact-ref "03_Scripts/logs/scheduled_fetch_status.json" \
+    --repo-root "$REPO_DIR" 2>/dev/null || true
+  echo "[status] $pipeline=$status written to $status_path"
+}
+
 bootstrap_msrp_dryrun_if_missing() {
   local latest_report="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_report.json"
   local runs_index="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_runs_index.json"

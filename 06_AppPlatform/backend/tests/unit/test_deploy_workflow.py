@@ -56,6 +56,9 @@ def test_deploy_bootstraps_missing_msrp_dryrun_artifacts_async() -> None:
     assert "BOOTSTRAP_MSRP_DRYRUN_IF_MISSING" in script
     assert "03_Scripts/diagnostics/artifacts/dryrun_report.json" in script
     assert "03_Scripts/diagnostics/artifacts/dryrun_runs_index.json" in script
+    assert "_write_msrp_status() {" in script
+    assert "pipeline_status_writer.py" in script
+    assert '2>/dev/null || true' in script
     assert "systemctl start --no-block \"$service_name\"" in script
     assert "bootstrap_msrp_dryrun_if_missing" in script
     assert '_write_msrp_status "msrp_dryrun" "running"' in script
