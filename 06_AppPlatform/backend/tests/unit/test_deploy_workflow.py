@@ -86,6 +86,11 @@ def test_msrp_runner_writes_running_status_and_caps_country_runtime() -> None:
     assert "requested_concurrency=$REQUESTED_CONCURRENCY" in script
     assert 'run_cmd=("$TIMEOUT_BIN" "${COUNTRY_TIMEOUT_SECONDS}s" "${cmd[@]}")' in script
     assert "[TIMEOUT] country=$country exceeded" in script
+    assert 'COUNTRY_DONE_DIR="$RUN_DIR/.country_done"' in script
+    assert "wait_for_finished_country() {" in script
+    assert "remove_country_pid_at() {" in script
+    assert 'finished_index="$(wait_for_finished_country)"' in script
+    assert 'pid="${pids[0]}"' not in script
 
 
 def test_public_deploy_status_reports_msrp_scheduler_and_artifacts() -> None:

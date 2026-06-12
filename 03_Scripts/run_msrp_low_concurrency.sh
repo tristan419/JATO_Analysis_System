@@ -156,7 +156,8 @@ TIMESTAMP="$(date -u '+%Y%m%d-%H%M%S')"
 RUN_ID="msrp-${MODE}-${TIMESTAMP}"
 RUN_DIR="$LOG_DIR/$RUN_ID"
 COUNTRY_ARTIFACT_DIR="$RUN_DIR/countries"
-mkdir -p "$RUN_DIR" "$COUNTRY_ARTIFACT_DIR"
+COUNTRY_DONE_DIR="$RUN_DIR/.country_done"
+mkdir -p "$RUN_DIR" "$COUNTRY_ARTIFACT_DIR" "$COUNTRY_DONE_DIR"
 
 LOG_FILE="$RUN_DIR/run.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -269,12 +270,37 @@ failures=0
 declare -a pids=()
 declare -a pid_countries=()
 
+wait_for_finished_country() {
+  local idx
+  local status_file
+  while true; do
+    for idx in "${!pid_countries[@]}"; do
+      status_file="$COUNTRY_DONE_DIR/${pid_countries[$idx]}.status"
+      if [[ -f "$status_file" ]]; then
+        echo "$idx"
+        return 0
+      fi
+    done
+    sleep 1
+  done
+}
+
+remove_country_pid_at() {
+  local idx="$1"
+  unset "pids[$idx]"
+  unset "pid_countries[$idx]"
+  pids=("${pids[@]}")
+  pid_countries=("${pid_countries[@]}")
+}
+
 while (( country_idx < total || active > 0 )); do
   while (( active < CONCURRENCY && country_idx < total )); do
     country="${COUNTRIES[$country_idx]}"
     # Phase 2: Country log goes into run dir (no glob that picks up historical)
     country_log="$RUN_DIR/${country}.log"
     country_artifact="$COUNTRY_ARTIFACT_DIR/${country}.json"
+    country_status_file="$COUNTRY_DONE_DIR/${country}.status"
+    rm -f "$country_status_file"
     echo "[RUN] $((country_idx + 1))/$total country=$country mode=$MODE (parallel slot $((active + 1))/$CONCURRENCY)"
 
     extra_args=()
@@ -288,6 +314,7 @@ while (( country_idx < total || active > 0 )); do
     fi
 
     (
+      trap 'status_rc=$?; printf "%s\n" "$status_rc" > "$country_status_file"' EXIT
       # Phase 3: Export child-run context so batch_dryrun knows not to write global status
       export JATO_MSRP_RUN_ID="$RUN_ID"
       export JATO_MSRP_RUN_DIR="$RUN_DIR"
@@ -321,23 +348,30 @@ while (( country_idx < total || active > 0 )); do
   done
 
   if (( active > 0 )); then
-    pid="${pids[0]}"
-    finished_country="${pid_countries[0]:-?}"
-    rc=0
-    wait "$pid" 2>/dev/null || rc=$?
+    finished_index="$(wait_for_finished_country)"
+    pid="${pids[$finished_index]}"
+    finished_country="${pid_countries[$finished_index]:-?}"
+    country_status_file="$COUNTRY_DONE_DIR/${finished_country}.status"
+    rc="$(cat "$country_status_file" 2>/dev/null || echo 1)"
+    wait "$pid" 2>/dev/null || true
+    rm -f "$country_status_file"
+    echo "[DONE] country=$finished_country rc=$rc"
     if [[ $rc -ne 0 ]]; then
       failures=$((failures + 1))
       if is_truthy "$STOP_ON_FAILURE"; then
         echo "[INFO] Stopping because JATO_MSRP_STOP_ON_FAILURE=true"
-        for rpid in "${pids[@]:1}"; do
+        for idx in "${!pids[@]}"; do
+          if [[ "$idx" == "$finished_index" ]]; then
+            continue
+          fi
+          rpid="${pids[$idx]}"
           kill "$rpid" 2>/dev/null || true
         done
         wait 2>/dev/null || true
         exit 1
       fi
     fi
-    pids=("${pids[@]:1}")
-    pid_countries=("${pid_countries[@]:1}")
+    remove_country_pid_at "$finished_index"
     active=$((active - 1))
   fi
 done
