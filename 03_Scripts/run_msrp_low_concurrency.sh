@@ -176,13 +176,32 @@ if [[ "${#COUNTRIES[@]}" -eq 0 ]]; then
   exit 1
 fi
 
-CONCURRENCY="${JATO_MSRP_CONCURRENCY:-2}"
+REQUESTED_CONCURRENCY="${JATO_MSRP_CONCURRENCY:-2}"
+CONCURRENCY="$REQUESTED_CONCURRENCY"
+if ! [[ "$CONCURRENCY" =~ ^[0-9]+$ ]] || [[ "$CONCURRENCY" -lt 1 ]]; then
+  echo "[WARN] Invalid JATO_MSRP_CONCURRENCY=$REQUESTED_CONCURRENCY; falling back to 1"
+  CONCURRENCY=1
+fi
+MAX_DRYRUN_CONCURRENCY="${JATO_MSRP_MAX_DRYRUN_CONCURRENCY:-2}"
+if ! [[ "$MAX_DRYRUN_CONCURRENCY" =~ ^[0-9]+$ ]] || [[ "$MAX_DRYRUN_CONCURRENCY" -lt 1 ]]; then
+  echo "[WARN] Invalid JATO_MSRP_MAX_DRYRUN_CONCURRENCY=$MAX_DRYRUN_CONCURRENCY; using 2"
+  MAX_DRYRUN_CONCURRENCY=2
+fi
+ALLOW_HIGH_CONCURRENCY="${JATO_MSRP_ALLOW_HIGH_CONCURRENCY:-false}"
+if [[ "$MODE" == "dryrun" ]] && ! is_truthy "$ALLOW_HIGH_CONCURRENCY" && [[ "$CONCURRENCY" -gt "$MAX_DRYRUN_CONCURRENCY" ]]; then
+  echo "[WARN] Dryrun concurrency requested=$REQUESTED_CONCURRENCY capped to $MAX_DRYRUN_CONCURRENCY"
+  echo "[WARN] Set JATO_MSRP_ALLOW_HIGH_CONCURRENCY=true to override after pass rates are stable."
+  CONCURRENCY="$MAX_DRYRUN_CONCURRENCY"
+fi
 
 echo "[INFO] MSRP low-concurrency runner"
 echo "[INFO] Repo: $REPO_DIR"
 echo "[INFO] Mode: $MODE"
 echo "[INFO] Countries: ${COUNTRIES[*]}"
+echo "[INFO] Requested concurrency: $REQUESTED_CONCURRENCY"
 echo "[INFO] Concurrency: $CONCURRENCY"
+echo "[INFO] Max dryrun concurrency: $MAX_DRYRUN_CONCURRENCY"
+echo "[INFO] Allow high concurrency: $ALLOW_HIGH_CONCURRENCY"
 echo "[INFO] Backend env: $BACKEND_ENV_FILE"
 echo "[INFO] MSRP env: $MSRP_ENV_FILE"
 echo "[INFO] API base: $JATO_API_BASE"
@@ -194,7 +213,7 @@ echo "[INFO] Refresh MSRP readiness audit: $REFRESH_READINESS_AUDIT"
 echo "[INFO] Country timeout seconds: $COUNTRY_TIMEOUT_SECONDS"
 
 PIPELINE_ID="msrp_${MODE}"
-_write_msrp_status "$PIPELINE_ID" "running" "run $RUN_ID started countries=${#COUNTRIES[@]} concurrency=$CONCURRENCY"
+_write_msrp_status "$PIPELINE_ID" "running" "run $RUN_ID started countries=${#COUNTRIES[@]} concurrency=$CONCURRENCY requested_concurrency=$REQUESTED_CONCURRENCY"
 
 total="${#COUNTRIES[@]}"
 active=0

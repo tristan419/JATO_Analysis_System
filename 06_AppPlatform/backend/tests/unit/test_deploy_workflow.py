@@ -47,6 +47,8 @@ def test_msrp_systemd_service_does_not_force_local_proxy() -> None:
     assert "Environment=https_proxy=http://127.0.0.1:7897" not in service
     assert "Leave unset for direct official-site access" in env_example
     assert "JATO_MSRP_CONCURRENCY=2" in env_example
+    assert "JATO_MSRP_MAX_DRYRUN_CONCURRENCY=2" in env_example
+    assert "JATO_MSRP_ALLOW_HIGH_CONCURRENCY=false" in env_example
 
 
 def test_deploy_bootstraps_missing_msrp_dryrun_artifacts_async() -> None:
@@ -73,8 +75,12 @@ def test_msrp_runner_writes_running_status_and_caps_country_runtime() -> None:
     )
 
     assert "JATO_MSRP_COUNTRY_TIMEOUT_SECONDS" in script
+    assert "JATO_MSRP_MAX_DRYRUN_CONCURRENCY" in script
+    assert "JATO_MSRP_ALLOW_HIGH_CONCURRENCY" in script
+    assert "Dryrun concurrency requested=" in script
     assert 'PIPELINE_ID="msrp_${MODE}"' in script
     assert '_write_msrp_status "$PIPELINE_ID" "running"' in script
+    assert "requested_concurrency=$REQUESTED_CONCURRENCY" in script
     assert 'run_cmd=("$TIMEOUT_BIN" "${COUNTRY_TIMEOUT_SECONDS}s" "${cmd[@]}")' in script
     assert "[TIMEOUT] country=$country exceeded" in script
 
@@ -100,6 +106,8 @@ def test_public_deploy_status_reports_msrp_scheduler_and_artifacts() -> None:
         encoding="utf-8",
     )
     assert "JATO_MSRP_CONCURRENCY" in script
+    assert "JATO_MSRP_MAX_DRYRUN_CONCURRENCY" in script
+    assert "JATO_MSRP_ALLOW_HIGH_CONCURRENCY" in script
     assert "proxy_configured=" in script
     assert "DEEPSEEK_API_KEY" not in script
 
