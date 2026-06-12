@@ -1,19 +1,19 @@
 source_code: kia_ev3_no_draft_scrapling
 country: 挪威
 brand: KIA
-source_url: https://www.kia.com/no/modeller/ev3/
+source_url: https://www.kia.com/no/kjop/sammenlign-modeller/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.kia.com/no/modeller/ev3/
+  url: https://www.kia.com/no/kjop/sammenlign-modeller/
   headless: true
   default_currency: NOK
   default_tax_included: true
-  default_price_label: Veiledende pris inkl. mva
+  default_price_label: Pris fra inkl. mva
   fixed_model: EV3
   fixed_jato_model: EV3
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -72,6 +72,12 @@ profile:
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
   json_script_selector: script[type='application/ld+json']
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'Våre biler\s+EV3\s+Pris fra \(inkl\. mva\)\.?\s*(?P<price>\d{3}\s+\d{3})\s*kr'
+      official_trim: Base from price
+      official_powertrain: BEV
   css:
     vehicle_container: body
     model: h2, h3

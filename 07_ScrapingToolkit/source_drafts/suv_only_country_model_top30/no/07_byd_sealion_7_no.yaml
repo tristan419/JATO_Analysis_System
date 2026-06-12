@@ -1,15 +1,15 @@
 source_code: byd_sealion_7_no_draft_scrapling
 country: 挪威
 brand: BYD
-source_url: https://www.byd.com/no/car/seal-ion-7
+source_url: https://byd.no/modeller/sealion7
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.byd.com/no/car/seal-ion-7
-  tier: stealth
+  url: https://byd.no/modeller/sealion7
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
   impersonate: chrome
   default_currency: NOK
   default_tax_included: true
