@@ -522,6 +522,23 @@ jobs:
             sudo -n systemctl status jato-msrp-sync@dryrun.service --no-pager 2>&1 || true
             echo "---msrp timers---"
             sudo -n systemctl list-timers --all 'jato-msrp*' --no-pager 2>&1 || true
+            echo "---msrp env---"
+            if [ -f /etc/jato-fullstack/msrp.env ]; then
+              while IFS='=' read -r key value; do
+                case "$key" in
+                  JATO_MSRP_MODE|JATO_MSRP_COUNTRIES|JATO_MSRP_CONCURRENCY|JATO_MSRP_PAUSE_SECONDS|JATO_MSRP_STOP_ON_FAILURE|JATO_MSRP_COUNTRY_TIMEOUT_SECONDS|JATO_MSRP_MIN_DRYRUN_PASS_PCT|JATO_STRICT_EXIT)
+                    printf '%s=%s\n' "$key" "$value"
+                    ;;
+                esac
+              done < /etc/jato-fullstack/msrp.env
+              if grep -Eq '^(http_proxy|https_proxy|HTTP_PROXY|HTTPS_PROXY)=' /etc/jato-fullstack/msrp.env; then
+                echo "proxy_configured=true"
+              else
+                echo "proxy_configured=false"
+              fi
+            else
+              echo "missing /etc/jato-fullstack/msrp.env"
+            fi
             echo "---msrp artifacts---"
             for artifact_path in \
               03_Scripts/diagnostics/artifacts/dryrun_report.json \
@@ -838,6 +855,23 @@ jobs:
             sudo -n systemctl status jato-msrp-sync@dryrun.service --no-pager 2>&1 || true
             echo "---msrp timers---"
             sudo -n systemctl list-timers --all 'jato-msrp*' --no-pager 2>&1 || true
+            echo "---msrp env---"
+            if [ -f /etc/jato-fullstack/msrp.env ]; then
+              while IFS='=' read -r key value; do
+                case "$key" in
+                  JATO_MSRP_MODE|JATO_MSRP_COUNTRIES|JATO_MSRP_CONCURRENCY|JATO_MSRP_PAUSE_SECONDS|JATO_MSRP_STOP_ON_FAILURE|JATO_MSRP_COUNTRY_TIMEOUT_SECONDS|JATO_MSRP_MIN_DRYRUN_PASS_PCT|JATO_STRICT_EXIT)
+                    printf '%s=%s\n' "$key" "$value"
+                    ;;
+                esac
+              done < /etc/jato-fullstack/msrp.env
+              if grep -Eq '^(http_proxy|https_proxy|HTTP_PROXY|HTTPS_PROXY)=' /etc/jato-fullstack/msrp.env; then
+                echo "proxy_configured=true"
+              else
+                echo "proxy_configured=false"
+              fi
+            else
+              echo "missing /etc/jato-fullstack/msrp.env"
+            fi
             echo "---msrp artifacts---"
             for artifact_path in \
               03_Scripts/diagnostics/artifacts/dryrun_report.json \

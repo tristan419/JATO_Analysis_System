@@ -46,6 +46,7 @@ def test_msrp_systemd_service_does_not_force_local_proxy() -> None:
     assert "Environment=http_proxy=http://127.0.0.1:7897" not in service
     assert "Environment=https_proxy=http://127.0.0.1:7897" not in service
     assert "Leave unset for direct official-site access" in env_example
+    assert "JATO_MSRP_CONCURRENCY=2" in env_example
 
 
 def test_deploy_bootstraps_missing_msrp_dryrun_artifacts_async() -> None:
@@ -87,6 +88,9 @@ def test_public_deploy_status_reports_msrp_scheduler_and_artifacts() -> None:
     assert "systemctl status jato-msrp-dryrun.timer" in workflow
     assert "systemctl status jato-msrp-sync@dryrun.service" in workflow
     assert "systemctl list-timers --all 'jato-msrp*'" in workflow
+    assert "---msrp env---" in workflow
+    assert "JATO_MSRP_CONCURRENCY" in workflow
+    assert "proxy_configured=" in workflow
     assert "---msrp artifacts---" in workflow
     assert "03_Scripts/diagnostics/artifacts/dryrun_report.json" in workflow
     assert "03_Scripts/diagnostics/artifacts/dryrun_runs_index.json" in workflow
