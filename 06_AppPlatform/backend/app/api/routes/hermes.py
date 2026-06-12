@@ -231,6 +231,76 @@ def _missing_msrp_progress() -> dict[str, Any]:
     }
 
 
+def _msrp_progress_from_partial_current(current: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not current or not current.get("available") or not current.get("partial"):
+        return None
+
+    countries: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = [{
+        "type": "dryrun_running_without_aggregate",
+        "severity": "warning",
+        "message": "MSRP dryrun is running and country-level partial artifacts are available; aggregate report is pending.",
+        "runId": current.get("runId"),
+    }]
+    for country in current.get("countries") or []:
+        code = str(country.get("countryCode") or "").lower()
+        entry = {
+            "countryCode": code,
+            "total": int(country.get("total") or 0),
+            "pass": int(country.get("pass") or 0),
+            "empty": int(country.get("empty") or 0),
+            "fail": int(country.get("fail") or 0),
+            "errors": int(country.get("errors") or 0),
+            "passPct": float(country.get("passRate") or 0.0),
+            "status": country.get("status") or ("success" if country.get("completed") else "running"),
+            "topFailureReason": country.get("topFailureReason"),
+            "failureBreakdown": country.get("failureBreakdown") or {},
+            "strategyRecommendations": country.get("strategyRecommendations") or {},
+        }
+        countries.append(entry)
+        if not country.get("completed"):
+            findings.append({
+                "type": "country_running",
+                "severity": "info",
+                "message": f"Country '{code}' has not finished in the active dryrun.",
+                "country": code,
+            })
+
+    return {
+        "probe": "pipeline.msrp_country_progress",
+        "overall": "warning",
+        "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "status": {
+            "runId": current.get("runId"),
+            "schemaVersion": current.get("schemaVersion"),
+            "running": bool(current.get("running")),
+            "partial": True,
+            "overallPassPct": float(current.get("overallPassRate") or 0.0),
+            "gateThreshold": current.get("gateThreshold"),
+            "gateStatus": current.get("gateStatus") or "pending",
+            "expectedCountries": current.get("expectedCountries") or [],
+            "observedCountries": current.get("observedCountries") or [],
+            "missingCountries": current.get("missingCountries") or [],
+            "duplicateCountries": [],
+        },
+        "countries": countries,
+        "topBlockingCountries": [],
+        "topFailureReasons": [],
+        "sourceRepairBacklog": _load_msrp_source_repair_backlog(),
+        "findings": findings,
+    }
+
+
+def _partial_msrp_progress() -> dict[str, Any] | None:
+    try:
+        from app.services.msrp_dryrun_progress import get_dryrun_dashboard
+        dashboard = get_dryrun_dashboard()
+    except Exception:
+        return None
+    current = dashboard.get("current") if isinstance(dashboard, dict) else None
+    return _msrp_progress_from_partial_current(current if isinstance(current, dict) else None)
+
+
 @router.get("/overview")
 def hermes_overview(_=Depends(require_min_role("viewer"))) -> dict:
     """Return a consolidated Hermes governance overview."""
@@ -355,10 +425,15 @@ def hermes_msrp_country_progress(
     latest_run_id = (latest_report or {}).get("runId")
     if latest_report and (_is_empty_msrp_progress(static_progress) or static_run_id != latest_run_id):
         return _msrp_progress_from_report(latest_report)
-    if static_progress:
+    if static_progress and not _is_empty_msrp_progress(static_progress):
         return static_progress
     if latest_report:
         return _msrp_progress_from_report(latest_report)
+    partial_progress = _partial_msrp_progress()
+    if partial_progress:
+        return partial_progress
+    if static_progress:
+        return static_progress
     return _missing_msrp_progress()
 
 

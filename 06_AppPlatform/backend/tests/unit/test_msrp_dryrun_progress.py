@@ -102,3 +102,70 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
     assert dashboard["current"]["countries"][0]["sources"][0]["finalUrl"] == "https://www.volvocars.com/se/build/xc60-hybrid/"
     assert dashboard["current"]["countries"][0]["sources"][0]["httpStatus"] == 0
     assert dashboard["history"][0]["runId"] == "msrp-dryrun-20260611-120000"
+
+
+def test_dashboard_reads_partial_run_dir_country_artifacts(tmp_path, monkeypatch):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    run_dir = logs / "msrp-dryrun-20260612-070207"
+    country_dir = run_dir / "countries"
+    artifacts.mkdir()
+    country_dir.mkdir(parents=True)
+    (run_dir / "run.log").write_text(
+        "\n".join([
+            "[RUN] 1/2 country=se mode=dryrun (parallel slot 1/2)",
+            "[RUN] 2/2 country=fi mode=dryrun (parallel slot 2/2)",
+        ]),
+        encoding="utf-8",
+    )
+    (run_dir / "fi.log").write_text(
+        "[ 1/2] ✅ volvo_xc60_fi_draft_scrapling valid=2 extracted=2 rejected=0 (4.0s)\n",
+        encoding="utf-8",
+    )
+    (country_dir / "se.json").write_text(json.dumps({
+        "schemaVersion": "msrp_dryrun_country_v1",
+        "runId": "msrp-dryrun-20260612-070207",
+        "country": "se",
+        "total": 1,
+        "pass": 1,
+        "empty": 0,
+        "fail": 0,
+        "errors": 0,
+        "passPct": 100.0,
+        "status": "success",
+        "failureBreakdown": {},
+        "strategyRecommendations": {},
+        "results": [{
+            "country": "se",
+            "sourceCode": "volvo_xc60_se_draft_scrapling",
+            "status": "pass",
+            "valid": 1,
+            "extracted": 1,
+            "rejected": 0,
+            "elapsedSeconds": 2.5,
+            "sourceUrl": "https://www.volvocars.com/se/",
+        }],
+    }), encoding="utf-8")
+    lock_file = tmp_path / "jato-msrp-low-concurrency.lock"
+    lock_file.write_text("locked", encoding="utf-8")
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+    monkeypatch.setattr(progress, "LOCK_FILE", lock_file)
+
+    dashboard = progress.get_dryrun_dashboard()
+    current = dashboard["current"]
+
+    assert current["available"] is True
+    assert current["partial"] is True
+    assert current["running"] is True
+    assert current["runId"] == "msrp-dryrun-20260612-070207"
+    assert current["totalSources"] == 3
+    assert current["totalPass"] == 2
+    assert [country["countryCode"] for country in current["countries"]] == ["se", "fi"]
+    assert current["countries"][0]["completed"] is True
+    assert current["countries"][0]["sources"][0]["sourceUrl"] == "https://www.volvocars.com/se/"
+    assert current["countries"][1]["completed"] is False
+    assert current["countries"][1]["sources"][0]["sourceCode"] == "volvo_xc60_fi_draft_scrapling"

@@ -18,6 +18,7 @@ LATEST_REPORT_PATH = ARTIFACT_DIR / "dryrun_report.json"
 RUNS_INDEX_PATH = ARTIFACT_DIR / "dryrun_runs_index.json"
 LOCK_FILE = Path("/tmp/jato-msrp-low-concurrency.lock")
 DRYRUN_LOG_PATTERN = re.compile(r"msrp-dryrun-(\d{8})-(\d{6})\.log")
+DRYRUN_RUN_DIR_PATTERN = re.compile(r"msrp-dryrun-(\d{8})-(\d{6})$")
 
 _COUNTRY_NAMES: dict[str, str] = {
     "se": "Sweden", "fi": "Finland", "no": "Norway", "dk": "Denmark",
@@ -33,6 +34,13 @@ def _country_label(cc: str) -> str:
 
 def _parse_log_timestamp(filename: str) -> datetime | None:
     m = DRYRUN_LOG_PATTERN.search(filename)
+    if not m:
+        return None
+    return datetime.strptime(f"{m.group(1)}{m.group(2)}", "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+
+
+def _parse_run_dir_timestamp(name: str) -> datetime | None:
+    m = DRYRUN_RUN_DIR_PATTERN.search(name)
     if not m:
         return None
     return datetime.strptime(f"{m.group(1)}{m.group(2)}", "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
@@ -211,6 +219,204 @@ def _list_log_files() -> list[Path]:
         return []
     files = sorted(LOG_DIR.glob("msrp-dryrun-*.log"), reverse=True)
     return files
+
+
+def _list_run_dirs() -> list[Path]:
+    if not LOG_DIR.exists():
+        return []
+    return sorted(
+        [path for path in LOG_DIR.glob("msrp-dryrun-*") if path.is_dir()],
+        key=lambda path: path.stat().st_mtime if path.exists() else 0,
+        reverse=True,
+    )
+
+
+def _run_dir_for_partial(run_id: str | None = None) -> Path | None:
+    if run_id:
+        path = LOG_DIR / run_id
+        return path if path.is_dir() else None
+    run_dirs = _list_run_dirs()
+    return run_dirs[0] if run_dirs else None
+
+
+def _expected_countries_from_run_log(run_dir: Path) -> list[str]:
+    log_path = run_dir / "run.log"
+    if not log_path.is_file():
+        return []
+    text = log_path.read_text(errors="replace")
+    countries: list[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"\[RUN\]\s+\d+/\d+\s+country=(\w+)\s+mode=", text):
+        code = match.group(1).strip().lower()
+        if code and code not in seen:
+            countries.append(code)
+            seen.add(code)
+    return countries
+
+
+def _parse_country_log(log_path: Path) -> dict[str, Any]:
+    if not log_path.is_file():
+        return {"sources": [], "completed": False, "total": 0, "pass": 0, "empty": 0, "fail": 0, "errors": 0}
+    text = log_path.read_text(errors="replace")
+    sources: list[dict[str, Any]] = []
+    for m in re.finditer(
+        r"\[\s*(\d+)/(\d+)\]\s*(\S+)\s+(\S+)\s+valid=(\d+)\s+extracted=(\d+)\s+rejected=(\d+)\s+\(([\d.]+)s\)",
+        text,
+    ):
+        emoji = m.group(3)
+        status = "pass" if "✅" in emoji else ("empty" if "⬚" in emoji else "fail")
+        sources.append({
+            "index": int(m.group(1)),
+            "totalInCountry": int(m.group(2)),
+            "sourceCode": m.group(4),
+            "status": status,
+            "valid": int(m.group(5)),
+            "extracted": int(m.group(6)),
+            "rejected": int(m.group(7)),
+            "elapsedSeconds": float(m.group(8)),
+        })
+    summary_m = re.search(
+        r"Results:\s*(\d+)/(\d+)\s+PASS,\s*(\d+)\s+empty,\s*(\d+)\s+rejected-all,\s*(\d+)\s+errors",
+        text,
+    )
+    if summary_m:
+        return {
+            "sources": sources,
+            "completed": True,
+            "total": int(summary_m.group(2)),
+            "pass": int(summary_m.group(1)),
+            "empty": int(summary_m.group(3)),
+            "fail": int(summary_m.group(4)),
+            "errors": int(summary_m.group(5)),
+        }
+    pass_count = sum(1 for source in sources if source["status"] == "pass")
+    empty_count = sum(1 for source in sources if source["status"] == "empty")
+    fail_count = sum(1 for source in sources if source["status"] == "fail")
+    total = max([int(source.get("totalInCountry") or 0) for source in sources] or [0])
+    return {
+        "sources": sources,
+        "completed": False,
+        "total": total,
+        "pass": pass_count,
+        "empty": empty_count,
+        "fail": fail_count,
+        "errors": 0,
+    }
+
+
+def _country_from_artifact(path: Path) -> dict[str, Any] | None:
+    artifact = _load_json(path)
+    if not artifact or artifact.get("schemaVersion") != "msrp_dryrun_country_v1":
+        return None
+    code = str(artifact.get("country") or path.stem).strip().lower()
+    total = int(artifact.get("total") or 0)
+    sources = [
+        _normalize_source(source, index, total)
+        for index, source in enumerate(artifact.get("results") or [], start=1)
+    ]
+    failure_breakdown = artifact.get("failureBreakdown") or {}
+    top_failure = max(failure_breakdown, key=failure_breakdown.get) if failure_breakdown else None
+    fail_count = int(artifact.get("fail") or 0) + int(artifact.get("errors") or 0)
+    return {
+        "countryCode": code,
+        "countryLabel": _country_label(code),
+        "total": total,
+        "pass": int(artifact.get("pass") or 0),
+        "empty": int(artifact.get("empty") or 0),
+        "fail": fail_count,
+        "errors": int(artifact.get("errors") or 0),
+        "completed": True,
+        "passRate": float(artifact.get("passPct") or 0),
+        "status": artifact.get("status") or "unknown",
+        "topFailureReason": top_failure,
+        "failureBreakdown": failure_breakdown,
+        "strategyRecommendations": artifact.get("strategyRecommendations") or {},
+        "sources": sources,
+    }
+
+
+def _current_from_partial_run_dir(run_id: str | None = None) -> dict[str, Any] | None:
+    run_dir = _run_dir_for_partial(run_id)
+    if not run_dir:
+        return None
+
+    countries_by_code: dict[str, dict[str, Any]] = {}
+    country_artifact_dir = run_dir / "countries"
+    if country_artifact_dir.is_dir():
+        for path in sorted(country_artifact_dir.glob("*.json")):
+            country = _country_from_artifact(path)
+            if country:
+                countries_by_code[country["countryCode"]] = country
+
+    expected = _expected_countries_from_run_log(run_dir)
+    if not expected:
+        expected = sorted(countries_by_code)
+
+    for code in expected:
+        if code in countries_by_code:
+            continue
+        parsed_log = _parse_country_log(run_dir / f"{code}.log")
+        total = int(parsed_log.get("total") or 0)
+        pass_count = int(parsed_log.get("pass") or 0)
+        empty_count = int(parsed_log.get("empty") or 0)
+        fail_count = int(parsed_log.get("fail") or 0) + int(parsed_log.get("errors") or 0)
+        countries_by_code[code] = {
+            "countryCode": code,
+            "countryLabel": _country_label(code),
+            "total": total,
+            "pass": pass_count,
+            "empty": empty_count,
+            "fail": fail_count,
+            "errors": int(parsed_log.get("errors") or 0),
+            "completed": bool(parsed_log.get("completed")),
+            "passRate": round(pass_count / max(total, 1) * 100, 1) if total > 0 else 0,
+            "status": "success" if parsed_log.get("completed") else "running",
+            "sources": parsed_log.get("sources") or [],
+            "failureBreakdown": {},
+            "strategyRecommendations": {},
+        }
+
+    ordered_codes = expected + [code for code in sorted(countries_by_code) if code not in expected]
+    countries = [countries_by_code[code] for code in ordered_codes if code in countries_by_code]
+    if not countries:
+        return None
+
+    total_sources = sum(int(country.get("total") or 0) for country in countries)
+    total_pass = sum(int(country.get("pass") or 0) for country in countries)
+    total_empty = sum(int(country.get("empty") or 0) for country in countries)
+    total_fail = sum(int(country.get("fail") or 0) for country in countries)
+    started = _parse_run_dir_timestamp(run_dir.name)
+    running = _is_running() or any(not country.get("completed") for country in countries)
+    return {
+        "available": True,
+        "running": running,
+        "partial": True,
+        "runId": run_dir.name,
+        "batch": "",
+        "schemaVersion": "msrp_dryrun_partial_v1",
+        "gateStatus": "pending" if running else None,
+        "gateThreshold": None,
+        "logFile": f"{run_dir.name}/run.log",
+        "startedAt": started.isoformat() if started else datetime.fromtimestamp(run_dir.stat().st_mtime, tz=timezone.utc).isoformat(),
+        "finishedAt": None,
+        "countries": countries,
+        "expectedCountries": expected,
+        "observedCountries": [country["countryCode"] for country in countries if country.get("completed")],
+        "missingCountries": [country["countryCode"] for country in countries if not country.get("completed")],
+        "duplicateCountries": [],
+        "totalSources": total_sources,
+        "totalPass": total_pass,
+        "totalEmpty": total_empty,
+        "totalFail": total_fail,
+        "overallPassRate": round(total_pass / max(total_sources, 1) * 100, 1) if total_sources > 0 else 0,
+        "failureBreakdown": {},
+        "strategyRecommendations": {},
+        "recentResults": [
+            source
+            for country in countries[-3:]
+            for source in (country.get("sources") or [])[-5:]
+        ][-20:],
+    }
 
 
 def _parse_current_progress(log_path: Path | None = None) -> dict[str, Any]:
@@ -476,7 +682,7 @@ def get_dryrun_dashboard(run_id: str | None = None) -> dict[str, Any]:
         current = _current_from_v3_report(report, index_data)
         history = _history_from_runs_index() or _list_historical_runs()
     else:
-        current = _parse_current_progress()
+        current = _current_from_partial_run_dir(run_id) or _parse_current_progress()
         history = _history_from_runs_index() or _list_historical_runs()
 
     # Also list available log files for drill-down

@@ -189,6 +189,7 @@ class TestSentinelAndDeploy:
         with (
             patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path),
             patch("app.api.routes.hermes.REPORTS_DIR", reports_dir),
+            patch("app.api.routes.hermes._partial_msrp_progress", return_value=None),
         ):
             resp = client.get("/hermes/msrp-country-progress")
 
@@ -198,6 +199,53 @@ class TestSentinelAndDeploy:
         assert data["countries"] == []
         assert data["findings"][0]["type"] == "no_dryrun_report"
         assert data["sourceRepairBacklog"]["groups"] == []
+
+    def test_msrp_country_progress_uses_partial_running_state(self, client, tmp_path):
+        reports_dir = tmp_path / "hermes" / "reports"
+        reports_dir.mkdir(parents=True)
+        _write_json(reports_dir / "msrp_country_progress.json", {
+            "probe": "pipeline.msrp_country_progress",
+            "overall": "critical",
+            "status": {},
+            "countries": [],
+            "findings": [{"type": "no_dryrun_report", "severity": "critical"}],
+        })
+        partial_progress = {
+            "probe": "pipeline.msrp_country_progress",
+            "overall": "warning",
+            "generatedAt": "2026-06-12T08:00:00Z",
+            "status": {
+                "runId": "msrp-dryrun-20260612-070207",
+                "schemaVersion": "msrp_dryrun_partial_v1",
+                "running": True,
+                "partial": True,
+                "overallPassPct": 66.7,
+                "gateStatus": "pending",
+                "expectedCountries": ["se", "fi"],
+                "observedCountries": ["se"],
+                "missingCountries": ["fi"],
+                "duplicateCountries": [],
+            },
+            "countries": [{"countryCode": "se", "passPct": 100.0}],
+            "topBlockingCountries": [],
+            "topFailureReasons": [],
+            "sourceRepairBacklog": {"schemaVersion": "msrp_source_repair_backlog_v1", "groups": []},
+            "findings": [{"type": "dryrun_running_without_aggregate", "severity": "warning"}],
+        }
+
+        with (
+            patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path),
+            patch("app.api.routes.hermes.REPORTS_DIR", reports_dir),
+            patch("app.api.routes.hermes._partial_msrp_progress", return_value=partial_progress),
+        ):
+            resp = client.get("/hermes/msrp-country-progress")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["overall"] == "warning"
+        assert data["status"]["partial"] is True
+        assert data["status"]["runId"] == "msrp-dryrun-20260612-070207"
+        assert data["findings"][0]["type"] == "dryrun_running_without_aggregate"
 
     def test_msrp_country_progress_missing_specific_run_remains_404(self, client, tmp_path):
         reports_dir = tmp_path / "hermes" / "reports"
