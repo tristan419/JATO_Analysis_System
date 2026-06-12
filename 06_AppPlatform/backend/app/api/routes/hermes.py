@@ -593,6 +593,16 @@ def hermes_msrp_country_progress(
     latest_report = _load_msrp_dryrun_report()
     static_run_id = (static_progress or {}).get("status", {}).get("runId")
     latest_run_id = (latest_report or {}).get("runId")
+    partial_progress = _partial_msrp_progress()
+    partial_status = (partial_progress or {}).get("status") or {}
+    partial_run_id = partial_status.get("runId")
+    if (
+        partial_progress
+        and partial_status.get("running")
+        and partial_run_id
+        and partial_run_id not in {known_run_id for known_run_id in (static_run_id, latest_run_id) if known_run_id}
+    ):
+        return partial_progress
     if latest_report and (
         _is_empty_msrp_progress(static_progress)
         or static_run_id != latest_run_id
@@ -603,7 +613,6 @@ def hermes_msrp_country_progress(
         return static_progress
     if latest_report:
         return _msrp_progress_from_report(latest_report)
-    partial_progress = _partial_msrp_progress()
     if partial_progress:
         return partial_progress
     if static_progress:

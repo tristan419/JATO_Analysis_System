@@ -104,6 +104,107 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
     assert dashboard["history"][0]["runId"] == "msrp-dryrun-20260611-120000"
 
 
+def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path, monkeypatch):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    active_run = logs / "msrp-dryrun-20260612-125301"
+    country_dir = active_run / "countries"
+    artifacts.mkdir()
+    country_dir.mkdir(parents=True)
+
+    old_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260612-070207",
+        "batch": "old_batch",
+        "expectedCountries": ["se"],
+        "observedCountries": ["se"],
+        "missingCountries": [],
+        "duplicateCountries": [],
+        "summary": {
+            "total": 1,
+            "pass": 0,
+            "empty": 1,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 0.0,
+            "status": "failure",
+            "gateThreshold": 70,
+            "gateStatus": "blocked",
+        },
+        "countriesDetail": [],
+        "generatedAt": "2026-06-12T09:31:08Z",
+    }
+    index = {
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "latestRunId": old_report["runId"],
+        "runs": [
+            {
+                "runId": old_report["runId"],
+                "batch": "old_batch",
+                "finishedAt": "2026-06-12T09:31:08Z",
+                "status": "failure",
+                "gateStatus": "blocked",
+                "passPct": 0.0,
+                "total": 1,
+                "pass": 0,
+                "empty": 1,
+                "fail": 0,
+                "errors": 0,
+                "artifactPath": str(artifacts / f"dryrun_report_{old_report['runId']}.json"),
+            }
+        ],
+    }
+    (artifacts / "dryrun_report.json").write_text(json.dumps(old_report), encoding="utf-8")
+    (artifacts / f"dryrun_report_{old_report['runId']}.json").write_text(json.dumps(old_report), encoding="utf-8")
+    (artifacts / "dryrun_runs_index.json").write_text(json.dumps(index), encoding="utf-8")
+    (active_run / "run.log").write_text(
+        "\n".join([
+            "[RUN] 1/2 country=se mode=dryrun (parallel slot 1/2)",
+            "[RUN] 2/2 country=fi mode=dryrun (parallel slot 2/2)",
+        ]),
+        encoding="utf-8",
+    )
+    (country_dir / "se.json").write_text(json.dumps({
+        "schemaVersion": "msrp_dryrun_country_v1",
+        "runId": "msrp-dryrun-20260612-125301",
+        "country": "se",
+        "total": 1,
+        "pass": 1,
+        "empty": 0,
+        "fail": 0,
+        "errors": 0,
+        "passPct": 100.0,
+        "status": "success",
+        "failureBreakdown": {},
+        "strategyRecommendations": {},
+        "results": [{
+            "country": "se",
+            "sourceCode": "volvo_xc60_se_draft_scrapling",
+            "status": "success",
+            "valid": 1,
+            "extracted": 1,
+            "rejected": 0,
+        }],
+    }), encoding="utf-8")
+    lock_file = tmp_path / "jato-msrp-low-concurrency.lock"
+    lock_file.write_text("locked", encoding="utf-8")
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+    monkeypatch.setattr(progress, "LOCK_FILE", lock_file)
+
+    dashboard = progress.get_dryrun_dashboard()
+    current = dashboard["current"]
+
+    assert current["partial"] is True
+    assert current["running"] is True
+    assert current["runId"] == "msrp-dryrun-20260612-125301"
+    assert [country["countryCode"] for country in current["countries"]] == ["se", "fi"]
+    assert dashboard["history"][0]["runId"] == "msrp-dryrun-20260612-070207"
+
+
 def test_dashboard_reads_partial_run_dir_country_artifacts(tmp_path, monkeypatch):
     artifacts = tmp_path / "artifacts"
     logs = tmp_path / "logs"

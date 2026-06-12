@@ -762,12 +762,13 @@ def _list_historical_runs() -> list[dict[str, Any]]:
 def get_dryrun_dashboard(run_id: str | None = None) -> dict[str, Any]:
     """Return combined dashboard data: live progress + history."""
     index_data = _load_json(RUNS_INDEX_PATH)
-    report = _load_v3_report(run_id)
+    current = _current_from_partial_run_dir() if run_id is None else None
+    report = None if current and current.get("running") else _load_v3_report(run_id)
     if report:
         current = _current_from_v3_report(report, index_data)
         history = _history_from_runs_index() or _list_historical_runs()
     else:
-        current = _current_from_partial_run_dir(run_id) or _parse_current_progress()
+        current = current or _current_from_partial_run_dir(run_id) or _parse_current_progress()
         history = _history_from_runs_index() or _list_historical_runs()
 
     # Also list available log files for drill-down
