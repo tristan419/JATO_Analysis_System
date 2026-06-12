@@ -146,7 +146,11 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/github_actions_tencent_key
           chmod 600 ~/.ssh/github_actions_tencent_key
 
-          timeout 600s ssh -T -v -p "$SSH_PORT" \
+          ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"
+          REMOTE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
+          ls -lh "$ARCHIVE_PATH"
+
+          timeout 900s scp -q -P "$SSH_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
@@ -154,10 +158,24 @@ jobs:
             -o ConnectionAttempts=2 \
             -o ServerAliveInterval=10 \
             -o ServerAliveCountMax=2 \
+            -o Compression=yes \
+            -o IPQoS=none \
+            -i ~/.ssh/github_actions_tencent_key \
+            "$ARCHIVE_PATH" \
+            "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE"
+
+          timeout 60s ssh -T -p "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=20 \
+            -o ConnectionAttempts=2 \
+            -o ServerAliveInterval=10 \
+            -o ServerAliveCountMax=2 \
+            -o IPQoS=none \
             -i ~/.ssh/github_actions_tencent_key \
             "$SSH_USER@$SSH_HOST" \
-            'cat > /tmp/JATO_deploy.tar.gz && ls -lh /tmp/JATO_deploy.tar.gz' \
-            < "$RUNNER_TEMP/JATO_deploy.tar.gz"
+            "ls -lh '$REMOTE_ARCHIVE'"
 
       - name: Upload archive to server
         if: ${{ steps.auth.outputs.mode == 'password' }}
@@ -178,8 +196,12 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y sshpass
 
-          sshpass -p "$SSH_PASSWORD" \
-            timeout 600s ssh -T -v -p "$SSH_PORT" \
+          ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"
+          REMOTE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
+          ls -lh "$ARCHIVE_PATH"
+
+          timeout 900s sshpass -p "$SSH_PASSWORD" \
+            scp -q -P "$SSH_PORT" \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
             -o StrictHostKeyChecking=no \
@@ -188,9 +210,24 @@ jobs:
             -o ConnectionAttempts=2 \
             -o ServerAliveInterval=10 \
             -o ServerAliveCountMax=2 \
+            -o Compression=yes \
+            -o IPQoS=none \
+            "$ARCHIVE_PATH" \
+            "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE"
+
+          timeout 60s sshpass -p "$SSH_PASSWORD" \
+            ssh -T -p "$SSH_PORT" \
+            -o PreferredAuthentications=password \
+            -o PubkeyAuthentication=no \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=20 \
+            -o ConnectionAttempts=2 \
+            -o ServerAliveInterval=10 \
+            -o ServerAliveCountMax=2 \
+            -o IPQoS=none \
             "$SSH_USER@$SSH_HOST" \
-            'cat > /tmp/JATO_deploy.tar.gz && ls -lh /tmp/JATO_deploy.tar.gz' \
-            < "$RUNNER_TEMP/JATO_deploy.tar.gz"
+            "ls -lh '$REMOTE_ARCHIVE'"
 
       - name: Deploy on server via SSH
         if: ${{ steps.auth.outputs.mode == 'key' }}
@@ -263,11 +300,13 @@ jobs:
           RELEASE_WORKTREE="/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}"
           RELEASE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
           RELEASE_REMOTE="https://github.com/tristan419/JATO_Analysis_System.git"
+          DEPLOY_SOURCE="github_sparse_checkout"
 
           rm -rf "$RELEASE_WORKTREE"
           mkdir -p "$RELEASE_WORKTREE"
           if [ -f "$RELEASE_ARCHIVE" ]; then
             echo "[INFO] Using uploaded deploy archive: $RELEASE_ARCHIVE"
+            DEPLOY_SOURCE="github_actions_archive"
             tar xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"
             rm -f "$RELEASE_ARCHIVE"
           else
@@ -333,7 +372,7 @@ jobs:
           done
           rm -rf "$RELEASE_WORKTREE"
 
-          export REPO_DIR
+          export REPO_DIR DEPLOY_SOURCE
           python3 - <<'PY'
           import datetime as _dt
           import json
@@ -356,7 +395,7 @@ jobs:
               "workflowRunAttempt": os.environ.get("DEPLOY_RUN_ATTEMPT", ""),
               "deployMethod": "github_actions",
               "packagedAt": _dt.datetime.now(_dt.UTC).isoformat(),
-              "source": "github_sparse_checkout",
+              "source": os.environ.get("DEPLOY_SOURCE", "github_sparse_checkout"),
           }
           out = root / "hermes" / "deploy_release.json"
           out.parent.mkdir(parents=True, exist_ok=True)
@@ -536,11 +575,13 @@ jobs:
           RELEASE_WORKTREE="/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}"
           RELEASE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
           RELEASE_REMOTE="https://github.com/tristan419/JATO_Analysis_System.git"
+          DEPLOY_SOURCE="github_sparse_checkout"
 
           rm -rf "$RELEASE_WORKTREE"
           mkdir -p "$RELEASE_WORKTREE"
           if [ -f "$RELEASE_ARCHIVE" ]; then
             echo "[INFO] Using uploaded deploy archive: $RELEASE_ARCHIVE"
+            DEPLOY_SOURCE="github_actions_archive"
             tar xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"
             rm -f "$RELEASE_ARCHIVE"
           else
@@ -606,7 +647,7 @@ jobs:
           done
           rm -rf "$RELEASE_WORKTREE"
 
-          export REPO_DIR
+          export REPO_DIR DEPLOY_SOURCE
           python3 - <<'PY'
           import datetime as _dt
           import json
@@ -629,7 +670,7 @@ jobs:
               "workflowRunAttempt": os.environ.get("DEPLOY_RUN_ATTEMPT", ""),
               "deployMethod": "github_actions",
               "packagedAt": _dt.datetime.now(_dt.UTC).isoformat(),
-              "source": "github_sparse_checkout",
+              "source": os.environ.get("DEPLOY_SOURCE", "github_sparse_checkout"),
           }
           out = root / "hermes" / "deploy_release.json"
           out.parent.mkdir(parents=True, exist_ok=True)
