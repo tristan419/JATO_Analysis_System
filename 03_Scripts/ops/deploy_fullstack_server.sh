@@ -408,6 +408,7 @@ bootstrap_msrp_dryrun_if_missing() {
   local latest_report="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_report.json"
   local runs_index="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_runs_index.json"
   local service_name="jato-msrp-sync@dryrun.service"
+  local gate_state="missing"
 
   if ! is_truthy "$BOOTSTRAP_MSRP_DRYRUN_IF_MISSING"; then
     echo "[INFO] Skipping MSRP dryrun bootstrap because BOOTSTRAP_MSRP_DRYRUN_IF_MISSING=$BOOTSTRAP_MSRP_DRYRUN_IF_MISSING"
@@ -415,8 +416,37 @@ bootstrap_msrp_dryrun_if_missing() {
   fi
 
   if [[ -s "$latest_report" && -s "$runs_index" ]]; then
-    echo "[INFO] MSRP dryrun artifacts already exist; not bootstrapping $service_name"
-    return 0
+    gate_state="$(
+      python3 - "$latest_report" <<'PY' 2>/dev/null || true
+import json
+import sys
+from pathlib import Path
+
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    print("missing")
+    raise SystemExit(0)
+status = str(payload.get("gateStatus") or payload.get("gate_status") or "").strip().lower()
+try:
+    pass_pct = float(payload.get("overallPassRate") or payload.get("overallPassPct") or 0)
+except (TypeError, ValueError):
+    pass_pct = 0.0
+try:
+    threshold = float(payload.get("gateThreshold") or 70)
+except (TypeError, ValueError):
+    threshold = 70.0
+if status == "allowed" or pass_pct >= threshold:
+    print("allowed")
+else:
+    print(status or "blocked")
+PY
+    )"
+    if [[ "$gate_state" == "allowed" ]]; then
+      echo "[INFO] MSRP dryrun artifacts already exist and gate is allowed; not bootstrapping $service_name"
+      return 0
+    fi
+    echo "[INFO] MSRP dryrun artifacts exist but gate is $gate_state; queueing a fresh $service_name"
   fi
 
   if sudo -n systemctl is-active --quiet "$service_name"; then
@@ -484,7 +514,6 @@ reconcile_scraper_schedulers() {
   restart_timer_unit jato-msrp-ingest.timer
   restart_timer_unit jato-voc-forum-sync.timer
   restart_timer_unit hermes-source-quality.timer
-  bootstrap_msrp_dryrun_if_missing
 }
 
 run_post_deploy_readiness_audits() {
@@ -768,6 +797,11 @@ for i in $(seq 1 15); do
   sleep 5
 done
 mark_release_deployed
+
+echo "[INFO] Bootstrap MSRP dryrun after backend health"
+CURRENT_STEP="Bootstrap MSRP dryrun"
+log_section "$CURRENT_STEP"
+bootstrap_msrp_dryrun_if_missing
 
 echo "[INFO] Run post-deploy readiness audits"
 CURRENT_STEP="Run post-deploy readiness audits"
