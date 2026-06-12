@@ -26,7 +26,7 @@ def _normalize_status(value: Any) -> str:
         return "failed"
     if status in {"degraded", "partial_success"}:
         return "degraded"
-    if status in {"success", "missing", "skipped", "unknown"}:
+    if status in {"success", "missing", "running", "skipped", "unknown"}:
         return status
     return "unknown"
 

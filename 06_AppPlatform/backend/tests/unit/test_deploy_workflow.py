@@ -58,6 +58,19 @@ def test_deploy_bootstraps_missing_msrp_dryrun_artifacts_async() -> None:
     assert "03_Scripts/diagnostics/artifacts/dryrun_runs_index.json" in script
     assert "systemctl start --no-block \"$service_name\"" in script
     assert "bootstrap_msrp_dryrun_if_missing" in script
+    assert '_write_msrp_status "msrp_dryrun" "running"' in script
+
+
+def test_msrp_runner_writes_running_status_and_caps_country_runtime() -> None:
+    script = (REPO_ROOT / "03_Scripts/run_msrp_low_concurrency.sh").read_text(
+        encoding="utf-8",
+    )
+
+    assert "JATO_MSRP_COUNTRY_TIMEOUT_SECONDS" in script
+    assert 'PIPELINE_ID="msrp_${MODE}"' in script
+    assert '_write_msrp_status "$PIPELINE_ID" "running"' in script
+    assert 'run_cmd=("$TIMEOUT_BIN" "${COUNTRY_TIMEOUT_SECONDS}s" "${cmd[@]}")' in script
+    assert "[TIMEOUT] country=$country exceeded" in script
 
 
 def test_public_deploy_status_reports_msrp_scheduler_and_artifacts() -> None:

@@ -84,7 +84,17 @@ CURRENT_SNAPSHOT_THRESHOLD_PCT="${JATO_MSRP_PRICE_ALERT_THRESHOLD_PCT:-3}"
 CURRENT_SNAPSHOT_TIMEOUT_SECONDS="${JATO_MSRP_CURRENT_SNAPSHOT_TIMEOUT_SECONDS:-30}"
 REFRESH_READINESS_AUDIT="${JATO_MSRP_REFRESH_READINESS_AUDIT:-true}"
 READINESS_AUDIT_TIMEOUT_SECONDS="${JATO_MSRP_READINESS_AUDIT_TIMEOUT_SECONDS:-30}"
+COUNTRY_TIMEOUT_SECONDS="${JATO_MSRP_COUNTRY_TIMEOUT_SECONDS:-3600}"
 export NVAPI_KEY="${NVAPI_KEY:-${NVIDIA_API_KEY:-}}"
+
+if ! [[ "$COUNTRY_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "[WARN] Invalid JATO_MSRP_COUNTRY_TIMEOUT_SECONDS=$COUNTRY_TIMEOUT_SECONDS; disabling per-country timeout"
+  COUNTRY_TIMEOUT_SECONDS=0
+fi
+TIMEOUT_BIN="$(command -v timeout || true)"
+if [[ "$COUNTRY_TIMEOUT_SECONDS" -gt 0 && -z "$TIMEOUT_BIN" ]]; then
+  echo "[WARN] timeout command not found; per-country timeout disabled on this host"
+fi
 
 # ── Dryrun-to-ingest gate ──────────────────────────────────────────
 MIN_DRYRUN_PASS_PCT="${JATO_MSRP_MIN_DRYRUN_PASS_PCT:-70}"
@@ -181,6 +191,10 @@ echo "[INFO] Auto review: $AUTO_REVIEW"
 echo "[INFO] Auto materialize: $AUTO_MATERIALIZE"
 echo "[INFO] Refresh current price snapshot: $REFRESH_CURRENT_SNAPSHOT"
 echo "[INFO] Refresh MSRP readiness audit: $REFRESH_READINESS_AUDIT"
+echo "[INFO] Country timeout seconds: $COUNTRY_TIMEOUT_SECONDS"
+
+PIPELINE_ID="msrp_${MODE}"
+_write_msrp_status "$PIPELINE_ID" "running" "run $RUN_ID started countries=${#COUNTRIES[@]} concurrency=$CONCURRENCY"
 
 total="${#COUNTRIES[@]}"
 active=0
@@ -217,12 +231,20 @@ while (( country_idx < total || active > 0 )); do
       if [[ "${#extra_args[@]}" -gt 0 ]]; then
         cmd+=("${extra_args[@]}")
       fi
-      if "${cmd[@]}"; then
+      run_cmd=("${cmd[@]}")
+      if [[ "$COUNTRY_TIMEOUT_SECONDS" -gt 0 && -n "$TIMEOUT_BIN" ]]; then
+        run_cmd=("$TIMEOUT_BIN" "${COUNTRY_TIMEOUT_SECONDS}s" "${cmd[@]}")
+      fi
+      if "${run_cmd[@]}"; then
         echo "[OK] country=$country"
         exit 0
       else
+        rc=$?
+        if [[ "$rc" -eq 124 ]]; then
+          echo "[TIMEOUT] country=$country exceeded ${COUNTRY_TIMEOUT_SECONDS}s"
+        fi
         echo "[FAIL] country=$country"
-        exit 1
+        exit "$rc"
       fi
     ) > "$country_log" 2>&1 &
 

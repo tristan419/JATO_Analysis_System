@@ -383,12 +383,14 @@ bootstrap_msrp_dryrun_if_missing() {
 
   if sudo -n systemctl is-active --quiet "$service_name"; then
     echo "[INFO] $service_name already running; not starting another dryrun"
+    _write_msrp_status "msrp_dryrun" "running" "$service_name active; waiting for dryrun artifacts"
     return 0
   fi
 
   echo "[INFO] MSRP dryrun artifacts missing; starting $service_name asynchronously"
   if sudo -n systemctl start --no-block "$service_name"; then
     echo "[INFO] $service_name queued; dryrun artifacts will appear after the run finishes"
+    _write_msrp_status "msrp_dryrun" "running" "$service_name queued; dryrun artifacts pending"
   else
     echo "[WARN] Failed to queue $service_name; dryrun artifacts remain missing"
   fi

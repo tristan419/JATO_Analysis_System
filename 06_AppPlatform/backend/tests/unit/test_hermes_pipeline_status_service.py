@@ -41,6 +41,24 @@ def test_write_and_read_success_status(monkeypatch, tmp_path: Path):
     assert health["overall"] == "ok"
 
 
+def test_running_status_is_preserved_as_active_pipeline(monkeypatch, tmp_path: Path):
+    _set_root(monkeypatch, tmp_path)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    pipeline_status.write_pipeline_status({
+        "pipelineId": "msrp_dryrun",
+        "status": "running",
+        "lastRunAt": now,
+        "message": "dryrun artifacts pending",
+    })
+    record = pipeline_status.get_pipeline_status("msrp_dryrun")
+    health = pipeline_status.classify_pipeline_health(record)
+
+    assert record["status"] == "running"
+    assert health["overall"] == "ok"
+    assert health["type"] == "pipeline_msrp_dryrun_running"
+
+
 def test_expected_pipelines_include_readiness_and_ai_smoke_statuses(monkeypatch, tmp_path: Path):
     _set_root(monkeypatch, tmp_path)
 

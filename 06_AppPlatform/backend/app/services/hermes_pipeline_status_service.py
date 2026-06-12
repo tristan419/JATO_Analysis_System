@@ -33,7 +33,7 @@ EXPECTED_PIPELINE_IDS = (
     "source_quality",
 )
 
-PIPELINE_STATUS_VALUES = {"success", "degraded", "failed", "missing", "skipped", "unknown"}
+PIPELINE_STATUS_VALUES = {"success", "degraded", "failed", "missing", "running", "skipped", "unknown"}
 DEGRADED_STATUS_VALUES = {"degraded", "partial_success"}
 FAILED_STATUS_VALUES = {"failed", "failure", "error"}
 
@@ -489,6 +489,13 @@ def classify_pipeline_health(record: dict[str, Any]) -> dict[str, Any]:
             "severity": "critical" if pipeline_id == "msrp_ingest" else "high",
             "type": f"pipeline_{pipeline_id}_failed",
             "message": f"Pipeline '{pipeline_id}' last run failed.",
+        }
+    if status == "running":
+        return {
+            "overall": "ok",
+            "severity": "none",
+            "type": f"pipeline_{pipeline_id}_running",
+            "message": f"Pipeline '{pipeline_id}' is currently running.",
         }
     if status == "degraded" or failed_count > 0 or warning_count > 0:
         return {
