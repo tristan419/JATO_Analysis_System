@@ -27,6 +27,7 @@ _write_msrp_status() {
   local pipeline="$1"
   local status="$2"
   local reason="$3"
+  local metadata_json="${4:-}"
   local status_path="$REPO_DIR/03_Scripts/logs/scheduled_fetch_status.json"
   python3 -c "
 import json,os
@@ -40,12 +41,16 @@ d['$pipeline']={
 }
 with open(p,'w') as f: f.write(json.dumps(d,indent=2)+chr(10))
 " 2>/dev/null || true
-  python3 "$REPO_DIR/03_Scripts/hermes/pipeline_status_writer.py" "$pipeline" \
+  writer_cmd=(python3 "$REPO_DIR/03_Scripts/hermes/pipeline_status_writer.py" "$pipeline" \
     --status "$status" \
     --source "03_Scripts/run_msrp_low_concurrency.sh" \
     --message "$reason" \
     --artifact-ref "03_Scripts/logs/scheduled_fetch_status.json" \
-    --repo-root "$REPO_DIR" 2>/dev/null || true
+    --repo-root "$REPO_DIR")
+  if [[ -n "$metadata_json" ]]; then
+    writer_cmd+=(--metadata-json "$metadata_json")
+  fi
+  "${writer_cmd[@]}" 2>/dev/null || true
   echo "[status] $pipeline=$status written to $status_path"
 }
 
@@ -212,8 +217,50 @@ echo "[INFO] Refresh current price snapshot: $REFRESH_CURRENT_SNAPSHOT"
 echo "[INFO] Refresh MSRP readiness audit: $REFRESH_READINESS_AUDIT"
 echo "[INFO] Country timeout seconds: $COUNTRY_TIMEOUT_SECONDS"
 
+MSRP_RUNTIME_METADATA="$(
+  MSRP_MODE="$MODE" \
+  MSRP_COUNTRIES_RAW="$COUNTRIES_RAW" \
+  MSRP_COUNTRIES="${COUNTRIES[*]}" \
+  MSRP_REQUESTED_CONCURRENCY="$REQUESTED_CONCURRENCY" \
+  MSRP_EFFECTIVE_CONCURRENCY="$CONCURRENCY" \
+  MSRP_MAX_DRYRUN_CONCURRENCY="$MAX_DRYRUN_CONCURRENCY" \
+  MSRP_ALLOW_HIGH_CONCURRENCY="$ALLOW_HIGH_CONCURRENCY" \
+  MSRP_STOP_ON_FAILURE="$STOP_ON_FAILURE" \
+  MSRP_COUNTRY_TIMEOUT_SECONDS="$COUNTRY_TIMEOUT_SECONDS" \
+  python3 -c '
+import json
+import os
+
+def truthy(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+def to_int(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+payload = {
+    "mode": os.environ.get("MSRP_MODE", ""),
+    "countriesRaw": os.environ.get("MSRP_COUNTRIES_RAW", ""),
+    "countries": [item for item in os.environ.get("MSRP_COUNTRIES", "").split() if item],
+    "requestedConcurrency": to_int(os.environ.get("MSRP_REQUESTED_CONCURRENCY")),
+    "effectiveConcurrency": to_int(os.environ.get("MSRP_EFFECTIVE_CONCURRENCY")),
+    "maxDryrunConcurrency": to_int(os.environ.get("MSRP_MAX_DRYRUN_CONCURRENCY")),
+    "allowHighConcurrency": truthy(os.environ.get("MSRP_ALLOW_HIGH_CONCURRENCY")),
+    "stopOnFailure": truthy(os.environ.get("MSRP_STOP_ON_FAILURE")),
+    "countryTimeoutSeconds": to_int(os.environ.get("MSRP_COUNTRY_TIMEOUT_SECONDS")),
+    "proxyConfigured": any(
+        os.environ.get(name)
+        for name in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY")
+    ),
+}
+print(json.dumps(payload, separators=(",", ":")))
+'
+)"
+
 PIPELINE_ID="msrp_${MODE}"
-_write_msrp_status "$PIPELINE_ID" "running" "run $RUN_ID started countries=${#COUNTRIES[@]} concurrency=$CONCURRENCY requested_concurrency=$REQUESTED_CONCURRENCY"
+_write_msrp_status "$PIPELINE_ID" "running" "run $RUN_ID started countries=${#COUNTRIES[@]} concurrency=$CONCURRENCY requested_concurrency=$REQUESTED_CONCURRENCY" "$MSRP_RUNTIME_METADATA"
 
 total="${#COUNTRIES[@]}"
 active=0
@@ -329,11 +376,13 @@ fi
 if [[ "$MODE" == "dryrun" ]]; then
   AGGR_REPORT="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_report.json"
   if [[ -f "$AGGR_REPORT" ]]; then
-    python3 -c "
+    MSRP_RUNTIME_METADATA_JSON="$MSRP_RUNTIME_METADATA" python3 -c "
 import json
+import os
 from datetime import datetime, timezone
 r = json.load(open('$AGGR_REPORT'))
 s = r.get('summary', {})
+runtime_metadata = json.loads(os.environ.get('MSRP_RUNTIME_METADATA_JSON') or '{}')
 status_path = '$REPO_DIR/03_Scripts/logs/scheduled_fetch_status.json'
 existing = json.load(open(status_path)) if __import__('os').path.exists(status_path) else {}
 existing['msrp_dryrun'] = {
@@ -344,6 +393,7 @@ existing['msrp_dryrun'] = {
     'historyIndexPath': '03_Scripts/diagnostics/artifacts/dryrun_runs_index.json',
     'runArtifactPath': f\"03_Scripts/diagnostics/artifacts/dryrun_report_{r.get('runId', '')}.json\" if r.get('runId') else '',
     'schemaVersion': 'msrp_dryrun_report_v3',
+    'runtimeMetadata': runtime_metadata,
 }
 with open(status_path, 'w') as f:
     f.write(json.dumps(existing, indent=2) + chr(10))
@@ -362,6 +412,7 @@ status_record = {
     'artifactRefs': ['03_Scripts/diagnostics/artifacts/dryrun_report.json'],
     'source': '03_Scripts/run_msrp_low_concurrency.sh',
     'message': 'aggregated dryrun report',
+    'metadata': runtime_metadata,
     'runId': r.get('runId', ''),
     'countryCount': len(r.get('expectedCountries', [])),
     'observedCountryCount': len(r.get('observedCountries', [])),

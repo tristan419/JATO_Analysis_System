@@ -80,6 +80,9 @@ def test_msrp_runner_writes_running_status_and_caps_country_runtime() -> None:
     assert "Dryrun concurrency requested=" in script
     assert 'PIPELINE_ID="msrp_${MODE}"' in script
     assert '_write_msrp_status "$PIPELINE_ID" "running"' in script
+    assert "MSRP_RUNTIME_METADATA" in script
+    assert '"effectiveConcurrency"' in script
+    assert "'metadata': runtime_metadata" in script
     assert "requested_concurrency=$REQUESTED_CONCURRENCY" in script
     assert 'run_cmd=("$TIMEOUT_BIN" "${COUNTRY_TIMEOUT_SECONDS}s" "${cmd[@]}")' in script
     assert "[TIMEOUT] country=$country exceeded" in script

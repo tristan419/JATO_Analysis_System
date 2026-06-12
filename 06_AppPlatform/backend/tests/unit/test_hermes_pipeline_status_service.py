@@ -41,6 +41,30 @@ def test_write_and_read_success_status(monkeypatch, tmp_path: Path):
     assert health["overall"] == "ok"
 
 
+def test_pipeline_status_preserves_runtime_metadata(monkeypatch, tmp_path: Path):
+    _set_root(monkeypatch, tmp_path)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    pipeline_status.write_pipeline_status({
+        "pipelineId": "msrp_dryrun",
+        "status": "running",
+        "lastRunAt": now,
+        "metadata": {
+            "requestedConcurrency": 3,
+            "effectiveConcurrency": 2,
+            "maxDryrunConcurrency": 2,
+            "proxyConfigured": False,
+        },
+    })
+
+    record = pipeline_status.get_pipeline_status("msrp_dryrun")
+
+    assert record["metadata"]["requestedConcurrency"] == 3
+    assert record["metadata"]["effectiveConcurrency"] == 2
+    assert record["metadata"]["maxDryrunConcurrency"] == 2
+    assert record["metadata"]["proxyConfigured"] is False
+
+
 def test_running_status_is_preserved_as_active_pipeline(monkeypatch, tmp_path: Path):
     _set_root(monkeypatch, tmp_path)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

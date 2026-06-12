@@ -99,8 +99,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--artifact-ref", action="append", default=[])
     parser.add_argument("--source", default="")
     parser.add_argument("--message", default="")
+    parser.add_argument("--metadata-json", default="")
     parser.add_argument("--repo-root", default=str(REPO_ROOT))
     args = parser.parse_args(argv)
+
+    extra: dict[str, Any] | None = None
+    if args.metadata_json:
+        try:
+            metadata = json.loads(args.metadata_json)
+        except json.JSONDecodeError as exc:
+            parser.error(f"--metadata-json must be valid JSON: {exc}")
+        if not isinstance(metadata, dict):
+            parser.error("--metadata-json must decode to an object")
+        extra = {"metadata": metadata}
 
     write_pipeline_status(
         pipeline_id=args.pipeline_id,
@@ -116,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         artifact_refs=args.artifact_ref,
         source=args.source,
         message=args.message,
+        extra=extra,
         repo_root=Path(args.repo_root).expanduser().resolve(),
     )
     return 0
