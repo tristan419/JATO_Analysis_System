@@ -6,6 +6,7 @@ import { HermesAskResponseCard } from "../components/HermesAskResponseCard";
 import { HermesHistoryMap } from "../components/HermesHistoryMap";
 import { HermesMermaidBlock } from "../components/HermesMermaidBlock";
 import { HermesProgressSwimlane } from "../components/HermesProgressSwimlane";
+import { HermesWorkflowView } from "../components/HermesWorkflowView";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { MsrpDryrunDashboard } from "../components/MsrpDryrunDashboard";
 import { MsrpFinanceObservationsPanel } from "../components/MsrpFinanceObservationsPanel";
@@ -56,7 +57,7 @@ import {
 
 type CrudEntityTab = "msrp-sources" | "engineering-projects" | "review-overrides";
 type DataSubpage = "overview" | "hermes" | "features" | "voc" | "admin" | "dryrun" | "order-genius" | "material-master";
-type HermesSubtab = "capabilities" | "progress" | "history" | "activity" | "cost" | "roadmap" | "diagrams";
+type HermesSubtab = "capabilities" | "progress" | "history" | "workflow" | "activity" | "cost" | "roadmap" | "diagrams";
 type SentinelInboxFilter = "new" | "read" | "archived" | "all";
 const DEFAULT_RECENT_ITEMS_VISIBLE = 6;
 
@@ -1480,8 +1481,15 @@ export function DataManagementPage() {
                 <button key={st} type="button" className={`admin-tab${hermesSubtab===st?" is-active":""}`} onClick={()=>setHermesSubtab(st)}>{st.charAt(0).toUpperCase()+st.slice(1)}</button>
               ))}
               <span className="hermes-subtab-group-label" style={{marginLeft:8}}>Understands</span>
-              {(["progress","history"] as HermesSubtab[]).map((st) => (
-                <button key={st} type="button" className={`admin-tab${hermesSubtab===st?" is-active":""}`} onClick={()=>setHermesSubtab(st)}>{st === "history" ? "History Map" : "Progress"}</button>
+              {(["progress","history","workflow"] as HermesSubtab[]).map((st) => (
+                <button
+                  key={st}
+                  type="button"
+                  className={`admin-tab${hermesSubtab===st?" is-active":""}`}
+                  onClick={()=>setHermesSubtab(st)}
+                >
+                  {st === "history" ? "History Map" : st === "workflow" ? "Workflow" : "Progress"}
+                </button>
               ))}
               <span className="hermes-subtab-group-label" style={{marginLeft:8}}>Does</span>
               {(["activity","cost"] as HermesSubtab[]).map((st) => (
@@ -1579,6 +1587,11 @@ export function DataManagementPage() {
             {/* ── History Map sub-tab (clustered project timeline) ── */}
             {hermesSubtab === "history" && (
               <HermesHistoryMap />
+            )}
+
+            {/* ── Workflow sub-tab (model/session orchestration) ── */}
+            {hermesSubtab === "workflow" && (
+              <HermesWorkflowView />
             )}
 
             {/* ── Activity sub-tab (干了什么) ── */}

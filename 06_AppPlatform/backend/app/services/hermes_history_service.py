@@ -539,6 +539,52 @@ def _deploy_events() -> list[dict[str, Any]]:
     return events
 
 
+def _event_from_usage_record(record: dict[str, Any]) -> dict[str, Any]:
+    usage_source = str(record.get("usageSource") or "usage")
+    mode = str(record.get("answerMode") or record.get("type") or "model_run")
+    model = str(record.get("model") or record.get("modelUsed") or "unknown")
+    title = f"{usage_source} {mode} usage"
+    files = _string_list(record.get("retrievalPaths")) + _string_list(record.get("files"))
+    feature_id = _infer_feature_id(f"{title} {model}", files)
+    timestamp = _timestamp_from_record(record)
+    return {
+        "eventId": _event_id("usage", record),
+        "timestamp": _iso(timestamp),
+        "source": "usage",
+        "type": "model_run",
+        "title": title,
+        "summary": f"{model} cost {float(record.get('estimatedCostCny') or 0):.4f} CNY",
+        "featureId": feature_id,
+        "workstream": infer_workstream(feature_id, title, files),
+        "phase": "Implemented",
+        "risk": "low",
+        "status": "implemented",
+        "sessionId": str(record.get("sessionId") or usage_source),
+        "model": model,
+        "commitSha": "",
+        "files": files[:40],
+        "tests": [],
+        "testCount": 0,
+        "evidenceRefs": _string_list(record.get("answerId") or record.get("usageId")),
+        "gapRefs": [],
+        "artifactRefs": _string_list(record.get("toolsUsed")),
+    }
+
+
+def _usage_events() -> list[dict[str, Any]]:
+    try:
+        from app.services.hermes_cost_ledger_service import load_cost_records
+
+        records = load_cost_records(_root())
+    except Exception:
+        return []
+    return [
+        _event_from_usage_record(record)
+        for record in records
+        if record.get("createdAt") or record.get("recordedAt")
+    ]
+
+
 def _all_history_events(max_git_commits: int = 80) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     events.extend(_git_commit_events(max_commits=max_git_commits))
@@ -547,6 +593,7 @@ def _all_history_events(max_git_commits: int = 80) -> list[dict[str, Any]]:
     events.extend(_event_from_sentinel(item) for item in _read_jsonl(_sentinel_notifications_path(), max_lines=300))
     events.extend(_pipeline_events())
     events.extend(_deploy_events())
+    events.extend(_usage_events())
 
     deduped: dict[str, dict[str, Any]] = {}
     for event in events:
@@ -937,4 +984,136 @@ def get_progress_swimlanes() -> dict[str, Any]:
         },
         "phases": PHASES,
         "lanes": lanes,
+    }
+
+
+def _top_values(events: list[dict[str, Any]], key: str, limit: int = 8) -> list[str]:
+    counter: Counter[str] = Counter()
+    for event in events:
+        value = event.get(key)
+        if isinstance(value, list):
+            counter.update(str(item) for item in value if str(item).strip())
+        elif value:
+            counter[str(value)] += 1
+    return [item for item, _count in counter.most_common(limit)]
+
+
+def _session_workflow_record(session_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
+    sorted_events = sorted(events, key=lambda event: event.get("timestamp") or "", reverse=True)
+    latest = sorted_events[0] if sorted_events else {}
+    risk = _highest_risk(events)
+    return {
+        "sessionId": session_id,
+        "model": _dominant_value(events, "model") or "unknown",
+        "status": _status_for_cluster(events),
+        "risk": risk,
+        "latestAt": str(latest.get("timestamp") or ""),
+        "lastEventTitle": str(latest.get("title") or ""),
+        "eventCount": len(events),
+        "commitCount": sum(1 for event in events if event.get("source") == "git" or event.get("commitSha")),
+        "testCount": sum(int(event.get("testCount") or 0) for event in events),
+        "evidenceCount": sum(len(event.get("evidenceRefs", []) or []) for event in events),
+        "gapCount": sum(len(event.get("gapRefs", []) or []) for event in events),
+        "sources": _top_values(events, "source", limit=6),
+        "workstreams": _top_values(events, "workstream", limit=6),
+        "featureIds": _top_values(events, "featureId", limit=8),
+        "topFiles": _top_values(events, "files", limit=8),
+        "events": [
+            {
+                "eventId": str(event.get("eventId") or ""),
+                "timestamp": str(event.get("timestamp") or ""),
+                "source": str(event.get("source") or ""),
+                "type": str(event.get("type") or ""),
+                "title": str(event.get("title") or ""),
+                "featureId": str(event.get("featureId") or ""),
+                "workstream": str(event.get("workstream") or ""),
+                "commitSha": str(event.get("commitSha") or ""),
+            }
+            for event in sorted_events[:8]
+        ],
+    }
+
+
+def _model_workflow_record(model: str, sessions: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "model": model,
+        "sessionCount": len(sessions),
+        "eventCount": sum(int(session.get("eventCount") or 0) for session in sessions),
+        "commitCount": sum(int(session.get("commitCount") or 0) for session in sessions),
+        "testCount": sum(int(session.get("testCount") or 0) for session in sessions),
+        "latestAt": max((str(session.get("latestAt") or "") for session in sessions), default=""),
+        "workstreams": sorted({
+            workstream
+            for session in sessions
+            for workstream in session.get("workstreams", [])
+            if str(workstream).strip()
+        }),
+    }
+
+
+def _workflow_review_items(
+    sessions: list[dict[str, Any]],
+    features: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for feature in features:
+        status = str(feature.get("status") or "")
+        if status in {"blocking", "ready_for_pr"} or int(feature.get("openGapCount") or 0) > 0:
+            items.append({
+                "kind": "feature",
+                "priority": "high" if status == "blocking" else "medium",
+                "title": str(feature.get("title") or feature.get("featureId") or ""),
+                "reason": str(feature.get("nextAction") or ""),
+                "targetId": str(feature.get("featureId") or ""),
+            })
+    for session in sessions:
+        if session.get("risk") in {"high", "critical", "blocking"}:
+            items.append({
+                "kind": "session",
+                "priority": "high",
+                "title": str(session.get("sessionId") or ""),
+                "reason": str(session.get("lastEventTitle") or "Review high-risk session activity."),
+                "targetId": str(session.get("sessionId") or ""),
+            })
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    items.sort(key=lambda item: priority_order.get(str(item.get("priority")), 3))
+    return items[:3]
+
+
+def get_workflow_cockpit() -> dict[str, Any]:
+    events = _all_history_events()
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for event in events:
+        session_id = str(event.get("sessionId") or event.get("model") or "unknown")
+        grouped[session_id].append(event)
+
+    sessions = [
+        _session_workflow_record(session_id, session_events)
+        for session_id, session_events in grouped.items()
+    ]
+    sessions.sort(key=lambda session: str(session.get("latestAt") or ""), reverse=True)
+
+    sessions_by_model: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for session in sessions:
+        sessions_by_model[str(session.get("model") or "unknown")].append(session)
+    models = [
+        _model_workflow_record(model, model_sessions)
+        for model, model_sessions in sessions_by_model.items()
+    ]
+    models.sort(key=lambda model: int(model.get("eventCount") or 0), reverse=True)
+
+    features = list_progress_features()
+    return {
+        "summary": {
+            "totalEvents": len(events),
+            "sessionCount": len(sessions),
+            "modelCount": len(models),
+            "commitCount": sum(int(session.get("commitCount") or 0) for session in sessions),
+            "testCount": sum(int(session.get("testCount") or 0) for session in sessions),
+            "blockingSessions": sum(1 for session in sessions if session.get("risk") in {"high", "critical", "blocking"}),
+            "latestAt": sessions[0].get("latestAt") if sessions else "",
+        },
+        "models": models,
+        "sessions": sessions[:40],
+        "reviewItems": _workflow_review_items(sessions, features),
     }

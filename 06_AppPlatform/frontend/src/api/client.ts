@@ -112,6 +112,7 @@ import type {
   HermesMsrpDryrunHistoryResponse,
   HermesSourceQualityResponse,
   HermesToolchainResponse,
+  HermesWorkflowCockpitResponse,
 } from "../types/hermes";
 import type {
   BaselineVersion,
@@ -2304,6 +2305,8 @@ export const api = {
     request<HermesProgressFeature[]>("/hermes/progress/features"),
   hermesProgressSwimlanes: () =>
     request<HermesProgressSwimlaneResponse>("/hermes/progress/swimlanes"),
+  hermesWorkflowCockpit: () =>
+    request<HermesWorkflowCockpitResponse>("/hermes/workflow/cockpit"),
 
   /* ── Hermes Chat ──────────────────────────────── */
   hermesChat: (payload: HermesChatRequest) =>

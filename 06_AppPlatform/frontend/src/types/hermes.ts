@@ -609,3 +609,66 @@ export interface HermesProgressSwimlaneResponse {
   phases: string[];
   lanes: HermesProgressLane[];
 }
+
+export interface HermesWorkflowEventPreview {
+  eventId: string;
+  timestamp: string;
+  source: string;
+  type: string;
+  title: string;
+  featureId: string;
+  workstream: string;
+  commitSha: string;
+}
+
+export interface HermesWorkflowSession {
+  sessionId: string;
+  model: string;
+  status: string;
+  risk: string;
+  latestAt: string;
+  lastEventTitle: string;
+  eventCount: number;
+  commitCount: number;
+  testCount: number;
+  evidenceCount: number;
+  gapCount: number;
+  sources: string[];
+  workstreams: string[];
+  featureIds: string[];
+  topFiles: string[];
+  events: HermesWorkflowEventPreview[];
+}
+
+export interface HermesWorkflowModel {
+  model: string;
+  sessionCount: number;
+  eventCount: number;
+  commitCount: number;
+  testCount: number;
+  latestAt: string;
+  workstreams: string[];
+}
+
+export interface HermesWorkflowReviewItem {
+  kind: string;
+  priority: string;
+  title: string;
+  reason: string;
+  targetId: string;
+}
+
+export interface HermesWorkflowCockpitResponse {
+  summary: {
+    totalEvents: number;
+    sessionCount: number;
+    modelCount: number;
+    commitCount: number;
+    testCount: number;
+    blockingSessions: number;
+    latestAt: string;
+  };
+  models: HermesWorkflowModel[];
+  sessions: HermesWorkflowSession[];
+  reviewItems: HermesWorkflowReviewItem[];
+}

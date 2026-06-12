@@ -2,12 +2,13 @@
 
 ## Purpose
 
-Hermes History Progress Cockpit turns existing Hermes governance data into a project history and progress view. It is not a raw git log viewer. It aggregates git commits, DevSync events, feature registries, evidence, gaps, Sentinel notifications, pipeline status, and deploy metadata into records that answer:
+Hermes History Progress Cockpit turns existing Hermes governance data into a project history, progress, and workflow view. It is not a raw git log viewer. It aggregates git commits, DevSync events, feature registries, evidence, gaps, Sentinel notifications, pipeline status, deploy metadata, and usage cost records into records that answer:
 
 - What changed recently?
 - Which workstream or feature moved forward?
 - Which feature is implemented, tested, deployed, verified, or blocked?
 - Which commits, files, tests, evidence, and gaps explain the current state?
+- Which session or model worked on which feature, files, tests, and commits?
 
 ## MVP Scope
 
@@ -40,6 +41,17 @@ Epic -> Workstream -> Feature -> Session -> Commit
 
 The Y axis can be switched between workstream, phase, risk, and session.
 
+### Workflow Cockpit
+
+The third view groups normalized events by session and model. It shows:
+
+- model summary by event, commit, test, and workstream counts
+- session cards with status, risk, latest meaningful event, and source mix
+- session details with related features, files, recent events, evidence, and gaps
+- top review items derived from blocking or ready-for-PR features
+
+AstrBot and other model usage records enter this view through the same Hermes cost ledger used by the cost report, so token consumption can be reviewed alongside commits and DevSync events.
+
 ## Backend
 
 New read-only service:
@@ -55,6 +67,7 @@ GET /v1/hermes/history/events
 GET /v1/hermes/history/clusters?level=feature&yAxis=workstream
 GET /v1/hermes/progress/features
 GET /v1/hermes/progress/swimlanes
+GET /v1/hermes/workflow/cockpit
 ```
 
 The service does not execute commands, deploy code, rewrite registry files, or mutate Hermes ledgers.
@@ -66,6 +79,7 @@ New components:
 ```text
 06_AppPlatform/frontend/src/components/HermesProgressSwimlane.tsx
 06_AppPlatform/frontend/src/components/HermesHistoryMap.tsx
+06_AppPlatform/frontend/src/components/HermesWorkflowView.tsx
 ```
 
 Hermes adds two subtabs under the "Understands" group:
@@ -73,11 +87,11 @@ Hermes adds two subtabs under the "Understands" group:
 ```text
 Progress
 History Map
+Workflow
 ```
 
 ## Deferred Work
 
-- Model Workflow view for session/model/task/file/test/commit/evidence flows
 - Semantic clustering with embeddings or changed-file overlap scoring
 - Direct links from event IDs to GitHub commits, evidence records, gaps, and pipeline artifacts
 - Dedicated route or URL state for shareable History Map filters
