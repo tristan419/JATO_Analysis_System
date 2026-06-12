@@ -34,6 +34,8 @@ from jato_scraper.extractors.scrapling_web import (
     CssMapping,
     ScraplingExtractor,
     ScraplingProfile,
+    TextRegexEntryPattern,
+    TextRegexMapping,
 )
 from jato_scraper.extractors.playwright_card_flow import (
     PlaywrightCardFlowExtractor,
@@ -214,6 +216,52 @@ def _build_scrapling_profile(profile: dict[str, Any]) -> ScraplingProfile:
             range_key=aj_raw.get("range_key", "range"),
         )
 
+    text_regex_raw = profile.get("text_regex")
+    text_regex = None
+    if text_regex_raw:
+        patterns_raw = text_regex_raw.get("entry_patterns", [])
+        if not isinstance(patterns_raw, list):
+            raise ValueError("scrapling text_regex entry_patterns must be a list")
+        entry_patterns = tuple(
+            TextRegexEntryPattern(
+                pattern=str(item.get("pattern", "")).strip(),
+                official_trim=(
+                    str(item["official_trim"]).strip()
+                    if item.get("official_trim") is not None
+                    else None
+                ),
+                official_powertrain=(
+                    str(item["official_powertrain"]).strip()
+                    if item.get("official_powertrain") is not None
+                    else None
+                ),
+                official_edition=(
+                    str(item["official_edition"]).strip()
+                    if item.get("official_edition") is not None
+                    else None
+                ),
+                availability_text=(
+                    str(item["availability_text"]).strip()
+                    if item.get("availability_text") is not None
+                    else None
+                ),
+                price_label=(
+                    str(item["price_label"]).strip()
+                    if item.get("price_label") is not None
+                    else None
+                ),
+            )
+            for item in patterns_raw
+            if isinstance(item, dict)
+            and str(item.get("pattern", "")).strip()
+        )
+        text_regex = TextRegexMapping(
+            source_selector=str(
+                text_regex_raw.get("source_selector", "body")
+            ).strip() or "body",
+            entry_patterns=entry_patterns,
+        )
+
     model_rules_raw = profile.get("model_rules")
     model_rules = None
     if isinstance(model_rules_raw, list):
@@ -226,6 +274,7 @@ def _build_scrapling_profile(profile: dict[str, Any]) -> ScraplingProfile:
         tier=profile.get("tier", "http"),
         css=css,
         attr_json=attr_json,
+        text_regex=text_regex,
         json_script_selector=profile.get("json_script_selector"),
         json_vehicles_path=profile.get("json_vehicles_path"),
         headless=profile.get("headless", True),

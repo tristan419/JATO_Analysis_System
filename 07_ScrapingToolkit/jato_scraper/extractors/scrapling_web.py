@@ -48,11 +48,28 @@ class AttrJsonMapping:
 
 
 @dataclass(frozen=True)
+class TextRegexEntryPattern:
+    pattern: str
+    official_trim: str | None = None
+    official_powertrain: str | None = None
+    official_edition: str | None = None
+    availability_text: str | None = None
+    price_label: str | None = None
+
+
+@dataclass(frozen=True)
+class TextRegexMapping:
+    source_selector: str = "body"
+    entry_patterns: tuple[TextRegexEntryPattern, ...] = ()
+
+
+@dataclass(frozen=True)
 class ScraplingProfile:
     url: str
     tier: FetcherTier = "http"
     css: CssMapping | None = None
     attr_json: AttrJsonMapping | None = None
+    text_regex: TextRegexMapping | None = None
     json_script_selector: str | None = None
     json_vehicles_path: str | None = None
     headless: bool = True
@@ -243,7 +260,20 @@ class ScraplingExtractor(BaseExtractor):
 
     @property
     def extractor_version(self) -> str:
-        return "0.5.0-scrapling"
+        return "0.6.0-scrapling"
+
+    def _string_values(self, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, (list, tuple, set)):
+            return [
+                str(item)
+                for item in value
+                if item not in (None, "")
+            ]
+        return []
 
     def _build_trim_search_text(
         self,
@@ -1266,9 +1296,32 @@ class ScraplingExtractor(BaseExtractor):
                     tier=p.tier or "http",
                 )
                 return results
-            log.warning("JSON extraction yielded nothing, falling back to CSS")
+            log.warning(
+                "JSON extraction yielded nothing, trying next strategy"
+            )
 
-        # Strategy 3: CSS selectors on visible text
+        # Strategy 3: regex over selected text/script payloads
+        if p.text_regex:
+            results = self._extract_from_text_regex(page)
+            attempted.append({
+                "strategy": "text_regex",
+                "status": "success" if results else "no_match",
+                "observations_count": len(results),
+            })
+            if results:
+                self.record_audit_event(
+                    url=p.url,
+                    attempted_strategies=attempted,
+                    winning_strategy="text_regex",
+                    observations=results,
+                    tier=p.tier or "http",
+                )
+                return results
+            log.warning(
+                "Text-regex extraction yielded nothing, falling back to CSS"
+            )
+
+        # Strategy 4: CSS selectors on visible text
         if p.css:
             results = self._extract_from_css(page)
             attempted.append({
@@ -1334,6 +1387,152 @@ class ScraplingExtractor(BaseExtractor):
                 exc,
             )
             return None
+
+    def _text_regex_source_text(self, page: Any) -> str:
+        mapping = self.profile.text_regex
+        if mapping is None:
+            return ""
+        selector = (mapping.source_selector or "body").strip() or "body"
+        elements = page.css(selector)
+        if not elements:
+            log.warning(
+                "No elements found for text_regex selector '%s'",
+                selector,
+            )
+            return ""
+
+        parts: list[str] = []
+        for element in elements:
+            try:
+                text_result = element.css("::text")
+            except Exception:
+                text_result = None
+            text_parts: list[str] = []
+            if text_result is not None:
+                for method_name in ("getall", "get_all"):
+                    method = getattr(text_result, method_name, None)
+                    if not callable(method):
+                        continue
+                    try:
+                        text_parts.extend(self._string_values(method()))
+                    except Exception:
+                        continue
+                if not text_parts:
+                    try:
+                        text_parts.extend(
+                            self._string_values(text_result.get())
+                        )
+                    except Exception:
+                        pass
+            if not text_parts:
+                try:
+                    text_parts.extend(self._string_values(element.get()))
+                except Exception:
+                    pass
+            parts.extend(text_parts)
+        return "\n".join(parts)
+
+    def _extract_from_text_regex(self, page: Any) -> list[RawObservation]:
+        mapping = self.profile.text_regex
+        if mapping is None:
+            return []
+
+        source_text = self._text_regex_source_text(page)
+        if not source_text:
+            return []
+
+        p = self.profile
+        results: list[RawObservation] = []
+        seen: set[tuple[str, str, float]] = set()
+        for entry in mapping.entry_patterns:
+            try:
+                matches = re.finditer(
+                    entry.pattern,
+                    source_text,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+            except re.error as exc:
+                log.warning(
+                    "Invalid text_regex pattern for %s: %s",
+                    self.config.source_code,
+                    exc,
+                )
+                continue
+
+            for match in matches:
+                group_values = match.groupdict()
+                price_raw = str(group_values.get("price") or "").strip()
+                if not price_raw:
+                    log.warning(
+                        "Skipping text_regex match without named price group "
+                        "for %s",
+                        self.config.source_code,
+                    )
+                    continue
+                msrp = parse_price(price_raw)
+                if msrp is None:
+                    log.warning("Cannot parse price from '%s'", price_raw)
+                    continue
+
+                model_text = _normalize_space(
+                    str(group_values.get("model") or p.fixed_model or "")
+                )
+                trim_text = _normalize_space(
+                    str(
+                        entry.official_trim
+                        or group_values.get("trim")
+                        or ""
+                    )
+                )
+                powertrain_text = _normalize_space(
+                    str(
+                        entry.official_powertrain
+                        or group_values.get("powertrain")
+                        or ""
+                    )
+                )
+                availability = _normalize_space(
+                    str(
+                        entry.availability_text
+                        or group_values.get("availability")
+                        or ""
+                    )
+                ) or None
+                if not (model_text or p.fixed_model) or not trim_text:
+                    continue
+
+                dedupe_key = (
+                    (model_text or p.fixed_model or "").lower(),
+                    trim_text.lower(),
+                    msrp,
+                )
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+
+                observation = self._build_observation(
+                    official_model=model_text,
+                    official_trim=trim_text,
+                    msrp_value=msrp,
+                    currency=p.default_currency,
+                    availability_text=availability,
+                    source_url=p.url,
+                    raw_payload={
+                        "priceText": price_raw,
+                        "trimText": trim_text,
+                        "powertrain": powertrain_text,
+                        "officialEdition": entry.official_edition,
+                        "sourcePriceValue": msrp,
+                        "regexPattern": entry.pattern,
+                        "regexSelector": mapping.source_selector,
+                    },
+                )
+                if observation is not None:
+                    if entry.price_label:
+                        observation.price_label = entry.price_label
+                    results.append(observation)
+
+        return results
 
     def _extract_from_attr_json(self, page: Any) -> list[RawObservation]:
         """Extract vehicle data from HTML attribute JSON payloads."""
