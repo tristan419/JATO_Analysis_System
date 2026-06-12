@@ -1,12 +1,12 @@
 source_code: citroen_c3_aircross_fr_draft_scrapling
 country: 法国
 brand: CITROEN
-source_url: https://todo.invalid/fr/citroen/c3_aircross
+source_url: https://www.citroen.fr/vehicules/c3-aircross.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/fr/citroen/c3_aircross
+  url: https://www.citroen.fr/vehicules/c3-aircross.html
   tier: stealth
   headless: true
   network_idle: true

@@ -1,12 +1,12 @@
 source_code: alfa_romeo_tonale_it_draft_scrapling
 country: 意大利
 brand: ALFA ROMEO
-source_url: https://todo.invalid/it/alfa_romeo/tonale
+source_url: https://www.alfaromeo.it/modelli/tonale
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/it/alfa_romeo/tonale
+  url: https://www.alfaromeo.it/modelli/tonale
   tier: stealth
   headless: true
   network_idle: true

@@ -1,12 +1,12 @@
 source_code: land_rover_range_rover_evoque_pl_draft_scrapling
 country: 波兰
 brand: LAND ROVER
-source_url: https://todo.invalid/pl/land_rover/range_rover_evoque
+source_url: https://www.rangerover.com/pl-pl/range-rover-evoque/index.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/pl/land_rover/range_rover_evoque
+  url: https://www.rangerover.com/pl-pl/range-rover-evoque/index.html
   tier: stealth
   headless: true
   network_idle: true

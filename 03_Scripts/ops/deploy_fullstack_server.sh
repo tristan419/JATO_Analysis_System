@@ -487,6 +487,62 @@ reconcile_scraper_schedulers() {
   bootstrap_msrp_dryrun_if_missing
 }
 
+run_post_deploy_readiness_audits() {
+  local reports_dir="$REPO_DIR/hermes/reports"
+  local api_base="http://127.0.0.1:${BACKEND_PORT}/v1"
+  local script=""
+  local rc=0
+
+  mkdir -p "$reports_dir"
+
+  script="$REPO_DIR/03_Scripts/diagnostics/msrp_readiness_audit.py"
+  if [[ -f "$script" ]]; then
+    echo "[INFO] Refreshing MSRP readiness status"
+    "$VENV_DIR/bin/python" "$script" \
+      --api-base "$api_base" \
+      --timeout-seconds 20 \
+      --out-dir "$reports_dir" \
+      --write-status \
+      || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+      echo "[WARN] MSRP readiness audit failed with rc=$rc"
+      rc=0
+    fi
+  else
+    echo "[WARN] MSRP readiness audit script missing: $script"
+  fi
+
+  script="$REPO_DIR/03_Scripts/diagnostics/ai_intelligence_enrichment_smoke.py"
+  if [[ -f "$script" ]]; then
+    echo "[INFO] Refreshing AI intelligence smoke status"
+    "$VENV_DIR/bin/python" "$script" \
+      --out-dir "$reports_dir" \
+      --write-status \
+      || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+      echo "[WARN] AI intelligence smoke audit failed with rc=$rc"
+      rc=0
+    fi
+  else
+    echo "[WARN] AI intelligence smoke script missing: $script"
+  fi
+
+  script="$REPO_DIR/03_Scripts/diagnostics/unified_scraping_readiness_audit.py"
+  if [[ -f "$script" ]]; then
+    echo "[INFO] Refreshing unified scraping readiness status"
+    "$VENV_DIR/bin/python" "$script" \
+      --repo-root "$REPO_DIR" \
+      --out-dir "$reports_dir" \
+      --write-status \
+      || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+      echo "[WARN] Unified scraping readiness audit failed with rc=$rc"
+    fi
+  else
+    echo "[WARN] Unified scraping readiness script missing: $script"
+  fi
+}
+
 CURRENT_STEP="Validate sudo access"
 log_section "$CURRENT_STEP"
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -712,6 +768,11 @@ for i in $(seq 1 15); do
   sleep 5
 done
 mark_release_deployed
+
+echo "[INFO] Run post-deploy readiness audits"
+CURRENT_STEP="Run post-deploy readiness audits"
+log_section "$CURRENT_STEP"
+run_post_deploy_readiness_audits
 
 echo "[INFO] Current revision"
 CURRENT_STEP="Print revision"

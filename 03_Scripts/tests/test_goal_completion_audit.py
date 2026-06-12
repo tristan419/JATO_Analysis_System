@@ -158,7 +158,13 @@ def test_remote_checks_can_mark_production_passed(monkeypatch, tmp_path: Path) -
     source_root = tmp_path / "source_drafts"
     _write_source_drafts(source_root, ("se", "fi"))
 
-    def fake_fetch_json(url: str, timeout_seconds: int):
+    def fake_fetch_json(
+        url: str,
+        timeout_seconds: int,
+        *,
+        resolve_ip: str | None = None,
+    ):
+        assert resolve_ip is None
         if url.endswith("/msrp/current-prices/snapshot"):
             return {
                 "schemaVersion": "msrp_current_price_snapshot_v1",
@@ -192,6 +198,45 @@ def test_remote_checks_can_mark_production_passed(monkeypatch, tmp_path: Path) -
 
     assert by_key["production_deployment_state"]["status"] == "passed"
     assert report["status"] == "complete"
+
+
+def test_remote_checks_passes_resolve_ip_to_fetcher(monkeypatch, tmp_path: Path) -> None:
+    _write_statuses(tmp_path)
+    source_root = tmp_path / "source_drafts"
+    _write_source_drafts(source_root, ("se", "fi"))
+    seen: list[tuple[str, str | None]] = []
+
+    def fake_fetch_json(
+        url: str,
+        timeout_seconds: int,
+        *,
+        resolve_ip: str | None = None,
+    ):
+        seen.append((url, resolve_ip))
+        if url.endswith("/msrp/current-prices/snapshot"):
+            return {"schemaVersion": "msrp_current_price_snapshot_v1"}, None, 200
+        if url.endswith("/hermes/msrp-country-progress"):
+            return {"status": {"gateStatus": "allowed", "overallPassPct": 96.4}}, None, 200
+        if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
+            return {"status": "success", "readinessStatus": "passed"}, None, 200
+        raise AssertionError(url)
+
+    monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)
+
+    report = audit.build_goal_completion_report(
+        repo_root=tmp_path,
+        source_draft_dir=source_root,
+        required_source_countries=("se", "fi"),
+        remote_api_base="https://example.test/v1",
+        remote_resolve_ip="203.0.113.10",
+    )
+    production = {
+        item["key"]: item for item in report["requirements"]
+    }["production_deployment_state"]
+
+    assert production["status"] == "passed"
+    assert production["runtime"]["resolveIp"] == "203.0.113.10"
+    assert {item[1] for item in seen} == {"203.0.113.10"}
 
 
 def test_missing_msrp_detail_blocks_local_p0(tmp_path: Path) -> None:

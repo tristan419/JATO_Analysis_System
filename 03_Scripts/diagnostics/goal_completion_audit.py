@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import contextmanager
 from datetime import UTC, datetime
 import json
 from pathlib import Path
+import socket
 import sys
 from typing import Any, Iterable, Sequence
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 
@@ -304,11 +307,36 @@ def _source_draft_coverage(
     }
 
 
-def _fetch_json(url: str, timeout_seconds: int) -> tuple[dict[str, Any] | None, str | None, int | None]:
+@contextmanager
+def _resolve_hostname_to_ip(hostname: str | None, resolve_ip: str | None) -> Iterable[None]:
+    if not hostname or not resolve_ip:
+        yield
+        return
+    original_getaddrinfo = socket.getaddrinfo
+
+    def patched_getaddrinfo(host: str, port: Any, *args: Any, **kwargs: Any):
+        target_host = resolve_ip if host == hostname else host
+        return original_getaddrinfo(target_host, port, *args, **kwargs)
+
+    socket.getaddrinfo = patched_getaddrinfo
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
+
+
+def _fetch_json(
+    url: str,
+    timeout_seconds: int,
+    *,
+    resolve_ip: str | None = None,
+) -> tuple[dict[str, Any] | None, str | None, int | None]:
     try:
         request = Request(url, headers={"User-Agent": "codex-goal-completion-audit"})
-        with urlopen(request, timeout=max(1, timeout_seconds)) as response:
-            payload = json.loads(response.read())
+        hostname = urlparse(url).hostname
+        with _resolve_hostname_to_ip(hostname, resolve_ip):
+            with urlopen(request, timeout=max(1, timeout_seconds)) as response:
+                payload = json.loads(response.read())
         return payload if isinstance(payload, dict) else {}, None, 200
     except HTTPError as exc:
         detail = exc.read(500).decode("utf-8", errors="replace")
@@ -317,7 +345,12 @@ def _fetch_json(url: str, timeout_seconds: int) -> tuple[dict[str, Any] | None, 
         return None, str(exc), None
 
 
-def _remote_checks(remote_api_base: str | None, timeout_seconds: int) -> dict[str, Any]:
+def _remote_checks(
+    remote_api_base: str | None,
+    timeout_seconds: int,
+    *,
+    resolve_ip: str | None = None,
+) -> dict[str, Any]:
     if not remote_api_base:
         return {
             "status": "not_checked",
@@ -327,14 +360,17 @@ def _remote_checks(remote_api_base: str | None, timeout_seconds: int) -> dict[st
     snapshot, snapshot_error, snapshot_code = _fetch_json(
         f"{base}/msrp/current-prices/snapshot",
         timeout_seconds,
+        resolve_ip=resolve_ip,
     )
     progress, progress_error, progress_code = _fetch_json(
         f"{base}/hermes/msrp-country-progress",
         timeout_seconds,
+        resolve_ip=resolve_ip,
     )
     unified, unified_error, unified_code = _fetch_json(
         f"{base}/hermes/pipeline/status/unified_scraping_readiness",
         timeout_seconds,
+        resolve_ip=resolve_ip,
     )
     progress_status = progress.get("status") if isinstance(progress, dict) else {}
     if not isinstance(progress_status, dict):
@@ -352,6 +388,7 @@ def _remote_checks(remote_api_base: str | None, timeout_seconds: int) -> dict[st
     return {
         "status": "passed" if passed else "missing",
         "apiBase": base,
+        "resolveIp": resolve_ip,
         "snapshot": {
             "httpStatus": snapshot_code,
             "schemaVersion": snapshot.get("schemaVersion") if isinstance(snapshot, dict) else None,
@@ -381,6 +418,7 @@ def build_goal_completion_report(
     required_source_countries: Sequence[str] = DEFAULT_REQUIRED_SOURCE_COUNTRIES,
     required_ai_countries: Sequence[str] = DEFAULT_REQUIRED_AI_COUNTRIES,
     remote_api_base: str | None = None,
+    remote_resolve_ip: str | None = None,
     timeout_seconds: int = 15,
 ) -> dict[str, Any]:
     root = Path(repo_root).expanduser().resolve() if repo_root else REPO_ROOT
@@ -397,7 +435,11 @@ def build_goal_completion_report(
         resolved_source_dir,
         required_source_countries,
     )
-    remote = _remote_checks(remote_api_base, timeout_seconds)
+    remote = _remote_checks(
+        remote_api_base,
+        timeout_seconds,
+        resolve_ip=remote_resolve_ip,
+    )
 
     msrp_missing_keys = [
         item["key"]
@@ -617,6 +659,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--required-source-countries", default=",".join(DEFAULT_REQUIRED_SOURCE_COUNTRIES))
     parser.add_argument("--required-ai-countries", default=",".join(DEFAULT_REQUIRED_AI_COUNTRIES))
     parser.add_argument("--remote-api-base", default=None)
+    parser.add_argument(
+        "--remote-resolve-ip",
+        default=None,
+        help="Resolve the remote API hostname to this IP while keeping the URL host for TLS/SNI.",
+    )
     parser.add_argument("--timeout-seconds", type=int, default=15)
     parser.add_argument("--out-dir", default=None)
     parser.add_argument("--write-status", action="store_true")
@@ -632,6 +679,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         required_source_countries=_csv_arg(args.required_source_countries),
         required_ai_countries=_csv_arg(args.required_ai_countries),
         remote_api_base=args.remote_api_base,
+        remote_resolve_ip=args.remote_resolve_ip,
         timeout_seconds=max(1, int(args.timeout_seconds)),
     )
     artifacts: dict[str, str] = {}

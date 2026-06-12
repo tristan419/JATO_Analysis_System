@@ -1,12 +1,12 @@
 source_code: fiat_grande_panda_it_draft_scrapling
 country: 意大利
 brand: FIAT
-source_url: https://todo.invalid/it/fiat/grande_panda
+source_url: https://www.fiat.it/modello/grande-panda-ibrido
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/it/fiat/grande_panda
+  url: https://www.fiat.it/modello/grande-panda-ibrido
   tier: stealth
   headless: true
   network_idle: true

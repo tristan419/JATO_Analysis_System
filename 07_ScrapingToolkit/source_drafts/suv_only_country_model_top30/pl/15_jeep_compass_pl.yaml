@@ -1,12 +1,12 @@
 source_code: jeep_compass_pl_draft_scrapling
 country: 波兰
 brand: JEEP
-source_url: https://todo.invalid/pl/jeep/compass
+source_url: https://www.jeep.pl/nowy-compass
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/pl/jeep/compass
+  url: https://www.jeep.pl/nowy-compass
   tier: stealth
   headless: true
   network_idle: true
