@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +24,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
 
 
 def _load_country_artifact(path: Path) -> dict | None:
@@ -305,8 +307,19 @@ def _relative(path: Path) -> str:
         return str(path)
 
 
-def _source_host(source: dict[str, Any]) -> str:
+def _source_url(source: dict[str, Any]) -> str:
     url = str(source.get("finalUrl") or source.get("sourceUrl") or "").strip()
+    if url:
+        return url
+    for key in ("extractorError", "error"):
+        match = SOURCE_URL_PATTERN.search(str(source.get(key) or ""))
+        if match:
+            return match.group(0).rstrip(".,")
+    return ""
+
+
+def _source_host(source: dict[str, Any]) -> str:
+    url = _source_url(source)
     if not url:
         return ""
     parsed = urlparse(url if "://" in url else f"https://{url}")
@@ -355,7 +368,7 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
         if source_code:
             group["sources"].append(source_code)
         host = _source_host(result)
-        url = str(result.get("finalUrl") or result.get("sourceUrl") or "").strip()
+        url = _source_url(result)
         if host:
             for host_bucket in (
                 group["hosts"].setdefault(host, {"count": 0, "affectedCountries": set(), "sources": [], "urls": []}),

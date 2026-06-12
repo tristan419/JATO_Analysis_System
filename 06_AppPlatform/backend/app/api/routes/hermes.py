@@ -39,6 +39,7 @@ ACTIVITY_LOG = HERMES_DIR / "activity_log.jsonl"
 BUDGET_DAILY_CNY = 20
 BUDGET_MONTHLY_CNY = 500
 ALERT_EMAIL = "tristanlyk@gmail.com"
+SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
 
 def _read_json(path: Path) -> dict[str, Any]:
     if not path.is_file():
@@ -75,8 +76,19 @@ def _load_msrp_source_repair_backlog() -> dict[str, Any]:
     return backlog if isinstance(backlog, dict) else _default_source_repair_backlog()
 
 
-def _source_host(source: dict[str, Any]) -> str:
+def _source_url(source: dict[str, Any]) -> str:
     url = str(source.get("finalUrl") or source.get("sourceUrl") or "").strip()
+    if url:
+        return url
+    for key in ("extractorError", "error"):
+        match = SOURCE_URL_PATTERN.search(str(source.get(key) or ""))
+        if match:
+            return match.group(0).rstrip(".,")
+    return ""
+
+
+def _source_host(source: dict[str, Any]) -> str:
+    url = _source_url(source)
     if not url:
         return ""
     parsed = urlparse(url if "://" in url else f"https://{url}")
@@ -131,7 +143,7 @@ def _source_repair_backlog_from_current(current: dict[str, Any] | None) -> dict[
             if source_code:
                 group["sources"].append(source_code)
             host = _source_host(source)
-            url = str(source.get("finalUrl") or source.get("sourceUrl") or "").strip()
+            url = _source_url(source)
             if host:
                 for host_bucket in (
                     group["hosts"].setdefault(host, {"count": 0, "affectedCountries": set(), "sources": [], "urls": []}),

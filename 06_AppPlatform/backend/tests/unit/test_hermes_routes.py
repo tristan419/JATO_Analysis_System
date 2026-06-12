@@ -440,7 +440,10 @@ class TestSentinelAndDeploy:
                     "status": "empty",
                     "failureReason": "http_timeout",
                     "recommendedStrategy": "retry_or_reduce_concurrency",
-                    "sourceUrl": "https://www.audi.fi/fi/web/fi/models/q4-e-tron.html",
+                    "extractorError": (
+                        "Page.goto: Timeout 30000ms exceeded while navigating to "
+                        "\"https://www.audi.fi/fi/web/fi/models/q4-e-tron.html\""
+                    ),
                 },
                 {
                     "sourceCode": "audi_q6_e_tron_fi_draft_scrapling",
