@@ -305,6 +305,22 @@ class TestSentinelAndDeploy:
         assert resp.status_code == 200
         assert resp.json()["summary"]["total"] == 1
 
+    def test_workflow_cockpit_endpoint(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.hermes_history_service.get_workflow_cockpit",
+            lambda: {
+                "summary": {"sessionCount": 1, "modelCount": 1, "totalEvents": 2},
+                "models": [{"model": "codex", "eventCount": 2}],
+                "sessions": [{"sessionId": "hermes-session", "model": "codex"}],
+                "reviewItems": [],
+            },
+        )
+
+        resp = client.get("/hermes/workflow/cockpit")
+
+        assert resp.status_code == 200
+        assert resp.json()["summary"]["sessionCount"] == 1
+
     def test_cost_heatmap_includes_astrbot_usage(self, client, tmp_path):
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         _write_jsonl(

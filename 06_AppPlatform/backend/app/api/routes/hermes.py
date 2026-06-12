@@ -1555,6 +1555,14 @@ def hermes_progress_swimlanes(_=Depends(require_min_role("viewer"))) -> dict:
     return get_progress_swimlanes()
 
 
+@router.get("/workflow/cockpit")
+def hermes_workflow_cockpit(_=Depends(require_min_role("viewer"))) -> dict:
+    """Return model/session workflow aggregation for the Hermes cockpit."""
+    from app.services.hermes_history_service import get_workflow_cockpit
+
+    return get_workflow_cockpit()
+
+
 @router.get("/dev/features")
 def hermes_dev_features(
     status: str | None = Query(None),

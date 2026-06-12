@@ -133,3 +133,44 @@ def test_progress_swimlanes_mark_ready_for_pr_with_tests(tmp_path, monkeypatch):
     assert feature["phase"] == "Tested"
     assert feature["status"] == "ready_for_pr"
     assert feature["docsCount"] == 1
+
+
+def test_workflow_cockpit_groups_sessions_and_usage_events(tmp_path, monkeypatch):
+    from app.services import hermes_history_service as history
+
+    monkeypatch.setattr(history, "_project_root", tmp_path)
+    _write_jsonl(tmp_path / "hermes" / "dev_events" / "dev_events.jsonl", [
+        {
+            "eventId": "evt_codex",
+            "eventType": "implementation_completed",
+            "source": "codex",
+            "sessionId": "hermes-session",
+            "title": "Hermes workflow cockpit",
+            "linkedFeatureIds": ["proposal.hermes_history_progress_cockpit"],
+            "changedFiles": ["06_AppPlatform/frontend/src/components/HermesWorkflowView.tsx"],
+            "tests": {"frontend": "typecheck"},
+            "createdAt": "2026-06-12T10:00:00Z",
+        }
+    ])
+    _write_jsonl(tmp_path / "hermes" / "agent_usage.jsonl", [
+        {
+            "usageId": "agent_usage_astrbot_1",
+            "recordedAt": "2026-06-12T10:05:00Z",
+            "model": "deepseek-chat",
+            "pricingModel": "deepseek-v4-flash",
+            "inputTokens": 100,
+            "outputTokens": 20,
+            "estimatedCostCny": 0.01,
+            "selectedTool": "country_copilot",
+        }
+    ])
+
+    events = history.list_history_events(source="usage", limit=10)
+    cockpit = history.get_workflow_cockpit()
+
+    assert events["summary"]["totalEvents"] == 1
+    assert events["events"][0]["source"] == "usage"
+    assert cockpit["summary"]["sessionCount"] == 2
+    assert any(session["sessionId"] == "hermes-session" for session in cockpit["sessions"])
+    assert any(session["sessionId"] == "astrbot" for session in cockpit["sessions"])
+    assert any(model["model"] == "deepseek-v4-flash" for model in cockpit["models"])

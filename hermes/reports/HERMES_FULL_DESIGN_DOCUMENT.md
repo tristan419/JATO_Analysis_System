@@ -555,10 +555,11 @@ Hermes compares `deploy_expected.json` with the server-side `actualCommitSha` in
 
 | 方法 | 端点 | 描述 | 鉴权 |
 |------|------|------|------|
-| GET | `/history/events` | 聚合 git、DevSync、evidence、Sentinel、pipeline、deploy 事件 | viewer+ |
+| GET | `/history/events` | 聚合 git、DevSync、evidence、Sentinel、pipeline、deploy、usage 事件 | viewer+ |
 | GET | `/history/clusters?level=feature&yAxis=workstream` | 按粒度和 Y 轴生成 History Map clusters | viewer+ |
 | GET | `/progress/features` | 功能生命周期状态、风险、测试、文档、evidence、gap、下一步 | viewer+ |
 | GET | `/progress/swimlanes` | 按 workstream 分组的 Progress Swimlane 数据 | viewer+ |
+| GET | `/workflow/cockpit` | 按 session/model 聚合任务、文件、测试、commit、evidence、gap | viewer+ |
 
 ---
 
@@ -828,6 +829,7 @@ DataManagementPage 的 Hermes 标签页包含 **5 个子标签**:
 - `hermesSourceDetail`, `hermesSourceHealthHistory`
 - `hermesActivityHeatmap`, `hermesCostHeatmap`, `hermesDailySummary`
 - `hermesFeatureKanban`, `hermesEvidenceLedger`
+- `hermesHistoryEvents`, `hermesHistoryClusters`, `hermesProgressSwimlanes`, `hermesWorkflowCockpit`
 - `hermesChat`, `hermesChatSessions`, `hermesChatSession`
 - `hermesCommands`, `hermesCommandExecute`
 
