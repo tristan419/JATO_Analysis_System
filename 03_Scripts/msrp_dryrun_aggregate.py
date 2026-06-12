@@ -83,17 +83,37 @@ def _gate_status(pass_pct: float, threshold: int) -> str:
     return "allowed" if pass_pct >= threshold else "blocked"
 
 
+def _status_value(result: dict[str, Any]) -> str:
+    return str(result.get("rawStatus") or result.get("status") or "").lower()
+
+
+def _valid_count(result: dict[str, Any]) -> int:
+    try:
+        return int(result.get("valid") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _result_is_pass(result: dict[str, Any]) -> bool:
-    return (
-        result.get("status") == "dry_run"
-        and int(result.get("valid") or 0) > 0
-        and not result.get("failureReason")
-    )
+    status = _status_value(result)
+    return _valid_count(result) > 0 and not result.get("failureReason") and status not in {"empty", "error", "exception"}
+
+
+def _result_is_empty(result: dict[str, Any]) -> bool:
+    return _status_value(result) == "empty"
+
+
+def _result_is_error(result: dict[str, Any]) -> bool:
+    return _status_value(result) in {"error", "exception"}
+
+
+def _result_is_fail(result: dict[str, Any]) -> bool:
+    return not _result_is_pass(result) and not _result_is_empty(result) and not _result_is_error(result)
 
 
 def _normalize_source_result(result: dict[str, Any], country_code: str) -> dict[str, Any]:
     status = str(result.get("status") or "")
-    normalized_status = "pass" if _result_is_pass(result) else ("empty" if status == "empty" else "fail")
+    normalized_status = "pass" if _result_is_pass(result) else ("empty" if _result_is_empty(result) else "fail")
     source_code = result.get("sourceCode") or result.get("code") or ""
     payload = {
         "index": int(result.get("index") or 0),
@@ -149,32 +169,22 @@ def _compute_summary(artifacts: dict[str, dict], results: list[dict]) -> dict:
         for data in artifacts.values():
             d_results = data.get("results") or []
             total += _artifact_count(data, "total", len(d_results))
-            pass_count += _artifact_count(
-                data,
-                "pass",
-                sum(1 for r in d_results if _result_is_pass(r)),
-            )
-            empty += _artifact_count(
-                data,
-                "empty",
-                sum(1 for r in d_results if r.get("status") == "empty"),
-            )
-            fail += _artifact_count(
-                data,
-                "fail",
-                sum(1 for r in d_results if r.get("failureReason") == "validation_rejected_all"),
-            )
-            errors += _artifact_count(
-                data,
-                "errors",
-                sum(1 for r in d_results if r.get("status") in ("error", "exception")),
-            )
+            if d_results:
+                pass_count += sum(1 for r in d_results if _result_is_pass(r))
+                empty += sum(1 for r in d_results if _result_is_empty(r))
+                fail += sum(1 for r in d_results if _result_is_fail(r))
+                errors += sum(1 for r in d_results if _result_is_error(r))
+            else:
+                pass_count += _artifact_count(data, "pass", 0)
+                empty += _artifact_count(data, "empty", 0)
+                fail += _artifact_count(data, "fail", 0)
+                errors += _artifact_count(data, "errors", 0)
     else:
         total = len(results)
         pass_count = sum(1 for r in results if _result_is_pass(r))
-        empty = sum(1 for r in results if r.get("status") == "empty")
-        fail = sum(1 for r in results if r.get("failureReason") == "validation_rejected_all")
-        errors = sum(1 for r in results if r.get("status") in ("error", "exception"))
+        empty = sum(1 for r in results if _result_is_empty(r))
+        fail = sum(1 for r in results if _result_is_fail(r))
+        errors = sum(1 for r in results if _result_is_error(r))
 
     pass_pct = round(pass_count / total * 100, 1) if total > 0 else 0.0
 
@@ -224,18 +234,16 @@ def _build_countries_detail(
             continue
         d_results = data.get("results") or []
         total = _artifact_count(data, "total", len(d_results))
-        d_pass = _artifact_count(data, "pass", sum(1 for r in d_results if _result_is_pass(r)))
-        d_empty = _artifact_count(data, "empty", sum(1 for r in d_results if r.get("status") == "empty"))
-        d_fail = _artifact_count(
-            data,
-            "fail",
-            sum(1 for r in d_results if r.get("failureReason") == "validation_rejected_all"),
-        )
-        d_errors = _artifact_count(
-            data,
-            "errors",
-            sum(1 for r in d_results if r.get("status") in ("error", "exception")),
-        )
+        if d_results:
+            d_pass = sum(1 for r in d_results if _result_is_pass(r))
+            d_empty = sum(1 for r in d_results if _result_is_empty(r))
+            d_fail = sum(1 for r in d_results if _result_is_fail(r))
+            d_errors = sum(1 for r in d_results if _result_is_error(r))
+        else:
+            d_pass = _artifact_count(data, "pass", 0)
+            d_empty = _artifact_count(data, "empty", 0)
+            d_fail = _artifact_count(data, "fail", 0)
+            d_errors = _artifact_count(data, "errors", 0)
         d_pct = round(d_pass / total * 100, 1) if total > 0 else 0.0
         d_status = _status_for_pass_pct(d_pct)
 

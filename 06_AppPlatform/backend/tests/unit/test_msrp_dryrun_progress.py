@@ -169,3 +169,60 @@ def test_dashboard_reads_partial_run_dir_country_artifacts(tmp_path, monkeypatch
     assert current["countries"][0]["sources"][0]["sourceUrl"] == "https://www.volvocars.com/se/"
     assert current["countries"][1]["completed"] is False
     assert current["countries"][1]["sources"][0]["sourceCode"] == "volvo_xc60_fi_draft_scrapling"
+
+
+def test_partial_artifact_recomputes_valid_success_status_as_pass(tmp_path, monkeypatch):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    run_dir = logs / "msrp-dryrun-20260612-090000"
+    country_dir = run_dir / "countries"
+    artifacts.mkdir()
+    country_dir.mkdir(parents=True)
+    (run_dir / "run.log").write_text(
+        "[RUN] 1/1 country=se mode=dryrun (parallel slot 1/1)\n",
+        encoding="utf-8",
+    )
+    (country_dir / "se.json").write_text(json.dumps({
+        "schemaVersion": "msrp_dryrun_country_v1",
+        "runId": "msrp-dryrun-20260612-090000",
+        "country": "se",
+        "total": 1,
+        "pass": 0,
+        "empty": 0,
+        "fail": 1,
+        "errors": 0,
+        "passPct": 0.0,
+        "status": "failure",
+        "failureBreakdown": {},
+        "strategyRecommendations": {},
+        "results": [{
+            "country": "se",
+            "sourceCode": "polestar_4_se_draft_scrapling",
+            "status": "success",
+            "valid": 1,
+            "extracted": 1,
+            "rejected": 0,
+            "elapsedSeconds": 2.5,
+        }],
+    }), encoding="utf-8")
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+    monkeypatch.setattr(progress, "LOCK_FILE", tmp_path / "missing.lock")
+
+    dashboard = progress.get_dryrun_dashboard()
+    current = dashboard["current"]
+    country = current["countries"][0]
+    source = country["sources"][0]
+
+    assert current["totalPass"] == 1
+    assert current["totalFail"] == 0
+    assert current["overallPassRate"] == 100.0
+    assert country["pass"] == 1
+    assert country["fail"] == 0
+    assert country["passRate"] == 100.0
+    assert country["status"] == "success"
+    assert source["status"] == "pass"
+    assert source["rawStatus"] == "success"

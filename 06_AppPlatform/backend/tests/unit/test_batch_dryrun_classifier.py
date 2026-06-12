@@ -42,6 +42,24 @@ def test_classify_success_ignores_transient_retry_warning():
     assert result["recommendedStrategy"] is None
 
 
+def test_valid_success_status_counts_as_passing_result():
+    """Any non-error status with valid observations is a dryrun pass."""
+    src = {"status": "success", "valid": 2, "extracted": 2}
+
+    classification = dryrun_mod._classify_dryrun_failure(src)
+    result = {**src, **classification}
+    normalized = dryrun_mod._normalize_source_for_v3(result, 1, 1)
+    summary = dryrun_mod._summary_from_results([result])
+
+    assert classification["failureReason"] is None
+    assert dryrun_mod._is_passing_result(result) is True
+    assert normalized["status"] == "pass"
+    assert normalized["rawStatus"] == "success"
+    assert summary["pass"] == 1
+    assert summary["fail"] == 0
+    assert summary["passPct"] == 100.0
+
+
 def test_classify_valid_soft_404_final_url():
     """Valid observations on a soft-404 final URL are not counted as a pass."""
     src = {

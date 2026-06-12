@@ -32,6 +32,38 @@ def _country_label(cc: str) -> str:
     return _COUNTRY_NAMES.get(cc.lower(), cc.upper())
 
 
+def _status_for_pass_rate(pass_rate: float) -> str:
+    if pass_rate >= 90:
+        return "success"
+    if pass_rate >= 50:
+        return "degraded"
+    return "failure"
+
+
+def _source_status_value(source: dict[str, Any]) -> str:
+    return str(source.get("rawStatus") or source.get("status") or "").lower()
+
+
+def _source_valid_count(source: dict[str, Any]) -> int:
+    try:
+        return int(source.get("valid") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _source_is_pass(source: dict[str, Any]) -> bool:
+    status = _source_status_value(source)
+    return _source_valid_count(source) > 0 and not source.get("failureReason") and status not in {"empty", "error", "exception"}
+
+
+def _source_is_empty(source: dict[str, Any]) -> bool:
+    return _source_status_value(source) == "empty"
+
+
+def _source_is_error(source: dict[str, Any]) -> bool:
+    return _source_status_value(source) in {"error", "exception"}
+
+
 def _parse_log_timestamp(filename: str) -> datetime | None:
     m = DRYRUN_LOG_PATTERN.search(filename)
     if not m:
@@ -78,26 +110,55 @@ def _load_v3_report(run_id: str | None = None) -> dict[str, Any] | None:
 
 def _normalize_source(source: dict[str, Any], index: int, total: int) -> dict[str, Any]:
     source_code = str(source.get("sourceCode") or source.get("code") or "")
-    status = str(source.get("status") or "")
-    if status not in {"pass", "empty", "fail"}:
-        status = "pass" if source.get("rawStatus") == "dry_run" and not source.get("failureReason") else ("empty" if source.get("rawStatus") == "empty" else "fail")
+    raw_status = str(source.get("rawStatus") or source.get("status") or "")
+    status = "pass" if _source_is_pass(source) else ("empty" if _source_is_empty(source) else "fail")
     payload = {
         "index": int(source.get("index") or index),
         "totalInCountry": int(source.get("totalInCountry") or total),
         "sourceCode": source_code,
         "status": status,
+        "rawStatus": raw_status,
         "valid": int(source.get("valid") or 0),
         "extracted": int(source.get("extracted") or 0),
         "rejected": int(source.get("rejected") or 0),
         "elapsedSeconds": float(source.get("elapsedSeconds") or source.get("elapsed") or 0),
         "failureReason": source.get("failureReason"),
         "recommendedStrategy": source.get("recommendedStrategy"),
+        "severity": source.get("severity"),
     }
     for key in ("error", "extractorError", "sourceUrl", "httpStatus", "finalUrl"):
         value = source.get(key)
         if value not in (None, ""):
             payload[key] = value
     return payload
+
+
+def _source_from_log_match(match: re.Match[str]) -> dict[str, Any]:
+    emoji = match.group(3)
+    raw_status = "pass" if "✅" in emoji else ("empty" if "⬚" in emoji else "fail")
+    total = int(match.group(2))
+    return _normalize_source(
+        {
+            "index": int(match.group(1)),
+            "totalInCountry": total,
+            "sourceCode": match.group(4),
+            "status": raw_status,
+            "valid": int(match.group(5)),
+            "extracted": int(match.group(6)),
+            "rejected": int(match.group(7)),
+            "elapsedSeconds": float(match.group(8)),
+        },
+        int(match.group(1)),
+        total,
+    )
+
+
+def _source_counts(sources: list[dict[str, Any]]) -> tuple[int, int, int, int]:
+    pass_count = sum(1 for source in sources if source["status"] == "pass")
+    empty_count = sum(1 for source in sources if source["status"] == "empty")
+    error_count = sum(1 for source in sources if _source_is_error(source))
+    fail_count = sum(1 for source in sources if source["status"] == "fail" and not _source_is_error(source))
+    return pass_count, empty_count, fail_count, error_count
 
 
 def _dedupe_countries(countries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -122,29 +183,50 @@ def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] |
     countries: list[dict[str, Any]] = []
     for country in report.get("countriesDetail") or []:
         code = str(country.get("countryCode") or "").lower()
+        total = int(country.get("total") or 0)
         sources = [
-            _normalize_source(source, index, int(country.get("total") or 0))
+            _normalize_source(source, index, total)
             for index, source in enumerate(country.get("sources") or [], start=1)
         ]
-        fail_count = int(country.get("fail") or 0) + int(country.get("errors") or 0)
+        if sources:
+            pass_count, empty_count, fail_count, error_count = _source_counts(sources)
+        else:
+            pass_count = int(country.get("pass") or 0)
+            empty_count = int(country.get("empty") or 0)
+            error_count = int(country.get("errors") or 0)
+            fail_count = int(country.get("fail") or 0)
+        pass_rate = round(pass_count / max(total, 1) * 100, 1) if total > 0 else 0
         countries.append({
             "countryCode": code,
             "countryLabel": _country_label(code),
-            "total": int(country.get("total") or 0),
-            "pass": int(country.get("pass") or 0),
-            "empty": int(country.get("empty") or 0),
+            "total": total,
+            "pass": pass_count,
+            "empty": empty_count,
             "fail": fail_count,
-            "errors": int(country.get("errors") or 0),
+            "errors": error_count,
             "completed": country.get("status") != "missing",
-            "passRate": float(country.get("passPct") or 0),
-            "status": country.get("status") or "unknown",
+            "passRate": pass_rate,
+            "status": "missing" if country.get("status") == "missing" else _status_for_pass_rate(pass_rate),
             "topFailureReason": country.get("topFailureReason"),
             "failureBreakdown": country.get("failureBreakdown") or {},
             "strategyRecommendations": country.get("strategyRecommendations") or {},
             "sources": sources,
         })
 
-    total_fail = int(summary.get("fail") or 0) + int(summary.get("errors") or 0)
+    if countries:
+        total_sources = sum(int(country.get("total") or 0) for country in countries)
+        total_pass = sum(int(country.get("pass") or 0) for country in countries)
+        total_empty = sum(int(country.get("empty") or 0) for country in countries)
+        total_fail = sum(int(country.get("fail") or 0) for country in countries)
+        total_errors = sum(int(country.get("errors") or 0) for country in countries)
+        overall_pass_rate = round(total_pass / max(total_sources, 1) * 100, 1) if total_sources > 0 else 0
+    else:
+        total_sources = int(summary.get("total") or 0)
+        total_pass = int(summary.get("pass") or 0)
+        total_empty = int(summary.get("empty") or 0)
+        total_fail = int(summary.get("fail") or 0)
+        total_errors = int(summary.get("errors") or 0)
+        overall_pass_rate = float(summary.get("passPct") or 0)
     return {
         "available": True,
         "running": _is_running(),
@@ -161,11 +243,11 @@ def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] |
         "observedCountries": report.get("observedCountries") or [],
         "missingCountries": report.get("missingCountries") or [],
         "duplicateCountries": report.get("duplicateCountries") or [],
-        "totalSources": int(summary.get("total") or 0),
-        "totalPass": int(summary.get("pass") or 0),
-        "totalEmpty": int(summary.get("empty") or 0),
-        "totalFail": total_fail,
-        "overallPassRate": float(summary.get("passPct") or 0),
+        "totalSources": total_sources,
+        "totalPass": total_pass,
+        "totalEmpty": total_empty,
+        "totalFail": total_fail + total_errors,
+        "overallPassRate": overall_pass_rate,
         "failureBreakdown": summary.get("failureBreakdown") or {},
         "strategyRecommendations": summary.get("strategyRecommendations") or {},
         "recentResults": [],
@@ -263,35 +345,28 @@ def _parse_country_log(log_path: Path) -> dict[str, Any]:
         r"\[\s*(\d+)/(\d+)\]\s*(\S+)\s+(\S+)\s+valid=(\d+)\s+extracted=(\d+)\s+rejected=(\d+)\s+\(([\d.]+)s\)",
         text,
     ):
-        emoji = m.group(3)
-        status = "pass" if "✅" in emoji else ("empty" if "⬚" in emoji else "fail")
-        sources.append({
-            "index": int(m.group(1)),
-            "totalInCountry": int(m.group(2)),
-            "sourceCode": m.group(4),
-            "status": status,
-            "valid": int(m.group(5)),
-            "extracted": int(m.group(6)),
-            "rejected": int(m.group(7)),
-            "elapsedSeconds": float(m.group(8)),
-        })
+        sources.append(_source_from_log_match(m))
     summary_m = re.search(
         r"Results:\s*(\d+)/(\d+)\s+PASS,\s*(\d+)\s+empty,\s*(\d+)\s+rejected-all,\s*(\d+)\s+errors",
         text,
     )
     if summary_m:
+        pass_count, empty_count, fail_count, error_count = _source_counts(sources)
+        if not sources:
+            pass_count = int(summary_m.group(1))
+            empty_count = int(summary_m.group(3))
+            fail_count = int(summary_m.group(4))
+            error_count = int(summary_m.group(5))
         return {
             "sources": sources,
             "completed": True,
             "total": int(summary_m.group(2)),
-            "pass": int(summary_m.group(1)),
-            "empty": int(summary_m.group(3)),
-            "fail": int(summary_m.group(4)),
-            "errors": int(summary_m.group(5)),
+            "pass": pass_count,
+            "empty": empty_count,
+            "fail": fail_count,
+            "errors": error_count,
         }
-    pass_count = sum(1 for source in sources if source["status"] == "pass")
-    empty_count = sum(1 for source in sources if source["status"] == "empty")
-    fail_count = sum(1 for source in sources if source["status"] == "fail")
+    pass_count, empty_count, fail_count, error_count = _source_counts(sources)
     total = max([int(source.get("totalInCountry") or 0) for source in sources] or [0])
     return {
         "sources": sources,
@@ -300,7 +375,7 @@ def _parse_country_log(log_path: Path) -> dict[str, Any]:
         "pass": pass_count,
         "empty": empty_count,
         "fail": fail_count,
-        "errors": 0,
+        "errors": error_count,
     }
 
 
@@ -316,18 +391,25 @@ def _country_from_artifact(path: Path) -> dict[str, Any] | None:
     ]
     failure_breakdown = artifact.get("failureBreakdown") or {}
     top_failure = max(failure_breakdown, key=failure_breakdown.get) if failure_breakdown else None
-    fail_count = int(artifact.get("fail") or 0) + int(artifact.get("errors") or 0)
+    if sources:
+        pass_count, empty_count, fail_count, error_count = _source_counts(sources)
+    else:
+        pass_count = int(artifact.get("pass") or 0)
+        empty_count = int(artifact.get("empty") or 0)
+        error_count = int(artifact.get("errors") or 0)
+        fail_count = int(artifact.get("fail") or 0)
+    pass_rate = round(pass_count / max(total, 1) * 100, 1) if total > 0 else 0
     return {
         "countryCode": code,
         "countryLabel": _country_label(code),
         "total": total,
-        "pass": int(artifact.get("pass") or 0),
-        "empty": int(artifact.get("empty") or 0),
+        "pass": pass_count,
+        "empty": empty_count,
         "fail": fail_count,
-        "errors": int(artifact.get("errors") or 0),
+        "errors": error_count,
         "completed": True,
-        "passRate": float(artifact.get("passPct") or 0),
-        "status": artifact.get("status") or "unknown",
+        "passRate": pass_rate,
+        "status": _status_for_pass_rate(pass_rate),
         "topFailureReason": top_failure,
         "failureBreakdown": failure_breakdown,
         "strategyRecommendations": artifact.get("strategyRecommendations") or {},
@@ -359,7 +441,7 @@ def _current_from_partial_run_dir(run_id: str | None = None) -> dict[str, Any] |
         total = int(parsed_log.get("total") or 0)
         pass_count = int(parsed_log.get("pass") or 0)
         empty_count = int(parsed_log.get("empty") or 0)
-        fail_count = int(parsed_log.get("fail") or 0) + int(parsed_log.get("errors") or 0)
+        fail_count = int(parsed_log.get("fail") or 0)
         countries_by_code[code] = {
             "countryCode": code,
             "countryLabel": _country_label(code),
@@ -384,7 +466,7 @@ def _current_from_partial_run_dir(run_id: str | None = None) -> dict[str, Any] |
     total_sources = sum(int(country.get("total") or 0) for country in countries)
     total_pass = sum(int(country.get("pass") or 0) for country in countries)
     total_empty = sum(int(country.get("empty") or 0) for country in countries)
-    total_fail = sum(int(country.get("fail") or 0) for country in countries)
+    total_fail = sum(int(country.get("fail") or 0) + int(country.get("errors") or 0) for country in countries)
     started = _parse_run_dir_timestamp(run_dir.name)
     running = _is_running() or any(not country.get("completed") for country in countries)
     return {
@@ -466,26 +548,19 @@ def _parse_parallel_progress(country_logs: list[Path]) -> dict[str, Any]:
             r"\[\s*(\d+)/(\d+)\]\s*(\S+)\s+(\S+)\s+valid=(\d+)\s+extracted=(\d+)\s+rejected=(\d+)\s+\(([\d.]+)s\)",
             text,
         ):
-            emoji = m.group(3)
-            sources.append({
-                "index": int(m.group(1)),
-                "totalInCountry": int(m.group(2)),
-                "sourceCode": m.group(4),
-                "status": "pass" if "✅" in emoji else ("empty" if "⬚" in emoji else "fail"),
-                "valid": int(m.group(5)),
-                "extracted": int(m.group(6)),
-                "rejected": int(m.group(7)),
-                "elapsedSeconds": float(m.group(8)),
-            })
+            sources.append(_source_from_log_match(m))
 
         summary_m = re.search(
             r"Results:\s*(\d+)/(\d+)\s+PASS,\s*(\d+)\s+empty,\s*(\d+)\s+rejected-all,\s*(\d+)\s+errors",
             text,
         )
-        pass_count = int(summary_m.group(1)) if summary_m else 0
         total = int(summary_m.group(2)) if summary_m else len(sources)
-        empty_count = int(summary_m.group(3)) if summary_m else 0
-        fail_count = int(summary_m.group(5)) if summary_m else 0
+        pass_count, empty_count, fail_count, error_count = _source_counts(sources)
+        if summary_m and not sources:
+            pass_count = int(summary_m.group(1))
+            empty_count = int(summary_m.group(3))
+            fail_count = int(summary_m.group(4))
+            error_count = int(summary_m.group(5))
 
         countries.append({
             "countryCode": cc,
@@ -494,6 +569,7 @@ def _parse_parallel_progress(country_logs: list[Path]) -> dict[str, Any]:
             "pass": pass_count,
             "empty": empty_count,
             "fail": fail_count,
+            "errors": error_count,
             "completed": bool(summary_m),
             "passRate": round(pass_count / max(total, 1) * 100, 1),
             "sources": sources,
@@ -501,7 +577,7 @@ def _parse_parallel_progress(country_logs: list[Path]) -> dict[str, Any]:
         total_sources += total
         total_pass += pass_count
         total_empty += empty_count
-        total_fail += fail_count
+        total_fail += fail_count + error_count
 
     return {
         "available": True,
@@ -554,28 +630,20 @@ def _parse_sequential_log(log_path: Path) -> dict[str, Any]:
             r"\[\s*(\d+)/(\d+)\]\s*(\S+)\s+(\S+)\s+valid=(\d+)\s+extracted=(\d+)\s+rejected=(\d+)\s+\(([\d.]+)s\)",
             section,
         ):
-            emoji = m.group(3)  # ✅ / ⬚ / ❌
-            source_code = m.group(4)
-            sources.append({
-                "index": int(m.group(1)),
-                "totalInCountry": int(m.group(2)),
-                "sourceCode": source_code,
-                "status": "pass" if "✅" in emoji else ("empty" if "⬚" in emoji else "fail"),
-                "valid": int(m.group(5)),
-                "extracted": int(m.group(6)),
-                "rejected": int(m.group(7)),
-                "elapsedSeconds": float(m.group(8)),
-            })
+            sources.append(_source_from_log_match(m))
 
         # Parse country summary from Results line
         summary_m = re.search(
             r"Results:\s*(\d+)/(\d+)\s+PASS,\s*(\d+)\s+empty,\s*(\d+)\s+rejected-all,\s*(\d+)\s+errors",
             section,
         )
-        pass_count = int(summary_m.group(1)) if summary_m else 0
         total = int(summary_m.group(2)) if summary_m else len(sources)
-        empty_count = int(summary_m.group(3)) if summary_m else 0
-        fail_count = int(summary_m.group(5)) if summary_m else 0
+        pass_count, empty_count, fail_count, error_count = _source_counts(sources)
+        if summary_m and not sources:
+            pass_count = int(summary_m.group(1))
+            empty_count = int(summary_m.group(3))
+            fail_count = int(summary_m.group(4))
+            error_count = int(summary_m.group(5))
 
         country_entry: dict[str, Any] = {
             "countryCode": cc,
@@ -584,6 +652,7 @@ def _parse_sequential_log(log_path: Path) -> dict[str, Any]:
             "pass": pass_count,
             "empty": empty_count,
             "fail": fail_count,
+            "errors": error_count,
             "completed": bool(summary_m),
             "passRate": round(pass_count / max(total, 1) * 100, 1),
             "sources": sources,
@@ -592,7 +661,7 @@ def _parse_sequential_log(log_path: Path) -> dict[str, Any]:
         result["totalSources"] += total
         result["totalPass"] += pass_count
         result["totalEmpty"] += empty_count
-        result["totalFail"] += fail_count
+        result["totalFail"] += fail_count + error_count
 
         # Collect recent results (last 20 across all countries)
         if sources:

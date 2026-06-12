@@ -147,6 +147,45 @@ def test_aggregate_preserves_source_diagnostics(tmp_path):
     assert source["httpStatus"] == 0
 
 
+def test_aggregate_recomputes_valid_success_status_as_pass(tmp_path):
+    """Old country artifacts with valid non-dry_run status are normalized as pass."""
+    run_dir = tmp_path / "msrp-dryrun-20260612-090000"
+    countries_dir = run_dir / "countries"
+    countries_dir.mkdir(parents=True)
+    artifact = _make_country_artifact("se", 0, 1)
+    artifact.update({
+        "pass": 0,
+        "empty": 0,
+        "fail": 1,
+        "passPct": 0.0,
+        "status": "failure",
+        "failureBreakdown": {},
+        "strategyRecommendations": {},
+    })
+    artifact["results"] = [{
+        "country": "se",
+        "code": "polestar_4_se_draft_scrapling",
+        "status": "success",
+        "valid": 1,
+        "extracted": 1,
+        "rejected": 0,
+        "elapsed": 1.0,
+    }]
+    (countries_dir / "se.json").write_text(json.dumps(artifact))
+
+    result = agg_mod.run(str(run_dir), ["se"], out_latest=None)
+
+    country = result["countriesDetail"][0]
+    source = country["sources"][0]
+    assert result["summary"]["pass"] == 1
+    assert result["summary"]["fail"] == 0
+    assert result["summary"]["passPct"] == 100.0
+    assert country["pass"] == 1
+    assert country["status"] == "success"
+    assert source["status"] == "pass"
+    assert source["rawStatus"] == "success"
+
+
 def test_aggregate_status_mapping():
     """Status mapping: >=90 success, >=50 degraded, <50 failure."""
     # success

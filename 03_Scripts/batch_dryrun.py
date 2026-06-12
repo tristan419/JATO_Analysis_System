@@ -88,14 +88,20 @@ def _classify_dryrun_failure(
     exception: Exception | None = None,
 ) -> dict:
     """Classify a dry-run failure and recommend next strategy."""
-    status = src.get("status", "")
+    status = str(src.get("status", "")).lower()
     error = str(
         src.get("error", "")
         or src.get("extractorError", "")
         or (str(exception) if exception else "")
     )
-    valid = src.get("valid", 0)
-    extracted = src.get("extracted", 0)
+    try:
+        valid = int(src.get("valid") or 0)
+    except (TypeError, ValueError):
+        valid = 0
+    try:
+        extracted = int(src.get("extracted") or 0)
+    except (TypeError, ValueError):
+        extracted = 0
     error_lower = error.lower()
     final_url = str(src.get("finalUrl") or src.get("final_url") or "")
     http_status_raw = src.get("httpStatus") or src.get("http_status")
@@ -106,7 +112,13 @@ def _classify_dryrun_failure(
 
     if "404-page" in final_url.lower() or "/404" in final_url.lower():
         return {"failureReason": "source_url_not_found", "recommendedStrategy": "update_source_url", "severity": "error"}
-    if status == "dry_run" and valid > 0:
+    if http_status == 403:
+        return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
+    if http_status == 404:
+        return {"failureReason": "source_url_not_found", "recommendedStrategy": "update_source_url", "severity": "error"}
+    if http_status and http_status >= 400:
+        return {"failureReason": "http_error", "recommendedStrategy": "check_source_url_or_site_status", "severity": "error"}
+    if valid > 0 and status not in {"empty", "error", "exception"}:
         return {"failureReason": None, "recommendedStrategy": None, "severity": "info"}
     if (
         "could not resolve host" in error_lower
@@ -124,12 +136,6 @@ def _classify_dryrun_failure(
         or "connection refused" in error_lower
     ):
         return {"failureReason": "network_unavailable", "recommendedStrategy": "retry_network_or_proxy", "severity": "warning"}
-    if http_status == 403:
-        return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
-    if http_status == 404:
-        return {"failureReason": "source_url_not_found", "recommendedStrategy": "update_source_url", "severity": "error"}
-    if http_status and http_status >= 400:
-        return {"failureReason": "http_error", "recommendedStrategy": "check_source_url_or_site_status", "severity": "error"}
     if "403" in error_lower or "forbidden" in error_lower:
         return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
     if "waiting for" in error_lower or "playwright" in error_lower:
@@ -174,11 +180,12 @@ def _classify_dryrun_failure(
 
 def _is_passing_result(result: dict) -> bool:
     """Return True only when a dryrun has valid data and no classified failure."""
-    return (
-        result.get("status") == "dry_run"
-        and int(result.get("valid") or 0) > 0
-        and not result.get("failureReason")
-    )
+    status = str(result.get("rawStatus") or result.get("status") or "").lower()
+    try:
+        valid = int(result.get("valid") or 0)
+    except (TypeError, ValueError):
+        valid = 0
+    return valid > 0 and not result.get("failureReason") and status not in {"empty", "error", "exception"}
 
 
 def _status_for_pass_pct(pass_pct: float) -> str:
@@ -212,11 +219,11 @@ def _strategy_recommendations(results: list[dict]) -> dict[str, int]:
 
 
 def _result_is_error(result: dict) -> bool:
-    return result.get("status") in {"error", "exception"}
+    return str(result.get("rawStatus") or result.get("status") or "").lower() in {"error", "exception"}
 
 
 def _result_is_empty(result: dict) -> bool:
-    return result.get("status") == "empty"
+    return str(result.get("rawStatus") or result.get("status") or "").lower() == "empty"
 
 
 def _result_is_fail(result: dict) -> bool:
@@ -616,13 +623,18 @@ def main():
                 classification_src = {**src, "extractorError": captured_log_text}
             classification = _classify_dryrun_failure(classification_src)
 
-            if status == "dry_run" and valid > 0 and not classification.get("failureReason"):
+            count_result = {
+                "status": status,
+                "valid": valid,
+                "failureReason": classification.get("failureReason"),
+            }
+            if _is_passing_result(count_result):
                 icon = "✅"
                 pass_count += 1
-            elif status == "empty":
+            elif _result_is_empty(count_result):
                 icon = "⬚"
                 empty_count += 1
-            elif status == "error":
+            elif _result_is_error(count_result):
                 icon = "❌"
                 error_count += 1
             else:
