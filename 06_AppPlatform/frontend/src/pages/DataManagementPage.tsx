@@ -1346,6 +1346,12 @@ export function DataManagementPage() {
                 </div>
               </div>
 
+              {hermesSubtab === "history" && (
+                <div style={{marginBottom:16}}>
+                  <HermesHistoryMap />
+                </div>
+              )}
+
               {sentinelStatus ? (() => {
                 const notifications = sentinelStatus.notifications ?? [];
                 const filteredNotifications = notifications.filter((notification) =>
@@ -1488,7 +1494,7 @@ export function DataManagementPage() {
                   className={`admin-tab${hermesSubtab===st?" is-active":""}`}
                   onClick={()=>setHermesSubtab(st)}
                 >
-                  {st === "history" ? "History Map" : st === "workflow" ? "Workflow" : "Progress"}
+                  {st === "history" ? "Git History Cluster" : st === "workflow" ? "Workflow" : "Progress"}
                 </button>
               ))}
               <span className="hermes-subtab-group-label" style={{marginLeft:8}}>Does</span>
@@ -1582,11 +1588,6 @@ export function DataManagementPage() {
             {/* ── Progress sub-tab (feature lifecycle) ── */}
             {hermesSubtab === "progress" && (
               <HermesProgressSwimlane />
-            )}
-
-            {/* ── History Map sub-tab (clustered project timeline) ── */}
-            {hermesSubtab === "history" && (
-              <HermesHistoryMap />
             )}
 
             {/* ── Workflow sub-tab (model/session orchestration) ── */}
