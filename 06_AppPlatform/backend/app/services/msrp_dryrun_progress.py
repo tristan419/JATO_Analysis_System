@@ -526,9 +526,7 @@ def _current_from_running_pipeline_status() -> dict[str, Any] | None:
 
     message = str(status.get("message") or "")
     match = DRYRUN_RUN_ID_PATTERN.search(message)
-    run_id = match.group(1) if match else ""
-    if not run_id:
-        return None
+    run_id = match.group(1) if match else "msrp-dryrun-pending"
 
     metadata = status.get("metadata") if isinstance(status.get("metadata"), dict) else {}
     countries = [
@@ -536,6 +534,12 @@ def _current_from_running_pipeline_status() -> dict[str, Any] | None:
         for country in (metadata.get("countries") or [])
         if str(country).strip()
     ]
+    if not countries and metadata.get("countriesRaw"):
+        countries = [
+            country.strip().lower()
+            for country in str(metadata.get("countriesRaw") or "").split(",")
+            if country.strip()
+        ]
     country_entries = [
         {
             "countryCode": code,
@@ -581,6 +585,7 @@ def _current_from_running_pipeline_status() -> dict[str, Any] | None:
         "failureBreakdown": {},
         "strategyRecommendations": {},
         "recentResults": [],
+        "pipelineMessage": message,
     }
 
 

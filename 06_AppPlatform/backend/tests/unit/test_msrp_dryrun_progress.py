@@ -267,6 +267,53 @@ def test_dashboard_uses_running_pipeline_status_when_partial_artifacts_are_pendi
     assert [country["status"] for country in current["countries"]] == ["running", "running"]
 
 
+def test_dashboard_uses_pending_run_id_for_queued_pipeline_status(tmp_path, monkeypatch):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    status_dir = tmp_path / "pipeline_status"
+    artifacts.mkdir()
+    logs.mkdir()
+    status_dir.mkdir()
+
+    old_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260612-070207",
+        "summary": {
+            "total": 1,
+            "pass": 0,
+            "empty": 1,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 0.0,
+            "gateStatus": "blocked",
+        },
+        "countriesDetail": [],
+    }
+    (artifacts / "dryrun_report.json").write_text(json.dumps(old_report), encoding="utf-8")
+    pipeline_status_path = status_dir / "msrp_dryrun.json"
+    pipeline_status_path.write_text(json.dumps({
+        "pipelineId": "msrp_dryrun",
+        "status": "running",
+        "lastRunAt": "2026-06-12T13:10:17Z",
+        "message": "jato-msrp-sync@dryrun.service queued; dryrun artifacts pending",
+    }), encoding="utf-8")
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "PIPELINE_STATUS_PATH", pipeline_status_path)
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+    monkeypatch.setattr(progress, "LOCK_FILE", tmp_path / "missing.lock")
+
+    current = progress.get_dryrun_dashboard()["current"]
+
+    assert current["partial"] is True
+    assert current["running"] is True
+    assert current["runId"] == "msrp-dryrun-pending"
+    assert current["expectedCountries"] == []
+    assert current["pipelineMessage"] == "jato-msrp-sync@dryrun.service queued; dryrun artifacts pending"
+
+
 def test_dashboard_reads_partial_run_dir_country_artifacts(tmp_path, monkeypatch):
     artifacts = tmp_path / "artifacts"
     logs = tmp_path / "logs"
