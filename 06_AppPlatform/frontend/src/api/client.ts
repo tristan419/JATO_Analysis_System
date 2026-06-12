@@ -2364,6 +2364,137 @@ export const api = {
       items: res.items.map((item) => mapMsrpObservation(item))
     }));
   },
+  listMsrpFinanceObservations: (params?: {
+    country?: string;
+    brand?: string;
+    jato_model?: string;
+    price_semantics?: string;
+    finance_type?: string;
+    has_monthly_payment?: boolean;
+    has_subsidy?: boolean;
+    has_net_price_after_subsidy?: boolean;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const sp = new URLSearchParams();
+    if (params?.country) sp.set("country", params.country);
+    if (params?.brand) sp.set("brand", params.brand);
+    if (params?.jato_model) sp.set("jato_model", params.jato_model);
+    if (params?.price_semantics) sp.set("price_semantics", params.price_semantics);
+    if (params?.finance_type) sp.set("finance_type", params.finance_type);
+    if (params?.has_monthly_payment !== undefined) {
+      sp.set("has_monthly_payment", String(params.has_monthly_payment));
+    }
+    if (params?.has_subsidy !== undefined) sp.set("has_subsidy", String(params.has_subsidy));
+    if (params?.has_net_price_after_subsidy !== undefined) {
+      sp.set("has_net_price_after_subsidy", String(params.has_net_price_after_subsidy));
+    }
+    if (params?.limit) sp.set("limit", String(params.limit));
+    if (params?.offset !== undefined) sp.set("offset", String(params.offset));
+    const q = sp.toString();
+    return request<{
+      rows?: unknown;
+      total?: unknown;
+      limit?: unknown;
+      offset?: unknown;
+      summary?: Record<string, unknown>;
+      items?: Record<string, unknown>[];
+      warning?: unknown;
+    }>(`/msrp/finance-observations${q ? `?${q}` : ""}`).then((res) => ({
+      rows: Number(res.rows ?? 0),
+      total: Number(res.total ?? 0),
+      limit: Number(res.limit ?? 0),
+      offset: Number(res.offset ?? 0),
+      summary: mapMsrpFinanceSummary(res.summary),
+      items: (res.items ?? []).map((item) => mapMsrpFinanceObservation(item)),
+      ...(typeof res.warning === "string" && res.warning ? { warning: res.warning } : {}),
+    }));
+  },
+  listMsrpReconciliation: (params?: {
+    country?: string;
+    brand?: string;
+    jato_model?: string;
+    threshold_pct?: number;
+    limit?: number;
+  }) => {
+    const sp = new URLSearchParams();
+    if (params?.country) sp.set("country", params.country);
+    if (params?.brand) sp.set("brand", params.brand);
+    if (params?.jato_model) sp.set("jato_model", params.jato_model);
+    if (params?.threshold_pct !== undefined) sp.set("threshold_pct", String(params.threshold_pct));
+    if (params?.limit) sp.set("limit", String(params.limit));
+    const q = sp.toString();
+    return request<{
+      schemaVersion?: unknown;
+      generatedAtUtc?: unknown;
+      filters?: Record<string, unknown>;
+      thresholdPct?: unknown;
+      summary?: Record<string, unknown>;
+      items?: Record<string, unknown>[];
+    }>(`/msrp/reconciliation${q ? `?${q}` : ""}`).then((res) => {
+      const filters = res.filters ?? {};
+      return {
+        schemaVersion: String(res.schemaVersion ?? ""),
+        generatedAtUtc: String(res.generatedAtUtc ?? ""),
+        filters: {
+          country: mapNullableFilterText(filters, "country"),
+          brand: mapNullableFilterText(filters, "brand"),
+          jatoModel: mapNullableFilterText(filters, "jatoModel"),
+        },
+        thresholdPct: Number(res.thresholdPct ?? 0),
+        summary: mapMsrpReconciliationSummary(res.summary),
+        items: (res.items ?? []).map((item) => mapMsrpReconciliationItem(item)),
+      };
+    });
+  },
+  queueMsrpReconciliationReviewCases: (params?: {
+    country?: string;
+    brand?: string;
+    jato_model?: string;
+    threshold_pct?: number;
+    limit?: number;
+  }) => {
+    const sp = new URLSearchParams();
+    if (params?.country) sp.set("country", params.country);
+    if (params?.brand) sp.set("brand", params.brand);
+    if (params?.jato_model) sp.set("jato_model", params.jato_model);
+    if (params?.threshold_pct !== undefined) sp.set("threshold_pct", String(params.threshold_pct));
+    if (params?.limit) sp.set("limit", String(params.limit));
+    const q = sp.toString();
+    return request<{
+      item: {
+        schemaVersion?: unknown;
+        generatedAtUtc?: unknown;
+        filters?: Record<string, unknown>;
+        thresholdPct?: unknown;
+        summary?: Record<string, unknown>;
+        sampleConflicts?: Record<string, unknown>[];
+        sampleReviewCases?: Record<string, unknown>[];
+      };
+    }>(`/msrp/reconciliation/review-cases${q ? `?${q}` : ""}`, {
+      method: "POST",
+    }).then((res) => {
+      const item = res.item;
+      const filters = item.filters ?? {};
+      return {
+        schemaVersion: String(item.schemaVersion ?? ""),
+        generatedAtUtc: String(item.generatedAtUtc ?? ""),
+        filters: {
+          country: mapNullableFilterText(filters, "country"),
+          brand: mapNullableFilterText(filters, "brand"),
+          jatoModel: mapNullableFilterText(filters, "jatoModel"),
+        },
+        thresholdPct: Number(item.thresholdPct ?? 0),
+        summary: mapMsrpReviewQueueSummary(item.summary),
+        sampleConflicts: (item.sampleConflicts ?? []).map((conflict) => (
+          mapMsrpQueuedConflict(conflict)
+        )),
+        sampleReviewCases: (item.sampleReviewCases ?? []).map((reviewCase) => (
+          mapReviewCase(reviewCase)
+        )),
+      };
+    });
+  },
   createMsrpObservation: (payload: {
     source_id: string;
     country: string;
