@@ -205,6 +205,68 @@ def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path,
     assert dashboard["history"][0]["runId"] == "msrp-dryrun-20260612-070207"
 
 
+def test_dashboard_uses_running_pipeline_status_when_partial_artifacts_are_pending(tmp_path, monkeypatch):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    status_dir = tmp_path / "pipeline_status"
+    artifacts.mkdir()
+    logs.mkdir()
+    status_dir.mkdir()
+
+    old_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260612-070207",
+        "batch": "old_batch",
+        "expectedCountries": ["se"],
+        "observedCountries": ["se"],
+        "missingCountries": [],
+        "duplicateCountries": [],
+        "summary": {
+            "total": 1,
+            "pass": 0,
+            "empty": 1,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 0.0,
+            "status": "failure",
+            "gateThreshold": 70,
+            "gateStatus": "blocked",
+        },
+        "countriesDetail": [],
+        "generatedAt": "2026-06-12T09:31:08Z",
+    }
+    (artifacts / "dryrun_report.json").write_text(json.dumps(old_report), encoding="utf-8")
+    pipeline_status_path = status_dir / "msrp_dryrun.json"
+    pipeline_status_path.write_text(json.dumps({
+        "pipelineId": "msrp_dryrun",
+        "status": "running",
+        "lastRunAt": "2026-06-12T12:53:01Z",
+        "finishedAt": "2026-06-12T12:53:01Z",
+        "message": "run msrp-dryrun-20260612-125301 started countries=2 concurrency=2 requested_concurrency=3",
+        "metadata": {
+            "countries": ["se", "fi"],
+            "effectiveConcurrency": 2,
+        },
+    }), encoding="utf-8")
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "PIPELINE_STATUS_PATH", pipeline_status_path)
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+    monkeypatch.setattr(progress, "LOCK_FILE", tmp_path / "missing.lock")
+
+    dashboard = progress.get_dryrun_dashboard()
+    current = dashboard["current"]
+
+    assert current["partial"] is True
+    assert current["running"] is True
+    assert current["runId"] == "msrp-dryrun-20260612-125301"
+    assert current["expectedCountries"] == ["se", "fi"]
+    assert current["missingCountries"] == ["se", "fi"]
+    assert [country["status"] for country in current["countries"]] == ["running", "running"]
+
+
 def test_dashboard_reads_partial_run_dir_country_artifacts(tmp_path, monkeypatch):
     artifacts = tmp_path / "artifacts"
     logs = tmp_path / "logs"

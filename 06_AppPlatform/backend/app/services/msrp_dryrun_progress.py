@@ -16,9 +16,11 @@ LOG_DIR = REPO_DIR / "03_Scripts" / "logs"
 ARTIFACT_DIR = REPO_DIR / "03_Scripts" / "diagnostics" / "artifacts"
 LATEST_REPORT_PATH = ARTIFACT_DIR / "dryrun_report.json"
 RUNS_INDEX_PATH = ARTIFACT_DIR / "dryrun_runs_index.json"
+PIPELINE_STATUS_PATH = REPO_DIR / "hermes" / "reports" / "pipeline_status" / "msrp_dryrun.json"
 LOCK_FILE = Path("/tmp/jato-msrp-low-concurrency.lock")
 DRYRUN_LOG_PATTERN = re.compile(r"msrp-dryrun-(\d{8})-(\d{6})\.log")
 DRYRUN_RUN_DIR_PATTERN = re.compile(r"msrp-dryrun-(\d{8})-(\d{6})$")
+DRYRUN_RUN_ID_PATTERN = re.compile(r"\b(msrp-dryrun-\d{8}-\d{6})\b")
 
 _COUNTRY_NAMES: dict[str, str] = {
     "se": "Sweden", "fi": "Finland", "no": "Norway", "dk": "Denmark",
@@ -517,6 +519,71 @@ def _current_from_partial_run_dir(run_id: str | None = None) -> dict[str, Any] |
     }
 
 
+def _current_from_running_pipeline_status() -> dict[str, Any] | None:
+    status = _load_json(PIPELINE_STATUS_PATH)
+    if not status or str(status.get("status") or "").lower() != "running":
+        return None
+
+    message = str(status.get("message") or "")
+    match = DRYRUN_RUN_ID_PATTERN.search(message)
+    run_id = match.group(1) if match else ""
+    if not run_id:
+        return None
+
+    metadata = status.get("metadata") if isinstance(status.get("metadata"), dict) else {}
+    countries = [
+        str(country).strip().lower()
+        for country in (metadata.get("countries") or [])
+        if str(country).strip()
+    ]
+    country_entries = [
+        {
+            "countryCode": code,
+            "countryLabel": _country_label(code),
+            "total": 0,
+            "pass": 0,
+            "empty": 0,
+            "fail": 0,
+            "errors": 0,
+            "completed": False,
+            "passRate": 0.0,
+            "status": "running",
+            "topFailureReason": None,
+            "failureBreakdown": {},
+            "strategyRecommendations": {},
+            "sources": [],
+        }
+        for code in countries
+    ]
+    started_at = status.get("startedAt") or status.get("lastRunAt") or status.get("finishedAt")
+    return {
+        "available": True,
+        "running": True,
+        "partial": True,
+        "runId": run_id,
+        "batch": "",
+        "schemaVersion": "msrp_dryrun_partial_v1",
+        "gateStatus": "pending",
+        "gateThreshold": None,
+        "logFile": "hermes/reports/pipeline_status/msrp_dryrun.json",
+        "startedAt": started_at,
+        "finishedAt": None,
+        "countries": country_entries,
+        "expectedCountries": countries,
+        "observedCountries": [],
+        "missingCountries": countries,
+        "duplicateCountries": [],
+        "totalSources": 0,
+        "totalPass": 0,
+        "totalEmpty": 0,
+        "totalFail": 0,
+        "overallPassRate": 0.0,
+        "failureBreakdown": {},
+        "strategyRecommendations": {},
+        "recentResults": [],
+    }
+
+
 def _parse_current_progress(log_path: Path | None = None) -> dict[str, Any]:
     """Parse the latest dryrun progress — supports both parallel per-country logs
     (msrp-dryrun-{country}-*.log) and legacy sequential logs (msrp-dryrun-*.log)."""
@@ -762,7 +829,9 @@ def _list_historical_runs() -> list[dict[str, Any]]:
 def get_dryrun_dashboard(run_id: str | None = None) -> dict[str, Any]:
     """Return combined dashboard data: live progress + history."""
     index_data = _load_json(RUNS_INDEX_PATH)
-    current = _current_from_partial_run_dir() if run_id is None else None
+    current = None
+    if run_id is None:
+        current = _current_from_partial_run_dir() or _current_from_running_pipeline_status()
     report = None if current and current.get("running") else _load_v3_report(run_id)
     if report:
         current = _current_from_v3_report(report, index_data)
