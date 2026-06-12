@@ -14,13 +14,13 @@ profile:
   text_regex:
     source_selector: body
     entry_patterns:
-    - pattern: 'CUPRA Terramar VZ 2\.0 TSI 4x4 265 HK DSG.{0,600}?Vejledende pris\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
+    - pattern: 'CUPRA\s+Terramar\s+VZ\s+2\.0\s+TSI\s+4x4\s+265\s+HK\s+DSG.{0,600}?Vejledende\s+pris\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
       official_trim: VZ 2.0 TSI 4x4 265 HK DSG
       official_powertrain: ICE
-    - pattern: 'CUPRA Terramar 1\.5 eTSI 150 HK DSG.{0,600}?Vejledende pris\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
+    - pattern: 'CUPRA\s+Terramar\s+1\.5\s+eTSI\s+150\s+HK\s+DSG.{0,600}?Vejledende\s+pris\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
       official_trim: 1.5 eTSI 150 HK DSG
       official_powertrain: MHEV
-    - pattern: 'CUPRA Terramar 2\.0 TSI 4x4 204 HK DSG.{0,600}?Vejledende pris\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
+    - pattern: 'CUPRA\s+Terramar\s+2\.0\s+TSI\s+4x4\s+204\s+HK\s+DSG.{0,600}?Vejledende\s+pris\s+(?P<price>\d{3}\.\d{3})\s*kr\.'
       official_trim: 2.0 TSI 4x4 204 HK DSG
       official_powertrain: ICE
   css:

@@ -14,7 +14,7 @@ profile:
   text_regex:
     source_selector: body
     entry_patterns:
-    - pattern: 'X1 sDrive18i M Sport.{0,500}?Vejl\. Pris kr\.\s+(?P<price>\d{3}\.\d{3})'
+    - pattern: 'X1\s+sDrive18i\s+M\s+Sport.{0,1200}?Vejl\.\s+Pris\s+kr\.\s+(?P<price>\d{3}\.\d{3})'
       official_trim: sDrive18i M Sport
       official_powertrain: ICE
   css:

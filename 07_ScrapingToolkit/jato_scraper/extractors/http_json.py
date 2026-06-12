@@ -15,9 +15,20 @@ DEFAULT_TIMEOUT = 30
 
 
 @dataclass(frozen=True)
+class LookupMapping:
+    source_path: str
+    collection_path: str
+    key_path: str = "id"
+    value_path: str = "name"
+
+
+FieldMappingPath = str | LookupMapping
+
+
+@dataclass(frozen=True)
 class FieldMapping:
-    model: str | tuple[str, ...] = "model"
-    trim: str | tuple[str, ...] = "trim"
+    model: FieldMappingPath | tuple[FieldMappingPath, ...] = "model"
+    trim: FieldMappingPath | tuple[FieldMappingPath, ...] = "trim"
     price: str = "price"
     currency: str = "currency"
     tax_included: str = "taxIncluded"
@@ -56,7 +67,7 @@ class HttpJsonExtractor(BaseExtractor):
 
     @property
     def extractor_version(self) -> str:
-        return "0.1.0"
+        return "0.2.0"
 
     def extract(self) -> list[RawObservation]:
         raw_json = self._fetch()
@@ -80,7 +91,7 @@ class HttpJsonExtractor(BaseExtractor):
             )
             return []
         vehicles = self._expand_items(vehicles)
-        results = self._map(vehicles)
+        results = self._map(vehicles, root=raw_json)
         self.record_strategy_audit(
             url=self.profile.url,
             strategy="http_json",
@@ -192,42 +203,100 @@ class HttpJsonExtractor(BaseExtractor):
     def _resolve_field_value(
         self,
         vehicle: dict[str, Any],
-        mapping: str | tuple[str, ...] | None,
+        mapping: FieldMappingPath | tuple[FieldMappingPath, ...] | None,
+        *,
+        root: Any | None = None,
     ) -> Any:
         if mapping is None:
             return None
         if isinstance(mapping, tuple):
             parts: list[str] = []
-            for path in mapping:
-                value = self._resolve_path(vehicle, path, log_errors=False)
+            for field in mapping:
+                value = self._resolve_field_value(
+                    vehicle,
+                    field,
+                    root=root,
+                )
                 if value is None:
                     continue
                 text = str(value).strip()
                 if text:
                     parts.append(text)
             return " / ".join(parts)
+        if isinstance(mapping, LookupMapping):
+            lookup_key = self._resolve_path(
+                vehicle,
+                mapping.source_path,
+                log_errors=False,
+            )
+            if lookup_key in (None, "") or root is None:
+                return None
+            collection = self._resolve_path(
+                root,
+                mapping.collection_path,
+                log_errors=False,
+            )
+            if not isinstance(collection, list):
+                return None
+            lookup_key_text = str(lookup_key)
+            for item in collection:
+                if not isinstance(item, dict):
+                    continue
+                candidate_key = self._resolve_path(
+                    item,
+                    mapping.key_path,
+                    log_errors=False,
+                )
+                if str(candidate_key) != lookup_key_text:
+                    continue
+                return self._resolve_path(
+                    item,
+                    mapping.value_path,
+                    log_errors=False,
+                )
+            return None
         if not mapping:
             return None
         return self._resolve_path(vehicle, mapping, log_errors=False)
 
-    def _map(self, vehicles: list[dict]) -> list[RawObservation]:
+    def _map(
+        self,
+        vehicles: list[dict],
+        *,
+        root: Any | None = None,
+    ) -> list[RawObservation]:
         fm = self.profile.field_mapping
         p = self.profile
         results: list[RawObservation] = []
         for v in vehicles:
             try:
                 official_model = str(
-                    p.fixed_model or self._resolve_field_value(v, fm.model) or ""
+                    p.fixed_model
+                    or self._resolve_field_value(v, fm.model, root=root)
+                    or ""
                 )
-                official_trim = str(self._resolve_field_value(v, fm.trim) or "")
-                msrp_value = float(self._resolve_field_value(v, fm.price) or 0)
+                official_trim = str(
+                    self._resolve_field_value(v, fm.trim, root=root) or ""
+                )
+                msrp_value = float(
+                    self._resolve_field_value(v, fm.price, root=root) or 0
+                )
                 currency = str(
-                    self._resolve_field_value(v, fm.currency) or p.default_currency
+                    self._resolve_field_value(v, fm.currency, root=root)
+                    or p.default_currency
                 )
-                tax_included = self._resolve_field_value(v, fm.tax_included)
-                price_label = self._resolve_field_value(v, fm.price_label)
+                tax_included = self._resolve_field_value(
+                    v,
+                    fm.tax_included,
+                    root=root,
+                )
+                price_label = self._resolve_field_value(
+                    v,
+                    fm.price_label,
+                    root=root,
+                )
                 availability = (
-                    self._resolve_field_value(v, fm.availability)
+                    self._resolve_field_value(v, fm.availability, root=root)
                     if fm.availability
                     else None
                 )

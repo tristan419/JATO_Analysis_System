@@ -124,6 +124,26 @@ def _mock_page_with_text(text: str) -> MagicMock:
     return page
 
 
+def _mock_page_with_descendant_text(selector: str, text: str) -> MagicMock:
+    page = MagicMock()
+    element = MagicMock()
+    element.css.return_value = MagicMock()
+    element.css.return_value.get.return_value = ""
+    element.get.return_value = ""
+    text_result = MagicMock()
+    text_result.getall.return_value = text.split("\n")
+
+    def _css_side_effect(query: str):
+        if query == f"{selector} ::text":
+            return text_result
+        if query == selector:
+            return [element]
+        return MagicMock()
+
+    page.css.side_effect = _css_side_effect
+    return page
+
+
 @patch.object(ScraplingExtractor, "_fetch")
 def test_css_extract_honors_include_if_text_contains(mock_fetch) -> None:
     mock_fetch.return_value = _mock_page_with_css(
@@ -208,6 +228,60 @@ def test_text_regex_extracts_price_list_script_text(mock_fetch) -> None:
     assert results[0].msrp_value == 299_990.0
     assert results[0].currency == "DKK"
     assert results[0].jato_powertrain == "BEV"
+
+
+@patch.object(ScraplingExtractor, "_fetch")
+def test_text_regex_extracts_descendant_body_text(mock_fetch) -> None:
+    mock_fetch.return_value = _mock_page_with_descendant_text(
+        "body",
+        "\n".join(
+            [
+                "BMW iX1",
+                "iX1 eDrive20 M Sport",
+                "Drivkraft",
+                "El",
+                "Vejl. Pris kr.",
+                "369.900",
+            ]
+        ),
+    )
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="bmw_ix1_dk",
+            country="DK",
+            brand="BMW",
+            source_url="https://example.com",
+        ),
+        ScraplingProfile(
+            url="https://example.com",
+            text_regex=TextRegexMapping(
+                source_selector="body",
+                entry_patterns=(
+                    TextRegexEntryPattern(
+                        pattern=(
+                            r"iX1 eDrive20 M Sport.{0,500}?"
+                            r"Vejl\. Pris kr\.\s+"
+                            r"(?P<price>\d{3}\.\d{3})"
+                        ),
+                        official_trim="eDrive20 M Sport",
+                        official_powertrain="BEV",
+                    ),
+                ),
+            ),
+            default_currency="DKK",
+            fixed_model="IX1",
+            fixed_jato_model="IX1",
+            fixed_jato_powertrain="BEV",
+            copy_trim_to_jato_trim=True,
+        ),
+    )
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].official_model == "IX1"
+    assert results[0].official_trim == "eDrive20 M Sport"
+    assert results[0].msrp_value == 369_900.0
 
 
 def test_config_loader_builds_scrapling_text_regex_profile() -> None:

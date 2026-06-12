@@ -14,22 +14,22 @@ profile:
   text_regex:
     source_selector: body
     entry_patterns:
-    - pattern: 'iX1 eDrive20 M Sport.{0,500}?Vejl\. Pris kr\.\s+(?P<price>\d{3}\.\d{3})'
+    - pattern: 'iX1\s+eDrive20\s+M\s+Sport.{0,1200}?Vejl\.\s+Pris\s+kr\.\s+(?P<price>\d{3}\.\d{3})'
       official_trim: eDrive20 M Sport
       official_powertrain: BEV
-    - pattern: 'iX1 eDrive20 Fully Charged.{0,500}?Vejl\. Pris kr\.\s+(?P<price>\d{3}\.\d{3})'
+    - pattern: 'iX1\s+eDrive20\s+Fully\s+Charged.{0,1200}?Vejl\.\s+Pris\s+kr\.\s+(?P<price>\d{3}\.\d{3})'
       official_trim: eDrive20 Fully Charged
       official_powertrain: BEV
-    - pattern: 'iX1 eDrive20 Supercharged.{0,500}?Vejl\. Pris kr\.\s+(?P<price>\d{3}\.\d{3})'
+    - pattern: 'iX1\s+eDrive20\s+Supercharged.{0,1200}?Vejl\.\s+Pris\s+kr\.\s+(?P<price>\d{3}\.\d{3})'
       official_trim: eDrive20 Supercharged
       official_powertrain: BEV
-    - pattern: 'iX1 xDrive30 M Sport\*.{0,500}?Vejl\. Pris kr\.\s+(?P<price>\d{3}\.\d{3})'
+    - pattern: 'iX1\s+xDrive30\s+M\s+Sport\*.{0,1200}?Vejl\.\s+Pris\s+kr\.\s+(?P<price>\d{3}\.\d{3})'
       official_trim: xDrive30 M Sport
       official_powertrain: BEV
-    - pattern: 'iX1 xDrive30 Fully Charged\*.{0,500}?Vejl\. Pris kr\.\s+(?P<price>\d{3}\.\d{3})'
+    - pattern: 'iX1\s+xDrive30\s+Fully\s+Charged\*.{0,1200}?Vejl\.\s+Pris\s+kr\.\s+(?P<price>\d{3}\.\d{3})'
       official_trim: xDrive30 Fully Charged
       official_powertrain: BEV
-    - pattern: 'iX1 xDrive30 Supercharged\*.{0,500}?Vejl\. Pris kr\.\s+(?P<price>\d{3}\.\d{3})'
+    - pattern: 'iX1\s+xDrive30\s+Supercharged\*.{0,1200}?Vejl\.\s+Pris\s+kr\.\s+(?P<price>\d{3}\.\d{3})'
       official_trim: xDrive30 Supercharged
       official_powertrain: BEV
   css:

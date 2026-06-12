@@ -1,8 +1,10 @@
 from jato_scraper.base import ExtractorConfig
+from jato_scraper.config_loader import _build_http_json_profile
 from jato_scraper.extractors.http_json import (
     FieldMapping,
     HttpJsonExtractor,
     HttpJsonProfile,
+    LookupMapping,
 )
 
 
@@ -118,3 +120,87 @@ def test_http_json_supports_list_indexes_in_paths():
     assert len(results) == 1
     assert results[0].official_model == "TIGUAN ALLSPACE"
     assert results[0].official_trim.startswith("R-Line / 2.0 TDI SCR")
+
+
+def test_http_json_joins_lookup_mapped_fields(monkeypatch):
+    extractor = HttpJsonExtractor(
+        ExtractorConfig(
+            source_code="citroen_c3_aircross_dk_test",
+            country="DK",
+            brand="CITROEN",
+            source_url="https://www.citroen.dk/prislister",
+        ),
+        HttpJsonProfile(
+            url="https://example.invalid/citroen.json",
+            fixed_model="C3 AIRCROSS",
+            default_currency="DKK",
+            field_mapping=FieldMapping(
+                model="",
+                trim=(
+                    LookupMapping(
+                        source_path="trimId",
+                        collection_path="trims",
+                        key_path="id",
+                        value_path="name",
+                    ),
+                    LookupMapping(
+                        source_path="engineId",
+                        collection_path="engines",
+                        key_path="id",
+                        value_path="name",
+                    ),
+                ),
+                price="price",
+                vehicles_path="variants",
+                availability="campaignLabel",
+            ),
+        ),
+    )
+
+    sample = {
+        "variants": [
+            {
+                "price": 199990,
+                "trimId": 1059,
+                "engineId": 276,
+                "campaignLabel": "Serviceaktiveret garanti",
+            }
+        ],
+        "trims": [{"id": 1059, "name": "YOU"}],
+        "engines": [{"id": 276, "name": "Electric 113 HK"}],
+    }
+
+    monkeypatch.setattr(extractor, "_fetch", lambda: sample)
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].official_model == "C3 AIRCROSS"
+    assert results[0].official_trim == "YOU / Electric 113 HK"
+    assert results[0].msrp_value == 199990
+    assert results[0].currency == "DKK"
+
+
+def test_config_loader_builds_http_json_lookup_mapping():
+    profile = _build_http_json_profile(
+        {
+            "url": "https://example.invalid/citroen.json",
+            "field_mapping": {
+                "vehicles_path": "variants",
+                "trim": [
+                    {
+                        "source_path": "trimId",
+                        "collection_path": "trims",
+                        "key_path": "id",
+                        "value_path": "name",
+                    }
+                ],
+                "price": "price",
+            },
+        }
+    )
+
+    trim_mapping = profile.field_mapping.trim
+    assert isinstance(trim_mapping, tuple)
+    assert isinstance(trim_mapping[0], LookupMapping)
+    assert trim_mapping[0].source_path == "trimId"
+    assert trim_mapping[0].collection_path == "trims"

@@ -260,7 +260,7 @@ class ScraplingExtractor(BaseExtractor):
 
     @property
     def extractor_version(self) -> str:
-        return "0.6.0-scrapling"
+        return "0.6.1-scrapling"
 
     def _string_values(self, value: Any) -> list[str]:
         if value is None:
@@ -274,6 +274,26 @@ class ScraplingExtractor(BaseExtractor):
                 if item not in (None, "")
             ]
         return []
+
+    def _collect_text_result_values(self, text_result: Any) -> list[str]:
+        values: list[str] = []
+        if text_result is None:
+            return values
+        for method_name in ("getall", "get_all"):
+            method = getattr(text_result, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                values.extend(self._string_values(method()))
+            except Exception:
+                continue
+        if values:
+            return values
+        try:
+            values.extend(self._string_values(text_result.get()))
+        except Exception:
+            pass
+        return values
 
     def _build_trim_search_text(
         self,
@@ -1402,28 +1422,19 @@ class ScraplingExtractor(BaseExtractor):
             return ""
 
         parts: list[str] = []
+        descendant_selector = f"{selector} ::text"
+        try:
+            parts.extend(
+                self._collect_text_result_values(page.css(descendant_selector))
+            )
+        except Exception:
+            pass
         for element in elements:
             try:
                 text_result = element.css("::text")
             except Exception:
                 text_result = None
-            text_parts: list[str] = []
-            if text_result is not None:
-                for method_name in ("getall", "get_all"):
-                    method = getattr(text_result, method_name, None)
-                    if not callable(method):
-                        continue
-                    try:
-                        text_parts.extend(self._string_values(method()))
-                    except Exception:
-                        continue
-                if not text_parts:
-                    try:
-                        text_parts.extend(
-                            self._string_values(text_result.get())
-                        )
-                    except Exception:
-                        pass
+            text_parts = self._collect_text_result_values(text_result)
             if not text_parts:
                 try:
                     text_parts.extend(self._string_values(element.get()))

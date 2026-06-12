@@ -28,6 +28,7 @@ from jato_scraper.extractors.http_json import (
     FieldMapping,
     HttpJsonExtractor,
     HttpJsonProfile,
+    LookupMapping,
 )
 from jato_scraper.extractors.scrapling_web import (
     AttrJsonMapping,
@@ -116,13 +117,36 @@ def _build_http_json_profile(profile: dict[str, Any]) -> HttpJsonProfile:
         default: str,
         *,
         allow_list: bool = False,
-    ) -> str | tuple[str, ...]:
+    ) -> str | LookupMapping | tuple[str | LookupMapping, ...]:
+        def _one(value: Any) -> str | LookupMapping | None:
+            if isinstance(value, dict):
+                source_path = str(value.get("source_path", "")).strip()
+                collection_path = str(value.get("collection_path", "")).strip()
+                if not source_path or not collection_path:
+                    return None
+                return LookupMapping(
+                    source_path=source_path,
+                    collection_path=collection_path,
+                    key_path=(
+                        str(value.get("key_path", "id")).strip() or "id"
+                    ),
+                    value_path=(
+                        str(value.get("value_path", "name")).strip()
+                        or "name"
+                    ),
+                )
+            text = str(value).strip()
+            return text or None
+
         if allow_list and isinstance(raw, list):
             return tuple(
-                str(value).strip()
-                for value in raw
-                if str(value).strip()
+                value
+                for value in (_one(item) for item in raw)
+                if value is not None
             )
+        if isinstance(raw, dict):
+            value = _one(raw)
+            return value if value is not None else default
         if raw is None:
             return default
         text = str(raw).strip()
