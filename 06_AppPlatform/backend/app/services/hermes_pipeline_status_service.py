@@ -190,6 +190,7 @@ def normalize_pipeline_status_record(record: dict[str, Any]) -> dict[str, Any]:
         "statusCounts",
         "runtimeCounts",
         "metadata",
+        "derivedFrom",
         "news",
         "voc",
         "warnings",

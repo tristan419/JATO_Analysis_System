@@ -123,6 +123,27 @@ def test_normalize_pipeline_status_preserves_readiness_specific_fields(monkeypat
     assert health["overall"] == "ok"
 
 
+def test_normalize_pipeline_status_preserves_derived_source(monkeypatch, tmp_path: Path):
+    _set_root(monkeypatch, tmp_path)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    pipeline_status.write_pipeline_status({
+        "pipelineId": "voc_forum_sync",
+        "status": "success",
+        "lastRunAt": now,
+        "recordsProcessed": 4,
+        "source": "ai_intelligence_enrichment_smoke",
+        "derivedFrom": "ai_intelligence_enrichment_smoke",
+        "smokeStatus": "ok",
+    })
+
+    record = pipeline_status.get_pipeline_status("voc_forum_sync")
+
+    assert record["source"] == "ai_intelligence_enrichment_smoke"
+    assert record["derivedFrom"] == "ai_intelligence_enrichment_smoke"
+    assert record["smokeStatus"] == "ok"
+
+
 def test_normalize_pipeline_status_preserves_goal_completion_fields(monkeypatch, tmp_path: Path):
     _set_root(monkeypatch, tmp_path)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

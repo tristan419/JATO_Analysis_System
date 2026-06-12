@@ -246,6 +246,105 @@ def write_status_record(
     )
 
 
+def _domain_warning_count(report: dict[str, Any], prefixes: Sequence[str]) -> int:
+    warnings = [str(item) for item in report.get("warnings") or [] if str(item).strip()]
+    return sum(
+        1
+        for item in warnings
+        if any(item.startswith(prefix) for prefix in prefixes)
+    )
+
+
+def _domain_pipeline_status(country_count: int, warning_count: int) -> str:
+    if country_count <= 0:
+        return "failed"
+    if warning_count > 0:
+        return "degraded"
+    return "success"
+
+
+def write_domain_status_records(
+    report: dict[str, Any],
+    *,
+    artifact_refs: Sequence[str],
+) -> list[dict[str, Any]]:
+    if write_pipeline_status is None:
+        return []
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    news = summary.get("news") if isinstance(summary.get("news"), dict) else {}
+    voc = summary.get("voc") if isinstance(summary.get("voc"), dict) else {}
+    generated_at = str(report.get("generatedAtUtc") or _utc_now_iso())
+    smoke_status = str(report.get("status") or "failed")
+    required_country_count = summary.get("requiredCountryCount", 0)
+    news_warnings = _domain_warning_count(report, ("news_",))
+    voc_warnings = _domain_warning_count(report, ("voc_",))
+    records: list[dict[str, Any]] = []
+
+    news_country_count = int(news.get("countryCount") or 0)
+    news_records = int(news.get("marketEventCount") or news.get("articleCount") or 0)
+    records.append(
+        write_pipeline_status(
+            pipeline_id="country_news_sync",
+            status=_domain_pipeline_status(news_country_count, news_warnings),
+            last_run_at=generated_at,
+            started_at=generated_at,
+            finished_at=_utc_now_iso(),
+            exit_code=0 if news_country_count > 0 else 1,
+            records_processed=news_records,
+            failed_count=0 if news_country_count > 0 else 1,
+            warning_count=news_warnings,
+            artifact_refs=list(artifact_refs),
+            source="ai_intelligence_enrichment_smoke",
+            message=(
+                "Derived News status from AI enrichment smoke; "
+                f"newsCountries={news_country_count}, "
+                f"marketEvents={news.get('marketEventCount', 0)}, "
+                f"warnings={news_warnings}."
+            ),
+            extra={
+                "derivedFrom": "ai_intelligence_enrichment_smoke",
+                "smokeStatus": smoke_status,
+                "requiredCountryCount": required_country_count,
+                "news": news,
+            },
+            repo_root=REPO_ROOT,
+        )
+    )
+
+    voc_country_count = int(voc.get("countryCount") or 0)
+    voc_records = int(voc.get("documentCount") or 0)
+    records.append(
+        write_pipeline_status(
+            pipeline_id="voc_forum_sync",
+            status=_domain_pipeline_status(voc_country_count, voc_warnings),
+            last_run_at=generated_at,
+            started_at=generated_at,
+            finished_at=_utc_now_iso(),
+            exit_code=0 if voc_country_count > 0 else 1,
+            records_processed=voc_records,
+            failed_count=0 if voc_country_count > 0 else 1,
+            warning_count=voc_warnings,
+            artifact_refs=list(artifact_refs),
+            source="ai_intelligence_enrichment_smoke",
+            message=(
+                "Derived VOC status from AI enrichment smoke; "
+                f"vocCountries={voc_country_count}, "
+                f"documents={voc.get('documentCount', 0)}, "
+                f"warnings={voc_warnings}."
+            ),
+            extra={
+                "derivedFrom": "ai_intelligence_enrichment_smoke",
+                "smokeStatus": smoke_status,
+                "requiredCountryCount": required_country_count,
+                "voc": voc,
+            },
+            repo_root=REPO_ROOT,
+        )
+    )
+
+    return records
+
+
 def _news_fixture_article(
     *,
     country_code: str,
@@ -742,16 +841,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         report_artifacts = write_outputs(report, args.out_dir)
         report["reportArtifacts"] = report_artifacts
     if args.write_status:
+        artifact_refs = [
+            *list(report_artifacts.values()),
+            str(report.get("artifacts", {}).get("newsEnrichment") or ""),
+            str(report.get("artifacts", {}).get("vocRoot") or ""),
+        ]
         status_record = write_status_record(
             report,
-            artifact_refs=[
-                *list(report_artifacts.values()),
-                str(report.get("artifacts", {}).get("newsEnrichment") or ""),
-                str(report.get("artifacts", {}).get("vocRoot") or ""),
-            ],
+            artifact_refs=artifact_refs,
         )
         if status_record is not None:
             report["pipelineStatus"] = status_record
+        domain_status_records = write_domain_status_records(
+            report,
+            artifact_refs=artifact_refs,
+        )
+        if domain_status_records:
+            report["pipelineStatuses"] = domain_status_records
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if report["status"] == "failed":
         return 1

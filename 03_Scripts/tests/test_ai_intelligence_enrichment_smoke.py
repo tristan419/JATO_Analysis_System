@@ -141,11 +141,45 @@ def test_write_status_record_maps_smoke_status(monkeypatch, tmp_path: Path) -> N
     assert calls[0]["artifact_refs"] == ["hermes/reports/ai_intelligence_enrichment_smoke.json"]
 
 
+def test_write_domain_status_records_marks_news_and_voc_as_derived(monkeypatch, tmp_path: Path) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        smoke_module,
+        "write_pipeline_status",
+        lambda **kwargs: calls.append(kwargs) or {
+            "pipelineId": kwargs["pipeline_id"],
+            "status": kwargs["status"],
+            **(kwargs.get("extra") or {}),
+        },
+    )
+    report = smoke_module.run_smoke(
+        artifact_root=tmp_path / "fixtures",
+        required_countries=("SE", "FI"),
+    )
+
+    records = smoke_module.write_domain_status_records(
+        report,
+        artifact_refs=["hermes/reports/ai_intelligence_enrichment_smoke.json"],
+    )
+
+    assert [call["pipeline_id"] for call in calls] == ["country_news_sync", "voc_forum_sync"]
+    assert [record["pipelineId"] for record in records] == ["country_news_sync", "voc_forum_sync"]
+    assert all(call["status"] == "success" for call in calls)
+    assert all(call["source"] == "ai_intelligence_enrichment_smoke" for call in calls)
+    assert all(call["extra"]["derivedFrom"] == "ai_intelligence_enrichment_smoke" for call in calls)
+    assert calls[0]["records_processed"] == 2
+    assert calls[1]["records_processed"] == 4
+
+
 def test_main_can_write_report_and_status(capsys, monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         smoke_module,
         "write_pipeline_status",
-        lambda **kwargs: {"pipelineId": kwargs["pipeline_id"], "status": kwargs["status"]},
+        lambda **kwargs: {
+            "pipelineId": kwargs["pipeline_id"],
+            "status": kwargs["status"],
+            **(kwargs.get("extra") or {}),
+        },
     )
 
     exit_code = smoke_module.main(
@@ -167,3 +201,8 @@ def test_main_can_write_report_and_status(capsys, monkeypatch, tmp_path: Path) -
     assert payload["status"] == "ok"
     assert payload["reportArtifacts"]["latestJson"].endswith("ai_intelligence_enrichment_smoke.json")
     assert payload["pipelineStatus"]["pipelineId"] == "ai_intelligence_enrichment_smoke"
+    assert [item["pipelineId"] for item in payload["pipelineStatuses"]] == ["country_news_sync", "voc_forum_sync"]
+    assert all(
+        item["derivedFrom"] == "ai_intelligence_enrichment_smoke"
+        for item in payload["pipelineStatuses"]
+    )
