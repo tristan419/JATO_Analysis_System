@@ -98,6 +98,46 @@ def test_history_clusters_group_by_feature_and_axis(tmp_path, monkeypatch):
     assert cluster["lane"] in {"Implemented", "Tested"}
 
 
+def test_history_clusters_merge_semantic_timeline_work(tmp_path, monkeypatch):
+    from app.services import hermes_history_service as history
+
+    monkeypatch.setattr(history, "_project_root", tmp_path)
+    _write_jsonl(tmp_path / "hermes" / "dev_events" / "dev_events.jsonl", [
+        {
+            "eventId": "evt_timeline",
+            "eventType": "implementation_completed",
+            "source": "codex",
+            "title": "Hermes timeline cluster visualization",
+            "summary": "Render clusters on a horizontal timeline.",
+            "linkedFeatureIds": ["feature.hermes_timeline_visualization"],
+            "changedFiles": ["06_AppPlatform/frontend/src/components/HermesHistoryMap.tsx"],
+            "createdAt": "2026-06-10T08:00:00Z",
+        },
+        {
+            "eventId": "evt_semantic",
+            "eventType": "implementation_completed",
+            "source": "codex",
+            "title": "Semantic cluster timeline axis",
+            "summary": "Merge related timeline events by title and files.",
+            "linkedFeatureIds": ["feature.hermes_semantic_cluster"],
+            "changedFiles": ["06_AppPlatform/frontend/src/components/HermesHistoryMap.tsx"],
+            "createdAt": "2026-06-12T09:00:00Z",
+        },
+    ])
+
+    result = history.list_history_clusters(level="feature", y_axis="workstream")
+
+    assert result["summary"]["semanticMode"] == "feature_file_title_similarity"
+    assert result["summary"]["clusterCount"] == 1
+    cluster = result["clusters"][0]
+    assert cluster["eventCount"] == 2
+    assert cluster["startAt"] == "2026-06-10T08:00:00Z"
+    assert cluster["endAt"] == "2026-06-12T09:00:00Z"
+    assert cluster["semanticScore"] > 0
+    assert "timeline" in cluster["semanticSignals"]
+    assert set(cluster["children"]) == {"evt_timeline", "evt_semantic"}
+
+
 def test_progress_swimlanes_mark_ready_for_pr_with_tests(tmp_path, monkeypatch):
     from app.services import hermes_history_service as history
 

@@ -24,7 +24,10 @@ Each feature row exposes current phase, risk, open gaps, test/doc/evidence count
 
 ### Git History Cluster
 
-The second view clusters git and governance events over time. The first implementation uses rules instead of machine learning:
+The second view clusters git and governance events over time. It now combines two layers:
+
+1. deterministic workstream inference, based on feature IDs, changed files, titles, and known project paths
+2. lightweight semantic merging, based on feature overlap, title/summary tokens, and changed-file token overlap
 
 - paths under `hermes/` map to Hermes
 - `07_ScrapingToolkit`, MSRP, and monthly update paths map to JATO Monthly / MSRP
@@ -32,6 +35,8 @@ The second view clusters git and governance events over time. The first implemen
 - `astrbot`, `jato_agent`, `country_chat`, and MCP paths map to AstrBot / CountryCopilot
 - engineering config and navigation paths map to Config Comparison
 - workflow, deploy, and pipeline paths map to Deploy / CI
+
+The UI renders a horizontal timeline with lane rows. Cluster cards are positioned by `startAt` and `endAt`, and overlapping clusters are stacked inside the same lane. Each cluster also exposes semantic signals and a semantic cohesion score so reviewers can see why related events were grouped.
 
 The UI supports a cluster-detail slider:
 
@@ -92,6 +97,6 @@ Workflow
 
 ## Deferred Work
 
-- Semantic clustering with embeddings or changed-file overlap scoring
+- Embedding-backed semantic clustering for cross-workstream similarity
 - Direct links from event IDs to GitHub commits, evidence records, gaps, and pipeline artifacts
 - Dedicated route or URL state for shareable History Map filters
