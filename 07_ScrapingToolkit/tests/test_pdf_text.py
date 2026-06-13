@@ -3,6 +3,7 @@ import subprocess
 import requests
 
 from jato_scraper.base import ExtractorConfig
+from jato_scraper.config_loader import _build_pdf_text_profile
 from jato_scraper.extractors.pdf_text import (
     PdfTextEntryPattern,
     PdfTextExtractor,
@@ -88,6 +89,18 @@ def test_pdf_text_extracts_entries_and_applies_price_delta(monkeypatch):
     assert results[0].match_confidence == 0.84
     assert results[1].msrp_value == 87_590.0
     assert results[1].jato_powertrain == "PHEV"
+
+
+def test_pdf_text_profile_accepts_legacy_curl_download_fallback() -> None:
+    profile = _build_pdf_text_profile(
+        {
+            "url": "https://example.invalid/eqa.pdf",
+            "curl_download_fallback": True,
+            "entry_patterns": [],
+        }
+    )
+
+    assert profile.browser_download_fallback is True
 
 
 def test_pdf_text_uses_curl_fallback_after_requests_timeout(monkeypatch):
