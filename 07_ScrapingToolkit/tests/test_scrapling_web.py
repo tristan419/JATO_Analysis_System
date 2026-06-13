@@ -429,6 +429,114 @@ def test_text_regex_ignores_kia_se_global_menu_price(mock_fetch) -> None:
 
 
 @patch.object(ScraplingExtractor, "_fetch")
+def test_text_regex_ignores_skoda_se_hero_footnote_marker(mock_fetch) -> None:
+    cases = (
+        (
+            "skoda_kodiaq_se",
+            "KODIAQ",
+            r"Kodiaq\s+Selection Explore.*?Bygg din Kodiaq.*?"
+            r"Från\s+1\s+(?P<price>\d{3}[\s\xa0]\d{3})\s*kr\s+"
+            r"Prislista",
+            "Selection Explore",
+            "MHEV",
+            "\n".join(
+                [
+                    "Kodiaq",
+                    "Selection Explore",
+                    "Škodas största SUV med möjlighet till 7 platser.",
+                    "Bygg din Kodiaq",
+                    "Boka provkörning",
+                    "Jämför bilar",
+                    "Från",
+                    "1",
+                    "409 500",
+                    "kr",
+                    "Prislista",
+                    "Senaste erbjudanden",
+                    "Pris från 409 500 kr (Ord.pris 436 900 kr)",
+                ]
+            ),
+            409_500.0,
+            1_409_500.0,
+        ),
+        (
+            "skoda_enyaq_se",
+            "ENYAQ",
+            r"Enyaq\s+Solid Edition.*?Bygg din Enyaq.*?"
+            r"Från\s+1\s+(?P<price>\d{3}[\s\xa0]\d{3})\s*kr\s+"
+            r"Prislista",
+            "Solid Edition",
+            "BEV",
+            "\n".join(
+                [
+                    "Enyaq",
+                    "Solid Edition",
+                    "En el-SUV med räckvidd upp till 574 km.",
+                    "Bygg din Enyaq",
+                    "Boka provkörning",
+                    "Jämför bilar",
+                    "Från",
+                    "1",
+                    "599 500",
+                    "kr",
+                    "Prislista",
+                    "Privatleasing från 5 295 kr/mån",
+                ]
+            ),
+            599_500.0,
+            1_599_500.0,
+        ),
+    )
+
+    for (
+        source_code,
+        model,
+        pattern,
+        trim,
+        powertrain,
+        body_text,
+        expected_price,
+        footnote_polluted_price,
+    ) in cases:
+        mock_fetch.return_value = _mock_page_with_text(body_text)
+        extractor = ScraplingExtractor(
+            ExtractorConfig(
+                source_code=source_code,
+                country="SE",
+                brand="SKODA",
+                source_url="https://example.com",
+            ),
+            ScraplingProfile(
+                url="https://example.com",
+                text_regex=TextRegexMapping(
+                    source_selector="body",
+                    entry_patterns=(
+                        TextRegexEntryPattern(
+                            pattern=pattern,
+                            official_trim=trim,
+                            official_powertrain=powertrain,
+                        ),
+                    ),
+                ),
+                default_currency="SEK",
+                fixed_model=model,
+                fixed_jato_model=model,
+                fixed_jato_powertrain=powertrain,
+                copy_trim_to_jato_trim=True,
+            ),
+        )
+
+        results = extractor.extract()
+
+        assert len(results) == 1
+        assert results[0].official_model == model
+        assert results[0].official_trim == trim
+        assert results[0].msrp_value == expected_price
+        assert results[0].msrp_value != footnote_polluted_price
+        assert results[0].currency == "SEK"
+
+
+@patch.object(ScraplingExtractor, "_fetch")
 def test_text_regex_extracts_descendant_body_text(mock_fetch) -> None:
     mock_fetch.return_value = _mock_page_with_descendant_text(
         "body",

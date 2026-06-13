@@ -91,12 +91,12 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
-  json_script_selector: script[type="application/json"]
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'Kodiaq\s+Selection Explore.*?Bygg din Kodiaq.*?Från\s+1\s+(?P<price>\d{3}[\s\xa0]\d{3})\s*kr\s+Prislista'
+      official_trim: Selection Explore
+      official_powertrain: MHEV
   tier: stealth
   network_idle: true
   impersonate: chrome
@@ -108,7 +108,9 @@ schedule:
 notes: Keywords filled from official manufacturer website research (SE market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
   applied from brand probe] [Switched to playwright_card_flow with skoda_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+  [Reverted to scrapling — playwright preset needs per-brand tuning] [Tightened
+  to hero text_regex after broad CSS treated Skoda footnote marker 1 as part
+  of the MSRP]
 bootstrap_meta:
   country_model_rank: 6
   suggested_scope_kind: single_model
