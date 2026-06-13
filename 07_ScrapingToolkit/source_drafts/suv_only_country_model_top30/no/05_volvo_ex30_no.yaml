@@ -21,7 +21,9 @@ profile:
   url: https://www.volvocars.com/no/build/ex30-electric/
   tier: stealth
   headless: true
-  network_idle: true
+  network_idle: false
+  timeout_ms: 75000
+  retries: 2
   impersonate: chrome
   css:
     vehicle_container: '[data-testid="selection-card"]'
