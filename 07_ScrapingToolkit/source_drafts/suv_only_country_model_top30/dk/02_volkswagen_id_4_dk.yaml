@@ -5,7 +5,7 @@ source_url: https://www.volkswagen.dk/da/byg-din-bil.html/__app/30290.app
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+profile_preset: ../_shared/presets/volkswagen_configurator_playwright.yaml
 profile:
   url: https://www.volkswagen.dk/da/byg-din-bil.html/__app/30290.app
   cookie_reject_selector: null
@@ -32,6 +32,8 @@ notes: Browser probing on 2026-04-13 confirmed the Denmark configurator entry at
   moms.". The shared Playwright preset now dismisses the Volkswagen overlay stack
   up front, so this draft no longer depends on showroom CSS selectors. [Switched to
   playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
+  [Reverted to engine-card flow because 2026-06 trim cards expose drivetrain specs
+  but no MSRP]
 bootstrap_meta:
   country_model_rank: 2
   suggested_scope_kind: single_model
