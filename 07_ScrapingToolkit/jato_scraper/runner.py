@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import multiprocessing
 import os
 from pathlib import Path
+import queue
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -27,6 +29,92 @@ from jato_scraper.validation import (
 log = logging.getLogger(__name__)
 DEFAULT_API_BASE = "http://localhost:8000/v1"
 SOURCE_FILE_SUFFIXES = frozenset({".yaml", ".yml"})
+DEFAULT_SOURCE_TIMEOUT_SECONDS = 180
+
+
+class SourceTimeoutError(TimeoutError):
+    """Raised when one source extraction exceeds its per-source budget."""
+
+
+def _default_source_timeout_seconds() -> int:
+    raw = os.getenv("JATO_SOURCE_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_SOURCE_TIMEOUT_SECONDS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        log.warning(
+            "Invalid JATO_SOURCE_TIMEOUT_SECONDS=%r; using default %s",
+            raw,
+            DEFAULT_SOURCE_TIMEOUT_SECONDS,
+        )
+        return DEFAULT_SOURCE_TIMEOUT_SECONDS
+
+
+def _extract_in_child(
+    extractor: BaseExtractor,
+    output_queue: multiprocessing.Queue,
+) -> None:
+    try:
+        output_queue.put(("ok", extractor.extract()))
+    except BaseException as exc:
+        output_queue.put(("error", type(exc).__name__, str(exc)))
+
+
+def _extract_with_timeout(
+    extractor: BaseExtractor,
+    *,
+    source_code: str,
+    timeout_seconds: int,
+) -> list[RawObservation]:
+    if timeout_seconds <= 0:
+        return extractor.extract()
+    if "fork" not in multiprocessing.get_all_start_methods():
+        log.warning(
+            "Per-source hard timeout requires fork; running %s inline",
+            source_code,
+        )
+        return extractor.extract()
+
+    ctx = multiprocessing.get_context("fork")
+    output_queue = ctx.Queue(maxsize=1)
+    process = ctx.Process(
+        target=_extract_in_child,
+        args=(extractor, output_queue),
+        daemon=True,
+    )
+    process.start()
+    process.join(timeout_seconds)
+
+    try:
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+            if process.is_alive():
+                process.kill()
+                process.join(5)
+            raise SourceTimeoutError(
+                f"source {source_code} exceeded "
+                f"{timeout_seconds}s extraction timeout"
+            )
+
+        try:
+            status, payload, *extra = output_queue.get_nowait()
+        except queue.Empty as exc:
+            raise RuntimeError(
+                f"source {source_code} extractor process exited with "
+                f"code {process.exitcode} without a result"
+            ) from exc
+        if status == "ok":
+            return payload
+        exc_type = str(payload)
+        message = str(extra[0]) if extra else ""
+        raise RuntimeError(
+            f"{exc_type}: {message}".strip(": ")
+        )
+    finally:
+        output_queue.close()
+        output_queue.join_thread()
 
 
 def _dedupe_preserve_order(values: list[str]) -> list[str]:
@@ -274,7 +362,13 @@ def run_scrape(
     dry_run: bool = False,
     auth_token: str | None = None,
     user_name: str | None = None,
+    source_timeout_seconds: int | None = None,
 ) -> dict[str, Any]:
+    timeout_seconds = (
+        _default_source_timeout_seconds()
+        if source_timeout_seconds is None
+        else max(0, int(source_timeout_seconds))
+    )
     resolved_codes = _resolve_source_codes(source_codes)
     run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}_{uuid.uuid4().hex[:6]}"
     summary: dict[str, Any] = {"sources": {}, "ok": True, "run_id": run_id}
@@ -290,7 +384,49 @@ def run_scrape(
             summary["sources"][code] = source_result
             summary["ok"] = False
             continue
-        observations = extractor.extract()
+        try:
+            observations = _extract_with_timeout(
+                extractor,
+                source_code=code,
+                timeout_seconds=timeout_seconds,
+            )
+        except SourceTimeoutError as exc:
+            error = str(exc)
+            log.error("Extraction timed out for %s: %s", code, error)
+            extractor.record_strategy_audit(
+                url=extractor.config.source_url,
+                strategy="extractor",
+                observations=[],
+                winning_strategy=None,
+                error=error,
+            )
+            source_result.update(
+                status="timeout",
+                extracted=0,
+                error=error,
+                sourceTimeoutSeconds=timeout_seconds,
+            )
+            summary["sources"][code] = source_result
+            summary["ok"] = False
+            continue
+        except Exception as exc:
+            error = str(exc)
+            log.exception("Extraction failed for %s: %s", code, error)
+            extractor.record_strategy_audit(
+                url=extractor.config.source_url,
+                strategy="extractor",
+                observations=[],
+                winning_strategy=None,
+                error=error,
+            )
+            source_result.update(
+                status="error",
+                extracted=0,
+                error=error,
+            )
+            summary["sources"][code] = source_result
+            summary["ok"] = False
+            continue
         log.info("Got %d raw observations", len(observations))
         if not observations:
             source_result.update(status="empty", extracted=0)
@@ -391,6 +527,15 @@ def main(argv: list[str] | None = None) -> None:
         choices=["manual", "scheduled"],
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--source-timeout-seconds",
+        type=int,
+        default=None,
+        help=(
+            "Maximum extraction time per source; defaults to "
+            "JATO_SOURCE_TIMEOUT_SECONDS or 180. Use 0 to disable."
+        ),
+    )
     parser.add_argument("--auth-token", default=None)
     parser.add_argument("--user-name", default=None)
     parser.add_argument("--verbose", "-v", action="store_true")
@@ -436,6 +581,7 @@ def main(argv: list[str] | None = None) -> None:
             dry_run=args.dry_run,
             auth_token=args.auth_token,
             user_name=args.user_name,
+            source_timeout_seconds=args.source_timeout_seconds,
         )
     except (FileNotFoundError, ValueError) as exc:
         parser.error(str(exc))
