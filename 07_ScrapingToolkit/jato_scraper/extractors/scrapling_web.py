@@ -258,6 +258,7 @@ class ScraplingExtractor(BaseExtractor):
     ) -> None:
         super().__init__(config)
         self.profile = profile
+        self._last_fetch_error: str | None = None
 
     @property
     def extractor_version(self) -> str:
@@ -1261,19 +1262,43 @@ class ScraplingExtractor(BaseExtractor):
             match_reason=match_reason,
         )
 
+    def _fetch_metadata(self, page: Any) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        raw_status = getattr(page, "status", None)
+        if raw_status is None:
+            raw_status = getattr(page, "status_code", None)
+        try:
+            metadata["httpStatus"] = int(raw_status)
+        except (TypeError, ValueError):
+            pass
+
+        final_url = getattr(page, "url", None)
+        if final_url:
+            metadata["finalUrl"] = str(final_url)
+
+        headers = getattr(page, "headers", None)
+        if isinstance(headers, dict):
+            content_type = headers.get("content-type") or headers.get("Content-Type")
+            if content_type:
+                metadata["contentType"] = str(content_type)
+
+        return metadata
+
     def extract(self) -> list[RawObservation]:
         page = self._fetch()
         if page is None:
+            error = self._last_fetch_error or "fetch_failed"
             self.record_audit_event(
                 url=self.profile.url,
                 attempted_strategies=[],
                 winning_strategy=None,
                 observations=[],
                 tier=self.profile.tier or "http",
-                error="fetch_failed",
+                error=error,
             )
             return []
 
+        fetch_metadata = self._fetch_metadata(page)
         attempted: list[dict[str, Any]] = []
         p = self.profile
         results: list[RawObservation] = []
@@ -1293,6 +1318,7 @@ class ScraplingExtractor(BaseExtractor):
                     winning_strategy="attr_json",
                     observations=results,
                     tier=p.tier or "http",
+                    extra=fetch_metadata or None,
                 )
                 return results
             log.warning(
@@ -1315,6 +1341,7 @@ class ScraplingExtractor(BaseExtractor):
                     winning_strategy="json_script_selector",
                     observations=results,
                     tier=p.tier or "http",
+                    extra=fetch_metadata or None,
                 )
                 return results
             log.warning(
@@ -1336,6 +1363,7 @@ class ScraplingExtractor(BaseExtractor):
                     winning_strategy="text_regex",
                     observations=results,
                     tier=p.tier or "http",
+                    extra=fetch_metadata or None,
                 )
                 return results
             log.warning(
@@ -1356,6 +1384,7 @@ class ScraplingExtractor(BaseExtractor):
                 winning_strategy="css_selectors" if results else None,
                 observations=results,
                 tier=p.tier or "http",
+                extra=fetch_metadata or None,
             )
             return results
 
@@ -1370,11 +1399,13 @@ class ScraplingExtractor(BaseExtractor):
             observations=[],
             tier=p.tier or "http",
             error="no_strategy_configured",
+            extra=fetch_metadata or None,
         )
         return []
 
     def _fetch(self) -> Any | None:
         p = self.profile
+        self._last_fetch_error = None
         try:
             if p.tier == "stealth":
                 from scrapling.fetchers import StealthyFetcher
@@ -1407,6 +1438,7 @@ class ScraplingExtractor(BaseExtractor):
                 self.config.source_code,
                 exc,
             )
+            self._last_fetch_error = f"{type(exc).__name__}: {exc}".strip()
             return None
 
     def _text_regex_source_text(self, page: Any) -> str:

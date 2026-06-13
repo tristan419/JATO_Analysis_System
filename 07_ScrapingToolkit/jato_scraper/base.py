@@ -79,6 +79,7 @@ class BaseExtractor(ABC):
     def __init__(self, config: ExtractorConfig) -> None:
         self.config = config
         self.run_id: str | None = None
+        self.last_audit_event: dict[str, Any] | None = None
 
     @property
     def extractor_name(self) -> str:
@@ -115,6 +116,7 @@ class BaseExtractor(ABC):
             error=error,
             extra=extra,
         )
+        self.last_audit_event = event
         write_audit_event(event)
 
     def record_strategy_audit(

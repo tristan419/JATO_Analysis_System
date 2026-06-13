@@ -29,6 +29,26 @@ class FastValidExtractor(BaseExtractor):
         ]
 
 
+class EmptyForbiddenExtractor(BaseExtractor):
+    def extract(self) -> list[RawObservation]:
+        self.record_audit_event(
+            url=self.config.source_url,
+            attempted_strategies=[{
+                "strategy": "css_selectors",
+                "status": "no_match",
+                "observations_count": 0,
+            }],
+            winning_strategy=None,
+            observations=[],
+            extra={
+                "httpStatus": 403,
+                "finalUrl": self.config.source_url,
+                "contentType": "text/html",
+            },
+        )
+        return []
+
+
 def test_run_scrape_times_out_one_source_and_continues(
     monkeypatch,
     tmp_path,
@@ -99,3 +119,48 @@ def test_run_scrape_times_out_one_source_and_continues(
     assert len(timeout_events) == 1
     assert timeout_events[0]["attempted_strategies"][0]["status"] == "error"
     assert "exceeded 1s extraction timeout" in timeout_events[0]["error"]
+
+
+def test_run_scrape_returns_child_audit_diagnostics(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("JATO_AUDIT_DIR", str(tmp_path))
+    monkeypatch.setattr(runner, "load_all_sources", lambda *_, **__: [])
+    code = "runner_forbidden_empty_test"
+
+    try:
+        registry.register(
+            ExtractorConfig(
+                source_code=code,
+                country="SE",
+                brand="TESLA",
+                source_url="https://www.tesla.com/sv_se/modely",
+            ),
+            EmptyForbiddenExtractor,
+        )
+    except ValueError:
+        pass
+
+    summary = runner.run_scrape(
+        [code],
+        dry_run=True,
+        source_timeout_seconds=5,
+    )
+
+    source = summary["sources"][code]
+    assert source["status"] == "empty"
+    assert source["extracted"] == 0
+    assert source["sourceUrl"] == "https://www.tesla.com/sv_se/modely"
+    assert source["brand"] == "TESLA"
+    assert source["httpStatus"] == 403
+    assert source["finalUrl"] == "https://www.tesla.com/sv_se/modely"
+    assert source["contentType"] == "text/html"
+    assert source["coverageLevel"] == "L0_FAILED"
+    assert source["auditStatus"] == "failed"
+    assert source["winningStrategy"] is None
+    assert source["attemptedStrategies"] == [{
+        "strategy": "css_selectors",
+        "status": "no_match",
+        "observations_count": 0,
+    }]

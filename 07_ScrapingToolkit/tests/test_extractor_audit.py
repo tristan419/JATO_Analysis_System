@@ -48,3 +48,5 @@ def test_base_extractor_records_strategy_audit(tmp_path, monkeypatch):
     }]
     assert event["observations_count"] == 1
     assert event["currency"] == "SEK"
+    assert extractor.last_audit_event is not None
+    assert extractor.last_audit_event["winning_strategy"] == "json_script_selector"

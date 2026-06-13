@@ -51,12 +51,50 @@ def _default_source_timeout_seconds() -> int:
         return DEFAULT_SOURCE_TIMEOUT_SECONDS
 
 
+def _source_diagnostics_from_extractor(
+    extractor: BaseExtractor,
+) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {
+        "sourceUrl": extractor.config.source_url,
+        "brand": extractor.config.brand,
+        "extractorName": extractor.extractor_name,
+        "extractorVersion": extractor.extractor_version,
+    }
+    audit_event = getattr(extractor, "last_audit_event", None)
+    if isinstance(audit_event, dict):
+        diagnostics.update({
+            "auditStatus": audit_event.get("status"),
+            "attemptedStrategies": audit_event.get("attempted_strategies"),
+            "winningStrategy": audit_event.get("winning_strategy"),
+            "coverageLevel": audit_event.get("coverage_level"),
+        })
+        if audit_event.get("error"):
+            diagnostics["extractorError"] = audit_event["error"]
+        if audit_event.get("httpStatus") is not None:
+            diagnostics["httpStatus"] = audit_event["httpStatus"]
+        if audit_event.get("finalUrl"):
+            diagnostics["finalUrl"] = audit_event["finalUrl"]
+        if audit_event.get("contentType"):
+            diagnostics["contentType"] = audit_event["contentType"]
+
+    return {
+        key: value
+        for key, value in diagnostics.items()
+        if value not in ("", [], {})
+    }
+
+
 def _extract_in_child(
     extractor: BaseExtractor,
     output_queue: multiprocessing.Queue,
 ) -> None:
     try:
-        output_queue.put(("ok", extractor.extract()))
+        observations = extractor.extract()
+        output_queue.put((
+            "ok",
+            observations,
+            _source_diagnostics_from_extractor(extractor),
+        ))
     except BaseException as exc:
         output_queue.put(("error", type(exc).__name__, str(exc)))
 
@@ -66,15 +104,17 @@ def _extract_with_timeout(
     *,
     source_code: str,
     timeout_seconds: int,
-) -> list[RawObservation]:
+) -> tuple[list[RawObservation], dict[str, Any]]:
     if timeout_seconds <= 0:
-        return extractor.extract()
+        observations = extractor.extract()
+        return observations, _source_diagnostics_from_extractor(extractor)
     if "fork" not in multiprocessing.get_all_start_methods():
         log.warning(
             "Per-source hard timeout requires fork; running %s inline",
             source_code,
         )
-        return extractor.extract()
+        observations = extractor.extract()
+        return observations, _source_diagnostics_from_extractor(extractor)
 
     ctx = multiprocessing.get_context("fork")
     output_queue = ctx.Queue(maxsize=1)
@@ -106,7 +146,8 @@ def _extract_with_timeout(
                 f"code {process.exitcode} without a result"
             ) from exc
         if status == "ok":
-            return payload
+            diagnostics = extra[0] if extra and isinstance(extra[0], dict) else {}
+            return payload, diagnostics
         exc_type = str(payload)
         message = str(extra[0]) if extra else ""
         raise RuntimeError(
@@ -378,6 +419,7 @@ def run_scrape(
         try:
             extractor = registry.get(code)
             extractor.run_id = run_id
+            source_result.update(_source_diagnostics_from_extractor(extractor))
         except KeyError as exc:
             log.error("%s", exc)
             source_result["error"] = str(exc)
@@ -385,11 +427,12 @@ def run_scrape(
             summary["ok"] = False
             continue
         try:
-            observations = _extract_with_timeout(
+            observations, diagnostics = _extract_with_timeout(
                 extractor,
                 source_code=code,
                 timeout_seconds=timeout_seconds,
             )
+            source_result.update(diagnostics)
         except SourceTimeoutError as exc:
             error = str(exc)
             log.error("Extraction timed out for %s: %s", code, error)
@@ -400,6 +443,7 @@ def run_scrape(
                 winning_strategy=None,
                 error=error,
             )
+            source_result.update(_source_diagnostics_from_extractor(extractor))
             source_result.update(
                 status="timeout",
                 extracted=0,
@@ -419,6 +463,7 @@ def run_scrape(
                 winning_strategy=None,
                 error=error,
             )
+            source_result.update(_source_diagnostics_from_extractor(extractor))
             source_result.update(
                 status="error",
                 extracted=0,

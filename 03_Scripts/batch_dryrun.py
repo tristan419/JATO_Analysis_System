@@ -9,9 +9,10 @@ import logging
 import os
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 # Ensure jato_scraper is importable
 _toolkit_dir = str(
@@ -59,6 +60,37 @@ class _RunLogCapture(logging.Handler):
 
     def text(self) -> str:
         return "\n".join(self.messages)
+
+
+@contextmanager
+def _capture_source_logs(handler: logging.Handler) -> Iterator[None]:
+    """Capture per-source scraper diagnostics, including Scrapling INFO logs."""
+    root_logger = logging.getLogger()
+    target_loggers = [
+        logging.getLogger("jato_scraper"),
+        logging.getLogger("scrapling"),
+    ]
+    logger_states = [
+        (logger, logger.level, logger.propagate)
+        for logger in target_loggers
+    ]
+
+    root_logger.addHandler(handler)
+    for logger in target_loggers:
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+
+    try:
+        yield
+    finally:
+        if handler in root_logger.handlers:
+            root_logger.removeHandler(handler)
+        for logger, level, propagate in logger_states:
+            if handler in logger.handlers:
+                logger.removeHandler(handler)
+            logger.setLevel(level)
+            logger.propagate = propagate
 
 
 def _is_child_run() -> bool:
@@ -613,11 +645,11 @@ def main():
         t0 = time.time()
         log_capture = _RunLogCapture()
         log_capture.setFormatter(logging.Formatter("%(levelname)s %(name)s — %(message)s"))
-        logging.getLogger().addHandler(log_capture)
         try:
-            summary = run_scrape(
-                source_codes=[code], dry_run=True
-            )
+            with _capture_source_logs(log_capture):
+                summary = run_scrape(
+                    source_codes=[code], dry_run=True
+                )
             src = summary["sources"].get(code, {})
             captured_log_text = log_capture.text()
             status = src.get("status", "error")
@@ -707,9 +739,6 @@ def main():
                 "severity": classification.get("severity", "warning"),
             })
             error_count += 1
-        finally:
-            logging.getLogger().removeHandler(log_capture)
-
     # Summary
     total = len(target_codes)
     print(f"\n{'='*70}")

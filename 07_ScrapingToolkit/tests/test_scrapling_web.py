@@ -23,6 +23,40 @@ def build_extractor() -> ScraplingExtractor:
     )
 
 
+def test_fetch_metadata_reads_response_status_url_and_content_type() -> None:
+    extractor = build_extractor()
+    page = type(
+        "FakePage",
+        (),
+        {
+            "status": "403",
+            "url": "https://www.tesla.com/sv_se/modely",
+            "headers": {"content-type": "text/html"},
+        },
+    )()
+
+    assert extractor._fetch_metadata(page) == {
+        "httpStatus": 403,
+        "finalUrl": "https://www.tesla.com/sv_se/modely",
+        "contentType": "text/html",
+    }
+
+
+def test_fetch_failure_records_original_error(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("JATO_AUDIT_DIR", str(tmp_path))
+    extractor = build_extractor()
+    extractor.run_id = "run_fetch_failure"
+    extractor._last_fetch_error = "TimeoutError: Page.goto: Timeout 30000ms exceeded"
+    monkeypatch.setattr(extractor, "_fetch", lambda: None)
+
+    assert extractor.extract() == []
+    assert extractor.last_audit_event is not None
+    assert (
+        extractor.last_audit_event["error"]
+        == "TimeoutError: Page.goto: Timeout 30000ms exceeded"
+    )
+
+
 def test_resolve_json_path_walks_graph_lists() -> None:
     extractor = build_extractor()
 
