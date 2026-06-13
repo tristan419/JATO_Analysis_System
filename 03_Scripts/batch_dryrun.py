@@ -166,6 +166,8 @@ def _classify_dryrun_failure(
         or "network is unreachable" in error_lower
         or "connection reset" in error_lower
         or "connection refused" in error_lower
+        or "connection closed" in error_lower
+        or "err_connection_closed" in error_lower
     ):
         return {"failureReason": "network_unavailable", "recommendedStrategy": "retry_network_or_proxy", "severity": "warning"}
     if "403" in error_lower or "forbidden" in error_lower:
@@ -260,6 +262,44 @@ def _result_is_empty(result: dict) -> bool:
 
 def _result_is_fail(result: dict) -> bool:
     return not _is_passing_result(result) and not _result_is_empty(result) and not _result_is_error(result)
+
+
+_RETRYABLE_SOURCE_FAILURES = {
+    "dns_resolution_failed",
+    "http_timeout",
+    "js_required_or_selector_timeout",
+    "network_unavailable",
+}
+
+
+def _source_attempt_limit() -> int:
+    raw = os.getenv("JATO_MSRP_DRYRUN_SOURCE_ATTEMPTS", "2").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        log.warning(
+            "Invalid JATO_MSRP_DRYRUN_SOURCE_ATTEMPTS=%r; using 2",
+            raw,
+        )
+        return 2
+
+
+def _source_retry_delay_seconds() -> float:
+    raw = os.getenv("JATO_MSRP_DRYRUN_RETRY_DELAY_SECONDS", "2").strip()
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        log.warning(
+            "Invalid JATO_MSRP_DRYRUN_RETRY_DELAY_SECONDS=%r; using 2",
+            raw,
+        )
+        return 2.0
+
+
+def _source_result_is_retryable(result: dict, classification: dict) -> bool:
+    if _is_passing_result(result):
+        return False
+    return classification.get("failureReason") in _RETRYABLE_SOURCE_FAILURES
 
 
 def _summary_from_results(results: list[dict]) -> dict:
@@ -641,27 +681,66 @@ def main():
     empty_count = 0
     error_count = 0
 
+    source_attempt_limit = _source_attempt_limit()
+    source_retry_delay = _source_retry_delay_seconds()
+
     for i, (cc, code) in enumerate(target_codes, 1):
         t0 = time.time()
-        log_capture = _RunLogCapture()
-        log_capture.setFormatter(logging.Formatter("%(levelname)s %(name)s — %(message)s"))
+        source_attempts: list[dict] = []
         try:
-            with _capture_source_logs(log_capture):
-                summary = run_scrape(
-                    source_codes=[code], dry_run=True
-                )
-            src = summary["sources"].get(code, {})
-            captured_log_text = log_capture.text()
+            src = {}
+            captured_log_text = ""
+            classification = {}
+            for attempt in range(1, source_attempt_limit + 1):
+                log_capture = _RunLogCapture()
+                log_capture.setFormatter(logging.Formatter("%(levelname)s %(name)s — %(message)s"))
+                attempt_t0 = time.time()
+                with _capture_source_logs(log_capture):
+                    summary = run_scrape(
+                        source_codes=[code], dry_run=True
+                    )
+                src = summary["sources"].get(code, {})
+                captured_log_text = log_capture.text()
+                classification_src = src
+                if captured_log_text and not (src.get("error") or src.get("extractorError")):
+                    classification_src = {**src, "extractorError": captured_log_text}
+                classification = _classify_dryrun_failure(classification_src)
+
+                status = src.get("status", "error")
+                valid = src.get("valid", 0)
+                extracted = src.get("extracted", 0)
+                retry_probe = {
+                    "status": status,
+                    "valid": valid,
+                    "failureReason": classification.get("failureReason"),
+                }
+                source_attempts.append({
+                    "attempt": attempt,
+                    "status": status,
+                    "valid": valid,
+                    "extracted": extracted,
+                    "failureReason": classification.get("failureReason"),
+                    "elapsedSeconds": round(time.time() - attempt_t0, 1),
+                })
+
+                if (
+                    attempt < source_attempt_limit
+                    and _source_result_is_retryable(retry_probe, classification)
+                ):
+                    print(
+                        f"      retry {attempt + 1}/{source_attempt_limit} "
+                        f"for {code}: {classification.get('failureReason')}"
+                    )
+                    if source_retry_delay > 0:
+                        time.sleep(source_retry_delay)
+                    continue
+                break
+
             status = src.get("status", "error")
             valid = src.get("valid", 0)
             extracted = src.get("extracted", 0)
             rejected = src.get("rejected", 0)
             elapsed = time.time() - t0
-
-            classification_src = src
-            if captured_log_text and not (src.get("error") or src.get("extractorError")):
-                classification_src = {**src, "extractorError": captured_log_text}
-            classification = _classify_dryrun_failure(classification_src)
 
             count_result = {
                 "status": status,
@@ -695,6 +774,8 @@ def main():
                 "rejected": rejected,
                 "elapsed": round(elapsed, 1),
             }
+            if len(source_attempts) > 1:
+                result_entry["sourceAttempts"] = source_attempts
             for key in (
                 "sourceUrl",
                 "brand",

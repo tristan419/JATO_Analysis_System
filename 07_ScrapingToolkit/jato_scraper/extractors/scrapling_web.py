@@ -75,6 +75,12 @@ class ScraplingProfile:
     json_vehicles_path: str | None = None
     headless: bool = True
     network_idle: bool = True
+    load_dom: bool | None = None
+    timeout_ms: int | None = None
+    wait_ms: int | None = None
+    disable_resources: bool | None = None
+    retries: int | None = None
+    retry_delay_seconds: float | None = None
     impersonate: str = "chrome"
     solve_cloudflare: bool = False
     default_currency: str = "EUR"
@@ -262,7 +268,7 @@ class ScraplingExtractor(BaseExtractor):
 
     @property
     def extractor_version(self) -> str:
-        return "0.6.1-scrapling"
+        return "0.6.2-scrapling"
 
     def _string_values(self, value: Any) -> list[str]:
         if value is None:
@@ -1406,14 +1412,29 @@ class ScraplingExtractor(BaseExtractor):
     def _fetch(self) -> Any | None:
         p = self.profile
         self._last_fetch_error = None
+        browser_kwargs: dict[str, Any] = {
+            "headless": p.headless,
+            "network_idle": p.network_idle,
+        }
+        if p.load_dom is not None:
+            browser_kwargs["load_dom"] = p.load_dom
+        if p.timeout_ms is not None:
+            browser_kwargs["timeout"] = p.timeout_ms
+        if p.wait_ms is not None:
+            browser_kwargs["wait"] = p.wait_ms
+        if p.disable_resources is not None:
+            browser_kwargs["disable_resources"] = p.disable_resources
+        if p.retries is not None:
+            browser_kwargs["retries"] = p.retries
+        if p.retry_delay_seconds is not None:
+            browser_kwargs["retry_delay"] = p.retry_delay_seconds
         try:
             if p.tier == "stealth":
                 from scrapling.fetchers import StealthyFetcher
 
                 return StealthyFetcher.fetch(
                     p.url,
-                    headless=p.headless,
-                    network_idle=p.network_idle,
+                    **browser_kwargs,
                     solve_cloudflare=p.solve_cloudflare,
                 )
             if p.tier == "dynamic":
@@ -1421,8 +1442,7 @@ class ScraplingExtractor(BaseExtractor):
 
                 return DynamicFetcher.fetch(
                     p.url,
-                    headless=p.headless,
-                    network_idle=p.network_idle,
+                    **browser_kwargs,
                 )
             from scrapling.fetchers import Fetcher
 

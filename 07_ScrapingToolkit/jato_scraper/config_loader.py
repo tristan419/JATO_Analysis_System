@@ -306,6 +306,36 @@ def _build_scrapling_profile(profile: dict[str, Any]) -> ScraplingProfile:
         json_vehicles_path=profile.get("json_vehicles_path"),
         headless=profile.get("headless", True),
         network_idle=profile.get("network_idle", True),
+        load_dom=(
+            bool(profile["load_dom"])
+            if profile.get("load_dom") is not None
+            else None
+        ),
+        timeout_ms=(
+            int(profile["timeout_ms"])
+            if profile.get("timeout_ms") is not None
+            else None
+        ),
+        wait_ms=(
+            int(profile["wait_ms"])
+            if profile.get("wait_ms") is not None
+            else None
+        ),
+        disable_resources=(
+            bool(profile["disable_resources"])
+            if profile.get("disable_resources") is not None
+            else None
+        ),
+        retries=(
+            int(profile["retries"])
+            if profile.get("retries") is not None
+            else None
+        ),
+        retry_delay_seconds=(
+            float(profile["retry_delay_seconds"])
+            if profile.get("retry_delay_seconds") is not None
+            else None
+        ),
         impersonate=profile.get("impersonate", "chrome"),
         solve_cloudflare=profile.get("solve_cloudflare", False),
         default_currency=profile.get("default_currency", "EUR"),

@@ -74,3 +74,41 @@ def test_classify_http_status_403_without_log_text() -> None:
     assert classification["failureReason"] == "forbidden_403"
     assert classification["recommendedStrategy"] == "manual_review_or_proxy_required"
     assert classification["severity"] == "error"
+
+
+def test_classify_connection_closed_as_retryable_network_failure() -> None:
+    classification = batch_dryrun._classify_dryrun_failure(
+        {
+            "status": "empty",
+            "valid": 0,
+            "extracted": 0,
+            "extractorError": "Error: Page.goto: net::ERR_CONNECTION_CLOSED",
+        }
+    )
+
+    assert classification["failureReason"] == "network_unavailable"
+    assert classification["recommendedStrategy"] == "retry_network_or_proxy"
+    assert classification["severity"] == "warning"
+
+
+def test_source_result_retryable_for_timeout_only() -> None:
+    assert batch_dryrun._source_result_is_retryable(
+        {"status": "empty", "valid": 0, "failureReason": "http_timeout"},
+        {"failureReason": "http_timeout"},
+    )
+    assert not batch_dryrun._source_result_is_retryable(
+        {"status": "empty", "valid": 0, "failureReason": "forbidden_403"},
+        {"failureReason": "forbidden_403"},
+    )
+    assert not batch_dryrun._source_result_is_retryable(
+        {"status": "dry_run", "valid": 2, "failureReason": None},
+        {"failureReason": None},
+    )
+
+
+def test_source_attempt_limit_env(monkeypatch) -> None:
+    monkeypatch.setenv("JATO_MSRP_DRYRUN_SOURCE_ATTEMPTS", "3")
+    assert batch_dryrun._source_attempt_limit() == 3
+
+    monkeypatch.setenv("JATO_MSRP_DRYRUN_SOURCE_ATTEMPTS", "bad")
+    assert batch_dryrun._source_attempt_limit() == 2

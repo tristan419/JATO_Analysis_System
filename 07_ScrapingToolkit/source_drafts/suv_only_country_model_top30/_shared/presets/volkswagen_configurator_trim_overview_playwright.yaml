@@ -3,7 +3,7 @@
 browser: chromium
 headless: true
 wait_until: domcontentloaded
-page_timeout_ms: 120000
+page_timeout_ms: 75000
 viewport_width: 1440
 viewport_height: 1200
 initial_ready_selector: '[data-testid="trimcard"]'

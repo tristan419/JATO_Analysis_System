@@ -17,10 +17,12 @@ from typing import Any, Literal
 from jato_scraper.base import BaseExtractor, ExtractorConfig, RawObservation
 
 try:
+    from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
 except ImportError:
     # pragma: no cover - exercised only when dependency missing
+    PlaywrightError = Exception
     PlaywrightTimeoutError = TimeoutError
     sync_playwright = None
 
@@ -145,6 +147,22 @@ def parse_price(raw: str) -> float | None:
     return float(number)
 
 
+def _is_retryable_navigation_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return any(
+        token in message
+        for token in (
+            "err_connection_closed",
+            "err_connection_reset",
+            "err_internet_disconnected",
+            "err_network_changed",
+            "net::err_timed_out",
+            "connection closed",
+            "connection reset",
+        )
+    )
+
+
 class PlaywrightCardFlowExtractor(BaseExtractor):
     def __init__(
         self,
@@ -254,6 +272,17 @@ class PlaywrightCardFlowExtractor(BaseExtractor):
                     "Playwright goto timed out for %s (attempt %d/2)",
                     self.profile.url,
                     attempt + 1,
+                )
+            except PlaywrightError as exc:
+                if not _is_retryable_navigation_error(exc):
+                    raise
+                last_error = exc
+                log.warning(
+                    "Playwright goto hit retryable network error for %s "
+                    "(attempt %d/2): %s",
+                    self.profile.url,
+                    attempt + 1,
+                    exc,
                 )
         raise RuntimeError(
             f"Failed to load {self.profile.url!r} in Playwright"

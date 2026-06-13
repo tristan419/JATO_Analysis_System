@@ -57,6 +57,51 @@ def test_fetch_failure_records_original_error(monkeypatch, tmp_path) -> None:
     )
 
 
+def test_fetch_passes_browser_runtime_options(monkeypatch) -> None:
+    from scrapling.fetchers import StealthyFetcher
+
+    calls: list[dict[str, object]] = []
+    page = MagicMock()
+
+    def fake_fetch(url: str, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return page
+
+    monkeypatch.setattr(StealthyFetcher, "fetch", fake_fetch)
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="volvo_xc90_se",
+            country="SE",
+            brand="VOLVO",
+            source_url="https://www.volvocars.com/se/build/xc90-hybrid/",
+        ),
+        ScraplingProfile(
+            url="https://www.volvocars.com/se/build/xc90-hybrid/",
+            tier="stealth",
+            timeout_ms=45_000,
+            wait_ms=500,
+            load_dom=False,
+            disable_resources=True,
+            retries=2,
+            retry_delay_seconds=0.25,
+        ),
+    )
+
+    assert extractor._fetch() is page
+    assert calls == [{
+        "url": "https://www.volvocars.com/se/build/xc90-hybrid/",
+        "headless": True,
+        "network_idle": True,
+        "load_dom": False,
+        "timeout": 45_000,
+        "wait": 500,
+        "disable_resources": True,
+        "retries": 2,
+        "retry_delay": 0.25,
+        "solve_cloudflare": False,
+    }]
+
+
 def test_resolve_json_path_walks_graph_lists() -> None:
     extractor = build_extractor()
 
@@ -696,3 +741,25 @@ def test_config_loader_builds_scrapling_text_regex_profile() -> None:
     assert profile.text_regex.include_element_html is True
     assert len(profile.text_regex.entry_patterns) == 1
     assert profile.text_regex.entry_patterns[0].official_trim == "Active"
+
+
+def test_config_loader_builds_scrapling_browser_runtime_options() -> None:
+    profile = _build_scrapling_profile(
+        {
+            "url": "https://www.volvocars.com/se/build/xc90-hybrid/",
+            "tier": "stealth",
+            "timeout_ms": 45000,
+            "wait_ms": 500,
+            "load_dom": False,
+            "disable_resources": True,
+            "retries": 2,
+            "retry_delay_seconds": 0.25,
+        }
+    )
+
+    assert profile.timeout_ms == 45_000
+    assert profile.wait_ms == 500
+    assert profile.load_dom is False
+    assert profile.disable_resources is True
+    assert profile.retries == 2
+    assert profile.retry_delay_seconds == 0.25

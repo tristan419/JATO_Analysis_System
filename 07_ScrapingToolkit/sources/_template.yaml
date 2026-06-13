@@ -103,6 +103,14 @@ profile:
   # combine_trim_and_powertrain: true
   # combined_trim_separator: ' | '
 
+  # --- scrapling browser tiers only ---
+  # timeout_ms: 45000          # Browser operation timeout; Scrapling default is 30000.
+  # wait_ms: 500               # Optional wait after page stability before parsing.
+  # load_dom: true
+  # disable_resources: false
+  # retries: 3
+  # retry_delay_seconds: 1
+
   default_currency: EUR
   default_tax_included: true
   default_price_label: "Manufacturer's Recommended Retail Price"
