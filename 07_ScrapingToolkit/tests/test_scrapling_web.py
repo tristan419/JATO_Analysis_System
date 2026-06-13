@@ -327,6 +327,108 @@ def test_text_regex_matches_exact_hyundai_model_price_raw(mock_fetch) -> None:
 
 
 @patch.object(ScraplingExtractor, "_fetch")
+def test_text_regex_ignores_kia_se_global_menu_price(mock_fetch) -> None:
+    global_menu_text = (
+        "Kia modellprogram Erbjudanden "
+        "Rek. ca pris från 200 500 kr "
+        "Detta pris hör till en annan menybil."
+    )
+    cases = (
+        (
+            "kia_ev3_se",
+            "EV3",
+            r"Kia EV3 kostar.*?Rek\s*ca\s*pris\s*från\s+"
+            r"(?P<price>\d{3}[\s\xa0]\d{3})\s*kr",
+            "Entry",
+            "BEV",
+            "Här nedan kan du se vad de olika modellversionerna av Kia EV3 "
+            "kostar. Rek ca pris från 434\xa0900 kr",
+            434_900.0,
+        ),
+        (
+            "kia_sportage_se",
+            "SPORTAGE",
+            r"Nya Kia Sportage Plug-In Hybrid.*?Rek\s*ca\s*pris\s*från\s+"
+            r"(?P<price>\d{3}[\s\xa0]\d{3})\s*kr",
+            "Plug-In Hybrid",
+            "PHEV",
+            "Nya Kia Sportage Plug-In Hybrid erbjuder hög komfort. "
+            "Rek ca pris från 508\xa0900 kr",
+            508_900.0,
+        ),
+        (
+            "kia_ev9_se",
+            "EV9",
+            r"Helelektriska Kia EV9.*?Rek\s*ca\s*pris\s*från\s+"
+            r"(?P<price>\d{3}[\s\xa0]\d{3})\s*kr",
+            "Entry",
+            "BEV",
+            "Helelektriska Kia EV9 har plats för familjen. "
+            "Rek ca pris från 701\xa0900 kr",
+            701_900.0,
+        ),
+        (
+            "kia_ev6_se",
+            "EV6",
+            r"Nya Kia EV6\..*?Rek\s*ca\s*pris\s*från\s+"
+            r"(?P<price>\d{3}[\s\xa0]\d{3})\s*kr",
+            "Entry",
+            "BEV",
+            "Nya Kia EV6. Rek ca pris från 596\xa0400 kr",
+            596_400.0,
+        ),
+    )
+
+    for (
+        source_code,
+        model,
+        pattern,
+        trim,
+        powertrain,
+        model_page_text,
+        expected_price,
+    ) in cases:
+        mock_fetch.return_value = _mock_page_with_text(
+            f"{global_menu_text}\n{model_page_text}"
+        )
+        extractor = ScraplingExtractor(
+            ExtractorConfig(
+                source_code=source_code,
+                country="SE",
+                brand="Kia",
+                source_url="https://example.com",
+            ),
+            ScraplingProfile(
+                url="https://example.com",
+                text_regex=TextRegexMapping(
+                    source_selector="body",
+                    entry_patterns=(
+                        TextRegexEntryPattern(
+                            pattern=pattern,
+                            official_trim=trim,
+                            official_powertrain=powertrain,
+                        ),
+                    ),
+                ),
+                default_currency="SEK",
+                fixed_model=model,
+                fixed_jato_model=model,
+                fixed_jato_powertrain=powertrain,
+                copy_trim_to_jato_trim=True,
+            ),
+        )
+
+        results = extractor.extract()
+
+        assert len(results) == 1
+        assert results[0].official_model == model
+        assert results[0].official_trim == trim
+        assert results[0].msrp_value == expected_price
+        assert results[0].currency == "SEK"
+        assert results[0].msrp_value != 200_500.0
+
+
+@patch.object(ScraplingExtractor, "_fetch")
 def test_text_regex_extracts_descendant_body_text(mock_fetch) -> None:
     mock_fetch.return_value = _mock_page_with_descendant_text(
         "body",

@@ -90,12 +90,12 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'Nya Kia Sportage Plug-In Hybrid.*?Rek\s*ca\s*pris\s*från\s+(?P<price>\d{3}[\s\xa0]\d{3})\s*kr'
+      official_trim: Plug-In Hybrid
+      official_powertrain: PHEV
   tier: stealth
   network_idle: true
   impersonate: chrome
@@ -107,7 +107,8 @@ schedule:
 notes: Keywords filled from official manufacturer website research (SE market). CSS
   selectors still require browser-based inspection before promotion. [Switched to
   playwright_card_flow with kia_trim_overview_playwright.yaml] [Reverted to scrapling
-  — playwright preset needs per-brand tuning]
+  — playwright preset needs per-brand tuning] [Tightened to model-page text_regex
+  after broad CSS matched global Kia menu price instead of Sportage MSRP]
 bootstrap_meta:
   country_model_rank: 13
   suggested_scope_kind: single_model
