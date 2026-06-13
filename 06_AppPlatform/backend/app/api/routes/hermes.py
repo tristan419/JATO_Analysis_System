@@ -418,15 +418,21 @@ def _msrp_progress_from_partial_current(current: dict[str, Any] | None) -> dict[
     if not current or not current.get("available") or not current.get("partial"):
         return None
 
+    is_running = bool(current.get("running"))
+    partial_finding = {
+        "type": "dryrun_running_without_aggregate" if is_running else "dryrun_partial_without_aggregate",
+        "severity": "warning",
+        "message": (
+            "MSRP dryrun is running and country-level partial artifacts are available; aggregate report is pending."
+            if is_running
+            else "MSRP dryrun partial artifacts are available, but no active run is detected; aggregate report is pending."
+        ),
+        "runId": current.get("runId"),
+    }
     countries: list[dict[str, Any]] = []
     top_blocking: list[dict[str, Any]] = []
     failure_reasons: dict[str, int] = {}
-    findings: list[dict[str, Any]] = [{
-        "type": "dryrun_running_without_aggregate",
-        "severity": "warning",
-        "message": "MSRP dryrun is running and country-level partial artifacts are available; aggregate report is pending.",
-        "runId": current.get("runId"),
-    }]
+    findings: list[dict[str, Any]] = [partial_finding]
     for country in current.get("countries") or []:
         code = str(country.get("countryCode") or "").lower()
         entry = {
@@ -480,7 +486,7 @@ def _msrp_progress_from_partial_current(current: dict[str, Any] | None) -> dict[
         "status": {
             "runId": current.get("runId"),
             "schemaVersion": current.get("schemaVersion"),
-            "running": bool(current.get("running")),
+            "running": is_running,
             "partial": True,
             "overallPassPct": float(current.get("overallPassRate") or 0.0),
             "gateThreshold": current.get("gateThreshold"),

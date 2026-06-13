@@ -401,6 +401,57 @@ class TestSentinelAndDeploy:
         ]
         assert backlog["topSourceHosts"][0]["host"] == "audi.se"
 
+    def test_partial_msrp_progress_marks_stopped_partial_without_aggregate(self):
+        current = {
+            "available": True,
+            "partial": True,
+            "running": False,
+            "runId": "msrp-dryrun-20260612-125301",
+            "schemaVersion": "msrp_dryrun_partial_v1",
+            "overallPassRate": 50.0,
+            "gateStatus": None,
+            "expectedCountries": ["se", "fi"],
+            "observedCountries": ["se"],
+            "missingCountries": ["fi"],
+            "countries": [
+                {
+                    "countryCode": "se",
+                    "completed": True,
+                    "total": 1,
+                    "pass": 1,
+                    "empty": 0,
+                    "fail": 0,
+                    "errors": 0,
+                    "passRate": 100.0,
+                    "status": "success",
+                    "failureBreakdown": {},
+                    "strategyRecommendations": {},
+                    "sources": [],
+                },
+                {
+                    "countryCode": "fi",
+                    "completed": False,
+                    "total": 0,
+                    "pass": 0,
+                    "empty": 0,
+                    "fail": 0,
+                    "errors": 0,
+                    "passRate": 0.0,
+                    "status": "running",
+                    "failureBreakdown": {},
+                    "strategyRecommendations": {},
+                    "sources": [],
+                },
+            ],
+        }
+
+        data = _msrp_progress_from_partial_current(current)
+
+        assert data is not None
+        assert data["status"]["running"] is False
+        assert data["findings"][0]["type"] == "dryrun_partial_without_aggregate"
+        assert "no active run" in data["findings"][0]["message"]
+
     def test_msrp_country_progress_missing_specific_run_remains_404(self, client, tmp_path):
         reports_dir = tmp_path / "hermes" / "reports"
         reports_dir.mkdir(parents=True)

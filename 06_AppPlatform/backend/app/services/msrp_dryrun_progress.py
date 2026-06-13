@@ -518,7 +518,10 @@ def _current_from_partial_run_dir(run_id: str | None = None) -> dict[str, Any] |
     failure_breakdown = _aggregate_country_counter(countries, "failureBreakdown")
     strategy_recommendations = _aggregate_country_counter(countries, "strategyRecommendations")
     started = _parse_run_dir_timestamp(run_dir.name)
-    running = _is_running() or any(not country.get("completed") for country in countries)
+    # Incomplete country artifacts mean the run is partial, not necessarily live.
+    # Treat the lock file as the authoritative local signal for an active run so
+    # abandoned partial artifacts do not mask the latest completed v3 report.
+    running = _is_running()
     return {
         "available": True,
         "running": running,
