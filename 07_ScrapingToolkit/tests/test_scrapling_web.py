@@ -254,6 +254,79 @@ def test_text_regex_extracts_price_list_script_text(mock_fetch) -> None:
 
 
 @patch.object(ScraplingExtractor, "_fetch")
+def test_text_regex_matches_exact_hyundai_model_price_raw(mock_fetch) -> None:
+    mock_fetch.return_value = _mock_page_with_text(
+        (
+            '{"models":['
+            '{"name":"INSTER","url":"/modeller/inster","priceRaw":"174995",'
+            '"priceCurrency":"DKK","isCampaign":false},'
+            '{"name":"IONIQ 5","url":"/modeller/ioniq-5",'
+            '"price":"279.995 kr.","isCampaign":false},'
+            '{"name":"IONIQ 5","url":"/modeller/ioniq-5",'
+            '"image":{"altText":"Hyundai IONIQ 5"},'
+            '"pimId":"HY_IONIQ5_NE_DK_IONIQ5_MY27",'
+            '"price":"279995","priceRaw":"279995",'
+            '"priceCurrency":"DKK","priceFormatted":"279.995 kr.",'
+            '"isCampaign":false},'
+            '{"name":"IONIQ 5 N","url":"/modeller/ioniq-5-n",'
+            '"priceRaw":"539995","priceCurrency":"DKK",'
+            '"isCampaign":false}'
+            "]}"
+        )
+    )
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="hyundai_ioniq_5_dk",
+            country="DK",
+            brand="Hyundai",
+            source_url="https://example.com",
+        ),
+        ScraplingProfile(
+            url="https://example.com",
+            text_regex=TextRegexMapping(
+                source_selector="script",
+                entry_patterns=(
+                    TextRegexEntryPattern(
+                        pattern=(
+                            r'"name":"IONIQ 5","url":"/modeller/ioniq-5",'
+                            r'"price":"(?P<price>\d{3}\.\d{3})\s*kr\.",'
+                            r'"isCampaign":false'
+                        ),
+                        official_trim="Entry",
+                        official_powertrain="BEV",
+                    ),
+                    TextRegexEntryPattern(
+                        pattern=(
+                            r'"name":"IONIQ 5".{0,700}?"url":"/modeller/ioniq-5"'
+                            r'.{0,1400}?"priceRaw":"(?P<price>\d+)"'
+                            r'.{0,200}?"priceCurrency":"DKK"'
+                            r'.{0,200}?"isCampaign":false'
+                        ),
+                        official_trim="Entry",
+                        official_powertrain="BEV",
+                    ),
+                ),
+            ),
+            default_currency="DKK",
+            fixed_model="IONIQ 5",
+            fixed_jato_model="IONIQ 5",
+            fixed_jato_powertrain="BEV",
+            copy_trim_to_jato_trim=True,
+        ),
+    )
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].official_model == "IONIQ 5"
+    assert results[0].official_trim == "Entry"
+    assert results[0].msrp_value == 279_995.0
+    assert results[0].currency == "DKK"
+    assert results[0].jato_model == "IONIQ 5"
+    assert results[0].jato_powertrain == "BEV"
+
+
+@patch.object(ScraplingExtractor, "_fetch")
 def test_text_regex_extracts_descendant_body_text(mock_fetch) -> None:
     mock_fetch.return_value = _mock_page_with_descendant_text(
         "body",
