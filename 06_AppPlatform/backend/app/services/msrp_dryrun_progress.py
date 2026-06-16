@@ -317,6 +317,44 @@ def _all_country_latest_from_runs_index(index_data: dict[str, Any] | None) -> li
     )
 
 
+def _stable_coverage_summary(all_countries: list[dict[str, Any]], current: dict[str, Any]) -> dict[str, Any]:
+    gate_threshold = float(current.get("gateThreshold") or 70)
+    ready_countries = [
+        country for country in all_countries
+        if float(country.get("passRate") or 0) >= gate_threshold
+    ]
+    total_sources = sum(int(country.get("total") or 0) for country in all_countries)
+    total_pass = sum(int(country.get("pass") or 0) for country in all_countries)
+    latest_run_id = str(next(
+        (country.get("runId") for country in all_countries if country.get("isLatestRun") and country.get("runId")),
+        "",
+    ))
+    if not latest_run_id:
+        latest_run_id = str(next((country.get("runId") for country in all_countries if country.get("runId")), ""))
+    active_run_id = str(current.get("runId") or "")
+    return {
+        "gateThreshold": gate_threshold,
+        "countryCount": len(all_countries),
+        "readyCountryCount": len(ready_countries),
+        "blockedCountryCount": max(0, len(all_countries) - len(ready_countries)),
+        "stablePassRate": round(total_pass / max(total_sources, 1) * 100, 1) if total_sources > 0 else 0,
+        "totalSources": total_sources,
+        "totalPass": total_pass,
+        "latestRunId": latest_run_id,
+        "activeRunId": active_run_id,
+        "activeRunRunning": bool(current.get("running")),
+        "activeRunPartial": bool(current.get("partial")),
+        "activeRunPassRate": float(current.get("overallPassRate") or 0),
+        "probeDiffersFromStableRun": bool(active_run_id and latest_run_id and active_run_id != latest_run_id),
+        "readyCountries": [str(country.get("countryCode") or "") for country in ready_countries],
+        "blockedCountries": [
+            str(country.get("countryCode") or "")
+            for country in all_countries
+            if float(country.get("passRate") or 0) < gate_threshold
+        ],
+    }
+
+
 def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] | None = None) -> dict[str, Any]:
     summary = report.get("summary") or {}
     run_id = str(report.get("runId") or "")
@@ -985,9 +1023,11 @@ def get_dryrun_dashboard(run_id: str | None = None) -> dict[str, Any]:
             "timestamp": ts.isoformat() if ts else None,
         })
 
+    all_countries = _all_country_latest_from_runs_index(index_data) or current.get("countries", [])
     return {
         "current": current,
-        "allCountries": _all_country_latest_from_runs_index(index_data) or current.get("countries", []),
+        "allCountries": all_countries,
+        "stableCoverage": _stable_coverage_summary(all_countries, current),
         "history": history,
         "logFiles": log_files,
         "selectedRunId": run_id,

@@ -45,6 +45,7 @@ interface DryrunCountry {
 interface DryrunCurrent {
   available: boolean;
   running: boolean;
+  partial?: boolean;
   logFile?: string;
   runId?: string;
   batch?: string;
@@ -93,9 +94,28 @@ interface DryrunHistoryRun {
   countriesDetail?: DryrunHistoryCountry[];
 }
 
+interface StableCoverage {
+  gateThreshold: number;
+  countryCount: number;
+  readyCountryCount: number;
+  blockedCountryCount: number;
+  stablePassRate: number;
+  totalSources: number;
+  totalPass: number;
+  latestRunId?: string;
+  activeRunId?: string;
+  activeRunRunning: boolean;
+  activeRunPartial: boolean;
+  activeRunPassRate: number;
+  probeDiffersFromStableRun: boolean;
+  readyCountries: string[];
+  blockedCountries: string[];
+}
+
 interface DryrunDashboard {
   current: DryrunCurrent;
   allCountries?: DryrunCountry[];
+  stableCoverage?: StableCoverage;
   history: DryrunHistoryRun[];
   selectedRunId?: string | null;
   latestRunId?: string | null;
@@ -266,6 +286,7 @@ export function MsrpDryrunDashboard() {
   const history = data?.history ?? [];
   const currentCountries = dedupeByCountryCode(current?.countries ?? []);
   const allCountries = dedupeByCountryCode(data?.allCountries ?? currentCountries);
+  const stableCoverage = data?.stableCoverage;
   const isHistoricalSelection = Boolean(selectedRunId);
 
   return (
@@ -337,6 +358,22 @@ export function MsrpDryrunDashboard() {
             {current.startedAt && <span>Started: {formatTime(current.startedAt)}</span>}
             {current.logFile && <span>Log: {current.logFile}</span>}
           </div>
+          {stableCoverage && stableCoverage.countryCount > 0 && (
+            <div className="dryrun-stable-coverage">
+              <span><strong>Stable coverage</strong></span>
+              <span>
+                <strong>{stableCoverage.readyCountryCount}/{stableCoverage.countryCount}</strong> countries &gt;= {stableCoverage.gateThreshold}%
+              </span>
+              <span><strong>{stableCoverage.stablePassRate}%</strong> stable rate</span>
+              {stableCoverage.latestRunId && <span>Latest stable: {stableCoverage.latestRunId}</span>}
+              {stableCoverage.probeDiffersFromStableRun && stableCoverage.activeRunId && (
+                <span>
+                  Active probe: {stableCoverage.activeRunId} · {stableCoverage.activeRunPassRate}%
+                  {stableCoverage.activeRunPartial ? " · partial" : ""}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       )}
 

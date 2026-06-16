@@ -103,6 +103,9 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
     assert dashboard["current"]["countries"][0]["sources"][0]["httpStatus"] == 0
     assert dashboard["history"][0]["runId"] == "msrp-dryrun-20260611-120000"
     assert [country["countryCode"] for country in dashboard["allCountries"]] == ["se"]
+    assert dashboard["stableCoverage"]["countryCount"] == 1
+    assert dashboard["stableCoverage"]["readyCountryCount"] == 1
+    assert dashboard["stableCoverage"]["latestRunId"] == "msrp-dryrun-20260611-120000"
 
 
 def test_dashboard_exposes_latest_progress_for_all_historical_countries(tmp_path, monkeypatch):
@@ -268,6 +271,15 @@ def test_dashboard_exposes_latest_progress_for_all_historical_countries(tmp_path
     assert all_countries["se"]["isLatestRun"] is True
     assert all_countries["dk"]["runId"] == older_run_id
     assert all_countries["no"]["gateStatus"] == "blocked"
+    assert dashboard["stableCoverage"]["countryCount"] == 4
+    assert dashboard["stableCoverage"]["readyCountryCount"] == 3
+    assert dashboard["stableCoverage"]["blockedCountryCount"] == 1
+    assert dashboard["stableCoverage"]["stablePassRate"] == 75.0
+    assert dashboard["stableCoverage"]["readyCountries"] == ["fi", "se", "dk"]
+    assert dashboard["stableCoverage"]["blockedCountries"] == ["no"]
+    assert dashboard["stableCoverage"]["activeRunId"] == latest_run_id
+    assert dashboard["stableCoverage"]["latestRunId"] == latest_run_id
+    assert dashboard["stableCoverage"]["probeDiffersFromStableRun"] is False
 
 
 def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(tmp_path, monkeypatch):
@@ -387,7 +399,19 @@ def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path,
             "gateThreshold": 70,
             "gateStatus": "blocked",
         },
-        "countriesDetail": [],
+        "countriesDetail": [
+            {
+                "countryCode": "se",
+                "total": 1,
+                "pass": 0,
+                "empty": 1,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 0.0,
+                "status": "failure",
+                "sources": [],
+            }
+        ],
         "generatedAt": "2026-06-12T09:31:08Z",
     }
     index = {
@@ -459,6 +483,10 @@ def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path,
     assert current["runId"] == "msrp-dryrun-20260612-125301"
     assert [country["countryCode"] for country in current["countries"]] == ["se", "fi"]
     assert dashboard["history"][0]["runId"] == "msrp-dryrun-20260612-070207"
+    assert dashboard["stableCoverage"]["latestRunId"] == "msrp-dryrun-20260612-070207"
+    assert dashboard["stableCoverage"]["activeRunId"] == "msrp-dryrun-20260612-125301"
+    assert dashboard["stableCoverage"]["probeDiffersFromStableRun"] is True
+    assert dashboard["stableCoverage"]["activeRunPartial"] is True
 
 
 def test_partial_run_dir_uses_logged_country_plan_before_country_starts(tmp_path, monkeypatch):
