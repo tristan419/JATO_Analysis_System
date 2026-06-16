@@ -29,6 +29,19 @@ export const JATO_COUNTRIES: JatoCountryOption[] = [
   { countryCode: "PT", countryName: "Portugal", countryNameZh: "葡萄牙", marketScanCountry: "葡萄牙" },
 ];
 
+const ORDERING_COUNTRY_NAME_OVERRIDES: Record<string, Pick<JatoCountryOption, "countryName" | "countryNameZh">> = {
+  BG: { countryName: "Bulgaria", countryNameZh: "保加利亚" },
+  BW: { countryName: "Botswana", countryNameZh: "博茨瓦纳" },
+  CL: { countryName: "Chile", countryNameZh: "智利" },
+  DM: { countryName: "Dominican Republic", countryNameZh: "多米尼加共和国" },
+  GV: { countryName: "Cape Verde", countryNameZh: "佛得角" },
+  KX: { countryName: "Kuwait", countryNameZh: "科威特" },
+  LV: { countryName: "Latvia", countryNameZh: "拉脱维亚" },
+  PU: { countryName: "Portugal", countryNameZh: "葡萄牙" },
+  ZF: { countryName: "South Africa", countryNameZh: "南非" },
+  ZU: { countryName: "Zimbabwe", countryNameZh: "津巴布韦" },
+};
+
 const COUNTRY_BY_CODE = new Map(
   JATO_COUNTRIES.map((country) => [country.countryCode, country]),
 );
@@ -44,6 +57,19 @@ export function countryCodeToDatasetCountry(countryCode: string | null | undefin
 
 export function formatJatoCountryOption(country: JatoCountryOption): string {
   return `${country.countryNameZh} / ${country.countryName} (${country.countryCode})`;
+}
+
+export function formatCountryCodeTooltip(countryCode: string | null | undefined): string {
+  const normalized = String(countryCode ?? "").trim().toUpperCase();
+  const jatoCountry = getJatoCountryByCode(normalized);
+  const override = ORDERING_COUNTRY_NAME_OVERRIDES[normalized];
+  if (jatoCountry) {
+    return `${normalized} · ${jatoCountry.countryName} · ${jatoCountry.countryNameZh}`;
+  }
+  if (override) {
+    return `${normalized} · ${override.countryName} · ${override.countryNameZh}`;
+  }
+  return `${normalized || "Unknown"} · Unknown country · 未知国家`;
 }
 
 /** Fallback country for admin, anonymous, or unset profile. */

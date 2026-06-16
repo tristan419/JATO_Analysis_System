@@ -15,6 +15,7 @@ import { api, apiUrl } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
 import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
+import { formatCountryCodeTooltip } from "../utils/jatoCountries";
 import type { CellValueChangedEvent } from "ag-grid-community";
 import {
   getOrderGeniusRowId,
@@ -2538,7 +2539,7 @@ function BomAdminPanel() {
                           <th style={{ ...bomHeaderBaseStyle, width: 65 }}>From</th>
                           <th style={{ ...bomHeaderBaseStyle, width: 65 }}>To</th>
                           {sortedCountries.map(c => (
-                            <th key={c} style={{ width: 75, textAlign: "right", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
+                            <th key={c} title={formatCountryCodeTooltip(c)} style={{ width: 75, textAlign: "right", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
                               {c}
                             </th>
                           ))}
@@ -2828,8 +2829,9 @@ function BomAdminPanel() {
                                 const baseFob = fob?.uploadedFobEur ?? fob?.finalFobEur;
                                 const hasFob = fob != null && baseFob != null && baseFob > 0;
                                 const hasSurcharge = fob?.colourSurchargeEur && fob.colourSurchargeEur > 0;
+                                const countryTooltip = formatCountryCodeTooltip(c);
                                 return (
-                                  <td key={c} style={{ textAlign: "right", cursor: "pointer", padding: "2px 4px" }}
+                                  <td key={c} title={`${countryTooltip}${hasFob ? ` · FOB ${baseFob!.toLocaleString()} EUR` : " · No FOB"}`} style={{ textAlign: "right", cursor: "pointer", padding: "2px 4px" }}
                                     onClick={() => setEditFob({ materialCodes: allCodes, countryCode: c, fob: baseFob ?? null })}>
                                     <span style={{ color: hasFob ? "#0f766e" : "#cbd5e1", fontWeight: hasFob ? 600 : 400 }}>
                                       {hasFob ? baseFob!.toLocaleString() : "-"}
