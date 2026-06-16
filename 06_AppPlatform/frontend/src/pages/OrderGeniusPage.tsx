@@ -1800,6 +1800,7 @@ function BomAdminPanel() {
   const [copyOverwrite, setCopyOverwrite] = useState(false);
   const [copyingCountry, setCopyingCountry] = useState(false);
   const [copyCountryStatus, setCopyCountryStatus] = useState("");
+  const [showCopyFob, setShowCopyFob] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [dragSku, setDragSku] = useState<string | null>(null);
   const [dragOverTier, setDragOverTier] = useState<string | null>(null);
@@ -2120,17 +2121,6 @@ function BomAdminPanel() {
         )}
         {editing ? (
           <>
-          <span
-            title="Copy this SKU into the Add Material form"
-            style={{ cursor: 'pointer', color: '#2563eb', fontSize: 9, marginLeft: 2, fontWeight: 700, border: '1px solid #bfdbfe', borderRadius: 2, padding: '0 3px', background: '#eff6ff' }}
-            onMouseDown={(e2: any) => e2.stopPropagation()}
-            onClick={(e2: any) => {
-              e2.stopPropagation();
-              handleCopyMaterialFromSku(s);
-            }}
-          >
-            Copy
-          </span>
           {pendingDeletes.has(s.materialCode) ? (
             <span title="Click again to confirm delete" style={{ cursor: 'pointer', color: '#fff', fontSize: 9, marginLeft: 1, fontWeight: 700, background: '#dc2626', borderRadius: 2, padding: '1px 3px' }}
               onClick={async (e2: any) => {
@@ -2220,25 +2210,49 @@ function BomAdminPanel() {
 
   if (loading) return <div style={{ padding: 16, color: "#64748b" }}>Loading BOM data...</div>;
 
+  const bomHeaderBaseStyle = {
+    background: "#334155",
+    color: "#ffffff",
+    fontWeight: 900,
+    borderBottom: "2px solid #0f172a",
+    textShadow: "0 1px 0 rgba(0,0,0,0.35)",
+  } as const;
+
   return (
     <div style={{ padding: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, position: "sticky", top: 0, background: "rgba(255,255,255,0.95)", backdropFilter: "blur(8px)", zIndex: 1, padding: "8px 0", borderBottom: "1px solid #e2e8f0" }}>
         <h3 style={{ margin: 0 }}>BOM / Material Master</h3>
         <span style={{ fontSize: 12, color: "#64748b" }}>{skus.length} SKUs · {modelGroups.size} models · {sortedCountries.length} countries</span>
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
         <input ref={searchInputRef} type="text" placeholder="Search model / material / country (e.g. JAECOO7, T716, SE) — auto 1.2s" value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           style={{ minWidth: 340 }} />
         <button className="btn btn-sm btn-ghost" onClick={() => { setSearchText(''); load(); }}>Clear</button>
-        <button className="btn btn-sm btn-ghost" onClick={() => { setShowAddMaterial(!showAddMaterial); setAddMaterialNotice(""); }}
-          style={{ marginLeft: 'auto' }}>+ Material</button>
+        {copyCountryStatus && !showCopyFob ? (
+          <span style={{ fontSize: 11, color: copyCountryStatus.startsWith("Copied") ? "#0f766e" : "#b45309" }}>
+            {copyCountryStatus}
+          </span>
+        ) : null}
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+          <button
+            className="btn btn-sm btn-ghost"
+            onClick={() => setShowCopyFob(prev => !prev)}
+            style={{ color: showCopyFob ? "#2563eb" : undefined }}
+          >
+            {showCopyFob ? "Hide Copy FOB" : "Copy Country FOB"}
+          </button>
+          <button className="btn btn-sm btn-ghost" onClick={() => { setShowAddMaterial(!showAddMaterial); setAddMaterialNotice(""); }}>
+            + Material
+          </button>
+        </div>
       </div>
       {bomAdminError ? (
         <div style={{ marginBottom: 10, padding: "8px 10px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 4, color: "#991b1b", fontSize: 12 }}>
           BOM Admin failed to load: {bomAdminError}
         </div>
       ) : null}
+      {showCopyFob ? (
       <form
         onSubmit={handleCopyCountryFobs}
         style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10, padding: "8px 10px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 4 }}
@@ -2287,6 +2301,7 @@ function BomAdminPanel() {
           </span>
         ) : null}
       </form>
+      ) : null}
       {showAddMaterial && (
         <div style={{ display: "flex", gap: 6, marginBottom: 8, padding: 6, background: '#f8fafc', borderRadius: 4, flexWrap: "wrap", alignItems: "center" }}>
           <input ref={materialCodeInputRef} type="text" placeholder="Material Code" value={newMaterial.materialCode}
@@ -2349,16 +2364,16 @@ function BomAdminPanel() {
                     <table className="data-table bom-admin-table" style={{ fontSize: 11, width: "auto", minWidth: "100%" }}>
                       <thead>
                         <tr style={{ position: "sticky", top: 0, zIndex: 2 }}>
-                          <th style={{ minWidth: 150, position: "sticky", left: 0, zIndex: 3, background: "#f8fafc" }}>BOM</th>
-                          <th style={{ minWidth: 90, position: "sticky", left: 150, zIndex: 3, background: "#f8fafc" }}>Interior</th>
-                          <th style={{ minWidth: 120, position: "sticky", left: 240, zIndex: 3, background: "#f8fafc" }}>Single</th>
-                          <th style={{ minWidth: 100, position: "sticky", left: 360, zIndex: 3, background: "#f8fafc" }}>Dual</th>
-                          <th style={{ minWidth: 70, position: "sticky", left: 460, zIndex: 3, background: "#f8fafc" }}>Special</th>
-                          <th style={{ minWidth: 70 }}>Lifecycle</th>
-                          <th style={{ width: 55 }}></th>
-                          <th style={{ width: 38 }}>Edit</th>
-                          <th style={{ width: 65 }}>From</th>
-                          <th style={{ width: 65 }}>To</th>
+                          <th style={{ ...bomHeaderBaseStyle, minWidth: 150, position: "sticky", left: 0, zIndex: 3 }}>BOM</th>
+                          <th style={{ ...bomHeaderBaseStyle, minWidth: 90, position: "sticky", left: 150, zIndex: 3 }}>Interior</th>
+                          <th style={{ ...bomHeaderBaseStyle, minWidth: 120, position: "sticky", left: 240, zIndex: 3 }}>Single</th>
+                          <th style={{ ...bomHeaderBaseStyle, minWidth: 100, position: "sticky", left: 360, zIndex: 3 }}>Dual</th>
+                          <th style={{ ...bomHeaderBaseStyle, minWidth: 70, position: "sticky", left: 460, zIndex: 3 }}>Special</th>
+                          <th style={{ ...bomHeaderBaseStyle, minWidth: 70 }}>Lifecycle</th>
+                          <th style={{ ...bomHeaderBaseStyle, width: 70 }}></th>
+                          <th style={{ ...bomHeaderBaseStyle, width: 72, minWidth: 72 }}>Edit</th>
+                          <th style={{ ...bomHeaderBaseStyle, width: 65 }}>From</th>
+                          <th style={{ ...bomHeaderBaseStyle, width: 65 }}>To</th>
                           {sortedCountries.map(c => (
                             <th key={c} style={{ width: 75, textAlign: "right", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
                               {c}
@@ -2612,9 +2627,9 @@ function BomAdminPanel() {
                               </td>
                               <td style={{ textAlign: 'center' }}>
                                 <button className="btn btn-sm btn-ghost"
-                                  style={{ fontSize: 10, padding: '1px 4px', color: editingBoms.has(bomTemplate) ? '#16a34a' : '#64748b' }}
+                                  style={{ fontSize: 10, padding: '1px 4px', color: editing ? '#16a34a' : '#64748b' }}
                                   onClick={() => toggleEditBom(bomTemplate)}>
-                                  {editingBoms.has(bomTemplate) ? 'Save' : 'Edit'}
+                                  {editing ? 'Save' : 'Edit'}
                                 </button>
                               </td>
                               <td>
@@ -2675,6 +2690,17 @@ function BomAdminPanel() {
                                     <select name="powertrain" defaultValue={(ref as any).powertrain || "ICE"} style={{ width: 78, fontSize: 11 }}>
                                       {['BEV','HEV','PHEV','ICE','MHEV','REEV'].map(p => <option key={p} value={p}>{p}</option>)}
                                     </select>
+                                    <span style={{ fontFamily: "monospace", fontSize: 10, color: "#94a3b8" }}>
+                                      {allSkus.length} SKUs
+                                    </span>
+                                    <button
+                                      className="btn btn-sm btn-ghost"
+                                      type="button"
+                                      style={{ fontSize: 10, padding: "2px 8px", color: "#2563eb", borderColor: "#bfdbfe", background: "#eff6ff" }}
+                                      onClick={() => handleCopyMaterialFromSku(ref)}
+                                    >
+                                      Copy Material
+                                    </button>
                                     <button className="btn btn-sm btn-primary" type="submit" style={{ fontSize: 10, padding: "2px 8px" }}>
                                       Save Product
                                     </button>
