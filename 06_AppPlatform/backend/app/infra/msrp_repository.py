@@ -294,24 +294,162 @@ def _apply_finance_observation_filters(
     if finance_type:
         stmt = stmt.where(FinanceObservation.finance_type == finance_type)
     if has_monthly_payment is not None:
+        has_monthly_value = or_(
+            FinanceObservation.monthly_payment.is_not(None),
+            FinanceObservation.monthly_payment_eur.is_not(None),
+        )
         stmt = stmt.where(
-            FinanceObservation.monthly_payment_eur.is_not(None)
+            has_monthly_value
             if has_monthly_payment
-            else FinanceObservation.monthly_payment_eur.is_(None)
+            else ~has_monthly_value
         )
     if has_subsidy is not None:
+        has_subsidy_value = or_(
+            FinanceObservation.subsidy_amount.is_not(None),
+            FinanceObservation.subsidy_amount_eur.is_not(None),
+        )
         stmt = stmt.where(
-            FinanceObservation.subsidy_amount_eur.is_not(None)
+            has_subsidy_value
             if has_subsidy
-            else FinanceObservation.subsidy_amount_eur.is_(None)
+            else ~has_subsidy_value
         )
     if has_net_price_after_subsidy is not None:
+        has_net_value = or_(
+            FinanceObservation.net_price_after_subsidy.is_not(None),
+            FinanceObservation.net_price_after_subsidy_eur.is_not(None),
+        )
         stmt = stmt.where(
-            FinanceObservation.net_price_after_subsidy_eur.is_not(None)
+            has_net_value
             if has_net_price_after_subsidy
-            else FinanceObservation.net_price_after_subsidy_eur.is_(None)
+            else ~has_net_value
         )
     return stmt
+
+
+def _finance_count_map(
+    session: Session,
+    column: object,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    price_semantics: str | None,
+    finance_type: str | None,
+    has_monthly_payment: bool | None,
+    has_subsidy: bool | None,
+    has_net_price_after_subsidy: bool | None,
+) -> dict[str, int]:
+    stmt = select(column, func.count()).select_from(FinanceObservation)
+    stmt = _apply_finance_observation_filters(
+        stmt,
+        country,
+        brand,
+        jato_model,
+        price_semantics,
+        finance_type,
+        has_monthly_payment,
+        has_subsidy,
+        has_net_price_after_subsidy,
+    ).group_by(column)
+    return {
+        str(value or "").strip() or "unknown": int(count or 0)
+        for value, count in session.execute(stmt).all()
+    }
+
+
+def summarize_finance_observations(
+    session: Session,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    price_semantics: str | None,
+    finance_type: str | None,
+    has_monthly_payment: bool | None,
+    has_subsidy: bool | None,
+    has_net_price_after_subsidy: bool | None,
+) -> dict[str, object]:
+    monthly_present = or_(
+        FinanceObservation.monthly_payment.is_not(None),
+        FinanceObservation.monthly_payment_eur.is_not(None),
+    )
+    subsidy_present = or_(
+        FinanceObservation.subsidy_amount.is_not(None),
+        FinanceObservation.subsidy_amount_eur.is_not(None),
+    )
+    net_present = or_(
+        FinanceObservation.net_price_after_subsidy.is_not(None),
+        FinanceObservation.net_price_after_subsidy_eur.is_not(None),
+    )
+    stmt = select(
+        func.sum(case((monthly_present, 1), else_=0)),
+        func.min(FinanceObservation.monthly_payment_eur),
+        func.max(FinanceObservation.monthly_payment_eur),
+        func.sum(case((net_present, 1), else_=0)),
+        func.min(FinanceObservation.net_price_after_subsidy_eur),
+        func.max(FinanceObservation.net_price_after_subsidy_eur),
+        func.sum(case((subsidy_present, 1), else_=0)),
+    ).select_from(FinanceObservation)
+    stmt = _apply_finance_observation_filters(
+        stmt,
+        country,
+        brand,
+        jato_model,
+        price_semantics,
+        finance_type,
+        has_monthly_payment,
+        has_subsidy,
+        has_net_price_after_subsidy,
+    )
+    (
+        monthly_count,
+        monthly_min,
+        monthly_max,
+        net_count,
+        net_min,
+        net_max,
+        subsidy_count,
+    ) = session.execute(stmt).one()
+
+    return {
+        "priceSemanticsCounts": _finance_count_map(
+            session,
+            FinanceObservation.price_semantics,
+            country,
+            brand,
+            jato_model,
+            price_semantics,
+            finance_type,
+            has_monthly_payment,
+            has_subsidy,
+            has_net_price_after_subsidy,
+        ),
+        "financeTypeCounts": _finance_count_map(
+            session,
+            FinanceObservation.finance_type,
+            country,
+            brand,
+            jato_model,
+            price_semantics,
+            finance_type,
+            has_monthly_payment,
+            has_subsidy,
+            has_net_price_after_subsidy,
+        ),
+        "monthlyPaymentCount": int(monthly_count or 0),
+        "monthlyPaymentEurMin": (
+            float(monthly_min) if monthly_min is not None else None
+        ),
+        "monthlyPaymentEurMax": (
+            float(monthly_max) if monthly_max is not None else None
+        ),
+        "netPriceAfterSubsidyCount": int(net_count or 0),
+        "netPriceAfterSubsidyEurMin": (
+            float(net_min) if net_min is not None else None
+        ),
+        "netPriceAfterSubsidyEurMax": (
+            float(net_max) if net_max is not None else None
+        ),
+        "subsidyObservationCount": int(subsidy_count or 0),
+    }
 
 
 def count_finance_observations(
