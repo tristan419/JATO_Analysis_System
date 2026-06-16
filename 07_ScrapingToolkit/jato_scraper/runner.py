@@ -48,6 +48,14 @@ FINANCE_CONTEXT_FIELDS = frozenset({
     "net_price_after_subsidy",
     "finance_currency",
 })
+WRITE_ROLE_LEVELS = {
+    "viewer": 1,
+    "order_filler": 1,
+    "editor": 2,
+    "admin": 3,
+    "developer": 3,
+}
+MIN_WRITE_ROLE_LEVEL = WRITE_ROLE_LEVELS["editor"]
 
 
 class SourceTimeoutError(TimeoutError):
@@ -247,6 +255,53 @@ def _auth_headers(
     return {
         "X-Auth-Token": token,
         "X-User-Name": user,
+    }
+
+
+def _verify_write_auth(
+    api_base: str,
+    auth_token: str | None = None,
+    user_name: str | None = None,
+) -> dict[str, Any]:
+    url = f"{api_base}/auth/me"
+    try:
+        resp = requests.get(
+            url,
+            headers=_auth_headers(auth_token, user_name),
+            timeout=15,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except requests.RequestException as exc:
+        return {
+            "ok": False,
+            "status": "auth_failed",
+            "reason": "auth_preflight_request_failed",
+            "error": str(exc),
+        }
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "status": "auth_failed",
+            "reason": "auth_preflight_invalid_json",
+            "error": str(exc),
+        }
+
+    role = str(payload.get("role") or "").strip().lower()
+    role_level = WRITE_ROLE_LEVELS.get(role, 0)
+    if role_level < MIN_WRITE_ROLE_LEVEL:
+        return {
+            "ok": False,
+            "status": "auth_failed",
+            "reason": "write_role_required",
+            "role": role or "unknown",
+            "requiredRole": "editor",
+        }
+    return {
+        "ok": True,
+        "status": "ok",
+        "role": role,
+        "user": payload.get("username") or payload.get("name"),
     }
 
 
@@ -459,9 +514,25 @@ def run_scrape(
         if source_timeout_seconds is None
         else max(0, int(source_timeout_seconds))
     )
-    resolved_codes = _resolve_source_codes(source_codes)
     run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}_{uuid.uuid4().hex[:6]}"
     summary: dict[str, Any] = {"sources": {}, "ok": True, "run_id": run_id}
+    if not dry_run:
+        auth_status = _verify_write_auth(
+            api_base,
+            auth_token=auth_token,
+            user_name=user_name,
+        )
+        summary["auth"] = auth_status
+        if not auth_status.get("ok"):
+            log.error(
+                "Write auth preflight failed for %s: %s",
+                api_base,
+                auth_status,
+            )
+            summary["ok"] = False
+            return summary
+
+    resolved_codes = _resolve_source_codes(source_codes)
     for code in resolved_codes:
         log.info("── Scraping %s ──", code)
         source_result: dict[str, Any] = {"status": "error"}
