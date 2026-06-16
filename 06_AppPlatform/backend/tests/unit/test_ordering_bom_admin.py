@@ -3,7 +3,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.db.models import CountryPaymentTermMaster, CountrySkuFobResolved
+import pytest
+
+from app.db.models import (
+    BrandColourSurchargeRule,
+    CountryPaymentTermMaster,
+    CountrySkuFobResolved,
+)
 from app.infra import order_genius_repository as repo
 from app.services.ordering_normalization import normalize_brand, normalize_brand_text
 
@@ -14,6 +20,9 @@ class _ScalarResult:
 
     def all(self) -> list[object]:
         return self._values
+
+    def first(self) -> object | None:
+        return self._values[0] if self._values else None
 
 
 class _ExecuteResult:
@@ -86,6 +95,40 @@ def test_list_ordering_country_options_includes_fob_only_country(monkeypatch) ->
             "lcDays": None,
         },
     ]
+
+
+def test_upsert_colour_surcharge_creates_normalized_special_rule() -> None:
+    fake_session = _FakeSession()
+
+    rule = repo.upsert_colour_surcharge(fake_session, "JEACOO", "Special", 350)
+
+    assert fake_session.added == [rule]
+    assert rule.brand == "JAECOO"
+    assert rule.colour_type == "special"
+    assert rule.surcharge_eur == 350
+    assert rule.is_active is True
+
+
+def test_upsert_colour_surcharge_updates_existing_rule() -> None:
+    existing = BrandColourSurchargeRule(
+        colour_surcharge_rule_id=uuid4(),
+        brand="JAECOO",
+        colour_type="dual",
+        surcharge_eur=300,
+        is_active=True,
+    )
+    fake_session = _FakeSession([existing])
+
+    rule = repo.upsert_colour_surcharge(fake_session, "JAECOO", "dual", 320)
+
+    assert rule is existing
+    assert fake_session.added == []
+    assert existing.surcharge_eur == 320
+
+
+def test_upsert_colour_surcharge_rejects_unknown_type() -> None:
+    with pytest.raises(ValueError, match="colourType must be dual or special"):
+        repo.upsert_colour_surcharge(_FakeSession(), "OMODA", "single", 0)
 
 
 def test_copy_country_fobs_creates_target_country_rows(monkeypatch) -> None:

@@ -87,6 +87,12 @@ class ColourSurchargeRuleOut(BaseModel):
     is_active: bool
 
 
+class ColourSurchargeUpdate(BaseModel):
+    brand: str = Field(min_length=1)
+    colourType: str = Field(min_length=1)
+    surchargeEur: float = Field(ge=0)
+
+
 # ── Order Genius Matrix ──────────────────────────────────────────────
 
 

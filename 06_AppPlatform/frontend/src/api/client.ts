@@ -3290,6 +3290,12 @@ export const api = {
       "/order-genius/colour-surcharges",
     ),
 
+  updateOrderGeniusColourSurcharge: (body: { brand: string; colourType: string; surchargeEur: number }) =>
+    request<ColourSurchargeRule>("/order-genius/colour-surcharges", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
   getOrderGeniusCountries: () =>
     request<{ items: CountryPaymentTerm[] }>("/order-genius/countries"),
 

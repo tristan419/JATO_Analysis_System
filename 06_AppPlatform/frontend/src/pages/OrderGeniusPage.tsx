@@ -23,6 +23,7 @@ import {
 } from "../components/OrderGeniusGrid";
 import { DeckFloatingDrawer } from "../components/deckControls/DeckFloatingDrawer";
 import type {
+  ColourSurchargeRule,
   CountryPaymentTerm,
   MaterialSkuMatrixRow,
   MaterialUploadPreview,
@@ -39,6 +40,25 @@ const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
+const BOM_ADMIN_SURCHARGE_BRANDS = ["OMODA", "JAECOO"] as const;
+const BOM_ADMIN_SURCHARGE_TYPES = [
+  { value: "dual", label: "Dual" },
+  { value: "special", label: "Special" },
+] as const;
+const DEFAULT_COLOUR_SURCHARGES: Record<string, number> = {
+  "OMODA|dual": 200,
+  "OMODA|special": 200,
+  "JAECOO|dual": 300,
+  "JAECOO|special": 300,
+};
+
+function colourSurchargeKey(brand: string, colourType: string): string {
+  return `${brand.trim().toUpperCase()}|${colourType.trim().toLowerCase()}`;
+}
+
+function formatSurchargeDraft(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
 
 function formatOrderGeniusFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -1800,7 +1820,11 @@ function BomAdminPanel() {
   const [copyOverwrite, setCopyOverwrite] = useState(false);
   const [copyingCountry, setCopyingCountry] = useState(false);
   const [copyCountryStatus, setCopyCountryStatus] = useState("");
-  const [showCopyFob, setShowCopyFob] = useState(false);
+  const [showAdminTools, setShowAdminTools] = useState(false);
+  const [colourSurchargeRules, setColourSurchargeRules] = useState<ColourSurchargeRule[]>([]);
+  const [colourSurchargeDrafts, setColourSurchargeDrafts] = useState<Record<string, string>>({});
+  const [colourSurchargeStatus, setColourSurchargeStatus] = useState("");
+  const [savingColourSurcharges, setSavingColourSurcharges] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [dragSku, setDragSku] = useState<string | null>(null);
   const [dragOverTier, setDragOverTier] = useState<string | null>(null);
@@ -1862,6 +1886,37 @@ function BomAdminPanel() {
     return Array.from(codes).sort();
   }, [accountCountryOptions, countries]);
 
+  const getColourSurchargeAmount = (brand: string, colourType: string): number => {
+    const key = colourSurchargeKey(brand, colourType);
+    const rule = colourSurchargeRules.find(
+      (item) => colourSurchargeKey(item.brand, item.colourType) === key,
+    );
+    return rule ? Number(rule.surchargeEur) : DEFAULT_COLOUR_SURCHARGES[key] ?? 0;
+  };
+
+  const loadColourSurcharges = useCallback(async () => {
+    try {
+      const res = await api.getOrderGeniusColourSurcharges();
+      const rules = res.items || [];
+      setColourSurchargeRules(rules);
+      const nextDrafts: Record<string, string> = {};
+      for (const brand of BOM_ADMIN_SURCHARGE_BRANDS) {
+        for (const type of BOM_ADMIN_SURCHARGE_TYPES) {
+          const key = colourSurchargeKey(brand, type.value);
+          const rule = rules.find(
+            (item) => colourSurchargeKey(item.brand, item.colourType) === key,
+          );
+          nextDrafts[key] = formatSurchargeDraft(
+            rule ? Number(rule.surchargeEur) : DEFAULT_COLOUR_SURCHARGES[key] ?? 0,
+          );
+        }
+      }
+      setColourSurchargeDrafts(nextDrafts);
+    } catch (e) {
+      setColourSurchargeStatus(getErrorMessage(e));
+    }
+  }, []);
+
   const load = useCallback(async (s?: string) => {
     if (loadRef.current) return;  // skip if already loading
     loadRef.current = true;
@@ -1894,6 +1949,7 @@ function BomAdminPanel() {
   }, [load]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { void loadColourSurcharges(); }, [loadColourSurcharges]);
 
   // Clear pending deletes after 3s timeout
   useEffect(() => {
@@ -2000,6 +2056,36 @@ function BomAdminPanel() {
     }
   };
 
+  const handleSaveColourSurcharges = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const updates: Array<{ brand: string; colourType: string; surchargeEur: number }> = [];
+    for (const brand of BOM_ADMIN_SURCHARGE_BRANDS) {
+      for (const type of BOM_ADMIN_SURCHARGE_TYPES) {
+        const key = colourSurchargeKey(brand, type.value);
+        const raw = (colourSurchargeDrafts[key] ?? "").trim();
+        const surchargeEur = Number(raw);
+        if (!raw || !Number.isFinite(surchargeEur) || surchargeEur < 0) {
+          setColourSurchargeStatus(`${brand} ${type.label} needs a non-negative number.`);
+          return;
+        }
+        updates.push({ brand, colourType: type.value, surchargeEur });
+      }
+    }
+    try {
+      setSavingColourSurcharges(true);
+      setColourSurchargeStatus("");
+      for (const update of updates) {
+        await api.updateOrderGeniusColourSurcharge(update);
+      }
+      await loadColourSurcharges();
+      setColourSurchargeStatus("Saved colour surcharge rules.");
+    } catch (e) {
+      setColourSurchargeStatus(getErrorMessage(e));
+    } finally {
+      setSavingColourSurcharges(false);
+    }
+  };
+
   const handleSkuMetadataSubmit = async (
     event: FormEvent<HTMLFormElement>,
     allSkus: any[],
@@ -2047,6 +2133,12 @@ function BomAdminPanel() {
     const displayHex = (!isDual || hasCustomDual) ? hex1 : undefined;
     const isDragging = dragSku === s.materialCode;
     const brand = s.brand || '';
+    const colourType = String(s.colourType || s.colourTier || "single").toLowerCase();
+    const surchargeLabel = colourType === "dual"
+      ? `双色 +${formatSurchargeDraft(getColourSurchargeAmount(brand, "dual"))}€`
+      : colourType === "special"
+        ? `特殊色 +${formatSurchargeDraft(getColourSurchargeAmount(brand, "special"))}€`
+        : "单色";
 
     const openColourPicker = (defaultHex: string, callback: (val: string) => void) => {
       const inp = document.createElement('input');
@@ -2068,7 +2160,7 @@ function BomAdminPanel() {
           setDragSku(s.materialCode);
         } : undefined}
         onDragEnd={editing ? () => { setDragSku(null); setDragOverTier(null); dragMaterialCode.current = null; } : undefined}
-        title={`${s.colour}${s.colourCode ? ` (${s.colourCode})` : ''}${isDual ? ' · 双色' : ''} · Tier: ${s.colourTier || 'single'} — Drag to reclassify, Click to edit colour`}
+        title={`${s.colour}${s.colourCode ? ` (${s.colourCode})` : ''} · ${surchargeLabel} · Tier: ${s.colourTier || 'single'} — Drag to reclassify, Click to edit colour`}
         style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 10, color: isHist ? '#9ca3af' : '#475569', cursor: isDragging ? 'grabbing' : 'grab', opacity: isDragging ? 0.4 : 1 }}
         onClick={(e) => {
           if (dragSku) return;
@@ -2114,7 +2206,7 @@ function BomAdminPanel() {
             {s.colourCode || s.colour}
           </span>
         ) : (
-          <span title={`${s.colour} · ${s.colourType === 'dual' ? '双色 +' + (brand === 'JAECOO' ? '300' : '200') + '€' : s.colourType === 'special' ? '特殊色 +' + (brand === 'JAECOO' ? '300' : '200') + '€' : '单色'} · Tier: ${s.colourTier || 'single'}`}
+          <span title={`${s.colour} · ${surchargeLabel} · Tier: ${s.colourTier || 'single'}`}
             style={{ fontWeight: 500, whiteSpace: "nowrap", fontSize: 9, color: s.colourTier === 'special' ? '#d97706' : s.colourTier === 'dual' ? '#2563eb' : '#16a34a' }}>
             {s.colourCode || s.colour}
           </span>
@@ -2217,6 +2309,18 @@ function BomAdminPanel() {
     borderBottom: "2px solid #0f172a",
     textShadow: "0 1px 0 rgba(0,0,0,0.35)",
   } as const;
+  const adminToolCardHeight = showAdminTools ? 188 : 50;
+  const adminToolFaceStyle = {
+    position: "absolute",
+    inset: 0,
+    backfaceVisibility: "hidden",
+    background: "#ffffff",
+    border: "1px solid #dbe3ef",
+    borderRadius: 6,
+    boxShadow: "0 8px 20px rgba(15,23,42,0.08)",
+    padding: 8,
+    overflow: "hidden",
+  } as const;
 
   return (
     <div style={{ padding: 20 }}>
@@ -2224,83 +2328,142 @@ function BomAdminPanel() {
         <h3 style={{ margin: 0 }}>BOM / Material Master</h3>
         <span style={{ fontSize: 12, color: "#64748b" }}>{skus.length} SKUs · {modelGroups.size} models · {sortedCountries.length} countries</span>
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
-        <input ref={searchInputRef} type="text" placeholder="Search model / material / country (e.g. JAECOO7, T716, SE) — auto 1.2s" value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          style={{ minWidth: 340 }} />
-        <button className="btn btn-sm btn-ghost" onClick={() => { setSearchText(''); load(); }}>Clear</button>
-        {copyCountryStatus && !showCopyFob ? (
-          <span style={{ fontSize: 11, color: copyCountryStatus.startsWith("Copied") ? "#0f766e" : "#b45309" }}>
-            {copyCountryStatus}
-          </span>
-        ) : null}
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-          <button
-            className="btn btn-sm btn-ghost"
-            onClick={() => setShowCopyFob(prev => !prev)}
-            style={{ color: showCopyFob ? "#2563eb" : undefined }}
-          >
-            {showCopyFob ? "Hide Copy FOB" : "Copy Country FOB"}
-          </button>
-          <button className="btn btn-sm btn-ghost" onClick={() => { setShowAddMaterial(!showAddMaterial); setAddMaterialNotice(""); }}>
-            + Material
-          </button>
+      <div style={{ display: "flex", gap: 10, marginBottom: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input ref={searchInputRef} type="text" placeholder="Search model / material / country (e.g. JAECOO7, T716, SE) — auto 1.2s" value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            style={{ minWidth: 340 }} />
+          <button className="btn btn-sm btn-ghost" onClick={() => { setSearchText(''); load(); }}>Clear</button>
+          {copyCountryStatus && !showAdminTools ? (
+            <span style={{ fontSize: 11, color: copyCountryStatus.startsWith("Copied") ? "#0f766e" : "#b45309" }}>
+              {copyCountryStatus}
+            </span>
+          ) : null}
+        </div>
+        <div style={{ marginLeft: "auto", width: showAdminTools ? 760 : 360, maxWidth: "100%", height: adminToolCardHeight, perspective: "1200px", transition: "width 180ms ease, height 180ms ease" }}>
+          <div style={{ position: "relative", width: "100%", height: "100%", transformStyle: "preserve-3d", transition: "transform 420ms ease", transform: showAdminTools ? "rotateY(180deg)" : "rotateY(0deg)" }}>
+            <div style={{ ...adminToolFaceStyle, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 900, letterSpacing: 0.6, color: "#334155", textTransform: "uppercase" }}>BOM Admin Tools</div>
+                <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Copy FOB · Colour surcharge</div>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <button className="btn btn-sm btn-ghost" onClick={() => setShowAdminTools(true)}>
+                  Edit Tools
+                </button>
+                <button className="btn btn-sm btn-ghost" onClick={() => { setShowAddMaterial(!showAddMaterial); setAddMaterialNotice(""); }}>
+                  + Material
+                </button>
+              </div>
+            </div>
+            <div style={{ ...adminToolFaceStyle, transform: "rotateY(180deg)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 900, letterSpacing: 0.6, color: "#334155", textTransform: "uppercase" }}>BOM Admin Tools</div>
+                <button className="btn btn-sm btn-ghost" onClick={() => setShowAdminTools(false)}>Done</button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) minmax(360px, 1.15fr)", gap: 10 }}>
+                <form
+                  onSubmit={handleCopyCountryFobs}
+                  style={{ padding: 8, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 4 }}
+                >
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "#334155", marginBottom: 8 }}>Copy Country FOB</div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <select
+                      value={copySourceCountry}
+                      onChange={(e) => setCopySourceCountry(e.target.value)}
+                      style={{ fontSize: 11, width: 74 }}
+                    >
+                      {copySourceCountry && !sortedCountries.includes(copySourceCountry) ? (
+                        <option value={copySourceCountry}>{copySourceCountry}</option>
+                      ) : null}
+                      {sortedCountries.map((country) => (
+                        <option key={country} value={country}>{country}</option>
+                      ))}
+                    </select>
+                    <span style={{ fontSize: 12, color: "#64748b" }}>to</span>
+                    <input
+                      type="text"
+                      value={copyTargetCountry}
+                      onChange={(e) => setCopyTargetCountry(e.target.value.toUpperCase().slice(0, 2))}
+                      list="bom-copy-target-countries"
+                      maxLength={2}
+                      style={{ fontSize: 11, width: 56, textTransform: "uppercase" }}
+                    />
+                    <datalist id="bom-copy-target-countries">
+                      {copyTargetOptions.map((country) => (
+                        <option key={country} value={country} />
+                      ))}
+                    </datalist>
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "#475569" }}>
+                      <input
+                        type="checkbox"
+                        checked={copyOverwrite}
+                        onChange={(e) => setCopyOverwrite(e.target.checked)}
+                      />
+                      overwrite
+                    </label>
+                    <button className="btn btn-sm btn-primary" type="submit" disabled={copyingCountry || sortedCountries.length === 0}>
+                      {copyingCountry ? "Copying..." : "Copy"}
+                    </button>
+                  </div>
+                  {copyCountryStatus ? (
+                    <div style={{ marginTop: 7, fontSize: 11, color: copyCountryStatus.startsWith("Copied") ? "#0f766e" : "#b45309" }}>
+                      {copyCountryStatus}
+                    </div>
+                  ) : null}
+                </form>
+                <form
+                  onSubmit={handleSaveColourSurcharges}
+                  style={{ padding: 8, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 4 }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>Colour Surcharges</span>
+                    <button className="btn btn-sm btn-primary" type="submit" disabled={savingColourSurcharges}>
+                      {savingColourSurcharges ? "Saving..." : "Save"}
+                    </button>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "72px repeat(2, 1fr)", gap: 6, alignItems: "center" }}>
+                    <span />
+                    {BOM_ADMIN_SURCHARGE_TYPES.map((type) => (
+                      <span key={type.value} style={{ fontSize: 10, fontWeight: 800, color: "#64748b", textTransform: "uppercase" }}>
+                        {type.label}
+                      </span>
+                    ))}
+                    {BOM_ADMIN_SURCHARGE_BRANDS.map((brand) => (
+                      <Fragment key={brand}>
+                        <span style={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>{brand}</span>
+                        {BOM_ADMIN_SURCHARGE_TYPES.map((type) => {
+                          const key = colourSurchargeKey(brand, type.value);
+                          return (
+                            <input
+                              key={key}
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={colourSurchargeDrafts[key] ?? ""}
+                              onChange={(e) => setColourSurchargeDrafts((prev) => ({ ...prev, [key]: e.target.value }))}
+                              style={{ width: "100%", fontSize: 11 }}
+                            />
+                          );
+                        })}
+                      </Fragment>
+                    ))}
+                  </div>
+                  {colourSurchargeStatus ? (
+                    <div style={{ marginTop: 7, fontSize: 11, color: colourSurchargeStatus.startsWith("Saved") ? "#0f766e" : "#b45309" }}>
+                      {colourSurchargeStatus}
+                    </div>
+                  ) : null}
+                </form>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       {bomAdminError ? (
         <div style={{ marginBottom: 10, padding: "8px 10px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 4, color: "#991b1b", fontSize: 12 }}>
           BOM Admin failed to load: {bomAdminError}
         </div>
-      ) : null}
-      {showCopyFob ? (
-      <form
-        onSubmit={handleCopyCountryFobs}
-        style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10, padding: "8px 10px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 4 }}
-      >
-        <span style={{ fontSize: 12, fontWeight: 700, color: "#334155" }}>Copy FOB</span>
-        <select
-          value={copySourceCountry}
-          onChange={(e) => setCopySourceCountry(e.target.value)}
-          style={{ fontSize: 11, width: 74 }}
-        >
-          {copySourceCountry && !sortedCountries.includes(copySourceCountry) ? (
-            <option value={copySourceCountry}>{copySourceCountry}</option>
-          ) : null}
-          {sortedCountries.map((country) => (
-            <option key={country} value={country}>{country}</option>
-          ))}
-        </select>
-        <span style={{ fontSize: 12, color: "#64748b" }}>to</span>
-        <input
-          type="text"
-          value={copyTargetCountry}
-          onChange={(e) => setCopyTargetCountry(e.target.value.toUpperCase().slice(0, 2))}
-          list="bom-copy-target-countries"
-          maxLength={2}
-          style={{ fontSize: 11, width: 56, textTransform: "uppercase" }}
-        />
-        <datalist id="bom-copy-target-countries">
-          {copyTargetOptions.map((country) => (
-            <option key={country} value={country} />
-          ))}
-        </datalist>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "#475569" }}>
-          <input
-            type="checkbox"
-            checked={copyOverwrite}
-            onChange={(e) => setCopyOverwrite(e.target.checked)}
-          />
-          overwrite
-        </label>
-        <button className="btn btn-sm btn-primary" type="submit" disabled={copyingCountry || sortedCountries.length === 0}>
-          {copyingCountry ? "Copying..." : "Copy"}
-        </button>
-        {copyCountryStatus ? (
-          <span style={{ fontSize: 11, color: copyCountryStatus.startsWith("Copied") ? "#0f766e" : "#b45309" }}>
-            {copyCountryStatus}
-          </span>
-        ) : null}
-      </form>
       ) : null}
       {showAddMaterial && (
         <div style={{ display: "flex", gap: 6, marginBottom: 8, padding: 6, background: '#f8fafc', borderRadius: 4, flexWrap: "wrap", alignItems: "center" }}>

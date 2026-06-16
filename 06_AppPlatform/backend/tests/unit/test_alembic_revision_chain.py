@@ -61,4 +61,4 @@ def test_alembic_revision_chain_has_single_head() -> None:
             _revision_values(_literal_assignment(module, "down_revision"))
         )
 
-    assert sorted(revisions - parent_revisions) == ["20260612_0033"]
+    assert sorted(revisions - parent_revisions) == ["20260616_0036"]
