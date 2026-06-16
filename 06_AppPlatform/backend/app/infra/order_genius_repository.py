@@ -24,6 +24,38 @@ from app.db.models import (
     PaymentTermPriceRule,
     QuantityCellHistory,
 )
+from app.services.ordering_normalization import normalize_brand, normalize_brand_text
+
+
+COUNTRY_NAMES_BY_CODE = {
+    "AT": "Austria",
+    "BE": "Belgium",
+    "BG": "Bulgaria",
+    "BW": "Botswana",
+    "CL": "Chile",
+    "CZ": "Czech Republic",
+    "DK": "Denmark",
+    "DM": "Dominican Republic",
+    "FI": "Finland",
+    "GR": "Greece",
+    "GV": "Cape Verde",
+    "HR": "Croatia",
+    "HU": "Hungary",
+    "KX": "Kuwait",
+    "LV": "Latvia",
+    "NL": "Netherlands",
+    "PL": "Poland",
+    "RO": "Romania",
+    "SE": "Sweden",
+    "SK": "Slovakia",
+    "ZF": "South Africa",
+    "ZU": "Zimbabwe",
+}
+
+
+def _country_name_for_code(country_code: str) -> str:
+    code = country_code.upper()
+    return COUNTRY_NAMES_BY_CODE.get(code, code)
 
 
 # ── MaterialBaselineVersion ────────────────────────────────────────────
@@ -265,14 +297,23 @@ def update_sku_fob_for_country(
         existing.final_fob_eur = final_fob_eur
         existing.updated_at_utc = datetime.now(timezone.utc)
         return existing
-    # Create new FOB record — use first available baseline version
-    bv = session.execute(
-        select(MaterialBaselineVersion.baseline_version_id).order_by(MaterialBaselineVersion.created_at_utc.desc()).limit(1)
-    ).scalar()
+    if final_fob_eur is None:
+        return None
+
+    baseline = get_latest_baseline(session)
+    if baseline is None:
+        baseline = create_baseline_version(
+            session,
+            source_file_name="manual_admin",
+            source_file_hash=None,
+            baseline_name="Manual Admin Baseline",
+            published_by="system",
+        )
+        session.flush()
     fob = CountrySkuFobResolved(
         country_sku_fob_id=uuid4(),
-        baseline_version_id=bv or UUID("00000000-0000-0000-0000-000000000000"),
-        country_code=country_code,
+        baseline_version_id=baseline.baseline_version_id,
+        country_code=country_code.upper(),
         material_code=material_code,
         payment_term_code=payment_term_code or "TT",
         final_fob_eur=final_fob_eur,
@@ -283,17 +324,120 @@ def update_sku_fob_for_country(
     return fob
 
 
+def copy_country_fobs(
+    session: Session,
+    source_country_code: str,
+    target_country_code: str,
+    overwrite: bool = False,
+    changed_by: str | None = None,
+) -> dict:
+    """Copy active FOB rows from one country to another for BOM Admin."""
+    source_code = source_country_code.strip().upper()
+    target_code = target_country_code.strip().upper()
+    if not source_code or not target_code:
+        raise ValueError("sourceCountryCode and targetCountryCode are required")
+    if source_code == target_code:
+        raise ValueError("sourceCountryCode and targetCountryCode must be different")
+
+    source_rows = list_fob_by_country(session, source_code)
+    target_term = get_country_payment_term(session, target_code)
+
+    copied = 0
+    updated = 0
+    skipped = 0
+    actor = changed_by or "copy_country_fobs"
+
+    for source_row in source_rows:
+        target_payment_term_code = (
+            target_term.payment_term_code if target_term else source_row.payment_term_code
+        )
+        existing = get_fob_for_country_sku(
+            session,
+            target_code,
+            source_row.material_code,
+        )
+        if existing and not overwrite:
+            skipped += 1
+            continue
+        if existing:
+            if (
+                existing.payment_term_code == target_payment_term_code
+                and existing.uploaded_fob_eur == source_row.uploaded_fob_eur
+                and existing.final_fob_eur == source_row.final_fob_eur
+                and existing.colour_surcharge_eur == source_row.colour_surcharge_eur
+            ):
+                skipped += 1
+                continue
+            session.add(
+                FobResolvedHistory(
+                    country_sku_fob_id=existing.country_sku_fob_id,
+                    baseline_version_id=source_row.baseline_version_id,
+                    country_code=target_code,
+                    material_code=source_row.material_code,
+                    payment_term_code=existing.payment_term_code,
+                    old_uploaded_fob_eur=existing.uploaded_fob_eur,
+                    new_uploaded_fob_eur=source_row.uploaded_fob_eur,
+                    old_final_fob_eur=existing.final_fob_eur,
+                    new_final_fob_eur=source_row.final_fob_eur,
+                    changed_by=actor,
+                )
+            )
+            existing.baseline_version_id = source_row.baseline_version_id
+            existing.payment_term_code = target_payment_term_code
+            existing.base_fob_eur = source_row.base_fob_eur
+            existing.payment_term_adjustment_eur = source_row.payment_term_adjustment_eur
+            existing.colour_surcharge_eur = source_row.colour_surcharge_eur
+            existing.uploaded_fob_eur = source_row.uploaded_fob_eur
+            existing.final_fob_eur = source_row.final_fob_eur
+            existing.fob_source_country_code = source_code
+            existing.fob_source_mode = "copied_from_country"
+            existing.is_active = True
+            existing.updated_at_utc = datetime.now(timezone.utc)
+            updated += 1
+            continue
+
+        session.add(
+            CountrySkuFobResolved(
+                country_sku_fob_id=uuid4(),
+                baseline_version_id=source_row.baseline_version_id,
+                country_code=target_code,
+                material_code=source_row.material_code,
+                payment_term_code=target_payment_term_code,
+                base_fob_eur=source_row.base_fob_eur,
+                payment_term_adjustment_eur=source_row.payment_term_adjustment_eur,
+                colour_surcharge_eur=source_row.colour_surcharge_eur,
+                uploaded_fob_eur=source_row.uploaded_fob_eur,
+                final_fob_eur=source_row.final_fob_eur,
+                fob_source_country_code=source_code,
+                fob_source_mode="copied_from_country",
+                is_active=True,
+            )
+        )
+        copied += 1
+
+    return {
+        "sourceCountryCode": source_code,
+        "targetCountryCode": target_code,
+        "totalSourceRows": len(source_rows),
+        "copied": copied,
+        "updated": updated,
+        "skipped": skipped,
+        "overwrite": overwrite,
+    }
+
+
 def list_bom_with_fob(
     session: Session,
     brand: str | None = None,
     search: str | None = None,
     country_code: str | None = None,
     limit: int = 1000,
-) -> list[dict]:
+) -> tuple[list[dict], list[str]]:
     """Return SKUs with their FOB per country, grouped for BOM admin display."""
     skus = list_all_material_skus_for_admin(session, brand=brand, search=search, country_code=country_code, limit=limit)
+    all_countries = [item["countryCode"] for item in list_ordering_country_options(session)]
     if not skus:
-        return []
+        return [], all_countries
 
     material_codes = [s.material_code for s in skus]
     fobs = session.execute(
@@ -315,14 +459,6 @@ def list_bom_with_fob(
             "paymentTermCode": f.payment_term_code,
         }
 
-    # Get all unique country codes: FOB data + configured payment terms (for new countries like NL)
-    pt_countries = session.execute(
-        select(CountryPaymentTermMaster.country_code).where(CountryPaymentTermMaster.is_active == True)
-    ).scalars().all()
-    all_countries = sorted(set(
-        [f.country_code for f in fobs] + list(pt_countries)
-    ))
-
     # Resolve source file names from baseline versions
     baseline_ids = {s.baseline_version_id for s in skus if s.baseline_version_id}
     baseline_names: dict[UUID, str] = {}
@@ -337,8 +473,8 @@ def list_bom_with_fob(
     return [
         {
             "materialCode": s.material_code,
-            "brand": s.brand,
-            "modelName": s.model_name,
+            "brand": normalize_brand(s.brand),
+            "modelName": normalize_brand_text(s.model_name),
             "version": s.version,
             "colour": s.exterior_color_name or "",
             "colourCode": s.exterior_color_code or "",
@@ -456,6 +592,35 @@ def update_sku_material_code(
     )
     session.execute(fob_stmt)
     return result.rowcount > 0
+
+
+def update_sku_metadata(
+    session: Session,
+    material_code: str,
+    *,
+    brand: str | None = None,
+    model_name: str | None = None,
+    version: str | None = None,
+    powertrain: str | None = None,
+    expected_version: int | None = None,
+) -> MaterialSkuMaster | None:
+    """Update product metadata for the SKU row shown in BOM Admin."""
+    sku = get_sku_by_material_code_any_status(session, material_code)
+    if not sku:
+        return None
+    if expected_version is not None and sku.row_version != expected_version:
+        return None
+    if brand is not None:
+        sku.brand = normalize_brand(brand)
+    if model_name is not None:
+        sku.model_name = normalize_brand_text(model_name).strip()
+    if version is not None:
+        sku.version = version.strip()
+    if powertrain is not None:
+        sku.powertrain = powertrain.strip() or None
+    sku.row_version += 1
+    sku.updated_at_utc = datetime.now(timezone.utc)
+    return sku
 
 
 def update_sku_colour_tier(
@@ -590,6 +755,44 @@ def list_distinct_material_codes(
 
 
 # ── Payment Terms ──────────────────────────────────────────────────────
+
+
+def list_ordering_country_options(session: Session) -> list[dict]:
+    """Return countries available to ordering accounts.
+
+    This includes JATO/payment-term countries plus FOB-only countries such as
+    SK/LV, without pretending every option is a JATO market.
+    """
+    options: dict[str, dict] = {}
+    term_rows = list_country_payment_terms(session)
+    for term in term_rows:
+        code = term.country_code.upper()
+        options[code] = {
+            "countryCode": code,
+            "countryName": term.country_name or _country_name_for_code(code),
+            "paymentTermCode": term.payment_term_code,
+            "paymentMethod": term.payment_method,
+            "lcDays": term.lc_days,
+        }
+
+    fob_country_codes = session.execute(
+        select(CountrySkuFobResolved.country_code)
+        .where(CountrySkuFobResolved.is_active == True)
+        .distinct()
+    ).scalars().all()
+    for raw_code in fob_country_codes:
+        code = str(raw_code or "").upper()
+        if not code or code in options:
+            continue
+        options[code] = {
+            "countryCode": code,
+            "countryName": _country_name_for_code(code),
+            "paymentTermCode": None,
+            "paymentMethod": None,
+            "lcDays": None,
+        }
+
+    return [options[code] for code in sorted(options)]
 
 
 def list_all_payment_terms(

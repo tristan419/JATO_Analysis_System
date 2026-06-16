@@ -99,9 +99,9 @@ export interface ColourSurchargeRule {
 export interface CountryPaymentTerm {
   countryCode: string;
   countryName: string;
-  paymentTermCode: string;
-  paymentMethod: string;
-  lcDays: number;
+  paymentTermCode: string | null;
+  paymentMethod: string | null;
+  lcDays: number | null;
 }
 
 export interface MaterialUploadSession {

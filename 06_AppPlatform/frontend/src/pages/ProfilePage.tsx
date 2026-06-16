@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../contexts/AuthContext";
-import { JATO_COUNTRIES, formatJatoCountryOption } from "../utils/jatoCountries";
+import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
+import { formatJatoCountryOption } from "../utils/jatoCountries";
 
 export function ProfilePage() {
   const { user, updateProfile } = useAuth();
   const navigate = useNavigate();
+  const { countryOptions } = useAccountCountryOptions();
   const isOrderFiller = user?.role === "order_filler";
   const [displayName, setDisplayName] = useState(user?.displayName ?? "");
   const [primaryCountry, setPrimaryCountry] = useState(user?.primaryCountry ?? "");
@@ -24,8 +26,8 @@ export function ProfilePage() {
   }, [user]);
 
   const secondaryOptions = useMemo(
-    () => JATO_COUNTRIES.filter((country) => country.countryCode !== primaryCountry),
-    [primaryCountry],
+    () => countryOptions.filter((country) => country.countryCode !== primaryCountry),
+    [countryOptions, primaryCountry],
   );
 
   function toggleSecondary(countryCode: string): void {
@@ -126,7 +128,7 @@ export function ProfilePage() {
                 style={{ minWidth: 260 }}
               >
                 <option value="">Select country...</option>
-                {JATO_COUNTRIES.map((country) => (
+                {countryOptions.map((country) => (
                   <option key={country.countryCode} value={country.countryCode}>
                     {formatJatoCountryOption(country)}
                   </option>

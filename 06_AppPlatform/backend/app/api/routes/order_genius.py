@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.order_genius_schemas import (
@@ -37,6 +38,7 @@ from app.services.order_genius_service import (
     update_remark,
 )
 from app.services.order_quantity_parser import parse_order_quantity_xlsx
+from app.services.ordering_normalization import normalize_brand, normalize_brand_text
 
 router = APIRouter(prefix="/order-genius", tags=["order_genius"])
 
@@ -257,7 +259,7 @@ def list_countries_with_payment_terms(
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("viewer")),
 ) -> dict:
-    countries = repo.list_country_payment_terms(session)
+    countries = repo.list_ordering_country_options(session)
 
     # order_filler users can only see their assigned countries
     if user.role == "order_filler":
@@ -267,20 +269,18 @@ def list_countries_with_payment_terms(
             allowed = {db_user.primary_country_code} if db_user.primary_country_code else set()
             for sc in (db_user.secondary_country_codes or []):
                 allowed.add(sc)
-            countries = [c for c in countries if c.country_code in allowed]
+            countries = [c for c in countries if c["countryCode"] in allowed]
 
-    return {
-        "items": [
-            {
-                "countryCode": c.country_code,
-                "countryName": c.country_name,
-                "paymentTermCode": c.payment_term_code,
-                "paymentMethod": c.payment_method,
-                "lcDays": c.lc_days,
-            }
-            for c in countries
-        ],
-    }
+    return {"items": countries}
+
+
+@router.get("/account-country-options")
+def list_account_country_options(
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    """Return all countries assignable to ordering accounts."""
+    return {"items": repo.list_ordering_country_options(session)}
 
 
 # ── Order Genius Matrix ───────────────────────────────────────────────
@@ -597,7 +597,10 @@ def patch_sku_fob(
     fob_raw = body.get("finalFobEur")
     if not country:
         raise HTTPException(status_code=400, detail="countryCode is required")
-    fob_val = fob_raw if fob_raw is None else float(fob_raw)
+    try:
+        fob_val = None if fob_raw in (None, "") else float(fob_raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="finalFobEur must be a number") from exc
     pt_code = body.get("paymentTermCode")
     result = repo.update_sku_fob_for_country(
         session, material_code, country, fob_val, pt_code,
@@ -613,6 +616,27 @@ def patch_sku_fob(
     }
 
 
+@router.post("/countries/copy-fobs")
+def copy_country_fobs(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("admin")),
+) -> dict:
+    """Copy BOM Admin FOB values from one country to another."""
+    try:
+        result = repo.copy_country_fobs(
+            session,
+            source_country_code=body.get("sourceCountryCode", ""),
+            target_country_code=body.get("targetCountryCode", ""),
+            overwrite=_body_bool(body.get("overwrite", False)),
+            changed_by=user.name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    return result
+
+
 @router.post("/material-skus")
 def create_material_sku(
     body: dict,
@@ -620,26 +644,122 @@ def create_material_sku(
     user=Depends(require_min_role("admin")),
 ) -> dict:
     """Create a new material SKU manually (BOM Admin)."""
-    from uuid import uuid4
     from app.db.models import MaterialSkuMaster
+
+    required_fields = {
+        "materialCode": "materialCode",
+        "brand": "brand",
+        "modelName": "modelName",
+        "version": "version",
+        "colour": "colour",
+        "colourCode": "colourCode",
+    }
+    missing = [
+        label
+        for key, label in required_fields.items()
+        if not str(body.get(key, "")).strip()
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing required fields: {', '.join(missing)}",
+        )
+
+    material_code = str(body["materialCode"]).strip().upper()
+    if repo.get_sku_by_material_code_any_status(session, material_code):
+        raise HTTPException(status_code=409, detail="Material code already exists")
+
+    baseline = repo.get_latest_baseline(session)
+    if baseline is None:
+        baseline = repo.create_baseline_version(
+            session,
+            source_file_name="manual_admin",
+            source_file_hash=None,
+            baseline_name="Manual Admin Baseline",
+            published_by=user.name,
+        )
+        session.flush()
+
     sku = MaterialSkuMaster(
-        material_sku_id=uuid4(),
-        material_code=body["materialCode"],
-        brand=body.get("brand", ""),
-        model_name=body.get("modelName", ""),
-        version=body.get("version", ""),
-        exterior_color_name=body.get("colour", ""),
-        exterior_color_code=body.get("colourCode", ""),
+        material_sku_id=uuid_module.uuid4(),
+        material_code=material_code,
+        brand=normalize_brand(body["brand"]),
+        model_name=normalize_brand_text(body["modelName"]),
+        version=str(body["version"]).strip(),
+        exterior_color_name=str(body["colour"]).strip(),
+        exterior_color_code=str(body["colourCode"]).strip(),
         exterior_color_type=body.get("colourType", "single"),
-        powertrain=body.get("powertrain", "Other"),
+        powertrain=str(body.get("powertrain", "Other")).strip() or "Other",
         lifecycle_status="active",
         is_active=True,
         is_published=False,
-        baseline_version_id=UUID("00000000-0000-0000-0000-000000000000"),
+        baseline_version_id=baseline.baseline_version_id,
     )
     session.add(sku)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="Material code already exists") from exc
     return {"materialCode": sku.material_code, "id": str(sku.material_sku_id)}
+
+
+@router.patch("/material-skus/{material_code}/metadata")
+def patch_sku_metadata(
+    material_code: str,
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    """Update BOM Admin product metadata for an existing material SKU."""
+    existing = repo.get_sku_by_material_code_any_status(session, material_code)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Material code not found")
+
+    row_version_raw = body.get("rowVersion", body.get("row_version"))
+    expected_version = None
+    if row_version_raw not in (None, ""):
+        try:
+            expected_version = int(row_version_raw)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="rowVersion must be an integer") from exc
+        if existing.row_version != expected_version:
+            raise HTTPException(status_code=409, detail="Concurrent update conflict")
+
+    values: dict[str, str] = {}
+    field_map = {
+        "brand": "brand",
+        "modelName": "model_name",
+        "version": "version",
+        "powertrain": "powertrain",
+    }
+    for input_key, repo_key in field_map.items():
+        if input_key not in body:
+            continue
+        value = str(body.get(input_key, "")).strip()
+        if not value and input_key in {"brand", "modelName", "version"}:
+            raise HTTPException(status_code=400, detail=f"{input_key} is required")
+        values[repo_key] = value
+    if not values:
+        raise HTTPException(status_code=400, detail="No metadata fields provided")
+
+    result = repo.update_sku_metadata(
+        session,
+        material_code,
+        expected_version=expected_version,
+        **values,
+    )
+    if result is None:
+        raise HTTPException(status_code=409, detail="Concurrent update conflict")
+    session.commit()
+    return {
+        "materialCode": result.material_code,
+        "brand": result.brand,
+        "modelName": result.model_name,
+        "version": result.version,
+        "powertrain": result.powertrain,
+        "rowVersion": result.row_version,
+    }
 
 
 @router.get("/bom-admin")
@@ -671,8 +791,8 @@ def list_material_skus_admin(
         "items": [
             {
                 "materialCode": r.material_code,
-                "brand": r.brand,
-                "modelName": r.model_name,
+                "brand": normalize_brand(r.brand),
+                "modelName": normalize_brand_text(r.model_name),
                 "version": r.version,
                 "colour": r.exterior_color_name or "",
                 "lifecycleStatus": r.lifecycle_status,

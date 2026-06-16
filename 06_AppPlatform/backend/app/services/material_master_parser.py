@@ -15,6 +15,8 @@ from pathlib import Path
 
 import openpyxl
 
+from app.services.ordering_normalization import normalize_brand, normalize_brand_text
+
 
 DUAL_COLOUR_PATTERNS = [
     r"/",
@@ -529,12 +531,12 @@ def parse_material_master_xlsx(file_path: Path) -> dict:
 
     # Post-processing: detect brand from model name (with typo tolerance)
     for row in all_rows:
-        mn = row["model_name"].upper()
-        sn = row.get("sheet_name", "").upper()
-        if "JAECOO" in mn or "JECOO" in mn or "JAECOO" in sn:
-            row["brand"] = "JAECOO"
-        elif "OMODA" in mn or "OMODA" in sn:
-            row["brand"] = "OMODA"
+        row["model_name"] = normalize_brand_text(row.get("model_name", ""))
+        brand = normalize_brand(
+            f"{row.get('model_name', '')} {row.get('sheet_name', '')}"
+        )
+        if brand in {"JAECOO", "OMODA"}:
+            row["brand"] = brand
         else:
             row["brand"] = ""
 
