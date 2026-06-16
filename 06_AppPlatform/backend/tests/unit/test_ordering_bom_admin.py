@@ -132,6 +132,110 @@ def test_upsert_colour_surcharge_rejects_unknown_type() -> None:
         repo.upsert_colour_surcharge(_FakeSession(), "OMODA", "single", 0)
 
 
+def test_colour_hex_rules_group_by_brand_code_and_normalized_name() -> None:
+    skus = [
+        SimpleNamespace(
+            material_code="A",
+            brand="JEACOO",
+            exterior_color_code="bw",
+            exterior_color_name="Khaki   White",
+            colour_hex="#f0ece0",
+        ),
+        SimpleNamespace(
+            material_code="B",
+            brand="JAECOO",
+            exterior_color_code="BW",
+            exterior_color_name="khaki white",
+            colour_hex="#F0ECE0",
+        ),
+        SimpleNamespace(
+            material_code="C",
+            brand="JAECOO",
+            exterior_color_code="BW",
+            exterior_color_name="Khaki White",
+            colour_hex="#FFFFFF",
+        ),
+    ]
+
+    rules = repo.build_colour_hex_rules_from_skus(skus)
+
+    assert len(rules) == 1
+    rule = rules[0]
+    assert rule["brand"] == "JAECOO"
+    assert rule["colourCode"] == "BW"
+    assert rule["normalizedColourName"] == "khaki white"
+    assert rule["status"] == "conflict"
+    assert rule["hexOptions"] == [
+        {"colourHex": "#F0ECE0", "skuCount": 2},
+        {"colourHex": "#FFFFFF", "skuCount": 1},
+    ]
+
+
+def test_find_reusable_colour_hex_requires_no_conflict() -> None:
+    standard = _FakeSession([
+        SimpleNamespace(
+            material_code="A",
+            brand="JAECOO",
+            exterior_color_code="BW",
+            exterior_color_name="Khaki White",
+            colour_hex="#F0ECE0",
+        )
+    ])
+    conflict = _FakeSession([
+        SimpleNamespace(
+            material_code="A",
+            brand="JAECOO",
+            exterior_color_code="BW",
+            exterior_color_name="Khaki White",
+            colour_hex="#F0ECE0",
+        ),
+        SimpleNamespace(
+            material_code="B",
+            brand="JAECOO",
+            exterior_color_code="BW",
+            exterior_color_name="Khaki White",
+            colour_hex="#FFFFFF",
+        ),
+    ])
+
+    assert repo.find_reusable_colour_hex(
+        standard, "JAECOO", "BW", "khaki white",
+    ) == "#F0ECE0"
+    assert repo.find_reusable_colour_hex(
+        conflict, "JAECOO", "BW", "khaki white",
+    ) is None
+
+
+def test_set_standard_colour_hex_for_rule_updates_matching_skus_only() -> None:
+    matching = SimpleNamespace(
+        material_code="A",
+        brand="JAECOO",
+        exterior_color_code="BW",
+        exterior_color_name="Khaki White",
+        colour_hex="#F0ECE0",
+        updated_at_utc=None,
+    )
+    same_code_other_name = SimpleNamespace(
+        material_code="B",
+        brand="JAECOO",
+        exterior_color_code="BW",
+        exterior_color_name="Carbon Black",
+        colour_hex="#000000",
+        updated_at_utc=None,
+    )
+    fake_session = _FakeSession([matching, same_code_other_name])
+
+    result = repo.set_standard_colour_hex_for_rule(
+        fake_session, "JAECOO", "BW", "khaki white", "#ffffff",
+    )
+
+    assert result["updated"] == 1
+    assert result["materialCodes"] == ["A"]
+    assert matching.colour_hex == "#FFFFFF"
+    assert matching.updated_at_utc is not None
+    assert same_code_other_name.colour_hex == "#000000"
+
+
 def test_copy_country_fobs_creates_target_country_rows(monkeypatch) -> None:
     baseline_id = uuid4()
     source_row = CountrySkuFobResolved(

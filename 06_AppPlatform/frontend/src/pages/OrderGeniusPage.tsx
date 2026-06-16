@@ -24,6 +24,7 @@ import {
 } from "../components/OrderGeniusGrid";
 import { DeckFloatingDrawer } from "../components/deckControls/DeckFloatingDrawer";
 import type {
+  ColourHexRule,
   ColourSurchargeRule,
   CountryPaymentTerm,
   MaterialSkuMatrixRow,
@@ -1980,6 +1981,9 @@ function BomAdminPanel() {
   const [colourSurchargeDrafts, setColourSurchargeDrafts] = useState<Record<string, string>>({});
   const [colourSurchargeStatus, setColourSurchargeStatus] = useState("");
   const [savingColourSurcharges, setSavingColourSurcharges] = useState(false);
+  const [colourHexRules, setColourHexRules] = useState<ColourHexRule[]>([]);
+  const [colourHexRuleStatus, setColourHexRuleStatus] = useState("");
+  const [savingColourHexRuleKey, setSavingColourHexRuleKey] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [dragSku, setDragSku] = useState<string | null>(null);
   const [dragOverTier, setDragOverTier] = useState<string | null>(null);
@@ -2052,6 +2056,11 @@ function BomAdminPanel() {
     return result.errors[0] ?? "";
   }, [newMaterial]);
 
+  const colourHexConflicts = useMemo(
+    () => colourHexRules.filter((rule) => rule.status === "conflict"),
+    [colourHexRules],
+  );
+
   const getColourSurchargeAmount = (brand: string, colourType: string): number => {
     const key = colourSurchargeKey(brand, colourType);
     const rule = colourSurchargeRules.find(
@@ -2080,6 +2089,16 @@ function BomAdminPanel() {
       setColourSurchargeDrafts(nextDrafts);
     } catch (e) {
       setColourSurchargeStatus(getErrorMessage(e));
+    }
+  }, []);
+
+  const loadColourHexRules = useCallback(async () => {
+    try {
+      const res = await api.getOrderGeniusColourHexRules();
+      setColourHexRules(res.items || []);
+      setColourHexRuleStatus("");
+    } catch (e) {
+      setColourHexRuleStatus(getErrorMessage(e));
     }
   }, []);
 
@@ -2116,6 +2135,7 @@ function BomAdminPanel() {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { void loadColourSurcharges(); }, [loadColourSurcharges]);
+  useEffect(() => { void loadColourHexRules(); }, [loadColourHexRules]);
 
   // Clear pending deletes after 3s timeout
   useEffect(() => {
@@ -2167,12 +2187,10 @@ function BomAdminPanel() {
             version: draft.version,
             colour: draft.colour,
             colourCode: draft.colourCode,
+            colourHex: draft.colourHex ?? undefined,
             colourType: "single",
             powertrain: draft.powertrain,
           });
-          if (draft.colourHex) {
-            await api.updateColourHex(draft.materialCode, draft.colourHex);
-          }
           created += 1;
         } catch (e) {
           failures.push(`${draft.materialCode}: ${getErrorMessage(e)}`);
@@ -2273,6 +2291,27 @@ function BomAdminPanel() {
     }
   };
 
+  const handleSetColourHexStandard = async (rule: ColourHexRule, colourHex: string) => {
+    const key = `${rule.brand}|${rule.colourCode}|${rule.normalizedColourName}|${colourHex}`;
+    try {
+      setSavingColourHexRuleKey(key);
+      setColourHexRuleStatus("");
+      const result = await api.setOrderGeniusColourHexRuleStandard({
+        brand: rule.brand,
+        colourCode: rule.colourCode,
+        colourName: rule.colourName,
+        colourHex,
+      });
+      setColourHexRuleStatus(`Set ${rule.colourCode} ${rule.colourName} to ${result.colourHex}; updated ${result.updated} SKUs.`);
+      await loadColourHexRules();
+      scheduleLoad(100);
+    } catch (e) {
+      setColourHexRuleStatus(getErrorMessage(e));
+    } finally {
+      setSavingColourHexRuleKey(null);
+    }
+  };
+
   const handleSkuMetadataSubmit = async (
     event: FormEvent<HTMLFormElement>,
     allSkus: any[],
@@ -2357,13 +2396,13 @@ function BomAdminPanel() {
             openColourPicker(hex1, (val1) => {
               openColourPicker(hex2 || val1, async (val2) => {
                 const combined = `${val1}|${val2}`;
-                try { await api.updateColourHex(s.materialCode, combined); load(); } catch {}
+                try { await api.updateColourHex(s.materialCode, combined); load(); await loadColourHexRules(); } catch {}
               });
             });
           } else {
             // Single colour
             openColourPicker(hex1, async (val) => {
-              try { await api.updateColourHex(s.materialCode, val || null); load(); } catch {}
+              try { await api.updateColourHex(s.materialCode, val || null); load(); await loadColourHexRules(); } catch {}
             });
           }
         }}>
@@ -2496,7 +2535,7 @@ function BomAdminPanel() {
     borderBottom: "2px solid #0f172a",
     textShadow: "0 1px 0 rgba(0,0,0,0.35)",
   } as const;
-  const adminToolCardHeight = showAdminTools ? 188 : 50;
+  const adminToolCardHeight = showAdminTools ? 262 : 50;
   const adminToolFaceStyle = {
     position: "absolute",
     inset: 0,
@@ -2527,12 +2566,12 @@ function BomAdminPanel() {
             </span>
           ) : null}
         </div>
-        <div style={{ marginLeft: "auto", width: showAdminTools ? 760 : 360, maxWidth: "100%", height: adminToolCardHeight, perspective: "1200px", transition: "width 180ms ease, height 180ms ease" }}>
+        <div style={{ marginLeft: "auto", width: showAdminTools ? 980 : 360, maxWidth: "100%", height: adminToolCardHeight, perspective: "1200px", transition: "width 180ms ease, height 180ms ease" }}>
           <div style={{ position: "relative", width: "100%", height: "100%", transformStyle: "preserve-3d", transition: "transform 420ms ease", transform: showAdminTools ? "rotateY(180deg)" : "rotateY(0deg)" }}>
             <div style={{ ...adminToolFaceStyle, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 900, letterSpacing: 0.6, color: "#334155", textTransform: "uppercase" }}>BOM Admin Tools</div>
-                <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Copy FOB · Colour surcharge</div>
+                <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Copy FOB · Colour surcharge · Swatch rules</div>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <button className="btn btn-sm btn-ghost" onClick={() => setShowAdminTools(true)}>
@@ -2548,7 +2587,7 @@ function BomAdminPanel() {
                 <div style={{ fontSize: 11, fontWeight: 900, letterSpacing: 0.6, color: "#334155", textTransform: "uppercase" }}>BOM Admin Tools</div>
                 <button className="btn btn-sm btn-ghost" onClick={() => setShowAdminTools(false)}>Done</button>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) minmax(360px, 1.15fr)", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 0.8fr) minmax(300px, 1fr) minmax(320px, 1.1fr)", gap: 10 }}>
                 <form
                   onSubmit={handleCopyCountryFobs}
                   style={{ padding: 8, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 4 }}
@@ -2642,6 +2681,77 @@ function BomAdminPanel() {
                     </div>
                   ) : null}
                 </form>
+                <div style={{ padding: 8, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 4, minHeight: 150 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>Colour Swatch Rules</span>
+                    <button className="btn btn-sm btn-ghost" type="button" onClick={() => void loadColourHexRules()}>
+                      Refresh
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 10, color: "#64748b", marginBottom: 7 }}>
+                    {colourHexConflicts.length > 0
+                      ? `${colourHexConflicts.length} conflicts need a standard swatch`
+                      : `${colourHexRules.length} collected rules · no conflicts`}
+                  </div>
+                  <div style={{ display: "grid", gap: 6, maxHeight: 142, overflowY: "auto", paddingRight: 2 }}>
+                    {colourHexConflicts.length === 0 ? (
+                      <div style={{ fontSize: 11, color: "#0f766e", padding: "8px 0" }}>Colour rules clean.</div>
+                    ) : (
+                      colourHexConflicts.slice(0, 4).map((rule) => (
+                        <div
+                          key={`${rule.brand}|${rule.colourCode}|${rule.normalizedColourName}`}
+                          style={{ padding: 6, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 4 }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 6, alignItems: "center" }}>
+                            <span style={{ fontSize: 10, fontWeight: 800, color: "#334155", overflow: "hidden", textOverflow: "ellipsis" }}>
+                              {rule.brand} · {rule.colourCode} · {rule.colourName}
+                            </span>
+                            <span style={{ fontSize: 9, color: "#94a3b8", whiteSpace: "nowrap" }}>{rule.skuCount} SKUs</span>
+                          </div>
+                          <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 5 }}>
+                            {rule.hexOptions.map((option) => {
+                              const optionKey = `${rule.brand}|${rule.colourCode}|${rule.normalizedColourName}|${option.colourHex}`;
+                              return (
+                                <button
+                                  key={option.colourHex}
+                                  className="btn btn-sm btn-ghost"
+                                  type="button"
+                                  disabled={savingColourHexRuleKey === optionKey}
+                                  title={`Set ${option.colourHex} as standard for ${rule.brand} ${rule.colourCode} ${rule.colourName}`}
+                                  onClick={() => void handleSetColourHexStandard(rule, option.colourHex)}
+                                  style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 6px", fontSize: 10 }}
+                                >
+                                  <span
+                                    style={{
+                                      width: 14,
+                                      height: 14,
+                                      borderRadius: 3,
+                                      border: "1px solid #cbd5e1",
+                                      background: option.colourHex.includes("|")
+                                        ? `linear-gradient(135deg, ${option.colourHex.split("|")[0]} 50%, ${option.colourHex.split("|")[1]} 50%)`
+                                        : option.colourHex,
+                                    }}
+                                  />
+                                  {option.colourHex} · {option.skuCount}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                    {colourHexConflicts.length > 4 ? (
+                      <div style={{ fontSize: 10, color: "#b45309" }}>
+                        {colourHexConflicts.length - 4} more conflicts. Resolve visible ones, then refresh.
+                      </div>
+                    ) : null}
+                  </div>
+                  {colourHexRuleStatus ? (
+                    <div style={{ marginTop: 7, fontSize: 11, color: colourHexRuleStatus.startsWith("Set") ? "#0f766e" : "#b45309" }}>
+                      {colourHexRuleStatus}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
           </div>
