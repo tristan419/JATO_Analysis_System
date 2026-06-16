@@ -1786,6 +1786,7 @@ function BomAdminPanel() {
   const [skus, setSkus] = useState<any[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [bomAdminError, setBomAdminError] = useState("");
   const [searchText, setSearchText] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [editFob, setEditFob] = useState<{ materialCodes: string[]; countryCode: string; fob: number | null } | null>(null);
@@ -1793,6 +1794,7 @@ function BomAdminPanel() {
   const [showAddMaterial, setShowAddMaterial] = useState(false);
   const [newMaterial, setNewMaterial] = useState({ materialCode: "", brand: "", modelName: "", version: "", colour: "", colourCode: "", powertrain: "ICE" });
   const [addMaterialError, setAddMaterialError] = useState("");
+  const [addMaterialNotice, setAddMaterialNotice] = useState("");
   const [copySourceCountry, setCopySourceCountry] = useState("CZ");
   const [copyTargetCountry, setCopyTargetCountry] = useState("SK");
   const [copyOverwrite, setCopyOverwrite] = useState(false);
@@ -1804,6 +1806,7 @@ function BomAdminPanel() {
   const dragEnterCount = useRef(0);
   const dragMaterialCode = useRef<string | null>(null); // bypass dataTransfer quirks
   const [addColourKey, setAddColourKey] = useState<string | null>(null); // "{bomTemplate}|{tierName}" to show inline form
+  const materialCodeInputRef = useRef<HTMLInputElement>(null);
   const addColourCodeRef = useRef<HTMLInputElement>(null);
   const addColourNameRef = useRef<HTMLInputElement>(null);
   const [editingBoms, setEditingBoms] = useState<Set<string>>(new Set());
@@ -1862,6 +1865,7 @@ function BomAdminPanel() {
     if (loadRef.current) return;  // skip if already loading
     loadRef.current = true;
     setLoading(true);
+    setBomAdminError("");
     try {
       const isCountry = s && /^[A-Z]{2}$/.test(s);
       const params: any = {};
@@ -1872,7 +1876,13 @@ function BomAdminPanel() {
       const res = await api.getBomAdmin(Object.keys(params).length > 0 ? params : undefined);
       setSkus(res.items || []);
       setCountries(res.countries || []);
-    } catch (e) { console.error('[BOM Admin]', e); }
+    } catch (e) {
+      const message = getErrorMessage(e);
+      setBomAdminError(message);
+      setSkus([]);
+      setCountries([]);
+      console.error('[BOM Admin]', e);
+    }
     finally { loadRef.current = false; setLoading(false); }
   }, []);
 
@@ -1932,11 +1942,32 @@ function BomAdminPanel() {
       setAddMaterialError("");
       await api.createMaterialSku({...newMaterial, colourType: 'single'});
       setShowAddMaterial(false);
+      setAddMaterialNotice("");
       setNewMaterial({materialCode:'',brand:'',modelName:'',version:'',colour:'',colourCode:'',powertrain:'ICE'});
       load();
     } catch (e) {
       setAddMaterialError(getErrorMessage(e));
     }
+  };
+
+  const handleCopyMaterialFromSku = (sku: any) => {
+    const materialCode = String(sku.materialCode || "");
+    setNewMaterial({
+      materialCode,
+      brand: String(sku.brand || ""),
+      modelName: String(sku.modelName || ""),
+      version: String(sku.version || ""),
+      colour: String(sku.colour || ""),
+      colourCode: String(sku.colourCode || ""),
+      powertrain: String(sku.powertrain || "ICE"),
+    });
+    setAddMaterialError("");
+    setAddMaterialNotice(`Copied from ${materialCode}. Change the material code before Add.`);
+    setShowAddMaterial(true);
+    window.setTimeout(() => {
+      materialCodeInputRef.current?.focus();
+      materialCodeInputRef.current?.select();
+    }, 50);
   };
 
   const handleCopyCountryFobs = async (event: FormEvent<HTMLFormElement>) => {
@@ -2088,7 +2119,19 @@ function BomAdminPanel() {
           </span>
         )}
         {editing ? (
-          pendingDeletes.has(s.materialCode) ? (
+          <>
+          <span
+            title="Copy this SKU into the Add Material form"
+            style={{ cursor: 'pointer', color: '#2563eb', fontSize: 9, marginLeft: 2, fontWeight: 700, border: '1px solid #bfdbfe', borderRadius: 2, padding: '0 3px', background: '#eff6ff' }}
+            onMouseDown={(e2: any) => e2.stopPropagation()}
+            onClick={(e2: any) => {
+              e2.stopPropagation();
+              handleCopyMaterialFromSku(s);
+            }}
+          >
+            Copy
+          </span>
+          {pendingDeletes.has(s.materialCode) ? (
             <span title="Click again to confirm delete" style={{ cursor: 'pointer', color: '#fff', fontSize: 9, marginLeft: 1, fontWeight: 700, background: '#dc2626', borderRadius: 2, padding: '1px 3px' }}
               onClick={async (e2: any) => {
                 e2.stopPropagation();
@@ -2100,7 +2143,8 @@ function BomAdminPanel() {
                 e2.stopPropagation();
                 setPendingDeletes(new Set([s.materialCode]));
               }}>×</span>
-          )
+          )}
+          </>
         ) : null}
       </span>
     );
@@ -2187,9 +2231,14 @@ function BomAdminPanel() {
           onChange={(e) => setSearchText(e.target.value)}
           style={{ minWidth: 340 }} />
         <button className="btn btn-sm btn-ghost" onClick={() => { setSearchText(''); load(); }}>Clear</button>
-        <button className="btn btn-sm btn-ghost" onClick={() => { setShowAddMaterial(!showAddMaterial); }}
+        <button className="btn btn-sm btn-ghost" onClick={() => { setShowAddMaterial(!showAddMaterial); setAddMaterialNotice(""); }}
           style={{ marginLeft: 'auto' }}>+ Material</button>
       </div>
+      {bomAdminError ? (
+        <div style={{ marginBottom: 10, padding: "8px 10px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 4, color: "#991b1b", fontSize: 12 }}>
+          BOM Admin failed to load: {bomAdminError}
+        </div>
+      ) : null}
       <form
         onSubmit={handleCopyCountryFobs}
         style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10, padding: "8px 10px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 4 }}
@@ -2240,7 +2289,7 @@ function BomAdminPanel() {
       </form>
       {showAddMaterial && (
         <div style={{ display: "flex", gap: 6, marginBottom: 8, padding: 6, background: '#f8fafc', borderRadius: 4, flexWrap: "wrap", alignItems: "center" }}>
-          <input type="text" placeholder="Material Code" value={newMaterial.materialCode}
+          <input ref={materialCodeInputRef} type="text" placeholder="Material Code" value={newMaterial.materialCode}
             onChange={e => setNewMaterial({...newMaterial, materialCode: e.target.value})}
             style={{ width: 160, fontSize: 11, fontFamily: 'monospace' }} />
           <input type="text" placeholder="Brand" value={newMaterial.brand}
@@ -2263,7 +2312,8 @@ function BomAdminPanel() {
             {['BEV','HEV','PHEV','ICE','MHEV','REEV'].map(p => <option key={p} value={p}>{p}</option>)}
           </select>
           <button className="btn btn-sm btn-primary" onClick={handleAddMaterial}>Add</button>
-          <button className="btn btn-sm btn-ghost" onClick={() => { setShowAddMaterial(false); setAddMaterialError(""); }}>Cancel</button>
+          <button className="btn btn-sm btn-ghost" onClick={() => { setShowAddMaterial(false); setAddMaterialError(""); setAddMaterialNotice(""); }}>Cancel</button>
+          {addMaterialNotice ? <span style={{ fontSize: 11, color: "#2563eb" }}>{addMaterialNotice}</span> : null}
           {addMaterialError ? <span style={{ fontSize: 11, color: "#b91c1c" }}>{addMaterialError}</span> : null}
         </div>
       )}
