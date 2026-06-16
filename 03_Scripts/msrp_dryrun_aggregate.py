@@ -342,9 +342,71 @@ def _normalize_host_groups(hosts: dict[str, dict[str, Any]], limit: int = 10) ->
     return normalized[:limit]
 
 
+def _source_key(country_code: str | None, source: dict[str, Any]) -> tuple[str, str] | None:
+    country = str(country_code or source.get("country") or source.get("countryCode") or "").strip().lower()
+    source_code = str(source.get("sourceCode") or source.get("code") or "").strip()
+    if not country or not source_code:
+        return None
+    return country, source_code
+
+
+def _artifact_path_from_ref(path_ref: str | None) -> Path | None:
+    if not path_ref:
+        return None
+    path = Path(path_ref)
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+def _load_v3_report(path: Path | None) -> dict[str, Any] | None:
+    if not path or not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    return data if data.get("schemaVersion") == "msrp_dryrun_report_v3" else None
+
+
+def _historical_good_sources(out_dir: Path, current_run_id: str | None) -> dict[tuple[str, str], dict[str, Any]]:
+    index_path = out_dir / "dryrun_runs_index.json"
+    if not index_path.is_file():
+        return {}
+    try:
+        index_data = json.loads(index_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+    good_sources: dict[tuple[str, str], dict[str, Any]] = {}
+    current = str(current_run_id or "")
+    for run in index_data.get("runs") or []:
+        run_id = str(run.get("runId") or "")
+        if not run_id or run_id == current:
+            continue
+        report = _load_v3_report(_artifact_path_from_ref(run.get("artifactPath")))
+        if not report:
+            fallback = out_dir / f"dryrun_report_{run_id}.json"
+            report = _load_v3_report(fallback)
+        if not report:
+            continue
+        observed_at = str(run.get("finishedAt") or report.get("generatedAt") or "")
+        for country in report.get("countriesDetail") or []:
+            country_code = str(country.get("countryCode") or "").strip().lower()
+            for source in country.get("sources") or []:
+                key = _source_key(country_code, source)
+                if not key or key in good_sources or not _result_is_pass(source):
+                    continue
+                good_sources[key] = {
+                    "runId": run_id,
+                    "observedAt": observed_at,
+                    "valid": source.get("valid"),
+                }
+    return good_sources
+
+
 def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
     groups: dict[str, dict[str, Any]] = {}
     top_hosts: dict[str, dict[str, Any]] = {}
+    last_known_good = _historical_good_sources(out_dir, str(report.get("runId") or ""))
     for result in report.get("results") or []:
         reason = result.get("failureReason")
         if not reason:
@@ -352,16 +414,35 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
         country = str(result.get("country") or "").lower()
         source_code = result.get("sourceCode") or result.get("code") or ""
         recommended = result.get("recommendedStrategy") or "diagnose_with_msrp_page_analyzer"
+        key = _source_key(country, result)
+        last_good = last_known_good.get(key) if key else None
+        is_transient = bool(last_good)
         group = groups.setdefault(reason, {
             "failureReason": reason,
             "count": 0,
+            "transientRegressionCount": 0,
+            "sourceRepairIssueCount": 0,
             "recommendedStrategies": {},
             "affectedCountries": set(),
             "sources": [],
+            "transientSources": [],
             "hosts": {},
             "status": "new",
         })
         group["count"] += 1
+        if is_transient:
+            group["transientRegressionCount"] += 1
+            group["transientSources"].append({
+                "countryCode": country,
+                "sourceCode": source_code,
+                "failureReason": reason,
+                "recommendedStrategy": recommended,
+                "lastKnownGoodRunId": last_good.get("runId"),
+                "lastKnownGoodAt": last_good.get("observedAt"),
+                "recommendedAction": "recheck_before_source_repair",
+            })
+        else:
+            group["sourceRepairIssueCount"] += 1
         group["recommendedStrategies"][recommended] = group["recommendedStrategies"].get(recommended, 0) + 1
         if country:
             group["affectedCountries"].add(country)
@@ -386,24 +467,38 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
     for group in groups.values():
         strategies = group["recommendedStrategies"]
         recommended_strategy = max(strategies, key=strategies.get) if strategies else "diagnose_with_msrp_page_analyzer"
+        transient_count = int(group["transientRegressionCount"])
+        source_repair_count = int(group["sourceRepairIssueCount"])
         normalized_groups.append({
             "failureReason": group["failureReason"],
             "count": group["count"],
+            "transientRegressionCount": transient_count,
+            "sourceRepairIssueCount": source_repair_count,
+            "recommendedAction": (
+                "recheck_before_source_repair"
+                if transient_count and not source_repair_count
+                else "repair_source_definition"
+            ),
             "recommendedStrategy": recommended_strategy,
             "recommendedStrategies": strategies,
             "affectedCountries": sorted(group["affectedCountries"]),
             "affectedCountryCount": len(group["affectedCountries"]),
             "sampleSources": group["sources"][:20],
+            "sampleTransientRegressions": group["transientSources"][:8],
             "topSourceHosts": _normalize_host_groups(group["hosts"]),
             "status": group["status"],
         })
     normalized_groups.sort(key=lambda item: (-int(item["count"]), str(item["failureReason"])))
+    transient_regression_count = sum(int(item["transientRegressionCount"]) for item in normalized_groups)
+    source_repair_issue_count = sum(int(item["sourceRepairIssueCount"]) for item in normalized_groups)
 
     payload = {
         "schemaVersion": "msrp_source_repair_backlog_v1",
         "runId": report.get("runId"),
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "totalIssueCount": sum(int(item["count"]) for item in normalized_groups),
+        "transientRegressionCount": transient_regression_count,
+        "sourceRepairIssueCount": source_repair_issue_count,
         "topSourceHosts": _normalize_host_groups(top_hosts),
         "groups": normalized_groups,
     }
@@ -415,15 +510,19 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
         "",
         f"Generated: {payload['generatedAt']}",
         f"Run ID: {payload.get('runId') or '-'}",
+        f"Transient regressions: {payload['transientRegressionCount']}",
+        f"Source repair issues: {payload['sourceRepairIssueCount']}",
         "",
-        "| Failure reason | Count | Recommended strategy | Affected countries |",
-        "|---|---:|---|---|",
+        "| Failure reason | Count | Recheck | Source repair | Recommended strategy | Affected countries |",
+        "|---|---:|---:|---:|---|---|",
     ]
     for item in normalized_groups:
         lines.append(
-            "| {reason} | {count} | {strategy} | {countries} |".format(
+            "| {reason} | {count} | {transient} | {source_repair} | {strategy} | {countries} |".format(
                 reason=item["failureReason"],
                 count=item["count"],
+                transient=item["transientRegressionCount"],
+                source_repair=item["sourceRepairIssueCount"],
                 strategy=item["recommendedStrategy"],
                 countries=", ".join(str(c).upper() for c in item["affectedCountries"]) or "-",
             )

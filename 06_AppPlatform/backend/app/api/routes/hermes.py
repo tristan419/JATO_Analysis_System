@@ -66,6 +66,8 @@ def _default_source_repair_backlog() -> dict[str, Any]:
         "runId": None,
         "generatedAt": None,
         "totalIssueCount": 0,
+        "transientRegressionCount": 0,
+        "sourceRepairIssueCount": 0,
         "topSourceHosts": [],
         "groups": [],
     }
@@ -113,11 +115,87 @@ def _normalize_host_groups(hosts: dict[str, dict[str, Any]], limit: int = 10) ->
     return normalized[:limit]
 
 
-def _source_repair_backlog_from_current(current: dict[str, Any] | None) -> dict[str, Any]:
+def _source_key(country_code: str | None, source: dict[str, Any]) -> tuple[str, str] | None:
+    country = str(country_code or source.get("country") or source.get("countryCode") or "").strip().lower()
+    source_code = str(source.get("sourceCode") or source.get("code") or "").strip()
+    if not country or not source_code:
+        return None
+    return country, source_code
+
+
+def _source_is_pass(source: dict[str, Any]) -> bool:
+    status = str(source.get("rawStatus") or source.get("status") or "").lower()
+    try:
+        valid = int(source.get("valid") or 0)
+    except (TypeError, ValueError):
+        valid = 0
+    return (
+        not source.get("failureReason")
+        and (status == "pass" or valid > 0)
+        and status not in {"empty", "error", "exception", "fail"}
+    )
+
+
+def _transient_lookup_from_stable_coverage(
+    stable_coverage: dict[str, Any] | None,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    if not isinstance(stable_coverage, dict):
+        return {}
+    lookup: dict[tuple[str, str], dict[str, Any]] = {}
+    for sample in stable_coverage.get("probeRegressionSamples") or []:
+        if not isinstance(sample, dict):
+            continue
+        key = _source_key(str(sample.get("countryCode") or ""), sample)
+        if key:
+            lookup[key] = sample
+    return lookup
+
+
+def _historical_good_sources_from_index(
+    current_run_id: str | None,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    index = _load_msrp_runs_index()
+    if not index:
+        return {}
+    current = str(current_run_id or "")
+    good_sources: dict[tuple[str, str], dict[str, Any]] = {}
+    for run in index.get("runs") or []:
+        run_id = str(run.get("runId") or "")
+        if not run_id or run_id == current:
+            continue
+        report_path = _artifact_path_from_ref(run.get("artifactPath"))
+        report = _read_json_if_exists(report_path) if report_path else None
+        if not report or report.get("schemaVersion") != "msrp_dryrun_report_v3":
+            report = _load_msrp_dryrun_report(run_id)
+        if not report:
+            continue
+        observed_at = str(run.get("finishedAt") or report.get("generatedAt") or "")
+        for country in report.get("countriesDetail") or []:
+            country_code = str(country.get("countryCode") or "").lower()
+            for source in country.get("sources") or []:
+                key = _source_key(country_code, source)
+                if not key or key in good_sources or not _source_is_pass(source):
+                    continue
+                good_sources[key] = {
+                    "runId": run_id,
+                    "observedAt": observed_at,
+                    "valid": source.get("valid"),
+                }
+    return good_sources
+
+
+def _source_repair_backlog_from_current(
+    current: dict[str, Any] | None,
+    *,
+    stable_coverage: dict[str, Any] | None = None,
+    last_known_good: dict[tuple[str, str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     if not current:
         return _default_source_repair_backlog()
     groups: dict[str, dict[str, Any]] = {}
     top_hosts: dict[str, dict[str, Any]] = {}
+    transient_lookup = _transient_lookup_from_stable_coverage(stable_coverage)
+    historical_good = last_known_good or {}
     for country in current.get("countries") or []:
         country_code = str(country.get("countryCode") or "").lower()
         for source in country.get("sources") or []:
@@ -127,16 +205,39 @@ def _source_repair_backlog_from_current(current: dict[str, Any] | None) -> dict[
             reason = str(reason)
             source_code = str(source.get("sourceCode") or source.get("code") or "")
             recommended = str(source.get("recommendedStrategy") or "diagnose_with_msrp_page_analyzer")
+            key = _source_key(country_code, source)
+            stable_sample = transient_lookup.get(key) if key else None
+            historical_sample = historical_good.get(key) if key else None
+            is_transient = bool(stable_sample or historical_sample)
             group = groups.setdefault(reason, {
                 "failureReason": reason,
                 "count": 0,
+                "transientRegressionCount": 0,
+                "sourceRepairIssueCount": 0,
                 "recommendedStrategies": {},
                 "affectedCountries": set(),
                 "sources": [],
+                "transientSources": [],
                 "hosts": {},
                 "status": "new",
             })
             group["count"] += 1
+            if is_transient:
+                group["transientRegressionCount"] += 1
+                group["transientSources"].append({
+                    "countryCode": country_code,
+                    "sourceCode": source_code,
+                    "failureReason": reason,
+                    "recommendedStrategy": recommended,
+                    "lastKnownGoodRunId": (
+                        (stable_sample or {}).get("stableRunId")
+                        or (historical_sample or {}).get("runId")
+                    ),
+                    "lastKnownGoodAt": (historical_sample or {}).get("observedAt"),
+                    "recommendedAction": "recheck_before_source_repair",
+                })
+            else:
+                group["sourceRepairIssueCount"] += 1
             group["recommendedStrategies"][recommended] = group["recommendedStrategies"].get(recommended, 0) + 1
             if country_code:
                 group["affectedCountries"].add(country_code)
@@ -161,24 +262,38 @@ def _source_repair_backlog_from_current(current: dict[str, Any] | None) -> dict[
     for group in groups.values():
         strategies = group["recommendedStrategies"]
         recommended_strategy = max(strategies, key=strategies.get) if strategies else "diagnose_with_msrp_page_analyzer"
+        transient_count = int(group["transientRegressionCount"])
+        source_repair_count = int(group["sourceRepairIssueCount"])
         normalized_groups.append({
             "failureReason": group["failureReason"],
             "count": group["count"],
+            "transientRegressionCount": transient_count,
+            "sourceRepairIssueCount": source_repair_count,
+            "recommendedAction": (
+                "recheck_before_source_repair"
+                if transient_count and not source_repair_count
+                else "repair_source_definition"
+            ),
             "recommendedStrategy": recommended_strategy,
             "recommendedStrategies": strategies,
             "affectedCountries": sorted(group["affectedCountries"]),
             "affectedCountryCount": len(group["affectedCountries"]),
             "sampleSources": group["sources"][:20],
+            "sampleTransientRegressions": group["transientSources"][:8],
             "topSourceHosts": _normalize_host_groups(group["hosts"]),
             "status": group["status"],
         })
     normalized_groups.sort(key=lambda item: (-int(item["count"]), str(item["failureReason"])))
+    transient_regression_count = sum(int(item["transientRegressionCount"]) for item in normalized_groups)
+    source_repair_issue_count = sum(int(item["sourceRepairIssueCount"]) for item in normalized_groups)
     return {
         "schemaVersion": "msrp_source_repair_backlog_v1",
         "runId": current.get("runId"),
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "partial": bool(current.get("partial")),
         "totalIssueCount": sum(int(item["count"]) for item in normalized_groups),
+        "transientRegressionCount": transient_regression_count,
+        "sourceRepairIssueCount": source_repair_issue_count,
         "topSourceHosts": _normalize_host_groups(top_hosts),
         "groups": normalized_groups,
     }
@@ -196,7 +311,10 @@ def _source_repair_backlog_from_report(report: dict[str, Any]) -> dict[str, Any]
             for country in report.get("countriesDetail") or []
         ],
     }
-    backlog = _source_repair_backlog_from_current(current)
+    backlog = _source_repair_backlog_from_current(
+        current,
+        last_known_good=_historical_good_sources_from_index(str(report.get("runId") or "")),
+    )
     if int(backlog.get("totalIssueCount") or 0) > 0:
         return backlog
     return _load_msrp_source_repair_backlog()
@@ -207,6 +325,8 @@ def _progress_has_source_host_backlog(progress: dict[str, Any] | None) -> bool:
         return False
     backlog = progress.get("sourceRepairBacklog")
     if not isinstance(backlog, dict):
+        return False
+    if "transientRegressionCount" not in backlog or "sourceRepairIssueCount" not in backlog:
         return False
     if backlog.get("topSourceHosts"):
         return True
@@ -414,7 +534,10 @@ def _missing_msrp_progress() -> dict[str, Any]:
     }
 
 
-def _msrp_progress_from_partial_current(current: dict[str, Any] | None) -> dict[str, Any] | None:
+def _msrp_progress_from_partial_current(
+    current: dict[str, Any] | None,
+    stable_coverage: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     if not current or not current.get("available") or not current.get("partial"):
         return None
 
@@ -502,7 +625,10 @@ def _msrp_progress_from_partial_current(current: dict[str, Any] | None) -> dict[
             {"reason": reason, "count": count}
             for reason, count in sorted(failure_reasons.items(), key=lambda item: (-item[1], item[0]))[:5]
         ],
-        "sourceRepairBacklog": _source_repair_backlog_from_current(current),
+        "sourceRepairBacklog": _source_repair_backlog_from_current(
+            current,
+            stable_coverage=stable_coverage,
+        ),
         "findings": findings,
     }
 
@@ -514,7 +640,11 @@ def _partial_msrp_progress() -> dict[str, Any] | None:
     except Exception:
         return None
     current = dashboard.get("current") if isinstance(dashboard, dict) else None
-    return _msrp_progress_from_partial_current(current if isinstance(current, dict) else None)
+    stable_coverage = dashboard.get("stableCoverage") if isinstance(dashboard, dict) else None
+    return _msrp_progress_from_partial_current(
+        current if isinstance(current, dict) else None,
+        stable_coverage if isinstance(stable_coverage, dict) else None,
+    )
 
 
 @router.get("/overview")

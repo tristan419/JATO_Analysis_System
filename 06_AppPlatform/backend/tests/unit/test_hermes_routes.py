@@ -401,6 +401,68 @@ class TestSentinelAndDeploy:
         ]
         assert backlog["topSourceHosts"][0]["host"] == "audi.se"
 
+    def test_partial_msrp_progress_marks_probe_regressions_for_recheck(self):
+        current = {
+            "available": True,
+            "partial": True,
+            "running": True,
+            "runId": "msrp-dryrun-20260612-125301",
+            "schemaVersion": "msrp_dryrun_partial_v1",
+            "overallPassRate": 0.0,
+            "gateStatus": None,
+            "expectedCountries": ["se"],
+            "observedCountries": ["se"],
+            "missingCountries": [],
+            "countries": [
+                {
+                    "countryCode": "se",
+                    "completed": True,
+                    "total": 1,
+                    "pass": 0,
+                    "empty": 1,
+                    "fail": 0,
+                    "errors": 0,
+                    "passRate": 0.0,
+                    "status": "failure",
+                    "failureBreakdown": {"http_timeout": 1},
+                    "strategyRecommendations": {"retry_or_reduce_concurrency": 1},
+                    "sources": [
+                        {
+                            "sourceCode": "audi_q4_e_tron_se_draft_scrapling",
+                            "status": "empty",
+                            "failureReason": "http_timeout",
+                            "recommendedStrategy": "retry_or_reduce_concurrency",
+                            "sourceUrl": "https://www.audi.se/se/web/sv/models/q4-e-tron.html",
+                        }
+                    ],
+                }
+            ],
+        }
+        stable_coverage = {
+            "probeRegressionSamples": [
+                {
+                    "countryCode": "se",
+                    "sourceCode": "audi_q4_e_tron_se_draft_scrapling",
+                    "stableRunId": "msrp-dryrun-20260612-070207",
+                    "activeRunId": "msrp-dryrun-20260612-125301",
+                    "activeStatus": "empty",
+                    "failureReason": "http_timeout",
+                }
+            ]
+        }
+
+        data = _msrp_progress_from_partial_current(current, stable_coverage)
+
+        assert data is not None
+        backlog = data["sourceRepairBacklog"]
+        assert backlog["totalIssueCount"] == 1
+        assert backlog["transientRegressionCount"] == 1
+        assert backlog["sourceRepairIssueCount"] == 0
+        assert backlog["groups"][0]["recommendedAction"] == "recheck_before_source_repair"
+        assert backlog["groups"][0]["sampleTransientRegressions"][0]["lastKnownGoodRunId"] == (
+            "msrp-dryrun-20260612-070207"
+        )
+
     def test_partial_msrp_progress_marks_stopped_partial_without_aggregate(self):
         current = {
             "available": True,

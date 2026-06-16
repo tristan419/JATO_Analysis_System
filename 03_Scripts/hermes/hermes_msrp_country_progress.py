@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATUS_FILE_PATH = REPO_ROOT / "03_Scripts" / "logs" / "scheduled_fetch_status.json"
 FALLBACK_REPORT_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_report.json"
+RUNS_INDEX_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_runs_index.json"
 SOURCE_REPAIR_BACKLOG_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_repair_backlog.json"
 SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
 
@@ -60,6 +61,8 @@ def _load_source_repair_backlog() -> dict:
         "runId": None,
         "generatedAt": None,
         "totalIssueCount": 0,
+        "transientRegressionCount": 0,
+        "sourceRepairIssueCount": 0,
         "topSourceHosts": [],
         "groups": [],
     }
@@ -100,9 +103,81 @@ def _normalize_host_groups(hosts: dict[str, dict[str, Any]], limit: int = 10) ->
     return normalized[:limit]
 
 
+def _source_key(country_code: str | None, source: dict[str, Any]) -> tuple[str, str] | None:
+    country = str(country_code or source.get("country") or source.get("countryCode") or "").strip().lower()
+    source_code = str(source.get("sourceCode") or source.get("code") or "").strip()
+    if not country or not source_code:
+        return None
+    return country, source_code
+
+
+def _source_is_pass(source: dict[str, Any]) -> bool:
+    status = str(source.get("rawStatus") or source.get("status") or "").lower()
+    try:
+        valid = int(source.get("valid") or 0)
+    except (TypeError, ValueError):
+        valid = 0
+    return (
+        not source.get("failureReason")
+        and (status == "pass" or valid > 0)
+        and status not in {"empty", "error", "exception", "fail"}
+    )
+
+
+def _artifact_path_from_ref(path_ref: str | None) -> Path | None:
+    if not path_ref:
+        return None
+    path = Path(path_ref)
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+def _load_v3_report(path: Path | None) -> dict[str, Any] | None:
+    if not path or not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return None
+    return data if data.get("schemaVersion") == "msrp_dryrun_report_v3" else None
+
+
+def _historical_good_sources(current_run_id: str | None) -> dict[tuple[str, str], dict[str, Any]]:
+    if not RUNS_INDEX_PATH.is_file():
+        return {}
+    try:
+        index_data = json.loads(RUNS_INDEX_PATH.read_text())
+    except Exception:
+        return {}
+    current = str(current_run_id or "")
+    good_sources: dict[tuple[str, str], dict[str, Any]] = {}
+    for run in index_data.get("runs") or []:
+        run_id = str(run.get("runId") or "")
+        if not run_id or run_id == current:
+            continue
+        report = _load_v3_report(_artifact_path_from_ref(run.get("artifactPath")))
+        if not report:
+            report = _load_v3_report(REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / f"dryrun_report_{run_id}.json")
+        if not report:
+            continue
+        observed_at = str(run.get("finishedAt") or report.get("generatedAt") or "")
+        for country in report.get("countriesDetail") or []:
+            country_code = str(country.get("countryCode") or "").lower()
+            for source in country.get("sources") or []:
+                key = _source_key(country_code, source)
+                if not key or key in good_sources or not _source_is_pass(source):
+                    continue
+                good_sources[key] = {
+                    "runId": run_id,
+                    "observedAt": observed_at,
+                    "valid": source.get("valid"),
+                }
+    return good_sources
+
+
 def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict[str, Any]:
     groups: dict[str, dict[str, Any]] = {}
     top_hosts: dict[str, dict[str, Any]] = {}
+    last_known_good = _historical_good_sources(str(report.get("runId") or ""))
     for country in report.get("countriesDetail") or []:
         country_code = str(country.get("countryCode") or "").lower()
         for source in country.get("sources") or []:
@@ -112,16 +187,35 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
             reason = str(reason)
             source_code = str(source.get("sourceCode") or source.get("code") or "")
             recommended = str(source.get("recommendedStrategy") or "diagnose_with_msrp_page_analyzer")
+            key = _source_key(country_code, source)
+            last_good = last_known_good.get(key) if key else None
+            is_transient = bool(last_good)
             group = groups.setdefault(reason, {
                 "failureReason": reason,
                 "count": 0,
+                "transientRegressionCount": 0,
+                "sourceRepairIssueCount": 0,
                 "recommendedStrategies": {},
                 "affectedCountries": set(),
                 "sources": [],
+                "transientSources": [],
                 "hosts": {},
                 "status": "new",
             })
             group["count"] += 1
+            if is_transient:
+                group["transientRegressionCount"] += 1
+                group["transientSources"].append({
+                    "countryCode": country_code,
+                    "sourceCode": source_code,
+                    "failureReason": reason,
+                    "recommendedStrategy": recommended,
+                    "lastKnownGoodRunId": last_good.get("runId"),
+                    "lastKnownGoodAt": last_good.get("observedAt"),
+                    "recommendedAction": "recheck_before_source_repair",
+                })
+            else:
+                group["sourceRepairIssueCount"] += 1
             group["recommendedStrategies"][recommended] = group["recommendedStrategies"].get(recommended, 0) + 1
             if country_code:
                 group["affectedCountries"].add(country_code)
@@ -146,24 +240,38 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
     for group in groups.values():
         strategies = group["recommendedStrategies"]
         recommended_strategy = max(strategies, key=strategies.get) if strategies else "diagnose_with_msrp_page_analyzer"
+        transient_count = int(group["transientRegressionCount"])
+        source_repair_count = int(group["sourceRepairIssueCount"])
         normalized_groups.append({
             "failureReason": group["failureReason"],
             "count": group["count"],
+            "transientRegressionCount": transient_count,
+            "sourceRepairIssueCount": source_repair_count,
+            "recommendedAction": (
+                "recheck_before_source_repair"
+                if transient_count and not source_repair_count
+                else "repair_source_definition"
+            ),
             "recommendedStrategy": recommended_strategy,
             "recommendedStrategies": strategies,
             "affectedCountries": sorted(group["affectedCountries"]),
             "affectedCountryCount": len(group["affectedCountries"]),
             "sampleSources": group["sources"][:20],
+            "sampleTransientRegressions": group["transientSources"][:8],
             "topSourceHosts": _normalize_host_groups(group["hosts"]),
             "status": group["status"],
         })
     normalized_groups.sort(key=lambda item: (-int(item["count"]), str(item["failureReason"])))
+    transient_regression_count = sum(int(item["transientRegressionCount"]) for item in normalized_groups)
+    source_repair_issue_count = sum(int(item["sourceRepairIssueCount"]) for item in normalized_groups)
     return {
         "schemaVersion": "msrp_source_repair_backlog_v1",
         "runId": report.get("runId"),
         "generatedAt": now,
         "partial": False,
         "totalIssueCount": sum(int(item["count"]) for item in normalized_groups),
+        "transientRegressionCount": transient_regression_count,
+        "sourceRepairIssueCount": source_repair_issue_count,
         "topSourceHosts": _normalize_host_groups(top_hosts),
         "groups": normalized_groups,
     }

@@ -127,6 +127,76 @@ def test_aggregate_writes_history_index_and_source_repair_backlog(tmp_path):
     assert backlog["groups"][0]["topSourceHosts"][0]["host"] == "volvocars.com"
 
 
+def test_source_repair_backlog_marks_historical_pass_as_transient(tmp_path):
+    """A source that passed in a prior v3 run is marked for recheck first."""
+    previous_run_id = "msrp-dryrun-20260521-020000"
+    current_run_dir = tmp_path / "msrp-dryrun-20260521-033000"
+    countries_dir = current_run_dir / "countries"
+    countries_dir.mkdir(parents=True)
+    source_code = "volvo_xc40_se_draft_scrapling"
+    out_dir = tmp_path / "artifacts"
+    out_dir.mkdir()
+
+    previous_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": previous_run_id,
+        "countriesDetail": [
+            {
+                "countryCode": "se",
+                "total": 1,
+                "pass": 1,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 100.0,
+                "status": "success",
+                "sources": [
+                    {
+                        "sourceCode": source_code,
+                        "status": "pass",
+                        "valid": 1,
+                        "failureReason": None,
+                    }
+                ],
+            }
+        ],
+        "generatedAt": "2026-05-21T02:00:00Z",
+    }
+    previous_path = out_dir / f"dryrun_report_{previous_run_id}.json"
+    previous_path.write_text(json.dumps(previous_report))
+    (out_dir / "dryrun_runs_index.json").write_text(json.dumps({
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "latestRunId": previous_run_id,
+        "runs": [
+            {
+                "runId": previous_run_id,
+                "finishedAt": "2026-05-21T02:05:00Z",
+                "artifactPath": str(previous_path),
+            }
+        ],
+    }))
+
+    artifact = _make_country_artifact("se", 0, 1)
+    artifact["results"][0].update({
+        "code": source_code,
+        "failureReason": "http_timeout",
+        "recommendedStrategy": "retry_or_reduce_concurrency",
+        "sourceUrl": "https://www.volvocars.com/se/cars/xc40-electric/",
+    })
+    (countries_dir / "se.json").write_text(json.dumps(artifact))
+
+    agg_mod.run(str(current_run_dir), ["se"], out_latest=str(out_dir / "dryrun_report.json"))
+
+    backlog = json.loads((out_dir / "msrp_source_repair_backlog.json").read_text())
+    assert backlog["totalIssueCount"] == 1
+    assert backlog["transientRegressionCount"] == 1
+    assert backlog["sourceRepairIssueCount"] == 0
+    group = backlog["groups"][0]
+    assert group["recommendedAction"] == "recheck_before_source_repair"
+    assert group["sampleTransientRegressions"][0]["sourceCode"] == source_code
+    assert group["sampleTransientRegressions"][0]["lastKnownGoodRunId"] == previous_run_id
+
+
 def test_aggregate_preserves_source_diagnostics(tmp_path):
     """Country source rows preserve diagnostics used by dashboards."""
     run_dir = tmp_path / "msrp-dryrun-20260521-040000"

@@ -1602,6 +1602,8 @@ export function DataManagementPage() {
                         const failureReasons = hermesMsrpProgress.topFailureReasons ?? [];
                         const backlogGroups = hermesMsrpProgress.sourceRepairBacklog?.groups ?? [];
                         const issueCount = hermesMsrpProgress.sourceRepairBacklog?.totalIssueCount ?? 0;
+                        const recheckCount = hermesMsrpProgress.sourceRepairBacklog?.transientRegressionCount ?? 0;
+                        const sourceRepairIssueCount = hermesMsrpProgress.sourceRepairBacklog?.sourceRepairIssueCount ?? issueCount;
                         const gateColor = status?.gateStatus === "blocked" ? "#dc2626" : "#16a34a";
                         return (
                           <div style={{display:"grid",gap:10}}>
@@ -1620,7 +1622,8 @@ export function DataManagementPage() {
                               </div>
                               <div style={{padding:"8px 10px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6}}>
                                 <div style={{fontSize:10,color:"#64748b"}}>Fix Queue</div>
-                                <div style={{fontSize:13,fontWeight:700,color:issueCount > 0 ? "#ea580c" : "#16a34a"}}>{issueCount}</div>
+                                <div style={{fontSize:13,fontWeight:700,color:sourceRepairIssueCount > 0 ? "#ea580c" : "#16a34a"}}>{sourceRepairIssueCount}</div>
+                                <div style={{fontSize:10,color:"#64748b",whiteSpace:"nowrap"}}>{recheckCount} recheck · {issueCount} total</div>
                               </div>
                             </div>
 
@@ -1670,10 +1673,19 @@ export function DataManagementPage() {
 
                             <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,padding:8}}>
                               <div style={{fontSize:11,fontWeight:700,marginBottom:5}}>Source Repair Backlog</div>
+                              {backlogGroups.length ? (
+                                <div style={{fontSize:10,color:"#64748b",display:"grid",gridTemplateColumns:"minmax(0,1.2fr) 42px 48px minmax(0,1.2fr)",gap:8,marginBottom:4}}>
+                                  <span>Reason</span>
+                                  <span style={{textAlign:"right"}}>Repair</span>
+                                  <span style={{textAlign:"right"}}>Recheck</span>
+                                  <span>Strategy</span>
+                                </div>
+                              ) : null}
                               {backlogGroups.length ? backlogGroups.slice(0,5).map((group: HermesMsrpSourceRepairBacklogGroup) => (
-                                <div key={group.failureReason} style={{fontSize:11,display:"grid",gridTemplateColumns:"1.2fr 38px 1.2fr",gap:8,alignItems:"center",marginBottom:5}}>
-                                  <span style={{fontWeight:600}}>{group.failureReason}</span>
-                                  <strong style={{textAlign:"right"}}>{group.count}</strong>
+                                <div key={group.failureReason} style={{fontSize:11,display:"grid",gridTemplateColumns:"minmax(0,1.2fr) 42px 48px minmax(0,1.2fr)",gap:8,alignItems:"center",marginBottom:5}}>
+                                  <span style={{fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={group.failureReason}>{group.failureReason}</span>
+                                  <strong style={{textAlign:"right",color:(group.sourceRepairIssueCount ?? group.count) > 0 ? "#ea580c" : "#16a34a"}}>{group.sourceRepairIssueCount ?? group.count}</strong>
+                                  <strong style={{textAlign:"right",color:(group.transientRegressionCount ?? 0) > 0 ? "#2563eb" : "#94a3b8"}}>{group.transientRegressionCount ?? 0}</strong>
                                   <span style={{color:"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={group.recommendedStrategy}>{group.recommendedStrategy}</span>
                                 </div>
                               )) : <span style={{fontSize:11,color:"#94a3b8"}}>No source repair backlog</span>}
