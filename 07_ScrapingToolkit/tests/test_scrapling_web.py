@@ -677,10 +677,70 @@ def test_text_regex_finance_named_groups_feed_pricing_context(
                 },
             ),
             default_currency="SEK",
+            default_price_label="Rekommenderat cirkapris inkl. moms",
             fixed_model="ENYAQ",
             fixed_jato_model="ENYAQ",
-            fixed_jato_powertrain="BEV",
+            fixed_jato_powertrain=None,
             copy_trim_to_jato_trim=True,
+            confidence_rules={
+                "base": 0.28,
+                "fixed_model_bonus": 0.18,
+                "fixed_jato_model_bonus": 0.12,
+                "model_rule_bonus": 0.12,
+                "trim_present_bonus": 0.1,
+                "copy_trim_to_jato_trim_bonus": 0.09,
+                "parsed_price_text_bonus": 0.03,
+                "currency_bonus": 0.01,
+                "price_label_bonus": 0.02,
+                "trim_keyword_bonuses": [
+                    {
+                        "key": "trim_keyword_solid_edition",
+                        "label": "Trim keyword matched: Solid Edition",
+                        "keyword": "Solid Edition",
+                        "delta": 0.04,
+                    },
+                ],
+                "price_band_bonuses": [
+                    {
+                        "key": "price_band_entry",
+                        "label": "Entry price band matched",
+                        "min": 550000,
+                        "max": 650000,
+                        "delta": 0.05,
+                    },
+                    {
+                        "key": "price_band_mid",
+                        "label": "Mid price band matched",
+                        "min": 650001,
+                        "max": 800000,
+                        "delta": 0.01,
+                    },
+                    {
+                        "key": "price_band_high",
+                        "label": "High price band matched",
+                        "min": 800001,
+                        "delta": 0.03,
+                    },
+                ],
+                "powertrain_bonuses": [
+                    {
+                        "key": "powertrain_bev",
+                        "label": "Powertrain matched: BEV",
+                        "powertrain": "BEV",
+                        "delta": 0.03,
+                    },
+                ],
+                "clamp_min": 0.0,
+                "clamp_max": 1.0,
+            },
+            auto_accept_gates={
+                "review_threshold": 0.95,
+                "semi_auto_threshold": 0.98,
+                "require_powertrain_match": True,
+                "force_review_if_powertrain_missing": True,
+                "force_review_if_powertrain_ambiguous": True,
+                "force_review_for_special_edition": True,
+            },
         ),
     )
 
@@ -695,6 +755,11 @@ def test_text_regex_finance_named_groups_feed_pricing_context(
         "finance_currency": "SEK",
         "monthly_payment": 5295.0,
     }
+    assert results[0].match_confidence == 0.95
+    assert results[0].match_status == "auto_accepted"
+    gate = results[0].match_reason["autoAcceptGate"]
+    assert gate["tier"] == "semi_auto"
+    assert gate["finalStatus"] == "auto_accepted"
 
 
 @patch.object(ScraplingExtractor, "_fetch")
