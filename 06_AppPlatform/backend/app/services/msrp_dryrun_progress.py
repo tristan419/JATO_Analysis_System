@@ -21,6 +21,7 @@ LOCK_FILE = Path("/tmp/jato-msrp-low-concurrency.lock")
 DRYRUN_LOG_PATTERN = re.compile(r"msrp-dryrun-(\d{8})-(\d{6})\.log")
 DRYRUN_RUN_DIR_PATTERN = re.compile(r"msrp-dryrun-(\d{8})-(\d{6})$")
 DRYRUN_RUN_ID_PATTERN = re.compile(r"\b(msrp-dryrun-\d{8}-\d{6})\b")
+COUNTRY_CODE_PATTERN = re.compile(r"^[a-z]{2}$")
 
 _COUNTRY_NAMES: dict[str, str] = {
     "se": "Sweden", "fi": "Finland", "no": "Norway", "dk": "Denmark",
@@ -32,6 +33,25 @@ _COUNTRY_NAMES: dict[str, str] = {
 
 def _country_label(cc: str) -> str:
     return _COUNTRY_NAMES.get(cc.lower(), cc.upper())
+
+
+def _country_code(value: Any) -> str:
+    code = str(value or "").strip().lower()
+    return code if COUNTRY_CODE_PATTERN.fullmatch(code) else ""
+
+
+def _country_code_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    codes: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        code = _country_code(value)
+        if not code or code in seen:
+            continue
+        codes.append(code)
+        seen.add(code)
+    return codes
 
 
 def _status_for_pass_rate(pass_rate: float) -> str:
@@ -205,11 +225,96 @@ def _aggregate_country_counter(countries: list[dict[str, Any]], key: str) -> dic
 def _dedupe_countries(countries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deduped: dict[str, dict[str, Any]] = {}
     for country in countries:
-        code = str(country.get("countryCode") or country.get("country") or "").lower()
+        code = _country_code(country.get("countryCode") or country.get("country"))
         if not code or code in deduped:
             continue
         deduped[code] = country
     return list(deduped.values())
+
+
+def _normalize_country_from_v3(
+    country: dict[str, Any],
+    *,
+    run_meta: dict[str, Any] | None = None,
+    latest_run_id: str = "",
+) -> dict[str, Any] | None:
+    code = _country_code(country.get("countryCode") or country.get("country"))
+    if not code:
+        return None
+    total = int(country.get("total") or 0)
+    sources = [
+        _normalize_source(source, index, total)
+        for index, source in enumerate(country.get("sources") or [], start=1)
+    ]
+    if sources:
+        pass_count, empty_count, fail_count, error_count = _source_counts(sources)
+    else:
+        pass_count = int(country.get("pass") or 0)
+        empty_count = int(country.get("empty") or 0)
+        error_count = int(country.get("errors") or 0)
+        fail_count = int(country.get("fail") or 0)
+    pass_rate = round(pass_count / max(total, 1) * 100, 1) if total > 0 else 0
+    payload: dict[str, Any] = {
+        "countryCode": code,
+        "countryLabel": _country_label(code),
+        "total": total,
+        "pass": pass_count,
+        "empty": empty_count,
+        "fail": fail_count,
+        "errors": error_count,
+        "completed": country.get("status") != "missing",
+        "passRate": pass_rate,
+        "status": "missing" if country.get("status") == "missing" else _status_for_pass_rate(pass_rate),
+        "topFailureReason": country.get("topFailureReason"),
+        "failureBreakdown": country.get("failureBreakdown") or {},
+        "strategyRecommendations": country.get("strategyRecommendations") or {},
+        "sources": sources,
+    }
+    if run_meta:
+        run_id = str(run_meta.get("runId") or "")
+        payload.update({
+            "runId": run_id,
+            "batch": run_meta.get("batch") or "",
+            "timestamp": run_meta.get("finishedAt") or run_meta.get("startedAt") or "",
+            "gateStatus": run_meta.get("gateStatus"),
+            "runStatus": run_meta.get("status"),
+            "isLatestRun": run_id == latest_run_id,
+        })
+    return payload
+
+
+def _all_country_latest_from_runs_index(index_data: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not index_data:
+        return []
+
+    latest_run_id = str(index_data.get("latestRunId") or "")
+    countries_by_code: dict[str, dict[str, Any]] = {}
+    for run in index_data.get("runs") or []:
+        run_id = str(run.get("runId") or "")
+        artifact_path = _artifact_path_from_ref(run.get("artifactPath"))
+        report = _load_json(artifact_path) if artifact_path else None
+        if not report or report.get("schemaVersion") != "msrp_dryrun_report_v3":
+            continue
+        for country in report.get("countriesDetail") or []:
+            normalized = _normalize_country_from_v3(
+                country,
+                run_meta=run,
+                latest_run_id=latest_run_id,
+            )
+            if not normalized:
+                continue
+            code = normalized["countryCode"]
+            if code in countries_by_code:
+                continue
+            countries_by_code[code] = normalized
+
+    return sorted(
+        countries_by_code.values(),
+        key=lambda country: (
+            0 if country.get("isLatestRun") else 1,
+            str(country.get("countryLabel") or country.get("countryCode") or ""),
+        ),
+    )
 
 
 def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -223,36 +328,9 @@ def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] |
 
     countries: list[dict[str, Any]] = []
     for country in report.get("countriesDetail") or []:
-        code = str(country.get("countryCode") or "").lower()
-        total = int(country.get("total") or 0)
-        sources = [
-            _normalize_source(source, index, total)
-            for index, source in enumerate(country.get("sources") or [], start=1)
-        ]
-        if sources:
-            pass_count, empty_count, fail_count, error_count = _source_counts(sources)
-        else:
-            pass_count = int(country.get("pass") or 0)
-            empty_count = int(country.get("empty") or 0)
-            error_count = int(country.get("errors") or 0)
-            fail_count = int(country.get("fail") or 0)
-        pass_rate = round(pass_count / max(total, 1) * 100, 1) if total > 0 else 0
-        countries.append({
-            "countryCode": code,
-            "countryLabel": _country_label(code),
-            "total": total,
-            "pass": pass_count,
-            "empty": empty_count,
-            "fail": fail_count,
-            "errors": error_count,
-            "completed": country.get("status") != "missing",
-            "passRate": pass_rate,
-            "status": "missing" if country.get("status") == "missing" else _status_for_pass_rate(pass_rate),
-            "topFailureReason": country.get("topFailureReason"),
-            "failureBreakdown": country.get("failureBreakdown") or {},
-            "strategyRecommendations": country.get("strategyRecommendations") or {},
-            "sources": sources,
-        })
+        normalized = _normalize_country_from_v3(country)
+        if normalized:
+            countries.append(normalized)
 
     if countries:
         total_sources = sum(int(country.get("total") or 0) for country in countries)
@@ -280,10 +358,10 @@ def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] |
         "startedAt": (run_meta or {}).get("startedAt") or report.get("generatedAt"),
         "finishedAt": (run_meta or {}).get("finishedAt") or report.get("generatedAt"),
         "countries": _dedupe_countries(countries),
-        "expectedCountries": report.get("expectedCountries") or [],
-        "observedCountries": report.get("observedCountries") or [],
-        "missingCountries": report.get("missingCountries") or [],
-        "duplicateCountries": report.get("duplicateCountries") or [],
+        "expectedCountries": _country_code_list(report.get("expectedCountries")),
+        "observedCountries": _country_code_list(report.get("observedCountries")),
+        "missingCountries": _country_code_list(report.get("missingCountries")),
+        "duplicateCountries": _country_code_list(report.get("duplicateCountries")),
         "totalSources": total_sources,
         "totalPass": total_pass,
         "totalEmpty": total_empty,
@@ -909,6 +987,7 @@ def get_dryrun_dashboard(run_id: str | None = None) -> dict[str, Any]:
 
     return {
         "current": current,
+        "allCountries": _all_country_latest_from_runs_index(index_data) or current.get("countries", []),
         "history": history,
         "logFiles": log_files,
         "selectedRunId": run_id,

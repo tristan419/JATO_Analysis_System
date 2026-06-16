@@ -102,6 +102,172 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
     assert dashboard["current"]["countries"][0]["sources"][0]["finalUrl"] == "https://www.volvocars.com/se/build/xc60-hybrid/"
     assert dashboard["current"]["countries"][0]["sources"][0]["httpStatus"] == 0
     assert dashboard["history"][0]["runId"] == "msrp-dryrun-20260611-120000"
+    assert [country["countryCode"] for country in dashboard["allCountries"]] == ["se"]
+
+
+def test_dashboard_exposes_latest_progress_for_all_historical_countries(tmp_path, monkeypatch):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    artifacts.mkdir()
+    logs.mkdir()
+
+    latest_run_id = "msrp-dryrun-20260615-064326"
+    older_run_id = "msrp-dryrun-20260614-024553"
+
+    latest_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": latest_run_id,
+        "batch": "se,fi",
+        "expectedCountries": ["fi", "se"],
+        "observedCountries": ["fi", "se"],
+        "missingCountries": [],
+        "duplicateCountries": [],
+        "summary": {
+            "total": 2,
+            "pass": 2,
+            "empty": 0,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 100.0,
+            "status": "success",
+            "gateThreshold": 70,
+            "gateStatus": "allowed",
+        },
+        "countriesDetail": [
+            {
+                "countryCode": "se",
+                "total": 1,
+                "pass": 1,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 100.0,
+                "status": "success",
+                "sources": [],
+            },
+            {
+                "countryCode": "fi",
+                "total": 1,
+                "pass": 1,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 100.0,
+                "status": "success",
+                "sources": [],
+            },
+        ],
+        "generatedAt": "2026-06-15T07:08:47Z",
+    }
+    older_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": older_run_id,
+        "batch": "dk,no",
+        "expectedCountries": ["dk", "no", "--help"],
+        "observedCountries": ["dk", "no"],
+        "missingCountries": [],
+        "duplicateCountries": [],
+        "summary": {
+            "total": 2,
+            "pass": 1,
+            "empty": 1,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 50.0,
+            "status": "degraded",
+            "gateThreshold": 70,
+            "gateStatus": "blocked",
+        },
+        "countriesDetail": [
+            {
+                "countryCode": "dk",
+                "total": 1,
+                "pass": 1,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 100.0,
+                "status": "success",
+                "sources": [],
+            },
+            {
+                "countryCode": "no",
+                "total": 1,
+                "pass": 0,
+                "empty": 1,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 0.0,
+                "status": "degraded",
+                "sources": [],
+            },
+            {
+                "countryCode": "--help",
+                "total": 1,
+                "pass": 0,
+                "empty": 1,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 0.0,
+                "status": "degraded",
+                "sources": [],
+            },
+        ],
+        "generatedAt": "2026-06-14T02:45:53Z",
+    }
+    index = {
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "latestRunId": latest_run_id,
+        "runs": [
+            {
+                "runId": latest_run_id,
+                "batch": "se,fi",
+                "finishedAt": "2026-06-15T07:08:47Z",
+                "status": "success",
+                "gateStatus": "allowed",
+                "passPct": 100.0,
+                "total": 2,
+                "pass": 2,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "artifactPath": str(artifacts / f"dryrun_report_{latest_run_id}.json"),
+            },
+            {
+                "runId": older_run_id,
+                "batch": "dk,no",
+                "finishedAt": "2026-06-14T02:45:53Z",
+                "status": "degraded",
+                "gateStatus": "blocked",
+                "passPct": 50.0,
+                "total": 2,
+                "pass": 1,
+                "empty": 1,
+                "fail": 0,
+                "errors": 0,
+                "artifactPath": str(artifacts / f"dryrun_report_{older_run_id}.json"),
+            },
+        ],
+    }
+
+    (artifacts / "dryrun_report.json").write_text(json.dumps(latest_report))
+    (artifacts / f"dryrun_report_{latest_run_id}.json").write_text(json.dumps(latest_report))
+    (artifacts / f"dryrun_report_{older_run_id}.json").write_text(json.dumps(older_report))
+    (artifacts / "dryrun_runs_index.json").write_text(json.dumps(index))
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+
+    dashboard = progress.get_dryrun_dashboard()
+
+    assert {country["countryCode"] for country in dashboard["current"]["countries"]} == {"fi", "se"}
+    all_countries = {country["countryCode"]: country for country in dashboard["allCountries"]}
+    assert set(all_countries) == {"dk", "fi", "no", "se"}
+    assert all_countries["se"]["isLatestRun"] is True
+    assert all_countries["dk"]["runId"] == older_run_id
+    assert all_countries["no"]["gateStatus"] == "blocked"
 
 
 def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(tmp_path, monkeypatch):

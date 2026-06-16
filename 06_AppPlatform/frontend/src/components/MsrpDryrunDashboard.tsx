@@ -33,6 +33,12 @@ interface DryrunCountry {
   topFailureReason?: string;
   failureBreakdown?: Record<string, number>;
   strategyRecommendations?: Record<string, number>;
+  runId?: string;
+  batch?: string;
+  timestamp?: string;
+  gateStatus?: string;
+  runStatus?: string;
+  isLatestRun?: boolean;
   sources: DryrunSource[];
 }
 
@@ -89,6 +95,7 @@ interface DryrunHistoryRun {
 
 interface DryrunDashboard {
   current: DryrunCurrent;
+  allCountries?: DryrunCountry[];
   history: DryrunHistoryRun[];
   selectedRunId?: string | null;
   latestRunId?: string | null;
@@ -137,11 +144,97 @@ function ProgressBar({ pct, tone }: { pct: number; tone: "green" | "amber" | "re
   );
 }
 
+interface CountryProgressChipProps {
+  country: DryrunCountry;
+  expanded: boolean;
+  onToggle: () => void;
+  showRunMeta?: boolean;
+}
+
+function CountryProgressChip({
+  country,
+  expanded,
+  onToggle,
+  showRunMeta = false,
+}: CountryProgressChipProps) {
+  const runClass = showRunMeta ? (country.isLatestRun ? " is-latest" : " is-historical") : "";
+  return (
+    <button
+      type="button"
+      className={`dryrun-country-chip${country.completed ? " is-done" : " is-running"}${runClass}${expanded ? " is-expanded" : ""}`}
+      onClick={onToggle}
+    >
+      <span className="dryrun-country-chip-head">
+        <span className="dryrun-country-flag">{country.completed ? "✅" : "⏳"}</span>
+        <span className="dryrun-country-name">{country.countryLabel}</span>
+        <span className="dryrun-country-rate">{country.passRate}%</span>
+      </span>
+      <ProgressBar pct={country.passRate} tone={country.passRate >= 50 ? "green" : country.passRate >= 20 ? "amber" : "red"} />
+      <span className="dryrun-country-chip-nums">
+        {country.pass}/{country.total} pass · {country.empty} empty · {country.fail} fail
+      </span>
+      {showRunMeta && (
+        <span className="dryrun-country-chip-nums dryrun-country-run-meta">
+          {country.isLatestRun ? "Latest run" : "Historical latest"} · {country.batch || country.runId || "-"}
+          {country.gateStatus ? ` · gate ${country.gateStatus}` : ""}
+          {country.timestamp ? ` · ${formatTime(country.timestamp)}` : ""}
+        </span>
+      )}
+      {country.topFailureReason && (
+        <span className="dryrun-country-chip-nums">
+          Top issue: {country.topFailureReason}
+        </span>
+      )}
+
+      {expanded && (
+        <div className="dryrun-source-panel" onClick={(event) => event.stopPropagation()}>
+          <div className="dryrun-source-panel-head">
+            <span>{country.sources.length} sources</span>
+            <span className="dryrun-source-panel-legend">
+              <span className="is-pass">✅ pass</span>
+              <span className="is-empty">⬚ empty</span>
+              <span className="is-fail">❌ fail</span>
+            </span>
+          </div>
+          <div className="dryrun-source-list">
+            {country.sources.map((source) => {
+              const cleanName = source.sourceCode
+                .replace(/_[a-z]{2}_draft_scrapling/g, "")
+                .replace(/_/g, " ");
+              const barPct = source.valid > 0 ? Math.min(100, (source.valid / Math.max(source.extracted, 1)) * 100) : 0;
+              return (
+                <div key={source.sourceCode || `${country.countryCode}-${source.index}`} className={`dryrun-source-row is-${source.status}`}>
+                  <span className="dryrun-source-icon">{STATUS_ICON[source.status]}</span>
+                  <span className="dryrun-source-code" title={source.sourceCode}>{cleanName}</span>
+                  <span className="dryrun-source-bar-wrap">
+                    <span
+                      className={`dryrun-source-bar-fill is-${source.status}`}
+                      style={{ width: `${Math.max(2, barPct)}%` }}
+                    />
+                  </span>
+                  <span className="dryrun-source-stat">
+                    {source.valid > 0 ? <><strong>{source.valid}</strong> valid</> : <span className="dryrun-source-stat-muted">0</span>}
+                  </span>
+                  {source.failureReason && (
+                    <span className="dryrun-source-elapsed" title={sourceFailureTitle(source)}>{source.failureReason}</span>
+                  )}
+                  <span className="dryrun-source-elapsed">{formatElapsed(source.elapsedSeconds)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </button>
+  );
+}
+
 export function MsrpDryrunDashboard() {
   const [data, setData] = useState<DryrunDashboard | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [expandedCountry, setExpandedCountry] = useState<string | null>(null);
+  const [expandedAllCountry, setExpandedAllCountry] = useState<string | null>(null);
   const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -172,6 +265,7 @@ export function MsrpDryrunDashboard() {
   const current = data?.current;
   const history = data?.history ?? [];
   const currentCountries = dedupeByCountryCode(current?.countries ?? []);
+  const allCountries = dedupeByCountryCode(data?.allCountries ?? currentCountries);
   const isHistoricalSelection = Boolean(selectedRunId);
 
   return (
@@ -193,6 +287,7 @@ export function MsrpDryrunDashboard() {
               onClick={() => {
                 setSelectedRunId(null);
                 setExpandedCountry(null);
+                setExpandedAllCountry(null);
               }}
             >
               Latest
@@ -252,71 +347,33 @@ export function MsrpDryrunDashboard() {
       {/* ── Per-Country Grid ── */}
       {currentCountries.length > 0 && (
         <div className="dryrun-countries">
-          <h4>Countries ({currentCountries.filter((c) => c.completed).length}/{currentCountries.length} done)</h4>
+          <h4>Current Run Countries ({currentCountries.filter((c) => c.completed).length}/{currentCountries.length} done)</h4>
           <div className="dryrun-country-grid">
-            {currentCountries.map((c) => (
-              <button
-                key={c.countryCode}
-                type="button"
-                className={`dryrun-country-chip${c.completed ? " is-done" : " is-running"}${expandedCountry === c.countryCode ? " is-expanded" : ""}`}
-                onClick={() => setExpandedCountry(expandedCountry === c.countryCode ? null : c.countryCode)}
-              >
-                <span className="dryrun-country-chip-head">
-                  <span className="dryrun-country-flag">{c.completed ? "✅" : "⏳"}</span>
-                  <span className="dryrun-country-name">{c.countryLabel}</span>
-                  <span className="dryrun-country-rate">{c.passRate}%</span>
-                </span>
-                <ProgressBar pct={c.passRate} tone={c.passRate >= 50 ? "green" : c.passRate >= 20 ? "amber" : "red"} />
-                <span className="dryrun-country-chip-nums">
-                  {c.pass}/{c.total} pass · {c.empty} empty · {c.fail} fail
-                </span>
-                {c.topFailureReason && (
-                  <span className="dryrun-country-chip-nums">
-                    Top issue: {c.topFailureReason}
-                  </span>
-                )}
+            {currentCountries.map((country) => (
+              <CountryProgressChip
+                key={country.countryCode}
+                country={country}
+                expanded={expandedCountry === country.countryCode}
+                onToggle={() => setExpandedCountry(expandedCountry === country.countryCode ? null : country.countryCode)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
-                {/* Expanded source detail panel */}
-                {expandedCountry === c.countryCode && (
-                  <div className="dryrun-source-panel" onClick={(e) => e.stopPropagation()}>
-                    <div className="dryrun-source-panel-head">
-                      <span>{c.sources.length} sources</span>
-                      <span className="dryrun-source-panel-legend">
-                        <span className="is-pass">✅ pass</span>
-                        <span className="is-empty">⬚ empty</span>
-                        <span className="is-fail">❌ fail</span>
-                      </span>
-                    </div>
-                    <div className="dryrun-source-list">
-                      {c.sources.map((s) => {
-                        const cleanName = s.sourceCode
-                          .replace(/_se_draft_scrapling|_fi_draft_scrapling|_no_draft_scrapling|_dk_draft_scrapling|_hu_draft_scrapling|_hr_draft_scrapling|_at_draft_scrapling|_cz_draft_scrapling|_de_draft_scrapling|_fr_draft_scrapling|_it_draft_scrapling|_pl_draft_scrapling/g, "")
-                          .replace(/_/g, " ");
-                        const barPct = s.valid > 0 ? Math.min(100, (s.valid / Math.max(s.extracted, 1)) * 100) : 0;
-                        return (
-                          <div key={s.sourceCode || `${c.countryCode}-${s.index}`} className={`dryrun-source-row is-${s.status}`}>
-                            <span className="dryrun-source-icon">{STATUS_ICON[s.status]}</span>
-                            <span className="dryrun-source-code" title={s.sourceCode}>{cleanName}</span>
-                            <span className="dryrun-source-bar-wrap">
-                              <span
-                                className={`dryrun-source-bar-fill is-${s.status}`}
-                                style={{ width: `${Math.max(2, barPct)}%` }}
-                              />
-                            </span>
-                            <span className="dryrun-source-stat">
-                              {s.valid > 0 ? <><strong>{s.valid}</strong> valid</> : <span className="dryrun-source-stat-muted">0</span>}
-                            </span>
-                            {s.failureReason && (
-                              <span className="dryrun-source-elapsed" title={sourceFailureTitle(s)}>{s.failureReason}</span>
-                            )}
-                            <span className="dryrun-source-elapsed">{formatElapsed(s.elapsedSeconds)}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </button>
+      {/* ── All-Country Latest Progress ── */}
+      {allCountries.length > 0 && (
+        <div className="dryrun-countries dryrun-countries--all">
+          <h4>All Country Latest Progress ({allCountries.length} countries)</h4>
+          <div className="dryrun-country-grid">
+            {allCountries.map((country) => (
+              <CountryProgressChip
+                key={`all-${country.countryCode}`}
+                country={country}
+                expanded={expandedAllCountry === country.countryCode}
+                onToggle={() => setExpandedAllCountry(expandedAllCountry === country.countryCode ? null : country.countryCode)}
+                showRunMeta
+              />
             ))}
           </div>
         </div>
@@ -349,6 +406,7 @@ export function MsrpDryrunDashboard() {
                         setExpandedHistory(nextExpanded);
                         setSelectedRunId(r.runId || null);
                         setExpandedCountry(null);
+                        setExpandedAllCountry(null);
                       }}
                       style={{ cursor: 'pointer' }}
                     >
