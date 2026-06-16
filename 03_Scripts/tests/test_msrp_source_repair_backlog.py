@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "msrp_source_repair_backlog.py"
+
+
+def load_module():
+    module_name = "msrp_source_repair_backlog_test_module"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    spec = importlib.util.spec_from_file_location(module_name, SCRIPT_PATH)
+    assert spec is not None
+    assert spec.loader is not None
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+backlog_script = load_module()
+
+
+def test_v3_report_uses_scored_repair_backlog(tmp_path: Path) -> None:
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260616-101010",
+        "results": [
+            {
+                "country": "se",
+                "sourceCode": "volvo_xc60_se_draft_scrapling",
+                "status": "empty",
+                "valid": 0,
+                "failureReason": "no_observation_extracted",
+                "recommendedStrategy": "diagnose_with_msrp_page_analyzer",
+                "sourceUrl": "https://www.volvocars.com/se/build/xc60-hybrid/",
+            },
+            {
+                "country": "fi",
+                "sourceCode": "volvo_xc60_fi_draft_scrapling",
+                "status": "empty",
+                "valid": 0,
+                "failureReason": "no_observation_extracted",
+                "recommendedStrategy": "diagnose_with_msrp_page_analyzer",
+                "sourceUrl": "https://www.volvocars.com/fi/build/xc60-hybrid/",
+            },
+        ],
+    }
+    report_path = tmp_path / "dryrun_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    backlog = backlog_script.run(str(report_path), str(tmp_path))
+
+    assert backlog["schemaVersion"] == "msrp_source_repair_backlog_v1"
+    assert backlog["runId"] == "msrp-dryrun-20260616-101010"
+    assert backlog["sourceRepairIssueCount"] == 2
+    assert backlog["transientRegressionCount"] == 0
+    assert backlog["topSourceHosts"][0]["host"] == "volvocars.com"
+    group = backlog["groups"][0]
+    assert group["failureReason"] == "no_observation_extracted"
+    assert group["priorityScore"] > 0
+    assert group["priorityBand"] in {"medium", "high", "critical"}
+    assert group["reviewAssist"]["preferred"] == "rule_based_then_llm"
+    assert group["reviewAssist"]["llmFit"] == "medium"
+    assert group["reviewAssist"]["neuralNetworkFit"] == "not_recommended_until_labeled_corpus"
+
+
+def test_v3_report_marks_historical_pass_as_recheck(tmp_path: Path) -> None:
+    current_run_id = "msrp-dryrun-20260616-101010"
+    previous_run_id = "msrp-dryrun-20260615-101010"
+    source_code = "volvo_xc60_se_draft_scrapling"
+    previous_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": previous_run_id,
+        "countriesDetail": [
+            {
+                "countryCode": "se",
+                "sources": [
+                    {
+                        "sourceCode": source_code,
+                        "status": "pass",
+                        "valid": 1,
+                    }
+                ],
+            }
+        ],
+        "generatedAt": "2026-06-15T10:10:10Z",
+    }
+    previous_path = tmp_path / f"dryrun_report_{previous_run_id}.json"
+    previous_path.write_text(json.dumps(previous_report), encoding="utf-8")
+    (tmp_path / "dryrun_runs_index.json").write_text(
+        json.dumps({
+            "schemaVersion": "msrp_dryrun_runs_index_v1",
+            "latestRunId": previous_run_id,
+            "runs": [
+                {
+                    "runId": previous_run_id,
+                    "finishedAt": "2026-06-15T10:12:00Z",
+                    "artifactPath": str(previous_path),
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+    current_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": current_run_id,
+        "results": [
+            {
+                "country": "se",
+                "sourceCode": source_code,
+                "status": "empty",
+                "valid": 0,
+                "failureReason": "http_timeout",
+                "recommendedStrategy": "retry_network_or_proxy",
+            }
+        ],
+    }
+    current_path = tmp_path / "dryrun_report.json"
+    current_path.write_text(json.dumps(current_report), encoding="utf-8")
+
+    backlog = backlog_script.run(str(current_path), str(tmp_path))
+
+    assert backlog["sourceRepairIssueCount"] == 0
+    assert backlog["transientRegressionCount"] == 1
+    group = backlog["groups"][0]
+    assert group["priorityBand"] == "recheck"
+    assert group["recommendedAction"] == "recheck_before_source_repair"
+    assert group["reviewAssist"]["preferred"] == "rule_based_recheck"
+    assert group["sampleTransientRegressions"][0]["lastKnownGoodRunId"] == previous_run_id
+
+
+def test_legacy_report_keeps_summary_backlog_format(tmp_path: Path) -> None:
+    report = {
+        "total": 1,
+        "pass": 0,
+        "passPct": 0.0,
+        "results": [
+            {
+                "country": "se",
+                "code": "volvo_xc60_se_draft_scrapling",
+                "status": "empty",
+                "valid": 0,
+                "failureReason": "validation_rejected_all",
+                "rejectedReasons": ["currency missing"],
+            }
+        ],
+    }
+    report_path = tmp_path / "legacy_dryrun_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    backlog = backlog_script.run(str(report_path), str(tmp_path))
+
+    assert backlog["summary"]["failedCount"] == 1
+    assert backlog["failureBreakdown"] == {"validation_rejected_all": 1}
+    assert backlog["backlog"][0]["recommendedStrategy"] == "check default_currency in the source YAML"

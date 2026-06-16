@@ -20,7 +20,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+try:
+    from msrp_dryrun_aggregate import _write_source_repair_backlog as _write_v3_source_repair_backlog
+except ImportError:  # pragma: no cover - keeps old-report fallback usable in stripped script contexts.
+    _write_v3_source_repair_backlog = None  # type: ignore[assignment]
 
 
 def _load_dryrun_report(path: str | None) -> dict:
@@ -191,15 +199,30 @@ def run(dryrun_path: str | None = None, out_dir: str | None = None) -> dict:
         print("[backlog] No dryrun report found.", file=sys.stderr)
         return {}
 
-    backlog = _build_backlog(report)
     out_base = Path(out_dir).resolve() if out_dir else REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts"
     out_base.mkdir(parents=True, exist_ok=True)
-
     json_path = out_base / "msrp_source_repair_backlog.json"
+    md_path = out_base / "msrp_source_repair_backlog.md"
+
+    if report.get("schemaVersion") == "msrp_dryrun_report_v3" and _write_v3_source_repair_backlog:
+        _write_v3_source_repair_backlog(report, out_base)
+        try:
+            backlog = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception:
+            backlog = {}
+        print(f"[backlog] JSON: {json_path}")
+        print(f"[backlog] Markdown: {md_path}")
+        print(
+            "[backlog] "
+            f"{backlog.get('sourceRepairIssueCount', 0)} source repair issues, "
+            f"{backlog.get('transientRegressionCount', 0)} transient rechecks"
+        )
+        return backlog
+
+    backlog = _build_backlog(report)
     json_path.write_text(json.dumps(backlog, indent=2, ensure_ascii=False) + "\n")
     print(f"[backlog] JSON: {json_path}")
 
-    md_path = out_base / "msrp_source_repair_backlog.md"
     md_path.write_text(_render_markdown(backlog))
     print(f"[backlog] Markdown: {md_path}")
 
