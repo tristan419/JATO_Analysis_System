@@ -345,6 +345,7 @@ export interface HermesDevSyncResult { synced: number; featuresUpdated: string[]
 // === MSRP Country Progress ===
 export interface HermesMsrpCountryProgressCountry {
   countryCode: string;
+  countryLabel?: string;
   total: number;
   pass: number;
   empty: number;
@@ -352,6 +353,13 @@ export interface HermesMsrpCountryProgressCountry {
   errors: number;
   passPct: number;
   status: string;
+  completed?: boolean;
+  runId?: string;
+  batch?: string;
+  timestamp?: string;
+  gateStatus?: string;
+  runStatus?: string;
+  isLatestRun?: boolean;
   topFailureReason?: string;
   failureBreakdown?: Record<string, number>;
   strategyRecommendations?: Record<string, number>;
@@ -401,6 +409,26 @@ export interface HermesMsrpSourceRepairBacklog {
   sourceRepairIssueCount?: number;
   groups: HermesMsrpSourceRepairBacklogGroup[];
 }
+export interface HermesMsrpStableCoverage {
+  gateThreshold?: number;
+  countryCount?: number;
+  readyCountryCount?: number;
+  blockedCountryCount?: number;
+  stablePassRate?: number;
+  sourceCount?: number;
+  readySourceCount?: number;
+  sourcePassRate?: number;
+  latestRunId?: string;
+  activeRunId?: string;
+  activeRunRunning?: boolean;
+  activeRunPartial?: boolean;
+  activeRunPassRate?: number;
+  probeDiffersFromStableRun?: boolean;
+  readyCountries?: string[];
+  blockedCountries?: string[];
+  topFailureReasons?: { reason: string; count: number }[];
+  probeRegressionCount?: number;
+}
 export interface HermesMsrpCountryProgressResponse {
   probe: string;
   overall: string;
@@ -408,15 +436,21 @@ export interface HermesMsrpCountryProgressResponse {
   status: {
     runId?: string;
     schemaVersion?: string;
+    running?: boolean;
+    partial?: boolean;
     overallPassPct?: number;
     gateThreshold?: number;
     gateStatus?: string;
+    stableLatestRunId?: string;
+    activeRunId?: string;
     expectedCountries?: string[];
     observedCountries?: string[];
     missingCountries?: string[];
     duplicateCountries?: string[];
   };
   countries: HermesMsrpCountryProgressCountry[];
+  allCountriesLatest?: HermesMsrpCountryProgressCountry[];
+  stableCoverage?: HermesMsrpStableCoverage;
   topBlockingCountries?: { countryCode: string; passPct: number; reason: string; recommendedAction: string }[];
   topFailureReasons?: { reason: string; count: number }[];
   sourceRepairBacklog?: HermesMsrpSourceRepairBacklog;

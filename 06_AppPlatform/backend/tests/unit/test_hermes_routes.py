@@ -454,9 +454,36 @@ class TestSentinelAndDeploy:
             ]
         }
 
-        data = _msrp_progress_from_partial_current(current, stable_coverage)
+        all_countries_latest = [
+            {
+                "countryCode": "se",
+                "countryLabel": "Sweden",
+                "total": 1,
+                "pass": 1,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "passRate": 100.0,
+                "status": "success",
+                "runId": "msrp-dryrun-20260612-070207",
+                "isLatestRun": True,
+            }
+        ]
+
+        data = _msrp_progress_from_partial_current(
+            current,
+            stable_coverage,
+            all_countries_latest,
+        )
 
         assert data is not None
+        assert data["status"]["stableLatestRunId"] == "msrp-dryrun-20260612-070207"
+        assert data["allCountriesLatest"][0]["countryCode"] == "se"
+        assert data["allCountriesLatest"][0]["passPct"] == 100.0
+        assert data["allCountriesLatest"][0]["runId"] == "msrp-dryrun-20260612-070207"
+        assert data["stableCoverage"]["probeRegressionSamples"][0]["stableRunId"] == (
+            "msrp-dryrun-20260612-070207"
+        )
         backlog = data["sourceRepairBacklog"]
         assert backlog["totalIssueCount"] == 1
         assert backlog["transientRegressionCount"] == 1
@@ -569,6 +596,72 @@ class TestSentinelAndDeploy:
             "count": 2,
         }
         assert data["sourceRepairBacklog"]["totalIssueCount"] == 3
+
+    def test_msrp_country_progress_enriches_latest_report_with_all_country_latest(
+        self,
+        client,
+        tmp_path,
+    ):
+        reports_dir = tmp_path / "hermes" / "reports"
+        artifact_dir = tmp_path / "03_Scripts" / "diagnostics" / "artifacts"
+        report = _make_msrp_v3_report("msrp-dryrun-20260613-110334")
+        report["expectedCountries"] = ["hu"]
+        report["observedCountries"] = ["hu"]
+        report["countriesDetail"][0]["countryCode"] = "hu"
+        _write_json(artifact_dir / "dryrun_report.json", report)
+
+        dashboard_context = {
+            "dashboard": {},
+            "stableLatestRunId": "msrp-dryrun-20260615-193249",
+            "stableCoverage": {
+                "countryCount": 2,
+                "readyCountryCount": 1,
+                "latestRunId": "msrp-dryrun-20260615-193249",
+                "activeRunId": "msrp-dryrun-20260613-110334",
+            },
+            "allCountriesLatest": [
+                {
+                    "countryCode": "fi",
+                    "total": 30,
+                    "pass": 27,
+                    "empty": 3,
+                    "fail": 0,
+                    "errors": 0,
+                    "passPct": 90.0,
+                    "status": "success",
+                    "runId": "msrp-dryrun-20260615-193249",
+                    "isLatestRun": True,
+                },
+                {
+                    "countryCode": "hu",
+                    "total": 31,
+                    "pass": 15,
+                    "empty": 13,
+                    "fail": 3,
+                    "errors": 0,
+                    "passPct": 48.4,
+                    "status": "failure",
+                    "runId": "msrp-dryrun-20260613-110334",
+                    "isLatestRun": False,
+                },
+            ],
+        }
+
+        with (
+            patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path),
+            patch("app.api.routes.hermes.REPORTS_DIR", reports_dir),
+            patch("app.api.routes.hermes._msrp_dashboard_context", return_value=dashboard_context),
+            patch("app.api.routes.hermes._partial_msrp_progress", return_value=None),
+        ):
+            resp = client.get("/hermes/msrp-country-progress")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert [country["countryCode"] for country in data["countries"]] == ["hu"]
+        assert [country["countryCode"] for country in data["allCountriesLatest"]] == ["fi", "hu"]
+        assert data["stableCoverage"]["countryCount"] == 2
+        assert data["status"]["stableLatestRunId"] == "msrp-dryrun-20260615-193249"
+        assert data["status"]["activeRunId"] == "msrp-dryrun-20260613-110334"
 
     def test_msrp_country_progress_uses_runs_index_when_latest_shortcut_is_partial(
         self,

@@ -473,6 +473,92 @@ def _is_empty_msrp_progress(payload: dict[str, Any] | None) -> bool:
     )
 
 
+def _msrp_progress_country_entry(country: dict[str, Any]) -> dict[str, Any]:
+    code = str(country.get("countryCode") or country.get("country") or "").lower()
+    pass_pct_raw = (
+        country.get("passPct")
+        if country.get("passPct") is not None
+        else country.get("passRate")
+    )
+    entry = {
+        "countryCode": code,
+        "countryLabel": country.get("countryLabel"),
+        "total": int(country.get("total") or 0),
+        "pass": int(country.get("pass") or 0),
+        "empty": int(country.get("empty") or 0),
+        "fail": int(country.get("fail") or 0),
+        "errors": int(country.get("errors") or 0),
+        "passPct": float(pass_pct_raw or 0.0),
+        "status": country.get("status") or ("success" if country.get("completed") else "unknown"),
+        "topFailureReason": country.get("topFailureReason"),
+        "failureBreakdown": country.get("failureBreakdown") or {},
+        "strategyRecommendations": country.get("strategyRecommendations") or {},
+    }
+    for key in ("runId", "batch", "timestamp", "gateStatus", "runStatus", "isLatestRun", "completed"):
+        if key in country:
+            entry[key] = country.get(key)
+    return entry
+
+
+def _msrp_dashboard_context() -> dict[str, Any]:
+    try:
+        from app.services.msrp_dryrun_progress import get_dryrun_dashboard
+        dashboard = get_dryrun_dashboard()
+    except Exception:
+        return {}
+    if not isinstance(dashboard, dict):
+        return {}
+
+    all_countries = [
+        _msrp_progress_country_entry(country)
+        for country in (dashboard.get("allCountries") or [])
+        if isinstance(country, dict)
+    ]
+    stable_coverage = dashboard.get("stableCoverage") if isinstance(dashboard.get("stableCoverage"), dict) else {}
+    stable_latest_run_id = stable_coverage.get("latestRunId") or next(
+        (
+            country.get("runId")
+            for country in all_countries
+            if country.get("runId")
+        ),
+        None,
+    )
+    return {
+        "dashboard": dashboard,
+        "allCountriesLatest": all_countries,
+        "stableCoverage": stable_coverage,
+        "stableLatestRunId": stable_latest_run_id,
+    }
+
+
+def _with_msrp_latest_context(
+    progress: dict[str, Any],
+    context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not context:
+        return progress
+    all_countries = context.get("allCountriesLatest")
+    stable_coverage = context.get("stableCoverage")
+    if not all_countries and not stable_coverage:
+        return progress
+
+    enriched = dict(progress)
+    if all_countries and not enriched.get("allCountriesLatest"):
+        enriched["allCountriesLatest"] = all_countries
+    if stable_coverage and not enriched.get("stableCoverage"):
+        enriched["stableCoverage"] = stable_coverage
+
+    status = dict(enriched.get("status") or {})
+    stable_latest_run_id = context.get("stableLatestRunId")
+    if stable_latest_run_id and not status.get("stableLatestRunId"):
+        status["stableLatestRunId"] = stable_latest_run_id
+    active_run_id = (stable_coverage or {}).get("activeRunId") if isinstance(stable_coverage, dict) else None
+    if active_run_id and not status.get("activeRunId"):
+        status["activeRunId"] = active_run_id
+    enriched["status"] = status
+    return enriched
+
+
 def _msrp_progress_from_report(report: dict[str, Any]) -> dict[str, Any]:
     summary = report.get("summary") or {}
     gate_threshold = int(summary.get("gateThreshold") or 70)
@@ -491,19 +577,14 @@ def _msrp_progress_from_report(report: dict[str, Any]) -> dict[str, Any]:
         strategy_recs = country.get("strategyRecommendations") or {}
         top_reason = max(failure_breakdown, key=failure_breakdown.get) if failure_breakdown else None
 
-        entry = {
+        entry = _msrp_progress_country_entry({
+            **country,
             "countryCode": code,
-            "total": int(country.get("total") or 0),
-            "pass": int(country.get("pass") or 0),
-            "empty": int(country.get("empty") or 0),
-            "fail": int(country.get("fail") or 0),
-            "errors": int(country.get("errors") or 0),
             "passPct": country_pct,
-            "status": country.get("status") or "unknown",
             "topFailureReason": top_reason,
             "failureBreakdown": failure_breakdown,
             "strategyRecommendations": strategy_recs,
-        }
+        })
         countries.append(entry)
 
         if country_pct < gate_threshold or country_pct < 50:
@@ -613,6 +694,7 @@ def _missing_msrp_progress() -> dict[str, Any]:
 def _msrp_progress_from_partial_current(
     current: dict[str, Any] | None,
     stable_coverage: dict[str, Any] | None = None,
+    all_countries_latest: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     if not current or not current.get("available") or not current.get("partial"):
         return None
@@ -634,19 +716,10 @@ def _msrp_progress_from_partial_current(
     findings: list[dict[str, Any]] = [partial_finding]
     for country in current.get("countries") or []:
         code = str(country.get("countryCode") or "").lower()
-        entry = {
-            "countryCode": code,
-            "total": int(country.get("total") or 0),
-            "pass": int(country.get("pass") or 0),
-            "empty": int(country.get("empty") or 0),
-            "fail": int(country.get("fail") or 0),
-            "errors": int(country.get("errors") or 0),
-            "passPct": float(country.get("passRate") or 0.0),
+        entry = _msrp_progress_country_entry({
+            **country,
             "status": country.get("status") or ("success" if country.get("completed") else "running"),
-            "topFailureReason": country.get("topFailureReason"),
-            "failureBreakdown": country.get("failureBreakdown") or {},
-            "strategyRecommendations": country.get("strategyRecommendations") or {},
-        }
+        })
         countries.append(entry)
         country_pct = float(entry.get("passPct") or 0.0)
         if country.get("completed") and country_pct < 50:
@@ -678,6 +751,21 @@ def _msrp_progress_from_partial_current(
         "warning" if findings else "ok"
     )
 
+    latest_countries = [
+        _msrp_progress_country_entry(country)
+        for country in (all_countries_latest or [])
+        if isinstance(country, dict)
+    ]
+    coverage = stable_coverage if isinstance(stable_coverage, dict) else {}
+    stable_latest_run_id = coverage.get("latestRunId") or next(
+        (
+            country.get("runId")
+            for country in latest_countries
+            if country.get("runId")
+        ),
+        None,
+    )
+
     return {
         "probe": "pipeline.msrp_country_progress",
         "overall": overall,
@@ -694,8 +782,12 @@ def _msrp_progress_from_partial_current(
             "observedCountries": current.get("observedCountries") or [],
             "missingCountries": current.get("missingCountries") or [],
             "duplicateCountries": [],
+            "stableLatestRunId": stable_latest_run_id,
+            "activeRunId": coverage.get("activeRunId") or current.get("runId"),
         },
         "countries": countries,
+        "allCountriesLatest": latest_countries or countries,
+        "stableCoverage": coverage,
         "topBlockingCountries": sorted(top_blocking, key=lambda item: item["passPct"]),
         "topFailureReasons": [
             {"reason": reason, "count": count}
@@ -709,17 +801,16 @@ def _msrp_progress_from_partial_current(
     }
 
 
-def _partial_msrp_progress() -> dict[str, Any] | None:
-    try:
-        from app.services.msrp_dryrun_progress import get_dryrun_dashboard
-        dashboard = get_dryrun_dashboard()
-    except Exception:
-        return None
+def _partial_msrp_progress(
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    context = context or _msrp_dashboard_context()
+    dashboard = context.get("dashboard") if isinstance(context.get("dashboard"), dict) else {}
     current = dashboard.get("current") if isinstance(dashboard, dict) else None
-    stable_coverage = dashboard.get("stableCoverage") if isinstance(dashboard, dict) else None
     return _msrp_progress_from_partial_current(
         current if isinstance(current, dict) else None,
-        stable_coverage if isinstance(stable_coverage, dict) else None,
+        context.get("stableCoverage") if isinstance(context.get("stableCoverage"), dict) else None,
+        context.get("allCountriesLatest") if isinstance(context.get("allCountriesLatest"), list) else None,
     )
 
 
@@ -845,7 +936,8 @@ def hermes_msrp_country_progress(
     latest_report = _load_msrp_dryrun_report() or _load_latest_indexed_msrp_dryrun_report()
     static_run_id = (static_progress or {}).get("status", {}).get("runId")
     latest_run_id = (latest_report or {}).get("runId")
-    partial_progress = _partial_msrp_progress()
+    dashboard_context = _msrp_dashboard_context()
+    partial_progress = _partial_msrp_progress(dashboard_context)
     partial_status = (partial_progress or {}).get("status") or {}
     partial_run_id = partial_status.get("runId")
     if (
@@ -860,16 +952,22 @@ def hermes_msrp_country_progress(
         or static_run_id != latest_run_id
         or not _progress_has_source_host_backlog(static_progress)
     ):
-        return _msrp_progress_from_report(latest_report)
+        return _with_msrp_latest_context(
+            _msrp_progress_from_report(latest_report),
+            dashboard_context,
+        )
     if static_progress and not _is_empty_msrp_progress(static_progress):
-        return static_progress
+        return _with_msrp_latest_context(static_progress, dashboard_context)
     if latest_report:
-        return _msrp_progress_from_report(latest_report)
+        return _with_msrp_latest_context(
+            _msrp_progress_from_report(latest_report),
+            dashboard_context,
+        )
     if partial_progress:
         return partial_progress
     if static_progress:
-        return static_progress
-    return _missing_msrp_progress()
+        return _with_msrp_latest_context(static_progress, dashboard_context)
+    return _with_msrp_latest_context(_missing_msrp_progress(), dashboard_context)
 
 
 @router.get("/msrp-dryrun-history")
