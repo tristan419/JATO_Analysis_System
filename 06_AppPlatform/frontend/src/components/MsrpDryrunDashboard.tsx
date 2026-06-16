@@ -102,6 +102,30 @@ interface StableCoverage {
   stablePassRate: number;
   totalSources: number;
   totalPass: number;
+  sourceRowsObserved: number;
+  sourceCount: number;
+  readySourceCount: number;
+  blockedSourceCount: number;
+  sourcePassRate: number;
+  topFailureReasons: Array<{ reason: string; count: number }>;
+  repairSourceSamples: Array<{
+    countryCode: string;
+    sourceCode: string;
+    failureReason?: string;
+    recommendedStrategy?: string;
+    runId?: string;
+  }>;
+  probeRegressionCount: number;
+  probeRegressionSamples: Array<{
+    countryCode: string;
+    sourceCode: string;
+    activeStatus?: string;
+    failureReason?: string;
+    recommendedStrategy?: string;
+    stableRunId?: string;
+    activeRunId?: string;
+    lastKnownValid?: number;
+  }>;
   latestRunId?: string;
   activeRunId?: string;
   activeRunRunning: boolean;
@@ -365,6 +389,17 @@ export function MsrpDryrunDashboard() {
                 <strong>{stableCoverage.readyCountryCount}/{stableCoverage.countryCount}</strong> countries &gt;= {stableCoverage.gateThreshold}%
               </span>
               <span><strong>{stableCoverage.stablePassRate}%</strong> stable rate</span>
+              {stableCoverage.sourceCount > 0 && (
+                <span>
+                  Sources: <strong>{stableCoverage.readySourceCount}/{stableCoverage.sourceCount}</strong> pass · {stableCoverage.sourcePassRate}%
+                </span>
+              )}
+              {stableCoverage.topFailureReasons.length > 0 && (
+                <span>Top source issue: {stableCoverage.topFailureReasons[0].reason} ({stableCoverage.topFailureReasons[0].count})</span>
+              )}
+              {stableCoverage.probeRegressionCount > 0 && (
+                <span><strong>{stableCoverage.probeRegressionCount}</strong> active probe regressions</span>
+              )}
               {stableCoverage.latestRunId && <span>Latest stable: {stableCoverage.latestRunId}</span>}
               {stableCoverage.probeDiffersFromStableRun && stableCoverage.activeRunId && (
                 <span>

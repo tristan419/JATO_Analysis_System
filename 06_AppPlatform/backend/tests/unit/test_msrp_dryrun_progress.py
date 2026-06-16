@@ -106,6 +106,10 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
     assert dashboard["stableCoverage"]["countryCount"] == 1
     assert dashboard["stableCoverage"]["readyCountryCount"] == 1
     assert dashboard["stableCoverage"]["latestRunId"] == "msrp-dryrun-20260611-120000"
+    assert dashboard["stableCoverage"]["sourceRowsObserved"] == 1
+    assert dashboard["stableCoverage"]["sourceCount"] == 1
+    assert dashboard["stableCoverage"]["readySourceCount"] == 1
+    assert dashboard["stableCoverage"]["sourcePassRate"] == 100.0
 
 
 def test_dashboard_exposes_latest_progress_for_all_historical_countries(tmp_path, monkeypatch):
@@ -280,6 +284,10 @@ def test_dashboard_exposes_latest_progress_for_all_historical_countries(tmp_path
     assert dashboard["stableCoverage"]["activeRunId"] == latest_run_id
     assert dashboard["stableCoverage"]["latestRunId"] == latest_run_id
     assert dashboard["stableCoverage"]["probeDiffersFromStableRun"] is False
+    assert dashboard["stableCoverage"]["sourceRowsObserved"] == 0
+    assert dashboard["stableCoverage"]["sourceCount"] == 4
+    assert dashboard["stableCoverage"]["readySourceCount"] == 3
+    assert dashboard["stableCoverage"]["sourcePassRate"] == 75.0
 
 
 def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(tmp_path, monkeypatch):
@@ -390,26 +398,35 @@ def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path,
         "duplicateCountries": [],
         "summary": {
             "total": 1,
-            "pass": 0,
-            "empty": 1,
+            "pass": 1,
+            "empty": 0,
             "fail": 0,
             "errors": 0,
-            "passPct": 0.0,
-            "status": "failure",
+            "passPct": 100.0,
+            "status": "success",
             "gateThreshold": 70,
-            "gateStatus": "blocked",
+            "gateStatus": "allowed",
         },
         "countriesDetail": [
             {
                 "countryCode": "se",
                 "total": 1,
-                "pass": 0,
-                "empty": 1,
+                "pass": 1,
+                "empty": 0,
                 "fail": 0,
                 "errors": 0,
-                "passPct": 0.0,
-                "status": "failure",
-                "sources": [],
+                "passPct": 100.0,
+                "status": "success",
+                "sources": [
+                    {
+                        "country": "se",
+                        "sourceCode": "volvo_xc60_se_draft_scrapling",
+                        "status": "pass",
+                        "valid": 1,
+                        "extracted": 1,
+                        "rejected": 0,
+                    }
+                ],
             }
         ],
         "generatedAt": "2026-06-12T09:31:08Z",
@@ -422,12 +439,12 @@ def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path,
                 "runId": old_report["runId"],
                 "batch": "old_batch",
                 "finishedAt": "2026-06-12T09:31:08Z",
-                "status": "failure",
-                "gateStatus": "blocked",
-                "passPct": 0.0,
+                "status": "success",
+                "gateStatus": "allowed",
+                "passPct": 100.0,
                 "total": 1,
-                "pass": 0,
-                "empty": 1,
+                "pass": 1,
+                "empty": 0,
                 "fail": 0,
                 "errors": 0,
                 "artifactPath": str(artifacts / f"dryrun_report_{old_report['runId']}.json"),
@@ -449,21 +466,22 @@ def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path,
         "runId": "msrp-dryrun-20260612-125301",
         "country": "se",
         "total": 1,
-        "pass": 1,
-        "empty": 0,
+        "pass": 0,
+        "empty": 1,
         "fail": 0,
         "errors": 0,
-        "passPct": 100.0,
-        "status": "success",
+        "passPct": 0.0,
+        "status": "failure",
         "failureBreakdown": {},
         "strategyRecommendations": {},
         "results": [{
             "country": "se",
             "sourceCode": "volvo_xc60_se_draft_scrapling",
-            "status": "success",
-            "valid": 1,
-            "extracted": 1,
+            "status": "empty",
+            "valid": 0,
+            "extracted": 0,
             "rejected": 0,
+            "failureReason": "http_timeout",
         }],
     }), encoding="utf-8")
     lock_file = tmp_path / "jato-msrp-low-concurrency.lock"
@@ -487,6 +505,11 @@ def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path,
     assert dashboard["stableCoverage"]["activeRunId"] == "msrp-dryrun-20260612-125301"
     assert dashboard["stableCoverage"]["probeDiffersFromStableRun"] is True
     assert dashboard["stableCoverage"]["activeRunPartial"] is True
+    assert dashboard["stableCoverage"]["probeRegressionCount"] == 1
+    assert dashboard["stableCoverage"]["probeRegressionSamples"][0]["countryCode"] == "se"
+    assert dashboard["stableCoverage"]["probeRegressionSamples"][0]["sourceCode"] == "volvo_xc60_se_draft_scrapling"
+    assert dashboard["stableCoverage"]["probeRegressionSamples"][0]["activeStatus"] == "empty"
+    assert dashboard["stableCoverage"]["probeRegressionSamples"][0]["stableRunId"] == "msrp-dryrun-20260612-070207"
 
 
 def test_partial_run_dir_uses_logged_country_plan_before_country_starts(tmp_path, monkeypatch):

@@ -332,6 +332,58 @@ def _stable_coverage_summary(all_countries: list[dict[str, Any]], current: dict[
     if not latest_run_id:
         latest_run_id = str(next((country.get("runId") for country in all_countries if country.get("runId")), ""))
     active_run_id = str(current.get("runId") or "")
+    stable_good_sources: dict[tuple[str, str], dict[str, Any]] = {}
+    active_sources: dict[tuple[str, str], dict[str, Any]] = {}
+    repair_samples: list[dict[str, Any]] = []
+    failure_counts: dict[str, int] = {}
+    source_rows_observed = 0
+    for country in all_countries:
+        country_code = str(country.get("countryCode") or "")
+        for source in country.get("sources") or []:
+            source_code = str(source.get("sourceCode") or "")
+            if not country_code or not source_code:
+                continue
+            source_rows_observed += 1
+            if source.get("status") == "pass":
+                stable_good_sources[(country_code, source_code)] = {**source, "_runId": country.get("runId")}
+                continue
+            reason = str(source.get("failureReason") or country.get("topFailureReason") or source.get("status") or "unknown")
+            failure_counts[reason] = failure_counts.get(reason, 0) + 1
+            if len(repair_samples) < 8:
+                repair_samples.append({
+                    "countryCode": country_code,
+                    "sourceCode": source_code,
+                    "failureReason": reason,
+                    "recommendedStrategy": source.get("recommendedStrategy"),
+                    "runId": country.get("runId"),
+                })
+    for country in current.get("countries") or []:
+        country_code = str(country.get("countryCode") or "")
+        for source in country.get("sources") or []:
+            source_code = str(source.get("sourceCode") or "")
+            if country_code and source_code:
+                active_sources[(country_code, source_code)] = source
+    probe_regressions: list[dict[str, Any]] = []
+    for (country_code, source_code), stable_source in stable_good_sources.items():
+        active_source = active_sources.get((country_code, source_code))
+        if not active_source or active_source.get("status") == "pass":
+            continue
+        probe_regressions.append({
+            "countryCode": country_code,
+            "sourceCode": source_code,
+            "activeStatus": active_source.get("status"),
+            "failureReason": active_source.get("failureReason"),
+            "recommendedStrategy": active_source.get("recommendedStrategy"),
+            "stableRunId": stable_source.get("_runId") or latest_run_id,
+            "activeRunId": active_run_id,
+            "lastKnownValid": stable_source.get("valid"),
+        })
+    source_count = source_rows_observed or total_sources
+    source_pass_count = len(stable_good_sources) if source_rows_observed else total_pass
+    top_failure_reasons = [
+        {"reason": reason, "count": count}
+        for reason, count in sorted(failure_counts.items(), key=lambda item: (-item[1], item[0]))[:8]
+    ]
     return {
         "gateThreshold": gate_threshold,
         "countryCount": len(all_countries),
@@ -340,6 +392,15 @@ def _stable_coverage_summary(all_countries: list[dict[str, Any]], current: dict[
         "stablePassRate": round(total_pass / max(total_sources, 1) * 100, 1) if total_sources > 0 else 0,
         "totalSources": total_sources,
         "totalPass": total_pass,
+        "sourceRowsObserved": source_rows_observed,
+        "sourceCount": source_count,
+        "readySourceCount": source_pass_count,
+        "blockedSourceCount": max(0, source_count - source_pass_count),
+        "sourcePassRate": round(source_pass_count / max(source_count, 1) * 100, 1) if source_count > 0 else 0,
+        "topFailureReasons": top_failure_reasons,
+        "repairSourceSamples": repair_samples,
+        "probeRegressionCount": len(probe_regressions),
+        "probeRegressionSamples": probe_regressions[:8],
         "latestRunId": latest_run_id,
         "activeRunId": active_run_id,
         "activeRunRunning": bool(current.get("running")),
