@@ -600,15 +600,20 @@ def test_auto_resolve_review_cases_approves_link_backed_open_cases(
     assert review_case.review_status == "approved"
     assert review_case.current_assignee == "msrp-auto-review"
     assert observation.match_status == "auto_accepted"
-    assert observation.match_reason_json["autoReviewDecision"] == {
+    decision = observation.match_reason_json["autoReviewDecision"]
+    assert decision == {
         "decision": "approve",
         "decidedBy": "msrp-auto-review",
         "decidedAtUtc": now.isoformat(),
         "resolverKind": "jato_link",
         "linkId": "link-1",
         "overrideId": None,
+        "screen": decision["screen"],
         "note": "Auto-approved via active MSRP link",
     }
+    assert decision["screen"]["passed"] is True
+    assert decision["screen"]["score"] >= decision["screen"]["threshold"]
+    assert decision["screen"]["reviewAssist"]["preferred"] == "rule_based"
     assert len(added_decisions) == 1
     assert added_decisions[0].decision == "approve"
     assert payload["candidateCases"] == 1
@@ -617,3 +622,127 @@ def test_auto_resolve_review_cases_approves_link_backed_open_cases(
     assert payload["overrideAppliedCount"] == 0
     assert payload["unresolvedCount"] == 0
     assert payload["missingObservationCount"] == 0
+    assert payload["scoreRejectedCount"] == 0
+    assert payload["autoReviewScore"]["threshold"] == 70.0
+    assert payload["sampleScreens"][0]["passed"] is True
+
+
+def test_auto_resolve_review_cases_holds_low_score_candidates(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 4, 21, 0, 30, tzinfo=timezone.utc)
+    review_case_id = uuid4()
+    observation_id = uuid4()
+    source_id = uuid4()
+    review_case = SimpleNamespace(
+        review_case_id=review_case_id,
+        observation_id=observation_id,
+        review_status="open",
+        current_assignee=None,
+        official_model="XC60",
+        official_trim="Ultra",
+        official_edition=None,
+        official_powertrain="PHEV",
+        jato_powertrain="PHEV",
+        updated_at_utc=now,
+    )
+    observation = SimpleNamespace(
+        observation_id=observation_id,
+        source_id=source_id,
+        country="瑞典",
+        brand="Volvo",
+        jato_model="XC60",
+        jato_trim="Ultra",
+        jato_powertrain="PHEV",
+        official_model="XC60",
+        official_trim="Ultra",
+        official_edition=None,
+        official_powertrain="PHEV",
+        match_confidence=Decimal("0.0500"),
+        match_status="review_required",
+        match_reason_json={},
+        source_url="https://example.test/xc60",
+        updated_at_utc=now,
+    )
+    source = SimpleNamespace(
+        source_id=source_id,
+        source_code="volvo_xc60_se",
+        source_url="https://example.test/source-registry",
+        source_type="brand_site",
+        extractor_name="scrapling",
+        extractor_version="v1",
+        tier=3,
+    )
+    added_decisions = []
+    materialized = []
+
+    def _apply_mapping(_session, incoming_observation):
+        incoming_observation.official_trim = "Ultra Dark"
+        incoming_observation.match_status = "auto_accepted"
+        return {
+            "resolverKind": "jato_link",
+            "linkId": "link-1",
+            "overrideId": None,
+        }
+
+    monkeypatch.setattr(
+        review_service.repo,
+        "list_review_cases",
+        lambda *args, **kwargs: [review_case],
+    )
+    monkeypatch.setattr(
+        review_service.msrp_repository,
+        "list_observations_by_ids",
+        lambda *args, **kwargs: [observation],
+    )
+    monkeypatch.setattr(
+        review_service.msrp_repository,
+        "list_sources_by_ids",
+        lambda *args, **kwargs: [source],
+    )
+    monkeypatch.setattr(
+        review_service,
+        "apply_canonical_mapping",
+        _apply_mapping,
+    )
+    monkeypatch.setattr(review_service, "_utc_now", lambda: now)
+    monkeypatch.setattr(
+        review_service,
+        "materialize_current_price_from_observation",
+        lambda *args, **kwargs: materialized.append(args[1]) or None,
+    )
+    monkeypatch.setattr(
+        review_service.repo,
+        "add_review_decision",
+        lambda _session, decision: added_decisions.append(decision),
+    )
+    monkeypatch.setattr(
+        review_service,
+        "_commit_or_conflict",
+        lambda *args, **kwargs: None,
+    )
+
+    payload = review_service.auto_resolve_review_cases(
+        None,
+        {
+            "decided_by": "msrp-auto-review",
+            "country": "Sweden",
+            "brand": "Volvo",
+            "limit": 100,
+            "min_score": 95,
+        },
+    )
+
+    assert review_case.review_status == "open"
+    assert observation.match_status == "review_required"
+    assert observation.official_trim == "Ultra"
+    assert observation.match_reason_json["autoReviewScreen"]["decision"] == "hold"
+    assert observation.match_reason_json["autoReviewScreen"]["passed"] is False
+    assert observation.match_reason_json["autoReviewScreen"]["reviewAssist"]["preferred"] == "human_review"
+    assert added_decisions == []
+    assert materialized == []
+    assert payload["candidateCases"] == 1
+    assert payload["autoApprovedCount"] == 0
+    assert payload["scoreRejectedCount"] == 1
+    assert payload["unresolvedCount"] == 1
+    assert payload["sampleScreens"][0]["passed"] is False

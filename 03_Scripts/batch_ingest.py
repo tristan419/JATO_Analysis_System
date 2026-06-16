@@ -59,6 +59,17 @@ def _is_truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _float_env(name: str) -> float | None:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"[WARN] Invalid {name}={raw!r}; ignoring")
+        return None
+
+
 def _auth_headers(
     auth_token: str | None = None,
     user_name: str | None = None,
@@ -234,6 +245,7 @@ def _auto_resolve_reviews(
     *,
     decided_by: str,
     limit: int,
+    min_score: float | None,
     note: str | None,
     auth_token: str | None,
     user_name: str | None,
@@ -245,6 +257,7 @@ def _auto_resolve_reviews(
         "overrideAppliedCount": 0,
         "unresolvedCount": 0,
         "missingObservationCount": 0,
+        "scoreRejectedCount": 0,
     }
     for country in countries:
         payload = {
@@ -253,6 +266,8 @@ def _auto_resolve_reviews(
             "limit": limit,
             "note": note,
         }
+        if min_score is not None:
+            payload["min_score"] = min_score
         result = _post_backend_json(
             "/review/cases/auto-resolve",
             payload,
@@ -264,6 +279,7 @@ def _auto_resolve_reviews(
             f" country={country}"
             f" approved={result.get('autoApprovedCount', 0)}"
             f" unresolved={result.get('unresolvedCount', 0)}"
+            f" score_rejected={result.get('scoreRejectedCount', 0)}"
             f" links={result.get('linkAppliedCount', 0)}"
             f" overrides={result.get('overrideAppliedCount', 0)}"
         )
@@ -405,6 +421,11 @@ def main() -> None:
         default=int(os.getenv("JATO_AUTO_REVIEW_LIMIT", "500")),
     )
     parser.add_argument(
+        "--auto-review-min-score",
+        type=float,
+        default=_float_env("JATO_MSRP_AUTO_REVIEW_MIN_SCORE"),
+    )
+    parser.add_argument(
         "--materialize-limit",
         type=int,
         default=int(os.getenv("JATO_MATERIALIZE_LIMIT", "500")),
@@ -494,6 +515,7 @@ def main() -> None:
             countries,
             decided_by=args.decided_by,
             limit=args.auto_review_limit,
+            min_score=args.auto_review_min_score,
             note=args.note,
             auth_token=args.auth_token,
             user_name=args.user_name,
@@ -502,6 +524,7 @@ def main() -> None:
             "Auto-review:"
             f" approved={totals['autoApprovedCount']}"
             f" unresolved={totals['unresolvedCount']}"
+            f" score_rejected={totals['scoreRejectedCount']}"
             f" links={totals['linkAppliedCount']}"
             f" overrides={totals['overrideAppliedCount']}"
         )

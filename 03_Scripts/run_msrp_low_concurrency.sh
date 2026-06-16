@@ -81,6 +81,7 @@ export APP_USER_NAME="${APP_USER_NAME:-msrp-cron}"
 AUTO_REVIEW="${JATO_MSRP_AUTO_REVIEW:-true}"
 AUTO_MATERIALIZE="${JATO_MSRP_AUTO_MATERIALIZE:-true}"
 AUTO_REVIEW_LIMIT="${JATO_MSRP_AUTO_REVIEW_LIMIT:-500}"
+AUTO_REVIEW_MIN_SCORE="${JATO_MSRP_AUTO_REVIEW_MIN_SCORE:-70}"
 MATERIALIZE_LIMIT="${JATO_MSRP_MATERIALIZE_LIMIT:-500}"
 AUTO_REVIEW_DECIDED_BY="${JATO_AUTO_REVIEW_DECIDED_BY:-${APP_USER_NAME:-msrp-cron}}"
 REFRESH_CURRENT_SNAPSHOT="${JATO_MSRP_REFRESH_CURRENT_SNAPSHOT:-true}"
@@ -214,6 +215,7 @@ echo "[INFO] API base: $JATO_API_BASE"
 echo "[INFO] Log file: $LOG_FILE"
 echo "[INFO] Auto review: $AUTO_REVIEW"
 echo "[INFO] Auto materialize: $AUTO_MATERIALIZE"
+echo "[INFO] Auto review min score: $AUTO_REVIEW_MIN_SCORE"
 echo "[INFO] Refresh current price snapshot: $REFRESH_CURRENT_SNAPSHOT"
 echo "[INFO] Refresh MSRP readiness audit: $REFRESH_READINESS_AUDIT"
 echo "[INFO] Country timeout seconds: $COUNTRY_TIMEOUT_SECONDS"
@@ -306,7 +308,7 @@ while (( country_idx < total || active > 0 )); do
     extra_args=()
     if [[ "$MODE" == "ingest" ]]; then
       if is_truthy "$AUTO_REVIEW"; then
-        extra_args+=(--auto-review --decided-by "$AUTO_REVIEW_DECIDED_BY" --auto-review-limit "$AUTO_REVIEW_LIMIT")
+        extra_args+=(--auto-review --decided-by "$AUTO_REVIEW_DECIDED_BY" --auto-review-limit "$AUTO_REVIEW_LIMIT" --auto-review-min-score "$AUTO_REVIEW_MIN_SCORE")
       fi
       if is_truthy "$AUTO_MATERIALIZE"; then
         extra_args+=(--materialize --materialize-limit "$MATERIALIZE_LIMIT")
