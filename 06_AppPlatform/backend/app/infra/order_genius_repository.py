@@ -452,7 +452,7 @@ def list_bom_with_fob(
 ) -> tuple[list[dict], list[str]]:
     """Return SKUs with their FOB per country, grouped for BOM admin display."""
     skus = list_all_material_skus_for_admin(session, brand=brand, search=search, country_code=country_code, limit=limit)
-    all_countries = [item["countryCode"] for item in list_ordering_country_options(session)]
+    all_countries = list_active_fob_country_codes(session)
     if not skus:
         return [], all_countries
 
@@ -820,6 +820,16 @@ def list_ordering_country_options(session: Session) -> list[dict]:
         }
 
     return [options[code] for code in sorted(options)]
+
+
+def list_active_fob_country_codes(session: Session) -> list[str]:
+    """Return country columns that have active FOB data in BOM Admin."""
+    country_codes = session.execute(
+        select(CountrySkuFobResolved.country_code)
+        .where(CountrySkuFobResolved.is_active == True)
+        .distinct()
+    ).scalars().all()
+    return sorted({str(code or "").upper() for code in country_codes if str(code or "").strip()})
 
 
 def list_all_payment_terms(
