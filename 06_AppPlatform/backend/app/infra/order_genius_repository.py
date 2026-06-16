@@ -27,29 +27,46 @@ from app.db.models import (
 from app.services.ordering_normalization import normalize_brand, normalize_brand_text
 
 
-COUNTRY_NAMES_BY_CODE = {
+JATO_COUNTRY_NAMES_BY_CODE = {
     "AT": "Austria",
     "BE": "Belgium",
+    "CH": "Switzerland",
+    "CZ": "Czech Republic",
+    "DE": "Germany",
+    "DK": "Denmark",
+    "ES": "Spain",
+    "FI": "Finland",
+    "FR": "France",
+    "GR": "Greece",
+    "HR": "Croatia",
+    "HU": "Hungary",
+    "IT": "Italy",
+    "NL": "Netherlands",
+    "NO": "Norway",
+    "PL": "Poland",
+    "PT": "Portugal",
+    "RO": "Romania",
+    "SE": "Sweden",
+    "SI": "Slovenia",
+    "SK": "Slovakia",
+}
+
+ORDERING_COUNTRY_NAMES_BY_CODE = {
     "BG": "Bulgaria",
     "BW": "Botswana",
     "CL": "Chile",
-    "CZ": "Czech Republic",
-    "DK": "Denmark",
     "DM": "Dominican Republic",
-    "FI": "Finland",
-    "GR": "Greece",
     "GV": "Cape Verde",
-    "HR": "Croatia",
-    "HU": "Hungary",
     "KX": "Kuwait",
     "LV": "Latvia",
-    "NL": "Netherlands",
-    "PL": "Poland",
-    "RO": "Romania",
-    "SE": "Sweden",
-    "SK": "Slovakia",
+    "PU": "Portugal",
     "ZF": "South Africa",
     "ZU": "Zimbabwe",
+}
+
+COUNTRY_NAMES_BY_CODE = {
+    **JATO_COUNTRY_NAMES_BY_CODE,
+    **ORDERING_COUNTRY_NAMES_BY_CODE,
 }
 
 
@@ -761,10 +778,19 @@ def list_distinct_material_codes(
 def list_ordering_country_options(session: Session) -> list[dict]:
     """Return countries available to ordering accounts.
 
-    This includes JATO/payment-term countries plus FOB-only countries such as
-    SK/LV, without pretending every option is a JATO market.
+    This includes JATO market countries, payment-term countries, and FOB-only
+    countries such as LV, without pretending every option is a JATO market.
     """
-    options: dict[str, dict] = {}
+    options: dict[str, dict] = {
+        code: {
+            "countryCode": code,
+            "countryName": country_name,
+            "paymentTermCode": None,
+            "paymentMethod": None,
+            "lcDays": None,
+        }
+        for code, country_name in JATO_COUNTRY_NAMES_BY_CODE.items()
+    }
     term_rows = list_country_payment_terms(session)
     for term in term_rows:
         code = term.country_code.upper()

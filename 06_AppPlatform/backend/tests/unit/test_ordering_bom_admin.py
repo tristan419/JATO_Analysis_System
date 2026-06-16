@@ -78,23 +78,24 @@ def test_list_ordering_country_options_includes_fob_only_country(monkeypatch) ->
     )
 
     result = repo.list_ordering_country_options(_FakeSession(["SK", "LV"]))
+    by_code = {item["countryCode"]: item for item in result}
 
-    assert result == [
-        {
-            "countryCode": "LV",
-            "countryName": "Latvia",
-            "paymentTermCode": "LC90",
-            "paymentMethod": "LC",
-            "lcDays": 90,
-        },
-        {
-            "countryCode": "SK",
-            "countryName": "Slovakia",
-            "paymentTermCode": None,
-            "paymentMethod": None,
-            "lcDays": None,
-        },
-    ]
+    assert "DE" in by_code
+    assert "PT" in by_code
+    assert by_code["LV"] == {
+        "countryCode": "LV",
+        "countryName": "Latvia",
+        "paymentTermCode": "LC90",
+        "paymentMethod": "LC",
+        "lcDays": 90,
+    }
+    assert by_code["SK"] == {
+        "countryCode": "SK",
+        "countryName": "Slovakia",
+        "paymentTermCode": None,
+        "paymentMethod": None,
+        "lcDays": None,
+    }
 
 
 def test_upsert_colour_surcharge_creates_normalized_special_rule() -> None:
