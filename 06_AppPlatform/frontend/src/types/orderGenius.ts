@@ -96,6 +96,23 @@ export interface ColourSurchargeRule {
   isActive: boolean;
 }
 
+export interface ColourHexOption {
+  colourHex: string;
+  skuCount: number;
+}
+
+export interface ColourHexRule {
+  brand: string;
+  colourCode: string;
+  colourName: string;
+  normalizedColourName: string;
+  skuCount: number;
+  sampleMaterialCodes: string[];
+  status: "standard" | "conflict" | "missing";
+  standardColourHex: string | null;
+  hexOptions: ColourHexOption[];
+}
+
 export interface CountryPaymentTerm {
   countryCode: string;
   countryName: string;

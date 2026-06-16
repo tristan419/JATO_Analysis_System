@@ -108,6 +108,7 @@ import type {
 } from "../types/hermes";
 import type {
   BaselineVersion,
+  ColourHexRule,
   ColourSurchargeRule,
   CountryPaymentTerm,
   MaterialUploadPreview,
@@ -3296,6 +3297,15 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  getOrderGeniusColourHexRules: () =>
+    request<{ items: ColourHexRule[] }>("/order-genius/colour-hex-rules"),
+
+  setOrderGeniusColourHexRuleStandard: (body: { brand: string; colourCode: string; colourName: string; colourHex: string }) =>
+    request<{ brand: string; colourCode: string; colourName: string; normalizedColourName: string; colourHex: string; updated: number; materialCodes: string[] }>(
+      "/order-genius/colour-hex-rules/standard",
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
   getOrderGeniusCountries: () =>
     request<{ items: CountryPaymentTerm[] }>("/order-genius/countries"),
 
@@ -3488,7 +3498,7 @@ export const api = {
   createPaymentTerm: (body: { countryCode: string; countryName: string; paymentTermCode: string; paymentMethod: string; lcDays: number }) =>
     request<any>("/order-genius/payment-terms/countries", { method: "POST", body: JSON.stringify(body) }),
 
-  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourType?: string; powertrain?: string }) =>
+  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; powertrain?: string }) =>
     request<any>("/order-genius/material-skus", { method: "POST", body: JSON.stringify(body) }),
 
   updateSkuMetadata: (materialCode: string, body: { brand: string; modelName: string; version: string; powertrain: string; rowVersion: number }) =>

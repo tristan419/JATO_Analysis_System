@@ -288,6 +288,37 @@ def update_colour_surcharge(
     }
 
 
+@router.get("/colour-hex-rules")
+def list_colour_hex_rules(
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    """Return derived colour swatch rules and conflicts from material SKUs."""
+    return {"items": repo.list_colour_hex_rules(session)}
+
+
+@router.patch("/colour-hex-rules/standard")
+def set_colour_hex_rule_standard(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Apply one standard swatch to a brand/code/name colour rule."""
+    try:
+        result = repo.set_standard_colour_hex_for_rule(
+            session,
+            brand=str(body.get("brand") or ""),
+            colour_code=str(body.get("colourCode", body.get("colour_code")) or ""),
+            colour_name=str(body.get("colourName", body.get("colour_name")) or ""),
+            colour_hex=str(body.get("colourHex", body.get("colour_hex")) or ""),
+        )
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    return result
+
+
 @router.get("/countries")
 def list_countries_with_payment_terms(
     session: Session = Depends(get_db_session),
@@ -412,7 +443,11 @@ def patch_sku_colour_hex(
     sku = repo.get_sku_by_material_code(session, material_code)
     if not sku:
         raise HTTPException(status_code=404, detail="Material code not found")
-    sku.colour_hex = body.get("colourHex") or None
+    try:
+        colour_hex = repo.normalize_colour_hex_value(body.get("colourHex"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    sku.colour_hex = colour_hex
     session.commit()
     return {"materialCode": sku.material_code, "colourHex": sku.colour_hex}
 
@@ -714,6 +749,17 @@ def create_material_sku(
         )
         session.flush()
 
+    try:
+        explicit_colour_hex = repo.normalize_colour_hex_value(body.get("colourHex"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    colour_hex = explicit_colour_hex or repo.find_reusable_colour_hex(
+        session,
+        brand=str(body["brand"]),
+        colour_code=str(body["colourCode"]),
+        colour_name=str(body["colour"]),
+    )
+
     sku = MaterialSkuMaster(
         material_sku_id=uuid_module.uuid4(),
         material_code=material_code,
@@ -724,6 +770,7 @@ def create_material_sku(
         exterior_color_code=str(body["colourCode"]).strip(),
         exterior_color_type=body.get("colourType", "single"),
         powertrain=str(body.get("powertrain", "Other")).strip() or "Other",
+        colour_hex=colour_hex,
         lifecycle_status="active",
         is_active=True,
         is_published=False,
