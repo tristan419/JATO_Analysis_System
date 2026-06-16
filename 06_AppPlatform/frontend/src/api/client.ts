@@ -3293,6 +3293,9 @@ export const api = {
   getOrderGeniusCountries: () =>
     request<{ items: CountryPaymentTerm[] }>("/order-genius/countries"),
 
+  getAccountCountryOptions: () =>
+    request<{ items: CountryPaymentTerm[] }>("/order-genius/account-country-options"),
+
   getOrderGeniusBaselines: () =>
     request<{ items: BaselineVersion[] }>("/order-genius/baselines"),
 
@@ -3470,11 +3473,23 @@ export const api = {
   getSkuFobDetail: (materialCode: string, country: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob?country=${encodeURIComponent(country)}`),
 
+  copyCountryFobs: (body: { sourceCountryCode: string; targetCountryCode: string; overwrite: boolean }) =>
+    request<{ sourceCountryCode: string; targetCountryCode: string; totalSourceRows: number; copied: number; updated: number; skipped: number; overwrite: boolean }>(
+      "/order-genius/countries/copy-fobs",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
   createPaymentTerm: (body: { countryCode: string; countryName: string; paymentTermCode: string; paymentMethod: string; lcDays: number }) =>
     request<any>("/order-genius/payment-terms/countries", { method: "POST", body: JSON.stringify(body) }),
 
   createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourType?: string; powertrain?: string }) =>
     request<any>("/order-genius/material-skus", { method: "POST", body: JSON.stringify(body) }),
+
+  updateSkuMetadata: (materialCode: string, body: { brand: string; modelName: string; version: string; powertrain: string; rowVersion: number }) =>
+    request<{ materialCode: string; brand: string; modelName: string; version: string; powertrain: string | null; rowVersion: number }>(
+      `/order-genius/material-skus/${encodeURIComponent(materialCode)}/metadata`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
 
   updateColourHex: (materialCode: string, colourHex: string | null) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/colour-hex`, { method: "PATCH", body: JSON.stringify({ colourHex }) }),

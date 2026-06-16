@@ -7,11 +7,13 @@ import {
   useState,
   type ChangeEvent,
   type DragEvent,
+  type FormEvent,
   type KeyboardEvent,
 } from "react";
 
 import { api, apiUrl } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
+import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
 import type { CellValueChangedEvent } from "ag-grid-community";
 import {
@@ -1780,6 +1782,7 @@ function ptColor(pt: string | null): string { return PT_COLORS[pt ?? ""] ?? "#9c
 // ── BOM Admin Panel ──────────────────────────────────────────────────
 
 function BomAdminPanel() {
+  const { countryOptions: accountCountryOptions } = useAccountCountryOptions();
   const [skus, setSkus] = useState<any[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1789,6 +1792,12 @@ function BomAdminPanel() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [showAddMaterial, setShowAddMaterial] = useState(false);
   const [newMaterial, setNewMaterial] = useState({ materialCode: "", brand: "", modelName: "", version: "", colour: "", colourCode: "", powertrain: "ICE" });
+  const [addMaterialError, setAddMaterialError] = useState("");
+  const [copySourceCountry, setCopySourceCountry] = useState("CZ");
+  const [copyTargetCountry, setCopyTargetCountry] = useState("SK");
+  const [copyOverwrite, setCopyOverwrite] = useState(false);
+  const [copyingCountry, setCopyingCountry] = useState(false);
+  const [copyCountryStatus, setCopyCountryStatus] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [dragSku, setDragSku] = useState<string | null>(null);
   const [dragOverTier, setDragOverTier] = useState<string | null>(null);
@@ -1842,6 +1851,13 @@ function BomAdminPanel() {
     return countries.includes('NL') ? ['NL', ...rest] : rest;
   }, [countries]);
 
+  const copyTargetOptions = useMemo(() => {
+    const codes = new Set<string>();
+    for (const country of accountCountryOptions) codes.add(country.countryCode);
+    for (const country of countries) codes.add(country);
+    return Array.from(codes).sort();
+  }, [accountCountryOptions, countries]);
+
   const load = useCallback(async (s?: string) => {
     if (loadRef.current) return;  // skip if already loading
     loadRef.current = true;
@@ -1894,6 +1910,92 @@ function BomAdminPanel() {
       }
       setEditFob(null); scheduleLoad(200);
     } catch (e) { alert(getErrorMessage(e)); }
+  };
+
+  const handleAddMaterial = async () => {
+    const requiredFields: [keyof typeof newMaterial, string][] = [
+      ["materialCode", "Material Code"],
+      ["brand", "Brand"],
+      ["modelName", "Model"],
+      ["version", "Version"],
+      ["colour", "Colour"],
+      ["colourCode", "Code"],
+    ];
+    const missing = requiredFields
+      .filter(([key]) => !newMaterial[key].trim())
+      .map(([, label]) => label);
+    if (missing.length > 0) {
+      setAddMaterialError(`Missing: ${missing.join(", ")}`);
+      return;
+    }
+    try {
+      setAddMaterialError("");
+      await api.createMaterialSku({...newMaterial, colourType: 'single'});
+      setShowAddMaterial(false);
+      setNewMaterial({materialCode:'',brand:'',modelName:'',version:'',colour:'',colourCode:'',powertrain:'ICE'});
+      load();
+    } catch (e) {
+      setAddMaterialError(getErrorMessage(e));
+    }
+  };
+
+  const handleCopyCountryFobs = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const sourceCountryCode = copySourceCountry.trim().toUpperCase();
+    const targetCountryCode = copyTargetCountry.trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(sourceCountryCode) || !/^[A-Z]{2}$/.test(targetCountryCode)) {
+      setCopyCountryStatus("Use 2-letter country codes.");
+      return;
+    }
+    if (sourceCountryCode === targetCountryCode) {
+      setCopyCountryStatus("Source and target must be different.");
+      return;
+    }
+    try {
+      setCopyingCountry(true);
+      setCopyCountryStatus("");
+      const result = await api.copyCountryFobs({
+        sourceCountryCode,
+        targetCountryCode,
+        overwrite: copyOverwrite,
+      });
+      setCopyCountryStatus(`Copied ${result.copied}, updated ${result.updated}, skipped ${result.skipped}.`);
+      load();
+    } catch (e) {
+      setCopyCountryStatus(getErrorMessage(e));
+    } finally {
+      setCopyingCountry(false);
+    }
+  };
+
+  const handleSkuMetadataSubmit = async (
+    event: FormEvent<HTMLFormElement>,
+    allSkus: any[],
+  ) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const brand = String(form.get("brand") ?? "").trim();
+    const modelName = String(form.get("modelName") ?? "").trim();
+    const version = String(form.get("version") ?? "").trim();
+    const powertrain = String(form.get("powertrain") ?? "").trim();
+    if (!brand || !modelName || !version || !powertrain) {
+      alert("Brand, Model, Version and Powertrain are required.");
+      return;
+    }
+    try {
+      for (const sku of allSkus) {
+        await api.updateSkuMetadata(sku.materialCode, {
+          brand,
+          modelName,
+          version,
+          powertrain,
+          rowVersion: sku.rowVersion,
+        });
+      }
+      scheduleLoad(100);
+    } catch (e) {
+      alert(getErrorMessage(e));
+    }
   };
 
   const toggleGroup = (key: string) => {
@@ -2088,6 +2190,54 @@ function BomAdminPanel() {
         <button className="btn btn-sm btn-ghost" onClick={() => { setShowAddMaterial(!showAddMaterial); }}
           style={{ marginLeft: 'auto' }}>+ Material</button>
       </div>
+      <form
+        onSubmit={handleCopyCountryFobs}
+        style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10, padding: "8px 10px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 4 }}
+      >
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#334155" }}>Copy FOB</span>
+        <select
+          value={copySourceCountry}
+          onChange={(e) => setCopySourceCountry(e.target.value)}
+          style={{ fontSize: 11, width: 74 }}
+        >
+          {copySourceCountry && !sortedCountries.includes(copySourceCountry) ? (
+            <option value={copySourceCountry}>{copySourceCountry}</option>
+          ) : null}
+          {sortedCountries.map((country) => (
+            <option key={country} value={country}>{country}</option>
+          ))}
+        </select>
+        <span style={{ fontSize: 12, color: "#64748b" }}>to</span>
+        <input
+          type="text"
+          value={copyTargetCountry}
+          onChange={(e) => setCopyTargetCountry(e.target.value.toUpperCase().slice(0, 2))}
+          list="bom-copy-target-countries"
+          maxLength={2}
+          style={{ fontSize: 11, width: 56, textTransform: "uppercase" }}
+        />
+        <datalist id="bom-copy-target-countries">
+          {copyTargetOptions.map((country) => (
+            <option key={country} value={country} />
+          ))}
+        </datalist>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "#475569" }}>
+          <input
+            type="checkbox"
+            checked={copyOverwrite}
+            onChange={(e) => setCopyOverwrite(e.target.checked)}
+          />
+          overwrite
+        </label>
+        <button className="btn btn-sm btn-primary" type="submit" disabled={copyingCountry || sortedCountries.length === 0}>
+          {copyingCountry ? "Copying..." : "Copy"}
+        </button>
+        {copyCountryStatus ? (
+          <span style={{ fontSize: 11, color: copyCountryStatus.startsWith("Copied") ? "#0f766e" : "#b45309" }}>
+            {copyCountryStatus}
+          </span>
+        ) : null}
+      </form>
       {showAddMaterial && (
         <div style={{ display: "flex", gap: 6, marginBottom: 8, padding: 6, background: '#f8fafc', borderRadius: 4, flexWrap: "wrap", alignItems: "center" }}>
           <input type="text" placeholder="Material Code" value={newMaterial.materialCode}
@@ -2112,14 +2262,9 @@ function BomAdminPanel() {
             style={{ fontSize: 11, width: 70 }}>
             {['BEV','HEV','PHEV','ICE','MHEV','REEV'].map(p => <option key={p} value={p}>{p}</option>)}
           </select>
-          <button className="btn btn-sm btn-primary" onClick={async () => {
-            if (!newMaterial.materialCode) return;
-            try {
-              await api.createMaterialSku({...newMaterial, colourType: 'single'});
-              setShowAddMaterial(false); setNewMaterial({materialCode:'',brand:'',modelName:'',version:'',colour:'',colourCode:'',powertrain:'ICE'}); load();
-            } catch(e) { alert(getErrorMessage(e)); }
-          }}>Add</button>
-          <button className="btn btn-sm btn-ghost" onClick={() => setShowAddMaterial(false)}>Cancel</button>
+          <button className="btn btn-sm btn-primary" onClick={handleAddMaterial}>Add</button>
+          <button className="btn btn-sm btn-ghost" onClick={() => { setShowAddMaterial(false); setAddMaterialError(""); }}>Cancel</button>
+          {addMaterialError ? <span style={{ fontSize: 11, color: "#b91c1c" }}>{addMaterialError}</span> : null}
         </div>
       )}
       <div style={{ overflowX: "auto", maxHeight: "60vh" }}>
@@ -2323,7 +2468,8 @@ function BomAdminPanel() {
                             );
                           };
                           return (
-                            <tr key={bomTemplate}
+                            <Fragment key={bomTemplate}>
+                            <tr
                               style={isHist ? { opacity: 0.55, textDecoration: "line-through" }
                                    : isPhaseOut ? { opacity: 0.75 } : undefined}>
                               <td style={{ borderLeft: `3px solid ${isHist ? '#9ca3af' : isPhaseOut ? '#d97706' : '#16a34a'}`,
@@ -2465,6 +2611,28 @@ function BomAdminPanel() {
                                 );
                               })}
                             </tr>
+                            {editing ? (
+                              <tr>
+                                <td colSpan={10 + sortedCountries.length} style={{ background: "#f8fafc", padding: "6px 8px", borderLeft: "3px solid #94a3b8" }}>
+                                  <form
+                                    onSubmit={(event) => handleSkuMetadataSubmit(event, allSkus)}
+                                    style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}
+                                  >
+                                    <span style={{ fontSize: 11, fontWeight: 700, color: "#334155" }}>Product</span>
+                                    <input name="brand" type="text" defaultValue={(ref as any).brand || ""} placeholder="Brand" style={{ width: 90, fontSize: 11 }} />
+                                    <input name="modelName" type="text" defaultValue={(ref as any).modelName || ""} placeholder="Model" style={{ width: 140, fontSize: 11 }} />
+                                    <input name="version" type="text" defaultValue={(ref as any).version || ""} placeholder="Version" style={{ width: 120, fontSize: 11 }} />
+                                    <select name="powertrain" defaultValue={(ref as any).powertrain || "ICE"} style={{ width: 78, fontSize: 11 }}>
+                                      {['BEV','HEV','PHEV','ICE','MHEV','REEV'].map(p => <option key={p} value={p}>{p}</option>)}
+                                    </select>
+                                    <button className="btn btn-sm btn-primary" type="submit" style={{ fontSize: 10, padding: "2px 8px" }}>
+                                      Save Product
+                                    </button>
+                                  </form>
+                                </td>
+                              </tr>
+                            ) : null}
+                            </Fragment>
                           );
                         })}
                       </tbody>

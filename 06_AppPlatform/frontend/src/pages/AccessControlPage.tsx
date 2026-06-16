@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
+import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
 import {
-  JATO_COUNTRIES,
   formatJatoCountryOption,
   type JatoCountryOption,
 } from "../utils/jatoCountries";
@@ -126,13 +126,13 @@ function CountryMultiSelect({
 
 export function AccessControlPage() {
   const { user } = useAuth();
+  const { countryOptions: allCountryOptions } = useAccountCountryOptions();
   const [tab, setTab] = useState<Tab>("users");
   const [users, setUsers] = useState<AccessUser[]>([]);
   const [requests, setRequests] = useState<RoleUpgradeRequestItem[]>([]);
   const [requestStatus, setRequestStatus] = useState("pending");
   const [requestsLoading, setRequestsLoading] = useState(false);
   const [reviewingRequestId, setReviewingRequestId] = useState<string | null>(null);
-  const [countries] = useState<JatoCountryOption[]>(JATO_COUNTRIES);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -146,25 +146,6 @@ export function AccessControlPage() {
   const [editingUser, setEditingUser] = useState<AccessUser | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ role: "", primaryCountry: "", secondaryCodes: [] as string[], newPassword: "", isActive: true });
-
-  // ── Country options (JATO ∪ payment-term countries) ───────────
-  const [ptCountries, setPtCountries] = useState<{ countryCode: string; countryName: string }[]>([]);
-  useEffect(() => {
-    api.get<{ items: { countryCode: string; countryName: string }[] }>("/order-genius/countries")
-      .then((res) => setPtCountries(res.items || []))
-      .catch(() => setPtCountries([]));
-  }, []);
-
-  const allCountryOptions = useMemo(() => {
-    const map = new Map<string, JatoCountryOption>();
-    for (const c of JATO_COUNTRIES) map.set(c.countryCode, c);
-    for (const c of ptCountries) {
-      if (!map.has(c.countryCode)) {
-        map.set(c.countryCode, { countryCode: c.countryCode, countryName: c.countryName, countryNameZh: c.countryName, marketScanCountry: c.countryCode });
-      }
-    }
-    return Array.from(map.values()).sort((a, b) => a.countryCode.localeCompare(b.countryCode));
-  }, [ptCountries]);
 
   // Multi-select popover for secondary countries
   const secondaryPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -436,7 +417,7 @@ export function AccessControlPage() {
                         style={{ padding: "2px 4px", fontSize: 12, minWidth: 120 }}
                       >
                         <option value="">Unset</option>
-                        {countries.map((country) => (
+                        {allCountryOptions.map((country) => (
                           <option key={country.countryCode} value={country.countryCode}>
                             {formatJatoCountryOption(country)}
                           </option>
@@ -514,7 +495,7 @@ export function AccessControlPage() {
                   <select value={editForm.primaryCountry} onChange={(e) => setEditForm({ ...editForm, primaryCountry: e.target.value })}
                     style={{ display: "block", width: "100%", marginTop: 4, padding: "6px 8px", borderRadius: 4, border: "1px solid #d1d5db", fontSize: 13 }}>
                     <option value="">Unset</option>
-                    {countries.map((c) => (
+                    {allCountryOptions.map((c) => (
                       <option key={c.countryCode} value={c.countryCode}>{formatJatoCountryOption(c)}</option>
                     ))}
                   </select>
