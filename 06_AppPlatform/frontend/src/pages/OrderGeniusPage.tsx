@@ -2210,6 +2210,14 @@ function BomAdminPanel() {
 
   if (loading) return <div style={{ padding: 16, color: "#64748b" }}>Loading BOM data...</div>;
 
+  const bomHeaderBaseStyle = {
+    background: "#334155",
+    color: "#ffffff",
+    fontWeight: 900,
+    borderBottom: "2px solid #0f172a",
+    textShadow: "0 1px 0 rgba(0,0,0,0.35)",
+  } as const;
+
   return (
     <div style={{ padding: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, position: "sticky", top: 0, background: "rgba(255,255,255,0.95)", backdropFilter: "blur(8px)", zIndex: 1, padding: "8px 0", borderBottom: "1px solid #e2e8f0" }}>
@@ -2232,7 +2240,7 @@ function BomAdminPanel() {
             onClick={() => setShowCopyFob(prev => !prev)}
             style={{ color: showCopyFob ? "#2563eb" : undefined }}
           >
-            {showCopyFob ? "Hide Copy FOB" : "Copy FOB"}
+            {showCopyFob ? "Hide Copy FOB" : "Copy Country FOB"}
           </button>
           <button className="btn btn-sm btn-ghost" onClick={() => { setShowAddMaterial(!showAddMaterial); setAddMaterialNotice(""); }}>
             + Material
@@ -2356,16 +2364,16 @@ function BomAdminPanel() {
                     <table className="data-table bom-admin-table" style={{ fontSize: 11, width: "auto", minWidth: "100%" }}>
                       <thead>
                         <tr style={{ position: "sticky", top: 0, zIndex: 2 }}>
-                          <th style={{ minWidth: 150, position: "sticky", left: 0, zIndex: 3, background: "#e8eef6", color: "#334155", fontWeight: 800, borderBottom: "1px solid #cbd5e1" }}>BOM</th>
-                          <th style={{ minWidth: 90, position: "sticky", left: 150, zIndex: 3, background: "#e8eef6", color: "#334155", fontWeight: 800, borderBottom: "1px solid #cbd5e1" }}>Interior</th>
-                          <th style={{ minWidth: 120, position: "sticky", left: 240, zIndex: 3, background: "#e8eef6", color: "#334155", fontWeight: 800, borderBottom: "1px solid #cbd5e1" }}>Single</th>
-                          <th style={{ minWidth: 100, position: "sticky", left: 360, zIndex: 3, background: "#e8eef6", color: "#334155", fontWeight: 800, borderBottom: "1px solid #cbd5e1" }}>Dual</th>
-                          <th style={{ minWidth: 70, position: "sticky", left: 460, zIndex: 3, background: "#e8eef6", color: "#334155", fontWeight: 800, borderBottom: "1px solid #cbd5e1" }}>Special</th>
-                          <th style={{ minWidth: 70, background: "#e8eef6", color: "#334155", fontWeight: 800, borderBottom: "1px solid #cbd5e1" }}>Lifecycle</th>
-                          <th style={{ width: 70, background: "#e8eef6", color: "#334155", fontWeight: 800, borderBottom: "1px solid #cbd5e1" }}></th>
-                          <th style={{ width: 96, minWidth: 96, background: "#e8eef6", color: "#334155", fontWeight: 800, borderBottom: "1px solid #cbd5e1" }}>Edit</th>
-                          <th style={{ width: 65, background: "#e8eef6", color: "#334155", fontWeight: 800, borderBottom: "1px solid #cbd5e1" }}>From</th>
-                          <th style={{ width: 65, background: "#e8eef6", color: "#334155", fontWeight: 800, borderBottom: "1px solid #cbd5e1" }}>To</th>
+                          <th style={{ ...bomHeaderBaseStyle, minWidth: 150, position: "sticky", left: 0, zIndex: 3 }}>BOM</th>
+                          <th style={{ ...bomHeaderBaseStyle, minWidth: 90, position: "sticky", left: 150, zIndex: 3 }}>Interior</th>
+                          <th style={{ ...bomHeaderBaseStyle, minWidth: 120, position: "sticky", left: 240, zIndex: 3 }}>Single</th>
+                          <th style={{ ...bomHeaderBaseStyle, minWidth: 100, position: "sticky", left: 360, zIndex: 3 }}>Dual</th>
+                          <th style={{ ...bomHeaderBaseStyle, minWidth: 70, position: "sticky", left: 460, zIndex: 3 }}>Special</th>
+                          <th style={{ ...bomHeaderBaseStyle, minWidth: 70 }}>Lifecycle</th>
+                          <th style={{ ...bomHeaderBaseStyle, width: 70 }}></th>
+                          <th style={{ ...bomHeaderBaseStyle, width: 72, minWidth: 72 }}>Edit</th>
+                          <th style={{ ...bomHeaderBaseStyle, width: 65 }}>From</th>
+                          <th style={{ ...bomHeaderBaseStyle, width: 65 }}>To</th>
                           {sortedCountries.map(c => (
                             <th key={c} style={{ width: 75, textAlign: "right", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
                               {c}
@@ -2618,24 +2626,11 @@ function BomAdminPanel() {
                                 )}
                               </td>
                               <td style={{ textAlign: 'center' }}>
-                                <div style={{ display: "inline-flex", gap: 4, alignItems: "center", justifyContent: "center" }}>
-                                  {editing ? (
-                                    <button
-                                      type="button"
-                                      className="btn btn-sm btn-ghost"
-                                      title={`Copy ${ref.materialCode} into the Add Material form`}
-                                      style={{ fontSize: 10, padding: '1px 5px', color: '#2563eb', borderColor: '#bfdbfe' }}
-                                      onClick={() => handleCopyMaterialFromSku(ref)}
-                                    >
-                                      Copy
-                                    </button>
-                                  ) : null}
-                                  <button className="btn btn-sm btn-ghost"
-                                    style={{ fontSize: 10, padding: '1px 4px', color: editing ? '#16a34a' : '#64748b' }}
-                                    onClick={() => toggleEditBom(bomTemplate)}>
-                                    {editing ? 'Save' : 'Edit'}
-                                  </button>
-                                </div>
+                                <button className="btn btn-sm btn-ghost"
+                                  style={{ fontSize: 10, padding: '1px 4px', color: editing ? '#16a34a' : '#64748b' }}
+                                  onClick={() => toggleEditBom(bomTemplate)}>
+                                  {editing ? 'Save' : 'Edit'}
+                                </button>
                               </td>
                               <td>
                                 {editingBoms.has(bomTemplate) ? (
@@ -2695,6 +2690,17 @@ function BomAdminPanel() {
                                     <select name="powertrain" defaultValue={(ref as any).powertrain || "ICE"} style={{ width: 78, fontSize: 11 }}>
                                       {['BEV','HEV','PHEV','ICE','MHEV','REEV'].map(p => <option key={p} value={p}>{p}</option>)}
                                     </select>
+                                    <span style={{ fontFamily: "monospace", fontSize: 10, color: "#94a3b8" }}>
+                                      {allSkus.length} SKUs
+                                    </span>
+                                    <button
+                                      className="btn btn-sm btn-ghost"
+                                      type="button"
+                                      style={{ fontSize: 10, padding: "2px 8px", color: "#2563eb", borderColor: "#bfdbfe", background: "#eff6ff" }}
+                                      onClick={() => handleCopyMaterialFromSku(ref)}
+                                    >
+                                      Copy Material
+                                    </button>
                                     <button className="btn btn-sm btn-primary" type="submit" style={{ fontSize: 10, padding: "2px 8px" }}>
                                       Save Product
                                     </button>

@@ -81,6 +81,7 @@ def seed() -> None:
                     ('HR', 'Croatia',         'TT',    'TT', 0),
                     ('HU', 'Hungary',         'LC90',  'LC', 90),
                     ('LV', 'Latvia',          'LC90',  'LC', 90),
+                    ('NL', 'Netherlands',     'TT',    'TT', 0),
                     ('PL', 'Poland',          'LC90',  'LC', 90),
                     ('RO', 'Romania',         'LC120', 'LC', 120),
                     ('SE', 'Sweden',          'LC90',  'LC', 90)
