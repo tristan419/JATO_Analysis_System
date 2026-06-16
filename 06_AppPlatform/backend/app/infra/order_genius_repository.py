@@ -888,6 +888,40 @@ def list_colour_surcharges(
     return list(session.execute(stmt).scalars().all())
 
 
+def upsert_colour_surcharge(
+    session: Session,
+    brand: str,
+    colour_type: str,
+    surcharge_eur: float,
+) -> BrandColourSurchargeRule:
+    normalized_brand = normalize_brand(brand)
+    normalized_colour_type = colour_type.strip().lower()
+    if normalized_colour_type not in {"dual", "special"}:
+        raise ValueError("colourType must be dual or special")
+    if surcharge_eur < 0:
+        raise ValueError("surchargeEur must be greater than or equal to 0")
+
+    existing = get_brand_colour_surcharge(
+        session,
+        normalized_brand,
+        normalized_colour_type,
+    )
+    if existing:
+        existing.surcharge_eur = surcharge_eur
+        existing.updated_at_utc = datetime.now(timezone.utc)
+        return existing
+
+    rule = BrandColourSurchargeRule(
+        colour_surcharge_rule_id=uuid4(),
+        brand=normalized_brand,
+        colour_type=normalized_colour_type,
+        surcharge_eur=surcharge_eur,
+        is_active=True,
+    )
+    session.add(rule)
+    return rule
+
+
 # ── CountrySkuFobResolved ──────────────────────────────────────────────
 
 

@@ -39,8 +39,10 @@ def seed() -> None:
                 VALUES
                     (gen_random_uuid(), 'OMODA',  'single', 0,   true, now(), now()),
                     (gen_random_uuid(), 'OMODA',  'dual',   200, true, now(), now()),
+                    (gen_random_uuid(), 'OMODA',  'special',200, true, now(), now()),
                     (gen_random_uuid(), 'JAECOO', 'single', 0,   true, now(), now()),
-                    (gen_random_uuid(), 'JAECOO', 'dual',   300, true, now(), now())
+                    (gen_random_uuid(), 'JAECOO', 'dual',   300, true, now(), now()),
+                    (gen_random_uuid(), 'JAECOO', 'special',300, true, now(), now())
                 ON CONFLICT DO NOTHING
                 """
             )

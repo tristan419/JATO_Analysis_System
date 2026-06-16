@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.order_genius_schemas import (
+    ColourSurchargeUpdate,
     ExportRequest,
     PublishBaselineRequest,
     QuantityCellUpdate,
@@ -251,6 +252,39 @@ def list_colour_surcharges(
             }
             for r in rules
         ],
+    }
+
+
+@router.patch("/colour-surcharges")
+def update_colour_surcharge(
+    body: ColourSurchargeUpdate,
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    try:
+        rule = repo.upsert_colour_surcharge(
+            session,
+            body.brand,
+            body.colourType,
+            body.surchargeEur,
+        )
+        session.commit()
+        session.refresh(rule)
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Colour surcharge rule already exists",
+        ) from exc
+    return {
+        "colourSurchargeRuleId": str(rule.colour_surcharge_rule_id),
+        "brand": rule.brand,
+        "colourType": rule.colour_type,
+        "surchargeEur": float(rule.surcharge_eur),
+        "isActive": rule.is_active,
     }
 
 
