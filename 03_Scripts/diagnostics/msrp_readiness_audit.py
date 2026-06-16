@@ -29,6 +29,14 @@ except ImportError:  # pragma: no cover - import is optional for pure unit tests
 
 
 SCHEMA_VERSION = "msrp_official_price_readiness_v1"
+WRITE_ROLE_LEVELS = {
+    "viewer": 1,
+    "order_filler": 1,
+    "editor": 2,
+    "admin": 3,
+    "developer": 3,
+}
+MIN_WRITE_ROLE_LEVEL = WRITE_ROLE_LEVELS["editor"]
 
 TEST_EVIDENCE = {
     "workflowSmoke": "03_Scripts/tests/test_msrp_workflow_smoke.py",
@@ -136,6 +144,11 @@ def _safe_get(
         return client.request_json("GET", path, query=query), None
     except SmokeFailure as exc:
         return {}, str(exc)
+
+
+def _role_level(payload: dict[str, Any]) -> tuple[str, int]:
+    role = str(payload.get("role") or "").strip().lower()
+    return role or "unknown", WRITE_ROLE_LEVELS.get(role, 0)
 
 
 def _requirement(
@@ -354,6 +367,7 @@ def build_readiness_report(
             "has_net_price_after_subsidy": True,
         },
     )
+    auth_me, auth_error = _safe_get(client, "/auth/me")
     reconciliation, reconciliation_error = _safe_get(
         client,
         "/msrp/reconciliation",
@@ -398,6 +412,15 @@ def build_readiness_report(
     dryrun_runs = dryrun_history.get("runs") if isinstance(dryrun_history.get("runs"), list) else []
     dryrun_pass_pct = dryrun_status.get("overallPassPct")
     dryrun_gate = dryrun_status.get("gateStatus")
+    write_role, write_role_level = _role_level(auth_me)
+    write_auth_ok = write_role_level >= MIN_WRITE_ROLE_LEVEL
+    write_auth_reason = (
+        None
+        if write_auth_ok
+        else "auth_preflight_request_failed"
+        if auth_error is not None
+        else "write_role_required"
+    )
 
     smoke_covers_full_contract = _test_file_has(
         "workflowSmoke",
@@ -440,6 +463,27 @@ def build_readiness_report(
             runtime={"sourceCount": source_count, "error": sources_error},
             evidence=["GET /msrp/sources", TEST_EVIDENCE["workflowSmoke"]],
             note="Maintains country/brand official source metadata.",
+        ),
+        _requirement(
+            key="official_msrp_ingest_auth",
+            title="Official MSRP write auth preflight",
+            status=_status(
+                write_auth_ok,
+                unavailable=auth_error is not None or not write_auth_ok,
+            ),
+            runtime={
+                "authStatus": "ok" if write_auth_ok else "auth_failed",
+                "role": write_role,
+                "requiredRole": "editor",
+                "user": auth_me.get("username") or auth_me.get("name"),
+                "reason": write_auth_reason,
+                "error": auth_error,
+            },
+            evidence=[
+                "GET /auth/me",
+                "07_ScrapingToolkit/jato_scraper/runner.py",
+            ],
+            note="Confirms the configured token can write ingest mutations before scraper network work begins.",
         ),
         _requirement(
             key="official_msrp_ingest",
@@ -679,6 +723,7 @@ def build_readiness_report(
                 "financeObservationCount": finance_count,
                 "reconciliationConflictGroups": conflict_count,
                 "dryrunRunCount": len(dryrun_runs),
+                "writeAuthRole": write_role,
             },
         },
         "requirements": requirements,
