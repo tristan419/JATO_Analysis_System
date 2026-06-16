@@ -380,6 +380,147 @@ def test_finance_observation_from_payload_reads_pricing_context(
     assert finance_observation.net_price_after_subsidy_eur == 74800.0
 
 
+def test_create_scrape_batch_ingest_persists_finance_observations(
+    monkeypatch,
+) -> None:
+    class FakeSession:
+        def flush(self) -> None:
+            pass
+
+        def commit(self) -> None:
+            pass
+
+        def rollback(self) -> None:
+            pass
+
+        def refresh(self, _item) -> None:
+            pass
+
+    source_id = uuid4()
+    captured: dict[str, list[FinanceObservation]] = {}
+
+    def add_scrape_batch(_session, batch):
+        batch.scrape_batch_id = batch.scrape_batch_id or uuid4()
+        return batch
+
+    def add_observations(_session, observations):
+        now = datetime(2026, 6, 16, 9, 0, tzinfo=timezone.utc)
+        for observation in observations:
+            observation.observation_id = observation.observation_id or uuid4()
+            observation.created_at_utc = observation.created_at_utc or now
+            observation.updated_at_utc = observation.updated_at_utc or now
+        return observations
+
+    def add_finance_observations(_session, observations):
+        now = datetime(2026, 6, 16, 9, 0, tzinfo=timezone.utc)
+        for item in observations:
+            item.finance_observation_id = (
+                item.finance_observation_id or uuid4()
+            )
+            item.created_at_utc = item.created_at_utc or now
+            item.updated_at_utc = item.updated_at_utc or now
+        captured["items"] = observations
+        return observations
+
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "add_scrape_batch",
+        add_scrape_batch,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "has_price_history_table",
+        lambda session: False,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "has_finance_observations_table",
+        lambda session: True,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "get_source",
+        lambda session, item_id: SimpleNamespace(
+            source_id=item_id,
+            price_semantics="base_msrp",
+        ),
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "add_observations",
+        add_observations,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "add_finance_observations",
+        add_finance_observations,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "convert_amount_to_eur",
+        lambda amount, currency, observed_at: (
+            round(float(amount) * 0.1, 2),
+            SimpleNamespace(
+                rate_to_eur=0.1,
+                as_of_date=date(2026, 6, 16),
+                source="unit-test",
+            ),
+        ),
+    )
+
+    payload = {
+        "batch_code": "finance-batch",
+        "trigger_type": "manual",
+        "scope_country": "瑞典",
+        "scope_brands": ["Volvo"],
+        "observations": [
+            {
+                "source_id": str(source_id),
+                "country": "瑞典",
+                "brand": "Volvo",
+                "jato_model": "XC60",
+                "jato_trim": "Ultra",
+                "jato_powertrain": "PHEV",
+                "official_model": "XC60",
+                "official_trim": "Ultra",
+                "msrp_value": 773000,
+                "currency": "SEK",
+                "tax_included": True,
+                "price_label": "Lease monthly",
+                "observed_at_utc": datetime(
+                    2026, 6, 16, 9, 0, tzinfo=timezone.utc
+                ),
+                "source_url": "https://example.test/xc60",
+                "source_payload_hash": "hash-finance",
+                "extraction_version": "test",
+                "match_confidence": 0.91,
+                "match_status": "auto_accepted",
+                "source_context_json": {
+                    "pricingContext": {
+                        "price_semantics": "lease_monthly",
+                        "monthly_payment": 5990,
+                        "term_months": 36,
+                        "finance_type": "private_lease",
+                        "finance_currency": "SEK",
+                    },
+                },
+            }
+        ],
+    }
+
+    result = msrp_workflow_service.create_scrape_batch_ingest(
+        FakeSession(),
+        payload,
+        commit=True,
+    )
+
+    assert result["financeObservationsCreated"] == 1
+    assert result["currentPricesTouched"] == 0
+    assert result["nonMsrpPriceObservationCount"] == 1
+    assert captured["items"][0].price_semantics == "lease_monthly"
+    assert captured["items"][0].monthly_payment_eur == 599.0
+
+
 def test_finance_observation_from_payload_skips_plain_msrp() -> None:
     assert (
         msrp_workflow_service._finance_observation_from_payload(

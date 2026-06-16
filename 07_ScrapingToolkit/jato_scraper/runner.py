@@ -30,6 +30,24 @@ log = logging.getLogger(__name__)
 DEFAULT_API_BASE = "http://localhost:8000/v1"
 SOURCE_FILE_SUFFIXES = frozenset({".yaml", ".yml"})
 DEFAULT_SOURCE_TIMEOUT_SECONDS = 180
+FINANCE_CONTEXT_FIELDS = frozenset({
+    "price_semantics",
+    "monthly_payment",
+    "down_payment",
+    "down_payment_pct",
+    "term_months",
+    "apr",
+    "effective_apr",
+    "balloon_payment",
+    "finance_type",
+    "total_credit_cost",
+    "total_amount_payable",
+    "annual_mileage_limit",
+    "offer_valid_until",
+    "subsidy_amount",
+    "net_price_after_subsidy",
+    "finance_currency",
+})
 
 
 class SourceTimeoutError(TimeoutError):
@@ -269,7 +287,33 @@ def _observation_to_ingest_dict(
         "candidate_matches_json": obs.candidate_matches,
         "msrp_value_eur": obs.msrp_value_eur,
         "fx_rate_to_eur": obs.fx_rate_to_eur,
+        "source_context_json": _source_context_from_raw_payload(
+            obs.raw_payload,
+        ),
     }
+
+
+def _source_context_from_raw_payload(
+    raw_payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not raw_payload:
+        return None
+
+    source_context: dict[str, Any] = {"rawPayload": raw_payload}
+    pricing_context = raw_payload.get("pricingContext")
+    if isinstance(pricing_context, dict):
+        source_context["pricingContext"] = pricing_context
+        return source_context
+
+    pricing_context = {
+        key: raw_payload[key]
+        for key in FINANCE_CONTEXT_FIELDS
+        if raw_payload.get(key) is not None
+    }
+    if pricing_context:
+        source_context["pricingContext"] = pricing_context
+
+    return source_context
 
 
 def build_batch_payload(

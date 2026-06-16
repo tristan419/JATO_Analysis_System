@@ -4,6 +4,7 @@ from jato_scraper.base import ExtractorConfig
 from jato_scraper.config_loader import _build_scrapling_profile
 from jato_scraper.extractors.scrapling_web import (
     CssMapping,
+    PricingContextMapping,
     ScraplingExtractor,
     ScraplingProfile,
     TextRegexEntryPattern,
@@ -741,6 +742,89 @@ def test_config_loader_builds_scrapling_text_regex_profile() -> None:
     assert profile.text_regex.include_element_html is True
     assert len(profile.text_regex.entry_patterns) == 1
     assert profile.text_regex.entry_patterns[0].official_trim == "Active"
+
+
+def test_config_loader_builds_scrapling_pricing_context_profile() -> None:
+    profile = _build_scrapling_profile(
+        {
+            "url": "https://example.com",
+            "pricing_context": {
+                "fields": {
+                    "monthly_payment": "lease.monthlyText",
+                    "term_months": "lease.termText",
+                },
+                "constants": {
+                    "price_semantics": "lease_monthly",
+                    "finance_type": "private_lease",
+                    "finance_currency": "SEK",
+                },
+            },
+        }
+    )
+
+    assert profile.pricing_context is not None
+    assert profile.pricing_context.fields == {
+        "monthly_payment": "lease.monthlyText",
+        "term_months": "lease.termText",
+    }
+    assert profile.pricing_context.constants == {
+        "price_semantics": "lease_monthly",
+        "finance_type": "private_lease",
+        "finance_currency": "SEK",
+    }
+
+
+def test_build_observation_adds_pricing_context_from_profile() -> None:
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="volvo_xc60_se_lease",
+            country="SE",
+            brand="Volvo",
+            source_url="https://example.com",
+        ),
+        ScraplingProfile(
+            url="https://example.com",
+            pricing_context=PricingContextMapping(
+                fields={
+                    "monthly_payment": "lease.monthlyText",
+                    "term_months": "lease.termText",
+                },
+                constants={
+                    "price_semantics": "lease_monthly",
+                    "finance_type": "private_lease",
+                    "finance_currency": "SEK",
+                },
+            ),
+            default_currency="SEK",
+            fixed_model="XC60",
+            fixed_jato_model="XC60",
+            fixed_jato_powertrain="PHEV",
+            copy_trim_to_jato_trim=True,
+        ),
+    )
+
+    observation = extractor._build_observation(
+        official_model="XC60",
+        official_trim="Ultra",
+        msrp_value=5990,
+        currency="SEK",
+        raw_payload={
+            "priceText": "5 990 kr/mån",
+            "lease": {
+                "monthlyText": "5 990 kr/mån",
+                "termText": "36 månader",
+            },
+        },
+    )
+
+    assert observation is not None
+    assert observation.raw_payload["pricingContext"] == {
+        "price_semantics": "lease_monthly",
+        "finance_type": "private_lease",
+        "finance_currency": "SEK",
+        "monthly_payment": 5990.0,
+        "term_months": 36,
+    }
 
 
 def test_config_loader_builds_scrapling_browser_runtime_options() -> None:

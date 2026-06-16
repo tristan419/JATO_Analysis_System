@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from jato_scraper.base import BaseExtractor, ExtractorConfig, RawObservation
@@ -65,12 +65,19 @@ class TextRegexMapping:
 
 
 @dataclass(frozen=True)
+class PricingContextMapping:
+    fields: dict[str, str] = field(default_factory=dict)
+    constants: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ScraplingProfile:
     url: str
     tier: FetcherTier = "http"
     css: CssMapping | None = None
     attr_json: AttrJsonMapping | None = None
     text_regex: TextRegexMapping | None = None
+    pricing_context: PricingContextMapping | None = None
     json_script_selector: str | None = None
     json_vehicles_path: str | None = None
     headless: bool = True
@@ -118,6 +125,22 @@ class StructuredVariantFields:
 
 
 _PRICE_RE = re.compile(r"[\d]+(?:[.,'\u2019]\d{3})*(?:[.,]\d{1,2})?")
+_FINANCE_AMOUNT_FIELDS = frozenset({
+    "monthly_payment",
+    "down_payment",
+    "down_payment_pct",
+    "apr",
+    "effective_apr",
+    "balloon_payment",
+    "total_credit_cost",
+    "total_amount_payable",
+    "subsidy_amount",
+    "net_price_after_subsidy",
+})
+_FINANCE_INTEGER_FIELDS = frozenset({
+    "term_months",
+    "annual_mileage_limit",
+})
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _GENERIC_EDITION_RE = re.compile(
     r"\b([a-z0-9][a-z0-9\-]*\s+edition)\b",
@@ -254,6 +277,40 @@ def parse_price(raw: str) -> float | None:
         if all(len(p) == 3 for p in parts[1:]):
             s = s.replace(".", "")
     return float(s)
+
+
+def _resolve_payload_path(payload: dict[str, Any], path: str) -> Any | None:
+    current: Any = payload
+    for part in path.split("."):
+        key = part.strip()
+        if not key:
+            return None
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+        if current is None:
+            return None
+    return current
+
+
+def _coerce_pricing_context_value(field_name: str, value: Any) -> Any | None:
+    if value in (None, "", [], {}):
+        return None
+    if field_name in _FINANCE_AMOUNT_FIELDS:
+        if isinstance(value, (int, float)):
+            return value
+        parsed = parse_price(str(value))
+        return parsed if parsed is not None else value
+    if field_name in _FINANCE_INTEGER_FIELDS:
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        parsed = parse_price(str(value))
+        return int(parsed) if parsed is not None else value
+    if isinstance(value, str):
+        return value.strip() or None
+    return value
 
 
 class ScraplingExtractor(BaseExtractor):
@@ -1181,6 +1238,60 @@ class ScraplingExtractor(BaseExtractor):
         )
         return float(self.profile.match_confidence or 0.0), reason
 
+    def _build_pricing_context(
+        self,
+        raw_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        mapping = self.profile.pricing_context
+        if mapping is None:
+            return {}
+
+        context: dict[str, Any] = {}
+        for field_name, value in mapping.constants.items():
+            normalized_field_name = str(field_name).strip()
+            if not normalized_field_name:
+                continue
+            coerced = _coerce_pricing_context_value(
+                normalized_field_name,
+                value,
+            )
+            if coerced is not None:
+                context[normalized_field_name] = coerced
+
+        for field_name, source_path in mapping.fields.items():
+            normalized_field_name = str(field_name).strip()
+            normalized_source_path = str(source_path).strip()
+            if not (normalized_field_name and normalized_source_path):
+                continue
+            value = _resolve_payload_path(raw_payload, normalized_source_path)
+            coerced = _coerce_pricing_context_value(
+                normalized_field_name,
+                value,
+            )
+            if coerced is not None:
+                context[normalized_field_name] = coerced
+
+        return context
+
+    def _raw_payload_with_pricing_context(
+        self,
+        raw_payload: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        payload = dict(raw_payload or {})
+        pricing_context = self._build_pricing_context(payload)
+        if not pricing_context:
+            return payload
+
+        existing = payload.get("pricingContext")
+        if isinstance(existing, dict):
+            payload["pricingContext"] = {
+                **pricing_context,
+                **existing,
+            }
+        else:
+            payload["pricingContext"] = pricing_context
+        return payload
+
     def _build_observation(
         self,
         official_model: str,
@@ -1192,6 +1303,7 @@ class ScraplingExtractor(BaseExtractor):
         source_url: str | None = None,
     ) -> RawObservation | None:
         profile = self.profile
+        payload = self._raw_payload_with_pricing_context(raw_payload)
         resolved_model = (profile.fixed_model or official_model).strip()
         resolved_trim = official_trim.strip()
         (
@@ -1202,7 +1314,7 @@ class ScraplingExtractor(BaseExtractor):
         ) = self._resolve_model_mapping(
             resolved_model,
             resolved_trim,
-            raw_payload or {},
+            payload,
         )
         if official_model_override:
             resolved_model = official_model_override
@@ -1229,7 +1341,7 @@ class ScraplingExtractor(BaseExtractor):
         variant_fields = self._extract_structured_variant_fields(
             resolved_model,
             resolved_trim,
-            raw_payload or {},
+            payload,
             model_mapping_source=model_mapping_source,
             model_mapping_keywords=model_mapping_keywords,
         )
@@ -1240,7 +1352,7 @@ class ScraplingExtractor(BaseExtractor):
             resolved_jato_trim,
             msrp_value,
             currency,
-            raw_payload or {},
+            payload,
             variant_fields,
         )
         match_status, match_reason = self._resolve_match_status(
@@ -1257,7 +1369,7 @@ class ScraplingExtractor(BaseExtractor):
             price_label=profile.default_price_label,
             source_url=source_url or profile.url,
             availability_text=availability_text,
-            raw_payload=raw_payload or {},
+            raw_payload=payload,
             jato_model=resolved_jato_model,
             jato_trim=resolved_jato_trim,
             jato_powertrain=variant_fields.jato_powertrain,
