@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
+import { DeckFloatingDrawer } from "../components/deckControls";
 import { useAuth } from "../contexts/AuthContext";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
+import type { MsrpFinanceObservation } from "../types";
 import type { LeaseOffer, LeaseCompareSet, SolveResult } from "../types/leaseComparison";
+import {
+  formatFinanceCurrency,
+  formatFinanceDate,
+  formatFinanceNumber,
+  getFinanceObservationLabel,
+  getFinanceObservationModelLabel,
+  matchesFinanceObservationFilters,
+} from "../utils/msrpFinance";
 
 const LEASE_TYPES = ["private", "fleet", "financial"] as const;
 const STATUSES = ["draft", "active", "expired", "archived", "scenario"] as const;
@@ -43,7 +53,14 @@ export function LeaseComparisonPage() {
   const [showVersions, setShowVersions] = useState<string | null>(null);
   const [versionList, setVersionList] = useState<LeaseOffer["versions"]>([]);
   const [countryFilter, setCountryFilter] = useState(primaryCountryISO);
+  const [brandFilter, setBrandFilter] = useState("");
+  const [modelFilter, setModelFilter] = useState("");
   const [leaseTypeFilter, setLeaseTypeFilter] = useState<string>("");
+  const [financeTypeFilter, setFinanceTypeFilter] = useState("");
+  const [filterDeckOpen, setFilterDeckOpen] = useState(true);
+  const [financeOffers, setFinanceOffers] = useState<MsrpFinanceObservation[]>([]);
+  const [financeLoading, setFinanceLoading] = useState(false);
+  const [financeError, setFinanceError] = useState<string | null>(null);
 
   // ── Block A: Solver state ──
   const [solver, setSolver] = useState({
@@ -65,6 +82,35 @@ export function LeaseComparisonPage() {
   }, [countryFilter, leaseTypeFilter]);
 
   useEffect(() => { loadOffers(); }, [loadOffers]);
+
+  const loadFinanceOffers = useCallback(async () => {
+    setFinanceLoading(true);
+    setFinanceError(null);
+    try {
+      const response = await api.listMsrpFinanceObservations({
+        country: countryFilter.trim() || undefined,
+        brand: brandFilter.trim() || undefined,
+        jato_model: modelFilter.trim() || undefined,
+        has_monthly_payment: true,
+        limit: 100,
+      });
+      setFinanceOffers(
+        response.items.filter((item) => matchesFinanceObservationFilters(item, {
+          country: countryFilter,
+          brand: brandFilter,
+          model: modelFilter,
+          financeType: financeTypeFilter,
+        })),
+      );
+    } catch (e: unknown) {
+      setFinanceError(e instanceof Error ? e.message : "Load finance observations failed");
+      setFinanceOffers([]);
+    } finally {
+      setFinanceLoading(false);
+    }
+  }, [brandFilter, countryFilter, financeTypeFilter, modelFilter]);
+
+  useEffect(() => { void loadFinanceOffers(); }, [loadFinanceOffers]);
 
   // ── Block A: Solve ──
   async function runSolver() {
@@ -130,6 +176,26 @@ export function LeaseComparisonPage() {
   }
 
   const comparedOffers = offers.filter((o) => compareIds.has(o.offerId));
+  const filteredOffers = offers.filter((offer) => {
+    const brandMatches = !brandFilter.trim()
+      || offer.brand.toLowerCase().includes(brandFilter.trim().toLowerCase());
+    const modelNeedle = modelFilter.trim().toLowerCase();
+    const modelMatches = !modelNeedle
+      || [offer.modelName, offer.version, offer.powertrain].filter(Boolean).join(" ").toLowerCase().includes(modelNeedle);
+    return brandMatches && modelMatches;
+  });
+
+  function useFinanceOfferInSolver(item: MsrpFinanceObservation) {
+    setSolver((current) => ({
+      ...current,
+      monthlyPayment: item.monthlyPayment ?? current.monthlyPayment,
+      capCost: item.netPriceAfterSubsidy ?? current.capCost,
+      residualValue: item.balloonPayment ?? current.residualValue,
+      termMonths: item.termMonths ?? current.termMonths,
+      solveFor: "money_factor",
+    }));
+    setNotice(`${getFinanceObservationModelLabel(item)} loaded into solver`);
+  }
 
   return (
     <section className="crud-shell" style={{ padding: 16 }}>
@@ -138,8 +204,50 @@ export function LeaseComparisonPage() {
         <p>Compare private leasing, fleet leasing and financial leasing offers across countries. All normalized to EUR.</p>
       </header>
 
+      <DeckFloatingDrawer
+        open={filterDeckOpen}
+        onOpenChange={setFilterDeckOpen}
+        triggerPrimary="Lease filters"
+        triggerSecondaryOpen="Hide"
+        triggerSecondaryClosed="Open"
+        title="Lease Compare Filters"
+        eyebrow="Floating Deck"
+        ariaLabel="Lease comparison filters"
+      >
+        <div className="crud-toolbar-grid">
+          <div className="filter-group">
+            <label>Country</label>
+            <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)}>
+              <option value="">All Countries</option>
+              <option value="SE">Sweden</option><option value="NO">Norway</option><option value="DK">Denmark</option>
+              <option value="FI">Finland</option><option value="DE">Germany</option><option value="NL">Netherlands</option>
+            </select>
+          </div>
+          <div className="filter-group">
+            <label>Brand</label>
+            <input value={brandFilter} onChange={(event) => setBrandFilter(event.target.value)} placeholder="e.g. Volvo / BMW" />
+          </div>
+          <div className="filter-group">
+            <label>Model</label>
+            <input value={modelFilter} onChange={(event) => setModelFilter(event.target.value)} placeholder="e.g. XC60 / iX1" />
+          </div>
+          <div className="filter-group">
+            <label>Lease type</label>
+            <select value={leaseTypeFilter} onChange={(e) => setLeaseTypeFilter(e.target.value)}>
+              <option value="">All Types</option>
+              {LEASE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div className="filter-group">
+            <label>Official finance type</label>
+            <input value={financeTypeFilter} onChange={(event) => setFinanceTypeFilter(event.target.value)} placeholder="private_lease / finance" />
+          </div>
+        </div>
+      </DeckFloatingDrawer>
+
       {error && <div className="alert alert-error" style={{ marginBottom: 12 }}>{error}</div>}
       {notice && <div className="alert" style={{ marginBottom: 12, background: "#ecfdf5", border: "1px solid #10b981" }}>{notice}</div>}
+      {financeError && <div className="alert alert-error" style={{ marginBottom: 12 }}>{financeError}</div>}
 
       {/* ═══ Block A: Parameter Solver ═══ */}
       <details className="card crud-card" style={{ padding: 16, marginBottom: 16 }}>
@@ -190,17 +298,9 @@ export function LeaseComparisonPage() {
 
       {/* ═══ Block B + C: Offer Manager + Comparison Board ═══ */}
       <div style={{ display: "flex", gap: 16, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-        <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)}
-          style={{ padding: "6px 10px", borderRadius: 4, border: "1px solid #d1d5db", fontSize: 13 }}>
-          <option value="">All Countries</option>
-          <option value="SE">Sweden</option><option value="NO">Norway</option><option value="DK">Denmark</option>
-          <option value="FI">Finland</option><option value="DE">Germany</option><option value="NL">Netherlands</option>
-        </select>
-        <select value={leaseTypeFilter} onChange={(e) => setLeaseTypeFilter(e.target.value)}
-          style={{ padding: "6px 10px", borderRadius: 4, border: "1px solid #d1d5db", fontSize: 13 }}>
-          <option value="">All Types</option>
-          {LEASE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
+        <span style={{ fontSize: 13, color: "#64748b" }}>
+          {countryFilter || "All countries"} · {brandFilter || "All brands"} · {modelFilter || "All models"} · {leaseTypeFilter || "All lease types"}
+        </span>
         {isEditor && <button className="btn btn-sm btn-primary" onClick={openCreate}>+ New Offer</button>}
         {compareIds.size > 0 && (
           <>
@@ -220,6 +320,60 @@ export function LeaseComparisonPage() {
           onClick={() => setViewMode("table")}>Table</button>
       </div>
 
+      <div className="card crud-card" style={{ padding: 16, marginBottom: 16 }}>
+        <div className="detail-section-head">
+          <div>
+            <div className="card-title">Official Finance Observations</div>
+            <p className="section-note">从 MSRP 抓取 pipeline 入库的月供 / lease / finance offer；用于和手工 lease offer 一起判断真实市场可用方案。</p>
+          </div>
+          <button type="button" className="btn btn-sm btn-secondary" onClick={() => void loadFinanceOffers()} disabled={financeLoading}>
+            {financeLoading ? "Loading" : "Refresh"}
+          </button>
+        </div>
+        {financeOffers.length > 0 ? (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+            {financeOffers.map((item) => (
+              <div key={item.financeObservationId} className="card crud-card" style={{ padding: 14 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+                  <div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+                      <span className="badge badge-active">{item.country}</span>
+                      <span className="badge badge-warning">{getFinanceObservationLabel(item)}</span>
+                    </div>
+                    <strong>{getFinanceObservationModelLabel(item)}</strong>
+                    <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>{item.officialModel} {item.officialTrim}</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <strong>{formatFinanceCurrency(item.monthlyPayment, item.currency)}</strong>
+                    <div style={{ fontSize: 12, color: "#64748b" }}>{formatFinanceCurrency(item.monthlyPaymentEur)}</div>
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px", fontSize: 12, marginTop: 12 }}>
+                  <span>Term {item.termMonths ? `${item.termMonths} mo` : "-"}</span>
+                  <span>Mileage {item.annualMileageLimit ? `${formatFinanceNumber(item.annualMileageLimit)} km/y` : "-"}</span>
+                  <span>Down {formatFinanceCurrency(item.downPayment, item.currency)}</span>
+                  <span>APR {item.apr !== null ? `${formatFinanceNumber(item.apr, 2)}%` : "-"}</span>
+                  <span>Net {formatFinanceCurrency(item.netPriceAfterSubsidyEur)}</span>
+                  <span>Valid {formatFinanceDate(item.offerValidUntil)}</span>
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", justifyContent: "space-between" }}>
+                  <button type="button" className="btn btn-xs btn-secondary" onClick={() => useFinanceOfferInSolver(item)}>
+                    Use in solver
+                  </button>
+                  {item.sourceUrl ? (
+                    <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="review-table-link">Source</a>
+                  ) : (
+                    <span style={{ fontSize: 12, color: "#94a3b8" }}>No source</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="crud-empty-state">{financeLoading ? "Loading official finance observations" : "No official finance observations for current filters"}</div>
+        )}
+      </div>
+
       {/* ── Table View ── */}
       {viewMode === "table" && (
         <div className="va-table-scroll" style={{ marginBottom: 16 }}>
@@ -233,7 +387,7 @@ export function LeaseComparisonPage() {
               <th>Status</th><th></th>
             </tr></thead>
             <tbody>
-              {offers.map((o) => (
+              {filteredOffers.map((o) => (
                 <tr key={o.offerId}>
                   <td>{o.countryCode}</td><td>{o.brand}</td><td>{o.modelName} {o.version || ""}</td>
                   <td>{o.leaseType}</td><td>{o.provider || "-"}</td>
@@ -265,7 +419,7 @@ export function LeaseComparisonPage() {
       {/* ── Offer cards grid ── */}
       {viewMode === "cards" && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 12, marginBottom: 16 }}>
-          {offers.map((o) => (
+          {filteredOffers.map((o) => (
             <div key={o.offerId} className="card crud-card"
               style={{
                 padding: 16, cursor: "pointer", position: "relative",

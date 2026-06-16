@@ -8,11 +8,20 @@ import {
   TextSearchFilters,
   useTextSearchFilters,
 } from "../components/TextSearchFilters";
-import type { CurrentPrice, PriceHistoryEntry } from "../types";
+import type { CurrentPrice, MsrpFinanceObservation, PriceHistoryEntry } from "../types";
 import {
   getCurrentPriceMatchStatusBadgeClass,
   getCurrentPriceMatchStatusLabel,
 } from "../utils/reviewStatus";
+import {
+  formatFinanceCurrency,
+  formatFinanceDate,
+  formatFinanceMonthlyPayment,
+  formatFinanceNumber,
+  getFinanceObservationLabel,
+  getFinanceObservationModelLabel,
+  getFinanceObservationsForCurrentPrice,
+} from "../utils/msrpFinance";
 import {
   buildCurrentPriceGroupKey,
   formatCurrentPriceDate,
@@ -155,6 +164,7 @@ export function MsrpPage() {
   const [heroCollapsed, setHeroCollapsed] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const refreshPricesRequestRef = useRef(0);
+  const refreshFinanceRequestRef = useRef(0);
 
   /* filters */
   const {
@@ -175,6 +185,11 @@ export function MsrpPage() {
   const [priceHistory, setPriceHistory] = useState<PriceHistoryEntry[]>([]);
   const [priceHistoryLoading, setPriceHistoryLoading] = useState(false);
   const [priceHistoryError, setPriceHistoryError] = useState("");
+  const [financeObservations, setFinanceObservations] = useState<MsrpFinanceObservation[]>([]);
+  const [financeLoading, setFinanceLoading] = useState(false);
+  const [financeError, setFinanceError] = useState("");
+  const [selectedFinanceObservation, setSelectedFinanceObservation] = useState<MsrpFinanceObservation | null>(null);
+  const [financeCardFlipped, setFinanceCardFlipped] = useState(false);
 
   /* materialize */
   const [materializing, setMaterializing] = useState(false);
@@ -230,6 +245,35 @@ export function MsrpPage() {
     }
   }
 
+  async function refreshFinanceObservations(filters = appliedTextFilters) {
+    const requestId = ++refreshFinanceRequestRef.current;
+    setFinanceLoading(true);
+    setFinanceError("");
+    try {
+      const res = await api.listMsrpFinanceObservations({
+        country: filters.country || undefined,
+        brand: filters.brand || undefined,
+        jato_model: filters.model || undefined,
+        has_monthly_payment: true,
+        limit: 500,
+      });
+      if (requestId !== refreshFinanceRequestRef.current) {
+        return;
+      }
+      setFinanceObservations(res.items);
+    } catch (err) {
+      if (requestId !== refreshFinanceRequestRef.current) {
+        return;
+      }
+      setFinanceError((err as Error).message);
+      setFinanceObservations([]);
+    } finally {
+      if (requestId === refreshFinanceRequestRef.current) {
+        setFinanceLoading(false);
+      }
+    }
+  }
+
   async function handleMaterialize() {
     const activeFilters = textFiltersPending ? draftTextFilters : appliedTextFilters;
     setMaterializing(true);
@@ -248,6 +292,7 @@ export function MsrpPage() {
       });
       setMaterializeResult(res.item);
       await refreshPrices(activeFilters);
+      await refreshFinanceObservations(activeFilters);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -282,6 +327,7 @@ export function MsrpPage() {
 
   useEffect(() => {
     void refreshPrices();
+    void refreshFinanceObservations();
   }, [appliedTextFilters]);
 
   useEffect(() => {
@@ -333,6 +379,10 @@ export function MsrpPage() {
   const uniqueCountries = new Set(prices.map((p) => p.country)).size;
   const uniqueBrands = new Set(prices.map((p) => p.brand)).size;
   const priceGroups = groupCurrentPrices(prices);
+  const monthlyObservationCount = financeObservations.filter((item) => item.monthlyPaymentEur !== null || item.monthlyPayment !== null).length;
+  const selectedPriceFinanceObservations = selectedPrice
+    ? getFinanceObservationsForCurrentPrice(financeObservations, selectedPrice)
+    : [];
   const showLoadingOverlay = loading && prices.length === 0;
 
   function isGroupExpanded(group: CurrentPriceGroup) {
@@ -363,6 +413,11 @@ export function MsrpPage() {
   function openPriceDetail(price: CurrentPrice) {
     setSelectedPrice(price);
     setDetailCollapsed(false);
+  }
+
+  function openFinanceCard(item: MsrpFinanceObservation) {
+    setSelectedFinanceObservation(item);
+    setFinanceCardFlipped(false);
   }
 
   return (
@@ -409,6 +464,11 @@ export function MsrpPage() {
                 <strong className="hero-meta-value">{priceAlertCount}</strong>
                 <span className="hero-meta-subvalue">发生过价格波动</span>
               </div>
+              <div className={`hero-meta-block hero-meta-block-immersive${financeLoading ? " is-loading" : ""}`}>
+                <span className="hero-meta-label">Monthly Offers</span>
+                <strong className="hero-meta-value">{monthlyObservationCount}</strong>
+                <span className="hero-meta-subvalue">finance observations</span>
+              </div>
             </div>
           </>
         )}
@@ -430,6 +490,7 @@ export function MsrpPage() {
                     return;
                   }
                   void refreshPrices(appliedTextFilters);
+                  void refreshFinanceObservations(appliedTextFilters);
                 }}
               >
                 刷新
@@ -448,6 +509,8 @@ export function MsrpPage() {
       />
 
       {error && <div className="alert alert-error">{error}</div>}
+
+      {financeError && <div className="alert alert-error">{financeError}</div>}
 
       {notice && <div className="alert alert-info">{notice}</div>}
 
@@ -530,6 +593,7 @@ export function MsrpPage() {
                 <th>JATO Powertrain</th>
                 <th>Official Model</th>
                 <th>MSRP (EUR)</th>
+                <th>Monthly</th>
                 <th>Currency</th>
                 <th>Match</th>
                 <th>Source</th>
@@ -558,7 +622,7 @@ export function MsrpPage() {
                 return (
                   <Fragment key={group.key}>
                     <tr className={`data-table-group-row${expanded ? " is-expanded" : ""}`}>
-                      <td colSpan={13}>
+                      <td colSpan={14}>
                         <div className="data-table-group-cell">
                           <button
                             type="button"
@@ -585,6 +649,8 @@ export function MsrpPage() {
                       const currentMsrpValue = resolveCurrentMsrpValue(p);
                       const lastPriceChangeAtUtc = resolveLastPriceChangeAtUtc(p);
                       const updatedAtUtc = resolveUpdatedAtUtc(p);
+                      const priceFinanceObservations = getFinanceObservationsForCurrentPrice(financeObservations, p);
+                      const bestFinanceObservation = priceFinanceObservations[0];
 
                       return (
                         <tr key={p.id} className={selectedPrice?.id === p.id ? "is-selected" : ""}>
@@ -595,6 +661,19 @@ export function MsrpPage() {
                           <td>{p.jatoPowertrain || "—"}</td>
                           <td>{p.officialModel}</td>
                           <td className="text-right"><strong>{formatCurrentPriceNumber(currentMsrpValue)}</strong></td>
+                          <td>
+                            {bestFinanceObservation ? (
+                              <button
+                                type="button"
+                                className="btn btn-xs btn-secondary"
+                                onClick={() => openFinanceCard(bestFinanceObservation)}
+                              >
+                                {formatFinanceMonthlyPayment(bestFinanceObservation)}
+                              </button>
+                            ) : (
+                              <span className="review-table-muted">{financeLoading ? "Loading" : "—"}</span>
+                            )}
+                          </td>
                           <td>{p.currency}</td>
                           <td>
                             <span className={`badge ${getCurrentPriceMatchStatusBadgeClass(p.matchStatus)}`}>
@@ -624,7 +703,7 @@ export function MsrpPage() {
                 );
               })}
               {prices.length === 0 && !loading && (
-                <tr><td colSpan={13}><div className="crud-empty-state">暂无价格记录，请先执行 Materialize</div></td></tr>
+                <tr><td colSpan={14}><div className="crud-empty-state">暂无价格记录，请先执行 Materialize</div></td></tr>
               )}
             </tbody>
           </table>
@@ -767,6 +846,38 @@ export function MsrpPage() {
 
               <div className="detail-section-head">
                 <div>
+                  <div className="card-title">Monthly / Finance Offers</div>
+                  <p className="section-note">按 country / brand / model 匹配 finance_observations，保留官网抓取来源。</p>
+                </div>
+              </div>
+
+              {selectedPriceFinanceObservations.length > 0 ? (
+                <div className="admin-detail-grid">
+                  {selectedPriceFinanceObservations.slice(0, 6).map((item) => (
+                    <button
+                      key={item.financeObservationId}
+                      type="button"
+                      className="admin-detail-item msrp-finance-detail-card"
+                      onClick={() => openFinanceCard(item)}
+                    >
+                      <span className="admin-detail-label">{getFinanceObservationLabel(item)}</span>
+                      <span className="admin-detail-value">
+                        <strong>{formatFinanceMonthlyPayment(item)}</strong>
+                      </span>
+                      <span className="review-table-muted">
+                        {item.termMonths ? `${item.termMonths} mo` : "Term -"} · {item.annualMileageLimit ? `${formatFinanceNumber(item.annualMileageLimit)} km/y` : "Mileage -"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="crud-empty-state">
+                  {financeLoading ? "正在匹配月供观测" : "当前价格没有匹配到月供 / lease / finance observation"}
+                </div>
+              )}
+
+              <div className="detail-section-head">
+                <div>
                   <div className="card-title">Price History</div>
                   <p className="section-note">按 valid_from / valid_to 压缩后的价格时段；同价时刷新最近确认时间，不重复开新段。</p>
                 </div>
@@ -816,6 +927,112 @@ export function MsrpPage() {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {selectedFinanceObservation && (
+        <div
+          className="msrp-finance-overlay"
+          role="presentation"
+          onClick={() => setSelectedFinanceObservation(null)}
+        >
+          <div
+            className={`msrp-finance-flip-card${financeCardFlipped ? " is-flipped" : ""}`}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Monthly finance observation"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="msrp-finance-flip-inner">
+              <section className="msrp-finance-flip-face msrp-finance-flip-front">
+                <div className="detail-section-head">
+                  <div>
+                    <span className="page-kicker">{selectedFinanceObservation.country} / {getFinanceObservationLabel(selectedFinanceObservation)}</span>
+                    <h3>{getFinanceObservationModelLabel(selectedFinanceObservation)}</h3>
+                  </div>
+                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => setSelectedFinanceObservation(null)}>关闭</button>
+                </div>
+                <div className="msrp-finance-flip-hero-value">
+                  {formatFinanceMonthlyPayment(selectedFinanceObservation)}
+                  <span>/ month</span>
+                </div>
+                <div className="admin-detail-grid">
+                  <div className="admin-detail-item">
+                    <span className="admin-detail-label">Original monthly</span>
+                    <span className="admin-detail-value">{formatFinanceCurrency(selectedFinanceObservation.monthlyPayment, selectedFinanceObservation.currency)}</span>
+                  </div>
+                  <div className="admin-detail-item">
+                    <span className="admin-detail-label">Down payment</span>
+                    <span className="admin-detail-value">{formatFinanceCurrency(selectedFinanceObservation.downPayment, selectedFinanceObservation.currency)}</span>
+                  </div>
+                  <div className="admin-detail-item">
+                    <span className="admin-detail-label">Term</span>
+                    <span className="admin-detail-value">{selectedFinanceObservation.termMonths ? `${selectedFinanceObservation.termMonths} months` : "-"}</span>
+                  </div>
+                  <div className="admin-detail-item">
+                    <span className="admin-detail-label">Mileage</span>
+                    <span className="admin-detail-value">{selectedFinanceObservation.annualMileageLimit ? `${formatFinanceNumber(selectedFinanceObservation.annualMileageLimit)} km/y` : "-"}</span>
+                  </div>
+                </div>
+                <div className="msrp-finance-flip-actions">
+                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setFinanceCardFlipped(true)}>Terms</button>
+                  {selectedFinanceObservation.sourceUrl ? (
+                    <a href={selectedFinanceObservation.sourceUrl} target="_blank" rel="noreferrer" className="btn btn-sm btn-ghost">Source URL</a>
+                  ) : null}
+                </div>
+              </section>
+
+              <section className="msrp-finance-flip-face msrp-finance-flip-back">
+                <div className="detail-section-head">
+                  <div>
+                    <span className="page-kicker">Offer terms</span>
+                    <h3>{selectedFinanceObservation.officialModel} {selectedFinanceObservation.officialTrim}</h3>
+                  </div>
+                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => setSelectedFinanceObservation(null)}>关闭</button>
+                </div>
+                <div className="admin-detail-grid">
+                  <div className="admin-detail-item">
+                    <span className="admin-detail-label">APR</span>
+                    <span className="admin-detail-value">{selectedFinanceObservation.apr !== null ? `${formatFinanceNumber(selectedFinanceObservation.apr, 2)}%` : "-"}</span>
+                  </div>
+                  <div className="admin-detail-item">
+                    <span className="admin-detail-label">Effective APR</span>
+                    <span className="admin-detail-value">{selectedFinanceObservation.effectiveApr !== null ? `${formatFinanceNumber(selectedFinanceObservation.effectiveApr, 2)}%` : "-"}</span>
+                  </div>
+                  <div className="admin-detail-item">
+                    <span className="admin-detail-label">Balloon</span>
+                    <span className="admin-detail-value">{formatFinanceCurrency(selectedFinanceObservation.balloonPayment, selectedFinanceObservation.currency)}</span>
+                  </div>
+                  <div className="admin-detail-item">
+                    <span className="admin-detail-label">Total payable</span>
+                    <span className="admin-detail-value">{formatFinanceCurrency(selectedFinanceObservation.totalAmountPayable, selectedFinanceObservation.currency)}</span>
+                  </div>
+                  <div className="admin-detail-item">
+                    <span className="admin-detail-label">Subsidy</span>
+                    <span className="admin-detail-value">{formatFinanceCurrency(selectedFinanceObservation.subsidyAmountEur)}</span>
+                  </div>
+                  <div className="admin-detail-item">
+                    <span className="admin-detail-label">Net after subsidy</span>
+                    <span className="admin-detail-value">{formatFinanceCurrency(selectedFinanceObservation.netPriceAfterSubsidyEur)}</span>
+                  </div>
+                  <div className="admin-detail-item">
+                    <span className="admin-detail-label">Valid until</span>
+                    <span className="admin-detail-value">{formatFinanceDate(selectedFinanceObservation.offerValidUntil)}</span>
+                  </div>
+                  <div className="admin-detail-item">
+                    <span className="admin-detail-label">Observed</span>
+                    <span className="admin-detail-value">{formatFinanceDate(selectedFinanceObservation.observedAtUtc)}</span>
+                  </div>
+                </div>
+                <div className="msrp-finance-flip-actions">
+                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setFinanceCardFlipped(false)}>Monthly</button>
+                  {selectedFinanceObservation.sourceUrl ? (
+                    <a href={selectedFinanceObservation.sourceUrl} target="_blank" rel="noreferrer" className="btn btn-sm btn-ghost">Source URL</a>
+                  ) : null}
+                </div>
+              </section>
+            </div>
+          </div>
         </div>
       )}
 

@@ -5277,6 +5277,104 @@ select:focus, input:focus {
   max-height: none;
 }
 
+.msrp-finance-detail-card {
+  cursor: pointer;
+  text-align: left;
+  appearance: none;
+  background: #fff;
+}
+
+.msrp-finance-detail-card:hover {
+  border-color: #2563eb;
+}
+
+.msrp-finance-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(15 23 42 / 0.56);
+}
+
+.msrp-finance-flip-card {
+  width: min(680px, 100%);
+  min-height: 480px;
+  perspective: 1400px;
+}
+
+.msrp-finance-flip-inner {
+  position: relative;
+  min-height: 480px;
+  transform-style: preserve-3d;
+  transition: transform 220ms ease;
+}
+
+.msrp-finance-flip-card.is-flipped .msrp-finance-flip-inner {
+  transform: rotateY(180deg);
+}
+
+.msrp-finance-flip-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 22px;
+  overflow: auto;
+  backface-visibility: hidden;
+  border: 1px solid rgb(148 163 184 / 0.42);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 24px 72px rgb(15 23 42 / 0.28);
+}
+
+.msrp-finance-flip-back {
+  transform: rotateY(180deg);
+}
+
+.msrp-finance-flip-hero-value {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 34px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.msrp-finance-flip-hero-value span {
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.msrp-finance-flip-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: auto;
+}
+
+@media (max-width: 680px) {
+  .msrp-finance-overlay {
+    padding: 10px;
+  }
+
+  .msrp-finance-flip-card,
+  .msrp-finance-flip-inner {
+    min-height: 560px;
+  }
+
+  .msrp-finance-flip-face {
+    padding: 16px;
+  }
+
+  .msrp-finance-flip-hero-value {
+    font-size: 28px;
+  }
+}
+
 .review-current-price-panel {
   padding-top: 2px;
   border-top: 1px solid var(--c-border-soft);
