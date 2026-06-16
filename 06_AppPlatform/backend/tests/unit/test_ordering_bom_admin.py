@@ -55,8 +55,8 @@ def test_list_bom_with_fob_empty_keeps_tuple_shape(monkeypatch) -> None:
     monkeypatch.setattr(repo, "list_all_material_skus_for_admin", lambda *_, **__: [])
     monkeypatch.setattr(
         repo,
-        "list_ordering_country_options",
-        lambda _session: [{"countryCode": "LV"}],
+        "list_active_fob_country_codes",
+        lambda _session: ["LV"],
     )
 
     assert repo.list_bom_with_fob(_FakeSession()) == ([], ["LV"])

@@ -162,6 +162,160 @@ function formatProductModelName(brand: string, modelName: string, version?: stri
   return [baseName, version?.trim()].filter(Boolean).join(" ");
 }
 
+interface AddMaterialFormState {
+  materialCode: string;
+  brand: string;
+  modelName: string;
+  version: string;
+  colour: string;
+  colourCode: string;
+  colourBatch: string;
+  powertrain: string;
+}
+
+interface MaterialColourInput {
+  colourCode: string;
+  colour: string;
+  colourHex: string | null;
+  lineNumber: number;
+}
+
+interface MaterialSkuCreateDraft {
+  materialCode: string;
+  brand: string;
+  modelName: string;
+  version: string;
+  colour: string;
+  colourCode: string;
+  colourHex: string | null;
+  powertrain: string;
+}
+
+const EMPTY_ADD_MATERIAL: AddMaterialFormState = {
+  materialCode: "",
+  brand: "",
+  modelName: "",
+  version: "",
+  colour: "",
+  colourCode: "",
+  colourBatch: "",
+  powertrain: "ICE",
+};
+
+function splitColourBatchLines(value: string): string[] {
+  return value
+    .split(/[\n;]+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function parseColourBatch(value: string): { colours: MaterialColourInput[]; errors: string[] } {
+  const colours: MaterialColourInput[] = [];
+  const errors: string[] = [];
+  const seenCodes = new Set<string>();
+  const lines = splitColourBatchLines(value);
+
+  lines.forEach((rawLine, index) => {
+    const lineNumber = index + 1;
+    let line = rawLine.replace(/^[-*•]\s*/, "").trim();
+    let colourHex: string | null = null;
+    const hexMatch = line.match(/\s+(#[0-9a-fA-F]{6})$/);
+    if (hexMatch) {
+      colourHex = hexMatch[1].toUpperCase();
+      line = line.slice(0, -hexMatch[0].length).trim();
+    }
+
+    let code = "";
+    let colour = "";
+    const explicitMatch = line.match(/^([A-Za-z0-9]{2})\s*(?:=|,|\t)\s*(.+)$/);
+    const spacedMatch = line.match(/^([A-Za-z0-9]{2})\s+(.+)$/);
+    const match = explicitMatch ?? spacedMatch;
+    if (match) {
+      code = match[1].trim().toUpperCase();
+      colour = match[2].trim();
+    }
+
+    if (!code || !colour) {
+      errors.push(`Line ${lineNumber}: use "BW Khaki white"`);
+      return;
+    }
+    if (!/^[A-Z0-9]{2}$/.test(code)) {
+      errors.push(`Line ${lineNumber}: colour code must be 2 letters/numbers`);
+      return;
+    }
+    if (seenCodes.has(code)) {
+      errors.push(`Line ${lineNumber}: duplicate colour code ${code}`);
+      return;
+    }
+    seenCodes.add(code);
+    colours.push({ colourCode: code, colour, colourHex, lineNumber });
+  });
+
+  return { colours, errors };
+}
+
+function buildMaterialDrafts(form: AddMaterialFormState): {
+  drafts: MaterialSkuCreateDraft[];
+  errors: string[];
+  isBatch: boolean;
+} {
+  const materialCodeTemplate = form.materialCode.trim().toUpperCase();
+  const baseMissing = [
+    ["Material Code", materialCodeTemplate],
+    ["Brand", form.brand],
+    ["Model", form.modelName],
+    ["Version", form.version],
+  ].filter(([, value]) => !String(value).trim()).map(([label]) => label);
+  if (baseMissing.length > 0) {
+    return { drafts: [], errors: [`Missing: ${baseMissing.join(", ")}`], isBatch: false };
+  }
+
+  const batchInput = form.colourBatch.trim();
+  const isTemplate = materialCodeTemplate.includes("**");
+  if (batchInput || isTemplate) {
+    const { colours, errors } = parseColourBatch(batchInput);
+    if (!isTemplate) errors.push("Use ** in Material Code for batch colours");
+    if (isTemplate && colours.length === 0) errors.push("Batch colours are required when Material Code contains **");
+    const drafts = colours.map((colour) => ({
+      materialCode: materialCodeTemplate.replace("**", colour.colourCode),
+      brand: form.brand.trim(),
+      modelName: form.modelName.trim(),
+      version: form.version.trim(),
+      colour: colour.colour,
+      colourCode: colour.colourCode,
+      colourHex: colour.colourHex,
+      powertrain: form.powertrain.trim() || "ICE",
+    }));
+    return { drafts, errors, isBatch: true };
+  }
+
+  const singleMissing = [
+    ["Colour", form.colour],
+    ["Code", form.colourCode],
+  ].filter(([, value]) => !String(value).trim()).map(([label]) => label);
+  if (singleMissing.length > 0) {
+    return { drafts: [], errors: [`Missing: ${singleMissing.join(", ")}`], isBatch: false };
+  }
+  const colourCode = form.colourCode.trim().toUpperCase();
+  if (!/^[A-Z0-9]{2}$/.test(colourCode)) {
+    return { drafts: [], errors: ["Code must be 2 letters/numbers"], isBatch: false };
+  }
+  return {
+    drafts: [{
+      materialCode: materialCodeTemplate,
+      brand: form.brand.trim(),
+      modelName: form.modelName.trim(),
+      version: form.version.trim(),
+      colour: form.colour.trim(),
+      colourCode,
+      colourHex: null,
+      powertrain: form.powertrain.trim() || "ICE",
+    }],
+    errors: [],
+    isBatch: false,
+  };
+}
+
 export function OrderGeniusPage() {
   const { user } = useAuth();
   const { allCountriesISO } = useResolvedCountry("iso");
@@ -1813,7 +1967,7 @@ function BomAdminPanel() {
   const [editFob, setEditFob] = useState<{ materialCodes: string[]; countryCode: string; fob: number | null } | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [showAddMaterial, setShowAddMaterial] = useState(false);
-  const [newMaterial, setNewMaterial] = useState({ materialCode: "", brand: "", modelName: "", version: "", colour: "", colourCode: "", powertrain: "ICE" });
+  const [newMaterial, setNewMaterial] = useState<AddMaterialFormState>(EMPTY_ADD_MATERIAL);
   const [addMaterialError, setAddMaterialError] = useState("");
   const [addMaterialNotice, setAddMaterialNotice] = useState("");
   const [copySourceCountry, setCopySourceCountry] = useState("CZ");
@@ -1886,6 +2040,17 @@ function BomAdminPanel() {
     for (const country of countries) codes.add(country);
     return Array.from(codes).sort();
   }, [accountCountryOptions, countries]);
+
+  const addMaterialDraftSummary = useMemo(() => {
+    const hasBatchIntent = newMaterial.materialCode.includes("**") || newMaterial.colourBatch.trim().length > 0;
+    if (!hasBatchIntent) return "";
+    const result = buildMaterialDrafts(newMaterial);
+    if (result.drafts.length > 0) {
+      const first = result.drafts[0];
+      return `${result.drafts.length} colours -> ${result.drafts.length} SKUs · ${first.materialCode}`;
+    }
+    return result.errors[0] ?? "";
+  }, [newMaterial]);
 
   const getColourSurchargeAmount = (brand: string, colourType: string): number => {
     const key = colourSurchargeKey(brand, colourType);
@@ -1981,28 +2146,48 @@ function BomAdminPanel() {
   };
 
   const handleAddMaterial = async () => {
-    const requiredFields: [keyof typeof newMaterial, string][] = [
-      ["materialCode", "Material Code"],
-      ["brand", "Brand"],
-      ["modelName", "Model"],
-      ["version", "Version"],
-      ["colour", "Colour"],
-      ["colourCode", "Code"],
-    ];
-    const missing = requiredFields
-      .filter(([key]) => !newMaterial[key].trim())
-      .map(([, label]) => label);
-    if (missing.length > 0) {
-      setAddMaterialError(`Missing: ${missing.join(", ")}`);
+    const { drafts, errors, isBatch } = buildMaterialDrafts(newMaterial);
+    if (errors.length > 0) {
+      setAddMaterialError(errors.join("; "));
       return;
     }
+    if (drafts.length === 0) return;
+
     try {
       setAddMaterialError("");
-      await api.createMaterialSku({...newMaterial, colourType: 'single'});
-      setShowAddMaterial(false);
       setAddMaterialNotice("");
-      setNewMaterial({materialCode:'',brand:'',modelName:'',version:'',colour:'',colourCode:'',powertrain:'ICE'});
-      load();
+      let created = 0;
+      const failures: string[] = [];
+      for (const draft of drafts) {
+        try {
+          await api.createMaterialSku({
+            materialCode: draft.materialCode,
+            brand: draft.brand,
+            modelName: draft.modelName,
+            version: draft.version,
+            colour: draft.colour,
+            colourCode: draft.colourCode,
+            colourType: "single",
+            powertrain: draft.powertrain,
+          });
+          if (draft.colourHex) {
+            await api.updateColourHex(draft.materialCode, draft.colourHex);
+          }
+          created += 1;
+        } catch (e) {
+          failures.push(`${draft.materialCode}: ${getErrorMessage(e)}`);
+        }
+      }
+      if (created > 0) scheduleLoad(100);
+      if (failures.length > 0) {
+        setAddMaterialNotice(created > 0 ? `Created ${created}/${drafts.length}.` : "");
+        setAddMaterialError(failures.slice(0, 3).join("; "));
+        return;
+      }
+      setShowAddMaterial(false);
+      setAddMaterialNotice(isBatch ? `Created ${created} materials.` : "");
+      setNewMaterial(EMPTY_ADD_MATERIAL);
+      scheduleLoad(100);
     } catch (e) {
       setAddMaterialError(getErrorMessage(e));
     }
@@ -2017,6 +2202,7 @@ function BomAdminPanel() {
       version: String(sku.version || ""),
       colour: String(sku.colour || ""),
       colourCode: String(sku.colourCode || ""),
+      colourBatch: "",
       powertrain: String(sku.powertrain || "ICE"),
     });
     setAddMaterialError("");
@@ -2136,10 +2322,10 @@ function BomAdminPanel() {
     const brand = s.brand || '';
     const colourType = String(s.colourType || s.colourTier || "single").toLowerCase();
     const surchargeLabel = colourType === "dual"
-      ? `双色 +${formatSurchargeDraft(getColourSurchargeAmount(brand, "dual"))}€`
+      ? `Dual +${formatSurchargeDraft(getColourSurchargeAmount(brand, "dual"))}€`
       : colourType === "special"
-        ? `特殊色 +${formatSurchargeDraft(getColourSurchargeAmount(brand, "special"))}€`
-        : "单色";
+        ? `Special +${formatSurchargeDraft(getColourSurchargeAmount(brand, "special"))}€`
+        : "Single";
 
     const openColourPicker = (defaultHex: string, callback: (val: string) => void) => {
       const inp = document.createElement('input');
@@ -2161,7 +2347,7 @@ function BomAdminPanel() {
           setDragSku(s.materialCode);
         } : undefined}
         onDragEnd={editing ? () => { setDragSku(null); setDragOverTier(null); dragMaterialCode.current = null; } : undefined}
-        title={`${s.colour}${s.colourCode ? ` (${s.colourCode})` : ''} · ${surchargeLabel} · Tier: ${s.colourTier || 'single'} — Drag to reclassify, Click to edit colour`}
+        title={`${s.colourCode || "--"} · ${s.colour || "Unknown colour"} · ${surchargeLabel} · Tier: ${s.colourTier || 'single'} · Click to edit swatch`}
         style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 10, color: isHist ? '#9ca3af' : '#475569', cursor: isDragging ? 'grabbing' : 'grab', opacity: isDragging ? 0.4 : 1 }}
         onClick={(e) => {
           if (dragSku) return;
@@ -2486,17 +2672,24 @@ function BomAdminPanel() {
           <input type="text" placeholder="Code" value={newMaterial.colourCode}
             onChange={e => setNewMaterial({...newMaterial, colourCode: e.target.value})}
             style={{ width: 50, fontSize: 11 }} />
+          <textarea
+            placeholder="Batch colours: BW Khaki white; CL Carbon crystal black; Z9 Galaxy Blue #1F5F9F"
+            value={newMaterial.colourBatch}
+            onChange={e => setNewMaterial({...newMaterial, colourBatch: e.target.value})}
+            style={{ width: 360, height: 38, fontSize: 11, resize: "vertical", lineHeight: 1.35 }}
+          />
           <select value={newMaterial.powertrain} onChange={e => setNewMaterial({...newMaterial, powertrain: e.target.value})}
             style={{ fontSize: 11, width: 70 }}>
             {['BEV','HEV','PHEV','ICE','MHEV','REEV'].map(p => <option key={p} value={p}>{p}</option>)}
           </select>
           <button className="btn btn-sm btn-primary" onClick={handleAddMaterial}>Add</button>
           <button className="btn btn-sm btn-ghost" onClick={() => { setShowAddMaterial(false); setAddMaterialError(""); setAddMaterialNotice(""); }}>Cancel</button>
+          {addMaterialDraftSummary ? <span style={{ fontSize: 11, color: "#475569", fontFamily: "monospace" }}>{addMaterialDraftSummary}</span> : null}
           {addMaterialNotice ? <span style={{ fontSize: 11, color: "#2563eb" }}>{addMaterialNotice}</span> : null}
           {addMaterialError ? <span style={{ fontSize: 11, color: "#b91c1c" }}>{addMaterialError}</span> : null}
         </div>
       )}
-      <div style={{ overflowX: "auto", maxHeight: "60vh" }}>
+      <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "60vh", width: "100%", maxWidth: "100%" }}>
         {[...modelGroups.entries()].sort(([a], [b]) => {
           // OMODA before JAECOO, then by model number (smaller first)
           const ba = a.split('|')[0] || '';
@@ -2525,7 +2718,7 @@ function BomAdminPanel() {
                     <div style={{ fontSize: 12, fontWeight: 600, color: '#334155', padding: '4px 0', marginBottom: 2 }}>
                       {vk} · {vSkus.length} colour-SKUs · {templates.size} BOM templates
                     </div>
-                    <table className="data-table bom-admin-table" style={{ fontSize: 11, width: "auto", minWidth: "100%" }}>
+                    <table className="data-table bom-admin-table" style={{ fontSize: 11, width: "max-content", minWidth: "100%" }}>
                       <thead>
                         <tr style={{ position: "sticky", top: 0, zIndex: 2 }}>
                           <th style={{ ...bomHeaderBaseStyle, minWidth: 150, position: "sticky", left: 0, zIndex: 3 }}>BOM</th>
@@ -2539,7 +2732,7 @@ function BomAdminPanel() {
                           <th style={{ ...bomHeaderBaseStyle, width: 65 }}>From</th>
                           <th style={{ ...bomHeaderBaseStyle, width: 65 }}>To</th>
                           {sortedCountries.map(c => (
-                            <th key={c} title={formatCountryCodeTooltip(c)} style={{ width: 75, textAlign: "right", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
+                            <th key={c} title={formatCountryCodeTooltip(c)} style={{ width: 54, minWidth: 54, maxWidth: 54, textAlign: "right", padding: "4px 5px", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
                               {c}
                             </th>
                           ))}
@@ -2831,7 +3024,7 @@ function BomAdminPanel() {
                                 const hasSurcharge = fob?.colourSurchargeEur && fob.colourSurchargeEur > 0;
                                 const countryTooltip = formatCountryCodeTooltip(c);
                                 return (
-                                  <td key={c} title={`${countryTooltip}${hasFob ? ` · FOB ${baseFob!.toLocaleString()} EUR` : " · No FOB"}`} style={{ textAlign: "right", cursor: "pointer", padding: "2px 4px" }}
+                                  <td key={c} title={`${countryTooltip}${hasFob ? ` · FOB ${baseFob!.toLocaleString()} EUR` : " · No FOB"}`} style={{ width: 54, minWidth: 54, maxWidth: 54, textAlign: "right", cursor: "pointer", padding: "2px 5px" }}
                                     onClick={() => setEditFob({ materialCodes: allCodes, countryCode: c, fob: baseFob ?? null })}>
                                     <span style={{ color: hasFob ? "#0f766e" : "#cbd5e1", fontWeight: hasFob ? 600 : 400 }}>
                                       {hasFob ? baseFob!.toLocaleString() : "-"}
