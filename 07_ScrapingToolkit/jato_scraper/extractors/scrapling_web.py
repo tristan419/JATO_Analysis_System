@@ -1701,6 +1701,11 @@ class ScraplingExtractor(BaseExtractor):
                         "sourcePriceValue": msrp,
                         "regexPattern": entry.pattern,
                         "regexSelector": mapping.source_selector,
+                        "regexGroups": {
+                            key: value
+                            for key, value in group_values.items()
+                            if value not in (None, "")
+                        },
                     },
                 )
                 if observation is not None:

@@ -74,9 +74,19 @@ profile:
   text_regex:
     source_selector: body
     entry_patterns:
+    - pattern: 'Enyaq\s+Solid Edition.*?Bygg din Enyaq.*?Från\s+1\s+(?P<price>\d{3}[\s\xa0]\d{3})\s*kr\s+Prislista.*?Privatleasing\s+från\s+(?P<monthly_payment>\d{1,2}[\s\xa0]\d{3})\s*kr/mån'
+      official_trim: Solid Edition
+      official_powertrain: BEV
     - pattern: 'Enyaq\s+Solid Edition.*?Bygg din Enyaq.*?Från\s+1\s+(?P<price>\d{3}[\s\xa0]\d{3})\s*kr\s+Prislista'
       official_trim: Solid Edition
       official_powertrain: BEV
+  pricing_context:
+    fields:
+      monthly_payment: regexGroups.monthly_payment
+    constants:
+      price_semantics: lease_monthly
+      finance_type: private_lease
+      finance_currency: SEK
   tier: stealth
   network_idle: true
   impersonate: chrome

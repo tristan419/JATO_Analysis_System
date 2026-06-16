@@ -164,9 +164,9 @@ def _payload_price_semantics(
     item: dict[str, object],
     source_price_semantics: str | None = None,
 ) -> str:
-    context = _finance_context_from_payload(item, source_price_semantics)
-    if context:
-        return str(context.get("price_semantics") or "base_msrp").strip()
+    explicit_semantics = _optional_text(item.get("price_semantics"))
+    if explicit_semantics:
+        return explicit_semantics
     return str(source_price_semantics or "base_msrp").strip() or "base_msrp"
 
 

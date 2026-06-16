@@ -290,6 +290,11 @@ def _observation_to_ingest_dict(
         "source_context_json": _source_context_from_raw_payload(
             obs.raw_payload,
         ),
+        "price_semantics": (
+            obs.raw_payload.get("price_semantics")
+            if obs.raw_payload
+            else None
+        ),
     }
 
 

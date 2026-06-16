@@ -617,6 +617,87 @@ def test_text_regex_ignores_skoda_se_hero_footnote_marker(mock_fetch) -> None:
 
 
 @patch.object(ScraplingExtractor, "_fetch")
+def test_text_regex_finance_named_groups_feed_pricing_context(
+    mock_fetch,
+) -> None:
+    mock_fetch.return_value = _mock_page_with_text(
+        "\n".join(
+            [
+                "Enyaq",
+                "Solid Edition",
+                "En el-SUV med räckvidd upp till 574 km.",
+                "Bygg din Enyaq",
+                "Boka provkörning",
+                "Jämför bilar",
+                "Från",
+                "1",
+                "599 500",
+                "kr",
+                "Prislista",
+                "Privatleasing från 5 295 kr/mån",
+            ]
+        )
+    )
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="skoda_enyaq_se",
+            country="SE",
+            brand="SKODA",
+            source_url="https://example.com",
+        ),
+        ScraplingProfile(
+            url="https://example.com",
+            text_regex=TextRegexMapping(
+                source_selector="body",
+                entry_patterns=(
+                    TextRegexEntryPattern(
+                        pattern=(
+                            r"Enyaq\s+Solid Edition.*?"
+                            r"Bygg din Enyaq.*?"
+                            r"Från\s+1\s+"
+                            r"(?P<price>\d{3}[\s\xa0]\d{3})"
+                            r"\s*kr\s+Prislista.*?"
+                            r"Privatleasing\s+från\s+"
+                            r"(?P<monthly_payment>\d{1,2}[\s\xa0]\d{3})"
+                            r"\s*kr/mån"
+                        ),
+                        official_trim="Solid Edition",
+                        official_powertrain="BEV",
+                    ),
+                ),
+            ),
+            pricing_context=PricingContextMapping(
+                fields={
+                    "monthly_payment": "regexGroups.monthly_payment",
+                },
+                constants={
+                    "price_semantics": "lease_monthly",
+                    "finance_type": "private_lease",
+                    "finance_currency": "SEK",
+                },
+            ),
+            default_currency="SEK",
+            fixed_model="ENYAQ",
+            fixed_jato_model="ENYAQ",
+            fixed_jato_powertrain="BEV",
+            copy_trim_to_jato_trim=True,
+        ),
+    )
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].msrp_value == 599_500.0
+    assert results[0].raw_payload["regexGroups"]["monthly_payment"] == "5 295"
+    assert results[0].raw_payload["pricingContext"] == {
+        "price_semantics": "lease_monthly",
+        "finance_type": "private_lease",
+        "finance_currency": "SEK",
+        "monthly_payment": 5295.0,
+    }
+
+
+@patch.object(ScraplingExtractor, "_fetch")
 def test_text_regex_extracts_descendant_body_text(mock_fetch) -> None:
     mock_fetch.return_value = _mock_page_with_descendant_text(
         "body",

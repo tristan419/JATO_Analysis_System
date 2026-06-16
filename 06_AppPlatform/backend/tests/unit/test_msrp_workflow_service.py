@@ -495,6 +495,7 @@ def test_create_scrape_batch_ingest_persists_finance_observations(
                 "extraction_version": "test",
                 "match_confidence": 0.91,
                 "match_status": "auto_accepted",
+                "price_semantics": "lease_monthly",
                 "source_context_json": {
                     "pricingContext": {
                         "price_semantics": "lease_monthly",
@@ -519,6 +520,36 @@ def test_create_scrape_batch_ingest_persists_finance_observations(
     assert result["nonMsrpPriceObservationCount"] == 1
     assert captured["items"][0].price_semantics == "lease_monthly"
     assert captured["items"][0].monthly_payment_eur == 599.0
+
+
+def test_payload_price_semantics_uses_explicit_observation_semantics_only() -> None:
+    payload = {
+        "source_context_json": {
+            "pricingContext": {
+                "price_semantics": "lease_monthly",
+                "monthly_payment": 5990,
+                "finance_type": "private_lease",
+            },
+        },
+    }
+
+    assert (
+        msrp_workflow_service._payload_price_semantics(
+            payload,
+            "base_msrp",
+        )
+        == "base_msrp"
+    )
+
+    payload["price_semantics"] = "lease_monthly"
+
+    assert (
+        msrp_workflow_service._payload_price_semantics(
+            payload,
+            "base_msrp",
+        )
+        == "lease_monthly"
+    )
 
 
 def test_finance_observation_from_payload_skips_plain_msrp() -> None:

@@ -42,6 +42,7 @@ def test_build_batch_payload_preserves_raw_payload_as_source_context() -> None:
     )
 
     source_context = payload["observations"][0]["source_context_json"]
+    assert payload["observations"][0]["price_semantics"] == "lease_monthly"
     assert source_context["rawPayload"]["priceText"] == "773 000 kr"
     assert source_context["pricingContext"] == {
         "monthly_payment": 5990,
@@ -85,6 +86,7 @@ def test_build_batch_payload_preserves_explicit_pricing_context() -> None:
     )
 
     source_context = payload["observations"][0]["source_context_json"]
+    assert payload["observations"][0]["price_semantics"] is None
     assert source_context["rawPayload"]["pricingContext"]["monthly_payment"] == 5990
     assert source_context["pricingContext"] == {
         "monthly_payment": 5990,
