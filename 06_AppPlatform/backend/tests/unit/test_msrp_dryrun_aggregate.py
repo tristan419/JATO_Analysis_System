@@ -122,6 +122,9 @@ def test_aggregate_writes_history_index_and_source_repair_backlog(tmp_path):
     assert backlog["runId"] == "msrp-dryrun-20260521-033000"
     assert backlog["groups"][0]["failureReason"] == "no_observation_extracted"
     assert backlog["groups"][0]["affectedCountries"] == ["se"]
+    assert backlog["groups"][0]["priorityScore"] > 0
+    assert backlog["groups"][0]["priorityBand"] in {"high", "critical"}
+    assert backlog["groups"][0]["reviewAssist"]["preferred"] == "rule_based_then_llm"
     assert backlog["topSourceHosts"][0]["host"] == "volvocars.com"
     assert backlog["topSourceHosts"][0]["count"] == 3
     assert backlog["groups"][0]["topSourceHosts"][0]["host"] == "volvocars.com"
@@ -193,6 +196,9 @@ def test_source_repair_backlog_marks_historical_pass_as_transient(tmp_path):
     assert backlog["sourceRepairIssueCount"] == 0
     group = backlog["groups"][0]
     assert group["recommendedAction"] == "recheck_before_source_repair"
+    assert group["priorityBand"] == "recheck"
+    assert group["priorityScore"] > 0
+    assert group["reviewAssist"]["preferred"] == "rule_based_recheck"
     assert group["sampleTransientRegressions"][0]["sourceCode"] == source_code
     assert group["sampleTransientRegressions"][0]["lastKnownGoodRunId"] == previous_run_id
 

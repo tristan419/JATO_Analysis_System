@@ -361,6 +361,20 @@ export interface HermesMsrpSourceRepairBacklogGroup {
   count: number;
   transientRegressionCount?: number;
   sourceRepairIssueCount?: number;
+  priorityScore?: number;
+  priorityBand?: string;
+  priorityWeights?: {
+    sourceRepair?: number;
+    country?: number;
+    hostCluster?: number;
+    transientRecheck?: number;
+  };
+  reviewAssist?: {
+    preferred?: string;
+    llmFit?: string;
+    neuralNetworkFit?: string;
+    reason?: string;
+  };
   recommendedAction?: string;
   recommendedStrategy: string;
   recommendedStrategies?: Record<string, number>;

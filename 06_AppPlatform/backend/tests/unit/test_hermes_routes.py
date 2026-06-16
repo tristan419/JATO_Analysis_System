@@ -388,6 +388,9 @@ class TestSentinelAndDeploy:
         assert backlog["runId"] == "msrp-dryrun-20260612-070207"
         assert backlog["totalIssueCount"] == 2
         assert backlog["groups"][0]["failureReason"] == "http_timeout"
+        assert backlog["groups"][0]["priorityScore"] > 0
+        assert backlog["groups"][0]["priorityBand"] in {"medium", "high", "critical"}
+        assert backlog["groups"][0]["reviewAssist"]["preferred"] == "rule_based"
         assert backlog["groups"][0]["sampleSources"] == ["audi_q4_e_tron_se_draft_scrapling"]
         assert backlog["groups"][0]["topSourceHosts"] == [
             {
@@ -459,6 +462,8 @@ class TestSentinelAndDeploy:
         assert backlog["transientRegressionCount"] == 1
         assert backlog["sourceRepairIssueCount"] == 0
         assert backlog["groups"][0]["recommendedAction"] == "recheck_before_source_repair"
+        assert backlog["groups"][0]["priorityBand"] == "recheck"
+        assert backlog["groups"][0]["reviewAssist"]["preferred"] == "rule_based_recheck"
         assert backlog["groups"][0]["sampleTransientRegressions"][0]["lastKnownGoodRunId"] == (
             "msrp-dryrun-20260612-070207"
         )
@@ -733,6 +738,7 @@ class TestSentinelAndDeploy:
         assert backlog["topSourceHosts"][0]["host"] == "audi.fi"
         assert backlog["topSourceHosts"][0]["count"] == 2
         assert backlog["groups"][0]["failureReason"] == "http_timeout"
+        assert backlog["groups"][0]["priorityScore"] > 0
         assert backlog["groups"][0]["topSourceHosts"][0]["host"] == "audi.fi"
         assert backlog["groups"][0]["topSourceHosts"][0]["sampleSources"] == [
             "audi_q4_e_tron_fi_draft_scrapling",

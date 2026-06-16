@@ -103,6 +103,76 @@ def _normalize_host_groups(hosts: dict[str, dict[str, Any]], limit: int = 10) ->
     return normalized[:limit]
 
 
+def _priority_weight(name: str, default: float) -> float:
+    raw = os.getenv(f"JATO_MSRP_REPAIR_WEIGHT_{name}")
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _priority_band(score: float, source_repair_count: int, transient_count: int) -> str:
+    if source_repair_count <= 0 and transient_count > 0:
+        return "recheck"
+    if score >= 80 or source_repair_count >= 10:
+        return "critical"
+    if score >= 45 or source_repair_count >= 3:
+        return "high"
+    if score >= 15:
+        return "medium"
+    return "low"
+
+
+def _priority_review_assist(failure_reason: str, source_repair_count: int) -> dict[str, str]:
+    if source_repair_count <= 0:
+        return {
+            "preferred": "rule_based_recheck",
+            "llmFit": "low",
+            "neuralNetworkFit": "not_recommended",
+            "reason": "Historical pass exists; rerun or inspect network conditions before source repair.",
+        }
+    if failure_reason in {"no_observation_extracted", "validation_rejected_all"}:
+        return {
+            "preferred": "rule_based_then_llm",
+            "llmFit": "medium",
+            "neuralNetworkFit": "not_recommended_until_labeled_corpus",
+            "reason": "Rules identify the failure class; an LLM can propose selector or extraction repair from page evidence.",
+        }
+    return {
+        "preferred": "rule_based",
+        "llmFit": "low",
+        "neuralNetworkFit": "not_recommended_until_labeled_corpus",
+        "reason": "Use deterministic retry/proxy/source diagnostics before model-assisted repair.",
+    }
+
+
+def _priority_fields(group: dict[str, Any]) -> dict[str, Any]:
+    source_repair_count = int(group["sourceRepairIssueCount"])
+    transient_count = int(group["transientRegressionCount"])
+    affected_country_count = len(group["affectedCountries"])
+    host_counts = [int(data.get("count") or 0) for data in group["hosts"].values()]
+    top_host_count = max(host_counts or [0])
+    score = (
+        source_repair_count * _priority_weight("SOURCE_REPAIR", 10.0)
+        + affected_country_count * _priority_weight("COUNTRY", 6.0)
+        + top_host_count * _priority_weight("HOST_CLUSTER", 3.0)
+        + transient_count * _priority_weight("TRANSIENT_RECHECK", 1.5)
+    )
+    return {
+        "priorityScore": round(score, 1),
+        "priorityBand": _priority_band(score, source_repair_count, transient_count),
+        "priorityWeights": {
+            "sourceRepair": _priority_weight("SOURCE_REPAIR", 10.0),
+            "country": _priority_weight("COUNTRY", 6.0),
+            "hostCluster": _priority_weight("HOST_CLUSTER", 3.0),
+            "transientRecheck": _priority_weight("TRANSIENT_RECHECK", 1.5),
+        },
+        "reviewAssist": _priority_review_assist(str(group["failureReason"]), source_repair_count),
+    }
+
+
 def _source_key(country_code: str | None, source: dict[str, Any]) -> tuple[str, str] | None:
     country = str(country_code or source.get("country") or source.get("countryCode") or "").strip().lower()
     source_code = str(source.get("sourceCode") or source.get("code") or "").strip()
@@ -247,6 +317,7 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
             "count": group["count"],
             "transientRegressionCount": transient_count,
             "sourceRepairIssueCount": source_repair_count,
+            **_priority_fields(group),
             "recommendedAction": (
                 "recheck_before_source_repair"
                 if transient_count and not source_repair_count
@@ -261,7 +332,12 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
             "topSourceHosts": _normalize_host_groups(group["hosts"]),
             "status": group["status"],
         })
-    normalized_groups.sort(key=lambda item: (-int(item["count"]), str(item["failureReason"])))
+    normalized_groups.sort(key=lambda item: (
+        0 if int(item["sourceRepairIssueCount"]) > 0 else 1,
+        -float(item["priorityScore"]),
+        -int(item["count"]),
+        str(item["failureReason"]),
+    ))
     transient_regression_count = sum(int(item["transientRegressionCount"]) for item in normalized_groups)
     source_repair_issue_count = sum(int(item["sourceRepairIssueCount"]) for item in normalized_groups)
     return {

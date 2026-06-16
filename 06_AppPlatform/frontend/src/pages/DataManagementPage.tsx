@@ -1674,16 +1674,23 @@ export function DataManagementPage() {
                             <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,padding:8}}>
                               <div style={{fontSize:11,fontWeight:700,marginBottom:5}}>Source Repair Backlog</div>
                               {backlogGroups.length ? (
-                                <div style={{fontSize:10,color:"#64748b",display:"grid",gridTemplateColumns:"minmax(0,1.2fr) 42px 48px minmax(0,1.2fr)",gap:8,marginBottom:4}}>
+                                <div style={{fontSize:10,color:"#64748b",display:"grid",gridTemplateColumns:"minmax(0,1.1fr) 54px 42px 48px minmax(0,1.1fr)",gap:8,marginBottom:4}}>
                                   <span>Reason</span>
+                                  <span style={{textAlign:"right"}}>Priority</span>
                                   <span style={{textAlign:"right"}}>Repair</span>
                                   <span style={{textAlign:"right"}}>Recheck</span>
                                   <span>Strategy</span>
                                 </div>
                               ) : null}
                               {backlogGroups.length ? backlogGroups.slice(0,5).map((group: HermesMsrpSourceRepairBacklogGroup) => (
-                                <div key={group.failureReason} style={{fontSize:11,display:"grid",gridTemplateColumns:"minmax(0,1.2fr) 42px 48px minmax(0,1.2fr)",gap:8,alignItems:"center",marginBottom:5}}>
+                                <div key={group.failureReason} style={{fontSize:11,display:"grid",gridTemplateColumns:"minmax(0,1.1fr) 54px 42px 48px minmax(0,1.1fr)",gap:8,alignItems:"center",marginBottom:5}}>
                                   <span style={{fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={group.failureReason}>{group.failureReason}</span>
+                                  <strong
+                                    style={{textAlign:"right",color:group.priorityBand === "recheck" ? "#2563eb" : "#475569"}}
+                                    title={group.reviewAssist?.reason ?? group.priorityBand}
+                                  >
+                                    {group.priorityBand ?? "n/a"} {group.priorityScore ?? 0}
+                                  </strong>
                                   <strong style={{textAlign:"right",color:(group.sourceRepairIssueCount ?? group.count) > 0 ? "#ea580c" : "#16a34a"}}>{group.sourceRepairIssueCount ?? group.count}</strong>
                                   <strong style={{textAlign:"right",color:(group.transientRegressionCount ?? 0) > 0 ? "#2563eb" : "#94a3b8"}}>{group.transientRegressionCount ?? 0}</strong>
                                   <span style={{color:"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={group.recommendedStrategy}>{group.recommendedStrategy}</span>
