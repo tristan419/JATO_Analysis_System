@@ -24,9 +24,12 @@ import {
   type OrderGeniusGridRow,
 } from "../components/OrderGeniusGrid";
 import { DeckFloatingDrawer, FlipToolCard } from "../components/deckControls";
+import { MaterialFinanceMatrix, MaterialFinanceWorkbench } from "../components/finance";
 import type {
   ColourHexRule,
   ColourSurchargeRule,
+  CountryMaterialFinanceRow,
+  CountryMaterialFinanceUpdate,
   CountryPaymentTerm,
   MaterialSkuMatrixRow,
   MaterialUploadPreview,
@@ -2205,9 +2208,52 @@ type BomColourSwatchEditor = {
   anchorTop: number;
 };
 
+interface BomFinanceQuickCard {
+  countryCode: string;
+  materialCode: string;
+  materialCodes: string[];
+  title: string;
+  fob: number | null;
+}
+
+interface BomFinanceDrawerScope {
+  countryCode: string;
+  brand: string;
+  modelName: string;
+  powertrain: string;
+  version?: string;
+  title: string;
+  scopeLabel: string;
+}
+
 interface BomAdminPanelProps {
   initialCopyTargetCountry?: string | null;
   onFobCountriesChanged?: () => void;
+}
+
+type BomFinanceAction = {
+  label: string;
+  kind?: "primary" | "ghost";
+  onClick: () => void;
+  disabled?: boolean;
+};
+
+function BomFinanceActionBar({ actions }: { actions: BomFinanceAction[] }) {
+  return (
+    <div className="bom-finance-action-bar">
+      {actions.map((action) => (
+        <button
+          key={action.label}
+          type="button"
+          className={`btn btn-sm ${action.kind === "primary" ? "btn-primary" : "btn-ghost"} bom-finance-action-button`}
+          disabled={action.disabled}
+          onClick={action.onClick}
+        >
+          {action.label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function getDraftBaseFob(
@@ -2250,6 +2296,16 @@ function BomAdminPanel({
   const [searchText, setSearchText] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [editFob, setEditFob] = useState<{ materialCodes: string[]; countryCode: string; fob: number | null } | null>(null);
+  const [financeQuickCard, setFinanceQuickCard] = useState<BomFinanceQuickCard | null>(null);
+  const [financeQuickFlipped, setFinanceQuickFlipped] = useState(false);
+  const [financeQuickRows, setFinanceQuickRows] = useState<CountryMaterialFinanceRow[]>([]);
+  const [financeQuickLoading, setFinanceQuickLoading] = useState(false);
+  const [financeDrawerScope, setFinanceDrawerScope] = useState<BomFinanceDrawerScope | null>(null);
+  const [financeDrawerFlipped, setFinanceDrawerFlipped] = useState(false);
+  const [financeDrawerRows, setFinanceDrawerRows] = useState<CountryMaterialFinanceRow[]>([]);
+  const [financeDrawerLoading, setFinanceDrawerLoading] = useState(false);
+  const [savingFinanceMaterialCode, setSavingFinanceMaterialCode] = useState<string | null>(null);
+  const [financeError, setFinanceError] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [showAddMaterial, setShowAddMaterial] = useState(false);
   const [toolsFlipped, setToolsFlipped] = useState(false);
@@ -2531,6 +2587,136 @@ function BomAdminPanel({
   useEffect(() => { load(); }, [load]);
   useEffect(() => { void loadColourSurcharges(); }, [loadColourSurcharges]);
   useEffect(() => { void loadColourHexRules(); }, [loadColourHexRules]);
+
+  const replaceFinanceRow = (
+    rows: CountryMaterialFinanceRow[],
+    nextRow: CountryMaterialFinanceRow,
+  ): CountryMaterialFinanceRow[] =>
+    rows.map((row) => row.materialCode === nextRow.materialCode ? nextRow : row);
+
+  const closeFinanceDrawer = () => {
+    setFinanceDrawerScope(null);
+    setFinanceDrawerFlipped(false);
+    setFinanceDrawerRows([]);
+    setFinanceDrawerLoading(false);
+    setFinanceError("");
+  };
+
+  const closeFinanceQuickCard = () => {
+    setFinanceQuickCard(null);
+    setFinanceQuickFlipped(false);
+    setFinanceQuickRows([]);
+    setFinanceQuickLoading(false);
+    setFinanceError("");
+  };
+
+  const buildFinanceDrawerScope = (
+    countryCode: string,
+    brand: string,
+    modelName: string,
+    powertrain: string,
+    version?: string,
+  ): BomFinanceDrawerScope => {
+    const scopeLabel = [
+      `${brand} ${modelName}`.trim(),
+      powertrain,
+      version,
+    ].filter(Boolean).join(" · ");
+    return {
+      countryCode,
+      brand,
+      modelName,
+      powertrain,
+      version,
+      scopeLabel,
+      title: `${countryCode} CBU · ${scopeLabel}`,
+    };
+  };
+
+  const openFinanceQuickCard = async (card: BomFinanceQuickCard) => {
+    closeFinanceDrawer();
+    setFinanceQuickCard(card);
+    setFinanceQuickFlipped(false);
+    setFinanceQuickRows([]);
+    setFinanceError("");
+    setFinanceQuickLoading(true);
+    try {
+      const rows = await api.listCountryMaterialFinance({
+        country: card.countryCode,
+        materialCodes: [card.materialCode],
+      });
+      setFinanceQuickRows(rows.items);
+    } catch (err) {
+      setFinanceError(getErrorMessage(err));
+    } finally {
+      setFinanceQuickLoading(false);
+    }
+  };
+
+  const openFinanceDrawer = async (
+    scope: BomFinanceDrawerScope,
+    options: { animateFlip: boolean } = { animateFlip: true },
+  ) => {
+    setFinanceQuickCard(null);
+    setFinanceQuickRows([]);
+    setFinanceQuickFlipped(false);
+    setFinanceDrawerScope(scope);
+    if (options.animateFlip) setFinanceDrawerFlipped(false);
+    setFinanceDrawerRows([]);
+    setFinanceError("");
+    setFinanceDrawerLoading(true);
+    try {
+      const rows = await api.listCountryMaterialFinance({
+        country: scope.countryCode,
+        brand: scope.brand,
+        model: scope.modelName,
+        powertrain: scope.powertrain,
+        version: scope.version,
+      });
+      setFinanceDrawerRows(rows.items);
+    } catch (err) {
+      setFinanceError(getErrorMessage(err));
+    } finally {
+      setFinanceDrawerLoading(false);
+      if (options.animateFlip) {
+        window.setTimeout(() => setFinanceDrawerFlipped(true), 60);
+      } else {
+        setFinanceDrawerFlipped(true);
+      }
+    }
+  };
+
+  const handleFinanceDrawerCountryChange = async (countryCode: string) => {
+    if (!financeDrawerScope) return;
+    await openFinanceDrawer(
+      buildFinanceDrawerScope(
+        countryCode,
+        financeDrawerScope.brand,
+        financeDrawerScope.modelName,
+        financeDrawerScope.powertrain,
+        financeDrawerScope.version,
+      ),
+      { animateFlip: false },
+    );
+  };
+
+  const handleFinanceSave = async (
+    row: CountryMaterialFinanceRow,
+    update: CountryMaterialFinanceUpdate,
+  ) => {
+    setSavingFinanceMaterialCode(row.materialCode);
+    setFinanceError("");
+    try {
+      const saved = await api.updateMaterialCountryFinance(row.materialCode, update);
+      setFinanceQuickRows((current) => replaceFinanceRow(current, saved));
+      setFinanceDrawerRows((current) => replaceFinanceRow(current, saved));
+      scheduleLoad(200);
+    } catch (err) {
+      setFinanceError(getErrorMessage(err));
+    } finally {
+      setSavingFinanceMaterialCode(null);
+    }
+  };
 
   // Clear pending deletes after 3s timeout
   useEffect(() => {
@@ -3093,6 +3279,7 @@ function BomAdminPanel({
           colourCode: sku.colourCode,
           colourType: sku.colourType || "single",
           powertrain: draft.powertrain || "ICE",
+          sourceBomTemplate: draft.sourceBomTemplate,
         });
         if ((sku.colourTier || "single") !== "single") {
           await api.updateColourTier(materialCode, sku.colourTier || "single");
@@ -3614,6 +3801,20 @@ function BomAdminPanel({
   const addMaterialButtonLabel = showAddMaterial
     ? (isPhoneToolsLayout ? "Hide Form" : "Hide + Material")
     : "+ Material";
+  const renderFinanceQuickSummary = (): string => {
+    if (financeQuickLoading) return "Loading...";
+    const row = financeQuickRows[0];
+    if (!row) return `FOB ${financeQuickCard?.fob?.toLocaleString() ?? "-"} · no CBU memo yet`;
+    const margin = row.vehicleMarginEur ?? row.marginEur;
+    const marginRate = row.vehicleMarginRate ?? row.marginRate;
+    const profit = row.vehicleProfitEur;
+    return [
+      `FOB ${row.fobEur?.toLocaleString() ?? "-"}`,
+      `Unit margin ${margin?.toLocaleString() ?? "-"}`,
+      `Margin ${marginRate == null ? "-" : `${(marginRate * 100).toFixed(2)}%`}`,
+      `Profit ${profit?.toLocaleString() ?? "-"}`,
+    ].join(" · ");
+  };
 
   return (
     <div style={{ padding: 20 }}>
@@ -3919,6 +4120,71 @@ function BomAdminPanel({
           }
         />
       </div>
+      {financeDrawerScope ? (
+        <div className="bom-finance-modal-backdrop" onClick={closeFinanceDrawer}>
+          <div className="bom-finance-modal-shell" onClick={(event) => event.stopPropagation()}>
+            <FlipToolCard
+              flipped={financeDrawerFlipped}
+              ariaLabel="Country CBU finance card"
+              height="min(72vh, 720px)"
+              minHeight="420px"
+              className="bom-finance-flip-card"
+              frontClassName="bom-finance-flip-face bom-finance-flip-front"
+              backClassName="bom-finance-flip-face bom-finance-flip-back"
+              front={
+                <div className="bom-finance-card-front">
+                  <div>
+                    <span className="bom-finance-eyebrow">BOM ADMIN</span>
+                    <h3>{financeDrawerScope.countryCode} CBU</h3>
+                    <p>{financeDrawerScope.scopeLabel}</p>
+                  </div>
+                  <div className="bom-finance-card-front-actions">
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      onClick={() => setFinanceDrawerFlipped(true)}
+                    >
+                      Open CBU
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={closeFinanceDrawer}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              }
+              back={
+                <div className="bom-finance-card-back">
+                  <div className="bom-finance-card-back-actions">
+                    <span className="bom-finance-eyebrow">BOM ADMIN · CBU DETAIL</span>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={closeFinanceDrawer}
+                    >
+                      Close
+                    </button>
+                  </div>
+                  <MaterialFinanceWorkbench
+                    countryCode={financeDrawerScope.countryCode}
+                    countryCodes={sortedCountries}
+                    scopeLabel={financeDrawerScope.scopeLabel}
+                    rows={financeDrawerRows}
+                    loading={financeDrawerLoading}
+                    error={financeError}
+                    savingMaterialCode={savingFinanceMaterialCode}
+                    onCountryChange={handleFinanceDrawerCountryChange}
+                    onSaveRow={handleFinanceSave}
+                  />
+                </div>
+              }
+            />
+          </div>
+        </div>
+      ) : null}
       {colourSwatchEditor ? (
         <div
           onClick={(event) => event.stopPropagation()}
@@ -4131,11 +4397,22 @@ function BomAdminPanel({
                           <th title="Actions" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions }}>Actions</th>
                           <th title="Effective from" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from }}>From</th>
                           <th title="Effective to" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to }}>To</th>
-	                          {sortedCountries.map(c => (
-	                            <th key={c} title={formatCountryCodeTooltip(c)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
-	                              {c}
-	                            </th>
-	                          ))}
+                          {sortedCountries.map(c => (
+                            <th key={c} title={formatCountryCodeTooltip(c)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
+                              <button
+                                type="button"
+                                className={`bom-country-cbu-trigger${c === "NL" ? " is-nl" : ""}`}
+                                title={`${formatCountryCodeTooltip(c)} · CBU detail`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void openFinanceDrawer(buildFinanceDrawerScope(c, mg.brand, mg.modelName, mg.pt));
+                                }}
+                              >
+                                <span className="bom-country-cbu-code">{c}</span>
+                                <span className="bom-country-cbu-caret" aria-hidden="true" />
+                              </button>
+                            </th>
+                          ))}
                         </tr>
                       </thead>
                       <tbody>
@@ -4432,12 +4709,33 @@ function BomAdminPanel({
                                 const hasFob = fob != null && baseFob != null && baseFob > 0;
                                 const hasSurcharge = fob?.colourSurchargeEur && fob.colourSurchargeEur > 0;
                                 const sourceMarker = getBomFobSourceMarker(fob?.fobSourceMode);
+                                const financeCountries = Array.isArray((ref as { financeCountries?: unknown }).financeCountries)
+                                  ? ((ref as { financeCountries: string[] }).financeCountries)
+                                  : [];
+                                const hasFinance = financeCountries.includes(c);
                                 return (
                                   <td key={c} className="bom-fob-price-cell" title={formatBomFobTooltip(c, baseFob, fob?.colourSurchargeEur, fob?.fobSourceMode, fob?.fobSourceCountryCode)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", cursor: "pointer", padding: "2px 4px" }}
-                                    onClick={() => setEditFob({ materialCodes: allCodes, countryCode: c, fob: baseFob ?? null })}>
+                                    onClick={() => {
+                                      if (c === "NL") {
+                                        void openFinanceQuickCard({
+                                          countryCode: c,
+                                          materialCode: String(bomTemplate || ref.materialCode || allCodes[0] || ""),
+                                          materialCodes: allCodes,
+                                          title: `${c} finance · ${bomTemplate}`,
+                                          fob: baseFob ?? null,
+                                        });
+                                        return;
+                                      }
+                                      setEditFob({ materialCodes: allCodes, countryCode: c, fob: baseFob ?? null });
+                                    }}>
                                     <span className="bom-fob-price-value" style={{ color: hasFob ? "#0f766e" : "#cbd5e1", fontWeight: hasFob ? 600 : 400 }}>
                                       {hasFob ? baseFob!.toLocaleString() : "-"}
                                       {hasSurcharge ? <sup style={{ color: '#d97706', fontSize: 9 }}> +{fob.colourSurchargeEur}</sup> : null}
+                                      {hasFinance ? (
+                                        <sup className="bom-finance-source-mark" title={`${c} finance / CBU maintained`}>
+                                          %
+                                        </sup>
+                                      ) : null}
                                       {sourceMarker ? (
                                         <sup className="bom-fob-source-mark" title={formatBomFobSourceLabel(fob?.fobSourceMode, fob?.fobSourceCountryCode)}>
                                           {sourceMarker}
@@ -4890,22 +5188,107 @@ function BomAdminPanel({
             </div>
           );
         })}
-      </div>
-      {editFob && (
-        <div style={{ marginTop: 10, padding: 8, background: "#f1f5f9", borderRadius: 4, display: "flex", gap: 8, alignItems: "center" }}>
-          <span style={{ fontFamily: "monospace", fontSize: 11 }}>{editFob.materialCodes.length} material codes</span>
-          <span style={{ fontSize: 12 }}>in</span>
-          <input type="text" value={editFob.countryCode}
-            onChange={(e) => setEditFob({ ...editFob, countryCode: e.target.value.toUpperCase() })}
-            style={{ width: 50, fontSize: 12, textAlign: "center" }} />
-          <span style={{ fontSize: 12 }}>FOB €</span>
-          <input type="number" value={editFob.fob ?? ""}
-            onChange={(e) => setEditFob({ ...editFob, fob: e.target.value === "" ? null : Number(e.target.value) })}
-            style={{ width: 100, fontSize: 12 }} />
-          <button className="btn btn-sm btn-primary" onClick={handleFobSave}>Save to all {editFob.materialCodes.length}</button>
-          <button className="btn btn-sm btn-ghost" onClick={() => setEditFob(null)}>Cancel</button>
+	      </div>
+      {financeQuickCard ? (
+        <div className="bom-finance-modal-backdrop" onClick={closeFinanceQuickCard}>
+          <div className="bom-finance-quick-modal-shell" onClick={(event) => event.stopPropagation()}>
+            <FlipToolCard
+              flipped={financeQuickFlipped}
+              ariaLabel={`${financeQuickCard.countryCode} material finance quick card`}
+              height={financeQuickFlipped ? 360 : 132}
+              minHeight={financeQuickFlipped ? 360 : 132}
+              className="bom-finance-quick-card"
+              front={
+                <div className="bom-finance-quick-face">
+                  <div>
+                    <span className="bom-finance-eyebrow">{financeQuickCard.countryCode} finance / CBU</span>
+                    <h4>{financeQuickCard.title}</h4>
+                    <p>{renderFinanceQuickSummary()}</p>
+                  </div>
+                  <BomFinanceActionBar
+                    actions={[
+                      { label: "Edit CBU", kind: "primary", onClick: () => setFinanceQuickFlipped(true) },
+                      {
+                        label: "Edit FOB",
+                        onClick: () => {
+                          setEditFob({
+                            materialCodes: financeQuickCard.materialCodes,
+                            countryCode: financeQuickCard.countryCode,
+                            fob: financeQuickCard.fob,
+                          });
+                          closeFinanceQuickCard();
+                        },
+                      },
+                      { label: "Close", onClick: closeFinanceQuickCard },
+                    ]}
+                  />
+                </div>
+              }
+              back={
+                <div className="bom-finance-quick-back">
+                  <div className="bom-finance-quick-back-head">
+                    <span className="bom-finance-eyebrow">{financeQuickCard.countryCode} finance / CBU</span>
+                    <BomFinanceActionBar
+                      actions={[
+                        { label: "Back", onClick: () => setFinanceQuickFlipped(false) },
+                        { label: "Close", onClick: closeFinanceQuickCard },
+                      ]}
+                    />
+                  </div>
+                  {financeQuickLoading ? (
+                    <div className="material-finance-empty">Loading finance row...</div>
+                  ) : (
+                    <MaterialFinanceMatrix
+                      rows={financeQuickRows}
+                      density="compact"
+                      savingMaterialCode={savingFinanceMaterialCode}
+                      onSaveRow={handleFinanceSave}
+                    />
+                  )}
+                  {financeError ? <div className="material-finance-error">{financeError}</div> : null}
+                </div>
+              }
+            />
+          </div>
         </div>
-      )}
+      ) : null}
+      {editFob ? (
+        <div className="bom-finance-modal-backdrop" onClick={() => setEditFob(null)}>
+          <div className="bom-fob-edit-modal-shell" onClick={(event) => event.stopPropagation()}>
+            <div className="bom-fob-edit-card">
+              <div>
+                <span className="bom-finance-eyebrow">BOM ADMIN · FOB</span>
+                <h4>Edit FOB</h4>
+                <p>{editFob.materialCodes.length} material codes</p>
+              </div>
+              <div className="bom-fob-edit-grid">
+                <label>
+                  <span>Country</span>
+                  <input
+                    type="text"
+                    value={editFob.countryCode}
+                    onChange={(event) => setEditFob({ ...editFob, countryCode: event.target.value.toUpperCase() })}
+                  />
+                </label>
+                <label>
+                  <span>FOB EUR</span>
+                  <input
+                    type="number"
+                    value={editFob.fob ?? ""}
+                    onChange={(event) => setEditFob({ ...editFob, fob: event.target.value === "" ? null : Number(event.target.value) })}
+                  />
+                </label>
+              </div>
+              <BomFinanceActionBar
+                actions={[
+                  { label: `Save ${editFob.materialCodes.length}`, kind: "primary", onClick: () => void handleFobSave() },
+                  { label: "Cancel", onClick: () => setEditFob(null) },
+                ]}
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

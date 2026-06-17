@@ -1,7 +1,7 @@
 # Order Genius — 当前状态与待办
 
 > 当前版本: V1.5 | 目标版本: V2 | V2 spec: [ORDER_GENIUS_V2_SPEC.md](./ORDER_GENIUS_V2_SPEC.md)
-> 更新: 2026-05-23
+> 更新: 2026-06-17
 
 ## V1.5 已实现
 
@@ -68,6 +68,11 @@
 ### 定制色
 - [ ] 颜色价格规则表（brand + colour + surcharge + valid_from/to）
 - [ ] Pricing mode 选择（`fob_includes_surcharge` vs `fob_excludes_surcharge`）
+
+### CBU / Finance
+- [ ] 真正 CBU 明细成本拆分表：国家可切换，最小粒度为包含 `**` 的 BOM template，成本项支持 Excel 粘贴/导入和网页维护
+- [ ] NL price CBU 保持独立格式；其它国家走通用 CBU 成本明细/Excel 粘贴，不复用 NL 边际矩阵
+- [ ] 完整 edit history / audit log：记录字段级前后值、操作人、操作时间、来源模式、source payload，可按国家/物料/BOM template 查询
 
 ### 历史追溯
 - [ ] 物料切换点在月份维度可见

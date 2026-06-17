@@ -44,6 +44,7 @@ describe("order filler navigation", () => {
 
     for (const path of [
       "/product/coc-match",
+      "/product/order-genius/cbu",
       "/data/config-import",
       "/data/matching-review",
       "/data/jato-monthly-update",
@@ -59,6 +60,8 @@ describe("order filler navigation", () => {
     expect(isRouteAllowedForRole("/market/transfer", "order_filler")).toBe(true);
     expect(isRouteAllowedForRole("/data/order-genius", "order_filler")).toBe(true);
     expect(isRouteAllowedForRole("/product/order-genius/vehicle-allocation", "order_filler")).toBe(true);
+    expect(isRouteAllowedForRole("/product/order-genius/cbu", "editor")).toBe(true);
+    expect(isRouteAllowedForRole("/product/order-genius/cbu", "order_filler")).toBe(false);
     expect(isRouteAllowedForRole("/product/coc-match", "editor")).toBe(true);
     expect(isRouteAllowedForRole("/product/coc-match", "order_filler")).toBe(false);
     expect(isRouteAllowedForRole("/product/order-genius/vehicle-allocation", "viewer")).toBe(false);

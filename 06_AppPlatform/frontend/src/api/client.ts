@@ -110,6 +110,8 @@ import type {
   BaselineVersion,
   ColourHexRule,
   ColourSurchargeRule,
+  CountryMaterialFinanceRow,
+  CountryMaterialFinanceUpdate,
   CountryPaymentTerm,
   MaterialUploadPreview,
   MaterialUploadPreviewRow,
@@ -994,6 +996,43 @@ function mapMaterialUploadPreview(raw: Record<string, unknown>): MaterialUploadP
         .map(mapMaterialUploadPreviewRow)
       : [],
     warnings: Array.isArray(warningsRaw) ? warningsRaw.map((item) => String(item)) : [],
+  };
+}
+
+function mapCountryMaterialFinanceRow(raw: Record<string, unknown>): CountryMaterialFinanceRow {
+  const sourcePayloadRaw = raw.sourcePayload ?? raw.source_payload;
+  return {
+    financeId: nullableString(raw.financeId ?? raw.finance_id),
+    countryCode: String(raw.countryCode ?? raw.country_code ?? ""),
+    materialCode: String(raw.materialCode ?? raw.material_code ?? ""),
+    brand: String(raw.brand ?? ""),
+    modelName: String(raw.modelName ?? raw.model_name ?? ""),
+    version: String(raw.version ?? ""),
+    powertrain: nullableString(raw.powertrain),
+    colour: String(raw.colour ?? ""),
+    colourCode: String(raw.colourCode ?? raw.colour_code ?? ""),
+    bomTemplate: nullableString(raw.bomTemplate ?? raw.bom_template),
+    bomFobEur: nullableNumber(raw.bomFobEur ?? raw.bom_fob_eur),
+    fobEur: nullableNumber(raw.fobEur ?? raw.fob_eur),
+    retailPriceEur: nullableNumber(raw.retailPriceEur ?? raw.retail_price_eur),
+    wholesalePriceEur: nullableNumber(raw.wholesalePriceEur ?? raw.wholesale_price_eur),
+    dealerPriceEur: nullableNumber(raw.dealerPriceEur ?? raw.dealer_price_eur),
+    costEur: nullableNumber(raw.costEur ?? raw.cost_eur),
+    marginEur: nullableNumber(raw.marginEur ?? raw.margin_eur),
+    marginRate: nullableNumber(raw.marginRate ?? raw.margin_rate),
+    vehicleMarginEur: nullableNumber(raw.vehicleMarginEur ?? raw.vehicle_margin_eur),
+    vehicleMarginRate: nullableNumber(raw.vehicleMarginRate ?? raw.vehicle_margin_rate),
+    vehicleProfitEur: nullableNumber(raw.vehicleProfitEur ?? raw.vehicle_profit_eur),
+    vehicleProfitRate: nullableNumber(raw.vehicleProfitRate ?? raw.vehicle_profit_rate),
+    fobDeltaEur: nullableNumber(raw.fobDeltaEur ?? raw.fob_delta_eur),
+    marginDeltaEur: nullableNumber(raw.marginDeltaEur ?? raw.margin_delta_eur),
+    memo: nullableString(raw.memo),
+    sourceMode: nullableString(raw.sourceMode ?? raw.source_mode),
+    sourcePayload: sourcePayloadRaw && typeof sourcePayloadRaw === "object" && !Array.isArray(sourcePayloadRaw)
+      ? sourcePayloadRaw as Record<string, unknown>
+      : null,
+    updatedBy: nullableString(raw.updatedBy ?? raw.updated_by),
+    updatedAtUtc: nullableString(raw.updatedAtUtc ?? raw.updated_at_utc),
   };
 }
 
@@ -3269,6 +3308,43 @@ export const api = {
       `/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob?country=${encodeURIComponent(country)}`,
     ),
 
+  listCountryMaterialFinance: (params: {
+    country: string;
+    brand?: string;
+    model?: string;
+    powertrain?: string;
+    version?: string;
+    materialCodes?: string[];
+  }) => {
+    const qs = new URLSearchParams({ country: params.country });
+    if (params.brand) qs.set("brand", params.brand);
+    if (params.model) qs.set("model", params.model);
+    if (params.powertrain) qs.set("powertrain", params.powertrain);
+    if (params.version) qs.set("version", params.version);
+    for (const materialCode of params.materialCodes || []) {
+      qs.append("material_code", materialCode);
+    }
+    return request<{ items: Record<string, unknown>[] }>(
+      `/order-genius/country-material-finance?${qs.toString()}`,
+    ).then((response) => ({
+      items: response.items.map(mapCountryMaterialFinanceRow),
+    }));
+  },
+
+  getMaterialCountryFinance: (materialCode: string, country: string) =>
+    request<Record<string, unknown>>(
+      `/order-genius/material-skus/${encodeURIComponent(materialCode)}/country-finance?country=${encodeURIComponent(country)}`,
+    ).then(mapCountryMaterialFinanceRow),
+
+  updateMaterialCountryFinance: (materialCode: string, payload: CountryMaterialFinanceUpdate) =>
+    request<Record<string, unknown>>(
+      `/order-genius/material-skus/${encodeURIComponent(materialCode)}/country-finance`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    ).then(mapCountryMaterialFinanceRow),
+
   exportOrderGenius: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; hideEmptyRows?: boolean; quantitiesOnly?: boolean }) =>
     requestBlob("/order-genius/export", {
       method: "POST",
@@ -3507,7 +3583,7 @@ export const api = {
   createPaymentTerm: (body: { countryCode: string; countryName: string; paymentTermCode: string; paymentMethod: string; lcDays: number }) =>
     request<any>("/order-genius/payment-terms/countries", { method: "POST", body: JSON.stringify(body) }),
 
-  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; powertrain?: string; bomTemplate?: string }) =>
+  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; powertrain?: string; bomTemplate?: string; sourceBomTemplate?: string }) =>
     request<any>("/order-genius/material-skus", { method: "POST", body: JSON.stringify(body) }),
 
   updateSkuMetadata: (materialCode: string, body: { materialCodes?: string[]; brand?: string; modelName?: string; version?: string; powertrain?: string }) =>

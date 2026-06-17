@@ -52,6 +52,7 @@ const MarketPowertrainPage = lazy(() => import("./pages/MarketPowertrainPage").t
 const AdvancedAnalysisPage = lazy(() => import("./pages/AdvancedAnalysisPage").then(m => ({ default: m.AdvancedAnalysisPage })));
 const LeaseComparisonPage = lazy(() => import("./pages/LeaseComparisonPage").then(m => ({ default: m.LeaseComparisonPage })));
 const OrderGeniusPage = lazy(() => import("./pages/OrderGeniusPage").then(m => ({ default: m.OrderGeniusPage })));
+const OrderGeniusCbuPage = lazy(() => import("./pages/OrderGeniusCbuPage").then(m => ({ default: m.OrderGeniusCbuPage })));
 const OrderGeniusVehicleAllocationPage = lazy(() => import("./pages/OrderGeniusVehicleAllocationPage").then(m => ({ default: m.OrderGeniusVehicleAllocationPage })));
 const AccessControlPage = lazy(() => import("./pages/AccessControlPage").then(m => ({ default: m.AccessControlPage })));
 const ProfilePage = lazy(() => import("./pages/ProfilePage").then(m => ({ default: m.ProfilePage })));
@@ -102,6 +103,7 @@ const router = createBrowserRouter([
     { path: "market/advanced-analysis", element: withPageLoader(<AdvancedAnalysisPage />) },
     { path: "product/current-msrp", element: withPageLoader(<MsrpPage />) },
     { path: "product/order-genius", element: withPageLoader(<OrderGeniusPage />) },
+    { path: "product/order-genius/cbu", element: withPageLoader(<OrderGeniusCbuPage />) },
     { path: "product/order-genius/vehicle-allocation", element: withPageLoader(<OrderGeniusVehicleAllocationPage />) },
     { path: "product/lease-comparison", element: withPageLoader(<LeaseComparisonPage />) },
     { path: "product/pricing", element: withPageLoader(<PositioningPricingPage />) },

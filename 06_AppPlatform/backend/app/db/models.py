@@ -1871,6 +1871,45 @@ class CountrySkuFobResolved(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+class CountryMaterialFinance(TimestampMixin, Base):
+    __tablename__ = "country_material_finance"
+    __table_args__ = (
+        Index(
+            "uq_ordering_country_material_finance_active",
+            "country_code", "material_code",
+            unique=True,
+            postgresql_where=text("is_active = true"),
+        ),
+        Index("ix_ordering_country_material_finance_country", "country_code"),
+        Index("ix_ordering_country_material_finance_material", "material_code"),
+        {"schema": "ordering"},
+    )
+
+    country_material_finance_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    material_code: Mapped[str] = mapped_column(Text, nullable=False)
+    fob_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    retail_price_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    wholesale_price_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    dealer_price_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    cost_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    margin_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    margin_rate: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    vehicle_margin_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    vehicle_margin_rate: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    vehicle_profit_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    vehicle_profit_rate: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    fob_delta_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    margin_delta_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    memo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_mode: Mapped[str] = mapped_column(Text, nullable=False, default="manual")
+    source_payload_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
 class CountryFobSourceMapping(TimestampMixin, Base):
     __tablename__ = "country_fob_source_mapping"
     __table_args__ = (

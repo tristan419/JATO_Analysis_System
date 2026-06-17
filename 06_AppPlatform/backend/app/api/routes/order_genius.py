@@ -65,6 +65,16 @@ def _selected_month_from_body(body: dict) -> int | None:
     return selected_month
 
 
+def _optional_float_from_body(body: dict, key: str) -> float | None:
+    value = body.get(key)
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"{key} must be numeric") from exc
+
+
 def _export_filter_params(body: dict) -> dict:
     return {
         "brand": body.get("brand"),
@@ -667,6 +677,102 @@ def get_sku_fob(
     return fob
 
 
+@router.get("/country-material-finance")
+def list_country_material_finance(
+    country: str = Query(),
+    brand: str | None = Query(default=None),
+    model: str | None = Query(default=None),
+    powertrain: str | None = Query(default=None),
+    version: str | None = Query(default=None),
+    material_code: list[str] | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Return country finance/CBU rows over BOM SKUs."""
+    rows = repo.list_country_material_finance(
+        session,
+        country,
+        material_codes=material_code,
+        brand=brand,
+        model_name=model,
+        powertrain=powertrain,
+        version=version,
+    )
+    return {"items": rows}
+
+
+@router.get("/material-skus/{material_code}/country-finance")
+def get_material_sku_country_finance(
+    material_code: str,
+    country: str = Query(),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Return one material's country finance/CBU row."""
+    rows = repo.list_country_material_finance(
+        session,
+        country,
+        material_codes=[material_code],
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Material finance row not found")
+    return rows[0]
+
+
+@router.patch("/material-skus/{material_code}/country-finance")
+def patch_material_sku_country_finance(
+    material_code: str,
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    """Create or update one material's country finance/CBU note without changing BOM FOB."""
+    country = clean_text(body.get("countryCode") or body.get("country_code")).upper()
+    if not country:
+        raise HTTPException(status_code=400, detail="countryCode is required")
+
+    field_map = {
+        "fob_eur": "fobEur",
+        "retail_price_eur": "retailPriceEur",
+        "wholesale_price_eur": "wholesalePriceEur",
+        "dealer_price_eur": "dealerPriceEur",
+        "cost_eur": "costEur",
+        "margin_eur": "marginEur",
+        "margin_rate": "marginRate",
+        "vehicle_margin_eur": "vehicleMarginEur",
+        "vehicle_margin_rate": "vehicleMarginRate",
+        "vehicle_profit_eur": "vehicleProfitEur",
+        "vehicle_profit_rate": "vehicleProfitRate",
+        "fob_delta_eur": "fobDeltaEur",
+        "margin_delta_eur": "marginDeltaEur",
+    }
+    values: dict = {}
+    for db_field, api_field in field_map.items():
+        if api_field in body:
+            values[db_field] = _optional_float_from_body(body, api_field)
+    if "memo" in body:
+        values["memo"] = clean_text(body.get("memo")) or None
+    if "sourcePayload" in body:
+        payload = body.get("sourcePayload")
+        values["source_payload_json"] = payload if isinstance(payload, dict) else None
+    values["source_mode"] = clean_text(body.get("sourceMode") or "manual")
+
+    if len(values) == 1 and "source_mode" in values:
+        raise HTTPException(status_code=400, detail="No finance fields provided")
+
+    result = repo.upsert_country_material_finance(
+        session,
+        country,
+        material_code,
+        values,
+        updated_by=user.name,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Material code not found")
+    session.commit()
+    return result
+
+
 @router.patch("/material-skus/{material_code}/lifecycle")
 def patch_sku_lifecycle(
     material_code: str,
@@ -705,19 +811,31 @@ def delete_material_sku(
     user=Depends(require_min_role("admin")),
 ) -> dict:
     """Hard-delete a material SKU and its FOB records (admin only)."""
+    existing_sku = repo.get_sku_by_material_code_any_status(session, material_code)
+    bom_template = existing_sku.bom_template if existing_sku else None
     deleted = repo.delete_sku(session, material_code)
     if not deleted:
         raise HTTPException(status_code=404, detail="Material code not found")
-    # Also clean up FOB records
+    # Also clean up FOB and finance records
     from sqlalchemy import delete as sa_delete
-    from app.db.models import CountrySkuFobResolved
+    from app.db.models import CountryMaterialFinance, CountrySkuFobResolved
     session.execute(
         sa_delete(CountrySkuFobResolved).where(
             CountrySkuFobResolved.material_code == material_code
         )
     )
+    session.execute(
+        sa_delete(CountryMaterialFinance).where(
+            CountryMaterialFinance.material_code == material_code
+        )
+    )
+    deleted_template_finance = repo.delete_orphan_template_finance(session, bom_template)
     session.commit()
-    return {"materialCode": material_code, "deleted": True}
+    return {
+        "materialCode": material_code,
+        "deleted": True,
+        "deletedTemplateFinance": deleted_template_finance,
+    }
 
 
 @router.patch("/material-skus/{material_code}/fob")
@@ -832,6 +950,7 @@ def create_material_sku(
     colour_type = clean_text(body.get("colourType")) or "single"
     powertrain = clean_text(body.get("powertrain")) or "Other"
     bom_template = clean_text(body.get("bomTemplate")).upper() or material_code
+    source_bom_template = clean_text(body.get("sourceBomTemplate")).upper()
 
     missing = [
         label
@@ -894,6 +1013,12 @@ def create_material_sku(
         baseline_version_id=baseline.baseline_version_id,
     )
     session.add(sku)
+    copied_finance_rows = repo.copy_country_material_finance_template(
+        session,
+        source_bom_template,
+        bom_template,
+        updated_by=user.name,
+    )
     try:
         session.commit()
     except IntegrityError as exc:
@@ -902,7 +1027,11 @@ def create_material_sku(
             status_code=409,
             detail=f"Could not create material SKU: {material_code}",
         ) from exc
-    return {"materialCode": sku.material_code, "id": str(sku.material_sku_id)}
+    return {
+        "materialCode": sku.material_code,
+        "id": str(sku.material_sku_id),
+        "copiedFinanceRows": copied_finance_rows,
+    }
 
 
 @router.patch("/material-skus/{material_code}/metadata")
