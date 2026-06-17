@@ -9,6 +9,7 @@ from app.db.models import (
     BrandColourSurchargeRule,
     CountryPaymentTermMaster,
     CountrySkuFobResolved,
+    FobResolvedHistory,
 )
 from app.infra import order_genius_repository as repo
 from app.services.ordering_normalization import normalize_brand, normalize_brand_text
@@ -96,6 +97,29 @@ def test_list_ordering_country_options_includes_fob_only_country(monkeypatch) ->
         "paymentMethod": None,
         "lcDays": None,
     }
+
+
+def test_list_ordering_country_options_skips_unsupported_country_codes(monkeypatch) -> None:
+    monkeypatch.setattr(
+        repo,
+        "list_country_payment_terms",
+        lambda _session: [
+            SimpleNamespace(
+                country_code="PU",
+                country_name="Portugal",
+                payment_term_code="TT",
+                payment_method="TT",
+                lc_days=0,
+            )
+        ],
+    )
+
+    result = repo.list_ordering_country_options(_FakeSession(["PU", "SK"]))
+    by_code = {item["countryCode"]: item for item in result}
+
+    assert "PU" not in by_code
+    assert by_code["PT"]["countryName"] == "Portugal"
+    assert by_code["SK"]["countryName"] == "Slovakia"
 
 
 def test_upsert_colour_surcharge_creates_normalized_special_rule() -> None:
@@ -289,3 +313,48 @@ def test_copy_country_fobs_creates_target_country_rows(monkeypatch) -> None:
     assert created.payment_term_code == "LC90"
     assert created.final_fob_eur == 14900
     assert created.fob_source_country_code == "CZ"
+
+
+def test_adjust_country_fobs_updates_rows_and_writes_history(monkeypatch) -> None:
+    baseline_id = uuid4()
+    row = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=baseline_id,
+        country_code="SK",
+        material_code="T7000SE**MY0001",
+        payment_term_code="LC90",
+        uploaded_fob_eur=14900,
+        final_fob_eur=14900,
+        fob_source_mode="copied_from_country",
+        is_active=True,
+    )
+    fake_session = _FakeSession()
+
+    monkeypatch.setattr(
+        repo,
+        "list_fob_by_country",
+        lambda _session, country_code, payment_term_code=None: [row]
+        if country_code == "SK"
+        else [],
+    )
+
+    result = repo.adjust_country_fobs(fake_session, "SK", 200, changed_by="admin")
+
+    assert result == {
+        "countryCode": "SK",
+        "deltaEur": 200,
+        "rows": 1,
+        "adjusted": 1,
+        "skippedNegative": 0,
+        "unchanged": 0,
+    }
+    assert row.final_fob_eur == 15100
+    assert row.fob_source_mode == "manual_country_adjust"
+    assert row.updated_at_utc is not None
+    history = fake_session.added[0]
+    assert isinstance(history, FobResolvedHistory)
+    assert history.country_code == "SK"
+    assert history.material_code == "T7000SE**MY0001"
+    assert history.old_final_fob_eur == 14900
+    assert history.new_final_fob_eur == 15100
+    assert history.changed_by == "admin"

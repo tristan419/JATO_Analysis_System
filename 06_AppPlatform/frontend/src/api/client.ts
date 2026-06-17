@@ -3312,6 +3312,9 @@ export const api = {
   getAccountCountryOptions: () =>
     request<{ items: CountryPaymentTerm[] }>("/order-genius/account-country-options"),
 
+  getOrderGeniusFobCountries: () =>
+    request<{ countries: string[] }>("/order-genius/fob-countries"),
+
   getOrderGeniusBaselines: () =>
     request<{ items: BaselineVersion[] }>("/order-genius/baselines"),
 
@@ -3489,20 +3492,26 @@ export const api = {
   getSkuFobDetail: (materialCode: string, country: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob?country=${encodeURIComponent(country)}`),
 
-  copyCountryFobs: (body: { sourceCountryCode: string; targetCountryCode: string; overwrite: boolean }) =>
-    request<{ sourceCountryCode: string; targetCountryCode: string; totalSourceRows: number; copied: number; updated: number; skipped: number; overwrite: boolean }>(
+  copyCountryFobs: (body: { sourceCountryCode: string; targetCountryCode: string; overwriteExisting?: boolean }) =>
+    request<{ sourceCountryCode: string; targetCountryCode: string; sourceRows: number; created: number; updated: number; skipped: number; unchanged: number; targetPaymentTermCode: string | null }>(
       "/order-genius/countries/copy-fobs",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  adjustCountryFobs: (body: { countryCode: string; deltaEur: number }) =>
+    request<{ countryCode: string; deltaEur: number; rows: number; adjusted: number; skippedNegative: number; unchanged: number }>(
+      "/order-genius/countries/adjust-fobs",
       { method: "POST", body: JSON.stringify(body) },
     ),
 
   createPaymentTerm: (body: { countryCode: string; countryName: string; paymentTermCode: string; paymentMethod: string; lcDays: number }) =>
     request<any>("/order-genius/payment-terms/countries", { method: "POST", body: JSON.stringify(body) }),
 
-  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; powertrain?: string }) =>
+  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; powertrain?: string; bomTemplate?: string }) =>
     request<any>("/order-genius/material-skus", { method: "POST", body: JSON.stringify(body) }),
 
-  updateSkuMetadata: (materialCode: string, body: { brand: string; modelName: string; version: string; powertrain: string; rowVersion: number }) =>
-    request<{ materialCode: string; brand: string; modelName: string; version: string; powertrain: string | null; rowVersion: number }>(
+  updateSkuMetadata: (materialCode: string, body: { materialCodes?: string[]; brand?: string; modelName?: string; version?: string; powertrain?: string }) =>
+    request<{ materialCodes: string[]; updated: number }>(
       `/order-genius/material-skus/${encodeURIComponent(materialCode)}/metadata`,
       { method: "PATCH", body: JSON.stringify(body) },
     ),
@@ -3518,6 +3527,12 @@ export const api = {
 
   updateMaterialCode: (oldCode: string, newCode: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(oldCode)}/material-code`, { method: "PATCH", body: JSON.stringify({ materialCode: newCode }) }),
+
+  updateBomTemplateMaterialCode: (materialCodes: string[], bomTemplate: string) =>
+    request<{ bomTemplate: string; materialCodes: string[]; updated: number }>(
+      "/order-genius/bom-templates/material-code",
+      { method: "PATCH", body: JSON.stringify({ materialCodes, bomTemplate }) },
+    ),
 
   updateColourTier: (materialCode: string, colourTier: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/colour-tier`, { method: "PATCH", body: JSON.stringify({ colourTier }) }),
