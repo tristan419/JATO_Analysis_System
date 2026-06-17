@@ -4173,9 +4173,9 @@ function BomAdminPanel({
                     <div style={{ marginTop: 7, fontSize: 11, color: colourHexRuleStatus.startsWith("Set") ? "#0f766e" : "#b45309" }}>
                       {colourHexRuleStatus}
                     </div>
-                  ) : null}
-                </div>
-              </div>
+	                  ) : null}
+	                </div>
+	              </div>
               {bomAdminNotice ? (
                 <div style={{ marginTop: 8, padding: "8px 10px", border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", fontSize: 11, fontWeight: 700 }}>
                   {bomAdminNotice}

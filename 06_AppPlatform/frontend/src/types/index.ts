@@ -2193,3 +2193,78 @@ export interface CocMatchJob {
   startedAt?: string | null;
   finishedAt?: string | null;
 }
+
+export interface CocFillRecord {
+  materialGroup: string;
+  wvtaNo: string;
+  cocNo: string;
+  brand?: string | null;
+  model?: string | null;
+  powertrain?: string | null;
+  version?: string | null;
+  salesName?: string | null;
+  validFrom?: string | null;
+  validTo?: string | null;
+  comments?: string | null;
+  pageNumber: number;
+  tableRowNumber: number;
+}
+
+export interface CocFillDecision {
+  materialGroup: string;
+  sheetName: string;
+  rowNumber: number;
+  status: "filled" | "skipped_existing" | "not_found" | "ambiguous" | "invalid_source" | string;
+  candidateCount: number;
+  reason: string;
+  confidence: number;
+  selectedRecord?: CocFillRecord | null;
+  candidateRecords?: CocFillRecord[];
+  writtenWvta?: string | null;
+  writtenCoc?: string | null;
+}
+
+export interface CocFillPreviewGroup {
+  sheetName: string;
+  totalRows: number;
+  filledCount: number;
+  notFoundCount: number;
+  ambiguousCount: number;
+  skippedExistingCount: number;
+  invalidSourceCount: number;
+  statusCounts?: Record<string, number>;
+  decisions: CocFillDecision[];
+  previewLimit?: number;
+  truncated?: boolean;
+}
+
+export interface CocFillJob {
+  jobId: string;
+  jobType: "fill" | string;
+  status: string;
+  phase: string;
+  excelFilename: string;
+  pdfFilename: string;
+  overwriteExisting: boolean;
+  conflictStrategy: string;
+  includeResultSheet?: boolean;
+  sheetNames?: string[];
+  totalRows?: number | null;
+  uniqueMaterialCount?: number | null;
+  pdfRecordCount?: number | null;
+  filledCount?: number | null;
+  notFoundCount?: number | null;
+  ambiguousCount?: number | null;
+  skippedExistingCount?: number | null;
+  invalidSourceCount?: number | null;
+  sheetCount?: number | null;
+  statusCounts?: Record<string, number>;
+  decisions?: CocFillDecision[];
+  previewGroups?: CocFillPreviewGroup[];
+  outputFilename?: string | null;
+  triggeredBy: string;
+  error?: string | null;
+  createdAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+}
