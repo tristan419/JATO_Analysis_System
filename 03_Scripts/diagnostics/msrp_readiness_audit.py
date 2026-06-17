@@ -14,12 +14,16 @@ from typing import Any, Sequence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
+SCRIPTS_ROOT = REPO_ROOT / "03_Scripts"
 HERMES_SCRIPT_DIR = REPO_ROOT / "03_Scripts" / "hermes"
-if str(HERMES_SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(HERMES_SCRIPT_DIR))
+for path in (SCRIPT_DIR, SCRIPTS_ROOT, HERMES_SCRIPT_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
+from engineering_config_source_sync import (  # noqa: E402
+    DEFAULT_SPEC_BATCH,
+    build_source_sync_report,
+)
 from msrp_workflow_smoke import ApiClient, DEFAULT_API_BASE, SmokeFailure  # noqa: E402
 
 try:
@@ -44,6 +48,7 @@ TEST_EVIDENCE = {
     "snapshotScript": "03_Scripts/tests/test_hermes_msrp_current_price_snapshot.py",
     "frontendApi": "06_AppPlatform/frontend/src/tests/unit/dataManagementApi.test.ts",
     "pipelineWrapper": "03_Scripts/tests/test_run_msrp_pipeline.py",
+    "configSourceSync": "03_Scripts/tests/test_engineering_config_source_sync.py",
 }
 
 
@@ -219,6 +224,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"| Current prices | {runtime_counts.get('currentPriceCount', 0)} |",
         f"| Price history rows | {runtime_counts.get('priceHistoryRows', 0)} |",
         f"| Finance observations | {runtime_counts.get('financeObservationCount', 0)} |",
+        f"| Official config sources | {runtime_counts.get('officialConfigSourceCount', 0)} |",
         f"| Reconciliation conflicts | {runtime_counts.get('reconciliationConflictGroups', 0)} |",
         "",
         "## Requirements",
@@ -394,6 +400,16 @@ def build_readiness_report(
         client,
         "/hermes/msrp-dryrun-history",
     )
+    try:
+        config_source_sync = build_source_sync_report(
+            repo_root=REPO_ROOT,
+            spec_batch=DEFAULT_SPEC_BATCH,
+            run_stage_smoke=False,
+        )
+        config_source_sync_error = None
+    except Exception as exc:  # noqa: BLE001 - readiness reports local config blockers.
+        config_source_sync = {}
+        config_source_sync_error = str(exc)
 
     source_count = _count_from_payload(sources, "total", "rows")
     observation_count = _count_from_payload(observations, "total", "rows")
@@ -413,6 +429,14 @@ def build_readiness_report(
     dryrun_runs = dryrun_history.get("runs") if isinstance(dryrun_history.get("runs"), list) else []
     dryrun_pass_pct = dryrun_status.get("overallPassPct")
     dryrun_gate = dryrun_status.get("gateStatus")
+    config_source_summary = _nested_dict(config_source_sync, "summary")
+    config_source_warehouse = _nested_dict(config_source_sync, "warehouseContract")
+    config_source_status = str(config_source_sync.get("status") or "failed")
+    config_source_count = int(config_source_summary.get("sourceCount") or 0)
+    config_country_count = int(config_source_summary.get("countryCount") or 0)
+    config_missing_countries = config_source_summary.get("missingRequiredCountries")
+    if not isinstance(config_missing_countries, list):
+        config_missing_countries = []
     write_role, write_role_level = _role_level(auth_me)
     write_auth_ok = write_role_level >= MIN_WRITE_ROLE_LEVEL
     write_auth_reason = (
@@ -462,6 +486,13 @@ def build_readiness_report(
         "listMsrpFinanceObservations",
         "listMsrpReconciliation",
         "queueMsrpReconciliationReviewCases",
+    )
+    config_source_sync_covered = _test_file_has(
+        "configSourceSync",
+        "engineering_config_source_sync_v1",
+        "SpecFeatureObservation",
+        "engineering_config.vehicle_trims",
+        "engineering_config.trim_feature_values",
     )
 
     requirements = [
@@ -670,6 +701,45 @@ def build_readiness_report(
             note="Supports monthly payment, lease type, subsidy amount, and net price after subsidy filters.",
         ),
         _requirement(
+            key="official_config_table_pipeline",
+            title="Official configuration/spec table pipeline",
+            status=_status(
+                config_source_status == "passed"
+                and config_source_count > 0
+                and config_source_sync_covered,
+                degraded=(
+                    config_source_status == "degraded"
+                    and config_source_count > 0
+                    and config_source_sync_covered
+                ),
+                unavailable=(
+                    config_source_sync_error is not None
+                    or config_source_status == "failed"
+                ),
+            ),
+            runtime={
+                "sourceSyncStatus": config_source_status,
+                "sourceCount": config_source_count,
+                "countryCount": config_country_count,
+                "countries": config_source_summary.get("countries") or [],
+                "missingRequiredCountries": config_missing_countries,
+                "schemaRefs": config_source_summary.get("schemaRefs") or {},
+                "warehouseTables": config_source_warehouse.get("tables") or [],
+                "error": config_source_sync_error,
+            },
+            evidence=[
+                DEFAULT_SPEC_BATCH,
+                "03_Scripts/engineering_config_source_sync.py",
+                TEST_EVIDENCE["configSourceSync"],
+                "06_AppPlatform/backend/app/api/routes/engineering_config.py",
+            ],
+            note=(
+                "Maps official spec/configuration sources into the unified "
+                "ScrapeJob contract and declares the Engineering Config "
+                "ImportBatch/VehicleTrim/TrimFeatureValue warehouse landing path."
+            ),
+        ),
+        _requirement(
             key="multi_source_reconciliation",
             title="Multi-source reconciliation",
             status=_status(
@@ -778,6 +848,8 @@ def build_readiness_report(
                 "priceHistoryRows": history_count,
                 "priceAlertCount": alert_count,
                 "financeObservationCount": finance_count,
+                "officialConfigSourceCount": config_source_count,
+                "officialConfigCountryCount": config_country_count,
                 "reconciliationConflictGroups": conflict_count,
                 "dryrunRunCount": len(dryrun_runs),
                 "writeAuthRole": write_role,

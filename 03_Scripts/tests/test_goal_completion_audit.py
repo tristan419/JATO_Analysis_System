@@ -63,7 +63,7 @@ def _write_statuses(repo_root: Path) -> None:
             "pipelineId": "msrp_readiness_audit",
             "status": "success",
             "readinessStatus": "passed",
-            "statusCounts": {"passed": 14},
+            "statusCounts": {"passed": len(audit.REQUIRED_MSRP_REQUIREMENT_KEYS)},
             "artifactRefs": ["hermes/reports/msrp_readiness_audit.json"],
         },
     )
@@ -133,10 +133,11 @@ def test_build_report_separates_local_p0_from_unchecked_production(tmp_path: Pat
     by_key = {item["key"]: item for item in report["requirements"]}
     assert by_key["msrp_official_price_p0"]["status"] == "passed"
     assert by_key["msrp_finance_monthly_lease_subsidy_net"]["status"] == "passed"
+    assert by_key["msrp_official_config_table_pipeline"]["status"] == "passed"
     assert by_key["msrp_auto_review_scoring"]["status"] == "passed"
     assert by_key["msrp_pipeline_orchestration"]["status"] == "passed"
     assert by_key["production_deployment_state"]["status"] == "not_checked"
-    assert report["summary"]["msrpDetailedPassedCount"] == 14
+    assert report["summary"]["msrpDetailedPassedCount"] == 15
 
 
 def test_source_todo_placeholders_degrade_full_goal(tmp_path: Path) -> None:
@@ -294,5 +295,5 @@ def test_write_outputs_and_status_record(monkeypatch, tmp_path: Path) -> None:
     assert Path(artifacts["latestJson"]).exists()
     assert Path(artifacts["latestMarkdown"]).exists()
     assert status_record == {"pipelineId": audit.PIPELINE_ID, "status": "failed"}
-    assert captured["records_processed"] == 19
+    assert captured["records_processed"] == 20
     assert captured["failed_count"] == 1

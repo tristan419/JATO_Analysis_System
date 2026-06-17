@@ -87,6 +87,7 @@ REQUIRED_MSRP_REQUIREMENT_KEYS = (
     "auto_review_scoring",
     "sales_effectiveness",
     "finance_monthly_lease_subsidy_net",
+    "official_config_table_pipeline",
     "multi_source_reconciliation",
     "dryrun_governance",
     "pipeline_orchestration",

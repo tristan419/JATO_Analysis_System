@@ -133,7 +133,7 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
 
     assert report["schemaVersion"] == audit_module.SCHEMA_VERSION
     assert report["status"] == "passed"
-    assert report["summary"]["statusCounts"] == {"passed": 15}
+    assert report["summary"]["statusCounts"] == {"passed": 16}
     requirements = {
         item["key"]: item
         for item in report["requirements"]
@@ -145,6 +145,10 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
     finance_runtime = requirements["finance_monthly_lease_subsidy_net"]["runtime"]
     assert auto_review_runtime["schemaVersion"] == "msrp_auto_review_score_v1"
     assert finance_runtime["financeObservationCount"] == 1
+    config_runtime = requirements["official_config_table_pipeline"]["runtime"]
+    assert config_runtime["sourceSyncStatus"] == "passed"
+    assert config_runtime["schemaRefs"] == {"SpecFeatureObservation": 4}
+    assert "engineering_config.vehicle_trims" in config_runtime["warehouseTables"]
     assert requirements["multi_source_reconciliation"]["runtime"]["statusCounts"]["conflict"] == 1
     assert requirements["pipeline_orchestration"]["runtime"]["statusPipelineId"] == "msrp_pipeline"
 
@@ -199,7 +203,7 @@ def test_main_prints_json_report(capsys, monkeypatch) -> None:
     payload = json.loads(captured.out)
     assert exit_code == 0
     assert payload["status"] == "passed"
-    assert payload["summary"]["requirementCount"] == 15
+    assert payload["summary"]["requirementCount"] == 16
 
 
 def test_write_outputs_creates_latest_and_historical_artifacts(tmp_path: Path) -> None:
