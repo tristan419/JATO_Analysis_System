@@ -8,7 +8,12 @@ from jato_scraper.extractors.pdf_text import (
     PdfTextEntryPattern,
     PdfTextExtractor,
     PdfTextProfile,
+    parse_price,
 )
+
+
+def test_parse_price_collapses_pdf_table_line_breaks():
+    assert parse_price("3\n8 .\n1\n90,\n-") == 38_190.0
 
 
 def test_pdf_text_extracts_entries_and_applies_price_delta(monkeypatch):

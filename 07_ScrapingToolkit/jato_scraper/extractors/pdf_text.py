@@ -55,7 +55,8 @@ class PdfTextProfile:
 
 
 def parse_price(raw: str) -> float | None:
-    match = _PRICE_RE.search(raw.replace("\xa0", " ").replace(" ", ""))
+    normalized_raw = re.sub(r"\s+", "", raw.replace("\xa0", " "))
+    match = _PRICE_RE.search(normalized_raw)
     if not match:
         return None
     number = match.group().replace("'", "").replace("\u2019", "")
