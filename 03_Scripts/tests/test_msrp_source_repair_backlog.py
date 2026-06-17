@@ -136,6 +136,57 @@ def test_v3_report_marks_historical_pass_as_recheck(tmp_path: Path) -> None:
     assert group["sampleTransientRegressions"][0]["lastKnownGoodRunId"] == previous_run_id
 
 
+def test_v3_report_marks_tesla_403_with_evkx_reference_policy(tmp_path: Path) -> None:
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260617-101010",
+        "results": [
+            {
+                "country": "se",
+                "code": "tesla_model_y_se_draft_scrapling",
+                "brand": "TESLA",
+                "status": "empty",
+                "valid": 0,
+                "failureReason": "forbidden_403",
+                "recommendedStrategy": "manual_review_or_proxy_required",
+                "sourceUrl": "https://www.tesla.com/sv_se/modely",
+                "httpStatus": 403,
+            },
+            {
+                "country": "fi",
+                "code": "tesla_model_y_fi_draft_scrapling",
+                "brand": "TESLA",
+                "status": "empty",
+                "valid": 0,
+                "failureReason": "forbidden_403",
+                "recommendedStrategy": "manual_review_or_proxy_required",
+                "sourceUrl": "https://www.tesla.com/fi_FI/modely",
+                "httpStatus": 403,
+            },
+        ],
+    }
+    report_path = tmp_path / "dryrun_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    backlog = backlog_script.run(str(report_path), str(tmp_path))
+
+    group = backlog["groups"][0]
+    assert group["failureReason"] == "forbidden_403"
+    assert group["affectedBrands"] == ["TESLA"]
+    assert group["referenceAssist"]["preferred"] == "official_proxy_or_configurator_api"
+    assert group["referenceAssist"]["thirdPartyReference"] == "EVKX"
+    assert group["referenceAssist"]["referencePolicy"] == "reference_only_review_required"
+    assert group["referenceAssist"]["officialSourceRequiredForIngest"] is True
+    assert "isConverted is false" in " ".join(
+        group["referenceAssist"]["acceptanceRules"]
+    )
+
+    markdown = (tmp_path / "msrp_source_repair_backlog.md").read_text(
+        encoding="utf-8"
+    )
+    assert "EVKX reference_only_review_required" in markdown
+
+
 def test_legacy_report_keeps_summary_backlog_format(tmp_path: Path) -> None:
     report = {
         "total": 1,

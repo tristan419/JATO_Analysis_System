@@ -375,6 +375,10 @@ def _source_host(source: dict[str, Any]) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+def _source_brand(source: dict[str, Any]) -> str:
+    return str(source.get("brand") or "").strip().upper()
+
+
 def _normalize_host_groups(hosts: dict[str, dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for host, data in hosts.items():
@@ -433,6 +437,33 @@ def _priority_review_assist(failure_reason: str, source_repair_count: int) -> di
         "neuralNetworkFit": "not_recommended_until_labeled_corpus",
         "reason": "Use deterministic retry/proxy/source diagnostics before model-assisted repair.",
     }
+
+
+def _source_reference_assist(group: dict[str, Any]) -> dict[str, Any] | None:
+    brands = {str(brand).upper() for brand in group.get("brands", set())}
+    hosts = {str(host).lower() for host in group.get("hosts", {})}
+    failure_reason = str(group.get("failureReason") or "")
+    if failure_reason == "forbidden_403" and (
+        "TESLA" in brands or "tesla.com" in hosts
+    ):
+        return {
+            "preferred": "official_proxy_or_configurator_api",
+            "thirdPartyReference": "EVKX",
+            "referencePolicy": "reference_only_review_required",
+            "officialSourceRequiredForIngest": True,
+            "acceptanceRules": [
+                "Do not count EVKX as an official MSRP dryrun pass.",
+                "Only use EVKX records when pricingCountry matches the target country.",
+                "Only use EVKX records when isConverted is false.",
+                "Keep the Tesla official source open until an official page, price list, or configurator API is fetchable.",
+            ],
+            "reason": (
+                "Tesla official pages are blocked by the direct fetch path; "
+                "EVKX can supply BEV variant and local-price reference evidence "
+                "but cannot replace official MSRP evidence."
+            ),
+        }
+    return None
 
 
 def _priority_fields(group: dict[str, Any]) -> dict[str, Any]:
@@ -542,6 +573,7 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
             "sourceRepairIssueCount": 0,
             "recommendedStrategies": {},
             "affectedCountries": set(),
+            "brands": set(),
             "sources": [],
             "transientSources": [],
             "hosts": {},
@@ -564,6 +596,9 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
         group["recommendedStrategies"][recommended] = group["recommendedStrategies"].get(recommended, 0) + 1
         if country:
             group["affectedCountries"].add(country)
+        brand = _source_brand(result)
+        if brand:
+            group["brands"].add(brand)
         if source_code:
             group["sources"].append(source_code)
         host = _source_host(result)
@@ -587,7 +622,7 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
         recommended_strategy = max(strategies, key=strategies.get) if strategies else "diagnose_with_msrp_page_analyzer"
         transient_count = int(group["transientRegressionCount"])
         source_repair_count = int(group["sourceRepairIssueCount"])
-        normalized_groups.append({
+        normalized_group = {
             "failureReason": group["failureReason"],
             "count": group["count"],
             "transientRegressionCount": transient_count,
@@ -602,11 +637,16 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
             "recommendedStrategies": strategies,
             "affectedCountries": sorted(group["affectedCountries"]),
             "affectedCountryCount": len(group["affectedCountries"]),
+            "affectedBrands": sorted(group["brands"]),
             "sampleSources": group["sources"][:20],
             "sampleTransientRegressions": group["transientSources"][:8],
             "topSourceHosts": _normalize_host_groups(group["hosts"]),
             "status": group["status"],
-        })
+        }
+        reference_assist = _source_reference_assist(group)
+        if reference_assist:
+            normalized_group["referenceAssist"] = reference_assist
+        normalized_groups.append(normalized_group)
     normalized_groups.sort(key=lambda item: (
         0 if int(item["sourceRepairIssueCount"]) > 0 else 1,
         -float(item["priorityScore"]),
@@ -637,18 +677,25 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
         f"Transient regressions: {payload['transientRegressionCount']}",
         f"Source repair issues: {payload['sourceRepairIssueCount']}",
         "",
-        "| Failure reason | Priority | Count | Recheck | Source repair | Recommended strategy | Affected countries |",
-        "|---|---:|---:|---:|---:|---|---|",
+        "| Failure reason | Priority | Count | Recheck | Source repair | Recommended strategy | Reference assist | Affected countries |",
+        "|---|---:|---:|---:|---:|---|---|---|",
     ]
     for item in normalized_groups:
+        reference_assist = item.get("referenceAssist") or {}
+        reference_label = (
+            f"{reference_assist.get('thirdPartyReference')} {reference_assist.get('referencePolicy')}"
+            if reference_assist
+            else "-"
+        )
         lines.append(
-            "| {reason} | {priority} | {count} | {transient} | {source_repair} | {strategy} | {countries} |".format(
+            "| {reason} | {priority} | {count} | {transient} | {source_repair} | {strategy} | {reference} | {countries} |".format(
                 reason=item["failureReason"],
                 priority=f"{item['priorityBand']} {item['priorityScore']}",
                 count=item["count"],
                 transient=item["transientRegressionCount"],
                 source_repair=item["sourceRepairIssueCount"],
                 strategy=item["recommendedStrategy"],
+                reference=reference_label,
                 countries=", ".join(str(c).upper() for c in item["affectedCountries"]) or "-",
             )
         )
