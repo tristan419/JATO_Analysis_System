@@ -73,9 +73,47 @@ def _default_source_repair_backlog() -> dict[str, Any]:
     }
 
 
+def _default_source_reference_evidence() -> dict[str, Any]:
+    return {
+        "schemaVersion": "msrp_source_reference_evidence_v1",
+        "generatedAt": None,
+        "backlogRunId": None,
+        "referenceSource": "EVKX",
+        "referencePolicy": "reference_only_review_required",
+        "officialSourceRequiredForIngest": True,
+        "officialIngestEligible": False,
+        "summary": {
+            "evidenceItemCount": 0,
+            "localReferenceCount": 0,
+            "missingLocalReferenceCount": 0,
+            "officialIngestEligibleCount": 0,
+        },
+        "items": [],
+    }
+
+
 def _load_msrp_source_repair_backlog() -> dict[str, Any]:
     backlog = _read_json_if_exists(_msrp_artifacts_dir() / "msrp_source_repair_backlog.json")
     return backlog if isinstance(backlog, dict) else _default_source_repair_backlog()
+
+
+def _load_msrp_source_reference_evidence(run_id: str | None = None) -> dict[str, Any]:
+    evidence = _read_json_if_exists(_msrp_artifacts_dir() / "msrp_source_reference_evidence.json")
+    if not isinstance(evidence, dict):
+        return _default_source_reference_evidence()
+    evidence_run_id = str(evidence.get("backlogRunId") or "")
+    target_run_id = str(run_id or "")
+    if target_run_id and evidence_run_id and evidence_run_id != target_run_id:
+        return _default_source_reference_evidence()
+    return evidence
+
+
+def _with_source_reference_evidence(progress: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(progress)
+    if not isinstance(enriched.get("sourceReferenceEvidence"), dict):
+        run_id = str((enriched.get("status") or {}).get("runId") or "")
+        enriched["sourceReferenceEvidence"] = _load_msrp_source_reference_evidence(run_id)
+    return enriched
 
 
 def _source_url(source: dict[str, Any]) -> str:
@@ -668,7 +706,7 @@ def _msrp_progress_from_report(report: dict[str, Any]) -> dict[str, Any]:
         "warning" if findings else "ok"
     )
 
-    return {
+    return _with_source_reference_evidence({
         "probe": "pipeline.msrp_country_progress",
         "overall": overall,
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -695,11 +733,11 @@ def _msrp_progress_from_report(report: dict[str, Any]) -> dict[str, Any]:
         ],
         "sourceRepairBacklog": _source_repair_backlog_from_report(report),
         "findings": findings,
-    }
+    })
 
 
 def _missing_msrp_progress() -> dict[str, Any]:
-    return {
+    return _with_source_reference_evidence({
         "probe": "pipeline.msrp_country_progress",
         "overall": "critical",
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -713,7 +751,7 @@ def _missing_msrp_progress() -> dict[str, Any]:
             "severity": "critical",
             "message": "No dryrun report found. MSRP dryrun may not have run yet.",
         }],
-    }
+    })
 
 
 def _msrp_progress_from_partial_current(
@@ -791,7 +829,7 @@ def _msrp_progress_from_partial_current(
         None,
     )
 
-    return {
+    return _with_source_reference_evidence({
         "probe": "pipeline.msrp_country_progress",
         "overall": overall,
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -827,7 +865,7 @@ def _msrp_progress_from_partial_current(
             stable_coverage=stable_coverage,
         ),
         "findings": findings,
-    }
+    })
 
 
 def _partial_msrp_progress(
@@ -955,7 +993,7 @@ def hermes_msrp_country_progress(
         report_path = REPORTS_DIR / f"msrp_country_progress_{run_id}.json"
         static_progress = _read_json_if_exists(report_path)
         if static_progress and not _is_empty_msrp_progress(static_progress):
-            return static_progress
+            return _with_source_reference_evidence(static_progress)
         dryrun_report = _load_msrp_dryrun_report(run_id)
         if dryrun_report:
             return _msrp_progress_from_report(dryrun_report)
@@ -984,9 +1022,11 @@ def hermes_msrp_country_progress(
         return _with_msrp_latest_context(
             _msrp_progress_from_report(latest_report),
             dashboard_context,
-        )
+    )
     if static_progress and not _is_empty_msrp_progress(static_progress):
-        return _with_msrp_latest_context(static_progress, dashboard_context)
+        return _with_source_reference_evidence(
+            _with_msrp_latest_context(static_progress, dashboard_context)
+        )
     if latest_report:
         return _with_msrp_latest_context(
             _msrp_progress_from_report(latest_report),
@@ -995,7 +1035,9 @@ def hermes_msrp_country_progress(
     if partial_progress:
         return partial_progress
     if static_progress:
-        return _with_msrp_latest_context(static_progress, dashboard_context)
+        return _with_source_reference_evidence(
+            _with_msrp_latest_context(static_progress, dashboard_context)
+        )
     return _with_msrp_latest_context(_missing_msrp_progress(), dashboard_context)
 
 

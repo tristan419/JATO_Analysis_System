@@ -858,6 +858,54 @@ class TestSentinelAndDeploy:
             "audi_q6_e_tron_fi_draft_scrapling",
         ]
 
+    def test_msrp_country_progress_includes_source_reference_evidence(
+        self,
+        client,
+        tmp_path,
+    ):
+        reports_dir = tmp_path / "hermes" / "reports"
+        artifact_dir = tmp_path / "03_Scripts" / "diagnostics" / "artifacts"
+        reports_dir.mkdir(parents=True)
+        artifact_dir.mkdir(parents=True)
+        report = _make_msrp_v3_report()
+        _write_json(artifact_dir / "dryrun_report.json", report)
+        _write_json(artifact_dir / "msrp_source_reference_evidence.json", {
+            "schemaVersion": "msrp_source_reference_evidence_v1",
+            "generatedAt": "2026-06-17T02:16:49Z",
+            "backlogRunId": report["runId"],
+            "referenceSource": "EVKX",
+            "referencePolicy": "reference_only_review_required",
+            "officialSourceRequiredForIngest": True,
+            "officialIngestEligible": False,
+            "summary": {
+                "evidenceItemCount": 2,
+                "localReferenceCount": 8,
+                "missingLocalReferenceCount": 0,
+                "officialIngestEligibleCount": 0,
+            },
+            "items": [
+                {
+                    "countryCode": "fi",
+                    "modelQuery": "Tesla Model Y",
+                    "localReferenceCount": 3,
+                    "officialIngestEligible": False,
+                }
+            ],
+        })
+
+        with patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path), patch(
+            "app.api.routes.hermes.REPORTS_DIR",
+            reports_dir,
+        ):
+            resp = client.get("/hermes/msrp-country-progress")
+
+        assert resp.status_code == 200
+        evidence = resp.json()["sourceReferenceEvidence"]
+        assert evidence["schemaVersion"] == "msrp_source_reference_evidence_v1"
+        assert evidence["summary"]["localReferenceCount"] == 8
+        assert evidence["summary"]["officialIngestEligibleCount"] == 0
+        assert evidence["items"][0]["officialIngestEligible"] is False
+
 
 # ── /hermes/gaps ──────────────────────────────────────────────────────
 

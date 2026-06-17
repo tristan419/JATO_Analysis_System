@@ -26,6 +26,7 @@ STATUS_FILE_PATH = REPO_ROOT / "03_Scripts" / "logs" / "scheduled_fetch_status.j
 FALLBACK_REPORT_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_report.json"
 RUNS_INDEX_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_runs_index.json"
 SOURCE_REPAIR_BACKLOG_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_repair_backlog.json"
+SOURCE_REFERENCE_EVIDENCE_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_reference_evidence.json"
 SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
 
 
@@ -66,6 +67,41 @@ def _load_source_repair_backlog() -> dict:
         "topSourceHosts": [],
         "groups": [],
     }
+
+
+def _default_source_reference_evidence() -> dict:
+    return {
+        "schemaVersion": "msrp_source_reference_evidence_v1",
+        "generatedAt": None,
+        "backlogRunId": None,
+        "referenceSource": "EVKX",
+        "referencePolicy": "reference_only_review_required",
+        "officialSourceRequiredForIngest": True,
+        "officialIngestEligible": False,
+        "summary": {
+            "evidenceItemCount": 0,
+            "localReferenceCount": 0,
+            "missingLocalReferenceCount": 0,
+            "officialIngestEligibleCount": 0,
+        },
+        "items": [],
+    }
+
+
+def _load_source_reference_evidence(run_id: str | None = None) -> dict:
+    if SOURCE_REFERENCE_EVIDENCE_PATH.is_file():
+        try:
+            data = json.loads(SOURCE_REFERENCE_EVIDENCE_PATH.read_text())
+            if not isinstance(data, dict):
+                return _default_source_reference_evidence()
+            evidence_run_id = str(data.get("backlogRunId") or "")
+            target_run_id = str(run_id or "")
+            if target_run_id and evidence_run_id and evidence_run_id != target_run_id:
+                return _default_source_reference_evidence()
+            return data
+        except Exception:
+            pass
+    return _default_source_reference_evidence()
 
 
 def _source_url(source: dict[str, Any]) -> str:
@@ -396,6 +432,7 @@ def run(out_dir: str | None = None) -> dict:
             "topBlockingCountries": [],
             "topFailureReasons": [],
             "sourceRepairBacklog": _load_source_repair_backlog(),
+            "sourceReferenceEvidence": _load_source_reference_evidence(),
             "findings": [{
                 "type": "no_dryrun_report",
                 "severity": "critical",
@@ -534,6 +571,7 @@ def run(out_dir: str | None = None) -> dict:
         "topBlockingCountries": sorted(top_blocking, key=lambda x: x["passPct"]),
         "topFailureReasons": [{"reason": r, "count": c} for r, c in top_reasons[:5]],
         "sourceRepairBacklog": source_repair_backlog,
+        "sourceReferenceEvidence": _load_source_reference_evidence(str(report.get("runId") or "")),
         "findings": findings,
     }
 
@@ -626,6 +664,18 @@ def _render_markdown(result: dict) -> str:
                 f"| {group.get('failureReason', '-')} | {group.get('count', 0)} | "
                 f"{group.get('recommendedStrategy', '-')} | {countries or '-'} |"
             )
+        lines.append("")
+
+    reference_evidence = result.get("sourceReferenceEvidence") or {}
+    reference_summary = reference_evidence.get("summary") or {}
+    if reference_summary.get("evidenceItemCount") or reference_summary.get("localReferenceCount"):
+        lines.append("## Source Reference Evidence\n")
+        lines.append("| Metric | Value |")
+        lines.append("|---|---:|")
+        lines.append(f"| Evidence items | {reference_summary.get('evidenceItemCount', 0)} |")
+        lines.append(f"| Local references | {reference_summary.get('localReferenceCount', 0)} |")
+        lines.append(f"| Missing local references | {reference_summary.get('missingLocalReferenceCount', 0)} |")
+        lines.append(f"| Official ingest eligible | {reference_summary.get('officialIngestEligibleCount', 0)} |")
         lines.append("")
 
     findings = result.get("findings", [])

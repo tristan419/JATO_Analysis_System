@@ -67,6 +67,27 @@ def test_country_progress_preserves_finance_dryrun_counts(tmp_path, monkeypatch)
         "SOURCE_REPAIR_BACKLOG_PATH",
         tmp_path / "missing_backlog.json",
     )
+    reference_path = tmp_path / "msrp_source_reference_evidence.json"
+    reference_path.write_text(
+        json.dumps({
+            "schemaVersion": "msrp_source_reference_evidence_v1",
+            "generatedAt": "2026-06-17T02:16:49Z",
+            "backlogRunId": "msrp-dryrun-20260617-012812",
+            "referenceSource": "EVKX",
+            "referencePolicy": "reference_only_review_required",
+            "officialSourceRequiredForIngest": True,
+            "officialIngestEligible": False,
+            "summary": {
+                "evidenceItemCount": 1,
+                "localReferenceCount": 5,
+                "missingLocalReferenceCount": 0,
+                "officialIngestEligibleCount": 0,
+            },
+            "items": [],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "SOURCE_REFERENCE_EVIDENCE_PATH", reference_path)
 
     result = module.run(str(tmp_path / "reports"))
 
@@ -81,3 +102,5 @@ def test_country_progress_preserves_finance_dryrun_counts(tmp_path, monkeypatch)
     assert "| Finance candidates | 1 |" in markdown
     assert "| Monthly offers | 1 |" in markdown
     assert "| se | success | 96.6% | 28 | 1 | 0 | 1 | 1 |" in markdown
+    assert result["sourceReferenceEvidence"]["summary"]["localReferenceCount"] == 5
+    assert "| Local references | 5 |" in markdown

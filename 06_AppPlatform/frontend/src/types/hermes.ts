@@ -387,11 +387,20 @@ export interface HermesMsrpSourceRepairBacklogGroup {
     neuralNetworkFit?: string;
     reason?: string;
   };
+  referenceAssist?: {
+    preferred?: string;
+    thirdPartyReference?: string;
+    referencePolicy?: string;
+    officialSourceRequiredForIngest?: boolean;
+    acceptanceRules?: string[];
+    reason?: string;
+  };
   recommendedAction?: string;
   recommendedStrategy: string;
   recommendedStrategies?: Record<string, number>;
   affectedCountries: string[];
   affectedCountryCount?: number;
+  affectedBrands?: string[];
   sampleSources?: string[];
   sampleTransientRegressions?: Array<{
     countryCode: string;
@@ -412,6 +421,44 @@ export interface HermesMsrpSourceRepairBacklog {
   transientRegressionCount?: number;
   sourceRepairIssueCount?: number;
   groups: HermesMsrpSourceRepairBacklogGroup[];
+}
+export interface HermesMsrpSourceReferenceEvidenceItem {
+  countryCode: string;
+  pricingCountry?: string;
+  brand?: string;
+  modelQuery: string;
+  sourceCodes?: string[];
+  referenceSource?: string;
+  referencePolicy?: string;
+  officialIngestEligible: boolean;
+  localReferenceCount: number;
+  localPriceReferences?: Array<{
+    evId?: string;
+    name?: string;
+    startPrice?: number;
+    currency?: string;
+    pricingCountry?: string;
+    isConverted?: boolean;
+    infoUrl?: string;
+  }>;
+  fetchError?: string | null;
+  reviewRecommendation?: string;
+}
+export interface HermesMsrpSourceReferenceEvidence {
+  schemaVersion: string;
+  generatedAt?: string | null;
+  backlogRunId?: string | null;
+  referenceSource?: string;
+  referencePolicy?: string;
+  officialSourceRequiredForIngest?: boolean;
+  officialIngestEligible?: boolean;
+  summary: {
+    evidenceItemCount: number;
+    localReferenceCount: number;
+    missingLocalReferenceCount: number;
+    officialIngestEligibleCount: number;
+  };
+  items: HermesMsrpSourceReferenceEvidenceItem[];
 }
 export interface HermesMsrpStableCoverage {
   gateThreshold?: number;
@@ -466,6 +513,7 @@ export interface HermesMsrpCountryProgressResponse {
   topBlockingCountries?: { countryCode: string; passPct: number; reason: string; recommendedAction: string }[];
   topFailureReasons?: { reason: string; count: number }[];
   sourceRepairBacklog?: HermesMsrpSourceRepairBacklog;
+  sourceReferenceEvidence?: HermesMsrpSourceReferenceEvidence;
   findings?: { type: string; severity: string; message: string }[];
 }
 
