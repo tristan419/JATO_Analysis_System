@@ -50,6 +50,8 @@ TEST_EVIDENCE = {
     "pipelineWrapper": "03_Scripts/tests/test_run_msrp_pipeline.py",
     "configSourceSync": "03_Scripts/tests/test_engineering_config_source_sync.py",
     "scraperValidation": "06_AppPlatform/backend/tests/unit/test_scraper_validation.py",
+    "httpJsonExtractor": "07_ScrapingToolkit/tests/test_http_json.py",
+    "scraplingExtractor": "07_ScrapingToolkit/tests/test_scrapling_web.py",
 }
 
 
@@ -499,6 +501,20 @@ def build_readiness_report(
         "test_monthly_amount_still_rejected_without_finance_semantics",
         "source_price_semantics",
     )
+    finance_extractor_context_covered = (
+        _test_file_has(
+            "httpJsonExtractor",
+            "test_http_json_adds_pricing_context_from_profile",
+            "test_config_loader_builds_http_json_pricing_context_profile",
+            "lease_monthly",
+        )
+        and _test_file_has(
+            "scraplingExtractor",
+            "test_build_observation_adds_pricing_context_from_profile",
+            "test_config_loader_builds_scrapling_pricing_context_profile",
+            "lease_monthly",
+        )
+    )
     config_source_sync_covered = _test_file_has(
         "configSourceSync",
         "engineering_config_source_sync_v1",
@@ -697,11 +713,13 @@ def build_readiness_report(
             title="Finance monthly, lease, subsidy and net price",
             status=_status(
                 bool(finance_count and finance_count > 0)
-                and finance_validation_covered,
+                and finance_validation_covered
+                and finance_extractor_context_covered,
                 degraded=(
                     finance_error is None
                     and smoke_covers_full_contract
                     and finance_validation_covered
+                    and finance_extractor_context_covered
                 ),
                 unavailable=finance_error is not None,
             ),
@@ -709,6 +727,7 @@ def build_readiness_report(
                 "financeObservationCount": finance_count,
                 "summary": finance.get("summary", {}),
                 "semanticValidationCovered": finance_validation_covered,
+                "extractorPricingContextCovered": finance_extractor_context_covered,
                 "error": finance_error,
             },
             evidence=[
@@ -716,6 +735,8 @@ def build_readiness_report(
                 TEST_EVIDENCE["workflowSmoke"],
                 TEST_EVIDENCE["frontendApi"],
                 TEST_EVIDENCE["scraperValidation"],
+                TEST_EVIDENCE["httpJsonExtractor"],
+                TEST_EVIDENCE["scraplingExtractor"],
             ],
             note="Supports monthly payment, lease type, subsidy amount, and net price after subsidy filters.",
         ),

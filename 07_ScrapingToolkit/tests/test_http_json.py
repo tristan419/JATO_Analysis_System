@@ -5,6 +5,7 @@ from jato_scraper.extractors.http_json import (
     HttpJsonExtractor,
     HttpJsonProfile,
     LookupMapping,
+    PricingContextMapping,
 )
 
 
@@ -180,6 +181,76 @@ def test_http_json_joins_lookup_mapped_fields(monkeypatch):
     assert results[0].currency == "DKK"
 
 
+def test_http_json_adds_pricing_context_from_profile(monkeypatch):
+    extractor = HttpJsonExtractor(
+        ExtractorConfig(
+            source_code="volvo_xc60_se_lease_json",
+            country="se",
+            brand="VOLVO",
+            source_url="https://www.volvocars.com/se/cars/xc60/",
+            price_semantics="lease_monthly",
+        ),
+        HttpJsonProfile(
+            url="https://example.invalid/volvo-offers.json",
+            fixed_model="XC60",
+            default_currency="SEK",
+            default_price_label="Private lease",
+            field_mapping=FieldMapping(
+                model="",
+                trim="trimName",
+                price="lease.monthlyText",
+                currency="lease.currency",
+                vehicles_path="offers",
+            ),
+            pricing_context=PricingContextMapping(
+                fields={
+                    "monthly_payment": "lease.monthlyText",
+                    "term_months": "lease.termText",
+                    "annual_mileage_limit": "lease.mileageText",
+                },
+                constants={
+                    "price_semantics": "lease_monthly",
+                    "finance_type": "private_lease",
+                    "finance_currency": "SEK",
+                },
+            ),
+        ),
+    )
+
+    monkeypatch.setattr(
+        extractor,
+        "_fetch",
+        lambda: {
+            "offers": [
+                {
+                    "trimName": "Ultra",
+                    "lease": {
+                        "monthlyText": "5 990 kr/mån",
+                        "termText": "36 månader",
+                        "mileageText": "15000 km/år",
+                        "currency": "SEK",
+                    },
+                }
+            ]
+        },
+    )
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].official_model == "XC60"
+    assert results[0].official_trim == "Ultra"
+    assert results[0].msrp_value == 5990.0
+    assert results[0].raw_payload["pricingContext"] == {
+        "price_semantics": "lease_monthly",
+        "finance_type": "private_lease",
+        "finance_currency": "SEK",
+        "monthly_payment": 5990.0,
+        "term_months": 36,
+        "annual_mileage_limit": 15000,
+    }
+
+
 def test_config_loader_builds_http_json_lookup_mapping():
     profile = _build_http_json_profile(
         {
@@ -204,3 +275,36 @@ def test_config_loader_builds_http_json_lookup_mapping():
     assert isinstance(trim_mapping[0], LookupMapping)
     assert trim_mapping[0].source_path == "trimId"
     assert trim_mapping[0].collection_path == "trims"
+
+
+def test_config_loader_builds_http_json_pricing_context_profile():
+    profile = _build_http_json_profile(
+        {
+            "url": "https://example.invalid/volvo-offers.json",
+            "field_mapping": {
+                "vehicles_path": "offers",
+                "trim": "trimName",
+                "price": "lease.monthlyText",
+            },
+            "pricing_context": {
+                "fields": {
+                    "monthly_payment": "lease.monthlyText",
+                    "term_months": "lease.termText",
+                },
+                "constants": {
+                    "price_semantics": "lease_monthly",
+                    "finance_type": "private_lease",
+                },
+            },
+        }
+    )
+
+    assert profile.pricing_context is not None
+    assert profile.pricing_context.fields == {
+        "monthly_payment": "lease.monthlyText",
+        "term_months": "lease.termText",
+    }
+    assert profile.pricing_context.constants == {
+        "price_semantics": "lease_monthly",
+        "finance_type": "private_lease",
+    }

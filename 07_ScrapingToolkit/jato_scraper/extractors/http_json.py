@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,6 +13,23 @@ from jato_scraper.base import BaseExtractor, ExtractorConfig, RawObservation
 
 log = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 30
+_PRICE_RE = re.compile(r"[\d]+(?:[.,'\u2019]\d{3})*(?:[.,]\d{1,2})?")
+_FINANCE_AMOUNT_FIELDS = frozenset({
+    "monthly_payment",
+    "down_payment",
+    "down_payment_pct",
+    "apr",
+    "effective_apr",
+    "balloon_payment",
+    "total_credit_cost",
+    "total_amount_payable",
+    "subsidy_amount",
+    "net_price_after_subsidy",
+})
+_FINANCE_INTEGER_FIELDS = frozenset({
+    "term_months",
+    "annual_mileage_limit",
+})
 
 
 @dataclass(frozen=True)
@@ -39,6 +57,12 @@ class FieldMapping:
 
 
 @dataclass(frozen=True)
+class PricingContextMapping:
+    fields: dict[str, str] = field(default_factory=dict)
+    constants: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class HttpJsonProfile:
     url: str
     method: str = "GET"
@@ -50,6 +74,7 @@ class HttpJsonProfile:
     default_tax_included: bool = True
     default_price_label: str = "Manufacturer's Recommended Retail Price"
     fixed_model: str | None = None
+    pricing_context: PricingContextMapping | None = None
 
 
 class HttpJsonExtractor(BaseExtractor):
@@ -259,6 +284,106 @@ class HttpJsonExtractor(BaseExtractor):
             return None
         return self._resolve_path(vehicle, mapping, log_errors=False)
 
+    def _coerce_pricing_context_value(
+        self,
+        field_name: str,
+        value: Any,
+    ) -> Any | None:
+        if value in (None, "", [], {}):
+            return None
+        if field_name in _FINANCE_AMOUNT_FIELDS:
+            if isinstance(value, (int, float)):
+                return value
+            parsed = self._parse_amount(str(value))
+            return parsed if parsed is not None else value
+        if field_name in _FINANCE_INTEGER_FIELDS:
+            if isinstance(value, int):
+                return value
+            if isinstance(value, float):
+                return int(value)
+            parsed = self._parse_amount(str(value))
+            return int(parsed) if parsed is not None else value
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+    def _parse_amount(self, raw: str) -> float | None:
+        match = _PRICE_RE.search(raw.replace("\xa0", "").replace(" ", ""))
+        if not match:
+            return None
+        value = match.group().replace("'", "").replace("\u2019", "")
+        if "," in value and "." in value:
+            if value.rfind(",") > value.rfind("."):
+                value = value.replace(".", "").replace(",", ".")
+            else:
+                value = value.replace(",", "")
+        elif "," in value:
+            parts = value.split(",")
+            if len(parts[-1]) <= 2:
+                value = value.replace(",", ".")
+            else:
+                value = value.replace(",", "")
+        elif "." in value:
+            parts = value.split(".")
+            if all(len(part) == 3 for part in parts[1:]):
+                value = value.replace(".", "")
+        return float(value)
+
+    def _coerce_price_value(self, value: Any) -> float:
+        if value in (None, ""):
+            return 0.0
+        if isinstance(value, (int, float)):
+            return float(value)
+        parsed = self._parse_amount(str(value or ""))
+        if parsed is None:
+            raise ValueError(f"price field is not numeric: {value!r}")
+        return parsed
+
+    def _build_pricing_context(
+        self,
+        vehicle: dict[str, Any],
+        *,
+        root: Any | None = None,
+    ) -> dict[str, Any]:
+        mapping = self.profile.pricing_context
+        if mapping is None:
+            return {}
+        context: dict[str, Any] = {}
+        for field_name, path in mapping.fields.items():
+            raw_value = self._resolve_field_value(
+                vehicle,
+                path,
+                root=root,
+            )
+            coerced = self._coerce_pricing_context_value(
+                field_name,
+                raw_value,
+            )
+            if coerced is not None:
+                context[field_name] = coerced
+        for field_name, value in mapping.constants.items():
+            coerced = self._coerce_pricing_context_value(
+                field_name,
+                value,
+            )
+            if coerced is not None:
+                context[field_name] = coerced
+        return context
+
+    def _raw_payload_with_pricing_context(
+        self,
+        vehicle: dict[str, Any],
+        *,
+        root: Any | None = None,
+    ) -> dict[str, Any]:
+        pricing_context = self._build_pricing_context(vehicle, root=root)
+        if not pricing_context:
+            return vehicle
+        return {
+            **vehicle,
+            "pricingContext": pricing_context,
+        }
+
     def _map(
         self,
         vehicles: list[dict],
@@ -278,8 +403,8 @@ class HttpJsonExtractor(BaseExtractor):
                 official_trim = str(
                     self._resolve_field_value(v, fm.trim, root=root) or ""
                 )
-                msrp_value = float(
-                    self._resolve_field_value(v, fm.price, root=root) or 0
+                msrp_value = self._coerce_price_value(
+                    self._resolve_field_value(v, fm.price, root=root)
                 )
                 currency = str(
                     self._resolve_field_value(v, fm.currency, root=root)
@@ -300,6 +425,10 @@ class HttpJsonExtractor(BaseExtractor):
                     if fm.availability
                     else None
                 )
+                raw_payload = self._raw_payload_with_pricing_context(
+                    v,
+                    root=root,
+                )
                 obs = RawObservation(
                     official_model=official_model,
                     official_trim=official_trim,
@@ -315,7 +444,7 @@ class HttpJsonExtractor(BaseExtractor):
                     availability_text=(
                         str(availability).strip() if availability is not None else None
                     ),
-                    raw_payload=v,
+                    raw_payload=raw_payload,
                 )
                 results.append(obs)
             except (TypeError, ValueError) as exc:
