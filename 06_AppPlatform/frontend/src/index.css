@@ -5282,10 +5282,67 @@ select:focus, input:focus {
   text-align: left;
   appearance: none;
   background: #fff;
+  border: 1px solid rgb(148 163 184 / 0.34);
+  border-radius: 8px;
+  padding: 14px;
+  min-height: 142px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #0f172a;
+  font: inherit;
 }
 
 .msrp-finance-detail-card:hover {
   border-color: #2563eb;
+}
+
+.msrp-finance-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.msrp-finance-detail-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.msrp-finance-detail-card-head strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.msrp-finance-detail-card-head span:not(.badge) {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.msrp-finance-card-monthly {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.msrp-finance-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.msrp-finance-card-meta span {
+  border: 1px solid rgb(148 163 184 / 0.26);
+  border-radius: 999px;
+  padding: 2px 7px;
 }
 
 .msrp-finance-overlay {
@@ -5349,6 +5406,30 @@ select:focus, input:focus {
   color: #64748b;
 }
 
+.msrp-finance-flip-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.msrp-finance-flip-grid > div {
+  border: 1px solid rgb(148 163 184 / 0.28);
+  border-radius: 6px;
+  padding: 8px 10px;
+  min-height: 58px;
+}
+
+.msrp-finance-flip-grid span {
+  display: block;
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.msrp-finance-flip-grid strong {
+  font-size: 13px;
+}
+
 .msrp-finance-flip-actions {
   display: flex;
   justify-content: flex-end;
@@ -5372,6 +5453,10 @@ select:focus, input:focus {
 
   .msrp-finance-flip-hero-value {
     font-size: 28px;
+  }
+
+  .msrp-finance-flip-grid {
+    grid-template-columns: 1fr;
   }
 }
 
