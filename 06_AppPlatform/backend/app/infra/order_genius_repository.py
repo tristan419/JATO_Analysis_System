@@ -624,6 +624,7 @@ def list_bom_with_fob(
             "brand": normalize_brand(s.brand),
             "modelName": normalize_brand_text(s.model_name),
             "version": s.version,
+            "powertrain": _extract_canonical_powertrain(s),
             "colour": s.exterior_color_name or "",
             "colourCode": s.exterior_color_code or "",
             "colourType": s.exterior_color_type or "single",

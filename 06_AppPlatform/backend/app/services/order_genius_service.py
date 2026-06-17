@@ -28,6 +28,7 @@ from app.services.order_quantity_parser import (
     OrderQuantityImport,
     parse_order_quantity_xlsx,
 )
+from app.services.ordering_normalization import normalize_brand, normalize_brand_text
 from app.services.powertrain_normalizer import normalize_powertrain
 
 
@@ -530,15 +531,27 @@ def build_matrix(
     payment_term_code = country_pt.payment_term_code if country_pt else None
     country_name = country_pt.country_name if country_pt else None
 
-    # Get active SKUs matching filters (powertrain filtered in Python for canonical matching)
+    normalized_brand = normalize_brand(brand) if brand else None
+    normalized_model = normalize_brand_text(model_name) if model_name else None
+
+    # Get active SKUs matching filters (brand/model/powertrain are normalized in Python
+    # because legacy BOM rows can still contain JEACOO and stale powertrain values).
     active_skus = repo.list_active_skus(
         session,
-        brand=brand,
-        model_name=model_name,
         version=version,
         exterior_color_code=colour,
         material_code_search=material_code_search,
     )
+    if normalized_brand:
+        active_skus = [
+            sku for sku in active_skus
+            if normalize_brand(sku.brand) == normalized_brand
+        ]
+    if normalized_model:
+        active_skus = [
+            sku for sku in active_skus
+            if normalize_brand_text(sku.model_name) == normalized_model
+        ]
 
     # Get FOB for these SKUs — filtered by country's default payment term
     fob_map: dict[str, CountrySkuFobResolved] = {}
@@ -590,8 +603,8 @@ def build_matrix(
 
         rows.append({
             "materialCode": sku.material_code,
-            "brand": sku.brand,
-            "modelName": sku.model_name,
+            "brand": normalize_brand(sku.brand),
+            "modelName": normalize_brand_text(sku.model_name),
             "version": sku.version,
             "colour": sku.exterior_color_name,
             "colourCode": sku.exterior_color_code,
@@ -601,7 +614,7 @@ def build_matrix(
             "interiorColourCode": sku.interior_colour_code,
             "interiorPackage": sku.interior_package,
             "editionTag": sku.edition_tag,
-            "powertrain": sku.powertrain,
+            "powertrain": _extract_canonical_pt(sku),
             "fobEur": float(fob.final_fob_eur) if fob else None,
             "lifecycleStatus": "active",
             "editable": True,
@@ -621,9 +634,9 @@ def build_matrix(
         if not hist_sku:
             continue
         # Apply filters to historical rows too
-        if brand and hist_sku.brand != brand:
+        if normalized_brand and normalize_brand(hist_sku.brand) != normalized_brand:
             continue
-        if model_name and hist_sku.model_name != model_name:
+        if normalized_model and normalize_brand_text(hist_sku.model_name) != normalized_model:
             continue
         if version and hist_sku.version != version:
             continue
@@ -653,8 +666,8 @@ def build_matrix(
         if has_any or row_ttl > 0:
             rows.append({
                 "materialCode": mc,
-                "brand": hist_sku.brand,
-                "modelName": hist_sku.model_name,
+                "brand": normalize_brand(hist_sku.brand),
+                "modelName": normalize_brand_text(hist_sku.model_name),
                 "version": hist_sku.version,
                 "colour": hist_sku.exterior_color_name,
                 "colourCode": hist_sku.exterior_color_code,
@@ -664,7 +677,7 @@ def build_matrix(
                 "interiorColourCode": hist_sku.interior_colour_code,
                 "interiorPackage": hist_sku.interior_package,
                 "editionTag": hist_sku.edition_tag,
-                "powertrain": hist_sku.powertrain,
+                "powertrain": _extract_canonical_pt(hist_sku),
                 "fobEur": float(fob.final_fob_eur) if fob else None,
                 "lifecycleStatus": "historical",
                 "editable": False,
@@ -705,38 +718,50 @@ def build_options(
         session, country_code, pt_code,
     )
 
-    # Get all active SKUs for this country (filtered by FOB availability)
-    # Don't filter powertrain at DB level — DB has raw values, we filter by canonical after
-    all_active = repo.list_active_skus(session, brand=brand, model_name=model_name,
-                                       version=version)
+    normalized_brand = normalize_brand(brand) if brand else None
+    normalized_model = normalize_brand_text(model_name) if model_name else None
+
+    # Get all active SKUs for this country (filtered by FOB availability).
+    # Brand/model/powertrain are filtered after normalization so old JEACOO rows stay visible.
+    all_active = repo.list_active_skus(session, version=version)
     skus = [s for s in all_active if s.material_code in fob_codes]
+    if normalized_brand:
+        skus = [s for s in skus if normalize_brand(s.brand) == normalized_brand]
+    if normalized_model:
+        skus = [s for s in skus if normalize_brand_text(s.model_name) == normalized_model]
 
     # Filter by canonical powertrain (model-name-aware)
     if powertrain:
         skus = [s for s in skus if _extract_canonical_pt(s) == normalize_powertrain(powertrain)]
 
     # Collect distinct values from the filtered skus
-    brands = sorted(set(s.brand for s in skus))
-    if brand:
+    brands = sorted(set(normalize_brand(s.brand) for s in skus if normalize_brand(s.brand)))
+    if normalized_brand:
         models = sorted(set(
-            s.model_name for s in skus if s.brand == brand
+            normalize_brand_text(s.model_name)
+            for s in skus
+            if normalize_brand(s.brand) == normalized_brand and normalize_brand_text(s.model_name)
         ))
     else:
-        models = sorted(set(s.model_name for s in skus))
+        models = sorted(set(
+            normalize_brand_text(s.model_name)
+            for s in skus
+            if normalize_brand_text(s.model_name)
+        ))
 
-    if model_name:
+    if normalized_model:
         pts = sorted(set(
             _extract_canonical_pt(s) for s in skus
-            if s.model_name == model_name and s.powertrain
+            if normalize_brand_text(s.model_name) == normalized_model
         ))
-    elif brand:
+    elif normalized_brand:
         pts = sorted(set(
             _extract_canonical_pt(s) for s in skus
-            if s.brand == brand and s.powertrain
+            if normalize_brand(s.brand) == normalized_brand
         ))
     else:
         pts = sorted(set(
-            _extract_canonical_pt(s) for s in skus if s.powertrain
+            _extract_canonical_pt(s) for s in skus
         ))
 
     if version:
@@ -744,20 +769,20 @@ def build_options(
     elif brand or model_name:
         # Cascade: versions filtered by upstream selections
         filtered = skus
-        if brand:
-            filtered = [s for s in filtered if s.brand == brand]
-        if model_name:
-            filtered = [s for s in filtered if s.model_name == model_name]
+        if normalized_brand:
+            filtered = [s for s in filtered if normalize_brand(s.brand) == normalized_brand]
+        if normalized_model:
+            filtered = [s for s in filtered if normalize_brand_text(s.model_name) == normalized_model]
         vers = sorted(set(s.version for s in filtered))
     else:
         vers = sorted(set(s.version for s in skus))
 
     # Cascade colours: filtered by all upstream selections
     colour_source = skus
-    if brand:
-        colour_source = [s for s in colour_source if s.brand == brand]
-    if model_name:
-        colour_source = [s for s in colour_source if s.model_name == model_name]
+    if normalized_brand:
+        colour_source = [s for s in colour_source if normalize_brand(s.brand) == normalized_brand]
+    if normalized_model:
+        colour_source = [s for s in colour_source if normalize_brand_text(s.model_name) == normalized_model]
     if powertrain:
         canonical_pt = normalize_powertrain(powertrain)
         colour_source = [s for s in colour_source if _extract_canonical_pt(s) == canonical_pt]

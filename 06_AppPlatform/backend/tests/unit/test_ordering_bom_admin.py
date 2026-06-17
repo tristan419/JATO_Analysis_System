@@ -12,6 +12,7 @@ from app.db.models import (
     FobResolvedHistory,
 )
 from app.infra import order_genius_repository as repo
+from app.services import order_genius_service
 from app.services.ordering_normalization import normalize_brand, normalize_brand_text
 
 
@@ -50,6 +51,110 @@ def test_normalize_jaecoo_brand_variants() -> None:
     assert normalize_brand("JEACOO") == "JAECOO"
     assert normalize_brand("jecoo") == "JAECOO"
     assert normalize_brand_text("JEACOO JAECOO7") == "JAECOO JAECOO7"
+
+
+def _legacy_jaecoo_sku() -> SimpleNamespace:
+    return SimpleNamespace(
+        material_code="T7000Z5**MY0026",
+        brand="JEACOO",
+        model_name="JEACOO5 HEV",
+        version="Exclusive-FWD",
+        powertrain=None,
+        exterior_color_name="Khaki white",
+        exterior_color_code="BW",
+        exterior_color_type="single",
+        colour_tier="single",
+        interior_color_name="Black-Black",
+        interior_colour_code="R19",
+        interior_package=None,
+        edition_tag=None,
+        remark=None,
+        effective_from_month=None,
+        effective_to_month=None,
+    )
+
+
+def test_build_matrix_normalizes_legacy_jaecoo_and_model_powertrain(monkeypatch) -> None:
+    sku = _legacy_jaecoo_sku()
+    fob = SimpleNamespace(final_fob_eur=15300)
+
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "get_country_payment_term",
+        lambda _session, _country_code, _order_month_hint=None: SimpleNamespace(
+            payment_term_code="LC90",
+            country_name="Slovakia",
+        ),
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "list_active_skus",
+        lambda *_args, **_kwargs: [sku],
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "get_fob_for_country_sku",
+        lambda *_args, **_kwargs: fob,
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "list_quantities_for_country_year",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "list_historical_skus_with_quantity",
+        lambda *_args, **_kwargs: [],
+    )
+
+    result = order_genius_service.build_matrix(
+        _FakeSession(),
+        "SK",
+        2026,
+        brand="JAECOO",
+        model_name="JAECOO5 HEV",
+        powertrain="HEV",
+    )
+
+    assert result["totalRows"] == 1
+    row = result["rows"][0]
+    assert row["brand"] == "JAECOO"
+    assert row["modelName"] == "JAECOO5 HEV"
+    assert row["powertrain"] == "HEV"
+    assert row["fobEur"] == 15300
+
+
+def test_build_options_normalizes_legacy_jaecoo_filter_values(monkeypatch) -> None:
+    sku = _legacy_jaecoo_sku()
+
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "get_country_payment_term",
+        lambda *_args, **_kwargs: SimpleNamespace(payment_term_code="LC90"),
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "list_active_fob_material_codes",
+        lambda *_args, **_kwargs: [sku.material_code],
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "list_active_skus",
+        lambda *_args, **_kwargs: [sku],
+    )
+
+    result = order_genius_service.build_options(
+        _FakeSession(),
+        "SK",
+        brand="JAECOO",
+        model_name="JAECOO5 HEV",
+    )
+
+    assert result["brands"] == ["JAECOO"]
+    assert result["models"] == ["JAECOO5 HEV"]
+    assert result["powertrains"] == ["HEV"]
+    assert result["versions"] == ["Exclusive-FWD"]
+    assert result["materialCodes"] == ["T7000Z5**MY0026"]
 
 
 def test_list_bom_with_fob_empty_keeps_tuple_shape(monkeypatch) -> None:
