@@ -149,6 +149,11 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
     assert config_runtime["sourceSyncStatus"] == "passed"
     assert config_runtime["schemaRefs"] == {"SpecFeatureObservation": 4}
     assert "engineering_config.vehicle_trims" in config_runtime["warehouseTables"]
+    assert (
+        config_runtime["landingAdapter"]
+        == "spec_feature_observation_to_engineering_config_landing_v1"
+    )
+    assert config_runtime["landingSummary"]["vehicleTrimRows"] == 4
     assert requirements["multi_source_reconciliation"]["runtime"]["statusCounts"]["conflict"] == 1
     pipeline_runtime = requirements["pipeline_orchestration"]["runtime"]
     assert pipeline_runtime["statusPipelineId"] == "msrp_pipeline"

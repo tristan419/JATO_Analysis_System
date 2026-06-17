@@ -407,7 +407,8 @@ def build_readiness_report(
         config_source_sync = build_source_sync_report(
             repo_root=REPO_ROOT,
             spec_batch=DEFAULT_SPEC_BATCH,
-            run_stage_smoke=False,
+            sample_per_country=1,
+            run_stage_smoke=True,
         )
         config_source_sync_error = None
     except Exception as exc:  # noqa: BLE001 - readiness reports local config blockers.
@@ -434,6 +435,7 @@ def build_readiness_report(
     dryrun_gate = dryrun_status.get("gateStatus")
     config_source_summary = _nested_dict(config_source_sync, "summary")
     config_source_warehouse = _nested_dict(config_source_sync, "warehouseContract")
+    config_source_landing = _nested_dict(config_source_sync, "warehouseLanding")
     config_source_status = str(config_source_sync.get("status") or "failed")
     config_source_count = int(config_source_summary.get("sourceCount") or 0)
     config_country_count = int(config_source_summary.get("countryCount") or 0)
@@ -521,6 +523,7 @@ def build_readiness_report(
         "SpecFeatureObservation",
         "engineering_config.vehicle_trims",
         "engineering_config.trim_feature_values",
+        "spec_feature_observation_to_engineering_config_landing_v1",
     )
 
     requirements = [
@@ -765,6 +768,8 @@ def build_readiness_report(
                 "missingRequiredCountries": config_missing_countries,
                 "schemaRefs": config_source_summary.get("schemaRefs") or {},
                 "warehouseTables": config_source_warehouse.get("tables") or [],
+                "landingAdapter": config_source_warehouse.get("landingAdapter"),
+                "landingSummary": config_source_landing.get("summary") or {},
                 "error": config_source_sync_error,
             },
             evidence=[

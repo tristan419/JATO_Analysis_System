@@ -78,13 +78,28 @@ def test_build_source_sync_report_maps_spec_sources_to_engineering_config_contra
     assert report["summary"]["countries"] == ["dk", "fi", "no", "se"]
     assert report["summary"]["schemaRefs"] == {"SpecFeatureObservation": 4}
     assert report["summary"]["stageSampledCount"] == 4
+    assert report["summary"]["warehouseLandingTrimRows"] == 4
+    assert report["summary"]["warehouseLandingFeatureRows"] == 4
     assert report["stageSmoke"]["status"] == "ok"
+    landing = report["warehouseLanding"]
+    assert landing["schemaVersion"] == "engineering_config_landing_v1"
+    assert landing["adapter"] == "spec_feature_observation_to_engineering_config_landing_v1"
+    assert landing["importBatch"]["domain"] == "engineering_config"
+    assert landing["importBatch"]["sourceFileName"] == "spec.yaml"
+    assert landing["vehicleTrims"][0]["brand"] == "CODEX"
+    assert landing["vehicleTrims"][0]["market"] == "DK"
+    assert landing["trimFeatureValues"][0]["featureCode"] == "fixture_standard_equipment"
+    assert landing["trimFeatureValues"][0]["availability"] == "standard"
     assert report["warehouseContract"]["tables"] == [
         "ops.import_batches",
         "engineering_config.vehicle_trims",
         "engineering_config.trim_feature_values",
         "engineering_config.config_versions",
     ]
+    assert (
+        report["warehouseContract"]["landingAdapter"]
+        == "spec_feature_observation_to_engineering_config_landing_v1"
+    )
 
 
 def test_build_source_sync_report_degrades_when_required_country_is_missing(

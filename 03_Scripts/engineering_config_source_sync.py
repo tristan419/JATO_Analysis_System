@@ -46,6 +46,7 @@ WAREHOUSE_CONTRACT = {
     "domain": "engineering_config",
     "importBatchDomain": "engineering_config",
     "schemaRef": "SpecFeatureObservation",
+    "landingAdapter": "spec_feature_observation_to_engineering_config_landing_v1",
     "tables": [
         "ops.import_batches",
         "engineering_config.vehicle_trims",
@@ -141,6 +142,130 @@ def _summarize_job(job: ScrapeJob) -> dict[str, Any]:
     }
 
 
+def _landing_identity_key(*, country: str, brand: str, model: str, trim: str) -> str:
+    raw = "::".join([country, brand, model, trim])
+    return _safe_token(raw, "unknown-trim")
+
+
+def _feature_availability(kind: object) -> str:
+    value = str(kind or "").strip().lower()
+    if value in {"standard", "included", "serial"}:
+        return "standard"
+    if value in {"optional", "option", "available"}:
+        return "optional"
+    if value in {"unavailable", "not_available", "not available"}:
+        return "unavailable"
+    return "unknown"
+
+
+def build_engineering_config_landing_payload(
+    normalized_observations: Sequence[dict[str, Any]],
+    *,
+    import_batch_code: str,
+    source_file_path: str,
+) -> dict[str, Any]:
+    """Map SpecFeatureObservation payloads into engineering_config landing rows."""
+    vehicle_trims: list[dict[str, Any]] = []
+    trim_feature_values: list[dict[str, Any]] = []
+    for index, observation in enumerate(normalized_observations, start=1):
+        payload = observation.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        brand = str(payload.get("brand") or "UNKNOWN").strip().upper()
+        model = str(payload.get("model") or "UNKNOWN").strip()
+        country = str(
+            payload.get("normalizedCountryCode")
+            or payload.get("countryCode")
+            or ""
+        ).strip().upper()
+        trim_name = str(
+            payload.get("trimName")
+            or payload.get("trim")
+            or payload.get("fullTrimName")
+            or f"{model} official spec"
+        ).strip()
+        full_trim_name = str(
+            payload.get("fullTrimName")
+            or " ".join(part for part in [brand, model, trim_name] if part)
+        ).strip()
+        identity_key = _landing_identity_key(
+            country=country,
+            brand=brand,
+            model=model,
+            trim=trim_name,
+        )
+        source_record_key = str(observation.get("recordKey") or "").strip()
+        vehicle_trims.append({
+            "landingTrimKey": identity_key,
+            "identityKey": identity_key,
+            "market": country or None,
+            "brand": brand,
+            "modelName": model,
+            "trimName": trim_name,
+            "fullTrimName": full_trim_name,
+            "status": "active",
+            "sourceRecordKey": source_record_key,
+            "sourceUrl": observation.get("sourceUrl") or payload.get("sourceUrl"),
+        })
+
+        feature_items = payload.get("featureItems")
+        if not isinstance(feature_items, list):
+            continue
+        for feature_index, item in enumerate(feature_items, start=1):
+            if not isinstance(item, dict):
+                continue
+            feature_key = str(
+                item.get("featureKey")
+                or item.get("featureCode")
+                or item.get("label")
+                or ""
+            ).strip()
+            if not feature_key:
+                continue
+            raw_value = str(
+                item.get("rawValue")
+                or item.get("value")
+                or item.get("label")
+                or item.get("kind")
+                or "present"
+            ).strip()
+            trim_feature_values.append({
+                "landingTrimKey": identity_key,
+                "featureCode": feature_key,
+                "rawValue": raw_value,
+                "normalizedValue": (
+                    str(item["normalizedValue"]).strip()
+                    if item.get("normalizedValue") is not None
+                    else None
+                ),
+                "availability": _feature_availability(item.get("kind")),
+                "unit": item.get("unit"),
+                "sourceRow": index,
+                "sourceColumn": str(item.get("label") or feature_key),
+                "sourceRecordKey": source_record_key,
+            })
+
+    return {
+        "schemaVersion": "engineering_config_landing_v1",
+        "adapter": WAREHOUSE_CONTRACT["landingAdapter"],
+        "importBatch": {
+            "domain": WAREHOUSE_CONTRACT["importBatchDomain"],
+            "sourceFileName": import_batch_code,
+            "sourceFilePath": source_file_path,
+            "importStatus": "ready",
+            "rowCount": len(vehicle_trims) + len(trim_feature_values),
+            "errorCount": 0,
+        },
+        "vehicleTrims": vehicle_trims,
+        "trimFeatureValues": trim_feature_values,
+        "summary": {
+            "vehicleTrimRows": len(vehicle_trims),
+            "trimFeatureValueRows": len(trim_feature_values),
+            "sourceObservationCount": len(normalized_observations),
+        },
+    }
+
+
 def _select_stage_jobs(
     jobs: Sequence[ScrapeJob],
     *,
@@ -184,7 +309,9 @@ def _run_stage_smoke(
                 "country": _job_country(job),
                 "schemaRef": job.schema_ref,
                 "recordKey": normalized.record_key,
+                "payload": normalized.payload,
                 "quality": normalized.quality,
+                "sourceUrl": normalized.source_url,
                 "sink": sink.model_dump(mode="json"),
             }
         )
@@ -275,6 +402,21 @@ def build_source_sync_report(
         warnings.append(f"mapping_errors_present:{len(mapping_errors)}")
     if stage_errors:
         warnings.append(f"stage_errors_present:{len(stage_errors)}")
+    warehouse_landing = build_engineering_config_landing_payload(
+        [
+            {
+                "recordKey": result.get("recordKey"),
+                "payload": result.get("payload"),
+                "sourceUrl": result.get("sourceUrl"),
+            }
+            for result in stage_results
+        ],
+        import_batch_code=str(resolved_spec_batch.name),
+        source_file_path=str(resolved_spec_batch),
+    )
+    landing_summary = warehouse_landing["summary"]
+    if stage_results and int(landing_summary.get("vehicleTrimRows") or 0) == 0:
+        warnings.append("warehouse_landing_empty")
 
     status = "passed"
     if not jobs or mapping_errors or stage_errors:
@@ -298,9 +440,12 @@ def build_source_sync_report(
             "stageSampledCount": len(stage_results),
             "stageErrorCount": len(stage_errors),
             "mappingErrorCount": len(mapping_errors),
+            "warehouseLandingTrimRows": landing_summary["vehicleTrimRows"],
+            "warehouseLandingFeatureRows": landing_summary["trimFeatureValueRows"],
             "warningCount": len(warnings),
         },
         "warehouseContract": WAREHOUSE_CONTRACT,
+        "warehouseLanding": warehouse_landing,
         "sources": [_summarize_job(job) for job in jobs],
         "stageSmoke": {
             "status": "not_run"
@@ -349,6 +494,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "",
         f"- Domain: {_markdown_cell(warehouse.get('domain'))}",
         f"- Schema ref: {_markdown_cell(warehouse.get('schemaRef'))}",
+        f"- Landing adapter: {_markdown_cell(warehouse.get('landingAdapter'))}",
         f"- Tables: {_markdown_cell(', '.join(warehouse.get('tables') or []))}",
         "",
         "## Sources",
