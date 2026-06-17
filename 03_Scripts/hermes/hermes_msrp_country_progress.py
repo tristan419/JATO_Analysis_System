@@ -194,6 +194,23 @@ def _source_is_pass(source: dict[str, Any]) -> bool:
     )
 
 
+def _int_value(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _count_map(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    counts: dict[str, int] = {}
+    for name, count in value.items():
+        label = str(name or "").strip() or "unknown"
+        counts[label] = counts.get(label, 0) + _int_value(count)
+    return counts
+
+
 def _artifact_path_from_ref(path_ref: str | None) -> Path | None:
     if not path_ref:
         return None
@@ -417,6 +434,10 @@ def run(out_dir: str | None = None) -> dict:
             "topFailureReason": top_reason,
             "failureBreakdown": fb,
             "strategyRecommendations": sr,
+            "financeObservationCandidates": _int_value(c.get("financeObservationCandidates")),
+            "financeMonthlyPaymentCount": _int_value(c.get("financeMonthlyPaymentCount")),
+            "financeSemanticsCounts": _count_map(c.get("financeSemanticsCounts")),
+            "financeTypeCounts": _count_map(c.get("financeTypeCounts")),
         }
         country_entries.append(entry)
 
@@ -504,6 +525,10 @@ def run(out_dir: str | None = None) -> dict:
             "observedCountries": report.get("observedCountries", []),
             "missingCountries": missing,
             "duplicateCountries": duplicates,
+            "financeObservationCandidates": _int_value(summary.get("financeObservationCandidates")),
+            "financeMonthlyPaymentCount": _int_value(summary.get("financeMonthlyPaymentCount")),
+            "financeSemanticsCounts": _count_map(summary.get("financeSemanticsCounts")),
+            "financeTypeCounts": _count_map(summary.get("financeTypeCounts")),
         },
         "countries": country_entries,
         "topBlockingCountries": sorted(top_blocking, key=lambda x: x["passPct"]),
@@ -562,17 +587,21 @@ def _render_markdown(result: dict) -> str:
     lines.append(f"| Observed countries | {len(status.get('observedCountries', []))} |")
     lines.append(f"| Missing countries | {len(status.get('missingCountries', []))} |")
     lines.append(f"| Duplicate countries | {len(status.get('duplicateCountries', []))} |")
+    lines.append(f"| Finance candidates | {status.get('financeObservationCandidates', 0)} |")
+    lines.append(f"| Monthly offers | {status.get('financeMonthlyPaymentCount', 0)} |")
     lines.append("")
 
     countries = result.get("countries", [])
     if countries:
         lines.append("## Country Progress\n")
-        lines.append("| Country | Status | PassPct | Pass | Empty | Fail | Top Failure |")
-        lines.append("|---|---:|---:|---:|---:|---:|---|")
+        lines.append("| Country | Status | PassPct | Pass | Empty | Fail | Finance | Monthly | Top Failure |")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---|")
         for c in sorted(countries, key=lambda x: x["passPct"]):
             lines.append(f"| {c['countryCode']} | {c['status']} | "
                         f"{c['passPct']}% | {c['pass']} | {c['empty']} | "
-                        f"{c['fail']} | {c.get('topFailureReason', '-')} |")
+                        f"{c['fail']} | {c.get('financeObservationCandidates', 0)} | "
+                        f"{c.get('financeMonthlyPaymentCount', 0)} | "
+                        f"{c.get('topFailureReason', '-')} |")
         lines.append("")
 
     blocking = result.get("topBlockingCountries", [])

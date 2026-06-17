@@ -291,8 +291,13 @@ remove_country_pid_at() {
   local idx="$1"
   unset "pids[$idx]"
   unset "pid_countries[$idx]"
-  pids=("${pids[@]}")
-  pid_countries=("${pid_countries[@]}")
+  if ((${#pids[@]} > 0)); then
+    pids=("${pids[@]}")
+    pid_countries=("${pid_countries[@]}")
+  else
+    pids=()
+    pid_countries=()
+  fi
 }
 
 while (( country_idx < total || active > 0 )); do
