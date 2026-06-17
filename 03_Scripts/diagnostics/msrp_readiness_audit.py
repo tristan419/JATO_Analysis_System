@@ -49,6 +49,7 @@ TEST_EVIDENCE = {
     "frontendApi": "06_AppPlatform/frontend/src/tests/unit/dataManagementApi.test.ts",
     "pipelineWrapper": "03_Scripts/tests/test_run_msrp_pipeline.py",
     "configSourceSync": "03_Scripts/tests/test_engineering_config_source_sync.py",
+    "scraperValidation": "06_AppPlatform/backend/tests/unit/test_scraper_validation.py",
 }
 
 
@@ -492,6 +493,12 @@ def build_readiness_report(
         "listMsrpReconciliation",
         "queueMsrpReconciliationReviewCases",
     )
+    finance_validation_covered = _test_file_has(
+        "scraperValidation",
+        "test_monthly_lease_amount_passes_finance_semantics",
+        "test_monthly_amount_still_rejected_without_finance_semantics",
+        "source_price_semantics",
+    )
     config_source_sync_covered = _test_file_has(
         "configSourceSync",
         "engineering_config_source_sync_v1",
@@ -689,19 +696,26 @@ def build_readiness_report(
             key="finance_monthly_lease_subsidy_net",
             title="Finance monthly, lease, subsidy and net price",
             status=_status(
-                bool(finance_count and finance_count > 0),
-                degraded=finance_error is None and smoke_covers_full_contract,
+                bool(finance_count and finance_count > 0)
+                and finance_validation_covered,
+                degraded=(
+                    finance_error is None
+                    and smoke_covers_full_contract
+                    and finance_validation_covered
+                ),
                 unavailable=finance_error is not None,
             ),
             runtime={
                 "financeObservationCount": finance_count,
                 "summary": finance.get("summary", {}),
+                "semanticValidationCovered": finance_validation_covered,
                 "error": finance_error,
             },
             evidence=[
                 "GET /msrp/finance-observations",
                 TEST_EVIDENCE["workflowSmoke"],
                 TEST_EVIDENCE["frontendApi"],
+                TEST_EVIDENCE["scraperValidation"],
             ],
             note="Supports monthly payment, lease type, subsidy amount, and net price after subsidy filters.",
         ),

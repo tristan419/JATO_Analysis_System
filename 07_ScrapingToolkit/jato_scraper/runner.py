@@ -80,11 +80,16 @@ def _default_source_timeout_seconds() -> int:
 def _source_diagnostics_from_extractor(
     extractor: BaseExtractor,
 ) -> dict[str, Any]:
+    cfg = extractor.config
     diagnostics: dict[str, Any] = {
-        "sourceUrl": extractor.config.source_url,
-        "brand": extractor.config.brand,
-        "extractorName": extractor.extractor_name,
-        "extractorVersion": extractor.extractor_version,
+        "sourceUrl": getattr(cfg, "source_url", None),
+        "brand": getattr(cfg, "brand", None),
+        "extractorName": getattr(
+            extractor,
+            "extractor_name",
+            type(extractor).__name__,
+        ),
+        "extractorVersion": getattr(extractor, "extractor_version", None),
     }
     audit_event = getattr(extractor, "last_audit_event", None)
     if isinstance(audit_event, dict):
@@ -678,6 +683,11 @@ def run_scrape(
         report = validate_observations(
             observations,
             country=extractor.config.country,
+            source_price_semantics=getattr(
+                extractor.config,
+                "price_semantics",
+                "base_msrp",
+            ),
         )
         # --- EUR conversion ---
         enrich_observations_with_eur(report.valid)
