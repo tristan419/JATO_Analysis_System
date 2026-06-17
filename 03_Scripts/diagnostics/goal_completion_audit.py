@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Completion audit for the MSRP/AI/Unified scraping goal.
+"""Completion audit for the MSRP/finance/config/unified scraping goal.
 
 This report is intentionally stricter than the P0 readiness checks. It keeps
 local feature readiness separate from full PRD completion evidence such as
@@ -33,7 +33,7 @@ except ImportError:  # pragma: no cover - optional for isolated unit imports.
     write_pipeline_status = None  # type: ignore[assignment]
 
 
-SCHEMA_VERSION = "jato_goal_completion_audit_v1"
+SCHEMA_VERSION = "jato_goal_completion_audit_v2"
 PIPELINE_ID = "goal_completion_audit"
 DEFAULT_SOURCE_DRAFT_DIR = "07_ScrapingToolkit/source_drafts/suv_only_country_model_top30"
 DEFAULT_REQUIRED_SOURCE_COUNTRIES = (
@@ -58,23 +58,6 @@ DEFAULT_REQUIRED_SOURCE_COUNTRIES = (
     "se",
     "si",
     "sk",
-)
-DEFAULT_REQUIRED_AI_COUNTRIES = (
-    "se",
-    "fi",
-    "no",
-    "dk",
-    "at",
-    "cz",
-    "hu",
-    "hr",
-    "de",
-    "fr",
-    "it",
-    "pl",
-    "sk",
-    "si",
-    "ch",
 )
 REQUIRED_MSRP_REQUIREMENT_KEYS = (
     "source_registry",
@@ -419,7 +402,6 @@ def build_goal_completion_report(
     repo_root: str | Path | None = None,
     source_draft_dir: str | Path = DEFAULT_SOURCE_DRAFT_DIR,
     required_source_countries: Sequence[str] = DEFAULT_REQUIRED_SOURCE_COUNTRIES,
-    required_ai_countries: Sequence[str] = DEFAULT_REQUIRED_AI_COUNTRIES,
     remote_api_base: str | None = None,
     remote_resolve_ip: str | None = None,
     timeout_seconds: int = 15,
@@ -432,7 +414,6 @@ def build_goal_completion_report(
         msrp_report=msrp_report,
         msrp_status=msrp_status,
     )
-    ai_status = _pipeline_status(root, "ai_intelligence_enrichment_smoke")
     unified_status = _pipeline_status(root, "unified_scraping_readiness")
     source_coverage = _source_draft_coverage(
         resolved_source_dir,
@@ -453,15 +434,6 @@ def build_goal_completion_report(
         msrp_status.get("status") == "success"
         and msrp_status.get("readinessStatus") == "passed"
         and not msrp_missing_keys
-    )
-    ai_news = ai_status.get("news") if isinstance(ai_status.get("news"), dict) else {}
-    ai_voc = ai_status.get("voc") if isinstance(ai_status.get("voc"), dict) else {}
-    ai_ready = (
-        ai_status.get("status") == "success"
-        and ai_status.get("smokeStatus") == "ok"
-        and int(ai_status.get("requiredCountryCount") or 0) >= len(required_ai_countries)
-        and int(ai_news.get("countryCount") or 0) >= len(required_ai_countries)
-        and int(ai_voc.get("countryCount") or 0) >= len(required_ai_countries)
     )
     unified_ready = (
         unified_status.get("status") == "success"
@@ -485,14 +457,6 @@ def build_goal_completion_report(
             note="Aggregate gate: every detailed MSRP readiness requirement below must be passed.",
         ),
         *msrp_detail_requirements,
-        _requirement(
-            key="ai_news_voc_15_country_smoke",
-            title="AI News/VOC 15-country enrichment smoke",
-            status="passed" if ai_ready else "missing",
-            evidence=[ai_status.get("statusPath", "")],
-            runtime=ai_status,
-            note="Network-free smoke proves configured sources can feed translation/entity/sentiment/pain point/evidence/digest contracts.",
-        ),
         _requirement(
             key="unified_scraping_contract_and_stage",
             title="Unified ScrapeJob contract and stage smoke",
@@ -526,7 +490,9 @@ def build_goal_completion_report(
         "summary": {
             "requirementCount": len(requirements),
             "statusCounts": status_counts,
-            "localP0Ready": msrp_ready and ai_ready and unified_ready,
+            "localP0Ready": msrp_ready and unified_ready,
+            "msrpReady": msrp_ready,
+            "unifiedReady": unified_ready,
             "msrpDetailedRequirementCount": len(msrp_detail_requirements),
             "msrpDetailedPassedCount": sum(
                 1 for item in msrp_detail_requirements
@@ -549,7 +515,7 @@ def _markdown_cell(value: Any) -> str:
 def _render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     lines = [
-        "# JATO MSRP / AI / Unified Goal Completion Audit",
+        "# JATO MSRP / Finance / Config / Unified Goal Completion Audit",
         "",
         f"**Generated:** {report.get('generatedAtUtc', '-')}",
         f"**Status:** {report.get('status', '-')}",
@@ -655,12 +621,12 @@ def write_status_record(
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Audit full goal completion across MSRP, AI News/VOC, and Unified Scraping.",
+        description="Audit full goal completion across MSRP, finance, official config, and unified scraping.",
     )
     parser.add_argument("--repo-root", default=str(REPO_ROOT))
     parser.add_argument("--source-draft-dir", default=DEFAULT_SOURCE_DRAFT_DIR)
     parser.add_argument("--required-source-countries", default=",".join(DEFAULT_REQUIRED_SOURCE_COUNTRIES))
-    parser.add_argument("--required-ai-countries", default=",".join(DEFAULT_REQUIRED_AI_COUNTRIES))
+    parser.add_argument("--required-ai-countries", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--remote-api-base", default=None)
     parser.add_argument(
         "--remote-resolve-ip",
@@ -680,7 +646,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         repo_root=args.repo_root,
         source_draft_dir=args.source_draft_dir,
         required_source_countries=_csv_arg(args.required_source_countries),
-        required_ai_countries=_csv_arg(args.required_ai_countries),
         remote_api_base=args.remote_api_base,
         remote_resolve_ip=args.remote_resolve_ip,
         timeout_seconds=max(1, int(args.timeout_seconds)),

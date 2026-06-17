@@ -68,17 +68,6 @@ def _write_statuses(repo_root: Path) -> None:
         },
     )
     _write_json(
-        status_dir / "ai_intelligence_enrichment_smoke.json",
-        {
-            "pipelineId": "ai_intelligence_enrichment_smoke",
-            "status": "success",
-            "smokeStatus": "ok",
-            "requiredCountryCount": 15,
-            "news": {"countryCount": 15},
-            "voc": {"countryCount": 15},
-        },
-    )
-    _write_json(
         status_dir / "unified_scraping_readiness.json",
         {
             "pipelineId": "unified_scraping_readiness",
@@ -125,17 +114,19 @@ def test_build_report_separates_local_p0_from_unchecked_production(tmp_path: Pat
         repo_root=tmp_path,
         source_draft_dir=source_root,
         required_source_countries=("se", "fi"),
-        required_ai_countries=("se", "fi", "no", "dk", "at", "cz", "hu", "hr", "de", "fr", "it", "pl", "sk", "si", "ch"),
     )
 
     assert report["status"] == "in_progress"
     assert report["summary"]["localP0Ready"] is True
+    assert report["summary"]["msrpReady"] is True
+    assert report["summary"]["unifiedReady"] is True
     by_key = {item["key"]: item for item in report["requirements"]}
     assert by_key["msrp_official_price_p0"]["status"] == "passed"
     assert by_key["msrp_finance_monthly_lease_subsidy_net"]["status"] == "passed"
     assert by_key["msrp_official_config_table_pipeline"]["status"] == "passed"
     assert by_key["msrp_auto_review_scoring"]["status"] == "passed"
     assert by_key["msrp_pipeline_orchestration"]["status"] == "passed"
+    assert "ai_news_voc_15_country_smoke" not in by_key
     assert by_key["production_deployment_state"]["status"] == "not_checked"
     assert report["summary"]["msrpDetailedPassedCount"] == 15
 
@@ -295,5 +286,5 @@ def test_write_outputs_and_status_record(monkeypatch, tmp_path: Path) -> None:
     assert Path(artifacts["latestJson"]).exists()
     assert Path(artifacts["latestMarkdown"]).exists()
     assert status_record == {"pipelineId": audit.PIPELINE_ID, "status": "failed"}
-    assert captured["records_processed"] == 20
+    assert captured["records_processed"] == 19
     assert captured["failed_count"] == 1

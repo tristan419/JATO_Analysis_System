@@ -180,7 +180,7 @@ def _fake_goal_completion_audit(path: Path) -> None:
             (reports_dir / "goal_completion_audit.json").write_text(
                 json.dumps(
                     {
-                        "schemaVersion": "jato_goal_completion_audit_v1",
+                        "schemaVersion": "jato_goal_completion_audit_v2",
                         "status": "degraded",
                         "summary": {"localP0Ready": True},
                     }
