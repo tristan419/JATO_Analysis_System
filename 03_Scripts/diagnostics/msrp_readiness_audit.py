@@ -476,6 +476,9 @@ def build_readiness_report(
         "engineering_config_source_sync",
         "test_pipeline_runs_ingest_when_dryrun_gate_is_allowed",
         "test_pipeline_skips_ingest_when_dryrun_gate_blocks",
+        "test_pipeline_fails_when_post_audit_fails",
+        "unified_scraping_readiness",
+        "goal_completion_audit",
         "msrp_pipeline",
     )
     snapshot_script_covered = _test_file_has(
@@ -797,6 +800,8 @@ def build_readiness_report(
                     "ingest",
                     "snapshot",
                     "readiness",
+                    "unified_readiness",
+                    "goal_completion_audit",
                 ],
             },
             evidence=[
@@ -807,7 +812,8 @@ def build_readiness_report(
                 "Runs official config source sync first, then dryrun and only "
                 "proceeds to ingest when the v3 dryrun gate allows it; ingest "
                 "reuses auto-review/materialize and snapshot/readiness refresh "
-                "from the low-concurrency runner."
+                "from the low-concurrency runner before full-pipeline unified "
+                "readiness and goal completion audits are refreshed."
             ),
         ),
         _requirement(

@@ -97,6 +97,119 @@ def _fake_config_source_sync(path: Path) -> None:
     )
 
 
+def _fake_unified_readiness_audit(path: Path) -> None:
+    path.write_text(
+        textwrap.dedent(
+            """\
+            import json
+            import os
+            from pathlib import Path
+            import sys
+
+            repo = Path(os.environ["REPO_DIR"])
+            with Path(os.environ["RUNNER_LOG"]).open("a", encoding="utf-8") as handle:
+                handle.write("unified-readiness:" + " ".join(sys.argv[1:]) + "\\n")
+
+            exit_code = int(os.environ.get("JATO_TEST_UNIFIED_AUDIT_EXIT", "0"))
+            if exit_code:
+                raise SystemExit(exit_code)
+
+            reports_dir = repo / "hermes" / "reports"
+            status_dir = reports_dir / "pipeline_status"
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            status_dir.mkdir(parents=True, exist_ok=True)
+            (reports_dir / "unified_scraping_readiness.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "unified_scraping_readiness_v1",
+                        "status": "passed",
+                        "summary": {
+                            "contractStatus": "ok",
+                            "stageStatus": "ok",
+                            "configuredJobCount": 6,
+                        },
+                    }
+                )
+                + "\\n",
+                encoding="utf-8",
+            )
+            (reports_dir / "unified_scraping_readiness.md").write_text(
+                "# Unified Scraping Readiness\\n",
+                encoding="utf-8",
+            )
+            (status_dir / "unified_scraping_readiness.json").write_text(
+                json.dumps(
+                    {
+                        "pipelineId": "unified_scraping_readiness",
+                        "status": "success",
+                        "readinessStatus": "passed",
+                        "contractStatus": "ok",
+                        "stageStatus": "ok",
+                    }
+                )
+                + "\\n",
+                encoding="utf-8",
+            )
+            """
+        ),
+        encoding="utf-8",
+    )
+
+
+def _fake_goal_completion_audit(path: Path) -> None:
+    path.write_text(
+        textwrap.dedent(
+            """\
+            import json
+            import os
+            from pathlib import Path
+            import sys
+
+            repo = Path(os.environ["REPO_DIR"])
+            with Path(os.environ["RUNNER_LOG"]).open("a", encoding="utf-8") as handle:
+                handle.write("goal-audit:" + " ".join(sys.argv[1:]) + "\\n")
+
+            exit_code = int(os.environ.get("JATO_TEST_GOAL_AUDIT_EXIT", "0"))
+            if exit_code:
+                raise SystemExit(exit_code)
+
+            reports_dir = repo / "hermes" / "reports"
+            status_dir = reports_dir / "pipeline_status"
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            status_dir.mkdir(parents=True, exist_ok=True)
+            (reports_dir / "goal_completion_audit.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "jato_goal_completion_audit_v1",
+                        "status": "degraded",
+                        "summary": {"localP0Ready": True},
+                    }
+                )
+                + "\\n",
+                encoding="utf-8",
+            )
+            (reports_dir / "goal_completion_audit.md").write_text(
+                "# Goal Completion Audit\\n",
+                encoding="utf-8",
+            )
+            (status_dir / "goal_completion_audit.json").write_text(
+                json.dumps(
+                    {
+                        "pipelineId": "goal_completion_audit",
+                        "status": "degraded",
+                        "goalCompletionStatus": "degraded",
+                        "localP0Ready": True,
+                    }
+                )
+                + "\\n",
+                encoding="utf-8",
+            )
+            """
+        ),
+        encoding="utf-8",
+    )
+
+
 def _run_pipeline(
     tmp_path: Path,
     *,
@@ -104,12 +217,18 @@ def _run_pipeline(
     pass_pct: str,
     pass_count: str,
     config_sync_exit: str = "0",
+    unified_audit_exit: str = "0",
+    goal_audit_exit: str = "0",
 ) -> subprocess.CompletedProcess[str]:
     runner = tmp_path / "fake_msrp_runner.sh"
     config_source_sync = tmp_path / "fake_config_source_sync.py"
+    unified_readiness_audit = tmp_path / "fake_unified_readiness_audit.py"
+    goal_completion_audit = tmp_path / "fake_goal_completion_audit.py"
     runner_log = tmp_path / "runner.log"
     _fake_runner(runner)
     _fake_config_source_sync(config_source_sync)
+    _fake_unified_readiness_audit(unified_readiness_audit)
+    _fake_goal_completion_audit(goal_completion_audit)
     env = os.environ.copy()
     env.update(
         {
@@ -117,9 +236,13 @@ def _run_pipeline(
             "RUNNER_LOG": str(runner_log),
             "JATO_MSRP_RUNNER": str(runner),
             "JATO_CONFIG_SOURCE_SYNC": str(config_source_sync),
+            "JATO_UNIFIED_READINESS_AUDIT": str(unified_readiness_audit),
+            "JATO_GOAL_COMPLETION_AUDIT": str(goal_completion_audit),
             "JATO_MSRP_PYTHON": sys.executable,
             "JATO_MSRP_PIPELINE_COUNTRIES": "se,fi",
             "JATO_TEST_CONFIG_SYNC_EXIT": config_sync_exit,
+            "JATO_TEST_UNIFIED_AUDIT_EXIT": unified_audit_exit,
+            "JATO_TEST_GOAL_AUDIT_EXIT": goal_audit_exit,
             "JATO_TEST_GATE_STATUS": gate_status,
             "JATO_TEST_PASS_PCT": pass_pct,
             "JATO_TEST_PASS_COUNT": pass_count,
@@ -157,10 +280,15 @@ def test_pipeline_runs_ingest_when_dryrun_gate_is_allowed(tmp_path: Path) -> Non
     lines = (tmp_path / "runner.log").read_text(encoding="utf-8").splitlines()
     assert lines[0].startswith("config-sync:")
     assert "--write-status" in lines[0]
-    assert lines[1:] == [
+    assert lines[1:3] == [
         "dryrun:se,fi",
         "ingest:se,fi",
     ]
+    assert lines[3].startswith("unified-readiness:")
+    assert "--write-status" in lines[3]
+    assert "--strict" in lines[3]
+    assert lines[4].startswith("goal-audit:")
+    assert "--write-status" in lines[4]
     status = json.loads(
         (
             tmp_path
@@ -177,7 +305,14 @@ def test_pipeline_runs_ingest_when_dryrun_gate_is_allowed(tmp_path: Path) -> Non
         status["metadata"]["configSourceSyncPipelineId"]
         == "engineering_config_source_sync"
     )
+    assert status["metadata"]["unifiedReadinessStatus"] == "success"
+    assert status["metadata"]["unifiedReadinessReadinessStatus"] == "passed"
+    assert status["metadata"]["goalCompletionStatus"] == "degraded"
+    assert status["metadata"]["goalCompletionState"] == "degraded"
+    assert status["metadata"]["goalLocalP0Ready"] is True
     assert "hermes/reports/engineering_config_source_sync.json" in status["artifactRefs"]
+    assert "hermes/reports/unified_scraping_readiness.json" in status["artifactRefs"]
+    assert "hermes/reports/goal_completion_audit.json" in status["artifactRefs"]
     scheduled = json.loads(
         (
             tmp_path
@@ -243,3 +378,33 @@ def test_pipeline_fails_before_dryrun_when_config_source_sync_fails(
     )
     assert status["status"] == "failed"
     assert status["metadata"]["phase"] == "config_source_sync"
+
+
+def test_pipeline_fails_when_post_audit_fails(tmp_path: Path) -> None:
+    result = _run_pipeline(
+        tmp_path,
+        gate_status="allowed",
+        pass_pct="91.0",
+        pass_count="2",
+        unified_audit_exit="5",
+    )
+
+    assert result.returncode == 1
+    lines = (tmp_path / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert lines[1:3] == [
+        "dryrun:se,fi",
+        "ingest:se,fi",
+    ]
+    assert lines[3].startswith("unified-readiness:")
+    assert len(lines) == 4
+    status = json.loads(
+        (
+            tmp_path
+            / "hermes"
+            / "reports"
+            / "pipeline_status"
+            / "msrp_pipeline.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert status["status"] == "failed"
+    assert status["metadata"]["phase"] == "post_audit"

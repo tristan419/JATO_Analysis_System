@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 RUNNER="${JATO_MSRP_RUNNER:-$SCRIPT_DIR/run_msrp_low_concurrency.sh}"
 CONFIG_SOURCE_SYNC="${JATO_CONFIG_SOURCE_SYNC:-$SCRIPT_DIR/engineering_config_source_sync.py}"
+UNIFIED_READINESS_AUDIT="${JATO_UNIFIED_READINESS_AUDIT:-$SCRIPT_DIR/diagnostics/unified_scraping_readiness_audit.py}"
+GOAL_COMPLETION_AUDIT="${JATO_GOAL_COMPLETION_AUDIT:-$SCRIPT_DIR/diagnostics/goal_completion_audit.py}"
 PYTHON_BIN="${JATO_MSRP_PYTHON:-$REPO_DIR/.venv/bin/python}"
 if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="$(command -v python3 || true)"
@@ -13,9 +15,13 @@ fi
 COUNTRIES_RAW="${JATO_MSRP_PIPELINE_COUNTRIES:-${JATO_MSRP_COUNTRIES:-batch_a}}"
 CONFIG_SOURCE_SYNC_COUNTRIES="${JATO_CONFIG_SOURCE_SYNC_COUNTRIES:-se,fi,no,dk}"
 CONFIG_SOURCE_SYNC_SAMPLE_PER_COUNTRY="${JATO_CONFIG_SOURCE_SYNC_SAMPLE_PER_COUNTRY:-1}"
+UNIFIED_READINESS_SAMPLE_PER_KIND="${JATO_UNIFIED_READINESS_SAMPLE_PER_KIND:-1}"
+UNIFIED_READINESS_ARTIFACT_ROOT="${JATO_UNIFIED_READINESS_ARTIFACT_ROOT:-$REPO_DIR/03_Scripts/diagnostics/artifacts/unified_scraping_stage_smoke}"
 MIN_DRYRUN_PASS_PCT="${JATO_MSRP_MIN_DRYRUN_PASS_PCT:-70}"
 DRYRUN_REPORT="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_report.json"
 CONFIG_SOURCE_SYNC_STATUS="$REPO_DIR/hermes/reports/pipeline_status/engineering_config_source_sync.json"
+UNIFIED_READINESS_STATUS="$REPO_DIR/hermes/reports/pipeline_status/unified_scraping_readiness.json"
+GOAL_COMPLETION_STATUS="$REPO_DIR/hermes/reports/pipeline_status/goal_completion_audit.json"
 STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
 is_truthy() {
@@ -62,6 +68,13 @@ artifact_refs = [
     "hermes/reports/pipeline_status/engineering_config_source_sync.json",
     "hermes/reports/msrp_current_price_snapshot.json",
     "hermes/reports/msrp_readiness_audit.json",
+    "hermes/reports/pipeline_status/msrp_readiness_audit.json",
+    "hermes/reports/unified_scraping_readiness.json",
+    "hermes/reports/unified_scraping_readiness.md",
+    "hermes/reports/pipeline_status/unified_scraping_readiness.json",
+    "hermes/reports/goal_completion_audit.json",
+    "hermes/reports/goal_completion_audit.md",
+    "hermes/reports/pipeline_status/goal_completion_audit.json",
 ]
 
 status_path = repo / "03_Scripts" / "logs" / "scheduled_fetch_status.json"
@@ -87,10 +100,19 @@ except (OSError, json.JSONDecodeError):
     report_payload = {}
 summary = report_payload.get("summary") if isinstance(report_payload.get("summary"), dict) else {}
 config_status_path = repo / "hermes" / "reports" / "pipeline_status" / "engineering_config_source_sync.json"
-try:
-    config_payload = json.loads(config_status_path.read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError):
-    config_payload = {}
+unified_status_path = repo / "hermes" / "reports" / "pipeline_status" / "unified_scraping_readiness.json"
+goal_status_path = repo / "hermes" / "reports" / "pipeline_status" / "goal_completion_audit.json"
+
+def _read_json(path):
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+config_payload = _read_json(config_status_path)
+unified_payload = _read_json(unified_status_path)
+goal_payload = _read_json(goal_status_path)
 pipeline_status = "failed" if status in {"failed", "failure", "error"} else status
 record = {
     "pipelineId": "msrp_pipeline",
@@ -115,6 +137,13 @@ record = {
         "dryrunGateThreshold": summary.get("gateThreshold"),
         "configSourceSyncStatus": config_payload.get("status"),
         "configSourceSyncPipelineId": config_payload.get("pipelineId"),
+        "unifiedReadinessStatus": unified_payload.get("status"),
+        "unifiedReadinessPipelineId": unified_payload.get("pipelineId"),
+        "unifiedReadinessReadinessStatus": unified_payload.get("readinessStatus"),
+        "goalCompletionStatus": goal_payload.get("status"),
+        "goalCompletionPipelineId": goal_payload.get("pipelineId"),
+        "goalCompletionState": goal_payload.get("goalCompletionStatus"),
+        "goalLocalP0Ready": goal_payload.get("localP0Ready"),
     },
 }
 status_dir = repo / "hermes" / "reports" / "pipeline_status"
@@ -152,7 +181,7 @@ PY
 
 run_config_source_sync() {
   if is_truthy "${JATO_MSRP_PIPELINE_SKIP_CONFIG_SYNC:-false}"; then
-    echo "[PIPELINE] Phase 1/3: official config source sync skipped by JATO_MSRP_PIPELINE_SKIP_CONFIG_SYNC"
+    echo "[PIPELINE] Phase 1/4: official config source sync skipped by JATO_MSRP_PIPELINE_SKIP_CONFIG_SYNC"
     return 0
   fi
   if [[ ! -f "$CONFIG_SOURCE_SYNC" ]]; then
@@ -170,7 +199,7 @@ run_config_source_sync() {
     stage_args+=(--no-stage-smoke)
   fi
 
-  echo "[PIPELINE] Phase 1/3: official config source sync"
+  echo "[PIPELINE] Phase 1/4: official config source sync"
   "$PYTHON_BIN" "$CONFIG_SOURCE_SYNC" \
     --repo-root "$REPO_DIR" \
     --required-countries "$CONFIG_SOURCE_SYNC_COUNTRIES" \
@@ -179,6 +208,58 @@ run_config_source_sync() {
     --write-status \
     --strict \
     "${stage_args[@]}" >/dev/null
+}
+
+run_post_pipeline_audits() {
+  if ! is_truthy "${JATO_MSRP_PIPELINE_RUN_POST_AUDITS:-true}"; then
+    echo "[PIPELINE] Phase 4/4: post-ingest audits skipped by JATO_MSRP_PIPELINE_RUN_POST_AUDITS"
+    return 0
+  fi
+
+  echo "[PIPELINE] Phase 4/4: readiness and goal audits"
+  if is_truthy "${JATO_MSRP_PIPELINE_REFRESH_UNIFIED_READINESS:-true}"; then
+    if [[ ! -f "$UNIFIED_READINESS_AUDIT" ]]; then
+      echo "[ERROR] Unified scraping readiness audit not found: $UNIFIED_READINESS_AUDIT" >&2
+      return 1
+    fi
+    if ! "$PYTHON_BIN" "$UNIFIED_READINESS_AUDIT" \
+      --repo-root "$REPO_DIR" \
+      --artifact-root "$UNIFIED_READINESS_ARTIFACT_ROOT" \
+      --out-dir "$REPO_DIR/hermes/reports" \
+      --write-status \
+      --sample-per-kind "$UNIFIED_READINESS_SAMPLE_PER_KIND" \
+      --strict >/dev/null; then
+      return 1
+    fi
+  else
+    echo "[PIPELINE] Unified scraping readiness audit skipped by JATO_MSRP_PIPELINE_REFRESH_UNIFIED_READINESS"
+  fi
+
+  if is_truthy "${JATO_MSRP_PIPELINE_REFRESH_GOAL_AUDIT:-true}"; then
+    if [[ ! -f "$GOAL_COMPLETION_AUDIT" ]]; then
+      echo "[ERROR] Goal completion audit not found: $GOAL_COMPLETION_AUDIT" >&2
+      return 1
+    fi
+    local -a goal_args=(
+      --repo-root "$REPO_DIR"
+      --out-dir "$REPO_DIR/hermes/reports"
+      --write-status
+    )
+    if [[ -n "${JATO_GOAL_COMPLETION_REMOTE_API_BASE:-}" ]]; then
+      goal_args+=(--remote-api-base "$JATO_GOAL_COMPLETION_REMOTE_API_BASE")
+    fi
+    if [[ -n "${JATO_GOAL_COMPLETION_REMOTE_RESOLVE_IP:-}" ]]; then
+      goal_args+=(--remote-resolve-ip "$JATO_GOAL_COMPLETION_REMOTE_RESOLVE_IP")
+    fi
+    if [[ -n "${JATO_GOAL_COMPLETION_TIMEOUT_SECONDS:-}" ]]; then
+      goal_args+=(--timeout-seconds "$JATO_GOAL_COMPLETION_TIMEOUT_SECONDS")
+    fi
+    if ! "$PYTHON_BIN" "$GOAL_COMPLETION_AUDIT" "${goal_args[@]}" >/dev/null; then
+      return 1
+    fi
+  else
+    echo "[PIPELINE] Goal completion audit skipped by JATO_MSRP_PIPELINE_REFRESH_GOAL_AUDIT"
+  fi
 }
 
 if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
@@ -194,6 +275,8 @@ echo "[INFO] MSRP full pipeline"
 echo "[INFO] Repo: $REPO_DIR"
 echo "[INFO] Runner: $RUNNER"
 echo "[INFO] Config source sync: $CONFIG_SOURCE_SYNC"
+echo "[INFO] Unified readiness audit: $UNIFIED_READINESS_AUDIT"
+echo "[INFO] Goal completion audit: $GOAL_COMPLETION_AUDIT"
 echo "[INFO] Countries: $COUNTRIES_RAW"
 echo "[INFO] Dryrun gate threshold: $MIN_DRYRUN_PASS_PCT%"
 
@@ -205,13 +288,13 @@ if ! run_config_source_sync; then
 fi
 
 if ! is_truthy "${JATO_MSRP_PIPELINE_SKIP_DRYRUN:-false}"; then
-  echo "[PIPELINE] Phase 2/3: dryrun"
+  echo "[PIPELINE] Phase 2/4: dryrun"
   if ! JATO_MSRP_MODE=dryrun JATO_MSRP_COUNTRIES="$COUNTRIES_RAW" "$RUNNER"; then
     write_pipeline_status "failed" "Dryrun phase failed" 1 "dryrun"
     exit 1
   fi
 else
-  echo "[PIPELINE] Phase 2/3: dryrun skipped by JATO_MSRP_PIPELINE_SKIP_DRYRUN"
+  echo "[PIPELINE] Phase 2/4: dryrun skipped by JATO_MSRP_PIPELINE_SKIP_DRYRUN"
 fi
 
 if [[ ! -f "$DRYRUN_REPORT" ]]; then
@@ -239,9 +322,14 @@ if is_truthy "${JATO_MSRP_PIPELINE_SKIP_INGEST:-false}"; then
   exit 0
 fi
 
-echo "[PIPELINE] Phase 3/3: ingest"
+echo "[PIPELINE] Phase 3/4: ingest"
 if ! JATO_MSRP_MODE=ingest JATO_MSRP_COUNTRIES="$COUNTRIES_RAW" "$RUNNER"; then
   write_pipeline_status "failed" "Ingest phase failed" 1 "ingest"
+  exit 1
+fi
+
+if ! run_post_pipeline_audits; then
+  write_pipeline_status "failed" "Post-ingest readiness audit failed" 1 "post_audit"
   exit 1
 fi
 
