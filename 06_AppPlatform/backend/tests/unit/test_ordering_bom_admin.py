@@ -165,7 +165,17 @@ def test_list_bom_with_fob_empty_keeps_tuple_shape(monkeypatch) -> None:
         lambda _session: ["LV"],
     )
 
-    assert repo.list_bom_with_fob(_FakeSession()) == ([], ["LV"])
+    assert repo.list_bom_with_fob(_FakeSession()) == ([], ["NL", "LV"])
+
+
+def test_list_bom_admin_country_columns_keeps_nl_first(monkeypatch) -> None:
+    monkeypatch.setattr(
+        repo,
+        "list_active_fob_country_codes",
+        lambda _session: ["SK", "CZ"],
+    )
+
+    assert repo.list_bom_admin_country_columns(_FakeSession()) == ["NL", "CZ", "SK"]
 
 
 def test_list_ordering_country_options_includes_fob_only_country(monkeypatch) -> None:

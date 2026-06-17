@@ -1100,7 +1100,11 @@ def get_bom_admin(
 ) -> dict:
     """Return BOM data with FOB per country, for the BOM admin panel."""
     items, countries = repo.list_bom_with_fob(session, brand=brand, search=search, country_code=country)
-    return {"items": items, "countries": countries}
+    return {
+        "items": items,
+        "countries": countries,
+        "activeFobCountries": repo.list_active_fob_country_codes(session),
+    }
 
 
 @router.get("/material-skus-admin")

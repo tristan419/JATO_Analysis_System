@@ -2312,6 +2312,7 @@ function BomAdminPanel({
 }: BomAdminPanelProps) {
   const [skus, setSkus] = useState<any[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
+  const [activeFobCountries, setActiveFobCountries] = useState<string[]>([]);
   const { countryOptions: accountCountryOptions } = useAccountCountryOptions();
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState("");
@@ -2384,7 +2385,7 @@ function BomAdminPanel({
   const currentLoadKeyRef = useRef<string | null>(null);
   const pendingLoadKeyRef = useRef<string | null>(null);
   const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);  // debounce loads
-  const countriesRef = useRef<string[]>([]);
+  const activeFobCountriesRef = useRef<string[]>([]);
 
 
   // Color name → hex mapping for paint swatches
@@ -2419,13 +2420,17 @@ function BomAdminPanel({
     const rest = countries.filter(c => c !== 'NL').sort();
     return countries.includes('NL') ? ['NL', ...rest] : rest;
   }, [countries]);
+  const sortedActiveFobCountries = useMemo(() => {
+    const rest = activeFobCountries.filter(c => c !== "NL").sort();
+    return activeFobCountries.includes("NL") ? ["NL", ...rest] : rest;
+  }, [activeFobCountries]);
 
   useEffect(() => {
     const targetCountry = String(initialCopyTargetCountry || "").trim().toUpperCase();
     if (!targetCountry) return;
-    const sourceCountry = sortedCountries.includes("CZ")
+    const sourceCountry = sortedActiveFobCountries.includes("CZ")
       ? "CZ"
-      : sortedCountries.find((countryCode) => countryCode !== targetCountry) || "";
+      : sortedActiveFobCountries.find((countryCode) => countryCode !== targetCountry) || "";
     setToolsFlipped(true);
     setShowAddMaterial(false);
     setBomAdminNotice(`Showing all BOM templates. ${targetCountry} has no FOB yet; copy FOB from an existing country to create it.`);
@@ -2439,7 +2444,7 @@ function BomAdminPanel({
       ...current,
       countryCode: current.countryCode || targetCountry,
     }));
-  }, [initialCopyTargetCountry, sortedCountries]);
+  }, [initialCopyTargetCountry, sortedActiveFobCountries]);
 
   const countryLabels = useMemo(() => {
     const map = new Map<string, string>();
@@ -2584,7 +2589,7 @@ function BomAdminPanel({
       const params: { country?: string; search?: string } = {};
       if (s) {
         if (isCountry) {
-          const fobCountries = countriesRef.current;
+          const fobCountries = activeFobCountriesRef.current;
           if (fobCountries.includes(normalizedSearch)) {
             params.country = normalizedSearch;
             setBomAdminNotice("");
@@ -2619,8 +2624,10 @@ function BomAdminPanel({
       const res = await api.getBomAdmin(Object.keys(params).length > 0 ? params : undefined);
       setSkus(res.items || []);
       const nextCountries = res.countries || [];
-      countriesRef.current = nextCountries;
+      const nextActiveFobCountries = res.activeFobCountries || nextCountries;
+      activeFobCountriesRef.current = nextActiveFobCountries;
       setCountries(nextCountries);
+      setActiveFobCountries(nextActiveFobCountries);
     } catch (e) { console.error('[BOM Admin]', e); }
     finally {
       loadRef.current = false;
@@ -3495,7 +3502,7 @@ function BomAdminPanel({
     setAdjustCountryMessage("");
     setCopyCountryForm(prev => ({
       ...prev,
-      sourceCountryCode: prev.sourceCountryCode || (countries.includes("CZ") ? "CZ" : sortedCountries[0] || ""),
+      sourceCountryCode: prev.sourceCountryCode || (activeFobCountries.includes("CZ") ? "CZ" : sortedActiveFobCountries[0] || ""),
       targetCountryCode: prev.targetCountryCode || (countries.includes("SK") ? "" : "SK"),
     }));
     setAdjustCountryForm(prev => ({
@@ -3963,7 +3970,7 @@ function BomAdminPanel({
                       style={{ fontSize: 11, width: 84 }}
                     >
                       <option value="">Source</option>
-                      {sortedCountries.map((code) => (
+                      {sortedActiveFobCountries.map((code) => (
                         <option key={code} value={code}>
                           {code}
                         </option>

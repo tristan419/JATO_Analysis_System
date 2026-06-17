@@ -561,7 +561,7 @@ def list_bom_with_fob(
     limit: int = 1000,
 ) -> tuple[list[dict], list[str]]:
     """Return SKUs with their FOB per country, grouped for BOM admin display."""
-    all_countries = list_active_fob_country_codes(session)
+    all_countries = list_bom_admin_country_columns(session)
     skus = list_all_material_skus_for_admin(session, brand=brand, search=search, country_code=country_code, limit=limit)
     if not skus:
         return [], all_countries
@@ -1727,6 +1727,18 @@ def list_active_fob_country_codes(session: Session) -> list[str]:
         .distinct()
     ).scalars().all()
     return sorted({str(code or "").upper() for code in country_codes if str(code or "").strip()})
+
+
+def list_bom_admin_country_columns(session: Session) -> list[str]:
+    """Return BOM Admin country columns.
+
+    NL is a mandatory logistics hub column even before NL FOB rows exist.
+    `/fob-countries` still uses list_active_fob_country_codes so no-FOB alerts
+    keep their original meaning.
+    """
+    countries = set(list_active_fob_country_codes(session))
+    countries.add("NL")
+    return ["NL", *sorted(country for country in countries if country != "NL")]
 
 
 def list_all_payment_terms(

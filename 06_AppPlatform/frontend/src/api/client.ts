@@ -3556,7 +3556,7 @@ export const api = {
   // BOM Admin
   getBomAdmin: (params?: { brand?: string; search?: string; country?: string }) => {
     const qs = params ? new URLSearchParams(Object.entries(params).filter(([_,v]) => v != null) as any).toString() : "";
-    return request<{ items: any[]; countries: string[] }>("/order-genius/bom-admin" + (qs ? "?" + qs : ""));
+    return request<{ items: any[]; countries: string[]; activeFobCountries?: string[] }>("/order-genius/bom-admin" + (qs ? "?" + qs : ""));
   },
 
   updateSkuLifecycle: (materialCode: string, body: { lifecycleStatus: string; effectiveFrom?: string; effectiveTo?: string; rowVersion: number }) =>
