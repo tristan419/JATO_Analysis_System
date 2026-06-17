@@ -1,12 +1,12 @@
 source_code: skoda_elroq_at_draft_scrapling
 country: 奥地利
 brand: SKODA
-source_url: https://www.skoda.at/modelle/elroq
+source_url: https://www.skoda.at/elroq/elroq/overlay-elroq-preisliste
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.skoda.at/modelle/elroq
+  url: https://www.skoda.at/elroq/elroq/overlay-elroq-preisliste
   headless: true
   default_currency: EUR
   default_tax_included: true
@@ -73,10 +73,10 @@ profile:
     force_review_for_special_edition: true
   json_script_selector: script[type="application/json"]
   css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
+    vehicle_container: tbody tr
+    model: td:first-child
+    trim: td:first-child
+    price: td:last-child
   tier: stealth
   network_idle: true
   impersonate: chrome
