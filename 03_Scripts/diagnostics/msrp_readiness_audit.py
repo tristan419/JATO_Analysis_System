@@ -43,6 +43,7 @@ TEST_EVIDENCE = {
     "workflowService": "06_AppPlatform/backend/tests/unit/test_msrp_workflow_service.py",
     "snapshotScript": "03_Scripts/tests/test_hermes_msrp_current_price_snapshot.py",
     "frontendApi": "06_AppPlatform/frontend/src/tests/unit/dataManagementApi.test.ts",
+    "pipelineWrapper": "03_Scripts/tests/test_run_msrp_pipeline.py",
 }
 
 
@@ -445,6 +446,12 @@ def build_readiness_report(
         "msrp_auto_review_score_v1",
         "not_recommended_until_labeled_corpus",
     )
+    script_covers_full_pipeline = _test_file_has(
+        "pipelineWrapper",
+        "test_pipeline_runs_ingest_when_dryrun_gate_is_allowed",
+        "test_pipeline_skips_ingest_when_dryrun_gate_blocks",
+        "msrp_pipeline",
+    )
     snapshot_script_covered = _test_file_has(
         "snapshotScript",
         "msrp_current_price_snapshot_v1",
@@ -703,6 +710,31 @@ def build_readiness_report(
                 "GET /hermes/msrp-dryrun-history",
             ],
             note="Provides source-repair governance and pass-rate gate evidence.",
+        ),
+        _requirement(
+            key="pipeline_orchestration",
+            title="Dryrun-gated ingest pipeline wrapper",
+            status=_status(script_covers_full_pipeline),
+            runtime={
+                "script": "03_Scripts/run_msrp_pipeline.sh",
+                "statusPipelineId": "msrp_pipeline",
+                "phases": [
+                    "dryrun",
+                    "gate",
+                    "ingest",
+                    "snapshot",
+                    "readiness",
+                ],
+            },
+            evidence=[
+                "03_Scripts/run_msrp_pipeline.sh",
+                TEST_EVIDENCE["pipelineWrapper"],
+            ],
+            note=(
+                "Runs dryrun and only proceeds to ingest when the v3 dryrun "
+                "gate allows it; ingest reuses auto-review/materialize and "
+                "snapshot/readiness refresh from the low-concurrency runner."
+            ),
         ),
         _requirement(
             key="frontend_management_views",

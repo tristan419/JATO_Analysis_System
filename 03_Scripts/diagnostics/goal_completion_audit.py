@@ -89,6 +89,7 @@ REQUIRED_MSRP_REQUIREMENT_KEYS = (
     "finance_monthly_lease_subsidy_net",
     "multi_source_reconciliation",
     "dryrun_governance",
+    "pipeline_orchestration",
     "frontend_management_views",
 )
 

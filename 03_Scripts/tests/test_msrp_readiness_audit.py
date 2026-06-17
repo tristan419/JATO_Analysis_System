@@ -133,7 +133,7 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
 
     assert report["schemaVersion"] == audit_module.SCHEMA_VERSION
     assert report["status"] == "passed"
-    assert report["summary"]["statusCounts"] == {"passed": 14}
+    assert report["summary"]["statusCounts"] == {"passed": 15}
     requirements = {
         item["key"]: item
         for item in report["requirements"]
@@ -146,6 +146,7 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
     assert auto_review_runtime["schemaVersion"] == "msrp_auto_review_score_v1"
     assert finance_runtime["financeObservationCount"] == 1
     assert requirements["multi_source_reconciliation"]["runtime"]["statusCounts"]["conflict"] == 1
+    assert requirements["pipeline_orchestration"]["runtime"]["statusPipelineId"] == "msrp_pipeline"
 
 
 def test_build_readiness_report_degrades_when_snapshot_is_missing() -> None:
@@ -198,7 +199,7 @@ def test_main_prints_json_report(capsys, monkeypatch) -> None:
     payload = json.loads(captured.out)
     assert exit_code == 0
     assert payload["status"] == "passed"
-    assert payload["summary"]["requirementCount"] == 14
+    assert payload["summary"]["requirementCount"] == 15
 
 
 def test_write_outputs_creates_latest_and_historical_artifacts(tmp_path: Path) -> None:
