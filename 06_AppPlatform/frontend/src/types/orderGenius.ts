@@ -113,6 +113,58 @@ export interface ColourHexRule {
   hexOptions: ColourHexOption[];
 }
 
+export interface CountryMaterialFinanceRow {
+  financeId: string | null;
+  countryCode: string;
+  materialCode: string;
+  brand: string;
+  modelName: string;
+  version: string;
+  powertrain: string | null;
+  colour: string;
+  colourCode: string;
+  bomTemplate: string | null;
+  bomFobEur: number | null;
+  fobEur: number | null;
+  retailPriceEur: number | null;
+  wholesalePriceEur: number | null;
+  dealerPriceEur: number | null;
+  costEur: number | null;
+  marginEur: number | null;
+  marginRate: number | null;
+  vehicleMarginEur: number | null;
+  vehicleMarginRate: number | null;
+  vehicleProfitEur: number | null;
+  vehicleProfitRate: number | null;
+  fobDeltaEur: number | null;
+  marginDeltaEur: number | null;
+  memo: string | null;
+  sourceMode: string | null;
+  sourcePayload: Record<string, unknown> | null;
+  updatedBy: string | null;
+  updatedAtUtc: string | null;
+}
+
+export interface CountryMaterialFinanceUpdate {
+  countryCode: string;
+  fobEur?: number | null;
+  retailPriceEur?: number | null;
+  wholesalePriceEur?: number | null;
+  dealerPriceEur?: number | null;
+  costEur?: number | null;
+  marginEur?: number | null;
+  marginRate?: number | null;
+  vehicleMarginEur?: number | null;
+  vehicleMarginRate?: number | null;
+  vehicleProfitEur?: number | null;
+  vehicleProfitRate?: number | null;
+  fobDeltaEur?: number | null;
+  marginDeltaEur?: number | null;
+  memo?: string | null;
+  sourceMode?: string;
+  sourcePayload?: Record<string, unknown> | null;
+}
+
 export interface CountryPaymentTerm {
   countryCode: string;
   countryName: string;
