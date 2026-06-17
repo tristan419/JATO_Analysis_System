@@ -24,6 +24,7 @@ from app.db.models import (
     CountryNewsArticle,
     CountryNewsDigest,
     CurrentPrice,
+    FinanceObservation,
     ImportBatch,
     MatchOverride,
     MsrpObservation,
@@ -1484,6 +1485,14 @@ def _build_database_payload() -> tuple[
             ),
             _query_table_summary(
                 session,
+                model=FinanceObservation,
+                schema="msrp",
+                label="MSRP Finance Observations",
+                domain="msrp",
+                timestamp_column=FinanceObservation.observed_at_utc,
+            ),
+            _query_table_summary(
+                session,
                 model=CurrentPrice,
                 schema="msrp",
                 label="MSRP Current Prices",
@@ -1530,6 +1539,7 @@ def _build_database_payload() -> tuple[
             ("engineering", ConfigImportBatch, ConfigImportBatch.created_at_utc),
             ("msrp", ScrapeBatch, ScrapeBatch.started_at_utc),
             ("msrp", MsrpObservation, MsrpObservation.observed_at_utc),
+            ("msrp", FinanceObservation, FinanceObservation.observed_at_utc),
             ("review", ReviewDecision, ReviewDecision.decided_at_utc),
         ]:
             for day, count in _query_day_counts(
@@ -1580,6 +1590,18 @@ def _build_database_payload() -> tuple[
             (item["rowCount"] for item in table_items if item["key"] == "msrp.observations"),
             0,
         )
+        finance_observation_count = next(
+            (item["rowCount"] for item in table_items if item["key"] == "msrp.finance_observations"),
+            0,
+        )
+        current_price_count = next(
+            (item["rowCount"] for item in table_items if item["key"] == "msrp.current_prices"),
+            0,
+        )
+        price_history_count = next(
+            (item["rowCount"] for item in table_items if item["key"] == "msrp.price_history"),
+            0,
+        )
         review_count = next(
             (item["rowCount"] for item in table_items if item["key"] == "review.review_cases"),
             0,
@@ -1588,6 +1610,18 @@ def _build_database_payload() -> tuple[
             (item["rowCount"] for item in table_items if item["key"] == "engineering.config_variants"),
             0,
         )
+        msrp_updated_at = None
+        for item in table_items:
+            if item["key"] in {
+                "msrp.observations",
+                "msrp.finance_observations",
+                "msrp.current_prices",
+                "msrp.price_history",
+            }:
+                msrp_updated_at = _latest_timestamp(
+                    msrp_updated_at,
+                    item["lastEventAt"],
+                )
         observation_snapshots = int(
             session.execute(
                 select(func.count())
@@ -1652,14 +1686,14 @@ def _build_database_payload() -> tuple[
             "label": "MSRP Core",
             "storage": "database",
             "status": "ready",
-            "updatedAt": next(
-                (item["lastEventAt"] for item in table_items if item["key"] == "msrp.observations"),
-                None,
-            ),
-            "summary": "MSRP sources、批次、观测、current prices 与 snapshot 路径覆盖。",
+            "updatedAt": msrp_updated_at,
+            "summary": "MSRP sources、批次、价格观测、finance observations、current prices 与 price history。",
             "metrics": [
                 _metric("Sources", sources_count),
                 _metric("Observations", observation_count),
+                _metric("Finance observations", finance_observation_count),
+                _metric("Current prices", current_price_count),
+                _metric("Price history", price_history_count),
                 _metric("Review cases", review_count),
             ],
             "recentItems": [],
