@@ -1595,15 +1595,27 @@ export function DataManagementPage() {
                       </select>
                     </div>
                     <div style={{padding:12}}>
-                      {hermesMsrpProgress?.countries?.length ? (() => {
-                        const status = hermesMsrpProgress.status;
-                        const countries = hermesMsrpProgress.countries;
-                        const blockers = hermesMsrpProgress.topBlockingCountries ?? [];
-                        const failureReasons = hermesMsrpProgress.topFailureReasons ?? [];
-                        const backlogGroups = hermesMsrpProgress.sourceRepairBacklog?.groups ?? [];
-                        const issueCount = hermesMsrpProgress.sourceRepairBacklog?.totalIssueCount ?? 0;
-                        const recheckCount = hermesMsrpProgress.sourceRepairBacklog?.transientRegressionCount ?? 0;
-                        const sourceRepairIssueCount = hermesMsrpProgress.sourceRepairBacklog?.sourceRepairIssueCount ?? issueCount;
+                      {hermesMsrpProgress ? (() => {
+                        const progress = hermesMsrpProgress;
+                        const status = progress.status;
+                        const countries = progress.countries ?? [];
+                        const latestCountries = progress.allCountriesLatest?.length
+                          ? progress.allCountriesLatest
+                          : countries;
+                        if (!countries.length && !latestCountries.length) {
+                          return <span style={{color:"#94a3b8",fontSize:11}}>Run dryrun to populate</span>;
+                        }
+                        const stableCoverage = progress.stableCoverage;
+                        const currentCountryCount = status?.expectedCountries?.length ?? countries.length;
+                        const currentObservedCount = status?.observedCountries?.length ?? countries.length;
+                        const latestCountryCount = stableCoverage?.countryCount ?? latestCountries.length;
+                        const latestReadyCountryCount = stableCoverage?.readyCountryCount ?? latestCountries.filter((country) => (country.passPct ?? 0) >= 70).length;
+                        const blockers = progress.topBlockingCountries ?? [];
+                        const failureReasons = progress.topFailureReasons ?? [];
+                        const backlogGroups = progress.sourceRepairBacklog?.groups ?? [];
+                        const issueCount = progress.sourceRepairBacklog?.totalIssueCount ?? 0;
+                        const recheckCount = progress.sourceRepairBacklog?.transientRegressionCount ?? 0;
+                        const sourceRepairIssueCount = progress.sourceRepairBacklog?.sourceRepairIssueCount ?? issueCount;
                         const gateColor = status?.gateStatus === "blocked" ? "#dc2626" : "#16a34a";
                         return (
                           <div style={{display:"grid",gap:10}}>
@@ -1611,6 +1623,9 @@ export function DataManagementPage() {
                               <div style={{padding:"8px 10px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6}}>
                                 <div style={{fontSize:10,color:"#64748b"}}>Pass</div>
                                 <div style={{fontSize:16,fontWeight:700,color:getMsrpProgressColor(status?.overallPassPct ?? 0)}}>{status?.overallPassPct ?? 0}%</div>
+                                {stableCoverage?.stablePassRate !== undefined && (
+                                  <div style={{fontSize:10,color:"#64748b",whiteSpace:"nowrap"}}>stable {stableCoverage.stablePassRate}%</div>
+                                )}
                               </div>
                               <div style={{padding:"8px 10px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6}}>
                                 <div style={{fontSize:10,color:"#64748b"}}>Gate</div>
@@ -1618,7 +1633,8 @@ export function DataManagementPage() {
                               </div>
                               <div style={{padding:"8px 10px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6}}>
                                 <div style={{fontSize:10,color:"#64748b"}}>Countries</div>
-                                <div style={{fontSize:13,fontWeight:700}}>{status?.observedCountries?.length ?? 0}/{status?.expectedCountries?.length ?? 0}</div>
+                                <div style={{fontSize:13,fontWeight:700}}>{latestReadyCountryCount}/{latestCountryCount}</div>
+                                <div style={{fontSize:10,color:"#64748b",whiteSpace:"nowrap"}}>current {currentObservedCount}/{currentCountryCount}</div>
                               </div>
                               <div style={{padding:"8px 10px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6}}>
                                 <div style={{fontSize:10,color:"#64748b"}}>Fix Queue</div>
@@ -1628,13 +1644,13 @@ export function DataManagementPage() {
                             </div>
 
                             <div>
-                              <div style={{fontSize:11,fontWeight:700,marginBottom:5}}>Country Progress</div>
+                              <div style={{fontSize:11,fontWeight:700,marginBottom:5}}>All Country Latest Progress</div>
                               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(92px,1fr))",gap:6,maxHeight:138,overflowY:"auto"}}>
-                                {countries.map((country: HermesMsrpCountryProgressCountry) => {
+                                {latestCountries.map((country: HermesMsrpCountryProgressCountry) => {
                                   const pct = country.passPct ?? 0;
                                   const color = getMsrpProgressColor(pct);
                                   return (
-                                    <div key={country.countryCode} style={{padding:"6px 8px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,fontSize:11}}>
+                                    <div key={`${country.countryCode}-${country.runId ?? "latest"}`} style={{padding:"6px 8px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,fontSize:11}}>
                                       <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
                                         <span style={{width:6,height:6,borderRadius:"50%",background:color,flexShrink:0}} />
                                         <span style={{fontWeight:700}}>{country.countryCode.toUpperCase()}</span>
@@ -1644,11 +1660,37 @@ export function DataManagementPage() {
                                         <div style={{height:"100%",width:`${Math.min(pct,100)}%`,background:color,borderRadius:2}} />
                                       </div>
                                       <div style={{marginTop:4,color:"#64748b"}}>{country.pass}/{country.total} pass</div>
+                                      {country.runId && <div style={{marginTop:2,color:"#94a3b8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{country.isLatestRun ? "latest" : "hist"} · {country.runId}</div>}
                                     </div>
                                   );
                                 })}
                               </div>
                             </div>
+
+                            {status?.partial && countries.length > 0 && (
+                              <div>
+                                <div style={{fontSize:11,fontWeight:700,marginBottom:5}}>Current Run Snapshot</div>
+                                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(92px,1fr))",gap:6,maxHeight:104,overflowY:"auto"}}>
+                                  {countries.map((country: HermesMsrpCountryProgressCountry) => {
+                                    const pct = country.passPct ?? 0;
+                                    const color = getMsrpProgressColor(pct);
+                                    return (
+                                      <div key={`current-${country.countryCode}`} style={{padding:"6px 8px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,fontSize:11}}>
+                                        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                                          <span style={{width:6,height:6,borderRadius:"50%",background:color,flexShrink:0}} />
+                                          <span style={{fontWeight:700}}>{country.countryCode.toUpperCase()}</span>
+                                          <span style={{marginLeft:"auto",color}}>{pct}%</span>
+                                        </div>
+                                        <div style={{height:4,background:"#f1f5f9",borderRadius:2,overflow:"hidden"}}>
+                                          <div style={{height:"100%",width:`${Math.min(pct,100)}%`,background:color,borderRadius:2}} />
+                                        </div>
+                                        <div style={{marginTop:4,color:"#64748b"}}>{country.pass}/{country.total} pass · {country.status}</div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
 
                             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                               <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,padding:8}}>

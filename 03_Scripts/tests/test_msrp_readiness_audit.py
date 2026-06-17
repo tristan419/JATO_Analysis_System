@@ -35,8 +35,14 @@ audit_module = load_module()
 class FakeReadinessClient:
     api_base = "https://example.test/v1"
 
-    def __init__(self, *, missing_snapshot: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        missing_snapshot: bool = False,
+        auth_role: str = "editor",
+    ) -> None:
         self.missing_snapshot = missing_snapshot
+        self.auth_role = auth_role
 
     def request_json(
         self,
@@ -78,6 +84,11 @@ class FakeReadinessClient:
                     "netPriceAfterSubsidyCount": 1,
                 },
                 "items": [{}],
+            }
+        if path == "/auth/me":
+            return {
+                "username": "msrp-cron",
+                "role": self.auth_role,
             }
         if path == "/msrp/reconciliation":
             return {
@@ -122,11 +133,12 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
 
     assert report["schemaVersion"] == audit_module.SCHEMA_VERSION
     assert report["status"] == "passed"
-    assert report["summary"]["statusCounts"] == {"passed": 12}
+    assert report["summary"]["statusCounts"] == {"passed": 13}
     requirements = {
         item["key"]: item
         for item in report["requirements"]
     }
+    assert requirements["official_msrp_ingest_auth"]["runtime"]["role"] == "editor"
     assert requirements["weekly_snapshot"]["runtime"]["snapshotWeek"] == "2026-W24"
     assert requirements["sales_effectiveness"]["runtime"]["labelCounts"] == {"positive": 1}
     assert requirements["finance_monthly_lease_subsidy_net"]["runtime"]["financeObservationCount"] == 1
@@ -148,6 +160,24 @@ def test_build_readiness_report_degrades_when_snapshot_is_missing() -> None:
     assert requirements["weekly_snapshot"]["runtime"]["error"] == "snapshot 404"
 
 
+def test_build_readiness_report_marks_viewer_token_missing_for_ingest() -> None:
+    report = audit_module.build_readiness_report(
+        client=FakeReadinessClient(auth_role="viewer"),
+        filters={},
+    )
+
+    requirements = {
+        item["key"]: item
+        for item in report["requirements"]
+    }
+    auth_requirement = requirements["official_msrp_ingest_auth"]
+    assert report["status"] == "missing"
+    assert auth_requirement["status"] == "missing"
+    assert auth_requirement["runtime"]["role"] == "viewer"
+    assert auth_requirement["runtime"]["requiredRole"] == "editor"
+    assert auth_requirement["runtime"]["reason"] == "write_role_required"
+
+
 def test_main_prints_json_report(capsys, monkeypatch) -> None:
     monkeypatch.setattr(
         audit_module,
@@ -165,7 +195,7 @@ def test_main_prints_json_report(capsys, monkeypatch) -> None:
     payload = json.loads(captured.out)
     assert exit_code == 0
     assert payload["status"] == "passed"
-    assert payload["summary"]["requirementCount"] == 12
+    assert payload["summary"]["requirementCount"] == 13
 
 
 def test_write_outputs_creates_latest_and_historical_artifacts(tmp_path: Path) -> None:

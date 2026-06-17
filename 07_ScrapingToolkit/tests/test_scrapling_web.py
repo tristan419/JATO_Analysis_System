@@ -4,6 +4,7 @@ from jato_scraper.base import ExtractorConfig
 from jato_scraper.config_loader import _build_scrapling_profile
 from jato_scraper.extractors.scrapling_web import (
     CssMapping,
+    PricingContextMapping,
     ScraplingExtractor,
     ScraplingProfile,
     TextRegexEntryPattern,
@@ -616,6 +617,152 @@ def test_text_regex_ignores_skoda_se_hero_footnote_marker(mock_fetch) -> None:
 
 
 @patch.object(ScraplingExtractor, "_fetch")
+def test_text_regex_finance_named_groups_feed_pricing_context(
+    mock_fetch,
+) -> None:
+    mock_fetch.return_value = _mock_page_with_text(
+        "\n".join(
+            [
+                "Enyaq",
+                "Solid Edition",
+                "En el-SUV med räckvidd upp till 574 km.",
+                "Bygg din Enyaq",
+                "Boka provkörning",
+                "Jämför bilar",
+                "Från",
+                "1",
+                "599 500",
+                "kr",
+                "Prislista",
+                "Privatleasing från 5 295 kr/mån",
+            ]
+        )
+    )
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="skoda_enyaq_se",
+            country="SE",
+            brand="SKODA",
+            source_url="https://example.com",
+        ),
+        ScraplingProfile(
+            url="https://example.com",
+            text_regex=TextRegexMapping(
+                source_selector="body",
+                entry_patterns=(
+                    TextRegexEntryPattern(
+                        pattern=(
+                            r"Enyaq\s+Solid Edition.*?"
+                            r"Bygg din Enyaq.*?"
+                            r"Från\s+1\s+"
+                            r"(?P<price>\d{3}[\s\xa0]\d{3})"
+                            r"\s*kr\s+Prislista.*?"
+                            r"Privatleasing\s+från\s+"
+                            r"(?P<monthly_payment>\d{1,2}[\s\xa0]\d{3})"
+                            r"\s*kr/mån"
+                        ),
+                        official_trim="Solid Edition",
+                        official_powertrain="BEV",
+                    ),
+                ),
+            ),
+            pricing_context=PricingContextMapping(
+                fields={
+                    "monthly_payment": "regexGroups.monthly_payment",
+                },
+                constants={
+                    "price_semantics": "lease_monthly",
+                    "finance_type": "private_lease",
+                    "finance_currency": "SEK",
+                },
+            ),
+            default_currency="SEK",
+            default_price_label="Rekommenderat cirkapris inkl. moms",
+            fixed_model="ENYAQ",
+            fixed_jato_model="ENYAQ",
+            fixed_jato_powertrain=None,
+            copy_trim_to_jato_trim=True,
+            confidence_rules={
+                "base": 0.28,
+                "fixed_model_bonus": 0.18,
+                "fixed_jato_model_bonus": 0.12,
+                "model_rule_bonus": 0.12,
+                "trim_present_bonus": 0.1,
+                "copy_trim_to_jato_trim_bonus": 0.09,
+                "parsed_price_text_bonus": 0.03,
+                "currency_bonus": 0.01,
+                "price_label_bonus": 0.02,
+                "trim_keyword_bonuses": [
+                    {
+                        "key": "trim_keyword_solid_edition",
+                        "label": "Trim keyword matched: Solid Edition",
+                        "keyword": "Solid Edition",
+                        "delta": 0.04,
+                    },
+                ],
+                "price_band_bonuses": [
+                    {
+                        "key": "price_band_entry",
+                        "label": "Entry price band matched",
+                        "min": 550000,
+                        "max": 650000,
+                        "delta": 0.05,
+                    },
+                    {
+                        "key": "price_band_mid",
+                        "label": "Mid price band matched",
+                        "min": 650001,
+                        "max": 800000,
+                        "delta": 0.01,
+                    },
+                    {
+                        "key": "price_band_high",
+                        "label": "High price band matched",
+                        "min": 800001,
+                        "delta": 0.03,
+                    },
+                ],
+                "powertrain_bonuses": [
+                    {
+                        "key": "powertrain_bev",
+                        "label": "Powertrain matched: BEV",
+                        "powertrain": "BEV",
+                        "delta": 0.03,
+                    },
+                ],
+                "clamp_min": 0.0,
+                "clamp_max": 1.0,
+            },
+            auto_accept_gates={
+                "review_threshold": 0.95,
+                "semi_auto_threshold": 0.98,
+                "require_powertrain_match": True,
+                "force_review_if_powertrain_missing": True,
+                "force_review_if_powertrain_ambiguous": True,
+                "force_review_for_special_edition": True,
+            },
+        ),
+    )
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].msrp_value == 599_500.0
+    assert results[0].raw_payload["regexGroups"]["monthly_payment"] == "5 295"
+    assert results[0].raw_payload["pricingContext"] == {
+        "price_semantics": "lease_monthly",
+        "finance_type": "private_lease",
+        "finance_currency": "SEK",
+        "monthly_payment": 5295.0,
+    }
+    assert results[0].match_confidence == 0.95
+    assert results[0].match_status == "auto_accepted"
+    gate = results[0].match_reason["autoAcceptGate"]
+    assert gate["tier"] == "semi_auto"
+    assert gate["finalStatus"] == "auto_accepted"
+
+
+@patch.object(ScraplingExtractor, "_fetch")
 def test_text_regex_extracts_descendant_body_text(mock_fetch) -> None:
     mock_fetch.return_value = _mock_page_with_descendant_text(
         "body",
@@ -741,6 +888,89 @@ def test_config_loader_builds_scrapling_text_regex_profile() -> None:
     assert profile.text_regex.include_element_html is True
     assert len(profile.text_regex.entry_patterns) == 1
     assert profile.text_regex.entry_patterns[0].official_trim == "Active"
+
+
+def test_config_loader_builds_scrapling_pricing_context_profile() -> None:
+    profile = _build_scrapling_profile(
+        {
+            "url": "https://example.com",
+            "pricing_context": {
+                "fields": {
+                    "monthly_payment": "lease.monthlyText",
+                    "term_months": "lease.termText",
+                },
+                "constants": {
+                    "price_semantics": "lease_monthly",
+                    "finance_type": "private_lease",
+                    "finance_currency": "SEK",
+                },
+            },
+        }
+    )
+
+    assert profile.pricing_context is not None
+    assert profile.pricing_context.fields == {
+        "monthly_payment": "lease.monthlyText",
+        "term_months": "lease.termText",
+    }
+    assert profile.pricing_context.constants == {
+        "price_semantics": "lease_monthly",
+        "finance_type": "private_lease",
+        "finance_currency": "SEK",
+    }
+
+
+def test_build_observation_adds_pricing_context_from_profile() -> None:
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="volvo_xc60_se_lease",
+            country="SE",
+            brand="Volvo",
+            source_url="https://example.com",
+        ),
+        ScraplingProfile(
+            url="https://example.com",
+            pricing_context=PricingContextMapping(
+                fields={
+                    "monthly_payment": "lease.monthlyText",
+                    "term_months": "lease.termText",
+                },
+                constants={
+                    "price_semantics": "lease_monthly",
+                    "finance_type": "private_lease",
+                    "finance_currency": "SEK",
+                },
+            ),
+            default_currency="SEK",
+            fixed_model="XC60",
+            fixed_jato_model="XC60",
+            fixed_jato_powertrain="PHEV",
+            copy_trim_to_jato_trim=True,
+        ),
+    )
+
+    observation = extractor._build_observation(
+        official_model="XC60",
+        official_trim="Ultra",
+        msrp_value=5990,
+        currency="SEK",
+        raw_payload={
+            "priceText": "5 990 kr/mån",
+            "lease": {
+                "monthlyText": "5 990 kr/mån",
+                "termText": "36 månader",
+            },
+        },
+    )
+
+    assert observation is not None
+    assert observation.raw_payload["pricingContext"] == {
+        "price_semantics": "lease_monthly",
+        "finance_type": "private_lease",
+        "finance_currency": "SEK",
+        "monthly_payment": 5990.0,
+        "term_months": 36,
+    }
 
 
 def test_config_loader_builds_scrapling_browser_runtime_options() -> None:

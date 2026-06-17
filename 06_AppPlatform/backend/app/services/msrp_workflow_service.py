@@ -164,9 +164,9 @@ def _payload_price_semantics(
     item: dict[str, object],
     source_price_semantics: str | None = None,
 ) -> str:
-    context = _finance_context_from_payload(item, source_price_semantics)
-    if context:
-        return str(context.get("price_semantics") or "base_msrp").strip()
+    explicit_semantics = _optional_text(item.get("price_semantics"))
+    if explicit_semantics:
+        return explicit_semantics
     return str(source_price_semantics or "base_msrp").strip() or "base_msrp"
 
 
@@ -878,6 +878,20 @@ def _increment_count(target: dict[str, int], value: object | None) -> None:
     target[key] = target.get(key, 0) + 1
 
 
+def _empty_finance_observation_summary() -> dict[str, object]:
+    return {
+        "priceSemanticsCounts": {},
+        "financeTypeCounts": {},
+        "monthlyPaymentCount": 0,
+        "monthlyPaymentEurMin": None,
+        "monthlyPaymentEurMax": None,
+        "netPriceAfterSubsidyCount": 0,
+        "netPriceAfterSubsidyEurMin": None,
+        "netPriceAfterSubsidyEurMax": None,
+        "subsidyObservationCount": 0,
+    }
+
+
 def _summarize_finance_observations(
     items: list[FinanceObservation],
 ) -> dict[str, object]:
@@ -888,33 +902,51 @@ def _summarize_finance_observations(
         for item in items
         if item.monthly_payment_eur is not None
     ]
+    monthly_count = sum(
+        1
+        for item in items
+        if item.monthly_payment is not None
+        or item.monthly_payment_eur is not None
+    )
     net_values = [
         float(item.net_price_after_subsidy_eur)
         for item in items
         if item.net_price_after_subsidy_eur is not None
     ]
+    net_count = sum(
+        1
+        for item in items
+        if item.net_price_after_subsidy is not None
+        or item.net_price_after_subsidy_eur is not None
+    )
     subsidy_values = [
         float(item.subsidy_amount_eur)
         for item in items
         if item.subsidy_amount_eur is not None
     ]
+    subsidy_count = sum(
+        1
+        for item in items
+        if item.subsidy_amount is not None
+        or item.subsidy_amount_eur is not None
+    )
     for item in items:
         _increment_count(semantics_counts, item.price_semantics)
         _increment_count(finance_type_counts, item.finance_type)
     return {
         "priceSemanticsCounts": semantics_counts,
         "financeTypeCounts": finance_type_counts,
-        "monthlyPaymentCount": len(monthly_values),
+        "monthlyPaymentCount": monthly_count,
         "monthlyPaymentEurMin": min(monthly_values) if monthly_values else None,
         "monthlyPaymentEurMax": max(monthly_values) if monthly_values else None,
-        "netPriceAfterSubsidyCount": len(net_values),
+        "netPriceAfterSubsidyCount": net_count,
         "netPriceAfterSubsidyEurMin": (
             min(net_values) if net_values else None
         ),
         "netPriceAfterSubsidyEurMax": (
             max(net_values) if net_values else None
         ),
-        "subsidyObservationCount": len(subsidy_values),
+        "subsidyObservationCount": subsidy_count,
     }
 
 
@@ -937,11 +969,22 @@ def list_finance_observations(
             "total": 0,
             "limit": limit,
             "offset": offset,
-            "summary": _summarize_finance_observations([]),
+            "summary": _empty_finance_observation_summary(),
             "items": [],
             "warning": "finance_observations_unavailable",
         }
     total = msrp_repo.count_finance_observations(
+        session,
+        country,
+        brand,
+        jato_model,
+        price_semantics,
+        finance_type,
+        has_monthly_payment,
+        has_subsidy,
+        has_net_price_after_subsidy,
+    )
+    summary = msrp_repo.summarize_finance_observations(
         session,
         country,
         brand,
@@ -970,7 +1013,7 @@ def list_finance_observations(
         "total": total,
         "limit": limit,
         "offset": offset,
-        "summary": _summarize_finance_observations(items),
+        "summary": summary,
         "items": [finance_observation_payload(item) for item in items],
     }
 

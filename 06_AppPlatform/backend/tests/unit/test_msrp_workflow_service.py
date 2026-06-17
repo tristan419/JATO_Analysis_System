@@ -380,6 +380,178 @@ def test_finance_observation_from_payload_reads_pricing_context(
     assert finance_observation.net_price_after_subsidy_eur == 74800.0
 
 
+def test_create_scrape_batch_ingest_persists_finance_observations(
+    monkeypatch,
+) -> None:
+    class FakeSession:
+        def flush(self) -> None:
+            pass
+
+        def commit(self) -> None:
+            pass
+
+        def rollback(self) -> None:
+            pass
+
+        def refresh(self, _item) -> None:
+            pass
+
+    source_id = uuid4()
+    captured: dict[str, list[FinanceObservation]] = {}
+
+    def add_scrape_batch(_session, batch):
+        batch.scrape_batch_id = batch.scrape_batch_id or uuid4()
+        return batch
+
+    def add_observations(_session, observations):
+        now = datetime(2026, 6, 16, 9, 0, tzinfo=timezone.utc)
+        for observation in observations:
+            observation.observation_id = observation.observation_id or uuid4()
+            observation.created_at_utc = observation.created_at_utc or now
+            observation.updated_at_utc = observation.updated_at_utc or now
+        return observations
+
+    def add_finance_observations(_session, observations):
+        now = datetime(2026, 6, 16, 9, 0, tzinfo=timezone.utc)
+        for item in observations:
+            item.finance_observation_id = (
+                item.finance_observation_id or uuid4()
+            )
+            item.created_at_utc = item.created_at_utc or now
+            item.updated_at_utc = item.updated_at_utc or now
+        captured["items"] = observations
+        return observations
+
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "add_scrape_batch",
+        add_scrape_batch,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "has_price_history_table",
+        lambda session: False,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "has_finance_observations_table",
+        lambda session: True,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "get_source",
+        lambda session, item_id: SimpleNamespace(
+            source_id=item_id,
+            price_semantics="base_msrp",
+        ),
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "add_observations",
+        add_observations,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "add_finance_observations",
+        add_finance_observations,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "convert_amount_to_eur",
+        lambda amount, currency, observed_at: (
+            round(float(amount) * 0.1, 2),
+            SimpleNamespace(
+                rate_to_eur=0.1,
+                as_of_date=date(2026, 6, 16),
+                source="unit-test",
+            ),
+        ),
+    )
+
+    payload = {
+        "batch_code": "finance-batch",
+        "trigger_type": "manual",
+        "scope_country": "瑞典",
+        "scope_brands": ["Volvo"],
+        "observations": [
+            {
+                "source_id": str(source_id),
+                "country": "瑞典",
+                "brand": "Volvo",
+                "jato_model": "XC60",
+                "jato_trim": "Ultra",
+                "jato_powertrain": "PHEV",
+                "official_model": "XC60",
+                "official_trim": "Ultra",
+                "msrp_value": 773000,
+                "currency": "SEK",
+                "tax_included": True,
+                "price_label": "Lease monthly",
+                "observed_at_utc": datetime(
+                    2026, 6, 16, 9, 0, tzinfo=timezone.utc
+                ),
+                "source_url": "https://example.test/xc60",
+                "source_payload_hash": "hash-finance",
+                "extraction_version": "test",
+                "match_confidence": 0.91,
+                "match_status": "auto_accepted",
+                "price_semantics": "lease_monthly",
+                "source_context_json": {
+                    "pricingContext": {
+                        "price_semantics": "lease_monthly",
+                        "monthly_payment": 5990,
+                        "term_months": 36,
+                        "finance_type": "private_lease",
+                        "finance_currency": "SEK",
+                    },
+                },
+            }
+        ],
+    }
+
+    result = msrp_workflow_service.create_scrape_batch_ingest(
+        FakeSession(),
+        payload,
+        commit=True,
+    )
+
+    assert result["financeObservationsCreated"] == 1
+    assert result["currentPricesTouched"] == 0
+    assert result["nonMsrpPriceObservationCount"] == 1
+    assert captured["items"][0].price_semantics == "lease_monthly"
+    assert captured["items"][0].monthly_payment_eur == 599.0
+
+
+def test_payload_price_semantics_uses_explicit_observation_semantics_only() -> None:
+    payload = {
+        "source_context_json": {
+            "pricingContext": {
+                "price_semantics": "lease_monthly",
+                "monthly_payment": 5990,
+                "finance_type": "private_lease",
+            },
+        },
+    }
+
+    assert (
+        msrp_workflow_service._payload_price_semantics(
+            payload,
+            "base_msrp",
+        )
+        == "base_msrp"
+    )
+
+    payload["price_semantics"] = "lease_monthly"
+
+    assert (
+        msrp_workflow_service._payload_price_semantics(
+            payload,
+            "base_msrp",
+        )
+        == "lease_monthly"
+    )
+
+
 def test_finance_observation_from_payload_skips_plain_msrp() -> None:
     assert (
         msrp_workflow_service._finance_observation_from_payload(
@@ -466,6 +638,21 @@ def test_list_finance_observations_returns_summary_and_items(
     )
     monkeypatch.setattr(
         msrp_workflow_service.msrp_repo,
+        "summarize_finance_observations",
+        lambda *args, **kwargs: {
+            "priceSemanticsCounts": {"lease_monthly": 7},
+            "financeTypeCounts": {"private_lease": 7},
+            "monthlyPaymentCount": 7,
+            "monthlyPaymentEurMin": 410.0,
+            "monthlyPaymentEurMax": 720.0,
+            "netPriceAfterSubsidyCount": 4,
+            "netPriceAfterSubsidyEurMin": 60000.0,
+            "netPriceAfterSubsidyEurMax": 72000.0,
+            "subsidyObservationCount": 3,
+        },
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
         "list_finance_observations",
         lambda *args, **kwargs: [item],
     )
@@ -487,11 +674,11 @@ def test_list_finance_observations_returns_summary_and_items(
     assert payload["rows"] == 1
     assert payload["total"] == 7
     assert payload["summary"]["priceSemanticsCounts"] == {
-        "lease_monthly": 1
+        "lease_monthly": 7
     }
-    assert payload["summary"]["financeTypeCounts"] == {"private_lease": 1}
-    assert payload["summary"]["monthlyPaymentCount"] == 1
-    assert payload["summary"]["subsidyObservationCount"] == 1
+    assert payload["summary"]["financeTypeCounts"] == {"private_lease": 7}
+    assert payload["summary"]["monthlyPaymentCount"] == 7
+    assert payload["summary"]["subsidyObservationCount"] == 3
     assert payload["items"][0]["financeObservationId"] == str(
         item.finance_observation_id
     )
@@ -518,10 +705,19 @@ def test_list_finance_observations_passes_finance_presence_filters(
         captured["list"] = args
         return []
 
+    def _capture_summary(*args):
+        captured["summary"] = args
+        return msrp_workflow_service._empty_finance_observation_summary()
+
     monkeypatch.setattr(
         msrp_workflow_service.msrp_repo,
         "count_finance_observations",
         _capture_count,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "summarize_finance_observations",
+        _capture_summary,
     )
     monkeypatch.setattr(
         msrp_workflow_service.msrp_repo,
@@ -545,7 +741,23 @@ def test_list_finance_observations_passes_finance_presence_filters(
 
     assert payload["rows"] == 0
     assert captured["count"][-3:] == (False, True, True)
+    assert captured["summary"][-3:] == (False, True, True)
     assert captured["list"][-5:] == (False, True, True, 25, 5)
+
+
+def test_finance_summary_counts_raw_values_without_eur() -> None:
+    item = _make_finance_observation()
+    item.monthly_payment_eur = None
+    item.subsidy_amount_eur = None
+    item.net_price_after_subsidy_eur = None
+
+    summary = msrp_workflow_service._summarize_finance_observations([item])
+
+    assert summary["monthlyPaymentCount"] == 1
+    assert summary["monthlyPaymentEurMin"] is None
+    assert summary["monthlyPaymentEurMax"] is None
+    assert summary["subsidyObservationCount"] == 1
+    assert summary["netPriceAfterSubsidyCount"] == 1
 
 
 def test_list_current_price_alerts_returns_delta_detail(

@@ -1663,7 +1663,13 @@ export function OrderGeniusPage() {
         )}
         {isAdmin && (
           <button type="button" className="btn btn-sm btn-ghost"
-                  onClick={() => setShowBomAdmin(!showBomAdmin)}
+                  onClick={() => {
+                    const nextVisible = !showBomAdmin;
+                    if (nextVisible && missingFobCountryCodes.length > 0) {
+                      setBomAdminCopyTargetCountry(missingFobCountryCodes[0] ?? null);
+                    }
+                    setShowBomAdmin(nextVisible);
+                  }}
                   style={showBomAdmin ? { background: "#b45309", color: "#fff" } : undefined}>
             {showBomAdmin ? "Hide BOM Admin" : "BOM Admin"}
           </button>
@@ -2108,9 +2114,24 @@ export function OrderGeniusPage() {
         />
       ) : (
         <div style={{ padding: 32, textAlign: "center", color: "#64748b" }}>
-          {selectedCountries.length > 0
-            ? "No data. Upload a Material Master file to get started."
-            : "Select a country to view the order matrix."}
+          {missingFobCountryCodes.length > 0 ? (
+            <div style={{ display: "grid", gap: 12, justifyItems: "center" }}>
+              <strong style={{ color: "#334155" }}>Selected country has no BOM FOB yet.</strong>
+              <span>{missingFobCountryLabels.join(" · ")}</span>
+              <div className="order-genius-missing-fob-actions">
+                <button type="button" className="btn btn-sm btn-primary" onClick={openBomAdminForMissingFob}>
+                  Open BOM Admin
+                </button>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={removeMissingFobCountries}>
+                  Remove from view
+                </button>
+              </div>
+            </div>
+          ) : selectedCountries.length > 0 ? (
+            "No data. Upload a Material Master file to get started."
+          ) : (
+            "Select a country to view the order matrix."
+          )}
         </div>
       )}
 
@@ -2291,6 +2312,7 @@ function BomAdminPanel({
 }: BomAdminPanelProps) {
   const [skus, setSkus] = useState<any[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
+  const [activeFobCountries, setActiveFobCountries] = useState<string[]>([]);
   const { countryOptions: accountCountryOptions } = useAccountCountryOptions();
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState("");
@@ -2320,6 +2342,7 @@ function BomAdminPanel({
   const [addMaterialNotice, setAddMaterialNotice] = useState("");
   const [copyCountryForm, setCopyCountryForm] = useState({ sourceCountryCode: "", targetCountryCode: "", overwriteExisting: false });
   const [copyCountryMessage, setCopyCountryMessage] = useState("");
+  const [bomAdminNotice, setBomAdminNotice] = useState("");
   const [copyingCountry, setCopyingCountry] = useState(false);
   const [adjustCountryForm, setAdjustCountryForm] = useState({ countryCode: "", deltaEur: "" });
   const [adjustCountryMessage, setAdjustCountryMessage] = useState("");
@@ -2362,6 +2385,7 @@ function BomAdminPanel({
   const currentLoadKeyRef = useRef<string | null>(null);
   const pendingLoadKeyRef = useRef<string | null>(null);
   const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);  // debounce loads
+  const activeFobCountriesRef = useRef<string[]>([]);
 
 
   // Color name → hex mapping for paint swatches
@@ -2396,15 +2420,20 @@ function BomAdminPanel({
     const rest = countries.filter(c => c !== 'NL').sort();
     return countries.includes('NL') ? ['NL', ...rest] : rest;
   }, [countries]);
+  const sortedActiveFobCountries = useMemo(() => {
+    const rest = activeFobCountries.filter(c => c !== "NL").sort();
+    return activeFobCountries.includes("NL") ? ["NL", ...rest] : rest;
+  }, [activeFobCountries]);
 
   useEffect(() => {
     const targetCountry = String(initialCopyTargetCountry || "").trim().toUpperCase();
     if (!targetCountry) return;
-    const sourceCountry = sortedCountries.includes("CZ")
+    const sourceCountry = sortedActiveFobCountries.includes("CZ")
       ? "CZ"
-      : sortedCountries.find((countryCode) => countryCode !== targetCountry) || "";
+      : sortedActiveFobCountries.find((countryCode) => countryCode !== targetCountry) || "";
     setToolsFlipped(true);
     setShowAddMaterial(false);
+    setBomAdminNotice(`Showing all BOM templates. ${targetCountry} has no FOB yet; copy FOB from an existing country to create it.`);
     setCopyCountryMessage(`Target ${targetCountry} has no FOB yet. Choose a source country, then copy FOB.`);
     setCopyCountryForm((current) => ({
       ...current,
@@ -2415,7 +2444,7 @@ function BomAdminPanel({
       ...current,
       countryCode: current.countryCode || targetCountry,
     }));
-  }, [initialCopyTargetCountry, sortedCountries]);
+  }, [initialCopyTargetCountry, sortedActiveFobCountries]);
 
   const countryLabels = useMemo(() => {
     const map = new Map<string, string>();
@@ -2555,15 +2584,50 @@ function BomAdminPanel({
     currentLoadKeyRef.current = loadKey;
     setLoading(true);
     try {
-      const isCountry = s && /^[A-Z]{2}$/.test(s);
-      const params: any = {};
+      const normalizedSearch = String(s || "").trim().toUpperCase();
+      const isCountry = /^[A-Z]{2}$/.test(normalizedSearch);
+      const params: { country?: string; search?: string } = {};
       if (s) {
-        if (isCountry) params.country = s;
-        else params.search = s;
+        if (isCountry) {
+          const fobCountries = activeFobCountriesRef.current;
+          if (fobCountries.includes(normalizedSearch)) {
+            params.country = normalizedSearch;
+            setBomAdminNotice("");
+          } else if (fobCountries.length > 0) {
+            const sourceCountry = fobCountries.includes("CZ")
+              ? "CZ"
+              : fobCountries.find((countryCode) => countryCode !== normalizedSearch) || "";
+            setToolsFlipped(true);
+            setShowAddMaterial(false);
+            setBomAdminNotice(`${normalizedSearch} has no active BOM FOB yet. Showing all BOM templates so you can copy FOB into ${normalizedSearch}.`);
+            setCopyCountryMessage(`Target ${normalizedSearch} has no FOB yet. Choose a source country, then copy FOB.`);
+            setCopyCountryForm((current) => ({
+              ...current,
+              sourceCountryCode: current.sourceCountryCode || sourceCountry,
+              targetCountryCode: normalizedSearch,
+            }));
+            setAdjustCountryForm((current) => ({
+              ...current,
+              countryCode: current.countryCode || normalizedSearch,
+            }));
+          } else {
+            params.search = s;
+            setBomAdminNotice("");
+          }
+        } else {
+          params.search = s;
+          setBomAdminNotice("");
+        }
+      } else {
+        setBomAdminNotice("");
       }
       const res = await api.getBomAdmin(Object.keys(params).length > 0 ? params : undefined);
       setSkus(res.items || []);
-      setCountries(res.countries || []);
+      const nextCountries = res.countries || [];
+      const nextActiveFobCountries = res.activeFobCountries || nextCountries;
+      activeFobCountriesRef.current = nextActiveFobCountries;
+      setCountries(nextCountries);
+      setActiveFobCountries(nextActiveFobCountries);
     } catch (e) { console.error('[BOM Admin]', e); }
     finally {
       loadRef.current = false;
@@ -3433,11 +3497,12 @@ function BomAdminPanel({
       setAddMaterialError("");
       setAddMaterialNotice("");
     }
+    if (!nextFlipped) setBomAdminNotice("");
     setCopyCountryMessage("");
     setAdjustCountryMessage("");
     setCopyCountryForm(prev => ({
       ...prev,
-      sourceCountryCode: prev.sourceCountryCode || (countries.includes("CZ") ? "CZ" : sortedCountries[0] || ""),
+      sourceCountryCode: prev.sourceCountryCode || (activeFobCountries.includes("CZ") ? "CZ" : sortedActiveFobCountries[0] || ""),
       targetCountryCode: prev.targetCountryCode || (countries.includes("SK") ? "" : "SK"),
     }));
     setAdjustCountryForm(prev => ({
@@ -3905,7 +3970,7 @@ function BomAdminPanel({
                       style={{ fontSize: 11, width: 84 }}
                     >
                       <option value="">Source</option>
-                      {sortedCountries.map((code) => (
+                      {sortedActiveFobCountries.map((code) => (
                         <option key={code} value={code}>
                           {code}
                         </option>
@@ -4111,6 +4176,11 @@ function BomAdminPanel({
 	                  ) : null}
 	                </div>
 	              </div>
+              {bomAdminNotice ? (
+                <div style={{ marginTop: 8, padding: "8px 10px", border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", fontSize: 11, fontWeight: 700 }}>
+                  {bomAdminNotice}
+                </div>
+              ) : null}
               {copyCountryMessage ? (
                 <div style={{ fontSize: 11, color: copyCountryMessage.includes("created") ? "#0f766e" : "#dc2626", fontWeight: 600 }}>
                   {copyCountryMessage}

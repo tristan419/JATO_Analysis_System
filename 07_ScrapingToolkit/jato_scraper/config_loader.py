@@ -33,6 +33,7 @@ from jato_scraper.extractors.http_json import (
 from jato_scraper.extractors.scrapling_web import (
     AttrJsonMapping,
     CssMapping,
+    PricingContextMapping,
     ScraplingExtractor,
     ScraplingProfile,
     TextRegexEntryPattern,
@@ -296,12 +297,39 @@ def _build_scrapling_profile(profile: dict[str, Any]) -> ScraplingProfile:
             rule for rule in model_rules_raw if isinstance(rule, dict)
         )
 
+    pricing_context_raw = profile.get("pricing_context")
+    pricing_context = None
+    if pricing_context_raw:
+        if not isinstance(pricing_context_raw, dict):
+            raise ValueError("scrapling pricing_context must be a mapping")
+        fields_raw = pricing_context_raw.get("fields", {})
+        constants_raw = pricing_context_raw.get("constants", {})
+        if not isinstance(fields_raw, dict):
+            raise ValueError("scrapling pricing_context fields must be a mapping")
+        if not isinstance(constants_raw, dict):
+            raise ValueError(
+                "scrapling pricing_context constants must be a mapping"
+            )
+        pricing_context = PricingContextMapping(
+            fields={
+                str(key).strip(): str(value).strip()
+                for key, value in fields_raw.items()
+                if str(key).strip() and str(value).strip()
+            },
+            constants={
+                str(key).strip(): value
+                for key, value in constants_raw.items()
+                if str(key).strip()
+            },
+        )
+
     return ScraplingProfile(
         url=profile["url"],
         tier=profile.get("tier", "http"),
         css=css,
         attr_json=attr_json,
         text_regex=text_regex,
+        pricing_context=pricing_context,
         json_script_selector=profile.get("json_script_selector"),
         json_vehicles_path=profile.get("json_vehicles_path"),
         headless=profile.get("headless", True),
