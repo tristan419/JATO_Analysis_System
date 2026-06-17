@@ -314,6 +314,15 @@ function MetricCard({
   );
 }
 
+function MatchMetaItem({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div style={matchMetaItemStyle}>
+      <span style={{ color: "#64748b", fontSize: 11, fontWeight: 700 }}>{label}</span>
+      <strong style={matchMetaValueStyle}>{value}</strong>
+    </div>
+  );
+}
+
 export function CocMatchPage() {
   const [activeMode, setActiveMode] = useState<CocWorkspaceMode>("fill");
   const [controlOpen, setControlOpen] = useState(true);
@@ -829,9 +838,6 @@ export function CocMatchPage() {
             管理 COC 文件比对，并从 WVTA 关联表回填发运清单的 WVTA / COC 编号。
           </p>
         </div>
-        <button className="btn btn-secondary" type="button" onClick={() => setControlOpen(true)}>
-          打开控制
-        </button>
       </header>
 
       {activeMode === "match" && matchError ? (
@@ -977,31 +983,45 @@ export function CocMatchPage() {
   function renderMatchSummary(job: CocMatchJob) {
     const running = job.status !== "success" && job.status !== "failed";
     return (
-      <div style={{ display: "grid", gap: 12 }}>
-        <div style={metricsGridStyle}>
+      <div style={matchSummaryBodyStyle}>
+        <div style={matchMetricsGridStyle}>
           <MetricCard label="总行数" value={job.totalRows ?? "-"} />
           <MetricCard label="匹配" value={job.matchedCount ?? "-"} tone="success" />
           <MetricCard label="缺失" value={job.missingCount ?? "-"} tone="danger" />
           <MetricCard label="覆盖率" value={job.coverageRate != null ? `${job.coverageRate}%` : "-"} tone="info" />
         </div>
-        <div style={{ color: "#64748b", fontSize: 13 }}>
-          {running ? "任务正在处理。" : `差异类型：${cocDifferenceLabel(job.differenceType)}`}
-        </div>
-        {job.status === "success" ? (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="btn btn-sm btn-primary" type="button" disabled={reportAction !== null} onClick={() => void handleOpenReport(job.jobId)}>
-              {reportAction === `${job.jobId}:view` ? "打开中..." : "查看报告"}
-            </button>
-            <button className="btn btn-sm btn-secondary" type="button" disabled={reportAction !== null} onClick={() => void handleDownloadReport(job.jobId)}>
-              {reportAction === `${job.jobId}:download` ? "下载中..." : "下载报告"}
-            </button>
+        <div style={matchDetailStyle}>
+          <div style={matchDetailHeaderStyle}>
+            <strong>当前任务</strong>
+            <span style={{ color: statusColor(job.status), fontWeight: 700 }}>{statusLabel(job.status)}</span>
           </div>
-        ) : null}
-        {job.status === "failed" ? (
-          <button className="btn btn-sm btn-danger" type="button" onClick={() => void handleRetryMatch(job.jobId)}>
-            重试
-          </button>
-        ) : null}
+          <div style={matchMetaGridStyle}>
+            <MatchMetaItem label="国家 / 月份" value={`${job.country || "-"} / ${job.month || "-"}`} />
+            <MatchMetaItem label="文件类型" value={(job.fileExt || "-").replace(".", "").toUpperCase()} />
+            <MatchMetaItem label="差异类型" value={running ? "处理中" : cocDifferenceLabel(job.differenceType)} />
+            <MatchMetaItem label="压缩包多余" value={job.extraFileCount ?? "-"} />
+            <MatchMetaItem label="Excel" value={job.excelFilename || "-"} />
+            <MatchMetaItem label="文件包" value={job.archiveFilename || "-"} />
+          </div>
+          <div style={matchActionRowStyle}>
+            {job.status === "success" ? (
+              <>
+                <button className="btn btn-sm btn-primary" type="button" disabled={reportAction !== null} onClick={() => void handleOpenReport(job.jobId)}>
+                  {reportAction === `${job.jobId}:view` ? "打开中..." : "查看报告"}
+                </button>
+                <button className="btn btn-sm btn-secondary" type="button" disabled={reportAction !== null} onClick={() => void handleDownloadReport(job.jobId)}>
+                  {reportAction === `${job.jobId}:download` ? "下载中..." : "下载报告"}
+                </button>
+              </>
+            ) : null}
+            {job.status === "failed" ? (
+              <button className="btn btn-sm btn-danger" type="button" onClick={() => void handleRetryMatch(job.jobId)}>
+                重试
+              </button>
+            ) : null}
+            <span style={hintStyle}>创建时间 {formatTs(job.createdAt)}</span>
+          </div>
+        </div>
       </div>
     );
   }
@@ -1503,6 +1523,67 @@ const metricsGridStyle: CSSProperties = {
   gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))",
   gap: 8,
   padding: 12,
+};
+
+const matchSummaryBodyStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+  gap: 12,
+  padding: 12,
+  alignItems: "stretch",
+};
+
+const matchMetricsGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 8,
+  alignContent: "start",
+};
+
+const matchDetailStyle: CSSProperties = {
+  display: "grid",
+  gap: 10,
+  minWidth: 0,
+  padding: 12,
+  border: "1px solid #e2e8f0",
+  borderRadius: 6,
+  background: "#f8fafc",
+};
+
+const matchDetailHeaderStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 10,
+  color: "#111827",
+};
+
+const matchMetaGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(138px, 1fr))",
+  gap: 8,
+};
+
+const matchMetaItemStyle: CSSProperties = {
+  display: "grid",
+  gap: 3,
+  minWidth: 0,
+};
+
+const matchMetaValueStyle: CSSProperties = {
+  color: "#111827",
+  fontSize: 13,
+  lineHeight: 1.35,
+  minWidth: 0,
+  overflowWrap: "anywhere",
+};
+
+const matchActionRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
+  paddingTop: 2,
 };
 
 const metricCardStyle: CSSProperties = {
