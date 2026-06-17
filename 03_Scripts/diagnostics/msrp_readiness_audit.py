@@ -472,6 +472,8 @@ def build_readiness_report(
     )
     script_covers_full_pipeline = _test_file_has(
         "pipelineWrapper",
+        "test_pipeline_fails_before_dryrun_when_config_source_sync_fails",
+        "engineering_config_source_sync",
         "test_pipeline_runs_ingest_when_dryrun_gate_is_allowed",
         "test_pipeline_skips_ingest_when_dryrun_gate_blocks",
         "msrp_pipeline",
@@ -789,6 +791,7 @@ def build_readiness_report(
                 "script": "03_Scripts/run_msrp_pipeline.sh",
                 "statusPipelineId": "msrp_pipeline",
                 "phases": [
+                    "official_config_source_sync",
                     "dryrun",
                     "gate",
                     "ingest",
@@ -801,9 +804,10 @@ def build_readiness_report(
                 TEST_EVIDENCE["pipelineWrapper"],
             ],
             note=(
-                "Runs dryrun and only proceeds to ingest when the v3 dryrun "
-                "gate allows it; ingest reuses auto-review/materialize and "
-                "snapshot/readiness refresh from the low-concurrency runner."
+                "Runs official config source sync first, then dryrun and only "
+                "proceeds to ingest when the v3 dryrun gate allows it; ingest "
+                "reuses auto-review/materialize and snapshot/readiness refresh "
+                "from the low-concurrency runner."
             ),
         ),
         _requirement(

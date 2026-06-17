@@ -4,14 +4,18 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 RUNNER="${JATO_MSRP_RUNNER:-$SCRIPT_DIR/run_msrp_low_concurrency.sh}"
+CONFIG_SOURCE_SYNC="${JATO_CONFIG_SOURCE_SYNC:-$SCRIPT_DIR/engineering_config_source_sync.py}"
 PYTHON_BIN="${JATO_MSRP_PYTHON:-$REPO_DIR/.venv/bin/python}"
 if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="$(command -v python3 || true)"
 fi
 
 COUNTRIES_RAW="${JATO_MSRP_PIPELINE_COUNTRIES:-${JATO_MSRP_COUNTRIES:-batch_a}}"
+CONFIG_SOURCE_SYNC_COUNTRIES="${JATO_CONFIG_SOURCE_SYNC_COUNTRIES:-se,fi,no,dk}"
+CONFIG_SOURCE_SYNC_SAMPLE_PER_COUNTRY="${JATO_CONFIG_SOURCE_SYNC_SAMPLE_PER_COUNTRY:-1}"
 MIN_DRYRUN_PASS_PCT="${JATO_MSRP_MIN_DRYRUN_PASS_PCT:-70}"
 DRYRUN_REPORT="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_report.json"
+CONFIG_SOURCE_SYNC_STATUS="$REPO_DIR/hermes/reports/pipeline_status/engineering_config_source_sync.json"
 STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
 is_truthy() {
@@ -53,6 +57,9 @@ artifact_refs = [
     "03_Scripts/diagnostics/artifacts/dryrun_report.json",
     "03_Scripts/diagnostics/artifacts/dryrun_runs_index.json",
     "03_Scripts/logs/scheduled_fetch_status.json",
+    "hermes/reports/engineering_config_source_sync.json",
+    "hermes/reports/engineering_config_source_sync.md",
+    "hermes/reports/pipeline_status/engineering_config_source_sync.json",
     "hermes/reports/msrp_current_price_snapshot.json",
     "hermes/reports/msrp_readiness_audit.json",
 ]
@@ -79,6 +86,11 @@ try:
 except (OSError, json.JSONDecodeError):
     report_payload = {}
 summary = report_payload.get("summary") if isinstance(report_payload.get("summary"), dict) else {}
+config_status_path = repo / "hermes" / "reports" / "pipeline_status" / "engineering_config_source_sync.json"
+try:
+    config_payload = json.loads(config_status_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    config_payload = {}
 pipeline_status = "failed" if status in {"failed", "failure", "error"} else status
 record = {
     "pipelineId": "msrp_pipeline",
@@ -101,6 +113,8 @@ record = {
         "dryrunGateStatus": summary.get("gateStatus"),
         "dryrunPassPct": summary.get("passPct"),
         "dryrunGateThreshold": summary.get("gateThreshold"),
+        "configSourceSyncStatus": config_payload.get("status"),
+        "configSourceSyncPipelineId": config_payload.get("pipelineId"),
     },
 }
 status_dir = repo / "hermes" / "reports" / "pipeline_status"
@@ -136,6 +150,37 @@ print("|".join([
 PY
 }
 
+run_config_source_sync() {
+  if is_truthy "${JATO_MSRP_PIPELINE_SKIP_CONFIG_SYNC:-false}"; then
+    echo "[PIPELINE] Phase 1/3: official config source sync skipped by JATO_MSRP_PIPELINE_SKIP_CONFIG_SYNC"
+    return 0
+  fi
+  if [[ ! -f "$CONFIG_SOURCE_SYNC" ]]; then
+    echo "[ERROR] Config source sync script not found: $CONFIG_SOURCE_SYNC" >&2
+    return 1
+  fi
+
+  local -a stage_args=()
+  if is_truthy "${JATO_CONFIG_SOURCE_SYNC_STAGE_SMOKE:-true}"; then
+    stage_args+=(
+      --artifact-root
+      "$REPO_DIR/03_Scripts/diagnostics/artifacts/engineering_config_source_sync_stage"
+    )
+  else
+    stage_args+=(--no-stage-smoke)
+  fi
+
+  echo "[PIPELINE] Phase 1/3: official config source sync"
+  "$PYTHON_BIN" "$CONFIG_SOURCE_SYNC" \
+    --repo-root "$REPO_DIR" \
+    --required-countries "$CONFIG_SOURCE_SYNC_COUNTRIES" \
+    --sample-per-country "$CONFIG_SOURCE_SYNC_SAMPLE_PER_COUNTRY" \
+    --out-dir "$REPO_DIR/hermes/reports" \
+    --write-status \
+    --strict \
+    "${stage_args[@]}" >/dev/null
+}
+
 if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
   echo "[ERROR] Python executable not found." >&2
   exit 1
@@ -148,19 +193,25 @@ fi
 echo "[INFO] MSRP full pipeline"
 echo "[INFO] Repo: $REPO_DIR"
 echo "[INFO] Runner: $RUNNER"
+echo "[INFO] Config source sync: $CONFIG_SOURCE_SYNC"
 echo "[INFO] Countries: $COUNTRIES_RAW"
 echo "[INFO] Dryrun gate threshold: $MIN_DRYRUN_PASS_PCT%"
 
 write_pipeline_status "running" "MSRP full pipeline started" 0 "started"
 
+if ! run_config_source_sync; then
+  write_pipeline_status "failed" "Official config source sync failed" 1 "config_source_sync"
+  exit 1
+fi
+
 if ! is_truthy "${JATO_MSRP_PIPELINE_SKIP_DRYRUN:-false}"; then
-  echo "[PIPELINE] Phase 1/2: dryrun"
+  echo "[PIPELINE] Phase 2/3: dryrun"
   if ! JATO_MSRP_MODE=dryrun JATO_MSRP_COUNTRIES="$COUNTRIES_RAW" "$RUNNER"; then
     write_pipeline_status "failed" "Dryrun phase failed" 1 "dryrun"
     exit 1
   fi
 else
-  echo "[PIPELINE] Phase 1/2: dryrun skipped by JATO_MSRP_PIPELINE_SKIP_DRYRUN"
+  echo "[PIPELINE] Phase 2/3: dryrun skipped by JATO_MSRP_PIPELINE_SKIP_DRYRUN"
 fi
 
 if [[ ! -f "$DRYRUN_REPORT" ]]; then
@@ -188,7 +239,7 @@ if is_truthy "${JATO_MSRP_PIPELINE_SKIP_INGEST:-false}"; then
   exit 0
 fi
 
-echo "[PIPELINE] Phase 2/2: ingest"
+echo "[PIPELINE] Phase 3/3: ingest"
 if ! JATO_MSRP_MODE=ingest JATO_MSRP_COUNTRIES="$COUNTRIES_RAW" "$RUNNER"; then
   write_pipeline_status "failed" "Ingest phase failed" 1 "ingest"
   exit 1
