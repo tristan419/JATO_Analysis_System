@@ -439,6 +439,12 @@ def build_readiness_report(
         "test_build_multi_source_reconciliation_flags_source_conflict",
         "conflict",
     )
+    service_covers_auto_review_scoring = _test_file_has(
+        "workflowService",
+        "test_msrp_auto_review_score_uses_weighted_rules_and_model_guidance",
+        "msrp_auto_review_score_v1",
+        "not_recommended_until_labeled_corpus",
+    )
     snapshot_script_covered = _test_file_has(
         "snapshotScript",
         "msrp_current_price_snapshot_v1",
@@ -595,6 +601,25 @@ def build_readiness_report(
                 TEST_EVIDENCE["workflowService"],
             ],
             note="Read-only audit does not queue review cases; write smoke covers the queue path.",
+        ),
+        _requirement(
+            key="auto_review_scoring",
+            title="Automatic MSRP observation scoring",
+            status=_status(service_covers_auto_review_scoring),
+            runtime={
+                "schemaVersion": "msrp_auto_review_score_v1",
+                "method": "deterministic_weighted_rules",
+                "modelAssistance": {
+                    "llmFit": "conditional",
+                    "neuralNetworkFit": "not_recommended_until_labeled_corpus",
+                },
+            },
+            evidence=[TEST_EVIDENCE["workflowService"]],
+            note=(
+                "Ingest adds weighted deterministic auto-review evidence to "
+                "match_reason_json and only uses LLM/neural assistance as a "
+                "governed recommendation."
+            ),
         ),
         _requirement(
             key="sales_effectiveness",

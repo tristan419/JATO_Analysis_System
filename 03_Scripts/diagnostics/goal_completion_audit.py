@@ -84,6 +84,7 @@ REQUIRED_MSRP_REQUIREMENT_KEYS = (
     "price_history",
     "price_alerts",
     "review_queue",
+    "auto_review_scoring",
     "sales_effectiveness",
     "finance_monthly_lease_subsidy_net",
     "multi_source_reconciliation",

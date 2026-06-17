@@ -133,7 +133,7 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
 
     assert report["schemaVersion"] == audit_module.SCHEMA_VERSION
     assert report["status"] == "passed"
-    assert report["summary"]["statusCounts"] == {"passed": 13}
+    assert report["summary"]["statusCounts"] == {"passed": 14}
     requirements = {
         item["key"]: item
         for item in report["requirements"]
@@ -141,7 +141,10 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
     assert requirements["official_msrp_ingest_auth"]["runtime"]["role"] == "editor"
     assert requirements["weekly_snapshot"]["runtime"]["snapshotWeek"] == "2026-W24"
     assert requirements["sales_effectiveness"]["runtime"]["labelCounts"] == {"positive": 1}
-    assert requirements["finance_monthly_lease_subsidy_net"]["runtime"]["financeObservationCount"] == 1
+    auto_review_runtime = requirements["auto_review_scoring"]["runtime"]
+    finance_runtime = requirements["finance_monthly_lease_subsidy_net"]["runtime"]
+    assert auto_review_runtime["schemaVersion"] == "msrp_auto_review_score_v1"
+    assert finance_runtime["financeObservationCount"] == 1
     assert requirements["multi_source_reconciliation"]["runtime"]["statusCounts"]["conflict"] == 1
 
 
@@ -195,7 +198,7 @@ def test_main_prints_json_report(capsys, monkeypatch) -> None:
     payload = json.loads(captured.out)
     assert exit_code == 0
     assert payload["status"] == "passed"
-    assert payload["summary"]["requirementCount"] == 13
+    assert payload["summary"]["requirementCount"] == 14
 
 
 def test_write_outputs_creates_latest_and_historical_artifacts(tmp_path: Path) -> None:

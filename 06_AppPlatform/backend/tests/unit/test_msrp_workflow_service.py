@@ -176,6 +176,111 @@ def _make_finance_observation(
     )
 
 
+def test_msrp_auto_review_score_uses_weighted_rules_and_model_guidance() -> None:
+    source = SimpleNamespace(
+        source_url="https://example.test/registry/xc60",
+        source_type="official_configurator",
+        extractor_name="scrapling_web",
+        extractor_version="v2",
+        price_semantics="base_msrp",
+    )
+    payload = {
+        "country": "瑞典",
+        "brand": "Volvo",
+        "jato_model": "XC60",
+        "jato_trim": "Ultra",
+        "jato_powertrain": "PHEV",
+        "official_model": "XC60 Recharge",
+        "official_trim": "Ultra",
+        "official_powertrain": "PHEV",
+        "price_label": "List price incl VAT",
+        "source_url": "https://example.test/xc60",
+        "source_snapshot_path": "snapshots/xc60.json",
+        "price_semantics": "base_msrp",
+        "autoReviewWeights": {
+            "match_confidence": 2,
+            "identity_alignment": 1,
+            "price_integrity": 1,
+            "source_traceability": 1,
+            "semantic_alignment": 1,
+            "finance_completeness": 1,
+        },
+    }
+
+    auto_review = msrp_workflow_service._build_msrp_auto_review_score(
+        payload,
+        source,
+        source_msrp_value=773000,
+        source_currency="SEK",
+        match_confidence=0.96,
+    )
+
+    assert auto_review["schemaVersion"] == "msrp_auto_review_score_v1"
+    assert auto_review["method"] == "deterministic_weighted_rules"
+    assert auto_review["score"] >= 85
+    assert (
+        auto_review["weights"]["match_confidence"]
+        > auto_review["weights"]["identity_alignment"]
+    )
+    assert auto_review["hardBlockers"] == []
+    assert auto_review["modelAssistance"]["preferred"] == "deterministic_rules"
+    assert auto_review["modelAssistance"]["llmFit"] == "low"
+    assert (
+        auto_review["modelAssistance"]["neuralNetworkFit"]
+        == "not_recommended_until_labeled_corpus"
+    )
+    assert (
+        msrp_workflow_service._auto_review_adjusted_match_status(
+            "auto_accepted",
+            auto_review,
+            0.96,
+        )
+        == "auto_accepted"
+    )
+
+
+def test_msrp_auto_review_downgrades_low_score_auto_accept() -> None:
+    source = SimpleNamespace(
+        source_url="",
+        source_type="forum",
+        extractor_name="",
+        extractor_version="",
+        price_semantics="base_msrp",
+    )
+    payload = {
+        "country": "瑞典",
+        "brand": "Volvo",
+        "jato_model": "XC60",
+        "jato_trim": "Ultra",
+        "official_model": "Different model",
+        "official_trim": "Unknown",
+        "price_label": "Monthly payment",
+        "source_url": "",
+        "price_semantics": "base_msrp",
+    }
+
+    auto_review = msrp_workflow_service._build_msrp_auto_review_score(
+        payload,
+        source,
+        source_msrp_value=0,
+        source_currency="",
+        match_confidence=0.21,
+    )
+
+    assert auto_review["scoreBand"] == "low"
+    assert "invalid_price" in auto_review["hardBlockers"]
+    assert "missing_source_url" in auto_review["hardBlockers"]
+    assert auto_review["modelAssistance"]["preferred"] == "rule_based_source_repair"
+    assert (
+        msrp_workflow_service._auto_review_adjusted_match_status(
+            "auto_accepted",
+            auto_review,
+            0.21,
+        )
+        == "review_required"
+    )
+
+
 def test_list_price_history_returns_empty_when_table_is_missing(
     monkeypatch,
 ) -> None:
@@ -520,6 +625,12 @@ def test_create_scrape_batch_ingest_persists_finance_observations(
     assert result["nonMsrpPriceObservationCount"] == 1
     assert captured["items"][0].price_semantics == "lease_monthly"
     assert captured["items"][0].monthly_payment_eur == 599.0
+    auto_review = result["sampleObservations"][0]["matchReason"]["autoReview"]
+    assert auto_review["schemaVersion"] == "msrp_auto_review_score_v1"
+    assert auto_review["finalMatchStatus"] == "auto_accepted"
+    assert auto_review["modelAssistance"]["neuralNetworkFit"] == (
+        "not_recommended_until_labeled_corpus"
+    )
 
 
 def test_payload_price_semantics_uses_explicit_observation_semantics_only() -> None:
