@@ -228,31 +228,31 @@ export function LeaseComparisonPage() {
       >
         <div className="crud-toolbar-grid">
           <div className="filter-group">
-            <label>Country</label>
-            <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)}>
+            <label htmlFor="lease-filter-country">Country</label>
+            <select id="lease-filter-country" value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)}>
               <option value="">All Countries</option>
               <option value="SE">Sweden</option><option value="NO">Norway</option><option value="DK">Denmark</option>
               <option value="FI">Finland</option><option value="DE">Germany</option><option value="NL">Netherlands</option>
             </select>
           </div>
           <div className="filter-group">
-            <label>Brand</label>
-            <input value={brandFilter} onChange={(event) => setBrandFilter(event.target.value)} placeholder="e.g. Volvo / BMW" />
+            <label htmlFor="lease-filter-brand">Brand</label>
+            <input id="lease-filter-brand" value={brandFilter} onChange={(event) => setBrandFilter(event.target.value)} placeholder="e.g. Volvo / BMW" />
           </div>
           <div className="filter-group">
-            <label>Model</label>
-            <input value={modelFilter} onChange={(event) => setModelFilter(event.target.value)} placeholder="e.g. XC60 / iX1" />
+            <label htmlFor="lease-filter-model">Model</label>
+            <input id="lease-filter-model" value={modelFilter} onChange={(event) => setModelFilter(event.target.value)} placeholder="e.g. XC60 / iX1" />
           </div>
           <div className="filter-group">
-            <label>Lease type</label>
-            <select value={leaseTypeFilter} onChange={(e) => setLeaseTypeFilter(e.target.value)}>
+            <label htmlFor="lease-filter-lease-type">Lease type</label>
+            <select id="lease-filter-lease-type" value={leaseTypeFilter} onChange={(e) => setLeaseTypeFilter(e.target.value)}>
               <option value="">All Types</option>
               {LEASE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div className="filter-group">
-            <label>Official finance type</label>
-            <input value={financeTypeFilter} onChange={(event) => setFinanceTypeFilter(event.target.value)} placeholder="private_lease / finance" />
+            <label htmlFor="lease-filter-finance-type">Official finance type</label>
+            <input id="lease-filter-finance-type" value={financeTypeFilter} onChange={(event) => setFinanceTypeFilter(event.target.value)} placeholder="private_lease / finance" />
           </div>
         </div>
       </DeckFloatingDrawer>
