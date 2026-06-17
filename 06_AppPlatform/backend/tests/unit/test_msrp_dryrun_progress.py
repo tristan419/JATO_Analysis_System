@@ -28,6 +28,10 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
             "status": "success",
             "gateThreshold": 70,
             "gateStatus": "allowed",
+            "financeObservationCandidates": 1,
+            "financeMonthlyPaymentCount": 1,
+            "financeSemanticsCounts": {"lease_monthly": 1},
+            "financeTypeCounts": {"private_lease": 1},
         },
         "countriesDetail": [
             {
@@ -41,6 +45,10 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
                 "status": "success",
                 "failureBreakdown": {},
                 "strategyRecommendations": {},
+                "financeObservationCandidates": 1,
+                "financeMonthlyPaymentCount": 1,
+                "financeSemanticsCounts": {"lease_monthly": 1},
+                "financeTypeCounts": {"private_lease": 1},
                 "sources": [
                     {
                         "country": "se",
@@ -54,6 +62,10 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
                         "sourceUrl": "https://www.volvocars.com/se/build/xc60-hybrid/",
                         "finalUrl": "https://www.volvocars.com/se/build/xc60-hybrid/",
                         "httpStatus": 0,
+                        "financeObservationCandidates": 1,
+                        "financeMonthlyPaymentCount": 1,
+                        "financeSemanticsCounts": {"lease_monthly": 1},
+                        "financeTypeCounts": {"private_lease": 1},
                     }
                 ],
             }
@@ -77,6 +89,8 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
                 "empty": 0,
                 "fail": 0,
                 "errors": 0,
+                "financeObservationCandidates": 1,
+                "financeMonthlyPaymentCount": 1,
                 "artifactPath": str(artifacts / "dryrun_report_msrp-dryrun-20260611-120000.json"),
             }
         ],
@@ -101,8 +115,15 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
     assert dashboard["current"]["countries"][0]["sources"][0]["sourceUrl"] == "https://www.volvocars.com/se/build/xc60-hybrid/"
     assert dashboard["current"]["countries"][0]["sources"][0]["finalUrl"] == "https://www.volvocars.com/se/build/xc60-hybrid/"
     assert dashboard["current"]["countries"][0]["sources"][0]["httpStatus"] == 0
+    assert dashboard["current"]["financeObservationCandidates"] == 1
+    assert dashboard["current"]["financeMonthlyPaymentCount"] == 1
+    assert dashboard["current"]["countries"][0]["financeSemanticsCounts"] == {"lease_monthly": 1}
+    assert dashboard["current"]["countries"][0]["sources"][0]["financeMonthlyPaymentCount"] == 1
     assert dashboard["history"][0]["runId"] == "msrp-dryrun-20260611-120000"
+    assert dashboard["history"][0]["financeObservationCandidates"] == 1
+    assert dashboard["history"][0]["financeMonthlyPaymentCount"] == 1
     assert [country["countryCode"] for country in dashboard["allCountries"]] == ["se"]
+    assert dashboard["allCountries"][0]["financeMonthlyPaymentCount"] == 1
     assert dashboard["stableCoverage"]["countryCount"] == 1
     assert dashboard["stableCoverage"]["readyCountryCount"] == 1
     assert dashboard["stableCoverage"]["latestRunId"] == "msrp-dryrun-20260611-120000"
@@ -110,6 +131,8 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
     assert dashboard["stableCoverage"]["sourceCount"] == 1
     assert dashboard["stableCoverage"]["readySourceCount"] == 1
     assert dashboard["stableCoverage"]["sourcePassRate"] == 100.0
+    assert dashboard["stableCoverage"]["financeObservationCandidates"] == 1
+    assert dashboard["stableCoverage"]["financeMonthlyPaymentCount"] == 1
 
 
 def test_dashboard_exposes_latest_progress_for_all_historical_countries(tmp_path, monkeypatch):

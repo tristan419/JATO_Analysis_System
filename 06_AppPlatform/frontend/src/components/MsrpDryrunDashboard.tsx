@@ -17,6 +17,10 @@ interface DryrunSource {
   sourceUrl?: string;
   finalUrl?: string;
   httpStatus?: number | string;
+  financeObservationCandidates?: number;
+  financeMonthlyPaymentCount?: number;
+  financeSemanticsCounts?: Record<string, number>;
+  financeTypeCounts?: Record<string, number>;
 }
 
 interface DryrunCountry {
@@ -33,6 +37,10 @@ interface DryrunCountry {
   topFailureReason?: string;
   failureBreakdown?: Record<string, number>;
   strategyRecommendations?: Record<string, number>;
+  financeObservationCandidates?: number;
+  financeMonthlyPaymentCount?: number;
+  financeSemanticsCounts?: Record<string, number>;
+  financeTypeCounts?: Record<string, number>;
   runId?: string;
   batch?: string;
   timestamp?: string;
@@ -63,6 +71,10 @@ interface DryrunCurrent {
   totalEmpty: number;
   totalFail: number;
   overallPassRate: number;
+  financeObservationCandidates?: number;
+  financeMonthlyPaymentCount?: number;
+  financeSemanticsCounts?: Record<string, number>;
+  financeTypeCounts?: Record<string, number>;
   recentResults: DryrunSource[];
   reason?: string;
 }
@@ -75,6 +87,10 @@ interface DryrunHistoryCountry {
   empty: number;
   fail: number;
   passRate: number;
+  financeObservationCandidates?: number;
+  financeMonthlyPaymentCount?: number;
+  financeSemanticsCounts?: Record<string, number>;
+  financeTypeCounts?: Record<string, number>;
 }
 
 interface DryrunHistoryRun {
@@ -87,6 +103,8 @@ interface DryrunHistoryRun {
   fail: number;
   errors: number;
   passRate: number;
+  financeObservationCandidates?: number;
+  financeMonthlyPaymentCount?: number;
   timestamp: string;
   file: string;
   gateStatus?: string;
@@ -102,6 +120,10 @@ interface StableCoverage {
   stablePassRate: number;
   totalSources: number;
   totalPass: number;
+  financeObservationCandidates?: number;
+  financeMonthlyPaymentCount?: number;
+  financeSemanticsCounts?: Record<string, number>;
+  financeTypeCounts?: Record<string, number>;
   sourceRowsObserved: number;
   sourceCount: number;
   readySourceCount: number;
@@ -157,6 +179,22 @@ function formatTime(iso?: string): string {
 function formatElapsed(s: number): string {
   if (s < 60) return `${s.toFixed(0)}s`;
   return `${(s / 60).toFixed(1)}m`;
+}
+
+function hasFinanceCoverage(item: {
+  financeObservationCandidates?: number;
+  financeMonthlyPaymentCount?: number;
+}): boolean {
+  return Boolean((item.financeObservationCandidates ?? 0) > 0 || (item.financeMonthlyPaymentCount ?? 0) > 0);
+}
+
+function financeCoverageLabel(item: {
+  financeObservationCandidates?: number;
+  financeMonthlyPaymentCount?: number;
+}): string {
+  const candidates = item.financeObservationCandidates ?? 0;
+  const monthly = item.financeMonthlyPaymentCount ?? 0;
+  return monthly > 0 ? `${monthly} monthly · ${candidates} finance` : `${candidates} finance`;
 }
 
 function sourceFailureTitle(source: DryrunSource): string | undefined {
@@ -217,6 +255,11 @@ function CountryProgressChip({
       <span className="dryrun-country-chip-nums">
         {country.pass}/{country.total} pass · {country.empty} empty · {country.fail} fail
       </span>
+      {hasFinanceCoverage(country) && (
+        <span className="dryrun-country-chip-nums">
+          {financeCoverageLabel(country)}
+        </span>
+      )}
       {showRunMeta && (
         <span className="dryrun-country-chip-nums dryrun-country-run-meta">
           {country.isLatestRun ? "Latest run" : "Historical latest"} · {country.batch || country.runId || "-"}
@@ -261,6 +304,9 @@ function CountryProgressChip({
                   </span>
                   {source.failureReason && (
                     <span className="dryrun-source-elapsed" title={sourceFailureTitle(source)}>{source.failureReason}</span>
+                  )}
+                  {hasFinanceCoverage(source) && (
+                    <span className="dryrun-source-elapsed">{financeCoverageLabel(source)}</span>
                   )}
                   <span className="dryrun-source-elapsed">{formatElapsed(source.elapsedSeconds)}</span>
                 </div>
@@ -374,6 +420,9 @@ export function MsrpDryrunDashboard() {
             <span className="is-empty"><strong>{current.totalEmpty}</strong> empty</span>
             <span className="is-fail"><strong>{current.totalFail}</strong> fail</span>
             <span><strong>{current.overallPassRate}%</strong> rate</span>
+            {hasFinanceCoverage(current) && (
+              <span><strong>{current.financeMonthlyPaymentCount ?? 0}</strong> monthly · {current.financeObservationCandidates ?? 0} finance</span>
+            )}
           </div>
           <div className="dryrun-overall-meta">
             {current.runId && <span>Run: {current.runId}</span>}
@@ -392,6 +441,11 @@ export function MsrpDryrunDashboard() {
               {stableCoverage.sourceCount > 0 && (
                 <span>
                   Sources: <strong>{stableCoverage.readySourceCount}/{stableCoverage.sourceCount}</strong> pass · {stableCoverage.sourcePassRate}%
+                </span>
+              )}
+              {hasFinanceCoverage(stableCoverage) && (
+                <span>
+                  Finance: <strong>{stableCoverage.financeMonthlyPaymentCount ?? 0}</strong> monthly · {stableCoverage.financeObservationCandidates ?? 0} candidates
                 </span>
               )}
               {stableCoverage.topFailureReasons.length > 0 && (
@@ -465,6 +519,7 @@ export function MsrpDryrunDashboard() {
                   <th>Pass</th>
                   <th>Empty</th>
                   <th>Fail</th>
+                  <th>Monthly</th>
                   <th>Rate</th>
                 </tr>
               </thead>
@@ -488,11 +543,12 @@ export function MsrpDryrunDashboard() {
                       <td className="is-pass">{r.pass}</td>
                       <td className="is-empty">{r.empty}</td>
                       <td className="is-fail">{r.fail}</td>
+                      <td>{r.financeMonthlyPaymentCount ?? 0}</td>
                       <td><strong>{r.passRate}%</strong></td>
                     </tr>
                     {expandedHistory === r.file && r.countriesDetail && r.countriesDetail.length > 0 && (
                       <tr key={`${r.file}-detail`} className="dryrun-history-detail-row">
-                        <td colSpan={7}>
+                        <td colSpan={8}>
                           <div className="dryrun-history-detail-grid">
                             {r.countriesDetail.map((c) => (
                               <div key={c.countryCode} className="dryrun-history-country-chip">
@@ -503,6 +559,11 @@ export function MsrpDryrunDashboard() {
                                 <span className="dryrun-history-country-nums">
                                   {c.pass}/{c.total} pass · {c.empty} empty · {c.fail} fail
                                 </span>
+                                {hasFinanceCoverage(c) && (
+                                  <span className="dryrun-history-country-nums">
+                                    {financeCoverageLabel(c)}
+                                  </span>
+                                )}
                               </div>
                             ))}
                           </div>

@@ -252,6 +252,43 @@ def _strategy_recommendations(results: list[dict]) -> dict[str, int]:
     return recommendations
 
 
+def _int_value(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _merge_count_maps(results: list[dict], key: str) -> dict[str, int]:
+    merged: dict[str, int] = {}
+    for result in results:
+        value = result.get(key)
+        if not isinstance(value, dict):
+            continue
+        for name, count in value.items():
+            label = str(name or "").strip() or "unknown"
+            merged[label] = merged.get(label, 0) + _int_value(count)
+    return merged
+
+
+def _finance_summary_from_results(results: list[dict]) -> dict[str, object]:
+    return {
+        "financeObservationCandidates": sum(
+            _int_value(result.get("financeObservationCandidates"))
+            for result in results
+        ),
+        "financeMonthlyPaymentCount": sum(
+            _int_value(result.get("financeMonthlyPaymentCount"))
+            for result in results
+        ),
+        "financeSemanticsCounts": _merge_count_maps(
+            results,
+            "financeSemanticsCounts",
+        ),
+        "financeTypeCounts": _merge_count_maps(results, "financeTypeCounts"),
+    }
+
+
 def _result_is_error(result: dict) -> bool:
     return str(result.get("rawStatus") or result.get("status") or "").lower() in {"error", "exception"}
 
@@ -319,6 +356,7 @@ def _summary_from_results(results: list[dict]) -> dict:
         "status": _status_for_pass_pct(pass_pct),
         "failureBreakdown": _failure_breakdown(results),
         "strategyRecommendations": _strategy_recommendations(results),
+        **_finance_summary_from_results(results),
     }
 
 
@@ -358,6 +396,7 @@ def _country_detail_from_results(country: str, results: list[dict]) -> dict:
         "topFailureReason": top_reason,
         "failureBreakdown": failure_breakdown,
         "strategyRecommendations": summary["strategyRecommendations"],
+        **_finance_summary_from_results(results),
         "sources": [
             _normalize_source_for_v3(result, index, total)
             for index, result in enumerate(results, start=1)
@@ -420,6 +459,10 @@ def _build_dryrun_report_payload(
                 "topFailureReason": None,
                 "failureBreakdown": {},
                 "strategyRecommendations": {},
+                "financeObservationCandidates": 0,
+                "financeMonthlyPaymentCount": 0,
+                "financeSemanticsCounts": {},
+                "financeTypeCounts": {},
                 "sources": [],
                 "completed": False,
             })
@@ -449,6 +492,10 @@ def _build_dryrun_report_payload(
         "passPct": summary["passPct"],
         "failureBreakdown": summary["failureBreakdown"],
         "strategyRecommendations": summary["strategyRecommendations"],
+        "financeObservationCandidates": summary["financeObservationCandidates"],
+        "financeMonthlyPaymentCount": summary["financeMonthlyPaymentCount"],
+        "financeSemanticsCounts": summary["financeSemanticsCounts"],
+        "financeTypeCounts": summary["financeTypeCounts"],
     }
 
 
@@ -492,6 +539,8 @@ def _write_dryrun_runs_index(report: dict, latest_path: Path, history_path: Path
         "empty": summary.get("empty", 0),
         "fail": summary.get("fail", 0),
         "errors": summary.get("errors", 0),
+        "financeObservationCandidates": summary.get("financeObservationCandidates", 0),
+        "financeMonthlyPaymentCount": summary.get("financeMonthlyPaymentCount", 0),
         "expectedCountryCount": len(report.get("expectedCountries") or []),
         "observedCountryCount": len(report.get("observedCountries") or []),
         "missingCountryCount": len(report.get("missingCountries") or []),
@@ -575,6 +624,7 @@ def _write_dryrun_status(
             "status": status,
             "failureBreakdown": failure_breakdown,
             "strategyRecommendations": strategy_recs,
+            **_finance_summary_from_results(results or []),
             "results": results or [],
         }
         artifact_path = artifact_dir / f"{country}.json"
@@ -788,6 +838,11 @@ def main():
                 "extractorError",
                 "httpStatus",
                 "finalUrl",
+                "financeObservationCandidates",
+                "financeMonthlyPaymentCount",
+                "financeSemanticsCounts",
+                "financeTypeCounts",
+                "sampleFinanceContexts",
             ):
                 if key in src:
                     result_entry[key] = src[key]

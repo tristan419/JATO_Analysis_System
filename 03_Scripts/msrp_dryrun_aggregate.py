@@ -146,6 +146,11 @@ def _normalize_source_result(result: dict[str, Any], country_code: str) -> dict[
         "auditStatus",
         "attemptedStrategies",
         "winningStrategy",
+        "financeObservationCandidates",
+        "financeMonthlyPaymentCount",
+        "financeSemanticsCounts",
+        "financeTypeCounts",
+        "sampleFinanceContexts",
     ):
         value = result.get(key)
         if value not in (None, ""):
@@ -160,6 +165,43 @@ def _artifact_count(data: dict[str, Any], key: str, fallback: int) -> int:
     if isinstance(value, float):
         return int(value)
     return fallback
+
+
+def _int_value(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _merge_count_maps(results: list[dict], key: str) -> dict[str, int]:
+    merged: dict[str, int] = {}
+    for result in results:
+        value = result.get(key)
+        if not isinstance(value, dict):
+            continue
+        for name, count in value.items():
+            label = str(name or "").strip() or "unknown"
+            merged[label] = merged.get(label, 0) + _int_value(count)
+    return merged
+
+
+def _finance_summary_from_results(results: list[dict]) -> dict[str, object]:
+    return {
+        "financeObservationCandidates": sum(
+            _int_value(result.get("financeObservationCandidates"))
+            for result in results
+        ),
+        "financeMonthlyPaymentCount": sum(
+            _int_value(result.get("financeMonthlyPaymentCount"))
+            for result in results
+        ),
+        "financeSemanticsCounts": _merge_count_maps(
+            results,
+            "financeSemanticsCounts",
+        ),
+        "financeTypeCounts": _merge_count_maps(results, "financeTypeCounts"),
+    }
 
 
 def _compute_summary(artifacts: dict[str, dict], results: list[dict]) -> dict:
@@ -211,6 +253,7 @@ def _compute_summary(artifacts: dict[str, dict], results: list[dict]) -> dict:
         "status": _status_for_pass_pct(pass_pct),
         "failureBreakdown": failure_breakdown,
         "strategyRecommendations": strategy_recs,
+        **_finance_summary_from_results(results),
     }
 
 
@@ -231,6 +274,10 @@ def _build_countries_detail(
                 "total": 0, "pass": 0, "empty": 0, "fail": 0, "errors": 0,
                 "passPct": 0.0, "status": "missing",
                 "failureBreakdown": {}, "strategyRecommendations": {},
+                "financeObservationCandidates": 0,
+                "financeMonthlyPaymentCount": 0,
+                "financeSemanticsCounts": {},
+                "financeTypeCounts": {},
                 "sources": [],
                 "completed": False,
             })
@@ -282,6 +329,7 @@ def _build_countries_detail(
             "topFailureReason": top_reason,
             "failureBreakdown": d_fb,
             "strategyRecommendations": d_sr,
+            **_finance_summary_from_results(d_results),
             "sources": sources,
             "completed": True,
         })
@@ -687,6 +735,8 @@ def run(
             "empty": summary.get("empty", 0),
             "fail": summary.get("fail", 0),
             "errors": summary.get("errors", 0),
+            "financeObservationCandidates": summary.get("financeObservationCandidates", 0),
+            "financeMonthlyPaymentCount": summary.get("financeMonthlyPaymentCount", 0),
             "expectedCountryCount": len(expected_countries_sorted),
             "observedCountryCount": len(artifacts),
             "missingCountryCount": len(missing),

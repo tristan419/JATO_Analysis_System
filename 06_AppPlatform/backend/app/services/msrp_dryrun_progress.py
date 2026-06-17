@@ -73,6 +73,13 @@ def _source_valid_count(source: dict[str, Any]) -> int:
         return 0
 
 
+def _int_value(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _source_is_pass(source: dict[str, Any]) -> bool:
     status = _source_status_value(source)
     return _source_valid_count(source) > 0 and not source.get("failureReason") and status not in {"empty", "error", "exception"}
@@ -173,7 +180,18 @@ def _normalize_source(source: dict[str, Any], index: int, total: int) -> dict[st
         "recommendedStrategy": source.get("recommendedStrategy"),
         "severity": source.get("severity"),
     }
-    for key in ("error", "extractorError", "sourceUrl", "httpStatus", "finalUrl"):
+    for key in (
+        "error",
+        "extractorError",
+        "sourceUrl",
+        "httpStatus",
+        "finalUrl",
+        "financeObservationCandidates",
+        "financeMonthlyPaymentCount",
+        "financeSemanticsCounts",
+        "financeTypeCounts",
+        "sampleFinanceContexts",
+    ):
         value = source.get(key)
         if value not in (None, ""):
             payload[key] = value
@@ -222,6 +240,95 @@ def _aggregate_country_counter(countries: list[dict[str, Any]], key: str) -> dic
     return dict(sorted(counter.items(), key=lambda item: (-item[1], item[0])))
 
 
+def _normalize_count_map(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, int] = {}
+    for name, count in value.items():
+        label = str(name or "").strip() or "unknown"
+        normalized[label] = normalized.get(label, 0) + _int_value(count)
+    return dict(sorted(normalized.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _finance_summary_from_sources(sources: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "financeObservationCandidates": sum(
+            _int_value(source.get("financeObservationCandidates"))
+            for source in sources
+        ),
+        "financeMonthlyPaymentCount": sum(
+            _int_value(source.get("financeMonthlyPaymentCount"))
+            for source in sources
+        ),
+        "financeSemanticsCounts": _aggregate_country_counter(
+            sources,
+            "financeSemanticsCounts",
+        ),
+        "financeTypeCounts": _aggregate_country_counter(sources, "financeTypeCounts"),
+    }
+
+
+def _finance_summary_from_country(
+    country: dict[str, Any],
+    sources: list[dict[str, Any]],
+) -> dict[str, Any]:
+    from_sources = _finance_summary_from_sources(sources)
+    semantics_counts = _normalize_count_map(country.get("financeSemanticsCounts"))
+    type_counts = _normalize_count_map(country.get("financeTypeCounts"))
+    return {
+        "financeObservationCandidates": (
+            _int_value(country.get("financeObservationCandidates"))
+            or from_sources["financeObservationCandidates"]
+        ),
+        "financeMonthlyPaymentCount": (
+            _int_value(country.get("financeMonthlyPaymentCount"))
+            or from_sources["financeMonthlyPaymentCount"]
+        ),
+        "financeSemanticsCounts": semantics_counts or from_sources["financeSemanticsCounts"],
+        "financeTypeCounts": type_counts or from_sources["financeTypeCounts"],
+    }
+
+
+def _finance_summary_from_countries(
+    countries: list[dict[str, Any]],
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    finance = {
+        "financeObservationCandidates": sum(
+            _int_value(country.get("financeObservationCandidates"))
+            for country in countries
+        ),
+        "financeMonthlyPaymentCount": sum(
+            _int_value(country.get("financeMonthlyPaymentCount"))
+            for country in countries
+        ),
+        "financeSemanticsCounts": _aggregate_country_counter(
+            countries,
+            "financeSemanticsCounts",
+        ),
+        "financeTypeCounts": _aggregate_country_counter(countries, "financeTypeCounts"),
+    }
+    if not fallback:
+        return finance
+    if finance["financeObservationCandidates"] == 0:
+        finance["financeObservationCandidates"] = _int_value(
+            fallback.get("financeObservationCandidates"),
+        )
+    if finance["financeMonthlyPaymentCount"] == 0:
+        finance["financeMonthlyPaymentCount"] = _int_value(
+            fallback.get("financeMonthlyPaymentCount"),
+        )
+    if not finance["financeSemanticsCounts"]:
+        finance["financeSemanticsCounts"] = _normalize_count_map(
+            fallback.get("financeSemanticsCounts"),
+        )
+    if not finance["financeTypeCounts"]:
+        finance["financeTypeCounts"] = _normalize_count_map(
+            fallback.get("financeTypeCounts"),
+        )
+    return finance
+
+
 def _dedupe_countries(countries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deduped: dict[str, dict[str, Any]] = {}
     for country in countries:
@@ -268,6 +375,7 @@ def _normalize_country_from_v3(
         "topFailureReason": country.get("topFailureReason"),
         "failureBreakdown": country.get("failureBreakdown") or {},
         "strategyRecommendations": country.get("strategyRecommendations") or {},
+        **_finance_summary_from_country(country, sources),
         "sources": sources,
     }
     if run_meta:
@@ -325,6 +433,7 @@ def _stable_coverage_summary(all_countries: list[dict[str, Any]], current: dict[
     ]
     total_sources = sum(int(country.get("total") or 0) for country in all_countries)
     total_pass = sum(int(country.get("pass") or 0) for country in all_countries)
+    finance = _finance_summary_from_countries(all_countries)
     latest_run_id = str(next(
         (country.get("runId") for country in all_countries if country.get("isLatestRun") and country.get("runId")),
         "",
@@ -392,6 +501,10 @@ def _stable_coverage_summary(all_countries: list[dict[str, Any]], current: dict[
         "stablePassRate": round(total_pass / max(total_sources, 1) * 100, 1) if total_sources > 0 else 0,
         "totalSources": total_sources,
         "totalPass": total_pass,
+        "financeObservationCandidates": finance["financeObservationCandidates"],
+        "financeMonthlyPaymentCount": finance["financeMonthlyPaymentCount"],
+        "financeSemanticsCounts": finance["financeSemanticsCounts"],
+        "financeTypeCounts": finance["financeTypeCounts"],
         "sourceRowsObserved": source_rows_observed,
         "sourceCount": source_count,
         "readySourceCount": source_pass_count,
@@ -430,6 +543,7 @@ def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] |
         normalized = _normalize_country_from_v3(country)
         if normalized:
             countries.append(normalized)
+    finance = _finance_summary_from_countries(countries, summary)
 
     if countries:
         total_sources = sum(int(country.get("total") or 0) for country in countries)
@@ -466,6 +580,10 @@ def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] |
         "totalEmpty": total_empty,
         "totalFail": total_fail + total_errors,
         "overallPassRate": overall_pass_rate,
+        "financeObservationCandidates": finance["financeObservationCandidates"],
+        "financeMonthlyPaymentCount": finance["financeMonthlyPaymentCount"],
+        "financeSemanticsCounts": finance["financeSemanticsCounts"],
+        "financeTypeCounts": finance["financeTypeCounts"],
         "failureBreakdown": summary.get("failureBreakdown") or {},
         "strategyRecommendations": summary.get("strategyRecommendations") or {},
         "recentResults": [],
@@ -494,7 +612,12 @@ def _history_from_runs_index() -> list[dict[str, Any]]:
                     "empty": int(country.get("empty") or 0),
                     "fail": int(country.get("fail") or 0) + int(country.get("errors") or 0),
                     "passRate": float(country.get("passPct") or 0),
+                    "financeObservationCandidates": _int_value(country.get("financeObservationCandidates")),
+                    "financeMonthlyPaymentCount": _int_value(country.get("financeMonthlyPaymentCount")),
+                    "financeSemanticsCounts": _normalize_count_map(country.get("financeSemanticsCounts")),
+                    "financeTypeCounts": _normalize_count_map(country.get("financeTypeCounts")),
                 })
+        report_summary = (report or {}).get("summary") or {}
         history.append({
             "runId": run.get("runId") or "",
             "batch": run.get("batch") or "",
@@ -505,6 +628,14 @@ def _history_from_runs_index() -> list[dict[str, Any]]:
             "fail": int(run.get("fail") or 0) + int(run.get("errors") or 0),
             "errors": int(run.get("errors") or 0),
             "passRate": float(run.get("passPct") or 0),
+            "financeObservationCandidates": (
+                _int_value(run.get("financeObservationCandidates"))
+                or _int_value(report_summary.get("financeObservationCandidates"))
+            ),
+            "financeMonthlyPaymentCount": (
+                _int_value(run.get("financeMonthlyPaymentCount"))
+                or _int_value(report_summary.get("financeMonthlyPaymentCount"))
+            ),
             "timestamp": run.get("finishedAt") or run.get("startedAt") or "",
             "file": Path(str(run.get("artifactPath") or "")).name or f"dryrun_report_{run.get('runId')}.json",
             "gateStatus": run.get("gateStatus"),
@@ -638,6 +769,7 @@ def _country_from_artifact(path: Path) -> dict[str, Any] | None:
         "topFailureReason": top_failure,
         "failureBreakdown": failure_breakdown,
         "strategyRecommendations": artifact.get("strategyRecommendations") or {},
+        **_finance_summary_from_country(artifact, sources),
         "sources": sources,
     }
 
@@ -694,6 +826,7 @@ def _current_from_partial_run_dir(run_id: str | None = None) -> dict[str, Any] |
     total_fail = sum(int(country.get("fail") or 0) + int(country.get("errors") or 0) for country in countries)
     failure_breakdown = _aggregate_country_counter(countries, "failureBreakdown")
     strategy_recommendations = _aggregate_country_counter(countries, "strategyRecommendations")
+    finance = _finance_summary_from_countries(countries)
     started = _parse_run_dir_timestamp(run_dir.name)
     # Incomplete country artifacts mean the run is partial, not necessarily live.
     # Treat the lock file as the authoritative local signal for an active run so
@@ -721,6 +854,10 @@ def _current_from_partial_run_dir(run_id: str | None = None) -> dict[str, Any] |
         "totalEmpty": total_empty,
         "totalFail": total_fail,
         "overallPassRate": round(total_pass / max(total_sources, 1) * 100, 1) if total_sources > 0 else 0,
+        "financeObservationCandidates": finance["financeObservationCandidates"],
+        "financeMonthlyPaymentCount": finance["financeMonthlyPaymentCount"],
+        "financeSemanticsCounts": finance["financeSemanticsCounts"],
+        "financeTypeCounts": finance["financeTypeCounts"],
         "failureBreakdown": failure_breakdown,
         "strategyRecommendations": strategy_recommendations,
         "recentResults": [
@@ -794,6 +931,10 @@ def _current_from_running_pipeline_status() -> dict[str, Any] | None:
         "totalEmpty": 0,
         "totalFail": 0,
         "overallPassRate": 0.0,
+        "financeObservationCandidates": 0,
+        "financeMonthlyPaymentCount": 0,
+        "financeSemanticsCounts": {},
+        "financeTypeCounts": {},
         "failureBreakdown": {},
         "strategyRecommendations": {},
         "recentResults": [],
@@ -1023,6 +1164,10 @@ def _list_historical_runs() -> list[dict[str, Any]]:
                 }
                 for c, v in sorted(by_country.items())
             ]
+            finance = _finance_summary_from_countries(
+                countries_detail,
+                data.get("summary") if isinstance(data.get("summary"), dict) else data,
+            )
 
             runs.append({
                 "batch": data.get("batch", ""),
@@ -1033,6 +1178,8 @@ def _list_historical_runs() -> list[dict[str, Any]]:
                 "fail": data.get("fail", 0),
                 "errors": data.get("errors", 0),
                 "passRate": round(data.get("pass", 0) / max(data.get("total", 1), 1) * 100, 1),
+                "financeObservationCandidates": finance["financeObservationCandidates"],
+                "financeMonthlyPaymentCount": finance["financeMonthlyPaymentCount"],
                 "timestamp": ts if isinstance(ts, str) else ts.isoformat() if hasattr(ts, 'isoformat') else str(ts),
                 "file": report_file.name,
                 "countriesDetail": countries_detail,

@@ -363,6 +363,10 @@ export interface HermesMsrpCountryProgressCountry {
   topFailureReason?: string;
   failureBreakdown?: Record<string, number>;
   strategyRecommendations?: Record<string, number>;
+  financeObservationCandidates?: number;
+  financeMonthlyPaymentCount?: number;
+  financeSemanticsCounts?: Record<string, number>;
+  financeTypeCounts?: Record<string, number>;
 }
 export interface HermesMsrpSourceRepairBacklogGroup {
   failureReason: string;
@@ -418,6 +422,10 @@ export interface HermesMsrpStableCoverage {
   sourceCount?: number;
   readySourceCount?: number;
   sourcePassRate?: number;
+  financeObservationCandidates?: number;
+  financeMonthlyPaymentCount?: number;
+  financeSemanticsCounts?: Record<string, number>;
+  financeTypeCounts?: Record<string, number>;
   latestRunId?: string;
   activeRunId?: string;
   activeRunRunning?: boolean;
@@ -447,6 +455,10 @@ export interface HermesMsrpCountryProgressResponse {
     observedCountries?: string[];
     missingCountries?: string[];
     duplicateCountries?: string[];
+    financeObservationCandidates?: number;
+    financeMonthlyPaymentCount?: number;
+    financeSemanticsCounts?: Record<string, number>;
+    financeTypeCounts?: Record<string, number>;
   };
   countries: HermesMsrpCountryProgressCountry[];
   allCountriesLatest?: HermesMsrpCountryProgressCountry[];
@@ -472,6 +484,8 @@ export interface HermesMsrpDryrunHistoryRun {
   empty: number;
   fail: number;
   errors: number;
+  financeObservationCandidates?: number;
+  financeMonthlyPaymentCount?: number;
   expectedCountryCount: number;
   observedCountryCount: number;
   missingCountryCount: number;

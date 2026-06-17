@@ -200,3 +200,57 @@ def test_build_batch_payload_preserves_explicit_pricing_context() -> None:
         "monthly_payment": 5990,
         "price_semantics": "lease_monthly",
     }
+
+
+def test_finance_summary_counts_valid_finance_contexts() -> None:
+    observations = [
+        RawObservation(
+            official_model="Enyaq",
+            official_trim="85",
+            msrp_value=5990,
+            currency="SEK",
+            tax_included=True,
+            price_label="Private lease",
+            source_url="https://example.test/enyaq",
+            raw_payload={
+                "monthly_payment": 5990,
+                "finance_type": "private_lease",
+                "finance_currency": "SEK",
+                "price_semantics": "lease_monthly",
+            },
+        ),
+        RawObservation(
+            official_model="Model Y",
+            official_trim="Long Range",
+            msrp_value=529900,
+            currency="SEK",
+            tax_included=True,
+            price_label="List price",
+            source_url="https://example.test/model-y",
+            raw_payload={"price_semantics": "cash_msrp"},
+        ),
+        RawObservation(
+            official_model="EX30",
+            official_trim="Core",
+            msrp_value=429000,
+            currency="SEK",
+            tax_included=True,
+            price_label="List price",
+            source_url="https://example.test/ex30",
+            raw_payload={"priceText": "429 000 kr"},
+        ),
+    ]
+
+    summary = runner._finance_summary_from_observations(observations)
+
+    assert summary["financeObservationCandidates"] == 2
+    assert summary["financeMonthlyPaymentCount"] == 1
+    assert summary["financeSemanticsCounts"] == {
+        "lease_monthly": 1,
+        "cash_msrp": 1,
+    }
+    assert summary["financeTypeCounts"] == {
+        "private_lease": 1,
+        "unknown": 1,
+    }
+    assert summary["sampleFinanceContexts"][0]["monthlyPayment"] == 5990

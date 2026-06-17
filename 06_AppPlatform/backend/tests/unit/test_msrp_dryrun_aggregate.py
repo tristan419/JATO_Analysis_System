@@ -102,6 +102,13 @@ def test_aggregate_writes_history_index_and_source_repair_backlog(tmp_path):
     countries_dir = run_dir / "countries"
     countries_dir.mkdir(parents=True)
     artifact = _make_country_artifact("se", 2, 5)
+    artifact["results"][0].update({
+        "financeObservationCandidates": 1,
+        "financeMonthlyPaymentCount": 1,
+        "financeSemanticsCounts": {"lease_monthly": 1},
+        "financeTypeCounts": {"private_lease": 1},
+        "sampleFinanceContexts": [{"monthlyPayment": 5990}],
+    })
     for result in artifact["results"][2:]:
         result["sourceUrl"] = "https://www.volvocars.com/se/build/xc60-hybrid/"
     (countries_dir / "se.json").write_text(json.dumps(artifact))
@@ -110,6 +117,10 @@ def test_aggregate_writes_history_index_and_source_repair_backlog(tmp_path):
     result = agg_mod.run(str(run_dir), ["se"], out_latest=str(out_latest))
 
     assert result["schemaVersion"] == "msrp_dryrun_report_v3"
+    assert result["summary"]["financeObservationCandidates"] == 1
+    assert result["summary"]["financeMonthlyPaymentCount"] == 1
+    assert result["countriesDetail"][0]["financeSemanticsCounts"] == {"lease_monthly": 1}
+    assert result["countriesDetail"][0]["sources"][0]["sampleFinanceContexts"] == [{"monthlyPayment": 5990}]
     assert out_latest.is_file()
     assert (out_latest.parent / "dryrun_report_msrp-dryrun-20260521-033000.json").is_file()
 
@@ -117,6 +128,8 @@ def test_aggregate_writes_history_index_and_source_repair_backlog(tmp_path):
     assert index["latestRunId"] == "msrp-dryrun-20260521-033000"
     assert index["runs"][0]["runId"] == "msrp-dryrun-20260521-033000"
     assert index["runs"][0]["runDir"].endswith("msrp-dryrun-20260521-033000")
+    assert index["runs"][0]["financeObservationCandidates"] == 1
+    assert index["runs"][0]["financeMonthlyPaymentCount"] == 1
 
     backlog = json.loads((out_latest.parent / "msrp_source_repair_backlog.json").read_text())
     assert backlog["runId"] == "msrp-dryrun-20260521-033000"

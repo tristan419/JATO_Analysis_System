@@ -65,6 +65,10 @@ def _make_msrp_v3_report(run_id: str = "msrp-dryrun-20260611-120000") -> dict:
             "status": "success",
             "gateThreshold": 70,
             "gateStatus": "allowed",
+            "financeObservationCandidates": 4,
+            "financeMonthlyPaymentCount": 3,
+            "financeSemanticsCounts": {"lease_monthly": 3, "cash_msrp": 1},
+            "financeTypeCounts": {"private_lease": 3, "unknown": 1},
         },
         "countriesDetail": [
             {
@@ -84,6 +88,10 @@ def _make_msrp_v3_report(run_id: str = "msrp-dryrun-20260611-120000") -> dict:
                     "diagnose_with_msrp_page_analyzer": 2,
                     "manual_review_or_proxy_required": 1,
                 },
+                "financeObservationCandidates": 4,
+                "financeMonthlyPaymentCount": 3,
+                "financeSemanticsCounts": {"lease_monthly": 3, "cash_msrp": 1},
+                "financeTypeCounts": {"private_lease": 3, "unknown": 1},
                 "sources": [],
             }
         ],
@@ -591,6 +599,13 @@ class TestSentinelAndDeploy:
         assert data["overall"] == "ok"
         assert data["countries"][0]["countryCode"] == "fi"
         assert data["countries"][0]["passPct"] == 90.0
+        assert data["status"]["financeObservationCandidates"] == 4
+        assert data["status"]["financeMonthlyPaymentCount"] == 3
+        assert data["countries"][0]["financeObservationCandidates"] == 4
+        assert data["countries"][0]["financeSemanticsCounts"] == {
+            "lease_monthly": 3,
+            "cash_msrp": 1,
+        }
         assert data["topFailureReasons"][0] == {
             "reason": "no_observation_extracted",
             "count": 2,
@@ -749,6 +764,11 @@ class TestSentinelAndDeploy:
         data = resp.json()
         assert data["status"]["runId"] == run_id
         assert data["countries"][0]["countryCode"] == "fi"
+        assert data["status"]["financeMonthlyPaymentCount"] == 3
+        assert data["countries"][0]["financeTypeCounts"] == {
+            "private_lease": 3,
+            "unknown": 1,
+        }
 
     def test_msrp_country_progress_derives_host_backlog_from_v3_sources(
         self,

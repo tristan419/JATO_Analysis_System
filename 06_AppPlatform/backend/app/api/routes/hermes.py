@@ -206,6 +206,23 @@ def _source_is_pass(source: dict[str, Any]) -> bool:
     )
 
 
+def _int_value(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _count_map(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    counts: dict[str, int] = {}
+    for name, count in value.items():
+        label = str(name or "").strip() or "unknown"
+        counts[label] = counts.get(label, 0) + _int_value(count)
+    return counts
+
+
 def _transient_lookup_from_stable_coverage(
     stable_coverage: dict[str, Any] | None,
 ) -> dict[tuple[str, str], dict[str, Any]]:
@@ -493,6 +510,10 @@ def _msrp_progress_country_entry(country: dict[str, Any]) -> dict[str, Any]:
         "topFailureReason": country.get("topFailureReason"),
         "failureBreakdown": country.get("failureBreakdown") or {},
         "strategyRecommendations": country.get("strategyRecommendations") or {},
+        "financeObservationCandidates": _int_value(country.get("financeObservationCandidates")),
+        "financeMonthlyPaymentCount": _int_value(country.get("financeMonthlyPaymentCount")),
+        "financeSemanticsCounts": _count_map(country.get("financeSemanticsCounts")),
+        "financeTypeCounts": _count_map(country.get("financeTypeCounts")),
     }
     for key in ("runId", "batch", "timestamp", "gateStatus", "runStatus", "isLatestRun", "completed"):
         if key in country:
@@ -661,6 +682,10 @@ def _msrp_progress_from_report(report: dict[str, Any]) -> dict[str, Any]:
             "observedCountries": report.get("observedCountries", []),
             "missingCountries": report.get("missingCountries", []),
             "duplicateCountries": report.get("duplicateCountries", []),
+            "financeObservationCandidates": _int_value(summary.get("financeObservationCandidates")),
+            "financeMonthlyPaymentCount": _int_value(summary.get("financeMonthlyPaymentCount")),
+            "financeSemanticsCounts": _count_map(summary.get("financeSemanticsCounts")),
+            "financeTypeCounts": _count_map(summary.get("financeTypeCounts")),
         },
         "countries": countries,
         "topBlockingCountries": sorted(top_blocking, key=lambda item: item["passPct"]),
@@ -784,6 +809,10 @@ def _msrp_progress_from_partial_current(
             "duplicateCountries": [],
             "stableLatestRunId": stable_latest_run_id,
             "activeRunId": coverage.get("activeRunId") or current.get("runId"),
+            "financeObservationCandidates": _int_value(current.get("financeObservationCandidates")),
+            "financeMonthlyPaymentCount": _int_value(current.get("financeMonthlyPaymentCount")),
+            "financeSemanticsCounts": _count_map(current.get("financeSemanticsCounts")),
+            "financeTypeCounts": _count_map(current.get("financeTypeCounts")),
         },
         "countries": countries,
         "allCountriesLatest": latest_countries or countries,
