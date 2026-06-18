@@ -16,9 +16,11 @@ class FakeResponse:
         self,
         payload: dict,
         status_code: int = 200,
+        text: str | None = None,
     ) -> None:
         self.payload = payload
         self.status_code = status_code
+        self.text = text if text is not None else str(payload)
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -254,3 +256,29 @@ def test_finance_summary_counts_valid_finance_contexts() -> None:
         "unknown": 1,
     }
     assert summary["sampleFinanceContexts"][0]["monthlyPayment"] == 5990
+
+
+def test_submit_batch_includes_backend_response_body_on_http_error(
+    monkeypatch,
+) -> None:
+    def fake_post(*args, **kwargs):
+        return FakeResponse(
+            {"detail": [{"loc": ["body", "observations", 0]}]},
+            status_code=422,
+            text='{"detail":[{"loc":["body","observations",0]}]}',
+        )
+
+    monkeypatch.setattr(runner.requests, "post", fake_post)
+
+    try:
+        runner.submit_batch(
+            {"batch_code": "bad"},
+            "https://example.test/v1",
+        )
+    except requests.HTTPError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("submit_batch should raise for HTTP errors")
+
+    assert "422 error" in message
+    assert '"observations",0' in message

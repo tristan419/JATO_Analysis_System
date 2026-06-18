@@ -498,7 +498,18 @@ def submit_batch(
         headers=_auth_headers(auth_token, user_name),
         timeout=60,
     )
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as exc:
+        response_body = (getattr(resp, "text", "") or "").strip()
+        if len(response_body) > 4000:
+            response_body = f"{response_body[:4000]}..."
+        if response_body:
+            raise requests.HTTPError(
+                f"{exc}; response_body={response_body}",
+                response=resp,
+            ) from exc
+        raise
     return resp.json()
 
 
