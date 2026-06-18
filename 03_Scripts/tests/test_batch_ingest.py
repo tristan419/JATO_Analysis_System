@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 
@@ -40,6 +41,7 @@ def test_auto_resolve_reviews_passes_min_score(monkeypatch) -> None:
             "item": {
                 "candidateCases": 2,
                 "autoApprovedCount": 1,
+                "directAutoReviewApprovedCount": 1,
                 "linkAppliedCount": 1,
                 "overrideAppliedCount": 0,
                 "unresolvedCount": 1,
@@ -75,6 +77,7 @@ def test_auto_resolve_reviews_passes_min_score(monkeypatch) -> None:
         }
     ]
     assert totals["autoApprovedCount"] == 1
+    assert totals["directAutoReviewApprovedCount"] == 1
     assert totals["scoreRejectedCount"] == 1
 
 
@@ -82,3 +85,40 @@ def test_float_env_ignores_invalid_values(monkeypatch) -> None:
     monkeypatch.setenv("JATO_MSRP_AUTO_REVIEW_MIN_SCORE", "bad")
 
     assert batch_ingest._float_env("JATO_MSRP_AUTO_REVIEW_MIN_SCORE") is None
+
+
+def test_write_ingest_status_includes_review_and_materialize_totals(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    captured = {}
+
+    monkeypatch.setattr(batch_ingest, "__file__", str(tmp_path / "batch_ingest.py"))
+    monkeypatch.setattr(
+        batch_ingest,
+        "write_pipeline_status",
+        lambda **kwargs: captured.update(kwargs),
+    )
+
+    batch_ingest._write_ingest_status(
+        ["at"],
+        ok_count=8,
+        empty_count=1,
+        fail_count=1,
+        total=10,
+        auto_review_totals={
+            "autoApprovedCount": 5,
+            "directAutoReviewApprovedCount": 4,
+            "unresolvedCount": 1,
+        },
+        materialize_totals={
+            "candidateObservations": 7,
+            "materializedKeys": 6,
+        },
+    )
+
+    status_path = tmp_path / "logs" / "scheduled_fetch_status.json"
+    status = json.loads(status_path.read_text())
+    assert status["msrp_ingest"]["okPct"] == 80.0
+    assert captured["extra"]["autoReview"]["directAutoReviewApprovedCount"] == 4
+    assert captured["extra"]["materialize"]["materializedKeys"] == 6
