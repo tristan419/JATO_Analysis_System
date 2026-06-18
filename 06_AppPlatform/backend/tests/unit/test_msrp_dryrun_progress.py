@@ -313,6 +313,161 @@ def test_dashboard_exposes_latest_progress_for_all_historical_countries(tmp_path
     assert dashboard["stableCoverage"]["sourcePassRate"] == 75.0
 
 
+def test_dashboard_keeps_latest_stable_country_when_new_probe_regresses(tmp_path, monkeypatch):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    artifacts.mkdir()
+    logs.mkdir()
+
+    latest_run_id = "msrp-dryrun-20260618-110029"
+    stable_run_id = "msrp-dryrun-20260618-085225"
+    stable_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": stable_run_id,
+        "batch": "at",
+        "expectedCountries": ["at"],
+        "observedCountries": ["at"],
+        "missingCountries": [],
+        "duplicateCountries": [],
+        "summary": {
+            "total": 2,
+            "pass": 2,
+            "empty": 0,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 100.0,
+            "status": "success",
+            "gateThreshold": 70,
+            "gateStatus": "allowed",
+        },
+        "countriesDetail": [
+            {
+                "countryCode": "at",
+                "total": 2,
+                "pass": 2,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 100.0,
+                "status": "success",
+                "sources": [
+                    {
+                        "sourceCode": "audi_q8_at_draft_scrapling",
+                        "status": "pass",
+                        "valid": 4,
+                    },
+                    {
+                        "sourceCode": "skoda_karoq_at_draft_scrapling",
+                        "status": "pass",
+                        "valid": 6,
+                    },
+                ],
+            }
+        ],
+    }
+    latest_report = {
+        **stable_report,
+        "runId": latest_run_id,
+        "summary": {
+            **stable_report["summary"],
+            "pass": 1,
+            "empty": 1,
+            "passPct": 50.0,
+            "status": "degraded",
+            "gateStatus": "blocked",
+        },
+        "countriesDetail": [
+            {
+                "countryCode": "at",
+                "total": 2,
+                "pass": 1,
+                "empty": 1,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 50.0,
+                "status": "degraded",
+                "failureBreakdown": {"network_unavailable": 1},
+                "sources": [
+                    {
+                        "sourceCode": "audi_q8_at_draft_scrapling",
+                        "status": "pass",
+                        "valid": 4,
+                    },
+                    {
+                        "sourceCode": "skoda_karoq_at_draft_scrapling",
+                        "status": "empty",
+                        "valid": 0,
+                        "failureReason": "network_unavailable",
+                        "recommendedStrategy": "retry_network_or_proxy",
+                    },
+                ],
+            }
+        ],
+    }
+    index = {
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "latestRunId": latest_run_id,
+        "runs": [
+            {
+                "runId": latest_run_id,
+                "batch": "at",
+                "finishedAt": "2026-06-18T11:00:29Z",
+                "status": "degraded",
+                "gateStatus": "blocked",
+                "gateThreshold": 70,
+                "passPct": 50.0,
+                "total": 2,
+                "pass": 1,
+                "empty": 1,
+                "fail": 0,
+                "errors": 0,
+                "artifactPath": str(artifacts / f"dryrun_report_{latest_run_id}.json"),
+            },
+            {
+                "runId": stable_run_id,
+                "batch": "at",
+                "finishedAt": "2026-06-18T08:52:25Z",
+                "status": "success",
+                "gateStatus": "allowed",
+                "gateThreshold": 70,
+                "passPct": 100.0,
+                "total": 2,
+                "pass": 2,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "artifactPath": str(artifacts / f"dryrun_report_{stable_run_id}.json"),
+            },
+        ],
+    }
+
+    (artifacts / "dryrun_report.json").write_text(json.dumps(latest_report))
+    (artifacts / f"dryrun_report_{latest_run_id}.json").write_text(json.dumps(latest_report))
+    (artifacts / f"dryrun_report_{stable_run_id}.json").write_text(json.dumps(stable_report))
+    (artifacts / "dryrun_runs_index.json").write_text(json.dumps(index))
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+
+    dashboard = progress.get_dryrun_dashboard()
+
+    assert dashboard["current"]["runId"] == latest_run_id
+    assert dashboard["current"]["overallPassRate"] == 50.0
+    assert dashboard["allCountries"][0]["countryCode"] == "at"
+    assert dashboard["allCountries"][0]["runId"] == stable_run_id
+    assert dashboard["allCountries"][0]["passRate"] == 100.0
+    assert dashboard["allCountries"][0]["isLatestRun"] is False
+    assert dashboard["stableCoverage"]["latestRunId"] == stable_run_id
+    assert dashboard["stableCoverage"]["activeRunId"] == latest_run_id
+    assert dashboard["stableCoverage"]["probeDiffersFromStableRun"] is True
+    assert dashboard["stableCoverage"]["probeRegressionCount"] == 1
+    assert dashboard["stableCoverage"]["probeRegressionSamples"][0]["sourceCode"] == (
+        "skoda_karoq_at_draft_scrapling"
+    )
+
+
 def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(tmp_path, monkeypatch):
     artifacts = tmp_path / "artifacts"
     logs = tmp_path / "logs"

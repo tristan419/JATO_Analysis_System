@@ -42,6 +42,10 @@ import type {
   MsrpFinanceObservation,
   MsrpFinanceObservationSummary,
   MsrpFinanceObservationsResponse,
+  MsrpPriceSalesEffectivenessItem,
+  MsrpPriceSalesEffectivenessResponse,
+  MsrpPriceSalesEffectivenessSummary,
+  MsrpSalesWindowRow,
   MsrpReconciliationItem,
   MsrpReconciliationResponse,
   MsrpReconciliationReviewQueueResponse,
@@ -770,6 +774,67 @@ function mapMsrpReviewQueueSummary(
     reviewCasesQueued: Number(raw?.reviewCasesQueued ?? 0),
     reviewCasesCreated: Number(raw?.reviewCasesCreated ?? 0),
     reviewCasesReused: Number(raw?.reviewCasesReused ?? 0),
+    limit: Number(raw?.limit ?? 0),
+  };
+}
+
+function mapMsrpSalesWindowRow(raw: Record<string, unknown>): MsrpSalesWindowRow {
+  return {
+    period: String(raw.period ?? ""),
+    sales: Number(raw.sales ?? 0),
+  };
+}
+
+function mapMsrpPriceSalesEffectivenessItem(
+  raw: Record<string, unknown>,
+): MsrpPriceSalesEffectivenessItem {
+  return {
+    analysisId: String(raw.analysisId ?? ""),
+    country: String(raw.country ?? ""),
+    brand: String(raw.brand ?? ""),
+    jatoModel: String(raw.jatoModel ?? ""),
+    jatoTrim: nullableString(raw.jatoTrim),
+    priceEventMonth: nullableString(raw.priceEventMonth),
+    priceChangeDirection: String(raw.priceChangeDirection ?? ""),
+    priceChangeValue: nullableNumber(raw.priceChangeValue),
+    priceChangePct: nullableNumber(raw.priceChangePct),
+    baselineWindowMonths: Array.isArray(raw.baselineWindowMonths)
+      ? raw.baselineWindowMonths.map((item) => String(item))
+      : [],
+    postWindowMonths: Array.isArray(raw.postWindowMonths)
+      ? raw.postWindowMonths.map((item) => String(item))
+      : [],
+    baselineSales: Array.isArray(raw.baselineSales)
+      ? raw.baselineSales.map((item) => mapMsrpSalesWindowRow(item as Record<string, unknown>))
+      : [],
+    postSales: Array.isArray(raw.postSales)
+      ? raw.postSales.map((item) => mapMsrpSalesWindowRow(item as Record<string, unknown>))
+      : [],
+    baselineAvgSales: nullableNumber(raw.baselineAvgSales),
+    postAvgSales: nullableNumber(raw.postAvgSales),
+    salesDelta: nullableNumber(raw.salesDelta),
+    salesDeltaPct: nullableNumber(raw.salesDeltaPct),
+    effectivenessLabel: String(raw.effectivenessLabel ?? ""),
+    confidenceNote: String(raw.confidenceNote ?? ""),
+    generatedAtUtc: String(raw.generatedAtUtc ?? ""),
+    sourcePriceAlert: raw.sourcePriceAlert && typeof raw.sourcePriceAlert === "object"
+      ? raw.sourcePriceAlert as Record<string, unknown>
+      : {},
+  };
+}
+
+function mapMsrpPriceSalesEffectivenessSummary(
+  raw: Record<string, unknown> | undefined,
+): MsrpPriceSalesEffectivenessSummary {
+  const labelCounts = (
+    raw?.labelCounts && typeof raw.labelCounts === "object"
+      ? raw.labelCounts
+      : {}
+  ) as Record<string, number>;
+  return {
+    priceEventCount: Number(raw?.priceEventCount ?? 0),
+    analyzedEventCount: Number(raw?.analyzedEventCount ?? 0),
+    labelCounts,
     limit: Number(raw?.limit ?? 0),
   };
 }
@@ -2493,6 +2558,63 @@ export const api = {
         sampleReviewCases: (item.sampleReviewCases ?? []).map((reviewCase) => (
           mapReviewCase(reviewCase)
         )),
+      };
+    });
+  },
+  listMsrpPriceSalesEffectiveness: (params?: {
+    country?: string;
+    brand?: string;
+    jato_model?: string;
+    threshold_pct?: number;
+    baseline_window_months?: number;
+    post_window_months?: number;
+    post_lag_months?: number;
+    min_months?: number;
+    limit?: number;
+  }) => {
+    const sp = new URLSearchParams();
+    if (params?.country) sp.set("country", params.country);
+    if (params?.brand) sp.set("brand", params.brand);
+    if (params?.jato_model) sp.set("jato_model", params.jato_model);
+    if (params?.threshold_pct !== undefined) sp.set("threshold_pct", String(params.threshold_pct));
+    if (params?.baseline_window_months) sp.set("baseline_window_months", String(params.baseline_window_months));
+    if (params?.post_window_months) sp.set("post_window_months", String(params.post_window_months));
+    if (params?.post_lag_months !== undefined) sp.set("post_lag_months", String(params.post_lag_months));
+    if (params?.min_months) sp.set("min_months", String(params.min_months));
+    if (params?.limit) sp.set("limit", String(params.limit));
+    const q = sp.toString();
+    return request<{
+      schemaVersion?: unknown;
+      generatedAtUtc?: unknown;
+      filters?: Record<string, unknown>;
+      window?: Record<string, unknown>;
+      summary?: Record<string, unknown>;
+      items?: Record<string, unknown>[];
+      warnings?: unknown[];
+    }>(`/msrp/effectiveness${q ? `?${q}` : ""}`).then((res): MsrpPriceSalesEffectivenessResponse => {
+      const filters = res.filters ?? {};
+      const window = res.window ?? {};
+      return {
+        schemaVersion: String(res.schemaVersion ?? ""),
+        generatedAtUtc: String(res.generatedAtUtc ?? ""),
+        filters: {
+          country: mapNullableFilterText(filters, "country"),
+          brand: mapNullableFilterText(filters, "brand"),
+          jatoModel: mapNullableFilterText(filters, "jatoModel"),
+        },
+        window: {
+          baselineWindowMonths: Number(window.baselineWindowMonths ?? 0),
+          postWindowMonths: Number(window.postWindowMonths ?? 0),
+          postLagMonths: Number(window.postLagMonths ?? 0),
+          minMonths: Number(window.minMonths ?? 0),
+        },
+        summary: mapMsrpPriceSalesEffectivenessSummary(res.summary),
+        items: (res.items ?? []).map((item) => (
+          mapMsrpPriceSalesEffectivenessItem(item)
+        )),
+        warnings: Array.isArray(res.warnings)
+          ? res.warnings.map((item) => String(item))
+          : [],
       };
     });
   },

@@ -61,14 +61,73 @@ def test_v3_report_uses_scored_repair_backlog(tmp_path: Path) -> None:
     assert backlog["runId"] == "msrp-dryrun-20260616-101010"
     assert backlog["sourceRepairIssueCount"] == 2
     assert backlog["transientRegressionCount"] == 0
+    assert [item["sourceCode"] for item in backlog["sourceIssues"]] == [
+        "volvo_xc60_se_draft_scrapling",
+        "volvo_xc60_fi_draft_scrapling",
+    ]
+    assert backlog["transientSourceRegressions"] == []
     assert backlog["topSourceHosts"][0]["host"] == "volvocars.com"
     group = backlog["groups"][0]
     assert group["failureReason"] == "no_observation_extracted"
+    assert [item["countryCode"] for item in group["sourceRepairIssues"]] == [
+        "se",
+        "fi",
+    ]
     assert group["priorityScore"] > 0
     assert group["priorityBand"] in {"medium", "high", "critical"}
     assert group["reviewAssist"]["preferred"] == "rule_based_then_llm"
     assert group["reviewAssist"]["llmFit"] == "medium"
     assert group["reviewAssist"]["neuralNetworkFit"] == "not_recommended_until_labeled_corpus"
+
+
+def test_v3_report_can_build_backlog_from_country_details_only(tmp_path: Path) -> None:
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260617-095029",
+        "countriesDetail": [
+            {
+                "countryCode": "at",
+                "sources": [
+                    {
+                        "sourceCode": "audi_q8_at_draft_scrapling",
+                        "brand": "AUDI",
+                        "status": "empty",
+                        "valid": 0,
+                        "failureReason": "source_url_not_found",
+                        "recommendedStrategy": "update_source_url",
+                        "sourceUrl": "https://www.audi.at/modelle/q8",
+                        "httpStatus": 404,
+                    },
+                    {
+                        "sourceCode": "byd_seal_u_at_draft_scrapling",
+                        "brand": "BYD",
+                        "status": "empty",
+                        "valid": 0,
+                        "failureReason": "source_url_not_found",
+                        "recommendedStrategy": "update_source_url",
+                        "sourceUrl": "https://www.byd.com/at/car/seal-u",
+                        "httpStatus": 404,
+                    },
+                ],
+            }
+        ],
+    }
+    report_path = tmp_path / "dryrun_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    backlog = backlog_script.run(str(report_path), str(tmp_path))
+
+    assert backlog["runId"] == "msrp-dryrun-20260617-095029"
+    assert backlog["sourceRepairIssueCount"] == 2
+    group = backlog["groups"][0]
+    assert group["failureReason"] == "source_url_not_found"
+    assert group["recommendedStrategy"] == "update_source_url"
+    assert group["affectedCountries"] == ["at"]
+    assert group["affectedBrands"] == ["AUDI", "BYD"]
+    assert [item["host"] for item in group["sourceRepairIssues"]] == [
+        "audi.at",
+        "byd.com",
+    ]
 
 
 def test_v3_report_marks_historical_pass_as_recheck(tmp_path: Path) -> None:
@@ -129,11 +188,18 @@ def test_v3_report_marks_historical_pass_as_recheck(tmp_path: Path) -> None:
 
     assert backlog["sourceRepairIssueCount"] == 0
     assert backlog["transientRegressionCount"] == 1
+    assert backlog["sourceIssues"] == []
+    assert backlog["transientSourceRegressions"][0]["sourceCode"] == source_code
+    assert (
+        backlog["transientSourceRegressions"][0]["recommendedAction"]
+        == "recheck_before_source_repair"
+    )
     group = backlog["groups"][0]
     assert group["priorityBand"] == "recheck"
     assert group["recommendedAction"] == "recheck_before_source_repair"
     assert group["reviewAssist"]["preferred"] == "rule_based_recheck"
     assert group["sampleTransientRegressions"][0]["lastKnownGoodRunId"] == previous_run_id
+    assert group["transientRegressions"][0]["lastKnownGoodRunId"] == previous_run_id
 
 
 def test_v3_report_marks_tesla_403_with_evkx_reference_policy(tmp_path: Path) -> None:
@@ -173,6 +239,9 @@ def test_v3_report_marks_tesla_403_with_evkx_reference_policy(tmp_path: Path) ->
     group = backlog["groups"][0]
     assert group["failureReason"] == "forbidden_403"
     assert group["affectedBrands"] == ["TESLA"]
+    assert len(backlog["sourceIssues"]) == 2
+    assert backlog["sourceIssues"][0]["host"] == "tesla.com"
+    assert backlog["sourceIssues"][0]["recommendedAction"] == "repair_source_definition"
     assert group["referenceAssist"]["preferred"] == "official_proxy_or_configurator_api"
     assert group["referenceAssist"]["thirdPartyReference"] == "EVKX"
     assert group["referenceAssist"]["referencePolicy"] == "reference_only_review_required"

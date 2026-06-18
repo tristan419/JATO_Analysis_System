@@ -459,6 +459,101 @@ describe("data management api", () => {
     });
   });
 
+  it("maps MSRP price sales effectiveness and passes window filters", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          schemaVersion: "msrp_price_sales_effectiveness_v1",
+          generatedAtUtc: "2026-06-11T22:00:00Z",
+          filters: {
+            country: "Sweden",
+            brand: "Volvo",
+            jatoModel: "XC60",
+          },
+          window: {
+            baselineWindowMonths: 3,
+            postWindowMonths: 3,
+            postLagMonths: 1,
+            minMonths: 1,
+          },
+          summary: {
+            priceEventCount: 1,
+            analyzedEventCount: 1,
+            labelCounts: { positive: 1 },
+            limit: 25,
+          },
+          items: [
+            {
+              analysisId: "msrp-effectiveness:sweden:volvo:xc60:2026-03",
+              country: "Sweden",
+              brand: "Volvo",
+              jatoModel: "XC60",
+              jatoTrim: "Ultra",
+              priceEventMonth: "2026-03",
+              priceChangeDirection: "down",
+              priceChangeValue: -3000,
+              priceChangePct: -5,
+              baselineWindowMonths: ["2025-12", "2026-01", "2026-02"],
+              postWindowMonths: ["2026-04", "2026-05", "2026-06"],
+              baselineSales: [{ period: "2026-01", sales: 100 }],
+              postSales: [{ period: "2026-04", sales: 160 }],
+              baselineAvgSales: 100,
+              postAvgSales: 160,
+              salesDelta: 60,
+              salesDeltaPct: 60,
+              effectivenessLabel: "positive",
+              confidenceNote: "Model-level sales proxy",
+              generatedAtUtc: "2026-06-11T22:00:00Z",
+              sourcePriceAlert: {
+                recommendedAction: "review_price_drop_and_queue_sales_effectiveness",
+              },
+            },
+          ],
+          warnings: [],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.listMsrpPriceSalesEffectiveness({
+      country: "Sweden",
+      brand: "Volvo",
+      jato_model: "XC60",
+      threshold_pct: 3,
+      baseline_window_months: 3,
+      post_window_months: 3,
+      post_lag_months: 1,
+      min_months: 1,
+      limit: 25,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/msrp/effectiveness?"),
+      expect.any(Object),
+    );
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("country=Sweden");
+    expect(url).toContain("brand=Volvo");
+    expect(url).toContain("jato_model=XC60");
+    expect(url).toContain("threshold_pct=3");
+    expect(url).toContain("baseline_window_months=3");
+    expect(url).toContain("post_window_months=3");
+    expect(url).toContain("post_lag_months=1");
+    expect(url).toContain("min_months=1");
+    expect(url).toContain("limit=25");
+    expect(result.summary.labelCounts.positive).toBe(1);
+    expect(result.window.postLagMonths).toBe(1);
+    expect(result.items[0]).toMatchObject({
+      analysisId: "msrp-effectiveness:sweden:volvo:xc60:2026-03",
+      effectivenessLabel: "positive",
+      salesDeltaPct: 60,
+    });
+    expect(result.items[0].sourcePriceAlert).toMatchObject({
+      recommendedAction: "review_price_drop_and_queue_sales_effectiveness",
+    });
+  });
+
   it("maps source-observation review candidates in review case details", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

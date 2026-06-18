@@ -391,12 +391,40 @@ def _normalize_country_from_v3(
     return payload
 
 
+def _country_gate_threshold(
+    run_meta: dict[str, Any],
+    report: dict[str, Any],
+) -> float:
+    summary = report.get("summary") or {}
+    for value in (run_meta.get("gateThreshold"), summary.get("gateThreshold")):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 70.0
+
+
+def _is_stable_country_observation(
+    normalized: dict[str, Any],
+    run_meta: dict[str, Any],
+    report: dict[str, Any],
+) -> bool:
+    if not normalized.get("completed", True):
+        return False
+    try:
+        pass_rate = float(normalized.get("passRate") or 0)
+    except (TypeError, ValueError):
+        pass_rate = 0.0
+    return pass_rate >= _country_gate_threshold(run_meta, report)
+
+
 def _all_country_latest_from_runs_index(index_data: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not index_data:
         return []
 
     latest_run_id = str(index_data.get("latestRunId") or "")
-    countries_by_code: dict[str, dict[str, Any]] = {}
+    stable_by_code: dict[str, dict[str, Any]] = {}
+    fallback_by_code: dict[str, dict[str, Any]] = {}
     for run in index_data.get("runs") or []:
         run_id = str(run.get("runId") or "")
         artifact_path = _artifact_path_from_ref(run.get("artifactPath"))
@@ -412,9 +440,18 @@ def _all_country_latest_from_runs_index(index_data: dict[str, Any] | None) -> li
             if not normalized:
                 continue
             code = normalized["countryCode"]
-            if code in countries_by_code:
-                continue
-            countries_by_code[code] = normalized
+            fallback_by_code.setdefault(code, normalized)
+            if code not in stable_by_code and _is_stable_country_observation(
+                normalized,
+                run,
+                report,
+            ):
+                stable_by_code[code] = normalized
+
+    countries_by_code = {
+        code: stable_by_code.get(code, fallback)
+        for code, fallback in fallback_by_code.items()
+    }
 
     return sorted(
         countries_by_code.values(),

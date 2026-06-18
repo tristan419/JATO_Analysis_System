@@ -1644,6 +1644,68 @@ export interface MsrpReconciliationReviewQueueResponse {
   sampleReviewCases: ReviewCase[];
 }
 
+export interface MsrpSalesWindowRow {
+  period: string;
+  sales: number;
+}
+
+export type MsrpPriceSalesEffectivenessLabel =
+  | "positive"
+  | "neutral"
+  | "negative"
+  | "insufficient_data"
+  | string;
+
+export interface MsrpPriceSalesEffectivenessItem {
+  analysisId: string;
+  country: string;
+  brand: string;
+  jatoModel: string;
+  jatoTrim: string | null;
+  priceEventMonth: string | null;
+  priceChangeDirection: string;
+  priceChangeValue: number | null;
+  priceChangePct: number | null;
+  baselineWindowMonths: string[];
+  postWindowMonths: string[];
+  baselineSales: MsrpSalesWindowRow[];
+  postSales: MsrpSalesWindowRow[];
+  baselineAvgSales: number | null;
+  postAvgSales: number | null;
+  salesDelta: number | null;
+  salesDeltaPct: number | null;
+  effectivenessLabel: MsrpPriceSalesEffectivenessLabel;
+  confidenceNote: string;
+  generatedAtUtc: string;
+  sourcePriceAlert: Record<string, unknown>;
+}
+
+export interface MsrpPriceSalesEffectivenessSummary {
+  priceEventCount: number;
+  analyzedEventCount: number;
+  labelCounts: Record<string, number>;
+  limit: number;
+}
+
+export interface MsrpPriceSalesEffectivenessResponse {
+  schemaVersion: string;
+  generatedAtUtc: string;
+  filters: {
+    country: string | null;
+    brand: string | null;
+    jatoModel: string | null;
+  };
+  window: {
+    baselineWindowMonths: number;
+    postWindowMonths: number;
+    postLagMonths: number;
+    minMonths: number;
+  };
+  summary: MsrpPriceSalesEffectivenessSummary;
+  items: MsrpPriceSalesEffectivenessItem[];
+  warnings: string[];
+}
+
 export interface JatoMonthlyUpdateUpload {
   originalFilename: string;
   storedPath?: string | null;

@@ -6,7 +6,9 @@ a summary report.
 """
 import json
 import logging
+import multiprocessing
 import os
+import queue
 import sys
 import time
 from contextlib import contextmanager
@@ -15,6 +17,9 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 # Ensure jato_scraper is importable
+_script_dir = str(Path(__file__).resolve().parent)
+if _script_dir not in sys.path:
+    sys.path.insert(0, _script_dir)
 _toolkit_dir = str(
     Path(__file__).resolve().parent.parent / "07_ScrapingToolkit"
 )
@@ -25,6 +30,13 @@ if _hermes_script_dir not in sys.path:
     sys.path.insert(0, _hermes_script_dir)
 
 from pipeline_status_writer import write_pipeline_status
+
+try:
+    from msrp_dryrun_aggregate import (
+        _write_source_repair_backlog as _write_v3_source_repair_backlog,
+    )
+except ImportError:  # pragma: no cover - keeps dryrun usable in stripped script contexts.
+    _write_v3_source_repair_backlog = None
 
 _TOOLKIT_ROOT = Path(__file__).resolve().parent.parent / "07_ScrapingToolkit"
 _DRAFTS_DIR = _TOOLKIT_ROOT / "source_drafts" / "suv_only_country_model_top30"
@@ -42,6 +54,10 @@ BATCH_COUNTRIES = {
 }
 
 log = logging.getLogger(__name__)
+
+
+class SourceAttemptTimeoutError(TimeoutError):
+    """Raised when an entire run_scrape attempt exceeds its hard budget."""
 
 
 class _RunLogCapture(logging.Handler):
@@ -144,6 +160,18 @@ def _classify_dryrun_failure(
 
     if "404-page" in final_url.lower() or "/404" in final_url.lower():
         return {"failureReason": "source_url_not_found", "recommendedStrategy": "update_source_url", "severity": "error"}
+    if (
+        "anti_bot_access_denied" in error_lower
+        or (
+            "access denied" in error_lower
+            and (
+                "permission to access" in error_lower
+                or "errors.edgesuite.net" in error_lower
+                or "akamai" in error_lower
+            )
+        )
+    ):
+        return {"failureReason": "anti_bot_access_denied", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
     if http_status == 403:
         return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
     if http_status == 404:
@@ -331,6 +359,131 @@ def _source_retry_delay_seconds() -> float:
             raw,
         )
         return 2.0
+
+
+def _source_timeout_seconds() -> int:
+    raw = os.getenv(
+        "JATO_MSRP_DRYRUN_SOURCE_TIMEOUT_SECONDS",
+        os.getenv("JATO_SOURCE_TIMEOUT_SECONDS", "180"),
+    ).strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        log.warning(
+            "Invalid MSRP source timeout %r; using 180",
+            raw,
+        )
+        return 180
+
+
+def _source_attempt_timeout_seconds(source_timeout_seconds: int) -> int:
+    raw = os.getenv("JATO_MSRP_DRYRUN_ATTEMPT_TIMEOUT_SECONDS", "").strip()
+    if raw:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            log.warning(
+                "Invalid JATO_MSRP_DRYRUN_ATTEMPT_TIMEOUT_SECONDS=%r; "
+                "using source timeout + 60",
+                raw,
+            )
+    if source_timeout_seconds <= 0:
+        return 0
+    return source_timeout_seconds + 60
+
+
+def _run_scrape_once(
+    run_scrape: Callable,
+    code: str,
+    *,
+    source_timeout_seconds: int,
+) -> tuple[dict, str]:
+    log_capture = _RunLogCapture()
+    log_capture.setFormatter(logging.Formatter("%(levelname)s %(name)s — %(message)s"))
+    with _capture_source_logs(log_capture):
+        summary = run_scrape(
+            source_codes=[code],
+            dry_run=True,
+            source_timeout_seconds=source_timeout_seconds,
+        )
+    return summary, log_capture.text()
+
+
+def _run_scrape_attempt_child(
+    run_scrape: Callable,
+    code: str,
+    source_timeout_seconds: int,
+    output_queue: multiprocessing.Queue,
+) -> None:
+    try:
+        summary, captured_log_text = _run_scrape_once(
+            run_scrape,
+            code,
+            source_timeout_seconds=source_timeout_seconds,
+        )
+        output_queue.put(("ok", summary, captured_log_text))
+    except BaseException as exc:
+        output_queue.put(("error", type(exc).__name__, str(exc)))
+
+
+def _run_scrape_attempt(
+    run_scrape: Callable,
+    code: str,
+    *,
+    source_timeout_seconds: int,
+    attempt_timeout_seconds: int,
+) -> tuple[dict, str]:
+    if attempt_timeout_seconds <= 0:
+        return _run_scrape_once(
+            run_scrape,
+            code,
+            source_timeout_seconds=source_timeout_seconds,
+        )
+    if "fork" not in multiprocessing.get_all_start_methods():
+        log.warning(
+            "Hard attempt timeout requires fork; running %s inline",
+            code,
+        )
+        return _run_scrape_once(
+            run_scrape,
+            code,
+            source_timeout_seconds=source_timeout_seconds,
+        )
+
+    ctx = multiprocessing.get_context("fork")
+    output_queue = ctx.Queue(maxsize=1)
+    process = ctx.Process(
+        target=_run_scrape_attempt_child,
+        args=(run_scrape, code, source_timeout_seconds, output_queue),
+        daemon=True,
+    )
+    process.start()
+    process.join(attempt_timeout_seconds)
+    try:
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+            if process.is_alive():
+                process.kill()
+                process.join(5)
+            raise SourceAttemptTimeoutError(
+                f"source {code} exceeded {attempt_timeout_seconds}s "
+                "run_scrape attempt timeout"
+            )
+
+        try:
+            status, payload, extra = output_queue.get_nowait()
+        except queue.Empty as exc:
+            raise RuntimeError(
+                f"source {code} attempt process exited with code "
+                f"{process.exitcode} without a result"
+            ) from exc
+        if status == "ok":
+            return payload, str(extra or "")
+        raise RuntimeError(f"{payload}: {extra}".strip(": "))
+    finally:
+        output_queue.close()
+        output_queue.join_thread()
 
 
 def _source_result_is_retryable(result: dict, classification: dict) -> bool:
@@ -566,6 +719,13 @@ def _write_dryrun_runs_index(report: dict, latest_path: Path, history_path: Path
     index_path.write_text(json.dumps(index_data, indent=2, ensure_ascii=False) + "\n")
 
 
+def _write_source_repair_backlog_artifact(report: dict, report_dir: Path) -> None:
+    if _write_v3_source_repair_backlog is None:
+        log.warning("Source repair backlog writer is unavailable; skipping artifact")
+        return
+    _write_v3_source_repair_backlog(report, report_dir)
+
+
 def _write_dryrun_status(
     countries: list[str],
     pass_count: int,
@@ -733,6 +893,8 @@ def main():
 
     source_attempt_limit = _source_attempt_limit()
     source_retry_delay = _source_retry_delay_seconds()
+    source_timeout_seconds = _source_timeout_seconds()
+    attempt_timeout_seconds = _source_attempt_timeout_seconds(source_timeout_seconds)
 
     for i, (cc, code) in enumerate(target_codes, 1):
         t0 = time.time()
@@ -742,19 +904,33 @@ def main():
             captured_log_text = ""
             classification = {}
             for attempt in range(1, source_attempt_limit + 1):
-                log_capture = _RunLogCapture()
-                log_capture.setFormatter(logging.Formatter("%(levelname)s %(name)s — %(message)s"))
                 attempt_t0 = time.time()
-                with _capture_source_logs(log_capture):
-                    summary = run_scrape(
-                        source_codes=[code], dry_run=True
+                attempt_exception: Exception | None = None
+                try:
+                    summary, captured_log_text = _run_scrape_attempt(
+                        run_scrape,
+                        code,
+                        source_timeout_seconds=source_timeout_seconds,
+                        attempt_timeout_seconds=attempt_timeout_seconds,
                     )
-                src = summary["sources"].get(code, {})
-                captured_log_text = log_capture.text()
+                    src = summary["sources"].get(code, {})
+                except Exception as exc:
+                    attempt_exception = exc
+                    src = {
+                        "status": "exception",
+                        "valid": 0,
+                        "extracted": 0,
+                        "rejected": 0,
+                        "error": str(exc),
+                    }
+                    captured_log_text = ""
                 classification_src = src
                 if captured_log_text and not (src.get("error") or src.get("extractorError")):
                     classification_src = {**src, "extractorError": captured_log_text}
-                classification = _classify_dryrun_failure(classification_src)
+                classification = _classify_dryrun_failure(
+                    classification_src,
+                    exception=attempt_exception,
+                )
 
                 status = src.get("status", "error")
                 valid = src.get("valid", 0)
@@ -824,11 +1000,12 @@ def main():
                 "rejected": rejected,
                 "elapsed": round(elapsed, 1),
             }
-            if len(source_attempts) > 1:
+            if source_attempts:
                 result_entry["sourceAttempts"] = source_attempts
             for key in (
                 "sourceUrl",
                 "brand",
+                "error",
                 "extractorName",
                 "extractorVersion",
                 "coverageLevel",
@@ -948,6 +1125,7 @@ def main():
         json.dump(report_payload, f, indent=2, ensure_ascii=False)
 
     _write_dryrun_runs_index(report_payload, latest_path, history_path)
+    _write_source_repair_backlog_artifact(report_payload, report_dir)
 
     print(f"\nReport saved to {latest_path} (history: {history_path.name})")
 

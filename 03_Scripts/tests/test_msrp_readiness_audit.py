@@ -40,9 +40,11 @@ class FakeReadinessClient:
         *,
         missing_snapshot: bool = False,
         auth_role: str = "editor",
+        missing_all_country_latest: bool = False,
     ) -> None:
         self.missing_snapshot = missing_snapshot
         self.auth_role = auth_role
+        self.missing_all_country_latest = missing_all_country_latest
 
     def request_json(
         self,
@@ -109,14 +111,41 @@ class FakeReadinessClient:
                 "items": [{}],
             }
         if path == "/hermes/msrp-country-progress":
-            return {
+            payload = {
                 "overall": "ok",
                 "status": {
                     "runId": "msrp-dryrun-test",
+                    "activeRunId": "msrp-dryrun-active",
+                    "stableLatestRunId": "msrp-dryrun-stable",
                     "gateStatus": "allowed",
                     "overallPassPct": 96.4,
                 },
+                "stableCoverage": {
+                    "latestRunId": "msrp-dryrun-stable",
+                    "activeRunId": "msrp-dryrun-active",
+                    "countryCount": 2,
+                    "probeDiffersFromStableRun": True,
+                    "probeRegressionCount": 1,
+                },
+                "sourceRepairBacklog": {
+                    "sourceRepairIssueCount": 2,
+                    "transientRegressionCount": 1,
+                },
             }
+            if not self.missing_all_country_latest:
+                payload["allCountriesLatest"] = [
+                    {
+                        "countryCode": "se",
+                        "runId": "msrp-dryrun-stable",
+                        "passPct": 100.0,
+                    },
+                    {
+                        "countryCode": "fi",
+                        "runId": "msrp-dryrun-stable",
+                        "passPct": 92.8,
+                    },
+                ]
+            return payload
         if path == "/hermes/msrp-dryrun-history":
             return {
                 "latestRunId": "msrp-dryrun-test",
@@ -154,6 +183,16 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
         == "spec_feature_observation_to_engineering_config_landing_v1"
     )
     assert config_runtime["landingSummary"]["vehicleTrimRows"] == 4
+    dryrun_runtime = requirements["dryrun_governance"]["runtime"]
+    assert dryrun_runtime["activeRunId"] == "msrp-dryrun-active"
+    assert dryrun_runtime["stableLatestRunId"] == "msrp-dryrun-stable"
+    assert dryrun_runtime["allCountryLatestCount"] == 2
+    assert dryrun_runtime["stableCoverage"]["probeRegressionCount"] == 1
+    assert dryrun_runtime["sourceRepairIssueCount"] == 2
+    assert dryrun_runtime["transientRecheckCount"] == 1
+    assert report["summary"]["runtimeCounts"]["dryrunAllCountryLatestCount"] == 2
+    assert report["summary"]["runtimeCounts"]["dryrunSourceRepairIssueCount"] == 2
+    assert report["summary"]["runtimeCounts"]["dryrunTransientRecheckCount"] == 1
     assert requirements["multi_source_reconciliation"]["runtime"]["statusCounts"]["conflict"] == 1
     pipeline_runtime = requirements["pipeline_orchestration"]["runtime"]
     assert pipeline_runtime["statusPipelineId"] == "msrp_pipeline"
@@ -192,6 +231,23 @@ def test_build_readiness_report_marks_viewer_token_missing_for_ingest() -> None:
     assert auth_requirement["runtime"]["role"] == "viewer"
     assert auth_requirement["runtime"]["requiredRole"] == "editor"
     assert auth_requirement["runtime"]["reason"] == "write_role_required"
+
+
+def test_build_readiness_report_degrades_without_all_country_latest_progress() -> None:
+    report = audit_module.build_readiness_report(
+        client=FakeReadinessClient(missing_all_country_latest=True),
+        filters={},
+    )
+
+    requirements = {
+        item["key"]: item
+        for item in report["requirements"]
+    }
+    dryrun_requirement = requirements["dryrun_governance"]
+    assert report["status"] == "degraded"
+    assert dryrun_requirement["status"] == "degraded"
+    assert dryrun_requirement["runtime"]["allCountryLatestCount"] == 0
+    assert dryrun_requirement["runtime"]["stableLatestRunId"] == "msrp-dryrun-stable"
 
 
 def test_main_prints_json_report(capsys, monkeypatch) -> None:

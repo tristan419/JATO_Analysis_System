@@ -58,6 +58,29 @@ def test_fetch_failure_records_original_error(monkeypatch, tmp_path) -> None:
     )
 
 
+def test_access_denied_body_records_audit_error(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("JATO_AUDIT_DIR", str(tmp_path))
+    page = _mock_page_with_descendant_text(
+        "body",
+        "\n".join([
+            "Access Denied",
+            "You don't have permission to access http://www.tesla.com/de_at/modely on this server.",
+            "https://errors.edgesuite.net/18.ab30d417.example",
+        ]),
+    )
+    page.status = 200
+    page.url = "https://www.tesla.com/de_at/modely"
+    page.headers = {"content-type": "text/html"}
+    extractor = build_extractor()
+    extractor.run_id = "run_access_denied"
+    monkeypatch.setattr(extractor, "_fetch", lambda: page)
+
+    assert extractor.extract() == []
+    assert extractor.last_audit_event is not None
+    assert extractor.last_audit_event["error"].startswith("anti_bot_access_denied")
+    assert extractor.last_audit_event["httpStatus"] == 200
+
+
 def test_fetch_passes_browser_runtime_options(monkeypatch) -> None:
     from scrapling.fetchers import StealthyFetcher
 

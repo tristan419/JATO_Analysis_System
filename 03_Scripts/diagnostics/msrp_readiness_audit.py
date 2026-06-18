@@ -431,6 +431,21 @@ def build_readiness_report(
     effectiveness_labels = _nested_dict(effectiveness_summary, "labelCounts")
     dryrun_status = _nested_dict(country_progress, "status")
     dryrun_runs = dryrun_history.get("runs") if isinstance(dryrun_history.get("runs"), list) else []
+    all_countries_latest = (
+        country_progress.get("allCountriesLatest")
+        if isinstance(country_progress.get("allCountriesLatest"), list)
+        else []
+    )
+    stable_coverage = _nested_dict(country_progress, "stableCoverage")
+    source_repair_backlog = _nested_dict(country_progress, "sourceRepairBacklog")
+    source_repair_issue_count = int(
+        source_repair_backlog.get("sourceRepairIssueCount")
+        or source_repair_backlog.get("totalIssueCount")
+        or 0
+    )
+    transient_recheck_count = int(
+        source_repair_backlog.get("transientRegressionCount") or 0
+    )
     dryrun_pass_pct = dryrun_status.get("overallPassPct")
     dryrun_gate = dryrun_status.get("gateStatus")
     config_source_summary = _nested_dict(config_source_sync, "summary")
@@ -808,13 +823,27 @@ def build_readiness_report(
             key="dryrun_governance",
             title="Dryrun history and Hermes governance view",
             status=_status(
-                bool(dryrun_history.get("latestRunId")) and country_progress_error is None,
+                bool(dryrun_history.get("latestRunId"))
+                and bool(all_countries_latest)
+                and country_progress_error is None,
                 degraded=country_progress_error is None or dryrun_history_error is None,
                 unavailable=country_progress_error is not None and dryrun_history_error is not None,
             ),
             runtime={
                 "latestRunId": dryrun_history.get("latestRunId"),
+                "activeRunId": (
+                    dryrun_status.get("activeRunId")
+                    or stable_coverage.get("activeRunId")
+                ),
+                "stableLatestRunId": (
+                    dryrun_status.get("stableLatestRunId")
+                    or stable_coverage.get("latestRunId")
+                ),
                 "runCount": len(dryrun_runs),
+                "allCountryLatestCount": len(all_countries_latest),
+                "stableCoverage": stable_coverage,
+                "sourceRepairIssueCount": source_repair_issue_count,
+                "transientRecheckCount": transient_recheck_count,
                 "overall": country_progress.get("overall"),
                 "gateStatus": dryrun_gate,
                 "passPct": dryrun_pass_pct,
@@ -824,7 +853,10 @@ def build_readiness_report(
                 "GET /hermes/msrp-country-progress",
                 "GET /hermes/msrp-dryrun-history",
             ],
-            note="Provides source-repair governance and pass-rate gate evidence.",
+            note=(
+                "Provides source-repair governance, active-vs-stable country "
+                "coverage, transient recheck counts, and pass-rate gate evidence."
+            ),
         ),
         _requirement(
             key="pipeline_orchestration",
@@ -902,6 +934,9 @@ def build_readiness_report(
                 "officialConfigCountryCount": config_country_count,
                 "reconciliationConflictGroups": conflict_count,
                 "dryrunRunCount": len(dryrun_runs),
+                "dryrunAllCountryLatestCount": len(all_countries_latest),
+                "dryrunSourceRepairIssueCount": source_repair_issue_count,
+                "dryrunTransientRecheckCount": transient_recheck_count,
                 "writeAuthRole": write_role,
             },
         },

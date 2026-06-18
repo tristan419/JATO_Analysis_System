@@ -466,6 +466,56 @@ def _source_reference_assist(group: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _source_issue_detail(
+    *,
+    result: dict[str, Any],
+    country: str,
+    source_code: str,
+    failure_reason: str,
+    recommended_strategy: str,
+    last_good: dict[str, Any] | None,
+) -> dict[str, Any]:
+    source_url = _source_url(result)
+    detail: dict[str, Any] = {
+        "countryCode": country,
+        "sourceCode": source_code,
+        "brand": _source_brand(result),
+        "sourceUrl": source_url,
+        "host": _source_host(result),
+        "status": result.get("status"),
+        "rawStatus": result.get("rawStatus"),
+        "valid": _int_value(result.get("valid")),
+        "extracted": _int_value(result.get("extracted")),
+        "failureReason": failure_reason,
+        "recommendedStrategy": recommended_strategy,
+        "sourceRepairIssue": last_good is None,
+        "transientRegression": last_good is not None,
+        "recommendedAction": (
+            "recheck_before_source_repair"
+            if last_good
+            else "repair_source_definition"
+        ),
+    }
+    for key in ("httpStatus", "finalUrl", "extractorName", "coverageLevel"):
+        value = result.get(key)
+        if value not in (None, ""):
+            detail[key] = value
+    error_text = str(result.get("extractorError") or result.get("error") or "")
+    if error_text:
+        detail["errorSnippet"] = error_text.replace("\n", " ")[:500]
+    if last_good:
+        detail["lastKnownGoodRunId"] = last_good.get("runId")
+        detail["lastKnownGoodAt"] = last_good.get("observedAt")
+        detail["lastKnownGoodValid"] = last_good.get("valid")
+    if not source_url:
+        detail.pop("sourceUrl", None)
+    if not detail.get("brand"):
+        detail.pop("brand", None)
+    if not detail.get("host"):
+        detail.pop("host", None)
+    return detail
+
+
 def _priority_fields(group: dict[str, Any]) -> dict[str, Any]:
     source_repair_count = int(group["sourceRepairIssueCount"])
     transient_count = int(group["transientRegressionCount"])
@@ -552,11 +602,30 @@ def _historical_good_sources(out_dir: Path, current_run_id: str | None) -> dict[
     return good_sources
 
 
+def _iter_report_results(report: dict[str, Any]) -> list[dict[str, Any]]:
+    results = report.get("results")
+    if isinstance(results, list) and results:
+        return [result for result in results if isinstance(result, dict)]
+
+    flattened: list[dict[str, Any]] = []
+    for country in report.get("countriesDetail") or []:
+        if not isinstance(country, dict):
+            continue
+        country_code = str(country.get("countryCode") or "").strip().lower()
+        for source in country.get("sources") or []:
+            if not isinstance(source, dict):
+                continue
+            payload = dict(source)
+            payload.setdefault("country", country_code)
+            flattened.append(payload)
+    return flattened
+
+
 def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
     groups: dict[str, dict[str, Any]] = {}
     top_hosts: dict[str, dict[str, Any]] = {}
     last_known_good = _historical_good_sources(out_dir, str(report.get("runId") or ""))
-    for result in report.get("results") or []:
+    for result in _iter_report_results(report):
         reason = result.get("failureReason")
         if not reason:
             continue
@@ -575,24 +644,26 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
             "affectedCountries": set(),
             "brands": set(),
             "sources": [],
+            "sourceDetails": [],
             "transientSources": [],
             "hosts": {},
             "status": "new",
         })
         group["count"] += 1
+        source_detail = _source_issue_detail(
+            result=result,
+            country=country,
+            source_code=source_code,
+            failure_reason=reason,
+            recommended_strategy=recommended,
+            last_good=last_good,
+        )
         if is_transient:
             group["transientRegressionCount"] += 1
-            group["transientSources"].append({
-                "countryCode": country,
-                "sourceCode": source_code,
-                "failureReason": reason,
-                "recommendedStrategy": recommended,
-                "lastKnownGoodRunId": last_good.get("runId"),
-                "lastKnownGoodAt": last_good.get("observedAt"),
-                "recommendedAction": "recheck_before_source_repair",
-            })
+            group["transientSources"].append(source_detail)
         else:
             group["sourceRepairIssueCount"] += 1
+            group["sourceDetails"].append(source_detail)
         group["recommendedStrategies"][recommended] = group["recommendedStrategies"].get(recommended, 0) + 1
         if country:
             group["affectedCountries"].add(country)
@@ -639,7 +710,9 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
             "affectedCountryCount": len(group["affectedCountries"]),
             "affectedBrands": sorted(group["brands"]),
             "sampleSources": group["sources"][:20],
+            "sourceRepairIssues": group["sourceDetails"],
             "sampleTransientRegressions": group["transientSources"][:8],
+            "transientRegressions": group["transientSources"],
             "topSourceHosts": _normalize_host_groups(group["hosts"]),
             "status": group["status"],
         }
@@ -655,6 +728,16 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
     ))
     transient_regression_count = sum(int(item["transientRegressionCount"]) for item in normalized_groups)
     source_repair_issue_count = sum(int(item["sourceRepairIssueCount"]) for item in normalized_groups)
+    source_issues = [
+        source
+        for item in normalized_groups
+        for source in item.get("sourceRepairIssues") or []
+    ]
+    transient_regressions = [
+        source
+        for item in normalized_groups
+        for source in item.get("transientRegressions") or []
+    ]
 
     payload = {
         "schemaVersion": "msrp_source_repair_backlog_v1",
@@ -663,6 +746,8 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
         "totalIssueCount": sum(int(item["count"]) for item in normalized_groups),
         "transientRegressionCount": transient_regression_count,
         "sourceRepairIssueCount": source_repair_issue_count,
+        "sourceIssues": source_issues,
+        "transientSourceRegressions": transient_regressions,
         "topSourceHosts": _normalize_host_groups(top_hosts),
         "groups": normalized_groups,
     }
@@ -699,6 +784,43 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
                 countries=", ".join(str(c).upper() for c in item["affectedCountries"]) or "-",
             )
         )
+    if source_issues:
+        lines.extend([
+            "",
+            "## Source Repair Queue",
+            "",
+            "| Country | Source | Brand | Host | Failure reason | Strategy |",
+            "|---|---|---|---|---|---|",
+        ])
+        for source in source_issues:
+            lines.append(
+                "| {country} | `{source}` | {brand} | {host} | {reason} | {strategy} |".format(
+                    country=str(source.get("countryCode") or "-").upper(),
+                    source=source.get("sourceCode") or "-",
+                    brand=source.get("brand") or "-",
+                    host=source.get("host") or "-",
+                    reason=source.get("failureReason") or "-",
+                    strategy=source.get("recommendedStrategy") or "-",
+                )
+            )
+    if transient_regressions:
+        lines.extend([
+            "",
+            "## Transient Recheck Queue",
+            "",
+            "| Country | Source | Failure reason | Last known good | Strategy |",
+            "|---|---|---|---|---|",
+        ])
+        for source in transient_regressions:
+            lines.append(
+                "| {country} | `{source}` | {reason} | {last_good} | {strategy} |".format(
+                    country=str(source.get("countryCode") or "-").upper(),
+                    source=source.get("sourceCode") or "-",
+                    reason=source.get("failureReason") or "-",
+                    last_good=source.get("lastKnownGoodRunId") or "-",
+                    strategy=source.get("recommendedStrategy") or "-",
+                )
+            )
     lines.append("")
     md_path = out_dir / "msrp_source_repair_backlog.md"
     md_path.write_text("\n".join(lines))

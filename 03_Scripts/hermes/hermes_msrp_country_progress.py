@@ -28,6 +28,15 @@ RUNS_INDEX_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryr
 SOURCE_REPAIR_BACKLOG_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_repair_backlog.json"
 SOURCE_REFERENCE_EVIDENCE_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_reference_evidence.json"
 SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
+COUNTRY_LABELS = {
+    "at": "Austria",
+    "dk": "Denmark",
+    "fi": "Finland",
+    "fr": "France",
+    "hu": "Hungary",
+    "no": "Norway",
+    "se": "Sweden",
+}
 
 
 def _load_dryrun_report() -> dict | None:
@@ -67,6 +76,16 @@ def _load_source_repair_backlog() -> dict:
         "topSourceHosts": [],
         "groups": [],
     }
+
+
+def _load_runs_index() -> dict[str, Any] | None:
+    if not RUNS_INDEX_PATH.is_file():
+        return None
+    try:
+        data = json.loads(RUNS_INDEX_PATH.read_text())
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _default_source_reference_evidence() -> dict:
@@ -230,6 +249,22 @@ def _source_is_pass(source: dict[str, Any]) -> bool:
     )
 
 
+def _source_status_value(source: dict[str, Any]) -> str:
+    return str(source.get("rawStatus") or source.get("status") or "").lower()
+
+
+def _source_valid_count(source: dict[str, Any]) -> int:
+    return _int_value(source.get("valid"))
+
+
+def _source_is_empty(source: dict[str, Any]) -> bool:
+    return _source_status_value(source) == "empty"
+
+
+def _source_is_error(source: dict[str, Any]) -> bool:
+    return _source_status_value(source) in {"error", "exception"}
+
+
 def _int_value(value: Any) -> int:
     try:
         return int(value or 0)
@@ -262,6 +297,365 @@ def _load_v3_report(path: Path | None) -> dict[str, Any] | None:
     except Exception:
         return None
     return data if data.get("schemaVersion") == "msrp_dryrun_report_v3" else None
+
+
+def _country_label(country_code: str) -> str:
+    code = str(country_code or "").lower()
+    return COUNTRY_LABELS.get(code, code.upper())
+
+
+def _status_for_pass_rate(pass_rate: float) -> str:
+    if pass_rate >= 90:
+        return "success"
+    if pass_rate >= 50:
+        return "degraded"
+    return "failure"
+
+
+def _normalize_source_for_progress(
+    source: dict[str, Any],
+    index: int,
+    total: int,
+) -> dict[str, Any]:
+    raw_status = _source_status_value(source)
+    if _source_is_pass(source):
+        status = "pass"
+    elif _source_is_empty(source):
+        status = "empty"
+    else:
+        status = "fail"
+    payload = {
+        "index": int(source.get("index") or index),
+        "totalInCountry": int(source.get("totalInCountry") or total),
+        "sourceCode": str(source.get("sourceCode") or source.get("code") or ""),
+        "status": status,
+        "rawStatus": raw_status,
+        "valid": _source_valid_count(source),
+        "extracted": _int_value(source.get("extracted")),
+        "rejected": _int_value(source.get("rejected")),
+        "failureReason": source.get("failureReason"),
+        "recommendedStrategy": source.get("recommendedStrategy"),
+    }
+    for key in ("sourceUrl", "finalUrl", "httpStatus", "extractorError", "error"):
+        value = source.get(key)
+        if value not in (None, ""):
+            payload[key] = value
+    return payload
+
+
+def _source_counts(sources: list[dict[str, Any]]) -> tuple[int, int, int, int]:
+    pass_count = sum(1 for source in sources if source["status"] == "pass")
+    empty_count = sum(1 for source in sources if source["status"] == "empty")
+    error_count = sum(1 for source in sources if _source_is_error(source))
+    fail_count = sum(
+        1
+        for source in sources
+        if source["status"] == "fail" and not _source_is_error(source)
+    )
+    return pass_count, empty_count, fail_count, error_count
+
+
+def _country_gate_threshold(
+    run_meta: dict[str, Any],
+    report: dict[str, Any],
+) -> float:
+    summary = report.get("summary") or {}
+    for value in (run_meta.get("gateThreshold"), summary.get("gateThreshold")):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 70.0
+
+
+def _country_from_v3(
+    country: dict[str, Any],
+    *,
+    run_meta: dict[str, Any],
+    latest_run_id: str,
+) -> dict[str, Any] | None:
+    code = str(country.get("countryCode") or country.get("country") or "").lower()
+    if not re.fullmatch(r"[a-z]{2}", code):
+        return None
+    total = _int_value(country.get("total"))
+    sources = [
+        _normalize_source_for_progress(source, index, total)
+        for index, source in enumerate(country.get("sources") or [], start=1)
+    ]
+    if sources:
+        pass_count, empty_count, fail_count, error_count = _source_counts(sources)
+    else:
+        pass_count = _int_value(country.get("pass"))
+        empty_count = _int_value(country.get("empty"))
+        fail_count = _int_value(country.get("fail"))
+        error_count = _int_value(country.get("errors"))
+    pass_pct = round(pass_count / max(total, 1) * 100, 1) if total else float(country.get("passPct") or 0)
+    run_id = str(run_meta.get("runId") or "")
+    top_failure = country.get("topFailureReason")
+    failure_breakdown = country.get("failureBreakdown") or {}
+    if not top_failure and failure_breakdown:
+        top_failure = max(failure_breakdown, key=failure_breakdown.get)
+    return {
+        "countryCode": code,
+        "countryLabel": _country_label(code),
+        "total": total,
+        "pass": pass_count,
+        "empty": empty_count,
+        "fail": fail_count,
+        "errors": error_count,
+        "passPct": pass_pct,
+        "status": (
+            "missing"
+            if country.get("status") == "missing"
+            else _status_for_pass_rate(pass_pct)
+        ),
+        "topFailureReason": top_failure,
+        "failureBreakdown": failure_breakdown,
+        "strategyRecommendations": country.get("strategyRecommendations") or {},
+        "financeObservationCandidates": _int_value(country.get("financeObservationCandidates")),
+        "financeMonthlyPaymentCount": _int_value(country.get("financeMonthlyPaymentCount")),
+        "financeSemanticsCounts": _count_map(country.get("financeSemanticsCounts")),
+        "financeTypeCounts": _count_map(country.get("financeTypeCounts")),
+        "runId": run_id,
+        "batch": run_meta.get("batch") or "",
+        "timestamp": run_meta.get("finishedAt") or run_meta.get("startedAt") or "",
+        "gateStatus": run_meta.get("gateStatus"),
+        "runStatus": run_meta.get("status"),
+        "isLatestRun": run_id == latest_run_id,
+        "completed": country.get("status") != "missing",
+        "sources": sources,
+    }
+
+
+def _is_stable_country_observation(
+    country: dict[str, Any],
+    run_meta: dict[str, Any],
+    report: dict[str, Any],
+) -> bool:
+    if not country.get("completed", True):
+        return False
+    try:
+        pass_pct = float(country.get("passPct") or 0)
+    except (TypeError, ValueError):
+        pass_pct = 0.0
+    return pass_pct >= _country_gate_threshold(run_meta, report)
+
+
+def _all_country_latest_from_runs_index() -> list[dict[str, Any]]:
+    index_data = _load_runs_index()
+    if not index_data:
+        return []
+    latest_run_id = str(index_data.get("latestRunId") or "")
+    stable_by_code: dict[str, dict[str, Any]] = {}
+    fallback_by_code: dict[str, dict[str, Any]] = {}
+    for run_meta in index_data.get("runs") or []:
+        artifact_path = _artifact_path_from_ref(run_meta.get("artifactPath"))
+        report = _load_v3_report(artifact_path)
+        if not report:
+            continue
+        for country in report.get("countriesDetail") or []:
+            normalized = _country_from_v3(
+                country,
+                run_meta=run_meta,
+                latest_run_id=latest_run_id,
+            )
+            if not normalized:
+                continue
+            code = normalized["countryCode"]
+            fallback_by_code.setdefault(code, normalized)
+            if code not in stable_by_code and _is_stable_country_observation(
+                normalized,
+                run_meta,
+                report,
+            ):
+                stable_by_code[code] = normalized
+
+    countries_by_code = {
+        code: stable_by_code.get(code, fallback)
+        for code, fallback in fallback_by_code.items()
+    }
+    return sorted(
+        countries_by_code.values(),
+        key=lambda item: (
+            0 if item.get("isLatestRun") else 1,
+            str(item.get("countryLabel") or item.get("countryCode") or ""),
+        ),
+    )
+
+
+def _finance_summary_from_countries(countries: list[dict[str, Any]]) -> dict[str, Any]:
+    semantics: dict[str, int] = {}
+    types: dict[str, int] = {}
+    for country in countries:
+        for key, target in (
+            ("financeSemanticsCounts", semantics),
+            ("financeTypeCounts", types),
+        ):
+            for name, count in (country.get(key) or {}).items():
+                label = str(name or "").strip() or "unknown"
+                target[label] = target.get(label, 0) + _int_value(count)
+    return {
+        "financeObservationCandidates": sum(
+            _int_value(country.get("financeObservationCandidates"))
+            for country in countries
+        ),
+        "financeMonthlyPaymentCount": sum(
+            _int_value(country.get("financeMonthlyPaymentCount"))
+            for country in countries
+        ),
+        "financeSemanticsCounts": dict(
+            sorted(semantics.items(), key=lambda item: (-item[1], item[0]))
+        ),
+        "financeTypeCounts": dict(
+            sorted(types.items(), key=lambda item: (-item[1], item[0]))
+        ),
+    }
+
+
+def _stable_coverage_summary(
+    all_countries: list[dict[str, Any]],
+    current_report: dict[str, Any],
+) -> dict[str, Any]:
+    current_summary = current_report.get("summary") or {}
+    gate_threshold = float(current_summary.get("gateThreshold") or 70)
+    ready_countries = [
+        country
+        for country in all_countries
+        if float(country.get("passPct") or 0) >= gate_threshold
+    ]
+    total_sources = sum(_int_value(country.get("total")) for country in all_countries)
+    total_pass = sum(_int_value(country.get("pass")) for country in all_countries)
+    finance = _finance_summary_from_countries(all_countries)
+    latest_run_id = str(next(
+        (
+            country.get("runId")
+            for country in all_countries
+            if country.get("isLatestRun") and country.get("runId")
+        ),
+        "",
+    ))
+    if not latest_run_id:
+        latest_run_id = str(next(
+            (country.get("runId") for country in all_countries if country.get("runId")),
+            "",
+        ))
+    active_run_id = str(current_report.get("runId") or "")
+    stable_good_sources: dict[tuple[str, str], dict[str, Any]] = {}
+    failure_counts: dict[str, int] = {}
+    repair_samples: list[dict[str, Any]] = []
+    source_rows_observed = 0
+    for country in all_countries:
+        country_code = str(country.get("countryCode") or "")
+        for source in country.get("sources") or []:
+            source_code = str(source.get("sourceCode") or "")
+            if not country_code or not source_code:
+                continue
+            source_rows_observed += 1
+            if source.get("status") == "pass":
+                stable_good_sources[(country_code, source_code)] = {
+                    **source,
+                    "_runId": country.get("runId"),
+                }
+                continue
+            reason = str(
+                source.get("failureReason")
+                or country.get("topFailureReason")
+                or source.get("status")
+                or "unknown"
+            )
+            failure_counts[reason] = failure_counts.get(reason, 0) + 1
+            if len(repair_samples) < 8:
+                repair_samples.append({
+                    "countryCode": country_code,
+                    "sourceCode": source_code,
+                    "failureReason": reason,
+                    "recommendedStrategy": source.get("recommendedStrategy"),
+                    "runId": country.get("runId"),
+                })
+
+    active_sources: dict[tuple[str, str], dict[str, Any]] = {}
+    for country in current_report.get("countriesDetail") or []:
+        country_code = str(country.get("countryCode") or "").lower()
+        total = _int_value(country.get("total"))
+        for index, source in enumerate(country.get("sources") or [], start=1):
+            normalized = _normalize_source_for_progress(source, index, total)
+            source_code = str(normalized.get("sourceCode") or "")
+            if country_code and source_code:
+                active_sources[(country_code, source_code)] = normalized
+
+    probe_regressions: list[dict[str, Any]] = []
+    for (country_code, source_code), stable_source in stable_good_sources.items():
+        active_source = active_sources.get((country_code, source_code))
+        if not active_source or active_source.get("status") == "pass":
+            continue
+        probe_regressions.append({
+            "countryCode": country_code,
+            "sourceCode": source_code,
+            "activeStatus": active_source.get("status"),
+            "failureReason": active_source.get("failureReason"),
+            "recommendedStrategy": active_source.get("recommendedStrategy"),
+            "stableRunId": stable_source.get("_runId") or latest_run_id,
+            "activeRunId": active_run_id,
+            "lastKnownValid": stable_source.get("valid"),
+        })
+
+    source_count = source_rows_observed or total_sources
+    source_pass_count = len(stable_good_sources) if source_rows_observed else total_pass
+    return {
+        "gateThreshold": gate_threshold,
+        "countryCount": len(all_countries),
+        "readyCountryCount": len(ready_countries),
+        "blockedCountryCount": max(0, len(all_countries) - len(ready_countries)),
+        "stablePassRate": (
+            round(total_pass / max(total_sources, 1) * 100, 1)
+            if total_sources > 0 else 0
+        ),
+        "totalSources": total_sources,
+        "totalPass": total_pass,
+        "financeObservationCandidates": finance["financeObservationCandidates"],
+        "financeMonthlyPaymentCount": finance["financeMonthlyPaymentCount"],
+        "financeSemanticsCounts": finance["financeSemanticsCounts"],
+        "financeTypeCounts": finance["financeTypeCounts"],
+        "sourceRowsObserved": source_rows_observed,
+        "sourceCount": source_count,
+        "readySourceCount": source_pass_count,
+        "blockedSourceCount": max(0, source_count - source_pass_count),
+        "sourcePassRate": (
+            round(source_pass_count / max(source_count, 1) * 100, 1)
+            if source_count > 0 else 0
+        ),
+        "topFailureReasons": [
+            {"reason": reason, "count": count}
+            for reason, count in sorted(
+                failure_counts.items(),
+                key=lambda item: (-item[1], item[0]),
+            )[:8]
+        ],
+        "repairSourceSamples": repair_samples,
+        "probeRegressionCount": len(probe_regressions),
+        "probeRegressionSamples": probe_regressions[:8],
+        "latestRunId": latest_run_id,
+        "activeRunId": active_run_id,
+        "activeRunRunning": False,
+        "activeRunPartial": False,
+        "activeRunPassRate": float(current_summary.get("passPct") or 0),
+        "probeDiffersFromStableRun": bool(
+            active_run_id and latest_run_id and active_run_id != latest_run_id
+        ),
+        "readyCountries": [
+            str(country.get("countryCode") or "")
+            for country in ready_countries
+        ],
+        "blockedCountries": [
+            str(country.get("countryCode") or "")
+            for country in all_countries
+            if float(country.get("passPct") or 0) < gate_threshold
+        ],
+    }
+
+
+def _strip_sources(country: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in country.items() if key != "sources"}
 
 
 def _historical_good_sources(current_run_id: str | None) -> dict[tuple[str, str], dict[str, Any]]:
@@ -548,6 +942,29 @@ def run(out_dir: str | None = None) -> dict:
     if not source_repair_backlog.get("groups"):
         source_repair_backlog = _load_source_repair_backlog()
 
+    all_countries_full = _all_country_latest_from_runs_index()
+    if not all_countries_full:
+        run_meta = {
+            "runId": report.get("runId"),
+            "batch": report.get("batch") or "",
+            "finishedAt": report.get("generatedAt") or now,
+            "status": summary.get("status"),
+            "gateStatus": gate_status,
+            "gateThreshold": gate_threshold,
+        }
+        all_countries_full = [
+            normalized
+            for country in countries_detail
+            if (
+                normalized := _country_from_v3(
+                    country,
+                    run_meta=run_meta,
+                    latest_run_id=str(report.get("runId") or ""),
+                )
+            )
+        ]
+    stable_coverage = _stable_coverage_summary(all_countries_full, report)
+
     result = {
         "probe": "pipeline.msrp_country_progress",
         "overall": overall,
@@ -566,12 +983,16 @@ def run(out_dir: str | None = None) -> dict:
             "financeMonthlyPaymentCount": _int_value(summary.get("financeMonthlyPaymentCount")),
             "financeSemanticsCounts": _count_map(summary.get("financeSemanticsCounts")),
             "financeTypeCounts": _count_map(summary.get("financeTypeCounts")),
+            "stableLatestRunId": stable_coverage.get("latestRunId"),
+            "activeRunId": stable_coverage.get("activeRunId"),
         },
         "countries": country_entries,
         "topBlockingCountries": sorted(top_blocking, key=lambda x: x["passPct"]),
         "topFailureReasons": [{"reason": r, "count": c} for r, c in top_reasons[:5]],
         "sourceRepairBacklog": source_repair_backlog,
         "sourceReferenceEvidence": _load_source_reference_evidence(str(report.get("runId") or "")),
+        "allCountriesLatest": [_strip_sources(country) for country in all_countries_full],
+        "stableCoverage": stable_coverage,
         "findings": findings,
     }
 
@@ -621,6 +1042,8 @@ def _render_markdown(result: dict) -> str:
     lines.append(f"| Overall passPct | {status.get('overallPassPct', '?')}% |")
     lines.append(f"| Gate threshold | {status.get('gateThreshold', '?')}% |")
     lines.append(f"| Gate status | {status.get('gateStatus', '?')} |")
+    lines.append(f"| Latest stable run | {status.get('stableLatestRunId', '-')} |")
+    lines.append(f"| Active run | {status.get('activeRunId', '-')} |")
     lines.append(f"| Expected countries | {len(status.get('expectedCountries', []))} |")
     lines.append(f"| Observed countries | {len(status.get('observedCountries', []))} |")
     lines.append(f"| Missing countries | {len(status.get('missingCountries', []))} |")
@@ -628,6 +1051,24 @@ def _render_markdown(result: dict) -> str:
     lines.append(f"| Finance candidates | {status.get('financeObservationCandidates', 0)} |")
     lines.append(f"| Monthly offers | {status.get('financeMonthlyPaymentCount', 0)} |")
     lines.append("")
+
+    stable_coverage = result.get("stableCoverage") or {}
+    if stable_coverage.get("countryCount"):
+        lines.append("## Stable Coverage\n")
+        lines.append("| Metric | Value |")
+        lines.append("|---|---:|")
+        lines.append(
+            f"| Ready countries | {stable_coverage.get('readyCountryCount', 0)}"
+            f"/{stable_coverage.get('countryCount', 0)} |"
+        )
+        lines.append(f"| Stable pass rate | {stable_coverage.get('stablePassRate', 0)}% |")
+        lines.append(
+            f"| Ready sources | {stable_coverage.get('readySourceCount', 0)}"
+            f"/{stable_coverage.get('sourceCount', 0)} |"
+        )
+        lines.append(f"| Source pass rate | {stable_coverage.get('sourcePassRate', 0)}% |")
+        lines.append(f"| Probe regressions | {stable_coverage.get('probeRegressionCount', 0)} |")
+        lines.append("")
 
     countries = result.get("countries", [])
     if countries:

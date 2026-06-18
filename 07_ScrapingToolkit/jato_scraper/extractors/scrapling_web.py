@@ -1402,6 +1402,46 @@ class ScraplingExtractor(BaseExtractor):
 
         return metadata
 
+    def _page_text_sample(self, page: Any, *, limit: int = 2_000) -> str:
+        parts: list[str] = []
+        try:
+            parts.extend(
+                self._collect_text_result_values(page.css("body ::text"))
+            )
+        except Exception:
+            pass
+        if not parts:
+            try:
+                elements = page.css("body")
+            except Exception:
+                elements = []
+            for element in elements[:1]:
+                try:
+                    parts.extend(
+                        self._collect_text_result_values(element.css("::text"))
+                    )
+                except Exception:
+                    pass
+                if not parts:
+                    try:
+                        parts.extend(self._string_values(element.get()))
+                    except Exception:
+                        pass
+        return _normalize_space(" ".join(parts))[:limit]
+
+    def _access_denied_error(self, page: Any) -> str | None:
+        sample = self._page_text_sample(page)
+        lower = sample.lower()
+        if not sample or "access denied" not in lower:
+            return None
+        if (
+            "permission to access" not in lower
+            and "errors.edgesuite.net" not in lower
+            and "akamai" not in lower
+        ):
+            return None
+        return f"anti_bot_access_denied: {sample[:240]}"
+
     def extract(self) -> list[RawObservation]:
         page = self._fetch()
         if page is None:
@@ -1420,6 +1460,18 @@ class ScraplingExtractor(BaseExtractor):
         attempted: list[dict[str, Any]] = []
         p = self.profile
         results: list[RawObservation] = []
+        access_error = self._access_denied_error(page)
+        if access_error:
+            self.record_audit_event(
+                url=p.url,
+                attempted_strategies=attempted,
+                winning_strategy=None,
+                observations=[],
+                tier=p.tier or "http",
+                error=access_error,
+                extra=fetch_metadata or None,
+            )
+            return []
 
         # Strategy 1: attribute-embedded JSON (most reliable for React SPAs)
         if p.attr_json:

@@ -167,6 +167,24 @@ def test_classify_empty_forbidden_403_from_captured_log():
     assert result["recommendedStrategy"] == "manual_review_or_proxy_required"
 
 
+def test_classify_anti_bot_access_denied_body():
+    """Akamai Access Denied bodies can arrive with HTTP 200 and need separate classification."""
+    src = {
+        "status": "empty",
+        "httpStatus": 200,
+        "extractorError": (
+            "anti_bot_access_denied: Access Denied You don't have permission "
+            "to access http://www.tesla.com/de_at/modely on this server. "
+            "https://errors.edgesuite.net/18.example"
+        ),
+    }
+
+    result = dryrun_mod._classify_dryrun_failure(src)
+
+    assert result["failureReason"] == "anti_bot_access_denied"
+    assert result["recommendedStrategy"] == "manual_review_or_proxy_required"
+
+
 def test_classify_dns_resolution_failed():
     """DNS resolver errors are retryable network issues, not source repairs."""
     src = {

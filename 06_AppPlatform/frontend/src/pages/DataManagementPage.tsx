@@ -7,6 +7,7 @@ import { HermesMermaidBlock } from "../components/HermesMermaidBlock";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { MsrpDryrunDashboard } from "../components/MsrpDryrunDashboard";
 import { MsrpFinanceObservationsPanel } from "../components/MsrpFinanceObservationsPanel";
+import { MsrpPriceSalesEffectivenessPanel } from "../components/MsrpPriceSalesEffectivenessPanel";
 import { MsrpReconciliationPanel } from "../components/MsrpReconciliationPanel";
 import type {
   DataManagementAirflowStatus,
@@ -1793,6 +1794,9 @@ export function DataManagementPage() {
                         );
                       })() : <span style={{color:"#94a3b8",fontSize:11}}>Run dryrun to populate</span>}
                     </div>
+                  </div>
+                  <div className="card crud-card" style={{gridColumn:"1 / -1"}}>
+                    <MsrpPriceSalesEffectivenessPanel />
                   </div>
                   <div className="card crud-card" style={{gridColumn:"1 / -1"}}>
                     <MsrpReconciliationPanel />
