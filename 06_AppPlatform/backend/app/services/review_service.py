@@ -35,6 +35,12 @@ from app.services.payload_serializers import (
 
 
 AUTO_REVIEW_ELIGIBLE_STATUSES = {"auto_accepted", "override_applied"}
+AUTO_REVIEW_DIRECT_RESOLVER_KIND = "deterministic_auto_review"
+AUTO_REVIEW_DIRECT_SOURCE_TYPES = {
+    "manufacturer_official",
+    "official_price_list",
+}
+AUTO_REVIEW_DIRECT_MIN_COMPLETENESS = 85.0
 AUTO_REVIEW_DEFAULT_WEIGHTS = {
     "resolver": 0.35,
     "matchConfidence": 0.30,
@@ -47,9 +53,17 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _commit_or_conflict(session: Session, detail: str) -> None:
+def _commit_or_conflict(
+    session: Session,
+    detail: str,
+    *,
+    commit: bool = True,
+) -> None:
     try:
-        session.commit()
+        if commit:
+            session.commit()
+        else:
+            session.flush()
     except IntegrityError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail=detail) from exc
@@ -121,6 +135,8 @@ def _resolver_score(resolver_kind: object | None) -> float:
         return 95.0
     if resolver_kind == RESOLVER_KIND_OVERRIDE:
         return 90.0
+    if resolver_kind == AUTO_REVIEW_DIRECT_RESOLVER_KIND:
+        return 95.0
     return 0.0
 
 
@@ -178,6 +194,16 @@ def _auto_review_assist(
                 "deterministic approval before model-assisted review."
             ),
         }
+    if resolver_kind == AUTO_REVIEW_DIRECT_RESOLVER_KIND:
+        return {
+            "preferred": "rule_based",
+            "llmFit": "low",
+            "neuralNetworkFit": "not_recommended_until_labeled_corpus",
+            "reason": (
+                "The official-source ingest already passed deterministic "
+                "auto-review gates; approve without model-assisted review."
+            ),
+        }
     return {
         "preferred": "rule_based_then_llm",
         "llmFit": "medium",
@@ -186,6 +212,64 @@ def _auto_review_assist(
             "Rules found a candidate, but resolver evidence is weak; an LLM "
             "can summarize evidence for a human."
         ),
+    }
+
+
+def _source_type(source) -> str:
+    return str(getattr(source, "source_type", "") or "").strip().lower()
+
+
+def _ingest_auto_review_payload(observation) -> dict[str, object] | None:
+    match_reason = getattr(observation, "match_reason_json", None)
+    if not isinstance(match_reason, dict):
+        return None
+    payload = match_reason.get("autoReview")
+    return payload if isinstance(payload, dict) else None
+
+
+def _ingest_auto_review_score(observation) -> float | None:
+    payload = _ingest_auto_review_payload(observation)
+    if payload is None:
+        return None
+    try:
+        score = float(payload.get("score"))
+    except (TypeError, ValueError):
+        return None
+    if 0 <= score <= 1:
+        score *= 100
+    return max(0.0, min(100.0, score))
+
+
+def _ingest_auto_review_has_blockers(observation) -> bool:
+    payload = _ingest_auto_review_payload(observation)
+    if payload is None:
+        return True
+    blockers = payload.get("hardBlockers")
+    return bool(blockers)
+
+
+def _direct_auto_review_resolution(
+    observation,
+    source,
+    threshold: float,
+) -> dict[str, object] | None:
+    if source is None:
+        return None
+    if _source_type(source) not in AUTO_REVIEW_DIRECT_SOURCE_TYPES:
+        return None
+    if _ingest_auto_review_has_blockers(observation):
+        return None
+    score = _ingest_auto_review_score(observation)
+    if score is None or score < threshold:
+        return None
+    completeness = _observation_completeness_score(observation)
+    if completeness < AUTO_REVIEW_DIRECT_MIN_COMPLETENESS:
+        return None
+    return {
+        "resolverKind": AUTO_REVIEW_DIRECT_RESOLVER_KIND,
+        "linkId": None,
+        "overrideId": None,
+        "deterministicScore": score,
     }
 
 
@@ -552,6 +636,7 @@ def auto_resolve_review_cases(
             "unresolvedCount": 0,
             "missingObservationCount": 0,
             "scoreRejectedCount": 0,
+            "directAutoReviewApprovedCount": 0,
             "autoReviewScore": {
                 "threshold": min_score,
                 "weights": _auto_review_weights(),
@@ -583,6 +668,7 @@ def auto_resolve_review_cases(
     score_rejected_count = 0
     link_applied_count = 0
     override_applied_count = 0
+    direct_auto_review_count = 0
     sample_screens = []
     now = _utc_now()
 
@@ -599,6 +685,7 @@ def auto_resolve_review_cases(
             continue
 
         previous_observation_state = _capture_observation_review_state(observation)
+        source = source_by_id.get(observation.source_id)
         resolution = apply_canonical_mapping(session, observation)
         if (
             resolution["resolverKind"]
@@ -606,16 +693,24 @@ def auto_resolve_review_cases(
             or observation.match_status
             not in AUTO_REVIEW_ELIGIBLE_STATUSES
         ):
-            _restore_observation_review_state(
+            direct_resolution = _direct_auto_review_resolution(
                 observation,
-                previous_observation_state,
+                source,
+                min_score,
             )
-            unresolved_count += 1
-            continue
+            if direct_resolution is None:
+                _restore_observation_review_state(
+                    observation,
+                    previous_observation_state,
+                )
+                unresolved_count += 1
+                continue
+            resolution = direct_resolution
+            observation.match_status = "auto_accepted"
 
         screen = _auto_review_screen(
             observation,
-            source_by_id.get(observation.source_id),
+            source,
             resolution,
             min_score,
         )
@@ -649,6 +744,8 @@ def auto_resolve_review_cases(
             link_applied_count += 1
         elif resolution["resolverKind"] == RESOLVER_KIND_OVERRIDE:
             override_applied_count += 1
+        elif resolution["resolverKind"] == AUTO_REVIEW_DIRECT_RESOLVER_KIND:
+            direct_auto_review_count += 1
 
         review_case.review_status = "approved"
         review_case.current_assignee = decided_by
@@ -666,7 +763,11 @@ def auto_resolve_review_cases(
         decision_note = note or (
             "Auto-approved via active MSRP link"
             if resolution["resolverKind"] == RESOLVER_KIND_LINK
-            else "Auto-approved via applicable match override"
+            else (
+                "Auto-approved via applicable match override"
+                if resolution["resolverKind"] == RESOLVER_KIND_OVERRIDE
+                else "Auto-approved via deterministic official-source review score"
+            )
         )
         match_reason["autoReviewDecision"] = {
             "decision": "approve",
@@ -698,6 +799,15 @@ def auto_resolve_review_cases(
         review_decisions.append(review_decision)
         if current_price is not None:
             current_prices.append(current_price)
+            # The app session runs with autoflush disabled. Flush each
+            # materialized price so later approved cases can see the current
+            # price row for the same business key instead of inserting a
+            # duplicate.
+            _commit_or_conflict(
+                session,
+                "Auto-resolving review cases conflicted with existing data",
+                commit=False,
+            )
 
     _commit_or_conflict(
         session,
@@ -709,6 +819,7 @@ def auto_resolve_review_cases(
         "autoApprovedCount": len(approved_cases),
         "linkAppliedCount": link_applied_count,
         "overrideAppliedCount": override_applied_count,
+        "directAutoReviewApprovedCount": direct_auto_review_count,
         "unresolvedCount": unresolved_count,
         "missingObservationCount": missing_observation_count,
         "scoreRejectedCount": score_rejected_count,

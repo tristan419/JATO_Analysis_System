@@ -627,6 +627,161 @@ def test_auto_resolve_review_cases_approves_link_backed_open_cases(
     assert payload["sampleScreens"][0]["passed"] is True
 
 
+def test_auto_resolve_review_cases_approves_high_score_official_source(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 6, 18, 9, 40, tzinfo=timezone.utc)
+    review_case_id = uuid4()
+    observation_id = uuid4()
+    source_id = uuid4()
+    review_case = SimpleNamespace(
+        review_case_id=review_case_id,
+        observation_id=observation_id,
+        review_status="open",
+        current_assignee=None,
+        official_model="ID.4",
+        official_trim="ID.4 starting price",
+        official_edition=None,
+        official_powertrain="BEV",
+        jato_powertrain="BEV",
+        updated_at_utc=now,
+    )
+    observation = SimpleNamespace(
+        observation_id=observation_id,
+        source_id=source_id,
+        country="Austria",
+        brand="VOLKSWAGEN",
+        jato_model="ID.4",
+        jato_trim="ID.4 starting price",
+        jato_powertrain="BEV",
+        official_model="ID.4",
+        official_trim="ID.4 starting price",
+        official_edition=None,
+        official_powertrain="BEV",
+        match_confidence=Decimal("0.8200"),
+        match_status="review_required",
+        match_reason_json={
+            "autoReview": {
+                "score": 90.2,
+                "scoreBand": "high",
+                "hardBlockers": [],
+            }
+        },
+        source_url="https://www.volkswagen.at/id4/id4",
+        updated_at_utc=now,
+    )
+    source = SimpleNamespace(
+        source_id=source_id,
+        source_code="volkswagen_id_4_at_draft_scrapling",
+        source_url="https://www.volkswagen.at/id4/id4",
+        source_type="manufacturer_official",
+        extractor_name="_ConfiguredScrapling",
+        extractor_version="0.6.2-scrapling",
+        tier=3,
+    )
+    current_price = SimpleNamespace(
+        current_price_id=uuid4(),
+        effective_observation_id=observation_id,
+    )
+    added_decisions = []
+    materialized = []
+
+    monkeypatch.setattr(
+        review_service.repo,
+        "list_review_cases",
+        lambda *args, **kwargs: [review_case],
+    )
+    monkeypatch.setattr(
+        review_service.msrp_repository,
+        "list_observations_by_ids",
+        lambda *args, **kwargs: [observation],
+    )
+    monkeypatch.setattr(
+        review_service.msrp_repository,
+        "list_sources_by_ids",
+        lambda *args, **kwargs: [source],
+    )
+    monkeypatch.setattr(
+        review_service,
+        "apply_canonical_mapping",
+        lambda _session, _observation: {
+            "resolverKind": None,
+            "linkId": None,
+            "overrideId": None,
+        },
+    )
+    monkeypatch.setattr(review_service, "_utc_now", lambda: now)
+    monkeypatch.setattr(
+        review_service,
+        "materialize_current_price_from_observation",
+        lambda _session, obs: materialized.append(obs) or current_price,
+    )
+    monkeypatch.setattr(
+        review_service.repo,
+        "add_review_decision",
+        lambda _session, decision: added_decisions.append(decision),
+    )
+    monkeypatch.setattr(
+        review_service,
+        "_commit_or_conflict",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        review_service,
+        "review_case_payload",
+        lambda case, obs, src: {
+            "reviewCaseId": str(case.review_case_id),
+            "sourceCode": src.source_code,
+        },
+    )
+    monkeypatch.setattr(
+        review_service,
+        "review_decision_payload",
+        lambda decision: {
+            "decision": decision.decision,
+            "note": decision.note,
+        },
+    )
+    monkeypatch.setattr(
+        review_service,
+        "current_price_payload",
+        lambda price, src: {
+            "currentPriceId": str(price.current_price_id),
+            "sourceCode": src.source_code,
+        },
+    )
+
+    payload = review_service.auto_resolve_review_cases(
+        None,
+        {
+            "decided_by": "msrp-auto-review",
+            "country": "Austria",
+            "brand": "VOLKSWAGEN",
+            "limit": 100,
+            "min_score": 85,
+        },
+    )
+
+    assert review_case.review_status == "approved"
+    assert review_case.current_assignee == "msrp-auto-review"
+    assert observation.match_status == "auto_accepted"
+    assert materialized == [observation]
+    assert len(added_decisions) == 1
+    decision = observation.match_reason_json["autoReviewDecision"]
+    assert decision["resolverKind"] == "deterministic_auto_review"
+    assert decision["screen"]["passed"] is True
+    assert decision["note"] == (
+        "Auto-approved via deterministic official-source review score"
+    )
+    assert payload["candidateCases"] == 1
+    assert payload["autoApprovedCount"] == 1
+    assert payload["directAutoReviewApprovedCount"] == 1
+    assert payload["linkAppliedCount"] == 0
+    assert payload["overrideAppliedCount"] == 0
+    assert payload["unresolvedCount"] == 0
+    assert payload["sampleCurrentPrices"][0]["sourceCode"] == source.source_code
+
+
 def test_auto_resolve_review_cases_holds_low_score_candidates(
     monkeypatch,
 ) -> None:
