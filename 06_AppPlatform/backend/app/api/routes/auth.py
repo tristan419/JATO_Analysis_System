@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import datetime, timezone
 from urllib.parse import urlencode, urlparse
@@ -36,6 +37,7 @@ from app.services.auth_service import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+log = logging.getLogger(__name__)
 
 
 class LoginBody(BaseModel):
@@ -713,13 +715,16 @@ def google_callback(
     except (_json.JSONDecodeError, TypeError):
         pass
 
-    from app.services.google_service import exchange_code
+    from app.services.google_service import GoogleOAuthError, exchange_code
 
     try:
         user_info = exchange_code(code, GOOGLE_REDIRECT_URI)
-    except Exception as exc:
+    except GoogleOAuthError as exc:
+        return _oauth_error_redirect(str(exc), redirect, frontend_origin)
+    except Exception:
+        log.exception("Unexpected Google OAuth callback failure")
         return _oauth_error_redirect(
-            f"Google auth failed: {exc}",
+            "Google auth failed: unexpected server error.",
             redirect,
             frontend_origin,
         )

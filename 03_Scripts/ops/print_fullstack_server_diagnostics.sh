@@ -89,6 +89,17 @@ fi
 section "proxy env"
 run_shell "env | grep -E '^(http_proxy|https_proxy|HTTP_PROXY|HTTPS_PROXY|no_proxy|NO_PROXY)=' | sed -E 's#(https?://)[^/@]+@#\\1***@#' || true"
 
+section "google oauth egress"
+if [[ -f "$BACKEND_ENV_FILE" ]]; then
+  run_shell "$SUDO awk -F= '/^(APP_GOOGLE_OAUTH_PROXY_URL|APP_GOOGLE_OAUTH_TIMEOUT_SECONDS|APP_GOOGLE_REDIRECT_URI|APP_FRONTEND_ORIGIN|APP_FRONTEND_ORIGINS)=/ {print}' '$BACKEND_ENV_FILE' || true"
+  GOOGLE_OAUTH_PROXY_URL="$($SUDO awk -F= '$1 == "APP_GOOGLE_OAUTH_PROXY_URL" {print $2; exit}' "$BACKEND_ENV_FILE" 2>/dev/null || true)"
+else
+  GOOGLE_OAUTH_PROXY_URL=""
+fi
+GOOGLE_OAUTH_PROXY_URL="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
+run_shell "ss -ltnp | grep -E '(:7897)\\b' || true"
+run_shell "curl -I --max-time 10 --proxy '$GOOGLE_OAUTH_PROXY_URL' 'https://oauth2.googleapis.com/token' || true"
+
 section "frontend dist"
 if [[ -d "$FRONTEND_DIST_DIR" ]]; then
   run_shell "ls -lah '$FRONTEND_DIST_DIR' | sed -n '1,20p'"

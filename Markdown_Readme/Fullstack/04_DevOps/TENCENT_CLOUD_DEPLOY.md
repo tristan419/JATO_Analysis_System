@@ -177,6 +177,18 @@ sudo nano /etc/jato-fullstack/backend.env
 - `JATO_PARTITIONED_PATH=/opt/JATO_Analysis_System-main/04_Processed_data/partitioned_dataset_v1`
 - `APP_CRUD_DATA_PATH=/opt/JATO_Analysis_System-main/04_Processed_data/app_entities.json`
 
+Google 登录如果出现 `backend cannot reach Google OAuth`、`SSLEOFError` 或 `/token` 连接失败，问题发生在后端服务器访问 Google token/userinfo，不是浏览器网络。先在服务器上检查：
+
+```bash
+sudo grep -E '^(APP_GOOGLE_OAUTH_PROXY_URL|APP_GOOGLE_OAUTH_TIMEOUT_SECONDS|APP_GOOGLE_REDIRECT_URI|APP_FRONTEND_ORIGIN|APP_FRONTEND_ORIGINS)=' /etc/jato-fullstack/backend.env
+systemctl is-active mihomo || true
+ss -ltnp | grep ':7897' || true
+curl -I --max-time 10 --proxy http://127.0.0.1:7897 https://oauth2.googleapis.com/token
+sudo systemctl restart jato-fullstack-backend@8000
+```
+
+`curl` 能返回 Google 的 HTTP 响应头即可，状态码不是重点；如果这里超时、`ECONNRESET` 或 TLS EOF，就先修 `mihomo`/订阅规则，再重启后端。
+
 启动时会执行后端环境变量校验：
 
 - `APP_DATABASE_ENABLED=true` 时，`APP_DATABASE_URL` 不能为空，否则后端会直接启动失败。
