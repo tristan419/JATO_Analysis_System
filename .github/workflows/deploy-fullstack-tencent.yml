@@ -404,8 +404,13 @@ jobs:
           rm -rf "$RELEASE_WORKTREE"
 
           echo "[INFO] Refreshing local mihomo subscription before backend restart..."
-          MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh" \
-            || echo "[WARN] Local mihomo refresh failed; continuing with existing proxy config"
+          mkdir -p "$REPO_DIR/hermes/reports"
+          MIHOMO_REFRESH_LOG="$REPO_DIR/hermes/reports/mihomo_refresh_status.txt"
+          {
+            date -u
+            MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
+          } > "$MIHOMO_REFRESH_LOG" 2>&1 \
+            || echo "[WARN] Local mihomo refresh failed; continuing with existing proxy config" >> "$MIHOMO_REFRESH_LOG"
 
           export REPO_DIR DEPLOY_SOURCE
           python3 - <<'PY'
@@ -543,6 +548,15 @@ jobs:
             systemctl is-active mihomo 2>&1 || true
             ss -ltnp | grep -E '(:7897)\b' 2>&1 || true
             curl -I --max-time 20 --proxy "${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}" https://oauth2.googleapis.com/token 2>&1 || true
+            echo "---mihomo refresh---"
+            cat "$REPO_DIR/hermes/reports/mihomo_refresh_status.txt" 2>&1 || echo "MIHOMO_REFRESH_STATUS_MISSING"
+            echo "---mihomo config summary---"
+            "$REPO_DIR/.venv/bin/python" -c 'import json; from pathlib import Path; import yaml; path = Path("/etc/mihomo/config.yaml"); cfg = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}; groups = cfg.get("proxy-groups") or []; rules = cfg.get("rules") or []; print(json.dumps({"mixed_port": cfg.get("mixed-port"), "mode": cfg.get("mode"), "proxy_count": len(cfg.get("proxies") or []), "groups": [{"name": group.get("name"), "type": group.get("type"), "proxy_count": len(group.get("proxies") or [])} for group in groups[:8] if isinstance(group, dict)], "rules_head": rules[:8]}, ensure_ascii=False, indent=2))' 2>&1 || true
+            echo "---mihomo controller---"
+            curl -sS --max-time 10 http://127.0.0.1:9090/proxies 2>&1 \
+              | "$REPO_DIR/.venv/bin/python" -c 'import json,sys; data=json.load(sys.stdin); proxies=data.get("proxies",{}); print(json.dumps({name: {"type": value.get("type"), "now": value.get("now"), "history": value.get("history", [])[-2:]} for name, value in list(proxies.items())[:25]}, ensure_ascii=False, indent=2))' 2>&1 || true
+            echo "---mihomo journal---"
+            sudo -n journalctl -u mihomo.service -n 80 --no-pager 2>&1 || true
             echo "---release---"
             cat "$REPO_DIR/hermes/deploy_release.json" 2>&1 || echo "RELEASE_METADATA_MISSING"
             echo "---deploy failure context---"
@@ -750,8 +764,13 @@ jobs:
           rm -rf "$RELEASE_WORKTREE"
 
           echo "[INFO] Refreshing local mihomo subscription before backend restart..."
-          MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh" \
-            || echo "[WARN] Local mihomo refresh failed; continuing with existing proxy config"
+          mkdir -p "$REPO_DIR/hermes/reports"
+          MIHOMO_REFRESH_LOG="$REPO_DIR/hermes/reports/mihomo_refresh_status.txt"
+          {
+            date -u
+            MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
+          } > "$MIHOMO_REFRESH_LOG" 2>&1 \
+            || echo "[WARN] Local mihomo refresh failed; continuing with existing proxy config" >> "$MIHOMO_REFRESH_LOG"
 
           export REPO_DIR DEPLOY_SOURCE
           python3 - <<'PY'
@@ -889,6 +908,15 @@ jobs:
             systemctl is-active mihomo 2>&1 || true
             ss -ltnp | grep -E '(:7897)\b' 2>&1 || true
             curl -I --max-time 20 --proxy "${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}" https://oauth2.googleapis.com/token 2>&1 || true
+            echo "---mihomo refresh---"
+            cat "$REPO_DIR/hermes/reports/mihomo_refresh_status.txt" 2>&1 || echo "MIHOMO_REFRESH_STATUS_MISSING"
+            echo "---mihomo config summary---"
+            "$REPO_DIR/.venv/bin/python" -c 'import json; from pathlib import Path; import yaml; path = Path("/etc/mihomo/config.yaml"); cfg = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}; groups = cfg.get("proxy-groups") or []; rules = cfg.get("rules") or []; print(json.dumps({"mixed_port": cfg.get("mixed-port"), "mode": cfg.get("mode"), "proxy_count": len(cfg.get("proxies") or []), "groups": [{"name": group.get("name"), "type": group.get("type"), "proxy_count": len(group.get("proxies") or [])} for group in groups[:8] if isinstance(group, dict)], "rules_head": rules[:8]}, ensure_ascii=False, indent=2))' 2>&1 || true
+            echo "---mihomo controller---"
+            curl -sS --max-time 10 http://127.0.0.1:9090/proxies 2>&1 \
+              | "$REPO_DIR/.venv/bin/python" -c 'import json,sys; data=json.load(sys.stdin); proxies=data.get("proxies",{}); print(json.dumps({name: {"type": value.get("type"), "now": value.get("now"), "history": value.get("history", [])[-2:]} for name, value in list(proxies.items())[:25]}, ensure_ascii=False, indent=2))' 2>&1 || true
+            echo "---mihomo journal---"
+            sudo -n journalctl -u mihomo.service -n 80 --no-pager 2>&1 || true
             echo "---release---"
             cat "$REPO_DIR/hermes/deploy_release.json" 2>&1 || echo "RELEASE_METADATA_MISSING"
             echo "---deploy failure context---"
