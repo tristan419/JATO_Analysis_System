@@ -49,12 +49,23 @@ APP_GOOGLE_REDIRECT_URI=https://www.ojeur.cloud/v1/auth/google/callback
 
 Google OAuth callback can stay on `www.ojeur.cloud`; the backend stores the initiating frontend origin in OAuth state and redirects back to `intl.ojeur.cloud` only when it is in `APP_FRONTEND_ORIGINS`.
 
+Do not register `intl.ojeur.cloud` as a second Google callback unless the backend is also changed to accept that callback. The intended chain is:
+
+```text
+intl.ojeur.cloud page -> www.ojeur.cloud /v1/auth/google/auth-url
+Google login -> www.ojeur.cloud /v1/auth/google/callback
+backend state -> intl.ojeur.cloud original page
+```
+
 ## Quick Check
 
 After both deployments:
 
 ```bash
 curl -I https://intl.ojeur.cloud/login
+curl -sS \
+  -H 'Origin: https://intl.ojeur.cloud' \
+  'https://www.ojeur.cloud/v1/auth/google/auth-url?redirect=%2Fproduct%2Forder-genius'
 curl -i -X OPTIONS \
   -H 'Origin: https://intl.ojeur.cloud' \
   -H 'Access-Control-Request-Method: GET' \
@@ -62,4 +73,4 @@ curl -i -X OPTIONS \
   https://www.ojeur.cloud/v1/auth/me
 ```
 
-The second command should include an `access-control-allow-origin: https://intl.ojeur.cloud` response header.
+The auth-url response should contain a Google URL whose encoded `state` stores `frontend_origin=https://intl.ojeur.cloud` and `redirect=/product/order-genius`. The OPTIONS response should include an `access-control-allow-origin: https://intl.ojeur.cloud` response header.

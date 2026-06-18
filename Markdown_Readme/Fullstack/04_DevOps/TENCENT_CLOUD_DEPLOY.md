@@ -185,6 +185,19 @@ sudo nano /etc/jato-fullstack/backend.env
 - 如果生产要求 Country Copilot 必须可用，设置 `APP_COUNTRY_COPILOT_REQUIRE_LLM_KEY=true`，并在服务器本地填写 `DEEPSEEK_API_KEY`。
 - 校验日志只输出变量名和缺失原因，不输出 secret 值。
 
+Google 登录的生产链路是：前端从 `www.ojeur.cloud` 或 `intl.ojeur.cloud` 请求 `www.ojeur.cloud/v1/auth/google/auth-url`，Google callback 固定回到 `https://www.ojeur.cloud/v1/auth/google/callback`，后端再按 OAuth state 里的安全 frontend origin 回跳到发起登录的页面。腾讯云大陆机房访问 `oauth2.googleapis.com` 时需要本机 mihomo 代理，默认 `APP_GOOGLE_OAUTH_PROXY_URL=http://127.0.0.1:7897`。
+
+如果页面显示 `Google auth failed` 或 `SSLEOFError`，先在服务器上检查：
+
+```bash
+systemctl is-active mihomo
+ss -ltnp | grep ':7897'
+curl -I --max-time 20 --proxy http://127.0.0.1:7897 https://oauth2.googleapis.com/token
+curl -sS https://www.ojeur.cloud/_deploy_status.txt | sed -n '/---google oauth proxy---/,/---release---/p'
+```
+
+`curl -I` 只要能连通并返回 HTTP 头即可，HTTP 400/404/405 都代表网络出口通了；连接超时、EOF、connection closed 才是代理或出口问题。GitHub Actions 部署会自动刷新 mihomo 订阅、重启服务，并把 Google 代理检查写入 `_deploy_status.txt`。
+
 线上需要 News/VOC/MSRP 写 PostgreSQL 时，后端 env 至少应包含：
 
 ```bash
