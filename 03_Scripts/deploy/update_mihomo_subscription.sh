@@ -88,10 +88,11 @@ if [[ "$HTTP_CODE" != "200" ]]; then
   exit 1
 fi
 
-# Validate it looks like a YAML Clash config
-if ! head -5 "$TMP_CONF" | grep -qE '^(port:|mixed-port:|proxies:)'; then
+# Validate it looks like a YAML Clash config. Some managed subscriptions start
+# with comment headers such as #!MANAGED-CONFIG, so scan beyond the first lines.
+if ! grep -qE '^(port:|mixed-port:|proxies:|proxy-groups:)' "$TMP_CONF"; then
   echo "[mihomo-sub] ERROR: Response does not look like a Clash YAML config" >&2
-  head -5 "$TMP_CONF" >&2
+  head -20 "$TMP_CONF" >&2
   rm -f "$TMP_CONF"
   exit 1
 fi
