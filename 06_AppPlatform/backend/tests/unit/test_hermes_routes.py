@@ -910,6 +910,8 @@ class TestSentinelAndDeploy:
                 },
                 "retryableNetworkCount": 1,
                 "officialProxyRequiredCount": 1,
+                "tlsHandshakeFailedCount": 1,
+                "dnsUnresolvedCount": 0,
             },
             "items": [
                 {
@@ -936,6 +938,7 @@ class TestSentinelAndDeploy:
         accessibility = resp.json()["sourceAccessibilityAudit"]
         assert accessibility["schemaVersion"] == "msrp_source_accessibility_audit_v1"
         assert accessibility["summary"]["officialProxyRequiredCount"] == 1
+        assert accessibility["summary"]["tlsHandshakeFailedCount"] == 1
         assert accessibility["items"][0]["probeStatus"] == "anti_bot_blocked"
 
 

@@ -105,6 +105,8 @@ def test_country_progress_preserves_finance_dryrun_counts(tmp_path, monkeypatch)
                 },
                 "retryableNetworkCount": 1,
                 "officialProxyRequiredCount": 1,
+                "tlsHandshakeFailedCount": 1,
+                "dnsUnresolvedCount": 0,
             },
             "items": [],
         }),
@@ -127,8 +129,10 @@ def test_country_progress_preserves_finance_dryrun_counts(tmp_path, monkeypatch)
     assert "| se | success | 96.6% | 28 | 1 | 0 | 1 | 1 |" in markdown
     assert result["sourceReferenceEvidence"]["summary"]["localReferenceCount"] == 5
     assert result["sourceAccessibilityAudit"]["summary"]["officialProxyRequiredCount"] == 1
+    assert result["sourceAccessibilityAudit"]["summary"]["tlsHandshakeFailedCount"] == 1
     assert "| Local references | 5 |" in markdown
     assert "| Official proxy required | 1 |" in markdown
+    assert "| TLS handshake failed | 1 |" in markdown
 
 
 def test_country_progress_keeps_stable_latest_when_active_run_regresses(tmp_path, monkeypatch):

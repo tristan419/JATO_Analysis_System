@@ -106,6 +106,8 @@ def _default_source_accessibility_audit() -> dict[str, Any]:
             "recommendedActionCounts": {},
             "retryableNetworkCount": 0,
             "officialProxyRequiredCount": 0,
+            "tlsHandshakeFailedCount": 0,
+            "dnsUnresolvedCount": 0,
         },
         "items": [],
     }

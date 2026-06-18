@@ -152,11 +152,35 @@ def classify_probe_result(
                 "error": error,
             }
         if (
+            "ssleoferror" in lowered
+            or "[ssl:" in lowered
+            or "sslerror" in lowered
+            or "tls" in lowered
+        ):
+            return {
+                "probeStatus": "tls_handshake_failed",
+                "recommendedAction": "try_official_alternative_url_or_proxy",
+                "retryable": True,
+                "officialProxyRequired": False,
+                "error": error,
+            }
+        if (
+            "nameresolutionerror" in lowered
+            or "failed to resolve" in lowered
+            or "nodename" in lowered
+            or "dns" in lowered
+        ):
+            return {
+                "probeStatus": "dns_unresolved",
+                "recommendedAction": "check_dns_or_source_domain",
+                "retryable": True,
+                "officialProxyRequired": False,
+                "error": error,
+            }
+        if (
             error_type == "ConnectionError"
             or "connection" in lowered
             or "resolve" in lowered
-            or "dns" in lowered
-            or "nodename" in lowered
         ):
             return {
                 "probeStatus": "network_unreachable",
@@ -306,19 +330,28 @@ def summarize_items(items: list[dict[str, Any]]) -> dict[str, Any]:
     action_counts: dict[str, int] = {}
     retryable_count = 0
     proxy_required_count = 0
+    tls_failed_count = 0
+    dns_unresolved_count = 0
     for item in items:
-        _increment(status_counts, item.get("probeStatus"))
+        probe_status = item.get("probeStatus")
+        _increment(status_counts, probe_status)
         _increment(action_counts, item.get("recommendedAction"))
         if item.get("retryable"):
             retryable_count += 1
         if item.get("officialProxyRequired"):
             proxy_required_count += 1
+        if probe_status == "tls_handshake_failed":
+            tls_failed_count += 1
+        if probe_status == "dns_unresolved":
+            dns_unresolved_count += 1
     return {
         "probedSourceCount": len(items),
         "probeStatusCounts": status_counts,
         "recommendedActionCounts": action_counts,
         "retryableNetworkCount": retryable_count,
         "officialProxyRequiredCount": proxy_required_count,
+        "tlsHandshakeFailedCount": tls_failed_count,
+        "dnsUnresolvedCount": dns_unresolved_count,
     }
 
 
@@ -370,6 +403,8 @@ def _write_markdown(report: dict[str, Any], path: Path) -> None:
         f"| Transient regressions | {summary.get('transientRegressionCount', 0)} |",
         f"| Retryable network | {summary.get('retryableNetworkCount', 0)} |",
         f"| Official proxy required | {summary.get('officialProxyRequiredCount', 0)} |",
+        f"| TLS handshake failed | {summary.get('tlsHandshakeFailedCount', 0)} |",
+        f"| DNS unresolved | {summary.get('dnsUnresolvedCount', 0)} |",
         "",
         "| Country | Source | HTTP | Probe status | Recommended action | URL |",
         "|---|---|---:|---|---|---|",

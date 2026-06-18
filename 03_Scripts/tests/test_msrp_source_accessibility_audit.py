@@ -193,6 +193,48 @@ def test_probe_source_classifies_timeout_as_retryable_network() -> None:
     assert item["retryable"] is True
 
 
+def test_probe_source_classifies_tls_eof_as_tls_handshake_failed() -> None:
+    session = _FakeSession(
+        exc=audit.requests.exceptions.SSLError(
+            "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol",
+        ),
+    )
+
+    item = audit.probe_source(
+        {
+            "countryCode": "at",
+            "sourceCode": "mg_zs_at_draft_scrapling",
+            "sourceUrl": "https://www.mgmotor.at/modelle/mg-zs",
+        },
+        session=session,
+    )
+
+    assert item["probeStatus"] == "tls_handshake_failed"
+    assert item["recommendedAction"] == "try_official_alternative_url_or_proxy"
+    assert item["retryable"] is True
+
+
+def test_probe_source_classifies_dns_resolution_failures() -> None:
+    session = _FakeSession(
+        exc=audit.requests.ConnectionError(
+            "NameResolutionError: Failed to resolve 'www.example.invalid'",
+        ),
+    )
+
+    item = audit.probe_source(
+        {
+            "countryCode": "at",
+            "sourceCode": "example_at_draft_scrapling",
+            "sourceUrl": "https://www.example.invalid/model",
+        },
+        session=session,
+    )
+
+    assert item["probeStatus"] == "dns_unresolved"
+    assert item["recommendedAction"] == "check_dns_or_source_domain"
+    assert item["retryable"] is True
+
+
 def test_run_writes_accessibility_report(tmp_path: Path) -> None:
     backlog_path = tmp_path / "backlog.json"
     backlog_path.write_text(
@@ -226,5 +268,7 @@ def test_run_writes_accessibility_report(tmp_path: Path) -> None:
     assert report["summary"]["probeStatusCounts"] == {
         "source_url_not_found": 1,
     }
+    assert report["summary"]["tlsHandshakeFailedCount"] == 0
+    assert report["summary"]["dnsUnresolvedCount"] == 0
     assert (tmp_path / "out" / "msrp_source_accessibility_audit.json").exists()
     assert (tmp_path / "out" / "msrp_source_accessibility_audit.md").exists()

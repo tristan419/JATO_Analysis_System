@@ -138,6 +138,8 @@ def _default_source_accessibility_audit() -> dict:
             "recommendedActionCounts": {},
             "retryableNetworkCount": 0,
             "officialProxyRequiredCount": 0,
+            "tlsHandshakeFailedCount": 0,
+            "dnsUnresolvedCount": 0,
         },
         "items": [],
     }
@@ -1166,6 +1168,8 @@ def _render_markdown(result: dict) -> str:
         lines.append(f"| Probed sources | {accessibility_summary.get('probedSourceCount', 0)} |")
         lines.append(f"| Retryable network | {accessibility_summary.get('retryableNetworkCount', 0)} |")
         lines.append(f"| Official proxy required | {accessibility_summary.get('officialProxyRequiredCount', 0)} |")
+        lines.append(f"| TLS handshake failed | {accessibility_summary.get('tlsHandshakeFailedCount', 0)} |")
+        lines.append(f"| DNS unresolved | {accessibility_summary.get('dnsUnresolvedCount', 0)} |")
         lines.append("")
 
     findings = result.get("findings", [])
