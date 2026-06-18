@@ -14,8 +14,34 @@ set -euo pipefail
 SSH_HOST="${SSH_HOST:-tencent-cloud}"
 MIHOMO_CONFIG_DIR="/etc/mihomo"
 DEFAULT_MIHOMO_SUB_URL="${DEFAULT_MIHOMO_SUB_URL:-https://naikosub.com/link/LPFT7gIKqNavBKoe?clash=1}"
+MIHOMO_LOCAL="${MIHOMO_LOCAL:-false}"
 
 discover_remote_subscription_url() {
+  if [[ "$MIHOMO_LOCAL" == "true" ]]; then
+    python3 - <<"PY"
+import sqlite3
+from pathlib import Path
+
+db_path = Path("/home/ubuntu/.local/share/0dcloud/database.sqlite")
+if not db_path.exists():
+    raise SystemExit(0)
+
+conn = sqlite3.connect(str(db_path))
+cur = conn.cursor()
+query = """
+SELECT url, last_update_date, id
+FROM profiles
+WHERE url IS NOT NULL AND TRIM(url) != ?
+ORDER BY last_update_date DESC, id DESC
+LIMIT 1
+"""
+rows = list(cur.execute(query, ("",)))
+if rows:
+    print(rows[0][0].strip())
+PY
+    return
+  fi
+
   ssh "$SSH_HOST" 'python3 - <<"PY"
 import sqlite3
 from pathlib import Path
@@ -123,19 +149,37 @@ print(
 )
 "
 
-echo "[mihomo-sub] Uploading to $SSH_HOST ..."
-scp "$TMP_CONF" "${SSH_HOST}:/tmp/mihomo-sub.yaml"
-ssh "$SSH_HOST" "sudo cp $MIHOMO_CONFIG_DIR/config.yaml $MIHOMO_CONFIG_DIR/config.yaml.bak 2>/dev/null || true; \
-  sudo mv /tmp/mihomo-sub.yaml $MIHOMO_CONFIG_DIR/config.yaml && \
-  sudo chmod 600 $MIHOMO_CONFIG_DIR/config.yaml && \
-  sudo systemctl restart mihomo.service && \
-  sleep 2 && \
-  echo '[mihomo-sub] Service restarted' && \
-  sudo systemctl status mihomo.service --no-pager | head -8"
+if [[ "$MIHOMO_LOCAL" == "true" ]]; then
+  echo "[mihomo-sub] Installing local config..."
+  sudo cp "$MIHOMO_CONFIG_DIR/config.yaml" "$MIHOMO_CONFIG_DIR/config.yaml.bak" 2>/dev/null || true
+  sudo mv "$TMP_CONF" "$MIHOMO_CONFIG_DIR/config.yaml"
+  sudo chmod 600 "$MIHOMO_CONFIG_DIR/config.yaml"
+  timeout 45s sudo systemctl restart mihomo.service \
+    || timeout 45s sudo systemctl restart mihomo \
+    || true
+  sleep 2
+  echo '[mihomo-sub] Service restarted'
+  sudo systemctl status mihomo.service --no-pager | head -8 || true
+else
+  echo "[mihomo-sub] Uploading to $SSH_HOST ..."
+  scp "$TMP_CONF" "${SSH_HOST}:/tmp/mihomo-sub.yaml"
+  ssh "$SSH_HOST" "sudo cp $MIHOMO_CONFIG_DIR/config.yaml $MIHOMO_CONFIG_DIR/config.yaml.bak 2>/dev/null || true; \
+    sudo mv /tmp/mihomo-sub.yaml $MIHOMO_CONFIG_DIR/config.yaml && \
+    sudo chmod 600 $MIHOMO_CONFIG_DIR/config.yaml && \
+    timeout 45s sudo systemctl restart mihomo.service || timeout 45s sudo systemctl restart mihomo || true && \
+    sleep 2 && \
+    echo '[mihomo-sub] Service restarted' && \
+    sudo systemctl status mihomo.service --no-pager | head -8"
+fi
 
 # Quick connectivity test
 echo "[mihomo-sub] Testing Google connectivity..."
-ssh "$SSH_HOST" "curl -sL --connect-timeout 10 -x http://127.0.0.1:7897 -o /dev/null -w 'HTTP:%{http_code}\n' https://news.google.com/"
+if [[ "$MIHOMO_LOCAL" == "true" ]]; then
+  curl -sL --connect-timeout 10 -x http://127.0.0.1:7897 \
+    -o /dev/null -w 'HTTP:%{http_code}\n' https://news.google.com/
+else
+  ssh "$SSH_HOST" "curl -sL --connect-timeout 10 -x http://127.0.0.1:7897 -o /dev/null -w 'HTTP:%{http_code}\n' https://news.google.com/"
+fi
 
-rm -f "$TMP_CONF"
+rm -f "$TMP_CONF" 2>/dev/null || true
 echo "[mihomo-sub] Done."
