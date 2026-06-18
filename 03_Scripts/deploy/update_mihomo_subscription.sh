@@ -80,7 +80,7 @@ fi
 
 echo "[mihomo-sub] Fetching subscription: $SUB_URL"
 TMP_CONF="$(mktemp)"
-HTTP_CODE=$(curl -sL -w "%{http_code}" --connect-timeout 15 -o "$TMP_CONF" "$SUB_URL")
+HTTP_CODE=$(curl -sL -w "%{http_code}" --connect-timeout 15 --max-time 60 -o "$TMP_CONF" "$SUB_URL")
 
 if [[ "$HTTP_CODE" != "200" ]]; then
   echo "[mihomo-sub] ERROR: HTTP $HTTP_CODE — subscription unavailable" >&2
@@ -176,9 +176,10 @@ fi
 echo "[mihomo-sub] Testing Google connectivity..."
 if [[ "$MIHOMO_LOCAL" == "true" ]]; then
   curl -sL --connect-timeout 10 -x http://127.0.0.1:7897 \
+    --max-time 30 \
     -o /dev/null -w 'HTTP:%{http_code}\n' https://news.google.com/
 else
-  ssh "$SSH_HOST" "curl -sL --connect-timeout 10 -x http://127.0.0.1:7897 -o /dev/null -w 'HTTP:%{http_code}\n' https://news.google.com/"
+  ssh "$SSH_HOST" "curl -sL --connect-timeout 10 --max-time 30 -x http://127.0.0.1:7897 -o /dev/null -w 'HTTP:%{http_code}\n' https://news.google.com/"
 fi
 
 rm -f "$TMP_CONF" 2>/dev/null || true
