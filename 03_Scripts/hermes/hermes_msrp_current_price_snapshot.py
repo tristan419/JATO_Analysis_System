@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Generate Hermes MSRP current price snapshot artifacts.
 
-The backend owns the current price, price history, and alert semantics. This
-script calls that read API and materializes the weekly snapshot into Hermes
-JSON/Markdown artifacts so the result can be archived by deploy jobs.
+The backend owns the current price, price history, alert, reconciliation, and
+finance semantics. This script calls those read APIs and materializes the
+weekly snapshot into Hermes JSON/Markdown artifacts so the result can be
+archived by deploy jobs.
 """
 
 from __future__ import annotations
@@ -100,6 +101,65 @@ def _fetch_effectiveness(
         return json.loads(response.read().decode("utf-8"))
 
 
+def _fetch_reconciliation(
+    *,
+    api_base: str,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    limit: int,
+    threshold_pct: float,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    query = {
+        "limit": str(limit),
+        "threshold_pct": str(threshold_pct),
+    }
+    if country:
+        query["country"] = country
+    if brand:
+        query["brand"] = brand
+    if jato_model:
+        query["jato_model"] = jato_model
+    url = (
+        api_base.rstrip("/")
+        + "/msrp/reconciliation?"
+        + urllib.parse.urlencode(query)
+    )
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _fetch_finance_observations(
+    *,
+    api_base: str,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    limit: int,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    query = {
+        "limit": str(limit),
+        "offset": "0",
+    }
+    if country:
+        query["country"] = country
+    if brand:
+        query["brand"] = brand
+    if jato_model:
+        query["jato_model"] = jato_model
+    url = (
+        api_base.rstrip("/")
+        + "/msrp/finance-observations?"
+        + urllib.parse.urlencode(query)
+    )
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def _safe_token(value: str | None, fallback: str) -> str:
     text = str(value or "").strip().lower()
     if not text:
@@ -169,11 +229,23 @@ def _render_markdown(snapshot: dict[str, Any]) -> str:
     summary = snapshot.get("summary") or {}
     alert_summary = summary.get("priceAlertSummary") or {}
     effectiveness = snapshot.get("priceSalesEffectiveness") or {}
+    reconciliation = snapshot.get("multiSourceReconciliation") or {}
+    finance = snapshot.get("financeObservations") or {}
     effectiveness_summary = (
         effectiveness.get("summary")
         if isinstance(effectiveness, dict)
         else {}
     ) or summary.get("effectivenessSummary") or {}
+    reconciliation_summary = (
+        reconciliation.get("summary")
+        if isinstance(reconciliation, dict)
+        else {}
+    ) or summary.get("reconciliationSummary") or {}
+    finance_summary = (
+        finance.get("summary")
+        if isinstance(finance, dict)
+        else {}
+    ) or summary.get("financeSummary") or {}
     warnings = [
         str(item)
         for item in (snapshot.get("warnings") or [])
@@ -196,6 +268,10 @@ def _render_markdown(snapshot: dict[str, Any]) -> str:
         f"| Alert threshold pct | {_number(summary.get('priceAlertThresholdPct'))} |",
         f"| Effectiveness events | {_number(effectiveness_summary.get('priceEventCount'))} |",
         f"| Effectiveness analyzed | {_number(effectiveness_summary.get('analyzedEventCount'))} |",
+        f"| Reconciliation groups | {_number(reconciliation_summary.get('reconciliationGroupCount'))} |",
+        f"| Finance observations | {_number(finance.get('total'))} |",
+        f"| Finance monthly rows | {_number(finance_summary.get('monthlyPaymentCount'))} |",
+        f"| Net incentive price rows | {_number(finance_summary.get('netPriceAfterSubsidyCount'))} |",
         "",
     ]
     if warnings:
@@ -276,6 +352,94 @@ def _render_markdown(snapshot: dict[str, Any]) -> str:
                 ])
                 + " |"
             )
+    lines.extend([
+        "",
+        "## Multi-source Reconciliation",
+        "",
+    ])
+    status_counts = (
+        reconciliation_summary.get("statusCounts")
+        if isinstance(reconciliation_summary.get("statusCounts"), dict)
+        else {}
+    )
+    if status_counts:
+        lines.extend([
+            "| Status | Count |",
+            "|---|---:|",
+        ])
+        for status, count in sorted(status_counts.items()):
+            lines.append(f"| {_markdown_cell(status)} | {_number(count)} |")
+        lines.append("")
+    reconciliation_items = (
+        list(reconciliation.get("items") or [])
+        if isinstance(reconciliation, dict)
+        else []
+    )
+    if not reconciliation_items:
+        lines.append("No multi-source reconciliation rows in this snapshot.")
+    else:
+        lines.extend([
+            "| Country | Brand | Model | Trim | Status | Sources | Spread % | Action |",
+            "|---|---|---|---|---|---:|---:|---|",
+        ])
+        for item in reconciliation_items[:50]:
+            lines.append(
+                "| "
+                + " | ".join([
+                    _markdown_cell(item.get("country")),
+                    _markdown_cell(item.get("brand")),
+                    _markdown_cell(item.get("jatoModel")),
+                    _markdown_cell(item.get("jatoTrim")),
+                    _markdown_cell(item.get("status")),
+                    _number(item.get("sourceCount")),
+                    _number(item.get("spreadPct")),
+                    _markdown_cell(item.get("recommendedAction")),
+                ])
+                + " |"
+            )
+    lines.extend([
+        "",
+        "## Finance And Net Incentives",
+        "",
+        "| Metric | Value |",
+        "|---|---:|",
+        f"| Finance observations | {_number(finance.get('total'))} |",
+        f"| Returned rows | {_number(finance.get('rows'))} |",
+        f"| Monthly payment rows | {_number(finance_summary.get('monthlyPaymentCount'))} |",
+        f"| Subsidy rows | {_number(finance_summary.get('subsidyObservationCount'))} |",
+        f"| Net price after subsidy rows | {_number(finance_summary.get('netPriceAfterSubsidyCount'))} |",
+        f"| Monthly EUR min | {_number(finance_summary.get('monthlyPaymentEurMin'))} |",
+        f"| Monthly EUR max | {_number(finance_summary.get('monthlyPaymentEurMax'))} |",
+        f"| Net price EUR min | {_number(finance_summary.get('netPriceAfterSubsidyEurMin'))} |",
+        f"| Net price EUR max | {_number(finance_summary.get('netPriceAfterSubsidyEurMax'))} |",
+        "",
+    ])
+    finance_items = (
+        list(finance.get("items") or [])
+        if isinstance(finance, dict)
+        else []
+    )
+    if not finance_items:
+        lines.append("No finance observation rows in this snapshot.")
+    else:
+        lines.extend([
+            "| Country | Brand | Model | Semantics | Finance type | Monthly EUR | Net price EUR |",
+            "|---|---|---|---|---|---:|---:|",
+        ])
+        for item in finance_items[:50]:
+            lines.append(
+                "| "
+                + " | ".join([
+                    _markdown_cell(item.get("country")),
+                    _markdown_cell(item.get("brand")),
+                    _markdown_cell(item.get("jatoModel")),
+                    _markdown_cell(item.get("priceSemantics")),
+                    _markdown_cell(item.get("financeType")),
+                    _number(item.get("monthlyPaymentEur")),
+                    _number(item.get("netPriceAfterSubsidyEur")),
+                ])
+                + " |"
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -305,10 +469,13 @@ def run(
     threshold_pct: float,
     timeout_seconds: int,
     include_effectiveness: bool = True,
+    include_reconciliation: bool = True,
+    include_finance: bool = True,
     baseline_window_months: int = 3,
     post_window_months: int = 3,
     post_lag_months: int = 1,
     min_months: int = 1,
+    reconciliation_threshold_pct: float = 1.0,
 ) -> dict[str, Any]:
     started_at = _utc_now()
     snapshot = _fetch_snapshot(
@@ -328,7 +495,11 @@ def run(
         if str(item).strip()
     ]
     effectiveness_summary: dict[str, Any] = {}
+    reconciliation_summary: dict[str, Any] = {}
+    finance_summary: dict[str, Any] = {}
     effectiveness_warning_count = 0
+    reconciliation_warning_count = 0
+    finance_warning_count = 0
     if include_effectiveness:
         try:
             effectiveness = _fetch_effectiveness(
@@ -363,10 +534,83 @@ def run(
                 f"effectiveness_unavailable:{type(exc).__name__}"
             )
     summary = snapshot.get("summary") or {}
+    if include_reconciliation:
+        try:
+            reconciliation = _fetch_reconciliation(
+                api_base=api_base,
+                country=country,
+                brand=brand,
+                jato_model=jato_model,
+                limit=limit,
+                threshold_pct=reconciliation_threshold_pct,
+                timeout_seconds=timeout_seconds,
+            )
+            reconciliation_summary = (
+                reconciliation.get("summary")
+                if isinstance(reconciliation.get("summary"), dict)
+                else {}
+            )
+            snapshot = {
+                **snapshot,
+                "summary": {
+                    **summary,
+                    "reconciliationSummary": reconciliation_summary,
+                },
+                "multiSourceReconciliation": reconciliation,
+            }
+            for warning in reconciliation.get("warnings") or []:
+                if str(warning).strip():
+                    warnings.append(f"reconciliation:{warning}")
+        except Exception as exc:  # pragma: no cover - covered by script run paths.
+            reconciliation_warning_count = 1
+            warnings.append(
+                f"reconciliation_unavailable:{type(exc).__name__}"
+            )
+    summary = snapshot.get("summary") or {}
+    if include_finance:
+        try:
+            finance = _fetch_finance_observations(
+                api_base=api_base,
+                country=country,
+                brand=brand,
+                jato_model=jato_model,
+                limit=limit,
+                timeout_seconds=timeout_seconds,
+            )
+            finance_summary = (
+                finance.get("summary")
+                if isinstance(finance.get("summary"), dict)
+                else {}
+            )
+            snapshot = {
+                **snapshot,
+                "summary": {
+                    **summary,
+                    "financeSummary": finance_summary,
+                },
+                "financeObservations": finance,
+            }
+            for warning in finance.get("warnings") or []:
+                if str(warning).strip():
+                    warnings.append(f"finance:{warning}")
+            if finance.get("warning"):
+                warnings.append(f"finance:{finance['warning']}")
+        except Exception as exc:  # pragma: no cover - covered by script run paths.
+            finance_warning_count = 1
+            warnings.append(
+                f"finance_unavailable:{type(exc).__name__}"
+            )
+    summary = snapshot.get("summary") or {}
     alert_summary = summary.get("priceAlertSummary") or {}
     current_count = int(summary.get("currentPriceCount") or 0)
     high_priority = int(alert_summary.get("highPriorityAlertCount") or 0)
     threshold_alerts = int(alert_summary.get("thresholdAlertCount") or 0)
+    status_counts = reconciliation_summary.get("statusCounts")
+    conflict_count = (
+        int(status_counts.get("conflict") or 0)
+        if isinstance(status_counts, dict)
+        else 0
+    )
     if current_count == 0:
         warnings.append("no_current_prices_available")
     if warnings:
@@ -377,12 +621,21 @@ def run(
     artifact_refs = _write_outputs(snapshot, out_dir)
     finished_at = _utc_now()
     status = "degraded" if current_count == 0 or high_priority > 0 else "success"
-    if effectiveness_warning_count:
+    if conflict_count > 0:
+        status = "degraded"
+    if (
+        effectiveness_warning_count
+        or reconciliation_warning_count
+        or finance_warning_count
+    ):
         status = "degraded"
     warning_count = (
         threshold_alerts
         + (1 if current_count == 0 else 0)
         + effectiveness_warning_count
+        + reconciliation_warning_count
+        + finance_warning_count
+        + conflict_count
     )
 
     write_pipeline_status(
@@ -400,12 +653,16 @@ def run(
             f"thresholdAlerts={threshold_alerts}, "
             f"highPriority={high_priority}, "
             f"effectivenessAnalyzed="
-            f"{effectiveness_summary.get('analyzedEventCount', 0)}."
+            f"{effectiveness_summary.get('analyzedEventCount', 0)}, "
+            f"reconciliationConflicts={conflict_count}, "
+            f"financeRows={snapshot.get('financeObservations', {}).get('total', 0)}."
         ),
         extra={
             "snapshotWeek": snapshot.get("snapshotWeek"),
             "priceAlertSummary": alert_summary,
             "effectivenessSummary": effectiveness_summary,
+            "reconciliationSummary": reconciliation_summary,
+            "financeSummary": finance_summary,
             "warnings": warnings,
         },
         repo_root=REPO_ROOT,
@@ -434,10 +691,21 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip /msrp/effectiveness when only current price state is needed.",
     )
+    parser.add_argument(
+        "--no-reconciliation",
+        action="store_true",
+        help="Skip /msrp/reconciliation weekly snapshot enrichment.",
+    )
+    parser.add_argument(
+        "--no-finance",
+        action="store_true",
+        help="Skip /msrp/finance-observations weekly snapshot enrichment.",
+    )
     parser.add_argument("--baseline-window-months", type=int, default=3)
     parser.add_argument("--post-window-months", type=int, default=3)
     parser.add_argument("--post-lag-months", type=int, default=1)
     parser.add_argument("--min-months", type=int, default=1)
+    parser.add_argument("--reconciliation-threshold-pct", type=float, default=1.0)
     args = parser.parse_args(argv)
 
     started_at = _utc_now()
@@ -452,10 +720,16 @@ def main(argv: list[str] | None = None) -> int:
             threshold_pct=max(0.0, args.threshold_pct),
             timeout_seconds=max(1, args.timeout_seconds),
             include_effectiveness=not args.no_effectiveness,
+            include_reconciliation=not args.no_reconciliation,
+            include_finance=not args.no_finance,
             baseline_window_months=max(1, args.baseline_window_months),
             post_window_months=max(1, args.post_window_months),
             post_lag_months=max(0, args.post_lag_months),
             min_months=max(1, args.min_months),
+            reconciliation_threshold_pct=max(
+                0.0,
+                args.reconciliation_threshold_pct,
+            ),
         )
     except Exception as exc:
         _write_failure_status(exc, started_at)
