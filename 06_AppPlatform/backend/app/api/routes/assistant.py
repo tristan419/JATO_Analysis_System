@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 
+from app.api.cache_headers import set_strong_json_cache_headers
 from app.api.schemas import (
     CountryChatDeckRequest,
     CountryChatRequest,
@@ -23,9 +24,16 @@ router = APIRouter(prefix="/assistant/country", tags=["assistant"])
 
 @router.get("/metadata")
 def metadata(
+    response: Response,
     _=Depends(require_min_role("viewer")),
 ) -> dict:
-    return get_country_chat_metadata()
+    payload = get_country_chat_metadata()
+    set_strong_json_cache_headers(
+        response,
+        payload,
+        namespace="country-chat-metadata",
+    )
+    return payload
 
 
 @router.post("/chat/stream")

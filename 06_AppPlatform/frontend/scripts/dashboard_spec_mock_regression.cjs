@@ -304,6 +304,18 @@ async function main() {
       return json(route, { items: columns });
     }
 
+    if (path.endsWith('/filters/options/batch')) {
+      counters.options += 1;
+      const payload = request.postDataJSON() || {};
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      return json(route, {
+        items: items.map((item) => ({
+          column: item.column,
+          options: optionsFor(item.column, item.filters || {}),
+        })),
+      });
+    }
+
     if (path.endsWith('/filters/options')) {
       counters.options += 1;
       const payload = request.postDataJSON() || {};

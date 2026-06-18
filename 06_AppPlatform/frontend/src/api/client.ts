@@ -169,6 +169,15 @@ export function apiUrl(path: string): string {
   return `${normalizedBase}${normalizedPath}`;
 }
 
+interface FilterOptionsResponse {
+  column: string;
+  options: string[];
+}
+
+interface FilterOptionsBatchResponse {
+  items: FilterOptionsResponse[];
+}
+
 function getAuthHeaders(): Record<string, string> {
   const token = (
     localStorage.getItem("jato_auth_token")
@@ -1812,9 +1821,14 @@ export const api = {
 
   columns: () => request<{ items: string[] }>("/metadata/columns"),
   filterOptions: (payload: FilterOptionsPayload, init?: RequestInit) =>
-    request<{ column: string; options: string[] }>(
+    request<FilterOptionsResponse>(
       "/filters/options",
       { method: "POST", body: JSON.stringify(payload), ...init }
+    ),
+  filterOptionsBatch: (items: FilterOptionsPayload[], init?: RequestInit) =>
+    request<FilterOptionsBatchResponse>(
+      "/filters/options/batch",
+      { method: "POST", body: JSON.stringify({ items }), ...init }
     ),
   analysis: (payload: AnalysisQuery) =>
     request<{ route: string; rows: number; items: Record<string, unknown>[] }>(
