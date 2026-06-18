@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import secrets
+import threading
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlencode, urlparse
 
@@ -36,6 +38,11 @@ from app.services.auth_service import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+_ME_PAYLOAD_CACHE_TTL_SECONDS = 15
+_ME_PAYLOAD_CACHE_MAX_ENTRIES = 512
+_me_payload_cache: dict[str, tuple[float, dict]] = {}
+_me_payload_cache_lock = threading.Lock()
 
 
 class LoginBody(BaseModel):
@@ -103,7 +110,7 @@ def _normalize_secondary_countries(
 
 
 def _user_payload(user: User) -> dict:
-    secondary = user.secondary_country_codes or []
+    secondary = list(user.secondary_country_codes or [])
     return {
         "id": str(user.id),
         "username": user.username,
@@ -118,6 +125,63 @@ def _user_payload(user: User) -> dict:
         "preferredLandingPage": user.preferred_landing_page,
         "profileComplete": bool(user.primary_country_code),
     }
+
+
+def _copy_user_payload(payload: dict) -> dict:
+    """Return a defensive copy so cached list values cannot be mutated by callers."""
+    copied = dict(payload)
+    copied["secondaryCountries"] = list(payload.get("secondaryCountries") or [])
+    return copied
+
+
+def _get_cached_me_payload(username: str) -> dict | None:
+    if not AUTH_ENABLED:
+        return None
+    key = str(username or "").strip()
+    if not key or key == "anonymous":
+        return None
+
+    now = time.monotonic()
+    with _me_payload_cache_lock:
+        cached = _me_payload_cache.get(key)
+        if cached is None:
+            return None
+        cached_at, payload = cached
+        if (now - cached_at) >= _ME_PAYLOAD_CACHE_TTL_SECONDS:
+            _me_payload_cache.pop(key, None)
+            return None
+        return _copy_user_payload(payload)
+
+
+def _store_me_payload(username: str, payload: dict) -> dict:
+    if not AUTH_ENABLED:
+        return payload
+    key = str(username or "").strip()
+    if not key or key == "anonymous":
+        return payload
+
+    with _me_payload_cache_lock:
+        _me_payload_cache[key] = (time.monotonic(), _copy_user_payload(payload))
+        while len(_me_payload_cache) > _ME_PAYLOAD_CACHE_MAX_ENTRIES:
+            oldest_key = min(
+                _me_payload_cache,
+                key=lambda item: _me_payload_cache[item][0],
+            )
+            _me_payload_cache.pop(oldest_key, None)
+    return payload
+
+
+def _invalidate_me_payload_cache(username: str | None) -> None:
+    key = str(username or "").strip()
+    if not key:
+        return
+    with _me_payload_cache_lock:
+        _me_payload_cache.pop(key, None)
+
+
+def _clear_me_payload_cache() -> None:
+    with _me_payload_cache_lock:
+        _me_payload_cache.clear()
 
 
 def _safe_frontend_redirect(value: str | None) -> str:
@@ -246,6 +310,10 @@ def me(
     user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Return the current authenticated user."""
+    cached_payload = _get_cached_me_payload(user.name)
+    if cached_payload is not None:
+        return cached_payload
+
     db_user = db.query(User).filter(User.username == user.name).first()
     if not db_user:
         return {
@@ -261,7 +329,8 @@ def me(
     # so that local development always sees full admin permissions.
     if not AUTH_ENABLED:
         payload["role"] = user.role
-    return payload
+        return payload
+    return _store_me_payload(user.name, payload)
 
 
 @router.patch("/me/profile")
@@ -294,6 +363,7 @@ def update_my_profile(
             db_user.display_name = dn if dn else None
         db.commit()
         db.refresh(db_user)
+        _invalidate_me_payload_cache(db_user.username)
         return _user_payload(db_user)
 
     primary = _normalize_country_code(body.primary_country)
@@ -312,6 +382,7 @@ def update_my_profile(
         db_user.display_name = dn if dn else None
     db.commit()
     db.refresh(db_user)
+    _invalidate_me_payload_cache(db_user.username)
     return _user_payload(db_user)
 
 
@@ -356,6 +427,7 @@ def update_user_role(
 
     user.role = body.role
     db.commit()
+    _invalidate_me_payload_cache(user.username)
     return {"id": str(user.id), "username": user.username, "role": user.role}
 
 
@@ -386,6 +458,7 @@ def update_user_profile(
         user.display_name = dn if dn else None
     db.commit()
     db.refresh(user)
+    _invalidate_me_payload_cache(user.username)
     return _user_payload(user)
 
 
@@ -404,6 +477,7 @@ def delete_user(
     username = user.username
     db.delete(user)
     db.commit()
+    _invalidate_me_payload_cache(username)
     return {"id": str(user_id), "username": username, "deleted": True}
 
 
@@ -420,6 +494,7 @@ def toggle_user_active(
     user.is_active = not user.is_active
     db.commit()
     db.refresh(user)
+    _invalidate_me_payload_cache(user.username)
     return _user_payload(user)
 
 
@@ -442,6 +517,7 @@ def reset_user_password(
         raise HTTPException(status_code=404, detail="User not found")
     user.password_hash = hash_password(body.password)
     db.commit()
+    _invalidate_me_payload_cache(user.username)
     return {"id": str(user_id), "username": user.username, "passwordReset": True}
 
 
@@ -560,6 +636,7 @@ def review_role_upgrade(
         db_user = db.query(User).filter(User.username == req.username).first()
         if db_user:
             db_user.role = req.requested_role
+            _invalidate_me_payload_cache(db_user.username)
 
     db.commit()
     return {

@@ -1,3 +1,5 @@
+import threading
+
 import pandas as pd
 
 from app.services import query_service
@@ -106,6 +108,75 @@ def test_query_grouped_time_series_caches_by_params_and_dataset_token(
     assert load_calls == 2
     assert first == second == third
     query_service._grouped_time_series_cache.clear()
+
+
+def test_query_grouped_time_series_coalesces_concurrent_same_key(
+    monkeypatch,
+) -> None:
+    calls = 0
+    compute_started = threading.Event()
+    release_compute = threading.Event()
+    results: list[dict] = []
+
+    def query() -> None:
+        results.append(
+            query_service.query_grouped_time_series(
+                filters={"Country": ["HU"]},
+                grain="year",
+                group_by="Brand",
+                top_n=2,
+                include_others=False,
+            )
+        )
+
+    def fake_impl(**_kwargs) -> dict:
+        nonlocal calls
+        calls += 1
+        compute_started.set()
+        assert release_compute.wait(timeout=2)
+        return {
+            "grain": "year",
+            "rows": 1,
+            "items": [{"time": "2024", "value": 10.0, "series": "Alpha"}],
+        }
+
+    query_service._clear_grouped_time_series_cache()
+    monkeypatch.setattr(
+        query_service.repo,
+        "current_dataset_token",
+        lambda: "dataset-a",
+    )
+    monkeypatch.setattr(
+        query_service,
+        "_query_grouped_time_series_impl",
+        fake_impl,
+    )
+
+    first = threading.Thread(target=query)
+    second = threading.Thread(target=query)
+    first.start()
+    assert compute_started.wait(timeout=2)
+    second.start()
+    release_compute.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert calls == 1
+    assert results == [
+        {
+            "grain": "year",
+            "rows": 1,
+            "items": [{"time": "2024", "value": 10.0, "series": "Alpha"}],
+        },
+        {
+            "grain": "year",
+            "rows": 1,
+            "items": [{"time": "2024", "value": 10.0, "series": "Alpha"}],
+        },
+    ]
+    query_service._clear_grouped_time_series_cache()
 
 
 def test_query_grouped_time_series_respects_time_range_for_topn(
