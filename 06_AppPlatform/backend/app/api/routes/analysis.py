@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Response
 
+from app.api.cache_headers import set_strong_json_cache_headers
 from app.api.schemas import (
     AdvancedChartRequest,
     AnalysisRequest,
@@ -71,9 +72,16 @@ def overview(
 
 @router.get("/data-freshness")
 def data_freshness(
+    response: Response,
     _=Depends(optional_viewer),
 ) -> dict:
-    return {"items": get_data_freshness()}
+    payload = {"items": get_data_freshness()}
+    set_strong_json_cache_headers(
+        response,
+        payload,
+        namespace="data-freshness",
+    )
+    return payload
 
 
 @router.post("/detail")

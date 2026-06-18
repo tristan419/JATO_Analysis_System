@@ -221,6 +221,19 @@ export function isRouteAllowedForRole(pathname: string, userRole: string): boole
   return getMenuPathsForRole(userRole).some((path) => matchesNavPath(pathname, path));
 }
 
+export function isKnownAppRoute(pathname: string): boolean {
+  if (pathname === "/" || pathname.startsWith("/login") || pathname === "/account/profile") {
+    return true;
+  }
+  const override = Object.keys(ROUTE_ROLE_OVERRIDES).some((path) => (
+    matchesNavPath(pathname, path)
+  ));
+  if (override) {
+    return true;
+  }
+  return getMenuPathsForRole("admin").some((path) => matchesNavPath(pathname, path));
+}
+
 export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
   {
     id: "dashboard",

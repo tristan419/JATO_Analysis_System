@@ -537,16 +537,6 @@ export function DashboardPage() {
     loadPositioningMap();
   }, [filterTimeScopeKey, loadPositioningMap, optionsSyncPending, pmItems.length]);
 
-  /* B12: lazy auto-load — when filteredRowCount < 200 000, auto-trigger first advanced chart */
-  const advAutoLoaded = useRef(false);
-  useEffect(() => {
-    if (advAutoLoaded.current) return;
-    if (filteredRowCount !== null && filteredRowCount < 200_000 && columns.length > 0 && advItems.length === 0 && advChart !== "rv_finance_dashboard") {
-      advAutoLoaded.current = true;
-      loadAdvChart();
-    }
-  }, [filteredRowCount, columns.length, advItems.length, advChart]);
-
   /* auto-fetch grouped time series */
   useEffect(() => {
     if (tsMode !== "\u5206\u7ec4" || columns.length === 0) return;

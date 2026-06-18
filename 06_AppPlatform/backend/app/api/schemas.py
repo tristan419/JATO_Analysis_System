@@ -9,6 +9,10 @@ class FiltersOptionsRequest(BaseModel):
     filters: dict[str, list[str]] = Field(default_factory=dict)
 
 
+class FiltersOptionsBatchRequest(BaseModel):
+    items: list[FiltersOptionsRequest] = Field(default_factory=list)
+
+
 class AnalysisResponse(BaseModel):
     route: str
     rows: int
