@@ -205,7 +205,8 @@ def run(dryrun_path: str | None = None, out_dir: str | None = None) -> dict:
     md_path = out_base / "msrp_source_repair_backlog.md"
 
     if report.get("schemaVersion") == "msrp_dryrun_report_v3" and _write_v3_source_repair_backlog:
-        _write_v3_source_repair_backlog(report, out_base)
+        history_base = Path(dryrun_path).resolve().parent if dryrun_path else out_base
+        _write_v3_source_repair_backlog(report, out_base, history_base)
         try:
             backlog = json.loads(json_path.read_text(encoding="utf-8"))
         except Exception:

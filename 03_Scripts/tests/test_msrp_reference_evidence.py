@@ -161,6 +161,76 @@ def test_build_reference_evidence_filters_to_local_non_converted_prices() -> Non
     } == {"use_as_review_reference_only"}
 
 
+def test_build_reference_evidence_uses_per_source_tesla_issue_for_austria() -> None:
+    backlog = {
+        "schemaVersion": "msrp_source_repair_backlog_v1",
+        "runId": "msrp-dryrun-20260618-110029",
+        "sourceIssues": [
+            {
+                "countryCode": "at",
+                "sourceCode": "mg_zs_at_draft_scrapling",
+                "brand": "MG",
+                "host": "mgmotor.at",
+                "failureReason": "network_unavailable",
+            },
+            {
+                "countryCode": "at",
+                "sourceCode": "tesla_model_y_at_draft_scrapling",
+                "brand": "TESLA",
+                "host": "tesla.com",
+                "failureReason": "network_unavailable",
+                "recommendedStrategy": "retry_network_or_proxy",
+            },
+        ],
+    }
+    session = _FakeSession([
+        {
+            "evs": [
+                {
+                    "evId": "at-standard",
+                    "name": "Tesla Model Y Standard",
+                    "startPrice": 44990,
+                    "currency": "EUR",
+                    "pricingCountry": "Austria",
+                    "isConverted": False,
+                    "infoUri": "../models/tesla/model_y/model_y_standard/",
+                },
+                {
+                    "evId": "at-converted",
+                    "name": "Tesla Model Y RWD",
+                    "startPrice": 44990,
+                    "currency": "EUR",
+                    "pricingCountry": "Germany",
+                    "isConverted": True,
+                },
+            ],
+            "hasNextPage": False,
+        },
+    ])
+
+    payload = reference_script.build_reference_evidence(
+        backlog,
+        session=session,
+        page_size=1000,
+        max_pages=1,
+    )
+
+    assert payload["summary"] == {
+        "evidenceItemCount": 1,
+        "localReferenceCount": 1,
+        "missingLocalReferenceCount": 0,
+        "officialIngestEligibleCount": 0,
+    }
+    assert [call[1]["pricingCountry"] for call in session.calls] == ["Austria"]
+    item = payload["items"][0]
+    assert item["countryCode"] == "at"
+    assert item["brand"] == "TESLA"
+    assert item["modelQuery"] == "Tesla Model Y"
+    assert item["sourceCodes"] == ["tesla_model_y_at_draft_scrapling"]
+    assert item["officialIngestEligible"] is False
+    assert item["localPriceReferences"][0]["evId"] == "at-standard"
+
+
 def test_build_reference_evidence_marks_missing_local_references() -> None:
     session = _FakeSession([
         {"evs": [], "hasNextPage": False},

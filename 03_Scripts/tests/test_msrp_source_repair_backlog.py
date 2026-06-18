@@ -202,6 +202,75 @@ def test_v3_report_marks_historical_pass_as_recheck(tmp_path: Path) -> None:
     assert group["transientRegressions"][0]["lastKnownGoodRunId"] == previous_run_id
 
 
+def test_v3_report_uses_artifact_history_when_output_dir_differs(
+    tmp_path: Path,
+) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    output_dir = tmp_path / "reports"
+    artifact_dir.mkdir()
+    current_run_id = "msrp-dryrun-20260616-101010"
+    previous_run_id = "msrp-dryrun-20260615-101010"
+    source_code = "volvo_xc60_se_draft_scrapling"
+    previous_path = artifact_dir / f"dryrun_report_{previous_run_id}.json"
+    previous_path.write_text(
+        json.dumps({
+            "schemaVersion": "msrp_dryrun_report_v3",
+            "runId": previous_run_id,
+            "countriesDetail": [
+                {
+                    "countryCode": "se",
+                    "sources": [
+                        {
+                            "sourceCode": source_code,
+                            "status": "pass",
+                            "valid": 1,
+                        }
+                    ],
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+    (artifact_dir / "dryrun_runs_index.json").write_text(
+        json.dumps({
+            "schemaVersion": "msrp_dryrun_runs_index_v1",
+            "runs": [
+                {
+                    "runId": previous_run_id,
+                    "finishedAt": "2026-06-15T10:12:00Z",
+                    "artifactPath": str(previous_path),
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+    current_path = artifact_dir / "dryrun_report.json"
+    current_path.write_text(
+        json.dumps({
+            "schemaVersion": "msrp_dryrun_report_v3",
+            "runId": current_run_id,
+            "results": [
+                {
+                    "country": "se",
+                    "sourceCode": source_code,
+                    "status": "empty",
+                    "valid": 0,
+                    "failureReason": "http_timeout",
+                    "recommendedStrategy": "retry_network_or_proxy",
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    backlog = backlog_script.run(str(current_path), str(output_dir))
+
+    assert (output_dir / "msrp_source_repair_backlog.json").exists()
+    assert backlog["sourceRepairIssueCount"] == 0
+    assert backlog["transientRegressionCount"] == 1
+    assert backlog["transientSourceRegressions"][0]["lastKnownGoodRunId"] == previous_run_id
+
+
 def test_v3_report_marks_tesla_403_with_evkx_reference_policy(tmp_path: Path) -> None:
     report = {
         "schemaVersion": "msrp_dryrun_report_v3",

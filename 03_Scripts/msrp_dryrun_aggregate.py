@@ -621,10 +621,17 @@ def _iter_report_results(report: dict[str, Any]) -> list[dict[str, Any]]:
     return flattened
 
 
-def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
+def _write_source_repair_backlog(
+    report: dict[str, Any],
+    out_dir: Path,
+    history_dir: Path | None = None,
+) -> None:
     groups: dict[str, dict[str, Any]] = {}
     top_hosts: dict[str, dict[str, Any]] = {}
-    last_known_good = _historical_good_sources(out_dir, str(report.get("runId") or ""))
+    last_known_good = _historical_good_sources(
+        history_dir or out_dir,
+        str(report.get("runId") or ""),
+    )
     for result in _iter_report_results(report):
         reason = result.get("failureReason")
         if not reason:

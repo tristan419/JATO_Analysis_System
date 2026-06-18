@@ -60,6 +60,24 @@ COUNTRY_NAME_BY_CODE = {
     "us": "UnitedStates",
 }
 
+TESLA_EVKX_REFERENCE_ASSIST = {
+    "preferred": "official_proxy_or_configurator_api",
+    "thirdPartyReference": "EVKX",
+    "referencePolicy": "reference_only_review_required",
+    "officialSourceRequiredForIngest": True,
+    "acceptanceRules": [
+        "Do not count EVKX as an official MSRP dryrun pass.",
+        "Only use EVKX records when pricingCountry matches the target country.",
+        "Only use EVKX records when isConverted is false.",
+        "Keep the Tesla official source open until an official page, price list, or configurator API is fetchable.",
+    ],
+    "reason": (
+        "Tesla official pages are blocked by the direct fetch path; EVKX can "
+        "supply BEV variant and local-price reference evidence but cannot "
+        "replace official MSRP evidence."
+    ),
+}
+
 SOURCE_SUFFIXES = (
     "_draft_scrapling",
     "_draft_playwright",
@@ -126,6 +144,38 @@ def _reference_groups(backlog: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _is_tesla_source(source: dict[str, Any]) -> bool:
+    brand = str(source.get("brand") or "").strip().upper()
+    host = str(source.get("host") or "").strip().lower()
+    source_code = str(source.get("sourceCode") or source.get("code") or "").lower()
+    return brand == "TESLA" or host == "tesla.com" or source_code.startswith("tesla_")
+
+
+def _iter_source_repair_issues(backlog: dict[str, Any]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str]] = set()
+    items: list[dict[str, Any]] = []
+    candidates: list[Any] = []
+    candidates.extend(backlog.get("sourceIssues") or [])
+    for group in backlog.get("groups") or []:
+        if isinstance(group, dict):
+            candidates.extend(group.get("sourceRepairIssues") or [])
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        source_code = str(candidate.get("sourceCode") or candidate.get("code") or "").strip()
+        country_code = str(
+            candidate.get("countryCode")
+            or candidate.get("country")
+            or _country_from_source_code(source_code)
+        ).strip().lower()
+        key = (country_code, source_code)
+        if not country_code or not source_code or key in seen:
+            continue
+        seen.add(key)
+        items.append(candidate)
+    return items
+
+
 def _work_items_from_backlog(backlog: dict[str, Any]) -> list[dict[str, Any]]:
     items: dict[tuple[str, str, str], dict[str, Any]] = {}
     for group in _reference_groups(backlog):
@@ -165,6 +215,39 @@ def _work_items_from_backlog(backlog: dict[str, Any]) -> list[dict[str, Any]]:
                     "referenceAssist": group.get("referenceAssist"),
                 },
             )
+            entry["sourceCodes"].append(source_code)
+    for source in _iter_source_repair_issues(backlog):
+        if not _is_tesla_source(source):
+            continue
+        source_code = str(source.get("sourceCode") or source.get("code") or "").strip()
+        country_code = str(
+            source.get("countryCode")
+            or source.get("country")
+            or _country_from_source_code(source_code)
+        ).strip().lower()
+        brand = "TESLA"
+        model_query = _source_model_query(
+            source_code,
+            brand=brand,
+            country_code=country_code,
+        )
+        if not country_code or not model_query:
+            continue
+        key = (country_code, brand, model_query)
+        entry = items.setdefault(
+            key,
+            {
+                "countryCode": country_code,
+                "pricingCountry": COUNTRY_NAME_BY_CODE.get(country_code, ""),
+                "brand": brand,
+                "modelQuery": model_query,
+                "sourceCodes": [],
+                "failureReason": source.get("failureReason"),
+                "recommendedStrategy": source.get("recommendedStrategy"),
+                "referenceAssist": TESLA_EVKX_REFERENCE_ASSIST,
+            },
+        )
+        if source_code not in entry["sourceCodes"]:
             entry["sourceCodes"].append(source_code)
     return sorted(
         items.values(),
