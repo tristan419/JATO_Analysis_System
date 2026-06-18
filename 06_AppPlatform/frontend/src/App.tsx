@@ -84,6 +84,10 @@ function withPageLoader(node: ReactNode) {
   );
 }
 
+function withSharedFilterScope(node: ReactNode) {
+  return <SharedFilterScopeProvider>{node}</SharedFilterScopeProvider>;
+}
+
 function RedirectPreserveSearch({ to }: { to: string }) {
   const location = useLocation();
   return <Navigate to={`${to}${location.search}${location.hash}`} replace />;
@@ -91,9 +95,9 @@ function RedirectPreserveSearch({ to }: { to: string }) {
 
 const router = createBrowserRouter([
   { path: "/login", element: (<AuthProvider>{withPageLoader(<LoginPage />)}</AuthProvider>) },
-  { path: "/", element: (<AuthProvider><OAuthGate><SharedFilterScopeProvider><CountryChatProvider><RequireRole><Layout /></RequireRole></CountryChatProvider></SharedFilterScopeProvider></OAuthGate></AuthProvider>), children: [
-    { index: true, element: withPageLoader(<DashboardPage />) },
-    { path: "dashboard", element: withPageLoader(<DashboardPage />) },
+  { path: "/", element: (<AuthProvider><OAuthGate><CountryChatProvider><RequireRole><Layout /></RequireRole></CountryChatProvider></OAuthGate></AuthProvider>), children: [
+    { index: true, element: withSharedFilterScope(withPageLoader(<DashboardPage />)) },
+    { path: "dashboard", element: withSharedFilterScope(withPageLoader(<DashboardPage />)) },
     { path: "market/overview", element: withPageLoader(<MarketOverviewPage />) },
     { path: "market/segments", element: withPageLoader(<MarketSegmentsPage />) },
     { path: "market/ranking/brand", element: withPageLoader(<MarketBrandRankingPage />) },
@@ -109,7 +113,7 @@ const router = createBrowserRouter([
     { path: "product/pricing", element: withPageLoader(<PositioningPricingPage />) },
     { path: "product/compare", element: withPageLoader(<VersionComparisonPage />) },
     { path: "product/customer-insight", element: withPageLoader(<CustomerInsightsPage />) },
-    { path: "data/spec-detail", element: withPageLoader(<SpecificationPage />) },
+    { path: "data/spec-detail", element: withSharedFilterScope(withPageLoader(<SpecificationPage />)) },
     { path: "data/overview", element: withPageLoader(<DataManagementPage />) },
     { path: "data/config-import", element: withPageLoader(<EngineeringPage />) },
     { path: "data/matching-review", element: withPageLoader(<ReviewCasesPage />) },
@@ -127,7 +131,7 @@ const router = createBrowserRouter([
     { path: "version-comparison", element: <RedirectPreserveSearch to="/product/compare" /> },
     { path: "customer-insights", element: <RedirectPreserveSearch to="/product/customer-insight" /> },
     { path: "customer-hev", element: <RedirectPreserveSearch to="/product/customer-insight" /> },
-    { path: "specification", element: withPageLoader(<SpecificationPage />) },
+    { path: "specification", element: withSharedFilterScope(withPageLoader(<SpecificationPage />)) },
     { path: "data-management", element: withPageLoader(<DataManagementPage />) },
     { path: "engineering", element: <RedirectPreserveSearch to="/data/config-import" /> },
     { path: "review", element: <RedirectPreserveSearch to="/data/matching-review" /> },

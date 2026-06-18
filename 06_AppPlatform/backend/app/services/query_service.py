@@ -11,6 +11,8 @@ import pandas as pd
 from app.core.config import (
     DEFAULT_GROUP_BY,
     FILTER_OPTIONS_SNAPSHOT_TTL_SECONDS,
+    GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES,
+    GROUPED_TIME_SERIES_CACHE_TTL_SECONDS,
 )
 from app.infra import parquet_repository as repo
 
@@ -77,6 +79,19 @@ _overview_cache: dict[
     tuple[float, str, dict],
 ] = {}
 _overview_cache_lock = threading.Lock()
+_grouped_time_series_cache: dict[
+    tuple[
+        tuple[tuple[str, tuple[str, ...]], ...],
+        str,
+        str | None,
+        str | None,
+        int,
+        bool,
+        tuple[str, str] | None,
+    ],
+    tuple[float, str, dict],
+] = {}
+_grouped_time_series_cache_lock = threading.Lock()
 
 
 # ── Helper: resolve column name ────────────────────────────────
@@ -838,6 +853,54 @@ def filters_options(column: str, filters: dict[str, list[str]]) -> dict:
     }
 
 
+def filters_options_batch(
+    requests: list[tuple[str, dict[str, list[str]]]],
+) -> list[dict]:
+    results: list[dict] = [
+        {"column": str(column).strip(), "options": []}
+        for column, _ in requests
+    ]
+    grouped_requests: dict[
+        tuple[tuple[str, tuple[str, ...]], ...],
+        tuple[dict[str, list[str]], list[tuple[int, str]]],
+    ] = {}
+    snapshot: dict[str, list[str]] | None = None
+
+    for index, (raw_column, filters) in enumerate(requests):
+        column = str(raw_column).strip()
+        if not column:
+            continue
+        if not _has_active_filters(filters):
+            if snapshot is None:
+                snapshot = _load_top_level_filter_options_snapshot()
+            if column in snapshot:
+                results[index] = {
+                    "column": column,
+                    "options": snapshot[column],
+                }
+                continue
+
+        normalized_filters = _normalize_query_cache_filters(filters)
+        grouped = grouped_requests.get(normalized_filters)
+        if grouped is None:
+            grouped = (filters, [])
+            grouped_requests[normalized_filters] = grouped
+        grouped[1].append((index, column))
+
+    for filters, indexed_columns in grouped_requests.values():
+        option_map = repo.load_distinct_options_batch(
+            [column for _, column in indexed_columns],
+            filters,
+        )
+        for index, column in indexed_columns:
+            results[index] = {
+                "column": column,
+                "options": option_map.get(column, []),
+            }
+
+    return results
+
+
 # ── Analysis query ──────────────────────────────────────────────
 def query_analysis(
     filters: dict[str, list[str]],
@@ -948,6 +1011,81 @@ def query_time_series(
 
 # ── Grouped time series (multi-series with group-by, top-n, "其他") ──
 def query_grouped_time_series(
+    filters: dict[str, list[str]],
+    grain: str,
+    group_by: str | None,
+    top_n: int,
+    include_others: bool,
+    share_split_by: str | None = None,
+    time_range: dict[str, str] | None = None,
+) -> dict:
+    normalized_grain = "year" if str(grain).lower() == "year" else "month"
+    cache_key = (
+        _normalize_query_cache_filters(filters),
+        normalized_grain,
+        str(group_by).strip() if group_by else None,
+        str(share_split_by).strip() if share_split_by else None,
+        max(1, int(top_n)),
+        bool(include_others),
+        _extract_time_range(time_range),
+    )
+    dataset_token = repo.current_dataset_token()
+    now = time.monotonic()
+    cached = _grouped_time_series_cache.get(cache_key)
+    if cached is not None:
+        cached_at, cached_token, cached_result = cached
+        if (
+            cached_token == dataset_token
+            and (now - cached_at) < GROUPED_TIME_SERIES_CACHE_TTL_SECONDS
+        ):
+            return cached_result
+
+    with _grouped_time_series_cache_lock:
+        now = time.monotonic()
+        dataset_token = repo.current_dataset_token()
+        cached = _grouped_time_series_cache.get(cache_key)
+        if cached is not None:
+            cached_at, cached_token, cached_result = cached
+            if (
+                cached_token == dataset_token
+                and (now - cached_at) < GROUPED_TIME_SERIES_CACHE_TTL_SECONDS
+            ):
+                return cached_result
+
+    result = _query_grouped_time_series_impl(
+        filters=filters,
+        grain=normalized_grain,
+        group_by=group_by,
+        top_n=top_n,
+        include_others=include_others,
+        share_split_by=share_split_by,
+        time_range=time_range,
+    )
+
+    with _grouped_time_series_cache_lock:
+        now = time.monotonic()
+        dataset_token = repo.current_dataset_token()
+        cached = _grouped_time_series_cache.get(cache_key)
+        if cached is not None:
+            cached_at, cached_token, cached_result = cached
+            if (
+                cached_token == dataset_token
+                and (now - cached_at) < GROUPED_TIME_SERIES_CACHE_TTL_SECONDS
+            ):
+                return cached_result
+
+        _grouped_time_series_cache[cache_key] = (now, dataset_token, result)
+        max_entries = max(1, int(GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES))
+        while len(_grouped_time_series_cache) > max_entries:
+            oldest_key = min(
+                _grouped_time_series_cache,
+                key=lambda key: _grouped_time_series_cache[key][0],
+            )
+            _grouped_time_series_cache.pop(oldest_key, None)
+        return result
+
+
+def _query_grouped_time_series_impl(
     filters: dict[str, list[str]],
     grain: str,
     group_by: str | None,

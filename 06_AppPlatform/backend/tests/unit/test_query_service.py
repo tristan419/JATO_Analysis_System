@@ -3,6 +3,111 @@ import pandas as pd
 from app.services import query_service
 
 
+def test_filters_options_batch_merges_requests_with_same_filters(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[list[str], dict[str, list[str]]]] = []
+
+    monkeypatch.setattr(
+        query_service.repo,
+        "load_distinct_options_batch",
+        lambda columns, filters: (
+            calls.append((columns, filters))
+            or {column: [f"{column}-value"] for column in columns}
+        ),
+    )
+
+    result = query_service.filters_options_batch([
+        ("Make", {"Country": ["HU"]}),
+        ("Model", {"Country": ["HU"]}),
+    ])
+
+    assert calls == [
+        (["Make", "Model"], {"Country": ["HU"]}),
+    ]
+    assert result == [
+        {"column": "Make", "options": ["Make-value"]},
+        {"column": "Model", "options": ["Model-value"]},
+    ]
+
+
+def test_filters_options_batch_uses_top_level_snapshot(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        query_service,
+        "_load_top_level_filter_options_snapshot",
+        lambda: {"Country": ["HU", "SE"]},
+    )
+    monkeypatch.setattr(
+        query_service.repo,
+        "load_distinct_options_batch",
+        lambda columns, filters: (_ for _ in ()).throw(AssertionError("scan")),
+    )
+
+    result = query_service.filters_options_batch([
+        ("Country", {}),
+    ])
+
+    assert result == [
+        {"column": "Country", "options": ["HU", "SE"]},
+    ]
+
+
+def test_query_grouped_time_series_caches_by_params_and_dataset_token(
+    monkeypatch,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Brand": ["Alpha", "Beta"],
+            "2024": [10.0, 5.0],
+        }
+    )
+    load_calls = 0
+    dataset_token = "dataset-a"
+
+    def current_dataset_token() -> str:
+        return dataset_token
+
+    def load_slice(columns, filters, limit, offset):
+        nonlocal load_calls
+        load_calls += 1
+        return frame.loc[:, columns].copy()
+
+    query_service._grouped_time_series_cache.clear()
+    monkeypatch.setattr(query_service.repo, "current_dataset_token", current_dataset_token)
+    monkeypatch.setattr(query_service.repo, "list_columns", lambda: ["Brand", "2024"])
+    monkeypatch.setattr(query_service.repo, "load_slice", load_slice)
+
+    first = query_service.query_grouped_time_series(
+        filters={},
+        grain="year",
+        group_by="Brand",
+        top_n=2,
+        include_others=False,
+    )
+    second = query_service.query_grouped_time_series(
+        filters={},
+        grain="year",
+        group_by="Brand",
+        top_n=2,
+        include_others=False,
+    )
+
+    dataset_token = "dataset-b"
+    third = query_service.query_grouped_time_series(
+        filters={},
+        grain="year",
+        group_by="Brand",
+        top_n=2,
+        include_others=False,
+    )
+
+    assert load_calls == 2
+    assert first == second == third
+    query_service._grouped_time_series_cache.clear()
+
+
 def test_query_grouped_time_series_respects_time_range_for_topn(
     monkeypatch,
 ) -> None:
