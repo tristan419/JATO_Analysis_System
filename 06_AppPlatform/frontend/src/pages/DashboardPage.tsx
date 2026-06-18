@@ -63,6 +63,8 @@ const RvFinanceDashboard = lazy(() =>
   import("../components/RvFinanceDashboard").then((module) => ({ default: module.RvFinanceDashboard }))
 );
 
+const DASHBOARD_DEFERRED_FETCH_DELAY_MS = 6_000;
+
 function resolveTimeSeriesSeriesColor(
   name: string,
   index: number,
@@ -289,7 +291,7 @@ export function DashboardPage() {
   const [activeTab, setActiveTab] = useState<"year"|"month">(() => cachedPage?.activeTab ?? "month");
   const [chartType, setChartType] = useState<"line"|"bar"|"rank">(() => cachedPage?.chartType ?? "line");
   const [rankLimit, setRankLimit] = useState(() => cachedPage?.rankLimit ?? 20);
-  const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">(() => cachedPage?.tsMode ?? "\u5206\u7ec4");
+  const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">("\u603b\u548c");
   const [tsGroupDim, setTsGroupDim] = useState(() => cachedPage?.tsGroupDim ?? "\u56fd\u5bb6");
   const [tsShareSplit, setTsShareSplit] = useState<TimeSeriesShareSplitDimension>(
     () => cachedPage?.tsShareSplit ?? "total",
@@ -453,16 +455,21 @@ export function DashboardPage() {
   const [freshnessItems, setFreshnessItems] = useState<DataFreshnessItem[]>([]);
   useEffect(() => {
     let cancelled = false;
-    api.dataFreshness().then((res) => {
-      if (!cancelled) setFreshnessItems(res.items ?? []);
-    }).catch(() => {});
-    return () => { cancelled = true; };
+    const timer = window.setTimeout(() => {
+      api.dataFreshness().then((res) => {
+        if (!cancelled) setFreshnessItems(res.items ?? []);
+      }).catch(() => {});
+    }, DASHBOARD_DEFERRED_FETCH_DELAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void preloadPlotlyChartRuntime();
-    }, 150);
+    }, DASHBOARD_DEFERRED_FETCH_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, []);
 
