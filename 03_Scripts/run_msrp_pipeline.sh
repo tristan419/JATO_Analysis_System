@@ -19,10 +19,20 @@ UNIFIED_READINESS_SAMPLE_PER_KIND="${JATO_UNIFIED_READINESS_SAMPLE_PER_KIND:-1}"
 UNIFIED_READINESS_ARTIFACT_ROOT="${JATO_UNIFIED_READINESS_ARTIFACT_ROOT:-$REPO_DIR/03_Scripts/diagnostics/artifacts/unified_scraping_stage_smoke}"
 MIN_DRYRUN_PASS_PCT="${JATO_MSRP_MIN_DRYRUN_PASS_PCT:-70}"
 DRYRUN_REPORT="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_report.json"
+COUNTRY_PROGRESS_REPORT="$REPO_DIR/hermes/reports/msrp_country_progress.json"
+DRYRUN_GATE_MODE="${JATO_MSRP_PIPELINE_GATE_MODE:-active}"
 CONFIG_SOURCE_SYNC_STATUS="$REPO_DIR/hermes/reports/pipeline_status/engineering_config_source_sync.json"
 UNIFIED_READINESS_STATUS="$REPO_DIR/hermes/reports/pipeline_status/unified_scraping_readiness.json"
 GOAL_COMPLETION_STATUS="$REPO_DIR/hermes/reports/pipeline_status/goal_completion_audit.json"
 STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+DRYRUN_GATE_STATUS_EFFECTIVE=""
+DRYRUN_GATE_BASIS=""
+DRYRUN_GATE_STABLE_PASS_PCT=""
+DRYRUN_GATE_STABLE_RUN_ID=""
+DRYRUN_GATE_STABLE_ACTIVE_RUN_ID=""
+DRYRUN_GATE_READY_COUNTRY_COUNT=""
+DRYRUN_GATE_BLOCKED_COUNTRY_COUNT=""
+DRYRUN_GATE_PROBE_REGRESSION_COUNT=""
 
 is_truthy() {
   case "$1" in
@@ -43,7 +53,17 @@ write_pipeline_status() {
   MSRP_PIPELINE_STARTED_AT="$STARTED_AT" \
   MSRP_PIPELINE_COUNTRIES_RAW="$COUNTRIES_RAW" \
   MSRP_PIPELINE_DRYRUN_REPORT="$DRYRUN_REPORT" \
+  MSRP_PIPELINE_COUNTRY_PROGRESS_REPORT="$COUNTRY_PROGRESS_REPORT" \
   MSRP_PIPELINE_REPO_DIR="$REPO_DIR" \
+  MSRP_PIPELINE_DRYRUN_GATE_MODE="$DRYRUN_GATE_MODE" \
+  MSRP_PIPELINE_DRYRUN_EFFECTIVE_GATE_STATUS="${DRYRUN_GATE_STATUS_EFFECTIVE:-}" \
+  MSRP_PIPELINE_DRYRUN_GATE_BASIS="${DRYRUN_GATE_BASIS:-}" \
+  MSRP_PIPELINE_DRYRUN_STABLE_PASS_PCT="${DRYRUN_GATE_STABLE_PASS_PCT:-}" \
+  MSRP_PIPELINE_DRYRUN_STABLE_RUN_ID="${DRYRUN_GATE_STABLE_RUN_ID:-}" \
+  MSRP_PIPELINE_DRYRUN_STABLE_ACTIVE_RUN_ID="${DRYRUN_GATE_STABLE_ACTIVE_RUN_ID:-}" \
+  MSRP_PIPELINE_DRYRUN_READY_COUNTRY_COUNT="${DRYRUN_GATE_READY_COUNTRY_COUNT:-}" \
+  MSRP_PIPELINE_DRYRUN_BLOCKED_COUNTRY_COUNT="${DRYRUN_GATE_BLOCKED_COUNTRY_COUNT:-}" \
+  MSRP_PIPELINE_DRYRUN_PROBE_REGRESSION_COUNT="${DRYRUN_GATE_PROBE_REGRESSION_COUNT:-}" \
   "$PYTHON_BIN" -c '
 import json
 import os
@@ -59,10 +79,16 @@ started_at = os.environ["MSRP_PIPELINE_STARTED_AT"]
 finished_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 countries_raw = os.environ["MSRP_PIPELINE_COUNTRIES_RAW"]
 dryrun_report = Path(os.environ["MSRP_PIPELINE_DRYRUN_REPORT"])
+country_progress_report = Path(os.environ["MSRP_PIPELINE_COUNTRY_PROGRESS_REPORT"])
+dryrun_gate_mode = os.environ.get("MSRP_PIPELINE_DRYRUN_GATE_MODE") or "active"
+dryrun_effective_gate_status = os.environ.get("MSRP_PIPELINE_DRYRUN_EFFECTIVE_GATE_STATUS") or None
+dryrun_gate_basis = os.environ.get("MSRP_PIPELINE_DRYRUN_GATE_BASIS") or None
 artifact_refs = [
     "03_Scripts/diagnostics/artifacts/dryrun_report.json",
     "03_Scripts/diagnostics/artifacts/dryrun_runs_index.json",
     "03_Scripts/logs/scheduled_fetch_status.json",
+    "hermes/reports/msrp_country_progress.json",
+    "hermes/reports/msrp_country_progress.md",
     "hermes/reports/engineering_config_source_sync.json",
     "hermes/reports/engineering_config_source_sync.md",
     "hermes/reports/pipeline_status/engineering_config_source_sync.json",
@@ -90,6 +116,9 @@ existing["msrp_pipeline"] = {
     "reason": message,
     "countriesRaw": countries_raw,
     "dryrunReportPath": "03_Scripts/diagnostics/artifacts/dryrun_report.json",
+    "countryProgressReportPath": "hermes/reports/msrp_country_progress.json",
+    "dryrunGateMode": dryrun_gate_mode,
+    "dryrunGateBasis": dryrun_gate_basis,
 }
 status_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
 
@@ -114,6 +143,25 @@ config_payload = _read_json(config_status_path)
 unified_payload = _read_json(unified_status_path)
 goal_payload = _read_json(goal_status_path)
 pipeline_status = "failed" if status in {"failed", "failure", "error"} else status
+
+def _float_env(name):
+    value = os.environ.get(name)
+    if value in {None, ""}:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+def _int_env(name):
+    value = os.environ.get(name)
+    if value in {None, ""}:
+        return None
+    try:
+        return int(float(value))
+    except ValueError:
+        return None
+
 record = {
     "pipelineId": "msrp_pipeline",
     "status": pipeline_status,
@@ -133,8 +181,27 @@ record = {
         "countriesRaw": countries_raw,
         "dryrunRunId": report_payload.get("runId"),
         "dryrunGateStatus": summary.get("gateStatus"),
+        "dryrunEffectiveGateStatus": dryrun_effective_gate_status,
+        "dryrunGateMode": dryrun_gate_mode,
+        "dryrunGateBasis": dryrun_gate_basis,
         "dryrunPassPct": summary.get("passPct"),
         "dryrunGateThreshold": summary.get("gateThreshold"),
+        "countryProgressReportPath": (
+            "hermes/reports/msrp_country_progress.json"
+            if country_progress_report.exists() else None
+        ),
+        "stableCoveragePassPct": _float_env("MSRP_PIPELINE_DRYRUN_STABLE_PASS_PCT"),
+        "stableCoverageRunId": os.environ.get("MSRP_PIPELINE_DRYRUN_STABLE_RUN_ID") or None,
+        "stableCoverageActiveRunId": (
+            os.environ.get("MSRP_PIPELINE_DRYRUN_STABLE_ACTIVE_RUN_ID") or None
+        ),
+        "stableCoverageReadyCountryCount": _int_env(
+            "MSRP_PIPELINE_DRYRUN_READY_COUNTRY_COUNT"
+        ),
+        "stableCoverageBlockedCountryCount": _int_env(
+            "MSRP_PIPELINE_DRYRUN_BLOCKED_COUNTRY_COUNT"
+        ),
+        "probeRegressionCount": _int_env("MSRP_PIPELINE_DRYRUN_PROBE_REGRESSION_COUNT"),
         "configSourceSyncStatus": config_payload.get("status"),
         "configSourceSyncPipelineId": config_payload.get("pipelineId"),
         "unifiedReadinessStatus": unified_payload.get("status"),
@@ -156,13 +223,19 @@ status_dir.mkdir(parents=True, exist_ok=True)
 }
 
 read_dryrun_gate() {
-  "$PYTHON_BIN" - "$DRYRUN_REPORT" "$MIN_DRYRUN_PASS_PCT" <<'PY'
+  "$PYTHON_BIN" - \
+    "$DRYRUN_REPORT" \
+    "$MIN_DRYRUN_PASS_PCT" \
+    "$COUNTRY_PROGRESS_REPORT" \
+    "$DRYRUN_GATE_MODE" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
 default_threshold = int(float(sys.argv[2]))
+country_progress_path = Path(sys.argv[3])
+gate_mode = str(sys.argv[4] or "active").strip().lower()
 payload = json.loads(path.read_text(encoding="utf-8"))
 summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
 threshold = int(float(summary.get("gateThreshold") or default_threshold))
@@ -170,11 +243,66 @@ pass_pct = float(summary.get("passPct") or 0)
 gate_status = str(summary.get("gateStatus") or "").strip().lower()
 if not gate_status:
     gate_status = "allowed" if pass_pct >= threshold else "blocked"
+
+stable_pass_pct = ""
+stable_run_id = ""
+stable_active_run_id = ""
+ready_country_count = ""
+blocked_country_count = ""
+probe_regression_count = ""
+basis = "active"
+if country_progress_path.is_file():
+    try:
+        progress_payload = json.loads(country_progress_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        progress_payload = {}
+    stable = progress_payload.get("stableCoverage")
+    if isinstance(stable, dict):
+        stable_pass = stable.get("sourcePassRate", stable.get("stablePassRate", 0))
+        try:
+            stable_pass_float = float(stable_pass or 0)
+        except (TypeError, ValueError):
+            stable_pass_float = 0.0
+        try:
+            ready_count = int(float(stable.get("readyCountryCount") or 0))
+        except (TypeError, ValueError):
+            ready_count = 0
+        try:
+            blocked_count = int(float(stable.get("blockedCountryCount") or 0))
+        except (TypeError, ValueError):
+            blocked_count = 0
+        try:
+            regression_count = int(float(stable.get("probeRegressionCount") or 0))
+        except (TypeError, ValueError):
+            regression_count = 0
+        stable_pass_pct = f"{stable_pass_float:.1f}"
+        stable_run_id = str(stable.get("latestRunId") or "")
+        stable_active_run_id = str(stable.get("activeRunId") or "")
+        ready_country_count = str(ready_count)
+        blocked_country_count = str(blocked_count)
+        probe_regression_count = str(regression_count)
+        stable_ready = (
+            stable_pass_float >= threshold
+            and ready_count > 0
+            and blocked_count == 0
+            and not bool(stable.get("activeRunRunning"))
+            and not bool(stable.get("activeRunPartial"))
+        )
+        if gate_status != "allowed" and gate_mode == "stable_if_allowed" and stable_ready:
+            gate_status = "allowed"
+            basis = "stable"
 print("|".join([
     gate_status,
     f"{pass_pct:.1f}",
     str(threshold),
     str(payload.get("runId") or ""),
+    basis,
+    stable_pass_pct,
+    stable_run_id,
+    stable_active_run_id,
+    ready_country_count,
+    blocked_country_count,
+    probe_regression_count,
 ]))
 PY
 }
@@ -303,15 +431,47 @@ if [[ ! -f "$DRYRUN_REPORT" ]]; then
   exit 1
 fi
 
-IFS='|' read -r gate_status pass_pct gate_threshold dryrun_run_id < <(read_dryrun_gate)
+IFS='|' read -r \
+  gate_status \
+  pass_pct \
+  gate_threshold \
+  dryrun_run_id \
+  gate_basis \
+  stable_pass_pct \
+  stable_run_id \
+  stable_active_run_id \
+  stable_ready_country_count \
+  stable_blocked_country_count \
+  stable_probe_regression_count < <(read_dryrun_gate)
+DRYRUN_GATE_STATUS_EFFECTIVE="$gate_status"
+DRYRUN_GATE_BASIS="${gate_basis:-active}"
+DRYRUN_GATE_STABLE_PASS_PCT="${stable_pass_pct:-}"
+DRYRUN_GATE_STABLE_RUN_ID="${stable_run_id:-}"
+DRYRUN_GATE_STABLE_ACTIVE_RUN_ID="${stable_active_run_id:-}"
+DRYRUN_GATE_READY_COUNTRY_COUNT="${stable_ready_country_count:-}"
+DRYRUN_GATE_BLOCKED_COUNTRY_COUNT="${stable_blocked_country_count:-}"
+DRYRUN_GATE_PROBE_REGRESSION_COUNT="${stable_probe_regression_count:-}"
 echo "[PIPELINE] Gate:"
+echo "  mode=${DRYRUN_GATE_MODE}"
+echo "  basis=${DRYRUN_GATE_BASIS:-active}"
 echo "  status=${gate_status:-unknown}"
 echo "  passPct=${pass_pct:-0}%"
 echo "  threshold=${gate_threshold:-$MIN_DRYRUN_PASS_PCT}%"
 echo "  run=${dryrun_run_id:-unknown}"
+if [[ -n "${stable_pass_pct:-}" ]]; then
+  echo "  stablePassPct=${stable_pass_pct}%"
+  echo "  stableRun=${stable_run_id:-unknown}"
+  echo "  stableReadyCountries=${stable_ready_country_count:-0}"
+  echo "  stableBlockedCountries=${stable_blocked_country_count:-0}"
+  echo "  probeRegressions=${stable_probe_regression_count:-0}"
+fi
 
 if [[ "$gate_status" != "allowed" ]]; then
-  write_pipeline_status "skipped" "Ingest skipped by dryrun gate" 0 "gate"
+  gate_message="Ingest skipped by dryrun gate"
+  if [[ -n "${stable_pass_pct:-}" ]]; then
+    gate_message="${gate_message}; stablePassPct=${stable_pass_pct}% readyCountries=${stable_ready_country_count:-0} blockedCountries=${stable_blocked_country_count:-0}"
+  fi
+  write_pipeline_status "skipped" "$gate_message" 0 "gate"
   echo "[PIPELINE] Ingest skipped by dryrun gate."
   exit 0
 fi

@@ -35,6 +35,28 @@ def _fake_runner(path: Path) -> None:
               "missingCountries": []
             }
             JSON
+              if [[ "${JATO_TEST_WRITE_STABLE_PROGRESS:-false}" == "true" ]]; then
+                mkdir -p "$REPO_DIR/hermes/reports"
+                cat > "$REPO_DIR/hermes/reports/msrp_country_progress.json" <<JSON
+            {
+              "probe": "pipeline.msrp_country_progress",
+              "stableCoverage": {
+                "gateThreshold": 70,
+                "countryCount": ${JATO_TEST_STABLE_COUNTRY_COUNT:-2},
+                "readyCountryCount": ${JATO_TEST_STABLE_READY_COUNTRY_COUNT:-2},
+                "blockedCountryCount": ${JATO_TEST_STABLE_BLOCKED_COUNTRY_COUNT:-0},
+                "stablePassRate": ${JATO_TEST_STABLE_PASS_PCT:-94.4},
+                "sourcePassRate": ${JATO_TEST_STABLE_SOURCE_PASS_PCT:-94.4},
+                "latestRunId": "${JATO_TEST_STABLE_RUN_ID:-msrp-dryrun-stable}",
+                "activeRunId": "${JATO_TEST_STABLE_ACTIVE_RUN_ID:-msrp-dryrun-test}",
+                "activeRunRunning": false,
+                "activeRunPartial": false,
+                "activeRunPassRate": ${JATO_TEST_PASS_PCT:-42.0},
+                "probeRegressionCount": ${JATO_TEST_STABLE_PROBE_REGRESSION_COUNT:-3}
+              }
+            }
+            JSON
+              fi
             fi
             """
         ),
@@ -219,6 +241,11 @@ def _run_pipeline(
     config_sync_exit: str = "0",
     unified_audit_exit: str = "0",
     goal_audit_exit: str = "0",
+    gate_mode: str = "active",
+    write_stable_progress: str = "false",
+    stable_pass_pct: str = "94.4",
+    stable_ready_country_count: str = "2",
+    stable_blocked_country_count: str = "0",
 ) -> subprocess.CompletedProcess[str]:
     runner = tmp_path / "fake_msrp_runner.sh"
     config_source_sync = tmp_path / "fake_config_source_sync.py"
@@ -240,12 +267,18 @@ def _run_pipeline(
             "JATO_GOAL_COMPLETION_AUDIT": str(goal_completion_audit),
             "JATO_MSRP_PYTHON": sys.executable,
             "JATO_MSRP_PIPELINE_COUNTRIES": "se,fi",
+            "JATO_MSRP_PIPELINE_GATE_MODE": gate_mode,
             "JATO_TEST_CONFIG_SYNC_EXIT": config_sync_exit,
             "JATO_TEST_UNIFIED_AUDIT_EXIT": unified_audit_exit,
             "JATO_TEST_GOAL_AUDIT_EXIT": goal_audit_exit,
             "JATO_TEST_GATE_STATUS": gate_status,
             "JATO_TEST_PASS_PCT": pass_pct,
             "JATO_TEST_PASS_COUNT": pass_count,
+            "JATO_TEST_WRITE_STABLE_PROGRESS": write_stable_progress,
+            "JATO_TEST_STABLE_PASS_PCT": stable_pass_pct,
+            "JATO_TEST_STABLE_SOURCE_PASS_PCT": stable_pass_pct,
+            "JATO_TEST_STABLE_READY_COUNTRY_COUNT": stable_ready_country_count,
+            "JATO_TEST_STABLE_BLOCKED_COUNTRY_COUNT": stable_blocked_country_count,
         }
     )
     return subprocess.run(
@@ -300,6 +333,9 @@ def test_pipeline_runs_ingest_when_dryrun_gate_is_allowed(tmp_path: Path) -> Non
     )
     assert status["status"] == "success"
     assert status["metadata"]["dryrunGateStatus"] == "allowed"
+    assert status["metadata"]["dryrunEffectiveGateStatus"] == "allowed"
+    assert status["metadata"]["dryrunGateMode"] == "active"
+    assert status["metadata"]["dryrunGateBasis"] == "active"
     assert status["metadata"]["configSourceSyncStatus"] == "success"
     assert (
         status["metadata"]["configSourceSyncPipelineId"]
@@ -350,6 +386,87 @@ def test_pipeline_skips_ingest_when_dryrun_gate_blocks(tmp_path: Path) -> None:
     assert status["status"] == "skipped"
     assert status["metadata"]["phase"] == "gate"
     assert status["metadata"]["dryrunPassPct"] == 42.0
+    assert status["metadata"]["dryrunEffectiveGateStatus"] == "blocked"
+    assert status["metadata"]["dryrunGateMode"] == "active"
+    assert status["metadata"]["dryrunGateBasis"] == "active"
+
+
+def test_pipeline_can_use_stable_gate_when_active_probe_regresses(
+    tmp_path: Path,
+) -> None:
+    result = _run_pipeline(
+        tmp_path,
+        gate_status="blocked",
+        pass_pct="42.0",
+        pass_count="1",
+        gate_mode="stable_if_allowed",
+        write_stable_progress="true",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    lines = (tmp_path / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert lines[1:3] == [
+        "dryrun:se,fi",
+        "ingest:se,fi",
+    ]
+    status = json.loads(
+        (
+            tmp_path
+            / "hermes"
+            / "reports"
+            / "pipeline_status"
+            / "msrp_pipeline.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert status["status"] == "success"
+    assert status["metadata"]["dryrunGateStatus"] == "blocked"
+    assert status["metadata"]["dryrunEffectiveGateStatus"] == "allowed"
+    assert status["metadata"]["dryrunGateMode"] == "stable_if_allowed"
+    assert status["metadata"]["dryrunGateBasis"] == "stable"
+    assert status["metadata"]["stableCoveragePassPct"] == 94.4
+    assert status["metadata"]["stableCoverageReadyCountryCount"] == 2
+    assert status["metadata"]["stableCoverageBlockedCountryCount"] == 0
+    assert status["metadata"]["probeRegressionCount"] == 3
+    assert status["metadata"]["countryProgressReportPath"] == (
+        "hermes/reports/msrp_country_progress.json"
+    )
+
+
+def test_stable_gate_mode_still_skips_when_stable_coverage_has_blocked_country(
+    tmp_path: Path,
+) -> None:
+    result = _run_pipeline(
+        tmp_path,
+        gate_status="blocked",
+        pass_pct="42.0",
+        pass_count="1",
+        gate_mode="stable_if_allowed",
+        write_stable_progress="true",
+        stable_pass_pct="94.4",
+        stable_ready_country_count="1",
+        stable_blocked_country_count="1",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    lines = (tmp_path / "runner.log").read_text(encoding="utf-8").splitlines()
+    assert lines[1:] == [
+        "dryrun:se,fi",
+    ]
+    status = json.loads(
+        (
+            tmp_path
+            / "hermes"
+            / "reports"
+            / "pipeline_status"
+            / "msrp_pipeline.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert status["status"] == "skipped"
+    assert status["metadata"]["dryrunEffectiveGateStatus"] == "blocked"
+    assert status["metadata"]["dryrunGateMode"] == "stable_if_allowed"
+    assert status["metadata"]["dryrunGateBasis"] == "active"
+    assert status["metadata"]["stableCoveragePassPct"] == 94.4
+    assert status["metadata"]["stableCoverageBlockedCountryCount"] == 1
 
 
 def test_pipeline_fails_before_dryrun_when_config_source_sync_fails(
