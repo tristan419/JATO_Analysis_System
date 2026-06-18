@@ -79,19 +79,86 @@ _overview_cache: dict[
     tuple[float, str, dict],
 ] = {}
 _overview_cache_lock = threading.Lock()
+_GroupedTimeSeriesCacheKey = tuple[
+    tuple[tuple[str, tuple[str, ...]], ...],
+    str,
+    str | None,
+    str | None,
+    int,
+    bool,
+    tuple[str, str] | None,
+]
+
 _grouped_time_series_cache: dict[
-    tuple[
-        tuple[tuple[str, tuple[str, ...]], ...],
-        str,
-        str | None,
-        str | None,
-        int,
-        bool,
-        tuple[str, str] | None,
-    ],
+    _GroupedTimeSeriesCacheKey,
     tuple[float, str, dict],
 ] = {}
+_grouped_time_series_inflight: dict[
+    _GroupedTimeSeriesCacheKey,
+    threading.Event,
+] = {}
 _grouped_time_series_cache_lock = threading.Lock()
+
+
+def _get_grouped_time_series_cache_hit(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    dataset_token: str,
+    now: float,
+) -> dict | None:
+    cached = _grouped_time_series_cache.get(cache_key)
+    if cached is None:
+        return None
+    cached_at, cached_token, cached_result = cached
+    if (
+        cached_token == dataset_token
+        and (now - cached_at) < GROUPED_TIME_SERIES_CACHE_TTL_SECONDS
+    ):
+        return cached_result
+    return None
+
+
+def _store_grouped_time_series_cache(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    result: dict,
+) -> dict:
+    now = time.monotonic()
+    dataset_token = repo.current_dataset_token()
+    cached_result = _get_grouped_time_series_cache_hit(
+        cache_key,
+        dataset_token,
+        now,
+    )
+    if cached_result is not None:
+        return cached_result
+
+    _grouped_time_series_cache[cache_key] = (now, dataset_token, result)
+    max_entries = max(1, int(GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES))
+    while len(_grouped_time_series_cache) > max_entries:
+        oldest_key = min(
+            _grouped_time_series_cache,
+            key=lambda key: _grouped_time_series_cache[key][0],
+        )
+        _grouped_time_series_cache.pop(oldest_key, None)
+    return result
+
+
+def _wait_for_grouped_time_series_cache(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    event: threading.Event,
+) -> dict | None:
+    event.wait()
+    dataset_token = repo.current_dataset_token()
+    return _get_grouped_time_series_cache_hit(
+        cache_key,
+        dataset_token,
+        time.monotonic(),
+    )
+
+
+def _clear_grouped_time_series_cache() -> None:
+    with _grouped_time_series_cache_lock:
+        _grouped_time_series_cache.clear()
+        _grouped_time_series_inflight.clear()
 
 
 # ── Helper: resolve column name ────────────────────────────────
@@ -1031,58 +1098,70 @@ def query_grouped_time_series(
     )
     dataset_token = repo.current_dataset_token()
     now = time.monotonic()
-    cached = _grouped_time_series_cache.get(cache_key)
-    if cached is not None:
-        cached_at, cached_token, cached_result = cached
-        if (
-            cached_token == dataset_token
-            and (now - cached_at) < GROUPED_TIME_SERIES_CACHE_TTL_SECONDS
-        ):
+    cached_result = _get_grouped_time_series_cache_hit(
+        cache_key,
+        dataset_token,
+        now,
+    )
+    if cached_result is not None:
+        return cached_result
+
+    owner = False
+    with _grouped_time_series_cache_lock:
+        now = time.monotonic()
+        dataset_token = repo.current_dataset_token()
+        cached_result = _get_grouped_time_series_cache_hit(
+            cache_key,
+            dataset_token,
+            now,
+        )
+        if cached_result is not None:
             return cached_result
 
-    with _grouped_time_series_cache_lock:
-        now = time.monotonic()
-        dataset_token = repo.current_dataset_token()
-        cached = _grouped_time_series_cache.get(cache_key)
-        if cached is not None:
-            cached_at, cached_token, cached_result = cached
-            if (
-                cached_token == dataset_token
-                and (now - cached_at) < GROUPED_TIME_SERIES_CACHE_TTL_SECONDS
-            ):
-                return cached_result
+        event = _grouped_time_series_inflight.get(cache_key)
+        if event is None:
+            event = threading.Event()
+            _grouped_time_series_inflight[cache_key] = event
+            owner = True
 
-    result = _query_grouped_time_series_impl(
-        filters=filters,
-        grain=normalized_grain,
-        group_by=group_by,
-        top_n=top_n,
-        include_others=include_others,
-        share_split_by=share_split_by,
-        time_range=time_range,
-    )
+    if not owner:
+        cached_result = _wait_for_grouped_time_series_cache(cache_key, event)
+        if cached_result is not None:
+            return cached_result
 
-    with _grouped_time_series_cache_lock:
-        now = time.monotonic()
-        dataset_token = repo.current_dataset_token()
-        cached = _grouped_time_series_cache.get(cache_key)
-        if cached is not None:
-            cached_at, cached_token, cached_result = cached
-            if (
-                cached_token == dataset_token
-                and (now - cached_at) < GROUPED_TIME_SERIES_CACHE_TTL_SECONDS
-            ):
-                return cached_result
-
-        _grouped_time_series_cache[cache_key] = (now, dataset_token, result)
-        max_entries = max(1, int(GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES))
-        while len(_grouped_time_series_cache) > max_entries:
-            oldest_key = min(
-                _grouped_time_series_cache,
-                key=lambda key: _grouped_time_series_cache[key][0],
+        with _grouped_time_series_cache_lock:
+            event = _grouped_time_series_inflight.get(cache_key)
+            if event is None:
+                event = threading.Event()
+                _grouped_time_series_inflight[cache_key] = event
+                owner = True
+        if not owner:
+            cached_result = _wait_for_grouped_time_series_cache(
+                cache_key,
+                event,
             )
-            _grouped_time_series_cache.pop(oldest_key, None)
-        return result
+            if cached_result is not None:
+                return cached_result
+
+    try:
+        result = _query_grouped_time_series_impl(
+            filters=filters,
+            grain=normalized_grain,
+            group_by=group_by,
+            top_n=top_n,
+            include_others=include_others,
+            share_split_by=share_split_by,
+            time_range=time_range,
+        )
+
+        with _grouped_time_series_cache_lock:
+            return _store_grouped_time_series_cache(cache_key, result)
+    finally:
+        if owner:
+            with _grouped_time_series_cache_lock:
+                event = _grouped_time_series_inflight.pop(cache_key, None)
+                if event is not None:
+                    event.set()
 
 
 def _query_grouped_time_series_impl(
