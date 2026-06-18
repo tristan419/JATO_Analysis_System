@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { MaterialFinanceWorkbench } from "../components/finance";
 import type {
+  CountryMaterialFinanceHistoryItem,
   CountryMaterialFinanceRow,
   CountryMaterialFinanceUpdate,
   CountryPaymentTerm,
@@ -21,6 +22,13 @@ function cleanParam(value: string | null): string {
   return (value ?? "").trim();
 }
 
+function formatHistoryValue(value: unknown): string {
+  if (value == null || value === "") return "-";
+  if (typeof value === "number") return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4)));
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
 export function OrderGeniusCbuPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [countryOptions, setCountryOptions] = useState<CountryPaymentTerm[]>([]);
@@ -34,6 +42,9 @@ export function OrderGeniusCbuPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [savingMaterialCode, setSavingMaterialCode] = useState<string | null>(null);
+  const [historyForRow, setHistoryForRow] = useState<CountryMaterialFinanceRow | null>(null);
+  const [historyItems, setHistoryItems] = useState<CountryMaterialFinanceHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const countryCodes = useMemo(() => {
     const codes = countryOptions.map((country) => country.countryCode);
@@ -149,6 +160,30 @@ export function OrderGeniusCbuPage() {
     }
   };
 
+  const handlePreviewImport = (
+    nextCountryCode: string,
+    payload: { file?: File; text?: string },
+  ) => api.previewCountryMaterialFinanceImport(nextCountryCode, payload);
+
+  const handleViewHistory = async (row: CountryMaterialFinanceRow) => {
+    setHistoryForRow(row);
+    setHistoryLoading(true);
+    setError("");
+    try {
+      const response = await api.listCountryMaterialFinanceHistory({
+        country: row.countryCode,
+        materialCode: row.materialCode,
+        limit: 80,
+      });
+      setHistoryItems(response.items);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setHistoryItems([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
   return (
     <section className="crud-shell material-finance-page">
       <header className="crud-hero">
@@ -247,9 +282,60 @@ export function OrderGeniusCbuPage() {
           error={error}
           savingMaterialCode={savingMaterialCode}
           onCountryChange={handleCountryChange}
+          onPreviewImport={handlePreviewImport}
+          onViewHistory={handleViewHistory}
           onSaveRow={handleSaveRow}
         />
       </div>
+      {historyForRow ? (
+        <section className="material-finance-history-panel">
+          <header>
+            <div>
+              <span className="material-finance-workbench-eyebrow">EDIT HISTORY</span>
+              <h3>{historyForRow.countryCode} · {historyForRow.materialCode}</h3>
+            </div>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => {
+                setHistoryForRow(null);
+                setHistoryItems([]);
+              }}
+            >
+              Close history
+            </button>
+          </header>
+          {historyLoading ? (
+            <div className="material-finance-empty">Loading history...</div>
+          ) : historyItems.length === 0 ? (
+            <div className="material-finance-empty">No edit history yet.</div>
+          ) : (
+            <div className="material-finance-history-list">
+              {historyItems.map((item) => (
+                <article key={item.historyId} className="material-finance-history-item">
+                  <div>
+                    <strong>{item.changedBy || "-"}</strong>
+                    <span>{item.changedAtUtc ? new Date(item.changedAtUtc).toLocaleString() : "-"}</span>
+                    <span>{item.sourceMode || "manual"}</span>
+                  </div>
+                  <dl>
+                    {item.changedFields.map((field) => (
+                      <div key={`${item.historyId}-${field}`}>
+                        <dt>{field}</dt>
+                        <dd>
+                          {formatHistoryValue(item.oldValues?.[field])}
+                          <span>-&gt;</span>
+                          {formatHistoryValue(item.newValues[field])}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
     </section>
   );
 }

@@ -21,6 +21,7 @@ interface MaterialFinanceMatrixProps {
   title?: string;
   density?: "compact" | "standard";
   savingMaterialCode?: string | null;
+  onViewHistory?: (row: CountryMaterialFinanceRow) => void | Promise<void>;
   onSaveRow: (row: CountryMaterialFinanceRow, update: CountryMaterialFinanceUpdate) => void | Promise<void>;
 }
 
@@ -131,6 +132,7 @@ export function MaterialFinanceMatrix({
   title,
   density = "standard",
   savingMaterialCode = null,
+  onViewHistory,
   onSaveRow,
 }: MaterialFinanceMatrixProps) {
   const [drafts, setDrafts] = useState<Record<string, MaterialFinanceDraft>>({});
@@ -259,14 +261,25 @@ export function MaterialFinanceMatrix({
                     <div className="material-finance-subtle">{formatDateTime(row.updatedAtUtc)}</div>
                   </td>
                   <td>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-primary"
-                      disabled={saving}
-                      onClick={() => void onSaveRow(row, updateFromDraft(row.countryCode, draft))}
-                    >
-                      {saving ? "Saving..." : "Save"}
-                    </button>
+                    <div className="material-finance-row-actions">
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        disabled={saving}
+                        onClick={() => void onSaveRow(row, updateFromDraft(row.countryCode, draft))}
+                      >
+                        {saving ? "Saving..." : "Save"}
+                      </button>
+                      {onViewHistory ? (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={() => void onViewHistory(row)}
+                        >
+                          History
+                        </button>
+                      ) : null}
+                    </div>
                   </td>
                 </tr>
               );

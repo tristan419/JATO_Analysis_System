@@ -111,6 +111,9 @@ import type {
   BaselineVersion,
   ColourHexRule,
   ColourSurchargeRule,
+  CountryMaterialFinanceHistoryItem,
+  CountryMaterialFinanceImportPreview,
+  CountryMaterialFinanceImportRow,
   CountryMaterialFinanceRow,
   CountryMaterialFinanceUpdate,
   CountryPaymentTerm,
@@ -1164,6 +1167,57 @@ function mapCountryMaterialFinanceRow(raw: Record<string, unknown>): CountryMate
       : null,
     updatedBy: nullableString(raw.updatedBy ?? raw.updated_by),
     updatedAtUtc: nullableString(raw.updatedAtUtc ?? raw.updated_at_utc),
+  };
+}
+
+function mapCountryMaterialFinanceImportRow(raw: Record<string, unknown>): CountryMaterialFinanceImportRow {
+  const updateRaw = raw.update;
+  return {
+    lineNumber: Number(raw.lineNumber ?? raw.line_number ?? 0),
+    materialCode: String(raw.materialCode ?? raw.material_code ?? ""),
+    update: updateRaw && typeof updateRaw === "object" && !Array.isArray(updateRaw)
+      ? updateRaw as CountryMaterialFinanceUpdate
+      : null,
+    error: String(raw.error ?? ""),
+  };
+}
+
+function mapCountryMaterialFinanceImportPreview(raw: Record<string, unknown>): CountryMaterialFinanceImportPreview {
+  const rowsRaw = raw.rows;
+  const warningsRaw = raw.warnings;
+  return {
+    rows: Array.isArray(rowsRaw)
+      ? rowsRaw
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        .map(mapCountryMaterialFinanceImportRow)
+      : [],
+    warnings: Array.isArray(warningsRaw) ? warningsRaw.map((item) => String(item)) : [],
+  };
+}
+
+function mapCountryMaterialFinanceHistoryItem(raw: Record<string, unknown>): CountryMaterialFinanceHistoryItem {
+  const oldValuesRaw = raw.oldValues ?? raw.old_values;
+  const newValuesRaw = raw.newValues ?? raw.new_values;
+  const changedFieldsRaw = raw.changedFields ?? raw.changed_fields;
+  const sourcePayloadRaw = raw.sourcePayload ?? raw.source_payload;
+  return {
+    historyId: String(raw.historyId ?? raw.history_id ?? ""),
+    financeId: nullableString(raw.financeId ?? raw.finance_id),
+    countryCode: String(raw.countryCode ?? raw.country_code ?? ""),
+    materialCode: String(raw.materialCode ?? raw.material_code ?? ""),
+    oldValues: oldValuesRaw && typeof oldValuesRaw === "object" && !Array.isArray(oldValuesRaw)
+      ? oldValuesRaw as Record<string, unknown>
+      : null,
+    newValues: newValuesRaw && typeof newValuesRaw === "object" && !Array.isArray(newValuesRaw)
+      ? newValuesRaw as Record<string, unknown>
+      : {},
+    changedFields: Array.isArray(changedFieldsRaw) ? changedFieldsRaw.map((item) => String(item)) : [],
+    sourceMode: nullableString(raw.sourceMode ?? raw.source_mode),
+    sourcePayload: sourcePayloadRaw && typeof sourcePayloadRaw === "object" && !Array.isArray(sourcePayloadRaw)
+      ? sourcePayloadRaw as Record<string, unknown>
+      : null,
+    changedBy: nullableString(raw.changedBy ?? raw.changed_by),
+    changedAtUtc: nullableString(raw.changedAtUtc ?? raw.changed_at_utc),
   };
 }
 
@@ -3636,6 +3690,37 @@ export const api = {
     ).then((response) => ({
       items: response.items.map(mapCountryMaterialFinanceRow),
     }));
+  },
+
+  listCountryMaterialFinanceHistory: (params: {
+    country: string;
+    materialCode: string;
+    limit?: number;
+  }) => {
+    const qs = new URLSearchParams({
+      country: params.country,
+      material_code: params.materialCode,
+    });
+    if (params.limit) qs.set("limit", String(params.limit));
+    return request<{ items: Record<string, unknown>[] }>(
+      `/order-genius/country-material-finance/history?${qs.toString()}`,
+    ).then((response) => ({
+      items: response.items.map(mapCountryMaterialFinanceHistoryItem),
+    }));
+  },
+
+  previewCountryMaterialFinanceImport: (country: string, payload: { file?: File; text?: string }) => {
+    const formData = new FormData();
+    formData.set("country", country);
+    if (payload.file) formData.set("file", payload.file);
+    if (payload.text) formData.set("text", payload.text);
+    return request<Record<string, unknown>>(
+      "/order-genius/country-material-finance/import-preview",
+      {
+        method: "POST",
+        body: formData,
+      },
+    ).then(mapCountryMaterialFinanceImportPreview);
   },
 
   getMaterialCountryFinance: (materialCode: string, country: string) =>

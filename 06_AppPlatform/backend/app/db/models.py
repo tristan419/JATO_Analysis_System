@@ -1910,6 +1910,41 @@ class CountryMaterialFinance(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+class CountryMaterialFinanceHistory(Base):
+    """Immutable audit trail for country material finance / CBU edits."""
+
+    __tablename__ = "country_material_finance_history"
+    __table_args__ = (
+        Index(
+            "ix_ordering_country_material_finance_history_code",
+            "country_code", "material_code", "changed_at_utc",
+        ),
+        Index(
+            "ix_ordering_country_material_finance_history_finance",
+            "country_material_finance_id",
+        ),
+        {"schema": "ordering"},
+    )
+
+    finance_history_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    country_material_finance_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), nullable=True
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    material_code: Mapped[str] = mapped_column(Text, nullable=False)
+    old_values_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    new_values_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    changed_fields_json: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    source_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_payload_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    changed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changed_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class CountryFobSourceMapping(TimestampMixin, Base):
     __tablename__ = "country_fob_source_mapping"
     __table_args__ = (
