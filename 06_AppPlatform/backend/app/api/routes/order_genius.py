@@ -7,7 +7,7 @@ from uuid import UUID
 import uuid as uuid_module
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -40,6 +40,11 @@ from app.services.order_genius_service import (
 )
 from app.services.ordering_normalization import clean_text, normalize_brand, normalize_brand_text
 from app.services.order_quantity_parser import parse_order_quantity_xlsx
+from app.services.country_material_finance_import_service import (
+    parse_country_material_finance_image,
+    parse_country_material_finance_text,
+    parse_country_material_finance_xlsx,
+)
 
 router = APIRouter(prefix="/order-genius", tags=["order_genius"])
 
@@ -699,6 +704,77 @@ def list_country_material_finance(
         version=version,
     )
     return {"items": rows}
+
+
+@router.get("/country-material-finance/history")
+def list_country_material_finance_history(
+    country: str = Query(),
+    material_code: str = Query(),
+    limit: int = Query(default=50, ge=1, le=200),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Return edit history for one BOM-template country finance row."""
+    rows = repo.list_country_material_finance_history(
+        session,
+        country,
+        material_code,
+        limit=limit,
+    )
+    return {"items": rows}
+
+
+@router.post("/country-material-finance/import-preview")
+async def preview_country_material_finance_import(
+    country: str = Form(...),
+    text_body: str | None = Form(default=None, alias="text"),
+    file: UploadFile | None = File(default=None),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Parse CBU finance imports into preview rows without writing to DB."""
+    country_code = clean_text(country).upper()
+    if not country_code:
+        raise HTTPException(status_code=400, detail="country is required")
+
+    if file is not None:
+        content = await file.read()
+        file_name = file.filename or "upload"
+        suffix = Path(file_name).suffix.lower()
+        content_type = (file.content_type or "").lower()
+        if suffix in {".xlsx", ".xlsm"}:
+            return parse_country_material_finance_xlsx(
+                content,
+                country_code,
+                file_name=file_name,
+            )
+        if content_type.startswith("image/") or suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
+            return parse_country_material_finance_image(
+                content,
+                country_code,
+                file_name=file_name,
+                mime_type=content_type or "image/png",
+            )
+        if suffix in {".csv", ".tsv", ".txt"} or content_type.startswith("text/"):
+            try:
+                decoded = content.decode("utf-8-sig")
+            except UnicodeDecodeError as exc:
+                raise HTTPException(status_code=400, detail="Text file must be UTF-8 encoded") from exc
+            return parse_country_material_finance_text(
+                decoded,
+                country_code,
+                source_mode="uploaded",
+                source_payload={"entryMode": "text_upload", "fileName": file_name},
+            )
+        raise HTTPException(status_code=400, detail="Supported files: xlsx, csv, tsv, txt, or image")
+
+    if text_body and text_body.strip():
+        return parse_country_material_finance_text(
+            text_body,
+            country_code,
+            source_mode="uploaded",
+            source_payload={"entryMode": "excel_paste"},
+        )
+    raise HTTPException(status_code=400, detail="file or text is required")
 
 
 @router.get("/material-skus/{material_code}/country-finance")

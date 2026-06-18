@@ -100,12 +100,13 @@ Good fit:
 Notes:
 
 - The component owns input drafts, signed EUR delta inputs, and percent display conversion.
-- The caller owns data loading, row saving, and whether the rows represent one material, one BOM template, one model, or a future upload digest.
+- The caller owns data loading, row saving, optional history loading, and whether the rows represent one material, one BOM template, one model, or a future upload digest.
 - `vehicleMarginRate` and `vehicleProfitRate` are stored as decimal values (`0.1682`) and displayed as percentages (`16.82%`).
+- Pass `onViewHistory` when the matrix should expose row-level audit history.
 
 ### `MaterialFinanceWorkbench`
 
-Use for a country-switchable CBU/margin workbench that wraps `MaterialFinanceMatrix`.
+Use for a country-switchable CBU/margin workbench that wraps `MaterialFinanceMatrix` and `CountryCbuPastePanel`.
 
 Good fit:
 
@@ -115,11 +116,12 @@ Good fit:
 Notes:
 
 - `NL` renders the dedicated price CBU / margin matrix.
-- Non-NL countries render the Excel paste flow through `CountryCbuPastePanel`.
+- Non-NL countries render the Excel-style digest flow through `CountryCbuPastePanel`.
+- Pass `onPreviewImport` from the page when XLSX/CSV/image preview should be enabled. The page keeps API ownership.
 
 ### `CountryCbuPastePanel`
 
-Use for non-NL country CBU rows that should be pasted from Excel at BOM-template grain.
+Use for non-NL country CBU rows that should be pasted or previewed from a file at BOM-template grain.
 
 Good fit:
 
@@ -130,6 +132,8 @@ Notes:
 
 - Accepted grain is the BOM template material code containing `**`.
 - Default paste order is `Material Code`, `FOB`, `Retail`, `Wholesale`, `Dealer`, `Cost`, `Note`.
+- Header-based paste also recognizes `Unit Margin`, `Margin %`, `Unit Profit`, `Profit %`, `FOB Delta`, `Margin Delta`, and common Chinese headers.
+- Optional file preview accepts text/CSV/TSV/XLSX/image via the caller-provided `onPreviewImport` callback.
 - The component reuses `UploadDigestPanel` for parsed row counts, errors, and apply actions.
 
 ## Upload Digest
@@ -150,4 +154,4 @@ Good fit:
 
 - Material Master upload preview.
 - Quantity import preview.
-- Future CBU Excel paste/upload digest before applying finance rows.
+- CBU Excel paste/upload/image digest before applying finance rows.

@@ -165,6 +165,32 @@ export interface CountryMaterialFinanceUpdate {
   sourcePayload?: Record<string, unknown> | null;
 }
 
+export interface CountryMaterialFinanceImportRow {
+  lineNumber: number;
+  materialCode: string;
+  update: CountryMaterialFinanceUpdate | null;
+  error: string;
+}
+
+export interface CountryMaterialFinanceImportPreview {
+  rows: CountryMaterialFinanceImportRow[];
+  warnings: string[];
+}
+
+export interface CountryMaterialFinanceHistoryItem {
+  historyId: string;
+  financeId: string | null;
+  countryCode: string;
+  materialCode: string;
+  oldValues: Record<string, unknown> | null;
+  newValues: Record<string, unknown>;
+  changedFields: string[];
+  sourceMode: string | null;
+  sourcePayload: Record<string, unknown> | null;
+  changedBy: string | null;
+  changedAtUtc: string | null;
+}
+
 export interface CountryPaymentTerm {
   countryCode: string;
   countryName: string;

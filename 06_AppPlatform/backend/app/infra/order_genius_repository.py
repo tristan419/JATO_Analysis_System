@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.db.models import (
     BrandColourSurchargeRule,
     CountryMaterialFinance,
+    CountryMaterialFinanceHistory,
     CountryPaymentTermMaster,
     CountrySkuFobResolved,
     FobResolvedHistory,
@@ -78,6 +79,25 @@ COUNTRY_MATERIAL_FINANCE_VALUE_FIELDS = (
     "fob_delta_eur",
     "margin_delta_eur",
     "memo",
+)
+
+COUNTRY_MATERIAL_FINANCE_AUDIT_FIELDS = (
+    "fob_eur",
+    "retail_price_eur",
+    "wholesale_price_eur",
+    "dealer_price_eur",
+    "cost_eur",
+    "margin_eur",
+    "margin_rate",
+    "vehicle_margin_eur",
+    "vehicle_margin_rate",
+    "vehicle_profit_eur",
+    "vehicle_profit_rate",
+    "fob_delta_eur",
+    "margin_delta_eur",
+    "memo",
+    "source_mode",
+    "source_payload_json",
 )
 
 
@@ -661,6 +681,72 @@ def _optional_float(value: object) -> float | None:
     return float(value)
 
 
+def _finance_audit_scalar(value: object) -> object:
+    if value is None or isinstance(value, (str, bool, int, float, list, dict)):
+        return deepcopy(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _country_material_finance_audit_values(
+    finance: CountryMaterialFinance | None,
+) -> dict[str, object] | None:
+    if finance is None:
+        return None
+    return {
+        field_name: _finance_audit_scalar(getattr(finance, field_name))
+        for field_name in COUNTRY_MATERIAL_FINANCE_AUDIT_FIELDS
+    }
+
+
+def _changed_finance_fields(
+    old_values: dict[str, object] | None,
+    new_values: dict[str, object],
+) -> list[str]:
+    if old_values is None:
+        return [
+            field_name
+            for field_name, value in new_values.items()
+            if value not in (None, "", {}, [])
+        ]
+    return [
+        field_name
+        for field_name, value in new_values.items()
+        if old_values.get(field_name) != value
+    ]
+
+
+def _add_country_material_finance_history(
+    session: Session,
+    finance: CountryMaterialFinance,
+    old_values: dict[str, object] | None,
+    *,
+    changed_by: str | None,
+) -> None:
+    new_values = _country_material_finance_audit_values(finance) or {}
+    changed_fields = _changed_finance_fields(old_values, new_values)
+    if not changed_fields:
+        return
+    session.add(
+        CountryMaterialFinanceHistory(
+            country_material_finance_id=finance.country_material_finance_id,
+            country_code=finance.country_code,
+            material_code=finance.material_code,
+            old_values_json=old_values,
+            new_values_json=new_values,
+            changed_fields_json=changed_fields,
+            source_mode=finance.source_mode,
+            source_payload_json=deepcopy(finance.source_payload_json)
+            if isinstance(finance.source_payload_json, dict)
+            else None,
+            changed_by=changed_by,
+            changed_at_utc=datetime.now(timezone.utc),
+        )
+    )
+
+
 def _country_material_finance_payload(
     sku: MaterialSkuMaster,
     country_code: str,
@@ -882,6 +968,7 @@ def upsert_country_material_finance(
             CountryMaterialFinance.is_active == True,
         )
     ).scalar_one_or_none()
+    old_values = _country_material_finance_audit_values(finance)
     if finance is None:
         finance = CountryMaterialFinance(
             country_code=country,
@@ -918,6 +1005,12 @@ def upsert_country_material_finance(
     finance.updated_by = updated_by
     finance.updated_at_utc = datetime.now(timezone.utc)
     session.flush()
+    _add_country_material_finance_history(
+        session,
+        finance,
+        old_values,
+        changed_by=updated_by,
+    )
 
     if "**" in material:
         concrete_codes = [item.material_code for item in template_skus if item.material_code]
@@ -936,6 +1029,47 @@ def upsert_country_material_finance(
         )
     fob = get_fob_for_country_sku(session, country, material)
     return _country_material_finance_payload(sku, country, fob, finance)
+
+
+def list_country_material_finance_history(
+    session: Session,
+    country_code: str,
+    material_code: str,
+    *,
+    limit: int = 50,
+) -> list[dict]:
+    """Return immutable audit events for one country material finance row."""
+    country = clean_text(country_code).upper()
+    material = clean_text(material_code).upper()
+    if not country or not material:
+        return []
+    capped_limit = max(1, min(int(limit or 50), 200))
+    rows = session.execute(
+        select(CountryMaterialFinanceHistory)
+        .where(
+            CountryMaterialFinanceHistory.country_code == country,
+            CountryMaterialFinanceHistory.material_code == material,
+        )
+        .order_by(CountryMaterialFinanceHistory.changed_at_utc.desc())
+        .limit(capped_limit)
+    ).scalars().all()
+    return [
+        {
+            "historyId": str(row.finance_history_id),
+            "financeId": str(row.country_material_finance_id)
+            if row.country_material_finance_id else None,
+            "countryCode": row.country_code,
+            "materialCode": row.material_code,
+            "oldValues": row.old_values_json,
+            "newValues": row.new_values_json,
+            "changedFields": row.changed_fields_json or [],
+            "sourceMode": row.source_mode,
+            "sourcePayload": row.source_payload_json,
+            "changedBy": row.changed_by,
+            "changedAtUtc": row.changed_at_utc.isoformat() if row.changed_at_utc else None,
+        }
+        for row in rows
+    ]
 
 
 def delete_orphan_template_finance(
@@ -1013,6 +1147,13 @@ def copy_country_material_finance_template(
         for field_name in COUNTRY_MATERIAL_FINANCE_VALUE_FIELDS:
             setattr(target_row, field_name, getattr(source_row, field_name))
         session.add(target_row)
+        session.flush()
+        _add_country_material_finance_history(
+            session,
+            target_row,
+            None,
+            changed_by=updated_by,
+        )
         copied += 1
     if copied:
         session.flush()

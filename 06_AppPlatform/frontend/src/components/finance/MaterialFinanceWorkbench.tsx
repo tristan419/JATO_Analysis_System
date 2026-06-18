@@ -1,4 +1,5 @@
 import type {
+  CountryMaterialFinanceImportPreview,
   CountryMaterialFinanceRow,
   CountryMaterialFinanceUpdate,
 } from "../../types/orderGenius";
@@ -15,6 +16,11 @@ interface MaterialFinanceWorkbenchProps {
   error?: string;
   savingMaterialCode?: string | null;
   onCountryChange: (countryCode: string) => void | Promise<void>;
+  onPreviewImport?: (
+    countryCode: string,
+    payload: { file?: File; text?: string },
+  ) => Promise<CountryMaterialFinanceImportPreview>;
+  onViewHistory?: (row: CountryMaterialFinanceRow) => void | Promise<void>;
   onSaveRow: (row: CountryMaterialFinanceRow, update: CountryMaterialFinanceUpdate) => void | Promise<void>;
 }
 
@@ -27,6 +33,8 @@ export function MaterialFinanceWorkbench({
   error = "",
   savingMaterialCode = null,
   onCountryChange,
+  onPreviewImport,
+  onViewHistory,
   onSaveRow,
 }: MaterialFinanceWorkbenchProps) {
   const isNlPriceCbu = countryCode === "NL";
@@ -63,6 +71,7 @@ export function MaterialFinanceWorkbench({
           countryCode={countryCode}
           rows={rows}
           savingMaterialCode={savingMaterialCode}
+          onPreviewImport={onPreviewImport}
           onSaveRow={onSaveRow}
         />
       ) : (
@@ -70,6 +79,7 @@ export function MaterialFinanceWorkbench({
           rows={rows}
           title="NL CBU / margin matrix"
           savingMaterialCode={savingMaterialCode}
+          onViewHistory={onViewHistory}
           onSaveRow={onSaveRow}
         />
       )}
