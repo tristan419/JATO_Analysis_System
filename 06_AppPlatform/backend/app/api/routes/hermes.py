@@ -92,6 +92,25 @@ def _default_source_reference_evidence() -> dict[str, Any]:
     }
 
 
+def _default_source_accessibility_audit() -> dict[str, Any]:
+    return {
+        "schemaVersion": "msrp_source_accessibility_audit_v1",
+        "generatedAt": None,
+        "backlogRunId": None,
+        "includeTransient": False,
+        "summary": {
+            "sourceRepairIssueCount": 0,
+            "transientRegressionCount": 0,
+            "probedSourceCount": 0,
+            "probeStatusCounts": {},
+            "recommendedActionCounts": {},
+            "retryableNetworkCount": 0,
+            "officialProxyRequiredCount": 0,
+        },
+        "items": [],
+    }
+
+
 def _load_msrp_source_repair_backlog() -> dict[str, Any]:
     backlog = _read_json_if_exists(_msrp_artifacts_dir() / "msrp_source_repair_backlog.json")
     return backlog if isinstance(backlog, dict) else _default_source_repair_backlog()
@@ -108,11 +127,24 @@ def _load_msrp_source_reference_evidence(run_id: str | None = None) -> dict[str,
     return evidence
 
 
+def _load_msrp_source_accessibility_audit(run_id: str | None = None) -> dict[str, Any]:
+    audit = _read_json_if_exists(_msrp_artifacts_dir() / "msrp_source_accessibility_audit.json")
+    if not isinstance(audit, dict):
+        return _default_source_accessibility_audit()
+    audit_run_id = str(audit.get("backlogRunId") or "")
+    target_run_id = str(run_id or "")
+    if target_run_id and audit_run_id and audit_run_id != target_run_id:
+        return _default_source_accessibility_audit()
+    return audit
+
+
 def _with_source_reference_evidence(progress: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(progress)
+    run_id = str((enriched.get("status") or {}).get("runId") or "")
     if not isinstance(enriched.get("sourceReferenceEvidence"), dict):
-        run_id = str((enriched.get("status") or {}).get("runId") or "")
         enriched["sourceReferenceEvidence"] = _load_msrp_source_reference_evidence(run_id)
+    if not isinstance(enriched.get("sourceAccessibilityAudit"), dict):
+        enriched["sourceAccessibilityAudit"] = _load_msrp_source_accessibility_audit(run_id)
     return enriched
 
 

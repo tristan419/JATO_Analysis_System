@@ -88,6 +88,29 @@ def test_country_progress_preserves_finance_dryrun_counts(tmp_path, monkeypatch)
         encoding="utf-8",
     )
     monkeypatch.setattr(module, "SOURCE_REFERENCE_EVIDENCE_PATH", reference_path)
+    accessibility_path = tmp_path / "msrp_source_accessibility_audit.json"
+    accessibility_path.write_text(
+        json.dumps({
+            "schemaVersion": "msrp_source_accessibility_audit_v1",
+            "generatedAt": "2026-06-18T17:38:42Z",
+            "backlogRunId": "msrp-dryrun-20260617-012812",
+            "summary": {
+                "sourceRepairIssueCount": 2,
+                "transientRegressionCount": 0,
+                "probedSourceCount": 2,
+                "probeStatusCounts": {"anti_bot_blocked": 1, "network_unreachable": 1},
+                "recommendedActionCounts": {
+                    "official_proxy_or_configurator_api": 1,
+                    "retry_network_or_proxy": 1,
+                },
+                "retryableNetworkCount": 1,
+                "officialProxyRequiredCount": 1,
+            },
+            "items": [],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "SOURCE_ACCESSIBILITY_AUDIT_PATH", accessibility_path)
 
     result = module.run(str(tmp_path / "reports"))
 
@@ -103,7 +126,9 @@ def test_country_progress_preserves_finance_dryrun_counts(tmp_path, monkeypatch)
     assert "| Monthly offers | 1 |" in markdown
     assert "| se | success | 96.6% | 28 | 1 | 0 | 1 | 1 |" in markdown
     assert result["sourceReferenceEvidence"]["summary"]["localReferenceCount"] == 5
+    assert result["sourceAccessibilityAudit"]["summary"]["officialProxyRequiredCount"] == 1
     assert "| Local references | 5 |" in markdown
+    assert "| Official proxy required | 1 |" in markdown
 
 
 def test_country_progress_keeps_stable_latest_when_active_run_regresses(tmp_path, monkeypatch):

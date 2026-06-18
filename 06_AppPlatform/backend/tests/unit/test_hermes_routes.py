@@ -892,6 +892,34 @@ class TestSentinelAndDeploy:
                 }
             ],
         })
+        _write_json(artifact_dir / "msrp_source_accessibility_audit.json", {
+            "schemaVersion": "msrp_source_accessibility_audit_v1",
+            "generatedAt": "2026-06-18T17:38:42Z",
+            "backlogRunId": report["runId"],
+            "summary": {
+                "sourceRepairIssueCount": 2,
+                "transientRegressionCount": 13,
+                "probedSourceCount": 2,
+                "probeStatusCounts": {
+                    "network_unreachable": 1,
+                    "anti_bot_blocked": 1,
+                },
+                "recommendedActionCounts": {
+                    "retry_network_or_proxy": 1,
+                    "official_proxy_or_configurator_api": 1,
+                },
+                "retryableNetworkCount": 1,
+                "officialProxyRequiredCount": 1,
+            },
+            "items": [
+                {
+                    "countryCode": "at",
+                    "sourceCode": "tesla_model_y_at_draft_scrapling",
+                    "probeStatus": "anti_bot_blocked",
+                    "officialProxyRequired": True,
+                }
+            ],
+        })
 
         with patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path), patch(
             "app.api.routes.hermes.REPORTS_DIR",
@@ -905,6 +933,10 @@ class TestSentinelAndDeploy:
         assert evidence["summary"]["localReferenceCount"] == 8
         assert evidence["summary"]["officialIngestEligibleCount"] == 0
         assert evidence["items"][0]["officialIngestEligible"] is False
+        accessibility = resp.json()["sourceAccessibilityAudit"]
+        assert accessibility["schemaVersion"] == "msrp_source_accessibility_audit_v1"
+        assert accessibility["summary"]["officialProxyRequiredCount"] == 1
+        assert accessibility["items"][0]["probeStatus"] == "anti_bot_blocked"
 
 
 # ── /hermes/gaps ──────────────────────────────────────────────────────

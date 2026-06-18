@@ -27,6 +27,7 @@ FALLBACK_REPORT_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / 
 RUNS_INDEX_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_runs_index.json"
 SOURCE_REPAIR_BACKLOG_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_repair_backlog.json"
 SOURCE_REFERENCE_EVIDENCE_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_reference_evidence.json"
+SOURCE_ACCESSIBILITY_AUDIT_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_accessibility_audit.json"
 SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
 COUNTRY_LABELS = {
     "at": "Austria",
@@ -121,6 +122,41 @@ def _load_source_reference_evidence(run_id: str | None = None) -> dict:
         except Exception:
             pass
     return _default_source_reference_evidence()
+
+
+def _default_source_accessibility_audit() -> dict:
+    return {
+        "schemaVersion": "msrp_source_accessibility_audit_v1",
+        "generatedAt": None,
+        "backlogRunId": None,
+        "includeTransient": False,
+        "summary": {
+            "sourceRepairIssueCount": 0,
+            "transientRegressionCount": 0,
+            "probedSourceCount": 0,
+            "probeStatusCounts": {},
+            "recommendedActionCounts": {},
+            "retryableNetworkCount": 0,
+            "officialProxyRequiredCount": 0,
+        },
+        "items": [],
+    }
+
+
+def _load_source_accessibility_audit(run_id: str | None = None) -> dict:
+    if SOURCE_ACCESSIBILITY_AUDIT_PATH.is_file():
+        try:
+            data = json.loads(SOURCE_ACCESSIBILITY_AUDIT_PATH.read_text())
+            if not isinstance(data, dict):
+                return _default_source_accessibility_audit()
+            audit_run_id = str(data.get("backlogRunId") or "")
+            target_run_id = str(run_id or "")
+            if target_run_id and audit_run_id and audit_run_id != target_run_id:
+                return _default_source_accessibility_audit()
+            return data
+        except Exception:
+            pass
+    return _default_source_accessibility_audit()
 
 
 def _source_url(source: dict[str, Any]) -> str:
@@ -827,6 +863,7 @@ def run(out_dir: str | None = None) -> dict:
             "topFailureReasons": [],
             "sourceRepairBacklog": _load_source_repair_backlog(),
             "sourceReferenceEvidence": _load_source_reference_evidence(),
+            "sourceAccessibilityAudit": _load_source_accessibility_audit(),
             "findings": [{
                 "type": "no_dryrun_report",
                 "severity": "critical",
@@ -991,6 +1028,7 @@ def run(out_dir: str | None = None) -> dict:
         "topFailureReasons": [{"reason": r, "count": c} for r, c in top_reasons[:5]],
         "sourceRepairBacklog": source_repair_backlog,
         "sourceReferenceEvidence": _load_source_reference_evidence(str(report.get("runId") or "")),
+        "sourceAccessibilityAudit": _load_source_accessibility_audit(str(report.get("runId") or "")),
         "allCountriesLatest": [_strip_sources(country) for country in all_countries_full],
         "stableCoverage": stable_coverage,
         "findings": findings,
@@ -1117,6 +1155,17 @@ def _render_markdown(result: dict) -> str:
         lines.append(f"| Local references | {reference_summary.get('localReferenceCount', 0)} |")
         lines.append(f"| Missing local references | {reference_summary.get('missingLocalReferenceCount', 0)} |")
         lines.append(f"| Official ingest eligible | {reference_summary.get('officialIngestEligibleCount', 0)} |")
+        lines.append("")
+
+    accessibility_audit = result.get("sourceAccessibilityAudit") or {}
+    accessibility_summary = accessibility_audit.get("summary") or {}
+    if accessibility_summary.get("probedSourceCount"):
+        lines.append("## Source Accessibility Audit\n")
+        lines.append("| Metric | Value |")
+        lines.append("|---|---:|")
+        lines.append(f"| Probed sources | {accessibility_summary.get('probedSourceCount', 0)} |")
+        lines.append(f"| Retryable network | {accessibility_summary.get('retryableNetworkCount', 0)} |")
+        lines.append(f"| Official proxy required | {accessibility_summary.get('officialProxyRequiredCount', 0)} |")
         lines.append("")
 
     findings = result.get("findings", [])
