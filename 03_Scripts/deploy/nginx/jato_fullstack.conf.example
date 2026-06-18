@@ -52,7 +52,6 @@ server {
         proxy_read_timeout 600s;
 
         proxy_buffering off;
-        add_header Cache-Control "no-store" always;
     }
 
     location = /openapi.json {
