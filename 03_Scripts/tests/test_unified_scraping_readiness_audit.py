@@ -175,6 +175,7 @@ def _report_kwargs(tmp_path: Path, inputs: dict[str, Path]) -> dict[str, object]
         "spec_batch": inputs["spec_batch"],
         "required_countries": ("se", "fi"),
         "required_kinds": ("msrp", "news", "voc", "policy", "incentive", "spec"),
+        "intelligence_countries": ("se", "fi"),
     }
 
 
@@ -187,8 +188,11 @@ def test_build_readiness_report_passes_when_contract_and_stage_are_ok(tmp_path: 
     assert report["status"] == "passed"
     assert report["summary"]["contractStatus"] == "ok"
     assert report["summary"]["stageStatus"] == "ok"
+    assert report["summary"]["intelligenceStatus"] == "ok"
     assert report["summary"]["configuredJobCount"] == 12
     assert report["summary"]["sampledJobCount"] == 6
+    assert report["summary"]["intelligence"]["newsMarketEventCount"] == 2
+    assert report["summary"]["intelligence"]["vocDocumentCount"] == 4
     assert report["summary"]["warningCount"] == 0
     assert report["warnings"] == []
 
@@ -198,6 +202,7 @@ def test_build_readiness_report_degrades_on_missing_kind_country_coverage(tmp_pa
     kwargs = _report_kwargs(tmp_path, inputs)
     kwargs["required_countries"] = ("se",)
     kwargs["required_countries_by_kind"] = {"news": ("se", "de")}
+    kwargs["intelligence_countries"] = ("se",)
 
     report = readiness.build_readiness_report(**kwargs)
 
@@ -205,6 +210,24 @@ def test_build_readiness_report_degrades_on_missing_kind_country_coverage(tmp_pa
     assert report["summary"]["contractStatus"] == "degraded"
     assert report["summary"]["stageStatus"] == "ok"
     assert "contract:missing_news_coverage:de" in report["warnings"]
+
+
+def test_build_readiness_report_degrades_on_missing_intelligence_country(
+    tmp_path: Path,
+) -> None:
+    inputs = _write_all_inputs(tmp_path, countries=("se",))
+    kwargs = _report_kwargs(tmp_path, inputs)
+    kwargs["required_countries"] = ("se",)
+    kwargs["intelligence_countries"] = ("se", "de")
+
+    report = readiness.build_readiness_report(**kwargs)
+
+    assert report["status"] == "degraded"
+    assert report["summary"]["contractStatus"] == "ok"
+    assert report["summary"]["stageStatus"] == "ok"
+    assert report["summary"]["intelligenceStatus"] == "degraded"
+    assert "intelligence:news_country_missing:de" in report["warnings"]
+    assert "intelligence:voc_country_missing:de" in report["warnings"]
 
 
 def test_write_outputs_creates_latest_and_historical_artifacts(tmp_path: Path) -> None:
@@ -219,6 +242,7 @@ def test_write_outputs_creates_latest_and_historical_artifacts(tmp_path: Path) -
     assert Path(artifacts["historicalMarkdown"]).exists()
     payload = json.loads(Path(artifacts["latestJson"]).read_text(encoding="utf-8"))
     assert payload["status"] == "passed"
+    assert payload["summary"]["intelligenceStatus"] == "ok"
     assert "Unified Scraping Readiness" in Path(
         artifacts["latestMarkdown"]
     ).read_text(encoding="utf-8")
@@ -247,6 +271,8 @@ def test_write_status_record_maps_readiness_to_pipeline_status(monkeypatch, tmp_
     }
     assert captured["records_processed"] == 12
     assert captured["warning_count"] == 0
+    assert captured["extra"]["intelligenceStatus"] == "ok"
+    assert captured["extra"]["intelligence"]["newsMarketEventCount"] == 2
     assert captured["artifact_refs"] == [
         "hermes/reports/unified_scraping_readiness.json"
     ]
@@ -284,6 +310,8 @@ def test_main_prints_report_and_status_record(monkeypatch, capsys, tmp_path: Pat
             str(inputs["spec_batch"]),
             "--required-countries",
             "se,fi",
+            "--intelligence-countries",
+            "se,fi",
         ]
     )
 
@@ -291,6 +319,7 @@ def test_main_prints_report_and_status_record(monkeypatch, capsys, tmp_path: Pat
     payload = json.loads(captured.out)
     assert exit_code == 0
     assert payload["status"] == "passed"
+    assert payload["summary"]["intelligenceStatus"] == "ok"
     assert payload["pipelineStatus"] == {
         "pipelineId": readiness.PIPELINE_ID,
         "status": "success",

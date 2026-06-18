@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Readiness audit for the unified scraping pipeline.
 
-This combines the static ScrapeJob contract audit with the local stage smoke so
-deploy checks can rely on one Hermes artifact/status record.
+This combines the static ScrapeJob contract audit, the local stage smoke, and
+the News/VOC intelligence smoke so deploy checks can rely on one Hermes
+artifact/status record.
 """
 
 from __future__ import annotations
@@ -35,6 +36,10 @@ from unified_scraping_contract_audit import (  # noqa: E402
     DEFAULT_VOC_BATCH,
     _parse_required_countries_for_kind,
     run_audit,
+)
+from ai_intelligence_enrichment_smoke import (  # noqa: E402
+    DEFAULT_REQUIRED_COUNTRIES as DEFAULT_INTELLIGENCE_COUNTRIES,
+    run_smoke as run_intelligence_smoke,
 )
 from unified_scraping_stage_smoke import run_stage_smoke  # noqa: E402
 
@@ -95,8 +100,8 @@ def _csv_arg(value: str | Sequence[str]) -> tuple[str, ...]:
     )
 
 
-def _combined_status(contract_status: str, stage_status: str) -> str:
-    statuses = {contract_status, stage_status}
+def _combined_status(status_values: Sequence[str]) -> str:
+    statuses = {status for status in status_values if status != "skipped"}
     if "failed" in statuses:
         return "failed"
     if not statuses.issubset({"ok", "degraded"}):
@@ -114,6 +119,48 @@ def _prefixed_warnings(prefix: str, report: dict[str, Any]) -> list[str]:
     ]
 
 
+def _child_artifact_root(
+    artifact_root: str | Path | None,
+    child_name: str,
+) -> str | None:
+    if artifact_root is None:
+        return None
+    return str(Path(artifact_root).expanduser() / child_name)
+
+
+def _intelligence_summary(report: dict[str, Any] | None) -> dict[str, Any]:
+    if not report:
+        return {
+            "status": "skipped",
+            "requiredCountryCount": 0,
+            "newsCountryCount": 0,
+            "newsMarketEventCount": 0,
+            "newsMissingEvidenceCountryCount": 0,
+            "vocCountryCount": 0,
+            "vocDocumentCount": 0,
+            "vocSignalObservationCount": 0,
+            "vocMissingEvidenceCountryCount": 0,
+        }
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    news = summary.get("news") if isinstance(summary.get("news"), dict) else {}
+    voc = summary.get("voc") if isinstance(summary.get("voc"), dict) else {}
+    return {
+        "status": str(report.get("status") or "failed"),
+        "requiredCountryCount": int(summary.get("requiredCountryCount") or 0),
+        "newsCountryCount": int(news.get("countryCount") or 0),
+        "newsMarketEventCount": int(news.get("marketEventCount") or 0),
+        "newsMissingEvidenceCountryCount": len(
+            news.get("missingEvidenceCountries") or []
+        ),
+        "vocCountryCount": int(voc.get("countryCount") or 0),
+        "vocDocumentCount": int(voc.get("documentCount") or 0),
+        "vocSignalObservationCount": int(voc.get("signalObservationCount") or 0),
+        "vocMissingEvidenceCountryCount": len(
+            voc.get("missingEvidenceCountries") or []
+        ),
+    }
+
+
 def _render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     jobs_by_kind = (
@@ -129,6 +176,16 @@ def _render_markdown(report: dict[str, Any]) -> str:
         if isinstance(stage.get("summary"), dict)
         else {}
     )
+    intelligence = (
+        report.get("intelligenceSmoke")
+        if isinstance(report.get("intelligenceSmoke"), dict)
+        else {}
+    )
+    intelligence_summary = (
+        summary.get("intelligence")
+        if isinstance(summary.get("intelligence"), dict)
+        else {}
+    )
 
     lines: list[str] = [
         "# Unified Scraping Readiness",
@@ -137,6 +194,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"**Status:** {report.get('status', '-')}",
         f"**Contract:** {summary.get('contractStatus', '-')}",
         f"**Stage smoke:** {summary.get('stageStatus', '-')}",
+        f"**AI intelligence:** {summary.get('intelligenceStatus', '-')}",
         "",
         "## Summary",
         "",
@@ -146,6 +204,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"| Sampled jobs | {summary.get('sampledJobCount', 0)} |",
         f"| Failed stages | {summary.get('failedStageCount', 0)} |",
         f"| Mapping errors | {summary.get('mappingErrorCount', 0)} |",
+        f"| Intelligence countries | {intelligence_summary.get('requiredCountryCount', 0)} |",
+        f"| News market events | {intelligence_summary.get('newsMarketEventCount', 0)} |",
+        f"| VOC documents | {intelligence_summary.get('vocDocumentCount', 0)} |",
+        f"| VOC signal observations | {intelligence_summary.get('vocSignalObservationCount', 0)} |",
         f"| Warnings | {summary.get('warningCount', 0)} |",
         "",
         "## Jobs By Kind",
@@ -180,6 +242,24 @@ def _render_markdown(report: dict[str, Any]) -> str:
                 f"- Default countries: {_markdown_cell(', '.join(contract_inputs.get('requiredCountries') or []))}",
             ]
         )
+    intelligence_inputs = (
+        intelligence.get("inputs")
+        if isinstance(intelligence.get("inputs"), dict)
+        else {}
+    )
+    if intelligence_inputs:
+        lines.extend(
+            [
+                "",
+                "## AI Intelligence",
+                "",
+                f"- Required countries: {_markdown_cell(', '.join(intelligence_inputs.get('requiredCountries') or []))}",
+                f"- News countries: {intelligence_summary.get('newsCountryCount', 0)}",
+                f"- VOC countries: {intelligence_summary.get('vocCountryCount', 0)}",
+                f"- Missing news evidence countries: {intelligence_summary.get('newsMissingEvidenceCountryCount', 0)}",
+                f"- Missing VOC evidence countries: {intelligence_summary.get('vocMissingEvidenceCountryCount', 0)}",
+            ]
+        )
     artifact_root = stage.get("artifactRoot")
     if artifact_root:
         lines.extend(["", "## Stage Artifacts", "", f"- {_markdown_cell(artifact_root)}"])
@@ -203,6 +283,8 @@ def build_readiness_report(
     required_kinds: Sequence[str] = DEFAULT_REQUIRED_KINDS,
     required_countries_by_kind: dict[str, Sequence[str]] | None = None,
     sample_per_kind: int = 1,
+    include_intelligence_smoke: bool = True,
+    intelligence_countries: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     started = time.time()
     contract_report = run_audit(
@@ -229,11 +311,36 @@ def build_readiness_report(
         required_kinds=required_kinds,
         sample_per_kind=sample_per_kind,
     )
+    intelligence_report = (
+        run_intelligence_smoke(
+            repo_root=repo_root,
+            news_batch=news_batch,
+            voc_batch=voc_batch,
+            artifact_root=_child_artifact_root(artifact_root, "intelligence"),
+            required_countries=(
+                intelligence_countries
+                if intelligence_countries is not None
+                else DEFAULT_INTELLIGENCE_COUNTRIES
+            ),
+        )
+        if include_intelligence_smoke
+        else None
+    )
     contract_status = str(contract_report.get("status") or "failed")
     stage_status = str(stage_report.get("status") or "failed")
+    intelligence_status = (
+        str(intelligence_report.get("status") or "failed")
+        if intelligence_report is not None
+        else "skipped"
+    )
     warnings = [
         *_prefixed_warnings("contract", contract_report),
         *_prefixed_warnings("stage", stage_report),
+        *(
+            _prefixed_warnings("intelligence", intelligence_report)
+            if intelligence_report is not None
+            else []
+        ),
     ]
     contract_summary = (
         contract_report.get("summary")
@@ -249,26 +356,34 @@ def build_readiness_report(
         stage_summary.get("mappingErrorCount") or 0
     )
     failed_stage_count = int(stage_summary.get("failedStageCount") or 0)
+    intelligence_summary = _intelligence_summary(intelligence_report)
 
-    return {
+    report: dict[str, Any] = {
         "schemaVersion": SCHEMA_VERSION,
-        "status": _combined_status(contract_status, stage_status),
+        "status": _combined_status(
+            (contract_status, stage_status, intelligence_status)
+        ),
         "generatedAtUtc": _utc_now_iso(),
         "elapsedSeconds": round(time.time() - started, 2),
         "summary": {
             "contractStatus": contract_status,
             "stageStatus": stage_status,
+            "intelligenceStatus": intelligence_status,
             "configuredJobCount": int(contract_summary.get("totalJobs") or 0),
             "sampledJobCount": int(stage_summary.get("sampledJobCount") or 0),
             "jobsByKind": contract_summary.get("jobsByKind") or {},
             "failedStageCount": failed_stage_count,
             "mappingErrorCount": mapping_error_count,
+            "intelligence": intelligence_summary,
             "warningCount": len(warnings),
         },
         "contract": contract_report,
         "stageSmoke": stage_report,
         "warnings": warnings,
     }
+    if intelligence_report is not None:
+        report["intelligenceSmoke"] = intelligence_report
+    return report
 
 
 def write_outputs(report: dict[str, Any], out_dir: str | Path) -> dict[str, str]:
@@ -327,6 +442,7 @@ def write_status_record(
             f"Unified scraping readiness={status}; "
             f"contract={summary.get('contractStatus', '-')}, "
             f"stage={summary.get('stageStatus', '-')}, "
+            f"intelligence={summary.get('intelligenceStatus', '-')}, "
             f"jobs={summary.get('configuredJobCount', 0)}, "
             f"sampled={summary.get('sampledJobCount', 0)}, "
             f"warnings={warning_count}."
@@ -335,9 +451,11 @@ def write_status_record(
             "readinessStatus": status,
             "contractStatus": summary.get("contractStatus"),
             "stageStatus": summary.get("stageStatus"),
+            "intelligenceStatus": summary.get("intelligenceStatus"),
             "jobsByKind": summary.get("jobsByKind") or {},
             "failedStageCount": summary.get("failedStageCount", 0),
             "mappingErrorCount": summary.get("mappingErrorCount", 0),
+            "intelligence": summary.get("intelligence") or {},
         },
         repo_root=REPO_ROOT,
     )
@@ -377,6 +495,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--sample-per-kind", type=int, default=1)
     parser.add_argument(
+        "--intelligence-countries",
+        default=",".join(DEFAULT_INTELLIGENCE_COUNTRIES),
+        help="Comma-separated country codes to verify in News/VOC intelligence smoke.",
+    )
+    parser.add_argument(
+        "--skip-intelligence-smoke",
+        action="store_true",
+        help="Skip News/VOC AI enrichment readiness checks.",
+    )
+    parser.add_argument(
         "--out-dir",
         default=None,
         help="Optional Hermes reports directory for JSON/Markdown artifacts.",
@@ -412,6 +540,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.required_countries_for_kind,
         ),
         sample_per_kind=max(1, int(args.sample_per_kind)),
+        include_intelligence_smoke=not bool(args.skip_intelligence_smoke),
+        intelligence_countries=_csv_arg(args.intelligence_countries),
     )
     artifact_refs: dict[str, str] = {}
     if args.out_dir:
