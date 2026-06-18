@@ -4,6 +4,7 @@ import { useLocation } from "react-router-dom";
 import { apiUrl } from "../api/client";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
+const INITIAL_HEARTBEAT_DELAY_MS = 8_000;
 const SESSION_KEY = "jato_presence_session_id";
 const USER_NAME_KEY = "jato_user_name";
 
@@ -79,9 +80,12 @@ export function usePresence() {
   }, [location.pathname]);
 
   useEffect(() => {
-    sendHeartbeat();
+    const initial = setTimeout(sendHeartbeat, INITIAL_HEARTBEAT_DELAY_MS);
     const interval = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(interval);
+    };
   }, [sendHeartbeat]);
 
   return snapshot;

@@ -135,7 +135,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(
     () => localStorage.getItem(STORAGE_TOKEN) || null,
   );
-  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [profileLoaded, setProfileLoaded] = useState(true);
 
   const applyUser = useCallback((nextUser: User) => {
     storeUser(nextUser);
@@ -196,7 +196,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applyUser]);
 
   useEffect(() => {
-    setProfileLoaded(false);
     void refreshUser();
   }, [refreshUser, token]);
 

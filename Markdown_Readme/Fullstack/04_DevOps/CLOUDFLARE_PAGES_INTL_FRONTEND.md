@@ -32,6 +32,8 @@ intl.ojeur.cloud
 
 Keep `www.ojeur.cloud` on Tencent Cloud for China traffic. Do not move the whole apex domain if China speed is still required and there is no budget for paid traffic steering.
 
+Do not force `www.ojeur.cloud` page routes to `intl.ojeur.cloud` with IP-based nginx 302 rules. Some users run a PAC/configuration proxy instead of a full global proxy, so their browser may still reach `www.ojeur.cloud` through the China network path. Keep `www.ojeur.cloud` as the domestic entry and use `intl.ojeur.cloud` only when users explicitly open the overseas entry.
+
 If you test the temporary Cloudflare `*.pages.dev` domain before binding `intl.ojeur.cloud`, append that exact origin to both `APP_FRONTEND_ORIGINS` and `APP_CORS_ORIGINS` during the test.
 
 ## Tencent API Env
