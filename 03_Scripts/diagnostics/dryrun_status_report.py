@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Generate comprehensive dry-run status report across all batches."""
+
 import json
 from pathlib import Path
 from collections import defaultdict
@@ -40,9 +41,8 @@ SE_RESULTS = [
     ("se", "volvo_xc90_se_draft_scrapling", 6, 6, 0),
 ]
 
-HR_RESULTS = [
-    ("hr", f"_{i}_hr_draft_scrapling", 0, 0, 0) for i in range(30)
-]  # All 0 PASS
+HR_RESULTS = [("hr", f"_{i}_hr_draft_scrapling", 0, 0, 0) for i in range(30)]  # All 0 PASS
+
 
 def main():
     # Load batch 2 report
@@ -51,11 +51,11 @@ def main():
 
     # Combine all results
     all_results = []
-    
+
     # Add SE (with lowPrice fix applied)
     for cc, code, valid, ext, rej in SE_RESULTS:
         all_results.append({"country": cc, "code": code, "valid": valid, "extracted": ext, "rejected": rej})
-    
+
     # Add batch 2
     for r in batch2["results"]:
         all_results.append(r)
@@ -64,7 +64,7 @@ def main():
     print("=" * 70)
     print("COMPREHENSIVE DRY-RUN STATUS REPORT")
     print("=" * 70)
-    
+
     by_country = defaultdict(lambda: {"pass": 0, "empty": 0, "fail": 0, "total": 0})
     for r in all_results:
         cc = r["country"]
@@ -75,7 +75,7 @@ def main():
             by_country[cc]["fail"] += 1
         else:
             by_country[cc]["empty"] += 1
-    
+
     print(f"\n{'Country':>8s}  {'Pass':>4s}  {'Empty':>5s}  {'Fail':>4s}  {'Total':>5s}  {'Rate':>6s}")
     print("-" * 42)
     grand_pass = grand_total = 0
@@ -96,7 +96,7 @@ def main():
         cc = parts[-1] if len(parts) >= 2 else "?"
         brand_model = parts[0] if len(parts) >= 2 else r["code"]
         brand = brand_model.split("_")[0]
-        by_brand[brand]["total"] += 1 
+        by_brand[brand]["total"] += 1
         by_brand[brand]["countries_total"].add(cc)
         if r.get("valid", 0) > 0:
             by_brand[brand]["pass"] += 1
@@ -115,7 +115,7 @@ def main():
     print("WORKING EXTRACTION STRATEGIES")
     print("=" * 70)
     print("✅ Toyota  → ld+json @type: Product/Car (SE, AT, CH, HU, NO)")
-    print("✅ Volvo   → CSS [data-testid=\"selection-card\"] (SE, CZ, HU, NO)")  
+    print('✅ Volvo   → CSS [data-testid="selection-card"] (SE, CZ, HU, NO)')
     print("✅ KIA     → CSS .card-info-title / ld+json (SE, CZ, NO)")
     print("✅ Hyundai → ld+json @type: Product (CH, CZ)")
     print("✅ Mercedes→ ld+json (CH only)")

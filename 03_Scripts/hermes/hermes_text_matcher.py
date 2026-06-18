@@ -8,8 +8,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 # ── PRD text extraction ──────────────────────────────────────────────
+
 
 def extract_prd_info(prd_text: str, prd_path: str = "") -> dict[str, Any]:
     """Extract structured info from a PRD markdown file."""
@@ -31,16 +31,20 @@ def extract_prd_info(prd_text: str, prd_path: str = "") -> dict[str, Any]:
             headings.append(stripped)
 
     # Extract URLs/routes: look for /path patterns
-    routes = list(set(re.findall(r'(/[a-zA-Z][a-zA-Z0-9_\-/]*)', prd_text)))
+    routes = list(set(re.findall(r"(/[a-zA-Z][a-zA-Z0-9_\-/]*)", prd_text)))
 
     # Extract API paths: /v1/something
-    api_paths = list(set(re.findall(r'/v[0-9]/[a-zA-Z][a-zA-Z0-9_\-/]*', prd_text)))
+    api_paths = list(set(re.findall(r"/v[0-9]/[a-zA-Z][a-zA-Z0-9_\-/]*", prd_text)))
 
     # Extract file paths
-    file_paths = list(set(re.findall(
-        r'[0-9]{2}_[A-Z][a-zA-Z0-9_]*/[A-Za-z0-9_\-/]*\.(?:py|tsx?|yaml|yml|sh|json|md)',
-        prd_text,
-    )))
+    file_paths = list(
+        set(
+            re.findall(
+                r"[0-9]{2}_[A-Z][a-zA-Z0-9_]*/[A-Za-z0-9_\-/]*\.(?:py|tsx?|yaml|yml|sh|json|md)",
+                prd_text,
+            )
+        )
+    )
 
     # Keywords
     text_lower = prd_text.lower()
@@ -49,10 +53,34 @@ def extract_prd_info(prd_text: str, prd_path: str = "") -> dict[str, Any]:
         "frontend": ["frontend", "react", "typescript", "vite", "component", "page", "ui", "route", "chart", "plotly"],
         "backend": ["backend", "fastapi", "api", "endpoint", "route", "service", "uvicorn"],
         "database": ["postgresql", "database", "schema", "migration", "alembic", "sqlalchemy"],
-        "pipeline": ["crawler", "scrape", "airflow", "dag", "systemd", "timer", "github action", "schedule", "artifact", "etl", "refresh", "fetch"],
+        "pipeline": [
+            "crawler",
+            "scrape",
+            "airflow",
+            "dag",
+            "systemd",
+            "timer",
+            "github action",
+            "schedule",
+            "artifact",
+            "etl",
+            "refresh",
+            "fetch",
+        ],
         "llm": ["llm", "prompt", "deepseek", "flash", "pro", "gemini", "nvidia"],
         "data": ["jato", "msrp", "voc", "news", "parquet", "partitioned", "excel", "xlsx"],
-        "feature": ["country assistant", "country copilot", "copilot", "dashboard", "market scan", "version comparison", "data management", "engineering", "review", "customer insight"],
+        "feature": [
+            "country assistant",
+            "country copilot",
+            "copilot",
+            "dashboard",
+            "market scan",
+            "version comparison",
+            "data management",
+            "engineering",
+            "review",
+            "customer insight",
+        ],
         "cost": ["pro", "deep report", "long report", "full text", "batch analysis", "multi-country"],
         "test": ["test", "contract", "integration", "unit test", "snapshot"],
     }
@@ -76,11 +104,12 @@ def extract_prd_info(prd_text: str, prd_path: str = "") -> dict[str, Any]:
 
 # ── Registry matching ────────────────────────────────────────────────
 
+
 def _tokenize(text: str) -> set[str]:
     """Lowercase tokenize a string into words."""
     if not text:
         return set()
-    return set(re.findall(r'[a-z0-9_一-鿿]+', str(text).lower()))
+    return set(re.findall(r"[a-z0-9_一-鿿]+", str(text).lower()))
 
 
 def _score_text_match(query_tokens: set[str], target_text: str, weight: float) -> float:
@@ -186,12 +215,14 @@ def match_features(prd_info: dict, features: list[dict]) -> list[dict]:
             score += s
             reasons.append("docs/deps/issue match")
 
-        results.append({
-            "entry": f,
-            "score": round(score, 2),
-            "reasons": reasons,
-            "confidence": "high" if score >= 5 else "medium" if score >= 2 else "low",
-        })
+        results.append(
+            {
+                "entry": f,
+                "score": round(score, 2),
+                "reasons": reasons,
+                "confidence": "high" if score >= 5 else "medium" if score >= 2 else "low",
+            }
+        )
 
     results.sort(key=lambda r: r["score"], reverse=True)
     return [r for r in results if r["score"] > 0]
@@ -239,12 +270,14 @@ def match_pipelines(prd_info: dict, pipelines: list[dict]) -> list[dict]:
             score += s
             reasons.append("known issue match")
 
-        results.append({
-            "entry": p,
-            "score": round(score, 2),
-            "reasons": reasons,
-            "confidence": "high" if score >= 5 else "medium" if score >= 2 else "low",
-        })
+        results.append(
+            {
+                "entry": p,
+                "score": round(score, 2),
+                "reasons": reasons,
+                "confidence": "high" if score >= 5 else "medium" if score >= 2 else "low",
+            }
+        )
 
     results.sort(key=lambda r: r["score"], reverse=True)
     return [r for r in results if r["score"] > 0]
@@ -277,12 +310,14 @@ def match_sources(prd_info: dict, sources: list[dict]) -> list[dict]:
             score += s_val
             reasons.append("type/country/path match")
 
-        results.append({
-            "entry": s,
-            "score": round(score, 2),
-            "reasons": reasons,
-            "confidence": "high" if score >= 5 else "medium" if score >= 2 else "low",
-        })
+        results.append(
+            {
+                "entry": s,
+                "score": round(score, 2),
+                "reasons": reasons,
+                "confidence": "high" if score >= 5 else "medium" if score >= 2 else "low",
+            }
+        )
 
     results.sort(key=lambda r: r["score"], reverse=True)
     return [r for r in results if r["score"] > 0]
@@ -314,12 +349,14 @@ def match_prompts(prd_info: dict, prompts: list[dict]) -> list[dict]:
             score += s
             reasons.append("pipeline/path match")
 
-        results.append({
-            "entry": p,
-            "score": round(score, 2),
-            "reasons": reasons,
-            "confidence": "high" if score >= 5 else "medium" if score >= 2 else "low",
-        })
+        results.append(
+            {
+                "entry": p,
+                "score": round(score, 2),
+                "reasons": reasons,
+                "confidence": "high" if score >= 5 else "medium" if score >= 2 else "low",
+            }
+        )
 
     results.sort(key=lambda r: r["score"], reverse=True)
     return [r for r in results if r["score"] > 0]
@@ -357,18 +394,21 @@ def match_artifacts(prd_info: dict, artifacts: list[dict]) -> list[dict]:
             score += s
             reasons.append("consumer/producer match")
 
-        results.append({
-            "entry": a,
-            "score": round(score, 2),
-            "reasons": reasons,
-            "confidence": "high" if score >= 5 else "medium" if score >= 2 else "low",
-        })
+        results.append(
+            {
+                "entry": a,
+                "score": round(score, 2),
+                "reasons": reasons,
+                "confidence": "high" if score >= 5 else "medium" if score >= 2 else "low",
+            }
+        )
 
     results.sort(key=lambda r: r["score"], reverse=True)
     return [r for r in results if r["score"] > 0]
 
 
 # ── Risk detection ───────────────────────────────────────────────────
+
 
 def detect_risks(prd_info: dict) -> list[dict]:
     """Detect risk areas from PRD keywords."""
@@ -392,16 +432,19 @@ def detect_risks(prd_info: dict) -> list[dict]:
             for cat in trigger_cats:
                 if cat in kws:
                     reasons.append(f"keyword: {', '.join(kws[cat])}")
-            risks.append({
-                "area": area,
-                "risk": "medium" if area in ("Backend", "Pipeline", "Intelligence") else "low",
-                "reason": "; ".join(reasons) if reasons else default_reason,
-            })
+            risks.append(
+                {
+                    "area": area,
+                    "risk": "medium" if area in ("Backend", "Pipeline", "Intelligence") else "low",
+                    "reason": "; ".join(reasons) if reasons else default_reason,
+                }
+            )
 
     return risks
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
+
 
 def _build_search_text(prd_info: dict) -> str:
     """Build a combined searchable text from PRD info."""

@@ -5,10 +5,15 @@ Opens each URL, finds elements containing price-like text, and reports
 the specific CSS class names and data attributes that can be used as selectors.
 """
 
-import json, re, sys, time
+import json
+import re
+import sys
+import time
 from typing import Any
 
-PRICE_RE = re.compile(r'[\d]{1,3}(?:[.,\s]\d{3})*(?:[.,]\d+)?\s*(?:€|\$|£|kr|SEK|NOK|DKK|PLN|CZK|HUF|CHF)', re.IGNORECASE)
+PRICE_RE = re.compile(
+    r"[\d]{1,3}(?:[.,\s]\d{3})*(?:[.,]\d+)?\s*(?:€|\$|£|kr|SEK|NOK|DKK|PLN|CZK|HUF|CHF)", re.IGNORECASE
+)
 
 PROBES = [
     ("SKODA", "https://www.skoda.se/modeller/enyaq/enyaq"),
@@ -32,7 +37,10 @@ def probe_deep(url: str, brand: str) -> dict[str, Any]:
     from playwright.sync_api import sync_playwright
 
     result = {
-        "brand": brand, "url": url, "title": "", "error": None,
+        "brand": brand,
+        "url": url,
+        "title": "",
+        "error": None,
         "price_elements": [],
         "data_attributes": [],
         "key_classes": [],
@@ -57,7 +65,13 @@ def probe_deep(url: str, brand: str) -> dict[str, Any]:
             # Strategy 1: Find elements with data-testid, data-cy, data-automation
             data_attrs = page.evaluate("""() => {
                 const attrs = new Set();
-                document.querySelectorAll('[data-testid], [data-cy], [data-automation], [data-component]').forEach(el => {
+                const selector = [
+                    '[data-testid]',
+                    '[data-cy]',
+                    '[data-automation]',
+                    '[data-component]',
+                ].join(', ');
+                document.querySelectorAll(selector).forEach(el => {
                     for (const attr of ['data-testid', 'data-cy', 'data-automation', 'data-component']) {
                         const v = el.getAttribute(attr);
                         if (v) attrs.add(attr + '="' + v + '"');
@@ -85,16 +99,23 @@ def probe_deep(url: str, brand: str) -> dict[str, Any]:
                     // Check if this element or its parent looks like a price
                     const tag = el.tagName.toLowerCase();
                     const cls = el.className && typeof el.className === 'string' ? el.className : '';
-                    const parentCls = el.parentElement && typeof el.parentElement.className === 'string' ? el.parentElement.className : '';
+                    const parentCls = (
+                        el.parentElement && typeof el.parentElement.className === 'string'
+                    ) ? el.parentElement.className : '';
 
                     // Check for price patterns in text
-                    if (/[\\d]{1,3}(?:[.,\\s]\\d{3})*(?:[.,]\\d+)?\\s*(?:€|\\$|£|kr|SEK|NOK|DKK)/i.test(text)) {
+                    const pricePattern = (
+                        /[\\d]{1,3}(?:[.,\\s]\\d{3})*(?:[.,]\\d+)?\\s*(?:€|\\$|£|kr|SEK|NOK|DKK)/i
+                    );
+                    if (pricePattern.test(text)) {
                         results.push({
                             text: text.substring(0, 80),
                             tag: tag,
                             cls: cls.split(' ').filter(c => c.length > 1 && c.length < 40).slice(0, 5),
                             parentCls: parentCls.split(' ').filter(c => c.length > 1 && c.length < 40).slice(0, 3),
-                            dataAttrs: [...el.attributes].filter(a => a.name.startsWith('data-')).map(a => a.name + '="' + a.value + '"'),
+                            dataAttrs: [...el.attributes]
+                                .filter(a => a.name.startsWith('data-'))
+                                .map(a => a.name + '="' + a.value + '"'),
                         });
                     }
                 }
@@ -156,12 +177,15 @@ def main():
             print(f"    best price: text='{pe['text'][:60]}' tag=<{pe['tag']}> cls={' '.join(pe['cls'][:3])}")
         if r["key_classes"]:
             # Find classes that look like card containers
-            card_like = [c for c in r["key_classes"] if 'card' in c or 'item' in c or 'tile' in c]
-            trim_like = [c for c in r["key_classes"] if 'trim' in c or 'version' in c or 'variant' in c]
-            price_like = [c for c in r["key_classes"] if 'price' in c]
-            if card_like: print(f"    card classes: {', '.join(card_like[:5])}")
-            if trim_like: print(f"    trim classes: {', '.join(trim_like[:5])}")
-            if price_like: print(f"    price classes: {', '.join(price_like[:5])}")
+            card_like = [c for c in r["key_classes"] if "card" in c or "item" in c or "tile" in c]
+            trim_like = [c for c in r["key_classes"] if "trim" in c or "version" in c or "variant" in c]
+            price_like = [c for c in r["key_classes"] if "price" in c]
+            if card_like:
+                print(f"    card classes: {', '.join(card_like[:5])}")
+            if trim_like:
+                print(f"    trim classes: {', '.join(trim_like[:5])}")
+            if price_like:
+                print(f"    price classes: {', '.join(price_like[:5])}")
 
     Path("/tmp/deep_probe_results.json").write_text(json.dumps(results, indent=2, ensure_ascii=False))
     print(f"\nFull results: /tmp/deep_probe_results.json")

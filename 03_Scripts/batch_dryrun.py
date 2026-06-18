@@ -4,6 +4,7 @@
 Runs each source individually to isolate failures, and produces
 a summary report.
 """
+
 import json
 import logging
 import os
@@ -15,9 +16,7 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 # Ensure jato_scraper is importable
-_toolkit_dir = str(
-    Path(__file__).resolve().parent.parent / "07_ScrapingToolkit"
-)
+_toolkit_dir = str(Path(__file__).resolve().parent.parent / "07_ScrapingToolkit")
 if _toolkit_dir not in sys.path:
     sys.path.insert(0, _toolkit_dir)
 _hermes_script_dir = str(Path(__file__).resolve().parent / "hermes")
@@ -70,10 +69,7 @@ def _capture_source_logs(handler: logging.Handler) -> Iterator[None]:
         logging.getLogger("jato_scraper"),
         logging.getLogger("scrapling"),
     ]
-    logger_states = [
-        (logger, logger.level, logger.propagate)
-        for logger in target_loggers
-    ]
+    logger_states = [(logger, logger.level, logger.propagate) for logger in target_loggers]
 
     root_logger.addHandler(handler)
     for logger in target_loggers:
@@ -121,11 +117,7 @@ def _classify_dryrun_failure(
 ) -> dict:
     """Classify a dry-run failure and recommend next strategy."""
     status = str(src.get("status", "")).lower()
-    error = str(
-        src.get("error", "")
-        or src.get("extractorError", "")
-        or (str(exception) if exception else "")
-    )
+    error = str(src.get("error", "") or src.get("extractorError", "") or (str(exception) if exception else ""))
     try:
         valid = int(src.get("valid") or 0)
     except (TypeError, ValueError):
@@ -143,13 +135,29 @@ def _classify_dryrun_failure(
         http_status = None
 
     if "404-page" in final_url.lower() or "/404" in final_url.lower():
-        return {"failureReason": "source_url_not_found", "recommendedStrategy": "update_source_url", "severity": "error"}
+        return {
+            "failureReason": "source_url_not_found",
+            "recommendedStrategy": "update_source_url",
+            "severity": "error",
+        }
     if http_status == 403:
-        return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
+        return {
+            "failureReason": "forbidden_403",
+            "recommendedStrategy": "manual_review_or_proxy_required",
+            "severity": "error",
+        }
     if http_status == 404:
-        return {"failureReason": "source_url_not_found", "recommendedStrategy": "update_source_url", "severity": "error"}
+        return {
+            "failureReason": "source_url_not_found",
+            "recommendedStrategy": "update_source_url",
+            "severity": "error",
+        }
     if http_status and http_status >= 400:
-        return {"failureReason": "http_error", "recommendedStrategy": "check_source_url_or_site_status", "severity": "error"}
+        return {
+            "failureReason": "http_error",
+            "recommendedStrategy": "check_source_url_or_site_status",
+            "severity": "error",
+        }
     if valid > 0 and status not in {"empty", "error", "exception"}:
         return {"failureReason": None, "recommendedStrategy": None, "severity": "info"}
     if (
@@ -159,7 +167,11 @@ def _classify_dryrun_failure(
         or "nodename nor servname" in error_lower
         or "err_name_not_resolved" in error_lower
     ):
-        return {"failureReason": "dns_resolution_failed", "recommendedStrategy": "retry_or_check_dns", "severity": "warning"}
+        return {
+            "failureReason": "dns_resolution_failed",
+            "recommendedStrategy": "retry_or_check_dns",
+            "severity": "warning",
+        }
     if (
         "err_internet_disconnected" in error_lower
         or "internet disconnected" in error_lower
@@ -169,45 +181,117 @@ def _classify_dryrun_failure(
         or "connection closed" in error_lower
         or "err_connection_closed" in error_lower
     ):
-        return {"failureReason": "network_unavailable", "recommendedStrategy": "retry_network_or_proxy", "severity": "warning"}
+        return {
+            "failureReason": "network_unavailable",
+            "recommendedStrategy": "retry_network_or_proxy",
+            "severity": "warning",
+        }
     if "403" in error_lower or "forbidden" in error_lower:
-        return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
+        return {
+            "failureReason": "forbidden_403",
+            "recommendedStrategy": "manual_review_or_proxy_required",
+            "severity": "error",
+        }
     if "waiting for" in error_lower or "playwright" in error_lower:
-        return {"failureReason": "js_required_or_selector_timeout", "recommendedStrategy": "try_playwright_card_flow", "severity": "warning"}
+        return {
+            "failureReason": "js_required_or_selector_timeout",
+            "recommendedStrategy": "try_playwright_card_flow",
+            "severity": "warning",
+        }
     if "fetch_failed" in error_lower:
-        return {"failureReason": "http_error", "recommendedStrategy": "check_source_url_or_site_status", "severity": "error"}
+        return {
+            "failureReason": "http_error",
+            "recommendedStrategy": "check_source_url_or_site_status",
+            "severity": "error",
+        }
     if "timeout" in error_lower or "timed out" in error_lower:
-        return {"failureReason": "http_timeout", "recommendedStrategy": "retry_or_reduce_concurrency", "severity": "warning"}
+        return {
+            "failureReason": "http_timeout",
+            "recommendedStrategy": "retry_or_reduce_concurrency",
+            "severity": "warning",
+        }
 
     if exception or status in ("exception", "error"):
         if "waiting for" in error_lower or "playwright" in error_lower:
-            return {"failureReason": "js_required_or_selector_timeout", "recommendedStrategy": "try_playwright_card_flow", "severity": "warning"}
+            return {
+                "failureReason": "js_required_or_selector_timeout",
+                "recommendedStrategy": "try_playwright_card_flow",
+                "severity": "warning",
+            }
         if "timeout" in error_lower:
-            return {"failureReason": "http_timeout", "recommendedStrategy": "retry_or_reduce_concurrency", "severity": "warning"}
+            return {
+                "failureReason": "http_timeout",
+                "recommendedStrategy": "retry_or_reduce_concurrency",
+                "severity": "warning",
+            }
         if "403" in error_lower or "forbidden" in error_lower:
-            return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
+            return {
+                "failureReason": "forbidden_403",
+                "recommendedStrategy": "manual_review_or_proxy_required",
+                "severity": "error",
+            }
         if "selector" in error_lower or "no elements" in error_lower or "TODO_SELECTOR" in error:
-            return {"failureReason": "selector_empty", "recommendedStrategy": "try_scrapling_dynamic_or_playwright", "severity": "warning"}
+            return {
+                "failureReason": "selector_empty",
+                "recommendedStrategy": "try_scrapling_dynamic_or_playwright",
+                "severity": "warning",
+            }
         if "502" in error_lower or "503" in error_lower or "bad gateway" in error_lower:
-            return {"failureReason": "db_or_backend_write_failed", "recommendedStrategy": "pipeline_error_not_source_error", "severity": "error"}
-        return {"failureReason": "unknown", "recommendedStrategy": "diagnose_with_msrp_page_analyzer", "severity": "warning"}
+            return {
+                "failureReason": "db_or_backend_write_failed",
+                "recommendedStrategy": "pipeline_error_not_source_error",
+                "severity": "error",
+            }
+        return {
+            "failureReason": "unknown",
+            "recommendedStrategy": "diagnose_with_msrp_page_analyzer",
+            "severity": "warning",
+        }
 
     if status == "empty":
         if "TODO_SELECTOR" in error:
-            return {"failureReason": "selector_empty", "recommendedStrategy": "try_scrapling_dynamic_or_playwright", "severity": "warning"}
+            return {
+                "failureReason": "selector_empty",
+                "recommendedStrategy": "try_scrapling_dynamic_or_playwright",
+                "severity": "warning",
+            }
         if "selector" in error_lower or "no elements" in error_lower:
-            return {"failureReason": "selector_empty", "recommendedStrategy": "try_scrapling_dynamic_or_playwright", "severity": "warning"}
+            return {
+                "failureReason": "selector_empty",
+                "recommendedStrategy": "try_scrapling_dynamic_or_playwright",
+                "severity": "warning",
+            }
         if "json" in error_lower and ("noth" in error_lower or "falling back" in error_lower):
-            return {"failureReason": "json_ld_empty", "recommendedStrategy": "try_css_or_attr_json", "severity": "warning"}
-        return {"failureReason": "no_observation_extracted", "recommendedStrategy": "diagnose_with_msrp_page_analyzer", "severity": "warning"}
+            return {
+                "failureReason": "json_ld_empty",
+                "recommendedStrategy": "try_css_or_attr_json",
+                "severity": "warning",
+            }
+        return {
+            "failureReason": "no_observation_extracted",
+            "recommendedStrategy": "diagnose_with_msrp_page_analyzer",
+            "severity": "warning",
+        }
 
     if extracted > 0 and valid == 0:
         rejected_reasons = [str(r).lower() for r in src.get("rejectedReasons", [])]
         if any("currency" in r for r in rejected_reasons):
-            return {"failureReason": "currency_mismatch", "recommendedStrategy": "check_default_currency", "severity": "warning"}
+            return {
+                "failureReason": "currency_mismatch",
+                "recommendedStrategy": "check_default_currency",
+                "severity": "warning",
+            }
         if any("price" in r and ("range" in r or "out" in r) for r in rejected_reasons):
-            return {"failureReason": "price_out_of_range", "recommendedStrategy": "check_currency_and_price_semantics", "severity": "warning"}
-        return {"failureReason": "validation_rejected_all", "recommendedStrategy": "review_validation_rules", "severity": "warning"}
+            return {
+                "failureReason": "price_out_of_range",
+                "recommendedStrategy": "check_currency_and_price_semantics",
+                "severity": "warning",
+            }
+        return {
+            "failureReason": "validation_rejected_all",
+            "recommendedStrategy": "review_validation_rules",
+            "severity": "warning",
+        }
 
     return {"failureReason": "unknown", "recommendedStrategy": "diagnose_with_msrp_page_analyzer", "severity": "info"}
 
@@ -326,18 +410,20 @@ def _normalize_source_for_v3(result: dict, index: int, total: int) -> dict:
     status = "pass" if _is_passing_result(result) else ("empty" if _result_is_empty(result) else "fail")
     source_code = result.get("sourceCode") or result.get("code") or ""
     payload = dict(result)
-    payload.update({
-        "index": index,
-        "totalInCountry": total,
-        "sourceCode": source_code,
-        "code": source_code,
-        "status": status,
-        "rawStatus": result.get("status"),
-        "valid": int(result.get("valid") or 0),
-        "extracted": int(result.get("extracted") or 0),
-        "rejected": int(result.get("rejected") or 0),
-        "elapsedSeconds": float(result.get("elapsedSeconds") or result.get("elapsed") or 0),
-    })
+    payload.update(
+        {
+            "index": index,
+            "totalInCountry": total,
+            "sourceCode": source_code,
+            "code": source_code,
+            "status": status,
+            "rawStatus": result.get("status"),
+            "valid": int(result.get("valid") or 0),
+            "extracted": int(result.get("extracted") or 0),
+            "rejected": int(result.get("rejected") or 0),
+            "elapsedSeconds": float(result.get("elapsedSeconds") or result.get("elapsed") or 0),
+        }
+    )
     return payload
 
 
@@ -358,10 +444,7 @@ def _country_detail_from_results(country: str, results: list[dict]) -> dict:
         "topFailureReason": top_reason,
         "failureBreakdown": failure_breakdown,
         "strategyRecommendations": summary["strategyRecommendations"],
-        "sources": [
-            _normalize_source_for_v3(result, index, total)
-            for index, result in enumerate(results, start=1)
-        ],
+        "sources": [_normalize_source_for_v3(result, index, total) for index, result in enumerate(results, start=1)],
         "completed": True,
     }
 
@@ -374,23 +457,17 @@ def _build_dryrun_report_payload(
     run_id: str,
     generated_at: str,
 ) -> dict:
-    normalized_countries = [
-        country.strip().lower()
-        for country in countries
-        if country.strip()
-    ]
+    normalized_countries = [country.strip().lower() for country in countries if country.strip()]
     expected_countries = sorted(set(normalized_countries))
-    observed_countries = sorted({
-        str(result.get("country") or "").strip().lower()
-        for result in results
-        if str(result.get("country") or "").strip()
-    })
+    observed_countries = sorted(
+        {
+            str(result.get("country") or "").strip().lower()
+            for result in results
+            if str(result.get("country") or "").strip()
+        }
+    )
     missing_countries = sorted(set(expected_countries) - set(observed_countries))
-    duplicate_countries = sorted({
-        country
-        for country in expected_countries
-        if normalized_countries.count(country) > 1
-    })
+    duplicate_countries = sorted({country for country in expected_countries if normalized_countries.count(country) > 1})
 
     summary = _summary_from_results(results)
     gate_threshold = int(os.getenv("JATO_MSRP_MIN_DRYRUN_PASS_PCT", "70"))
@@ -402,27 +479,25 @@ def _build_dryrun_report_payload(
 
     countries_detail: list[dict] = []
     for country in sorted(set(expected_countries) | set(observed_countries)):
-        country_results = [
-            result
-            for result in results
-            if str(result.get("country") or "").strip().lower() == country
-        ]
+        country_results = [result for result in results if str(result.get("country") or "").strip().lower() == country]
         if not country_results:
-            countries_detail.append({
-                "countryCode": country,
-                "total": 0,
-                "pass": 0,
-                "empty": 0,
-                "fail": 0,
-                "errors": 0,
-                "passPct": 0.0,
-                "status": "missing",
-                "topFailureReason": None,
-                "failureBreakdown": {},
-                "strategyRecommendations": {},
-                "sources": [],
-                "completed": False,
-            })
+            countries_detail.append(
+                {
+                    "countryCode": country,
+                    "total": 0,
+                    "pass": 0,
+                    "empty": 0,
+                    "fail": 0,
+                    "errors": 0,
+                    "passPct": 0.0,
+                    "status": "missing",
+                    "topFailureReason": None,
+                    "failureBreakdown": {},
+                    "strategyRecommendations": {},
+                    "sources": [],
+                    "completed": False,
+                }
+            )
             continue
         countries_detail.append(_country_detail_from_results(country, country_results))
 
@@ -502,18 +577,16 @@ def _write_dryrun_runs_index(report: dict, latest_path: Path, history_path: Path
         "logFile": "",
     }
 
-    existing_runs = [
-        run
-        for run in index_data.get("runs", [])
-        if run.get("runId") != run_id
-    ]
+    existing_runs = [run for run in index_data.get("runs", []) if run.get("runId") != run_id]
     existing_runs.insert(0, run_entry)
-    index_data.update({
-        "schemaVersion": "msrp_dryrun_runs_index_v1",
-        "updatedAt": now,
-        "latestRunId": run_id,
-        "runs": existing_runs[:100],
-    })
+    index_data.update(
+        {
+            "schemaVersion": "msrp_dryrun_runs_index_v1",
+            "updatedAt": now,
+            "latestRunId": run_id,
+            "runs": existing_runs[:100],
+        }
+    )
     index_path.write_text(json.dumps(index_data, indent=2, ensure_ascii=False) + "\n")
 
 
@@ -554,7 +627,7 @@ def _write_dryrun_status(
 
         failure_breakdown: dict[str, int] = {}
         strategy_recs: dict[str, int] = {}
-        for r in (results or []):
+        for r in results or []:
             reason = r.get("failureReason")
             if reason:
                 failure_breakdown[reason] = failure_breakdown.get(reason, 0) + 1
@@ -696,9 +769,7 @@ def main():
                 log_capture.setFormatter(logging.Formatter("%(levelname)s %(name)s — %(message)s"))
                 attempt_t0 = time.time()
                 with _capture_source_logs(log_capture):
-                    summary = run_scrape(
-                        source_codes=[code], dry_run=True
-                    )
+                    summary = run_scrape(source_codes=[code], dry_run=True)
                 src = summary["sources"].get(code, {})
                 captured_log_text = log_capture.text()
                 classification_src = src
@@ -714,19 +785,18 @@ def main():
                     "valid": valid,
                     "failureReason": classification.get("failureReason"),
                 }
-                source_attempts.append({
-                    "attempt": attempt,
-                    "status": status,
-                    "valid": valid,
-                    "extracted": extracted,
-                    "failureReason": classification.get("failureReason"),
-                    "elapsedSeconds": round(time.time() - attempt_t0, 1),
-                })
+                source_attempts.append(
+                    {
+                        "attempt": attempt,
+                        "status": status,
+                        "valid": valid,
+                        "extracted": extracted,
+                        "failureReason": classification.get("failureReason"),
+                        "elapsedSeconds": round(time.time() - attempt_t0, 1),
+                    }
+                )
 
-                if (
-                    attempt < source_attempt_limit
-                    and _source_result_is_retryable(retry_probe, classification)
-                ):
+                if attempt < source_attempt_limit and _source_result_is_retryable(retry_probe, classification):
                     print(
                         f"      retry {attempt + 1}/{source_attempt_limit} "
                         f"for {code}: {classification.get('failureReason')}"
@@ -791,11 +861,7 @@ def main():
             ):
                 if key in src:
                     result_entry[key] = src[key]
-            if (
-                classification.get("failureReason")
-                and captured_log_text
-                and not result_entry.get("extractorError")
-            ):
+            if classification.get("failureReason") and captured_log_text and not result_entry.get("extractorError"):
                 result_entry["extractorError"] = captured_log_text[:1000]
             if classification.get("failureReason"):
                 result_entry["failureReason"] = classification["failureReason"]
@@ -805,30 +871,31 @@ def main():
         except Exception as e:
             elapsed = time.time() - t0
             classification = _classify_dryrun_failure({}, exception=e)
-            print(
-                f"  [{i:3d}/{len(target_codes)}] ❌ {code:50s} "
-                f"ERROR: {e!s:.60s}"
+            print(f"  [{i:3d}/{len(target_codes)}] ❌ {code:50s} " f"ERROR: {e!s:.60s}")
+            results.append(
+                {
+                    "country": cc,
+                    "code": code,
+                    "status": "exception",
+                    "error": str(e)[:200],
+                    "elapsed": round(elapsed, 1),
+                    "failureReason": classification.get("failureReason", "unknown"),
+                    "recommendedStrategy": classification.get(
+                        "recommendedStrategy", "diagnose_with_msrp_page_analyzer"
+                    ),
+                    "severity": classification.get("severity", "warning"),
+                }
             )
-            results.append({
-                "country": cc,
-                "code": code,
-                "status": "exception",
-                "error": str(e)[:200],
-                "elapsed": round(elapsed, 1),
-                "failureReason": classification.get("failureReason", "unknown"),
-                "recommendedStrategy": classification.get("recommendedStrategy", "diagnose_with_msrp_page_analyzer"),
-                "severity": classification.get("severity", "warning"),
-            })
             error_count += 1
     # Summary
     total = len(target_codes)
     print(f"\n{'='*70}")
-    print(f"Results: {pass_count}/{total} PASS, {empty_count} empty, "
-          f"{fail_count} failures, {error_count} errors")
+    print(f"Results: {pass_count}/{total} PASS, {empty_count} empty, " f"{fail_count} failures, {error_count} errors")
     print(f"{'='*70}")
 
     # By-country summary
     from collections import Counter
+
     by_country = {}
     for r in results:
         cc = r["country"]
@@ -840,10 +907,7 @@ def main():
         else:
             by_country[cc]["fail"] += 1
 
-    print(
-        f"\n{'Country':8s} {'Pass':>6s} {'Empty':>6s} "
-        f"{'Fail':>6s} {'Total':>6s}"
-    )
+    print(f"\n{'Country':8s} {'Pass':>6s} {'Empty':>6s} " f"{'Fail':>6s} {'Total':>6s}")
     for cc in sorted(by_country):
         c = by_country[cc]
         t = c["pass"] + c["empty"] + c["fail"]

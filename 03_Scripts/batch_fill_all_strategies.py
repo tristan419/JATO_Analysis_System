@@ -6,6 +6,7 @@ For each file:
   2. Fill brand-specific CSS / attr_json selectors if known
   3. Replace TODO_SELECTOR with '' (empty) in css section
 """
+
 import os
 import re
 import sys
@@ -14,9 +15,7 @@ import copy
 from pathlib import Path
 
 BATCH_COUNTRIES = ["se", "hr", "hu", "no", "at", "cz", "ch"]
-DRAFTS_ROOT = Path(__file__).resolve().parent.parent / (
-    "07_ScrapingToolkit/source_drafts/suv_only_country_model_top30"
-)
+DRAFTS_ROOT = Path(__file__).resolve().parent.parent / ("07_ScrapingToolkit/source_drafts/suv_only_country_model_top30")
 
 # ── Price label mappings per locale ─────────────────────────────────
 PRICE_LABELS = {
@@ -38,10 +37,10 @@ BRAND_CSS_PROFILES = {
     "VOLVO": {
         "strategy": "css",
         "css": {
-            "vehicle_container": "[data-testid=\"selection-card\"]",
+            "vehicle_container": '[data-testid="selection-card"]',
             "model": "",
-            "trim": "[data-testid=\"title\"]",
-            "price": "[data-testid=\"price\"]",
+            "trim": '[data-testid="title"]',
+            "price": '[data-testid="price"]',
         },
         "exclude_price_prefixes_by_locale": {
             "se": ["Från ", "Leasing"],
@@ -127,16 +126,12 @@ def update_one(filepath: Path, dry_run: bool = True) -> dict:
             css_section["exclude_if_selector"] = bp_css["exclude_if_selector"]
             changes.append("css.exclude_if_selector set")
         # Locale-specific exclude_price_prefixes
-        prefixes = (brand_profile.get("exclude_price_prefixes_by_locale") or {}).get(
-            country_code
-        )
+        prefixes = (brand_profile.get("exclude_price_prefixes_by_locale") or {}).get(country_code)
         if prefixes:
             profile["exclude_price_prefixes"] = prefixes
             changes.append(f"exclude_price_prefixes={prefixes}")
         # Locale-specific price labels
-        plabel = (brand_profile.get("price_labels_by_locale") or {}).get(
-            country_code
-        )
+        plabel = (brand_profile.get("price_labels_by_locale") or {}).get(country_code)
         if plabel:
             profile["default_price_label"] = plabel
             changes.append(f"price_label={plabel}")
@@ -144,10 +139,7 @@ def update_one(filepath: Path, dry_run: bool = True) -> dict:
     else:
         # No CSS strategy — remove the css section entirely so
         # the extractor skips straight from json_script to "no strategy".
-        has_todo = any(
-            css_section.get(k) == "TODO_SELECTOR"
-            for k in ["vehicle_container", "model", "trim", "price"]
-        )
+        has_todo = any(css_section.get(k) == "TODO_SELECTOR" for k in ["vehicle_container", "model", "trim", "price"])
         if has_todo:
             profile.pop("css", None)
             changes.append("css section removed (no css strategy)")
@@ -230,8 +222,10 @@ def main():
                 print(f"  ⚠ {fn.name}: {result.get('reason')}")
 
     print(f"\n{'─'*60}")
-    print(f"Summary: {stats['updated']} updated, {stats['unchanged']} unchanged, "
-          f"{stats['skip']} skipped, {stats.get('errors', 0)} errors")
+    print(
+        f"Summary: {stats['updated']} updated, {stats['unchanged']} unchanged, "
+        f"{stats['skip']} skipped, {stats.get('errors', 0)} errors"
+    )
     print(f"{'─'*60}")
 
     # Brand summary
@@ -240,7 +234,11 @@ def main():
     for brand in sorted(by_brand.keys()):
         results = by_brand[brand]
         updated = sum(1 for r in results if r["status"] == "updated")
-        strat = "css" if brand in BRAND_CSS_PROFILES and BRAND_CSS_PROFILES[brand].get("strategy") == "css" else "json_script"
+        strat = (
+            "css"
+            if brand in BRAND_CSS_PROFILES and BRAND_CSS_PROFILES[brand].get("strategy") == "css"
+            else "json_script"
+        )
         print(f"{brand:15s} {len(results):5d} {updated:7d}  {strat}")
 
     if dry_run:

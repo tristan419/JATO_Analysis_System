@@ -266,9 +266,11 @@ def _generate_report(samples: list[dict]) -> str:
     lines.append("|---|---|---:|---:|---:|---:|")
     for s in samples:
         aid = s["answerId"][-20:]
+        estimated_cost = f"${s['estimatedCostUsd']:.4f}"
         lines.append(
             f"| `...{aid}` | {s['answerMode']} | {s['modelUsed']} "
-            f"| {len(s['evidenceIds'])} | {s['groundednessScore']} | {s['hallucinationRiskScore']} | ${s['estimatedCostUsd']:.4f} |"
+            f"| {len(s['evidenceIds'])} | {s['groundednessScore']} | "
+            f"{s['hallucinationRiskScore']} | {estimated_cost} |"
         )
     lines.append("")
 
@@ -280,7 +282,9 @@ def _generate_report(samples: list[dict]) -> str:
         lines.append(f"- [ ] {len(high_halluc)} answers with high hallucination risk — add evidence before answering")
     low_grounded = [s for s in samples if s["groundednessScore"] < 0.5]
     if low_grounded:
-        lines.append(f"- [ ] {len(low_grounded)} answers with low groundedness — insufficient evidence or no tools used")
+        lines.append(
+            f"- [ ] {len(low_grounded)} answers with low groundedness — insufficient evidence or no tools used"
+        )
     cacheable = [s for s in samples if s.get("shouldCache")]
     if cacheable:
         lines.append(f"- [ ] {len(cacheable)} answers could be cached to reduce API cost")
@@ -319,16 +323,18 @@ def main() -> None:
     if args.question:
         evidence = [e.strip() for e in args.evidence_ids.split(",") if e.strip()]
         tools = [t.strip() for t in args.tools_used.split(",") if t.strip()]
-        audits = [create_audit_record(
-            question=args.question,
-            answer_mode=args.answer_mode,
-            model=args.model,
-            prompt_version=args.prompt_version,
-            tools_used=tools,
-            evidence_ids=evidence,
-            input_tokens=args.input_tokens,
-            output_tokens=args.output_tokens,
-        )]
+        audits = [
+            create_audit_record(
+                question=args.question,
+                answer_mode=args.answer_mode,
+                model=args.model,
+                prompt_version=args.prompt_version,
+                tools_used=tools,
+                evidence_ids=evidence,
+                input_tokens=args.input_tokens,
+                output_tokens=args.output_tokens,
+            )
+        ]
     else:
         audits = _generate_sample_audits()
 

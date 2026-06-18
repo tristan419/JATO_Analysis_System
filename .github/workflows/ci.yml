@@ -45,14 +45,14 @@ jobs:
       - name: CLI help checks
         run: |
           python 03_Scripts/elt_worker.py --help
-          python 03_Scripts/build_partitioned_dataset.py --help
-          python 03_Scripts/run_data_refresh_job.py --help
+          python 03_Scripts/data_pipeline/build_partitioned_dataset.py --help
+          python 03_Scripts/data_pipeline/run_data_refresh_job.py --help
 
       - name: Regression checks
         run: |
-          python 03_Scripts/regression_csv_download_guardrails.py
-          python 03_Scripts/regression_render_strategy_defaults.py
-          python 03_Scripts/regression_time_selector_consistency.py
+          python 03_Scripts/diagnostics/regression_csv_download_guardrails.py
+          python 03_Scripts/diagnostics/regression_render_strategy_defaults.py
+          python 03_Scripts/diagnostics/regression_time_selector_consistency.py
 
   fullstack-backend:
     runs-on: ubuntu-latest

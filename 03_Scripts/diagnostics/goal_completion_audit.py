@@ -21,7 +21,6 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HERMES_SCRIPT_DIR = REPO_ROOT / "03_Scripts" / "hermes"
 if str(HERMES_SCRIPT_DIR) not in sys.path:
@@ -118,12 +117,7 @@ def _safe_token(value: str | None, fallback: str) -> str:
 
 def _history_suffix(report: dict[str, Any]) -> str:
     generated = str(report.get("generatedAtUtc") or _utc_now_iso())
-    stamp = (
-        generated.replace(":", "")
-        .replace("-", "")
-        .replace("+", "z")
-        .replace(".", "-")
-    )
+    stamp = generated.replace(":", "").replace("-", "").replace("+", "z").replace(".", "-")
     return _safe_token(stamp, "unknown-time")
 
 
@@ -234,9 +228,7 @@ def _msrp_detail_requirements(
                 evidence=evidence,
                 runtime=runtime,
                 note=str(
-                    detail.get("note")
-                    if isinstance(detail, dict)
-                    else "Detailed MSRP readiness evidence is missing."
+                    detail.get("note") if isinstance(detail, dict) else "Detailed MSRP readiness evidence is missing."
                 ),
             )
         )
@@ -441,11 +433,7 @@ def build_goal_completion_report(
         resolve_ip=remote_resolve_ip,
     )
 
-    msrp_missing_keys = [
-        item["key"]
-        for item in msrp_detail_requirements
-        if item.get("status") != "passed"
-    ]
+    msrp_missing_keys = [item["key"] for item in msrp_detail_requirements if item.get("status") != "passed"]
     msrp_ready = (
         msrp_status.get("status") == "success"
         and msrp_status.get("readinessStatus") == "passed"
@@ -488,7 +476,10 @@ def build_goal_completion_report(
             status="passed" if ai_ready else "missing",
             evidence=[ai_status.get("statusPath", "")],
             runtime=ai_status,
-            note="Network-free smoke proves configured sources can feed translation/entity/sentiment/pain point/evidence/digest contracts.",
+            note=(
+                "Network-free smoke proves configured sources can feed translation/entity/sentiment/"
+                "pain point/evidence/digest contracts."
+            ),
         ),
         _requirement(
             key="unified_scraping_contract_and_stage",
@@ -496,7 +487,10 @@ def build_goal_completion_report(
             status="passed" if unified_ready else "missing",
             evidence=[unified_status.get("statusPath", "")],
             runtime=unified_status,
-            note="Covers MSRP/news/VOC/policy/incentive/spec job mapping and fixture Fetcher->Extractor->Normalizer->Sink stages.",
+            note=(
+                "Covers MSRP/news/VOC/policy/incentive/spec job mapping and fixture "
+                "Fetcher->Extractor->Normalizer->Sink stages."
+            ),
         ),
         _requirement(
             key="msrp_21_country_source_draft_coverage",
@@ -504,7 +498,10 @@ def build_goal_completion_report(
             status=source_status,
             evidence=[source_coverage["sourceDraftDir"]],
             runtime=source_coverage,
-            note="Full PRD completion still requires eliminating TODO placeholders and validating real source extraction across all countries.",
+            note=(
+                "Full PRD completion still requires eliminating TODO placeholders and validating "
+                "real source extraction across all countries."
+            ),
         ),
         _requirement(
             key="production_deployment_state",
@@ -512,7 +509,10 @@ def build_goal_completion_report(
             status=str(remote.get("status") or "not_checked"),
             evidence=[remote.get("apiBase", "")] if remote.get("apiBase") else [],
             runtime=remote,
-            note="Production is complete only when deployed API exposes current snapshot, allowed dryrun gate, and unified readiness success.",
+            note=(
+                "Production is complete only when deployed API exposes current snapshot, "
+                "allowed dryrun gate, and unified readiness success."
+            ),
         ),
     ]
     status_counts = dict(sorted(Counter(item["status"] for item in requirements).items()))
@@ -525,10 +525,7 @@ def build_goal_completion_report(
             "statusCounts": status_counts,
             "localP0Ready": msrp_ready and ai_ready and unified_ready,
             "msrpDetailedRequirementCount": len(msrp_detail_requirements),
-            "msrpDetailedPassedCount": sum(
-                1 for item in msrp_detail_requirements
-                if item.get("status") == "passed"
-            ),
+            "msrpDetailedPassedCount": sum(1 for item in msrp_detail_requirements if item.get("status") == "passed"),
             "msrpMissingRequirementKeys": msrp_missing_keys,
             "sourceDraftTodoPlaceholderCount": source_coverage["todoPlaceholderCount"],
             "sourceDraftCountryCount": source_coverage["countryCount"],
@@ -561,7 +558,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"| Degraded | {(summary.get('statusCounts') or {}).get('degraded', 0)} |",
         f"| Missing | {(summary.get('statusCounts') or {}).get('missing', 0)} |",
         f"| Not checked | {(summary.get('statusCounts') or {}).get('not_checked', 0)} |",
-        f"| MSRP detailed passed | {summary.get('msrpDetailedPassedCount', 0)} / {summary.get('msrpDetailedRequirementCount', 0)} |",
+        (
+            f"| MSRP detailed passed | {summary.get('msrpDetailedPassedCount', 0)} / "
+            f"{summary.get('msrpDetailedRequirementCount', 0)} |"
+        ),
         f"| Source draft countries | {summary.get('sourceDraftCountryCount', 0)} |",
         f"| Source TODO placeholders | {summary.get('sourceDraftTodoPlaceholderCount', 0)} |",
         "",

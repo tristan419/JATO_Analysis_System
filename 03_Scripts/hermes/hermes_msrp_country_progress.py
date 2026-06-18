@@ -91,14 +91,16 @@ def _source_host(source: dict[str, Any]) -> str:
 def _normalize_host_groups(hosts: dict[str, dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for host, data in hosts.items():
-        normalized.append({
-            "host": host,
-            "count": int(data.get("count") or 0),
-            "affectedCountries": sorted(data.get("affectedCountries") or []),
-            "affectedCountryCount": len(data.get("affectedCountries") or []),
-            "sampleSources": list(data.get("sources") or [])[:10],
-            "sampleUrls": list(data.get("urls") or [])[:5],
-        })
+        normalized.append(
+            {
+                "host": host,
+                "count": int(data.get("count") or 0),
+                "affectedCountries": sorted(data.get("affectedCountries") or []),
+                "affectedCountryCount": len(data.get("affectedCountries") or []),
+                "sampleSources": list(data.get("sources") or [])[:10],
+                "sampleUrls": list(data.get("urls") or [])[:5],
+            }
+        )
     normalized.sort(key=lambda item: (-int(item["count"]), str(item["host"])))
     return normalized[:limit]
 
@@ -138,7 +140,10 @@ def _priority_review_assist(failure_reason: str, source_repair_count: int) -> di
             "preferred": "rule_based_then_llm",
             "llmFit": "medium",
             "neuralNetworkFit": "not_recommended_until_labeled_corpus",
-            "reason": "Rules identify the failure class; an LLM can propose selector or extraction repair from page evidence.",
+            "reason": (
+                "Rules identify the failure class; an LLM can propose selector or "
+                "extraction repair from page evidence."
+            ),
         }
     return {
         "preferred": "rule_based",
@@ -226,7 +231,9 @@ def _historical_good_sources(current_run_id: str | None) -> dict[tuple[str, str]
             continue
         report = _load_v3_report(_artifact_path_from_ref(run.get("artifactPath")))
         if not report:
-            report = _load_v3_report(REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / f"dryrun_report_{run_id}.json")
+            report = _load_v3_report(
+                REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / f"dryrun_report_{run_id}.json"
+            )
         if not report:
             continue
         observed_at = str(run.get("finishedAt") or report.get("generatedAt") or "")
@@ -260,30 +267,35 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
             key = _source_key(country_code, source)
             last_good = last_known_good.get(key) if key else None
             is_transient = bool(last_good)
-            group = groups.setdefault(reason, {
-                "failureReason": reason,
-                "count": 0,
-                "transientRegressionCount": 0,
-                "sourceRepairIssueCount": 0,
-                "recommendedStrategies": {},
-                "affectedCountries": set(),
-                "sources": [],
-                "transientSources": [],
-                "hosts": {},
-                "status": "new",
-            })
+            group = groups.setdefault(
+                reason,
+                {
+                    "failureReason": reason,
+                    "count": 0,
+                    "transientRegressionCount": 0,
+                    "sourceRepairIssueCount": 0,
+                    "recommendedStrategies": {},
+                    "affectedCountries": set(),
+                    "sources": [],
+                    "transientSources": [],
+                    "hosts": {},
+                    "status": "new",
+                },
+            )
             group["count"] += 1
             if is_transient:
                 group["transientRegressionCount"] += 1
-                group["transientSources"].append({
-                    "countryCode": country_code,
-                    "sourceCode": source_code,
-                    "failureReason": reason,
-                    "recommendedStrategy": recommended,
-                    "lastKnownGoodRunId": last_good.get("runId"),
-                    "lastKnownGoodAt": last_good.get("observedAt"),
-                    "recommendedAction": "recheck_before_source_repair",
-                })
+                group["transientSources"].append(
+                    {
+                        "countryCode": country_code,
+                        "sourceCode": source_code,
+                        "failureReason": reason,
+                        "recommendedStrategy": recommended,
+                        "lastKnownGoodRunId": last_good.get("runId"),
+                        "lastKnownGoodAt": last_good.get("observedAt"),
+                        "recommendedAction": "recheck_before_source_repair",
+                    }
+                )
             else:
                 group["sourceRepairIssueCount"] += 1
             group["recommendedStrategies"][recommended] = group["recommendedStrategies"].get(recommended, 0) + 1
@@ -295,7 +307,9 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
             url = _source_url(source)
             if host:
                 for host_bucket in (
-                    group["hosts"].setdefault(host, {"count": 0, "affectedCountries": set(), "sources": [], "urls": []}),
+                    group["hosts"].setdefault(
+                        host, {"count": 0, "affectedCountries": set(), "sources": [], "urls": []}
+                    ),
                     top_hosts.setdefault(host, {"count": 0, "affectedCountries": set(), "sources": [], "urls": []}),
                 ):
                     host_bucket["count"] += 1
@@ -312,32 +326,36 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
         recommended_strategy = max(strategies, key=strategies.get) if strategies else "diagnose_with_msrp_page_analyzer"
         transient_count = int(group["transientRegressionCount"])
         source_repair_count = int(group["sourceRepairIssueCount"])
-        normalized_groups.append({
-            "failureReason": group["failureReason"],
-            "count": group["count"],
-            "transientRegressionCount": transient_count,
-            "sourceRepairIssueCount": source_repair_count,
-            **_priority_fields(group),
-            "recommendedAction": (
-                "recheck_before_source_repair"
-                if transient_count and not source_repair_count
-                else "repair_source_definition"
-            ),
-            "recommendedStrategy": recommended_strategy,
-            "recommendedStrategies": strategies,
-            "affectedCountries": sorted(group["affectedCountries"]),
-            "affectedCountryCount": len(group["affectedCountries"]),
-            "sampleSources": group["sources"][:20],
-            "sampleTransientRegressions": group["transientSources"][:8],
-            "topSourceHosts": _normalize_host_groups(group["hosts"]),
-            "status": group["status"],
-        })
-    normalized_groups.sort(key=lambda item: (
-        0 if int(item["sourceRepairIssueCount"]) > 0 else 1,
-        -float(item["priorityScore"]),
-        -int(item["count"]),
-        str(item["failureReason"]),
-    ))
+        normalized_groups.append(
+            {
+                "failureReason": group["failureReason"],
+                "count": group["count"],
+                "transientRegressionCount": transient_count,
+                "sourceRepairIssueCount": source_repair_count,
+                **_priority_fields(group),
+                "recommendedAction": (
+                    "recheck_before_source_repair"
+                    if transient_count and not source_repair_count
+                    else "repair_source_definition"
+                ),
+                "recommendedStrategy": recommended_strategy,
+                "recommendedStrategies": strategies,
+                "affectedCountries": sorted(group["affectedCountries"]),
+                "affectedCountryCount": len(group["affectedCountries"]),
+                "sampleSources": group["sources"][:20],
+                "sampleTransientRegressions": group["transientSources"][:8],
+                "topSourceHosts": _normalize_host_groups(group["hosts"]),
+                "status": group["status"],
+            }
+        )
+    normalized_groups.sort(
+        key=lambda item: (
+            0 if int(item["sourceRepairIssueCount"]) > 0 else 1,
+            -float(item["priorityScore"]),
+            -int(item["count"]),
+            str(item["failureReason"]),
+        )
+    )
     transient_regression_count = sum(int(item["transientRegressionCount"]) for item in normalized_groups)
     source_repair_issue_count = sum(int(item["sourceRepairIssueCount"]) for item in normalized_groups)
     return {
@@ -379,11 +397,13 @@ def run(out_dir: str | None = None) -> dict:
             "topBlockingCountries": [],
             "topFailureReasons": [],
             "sourceRepairBacklog": _load_source_repair_backlog(),
-            "findings": [{
-                "type": "no_dryrun_report",
-                "severity": "critical",
-                "message": "No dryrun report found. MSRP dryrun may not have run yet.",
-            }],
+            "findings": [
+                {
+                    "type": "no_dryrun_report",
+                    "severity": "critical",
+                    "message": "No dryrun report found. MSRP dryrun may not have run yet.",
+                }
+            ],
         }
         _write_outputs(result, out_dir)
         return result
@@ -421,12 +441,14 @@ def run(out_dir: str | None = None) -> dict:
         country_entries.append(entry)
 
         if c_pct < gate_threshold or c_pct < 50:
-            top_blocking.append({
-                "countryCode": cc,
-                "passPct": c_pct,
-                "reason": top_reason or "unknown",
-                "recommendedAction": f"Review {top_reason or 'failures'} for {cc}",
-            })
+            top_blocking.append(
+                {
+                    "countryCode": cc,
+                    "passPct": c_pct,
+                    "reason": top_reason or "unknown",
+                    "recommendedAction": f"Review {top_reason or 'failures'} for {cc}",
+                }
+            )
 
     # Aggregate failure reasons
     all_failure_reasons: dict[str, int] = {}
@@ -441,50 +463,59 @@ def run(out_dir: str | None = None) -> dict:
     duplicates = report.get("duplicateCountries") or []
 
     for mc in missing:
-        findings.append({
-            "type": "missing_country",
-            "severity": "critical",
-            "message": f"Country '{mc}' is missing from the dryrun run.",
-            "country": mc,
-        })
+        findings.append(
+            {
+                "type": "missing_country",
+                "severity": "critical",
+                "message": f"Country '{mc}' is missing from the dryrun run.",
+                "country": mc,
+            }
+        )
 
     for dc in duplicates:
-        findings.append({
-            "type": "duplicate_country",
-            "severity": "warning",
-            "message": f"Country '{dc}' appears multiple times in the same run.",
-            "country": dc,
-        })
+        findings.append(
+            {
+                "type": "duplicate_country",
+                "severity": "warning",
+                "message": f"Country '{dc}' appears multiple times in the same run.",
+                "country": dc,
+            }
+        )
 
     for c in country_entries:
         if c.get("passPct", 100) < 50:
-            findings.append({
-                "type": "country_low_pass_rate",
-                "severity": "critical",
-                "message": f"Country '{c['countryCode']}' pass rate is {c['passPct']}% (<50%).",
-                "country": c["countryCode"],
-                "passPct": c["passPct"],
-            })
+            findings.append(
+                {
+                    "type": "country_low_pass_rate",
+                    "severity": "critical",
+                    "message": f"Country '{c['countryCode']}' pass rate is {c['passPct']}% (<50%).",
+                    "country": c["countryCode"],
+                    "passPct": c["passPct"],
+                }
+            )
         elif c.get("passPct", 100) < gate_threshold:
-            findings.append({
-                "type": "country_below_gate",
-                "severity": "warning",
-                "message": f"Country '{c['countryCode']}' pass rate is {c['passPct']}% (<{gate_threshold}% gate).",
-                "country": c["countryCode"],
-                "passPct": c["passPct"],
-            })
+            findings.append(
+                {
+                    "type": "country_below_gate",
+                    "severity": "warning",
+                    "message": f"Country '{c['countryCode']}' pass rate is {c['passPct']}% (<{gate_threshold}% gate).",
+                    "country": c["countryCode"],
+                    "passPct": c["passPct"],
+                }
+            )
 
     if gate_status == "blocked":
-        findings.append({
-            "type": "ingest_gate_blocked",
-            "severity": "critical",
-            "message": f"Ingest gate blocked: overall pass rate {pass_pct}% < {gate_threshold}% threshold.",
-            "passPct": pass_pct,
-            "gateThreshold": gate_threshold,
-        })
+        findings.append(
+            {
+                "type": "ingest_gate_blocked",
+                "severity": "critical",
+                "message": f"Ingest gate blocked: overall pass rate {pass_pct}% < {gate_threshold}% threshold.",
+                "passPct": pass_pct,
+                "gateThreshold": gate_threshold,
+            }
+        )
 
-    overall = "critical" if any(f["severity"] == "critical" for f in findings) else \
-              "warning" if findings else "ok"
+    overall = "critical" if any(f["severity"] == "critical" for f in findings) else "warning" if findings else "ok"
 
     source_repair_backlog = _source_repair_backlog_from_report(report, now)
     if not source_repair_backlog.get("groups"):
@@ -538,10 +569,12 @@ def _write_outputs(result: dict, out_dir: str | None = None) -> None:
         print(f"[country-progress] Historical: {hist_json}")
 
     s = result.get("status", {})
-    print(f"[country-progress] overall={result['overall']}, "
-          f"passPct={s.get('overallPassPct', '?')}%, "
-          f"gate={s.get('gateStatus', '?')}, "
-          f"findings={len(result['findings'])}")
+    print(
+        f"[country-progress] overall={result['overall']}, "
+        f"passPct={s.get('overallPassPct', '?')}%, "
+        f"gate={s.get('gateStatus', '?')}, "
+        f"findings={len(result['findings'])}"
+    )
 
 
 def _render_markdown(result: dict) -> str:
@@ -570,9 +603,11 @@ def _render_markdown(result: dict) -> str:
         lines.append("| Country | Status | PassPct | Pass | Empty | Fail | Top Failure |")
         lines.append("|---|---:|---:|---:|---:|---:|---|")
         for c in sorted(countries, key=lambda x: x["passPct"]):
-            lines.append(f"| {c['countryCode']} | {c['status']} | "
-                        f"{c['passPct']}% | {c['pass']} | {c['empty']} | "
-                        f"{c['fail']} | {c.get('topFailureReason', '-')} |")
+            lines.append(
+                f"| {c['countryCode']} | {c['status']} | "
+                f"{c['passPct']}% | {c['pass']} | {c['empty']} | "
+                f"{c['fail']} | {c.get('topFailureReason', '-')} |"
+            )
         lines.append("")
 
     blocking = result.get("topBlockingCountries", [])
@@ -581,8 +616,9 @@ def _render_markdown(result: dict) -> str:
         lines.append("| Country | Reason | Recommended Action |")
         lines.append("|---|---|---|")
         for b in blocking:
-            lines.append(f"| {b['countryCode']} | {b.get('reason', '?')} "
-                        f"| {b.get('recommendedAction', 'Review')} |")
+            lines.append(
+                f"| {b['countryCode']} | {b.get('reason', '?')} " f"| {b.get('recommendedAction', 'Review')} |"
+            )
         lines.append("")
 
     backlog = result.get("sourceRepairBacklog") or {}

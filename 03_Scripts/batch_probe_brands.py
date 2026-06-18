@@ -24,8 +24,11 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 DRAFT_BASE = os.path.join(
-    os.path.dirname(__file__), "..", "07_ScrapingToolkit",
-    "source_drafts", "suv_only_country_model_top30",
+    os.path.dirname(__file__),
+    "..",
+    "07_ScrapingToolkit",
+    "source_drafts",
+    "suv_only_country_model_top30",
 )
 RESULT_DIR = os.path.join(os.path.dirname(__file__), "probe_results")
 BATCH_1_2 = ["se", "hr", "hu", "no", "at", "cz", "ch"]
@@ -125,16 +128,26 @@ def probe_page(page, brand: str, currency: str) -> dict:
             try:
                 parsed = json.loads(v)
                 if isinstance(parsed, dict):
-                    price_keys = [pk for pk in parsed if "price" in pk.lower() or "preis" in pk.lower() or "pris" in pk.lower() or "prix" in pk.lower() or "cena" in pk.lower()]
+                    price_keys = [
+                        pk
+                        for pk in parsed
+                        if "price" in pk.lower()
+                        or "preis" in pk.lower()
+                        or "pris" in pk.lower()
+                        or "prix" in pk.lower()
+                        or "cena" in pk.lower()
+                    ]
                     if price_keys:
-                        result["data_attrs"].append({
-                            "attr": k,
-                            "keys": list(parsed.keys())[:8],
-                            "price_keys": price_keys,
-                            "price_vals": {pk: str(parsed[pk])[:50] for pk in price_keys},
-                            "class": (attrs.get("class", "")).split()[0] if attrs.get("class") else "",
-                            "tag": getattr(el, "tag", ""),
-                        })
+                        result["data_attrs"].append(
+                            {
+                                "attr": k,
+                                "keys": list(parsed.keys())[:8],
+                                "price_keys": price_keys,
+                                "price_vals": {pk: str(parsed[pk])[:50] for pk in price_keys},
+                                "class": (attrs.get("class", "")).split()[0] if attrs.get("class") else "",
+                                "tag": getattr(el, "tag", ""),
+                            }
+                        )
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -150,34 +163,53 @@ def probe_page(page, brand: str, currency: str) -> dict:
         if not m:
             continue
         attrs = getattr(el, "attrib", {}) or {}
-        result["price_elements"].append({
-            "text": text[:120],
-            "tag": tag,
-            "class": (attrs.get("class", "")).split()[0] if attrs.get("class") else "",
-            "data_testid": attrs.get("data-testid", ""),
-            "path": _css_path_simple(el),
-            "price_match": m.group().strip(),
-        })
+        result["price_elements"].append(
+            {
+                "text": text[:120],
+                "tag": tag,
+                "class": (attrs.get("class", "")).split()[0] if attrs.get("class") else "",
+                "data_testid": attrs.get("data-testid", ""),
+                "path": _css_path_simple(el),
+                "price_match": m.group().strip(),
+            }
+        )
 
     # Probe known container patterns
     patterns = [
-        '[data-testid*="card"]', '[data-testid*="price"]',
-        '[data-testid*="model"]', '[data-testid*="variant"]',
-        '[data-testid*="trim"]', '[data-testid*="vehicle"]',
-        '[data-testid*="product"]', '[data-testid*="offer"]',
-        'article', '[role="article"]',
-        '[class*="card"]', '[class*="Card"]',
-        '[class*="vehicle"]', '[class*="Vehicle"]',
-        '[class*="model"]', '[class*="Model"]',
-        '[class*="variant"]', '[class*="Variant"]',
-        '[class*="trim"]', '[class*="Trim"]',
-        '[class*="product"]', '[class*="Product"]',
-        '[class*="price"]', '[class*="Price"]',
-        '[class*="offer"]', '[class*="Offer"]',
-        '[class*="version"]', '[class*="Version"]',
-        '[class*="motorization"]', '[class*="Motorization"]',
-        '[class*="engine"]', '[class*="Engine"]',
-        '[class*="grade"]', '[class*="Grade"]',
+        '[data-testid*="card"]',
+        '[data-testid*="price"]',
+        '[data-testid*="model"]',
+        '[data-testid*="variant"]',
+        '[data-testid*="trim"]',
+        '[data-testid*="vehicle"]',
+        '[data-testid*="product"]',
+        '[data-testid*="offer"]',
+        "article",
+        '[role="article"]',
+        '[class*="card"]',
+        '[class*="Card"]',
+        '[class*="vehicle"]',
+        '[class*="Vehicle"]',
+        '[class*="model"]',
+        '[class*="Model"]',
+        '[class*="variant"]',
+        '[class*="Variant"]',
+        '[class*="trim"]',
+        '[class*="Trim"]',
+        '[class*="product"]',
+        '[class*="Product"]',
+        '[class*="price"]',
+        '[class*="Price"]',
+        '[class*="offer"]',
+        '[class*="Offer"]',
+        '[class*="version"]',
+        '[class*="Version"]',
+        '[class*="motorization"]',
+        '[class*="Motorization"]',
+        '[class*="engine"]',
+        '[class*="Engine"]',
+        '[class*="grade"]',
+        '[class*="Grade"]',
     ]
     for sel in patterns:
         try:
@@ -207,6 +239,7 @@ def probe_page(page, brand: str, currency: str) -> dict:
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--brands", default="", help="Comma-separated brand filter")
     parser.add_argument("--timeout", type=int, default=45, help="Timeout per page in seconds")
@@ -228,7 +261,7 @@ def main():
     for brand, info in sorted(brand_urls.items()):
         url = info["url"]
         out_path = os.path.join(RESULT_DIR, f"{brand.lower()}.json")
-        
+
         log.info("═" * 60)
         log.info("Probing %s (%s) — %s", brand, info["country"].upper(), url)
         log.info("═" * 60)

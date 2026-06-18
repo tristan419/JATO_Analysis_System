@@ -28,11 +28,32 @@ DEV_EVENTS_PATH = REPO_ROOT / "hermes" / "dev_events" / "dev_events.jsonl"
 # File path patterns → likely feature areas. Specific feature matches carry much
 # higher weight than generic frontend/backend matches.
 FEATURE_INFERENCE: list[tuple[list[str], str, int]] = [
-    ([".github/workflows/hermes-devsync.yml", ".githooks/", "03_Scripts/hermes/hermes_dev_event", "backend/app/services/hermes_devsync_service"], "hermes-devsync", 100),
+    (
+        [
+            ".github/workflows/hermes-devsync.yml",
+            ".githooks/",
+            "03_Scripts/hermes/hermes_dev_event",
+            "backend/app/services/hermes_devsync_service",
+        ],
+        "hermes-devsync",
+        100,
+    ),
     (["backend/app/services/hermes_chat_service", "HermesAskResponseCard"], "hermes-chat-gateway", 100),
-    (["backend/app/api/routes/presence", "backend/app/services/presence_service", "PresenceWidget", "usePresence"], "feature.presence_websocket", 100),
+    (
+        ["backend/app/api/routes/presence", "backend/app/services/presence_service", "PresenceWidget", "usePresence"],
+        "feature.presence_websocket",
+        100,
+    ),
     (["usePageTransition", "useStaggerEntrance", "anime"], "feature.ui_animation_toolkit", 90),
-    (["backend/app/services/jato_monthly_update_service", "JatoMonthlyUpdatePage", "JATO_MONTHLY_UPDATE_DATA_LIFECYCLE"], "feature.jato_monthly_update", 100),
+    (
+        [
+            "backend/app/services/jato_monthly_update_service",
+            "JatoMonthlyUpdatePage",
+            "JATO_MONTHLY_UPDATE_DATA_LIFECYCLE",
+        ],
+        "feature.jato_monthly_update",
+        100,
+    ),
     (["frontend/src/pages/DashboardPage", "frontend/src/pages/DataManagementPage"], "feature.data_management", 80),
     (["frontend/src/pages/CountryChatPage", "backend/app/services/country_chat"], "feature.country_copilot", 100),
     (["frontend/src/pages/MarketScanPage", "backend/app/services/market_scan"], "feature.market_scan", 100),
@@ -125,6 +146,7 @@ def infer_features(files: list[str], subject: str) -> list[str]:
     if not features:
         # Fallback: slugify subject
         import re
+
         slug = re.sub(r"[^a-z0-9]+", "-", subject.lower()).strip("-")[:50]
         if slug:
             features = [slug]
@@ -159,6 +181,7 @@ def classify_endpoints(files: list[str]) -> dict:
         except Exception:
             continue
         import re
+
         for m in re.finditer(r'@router\.(get|post|put|patch|delete)\("([^"]+)"\)', content):
             method = m.group(1).upper()
             ep = f"{method} {m.group(2)}"
@@ -213,6 +236,7 @@ def write_event(event: dict) -> Path:
 def try_sync() -> bool:
     """Try to call POST /hermes/dev/sync on the running backend."""
     import urllib.request
+
     try:
         url = "http://127.0.0.1:8000/v1/hermes/dev/sync"
         req = urllib.request.Request(url, method="POST")
