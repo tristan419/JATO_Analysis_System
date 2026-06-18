@@ -68,6 +68,38 @@ def sample_snapshot() -> dict[str, object]:
     }
 
 
+def sample_effectiveness() -> dict[str, object]:
+    return {
+        "schemaVersion": "msrp_price_sales_effectiveness_v1",
+        "generatedAtUtc": "2026-06-11T20:00:01+00:00",
+        "filters": {"country": "SE", "brand": "Volvo", "jatoModel": "XC60"},
+        "window": {
+            "baselineWindowMonths": 3,
+            "postWindowMonths": 3,
+            "postLagMonths": 1,
+            "minMonths": 1,
+        },
+        "summary": {
+            "priceEventCount": 1,
+            "analyzedEventCount": 1,
+            "labelCounts": {"positive": 1},
+            "limit": 5,
+        },
+        "items": [
+            {
+                "country": "SE",
+                "brand": "Volvo",
+                "jatoModel": "XC60",
+                "priceEventMonth": "2026-03",
+                "priceChangeDirection": "down",
+                "salesDeltaPct": 18.5,
+                "effectivenessLabel": "positive",
+            }
+        ],
+        "warnings": [],
+    }
+
+
 def empty_snapshot() -> dict[str, object]:
     return {
         **sample_snapshot(),
@@ -93,11 +125,21 @@ def empty_snapshot() -> dict[str, object]:
 
 
 def test_render_markdown_escapes_table_cells() -> None:
-    markdown = snapshot_module._render_markdown(sample_snapshot())
+    markdown = snapshot_module._render_markdown({
+        **sample_snapshot(),
+        "summary": {
+            **sample_snapshot()["summary"],
+            "effectivenessSummary": sample_effectiveness()["summary"],
+        },
+        "priceSalesEffectiveness": sample_effectiveness(),
+    })
 
     assert "| Current prices | 1 |" in markdown
     assert "Volvo\\|Polestar" in markdown
     assert "Plus Dark" in markdown
+    assert "## Sales Effectiveness" in markdown
+    assert "| positive | 1 |" in markdown
+    assert "| SE | Volvo | XC60 | 2026-03 | down | 18.5 | positive |" in markdown
 
 
 def test_write_outputs_accepts_out_dir_outside_repo(tmp_path: Path) -> None:
@@ -123,6 +165,11 @@ def test_run_writes_degraded_status_for_high_priority_alert(
     )
     monkeypatch.setattr(
         snapshot_module,
+        "_fetch_effectiveness",
+        lambda **_: sample_effectiveness(),
+    )
+    monkeypatch.setattr(
+        snapshot_module,
         "write_pipeline_status",
         lambda **kwargs: status_calls.append(kwargs) or kwargs,
     )
@@ -142,6 +189,15 @@ def test_run_writes_degraded_status_for_high_priority_alert(
     assert status_calls[0]["status"] == "degraded"
     assert status_calls[0]["records_processed"] == 1
     assert status_calls[0]["warning_count"] == 1
+    assert status_calls[0]["extra"]["effectivenessSummary"] == {
+        "priceEventCount": 1,
+        "analyzedEventCount": 1,
+        "labelCounts": {"positive": 1},
+        "limit": 5,
+    }
+    assert result["snapshot"]["priceSalesEffectiveness"]["schemaVersion"] == (
+        "msrp_price_sales_effectiveness_v1"
+    )
 
 
 def test_run_writes_degraded_status_for_empty_current_prices(
@@ -154,6 +210,20 @@ def test_run_writes_degraded_status_for_empty_current_prices(
         snapshot_module,
         "_fetch_snapshot",
         lambda **_: empty_snapshot(),
+    )
+    monkeypatch.setattr(
+        snapshot_module,
+        "_fetch_effectiveness",
+        lambda **_: {
+            **sample_effectiveness(),
+            "summary": {
+                "priceEventCount": 0,
+                "analyzedEventCount": 0,
+                "labelCounts": {},
+                "limit": 5,
+            },
+            "items": [],
+        },
     )
     monkeypatch.setattr(
         snapshot_module,
@@ -183,6 +253,51 @@ def test_run_writes_degraded_status_for_empty_current_prices(
     markdown = (tmp_path / "msrp_current_price_snapshot.md").read_text()
     assert "## Warnings" in markdown
     assert "- no_current_prices_available" in markdown
+
+
+def test_run_degrades_when_effectiveness_fetch_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    status_calls: list[dict[str, object]] = []
+
+    def fail_effectiveness(**_: object) -> dict[str, object]:
+        raise RuntimeError("effectiveness unavailable")
+
+    monkeypatch.setattr(
+        snapshot_module,
+        "_fetch_snapshot",
+        lambda **_: sample_snapshot(),
+    )
+    monkeypatch.setattr(
+        snapshot_module,
+        "_fetch_effectiveness",
+        fail_effectiveness,
+    )
+    monkeypatch.setattr(
+        snapshot_module,
+        "write_pipeline_status",
+        lambda **kwargs: status_calls.append(kwargs) or kwargs,
+    )
+
+    result = snapshot_module.run(
+        api_base="http://127.0.0.1:8000/v1",
+        out_dir=tmp_path,
+        country=None,
+        brand=None,
+        jato_model=None,
+        limit=5,
+        threshold_pct=3.0,
+        timeout_seconds=1,
+    )
+
+    assert result["pipelineStatus"] == "degraded"
+    assert result["snapshot"]["warnings"] == [
+        "effectiveness_unavailable:RuntimeError"
+    ]
+    assert status_calls[0]["status"] == "degraded"
+    assert status_calls[0]["warning_count"] == 2
+    assert status_calls[0]["extra"]["effectivenessSummary"] == {}
 
 
 def test_main_writes_failed_status_when_snapshot_fetch_fails(
