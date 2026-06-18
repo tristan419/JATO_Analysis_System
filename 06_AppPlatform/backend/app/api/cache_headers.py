@@ -9,6 +9,13 @@ from fastapi import Response
 from app.core.config import HTTP_STRONG_CACHE_SECONDS
 
 
+def response_has_cache_control(response: Response) -> bool:
+    return any(
+        key.lower() == b"cache-control"
+        for key, _value in response.raw_headers
+    )
+
+
 def set_strong_json_cache_headers(
     response: Response,
     payload: Any,
