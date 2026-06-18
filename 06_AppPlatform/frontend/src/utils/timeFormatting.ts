@@ -52,3 +52,10 @@ export function compareTimeLabels(a: string, b: string): number {
   if (ao !== null && bo !== null && ao !== bo) return ao - bo;
   return a.localeCompare(b);
 }
+
+export function formatDateTime(value: string | null | undefined, locale = "zh-CN"): string {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString(locale, { hour12: false });
+}

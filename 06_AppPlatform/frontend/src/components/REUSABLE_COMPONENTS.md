@@ -77,6 +77,102 @@ Notes:
 - The caller owns the front/back content and card sizing.
 - Use neutral CSS classes `deck-flip-card`, `deck-flip-inner`, `deck-flip-face`, `deck-flip-front`, and `deck-flip-back`.
 
+## Upload Primitives
+
+Location: `src/components/upload`
+
+Import:
+
+```tsx
+import { FileDropzone } from "../components";
+```
+
+### `FileDropzone`
+
+Use for file upload controls that need drag/drop, click-to-select, selected-file display, and a clear action.
+
+Good fit:
+
+- Excel/PDF/ZIP/RAR upload panels.
+- Floating deck controls where two related files are selected before starting a job.
+- Future upload workflows such as JATO monthly update, CBU import, or Engineering Config source files.
+
+Notes:
+
+- The component owns drag state and the hidden file input.
+- The caller owns accepted extensions, selected file state, upload progress, validation, and submit behavior.
+- Use separate `FileDropzone` state per workflow tab so switching tabs cannot submit the wrong files.
+
+## Workbench Components
+
+Location: `src/components/workbench`
+
+Import:
+
+```tsx
+import {
+  SheetGroupedPreview,
+  StatusMetricCard,
+  type SheetGroupedPreviewColumn,
+  type SheetGroupedPreviewGroup,
+} from "../components";
+```
+
+### `StatusMetricCard`
+
+Use for compact workbench metrics that may also act as filters.
+
+Good fit:
+
+- Job status summaries.
+- Preview filters such as total / filled / missing / ambiguous / skipped.
+- Dashboard cards where `tone`, `active`, and `onClick` cover the interaction.
+
+Notes:
+
+- The component owns visual tone and active styling.
+- The caller owns metric value calculation and filter state.
+
+### `SheetGroupedPreview`
+
+Use for preview tables grouped by Sheet, source section, country, or another stable group key.
+
+Good fit:
+
+- COC fill preview grouped by Excel sheet.
+- Engineering Config source preview grouped by sheet.
+- Excel digest/import preview where rows need expand/collapse and per-group metrics.
+
+Notes:
+
+- The component owns the panel, blue disclosure triangle, group header, table skeleton, and empty/truncated state.
+- The caller owns columns, filtering, expanded key state, and row rendering.
+- Business-specific actions belong in `renderRow`; do not push COC-only candidate selection or WVTA rules into the shared component.
+
+## Common Utilities
+
+Location: `src/components/common`, `src/utils`
+
+Import:
+
+```tsx
+import { EmptyState } from "../components";
+import { downloadBlob } from "../utils/download";
+import { formatDateTime } from "../utils/timeFormatting";
+```
+
+### `EmptyState`
+
+Use for small table/panel empty states with consistent copy spacing.
+
+### `downloadBlob`
+
+Use when an API returns a `Blob` that should be downloaded with a known filename.
+
+### `formatDateTime`
+
+Use for job history and audit timestamps that should render consistently in the frontend locale.
+
 ## Finance / CBU
 
 Location: `src/components/finance`
@@ -151,3 +247,33 @@ Good fit:
 - Material Master upload preview.
 - Quantity import preview.
 - Future CBU Excel paste/upload digest before applying finance rows.
+
+## Backend Workbook Scanner
+
+Location: `06_AppPlatform/backend/app/services/workbook_table_scanner.py`
+
+Import:
+
+```python
+from app.services.workbook_table_scanner import (
+    MaterialGroupRow,
+    extract_material_rows,
+    target_columns_for_sheet,
+)
+```
+
+### `workbook_table_scanner`
+
+Use for backend jobs that read an Excel workbook, scan multiple sheets, infer a header/material column, create target columns, and keep source row/cell references for preview or writeback.
+
+Good fit:
+
+- COC fill workbook parsing.
+- Future Engineering Config source digest jobs.
+- Excel workflows that follow `upload -> preview -> confirm -> writeback`.
+
+Notes:
+
+- The scanner uses `openpyxl` so workbook sheets, styles, widths, and existing values survive writeback.
+- Domain services still own matching, validation, persistence, and output naming.
+- PDF parsing is intentionally not part of this scanner; keep PDF-specific extraction in the owning service until formats stabilize.

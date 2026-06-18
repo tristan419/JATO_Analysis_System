@@ -4,15 +4,24 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type DragEvent,
 } from "react";
 import { api } from "../api/client";
+import {
+  EmptyState,
+  FileDropzone,
+  SheetGroupedPreview,
+  StatusMetricCard,
+  type SheetGroupedPreviewColumn,
+  type SheetGroupedPreviewGroup,
+} from "../components";
 import {
   DeckControlTabs,
   DeckFloatingDrawer,
   type DeckControlTabItem,
 } from "../components/deckControls";
 import type { CocFillDecision, CocFillJob, CocFillPreviewGroup, CocFillRecord, CocMatchJob } from "../types";
+import { downloadBlob } from "../utils/download";
+import { formatDateTime } from "../utils/timeFormatting";
 
 type CocWorkspaceMode = "match" | "fill";
 type FillPreviewStatusFilter = "all" | "filled" | "not_found" | "ambiguous" | "skipped_existing";
@@ -25,16 +34,24 @@ type ManualFillDraft = {
   cocNo: string;
 };
 
+type CocFillSheetPreviewGroup = SheetGroupedPreviewGroup<CocFillDecision> & {
+  sheetName: string;
+};
+
 const WORKSPACE_TABS: Array<DeckControlTabItem<CocWorkspaceMode>> = [
   { key: "match", label: "COC 比对", caption: "VIN 与文件包" },
   { key: "fill", label: "COC 填充", caption: "物料号组回填" },
 ];
 
-function formatTs(ts: string | null | undefined): string {
-  if (!ts) return "-";
-  const d = new Date(ts);
-  return d.toLocaleString("zh-CN", { hour12: false });
-}
+const FILL_PREVIEW_COLUMNS: SheetGroupedPreviewColumn[] = [
+  { key: "status", label: "状态" },
+  { key: "row", label: "行" },
+  { key: "material", label: "物料号组" },
+  { key: "wvta", label: "WVTA" },
+  { key: "coc", label: "COC" },
+  { key: "candidate", label: "候选" },
+  { key: "reason", label: "原因" },
+];
 
 function statusLabel(status: string): string {
   const labels: Record<string, string> = {
@@ -186,132 +203,6 @@ function candidateMetaText(record: CocFillRecord): string {
   if (validRange) parts.push(validRange);
   if (record.comments) parts.push(record.comments);
   return parts.join(" · ");
-}
-
-function Dropzone({
-  accept,
-  label,
-  hint,
-  file,
-  onFile,
-  onClear,
-}: {
-  accept: string;
-  label: string;
-  hint: string;
-  file: File | null;
-  onFile: (file: File) => void;
-  onClear?: () => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [dragging, setDragging] = useState(false);
-
-  const handleDrop = useCallback(
-    (event: DragEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      setDragging(false);
-      const nextFile = event.dataTransfer.files[0];
-      if (nextFile) onFile(nextFile);
-    },
-    [onFile],
-  );
-
-  return (
-    <div
-      className={`dropzone ${file ? "has-file" : ""} ${dragging ? "dragover" : ""}`}
-      onClick={() => inputRef.current?.click()}
-      onDragOver={(event) => {
-        event.preventDefault();
-        setDragging(true);
-      }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={handleDrop}
-      style={{
-        position: "relative",
-        border: `2px dashed ${file ? "#16a34a" : dragging ? "#2563eb" : "#d1d5db"}`,
-        borderRadius: 8,
-        padding: file ? "22px 38px 18px 14px" : "18px 14px",
-        minHeight: 110,
-        display: "grid",
-        alignContent: "center",
-        gap: 6,
-        cursor: "pointer",
-        background: file ? "#f0fdf4" : dragging ? "#eff6ff" : "#fafafa",
-      }}
-    >
-      {file && onClear ? (
-        <button
-          type="button"
-          aria-label={`清除${label}`}
-          title="清除文件"
-          onClick={(event) => {
-            event.stopPropagation();
-            onClear();
-          }}
-          style={dropzoneClearButtonStyle}
-        >
-          ×
-        </button>
-      ) : null}
-      <strong style={{ color: file ? "#15803d" : "#111827", fontSize: 14 }}>{label}</strong>
-      <span style={{ color: "#64748b", fontSize: 12 }}>{file ? file.name : hint}</span>
-      <input
-        ref={inputRef}
-        type="file"
-        accept={accept}
-        hidden
-        onChange={(event) => {
-          const nextFile = event.target.files?.[0];
-          if (nextFile) onFile(nextFile);
-          event.target.value = "";
-        }}
-      />
-    </div>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  tone,
-  active = false,
-  onClick,
-}: {
-  label: string;
-  value: string | number;
-  tone?: "success" | "warning" | "danger" | "info";
-  active?: boolean;
-  onClick?: () => void;
-}) {
-  const color = tone === "success" ? "#16a34a" : tone === "warning" ? "#b45309" : tone === "danger" ? "#dc2626" : "#111827";
-  const content = (
-    <>
-      <span style={{ color: "#64748b", fontSize: 11, fontWeight: 700 }}>{label}</span>
-      <strong style={{ color, fontSize: 22, lineHeight: 1 }}>{value}</strong>
-    </>
-  );
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        style={{
-          ...metricCardStyle,
-          ...(active ? metricCardActiveStyle : null),
-          cursor: "pointer",
-          textAlign: "left",
-          font: "inherit",
-        }}
-        onClick={onClick}
-      >
-        {content}
-      </button>
-    );
-  }
-  return (
-    <div style={metricCardStyle}>
-      {content}
-    </div>
-  );
 }
 
 function MatchMetaItem({ label, value }: { label: string; value: string | number }) {
@@ -877,7 +768,7 @@ export function CocMatchPage() {
     return (
       <div style={controlPanelStyle}>
         <div style={dropGridStyle}>
-          <Dropzone
+          <FileDropzone
             accept=".xlsx,.xlsm,.xls"
             label="Excel 注册表"
             hint="拖拽 / 点击选择 Excel"
@@ -885,7 +776,7 @@ export function CocMatchPage() {
             onFile={setMatchExcelFile}
             onClear={() => setMatchExcelFile(null)}
           />
-          <Dropzone
+          <FileDropzone
             accept=".zip,.rar"
             label="ZIP/RAR 文件包"
             hint="拖拽 / 点击选择压缩包"
@@ -932,7 +823,7 @@ export function CocMatchPage() {
     return (
       <div style={controlPanelStyle}>
         <div style={dropGridStyle}>
-          <Dropzone
+          <FileDropzone
             accept=".xlsx,.xlsm"
             label="发运清单 Excel"
             hint="拖拽 / 点击选择发运清单"
@@ -940,7 +831,7 @@ export function CocMatchPage() {
             onFile={setFillExcelFile}
             onClear={() => setFillExcelFile(null)}
           />
-          <Dropzone
+          <FileDropzone
             accept=".pdf"
             label="WVTA 关联 PDF"
             hint="拖拽 / 点击选择 PDF"
@@ -985,10 +876,10 @@ export function CocMatchPage() {
     return (
       <div style={matchSummaryBodyStyle}>
         <div style={matchMetricsGridStyle}>
-          <MetricCard label="总行数" value={job.totalRows ?? "-"} />
-          <MetricCard label="匹配" value={job.matchedCount ?? "-"} tone="success" />
-          <MetricCard label="缺失" value={job.missingCount ?? "-"} tone="danger" />
-          <MetricCard label="覆盖率" value={job.coverageRate != null ? `${job.coverageRate}%` : "-"} tone="info" />
+          <StatusMetricCard label="总行数" value={job.totalRows ?? "-"} />
+          <StatusMetricCard label="匹配" value={job.matchedCount ?? "-"} tone="success" />
+          <StatusMetricCard label="缺失" value={job.missingCount ?? "-"} tone="danger" />
+          <StatusMetricCard label="覆盖率" value={job.coverageRate != null ? `${job.coverageRate}%` : "-"} tone="info" />
         </div>
         <div style={matchDetailStyle}>
           <div style={matchDetailHeaderStyle}>
@@ -1019,7 +910,7 @@ export function CocMatchPage() {
                 重试
               </button>
             ) : null}
-            <span style={hintStyle}>创建时间 {formatTs(job.createdAt)}</span>
+            <span style={hintStyle}>创建时间 {formatDateTime(job.createdAt)}</span>
           </div>
         </div>
       </div>
@@ -1033,34 +924,34 @@ export function CocMatchPage() {
     return (
       <div style={{ display: "grid", gap: 12 }}>
         <div style={metricsGridStyle}>
-          <MetricCard
+          <StatusMetricCard
             label="识别"
             value={job.totalRows ?? "-"}
             active={fillPreviewStatusFilter === "all"}
             onClick={() => handleFillPreviewFilterClick("all")}
           />
-          <MetricCard
+          <StatusMetricCard
             label="填充"
             value={job.filledCount ?? "-"}
             tone="success"
             active={fillPreviewStatusFilter === "filled"}
             onClick={() => handleFillPreviewFilterClick("filled")}
           />
-          <MetricCard
+          <StatusMetricCard
             label="未命中"
             value={job.notFoundCount ?? "-"}
             tone="danger"
             active={fillPreviewStatusFilter === "not_found"}
             onClick={() => handleFillPreviewFilterClick("not_found")}
           />
-          <MetricCard
+          <StatusMetricCard
             label="冲突"
             value={job.ambiguousCount ?? "-"}
             tone="warning"
             active={fillPreviewStatusFilter === "ambiguous"}
             onClick={() => handleFillPreviewFilterClick("ambiguous")}
           />
-          <MetricCard
+          <StatusMetricCard
             label="跳过"
             value={job.skippedExistingCount ?? "-"}
             active={fillPreviewStatusFilter === "skipped_existing"}
@@ -1128,20 +1019,37 @@ export function CocMatchPage() {
 
   function renderFillPreview(job: CocFillJob) {
     const groups = getFillPreviewGroups(job);
-    const filteredGroups = groups
+    const filteredGroups: CocFillSheetPreviewGroup[] = groups
       .map((group) => ({
-        ...group,
-        decisions: fillPreviewStatusFilter === "all"
+        key: `${job.jobId}:${group.sheetName}`,
+        sheetName: group.sheetName,
+        title: group.sheetName,
+        metrics: [
+          { label: "识别", value: group.totalRows },
+          { label: "填充", value: group.filledCount },
+          { label: "未命中", value: group.notFoundCount },
+          { label: "冲突", value: group.ambiguousCount },
+          { label: "跳过", value: group.skippedExistingCount },
+        ],
+        rows: fillPreviewStatusFilter === "all"
           ? group.decisions
           : group.decisions.filter((decision) => decision.status === fillPreviewStatusFilter),
+        truncated: group.truncated,
+        previewLimit: group.previewLimit,
       }))
-      .filter((group) => group.decisions.length > 0);
+      .filter((group) => group.rows.length > 0);
     const previewTouched = touchedFillPreviewJobIds.has(job.jobId);
     return (
-      <div style={previewPanelStyle}>
-        <div style={previewHeaderStyle}>
-          <strong>填充预览</strong>
-          <div style={previewFilterToolbarStyle}>
+      <SheetGroupedPreview<CocFillDecision, CocFillSheetPreviewGroup>
+        title="填充预览"
+        groups={filteredGroups}
+        columns={FILL_PREVIEW_COLUMNS}
+        expandedGroupKeys={expandedFillPreviewSheets}
+        previewTouched={previewTouched}
+        emptyText="当前筛选没有预览记录"
+        onToggleGroup={(group, expanded) => toggleFillPreviewSheet(job.jobId, group.sheetName, expanded)}
+        toolbar={(
+          <>
             <span>{fillPreviewFilterLabel(fillPreviewStatusFilter)} · {filteredGroups.length} / {groups.length} 个 Sheet</span>
             {(["all", "filled", "not_found", "ambiguous", "skipped_existing"] as FillPreviewStatusFilter[]).map((filter) => (
               <button
@@ -1156,46 +1064,14 @@ export function CocMatchPage() {
                 {fillPreviewFilterButtonLabel(filter)}
               </button>
             ))}
-          </div>
-        </div>
-        {filteredGroups.length === 0 ? <EmptyState text="当前筛选没有预览记录" /> : (
-          <div style={previewGroupsStyle}>
-            {filteredGroups.map((group, groupIndex) => {
-              const key = `${job.jobId}:${group.sheetName}`;
-              const expanded = expandedFillPreviewSheets.has(key) || (!previewTouched && groupIndex === 0);
-              return (
-                <div key={group.sheetName} style={previewGroupStyle}>
-                  <button
-                    type="button"
-                    style={previewGroupHeaderButtonStyle}
-                    onClick={() => toggleFillPreviewSheet(job.jobId, group.sheetName, expanded)}
-                  >
-                    <span aria-hidden="true" style={{ ...previewDisclosureStyle, transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }} />
-                    <strong>{group.sheetName}</strong>
-                    <span style={previewGroupMetricsStyle}>
-                      <span style={previewMetricChipStyle}>识别 {group.totalRows}</span>
-                      <span style={previewMetricChipStyle}>填充 {group.filledCount}</span>
-                      <span style={previewMetricChipStyle}>未命中 {group.notFoundCount}</span>
-                      <span style={previewMetricChipStyle}>冲突 {group.ambiguousCount}</span>
-                      <span style={previewMetricChipStyle}>跳过 {group.skippedExistingCount}</span>
-                    </span>
-                  </button>
-                  {expanded ? (
-                    <div style={previewTableWrapStyle}>
-                      <table style={tableStyle}>
-                        <thead>
-                          <tr>
-                            <th style={thStyle}>状态</th>
-                            <th style={thStyle}>行</th>
-                            <th style={thStyle}>物料号组</th>
-                            <th style={thStyle}>WVTA</th>
-                            <th style={thStyle}>COC</th>
-                            <th style={thStyle}>候选</th>
-                            <th style={thStyle}>原因</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {group.decisions.map((decision, index) => {
+          </>
+        )}
+        renderTruncated={(group) => (
+          job.includeResultSheet
+            ? `该 Sheet 仅展示前 ${group.previewLimit ?? group.rows.length} 行预览，完整清单在下载文件的 COC填充结果 sheet 中。`
+            : `该 Sheet 仅展示前 ${group.previewLimit ?? group.rows.length} 行预览。`
+        )}
+        renderRow={(decision, index, group) => {
                             const pickerKey = fillDecisionKey(job.jobId, decision);
                             const candidates = decision.candidateRecords || [];
                             const pickerOpen = openCandidatePickerKey === pickerKey;
@@ -1315,24 +1191,8 @@ export function CocMatchPage() {
                                 </td>
                               </tr>
                             );
-                          })}
-                        </tbody>
-                      </table>
-                      {group.truncated ? (
-                        <div style={previewTruncatedStyle}>
-                          {job.includeResultSheet
-                            ? `该 Sheet 仅展示前 ${group.previewLimit ?? group.decisions.length} 行预览，完整清单在下载文件的 COC填充结果 sheet 中。`
-                            : `该 Sheet 仅展示前 ${group.previewLimit ?? group.decisions.length} 行预览。`}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+        }}
+      />
     );
   }
 
@@ -1408,7 +1268,7 @@ export function CocMatchPage() {
                     <td style={tdStyle}>{job.notFoundCount ?? "-"}</td>
                     <td style={tdStyle}>{job.ambiguousCount ?? "-"}</td>
                     <td style={tdStyle}>{fillStrategyLabel(job.conflictStrategy)}</td>
-                    <td style={tdStyle}>{formatTs(job.createdAt)}</td>
+                    <td style={tdStyle}>{formatDateTime(job.createdAt)}</td>
                     <td style={tdStyle}>{renderFillActions(job)}</td>
                   </tr>
                 ))}
@@ -1461,24 +1321,9 @@ export function CocMatchPage() {
   }
 }
 
-function downloadBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
 function fillWorkbookDownloadName(job: CocFillJob): string {
   const filename = job.excelFilename.trim();
   return filename || `coc_fill_${job.jobId}.xlsx`;
-}
-
-function EmptyState({ text }: { text: string }) {
-  return <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>{text}</div>;
 }
 
 const heroStyle: CSSProperties = {
@@ -1586,48 +1431,6 @@ const matchActionRowStyle: CSSProperties = {
   paddingTop: 2,
 };
 
-const metricCardStyle: CSSProperties = {
-  display: "grid",
-  gap: 5,
-  minHeight: 64,
-  padding: 10,
-  border: "1px solid #e2e8f0",
-  borderRadius: 6,
-  background: "#f8fafc",
-};
-
-const metricCardActiveStyle: CSSProperties = {
-  borderColor: "#2563eb",
-  background: "#eff6ff",
-  boxShadow: "inset 0 0 0 1px #2563eb",
-};
-
-const previewPanelStyle: CSSProperties = {
-  border: "1px solid #e2e8f0",
-  borderRadius: 8,
-  overflow: "hidden",
-  background: "#ffffff",
-};
-
-const previewHeaderStyle: CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: 10,
-  padding: "10px 12px",
-  borderBottom: "1px solid #e2e8f0",
-  color: "#334155",
-  fontSize: 13,
-};
-
-const previewFilterToolbarStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "flex-end",
-  gap: 6,
-  flexWrap: "wrap",
-};
-
 const previewFilterButtonStyle: CSSProperties = {
   border: "1px solid #cbd5e1",
   borderRadius: 6,
@@ -1643,69 +1446,6 @@ const previewFilterButtonActiveStyle: CSSProperties = {
   borderColor: "#2563eb",
   background: "#eff6ff",
   color: "#1d4ed8",
-};
-
-const previewTableWrapStyle: CSSProperties = {
-  maxHeight: 520,
-  overflow: "auto",
-};
-
-const previewGroupsStyle: CSSProperties = {
-  display: "grid",
-};
-
-const previewGroupStyle: CSSProperties = {
-  borderTop: "1px solid #e2e8f0",
-};
-
-const previewGroupHeaderButtonStyle: CSSProperties = {
-  width: "100%",
-  display: "grid",
-  gridTemplateColumns: "18px minmax(120px, 1fr) auto",
-  alignItems: "center",
-  gap: 10,
-  padding: "10px 12px",
-  border: 0,
-  background: "#f8fafc",
-  color: "#334155",
-  cursor: "pointer",
-  textAlign: "left",
-};
-
-const previewDisclosureStyle: CSSProperties = {
-  display: "inline-block",
-  width: 0,
-  height: 0,
-  borderTop: "5px solid transparent",
-  borderBottom: "5px solid transparent",
-  borderLeft: "8px solid #2563eb",
-  transition: "transform 120ms ease",
-  transformOrigin: "45% 50%",
-};
-
-const previewGroupMetricsStyle: CSSProperties = {
-  display: "flex",
-  gap: 6,
-  flexWrap: "wrap",
-  justifyContent: "flex-end",
-};
-
-const previewMetricChipStyle: CSSProperties = {
-  border: "1px solid #e2e8f0",
-  borderRadius: 999,
-  padding: "2px 8px",
-  background: "#ffffff",
-  color: "#475569",
-  fontSize: 11,
-  fontWeight: 700,
-  whiteSpace: "nowrap",
-};
-
-const previewTruncatedStyle: CSSProperties = {
-  padding: "8px 12px",
-  color: "#64748b",
-  fontSize: 12,
-  borderTop: "1px solid #e2e8f0",
 };
 
 const candidatePickerWrapStyle: CSSProperties = {
@@ -1789,22 +1529,6 @@ const dropGridStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
   gap: 10,
-};
-
-const dropzoneClearButtonStyle: CSSProperties = {
-  position: "absolute",
-  top: 8,
-  right: 8,
-  width: 24,
-  height: 24,
-  border: "1px solid #86efac",
-  borderRadius: 999,
-  background: "#ffffff",
-  color: "#15803d",
-  cursor: "pointer",
-  fontSize: 18,
-  lineHeight: "20px",
-  fontWeight: 700,
 };
 
 const fieldStyle: CSSProperties = {

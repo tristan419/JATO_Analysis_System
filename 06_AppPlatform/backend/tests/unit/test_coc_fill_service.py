@@ -62,6 +62,37 @@ def _record(
     )
 
 
+def test_resolve_fill_decision_is_strict_by_default_for_multiple_candidates() -> None:
+    material = "T7000Z5**MY0013"
+    records = [
+        _record(
+            material,
+            "e4*2018/858*00273*02",
+            "00273-02&402&104V&COC002-宁德",
+            valid_from=date(2026, 3, 11),
+            valid_to=date(2026, 4, 14),
+        ),
+        _record(
+            material,
+            "e4*2018/858*00273*03",
+            "00273-03&402&104V&COC002-宁德",
+            valid_from=date(2026, 4, 15),
+            valid_to=None,
+            comments="宁德电池",
+        ),
+    ]
+
+    decision = resolve_fill_decision(
+        _row(material),
+        {material: records},
+        overwrite_existing=False,
+    )
+
+    assert decision.status == "ambiguous"
+    assert decision.written_wvta is None
+    assert decision.written_coc is None
+
+
 def test_resolve_fill_decision_uses_date_and_country_to_avoid_special_coc() -> None:
     material = "T7000Z5**MY0013"
     records = [
@@ -94,6 +125,7 @@ def test_resolve_fill_decision_uses_date_and_country_to_avoid_special_coc() -> N
         _row(material),
         {material: records},
         overwrite_existing=False,
+        conflict_strategy="date_country",
     )
 
     assert decision.status == "filled"
