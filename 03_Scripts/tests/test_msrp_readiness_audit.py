@@ -169,11 +169,22 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
     }
     assert requirements["official_msrp_ingest_auth"]["runtime"]["role"] == "editor"
     assert requirements["weekly_snapshot"]["runtime"]["snapshotWeek"] == "2026-W24"
+    assert requirements["weekly_snapshot"]["runtime"]["scriptCovered"] is True
+    assert (
+        requirements["weekly_snapshot"]["runtime"][
+            "archiveIncludesEffectivenessReconciliationFinance"
+        ]
+        is True
+    )
     assert requirements["sales_effectiveness"]["runtime"]["labelCounts"] == {"positive": 1}
     auto_review_runtime = requirements["auto_review_scoring"]["runtime"]
     finance_runtime = requirements["finance_monthly_lease_subsidy_net"]["runtime"]
     assert auto_review_runtime["schemaVersion"] == "msrp_auto_review_score_v1"
     assert finance_runtime["financeObservationCount"] == 1
+    assert (
+        audit_module.TEST_EVIDENCE["snapshotScript"]
+        in requirements["finance_monthly_lease_subsidy_net"]["evidence"]
+    )
     config_runtime = requirements["official_config_table_pipeline"]["runtime"]
     assert config_runtime["sourceSyncStatus"] == "passed"
     assert config_runtime["schemaRefs"] == {"SpecFeatureObservation": 4}
@@ -194,6 +205,10 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
     assert report["summary"]["runtimeCounts"]["dryrunSourceRepairIssueCount"] == 2
     assert report["summary"]["runtimeCounts"]["dryrunTransientRecheckCount"] == 1
     assert requirements["multi_source_reconciliation"]["runtime"]["statusCounts"]["conflict"] == 1
+    assert (
+        audit_module.TEST_EVIDENCE["snapshotScript"]
+        in requirements["multi_source_reconciliation"]["evidence"]
+    )
     pipeline_runtime = requirements["pipeline_orchestration"]["runtime"]
     assert pipeline_runtime["statusPipelineId"] == "msrp_pipeline"
     assert "unified_readiness" in pipeline_runtime["phases"]

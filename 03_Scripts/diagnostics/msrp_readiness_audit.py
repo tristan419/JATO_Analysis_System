@@ -506,6 +506,13 @@ def build_readiness_report(
         "msrp_current_price_snapshot_v1",
         "test_run_writes_degraded_status_for_high_priority_alert",
     )
+    snapshot_archive_covers_full_prd = _test_file_has(
+        "snapshotScript",
+        "priceSalesEffectiveness",
+        "multiSourceReconciliation",
+        "financeObservations",
+        "test_run_degrades_for_reconciliation_conflicts",
+    )
     frontend_finance_reconciliation_covered = _test_file_has(
         "frontendApi",
         "listMsrpFinanceObservations",
@@ -603,7 +610,9 @@ def build_readiness_report(
             title="Weekly current-price snapshot",
             status=_status(
                 snapshot.get("schemaVersion") == "msrp_current_price_snapshot_v1"
-                and bool(snapshot.get("snapshotWeek")),
+                and bool(snapshot.get("snapshotWeek"))
+                and snapshot_script_covered
+                and snapshot_archive_covers_full_prd,
                 degraded=snapshot_error is None,
                 unavailable=snapshot_error is not None,
             ),
@@ -612,6 +621,10 @@ def build_readiness_report(
                 "snapshotWeek": snapshot.get("snapshotWeek"),
                 "currentPriceCount": snapshot_current_count,
                 "priceAlertCount": snapshot_alert_count,
+                "scriptCovered": snapshot_script_covered,
+                "archiveIncludesEffectivenessReconciliationFinance": (
+                    snapshot_archive_covers_full_prd
+                ),
                 "error": snapshot_error,
             },
             evidence=[
@@ -755,8 +768,13 @@ def build_readiness_report(
                 TEST_EVIDENCE["scraperValidation"],
                 TEST_EVIDENCE["httpJsonExtractor"],
                 TEST_EVIDENCE["scraplingExtractor"],
+                TEST_EVIDENCE["snapshotScript"],
             ],
-            note="Supports monthly payment, lease type, subsidy amount, and net price after subsidy filters.",
+            note=(
+                "Supports monthly payment, lease type, subsidy amount, net "
+                "price after subsidy filters, and weekly Hermes snapshot "
+                "archive summaries."
+            ),
         ),
         _requirement(
             key="official_config_table_pipeline",
@@ -816,8 +834,12 @@ def build_readiness_report(
                 "GET /msrp/reconciliation",
                 TEST_EVIDENCE["workflowService"],
                 TEST_EVIDENCE["frontendApi"],
+                TEST_EVIDENCE["snapshotScript"],
             ],
-            note="Groups latest observations by vehicle key and flags source spread conflicts.",
+            note=(
+                "Groups latest observations by vehicle key, flags source "
+                "spread conflicts, and feeds the weekly Hermes snapshot."
+            ),
         ),
         _requirement(
             key="dryrun_governance",
