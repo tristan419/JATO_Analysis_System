@@ -403,6 +403,15 @@ jobs:
           rm -rf "$RUNTIME_PRESERVE_DIR"
           rm -rf "$RELEASE_WORKTREE"
 
+          echo "[INFO] Refreshing local mihomo subscription before backend restart..."
+          mkdir -p "$REPO_DIR/hermes/reports"
+          MIHOMO_REFRESH_LOG="$REPO_DIR/hermes/reports/mihomo_refresh_status.txt"
+          {
+            date -u
+            MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
+          } > "$MIHOMO_REFRESH_LOG" 2>&1 \
+            || echo "[WARN] Local mihomo refresh failed; continuing with existing proxy config" >> "$MIHOMO_REFRESH_LOG"
+
           export REPO_DIR DEPLOY_SOURCE
           python3 - <<'PY'
           import datetime as _dt
@@ -477,6 +486,20 @@ jobs:
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
               echo "[INFO] Google OAuth config updated"
             fi
+            check_google_oauth_proxy() {
+              local label="$1"
+              local proxy_url="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
+              echo "[INFO] Google OAuth proxy check (${label}) via ${proxy_url}"
+              curl -I --max-time 20 --proxy "$proxy_url" https://oauth2.googleapis.com/token
+            }
+            if ! check_google_oauth_proxy "before-mihomo-restart"; then
+              echo "[WARN] Google OAuth proxy check failed; restarting mihomo"
+              sudo -n systemctl restart mihomo.service 2>/dev/null \
+                || sudo -n systemctl restart mihomo 2>/dev/null \
+                || true
+              sleep 5
+              check_google_oauth_proxy "after-mihomo-restart" || true
+            fi
           fi
 
           cd "$REPO_DIR"
@@ -519,6 +542,13 @@ jobs:
             sudo -n systemctl status jato-fullstack-backend@8000 --no-pager 2>&1 || true
             echo "---healthz---"
             curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
+            echo "---google oauth proxy---"
+            sudo -n awk -F= '/^(APP_GOOGLE_OAUTH_PROXY_URL|APP_GOOGLE_OAUTH_TIMEOUT_SECONDS|APP_GOOGLE_REDIRECT_URI|APP_FRONTEND_ORIGIN|APP_FRONTEND_ORIGINS|APP_CORS_ORIGINS)=/ {print}' "$ENV_FILE" 2>&1 || true
+            systemctl is-active mihomo 2>&1 || true
+            ss -ltnp | grep -E '(:7897)\b' 2>&1 || true
+            curl -I --max-time 20 --proxy "${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}" https://oauth2.googleapis.com/token 2>&1 || true
+            echo "---mihomo refresh---"
+            cat "$REPO_DIR/hermes/reports/mihomo_refresh_status.txt" 2>&1 || echo "MIHOMO_REFRESH_STATUS_MISSING"
             echo "---release---"
             cat "$REPO_DIR/hermes/deploy_release.json" 2>&1 || echo "RELEASE_METADATA_MISSING"
             echo "---deploy failure context---"
@@ -725,6 +755,15 @@ jobs:
           rm -rf "$RUNTIME_PRESERVE_DIR"
           rm -rf "$RELEASE_WORKTREE"
 
+          echo "[INFO] Refreshing local mihomo subscription before backend restart..."
+          mkdir -p "$REPO_DIR/hermes/reports"
+          MIHOMO_REFRESH_LOG="$REPO_DIR/hermes/reports/mihomo_refresh_status.txt"
+          {
+            date -u
+            MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
+          } > "$MIHOMO_REFRESH_LOG" 2>&1 \
+            || echo "[WARN] Local mihomo refresh failed; continuing with existing proxy config" >> "$MIHOMO_REFRESH_LOG"
+
           export REPO_DIR DEPLOY_SOURCE
           python3 - <<'PY'
           import datetime as _dt
@@ -799,6 +838,20 @@ jobs:
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
               echo "[INFO] Google OAuth config updated"
             fi
+            check_google_oauth_proxy() {
+              local label="$1"
+              local proxy_url="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
+              echo "[INFO] Google OAuth proxy check (${label}) via ${proxy_url}"
+              curl -I --max-time 20 --proxy "$proxy_url" https://oauth2.googleapis.com/token
+            }
+            if ! check_google_oauth_proxy "before-mihomo-restart"; then
+              echo "[WARN] Google OAuth proxy check failed; restarting mihomo"
+              sudo -n systemctl restart mihomo.service 2>/dev/null \
+                || sudo -n systemctl restart mihomo 2>/dev/null \
+                || true
+              sleep 5
+              check_google_oauth_proxy "after-mihomo-restart" || true
+            fi
           fi
 
           cd "$REPO_DIR"
@@ -841,6 +894,13 @@ jobs:
             sudo -n systemctl status jato-fullstack-backend@8000 --no-pager 2>&1 || true
             echo "---healthz---"
             curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
+            echo "---google oauth proxy---"
+            sudo -n awk -F= '/^(APP_GOOGLE_OAUTH_PROXY_URL|APP_GOOGLE_OAUTH_TIMEOUT_SECONDS|APP_GOOGLE_REDIRECT_URI|APP_FRONTEND_ORIGIN|APP_FRONTEND_ORIGINS|APP_CORS_ORIGINS)=/ {print}' "$ENV_FILE" 2>&1 || true
+            systemctl is-active mihomo 2>&1 || true
+            ss -ltnp | grep -E '(:7897)\b' 2>&1 || true
+            curl -I --max-time 20 --proxy "${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}" https://oauth2.googleapis.com/token 2>&1 || true
+            echo "---mihomo refresh---"
+            cat "$REPO_DIR/hermes/reports/mihomo_refresh_status.txt" 2>&1 || echo "MIHOMO_REFRESH_STATUS_MISSING"
             echo "---release---"
             cat "$REPO_DIR/hermes/deploy_release.json" 2>&1 || echo "RELEASE_METADATA_MISSING"
             echo "---deploy failure context---"

@@ -6,6 +6,7 @@ import { AuthProvider } from "./contexts/AuthContext";
 import { Layout } from "./components/Layout";
 import { RequireRole } from "./components/RequireRole";
 import { LoadingSurface } from "./components/LoadingSurface";
+import { getOAuthRedirectTarget } from "./utils/oauthRedirect";
 
 /** Consume OAuth token params before any provider mounts, avoiding aborted fetches. */
 function OAuthGate({ children }: { children: ReactNode }) {
@@ -21,7 +22,7 @@ function OAuthGate({ children }: { children: ReactNode }) {
     localStorage.setItem("jato_user_name", urlUser);
     localStorage.setItem("jato_user_role", urlRole);
     localStorage.removeItem("shared-filter-scope");
-    const target = isNewUser ? "/account/profile" : "/dashboard";
+    const target = getOAuthRedirectTarget(window.location, isNewUser);
     // Sync redirect — aborts current render before any child effects run
     window.location.replace(target);
     return null;
