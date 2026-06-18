@@ -74,6 +74,111 @@ def _dedupe_sources(items: list[Any]) -> list[dict[str, Any]]:
     return sources
 
 
+def _brand_from_source_code(source_code: str) -> str:
+    first_token = source_code.strip().split("_", 1)[0]
+    return first_token.upper() if first_token else ""
+
+
+def _legacy_sample_url_lookup(group: dict[str, Any]) -> dict[str, tuple[str, str]]:
+    lookup: dict[str, tuple[str, str]] = {}
+    for host_group in group.get("topSourceHosts") or []:
+        if not isinstance(host_group, dict):
+            continue
+        host = str(host_group.get("host") or "").strip().lower()
+        sources = [
+            str(source).strip()
+            for source in host_group.get("sampleSources") or []
+            if str(source).strip()
+        ]
+        urls = [
+            str(url).strip()
+            for url in host_group.get("sampleUrls") or []
+            if str(url).strip()
+        ]
+        for index, source_code in enumerate(sources):
+            lookup.setdefault(
+                source_code,
+                (urls[index] if index < len(urls) else "", host),
+            )
+    return lookup
+
+
+def _legacy_group_source_items(
+    group: dict[str, Any],
+    *,
+    include_transient: bool,
+) -> list[dict[str, Any]]:
+    """Recover source samples from older backlog artifacts.
+
+    Earlier v1 backlog artifacts stored source repair counts plus sample
+    source names, but not the full sourceIssues arrays. Use the transient
+    samples to avoid treating known last-good regressions as source repairs.
+    When transient samples are truncated, cap the remaining repair candidates
+    by sourceRepairIssueCount.
+    """
+    sample_sources = [
+        str(source).strip()
+        for source in group.get("sampleSources") or []
+        if str(source).strip()
+    ]
+    if not sample_sources:
+        return []
+
+    transient_samples = [
+        item
+        for item in (
+            (group.get("transientRegressions") or [])
+            + (group.get("sampleTransientRegressions") or [])
+        )
+        if isinstance(item, dict)
+    ]
+    transient_codes = {
+        str(item.get("sourceCode") or item.get("code") or "").strip()
+        for item in transient_samples
+        if str(item.get("sourceCode") or item.get("code") or "").strip()
+    }
+    source_repair_count = int(group.get("sourceRepairIssueCount") or 0)
+    repair_sources = [
+        source_code
+        for source_code in sample_sources
+        if source_code not in transient_codes
+    ][:source_repair_count]
+    url_lookup = _legacy_sample_url_lookup(group)
+    countries = [
+        str(country).strip().lower()
+        for country in group.get("affectedCountries") or []
+        if str(country).strip()
+    ]
+    default_country = countries[0] if len(countries) == 1 else ""
+
+    items: list[dict[str, Any]] = []
+    for source_code in repair_sources:
+        source_url, host = url_lookup.get(source_code, ("", ""))
+        items.append({
+            "countryCode": default_country,
+            "sourceCode": source_code,
+            "sourceUrl": source_url,
+            "host": host or _host_from_url(source_url),
+            "brand": _brand_from_source_code(source_code),
+            "failureReason": group.get("failureReason"),
+            "recommendedStrategy": group.get("recommendedStrategy"),
+            "recommendedAction": group.get("recommendedAction"),
+        })
+    if include_transient:
+        for item in transient_samples:
+            source_code = str(item.get("sourceCode") or item.get("code") or "").strip()
+            if not source_code:
+                continue
+            source_url, host = url_lookup.get(source_code, ("", ""))
+            payload = dict(item)
+            payload.setdefault("countryCode", default_country)
+            payload.setdefault("sourceUrl", source_url)
+            payload.setdefault("host", host or _host_from_url(source_url))
+            payload.setdefault("brand", _brand_from_source_code(source_code))
+            items.append(payload)
+    return items
+
+
 def source_issues_from_backlog(
     backlog: dict[str, Any],
     *,
@@ -90,7 +195,21 @@ def source_issues_from_backlog(
         for group in backlog.get("groups") or []:
             if isinstance(group, dict):
                 candidates.extend(group.get("transientRegressions") or [])
-    return _dedupe_sources(candidates)
+    sources = _dedupe_sources(candidates)
+    if sources:
+        return sources
+
+    legacy_candidates: list[dict[str, Any]] = []
+    for group in backlog.get("groups") or []:
+        if isinstance(group, dict):
+            legacy_candidates.extend(
+                _legacy_group_source_items(
+                    group,
+                    include_transient=include_transient,
+                )
+            )
+    return _dedupe_sources(legacy_candidates)
+
 
 
 def _response_text_sample(response: Any, limit: int = 500) -> str:

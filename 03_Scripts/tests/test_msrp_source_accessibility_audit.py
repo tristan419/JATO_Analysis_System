@@ -119,6 +119,74 @@ def test_source_issues_from_backlog_dedupes_group_and_top_level_items() -> None:
     ]
 
 
+def test_source_issues_from_legacy_backlog_samples_recover_source_repairs() -> None:
+    backlog = {
+        "sourceRepairIssueCount": 2,
+        "transientRegressionCount": 10,
+        "groups": [
+            {
+                "failureReason": "network_unavailable",
+                "sourceRepairIssueCount": 2,
+                "transientRegressionCount": 10,
+                "recommendedStrategy": "retry_network_or_proxy",
+                "recommendedAction": "repair_source_definition",
+                "affectedCountries": ["at"],
+                "sampleSources": [
+                    "mg_zs_at_draft_scrapling",
+                    "peugeot_3008_at_draft_scrapling",
+                    "skoda_elroq_at_draft_scrapling",
+                    "tesla_model_y_at_draft_scrapling",
+                    "volkswagen_tiguan_at_draft_scrapling",
+                ],
+                "sampleTransientRegressions": [
+                    {
+                        "countryCode": "at",
+                        "sourceCode": "peugeot_3008_at_draft_scrapling",
+                        "recommendedAction": "recheck_before_source_repair",
+                    },
+                    {
+                        "countryCode": "at",
+                        "sourceCode": "skoda_elroq_at_draft_scrapling",
+                        "recommendedAction": "recheck_before_source_repair",
+                    },
+                ],
+                "topSourceHosts": [
+                    {
+                        "host": "mgmotor.at",
+                        "sampleSources": ["mg_zs_at_draft_scrapling"],
+                        "sampleUrls": ["https://www.mgmotor.at/modelle/mg-zs"],
+                    },
+                    {
+                        "host": "tesla.com",
+                        "sampleSources": ["tesla_model_y_at_draft_scrapling"],
+                        "sampleUrls": ["https://www.tesla.com/de_at/modely"],
+                    },
+                    {
+                        "host": "volkswagen.at",
+                        "sampleSources": ["volkswagen_tiguan_at_draft_scrapling"],
+                        "sampleUrls": ["https://www.volkswagen.at/tiguan/tiguan"],
+                    },
+                ],
+            }
+        ],
+    }
+
+    sources = audit.source_issues_from_backlog(backlog)
+
+    assert [
+        item["sourceCode"]
+        for item in sources
+    ] == [
+        "mg_zs_at_draft_scrapling",
+        "tesla_model_y_at_draft_scrapling",
+    ]
+    assert [item["sourceUrl"] for item in sources] == [
+        "https://www.mgmotor.at/modelle/mg-zs",
+        "https://www.tesla.com/de_at/modely",
+    ]
+    assert {item["brand"] for item in sources} == {"MG", "TESLA"}
+
+
 def test_probe_source_classifies_akamai_403_as_official_proxy_required() -> None:
     session = _FakeSession([
         _FakeResponse(
