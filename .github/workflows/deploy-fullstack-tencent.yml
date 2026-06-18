@@ -58,6 +58,41 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Refresh Tencent mihomo subscription
+        if: ${{ steps.auth.outputs.mode == 'key' }}
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          MIHOMO_SUB_URL: ${{ secrets.MIHOMO_SUB_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SSH_PORT:-}" ]; then
+            SSH_PORT=22
+          fi
+
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/github_actions_tencent_key
+          chmod 600 ~/.ssh/github_actions_tencent_key
+          cat > ~/.ssh/config <<EOF
+          Host tencent-mihomo
+            HostName $SSH_HOST
+            User $SSH_USER
+            Port $SSH_PORT
+            IdentityFile ~/.ssh/github_actions_tencent_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ConnectTimeout 20
+            ConnectionAttempts 2
+            ServerAliveInterval 10
+            ServerAliveCountMax 2
+          EOF
+
+          python3 -m pip install --user pyyaml
+          SSH_HOST=tencent-mihomo bash 03_Scripts/deploy/update_mihomo_subscription.sh
+
       - name: Package deploy archive
         run: |
           REQUIRED_WORKBOOK="01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"

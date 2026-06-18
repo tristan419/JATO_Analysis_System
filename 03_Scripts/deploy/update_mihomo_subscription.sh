@@ -7,12 +7,13 @@ set -euo pipefail
 # Usage:
 #   bash 03_Scripts/deploy/update_mihomo_subscription.sh [SUBSCRIPTION_URL]
 #
-# If SUBSCRIPTION_URL is omitted, uses MIHOMO_SUB_URL env var or the default
-# subscription below.
+# If SUBSCRIPTION_URL is omitted, uses MIHOMO_SUB_URL env var, the latest
+# remote 0dcloud profile URL, or the default subscription below.
 # ──────────────────────────────────────────────────────────────
 
 SSH_HOST="${SSH_HOST:-tencent-cloud}"
 MIHOMO_CONFIG_DIR="/etc/mihomo"
+DEFAULT_MIHOMO_SUB_URL="${DEFAULT_MIHOMO_SUB_URL:-https://naikosub.com/link/LPFT7gIKqNavBKoe?clash=1}"
 
 discover_remote_subscription_url() {
   ssh "$SSH_HOST" 'python3 - <<"PY"
@@ -41,6 +42,9 @@ PY'
 SUB_URL="${1:-${MIHOMO_SUB_URL:-}}"
 if [[ -z "$SUB_URL" ]]; then
   SUB_URL="$(discover_remote_subscription_url)"
+fi
+if [[ -z "$SUB_URL" ]]; then
+  SUB_URL="$DEFAULT_MIHOMO_SUB_URL"
 fi
 
 if [[ -z "$SUB_URL" ]]; then
@@ -90,10 +94,33 @@ cfg.setdefault('dns', {})
 cfg['dns']['enable'] = True
 cfg['dns']['listen'] = '127.0.0.1:1053'
 
+proxies = cfg.get('proxies') or []
+proxy_names = [
+    proxy.get('name')
+    for proxy in proxies
+    if isinstance(proxy, dict) and proxy.get('name')
+]
+if proxy_names:
+    cfg['proxy-groups'] = [
+        {
+            'name': 'auto',
+            'type': 'url-test',
+            'url': 'https://www.gstatic.com/generate_204',
+            'interval': 300,
+            'tolerance': 80,
+            'proxies': proxy_names,
+        }
+    ]
+    cfg['rules'] = ['MATCH,auto']
+    cfg['mode'] = 'rule'
+
 with open('$TMP_CONF', 'w') as f:
     yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
 
-print(f\"[mihomo-sub] Patched config: {len(cfg.get('proxies',[]))} proxies\")
+print(
+    f\"[mihomo-sub] Patched config: {len(proxies)} proxies, \"
+    f\"auto_group={'yes' if proxy_names else 'no'}\"
+)
 "
 
 echo "[mihomo-sub] Uploading to $SSH_HOST ..."
