@@ -331,6 +331,67 @@ def _fetch_json(
         return None, str(exc), None
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _effective_progress_gate(progress: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(progress, dict):
+        return {
+            "effectiveGateStatus": "missing",
+            "effectiveGateBasis": "missing",
+            "stableCoverage": {},
+        }
+
+    progress_status = progress.get("status")
+    if not isinstance(progress_status, dict):
+        progress_status = {}
+    stable = progress.get("stableCoverage")
+    if not isinstance(stable, dict):
+        stable = {}
+
+    active_gate = str(progress_status.get("gateStatus") or "").strip().lower()
+    if active_gate == "allowed":
+        return {
+            "effectiveGateStatus": "allowed",
+            "effectiveGateBasis": "active",
+            "stableCoverage": stable,
+        }
+
+    threshold = _safe_float(
+        stable.get("gateThreshold", progress_status.get("gateThreshold")),
+        70.0,
+    )
+    stable_pass_rate = _safe_float(
+        stable.get("sourcePassRate", stable.get("stablePassRate")),
+        0.0,
+    )
+    ready_country_count = _safe_int(stable.get("readyCountryCount"), 0)
+    blocked_country_count = _safe_int(stable.get("blockedCountryCount"), 0)
+    stable_ready = (
+        stable_pass_rate >= threshold
+        and ready_country_count > 0
+        and blocked_country_count == 0
+        and not bool(stable.get("activeRunRunning"))
+        and not bool(stable.get("activeRunPartial"))
+    )
+    return {
+        "effectiveGateStatus": "allowed" if stable_ready else "blocked",
+        "effectiveGateBasis": "stable" if stable_ready else "active",
+        "stableCoverage": stable,
+    }
+
+
 def _remote_checks(
     remote_api_base: str | None,
     timeout_seconds: int,
@@ -361,12 +422,14 @@ def _remote_checks(
     progress_status = progress.get("status") if isinstance(progress, dict) else {}
     if not isinstance(progress_status, dict):
         progress_status = {}
+    progress_gate = _effective_progress_gate(progress)
+    stable_coverage = progress_gate["stableCoverage"]
     passed = (
         snapshot_code == 200
         and isinstance(snapshot, dict)
         and snapshot.get("schemaVersion") == "msrp_current_price_snapshot_v1"
         and progress_code == 200
-        and progress_status.get("gateStatus") == "allowed"
+        and progress_gate["effectiveGateStatus"] == "allowed"
         and unified_code == 200
         and isinstance(unified, dict)
         and unified.get("status") == "success"
@@ -385,7 +448,19 @@ def _remote_checks(
             "httpStatus": progress_code,
             "runId": progress_status.get("runId"),
             "gateStatus": progress_status.get("gateStatus"),
+            "effectiveGateStatus": progress_gate["effectiveGateStatus"],
+            "effectiveGateBasis": progress_gate["effectiveGateBasis"],
             "overallPassPct": progress_status.get("overallPassPct"),
+            "stableCoverage": {
+                "gateThreshold": stable_coverage.get("gateThreshold"),
+                "stablePassRate": stable_coverage.get("stablePassRate"),
+                "sourcePassRate": stable_coverage.get("sourcePassRate"),
+                "readyCountryCount": stable_coverage.get("readyCountryCount"),
+                "blockedCountryCount": stable_coverage.get("blockedCountryCount"),
+                "probeRegressionCount": stable_coverage.get("probeRegressionCount"),
+                "latestRunId": stable_coverage.get("latestRunId"),
+                "activeRunId": stable_coverage.get("activeRunId"),
+            },
             "error": progress_error,
         },
         "unifiedScrapingReadiness": {
@@ -479,7 +554,7 @@ def build_goal_completion_report(
             status=str(remote.get("status") or "not_checked"),
             evidence=[remote.get("apiBase", "")] if remote.get("apiBase") else [],
             runtime=remote,
-            note="Production is complete only when deployed API exposes current snapshot, allowed dryrun gate, and unified readiness success.",
+            note="Production is complete only when deployed API exposes current snapshot, effective dryrun gate, and unified readiness success.",
         ),
     ]
     status_counts = dict(sorted(Counter(item["status"] for item in requirements).items()))

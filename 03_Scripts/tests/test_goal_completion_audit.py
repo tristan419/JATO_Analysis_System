@@ -194,6 +194,134 @@ def test_remote_checks_can_mark_production_passed(monkeypatch, tmp_path: Path) -
     assert report["status"] == "complete"
 
 
+def test_remote_checks_can_use_stable_progress_when_active_probe_regresses(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _write_statuses(tmp_path)
+    source_root = tmp_path / "source_drafts"
+    _write_source_drafts(source_root, ("se", "fi"))
+
+    def fake_fetch_json(
+        url: str,
+        timeout_seconds: int,
+        *,
+        resolve_ip: str | None = None,
+    ):
+        assert resolve_ip is None
+        if url.endswith("/msrp/current-prices/snapshot"):
+            return {
+                "schemaVersion": "msrp_current_price_snapshot_v1",
+                "snapshotWeek": "2026-W25",
+            }, None, 200
+        if url.endswith("/hermes/msrp-country-progress"):
+            return {
+                "status": {
+                    "runId": "msrp-dryrun-active",
+                    "gateStatus": "blocked",
+                    "gateThreshold": 70,
+                    "overallPassPct": 51.6,
+                },
+                "stableCoverage": {
+                    "gateThreshold": 70,
+                    "stablePassRate": 94.4,
+                    "sourcePassRate": 94.4,
+                    "readyCountryCount": 3,
+                    "blockedCountryCount": 0,
+                    "probeRegressionCount": 13,
+                    "latestRunId": "msrp-dryrun-stable",
+                    "activeRunId": "msrp-dryrun-active",
+                    "activeRunRunning": False,
+                    "activeRunPartial": False,
+                },
+            }, None, 200
+        if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
+            return {
+                "pipelineId": "unified_scraping_readiness",
+                "status": "success",
+                "readinessStatus": "passed",
+            }, None, 200
+        raise AssertionError(url)
+
+    monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)
+
+    report = audit.build_goal_completion_report(
+        repo_root=tmp_path,
+        source_draft_dir=source_root,
+        required_source_countries=("se", "fi"),
+        remote_api_base="https://example.test/v1",
+    )
+    production = {
+        item["key"]: item for item in report["requirements"]
+    }["production_deployment_state"]
+    progress = production["runtime"]["msrpCountryProgress"]
+
+    assert production["status"] == "passed"
+    assert report["status"] == "complete"
+    assert progress["gateStatus"] == "blocked"
+    assert progress["effectiveGateStatus"] == "allowed"
+    assert progress["effectiveGateBasis"] == "stable"
+    assert progress["stableCoverage"]["sourcePassRate"] == 94.4
+    assert progress["stableCoverage"]["readyCountryCount"] == 3
+    assert progress["stableCoverage"]["blockedCountryCount"] == 0
+    assert progress["stableCoverage"]["probeRegressionCount"] == 13
+
+
+def test_remote_checks_rejects_stable_progress_with_blocked_country(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _write_statuses(tmp_path)
+    source_root = tmp_path / "source_drafts"
+    _write_source_drafts(source_root, ("se", "fi"))
+
+    def fake_fetch_json(
+        url: str,
+        timeout_seconds: int,
+        *,
+        resolve_ip: str | None = None,
+    ):
+        if url.endswith("/msrp/current-prices/snapshot"):
+            return {"schemaVersion": "msrp_current_price_snapshot_v1"}, None, 200
+        if url.endswith("/hermes/msrp-country-progress"):
+            return {
+                "status": {
+                    "gateStatus": "blocked",
+                    "gateThreshold": 70,
+                    "overallPassPct": 51.6,
+                },
+                "stableCoverage": {
+                    "gateThreshold": 70,
+                    "sourcePassRate": 94.4,
+                    "readyCountryCount": 2,
+                    "blockedCountryCount": 1,
+                    "activeRunRunning": False,
+                    "activeRunPartial": False,
+                },
+            }, None, 200
+        if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
+            return {"status": "success", "readinessStatus": "passed"}, None, 200
+        raise AssertionError(url)
+
+    monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)
+
+    report = audit.build_goal_completion_report(
+        repo_root=tmp_path,
+        source_draft_dir=source_root,
+        required_source_countries=("se", "fi"),
+        remote_api_base="https://example.test/v1",
+    )
+    production = {
+        item["key"]: item for item in report["requirements"]
+    }["production_deployment_state"]
+    progress = production["runtime"]["msrpCountryProgress"]
+
+    assert production["status"] == "missing"
+    assert report["status"] == "in_progress"
+    assert progress["effectiveGateStatus"] == "blocked"
+    assert progress["effectiveGateBasis"] == "active"
+
+
 def test_remote_checks_passes_resolve_ip_to_fetcher(monkeypatch, tmp_path: Path) -> None:
     _write_statuses(tmp_path)
     source_root = tmp_path / "source_drafts"
