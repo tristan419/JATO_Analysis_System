@@ -1,4 +1,5 @@
 import { ChangeEvent, FormEvent, Fragment, useEffect, useRef, useState } from "react";
+import { animate } from "animejs";
 
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
@@ -355,6 +356,8 @@ export function ReviewCasesPage() {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const refreshCasesRequestRef = useRef(0);
   const tbodyRef = useRef<HTMLTableSectionElement | null>(null);
+  const detailDockRef = useRef<HTMLDivElement | null>(null);
+  const detailBodyRef = useRef<HTMLDivElement | null>(null);
 
   /* filters */
   const [statusFilter, setStatusFilter] = useState("");
@@ -560,6 +563,79 @@ export function ReviewCasesPage() {
   const rejectedCount = cases.filter((c) => c.reviewStatus === "rejected").length;
   const caseGroups = groupReviewCases(cases);
   useStaggerEntrance(tbodyRef, cases.length > 0 && !loading, { selector: ".data-table-group-row" });
+  useEffect(() => {
+    if (!detail) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (!detailDockRef.current) return;
+      try {
+        animate(detailDockRef.current, {
+          opacity: [0, 1],
+          translateY: [18, 0],
+          duration: 240,
+          ease: "outQuad",
+        });
+      } catch {
+        /* decorative only */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [detail?.id]);
+
+  useEffect(() => {
+    if (!detail || detailCollapsed) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (!detailBodyRef.current) return;
+      try {
+        animate(detailBodyRef.current, {
+          opacity: [0, 1],
+          translateY: [8, 0],
+          duration: 220,
+          ease: "outQuad",
+        });
+      } catch {
+        /* decorative only */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [detail?.id, detailCollapsed]);
+
+  useEffect(() => {
+    if (!rowActionId) return;
+    const frame = window.requestAnimationFrame(() => {
+      const row = Array.from(tbodyRef.current?.querySelectorAll<HTMLTableRowElement>("tr[data-review-case-id]") ?? [])
+        .find((candidate) => candidate.dataset.reviewCaseId === rowActionId);
+      if (!row) return;
+      try {
+        animate(row, {
+          translateX: [0, 4, 0],
+          duration: 280,
+          ease: "outQuad",
+        });
+      } catch {
+        /* decorative only */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [rowActionId]);
+
+  useEffect(() => {
+    if (!groupActionState) return;
+    const frame = window.requestAnimationFrame(() => {
+      const row = Array.from(tbodyRef.current?.querySelectorAll<HTMLTableRowElement>("tr[data-review-group-key]") ?? [])
+        .find((candidate) => candidate.dataset.reviewGroupKey === groupActionState.key);
+      if (!row) return;
+      try {
+        animate(row, {
+          scale: [1, 1.004, 1],
+          duration: 320,
+          ease: "outQuad",
+        });
+      } catch {
+        /* decorative only */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [groupActionState?.key, groupActionState?.decision]);
   const reviewCountries = Array.from(new Set(cases.map((c) => c.country)))
     .sort((left, right) => left.localeCompare(right));
   const filteredCountries = new Set(cases.map((c) => c.country)).size;
@@ -800,7 +876,10 @@ export function ReviewCasesPage() {
 
                 return (
                   <Fragment key={group.key}>
-                    <tr className={`data-table-group-row${expanded ? " is-expanded" : ""}${containsSelection ? " contains-selection" : ""}`}>
+                    <tr
+                      data-review-group-key={group.key}
+                      className={`data-table-group-row${expanded ? " is-expanded" : ""}${containsSelection ? " contains-selection" : ""}`}
+                    >
                       <td colSpan={11}>
                         <div className="data-table-group-cell">
                           <button
@@ -852,7 +931,11 @@ export function ReviewCasesPage() {
                       const rowReasonBrief = getReviewCaseReasonBrief(c);
 
                       return (
-                        <tr key={c.id} className={detail?.id === c.id ? "is-selected" : ""}>
+                        <tr
+                          key={c.id}
+                          data-review-case-id={c.id}
+                          className={detail?.id === c.id ? "is-selected" : ""}
+                        >
                           <td>
                             <span className={`badge ${getReviewStatusBadgeClass(c.reviewStatus)}`}>
                               {getReviewStatusLabel(c.reviewStatus)}
@@ -936,7 +1019,7 @@ export function ReviewCasesPage() {
 
       {/* ── Detail + Decision Panel ─────────────── */}
       {detail && (
-        <div className={`card crud-card admin-detail-drawer review-detail-dock${detailCollapsed ? " is-collapsed" : ""}`}>
+        <div ref={detailDockRef} className={`card crud-card admin-detail-drawer review-detail-dock${detailCollapsed ? " is-collapsed" : ""}`}>
           <div className="detail-section-head review-detail-dock-head">
             <div>
               <div className="card-title">Case Detail</div>
@@ -976,7 +1059,7 @@ export function ReviewCasesPage() {
             <LoadingSurface mode="inline" label="正在加载详情" detail="" kicker="Detail" />
           )}
           {!detailCollapsed && (
-            <div className="review-detail-dock-body">
+            <div ref={detailBodyRef} className="review-detail-dock-body">
               <div className="admin-detail-grid">
                 <div className="admin-detail-item">
                   <span className="admin-detail-label">Source Code</span>

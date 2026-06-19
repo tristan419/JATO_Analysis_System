@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { animate } from "animejs";
 import { useSearchParams } from "react-router-dom";
 
 import { api } from "../api/client";
 import { MaterialFinanceWorkbench } from "../components/finance";
+import { usePageTransition } from "../hooks/usePageTransition";
 import type {
   CountryMaterialFinanceHistoryItem,
   CountryMaterialFinanceRow,
@@ -45,6 +47,7 @@ export function OrderGeniusCbuPage() {
   const [historyForRow, setHistoryForRow] = useState<CountryMaterialFinanceRow | null>(null);
   const [historyItems, setHistoryItems] = useState<CountryMaterialFinanceHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const historyPanelRef = useRef<HTMLElement | null>(null);
 
   const countryCodes = useMemo(() => {
     const codes = countryOptions.map((country) => country.countryCode);
@@ -52,10 +55,25 @@ export function OrderGeniusCbuPage() {
     return codes.includes("NL") ? ["NL", ...rest] : rest;
   }, [countryOptions]);
 
-  const scopeLabel = useMemo(
-    () => [brand || "All brands", modelName || "All models", powertrain || "All powertrains", version || "All versions"].join(" · "),
-    [brand, modelName, powertrain, version],
-  );
+  const workbenchTransitionKey = `${countryCode}|${brand}|${modelName}|${powertrain}|${version}`;
+  usePageTransition(workbenchTransitionKey, ".material-finance-page-workbench", 220);
+
+  useEffect(() => {
+    if (!historyForRow) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (!historyPanelRef.current) return;
+      try {
+        animate(historyPanelRef.current, {
+          opacity: [0, 1],
+          duration: 220,
+          ease: "outQuad",
+        });
+      } catch {
+        /* decorative only */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [historyForRow]);
 
   const syncUrl = (next: {
     countryCode?: string;
@@ -99,7 +117,7 @@ export function OrderGeniusCbuPage() {
   useEffect(() => {
     if (!countryCode) return;
     let cancelled = false;
-    api.getOrderGeniusOptions({
+    api.getCountryMaterialFinanceOptions({
       country: countryCode,
       brand: brand || undefined,
       model: modelName || undefined,
@@ -276,7 +294,6 @@ export function OrderGeniusCbuPage() {
         <MaterialFinanceWorkbench
           countryCode={countryCode}
           countryCodes={countryCodes}
-          scopeLabel={scopeLabel}
           rows={rows}
           loading={loading}
           error={error}
@@ -288,53 +305,70 @@ export function OrderGeniusCbuPage() {
         />
       </div>
       {historyForRow ? (
-        <section className="material-finance-history-panel">
-          <header>
-            <div>
-              <span className="material-finance-workbench-eyebrow">EDIT HISTORY</span>
-              <h3>{historyForRow.countryCode} · {historyForRow.materialCode}</h3>
-            </div>
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              onClick={() => {
-                setHistoryForRow(null);
-                setHistoryItems([]);
-              }}
-            >
-              Close history
-            </button>
-          </header>
-          {historyLoading ? (
-            <div className="material-finance-empty">Loading history...</div>
-          ) : historyItems.length === 0 ? (
-            <div className="material-finance-empty">No edit history yet.</div>
-          ) : (
-            <div className="material-finance-history-list">
-              {historyItems.map((item) => (
-                <article key={item.historyId} className="material-finance-history-item">
-                  <div>
-                    <strong>{item.changedBy || "-"}</strong>
-                    <span>{item.changedAtUtc ? new Date(item.changedAtUtc).toLocaleString() : "-"}</span>
-                    <span>{item.sourceMode || "manual"}</span>
-                  </div>
-                  <dl>
-                    {item.changedFields.map((field) => (
-                      <div key={`${item.historyId}-${field}`}>
-                        <dt>{field}</dt>
-                        <dd>
-                          {formatHistoryValue(item.oldValues?.[field])}
-                          <span>-&gt;</span>
-                          {formatHistoryValue(item.newValues[field])}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
+        <div className="material-finance-history-overlay" role="presentation">
+          <button
+            type="button"
+            className="material-finance-history-backdrop"
+            aria-label="Close edit history"
+            onClick={() => {
+              setHistoryForRow(null);
+              setHistoryItems([]);
+            }}
+          />
+          <section
+            ref={historyPanelRef}
+            className="material-finance-history-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="CBU edit history"
+          >
+            <header>
+              <div>
+                <span className="material-finance-workbench-eyebrow">EDIT HISTORY</span>
+                <h3>{historyForRow.countryCode} · {historyForRow.materialCode}</h3>
+              </div>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                onClick={() => {
+                  setHistoryForRow(null);
+                  setHistoryItems([]);
+                }}
+              >
+                Close history
+              </button>
+            </header>
+            {historyLoading ? (
+              <div className="material-finance-empty">Loading history...</div>
+            ) : historyItems.length === 0 ? (
+              <div className="material-finance-empty">No edit history yet.</div>
+            ) : (
+              <div className="material-finance-history-list">
+                {historyItems.map((item) => (
+                  <article key={item.historyId} className="material-finance-history-item">
+                    <div>
+                      <strong>{item.changedBy || "-"}</strong>
+                      <span>{item.changedAtUtc ? new Date(item.changedAtUtc).toLocaleString() : "-"}</span>
+                      <span>{item.sourceMode || "manual"}</span>
+                    </div>
+                    <dl>
+                      {item.changedFields.map((field) => (
+                        <div key={`${item.historyId}-${field}`}>
+                          <dt>{field}</dt>
+                          <dd>
+                            {formatHistoryValue(item.oldValues?.[field])}
+                            <span>-&gt;</span>
+                            {formatHistoryValue(item.newValues[field])}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
       ) : null}
     </section>
   );

@@ -935,6 +935,83 @@ def list_country_material_finance(
     ]
 
 
+def list_country_material_finance_options(
+    session: Session,
+    country_code: str,
+    *,
+    brand: str | None = None,
+    model_name: str | None = None,
+    powertrain: str | None = None,
+    version: str | None = None,
+    limit: int = 5000,
+) -> dict:
+    """Return CBU filter options from the BOM SKU universe, not country FOB coverage."""
+    country = clean_text(country_code).upper()
+    country_pt = get_country_payment_term(session, country)
+    normalized_brand = normalize_brand(brand) if brand else None
+    normalized_model = normalize_brand_text(model_name) if model_name else None
+    normalized_powertrain = normalize_powertrain(powertrain) if powertrain else None
+    normalized_version = clean_text(version) if version else None
+
+    skus = list_all_material_skus_for_admin(session, limit=limit)
+    filtered = skus
+    if normalized_brand:
+        filtered = [sku for sku in filtered if normalize_brand(sku.brand) == normalized_brand]
+    if normalized_model:
+        filtered = [sku for sku in filtered if normalize_brand_text(sku.model_name) == normalized_model]
+    if normalized_powertrain:
+        filtered = [sku for sku in filtered if _extract_canonical_powertrain(sku) == normalized_powertrain]
+    if normalized_version:
+        filtered = [sku for sku in filtered if clean_text(sku.version) == normalized_version]
+
+    return {
+        "countryCode": country,
+        "paymentTermCode": country_pt.payment_term_code if country_pt else None,
+        "brands": sorted(
+            {
+                normalize_brand(sku.brand)
+                for sku in filtered
+                if normalize_brand(sku.brand)
+            }
+        ),
+        "models": sorted(
+            {
+                normalize_brand_text(sku.model_name)
+                for sku in filtered
+                if normalize_brand_text(sku.model_name)
+            }
+        ),
+        "powertrains": sorted(
+            {
+                _extract_canonical_powertrain(sku)
+                for sku in filtered
+                if _extract_canonical_powertrain(sku)
+            }
+        ),
+        "versions": sorted(
+            {
+                clean_text(sku.version)
+                for sku in filtered
+                if clean_text(sku.version)
+            }
+        ),
+        "colours": sorted(
+            {
+                clean_text(sku.exterior_color_name)
+                for sku in filtered
+                if clean_text(sku.exterior_color_name)
+            }
+        ),
+        "materialCodes": sorted(
+            {
+                clean_text(sku.bom_template or sku.material_code).upper()
+                for sku in filtered
+                if clean_text(sku.bom_template or sku.material_code)
+            }
+        ),
+    }
+
+
 def upsert_country_material_finance(
     session: Session,
     country_code: str,
