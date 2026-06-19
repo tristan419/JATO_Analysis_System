@@ -455,7 +455,6 @@ def _run_scrape_attempt(
     process = ctx.Process(
         target=_run_scrape_attempt_child,
         args=(run_scrape, code, source_timeout_seconds, output_queue),
-        daemon=True,
     )
     process.start()
     process.join(attempt_timeout_seconds)
@@ -835,6 +834,32 @@ def _write_dryrun_status(
     print(f"[status] msrp_dryrun={status} passPct={pass_pct}% written to {status_path}")
 
 
+def _write_dryrun_status_best_effort(
+    countries: list[str],
+    pass_count: int,
+    empty_count: int,
+    fail_count: int,
+    error_count: int,
+    total: int = 0,
+    results: list | None = None,
+) -> None:
+    try:
+        _write_dryrun_status(
+            countries,
+            pass_count,
+            empty_count,
+            fail_count,
+            error_count,
+            total=total,
+            results=results,
+        )
+    except Exception as exc:
+        log.warning(
+            "Dryrun status write failed; continuing report generation: %s",
+            exc,
+        )
+
+
 def main():
     logging.basicConfig(
         level=logging.WARNING,
@@ -1092,7 +1117,15 @@ def main():
         if strat:
             strategy_recs[strat] = strategy_recs.get(strat, 0) + 1
 
-    _write_dryrun_status(countries, pass_count, empty_count, fail_count, error_count, total=total, results=results)
+    _write_dryrun_status_best_effort(
+        countries,
+        pass_count,
+        empty_count,
+        fail_count,
+        error_count,
+        total=total,
+        results=results,
+    )
 
     if _is_child_run():
         if STRICT_EXIT and (fail_count > 0 or error_count > 0):

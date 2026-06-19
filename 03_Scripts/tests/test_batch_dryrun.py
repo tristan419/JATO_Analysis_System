@@ -232,3 +232,26 @@ def test_write_source_repair_backlog_artifact_reuses_aggregate_writer(
 
     assert calls == [(report, tmp_path)]
     assert (tmp_path / "msrp_source_repair_backlog.json").is_file()
+
+
+def test_write_dryrun_status_best_effort_does_not_block_report_generation(
+    monkeypatch,
+    caplog,
+) -> None:
+    def failing_status_writer(*args, **kwargs) -> None:
+        raise PermissionError("status file locked")
+
+    monkeypatch.setattr(batch_dryrun, "_write_dryrun_status", failing_status_writer)
+
+    with caplog.at_level(logging.WARNING):
+        batch_dryrun._write_dryrun_status_best_effort(
+            ["fr"],
+            pass_count=0,
+            empty_count=0,
+            fail_count=0,
+            error_count=1,
+            total=1,
+            results=[],
+        )
+
+    assert "continuing report generation" in caplog.text
