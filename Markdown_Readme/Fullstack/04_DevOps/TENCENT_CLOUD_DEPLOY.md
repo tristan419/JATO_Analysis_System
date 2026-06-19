@@ -198,6 +198,8 @@ curl -sS https://www.ojeur.cloud/_deploy_status.txt | sed -n '/---google oauth p
 
 `curl -I` 只要能连通并返回 HTTP 头即可，HTTP 400/404/405 都代表网络出口通了；连接超时、EOF、connection closed 才是代理或出口问题。GitHub Actions 部署会自动刷新 mihomo 订阅、重启服务，并把 Google 代理检查写入 `_deploy_status.txt`。
 
+生产建议在 GitHub Secrets 里配置 `MIHOMO_SUB_URL`，让部署时明确刷新订阅。未配置时脚本会尝试从 `MIHOMO_DB_PATH` 或 `/home/*/.local/share/0dcloud/database.sqlite` 发现 0dcloud profile URL；如果本地 profile 没保存 URL，刷新会跳过并沿用现有 `/etc/mihomo/config.yaml`。
+
 线上需要 News/VOC/MSRP 写 PostgreSQL 时，后端 env 至少应包含：
 
 ```bash
@@ -401,11 +403,13 @@ bash 03_Scripts/print_fullstack_server_diagnostics.sh
 - Secrets: `DEPLOY_CERTBOT_EMAIL`（推荐，Let's Encrypt 联系邮箱）
 - Secrets: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
 - Secrets: `GOOGLE_OAUTH_PROXY_URL`（可选；腾讯云大陆默认回落到 `http://127.0.0.1:7897`）
+- Secrets: `MIHOMO_SUB_URL`（推荐；用于部署时刷新腾讯云本机 mihomo 订阅，日志会脱敏，不打印完整 URL）
 - Variables: `DEPLOY_REPO_DIR`
 - Variables: `FULLSTACK_BACKEND_SERVICE_NAME`
 - Variables: `DEPLOY_BRANCH`
 - Variables: `DEPLOY_SERVER_NAME`（可选，未设置时当前 workflow 默认回落到 `ojeur.cloud www.ojeur.cloud`）
 - Variables: `DEPLOY_ENABLE_HTTPS`（可选，默认 `true`）
+- Variables: `MIHOMO_DB_PATH`（可选；未设置 `MIHOMO_SUB_URL` 时，用于指定 0dcloud sqlite profile 路径）
 - Variables: `FULLSTACK_VITE_API_BASE`
 - Variables: `FULLSTACK_VITE_USER_ROLE`
 - Variables: `FULLSTACK_VITE_USER_NAME`
