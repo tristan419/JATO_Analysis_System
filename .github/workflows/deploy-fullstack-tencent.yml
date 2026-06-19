@@ -277,6 +277,8 @@ jobs:
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_ID }}'); "
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_SECRET=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_SECRET }}'); "
           REMOTE_EXPORTS+="export GOOGLE_OAUTH_PROXY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_PROXY_URL }}'); "
+          REMOTE_EXPORTS+="export MIHOMO_SUB_URL=$(printf '%q' '${{ secrets.MIHOMO_SUB_URL }}'); "
+          REMOTE_EXPORTS+="export MIHOMO_DB_PATH=$(printf '%q' '${{ vars.MIHOMO_DB_PATH }}'); "
 
           timeout 1800s ssh -v -p "$SSH_PORT" \
             -o BatchMode=yes \
@@ -408,6 +410,12 @@ jobs:
           MIHOMO_REFRESH_LOG="$REPO_DIR/hermes/reports/mihomo_refresh_status.txt"
           {
             date -u
+            if [ -n "${MIHOMO_SUB_URL:-}" ]; then
+              echo "[mihomo-sub] MIHOMO_SUB_URL configured from deploy environment"
+            else
+              echo "[mihomo-sub] MIHOMO_SUB_URL not configured; trying local 0dcloud discovery"
+            fi
+            echo "[mihomo-sub] MIHOMO_DB_PATH=${MIHOMO_DB_PATH:-auto}"
             MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
           } > "$MIHOMO_REFRESH_LOG" 2>&1 \
             || echo "[WARN] Local mihomo refresh failed; continuing with existing proxy config" >> "$MIHOMO_REFRESH_LOG"
@@ -628,6 +636,8 @@ jobs:
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_ID }}'); "
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_SECRET=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_SECRET }}'); "
           REMOTE_EXPORTS+="export GOOGLE_OAUTH_PROXY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_PROXY_URL }}'); "
+          REMOTE_EXPORTS+="export MIHOMO_SUB_URL=$(printf '%q' '${{ secrets.MIHOMO_SUB_URL }}'); "
+          REMOTE_EXPORTS+="export MIHOMO_DB_PATH=$(printf '%q' '${{ vars.MIHOMO_DB_PATH }}'); "
 
           sshpass -p "$SSH_PASSWORD" \
             timeout 1800s ssh -v -p "$SSH_PORT" \
@@ -760,6 +770,12 @@ jobs:
           MIHOMO_REFRESH_LOG="$REPO_DIR/hermes/reports/mihomo_refresh_status.txt"
           {
             date -u
+            if [ -n "${MIHOMO_SUB_URL:-}" ]; then
+              echo "[mihomo-sub] MIHOMO_SUB_URL configured from deploy environment"
+            else
+              echo "[mihomo-sub] MIHOMO_SUB_URL not configured; trying local 0dcloud discovery"
+            fi
+            echo "[mihomo-sub] MIHOMO_DB_PATH=${MIHOMO_DB_PATH:-auto}"
             MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
           } > "$MIHOMO_REFRESH_LOG" 2>&1 \
             || echo "[WARN] Local mihomo refresh failed; continuing with existing proxy config" >> "$MIHOMO_REFRESH_LOG"
