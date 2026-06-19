@@ -1,12 +1,12 @@
 source_code: nissan_qashqai_fr_draft_scrapling
 country: 法国
 brand: NISSAN
-source_url: https://www.nissan.fr/vehicules/qashqai.html
+source_url: https://www.nissan.fr/vehicules/neufs/qashqai.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.nissan.fr/vehicules/qashqai.html
+  url: https://www.nissan.fr/vehicules/neufs/qashqai.html
   tier: stealth
   headless: true
   network_idle: true
