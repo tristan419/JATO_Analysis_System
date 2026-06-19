@@ -1,12 +1,12 @@
 source_code: toyota_c_hr_fr_draft_scrapling
 country: 法国
 brand: TOYOTA
-source_url: https://www.toyota.fr/vehicules/c-hr
+source_url: https://www.toyota.fr/vehicules-neufs/toyota-c-hr
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.toyota.fr/vehicules/c-hr
+  url: https://www.toyota.fr/vehicules-neufs/toyota-c-hr
   headless: true
   default_currency: EUR
   default_tax_included: true

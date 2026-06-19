@@ -1,12 +1,12 @@
 source_code: toyota_rav4_hr_draft_scrapling
 country: 克罗地亚
 brand: TOYOTA
-source_url: https://www.toyota.hr/new-cars/coming-soon/rav4
+source_url: https://www.toyota.hr/new-cars/rav4
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.toyota.hr/new-cars/coming-soon/rav4
+  url: https://www.toyota.hr/new-cars/rav4
   headless: true
   default_currency: EUR
   default_tax_included: true

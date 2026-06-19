@@ -1,12 +1,12 @@
 source_code: cupra_terramar_de_draft_scrapling
 country: 德国
 brand: CUPRA
-source_url: https://www.cupraofficial.de/modelle/terramar
+source_url: https://www.cupraofficial.de/fahrzeuge/terramar
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.cupraofficial.de/modelle/terramar
+  url: https://www.cupraofficial.de/fahrzeuge/terramar
   tier: stealth
   headless: true
   network_idle: true
