@@ -1,9 +1,11 @@
 import { Fragment, useEffect, useRef, useState } from "react";
+import { animate } from "animejs";
 
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { PriceHistoryTimeline } from "../components/PriceHistoryTimeline";
+import { useStaggerEntrance } from "../hooks/useStaggerEntrance";
 import {
   TextSearchFilters,
   useTextSearchFilters,
@@ -165,6 +167,11 @@ export function MsrpPage() {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const refreshPricesRequestRef = useRef(0);
   const refreshFinanceRequestRef = useRef(0);
+  const tbodyRef = useRef<HTMLTableSectionElement | null>(null);
+  const detailDockRef = useRef<HTMLDivElement | null>(null);
+  const detailBodyRef = useRef<HTMLDivElement | null>(null);
+  const financeOverlayRef = useRef<HTMLDivElement | null>(null);
+  const financeCardInnerRef = useRef<HTMLDivElement | null>(null);
 
   /* filters */
   const {
@@ -384,6 +391,111 @@ export function MsrpPage() {
     ? getFinanceObservationsForCurrentPrice(financeObservations, selectedPrice)
     : [];
   const showLoadingOverlay = loading && prices.length === 0;
+  useStaggerEntrance(tbodyRef, prices.length > 0 && !loading, {
+    selector: ".data-table-group-row",
+    staggerDelay: 28,
+    duration: 360,
+    translateY: 8,
+  });
+
+  useEffect(() => {
+    if (!selectedPrice) return;
+    const frame = window.requestAnimationFrame(() => {
+      const row = Array.from(tbodyRef.current?.querySelectorAll<HTMLTableRowElement>("tr[data-current-price-id]") ?? [])
+        .find((candidate) => candidate.dataset.currentPriceId === selectedPrice.id);
+      if (!row) return;
+      try {
+        animate(row, {
+          translateX: [0, 4, 0],
+          duration: 260,
+          ease: "outQuad",
+        });
+      } catch {
+        /* decorative only */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedPrice?.id]);
+
+  useEffect(() => {
+    if (!selectedPrice) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (!detailDockRef.current) return;
+      try {
+        animate(detailDockRef.current, {
+          opacity: [0, 1],
+          translateY: [18, 0],
+          duration: 240,
+          ease: "outQuad",
+        });
+      } catch {
+        /* decorative only */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedPrice?.id]);
+
+  useEffect(() => {
+    if (!selectedPrice || detailCollapsed) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (!detailBodyRef.current) return;
+      try {
+        animate(detailBodyRef.current, {
+          opacity: [0, 1],
+          translateY: [8, 0],
+          duration: 220,
+          ease: "outQuad",
+        });
+      } catch {
+        /* decorative only */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedPrice?.id, detailCollapsed]);
+
+  useEffect(() => {
+    if (!selectedFinanceObservation) return;
+    const frame = window.requestAnimationFrame(() => {
+      try {
+        if (financeOverlayRef.current) {
+          animate(financeOverlayRef.current, {
+            opacity: [0, 1],
+            duration: 180,
+            ease: "outQuad",
+          });
+        }
+        if (financeCardInnerRef.current) {
+          animate(financeCardInnerRef.current, {
+            opacity: [0, 1],
+            scale: [0.96, 1],
+            translateY: [14, 0],
+            duration: 260,
+            ease: "outExpo",
+          });
+        }
+      } catch {
+        /* decorative only */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedFinanceObservation?.financeObservationId]);
+
+  useEffect(() => {
+    if (!selectedFinanceObservation) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (!financeCardInnerRef.current) return;
+      try {
+        animate(financeCardInnerRef.current, {
+          scale: [0.985, 1],
+          duration: 180,
+          ease: "outQuad",
+        });
+      } catch {
+        /* decorative only */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [financeCardFlipped, selectedFinanceObservation?.financeObservationId]);
 
   function isGroupExpanded(group: CurrentPriceGroup) {
     return expandedGroups[group.key] ?? (
@@ -602,7 +714,7 @@ export function MsrpPage() {
                 <th></th>
               </tr>
             </thead>
-            <tbody>
+            <tbody ref={tbodyRef}>
               {priceGroups.map((group) => {
                 const expanded = isGroupExpanded(group);
                 const latestUpdatedAt = group.items.reduce<string | null>((currentLatest, price) => {
@@ -653,7 +765,11 @@ export function MsrpPage() {
                       const bestFinanceObservation = priceFinanceObservations[0];
 
                       return (
-                        <tr key={p.id} className={selectedPrice?.id === p.id ? "is-selected" : ""}>
+                        <tr
+                          key={p.id}
+                          data-current-price-id={p.id}
+                          className={selectedPrice?.id === p.id ? "is-selected" : ""}
+                        >
                           <td>{p.country}</td>
                           <td><strong>{p.brand}</strong></td>
                           <td>{p.jatoModel}</td>
@@ -712,7 +828,7 @@ export function MsrpPage() {
 
       {/* ── Detail Drawer ───────────────────────── */}
       {selectedPrice && (
-        <div className={`card crud-card admin-detail-drawer review-detail-dock${detailCollapsed ? " is-collapsed" : ""}`}>
+        <div ref={detailDockRef} className={`card crud-card admin-detail-drawer review-detail-dock${detailCollapsed ? " is-collapsed" : ""}`}>
           <div className="detail-section-head review-detail-dock-head">
             <div>
               <div className="card-title">Price Detail</div>
@@ -746,7 +862,7 @@ export function MsrpPage() {
           </div>
 
           {!detailCollapsed && (
-            <div className="review-detail-dock-body">
+            <div ref={detailBodyRef} className="review-detail-dock-body">
               <div className="admin-detail-grid">
             <div className="admin-detail-item">
               <span className="admin-detail-label">Country</span>
@@ -932,6 +1048,7 @@ export function MsrpPage() {
 
       {selectedFinanceObservation && (
         <div
+          ref={financeOverlayRef}
           className="msrp-finance-overlay"
           role="presentation"
           onClick={() => setSelectedFinanceObservation(null)}
@@ -943,7 +1060,7 @@ export function MsrpPage() {
             aria-label="Monthly finance observation"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="msrp-finance-flip-inner">
+            <div ref={financeCardInnerRef} className="msrp-finance-flip-inner">
               <section className="msrp-finance-flip-face msrp-finance-flip-front">
                 <div className="detail-section-head">
                   <div>

@@ -11,6 +11,7 @@ import {
   type KeyboardEvent,
   type CSSProperties,
 } from "react";
+import { animate } from "animejs";
 
 import { api, apiUrl } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
@@ -2243,8 +2244,6 @@ interface BomFinanceDrawerScope {
   modelName: string;
   powertrain: string;
   version?: string;
-  title: string;
-  scopeLabel: string;
 }
 
 interface BomAdminPanelProps {
@@ -2366,6 +2365,8 @@ function BomAdminPanel({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const materialCodeInputRef = useRef<HTMLInputElement>(null);
   const copyDraftInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const bomGroupRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const expandedBomGroupKeyRef = useRef<string | null>(null);
   const [dragSku, setDragSku] = useState<string | null>(null);
   const [dragOverTier, setDragOverTier] = useState<string | null>(null);
   const dragEnterCount = useRef(0);
@@ -2681,19 +2682,12 @@ function BomAdminPanel({
     powertrain: string,
     version?: string,
   ): BomFinanceDrawerScope => {
-    const scopeLabel = [
-      `${brand} ${modelName}`.trim(),
-      powertrain,
-      version,
-    ].filter(Boolean).join(" · ");
     return {
       countryCode,
       brand,
       modelName,
       powertrain,
       version,
-      scopeLabel,
-      title: `${countryCode} CBU · ${scopeLabel}`,
     };
   };
 
@@ -3511,6 +3505,60 @@ function BomAdminPanel({
     }));
   };
 
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const card = document.querySelector<HTMLElement>(".bom-admin-tools-card");
+    if (!card) return;
+    try {
+      animate(card, {
+        opacity: [0.92, 1],
+        translateY: toolsFlipped ? [-4, 0] : [3, 0],
+        duration: 220,
+        ease: "outQuad",
+      });
+    } catch {
+      /* decorative only */
+    }
+  }, [toolsFlipped]);
+
+  useEffect(() => {
+    if (!financeDrawerScope) return;
+    const frame = window.requestAnimationFrame(() => {
+      const shell = document.querySelector<HTMLElement>(".bom-finance-modal-shell");
+      if (!shell) return;
+      try {
+        animate(shell, {
+          opacity: [0, 1],
+          scale: [0.985, 1],
+          duration: 260,
+          ease: "outQuad",
+        });
+      } catch {
+        /* decorative only */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [financeDrawerScope]);
+
+  useEffect(() => {
+    if (!financeQuickCard) return;
+    const frame = window.requestAnimationFrame(() => {
+      const shell = document.querySelector<HTMLElement>(".bom-finance-quick-modal-shell");
+      if (!shell) return;
+      try {
+        animate(shell, {
+          opacity: [0, 1],
+          translateY: [14, 0],
+          duration: 240,
+          ease: "outQuad",
+        });
+      } catch {
+        /* decorative only */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [financeQuickCard]);
+
   const toggleAddMaterialForm = () => {
     const nextVisible = !showAddMaterial;
     setShowAddMaterial(nextVisible);
@@ -3590,8 +3638,36 @@ function BomAdminPanel({
   };
 
   const toggleGroup = (key: string) => {
-    setExpandedGroups(prev => { const next = new Set(prev); next.has(key) ? next.delete(key) : next.add(key); return next; });
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        expandedBomGroupKeyRef.current = key;
+        next.add(key);
+      }
+      return next;
+    });
   };
+
+  useEffect(() => {
+    const groupKey = expandedBomGroupKeyRef.current;
+    if (!groupKey || !expandedGroups.has(groupKey)) return;
+    expandedBomGroupKeyRef.current = null;
+
+    const body = bomGroupRefs.current[groupKey]?.querySelector<HTMLElement>(".bom-admin-model-group-body");
+    if (!body) return;
+    try {
+      animate(body, {
+        opacity: [0, 1],
+        translateY: [10, 0],
+        duration: 260,
+        ease: "outQuad",
+      });
+    } catch {
+      /* decorative only */
+    }
+  }, [expandedGroups]);
 
   // Shared colour chip renderer used by BOM rows
   const renderColourChip = (s: any, isHist: boolean, editing: boolean) => {
@@ -4206,7 +4282,6 @@ function BomAdminPanel({
                   <div>
                     <span className="bom-finance-eyebrow">BOM ADMIN</span>
                     <h3>{financeDrawerScope.countryCode} CBU</h3>
-                    <p>{financeDrawerScope.scopeLabel}</p>
                   </div>
                   <div className="bom-finance-card-front-actions">
                     <button
@@ -4241,7 +4316,6 @@ function BomAdminPanel({
                   <MaterialFinanceWorkbench
                     countryCode={financeDrawerScope.countryCode}
                     countryCodes={sortedCountries}
-                    scopeLabel={financeDrawerScope.scopeLabel}
                     rows={financeDrawerRows}
                     loading={financeDrawerLoading}
                     error={financeError}
@@ -4423,7 +4497,14 @@ function BomAdminPanel({
         }).map(([mk, mg]) => {
           const expanded = expandedGroups.has(mk);
           return (
-            <div key={mk} style={{ marginBottom: 2 }}>
+            <div
+              key={mk}
+              ref={(node) => {
+                bomGroupRefs.current[mk] = node;
+              }}
+              className="bom-admin-model-group"
+              style={{ marginBottom: 2 }}
+            >
               <div
                 role="button"
                 tabIndex={0}
@@ -4445,7 +4526,9 @@ function BomAdminPanel({
                 </span>
                 <span style={{ fontWeight: 400, color: "#64748b", fontSize: 11, flexShrink: 0 }}>· {mg.pt} · {mg.versions.size} versions</span>
               </div>
-              {expanded && [...mg.versions.entries()].sort(([a],[b]) => a.localeCompare(b)).map(([vk, vSkus]) => {
+              {expanded ? (
+                <div className="bom-admin-model-group-body">
+                {[...mg.versions.entries()].sort(([a],[b]) => a.localeCompare(b)).map(([vk, vSkus]) => {
                 const templates = groupByTemplate(vSkus);
                 const sortedTemplates = [...templates.entries()].sort(([a], [b]) => a.localeCompare(b));
                 return (
@@ -4468,7 +4551,7 @@ function BomAdminPanel({
                           <th title="Effective from" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from }}>From</th>
                           <th title="Effective to" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to }}>To</th>
                           {sortedCountries.map(c => (
-                            <th key={c} title={formatCountryCodeTooltip(c)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
+                            <th key={c} title={formatCountryCodeTooltip(c)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "center", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
                               <button
                                 type="button"
                                 className={`bom-country-cbu-trigger${c === "NL" ? " is-nl" : ""}`}
@@ -5255,6 +5338,8 @@ function BomAdminPanel({
                   </div>
                 );
               })}
+                </div>
+              ) : null}
             </div>
           );
         })}

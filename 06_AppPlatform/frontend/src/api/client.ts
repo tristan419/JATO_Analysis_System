@@ -3385,6 +3385,23 @@ export const api = {
     }));
   },
 
+  getCountryMaterialFinanceOptions: (params: {
+    country: string;
+    brand?: string;
+    model?: string;
+    powertrain?: string;
+    version?: string;
+  }) => {
+    const qs = new URLSearchParams({ country: params.country });
+    if (params.brand) qs.set("brand", params.brand);
+    if (params.model) qs.set("model", params.model);
+    if (params.powertrain) qs.set("powertrain", params.powertrain);
+    if (params.version) qs.set("version", params.version);
+    return request<OrderGeniusOptions>(
+      `/order-genius/country-material-finance/options?${qs.toString()}`,
+    );
+  },
+
   listCountryMaterialFinanceHistory: (params: {
     country: string;
     materialCode: string;

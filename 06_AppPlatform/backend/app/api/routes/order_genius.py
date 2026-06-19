@@ -706,6 +706,27 @@ def list_country_material_finance(
     return {"items": rows}
 
 
+@router.get("/country-material-finance/options")
+def list_country_material_finance_options(
+    country: str = Query(default="NL"),
+    brand: str | None = Query(default=None),
+    model: str | None = Query(default=None),
+    powertrain: str | None = Query(default=None),
+    version: str | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Return CBU filter options from BOM templates, independent of country FOB coverage."""
+    return repo.list_country_material_finance_options(
+        session,
+        country,
+        brand=brand,
+        model_name=model,
+        powertrain=powertrain,
+        version=version,
+    )
+
+
 @router.get("/country-material-finance/history")
 def list_country_material_finance_history(
     country: str = Query(),
