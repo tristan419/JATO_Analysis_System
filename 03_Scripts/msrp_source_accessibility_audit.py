@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import requests
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,12 @@ DEFAULT_BACKLOG_PATH = (
     / "msrp_source_repair_backlog.json"
 )
 DEFAULT_OUT_DIR = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts"
+DEFAULT_SOURCE_DRAFT_ROOT = (
+    REPO_ROOT
+    / "07_ScrapingToolkit"
+    / "source_drafts"
+    / "suv_only_country_model_top30"
+)
 SCHEMA_VERSION = "msrp_source_accessibility_audit_v1"
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -47,6 +54,13 @@ def _load_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError(f"Expected JSON object in {path}")
     return payload
+
+
+def _display_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT.resolve()))
+    except ValueError:
+        return str(path)
 
 
 def _host_from_url(url: str) -> str:
@@ -77,6 +91,80 @@ def _dedupe_sources(items: list[Any]) -> list[dict[str, Any]]:
 def _brand_from_source_code(source_code: str) -> str:
     first_token = source_code.strip().split("_", 1)[0]
     return first_token.upper() if first_token else ""
+
+
+def _csv_filter(values: str | None) -> set[str]:
+    if not values:
+        return set()
+    return {
+        item.strip().lower()
+        for item in values.split(",")
+        if item.strip()
+    }
+
+
+def _iter_source_draft_files(
+    source_draft_root: Path,
+    *,
+    countries: set[str],
+) -> list[Path]:
+    files: list[Path] = []
+    for path in sorted(source_draft_root.rglob("*.yaml")):
+        try:
+            relative = path.relative_to(source_draft_root)
+        except ValueError:
+            continue
+        if path.name.startswith("_") or any(part.startswith("_") for part in relative.parts):
+            continue
+        country = relative.parts[0].lower() if relative.parts else ""
+        if countries and country not in countries:
+            continue
+        files.append(path)
+    return files
+
+
+def source_issues_from_source_drafts(
+    source_draft_root: Path,
+    *,
+    countries: set[str] | None = None,
+    brands: set[str] | None = None,
+    source_codes: set[str] | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Load current source draft URLs as accessibility probe targets."""
+    country_filter = countries or set()
+    brand_filter = {brand.upper() for brand in (brands or set())}
+    code_filter = source_codes or set()
+    sources: list[dict[str, Any]] = []
+    for path in _iter_source_draft_files(source_draft_root, countries=country_filter):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
+        source_code = str(data.get("source_code") or path.stem).strip()
+        country_code = path.relative_to(source_draft_root).parts[0].lower()
+        brand = str(data.get("brand") or _brand_from_source_code(source_code)).strip().upper()
+        if brand_filter and brand not in brand_filter:
+            continue
+        if code_filter and source_code not in code_filter:
+            continue
+        source_url = str(data.get("source_url") or profile.get("url") or "").strip()
+        sources.append({
+            "countryCode": country_code,
+            "sourceCode": source_code,
+            "sourceUrl": source_url,
+            "brand": brand,
+            "failureReason": "source_draft_url_probe",
+            "recommendedStrategy": "probe_current_source_url",
+            "recommendedAction": "verify_current_source_draft_url",
+            "sourceDraftPath": _display_path(path),
+        })
+        if limit and len(sources) >= limit:
+            break
+    return sources
 
 
 def _legacy_sample_url_lookup(group: dict[str, Any]) -> dict[str, tuple[str, str]]:
@@ -430,6 +518,7 @@ def probe_source(
         "dryrunFailureReason": source.get("failureReason"),
         "dryrunRecommendedStrategy": source.get("recommendedStrategy"),
         "dryrunRecommendedAction": source.get("recommendedAction"),
+        "sourceDraftPath": source.get("sourceDraftPath"),
         "method": method,
         "httpStatus": status_code,
         "finalUrl": final_url,
@@ -474,17 +563,16 @@ def summarize_items(items: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def build_accessibility_report(
-    backlog: dict[str, Any],
+def _build_accessibility_report_from_sources(
+    sources: list[dict[str, Any]],
     *,
     session: requests.Session,
     timeout_seconds: float = 12.0,
+    source_mode: str,
+    backlog: dict[str, Any] | None = None,
     include_transient: bool = False,
+    source_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    sources = source_issues_from_backlog(
-        backlog,
-        include_transient=include_transient,
-    )
     items = [
         probe_source(
             source,
@@ -496,30 +584,90 @@ def build_accessibility_report(
     return {
         "schemaVersion": SCHEMA_VERSION,
         "generatedAt": _utc_now_iso(),
-        "backlogRunId": backlog.get("runId"),
+        "sourceMode": source_mode,
+        "backlogRunId": (backlog or {}).get("runId"),
         "includeTransient": include_transient,
+        "sourceContext": source_context or {},
         "summary": {
-            "sourceRepairIssueCount": int(backlog.get("sourceRepairIssueCount") or 0),
-            "transientRegressionCount": int(backlog.get("transientRegressionCount") or 0),
+            "sourceRepairIssueCount": int((backlog or {}).get("sourceRepairIssueCount") or 0),
+            "transientRegressionCount": int((backlog or {}).get("transientRegressionCount") or 0),
+            "sourceDraftSourceCount": len(sources) if source_mode == "source_drafts" else 0,
             **summarize_items(items),
         },
         "items": items,
     }
 
 
+def build_accessibility_report(
+    backlog: dict[str, Any],
+    *,
+    session: requests.Session,
+    timeout_seconds: float = 12.0,
+    include_transient: bool = False,
+) -> dict[str, Any]:
+    sources = source_issues_from_backlog(
+        backlog,
+        include_transient=include_transient,
+    )
+    return _build_accessibility_report_from_sources(
+        sources,
+        session=session,
+        timeout_seconds=timeout_seconds,
+        source_mode="backlog",
+        backlog=backlog,
+        include_transient=include_transient,
+    )
+
+
+def build_source_draft_accessibility_report(
+    *,
+    source_draft_root: Path,
+    countries: set[str] | None,
+    brands: set[str] | None,
+    source_codes: set[str] | None,
+    limit: int | None,
+    session: requests.Session,
+    timeout_seconds: float = 12.0,
+) -> dict[str, Any]:
+    sources = source_issues_from_source_drafts(
+        source_draft_root,
+        countries=countries,
+        brands=brands,
+        source_codes=source_codes,
+        limit=limit,
+    )
+    return _build_accessibility_report_from_sources(
+        sources,
+        session=session,
+        timeout_seconds=timeout_seconds,
+        source_mode="source_drafts",
+        source_context={
+            "sourceDraftRoot": _display_path(source_draft_root),
+            "countries": sorted(countries or []),
+            "brands": sorted(brands or []),
+            "sourceCodes": sorted(source_codes or []),
+            "limit": limit,
+        },
+    )
+
+
 def _write_markdown(report: dict[str, Any], path: Path) -> None:
     summary = report.get("summary") or {}
+    context = report.get("sourceContext") if isinstance(report.get("sourceContext"), dict) else {}
     lines = [
         "# MSRP Source Accessibility Audit",
         "",
         f"Generated: {report.get('generatedAt') or '-'}",
+        f"Source mode: {report.get('sourceMode') or 'backlog'}",
         f"Backlog run: {report.get('backlogRunId') or '-'}",
+        f"Source draft root: {context.get('sourceDraftRoot') or '-'}",
         "",
         "| Metric | Value |",
         "|---|---:|",
         f"| Probed sources | {summary.get('probedSourceCount', 0)} |",
         f"| Source repair issues | {summary.get('sourceRepairIssueCount', 0)} |",
         f"| Transient regressions | {summary.get('transientRegressionCount', 0)} |",
+        f"| Source draft targets | {summary.get('sourceDraftSourceCount', 0)} |",
         f"| Retryable network | {summary.get('retryableNetworkCount', 0)} |",
         f"| Official proxy required | {summary.get('officialProxyRequiredCount', 0)} |",
         f"| TLS handshake failed | {summary.get('tlsHandshakeFailedCount', 0)} |",
@@ -548,21 +696,42 @@ def run(
     *,
     timeout_seconds: float = 12.0,
     include_transient: bool = False,
+    source_draft_root: str | None = None,
+    countries: str | None = None,
+    brands: str | None = None,
+    source_codes: list[str] | None = None,
+    limit: int | None = None,
     session: requests.Session | None = None,
 ) -> dict[str, Any]:
-    backlog = _load_json(Path(backlog_path or DEFAULT_BACKLOG_PATH))
     output_dir = Path(out_dir).resolve() if out_dir else DEFAULT_OUT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
     owns_session = session is None
     current_session = session or requests.Session()
     current_session.headers.update(DEFAULT_HEADERS)
     try:
-        report = build_accessibility_report(
-            backlog,
-            session=current_session,
-            timeout_seconds=timeout_seconds,
-            include_transient=include_transient,
-        )
+        if source_draft_root:
+            code_filter = {
+                code.strip()
+                for code in (source_codes or [])
+                if code.strip()
+            }
+            report = build_source_draft_accessibility_report(
+                source_draft_root=Path(source_draft_root).resolve(),
+                countries=_csv_filter(countries),
+                brands=_csv_filter(brands),
+                source_codes=code_filter,
+                limit=limit,
+                session=current_session,
+                timeout_seconds=timeout_seconds,
+            )
+        else:
+            backlog = _load_json(Path(backlog_path or DEFAULT_BACKLOG_PATH))
+            report = build_accessibility_report(
+                backlog,
+                session=current_session,
+                timeout_seconds=timeout_seconds,
+                include_transient=include_transient,
+            )
     finally:
         if owns_session:
             current_session.close()
@@ -592,6 +761,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out-dir", default=None)
     parser.add_argument("--timeout-seconds", type=float, default=12.0)
     parser.add_argument(
+        "--source-draft-root",
+        default=None,
+        help=(
+            "Probe current source draft YAML URLs instead of backlog samples. "
+            f"Use {DEFAULT_SOURCE_DRAFT_ROOT} for SUV Top30 drafts."
+        ),
+    )
+    parser.add_argument(
+        "--countries",
+        default=None,
+        help="Comma-separated country codes to include when probing source drafts.",
+    )
+    parser.add_argument(
+        "--brands",
+        default=None,
+        help="Comma-separated brand names to include when probing source drafts.",
+    )
+    parser.add_argument(
+        "--source-code",
+        action="append",
+        default=[],
+        help="Specific source_code to probe from source drafts; repeatable.",
+    )
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
         "--include-transient",
         action="store_true",
         help="Also probe transient regressions with last-known-good evidence.",
@@ -606,6 +800,11 @@ def main(argv: list[str] | None = None) -> int:
         out_dir=args.out_dir,
         timeout_seconds=max(1.0, args.timeout_seconds),
         include_transient=args.include_transient,
+        source_draft_root=args.source_draft_root,
+        countries=args.countries,
+        brands=args.brands,
+        source_codes=args.source_code,
+        limit=args.limit,
     )
     return 0
 

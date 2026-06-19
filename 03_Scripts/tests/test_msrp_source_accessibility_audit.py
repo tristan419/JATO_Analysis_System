@@ -187,6 +187,53 @@ def test_source_issues_from_legacy_backlog_samples_recover_source_repairs() -> N
     assert {item["brand"] for item in sources} == {"MG", "TESLA"}
 
 
+def test_source_issues_from_source_drafts_reads_current_yaml_urls(tmp_path: Path) -> None:
+    source_root = tmp_path / "source_drafts"
+    target = source_root / "at" / "01_skoda_elroq_at.yaml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "\n".join([
+            "source_code: skoda_elroq_at_draft_scrapling",
+            "country: Austria",
+            "brand: SKODA",
+            "source_url: https://www.skoda.at/elroq/elroq/overlay-elroq-preisliste",
+            "profile:",
+            "  url: https://www.skoda.at/elroq/elroq/overlay-elroq-preisliste",
+        ]),
+        encoding="utf-8",
+    )
+    ignored = source_root / "fi" / "01_tesla_model_y_fi.yaml"
+    ignored.parent.mkdir(parents=True, exist_ok=True)
+    ignored.write_text(
+        "\n".join([
+            "source_code: tesla_model_y_fi_draft_scrapling",
+            "country: Finland",
+            "brand: TESLA",
+            "source_url: https://www.tesla.com/fi_FI/modely",
+        ]),
+        encoding="utf-8",
+    )
+
+    sources = audit.source_issues_from_source_drafts(
+        source_root,
+        countries={"at"},
+        brands={"skoda"},
+    )
+
+    assert sources == [
+        {
+            "countryCode": "at",
+            "sourceCode": "skoda_elroq_at_draft_scrapling",
+            "sourceUrl": "https://www.skoda.at/elroq/elroq/overlay-elroq-preisliste",
+            "brand": "SKODA",
+            "failureReason": "source_draft_url_probe",
+            "recommendedStrategy": "probe_current_source_url",
+            "recommendedAction": "verify_current_source_draft_url",
+            "sourceDraftPath": str(target),
+        }
+    ]
+
+
 def test_probe_source_classifies_akamai_403_as_official_proxy_required() -> None:
     session = _FakeSession([
         _FakeResponse(
@@ -340,3 +387,37 @@ def test_run_writes_accessibility_report(tmp_path: Path) -> None:
     assert report["summary"]["dnsUnresolvedCount"] == 0
     assert (tmp_path / "out" / "msrp_source_accessibility_audit.json").exists()
     assert (tmp_path / "out" / "msrp_source_accessibility_audit.md").exists()
+
+
+def test_run_can_probe_current_source_drafts(tmp_path: Path) -> None:
+    source_root = tmp_path / "source_drafts"
+    target = source_root / "at" / "01_mg_zs_at.yaml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "\n".join([
+            "source_code: mg_zs_at_draft_scrapling",
+            "country: Austria",
+            "brand: MG",
+            "source_url: https://www.mgmotor.at/modelle/mg-zs",
+            "profile:",
+            "  url: https://www.mgmotor.at/modelle/mg-zs",
+        ]),
+        encoding="utf-8",
+    )
+    session = _FakeSession([
+        _FakeResponse(200, url="https://www.mgmotor.at/modelle/mg-zs"),
+    ])
+
+    report = audit.run(
+        out_dir=str(tmp_path / "out"),
+        source_draft_root=str(source_root),
+        countries="at",
+        brands="mg",
+        session=session,
+    )
+
+    assert report["sourceMode"] == "source_drafts"
+    assert report["summary"]["sourceDraftSourceCount"] == 1
+    assert report["summary"]["probeStatusCounts"] == {"fetchable": 1}
+    assert report["items"][0]["sourceDraftPath"] == str(target)
+    assert (tmp_path / "out" / "msrp_source_accessibility_audit.json").exists()

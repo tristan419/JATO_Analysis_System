@@ -1,12 +1,12 @@
 source_code: skoda_kodiaq_hr_draft_scrapling
 country: 克罗地亚
 brand: SKODA
-source_url: https://www.skoda.hr/modeli/kodiaq
+source_url: https://www.skoda.hr/kodiaq/kodiaq
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.skoda.hr/modeli/kodiaq
+  url: https://www.skoda.hr/kodiaq/kodiaq
   headless: true
   default_currency: EUR
   default_tax_included: true

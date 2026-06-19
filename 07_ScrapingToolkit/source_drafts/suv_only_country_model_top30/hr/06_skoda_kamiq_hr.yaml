@@ -1,12 +1,12 @@
 source_code: skoda_kamiq_hr_draft_scrapling
 country: 克罗地亚
 brand: SKODA
-source_url: https://www.skoda.hr/modeli/kamiq
+source_url: https://www.skoda.hr/kamiq/kamiq
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.skoda.hr/modeli/kamiq
+  url: https://www.skoda.hr/kamiq/kamiq
   headless: true
   default_currency: EUR
   default_tax_included: true

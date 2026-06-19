@@ -1,12 +1,12 @@
 source_code: cupra_terramar_hr_draft_scrapling
 country: 克罗地亚
 brand: CUPRA
-source_url: https://www.cupraofficial.hr/modeli/terramar
+source_url: https://www.cupraofficial.hr/nova-cupra-terramar/verzije-i-oprema
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.cupraofficial.hr/modeli/terramar
+  url: https://www.cupraofficial.hr/nova-cupra-terramar/verzije-i-oprema
   tier: stealth
   headless: true
   network_idle: true
