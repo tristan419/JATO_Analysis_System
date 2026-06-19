@@ -413,8 +413,9 @@ jobs:
             if [ -n "${MIHOMO_SUB_URL:-}" ]; then
               echo "[mihomo-sub] MIHOMO_SUB_URL configured from deploy environment"
             else
-              echo "[mihomo-sub] MIHOMO_SUB_URL not configured; trying local 0dcloud discovery"
+              echo "[mihomo-sub] MIHOMO_SUB_URL not configured; trying local protected file and 0dcloud discovery"
             fi
+            echo "[mihomo-sub] MIHOMO_SUB_URL_FILE=${MIHOMO_SUB_URL_FILE:-/etc/mihomo/subscription_url}"
             echo "[mihomo-sub] MIHOMO_DB_PATH=${MIHOMO_DB_PATH:-auto}"
             MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
           } > "$MIHOMO_REFRESH_LOG" 2>&1 \
@@ -773,8 +774,9 @@ jobs:
             if [ -n "${MIHOMO_SUB_URL:-}" ]; then
               echo "[mihomo-sub] MIHOMO_SUB_URL configured from deploy environment"
             else
-              echo "[mihomo-sub] MIHOMO_SUB_URL not configured; trying local 0dcloud discovery"
+              echo "[mihomo-sub] MIHOMO_SUB_URL not configured; trying local protected file and 0dcloud discovery"
             fi
+            echo "[mihomo-sub] MIHOMO_SUB_URL_FILE=${MIHOMO_SUB_URL_FILE:-/etc/mihomo/subscription_url}"
             echo "[mihomo-sub] MIHOMO_DB_PATH=${MIHOMO_DB_PATH:-auto}"
             MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
           } > "$MIHOMO_REFRESH_LOG" 2>&1 \
