@@ -1,12 +1,12 @@
 source_code: mercedes_gla_fr_draft_scrapling
 country: 法国
 brand: MERCEDES
-source_url: https://www.mercedes-benz.fr/passengercars/models/suv/eqa/overview.html
+source_url: https://www.mercedes-benz.fr/passengercars/models/suv/gla/overview.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.mercedes-benz.fr/passengercars/models/suv/eqa/overview.html
+  url: https://www.mercedes-benz.fr/passengercars/models/suv/gla/overview.html
   tier: stealth
   headless: true
   network_idle: true

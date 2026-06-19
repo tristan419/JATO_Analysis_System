@@ -1,12 +1,12 @@
 source_code: ford_kuga_fr_draft_scrapling
 country: 法国
 brand: FORD
-source_url: https://www.ford.fr/vehicules/kuga
+source_url: https://www.ford.fr/voitures-neuves/kuga
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.ford.fr/vehicules/kuga
+  url: https://www.ford.fr/voitures-neuves/kuga
   tier: stealth
   headless: true
   network_idle: true

@@ -1,12 +1,12 @@
 source_code: ford_puma_fr_draft_scrapling
 country: 法国
 brand: FORD
-source_url: https://www.ford.fr/vehicules/puma
+source_url: https://www.ford.fr/voitures-neuves/puma
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.ford.fr/vehicules/puma
+  url: https://www.ford.fr/voitures-neuves/puma
   tier: stealth
   headless: true
   network_idle: true

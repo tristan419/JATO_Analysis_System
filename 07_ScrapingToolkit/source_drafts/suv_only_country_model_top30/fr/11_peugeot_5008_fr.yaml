@@ -1,12 +1,12 @@
 source_code: peugeot_5008_fr_draft_scrapling
 country: 法国
 brand: PEUGEOT
-source_url: https://www.peugeot.fr/modeles/5008.html
+source_url: https://www.peugeot.fr/nos-vehicules/peugeot-5008/hybride.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.peugeot.fr/modeles/5008.html
+  url: https://www.peugeot.fr/nos-vehicules/peugeot-5008/hybride.html
   tier: stealth
   headless: true
   network_idle: true

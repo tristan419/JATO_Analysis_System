@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, patch
 
 from jato_scraper.base import ExtractorConfig
@@ -270,6 +271,28 @@ def _mock_page_with_descendant_text_and_html(
     return page
 
 
+def _mock_page_with_json_scripts(
+    selector: str,
+    payloads: list[dict],
+) -> MagicMock:
+    page = MagicMock()
+    scripts = []
+    for payload in payloads:
+        script = MagicMock()
+        text_result = MagicMock()
+        text_result.get.return_value = json.dumps(payload)
+        script.css.return_value = text_result
+        scripts.append(script)
+
+    def _css_side_effect(query: str):
+        if query == selector:
+            return scripts
+        return []
+
+    page.css.side_effect = _css_side_effect
+    return page
+
+
 @patch.object(ScraplingExtractor, "_fetch")
 def test_css_extract_honors_include_if_text_contains(mock_fetch) -> None:
     mock_fetch.return_value = _mock_page_with_css(
@@ -306,6 +329,75 @@ def test_css_extract_honors_include_if_text_contains(mock_fetch) -> None:
     assert len(results) == 1
     assert results[0].official_model == "TIGUAN"
     assert results[0].msrp_value == 39_870.0
+
+
+def test_json_extracts_namespaced_schema_product_model_variants() -> None:
+    selector = "script[type='application/ld+json']"
+    page = _mock_page_with_json_scripts(
+        selector,
+        [
+            {
+                "@context": {"schema": "http://schema.org/"},
+                "@type": ["schema:ProductModel", "schema:Car"],
+                "schema:name": "CAPTUR",
+                "@reverse": {
+                    "schema:isVariantOf": [
+                        {
+                            "@type": ["schema:ProductModel", "schema:Car"],
+                            "schema:name": "CAPTUR evolution",
+                            "schema:offers": {
+                                "@type": "schema:Offer",
+                                "schema:priceSpecification": {
+                                    "@type": "schema:UnitPriceSpecification",
+                                    "schema:price": "26800.0",
+                                    "schema:priceCurrency": "EUR",
+                                    "schema:priceType": "SRP",
+                                },
+                                "schema:url": (
+                                    "https://www.renault.fr/vehicules-hybrides/"
+                                    "captur/prix-versions.html"
+                                ),
+                            },
+                        },
+                        {
+                            "@type": ["schema:ProductModel", "schema:Car"],
+                            "schema:name": "CAPTUR techno",
+                            "schema:offers": {
+                                "@type": "schema:Offer",
+                                "schema:price": "29100.0",
+                                "schema:priceCurrency": "EUR",
+                            },
+                        },
+                    ]
+                },
+            }
+        ],
+    )
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="renault_captur_fr",
+            country="FR",
+            brand="RENAULT",
+            source_url="https://example.com",
+        ),
+        ScraplingProfile(
+            url="https://example.com",
+            json_script_selector=selector,
+            default_currency="EUR",
+            fixed_model="CAPTUR",
+            fixed_jato_model="CAPTUR",
+            copy_trim_to_jato_trim=True,
+        ),
+    )
+
+    results = extractor._extract_from_json(page)
+
+    assert [(r.official_trim, r.msrp_value) for r in results] == [
+        ("CAPTUR evolution", 26_800.0),
+        ("CAPTUR techno", 29_100.0),
+    ]
+    assert all(r.official_model == "CAPTUR" for r in results)
+    assert all(r.currency == "EUR" for r in results)
 
 
 @patch.object(ScraplingExtractor, "_fetch")
