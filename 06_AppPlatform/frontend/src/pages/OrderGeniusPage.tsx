@@ -1410,11 +1410,16 @@ export function OrderGeniusPage() {
   const missingFobCountryLabels = missingFobCountryCodes.map((countryCode) =>
     formatOrderGeniusCountryOptionLabel(countryCode, countryNameByCode.get(countryCode)),
   );
-  const openBomAdminForMissingFob = () => {
+  const openBomAdminPanel = () => {
     const targetCountry = missingFobCountryCodes[0] ?? null;
     setBomAdminCopyTargetCountry(targetCountry);
-    setShowBomAdmin(true);
+    setShowDeck(true);
     setControlTab("bom");
+    setShowPtAdmin(false);
+    setShowBomAdmin(true);
+  };
+  const openBomAdminForMissingFob = () => {
+    openBomAdminPanel();
   };
   const removeMissingFobCountries = () => {
     const missing = new Set(missingFobCountryCodes);
@@ -1496,7 +1501,13 @@ export function OrderGeniusPage() {
             role="tab"
             aria-selected={controlTab === tab.id}
             className={`deck-control-tab${controlTab === tab.id ? " is-active" : ""}`}
-            onClick={() => setControlTab(tab.id)}
+            onClick={() => {
+              if (tab.id === "bom") {
+                openBomAdminPanel();
+                return;
+              }
+              setControlTab(tab.id);
+            }}
           >
             <span>{tab.label}</span>
             <small>{tab.meta}</small>
@@ -1665,11 +1676,11 @@ export function OrderGeniusPage() {
         {isAdmin && (
           <button type="button" className="btn btn-sm btn-ghost"
                   onClick={() => {
-                    const nextVisible = !showBomAdmin;
-                    if (nextVisible && missingFobCountryCodes.length > 0) {
-                      setBomAdminCopyTargetCountry(missingFobCountryCodes[0] ?? null);
+                    if (showBomAdmin) {
+                      setShowBomAdmin(false);
+                      return;
                     }
-                    setShowBomAdmin(nextVisible);
+                    openBomAdminPanel();
                   }}
                   style={showBomAdmin ? { background: "#b45309", color: "#fff" } : undefined}>
             {showBomAdmin ? "Hide BOM Admin" : "BOM Admin"}
