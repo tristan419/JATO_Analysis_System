@@ -289,3 +289,122 @@ def test_country_progress_keeps_stable_latest_when_active_run_regresses(tmp_path
     markdown = (reports / "msrp_country_progress.md").read_text(encoding="utf-8")
     assert "| Latest stable run | msrp-dryrun-20260618-085225 |" in markdown
     assert "| Probe regressions | 1 |" in markdown
+
+
+def test_country_progress_sorts_unsorted_runs_index_for_latest_stable_country(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_module()
+    artifacts = tmp_path / "artifacts"
+    reports = tmp_path / "reports"
+    artifacts.mkdir()
+
+    older_run_id = "msrp-dryrun-20260616-010000"
+    newer_run_id = "msrp-dryrun-20260618-010000"
+
+    def make_report(run_id: str, valid: int, generated_at: str) -> dict:
+        return {
+            "schemaVersion": "msrp_dryrun_report_v3",
+            "runId": run_id,
+            "batch": "es",
+            "expectedCountries": ["es"],
+            "observedCountries": ["es"],
+            "missingCountries": [],
+            "duplicateCountries": [],
+            "summary": {
+                "total": 1,
+                "pass": 1,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 100.0,
+                "status": "success",
+                "gateThreshold": 70,
+                "gateStatus": "allowed",
+            },
+            "countriesDetail": [
+                {
+                    "countryCode": "es",
+                    "total": 1,
+                    "pass": 1,
+                    "empty": 0,
+                    "fail": 0,
+                    "errors": 0,
+                    "passPct": 100.0,
+                    "status": "success",
+                    "sources": [
+                        {
+                            "sourceCode": "seat_arona_es_draft_scrapling",
+                            "status": "pass",
+                            "valid": valid,
+                        },
+                    ],
+                },
+            ],
+            "generatedAt": generated_at,
+        }
+
+    older_report = make_report(older_run_id, 1, "2026-06-16T01:00:00Z")
+    newer_report = make_report(newer_run_id, 7, "2026-06-18T01:00:00Z")
+    (artifacts / "dryrun_report.json").write_text(
+        json.dumps(newer_report),
+        encoding="utf-8",
+    )
+    (artifacts / f"dryrun_report_{older_run_id}.json").write_text(
+        json.dumps(older_report),
+        encoding="utf-8",
+    )
+    (artifacts / f"dryrun_report_{newer_run_id}.json").write_text(
+        json.dumps(newer_report),
+        encoding="utf-8",
+    )
+    index_path = artifacts / "dryrun_runs_index.json"
+    index_path.write_text(
+        json.dumps({
+            "schemaVersion": "msrp_dryrun_runs_index_v1",
+            "latestRunId": newer_run_id,
+            "runs": [
+                {
+                    "runId": older_run_id,
+                    "batch": "es",
+                    "finishedAt": "2026-06-16T01:00:00Z",
+                    "status": "success",
+                    "gateStatus": "allowed",
+                    "gateThreshold": 70,
+                    "artifactPath": str(artifacts / f"dryrun_report_{older_run_id}.json"),
+                },
+                {
+                    "runId": newer_run_id,
+                    "batch": "es",
+                    "finishedAt": "2026-06-18T01:00:00Z",
+                    "status": "success",
+                    "gateStatus": "allowed",
+                    "gateThreshold": 70,
+                    "artifactPath": str(artifacts / f"dryrun_report_{newer_run_id}.json"),
+                },
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(module, "STATUS_FILE_PATH", tmp_path / "missing_status.json")
+    monkeypatch.setattr(module, "FALLBACK_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(module, "RUNS_INDEX_PATH", index_path)
+    monkeypatch.setattr(
+        module,
+        "SOURCE_REPAIR_BACKLOG_PATH",
+        tmp_path / "missing_backlog.json",
+    )
+    monkeypatch.setattr(
+        module,
+        "SOURCE_REFERENCE_EVIDENCE_PATH",
+        tmp_path / "missing_reference.json",
+    )
+
+    result = module.run(str(reports))
+
+    assert result["allCountriesLatest"][0]["countryCode"] == "es"
+    assert result["allCountriesLatest"][0]["countryLabel"] == "Spain"
+    assert result["allCountriesLatest"][0]["runId"] == newer_run_id
+    assert result["stableCoverage"]["latestRunId"] == newer_run_id

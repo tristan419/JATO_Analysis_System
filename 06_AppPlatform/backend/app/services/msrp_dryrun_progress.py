@@ -24,10 +24,27 @@ DRYRUN_RUN_ID_PATTERN = re.compile(r"\b(msrp-dryrun-\d{8}-\d{6})\b")
 COUNTRY_CODE_PATTERN = re.compile(r"^[a-z]{2}$")
 
 _COUNTRY_NAMES: dict[str, str] = {
-    "se": "Sweden", "fi": "Finland", "no": "Norway", "dk": "Denmark",
-    "hu": "Hungary", "hr": "Croatia", "at": "Austria", "cz": "Czech Republic",
-    "de": "Germany", "fr": "France", "it": "Italy", "pl": "Poland",
+    "at": "Austria",
+    "be": "Belgium",
     "ch": "Switzerland",
+    "cz": "Czech Republic",
+    "de": "Germany",
+    "dk": "Denmark",
+    "es": "Spain",
+    "fi": "Finland",
+    "fr": "France",
+    "gr": "Greece",
+    "hr": "Croatia",
+    "hu": "Hungary",
+    "it": "Italy",
+    "nl": "Netherlands",
+    "no": "Norway",
+    "pl": "Poland",
+    "pt": "Portugal",
+    "ro": "Romania",
+    "se": "Sweden",
+    "si": "Slovenia",
+    "sk": "Slovakia",
 }
 
 
@@ -160,6 +177,17 @@ def _load_latest_indexed_v3_report(index_data: dict[str, Any] | None) -> dict[st
         if data and data.get("schemaVersion") == "msrp_dryrun_report_v3":
             return data
     return None
+
+
+def _run_recency_key(run: dict[str, Any]) -> tuple[str, str]:
+    run_id = str(run.get("runId") or "")
+    timestamp = str(
+        run.get("finishedAt")
+        or run.get("startedAt")
+        or run.get("updatedAt")
+        or ""
+    )
+    return timestamp, run_id
 
 
 def _normalize_source(source: dict[str, Any], index: int, total: int) -> dict[str, Any]:
@@ -425,7 +453,11 @@ def _all_country_latest_from_runs_index(index_data: dict[str, Any] | None) -> li
     latest_run_id = str(index_data.get("latestRunId") or "")
     stable_by_code: dict[str, dict[str, Any]] = {}
     fallback_by_code: dict[str, dict[str, Any]] = {}
-    for run in index_data.get("runs") or []:
+    for run in sorted(
+        index_data.get("runs") or [],
+        key=_run_recency_key,
+        reverse=True,
+    ):
         run_id = str(run.get("runId") or "")
         artifact_path = _artifact_path_from_ref(run.get("artifactPath"))
         report = _load_json(artifact_path) if artifact_path else None
@@ -632,7 +664,11 @@ def _history_from_runs_index() -> list[dict[str, Any]]:
     if not index_data:
         return []
     history: list[dict[str, Any]] = []
-    for run in index_data.get("runs") or []:
+    for run in sorted(
+        index_data.get("runs") or [],
+        key=_run_recency_key,
+        reverse=True,
+    ):
         report = None
         artifact_path = _artifact_path_from_ref(run.get("artifactPath"))
         if artifact_path:

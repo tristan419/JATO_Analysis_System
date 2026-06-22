@@ -313,6 +313,110 @@ def test_dashboard_exposes_latest_progress_for_all_historical_countries(tmp_path
     assert dashboard["stableCoverage"]["sourcePassRate"] == 75.0
 
 
+def test_dashboard_sorts_unsorted_runs_index_before_selecting_latest_stable_country(
+    tmp_path,
+    monkeypatch,
+):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    artifacts.mkdir()
+    logs.mkdir()
+
+    older_run_id = "msrp-dryrun-20260616-010000"
+    newer_run_id = "msrp-dryrun-20260618-010000"
+
+    def make_report(run_id: str, valid: int, generated_at: str) -> dict:
+        return {
+            "schemaVersion": "msrp_dryrun_report_v3",
+            "runId": run_id,
+            "batch": "es",
+            "expectedCountries": ["es"],
+            "observedCountries": ["es"],
+            "missingCountries": [],
+            "duplicateCountries": [],
+            "summary": {
+                "total": 1,
+                "pass": 1,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 100.0,
+                "status": "success",
+                "gateThreshold": 70,
+                "gateStatus": "allowed",
+            },
+            "countriesDetail": [
+                {
+                    "countryCode": "es",
+                    "total": 1,
+                    "pass": 1,
+                    "empty": 0,
+                    "fail": 0,
+                    "errors": 0,
+                    "passPct": 100.0,
+                    "status": "success",
+                    "sources": [
+                        {
+                            "sourceCode": "seat_arona_es_draft_scrapling",
+                            "status": "pass",
+                            "valid": valid,
+                        },
+                    ],
+                },
+            ],
+            "generatedAt": generated_at,
+        }
+
+    older_report = make_report(older_run_id, 1, "2026-06-16T01:00:00Z")
+    newer_report = make_report(newer_run_id, 7, "2026-06-18T01:00:00Z")
+    index = {
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "latestRunId": newer_run_id,
+        "runs": [
+            {
+                "runId": older_run_id,
+                "batch": "es",
+                "finishedAt": "2026-06-16T01:00:00Z",
+                "status": "success",
+                "gateStatus": "allowed",
+                "gateThreshold": 70,
+                "artifactPath": str(artifacts / f"dryrun_report_{older_run_id}.json"),
+            },
+            {
+                "runId": newer_run_id,
+                "batch": "es",
+                "finishedAt": "2026-06-18T01:00:00Z",
+                "status": "success",
+                "gateStatus": "allowed",
+                "gateThreshold": 70,
+                "artifactPath": str(artifacts / f"dryrun_report_{newer_run_id}.json"),
+            },
+        ],
+    }
+    (artifacts / "dryrun_report.json").write_text(json.dumps(newer_report))
+    (artifacts / f"dryrun_report_{older_run_id}.json").write_text(
+        json.dumps(older_report),
+    )
+    (artifacts / f"dryrun_report_{newer_run_id}.json").write_text(
+        json.dumps(newer_report),
+    )
+    (artifacts / "dryrun_runs_index.json").write_text(json.dumps(index))
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+
+    dashboard = progress.get_dryrun_dashboard()
+
+    assert dashboard["allCountries"][0]["countryCode"] == "es"
+    assert dashboard["allCountries"][0]["countryLabel"] == "Spain"
+    assert dashboard["allCountries"][0]["runId"] == newer_run_id
+    assert dashboard["allCountries"][0]["sources"][0]["valid"] == 7
+    assert dashboard["history"][0]["runId"] == newer_run_id
+    assert dashboard["stableCoverage"]["latestRunId"] == newer_run_id
+
+
 def test_dashboard_keeps_latest_stable_country_when_new_probe_regresses(tmp_path, monkeypatch):
     artifacts = tmp_path / "artifacts"
     logs = tmp_path / "logs"

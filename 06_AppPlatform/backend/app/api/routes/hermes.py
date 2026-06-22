@@ -40,6 +40,29 @@ BUDGET_DAILY_CNY = 20
 BUDGET_MONTHLY_CNY = 500
 ALERT_EMAIL = "tristanlyk@gmail.com"
 SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
+MSRP_COUNTRY_LABELS = {
+    "at": "Austria",
+    "be": "Belgium",
+    "ch": "Switzerland",
+    "cz": "Czech Republic",
+    "de": "Germany",
+    "dk": "Denmark",
+    "es": "Spain",
+    "fi": "Finland",
+    "fr": "France",
+    "gr": "Greece",
+    "hr": "Croatia",
+    "hu": "Hungary",
+    "it": "Italy",
+    "nl": "Netherlands",
+    "no": "Norway",
+    "pl": "Poland",
+    "pt": "Portugal",
+    "ro": "Romania",
+    "se": "Sweden",
+    "si": "Slovenia",
+    "sk": "Slovakia",
+}
 
 def _read_json(path: Path) -> dict[str, Any]:
     if not path.is_file():
@@ -54,6 +77,36 @@ def _read_json_if_exists(path: Path) -> dict[str, Any] | None:
         return json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def _msrp_country_label(country_code: str) -> str:
+    code = str(country_code or "").strip().lower()
+    return MSRP_COUNTRY_LABELS.get(code, code.upper())
+
+
+def _msrp_run_recency_key(run: dict[str, Any]) -> tuple[str, str]:
+    run_id = str(run.get("runId") or "")
+    timestamp = str(
+        run.get("finishedAt")
+        or run.get("startedAt")
+        or run.get("updatedAt")
+        or ""
+    )
+    return timestamp, run_id
+
+
+def _sort_msrp_runs_index(index_data: dict[str, Any]) -> dict[str, Any]:
+    runs = index_data.get("runs")
+    if not isinstance(runs, list):
+        return index_data
+    return {
+        **index_data,
+        "runs": sorted(
+            [run for run in runs if isinstance(run, dict)],
+            key=_msrp_run_recency_key,
+            reverse=True,
+        ),
+    }
 
 
 def _msrp_artifacts_dir() -> Path:
@@ -571,7 +624,7 @@ def _msrp_progress_country_entry(country: dict[str, Any]) -> dict[str, Any]:
     )
     entry = {
         "countryCode": code,
-        "countryLabel": country.get("countryLabel"),
+        "countryLabel": country.get("countryLabel") or _msrp_country_label(code),
         "total": int(country.get("total") or 0),
         "pass": int(country.get("pass") or 0),
         "empty": int(country.get("empty") or 0),
@@ -1086,7 +1139,7 @@ def hermes_msrp_dryrun_history(_=Depends(require_min_role("viewer"))) -> dict:
             "latestRunId": None,
             "runs": [],
         }
-    return _read_json(path)
+    return _sort_msrp_runs_index(_read_json(path))
 
 
 @router.get("/code-audit")

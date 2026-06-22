@@ -31,12 +31,26 @@ SOURCE_ACCESSIBILITY_AUDIT_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "ar
 SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
 COUNTRY_LABELS = {
     "at": "Austria",
+    "be": "Belgium",
+    "ch": "Switzerland",
+    "cz": "Czech Republic",
+    "de": "Germany",
     "dk": "Denmark",
+    "es": "Spain",
     "fi": "Finland",
     "fr": "France",
+    "gr": "Greece",
+    "hr": "Croatia",
     "hu": "Hungary",
+    "it": "Italy",
+    "nl": "Netherlands",
     "no": "Norway",
+    "pl": "Poland",
+    "pt": "Portugal",
+    "ro": "Romania",
     "se": "Sweden",
+    "si": "Slovenia",
+    "sk": "Slovakia",
 }
 
 
@@ -337,6 +351,17 @@ def _load_v3_report(path: Path | None) -> dict[str, Any] | None:
     return data if data.get("schemaVersion") == "msrp_dryrun_report_v3" else None
 
 
+def _run_recency_key(run: dict[str, Any]) -> tuple[str, str]:
+    run_id = str(run.get("runId") or "")
+    timestamp = str(
+        run.get("finishedAt")
+        or run.get("startedAt")
+        or run.get("updatedAt")
+        or ""
+    )
+    return timestamp, run_id
+
+
 def _country_label(country_code: str) -> str:
     code = str(country_code or "").lower()
     return COUNTRY_LABELS.get(code, code.upper())
@@ -486,7 +511,11 @@ def _all_country_latest_from_runs_index() -> list[dict[str, Any]]:
     latest_run_id = str(index_data.get("latestRunId") or "")
     stable_by_code: dict[str, dict[str, Any]] = {}
     fallback_by_code: dict[str, dict[str, Any]] = {}
-    for run_meta in index_data.get("runs") or []:
+    for run_meta in sorted(
+        index_data.get("runs") or [],
+        key=_run_recency_key,
+        reverse=True,
+    ):
         artifact_path = _artifact_path_from_ref(run_meta.get("artifactPath"))
         report = _load_v3_report(artifact_path)
         if not report:
@@ -705,7 +734,11 @@ def _historical_good_sources(current_run_id: str | None) -> dict[tuple[str, str]
         return {}
     current = str(current_run_id or "")
     good_sources: dict[tuple[str, str], dict[str, Any]] = {}
-    for run in index_data.get("runs") or []:
+    for run in sorted(
+        index_data.get("runs") or [],
+        key=_run_recency_key,
+        reverse=True,
+    ):
         run_id = str(run.get("runId") or "")
         if not run_id or run_id == current:
             continue
