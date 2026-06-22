@@ -77,8 +77,10 @@ profile:
     model: td:first-child
     trim: td:first-child
     price: td:last-child
-  tier: stealth
-  network_idle: true
+  tier: http
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
   impersonate: chrome
 schedule:
   frequency: manual_only
@@ -88,7 +90,9 @@ schedule:
 notes: Keywords filled from official manufacturer website research (AT market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
   applied from brand probe] [Switched to playwright_card_flow with skoda_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+  [Reverted to scrapling — playwright preset needs per-brand tuning] [Static
+  Skoda AT price-list table validated with HTTP fetch; browser rendering is not
+  required]
 bootstrap_meta:
   country_model_rank: 3
   suggested_scope_kind: single_model
