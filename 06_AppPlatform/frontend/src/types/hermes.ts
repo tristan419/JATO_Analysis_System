@@ -614,3 +614,132 @@ export interface HermesWorkflowCockpitResponse {
   sessions: HermesWorkflowSession[];
   reviewItems: HermesWorkflowReviewItem[];
 }
+
+// === Hermes Feature PMO Cockpit ===
+export type HermesFeatureGoalState =
+  | "draft"
+  | "prd_ready"
+  | "ready_for_dev"
+  | "in_progress"
+  | "implemented"
+  | "tested"
+  | "ready_for_pr"
+  | "in_review"
+  | "merged"
+  | "deployed"
+  | "verified"
+  | "done"
+  | "blocked"
+  | "archived"
+  | "reopened"
+  | string;
+
+export interface HermesFeatureGoalChecklistItem {
+  key: string;
+  label: string;
+  checked: boolean;
+  declaredChecked: boolean;
+  evidenceSources: string[];
+}
+
+export interface HermesReuseCandidate {
+  category: string;
+  path: string;
+  reason: string;
+  score: number;
+  matchedSignals: string[];
+}
+
+export interface HermesFeatureGoalSummary {
+  events: number;
+  docs: number;
+  tests: number;
+  evidence: number;
+  openGaps: number;
+  commits: number;
+}
+
+export type HermesFeatureGoalWorktreeState = "unlinked" | "missing" | "clean" | "dirty" | "error" | string;
+export type HermesFeatureGoalWorktreeScopeState =
+  | "not_applicable"
+  | "clean"
+  | "in_scope"
+  | "mixed_scope"
+  | "out_of_scope"
+  | "unknown"
+  | "generated_only"
+  | string;
+
+export interface HermesFeatureGoalWorktreeStatus {
+  path: string;
+  state: HermesFeatureGoalWorktreeState;
+  isDirty: boolean;
+  stagedCount: number;
+  modifiedCount: number;
+  untrackedCount: number;
+  deletedCount: number;
+  conflictedCount: number;
+  files: string[];
+  scopeWorkstream: string;
+  scopeState: HermesFeatureGoalWorktreeScopeState;
+  inScopeCount: number;
+  outOfScopeCount: number;
+  unknownScopeCount: number;
+  generatedCount: number;
+  inScopeFiles: string[];
+  outOfScopeFiles: string[];
+  unknownScopeFiles: string[];
+  generatedFiles: string[];
+}
+
+export interface HermesFeatureGoal {
+  featureId: string;
+  title: string;
+  workstream: string;
+  owner: string;
+  branch: string;
+  state: HermesFeatureGoalState;
+  blocked: boolean;
+  risk: string;
+  nextAction: string;
+  missingEvidence: string[];
+  sourceDocs: string[];
+  linkedPrs: string[];
+  linkedWorktree: string;
+  worktreeStatus: HermesFeatureGoalWorktreeStatus;
+  lastEventAt: string;
+  lastMeaningfulEvent: string;
+  checklist: HermesFeatureGoalChecklistItem[];
+  declaredChecklist: Array<{ key: string; label: string; checked: boolean }>;
+  reuseCandidates: HermesReuseCandidate[];
+  evidenceSummary: HermesFeatureGoalSummary;
+  topFiles: string[];
+}
+
+export interface HermesFeatureGoalsResponse {
+  summary: {
+    total: number;
+    blocked: number;
+    readyForPr: number;
+    inProgress: number;
+    verified: number;
+    workstreamCount: number;
+  };
+  features: HermesFeatureGoal[];
+}
+
+export interface HermesFeatureGoalLane {
+  workstream: string;
+  features: HermesFeatureGoal[];
+}
+
+export interface HermesFeatureGoalSwimlanesResponse extends HermesFeatureGoalsResponse {
+  lanes: HermesFeatureGoalLane[];
+}
+
+export interface HermesReuseCandidatesResponse {
+  featureId: string;
+  title: string;
+  workstream: string;
+  candidates: HermesReuseCandidate[];
+}

@@ -259,7 +259,7 @@ export function HermesHistoryMap() {
           <span className="badge">{LEVELS[levelIndex]?.label ?? "Feature"}</span>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) 170px 220px", gap: 10, alignItems: "end", padding: "0 12px 12px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,180px),1fr))", gap: 10, alignItems: "end", padding: "0 12px 12px" }}>
           <div>
             <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>
               Cluster detail

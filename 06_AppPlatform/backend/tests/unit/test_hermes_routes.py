@@ -321,6 +321,39 @@ class TestSentinelAndDeploy:
         assert resp.status_code == 200
         assert resp.json()["summary"]["sessionCount"] == 1
 
+    def test_feature_goal_swimlanes_endpoint(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.hermes_feature_goal_service.get_feature_goal_swimlanes",
+            lambda: {
+                "summary": {"total": 1, "blocked": 0, "readyForPr": 1, "inProgress": 0, "verified": 0, "workstreamCount": 1},
+                "features": [{"featureId": "feature.hermes_feature_pmo_cockpit", "state": "ready_for_pr"}],
+                "lanes": [{"workstream": "Hermes", "features": [{"featureId": "feature.hermes_feature_pmo_cockpit"}]}],
+            },
+        )
+
+        resp = client.get("/hermes/goals/swimlanes")
+
+        assert resp.status_code == 200
+        assert resp.json()["summary"]["readyForPr"] == 1
+        assert resp.json()["lanes"][0]["workstream"] == "Hermes"
+
+    def test_reuse_candidates_endpoint(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.hermes_feature_goal_service.get_reuse_candidates_for_feature",
+            lambda feature_id: {
+                "featureId": feature_id,
+                "title": "Hermes Feature PMO Cockpit",
+                "workstream": "Hermes",
+                "candidates": [{"path": "06_AppPlatform/backend/app/services/hermes_history_service.py", "score": 8}],
+            },
+        )
+
+        resp = client.get("/hermes/reuse/candidates?featureId=feature.hermes_feature_pmo_cockpit")
+
+        assert resp.status_code == 200
+        assert resp.json()["featureId"] == "feature.hermes_feature_pmo_cockpit"
+        assert resp.json()["candidates"][0]["score"] == 8
+
     def test_cost_heatmap_includes_astrbot_usage(self, client, tmp_path):
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         _write_jsonl(

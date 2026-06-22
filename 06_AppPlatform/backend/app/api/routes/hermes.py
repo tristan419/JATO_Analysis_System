@@ -1563,6 +1563,41 @@ def hermes_workflow_cockpit(_=Depends(require_min_role("viewer"))) -> dict:
     return get_workflow_cockpit()
 
 
+@router.get("/goals/features")
+def hermes_goal_features(_=Depends(require_min_role("viewer"))) -> dict:
+    """Return read-only Feature PMO goals from Markdown, registries, and evidence."""
+    from app.services.hermes_feature_goal_service import list_feature_goals
+
+    return list_feature_goals()
+
+
+@router.get("/goals/features/{feature_id}")
+def hermes_goal_feature(feature_id: str, _=Depends(require_min_role("viewer"))) -> dict:
+    """Return one computed Feature PMO goal."""
+    from app.services.hermes_feature_goal_service import get_feature_goal
+
+    return get_feature_goal(feature_id)
+
+
+@router.get("/goals/swimlanes")
+def hermes_goal_swimlanes(_=Depends(require_min_role("viewer"))) -> dict:
+    """Return Feature PMO goals grouped by workstream."""
+    from app.services.hermes_feature_goal_service import get_feature_goal_swimlanes
+
+    return get_feature_goal_swimlanes()
+
+
+@router.get("/reuse/candidates")
+def hermes_reuse_candidates(
+    feature_id: str = Query(..., alias="featureId"),
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    """Return reuse candidates for a tracked feature."""
+    from app.services.hermes_feature_goal_service import get_reuse_candidates_for_feature
+
+    return get_reuse_candidates_for_feature(feature_id)
+
+
 @router.get("/dev/features")
 def hermes_dev_features(
     status: str | None = Query(None),
