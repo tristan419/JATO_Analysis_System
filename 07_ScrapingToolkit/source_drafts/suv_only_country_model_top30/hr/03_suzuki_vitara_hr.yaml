@@ -21,9 +21,9 @@ profile:
     model: modelCode
     trim: variantCode
     price: price2
-    currency: currency
-    tax_included: taxIncluded
-    price_label: priceLabel
+    currency: ''
+    tax_included: ''
+    price_label: ''
   default_currency: EUR
   default_tax_included: true
   default_price_label: Preporučena maloprodajna cijena s PDV-om
@@ -39,16 +39,14 @@ profile:
     model_code: V
     dealer_code: HUA251103
     price_field: price2
-    color_filter: 26U
-  filters:
-  - path: colorCode
-    equals:
-    - 26U
+    grouping: min_price_by_variant
+  min_price_group:
+    key: variantCode
+    price: price2
   pricing_context:
     fields:
       external_variant_code: variantCode
       external_color_code: colorCode
-      source_price_code: code
     constants:
       source_api: suzuki_business_cloud_selling_prices
       source_market_code: CRA
@@ -59,9 +57,8 @@ schedule:
   preferred_weekday: monday
 notes: Official Suzuki Croatia Business Cloud sellingPrices API used by the public
   model page. price2 matches the site's "Preporučena maloprodajna cijena" setting;
-  colorCode 26U keeps one base paint observation per mainstream variant and avoids
-  color surcharge duplicates. Special Black Edition colors may need a follow-up
-  min-price grouping pass if full special-edition trim coverage is required.
+  min-price grouping keeps one base paint observation per variant and avoids color
+  surcharge duplicates while preserving special-edition variants.
 bootstrap_meta:
   country_model_rank: 3
   suggested_scope_kind: single_model

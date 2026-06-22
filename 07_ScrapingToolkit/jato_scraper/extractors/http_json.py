@@ -70,6 +70,12 @@ class ValueFilter:
 
 
 @dataclass(frozen=True)
+class MinPriceGroup:
+    key: FieldMappingPath | tuple[FieldMappingPath, ...]
+    price: str
+
+
+@dataclass(frozen=True)
 class HttpJsonProfile:
     url: str
     method: str = "GET"
@@ -89,6 +95,7 @@ class HttpJsonProfile:
     match_status: str = "review_required"
     match_reason: dict[str, Any] | None = None
     filters: tuple[ValueFilter, ...] = ()
+    min_price_group: MinPriceGroup | None = None
     pricing_context: PricingContextMapping | None = None
 
 
@@ -133,6 +140,7 @@ class HttpJsonExtractor(BaseExtractor):
             return []
         vehicles = self._expand_items(vehicles)
         vehicles = self._apply_filters(vehicles, root=raw_json)
+        vehicles = self._apply_min_price_grouping(vehicles, root=raw_json)
         results = self._map(vehicles, root=raw_json)
         self.record_strategy_audit(
             url=audit_url,
@@ -357,6 +365,38 @@ class HttpJsonExtractor(BaseExtractor):
             if include:
                 filtered.append(vehicle)
         return filtered
+
+    def _apply_min_price_grouping(
+        self,
+        vehicles: list[dict],
+        *,
+        root: Any | None = None,
+    ) -> list[dict]:
+        group = self.profile.min_price_group
+        if group is None:
+            return vehicles
+
+        selected: dict[str, tuple[float, dict]] = {}
+        passthrough: list[dict] = []
+        for vehicle in vehicles:
+            group_key = self._resolve_field_value(vehicle, group.key, root=root)
+            if group_key in (None, ""):
+                passthrough.append(vehicle)
+                continue
+            try:
+                price = self._coerce_price_value(
+                    self._resolve_field_value(vehicle, group.price, root=root)
+                )
+            except (TypeError, ValueError):
+                passthrough.append(vehicle)
+                continue
+
+            key_text = str(group_key).strip()
+            current = selected.get(key_text)
+            if current is None or price < current[0]:
+                selected[key_text] = (price, vehicle)
+
+        return [item for _, item in selected.values()] + passthrough
 
     def _coerce_pricing_context_value(
         self,

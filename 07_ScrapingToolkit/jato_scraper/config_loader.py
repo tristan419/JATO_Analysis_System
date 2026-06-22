@@ -29,6 +29,7 @@ from jato_scraper.extractors.http_json import (
     HttpJsonExtractor,
     HttpJsonProfile,
     LookupMapping,
+    MinPriceGroup,
     PricingContextMapping as HttpPricingContextMapping,
     ValueFilter,
 )
@@ -205,6 +206,24 @@ def _build_http_json_profile(profile: dict[str, Any]) -> HttpJsonProfile:
                 equals = (str(equals_raw).strip(),)
             filters.append(ValueFilter(path=path, equals=equals))
 
+    min_price_group = None
+    min_price_group_raw = profile.get(
+        "min_price_group",
+        profile.get("group_min_price"),
+    )
+    if min_price_group_raw:
+        if not isinstance(min_price_group_raw, dict):
+            raise ValueError("http_json min_price_group must be a mapping")
+        key_raw = min_price_group_raw.get("key")
+        key = _path_field(key_raw, "", allow_list=True)
+        if not key:
+            raise ValueError("http_json min_price_group requires a key")
+        price = (
+            str(min_price_group_raw.get("price", fm.price)).strip()
+            or fm.price
+        )
+        min_price_group = MinPriceGroup(key=key, price=price)
+
     return HttpJsonProfile(
         url=profile["url"],
         method=profile.get("method", "GET"),
@@ -231,6 +250,7 @@ def _build_http_json_profile(profile: dict[str, Any]) -> HttpJsonProfile:
         match_status=profile.get("match_status", "review_required"),
         match_reason=profile.get("match_reason"),
         filters=tuple(filters),
+        min_price_group=min_price_group,
         pricing_context=_build_pricing_context_mapping(
             profile,
             mapping_cls=HttpPricingContextMapping,

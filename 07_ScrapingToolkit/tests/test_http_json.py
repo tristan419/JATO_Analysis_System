@@ -7,6 +7,7 @@ from jato_scraper.extractors.http_json import (
     HttpJsonExtractor,
     HttpJsonProfile,
     LookupMapping,
+    MinPriceGroup,
     PricingContextMapping,
     ValueFilter,
 )
@@ -273,6 +274,65 @@ def test_http_json_filters_entries_and_maps_dict_lookup(monkeypatch):
     assert results[0].availability_text == "31EE"
 
 
+def test_http_json_groups_entries_by_min_price_before_mapping(monkeypatch):
+    extractor = HttpJsonExtractor(
+        ExtractorConfig(
+            source_code="suzuki_scross_hr_test",
+            country="克罗地亚",
+            brand="SUZUKI",
+            source_url="https://auto.suzuki.hr/cars/scross-hybrid",
+        ),
+        HttpJsonProfile(
+            url="https://example.invalid/sellingPrices",
+            fixed_model="S-CROSS",
+            default_currency="EUR",
+            field_mapping=FieldMapping(
+                vehicles_path="data.0.sellingPriceDetails",
+                trim="variantCode",
+                price="price2",
+            ),
+            min_price_group=MinPriceGroup(key="variantCode", price="price2"),
+            pricing_context=PricingContextMapping(
+                fields={"external_color_code": "colorCode"}
+            ),
+        ),
+    )
+
+    sample = {
+        "data": [
+            {
+                "sellingPriceDetails": [
+                    {
+                        "variantCode": "R573",
+                        "colorCode": "ZQ4",
+                        "price2": 23790.49,
+                    },
+                    {
+                        "variantCode": "R573",
+                        "colorCode": "26U",
+                        "price2": 23123.23,
+                    },
+                    {
+                        "variantCode": "R5Q0",
+                        "colorCode": "ZQ4",
+                        "price2": 27146.83,
+                    },
+                ]
+            }
+        ]
+    }
+
+    monkeypatch.setattr(extractor, "_fetch", lambda: sample)
+    results = extractor.extract()
+
+    assert len(results) == 2
+    assert results[0].official_trim == "R573"
+    assert results[0].msrp_value == 23123.23
+    assert results[0].raw_payload["pricingContext"]["external_color_code"] == "26U"
+    assert results[1].official_trim == "R5Q0"
+    assert results[1].msrp_value == 27146.83
+
+
 def test_http_json_renders_today_template_in_request_values():
     class DummyResponse:
         def raise_for_status(self):
@@ -454,3 +514,24 @@ def test_config_loader_builds_http_json_pricing_context_profile():
         "price_semantics": "lease_monthly",
         "finance_type": "private_lease",
     }
+
+
+def test_config_loader_builds_http_json_min_price_group_profile():
+    profile = _build_http_json_profile(
+        {
+            "url": "https://example.invalid/sellingPrices",
+            "field_mapping": {
+                "vehicles_path": "data.0.sellingPriceDetails",
+                "trim": "variantCode",
+                "price": "price2",
+            },
+            "min_price_group": {
+                "key": "variantCode",
+                "price": "price2",
+            },
+        }
+    )
+
+    assert profile.min_price_group is not None
+    assert profile.min_price_group.key == "variantCode"
+    assert profile.min_price_group.price == "price2"
