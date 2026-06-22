@@ -311,6 +311,7 @@ jobs:
           RUNTIME_PRESERVE_PATHS="
           03_Scripts/diagnostics/artifacts
           03_Scripts/logs
+          06_AppPlatform/frontend/dist
           hermes/reports
           "
 
@@ -672,6 +673,7 @@ jobs:
           RUNTIME_PRESERVE_PATHS="
           03_Scripts/diagnostics/artifacts
           03_Scripts/logs
+          06_AppPlatform/frontend/dist
           hermes/reports
           "
 

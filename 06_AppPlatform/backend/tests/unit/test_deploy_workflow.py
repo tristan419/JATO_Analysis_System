@@ -21,6 +21,7 @@ def test_tencent_deploy_workflow_preserves_runtime_artifacts() -> None:
 
     assert "03_Scripts/diagnostics/artifacts" in workflow
     assert "03_Scripts/logs" in workflow
+    assert "06_AppPlatform/frontend/dist" in workflow
     assert "hermes/reports" in workflow
     assert "Preserved runtime path" in workflow
     assert "Restored runtime path" in workflow
