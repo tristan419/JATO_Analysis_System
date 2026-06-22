@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 from jato_scraper.base import ExtractorConfig
 from jato_scraper.config_loader import _build_scrapling_profile
 from jato_scraper.extractors.scrapling_web import (
+    AttrJsonMapping,
     CssMapping,
     PricingContextMapping,
     ScraplingExtractor,
@@ -291,6 +292,85 @@ def _mock_page_with_json_scripts(
 
     page.css.side_effect = _css_side_effect
     return page
+
+
+def _mock_attr_json_card(
+    *,
+    filter_payload: dict,
+    tracking_payload: dict,
+    series: str,
+) -> MagicMock:
+    card = MagicMock()
+    card.attrib = {
+        "data-card-filter-info": json.dumps(filter_payload),
+        "data-tracking-attributes": json.dumps(tracking_payload),
+    }
+
+    def _css_side_effect(query: str):
+        result = MagicMock()
+        if query == ".cmp-allmodelscarddetail__series::text":
+            result.get.return_value = series
+        else:
+            result.get.return_value = None
+        return result
+
+    card.css.side_effect = _css_side_effect
+    return card
+
+
+def test_attr_json_model_rules_can_match_nested_tracking_name() -> None:
+    page = MagicMock()
+    page.css.side_effect = lambda query: (
+        [
+            _mock_attr_json_card(
+                filter_payload={"price": "46788.0", "fuelType": "e"},
+                tracking_payload={"name": "BMW iX1 xDrive30", "range": "U11"},
+                series="iX1",
+            ),
+            _mock_attr_json_card(
+                filter_payload={"price": "49027.6", "fuelType": "o"},
+                tracking_payload={"name": "BMW X1 xDrive23i", "range": "U11"},
+                series="X1",
+            ),
+        ]
+        if query == ".cmp-allmodelscard"
+        else []
+    )
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="bmw_x1_at",
+            country="AT",
+            brand="BMW",
+            source_url="https://www.bmw.at/de/konfigurator.html",
+        ),
+        ScraplingProfile(
+            url="https://www.bmw.at/de/konfigurator.html",
+            attr_json=AttrJsonMapping(
+                vehicle_container=".cmp-allmodelscard",
+                filter_attr="data-card-filter-info",
+                tracking_attr="data-tracking-attributes",
+            ),
+            default_currency="EUR",
+            model_rules=(
+                {
+                    "key": "model_x1",
+                    "jato_model": "X1",
+                    "official_model": "X1",
+                    "keywords": ["BMW X1"],
+                },
+            ),
+            skip_if_model_unmapped=True,
+            copy_trim_to_jato_trim=True,
+        ),
+    )
+
+    results = extractor._extract_from_attr_json(page)
+
+    assert len(results) == 1
+    assert results[0].official_model == "X1"
+    assert results[0].official_trim == "xDrive23i"
+    assert results[0].jato_model == "X1"
+    assert results[0].msrp_value == 49_027.6
 
 
 @patch.object(ScraplingExtractor, "_fetch")

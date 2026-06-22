@@ -7,10 +7,20 @@ price_semantics: base_msrp
 extractor_type: scrapling
 profile:
   url: https://www.bmw.at/de/konfigurator.html
-  tier: stealth
+  tier: http
   headless: true
   network_idle: true
   impersonate: chrome
+  attr_json:
+    vehicle_container: ".cmp-allmodelscard"
+    filter_attr: "data-card-filter-info"
+    tracking_attr: "data-tracking-attributes"
+    price_key: "price"
+    fuel_key: "fuelType"
+    category_key: "category"
+    series_key: "series"
+    name_key: "name"
+    range_key: "range"
   text_regex:
     source_selector: body
     entry_patterns:
@@ -21,17 +31,23 @@ profile:
   default_currency: EUR
   default_tax_included: true
   default_price_label: BMW Konfigurator Ab Preis
-  fixed_model: IX1
-  fixed_jato_model: IX1
+  fixed_model: null
+  fixed_jato_model: null
   fixed_jato_powertrain: BEV
   match_confidence: 0.82
   match_status: review_required
   match_reason:
     kind: official_configurator_overview_from_price
     source: bmw_at_configurator
-    note: Official BMW Austria configurator overview exposes iX1 Elektrisch Ab price.
-  model_rules: []
-  skip_if_model_unmapped: false
+    note: Official BMW Austria configurator overview exposes iX1 model card prices.
+  model_rules:
+  - key: model_ix1
+    jato_model: IX1
+    official_model: iX1
+    keywords:
+    - BMW iX1
+    - iX1
+  skip_if_model_unmapped: true
   copy_trim_to_jato_trim: true
   confidence_rules:
     base: 0.2
@@ -99,8 +115,9 @@ schedule:
   run_window_end: 05:00
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (AT market).
-  Replaced outdated model URL with text_regex over the official BMW Austria
-  configurator overview Ab price.
+  Uses the official BMW Austria configurator overview via static HTTP and the
+  embedded allmodels card JSON, avoiding browser automation failures on
+  configure.bmw.at.
 bootstrap_meta:
   country_model_rank: 19
   suggested_scope_kind: single_model

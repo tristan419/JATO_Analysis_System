@@ -376,6 +376,23 @@ class ScraplingExtractor(BaseExtractor):
             )
         ).lower()
 
+    def _nested_payload_text(
+        self,
+        raw_payload: dict[str, Any],
+        *container_names: str,
+    ) -> str:
+        parts: list[str] = []
+        for container_name in container_names:
+            container = raw_payload.get(container_name)
+            if not isinstance(container, dict):
+                continue
+            parts.extend(
+                str(value)
+                for value in container.values()
+                if value not in (None, "", [], {})
+            )
+        return _normalize_space(" ".join(parts))
+
     def _build_powertrain_search_text(
         self,
         resolved_model: str,
@@ -396,6 +413,7 @@ class ScraplingExtractor(BaseExtractor):
                     str(raw_payload.get("fuel_type", "")),
                     str(raw_payload.get("fuelType", "")),
                     str(raw_payload.get("category", "")),
+                    self._nested_payload_text(raw_payload, "filter", "tracking"),
                 )
                 if part
             )
@@ -422,6 +440,7 @@ class ScraplingExtractor(BaseExtractor):
                     str(raw_payload.get("fuel_type", "")),
                     str(raw_payload.get("fuelType", "")),
                     str(raw_payload.get("category", "")),
+                    self._nested_payload_text(raw_payload, "filter", "tracking"),
                 )
                 if part
             )
