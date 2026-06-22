@@ -19,6 +19,10 @@ interface MaterialFinanceDraft {
   memo: string;
 }
 
+type MaterialFinanceSaveState = "saved" | "dirty" | "saving" | "error";
+
+const FINANCE_AUTOSAVE_DELAY_MS = 1200;
+
 interface MaterialFinanceMatrixProps {
   rows: CountryMaterialFinanceRow[];
   title?: string;
@@ -194,8 +198,13 @@ function displayDraftValue(value: string): string {
   return value.trim() ? value : "-";
 }
 
-function financeCellInputProps(value: string) {
+function financeCellInputProps(
+  value: string,
+  saveState: MaterialFinanceSaveState,
+  className = "",
+) {
   return {
+    className: ["material-finance-edit-field", `is-${saveState}`, className].filter(Boolean).join(" "),
     inputMode: "decimal" as const,
     type: "text",
     value: displayDraftValue(value),
@@ -205,6 +214,26 @@ function financeCellInputProps(value: string) {
       }
     },
   };
+}
+
+function draftFingerprint(draft: MaterialFinanceDraft): string {
+  return [
+    draft.fobEur,
+    draft.vehicleMarginEur,
+    draft.vehicleMarginRatePercent,
+    draft.vehicleProfitEur,
+    draft.vehicleProfitRatePercent,
+    draft.fobDeltaEur,
+    draft.marginDeltaEur,
+    draft.memo,
+  ].join("\u001f");
+}
+
+function saveStateLabel(saveState: MaterialFinanceSaveState): string {
+  if (saveState === "dirty") return "Unsaved";
+  if (saveState === "saving") return "Saving...";
+  if (saveState === "error") return "Save failed";
+  return "Saved";
 }
 
 function findFinanceRow(container: HTMLElement, materialCode: string): HTMLTableRowElement | null {
@@ -238,10 +267,15 @@ export function MaterialFinanceMatrix({
   onSaveRow,
 }: MaterialFinanceMatrixProps) {
   const [drafts, setDrafts] = useState<Record<string, MaterialFinanceDraft>>({});
+  const [saveStates, setSaveStates] = useState<Record<string, MaterialFinanceSaveState>>({});
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(() => new Set());
   const tbodyRef = useRef<HTMLTableSectionElement | null>(null);
   const expandedGroupKeyRef = useRef<string | null>(null);
   const savingMaterialCodeRef = useRef<string | null>(null);
+  const latestDraftsRef = useRef<Record<string, MaterialFinanceDraft>>({});
+  const saveStatesRef = useRef<Record<string, MaterialFinanceSaveState>>({});
+  const autosaveTimersRef = useRef<Record<string, number>>({});
+  const saveTokensRef = useRef<Record<string, number>>({});
   const financeGroups = buildFinanceGroups(rows);
 
   useStaggerEntrance(tbodyRef, rows.length > 0, {
@@ -252,8 +286,33 @@ export function MaterialFinanceMatrix({
   });
 
   useEffect(() => {
-    setDrafts(Object.fromEntries(rows.map((row) => [row.materialCode, draftFromRow(row)])));
+    const serverDrafts = Object.fromEntries(rows.map((row) => [row.materialCode, draftFromRow(row)]));
+    setDrafts((current) => {
+      const nextDrafts = { ...serverDrafts };
+      for (const row of rows) {
+        const state = saveStatesRef.current[row.materialCode];
+        if ((state === "dirty" || state === "saving" || state === "error") && current[row.materialCode]) {
+          nextDrafts[row.materialCode] = current[row.materialCode];
+        }
+      }
+      latestDraftsRef.current = nextDrafts;
+      return nextDrafts;
+    });
+    setSaveStates((current) => Object.fromEntries(
+      rows.map((row) => {
+        const state = current[row.materialCode];
+        return [row.materialCode, state === "dirty" || state === "saving" || state === "error" ? state : "saved"];
+      }),
+    ));
   }, [rows]);
+
+  useEffect(() => {
+    saveStatesRef.current = saveStates;
+  }, [saveStates]);
+
+  useEffect(() => () => {
+    Object.values(autosaveTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
+  }, []);
 
   useEffect(() => {
     const container = tbodyRef.current;
@@ -317,18 +376,54 @@ export function MaterialFinanceMatrix({
     }
   }, [expandedGroupKeys]);
 
+  const saveDraft = async (row: CountryMaterialFinanceRow, draft: MaterialFinanceDraft) => {
+    const materialCode = row.materialCode;
+    if (autosaveTimersRef.current[materialCode] != null) {
+      window.clearTimeout(autosaveTimersRef.current[materialCode]);
+      delete autosaveTimersRef.current[materialCode];
+    }
+    const saveToken = (saveTokensRef.current[materialCode] ?? 0) + 1;
+    saveTokensRef.current[materialCode] = saveToken;
+    const savedFingerprint = draftFingerprint(draft);
+    setSaveStates((current) => ({ ...current, [materialCode]: "saving" }));
+    try {
+      await onSaveRow(row, updateFromDraft(row.countryCode, draft));
+      const latestDraft = latestDraftsRef.current[materialCode] ?? draft;
+      if (saveTokensRef.current[materialCode] === saveToken && draftFingerprint(latestDraft) === savedFingerprint) {
+        setSaveStates((current) => ({ ...current, [materialCode]: "saved" }));
+      }
+    } catch {
+      if (saveTokensRef.current[materialCode] === saveToken) {
+        setSaveStates((current) => ({ ...current, [materialCode]: "error" }));
+      }
+    }
+  };
+
+  const queueAutosave = (row: CountryMaterialFinanceRow, draft: MaterialFinanceDraft) => {
+    const materialCode = row.materialCode;
+    if (autosaveTimersRef.current[materialCode] != null) {
+      window.clearTimeout(autosaveTimersRef.current[materialCode]);
+    }
+    setSaveStates((current) => ({ ...current, [materialCode]: "dirty" }));
+    autosaveTimersRef.current[materialCode] = window.setTimeout(() => {
+      delete autosaveTimersRef.current[materialCode];
+      const latestDraft = latestDraftsRef.current[materialCode] ?? draft;
+      void saveDraft(row, latestDraft);
+    }, FINANCE_AUTOSAVE_DELAY_MS);
+  };
+
   const updateDraft = (
-    materialCode: string,
+    row: CountryMaterialFinanceRow,
     patch: Partial<MaterialFinanceDraft>,
   ) => {
-    setDrafts((current) => {
-      const existing = current[materialCode];
-      if (!existing) return current;
-      return {
-        ...current,
-        [materialCode]: { ...existing, ...patch },
-      };
-    });
+    const existing = latestDraftsRef.current[row.materialCode] ?? drafts[row.materialCode] ?? draftFromRow(row);
+    const nextDraft = { ...existing, ...patch };
+    latestDraftsRef.current[row.materialCode] = nextDraft;
+    setDrafts((current) => ({
+      ...current,
+      [row.materialCode]: nextDraft,
+    }));
+    queueAutosave(row, nextDraft);
   };
 
   const toggleGroup = (groupKey: string) => {
@@ -414,7 +509,9 @@ export function MaterialFinanceMatrix({
                   </tr>
                   {collapsed ? null : group.rows.map((row) => {
                     const draft = drafts[row.materialCode] ?? draftFromRow(row);
-                    const saving = savingMaterialCode === row.materialCode;
+                    const localSaveState = saveStates[row.materialCode] ?? "saved";
+                    const saving = savingMaterialCode === row.materialCode || localSaveState === "saving";
+                    const rowSaveState: MaterialFinanceSaveState = saving ? "saving" : localSaveState;
                     const skuCount = getSourcePayloadNumber(row, "skuCount");
                     const colourCodes = getSourcePayloadStringList(row, "colourCodes");
                     return (
@@ -422,7 +519,7 @@ export function MaterialFinanceMatrix({
                         key={`${row.countryCode}-${row.materialCode}`}
                         data-finance-group-key={group.key}
                         data-material-code={row.materialCode}
-                        className={`material-finance-row${saving ? " is-saving" : ""}`}
+                        className={`material-finance-row is-${rowSaveState}`}
                       >
                         <td>
                           <div className="material-finance-code">{row.materialCode}</div>
@@ -447,61 +544,60 @@ export function MaterialFinanceMatrix({
                         <td className="material-finance-number">{formatMoney(row.bomFobEur)}</td>
                         <td>
                           <input
-                            {...financeCellInputProps(draft.fobEur)}
+                            {...financeCellInputProps(draft.fobEur, rowSaveState)}
                             aria-label={`${row.materialCode} FOB`}
-                            onChange={(event) => updateDraft(row.materialCode, { fobEur: event.target.value === "-" ? "" : event.target.value })}
+                            onChange={(event) => updateDraft(row, { fobEur: event.target.value === "-" ? "" : event.target.value })}
                           />
                         </td>
                         <td>
                           <input
-                            {...financeCellInputProps(draft.vehicleMarginEur)}
+                            {...financeCellInputProps(draft.vehicleMarginEur, rowSaveState)}
                             aria-label={`${row.materialCode} unit margin`}
-                            onChange={(event) => updateDraft(row.materialCode, { vehicleMarginEur: event.target.value === "-" ? "" : event.target.value })}
+                            onChange={(event) => updateDraft(row, { vehicleMarginEur: event.target.value === "-" ? "" : event.target.value })}
                           />
                         </td>
                         <td>
                           <input
-                            {...financeCellInputProps(draft.vehicleMarginRatePercent)}
+                            {...financeCellInputProps(draft.vehicleMarginRatePercent, rowSaveState)}
                             aria-label={`${row.materialCode} margin percent`}
-                            onChange={(event) => updateDraft(row.materialCode, { vehicleMarginRatePercent: event.target.value === "-" ? "" : event.target.value })}
+                            onChange={(event) => updateDraft(row, { vehicleMarginRatePercent: event.target.value === "-" ? "" : event.target.value })}
                           />
                         </td>
                         <td>
                           <input
-                            {...financeCellInputProps(draft.vehicleProfitEur)}
+                            {...financeCellInputProps(draft.vehicleProfitEur, rowSaveState)}
                             aria-label={`${row.materialCode} unit profit`}
-                            onChange={(event) => updateDraft(row.materialCode, { vehicleProfitEur: event.target.value === "-" ? "" : event.target.value })}
+                            onChange={(event) => updateDraft(row, { vehicleProfitEur: event.target.value === "-" ? "" : event.target.value })}
                           />
                         </td>
                         <td>
                           <input
-                            {...financeCellInputProps(draft.vehicleProfitRatePercent)}
+                            {...financeCellInputProps(draft.vehicleProfitRatePercent, rowSaveState)}
                             aria-label={`${row.materialCode} profit percent`}
-                            onChange={(event) => updateDraft(row.materialCode, { vehicleProfitRatePercent: event.target.value === "-" ? "" : event.target.value })}
+                            onChange={(event) => updateDraft(row, { vehicleProfitRatePercent: event.target.value === "-" ? "" : event.target.value })}
                           />
                         </td>
                         <td>
                           <input
-                            {...financeCellInputProps(draft.fobDeltaEur)}
-                            className="material-finance-signed-input"
+                            {...financeCellInputProps(draft.fobDeltaEur, rowSaveState, "material-finance-signed-input")}
                             aria-label={`${row.materialCode} FOB delta`}
                             placeholder="+/-"
-                            onChange={(event) => updateDraft(row.materialCode, { fobDeltaEur: event.target.value === "-" ? "" : event.target.value })}
+                            onChange={(event) => updateDraft(row, { fobDeltaEur: event.target.value === "-" ? "" : event.target.value })}
                           />
                         </td>
                         <td>
                           <input
-                            {...financeCellInputProps(draft.marginDeltaEur)}
-                            className="material-finance-signed-input"
+                            {...financeCellInputProps(draft.marginDeltaEur, rowSaveState, "material-finance-signed-input")}
                             aria-label={`${row.materialCode} margin delta`}
                             placeholder="+/-"
-                            onChange={(event) => updateDraft(row.materialCode, { marginDeltaEur: event.target.value === "-" ? "" : event.target.value })}
+                            onChange={(event) => updateDraft(row, { marginDeltaEur: event.target.value === "-" ? "" : event.target.value })}
                           />
                         </td>
                         <td>
                           <textarea
+                            className={`material-finance-edit-field is-${rowSaveState}`}
                             value={draft.memo}
-                            onChange={(event) => updateDraft(row.materialCode, { memo: event.target.value })}
+                            onChange={(event) => updateDraft(row, { memo: event.target.value })}
                             rows={density === "compact" ? 2 : 3}
                           />
                         </td>
@@ -522,10 +618,13 @@ export function MaterialFinanceMatrix({
                               variant="primary"
                               loading={saving}
                               loadingLabel="Saving..."
-                              onClick={() => void onSaveRow(row, updateFromDraft(row.countryCode, draft))}
+                              onClick={() => void saveDraft(row, latestDraftsRef.current[row.materialCode] ?? draft)}
                             >
-                              Save
+                              Save now
                             </LoadingActionButton>
+                            <span className={`material-finance-save-state material-finance-save-state-${rowSaveState}`}>
+                              {saveStateLabel(rowSaveState)}
+                            </span>
                             {onViewHistory ? (
                               <button
                                 type="button"

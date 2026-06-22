@@ -14878,6 +14878,14 @@ table.material-finance-table td:nth-child(n+5) {
   box-shadow: inset 3px 0 0 #2563eb;
 }
 
+.material-finance-row.is-dirty td {
+  box-shadow: inset 3px 0 0 #16a34a;
+}
+
+.material-finance-row.is-error td {
+  box-shadow: inset 3px 0 0 #dc2626;
+}
+
 .material-finance-table input,
 .material-finance-table textarea {
   width: 100%;
@@ -14885,7 +14893,7 @@ table.material-finance-table td:nth-child(n+5) {
   border: 1px solid transparent;
   border-radius: 0;
   background: transparent;
-  color: #0f766e;
+  color: #111827;
   font-size: 11px;
   font-weight: 800;
   line-height: 1.25;
@@ -14918,8 +14926,16 @@ table.material-finance-table td:nth-child(n+5) {
 }
 
 .material-finance-table .material-finance-signed-input {
-  color: #334155;
   font-weight: 800;
+}
+
+.material-finance-table .material-finance-edit-field.is-dirty,
+.material-finance-table .material-finance-edit-field.is-saving {
+  color: #0f766e;
+}
+
+.material-finance-table .material-finance-edit-field.is-error {
+  color: #dc2626;
 }
 
 .material-finance-table .material-finance-signed-input::placeholder {
@@ -14930,7 +14946,6 @@ table.material-finance-table td:nth-child(n+5) {
 .material-finance-table textarea {
   min-height: 34px;
   padding: 4px 6px;
-  color: #334155;
   font-weight: 700;
   resize: vertical;
 }
@@ -15057,6 +15072,24 @@ table.material-finance-table td:nth-child(n+5) {
 
 .material-finance-row-actions .btn-liquid {
   min-width: 0;
+}
+
+.material-finance-save-state {
+  color: #111827;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.material-finance-save-state-dirty,
+.material-finance-save-state-saving {
+  color: #0f766e;
+}
+
+.material-finance-save-state-error {
+  color: #dc2626;
 }
 
 .material-finance-history-panel {

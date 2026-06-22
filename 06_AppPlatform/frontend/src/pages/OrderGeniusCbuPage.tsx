@@ -173,6 +173,7 @@ export function OrderGeniusCbuPage() {
       setRows((current) => current.map((item) => item.materialCode === saved.materialCode ? saved : item));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      throw err;
     } finally {
       setSavingMaterialCode(null);
     }
