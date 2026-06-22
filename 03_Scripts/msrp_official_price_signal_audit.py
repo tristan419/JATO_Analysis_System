@@ -40,6 +40,23 @@ from msrp_source_accessibility_audit import (  # noqa: E402
 
 
 SCHEMA_VERSION = "msrp_official_price_signal_audit_v1"
+CAMPAIGN_PRICE_KEYWORDS = (
+    "aktionspreis",
+    "campaign price",
+    "promotion price",
+    "promotional price",
+    "promo price",
+    "eintauschbonus",
+    "leasingbonus",
+    "versicherungsbonus",
+    "bonus",
+    "rabatt",
+    "discount",
+    "subsidy",
+    "net price",
+    "nettopreis",
+    "cash",
+)
 DEFAULT_BACKLOG_PATH = (
     REPO_ROOT
     / "03_Scripts"
@@ -141,8 +158,36 @@ def classify_price_signal(
     finance_hits = [
         str(hit) for hit in keyword_hits.get("finance") or [] if str(hit).strip()
     ]
+    campaign_hits_from_evidence = [
+        str(hit) for hit in keyword_hits.get("campaign") or [] if str(hit).strip()
+    ]
     page_semantics = str(heuristics.get("page_semantics") or "unknown")
+    evidence_text = " ".join(
+        [
+            str(evidence.get("text_excerpt") or ""),
+            " ".join(msrp_hits),
+            " ".join(finance_hits),
+        ]
+    ).lower()
+    campaign_hits = sorted(
+        set(campaign_hits_from_evidence)
+        | {keyword for keyword in CAMPAIGN_PRICE_KEYWORDS if keyword in evidence_text}
+    )
 
+    if price_samples and campaign_hits:
+        return {
+            "officialPriceSignalStatus": "campaign_or_net_price_signal",
+            "recommendedAction": "route_to_campaign_or_net_price_pipeline_not_base_msrp",
+            "dryrunCandidateEligible": False,
+            "officialIngestEligible": False,
+            "reason": (
+                "Official page includes price-like values, but promotion, "
+                "bonus, subsidy, cash, or leasing context means it must not "
+                "be treated as base MSRP."
+            ),
+            "nonMsrpSignalType": "campaign_or_net_price",
+            "nonMsrpKeywordHits": campaign_hits,
+        }
     if price_samples and page_semantics == "base_msrp":
         return {
             "officialPriceSignalStatus": "price_signal_present",

@@ -78,6 +78,23 @@ FINANCE_KEYWORDS = (
     "raten",
     "rental",
 )
+CAMPAIGN_KEYWORDS = (
+    "aktionspreis",
+    "campaign price",
+    "promotion price",
+    "promotional price",
+    "promo price",
+    "eintauschbonus",
+    "leasingbonus",
+    "versicherungsbonus",
+    "bonus",
+    "rabatt",
+    "discount",
+    "subsidy",
+    "förderung",
+    "net price",
+    "nettopreis",
+)
 CONFIGURATOR_KEYWORDS = (
     "configurator",
     "konfigurator",
@@ -93,6 +110,17 @@ JSON_HINT_KEYWORDS = (
     "json-ld",
     "offers",
     "aggregateoffer",
+)
+EMBEDDED_ATTRIBUTE_HINTS = (
+    "price",
+    "preis",
+    "payment",
+    "leasing",
+    "aktionspreis",
+    "baseprice",
+    "versionsprices",
+    "edition",
+    "€",
 )
 
 
@@ -123,7 +151,11 @@ def build_page_evidence(
     metadata: dict[str, Any] | None = None,
     max_text_excerpt: int = DEFAULT_MAX_TEXT_EXCERPT,
 ) -> dict[str, Any]:
-    normalized_text = _normalize_space(_strip_html_tags(html))
+    body_text = _strip_html_tags(html)
+    embedded_attribute_text = _extract_embedded_attribute_text(html)
+    normalized_text = _normalize_space(
+        " ".join(part for part in (body_text, embedded_attribute_text) if part)
+    )
     evidence = {
         "page": {
             "url": url,
@@ -145,6 +177,7 @@ def build_page_evidence(
             "keyword_hits": {
                 "msrp": _match_keywords(normalized_text, MSRP_KEYWORDS),
                 "finance": _match_keywords(normalized_text, FINANCE_KEYWORDS),
+                "campaign": _match_keywords(normalized_text, CAMPAIGN_KEYWORDS),
                 "configurator": _match_keywords(
                     normalized_text,
                     CONFIGURATOR_KEYWORDS,
@@ -635,7 +668,7 @@ def _extract_candidate_links(html: str, limit: int = 20) -> list[str]:
 
 def _extract_price_like_samples(text: str, limit: int = 10) -> list[str]:
     matches = re.findall(
-        r"\b\d{1,3}(?:[ .,'’]\d{3})+(?:[.,]\d{2})?\b",
+        r"\b(?:\d{1,3}(?:[ .,'’]\d{3})+(?:[.,]\d{2})?|\d{4,6}[.,]\d{2})\b",
         text,
     )
     results: list[str] = []
@@ -649,6 +682,62 @@ def _extract_price_like_samples(text: str, limit: int = 10) -> list[str]:
 
 def _strip_html_tags(value: str) -> str:
     return unescape(re.sub(r"<[^>]+>", " ", value))
+
+
+def _extract_embedded_attribute_text(value: str, *, max_chars: int = 20000) -> str:
+    """Extract relevant Vue/Craft component props hidden in HTML attributes."""
+    payment_snippets: list[str] = []
+    price_block_snippets: list[str] = []
+    general_snippets: list[str] = []
+    pattern = re.compile(
+        r"""(?:^|\s)([:@]?[A-Za-z0-9_-]+)=(".*?"|'.*?')""",
+        re.DOTALL,
+    )
+    for match in pattern.finditer(value):
+        attr_name = match.group(1).lower()
+        raw = match.group(2)[1:-1]
+        if attr_name in {"class", ":class", "aria-labelledby", ":aria-labelledby"}:
+            continue
+        if len(raw) < 40:
+            continue
+        decoded = unescape(raw)
+        lowered = decoded.lower()
+        is_component_binding = (
+            attr_name.startswith(":")
+            or attr_name.startswith("v-bind:")
+            or attr_name in {
+                "editions",
+                "initial-edition",
+                "hero-section",
+                "all-compare-models-sections",
+            }
+        )
+        has_payment_payload = (
+            "field_paymentoption" in lowered or "baseprice" in lowered
+        )
+        has_price_block_payload = (
+            "field_commerce" in lowered or "priceblock" in lowered
+        )
+        has_explicit_price_payload = has_payment_payload or has_price_block_payload
+        if not (is_component_binding or has_explicit_price_payload):
+            continue
+        if not any(hint in lowered for hint in EMBEDDED_ATTRIBUTE_HINTS):
+            continue
+        snippet = _strip_html_tags(decoded)
+        if has_payment_payload:
+            payment_snippets.append(snippet)
+        elif has_price_block_payload:
+            price_block_snippets.append(snippet)
+        else:
+            general_snippets.append(snippet)
+        if (
+            sum(len(item) for item in payment_snippets) >= max_chars
+            and payment_snippets
+        ):
+            break
+    return _normalize_space(
+        " ".join(payment_snippets + price_block_snippets + general_snippets)
+    )[:max_chars]
 
 
 def _normalize_space(value: str) -> str:

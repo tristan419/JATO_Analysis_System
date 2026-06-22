@@ -99,6 +99,57 @@ def test_classify_price_signal_marks_official_msrp_page_as_dryrun_candidate() ->
     assert classification["officialIngestEligible"] is False
 
 
+def test_classify_price_signal_routes_campaign_price_out_of_base_msrp() -> None:
+    html = """
+    <html>
+      <head><title>MG ZS Hybrid+ Aktionspreise</title></head>
+      <body>
+        <h1>MG ZS Hybrid+</h1>
+        <p>
+          Unverbindl. empf. Aktionspreis € 18.990,- inkl. € 1.000,-
+          Leasingbonus und € 2.000,- Eintauschbonus. Preis inkl. MwSt. und NoVA.
+        </p>
+      </body>
+    </html>
+    """
+    evidence = audit.build_page_evidence(html=html, url="https://example.test")
+    heuristics = audit.analyze_page_heuristics(evidence)
+
+    assert "aktionspreis" in evidence["signals"]["keyword_hits"]["campaign"]
+
+    classification = audit.classify_price_signal(
+        evidence=evidence,
+        heuristics=heuristics,
+    )
+
+    assert classification["officialPriceSignalStatus"] == "campaign_or_net_price_signal"
+    assert (
+        classification["recommendedAction"]
+        == "route_to_campaign_or_net_price_pipeline_not_base_msrp"
+    )
+    assert classification["dryrunCandidateEligible"] is False
+    assert classification["officialIngestEligible"] is False
+    assert classification["nonMsrpSignalType"] == "campaign_or_net_price"
+
+
+def test_build_page_evidence_reads_component_attribute_prices() -> None:
+    html = """
+    <html><body>
+      <mg-configurator
+        :editions="{&quot;field_paymentOption_paymentName&quot;:&quot;Aktionspreis (Privatkunde)&quot;,
+        &quot;field_paymentOption_basePrice&quot;:&quot;18990.00&quot;,
+        &quot;field_paymentOption_paymentHandle&quot;:&quot;cash&quot;}">
+      </mg-configurator>
+    </body></html>
+    """
+
+    evidence = audit.build_page_evidence(html=html, url="https://example.test")
+
+    assert "18990.00" in evidence["signals"]["price_like_samples"]
+    assert "Aktionspreis" in evidence["text_excerpt"]
+    assert "aktionspreis" in evidence["signals"]["keyword_hits"]["campaign"]
+
+
 def test_classify_price_signal_rejects_page_without_price_values() -> None:
     html = """
     <html>
