@@ -27,6 +27,17 @@ def test_tencent_deploy_workflow_preserves_runtime_artifacts() -> None:
     assert "Restored runtime path" in workflow
 
 
+def test_tencent_deploy_upload_timeout_allows_slow_tencent_scp() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/deploy-fullstack-tencent.yml").read_text(
+        encoding="utf-8",
+    )
+
+    assert "timeout 600s scp" in workflow
+    assert 'timeout 600s sshpass -p "$SSH_PASSWORD"' in workflow
+    assert "timeout 180s ssh -T" in workflow
+    assert 'timeout 180s sshpass -p "$SSH_PASSWORD"' in workflow
+
+
 def test_archive_deploy_reports_expected_commit_when_git_sync_is_skipped() -> None:
     script = (
         REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
