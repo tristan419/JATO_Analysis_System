@@ -159,6 +159,46 @@ class VersionComparisonDeckRequest(BaseModel):
     length_max: float | None = Field(default=None, ge=0)
 
 
+class HeroProductDeckRequest(BaseModel):
+    countries: list[str] = Field(default_factory=list)
+    price_country: str | None = None
+    target_period: str | None = None
+    time_range: dict[str, str] | None = None
+    sales_mode: Literal["month", "ytd", "rolling12"] = "ytd"
+    segment: str = "SUV A0"
+    fuel_type: str = "BEV"
+    price_source: Literal["msrp", "jato"] = "msrp"
+    top_n: int = Field(default=10, ge=3, le=20)
+    ranking_limit: int = Field(default=20, ge=10, le=40)
+    country_limit: int = Field(default=0, ge=0, le=80)
+    trend_window_months: int = Field(default=16, ge=6, le=36)
+    top_models: list[str] = Field(default_factory=list)
+    hero_models: list[str] = Field(default_factory=list)
+
+
+class HeroProductPriceOverrideRequest(BaseModel):
+    country: str
+    price_period: str | None = None
+    price_source: Literal["msrp", "jato"]
+    brand: str
+    model: str
+    trim: str | None = None
+    powertrain: str | None = None
+    price_value: float | None = Field(default=None, ge=0)
+    currency: str = "EUR"
+    note: str | None = None
+
+
+class HeroProductSpecOverrideRequest(BaseModel):
+    country: str
+    price_period: str | None = None
+    brand: str
+    model: str
+    field_name: str
+    field_value: str | None = None
+    note: str | None = None
+
+
 class CountryChatTurn(BaseModel):
     role: Literal["user", "assistant"]
     content: str

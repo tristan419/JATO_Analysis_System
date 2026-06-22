@@ -263,7 +263,8 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
         title: "Market Analysis / 市场分析",
         items: [
           { label: "Overview", sublabel: "市场总览", to: "/market/overview", minRole: "viewer" },
-          { label: "Advanced Analysis", sublabel: "高级分析", to: "/market/advanced-analysis", minRole: "viewer" },
+          { label: "Share Transfer", sublabel: "份额转移分析", to: "/market/advanced-analysis", minRole: "viewer" },
+          { label: "Hero Product", sublabel: "BEV 动总分析", to: "/market/advanced-analysis?mode=hero-product", minRole: "viewer" },
         ],
       },
     ],

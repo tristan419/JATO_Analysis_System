@@ -1173,6 +1173,84 @@ class CurrentPrice(Base):
     )
 
 
+class HeroProductPriceOverride(TimestampMixin, Base):
+    __tablename__ = "hero_product_price_overrides"
+    __table_args__ = (
+        UniqueConstraint(
+            "country",
+            "price_period",
+            "price_source",
+            "brand",
+            "model",
+            "trim",
+            "powertrain",
+            name="uq_hero_product_price_overrides_key",
+        ),
+        Index(
+            "ix_hero_product_price_overrides_lookup",
+            "country",
+            "price_period",
+            "price_source",
+            "brand",
+            "model",
+        ),
+        {"schema": "msrp"},
+    )
+
+    override_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    country: Mapped[str] = mapped_column(Text, nullable=False)
+    price_period: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    price_source: Mapped[str] = mapped_column(Text, nullable=False)
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    trim: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    powertrain: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    price_value: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(Text, nullable=False, default="EUR")
+    updated_by: Mapped[str] = mapped_column(Text, nullable=False, default="editor")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class HeroProductSpecOverride(TimestampMixin, Base):
+    __tablename__ = "hero_product_spec_overrides"
+    __table_args__ = (
+        UniqueConstraint(
+            "country",
+            "price_period",
+            "brand",
+            "model",
+            "field_name",
+            name="uq_hero_product_spec_overrides_key",
+        ),
+        Index(
+            "ix_hero_product_spec_overrides_lookup",
+            "country",
+            "price_period",
+            "brand",
+            "model",
+        ),
+        {"schema": "msrp"},
+    )
+
+    override_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    country: Mapped[str] = mapped_column(Text, nullable=False)
+    price_period: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    field_name: Mapped[str] = mapped_column(Text, nullable=False)
+    field_value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by: Mapped[str] = mapped_column(Text, nullable=False, default="editor")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class PriceHistory(Base):
     """Compressed price time-series: each row = one price period.
 

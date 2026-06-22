@@ -15,6 +15,10 @@ import type {
   PriceHistoryEntry,
   DetailResponse,
   GroupedTimeSeriesResponse,
+  HeroProductDeckRequest,
+  HeroProductDeckResponse,
+  HeroProductPriceOverridePayload,
+  HeroProductSpecOverridePayload,
   JatoMonthlyUpdateCleanupResult,
   JatoMonthlyUpdateArtifacts,
   JatoMonthlyUpdateJob,
@@ -2108,6 +2112,22 @@ export const api = {
     request<VersionComparisonDeckResponse>("/market-scan/version-comparison-deck", {
       method: "POST",
       body: JSON.stringify(payload)
+    }),
+  heroProductDeck: (payload: HeroProductDeckRequest = {}, signal?: AbortSignal) =>
+    request<HeroProductDeckResponse>("/market-scan/hero-product-deck", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      signal,
+    }),
+  patchHeroProductPrice: (payload: HeroProductPriceOverridePayload) =>
+    request<{ item: Record<string, unknown> }>("/market-scan/hero-product-price", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  patchHeroProductSpec: (payload: HeroProductSpecOverridePayload) =>
+    request<{ item: Record<string, unknown> }>("/market-scan/hero-product-spec", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
     }),
   nordicCustomerDeck: (mode: CustomerInsightMode = "benchmark", countries?: string[]) => {
     const search = new URLSearchParams();

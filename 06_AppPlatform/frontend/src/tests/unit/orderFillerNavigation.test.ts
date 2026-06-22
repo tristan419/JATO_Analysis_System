@@ -33,6 +33,7 @@ describe("order filler navigation", () => {
     expect(paths).toContain("/dashboard");
     expect(paths).toContain("/market/overview");
     expect(paths).toContain("/market/advanced-analysis");
+    expect(paths).toContain("/market/advanced-analysis?mode=hero-product");
     expect(paths).toContain("/product/order-genius");
     expect(paths).toContain("/product/order-genius/vehicle-allocation");
     expect(paths).toContain("/data/spec-detail");

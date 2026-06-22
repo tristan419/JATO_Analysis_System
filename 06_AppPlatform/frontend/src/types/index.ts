@@ -959,6 +959,215 @@ export interface VersionComparisonDeckRequest {
   length_max?: number | null;
 }
 
+export type HeroProductPriceSource = "msrp" | "jato";
+export type HeroProductSalesMode = "month" | "ytd" | "rolling12";
+
+export interface HeroProductPriceSourceValue {
+  source: HeroProductPriceSource;
+  value: number | null;
+  rawValue: number | null;
+  currency: string;
+  status: "available" | "missing" | "manual_override" | string;
+  override?: {
+    overrideId: string;
+    value: number;
+    currency: string;
+    updatedBy: string;
+    updatedAt: string | null;
+    note?: string | null;
+  } | null;
+}
+
+export interface HeroProductPricePayload {
+  selectedSource: HeroProductPriceSource;
+  selected: HeroProductPriceSourceValue;
+  sources: Record<HeroProductPriceSource, HeroProductPriceSourceValue>;
+}
+
+export interface HeroProductModelSpecs {
+  lengthMm: number | null;
+  rangeKm: number[];
+  batteryKwh: number[];
+  consumptionKwh100km: number[];
+  accelerationSec: number[];
+  chargingKw: number[];
+  chargingText: string[];
+  overrides?: Record<string, {
+    overrideId: string;
+    value: string;
+    updatedBy?: string | null;
+    updatedAt?: string | null;
+    note?: string | null;
+  }>;
+}
+
+export interface HeroProductModelRow {
+  rank: number;
+  brand: string;
+  model: string;
+  sourceBrand?: string;
+  sourceModel?: string;
+  label: string;
+  origin: string;
+  sales: number;
+  priorSales: number;
+  yoy: MarketScanDelta;
+  sharePct: number;
+  barPct: number;
+  channelMix: Record<string, number>;
+  channelSharePct: Record<string, number>;
+  driveMix: Record<string, number>;
+  specs: HeroProductModelSpecs;
+  price: HeroProductPricePayload;
+}
+
+export interface HeroProductTrendPoint {
+  period: string;
+  label: string;
+  volume: number;
+}
+
+export interface HeroProductTrendSeries {
+  brand: string;
+  model: string;
+  sourceBrand?: string;
+  sourceModel?: string;
+  label: string;
+  points: HeroProductTrendPoint[];
+}
+
+export interface HeroProductCountryDistributionItem {
+  country: string;
+  sales: number;
+  driveMix: Record<string, number>;
+}
+
+export interface HeroProductModelDistribution {
+  brand: string;
+  model: string;
+  sourceBrand?: string;
+  sourceModel?: string;
+  totalSales: number;
+  countries: HeroProductCountryDistributionItem[];
+}
+
+export interface HeroProductBenchmarkPage {
+  title: string;
+  ranking: HeroProductModelRow[];
+  productRows: HeroProductModelRow[];
+}
+
+export interface HeroProductTrendPage {
+  title: string;
+  models: HeroProductModelRow[];
+  series: HeroProductTrendSeries[];
+  priceRows: Array<{
+    brand: string;
+    model: string;
+    sourceBrand?: string;
+    sourceModel?: string;
+    origin: string;
+    price: HeroProductPricePayload;
+  }>;
+}
+
+export interface HeroProductDistributionPage {
+  title: string;
+  models: HeroProductModelRow[];
+  distribution: {
+    countries: string[];
+    items: HeroProductModelDistribution[];
+  };
+}
+
+export interface HeroProductDeckResponse {
+  metadata: {
+    protocolVersion: string;
+    requestedPeriod: string | null;
+    resolvedPeriod: string;
+    latestPeriod: string;
+    selectedCountries: MarketScanCountryOption[];
+    selectedPriceCountry: MarketScanCountryOption;
+    selectedSegment: string;
+    selectedFuelType: string;
+    selectedSalesMode: HeroProductSalesMode;
+    selectedPriceSource: HeroProductPriceSource;
+    selectedCountryLimit?: number;
+    selectedTimeRange?: MarketScanPeriodRange | null;
+    customRangeActive?: boolean;
+    availableCountries: MarketScanCountryOption[];
+    availablePeriods: MarketScanCountryOption[];
+    availablePriceSources: MarketScanCountryOption[];
+    labels: {
+      pageTitle: string;
+      periodLabel: string;
+      currentMonthShort: string;
+      salesModeLabel: string;
+      marketScopeLabel: string;
+    };
+  };
+  summary: {
+    totalSales: number;
+    modelCount: number;
+    topModel: string;
+    heroModelCount: number;
+  };
+  modelOptions: Array<{
+    brand: string;
+    model: string;
+    label: string;
+    sales: number;
+  }>;
+  pages: {
+    benchmark: HeroProductBenchmarkPage;
+    benchmarkWithChannel: HeroProductBenchmarkPage;
+    topTrend: HeroProductTrendPage;
+    topDistribution: HeroProductDistributionPage;
+    heroTrend: HeroProductTrendPage;
+    heroDistribution: HeroProductDistributionPage;
+  };
+}
+
+export interface HeroProductDeckRequest {
+  countries?: string[];
+  price_country?: string | null;
+  target_period?: string | null;
+  time_range?: MarketScanPeriodRange | null;
+  sales_mode?: HeroProductSalesMode;
+  segment?: string;
+  fuel_type?: string;
+  price_source?: HeroProductPriceSource;
+  top_n?: number;
+  ranking_limit?: number;
+  country_limit?: number;
+  trend_window_months?: number;
+  top_models?: string[];
+  hero_models?: string[];
+}
+
+export interface HeroProductPriceOverridePayload {
+  country: string;
+  price_period?: string | null;
+  price_source: HeroProductPriceSource;
+  brand: string;
+  model: string;
+  trim?: string | null;
+  powertrain?: string | null;
+  price_value: number | null;
+  currency?: string;
+  note?: string | null;
+}
+
+export interface HeroProductSpecOverridePayload {
+  country: string;
+  price_period?: string | null;
+  brand: string;
+  model: string;
+  field_name: string;
+  field_value?: string | null;
+  note?: string | null;
+}
+
 export interface CustomerInsightShareItem {
   label: string;
   rawLabel: string;
