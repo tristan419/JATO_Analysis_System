@@ -711,7 +711,7 @@ export function OrderGeniusPage() {
           floorFob = fob;
         }
       }
-      const groupFob = floorFob ?? (groupRows[0]?.fobEur ?? null);
+      const groupFob = floorFob;
       const expanded = expandedProductGroups.has(groupKey);
       const displayName = formatProductModelName(brand, modelName, version);
       const labelName = formatProductModelName(brand, modelName);
@@ -2294,7 +2294,7 @@ function getDraftBaseFob(
   const raw = fob.finalFobEur ?? fob.uploadedFobEur;
   if (raw == null) return null;
   const numeric = Number(raw);
-  return Number.isFinite(numeric) ? numeric : null;
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
 }
 
 function formatBomSourceLabel(
@@ -2837,7 +2837,7 @@ function BomAdminPanel({
     if (!editFob) return;
     try {
       for (const mc of editFob.materialCodes) {
-        await api.updateSkuFob(mc, { countryCode: editFob.countryCode, finalFobEur: editFob.fob ?? undefined } as any);
+        await api.updateSkuFob(mc, { countryCode: editFob.countryCode, finalFobEur: editFob.fob });
       }
       setEditFob(null); scheduleLoad(200);
     } catch (e) { alert(getErrorMessage(e)); }
@@ -3056,6 +3056,9 @@ function BomAdminPanel({
         [draftKey]: {
           ...current,
           fobByCountry: nextFobByCountry,
+          bulkSelectedCountries: current.bulkSelectedCountries.filter(
+            (code) => getDraftBaseFob(nextFobByCountry[code]) != null,
+          ),
           bulkDeltaEur:
             quickDelta == null ? current.bulkDeltaEur : String(numericDelta),
         },
@@ -3371,7 +3374,8 @@ function BomAdminPanel({
             rowVersion: 1,
           });
         }
-        for (const [countryCode, fob] of Object.entries(draft.fobByCountry || {})) {
+        for (const countryCode of draft.bulkSelectedCountries) {
+          const fob = draft.fobByCountry[countryCode];
           const baseFob = getDraftBaseFob(fob);
           if (baseFob == null) continue;
           await api.updateSkuFob(materialCode, {
@@ -4870,7 +4874,7 @@ function BomAdminPanel({
                               </td>
                               {sortedCountries.map(c => {
                                 const fob = ref.fobByCountry?.[c];
-                                const baseFob = fob?.finalFobEur ?? fob?.uploadedFobEur;
+                                const baseFob = getDraftBaseFob(fob);
                                 const hasFob = fob != null && baseFob != null && baseFob > 0;
                                 const hasSurcharge = fob?.colourSurchargeEur && fob.colourSurchargeEur > 0;
                                 const sourceMarker = getBomFobSourceMarker(fob?.fobSourceMode);

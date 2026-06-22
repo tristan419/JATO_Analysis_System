@@ -3664,7 +3664,7 @@ export const api = {
   updateSkuLifecycle: (materialCode: string, body: { lifecycleStatus: string; effectiveFrom?: string; effectiveTo?: string; rowVersion: number }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/lifecycle`, { method: "PATCH", body: JSON.stringify(body) }),
 
-  updateSkuFob: (materialCode: string, body: { countryCode: string; finalFobEur: number; paymentTermCode?: string }) =>
+  updateSkuFob: (materialCode: string, body: { countryCode: string; finalFobEur?: number | null; paymentTermCode?: string }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob`, { method: "PATCH", body: JSON.stringify(body) }),
 
   getSkuFobDetail: (materialCode: string, country: string) =>
