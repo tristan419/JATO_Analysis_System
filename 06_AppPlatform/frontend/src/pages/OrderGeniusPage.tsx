@@ -2782,6 +2782,7 @@ function BomAdminPanel({
       scheduleLoad(200);
     } catch (err) {
       setFinanceError(getErrorMessage(err));
+      throw err;
     } finally {
       setSavingFinanceMaterialCode(null);
     }
