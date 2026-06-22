@@ -30,6 +30,7 @@ from jato_scraper.extractors.http_json import (
     HttpJsonProfile,
     LookupMapping,
     PricingContextMapping as HttpPricingContextMapping,
+    ValueFilter,
 )
 from jato_scraper.extractors.scrapling_web import (
     AttrJsonMapping,
@@ -179,6 +180,31 @@ def _build_http_json_profile(profile: dict[str, Any]) -> HttpJsonProfile:
             else None
         ),
     )
+
+    filters_raw = profile.get("filters", [])
+    filters: list[ValueFilter] = []
+    if filters_raw:
+        if not isinstance(filters_raw, list):
+            raise ValueError("http_json filters must be a list")
+        for item in filters_raw:
+            if not isinstance(item, dict):
+                raise ValueError("http_json filter entries must be mappings")
+            path = str(item.get("path", "")).strip()
+            if not path:
+                raise ValueError("http_json filter entries require a path")
+            equals_raw = item.get("equals", item.get("in", []))
+            if isinstance(equals_raw, list):
+                equals = tuple(
+                    str(value).strip()
+                    for value in equals_raw
+                    if str(value).strip()
+                )
+            elif equals_raw is None:
+                equals = ()
+            else:
+                equals = (str(equals_raw).strip(),)
+            filters.append(ValueFilter(path=path, equals=equals))
+
     return HttpJsonProfile(
         url=profile["url"],
         method=profile.get("method", "GET"),
@@ -193,6 +219,18 @@ def _build_http_json_profile(profile: dict[str, Any]) -> HttpJsonProfile:
             "Manufacturer's Recommended Retail Price",
         ),
         fixed_model=profile.get("fixed_model"),
+        fixed_official_powertrain=profile.get("fixed_official_powertrain"),
+        fixed_jato_model=profile.get("fixed_jato_model"),
+        fixed_jato_powertrain=profile.get("fixed_jato_powertrain"),
+        copy_trim_to_jato_trim=bool(profile.get("copy_trim_to_jato_trim", False)),
+        match_confidence=(
+            float(profile["match_confidence"])
+            if profile.get("match_confidence") is not None
+            else None
+        ),
+        match_status=profile.get("match_status", "review_required"),
+        match_reason=profile.get("match_reason"),
+        filters=tuple(filters),
         pricing_context=_build_pricing_context_mapping(
             profile,
             mapping_cls=HttpPricingContextMapping,

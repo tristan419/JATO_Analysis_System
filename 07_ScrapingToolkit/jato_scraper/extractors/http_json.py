@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 import requests
@@ -63,6 +64,12 @@ class PricingContextMapping:
 
 
 @dataclass(frozen=True)
+class ValueFilter:
+    path: str
+    equals: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class HttpJsonProfile:
     url: str
     method: str = "GET"
@@ -74,6 +81,14 @@ class HttpJsonProfile:
     default_tax_included: bool = True
     default_price_label: str = "Manufacturer's Recommended Retail Price"
     fixed_model: str | None = None
+    fixed_official_powertrain: str | None = None
+    fixed_jato_model: str | None = None
+    fixed_jato_powertrain: str | None = None
+    copy_trim_to_jato_trim: bool = False
+    match_confidence: float | None = None
+    match_status: str = "review_required"
+    match_reason: dict[str, Any] | None = None
+    filters: tuple[ValueFilter, ...] = ()
     pricing_context: PricingContextMapping | None = None
 
 
@@ -96,9 +111,10 @@ class HttpJsonExtractor(BaseExtractor):
 
     def extract(self) -> list[RawObservation]:
         raw_json = self._fetch()
+        audit_url = getattr(self, "_last_request_url", self.profile.url)
         if raw_json is None:
             self.record_strategy_audit(
-                url=self.profile.url,
+                url=audit_url,
                 strategy="http_json",
                 observations=[],
                 winning_strategy=None,
@@ -108,7 +124,7 @@ class HttpJsonExtractor(BaseExtractor):
         vehicles = self._navigate(raw_json)
         if vehicles is None:
             self.record_strategy_audit(
-                url=self.profile.url,
+                url=audit_url,
                 strategy="http_json",
                 observations=[],
                 winning_strategy=None,
@@ -116,25 +132,49 @@ class HttpJsonExtractor(BaseExtractor):
             )
             return []
         vehicles = self._expand_items(vehicles)
+        vehicles = self._apply_filters(vehicles, root=raw_json)
         results = self._map(vehicles, root=raw_json)
         self.record_strategy_audit(
-            url=self.profile.url,
+            url=audit_url,
             strategy="http_json",
             observations=results,
             winning_strategy="http_json" if results else None,
         )
         return results
 
+    def _template_context(self) -> dict[str, str]:
+        today = date.today().isoformat()
+        return {"today": today, "current_date": today}
+
+    def _render_request_value(self, value: Any) -> Any:
+        if isinstance(value, str):
+            rendered = value
+            for key, replacement in self._template_context().items():
+                rendered = rendered.replace("{" + key + "}", replacement)
+            return rendered
+        if isinstance(value, dict):
+            return {
+                self._render_request_value(key): self._render_request_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [self._render_request_value(item) for item in value]
+        return value
+
     def _fetch(self) -> dict | list | None:
         p = self.profile
+        url = self._render_request_value(p.url)
+        params = self._render_request_value(p.params)
+        body = self._render_request_value(p.body)
+        self._last_request_url = url
         try:
             if p.method.upper() == "POST":
                 resp = self._session.post(
-                    p.url, json=p.body, params=p.params, timeout=DEFAULT_TIMEOUT
+                    url, json=body, params=params, timeout=DEFAULT_TIMEOUT
                 )
             else:
                 resp = self._session.get(
-                    p.url, params=p.params, timeout=DEFAULT_TIMEOUT
+                    url, params=params, timeout=DEFAULT_TIMEOUT
                 )
             resp.raise_for_status()
             return resp.json()
@@ -261,9 +301,18 @@ class HttpJsonExtractor(BaseExtractor):
                 mapping.collection_path,
                 log_errors=False,
             )
+            lookup_key_text = str(lookup_key)
+            if isinstance(collection, dict):
+                item = collection.get(lookup_key_text)
+                if not isinstance(item, dict):
+                    return None
+                return self._resolve_path(
+                    item,
+                    mapping.value_path,
+                    log_errors=False,
+                )
             if not isinstance(collection, list):
                 return None
-            lookup_key_text = str(lookup_key)
             for item in collection:
                 if not isinstance(item, dict):
                     continue
@@ -283,6 +332,31 @@ class HttpJsonExtractor(BaseExtractor):
         if not mapping:
             return None
         return self._resolve_path(vehicle, mapping, log_errors=False)
+
+    def _apply_filters(
+        self,
+        vehicles: list[dict],
+        *,
+        root: Any | None = None,
+    ) -> list[dict]:
+        if not self.profile.filters:
+            return vehicles
+        filtered: list[dict] = []
+        for vehicle in vehicles:
+            include = True
+            for filter_ in self.profile.filters:
+                actual = self._resolve_field_value(
+                    vehicle,
+                    filter_.path,
+                    root=root,
+                )
+                actual_text = "" if actual is None else str(actual).strip()
+                if filter_.equals and actual_text not in filter_.equals:
+                    include = False
+                    break
+            if include:
+                filtered.append(vehicle)
+        return filtered
 
     def _coerce_pricing_context_value(
         self,
@@ -399,17 +473,17 @@ class HttpJsonExtractor(BaseExtractor):
                     p.fixed_model
                     or self._resolve_field_value(v, fm.model, root=root)
                     or ""
-                )
+                ).strip()
                 official_trim = str(
                     self._resolve_field_value(v, fm.trim, root=root) or ""
-                )
+                ).strip()
                 msrp_value = self._coerce_price_value(
                     self._resolve_field_value(v, fm.price, root=root)
                 )
                 currency = str(
                     self._resolve_field_value(v, fm.currency, root=root)
                     or p.default_currency
-                )
+                ).strip()
                 tax_included = self._resolve_field_value(
                     v,
                     fm.tax_included,
@@ -445,6 +519,13 @@ class HttpJsonExtractor(BaseExtractor):
                         str(availability).strip() if availability is not None else None
                     ),
                     raw_payload=raw_payload,
+                    jato_model=str(p.fixed_jato_model or ""),
+                    jato_trim=official_trim if p.copy_trim_to_jato_trim else "",
+                    jato_powertrain=p.fixed_jato_powertrain,
+                    official_powertrain=p.fixed_official_powertrain,
+                    match_confidence=float(p.match_confidence or 0.0),
+                    match_status=p.match_status,
+                    match_reason=p.match_reason,
                 )
                 results.append(obs)
             except (TypeError, ValueError) as exc:

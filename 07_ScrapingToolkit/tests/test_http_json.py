@@ -1,3 +1,5 @@
+from datetime import date
+
 from jato_scraper.base import ExtractorConfig
 from jato_scraper.config_loader import _build_http_json_profile
 from jato_scraper.extractors.http_json import (
@@ -6,6 +8,7 @@ from jato_scraper.extractors.http_json import (
     HttpJsonProfile,
     LookupMapping,
     PricingContextMapping,
+    ValueFilter,
 )
 
 
@@ -179,6 +182,149 @@ def test_http_json_joins_lookup_mapped_fields(monkeypatch):
     assert results[0].official_trim == "YOU / Electric 113 HK"
     assert results[0].msrp_value == 199990
     assert results[0].currency == "DKK"
+
+
+def test_http_json_filters_entries_and_maps_dict_lookup(monkeypatch):
+    extractor = HttpJsonExtractor(
+        ExtractorConfig(
+            source_code="bmw_x1_fr_test",
+            country="法国",
+            brand="BMW",
+            source_url="https://configure.bmw.fr/fr_FR/configure/U11/31EE",
+        ),
+        HttpJsonProfile(
+            url="https://example.invalid/bmw-u11.json",
+            fixed_model="X1",
+            fixed_jato_model="X1",
+            fixed_jato_powertrain="ICE",
+            fixed_official_powertrain="ICE",
+            copy_trim_to_jato_trim=True,
+            match_confidence=0.86,
+            match_reason={"kind": "official_vehicle_tree_price"},
+            field_mapping=FieldMapping(
+                vehicles_path=(
+                    "X.modelRanges.U11.lines.BASIC_LINE.includedTransmissionVariants"
+                ),
+                trim=LookupMapping(
+                    source_path="configuration.modelCode",
+                    collection_path="X.modelRanges.U11.models",
+                    value_path="phrases.fr.longDescription",
+                ),
+                price="prices.grossListPrice",
+                currency="",
+                tax_included="",
+                price_label="",
+                availability="configuration.modelCode",
+            ),
+            filters=(
+                ValueFilter(path="configuration.modelCode", equals=("31EE",)),
+            ),
+        ),
+    )
+
+    sample = {
+        "X": {
+            "modelRanges": {
+                "U11": {
+                    "models": {
+                        "11HM": {
+                            "phrases": {
+                                "fr": {"longDescription": "BMW iX1 eDrive20"}
+                            }
+                        },
+                        "31EE": {
+                            "phrases": {
+                                "fr": {"longDescription": "BMW X1 sDrive20i"}
+                            }
+                        },
+                    },
+                    "lines": {
+                        "BASIC_LINE": {
+                            "includedTransmissionVariants": [
+                                {
+                                    "configuration": {"modelCode": "11HM"},
+                                    "prices": {"grossListPrice": 46990.0},
+                                },
+                                {
+                                    "configuration": {"modelCode": "31EE"},
+                                    "prices": {"grossListPrice": 48050.0},
+                                },
+                            ]
+                        }
+                    },
+                }
+            }
+        }
+    }
+
+    monkeypatch.setattr(extractor, "_fetch", lambda: sample)
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].official_model == "X1"
+    assert results[0].official_trim == "BMW X1 sDrive20i"
+    assert results[0].jato_model == "X1"
+    assert results[0].jato_trim == "BMW X1 sDrive20i"
+    assert results[0].jato_powertrain == "ICE"
+    assert results[0].official_powertrain == "ICE"
+    assert results[0].match_confidence == 0.86
+    assert results[0].match_reason == {"kind": "official_vehicle_tree_price"}
+    assert results[0].msrp_value == 48050.0
+    assert results[0].availability_text == "31EE"
+
+
+def test_http_json_renders_today_template_in_request_values():
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True}
+
+    class DummySession:
+        def __init__(self):
+            self.headers = {}
+            self.calls = []
+
+        def post(self, url, *, json, params, timeout):
+            self.calls.append(
+                {
+                    "url": url,
+                    "json": json,
+                    "params": params,
+                    "timeout": timeout,
+                }
+            )
+            return DummyResponse()
+
+    extractor = HttpJsonExtractor(
+        ExtractorConfig(
+            source_code="bmw_template_test",
+            country="法国",
+            brand="BMW",
+            source_url="https://configure.bmw.fr/fr_FR/configure/U11/11HM",
+        ),
+        HttpJsonProfile(
+            url="https://example.invalid/effect-dates/{today}",
+            method="POST",
+            params={"order-date": "{today}"},
+            body={"validityDates": {"taxDate": "{current_date}"}},
+        ),
+    )
+    session = DummySession()
+    extractor._session = session
+
+    assert extractor._fetch() == {"ok": True}
+
+    today = date.today().isoformat()
+    assert session.calls == [
+        {
+            "url": f"https://example.invalid/effect-dates/{today}",
+            "json": {"validityDates": {"taxDate": today}},
+            "params": {"order-date": today},
+            "timeout": 30,
+        }
+    ]
 
 
 def test_http_json_adds_pricing_context_from_profile(monkeypatch):
