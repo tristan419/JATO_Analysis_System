@@ -91,6 +91,9 @@ import type {
   HermesCostResponse,
   HermesDailySummaryResponse,
   HermesEvidenceLedgerResponse,
+  HermesFeatureGoal,
+  HermesFeatureGoalsResponse,
+  HermesFeatureGoalSwimlanesResponse,
   HermesFeatureKanbanResponse,
   HermesFullDesignDocumentResponse,
   HermesGap,
@@ -104,6 +107,7 @@ import type {
   HermesPipelineStatusRecord,
   HermesProgressFeature,
   HermesProgressSwimlaneResponse,
+  HermesReuseCandidatesResponse,
   HermesDeployStatusResponse,
   HermesSentinelMailboxStatus,
   HermesSentinelNotification,
@@ -2307,6 +2311,14 @@ export const api = {
     request<HermesProgressSwimlaneResponse>("/hermes/progress/swimlanes"),
   hermesWorkflowCockpit: () =>
     request<HermesWorkflowCockpitResponse>("/hermes/workflow/cockpit"),
+  hermesGoalFeatures: () =>
+    request<HermesFeatureGoalsResponse>("/hermes/goals/features"),
+  hermesGoalFeature: (featureId: string) =>
+    request<HermesFeatureGoal>(`/hermes/goals/features/${encodeURIComponent(featureId)}`),
+  hermesGoalSwimlanes: () =>
+    request<HermesFeatureGoalSwimlanesResponse>("/hermes/goals/swimlanes"),
+  hermesReuseCandidates: (featureId: string) =>
+    request<HermesReuseCandidatesResponse>(`/hermes/reuse/candidates?featureId=${encodeURIComponent(featureId)}`),
 
   /* ── Hermes Chat ──────────────────────────────── */
   hermesChat: (payload: HermesChatRequest) =>

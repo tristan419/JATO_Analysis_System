@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { api } from "../api/client";
 import { HermesAskResponseCard } from "../components/HermesAskResponseCard";
+import { HermesFeaturePmoBoard } from "../components/HermesFeaturePmoBoard";
 import { HermesHistoryMap } from "../components/HermesHistoryMap";
 import { HermesMermaidBlock } from "../components/HermesMermaidBlock";
 import { HermesProgressSwimlane } from "../components/HermesProgressSwimlane";
@@ -1293,8 +1294,9 @@ export function DataManagementPage() {
               </div>
             )}
 
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(100%,360px),1fr))",gap:12,alignItems:"stretch",marginBottom:16}}>
-              <div className="card crud-card" style={{height:440,padding:12,display:"grid",gridTemplateRows:"auto 1fr auto",gap:10,overflow:"hidden"}}>
+            <div style={{display:"grid",gap:12,marginBottom:16}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(100%,420px),1fr))",gap:12,alignItems:"stretch"}}>
+              <div className="card crud-card" style={{height:420,padding:12,display:"grid",gridTemplateRows:"auto 1fr auto",gap:10,overflow:"hidden"}}>
                 <div>
                   <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:"#64748b"}}>Hermes 小管家</div>
                   <strong style={{fontSize:16,color:"#0f172a"}}>{askSending ? "正在查询" : askResponse ? "已返回回答" : "可以继续开发"}</strong>
@@ -1363,12 +1365,6 @@ export function DataManagementPage() {
                 </div>
               </div>
 
-              {hermesSubtab === "history" && (
-                <div style={{marginBottom:16}}>
-                  <HermesHistoryMap />
-                </div>
-              )}
-
               {sentinelStatus ? (() => {
                 const notifications = sentinelStatus.notifications ?? [];
                 const filteredNotifications = notifications.filter((notification) =>
@@ -1377,7 +1373,7 @@ export function DataManagementPage() {
                 const countFor = (filter: SentinelInboxFilter) =>
                   notifications.filter((notification) => matchesSentinelFilter(notification, filter, "")).length;
                 return (
-                  <div className="card crud-card" style={{height:440,padding:12,display:"grid",gridTemplateRows:"auto auto 1fr auto",gap:10,overflow:"hidden"}}>
+                  <div className="card crud-card" style={{height:420,padding:12,display:"grid",gridTemplateRows:"auto auto 1fr auto",gap:10,overflow:"hidden"}}>
                     <div>
                       <strong style={{fontSize:13}}>SENTINEL INBOX</strong>
                       <div style={{fontSize:11,color:"#64748b"}}>{sentinelStatus.overall === "ok" ? "Clear" : String(sentinelStatus.overall).toUpperCase()} · {sentinelStatus.unreadCount ?? 0} unread</div>
@@ -1471,10 +1467,11 @@ export function DataManagementPage() {
                   </div>
                 );
               })() : (
-                <div className="card crud-card" style={{height:440,padding:12,display:"flex",alignItems:"center",justifyContent:"center",color:"#64748b",fontSize:12}}>
+                <div className="card crud-card" style={{height:420,padding:12,display:"flex",alignItems:"center",justifyContent:"center",color:"#64748b",fontSize:12}}>
                   Loading Sentinel inbox...
                 </div>
               )}
+              </div>
             </div>
 
             {/* Hermes summary bar */}
@@ -1527,6 +1524,13 @@ export function DataManagementPage() {
                 <button key={st} type="button" className={`admin-tab${hermesSubtab===st?" is-active":""}`} onClick={()=>selectHermesSubtab(st)}>Diagrams</button>
               ))}
             </div>
+
+            {hermesSubtab === "history" && (
+              <div style={{display:"grid",gap:12,marginBottom:16}}>
+                <HermesHistoryMap />
+                <HermesFeaturePmoBoard />
+              </div>
+            )}
 
             {/* ── Capabilities sub-tab (能为我干什么) ── */}
             {hermesSubtab === "capabilities" && (

@@ -33,6 +33,10 @@ vi.mock("../../components/HermesHistoryMap", () => ({
   HermesHistoryMap: () => <div data-testid="history-map">Git History Cluster Panel</div>,
 }));
 
+vi.mock("../../components/HermesFeaturePmoBoard", () => ({
+  HermesFeaturePmoBoard: () => <div data-testid="feature-pmo-board">Feature PMO Board</div>,
+}));
+
 vi.mock("../../components/HermesProgressSwimlane", () => ({
   HermesProgressSwimlane: () => <div data-testid="progress-swimlane">Progress Swimlane</div>,
 }));
