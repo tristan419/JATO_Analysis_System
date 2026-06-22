@@ -17478,6 +17478,26 @@ table.material-finance-table td:nth-child(n+5) {
   min-height: 0;
 }
 
+.hero-product-slide-frame .hero-product-distribution-panel.is-country-aligned .hero-product-country-row {
+  align-items: center;
+}
+
+.hero-product-slide-frame .hero-product-distribution-panel .hero-product-country-row.is-empty {
+  color: rgba(100, 116, 139, 0.46);
+}
+
+.hero-product-slide-frame .hero-product-distribution-panel .hero-product-country-row.is-empty .hero-product-country-bar-shell {
+  background: rgba(226, 232, 240, 0.46);
+}
+
+.hero-product-slide-frame .hero-product-distribution-panel .hero-product-country-row.is-empty .hero-product-drive-stack {
+  opacity: 0;
+}
+
+.hero-product-slide-frame .hero-product-distribution-panel .hero-product-country-row.is-empty strong {
+  color: rgba(100, 116, 139, 0.52);
+}
+
 .hero-product-slide-frame .hero-product-distribution-panel.is-dense .hero-product-country-list,
 .hero-product-slide-frame .hero-product-distribution-panel.is-very-dense .hero-product-country-list {
   gap: 1px;

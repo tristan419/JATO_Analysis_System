@@ -44,6 +44,7 @@ type HeroProductPageKey =
   | "heroDistribution";
 
 type HeroProductScopeMode = "all" | "price";
+type HeroProductDistributionLayout = "ranked" | "aligned";
 type HeroProductInsightTone = "positive" | "negative" | "neutral" | "new";
 type HeroProductSpecEditableField =
   | "brand"
@@ -176,6 +177,10 @@ const PRICE_SOURCES: Array<{ value: HeroProductPriceSource; label: string }> = [
   { value: "msrp", label: "MSRP 抓取价" },
   { value: "jato", label: "JATO 价格" },
 ];
+const DISTRIBUTION_LAYOUTS: Array<{ value: HeroProductDistributionLayout; label: string }> = [
+  { value: "ranked", label: "独立排序" },
+  { value: "aligned", label: "国家对齐" },
+];
 const HERO_PRODUCT_SPEC_COLUMN_OPTIONS: Array<{ key: HeroProductSystemSpecColumnKey; label: string }> = [
   { key: "brand", label: "品牌" },
   { key: "model", label: "车型" },
@@ -226,6 +231,10 @@ function isSalesMode(value: string | null): value is HeroProductSalesMode {
 
 function isPriceSource(value: string | null): value is HeroProductPriceSource {
   return value === "msrp" || value === "jato";
+}
+
+function isDistributionLayout(value: string | null): value is HeroProductDistributionLayout {
+  return value === "ranked" || value === "aligned";
 }
 
 function normalizeExportDimension(value: number, fallback: number, min: number): number {
@@ -301,6 +310,10 @@ function salesModeColumnPrefix(mode: HeroProductSalesMode): string {
   if (mode === "month") return "当月";
   if (mode === "rolling12") return "近12月";
   return "YTD";
+}
+
+function salesModeLabel(mode: HeroProductSalesMode): string {
+  return SALES_MODES.find((item) => item.value === mode)?.label ?? "YTD";
 }
 
 function sanitizeCustomSpecColumnLabel(value: string): string {
@@ -703,6 +716,9 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
   const [scopeMode, setScopeMode] = useState<HeroProductScopeMode>(() => (
     searchParams.get("scope") === "price" ? "price" : "all"
   ));
+  const [distributionLayout, setDistributionLayout] = useState<HeroProductDistributionLayout>(() => (
+    isDistributionLayout(searchParams.get("distributionLayout")) ? searchParams.get("distributionLayout") as HeroProductDistributionLayout : "aligned"
+  ));
   const [topModelText, setTopModelText] = useState(() => searchParams.get("topModels") || "");
   const [heroModelText, setHeroModelText] = useState(() => searchParams.get("heroModels") || "");
   const [countryLimitText, setCountryLimitText] = useState(() => {
@@ -821,13 +837,14 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     if (salesMode !== "ytd") params.set("salesMode", salesMode);
     if (priceSource !== "msrp") params.set("priceSource", priceSource);
     if (scopeMode !== "all") params.set("scope", scopeMode);
+    if (distributionLayout !== "aligned") params.set("distributionLayout", distributionLayout);
     if (countryLimit > 0) params.set("countryLimit", String(countryLimit));
     if (topModelText.trim()) params.set("topModels", topModelText.trim());
     if (heroModelText.trim()) params.set("heroModels", heroModelText.trim());
     if (params.toString() !== searchParams.toString()) {
       setSearchParams(params, { replace: true });
     }
-  }, [activePage, countryLimit, heroModelText, period, priceCountry, priceSource, salesMode, scopeMode, searchParams, setSearchParams, topModelText]);
+  }, [activePage, countryLimit, distributionLayout, heroModelText, period, priceCountry, priceSource, salesMode, scopeMode, searchParams, setSearchParams, topModelText]);
 
   useEffect(() => {
     writeStoredSlideLayouts("hero-product-analysis", slideLayouts);
@@ -1048,6 +1065,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     onSavePriceValue: handleSavePriceValue,
     onSaveSpecValue: handleSaveSpecValue,
   };
+  const activeSalesModeLabel = salesModeLabel(salesMode);
 
   return (
     <div className="market-scan-shell hero-product-shell">
@@ -1124,6 +1142,17 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
                   </button>
                 ))}
               </div>
+            </div>
+            <div className="market-scan-field deck-panel-grid__wide">
+              <span>Market Layout</span>
+              <div className="btn-group">
+                {DISTRIBUTION_LAYOUTS.map((layout) => (
+                  <button key={layout.value} type="button" className={`btn btn-sm ${distributionLayout === layout.value ? "btn-primary" : "btn-ghost"}`} onClick={() => setDistributionLayout(layout.value)}>
+                    {layout.label}
+                  </button>
+                ))}
+              </div>
+              <small className="hero-product-control-hint">国家对齐 = 第 4/6 页按第一列车型国家顺序对齐；缺失国家保留空行。</small>
             </div>
             <div className="market-scan-field deck-panel-grid__wide hero-product-spec-column-control">
               <div className="hero-product-column-control-head">
@@ -1211,7 +1240,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
               <span>Deck</span>
               <div className="btn-group">
                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => setReloadToken((value) => value + 1)}>Refresh</button>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTopModelText(""); setHeroModelText(""); setCountryLimitText(""); setScopeMode("all"); setSalesMode("ytd"); setPriceSource("msrp"); setSpecColumns(DEFAULT_HERO_PRODUCT_SPEC_COLUMNS); }}>Reset</button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTopModelText(""); setHeroModelText(""); setCountryLimitText(""); setScopeMode("all"); setSalesMode("ytd"); setPriceSource("msrp"); setDistributionLayout("aligned"); setSpecColumns(DEFAULT_HERO_PRODUCT_SPEC_COLUMNS); }}>Reset</button>
               </div>
             </div>
             <div className="hero-product-price-editor deck-panel-grid__wide">
@@ -1282,13 +1311,15 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
                     <div className="market-scan-slide-meta">
                       <span className="market-scan-slide-tag">{deck.metadata.selectedFuelType}</span>
                       <span className="market-scan-slide-tag">{deck.metadata.selectedSegment}</span>
+                      <span className="market-scan-slide-tag">{activeSalesModeLabel}</span>
                       <span className="market-scan-slide-tag">{deck.metadata.labels.currentMonthShort}</span>
                       <span className="market-scan-slide-tag">{priceSource.toUpperCase()}</span>
+                      {loading ? <span className="market-scan-slide-tag">Updating</span> : null}
                     </div>
                   </header>
                   <div className="market-scan-slide-body hero-product-slide-body">
                     <div className="market-scan-slide-content hero-product-slide-content">
-                      <HeroProductPageContent deck={deck} pageKey={activePage} priceSource={priceSource} priceEditor={priceEditor} salesMode={salesMode} specColumns={specColumns} customColumns={customSpecColumnOptions} />
+                      <HeroProductPageContent deck={deck} pageKey={activePage} priceSource={priceSource} priceEditor={priceEditor} salesMode={salesMode} distributionLayout={distributionLayout} specColumns={specColumns} customColumns={customSpecColumnOptions} />
                     </div>
                   </div>
                 </div>
@@ -1407,7 +1438,7 @@ function HeroProductInsightCallout({ insight }: { insight: HeroProductInsight })
   );
 }
 
-function HeroProductPageContent({ deck, pageKey, priceSource, priceEditor, salesMode, specColumns, customColumns }: { deck: HeroProductDeckResponse; pageKey: HeroProductPageKey; priceSource: HeroProductPriceSource; priceEditor: HeroProductPriceEditorBinding; salesMode: HeroProductSalesMode; specColumns: HeroProductSpecColumnKey[]; customColumns: HeroProductSpecColumnOption[] }) {
+function HeroProductPageContent({ deck, pageKey, priceSource, priceEditor, salesMode, distributionLayout, specColumns, customColumns }: { deck: HeroProductDeckResponse; pageKey: HeroProductPageKey; priceSource: HeroProductPriceSource; priceEditor: HeroProductPriceEditorBinding; salesMode: HeroProductSalesMode; distributionLayout: HeroProductDistributionLayout; specColumns: HeroProductSpecColumnKey[]; customColumns: HeroProductSpecColumnOption[] }) {
   if (pageKey === "benchmark") {
     return <BenchmarkSlide rows={deck.pages.benchmark.ranking} productRows={deck.pages.benchmark.productRows} priceSource={priceSource} priceEditor={priceEditor} salesMode={salesMode} specColumns={specColumns} customColumns={customColumns} showChannel={false} />;
   }
@@ -1418,12 +1449,12 @@ function HeroProductPageContent({ deck, pageKey, priceSource, priceEditor, sales
     return <TrendSlide page={deck.pages.topTrend} priceSource={priceSource} priceEditor={priceEditor} variant="top" />;
   }
   if (pageKey === "topDistribution") {
-    return <DistributionSlide page={deck.pages.topDistribution} variant="top" />;
+    return <DistributionSlide page={deck.pages.topDistribution} variant="top" salesMode={salesMode} layout={distributionLayout} />;
   }
   if (pageKey === "heroTrend") {
     return <TrendSlide page={deck.pages.heroTrend} priceSource={priceSource} priceEditor={priceEditor} variant="hero" />;
   }
-  return <DistributionSlide page={deck.pages.heroDistribution} variant="hero" />;
+  return <DistributionSlide page={deck.pages.heroDistribution} variant="hero" salesMode={salesMode} layout={distributionLayout} />;
 }
 
 function BenchmarkSlide({ rows, productRows, priceSource, priceEditor, salesMode, specColumns, customColumns, showChannel }: { rows: HeroProductModelRow[]; productRows: HeroProductModelRow[]; priceSource: HeroProductPriceSource; priceEditor: HeroProductPriceEditorBinding; salesMode: HeroProductSalesMode; specColumns: HeroProductSpecColumnKey[]; customColumns: HeroProductSpecColumnOption[]; showChannel: boolean }) {
@@ -1939,14 +1970,52 @@ function PricePanel({ rows, priceSource, priceEditor }: { rows: HeroProductDeckR
   );
 }
 
-function DistributionSlide({ page, variant }: { page: HeroProductDeckResponse["pages"]["topDistribution"]; variant: "top" | "hero" }) {
+type HeroProductDistributionCountryRow = HeroProductDeckResponse["pages"]["topDistribution"]["distribution"]["items"][number]["countries"][number] & {
+  isAlignedEmpty?: boolean;
+};
+
+function emptyDistributionCountry(country: string): HeroProductDistributionCountryRow {
+  return {
+    country,
+    sales: 0,
+    isAlignedEmpty: true,
+    driveMix: {
+      front: 0,
+      rear: 0,
+      "4x4": 0,
+      other: 0,
+    },
+  };
+}
+
+function alignedCountryOrder(items: HeroProductDeckResponse["pages"]["topDistribution"]["distribution"]["items"], fallbackCountries: string[]): string[] {
+  const firstColumnCountries = items[0]?.countries.map((country) => country.country).filter(Boolean) ?? [];
+  return firstColumnCountries.length > 0 ? firstColumnCountries : fallbackCountries;
+}
+
+function countryRowsForDistributionItem(
+  item: HeroProductDeckResponse["pages"]["topDistribution"]["distribution"]["items"][number],
+  layout: HeroProductDistributionLayout,
+  countryOrder: string[],
+): HeroProductDistributionCountryRow[] {
+  if (layout === "ranked") return item.countries;
+  const byCountry = new Map(item.countries.map((country) => [country.country, country]));
+  return countryOrder.map((country) => byCountry.get(country) ?? emptyDistributionCountry(country));
+}
+
+function DistributionSlide({ page, variant, salesMode, layout }: { page: HeroProductDeckResponse["pages"]["topDistribution"]; variant: "top" | "hero"; salesMode: HeroProductSalesMode; layout: HeroProductDistributionLayout }) {
   const insight = buildDistributionInsight(page, variant);
   const visibleItems = page.distribution.items.slice(0, variant === "top" ? 10 : 6);
-  const maxCountryRows = Math.max(1, ...visibleItems.map((item) => item.countries.length));
+  const countryOrder = alignedCountryOrder(visibleItems, page.distribution.countries);
+  const maxCountryRows = Math.max(1, ...visibleItems.map((item) => (
+    layout === "aligned" ? countryOrder.length : item.countries.length
+  )));
   const densityClass = maxCountryRows > 34 ? " is-very-dense" : maxCountryRows > 24 ? " is-dense" : "";
   const matrixStyle = {
     "--hero-product-distribution-cols": String(Math.max(1, visibleItems.length)),
   } as CSSProperties;
+  const modeLabel = salesModeLabel(salesMode);
+  const layoutLabel = layout === "aligned" ? "国家对齐" : "独立排序";
 
   return (
     <div className="hero-product-page-stack hero-product-page-stack--distribution">
@@ -1954,8 +2023,8 @@ function DistributionSlide({ page, variant }: { page: HeroProductDeckResponse["p
       <HeroProductPanel
         eyebrow={variant === "hero" ? "Market · Fixed Models" : "Market · Top Models"}
         title={page.title}
-        subtitle="每个车型独立成列，按国家拆分销量并用 front / rear / 4x4 堆叠条解释驱动结构。"
-        className={`hero-product-distribution-panel hero-product-distribution-panel--${variant}${densityClass}`}
+        subtitle={`${modeLabel}口径 · ${layoutLabel}；${layout === "aligned" ? "按第一列车型国家顺序统一行轴，缺失国家保留空行。" : "每个车型独立成列，按国家销量排序。"}`}
+        className={`hero-product-distribution-panel hero-product-distribution-panel--${variant}${layout === "aligned" ? " is-country-aligned" : ""}${densityClass}`}
       >
         <div className="hero-product-distribution-wrap">
           <div className="hero-product-distribution-legend">
@@ -1965,7 +2034,7 @@ function DistributionSlide({ page, variant }: { page: HeroProductDeckResponse["p
           </div>
           <div className="hero-product-distribution-grid" style={matrixStyle}>
         {visibleItems.map((item) => {
-          const countryRows = item.countries;
+          const countryRows = countryRowsForDistributionItem(item, layout, countryOrder);
           const modelMaxCountrySales = Math.max(1, ...countryRows.map((country) => country.sales));
           return (
             <section key={`${item.brand}-${item.model}`} className="hero-product-distribution-card">
@@ -1989,15 +2058,16 @@ function DistributionSlide({ page, variant }: { page: HeroProductDeckResponse["p
   );
 }
 
-function CountryDriveRow({ country, maxSales }: { country: HeroProductDeckResponse["pages"]["topDistribution"]["distribution"]["items"][number]["countries"][number]; maxSales: number }) {
+function CountryDriveRow({ country, maxSales }: { country: HeroProductDistributionCountryRow; maxSales: number }) {
+  const isEmpty = Boolean(country.isAlignedEmpty) || country.sales <= 0;
   const total = Math.max(1, country.sales);
   const frontShare = clampShare(Number(country.driveMix.front ?? 0) / total);
   const rearShare = clampShare(Number(country.driveMix.rear ?? 0) / total);
   const fourShare = clampShare(Number(country.driveMix["4x4"] ?? 0) / total);
-  const barWidth = Math.max(1, Math.min(100, (country.sales / Math.max(1, maxSales)) * 100));
+  const barWidth = isEmpty ? 0 : Math.max(1, Math.min(100, (country.sales / Math.max(1, maxSales)) * 100));
 
   return (
-    <div className="hero-product-country-row">
+    <div className={`hero-product-country-row${isEmpty ? " is-empty" : ""}`}>
       <span>{country.country}</span>
       <div className="hero-product-country-bar-shell">
         <div className="hero-product-drive-stack" style={{ width: `${barWidth}%` }}>
@@ -2006,7 +2076,7 @@ function CountryDriveRow({ country, maxSales }: { country: HeroProductDeckRespon
           <i className="is-4x4" style={{ width: `${fourShare * 100}%` }} />
         </div>
       </div>
-      <strong>{formatNumber(country.sales)}</strong>
+      <strong>{isEmpty ? "-" : formatNumber(country.sales)}</strong>
     </div>
   );
 }
