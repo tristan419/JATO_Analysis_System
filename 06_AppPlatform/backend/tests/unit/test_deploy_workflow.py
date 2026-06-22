@@ -38,6 +38,18 @@ def test_tencent_deploy_upload_timeout_allows_slow_tencent_scp() -> None:
     assert 'timeout 180s sshpass -p "$SSH_PASSWORD"' in workflow
 
 
+def test_tencent_deploy_uploads_archive_inside_deploy_step() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/deploy-fullstack-tencent.yml").read_text(
+        encoding="utf-8",
+    )
+
+    assert workflow.count('ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"') >= 4
+    assert workflow.count('REMOTE_ARCHIVE="/tmp/JATO_deploy.tar.gz"') >= 4
+    assert 'REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.${GITHUB_RUN_ID:-manual}.${GITHUB_RUN_ATTEMPT:-0}.uploading"' in workflow
+    assert workflow.count("timeout 600s scp") >= 2
+    assert workflow.count('timeout 600s sshpass -p "$SSH_PASSWORD"') >= 2
+
+
 def test_archive_deploy_reports_expected_commit_when_git_sync_is_skipped() -> None:
     script = (
         REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
