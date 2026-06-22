@@ -49,13 +49,19 @@ CAMPAIGN_PRICE_KEYWORDS = (
     "eintauschbonus",
     "leasingbonus",
     "versicherungsbonus",
-    "bonus",
     "rabatt",
     "discount",
     "subsidy",
     "net price",
     "nettopreis",
-    "cash",
+)
+PRICE_LIST_CUE_KEYWORDS = (
+    "preisliste",
+    "preislisten",
+    "price list",
+    "katalog",
+    "catalogue",
+    "brochure",
 )
 DEFAULT_BACKLOG_PATH = (
     REPO_ROOT
@@ -173,7 +179,27 @@ def classify_price_signal(
         set(campaign_hits_from_evidence)
         | {keyword for keyword in CAMPAIGN_PRICE_KEYWORDS if keyword in evidence_text}
     )
+    title_and_headings = " ".join(
+        [
+            str((evidence.get("page") or {}).get("title") or ""),
+            " ".join(str(value) for value in signals.get("headings") or []),
+        ]
+    ).lower()
+    has_price_list_cue = any(
+        keyword in title_and_headings for keyword in PRICE_LIST_CUE_KEYWORDS
+    )
 
+    if price_samples and msrp_hits and has_price_list_cue:
+        return {
+            "officialPriceSignalStatus": "price_signal_present",
+            "recommendedAction": "repair_selector_and_run_dryrun",
+            "dryrunCandidateEligible": True,
+            "officialIngestEligible": False,
+            "reason": (
+                "Official page has price-list cues plus MSRP/VAT semantics; "
+                "validate selector scope through dryrun before ingest."
+            ),
+        }
     if price_samples and campaign_hits:
         return {
             "officialPriceSignalStatus": "campaign_or_net_price_signal",

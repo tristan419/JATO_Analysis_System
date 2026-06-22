@@ -132,6 +132,31 @@ def test_classify_price_signal_routes_campaign_price_out_of_base_msrp() -> None:
     assert classification["nonMsrpSignalType"] == "campaign_or_net_price"
 
 
+def test_classify_price_signal_keeps_price_list_with_generic_bonus_candidate() -> None:
+    html = """
+    <html>
+      <head><title>Skoda Karoq Preise und Preisliste</title></head>
+      <body>
+        <h1>Preisliste</h1>
+        <p>Preis inkl. MwSt. ab € 46.487,00.</p>
+        <p>Service bonus details and app content may appear in the footer.</p>
+      </body>
+    </html>
+    """
+    evidence = audit.build_page_evidence(html=html, url="https://example.test")
+    heuristics = audit.analyze_page_heuristics(evidence)
+
+    classification = audit.classify_price_signal(
+        evidence=evidence,
+        heuristics=heuristics,
+    )
+
+    assert classification["officialPriceSignalStatus"] == "price_signal_present"
+    assert classification["recommendedAction"] == "repair_selector_and_run_dryrun"
+    assert classification["dryrunCandidateEligible"] is True
+    assert classification["officialIngestEligible"] is False
+
+
 def test_build_page_evidence_reads_component_attribute_prices() -> None:
     html = """
     <html><body>

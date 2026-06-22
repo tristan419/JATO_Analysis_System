@@ -87,7 +87,6 @@ CAMPAIGN_KEYWORDS = (
     "eintauschbonus",
     "leasingbonus",
     "versicherungsbonus",
-    "bonus",
     "rabatt",
     "discount",
     "subsidy",
