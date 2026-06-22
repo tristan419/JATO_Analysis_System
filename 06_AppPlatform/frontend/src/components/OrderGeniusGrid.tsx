@@ -235,7 +235,10 @@ export function buildOrderGeniusColumnDefs(
       width: 100,
       editable: false,
       type: "numericColumn",
-      valueFormatter: (p) => (p.value != null ? p.value.toLocaleString() : "-"),
+      valueFormatter: (p) => {
+        const value = Number(p.value);
+        return Number.isFinite(value) && value > 0 ? value.toLocaleString() : "-";
+      },
     });
   }
 

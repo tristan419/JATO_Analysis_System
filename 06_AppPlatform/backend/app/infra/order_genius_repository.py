@@ -446,6 +446,10 @@ def copy_country_fobs(
             target,
             source_row.material_code,
         )
+        if existing and existing.final_fob_eur is not None and existing.final_fob_eur <= 0:
+            existing.is_active = False
+            existing.updated_at_utc = datetime.now(timezone.utc)
+            existing = None
         if existing:
             if not overwrite_existing:
                 skipped += 1
@@ -560,6 +564,8 @@ def adjust_country_fobs(
         )
         row.final_fob_eur = new_value
         row.fob_source_mode = "manual_country_adjust"
+        if new_value == 0:
+            row.is_active = False
         row.updated_at_utc = datetime.now(timezone.utc)
         adjusted += 1
 
@@ -591,6 +597,7 @@ def list_bom_with_fob(
         select(CountrySkuFobResolved).where(
             CountrySkuFobResolved.material_code.in_(material_codes),
             CountrySkuFobResolved.is_active == True,
+            CountrySkuFobResolved.final_fob_eur > 0,
         )
     ).scalars().all()
 
@@ -753,7 +760,11 @@ def _country_material_finance_payload(
     fob: CountrySkuFobResolved | None,
     finance: CountryMaterialFinance | None,
 ) -> dict:
-    bom_fob_eur = float(fob.final_fob_eur) if fob and fob.final_fob_eur is not None else None
+    bom_fob_eur = (
+        float(fob.final_fob_eur)
+        if fob and fob.final_fob_eur is not None and fob.final_fob_eur > 0
+        else None
+    )
     finance_fob_eur = (
         float(finance.fob_eur)
         if finance and finance.fob_eur is not None
@@ -879,6 +890,7 @@ def list_country_material_finance(
             CountrySkuFobResolved.country_code == country,
             CountrySkuFobResolved.material_code.in_(codes),
             CountrySkuFobResolved.is_active == True,
+            CountrySkuFobResolved.final_fob_eur > 0,
         )
     ).scalars().all()
     fob_by_code = {row.material_code: row for row in fobs}
@@ -1096,6 +1108,7 @@ def upsert_country_material_finance(
                 CountrySkuFobResolved.country_code == country,
                 CountrySkuFobResolved.material_code.in_(concrete_codes),
                 CountrySkuFobResolved.is_active == True,
+                CountrySkuFobResolved.final_fob_eur > 0,
             )
         ).scalars().all()
         return _country_template_finance_payload(
@@ -1253,6 +1266,7 @@ def list_all_material_skus_for_admin(
         subq = select(CountrySkuFobResolved.material_code).where(
             CountrySkuFobResolved.country_code == country_code,
             CountrySkuFobResolved.is_active == True,
+            CountrySkuFobResolved.final_fob_eur > 0,
         ).distinct()
         stmt = stmt.where(MaterialSkuMaster.material_code.in_(subq))
     if brand:
@@ -1942,6 +1956,7 @@ def list_active_fob_country_codes(session: Session) -> list[str]:
     country_codes = session.execute(
         select(CountrySkuFobResolved.country_code)
         .where(CountrySkuFobResolved.is_active == True)
+        .where(CountrySkuFobResolved.final_fob_eur > 0)
         .distinct()
     ).scalars().all()
     return sorted({str(code or "").upper() for code in country_codes if str(code or "").strip()})
@@ -2151,6 +2166,7 @@ def list_fob_by_country(
     stmt = select(CountrySkuFobResolved).where(
         CountrySkuFobResolved.country_code == country_code,
         CountrySkuFobResolved.is_active == True,
+        CountrySkuFobResolved.final_fob_eur > 0,
     )
     if payment_term_code:
         stmt = stmt.where(
@@ -2168,6 +2184,7 @@ def list_active_fob_material_codes(
         select(CountrySkuFobResolved.material_code).where(
             CountrySkuFobResolved.country_code == country_code,
             CountrySkuFobResolved.is_active == True,
+            CountrySkuFobResolved.final_fob_eur > 0,
         )
     ).all()}
 

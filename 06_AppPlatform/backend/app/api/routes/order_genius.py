@@ -947,19 +947,21 @@ def patch_sku_fob(
     fob_raw = body.get("finalFobEur")
     if not country:
         raise HTTPException(status_code=400, detail="countryCode is required")
-    fob_val = fob_raw if fob_raw is None else float(fob_raw)
+    fob_val = None if fob_raw is None else float(fob_raw)
+    if fob_val is not None and fob_val <= 0:
+        fob_val = None
     pt_code = body.get("paymentTermCode")
     result = repo.update_sku_fob_for_country(
         session, material_code, country, fob_val, pt_code,
     )
-    if not result:
+    if not result and fob_val is not None:
         raise HTTPException(status_code=404, detail="Could not update FOB")
     session.commit()
     return {
-        "materialCode": result.material_code,
-        "countryCode": result.country_code,
-        "finalFobEur": float(result.final_fob_eur) if result.final_fob_eur is not None else None,
-        "paymentTermCode": result.payment_term_code,
+        "materialCode": result.material_code if result else material_code,
+        "countryCode": result.country_code if result else country,
+        "finalFobEur": float(result.final_fob_eur) if result and fob_val is not None else None,
+        "paymentTermCode": result.payment_term_code if result else pt_code,
     }
 
 
