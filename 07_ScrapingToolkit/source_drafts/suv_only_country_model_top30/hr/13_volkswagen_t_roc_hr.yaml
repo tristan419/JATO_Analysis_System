@@ -1,39 +1,41 @@
 source_code: volkswagen_t_roc_hr_draft_scrapling
 country: 克罗地亚
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.hr/hr/modeli/t-roc.html
-source_type: manufacturer_official
+source_url: https://www.volkswagen.hr/svi-cjenici
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: pdf_text
 profile:
-  url: https://www.volkswagen.hr/hr/modeli/t-roc.html
+  url: https://www.volkswagen.hr/dam/files/download/dbcc201949960d6bf120f21e427470d89354bd8e/a5ead41ffb6d1e957b14f635a428edeb/039ae151-54f1-44cb-b6b2-db8f19918e97/cjenik-novi-t-roc
+  timeout_seconds: 30
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Preporučena maloprodajna cijena s PDV-om
+  default_price_label: Cijena do registracije u EUR, s uključenim PDV-om i PPMV-om
   fixed_model: T-ROC
   fixed_jato_model: T-ROC
-  structured_fields:
-    powertrain_rules:
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - eTSI
-      - hybrid
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzin
-      - TSI
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: volkswagen_hr_svi_cjenici
+    note: Official Volkswagen Croatia T-Roc price-list PDF from Svi cjenici; Cijena do registracije column.
+  entry_patterns:
+  - pattern: '(?P<trim>T-ROC\s+NF\s+1\.5\s+eTSI\s+DSG(?:\s+(?:Trend|Life|Style|R-Line))?)\s+5\s+DG7\s+\d+\s+\d+\s+(?P<price>\d{2}\.\d{3},\d{2})'
+    official_powertrain: eTSI
+    jato_powertrain: MHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (HR market). CSS
-  selectors still require browser-based inspection before promotion. [Switched to
-  playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
+notes: Keywords filled from official manufacturer website research (HR market).
+  Replaced stale Playwright model page with official Volkswagen Croatia Svi cjenici
+  price-list PDF; PDF URL is taken from data-gtm-element-url without the stale
+  /pdf suffix.
 bootstrap_meta:
   country_model_rank: 13
   suggested_scope_kind: single_model
