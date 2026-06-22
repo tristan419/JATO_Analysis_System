@@ -7,105 +7,40 @@ price_semantics: base_msrp
 extractor_type: scrapling
 profile:
   url: https://www.cupraofficial.hr/nova-cupra-terramar/verzije-i-oprema
-  tier: stealth
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
   impersonate: chrome
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: 'name\\":\\"CUPRA Terramar\\".*?modelName\\":\\"CUPRA TERRAMAR\\".*?price\\":(?P<price>39683\.38)'
+      official_trim: Terramar starting price
+      official_powertrain: model overview
+      price_label: Official model starting price
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Preporučena maloprodajna cijena s PDV-om
+  default_price_label: Official model starting price
   fixed_model: TERRAMAR
   fixed_jato_model: TERRAMAR
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - eHybrid
-      - plug-in hibrid
-      - plug-in hybrid
-      - VZ e-HYBRID
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - eTSI
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzin
-      - TSI
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  match_confidence: 0.8
+  match_status: review_required
+  match_reason:
+    kind: official_model_overview_starting_price
+    source: cupra_hr_next_payload
+    note: Official Cupra Croatia Terramar page embeds the model overview starting price in the Next.js payload.
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (HR market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+notes: Keywords filled from official manufacturer website research (HR market).
+  Replaced broad CSS extraction with text_regex over the official Cupra Croatia
+  Terramar page's embedded model overview starting price.
 bootstrap_meta:
   country_model_rank: 23
   suggested_scope_kind: single_model
