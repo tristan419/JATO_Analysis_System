@@ -18,6 +18,8 @@ MIHOMO_CONFIG_DIR="/etc/mihomo"
 MIHOMO_LOCAL="${MIHOMO_LOCAL:-false}"
 MIHOMO_DRY_RUN="${MIHOMO_DRY_RUN:-false}"
 MIHOMO_SUB_URL_FILE="${MIHOMO_SUB_URL_FILE:-$MIHOMO_CONFIG_DIR/subscription_url}"
+MIHOMO_SUB_PROXY_URL="${MIHOMO_SUB_PROXY_URL:-http://127.0.0.1:7897}"
+MIHOMO_SUB_USER_AGENT="${MIHOMO_SUB_USER_AGENT:-mihomo/1.18 JATO-deploy}"
 
 read_subscription_url_file() {
   if [[ "$MIHOMO_LOCAL" == "true" ]]; then
@@ -322,6 +324,29 @@ print(
 PY
 }
 
+fetch_subscription_candidate() {
+  local candidate_url="$1"
+  local output_file="$2"
+  local mode="$3"
+  local curl_args=(
+    -sL
+    -w "%{http_code}"
+    --connect-timeout 15
+    --max-time 60
+    -A "$MIHOMO_SUB_USER_AGENT"
+    -o "$output_file"
+  )
+  local curl_rc=0
+  local http_code
+
+  if [[ "$mode" == "local-proxy" ]]; then
+    curl_args+=(--proxy "$MIHOMO_SUB_PROXY_URL")
+  fi
+
+  http_code="$(curl "${curl_args[@]}" "$candidate_url")" || curl_rc=$?
+  printf '%s %s\n' "$curl_rc" "$http_code"
+}
+
 normalize_subscription_file() {
   local file="$1"
   local normalized
@@ -509,35 +534,48 @@ TMP_CONF=""
 FETCH_OK=false
 for candidate_url in "${SUB_URLS[@]}"; do
   log_subscription_url "$candidate_url"
-  TMP_CONF="$(mktemp)"
-  CURL_RC=0
-  HTTP_CODE=$(curl -sL -w "%{http_code}" --connect-timeout 15 --max-time 60 -o "$TMP_CONF" "$candidate_url") || CURL_RC=$?
-
-  if [[ "$CURL_RC" -ne 0 || "$HTTP_CODE" != "200" ]]; then
-    echo "[mihomo-sub] WARN: curl_rc=$CURL_RC HTTP $HTTP_CODE — subscription candidate unavailable" >&2
-    rm -f "$TMP_CONF"
-    TMP_CONF=""
-    continue
+  FETCH_MODES=("direct")
+  if [[ "$MIHOMO_LOCAL" == "true" && -n "$MIHOMO_SUB_PROXY_URL" ]]; then
+    FETCH_MODES+=("local-proxy")
   fi
 
-  if ! normalize_subscription_file "$TMP_CONF"; then
-    echo "[mihomo-sub] WARN: subscription candidate could not be converted to a mihomo config" >&2
-    rm -f "$TMP_CONF"
-    TMP_CONF=""
-    continue
-  fi
+  for fetch_mode in "${FETCH_MODES[@]}"; do
+    TMP_CONF="$(mktemp)"
+    read -r CURL_RC HTTP_CODE < <(fetch_subscription_candidate "$candidate_url" "$TMP_CONF" "$fetch_mode")
 
-  # Validate it looks like a YAML Clash config. Some managed subscriptions start
-  # with comment headers such as #!MANAGED-CONFIG, so scan beyond the first lines.
-  if ! grep -qE '^(port:|mixed-port:|proxies:|proxy-groups:)' "$TMP_CONF"; then
-    echo "[mihomo-sub] WARN: converted subscription does not contain mihomo YAML keys" >&2
-    rm -f "$TMP_CONF"
-    TMP_CONF=""
-    continue
-  fi
+    if [[ "$CURL_RC" -ne 0 || "$HTTP_CODE" != "200" ]]; then
+      echo "[mihomo-sub] WARN: mode=$fetch_mode curl_rc=$CURL_RC HTTP $HTTP_CODE — subscription candidate unavailable" >&2
+      rm -f "$TMP_CONF"
+      TMP_CONF=""
+      continue
+    fi
 
-  FETCH_OK=true
-  break
+    if ! normalize_subscription_file "$TMP_CONF"; then
+      echo "[mihomo-sub] WARN: mode=$fetch_mode subscription candidate could not be converted to a mihomo config" >&2
+      rm -f "$TMP_CONF"
+      TMP_CONF=""
+      continue
+    fi
+
+    # Validate it looks like a YAML Clash config. Some managed subscriptions start
+    # with comment headers such as #!MANAGED-CONFIG, so scan beyond the first lines.
+    if ! grep -qE '^(port:|mixed-port:|proxies:|proxy-groups:)' "$TMP_CONF"; then
+      echo "[mihomo-sub] WARN: mode=$fetch_mode converted subscription does not contain mihomo YAML keys" >&2
+      rm -f "$TMP_CONF"
+      TMP_CONF=""
+      continue
+    fi
+
+    if [[ "$fetch_mode" == "local-proxy" ]]; then
+      echo "[mihomo-sub] Fetched subscription through local mihomo proxy"
+    fi
+    FETCH_OK=true
+    break
+  done
+
+  if [[ "$FETCH_OK" == "true" ]]; then
+    break
+  fi
 done
 
 if [[ "$FETCH_OK" != "true" || -z "$TMP_CONF" ]]; then
