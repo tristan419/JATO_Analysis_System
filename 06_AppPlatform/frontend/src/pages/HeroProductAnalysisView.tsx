@@ -209,6 +209,7 @@ const DEFAULT_HERO_PRODUCT_SPEC_COLUMNS: HeroProductSystemSpecColumnKey[] = [
   "price",
 ];
 const HERO_PRODUCT_CUSTOM_SPEC_STORAGE_KEY = "jato.hero-product.customSpecColumns.v1";
+const HERO_PRODUCT_DECK_CACHE_LIMIT = 8;
 const LINE_COLORS = ["#2563eb", "#f97316", "#16a34a", "#7c3aed", "#0ea5e9", "#dc2626", "#64748b", "#ca8a04", "#059669", "#db2777"];
 const HERO_PRODUCT_CHANNEL_ORDER = ["Business", "Private", "Other"] as const;
 const HERO_PRODUCT_CHANNEL_META: Record<(typeof HERO_PRODUCT_CHANNEL_ORDER)[number], { label: string; color: string; textColor: string }> = {
@@ -786,6 +787,8 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
   );
   const slideRef = useRef<HTMLDivElement | null>(null);
   const fallbackRankingReloadKeyRef = useRef("");
+  const deckCache = useRef<Map<string, HeroProductDeckResponse>>(new Map());
+  const deckRequestIdRef = useRef(0);
   const canEdit = canEditPrices(user?.role);
   const activeTab = HERO_PAGE_ITEMS.find((item) => item.key === activePage) ?? HERO_PAGE_ITEMS[0];
   const countryLimit = parseCountryLimit(countryLimitText);
@@ -794,9 +797,40 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
   const resolvedTrackingCountry = deck
     ? resolveCountryOption(deck.metadata.availableCountries, currentTrackingCountry, deck.metadata.selectedTrackingCountry)
     : null;
-  const selectedCountries = scopeMode === "price" && currentPriceCountry
-    ? [countryValue(deck?.metadata.availableCountries ?? [], currentPriceCountry)]
-    : [];
+  const requestTopModels = useMemo(() => parseModelList(topModelText), [topModelText]);
+  const requestHeroModels = useMemo(() => parseModelList(heroModelText), [heroModelText]);
+  const requestSelectedCountries = useMemo(() => (
+    scopeMode === "price" && currentPriceCountry
+      ? [countryValue(deck?.metadata.availableCountries ?? [], currentPriceCountry)]
+      : []
+  ), [currentPriceCountry, deck?.metadata.availableCountries, scopeMode]);
+  const deckRequestPayload = useMemo(() => ({
+    countries: requestSelectedCountries,
+    price_country: priceCountry || undefined,
+    tracking_country: currentTrackingCountry || undefined,
+    target_period: period || undefined,
+    sales_mode: salesMode,
+    segment: "SUV A0",
+    fuel_type: "BEV",
+    price_source: priceSource,
+    top_n: 10,
+    ranking_limit: 20,
+    country_limit: countryLimit,
+    trend_window_months: 16,
+    country_rank_scope: "selected" as const,
+    top_models: requestTopModels,
+    hero_models: requestHeroModels,
+  }), [countryLimit, currentTrackingCountry, period, priceCountry, priceSource, requestHeroModels, requestSelectedCountries, requestTopModels, salesMode]);
+  const deckRequestKey = useMemo(() => JSON.stringify(deckRequestPayload), [deckRequestPayload]);
+  const refreshDeck = useCallback(() => {
+    deckCache.current.clear();
+    fallbackRankingReloadKeyRef.current = "";
+    setReloadToken((value) => value + 1);
+  }, []);
+  const refreshCurrentDeck = useCallback(() => {
+    deckCache.current.delete(deckRequestKey);
+    setReloadToken((value) => value + 1);
+  }, [deckRequestKey]);
   const discoveredCustomSpecColumns = useMemo<HeroProductSpecColumnOption[]>(() => {
     const byKey = new Map<HeroProductCustomSpecColumnKey, HeroProductSpecColumnOption>();
     const storedLabels = new Map(customSpecColumns.filter((column) => isCustomSpecColumnKey(column.key)).map((column) => [column.key, column.label]));
@@ -835,43 +869,43 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
   const allSpecColumnKeys = useMemo<HeroProductSpecColumnKey[]>(() => specColumnOptions.map((column) => column.key), [specColumnOptions]);
 
   useEffect(() => {
+    const cachedDeck = deckCache.current.get(deckRequestKey);
+    if (cachedDeck) {
+      deckRequestIdRef.current += 1;
+      setDeck(cachedDeck);
+      setError("");
+      setLoading(false);
+      return undefined;
+    }
+
     let cancelled = false;
     const controller = new AbortController();
+    const requestId = deckRequestIdRef.current + 1;
+    deckRequestIdRef.current = requestId;
     setLoading(true);
     setError("");
-    api.heroProductDeck({
-      countries: selectedCountries,
-      price_country: priceCountry || undefined,
-      tracking_country: currentTrackingCountry || undefined,
-      target_period: period || undefined,
-      sales_mode: salesMode,
-      segment: "SUV A0",
-      fuel_type: "BEV",
-      price_source: priceSource,
-      top_n: 10,
-      ranking_limit: 20,
-      country_limit: countryLimit,
-      trend_window_months: 16,
-      country_rank_scope: "selected",
-      top_models: parseModelList(topModelText),
-      hero_models: parseModelList(heroModelText),
-    }, controller.signal)
+    api.heroProductDeck(deckRequestPayload, controller.signal)
       .then((response) => {
-        if (cancelled) return;
+        if (cancelled || deckRequestIdRef.current !== requestId) return;
+        deckCache.current.set(deckRequestKey, response);
+        if (deckCache.current.size > HERO_PRODUCT_DECK_CACHE_LIMIT) {
+          const oldestKey = deckCache.current.keys().next().value;
+          if (typeof oldestKey === "string") deckCache.current.delete(oldestKey);
+        }
         setDeck(response);
       })
       .catch((reason: Error) => {
-        if (cancelled) return;
+        if (cancelled || deckRequestIdRef.current !== requestId) return;
         if (reason.name !== "AbortError") setError(reason.message);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && deckRequestIdRef.current === requestId) setLoading(false);
       });
     return () => {
       cancelled = true;
       controller.abort();
     };
-  }, [countryLimit, heroModelText, period, priceCountry, reloadToken, salesMode, scopeMode, topModelText]);
+  }, [deckRequestKey, reloadToken]);
 
   useEffect(() => {
     if (!deck || !resolvedTrackingCountry || loading) return;
@@ -894,9 +928,9 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     }
     if (fallbackRankingReloadKeyRef.current !== reloadKey) {
       fallbackRankingReloadKeyRef.current = reloadKey;
-      setReloadToken((value) => value + 1);
+      refreshCurrentDeck();
     }
-  }, [activePage, countryLimit, deck, heroModelText, loading, priceCountry, resolvedTrackingCountry, salesMode, topModelText]);
+  }, [activePage, countryLimit, deck, heroModelText, loading, priceCountry, refreshCurrentDeck, resolvedTrackingCountry, salesMode, topModelText]);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -1085,7 +1119,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
         return next;
       });
       setSaveMessage(nextValue === null ? "价格补录已清除。" : "价格已保存，所有人刷新后可见。");
-      setReloadToken((value) => value + 1);
+      refreshDeck();
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
       setSaveMessage(message);
@@ -1117,7 +1151,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
         field_value: trimmed || null,
       });
       setSaveMessage(trimmed ? "规格已保存，所有人刷新后可见。" : "规格补录已清除。");
-      setReloadToken((value) => value + 1);
+      refreshDeck();
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
       setSaveMessage(message);
@@ -1336,7 +1370,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
             <div className="market-scan-field market-scan-field-actions deck-panel-grid__wide">
               <span>Deck</span>
               <div className="btn-group">
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setReloadToken((value) => value + 1)}>Refresh</button>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={refreshDeck}>Refresh</button>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTopModelText(""); setHeroModelText(""); setCountryLimitText(""); setScopeMode("all"); setSalesMode("ytd"); setPriceSource("msrp"); setDistributionLayout("aligned"); setTrackingCountry(""); setSpecColumns(DEFAULT_HERO_PRODUCT_SPEC_COLUMNS); }}>Reset</button>
               </div>
             </div>
@@ -1377,7 +1411,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
           <HeroProductDeckFallback
             loading={loading}
             error={error}
-            onRetry={() => setReloadToken((value) => value + 1)}
+            onRetry={refreshDeck}
           />
         ) : (
           <div className="market-scan-content" aria-busy={loading}>

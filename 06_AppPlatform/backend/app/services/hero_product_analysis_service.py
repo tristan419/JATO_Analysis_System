@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
+import threading
+import time
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
@@ -11,7 +16,15 @@ from sqlalchemy.orm import Session
 from app.db.models import CurrentPrice, HeroProductPriceOverride, HeroProductSpecOverride
 from app.db.session import get_session_factory
 from app.infra import parquet_repository as repo
+from app.infra.redis_client import get_redis_client
 from app.services.country_service import country_filter_aliases
+from app.services.market_scan_cache import (
+    acquire_compute_lock,
+    get_cached_deck,
+    release_compute_lock,
+    set_cached_deck,
+    wait_for_cache,
+)
 from app.services.market_scan_service import (
     _available_periods,
     _coerce_text,
@@ -35,10 +48,17 @@ from app.services.market_scan_service import (
     _get_columns,
 )
 
+logger = logging.getLogger(__name__)
+
 PRICE_SOURCES = ("msrp", "jato")
 DEFAULT_SEGMENT = "SUV A0"
 DEFAULT_FUEL = "BEV"
 DEFAULT_PRICE_CURRENCY = "EUR"
+_HERO_PRODUCT_DECK_CACHE_SCHEMA_VERSION = 1
+_HERO_PRODUCT_DECK_CACHE_PREFIX = f"ms:hero-product-deck:v{_HERO_PRODUCT_DECK_CACHE_SCHEMA_VERSION}"
+_HERO_PRODUCT_DECK_CACHE_TTL_SECONDS = 300
+_hero_product_deck_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
+_hero_product_deck_cache_lock = threading.Lock()
 SPEC_OVERRIDE_FIELDS = {
     "brand",
     "model",
@@ -130,6 +150,138 @@ def _country_alias_set(*values: str | None) -> set[str]:
         except Exception:  # noqa: BLE001 - country aliases are convenience only
             pass
     return {alias for alias in aliases if alias}
+
+
+def _stable_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _time_range_deck_cache_key(time_range: dict[str, str] | None) -> str:
+    if not time_range:
+        return ""
+    return f"{time_range.get('start', '')}:{time_range.get('end', '')}"
+
+
+def _normalized_cache_list(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    return [_coerce_text(value) for value in (values or []) if _coerce_text(value)]
+
+
+def _hero_product_override_token() -> str:
+    try:
+        session_factory = get_session_factory()
+        with session_factory() as session:
+            price_updated = session.execute(select(func.max(HeroProductPriceOverride.updated_at_utc))).scalar()
+            spec_updated = session.execute(select(func.max(HeroProductSpecOverride.updated_at_utc))).scalar()
+            price_count = int(session.execute(select(func.count(HeroProductPriceOverride.override_id))).scalar() or 0)
+            spec_count = int(session.execute(select(func.count(HeroProductSpecOverride.override_id))).scalar() or 0)
+        price_token = price_updated.isoformat() if price_updated else "none"
+        spec_token = spec_updated.isoformat() if spec_updated else "none"
+        return f"price={price_token}:{price_count}|spec={spec_token}:{spec_count}"
+    except Exception as exc:  # noqa: BLE001 - cache key should not block deck generation
+        logger.warning("HeroProduct override token unavailable: %s", exc)
+        return "override-token-unavailable"
+
+
+def _build_hero_product_deck_cache_key(
+    *,
+    countries: list[str],
+    price_country: str | None,
+    tracking_country: str | None,
+    target_period: str | None,
+    time_range: dict[str, str] | None,
+    sales_mode: str,
+    segment: str,
+    fuel_type: str,
+    price_source: str,
+    top_n: int,
+    ranking_limit: int,
+    country_limit: int,
+    trend_window_months: int,
+    country_rank_scope: str,
+    top_models: list[str],
+    hero_models: list[str],
+    dataset_token: str,
+    override_token: str,
+) -> str:
+    token = hashlib.sha256(dataset_token.encode()).hexdigest()[:12] if dataset_token else "notoken"
+    override_hash = hashlib.sha256(override_token.encode()).hexdigest()[:12]
+    payload = {
+        "countries": sorted(_normalized_cache_list(countries)),
+        "priceCountry": _coerce_text(price_country),
+        "trackingCountry": _coerce_text(tracking_country),
+        "targetPeriod": _coerce_text(target_period) or "latest",
+        "timeRange": _time_range_deck_cache_key(time_range),
+        "salesMode": _coerce_text(sales_mode),
+        "segment": _coerce_text(segment),
+        "fuelType": _coerce_text(fuel_type),
+        "priceSource": _coerce_text(price_source),
+        "topN": int(top_n),
+        "rankingLimit": int(ranking_limit),
+        "countryLimit": int(country_limit),
+        "trendWindowMonths": int(trend_window_months),
+        "countryRankScope": _coerce_text(country_rank_scope),
+        "topModels": _normalized_cache_list(top_models),
+        "heroModels": _normalized_cache_list(hero_models),
+        "dataset": token,
+        "overrides": override_hash,
+    }
+    digest = hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()[:24]
+    return f"{_HERO_PRODUCT_DECK_CACHE_PREFIX}:{digest}"
+
+
+def clear_hero_product_deck_cache() -> dict[str, Any]:
+    with _hero_product_deck_cache_lock:
+        cleared_count = len(_hero_product_deck_cache)
+        _hero_product_deck_cache.clear()
+    return {"enabled": True, "clearedCount": cleared_count}
+
+
+def invalidate_hero_product_deck_cache(client: Any | None) -> dict[str, Any]:
+    pattern = f"{_HERO_PRODUCT_DECK_CACHE_PREFIX}:*"
+    if client is None:
+        return {
+            "enabled": False,
+            "pattern": pattern,
+            "deletedCount": 0,
+            "message": "Redis client unavailable; hero product dataset-token cache keys will expire naturally.",
+        }
+
+    deleted_count = 0
+    batch_count = 0
+    batch: list[Any] = []
+    try:
+        for key in client.scan_iter(match=pattern, count=250):
+            batch.append(key)
+            if len(batch) >= 100:
+                deleted_count += int(client.delete(*batch) or 0)
+                batch_count += 1
+                batch = []
+        if batch:
+            deleted_count += int(client.delete(*batch) or 0)
+            batch_count += 1
+        return {
+            "enabled": True,
+            "pattern": pattern,
+            "deletedCount": deleted_count,
+            "batchCount": batch_count,
+        }
+    except Exception as exc:  # noqa: BLE001 - cache invalidation should not block publishing/editing
+        logger.warning("HeroProduct Redis invalidation failed for %s: %s", pattern, exc)
+        return {
+            "enabled": True,
+            "pattern": pattern,
+            "deletedCount": deleted_count,
+            "batchCount": batch_count,
+            "error": str(exc),
+            "message": "HeroProduct Redis invalidation failed; dataset-token cache keys will expire naturally.",
+        }
+
+
+def invalidate_hero_product_runtime_cache() -> dict[str, Any]:
+    return {
+        "heroProductDeckLocal": clear_hero_product_deck_cache(),
+        "heroProductDeckRedis": invalidate_hero_product_deck_cache(get_redis_client()),
+    }
 
 
 def _resolve_country_list(
@@ -1217,6 +1369,122 @@ def query_hero_product_deck(
     top_models: list[str],
     hero_models: list[str],
 ) -> dict[str, Any]:
+    dataset_token = repo.current_dataset_token()
+    override_token = _hero_product_override_token()
+    normalized_top_n = max(1, int(top_n or 10))
+    normalized_ranking_limit = max(1, int(ranking_limit or 20))
+    normalized_country_limit = max(0, int(country_limit or 0))
+    normalized_trend_window = max(1, int(trend_window_months or 16))
+    cache_key = _build_hero_product_deck_cache_key(
+        countries=countries,
+        price_country=price_country,
+        tracking_country=tracking_country,
+        target_period=target_period,
+        time_range=time_range,
+        sales_mode=sales_mode,
+        segment=segment,
+        fuel_type=fuel_type,
+        price_source=price_source,
+        top_n=normalized_top_n,
+        ranking_limit=normalized_ranking_limit,
+        country_limit=normalized_country_limit,
+        trend_window_months=normalized_trend_window,
+        country_rank_scope=country_rank_scope,
+        top_models=top_models,
+        hero_models=hero_models,
+        dataset_token=dataset_token,
+        override_token=override_token,
+    )
+    now = time.monotonic()
+    local_cached = _hero_product_deck_cache.get(cache_key)
+    if local_cached is not None:
+        cached_at, cached_dataset_token, cached_result = local_cached
+        if cached_dataset_token == dataset_token and (now - cached_at) < _HERO_PRODUCT_DECK_CACHE_TTL_SECONDS:
+            logger.info("HeroProduct [%s] local-cache HIT", target_period or "latest")
+            return cached_result
+
+    redis_client = get_redis_client()
+    acquired_cache_lock_key: str | None = None
+    if redis_client is not None:
+        try:
+            cached = get_cached_deck(redis_client, cache_key)
+            if cached is not None:
+                logger.info("HeroProduct [%s] redis HIT", target_period or "latest")
+                with _hero_product_deck_cache_lock:
+                    _hero_product_deck_cache[cache_key] = (now, dataset_token, cached)
+                return cached
+            if acquire_compute_lock(redis_client, cache_key):
+                acquired_cache_lock_key = cache_key
+            else:
+                waited = wait_for_cache(redis_client, cache_key)
+                if waited is not None:
+                    logger.info("HeroProduct [%s] redis waiter GOT cache from peer", target_period or "latest")
+                    with _hero_product_deck_cache_lock:
+                        _hero_product_deck_cache[cache_key] = (now, dataset_token, waited)
+                    return waited
+        except Exception as exc:  # noqa: BLE001 - cache failure should not block deck generation
+            logger.warning("HeroProduct cache lookup failed: %s", exc)
+
+    try:
+        result = _query_hero_product_deck_impl(
+            countries=countries,
+            price_country=price_country,
+            tracking_country=tracking_country,
+            target_period=target_period,
+            time_range=time_range,
+            sales_mode=sales_mode,
+            segment=segment,
+            fuel_type=fuel_type,
+            price_source=price_source,
+            top_n=normalized_top_n,
+            ranking_limit=normalized_ranking_limit,
+            country_limit=normalized_country_limit,
+            trend_window_months=normalized_trend_window,
+            country_rank_scope=country_rank_scope,
+            top_models=top_models,
+            hero_models=hero_models,
+        )
+    except Exception:
+        if redis_client is not None and acquired_cache_lock_key is not None:
+            release_compute_lock(redis_client, acquired_cache_lock_key)
+        raise
+
+    with _hero_product_deck_cache_lock:
+        _hero_product_deck_cache[cache_key] = (now, dataset_token, result)
+        if len(_hero_product_deck_cache) > 32:
+            oldest_key = min(_hero_product_deck_cache, key=lambda key: _hero_product_deck_cache[key][0])
+            _hero_product_deck_cache.pop(oldest_key, None)
+
+    if redis_client is not None:
+        try:
+            set_cached_deck(redis_client, cache_key, result)
+        except Exception as exc:  # noqa: BLE001 - cache write should not fail the API
+            logger.warning("HeroProduct cache write failed: %s", exc)
+        finally:
+            if acquired_cache_lock_key is not None:
+                release_compute_lock(redis_client, acquired_cache_lock_key)
+    return result
+
+
+def _query_hero_product_deck_impl(
+    *,
+    countries: list[str],
+    price_country: str | None,
+    tracking_country: str | None,
+    target_period: str | None,
+    time_range: dict[str, str] | None,
+    sales_mode: str,
+    segment: str,
+    fuel_type: str,
+    price_source: str,
+    top_n: int,
+    ranking_limit: int,
+    country_limit: int,
+    trend_window_months: int,
+    country_rank_scope: str,
+    top_models: list[str],
+    hero_models: list[str],
+) -> dict[str, Any]:
     selected_price_source = price_source if price_source in PRICE_SOURCES else "msrp"
     source = _build_source_frame(
         countries=countries,
@@ -1478,6 +1746,7 @@ def upsert_hero_product_price_override(
         if row is not None:
             session.delete(row)
             session.commit()
+            invalidate_hero_product_runtime_cache()
         return {
             "deleted": True,
             "country": country,
@@ -1514,6 +1783,7 @@ def upsert_hero_product_price_override(
         row.updated_at_utc = datetime.now(timezone.utc)
     session.commit()
     session.refresh(row)
+    invalidate_hero_product_runtime_cache()
     return _override_to_dict(row)
 
 
@@ -1560,6 +1830,7 @@ def upsert_hero_product_spec_override(
         if row is not None:
             session.delete(row)
             session.commit()
+            invalidate_hero_product_runtime_cache()
         return {
             "deleted": True,
             "country": country,
@@ -1588,4 +1859,5 @@ def upsert_hero_product_spec_override(
         row.updated_at_utc = datetime.now(timezone.utc)
     session.commit()
     session.refresh(row)
+    invalidate_hero_product_runtime_cache()
     return _spec_override_to_dict(row)
