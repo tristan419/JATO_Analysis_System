@@ -47,6 +47,32 @@ APP_CORS_ORIGINS=https://www.ojeur.cloud,https://intl.ojeur.cloud,http://localho
 APP_GOOGLE_REDIRECT_URI=https://www.ojeur.cloud/v1/auth/google/callback
 ```
 
+## Optional Read-only API Edge Cache
+
+If overseas users still spend most time waiting for Tencent Cloud API reads, add
+the optional Worker facade in:
+
+```text
+03_Scripts/deploy/cloudflare/jato-readonly-api-cache
+```
+
+Recommended route:
+
+```text
+https://api-intl.ojeur.cloud/*
+```
+
+Then set the Cloudflare Pages intl frontend API base to:
+
+```bash
+VITE_API_BASE=https://api-intl.ojeur.cloud/v1
+```
+
+The Worker only caches explicit read-only endpoints such as metadata, filter
+options, and grouped time-series. Auth, profile, admin, and write APIs keep
+going to the Tencent Cloud origin. Keep `www.ojeur.cloud` on the Tencent Cloud
+backend for domestic users.
+
 Google OAuth callback can stay on `www.ojeur.cloud`; the backend stores the initiating frontend origin in OAuth state and redirects back to `intl.ojeur.cloud` only when it is in `APP_FRONTEND_ORIGINS`.
 
 Do not register `intl.ojeur.cloud` as a second Google callback unless the backend is also changed to accept that callback. The intended chain is:
