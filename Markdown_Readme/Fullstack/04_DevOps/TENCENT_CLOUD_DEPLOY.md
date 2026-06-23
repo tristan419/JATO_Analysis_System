@@ -202,6 +202,8 @@ curl -sS https://www.ojeur.cloud/_deploy_status.txt | sed -n '/---google oauth p
 
 订阅格式优先使用 Clash/mihomo YAML。如果订阅服务的 Clash 链接不可用，但 Shadowrocket 链接能返回 base64 包装的 `ss://` 列表，`03_Scripts/deploy/update_mihomo_subscription.sh` 会在服务器端转换为 mihomo YAML，再复用同一套本地绑定、DNS、`auto` 代理组和 Google 连通性检查流程。转换器会拒绝 `127.0.0.1` / `localhost` 这类只能配合图形化客户端本机转发使用的节点，因为它们在腾讯云上没有远端代理能力。不要把真实订阅 URL 写进仓库；可放到 GitHub Secret `MIHOMO_SUB_URL`，或在服务器上写入 root-only 文件：
 
+如果订阅站对腾讯云直连出口返回 403 或连接失败，部署脚本会先尝试直连，再通过服务器现有的本机 mihomo 代理 `http://127.0.0.1:7897` 重试下载订阅；可用 `MIHOMO_SUB_PROXY_URL` 覆盖这个代理地址。
+
 ```bash
 sudo install -d -m 700 /etc/mihomo
 sudo sh -c 'printf "%s\n" "$MIHOMO_SUB_URL" > /etc/mihomo/subscription_url'

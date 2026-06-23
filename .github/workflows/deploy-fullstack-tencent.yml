@@ -280,36 +280,6 @@ jobs:
           REMOTE_EXPORTS+="export MIHOMO_SUB_URL=$(printf '%q' '${{ secrets.MIHOMO_SUB_URL }}'); "
           REMOTE_EXPORTS+="export MIHOMO_DB_PATH=$(printf '%q' '${{ vars.MIHOMO_DB_PATH }}'); "
 
-          ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"
-          REMOTE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
-          REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.${GITHUB_RUN_ID:-manual}.${GITHUB_RUN_ATTEMPT:-0}.uploading"
-          ls -lh "$ARCHIVE_PATH"
-          timeout 600s scp -q -P "$SSH_PORT" \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -o ConnectTimeout=20 \
-            -o ConnectionAttempts=2 \
-            -o ServerAliveInterval=10 \
-            -o ServerAliveCountMax=2 \
-            -o Compression=yes \
-            -o IPQoS=none \
-            -i ~/.ssh/github_actions_tencent_key \
-            "$ARCHIVE_PATH" \
-            "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE_TMP"
-          timeout 180s ssh -T -p "$SSH_PORT" \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -o ConnectTimeout=20 \
-            -o ConnectionAttempts=2 \
-            -o ServerAliveInterval=10 \
-            -o ServerAliveCountMax=2 \
-            -o IPQoS=none \
-            -i ~/.ssh/github_actions_tencent_key \
-            "$SSH_USER@$SSH_HOST" \
-            "mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"
-
           timeout 1800s ssh -v -p "$SSH_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=no \
@@ -351,12 +321,30 @@ jobs:
             echo "[WARN] Uploaded deploy archive is incomplete or invalid; falling back to sparse Git fetch"
             rm -f "$RELEASE_ARCHIVE"
           fi
+          ARCHIVE_READY=false
           if [ -f "$RELEASE_ARCHIVE" ]; then
-            echo "[INFO] Using uploaded deploy archive: $RELEASE_ARCHIVE"
-            DEPLOY_SOURCE="github_actions_archive"
-            tar xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"
-            rm -f "$RELEASE_ARCHIVE"
-          else
+            echo "[INFO] Inspecting uploaded deploy archive: $RELEASE_ARCHIVE"
+            if tar xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"; then
+              ARCHIVE_COMMIT="$(python3 -c 'import json, sys; from pathlib import Path; p = Path(sys.argv[1]); payload = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}; print(payload.get("expectedCommitSha") or payload.get("commitSha") or "")' "$RELEASE_WORKTREE/hermes/deploy_release.json")"
+              if [ "$ARCHIVE_COMMIT" = "$DEPLOY_COMMIT_SHA" ]; then
+                echo "[INFO] Using uploaded deploy archive for ${DEPLOY_SHORT_SHA:-$DEPLOY_COMMIT_SHA}"
+                DEPLOY_SOURCE="github_actions_archive"
+                ARCHIVE_READY=true
+                rm -f "$RELEASE_ARCHIVE"
+              else
+                echo "[WARN] Uploaded deploy archive commit mismatch: archive=${ARCHIVE_COMMIT:-missing} expected=$DEPLOY_COMMIT_SHA; falling back to sparse Git fetch"
+                rm -rf "$RELEASE_WORKTREE"
+                mkdir -p "$RELEASE_WORKTREE"
+                rm -f "$RELEASE_ARCHIVE"
+              fi
+            else
+              echo "[WARN] Uploaded deploy archive extraction failed; falling back to sparse Git fetch"
+              rm -rf "$RELEASE_WORKTREE"
+              mkdir -p "$RELEASE_WORKTREE"
+              rm -f "$RELEASE_ARCHIVE"
+            fi
+          fi
+          if [ "$ARCHIVE_READY" != "true" ]; then
             echo "[WARN] Uploaded deploy archive not found; falling back to sparse Git fetch"
             git -C "$RELEASE_WORKTREE" init
             git -C "$RELEASE_WORKTREE" remote add origin "$RELEASE_REMOTE"
@@ -671,38 +659,6 @@ jobs:
           REMOTE_EXPORTS+="export MIHOMO_SUB_URL=$(printf '%q' '${{ secrets.MIHOMO_SUB_URL }}'); "
           REMOTE_EXPORTS+="export MIHOMO_DB_PATH=$(printf '%q' '${{ vars.MIHOMO_DB_PATH }}'); "
 
-          ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"
-          REMOTE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
-          REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.${GITHUB_RUN_ID:-manual}.${GITHUB_RUN_ATTEMPT:-0}.uploading"
-          ls -lh "$ARCHIVE_PATH"
-          timeout 600s sshpass -p "$SSH_PASSWORD" \
-            scp -q -P "$SSH_PORT" \
-            -o PreferredAuthentications=password \
-            -o PubkeyAuthentication=no \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -o ConnectTimeout=20 \
-            -o ConnectionAttempts=2 \
-            -o ServerAliveInterval=10 \
-            -o ServerAliveCountMax=2 \
-            -o Compression=yes \
-            -o IPQoS=none \
-            "$ARCHIVE_PATH" \
-            "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE_TMP"
-          timeout 180s sshpass -p "$SSH_PASSWORD" \
-            ssh -T -p "$SSH_PORT" \
-            -o PreferredAuthentications=password \
-            -o PubkeyAuthentication=no \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -o ConnectTimeout=20 \
-            -o ConnectionAttempts=2 \
-            -o ServerAliveInterval=10 \
-            -o ServerAliveCountMax=2 \
-            -o IPQoS=none \
-            "$SSH_USER@$SSH_HOST" \
-            "mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"
-
           sshpass -p "$SSH_PASSWORD" \
             timeout 1800s ssh -v -p "$SSH_PORT" \
             -o PreferredAuthentications=password \
@@ -745,12 +701,30 @@ jobs:
             echo "[WARN] Uploaded deploy archive is incomplete or invalid; falling back to sparse Git fetch"
             rm -f "$RELEASE_ARCHIVE"
           fi
+          ARCHIVE_READY=false
           if [ -f "$RELEASE_ARCHIVE" ]; then
-            echo "[INFO] Using uploaded deploy archive: $RELEASE_ARCHIVE"
-            DEPLOY_SOURCE="github_actions_archive"
-            tar xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"
-            rm -f "$RELEASE_ARCHIVE"
-          else
+            echo "[INFO] Inspecting uploaded deploy archive: $RELEASE_ARCHIVE"
+            if tar xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"; then
+              ARCHIVE_COMMIT="$(python3 -c 'import json, sys; from pathlib import Path; p = Path(sys.argv[1]); payload = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}; print(payload.get("expectedCommitSha") or payload.get("commitSha") or "")' "$RELEASE_WORKTREE/hermes/deploy_release.json")"
+              if [ "$ARCHIVE_COMMIT" = "$DEPLOY_COMMIT_SHA" ]; then
+                echo "[INFO] Using uploaded deploy archive for ${DEPLOY_SHORT_SHA:-$DEPLOY_COMMIT_SHA}"
+                DEPLOY_SOURCE="github_actions_archive"
+                ARCHIVE_READY=true
+                rm -f "$RELEASE_ARCHIVE"
+              else
+                echo "[WARN] Uploaded deploy archive commit mismatch: archive=${ARCHIVE_COMMIT:-missing} expected=$DEPLOY_COMMIT_SHA; falling back to sparse Git fetch"
+                rm -rf "$RELEASE_WORKTREE"
+                mkdir -p "$RELEASE_WORKTREE"
+                rm -f "$RELEASE_ARCHIVE"
+              fi
+            else
+              echo "[WARN] Uploaded deploy archive extraction failed; falling back to sparse Git fetch"
+              rm -rf "$RELEASE_WORKTREE"
+              mkdir -p "$RELEASE_WORKTREE"
+              rm -f "$RELEASE_ARCHIVE"
+            fi
+          fi
+          if [ "$ARCHIVE_READY" != "true" ]; then
             echo "[WARN] Uploaded deploy archive not found; falling back to sparse Git fetch"
             git -C "$RELEASE_WORKTREE" init
             git -C "$RELEASE_WORKTREE" remote add origin "$RELEASE_REMOTE"
