@@ -196,6 +196,12 @@ def test_build_msrp_monitoring_events_returns_warning_when_history_missing(
         "limit": 500,
     }
     assert payload["summary"]["eventCount"] == 0
+    assert payload["summary"]["auditPriorityCounts"] == {
+        "auto_pass": 0,
+        "sample": 0,
+        "priority_audit": 0,
+        "block": 0,
+    }
     assert payload["events"] == []
 
 
@@ -296,9 +302,23 @@ def test_build_msrp_monitoring_events_groups_price_changes_with_evidence(
         "reviewRequiredCount": 1,
         "outlierCount": 0,
         "lengthMissingCount": 0,
+        "auditPriorityCounts": {
+            "auto_pass": 0,
+            "sample": 0,
+            "priority_audit": 1,
+            "block": 0,
+        },
+        "autoPassCount": 0,
+        "sampleCount": 0,
+        "priorityAuditCount": 1,
+        "blockCount": 0,
     }
     event = payload["events"][0]
     assert event["eventId"] == "Volvo|XC60|PHEV"
+    assert event["auditPriority"] == "priority_audit"
+    assert event["suggestedAction"] == "priority_audit"
+    assert event["samplingBucket"] == "source_risk"
+    assert "source_status:review_required" in event["auditReasons"]
     assert event["lengthMm"] == 4708
     assert event["lengthSource"] == "observation_context"
     assert event["confidence"] == "low"
@@ -316,6 +336,9 @@ def test_build_msrp_monitoring_events_groups_price_changes_with_evidence(
     assert country["countryLabel"] == "Sweden"
     assert country["sourceStatus"] == "review_required"
     assert country["reviewFlag"] is True
+    assert country["auditPriority"] == "priority_audit"
+    assert country["suggestedAction"] == "priority_audit"
+    assert country["samplingBucket"] == "source_risk"
     assert country["outlier"] is False
     assert country["suspectedFalsePositive"] is True
     assert country["changeAmountEur"] == -3000.0
@@ -470,9 +493,12 @@ def test_build_msrp_monitoring_events_groups_multi_country_sync_and_outlier(
     assert payload["summary"]["affectedCountryCount"] == 3
     assert payload["summary"]["sourceRiskCount"] == 1
     assert payload["summary"]["outlierCount"] == 1
+    assert payload["summary"]["priorityAuditCount"] == 1
 
     event = payload["events"][0]
     assert event["eventId"] == "Tesla|Model Y|BEV"
+    assert event["auditPriority"] == "priority_audit"
+    assert event["samplingBucket"] in {"outlier", "source_risk"}
     assert event["powertrainColor"] == "#16a34a"
     assert event["lengthMm"] == 4790
     assert event["affectedCountryCount"] == 3
@@ -492,5 +518,115 @@ def test_build_msrp_monitoring_events_groups_multi_country_sync_and_outlier(
     assert countries["dk"]["changePct"] == -30.0
     assert countries["dk"]["outlier"] is True
     assert countries["dk"]["reviewFlag"] is True
+    assert countries["dk"]["auditPriority"] == "priority_audit"
+    assert "outlier_vs_model_country_cluster" in countries["dk"]["auditReasons"]
     assert countries["dk"]["suspectedFalsePositive"] is True
     assert countries["dk"]["evidence"]["dryrunRunId"] == "msrp-dryrun-20260620-dk"
+
+
+def test_build_msrp_monitoring_events_sweden_demo_uses_current_prices(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 6, 23, 8, 0, tzinfo=timezone.utc)
+    observations: list[MsrpObservation] = []
+    current_prices: list[CurrentPrice] = []
+    sources: list[MsrpSource] = []
+    rows = [
+        ("瑞典", "VOLVO", "EX90", "Ultra", "BEV", "94782.61", "1090000.00", "official_price_list"),
+        ("瑞典", "VOLKSWAGEN", "TAYRON", "Life", "", "38600.00", "443900.00", "official_configurator"),
+    ]
+    for country, brand, model, trim, powertrain, current_value, source_value, source_type in rows:
+        observation_id = uuid4()
+        source_id = uuid4()
+        observation = _observation(
+            observation_id=observation_id,
+            source_id=source_id,
+            scrape_batch_id=uuid4(),
+            observed_at=now - timedelta(days=1),
+            country=country,
+            brand=brand,
+            jato_model=model,
+            jato_trim=trim,
+            jato_powertrain=powertrain,
+            msrp_value=current_value,
+            source_msrp_value=source_value,
+            source_currency="SEK",
+            match_confidence="0.9600",
+            match_status="auto_accepted",
+            dryrun_run_id=None,
+        )
+        observations.append(observation)
+        current_prices.append(
+            _current_price(
+                current_price_id=uuid4(),
+                observation=observation,
+                updated_at=now - timedelta(days=1),
+            )
+        )
+        sources.append(
+            _source(
+                source_id,
+                country=country,
+                brand=brand,
+                source_code=f"{brand.lower()}_{model.lower()}_se",
+                source_type=source_type,
+            )
+        )
+
+    monkeypatch.setattr(msrp_monitoring_service, "_utc_now", lambda: now)
+    monkeypatch.setattr(
+        msrp_monitoring_service.msrp_repo,
+        "list_current_prices",
+        lambda session, country, brand, jato_model, limit, offset: current_prices,
+    )
+    monkeypatch.setattr(
+        msrp_monitoring_service.msrp_repo,
+        "list_observations_by_ids",
+        lambda session, ids: [
+            observation
+            for observation in observations
+            if observation.observation_id in {UUID(str(item_id)) for item_id in ids}
+        ],
+    )
+    monkeypatch.setattr(
+        msrp_monitoring_service.msrp_repo,
+        "list_sources_by_ids",
+        lambda session, ids: [
+            source
+            for source in sources
+            if source.source_id in {UUID(str(item_id)) for item_id in ids}
+        ],
+    )
+
+    payload = msrp_monitoring_service.build_msrp_monitoring_events(
+        "session",
+        window_days=30,
+        threshold_pct=0.0,
+        mode="sweden_demo",
+    )
+
+    assert payload["mode"] == "sweden_demo"
+    assert payload["demo"]["enabled"] is True
+    assert payload["filters"]["country"] == "瑞典"
+    assert payload["summary"]["eventCount"] == 2
+    assert payload["summary"]["timelineEventCount"] == 2
+    assert payload["summary"]["sourceRiskCount"] == 1
+    assert payload["summary"]["priorityAuditCount"] == 1
+    assert payload["summary"]["blockCount"] == 1
+    assert payload["warnings"] == ["sweden_demo_backfilled_not_written_to_price_history"]
+
+    events = {event["jatoModel"]: event for event in payload["events"]}
+    assert events["EX90"]["powertrainColor"] == "#16a34a"
+    assert events["EX90"]["lengthMm"] == 5037
+    assert events["EX90"]["demo"] is True
+    assert events["EX90"]["auditPriority"] == "priority_audit"
+    assert "large_price_move:>=5pct" in events["EX90"]["auditReasons"]
+    assert events["EX90"]["countries"][0]["evidence"]["demoBackfilled"] is True
+    assert events["TAYRON"]["lifecycleStatus"] == "removed_from_configurator"
+    assert events["TAYRON"]["auditPriority"] == "block"
+    assert "lifecycle_signal:removed_from_configurator" in events["TAYRON"]["auditReasons"]
+    assert events["TAYRON"]["reviewRequiredCount"] == 1
+    assert events["TAYRON"]["countries"][0]["riskReasons"] == [
+        "demo_unavailable_signal",
+        "demo_backfilled_price",
+    ]

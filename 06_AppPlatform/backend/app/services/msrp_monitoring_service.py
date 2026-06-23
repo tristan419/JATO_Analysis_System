@@ -31,6 +31,49 @@ OFFICIAL_SOURCE_TYPES = {
 }
 SOURCE_RISK_MATCH_STATUSES = {"review_required", "rejected", "failed"}
 DEFAULT_MONITORING_LIMIT = 500
+MONITORING_MODE_LIVE = "live"
+MONITORING_MODE_SWEDEN_DEMO = "sweden_demo"
+AUDIT_PRIORITY_ORDER = {
+    "auto_pass": 0,
+    "sample": 1,
+    "priority_audit": 2,
+    "block": 3,
+}
+AUDIT_ACTION_LABELS = {
+    "auto_pass": "Auto pass after next scrape confirms unchanged MSRP.",
+    "sample": "Sample one source snapshot in the routine spot-check batch.",
+    "priority_audit": "Prioritize manual audit before accepting the movement.",
+    "block": "Block automatic acceptance until lifecycle/source evidence is verified.",
+}
+SWEDEN_DEMO_SCENARIOS: dict[tuple[str, str, str], dict[str, object]] = {
+    ("VOLVO", "EX90", "BEV"): {
+        "changePct": -6.8,
+        "daysAgo": 6,
+        "lengthMm": 5037,
+        "scenario": "2026 spring MSRP repositioning",
+    },
+    ("VOLVO", "XC90", "PHEV"): {
+        "changePct": 2.9,
+        "daysAgo": 12,
+        "lengthMm": 4953,
+        "scenario": "2026 plug-in hybrid package price update",
+    },
+    ("SKODA", "ENYAQ", "BEV"): {
+        "changePct": -4.6,
+        "daysAgo": 18,
+        "lengthMm": 4653,
+        "scenario": "2026 BEV campaign price cut",
+    },
+    ("VOLKSWAGEN", "TAYRON", "UNKNOWN"): {
+        "changePct": -3.2,
+        "daysAgo": 24,
+        "lengthMm": 4770,
+        "scenario": "Configurator availability signal",
+        "sourceStatus": "review_required",
+        "riskReasons": ["demo_unavailable_signal", "demo_backfilled_price"],
+        "lifecycleStatus": "removed_from_configurator",
+    },
+}
 
 
 def _utc_now() -> datetime:
@@ -168,6 +211,33 @@ def _range_payload(values: list[float]) -> dict[str, float | None]:
     if not values:
         return {"min": None, "max": None}
     return {"min": round(min(values), 2), "max": round(max(values), 2)}
+
+
+def _summary_payload(events: list[dict[str, object]]) -> dict[str, object]:
+    audit_priority_counts = {
+        priority: sum(1 for item in events if item.get("auditPriority") == priority)
+        for priority in AUDIT_PRIORITY_ORDER
+    }
+    return {
+        "eventCount": len(events),
+        "timelineEventCount": sum(int(item.get("timelineEventCount") or 0) for item in events),
+        "affectedCountryCount": len(
+            {
+                country_event.get("country")
+                for event in events
+                for country_event in list(event.get("countries") or [])
+            }
+        ),
+        "sourceRiskCount": sum(int(item.get("sourceRiskCount") or 0) for item in events),
+        "reviewRequiredCount": sum(int(item.get("reviewRequiredCount") or 0) for item in events),
+        "outlierCount": sum(int(item.get("outlierCount") or 0) for item in events),
+        "lengthMissingCount": sum(1 for item in events if item.get("lengthMissing")),
+        "auditPriorityCounts": audit_priority_counts,
+        "autoPassCount": audit_priority_counts["auto_pass"],
+        "sampleCount": audit_priority_counts["sample"],
+        "priorityAuditCount": audit_priority_counts["priority_audit"],
+        "blockCount": audit_priority_counts["block"],
+    }
 
 
 def _source_status(
@@ -352,20 +422,145 @@ def _mark_outliers(events: list[dict[str, object]]) -> None:
         item["suspectedFalsePositive"] = bool(item.get("reviewFlag")) or outlier
 
 
+def _audit_decision_payload(
+    priority: str,
+    reasons: list[str],
+    bucket: str,
+) -> dict[str, object]:
+    safe_priority = priority if priority in AUDIT_PRIORITY_ORDER else "priority_audit"
+    return {
+        "auditPriority": safe_priority,
+        "suggestedAction": safe_priority,
+        "auditActionLabel": AUDIT_ACTION_LABELS[safe_priority],
+        "auditReasons": reasons,
+        "samplingBucket": bucket,
+    }
+
+
+def _raise_audit_priority(current: str, candidate: str) -> str:
+    if AUDIT_PRIORITY_ORDER[candidate] > AUDIT_PRIORITY_ORDER[current]:
+        return candidate
+    return current
+
+
+def _audit_decision_for_country_event(item: dict[str, object]) -> dict[str, object]:
+    reasons: list[str] = []
+    priority = "auto_pass"
+    bucket = "clean_confirmed"
+    lifecycle_status = str(item.get("lifecycleStatus") or "active")
+    source_status = str(item.get("sourceStatus") or "confirmed")
+    change_pct = _float_or_none(item.get("changePct"))
+    absolute_change_pct = abs(change_pct) if change_pct is not None else 0.0
+    risk_reasons = [str(reason) for reason in list(item.get("riskReasons") or [])]
+    demo_backfilled = bool(dict(item.get("evidence") or {}).get("demoBackfilled"))
+
+    if lifecycle_status not in {"", "active"}:
+        priority = "block"
+        bucket = "lifecycle_block"
+        reasons.append(f"lifecycle_signal:{lifecycle_status}")
+    if any(reason in {"match_status:rejected", "match_status:failed"} for reason in risk_reasons):
+        priority = "block"
+        bucket = "source_rejected"
+        reasons.extend(reason for reason in risk_reasons if reason.startswith("match_status:"))
+    if source_status != "confirmed":
+        priority = _raise_audit_priority(priority, "priority_audit")
+        if bucket == "clean_confirmed":
+            bucket = "source_risk"
+        reasons.append(f"source_status:{source_status}")
+    if bool(item.get("outlier")):
+        priority = _raise_audit_priority(priority, "priority_audit")
+        if bucket == "clean_confirmed":
+            bucket = "outlier"
+        reasons.append("outlier_vs_model_country_cluster")
+    if bool(item.get("sourceCurrencyChanged")):
+        priority = _raise_audit_priority(priority, "priority_audit")
+        if bucket == "clean_confirmed":
+            bucket = "currency_change"
+        reasons.append("source_currency_changed")
+    if absolute_change_pct >= 5.0:
+        priority = _raise_audit_priority(priority, "priority_audit")
+        if bucket == "clean_confirmed":
+            bucket = "large_price_move"
+        reasons.append("large_price_move:>=5pct")
+    elif absolute_change_pct >= 1.0:
+        priority = _raise_audit_priority(priority, "sample")
+        if bucket == "clean_confirmed":
+            bucket = "routine_price_move"
+        reasons.append("price_move:>=1pct")
+    if demo_backfilled:
+        priority = _raise_audit_priority(priority, "sample")
+        if bucket == "clean_confirmed":
+            bucket = "demo_backfill"
+        reasons.append("demo_backfilled_scenario")
+
+    if not reasons:
+        reasons.append("confirmed_low_variance")
+    return _audit_decision_payload(priority, sorted(set(reasons)), bucket)
+
+
+def _audit_decision_for_model_event(
+    country_events: list[dict[str, object]],
+    *,
+    multi_country_sync: bool,
+    demo_event: bool,
+) -> dict[str, object]:
+    priority = "auto_pass"
+    reasons: set[str] = set()
+    bucket = "clean_confirmed"
+    for item in country_events:
+        item_priority = str(item.get("auditPriority") or "auto_pass")
+        priority = _raise_audit_priority(priority, item_priority)
+        reasons.update(str(reason) for reason in list(item.get("auditReasons") or []))
+        if bucket == "clean_confirmed" and item_priority != "auto_pass":
+            bucket = str(item.get("samplingBucket") or item_priority)
+
+    change_values = [
+        abs(float(item["changePct"]))
+        for item in country_events
+        if item.get("changePct") is not None
+    ]
+    max_change_pct = max(change_values) if change_values else 0.0
+    trim_count = len({item.get("jatoTrim") for item in country_events})
+    country_change_count = len(country_events)
+
+    if priority != "block" and country_change_count == 1 and trim_count == 1 and max_change_pct >= 3.0:
+        priority = _raise_audit_priority(priority, "priority_audit")
+        reasons.add("single_trim_market_move:>=3pct")
+        if bucket == "clean_confirmed":
+            bucket = "single_trim_market_move"
+    if priority == "auto_pass" and max_change_pct >= 1.0:
+        priority = "sample"
+        bucket = "routine_price_move"
+        reasons.add("price_move:>=1pct")
+    if multi_country_sync and priority in {"auto_pass", "sample"}:
+        reasons.add("multi_country_sync_support")
+    if demo_event:
+        reasons.add("demo_backfilled_scenario")
+        if priority == "auto_pass":
+            priority = "sample"
+            bucket = "demo_backfill"
+
+    if not reasons:
+        reasons.add("confirmed_low_variance")
+    return _audit_decision_payload(priority, sorted(reasons), bucket)
+
+
 def _country_latest_events(events: list[dict[str, object]]) -> list[dict[str, object]]:
-    latest_by_country: dict[str, dict[str, object]] = {}
+    latest_by_country_trim: dict[tuple[str, str], dict[str, object]] = {}
     for event in sorted(
         events,
         key=lambda item: str(item.get("changedAtUtc") or ""),
         reverse=True,
     ):
         country = str(event.get("country") or "")
-        latest_by_country.setdefault(country, event)
+        trim = str(event.get("jatoTrim") or "")
+        latest_by_country_trim.setdefault((country, trim), event)
     return sorted(
-        latest_by_country.values(),
+        latest_by_country_trim.values(),
         key=lambda item: (
             -abs(float(item.get("changePct") or 0.0)),
             str(item.get("countryLabel") or ""),
+            str(item.get("jatoTrim") or ""),
         ),
     )
 
@@ -495,6 +690,8 @@ def _build_model_event(
 ) -> dict[str, object]:
     _mark_outliers(timeline)
     country_events = _country_latest_events(timeline)
+    for item in country_events:
+        item.update(_audit_decision_for_country_event(item))
     change_values = [
         float(item["changePct"])
         for item in country_events
@@ -532,6 +729,23 @@ def _build_model_event(
         for reason in list(item.get("riskReasons") or []):
             key_text = str(reason)
             risk_reasons[key_text] = risk_reasons.get(key_text, 0) + 1
+    lifecycle_statuses = sorted(
+        {
+            str(item.get("lifecycleStatus") or "active")
+            for item in country_events
+            if item.get("lifecycleStatus") or item.get("sourceStatus") == "confirmed"
+        }
+    )
+    demo_event = any(
+        bool(dict(item.get("evidence") or {}).get("demoBackfilled"))
+        for item in timeline
+    )
+    multi_country_sync = len({item.get("country") for item in country_events}) >= 2
+    audit_decision = _audit_decision_for_model_event(
+        country_events,
+        multi_country_sync=multi_country_sync,
+        demo_event=demo_event,
+    )
 
     brand, model, powertrain = key
     return {
@@ -558,7 +772,16 @@ def _build_model_event(
         "reviewRequiredCount": review_required_count,
         "outlierCount": outlier_count,
         "suspectedFalsePositiveCount": suspected_false_positive_count,
-        "multiCountrySync": len({item.get("country") for item in country_events}) >= 2,
+        "multiCountrySync": multi_country_sync,
+        "lifecycleStatus": (
+            "mixed"
+            if len(lifecycle_statuses) > 1
+            else lifecycle_statuses[0]
+            if lifecycle_statuses
+            else "active"
+        ),
+        "demo": demo_event,
+        **audit_decision,
         "confidence": (
             "low"
             if suspected_false_positive_count
@@ -575,6 +798,207 @@ def _build_model_event(
     }
 
 
+def _sweden_demo_scenario(item: CurrentPrice) -> dict[str, object] | None:
+    key = (
+        str(item.brand or "").strip().upper(),
+        str(item.jato_model or "").strip().upper(),
+        _normalize_powertrain(item.jato_powertrain),
+    )
+    return SWEDEN_DEMO_SCENARIOS.get(key)
+
+
+def _demo_previous_value(current_value: float, change_pct: float) -> float:
+    divisor = 1.0 + change_pct / 100.0
+    if divisor <= 0:
+        return current_value
+    return round(current_value / divisor, 2)
+
+
+def _demo_timeline_payload(
+    *,
+    item: CurrentPrice,
+    observation: MsrpObservation | None,
+    source: MsrpSource | None,
+    generated_at: datetime,
+    scenario: dict[str, object],
+    threshold_pct: float,
+) -> dict[str, object] | None:
+    current_eur = _float_or_none(item.current_msrp_value)
+    if current_eur is None:
+        return None
+    change_pct = _float_or_none(scenario.get("changePct"))
+    if change_pct is None or abs(change_pct) < threshold_pct:
+        return None
+    previous_eur = _demo_previous_value(current_eur, change_pct)
+    current_source = _float_or_none(item.source_msrp_value) or current_eur
+    previous_source = _demo_previous_value(current_source, change_pct)
+    days_ago = int(_float_or_none(scenario.get("daysAgo")) or 7)
+    changed_at = generated_at - timedelta(days=max(1, days_ago))
+    source_status = str(scenario.get("sourceStatus") or "confirmed")
+    risk_reasons = [str(item) for item in list(scenario.get("riskReasons") or [])]
+    lifecycle_status = str(scenario.get("lifecycleStatus") or "active")
+    observation_id = str(getattr(observation, "observation_id", item.effective_observation_id))
+    return {
+        "country": item.country,
+        "countryLabel": to_display_country(item.country),
+        "brand": item.brand,
+        "jatoModel": item.jato_model,
+        "jatoTrim": item.jato_trim,
+        "jatoPowertrain": _normalize_powertrain(item.jato_powertrain),
+        "changedAtUtc": changed_at.isoformat(),
+        "oldMsrpEur": previous_eur,
+        "currentMsrpEur": current_eur,
+        "changeAmountEur": round(current_eur - previous_eur, 2),
+        "changePct": round(change_pct, 2),
+        "oldSourceMsrp": previous_source,
+        "currentSourceMsrp": current_source,
+        "changeAmountSource": round(current_source - previous_source, 2),
+        "sourceCurrency": item.source_currency,
+        "previousSourceCurrency": item.source_currency,
+        "sourceCurrencyChanged": False,
+        "sourceStatus": source_status,
+        "reviewFlag": source_status != "confirmed",
+        "riskReasons": risk_reasons,
+        "lifecycleStatus": lifecycle_status,
+        "currentPriceId": str(item.current_price_id),
+        "priceHistoryId": f"demo-sweden-history:{item.current_price_id}:{changed_at.date().isoformat()}",
+        "currentObservationId": observation_id,
+        "previousObservationId": f"demo-sweden-backfill:{item.current_price_id}",
+        "lastConfirmedObservationId": observation_id,
+        "effectiveObservationId": str(item.effective_observation_id),
+        "source": {
+            "sourceCode": source.source_code if source is not None else None,
+            "sourceType": source.source_type if source is not None else None,
+            "extractorName": source.extractor_name if source is not None else None,
+            "extractorVersion": source.extractor_version if source is not None else None,
+            "sourceRegistryUrl": source.source_url if source is not None else None,
+        },
+        "evidence": {
+            "sourceUrl": item.source_url,
+            "sourceSnapshotPath": item.source_snapshot_path,
+            "matchConfidence": _float_or_none(item.match_confidence),
+            "matchStatus": item.match_status,
+            "observationSourceUrl": observation.source_url if observation is not None else None,
+            "sourcePayloadHash": observation.source_payload_hash if observation is not None else None,
+            "observedAtUtc": _iso(observation.observed_at_utc if observation is not None else None),
+            "demoBackfilled": True,
+            "demoScenario": str(scenario.get("scenario") or "Sweden MSRP monitoring demo"),
+            "dryrunRunId": "msrp-demo-sweden-2026",
+            "scrapeBatchCode": "msrp-demo-sweden-backfill",
+        },
+    }
+
+
+def _build_sweden_demo_events(
+    session: Session,
+    *,
+    brand: str | None,
+    jato_model: str | None,
+    generated_at: datetime,
+    safe_window_days: int,
+    safe_threshold_pct: float,
+    safe_limit: int,
+) -> dict[str, object]:
+    current_prices = msrp_repo.list_current_prices(
+        session,
+        "瑞典",
+        brand,
+        jato_model,
+        safe_limit,
+        0,
+    )
+    current_prices = [
+        item
+        for item in current_prices
+        if _sweden_demo_scenario(item) is not None
+    ]
+    current_observations = msrp_repo.list_observations_by_ids(
+        session,
+        [item.effective_observation_id for item in current_prices],
+    )
+    current_observation_by_id = {
+        str(item.observation_id): item for item in current_observations
+    }
+    sources = msrp_repo.list_sources_by_ids(
+        session,
+        [item.source_id for item in current_observations],
+    )
+    source_by_id = {str(item.source_id): item for item in sources}
+    since = generated_at - timedelta(days=safe_window_days)
+    grouped_timeline: dict[tuple[str, str, str], list[dict[str, object]]] = {}
+    grouped_lengths: dict[tuple[str, str, str], dict[str, tuple[int | None, str | None]]] = {}
+
+    for item in current_prices:
+        scenario = _sweden_demo_scenario(item)
+        if scenario is None:
+            continue
+        changed_at = generated_at - timedelta(days=int(_float_or_none(scenario.get("daysAgo")) or 7))
+        if changed_at < since:
+            continue
+        observation = current_observation_by_id.get(str(item.effective_observation_id))
+        source = (
+            source_by_id.get(str(observation.source_id))
+            if observation is not None
+            else None
+        )
+        timeline_item = _demo_timeline_payload(
+            item=item,
+            observation=observation,
+            source=source,
+            generated_at=generated_at,
+            scenario=scenario,
+            threshold_pct=safe_threshold_pct,
+        )
+        if timeline_item is None:
+            continue
+        key = _event_key(item)
+        grouped_timeline.setdefault(key, []).append(timeline_item)
+        grouped_lengths.setdefault(key, {})[item.country] = (
+            int(scenario.get("lengthMm") or 0) or None,
+            "sweden_demo_backfill",
+        )
+
+    events = [
+        _build_model_event(
+            key,
+            timeline,
+            grouped_lengths.get(key, {}),
+        )
+        for key, timeline in grouped_timeline.items()
+        if timeline
+    ]
+    events.sort(
+        key=lambda item: (
+            -abs(float(item.get("medianChangePct") or 0.0)),
+            str(item.get("brand") or ""),
+            str(item.get("jatoModel") or ""),
+        )
+    )
+    return {
+        "schemaVersion": "msrp_monitoring_events_v1",
+        "mode": MONITORING_MODE_SWEDEN_DEMO,
+        "generatedAtUtc": generated_at.isoformat(),
+        "filters": {
+            "country": "瑞典",
+            "brand": brand,
+            "jatoModel": jato_model,
+            "windowDays": safe_window_days,
+            "thresholdPct": safe_threshold_pct,
+            "limit": safe_limit,
+        },
+        "summary": _summary_payload(events),
+        "powertrainColors": POWERTRAIN_COLORS,
+        "events": events,
+        "warnings": ["sweden_demo_backfilled_not_written_to_price_history"],
+        "demo": {
+            "enabled": True,
+            "country": "Sweden",
+            "backfilled": True,
+            "description": "Synthetic Sweden MSRP movements built from live current prices for product review.",
+        },
+    }
+
+
 def build_msrp_monitoring_events(
     session: Session,
     *,
@@ -584,16 +1008,34 @@ def build_msrp_monitoring_events(
     window_days: int = 30,
     threshold_pct: float = 0.0,
     limit: int = DEFAULT_MONITORING_LIMIT,
+    mode: str = MONITORING_MODE_LIVE,
 ) -> dict[str, object]:
     generated_at = _utc_now()
     safe_window_days = max(1, min(int(window_days), 365))
     safe_threshold_pct = max(0.0, float(threshold_pct))
     safe_limit = max(1, min(int(limit), DEFAULT_MONITORING_LIMIT))
     since = generated_at - timedelta(days=safe_window_days)
+    safe_mode = (
+        MONITORING_MODE_SWEDEN_DEMO
+        if mode == MONITORING_MODE_SWEDEN_DEMO
+        else MONITORING_MODE_LIVE
+    )
+
+    if safe_mode == MONITORING_MODE_SWEDEN_DEMO:
+        return _build_sweden_demo_events(
+            session,
+            brand=brand,
+            jato_model=jato_model,
+            generated_at=generated_at,
+            safe_window_days=safe_window_days,
+            safe_threshold_pct=safe_threshold_pct,
+            safe_limit=safe_limit,
+        )
 
     if not msrp_repo.has_price_history_table(session):
         return {
             "schemaVersion": "msrp_monitoring_events_v1",
+            "mode": MONITORING_MODE_LIVE,
             "generatedAtUtc": generated_at.isoformat(),
             "filters": {
                 "country": country,
@@ -603,18 +1045,11 @@ def build_msrp_monitoring_events(
                 "thresholdPct": safe_threshold_pct,
                 "limit": safe_limit,
             },
-            "summary": {
-                "eventCount": 0,
-                "timelineEventCount": 0,
-                "affectedCountryCount": 0,
-                "sourceRiskCount": 0,
-                "reviewRequiredCount": 0,
-                "outlierCount": 0,
-                "lengthMissingCount": 0,
-            },
+            "summary": _summary_payload([]),
             "powertrainColors": POWERTRAIN_COLORS,
             "events": [],
             "warnings": ["price_history_unavailable"],
+            "demo": None,
         }
 
     current_prices = msrp_repo.list_current_price_alerts(
@@ -724,24 +1159,9 @@ def build_msrp_monitoring_events(
         )
     )
 
-    summary = {
-        "eventCount": len(events),
-        "timelineEventCount": sum(int(item.get("timelineEventCount") or 0) for item in events),
-        "affectedCountryCount": len(
-            {
-                country_event.get("country")
-                for event in events
-                for country_event in list(event.get("countries") or [])
-            }
-        ),
-        "sourceRiskCount": sum(int(item.get("sourceRiskCount") or 0) for item in events),
-        "reviewRequiredCount": sum(int(item.get("reviewRequiredCount") or 0) for item in events),
-        "outlierCount": sum(int(item.get("outlierCount") or 0) for item in events),
-        "lengthMissingCount": sum(1 for item in events if item.get("lengthMissing")),
-    }
-
     return {
         "schemaVersion": "msrp_monitoring_events_v1",
+        "mode": MONITORING_MODE_LIVE,
         "generatedAtUtc": generated_at.isoformat(),
         "filters": {
             "country": country,
@@ -751,8 +1171,9 @@ def build_msrp_monitoring_events(
             "thresholdPct": safe_threshold_pct,
             "limit": safe_limit,
         },
-        "summary": summary,
+        "summary": _summary_payload(events),
         "powertrainColors": POWERTRAIN_COLORS,
         "events": events,
         "warnings": [item for item in [length_lookup_warning] if item],
+        "demo": None,
     }
