@@ -1,14 +1,49 @@
-import { useEffect } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
-import { CountryChatWidget } from "./CountryChatWidget";
 import { MegaMenu } from "./MegaMenu";
-import { PresenceWidget } from "./PresenceWidget";
+
+const PresenceWidget = lazy(() =>
+  import("./PresenceWidget").then((module) => ({ default: module.PresenceWidget }))
+);
+const CountryChatWidget = lazy(() =>
+  import("./CountryChatWidget").then((module) => ({ default: module.CountryChatWidget }))
+);
+
+const AUXILIARY_WIDGET_DELAY_MS = 4_000;
+
+type IdleWindow = Window & typeof globalThis & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
+
+function scheduleAuxiliaryWidgets(callback: () => void): () => void {
+  const idleWindow = window as IdleWindow;
+  let idleHandle: number | null = null;
+  const timeoutHandle = window.setTimeout(() => {
+    if (typeof idleWindow.requestIdleCallback === "function") {
+      idleHandle = idleWindow.requestIdleCallback(callback, { timeout: 2_000 });
+      return;
+    }
+    callback();
+  }, AUXILIARY_WIDGET_DELAY_MS);
+
+  return () => {
+    window.clearTimeout(timeoutHandle);
+    if (idleHandle !== null) idleWindow.cancelIdleCallback?.(idleHandle);
+  };
+}
 
 export function Layout() {
+  const [showAuxiliaryWidgets, setShowAuxiliaryWidgets] = useState(false);
+
   useEffect(() => {
     document.documentElement.style.scrollBehavior = "auto";
     return () => { document.documentElement.style.scrollBehavior = ""; };
   }, []);
+
+  useEffect(() => scheduleAuxiliaryWidgets(() => {
+    setShowAuxiliaryWidgets(true);
+  }), []);
 
   return (
     <div className="app-root">
@@ -22,8 +57,12 @@ export function Layout() {
         </div>
       </header>
       <main className="main-area"><Outlet /></main>
-      <PresenceWidget />
-      <CountryChatWidget />
+      {showAuxiliaryWidgets && (
+        <Suspense fallback={null}>
+          <PresenceWidget />
+          <CountryChatWidget />
+        </Suspense>
+      )}
     </div>
   );
 }
