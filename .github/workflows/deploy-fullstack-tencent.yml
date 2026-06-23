@@ -162,6 +162,16 @@ jobs:
           if [ -z "${SSH_PORT:-}" ]; then
             SSH_PORT=22
           fi
+          SSH_CONNECT_HOST="$SSH_HOST"
+          if command -v getent >/dev/null 2>&1; then
+            SSH_RESOLVED_HOST="$(getent ahostsv4 "$SSH_HOST" | awk 'NR == 1 {print $1}' || true)"
+            if [ -n "$SSH_RESOLVED_HOST" ]; then
+              SSH_CONNECT_HOST="$SSH_RESOLVED_HOST"
+              echo "SSH_RESOLVED_HOST=$SSH_RESOLVED_HOST" >> "$GITHUB_ENV"
+              echo "[INFO] SSH host resolved for deploy: $SSH_HOST -> $SSH_RESOLVED_HOST"
+            fi
+          fi
+          echo "SSH_HOST=$SSH_CONNECT_HOST" >> "$GITHUB_ENV"
 
           install -d -m 700 ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/github_actions_tencent_key
@@ -182,9 +192,10 @@ jobs:
             -o ServerAliveCountMax=2 \
             -o Compression=yes \
             -o IPQoS=none \
+            -o HostKeyAlias="$SSH_HOST" \
             -i ~/.ssh/github_actions_tencent_key \
             "$ARCHIVE_PATH" \
-            "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE_TMP"
+            "$SSH_USER@$SSH_CONNECT_HOST:$REMOTE_ARCHIVE_TMP"
 
           timeout 180s ssh -T -p "$SSH_PORT" \
             -o BatchMode=yes \
@@ -195,8 +206,9 @@ jobs:
             -o ServerAliveInterval=10 \
             -o ServerAliveCountMax=2 \
             -o IPQoS=none \
+            -o HostKeyAlias="$SSH_HOST" \
             -i ~/.ssh/github_actions_tencent_key \
-            "$SSH_USER@$SSH_HOST" \
+            "$SSH_USER@$SSH_CONNECT_HOST" \
             "mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"
 
       - name: Upload archive to server
@@ -256,7 +268,6 @@ jobs:
       - name: Deploy on server via SSH
         if: ${{ steps.auth.outputs.mode == 'key' }}
         env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
