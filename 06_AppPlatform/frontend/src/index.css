@@ -761,6 +761,34 @@ button, input, select, textarea {
   background: linear-gradient(180deg, rgba(239, 246, 255, 0.9) 0%, rgba(248, 250, 252, 0.92) 100%);
 }
 
+.copilot-answer-section.is-collapsible {
+  display: block;
+}
+
+.copilot-answer-section.is-collapsible > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.copilot-answer-section.is-collapsible > summary::-webkit-details-marker {
+  display: none;
+}
+
+.copilot-answer-section.is-collapsible > summary::after {
+  content: "展开";
+  color: var(--c-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.copilot-answer-section.is-collapsible[open] > summary {
+  margin-bottom: 8px;
+}
+
+.copilot-answer-section.is-collapsible[open] > summary::after {
+  content: "收起";
+}
+
 .copilot-answer-section-head {
   display: flex;
   align-items: center;
@@ -1052,6 +1080,16 @@ button, input, select, textarea {
 .copilot-grounded-answer-table th {
   color: var(--c-text-muted);
   font-weight: 700;
+}
+
+.copilot-evidence-link {
+  color: #1d4ed8;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.copilot-evidence-link:hover {
+  text-decoration: underline;
 }
 
 .copilot-grounded-answer.is-compact .copilot-answer-section {
