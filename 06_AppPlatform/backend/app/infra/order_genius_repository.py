@@ -33,7 +33,13 @@ from app.db.models import (
     PiVehicleUnit,
     QuantityCellHistory,
 )
-from app.services.ordering_normalization import clean_text, normalize_brand, normalize_brand_text
+from app.services.ordering_normalization import (
+    clean_text,
+    infer_colour_tier,
+    merge_colour_tiers,
+    normalize_brand,
+    normalize_brand_text,
+)
 from app.services.powertrain_normalizer import normalize_powertrain
 
 
@@ -683,6 +689,20 @@ def list_bom_with_fob(
             "warnings": raw_payload.get("warnings") or [],
         }
 
+    interior_by_template: dict[str, str] = {}
+    interior_code_by_template: dict[str, str] = {}
+    interior_package_by_template: dict[str, str] = {}
+    for sku in skus:
+        template = sku.bom_template or ""
+        if not template:
+            continue
+        if sku.interior_color_name and template not in interior_by_template:
+            interior_by_template[template] = sku.interior_color_name
+        if sku.interior_colour_code and template not in interior_code_by_template:
+            interior_code_by_template[template] = sku.interior_colour_code
+        if sku.interior_package and template not in interior_package_by_template:
+            interior_package_by_template[template] = sku.interior_package
+
     return [
         {
             "materialCode": s.material_code,
@@ -695,11 +715,14 @@ def list_bom_with_fob(
             "colourType": s.exterior_color_type or "single",
             "colourHex": s.colour_hex,
             "colourCodeConfirmed": s.colour_code_confirmed,
-            "colourTier": s.colour_tier or "single",
+            "colourTier": merge_colour_tiers(
+                s.colour_tier,
+                infer_colour_tier(s.exterior_color_name, s.exterior_color_type, s.edition_tag),
+            ),
             "bomTemplate": s.bom_template,
-            "interiorColorName": s.interior_color_name,
-            "interiorColourCode": s.interior_colour_code,
-            "interiorPackage": s.interior_package,
+            "interiorColorName": s.interior_color_name or interior_by_template.get(s.bom_template or ""),
+            "interiorColourCode": s.interior_colour_code or interior_code_by_template.get(s.bom_template or ""),
+            "interiorPackage": s.interior_package or interior_package_by_template.get(s.bom_template or ""),
             "editionTag": s.edition_tag,
             "lifecycleStatus": s.lifecycle_status,
             "isActive": s.is_active,

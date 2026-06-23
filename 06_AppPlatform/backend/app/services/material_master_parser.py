@@ -15,7 +15,11 @@ from pathlib import Path
 
 import openpyxl
 
-from app.services.ordering_normalization import normalize_brand, normalize_brand_text
+from app.services.ordering_normalization import (
+    infer_colour_tier,
+    normalize_brand,
+    normalize_brand_text,
+)
 
 
 DUAL_COLOUR_PATTERNS = [
@@ -46,16 +50,7 @@ def _detect_edition_tag(raw_colour_name: str) -> str | None:
 def _detect_colour_tier(
     colour_name: str, colour_type: str, edition_tag: str | None = None
 ) -> str:
-    if edition_tag:
-        return "special"
-    if colour_type == "dual":
-        return "dual"
-    lower = colour_name.lower()
-    if "matte black" in lower:
-        return "special"
-    if "matte gray" in lower or "matte grey" in lower:
-        return "special"
-    return "single"
+    return infer_colour_tier(colour_name, colour_type, edition_tag)
 
 
 # ── BOM-pattern → interior inference rules ───────────────────
