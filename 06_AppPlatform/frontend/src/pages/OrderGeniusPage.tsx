@@ -11,7 +11,6 @@ import {
   type KeyboardEvent,
   type CSSProperties,
 } from "react";
-import { animate } from "animejs";
 
 import { api, apiUrl } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
@@ -118,6 +117,37 @@ function cleanText(value: string): string | null {
   return text ? text : null;
 }
 
+function deriveMaterialTemplate(codes: string[]): string {
+  const cleanCodes = codes.map((code) => code.trim().toUpperCase()).filter(Boolean);
+  if (cleanCodes.length === 0) return "";
+  if (cleanCodes.length === 1) return cleanCodes[0];
+  let prefix = cleanCodes[0];
+  let reversedSuffix = cleanCodes[0].split("").reverse().join("");
+  for (const code of cleanCodes.slice(1)) {
+    let prefixLength = 0;
+    while (prefixLength < prefix.length && prefixLength < code.length && prefix[prefixLength] === code[prefixLength]) {
+      prefixLength += 1;
+    }
+    prefix = prefix.substring(0, prefixLength);
+
+    const reversedCode = code.split("").reverse().join("");
+    let suffixLength = 0;
+    while (
+      suffixLength < reversedSuffix.length
+      && suffixLength < reversedCode.length
+      && reversedSuffix[suffixLength] === reversedCode[suffixLength]
+    ) {
+      suffixLength += 1;
+    }
+    reversedSuffix = reversedSuffix.substring(0, suffixLength);
+  }
+  const suffix = reversedSuffix.split("").reverse().join("");
+  if (prefix && suffix && prefix.length + suffix.length < cleanCodes[0].length) {
+    return `${prefix}**${suffix}`;
+  }
+  return prefix + suffix || cleanCodes[0];
+}
+
 function normalizeAccountCode(value: string): string {
   return value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12);
 }
@@ -201,6 +231,16 @@ function firstModelNumber(value: string): number {
   return match ? Number(match[0]) : Number.MAX_SAFE_INTEGER;
 }
 
+function powertrainDisplayRank(value: string): number {
+  const upper = value.toUpperCase();
+  if (upper === "ICE") return 0;
+  if (upper === "HEV") return 1;
+  if (upper === "BEV") return 2;
+  if (upper === "PHEV" || upper.includes("SHS")) return 3;
+  if (upper === "MHEV") return 4;
+  return 9;
+}
+
 function compareProductGroupEntries(a: ProductGroupEntry, b: ProductGroupEntry): number {
   const [brandA = "", modelA = "", versionA = "", ptA = ""] = a[0].split("|");
   const [brandB = "", modelB = "", versionB = "", ptB = ""] = b[0].split("|");
@@ -210,7 +250,8 @@ function compareProductGroupEntries(a: ProductGroupEntry, b: ProductGroupEntry):
   if (brandDiff !== 0) return brandDiff;
   const modelNumberDiff = firstModelNumber(modelA) - firstModelNumber(modelB);
   if (modelNumberDiff !== 0) return modelNumberDiff;
-  return modelA.localeCompare(modelB) || versionA.localeCompare(versionB) || ptA.localeCompare(ptB);
+  const powertrainDiff = powertrainDisplayRank(ptA) - powertrainDisplayRank(ptB);
+  return modelA.localeCompare(modelB) || powertrainDiff || versionA.localeCompare(versionB) || ptA.localeCompare(ptB);
 }
 
 function formatProductModelName(brand: string, modelName: string, version?: string): string {
@@ -434,6 +475,7 @@ export function OrderGeniusPage() {
   const [versionFilter, setVersionFilter] = useState("");
   const [colourFilter, setColourFilter] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
+  const [debouncedMaterialSearch, setDebouncedMaterialSearch] = useState("");
   const [groupByProduct, setGroupByProduct] = useState(true);
   const [expandedProductGroups, setExpandedProductGroups] = useState<Set<string>>(() => new Set());
   const [showPtAdmin, setShowPtAdmin] = useState(false);
@@ -493,6 +535,15 @@ export function OrderGeniusPage() {
   const [orderingAccountCodeEdited, setOrderingAccountCodeEdited] = useState(false);
   const [creatingPiBatch, setCreatingPiBatch] = useState(false);
   const [piBatchNotice, setPiBatchNotice] = useState("");
+  const matrixRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedMaterialSearch(materialSearch.trim());
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [materialSearch]);
+
   useEffect(() => {
     if (gridApiRef.current) {
       setTimeout(() => {
@@ -557,7 +608,13 @@ export function OrderGeniusPage() {
 
   // ── Load matrices for all selected countries ────────────────────────
   const loadMatrices = useCallback(() => {
-    if (selectedCountries.length === 0) return;
+    const requestId = matrixRequestIdRef.current + 1;
+    matrixRequestIdRef.current = requestId;
+    if (selectedCountries.length === 0) {
+      setMatrices({});
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError("");
     const params = {
@@ -567,28 +624,32 @@ export function OrderGeniusPage() {
       powertrain: powertrainFilter || undefined,
       version: versionFilter || undefined,
       colour: colourFilter || undefined,
-      materialCodeSearch: materialSearch || undefined,
+      materialCodeSearch: debouncedMaterialSearch || undefined,
     };
-    Promise.all(
-      selectedCountries.map((country) =>
-        api
-          .getOrderGeniusMatrix({ country, ...params })
-          .then((matrix) => [country, matrix] as const)
-          .catch(() => [country, null] as const),
-      ),
-    )
-      .then((results) => {
+    void api
+      .getOrderGeniusMatrixBatch({ countries: selectedCountries, ...params })
+      .then((response) => {
+        if (requestId !== matrixRequestIdRef.current) return;
         const next: Record<string, MatrixResponse> = {};
-        for (const [country, matrix] of results) {
+        for (const country of selectedCountries) {
+          const matrix = response.matrices[country];
           if (matrix) next[country] = matrix;
         }
         setMatrices(next);
+        if (Object.keys(next).length === 0) {
+          const firstError = Object.values(response.errors)[0];
+          if (firstError) setError(firstError);
+        }
       })
-      .catch((e: unknown) => setError(getErrorMessage(e)))
-      .finally(() => setLoading(false));
+      .catch((e: unknown) => {
+        if (requestId === matrixRequestIdRef.current) setError(getErrorMessage(e));
+      })
+      .finally(() => {
+        if (requestId === matrixRequestIdRef.current) setLoading(false);
+      });
   }, [
     selectedCountries, selectedYear, brandFilter, modelFilter,
-    powertrainFilter, versionFilter, colourFilter, materialSearch,
+    powertrainFilter, versionFilter, colourFilter, debouncedMaterialSearch,
   ]);
 
   useEffect(() => {
@@ -611,12 +672,26 @@ export function OrderGeniusPage() {
     return { rows: allRows, totalRows };
   }, [matrices, selectedCountries]);
 
+  const materialSuggestions = useMemo(() => {
+    const seen = new Set<string>();
+    const suggestions: Array<{ materialCode: string; remark: string | null }> = [];
+    for (const row of combinedMatrix.rows) {
+      const materialCode = row.materialCode?.trim();
+      if (!materialCode || seen.has(materialCode)) continue;
+      seen.add(materialCode);
+      suggestions.push({ materialCode, remark: row.remark ?? null });
+      if (suggestions.length >= 300) break;
+    }
+    return suggestions;
+  }, [combinedMatrix.rows]);
+
   // ── Grid data + cell editing ──────────────────────────────────────
 
-  const flatRows = ((): OrderGeniusGridRow[] => {
-    const makeRow = (r: MatrixRowWithCountry): OrderGeniusGridRow => {
+  const flatRows = useMemo<OrderGeniusGridRow[]>(() => {
+    const makeRow = (r: MatrixRowWithCountry, indent = false): OrderGeniusGridRow => {
       const row: OrderGeniusGridRow = {
         materialCode: r.materialCode,
+        bomTemplate: r.bomTemplate,
         modelName: r.modelName,
         version: r.version,
         colour: r.colour,
@@ -626,6 +701,7 @@ export function OrderGeniusPage() {
         editable: r.editable,
         remark: r.remark ?? undefined,
         _countryCode: r._countryCode,
+        _indent: indent || undefined,
         _versions: {},
         _errors: {},
         _saving: new Set(),
@@ -659,8 +735,163 @@ export function OrderGeniusPage() {
     };
 
     if (!groupByProduct) {
-      return combinedMatrix.rows.map(makeRow);
+      return combinedMatrix.rows.map((row) => makeRow(row));
     }
+
+    const aggregateRows = (rows: MatrixRowWithCountry[]) => {
+      let ttl = 0;
+      let floorFob: number | null = null;
+      const monthlySums: number[] = new Array(13).fill(0);
+      for (const row of rows) {
+        const months = row.months || {};
+        for (let m = 1; m <= 12; m++) {
+          const quantity = months[String(m)]?.quantity ?? 0;
+          monthlySums[m] += quantity;
+          ttl += quantity;
+        }
+        const fob = row.fobEur ?? 0;
+        if (fob > 0 && (floorFob === null || fob < floorFob)) {
+          floorFob = fob;
+        }
+      }
+      return { ttl, floorFob, monthlySums };
+    };
+
+    const makeGroupHeader = (params: {
+      groupKey: string;
+      label: string;
+      meta: string;
+      color: string;
+      rows: MatrixRowWithCountry[];
+      countryCode?: string;
+      level: number;
+      kind: "trim" | "country" | "bom";
+      expanded: boolean;
+    }): OrderGeniusGridRow => {
+      const aggregate = aggregateRows(params.rows);
+      const header: OrderGeniusGridRow = {
+        materialCode: `__grp_${params.groupKey.replace(/[^a-zA-Z0-9]/g, "_")}`,
+        modelName: params.label,
+        version: "",
+        colour: "",
+        fobEur: aggregate.floorFob,
+        lifecycleStatus: "active",
+        editable: false,
+        remark: "",
+        _countryCode: params.countryCode,
+        _versions: {},
+        _errors: {},
+        _saving: new Set(),
+        __type: "groupHeader",
+        __groupLabel: params.label,
+        __groupMeta: params.meta,
+        __groupColor: params.color,
+        __groupKey: params.groupKey,
+        __groupKind: params.kind,
+        __groupLevel: params.level,
+        __expanded: params.expanded,
+      };
+      for (let m = 1; m <= 12; m++) header[`month_${m}`] = aggregate.monthlySums[m];
+      return header;
+    };
+
+    const bomTemplateForRow = (row: MatrixRowWithCountry): string => {
+      const stored = row.bomTemplate?.trim().toUpperCase();
+      if (stored) return stored;
+      const materialCode = row.materialCode.trim().toUpperCase();
+      const colourCode = row.colourCode?.trim().toUpperCase();
+      if (materialCode && colourCode) {
+        const colourIndex = materialCode.indexOf(colourCode);
+        if (colourIndex >= 0) {
+          return `${materialCode.slice(0, colourIndex)}**${materialCode.slice(colourIndex + colourCode.length)}`;
+        }
+      }
+      return deriveMaterialTemplate([materialCode]) || materialCode;
+    };
+
+    const appendBomChildren = (
+      target: OrderGeniusGridRow[],
+      rows: MatrixRowWithCountry[],
+      parentKey: string,
+      color: string,
+      level: number,
+      forceExpanded: boolean,
+    ) => {
+      const bomGroups = new Map<string, MatrixRowWithCountry[]>();
+      for (const row of rows) {
+        const bomTemplate = bomTemplateForRow(row);
+        if (!bomGroups.has(bomTemplate)) bomGroups.set(bomTemplate, []);
+        bomGroups.get(bomTemplate)!.push(row);
+      }
+      const sortedBomGroups = [...bomGroups.entries()].sort(([left], [right]) => left.localeCompare(right));
+      if (sortedBomGroups.length <= 1) {
+        for (const row of rows) target.push(makeRow(row, level > 0));
+        return;
+      }
+      for (const [bomTemplate, bomRows] of sortedBomGroups) {
+        const bomKey = `${parentKey}|bom|${bomTemplate}`;
+        const aggregate = aggregateRows(bomRows);
+        const expanded = forceExpanded || expandedProductGroups.has(bomKey);
+        target.push(makeGroupHeader({
+          groupKey: bomKey,
+          label: bomTemplate,
+          meta: `${bomRows.length} variants · ${aggregate.ttl.toLocaleString()} units`,
+          color,
+          rows: bomRows,
+          countryCode: bomRows[0]?._countryCode,
+          level,
+          kind: "bom",
+          expanded,
+        }));
+        if (expanded) {
+          for (const row of bomRows) target.push(makeRow(row, true));
+        }
+      }
+    };
+
+    const appendCountryChildren = (
+      target: OrderGeniusGridRow[],
+      rows: MatrixRowWithCountry[],
+      parentKey: string,
+      color: string,
+      forceExpanded: boolean,
+    ) => {
+      const countryGroups = new Map<string, MatrixRowWithCountry[]>();
+      for (const row of rows) {
+        const countryCode = row._countryCode || "-";
+        if (!countryGroups.has(countryCode)) countryGroups.set(countryCode, []);
+        countryGroups.get(countryCode)!.push(row);
+      }
+      const sortedCountryGroups = [...countryGroups.entries()].sort(([left], [right]) => {
+        if (left === "NL" && right !== "NL") return -1;
+        if (right === "NL" && left !== "NL") return 1;
+        return left.localeCompare(right);
+      });
+      if (sortedCountryGroups.length <= 1) {
+        appendBomChildren(target, rows, parentKey, color, 1, forceExpanded);
+        return;
+      }
+      for (const [countryCode, countryRows] of sortedCountryGroups) {
+        const countryKey = `${parentKey}|country|${countryCode}`;
+        const bomCount = new Set(countryRows.map(bomTemplateForRow)).size;
+        const aggregate = aggregateRows(countryRows);
+        const expanded = forceExpanded || expandedProductGroups.has(countryKey);
+        target.push(makeGroupHeader({
+          groupKey: countryKey,
+          label: countryCode,
+          meta: `${bomCount} BOM groups · ${countryRows.length} variants · ${aggregate.ttl.toLocaleString()} units`,
+          color,
+          rows: countryRows,
+          countryCode,
+          level: 1,
+          kind: "country",
+          expanded,
+        }));
+        if (expanded) {
+          appendBomChildren(target, countryRows, countryKey, color, 2, forceExpanded);
+        }
+      }
+    };
 
     // Deduplicate by full row identity
     const seen = new Set<string>();
@@ -695,57 +926,27 @@ export function OrderGeniusPage() {
           || (a.interiorColorName || "").localeCompare(b.interiorColorName || "")
           || a.materialCode.localeCompare(b.materialCode);
       });
-      // Sum TTL, monthly totals, and floor FOB for the group
-      let groupTtl = 0;
-      let floorFob: number | null = null;
-      const monthlySums: number[] = new Array(13).fill(0); // index 1-12
-      for (const r of groupRows) {
-        const months = r.months || {};
-        for (let m = 1; m <= 12; m++) {
-          const q = months[String(m)]?.quantity ?? 0;
-          monthlySums[m] += q;
-          groupTtl += q;
-        }
-        const fob = r.fobEur ?? 0;
-        if (fob > 0 && (floorFob === null || fob < floorFob)) {
-          floorFob = fob;
-        }
-      }
-      const groupFob = floorFob;
+      const groupAggregate = aggregateRows(groupRows);
       const expanded = expandedProductGroups.has(groupKey);
       const displayName = formatProductModelName(brand, modelName, version);
       const labelName = formatProductModelName(brand, modelName);
-      // Group header row (use group key as materialCode so getRowId is unique)
-      const header: OrderGeniusGridRow = {
-        materialCode: `__grp_${groupKey.replace(/[^a-zA-Z0-9]/g, '_')}`,
-        modelName: displayName,
-        version: "",
-        colour: "",
-        fobEur: groupFob,
-        lifecycleStatus: "active",
-        editable: false,
-        remark: "",
-        _countryCode: groupRows[0]?._countryCode,
-        _versions: {},
-        _errors: {},
-        _saving: new Set(),
-        __type: "groupHeader",
-        __groupLabel: `${labelName} · ${version} · ${pt} · ${groupRows.length} variants · ${groupTtl.toLocaleString()} units`,
-        __groupColor: color,
-        __groupKey: groupKey,
-        __expanded: expanded,
-      };
-      for (let m = 1; m <= 12; m++) header[`month_${m}`] = monthlySums[m];
-      result.push(header);
-      // Child rows
+      result.push(makeGroupHeader({
+        groupKey,
+        label: displayName,
+        meta: `${labelName} · ${version} · ${pt} · ${groupRows.length} variants · ${groupAggregate.ttl.toLocaleString()} units`,
+        color,
+        rows: groupRows,
+        countryCode: groupRows[0]?._countryCode,
+        level: 0,
+        kind: "trim",
+        expanded,
+      }));
       if (expanded || (consolidatedView && selectedCountries.length > 1)) {
-        for (const r of groupRows) {
-          result.push(makeRow(r));
-        }
+        appendCountryChildren(result, groupRows, groupKey, color, consolidatedView && selectedCountries.length > 1);
       }
     }
     return result;
-  })();
+  }, [combinedMatrix.rows, consolidatedView, expandedProductGroups, groupByProduct, selectedCountries.length]);
 
   const cellKey = (materialCode: string, month: number) =>
     `${materialCode}_${month}`;
@@ -890,7 +1091,7 @@ export function OrderGeniusPage() {
       }
     }
     return result;
-  }, [flatRows, consolidatedView, selectedCountries, hideEmptyRows, selectedMonth]);
+  }, [flatRows, consolidatedView, selectedCountries.length, hideEmptyRows, selectedMonth]);
 
   const selectablePiRows = useMemo(() => {
     if (selectedMonth == null) return [];
@@ -1634,9 +1835,9 @@ export function OrderGeniusPage() {
           style={{ minWidth: 160 }}
         />
         <datalist id="material-suggestions">
-          {combinedMatrix.rows.map((r, index) => (
-            <option key={`${r._countryCode || ""}-${r.materialCode}-${index}`} value={r.materialCode}>
-              {r.remark ? `${r.materialCode} (${r.remark})` : r.materialCode}
+          {materialSuggestions.map((suggestion) => (
+            <option key={suggestion.materialCode} value={suggestion.materialCode}>
+              {suggestion.remark ? `${suggestion.materialCode} (${suggestion.remark})` : suggestion.materialCode}
             </option>
           ))}
         </datalist>
@@ -2229,6 +2430,23 @@ type BomBulkFobEditor = {
   selectedCountries: string[];
 };
 
+type BomAdminModelGroup = {
+  brand: string;
+  modelName: string;
+  pt: string;
+  versions: Map<string, any[]>;
+};
+
+type BomAdminTierGroups = {
+  single: any[];
+  dual: any[];
+  special: any[];
+  allSkus: any[];
+  countryCodes: string[];
+  filledCountryCodes: string[];
+  filledCountryCodeSet: ReadonlySet<string>;
+};
+
 type BomColourSwatchEditor = {
   materialCode: string;
   brand: string;
@@ -2376,8 +2594,6 @@ function BomAdminPanel({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const materialCodeInputRef = useRef<HTMLInputElement>(null);
   const copyDraftInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
-  const bomGroupRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const expandedBomGroupKeyRef = useRef<string | null>(null);
   const [dragSku, setDragSku] = useState<string | null>(null);
   const [dragOverTier, setDragOverTier] = useState<string | null>(null);
   const dragEnterCount = useRef(0);
@@ -2465,6 +2681,13 @@ function BomAdminPanel({
     }
     return map;
   }, [accountCountryOptions]);
+  const countryTooltipByCode = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const countryCode of sortedCountries) {
+      map.set(countryCode, formatCountryCodeTooltip(countryCode));
+    }
+    return map;
+  }, [sortedCountries]);
   const bomAdminTableMinWidth = BOM_ADMIN_FIXED_COLUMN_WIDTH + sortedCountries.length * BOM_ADMIN_COUNTRY_COLUMN_WIDTH;
   const renderBomAdminColumnGroup = () => (
     <colgroup>
@@ -2521,7 +2744,7 @@ function BomAdminPanel({
       ? ` · surcharge +${colourSurchargeEur.toLocaleString()} EUR`
       : "";
     const sourceLabel = formatBomFobSourceLabel(fobSourceMode, fobSourceCountryCode);
-    return `${formatCountryCodeTooltip(countryCode)} · ${fobLabel}${surchargeLabel}${sourceLabel ? ` · ${sourceLabel}` : ""}`;
+    return `${countryTooltipByCode.get(countryCode) || formatCountryCodeTooltip(countryCode)} · ${fobLabel}${surchargeLabel}${sourceLabel ? ` · ${sourceLabel}` : ""}`;
   };
 
   const formatBomFobSourceLabel = (
@@ -2934,7 +3157,7 @@ function BomAdminPanel({
     });
   };
 
-  const collectCountryCodes = (codes: string[]): string[] => {
+  const collectCountryCodes = useCallback((codes: string[]): string[] => {
     const seen = new Set<string>();
     const result: string[] = [];
     for (const code of codes) {
@@ -2944,7 +3167,7 @@ function BomAdminPanel({
       result.push(normalized);
     }
     return result;
-  };
+  }, []);
 
   const getDraftCountryCodes = (draft: BomCopyDraft): string[] => {
     return collectCountryCodes([
@@ -3243,7 +3466,7 @@ function BomAdminPanel({
     sourceDisplayLabel?: string,
   ) => {
     const initialTemplate = String(
-      bomTemplate || deriveTemplate(allSkus.map((sku: any) => String(sku.materialCode || "")).filter(Boolean)) || ref.materialCode || "",
+      bomTemplate || deriveMaterialTemplate(allSkus.map((sku: any) => String(sku.materialCode || "")).filter(Boolean)) || ref.materialCode || "",
     ).trim().toUpperCase();
     const sourceInfo = ref.sourcePayload || {};
     const modelName = String(ref.modelName || "");
@@ -3521,60 +3744,6 @@ function BomAdminPanel({
     }));
   };
 
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const card = document.querySelector<HTMLElement>(".bom-admin-tools-card");
-    if (!card) return;
-    try {
-      animate(card, {
-        opacity: [0.92, 1],
-        translateY: toolsFlipped ? [-4, 0] : [3, 0],
-        duration: 220,
-        ease: "outQuad",
-      });
-    } catch {
-      /* decorative only */
-    }
-  }, [toolsFlipped]);
-
-  useEffect(() => {
-    if (!financeDrawerScope) return;
-    const frame = window.requestAnimationFrame(() => {
-      const shell = document.querySelector<HTMLElement>(".bom-finance-modal-shell");
-      if (!shell) return;
-      try {
-        animate(shell, {
-          opacity: [0, 1],
-          scale: [0.985, 1],
-          duration: 260,
-          ease: "outQuad",
-        });
-      } catch {
-        /* decorative only */
-      }
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [financeDrawerScope]);
-
-  useEffect(() => {
-    if (!financeQuickCard) return;
-    const frame = window.requestAnimationFrame(() => {
-      const shell = document.querySelector<HTMLElement>(".bom-finance-quick-modal-shell");
-      if (!shell) return;
-      try {
-        animate(shell, {
-          opacity: [0, 1],
-          translateY: [14, 0],
-          duration: 240,
-          ease: "outQuad",
-        });
-      } catch {
-        /* decorative only */
-      }
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [financeQuickCard]);
-
   const toggleAddMaterialForm = () => {
     const nextVisible = !showAddMaterial;
     setShowAddMaterial(nextVisible);
@@ -3659,31 +3828,11 @@ function BomAdminPanel({
       if (next.has(key)) {
         next.delete(key);
       } else {
-        expandedBomGroupKeyRef.current = key;
         next.add(key);
       }
       return next;
     });
   };
-
-  useEffect(() => {
-    const groupKey = expandedBomGroupKeyRef.current;
-    if (!groupKey || !expandedGroups.has(groupKey)) return;
-    expandedBomGroupKeyRef.current = null;
-
-    const body = bomGroupRefs.current[groupKey]?.querySelector<HTMLElement>(".bom-admin-model-group-body");
-    if (!body) return;
-    try {
-      animate(body, {
-        opacity: [0, 1],
-        translateY: [10, 0],
-        duration: 260,
-        ease: "outQuad",
-      });
-    } catch {
-      /* decorative only */
-    }
-  }, [expandedGroups]);
 
   // Shared colour chip renderer used by BOM rows
   const renderColourChip = (s: any, isHist: boolean, editing: boolean) => {
@@ -3854,29 +4003,9 @@ function BomAdminPanel({
     );
   };
 
-  // Derive BOM template from material codes: find common prefix + ** + suffix
-  const deriveTemplate = (codes: string[]): string => {
-    if (codes.length === 0) return '';
-    if (codes.length === 1) return codes[0];
-    let prefix = codes[0];
-    let rev = codes[0].split('').reverse().join('');
-    for (const c of codes.slice(1)) {
-      let i = 0; while (i < prefix.length && i < c.length && prefix[i] === c[i]) i++;
-      prefix = prefix.substring(0, i);
-      const crev = c.split('').reverse().join('');
-      let j = 0; while (j < rev.length && j < crev.length && rev[j] === crev[j]) j++;
-      rev = rev.substring(0, j);
-    }
-    const suffix = rev.split('').reverse().join('');
-    if (prefix && suffix && prefix.length + suffix.length < (codes[0]?.length || 0)) {
-      return prefix + '**' + suffix;
-    }
-    return prefix + suffix || codes[0];
-  };
-
   // Two-level grouping: model+powertrain → version, with multiple BOM template rows per version
   const modelGroups = useMemo(() => {
-    const map = new Map<string, { brand: string; modelName: string; pt: string; versions: Map<string, any[]> }>();
+    const map = new Map<string, BomAdminModelGroup>();
     for (const s of skus) {
       const pt = (s.modelName || '').toUpperCase().includes('HEV') ? 'HEV' :
                  (s.modelName || '').toUpperCase().includes('SHS') ? 'PHEV' :
@@ -3897,30 +4026,86 @@ function BomAdminPanel({
 
   // Group SKUs within a version by BOM template (using stored bomTemplate from DB)
   // Returns: Map<bomTemplate, { single: SKU[], dual: SKU[], special: SKU[] }>
-  const groupByTemplate = (vSkus: any[]): Map<string, { single: any[]; dual: any[]; special: any[] }> => {
+  const groupByTemplate = useCallback((vSkus: any[]): Map<string, BomAdminTierGroups> => {
     const byPeriod = new Map<string, any[]>();
     for (const s of vSkus) {
       const period = `${s.effectiveFrom || 'any'}_${s.effectiveTo || 'any'}`;
       // Use stored bomTemplate from DB; fall back to single-code derive
-      const bt = s.bomTemplate || deriveTemplate([s.materialCode]);
+      const bt = s.bomTemplate || deriveMaterialTemplate([s.materialCode]);
       const gk = `${bt}|${period}`;
       if (!byPeriod.has(gk)) byPeriod.set(gk, []);
       byPeriod.get(gk)!.push(s);
     }
-    const result = new Map<string, { single: any[]; dual: any[]; special: any[] }>();
+    const result = new Map<string, BomAdminTierGroups>();
     for (const [gk, gSkus] of byPeriod) {
       const bt = gk.split('|')[0];
-      const entry = result.get(bt) || { single: [], dual: [], special: [] };
+      const entry = result.get(bt) || {
+        single: [],
+        dual: [],
+        special: [],
+        allSkus: [],
+        countryCodes: [],
+        filledCountryCodes: [],
+        filledCountryCodeSet: new Set<string>(),
+      };
       for (const s of gSkus) {
         const tier = s.colourTier || 'single';
         if (tier === 'special') entry.special.push(s);
         else if (tier === 'dual') entry.dual.push(s);
         else entry.single.push(s);
+        entry.allSkus.push(s);
       }
       result.set(bt, entry);
     }
+    for (const entry of result.values()) {
+      const countryCodes = collectCountryCodes([
+        ...sortedCountries,
+        ...entry.allSkus.flatMap((sku: any) =>
+          Object.keys((sku?.fobByCountry as Record<string, BomDraftFobEntry>) || {}),
+        ),
+      ]);
+      const filledCountryCodes = countryCodes.filter((countryCode) =>
+        entry.allSkus.some((sku: any) => getDraftBaseFob(sku?.fobByCountry?.[countryCode]) != null),
+      );
+      entry.countryCodes = countryCodes;
+      entry.filledCountryCodes = filledCountryCodes;
+      entry.filledCountryCodeSet = new Set(filledCountryCodes);
+    }
     return result;
-  };
+  }, [collectCountryCodes, sortedCountries]);
+
+  const sortedModelGroupEntries = useMemo(() => {
+    return [...modelGroups.entries()].sort(([a], [b]) => {
+      // OMODA before JAECOO, then by model number (smaller first)
+      const brandA = a.split('|')[0] || '';
+      const brandB = b.split('|')[0] || '';
+      if (brandA !== brandB) return brandA === 'OMODA' ? -1 : brandA === 'JAECOO' ? 1 : brandA.localeCompare(brandB);
+      const numberA = parseInt((a.match(/\d+/) || ['0'])[0]) || 0;
+      const numberB = parseInt((b.match(/\d+/) || ['0'])[0]) || 0;
+      return numberA - numberB;
+    });
+  }, [modelGroups]);
+
+  const sortedVersionEntriesByModelKey = useMemo(() => {
+    const result = new Map<string, [string, any[]][]>();
+    for (const [modelKey, modelGroup] of modelGroups.entries()) {
+      result.set(modelKey, [...modelGroup.versions.entries()].sort(([a], [b]) => a.localeCompare(b)));
+    }
+    return result;
+  }, [modelGroups]);
+
+  const sortedTemplateEntriesByVersionKey = useMemo(() => {
+    const result = new Map<string, [string, BomAdminTierGroups][]>();
+    for (const [modelKey, versionEntries] of sortedVersionEntriesByModelKey.entries()) {
+      for (const [versionKey, versionSkus] of versionEntries) {
+        result.set(
+          `${modelKey}|${versionKey}`,
+          [...groupByTemplate(versionSkus).entries()].sort(([a], [b]) => a.localeCompare(b)),
+        );
+      }
+    }
+    return result;
+  }, [groupByTemplate, sortedVersionEntriesByModelKey]);
 
   if (loading && skus.length === 0 && countries.length === 0) return <div style={{ padding: 16, color: "#64748b" }}>Loading BOM data...</div>;
 
@@ -4501,23 +4686,11 @@ function BomAdminPanel({
         </div>
       )}
       <div style={{ overflowY: "auto", overflowX: "hidden", maxHeight: toolsFlipped ? "calc(94vh - 340px)" : "calc(94vh - 210px)", minHeight: 320 }}>
-        {[...modelGroups.entries()].sort(([a], [b]) => {
-          // OMODA before JAECOO, then by model number (smaller first)
-          const ba = a.split('|')[0] || '';
-          const bb = b.split('|')[0] || '';
-          if (ba !== bb) return ba === 'OMODA' ? -1 : ba === 'JAECOO' ? 1 : ba.localeCompare(bb);
-          // Extract number from model name for numeric sort
-          const na = parseInt((a.match(/\d+/) || ['0'])[0]) || 0;
-          const nb = parseInt((b.match(/\d+/) || ['0'])[0]) || 0;
-          return na - nb;
-        }).map(([mk, mg]) => {
+        {sortedModelGroupEntries.map(([mk, mg]) => {
           const expanded = expandedGroups.has(mk);
           return (
             <div
               key={mk}
-              ref={(node) => {
-                bomGroupRefs.current[mk] = node;
-              }}
               className="bom-admin-model-group"
               style={{ marginBottom: 2 }}
             >
@@ -4544,13 +4717,12 @@ function BomAdminPanel({
               </div>
               {expanded ? (
                 <div className="bom-admin-model-group-body">
-                {[...mg.versions.entries()].sort(([a],[b]) => a.localeCompare(b)).map(([vk, vSkus]) => {
-                const templates = groupByTemplate(vSkus);
-                const sortedTemplates = [...templates.entries()].sort(([a], [b]) => a.localeCompare(b));
+                {(sortedVersionEntriesByModelKey.get(mk) || []).map(([vk, vSkus]) => {
+                const sortedTemplates = sortedTemplateEntriesByVersionKey.get(`${mk}|${vk}`) || [];
                 return (
                   <div key={mk + '|' + vk} style={{ marginLeft: 20, marginBottom: 8 }}>
                     <div style={{ fontSize: 12, fontWeight: 600, color: '#334155', padding: '4px 0', marginBottom: 2 }}>
-                      {vk} · {vSkus.length} colour-SKUs · {templates.size} BOM templates
+                      {vk} · {vSkus.length} colour-SKUs · {sortedTemplates.length} BOM templates
                     </div>
                     <div className="bom-admin-table-scroll">
                       <table className="data-table bom-admin-table" style={{ fontSize: 11, width: bomAdminTableMinWidth, minWidth: bomAdminTableMinWidth, tableLayout: "fixed" }}>
@@ -4567,11 +4739,11 @@ function BomAdminPanel({
                           <th title="Effective from" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from }}>From</th>
                           <th title="Effective to" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to }}>To</th>
                           {sortedCountries.map(c => (
-                            <th key={c} title={formatCountryCodeTooltip(c)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "center", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
+                            <th key={c} title={countryTooltipByCode.get(c) || formatCountryCodeTooltip(c)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "center", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
                               <button
                                 type="button"
                                 className={`bom-country-cbu-trigger${c === "NL" ? " is-nl" : ""}`}
-                                title={`${formatCountryCodeTooltip(c)} · CBU detail`}
+                                title={`${countryTooltipByCode.get(c) || formatCountryCodeTooltip(c)} · CBU detail`}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   void openFinanceDrawer(buildFinanceDrawerScope(c, mg.brand, mg.modelName, mg.pt));
@@ -4586,7 +4758,7 @@ function BomAdminPanel({
                       </thead>
                       <tbody>
                         {sortedTemplates.map(([bomTemplate, tiers]) => {
-                          const allSkus = [...tiers.single, ...tiers.dual, ...tiers.special];
+                          const allSkus = tiers.allSkus;
                           const ref = allSkus[0];
                           const isHist = ref.lifecycleStatus === 'historical';
                           const isPhaseOut = ref.lifecycleStatus === 'phase_out';
@@ -4604,7 +4776,10 @@ function BomAdminPanel({
                           const editing = editingBoms.has(bomTemplate);
                           const draftKey = `${mk}|${vk}|${bomTemplate}`;
                           const copyDraft = copyDrafts[draftKey];
-                          const bulkFobEditor = getBulkFobEditor(bomTemplate, allSkus);
+                          const bulkFobEditor = bulkFobEditors[bomTemplate] || {
+                            deltaEur: "",
+                            selectedCountries: tiers.filledCountryCodes,
+                          };
                           const renderTierCell = (tierName: BomAdminColourTier, tierSkus: any[], borderColor: string, bgColor: string) => {
                             const isOver = editing && dragOverTier === tierName && dragSku && !tierSkus.some((s: any) => s.materialCode === dragSku);
                             const dragProps = editing ? {
@@ -5310,10 +5485,8 @@ function BomAdminPanel({
                                         Selected countries ({bulkFobEditor.selectedCountries.length})
                                       </summary>
                                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                                        {getBomCountryCodes(allSkus).map((countryCode) => {
-                                          const hasFob = allSkus.some((sku: any) =>
-                                            getDraftBaseFob(sku?.fobByCountry?.[countryCode]) != null,
-                                          );
+                                        {tiers.countryCodes.map((countryCode) => {
+                                          const hasFob = tiers.filledCountryCodeSet.has(countryCode);
                                           return (
                                             <label
                                               key={`${bomTemplate}-country-${countryCode}`}

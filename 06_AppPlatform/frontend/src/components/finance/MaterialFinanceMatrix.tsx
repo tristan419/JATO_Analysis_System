@@ -1,11 +1,9 @@
-import { Fragment, type FocusEvent, useEffect, useRef, useState } from "react";
-import { animate, stagger } from "animejs";
+import { Fragment, type FocusEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   CountryMaterialFinanceRow,
   CountryMaterialFinanceUpdate,
 } from "../../types/orderGenius";
-import { useStaggerEntrance } from "../../hooks/useStaggerEntrance";
 import { LoadingActionButton } from "../LoadingActionButton";
 
 interface MaterialFinanceDraft {
@@ -32,12 +30,27 @@ interface MaterialFinanceMatrixProps {
   onSaveRow: (row: CountryMaterialFinanceRow, update: CountryMaterialFinanceUpdate) => void | Promise<void>;
 }
 
-interface MaterialFinanceGroup {
+interface MaterialFinanceBomGroup {
+  key: string;
+  bomTemplate: string;
+  rows: CountryMaterialFinanceRow[];
+}
+
+interface MaterialFinanceCountryGroup {
+  key: string;
+  countryCode: string;
+  rows: CountryMaterialFinanceRow[];
+  bomGroups: MaterialFinanceBomGroup[];
+}
+
+interface MaterialFinanceTrimGroup {
   key: string;
   brand: string;
   modelName: string;
+  version: string;
   powertrain: string;
   rows: CountryMaterialFinanceRow[];
+  countryGroups: MaterialFinanceCountryGroup[];
 }
 
 function formatMoney(value: number | null): string {
@@ -84,22 +97,39 @@ function powertrainTone(value: string | null): string {
   return "other";
 }
 
+function compareCountryCode(left: string, right: string): number {
+  if (left === "NL" && right !== "NL") return -1;
+  if (right === "NL" && left !== "NL") return 1;
+  return compareText(left, right);
+}
+
 function compareFinanceRows(left: CountryMaterialFinanceRow, right: CountryMaterialFinanceRow): number {
   return brandRank(left.brand) - brandRank(right.brand)
     || modelNumberRank(left.modelName) - modelNumberRank(right.modelName)
     || powertrainRank(left.powertrain) - powertrainRank(right.powertrain)
     || compareText(normalizedText(left.modelName), normalizedText(right.modelName))
     || compareText(normalizedText(left.version), normalizedText(right.version))
+    || compareCountryCode(left.countryCode, right.countryCode)
+    || compareText(normalizedText(left.bomTemplate) || left.materialCode, normalizedText(right.bomTemplate) || right.materialCode)
     || compareText(left.materialCode, right.materialCode);
 }
 
-function buildFinanceGroups(rows: CountryMaterialFinanceRow[]): MaterialFinanceGroup[] {
-  const grouped = new Map<string, MaterialFinanceGroup>();
+function financeRowKey(row: CountryMaterialFinanceRow): string {
+  return `${row.countryCode}::${row.materialCode}`;
+}
+
+function financeBomKey(row: CountryMaterialFinanceRow): string {
+  return normalizedText(row.bomTemplate) || row.materialCode;
+}
+
+function buildFinanceGroups(rows: CountryMaterialFinanceRow[]): MaterialFinanceTrimGroup[] {
+  const grouped = new Map<string, MaterialFinanceTrimGroup>();
   [...rows].sort(compareFinanceRows).forEach((row) => {
     const brand = normalizedText(row.brand) || "-";
     const modelName = normalizedText(row.modelName) || "-";
+    const version = normalizedText(row.version) || "-";
     const powertrain = normalizedText(row.powertrain) || "-";
-    const key = `${brand}::${modelName}::${powertrain}`;
+    const key = `${brand}::${modelName}::${version}::${powertrain}`;
     const existing = grouped.get(key);
     if (existing) {
       existing.rows.push(row);
@@ -109,11 +139,58 @@ function buildFinanceGroups(rows: CountryMaterialFinanceRow[]): MaterialFinanceG
       key,
       brand,
       modelName,
+      version,
       powertrain,
       rows: [row],
+      countryGroups: [],
     });
   });
-  return Array.from(grouped.values());
+
+  return Array.from(grouped.values()).map((trimGroup) => {
+    const countryGroups = new Map<string, MaterialFinanceCountryGroup>();
+    trimGroup.rows.forEach((row) => {
+      const countryCode = row.countryCode || "-";
+      const countryKey = `${trimGroup.key}::country::${countryCode}`;
+      const existingCountry = countryGroups.get(countryKey);
+      if (existingCountry) {
+        existingCountry.rows.push(row);
+        return;
+      }
+      countryGroups.set(countryKey, {
+        key: countryKey,
+        countryCode,
+        rows: [row],
+        bomGroups: [],
+      });
+    });
+
+    const nextCountryGroups = Array.from(countryGroups.values())
+      .sort((left, right) => compareCountryCode(left.countryCode, right.countryCode))
+      .map((countryGroup) => {
+        const bomGroups = new Map<string, MaterialFinanceBomGroup>();
+        countryGroup.rows.forEach((row) => {
+          const bomTemplate = financeBomKey(row);
+          const bomKey = `${countryGroup.key}::bom::${bomTemplate}`;
+          const existingBom = bomGroups.get(bomKey);
+          if (existingBom) {
+            existingBom.rows.push(row);
+            return;
+          }
+          bomGroups.set(bomKey, {
+            key: bomKey,
+            bomTemplate,
+            rows: [row],
+          });
+        });
+        return {
+          ...countryGroup,
+          bomGroups: Array.from(bomGroups.values())
+            .sort((left, right) => compareText(left.bomTemplate, right.bomTemplate)),
+        };
+      });
+
+    return { ...trimGroup, countryGroups: nextCountryGroups };
+  });
 }
 
 function formatDateTime(value: string | null): string {
@@ -236,9 +313,16 @@ function saveStateLabel(saveState: MaterialFinanceSaveState): string {
   return "Saved";
 }
 
-function findFinanceRow(container: HTMLElement, materialCode: string): HTMLTableRowElement | null {
-  return Array.from(container.querySelectorAll<HTMLTableRowElement>(".material-finance-row"))
-    .find((row) => row.dataset.materialCode === materialCode) ?? null;
+function countRowsWithFinanceValue(rows: CountryMaterialFinanceRow[]): number {
+  return rows.filter((row) => [
+    row.fobEur,
+    row.vehicleMarginEur,
+    row.vehicleMarginRate,
+    row.vehicleProfitEur,
+    row.vehicleProfitRate,
+    row.fobDeltaEur,
+    row.marginDeltaEur,
+  ].some((value) => value != null) || Boolean(row.memo?.trim())).length;
 }
 
 function updateFromDraft(countryCode: string, draft: MaterialFinanceDraft): CountryMaterialFinanceUpdate {
@@ -269,30 +353,21 @@ export function MaterialFinanceMatrix({
   const [drafts, setDrafts] = useState<Record<string, MaterialFinanceDraft>>({});
   const [saveStates, setSaveStates] = useState<Record<string, MaterialFinanceSaveState>>({});
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(() => new Set());
-  const tbodyRef = useRef<HTMLTableSectionElement | null>(null);
-  const expandedGroupKeyRef = useRef<string | null>(null);
-  const savingMaterialCodeRef = useRef<string | null>(null);
   const latestDraftsRef = useRef<Record<string, MaterialFinanceDraft>>({});
   const saveStatesRef = useRef<Record<string, MaterialFinanceSaveState>>({});
   const autosaveTimersRef = useRef<Record<string, number>>({});
   const saveTokensRef = useRef<Record<string, number>>({});
-  const financeGroups = buildFinanceGroups(rows);
-
-  useStaggerEntrance(tbodyRef, rows.length > 0, {
-    selector: ".material-finance-row",
-    staggerDelay: 42,
-    duration: 460,
-    translateY: 10,
-  });
+  const financeGroups = useMemo(() => buildFinanceGroups(rows), [rows]);
 
   useEffect(() => {
-    const serverDrafts = Object.fromEntries(rows.map((row) => [row.materialCode, draftFromRow(row)]));
+    const serverDrafts = Object.fromEntries(rows.map((row) => [financeRowKey(row), draftFromRow(row)]));
     setDrafts((current) => {
       const nextDrafts = { ...serverDrafts };
       for (const row of rows) {
-        const state = saveStatesRef.current[row.materialCode];
-        if ((state === "dirty" || state === "saving" || state === "error") && current[row.materialCode]) {
-          nextDrafts[row.materialCode] = current[row.materialCode];
+        const key = financeRowKey(row);
+        const state = saveStatesRef.current[key];
+        if ((state === "dirty" || state === "saving" || state === "error") && current[key]) {
+          nextDrafts[key] = current[key];
         }
       }
       latestDraftsRef.current = nextDrafts;
@@ -300,8 +375,9 @@ export function MaterialFinanceMatrix({
     });
     setSaveStates((current) => Object.fromEntries(
       rows.map((row) => {
-        const state = current[row.materialCode];
-        return [row.materialCode, state === "dirty" || state === "saving" || state === "error" ? state : "saved"];
+        const key = financeRowKey(row);
+        const state = current[key];
+        return [key, state === "dirty" || state === "saving" || state === "error" ? state : "saved"];
       }),
     ));
   }, [rows]);
@@ -314,100 +390,50 @@ export function MaterialFinanceMatrix({
     Object.values(autosaveTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
   }, []);
 
-  useEffect(() => {
-    const container = tbodyRef.current;
-    if (!container) return;
-
-    if (savingMaterialCode) {
-      savingMaterialCodeRef.current = savingMaterialCode;
-      const row = findFinanceRow(container, savingMaterialCode);
-      if (!row) return;
-      try {
-        animate(row, {
-          translateX: [0, 3, 0],
-          duration: 420,
-          ease: "outQuad",
-        });
-      } catch {
-        /* decorative only */
-      }
-      return;
-    }
-
-    const completedMaterialCode = savingMaterialCodeRef.current;
-    savingMaterialCodeRef.current = null;
-    if (!completedMaterialCode) return;
-
-    const row = findFinanceRow(container, completedMaterialCode);
-    if (!row) return;
-    const cells = row.querySelectorAll<HTMLTableCellElement>("td");
-    try {
-      animate(cells, {
-        backgroundColor: ["#dcfce7", "#ffffff"],
-        duration: 760,
-        ease: "outQuad",
-      });
-    } catch {
-      /* decorative only */
-    }
-  }, [savingMaterialCode]);
-
-  useEffect(() => {
-    const groupKey = expandedGroupKeyRef.current;
-    if (!groupKey || !expandedGroupKeys.has(groupKey)) return;
-    expandedGroupKeyRef.current = null;
-
-    const container = tbodyRef.current;
-    if (!container) return;
-    const groupRows = Array.from(container.querySelectorAll<HTMLTableRowElement>(".material-finance-row"))
-      .filter((row) => row.dataset.financeGroupKey === groupKey);
-    if (groupRows.length === 0) return;
-
-    try {
-      animate(groupRows, {
-        opacity: [0, 1],
-        translateY: [8, 0],
-        delay: stagger(32),
-        duration: 300,
-        ease: "outQuad",
-      });
-    } catch {
-      /* decorative only */
-    }
-  }, [expandedGroupKeys]);
+  const setRowSaveState = (rowKey: string, nextState: MaterialFinanceSaveState) => {
+    if (saveStatesRef.current[rowKey] === nextState) return;
+    saveStatesRef.current = {
+      ...saveStatesRef.current,
+      [rowKey]: nextState,
+    };
+    setSaveStates((current) => {
+      if (current[rowKey] === nextState) return current;
+      return { ...current, [rowKey]: nextState };
+    });
+  };
 
   const saveDraft = async (row: CountryMaterialFinanceRow, draft: MaterialFinanceDraft) => {
-    const materialCode = row.materialCode;
-    if (autosaveTimersRef.current[materialCode] != null) {
-      window.clearTimeout(autosaveTimersRef.current[materialCode]);
-      delete autosaveTimersRef.current[materialCode];
+    const rowKey = financeRowKey(row);
+    if (autosaveTimersRef.current[rowKey] != null) {
+      window.clearTimeout(autosaveTimersRef.current[rowKey]);
+      delete autosaveTimersRef.current[rowKey];
     }
-    const saveToken = (saveTokensRef.current[materialCode] ?? 0) + 1;
-    saveTokensRef.current[materialCode] = saveToken;
+    const saveToken = (saveTokensRef.current[rowKey] ?? 0) + 1;
+    saveTokensRef.current[rowKey] = saveToken;
     const savedFingerprint = draftFingerprint(draft);
-    setSaveStates((current) => ({ ...current, [materialCode]: "saving" }));
+    setRowSaveState(rowKey, "saving");
     try {
       await onSaveRow(row, updateFromDraft(row.countryCode, draft));
-      const latestDraft = latestDraftsRef.current[materialCode] ?? draft;
-      if (saveTokensRef.current[materialCode] === saveToken && draftFingerprint(latestDraft) === savedFingerprint) {
-        setSaveStates((current) => ({ ...current, [materialCode]: "saved" }));
+      const latestDraft = latestDraftsRef.current[rowKey] ?? draft;
+      if (saveTokensRef.current[rowKey] === saveToken && draftFingerprint(latestDraft) === savedFingerprint) {
+        setRowSaveState(rowKey, "saved");
       }
     } catch {
-      if (saveTokensRef.current[materialCode] === saveToken) {
-        setSaveStates((current) => ({ ...current, [materialCode]: "error" }));
+      if (saveTokensRef.current[rowKey] === saveToken) {
+        setRowSaveState(rowKey, "error");
       }
     }
   };
 
   const queueAutosave = (row: CountryMaterialFinanceRow, draft: MaterialFinanceDraft) => {
-    const materialCode = row.materialCode;
-    if (autosaveTimersRef.current[materialCode] != null) {
-      window.clearTimeout(autosaveTimersRef.current[materialCode]);
+    const rowKey = financeRowKey(row);
+    if (autosaveTimersRef.current[rowKey] != null) {
+      window.clearTimeout(autosaveTimersRef.current[rowKey]);
     }
-    setSaveStates((current) => ({ ...current, [materialCode]: "dirty" }));
-    autosaveTimersRef.current[materialCode] = window.setTimeout(() => {
-      delete autosaveTimersRef.current[materialCode];
-      const latestDraft = latestDraftsRef.current[materialCode] ?? draft;
+    setRowSaveState(rowKey, "dirty");
+    autosaveTimersRef.current[rowKey] = window.setTimeout(() => {
+      delete autosaveTimersRef.current[rowKey];
+      const latestDraft = latestDraftsRef.current[rowKey] ?? draft;
       void saveDraft(row, latestDraft);
     }, FINANCE_AUTOSAVE_DELAY_MS);
   };
@@ -416,12 +442,13 @@ export function MaterialFinanceMatrix({
     row: CountryMaterialFinanceRow,
     patch: Partial<MaterialFinanceDraft>,
   ) => {
-    const existing = latestDraftsRef.current[row.materialCode] ?? drafts[row.materialCode] ?? draftFromRow(row);
+    const rowKey = financeRowKey(row);
+    const existing = latestDraftsRef.current[rowKey] ?? drafts[rowKey] ?? draftFromRow(row);
     const nextDraft = { ...existing, ...patch };
-    latestDraftsRef.current[row.materialCode] = nextDraft;
+    latestDraftsRef.current[rowKey] = nextDraft;
     setDrafts((current) => ({
       ...current,
-      [row.materialCode]: nextDraft,
+      [rowKey]: nextDraft,
     }));
     queueAutosave(row, nextDraft);
   };
@@ -432,7 +459,6 @@ export function MaterialFinanceMatrix({
       if (next.has(groupKey)) {
         next.delete(groupKey);
       } else {
-        expandedGroupKeyRef.current = groupKey;
         next.add(groupKey);
       }
       return next;
@@ -480,7 +506,7 @@ export function MaterialFinanceMatrix({
               <th>Action</th>
             </tr>
           </thead>
-          <tbody ref={tbodyRef}>
+          <tbody>
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={15} className="material-finance-empty">No finance rows.</td>
@@ -500,143 +526,199 @@ export function MaterialFinanceMatrix({
                       >
                         <span className="material-finance-group-caret">{collapsed ? "▸" : "▾"}</span>
                         <strong>{group.brand} {group.modelName}</strong>
+                        <span>{group.version}</span>
                         <span className={`material-finance-group-powertrain material-finance-group-powertrain-${tone}`}>
                           {group.powertrain}
                         </span>
+                        <span>{group.countryGroups.length} countries</span>
                         <span>{group.rows.length} BOM rows</span>
                       </button>
                     </td>
                   </tr>
-                  {collapsed ? null : group.rows.map((row) => {
-                    const draft = drafts[row.materialCode] ?? draftFromRow(row);
-                    const localSaveState = saveStates[row.materialCode] ?? "saved";
-                    const saving = savingMaterialCode === row.materialCode || localSaveState === "saving";
-                    const rowSaveState: MaterialFinanceSaveState = saving ? "saving" : localSaveState;
-                    const skuCount = getSourcePayloadNumber(row, "skuCount");
-                    const colourCodes = getSourcePayloadStringList(row, "colourCodes");
+                  {collapsed ? null : group.countryGroups.map((countryGroup) => {
+                    const showCountryGroup = group.countryGroups.length > 1;
+                    const countryCollapsed = showCountryGroup && !expandedGroupKeys.has(countryGroup.key);
+                    const filledRows = countRowsWithFinanceValue(countryGroup.rows);
                     return (
-                      <tr
-                        key={`${row.countryCode}-${row.materialCode}`}
-                        data-finance-group-key={group.key}
-                        data-material-code={row.materialCode}
-                        className={`material-finance-row is-${rowSaveState}`}
-                      >
-                        <td>
-                          <div className="material-finance-code">{row.materialCode}</div>
-                          <div className="material-finance-subtle">
-                            {skuCount == null ? row.bomTemplate || "-" : `${skuCount} colour SKUs`}
-                            {colourCodes.length > 0 ? ` · ${colourCodes.join("/")}` : ""}
-                          </div>
-                        </td>
-                        <td>
-                          <div className="material-finance-product-main">{row.modelName}</div>
-                          <div className="material-finance-subtle">{row.brand}</div>
-                        </td>
-                        <td>
-                          <div className="material-finance-product-main">{row.version || "-"}</div>
-                          <div className="material-finance-subtle">Template level</div>
-                        </td>
-                        <td>
-                          <span className={`material-finance-powertrain-chip material-finance-powertrain-${powertrainTone(row.powertrain)}`}>
-                            {row.powertrain || "-"}
-                          </span>
-                        </td>
-                        <td className="material-finance-number">{formatMoney(row.bomFobEur)}</td>
-                        <td>
-                          <input
-                            {...financeCellInputProps(draft.fobEur, rowSaveState)}
-                            aria-label={`${row.materialCode} FOB`}
-                            onChange={(event) => updateDraft(row, { fobEur: event.target.value === "-" ? "" : event.target.value })}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            {...financeCellInputProps(draft.vehicleMarginEur, rowSaveState)}
-                            aria-label={`${row.materialCode} unit margin`}
-                            onChange={(event) => updateDraft(row, { vehicleMarginEur: event.target.value === "-" ? "" : event.target.value })}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            {...financeCellInputProps(draft.vehicleMarginRatePercent, rowSaveState)}
-                            aria-label={`${row.materialCode} margin percent`}
-                            onChange={(event) => updateDraft(row, { vehicleMarginRatePercent: event.target.value === "-" ? "" : event.target.value })}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            {...financeCellInputProps(draft.vehicleProfitEur, rowSaveState)}
-                            aria-label={`${row.materialCode} unit profit`}
-                            onChange={(event) => updateDraft(row, { vehicleProfitEur: event.target.value === "-" ? "" : event.target.value })}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            {...financeCellInputProps(draft.vehicleProfitRatePercent, rowSaveState)}
-                            aria-label={`${row.materialCode} profit percent`}
-                            onChange={(event) => updateDraft(row, { vehicleProfitRatePercent: event.target.value === "-" ? "" : event.target.value })}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            {...financeCellInputProps(draft.fobDeltaEur, rowSaveState, "material-finance-signed-input")}
-                            aria-label={`${row.materialCode} FOB delta`}
-                            placeholder="+/-"
-                            onChange={(event) => updateDraft(row, { fobDeltaEur: event.target.value === "-" ? "" : event.target.value })}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            {...financeCellInputProps(draft.marginDeltaEur, rowSaveState, "material-finance-signed-input")}
-                            aria-label={`${row.materialCode} margin delta`}
-                            placeholder="+/-"
-                            onChange={(event) => updateDraft(row, { marginDeltaEur: event.target.value === "-" ? "" : event.target.value })}
-                          />
-                        </td>
-                        <td>
-                          <textarea
-                            className={`material-finance-edit-field is-${rowSaveState}`}
-                            value={draft.memo}
-                            onChange={(event) => updateDraft(row, { memo: event.target.value })}
-                            rows={density === "compact" ? 2 : 3}
-                          />
-                        </td>
-                        <td>
-                          <span
-                            className={`material-finance-source-badge material-finance-source-${sourceModeTone(row.sourceMode)}`}
-                            title={sourceModeTitle(row)}
-                          >
-                            {formatSourceMode(row.sourceMode)}
-                          </span>
-                          <div>{row.updatedBy || "-"}</div>
-                          <div className="material-finance-subtle">{formatDateTime(row.updatedAtUtc)}</div>
-                        </td>
-                        <td>
-                          <div className="crud-row-actions review-row-actions material-finance-row-actions">
-                            <LoadingActionButton
-                              size="sm"
-                              variant="primary"
-                              loading={saving}
-                              loadingLabel="Saving..."
-                              onClick={() => void saveDraft(row, latestDraftsRef.current[row.materialCode] ?? draft)}
-                            >
-                              Save now
-                            </LoadingActionButton>
-                            <span className={`material-finance-save-state material-finance-save-state-${rowSaveState}`}>
-                              {saveStateLabel(rowSaveState)}
-                            </span>
-                            {onViewHistory ? (
+                      <Fragment key={countryGroup.key}>
+                        {showCountryGroup ? (
+                          <tr className="material-finance-subgroup-row material-finance-country-group-row">
+                            <td colSpan={15}>
                               <button
                                 type="button"
-                                className="btn btn-sm btn-ghost material-finance-history-button"
-                                onClick={() => void onViewHistory(row)}
+                                className="material-finance-subgroup-toggle"
+                                aria-expanded={!countryCollapsed}
+                                onClick={() => toggleGroup(countryGroup.key)}
                               >
-                                History
+                                <span className="material-finance-group-caret">{countryCollapsed ? "▸" : "▾"}</span>
+                                <strong>{countryGroup.countryCode}</strong>
+                                <span>{countryGroup.bomGroups.length} BOM groups</span>
+                                <span>{filledRows} filled / {countryGroup.rows.length} rows</span>
                               </button>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
+                            </td>
+                          </tr>
+                        ) : null}
+                        {countryCollapsed ? null : countryGroup.bomGroups.map((bomGroup) => {
+                          const showBomGroup = countryGroup.bomGroups.length > 1;
+                          const bomCollapsed = showBomGroup && !expandedGroupKeys.has(bomGroup.key);
+                          const skuCount = getSourcePayloadNumber(bomGroup.rows[0], "skuCount");
+                          const colourCodes = getSourcePayloadStringList(bomGroup.rows[0], "colourCodes");
+                          return (
+                            <Fragment key={bomGroup.key}>
+                              {showBomGroup ? (
+                                <tr className="material-finance-subgroup-row material-finance-bom-group-row">
+                                  <td colSpan={15}>
+                                    <button
+                                      type="button"
+                                      className={`material-finance-subgroup-toggle material-finance-subgroup-toggle-bom${showCountryGroup ? "" : " material-finance-subgroup-toggle-direct-bom"}`}
+                                      aria-expanded={!bomCollapsed}
+                                      onClick={() => toggleGroup(bomGroup.key)}
+                                    >
+                                      <span className="material-finance-group-caret">{bomCollapsed ? "▸" : "▾"}</span>
+                                      <strong>{bomGroup.bomTemplate}</strong>
+                                      <span>{skuCount == null ? `${bomGroup.rows.length} rows` : `${skuCount} colour SKUs`}</span>
+                                      {colourCodes.length > 0 ? <span>{colourCodes.join("/")}</span> : null}
+                                    </button>
+                                  </td>
+                                </tr>
+                              ) : null}
+                              {bomCollapsed ? null : bomGroup.rows.map((row) => {
+                                const rowKey = financeRowKey(row);
+                                const draft = drafts[rowKey] ?? draftFromRow(row);
+                                const localSaveState = saveStates[rowKey] ?? "saved";
+                                const saving = savingMaterialCode === row.materialCode || localSaveState === "saving";
+                                const rowSaveState: MaterialFinanceSaveState = saving ? "saving" : localSaveState;
+                                const rowSkuCount = getSourcePayloadNumber(row, "skuCount");
+                                const rowColourCodes = getSourcePayloadStringList(row, "colourCodes");
+                                return (
+                                  <tr
+                                    key={rowKey}
+                                    data-finance-group-key={bomGroup.key}
+                                    data-material-code={row.materialCode}
+                                    className={`material-finance-row is-${rowSaveState}`}
+                                  >
+                                    <td>
+                                      <div className="material-finance-code">{row.materialCode}</div>
+                                      <div className="material-finance-subtle">
+                                        {rowSkuCount == null ? row.bomTemplate || "-" : `${rowSkuCount} colour SKUs`}
+                                        {rowColourCodes.length > 0 ? ` · ${rowColourCodes.join("/")}` : ""}
+                                      </div>
+                                    </td>
+                                    <td>
+                                      <div className="material-finance-product-main">{row.modelName}</div>
+                                      <div className="material-finance-subtle">{row.brand}</div>
+                                    </td>
+                                    <td>
+                                      <div className="material-finance-product-main">{row.version || "-"}</div>
+                                      <div className="material-finance-subtle">Template level</div>
+                                    </td>
+                                    <td>
+                                      <span className={`material-finance-powertrain-chip material-finance-powertrain-${powertrainTone(row.powertrain)}`}>
+                                        {row.powertrain || "-"}
+                                      </span>
+                                    </td>
+                                    <td className="material-finance-number">{formatMoney(row.bomFobEur)}</td>
+                                    <td>
+                                      <input
+                                        {...financeCellInputProps(draft.fobEur, rowSaveState)}
+                                        aria-label={`${row.materialCode} FOB`}
+                                        onChange={(event) => updateDraft(row, { fobEur: event.target.value === "-" ? "" : event.target.value })}
+                                      />
+                                    </td>
+                                    <td>
+                                      <input
+                                        {...financeCellInputProps(draft.vehicleMarginEur, rowSaveState)}
+                                        aria-label={`${row.materialCode} unit margin`}
+                                        onChange={(event) => updateDraft(row, { vehicleMarginEur: event.target.value === "-" ? "" : event.target.value })}
+                                      />
+                                    </td>
+                                    <td>
+                                      <input
+                                        {...financeCellInputProps(draft.vehicleMarginRatePercent, rowSaveState)}
+                                        aria-label={`${row.materialCode} margin percent`}
+                                        onChange={(event) => updateDraft(row, { vehicleMarginRatePercent: event.target.value === "-" ? "" : event.target.value })}
+                                      />
+                                    </td>
+                                    <td>
+                                      <input
+                                        {...financeCellInputProps(draft.vehicleProfitEur, rowSaveState)}
+                                        aria-label={`${row.materialCode} unit profit`}
+                                        onChange={(event) => updateDraft(row, { vehicleProfitEur: event.target.value === "-" ? "" : event.target.value })}
+                                      />
+                                    </td>
+                                    <td>
+                                      <input
+                                        {...financeCellInputProps(draft.vehicleProfitRatePercent, rowSaveState)}
+                                        aria-label={`${row.materialCode} profit percent`}
+                                        onChange={(event) => updateDraft(row, { vehicleProfitRatePercent: event.target.value === "-" ? "" : event.target.value })}
+                                      />
+                                    </td>
+                                    <td>
+                                      <input
+                                        {...financeCellInputProps(draft.fobDeltaEur, rowSaveState, "material-finance-signed-input")}
+                                        aria-label={`${row.materialCode} FOB delta`}
+                                        placeholder="+/-"
+                                        onChange={(event) => updateDraft(row, { fobDeltaEur: event.target.value === "-" ? "" : event.target.value })}
+                                      />
+                                    </td>
+                                    <td>
+                                      <input
+                                        {...financeCellInputProps(draft.marginDeltaEur, rowSaveState, "material-finance-signed-input")}
+                                        aria-label={`${row.materialCode} margin delta`}
+                                        placeholder="+/-"
+                                        onChange={(event) => updateDraft(row, { marginDeltaEur: event.target.value === "-" ? "" : event.target.value })}
+                                      />
+                                    </td>
+                                    <td>
+                                      <textarea
+                                        className={`material-finance-edit-field is-${rowSaveState}`}
+                                        value={draft.memo}
+                                        onChange={(event) => updateDraft(row, { memo: event.target.value })}
+                                        rows={density === "compact" ? 2 : 3}
+                                      />
+                                    </td>
+                                    <td>
+                                      <span
+                                        className={`material-finance-source-badge material-finance-source-${sourceModeTone(row.sourceMode)}`}
+                                        title={sourceModeTitle(row)}
+                                      >
+                                        {formatSourceMode(row.sourceMode)}
+                                      </span>
+                                      <div>{row.updatedBy || "-"}</div>
+                                      <div className="material-finance-subtle">{formatDateTime(row.updatedAtUtc)}</div>
+                                    </td>
+                                    <td>
+                                      <div className="crud-row-actions review-row-actions material-finance-row-actions">
+                                        <LoadingActionButton
+                                          size="sm"
+                                          variant="primary"
+                                          loading={saving}
+                                          loadingLabel="Saving..."
+                                          onClick={() => void saveDraft(row, latestDraftsRef.current[rowKey] ?? draft)}
+                                        >
+                                          Save now
+                                        </LoadingActionButton>
+                                        <span className={`material-finance-save-state material-finance-save-state-${rowSaveState}`}>
+                                          {saveStateLabel(rowSaveState)}
+                                        </span>
+                                        {onViewHistory ? (
+                                          <button
+                                            type="button"
+                                            className="btn btn-sm btn-ghost material-finance-history-button"
+                                            onClick={() => void onViewHistory(row)}
+                                          >
+                                            History
+                                          </button>
+                                        ) : null}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </Fragment>
+                          );
+                        })}
+                      </Fragment>
                     );
                   })}
                 </Fragment>

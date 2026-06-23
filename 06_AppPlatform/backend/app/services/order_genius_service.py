@@ -553,14 +553,14 @@ def build_matrix(
             if normalize_brand_text(sku.model_name) == normalized_model
         ]
 
-    # Get FOB for these SKUs — filtered by country's default payment term
-    fob_map: dict[str, CountrySkuFobResolved] = {}
-    for sku in active_skus:
-        fob = repo.get_fob_for_country_sku(
-            session, country_code, sku.material_code, payment_term_code,
-        )
-        if fob:
-            fob_map[sku.material_code] = fob
+    # Get FOB for these SKUs in one round trip. Payment term is metadata-only
+    # in the current repository rule, matching get_fob_for_country_sku.
+    fob_map: dict[str, CountrySkuFobResolved] = repo.list_fobs_for_country_material_codes(
+        session,
+        country_code,
+        [sku.material_code for sku in active_skus],
+        payment_term_code,
+    )
 
     # Only include SKUs that have FOB for this country
     skus_with_fob = [
@@ -584,6 +584,16 @@ def build_matrix(
     historical_codes = repo.list_historical_skus_with_quantity(
         session, country_code, year
     )
+    historical_skus = repo.get_skus_by_material_codes_any_status(
+        session,
+        historical_codes,
+    )
+    historical_fob_map = repo.list_fobs_for_country_material_codes(
+        session,
+        country_code,
+        historical_codes,
+        payment_term_code,
+    )
 
     # Build rows
     rows = []
@@ -603,6 +613,7 @@ def build_matrix(
 
         rows.append({
             "materialCode": sku.material_code,
+            "bomTemplate": sku.bom_template,
             "brand": normalize_brand(sku.brand),
             "modelName": normalize_brand_text(sku.model_name),
             "version": sku.version,
@@ -630,7 +641,7 @@ def build_matrix(
     for mc in historical_codes:
         if mc in fob_map:
             continue  # already included as active
-        hist_sku = repo.get_sku_by_material_code_any_status(session, mc)
+        hist_sku = historical_skus.get(mc)
         if not hist_sku:
             continue
         # Apply filters to historical rows too
@@ -646,7 +657,7 @@ def build_matrix(
             continue
         if material_code_search and material_code_search.lower() not in mc.lower():
             continue
-        fob = repo.get_fob_for_country_sku(session, country_code, mc)
+        fob = historical_fob_map.get(mc)
 
         row_months: dict[str, dict] = {}
         row_ttl = 0
@@ -666,6 +677,7 @@ def build_matrix(
         if has_any or row_ttl > 0:
             rows.append({
                 "materialCode": mc,
+                "bomTemplate": hist_sku.bom_template,
                 "brand": normalize_brand(hist_sku.brand),
                 "modelName": normalize_brand_text(hist_sku.model_name),
                 "version": hist_sku.version,

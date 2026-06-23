@@ -235,6 +235,34 @@ def get_sku_by_material_code_any_status(
     return session.execute(stmt).scalars().first()
 
 
+def get_skus_by_material_codes_any_status(
+    session: Session,
+    material_codes: list[str],
+) -> dict[str, MaterialSkuMaster]:
+    """Return the preferred SKU row per material code.
+
+    Preference matches get_sku_by_material_code_any_status: active first, then
+    highest row_version. This avoids one query per historical matrix row.
+    """
+    codes = [code for code in dict.fromkeys(material_codes) if code]
+    if not codes:
+        return {}
+    stmt = (
+        select(MaterialSkuMaster)
+        .where(MaterialSkuMaster.material_code.in_(codes))
+        .order_by(
+            MaterialSkuMaster.material_code,
+            MaterialSkuMaster.is_active.desc(),
+            MaterialSkuMaster.row_version.desc(),
+        )
+    )
+    result: dict[str, MaterialSkuMaster] = {}
+    for row in session.execute(stmt).scalars().all():
+        if row.material_code not in result:
+            result[row.material_code] = row
+    return result
+
+
 def list_active_skus(
     session: Session,
     brand: str | None = None,
@@ -645,6 +673,15 @@ def list_bom_with_fob(
         ).scalars().all()
         baseline_names = {b.baseline_version_id: b.source_file_name for b in baselines}
 
+    def compact_source_payload(raw_payload: object) -> dict:
+        if not isinstance(raw_payload, dict):
+            return {}
+        return {
+            "sheet_name": raw_payload.get("sheet_name"),
+            "row_index": raw_payload.get("row_index"),
+            "warnings": raw_payload.get("warnings") or [],
+        }
+
     return [
         {
             "materialCode": s.material_code,
@@ -676,7 +713,7 @@ def list_bom_with_fob(
             "sourceSheetName": s.source_sheet_name,
             "sourceRowNumber": s.source_row_number,
             "sourceFileName": baseline_names.get(s.baseline_version_id) if s.baseline_version_id else None,
-            "sourcePayload": s.raw_payload_json,
+            "sourcePayload": compact_source_payload(s.raw_payload_json),
         }
         for s in skus
     ], all_countries
@@ -2156,6 +2193,36 @@ def get_fob_for_country_sku(
         CountrySkuFobResolved.is_active == True,
     )
     return session.execute(stmt).scalars().first()
+
+
+def list_fobs_for_country_material_codes(
+    session: Session,
+    country_code: str,
+    material_codes: list[str],
+    payment_term_code: str | None = None,  # kept for call-site clarity, not a filter
+) -> dict[str, CountrySkuFobResolved]:
+    """Return active FOB rows for many material codes in one query.
+
+    Payment term is metadata-only in current pricing rules, matching
+    get_fob_for_country_sku behavior.
+    """
+    codes = [code for code in dict.fromkeys(material_codes) if code]
+    if not codes:
+        return {}
+    stmt = (
+        select(CountrySkuFobResolved)
+        .where(
+            CountrySkuFobResolved.country_code == country_code,
+            CountrySkuFobResolved.material_code.in_(codes),
+            CountrySkuFobResolved.is_active == True,
+        )
+        .order_by(CountrySkuFobResolved.material_code)
+    )
+    result: dict[str, CountrySkuFobResolved] = {}
+    for row in session.execute(stmt).scalars().all():
+        if row.material_code not in result:
+            result[row.material_code] = row
+    return result
 
 
 def list_fob_by_country(

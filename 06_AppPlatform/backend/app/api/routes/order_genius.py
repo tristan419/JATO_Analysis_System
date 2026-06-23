@@ -436,6 +436,63 @@ def get_order_genius_matrix(
     )
 
 
+@router.post("/matrix/batch")
+def get_order_genius_matrix_batch(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("viewer")),
+) -> dict:
+    countries_raw = body.get("countries")
+    if not isinstance(countries_raw, list):
+        raise HTTPException(status_code=400, detail="countries must be a list")
+
+    countries: list[str] = []
+    seen: set[str] = set()
+    for value in countries_raw:
+        country = str(value or "").strip().upper()
+        if country and country not in seen:
+            countries.append(country)
+            seen.add(country)
+    if not countries:
+        raise HTTPException(status_code=400, detail="countries is required")
+    if len(countries) > 80:
+        raise HTTPException(status_code=400, detail="too many countries")
+
+    try:
+        year = int(body.get("year"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="year is required") from exc
+
+    filters = {
+        "brand": body.get("brand") or None,
+        "model_name": body.get("model") or body.get("modelName") or None,
+        "powertrain": body.get("powertrain") or None,
+        "version": body.get("version") or None,
+        "colour": body.get("colour") or None,
+        "material_code_search": (
+            body.get("materialCodeSearch")
+            or body.get("material_code_search")
+            or None
+        ),
+    }
+
+    matrices: dict[str, dict] = {}
+    errors: dict[str, str] = {}
+    for country in countries:
+        try:
+            validate_country_access(session, user.name, user.role, country)
+            matrices[country] = build_matrix(
+                session,
+                country_code=country,
+                year=year,
+                **filters,
+            )
+        except HTTPException as exc:
+            errors[country] = str(exc.detail)
+
+    return {"matrices": matrices, "errors": errors}
+
+
 @router.patch("/quantity-cell")
 def patch_quantity_cell(
     body: dict,
