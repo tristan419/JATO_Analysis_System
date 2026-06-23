@@ -41,10 +41,12 @@ class FakeReadinessClient:
         missing_snapshot: bool = False,
         auth_role: str = "editor",
         missing_all_country_latest: bool = False,
+        missing_monitoring: bool = False,
     ) -> None:
         self.missing_snapshot = missing_snapshot
         self.auth_role = auth_role
         self.missing_all_country_latest = missing_all_country_latest
+        self.missing_monitoring = missing_monitoring
 
     def request_json(
         self,
@@ -65,6 +67,21 @@ class FakeReadinessClient:
             return {"rows": 4, "items": [{}] * 4}
         if path == "/msrp/current-prices/alerts":
             return {"rows": 1, "total": 1, "items": [{"severity": "critical"}]}
+        if path == "/msrp/monitoring/events":
+            if self.missing_monitoring:
+                raise audit_module.SmokeFailure("monitoring 404")
+            return {
+                "schemaVersion": "msrp_monitoring_events_v1",
+                "summary": {
+                    "eventCount": 1,
+                    "timelineEventCount": 2,
+                    "affectedCountryCount": 2,
+                    "sourceRiskCount": 1,
+                    "reviewRequiredCount": 1,
+                },
+                "events": [{}],
+                "warnings": ["unit_warning"],
+            }
         if path == "/msrp/current-prices/snapshot":
             if self.missing_snapshot:
                 raise audit_module.SmokeFailure("snapshot 404")
@@ -162,7 +179,7 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
 
     assert report["schemaVersion"] == audit_module.SCHEMA_VERSION
     assert report["status"] == "passed"
-    assert report["summary"]["statusCounts"] == {"passed": 16}
+    assert report["summary"]["statusCounts"] == {"passed": 17}
     requirements = {
         item["key"]: item
         for item in report["requirements"]
@@ -177,6 +194,15 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
         is True
     )
     assert requirements["sales_effectiveness"]["runtime"]["labelCounts"] == {"positive": 1}
+    monitoring_runtime = requirements["monitoring_events"]["runtime"]
+    assert monitoring_runtime["schemaVersion"] == "msrp_monitoring_events_v1"
+    assert monitoring_runtime["timelineEventCount"] == 2
+    assert monitoring_runtime["sourceRiskCount"] == 1
+    assert monitoring_runtime["warningCount"] == 1
+    assert (
+        audit_module.TEST_EVIDENCE["monitoringService"]
+        in requirements["monitoring_events"]["evidence"]
+    )
     auto_review_runtime = requirements["auto_review_scoring"]["runtime"]
     finance_runtime = requirements["finance_monthly_lease_subsidy_net"]["runtime"]
     assert auto_review_runtime["schemaVersion"] == "msrp_auto_review_score_v1"
@@ -213,6 +239,21 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
     assert pipeline_runtime["statusPipelineId"] == "msrp_pipeline"
     assert "unified_readiness" in pipeline_runtime["phases"]
     assert "goal_completion_audit" in pipeline_runtime["phases"]
+
+
+def test_build_readiness_report_marks_missing_when_monitoring_events_are_unavailable() -> None:
+    report = audit_module.build_readiness_report(
+        client=FakeReadinessClient(missing_monitoring=True),
+        filters={},
+    )
+
+    requirements = {
+        item["key"]: item
+        for item in report["requirements"]
+    }
+    assert report["status"] == "missing"
+    assert requirements["monitoring_events"]["status"] == "missing"
+    assert requirements["monitoring_events"]["runtime"]["error"] == "monitoring 404"
 
 
 def test_build_readiness_report_degrades_when_snapshot_is_missing() -> None:
@@ -282,7 +323,7 @@ def test_main_prints_json_report(capsys, monkeypatch) -> None:
     payload = json.loads(captured.out)
     assert exit_code == 0
     assert payload["status"] == "passed"
-    assert payload["summary"]["requirementCount"] == 16
+    assert payload["summary"]["requirementCount"] == 17
 
 
 def test_write_outputs_creates_latest_and_historical_artifacts(tmp_path: Path) -> None:

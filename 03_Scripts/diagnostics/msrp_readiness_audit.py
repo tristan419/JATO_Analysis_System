@@ -45,6 +45,7 @@ MIN_WRITE_ROLE_LEVEL = WRITE_ROLE_LEVELS["editor"]
 TEST_EVIDENCE = {
     "workflowSmoke": "03_Scripts/tests/test_msrp_workflow_smoke.py",
     "workflowService": "06_AppPlatform/backend/tests/unit/test_msrp_workflow_service.py",
+    "monitoringService": "06_AppPlatform/backend/tests/unit/test_msrp_monitoring_service.py",
     "snapshotScript": "03_Scripts/tests/test_hermes_msrp_current_price_snapshot.py",
     "frontendApi": "06_AppPlatform/frontend/src/tests/unit/dataManagementApi.test.ts",
     "pipelineWrapper": "03_Scripts/tests/test_run_msrp_pipeline.py",
@@ -362,6 +363,11 @@ def build_readiness_report(
         "/msrp/current-prices/alerts",
         query=snapshot_query,
     )
+    monitoring, monitoring_error = _safe_get(
+        client,
+        "/msrp/monitoring/events",
+        query={**query, "window_days": 365, "threshold_pct": filters.get("threshold_pct", 3.0), "limit": 500},
+    )
     snapshot, snapshot_error = _safe_get(
         client,
         "/msrp/current-prices/snapshot",
@@ -420,6 +426,12 @@ def build_readiness_report(
     current_price_count = _count_from_payload(current_prices, "total", "rows")
     history_count = _count_from_payload(history, "rows", "total")
     alert_count = _count_from_payload(alerts, "total", "rows")
+    monitoring_summary = _nested_dict(monitoring, "summary")
+    monitoring_event_count = int(monitoring_summary.get("eventCount") or 0)
+    monitoring_timeline_count = int(monitoring_summary.get("timelineEventCount") or 0)
+    monitoring_source_risk_count = int(monitoring_summary.get("sourceRiskCount") or 0)
+    monitoring_review_required_count = int(monitoring_summary.get("reviewRequiredCount") or 0)
+    monitoring_warnings = monitoring.get("warnings") if isinstance(monitoring.get("warnings"), list) else []
     snapshot_current_count = _summary_count(snapshot, "currentPriceCount")
     snapshot_alert_count = _summary_count(snapshot, "priceAlertCount")
     finance_count = _count_from_payload(finance, "total", "rows")
@@ -489,6 +501,12 @@ def build_readiness_report(
         "test_msrp_auto_review_score_uses_weighted_rules_and_model_guidance",
         "msrp_auto_review_score_v1",
         "not_recommended_until_labeled_corpus",
+    )
+    service_covers_monitoring_events = _test_file_has(
+        "monitoringService",
+        "test_build_msrp_monitoring_events_groups_price_changes_with_evidence",
+        "test_build_msrp_monitoring_events_groups_multi_country_sync_and_outlier",
+        "msrp_monitoring_events_v1",
     )
     script_covers_full_pipeline = _test_file_has(
         "pipelineWrapper",
@@ -680,6 +698,33 @@ def build_readiness_report(
                 TEST_EVIDENCE["snapshotScript"],
             ],
             note="Detects price movement and threshold severity.",
+        ),
+        _requirement(
+            key="monitoring_events",
+            title="MSRP monitoring events",
+            status=_status(
+                monitoring.get("schemaVersion") == "msrp_monitoring_events_v1"
+                and service_covers_monitoring_events
+                and frontend_finance_reconciliation_covered,
+                degraded=monitoring_error is None and service_covers_monitoring_events,
+                unavailable=monitoring_error is not None,
+            ),
+            runtime={
+                "schemaVersion": monitoring.get("schemaVersion"),
+                "eventCount": monitoring_event_count,
+                "timelineEventCount": monitoring_timeline_count,
+                "sourceRiskCount": monitoring_source_risk_count,
+                "reviewRequiredCount": monitoring_review_required_count,
+                "warningCount": len(monitoring_warnings),
+                "warnings": monitoring_warnings[:5],
+                "error": monitoring_error,
+            },
+            evidence=[
+                "GET /msrp/monitoring/events",
+                TEST_EVIDENCE["monitoringService"],
+                TEST_EVIDENCE["frontendApi"],
+            ],
+            note="Groups price-history changes into country/model monitoring events with source-risk and review evidence.",
         ),
         _requirement(
             key="review_queue",
@@ -951,6 +996,9 @@ def build_readiness_report(
                 "currentPriceCount": current_price_count,
                 "priceHistoryRows": history_count,
                 "priceAlertCount": alert_count,
+                "monitoringEventCount": monitoring_event_count,
+                "monitoringTimelineEventCount": monitoring_timeline_count,
+                "monitoringSourceRiskCount": monitoring_source_risk_count,
                 "financeObservationCount": finance_count,
                 "officialConfigSourceCount": config_source_count,
                 "officialConfigCountryCount": config_country_count,

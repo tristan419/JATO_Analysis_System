@@ -66,6 +66,7 @@ REQUIRED_MSRP_REQUIREMENT_KEYS = (
     "current_price",
     "price_history",
     "price_alerts",
+    "monitoring_events",
     "review_queue",
     "auto_review_scoring",
     "sales_effectiveness",
@@ -419,6 +420,11 @@ def _remote_checks(
         timeout_seconds,
         resolve_ip=resolve_ip,
     )
+    monitoring, monitoring_error, monitoring_code = _fetch_json(
+        f"{base}/msrp/monitoring/events",
+        timeout_seconds,
+        resolve_ip=resolve_ip,
+    )
     progress_status = progress.get("status") if isinstance(progress, dict) else {}
     if not isinstance(progress_status, dict):
         progress_status = {}
@@ -433,6 +439,9 @@ def _remote_checks(
         and unified_code == 200
         and isinstance(unified, dict)
         and unified.get("status") == "success"
+        and monitoring_code == 200
+        and isinstance(monitoring, dict)
+        and monitoring.get("schemaVersion") == "msrp_monitoring_events_v1"
     )
     return {
         "status": "passed" if passed else "missing",
@@ -468,6 +477,31 @@ def _remote_checks(
             "status": unified.get("status") if isinstance(unified, dict) else None,
             "readinessStatus": unified.get("readinessStatus") if isinstance(unified, dict) else None,
             "error": unified_error,
+        },
+        "msrpMonitoringEvents": {
+            "httpStatus": monitoring_code,
+            "schemaVersion": monitoring.get("schemaVersion") if isinstance(monitoring, dict) else None,
+            "eventCount": (
+                monitoring.get("summary", {}).get("eventCount")
+                if isinstance(monitoring, dict) and isinstance(monitoring.get("summary"), dict)
+                else None
+            ),
+            "timelineEventCount": (
+                monitoring.get("summary", {}).get("timelineEventCount")
+                if isinstance(monitoring, dict) and isinstance(monitoring.get("summary"), dict)
+                else None
+            ),
+            "sourceRiskCount": (
+                monitoring.get("summary", {}).get("sourceRiskCount")
+                if isinstance(monitoring, dict) and isinstance(monitoring.get("summary"), dict)
+                else None
+            ),
+            "warningCount": (
+                len(monitoring.get("warnings"))
+                if isinstance(monitoring, dict) and isinstance(monitoring.get("warnings"), list)
+                else None
+            ),
+            "error": monitoring_error,
         },
     }
 
@@ -554,7 +588,7 @@ def build_goal_completion_report(
             status=str(remote.get("status") or "not_checked"),
             evidence=[remote.get("apiBase", "")] if remote.get("apiBase") else [],
             runtime=remote,
-            note="Production is complete only when deployed API exposes current snapshot, effective dryrun gate, and unified readiness success.",
+            note="Production is complete only when deployed API exposes current snapshot, monitoring events, effective dryrun gate, and unified readiness success.",
         ),
     ]
     status_counts = dict(sorted(Counter(item["status"] for item in requirements).items()))

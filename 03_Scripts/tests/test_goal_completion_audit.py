@@ -125,10 +125,11 @@ def test_build_report_separates_local_p0_from_unchecked_production(tmp_path: Pat
     assert by_key["msrp_finance_monthly_lease_subsidy_net"]["status"] == "passed"
     assert by_key["msrp_official_config_table_pipeline"]["status"] == "passed"
     assert by_key["msrp_auto_review_scoring"]["status"] == "passed"
+    assert by_key["msrp_monitoring_events"]["status"] == "passed"
     assert by_key["msrp_pipeline_orchestration"]["status"] == "passed"
     assert "ai_news_voc_15_country_smoke" not in by_key
     assert by_key["production_deployment_state"]["status"] == "not_checked"
-    assert report["summary"]["msrpDetailedPassedCount"] == 15
+    assert report["summary"]["msrpDetailedPassedCount"] == 16
 
 
 def test_source_todo_placeholders_degrade_full_goal(tmp_path: Path) -> None:
@@ -177,6 +178,12 @@ def test_remote_checks_can_mark_production_passed(monkeypatch, tmp_path: Path) -
                 "pipelineId": "unified_scraping_readiness",
                 "status": "success",
                 "readinessStatus": "passed",
+            }, None, 200
+        if url.endswith("/msrp/monitoring/events"):
+            return {
+                "schemaVersion": "msrp_monitoring_events_v1",
+                "summary": {"eventCount": 1, "timelineEventCount": 1, "sourceRiskCount": 0},
+                "warnings": [],
             }, None, 200
         raise AssertionError(url)
 
@@ -241,6 +248,8 @@ def test_remote_checks_can_use_stable_progress_when_active_probe_regresses(
                 "status": "success",
                 "readinessStatus": "passed",
             }, None, 200
+        if url.endswith("/msrp/monitoring/events"):
+            return {"schemaVersion": "msrp_monitoring_events_v1", "summary": {}}, None, 200
         raise AssertionError(url)
 
     monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)
@@ -301,6 +310,8 @@ def test_remote_checks_rejects_stable_progress_with_blocked_country(
             }, None, 200
         if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
             return {"status": "success", "readinessStatus": "passed"}, None, 200
+        if url.endswith("/msrp/monitoring/events"):
+            return {"schemaVersion": "msrp_monitoring_events_v1", "summary": {}}, None, 200
         raise AssertionError(url)
 
     monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)
@@ -341,6 +352,8 @@ def test_remote_checks_passes_resolve_ip_to_fetcher(monkeypatch, tmp_path: Path)
             return {"status": {"gateStatus": "allowed", "overallPassPct": 96.4}}, None, 200
         if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
             return {"status": "success", "readinessStatus": "passed"}, None, 200
+        if url.endswith("/msrp/monitoring/events"):
+            return {"schemaVersion": "msrp_monitoring_events_v1", "summary": {}}, None, 200
         raise AssertionError(url)
 
     monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)
@@ -358,6 +371,7 @@ def test_remote_checks_passes_resolve_ip_to_fetcher(monkeypatch, tmp_path: Path)
 
     assert production["status"] == "passed"
     assert production["runtime"]["resolveIp"] == "203.0.113.10"
+    assert production["runtime"]["msrpMonitoringEvents"]["schemaVersion"] == "msrp_monitoring_events_v1"
     assert {item[1] for item in seen} == {"203.0.113.10"}
 
 
@@ -414,5 +428,5 @@ def test_write_outputs_and_status_record(monkeypatch, tmp_path: Path) -> None:
     assert Path(artifacts["latestJson"]).exists()
     assert Path(artifacts["latestMarkdown"]).exists()
     assert status_record == {"pipelineId": audit.PIPELINE_ID, "status": "failed"}
-    assert captured["records_processed"] == 19
+    assert captured["records_processed"] == 20
     assert captured["failed_count"] == 1
