@@ -25,6 +25,12 @@ from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
+TRANSIENT_RECHECK_FAILURES = {
+    "dns_resolution_failed",
+    "dynamic_price_not_ready",
+    "http_timeout",
+    "network_unavailable",
+}
 
 
 def _load_country_artifact(path: Path) -> dict | None:
@@ -474,6 +480,7 @@ def _source_issue_detail(
     failure_reason: str,
     recommended_strategy: str,
     last_good: dict[str, Any] | None,
+    transient_recheck: bool,
 ) -> dict[str, Any]:
     source_url = _source_url(result)
     detail: dict[str, Any] = {
@@ -488,11 +495,11 @@ def _source_issue_detail(
         "extracted": _int_value(result.get("extracted")),
         "failureReason": failure_reason,
         "recommendedStrategy": recommended_strategy,
-        "sourceRepairIssue": last_good is None,
-        "transientRegression": last_good is not None,
+        "sourceRepairIssue": not transient_recheck,
+        "transientRegression": transient_recheck,
         "recommendedAction": (
             "recheck_before_source_repair"
-            if last_good
+            if transient_recheck
             else "repair_source_definition"
         ),
     }
@@ -641,7 +648,7 @@ def _write_source_repair_backlog(
         recommended = result.get("recommendedStrategy") or "diagnose_with_msrp_page_analyzer"
         key = _source_key(country, result)
         last_good = last_known_good.get(key) if key else None
-        is_transient = bool(last_good)
+        is_transient = bool(last_good) or str(reason) in TRANSIENT_RECHECK_FAILURES
         group = groups.setdefault(reason, {
             "failureReason": reason,
             "count": 0,
@@ -664,6 +671,7 @@ def _write_source_repair_backlog(
             failure_reason=reason,
             recommended_strategy=recommended,
             last_good=last_good,
+            transient_recheck=is_transient,
         )
         if is_transient:
             group["transientRegressionCount"] += 1

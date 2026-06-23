@@ -202,6 +202,44 @@ def test_v3_report_marks_historical_pass_as_recheck(tmp_path: Path) -> None:
     assert group["transientRegressions"][0]["lastKnownGoodRunId"] == previous_run_id
 
 
+def test_v3_report_marks_dynamic_price_not_ready_as_recheck_without_history(
+    tmp_path: Path,
+) -> None:
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260618-101010",
+        "results": [
+            {
+                "country": "fi",
+                "sourceCode": "volkswagen_tiguan_fi_draft_scrapling",
+                "brand": "VOLKSWAGEN",
+                "status": "empty",
+                "valid": 0,
+                "failureReason": "dynamic_price_not_ready",
+                "recommendedStrategy": "retry_or_reduce_concurrency",
+                "sourceUrl": "https://www.volkswagen.fi/fi/rakenna-auto.html",
+            }
+        ],
+    }
+    report_path = tmp_path / "dryrun_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    backlog = backlog_script.run(str(report_path), str(tmp_path))
+
+    assert backlog["sourceRepairIssueCount"] == 0
+    assert backlog["transientRegressionCount"] == 1
+    assert backlog["sourceIssues"] == []
+    transient = backlog["transientSourceRegressions"][0]
+    assert transient["sourceCode"] == "volkswagen_tiguan_fi_draft_scrapling"
+    assert transient["recommendedAction"] == "recheck_before_source_repair"
+    assert transient["transientRegression"] is True
+    assert "lastKnownGoodRunId" not in transient
+    group = backlog["groups"][0]
+    assert group["failureReason"] == "dynamic_price_not_ready"
+    assert group["priorityBand"] == "recheck"
+    assert group["sourceRepairIssueCount"] == 0
+
+
 def test_v3_report_uses_artifact_history_when_output_dir_differs(
     tmp_path: Path,
 ) -> None:
