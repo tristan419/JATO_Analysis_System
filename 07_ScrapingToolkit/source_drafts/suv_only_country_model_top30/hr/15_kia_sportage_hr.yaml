@@ -1,19 +1,27 @@
 source_code: kia_sportage_hr_draft_scrapling
 country: 克罗地亚
 brand: KIA
-source_url: https://www.kia.hr/modeli/sportage/
+source_url: https://www.kia.hr/nova_vozila
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.kia.hr/modeli/sportage/
+  url: https://www.kia.hr/nova_vozila
   headless: true
+  timeout_ms: 30000
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'Novi Sportage\s+Ve[cć]\s+od\s+(?P<price>[\d.]+)\*?\s*€'
+      official_trim: Novi Sportage
+      official_powertrain: Kia HR model-list starting price
+      price_label: Cijene vrijede uz Kia SMART financiranje
   default_currency: EUR
   default_tax_included: true
   default_price_label: Preporučena maloprodajna cijena s PDV-om
   fixed_model: SPORTAGE
   fixed_jato_model: SPORTAGE
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: ICE
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -100,7 +108,6 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
   css:
     vehicle_container: body
     model: h2, h3
@@ -114,10 +121,11 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (HR market). CSS
-  selectors still require browser-based inspection before promotion. [Switched to
-  playwright_card_flow with kia_trim_overview_playwright.yaml] [Reverted to scrapling
-  — playwright preset needs per-brand tuning]
+notes: Keywords filled from official manufacturer website research (HR market).
+  Replaced stale /modeli/sportage/ URL with Kia Croatia's official Nova vozila
+  model list and text_regex over the visible "Novi Sportage Već od" starting
+  price. Price is marked review_required because the page states SMART financing
+  campaign conditions.
 bootstrap_meta:
   country_model_rank: 15
   suggested_scope_kind: single_model
