@@ -182,7 +182,7 @@ jobs:
           REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
           ls -lh "$ARCHIVE_PATH"
 
-          timeout 600s scp -q -P "$SSH_PORT" \
+          timeout 180s scp -q -P "$SSH_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
@@ -236,7 +236,7 @@ jobs:
           REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
           ls -lh "$ARCHIVE_PATH"
 
-          timeout 600s sshpass -p "$SSH_PASSWORD" \
+          timeout 180s sshpass -p "$SSH_PASSWORD" \
             scp -q -P "$SSH_PORT" \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
