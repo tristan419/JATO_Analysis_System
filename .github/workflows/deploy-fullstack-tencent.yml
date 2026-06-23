@@ -280,14 +280,6 @@ jobs:
           if [ -z "${SSH_PORT:-}" ]; then
             SSH_PORT=22
           fi
-          SSH_CONNECT_HOST="${SSH_RESOLVED_HOST:-$SSH_HOST}"
-          if [ "$SSH_CONNECT_HOST" = "$SSH_HOST" ] && command -v getent >/dev/null 2>&1; then
-            SSH_RESOLVED_HOST="$(getent ahostsv4 "$SSH_HOST" | awk 'NR == 1 {print $1}' || true)"
-            if [ -n "$SSH_RESOLVED_HOST" ]; then
-              SSH_CONNECT_HOST="$SSH_RESOLVED_HOST"
-            fi
-          fi
-          echo "[INFO] Deploy SSH target: $SSH_CONNECT_HOST"
           if [ -z "${DEPLOY_SERVER_NAME:-}" ]; then
             DEPLOY_SERVER_NAME="ojeur.cloud www.ojeur.cloud"
           fi
@@ -329,9 +321,8 @@ jobs:
             -o ConnectionAttempts=2 \
             -o ServerAliveInterval=10 \
             -o ServerAliveCountMax=2 \
-            -o HostKeyAlias="$SSH_HOST" \
             -i ~/.ssh/github_actions_tencent_key \
-            "$SSH_USER@$SSH_CONNECT_HOST" "${REMOTE_EXPORTS}bash -s" <<'EOF'
+            "$SSH_USER@$SSH_HOST" "${REMOTE_EXPORTS}bash -s" <<'EOF'
           set -euo pipefail
 
           REPO_DIR="/opt/JATO_Analysis_System-main"
