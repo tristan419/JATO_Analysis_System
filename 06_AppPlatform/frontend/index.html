@@ -139,8 +139,7 @@
           var currentTarget = host === intlHost ? "intl" : "cn";
           var nextTarget = currentTarget;
           if (cn.ok && intl.ok) {
-            if (intl.ms + redirectMarginMs < cn.ms) nextTarget = "intl";
-            if (cn.ms + redirectMarginMs < intl.ms) nextTarget = "cn";
+            nextTarget = intl.ms + redirectMarginMs < cn.ms ? "intl" : "cn";
           } else if (intl.ok && !cn.ok) {
             nextTarget = "intl";
           } else if (cn.ok && !intl.ok) {
