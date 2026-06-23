@@ -30,6 +30,7 @@ const MONTH_NAMES = [
 
 export interface OrderGeniusGridRow {
   materialCode: string;
+  bomTemplate?: string | null;
   modelName: string;
   version: string;
   colour: string;
@@ -42,9 +43,12 @@ export interface OrderGeniusGridRow {
   _indent?: boolean;
   __type?: "groupHeader" | "data" | "consolidated_parent";
   __groupLabel?: string;
+  __groupMeta?: string;
   __groupColor?: string;
   __groupColSpan?: number;
   __groupKey?: string;
+  __groupKind?: "trim" | "country" | "bom";
+  __groupLevel?: number;
   __expanded?: boolean;
   // Flattened months: month_1..month_12
   [key: `month_${number}`]: number;
@@ -89,6 +93,7 @@ export function getOrderGeniusRowId(row: OrderGeniusGridRow): string {
   return [
     row._countryCode || "",
     row.materialCode,
+    row.__groupKey || "",
     row.lifecycleStatus || "active",
     row.version || "",
     row.colour || "",
@@ -101,7 +106,7 @@ export function buildOrderGeniusColumnDefs(
   selectedMonth: number | null,
   vis: OrderGeniusGridProps["visibleColumns"],
   canEditQuantities: boolean,
-  selectedRowIds?: ReadonlySet<string>,
+  isPiRowSelected?: (row: OrderGeniusGridRow) => boolean,
   onTogglePiRow?: (row: OrderGeniusGridRow, selected: boolean) => void,
 ): ColDef<OrderGeniusGridRow>[] {
   const cols: ColDef<OrderGeniusGridRow>[] = [];
@@ -109,6 +114,7 @@ export function buildOrderGeniusColumnDefs(
   if (selectedMonth != null && onTogglePiRow) {
     const monthField = `month_${selectedMonth}` as `month_${number}`;
     cols.push({
+      colId: "piSelect",
       headerName: "PI",
       headerTooltip: "Tick rows to include their selected-month quantity in PI batch creation.",
       pinned: "left",
@@ -123,11 +129,10 @@ export function buildOrderGeniusColumnDefs(
         }
         const quantity = row[monthField] || 0;
         const disabled = quantity <= 0 || row.lifecycleStatus === "historical";
-        const rowId = getOrderGeniusRowId(row);
         return (
           <input
             type="checkbox"
-            checked={selectedRowIds?.has(rowId) ?? false}
+            checked={isPiRowSelected?.(row) ?? false}
             disabled={disabled}
             onChange={(event) => onTogglePiRow(row, event.currentTarget.checked)}
             aria-label="Select PI row"
@@ -413,23 +418,23 @@ export function OrderGeniusGrid({
   onTogglePiRow,
 }: OrderGeniusGridProps) {
   const localGridApiRef = useRef<any>(null);
+  const gridWrapperRef = useRef<HTMLDivElement | null>(null);
+  const selectedRowIdsRef = useRef(selectedRowIds);
+  selectedRowIdsRef.current = selectedRowIds;
+  const isPiRowSelected = useCallback(
+    (row: OrderGeniusGridRow): boolean => selectedRowIdsRef.current?.has(getOrderGeniusRowId(row)) ?? false,
+    [],
+  );
   const columnDefs = useMemo(
     () => buildOrderGeniusColumnDefs(
       showCountry,
       selectedMonth,
       visibleColumns,
       canEditQuantities,
-      selectedRowIds,
+      isPiRowSelected,
       onTogglePiRow,
     ),
-    [canEditQuantities, showCountry, selectedMonth, visibleColumns, selectedRowIds, onTogglePiRow],
-  );
-  const groupStateSignature = useMemo(
-    () => rows
-      .filter((row) => row.__type === "groupHeader")
-      .map((row) => `${row.__groupKey || row.materialCode}:${row.__expanded ? "1" : "0"}`)
-      .join("|"),
-    [rows],
+    [canEditQuantities, showCountry, selectedMonth, visibleColumns, isPiRowSelected, onTogglePiRow],
   );
 
   const defaultColDef = useMemo<ColDef<OrderGeniusGridRow>>(
@@ -460,41 +465,79 @@ export function OrderGeniusGrid({
   const rowClassRules = useMemo<any>(
     () => ({
       "og-group-header-row": (p: any) => p.data?.__type === "groupHeader",
+      "og-group-header-row-country": (p: any) => p.data?.__groupKind === "country",
+      "og-group-header-row-bom": (p: any) => p.data?.__groupKind === "bom",
       "og-consolidated-parent": (p: any) => p.data?.__type === "consolidated_parent",
       "og-historical-row": (p: any) => p.data?.lifecycleStatus === "historical",
     }),
     [],
   );
 
-  const onFirstDataRendered = useCallback((params: { api: any }) => {
-    params.api.autoSizeAllColumns(false);
-  }, []);
-
   useEffect(() => {
     if (!localGridApiRef.current) return;
-    localGridApiRef.current.refreshCells({ force: true, columns: ["modelName"] });
-  }, [groupStateSignature]);
+    localGridApiRef.current.refreshCells({ force: true, columns: ["piSelect"] });
+  }, [selectedRowIds]);
 
   const gridContext = useMemo<OrderGeniusGridContext>(
     () => ({ onToggleGroup }),
     [onToggleGroup],
   );
 
+  useEffect(() => {
+    const root = gridWrapperRef.current;
+    if (!root || !onToggleGroup) return undefined;
+    const handleGroupMouseDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const trigger = target.closest<HTMLElement>("[data-og-group-key]");
+      if (!trigger || !root.contains(trigger)) return;
+      const groupKey = trigger.dataset.ogGroupKey;
+      if (!groupKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onToggleGroup(groupKey);
+    };
+    root.addEventListener("mousedown", handleGroupMouseDown, true);
+    return () => root.removeEventListener("mousedown", handleGroupMouseDown, true);
+  }, [onToggleGroup]);
+
   const components = useMemo(() => ({
     groupHeaderRenderer: (props: GroupHeaderRendererProps) => {
       const color = props.data?.__groupColor || "#9ca3af";
       const label = props.data?.__groupLabel || "";
+      const meta = props.data?.__groupMeta || "";
       const groupKey = props.data?.__groupKey || "";
+      const level = props.data?.__groupLevel ?? 0;
+      const kind = props.data?.__groupKind ?? "trim";
       const expanded = props.data?.__expanded ?? false;
+      const isSubgroup = level > 0;
+      const toggleGroup = () => {
+        const toggle = props.context?.onToggleGroup ?? onToggleGroup;
+        if (groupKey) toggle?.(groupKey);
+      };
       return (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, height: "100%", fontWeight: 700, fontSize: 13, paddingLeft: 4 }}>
+        <div
+          className={`og-group-header-renderer og-group-header-renderer-${kind}`}
+          data-og-group-key={groupKey || undefined}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: isSubgroup ? 6 : 8,
+            height: "100%",
+            fontWeight: 700,
+            fontSize: isSubgroup ? 12 : 13,
+            paddingLeft: 4 + level * 18,
+          }}
+        >
           <button
             type="button"
-            aria-label={expanded ? "Collapse product group" : "Expand product group"}
+            aria-label={expanded ? "Collapse group" : "Expand group"}
             disabled={!groupKey}
-            onClick={(event) => {
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
               event.stopPropagation();
-              if (groupKey) props.context?.onToggleGroup?.(groupKey);
+              event.preventDefault();
+              toggleGroup();
             }}
             style={{
               display: "inline-flex",
@@ -514,15 +557,16 @@ export function OrderGeniusGrid({
           >
             {expanded ? "-" : "+"}
           </button>
-          <div style={{ width: 4, height: 20, borderRadius: 2, flexShrink: 0, backgroundColor: color }} />
-          <span style={{ color }}>{label}</span>
+          <div style={{ width: isSubgroup ? 3 : 4, height: isSubgroup ? 16 : 20, borderRadius: 2, flexShrink: 0, backgroundColor: color }} />
+          <span style={{ color, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+          {meta ? <span className="og-group-header-meta">{meta}</span> : null}
         </div>
       );
     },
-  }), []);
+  }), [onToggleGroup]);
 
   return (
-    <div className="og-grid-wrapper" style={{ height: "70vh", width: "100%" }}>
+    <div ref={gridWrapperRef} className="og-grid-wrapper" style={{ height: "70vh", width: "100%" }}>
       <AgGridReact<OrderGeniusGridRow>
         theme={themeAlpine}
         rowData={rows}
@@ -534,7 +578,6 @@ export function OrderGeniusGrid({
         isRowSelectable={isRowSelectable}
         rowClassRules={rowClassRules}
         onCellValueChanged={onCellValueChanged}
-        onFirstDataRendered={onFirstDataRendered}
         onGridReady={(p) => {
           localGridApiRef.current = p.api;
           onGridReady?.(p.api);
@@ -542,11 +585,11 @@ export function OrderGeniusGrid({
         stopEditingWhenCellsLoseFocus={true}
         undoRedoCellEditing={true}
         undoRedoCellEditingLimit={20}
+        animateRows={false}
         enableCellTextSelection={true}
         suppressDragLeaveHidesColumns={true}
         rowModelType="clientSide"
         rowBuffer={10}
-        animateRows={false}
         headerHeight={32}
         rowHeight={32}
       />
