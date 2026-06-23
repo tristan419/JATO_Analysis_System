@@ -65,6 +65,24 @@ const RvFinanceDashboard = lazy(() =>
 );
 
 const DASHBOARD_DEFERRED_FETCH_DELAY_MS = 6_000;
+const DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS = 4_000;
+
+type DashboardIdleWindow = Window & typeof globalThis & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
+
+function scheduleDashboardIdlePreload(callback: () => void): () => void {
+  const idleWindow = window as DashboardIdleWindow;
+  if (typeof idleWindow.requestIdleCallback === "function") {
+    const handle = idleWindow.requestIdleCallback(callback, {
+      timeout: DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS,
+    });
+    return () => idleWindow.cancelIdleCallback?.(handle);
+  }
+  const handle = window.setTimeout(callback, DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS);
+  return () => window.clearTimeout(handle);
+}
 
 function resolveTimeSeriesSeriesColor(
   name: string,
@@ -467,13 +485,6 @@ export function DashboardPage() {
     };
   }, []);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void preloadPlotlyChartRuntime();
-    }, DASHBOARD_DEFERRED_FETCH_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, []);
-
   /* deck section selector for global drawers */
   const [activeDeckSection, setActiveDeckSection] = useState<DeckSectionKey>("timeSeries");
   const activeDeckLayout = deckLayouts[activeDeckSection];
@@ -863,6 +874,20 @@ export function DashboardPage() {
     () => rankingData.slice(0, rankLimit),
     [rankingData, rankLimit],
   );
+  const hasDeferredChartData = (
+    aggregatedSingle.length > 0
+    || filteredGrouped.length > 0
+    || advItems.length > 0
+    || mvItems.length > 0
+    || pmItems.length > 0
+  );
+
+  useEffect(() => {
+    if (dashboardBootstrapping || !hasDeferredChartData) return;
+    return scheduleDashboardIdlePreload(() => {
+      void preloadPlotlyChartRuntime();
+    });
+  }, [dashboardBootstrapping, hasDeferredChartData]);
 
   /* B7: time-window KPI — compute sales from filtered time series */
   const timeWindowSales = useMemo(() => {
