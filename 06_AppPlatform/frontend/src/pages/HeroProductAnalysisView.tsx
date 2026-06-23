@@ -144,7 +144,7 @@ interface HeroProductPricePanelGridRow {
 }
 
 const HERO_PAGE_ITEMS: Array<{ key: HeroProductPageKey; code: string; label: string; sublabel: string }> = [
-  { key: "benchmark", code: "01", label: "BEV Benchmark", sublabel: "动总对标" },
+  { key: "benchmark", code: "01", label: "Benchmark", sublabel: "动总对标" },
   { key: "benchmarkWithChannel", code: "02", label: "Channel Benchmark", sublabel: "渠道对标" },
   { key: "topTrend", code: "03", label: "Top Trend", sublabel: "Top 趋势" },
   { key: "topDistribution", code: "04", label: "Top Markets", sublabel: "Top 分布" },
@@ -182,6 +182,18 @@ const DISTRIBUTION_LAYOUTS: Array<{ value: HeroProductDistributionLayout; label:
   { value: "ranked", label: "独立排序" },
   { value: "aligned", label: "国家对齐" },
 ];
+const DEFAULT_HERO_PRODUCT_FUEL_TYPES = ["BEV"];
+const FALLBACK_HERO_PRODUCT_FUEL_OPTIONS: MarketScanCountryOption[] = [
+  { value: "BEV", label: "BEV" },
+  { value: "PHEV", label: "PHEV" },
+  { value: "HEV", label: "HEV" },
+  { value: "MHEV", label: "MHEV" },
+  { value: "REEV", label: "REEV" },
+  { value: "ICE", label: "ICE" },
+];
+const HERO_PRODUCT_TOP_N_PRESETS = [10, 20, 30] as const;
+const HERO_PRODUCT_MIN_TOP_N = 10;
+const HERO_PRODUCT_MAX_TOP_N = 30;
 const HERO_PRODUCT_SPEC_COLUMN_OPTIONS: Array<{ key: HeroProductSystemSpecColumnKey; label: string }> = [
   { key: "brand", label: "品牌" },
   { key: "model", label: "车型" },
@@ -396,6 +408,39 @@ function parseCountryLimit(value: string): number {
   const numeric = Number(trimmed);
   if (!Number.isFinite(numeric)) return 0;
   return Math.max(0, Math.min(80, Math.round(numeric)));
+}
+
+function normalizeHeroFuelType(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+function normalizeHeroFuelTypes(values: Iterable<string>): string[] {
+  const selected: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalized = normalizeHeroFuelType(value);
+    if (!normalized || seen.has(normalized)) continue;
+    selected.push(normalized);
+    seen.add(normalized);
+  }
+  return selected.length > 0 ? selected : [...DEFAULT_HERO_PRODUCT_FUEL_TYPES];
+}
+
+function parseFuelTypesParam(value: string | null): string[] {
+  if (!value) return [...DEFAULT_HERO_PRODUCT_FUEL_TYPES];
+  return normalizeHeroFuelTypes(value.split(","));
+}
+
+function sameFuelTypes(left: string[], right: string[]): boolean {
+  const normalizedLeft = normalizeHeroFuelTypes(left);
+  const normalizedRight = normalizeHeroFuelTypes(right);
+  return normalizedLeft.length === normalizedRight.length && normalizedLeft.every((value, index) => value === normalizedRight[index]);
+}
+
+function parseTopNParam(value: string | null): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return HERO_PRODUCT_MIN_TOP_N;
+  return Math.max(HERO_PRODUCT_MIN_TOP_N, Math.min(HERO_PRODUCT_MAX_TOP_N, Math.round(numeric)));
 }
 
 function sanitizeFileNameSegment(value: string): string {
@@ -639,6 +684,7 @@ function distributionFourWheelShare(item: HeroProductDeckResponse["pages"]["topD
 
 function buildBenchmarkInsight(rows: HeroProductModelRow[], productRows: HeroProductModelRow[], priceSource: HeroProductPriceSource, showChannel: boolean): HeroProductInsight {
   const salesLeader = rows[0] ?? null;
+  const topLabel = `TOP${rows.length}`;
   const rangeLeader = maxBy(productRows, (row) => maxSpecValue(row.specs.rangeKm));
   const batteryLeader = maxBy(productRows, (row) => maxSpecValue(row.specs.batteryKwh));
   const accelerationLeader = minBy(productRows, (row) => minSpecValue(row.specs.accelerationSec));
@@ -662,7 +708,7 @@ function buildBenchmarkInsight(rows: HeroProductModelRow[], productRows: HeroPro
     return {
       eyebrow: "Channel judgement",
       headline: `${privateLeader?.model ?? "Private主力"}零售占比${formatWholePercent(privateLeader ? channelShare(privateLeader, "Private") : null)}，${businessLeader?.model ?? "Business主力"}商务占比${formatWholePercent(businessLeader ? businessShare(businessLeader) : null)}。`,
-      summary: `左侧保留 TOP20 销量排序和渠道结构，右侧用固定车型规格表复核续航、性能、充电和 ${priceSource.toUpperCase()} 价格，判断渠道放量是否有产品力支撑。`,
+      summary: `左侧保留 ${topLabel} 销量排序和渠道结构，右侧用固定车型规格表复核续航、性能、充电和 ${priceSource.toUpperCase()} 价格，判断渠道放量是否有产品力支撑。`,
       cards: [
         { label: "Private Leader", value: modelLabel(privateLeader), detail: `Private ${formatWholePercent(privateLeader ? channelShare(privateLeader, "Private") : null)}`, tone: "positive" },
         { label: "Business Leader", value: modelLabel(businessLeader), detail: `Business ${formatWholePercent(businessLeader ? businessShare(businessLeader) : null)}` },
@@ -675,7 +721,7 @@ function buildBenchmarkInsight(rows: HeroProductModelRow[], productRows: HeroPro
   return {
     eyebrow: "Powertrain benchmark",
     headline: benchmarkHeadline,
-    summary: `左侧复刻 TOP20 销量基准，右侧固定车型下沉到续航、电池、电耗、零百、充电和 ${priceSource.toUpperCase()} 价格，先看结论再看单项差距。`,
+    summary: `左侧复刻 ${topLabel} 销量基准，右侧固定车型下沉到续航、电池、电耗、零百、充电和 ${priceSource.toUpperCase()} 价格，先看结论再看单项差距。`,
     cards: [
       rangeOrBatteryCard,
       { label: "Acceleration", value: modelLabel(accelerationLeader), detail: accelerationLeader ? `${specDisplay(accelerationLeader.specs.accelerationSec, "s")}` : "待补齐", tone: accelerationLeader ? "positive" : "new" },
@@ -746,6 +792,8 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
   const [priceCountry, setPriceCountry] = useState(() => searchParams.get("priceCountry") || "");
   const [trackingCountry, setTrackingCountry] = useState(() => searchParams.get("trackCountry") || "");
   const [period, setPeriod] = useState(() => searchParams.get("period") || "");
+  const [selectedFuelTypes, setSelectedFuelTypes] = useState<string[]>(() => parseFuelTypesParam(searchParams.get("fuelTypes")));
+  const [topN, setTopN] = useState(() => parseTopNParam(searchParams.get("topN")));
   const [salesMode, setSalesMode] = useState<HeroProductSalesMode>(() => (
     isSalesMode(searchParams.get("salesMode")) ? searchParams.get("salesMode") as HeroProductSalesMode : "ytd"
   ));
@@ -811,16 +859,17 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     target_period: period || undefined,
     sales_mode: salesMode,
     segment: "SUV A0",
-    fuel_type: "BEV",
+    fuel_type: selectedFuelTypes[0] ?? DEFAULT_HERO_PRODUCT_FUEL_TYPES[0],
+    fuel_types: selectedFuelTypes,
     price_source: priceSource,
-    top_n: 10,
-    ranking_limit: 20,
+    top_n: topN,
+    ranking_limit: topN,
     country_limit: countryLimit,
     trend_window_months: 16,
     country_rank_scope: "selected" as const,
     top_models: requestTopModels,
     hero_models: requestHeroModels,
-  }), [countryLimit, currentTrackingCountry, period, priceCountry, priceSource, requestHeroModels, requestSelectedCountries, requestTopModels, salesMode]);
+  }), [countryLimit, currentTrackingCountry, period, priceCountry, priceSource, requestHeroModels, requestSelectedCountries, requestTopModels, salesMode, selectedFuelTypes, topN]);
   const deckRequestKey = useMemo(() => JSON.stringify(deckRequestPayload), [deckRequestPayload]);
   const refreshDeck = useCallback(() => {
     deckCache.current.clear();
@@ -867,6 +916,24 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     ...customSpecColumnOptions,
   ], [customSpecColumnOptions]);
   const allSpecColumnKeys = useMemo<HeroProductSpecColumnKey[]>(() => specColumnOptions.map((column) => column.key), [specColumnOptions]);
+  const availableFuelOptions = useMemo<MarketScanCountryOption[]>(() => {
+    const byValue = new Map<string, MarketScanCountryOption>();
+    const sourceOptions = deck?.metadata.availableFuelTypes?.length
+      ? deck.metadata.availableFuelTypes
+      : FALLBACK_HERO_PRODUCT_FUEL_OPTIONS;
+    for (const option of sourceOptions) {
+      const value = normalizeHeroFuelType(option.value);
+      if (!value) continue;
+      byValue.set(value, { value, label: option.label || value });
+    }
+    for (const value of selectedFuelTypes) {
+      const normalized = normalizeHeroFuelType(value);
+      if (normalized && !byValue.has(normalized)) byValue.set(normalized, { value: normalized, label: normalized });
+    }
+    return Array.from(byValue.values());
+  }, [deck?.metadata.availableFuelTypes, selectedFuelTypes]);
+  const requestedFuelLabel = selectedFuelTypes.join(" / ");
+  const selectedFuelLabel = loading ? requestedFuelLabel : deck?.metadata.selectedFuelType ?? requestedFuelLabel;
 
   useEffect(() => {
     const cachedDeck = deckCache.current.get(deckRequestKey);
@@ -879,12 +946,11 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     }
 
     let cancelled = false;
-    const controller = new AbortController();
     const requestId = deckRequestIdRef.current + 1;
     deckRequestIdRef.current = requestId;
     setLoading(true);
     setError("");
-    api.heroProductDeck(deckRequestPayload, controller.signal)
+    api.heroProductDeck(deckRequestPayload)
       .then((response) => {
         if (cancelled || deckRequestIdRef.current !== requestId) return;
         deckCache.current.set(deckRequestKey, response);
@@ -903,7 +969,6 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
       });
     return () => {
       cancelled = true;
-      controller.abort();
     };
   }, [deckRequestKey, reloadToken]);
 
@@ -919,6 +984,8 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
       salesMode,
       priceCountry,
       countryLimit,
+      selectedFuelTypes.join(","),
+      topN,
       topModelText,
       heroModelText,
     ].join("|");
@@ -930,7 +997,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
       fallbackRankingReloadKeyRef.current = reloadKey;
       refreshCurrentDeck();
     }
-  }, [activePage, countryLimit, deck, heroModelText, loading, priceCountry, refreshCurrentDeck, resolvedTrackingCountry, salesMode, topModelText]);
+  }, [activePage, countryLimit, deck, heroModelText, loading, priceCountry, refreshCurrentDeck, resolvedTrackingCountry, salesMode, selectedFuelTypes, topModelText, topN]);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -940,6 +1007,8 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     if (trackingCountry && trackingCountry !== priceCountry) params.set("trackCountry", trackingCountry);
     if (period) params.set("period", period);
     if (salesMode !== "ytd") params.set("salesMode", salesMode);
+    if (!sameFuelTypes(selectedFuelTypes, DEFAULT_HERO_PRODUCT_FUEL_TYPES)) params.set("fuelTypes", selectedFuelTypes.join(","));
+    if (topN !== HERO_PRODUCT_MIN_TOP_N) params.set("topN", String(topN));
     if (priceSource !== "msrp") params.set("priceSource", priceSource);
     if (scopeMode !== "all") params.set("scope", scopeMode);
     if (distributionLayout !== "aligned") params.set("distributionLayout", distributionLayout);
@@ -949,7 +1018,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     if (params.toString() !== searchParams.toString()) {
       setSearchParams(params, { replace: true });
     }
-  }, [activePage, countryLimit, distributionLayout, heroModelText, period, priceCountry, priceSource, salesMode, scopeMode, searchParams, setSearchParams, topModelText, trackingCountry]);
+  }, [activePage, countryLimit, distributionLayout, heroModelText, period, priceCountry, priceSource, salesMode, scopeMode, searchParams, selectedFuelTypes, setSearchParams, topModelText, topN, trackingCountry]);
 
   useEffect(() => {
     writeStoredSlideLayouts("hero-product-analysis", slideLayouts);
@@ -1010,6 +1079,23 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     const nextCountry = country.trim();
     if (!nextCountry) return;
     setTrackingCountry(nextCountry);
+  }
+
+  function toggleFuelType(value: string): void {
+    const normalized = normalizeHeroFuelType(value);
+    if (!normalized) return;
+    setSelectedFuelTypes((current) => {
+      const selected = normalizeHeroFuelTypes(current);
+      if (selected.includes(normalized)) {
+        const next = selected.filter((item) => item !== normalized);
+        return next.length > 0 ? next : selected;
+      }
+      return normalizeHeroFuelTypes([...selected, normalized]);
+    });
+  }
+
+  function updateTopN(value: number): void {
+    setTopN(Math.max(HERO_PRODUCT_MIN_TOP_N, Math.min(HERO_PRODUCT_MAX_TOP_N, Math.round(value))));
   }
 
   function toggleSpecColumn(column: HeroProductSpecColumnKey): void {
@@ -1073,8 +1159,9 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
       link.href = dataUrl;
       link.download = [
         "hero-product",
-        sanitizeFileNameSegment(deck.metadata.selectedFuelType),
+        sanitizeFileNameSegment(selectedFuelLabel),
         sanitizeFileNameSegment(deck.metadata.selectedSegment),
+        `top${topN}`,
         deck.metadata.resolvedPeriod,
         activePage,
       ].join("-") + ".png";
@@ -1167,7 +1254,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
   const requestedPeriodLabel = `${activeSalesModeLabel}${activePeriodLabel ? ` · ${activePeriodLabel}` : ""}`;
   const narrative = deck
     ? `${deck.metadata.labels.marketScopeLabel} · ${requestedPeriodLabel} · 价格市场 ${deck.metadata.selectedPriceCountry.label}`
-    : "按 BEV / SUV A0 生成 Hero Product 六页分析。";
+    : `按 ${selectedFuelLabel} / SUV A0 生成 Hero Product 六页分析。`;
   const priceEditor: HeroProductPriceEditorBinding = {
     canEdit,
     priceDrafts,
@@ -1188,10 +1275,11 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
             <div className="dashboard-hero-copy market-scan-hero-copy">
               <span className="page-kicker">Advanced Analysis</span>
               <h1>Hero Product 分析</h1>
-              <p>从 SUV A0 BEV 动总下钻到固定车型，复刻六页产品、趋势、价格和市场分布分析。</p>
+              <p>从 SUV A0 {selectedFuelLabel} 动总下钻到固定车型，复刻六页产品、趋势、价格和市场分布分析。</p>
               <div className="market-scan-hero-ribbon">
                 <span className="market-scan-hero-chip">Mode Hero Product</span>
                 <span className="market-scan-hero-chip">{deck?.metadata.labels.marketScopeLabel ?? "全部市场"}</span>
+                <span className="market-scan-hero-chip">Top {topN}</span>
                 <span className="market-scan-hero-chip">Price {priceSource.toUpperCase()}</span>
                 <button type="button" className="btn btn-ghost btn-sm hero-product-mode-btn" onClick={onSwitchToTransfer}>
                   Share Transfer
@@ -1212,8 +1300,9 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
           ariaLabel="Hero Product controls"
           footer={(
             <>
-              <span className="market-scan-toolbar-chip">{deck?.metadata.selectedFuelType ?? "BEV"}</span>
+              <span className="market-scan-toolbar-chip">{selectedFuelLabel}</span>
               <span className="market-scan-toolbar-chip">{deck?.metadata.selectedSegment ?? "SUV A0"}</span>
+              <span className="market-scan-toolbar-chip">Top {topN}</span>
               <span className="market-scan-toolbar-chip">价格 {priceSource.toUpperCase()}</span>
               <span className={`market-scan-toolbar-chip hero-product-control-state${loading ? " is-updating" : ""}`}>{loading ? "Updating" : "Live"}</span>
               <span className="market-scan-toolbar-chip">{canEdit ? "Editor" : "Read only"}</span>
@@ -1312,6 +1401,49 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
               <span>Recompute</span>
               <small>{loading ? "正在更新当前页" : "重算销量口径"}</small>
             </div>
+            <div className="market-scan-field deck-panel-grid__wide">
+              <span>Powertrain</span>
+              <div className="hero-product-fuel-toggle-grid">
+                {availableFuelOptions.map((option) => {
+                  const value = normalizeHeroFuelType(option.value);
+                  const checked = selectedFuelTypes.includes(value);
+                  return (
+                    <label key={value} className={`hero-product-fuel-toggle${checked ? " is-active" : ""}`}>
+                      <input
+                        type="checkbox"
+                        value={value}
+                        checked={checked}
+                        onChange={() => toggleFuelType(value)}
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <small className="hero-product-control-hint">至少保留 1 个动总；01/03/04 按组合口径重算。</small>
+            </div>
+            <div className="market-scan-field deck-panel-grid__wide">
+              <span>Top Models</span>
+              <div className="hero-product-top-n-control">
+                <div className="btn-group">
+                  {HERO_PRODUCT_TOP_N_PRESETS.map((preset) => (
+                    <button key={preset} type="button" className={`btn btn-sm ${topN === preset ? "btn-primary" : "btn-ghost"}`} onClick={() => updateTopN(preset)}>
+                      Top {preset}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="number"
+                  min={HERO_PRODUCT_MIN_TOP_N}
+                  max={HERO_PRODUCT_MAX_TOP_N}
+                  step={1}
+                  inputMode="numeric"
+                  value={topN}
+                  onChange={(event) => updateTopN(Number(event.target.value))}
+                />
+              </div>
+              <small className="hero-product-control-hint">TopN 联动 01/03/04；05/06 固定车型页继续由 Hero Models 控制。</small>
+            </div>
             <label className="market-scan-field">
               <span>Price Market</span>
               <select value={currentPriceCountry} onChange={(event) => setPriceCountry(event.target.value)}>
@@ -1360,7 +1492,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
               <small className="hero-product-control-hint">空白或 0 = 每个车型展示全部有销量国家；输入数字则按销量截取前 N 个国家。</small>
             </label>
             <label className="market-scan-field deck-panel-grid__wide">
-              <span>Top Models</span>
+              <span>Top Model Override</span>
               <input value={topModelText} onChange={(event) => setTopModelText(event.target.value)} placeholder="可选，逗号分隔车型名" />
             </label>
             <label className="market-scan-field deck-panel-grid__wide">
@@ -1371,7 +1503,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
               <span>Deck</span>
               <div className="btn-group">
                 <button type="button" className="btn btn-secondary btn-sm" onClick={refreshDeck}>Refresh</button>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTopModelText(""); setHeroModelText(""); setCountryLimitText(""); setScopeMode("all"); setSalesMode("ytd"); setPriceSource("msrp"); setDistributionLayout("aligned"); setTrackingCountry(""); setSpecColumns(DEFAULT_HERO_PRODUCT_SPEC_COLUMNS); }}>Reset</button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTopModelText(""); setHeroModelText(""); setCountryLimitText(""); setScopeMode("all"); setSalesMode("ytd"); setSelectedFuelTypes([...DEFAULT_HERO_PRODUCT_FUEL_TYPES]); setTopN(HERO_PRODUCT_MIN_TOP_N); setPriceSource("msrp"); setDistributionLayout("aligned"); setTrackingCountry(""); setSpecColumns(DEFAULT_HERO_PRODUCT_SPEC_COLUMNS); }}>Reset</button>
               </div>
             </div>
             <div className="hero-product-price-editor deck-panel-grid__wide">
@@ -1443,6 +1575,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
                     <div className="market-scan-slide-meta">
                       <span className="market-scan-slide-tag">{deck.metadata.selectedFuelType}</span>
                       <span className="market-scan-slide-tag">{deck.metadata.selectedSegment}</span>
+                      <span className="market-scan-slide-tag">Top {topN}</span>
                       <span className="market-scan-slide-tag">{activeSalesModeLabel}</span>
                       <span className="market-scan-slide-tag">{activePeriodLabel || deck.metadata.labels.currentMonthShort}</span>
                       <span className="market-scan-slide-tag">{priceSource.toUpperCase()}</span>
@@ -1460,6 +1593,8 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
                         specColumns={specColumns}
                         customColumns={customSpecColumnOptions}
                         selectedTrackingCountry={resolvedTrackingCountry ?? deck.metadata.selectedTrackingCountry}
+                        fuelLabel={deck.metadata.selectedFuelType}
+                        segmentLabel={deck.metadata.selectedSegment}
                         onDistributionCountryTrace={handleDistributionCountryTrace}
                       />
                     </div>
@@ -1580,12 +1715,12 @@ function HeroProductInsightCallout({ insight }: { insight: HeroProductInsight })
   );
 }
 
-function HeroProductPageContent({ deck, pageKey, priceSource, priceEditor, salesMode, distributionLayout, specColumns, customColumns, selectedTrackingCountry, onDistributionCountryTrace }: { deck: HeroProductDeckResponse; pageKey: HeroProductPageKey; priceSource: HeroProductPriceSource; priceEditor: HeroProductPriceEditorBinding; salesMode: HeroProductSalesMode; distributionLayout: HeroProductDistributionLayout; specColumns: HeroProductSpecColumnKey[]; customColumns: HeroProductSpecColumnOption[]; selectedTrackingCountry: MarketScanCountryOption; onDistributionCountryTrace: (country: string) => void }) {
+function HeroProductPageContent({ deck, pageKey, priceSource, priceEditor, salesMode, distributionLayout, specColumns, customColumns, selectedTrackingCountry, fuelLabel, segmentLabel, onDistributionCountryTrace }: { deck: HeroProductDeckResponse; pageKey: HeroProductPageKey; priceSource: HeroProductPriceSource; priceEditor: HeroProductPriceEditorBinding; salesMode: HeroProductSalesMode; distributionLayout: HeroProductDistributionLayout; specColumns: HeroProductSpecColumnKey[]; customColumns: HeroProductSpecColumnOption[]; selectedTrackingCountry: MarketScanCountryOption; fuelLabel: string; segmentLabel: string; onDistributionCountryTrace: (country: string) => void }) {
   if (pageKey === "benchmark") {
-    return <BenchmarkSlide rows={deck.pages.benchmark.ranking} productRows={deck.pages.benchmark.productRows} priceSource={priceSource} priceEditor={priceEditor} salesMode={salesMode} specColumns={specColumns} customColumns={customColumns} showChannel={false} />;
+    return <BenchmarkSlide rows={deck.pages.benchmark.ranking} productRows={deck.pages.benchmark.productRows} priceSource={priceSource} priceEditor={priceEditor} salesMode={salesMode} specColumns={specColumns} customColumns={customColumns} fuelLabel={fuelLabel} segmentLabel={segmentLabel} showChannel={false} />;
   }
   if (pageKey === "benchmarkWithChannel") {
-    return <BenchmarkSlide rows={deck.pages.benchmarkWithChannel.ranking} productRows={deck.pages.benchmarkWithChannel.productRows} priceSource={priceSource} priceEditor={priceEditor} salesMode={salesMode} specColumns={specColumns} customColumns={customColumns} showChannel />;
+    return <BenchmarkSlide rows={deck.pages.benchmarkWithChannel.ranking} productRows={deck.pages.benchmarkWithChannel.productRows} priceSource={priceSource} priceEditor={priceEditor} salesMode={salesMode} specColumns={specColumns} customColumns={customColumns} fuelLabel={fuelLabel} segmentLabel={segmentLabel} showChannel />;
   }
   if (pageKey === "topTrend") {
     return <TrendSlide page={deck.pages.topTrend} priceSource={priceSource} priceEditor={priceEditor} variant="top" selectedTrackingCountry={selectedTrackingCountry} />;
@@ -1599,8 +1734,9 @@ function HeroProductPageContent({ deck, pageKey, priceSource, priceEditor, sales
   return <DistributionSlide page={deck.pages.heroDistribution} variant="hero" salesMode={salesMode} layout={distributionLayout} selectedTrackingCountry={selectedTrackingCountry} onTrackCountry={onDistributionCountryTrace} />;
 }
 
-function BenchmarkSlide({ rows, productRows, priceSource, priceEditor, salesMode, specColumns, customColumns, showChannel }: { rows: HeroProductModelRow[]; productRows: HeroProductModelRow[]; priceSource: HeroProductPriceSource; priceEditor: HeroProductPriceEditorBinding; salesMode: HeroProductSalesMode; specColumns: HeroProductSpecColumnKey[]; customColumns: HeroProductSpecColumnOption[]; showChannel: boolean }) {
+function BenchmarkSlide({ rows, productRows, priceSource, priceEditor, salesMode, specColumns, customColumns, fuelLabel, segmentLabel, showChannel }: { rows: HeroProductModelRow[]; productRows: HeroProductModelRow[]; priceSource: HeroProductPriceSource; priceEditor: HeroProductPriceEditorBinding; salesMode: HeroProductSalesMode; specColumns: HeroProductSpecColumnKey[]; customColumns: HeroProductSpecColumnOption[]; fuelLabel: string; segmentLabel: string; showChannel: boolean }) {
   const insight = buildBenchmarkInsight(rows, productRows, priceSource, showChannel);
+  const rankingTitle = `${segmentLabel} ${fuelLabel} TOP${rows.length} 销量`;
 
   return (
     <div className="hero-product-page-stack hero-product-page-stack--benchmark">
@@ -1608,11 +1744,11 @@ function BenchmarkSlide({ rows, productRows, priceSource, priceEditor, salesMode
       <div className="market-scan-grid market-scan-grid--two-wide hero-product-benchmark-grid">
         <HeroProductPanel
           eyebrow={showChannel ? "Ranking · Channel" : "Ranking · Volume"}
-          title="SUV A0 BEV TOP20 销量"
+          title={rankingTitle}
           subtitle={showChannel ? "用 Business / Private 与 4WD 标记解释排行背后的渠道结构。" : "用销量、份额、YoY 和 4WD 暴露度建立动总对标基准。"}
           className="hero-product-ranking-panel"
         >
-          <RankingList rows={rows.slice(0, 10)} />
+          <RankingList rows={rows} />
         </HeroProductPanel>
         <HeroProductPanel
           eyebrow="Product · Spec"
@@ -1631,9 +1767,10 @@ function RankingList({ rows }: { rows: HeroProductModelRow[] }) {
   if (rows.length === 0) {
     return <div className="market-scan-empty">暂无排行数据。</div>;
   }
+  const densityClass = rows.length >= 28 ? " is-top-30" : rows.length >= 18 ? " is-top-20" : "";
 
   return (
-    <div className="market-scan-ranking-list market-scan-ranking-list--fuel hero-product-ranking-list hero-product-share-ranking-list">
+    <div className={`market-scan-ranking-list market-scan-ranking-list--fuel hero-product-ranking-list hero-product-share-ranking-list${densityClass}`}>
       {rows.map((row) => {
         const fourWd = fourWheelShare(row);
         const business = businessShare(row);
@@ -1877,7 +2014,7 @@ function InlinePriceEditor({ row, priceSource, binding, variant }: { row: HeroPr
 
 function TrendSlide({ page, priceSource, priceEditor, variant, selectedTrackingCountry }: { page: HeroProductDeckResponse["pages"]["topTrend"]; priceSource: HeroProductPriceSource; priceEditor: HeroProductPriceEditorBinding; variant: "top" | "hero"; selectedTrackingCountry: MarketScanCountryOption }) {
   const insight = buildTrendInsight(page, priceSource, variant);
-  const channelRows = page.models.slice(0, variant === "hero" ? 6 : 10);
+  const channelRows = page.models.slice(0, variant === "hero" ? 6 : page.models.length);
   const countryRanking = countryRankingForTrendPage(page, selectedTrackingCountry);
   const trackingCountryLabel = countryRanking.country.label || countryRanking.country.value;
 
@@ -2276,12 +2413,13 @@ function DistributionSlide({ page, variant, salesMode, layout, selectedTrackingC
     suppressClickCountry: "",
   });
   const insight = buildDistributionInsight(page, variant);
-  const visibleItems = page.distribution.items.slice(0, variant === "top" ? 10 : 6);
+  const visibleItems = page.distribution.items.slice(0, variant === "top" ? page.distribution.items.length : 6);
   const countryOrder = alignedCountryOrder(visibleItems, page.distribution.countries);
   const maxCountryRows = Math.max(1, ...visibleItems.map((item) => (
     layout === "aligned" ? countryOrder.length : item.countries.length
   )));
-  const densityClass = maxCountryRows > 34 ? " is-very-dense" : maxCountryRows > 24 ? " is-dense" : "";
+  const countryDensityClass = maxCountryRows > 34 ? " is-very-dense" : maxCountryRows > 24 ? " is-dense" : "";
+  const columnDensityClass = visibleItems.length >= 28 ? " is-top-30" : visibleItems.length >= 18 ? " is-top-20" : "";
   const matrixStyle = {
     "--hero-product-distribution-cols": String(Math.max(1, visibleItems.length)),
   } as CSSProperties;
@@ -2355,7 +2493,7 @@ function DistributionSlide({ page, variant, salesMode, layout, selectedTrackingC
         eyebrow={variant === "hero" ? "Market · Fixed Models" : "Market · Top Models"}
         title={page.title}
         subtitle={`${modeLabel}口径 · ${layoutLabel}；点击或拖动国家行更新追踪国家，当前 ${trackingCountryLabel}；切到趋势页查看单国 ranking。${layout === "aligned" ? "按第一列车型国家顺序统一行轴，缺失国家保留空行。" : "每个车型独立成列，按国家销量排序。"}`}
-        className={`hero-product-distribution-panel hero-product-distribution-panel--${variant}${layout === "aligned" ? " is-country-aligned" : ""}${densityClass}`}
+        className={`hero-product-distribution-panel hero-product-distribution-panel--${variant}${layout === "aligned" ? " is-country-aligned" : ""}${countryDensityClass}${columnDensityClass}`}
       >
         <div className="hero-product-distribution-wrap">
           <div className="hero-product-distribution-legend">
@@ -2452,8 +2590,12 @@ function CountryDriveRow({ country, maxSales, isTracking, onPointerDown, onPoint
 }
 
 function ChannelMixStrip({ rows }: { rows: HeroProductModelRow[] }) {
+  const densityClass = rows.length >= 28 ? " is-top-30" : rows.length >= 18 ? " is-top-20" : "";
+  const stripStyle = {
+    "--hero-product-channel-cols": String(Math.max(1, rows.length)),
+  } as CSSProperties;
   return (
-    <div className="hero-product-channel-strip hero-product-channel-strip--pies">
+    <div className={`hero-product-channel-strip hero-product-channel-strip--pies${densityClass}`} style={stripStyle}>
       <div className="hero-product-channel-legend">
         {HERO_PRODUCT_CHANNEL_ORDER.map((channel) => (
           <span key={channel}><i style={{ background: HERO_PRODUCT_CHANNEL_META[channel].color }} />{HERO_PRODUCT_CHANNEL_META[channel].label}</span>

@@ -54,7 +54,7 @@ PRICE_SOURCES = ("msrp", "jato")
 DEFAULT_SEGMENT = "SUV A0"
 DEFAULT_FUEL = "BEV"
 DEFAULT_PRICE_CURRENCY = "EUR"
-_HERO_PRODUCT_DECK_CACHE_SCHEMA_VERSION = 1
+_HERO_PRODUCT_DECK_CACHE_SCHEMA_VERSION = 2
 _HERO_PRODUCT_DECK_CACHE_PREFIX = f"ms:hero-product-deck:v{_HERO_PRODUCT_DECK_CACHE_SCHEMA_VERSION}"
 _HERO_PRODUCT_DECK_CACHE_TTL_SECONDS = 300
 _hero_product_deck_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
@@ -78,6 +78,18 @@ DEFAULT_HERO_BRANDS = (
     "SMART",
     "XPENG",
     "LEAPMOTOR",
+)
+FUEL_TYPE_DISPLAY_ORDER = (
+    "BEV",
+    "PHEV",
+    "HEV",
+    "MHEV",
+    "REEV",
+    "ICE",
+    "FCV",
+    "LPG",
+    "CNG",
+    "OTHER",
 )
 SPEC_CANDIDATES: dict[str, list[str]] = {
     "rangeKm": [
@@ -191,7 +203,7 @@ def _build_hero_product_deck_cache_key(
     time_range: dict[str, str] | None,
     sales_mode: str,
     segment: str,
-    fuel_type: str,
+    fuel_types: list[str],
     price_source: str,
     top_n: int,
     ranking_limit: int,
@@ -213,7 +225,7 @@ def _build_hero_product_deck_cache_key(
         "timeRange": _time_range_deck_cache_key(time_range),
         "salesMode": _coerce_text(sales_mode),
         "segment": _coerce_text(segment),
-        "fuelType": _coerce_text(fuel_type),
+        "fuelTypes": sorted(_normalized_cache_list(fuel_types)),
         "priceSource": _coerce_text(price_source),
         "topN": int(top_n),
         "rankingLimit": int(ranking_limit),
@@ -457,6 +469,69 @@ def _powertrain_filter_candidates(fuel_type: str) -> list[str]:
     return list(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
+def _fuel_type_sort_key(value: str) -> tuple[int, str]:
+    normalized = _normalize_powertrain(value)
+    try:
+        index = FUEL_TYPE_DISPLAY_ORDER.index(normalized)
+    except ValueError:
+        index = len(FUEL_TYPE_DISPLAY_ORDER)
+    return index, normalized
+
+
+def _normalize_fuel_type_list(
+    fuel_type: str | None,
+    fuel_types: list[str] | tuple[str, ...] | None,
+) -> list[str]:
+    raw_values = list(fuel_types or [])
+    if not raw_values:
+        raw_values = [fuel_type or DEFAULT_FUEL]
+    selected: dict[str, str] = {}
+    for raw_value in raw_values:
+        text = _coerce_text(raw_value)
+        if not text:
+            continue
+        normalized = _normalize_powertrain(text)
+        if not normalized:
+            continue
+        selected[normalized] = normalized
+    if not selected:
+        selected[_normalize_powertrain(fuel_type or DEFAULT_FUEL)] = _normalize_powertrain(fuel_type or DEFAULT_FUEL)
+    return sorted(selected.values(), key=_fuel_type_sort_key)
+
+
+def _fuel_type_label(fuel_types: list[str]) -> str:
+    values = _normalize_fuel_type_list(DEFAULT_FUEL, fuel_types)
+    return " / ".join(values)
+
+
+def _powertrain_filter_candidates_for_types(fuel_types: list[str]) -> list[str]:
+    candidates: list[str] = []
+    for fuel_type in fuel_types:
+        candidates.extend(_powertrain_filter_candidates(fuel_type))
+    return list(dict.fromkeys(candidate for candidate in candidates if candidate))
+
+
+@lru_cache(maxsize=32)
+def _available_powertrain_options(dataset_token: str, segment: str) -> list[dict[str, str]]:
+    _ = dataset_token
+    columns = _get_columns()
+    raw_options = repo.load_distinct_options(
+        columns.powertrain,
+        {columns.segment: _segment_filter_candidates(segment or DEFAULT_SEGMENT)},
+    )
+    normalized = {
+        _normalize_powertrain(option)
+        for option in raw_options
+        if _coerce_text(option)
+    }
+    if not normalized:
+        normalized.add(DEFAULT_FUEL)
+    return [
+        {"value": value, "label": value}
+        for value in sorted(normalized, key=_fuel_type_sort_key)
+    ]
+
+
 def _table_exists(session: Session, table_name: str, schema: str = "msrp") -> bool:
     bind = session.get_bind()
     if bind is None:
@@ -656,9 +731,10 @@ def _build_source_frame(
     time_range: dict[str, str] | None,
     sales_mode: str,
     segment: str,
-    fuel_type: str,
+    fuel_types: list[str],
     trend_window_months: int,
 ) -> dict[str, Any]:
+    selected_fuel_types = _normalize_fuel_type_list(DEFAULT_FUEL, fuel_types)
     base = _build_source_base_frame_cached(
         repo.current_dataset_token(),
         tuple(countries),
@@ -666,7 +742,7 @@ def _build_source_frame(
         target_period or "",
         _time_range_cache_key(time_range),
         segment or "",
-        fuel_type or "",
+        tuple(selected_fuel_types),
         int(trend_window_months),
     )
     return _derive_source_frame_for_sales_window(base, sales_mode or "")
@@ -680,7 +756,7 @@ def _build_source_base_frame_cached(
     target_period: str,
     time_range_key: tuple[tuple[str, str], ...],
     segment: str,
-    fuel_type: str,
+    fuel_types_key: tuple[str, ...],
     trend_window_months: int,
 ) -> dict[str, Any]:
     time_range = dict(time_range_key) if time_range_key else None
@@ -720,9 +796,10 @@ def _build_source_base_frame_cached(
     selected_price_country = _resolve_price_country(price_country or None, country_options)
     selected_country_values = [item["value"] for item in selected_countries]
     segment_key = _normalize_segment_key(segment or DEFAULT_SEGMENT)
-    fuel_key = _normalize_powertrain(fuel_type or DEFAULT_FUEL)
+    selected_fuel_types = _normalize_fuel_type_list(DEFAULT_FUEL, fuel_types_key)
+    selected_fuel_set = set(selected_fuel_types)
     segment_filter_values = _segment_filter_candidates(segment or DEFAULT_SEGMENT)
-    powertrain_filter_values = _powertrain_filter_candidates(fuel_type or DEFAULT_FUEL)
+    powertrain_filter_values = _powertrain_filter_candidates_for_types(selected_fuel_types)
 
     selected_columns = [
         columns.country_value,
@@ -819,7 +896,7 @@ def _build_source_base_frame_cached(
         & (frame["__model"] != "")
         & (frame["__available_sales"] > 0)
         & (frame["__segment_raw"].map(_normalize_segment_key) == segment_key)
-        & (frame["__powertrain"] == fuel_key)
+        & (frame["__powertrain"].isin(selected_fuel_set))
     ].copy()
 
     return {
@@ -835,7 +912,9 @@ def _build_source_base_frame_cached(
         "trendPeriods": trend_periods,
         "customPeriods": custom_periods,
         "selectedSegment": segment or DEFAULT_SEGMENT,
-        "selectedFuelType": fuel_key,
+        "selectedFuelTypes": selected_fuel_types,
+        "selectedFuelType": _fuel_type_label(selected_fuel_types),
+        "availableFuelTypes": _available_powertrain_options(dataset_token, segment or DEFAULT_SEGMENT),
     }
 
 
@@ -1485,6 +1564,7 @@ def query_hero_product_deck(
     sales_mode: str,
     segment: str,
     fuel_type: str,
+    fuel_types: list[str] | None = None,
     price_source: str,
     top_n: int,
     ranking_limit: int,
@@ -1496,8 +1576,9 @@ def query_hero_product_deck(
 ) -> dict[str, Any]:
     dataset_token = repo.current_dataset_token()
     override_token = _hero_product_override_token()
-    normalized_top_n = max(1, int(top_n or 10))
-    normalized_ranking_limit = max(1, int(ranking_limit or 20))
+    normalized_fuel_types = _normalize_fuel_type_list(fuel_type, fuel_types)
+    normalized_top_n = min(30, max(10, int(top_n or 10)))
+    normalized_ranking_limit = min(60, max(normalized_top_n, int(ranking_limit or normalized_top_n)))
     normalized_country_limit = max(0, int(country_limit or 0))
     normalized_trend_window = max(1, int(trend_window_months or 16))
     cache_key = _build_hero_product_deck_cache_key(
@@ -1508,7 +1589,7 @@ def query_hero_product_deck(
         time_range=time_range,
         sales_mode=sales_mode,
         segment=segment,
-        fuel_type=fuel_type,
+        fuel_types=normalized_fuel_types,
         price_source=price_source,
         top_n=normalized_top_n,
         ranking_limit=normalized_ranking_limit,
@@ -1560,6 +1641,7 @@ def query_hero_product_deck(
             sales_mode=sales_mode,
             segment=segment,
             fuel_type=fuel_type,
+            fuel_types=normalized_fuel_types,
             price_source=price_source,
             top_n=normalized_top_n,
             ranking_limit=normalized_ranking_limit,
@@ -1601,6 +1683,7 @@ def _query_hero_product_deck_impl(
     sales_mode: str,
     segment: str,
     fuel_type: str,
+    fuel_types: list[str] | None = None,
     price_source: str,
     top_n: int,
     ranking_limit: int,
@@ -1611,6 +1694,7 @@ def _query_hero_product_deck_impl(
     hero_models: list[str],
 ) -> dict[str, Any]:
     selected_price_source = price_source if price_source in PRICE_SOURCES else "msrp"
+    selected_fuel_types = _normalize_fuel_type_list(fuel_type, fuel_types)
     source = _build_source_frame(
         countries=countries,
         price_country=price_country,
@@ -1618,7 +1702,7 @@ def _query_hero_product_deck_impl(
         time_range=time_range,
         sales_mode=sales_mode,
         segment=segment,
-        fuel_type=fuel_type,
+        fuel_types=selected_fuel_types,
         trend_window_months=trend_window_months,
     )
     frame: pd.DataFrame = source["frame"]
@@ -1723,6 +1807,7 @@ def _query_hero_product_deck_impl(
         if len(source["selectedCountries"]) == len(source["countryOptions"])
         else " / ".join(item["label"] for item in source["selectedCountries"][:4])
     )
+    fuel_label = source["selectedFuelType"]
 
     return {
         "metadata": {
@@ -1734,6 +1819,7 @@ def _query_hero_product_deck_impl(
             "selectedPriceCountry": source["priceCountry"],
             "selectedTrackingCountry": selected_tracking_country,
             "selectedSegment": source["selectedSegment"],
+            "selectedFuelTypes": source["selectedFuelTypes"],
             "selectedFuelType": source["selectedFuelType"],
             "selectedSalesMode": sales_mode,
             "selectedPriceSource": selected_price_source,
@@ -1752,6 +1838,7 @@ def _query_hero_product_deck_impl(
                 {"value": "msrp", "label": "MSRP 抓取价"},
                 {"value": "jato", "label": "JATO 价格"},
             ],
+            "availableFuelTypes": source["availableFuelTypes"],
             "labels": {
                 "pageTitle": page_title,
                 "periodLabel": period_label,
@@ -1779,12 +1866,12 @@ def _query_hero_product_deck_impl(
         ],
         "pages": {
             "benchmark": {
-                "title": "BEV 动总产品对标",
+                "title": f"{fuel_label} 动总产品对标",
                 "ranking": ranking_rows,
                 "productRows": benchmark_rows,
             },
             "benchmarkWithChannel": {
-                "title": "BEV 动总渠道结构对标",
+                "title": f"{fuel_label} 动总渠道结构对标",
                 "ranking": ranking_rows,
                 "productRows": benchmark_rows,
             },
