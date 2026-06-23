@@ -10,6 +10,8 @@ import {
 
 import { apiUrl } from "../api/client";
 
+const AUTH_PROFILE_REFRESH_DELAY_MS = 1_500;
+
 export interface User {
   username: string;
   role: string;
@@ -148,9 +150,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       || import.meta.env.VITE_AUTH_TOKEN
       || ""
     ).trim();
+    if (!currentToken) {
+      setProfileLoaded(true);
+      return;
+    }
     const res = await fetch(apiUrl("/auth/me"), {
       headers: {
-        ...(currentToken ? { "X-Auth-Token": currentToken } : {}),
+        "X-Auth-Token": currentToken,
         "X-User-Name": localStorage.getItem(STORAGE_USER) || import.meta.env.VITE_USER_NAME || "anonymous",
       },
     });
@@ -196,7 +202,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applyUser]);
 
   useEffect(() => {
-    void refreshUser();
+    const currentToken = (
+      localStorage.getItem(STORAGE_TOKEN)
+      || import.meta.env.VITE_AUTH_TOKEN
+      || ""
+    ).trim();
+    if (!currentToken) {
+      setProfileLoaded(true);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void refreshUser();
+    }, AUTH_PROFILE_REFRESH_DELAY_MS);
+    return () => window.clearTimeout(timer);
   }, [refreshUser, token]);
 
   const login = useCallback(async (username: string, password: string) => {

@@ -8,6 +8,10 @@ const INITIAL_HEARTBEAT_DELAY_MS = 8_000;
 const SESSION_KEY = "jato_presence_session_id";
 const USER_NAME_KEY = "jato_user_name";
 
+function isDocumentVisible(): boolean {
+  return typeof document === "undefined" || document.visibilityState === "visible";
+}
+
 function getSessionId(): string {
   // sessionStorage is per-tab — two tabs = two distinct sessions
   const cached = sessionStorage.getItem(SESSION_KEY);
@@ -40,7 +44,7 @@ export interface PresenceSnapshot {
   users: PresenceUser[];
 }
 
-export function usePresence() {
+export function usePresence(includeUsers = false) {
   const location = useLocation();
   const sessionIdRef = useRef(getSessionId());
   const [snapshot, setSnapshot] = useState<PresenceSnapshot>({
@@ -50,6 +54,7 @@ export function usePresence() {
   });
 
   const sendHeartbeat = useCallback(() => {
+    if (!isDocumentVisible()) return;
     const token =
       localStorage.getItem("jato_auth_token") ||
       import.meta.env.VITE_AUTH_TOKEN;
@@ -58,7 +63,7 @@ export function usePresence() {
       user_name: getUserName(),
       current_page: location.pathname,
     };
-    fetch(apiUrl("/presence/heartbeat"), {
+    fetch(apiUrl(`/presence/heartbeat?include_users=${includeUsers ? "true" : "false"}`), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -72,21 +77,49 @@ export function usePresence() {
           setSnapshot({
             online: d.online,
             samePage: d.same_page ?? 0,
-            users: d.users ?? [],
+            users: Array.isArray(d.users) ? d.users : [],
           });
         }
       })
       .catch(() => {});
-  }, [location.pathname]);
+  }, [includeUsers, location.pathname]);
 
   useEffect(() => {
-    const initial = setTimeout(sendHeartbeat, INITIAL_HEARTBEAT_DELAY_MS);
-    const interval = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+    let interval: number | null = null;
+    const startInterval = () => {
+      if (interval !== null || !isDocumentVisible()) return;
+      interval = window.setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+    };
+    const stopInterval = () => {
+      if (interval === null) return;
+      window.clearInterval(interval);
+      interval = null;
+    };
+    const handleVisibilityChange = () => {
+      if (isDocumentVisible()) {
+        sendHeartbeat();
+        startInterval();
+      } else {
+        stopInterval();
+      }
+    };
+
+    const initial = window.setTimeout(() => {
+      sendHeartbeat();
+      startInterval();
+    }, INITIAL_HEARTBEAT_DELAY_MS);
+    startInterval();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
-      clearTimeout(initial);
-      clearInterval(interval);
+      window.clearTimeout(initial);
+      stopInterval();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [sendHeartbeat]);
+
+  useEffect(() => {
+    if (includeUsers) sendHeartbeat();
+  }, [includeUsers, sendHeartbeat]);
 
   return snapshot;
 }

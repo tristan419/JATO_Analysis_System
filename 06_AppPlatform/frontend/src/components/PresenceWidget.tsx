@@ -26,8 +26,8 @@ function edgeSnap(x: number) {
 }
 
 export function PresenceWidget() {
-  const { online, samePage, users } = usePresence();
   const [expanded, setExpanded] = useState(false);
+  const { online, samePage, users } = usePresence(expanded);
   const [snapped, setSnapped] = useState(true);
   const [dragging, setDragging] = useState(false);
   const [pos, setPos] = useState(() => ({
