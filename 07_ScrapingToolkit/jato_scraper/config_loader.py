@@ -6,7 +6,7 @@ requires creating a new YAML file — no Python code changes needed.
 
 Each YAML file describes **one source** and must contain:
     - source_code, country, brand, source_url   (identity)
-    - extractor_type: "http_json" | "scrapling" | "playwright" | "pdf_text"
+    - extractor_type: "http_json" | "http_text" | "scrapling" | "playwright" | "pdf_text"
     - profile: <dict>                            (extractor-specific config)
 
 Optional source fields:
@@ -32,6 +32,11 @@ from jato_scraper.extractors.http_json import (
     MinPriceGroup,
     PricingContextMapping as HttpPricingContextMapping,
     ValueFilter,
+)
+from jato_scraper.extractors.http_text import (
+    HttpTextEntryPattern,
+    HttpTextExtractor,
+    HttpTextProfile,
 )
 from jato_scraper.extractors.scrapling_web import (
     AttrJsonMapping,
@@ -629,9 +634,87 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
     )
 
 
+def _build_http_text_profile(profile: dict[str, Any]) -> HttpTextProfile:
+    patterns_raw = profile.get("entry_patterns", [])
+    if not isinstance(patterns_raw, list):
+        raise ValueError("http_text entry_patterns must be a list")
+    entry_patterns = tuple(
+        HttpTextEntryPattern(
+            pattern=str(item["pattern"]).strip(),
+            official_trim=(
+                str(item["official_trim"]).strip()
+                if item.get("official_trim") is not None
+                else None
+            ),
+            official_powertrain=(
+                str(item["official_powertrain"]).strip()
+                if item.get("official_powertrain") is not None
+                else None
+            ),
+            official_edition=(
+                str(item["official_edition"]).strip()
+                if item.get("official_edition") is not None
+                else None
+            ),
+            availability_text=(
+                str(item["availability_text"]).strip()
+                if item.get("availability_text") is not None
+                else None
+            ),
+            jato_trim=(
+                str(item["jato_trim"]).strip()
+                if item.get("jato_trim") is not None
+                else None
+            ),
+            jato_powertrain=(
+                str(item["jato_powertrain"]).strip()
+                if item.get("jato_powertrain") is not None
+                else None
+            ),
+            price_delta=float(item.get("price_delta", 0.0) or 0.0),
+            price_label=(
+                str(item["price_label"]).strip()
+                if item.get("price_label") is not None
+                else None
+            ),
+        )
+        for item in patterns_raw
+        if isinstance(item, dict) and str(item.get("pattern", "")).strip()
+    )
+    return HttpTextProfile(
+        url=profile["url"],
+        entry_patterns=entry_patterns,
+        timeout_seconds=int(profile.get("timeout_seconds", 30)),
+        headers=profile.get("headers", {}),
+        default_currency=profile.get("default_currency", "EUR"),
+        default_tax_included=bool(profile.get("default_tax_included", True)),
+        default_price_label=profile.get(
+            "default_price_label",
+            "Manufacturer's Recommended Retail Price",
+        ),
+        fixed_model=profile.get("fixed_model"),
+        fixed_jato_model=profile.get("fixed_jato_model"),
+        fixed_jato_powertrain=profile.get("fixed_jato_powertrain"),
+        copy_trim_to_jato_trim=bool(profile.get("copy_trim_to_jato_trim", False)),
+        match_confidence=(
+            float(profile["match_confidence"])
+            if profile.get("match_confidence") is not None
+            else None
+        ),
+        match_status=profile.get("match_status", "review_required"),
+        match_reason=profile.get("match_reason"),
+    )
+
+
 def _make_extractor_class(
     extractor_type: str,
-    profile: HttpJsonProfile | ScraplingProfile | PlaywrightCardFlowProfile | PdfTextProfile,
+    profile: (
+        HttpJsonProfile
+        | HttpTextProfile
+        | ScraplingProfile
+        | PlaywrightCardFlowProfile
+        | PdfTextProfile
+    ),
 ) -> type:
     """Create an extractor class that binds a fixed profile at init."""
     if extractor_type == "http_json":
@@ -641,6 +724,14 @@ def _make_extractor_class(
             def __init__(self, config: ExtractorConfig) -> None:
                 super().__init__(config, self._profile)
         return _ConfiguredHttpJson
+
+    if extractor_type == "http_text":
+        class _ConfiguredHttpText(HttpTextExtractor):
+            _profile = profile
+
+            def __init__(self, config: ExtractorConfig) -> None:
+                super().__init__(config, self._profile)
+        return _ConfiguredHttpText
 
     if extractor_type == "scrapling":
         class _ConfiguredScrapling(ScraplingExtractor):
@@ -708,6 +799,8 @@ def load_source_file(path: Path) -> str | None:
         profile_raw = _resolve_profile_raw(path, data)
         if ext_type == "http_json":
             profile = _build_http_json_profile(profile_raw)
+        elif ext_type == "http_text":
+            profile = _build_http_text_profile(profile_raw)
         elif ext_type == "scrapling":
             profile = _build_scrapling_profile(profile_raw)
         elif ext_type == "playwright":
