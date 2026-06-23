@@ -47,6 +47,7 @@ export interface PresenceSnapshot {
 export function usePresence(includeUsers = false) {
   const location = useLocation();
   const sessionIdRef = useRef(getSessionId());
+  const initialDelayDoneRef = useRef(false);
   const [snapshot, setSnapshot] = useState<PresenceSnapshot>({
     online: 0,
     samePage: 0,
@@ -86,6 +87,7 @@ export function usePresence(includeUsers = false) {
 
   useEffect(() => {
     let interval: number | null = null;
+    let initial: number | null = null;
     const startInterval = () => {
       if (interval !== null || !isDocumentVisible()) return;
       interval = window.setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
@@ -97,28 +99,30 @@ export function usePresence(includeUsers = false) {
     };
     const handleVisibilityChange = () => {
       if (isDocumentVisible()) {
-        sendHeartbeat();
+        if (initialDelayDoneRef.current) sendHeartbeat();
         startInterval();
       } else {
         stopInterval();
       }
     };
 
-    const initial = window.setTimeout(() => {
+    initialDelayDoneRef.current = false;
+    initial = window.setTimeout(() => {
+      initialDelayDoneRef.current = true;
+      initial = null;
       sendHeartbeat();
       startInterval();
     }, INITIAL_HEARTBEAT_DELAY_MS);
-    startInterval();
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
-      window.clearTimeout(initial);
+      if (initial !== null) window.clearTimeout(initial);
       stopInterval();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [sendHeartbeat]);
 
   useEffect(() => {
-    if (includeUsers) sendHeartbeat();
+    if (includeUsers && initialDelayDoneRef.current) sendHeartbeat();
   }, [includeUsers, sendHeartbeat]);
 
   return snapshot;
