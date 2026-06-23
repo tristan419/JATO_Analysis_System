@@ -103,14 +103,14 @@ def test_exchange_code_uses_configured_relay(monkeypatch) -> None:
     assert calls[0]["method"] == "post"
     assert calls[0]["url"] == "https://relay.example/token"
     assert calls[0]["headers"] == {"X-JATO-Relay-Token": "relay-secret"}
-    assert "proxies" not in calls[0]
+    assert calls[0]["proxies"] == {"http": None, "https": None, "all": None}
     assert calls[1]["method"] == "get"
     assert calls[1]["url"] == "https://relay.example/userinfo"
     assert calls[1]["headers"] == {
         "Authorization": "Bearer token-1",
         "X-JATO-Relay-Token": "relay-secret",
     }
-    assert "proxies" not in calls[1]
+    assert calls[1]["proxies"] == {"http": None, "https": None, "all": None}
 
 
 def test_exchange_code_wraps_google_network_errors(monkeypatch) -> None:

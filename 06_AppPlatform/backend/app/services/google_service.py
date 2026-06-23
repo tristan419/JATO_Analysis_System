@@ -27,6 +27,7 @@ _PROXY_ENV_NAMES = (
     "ALL_PROXY",
     "all_proxy",
 )
+_DIRECT_PROXIES = {"http": None, "https": None, "all": None}
 log = logging.getLogger(__name__)
 
 
@@ -103,6 +104,7 @@ def _google_relay_request(method: str, path: str, **kwargs) -> requests.Response
             relay_url,
             headers=headers,
             timeout=GOOGLE_OAUTH_TIMEOUT_SECONDS,
+            proxies=_DIRECT_PROXIES,
             **kwargs,
         )
     except requests.exceptions.RequestException as exc:
