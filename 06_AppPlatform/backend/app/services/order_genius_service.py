@@ -28,7 +28,12 @@ from app.services.order_quantity_parser import (
     OrderQuantityImport,
     parse_order_quantity_xlsx,
 )
-from app.services.ordering_normalization import normalize_brand, normalize_brand_text
+from app.services.ordering_normalization import (
+    infer_colour_tier,
+    merge_colour_tiers,
+    normalize_brand,
+    normalize_brand_text,
+)
 from app.services.powertrain_normalizer import normalize_powertrain
 
 
@@ -60,15 +65,39 @@ def _extract_canonical_pt(sku: object) -> str:
 def _derive_colour_tier(exterior_color_type: str) -> str:
     """Auto-classify colour_tier from exterior_color_type.
     single → single, dual → dual, matte/black edition/etc → special"""
-    if not exterior_color_type:
-        return "single"
-    ct = str(exterior_color_type).strip().lower()
-    if ct in ("single", "solid", "mono"):
-        return "single"
-    if ct in ("dual", "two-tone", "dual tone", "bi-color", "bi colour"):
-        return "dual"
-    # matte, black edition, pearl, metallic, special finishes → special
-    return "special"
+    return infer_colour_tier(None, exterior_color_type)
+
+
+def _effective_colour_tier(sku: object) -> str:
+    return merge_colour_tiers(
+        getattr(sku, "colour_tier", None),
+        infer_colour_tier(
+            getattr(sku, "exterior_color_name", None),
+            getattr(sku, "exterior_color_type", None),
+            getattr(sku, "edition_tag", None),
+        ),
+    )
+
+
+def _interior_by_template(skus: list[MaterialSkuMaster]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for sku in skus:
+        template = sku.bom_template or ""
+        interior = sku.interior_color_name or ""
+        if template and interior and template not in result:
+            result[template] = interior
+    return result
+
+
+def _effective_interior_name(
+    sku: MaterialSkuMaster,
+    interior_by_bom_template: dict[str, str],
+) -> str | None:
+    return (
+        sku.interior_color_name
+        or interior_by_bom_template.get(sku.bom_template or "")
+        or _infer_interior_from_bom(sku.bom_template)
+    )
 
 
 # ── Upload orchestration ───────────────────────────────────────────────
@@ -167,10 +196,19 @@ def _assign_fob_based_tiers(
             sc_to_tier[unique_sc[-1]] = "special"
 
         for mc, sc in mc_surcharges.items():
-            tier = sc_to_tier.get(sc)
-            if tier is None:
+            fob_tier = sc_to_tier.get(sc)
+            if fob_tier is None:
                 continue
             sku = code_to_sku.get(mc)
+            tier = merge_colour_tiers(
+                sku.colour_tier if sku else None,
+                infer_colour_tier(
+                    sku.exterior_color_name if sku else None,
+                    sku.exterior_color_type if sku else None,
+                    sku.edition_tag if sku else None,
+                ),
+                fob_tier,
+            )
             if sku and sku.colour_tier != tier:
                 sku.colour_tier = tier
                 updated += 1
@@ -619,6 +657,9 @@ def _build_matrix_for_country(
         session,
         historical_codes,
     )
+    matrix_interior_by_template = _interior_by_template(
+        active_skus + list(historical_skus.values())
+    )
     historical_fob_map = repo.list_fobs_for_country_material_codes(
         session,
         country_code,
@@ -651,8 +692,8 @@ def _build_matrix_for_country(
             "colour": sku.exterior_color_name,
             "colourCode": sku.exterior_color_code,
             "colourType": sku.exterior_color_type,
-            "colourTier": sku.colour_tier,
-            "interiorColorName": sku.interior_color_name,
+            "colourTier": _effective_colour_tier(sku),
+            "interiorColorName": _effective_interior_name(sku, matrix_interior_by_template),
             "interiorColourCode": sku.interior_colour_code,
             "interiorPackage": sku.interior_package,
             "editionTag": sku.edition_tag,
@@ -714,8 +755,8 @@ def _build_matrix_for_country(
                 "colour": hist_sku.exterior_color_name,
                 "colourCode": hist_sku.exterior_color_code,
                 "colourType": hist_sku.exterior_color_type,
-                "colourTier": hist_sku.colour_tier,
-                "interiorColorName": hist_sku.interior_color_name,
+                "colourTier": _effective_colour_tier(hist_sku),
+                "interiorColorName": _effective_interior_name(hist_sku, matrix_interior_by_template),
                 "interiorColourCode": hist_sku.interior_colour_code,
                 "interiorPackage": hist_sku.interior_package,
                 "editionTag": hist_sku.edition_tag,
