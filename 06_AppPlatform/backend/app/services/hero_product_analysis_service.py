@@ -407,6 +407,37 @@ def _source_pair(row: dict[str, Any]) -> tuple[str, str]:
     return (_source_brand(row), _source_model(row))
 
 
+def _source_pairs(model_rows: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in model_rows:
+        pair = _source_pair(row)
+        if pair in seen:
+            continue
+        pairs.append(pair)
+        seen.add(pair)
+    return pairs
+
+
+def _filter_frame_for_pairs(frame: pd.DataFrame, pairs: list[tuple[str, str]]) -> pd.DataFrame:
+    if frame.empty or not pairs:
+        return frame.iloc[0:0]
+    pair_index = pd.MultiIndex.from_arrays([
+        frame["__brand"].astype(str),
+        frame["__model"].astype(str),
+    ])
+    target_index = pd.MultiIndex.from_tuples(pairs)
+    return frame[pair_index.isin(target_index)]
+
+
+def _segment_filter_candidates(segment: str) -> list[str]:
+    text = _coerce_text(segment or DEFAULT_SEGMENT)
+    candidates = [text]
+    if _normalize_segment_key(text) == _normalize_segment_key(DEFAULT_SEGMENT):
+        candidates.append(DEFAULT_SEGMENT)
+    return list(dict.fromkeys(candidate for candidate in candidates if candidate))
+
+
 def _table_exists(session: Session, table_name: str, schema: str = "msrp") -> bool:
     bind = session.get_bind()
     if bind is None:
@@ -609,27 +640,26 @@ def _build_source_frame(
     fuel_type: str,
     trend_window_months: int,
 ) -> dict[str, Any]:
-    return _build_source_frame_cached(
+    base = _build_source_base_frame_cached(
         repo.current_dataset_token(),
         tuple(countries),
         price_country or "",
         target_period or "",
         _time_range_cache_key(time_range),
-        sales_mode or "",
         segment or "",
         fuel_type or "",
         int(trend_window_months),
     )
+    return _derive_source_frame_for_sales_window(base, sales_mode or "")
 
 
 @lru_cache(maxsize=16)
-def _build_source_frame_cached(
+def _build_source_base_frame_cached(
     dataset_token: str,
     countries_key: tuple[str, ...],
     price_country: str,
     target_period: str,
     time_range_key: tuple[tuple[str, str], ...],
-    sales_mode: str,
     segment: str,
     fuel_type: str,
     trend_window_months: int,
@@ -641,31 +671,37 @@ def _build_source_frame_cached(
     available_periods = _available_periods(columns)
     resolved_period = _resolve_period(target_period or None, available_periods)
     custom_periods = _normalize_period_range(available_periods, time_range, resolved_period)
-    sales_periods, sales_mode_label, sales_metric_label = _resolve_positioning_sales_window(
-        available_periods,
-        resolved_period,
-        sales_mode,
-        custom_periods,
-    )
-    prior_sales_periods = [
-        _shift_period(period, -12)
-        for period in sales_periods
-        if _shift_period(period, -12) in available_periods
-    ]
     trend_periods = _window_periods(
         available_periods,
         resolved_period,
         trend_window_months,
     )
+    read_periods: list[str] = []
+    for mode in ("month", "ytd", "rolling12"):
+        sales_periods, _, _ = _resolve_positioning_sales_window(
+            available_periods,
+            resolved_period,
+            mode,
+            custom_periods,
+        )
+        read_periods.extend(sales_periods)
+        read_periods.extend(
+            shifted
+            for period in sales_periods
+            if (shifted := _shift_period(period, -12)) in available_periods
+        )
+    read_periods.extend(trend_periods)
     month_columns = [
         _period_to_month_column(period)
-        for period in [*trend_periods, *sales_periods, *prior_sales_periods]
+        for period in list(dict.fromkeys(read_periods))
     ]
 
     country_options = _country_options(dataset_token)
     selected_countries = _resolve_country_list(list(countries_key), country_options)
     selected_price_country = _resolve_price_country(price_country or None, country_options)
     selected_country_values = [item["value"] for item in selected_countries]
+    segment_key = _normalize_segment_key(segment or DEFAULT_SEGMENT)
+    fuel_key = _normalize_powertrain(fuel_type or DEFAULT_FUEL)
 
     selected_columns = [
         columns.country_value,
@@ -691,11 +727,13 @@ def _build_source_frame_cached(
     selected_columns = list(dict.fromkeys(selected_columns))
 
     dataset = repo._open_dataset()
-    filter_expression = None
+    pushdown_filters: dict[str, list[str]] = {
+        columns.segment: _segment_filter_candidates(segment or DEFAULT_SEGMENT),
+        columns.powertrain: [fuel_key],
+    }
     if 0 < len(selected_country_values) < len(country_options):
-        filter_expression = repo._build_filter_expression(
-            {columns.country_value: selected_country_values}
-        )
+        pushdown_filters[columns.country_value] = selected_country_values
+    filter_expression = repo._build_filter_expression(pushdown_filters)
     table = (
         dataset.to_table(columns=selected_columns, filter=filter_expression)
         if filter_expression is not None
@@ -753,30 +791,20 @@ def _build_source_frame_cached(
         if columns.msrp and columns.msrp in frame.columns
         else 0.0
     )
-    sales_columns = [_period_to_month_column(period) for period in sales_periods]
-    prior_sales_columns = [_period_to_month_column(period) for period in prior_sales_periods]
-    frame["__sales"] = _series_sum(frame, sales_columns)
-    frame["__prior_sales"] = _series_sum(frame, prior_sales_columns)
 
-    segment_key = _normalize_segment_key(segment or DEFAULT_SEGMENT)
-    fuel_key = _normalize_powertrain(fuel_type or DEFAULT_FUEL)
+    frame["__available_sales"] = _series_sum(frame, month_columns)
     frame = frame[
         (frame["__brand"] != "")
         & (frame["__model"] != "")
-        & ((frame["__sales"] > 0) | (frame["__prior_sales"] > 0))
+        & (frame["__available_sales"] > 0)
         & (frame["__segment_raw"].map(_normalize_segment_key) == segment_key)
         & (frame["__powertrain"] == fuel_key)
-    ].copy()
-    price_frame = frame[
-        (frame["__country_value"] == selected_price_country["value"])
-        & (frame["__sales"] > 0)
     ].copy()
 
     return {
         "columns": columns,
         "specColumns": spec_columns,
-        "frame": frame,
-        "priceFrame": price_frame,
+        "baseFrame": frame,
         "countryOptions": country_options,
         "selectedCountries": selected_countries,
         "priceCountry": selected_price_country,
@@ -784,13 +812,45 @@ def _build_source_frame_cached(
         "resolvedPeriod": resolved_period,
         "latestPeriod": available_periods[-1],
         "trendPeriods": trend_periods,
+        "customPeriods": custom_periods,
+        "selectedSegment": segment or DEFAULT_SEGMENT,
+        "selectedFuelType": fuel_key,
+    }
+
+
+def _derive_source_frame_for_sales_window(base: dict[str, Any], sales_mode: str) -> dict[str, Any]:
+    available_periods: list[str] = base["availablePeriods"]
+    resolved_period: str = base["resolvedPeriod"]
+    custom_periods: list[str] | None = base["customPeriods"]
+    sales_periods, sales_mode_label, sales_metric_label = _resolve_positioning_sales_window(
+        available_periods,
+        resolved_period,
+        sales_mode,
+        custom_periods,
+    )
+    prior_sales_periods = [
+        shifted
+        for period in sales_periods
+        if (shifted := _shift_period(period, -12)) in available_periods
+    ]
+    sales_columns = [_period_to_month_column(period) for period in sales_periods]
+    prior_sales_columns = [_period_to_month_column(period) for period in prior_sales_periods]
+    frame = base["baseFrame"].copy()
+    frame["__sales"] = _series_sum(frame, sales_columns)
+    frame["__prior_sales"] = _series_sum(frame, prior_sales_columns)
+    frame = frame[(frame["__sales"] > 0) | (frame["__prior_sales"] > 0)].copy()
+    price_frame = frame[
+        (frame["__country_value"] == base["priceCountry"]["value"])
+        & (frame["__sales"] > 0)
+    ].copy()
+    return {
+        **base,
+        "frame": frame,
+        "priceFrame": price_frame,
         "salesPeriods": sales_periods,
         "priorSalesPeriods": prior_sales_periods,
         "salesModeLabel": sales_mode_label,
         "salesMetricLabel": sales_metric_label,
-        "customPeriods": custom_periods,
-        "selectedSegment": segment or DEFAULT_SEGMENT,
-        "selectedFuelType": fuel_key,
     }
 
 
@@ -1018,17 +1078,31 @@ def _build_trend_series(
     model_rows: list[dict[str, Any]],
     trend_periods: list[str],
 ) -> list[dict[str, Any]]:
+    pairs = _source_pairs(model_rows)
+    period_columns = [
+        column
+        for column in dict.fromkeys(_period_to_month_column(period) for period in trend_periods)
+        if column in frame.columns
+    ]
+    grouped = pd.DataFrame()
+    if pairs and period_columns and not frame.empty:
+        working = _filter_frame_for_pairs(frame, pairs)
+        if not working.empty:
+            grouped = working.groupby(["__brand", "__model"], dropna=False, sort=False)[period_columns].sum()
+
     series: list[dict[str, Any]] = []
     for row in model_rows:
         source_brand, source_model = _source_pair(row)
-        group = frame[
-            (frame["__brand"] == source_brand)
-            & (frame["__model"] == source_model)
-        ]
+        values = None
+        if not grouped.empty:
+            try:
+                values = grouped.loc[(source_brand, source_model)]
+            except KeyError:
+                values = None
         points: list[dict[str, Any]] = []
         for period in trend_periods:
             column = _period_to_month_column(period)
-            volume = float(pd.to_numeric(group[column], errors="coerce").fillna(0.0).sum()) if column in group.columns else 0.0
+            volume = float(values.get(column, 0.0)) if values is not None and column in period_columns else 0.0
             points.append({
                 "period": period,
                 "label": _short_period_label(period),
@@ -1268,6 +1342,28 @@ def _build_country_ranking_trace_map(
     return result
 
 
+def _filter_country_ranking_trace_map(
+    trace_map: dict[str, Any],
+    model_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    selected_pairs = set(_source_pairs(model_rows))
+    result: dict[str, Any] = {}
+    for key, payload in trace_map.items():
+        filtered_series = []
+        for series in payload.get("series", []):
+            pair = (
+                str(series.get("sourceBrand") or series.get("brand") or ""),
+                str(series.get("sourceModel") or series.get("model") or ""),
+            )
+            if pair in selected_pairs:
+                filtered_series.append(series)
+        result[key] = {
+            **payload,
+            "series": filtered_series,
+        }
+    return result
+
+
 def _build_country_distribution(
     frame: pd.DataFrame,
     model_rows: list[dict[str, Any]],
@@ -1275,10 +1371,8 @@ def _build_country_distribution(
 ) -> dict[str, Any]:
     if frame.empty or not model_rows:
         return {"countries": [], "items": []}
-    selected_labels = {_source_pair(row) for row in model_rows}
-    working = frame[
-        frame.apply(lambda item: (item["__brand"], item["__model"]) in selected_labels, axis=1)
-    ].copy()
+    pairs = _source_pairs(model_rows)
+    working = _filter_frame_for_pairs(frame, pairs).copy()
     working = working[working["__sales"] > 0].copy()
     if working.empty:
         return {"countries": [], "items": []}
@@ -1289,33 +1383,43 @@ def _build_country_distribution(
     )
     all_countries = [str(country) for country in country_totals.index if float(country_totals.loc[country]) > 0]
     max_countries = max(0, int(country_limit or 0))
+    drive_grouped = (
+        working.groupby(["__brand", "__model", "__country_label", "__drive_detail"], dropna=False, sort=False)["__sales"]
+        .sum()
+        .reset_index(name="sales")
+    )
+    country_grouped = (
+        drive_grouped.groupby(["__brand", "__model", "__country_label"], dropna=False, sort=False)["sales"]
+        .sum()
+        .reset_index(name="sales")
+        .sort_values(["__brand", "__model", "sales", "__country_label"], ascending=[True, True, False, True])
+    )
+    countries_by_pair: dict[tuple[str, str], list[tuple[str, float]]] = {}
+    for item in country_grouped.to_dict("records"):
+        pair = (str(item["__brand"]), str(item["__model"]))
+        countries_by_pair.setdefault(pair, []).append((str(item["__country_label"]), float(item["sales"])))
+    drive_by_pair_country: dict[tuple[str, str, str], dict[str, float]] = {}
+    for item in drive_grouped.to_dict("records"):
+        key = (str(item["__brand"]), str(item["__model"]), str(item["__country_label"]))
+        drive_by_pair_country.setdefault(key, {"front": 0.0, "rear": 0.0, "4x4": 0.0, "other": 0.0})[
+            str(item["__drive_detail"])
+        ] = float(item["sales"])
+
     items: list[dict[str, Any]] = []
     for row in model_rows:
         source_brand, source_model = _source_pair(row)
-        model_group = working[
-            (working["__brand"] == source_brand)
-            & (working["__model"] == source_model)
-        ]
-        model_country_totals = (
-            model_group.groupby("__country_label")["__sales"]
-            .sum()
-            .sort_values(ascending=False)
-        )
-        countries = [
-            str(country)
-            for country in model_country_totals.index
-            if float(model_country_totals.loc[country]) > 0
-        ]
+        countries = countries_by_pair.get((source_brand, source_model), [])
         if max_countries > 0:
             countries = countries[:max_countries]
         country_items: list[dict[str, Any]] = []
-        for country in countries:
-            country_group = model_group[model_group["__country_label"] == country]
-            total = float(country_group["__sales"].sum())
+        for country, total in countries:
             country_items.append({
                 "country": country,
                 "sales": total,
-                "driveMix": _mix_payload(country_group, "__drive_detail", ("front", "rear", "4x4", "other")),
+                "driveMix": drive_by_pair_country.get(
+                    (source_brand, source_model, country),
+                    {"front": 0.0, "rear": 0.0, "4x4": 0.0, "other": 0.0},
+                ),
             })
         items.append({
             "brand": row["brand"],
@@ -1538,33 +1642,30 @@ def _query_hero_product_deck_impl(
     top_distribution = _build_country_distribution(frame, top_rows, country_limit)
     hero_distribution = _build_country_distribution(frame, hero_rows, country_limit)
     if country_rank_scope == "selected":
-        top_rank_countries = [selected_tracking_country]
-        hero_rank_countries = [selected_tracking_country]
+        rank_countries = [selected_tracking_country]
     else:
-        top_rank_countries = _country_rank_trace_options(
+        rank_countries = _country_rank_trace_options(
             [option["label"] for option in source["countryOptions"]],
             source["countryOptions"],
             selected_tracking_country,
         )
-        hero_rank_countries = _country_rank_trace_options(
-            [option["label"] for option in source["countryOptions"]],
-            source["countryOptions"],
-            selected_tracking_country,
-        )
-    top_country_rankings = _build_country_ranking_trace_map(
+    ranking_rows_for_traces = []
+    seen_trace_pairs: set[tuple[str, str]] = set()
+    for row in [*top_rows, *hero_rows]:
+        pair = _source_pair(row)
+        if pair in seen_trace_pairs:
+            continue
+        ranking_rows_for_traces.append(row)
+        seen_trace_pairs.add(pair)
+    combined_country_rankings = _build_country_ranking_trace_map(
         frame,
-        top_rows,
+        ranking_rows_for_traces,
         source["trendPeriods"],
-        top_rank_countries,
+        rank_countries,
         ranking_limit,
     )
-    hero_country_rankings = _build_country_ranking_trace_map(
-        frame,
-        hero_rows,
-        source["trendPeriods"],
-        hero_rank_countries,
-        ranking_limit,
-    )
+    top_country_rankings = _filter_country_ranking_trace_map(combined_country_rankings, top_rows)
+    hero_country_rankings = _filter_country_ranking_trace_map(combined_country_rankings, hero_rows)
     selected_tracking_key = selected_tracking_country["label"] or selected_tracking_country["value"]
     top_selected_country_ranking = top_country_rankings.get(selected_tracking_key)
     if top_selected_country_ranking is None:
