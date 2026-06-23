@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { animate } from "animejs";
 import { usePresence, type PresenceUser } from "../hooks/usePresence";
 
 const W = 160;
@@ -16,6 +15,18 @@ const ROLE_DOT: Record<string, string> = {
   viewer: "#3b82f6",
   anonymous: "#64748b",
 };
+
+let presenceAnimationPromise: Promise<typeof import("animejs")> | null = null;
+
+function loadPresenceAnimation() {
+  if (!presenceAnimationPromise) {
+    presenceAnimationPromise = import("animejs").catch((error) => {
+      presenceAnimationPromise = null;
+      throw error;
+    });
+  }
+  return presenceAnimationPromise;
+}
 
 function edgeSnap(x: number) {
   const margin = VISIBLE_HINT - W;
@@ -35,6 +46,7 @@ export function PresenceWidget() {
     y: INITIAL_TOP,
   }));
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const hasRenderedRef = useRef(false);
   const dragRef = useRef<{
     sx: number; sy: number; ox: number; oy: number; moved: boolean;
   } | null>(null);
@@ -61,13 +73,25 @@ export function PresenceWidget() {
   /* spring expand / collapse */
   useEffect(() => {
     if (!rootRef.current) return;
-    try {
-      animate(rootRef.current, {
-        height: totalH,
-        duration: 350,
-        ease: expanded ? "outBack" : "inOutCubic",
-      });
-    } catch { /* decorative */ }
+    if (!hasRenderedRef.current) {
+      hasRenderedRef.current = true;
+      return;
+    }
+    let cancelled = false;
+    const root = rootRef.current;
+    void loadPresenceAnimation().then(({ animate }) => {
+      if (cancelled) return;
+      try {
+        animate(root, {
+          height: totalH,
+          duration: 350,
+          ease: expanded ? "outBack" : "inOutCubic",
+        });
+      } catch { /* decorative */ }
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, [expanded, totalH]);
 
   /* unsnap on expand — slide to nearest edge */
