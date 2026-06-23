@@ -34,7 +34,10 @@ def request_json(method: str, path: str, payload: dict | None = None, timeout: f
         method=method,
     )
     with urllib.request.urlopen(req, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+        body = response.read().decode("utf-8").strip()
+        if not body:
+            return {}
+        return json.loads(body)
 
 
 def curl_check() -> bool:
