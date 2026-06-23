@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
+from urllib.parse import urlparse
 
 # Ensure jato_scraper is importable
 _script_dir = str(Path(__file__).resolve().parent)
@@ -151,6 +152,7 @@ def _classify_dryrun_failure(
     except (TypeError, ValueError):
         extracted = 0
     error_lower = error.lower()
+    source_url = str(src.get("sourceUrl") or src.get("source_url") or "")
     final_url = str(src.get("finalUrl") or src.get("final_url") or "")
     http_status_raw = src.get("httpStatus") or src.get("http_status")
     try:
@@ -180,6 +182,18 @@ def _classify_dryrun_failure(
         return {"failureReason": "http_error", "recommendedStrategy": "check_source_url_or_site_status", "severity": "error"}
     if valid > 0 and status not in {"empty", "error", "exception"}:
         return {"failureReason": None, "recommendedStrategy": None, "severity": "info"}
+    if _looks_like_discontinued_model_url(final_url):
+        return {
+            "failureReason": "model_not_currently_available",
+            "recommendedStrategy": "exclude_or_replace_discontinued_model",
+            "severity": "info",
+        }
+    if _redirected_to_brand_homepage(source_url, final_url):
+        return {
+            "failureReason": "source_url_redirected_to_homepage",
+            "recommendedStrategy": "update_source_url_or_confirm_model_availability",
+            "severity": "warning",
+        }
     if (
         "could not resolve host" in error_lower
         or "failed to resolve" in error_lower
@@ -241,6 +255,41 @@ def _classify_dryrun_failure(
         return {"failureReason": "validation_rejected_all", "recommendedStrategy": "review_validation_rules", "severity": "warning"}
 
     return {"failureReason": "unknown", "recommendedStrategy": "diagnose_with_msrp_page_analyzer", "severity": "info"}
+
+
+def _looks_like_discontinued_model_url(url: str) -> bool:
+    """Detect official out-of-range model pages that should not be treated as selector bugs."""
+    normalized = url.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "ikke-tilgjengelig",
+            "ikke_tilgjengelig",
+            "ikke-lenger-tilgjengelig",
+            "not-available",
+            "not_available",
+            "discontinued",
+            "utgar",
+            "utgår",
+            "utga",
+            "utgå",
+        )
+    )
+
+
+def _redirected_to_brand_homepage(source_url: str, final_url: str) -> bool:
+    """Return True when a model source resolves to the same host's homepage."""
+    if not source_url or not final_url:
+        return False
+    source = urlparse(source_url)
+    final = urlparse(final_url)
+    if not source.netloc or not final.netloc:
+        return False
+    if source.netloc.lower() != final.netloc.lower():
+        return False
+    source_path = (source.path or "/").rstrip("/") or "/"
+    final_path = (final.path or "/").rstrip("/") or "/"
+    return source_path != "/" and final_path == "/"
 
 
 def _is_passing_result(result: dict) -> bool:

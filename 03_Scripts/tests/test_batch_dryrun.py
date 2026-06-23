@@ -149,6 +149,44 @@ def test_classify_missing_dynamic_price_as_retryable() -> None:
     )
 
 
+def test_classify_discontinued_model_url_as_business_resolution() -> None:
+    classification = batch_dryrun._classify_dryrun_failure(
+        {
+            "status": "empty",
+            "valid": 0,
+            "extracted": 0,
+            "sourceUrl": "https://www.mercedes-benz.no/passengercars/models/suv/eqb/overview.html",
+            "finalUrl": "https://www.mercedes-benz.no/our-brands/eqb-ikke-tilgjengelig/",
+            "httpStatus": 200,
+        }
+    )
+
+    assert classification == {
+        "failureReason": "model_not_currently_available",
+        "recommendedStrategy": "exclude_or_replace_discontinued_model",
+        "severity": "info",
+    }
+
+
+def test_classify_model_page_redirected_to_homepage() -> None:
+    classification = batch_dryrun._classify_dryrun_failure(
+        {
+            "status": "empty",
+            "valid": 0,
+            "extracted": 0,
+            "sourceUrl": "https://www.toyota.no/nybil/yaris-cross",
+            "finalUrl": "https://www.toyota.no/",
+            "httpStatus": 200,
+        }
+    )
+
+    assert classification == {
+        "failureReason": "source_url_redirected_to_homepage",
+        "recommendedStrategy": "update_source_url_or_confirm_model_availability",
+        "severity": "warning",
+    }
+
+
 def test_source_result_retryable_for_timeout_only() -> None:
     assert batch_dryrun._source_result_is_retryable(
         {"status": "empty", "valid": 0, "failureReason": "http_timeout"},
