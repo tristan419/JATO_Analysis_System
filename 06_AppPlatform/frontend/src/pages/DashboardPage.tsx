@@ -2,8 +2,6 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Link } from "react-router-dom";
 import type { Data, Layout, PlotMouseEvent } from "plotly.js";
 
-import { animate } from "animejs";
-
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { CollapsibleFilterSidebar } from "../components/CollapsibleFilterSidebar";
@@ -66,6 +64,18 @@ const RvFinanceDashboard = lazy(() =>
 
 const DASHBOARD_DEFERRED_FETCH_DELAY_MS = 6_000;
 const DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS = 4_000;
+
+let dashboardAnimationPromise: Promise<typeof import("animejs")> | null = null;
+
+function loadDashboardAnimation() {
+  if (!dashboardAnimationPromise) {
+    dashboardAnimationPromise = import("animejs").catch((error) => {
+      dashboardAnimationPromise = null;
+      throw error;
+    });
+  }
+  return dashboardAnimationPromise;
+}
 
 type DashboardIdleWindow = Window & typeof globalThis & {
   requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
@@ -1068,16 +1078,26 @@ export function DashboardPage() {
   }, [columns.length, dashboardCacheSnapshot]);
 
   useEffect(() => {
-    try {
-      animate(".dashboard-hero-head", {
-        opacity: [0, 1],
-        translateY: [12, 0],
-        duration: 600,
-        ease: "outExpo",
-      });
-    } catch {
-      /* decorative only */
-    }
+    let cancelled = false;
+    const cancelIdle = scheduleDashboardIdlePreload(() => {
+      void loadDashboardAnimation().then(({ animate }) => {
+        if (cancelled) return;
+        try {
+          animate(".dashboard-hero-head", {
+            opacity: [0, 1],
+            translateY: [12, 0],
+            duration: 600,
+            ease: "outExpo",
+          });
+        } catch {
+          /* decorative only */
+        }
+      }).catch(() => undefined);
+    });
+    return () => {
+      cancelled = true;
+      cancelIdle();
+    };
   }, []);
 
   /* palette helper */
