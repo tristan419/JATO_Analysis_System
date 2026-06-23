@@ -182,7 +182,7 @@ jobs:
           REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
           ls -lh "$ARCHIVE_PATH"
 
-          timeout 600s scp -q -P "$SSH_PORT" \
+          timeout 180s scp -q -P "$SSH_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
@@ -236,7 +236,7 @@ jobs:
           REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
           ls -lh "$ARCHIVE_PATH"
 
-          timeout 600s sshpass -p "$SSH_PASSWORD" \
+          timeout 180s sshpass -p "$SSH_PASSWORD" \
             scp -q -P "$SSH_PORT" \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
@@ -300,41 +300,6 @@ jobs:
           chmod 600 ~/.ssh/github_actions_tencent_key
 
           DEPLOY_SHORT_SHA="$(git rev-parse --short=8 HEAD)"
-          ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"
-          REMOTE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
-          REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.${GITHUB_RUN_ID:-manual}.uploading"
-          if [ -f "$ARCHIVE_PATH" ]; then
-            echo "[INFO] Ensuring deploy archive is present on SSH target"
-            timeout 600s scp -q -P "$SSH_PORT" \
-              -o BatchMode=yes \
-              -o StrictHostKeyChecking=no \
-              -o UserKnownHostsFile=/dev/null \
-              -o ConnectTimeout=20 \
-              -o ConnectionAttempts=2 \
-              -o ServerAliveInterval=10 \
-              -o ServerAliveCountMax=2 \
-              -o Compression=yes \
-              -o IPQoS=none \
-              -o HostKeyAlias="$SSH_HOST" \
-              -i ~/.ssh/github_actions_tencent_key \
-              "$ARCHIVE_PATH" \
-              "$SSH_USER@$SSH_CONNECT_HOST:$REMOTE_ARCHIVE_TMP"
-            timeout 180s ssh -T -p "$SSH_PORT" \
-              -o BatchMode=yes \
-              -o StrictHostKeyChecking=no \
-              -o UserKnownHostsFile=/dev/null \
-              -o ConnectTimeout=20 \
-              -o ConnectionAttempts=2 \
-              -o ServerAliveInterval=10 \
-              -o ServerAliveCountMax=2 \
-              -o IPQoS=none \
-              -o HostKeyAlias="$SSH_HOST" \
-              -i ~/.ssh/github_actions_tencent_key \
-              "$SSH_USER@$SSH_CONNECT_HOST" \
-              "mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"
-          else
-            echo "[WARN] Deploy archive missing on runner; server will use sparse Git fallback"
-          fi
           REMOTE_EXPORTS="export DEPLOY_SERVER_NAME=$(printf '%q' "$DEPLOY_SERVER_NAME"); "
           REMOTE_EXPORTS+="export DEPLOY_ENABLE_HTTPS=$(printf '%q' "$DEPLOY_ENABLE_HTTPS"); "
           REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
