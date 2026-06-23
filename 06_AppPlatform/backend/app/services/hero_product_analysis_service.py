@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any
 
 import pandas as pd
@@ -439,6 +440,12 @@ def _build_price_payload(
     }
 
 
+def _time_range_cache_key(time_range: dict[str, str] | None) -> tuple[tuple[str, str], ...]:
+    if not time_range:
+        return ()
+    return tuple(sorted((str(key), str(value)) for key, value in time_range.items()))
+
+
 def _build_source_frame(
     *,
     countries: list[str],
@@ -450,11 +457,37 @@ def _build_source_frame(
     fuel_type: str,
     trend_window_months: int,
 ) -> dict[str, Any]:
+    return _build_source_frame_cached(
+        repo.current_dataset_token(),
+        tuple(countries),
+        price_country or "",
+        target_period or "",
+        _time_range_cache_key(time_range),
+        sales_mode or "",
+        segment or "",
+        fuel_type or "",
+        int(trend_window_months),
+    )
+
+
+@lru_cache(maxsize=16)
+def _build_source_frame_cached(
+    dataset_token: str,
+    countries_key: tuple[str, ...],
+    price_country: str,
+    target_period: str,
+    time_range_key: tuple[tuple[str, str], ...],
+    sales_mode: str,
+    segment: str,
+    fuel_type: str,
+    trend_window_months: int,
+) -> dict[str, Any]:
+    time_range = dict(time_range_key) if time_range_key else None
     columns = _get_columns()
     all_columns = repo.list_columns()
     spec_columns = _resolve_spec_columns(all_columns)
     available_periods = _available_periods(columns)
-    resolved_period = _resolve_period(target_period, available_periods)
+    resolved_period = _resolve_period(target_period or None, available_periods)
     custom_periods = _normalize_period_range(available_periods, time_range, resolved_period)
     sales_periods, sales_mode_label, sales_metric_label = _resolve_positioning_sales_window(
         available_periods,
@@ -477,9 +510,9 @@ def _build_source_frame(
         for period in [*trend_periods, *sales_periods, *prior_sales_periods]
     ]
 
-    country_options = _country_options(repo.current_dataset_token())
-    selected_countries = _resolve_country_list(countries, country_options)
-    selected_price_country = _resolve_price_country(price_country, country_options)
+    country_options = _country_options(dataset_token)
+    selected_countries = _resolve_country_list(list(countries_key), country_options)
+    selected_price_country = _resolve_price_country(price_country or None, country_options)
     selected_country_values = [item["value"] for item in selected_countries]
 
     selected_columns = [
@@ -1010,13 +1043,20 @@ def _build_country_ranking_trace_map(
             for country in countries
         }
 
+    country_values = {str(country["value"]) for country in countries if str(country.get("value") or "").strip()}
+    ranking_frame = (
+        frame[frame["__country_value"].astype(str).isin(country_values)].copy()
+        if country_values
+        else frame
+    )
+
     rankings_by_country: dict[str, dict[str, dict[tuple[str, str], dict[str, Any]]]] = {}
     for period in trend_periods:
         column = _period_to_month_column(period)
-        if column not in frame.columns:
+        if column not in ranking_frame.columns:
             continue
         grouped = (
-            frame.groupby(["__country_value", "__brand", "__model"], dropna=False)[column]
+            ranking_frame.groupby(["__country_value", "__brand", "__model"], dropna=False)[column]
             .sum()
             .reset_index(name="sales")
         )
@@ -1173,6 +1213,7 @@ def query_hero_product_deck(
     ranking_limit: int,
     country_limit: int,
     trend_window_months: int,
+    country_rank_scope: str,
     top_models: list[str],
     hero_models: list[str],
 ) -> dict[str, Any]:
@@ -1228,16 +1269,20 @@ def query_hero_product_deck(
     ]
     top_distribution = _build_country_distribution(frame, top_rows, country_limit)
     hero_distribution = _build_country_distribution(frame, hero_rows, country_limit)
-    top_rank_countries = _country_rank_trace_options(
-        [option["label"] for option in source["countryOptions"]],
-        source["countryOptions"],
-        selected_tracking_country,
-    )
-    hero_rank_countries = _country_rank_trace_options(
-        [option["label"] for option in source["countryOptions"]],
-        source["countryOptions"],
-        selected_tracking_country,
-    )
+    if country_rank_scope == "selected":
+        top_rank_countries = [selected_tracking_country]
+        hero_rank_countries = [selected_tracking_country]
+    else:
+        top_rank_countries = _country_rank_trace_options(
+            [option["label"] for option in source["countryOptions"]],
+            source["countryOptions"],
+            selected_tracking_country,
+        )
+        hero_rank_countries = _country_rank_trace_options(
+            [option["label"] for option in source["countryOptions"]],
+            source["countryOptions"],
+            selected_tracking_country,
+        )
     top_country_rankings = _build_country_ranking_trace_map(
         frame,
         top_rows,

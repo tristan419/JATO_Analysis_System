@@ -1170,6 +1170,7 @@ export interface HeroProductDeckRequest {
   ranking_limit?: number;
   country_limit?: number;
   trend_window_months?: number;
+  country_rank_scope?: "selected" | "all";
   top_models?: string[];
   hero_models?: string[];
 }
