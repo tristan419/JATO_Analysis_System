@@ -4,6 +4,10 @@
 /build-meta.json
   Cache-Control: no-cache, no-store, must-revalidate
 
+/route-probe.txt
+  Cache-Control: no-cache, no-store, must-revalidate
+  Timing-Allow-Origin: *
+
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin

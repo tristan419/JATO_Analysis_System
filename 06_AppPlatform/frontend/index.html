@@ -5,6 +5,152 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>JATO App Platform</title>
+    <script>
+      (function () {
+        var cnHost = "www.ojeur.cloud";
+        var intlHost = "intl.ojeur.cloud";
+        var host = window.location.hostname;
+        if (host !== cnHost && host !== intlHost) return;
+
+        var params = new URLSearchParams(window.location.search);
+        var route = params.get("route");
+        var routeChecked = params.get("routeChecked") === "1";
+        var hasAuthParams = params.has("token") || params.has("oauthError") || params.has("code");
+        var decisionKey = "jato_route_decision_v1";
+        var manualKey = "jato_route_manual_v1";
+        var autoTtlMs = 10 * 60 * 1000;
+        var manualTtlMs = 24 * 60 * 60 * 1000;
+        var timeoutMs = 1800;
+        var redirectMarginMs = 450;
+
+        function cleanParam(name) {
+          if (!params.has(name)) return;
+          params.delete(name);
+          var next = window.location.pathname;
+          var query = params.toString();
+          if (query) next += "?" + query;
+          next += window.location.hash;
+          window.history.replaceState({}, "", next);
+        }
+
+        function saveDecision(key, target, ttlMs) {
+          try {
+            window.localStorage.setItem(key, JSON.stringify({
+              target: target,
+              expiresAt: Date.now() + ttlMs
+            }));
+          } catch (err) {}
+        }
+
+        function readDecision(key) {
+          try {
+            var raw = window.localStorage.getItem(key);
+            if (!raw) return null;
+            var parsed = JSON.parse(raw);
+            if (!parsed || parsed.expiresAt < Date.now()) {
+              window.localStorage.removeItem(key);
+              return null;
+            }
+            return parsed.target === "intl" || parsed.target === "cn" ? parsed.target : null;
+          } catch (err) {
+            return null;
+          }
+        }
+
+        function targetHost(target) {
+          return target === "intl" ? intlHost : cnHost;
+        }
+
+        function redirectTo(target) {
+          var nextHost = targetHost(target);
+          if (nextHost === host) return;
+          var url = new URL(window.location.href);
+          url.protocol = "https:";
+          url.hostname = nextHost;
+          url.searchParams.set("routeChecked", "1");
+          window.location.replace(url.toString());
+        }
+
+        if (route === "stay") {
+          cleanParam("route");
+          return;
+        }
+        if (route === "cn" || route === "intl") {
+          saveDecision(manualKey, route, manualTtlMs);
+          cleanParam("route");
+          redirectTo(route);
+          return;
+        }
+        if (route === "auto") {
+          try {
+            window.localStorage.removeItem(manualKey);
+            window.localStorage.removeItem(decisionKey);
+          } catch (err) {}
+          cleanParam("route");
+        }
+        if (routeChecked) {
+          cleanParam("routeChecked");
+          return;
+        }
+        if (hasAuthParams) return;
+
+        var manualDecision = readDecision(manualKey);
+        if (manualDecision) {
+          redirectTo(manualDecision);
+          return;
+        }
+        var cachedDecision = readDecision(decisionKey);
+        if (cachedDecision) {
+          redirectTo(cachedDecision);
+          return;
+        }
+
+        function probe(target) {
+          var startedAt = performance.now();
+          var url = "https://" + targetHost(target) + "/route-probe.txt?ts=" + Date.now();
+          return new Promise(function (resolve) {
+            var settled = false;
+            var timer = window.setTimeout(function () {
+              if (settled) return;
+              settled = true;
+              resolve({ target: target, ok: false, ms: timeoutMs });
+            }, timeoutMs);
+            fetch(url, {
+              cache: "no-store",
+              credentials: "omit",
+              mode: "no-cors"
+            }).then(function () {
+              if (settled) return;
+              settled = true;
+              window.clearTimeout(timer);
+              resolve({ target: target, ok: true, ms: performance.now() - startedAt });
+            }).catch(function () {
+              if (settled) return;
+              settled = true;
+              window.clearTimeout(timer);
+              resolve({ target: target, ok: false, ms: timeoutMs });
+            });
+          });
+        }
+
+        Promise.all([probe("cn"), probe("intl")]).then(function (results) {
+          var cn = results[0];
+          var intl = results[1];
+          var currentTarget = host === intlHost ? "intl" : "cn";
+          var nextTarget = currentTarget;
+          if (cn.ok && intl.ok) {
+            if (intl.ms + redirectMarginMs < cn.ms) nextTarget = "intl";
+            if (cn.ms + redirectMarginMs < intl.ms) nextTarget = "cn";
+          } else if (intl.ok && !cn.ok) {
+            nextTarget = "intl";
+          } else if (cn.ok && !intl.ok) {
+            nextTarget = "cn";
+          }
+          saveDecision(decisionKey, nextTarget, autoTtlMs);
+          redirectTo(nextTarget);
+        }).catch(function () {});
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
