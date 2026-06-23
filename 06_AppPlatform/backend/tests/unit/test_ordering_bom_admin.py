@@ -13,7 +13,11 @@ from app.db.models import (
 )
 from app.infra import order_genius_repository as repo
 from app.services import order_genius_service
-from app.services.ordering_normalization import normalize_brand, normalize_brand_text
+from app.services.ordering_normalization import (
+    infer_colour_tier,
+    normalize_brand,
+    normalize_brand_text,
+)
 
 
 class _ScalarResult:
@@ -54,6 +58,13 @@ def test_normalize_jaecoo_brand_variants() -> None:
     assert normalize_brand("JEACOO") == "JAECOO"
     assert normalize_brand("jecoo") == "JAECOO"
     assert normalize_brand_text("JEACOO JAECOO7") == "JAECOO JAECOO7"
+
+
+def test_infer_colour_tier_handles_dual_swatch_and_special_finish() -> None:
+    assert infer_colour_tier("Carbon black / khaki white") == "dual"
+    assert infer_colour_tier("Carbon black + grey roof") == "dual"
+    assert infer_colour_tier("Aviation silver", colour_hex="#C8C0B8|#111111") == "dual"
+    assert infer_colour_tier("Matte black (Black Edition)") == "special"
 
 
 def _legacy_jaecoo_sku() -> SimpleNamespace:

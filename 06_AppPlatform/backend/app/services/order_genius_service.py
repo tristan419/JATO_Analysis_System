@@ -75,6 +75,8 @@ def _effective_colour_tier(sku: object) -> str:
             getattr(sku, "exterior_color_name", None),
             getattr(sku, "exterior_color_type", None),
             getattr(sku, "edition_tag", None),
+            getattr(sku, "exterior_color_code", None),
+            getattr(sku, "colour_hex", None),
         ),
     )
 
@@ -206,6 +208,8 @@ def _assign_fob_based_tiers(
                     sku.exterior_color_name if sku else None,
                     sku.exterior_color_type if sku else None,
                     sku.edition_tag if sku else None,
+                    sku.exterior_color_code if sku else None,
+                    sku.colour_hex if sku else None,
                 ),
                 fob_tier,
             )

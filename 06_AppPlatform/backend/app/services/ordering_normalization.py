@@ -50,27 +50,36 @@ def infer_colour_tier(
     colour_name: object | None,
     colour_type: object | None = None,
     edition_tag: object | None = None,
+    colour_code: object | None = None,
+    colour_hex: object | None = None,
 ) -> str:
     """Infer the minimum paint tier from colour metadata."""
     name = clean_text(colour_name).lower()
     ctype = clean_text(colour_type).lower().replace("_", "-")
     edition = clean_text(edition_tag).lower()
+    code = clean_text(colour_code).lower()
+    hex_value = clean_text(colour_hex)
+    combined = " ".join(part for part in (name, ctype, edition, code) if part)
     if (
         edition
         or "black edition" in name
         or "matte" in name
+        or any(token in combined for token in ("matte", "pearl", "metallic", "special finish"))
         or ctype in {"special", "matte", "pearl", "metallic"}
     ):
         return "special"
+    has_dual_hex = "|" in hex_value and all(part.strip() for part in hex_value.split("|", 1))
     if (
         ctype in {"dual", "two-tone", "dual-tone", "dual tone", "bi-color", "bi-colour"}
-        or re.search(r"[/&／]", name)
-        or "双色" in name
-        or "dual" in name
-        or "two tone" in name
-        or "two-tone" in name
-        or "black roof" in name
-        or re.search(r"bi.?colou?r", name)
+        or has_dual_hex
+        or re.search(r"[/&／+＋]", combined)
+        or "双色" in combined
+        or "dual" in combined
+        or "two tone" in combined
+        or "two-tone" in combined
+        or "contrast roof" in combined
+        or "black roof" in combined
+        or re.search(r"bi.?colou?r", combined)
     ):
         return "dual"
     return "single"
