@@ -19,6 +19,7 @@ from app.core.config import (
     GROUPED_TIME_SERIES_CACHE_TTL_SECONDS,
     GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR,
     GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED,
+    GROUPED_TIME_SERIES_PREWARM_FILTERS,
     GROUPED_TIME_SERIES_PREWARM_GRAINS,
     GROUPED_TIME_SERIES_PREWARM_GROUP_BY,
     GROUPED_TIME_SERIES_PREWARM_SCOPES,
@@ -1323,29 +1324,44 @@ def warm_grouped_time_series_cache() -> dict[str, int]:
         for item in GROUPED_TIME_SERIES_PREWARM_SCOPES
         if item
     ] or ["viewer"]
+    filter_sets: list[dict[str, list[str]]] = []
+    seen_filter_keys: set[tuple[tuple[str, tuple[str, ...]], ...]] = set()
+    for filters in [{}, *GROUPED_TIME_SERIES_PREWARM_FILTERS]:
+        normalized_filters = _normalize_query_cache_filters(filters)
+        if normalized_filters in seen_filter_keys:
+            continue
+        seen_filter_keys.add(normalized_filters)
+        filter_sets.append(
+            {
+                column: list(values)
+                for column, values in normalized_filters
+            }
+        )
 
     for scope in dict.fromkeys(scopes):
         for grain in dict.fromkeys(grains):
             for group_by in dict.fromkeys(group_bys):
-                try:
-                    query_grouped_time_series(
-                        filters={},
-                        grain=grain,
-                        group_by=group_by,
-                        top_n=10,
-                        include_others=False,
-                        cache_scope=scope,
-                    )
-                    warmed += 1
-                except Exception as exc:  # pragma: no cover - startup warming must not fail the API
-                    failed += 1
-                    LOGGER.warning(
-                        "Grouped time-series prewarm failed for scope=%s grain=%s group_by=%s: %s",
-                        scope,
-                        grain,
-                        group_by,
-                        exc,
-                    )
+                for filters in filter_sets:
+                    try:
+                        query_grouped_time_series(
+                            filters=filters,
+                            grain=grain,
+                            group_by=group_by,
+                            top_n=10,
+                            include_others=False,
+                            cache_scope=scope,
+                        )
+                        warmed += 1
+                    except Exception as exc:  # pragma: no cover - startup warming must not fail the API
+                        failed += 1
+                        LOGGER.warning(
+                            "Grouped time-series prewarm failed for scope=%s grain=%s group_by=%s filters=%s: %s",
+                            scope,
+                            grain,
+                            group_by,
+                            filters,
+                            exc,
+                        )
     return {"warmed": warmed, "failed": failed}
 
 
