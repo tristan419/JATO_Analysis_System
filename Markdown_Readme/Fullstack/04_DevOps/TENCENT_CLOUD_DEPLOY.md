@@ -204,6 +204,8 @@ curl -sS https://www.ojeur.cloud/_deploy_status.txt | sed -n '/---google oauth p
 
 如果订阅站对腾讯云直连出口返回 403 或连接失败，部署脚本会先尝试直连，再通过服务器现有的本机 mihomo 代理 `http://127.0.0.1:7897` 重试下载订阅；可用 `MIHOMO_SUB_PROXY_URL` 覆盖这个代理地址。
 
+如果腾讯云和本机代理都无法下载订阅，GitHub Actions 会尽量在 Runner 侧用 `MIHOMO_SUB_URL` 生成预配置好的 mihomo config，并随部署包发送到服务器；服务器安装后会删除部署目录里的临时 config。Google OAuth 代理检测仍失败时，部署脚本会调用 `03_Scripts/deploy/select_mihomo_google_proxy.sh` 通过本机 mihomo controller 选择可访问 `oauth2.googleapis.com` 的节点。
+
 ```bash
 sudo install -d -m 700 /etc/mihomo
 sudo sh -c 'printf "%s\n" "$MIHOMO_SUB_URL" > /etc/mihomo/subscription_url'
