@@ -1,0 +1,8 @@
+name = "jato-google-oauth-relay"
+main = "worker.js"
+compatibility_date = "2026-06-23"
+workers_dev = true
+routes = [
+  { pattern = "www.ojeur.cloud/oauth-relay/*", zone_name = "ojeur.cloud" },
+  { pattern = "intl.ojeur.cloud/oauth-relay/*", zone_name = "ojeur.cloud" },
+]

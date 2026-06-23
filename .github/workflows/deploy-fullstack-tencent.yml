@@ -297,6 +297,8 @@ jobs:
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_ID }}'); "
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_SECRET=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_SECRET }}'); "
           REMOTE_EXPORTS+="export GOOGLE_OAUTH_PROXY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_PROXY_URL }}'); "
+          REMOTE_EXPORTS+="export GOOGLE_OAUTH_RELAY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_RELAY_URL }}'); "
+          REMOTE_EXPORTS+="export GOOGLE_OAUTH_RELAY_TOKEN=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_RELAY_TOKEN }}'); "
           REMOTE_EXPORTS+="export MIHOMO_SUB_URL=$(printf '%q' '${{ secrets.MIHOMO_SUB_URL }}'); "
           REMOTE_EXPORTS+="export MIHOMO_DB_PATH=$(printf '%q' '${{ vars.MIHOMO_DB_PATH }}'); "
 
@@ -528,6 +530,8 @@ jobs:
               sudo -n sed -i '/^APP_FRONTEND_ORIGINS=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_CORS_ORIGINS=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_GOOGLE_OAUTH_PROXY_URL=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_GOOGLE_OAUTH_RELAY_URL=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_GOOGLE_OAUTH_RELAY_TOKEN=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_GOOGLE_OAUTH_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true
               GOOGLE_OAUTH_PROXY_URL="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
               {
@@ -538,26 +542,37 @@ jobs:
                 echo "APP_FRONTEND_ORIGINS=https://www.ojeur.cloud,https://intl.ojeur.cloud"
                 echo "APP_CORS_ORIGINS=https://www.ojeur.cloud,https://intl.ojeur.cloud,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000"
                 echo "APP_GOOGLE_OAUTH_PROXY_URL=$GOOGLE_OAUTH_PROXY_URL"
+                if [ -n "${GOOGLE_OAUTH_RELAY_URL:-}" ]; then
+                  echo "APP_GOOGLE_OAUTH_RELAY_URL=$GOOGLE_OAUTH_RELAY_URL"
+                fi
+                if [ -n "${GOOGLE_OAUTH_RELAY_TOKEN:-}" ]; then
+                  echo "APP_GOOGLE_OAUTH_RELAY_TOKEN=$GOOGLE_OAUTH_RELAY_TOKEN"
+                fi
                 echo "APP_GOOGLE_OAUTH_TIMEOUT_SECONDS=30"
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
               echo "[INFO] Google OAuth config updated"
             fi
-            check_google_oauth_proxy() {
-              local label="$1"
-              local proxy_url="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
-              echo "[INFO] Google OAuth proxy check (${label}) via ${proxy_url}"
-              curl -I --max-time 20 --proxy "$proxy_url" https://oauth2.googleapis.com/token
-            }
-            if ! check_google_oauth_proxy "before-mihomo-restart"; then
-              echo "[WARN] Google OAuth proxy check failed; restarting mihomo"
-              sudo -n systemctl restart mihomo.service 2>/dev/null \
-                || sudo -n systemctl restart mihomo 2>/dev/null \
-                || true
-              sleep 5
-              if ! check_google_oauth_proxy "after-mihomo-restart"; then
-                echo "[WARN] Google OAuth proxy still failed; selecting a working mihomo node"
-                bash "$REPO_DIR/03_Scripts/deploy/select_mihomo_google_proxy.sh" || true
-                check_google_oauth_proxy "after-mihomo-select" || true
+            if [ -n "${GOOGLE_OAUTH_RELAY_URL:-}" ]; then
+              echo "[INFO] Google OAuth relay check via ${GOOGLE_OAUTH_RELAY_URL}"
+              curl -fsS --max-time 20 "${GOOGLE_OAUTH_RELAY_URL%/}/healthz" || true
+            else
+              check_google_oauth_proxy() {
+                local label="$1"
+                local proxy_url="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
+                echo "[INFO] Google OAuth proxy check (${label}) via ${proxy_url}"
+                curl -I --max-time 20 --proxy "$proxy_url" https://oauth2.googleapis.com/token
+              }
+              if ! check_google_oauth_proxy "before-mihomo-restart"; then
+                echo "[WARN] Google OAuth proxy check failed; restarting mihomo"
+                sudo -n systemctl restart mihomo.service 2>/dev/null \
+                  || sudo -n systemctl restart mihomo 2>/dev/null \
+                  || true
+                sleep 5
+                if ! check_google_oauth_proxy "after-mihomo-restart"; then
+                  echo "[WARN] Google OAuth proxy still failed; selecting a working mihomo node"
+                  bash "$REPO_DIR/03_Scripts/deploy/select_mihomo_google_proxy.sh" || true
+                  check_google_oauth_proxy "after-mihomo-select" || true
+                fi
               fi
             fi
           fi
@@ -603,7 +618,11 @@ jobs:
             echo "---healthz---"
             curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
             echo "---google oauth proxy---"
-            sudo -n awk -F= '/^(APP_GOOGLE_OAUTH_PROXY_URL|APP_GOOGLE_OAUTH_TIMEOUT_SECONDS|APP_GOOGLE_REDIRECT_URI|APP_FRONTEND_ORIGIN|APP_FRONTEND_ORIGINS|APP_CORS_ORIGINS)=/ {print}' "$ENV_FILE" 2>&1 || true
+            sudo -n awk -F= '/^(APP_GOOGLE_OAUTH_PROXY_URL|APP_GOOGLE_OAUTH_RELAY_URL|APP_GOOGLE_OAUTH_TIMEOUT_SECONDS|APP_GOOGLE_REDIRECT_URI|APP_FRONTEND_ORIGIN|APP_FRONTEND_ORIGINS|APP_CORS_ORIGINS)=/ {print}' "$ENV_FILE" 2>&1 || true
+            sudo -n awk -F= '/^APP_GOOGLE_OAUTH_RELAY_TOKEN=/ {print "APP_GOOGLE_OAUTH_RELAY_TOKEN=configured"}' "$ENV_FILE" 2>&1 || true
+            if [ -n "${GOOGLE_OAUTH_RELAY_URL:-}" ]; then
+              curl -fsS --max-time 20 "${GOOGLE_OAUTH_RELAY_URL%/}/healthz" 2>&1 || true
+            fi
             systemctl is-active mihomo 2>&1 || true
             ss -ltnp | grep -E '(:7897)\b' 2>&1 || true
             curl -I --max-time 20 --proxy "${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}" https://oauth2.googleapis.com/token 2>&1 || true
@@ -688,6 +707,8 @@ jobs:
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_ID }}'); "
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_SECRET=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_SECRET }}'); "
           REMOTE_EXPORTS+="export GOOGLE_OAUTH_PROXY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_PROXY_URL }}'); "
+          REMOTE_EXPORTS+="export GOOGLE_OAUTH_RELAY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_RELAY_URL }}'); "
+          REMOTE_EXPORTS+="export GOOGLE_OAUTH_RELAY_TOKEN=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_RELAY_TOKEN }}'); "
           REMOTE_EXPORTS+="export MIHOMO_SUB_URL=$(printf '%q' '${{ secrets.MIHOMO_SUB_URL }}'); "
           REMOTE_EXPORTS+="export MIHOMO_DB_PATH=$(printf '%q' '${{ vars.MIHOMO_DB_PATH }}'); "
 
@@ -920,6 +941,8 @@ jobs:
               sudo -n sed -i '/^APP_FRONTEND_ORIGINS=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_CORS_ORIGINS=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_GOOGLE_OAUTH_PROXY_URL=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_GOOGLE_OAUTH_RELAY_URL=/d' "$ENV_FILE" 2>/dev/null || true
+              sudo -n sed -i '/^APP_GOOGLE_OAUTH_RELAY_TOKEN=/d' "$ENV_FILE" 2>/dev/null || true
               sudo -n sed -i '/^APP_GOOGLE_OAUTH_TIMEOUT_SECONDS=/d' "$ENV_FILE" 2>/dev/null || true
               GOOGLE_OAUTH_PROXY_URL="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
               {
@@ -930,26 +953,37 @@ jobs:
                 echo "APP_FRONTEND_ORIGINS=https://www.ojeur.cloud,https://intl.ojeur.cloud"
                 echo "APP_CORS_ORIGINS=https://www.ojeur.cloud,https://intl.ojeur.cloud,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000"
                 echo "APP_GOOGLE_OAUTH_PROXY_URL=$GOOGLE_OAUTH_PROXY_URL"
+                if [ -n "${GOOGLE_OAUTH_RELAY_URL:-}" ]; then
+                  echo "APP_GOOGLE_OAUTH_RELAY_URL=$GOOGLE_OAUTH_RELAY_URL"
+                fi
+                if [ -n "${GOOGLE_OAUTH_RELAY_TOKEN:-}" ]; then
+                  echo "APP_GOOGLE_OAUTH_RELAY_TOKEN=$GOOGLE_OAUTH_RELAY_TOKEN"
+                fi
                 echo "APP_GOOGLE_OAUTH_TIMEOUT_SECONDS=30"
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
               echo "[INFO] Google OAuth config updated"
             fi
-            check_google_oauth_proxy() {
-              local label="$1"
-              local proxy_url="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
-              echo "[INFO] Google OAuth proxy check (${label}) via ${proxy_url}"
-              curl -I --max-time 20 --proxy "$proxy_url" https://oauth2.googleapis.com/token
-            }
-            if ! check_google_oauth_proxy "before-mihomo-restart"; then
-              echo "[WARN] Google OAuth proxy check failed; restarting mihomo"
-              sudo -n systemctl restart mihomo.service 2>/dev/null \
-                || sudo -n systemctl restart mihomo 2>/dev/null \
-                || true
-              sleep 5
-              if ! check_google_oauth_proxy "after-mihomo-restart"; then
-                echo "[WARN] Google OAuth proxy still failed; selecting a working mihomo node"
-                bash "$REPO_DIR/03_Scripts/deploy/select_mihomo_google_proxy.sh" || true
-                check_google_oauth_proxy "after-mihomo-select" || true
+            if [ -n "${GOOGLE_OAUTH_RELAY_URL:-}" ]; then
+              echo "[INFO] Google OAuth relay check via ${GOOGLE_OAUTH_RELAY_URL}"
+              curl -fsS --max-time 20 "${GOOGLE_OAUTH_RELAY_URL%/}/healthz" || true
+            else
+              check_google_oauth_proxy() {
+                local label="$1"
+                local proxy_url="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
+                echo "[INFO] Google OAuth proxy check (${label}) via ${proxy_url}"
+                curl -I --max-time 20 --proxy "$proxy_url" https://oauth2.googleapis.com/token
+              }
+              if ! check_google_oauth_proxy "before-mihomo-restart"; then
+                echo "[WARN] Google OAuth proxy check failed; restarting mihomo"
+                sudo -n systemctl restart mihomo.service 2>/dev/null \
+                  || sudo -n systemctl restart mihomo 2>/dev/null \
+                  || true
+                sleep 5
+                if ! check_google_oauth_proxy "after-mihomo-restart"; then
+                  echo "[WARN] Google OAuth proxy still failed; selecting a working mihomo node"
+                  bash "$REPO_DIR/03_Scripts/deploy/select_mihomo_google_proxy.sh" || true
+                  check_google_oauth_proxy "after-mihomo-select" || true
+                fi
               fi
             fi
           fi
@@ -995,7 +1029,11 @@ jobs:
             echo "---healthz---"
             curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
             echo "---google oauth proxy---"
-            sudo -n awk -F= '/^(APP_GOOGLE_OAUTH_PROXY_URL|APP_GOOGLE_OAUTH_TIMEOUT_SECONDS|APP_GOOGLE_REDIRECT_URI|APP_FRONTEND_ORIGIN|APP_FRONTEND_ORIGINS|APP_CORS_ORIGINS)=/ {print}' "$ENV_FILE" 2>&1 || true
+            sudo -n awk -F= '/^(APP_GOOGLE_OAUTH_PROXY_URL|APP_GOOGLE_OAUTH_RELAY_URL|APP_GOOGLE_OAUTH_TIMEOUT_SECONDS|APP_GOOGLE_REDIRECT_URI|APP_FRONTEND_ORIGIN|APP_FRONTEND_ORIGINS|APP_CORS_ORIGINS)=/ {print}' "$ENV_FILE" 2>&1 || true
+            sudo -n awk -F= '/^APP_GOOGLE_OAUTH_RELAY_TOKEN=/ {print "APP_GOOGLE_OAUTH_RELAY_TOKEN=configured"}' "$ENV_FILE" 2>&1 || true
+            if [ -n "${GOOGLE_OAUTH_RELAY_URL:-}" ]; then
+              curl -fsS --max-time 20 "${GOOGLE_OAUTH_RELAY_URL%/}/healthz" 2>&1 || true
+            fi
             systemctl is-active mihomo 2>&1 || true
             ss -ltnp | grep -E '(:7897)\b' 2>&1 || true
             curl -I --max-time 20 --proxy "${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}" https://oauth2.googleapis.com/token 2>&1 || true

@@ -20,6 +20,8 @@
 venv/
 .claude/
 .playwright-mcp/
+.wrangler/
+**/.wrangler/
 
 # macOS artifacts
 .DS_Store
