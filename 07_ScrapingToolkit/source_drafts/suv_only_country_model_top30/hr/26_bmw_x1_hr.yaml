@@ -7,8 +7,8 @@ price_semantics: base_msrp
 extractor_type: pdf_text
 profile:
   url: https://www.bmw.hr/content/dam/bmw/marketB4R1/bmw_hr/pdf-cjenici/20251114%20-%20Serija%20X1%20(U11).pdf.coredownload.pdf
-  timeout_seconds: 30
-  retry_attempts: 1
+  timeout_seconds: 20
+  retry_attempts: 0
   retry_delay_seconds: 1
   browser_download_fallback: true
   default_currency: EUR
