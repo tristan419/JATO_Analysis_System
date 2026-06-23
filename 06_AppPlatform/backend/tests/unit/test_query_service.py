@@ -253,6 +253,68 @@ def test_query_grouped_time_series_coalesces_concurrent_same_key(
     query_service._clear_grouped_time_series_cache()
 
 
+def test_warm_grouped_time_series_cache_includes_configured_filter_sets(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PREWARM_GROUP_BY",
+        ["Brand"],
+    )
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PREWARM_GRAINS",
+        ["month"],
+    )
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PREWARM_SCOPES",
+        ["viewer"],
+    )
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PREWARM_FILTERS",
+        [
+            {"Country": ["DK"], "Powertrain": ["ICE", "BEV"]},
+            {"Powertrain": ["BEV", "ICE"], "Country": ["DK"]},
+        ],
+    )
+
+    def fake_query_grouped_time_series(**kwargs) -> dict:
+        calls.append(kwargs)
+        return {"items": []}
+
+    monkeypatch.setattr(
+        query_service,
+        "query_grouped_time_series",
+        fake_query_grouped_time_series,
+    )
+
+    result = query_service.warm_grouped_time_series_cache()
+
+    assert result == {"warmed": 2, "failed": 0}
+    assert calls == [
+        {
+            "filters": {},
+            "grain": "month",
+            "group_by": "Brand",
+            "top_n": 10,
+            "include_others": False,
+            "cache_scope": "viewer",
+        },
+        {
+            "filters": {"Country": ["DK"], "Powertrain": ["BEV", "ICE"]},
+            "grain": "month",
+            "group_by": "Brand",
+            "top_n": 10,
+            "include_others": False,
+            "cache_scope": "viewer",
+        },
+    ]
+
+
 def test_query_grouped_time_series_respects_time_range_for_topn(
     monkeypatch,
 ) -> None:
