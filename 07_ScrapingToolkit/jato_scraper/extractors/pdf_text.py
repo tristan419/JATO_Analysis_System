@@ -41,6 +41,7 @@ class PdfTextProfile:
     timeout_seconds: int = DEFAULT_TIMEOUT
     retry_attempts: int = 0
     retry_delay_seconds: float = 0.0
+    prefer_curl_download: bool = False
     browser_download_fallback: bool = False
     default_currency: str = "EUR"
     default_tax_included: bool = True
@@ -133,6 +134,17 @@ class PdfTextExtractor(BaseExtractor):
         last_error: Exception | None = None
         attempts = max(1, int(self.profile.retry_attempts or 0) + 1)
         timeout = max(1, int(self.profile.timeout_seconds or DEFAULT_TIMEOUT))
+        if self.profile.prefer_curl_download:
+            blob = self._fetch_pdf_bytes_with_curl(
+                max(timeout, DEFAULT_CURL_FALLBACK_TIMEOUT),
+            )
+            if blob:
+                return blob
+            log.warning(
+                "Preferred PDF curl download failed for %s; falling back to requests",
+                self.config.source_code,
+            )
+
         for attempt in range(1, attempts + 1):
             try:
                 response = self._session.get(self.profile.url, timeout=timeout)

@@ -564,6 +564,12 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
             profile.get("curl_download_fallback", False),
         )
     )
+    prefer_curl_download = bool(
+        profile.get(
+            "prefer_curl_download",
+            profile.get("curl_download_first", False),
+        )
+    )
     entry_patterns = tuple(
         PdfTextEntryPattern(
             pattern=str(item["pattern"]).strip(),
@@ -613,6 +619,7 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
         timeout_seconds=int(profile.get("timeout_seconds", 60)),
         retry_attempts=int(profile.get("retry_attempts", 0)),
         retry_delay_seconds=float(profile.get("retry_delay_seconds", 0.0) or 0.0),
+        prefer_curl_download=prefer_curl_download,
         browser_download_fallback=browser_download_fallback,
         default_currency=profile.get("default_currency", "EUR"),
         default_tax_included=bool(profile.get("default_tax_included", True)),

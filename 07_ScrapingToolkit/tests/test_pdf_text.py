@@ -108,6 +108,18 @@ def test_pdf_text_profile_accepts_legacy_curl_download_fallback() -> None:
     assert profile.browser_download_fallback is True
 
 
+def test_pdf_text_profile_accepts_preferred_curl_download() -> None:
+    profile = _build_pdf_text_profile(
+        {
+            "url": "https://example.invalid/sealion.pdf",
+            "prefer_curl_download": True,
+            "entry_patterns": [],
+        }
+    )
+
+    assert profile.prefer_curl_download is True
+
+
 def test_pdf_text_uses_curl_fallback_after_requests_timeout(monkeypatch):
     extractor = PdfTextExtractor(
         ExtractorConfig(
@@ -141,6 +153,39 @@ def test_pdf_text_uses_curl_fallback_after_requests_timeout(monkeypatch):
 
     assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
     assert fallback_timeouts == [30]
+
+
+def test_pdf_text_prefers_curl_download_before_requests(monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="byd_sealion_7_at_draft_scrapling",
+            country="奥地利",
+            brand="BYD",
+            source_url="https://www.bydauto.at/modelle/sealion-7",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(
+            url="https://example.invalid/sealion.pdf",
+            timeout_seconds=2,
+            prefer_curl_download=True,
+        ),
+    )
+
+    def fail_request(*_args, **_kwargs):
+        raise AssertionError("requests should not run when curl is preferred")
+
+    monkeypatch.setattr(extractor._session, "get", fail_request)
+    curl_timeouts = []
+
+    def fetch_with_curl(timeout):
+        curl_timeouts.append(timeout)
+        return b"%PDF-1.7\n"
+
+    monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_curl", fetch_with_curl)
+
+    assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
+    assert curl_timeouts == [30]
 
 
 def test_pdf_text_curl_fallback_keeps_curl_default_user_agent(monkeypatch):
