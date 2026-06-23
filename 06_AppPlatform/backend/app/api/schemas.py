@@ -162,6 +162,7 @@ class VersionComparisonDeckRequest(BaseModel):
 class HeroProductDeckRequest(BaseModel):
     countries: list[str] = Field(default_factory=list)
     price_country: str | None = None
+    tracking_country: str | None = None
     target_period: str | None = None
     time_range: dict[str, str] | None = None
     sales_mode: Literal["month", "ytd", "rolling12"] = "ytd"

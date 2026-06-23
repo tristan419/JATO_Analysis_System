@@ -105,6 +105,7 @@ def hero_product_deck(
     return query_hero_product_deck(
         countries=payload.countries,
         price_country=payload.price_country,
+        tracking_country=payload.tracking_country,
         target_period=payload.target_period,
         time_range=payload.time_range,
         sales_mode=payload.sales_mode,

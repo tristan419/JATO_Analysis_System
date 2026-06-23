@@ -166,6 +166,16 @@ def _resolve_price_country(
     return options[0]
 
 
+def _resolve_tracking_country(
+    requested: str | None,
+    options: list[dict[str, str]],
+    fallback: dict[str, str],
+) -> dict[str, str]:
+    if requested:
+        return _normalize_country_lookup(requested, options)
+    return fallback
+
+
 def _resolve_spec_columns(all_columns: list[str]) -> dict[str, str | None]:
     return {
         key: _resolve_existing_column(candidates, all_columns)
@@ -850,6 +860,116 @@ def _build_trend_series(
     return series
 
 
+def _build_country_ranking_trace(
+    frame: pd.DataFrame,
+    model_rows: list[dict[str, Any]],
+    trend_periods: list[str],
+    tracking_country: dict[str, str],
+    rank_window: int,
+) -> dict[str, Any]:
+    periods = [
+        {"period": period, "label": _short_period_label(period)}
+        for period in trend_periods
+    ]
+    if frame.empty or not model_rows:
+        return {
+            "country": tracking_country,
+            "rankWindow": max(1, int(rank_window or 20)),
+            "periods": periods,
+            "series": [],
+        }
+
+    country_frame = frame[frame["__country_value"] == tracking_country["value"]].copy()
+    selected_pairs = {_source_pair(row) for row in model_rows}
+    if country_frame.empty:
+        return {
+            "country": tracking_country,
+            "rankWindow": max(1, int(rank_window or 20)),
+            "periods": periods,
+            "series": [
+                {
+                    "brand": row["brand"],
+                    "model": row["model"],
+                    "label": row["model"],
+                    "sourceBrand": _source_brand(row),
+                    "sourceModel": _source_model(row),
+                    "points": [
+                        {
+                            "period": period["period"],
+                            "label": period["label"],
+                            "rank": None,
+                            "sales": 0.0,
+                            "sharePct": 0.0,
+                            "inWindow": False,
+                        }
+                        for period in periods
+                    ],
+                }
+                for row in model_rows
+            ],
+        }
+
+    ranking_by_period: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
+    for period in trend_periods:
+        column = _period_to_month_column(period)
+        if column not in country_frame.columns:
+            ranking_by_period[period] = {}
+            continue
+        grouped = (
+            country_frame.groupby(["__brand", "__model"], dropna=False)[column]
+            .sum()
+            .reset_index(name="sales")
+        )
+        grouped["sales"] = pd.to_numeric(grouped["sales"], errors="coerce").fillna(0.0)
+        grouped = grouped[grouped["sales"] > 0].sort_values(
+            ["sales", "__brand", "__model"],
+            ascending=[False, True, True],
+        )
+        total = float(grouped["sales"].sum())
+        ranking_by_period[period] = {
+            (str(row["__brand"]), str(row["__model"])): {
+                "rank": index,
+                "sales": float(row["sales"]),
+                "sharePct": _safe_share(float(row["sales"]), total),
+            }
+            for index, row in enumerate(grouped.to_dict("records"), start=1)
+        }
+
+    result_series: list[dict[str, Any]] = []
+    for row in model_rows:
+        source_brand, source_model = _source_pair(row)
+        pair = (source_brand, source_model)
+        if pair not in selected_pairs:
+            continue
+        points: list[dict[str, Any]] = []
+        for period in periods:
+            item = ranking_by_period.get(period["period"], {}).get(pair)
+            rank = int(item["rank"]) if item else None
+            points.append({
+                "period": period["period"],
+                "label": period["label"],
+                "rank": rank,
+                "sales": float(item["sales"]) if item else 0.0,
+                "sharePct": float(item["sharePct"]) if item else 0.0,
+                "inWindow": bool(rank is not None and rank <= max(1, int(rank_window or 20))),
+            })
+        result_series.append({
+            "brand": row["brand"],
+            "model": row["model"],
+            "label": row["model"],
+            "sourceBrand": source_brand,
+            "sourceModel": source_model,
+            "points": points,
+        })
+
+    return {
+        "country": tracking_country,
+        "rankWindow": max(1, int(rank_window or 20)),
+        "periods": periods,
+        "series": result_series,
+    }
+
+
 def _build_country_distribution(
     frame: pd.DataFrame,
     model_rows: list[dict[str, Any]],
@@ -936,6 +1056,7 @@ def query_hero_product_deck(
     *,
     countries: list[str],
     price_country: str | None,
+    tracking_country: str | None,
     target_period: str | None,
     time_range: dict[str, str] | None,
     sales_mode: str,
@@ -962,6 +1083,11 @@ def query_hero_product_deck(
     )
     frame: pd.DataFrame = source["frame"]
     price_frame: pd.DataFrame = source["priceFrame"]
+    selected_tracking_country = _resolve_tracking_country(
+        tracking_country,
+        source["countryOptions"],
+        source["priceCountry"],
+    )
     brands = set(frame["__brand"].dropna().astype(str).tolist()) if not frame.empty else set()
     current_price_map = _load_current_price_map(source["priceCountry"], brands)
     overrides = _load_price_overrides(source["priceCountry"], source["resolvedPeriod"])
@@ -1020,6 +1146,7 @@ def query_hero_product_deck(
             "latestPeriod": source["latestPeriod"],
             "selectedCountries": source["selectedCountries"],
             "selectedPriceCountry": source["priceCountry"],
+            "selectedTrackingCountry": selected_tracking_country,
             "selectedSegment": source["selectedSegment"],
             "selectedFuelType": source["selectedFuelType"],
             "selectedSalesMode": sales_mode,
@@ -1079,6 +1206,13 @@ def query_hero_product_deck(
                 "title": "Top 车型销量趋势",
                 "models": top_rows,
                 "series": _build_trend_series(frame, top_rows, source["trendPeriods"]),
+                "countryRanking": _build_country_ranking_trace(
+                    frame,
+                    top_rows,
+                    source["trendPeriods"],
+                    selected_tracking_country,
+                    ranking_limit,
+                ),
                 "priceRows": _build_price_panel_rows(top_rows[:5]),
             },
             "topDistribution": {
@@ -1090,6 +1224,13 @@ def query_hero_product_deck(
                 "title": "Hero 车型销量趋势",
                 "models": hero_rows,
                 "series": _build_trend_series(frame, hero_rows, source["trendPeriods"]),
+                "countryRanking": _build_country_ranking_trace(
+                    frame,
+                    hero_rows,
+                    source["trendPeriods"],
+                    selected_tracking_country,
+                    ranking_limit,
+                ),
                 "priceRows": _build_price_panel_rows(hero_rows[:6]),
             },
             "heroDistribution": {

@@ -706,6 +706,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     isHeroProductPageKey(searchParams.get("heroPage")) ? searchParams.get("heroPage") as HeroProductPageKey : "benchmark"
   ));
   const [priceCountry, setPriceCountry] = useState(() => searchParams.get("priceCountry") || "");
+  const [trackingCountry, setTrackingCountry] = useState(() => searchParams.get("trackCountry") || "");
   const [period, setPeriod] = useState(() => searchParams.get("period") || "");
   const [salesMode, setSalesMode] = useState<HeroProductSalesMode>(() => (
     isSalesMode(searchParams.get("salesMode")) ? searchParams.get("salesMode") as HeroProductSalesMode : "ytd"
@@ -751,6 +752,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
   const activeTab = HERO_PAGE_ITEMS.find((item) => item.key === activePage) ?? HERO_PAGE_ITEMS[0];
   const countryLimit = parseCountryLimit(countryLimitText);
   const currentPriceCountry = priceCountry || deck?.metadata.selectedPriceCountry.value || "";
+  const currentTrackingCountry = trackingCountry || deck?.metadata.selectedTrackingCountry?.value || currentPriceCountry;
   const selectedCountries = scopeMode === "price" && currentPriceCountry
     ? [countryValue(deck?.metadata.availableCountries ?? [], currentPriceCountry)]
     : [];
@@ -798,6 +800,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     api.heroProductDeck({
       countries: selectedCountries,
       price_country: priceCountry || undefined,
+      tracking_country: currentTrackingCountry || undefined,
       target_period: period || undefined,
       sales_mode: salesMode,
       segment: "SUV A0",
@@ -814,6 +817,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
         if (cancelled) return;
         setDeck(response);
         if (!priceCountry) setPriceCountry(response.metadata.selectedPriceCountry.value);
+        if (!trackingCountry) setTrackingCountry(response.metadata.selectedTrackingCountry.value);
         if (!period) setPeriod(response.metadata.resolvedPeriod);
       })
       .catch((reason: Error) => {
@@ -826,13 +830,14 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     return () => {
       cancelled = true;
     };
-  }, [countryLimit, heroModelText, period, priceCountry, priceSource, reloadToken, salesMode, scopeMode, topModelText]);
+  }, [countryLimit, currentTrackingCountry, heroModelText, period, priceCountry, priceSource, reloadToken, salesMode, scopeMode, topModelText, trackingCountry]);
 
   useEffect(() => {
     const params = new URLSearchParams();
     params.set("mode", "hero-product");
     if (activePage !== "benchmark") params.set("heroPage", activePage);
     if (priceCountry) params.set("priceCountry", priceCountry);
+    if (trackingCountry && trackingCountry !== priceCountry) params.set("trackCountry", trackingCountry);
     if (period) params.set("period", period);
     if (salesMode !== "ytd") params.set("salesMode", salesMode);
     if (priceSource !== "msrp") params.set("priceSource", priceSource);
@@ -844,7 +849,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     if (params.toString() !== searchParams.toString()) {
       setSearchParams(params, { replace: true });
     }
-  }, [activePage, countryLimit, distributionLayout, heroModelText, period, priceCountry, priceSource, salesMode, scopeMode, searchParams, setSearchParams, topModelText]);
+  }, [activePage, countryLimit, distributionLayout, heroModelText, period, priceCountry, priceSource, salesMode, scopeMode, searchParams, setSearchParams, topModelText, trackingCountry]);
 
   useEffect(() => {
     writeStoredSlideLayouts("hero-product-analysis", slideLayouts);
@@ -1123,6 +1128,15 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
                 ))}
               </select>
             </label>
+            <label className="market-scan-field">
+              <span>Track Country</span>
+              <select value={currentTrackingCountry} onChange={(event) => setTrackingCountry(event.target.value)}>
+                {(deck?.metadata.availableCountries ?? []).map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <small className="hero-product-control-hint">第 03/05 页按该国家内部销量重算车型排名。</small>
+            </label>
             <div className="market-scan-field">
               <span>Sales Mode</span>
               <div className="btn-group">
@@ -1240,7 +1254,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
               <span>Deck</span>
               <div className="btn-group">
                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => setReloadToken((value) => value + 1)}>Refresh</button>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTopModelText(""); setHeroModelText(""); setCountryLimitText(""); setScopeMode("all"); setSalesMode("ytd"); setPriceSource("msrp"); setDistributionLayout("aligned"); setSpecColumns(DEFAULT_HERO_PRODUCT_SPEC_COLUMNS); }}>Reset</button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTopModelText(""); setHeroModelText(""); setCountryLimitText(""); setScopeMode("all"); setSalesMode("ytd"); setPriceSource("msrp"); setDistributionLayout("aligned"); setTrackingCountry(""); setSpecColumns(DEFAULT_HERO_PRODUCT_SPEC_COLUMNS); }}>Reset</button>
               </div>
             </div>
             <div className="hero-product-price-editor deck-panel-grid__wide">
@@ -1736,6 +1750,7 @@ function InlinePriceEditor({ row, priceSource, binding, variant }: { row: HeroPr
 function TrendSlide({ page, priceSource, priceEditor, variant }: { page: HeroProductDeckResponse["pages"]["topTrend"]; priceSource: HeroProductPriceSource; priceEditor: HeroProductPriceEditorBinding; variant: "top" | "hero" }) {
   const insight = buildTrendInsight(page, priceSource, variant);
   const channelRows = page.models.slice(0, variant === "hero" ? 6 : 10);
+  const trackingCountryLabel = page.countryRanking.country.label || page.countryRanking.country.value;
 
   return (
     <div className="hero-product-page-stack hero-product-page-stack--trend">
@@ -1744,11 +1759,14 @@ function TrendSlide({ page, priceSource, priceEditor, variant }: { page: HeroPro
         <HeroProductPanel
           eyebrow={variant === "hero" ? "Trend · Fixed Models" : "Trend · Top Models"}
           title={page.title}
-          subtitle="顶部用 Business / Private 饼图解释渠道结构，折线补充最近周期销量趋势。"
+          subtitle={`顶部解释渠道结构；下方左侧看销量趋势，右侧追踪 ${trackingCountryLabel} 单国排名变化。`}
           className="hero-product-trend-panel"
         >
           <ChannelMixStrip rows={channelRows} />
-          <TrendSvg series={page.series} />
+          <div className="hero-product-trend-visual-grid">
+            <TrendSvg series={page.series} />
+            <CountryRankTrace ranking={page.countryRanking} />
+          </div>
         </HeroProductPanel>
         <PricePanel rows={page.priceRows} priceSource={priceSource} priceEditor={priceEditor} />
       </div>
@@ -1840,6 +1858,124 @@ function TrendSvg({ series }: { series: HeroProductTrendSeries[] }) {
         );
       })}
     </svg>
+  );
+}
+
+function CountryRankTrace({ ranking }: { ranking: HeroProductDeckResponse["pages"]["topTrend"]["countryRanking"] }) {
+  const periods = ranking.periods.length > 0
+    ? ranking.periods
+    : ranking.series.reduce<Array<{ period: string; label: string }>>((longest, item) => (
+      item.points.length > longest.length ? item.points.map((point) => ({ period: point.period, label: point.label })) : longest
+    ), []);
+  if (periods.length === 0 || ranking.series.length === 0) {
+    return (
+      <div className="hero-product-rank-trace is-empty">
+        <span>Rank Trace</span>
+        <strong>{ranking.country.label || ranking.country.value}</strong>
+        <p>暂无单国排名数据。</p>
+      </div>
+    );
+  }
+
+  const rankWindow = Math.max(5, Math.min(40, Math.round(ranking.rankWindow || 20)));
+  const outRank = rankWindow + 1;
+  const width = 760;
+  const height = 420;
+  const padLeft = 42;
+  const padRight = 190;
+  const padTop = 44;
+  const padBottom = 50;
+  const chartWidth = width - padLeft - padRight;
+  const chartHeight = height - padTop - padBottom;
+  const x = (index: number) => padLeft + (index / Math.max(1, periods.length - 1)) * chartWidth;
+  const y = (rank: number) => padTop + ((rank - 1) / Math.max(1, outRank - 1)) * chartHeight;
+  const pointRank = (rank: number | null): number => (
+    rank !== null && Number.isFinite(rank) && rank > 0 && rank <= rankWindow ? rank : outRank
+  );
+  const buildPath = (points: Array<{ x: number; y: number }>): string => {
+    if (points.length === 0) return "";
+    if (points.length === 1) return `M${points[0].x},${points[0].y}`;
+    return points.slice(1).reduce((path, point, index) => {
+      const previous = points[index];
+      const midX = (previous.x + point.x) / 2;
+      return `${path} C${midX},${previous.y} ${midX},${point.y} ${point.x},${point.y}`;
+    }, `M${points[0].x},${points[0].y}`);
+  };
+  const labelKey = (item: (typeof ranking.series)[number]) => `${item.brand}-${item.model}`;
+  const labelRows = ranking.series.map((item) => {
+    const latestPoint = item.points[item.points.length - 1];
+    if (!latestPoint) return null;
+    return { key: labelKey(item), y: y(pointRank(latestPoint.rank)) + 4 };
+  }).filter((item): item is { key: string; y: number } => Boolean(item)).sort((a, b) => a.y - b.y);
+  const minLabelGap = 20;
+  let nextLabelY = padTop + 8;
+  labelRows.forEach((item) => {
+    item.y = Math.max(item.y, nextLabelY);
+    nextLabelY = item.y + minLabelGap;
+  });
+  let previousLabelY = height - padBottom - 2;
+  [...labelRows].reverse().forEach((item) => {
+    item.y = Math.min(item.y, previousLabelY);
+    previousLabelY = item.y - minLabelGap;
+  });
+  const labelYBySeries = new Map(labelRows.map((item) => [item.key, item.y]));
+  const gridRanks = Array.from(new Set([1, 3, 5, 10, 15, rankWindow, outRank].filter((rank) => rank <= outRank)));
+  const rankLabel = (rank: number | null): string => (
+    rank !== null && rank <= rankWindow ? `#${rank}` : "OUT"
+  );
+
+  return (
+    <div className="hero-product-rank-trace">
+      <div className="hero-product-rank-trace-head">
+        <span>Country Rank Trace</span>
+        <strong>{ranking.country.label || ranking.country.value}</strong>
+      </div>
+      <svg className="hero-product-rank-trace-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${ranking.country.label || ranking.country.value} 单国排名追踪`}>
+        {gridRanks.map((rank) => (
+          <g key={rank} className={rank === outRank ? "is-out" : undefined}>
+            <line className="hero-product-rank-gridline" x1={padLeft} y1={y(rank)} x2={width - padRight} y2={y(rank)} />
+            <text className="hero-product-rank-axis-label" x={10} y={y(rank) + 4}>{rank === outRank ? "OUT" : `#${rank}`}</text>
+          </g>
+        ))}
+        {periods.map((period, index) => (
+          <text key={period.period} className="hero-product-rank-period" x={x(index)} y={height - 14} textAnchor="middle">{period.label}</text>
+        ))}
+        {ranking.series.map((item, seriesIndex) => {
+          const color = LINE_COLORS[seriesIndex % LINE_COLORS.length];
+          const coordinates = periods.map((period, index) => {
+            const point = item.points.find((candidate) => candidate.period === period.period);
+            return { x: x(index), y: y(pointRank(point?.rank ?? null)), point };
+          });
+          const latestPoint = item.points[item.points.length - 1];
+          const labelY = labelYBySeries.get(labelKey(item)) ?? (latestPoint ? y(pointRank(latestPoint.rank)) + 4 : padTop);
+          return (
+            <g key={`${item.brand}-${item.model}`} className="hero-product-rank-series">
+              <path className="hero-product-rank-line" d={buildPath(coordinates)} style={{ stroke: color }} />
+              {coordinates.map(({ point, ...coordinate }, index) => {
+                const isOut = !point || point.rank === null || point.rank > rankWindow;
+                return (
+                  <circle
+                    key={`${item.model}-${periods[index].period}`}
+                    className={`hero-product-rank-dot${isOut ? " is-out" : ""}`}
+                    cx={coordinate.x}
+                    cy={coordinate.y}
+                    r={isOut ? 2.4 : 3.4}
+                    style={{ fill: color }}
+                  >
+                    <title>{`${item.model} · ${periods[index].label} · ${rankLabel(point?.rank ?? null)} · ${formatNumber(point?.sales ?? 0)}`}</title>
+                  </circle>
+                );
+              })}
+              {latestPoint ? (
+                <text className="hero-product-rank-label" x={width - padRight + 10} y={labelY} style={{ fill: color }}>
+                  {item.model} {rankLabel(latestPoint.rank)}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
   );
 }
 

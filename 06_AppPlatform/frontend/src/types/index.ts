@@ -1036,6 +1036,31 @@ export interface HeroProductTrendSeries {
   points: HeroProductTrendPoint[];
 }
 
+export interface HeroProductCountryRankPoint {
+  period: string;
+  label: string;
+  rank: number | null;
+  sales: number;
+  sharePct: number;
+  inWindow: boolean;
+}
+
+export interface HeroProductCountryRankSeries {
+  brand: string;
+  model: string;
+  sourceBrand?: string;
+  sourceModel?: string;
+  label: string;
+  points: HeroProductCountryRankPoint[];
+}
+
+export interface HeroProductCountryRanking {
+  country: MarketScanCountryOption;
+  rankWindow: number;
+  periods: Array<{ period: string; label: string }>;
+  series: HeroProductCountryRankSeries[];
+}
+
 export interface HeroProductCountryDistributionItem {
   country: string;
   sales: number;
@@ -1061,6 +1086,7 @@ export interface HeroProductTrendPage {
   title: string;
   models: HeroProductModelRow[];
   series: HeroProductTrendSeries[];
+  countryRanking: HeroProductCountryRanking;
   priceRows: Array<{
     brand: string;
     model: string;
@@ -1088,6 +1114,7 @@ export interface HeroProductDeckResponse {
     latestPeriod: string;
     selectedCountries: MarketScanCountryOption[];
     selectedPriceCountry: MarketScanCountryOption;
+    selectedTrackingCountry: MarketScanCountryOption;
     selectedSegment: string;
     selectedFuelType: string;
     selectedSalesMode: HeroProductSalesMode;
@@ -1131,6 +1158,7 @@ export interface HeroProductDeckResponse {
 export interface HeroProductDeckRequest {
   countries?: string[];
   price_country?: string | null;
+  tracking_country?: string | null;
   target_period?: string | null;
   time_range?: MarketScanPeriodRange | null;
   sales_mode?: HeroProductSalesMode;
