@@ -1906,10 +1906,11 @@ export const api = {
     filters: Record<string, string[]>;
     prefer_precomputed: boolean;
     top_n: number;
-  }) =>
+  }, init?: RequestInit) =>
     request<OverviewResponse>("/analysis/overview", {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      ...init,
     }),
   dataFreshness: () =>
     request<{ items: DataFreshnessItem[] }>("/analysis/data-freshness"),
@@ -2054,10 +2055,11 @@ export const api = {
     top_n: number;
     include_others: boolean;
     time_range?: { start: string; end: string };
-  }) =>
+  }, init?: RequestInit) =>
     request<GroupedTimeSeriesResponse>("/analysis/time-series-grouped", {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      ...init,
     }),
   modelVersions: (payload: {
     filters: Record<string, string[]>;

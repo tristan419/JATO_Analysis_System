@@ -57,6 +57,7 @@ const OrderGeniusCbuPage = lazy(() => import("./pages/OrderGeniusCbuPage").then(
 const OrderGeniusVehicleAllocationPage = lazy(() => import("./pages/OrderGeniusVehicleAllocationPage").then(m => ({ default: m.OrderGeniusVehicleAllocationPage })));
 const AccessControlPage = lazy(() => import("./pages/AccessControlPage").then(m => ({ default: m.AccessControlPage })));
 const ProfilePage = lazy(() => import("./pages/ProfilePage").then(m => ({ default: m.ProfilePage })));
+const RouteDiagnosticsPage = lazy(() => import("./pages/RouteDiagnosticsPage").then(m => ({ default: m.RouteDiagnosticsPage })));
 
 class ChunkErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
   state = { hasError: false };
@@ -122,6 +123,7 @@ const router = createBrowserRouter([
     { path: "data/order-genius", element: withPageLoader(<OrderGeniusPage />) },
     { path: "admin/access-control", element: withPageLoader(<AccessControlPage />) },
     { path: "account/profile", element: withPageLoader(<ProfilePage />) },
+    { path: "route-diagnostics", element: withPageLoader(<RouteDiagnosticsPage />) },
     { path: "product/coc-match", element: withPageLoader(<CocMatchPage />) },
     { path: "copilot", element: withPageLoader(<CountryChatPage />) },
     { path: "engineering-config", element: withPageLoader(<EngineeringConfigPage />) },
