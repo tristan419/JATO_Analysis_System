@@ -506,6 +506,9 @@ def _build_playwright_profile(
         trim_name_selector=profile.get("trim_name_selector", "h3"),
         trim_model_selector=profile.get("trim_model_selector"),
         trim_card_wait_ms=int(profile.get("trim_card_wait_ms", 1200)),
+        trim_price_ready_timeout_ms=int(
+            profile.get("trim_price_ready_timeout_ms", 10000)
+        ),
         next_step_selector=profile.get("next_step_selector", ""),
         detail_ready_selector=profile.get("detail_ready_selector"),
         detail_card_selector=profile.get("detail_card_selector", ""),

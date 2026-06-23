@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -32,6 +33,7 @@ WaitUntilState = Literal["commit", "domcontentloaded", "load", "networkidle"]
 BrowserName = Literal["chromium", "firefox", "webkit"]
 
 _PRICE_RE = re.compile(r"[\d]+(?:[.,'\u2019]\d{3})*(?:[.,]\d{1,2})?")
+_MIN_PLAUSIBLE_MSRP = 5000.0
 _DEFAULT_POWERTRAIN_RULES: tuple[dict[str, Any], ...] = (
     {
         "powertrain": "PHEV",
@@ -86,6 +88,7 @@ class PlaywrightCardFlowProfile:
     trim_name_selector: str = "h3"
     trim_model_selector: str | None = None
     trim_card_wait_ms: int = 1200
+    trim_price_ready_timeout_ms: int = 10000
     next_step_selector: str = ""
     detail_ready_selector: str | None = None
     detail_card_selector: str = ""
@@ -125,10 +128,25 @@ def _normalize_lines(text: str) -> list[str]:
 
 def parse_price(raw: str) -> float | None:
     compact = raw.replace("\xa0", " ")
-    match = _PRICE_RE.search(compact.replace(" ", ""))
-    if not match:
+    candidates = [
+        _parse_price_match(match.group())
+        for match in _PRICE_RE.finditer(compact.replace(" ", ""))
+    ]
+    candidates = [value for value in candidates if value is not None]
+    if not candidates:
         return None
-    number = match.group().replace("'", "").replace("\u2019", "")
+    for value in candidates:
+        if value >= _MIN_PLAUSIBLE_MSRP:
+            return value
+    return candidates[0]
+
+
+def _is_plausible_msrp_value(value: float | None) -> bool:
+    return value is not None and value >= _MIN_PLAUSIBLE_MSRP
+
+
+def _parse_price_match(raw: str) -> float | None:
+    number = raw.replace("'", "").replace("\u2019", "")
     if "," in number and "." in number:
         if number.rfind(",") > number.rfind("."):
             number = number.replace(".", "").replace(",", ".")
@@ -144,7 +162,10 @@ def parse_price(raw: str) -> float | None:
         parts = number.split(".")
         if all(len(part) == 3 for part in parts[1:]):
             number = number.replace(".", "")
-    return float(number)
+    try:
+        return float(number)
+    except ValueError:
+        return None
 
 
 def _is_retryable_navigation_error(error: Exception) -> bool:
@@ -424,6 +445,15 @@ class PlaywrightCardFlowExtractor(BaseExtractor):
                     price_text,
                 )
                 continue
+            if not _is_plausible_msrp_value(price_value):
+                log.warning(
+                    "Skipping %s / %s — parsed implausible MSRP %.2f from %r",
+                    self.config.source_code,
+                    trim_name,
+                    price_value,
+                    price_text,
+                )
+                continue
             combined_trim = self._build_combined_trim(
                 trim_name,
                 powertrain_label,
@@ -517,6 +547,15 @@ class PlaywrightCardFlowExtractor(BaseExtractor):
                     price_text,
                 )
                 continue
+            if not _is_plausible_msrp_value(price_value):
+                log.warning(
+                    "Skipping %s / %s — parsed implausible MSRP %.2f from %r",
+                    self.config.source_code,
+                    trim_name,
+                    price_value,
+                    price_text,
+                )
+                continue
             combined_trim = self._build_combined_trim(
                 trim_name,
                 powertrain_label,
@@ -577,6 +616,7 @@ class PlaywrightCardFlowExtractor(BaseExtractor):
         self._dismiss_cookie_banner(page)
         self._dismiss_startup_overlays(page)
         page.wait_for_timeout(self.profile.trim_card_wait_ms)
+        self._wait_for_trim_overview_price_text(page)
 
         trim_cards = page.locator(self.profile.trim_card_selector)
         trim_count = trim_cards.count()
@@ -601,6 +641,15 @@ class PlaywrightCardFlowExtractor(BaseExtractor):
                     "Skipping %s / %s — unable to parse price from %r",
                     self.config.source_code,
                     trim_name,
+                    price_text,
+                )
+                continue
+            if not _is_plausible_msrp_value(price_value):
+                log.warning(
+                    "Skipping %s / %s — parsed implausible MSRP %.2f from %r",
+                    self.config.source_code,
+                    trim_name,
+                    price_value,
                     price_text,
                 )
                 continue
@@ -650,6 +699,34 @@ class PlaywrightCardFlowExtractor(BaseExtractor):
                 )
             )
         return observations
+
+    def _wait_for_trim_overview_price_text(self, page) -> None:
+        if (
+            not self.profile.extract_from_trim_cards
+            or not self.profile.trim_card_selector
+        ):
+            return
+        timeout_ms = max(0, self.profile.trim_price_ready_timeout_ms)
+        if timeout_ms <= 0:
+            return
+        deadline = time.monotonic() + (timeout_ms / 1000)
+        trim_cards = page.locator(self.profile.trim_card_selector)
+        while time.monotonic() < deadline:
+            try:
+                texts = trim_cards.all_inner_texts()
+            except PlaywrightError:
+                return
+            if any(
+                _is_plausible_msrp_value(parse_price(text))
+                for text in texts
+            ):
+                return
+            page.wait_for_timeout(500)
+        log.warning(
+            "No plausible trim-overview MSRP appeared within %sms for %s",
+            timeout_ms,
+            self.config.source_code,
+        )
 
     def _extract_trim_overview_powertrain_label(self, detail_text: str) -> str:
         lines = _normalize_lines(detail_text)
@@ -752,9 +829,21 @@ class PlaywrightCardFlowExtractor(BaseExtractor):
                 self.profile.detail_price_selector
             )
             if price_locator.count() > 0:
-                return _normalize_space(
+                price_text = _normalize_space(
                     price_locator.first.inner_text(timeout=20000)
                 )
+                price_value = parse_price(price_text)
+                detail_value = parse_price(detail_text)
+                if (
+                    detail_value is not None
+                    and detail_value >= _MIN_PLAUSIBLE_MSRP
+                    and (
+                        price_value is None
+                        or price_value < _MIN_PLAUSIBLE_MSRP
+                    )
+                ):
+                    return _normalize_space(detail_text)
+                return price_text
         return _normalize_space(detail_text)
 
     def _build_combined_trim(
