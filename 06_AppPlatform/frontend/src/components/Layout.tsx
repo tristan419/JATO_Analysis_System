@@ -5,8 +5,8 @@ import { MegaMenu } from "./MegaMenu";
 const PresenceWidget = lazy(() =>
   import("./PresenceWidget").then((module) => ({ default: module.PresenceWidget }))
 );
-const CountryChatWidget = lazy(() =>
-  import("./CountryChatWidget").then((module) => ({ default: module.CountryChatWidget }))
+const CountryChatWidgetHost = lazy(() =>
+  import("./CountryChatWidgetHost").then((module) => ({ default: module.CountryChatWidgetHost }))
 );
 
 const AUXILIARY_WIDGET_DELAY_MS = 4_000;
@@ -60,7 +60,7 @@ export function Layout() {
       {showAuxiliaryWidgets && (
         <Suspense fallback={null}>
           <PresenceWidget />
-          <CountryChatWidget />
+          <CountryChatWidgetHost />
         </Suspense>
       )}
     </div>
