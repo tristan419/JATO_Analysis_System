@@ -173,6 +173,7 @@ class HeroProductDeckRequest(BaseModel):
     ranking_limit: int = Field(default=20, ge=10, le=40)
     country_limit: int = Field(default=0, ge=0, le=80)
     trend_window_months: int = Field(default=16, ge=6, le=36)
+    country_rank_scope: Literal["selected", "all"] = "all"
     top_models: list[str] = Field(default_factory=list)
     hero_models: list[str] = Field(default_factory=list)
 

@@ -317,6 +317,12 @@ function salesModeLabel(mode: HeroProductSalesMode): string {
   return SALES_MODES.find((item) => item.value === mode)?.label ?? "YTD";
 }
 
+function shortPeriodLabel(period: string): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(period.trim());
+  if (!match) return period;
+  return `${match[1].slice(2)}.${match[2]}`;
+}
+
 function sanitizeCustomSpecColumnLabel(value: string): string {
   return value
     .replace(/[.:|]/g, " ")
@@ -830,6 +836,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError("");
     api.heroProductDeck({
@@ -845,15 +852,13 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
       ranking_limit: 20,
       country_limit: countryLimit,
       trend_window_months: 16,
+      country_rank_scope: "selected",
       top_models: parseModelList(topModelText),
       hero_models: parseModelList(heroModelText),
-    })
+    }, controller.signal)
       .then((response) => {
         if (cancelled) return;
         setDeck(response);
-        if (!priceCountry) setPriceCountry(response.metadata.selectedPriceCountry.value);
-        if (!trackingCountry) setTrackingCountry(response.metadata.selectedTrackingCountry.value);
-        if (!period) setPeriod(response.metadata.resolvedPeriod);
       })
       .catch((reason: Error) => {
         if (cancelled) return;
@@ -864,6 +869,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [countryLimit, heroModelText, period, priceCountry, reloadToken, salesMode, scopeMode, topModelText]);
 
@@ -1122,8 +1128,11 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
   }
 
   const slideTitle = deck?.pages[activePage].title ?? activeTab.label;
+  const activeSalesModeLabel = salesModeLabel(salesMode);
+  const activePeriodLabel = shortPeriodLabel(period || deck?.metadata.resolvedPeriod || "");
+  const requestedPeriodLabel = `${activeSalesModeLabel}${activePeriodLabel ? ` · ${activePeriodLabel}` : ""}`;
   const narrative = deck
-    ? `${deck.metadata.labels.marketScopeLabel} · ${deck.metadata.labels.periodLabel} · 价格市场 ${deck.metadata.selectedPriceCountry.label}`
+    ? `${deck.metadata.labels.marketScopeLabel} · ${requestedPeriodLabel} · 价格市场 ${deck.metadata.selectedPriceCountry.label}`
     : "按 BEV / SUV A0 生成 Hero Product 六页分析。";
   const priceEditor: HeroProductPriceEditorBinding = {
     canEdit,
@@ -1136,7 +1145,6 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     onSavePriceValue: handleSavePriceValue,
     onSaveSpecValue: handleSaveSpecValue,
   };
-  const activeSalesModeLabel = salesModeLabel(salesMode);
 
   return (
     <div className="market-scan-shell hero-product-shell">
@@ -1391,7 +1399,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
                   className={`market-scan-slide-frame hero-product-slide-frame hero-product-slide-frame--${activePage}${exportingSlide ? " is-exporting" : ""}${slideEditMode && !exportingSlide ? " is-editing" : ""}${loading && !exportingSlide ? " is-updating" : ""}`}
                   style={slideFrameStyle}
                 >
-                  {loading && !exportingSlide ? <span className="hero-product-slide-refresh-status" role="status" aria-live="polite">刷新中</span> : null}
+                  {loading && !exportingSlide ? <span className="hero-product-slide-refresh-status" role="status" aria-live="polite">刷新中 · {requestedPeriodLabel}</span> : null}
                   <header className="market-scan-slide-head hero-product-slide-head">
                     <div className="market-scan-slide-copy">
                       <span className="market-scan-slide-kicker">{activeTab.code} {activeTab.label}</span>
@@ -1402,7 +1410,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
                       <span className="market-scan-slide-tag">{deck.metadata.selectedFuelType}</span>
                       <span className="market-scan-slide-tag">{deck.metadata.selectedSegment}</span>
                       <span className="market-scan-slide-tag">{activeSalesModeLabel}</span>
-                      <span className="market-scan-slide-tag">{deck.metadata.labels.currentMonthShort}</span>
+                      <span className="market-scan-slide-tag">{activePeriodLabel || deck.metadata.labels.currentMonthShort}</span>
                       <span className="market-scan-slide-tag">{priceSource.toUpperCase()}</span>
                     </div>
                   </header>

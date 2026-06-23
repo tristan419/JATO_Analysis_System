@@ -116,6 +116,7 @@ def hero_product_deck(
         ranking_limit=payload.ranking_limit,
         country_limit=payload.country_limit,
         trend_window_months=payload.trend_window_months,
+        country_rank_scope=payload.country_rank_scope,
         top_models=payload.top_models,
         hero_models=payload.hero_models,
     )
