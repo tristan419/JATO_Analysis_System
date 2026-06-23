@@ -10,7 +10,34 @@ import {
 
 import { apiUrl } from "../api/client";
 
-const AUTH_PROFILE_REFRESH_DELAY_MS = 1_500;
+const AUTH_PROFILE_REFRESH_DELAY_MS = 6_000;
+const AUTH_PROFILE_REFRESH_IDLE_TIMEOUT_MS = 4_000;
+
+type AuthIdleWindow = Window & typeof globalThis & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
+
+function scheduleAuthProfileRefresh(callback: () => void): () => void {
+  const idleWindow = window as AuthIdleWindow;
+  let idleHandle: number | null = null;
+  const delayHandle = window.setTimeout(() => {
+    if (typeof idleWindow.requestIdleCallback === "function") {
+      idleHandle = idleWindow.requestIdleCallback(callback, {
+        timeout: AUTH_PROFILE_REFRESH_IDLE_TIMEOUT_MS,
+      });
+      return;
+    }
+    callback();
+  }, AUTH_PROFILE_REFRESH_DELAY_MS);
+
+  return () => {
+    window.clearTimeout(delayHandle);
+    if (idleHandle !== null) {
+      idleWindow.cancelIdleCallback?.(idleHandle);
+    }
+  };
+}
 
 export interface User {
   username: string;
@@ -211,10 +238,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfileLoaded(true);
       return;
     }
-    const timer = window.setTimeout(() => {
+    return scheduleAuthProfileRefresh(() => {
       void refreshUser();
-    }, AUTH_PROFILE_REFRESH_DELAY_MS);
-    return () => window.clearTimeout(timer);
+    });
   }, [refreshUser, token]);
 
   const login = useCallback(async (username: string, password: string) => {
