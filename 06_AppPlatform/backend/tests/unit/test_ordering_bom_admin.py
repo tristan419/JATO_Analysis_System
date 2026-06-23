@@ -93,8 +93,10 @@ def test_build_matrix_normalizes_legacy_jaecoo_and_model_powertrain(monkeypatch)
     )
     monkeypatch.setattr(
         order_genius_service.repo,
-        "get_fob_for_country_sku",
-        lambda *_args, **_kwargs: fob,
+        "list_fobs_for_country_material_codes",
+        lambda _session, _country_code, material_codes, _payment_term_code=None: {
+            sku.material_code: fob,
+        } if sku.material_code in material_codes else {},
     )
     monkeypatch.setattr(
         order_genius_service.repo,
@@ -122,6 +124,44 @@ def test_build_matrix_normalizes_legacy_jaecoo_and_model_powertrain(monkeypatch)
     assert row["modelName"] == "JAECOO5 HEV"
     assert row["powertrain"] == "HEV"
     assert row["fobEur"] == 15300
+
+
+def test_build_matrix_excludes_cleared_zero_fob(monkeypatch) -> None:
+    sku = _legacy_jaecoo_sku()
+
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "get_country_payment_term",
+        lambda _session, _country_code, _order_month_hint=None: SimpleNamespace(
+            payment_term_code="LC90",
+            country_name="Slovakia",
+        ),
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "list_active_skus",
+        lambda *_args, **_kwargs: [sku],
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "list_fobs_for_country_material_codes",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "list_quantities_for_country_year",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "list_historical_skus_with_quantity",
+        lambda *_args, **_kwargs: [],
+    )
+
+    result = order_genius_service.build_matrix(_FakeSession(), "SK", 2026)
+
+    assert result["rows"] == []
+    assert result["totalRows"] == 0
 
 
 def test_build_options_normalizes_legacy_jaecoo_filter_values(monkeypatch) -> None:

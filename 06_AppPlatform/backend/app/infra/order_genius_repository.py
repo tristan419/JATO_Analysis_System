@@ -469,10 +469,11 @@ def copy_country_fobs(
     skipped = 0
     unchanged = 0
     for source_row in source_rows:
-        existing = get_fob_for_country_sku(
+        existing = _get_fob_for_country_sku_row(
             session,
             target,
             source_row.material_code,
+            positive_only=False,
         )
         if existing and existing.final_fob_eur is not None and existing.final_fob_eur <= 0:
             existing.is_active = False
@@ -2144,8 +2145,9 @@ def upsert_fob_resolved(
     session: Session,
     fob: CountrySkuFobResolved,
 ) -> CountrySkuFobResolved:
-    existing = get_fob_for_country_sku(
-        session, fob.country_code, fob.material_code, fob.payment_term_code,
+    existing = _get_fob_for_country_sku_row(
+        session, fob.country_code, fob.material_code,
+        positive_only=False,
     )
     if existing:
         # Write history record before overwriting values
@@ -2186,12 +2188,35 @@ def get_fob_for_country_sku(
     material_code: str,
     payment_term_code: str | None = None,  # kept for API compat, no longer filters
 ) -> CountrySkuFobResolved | None:
-    """Get FOB for a country+material. PT is metadata only — not a filter."""
+    """Get a business-visible FOB for a country+material.
+
+    A non-positive FOB means the market does not currently have an orderable
+    FOB for the SKU. Keep that rule here so Order Genius, exports, and vehicle
+    allocation do not treat cleared FOB rows as available.
+    """
+    return _get_fob_for_country_sku_row(
+        session,
+        country_code,
+        material_code,
+        positive_only=True,
+    )
+
+
+def _get_fob_for_country_sku_row(
+    session: Session,
+    country_code: str,
+    material_code: str,
+    *,
+    positive_only: bool,
+) -> CountrySkuFobResolved | None:
+    """Get an active FOB row; internal writers can include cleared rows."""
     stmt = select(CountrySkuFobResolved).where(
         CountrySkuFobResolved.country_code == country_code,
         CountrySkuFobResolved.material_code == material_code,
         CountrySkuFobResolved.is_active == True,
     )
+    if positive_only:
+        stmt = stmt.where(CountrySkuFobResolved.final_fob_eur > 0)
     return session.execute(stmt).scalars().first()
 
 
@@ -2215,6 +2240,7 @@ def list_fobs_for_country_material_codes(
             CountrySkuFobResolved.country_code == country_code,
             CountrySkuFobResolved.material_code.in_(codes),
             CountrySkuFobResolved.is_active == True,
+            CountrySkuFobResolved.final_fob_eur > 0,
         )
         .order_by(CountrySkuFobResolved.material_code)
     )
