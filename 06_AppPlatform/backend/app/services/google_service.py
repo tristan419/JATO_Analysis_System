@@ -11,6 +11,8 @@ import requests
 from app.core.config import (
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
+    GOOGLE_OAUTH_RELAY_TOKEN,
+    GOOGLE_OAUTH_RELAY_URL,
     GOOGLE_OAUTH_PROXY_URL,
     GOOGLE_OAUTH_TIMEOUT_SECONDS,
 )
@@ -57,6 +59,17 @@ def _google_proxies() -> dict[str, str] | None:
     }
 
 
+def _google_relay_url(path: str) -> str:
+    base = str(GOOGLE_OAUTH_RELAY_URL or "").strip().rstrip("/")
+    return f"{base}/{path.lstrip('/')}" if base else ""
+
+
+def _google_relay_headers(headers: dict | None = None) -> dict:
+    relay_headers = dict(headers or {})
+    relay_headers["X-JATO-Relay-Token"] = GOOGLE_OAUTH_RELAY_TOKEN
+    return relay_headers
+
+
 def _google_request(method: str, url: str, **kwargs) -> requests.Response:
     try:
         return requests.request(
@@ -77,6 +90,44 @@ def _google_request(method: str, url: str, **kwargs) -> requests.Response:
             "Google auth failed: backend cannot reach Google OAuth. "
             "Check APP_GOOGLE_OAUTH_PROXY_URL and the local outbound proxy."
         ) from exc
+
+
+def _google_relay_request(method: str, path: str, **kwargs) -> requests.Response:
+    relay_url = _google_relay_url(path)
+    if not relay_url:
+        raise GoogleOAuthNetworkError("Google OAuth relay is not configured.")
+    try:
+        headers = _google_relay_headers(kwargs.pop("headers", None))
+        return requests.request(
+            method,
+            relay_url,
+            headers=headers,
+            timeout=GOOGLE_OAUTH_TIMEOUT_SECONDS,
+            **kwargs,
+        )
+    except requests.exceptions.RequestException as exc:
+        log.warning(
+            "Google OAuth relay %s request failed; relay_configured=%s",
+            method.upper(),
+            bool(relay_url),
+            exc_info=True,
+        )
+        raise GoogleOAuthNetworkError(
+            "Google auth failed: backend cannot reach the Google OAuth relay."
+        ) from exc
+
+
+def _request_google_token(data: dict) -> requests.Response:
+    if _google_relay_url("token"):
+        return _google_relay_request("post", "token", data=data)
+    return _google_request("post", _TOKEN_URL, data=data)
+
+
+def _request_google_userinfo(access_token: str) -> requests.Response:
+    headers = {"Authorization": f"Bearer {access_token}"}
+    if _google_relay_url("userinfo"):
+        return _google_relay_request("get", "userinfo", headers=headers)
+    return _google_request("get", _USERINFO_URL, headers=headers)
 
 
 def _raise_for_google_status(resp: requests.Response, step: str) -> None:
@@ -101,16 +152,14 @@ def exchange_code(code: str, redirect_uri: str) -> dict:
 
     Returns dict with: email, name, picture, sub (Google user ID).
     """
-    resp = _google_request(
-        "post",
-        _TOKEN_URL,
-        data={
+    resp = _request_google_token(
+        {
             "client_id": GOOGLE_CLIENT_ID,
             "client_secret": GOOGLE_CLIENT_SECRET,
             "code": code,
             "grant_type": "authorization_code",
             "redirect_uri": redirect_uri,
-        },
+        }
     )
     _raise_for_google_status(resp, "token")
     tokens = resp.json()
@@ -119,11 +168,7 @@ def exchange_code(code: str, redirect_uri: str) -> dict:
         log.warning("Google OAuth token response did not include access_token")
         raise GoogleOAuthError("Google auth failed: missing access token from Google.")
 
-    user_resp = _google_request(
-        "get",
-        _USERINFO_URL,
-        headers={"Authorization": f"Bearer {access_token}"},
-    )
+    user_resp = _request_google_userinfo(access_token)
     _raise_for_google_status(user_resp, "userinfo")
     return user_resp.json()
 

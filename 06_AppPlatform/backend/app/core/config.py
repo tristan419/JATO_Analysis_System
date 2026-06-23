@@ -195,6 +195,8 @@ GOOGLE_REDIRECT_URI = os.getenv(
     "http://127.0.0.1:8000/v1/auth/google/callback",
 ).strip()
 GOOGLE_OAUTH_PROXY_URL = os.getenv("APP_GOOGLE_OAUTH_PROXY_URL", "").strip()
+GOOGLE_OAUTH_RELAY_URL = os.getenv("APP_GOOGLE_OAUTH_RELAY_URL", "").strip()
+GOOGLE_OAUTH_RELAY_TOKEN = os.getenv("APP_GOOGLE_OAUTH_RELAY_TOKEN", "").strip()
 GOOGLE_OAUTH_TIMEOUT_SECONDS = _parse_float_env(
     "APP_GOOGLE_OAUTH_TIMEOUT_SECONDS",
     15.0,
