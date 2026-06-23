@@ -54,6 +54,30 @@ class _FakeSession:
         self.added.append(row)
 
 
+class _QueryResult:
+    def __init__(self, values: list[object]):
+        self.values = values
+
+    def filter(self, *_criteria: object) -> "_QueryResult":
+        return self
+
+    def all(self) -> list[object]:
+        return self.values
+
+
+class _QueryFakeSession(_FakeSession):
+    def __init__(self, query_values: list[object]):
+        super().__init__()
+        self.query_values = query_values
+        self.flushed = False
+
+    def query(self, _model: object) -> _QueryResult:
+        return _QueryResult(self.query_values)
+
+    def flush(self) -> None:
+        self.flushed = True
+
+
 def test_normalize_jaecoo_brand_variants() -> None:
     assert normalize_brand("JEACOO") == "JAECOO"
     assert normalize_brand("jecoo") == "JAECOO"
@@ -65,6 +89,32 @@ def test_infer_colour_tier_handles_dual_swatch_and_special_finish() -> None:
     assert infer_colour_tier("Carbon black + grey roof") == "dual"
     assert infer_colour_tier("Aviation silver", colour_hex="#C8C0B8|#111111") == "dual"
     assert infer_colour_tier("Matte black (Black Edition)") == "special"
+
+
+def test_fob_based_tier_ignores_cleared_zero_fob() -> None:
+    zero = _legacy_jaecoo_sku()
+    zero.material_code = "T7000Z5BWMY0000"
+    zero.bom_template = "T7000Z5BWMY0000"
+    base = _legacy_jaecoo_sku()
+    base.material_code = "T7000Z5BWMY0001"
+    base.bom_template = "T7000Z5BWMY0001"
+    dual = _legacy_jaecoo_sku()
+    dual.material_code = "T7000Z5ZEMY0002"
+    dual.bom_template = "T7000Z5ZEMY0002"
+    dual.exterior_color_code = "ZE"
+
+    session = _QueryFakeSession([
+        SimpleNamespace(material_code=zero.material_code, country_code="NL", final_fob_eur=0),
+        SimpleNamespace(material_code=base.material_code, country_code="NL", final_fob_eur=1000),
+        SimpleNamespace(material_code=dual.material_code, country_code="NL", final_fob_eur=1200),
+    ])
+
+    updated = order_genius_service._assign_fob_based_tiers(session, [zero, base, dual])
+
+    assert updated == 1
+    assert base.colour_tier == "single"
+    assert dual.colour_tier == "dual"
+    assert session.flushed is True
 
 
 def _legacy_jaecoo_sku() -> SimpleNamespace:
@@ -79,6 +129,7 @@ def _legacy_jaecoo_sku() -> SimpleNamespace:
         exterior_color_code="BW",
         exterior_color_type="single",
         colour_tier="single",
+        colour_hex=None,
         interior_color_name="Black-Black",
         interior_colour_code="R19",
         interior_package=None,

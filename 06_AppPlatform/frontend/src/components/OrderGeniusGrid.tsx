@@ -27,6 +27,7 @@ const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
+const MONTH_NUMBERS = MONTH_NAMES.map((_, i) => i + 1);
 
 export interface OrderGeniusGridRow {
   materialCode: string;
@@ -41,7 +42,7 @@ export interface OrderGeniusGridRow {
   remark?: string;
   _countryCode?: string;
   _indent?: boolean;
-  __type?: "groupHeader" | "data" | "consolidated_parent";
+  __type?: "groupHeader" | "data" | "consolidated_parent" | "summary";
   __groupLabel?: string;
   __groupMeta?: string;
   __groupColor?: string;
@@ -52,6 +53,9 @@ export interface OrderGeniusGridRow {
   __expanded?: boolean;
   // Flattened months: month_1..month_12
   [key: `month_${number}`]: number;
+  // Precomputed monetary totals for aggregate rows.
+  [key: `_amount_${number}`]: number | undefined;
+  _ttlAmount?: number;
   // Row versions per month
   _versions: Record<string, number>;
   // Error messages per cell key
@@ -124,7 +128,7 @@ export function buildOrderGeniusColumnDefs(
       cellClass: "og-pi-select-cell",
       cellRenderer: (params: ICellRendererParams<OrderGeniusGridRow, unknown>) => {
         const row = params.data;
-        if (!row || row.__type === "groupHeader" || row.__type === "consolidated_parent") {
+        if (!row || row.__type === "groupHeader" || row.__type === "consolidated_parent" || row.__type === "summary") {
           return null;
         }
         const quantity = row[monthField] || 0;
@@ -228,7 +232,7 @@ export function buildOrderGeniusColumnDefs(
       width: 150,
       editable: false,
       cellClass: "og-material-cell",
-      valueFormatter: (p) => (p.data?.__type === "groupHeader" ? "" : String(p.value ?? "")),
+        valueFormatter: (p) => (p.data?.__type === "groupHeader" || p.data?.__type === "summary" ? "" : String(p.value ?? "")),
     });
   }
 
@@ -285,6 +289,9 @@ export function buildOrderGeniusColumnDefs(
         valueGetter: (p: ValueGetterParams<OrderGeniusGridRow>) => {
           const row = p.data;
           if (!row) return 0;
+          if (row.__type === "groupHeader" || row.__type === "consolidated_parent") {
+            return row[`_amount_${m}`] ?? 0;
+          }
           const qty = (row as any)[field] ?? 0;
           const fob = row.fobEur ?? 0;
           return qty * fob;
@@ -323,6 +330,9 @@ export function buildOrderGeniusColumnDefs(
       valueGetter: (p: ValueGetterParams<OrderGeniusGridRow>) => {
         const row = p.data;
         if (!row) return 0;
+        if (row.__type === "groupHeader" || row.__type === "consolidated_parent") {
+          return row._ttlAmount ?? 0;
+        }
         let t = 0;
         const fob = row.fobEur ?? 0;
         for (const m of activeMonths) t += ((row as any)[`month_${m}`] ?? 0) * fob;
@@ -458,7 +468,7 @@ export function OrderGeniusGrid({
   );
 
   const isRowSelectable = useCallback(
-    (node: any) => node.data?.__type !== "groupHeader",
+    (node: any) => node.data?.__type !== "groupHeader" && node.data?.__type !== "summary",
     [],
   );
 
@@ -468,10 +478,55 @@ export function OrderGeniusGrid({
       "og-group-header-row-country": (p: any) => p.data?.__groupKind === "country",
       "og-group-header-row-bom": (p: any) => p.data?.__groupKind === "bom",
       "og-consolidated-parent": (p: any) => p.data?.__type === "consolidated_parent",
+      "og-summary-row": (p: any) => p.data?.__type === "summary",
       "og-historical-row": (p: any) => p.data?.lifecycleStatus === "historical",
     }),
     [],
   );
+
+  const pinnedBottomRowData = useMemo<OrderGeniusGridRow[]>(() => {
+    if (rows.length === 0) return [];
+    const topLevelHeaders = rows.filter(
+      (row) => row.__type === "groupHeader" && (row.__groupLevel ?? 0) === 0,
+    );
+    const sourceRows = topLevelHeaders.length > 0
+      ? topLevelHeaders
+      : rows.filter((row) => row.__type !== "groupHeader" && row.__type !== "consolidated_parent" && row.__type !== "summary");
+    if (sourceRows.length === 0) return [];
+
+    const summary: OrderGeniusGridRow = {
+      materialCode: "__sum__",
+      modelName: "SUM",
+      version: "",
+      colour: "",
+      interiorColorName: "",
+      fobEur: null,
+      lifecycleStatus: "active",
+      editable: false,
+      remark: "",
+      _countryCode: showCountry ? "Σ" : undefined,
+      _versions: {},
+      _errors: {},
+      _saving: new Set(),
+      __type: "summary",
+    };
+    let ttlAmount = 0;
+    for (const month of MONTH_NUMBERS) {
+      const monthField = `month_${month}` as `month_${number}`;
+      const amountField = `_amount_${month}` as `_amount_${number}`;
+      const quantity = sourceRows.reduce((sum, row) => sum + (row[monthField] || 0), 0);
+      const amount = sourceRows.reduce((sum, row) => {
+        const precomputed = row[amountField];
+        if (precomputed != null) return sum + precomputed;
+        return sum + (row[monthField] || 0) * (row.fobEur || 0);
+      }, 0);
+      summary[monthField] = quantity;
+      summary[amountField] = amount;
+      ttlAmount += amount;
+    }
+    summary._ttlAmount = ttlAmount;
+    return [summary];
+  }, [rows, showCountry]);
 
   useEffect(() => {
     if (!localGridApiRef.current) return;
@@ -570,6 +625,7 @@ export function OrderGeniusGrid({
       <AgGridReact<OrderGeniusGridRow>
         theme={themeAlpine}
         rowData={rows}
+        pinnedBottomRowData={pinnedBottomRowData}
         columnDefs={columnDefs}
         components={components}
         context={gridContext}

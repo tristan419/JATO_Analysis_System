@@ -131,6 +131,7 @@ def _assign_fob_based_tiers(
     all_fobs = session.query(CountrySkuFobResolved).filter(
         CountrySkuFobResolved.material_code.in_(material_codes),
         CountrySkuFobResolved.is_active == True,
+        CountrySkuFobResolved.final_fob_eur > 0,
     ).all()
 
     # Step 1: For each (bom_template, country), find the base FOB
@@ -138,7 +139,7 @@ def _assign_fob_based_tiers(
     bom_fobs: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
     for fob in all_fobs:
         sku = code_to_sku.get(fob.material_code)
-        if not sku or fob.final_fob_eur is None:
+        if not sku or fob.final_fob_eur is None or float(fob.final_fob_eur) <= 0:
             continue
         bt = sku.bom_template or sku.material_code
         key = (bt, fob.country_code)
@@ -151,7 +152,7 @@ def _assign_fob_based_tiers(
     mv_fobs: dict[tuple[str, str], list[float]] = defaultdict(list)
     for fob in all_fobs:
         sku = code_to_sku.get(fob.material_code)
-        if not sku or fob.final_fob_eur is None:
+        if not sku or fob.final_fob_eur is None or float(fob.final_fob_eur) <= 0:
             continue
         mv = f"{sku.model_name or ''}|{sku.version or ''}"
         key = (mv, fob.country_code)
@@ -163,7 +164,7 @@ def _assign_fob_based_tiers(
     surcharge_map: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
     for fob in all_fobs:
         sku = code_to_sku.get(fob.material_code)
-        if not sku or fob.final_fob_eur is None:
+        if not sku or fob.final_fob_eur is None or float(fob.final_fob_eur) <= 0:
             continue
         bt = sku.bom_template or sku.material_code
         mv = f"{sku.model_name or ''}|{sku.version or ''}"

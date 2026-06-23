@@ -13396,6 +13396,21 @@ table.data-table tr.data-table-group-row.contains-selection td {
   color: #0f766e !important;
 }
 
+.og-summary-row {
+  background: #eef6ff !important;
+  font-weight: 900 !important;
+  border-top: 2px solid #94a3b8 !important;
+}
+
+.og-summary-row .ag-cell {
+  color: #0f172a !important;
+  border-top: 1px solid #cbd5e1 !important;
+}
+
+.og-summary-row .ag-cell-value {
+  letter-spacing: 0.02em;
+}
+
 .og-country-cell {
   font-family: monospace;
   font-size: 11px;
