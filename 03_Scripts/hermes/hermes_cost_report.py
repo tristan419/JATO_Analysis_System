@@ -31,6 +31,7 @@ def _safe(v: Any, key: str, default: Any = None) -> Any:
 def load_pricing(path: str) -> dict:
     """Load model pricing YAML."""
     import yaml
+
     p = Path(path)
     if not p.is_absolute():
         p = REPO_ROOT / p
@@ -44,18 +45,22 @@ def _default_pricing() -> dict:
     return {
         "currency": "CNY",
         "models": {
-            "deepseek-v4-flash": {"pricing": {
-                "inputCacheHitCnyPerMillionTokens": 0.02,
-                "inputCacheMissCnyPerMillionTokens": 1.0,
-                "outputCnyPerMillionTokens": 2.0,
-                "discount": {"active": False},
-            }},
-            "deepseek-v4-pro": {"pricing": {
-                "inputCacheHitCnyPerMillionTokens": 0.025,
-                "inputCacheMissCnyPerMillionTokens": 3.0,
-                "outputCnyPerMillionTokens": 6.0,
-                "discount": {"active": True, "validUntil": "2026-05-31T23:59:00+08:00"},
-            }},
+            "deepseek-v4-flash": {
+                "pricing": {
+                    "inputCacheHitCnyPerMillionTokens": 0.02,
+                    "inputCacheMissCnyPerMillionTokens": 1.0,
+                    "outputCnyPerMillionTokens": 2.0,
+                    "discount": {"active": False},
+                }
+            },
+            "deepseek-v4-pro": {
+                "pricing": {
+                    "inputCacheHitCnyPerMillionTokens": 0.025,
+                    "inputCacheMissCnyPerMillionTokens": 3.0,
+                    "outputCnyPerMillionTokens": 6.0,
+                    "discount": {"active": True, "validUntil": "2026-05-31T23:59:00+08:00"},
+                }
+            },
         },
         "monthlyBudget": {"totalBudgetCny": 500, "warningThresholdRatio": 0.75},
     }
@@ -95,6 +100,7 @@ def _calc_cost(audit: dict, pricing: dict) -> dict:
         if valid_until:
             try:
                 from datetime import datetime as dt
+
                 expires = dt.fromisoformat(valid_until.replace("+08:00", "+08:00"))
                 if dt.now(timezone.utc) > expires:
                     discount_active = False
@@ -122,23 +128,29 @@ def _generate_routing_findings(audits: list[dict]) -> list[dict]:
         model = a.get("modelUsed", "")
 
         if mode == "direct_lookup" and model == "deepseek-v4-pro":
-            findings.append({
-                "severity": "WARNING",
-                "finding": f"direct_lookup using Pro: {a.get('question', '')[:60]}",
-                "recommendation": "direct_lookup should use Flash or no LLM.",
-            })
+            findings.append(
+                {
+                    "severity": "WARNING",
+                    "finding": f"direct_lookup using Pro: {a.get('question', '')[:60]}",
+                    "recommendation": "direct_lookup should use Flash or no LLM.",
+                }
+            )
         if mode == "insufficient_evidence" and model == "deepseek-v4-pro":
-            findings.append({
-                "severity": "WARNING",
-                "finding": "insufficient_evidence using Pro",
-                "recommendation": "No evidence available — should not consume Pro budget.",
-            })
+            findings.append(
+                {
+                    "severity": "WARNING",
+                    "finding": "insufficient_evidence using Pro",
+                    "recommendation": "No evidence available — should not consume Pro budget.",
+                }
+            )
         if mode == "hypothesis" and model == "deepseek-v4-pro":
-            findings.append({
-                "severity": "INFO",
-                "finding": "hypothesis using Pro — review necessity",
-                "recommendation": "Flash is sufficient for speculative answers.",
-            })
+            findings.append(
+                {
+                    "severity": "INFO",
+                    "finding": "hypothesis using Pro — review necessity",
+                    "recommendation": "Flash is sufficient for speculative answers.",
+                }
+            )
 
     return findings
 
@@ -166,7 +178,9 @@ def _generate_report(results: dict) -> str:
     lines.append(f"| Cache-miss input tokens | {s['totalCacheMissInputTokens']:,} |")
     lines.append(f"| Cache hit ratio | {s['cacheHitRatio']:.1%} |")
     lines.append(f"| Budget | {s['budgetCny']:.0f} CNY |")
-    budget_icon = "exceeded" if s["budgetStatus"] == "exceeded" else ("warning" if s["budgetStatus"] == "warning" else "ok")
+    budget_icon = (
+        "exceeded" if s["budgetStatus"] == "exceeded" else ("warning" if s["budgetStatus"] == "warning" else "ok")
+    )
     lines.append(f"| Budget status | {budget_icon} |")
     lines.append("")
 
@@ -175,7 +189,11 @@ def _generate_report(results: dict) -> str:
     lines.append("|---|---:|---:|---:|---:|")
     for mid, m in by_model.items():
         d = "active" if m.get("discountActive") else "none"
-        lines.append(f"| {mid} | {m['records']} | {m['inputTokens']:,} | {m['outputTokens']:,} | {m['estimatedCostCny']:.4f} | {d} |")
+        estimated_cost = f"{m['estimatedCostCny']:.4f}"
+        lines.append(
+            f"| {mid} | {m['records']} | {m['inputTokens']:,} | "
+            f"{m['outputTokens']:,} | {estimated_cost} | {d} |"
+        )
     lines.append("")
 
     if by_mode:
@@ -204,12 +222,17 @@ def _generate_report(results: dict) -> str:
         lines.append("| Severity | Finding | Recommendation |")
         lines.append("|---|---|---|")
         for f in findings:
-            lines.append(f"| {f['severity']} | {f['finding'][:100]} | {f['recommendation'][:100]} |")
+            finding = f["finding"][:100]
+            recommendation = f["recommendation"][:100]
+            lines.append(f"| {f['severity']} | {finding} | {recommendation} |")
         lines.append("")
 
     lines.append("## 6. Notes\n")
     lines.append("- Pricing loaded from `hermes/model_pricing.yaml`. Verify against DeepSeek billing console.")
-    lines.append("- Cache split fields (cacheHitInputTokens/cacheMissInputTokens) not yet present in audit records — assuming all cache-miss.")
+    lines.append(
+        "- Cache split fields (cacheHitInputTokens/cacheMissInputTokens) not yet present "
+        "in audit records — assuming all cache-miss."
+    )
     lines.append("- Pro discount (2.5折) is time-limited. Review cost estimates before 2026-05-31.")
     lines.append("")
 

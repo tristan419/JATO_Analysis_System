@@ -10,6 +10,35 @@ import {
 
 import { apiUrl } from "../api/client";
 
+const AUTH_PROFILE_REFRESH_DELAY_MS = 6_000;
+const AUTH_PROFILE_REFRESH_IDLE_TIMEOUT_MS = 4_000;
+
+type AuthIdleWindow = Window & typeof globalThis & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
+
+function scheduleAuthProfileRefresh(callback: () => void): () => void {
+  const idleWindow = window as AuthIdleWindow;
+  let idleHandle: number | null = null;
+  const delayHandle = window.setTimeout(() => {
+    if (typeof idleWindow.requestIdleCallback === "function") {
+      idleHandle = idleWindow.requestIdleCallback(callback, {
+        timeout: AUTH_PROFILE_REFRESH_IDLE_TIMEOUT_MS,
+      });
+      return;
+    }
+    callback();
+  }, AUTH_PROFILE_REFRESH_DELAY_MS);
+
+  return () => {
+    window.clearTimeout(delayHandle);
+    if (idleHandle !== null) {
+      idleWindow.cancelIdleCallback?.(idleHandle);
+    }
+  };
+}
+
 export interface User {
   username: string;
   role: string;
@@ -135,7 +164,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(
     () => localStorage.getItem(STORAGE_TOKEN) || null,
   );
-  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [profileLoaded, setProfileLoaded] = useState(true);
 
   const applyUser = useCallback((nextUser: User) => {
     storeUser(nextUser);
@@ -148,9 +177,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       || import.meta.env.VITE_AUTH_TOKEN
       || ""
     ).trim();
+    if (!currentToken) {
+      setProfileLoaded(true);
+      return;
+    }
     const res = await fetch(apiUrl("/auth/me"), {
       headers: {
-        ...(currentToken ? { "X-Auth-Token": currentToken } : {}),
+        "X-Auth-Token": currentToken,
         "X-User-Name": localStorage.getItem(STORAGE_USER) || import.meta.env.VITE_USER_NAME || "anonymous",
       },
     });
@@ -196,8 +229,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applyUser]);
 
   useEffect(() => {
-    setProfileLoaded(false);
-    void refreshUser();
+    const currentToken = (
+      localStorage.getItem(STORAGE_TOKEN)
+      || import.meta.env.VITE_AUTH_TOKEN
+      || ""
+    ).trim();
+    if (!currentToken) {
+      setProfileLoaded(true);
+      return;
+    }
+    return scheduleAuthProfileRefresh(() => {
+      void refreshUser();
+    });
   }, [refreshUser, token]);
 
   const login = useCallback(async (username: string, password: string) => {

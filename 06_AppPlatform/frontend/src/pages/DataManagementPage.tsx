@@ -85,6 +85,61 @@ const HERMES_SCRIPTS_MAP: Record<string, string> = {
   "answer-audit": "answer audit",
 };
 
+type ReusableBuildingBlockLayer = "Frontend" | "Backend" | "Utility";
+
+interface ReusableBuildingBlock {
+  name: string;
+  layer: ReusableBuildingBlockLayer;
+  path: string;
+  usage: string;
+  owner: string;
+}
+
+const REUSABLE_BUILDING_BLOCKS: ReusableBuildingBlock[] = [
+  {
+    name: "FileDropzone",
+    layer: "Frontend",
+    path: "src/components/upload/FileDropzone.tsx",
+    usage: "Excel、PDF、ZIP/RAR 上传入口，支持拖拽、点击选择和清除文件。",
+    owner: "COC 工作台 / 月更上传 / 后续导入页",
+  },
+  {
+    name: "StatusMetricCard",
+    layer: "Frontend",
+    path: "src/components/workbench/StatusMetricCard.tsx",
+    usage: "状态数字卡片，支持 tone、active 和点击筛选。",
+    owner: "COC 状态 / 导入预览 / 工作台摘要",
+  },
+  {
+    name: "SheetGroupedPreview",
+    layer: "Frontend",
+    path: "src/components/workbench/SheetGroupedPreview.tsx",
+    usage: "按 Sheet 分组展开的表格预览，业务行操作通过 renderRow 插槽注入。",
+    owner: "COC 填充 / Engineering Config / Excel digest",
+  },
+  {
+    name: "UploadDigestPanel",
+    layer: "Frontend",
+    path: "src/components/UploadDigestPanel.tsx",
+    usage: "上传解析后的指标、错误、预览和 apply/cancel 操作面板。",
+    owner: "Material Master / CBU / 后续上传 digest",
+  },
+  {
+    name: "workbook_table_scanner",
+    layer: "Backend",
+    path: "app/services/workbook_table_scanner.py",
+    usage: "多 sheet 表头扫描、物料号组推断、目标列创建和 source row/cell 抽取。",
+    owner: "COC 填充 / Excel 回写型任务",
+  },
+  {
+    name: "downloadBlob + formatDateTime",
+    layer: "Utility",
+    path: "src/utils/download.ts, src/utils/timeFormatting.ts",
+    usage: "浏览器下载 blob 与统一时间显示，避免页面内重复小工具函数。",
+    owner: "所有下载和历史记录页面",
+  },
+];
+
 interface HermesPipelineDisplayRow {
   key: string;
   label: string;
@@ -1085,92 +1140,124 @@ export function DataManagementPage() {
       ) : null}
 
       {subpage === "features" ? (
-        <div className="card crud-card">
-          <div className="admin-card-header"><div><h2>Feature Development Kanban</h2></div></div>
-          <div style={{ padding: 16 }}>
-            {featureKanban ? (
-              <>
-                <div style={{display:"flex",gap:12,marginBottom:16,fontSize:12,color:"#64748b"}}>
-                  <span>Total: {(featureKanban.summary as Record<string,number>)?.total} features</span>
-                  <span>Active: {(featureKanban.summary as Record<string,number>)?.active}</span>
-                  <span>Beta: {(featureKanban.summary as Record<string,number>)?.beta}</span>
-                  <span>Planned: {(featureKanban.summary as Record<string,number>)?.planned}</span>
-                  <span>With tests: {(featureKanban.summary as Record<string,number>)?.withTests}</span>
-                  <span>With issues: {(featureKanban.summary as Record<string,number>)?.withIssues}</span>
-                </div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
-                  {(["planned","beta","active","archived"] as string[]).map((col) => {
-                    const column = (featureKanban.columns as Record<string,unknown>)[col] as Record<string,unknown>;
-                    const allFeatures = (column?.features as unknown[]) || [];
-                    const showAll = allFeatures.length <= 10;
-                    const visibleFeatures = showAll ? allFeatures : allFeatures.slice(0, 10);
-                    return (
-                      <div key={col} style={{background:"#f8fafc",borderRadius:8,padding:12}}>
-                        <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:column?.color as string,display:"flex",justifyContent:"space-between"}}>
-                          <span>{column?.label as string}</span>
-                          <span style={{fontSize:11,background:"#e2e8f0",borderRadius:10,padding:"0 8px"}}>{allFeatures.length}</span>
-                        </div>
-                        <div style={{maxHeight:520,overflowY:"auto",paddingRight:4}}>
-                        {visibleFeatures.map((f: unknown, idx: number) => {
-                          const feat = f as Record<string,unknown>;
-                          const risk = String(feat.riskLevel || "low");
-                          const riskColor = risk === "high" ? "#ef4444" : risk === "medium" ? "#f59e0b" : "#22c55e";
-                          const hasTests = (feat.tests as unknown[])?.length > 0;
-                          const hasDocs = (feat.docs as unknown[])?.length > 0;
-                          const hasIssues = (feat.knownIssues as unknown[])?.length > 0;
-                          const deps = (feat.dependencies as string[]) || [];
-                          return (
-                            <div key={String(feat.featureId)}>
-                              {/* Dependency connector dot + line */}
-                              {deps.length > 0 && (
-                                <div style={{display:"flex",alignItems:"center",gap:4,marginBottom:2,paddingLeft:8}}>
-                                  <div style={{width:6,height:6,borderRadius:"50%",background:"#94a3b8"}} />
-                                  <div style={{fontSize:9,color:"#94a3b8"}}>{deps.map((d: string) => d.replace("feature.","")).join(", ")}</div>
+        <>
+          <div className="card crud-card">
+            <div className="admin-card-header"><div><h2>Feature Development Kanban</h2></div></div>
+            <div style={{ padding: 16 }}>
+              {featureKanban ? (
+                <>
+                  <div style={{display:"flex",gap:12,marginBottom:16,fontSize:12,color:"#64748b"}}>
+                    <span>Total: {(featureKanban.summary as Record<string,number>)?.total} features</span>
+                    <span>Active: {(featureKanban.summary as Record<string,number>)?.active}</span>
+                    <span>Beta: {(featureKanban.summary as Record<string,number>)?.beta}</span>
+                    <span>Planned: {(featureKanban.summary as Record<string,number>)?.planned}</span>
+                    <span>With tests: {(featureKanban.summary as Record<string,number>)?.withTests}</span>
+                    <span>With issues: {(featureKanban.summary as Record<string,number>)?.withIssues}</span>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+                    {(["planned","beta","active","archived"] as string[]).map((col) => {
+                      const column = (featureKanban.columns as Record<string,unknown>)[col] as Record<string,unknown>;
+                      const allFeatures = (column?.features as unknown[]) || [];
+                      const showAll = allFeatures.length <= 10;
+                      const visibleFeatures = showAll ? allFeatures : allFeatures.slice(0, 10);
+                      return (
+                        <div key={col} style={{background:"#f8fafc",borderRadius:8,padding:12}}>
+                          <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:column?.color as string,display:"flex",justifyContent:"space-between"}}>
+                            <span>{column?.label as string}</span>
+                            <span style={{fontSize:11,background:"#e2e8f0",borderRadius:10,padding:"0 8px"}}>{allFeatures.length}</span>
+                          </div>
+                          <div style={{maxHeight:520,overflowY:"auto",paddingRight:4}}>
+                          {visibleFeatures.map((f: unknown, idx: number) => {
+                            const feat = f as Record<string,unknown>;
+                            const risk = String(feat.riskLevel || "low");
+                            const riskColor = risk === "high" ? "#ef4444" : risk === "medium" ? "#f59e0b" : "#22c55e";
+                            const hasTests = (feat.tests as unknown[])?.length > 0;
+                            const hasDocs = (feat.docs as unknown[])?.length > 0;
+                            const hasIssues = (feat.knownIssues as unknown[])?.length > 0;
+                            const deps = (feat.dependencies as string[]) || [];
+                            return (
+                              <div key={String(feat.featureId)}>
+                                {/* Dependency connector dot + line */}
+                                {deps.length > 0 && (
+                                  <div style={{display:"flex",alignItems:"center",gap:4,marginBottom:2,paddingLeft:8}}>
+                                    <div style={{width:6,height:6,borderRadius:"50%",background:"#94a3b8"}} />
+                                    <div style={{fontSize:9,color:"#94a3b8"}}>{deps.map((d: string) => d.replace("feature.","")).join(", ")}</div>
+                                  </div>
+                                )}
+                                <div style={{
+                                  background:"#fff",borderRadius:6,padding:"10px 12px",marginBottom:8,
+                                  border:"1px solid #e2e8f0",borderLeft:`3px solid ${feat.color || "#94a3b8"}`,fontSize:12,
+                                  marginLeft: deps.length > 0 ? 12 : 0,
+                                }}>
+                                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                                    <span style={{fontWeight:600,fontSize:11}}>{String(feat.name)}</span>
+                                    <span style={{fontSize:8,background:feat.implementationStatus==="implemented"?"#dcfce7":feat.implementationStatus==="partial"?"#dbeafe":"#fef3c7",color:feat.implementationStatus==="implemented"?"#166534":feat.implementationStatus==="partial"?"#1e40af":"#92400e",padding:"1px 5px",borderRadius:3,fontWeight:600,whiteSpace:"nowrap"}}>{String(feat.phase||feat.implementationStatus||"")}</span>
+                                  </div>
+                                  <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:3}}>
+                                    {(feat.routes as unknown[])?.length > 0 && <span style={{fontSize:9,background:"#e0f2fe",color:"#0369a1",padding:"0 5px",borderRadius:2}}>{(feat.routes as string[]).join(" ")}</span>}
+                                    {(feat.backendApis as unknown[])?.length > 0 && <span style={{fontSize:9,background:"#fef3c7",color:"#92400e",padding:"0 5px",borderRadius:2}}>{(feat.backendApis as string[]).length} APIs</span>}
+                                  </div>
+                                  <div style={{display:"flex",gap:6,fontSize:9,color:"#64748b"}}>
+                                    {hasTests && <span style={{color:"#22c55e"}}>Tests</span>}
+                                    {hasDocs && <span style={{color:"#3b82f6"}}>Docs</span>}
+                                    {hasIssues && <span style={{color:"#ef4444"}}>Issues</span>}
+                                    <span style={{color:riskColor,fontWeight:600}}>{risk}</span>
+                                  </div>
                                 </div>
-                              )}
-                              <div style={{
-                                background:"#fff",borderRadius:6,padding:"10px 12px",marginBottom:8,
-                                border:"1px solid #e2e8f0",borderLeft:`3px solid ${feat.color || "#94a3b8"}`,fontSize:12,
-                                marginLeft: deps.length > 0 ? 12 : 0,
-                              }}>
-                                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                                  <span style={{fontWeight:600,fontSize:11}}>{String(feat.name)}</span>
-                                  <span style={{fontSize:8,background:feat.implementationStatus==="implemented"?"#dcfce7":feat.implementationStatus==="partial"?"#dbeafe":"#fef3c7",color:feat.implementationStatus==="implemented"?"#166534":feat.implementationStatus==="partial"?"#1e40af":"#92400e",padding:"1px 5px",borderRadius:3,fontWeight:600,whiteSpace:"nowrap"}}>{String(feat.phase||feat.implementationStatus||"")}</span>
-                                </div>
-                                <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:3}}>
-                                  {(feat.routes as unknown[])?.length > 0 && <span style={{fontSize:9,background:"#e0f2fe",color:"#0369a1",padding:"0 5px",borderRadius:2}}>{(feat.routes as string[]).join(" ")}</span>}
-                                  {(feat.backendApis as unknown[])?.length > 0 && <span style={{fontSize:9,background:"#fef3c7",color:"#92400e",padding:"0 5px",borderRadius:2}}>{(feat.backendApis as string[]).length} APIs</span>}
-                                </div>
-                                <div style={{display:"flex",gap:6,fontSize:9,color:"#64748b"}}>
-                                  {hasTests && <span style={{color:"#22c55e"}}>Tests</span>}
-                                  {hasDocs && <span style={{color:"#3b82f6"}}>Docs</span>}
-                                  {hasIssues && <span style={{color:"#ef4444"}}>Issues</span>}
-                                  <span style={{color:riskColor,fontWeight:600}}>{risk}</span>
-                                </div>
+                                {/* Connector line between cards with deps */}
+                                {idx < visibleFeatures.length - 1 && deps.length > 0 && (
+                                  <div style={{width:2,height:4,background:"#e2e8f0",marginLeft:10}} />
+                                )}
                               </div>
-                              {/* Connector line between cards with deps */}
-                              {idx < visibleFeatures.length - 1 && deps.length > 0 && (
-                                <div style={{width:2,height:4,background:"#e2e8f0",marginLeft:10}} />
-                              )}
-                            </div>
-                          );
-                        })}
+                            );
+                          })}
+                          </div>
+                          {allFeatures.length > 10 && (
+                            <button type="button" className="btn btn-sm btn-ghost" style={{width:"100%",marginTop:8,fontSize:11}}
+                              onClick={() => {}}>
+                              +{allFeatures.length - 10} more
+                            </button>
+                          )}
+                          {allFeatures.length === 0 && <div style={{color:"#94a3b8",fontSize:11,textAlign:"center",padding:20}}>—</div>}
                         </div>
-                        {allFeatures.length > 10 && (
-                          <button type="button" className="btn btn-sm btn-ghost" style={{width:"100%",marginTop:8,fontSize:11}}
-                            onClick={() => {}}>
-                            +{allFeatures.length - 10} more
-                          </button>
-                        )}
-                        {allFeatures.length === 0 && <div style={{color:"#94a3b8",fontSize:11,textAlign:"center",padding:20}}>—</div>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </>
-            ) : <LoadingSurface mode="inline" label="Loading feature kanban..." kicker="Features" />}
+                      );
+                    })}
+                  </div>
+                </>
+              ) : <LoadingSurface mode="inline" label="Loading feature kanban..." kicker="Features" />}
+            </div>
           </div>
-        </div>
+          <div className="card crud-card" style={{ marginTop: 16 }}>
+            <div className="admin-card-header">
+              <div>
+                <h2>Reusable Building Blocks</h2>
+                <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: 12 }}>
+                  Frontend components, utilities, and backend scanners worth reusing before writing another upload workflow.
+                </p>
+              </div>
+            </div>
+            <div style={{ padding: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
+                {REUSABLE_BUILDING_BLOCKS.map((block) => (
+                  <div key={block.name} style={{ border: "1px solid #e2e8f0", borderRadius: 8, background: "#ffffff", padding: 12, display: "grid", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <strong style={{ fontSize: 13, color: "#0f172a" }}>{block.name}</strong>
+                      <span style={{ border: "1px solid #cbd5e1", borderRadius: 999, color: "#475569", fontSize: 10, fontWeight: 700, padding: "2px 8px" }}>
+                        {block.layer}
+                      </span>
+                    </div>
+                    <div style={{ color: "#2563eb", fontSize: 11, overflowWrap: "anywhere" }}>{block.path}</div>
+                    <div style={{ color: "#475569", fontSize: 12, lineHeight: 1.45 }}>{block.usage}</div>
+                    <div style={{ color: "#64748b", fontSize: 11 }}>Used by: {block.owner}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 12, color: "#64748b", fontSize: 12 }}>
+                Full notes live in <code>src/components/REUSABLE_COMPONENTS.md</code>.
+              </div>
+            </div>
+          </div>
+        </>
       ) : null}
 
       {subpage === "hermes" ? (

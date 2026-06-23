@@ -3,14 +3,24 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query
 
 from app.api.schemas import (
+    HeroProductDeckRequest,
+    HeroProductPriceOverrideRequest,
+    HeroProductSpecOverrideRequest,
     MarketScanDeckRequest,
     PositioningPricingDeckRequest,
     VersionComparisonDeckRequest,
 )
-from app.core.security import optional_viewer
+from app.core.security import UserContext, optional_viewer, require_min_role
+from app.db.session import get_db_session
+from sqlalchemy.orm import Session
 from app.services.customer_insight_service import (
     query_nordic_customer_deck,
     query_nordic_hev_customer_deck,
+)
+from app.services.hero_product_analysis_service import (
+    query_hero_product_deck,
+    upsert_hero_product_price_override,
+    upsert_hero_product_spec_override,
 )
 from app.services.market_scan_service import (
     query_market_scan_deck,
@@ -85,6 +95,61 @@ def version_comparison_deck(
         length_min=payload.length_min,
         length_max=payload.length_max,
     )
+
+
+@router.post("/hero-product-deck")
+def hero_product_deck(
+    payload: HeroProductDeckRequest,
+    _=Depends(optional_viewer),
+) -> dict:
+    return query_hero_product_deck(
+        countries=payload.countries,
+        price_country=payload.price_country,
+        tracking_country=payload.tracking_country,
+        target_period=payload.target_period,
+        time_range=payload.time_range,
+        sales_mode=payload.sales_mode,
+        segment=payload.segment,
+        fuel_type=payload.fuel_type,
+        price_source=payload.price_source,
+        top_n=payload.top_n,
+        ranking_limit=payload.ranking_limit,
+        country_limit=payload.country_limit,
+        trend_window_months=payload.trend_window_months,
+        country_rank_scope=payload.country_rank_scope,
+        top_models=payload.top_models,
+        hero_models=payload.hero_models,
+    )
+
+
+@router.patch("/hero-product-price")
+def patch_hero_product_price(
+    payload: HeroProductPriceOverrideRequest,
+    session: Session = Depends(get_db_session),
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict:
+    return {
+        "item": upsert_hero_product_price_override(
+            session,
+            payload.model_dump(),
+            updated_by=user.name,
+        )
+    }
+
+
+@router.patch("/hero-product-spec")
+def patch_hero_product_spec(
+    payload: HeroProductSpecOverrideRequest,
+    session: Session = Depends(get_db_session),
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict:
+    return {
+        "item": upsert_hero_product_spec_override(
+            session,
+            payload.model_dump(),
+            updated_by=user.name,
+        )
+    }
 
 
 @router.get("/ranking-trend")

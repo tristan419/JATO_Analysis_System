@@ -163,3 +163,5 @@ docker compose --profile airflow up -d airflow-webserver airflow-scheduler airfl
 ```bash
 15 6 * * * cd /Users/you/Downloads/JATO_Analysis_System && /bin/bash 03_Scripts/run_country_news_sync.sh
 ```
+
+<!-- deploy trigger: BOM zero FOB empty-state hotfix, 2026-06-22 -->

@@ -1,29 +1,72 @@
-import { useState, useEffect, useRef, useCallback, type DragEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { api } from "../api/client";
-import type { CocMatchJob } from "../types";
+import {
+  EmptyState,
+  FileDropzone,
+  SheetGroupedPreview,
+  StatusMetricCard,
+  type SheetGroupedPreviewColumn,
+  type SheetGroupedPreviewGroup,
+} from "../components";
+import {
+  DeckControlTabs,
+  DeckFloatingDrawer,
+  type DeckControlTabItem,
+} from "../components/deckControls";
+import type { CocFillDecision, CocFillJob, CocFillPreviewGroup, CocFillRecord, CocMatchJob } from "../types";
+import { downloadBlob } from "../utils/download";
+import { formatDateTime } from "../utils/timeFormatting";
 
-/* ── Helpers ───────────────────────────────────── */
+type CocWorkspaceMode = "match" | "fill";
+type FillPreviewStatusFilter = "all" | "filled" | "not_found" | "ambiguous" | "skipped_existing";
+type PendingFillSelection =
+  | { kind: "candidate"; decision: CocFillDecision; candidate: CocFillRecord }
+  | { kind: "manual"; decision: CocFillDecision; wvtaNo: string; cocNo: string };
 
-function formatTs(ts: string | null | undefined): string {
-  if (!ts) return "-";
-  const d = new Date(ts);
-  return d.toLocaleString("zh-CN", { hour12: false });
-}
+type ManualFillDraft = {
+  wvtaNo: string;
+  cocNo: string;
+};
 
-function statusLabel(s: string): string {
-  const m: Record<string, string> = {
+type CocFillSheetPreviewGroup = SheetGroupedPreviewGroup<CocFillDecision> & {
+  sheetName: string;
+};
+
+const WORKSPACE_TABS: Array<DeckControlTabItem<CocWorkspaceMode>> = [
+  { key: "match", label: "COC 比对", caption: "VIN 与文件包" },
+  { key: "fill", label: "COC 填充", caption: "物料号组回填" },
+];
+
+const FILL_PREVIEW_COLUMNS: SheetGroupedPreviewColumn[] = [
+  { key: "status", label: "状态" },
+  { key: "row", label: "行" },
+  { key: "material", label: "物料号组" },
+  { key: "wvta", label: "WVTA" },
+  { key: "coc", label: "COC" },
+  { key: "candidate", label: "候选" },
+  { key: "reason", label: "原因" },
+];
+
+function statusLabel(status: string): string {
+  const labels: Record<string, string> = {
     queued: "排队中",
     running: "运行中",
     success: "已完成",
     failed: "失败",
   };
-  return m[s] ?? s;
+  return labels[status] ?? status;
 }
 
-function statusColor(s: string): string {
-  if (s === "success") return "#16a34a";
-  if (s === "failed") return "#dc2626";
-  if (s === "running") return "#2563eb";
+function statusColor(status: string): string {
+  if (status === "success") return "#16a34a";
+  if (status === "failed") return "#dc2626";
+  if (status === "running") return "#2563eb";
   return "#6b7280";
 }
 
@@ -37,59 +80,145 @@ function cocDifferenceLabel(type: string | null | undefined): string {
   return type ? (labels[type] ?? type) : "-";
 }
 
-/* ── Dropzone component ────────────────────────── */
+function fillStrategyLabel(strategy: string): string {
+  if (strategy === "strict") return "严格唯一";
+  if (strategy === "date_country") return "日期 / 国家";
+  return strategy;
+}
 
-function Dropzone({
-  accept,
-  hint,
-  file,
-  onFile,
-}: {
-  accept: string;
-  hint: string;
-  file: File | null;
-  onFile: (f: File) => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [dragging, setDragging] = useState(false);
+function fillDecisionStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    filled: "已填充",
+    skipped_existing: "跳过已有",
+    not_found: "未命中",
+    ambiguous: "冲突",
+    invalid_source: "无效来源",
+  };
+  return labels[status] ?? status;
+}
 
-  const handleDrop = useCallback(
-    (e: DragEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      setDragging(false);
-      const f = e.dataTransfer.files[0];
-      if (f) onFile(f);
-    },
-    [onFile]
+function fillDecisionStatusColor(status: string): string {
+  if (status === "filled") return "#16a34a";
+  if (status === "not_found" || status === "invalid_source") return "#dc2626";
+  if (status === "ambiguous") return "#b45309";
+  return "#64748b";
+}
+
+function fillPreviewFilterLabel(filter: FillPreviewStatusFilter): string {
+  const labels: Record<FillPreviewStatusFilter, string> = {
+    all: "识别",
+    filled: "填充",
+    not_found: "未命中",
+    ambiguous: "冲突",
+    skipped_existing: "跳过",
+  };
+  return labels[filter];
+}
+
+function fillPreviewFilterButtonLabel(filter: FillPreviewStatusFilter): string {
+  return filter === "all" ? "全部" : fillPreviewFilterLabel(filter);
+}
+
+function buildFallbackPreviewGroups(job: CocFillJob): CocFillPreviewGroup[] {
+  const groups = new Map<string, CocFillPreviewGroup>();
+  for (const decision of job.decisions || []) {
+    const group = groups.get(decision.sheetName) || {
+      sheetName: decision.sheetName,
+      totalRows: 0,
+      filledCount: 0,
+      notFoundCount: 0,
+      ambiguousCount: 0,
+      skippedExistingCount: 0,
+      invalidSourceCount: 0,
+      statusCounts: {},
+      decisions: [],
+      truncated: false,
+    };
+    group.totalRows += 1;
+    group.statusCounts = {
+      ...(group.statusCounts || {}),
+      [decision.status]: (group.statusCounts?.[decision.status] || 0) + 1,
+    };
+    if (decision.status === "filled") group.filledCount += 1;
+    if (decision.status === "not_found") group.notFoundCount += 1;
+    if (decision.status === "ambiguous") group.ambiguousCount += 1;
+    if (decision.status === "skipped_existing") group.skippedExistingCount += 1;
+    if (decision.status === "invalid_source") group.invalidSourceCount += 1;
+    group.decisions.push(decision);
+    groups.set(decision.sheetName, group);
+  }
+  return Array.from(groups.values());
+}
+
+function getFillPreviewGroups(job: CocFillJob): CocFillPreviewGroup[] {
+  return job.previewGroups?.length ? job.previewGroups : buildFallbackPreviewGroups(job);
+}
+
+function fillDecisionKey(jobId: string, decision: CocFillDecision): string {
+  return `${jobId}:${decision.sheetName}:${decision.rowNumber}:${decision.materialGroup}`;
+}
+
+function fillDecisionKeyFromParts(jobId: string, sheetName: string, rowNumber: number, materialGroup: string): string {
+  return `${jobId}:${sheetName}:${rowNumber}:${materialGroup}`;
+}
+
+function isManualFillDecision(decision: CocFillDecision): boolean {
+  return decision.status === "filled" && (
+    decision.reason === "人工选择 PDF 候选。" || decision.reason === "人工填写 WVTA/COC。"
   );
+}
 
+function manualFillPasteParts(value: string): ManualFillDraft {
+  const wvtaMatch = value.match(/e\d+\*2018\/858\*[^\s,，;；]+/i);
+  const cocMatch = value.match(/\d{5}-\d{2}&[^\s,，;；]*C[O0]C[^\s,，;；]*/i);
+  if (wvtaMatch || cocMatch) {
+    return {
+      wvtaNo: wvtaMatch?.[0] ?? "",
+      cocNo: cocMatch?.[0] ?? "",
+    };
+  }
+  const [wvtaNo = "", cocNo = ""] = value.split(/[\t\n\r,，;；]+/).map((part) => part.trim()).filter(Boolean);
+  return { wvtaNo, cocNo };
+}
+
+function pendingFillSelectionValues(selection: PendingFillSelection | undefined): { wvtaNo: string; cocNo: string } | null {
+  if (!selection) return null;
+  if (selection.kind === "candidate") {
+    return { wvtaNo: selection.candidate.wvtaNo, cocNo: selection.candidate.cocNo };
+  }
+  return { wvtaNo: selection.wvtaNo, cocNo: selection.cocNo };
+}
+
+function candidateOptionKey(record: CocFillRecord, index: number): string {
+  return `${record.wvtaNo}:${record.cocNo}:${record.pageNumber}:${record.tableRowNumber}:${index}`;
+}
+
+function candidateMainText(record: CocFillRecord): string {
+  return `${record.wvtaNo || "-"} / ${record.cocNo || "-"}`;
+}
+
+function candidateMetaText(record: CocFillRecord): string {
+  const parts = [`PDF ${record.pageNumber || "-"} 页`, `行 ${record.tableRowNumber || "-"}`];
+  const validRange = [record.validFrom, record.validTo].filter(Boolean).join(" ~ ");
+  if (validRange) parts.push(validRange);
+  if (record.comments) parts.push(record.comments);
+  return parts.join(" · ");
+}
+
+function MatchMetaItem({ label, value }: { label: string; value: string | number }) {
   return (
-    <div
-      className={`dropzone ${file ? "has-file" : ""} ${dragging ? "dragover" : ""}`}
-      onClick={() => inputRef.current?.click()}
-      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={handleDrop}
-      style={{
-        border: `2px dashed ${file ? "#16a34a" : dragging ? "#2563eb" : "#d1d5db"}`,
-        borderRadius: 12, padding: "24px 16px", textAlign: "center",
-        cursor: "pointer", background: file ? "#f0fdf4" : dragging ? "#eff6ff" : "#fafafa",
-        transition: "all 0.2s", flex: 1,
-      }}
-    >
-      <div style={{ fontSize: 28, marginBottom: 6 }}>{accept.includes("zip") ? "📦" : "📊"}</div>
-      <div style={{ fontSize: 13, color: "#888" }}>{hint}</div>
-      {file && <div style={{ fontSize: 12, color: "#16a34a", fontWeight: 600, marginTop: 4 }}>{file.name}</div>}
-      <input ref={inputRef} type="file" accept={accept} hidden
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
+    <div style={matchMetaItemStyle}>
+      <span style={{ color: "#64748b", fontSize: 11, fontWeight: 700 }}>{label}</span>
+      <strong style={matchMetaValueStyle}>{value}</strong>
     </div>
   );
 }
 
-/* ── Main page ─────────────────────────────────── */
-
 export function CocMatchPage() {
-  const [excelFile, setExcelFile] = useState<File | null>(null);
+  const [activeMode, setActiveMode] = useState<CocWorkspaceMode>("fill");
+  const [controlOpen, setControlOpen] = useState(true);
+
+  const [matchExcelFile, setMatchExcelFile] = useState<File | null>(null);
   const [archiveFile, setArchiveFile] = useState<File | null>(null);
   const [country, setCountry] = useState("");
   const [month, setMonth] = useState(() => {
@@ -97,100 +226,409 @@ export function CocMatchPage() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   });
   const [fileExt, setFileExt] = useState<".pdf" | ".xml">(".pdf");
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [currentJob, setCurrentJob] = useState<CocMatchJob | null>(null);
-  const [jobList, setJobList] = useState<CocMatchJob[]>([]);
-  const [pollId, setPollId] = useState<string | null>(null);
+  const [matchUploading, setMatchUploading] = useState(false);
+  const [matchError, setMatchError] = useState<string | null>(null);
+  const [matchUploadDetail, setMatchUploadDetail] = useState<string | null>(null);
+  const [currentMatchJob, setCurrentMatchJob] = useState<CocMatchJob | null>(null);
+  const [matchJobList, setMatchJobList] = useState<CocMatchJob[]>([]);
+  const [matchPollId, setMatchPollId] = useState<string | null>(null);
   const [reportAction, setReportAction] = useState<string | null>(null);
-  const pollingRef = useRef(false);
+  const matchPollingRef = useRef(false);
+
+  const [fillExcelFile, setFillExcelFile] = useState<File | null>(null);
+  const [fillPdfFile, setFillPdfFile] = useState<File | null>(null);
+  const [overwriteExisting, setOverwriteExisting] = useState(false);
+  const [includeResultSheet, setIncludeResultSheet] = useState(false);
+  const [conflictStrategy, setConflictStrategy] = useState<"date_country" | "strict">("strict");
+  const [fillUploading, setFillUploading] = useState(false);
+  const [fillError, setFillError] = useState<string | null>(null);
+  const [fillUploadDetail, setFillUploadDetail] = useState<string | null>(null);
+  const [currentFillJob, setCurrentFillJob] = useState<CocFillJob | null>(null);
+  const [fillJobList, setFillJobList] = useState<CocFillJob[]>([]);
+  const [fillPollId, setFillPollId] = useState<string | null>(null);
+  const [fillDownloadAction, setFillDownloadAction] = useState<string | null>(null);
+  const [confirmedFillJobIds, setConfirmedFillJobIds] = useState<Set<string>>(() => new Set());
+  const [expandedFillPreviewSheets, setExpandedFillPreviewSheets] = useState<Set<string>>(() => new Set());
+  const [touchedFillPreviewJobIds, setTouchedFillPreviewJobIds] = useState<Set<string>>(() => new Set());
+  const [fillPreviewStatusFilter, setFillPreviewStatusFilter] = useState<FillPreviewStatusFilter>("all");
+  const [openCandidatePickerKey, setOpenCandidatePickerKey] = useState<string | null>(null);
+  const [fillOverrideAction, setFillOverrideAction] = useState<string | null>(null);
+  const [pendingFillCandidateSelections, setPendingFillCandidateSelections] = useState<Record<string, PendingFillSelection>>({});
+  const [manualFillDrafts, setManualFillDrafts] = useState<Record<string, ManualFillDraft>>({});
+  const fillPollingRef = useRef(false);
+
   const jobsCountryFilter = country.trim().toUpperCase();
 
-  // Load recent jobs; when a country code is entered, show that country's history.
-  useEffect(() => {
-    let cancelled = false;
-    api.cocMatchListJobs(20, jobsCountryFilter || undefined).then((res) => {
-      if (!cancelled) setJobList(res.items);
-    }).catch(() => {});
-    return () => { cancelled = true; };
+  const refreshMatchJobs = useCallback(() => {
+    api.cocMatchListJobs(20, jobsCountryFilter || undefined)
+      .then((res) => setMatchJobList(res.items))
+      .catch(() => {});
   }, [jobsCountryFilter]);
 
-  // Refresh job list when a job finishes
-  const refreshJobs = useCallback(() => {
-    api.cocMatchListJobs(20, jobsCountryFilter || undefined).then((res) => {
-      setJobList(res.items);
-    }).catch(() => {});
-  }, [jobsCountryFilter]);
+  const refreshFillJobs = useCallback(() => {
+    api.cocFillListJobs(50)
+      .then((res) => setFillJobList(res.items))
+      .catch(() => {});
+  }, []);
 
-  // Poll job status
   useEffect(() => {
-    if (!pollId) return;
-    pollingRef.current = true;
+    refreshMatchJobs();
+  }, [refreshMatchJobs]);
+
+  useEffect(() => {
+    refreshFillJobs();
+  }, [refreshFillJobs]);
+
+  useEffect(() => {
+    if (!matchPollId) return;
+    matchPollingRef.current = true;
     let cancelled = false;
 
     const poll = async () => {
-      while (pollingRef.current && !cancelled) {
-        await new Promise((r) => setTimeout(r, 3000));
-        if (cancelled || !pollingRef.current) break;
+      while (matchPollingRef.current && !cancelled) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        if (cancelled || !matchPollingRef.current) break;
         try {
-          const res = await api.cocMatchGetJob(pollId);
-          setCurrentJob(res.item);
+          const res = await api.cocMatchGetJob(matchPollId);
+          setCurrentMatchJob(res.item);
           if (res.item.status === "success" || res.item.status === "failed") {
-            pollingRef.current = false;
-            setPollId(null);
-            refreshJobs();
+            matchPollingRef.current = false;
+            setMatchPollId(null);
+            refreshMatchJobs();
           }
         } catch {
-          pollingRef.current = false;
-          setPollId(null);
+          matchPollingRef.current = false;
+          setMatchPollId(null);
         }
       }
     };
-    poll();
+    void poll();
 
-    return () => { cancelled = true; pollingRef.current = false; };
-  }, [pollId, refreshJobs]);
+    return () => {
+      cancelled = true;
+      matchPollingRef.current = false;
+    };
+  }, [matchPollId, refreshMatchJobs]);
 
-  const [uploadDetail, setUploadDetail] = useState<string | null>(null);
+  useEffect(() => {
+    if (!fillPollId) return;
+    fillPollingRef.current = true;
+    let cancelled = false;
 
-  const handleUpload = async () => {
-    if (!excelFile || !archiveFile) return;
-    if (!country.trim()) { setError("请输入国家代码"); return; }
+    const poll = async () => {
+      while (fillPollingRef.current && !cancelled) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        if (cancelled || !fillPollingRef.current) break;
+        try {
+          const res = await api.cocFillGetJob(fillPollId);
+          setCurrentFillJob(res.item);
+          if (res.item.status === "success" || res.item.status === "failed") {
+            fillPollingRef.current = false;
+            setFillPollId(null);
+            refreshFillJobs();
+          }
+        } catch {
+          fillPollingRef.current = false;
+          setFillPollId(null);
+        }
+      }
+    };
+    void poll();
 
-    setUploading(true);
-    setError(null);
-    setCurrentJob(null);
+    return () => {
+      cancelled = true;
+      fillPollingRef.current = false;
+    };
+  }, [fillPollId, refreshFillJobs]);
 
-    // Check if chunked upload is needed
-    const isLarge = excelFile.size >= 50 * 1024 * 1024 || archiveFile.size >= 50 * 1024 * 1024;
-    setUploadDetail(isLarge
-      ? `文件较大（> 50MB），使用分片上传...`
-      : null
+  useEffect(() => {
+    setPendingFillCandidateSelections({});
+    setManualFillDrafts({});
+    setOpenCandidatePickerKey(null);
+  }, [currentFillJob?.jobId]);
+
+  const handleMatchUpload = async () => {
+    if (!matchExcelFile || !archiveFile) return;
+    if (!country.trim()) {
+      setMatchError("请输入国家代码");
+      return;
+    }
+
+    setMatchUploading(true);
+    setMatchError(null);
+    setCurrentMatchJob(null);
+    setMatchUploadDetail(
+      matchExcelFile.size >= 50 * 1024 * 1024 || archiveFile.size >= 50 * 1024 * 1024
+        ? "文件较大，使用分片上传。"
+        : null,
     );
 
     try {
       const res = await api.cocMatchUploadAndCreateJob(
-        excelFile, archiveFile, country.toUpperCase(), fileExt,
+        matchExcelFile,
+        archiveFile,
+        country.toUpperCase(),
+        fileExt,
         month || undefined,
       );
-      setCurrentJob(res.item);
-      setPollId(res.item.jobId);
-      setUploadDetail(null);
+      setCurrentMatchJob(res.item);
+      setMatchPollId(res.item.jobId);
+      setMatchUploadDetail(null);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "上传失败");
-      setUploadDetail(null);
+      setMatchError(err instanceof Error ? err.message : "上传失败");
+      setMatchUploadDetail(null);
     } finally {
-      setUploading(false);
+      setMatchUploading(false);
     }
   };
 
-  const handleRetry = async (jobId: string) => {
+  const handleFillUpload = async () => {
+    if (!fillExcelFile || !fillPdfFile) return;
+    setFillUploading(true);
+    setFillError(null);
+    setCurrentFillJob(null);
+    setFillUploadDetail(
+      fillExcelFile.size >= 50 * 1024 * 1024 || fillPdfFile.size >= 50 * 1024 * 1024
+        ? "文件较大，使用分片上传。"
+        : null,
+    );
+
+    try {
+      const res = await api.cocFillUploadAndCreateJob(fillExcelFile, fillPdfFile, {
+        overwriteExisting,
+        conflictStrategy,
+        includeResultSheet,
+      });
+      setCurrentFillJob(res.item);
+      setFillPollId(res.item.jobId);
+      setFillUploadDetail(null);
+    } catch (err: unknown) {
+      setFillError(err instanceof Error ? err.message : "填充任务创建失败");
+      setFillUploadDetail(null);
+    } finally {
+      setFillUploading(false);
+    }
+  };
+
+  const handlePreviewFillJob = (job: CocFillJob) => {
+    setCurrentFillJob(job);
+  };
+
+  const handleConfirmFillPreview = (jobId: string) => {
+    setConfirmedFillJobIds((previous) => {
+      const next = new Set(previous);
+      next.add(jobId);
+      return next;
+    });
+  };
+
+  const handleFillPreviewFilterClick = (filter: FillPreviewStatusFilter) => {
+    setFillPreviewStatusFilter((current) => current === filter ? "all" : filter);
+  };
+
+  const toggleFillPreviewSheet = (jobId: string, sheetName: string, expanded: boolean) => {
+    const key = `${jobId}:${sheetName}`;
+    setTouchedFillPreviewJobIds((previous) => {
+      const next = new Set(previous);
+      next.add(jobId);
+      return next;
+    });
+    setExpandedFillPreviewSheets((previous) => {
+      const next = new Set(previous);
+      if (expanded) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const pendingCandidateCountForJob = (jobId: string) =>
+    Object.keys(pendingFillCandidateSelections).filter((key) => key.startsWith(`${jobId}:`)).length;
+
+  const handleSelectFillCandidate = (
+    job: CocFillJob,
+    decision: CocFillDecision,
+    candidate: CocFillRecord,
+  ) => {
+    const selectionKey = fillDecisionKey(job.jobId, decision);
+    setPendingFillCandidateSelections((previous) => ({
+      ...previous,
+      [selectionKey]: { kind: "candidate", decision, candidate },
+    }));
+    setConfirmedFillJobIds((previous) => {
+      const next = new Set(previous);
+      next.delete(job.jobId);
+      return next;
+    });
+    setOpenCandidatePickerKey(null);
+  };
+
+  const handleManualFillDraftChange = (
+    job: CocFillJob,
+    decision: CocFillDecision,
+    field: keyof ManualFillDraft,
+    value: string,
+  ) => {
+    const selectionKey = fillDecisionKey(job.jobId, decision);
+    setManualFillDrafts((previous) => ({
+      ...previous,
+      [selectionKey]: {
+        wvtaNo: previous[selectionKey]?.wvtaNo ?? "",
+        cocNo: previous[selectionKey]?.cocNo ?? "",
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleManualFillPaste = (
+    job: CocFillJob,
+    decision: CocFillDecision,
+    value: string,
+  ) => {
+    const parsed = manualFillPasteParts(value);
+    if (!parsed.wvtaNo && !parsed.cocNo) return;
+    const selectionKey = fillDecisionKey(job.jobId, decision);
+    setManualFillDrafts((previous) => ({
+      ...previous,
+      [selectionKey]: {
+        wvtaNo: parsed.wvtaNo || previous[selectionKey]?.wvtaNo || "",
+        cocNo: parsed.cocNo || previous[selectionKey]?.cocNo || "",
+      },
+    }));
+  };
+
+  const handleStageManualFill = (job: CocFillJob, decision: CocFillDecision) => {
+    const selectionKey = fillDecisionKey(job.jobId, decision);
+    const draft = manualFillDrafts[selectionKey] || { wvtaNo: "", cocNo: "" };
+    const wvtaNo = draft.wvtaNo.trim();
+    const cocNo = draft.cocNo.trim();
+    if (!wvtaNo || !cocNo) {
+      setFillError("手工填写需要同时提供 WVTA 和 COC。");
+      return;
+    }
+    setFillError(null);
+    setPendingFillCandidateSelections((previous) => ({
+      ...previous,
+      [selectionKey]: { kind: "manual", decision, wvtaNo, cocNo },
+    }));
+    setConfirmedFillJobIds((previous) => {
+      const next = new Set(previous);
+      next.delete(job.jobId);
+      return next;
+    });
+  };
+
+  const clearPendingFillCandidateSelection = (job: CocFillJob, decision: CocFillDecision) => {
+    const selectionKey = fillDecisionKey(job.jobId, decision);
+    setPendingFillCandidateSelections((previous) => {
+      const next = { ...previous };
+      delete next[selectionKey];
+      return next;
+    });
+  };
+
+  const clearPendingFillCandidateSelections = (jobId: string) => {
+    setPendingFillCandidateSelections((previous) => {
+      const next = { ...previous };
+      for (const key of Object.keys(next)) {
+        if (key.startsWith(`${jobId}:`)) delete next[key];
+      }
+      return next;
+    });
+  };
+
+  const handleConfirmFillCandidates = async (job: CocFillJob) => {
+    const selections = Object.entries(pendingFillCandidateSelections)
+      .filter(([key]) => key.startsWith(`${job.jobId}:`))
+      .map(([, selection]) => selection);
+    if (selections.length === 0) return;
+
+    setFillOverrideAction(`${job.jobId}:batch`);
+    setFillError(null);
+    try {
+      const res = await api.cocFillApplyOverrides(
+        job.jobId,
+        selections.map((selection) => {
+          if (selection.kind === "candidate") {
+            return {
+              sheetName: selection.decision.sheetName,
+              rowNumber: selection.decision.rowNumber,
+              materialGroup: selection.decision.materialGroup,
+              wvtaNo: selection.candidate.wvtaNo,
+              cocNo: selection.candidate.cocNo,
+              pageNumber: selection.candidate.pageNumber,
+              tableRowNumber: selection.candidate.tableRowNumber,
+            };
+          }
+          return {
+            sheetName: selection.decision.sheetName,
+            rowNumber: selection.decision.rowNumber,
+            materialGroup: selection.decision.materialGroup,
+            wvtaNo: selection.wvtaNo,
+            cocNo: selection.cocNo,
+          };
+        }),
+      );
+      setCurrentFillJob(res.item);
+      setFillJobList((previous) => {
+        const next = previous.map((item) => item.jobId === res.item.jobId ? res.item : item);
+        return next.some((item) => item.jobId === res.item.jobId) ? next : [res.item, ...next];
+      });
+      clearPendingFillCandidateSelections(job.jobId);
+      setConfirmedFillJobIds((previous) => {
+        const next = new Set(previous);
+        next.delete(res.item.jobId);
+        return next;
+      });
+    } catch (err: unknown) {
+      setFillError(err instanceof Error ? err.message : "候选确认失败");
+    } finally {
+      setFillOverrideAction(null);
+    }
+  };
+
+  const handleRevertFillCandidate = async (
+    job: CocFillJob,
+    decision: CocFillDecision,
+  ) => {
+    const actionKey = fillDecisionKey(job.jobId, decision);
+    setFillOverrideAction(actionKey);
+    setFillError(null);
+    try {
+      const res = await api.cocFillRevertOverrides(job.jobId, [
+        {
+          sheetName: decision.sheetName,
+          rowNumber: decision.rowNumber,
+          materialGroup: decision.materialGroup,
+        },
+      ]);
+      setCurrentFillJob(res.item);
+      setFillJobList((previous) => {
+        const next = previous.map((item) => item.jobId === res.item.jobId ? res.item : item);
+        return next.some((item) => item.jobId === res.item.jobId) ? next : [res.item, ...next];
+      });
+      setConfirmedFillJobIds((previous) => {
+        const next = new Set(previous);
+        next.delete(res.item.jobId);
+        return next;
+      });
+      setOpenCandidatePickerKey(null);
+    } catch (err: unknown) {
+      setFillError(err instanceof Error ? err.message : "撤回人工选择失败");
+    } finally {
+      setFillOverrideAction(null);
+    }
+  };
+
+  const handleRetryMatch = async (jobId: string) => {
     try {
       const res = await api.cocMatchRetryJob(jobId);
-      setCurrentJob(res.item);
-      setPollId(res.item.jobId);
+      setCurrentMatchJob(res.item);
+      setMatchPollId(res.item.jobId);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "重试失败");
+      setMatchError(err instanceof Error ? err.message : "重试失败");
     }
   };
 
@@ -198,11 +636,11 @@ export function CocMatchPage() {
     const actionId = `${jobId}:view`;
     const reportWindow = window.open("", "_blank");
     if (!reportWindow) {
-      setError("浏览器阻止了新窗口，请允许弹窗后重试。");
+      setMatchError("浏览器阻止了新窗口，请允许弹窗后重试。");
       return;
     }
     setReportAction(actionId);
-    setError(null);
+    setMatchError(null);
     try {
       const blob = await api.cocMatchGetReport(jobId);
       const url = URL.createObjectURL(blob);
@@ -210,7 +648,7 @@ export function CocMatchPage() {
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err: unknown) {
       reportWindow.close();
-      setError(err instanceof Error ? err.message : "查看报告失败");
+      setMatchError(err instanceof Error ? err.message : "查看报告失败");
     } finally {
       setReportAction(null);
     }
@@ -219,261 +657,576 @@ export function CocMatchPage() {
   const handleDownloadReport = async (jobId: string) => {
     const actionId = `${jobId}:download`;
     setReportAction(actionId);
-    setError(null);
+    setMatchError(null);
     try {
       const blob = await api.cocMatchGetReport(jobId, true);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `coc_report_${jobId}.html`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `coc_report_${jobId}.html`);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "下载报告失败");
+      setMatchError(err instanceof Error ? err.message : "下载报告失败");
     } finally {
       setReportAction(null);
     }
   };
 
-  const isReady = excelFile && archiveFile && country.trim();
+  const handleDownloadFillWorkbook = async (job: CocFillJob) => {
+    setFillDownloadAction(job.jobId);
+    setFillError(null);
+    try {
+      const blob = await api.cocFillGetWorkbook(job.jobId);
+      downloadBlob(blob, fillWorkbookDownloadName(job));
+    } catch (err: unknown) {
+      setFillError(err instanceof Error ? err.message : "下载填充结果失败");
+    } finally {
+      setFillDownloadAction(null);
+    }
+  };
+
+  const matchReady = Boolean(matchExcelFile && archiveFile && country.trim());
+  const fillReady = Boolean(fillExcelFile && fillPdfFile);
+  const displayMatchJob = currentMatchJob ?? matchJobList[0] ?? null;
+  const displayFillJob = currentFillJob ?? fillJobList[0] ?? null;
 
   return (
-    <div style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 22, marginBottom: 4 }}>COC 比对工具</h1>
-      <p style={{ color: "#888", fontSize: 14, marginBottom: 24 }}>
-        上传 Excel 注册表和 ZIP/RAR 压缩包，自动比对 COC 文件匹配情况
-      </p>
+    <section className="crud-shell" style={{ padding: 24, maxWidth: 1180, margin: "0 auto" }}>
+      <DeckFloatingDrawer
+        open={controlOpen}
+        onOpenChange={setControlOpen}
+        triggerPrimary={activeMode === "match" ? "COC 比对" : "COC 填充"}
+        triggerSecondaryOpen="收起控制"
+        triggerSecondaryClosed="打开控制"
+        eyebrow="COC Workbench"
+        title="COC 工作台控制"
+        ariaLabel="COC 工作台控制"
+        footer={(
+          <>
+            <span className="market-scan-toolbar-chip">{activeMode === "match" ? "比对" : "填充"}</span>
+            <span className="market-scan-toolbar-chip">
+              {activeMode === "match" ? `${matchJobList.length} 条比对记录` : `${fillJobList.length} 条填充记录`}
+            </span>
+            {activeMode === "fill" ? (
+              <span className="market-scan-toolbar-chip">{fillStrategyLabel(conflictStrategy)}</span>
+            ) : null}
+            {activeMode === "fill" ? (
+              <span className="market-scan-toolbar-chip">自动扫描全部 Sheet</span>
+            ) : null}
+          </>
+        )}
+      >
+        <DeckControlTabs
+          tabs={WORKSPACE_TABS}
+          activeKey={activeMode}
+          onChange={setActiveMode}
+          ariaLabel="COC 工作台功能切换"
+        />
+        {activeMode === "match" ? renderMatchControls() : renderFillControls()}
+      </DeckFloatingDrawer>
 
-      {/* ── Upload Form ── */}
-      <div style={{
-        background: "white", borderRadius: 12, padding: 24, marginBottom: 24,
-        boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-      }}>
-        <div style={{ display: "flex", gap: 16, marginBottom: 20 }}>
-          <Dropzone accept=".xlsx,.xlsm,.xls" hint="拖拽 / 点击选择 Excel 注册表"
-            file={excelFile} onFile={setExcelFile} />
-          <Dropzone accept=".zip,.rar" hint="拖拽 / 点击选择 ZIP/RAR 压缩包"
-            file={archiveFile} onFile={setArchiveFile} />
+      <header style={heroStyle}>
+        <div>
+          <span className="market-scan-panel-eyebrow">Product Deck</span>
+          <h1 style={{ margin: "4px 0", fontSize: 28 }}>COC 工作台</h1>
+          <p style={{ margin: 0, color: "#64748b", fontSize: 14 }}>
+            管理 COC 文件比对，并从 WVTA 关联表回填发运清单的 WVTA / COC 编号。
+          </p>
         </div>
+      </header>
 
-        <div style={{ display: "flex", gap: 16, marginBottom: 20, alignItems: "flex-end" }}>
-          <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 4, display: "block" }}>
-              国家代码
-            </label>
-            <input type="text" placeholder="如 CZ, SK, HU" value={country}
-              onChange={(e) => setCountry(e.target.value.toUpperCase())}
-              maxLength={10}
-              style={{
-                width: "100%", padding: "10px 12px", border: "1px solid #d1d5db",
-                borderRadius: 8, fontSize: 14,
-              }} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 4, display: "block" }}>
-              月份（可选）
-            </label>
-            <input type="month" value={month}
-              onChange={(e) => setMonth(e.target.value)}
-              style={{
-                width: "100%", padding: "10px 12px", border: "1px solid #d1d5db",
-                borderRadius: 8, fontSize: 14,
-              }} />
-          </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <label style={{
-              padding: "10px 18px", border: `2px solid ${fileExt === ".pdf" ? "#2563eb" : "#e5e7eb"}`,
-              borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 600,
-              background: fileExt === ".pdf" ? "#eff6ff" : "white", color: fileExt === ".pdf" ? "#2563eb" : "#333",
-            }}>
-              <input type="radio" name="ext" value=".pdf" checked={fileExt === ".pdf"}
-                onChange={() => setFileExt(".pdf")} style={{ display: "none" }} />
-              PDF
-            </label>
-            <label style={{
-              padding: "10px 18px", border: `2px solid ${fileExt === ".xml" ? "#2563eb" : "#e5e7eb"}`,
-              borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 600,
-              background: fileExt === ".xml" ? "#eff6ff" : "white", color: fileExt === ".xml" ? "#2563eb" : "#333",
-            }}>
-              <input type="radio" name="ext" value=".xml" checked={fileExt === ".xml"}
-                onChange={() => setFileExt(".xml")} style={{ display: "none" }} />
-              XML
-            </label>
-          </div>
-        </div>
+      {activeMode === "match" && matchError ? (
+        <div className="alert alert-error" style={{ marginBottom: 14 }}>{matchError}</div>
+      ) : null}
+      {activeMode === "fill" && fillError ? (
+        <div className="alert alert-error" style={{ marginBottom: 14 }}>{fillError}</div>
+      ) : null}
 
-        <button onClick={handleUpload} disabled={!isReady || uploading}
-          style={{
-            width: "100%", padding: 14, border: "none", borderRadius: 10,
-            fontSize: 16, fontWeight: 600, cursor: isReady && !uploading ? "pointer" : "not-allowed",
-            background: isReady && !uploading ? "#2563eb" : "#9ca3af", color: "white",
-          }}>
-          {uploading ? "上传中..." : "开始比对"}
-        </button>
-
-        {error && (
-          <div style={{ marginTop: 16, padding: 12, borderRadius: 8, background: "#fef2f2", color: "#dc2626", fontSize: 14 }}>
-            {error}
-          </div>
-        )}
-
-        {uploadDetail && (
-          <div style={{ marginTop: 16, padding: 12, borderRadius: 8, background: "#eff6ff", fontSize: 14 }}>
-            {uploadDetail}
-          </div>
-        )}
-
-        {/* Current job progress */}
-        {currentJob && currentJob.status !== "success" && currentJob.status !== "failed" && (
-          <div style={{ marginTop: 16, padding: 16, borderRadius: 8, background: "#eff6ff", fontSize: 14 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{
-                width: 12, height: 12, borderRadius: "50%", background: "#2563eb",
-                animation: currentJob.status === "running" ? "pulse 1s infinite" : "none",
-              }} />
-              <span style={{ fontWeight: 600 }}>
-                {currentJob.status === "queued" ? "任务已排队，等待处理..." : "正在比对中..."}
-              </span>
+      <section style={dashboardGridStyle}>
+        {activeMode === "match" ? (
+          <div style={panelStyle}>
+            <div style={panelHeaderStyle}>
+              <strong>COC 比对状态</strong>
+              {displayMatchJob ? <span style={{ color: statusColor(displayMatchJob.status) }}>{statusLabel(displayMatchJob.status)}</span> : null}
             </div>
-          </div>
-        )}
-
-        {/* Success state */}
-        {currentJob?.status === "success" && (
-          <div style={{ marginTop: 16, padding: 16, borderRadius: 8, background: "#f0fdf4", fontSize: 14 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <strong style={{ color: "#16a34a" }}>比对完成</strong>
-                <span style={{ color: "#666", marginLeft: 8 }}>
-                  共 {currentJob.totalRows} 条 · 匹配 {currentJob.matchedCount} · 缺失 {currentJob.missingCount} · Excel 缺码 {currentJob.extraFileCount ?? 0} · 覆盖率 {currentJob.coverageRate}%
-                </span>
-                <span style={{ color: currentJob.hasBidirectionalMismatch ? "#c2410c" : "#666", marginLeft: 8 }}>
-                  {cocDifferenceLabel(currentJob.differenceType)}
-                </span>
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => handleOpenReport(currentJob.jobId)}
-                  disabled={reportAction !== null}
-                  style={{
-                    padding: "8px 20px", background: "#16a34a", color: "white", borderRadius: 8,
-                    border: "none", fontWeight: 600, fontSize: 14, cursor: reportAction ? "wait" : "pointer",
-                  }}>
-                  {reportAction === `${currentJob.jobId}:view` ? "打开中..." : "查看报告"}
-                </button>
-                <button onClick={() => handleDownloadReport(currentJob.jobId)}
-                  disabled={reportAction !== null}
-                  style={{
-                    padding: "8px 20px", background: "white", color: "#16a34a", borderRadius: 8,
-                    border: "2px solid #16a34a", fontWeight: 600, fontSize: 14,
-                    cursor: reportAction ? "wait" : "pointer",
-                  }}>
-                  {reportAction === `${currentJob.jobId}:download` ? "下载中..." : "下载报告"}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Failed state */}
-        {currentJob?.status === "failed" && (
-          <div style={{ marginTop: 16, padding: 16, borderRadius: 8, background: "#fef2f2", fontSize: 14 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <strong style={{ color: "#dc2626" }}>比对失败</strong>
-                {currentJob.error && <span style={{ color: "#666", marginLeft: 8 }}>{currentJob.error}</span>}
-              </div>
-              <button onClick={() => handleRetry(currentJob.jobId)}
-                style={{
-                  padding: "8px 20px", background: "#dc2626", color: "white", border: "none",
-                  borderRadius: 8, fontWeight: 600, fontSize: 14, cursor: "pointer",
-                }}>
-                重试
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* ── Job List ── */}
-      <div style={{
-        background: "white", borderRadius: 12, overflow: "hidden",
-        boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-      }}>
-        <div style={{ padding: "16px 24px", borderBottom: "1px solid #eee", fontWeight: 600 }}>
-          COC 比对记录
-        </div>
-        {jobList.length === 0 ? (
-          <div style={{ padding: "24px", textAlign: "center", color: "#999", fontSize: 14 }}>
-            {jobsCountryFilter ? `暂无 ${jobsCountryFilter} 的比对记录` : "暂无比对记录"}
+            {displayMatchJob ? renderMatchSummary(displayMatchJob) : <EmptyState text="暂无比对任务" />}
           </div>
         ) : (
+          <div style={panelStyle}>
+            <div style={panelHeaderStyle}>
+              <strong>COC 填充状态</strong>
+              {displayFillJob ? <span style={{ color: statusColor(displayFillJob.status) }}>{statusLabel(displayFillJob.status)}</span> : null}
+            </div>
+            {displayFillJob ? renderFillSummary(displayFillJob) : <EmptyState text="暂无填充任务" />}
+          </div>
+        )}
+      </section>
+
+      <section style={historyGridStyle}>
+        {activeMode === "match" ? renderMatchHistory() : renderFillHistory()}
+      </section>
+    </section>
+  );
+
+  function renderMatchControls() {
+    return (
+      <div style={controlPanelStyle}>
+        <div style={dropGridStyle}>
+          <FileDropzone
+            accept=".xlsx,.xlsm,.xls"
+            label="Excel 注册表"
+            hint="拖拽 / 点击选择 Excel"
+            file={matchExcelFile}
+            onFile={setMatchExcelFile}
+            onClear={() => setMatchExcelFile(null)}
+          />
+          <FileDropzone
+            accept=".zip,.rar"
+            label="ZIP/RAR 文件包"
+            hint="拖拽 / 点击选择压缩包"
+            file={archiveFile}
+            onFile={setArchiveFile}
+            onClear={() => setArchiveFile(null)}
+          />
+        </div>
+        <label style={fieldStyle}>
+          <span>国家代码</span>
+          <input
+            type="text"
+            placeholder="CZ / SK / HU"
+            value={country}
+            maxLength={10}
+            onChange={(event) => setCountry(event.target.value.toUpperCase())}
+          />
+        </label>
+        <label style={fieldStyle}>
+          <span>月份</span>
+          <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
+        </label>
+        <div style={segmentedStyle} role="group" aria-label="COC 文件类型">
+          {([".pdf", ".xml"] as const).map((ext) => (
+            <button
+              key={ext}
+              type="button"
+              className={`btn btn-sm ${fileExt === ext ? "btn-primary" : "btn-secondary"}`}
+              onClick={() => setFileExt(ext)}
+            >
+              {ext.toUpperCase().slice(1)}
+            </button>
+          ))}
+        </div>
+        <button className="btn btn-primary" type="button" disabled={!matchReady || matchUploading} onClick={() => void handleMatchUpload()}>
+          {matchUploading ? "上传中..." : "开始比对"}
+        </button>
+        {matchUploadDetail ? <small style={hintStyle}>{matchUploadDetail}</small> : null}
+      </div>
+    );
+  }
+
+  function renderFillControls() {
+    return (
+      <div style={controlPanelStyle}>
+        <div style={dropGridStyle}>
+          <FileDropzone
+            accept=".xlsx,.xlsm"
+            label="发运清单 Excel"
+            hint="拖拽 / 点击选择发运清单"
+            file={fillExcelFile}
+            onFile={setFillExcelFile}
+            onClear={() => setFillExcelFile(null)}
+          />
+          <FileDropzone
+            accept=".pdf"
+            label="WVTA 关联 PDF"
+            hint="拖拽 / 点击选择 PDF"
+            file={fillPdfFile}
+            onFile={setFillPdfFile}
+            onClear={() => setFillPdfFile(null)}
+          />
+        </div>
+        <label style={fieldStyle}>
+          <span>冲突策略</span>
+          <select value={conflictStrategy} onChange={(event) => setConflictStrategy(event.target.value as "date_country" | "strict")}>
+            <option value="strict">严格唯一，否则标记冲突</option>
+            <option value="date_country">按生产日期 / 国家收敛</option>
+          </select>
+        </label>
+        <label style={checkboxStyle}>
+          <input
+            type="checkbox"
+            checked={overwriteExisting}
+            onChange={(event) => setOverwriteExisting(event.target.checked)}
+          />
+          <span>允许覆盖已有 WVTA / COC 值</span>
+        </label>
+        <label style={checkboxStyle}>
+          <input
+            type="checkbox"
+            checked={includeResultSheet}
+            onChange={(event) => setIncludeResultSheet(event.target.checked)}
+          />
+          <span>导出 COC填充结果 sheet</span>
+        </label>
+        <button className="btn btn-primary" type="button" disabled={!fillReady || fillUploading} onClick={() => void handleFillUpload()}>
+          {fillUploading ? "上传中..." : "开始填充"}
+        </button>
+        {fillUploadDetail ? <small style={hintStyle}>{fillUploadDetail}</small> : null}
+      </div>
+    );
+  }
+
+  function renderMatchSummary(job: CocMatchJob) {
+    const running = job.status !== "success" && job.status !== "failed";
+    return (
+      <div style={matchSummaryBodyStyle}>
+        <div style={matchMetricsGridStyle}>
+          <StatusMetricCard label="总行数" value={job.totalRows ?? "-"} />
+          <StatusMetricCard label="匹配" value={job.matchedCount ?? "-"} tone="success" />
+          <StatusMetricCard label="缺失" value={job.missingCount ?? "-"} tone="danger" />
+          <StatusMetricCard label="覆盖率" value={job.coverageRate != null ? `${job.coverageRate}%` : "-"} tone="info" />
+        </div>
+        <div style={matchDetailStyle}>
+          <div style={matchDetailHeaderStyle}>
+            <strong>当前任务</strong>
+            <span style={{ color: statusColor(job.status), fontWeight: 700 }}>{statusLabel(job.status)}</span>
+          </div>
+          <div style={matchMetaGridStyle}>
+            <MatchMetaItem label="国家 / 月份" value={`${job.country || "-"} / ${job.month || "-"}`} />
+            <MatchMetaItem label="文件类型" value={(job.fileExt || "-").replace(".", "").toUpperCase()} />
+            <MatchMetaItem label="差异类型" value={running ? "处理中" : cocDifferenceLabel(job.differenceType)} />
+            <MatchMetaItem label="压缩包多余" value={job.extraFileCount ?? "-"} />
+            <MatchMetaItem label="Excel" value={job.excelFilename || "-"} />
+            <MatchMetaItem label="文件包" value={job.archiveFilename || "-"} />
+          </div>
+          <div style={matchActionRowStyle}>
+            {job.status === "success" ? (
+              <>
+                <button className="btn btn-sm btn-primary" type="button" disabled={reportAction !== null} onClick={() => void handleOpenReport(job.jobId)}>
+                  {reportAction === `${job.jobId}:view` ? "打开中..." : "查看报告"}
+                </button>
+                <button className="btn btn-sm btn-secondary" type="button" disabled={reportAction !== null} onClick={() => void handleDownloadReport(job.jobId)}>
+                  {reportAction === `${job.jobId}:download` ? "下载中..." : "下载报告"}
+                </button>
+              </>
+            ) : null}
+            {job.status === "failed" ? (
+              <button className="btn btn-sm btn-danger" type="button" onClick={() => void handleRetryMatch(job.jobId)}>
+                重试
+              </button>
+            ) : null}
+            <span style={hintStyle}>创建时间 {formatDateTime(job.createdAt)}</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderFillSummary(job: CocFillJob) {
+    const running = job.status !== "success" && job.status !== "failed";
+    const previewConfirmed = confirmedFillJobIds.has(job.jobId);
+    const pendingCandidateCount = pendingCandidateCountForJob(job.jobId);
+    return (
+      <div style={{ display: "grid", gap: 12 }}>
+        <div style={metricsGridStyle}>
+          <StatusMetricCard
+            label="识别"
+            value={job.totalRows ?? "-"}
+            active={fillPreviewStatusFilter === "all"}
+            onClick={() => handleFillPreviewFilterClick("all")}
+          />
+          <StatusMetricCard
+            label="填充"
+            value={job.filledCount ?? "-"}
+            tone="success"
+            active={fillPreviewStatusFilter === "filled"}
+            onClick={() => handleFillPreviewFilterClick("filled")}
+          />
+          <StatusMetricCard
+            label="未命中"
+            value={job.notFoundCount ?? "-"}
+            tone="danger"
+            active={fillPreviewStatusFilter === "not_found"}
+            onClick={() => handleFillPreviewFilterClick("not_found")}
+          />
+          <StatusMetricCard
+            label="冲突"
+            value={job.ambiguousCount ?? "-"}
+            tone="warning"
+            active={fillPreviewStatusFilter === "ambiguous"}
+            onClick={() => handleFillPreviewFilterClick("ambiguous")}
+          />
+          <StatusMetricCard
+            label="跳过"
+            value={job.skippedExistingCount ?? "-"}
+            active={fillPreviewStatusFilter === "skipped_existing"}
+            onClick={() => handleFillPreviewFilterClick("skipped_existing")}
+          />
+        </div>
+        <div style={{ color: "#64748b", fontSize: 13 }}>
+          {running
+            ? `阶段：${job.phase || "pending"}`
+            : `唯一物料 ${job.uniqueMaterialCount ?? "-"} · 跳过已有 ${job.skippedExistingCount ?? "-"} · PDF 记录 ${job.pdfRecordCount ?? "-"}`}
+        </div>
+        {job.status === "success" ? (
+          <>
+            {renderFillPreview(job)}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              {pendingCandidateCount > 0 ? (
+                <>
+                  <button
+                    className="btn btn-sm btn-primary"
+                    type="button"
+                    disabled={fillOverrideAction !== null}
+                    onClick={() => void handleConfirmFillCandidates(job)}
+                  >
+                    {fillOverrideAction === `${job.jobId}:batch` ? "确认中..." : `批量确认选择 (${pendingCandidateCount})`}
+                  </button>
+                  <button
+                    className="btn btn-sm btn-secondary"
+                    type="button"
+                    disabled={fillOverrideAction !== null}
+                    onClick={() => clearPendingFillCandidateSelections(job.jobId)}
+                  >
+                    清空暂选
+                  </button>
+                </>
+              ) : null}
+              {previewConfirmed ? (
+                <button
+                  className="btn btn-sm btn-primary"
+                  type="button"
+                  disabled={fillDownloadAction !== null}
+                  onClick={() => void handleDownloadFillWorkbook(job)}
+                >
+                  {fillDownloadAction === job.jobId ? "下载中..." : "下载填充 Excel"}
+                </button>
+              ) : (
+                <button
+                  className="btn btn-sm btn-primary"
+                  type="button"
+                  disabled={pendingCandidateCount > 0}
+                  onClick={() => handleConfirmFillPreview(job.jobId)}
+                >
+                  确认预览
+                </button>
+              )}
+              <span style={hintStyle}>
+                {pendingCandidateCount > 0 ? "先批量确认候选，再确认预览" : previewConfirmed ? "预览已确认" : "确认后可下载"}
+              </span>
+            </div>
+          </>
+        ) : null}
+        {job.status === "failed" && job.error ? <small style={{ color: "#dc2626" }}>{job.error}</small> : null}
+      </div>
+    );
+  }
+
+  function renderFillPreview(job: CocFillJob) {
+    const groups = getFillPreviewGroups(job);
+    const filteredGroups: CocFillSheetPreviewGroup[] = groups
+      .map((group) => ({
+        key: `${job.jobId}:${group.sheetName}`,
+        sheetName: group.sheetName,
+        title: group.sheetName,
+        metrics: [
+          { label: "识别", value: group.totalRows },
+          { label: "填充", value: group.filledCount },
+          { label: "未命中", value: group.notFoundCount },
+          { label: "冲突", value: group.ambiguousCount },
+          { label: "跳过", value: group.skippedExistingCount },
+        ],
+        rows: fillPreviewStatusFilter === "all"
+          ? group.decisions
+          : group.decisions.filter((decision) => decision.status === fillPreviewStatusFilter),
+        truncated: group.truncated,
+        previewLimit: group.previewLimit,
+      }))
+      .filter((group) => group.rows.length > 0);
+    const previewTouched = touchedFillPreviewJobIds.has(job.jobId);
+    return (
+      <SheetGroupedPreview<CocFillDecision, CocFillSheetPreviewGroup>
+        title="填充预览"
+        groups={filteredGroups}
+        columns={FILL_PREVIEW_COLUMNS}
+        expandedGroupKeys={expandedFillPreviewSheets}
+        previewTouched={previewTouched}
+        emptyText="当前筛选没有预览记录"
+        onToggleGroup={(group, expanded) => toggleFillPreviewSheet(job.jobId, group.sheetName, expanded)}
+        toolbar={(
+          <>
+            <span>{fillPreviewFilterLabel(fillPreviewStatusFilter)} · {filteredGroups.length} / {groups.length} 个 Sheet</span>
+            {(["all", "filled", "not_found", "ambiguous", "skipped_existing"] as FillPreviewStatusFilter[]).map((filter) => (
+              <button
+                key={filter}
+                type="button"
+                style={{
+                  ...previewFilterButtonStyle,
+                  ...(fillPreviewStatusFilter === filter ? previewFilterButtonActiveStyle : null),
+                }}
+                onClick={() => handleFillPreviewFilterClick(filter)}
+              >
+                {fillPreviewFilterButtonLabel(filter)}
+              </button>
+            ))}
+          </>
+        )}
+        renderTruncated={(group) => (
+          job.includeResultSheet
+            ? `该 Sheet 仅展示前 ${group.previewLimit ?? group.rows.length} 行预览，完整清单在下载文件的 COC填充结果 sheet 中。`
+            : `该 Sheet 仅展示前 ${group.previewLimit ?? group.rows.length} 行预览。`
+        )}
+        renderRow={(decision, index, group) => {
+                            const pickerKey = fillDecisionKey(job.jobId, decision);
+                            const candidates = decision.candidateRecords || [];
+                            const pickerOpen = openCandidatePickerKey === pickerKey;
+                            const pickerBusy = fillOverrideAction === pickerKey;
+                            const pendingSelection = pendingFillCandidateSelections[pickerKey];
+                            const pendingValues = pendingFillSelectionValues(pendingSelection);
+                            const displayedWvta = pendingValues?.wvtaNo || decision.writtenWvta || "-";
+                            const displayedCoc = pendingValues?.cocNo || decision.writtenCoc || "-";
+                            const manualDraft = manualFillDrafts[pickerKey] || { wvtaNo: "", cocNo: "" };
+                            return (
+                              <tr key={`${group.sheetName}-${decision.rowNumber}-${decision.materialGroup}-${index}`}>
+                                <td style={{ ...tdStyle, color: pendingSelection ? "#2563eb" : fillDecisionStatusColor(decision.status), fontWeight: 700 }}>
+                                  {pendingSelection ? "待确认" : fillDecisionStatusLabel(decision.status)}
+                                </td>
+                                <td style={tdStyle}>{decision.rowNumber}</td>
+                                <td style={tdStyle}>{decision.materialGroup}</td>
+                                <td style={tdStyle}>{displayedWvta}</td>
+                                <td style={tdStyle}>{displayedCoc}</td>
+                                <td style={{ ...tdStyle, position: "relative" }}>
+                                  {decision.status === "ambiguous" && candidates.length > 0 ? (
+                                    <div style={candidatePickerWrapStyle}>
+                                      <span style={candidateActionRowStyle}>
+                                        <button
+                                          className="btn btn-sm btn-secondary"
+                                          type="button"
+                                          disabled={fillOverrideAction !== null}
+                                          onClick={() => setOpenCandidatePickerKey(pickerOpen ? null : pickerKey)}
+                                        >
+                                          {pendingSelection ? "更换候选" : `暂选候选 (${candidates.length})`}
+                                        </button>
+                                        {pendingSelection ? (
+                                          <button
+                                            className="btn btn-sm btn-secondary"
+                                            type="button"
+                                            disabled={fillOverrideAction !== null}
+                                            onClick={() => clearPendingFillCandidateSelection(job, decision)}
+                                          >
+                                            取消暂选
+                                          </button>
+                                        ) : null}
+                                      </span>
+                                      {pickerOpen ? (
+                                        <div style={candidateMenuStyle}>
+                                          {candidates.map((candidate, candidateIndex) => (
+                                            <button
+                                              key={candidateOptionKey(candidate, candidateIndex)}
+                                              type="button"
+                                              style={candidateOptionStyle}
+                                              disabled={fillOverrideAction !== null}
+                                              onClick={() => handleSelectFillCandidate(job, decision, candidate)}
+                                            >
+                                              <strong style={candidateOptionMainStyle}>{candidateMainText(candidate)}</strong>
+                                              <span style={candidateOptionMetaStyle}>{candidateMetaText(candidate)}</span>
+                                            </button>
+                                          ))}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ) : decision.status === "not_found" ? (
+                                    <div style={manualFillWrapStyle}>
+                                      <input
+                                        type="text"
+                                        placeholder="粘贴 / 输入 WVTA"
+                                        value={manualDraft.wvtaNo}
+                                        onChange={(event) => handleManualFillDraftChange(job, decision, "wvtaNo", event.target.value)}
+                                        onPaste={(event) => {
+                                          const text = event.clipboardData.getData("text");
+                                          const parsed = manualFillPasteParts(text);
+                                          if (parsed.wvtaNo || parsed.cocNo) {
+                                            event.preventDefault();
+                                            handleManualFillPaste(job, decision, text);
+                                          }
+                                        }}
+                                        style={manualFillInputStyle}
+                                      />
+                                      <input
+                                        type="text"
+                                        placeholder="输入 COC"
+                                        value={manualDraft.cocNo}
+                                        onChange={(event) => handleManualFillDraftChange(job, decision, "cocNo", event.target.value)}
+                                        style={manualFillInputStyle}
+                                      />
+                                      <span style={candidateActionRowStyle}>
+                                        <button
+                                          className="btn btn-sm btn-secondary"
+                                          type="button"
+                                          disabled={fillOverrideAction !== null}
+                                          onClick={() => handleStageManualFill(job, decision)}
+                                        >
+                                          暂存手填
+                                        </button>
+                                        {pendingSelection ? (
+                                          <button
+                                            className="btn btn-sm btn-secondary"
+                                            type="button"
+                                            disabled={fillOverrideAction !== null}
+                                            onClick={() => clearPendingFillCandidateSelection(job, decision)}
+                                          >
+                                            取消暂选
+                                          </button>
+                                        ) : null}
+                                      </span>
+                                    </div>
+                                  ) : isManualFillDecision(decision) ? (
+                                    <button
+                                      className="btn btn-sm btn-secondary"
+                                      type="button"
+                                      disabled={fillOverrideAction !== null}
+                                      onClick={() => void handleRevertFillCandidate(job, decision)}
+                                    >
+                                      {pickerBusy ? "撤回中..." : "撤回人工选择"}
+                                    </button>
+                                  ) : "-"}
+                                </td>
+                                <td style={{ ...tdStyle, whiteSpace: "normal", minWidth: 180 }}>
+                                  {pendingSelection ? "已暂选，尚未批量确认。" : decision.reason}
+                                </td>
+                              </tr>
+                            );
+        }}
+      />
+    );
+  }
+
+  function renderMatchHistory() {
+    return (
+      <div style={panelStyle}>
+        <div style={panelHeaderStyle}>
+          <strong>COC 比对记录</strong>
+          <button className="btn btn-sm btn-secondary" type="button" onClick={refreshMatchJobs}>刷新</button>
+        </div>
+        {matchJobList.length === 0 ? <EmptyState text="暂无比对记录" /> : (
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table style={tableStyle}>
               <thead>
                 <tr>
                   <th style={thStyle}>国家</th>
                   <th style={thStyle}>月份</th>
                   <th style={thStyle}>状态</th>
-                  <th style={thStyle}>总行数</th>
                   <th style={thStyle}>匹配</th>
                   <th style={thStyle}>缺失</th>
-                  <th style={thStyle}>Excel 缺码</th>
-                  <th style={thStyle}>差异类型</th>
                   <th style={thStyle}>覆盖率</th>
-                  <th style={thStyle}>创建时间</th>
                   <th style={thStyle}>操作</th>
                 </tr>
               </thead>
               <tbody>
-                {jobList.map((job) => (
-                  <tr key={job.jobId} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                {matchJobList.map((job) => (
+                  <tr key={job.jobId}>
                     <td style={tdStyle}>{job.country}</td>
                     <td style={tdStyle}>{job.month}</td>
-                    <td style={{ ...tdStyle, color: statusColor(job.status), fontWeight: 600 }}>
-                      {statusLabel(job.status)}
-                    </td>
-                    <td style={tdStyle}>{job.totalRows ?? "-"}</td>
+                    <td style={{ ...tdStyle, color: statusColor(job.status), fontWeight: 700 }}>{statusLabel(job.status)}</td>
                     <td style={tdStyle}>{job.matchedCount ?? "-"}</td>
                     <td style={tdStyle}>{job.missingCount ?? "-"}</td>
-                    <td style={tdStyle}>{job.extraFileCount ?? "-"}</td>
-                    <td style={tdStyle}>{cocDifferenceLabel(job.differenceType)}</td>
-                    <td style={tdStyle}>
-                      {job.coverageRate != null ? `${job.coverageRate}%` : "-"}
-                    </td>
-                    <td style={tdStyle}>{formatTs(job.createdAt)}</td>
-                    <td style={tdStyle}>
-                      {job.status === "success" && (
-                        <span style={{ fontSize: 13, whiteSpace: "nowrap" }}>
-                          <button onClick={() => handleOpenReport(job.jobId)}
-                            disabled={reportAction !== null}
-                            style={{
-                              color: "#2563eb", cursor: reportAction ? "wait" : "pointer",
-                              textDecoration: "underline", background: "none", border: "none", padding: 0,
-                              fontSize: 13,
-                            }}>
-                            {reportAction === `${job.jobId}:view` ? "打开中" : "查看"}
-                          </button>
-                          <span style={{ color: "#d1d5db", margin: "0 4px" }}>|</span>
-                          <button onClick={() => handleDownloadReport(job.jobId)}
-                            disabled={reportAction !== null}
-                            style={{
-                              color: "#16a34a", cursor: reportAction ? "wait" : "pointer",
-                              textDecoration: "underline", background: "none", border: "none", padding: 0,
-                              fontSize: 13,
-                            }}>
-                            {reportAction === `${job.jobId}:download` ? "下载中" : "下载"}
-                          </button>
-                        </span>
-                      )}
-                      {job.status === "failed" && (
-                        <button onClick={() => handleRetry(job.jobId)}
-                          style={{ color: "#dc2626", fontSize: 13, textDecoration: "underline", background: "none", border: "none", cursor: "pointer" }}>
-                          重试
-                        </button>
-                      )}
-                    </td>
+                    <td style={tdStyle}>{job.coverageRate != null ? `${job.coverageRate}%` : "-"}</td>
+                    <td style={tdStyle}>{renderMatchActions(job)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -481,24 +1234,350 @@ export function CocMatchPage() {
           </div>
         )}
       </div>
+    );
+  }
 
-      {/* Pulse keyframes */}
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.4; }
-        }
-      `}</style>
-    </div>
-  );
+  function renderFillHistory() {
+    return (
+      <div style={panelStyle}>
+        <div style={panelHeaderStyle}>
+          <strong>COC 填充记录</strong>
+          <button className="btn btn-sm btn-secondary" type="button" onClick={refreshFillJobs}>刷新</button>
+        </div>
+        {fillJobList.length === 0 ? <EmptyState text="暂无填充记录" /> : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={tableStyle}>
+              <thead>
+                <tr>
+                  <th style={thStyle}>状态</th>
+                  <th style={thStyle}>识别行</th>
+                  <th style={thStyle}>填充</th>
+                  <th style={thStyle}>未命中</th>
+                  <th style={thStyle}>冲突</th>
+                  <th style={thStyle}>策略</th>
+                  <th style={thStyle}>创建时间</th>
+                  <th style={thStyle}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fillJobList.map((job) => (
+                  <tr key={job.jobId}>
+                    <td style={{ ...tdStyle, color: statusColor(job.status), fontWeight: 700 }}>{statusLabel(job.status)}</td>
+                    <td style={tdStyle}>{job.totalRows ?? "-"}</td>
+                    <td style={tdStyle}>{job.filledCount ?? "-"}</td>
+                    <td style={tdStyle}>{job.notFoundCount ?? "-"}</td>
+                    <td style={tdStyle}>{job.ambiguousCount ?? "-"}</td>
+                    <td style={tdStyle}>{fillStrategyLabel(job.conflictStrategy)}</td>
+                    <td style={tdStyle}>{formatDateTime(job.createdAt)}</td>
+                    <td style={tdStyle}>{renderFillActions(job)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderMatchActions(job: CocMatchJob) {
+    if (job.status === "success") {
+      return (
+        <span style={{ display: "inline-flex", gap: 6 }}>
+          <button className="btn btn-sm btn-secondary" type="button" disabled={reportAction !== null} onClick={() => void handleOpenReport(job.jobId)}>查看</button>
+          <button className="btn btn-sm btn-secondary" type="button" disabled={reportAction !== null} onClick={() => void handleDownloadReport(job.jobId)}>下载</button>
+        </span>
+      );
+    }
+    if (job.status === "failed") {
+      return <button className="btn btn-sm btn-secondary" type="button" onClick={() => void handleRetryMatch(job.jobId)}>重试</button>;
+    }
+    return "-";
+  }
+
+  function renderFillActions(job: CocFillJob) {
+    if (job.status !== "success") return "-";
+    if (!confirmedFillJobIds.has(job.jobId)) {
+      return (
+        <button
+          className="btn btn-sm btn-secondary"
+          type="button"
+          onClick={() => handlePreviewFillJob(job)}
+        >
+          预览
+        </button>
+      );
+    }
+    return (
+      <button
+        className="btn btn-sm btn-secondary"
+        type="button"
+        disabled={fillDownloadAction !== null}
+        onClick={() => void handleDownloadFillWorkbook(job)}
+      >
+        下载
+      </button>
+    );
+  }
 }
 
-const thStyle: React.CSSProperties = {
-  textAlign: "left", padding: "10px 16px", fontSize: 12, fontWeight: 600,
-  color: "#666", background: "#fafafa", textTransform: "uppercase",
+function fillWorkbookDownloadName(job: CocFillJob): string {
+  const filename = job.excelFilename.trim();
+  return filename || `coc_fill_${job.jobId}.xlsx`;
+}
+
+const heroStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  gap: 16,
+  marginBottom: 18,
+};
+
+const dashboardGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+  gap: 16,
+  marginBottom: 16,
+};
+
+const historyGridStyle: CSSProperties = {
+  display: "grid",
+  gap: 16,
+};
+
+const panelStyle: CSSProperties = {
+  background: "white",
+  border: "1px solid #e2e8f0",
+  borderRadius: 8,
+  overflow: "hidden",
+  boxShadow: "0 1px 3px rgba(15, 23, 42, 0.08)",
+};
+
+const panelHeaderStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+  padding: "14px 16px",
+  borderBottom: "1px solid #e2e8f0",
+};
+
+const metricsGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))",
+  gap: 8,
+  padding: 12,
+};
+
+const matchSummaryBodyStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+  gap: 12,
+  padding: 12,
+  alignItems: "stretch",
+};
+
+const matchMetricsGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 8,
+  alignContent: "start",
+};
+
+const matchDetailStyle: CSSProperties = {
+  display: "grid",
+  gap: 10,
+  minWidth: 0,
+  padding: 12,
+  border: "1px solid #e2e8f0",
+  borderRadius: 6,
+  background: "#f8fafc",
+};
+
+const matchDetailHeaderStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 10,
+  color: "#111827",
+};
+
+const matchMetaGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(138px, 1fr))",
+  gap: 8,
+};
+
+const matchMetaItemStyle: CSSProperties = {
+  display: "grid",
+  gap: 3,
+  minWidth: 0,
+};
+
+const matchMetaValueStyle: CSSProperties = {
+  color: "#111827",
+  fontSize: 13,
+  lineHeight: 1.35,
+  minWidth: 0,
+  overflowWrap: "anywhere",
+};
+
+const matchActionRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
+  paddingTop: 2,
+};
+
+const previewFilterButtonStyle: CSSProperties = {
+  border: "1px solid #cbd5e1",
+  borderRadius: 6,
+  background: "#ffffff",
+  color: "#475569",
+  padding: "4px 8px",
+  fontSize: 12,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const previewFilterButtonActiveStyle: CSSProperties = {
+  borderColor: "#2563eb",
+  background: "#eff6ff",
+  color: "#1d4ed8",
+};
+
+const candidatePickerWrapStyle: CSSProperties = {
+  position: "relative",
+  display: "inline-block",
+};
+
+const candidateActionRowStyle: CSSProperties = {
+  display: "inline-flex",
+  gap: 6,
+  alignItems: "center",
+  flexWrap: "wrap",
+};
+
+const candidateMenuStyle: CSSProperties = {
+  position: "absolute",
+  top: "calc(100% + 6px)",
+  left: 0,
+  zIndex: 20,
+  width: 520,
+  maxWidth: "70vw",
+  maxHeight: 420,
+  overflowY: "auto",
+  border: "1px solid #bfdbfe",
+  borderRadius: 8,
+  background: "#ffffff",
+  boxShadow: "0 18px 36px rgba(15, 23, 42, 0.18)",
+  padding: 6,
+};
+
+const candidateOptionStyle: CSSProperties = {
+  width: "100%",
+  display: "grid",
+  gap: 3,
+  padding: "7px 8px",
+  border: 0,
+  borderRadius: 6,
+  background: "#ffffff",
+  color: "#111827",
+  cursor: "pointer",
+  textAlign: "left",
+  font: "inherit",
+};
+
+const candidateOptionMainStyle: CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.25,
+  color: "#111827",
+  whiteSpace: "normal",
+};
+
+const candidateOptionMetaStyle: CSSProperties = {
+  color: "#64748b",
+  fontSize: 11,
+  lineHeight: 1.25,
+  whiteSpace: "normal",
+};
+
+const manualFillWrapStyle: CSSProperties = {
+  display: "grid",
+  gap: 6,
+  width: 300,
+  maxWidth: "38vw",
+};
+
+const manualFillInputStyle: CSSProperties = {
+  width: "100%",
+  minWidth: 0,
+  border: "1px solid #cbd5e1",
+  borderRadius: 6,
+  padding: "5px 7px",
+  fontSize: 12,
+};
+
+const controlPanelStyle: CSSProperties = {
+  display: "grid",
+  gap: 12,
+};
+
+const dropGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+  gap: 10,
+};
+
+const fieldStyle: CSSProperties = {
+  display: "grid",
+  gap: 5,
+  color: "#475569",
+  fontSize: 12,
+  fontWeight: 700,
+};
+
+const checkboxStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  color: "#475569",
+  fontSize: 12,
+  fontWeight: 700,
+};
+
+const segmentedStyle: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+};
+
+const hintStyle: CSSProperties = {
+  color: "#64748b",
+  fontSize: 12,
+};
+
+const tableStyle: CSSProperties = {
+  width: "100%",
+  borderCollapse: "collapse",
+};
+
+const thStyle: CSSProperties = {
+  textAlign: "left",
+  padding: "10px 12px",
+  fontSize: 11,
+  fontWeight: 700,
+  color: "#64748b",
+  background: "#f8fafc",
+  textTransform: "uppercase",
   whiteSpace: "nowrap",
 };
 
-const tdStyle: React.CSSProperties = {
-  padding: "10px 16px", fontSize: 14, whiteSpace: "nowrap",
+const tdStyle: CSSProperties = {
+  padding: "10px 12px",
+  borderTop: "1px solid #f1f5f9",
+  fontSize: 13,
+  whiteSpace: "nowrap",
 };

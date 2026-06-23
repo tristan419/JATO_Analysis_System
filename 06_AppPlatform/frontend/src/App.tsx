@@ -6,6 +6,7 @@ import { AuthProvider } from "./contexts/AuthContext";
 import { Layout } from "./components/Layout";
 import { RequireRole } from "./components/RequireRole";
 import { LoadingSurface } from "./components/LoadingSurface";
+import { getOAuthRedirectTarget } from "./utils/oauthRedirect";
 
 /** Consume OAuth token params before any provider mounts, avoiding aborted fetches. */
 function OAuthGate({ children }: { children: ReactNode }) {
@@ -21,7 +22,7 @@ function OAuthGate({ children }: { children: ReactNode }) {
     localStorage.setItem("jato_user_name", urlUser);
     localStorage.setItem("jato_user_role", urlRole);
     localStorage.removeItem("shared-filter-scope");
-    const target = isNewUser ? "/account/profile" : "/dashboard";
+    const target = getOAuthRedirectTarget(window.location, isNewUser);
     // Sync redirect — aborts current render before any child effects run
     window.location.replace(target);
     return null;
@@ -56,6 +57,7 @@ const OrderGeniusCbuPage = lazy(() => import("./pages/OrderGeniusCbuPage").then(
 const OrderGeniusVehicleAllocationPage = lazy(() => import("./pages/OrderGeniusVehicleAllocationPage").then(m => ({ default: m.OrderGeniusVehicleAllocationPage })));
 const AccessControlPage = lazy(() => import("./pages/AccessControlPage").then(m => ({ default: m.AccessControlPage })));
 const ProfilePage = lazy(() => import("./pages/ProfilePage").then(m => ({ default: m.ProfilePage })));
+const RouteDiagnosticsPage = lazy(() => import("./pages/RouteDiagnosticsPage").then(m => ({ default: m.RouteDiagnosticsPage })));
 
 class ChunkErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
   state = { hasError: false };
@@ -82,6 +84,10 @@ function withPageLoader(node: ReactNode) {
       </Suspense>
     </ChunkErrorBoundary>
   );
+}
+
+function withSharedFilterScope(node: ReactNode) {
+  return <SharedFilterScopeProvider>{node}</SharedFilterScopeProvider>;
 }
 
 function RedirectPreserveSearch({ to }: { to: string }) {
@@ -197,9 +203,9 @@ function AppVersionNotice() {
 
 const router = createBrowserRouter([
   { path: "/login", element: (<AuthProvider>{withPageLoader(<LoginPage />)}</AuthProvider>) },
-  { path: "/", element: (<AuthProvider><OAuthGate><SharedFilterScopeProvider><CountryChatProvider><RequireRole><Layout /></RequireRole></CountryChatProvider></SharedFilterScopeProvider></OAuthGate></AuthProvider>), children: [
-    { index: true, element: withPageLoader(<DashboardPage />) },
-    { path: "dashboard", element: withPageLoader(<DashboardPage />) },
+  { path: "/", element: (<AuthProvider><OAuthGate><CountryChatProvider><RequireRole><Layout /></RequireRole></CountryChatProvider></OAuthGate></AuthProvider>), children: [
+    { index: true, element: withSharedFilterScope(withPageLoader(<DashboardPage />)) },
+    { path: "dashboard", element: withSharedFilterScope(withPageLoader(<DashboardPage />)) },
     { path: "market/overview", element: withPageLoader(<MarketOverviewPage />) },
     { path: "market/segments", element: withPageLoader(<MarketSegmentsPage />) },
     { path: "market/ranking/brand", element: withPageLoader(<MarketBrandRankingPage />) },
@@ -215,7 +221,7 @@ const router = createBrowserRouter([
     { path: "product/pricing", element: withPageLoader(<PositioningPricingPage />) },
     { path: "product/compare", element: withPageLoader(<VersionComparisonPage />) },
     { path: "product/customer-insight", element: withPageLoader(<CustomerInsightsPage />) },
-    { path: "data/spec-detail", element: withPageLoader(<SpecificationPage />) },
+    { path: "data/spec-detail", element: withSharedFilterScope(withPageLoader(<SpecificationPage />)) },
     { path: "data/overview", element: withPageLoader(<DataManagementPage />) },
     { path: "data/config-import", element: withPageLoader(<EngineeringPage />) },
     { path: "data/matching-review", element: withPageLoader(<ReviewCasesPage />) },
@@ -223,6 +229,7 @@ const router = createBrowserRouter([
     { path: "data/order-genius", element: withPageLoader(<OrderGeniusPage />) },
     { path: "admin/access-control", element: withPageLoader(<AccessControlPage />) },
     { path: "account/profile", element: withPageLoader(<ProfilePage />) },
+    { path: "route-diagnostics", element: withPageLoader(<RouteDiagnosticsPage />) },
     { path: "product/coc-match", element: withPageLoader(<CocMatchPage />) },
     { path: "copilot", element: withPageLoader(<CountryChatPage />) },
     { path: "engineering-config", element: withPageLoader(<EngineeringConfigPage />) },
@@ -233,7 +240,7 @@ const router = createBrowserRouter([
     { path: "version-comparison", element: <RedirectPreserveSearch to="/product/compare" /> },
     { path: "customer-insights", element: <RedirectPreserveSearch to="/product/customer-insight" /> },
     { path: "customer-hev", element: <RedirectPreserveSearch to="/product/customer-insight" /> },
-    { path: "specification", element: withPageLoader(<SpecificationPage />) },
+    { path: "specification", element: withSharedFilterScope(withPageLoader(<SpecificationPage />)) },
     { path: "data-management", element: withPageLoader(<DataManagementPage />) },
     { path: "engineering", element: <RedirectPreserveSearch to="/data/config-import" /> },
     { path: "review", element: <RedirectPreserveSearch to="/data/matching-review" /> },

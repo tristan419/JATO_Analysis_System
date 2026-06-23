@@ -2,8 +2,6 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Link } from "react-router-dom";
 import type { Data, Layout, PlotMouseEvent } from "plotly.js";
 
-import { animate } from "animejs";
-
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { CollapsibleFilterSidebar } from "../components/CollapsibleFilterSidebar";
@@ -30,6 +28,7 @@ import { DEFAULT_POWERTRAINS, fuelFamilyColor, normalizePowertrainName, seriesCo
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 import { buildCategoryAxis, formatCompactBarLabel } from "../utils/plotlyDefaults";
 import { parseMonthLabel, toTimeOrdinal, compareTimeLabels } from "../utils/timeFormatting";
+import { isAbortError } from "../utils/filterOptions";
 import {
   type BubbleGroupDimension,
   type DashboardPageCache,
@@ -62,6 +61,38 @@ import {
 const RvFinanceDashboard = lazy(() =>
   import("../components/RvFinanceDashboard").then((module) => ({ default: module.RvFinanceDashboard }))
 );
+
+const DASHBOARD_DEFERRED_FETCH_DELAY_MS = 6_000;
+const DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS = 4_000;
+
+let dashboardAnimationPromise: Promise<typeof import("animejs")> | null = null;
+
+function loadDashboardAnimation() {
+  if (!dashboardAnimationPromise) {
+    dashboardAnimationPromise = import("animejs").catch((error) => {
+      dashboardAnimationPromise = null;
+      throw error;
+    });
+  }
+  return dashboardAnimationPromise;
+}
+
+type DashboardIdleWindow = Window & typeof globalThis & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
+
+function scheduleDashboardIdlePreload(callback: () => void): () => void {
+  const idleWindow = window as DashboardIdleWindow;
+  if (typeof idleWindow.requestIdleCallback === "function") {
+    const handle = idleWindow.requestIdleCallback(callback, {
+      timeout: DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS,
+    });
+    return () => idleWindow.cancelIdleCallback?.(handle);
+  }
+  const handle = window.setTimeout(callback, DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS);
+  return () => window.clearTimeout(handle);
+}
 
 function resolveTimeSeriesSeriesColor(
   name: string,
@@ -289,7 +320,7 @@ export function DashboardPage() {
   const [activeTab, setActiveTab] = useState<"year"|"month">(() => cachedPage?.activeTab ?? "month");
   const [chartType, setChartType] = useState<"line"|"bar"|"rank">(() => cachedPage?.chartType ?? "line");
   const [rankLimit, setRankLimit] = useState(() => cachedPage?.rankLimit ?? 20);
-  const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">(() => cachedPage?.tsMode ?? "\u5206\u7ec4");
+  const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">("\u603b\u548c");
   const [tsGroupDim, setTsGroupDim] = useState(() => cachedPage?.tsGroupDim ?? "\u56fd\u5bb6");
   const [tsShareSplit, setTsShareSplit] = useState<TimeSeriesShareSplitDimension>(
     () => cachedPage?.tsShareSplit ?? "total",
@@ -453,17 +484,15 @@ export function DashboardPage() {
   const [freshnessItems, setFreshnessItems] = useState<DataFreshnessItem[]>([]);
   useEffect(() => {
     let cancelled = false;
-    api.dataFreshness().then((res) => {
-      if (!cancelled) setFreshnessItems(res.items ?? []);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
     const timer = window.setTimeout(() => {
-      void preloadPlotlyChartRuntime();
-    }, 150);
-    return () => window.clearTimeout(timer);
+      api.dataFreshness().then((res) => {
+        if (!cancelled) setFreshnessItems(res.items ?? []);
+      }).catch(() => {});
+    }, DASHBOARD_DEFERRED_FETCH_DELAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, []);
 
   /* deck section selector for global drawers */
@@ -537,22 +566,13 @@ export function DashboardPage() {
     loadPositioningMap();
   }, [filterTimeScopeKey, loadPositioningMap, optionsSyncPending, pmItems.length]);
 
-  /* B12: lazy auto-load — when filteredRowCount < 200 000, auto-trigger first advanced chart */
-  const advAutoLoaded = useRef(false);
-  useEffect(() => {
-    if (advAutoLoaded.current) return;
-    if (filteredRowCount !== null && filteredRowCount < 200_000 && columns.length > 0 && advItems.length === 0 && advChart !== "rv_finance_dashboard") {
-      advAutoLoaded.current = true;
-      loadAdvChart();
-    }
-  }, [filteredRowCount, columns.length, advItems.length, advChart]);
-
   /* auto-fetch grouped time series */
   useEffect(() => {
     if (tsMode !== "\u5206\u7ec4" || columns.length === 0) return;
     const filters = JSON.parse(filterPayloadStr) as Record<string, string[]>;
     setGroupedLoading(true);
     let cancelled = false;
+    const controller = new AbortController();
       const timer = setTimeout(async () => {
         setError("");
         try {
@@ -567,16 +587,21 @@ export function DashboardPage() {
             top_n: chartType === "rank" ? rankLimit : (tsTopNEnabled ? tsTopN : 9999),
             include_others: tsIncludeOthers,
             time_range: timeRangePayload,
-          });
+          }, { signal: controller.signal });
           if (!cancelled) {
             setGroupedItems(ensureArray(r.items));
             setHiddenSeries(new Set());
             setOthersDetail(ensureArray(r.others_detail));
           }
-        } catch (e) { if (!cancelled) setError((e as Error).message); }
+        } catch (e) { if (!cancelled && !isAbortError(e)) setError((e as Error).message); }
         finally { if (!cancelled) setGroupedLoading(false); }
       }, 300);
-      return () => { cancelled = true; clearTimeout(timer); setGroupedLoading(false); };
+      return () => {
+        cancelled = true;
+        controller.abort();
+        clearTimeout(timer);
+        setGroupedLoading(false);
+      };
   }, [tsMode, tsGroupDim, tsShareSplit, activeTab, tsTopN, tsTopNEnabled, tsIncludeOthers, chartType, rankLimit, filterPayloadStr, columns.length, timeRangePayload]);
 
   /* advanced chart */
@@ -859,6 +884,20 @@ export function DashboardPage() {
     () => rankingData.slice(0, rankLimit),
     [rankingData, rankLimit],
   );
+  const hasDeferredChartData = (
+    aggregatedSingle.length > 0
+    || filteredGrouped.length > 0
+    || advItems.length > 0
+    || mvItems.length > 0
+    || pmItems.length > 0
+  );
+
+  useEffect(() => {
+    if (dashboardBootstrapping || !hasDeferredChartData) return;
+    return scheduleDashboardIdlePreload(() => {
+      void preloadPlotlyChartRuntime();
+    });
+  }, [dashboardBootstrapping, hasDeferredChartData]);
 
   /* B7: time-window KPI — compute sales from filtered time series */
   const timeWindowSales = useMemo(() => {
@@ -1039,16 +1078,26 @@ export function DashboardPage() {
   }, [columns.length, dashboardCacheSnapshot]);
 
   useEffect(() => {
-    try {
-      animate(".dashboard-hero-head", {
-        opacity: [0, 1],
-        translateY: [12, 0],
-        duration: 600,
-        ease: "outExpo",
-      });
-    } catch {
-      /* decorative only */
-    }
+    let cancelled = false;
+    const cancelIdle = scheduleDashboardIdlePreload(() => {
+      void loadDashboardAnimation().then(({ animate }) => {
+        if (cancelled) return;
+        try {
+          animate(".dashboard-hero-head", {
+            opacity: [0, 1],
+            translateY: [12, 0],
+            duration: 600,
+            ease: "outExpo",
+          });
+        } catch {
+          /* decorative only */
+        }
+      }).catch(() => undefined);
+    });
+    return () => {
+      cancelled = true;
+      cancelIdle();
+    };
   }, []);
 
   /* palette helper */

@@ -185,6 +185,33 @@ sudo nano /etc/jato-fullstack/backend.env
 - 如果生产要求 Country Copilot 必须可用，设置 `APP_COUNTRY_COPILOT_REQUIRE_LLM_KEY=true`，并在服务器本地填写 `DEEPSEEK_API_KEY`。
 - 校验日志只输出变量名和缺失原因，不输出 secret 值。
 
+Google 登录的生产链路是：前端从 `www.ojeur.cloud` 或 `intl.ojeur.cloud` 请求 `www.ojeur.cloud/v1/auth/google/auth-url`，Google callback 固定回到 `https://www.ojeur.cloud/v1/auth/google/callback`，后端再按 OAuth state 里的安全 frontend origin 回跳到发起登录的页面。腾讯云大陆机房访问 `oauth2.googleapis.com` 时需要本机 mihomo 代理，默认 `APP_GOOGLE_OAUTH_PROXY_URL=http://127.0.0.1:7897`。
+
+如果页面显示 `Google auth failed` 或 `SSLEOFError`，先在服务器上检查：
+
+```bash
+systemctl is-active mihomo
+ss -ltnp | grep ':7897'
+curl -I --max-time 20 --proxy http://127.0.0.1:7897 https://oauth2.googleapis.com/token
+curl -sS https://www.ojeur.cloud/_deploy_status.txt | sed -n '/---google oauth proxy---/,/---release---/p'
+```
+
+`curl -I` 只要能连通并返回 HTTP 头即可，HTTP 400/404/405 都代表网络出口通了；连接超时、EOF、connection closed 才是代理或出口问题。GitHub Actions 部署会自动刷新 mihomo 订阅、重启服务，并把 Google 代理检查写入 `_deploy_status.txt`。
+
+生产建议在 GitHub Secrets 里配置 `MIHOMO_SUB_URL`，让部署时明确刷新订阅。未配置时脚本会先读取服务器本机受限文件 `/etc/mihomo/subscription_url`，再尝试从 `MIHOMO_DB_PATH` 或 `/home/*/.local/share/0dcloud/database.sqlite` 发现 0dcloud profile URL；如果都不可用，刷新会跳过并沿用现有 `/etc/mihomo/config.yaml`。
+
+订阅格式优先使用 Clash/mihomo YAML。如果订阅服务的 Clash 链接不可用，但 Shadowrocket 链接能返回 base64 包装的 `ss://` 列表，`03_Scripts/deploy/update_mihomo_subscription.sh` 会在服务器端转换为 mihomo YAML，再复用同一套本地绑定、DNS、`auto` 代理组和 Google 连通性检查流程。转换器会拒绝 `127.0.0.1` / `localhost` 这类只能配合图形化客户端本机转发使用的节点，因为它们在腾讯云上没有远端代理能力。不要把真实订阅 URL 写进仓库；可放到 GitHub Secret `MIHOMO_SUB_URL`，或在服务器上写入 root-only 文件：
+
+如果订阅站对腾讯云直连出口返回 403 或连接失败，部署脚本会先尝试直连，再通过服务器现有的本机 mihomo 代理 `http://127.0.0.1:7897` 重试下载订阅；可用 `MIHOMO_SUB_PROXY_URL` 覆盖这个代理地址。
+
+如果腾讯云和本机代理都无法下载订阅，GitHub Actions 会尽量在 Runner 侧用 `MIHOMO_SUB_URL` 生成预配置好的 mihomo config，并随部署包发送到服务器；服务器安装后会删除部署目录里的临时 config。Google OAuth 代理检测仍失败时，部署脚本会调用 `03_Scripts/deploy/select_mihomo_google_proxy.sh` 通过本机 mihomo controller 选择可访问 `oauth2.googleapis.com` 的节点。
+
+```bash
+sudo install -d -m 700 /etc/mihomo
+sudo sh -c 'printf "%s\n" "$MIHOMO_SUB_URL" > /etc/mihomo/subscription_url'
+sudo chmod 600 /etc/mihomo/subscription_url
+```
+
 线上需要 News/VOC/MSRP 写 PostgreSQL 时，后端 env 至少应包含：
 
 ```bash
@@ -388,11 +415,13 @@ bash 03_Scripts/print_fullstack_server_diagnostics.sh
 - Secrets: `DEPLOY_CERTBOT_EMAIL`（推荐，Let's Encrypt 联系邮箱）
 - Secrets: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
 - Secrets: `GOOGLE_OAUTH_PROXY_URL`（可选；腾讯云大陆默认回落到 `http://127.0.0.1:7897`）
+- Secrets: `MIHOMO_SUB_URL`（推荐；用于部署时刷新腾讯云本机 mihomo 订阅，支持 Clash/mihomo YAML 或 Shadowrocket `ss://` 列表订阅，日志会脱敏，不打印完整 URL）
 - Variables: `DEPLOY_REPO_DIR`
 - Variables: `FULLSTACK_BACKEND_SERVICE_NAME`
 - Variables: `DEPLOY_BRANCH`
 - Variables: `DEPLOY_SERVER_NAME`（可选，未设置时当前 workflow 默认回落到 `ojeur.cloud www.ojeur.cloud`）
 - Variables: `DEPLOY_ENABLE_HTTPS`（可选，默认 `true`）
+- Variables: `MIHOMO_DB_PATH`（可选；未设置 `MIHOMO_SUB_URL` 且服务器本机 `/etc/mihomo/subscription_url` 不存在时，用于指定 0dcloud sqlite profile 路径）
 - Variables: `FULLSTACK_VITE_API_BASE`
 - Variables: `FULLSTACK_VITE_USER_ROLE`
 - Variables: `FULLSTACK_VITE_USER_NAME`

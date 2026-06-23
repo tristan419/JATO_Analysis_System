@@ -212,13 +212,21 @@ def _check_unstructured_failures(sources: list[dict]) -> list[dict]:
         failed = last_obs.get("failedCount", 0) or 0
         has_structured = last_obs.get("failedSources") is not None
         if failed > 0 and not has_structured:
-            findings.append({
-                "sourceId": _safe(src, "sourceId", "?"),
-                "name": _safe(src, "name", "?"),
-                "failedCount": failed,
-                "finding": f"{failed} failures without per-source structured tracking (sourceId, url, error type, retryable)",
-                "recommendation": "Add per-source failed_sources.json output to the crawler. Track source code, error type, and timestamp per failure.",
-            })
+            findings.append(
+                {
+                    "sourceId": _safe(src, "sourceId", "?"),
+                    "name": _safe(src, "name", "?"),
+                    "failedCount": failed,
+                    "finding": (
+                        f"{failed} failures without per-source structured tracking "
+                        "(sourceId, url, error type, retryable)"
+                    ),
+                    "recommendation": (
+                        "Add per-source failed_sources.json output to the crawler. "
+                        "Track source code, error type, and timestamp per failure."
+                    ),
+                }
+            )
     return findings
 
 
@@ -250,7 +258,11 @@ def _generate_report(scored: list[dict], fails: list[dict], source_findings: lis
     lines.append("| Source ID | Type | Country | Status | Score | Risk | Recommendation |")
     lines.append("|---|---|---|---:|---|---|")
     for s in scored:
-        lines.append(f"| `{s['sourceId']}` | {s['sourceType']} | {s['country']} | {s['status']} | {s['qualityScore']} | {s['risk']} | {s['recommendation'][:80]} |")
+        recommendation = s["recommendation"][:80]
+        lines.append(
+            f"| `{s['sourceId']}` | {s['sourceType']} | {s['country']} | "
+            f"{s['status']} | {s['qualityScore']} | {s['risk']} | {recommendation} |"
+        )
     lines.append("")
 
     if fails:
@@ -384,16 +396,18 @@ def _add_dryrun_source_findings(report: dict) -> list[dict]:
         failure_reason = r.get("failureReason")
         if not failure_reason:
             continue
-        findings.append({
-            "sourceCode": code,
-            "country": r.get("country", "?"),
-            "status": r.get("status", "?"),
-            "valid": r.get("valid", 0),
-            "extracted": r.get("extracted", 0),
-            "failureReason": failure_reason,
-            "recommendedStrategy": r.get("recommendedStrategy", ""),
-            "elapsed": r.get("elapsed", 0),
-        })
+        findings.append(
+            {
+                "sourceCode": code,
+                "country": r.get("country", "?"),
+                "status": r.get("status", "?"),
+                "valid": r.get("valid", 0),
+                "extracted": r.get("extracted", 0),
+                "failureReason": failure_reason,
+                "recommendedStrategy": r.get("recommendedStrategy", ""),
+                "elapsed": r.get("elapsed", 0),
+            }
+        )
 
     report["sourceLevelFindings"] = findings
 
@@ -406,14 +420,16 @@ def _add_dryrun_source_findings(report: dict) -> list[dict]:
         report["failureBreakdown"] = fail_reasons
 
         # Add aggregate unstructured failure finding for MSRP
-        report.setdefault("unstructuredFailures", []).append({
-            "sourceId": "source.msrp.batch_a",
-            "name": "MSRP Batch A (from dryrun artifact)",
-            "failedCount": len(findings),
-            "finding": f"{len(findings)} sources with classified failures in latest dryrun.",
-            "recommendation": "Review source-level failureBreakdown and apply recommendedStrategy per source.",
-            "sourceLevelFindingsLink": True,
-        })
+        report.setdefault("unstructuredFailures", []).append(
+            {
+                "sourceId": "source.msrp.batch_a",
+                "name": "MSRP Batch A (from dryrun artifact)",
+                "failedCount": len(findings),
+                "finding": f"{len(findings)} sources with classified failures in latest dryrun.",
+                "recommendation": "Review source-level failureBreakdown and apply recommendedStrategy per source.",
+                "sourceLevelFindingsLink": True,
+            }
+        )
 
     return findings
 
@@ -448,9 +464,11 @@ def run(registry_dir: str | None = None, status_file: str | None = None) -> dict
     fails = _check_unstructured_failures(sources)
 
     # Load dryrun artifact for source-level MSRP failure breakdown
-    dryrun_findings = _add_dryrun_source_findings({
-        "unstructuredFailures": fails,
-    })
+    dryrun_findings = _add_dryrun_source_findings(
+        {
+            "unstructuredFailures": fails,
+        }
+    )
 
     healthy = sum(1 for s in scored if s["status"] == "healthy")
     watch = sum(1 for s in scored if s["status"] == "watch")
@@ -507,11 +525,13 @@ def main() -> None:
 
     out_md = Path(args.out_md)
     out_md.parent.mkdir(parents=True, exist_ok=True)
-    out_md.write_text(_generate_report(
-        results["sources"],
-        results["unstructuredFailures"],
-        source_findings=results.get("sourceLevelFindings"),
-    ))
+    out_md.write_text(
+        _generate_report(
+            results["sources"],
+            results["unstructuredFailures"],
+            source_findings=results.get("sourceLevelFindings"),
+        )
+    )
     print(f"[Hermes Source Quality] Report: {out_md}")
 
     out_json = Path(args.out_json)

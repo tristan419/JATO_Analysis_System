@@ -622,6 +622,8 @@ def _invalidate_jato_publish_runtime_caches() -> dict[str, Any]:
     result: dict[str, Any] = {
         "marketScanDeckLocal": {"enabled": False, "clearedCount": 0},
         "marketScanDeckRedis": {"enabled": False, "deletedCount": 0},
+        "heroProductDeckLocal": {"enabled": False, "clearedCount": 0},
+        "heroProductDeckRedis": {"enabled": False, "deletedCount": 0},
         "datasetToken": {
             "enabled": True,
             "message": "Parquet repository dataset token changes with active data artifacts.",
@@ -629,16 +631,23 @@ def _invalidate_jato_publish_runtime_caches() -> dict[str, Any]:
     }
     try:
         from app.infra.redis_client import get_redis_client
+        from app.services.hero_product_analysis_service import (
+            clear_hero_product_deck_cache,
+            invalidate_hero_product_deck_cache,
+        )
         from app.services.market_scan_cache import invalidate_market_scan_deck_cache
         from app.services.market_scan_service import clear_market_scan_local_cache
 
+        redis_client = get_redis_client()
         result["marketScanDeckLocal"] = clear_market_scan_local_cache()
-        result["marketScanDeckRedis"] = invalidate_market_scan_deck_cache(get_redis_client())
+        result["marketScanDeckRedis"] = invalidate_market_scan_deck_cache(redis_client)
+        result["heroProductDeckLocal"] = clear_hero_product_deck_cache()
+        result["heroProductDeckRedis"] = invalidate_hero_product_deck_cache(redis_client)
     except Exception as exc:
         result["error"] = str(exc)
         result["message"] = (
             "Runtime cache invalidation failed; dataset-token cache keys should still "
-            "avoid stale MarketScan data."
+            "avoid stale MarketScan/HeroProduct data."
         )
     return result
 

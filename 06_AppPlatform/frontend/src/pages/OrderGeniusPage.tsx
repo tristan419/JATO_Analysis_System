@@ -11,6 +11,7 @@ import {
   type KeyboardEvent,
   type CSSProperties,
 } from "react";
+import { animate } from "animejs";
 
 import { api, apiUrl } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
@@ -2702,6 +2703,8 @@ function BomAdminPanel({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const materialCodeInputRef = useRef<HTMLInputElement>(null);
   const copyDraftInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const bomGroupRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const expandedBomGroupKeyRef = useRef<string | null>(null);
   const [dragSku, setDragSku] = useState<string | null>(null);
   const [dragOverTier, setDragOverTier] = useState<string | null>(null);
   const dragEnterCount = useRef(0);
@@ -3867,6 +3870,60 @@ function BomAdminPanel({
     }));
   };
 
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const card = document.querySelector<HTMLElement>(".bom-admin-tools-card");
+    if (!card) return;
+    try {
+      animate(card, {
+        opacity: [0.92, 1],
+        translateY: toolsFlipped ? [-4, 0] : [3, 0],
+        duration: 220,
+        ease: "outQuad",
+      });
+    } catch {
+      /* decorative only */
+    }
+  }, [toolsFlipped]);
+
+  useEffect(() => {
+    if (!financeDrawerScope) return;
+    const frame = window.requestAnimationFrame(() => {
+      const shell = document.querySelector<HTMLElement>(".bom-finance-modal-shell");
+      if (!shell) return;
+      try {
+        animate(shell, {
+          opacity: [0, 1],
+          scale: [0.985, 1],
+          duration: 260,
+          ease: "outQuad",
+        });
+      } catch {
+        /* decorative only */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [financeDrawerScope]);
+
+  useEffect(() => {
+    if (!financeQuickCard) return;
+    const frame = window.requestAnimationFrame(() => {
+      const shell = document.querySelector<HTMLElement>(".bom-finance-quick-modal-shell");
+      if (!shell) return;
+      try {
+        animate(shell, {
+          opacity: [0, 1],
+          translateY: [14, 0],
+          duration: 240,
+          ease: "outQuad",
+        });
+      } catch {
+        /* decorative only */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [financeQuickCard]);
+
   const toggleAddMaterialForm = () => {
     const nextVisible = !showAddMaterial;
     setShowAddMaterial(nextVisible);
@@ -3953,11 +4010,31 @@ function BomAdminPanel({
       if (next.has(key)) {
         next.delete(key);
       } else {
+        expandedBomGroupKeyRef.current = key;
         next.add(key);
       }
       return next;
     });
   };
+
+  useEffect(() => {
+    const groupKey = expandedBomGroupKeyRef.current;
+    if (!groupKey || !expandedGroups.has(groupKey)) return;
+    expandedBomGroupKeyRef.current = null;
+
+    const body = bomGroupRefs.current[groupKey]?.querySelector<HTMLElement>(".bom-admin-model-group-body");
+    if (!body) return;
+    try {
+      animate(body, {
+        opacity: [0, 1],
+        translateY: [10, 0],
+        duration: 260,
+        ease: "outQuad",
+      });
+    } catch {
+      /* decorative only */
+    }
+  }, [expandedGroups]);
 
   // Shared colour chip renderer used by BOM rows
   const renderColourChip = (s: any, isHist: boolean, editing: boolean) => {
@@ -4640,9 +4717,9 @@ function BomAdminPanel({
                     <div style={{ marginTop: 7, fontSize: 11, color: colourHexRuleStatus.startsWith("Set") ? "#0f766e" : "#b45309" }}>
                       {colourHexRuleStatus}
                     </div>
-                  ) : null}
-                </div>
-              </div>
+	                  ) : null}
+	                </div>
+	              </div>
               {bomAdminNotice ? (
                 <div style={{ marginTop: 8, padding: "8px 10px", border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", fontSize: 11, fontWeight: 700 }}>
                   {bomAdminNotice}
@@ -4881,6 +4958,9 @@ function BomAdminPanel({
           return (
             <div
               key={mk}
+              ref={(node) => {
+                bomGroupRefs.current[mk] = node;
+              }}
               className="bom-admin-model-group"
               style={{ marginBottom: 2 }}
             >

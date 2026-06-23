@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MEGA_MENU_ITEMS,
   filterMenuByRole,
+  isKnownAppRoute,
   isRouteAllowedForRole,
   type MegaMenuItem,
 } from "../../utils/pageNavigation";
@@ -32,6 +33,7 @@ describe("order filler navigation", () => {
     expect(paths).toContain("/dashboard");
     expect(paths).toContain("/market/overview");
     expect(paths).toContain("/market/advanced-analysis");
+    expect(paths).toContain("/market/advanced-analysis?mode=hero-product");
     expect(paths).toContain("/product/order-genius");
     expect(paths).toContain("/product/order-genius/vehicle-allocation");
     expect(paths).toContain("/data/spec-detail");
@@ -67,5 +69,11 @@ describe("order filler navigation", () => {
     expect(isRouteAllowedForRole("/product/order-genius/vehicle-allocation", "viewer")).toBe(false);
     expect(isRouteAllowedForRole("/data/config-import", "order_filler")).toBe(false);
     expect(isRouteAllowedForRole("/admin/access-control", "order_filler")).toBe(false);
+  });
+
+  it("distinguishes unknown routes from protected known routes", () => {
+    expect(isKnownAppRoute("/dashboard")).toBe(true);
+    expect(isKnownAppRoute("/product/order-genius")).toBe(true);
+    expect(isKnownAppRoute("/route-that-does-not-exist")).toBe(false);
   });
 });

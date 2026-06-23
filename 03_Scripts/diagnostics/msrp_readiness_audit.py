@@ -11,7 +11,6 @@ import sys
 import time
 from typing import Any, Sequence
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(SCRIPT_DIR) not in sys.path:
@@ -71,12 +70,7 @@ def _safe_token(value: str | None, fallback: str) -> str:
 
 def _history_suffix(report: dict[str, Any]) -> str:
     generated = str(report.get("generatedAtUtc") or _utc_now_iso())
-    stamp = (
-        generated.replace(":", "")
-        .replace("-", "")
-        .replace("+", "z")
-        .replace(".", "-")
-    )
+    stamp = generated.replace(":", "").replace("-", "").replace("+", "z").replace(".", "-")
     return _safe_token(stamp, "unknown-time")
 
 
@@ -186,20 +180,9 @@ def _markdown_cell(value: Any) -> str:
 
 def _render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    status_counts = (
-        summary.get("statusCounts")
-        if isinstance(summary.get("statusCounts"), dict)
-        else {}
-    )
-    runtime_counts = (
-        summary.get("runtimeCounts")
-        if isinstance(summary.get("runtimeCounts"), dict)
-        else {}
-    )
-    requirements = [
-        item for item in report.get("requirements") or []
-        if isinstance(item, dict)
-    ]
+    status_counts = summary.get("statusCounts") if isinstance(summary.get("statusCounts"), dict) else {}
+    runtime_counts = summary.get("runtimeCounts") if isinstance(summary.get("runtimeCounts"), dict) else {}
+    requirements = [item for item in report.get("requirements") or [] if isinstance(item, dict)]
     lines: list[str] = [
         "# MSRP Official Price Readiness",
         "",
@@ -228,19 +211,19 @@ def _render_markdown(report: dict[str, Any]) -> str:
     for item in requirements:
         runtime = item.get("runtime") if isinstance(item.get("runtime"), dict) else {}
         runtime_preview = ", ".join(
-            f"{key}={value}"
-            for key, value in list(runtime.items())[:4]
-            if value not in (None, "", [], {})
+            f"{key}={value}" for key, value in list(runtime.items())[:4] if value not in (None, "", [], {})
         )
         evidence = "; ".join(str(value) for value in item.get("evidence") or [])
         lines.append(
             "| "
-            + " | ".join([
-                _markdown_cell(item.get("key")),
-                _markdown_cell(item.get("status")),
-                _markdown_cell(runtime_preview or "-"),
-                _markdown_cell(evidence),
-            ])
+            + " | ".join(
+                [
+                    _markdown_cell(item.get("key")),
+                    _markdown_cell(item.get("status")),
+                    _markdown_cell(runtime_preview or "-"),
+                    _markdown_cell(evidence),
+                ]
+            )
             + " |"
         )
     return "\n".join(lines) + "\n"
@@ -277,25 +260,13 @@ def write_status_record(
     if write_pipeline_status is None:
         return None
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    status_counts = (
-        summary.get("statusCounts")
-        if isinstance(summary.get("statusCounts"), dict)
-        else {}
-    )
-    runtime_counts = (
-        summary.get("runtimeCounts")
-        if isinstance(summary.get("runtimeCounts"), dict)
-        else {}
-    )
+    status_counts = summary.get("statusCounts") if isinstance(summary.get("statusCounts"), dict) else {}
+    runtime_counts = summary.get("runtimeCounts") if isinstance(summary.get("runtimeCounts"), dict) else {}
     missing_count = int(status_counts.get("missing") or 0)
     degraded_count = int(status_counts.get("degraded") or 0)
     readiness_status = str(report.get("status") or "missing")
     pipeline_status = (
-        "success"
-        if readiness_status == "passed"
-        else "degraded"
-        if readiness_status == "degraded"
-        else "failed"
+        "success" if readiness_status == "passed" else "degraded" if readiness_status == "degraded" else "failed"
     )
     return write_pipeline_status(
         pipeline_id="msrp_readiness_audit",
@@ -415,11 +386,7 @@ def build_readiness_report(
     write_role, write_role_level = _role_level(auth_me)
     write_auth_ok = write_role_level >= MIN_WRITE_ROLE_LEVEL
     write_auth_reason = (
-        None
-        if write_auth_ok
-        else "auth_preflight_request_failed"
-        if auth_error is not None
-        else "write_role_required"
+        None if write_auth_ok else "auth_preflight_request_failed" if auth_error is not None else "write_role_required"
     )
 
     smoke_covers_full_contract = _test_file_has(
@@ -432,7 +399,7 @@ def build_readiness_report(
     service_covers_effectiveness_positive = _test_file_has(
         "workflowService",
         "test_build_price_sales_effectiveness_compares_sales_windows",
-        "\"positive\": 1",
+        '"positive": 1',
     )
     service_covers_reconciliation = _test_file_has(
         "workflowService",
@@ -489,7 +456,9 @@ def build_readiness_report(
             key="official_msrp_ingest",
             title="Official MSRP ingestion",
             status=_status(
-                bool((observation_count and observation_count > 0) or (current_price_count and current_price_count > 0)),
+                bool(
+                    (observation_count and observation_count > 0) or (current_price_count and current_price_count > 0)
+                ),
                 degraded=bool(dryrun_history and not observations_error),
                 unavailable=observations_error is not None and current_prices_error is not None,
             ),
@@ -534,7 +503,10 @@ def build_readiness_report(
             key="current_price",
             title="Current price read model",
             status=_status(
-                bool((current_price_count and current_price_count > 0) or (snapshot_current_count and snapshot_current_count > 0)),
+                bool(
+                    (current_price_count and current_price_count > 0)
+                    or (snapshot_current_count and snapshot_current_count > 0)
+                ),
                 degraded=current_prices_error is None or snapshot_error is None,
                 unavailable=current_prices_error is not None and snapshot_error is not None,
             ),
@@ -615,7 +587,10 @@ def build_readiness_report(
                 "GET /msrp/effectiveness",
                 TEST_EVIDENCE["workflowService"],
             ],
-            note="Runtime may be insufficient_data until matching JATO sales months exist; unit test covers positive branch.",
+            note=(
+                "Runtime may be insufficient_data until matching JATO sales months exist; "
+                "unit test covers positive branch."
+            ),
         ),
         _requirement(
             key="finance_monthly_lease_subsidy_net",

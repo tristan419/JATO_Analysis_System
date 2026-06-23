@@ -154,7 +154,9 @@ def _report(results: dict) -> str:
     cr = s.get("cost")
     if cr:
         lines.append("## Cost\n")
-        lines.append(f"- Total: {cr['totalEstimatedCostCny']:.4f} CNY / {cr['budgetCny']} CNY budget ({cr['budgetStatus']})")
+        lines.append(
+            f"- Total: {cr['totalEstimatedCostCny']:.4f} CNY / {cr['budgetCny']} CNY budget ({cr['budgetStatus']})"
+        )
         lines.append("")
 
     fs = s.get("scheduledFetchStatus")

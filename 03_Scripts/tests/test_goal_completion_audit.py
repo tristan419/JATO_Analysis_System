@@ -5,12 +5,7 @@ import json
 from pathlib import Path
 import sys
 
-
-SCRIPT_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "diagnostics"
-    / "goal_completion_audit.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "diagnostics" / "goal_completion_audit.py"
 
 
 def load_module():
@@ -125,7 +120,23 @@ def test_build_report_separates_local_p0_from_unchecked_production(tmp_path: Pat
         repo_root=tmp_path,
         source_draft_dir=source_root,
         required_source_countries=("se", "fi"),
-        required_ai_countries=("se", "fi", "no", "dk", "at", "cz", "hu", "hr", "de", "fr", "it", "pl", "sk", "si", "ch"),
+        required_ai_countries=(
+            "se",
+            "fi",
+            "no",
+            "dk",
+            "at",
+            "cz",
+            "hu",
+            "hr",
+            "de",
+            "fr",
+            "it",
+            "pl",
+            "sk",
+            "si",
+            "ch",
+        ),
     )
 
     assert report["status"] == "in_progress"
@@ -166,24 +177,36 @@ def test_remote_checks_can_mark_production_passed(monkeypatch, tmp_path: Path) -
     ):
         assert resolve_ip is None
         if url.endswith("/msrp/current-prices/snapshot"):
-            return {
-                "schemaVersion": "msrp_current_price_snapshot_v1",
-                "snapshotWeek": "2026-W24",
-            }, None, 200
+            return (
+                {
+                    "schemaVersion": "msrp_current_price_snapshot_v1",
+                    "snapshotWeek": "2026-W24",
+                },
+                None,
+                200,
+            )
         if url.endswith("/hermes/msrp-country-progress"):
-            return {
-                "status": {
-                    "runId": "msrp-dryrun-20260612-013223",
-                    "gateStatus": "allowed",
-                    "overallPassPct": 96.4,
-                }
-            }, None, 200
+            return (
+                {
+                    "status": {
+                        "runId": "msrp-dryrun-20260612-013223",
+                        "gateStatus": "allowed",
+                        "overallPassPct": 96.4,
+                    }
+                },
+                None,
+                200,
+            )
         if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
-            return {
-                "pipelineId": "unified_scraping_readiness",
-                "status": "success",
-                "readinessStatus": "passed",
-            }, None, 200
+            return (
+                {
+                    "pipelineId": "unified_scraping_readiness",
+                    "status": "success",
+                    "readinessStatus": "passed",
+                },
+                None,
+                200,
+            )
         raise AssertionError(url)
 
     monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)
@@ -230,9 +253,7 @@ def test_remote_checks_passes_resolve_ip_to_fetcher(monkeypatch, tmp_path: Path)
         remote_api_base="https://example.test/v1",
         remote_resolve_ip="203.0.113.10",
     )
-    production = {
-        item["key"]: item for item in report["requirements"]
-    }["production_deployment_state"]
+    production = {item["key"]: item for item in report["requirements"]}["production_deployment_state"]
 
     assert production["status"] == "passed"
     assert production["runtime"]["resolveIp"] == "203.0.113.10"
@@ -244,9 +265,7 @@ def test_missing_msrp_detail_blocks_local_p0(tmp_path: Path) -> None:
     report_path = tmp_path / "hermes" / "reports" / "msrp_readiness_audit.json"
     report_payload = json.loads(report_path.read_text(encoding="utf-8"))
     report_payload["requirements"] = [
-        item
-        for item in report_payload["requirements"]
-        if item["key"] != "finance_monthly_lease_subsidy_net"
+        item for item in report_payload["requirements"] if item["key"] != "finance_monthly_lease_subsidy_net"
     ]
     _write_json(report_path, report_payload)
     source_root = tmp_path / "source_drafts"
@@ -262,9 +281,7 @@ def test_missing_msrp_detail_blocks_local_p0(tmp_path: Path) -> None:
     assert report["summary"]["localP0Ready"] is False
     assert by_key["msrp_official_price_p0"]["status"] == "missing"
     assert by_key["msrp_finance_monthly_lease_subsidy_net"]["status"] == "missing"
-    assert report["summary"]["msrpMissingRequirementKeys"] == [
-        "msrp_finance_monthly_lease_subsidy_net"
-    ]
+    assert report["summary"]["msrpMissingRequirementKeys"] == ["msrp_finance_monthly_lease_subsidy_net"]
 
 
 def test_write_outputs_and_status_record(monkeypatch, tmp_path: Path) -> None:

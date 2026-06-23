@@ -47,6 +47,7 @@ export const TOP_LEVEL_FILTER_KEYS = [
   "segment",
   "powertrain",
 ] as const satisfies readonly FilterKey[];
+type TopLevelFilterKey = (typeof TOP_LEVEL_FILTER_KEYS)[number];
 
 interface SharedFilterScopeCache {
   search: string;
@@ -93,7 +94,12 @@ export interface SharedFilterScopeValue {
 const SharedFilterScopeContext = createContext<SharedFilterScopeValue | null>(null);
 
 export function shouldSyncDashboardSearchToLocation(pathname: string): boolean {
-  return pathname === "/" || pathname === "/dashboard" || pathname === "/specification";
+  return (
+    pathname === "/"
+    || pathname === "/dashboard"
+    || pathname === "/specification"
+    || pathname === "/data/spec-detail"
+  );
 }
 
 export function createSharedSelections(
@@ -213,6 +219,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     new Map<string, { expiresAt: number; options: string[] }>(),
   );
   const syncOptionsAbortRef = useRef<AbortController | null>(null);
+  const overviewAbortRef = useRef<AbortController | null>(null);
   const prevPayloadRef = useRef("");
 
   const res = useMemo<ResolvedFilterColumns>(
@@ -264,23 +271,65 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     [],
   );
 
-  const loadOverview = useCallback(async () => {
+  const loadFilterOptionsBatch = useCallback(
+    async (
+      payloads: FilterOptionsPayload[],
+      signal?: AbortSignal,
+    ): Promise<string[][]> => {
+      const now = Date.now();
+      const resultByKey = new Map<string, string[]>();
+      const missedPayloads: FilterOptionsPayload[] = [];
+
+      for (const payload of payloads) {
+        const cacheKey = buildFilterOptionsCacheKey(payload);
+        const cached = optionsCacheRef.current.get(cacheKey);
+        if (cached && cached.expiresAt > now) {
+          resultByKey.set(cacheKey, cached.options);
+          continue;
+        }
+        missedPayloads.push(payload);
+      }
+
+      if (missedPayloads.length > 0) {
+        const response = await api.filterOptionsBatch(missedPayloads, { signal });
+        response.items.forEach((item, index) => {
+          const payload = missedPayloads[index];
+          if (!payload) return;
+          const cacheKey = buildFilterOptionsCacheKey(payload);
+          const options = item?.options ?? [];
+          optionsCacheRef.current.set(cacheKey, {
+            expiresAt: Date.now() + FILTER_OPTIONS_CACHE_TTL_MS,
+            options,
+          });
+          resultByKey.set(cacheKey, options);
+        });
+      }
+
+      return payloads.map((payload) => (
+        resultByKey.get(buildFilterOptionsCacheKey(payload)) ?? []
+      ));
+    },
+    [],
+  );
+
+  const loadOverview = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError("");
     try {
-              const overviewResponse = await api.overview({
+      const overviewResponse = await api.overview({
         filters: buildFilterPayload(),
         prefer_precomputed: true,
         top_n: 120,
-      });
+      }, { signal });
+      if (signal?.aborted) return;
       setOverview(overviewResponse);
       setYearSeries(overviewResponse.yearSeries ?? []);
       setMonthSeries(overviewResponse.monthSeries ?? []);
       setFilteredRowCount(overviewResponse.kpis.totalRows);
     } catch (err) { console.log("[SFS] boot ERROR:", err);
-      setError((err as Error).message);
+      if (!isAbortError(err)) setError((err as Error).message);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [buildFilterPayload]);
 
@@ -308,22 +357,23 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
         const { items } = await api.columns();
         if (bootId !== bootAttemptRef.current) return;
         const resolvedColumns = resolveFilterColumns(items);
-        const topLevelOptions = (
-          await Promise.all(
-            TOP_LEVEL_FILTER_KEYS.map(async (key) => {
-              const column = resolvedColumns[key];
-              if (!column) return [key, [] as string[]] as const;
-              const options = await loadFilterOptions({ column, filters: {} });
-              return [key, options] as const;
-            }),
-          )
-        ).reduce<Partial<Record<FilterKey, string[]>>>(
-          (accumulator, [key, options]) => {
-            accumulator[key] = options;
-            return accumulator;
-          },
-          {},
+        const topLevelOptions: Partial<Record<FilterKey, string[]>> = {};
+        const topLevelRequests: { key: TopLevelFilterKey; column: string }[] = [];
+        for (const key of TOP_LEVEL_FILTER_KEYS) {
+          const column = resolvedColumns[key];
+          if (column) {
+            topLevelRequests.push({ key, column });
+          }
+        }
+        const topLevelOptionSets = await loadFilterOptionsBatch(
+          topLevelRequests.map((item) => ({
+            column: item.column,
+            filters: {},
+          })),
         );
+        topLevelRequests.forEach((item, index) => {
+          topLevelOptions[item.key] = topLevelOptionSets[index] ?? [];
+        });
 
         const initialFromSearch = sanitizeTopLevelSelections(
           readSelectionsFromSearch(currentSearch),
@@ -353,22 +403,40 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
           resolvedColumns,
           syncedSelections,
         );
-                const overviewResponse = await api.overview({
-          filters: initialFilters,
-          prefer_precomputed: true,
-          top_n: 120,
-        });
 
         prevPayloadRef.current = JSON.stringify(initialFilters);
         setColumns(items);
         setSelections(syncedSelections);
         setOptionsMap({ ...topLevelOptions, ...cascadedOptions });
-        setOverview(overviewResponse);
-        setYearSeries(overviewResponse.yearSeries ?? []);
-        setMonthSeries(overviewResponse.monthSeries ?? []);
-        setFilteredRowCount(overviewResponse.kpis.totalRows);
         setFiltersReady(true);
         bootCompleted.current = true;
+        setLoading(false);
+
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, 80);
+        });
+        if (bootId !== bootAttemptRef.current) return;
+        const overviewController = new AbortController();
+        overviewAbortRef.current?.abort();
+        overviewAbortRef.current = overviewController;
+        setLoading(true);
+        try {
+          const overviewResponse = await api.overview({
+            filters: initialFilters,
+            prefer_precomputed: true,
+            top_n: 120,
+          }, { signal: overviewController.signal });
+          if (overviewAbortRef.current !== overviewController) return;
+          setOverview(overviewResponse);
+          setYearSeries(overviewResponse.yearSeries ?? []);
+          setMonthSeries(overviewResponse.monthSeries ?? []);
+          setFilteredRowCount(overviewResponse.kpis.totalRows);
+        } finally {
+          if (overviewAbortRef.current === overviewController) {
+            overviewAbortRef.current = null;
+            setLoading(false);
+          }
+        }
       } catch (err) { console.log("[SFS] boot ERROR:", err);
         if (!isAbortError(err)) setError((err as Error).message);
       } finally {
@@ -381,11 +449,12 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
         bootDone.current = false;
       }
     };
-  }, [cachedScope, currentSearch, loadFilterOptions, user?.primaryCountry]);
+  }, [cachedScope, currentSearch, loadFilterOptions, loadFilterOptionsBatch, user?.primaryCountry]);
 
   useEffect(() => {
     return () => {
         syncOptionsAbortRef.current?.abort();
+        overviewAbortRef.current?.abort();
     };
   }, []);
 
@@ -401,7 +470,14 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     if (!filtersReady || columns.length === 0 || optionsSyncPending) return;
     if (prevPayloadRef.current === filterPayloadStr) return;
     prevPayloadRef.current = filterPayloadStr;
-    void loadOverview();
+    overviewAbortRef.current?.abort();
+    const controller = new AbortController();
+    overviewAbortRef.current = controller;
+    void loadOverview(controller.signal).finally(() => {
+      if (overviewAbortRef.current === controller) {
+        overviewAbortRef.current = null;
+      }
+    });
   }, [columns.length, filterPayloadStr, filtersReady, loadOverview, optionsSyncPending]);
 
   const scopeCacheSnapshot = useMemo<SharedFilterScopeCache>(
@@ -568,4 +644,8 @@ export function useSharedFilterScope(): SharedFilterScopeValue {
     throw new Error("useSharedFilterScope must be used within SharedFilterScopeProvider");
   }
   return context;
+}
+
+export function useSharedFilterScopeOptional(): SharedFilterScopeValue | null {
+  return useContext(SharedFilterScopeContext);
 }

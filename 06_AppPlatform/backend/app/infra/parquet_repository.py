@@ -283,6 +283,8 @@ def load_distinct_options_batch(
     filters: dict[str, list[str]],
 ) -> dict[str, list[str]]:
     dataset = _open_dataset()
+    dataset_token = current_dataset_token()
+    normalized_filters = _normalize_filter_cache_key(filters)
     selected_columns = [
         str(column).strip()
         for column in dict.fromkeys(columns)
@@ -291,12 +293,30 @@ def load_distinct_options_batch(
     if not selected_columns:
         return {}
 
+    options_by_column: dict[str, list[str]] = {}
+    missed_columns: list[str] = []
+    for column in selected_columns:
+        cache_key = (dataset_token, column, normalized_filters)
+        cached_options = _get_cached_options(cache_key)
+        if cached_options is None:
+            missed_columns.append(column)
+        else:
+            options_by_column[column] = cached_options
+
+    if not missed_columns:
+        return {column: options_by_column[column] for column in selected_columns}
+
     table = dataset.to_table(
-        columns=selected_columns,
+        columns=missed_columns,
         filter=_build_filter_expression(filters),
     )
+    for column in missed_columns:
+        options = _normalize_option_values(pc.unique(table[column]).to_pylist())
+        options_by_column[column] = options
+        _set_cached_options((dataset_token, column, normalized_filters), options)
+
     return {
-        column: _normalize_option_values(pc.unique(table[column]).to_pylist())
+        column: options_by_column.get(column, [])
         for column in selected_columns
     }
 

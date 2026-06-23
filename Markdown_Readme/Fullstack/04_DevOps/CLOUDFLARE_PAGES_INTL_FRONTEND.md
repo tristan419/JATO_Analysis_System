@@ -32,6 +32,8 @@ intl.ojeur.cloud
 
 Keep `www.ojeur.cloud` on Tencent Cloud for China traffic. Do not move the whole apex domain if China speed is still required and there is no budget for paid traffic steering.
 
+Do not force `www.ojeur.cloud` page routes to `intl.ojeur.cloud` with IP-based nginx 302 rules. Some users run a PAC/configuration proxy instead of a full global proxy, so their browser may still reach `www.ojeur.cloud` through the China network path. Keep `www.ojeur.cloud` as the domestic entry and use `intl.ojeur.cloud` only when users explicitly open the overseas entry.
+
 If you test the temporary Cloudflare `*.pages.dev` domain before binding `intl.ojeur.cloud`, append that exact origin to both `APP_FRONTEND_ORIGINS` and `APP_CORS_ORIGINS` during the test.
 
 ## Tencent API Env
@@ -45,7 +47,41 @@ APP_CORS_ORIGINS=https://www.ojeur.cloud,https://intl.ojeur.cloud,http://localho
 APP_GOOGLE_REDIRECT_URI=https://www.ojeur.cloud/v1/auth/google/callback
 ```
 
+## Optional Read-only API Edge Cache
+
+If overseas users still spend most time waiting for Tencent Cloud API reads, add
+the optional Worker facade in:
+
+```text
+03_Scripts/deploy/cloudflare/jato-readonly-api-cache
+```
+
+Recommended route:
+
+```text
+https://api-intl.ojeur.cloud/*
+```
+
+Then set the Cloudflare Pages intl frontend API base to:
+
+```bash
+VITE_API_BASE=https://api-intl.ojeur.cloud/v1
+```
+
+The Worker only caches explicit read-only endpoints such as metadata, filter
+options, and grouped time-series. Auth, profile, admin, and write APIs keep
+going to the Tencent Cloud origin. Keep `www.ojeur.cloud` on the Tencent Cloud
+backend for domestic users.
+
 Google OAuth callback can stay on `www.ojeur.cloud`; the backend stores the initiating frontend origin in OAuth state and redirects back to `intl.ojeur.cloud` only when it is in `APP_FRONTEND_ORIGINS`.
+
+Do not register `intl.ojeur.cloud` as a second Google callback unless the backend is also changed to accept that callback. The intended chain is:
+
+```text
+intl.ojeur.cloud page -> www.ojeur.cloud /v1/auth/google/auth-url
+Google login -> www.ojeur.cloud /v1/auth/google/callback
+backend state -> intl.ojeur.cloud original page
+```
 
 ## Quick Check
 
@@ -53,6 +89,9 @@ After both deployments:
 
 ```bash
 curl -I https://intl.ojeur.cloud/login
+curl -sS \
+  -H 'Origin: https://intl.ojeur.cloud' \
+  'https://www.ojeur.cloud/v1/auth/google/auth-url?redirect=%2Fproduct%2Forder-genius'
 curl -i -X OPTIONS \
   -H 'Origin: https://intl.ojeur.cloud' \
   -H 'Access-Control-Request-Method: GET' \
@@ -60,4 +99,4 @@ curl -i -X OPTIONS \
   https://www.ojeur.cloud/v1/auth/me
 ```
 
-The second command should include an `access-control-allow-origin: https://intl.ojeur.cloud` response header.
+The auth-url response should contain a Google URL whose encoded `state` stores `frontend_origin=https://intl.ojeur.cloud` and `redirect=/product/order-genius`. The OPTIONS response should include an `access-control-allow-origin: https://intl.ojeur.cloud` response header.

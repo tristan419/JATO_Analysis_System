@@ -65,7 +65,7 @@ def _gather_source_results(artifacts: dict[str, dict]) -> list[dict]:
     results: list[dict] = []
     seen: set[str] = set()
     for cc, data in artifacts.items():
-        for r in (data.get("results") or []):
+        for r in data.get("results") or []:
             key = r.get("code") or r.get("sourceCode") or f"{cc}_{len(results)}"
             if key in seen:
                 continue
@@ -99,7 +99,9 @@ def _valid_count(result: dict[str, Any]) -> int:
 
 def _result_is_pass(result: dict[str, Any]) -> bool:
     status = _status_value(result)
-    return _valid_count(result) > 0 and not result.get("failureReason") and status not in {"empty", "error", "exception"}
+    return (
+        _valid_count(result) > 0 and not result.get("failureReason") and status not in {"empty", "error", "exception"}
+    )
 
 
 def _result_is_empty(result: dict[str, Any]) -> bool:
@@ -226,14 +228,22 @@ def _build_countries_detail(
     for cc in sorted(set(expected) | observed_codes):
         data = artifacts.get(cc)
         if not data:
-            detail.append({
-                "countryCode": cc,
-                "total": 0, "pass": 0, "empty": 0, "fail": 0, "errors": 0,
-                "passPct": 0.0, "status": "missing",
-                "failureBreakdown": {}, "strategyRecommendations": {},
-                "sources": [],
-                "completed": False,
-            })
+            detail.append(
+                {
+                    "countryCode": cc,
+                    "total": 0,
+                    "pass": 0,
+                    "empty": 0,
+                    "fail": 0,
+                    "errors": 0,
+                    "passPct": 0.0,
+                    "status": "missing",
+                    "failureBreakdown": {},
+                    "strategyRecommendations": {},
+                    "sources": [],
+                    "completed": False,
+                }
+            )
             continue
         d_results = data.get("results") or []
         total = _artifact_count(data, "total", len(d_results))
@@ -270,21 +280,23 @@ def _build_countries_detail(
             for idx, result in enumerate(d_results, start=1)
         ]
 
-        detail.append({
-            "countryCode": cc,
-            "total": total,
-            "pass": d_pass,
-            "empty": d_empty,
-            "fail": d_fail,
-            "errors": d_errors,
-            "passPct": d_pct,
-            "status": d_status,
-            "topFailureReason": top_reason,
-            "failureBreakdown": d_fb,
-            "strategyRecommendations": d_sr,
-            "sources": sources,
-            "completed": True,
-        })
+        detail.append(
+            {
+                "countryCode": cc,
+                "total": total,
+                "pass": d_pass,
+                "empty": d_empty,
+                "fail": d_fail,
+                "errors": d_errors,
+                "passPct": d_pct,
+                "status": d_status,
+                "topFailureReason": top_reason,
+                "failureBreakdown": d_fb,
+                "strategyRecommendations": d_sr,
+                "sources": sources,
+                "completed": True,
+            }
+        )
 
     return detail, missing
 
@@ -330,14 +342,16 @@ def _source_host(source: dict[str, Any]) -> str:
 def _normalize_host_groups(hosts: dict[str, dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for host, data in hosts.items():
-        normalized.append({
-            "host": host,
-            "count": int(data.get("count") or 0),
-            "affectedCountries": sorted(data.get("affectedCountries") or []),
-            "affectedCountryCount": len(data.get("affectedCountries") or []),
-            "sampleSources": list(data.get("sources") or [])[:10],
-            "sampleUrls": list(data.get("urls") or [])[:5],
-        })
+        normalized.append(
+            {
+                "host": host,
+                "count": int(data.get("count") or 0),
+                "affectedCountries": sorted(data.get("affectedCountries") or []),
+                "affectedCountryCount": len(data.get("affectedCountries") or []),
+                "sampleSources": list(data.get("sources") or [])[:10],
+                "sampleUrls": list(data.get("urls") or [])[:5],
+            }
+        )
     normalized.sort(key=lambda item: (-int(item["count"]), str(item["host"])))
     return normalized[:limit]
 
@@ -377,7 +391,10 @@ def _priority_review_assist(failure_reason: str, source_repair_count: int) -> di
             "preferred": "rule_based_then_llm",
             "llmFit": "medium",
             "neuralNetworkFit": "not_recommended_until_labeled_corpus",
-            "reason": "Rules identify the failure class; an LLM can propose selector or extraction repair from page evidence.",
+            "reason": (
+                "Rules identify the failure class; an LLM can propose selector or "
+                "extraction repair from page evidence."
+            ),
         }
     return {
         "preferred": "rule_based",
@@ -487,30 +504,35 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
         key = _source_key(country, result)
         last_good = last_known_good.get(key) if key else None
         is_transient = bool(last_good)
-        group = groups.setdefault(reason, {
-            "failureReason": reason,
-            "count": 0,
-            "transientRegressionCount": 0,
-            "sourceRepairIssueCount": 0,
-            "recommendedStrategies": {},
-            "affectedCountries": set(),
-            "sources": [],
-            "transientSources": [],
-            "hosts": {},
-            "status": "new",
-        })
+        group = groups.setdefault(
+            reason,
+            {
+                "failureReason": reason,
+                "count": 0,
+                "transientRegressionCount": 0,
+                "sourceRepairIssueCount": 0,
+                "recommendedStrategies": {},
+                "affectedCountries": set(),
+                "sources": [],
+                "transientSources": [],
+                "hosts": {},
+                "status": "new",
+            },
+        )
         group["count"] += 1
         if is_transient:
             group["transientRegressionCount"] += 1
-            group["transientSources"].append({
-                "countryCode": country,
-                "sourceCode": source_code,
-                "failureReason": reason,
-                "recommendedStrategy": recommended,
-                "lastKnownGoodRunId": last_good.get("runId"),
-                "lastKnownGoodAt": last_good.get("observedAt"),
-                "recommendedAction": "recheck_before_source_repair",
-            })
+            group["transientSources"].append(
+                {
+                    "countryCode": country,
+                    "sourceCode": source_code,
+                    "failureReason": reason,
+                    "recommendedStrategy": recommended,
+                    "lastKnownGoodRunId": last_good.get("runId"),
+                    "lastKnownGoodAt": last_good.get("observedAt"),
+                    "recommendedAction": "recheck_before_source_repair",
+                }
+            )
         else:
             group["sourceRepairIssueCount"] += 1
         group["recommendedStrategies"][recommended] = group["recommendedStrategies"].get(recommended, 0) + 1
@@ -539,32 +561,36 @@ def _write_source_repair_backlog(report: dict[str, Any], out_dir: Path) -> None:
         recommended_strategy = max(strategies, key=strategies.get) if strategies else "diagnose_with_msrp_page_analyzer"
         transient_count = int(group["transientRegressionCount"])
         source_repair_count = int(group["sourceRepairIssueCount"])
-        normalized_groups.append({
-            "failureReason": group["failureReason"],
-            "count": group["count"],
-            "transientRegressionCount": transient_count,
-            "sourceRepairIssueCount": source_repair_count,
-            **_priority_fields(group),
-            "recommendedAction": (
-                "recheck_before_source_repair"
-                if transient_count and not source_repair_count
-                else "repair_source_definition"
-            ),
-            "recommendedStrategy": recommended_strategy,
-            "recommendedStrategies": strategies,
-            "affectedCountries": sorted(group["affectedCountries"]),
-            "affectedCountryCount": len(group["affectedCountries"]),
-            "sampleSources": group["sources"][:20],
-            "sampleTransientRegressions": group["transientSources"][:8],
-            "topSourceHosts": _normalize_host_groups(group["hosts"]),
-            "status": group["status"],
-        })
-    normalized_groups.sort(key=lambda item: (
-        0 if int(item["sourceRepairIssueCount"]) > 0 else 1,
-        -float(item["priorityScore"]),
-        -int(item["count"]),
-        str(item["failureReason"]),
-    ))
+        normalized_groups.append(
+            {
+                "failureReason": group["failureReason"],
+                "count": group["count"],
+                "transientRegressionCount": transient_count,
+                "sourceRepairIssueCount": source_repair_count,
+                **_priority_fields(group),
+                "recommendedAction": (
+                    "recheck_before_source_repair"
+                    if transient_count and not source_repair_count
+                    else "repair_source_definition"
+                ),
+                "recommendedStrategy": recommended_strategy,
+                "recommendedStrategies": strategies,
+                "affectedCountries": sorted(group["affectedCountries"]),
+                "affectedCountryCount": len(group["affectedCountries"]),
+                "sampleSources": group["sources"][:20],
+                "sampleTransientRegressions": group["transientSources"][:8],
+                "topSourceHosts": _normalize_host_groups(group["hosts"]),
+                "status": group["status"],
+            }
+        )
+    normalized_groups.sort(
+        key=lambda item: (
+            0 if int(item["sourceRepairIssueCount"]) > 0 else 1,
+            -float(item["priorityScore"]),
+            -int(item["count"]),
+            str(item["failureReason"]),
+        )
+    )
     transient_regression_count = sum(int(item["transientRegressionCount"]) for item in normalized_groups)
     source_repair_issue_count = sum(int(item["sourceRepairIssueCount"]) for item in normalized_groups)
 
@@ -622,12 +648,12 @@ def run(
     run_id = run_dir_path.name
 
     expected_countries_sorted = sorted({c.strip().lower() for c in expected_countries if c.strip()})
-    expected_duplicates = sorted({
-        c for c in expected_countries_sorted
-        if [x.strip().lower() for x in expected_countries].count(c) > 1
-    })
+    expected_duplicates = sorted(
+        {c for c in expected_countries_sorted if [x.strip().lower() for x in expected_countries].count(c) > 1}
+    )
     countries_detail, missing = _build_countries_detail(
-        artifacts, expected_countries_sorted,
+        artifacts,
+        expected_countries_sorted,
     )
     duplicates = sorted(set(artifact_duplicates + expected_duplicates))
     gate_threshold = int(os.getenv("JATO_MSRP_MIN_DRYRUN_PASS_PCT", "70"))
@@ -664,7 +690,12 @@ def run(
 
         # Update dryrun_runs_index.json
         index_path = out_path.parent / "dryrun_runs_index.json"
-        index_data: dict = {"schemaVersion": "msrp_dryrun_runs_index_v1", "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "latestRunId": run_id, "runs": []}
+        index_data: dict = {
+            "schemaVersion": "msrp_dryrun_runs_index_v1",
+            "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "latestRunId": run_id,
+            "runs": [],
+        }
         if index_path.is_file():
             try:
                 index_data = json.loads(index_path.read_text())
@@ -707,11 +738,13 @@ def run(
         print(f"[aggregate] Runs index updated: {index_path} ({len(index_data['runs'])} runs)")
 
     s = report["summary"]
-    print(f"[aggregate] v3 report: {s['total']} sources, "
-          f"passPct={s['passPct']}%, status={s['status']}, "
-          f"gate={s['gateStatus']}, "
-          f"countries={len(countries_detail)} "
-          f"(missing={len(missing)}, dupes={len(duplicates)})")
+    print(
+        f"[aggregate] v3 report: {s['total']} sources, "
+        f"passPct={s['passPct']}%, status={s['status']}, "
+        f"gate={s['gateStatus']}, "
+        f"countries={len(countries_detail)} "
+        f"(missing={len(missing)}, dupes={len(duplicates)})"
+    )
 
     return report
 

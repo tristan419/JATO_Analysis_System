@@ -17,7 +17,6 @@ import sys
 import tempfile
 from typing import Any, Iterable, Sequence
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLKIT_ROOT = REPO_ROOT / "07_ScrapingToolkit"
 if str(TOOLKIT_ROOT) not in sys.path:
@@ -83,12 +82,7 @@ def _safe_token(value: str | None, fallback: str) -> str:
 
 def _history_suffix(report: dict[str, Any]) -> str:
     generated = str(report.get("generatedAtUtc") or _utc_now_iso())
-    stamp = (
-        generated.replace(":", "")
-        .replace("-", "")
-        .replace("+", "z")
-        .replace(".", "-")
-    )
+    stamp = generated.replace(":", "").replace("-", "").replace("+", "z").replace(".", "-")
     return _safe_token(stamp, "unknown-time")
 
 
@@ -125,6 +119,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
     news = summary.get("news") if isinstance(summary.get("news"), dict) else {}
     voc = summary.get("voc") if isinstance(summary.get("voc"), dict) else {}
     warnings = [str(item) for item in report.get("warnings") or [] if str(item).strip()]
+    voc_missing_count = (
+        len(voc.get("missingEvidenceCountries") or [])
+        + len(voc.get("missingPainPointCountries") or [])
+        + len(voc.get("missingSentimentCountries") or [])
+    )
     lines: list[str] = [
         "# AI News & VOC Enrichment Smoke",
         "",
@@ -145,7 +144,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
             f"| VOC | {voc.get('countryCount', 0)} | "
             f"{voc.get('documentCount', 0)} | "
             f"{voc.get('signalObservationCount', 0)} | "
-            f"{len(voc.get('missingEvidenceCountries') or []) + len(voc.get('missingPainPointCountries') or []) + len(voc.get('missingSentimentCountries') or [])} |"
+            f"{voc_missing_count} |"
         ),
         "",
         "## Countries",
@@ -168,13 +167,15 @@ def _render_markdown(report: dict[str, Any]) -> str:
         voc_item = voc_by_country.get(country_code, {})
         lines.append(
             "| "
-            + " | ".join([
-                _markdown_cell(country_code),
-                _markdown_cell(news_item.get("marketEventCount", 0)),
-                _markdown_cell("yes" if news_item.get("weeklyDigestReady") else "no"),
-                _markdown_cell(voc_item.get("documentCount", 0)),
-                _markdown_cell(voc_item.get("evidenceCardCount", 0)),
-            ])
+            + " | ".join(
+                [
+                    _markdown_cell(country_code),
+                    _markdown_cell(news_item.get("marketEventCount", 0)),
+                    _markdown_cell("yes" if news_item.get("weeklyDigestReady") else "no"),
+                    _markdown_cell(voc_item.get("documentCount", 0)),
+                    _markdown_cell(voc_item.get("evidenceCardCount", 0)),
+                ]
+            )
             + " |"
         )
     if warnings:
@@ -248,11 +249,7 @@ def write_status_record(
 
 def _domain_warning_count(report: dict[str, Any], prefixes: Sequence[str]) -> int:
     warnings = [str(item) for item in report.get("warnings") or [] if str(item).strip()]
-    return sum(
-        1
-        for item in warnings
-        if any(item.startswith(prefix) for prefix in prefixes)
-    )
+    return sum(1 for item in warnings if any(item.startswith(prefix) for prefix in prefixes))
 
 
 def _domain_pipeline_status(country_count: int, warning_count: int) -> str:
@@ -359,9 +356,7 @@ def _news_fixture_article(
         "country_code": code,
         "country_label": country_label,
         "publisher": publisher,
-        "title": (
-            f"{code} EV incentive and MSRP pricing update affects Tesla Model Y"
-        ),
+        "title": (f"{code} EV incentive and MSRP pricing update affects Tesla Model Y"),
         "url": f"https://news.example/{code.lower()}/ev-pricing-policy",
         "summary": (
             "Government policy, subsidy eligibility, charging network expansion, "
@@ -565,14 +560,9 @@ def _build_voc_fixture_artifacts(
 
 
 def _news_summary(enrichment: dict[str, Any]) -> dict[str, Any]:
-    countries = [
-        country for country in enrichment.get("countries") or []
-        if isinstance(country, dict)
-    ]
+    countries = [country for country in enrichment.get("countries") or [] if isinstance(country, dict)]
     missing_digest = [
-        str(country.get("countryCode")).lower()
-        for country in countries
-        if not country.get("weeklyDigest")
+        str(country.get("countryCode")).lower() for country in countries if not country.get("weeklyDigest")
     ]
     missing_evidence = [
         str(country.get("countryCode")).lower()
@@ -614,10 +604,7 @@ def _voc_summary(country_roots: Sequence[Path]) -> tuple[dict[str, Any], list[di
     for country_root in country_roots:
         enrichment = build_country_voc_enrichment(country_root)
         country_code = str(enrichment.get("countryCode") or country_root.name.upper())
-        documents = [
-            item for item in enrichment.get("documents") or []
-            if isinstance(item, dict)
-        ]
+        documents = [item for item in enrichment.get("documents") or [] if isinstance(item, dict)]
         total_documents += int(enrichment.get("documentCount") or len(documents))
         total_observations += int(enrichment.get("signalObservationCount") or 0)
         aggregates = enrichment.get("aggregates")
@@ -721,26 +708,11 @@ def run_smoke(
         *news_warnings,
         *voc_warnings,
         *list(news_enrichment.get("warnings") or []),
-        *[
-            f"news_missing_digest:{country}"
-            for country in news_status["missingDigestCountries"]
-        ],
-        *[
-            f"news_missing_evidence:{country}"
-            for country in news_status["missingEvidenceCountries"]
-        ],
-        *[
-            f"voc_missing_evidence:{country}"
-            for country in voc_summary["missingEvidenceCountries"]
-        ],
-        *[
-            f"voc_missing_pain_points:{country}"
-            for country in voc_summary["missingPainPointCountries"]
-        ],
-        *[
-            f"voc_missing_sentiment:{country}"
-            for country in voc_summary["missingSentimentCountries"]
-        ],
+        *[f"news_missing_digest:{country}" for country in news_status["missingDigestCountries"]],
+        *[f"news_missing_evidence:{country}" for country in news_status["missingEvidenceCountries"]],
+        *[f"voc_missing_evidence:{country}" for country in voc_summary["missingEvidenceCountries"]],
+        *[f"voc_missing_pain_points:{country}" for country in voc_summary["missingPainPointCountries"]],
+        *[f"voc_missing_sentiment:{country}" for country in voc_summary["missingSentimentCountries"]],
     ]
     status = "ok"
     if news_status["countryCount"] == 0 and voc_summary["countryCount"] == 0:
@@ -823,11 +795,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    countries = [
-        part.strip()
-        for part in str(args.required_countries).split(",")
-        if part.strip()
-    ]
+    countries = [part.strip() for part in str(args.required_countries).split(",") if part.strip()]
     report = run_smoke(
         repo_root=args.repo_root,
         news_batch=args.news_batch,

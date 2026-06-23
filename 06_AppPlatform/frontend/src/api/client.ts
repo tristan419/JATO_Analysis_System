@@ -1,6 +1,7 @@
 import type {
   AdvancedChartResponse,
   AnalysisQuery,
+  CocFillJob,
   CocMatchJob,
   ConfigImportBatch,
   ConfigVariant,
@@ -14,6 +15,10 @@ import type {
   PriceHistoryEntry,
   DetailResponse,
   GroupedTimeSeriesResponse,
+  HeroProductDeckRequest,
+  HeroProductDeckResponse,
+  HeroProductPriceOverridePayload,
+  HeroProductSpecOverridePayload,
   JatoMonthlyUpdateCleanupResult,
   JatoMonthlyUpdateArtifacts,
   JatoMonthlyUpdateJob,
@@ -170,6 +175,15 @@ export function apiUrl(path: string): string {
   const normalizedBase = API_BASE.endsWith("/") ? API_BASE.slice(0, -1) : API_BASE;
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   return `${normalizedBase}${normalizedPath}`;
+}
+
+interface FilterOptionsResponse {
+  column: string;
+  options: string[];
+}
+
+interface FilterOptionsBatchResponse {
+  items: FilterOptionsResponse[];
 }
 
 function getAuthHeaders(): Record<string, string> {
@@ -937,6 +951,127 @@ function mapCocMatchJob(raw: Record<string, unknown>): CocMatchJob {
     createdAt: String(raw.createdAt ?? ""),
     startedAt: raw.startedAt === undefined ? null : String(raw.startedAt),
     finishedAt: raw.finishedAt === undefined ? null : String(raw.finishedAt),
+  };
+}
+
+function mapCocFillRecord(raw: Record<string, unknown>) {
+  return {
+    materialGroup: String(raw.materialGroup ?? raw.material_group ?? ""),
+    wvtaNo: String(raw.wvtaNo ?? raw.wvta_no ?? ""),
+    cocNo: String(raw.cocNo ?? raw.coc_no ?? ""),
+    brand: nullableString(raw.brand),
+    model: nullableString(raw.model),
+    powertrain: nullableString(raw.powertrain),
+    version: nullableString(raw.version),
+    salesName: nullableString(raw.salesName ?? raw.sales_name),
+    validFrom: nullableString(raw.validFrom ?? raw.valid_from),
+    validTo: nullableString(raw.validTo ?? raw.valid_to),
+    comments: nullableString(raw.comments),
+    pageNumber: Number(raw.pageNumber ?? raw.page_number ?? 0),
+    tableRowNumber: Number(raw.tableRowNumber ?? raw.table_row_number ?? 0),
+  };
+}
+
+function mapCocFillDecision(raw: Record<string, unknown>) {
+  const selectedRecordRaw = raw.selectedRecord ?? raw.selected_record;
+  const candidateRecordsRaw = raw.candidateRecords ?? raw.candidate_records;
+  return {
+    materialGroup: String(raw.materialGroup ?? raw.material_group ?? ""),
+    sheetName: String(raw.sheetName ?? raw.sheet_name ?? ""),
+    rowNumber: Number(raw.rowNumber ?? raw.row_number ?? 0),
+    status: String(raw.status ?? ""),
+    candidateCount: Number(raw.candidateCount ?? raw.candidate_count ?? 0),
+    reason: String(raw.reason ?? ""),
+    confidence: Number(raw.confidence ?? 0),
+    selectedRecord: selectedRecordRaw && typeof selectedRecordRaw === "object" && !Array.isArray(selectedRecordRaw)
+      ? mapCocFillRecord(selectedRecordRaw as Record<string, unknown>)
+      : null,
+    candidateRecords: Array.isArray(candidateRecordsRaw)
+      ? candidateRecordsRaw
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+        .map(mapCocFillRecord)
+      : [],
+    writtenWvta: nullableString(raw.writtenWvta ?? raw.written_wvta),
+    writtenCoc: nullableString(raw.writtenCoc ?? raw.written_coc),
+  };
+}
+
+function mapCocFillPreviewGroup(raw: Record<string, unknown>) {
+  const statusCountsRaw = raw.statusCounts ?? raw.status_counts;
+  const decisionsRaw = raw.decisions;
+  const statusCounts: Record<string, number> = {};
+  if (statusCountsRaw && typeof statusCountsRaw === "object" && !Array.isArray(statusCountsRaw)) {
+    for (const [key, value] of Object.entries(statusCountsRaw)) {
+      statusCounts[key] = Number(value);
+    }
+  }
+  return {
+    sheetName: String(raw.sheetName ?? raw.sheet_name ?? ""),
+    totalRows: Number(raw.totalRows ?? raw.total_rows ?? 0),
+    filledCount: Number(raw.filledCount ?? raw.filled_count ?? 0),
+    notFoundCount: Number(raw.notFoundCount ?? raw.not_found_count ?? 0),
+    ambiguousCount: Number(raw.ambiguousCount ?? raw.ambiguous_count ?? 0),
+    skippedExistingCount: Number(raw.skippedExistingCount ?? raw.skipped_existing_count ?? 0),
+    invalidSourceCount: Number(raw.invalidSourceCount ?? raw.invalid_source_count ?? 0),
+    statusCounts,
+    decisions: Array.isArray(decisionsRaw)
+      ? decisionsRaw
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+        .map(mapCocFillDecision)
+      : [],
+    previewLimit: nullableNumber(raw.previewLimit ?? raw.preview_limit) ?? undefined,
+    truncated: Boolean(raw.truncated),
+  };
+}
+
+function mapCocFillJob(raw: Record<string, unknown>): CocFillJob {
+  const statusCountsRaw = raw.statusCounts ?? raw.status_counts;
+  const decisionsRaw = raw.decisions;
+  const previewGroupsRaw = raw.previewGroups ?? raw.preview_groups;
+  const sheetNamesRaw = raw.sheetNames ?? raw.sheet_names;
+  const statusCounts: Record<string, number> = {};
+  if (statusCountsRaw && typeof statusCountsRaw === "object" && !Array.isArray(statusCountsRaw)) {
+    for (const [key, value] of Object.entries(statusCountsRaw)) {
+      statusCounts[key] = Number(value);
+    }
+  }
+  return {
+    jobId: String(raw.jobId ?? raw.job_id ?? ""),
+    jobType: String(raw.jobType ?? raw.job_type ?? "fill"),
+    status: String(raw.status ?? ""),
+    phase: String(raw.phase ?? ""),
+    excelFilename: String(raw.excelFilename ?? raw.excel_filename ?? ""),
+    pdfFilename: String(raw.pdfFilename ?? raw.pdf_filename ?? ""),
+    overwriteExisting: Boolean(raw.overwriteExisting ?? raw.overwrite_existing),
+    conflictStrategy: String(raw.conflictStrategy ?? raw.conflict_strategy ?? "strict"),
+    includeResultSheet: Boolean(raw.includeResultSheet ?? raw.include_result_sheet),
+    sheetNames: Array.isArray(sheetNamesRaw) ? sheetNamesRaw.map((item) => String(item)).filter(Boolean) : [],
+    totalRows: nullableNumber(raw.totalRows ?? raw.total_rows),
+    uniqueMaterialCount: nullableNumber(raw.uniqueMaterialCount ?? raw.unique_material_count),
+    pdfRecordCount: nullableNumber(raw.pdfRecordCount ?? raw.pdf_record_count),
+    filledCount: nullableNumber(raw.filledCount ?? raw.filled_count),
+    notFoundCount: nullableNumber(raw.notFoundCount ?? raw.not_found_count),
+    ambiguousCount: nullableNumber(raw.ambiguousCount ?? raw.ambiguous_count),
+    skippedExistingCount: nullableNumber(raw.skippedExistingCount ?? raw.skipped_existing_count),
+    invalidSourceCount: nullableNumber(raw.invalidSourceCount ?? raw.invalid_source_count),
+    sheetCount: nullableNumber(raw.sheetCount ?? raw.sheet_count),
+    statusCounts,
+    decisions: Array.isArray(decisionsRaw)
+      ? decisionsRaw
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+        .map(mapCocFillDecision)
+      : [],
+    previewGroups: Array.isArray(previewGroupsRaw)
+      ? previewGroupsRaw
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+        .map(mapCocFillPreviewGroup)
+      : [],
+    outputFilename: nullableString(raw.outputFilename ?? raw.output_filename),
+    triggeredBy: String(raw.triggeredBy ?? raw.triggered_by ?? ""),
+    error: raw.error === undefined || raw.error === null ? null : String(raw.error),
+    createdAt: String(raw.createdAt ?? raw.created_at ?? ""),
+    startedAt: nullableString(raw.startedAt ?? raw.started_at),
+    finishedAt: nullableString(raw.finishedAt ?? raw.finished_at),
   };
 }
 
@@ -1745,9 +1880,14 @@ export const api = {
 
   columns: () => request<{ items: string[] }>("/metadata/columns"),
   filterOptions: (payload: FilterOptionsPayload, init?: RequestInit) =>
-    request<{ column: string; options: string[] }>(
+    request<FilterOptionsResponse>(
       "/filters/options",
       { method: "POST", body: JSON.stringify(payload), ...init }
+    ),
+  filterOptionsBatch: (items: FilterOptionsPayload[], init?: RequestInit) =>
+    request<FilterOptionsBatchResponse>(
+      "/filters/options/batch",
+      { method: "POST", body: JSON.stringify({ items }), ...init }
     ),
   analysis: (payload: AnalysisQuery) =>
     request<{ route: string; rows: number; items: Record<string, unknown>[] }>(
@@ -1767,10 +1907,11 @@ export const api = {
     filters: Record<string, string[]>;
     prefer_precomputed: boolean;
     top_n: number;
-  }) =>
+  }, init?: RequestInit) =>
     request<OverviewResponse>("/analysis/overview", {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      ...init,
     }),
   dataFreshness: () =>
     request<{ items: DataFreshnessItem[] }>("/analysis/data-freshness"),
@@ -1915,10 +2056,11 @@ export const api = {
     top_n: number;
     include_others: boolean;
     time_range?: { start: string; end: string };
-  }) =>
+  }, init?: RequestInit) =>
     request<GroupedTimeSeriesResponse>("/analysis/time-series-grouped", {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      ...init,
     }),
   modelVersions: (payload: {
     filters: Record<string, string[]>;
@@ -1973,6 +2115,22 @@ export const api = {
     request<VersionComparisonDeckResponse>("/market-scan/version-comparison-deck", {
       method: "POST",
       body: JSON.stringify(payload)
+    }),
+  heroProductDeck: (payload: HeroProductDeckRequest = {}, signal?: AbortSignal) =>
+    request<HeroProductDeckResponse>("/market-scan/hero-product-deck", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      signal,
+    }),
+  patchHeroProductPrice: (payload: HeroProductPriceOverridePayload) =>
+    request<{ item: Record<string, unknown> }>("/market-scan/hero-product-price", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  patchHeroProductSpec: (payload: HeroProductSpecOverridePayload) =>
+    request<{ item: Record<string, unknown> }>("/market-scan/hero-product-spec", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
     }),
   nordicCustomerDeck: (mode: CustomerInsightMode = "benchmark", countries?: string[]) => {
     const search = new URLSearchParams();
@@ -3256,6 +3414,177 @@ export const api = {
       `/coc-match/jobs/${jobId}/retry`,
       { method: "POST" }
     ).then((res) => ({ item: mapCocMatchJob(res.item) })),
+
+  cocFillCreateJob: (
+    excel: File,
+    pdf: File,
+    options?: { overwriteExisting?: boolean; conflictStrategy?: string; includeResultSheet?: boolean; sheetNames?: string[] },
+  ) => {
+    const fd = new FormData();
+    fd.append("excel", excel);
+    fd.append("pdf", pdf);
+    fd.append("overwrite_existing", String(Boolean(options?.overwriteExisting)));
+    fd.append("conflict_strategy", options?.conflictStrategy || "strict");
+    fd.append("include_result_sheet", String(Boolean(options?.includeResultSheet)));
+    if (options?.sheetNames?.length) {
+      fd.append("sheet_names", options.sheetNames.join(","));
+    }
+    return request<{ item: Record<string, unknown> }>("/coc-match/fill/jobs", {
+      method: "POST",
+      body: fd,
+    }).then((res) => ({ item: mapCocFillJob(res.item) }));
+  },
+
+  cocFillInitiateUpload: (
+    filename: string,
+    sizeBytes: number,
+    resumeKey?: string,
+  ) =>
+    request<{ item: Record<string, unknown> }>(
+      "/coc-match/fill/upload-sessions/initiate",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          filename,
+          sizeBytes,
+          resumeKey: resumeKey || undefined,
+        }),
+      }
+    ).then((res) => res.item),
+
+  cocFillUploadChunk: async (
+    uploadId: string,
+    partNumber: number,
+    blob: Blob,
+  ): Promise<Record<string, unknown>> => {
+    const sha256 = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer())
+      .then((buf) => Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join(""));
+    return request<{ item: Record<string, unknown> }>(
+      `/coc-match/fill/upload-sessions/${uploadId}/parts/${partNumber}`,
+      {
+        method: "PUT",
+        body: blob,
+        headers: { "X-Chunk-SHA256": sha256, "Content-Type": "application/octet-stream" },
+      }
+    ).then((res) => res.item);
+  },
+
+  cocFillCompleteUpload: (uploadId: string) =>
+    request<{ item: Record<string, unknown> }>(
+      `/coc-match/fill/upload-sessions/${uploadId}/complete`,
+      { method: "POST" }
+    ).then((res) => res.item),
+
+  cocFillCreateJobFromUpload: (
+    excelUploadId: string,
+    pdfUploadId: string,
+    excelFilename: string,
+    pdfFilename: string,
+    options?: { overwriteExisting?: boolean; conflictStrategy?: string; includeResultSheet?: boolean; sheetNames?: string[] },
+  ) => request<{ item: Record<string, unknown> }>("/coc-match/fill/jobs/batch", {
+    method: "POST",
+    body: JSON.stringify({
+      excelUploadId,
+      pdfUploadId,
+      excelFilename,
+      pdfFilename,
+      overwriteExisting: Boolean(options?.overwriteExisting),
+      conflictStrategy: options?.conflictStrategy || "strict",
+      includeResultSheet: Boolean(options?.includeResultSheet),
+      sheetNames: options?.sheetNames || [],
+    }),
+  }).then((res) => ({ item: mapCocFillJob(res.item) })),
+
+  cocFillUploadAndCreateJob: async (
+    excel: File,
+    pdf: File,
+    options?: { overwriteExisting?: boolean; conflictStrategy?: string; includeResultSheet?: boolean; sheetNames?: string[] },
+  ): Promise<{ item: CocFillJob }> => {
+    const CHUNK_THRESHOLD = 50 * 1024 * 1024;
+    const CHUNK_SIZE = 8 * 1024 * 1024;
+    if (excel.size < CHUNK_THRESHOLD && pdf.size < CHUNK_THRESHOLD) {
+      return api.cocFillCreateJob(excel, pdf, options);
+    }
+
+    const uploadFile = async (file: File): Promise<string> => {
+      const session = await api.cocFillInitiateUpload(
+        file.name,
+        file.size,
+        `coc-fill-resume-${file.name}-${file.size}`,
+      );
+      const uploadId = String(session.uploadId ?? "");
+      const received: number[] = Array.isArray(session.receivedChunks)
+        ? session.receivedChunks.map((item) => Number(item))
+        : [];
+      const totalChunks = Number(session.totalChunks ?? 1);
+      for (let i = 1; i <= totalChunks; i++) {
+        if (received.includes(i)) continue;
+        const start = (i - 1) * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        await api.cocFillUploadChunk(uploadId, i, file.slice(start, end));
+      }
+      await api.cocFillCompleteUpload(uploadId);
+      return uploadId;
+    };
+
+    const excelUploadId = await uploadFile(excel);
+    const pdfUploadId = await uploadFile(pdf);
+    return api.cocFillCreateJobFromUpload(
+      excelUploadId,
+      pdfUploadId,
+      excel.name,
+      pdf.name,
+      options,
+    );
+  },
+
+  cocFillListJobs: (limit = 50) =>
+    request<{ items: Record<string, unknown>[] }>(
+      `/coc-match/fill/jobs?limit=${encodeURIComponent(String(limit))}`
+    ).then((res) => ({ items: res.items.map(mapCocFillJob) })),
+
+  cocFillGetJob: (jobId: string) =>
+    request<{ item: Record<string, unknown> }>(`/coc-match/fill/jobs/${jobId}`)
+      .then((res) => ({ item: mapCocFillJob(res.item) })),
+
+  cocFillApplyOverrides: (
+    jobId: string,
+    overrides: Array<{
+      sheetName: string;
+      rowNumber: number;
+      materialGroup: string;
+      wvtaNo: string;
+      cocNo: string;
+      pageNumber?: number;
+      tableRowNumber?: number;
+    }>,
+  ) =>
+    request<{ item: Record<string, unknown> }>(
+      `/coc-match/fill/jobs/${encodeURIComponent(jobId)}/overrides`,
+      {
+        method: "POST",
+        body: JSON.stringify({ overrides }),
+      },
+    ).then((res) => ({ item: mapCocFillJob(res.item) })),
+
+  cocFillRevertOverrides: (
+    jobId: string,
+    overrides: Array<{
+      sheetName: string;
+      rowNumber: number;
+      materialGroup: string;
+    }>,
+  ) =>
+    request<{ item: Record<string, unknown> }>(
+      `/coc-match/fill/jobs/${encodeURIComponent(jobId)}/overrides/revert`,
+      {
+        method: "POST",
+        body: JSON.stringify({ overrides }),
+      },
+    ).then((res) => ({ item: mapCocFillJob(res.item) })),
+
+  cocFillGetWorkbook: (jobId: string) =>
+    requestBlob(`/coc-match/fill/jobs/${encodeURIComponent(jobId)}/workbook`),
 
   // ── Order Genius ────────────────────────────────────────────────
 

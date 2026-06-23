@@ -6,17 +6,9 @@ import random
 
 from openpyxl import load_workbook
 
-
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE_PATH = ROOT / "01_RAW_DATA" / "VOC_Nordic_SUV_Users_100.xlsx"
-OUTPUT_PATH = (
-    ROOT
-    / "04_Processed_data"
-    / "voc"
-    / "se"
-    / "raw"
-    / "se_hev_owners_benchmark_voc_20260423.xlsx"
-)
+OUTPUT_PATH = ROOT / "04_Processed_data" / "voc" / "se" / "raw" / "se_hev_owners_benchmark_voc_20260423.xlsx"
 ROW_COUNT = 65
 SEED = 42
 
