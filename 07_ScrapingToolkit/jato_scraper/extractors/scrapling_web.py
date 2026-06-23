@@ -1446,12 +1446,32 @@ class ScraplingExtractor(BaseExtractor):
                         parts.extend(self._string_values(element.get()))
                     except Exception:
                         pass
+        if not parts:
+            html_content = getattr(page, "html_content", None)
+            if html_content:
+                parts.append(str(html_content))
+        if not parts:
+            body = getattr(page, "body", None)
+            if isinstance(body, bytes):
+                parts.append(body.decode("utf-8", errors="ignore"))
+            elif body:
+                parts.append(str(body))
         return _normalize_space(" ".join(parts))[:limit]
 
     def _access_denied_error(self, page: Any) -> str | None:
         sample = self._page_text_sample(page)
         lower = sample.lower()
-        if not sample or "access denied" not in lower:
+        if not sample:
+            return None
+        if (
+            "sec-if-cpt-container" in lower
+            or (
+                "powered and protected by" in lower
+                and "akamai" in lower
+            )
+        ):
+            return f"anti_bot_access_denied: {sample[:240]}"
+        if "access denied" not in lower:
             return None
         if (
             "permission to access" not in lower

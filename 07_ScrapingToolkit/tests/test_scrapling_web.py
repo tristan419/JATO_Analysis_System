@@ -83,6 +83,58 @@ def test_access_denied_body_records_audit_error(monkeypatch, tmp_path) -> None:
     assert extractor.last_audit_event["httpStatus"] == 200
 
 
+def test_akamai_behavioral_challenge_records_audit_error(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("JATO_AUDIT_DIR", str(tmp_path))
+    page = _mock_page_with_descendant_text(
+        "body",
+        "\n".join([
+            "sec-if-cpt-container",
+            "Powered and protected by Akamai",
+            "Privacy",
+        ]),
+    )
+    page.status = 200
+    page.url = "https://www.tesla.com/fr_FR/modely"
+    page.headers = {"content-type": "text/html"}
+    extractor = build_extractor()
+    extractor.run_id = "run_akamai_challenge"
+    monkeypatch.setattr(extractor, "_fetch", lambda: page)
+
+    assert extractor.extract() == []
+    assert extractor.last_audit_event is not None
+    assert extractor.last_audit_event["error"].startswith("anti_bot_access_denied")
+    assert extractor.last_audit_event["httpStatus"] == 200
+
+
+def test_akamai_behavioral_challenge_reads_html_content_fallback(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("JATO_AUDIT_DIR", str(tmp_path))
+
+    class HtmlOnlyPage:
+        status = 200
+        url = "https://www.tesla.com/fr_FR/modely"
+        headers = {"content-type": "text/html"}
+        html_content = (
+            "<div id='sec-if-cpt-container'>"
+            "Powered and protected by Akamai"
+            "</div>"
+        )
+
+        def css(self, _selector):
+            return []
+
+    extractor = build_extractor()
+    extractor.run_id = "run_akamai_html_fallback"
+    monkeypatch.setattr(extractor, "_fetch", lambda: HtmlOnlyPage())
+
+    assert extractor.extract() == []
+    assert extractor.last_audit_event is not None
+    assert extractor.last_audit_event["error"].startswith("anti_bot_access_denied")
+    assert extractor.last_audit_event["httpStatus"] == 200
+
+
 def test_fetch_passes_browser_runtime_options(monkeypatch) -> None:
     from scrapling.fetchers import StealthyFetcher
 

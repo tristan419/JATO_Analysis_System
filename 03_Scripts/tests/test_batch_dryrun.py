@@ -93,6 +93,26 @@ def test_classify_http_status_403_without_log_text() -> None:
     assert classification["severity"] == "error"
 
 
+def test_classify_anti_bot_challenge_from_extractor_error() -> None:
+    classification = batch_dryrun._classify_dryrun_failure(
+        {
+            "status": "empty",
+            "valid": 0,
+            "extracted": 0,
+            "extractorError": (
+                "anti_bot_access_denied: "
+                "sec-if-cpt-container Powered and protected by Akamai"
+            ),
+        }
+    )
+
+    assert classification == {
+        "failureReason": "anti_bot_access_denied",
+        "recommendedStrategy": "manual_review_or_proxy_required",
+        "severity": "error",
+    }
+
+
 def test_classify_connection_closed_as_retryable_network_failure() -> None:
     classification = batch_dryrun._classify_dryrun_failure(
         {
