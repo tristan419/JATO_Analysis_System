@@ -15504,6 +15504,47 @@ table.material-finance-table td:nth-child(n+5) {
   font-weight: 700;
 }
 
+.hero-product-control-state {
+  border-color: rgba(20, 184, 166, 0.28);
+  color: #0f766e;
+}
+
+.hero-product-control-state.is-updating {
+  border-color: rgba(37, 99, 235, 0.34);
+  color: #1d4ed8;
+}
+
+.hero-product-control-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+  padding: 8px 0 2px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+  color: #0f172a;
+}
+
+.hero-product-control-section-head:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.hero-product-control-section-head span {
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.hero-product-control-section-head small {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 800;
+}
+
 .hero-product-slide-frame {
   min-height: 820px;
   background:
@@ -15531,14 +15572,22 @@ table.material-finance-table td:nth-child(n+5) {
 
 .hero-product-slide-refresh-status {
   position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+  top: 10px;
+  left: 50%;
+  z-index: 8;
+  transform: translateX(-50%);
+  min-width: 68px;
+  padding: 4px 10px;
+  border: 1px solid rgba(37, 99, 235, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #1d4ed8;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-align: center;
+  text-transform: uppercase;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
 }
 
 .hero-product-slide-frame.is-exporting {

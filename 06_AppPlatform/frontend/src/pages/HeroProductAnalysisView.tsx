@@ -865,7 +865,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     return () => {
       cancelled = true;
     };
-  }, [countryLimit, heroModelText, period, priceCountry, priceSource, reloadToken, salesMode, scopeMode, topModelText]);
+  }, [countryLimit, heroModelText, period, priceCountry, reloadToken, salesMode, scopeMode, topModelText]);
 
   useEffect(() => {
     if (!deck || !resolvedTrackingCountry || loading) return;
@@ -878,7 +878,6 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
       deck.metadata.resolvedPeriod,
       salesMode,
       priceCountry,
-      priceSource,
       countryLimit,
       topModelText,
       heroModelText,
@@ -891,7 +890,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
       fallbackRankingReloadKeyRef.current = reloadKey;
       setReloadToken((value) => value + 1);
     }
-  }, [activePage, countryLimit, deck, heroModelText, loading, priceCountry, priceSource, resolvedTrackingCountry, salesMode, topModelText]);
+  }, [activePage, countryLimit, deck, heroModelText, loading, priceCountry, resolvedTrackingCountry, salesMode, topModelText]);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -1175,27 +1174,16 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
               <span className="market-scan-toolbar-chip">{deck?.metadata.selectedFuelType ?? "BEV"}</span>
               <span className="market-scan-toolbar-chip">{deck?.metadata.selectedSegment ?? "SUV A0"}</span>
               <span className="market-scan-toolbar-chip">价格 {priceSource.toUpperCase()}</span>
+              <span className={`market-scan-toolbar-chip hero-product-control-state${loading ? " is-updating" : ""}`}>{loading ? "Updating" : "Live"}</span>
               <span className="market-scan-toolbar-chip">{canEdit ? "Editor" : "Read only"}</span>
             </>
           )}
         >
           <div className="deck-panel-grid">
-            <label className="market-scan-field">
-              <span>Price Market</span>
-              <select value={currentPriceCountry} onChange={(event) => setPriceCountry(event.target.value)}>
-                {(deck?.metadata.availableCountries ?? []).map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="market-scan-field">
-              <span>Period</span>
-              <select value={period || deck?.metadata.resolvedPeriod || ""} onChange={(event) => setPeriod(event.target.value)}>
-                {(deck?.metadata.availablePeriods ?? []).map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
+            <div className="hero-product-control-section-head deck-panel-grid__wide">
+              <span>Live</span>
+              <small>本地切换</small>
+            </div>
             <label className="market-scan-field">
               <span>Track Country</span>
               <select value={currentTrackingCountry} onChange={(event) => setTrackingCountry(event.target.value)}>
@@ -1203,18 +1191,8 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
               </select>
-              <small className="hero-product-control-hint">第 03/05 页按该国家内部销量重算车型排名。</small>
+              <small className="hero-product-control-hint">第 03/05 页使用已缓存的单国 ranking。</small>
             </label>
-            <div className="market-scan-field">
-              <span>Sales Mode</span>
-              <div className="btn-group">
-                {SALES_MODES.map((mode) => (
-                  <button key={mode.value} type="button" className={`btn btn-sm ${salesMode === mode.value ? "btn-primary" : "btn-ghost"}`} onClick={() => setSalesMode(mode.value)}>
-                    {mode.label}
-                  </button>
-                ))}
-              </div>
-            </div>
             <div className="market-scan-field">
               <span>Price Source</span>
               <div className="btn-group">
@@ -1288,6 +1266,36 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
                 </div>
               ) : null}
               <small className="hero-product-control-hint">系统指标列跟随 Sales Mode 切换口径；自定义列可直接在表格内编辑保存。</small>
+            </div>
+            <div className="hero-product-control-section-head deck-panel-grid__wide">
+              <span>Recompute</span>
+              <small>{loading ? "正在更新当前页" : "重算销量口径"}</small>
+            </div>
+            <label className="market-scan-field">
+              <span>Price Market</span>
+              <select value={currentPriceCountry} onChange={(event) => setPriceCountry(event.target.value)}>
+                {(deck?.metadata.availableCountries ?? []).map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="market-scan-field">
+              <span>Period</span>
+              <select value={period || deck?.metadata.resolvedPeriod || ""} onChange={(event) => setPeriod(event.target.value)}>
+                {(deck?.metadata.availablePeriods ?? []).map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <div className="market-scan-field">
+              <span>Sales Mode</span>
+              <div className="btn-group">
+                {SALES_MODES.map((mode) => (
+                  <button key={mode.value} type="button" className={`btn btn-sm ${salesMode === mode.value ? "btn-primary" : "btn-ghost"}`} onClick={() => setSalesMode(mode.value)}>
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="market-scan-field deck-panel-grid__wide">
               <span>Market Scope</span>
