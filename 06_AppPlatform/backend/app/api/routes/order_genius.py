@@ -30,6 +30,7 @@ from app.services.backup_utils import backup_ordering_schema
 from app.services.order_genius_service import (
     apply_order_quantity_import,
     build_matrix,
+    build_matrix_batch,
     build_options,
     export_matrix,
     export_pi_matrix,
@@ -476,20 +477,21 @@ def get_order_genius_matrix_batch(
         ),
     }
 
-    matrices: dict[str, dict] = {}
     errors: dict[str, str] = {}
+    valid_countries: list[str] = []
     for country in countries:
         try:
             validate_country_access(session, user.name, user.role, country)
-            matrices[country] = build_matrix(
-                session,
-                country_code=country,
-                year=year,
-                **filters,
-            )
+            valid_countries.append(country)
         except HTTPException as exc:
             errors[country] = str(exc.detail)
 
+    matrices = build_matrix_batch(
+        session,
+        country_codes=valid_countries,
+        year=year,
+        **filters,
+    )
     return {"matrices": matrices, "errors": errors}
 
 

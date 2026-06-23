@@ -510,32 +510,21 @@ def get_fob_for_sku(
 # ── Matrix Building ───────────────────────────────────────────────────
 
 
-def build_matrix(
+def _list_matrix_candidate_skus(
     session: Session,
-    country_code: str,
-    year: int,
     brand: str | None = None,
     model_name: str | None = None,
     powertrain: str | None = None,
     version: str | None = None,
     colour: str | None = None,
     material_code_search: str | None = None,
-) -> dict:
-    """Build the Order Genius matrix for a country+year.
-
-    Returns rows with Model, Version, Colour, Material Code, FOB, Jan-Dec, TTL.
-    """
-    # Get country payment term valid for this order year
-    order_month_hint = f"{year}-01"  # use January of the order year
-    country_pt = repo.get_country_payment_term(session, country_code, order_month_hint)
-    payment_term_code = country_pt.payment_term_code if country_pt else None
-    country_name = country_pt.country_name if country_pt else None
-
+) -> list[MaterialSkuMaster]:
     normalized_brand = normalize_brand(brand) if brand else None
     normalized_model = normalize_brand_text(model_name) if model_name else None
+    canonical_pt = normalize_powertrain(powertrain) if powertrain else None
 
-    # Get active SKUs matching filters (brand/model/powertrain are normalized in Python
-    # because legacy BOM rows can still contain JEACOO and stale powertrain values).
+    # Brand/model/powertrain are normalized in Python because legacy BOM rows can
+    # still contain JEACOO and stale powertrain values.
     active_skus = repo.list_active_skus(
         session,
         version=version,
@@ -552,6 +541,53 @@ def build_matrix(
             sku for sku in active_skus
             if normalize_brand_text(sku.model_name) == normalized_model
         ]
+    if canonical_pt:
+        active_skus = [sku for sku in active_skus if _extract_canonical_pt(sku) == canonical_pt]
+    return active_skus
+
+
+def _historical_sku_matches_matrix_filters(
+    sku: MaterialSkuMaster,
+    material_code: str,
+    brand: str | None = None,
+    model_name: str | None = None,
+    powertrain: str | None = None,
+    version: str | None = None,
+    colour: str | None = None,
+    material_code_search: str | None = None,
+) -> bool:
+    if brand and normalize_brand(sku.brand) != normalize_brand(brand):
+        return False
+    if model_name and normalize_brand_text(sku.model_name) != normalize_brand_text(model_name):
+        return False
+    if version and sku.version != version:
+        return False
+    if colour and sku.exterior_color_code != colour:
+        return False
+    if powertrain and _extract_canonical_pt(sku) != normalize_powertrain(powertrain):
+        return False
+    if material_code_search and material_code_search.lower() not in material_code.lower():
+        return False
+    return True
+
+
+def _build_matrix_for_country(
+    session: Session,
+    country_code: str,
+    year: int,
+    active_skus: list[MaterialSkuMaster],
+    brand: str | None = None,
+    model_name: str | None = None,
+    powertrain: str | None = None,
+    version: str | None = None,
+    colour: str | None = None,
+    material_code_search: str | None = None,
+) -> dict:
+    # Get country payment term valid for this order year
+    order_month_hint = f"{year}-01"  # use January of the order year
+    country_pt = repo.get_country_payment_term(session, country_code, order_month_hint)
+    payment_term_code = country_pt.payment_term_code if country_pt else None
+    country_name = country_pt.country_name if country_pt else None
 
     # Get FOB for these SKUs in one round trip. Payment term is metadata-only
     # in the current repository rule, matching get_fob_for_country_sku.
@@ -566,11 +602,6 @@ def build_matrix(
     skus_with_fob = [
         s for s in active_skus if s.material_code in fob_map
     ]
-
-    # Filter by canonical powertrain (model-name-aware, not raw DB field)
-    if powertrain:
-        canonical_pt = normalize_powertrain(powertrain)
-        skus_with_fob = [s for s in skus_with_fob if _extract_canonical_pt(s) == canonical_pt]
 
     # Get quantities for this country+year
     all_quantities = repo.list_quantities_for_country_year(
@@ -645,17 +676,16 @@ def build_matrix(
         if not hist_sku:
             continue
         # Apply filters to historical rows too
-        if normalized_brand and normalize_brand(hist_sku.brand) != normalized_brand:
-            continue
-        if normalized_model and normalize_brand_text(hist_sku.model_name) != normalized_model:
-            continue
-        if version and hist_sku.version != version:
-            continue
-        if colour and hist_sku.exterior_color_code != colour:
-            continue
-        if powertrain and _extract_canonical_pt(hist_sku) != normalize_powertrain(powertrain):
-            continue
-        if material_code_search and material_code_search.lower() not in mc.lower():
+        if not _historical_sku_matches_matrix_filters(
+            hist_sku,
+            mc,
+            brand=brand,
+            model_name=model_name,
+            powertrain=powertrain,
+            version=version,
+            colour=colour,
+            material_code_search=material_code_search,
+        ):
             continue
         fob = historical_fob_map.get(mc)
 
@@ -708,6 +738,82 @@ def build_matrix(
         "year": year,
         "rows": rows,
         "totalRows": len(rows),
+    }
+
+
+def build_matrix(
+    session: Session,
+    country_code: str,
+    year: int,
+    brand: str | None = None,
+    model_name: str | None = None,
+    powertrain: str | None = None,
+    version: str | None = None,
+    colour: str | None = None,
+    material_code_search: str | None = None,
+) -> dict:
+    """Build the Order Genius matrix for a country+year.
+
+    Returns rows with Model, Version, Colour, Material Code, FOB, Jan-Dec, TTL.
+    """
+    active_skus = _list_matrix_candidate_skus(
+        session,
+        brand=brand,
+        model_name=model_name,
+        powertrain=powertrain,
+        version=version,
+        colour=colour,
+        material_code_search=material_code_search,
+    )
+    return _build_matrix_for_country(
+        session,
+        country_code=country_code,
+        year=year,
+        active_skus=active_skus,
+        brand=brand,
+        model_name=model_name,
+        powertrain=powertrain,
+        version=version,
+        colour=colour,
+        material_code_search=material_code_search,
+    )
+
+
+def build_matrix_batch(
+    session: Session,
+    country_codes: list[str],
+    year: int,
+    brand: str | None = None,
+    model_name: str | None = None,
+    powertrain: str | None = None,
+    version: str | None = None,
+    colour: str | None = None,
+    material_code_search: str | None = None,
+) -> dict[str, dict]:
+    """Build matrices for many countries while reusing the filtered SKU set."""
+    active_skus = _list_matrix_candidate_skus(
+        session,
+        brand=brand,
+        model_name=model_name,
+        powertrain=powertrain,
+        version=version,
+        colour=colour,
+        material_code_search=material_code_search,
+    )
+    return {
+        country_code: _build_matrix_for_country(
+            session,
+            country_code=country_code,
+            year=year,
+            active_skus=active_skus,
+            brand=brand,
+            model_name=model_name,
+            powertrain=powertrain,
+            version=version,
+            colour=colour,
+            material_code_search=material_code_search,
+        )
+        for country_code in country_codes
     }
 
 
