@@ -108,6 +108,47 @@ def test_classify_connection_closed_as_retryable_network_failure() -> None:
     assert classification["severity"] == "warning"
 
 
+def test_classify_playwright_failed_load_as_retryable_network_failure() -> None:
+    classification = batch_dryrun._classify_dryrun_failure(
+        {
+            "status": "empty",
+            "valid": 0,
+            "extracted": 0,
+            "extractorError": (
+                "RuntimeError: Failed to load "
+                "'https://www.volkswagen.fi/fi/rakenna-auto.html' "
+                "in Playwright: Page.goto: net::ERR_CONNECTION_CLOSED"
+            ),
+        }
+    )
+
+    assert classification["failureReason"] == "network_unavailable"
+    assert classification["recommendedStrategy"] == "retry_network_or_proxy"
+    assert classification["severity"] == "warning"
+
+
+def test_classify_missing_dynamic_price_as_retryable() -> None:
+    classification = batch_dryrun._classify_dryrun_failure(
+        {
+            "status": "empty",
+            "valid": 0,
+            "extracted": 0,
+            "extractorError": (
+                "WARNING jato_scraper.extractors.playwright_card_flow — "
+                "No plausible trim-overview MSRP appeared within 10000ms"
+            ),
+        }
+    )
+
+    assert classification["failureReason"] == "dynamic_price_not_ready"
+    assert classification["recommendedStrategy"] == "retry_or_reduce_concurrency"
+    assert classification["severity"] == "warning"
+    assert batch_dryrun._source_result_is_retryable(
+        {"status": "empty", "valid": 0, "failureReason": "dynamic_price_not_ready"},
+        classification,
+    )
+
+
 def test_source_result_retryable_for_timeout_only() -> None:
     assert batch_dryrun._source_result_is_retryable(
         {"status": "empty", "valid": 0, "failureReason": "http_timeout"},

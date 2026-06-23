@@ -306,7 +306,7 @@ class PlaywrightCardFlowExtractor(BaseExtractor):
                     exc,
                 )
         raise RuntimeError(
-            f"Failed to load {self.profile.url!r} in Playwright"
+            f"Failed to load {self.profile.url!r} in Playwright: {last_error}"
         ) from last_error
 
     def _dismiss_cookie_banner(self, page) -> None:

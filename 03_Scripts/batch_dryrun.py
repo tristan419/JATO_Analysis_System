@@ -196,10 +196,13 @@ def _classify_dryrun_failure(
         or "connection refused" in error_lower
         or "connection closed" in error_lower
         or "err_connection_closed" in error_lower
+        or "failed to load" in error_lower
     ):
         return {"failureReason": "network_unavailable", "recommendedStrategy": "retry_network_or_proxy", "severity": "warning"}
     if "403" in error_lower or "forbidden" in error_lower:
         return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
+    if "no plausible trim-overview msrp" in error_lower:
+        return {"failureReason": "dynamic_price_not_ready", "recommendedStrategy": "retry_or_reduce_concurrency", "severity": "warning"}
     if "waiting for" in error_lower or "playwright" in error_lower:
         return {"failureReason": "js_required_or_selector_timeout", "recommendedStrategy": "try_playwright_card_flow", "severity": "warning"}
     if "fetch_failed" in error_lower:
@@ -334,6 +337,7 @@ _RETRYABLE_SOURCE_FAILURES = {
     "http_timeout",
     "js_required_or_selector_timeout",
     "network_unavailable",
+    "dynamic_price_not_ready",
 }
 
 
