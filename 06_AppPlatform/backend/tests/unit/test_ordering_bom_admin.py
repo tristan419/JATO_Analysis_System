@@ -34,6 +34,9 @@ class _ExecuteResult:
     def scalars(self) -> _ScalarResult:
         return _ScalarResult(self._values)
 
+    def all(self) -> list[object]:
+        return self._values
+
 
 class _FakeSession:
     def __init__(self, execute_values: list[object] | None = None):
@@ -56,6 +59,7 @@ def test_normalize_jaecoo_brand_variants() -> None:
 def _legacy_jaecoo_sku() -> SimpleNamespace:
     return SimpleNamespace(
         material_code="T7000Z5**MY0026",
+        bom_template="T7000Z5**MY0026",
         brand="JEACOO",
         model_name="JEACOO5 HEV",
         version="Exclusive-FWD",
@@ -126,6 +130,59 @@ def test_build_matrix_normalizes_legacy_jaecoo_and_model_powertrain(monkeypatch)
     assert row["fobEur"] == 15300
 
 
+def test_build_matrix_backfills_interior_and_preserves_paint_tier(monkeypatch) -> None:
+    blank = _legacy_jaecoo_sku()
+    blank.material_code = "T7000Z5CPMY0026"
+    blank.exterior_color_name = "Matte black (Black Edition)"
+    blank.exterior_color_code = "CP"
+    blank.exterior_color_type = "single"
+    blank.colour_tier = "single"
+    blank.interior_color_name = None
+
+    donor = _legacy_jaecoo_sku()
+    donor.material_code = "T7000Z5BWMY0026"
+    donor.exterior_color_code = "BW"
+    donor.interior_color_name = "Black-Black"
+
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "get_country_payment_term",
+        lambda _session, _country_code, _order_month_hint=None: SimpleNamespace(
+            payment_term_code="LC90",
+            country_name="Slovakia",
+        ),
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "list_active_skus",
+        lambda *_args, **_kwargs: [blank, donor],
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "list_fobs_for_country_material_codes",
+        lambda _session, _country_code, material_codes, _payment_term_code=None: {
+            code: SimpleNamespace(final_fob_eur=15300)
+            for code in material_codes
+        },
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "list_quantities_for_country_year",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "list_historical_skus_with_quantity",
+        lambda *_args, **_kwargs: [],
+    )
+
+    result = order_genius_service.build_matrix(_FakeSession(), "SK", 2026)
+    by_code = {row["materialCode"]: row for row in result["rows"]}
+
+    assert by_code["T7000Z5CPMY0026"]["interiorColorName"] == "Black-Black"
+    assert by_code["T7000Z5CPMY0026"]["colourTier"] == "special"
+
+
 def test_build_matrix_excludes_cleared_zero_fob(monkeypatch) -> None:
     sku = _legacy_jaecoo_sku()
 
@@ -162,6 +219,60 @@ def test_build_matrix_excludes_cleared_zero_fob(monkeypatch) -> None:
 
     assert result["rows"] == []
     assert result["totalRows"] == 0
+
+
+def test_list_bom_with_fob_backfills_interior_and_effective_colour_tier(monkeypatch) -> None:
+    blank = _legacy_jaecoo_sku()
+    blank.material_code = "T7000Z5CPMY0026"
+    blank.exterior_color_name = "Matte black (Black Edition)"
+    blank.exterior_color_code = "CP"
+    blank.exterior_color_type = "single"
+    blank.colour_tier = "single"
+    blank.interior_color_name = None
+    blank.interior_colour_code = None
+    blank.interior_package = None
+    blank.baseline_version_id = None
+    blank.lifecycle_status = "active"
+    blank.is_active = True
+    blank.effective_from_month = None
+    blank.effective_to_month = None
+    blank.row_version = 1
+    blank.source_sheet_name = None
+    blank.source_row_number = None
+    blank.raw_payload_json = None
+    blank.colour_hex = None
+    blank.colour_code_confirmed = True
+
+    donor = _legacy_jaecoo_sku()
+    donor.material_code = "T7000Z5BWMY0026"
+    donor.interior_color_name = "Black-Black"
+    donor.interior_colour_code = "R19"
+    donor.interior_package = "Black-Black"
+    donor.baseline_version_id = None
+    donor.lifecycle_status = "active"
+    donor.is_active = True
+    donor.effective_from_month = None
+    donor.effective_to_month = None
+    donor.row_version = 1
+    donor.source_sheet_name = None
+    donor.source_row_number = None
+    donor.raw_payload_json = None
+    donor.colour_hex = None
+    donor.colour_code_confirmed = True
+
+    monkeypatch.setattr(repo, "list_bom_admin_country_columns", lambda _session: ["NL"])
+    monkeypatch.setattr(
+        repo,
+        "list_all_material_skus_for_admin",
+        lambda *_args, **_kwargs: [blank, donor],
+    )
+
+    rows, _countries = repo.list_bom_with_fob(_FakeSession())
+    by_code = {row["materialCode"]: row for row in rows}
+
+    assert by_code["T7000Z5CPMY0026"]["interiorColorName"] == "Black-Black"
+    assert by_code["T7000Z5CPMY0026"]["interiorColourCode"] == "R19"
+    assert by_code["T7000Z5CPMY0026"]["colourTier"] == "special"
 
 
 def test_build_options_normalizes_legacy_jaecoo_filter_values(monkeypatch) -> None:
