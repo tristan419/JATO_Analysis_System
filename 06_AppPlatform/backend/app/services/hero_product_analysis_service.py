@@ -432,9 +432,28 @@ def _filter_frame_for_pairs(frame: pd.DataFrame, pairs: list[tuple[str, str]]) -
 
 def _segment_filter_candidates(segment: str) -> list[str]:
     text = _coerce_text(segment or DEFAULT_SEGMENT)
-    candidates = [text]
-    if _normalize_segment_key(text) == _normalize_segment_key(DEFAULT_SEGMENT):
-        candidates.append(DEFAULT_SEGMENT)
+    spaced = " ".join(text.replace("-", " ").split())
+    upper = spaced.upper()
+    candidates = [text, spaced, spaced.title(), upper]
+    if upper.startswith("SUV "):
+        candidates.append(f"SUV {upper.removeprefix('SUV ')}")
+    if upper.startswith("CAR "):
+        candidates.append(f"Car {upper.removeprefix('CAR ')}")
+    if upper == "SPORTS CAR":
+        candidates.extend(["Sports Car", "Sports car", "sports car"])
+    return list(dict.fromkeys(candidate for candidate in candidates if candidate))
+
+
+def _powertrain_filter_candidates(fuel_type: str) -> list[str]:
+    text = _coerce_text(fuel_type or DEFAULT_FUEL)
+    fuel_key = _normalize_powertrain(text)
+    candidates = [text, text.upper(), fuel_key]
+    reverse_aliases = {
+        "ICE": ["COMBUSTION"],
+        "REEV": ["EREV"],
+        "FCV": ["FCEV"],
+    }
+    candidates.extend(reverse_aliases.get(fuel_key, []))
     return list(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
@@ -702,6 +721,8 @@ def _build_source_base_frame_cached(
     selected_country_values = [item["value"] for item in selected_countries]
     segment_key = _normalize_segment_key(segment or DEFAULT_SEGMENT)
     fuel_key = _normalize_powertrain(fuel_type or DEFAULT_FUEL)
+    segment_filter_values = _segment_filter_candidates(segment or DEFAULT_SEGMENT)
+    powertrain_filter_values = _powertrain_filter_candidates(fuel_type or DEFAULT_FUEL)
 
     selected_columns = [
         columns.country_value,
@@ -728,8 +749,8 @@ def _build_source_base_frame_cached(
 
     dataset = repo._open_dataset()
     pushdown_filters: dict[str, list[str]] = {
-        columns.segment: _segment_filter_candidates(segment or DEFAULT_SEGMENT),
-        columns.powertrain: [fuel_key],
+        columns.segment: segment_filter_values,
+        columns.powertrain: powertrain_filter_values,
     }
     if 0 < len(selected_country_values) < len(country_options):
         pushdown_filters[columns.country_value] = selected_country_values
