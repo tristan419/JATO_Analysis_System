@@ -1087,6 +1087,7 @@ export interface HeroProductTrendPage {
   models: HeroProductModelRow[];
   series: HeroProductTrendSeries[];
   countryRanking: HeroProductCountryRanking;
+  countryRankings?: Record<string, HeroProductCountryRanking>;
   priceRows: Array<{
     brand: string;
     model: string;

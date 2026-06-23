@@ -970,6 +970,112 @@ def _build_country_ranking_trace(
     }
 
 
+def _country_rank_trace_options(
+    country_labels: list[str],
+    country_options: list[dict[str, str]],
+    selected_country: dict[str, str],
+) -> list[dict[str, str]]:
+    resolved: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for country in [selected_country["value"], selected_country["label"], *country_labels]:
+        option = _normalize_country_lookup(country, country_options)
+        key = option["value"]
+        if key in seen:
+            continue
+        resolved.append(option)
+        seen.add(key)
+    return resolved
+
+
+def _build_country_ranking_trace_map(
+    frame: pd.DataFrame,
+    model_rows: list[dict[str, Any]],
+    trend_periods: list[str],
+    countries: list[dict[str, str]],
+    rank_window: int,
+) -> dict[str, Any]:
+    periods = [
+        {"period": period, "label": _short_period_label(period)}
+        for period in trend_periods
+    ]
+    rank_limit = max(1, int(rank_window or 20))
+    if frame.empty or not model_rows:
+        return {
+            country["label"] or country["value"]: {
+                "country": country,
+                "rankWindow": rank_limit,
+                "periods": periods,
+                "series": [],
+            }
+            for country in countries
+        }
+
+    rankings_by_country: dict[str, dict[str, dict[tuple[str, str], dict[str, Any]]]] = {}
+    for period in trend_periods:
+        column = _period_to_month_column(period)
+        if column not in frame.columns:
+            continue
+        grouped = (
+            frame.groupby(["__country_value", "__brand", "__model"], dropna=False)[column]
+            .sum()
+            .reset_index(name="sales")
+        )
+        grouped["sales"] = pd.to_numeric(grouped["sales"], errors="coerce").fillna(0.0)
+        grouped = grouped[grouped["sales"] > 0]
+        if grouped.empty:
+            continue
+        for country_value, country_group in grouped.groupby("__country_value", dropna=False):
+            ranked = country_group.sort_values(
+                ["sales", "__brand", "__model"],
+                ascending=[False, True, True],
+            )
+            total = float(ranked["sales"].sum())
+            rankings_by_country.setdefault(str(country_value), {})[period] = {
+                (str(row["__brand"]), str(row["__model"])): {
+                    "rank": index,
+                    "sales": float(row["sales"]),
+                    "sharePct": _safe_share(float(row["sales"]), total),
+                }
+                for index, row in enumerate(ranked.to_dict("records"), start=1)
+            }
+
+    result: dict[str, Any] = {}
+    for country in countries:
+        key = country["label"] or country["value"]
+        country_rankings = rankings_by_country.get(country["value"], {})
+        series: list[dict[str, Any]] = []
+        for row in model_rows:
+            source_brand, source_model = _source_pair(row)
+            pair = (source_brand, source_model)
+            points: list[dict[str, Any]] = []
+            for period in periods:
+                item = country_rankings.get(period["period"], {}).get(pair)
+                rank = int(item["rank"]) if item else None
+                points.append({
+                    "period": period["period"],
+                    "label": period["label"],
+                    "rank": rank,
+                    "sales": float(item["sales"]) if item else 0.0,
+                    "sharePct": float(item["sharePct"]) if item else 0.0,
+                    "inWindow": bool(rank is not None and rank <= rank_limit),
+                })
+            series.append({
+                "brand": row["brand"],
+                "model": row["model"],
+                "label": row["model"],
+                "sourceBrand": source_brand,
+                "sourceModel": source_model,
+                "points": points,
+            })
+        result[key] = {
+            "country": country,
+            "rankWindow": rank_limit,
+            "periods": periods,
+            "series": series,
+        }
+    return result
+
+
 def _build_country_distribution(
     frame: pd.DataFrame,
     model_rows: list[dict[str, Any]],
@@ -1120,6 +1226,51 @@ def query_hero_product_deck(
         for row in model_rows
         if _source_pair(row) in benchmark_keys
     ]
+    top_distribution = _build_country_distribution(frame, top_rows, country_limit)
+    hero_distribution = _build_country_distribution(frame, hero_rows, country_limit)
+    top_rank_countries = _country_rank_trace_options(
+        [option["label"] for option in source["countryOptions"]],
+        source["countryOptions"],
+        selected_tracking_country,
+    )
+    hero_rank_countries = _country_rank_trace_options(
+        [option["label"] for option in source["countryOptions"]],
+        source["countryOptions"],
+        selected_tracking_country,
+    )
+    top_country_rankings = _build_country_ranking_trace_map(
+        frame,
+        top_rows,
+        source["trendPeriods"],
+        top_rank_countries,
+        ranking_limit,
+    )
+    hero_country_rankings = _build_country_ranking_trace_map(
+        frame,
+        hero_rows,
+        source["trendPeriods"],
+        hero_rank_countries,
+        ranking_limit,
+    )
+    selected_tracking_key = selected_tracking_country["label"] or selected_tracking_country["value"]
+    top_selected_country_ranking = top_country_rankings.get(selected_tracking_key)
+    if top_selected_country_ranking is None:
+        top_selected_country_ranking = _build_country_ranking_trace(
+            frame,
+            top_rows,
+            source["trendPeriods"],
+            selected_tracking_country,
+            ranking_limit,
+        )
+    hero_selected_country_ranking = hero_country_rankings.get(selected_tracking_key)
+    if hero_selected_country_ranking is None:
+        hero_selected_country_ranking = _build_country_ranking_trace(
+            frame,
+            hero_rows,
+            source["trendPeriods"],
+            selected_tracking_country,
+            ranking_limit,
+        )
 
     total_sales = sum(float(row["sales"]) for row in model_rows)
     year_text, month_text = source["resolvedPeriod"].split("-", 1)
@@ -1206,37 +1357,27 @@ def query_hero_product_deck(
                 "title": "Top 车型销量趋势",
                 "models": top_rows,
                 "series": _build_trend_series(frame, top_rows, source["trendPeriods"]),
-                "countryRanking": _build_country_ranking_trace(
-                    frame,
-                    top_rows,
-                    source["trendPeriods"],
-                    selected_tracking_country,
-                    ranking_limit,
-                ),
+                "countryRanking": top_selected_country_ranking,
+                "countryRankings": top_country_rankings,
                 "priceRows": _build_price_panel_rows(top_rows[:5]),
             },
             "topDistribution": {
                 "title": "Top 车型市场分布",
                 "models": top_rows,
-                "distribution": _build_country_distribution(frame, top_rows, country_limit),
+                "distribution": top_distribution,
             },
             "heroTrend": {
                 "title": "Hero 车型销量趋势",
                 "models": hero_rows,
                 "series": _build_trend_series(frame, hero_rows, source["trendPeriods"]),
-                "countryRanking": _build_country_ranking_trace(
-                    frame,
-                    hero_rows,
-                    source["trendPeriods"],
-                    selected_tracking_country,
-                    ranking_limit,
-                ),
+                "countryRanking": hero_selected_country_ranking,
+                "countryRankings": hero_country_rankings,
                 "priceRows": _build_price_panel_rows(hero_rows[:6]),
             },
             "heroDistribution": {
                 "title": "Hero 车型市场分布",
                 "models": hero_rows,
-                "distribution": _build_country_distribution(frame, hero_rows, country_limit),
+                "distribution": hero_distribution,
             },
         },
     }
