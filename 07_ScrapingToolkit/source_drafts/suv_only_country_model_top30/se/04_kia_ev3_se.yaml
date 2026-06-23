@@ -1,12 +1,12 @@
 source_code: kia_ev3_se_draft_scrapling
 country: 瑞典
 brand: KIA
-source_url: https://www.kia.com/se/nya-bilar/ev3/premiere
+source_url: https://www.kia.com/se/nya-bilar/ev3/upptack/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.kia.com/se/nya-bilar/ev3/premiere
+  url: https://www.kia.com/se/nya-bilar/ev3/upptack/
   headless: true
   default_currency: SEK
   default_tax_included: true
@@ -90,7 +90,8 @@ notes: Keywords filled from official manufacturer website research (SE market). 
   selectors still require browser-based inspection before promotion. [Switched to
   playwright_card_flow with kia_trim_overview_playwright.yaml] [Reverted to scrapling
   — playwright preset needs per-brand tuning] [Tightened to model-page text_regex
-  after broad CSS matched global Kia menu price instead of EV3 MSRP]
+  after broad CSS matched global Kia menu price instead of EV3 MSRP] [Updated from
+  legacy premiere URL to final /upptack/ official page to avoid redirects]
 bootstrap_meta:
   country_model_rank: 4
   suggested_scope_kind: single_model
