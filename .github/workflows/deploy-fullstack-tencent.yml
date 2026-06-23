@@ -59,6 +59,8 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Package deploy archive
+        env:
+          MIHOMO_SUB_URL: ${{ secrets.MIHOMO_SUB_URL }}
         run: |
           REQUIRED_WORKBOOK="01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
           if [ ! -f "$GITHUB_WORKSPACE/$REQUIRED_WORKBOOK" ]; then
@@ -105,6 +107,19 @@ jobs:
           print(f"Wrote {out.relative_to(root)} for release {short_sha}")
           PY
 
+          MIHOMO_PAYLOAD_ROOT="$RUNNER_TEMP/mihomo_payload"
+          MIHOMO_PACKAGED_CONFIG="$MIHOMO_PAYLOAD_ROOT/hermes/runtime/mihomo/config.yaml"
+          if [ -n "${MIHOMO_SUB_URL:-}" ]; then
+            echo "[mihomo-sub] Building prebuilt mihomo config on GitHub runner"
+            if MIHOMO_OUTPUT_CONFIG="$MIHOMO_PACKAGED_CONFIG" \
+              bash 03_Scripts/deploy/update_mihomo_subscription.sh; then
+              echo "[mihomo-sub] Prebuilt mihomo config ready"
+            else
+              echo "[WARN] Prebuilt mihomo config failed; server will try local refresh"
+              rm -f "$MIHOMO_PACKAGED_CONFIG"
+            fi
+          fi
+
           tar cf "$RUNNER_TEMP/JATO_deploy.tar" \
             --exclude='.git' \
             --exclude='node_modules' \
@@ -122,6 +137,11 @@ jobs:
           tar rf "$RUNNER_TEMP/JATO_deploy.tar" \
             -C "$GITHUB_WORKSPACE" \
             "$REQUIRED_WORKBOOK"
+          if [ -f "$MIHOMO_PACKAGED_CONFIG" ]; then
+            tar rf "$RUNNER_TEMP/JATO_deploy.tar" \
+              -C "$MIHOMO_PAYLOAD_ROOT" \
+              hermes/runtime/mihomo/config.yaml
+          fi
           gzip -f "$RUNNER_TEMP/JATO_deploy.tar"
           ls -lh "$RUNNER_TEMP/JATO_deploy.tar.gz"
           tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$REQUIRED_WORKBOOK"
@@ -427,6 +447,7 @@ jobs:
           echo "[INFO] Refreshing local mihomo subscription before backend restart..."
           mkdir -p "$REPO_DIR/hermes/reports"
           MIHOMO_REFRESH_LOG="$REPO_DIR/hermes/reports/mihomo_refresh_status.txt"
+          PACKAGED_MIHOMO_CONFIG="$REPO_DIR/hermes/runtime/mihomo/config.yaml"
           {
             date -u
             if [ -n "${MIHOMO_SUB_URL:-}" ]; then
@@ -436,7 +457,14 @@ jobs:
             fi
             echo "[mihomo-sub] MIHOMO_SUB_URL_FILE=${MIHOMO_SUB_URL_FILE:-/etc/mihomo/subscription_url}"
             echo "[mihomo-sub] MIHOMO_DB_PATH=${MIHOMO_DB_PATH:-auto}"
-            MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
+            if [ -r "$PACKAGED_MIHOMO_CONFIG" ]; then
+              echo "[mihomo-sub] Using packaged mihomo config from GitHub runner"
+              MIHOMO_LOCAL=true MIHOMO_SOURCE_CONFIG="$PACKAGED_MIHOMO_CONFIG" \
+                bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
+            else
+              MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
+            fi
+            rm -f "$PACKAGED_MIHOMO_CONFIG"
           } > "$MIHOMO_REFRESH_LOG" 2>&1 \
             || echo "[WARN] Local mihomo refresh failed; continuing with existing proxy config" >> "$MIHOMO_REFRESH_LOG"
 
@@ -526,7 +554,11 @@ jobs:
                 || sudo -n systemctl restart mihomo 2>/dev/null \
                 || true
               sleep 5
-              check_google_oauth_proxy "after-mihomo-restart" || true
+              if ! check_google_oauth_proxy "after-mihomo-restart"; then
+                echo "[WARN] Google OAuth proxy still failed; selecting a working mihomo node"
+                bash "$REPO_DIR/03_Scripts/deploy/select_mihomo_google_proxy.sh" || true
+                check_google_oauth_proxy "after-mihomo-select" || true
+              fi
             fi
           fi
 
@@ -807,6 +839,7 @@ jobs:
           echo "[INFO] Refreshing local mihomo subscription before backend restart..."
           mkdir -p "$REPO_DIR/hermes/reports"
           MIHOMO_REFRESH_LOG="$REPO_DIR/hermes/reports/mihomo_refresh_status.txt"
+          PACKAGED_MIHOMO_CONFIG="$REPO_DIR/hermes/runtime/mihomo/config.yaml"
           {
             date -u
             if [ -n "${MIHOMO_SUB_URL:-}" ]; then
@@ -816,7 +849,14 @@ jobs:
             fi
             echo "[mihomo-sub] MIHOMO_SUB_URL_FILE=${MIHOMO_SUB_URL_FILE:-/etc/mihomo/subscription_url}"
             echo "[mihomo-sub] MIHOMO_DB_PATH=${MIHOMO_DB_PATH:-auto}"
-            MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
+            if [ -r "$PACKAGED_MIHOMO_CONFIG" ]; then
+              echo "[mihomo-sub] Using packaged mihomo config from GitHub runner"
+              MIHOMO_LOCAL=true MIHOMO_SOURCE_CONFIG="$PACKAGED_MIHOMO_CONFIG" \
+                bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
+            else
+              MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
+            fi
+            rm -f "$PACKAGED_MIHOMO_CONFIG"
           } > "$MIHOMO_REFRESH_LOG" 2>&1 \
             || echo "[WARN] Local mihomo refresh failed; continuing with existing proxy config" >> "$MIHOMO_REFRESH_LOG"
 
@@ -906,7 +946,11 @@ jobs:
                 || sudo -n systemctl restart mihomo 2>/dev/null \
                 || true
               sleep 5
-              check_google_oauth_proxy "after-mihomo-restart" || true
+              if ! check_google_oauth_proxy "after-mihomo-restart"; then
+                echo "[WARN] Google OAuth proxy still failed; selecting a working mihomo node"
+                bash "$REPO_DIR/03_Scripts/deploy/select_mihomo_google_proxy.sh" || true
+                check_google_oauth_proxy "after-mihomo-select" || true
+              fi
             fi
           fi
 
