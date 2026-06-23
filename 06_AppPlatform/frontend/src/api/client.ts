@@ -124,6 +124,7 @@ import type {
   MaterialUploadPreview,
   MaterialUploadPreviewRow,
   MaterialUploadSession,
+  MatrixBatchResponse,
   MatrixResponse,
   OrderGeniusOptions,
   PaymentTermRule,
@@ -3673,6 +3674,30 @@ export const api = {
       `/order-genius/matrix?${qs.toString()}`,
     );
   },
+
+  getOrderGeniusMatrixBatch: (params: {
+    countries: string[];
+    year: number;
+    brand?: string;
+    model?: string;
+    powertrain?: string;
+    version?: string;
+    colour?: string;
+    materialCodeSearch?: string;
+  }) =>
+    request<MatrixBatchResponse>("/order-genius/matrix/batch", {
+      method: "POST",
+      body: JSON.stringify({
+        countries: params.countries,
+        year: params.year,
+        brand: params.brand,
+        model: params.model,
+        powertrain: params.powertrain,
+        version: params.version,
+        colour: params.colour,
+        materialCodeSearch: params.materialCodeSearch,
+      }),
+    }),
 
   updateQuantityCell: (payload: QuantityCellUpdate) =>
     request<QuantityCellResponse>("/order-genius/quantity-cell", {

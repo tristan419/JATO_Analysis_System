@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import {
   AllCommunityModule,
   ModuleRegistry,
@@ -966,11 +966,10 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
     if (open) setControlOpen(false);
   }
 
-  function handleDistributionCountryTrace(country: string, targetPage: HeroProductPageKey): void {
+  function handleDistributionCountryTrace(country: string): void {
     const nextCountry = country.trim();
     if (!nextCountry) return;
     setTrackingCountry(nextCountry);
-    setActivePage(targetPage);
   }
 
   function toggleSpecColumn(column: HeroProductSpecColumnKey): void {
@@ -1539,7 +1538,7 @@ function HeroProductInsightCallout({ insight }: { insight: HeroProductInsight })
   );
 }
 
-function HeroProductPageContent({ deck, pageKey, priceSource, priceEditor, salesMode, distributionLayout, specColumns, customColumns, selectedTrackingCountry, onDistributionCountryTrace }: { deck: HeroProductDeckResponse; pageKey: HeroProductPageKey; priceSource: HeroProductPriceSource; priceEditor: HeroProductPriceEditorBinding; salesMode: HeroProductSalesMode; distributionLayout: HeroProductDistributionLayout; specColumns: HeroProductSpecColumnKey[]; customColumns: HeroProductSpecColumnOption[]; selectedTrackingCountry: MarketScanCountryOption; onDistributionCountryTrace: (country: string, targetPage: HeroProductPageKey) => void }) {
+function HeroProductPageContent({ deck, pageKey, priceSource, priceEditor, salesMode, distributionLayout, specColumns, customColumns, selectedTrackingCountry, onDistributionCountryTrace }: { deck: HeroProductDeckResponse; pageKey: HeroProductPageKey; priceSource: HeroProductPriceSource; priceEditor: HeroProductPriceEditorBinding; salesMode: HeroProductSalesMode; distributionLayout: HeroProductDistributionLayout; specColumns: HeroProductSpecColumnKey[]; customColumns: HeroProductSpecColumnOption[]; selectedTrackingCountry: MarketScanCountryOption; onDistributionCountryTrace: (country: string) => void }) {
   if (pageKey === "benchmark") {
     return <BenchmarkSlide rows={deck.pages.benchmark.ranking} productRows={deck.pages.benchmark.productRows} priceSource={priceSource} priceEditor={priceEditor} salesMode={salesMode} specColumns={specColumns} customColumns={customColumns} showChannel={false} />;
   }
@@ -1550,12 +1549,12 @@ function HeroProductPageContent({ deck, pageKey, priceSource, priceEditor, sales
     return <TrendSlide page={deck.pages.topTrend} priceSource={priceSource} priceEditor={priceEditor} variant="top" selectedTrackingCountry={selectedTrackingCountry} />;
   }
   if (pageKey === "topDistribution") {
-    return <DistributionSlide page={deck.pages.topDistribution} variant="top" salesMode={salesMode} layout={distributionLayout} selectedTrackingCountry={selectedTrackingCountry} onTrackCountry={(country) => onDistributionCountryTrace(country, "topTrend")} />;
+    return <DistributionSlide page={deck.pages.topDistribution} variant="top" salesMode={salesMode} layout={distributionLayout} selectedTrackingCountry={selectedTrackingCountry} onTrackCountry={onDistributionCountryTrace} />;
   }
   if (pageKey === "heroTrend") {
     return <TrendSlide page={deck.pages.heroTrend} priceSource={priceSource} priceEditor={priceEditor} variant="hero" selectedTrackingCountry={selectedTrackingCountry} />;
   }
-  return <DistributionSlide page={deck.pages.heroDistribution} variant="hero" salesMode={salesMode} layout={distributionLayout} selectedTrackingCountry={selectedTrackingCountry} onTrackCountry={(country) => onDistributionCountryTrace(country, "heroTrend")} />;
+  return <DistributionSlide page={deck.pages.heroDistribution} variant="hero" salesMode={salesMode} layout={distributionLayout} selectedTrackingCountry={selectedTrackingCountry} onTrackCountry={onDistributionCountryTrace} />;
 }
 
 function BenchmarkSlide({ rows, productRows, priceSource, priceEditor, salesMode, specColumns, customColumns, showChannel }: { rows: HeroProductModelRow[]; productRows: HeroProductModelRow[]; priceSource: HeroProductPriceSource; priceEditor: HeroProductPriceEditorBinding; salesMode: HeroProductSalesMode; specColumns: HeroProductSpecColumnKey[]; customColumns: HeroProductSpecColumnOption[]; showChannel: boolean }) {
@@ -2232,8 +2231,6 @@ function DistributionSlide({ page, variant, salesMode, layout, selectedTrackingC
   const dragStateRef = useRef({
     active: false,
     current: "",
-    moved: false,
-    start: "",
     suppressClickCountry: "",
   });
   const insight = buildDistributionInsight(page, variant);
@@ -2251,13 +2248,28 @@ function DistributionSlide({ page, variant, salesMode, layout, selectedTrackingC
   const trackingCountryLabel = selectedTrackingCountry.label || selectedTrackingCountry.value;
   const activeCountryLabel = dragCountry || trackingCountryLabel;
 
+  function previewCountryDrag(country: string): void {
+    const state = dragStateRef.current;
+    if (!state.active || state.current === country) return;
+    state.current = country;
+    setDragCountry(country);
+  }
+
   useEffect(() => {
+    function handlePointerMove(event: PointerEvent): void {
+      const state = dragStateRef.current;
+      if (!state.active) return;
+      const target = document.elementFromPoint(event.clientX, event.clientY);
+      const country = target?.closest<HTMLElement>(".hero-product-country-row")?.dataset.heroCountry;
+      if (country) previewCountryDrag(country);
+    }
+
     function handlePointerUp(): void {
       const state = dragStateRef.current;
       if (!state.active) return;
       state.active = false;
       setDragCountry("");
-      if (state.moved && state.current) {
+      if (state.current) {
         state.suppressClickCountry = state.current;
         window.setTimeout(() => {
           if (dragStateRef.current.suppressClickCountry === state.current) {
@@ -2267,9 +2279,11 @@ function DistributionSlide({ page, variant, salesMode, layout, selectedTrackingC
         onTrackCountry(state.current);
       }
     }
+    window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp);
     window.addEventListener("pointercancel", handlePointerUp);
     return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
     };
@@ -2279,18 +2293,8 @@ function DistributionSlide({ page, variant, salesMode, layout, selectedTrackingC
     dragStateRef.current = {
       active: true,
       current: country,
-      moved: false,
-      start: country,
       suppressClickCountry: "",
     };
-    setDragCountry(country);
-  }
-
-  function previewCountryDrag(country: string): void {
-    const state = dragStateRef.current;
-    if (!state.active || state.current === country) return;
-    state.current = country;
-    state.moved = state.moved || country !== state.start;
     setDragCountry(country);
   }
 
@@ -2308,7 +2312,7 @@ function DistributionSlide({ page, variant, salesMode, layout, selectedTrackingC
       <HeroProductPanel
         eyebrow={variant === "hero" ? "Market · Fixed Models" : "Market · Top Models"}
         title={page.title}
-        subtitle={`${modeLabel}口径 · ${layoutLabel}；点击国家行追踪该国家 ranking，当前 ${trackingCountryLabel}。${layout === "aligned" ? "按第一列车型国家顺序统一行轴，缺失国家保留空行。" : "每个车型独立成列，按国家销量排序。"}`}
+        subtitle={`${modeLabel}口径 · ${layoutLabel}；点击或拖动国家行更新追踪国家，当前 ${trackingCountryLabel}；切到趋势页查看单国 ranking。${layout === "aligned" ? "按第一列车型国家顺序统一行轴，缺失国家保留空行。" : "每个车型独立成列，按国家销量排序。"}`}
         className={`hero-product-distribution-panel hero-product-distribution-panel--${variant}${layout === "aligned" ? " is-country-aligned" : ""}${densityClass}`}
       >
         <div className="hero-product-distribution-wrap">
@@ -2364,14 +2368,33 @@ function CountryDriveRow({ country, maxSales, isTracking, onPointerDown, onPoint
   const fourShare = clampShare(Number(country.driveMix["4x4"] ?? 0) / total);
   const barWidth = isEmpty ? 0 : Math.max(1, Math.min(100, (country.sales / Math.max(1, maxSales)) * 100));
 
+  function handlePointerDown(event: ReactPointerEvent<HTMLButtonElement>): void {
+    event.preventDefault();
+    event.stopPropagation();
+    onPointerDown(country.country);
+  }
+
+  function handlePointerEnter(event: ReactPointerEvent<HTMLButtonElement>): void {
+    event.preventDefault();
+    event.stopPropagation();
+    onPointerEnter(country.country);
+  }
+
+  function handleClick(event: ReactMouseEvent<HTMLButtonElement>): void {
+    event.preventDefault();
+    event.stopPropagation();
+    onTrackCountry(country.country);
+  }
+
   return (
     <button
       type="button"
       className={`hero-product-country-row${isEmpty ? " is-empty" : ""}${isTracking ? " is-tracking" : ""}`}
       title={`追踪 ${country.country} ranking`}
-      onPointerDown={() => onPointerDown(country.country)}
-      onPointerEnter={() => onPointerEnter(country.country)}
-      onClick={() => onTrackCountry(country.country)}
+      data-hero-country={country.country}
+      onPointerDown={handlePointerDown}
+      onPointerEnter={handlePointerEnter}
+      onClick={handleClick}
     >
       <span>{country.country}</span>
       <div className="hero-product-country-bar-shell">
