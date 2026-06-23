@@ -8,6 +8,9 @@ extractor_type: scrapling
 profile:
   url: https://www.toyota.hr/new-cars/new-toyota-c-hr
   headless: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 30000
   default_currency: EUR
   default_tax_included: true
   default_price_label: Preporučena maloprodajna cijena s PDV-om
@@ -87,7 +90,6 @@ profile:
     trim: h3
     price: '[class*="price"]'
   tier: stealth
-  network_idle: true
   impersonate: chrome
 schedule:
   frequency: manual_only
@@ -97,7 +99,9 @@ schedule:
 notes: Keywords filled from official manufacturer website research (HR market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
   applied from brand probe] [Switched to playwright_card_flow with toyota_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+  [Reverted to scrapling — playwright preset needs per-brand tuning] [Reduced
+  Scrapling wait budget after probe confirmed Toyota HR ld+json is present before
+  network idle.]
 bootstrap_meta:
   country_model_rank: 17
   suggested_scope_kind: single_model
