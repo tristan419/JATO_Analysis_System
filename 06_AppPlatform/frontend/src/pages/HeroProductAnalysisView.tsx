@@ -1299,9 +1299,10 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
               <div className="market-scan-slide-scale-box" style={slidePreview.scaleBoxStyle}>
                 <div
                   ref={slideRef}
-                  className={`market-scan-slide-frame hero-product-slide-frame hero-product-slide-frame--${activePage}${exportingSlide ? " is-exporting" : ""}${slideEditMode && !exportingSlide ? " is-editing" : ""}`}
+                  className={`market-scan-slide-frame hero-product-slide-frame hero-product-slide-frame--${activePage}${exportingSlide ? " is-exporting" : ""}${slideEditMode && !exportingSlide ? " is-editing" : ""}${loading && !exportingSlide ? " is-updating" : ""}`}
                   style={slideFrameStyle}
                 >
+                  {loading && !exportingSlide ? <span className="hero-product-slide-refresh-status" role="status" aria-live="polite">刷新中</span> : null}
                   <header className="market-scan-slide-head hero-product-slide-head">
                     <div className="market-scan-slide-copy">
                       <span className="market-scan-slide-kicker">{activeTab.code} {activeTab.label}</span>
@@ -1314,7 +1315,6 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
                       <span className="market-scan-slide-tag">{activeSalesModeLabel}</span>
                       <span className="market-scan-slide-tag">{deck.metadata.labels.currentMonthShort}</span>
                       <span className="market-scan-slide-tag">{priceSource.toUpperCase()}</span>
-                      {loading ? <span className="market-scan-slide-tag">Updating</span> : null}
                     </div>
                   </header>
                   <div className="market-scan-slide-body hero-product-slide-body">
