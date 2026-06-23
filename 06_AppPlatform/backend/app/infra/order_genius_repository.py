@@ -717,7 +717,13 @@ def list_bom_with_fob(
             "colourCodeConfirmed": s.colour_code_confirmed,
             "colourTier": merge_colour_tiers(
                 s.colour_tier,
-                infer_colour_tier(s.exterior_color_name, s.exterior_color_type, s.edition_tag),
+                infer_colour_tier(
+                    s.exterior_color_name,
+                    s.exterior_color_type,
+                    s.edition_tag,
+                    s.exterior_color_code,
+                    s.colour_hex,
+                ),
             ),
             "bomTemplate": s.bom_template,
             "interiorColorName": s.interior_color_name or interior_by_template.get(s.bom_template or ""),

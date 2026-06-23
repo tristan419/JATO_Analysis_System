@@ -63,6 +63,19 @@ const DEFAULT_COLOUR_SURCHARGES: Record<string, number> = {
 const BOM_ADMIN_FIXED_COLUMN_COUNT = 9;
 const BOM_ADMIN_COUNTRY_COLUMN_WIDTH = 75;
 type BomAdminColourTier = "single" | "dual" | "special";
+type BomAdminSkuColourFields = {
+  colour?: string | null;
+  colourCode?: string | null;
+  colourType?: string | null;
+  colourTier?: string | null;
+  colourHex?: string | null;
+  editionTag?: string | null;
+};
+const BOM_ADMIN_COLOUR_TIER_RANK: Record<BomAdminColourTier, number> = {
+  single: 0,
+  dual: 1,
+  special: 2,
+};
 const BOM_ADMIN_STICKY_COLUMN_WIDTHS = {
   bom: 150,
   interior: 90,
@@ -97,6 +110,60 @@ const BOM_ADMIN_FIXED_COLUMN_WIDTH =
 
 function colourSurchargeKey(brand: string, colourType: string): string {
   return `${brand.trim().toUpperCase()}|${colourType.trim().toLowerCase()}`;
+}
+
+function normalizeBomAdminColourTier(value: unknown): BomAdminColourTier {
+  const normalized = String(value || "").trim().toLowerCase().replace("_", "-");
+  if (normalized === "dual" || normalized === "two-tone" || normalized === "dual-tone" || normalized === "dual tone") {
+    return "dual";
+  }
+  if (normalized === "special" || normalized === "matte" || normalized === "black edition" || normalized === "pearl" || normalized === "metallic") {
+    return "special";
+  }
+  return "single";
+}
+
+function mergeBomAdminColourTier(...tiers: unknown[]): BomAdminColourTier {
+  return tiers.reduce<BomAdminColourTier>((best, tier) => {
+    const normalized = normalizeBomAdminColourTier(tier);
+    return BOM_ADMIN_COLOUR_TIER_RANK[normalized] > BOM_ADMIN_COLOUR_TIER_RANK[best]
+      ? normalized
+      : best;
+  }, "single");
+}
+
+function inferBomAdminColourTier(sku: BomAdminSkuColourFields): BomAdminColourTier {
+  const colourName = String(sku.colour || "").trim().toLowerCase();
+  const colourType = String(sku.colourType || "").trim().toLowerCase().replace("_", "-");
+  const colourCode = String(sku.colourCode || "").trim().toLowerCase();
+  const editionTag = String(sku.editionTag || "").trim().toLowerCase();
+  const colourHex = String(sku.colourHex || "").trim();
+  const combined = [colourName, colourType, colourCode, editionTag].filter(Boolean).join(" ");
+  const inferred = (
+    editionTag
+    || combined.includes("black edition")
+    || combined.includes("matte")
+    || combined.includes("pearl")
+    || combined.includes("metallic")
+    || combined.includes("special finish")
+    || ["special", "matte", "pearl", "metallic"].includes(colourType)
+  )
+    ? "special"
+    : (
+      colourHex.includes("|")
+      || ["dual", "two-tone", "dual-tone", "dual tone", "bi-color", "bi-colour"].includes(colourType)
+      || /[/&／+＋]/.test(combined)
+      || combined.includes("双色")
+      || combined.includes("dual")
+      || combined.includes("two tone")
+      || combined.includes("two-tone")
+      || combined.includes("contrast roof")
+      || combined.includes("black roof")
+      || /bi.?colou?r/.test(combined)
+    )
+      ? "dual"
+      : "single";
+  return mergeBomAdminColourTier(sku.colourTier, inferred);
 }
 
 function formatSurchargeDraft(value: number): string {
@@ -3512,7 +3579,14 @@ function BomAdminPanel({
         colour: String(sku.colour || ""),
         colourCode: String(sku.colourCode || "").toUpperCase(),
         colourType: String(sku.colourType || "single"),
-        colourTier: String(sku.colourTier || "single"),
+        colourTier: inferBomAdminColourTier({
+          colour: sku.colour,
+          colourCode: sku.colourCode,
+          colourType: sku.colourType,
+          colourTier: sku.colourTier,
+          colourHex: sku.colourHex,
+          editionTag: sku.editionTag,
+        }),
         colourHex: sku.colourHex || null,
       })),
     };
@@ -3588,8 +3662,9 @@ function BomAdminPanel({
           powertrain: draft.powertrain || "ICE",
           sourceBomTemplate: draft.sourceBomTemplate,
         });
-        if ((sku.colourTier || "single") !== "single") {
-          await api.updateColourTier(materialCode, sku.colourTier || "single");
+        const effectiveColourTier = inferBomAdminColourTier(sku);
+        if (effectiveColourTier !== "single") {
+          await api.updateColourTier(materialCode, effectiveColourTier);
         }
         if (sku.colourHex) {
           await api.updateColourHex(materialCode, sku.colourHex);
@@ -3923,11 +3998,12 @@ function BomAdminPanel({
 
   // Shared colour chip renderer used by BOM rows
   const renderColourChip = (s: any, isHist: boolean, editing: boolean) => {
+    const effectiveTier = inferBomAdminColourTier(s);
     const customHexRaw = s.colourHex || '';
     const customHexParts = customHexRaw ? customHexRaw.split('|') : [];
     const hasCustomDual = customHexParts.length >= 2;
     const computed = getSwatchColors(s.colour || '');
-    const isDual = computed.length >= 2 || hasCustomDual;
+    const isDual = computed.length >= 2 || hasCustomDual || effectiveTier === "dual";
     // For display: custom overrides computed
     const hex1 = customHexParts[0] || computed[0] || '#94a3b8';
     const hex2 = customHexParts[1] || (hasCustomDual ? undefined : computed[1]);
@@ -3937,10 +4013,9 @@ function BomAdminPanel({
     const colourCode = String(s.colourCode || "").trim().toUpperCase();
     const colourName = String(s.colour || "").trim();
     const canEditSwatchRule = Boolean(brand && colourCode && colourName);
-    const tierForTooltip = String(s.colourType || s.colourTier || "single").toLowerCase();
-    const surchargeLabel = tierForTooltip === "dual"
+    const surchargeLabel = effectiveTier === "dual"
       ? `Dual +${formatSurchargeDraft(getColourSurchargeAmount(brand, "dual"))}€`
-      : tierForTooltip === "special"
+      : effectiveTier === "special"
         ? `Special +${formatSurchargeDraft(getColourSurchargeAmount(brand, "special"))}€`
         : "Single";
 
@@ -3953,7 +4028,7 @@ function BomAdminPanel({
           setDragSku(s.materialCode);
         } : undefined}
         onDragEnd={editing ? () => { setDragSku(null); setDragOverTier(null); dragMaterialCode.current = null; } : undefined}
-        title={`${s.colour}${s.colourCode ? ` (${s.colourCode})` : ''}${isDual ? ' · 双色' : ''} · Tier: ${s.colourTier || 'single'} — Drag to reclassify, click swatch to edit colour rule`}
+        title={`${s.colour}${s.colourCode ? ` (${s.colourCode})` : ''}${isDual ? ' · 双色' : ''} · Tier: ${effectiveTier} — Drag to reclassify, click swatch to edit colour rule`}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -4018,7 +4093,7 @@ function BomAdminPanel({
             {s.colourCode || s.colour}
           </span>
         ) : editing ? (
-          <span title="Click to edit colour code" style={{ fontWeight: 500, whiteSpace: "nowrap", fontSize: 9, color: s.colourTier === 'special' ? '#d97706' : s.colourTier === 'dual' ? '#2563eb' : '#16a34a', cursor: 'pointer' }}
+          <span title="Click to edit colour code" style={{ fontWeight: 500, whiteSpace: "nowrap", fontSize: 9, color: effectiveTier === 'special' ? '#d97706' : effectiveTier === 'dual' ? '#2563eb' : '#16a34a', cursor: 'pointer' }}
             onClick={async (e2: any) => { e2.stopPropagation();
               const newCode = prompt('Edit colour code (leave blank to unconfirm):', s.colourCode || '');
               if (newCode != null) { try { await api.updateColourCode(s.materialCode, newCode.toUpperCase()); load(); } catch {} }
@@ -4026,8 +4101,8 @@ function BomAdminPanel({
             {s.colourCode || s.colour}
           </span>
         ) : (
-	          <span title={`${s.colour} · ${surchargeLabel} · Tier: ${s.colourTier || 'single'}`}
-	            style={{ fontWeight: 500, whiteSpace: "nowrap", fontSize: 9, color: s.colourTier === 'special' ? '#d97706' : s.colourTier === 'dual' ? '#2563eb' : '#16a34a' }}>
+	          <span title={`${s.colour} · ${surchargeLabel} · Tier: ${effectiveTier}`}
+	            style={{ fontWeight: 500, whiteSpace: "nowrap", fontSize: 9, color: effectiveTier === 'special' ? '#d97706' : effectiveTier === 'dual' ? '#2563eb' : '#16a34a' }}>
 	            {s.colourCode || s.colour}
           </span>
         )}
@@ -4051,6 +4126,7 @@ function BomAdminPanel({
   };
 
   const renderDraftColourChip = (sku: BomCopyDraftSku) => {
+    const effectiveTier = inferBomAdminColourTier(sku);
     const customHexRaw = sku.colourHex || "";
     const customHexParts = customHexRaw ? customHexRaw.split("|") : [];
     const computed = getSwatchColors(sku.colour || "");
@@ -4060,7 +4136,7 @@ function BomAdminPanel({
     return (
       <span
         key={`${sku.sourceMaterialCode}-${sku.colourCode}`}
-        title={`${sku.colour}${sku.colourCode ? ` (${sku.colourCode})` : ""} · ${sku.colourTier || "single"}`}
+        title={`${sku.colour}${sku.colourCode ? ` (${sku.colourCode})` : ""} · ${effectiveTier}`}
         style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 10, color: "#475569" }}
       >
         <span
@@ -4081,7 +4157,7 @@ function BomAdminPanel({
             fontWeight: 500,
             whiteSpace: "nowrap",
             fontSize: 9,
-            color: sku.colourTier === "special" ? "#d97706" : sku.colourTier === "dual" ? "#2563eb" : "#16a34a",
+            color: effectiveTier === "special" ? "#d97706" : effectiveTier === "dual" ? "#2563eb" : "#16a34a",
           }}
         >
           {sku.colourCode || sku.colour}
@@ -4136,7 +4212,7 @@ function BomAdminPanel({
         filledCountryCodeSet: new Set<string>(),
       };
       for (const s of gSkus) {
-        const tier = s.colourTier || 'single';
+        const tier = inferBomAdminColourTier(s);
         if (tier === 'special') entry.special.push(s);
         else if (tier === 'dual') entry.dual.push(s);
         else entry.single.push(s);
@@ -5262,9 +5338,9 @@ function BomAdminPanel({
                                     }}
                                   >
                                     <div style={{ display: "flex", gap: 3, flexWrap: "wrap", alignItems: "center" }}>
-                                      {copyDraft.skus.filter((sku) => (sku.colourTier || "single") === tierName).length > 0 ? (
+                                      {copyDraft.skus.filter((sku) => inferBomAdminColourTier(sku) === tierName).length > 0 ? (
                                         copyDraft.skus
-                                          .filter((sku) => (sku.colourTier || "single") === tierName)
+                                          .filter((sku) => inferBomAdminColourTier(sku) === tierName)
                                           .map((sku) => renderDraftColourChip(sku))
                                       ) : (
                                         <span style={{ fontSize: 9, color: "#cbd5e1" }}>—</span>

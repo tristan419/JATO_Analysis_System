@@ -39,7 +39,12 @@ from app.services.order_genius_service import (
     update_quantity_cell,
     update_remark,
 )
-from app.services.ordering_normalization import clean_text, normalize_brand, normalize_brand_text
+from app.services.ordering_normalization import (
+    clean_text,
+    infer_colour_tier,
+    normalize_brand,
+    normalize_brand_text,
+)
 from app.services.order_quantity_parser import parse_order_quantity_xlsx
 from app.services.country_material_finance_import_service import (
     parse_country_material_finance_image,
@@ -1165,6 +1170,13 @@ def create_material_sku(
         bom_template=bom_template,
         powertrain=powertrain,
         colour_hex=colour_hex,
+        colour_tier=infer_colour_tier(
+            colour,
+            colour_type,
+            body.get("editionTag", body.get("edition_tag")),
+            colour_code,
+            colour_hex,
+        ),
         lifecycle_status="active",
         is_active=True,
         is_published=False,
