@@ -95,7 +95,7 @@ button, input, select, textarea {
 
 .route-diagnostics-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   border: 1px solid var(--c-border-soft);
   background: var(--c-surface);
 }
@@ -131,6 +131,32 @@ button, input, select, textarea {
 .route-diagnostics-muted {
   color: var(--c-text-secondary);
   font-size: 12px;
+}
+
+.route-diagnostics-decision {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  border: 1px solid var(--c-border-soft);
+  background: var(--c-surface);
+}
+
+.route-diagnostics-decision > div {
+  min-width: 0;
+  padding: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.route-diagnostics-decision > div + div {
+  border-left: 1px solid var(--c-border-light);
+}
+
+.route-diagnostics-decision p {
+  color: var(--c-text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
 }
 
 .route-diagnostics-table-wrap {
@@ -191,6 +217,15 @@ button, input, select, textarea {
 
   .route-diagnostics-panel:nth-child(2n) {
     border-right: 0;
+  }
+
+  .route-diagnostics-decision {
+    grid-template-columns: 1fr;
+  }
+
+  .route-diagnostics-decision > div + div {
+    border-top: 1px solid var(--c-border-light);
+    border-left: 0;
   }
 }
 

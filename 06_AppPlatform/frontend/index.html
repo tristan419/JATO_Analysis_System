@@ -33,12 +33,19 @@
           window.history.replaceState({}, "", next);
         }
 
-        function saveDecision(key, target, ttlMs) {
+        function saveDecision(key, target, ttlMs, details) {
           try {
-            window.localStorage.setItem(key, JSON.stringify({
+            var payload = {
               target: target,
+              createdAt: Date.now(),
               expiresAt: Date.now() + ttlMs
-            }));
+            };
+            if (details && typeof details === "object") {
+              Object.keys(details).forEach(function (name) {
+                payload[name] = details[name];
+              });
+            }
+            window.localStorage.setItem(key, JSON.stringify(payload));
           } catch (err) {}
         }
 
@@ -76,7 +83,10 @@
           return;
         }
         if (route === "cn" || route === "intl") {
-          saveDecision(manualKey, route, manualTtlMs);
+          saveDecision(manualKey, route, manualTtlMs, {
+            source: "manual",
+            reason: "Manual override from route parameter"
+          });
           cleanParam("route");
           redirectTo(route);
           return;
@@ -138,14 +148,30 @@
           var intl = results[1];
           var currentTarget = host === intlHost ? "intl" : "cn";
           var nextTarget = currentTarget;
+          var reason = "Both route probes failed; stay on the current host";
           if (cn.ok && intl.ok) {
             nextTarget = intl.ms + redirectMarginMs < cn.ms ? "intl" : "cn";
+            if (nextTarget === "intl") {
+              reason = "intl is faster than www by more than the redirect margin";
+            } else {
+              reason = "www is preferred unless intl is clearly faster";
+            }
           } else if (intl.ok && !cn.ok) {
             nextTarget = "intl";
+            reason = "www probe failed and intl probe succeeded";
           } else if (cn.ok && !intl.ok) {
             nextTarget = "cn";
+            reason = "intl probe failed and www probe succeeded";
           }
-          saveDecision(decisionKey, nextTarget, autoTtlMs);
+          saveDecision(decisionKey, nextTarget, autoTtlMs, {
+            source: "auto",
+            reason: reason,
+            cnOk: Boolean(cn.ok),
+            intlOk: Boolean(intl.ok),
+            cnMs: Math.round(cn.ms),
+            intlMs: Math.round(intl.ms),
+            marginMs: redirectMarginMs
+          });
           redirectTo(nextTarget);
         }).catch(function () {});
       })();
