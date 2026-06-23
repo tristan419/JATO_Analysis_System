@@ -10,6 +10,7 @@ profile:
   timeout_seconds: 30
   retry_attempts: 1
   retry_delay_seconds: 1
+  prefer_curl_download: true
   browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
