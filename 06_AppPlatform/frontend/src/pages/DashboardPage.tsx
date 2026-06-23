@@ -30,6 +30,7 @@ import { DEFAULT_POWERTRAINS, fuelFamilyColor, normalizePowertrainName, seriesCo
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 import { buildCategoryAxis, formatCompactBarLabel } from "../utils/plotlyDefaults";
 import { parseMonthLabel, toTimeOrdinal, compareTimeLabels } from "../utils/timeFormatting";
+import { isAbortError } from "../utils/filterOptions";
 import {
   type BubbleGroupDimension,
   type DashboardPageCache,
@@ -550,6 +551,7 @@ export function DashboardPage() {
     const filters = JSON.parse(filterPayloadStr) as Record<string, string[]>;
     setGroupedLoading(true);
     let cancelled = false;
+    const controller = new AbortController();
       const timer = setTimeout(async () => {
         setError("");
         try {
@@ -564,16 +566,21 @@ export function DashboardPage() {
             top_n: chartType === "rank" ? rankLimit : (tsTopNEnabled ? tsTopN : 9999),
             include_others: tsIncludeOthers,
             time_range: timeRangePayload,
-          });
+          }, { signal: controller.signal });
           if (!cancelled) {
             setGroupedItems(ensureArray(r.items));
             setHiddenSeries(new Set());
             setOthersDetail(ensureArray(r.others_detail));
           }
-        } catch (e) { if (!cancelled) setError((e as Error).message); }
+        } catch (e) { if (!cancelled && !isAbortError(e)) setError((e as Error).message); }
         finally { if (!cancelled) setGroupedLoading(false); }
       }, 300);
-      return () => { cancelled = true; clearTimeout(timer); setGroupedLoading(false); };
+      return () => {
+        cancelled = true;
+        controller.abort();
+        clearTimeout(timer);
+        setGroupedLoading(false);
+      };
   }, [tsMode, tsGroupDim, tsShareSplit, activeTab, tsTopN, tsTopNEnabled, tsIncludeOthers, chartType, rankLimit, filterPayloadStr, columns.length, timeRangePayload]);
 
   /* advanced chart */

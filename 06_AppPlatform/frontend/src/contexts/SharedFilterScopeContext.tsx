@@ -219,6 +219,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     new Map<string, { expiresAt: number; options: string[] }>(),
   );
   const syncOptionsAbortRef = useRef<AbortController | null>(null);
+  const overviewAbortRef = useRef<AbortController | null>(null);
   const prevPayloadRef = useRef("");
 
   const res = useMemo<ResolvedFilterColumns>(
@@ -311,7 +312,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     [],
   );
 
-  const loadOverview = useCallback(async () => {
+  const loadOverview = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError("");
     try {
@@ -319,15 +320,16 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
         filters: buildFilterPayload(),
         prefer_precomputed: true,
         top_n: 120,
-      });
+      }, { signal });
+      if (signal?.aborted) return;
       setOverview(overviewResponse);
       setYearSeries(overviewResponse.yearSeries ?? []);
       setMonthSeries(overviewResponse.monthSeries ?? []);
       setFilteredRowCount(overviewResponse.kpis.totalRows);
     } catch (err) { console.log("[SFS] boot ERROR:", err);
-      setError((err as Error).message);
+      if (!isAbortError(err)) setError((err as Error).message);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [buildFilterPayload]);
 
@@ -401,22 +403,40 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
           resolvedColumns,
           syncedSelections,
         );
-        const overviewResponse = await api.overview({
-          filters: initialFilters,
-          prefer_precomputed: true,
-          top_n: 120,
-        });
 
         prevPayloadRef.current = JSON.stringify(initialFilters);
         setColumns(items);
         setSelections(syncedSelections);
         setOptionsMap({ ...topLevelOptions, ...cascadedOptions });
-        setOverview(overviewResponse);
-        setYearSeries(overviewResponse.yearSeries ?? []);
-        setMonthSeries(overviewResponse.monthSeries ?? []);
-        setFilteredRowCount(overviewResponse.kpis.totalRows);
         setFiltersReady(true);
         bootCompleted.current = true;
+        setLoading(false);
+
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, 80);
+        });
+        if (bootId !== bootAttemptRef.current) return;
+        const overviewController = new AbortController();
+        overviewAbortRef.current?.abort();
+        overviewAbortRef.current = overviewController;
+        setLoading(true);
+        try {
+          const overviewResponse = await api.overview({
+            filters: initialFilters,
+            prefer_precomputed: true,
+            top_n: 120,
+          }, { signal: overviewController.signal });
+          if (overviewAbortRef.current !== overviewController) return;
+          setOverview(overviewResponse);
+          setYearSeries(overviewResponse.yearSeries ?? []);
+          setMonthSeries(overviewResponse.monthSeries ?? []);
+          setFilteredRowCount(overviewResponse.kpis.totalRows);
+        } finally {
+          if (overviewAbortRef.current === overviewController) {
+            overviewAbortRef.current = null;
+            setLoading(false);
+          }
+        }
       } catch (err) { console.log("[SFS] boot ERROR:", err);
         if (!isAbortError(err)) setError((err as Error).message);
       } finally {
@@ -434,6 +454,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
   useEffect(() => {
     return () => {
         syncOptionsAbortRef.current?.abort();
+        overviewAbortRef.current?.abort();
     };
   }, []);
 
@@ -449,7 +470,14 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     if (!filtersReady || columns.length === 0 || optionsSyncPending) return;
     if (prevPayloadRef.current === filterPayloadStr) return;
     prevPayloadRef.current = filterPayloadStr;
-    void loadOverview();
+    overviewAbortRef.current?.abort();
+    const controller = new AbortController();
+    overviewAbortRef.current = controller;
+    void loadOverview(controller.signal).finally(() => {
+      if (overviewAbortRef.current === controller) {
+        overviewAbortRef.current = null;
+      }
+    });
   }, [columns.length, filterPayloadStr, filtersReady, loadOverview, optionsSyncPending]);
 
   const scopeCacheSnapshot = useMemo<SharedFilterScopeCache>(

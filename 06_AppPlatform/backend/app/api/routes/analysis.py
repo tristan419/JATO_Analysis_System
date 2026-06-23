@@ -1,3 +1,5 @@
+import threading
+
 from fastapi import APIRouter, Depends, Response
 
 from app.api.cache_headers import set_strong_json_cache_headers
@@ -13,7 +15,11 @@ from app.api.schemas import (
     RvFinanceRequest,
     TimeSeriesRequest,
 )
-from app.core.config import MAX_DETAIL_PAGE_SIZE, MAX_EXPORT_ROWS
+from app.core.config import (
+    GROUPED_TIME_SERIES_PREWARM_ENABLED,
+    MAX_DETAIL_PAGE_SIZE,
+    MAX_EXPORT_ROWS,
+)
 from app.core.security import optional_viewer
 from app.services.query_service import (
     export_detail_csv,
@@ -27,9 +33,13 @@ from app.services.query_service import (
     query_positioning_map,
     query_rv_finance,
     query_time_series,
+    warm_grouped_time_series_cache,
 )
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
+
+if GROUPED_TIME_SERIES_PREWARM_ENABLED:
+    threading.Thread(target=warm_grouped_time_series_cache, daemon=True).start()
 
 
 @router.post("/query")
@@ -125,7 +135,7 @@ def detail_csv(
 @router.post("/time-series-grouped")
 def time_series_grouped(
     payload: GroupedTimeSeriesRequest,
-    _=Depends(optional_viewer),
+    user=Depends(optional_viewer),
 ) -> dict:
     return query_grouped_time_series(
         filters=payload.filters,
@@ -137,6 +147,7 @@ def time_series_grouped(
         time_range=(
             payload.time_range.model_dump() if payload.time_range is not None else None
         ),
+        cache_scope=user.role,
     )
 
 

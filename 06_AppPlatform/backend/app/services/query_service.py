@@ -1,8 +1,12 @@
 from uuid import uuid4
+import hashlib
 import io
+import json
+import logging
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -13,9 +17,15 @@ from app.core.config import (
     FILTER_OPTIONS_SNAPSHOT_TTL_SECONDS,
     GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES,
     GROUPED_TIME_SERIES_CACHE_TTL_SECONDS,
+    GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR,
+    GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED,
+    GROUPED_TIME_SERIES_PREWARM_GRAINS,
+    GROUPED_TIME_SERIES_PREWARM_GROUP_BY,
+    GROUPED_TIME_SERIES_PREWARM_SCOPES,
 )
 from app.infra import parquet_repository as repo
 
+LOGGER = logging.getLogger(__name__)
 
 # ── Column name candidates ──────────────────────────────────────
 COUNTRY_CANDIDATES = ["国家", "Country", "country"]
@@ -64,6 +74,7 @@ TOP_LEVEL_FILTER_CANDIDATE_SETS = [
     SEGMENT_CANDIDATES,
     POWERTRAIN_CANDIDATES,
 ]
+_GROUPED_TIME_SERIES_DISK_CACHE_SCHEMA = 1
 
 _top_level_filter_options_cache: (
     tuple[float, str, dict[str, list[str]]] | None
@@ -80,6 +91,7 @@ _overview_cache: dict[
 ] = {}
 _overview_cache_lock = threading.Lock()
 _GroupedTimeSeriesCacheKey = tuple[
+    str,
     tuple[tuple[str, tuple[str, ...]], ...],
     str,
     str | None,
@@ -98,6 +110,109 @@ _grouped_time_series_inflight: dict[
     threading.Event,
 ] = {}
 _grouped_time_series_cache_lock = threading.Lock()
+
+
+def _normalize_cache_scope(cache_scope: str | None) -> str:
+    return str(cache_scope or "viewer").strip().lower() or "viewer"
+
+
+def _grouped_time_series_disk_payload_key(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    dataset_token: str,
+) -> dict[str, object]:
+    return {
+        "schema": _GROUPED_TIME_SERIES_DISK_CACHE_SCHEMA,
+        "dataset": dataset_token,
+        "cacheKey": cache_key,
+    }
+
+
+def _grouped_time_series_disk_cache_path(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    dataset_token: str,
+) -> Path:
+    payload_key = _grouped_time_series_disk_payload_key(cache_key, dataset_token)
+    digest = hashlib.sha256(
+        json.dumps(payload_key, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR / f"{digest}.json"
+
+
+def _read_grouped_time_series_disk_cache(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    dataset_token: str,
+    now_epoch: float,
+) -> dict | None:
+    if not GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED:
+        return None
+    cache_path = _grouped_time_series_disk_cache_path(cache_key, dataset_token)
+    try:
+        if not cache_path.exists():
+            return None
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if payload.get("schema") != _GROUPED_TIME_SERIES_DISK_CACHE_SCHEMA:
+        return None
+    if payload.get("dataset") != dataset_token:
+        return None
+    cached_at = float(payload.get("cachedAt", 0.0) or 0.0)
+    if (now_epoch - cached_at) >= GROUPED_TIME_SERIES_CACHE_TTL_SECONDS:
+        return None
+    result = payload.get("result")
+    return result if isinstance(result, dict) else None
+
+
+def _prune_grouped_time_series_disk_cache() -> None:
+    if not GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED:
+        return
+    try:
+        cache_files = sorted(
+            GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR.glob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+        )
+    except OSError:
+        return
+    max_entries = max(1, int(GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES))
+    overflow = len(cache_files) - max_entries
+    if overflow <= 0:
+        return
+    for path in cache_files[:overflow]:
+        try:
+            path.unlink()
+        except OSError:
+            continue
+
+
+def _write_grouped_time_series_disk_cache(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    dataset_token: str,
+    result: dict,
+) -> None:
+    if not GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED:
+        return
+    try:
+        GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_path = _grouped_time_series_disk_cache_path(cache_key, dataset_token)
+        tmp_path = cache_path.with_suffix(f".{uuid4().hex}.tmp")
+        tmp_path.write_text(
+            json.dumps(
+                {
+                    "schema": _GROUPED_TIME_SERIES_DISK_CACHE_SCHEMA,
+                    "dataset": dataset_token,
+                    "cachedAt": time.time(),
+                    "result": result,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        tmp_path.replace(cache_path)
+        _prune_grouped_time_series_disk_cache()
+    except OSError as exc:
+        LOGGER.warning("Could not write grouped time-series cache: %s", exc)
 
 
 def _get_grouped_time_series_cache_hit(
@@ -140,6 +255,21 @@ def _store_grouped_time_series_cache(
         )
         _grouped_time_series_cache.pop(oldest_key, None)
     return result
+
+
+def _load_grouped_time_series_persistent_cache(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    dataset_token: str,
+) -> dict | None:
+    cached_result = _read_grouped_time_series_disk_cache(
+        cache_key,
+        dataset_token,
+        time.time(),
+    )
+    if cached_result is None:
+        return None
+    with _grouped_time_series_cache_lock:
+        return _store_grouped_time_series_cache(cache_key, cached_result)
 
 
 def _wait_for_grouped_time_series_cache(
@@ -1085,9 +1215,11 @@ def query_grouped_time_series(
     include_others: bool,
     share_split_by: str | None = None,
     time_range: dict[str, str] | None = None,
+    cache_scope: str | None = None,
 ) -> dict:
     normalized_grain = "year" if str(grain).lower() == "year" else "month"
     cache_key = (
+        _normalize_cache_scope(cache_scope),
         _normalize_query_cache_filters(filters),
         normalized_grain,
         str(group_by).strip() if group_by else None,
@@ -1102,6 +1234,12 @@ def query_grouped_time_series(
         cache_key,
         dataset_token,
         now,
+    )
+    if cached_result is not None:
+        return cached_result
+    cached_result = _load_grouped_time_series_persistent_cache(
+        cache_key,
+        dataset_token,
     )
     if cached_result is not None:
         return cached_result
@@ -1154,14 +1292,61 @@ def query_grouped_time_series(
             time_range=time_range,
         )
 
+        dataset_token = repo.current_dataset_token()
         with _grouped_time_series_cache_lock:
-            return _store_grouped_time_series_cache(cache_key, result)
+            cached_result = _store_grouped_time_series_cache(cache_key, result)
+        _write_grouped_time_series_disk_cache(
+            cache_key,
+            dataset_token,
+            cached_result,
+        )
+        return cached_result
     finally:
         if owner:
             with _grouped_time_series_cache_lock:
                 event = _grouped_time_series_inflight.pop(cache_key, None)
                 if event is not None:
                     event.set()
+
+
+def warm_grouped_time_series_cache() -> dict[str, int]:
+    warmed = 0
+    failed = 0
+    group_bys = [item for item in GROUPED_TIME_SERIES_PREWARM_GROUP_BY if item]
+    grains = [
+        "year" if str(item).strip().lower() == "year" else "month"
+        for item in GROUPED_TIME_SERIES_PREWARM_GRAINS
+        if item
+    ] or ["month"]
+    scopes = [
+        _normalize_cache_scope(item)
+        for item in GROUPED_TIME_SERIES_PREWARM_SCOPES
+        if item
+    ] or ["viewer"]
+
+    for scope in dict.fromkeys(scopes):
+        for grain in dict.fromkeys(grains):
+            for group_by in dict.fromkeys(group_bys):
+                try:
+                    query_grouped_time_series(
+                        filters={},
+                        grain=grain,
+                        group_by=group_by,
+                        top_n=10,
+                        include_others=False,
+                        cache_scope=scope,
+                    )
+                    warmed += 1
+                except Exception as exc:  # pragma: no cover - startup warming must not fail the API
+                    failed += 1
+                    LOGGER.warning(
+                        "Grouped time-series prewarm failed for scope=%s grain=%s group_by=%s: %s",
+                        scope,
+                        grain,
+                        group_by,
+                        exc,
+                    )
+    return {"warmed": warmed, "failed": failed}
 
 
 def _query_grouped_time_series_impl(

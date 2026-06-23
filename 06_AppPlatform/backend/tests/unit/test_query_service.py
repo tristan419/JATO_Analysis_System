@@ -1,8 +1,24 @@
 import threading
 
 import pandas as pd
+import pytest
 
 from app.services import query_service
+
+
+@pytest.fixture(autouse=True)
+def disable_grouped_time_series_disk_cache(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED",
+        False,
+    )
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR",
+        tmp_path,
+    )
+    query_service._clear_grouped_time_series_cache()
 
 
 def test_filters_options_batch_merges_requests_with_same_filters(
@@ -108,6 +124,64 @@ def test_query_grouped_time_series_caches_by_params_and_dataset_token(
     assert load_calls == 2
     assert first == second == third
     query_service._grouped_time_series_cache.clear()
+
+
+def test_query_grouped_time_series_uses_persistent_cache(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Brand": ["Alpha", "Beta"],
+            "2024": [10.0, 5.0],
+        }
+    )
+    load_calls = 0
+
+    def load_slice(columns, filters, limit, offset):
+        nonlocal load_calls
+        load_calls += 1
+        return frame.loc[:, columns].copy()
+
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED",
+        True,
+    )
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR",
+        tmp_path,
+    )
+    monkeypatch.setattr(
+        query_service.repo,
+        "current_dataset_token",
+        lambda: "dataset-a",
+    )
+    monkeypatch.setattr(query_service.repo, "list_columns", lambda: ["Brand", "2024"])
+    monkeypatch.setattr(query_service.repo, "load_slice", load_slice)
+
+    first = query_service.query_grouped_time_series(
+        filters={"Country": ["HU"]},
+        grain="year",
+        group_by="Brand",
+        top_n=2,
+        include_others=False,
+        cache_scope="viewer",
+    )
+    query_service._clear_grouped_time_series_cache()
+    second = query_service.query_grouped_time_series(
+        filters={"Country": ["HU"]},
+        grain="year",
+        group_by="Brand",
+        top_n=2,
+        include_others=False,
+        cache_scope="viewer",
+    )
+
+    assert load_calls == 1
+    assert first == second
+    assert list(tmp_path.glob("*.json"))
 
 
 def test_query_grouped_time_series_coalesces_concurrent_same_key(

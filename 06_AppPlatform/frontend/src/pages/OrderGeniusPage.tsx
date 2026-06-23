@@ -2371,6 +2371,10 @@ export function OrderGeniusPage() {
             <BomAdminPanel
               initialCopyTargetCountry={bomAdminCopyTargetCountry}
               onFobCountriesChanged={loadFobCountries}
+              onFobChanged={() => {
+                void loadFobCountries();
+                loadMatrices();
+              }}
             />
           </div>
         </div>
@@ -2479,6 +2483,7 @@ interface BomFinanceDrawerScope {
 interface BomAdminPanelProps {
   initialCopyTargetCountry?: string | null;
   onFobCountriesChanged?: () => void;
+  onFobChanged?: () => void;
 }
 
 type BomFinanceAction = {
@@ -2538,6 +2543,7 @@ function formatBomSourceLabel(
 function BomAdminPanel({
   initialCopyTargetCountry = null,
   onFobCountriesChanged,
+  onFobChanged,
 }: BomAdminPanelProps) {
   const [skus, setSkus] = useState<any[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
@@ -3065,7 +3071,9 @@ function BomAdminPanel({
       for (const mc of editFob.materialCodes) {
         await api.updateSkuFob(mc, { countryCode: editFob.countryCode, finalFobEur: editFob.fob });
       }
-      setEditFob(null); scheduleLoad(200);
+      setEditFob(null);
+      scheduleLoad(200);
+      onFobChanged?.();
     } catch (e) { alert(getErrorMessage(e)); }
   };
 
@@ -3845,6 +3853,7 @@ function BomAdminPanel({
       setAdjustCountryForm(prev => ({ ...prev, countryCode: res.targetCountryCode }));
       await load();
       onFobCountriesChanged?.();
+      onFobChanged?.();
     } catch (err) {
       setCopyCountryMessage(getErrorMessage(err));
     } finally {
@@ -3872,6 +3881,7 @@ function BomAdminPanel({
         `${res.countryCode} ${sign}${res.deltaEur}: ${res.adjusted} adjusted, ${res.skippedNegative} skipped, ${res.unchanged} unchanged.`,
       );
       await load();
+      onFobChanged?.();
     } catch (err) {
       setAdjustCountryMessage(getErrorMessage(err));
     } finally {
