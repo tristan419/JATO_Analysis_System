@@ -21,6 +21,7 @@ from app.services.msrp_workflow_service import (
     queue_reconciliation_conflicts_for_review,
     remap_current_price,
 )
+from app.services.msrp_monitoring_service import build_msrp_monitoring_events
 
 router = APIRouter(prefix="/msrp", tags=["msrp"])
 
@@ -51,6 +52,28 @@ def get_current_prices(
         jato_model,
         limit,
         offset,
+    )
+
+
+@router.get("/monitoring/events")
+def get_msrp_monitoring_events(
+    country: str | None = Query(default=None),
+    brand: str | None = Query(default=None),
+    jato_model: str | None = Query(default=None),
+    window_days: int = Query(default=30, ge=1, le=365),
+    threshold_pct: float = Query(default=0.0, ge=0.0, le=50.0),
+    limit: int = Query(default=500, ge=1, le=500),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("viewer")),
+) -> dict[str, object]:
+    return build_msrp_monitoring_events(
+        session,
+        country=country,
+        brand=brand,
+        jato_model=jato_model,
+        window_days=window_days,
+        threshold_pct=threshold_pct,
+        limit=limit,
     )
 
 

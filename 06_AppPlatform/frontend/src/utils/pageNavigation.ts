@@ -190,6 +190,7 @@ const ROUTE_ROLE_OVERRIDES: Record<string, MenuRole> = {
   "/market/ranking/brand": "viewer",
   "/market/ranking/model": "viewer",
   "/market/powertrain": "viewer",
+  "/market/msrp-monitor": "viewer",
   "/market/transfer": "viewer",
   "/market-scan": "viewer",
   "/msrp": "viewer",
@@ -250,6 +251,12 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
         items: [
           { label: "Overview", sublabel: "市场总览", to: "/market/overview", minRole: "viewer" },
           { label: "Advanced Analysis", sublabel: "高级分析", to: "/market/advanced-analysis", minRole: "viewer" },
+        ],
+      },
+      {
+        title: "Market Monitor / 市场监控",
+        items: [
+          { label: "MSRP监控", sublabel: "跨国调价", to: "/market/msrp-monitor", minRole: "viewer" },
         ],
       },
     ],

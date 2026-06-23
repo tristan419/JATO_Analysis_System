@@ -13703,3 +13703,621 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 /* Collapse animation handled by anime.js width tween + outBack easing */
+
+/* ── MSRP Cross-Country Monitor ───────────────────────────── */
+.msrp-monitor-page {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  color: #172033;
+}
+
+.msrp-monitor-topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.msrp-monitor-kicker {
+  margin: 0 0 4px;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-topbar h1 {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.msrp-monitor-subtitle {
+  margin: 6px 0 0;
+  color: #667085;
+  font-size: 13px;
+}
+
+.msrp-monitor-controls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(110px, 1fr));
+  gap: 8px;
+  min-width: min(620px, 100%);
+}
+
+.msrp-monitor-controls label {
+  display: grid;
+  gap: 4px;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.msrp-monitor-controls select {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid #cfd6df;
+  border-radius: 6px;
+  background: #fff;
+  color: #172033;
+  padding: 0 9px;
+}
+
+.msrp-monitor-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.msrp-monitor-summary div {
+  min-height: 72px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.msrp-monitor-summary span {
+  display: block;
+  color: #667085;
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+
+.msrp-monitor-summary strong {
+  display: block;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.msrp-monitor-powertrain-legend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.msrp-monitor-powertrain-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.msrp-monitor-powertrain-legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.msrp-monitor-warning-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.msrp-monitor-warning-list span {
+  border: 1px solid rgba(180, 83, 9, 0.26);
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #92400e;
+  padding: 6px 9px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.msrp-monitor-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 16px;
+  align-items: start;
+}
+
+.msrp-monitor-chart-shell {
+  position: relative;
+  min-height: 620px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+}
+
+.msrp-monitor-chart-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 0;
+}
+
+.msrp-monitor-chart-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.msrp-monitor-chart-head p {
+  margin: 4px 0 0;
+  color: #667085;
+  font-size: 12px;
+}
+
+.msrp-monitor-legend {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  color: #667085;
+  font-size: 11px;
+}
+
+.msrp-monitor-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.msrp-monitor-legend i {
+  display: inline-block;
+}
+
+.msrp-monitor-legend .old {
+  width: 12px;
+  height: 12px;
+  border: 2px dashed #d94a3a;
+  border-radius: 999px;
+}
+
+.msrp-monitor-legend .line {
+  width: 22px;
+  height: 0;
+  border-top: 2px dashed #d94a3a;
+}
+
+.msrp-monitor-legend .current {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #2563eb;
+}
+
+.msrp-monitor-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 560px;
+}
+
+.msrp-monitor-grid line {
+  stroke: #dfe6ef;
+  stroke-dasharray: 3 5;
+}
+
+.msrp-monitor-axis line {
+  stroke: #b8c2d2;
+}
+
+.msrp-monitor-axis text {
+  fill: #667085;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.msrp-monitor-point {
+  cursor: pointer;
+  outline: none;
+}
+
+.msrp-monitor-point:focus .msrp-monitor-current-dot {
+  stroke: #111827;
+  stroke-width: 3px;
+}
+
+.msrp-monitor-drop-line {
+  stroke: #d94a3a;
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+  opacity: 0.75;
+}
+
+.msrp-monitor-old-dot {
+  fill: #fff;
+  stroke: #d94a3a;
+  stroke-width: 2;
+  stroke-dasharray: 4 4;
+}
+
+.msrp-monitor-current-line {
+  stroke-width: 3;
+  stroke-linecap: round;
+  opacity: 0.88;
+}
+
+.msrp-monitor-current-dot {
+  stroke: #fff;
+  stroke-width: 2;
+  filter: drop-shadow(0 5px 8px rgba(15, 23, 42, 0.22));
+}
+
+.msrp-monitor-current-dot.is-selected {
+  stroke: #111827;
+  stroke-width: 3;
+}
+
+.msrp-monitor-point-label {
+  fill: #253044;
+  font-size: 11px;
+  font-weight: 760;
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.88);
+  stroke-width: 4px;
+}
+
+.msrp-monitor-empty {
+  position: absolute;
+  inset: 72px 12px 12px;
+  display: grid;
+  place-items: center;
+  color: #667085;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+}
+
+.msrp-monitor-deck {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.14);
+}
+
+.msrp-monitor-deck-head {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.msrp-monitor-deck-head span {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-deck-head strong {
+  font-size: 20px;
+  line-height: 1.15;
+}
+
+.msrp-monitor-deck-head small {
+  color: #667085;
+  font-size: 12px;
+}
+
+.msrp-monitor-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  padding: 10px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.msrp-monitor-tabs button {
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: #f6f8fb;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 760;
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.msrp-monitor-tabs button.is-active {
+  border-color: #cfd6df;
+  background: #fff;
+  color: #172033;
+}
+
+.msrp-monitor-deck-section,
+.msrp-monitor-country-list,
+.msrp-monitor-timeline,
+.msrp-monitor-source-panel {
+  padding: 14px;
+}
+
+.msrp-monitor-deck-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.msrp-monitor-deck-stats div {
+  min-height: 66px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 10px;
+}
+
+.msrp-monitor-deck-stats span,
+.msrp-monitor-detail small {
+  display: block;
+  color: #667085;
+  font-size: 11px;
+}
+
+.msrp-monitor-deck-stats strong {
+  display: block;
+  margin-top: 5px;
+  font-size: 16px;
+}
+
+.msrp-monitor-deck-stats small {
+  display: block;
+  margin-top: 4px;
+  color: #667085;
+  font-size: 10px;
+}
+
+.msrp-monitor-signal-list,
+.msrp-monitor-missing-length,
+.msrp-monitor-risk-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.msrp-monitor-signal-list span,
+.msrp-monitor-risk-reasons span {
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 5px 8px;
+  color: #475467;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.msrp-monitor-signal-list .is-good {
+  border-color: rgba(22, 163, 74, 0.24);
+  color: #15803d;
+  background: rgba(22, 163, 74, 0.08);
+}
+
+.msrp-monitor-missing-length strong {
+  width: 100%;
+  font-size: 12px;
+}
+
+.msrp-monitor-missing-length button,
+.msrp-monitor-country-list button,
+.msrp-monitor-timeline-list button {
+  width: 100%;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #172033;
+  cursor: pointer;
+}
+
+.msrp-monitor-missing-length button {
+  padding: 7px 9px;
+  text-align: left;
+  font-size: 12px;
+}
+
+.msrp-monitor-country-list {
+  display: grid;
+  gap: 8px;
+}
+
+.msrp-monitor-country-list button {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  text-align: left;
+}
+
+.msrp-monitor-country-list button.is-selected {
+  border-color: rgba(37, 99, 235, 0.45);
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.msrp-monitor-country-list span {
+  display: grid;
+  gap: 2px;
+}
+
+.msrp-monitor-country-list small {
+  color: #667085;
+}
+
+.msrp-monitor-country-list b {
+  color: #b42318;
+}
+
+.msrp-monitor-timeline input {
+  width: 100%;
+}
+
+.msrp-monitor-timeline-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.msrp-monitor-timeline-list button {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 4px 8px;
+  padding: 8px;
+  text-align: left;
+}
+
+.msrp-monitor-timeline-list span {
+  color: #667085;
+  font-size: 11px;
+  grid-row: span 2;
+}
+
+.msrp-monitor-timeline-list strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.msrp-monitor-timeline-list small {
+  color: #667085;
+  font-size: 11px;
+}
+
+.msrp-monitor-source-panel dl {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 8px 10px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.msrp-monitor-source-panel dt {
+  color: #667085;
+  font-weight: 700;
+}
+
+.msrp-monitor-source-panel dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.msrp-monitor-detail {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.msrp-monitor-detail header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.msrp-monitor-detail h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.msrp-monitor-detail header span {
+  color: #667085;
+  font-size: 12px;
+}
+
+.msrp-monitor-table-wrap {
+  overflow: auto;
+}
+
+.msrp-monitor-detail table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.msrp-monitor-detail th,
+.msrp-monitor-detail td {
+  padding: 9px 12px;
+  border-bottom: 1px solid #edf1f5;
+  text-align: left;
+  vertical-align: top;
+}
+
+.msrp-monitor-detail th {
+  color: #667085;
+  font-size: 10px;
+  text-transform: uppercase;
+  background: #f8fafc;
+}
+
+.msrp-monitor-detail tr {
+  cursor: pointer;
+}
+
+.msrp-monitor-detail tr.is-selected td {
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.msrp-monitor-detail td strong {
+  display: block;
+  color: #b42318;
+}
+
+@media (max-width: 1180px) {
+  .msrp-monitor-topbar {
+    flex-direction: column;
+  }
+  .msrp-monitor-controls,
+  .msrp-monitor-main {
+    grid-template-columns: 1fr;
+  }
+  .msrp-monitor-deck {
+    position: relative;
+    top: 0;
+    max-height: none;
+    order: -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .msrp-monitor-page {
+    padding: 12px;
+  }
+  .msrp-monitor-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .msrp-monitor-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .msrp-monitor-chart-head,
+  .msrp-monitor-detail header {
+    flex-direction: column;
+  }
+  .msrp-monitor-chart-shell {
+    min-height: 520px;
+  }
+}

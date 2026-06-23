@@ -1485,6 +1485,116 @@ export interface PriceHistoryEntry {
   createdAtUtc: string;
 }
 
+export interface MsrpMonitoringSource {
+  sourceCode: string | null;
+  sourceType: string | null;
+  extractorName: string | null;
+  extractorVersion: string | null;
+  sourceRegistryUrl: string | null;
+}
+
+export interface MsrpMonitoringEvidence {
+  sourceUrl: string | null;
+  sourceSnapshotPath: string | null;
+  matchConfidence: number | null;
+  matchStatus: string | null;
+  observationSourceUrl: string | null;
+  sourcePayloadHash: string | null;
+  observedAtUtc: string | null;
+  scrapeBatchId?: string | null;
+  scrapeBatchCode?: string | null;
+  dryrunRunId?: string | null;
+}
+
+export interface MsrpMonitoringTimelineEvent {
+  country: string;
+  countryLabel: string;
+  brand: string;
+  jatoModel: string;
+  jatoTrim: string;
+  jatoPowertrain: string;
+  changedAtUtc: string | null;
+  oldMsrpEur: number | null;
+  currentMsrpEur: number | null;
+  changeAmountEur: number | null;
+  changePct: number | null;
+  oldSourceMsrp: number | null;
+  currentSourceMsrp: number | null;
+  changeAmountSource: number | null;
+  sourceCurrency: string;
+  previousSourceCurrency: string;
+  sourceCurrencyChanged: boolean;
+  sourceStatus: string;
+  reviewFlag: boolean;
+  riskReasons: string[];
+  currentPriceId: string;
+  priceHistoryId: string;
+  currentObservationId: string;
+  previousObservationId: string;
+  lastConfirmedObservationId: string;
+  effectiveObservationId: string;
+  source: MsrpMonitoringSource;
+  evidence: MsrpMonitoringEvidence;
+  outlier?: boolean;
+  suspectedFalsePositive?: boolean;
+}
+
+export interface MsrpMonitoringModelEvent {
+  eventId: string;
+  brand: string;
+  jatoModel: string;
+  jatoPowertrain: string;
+  powertrainColor: string;
+  lengthMm: number | null;
+  lengthMissing: boolean;
+  lengthSource: string | null;
+  affectedCountryCount: number;
+  countryChangeCount: number;
+  timelineEventCount: number;
+  trimChangeCount: number;
+  medianChangePct: number | null;
+  minChangePct: number | null;
+  maxChangePct: number | null;
+  medianOldMsrpEur: number | null;
+  medianCurrentMsrpEur: number | null;
+  oldMsrpEurRange: { min: number | null; max: number | null };
+  currentMsrpEurRange: { min: number | null; max: number | null };
+  sourceRiskCount: number;
+  reviewRequiredCount: number;
+  outlierCount: number;
+  suspectedFalsePositiveCount: number;
+  multiCountrySync: boolean;
+  confidence: "high" | "medium" | "low" | string;
+  riskReasons: Record<string, number>;
+  countries: MsrpMonitoringTimelineEvent[];
+  timeline: MsrpMonitoringTimelineEvent[];
+}
+
+export interface MsrpMonitoringResponse {
+  schemaVersion: string;
+  generatedAtUtc: string;
+  filters: {
+    country: string | null;
+    brand: string | null;
+    jatoModel: string | null;
+    windowDays: number;
+    thresholdPct: number;
+    limit: number;
+  };
+  summary: {
+    eventCount: number;
+    timelineEventCount: number;
+    affectedCountryCount: number;
+    sourceRiskCount: number;
+    reviewRequiredCount: number;
+    outlierCount: number;
+    lengthMissingCount: number;
+  };
+  powertrainColors: Record<string, string>;
+  events: MsrpMonitoringModelEvent[];
+  warnings: string[];
+}
+
 export interface MsrpFinanceObservation {
   financeObservationId: string;
   observationId: string;

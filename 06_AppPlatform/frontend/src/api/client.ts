@@ -42,6 +42,7 @@ import type {
   MsrpFinanceObservation,
   MsrpFinanceObservationSummary,
   MsrpFinanceObservationsResponse,
+  MsrpMonitoringResponse,
   MsrpPriceSalesEffectivenessItem,
   MsrpPriceSalesEffectivenessResponse,
   MsrpPriceSalesEffectivenessSummary,
@@ -2343,6 +2344,24 @@ export const api = {
     }),
 
   /* ── MSRP Current Prices ───────────────────────── */
+  getMsrpMonitoringEvents: (params?: {
+    country?: string;
+    brand?: string;
+    jato_model?: string;
+    window_days?: number;
+    threshold_pct?: number;
+    limit?: number;
+  }) => {
+    const sp = new URLSearchParams();
+    if (params?.country) sp.set("country", params.country);
+    if (params?.brand) sp.set("brand", params.brand);
+    if (params?.jato_model) sp.set("jato_model", params.jato_model);
+    if (params?.window_days !== undefined) sp.set("window_days", String(params.window_days));
+    if (params?.threshold_pct !== undefined) sp.set("threshold_pct", String(params.threshold_pct));
+    if (params?.limit) sp.set("limit", String(params.limit));
+    const q = sp.toString();
+    return request<MsrpMonitoringResponse>(`/msrp/monitoring/events${q ? `?${q}` : ""}`);
+  },
   listMsrpSources: (params?: {
     source_code?: string;
     country?: string;

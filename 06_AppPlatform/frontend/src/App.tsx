@@ -49,6 +49,7 @@ const MarketSegmentsPage = lazy(() => import("./pages/MarketSegmentsPage").then(
 const MarketBrandRankingPage = lazy(() => import("./pages/MarketBrandRankingPage").then(m => ({ default: m.MarketBrandRankingPage })));
 const MarketModelRankingPage = lazy(() => import("./pages/MarketModelRankingPage").then(m => ({ default: m.MarketModelRankingPage })));
 const MarketPowertrainPage = lazy(() => import("./pages/MarketPowertrainPage").then(m => ({ default: m.MarketPowertrainPage })));
+const MsrpMonitorPage = lazy(() => import("./pages/MsrpMonitorPage").then(m => ({ default: m.MsrpMonitorPage })));
 const AdvancedAnalysisPage = lazy(() => import("./pages/AdvancedAnalysisPage").then(m => ({ default: m.AdvancedAnalysisPage })));
 const LeaseComparisonPage = lazy(() => import("./pages/LeaseComparisonPage").then(m => ({ default: m.LeaseComparisonPage })));
 const OrderGeniusPage = lazy(() => import("./pages/OrderGeniusPage").then(m => ({ default: m.OrderGeniusPage })));
@@ -98,6 +99,7 @@ const router = createBrowserRouter([
     { path: "market/ranking/brand", element: withPageLoader(<MarketBrandRankingPage />) },
     { path: "market/ranking/model", element: withPageLoader(<MarketModelRankingPage />) },
     { path: "market/powertrain", element: withPageLoader(<MarketPowertrainPage />) },
+    { path: "market/msrp-monitor", element: withPageLoader(<MsrpMonitorPage />) },
     { path: "market/transfer", element: withPageLoader(<AdvancedAnalysisPage />) },
     { path: "market/advanced-analysis", element: withPageLoader(<AdvancedAnalysisPage />) },
     { path: "product/current-msrp", element: withPageLoader(<MsrpPage />) },
