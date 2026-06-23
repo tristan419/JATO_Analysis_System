@@ -31,6 +31,9 @@ TRANSIENT_RECHECK_FAILURES = {
     "http_timeout",
     "network_unavailable",
 }
+BUSINESS_RESOLUTION_FAILURES = {
+    "model_not_currently_available",
+}
 
 
 def _load_country_artifact(path: Path) -> dict | None:
@@ -410,9 +413,16 @@ def _priority_weight(name: str, default: float) -> float:
         return default
 
 
-def _priority_band(score: float, source_repair_count: int, transient_count: int) -> str:
+def _priority_band(
+    score: float,
+    source_repair_count: int,
+    transient_count: int,
+    business_resolution_count: int = 0,
+) -> str:
     if source_repair_count <= 0 and transient_count > 0:
         return "recheck"
+    if source_repair_count <= 0 and business_resolution_count > 0:
+        return "business"
     if score >= 80 or source_repair_count >= 10:
         return "critical"
     if score >= 45 or source_repair_count >= 3:
@@ -422,13 +432,28 @@ def _priority_band(score: float, source_repair_count: int, transient_count: int)
     return "low"
 
 
-def _priority_review_assist(failure_reason: str, source_repair_count: int) -> dict[str, str]:
-    if source_repair_count <= 0:
+def _priority_review_assist(
+    failure_reason: str,
+    source_repair_count: int,
+    transient_count: int = 0,
+    business_resolution_count: int = 0,
+) -> dict[str, str]:
+    if source_repair_count <= 0 and transient_count > 0:
         return {
             "preferred": "rule_based_recheck",
             "llmFit": "low",
             "neuralNetworkFit": "not_recommended",
             "reason": "Historical pass exists; rerun or inspect network conditions before source repair.",
+        }
+    if source_repair_count <= 0 and business_resolution_count > 0:
+        return {
+            "preferred": "business_rule_review",
+            "llmFit": "low",
+            "neuralNetworkFit": "not_recommended",
+            "reason": (
+                "Official source indicates the model may be discontinued or unavailable; "
+                "confirm catalog coverage or replace the tracked model instead of repairing selectors."
+            ),
         }
     if failure_reason in {"no_observation_extracted", "validation_rejected_all"}:
         return {
@@ -481,6 +506,7 @@ def _source_issue_detail(
     recommended_strategy: str,
     last_good: dict[str, Any] | None,
     transient_recheck: bool,
+    business_resolution: bool = False,
 ) -> dict[str, Any]:
     source_url = _source_url(result)
     detail: dict[str, Any] = {
@@ -495,14 +521,15 @@ def _source_issue_detail(
         "extracted": _int_value(result.get("extracted")),
         "failureReason": failure_reason,
         "recommendedStrategy": recommended_strategy,
-        "sourceRepairIssue": not transient_recheck,
+        "sourceRepairIssue": not transient_recheck and not business_resolution,
         "transientRegression": transient_recheck,
-        "recommendedAction": (
-            "recheck_before_source_repair"
-            if transient_recheck
-            else "repair_source_definition"
-        ),
+        "businessResolution": business_resolution,
+        "recommendedAction": "repair_source_definition",
     }
+    if transient_recheck:
+        detail["recommendedAction"] = "recheck_before_source_repair"
+    elif business_resolution:
+        detail["recommendedAction"] = "business_resolution_required"
     for key in ("httpStatus", "finalUrl", "extractorName", "coverageLevel"):
         value = result.get(key)
         if value not in (None, ""):
@@ -526,6 +553,7 @@ def _source_issue_detail(
 def _priority_fields(group: dict[str, Any]) -> dict[str, Any]:
     source_repair_count = int(group["sourceRepairIssueCount"])
     transient_count = int(group["transientRegressionCount"])
+    business_resolution_count = int(group.get("businessResolutionCount") or 0)
     affected_country_count = len(group["affectedCountries"])
     host_counts = [int(data.get("count") or 0) for data in group["hosts"].values()]
     top_host_count = max(host_counts or [0])
@@ -534,17 +562,29 @@ def _priority_fields(group: dict[str, Any]) -> dict[str, Any]:
         + affected_country_count * _priority_weight("COUNTRY", 6.0)
         + top_host_count * _priority_weight("HOST_CLUSTER", 3.0)
         + transient_count * _priority_weight("TRANSIENT_RECHECK", 1.5)
+        + business_resolution_count * _priority_weight("BUSINESS_RESOLUTION", 4.0)
     )
     return {
         "priorityScore": round(score, 1),
-        "priorityBand": _priority_band(score, source_repair_count, transient_count),
+        "priorityBand": _priority_band(
+            score,
+            source_repair_count,
+            transient_count,
+            business_resolution_count,
+        ),
         "priorityWeights": {
             "sourceRepair": _priority_weight("SOURCE_REPAIR", 10.0),
             "country": _priority_weight("COUNTRY", 6.0),
             "hostCluster": _priority_weight("HOST_CLUSTER", 3.0),
             "transientRecheck": _priority_weight("TRANSIENT_RECHECK", 1.5),
+            "businessResolution": _priority_weight("BUSINESS_RESOLUTION", 4.0),
         },
-        "reviewAssist": _priority_review_assist(str(group["failureReason"]), source_repair_count),
+        "reviewAssist": _priority_review_assist(
+            str(group["failureReason"]),
+            source_repair_count,
+            transient_count,
+            business_resolution_count,
+        ),
     }
 
 
@@ -643,23 +683,29 @@ def _write_source_repair_backlog(
         reason = result.get("failureReason")
         if not reason:
             continue
+        reason_label = str(reason)
         country = str(result.get("country") or "").lower()
         source_code = result.get("sourceCode") or result.get("code") or ""
         recommended = result.get("recommendedStrategy") or "diagnose_with_msrp_page_analyzer"
         key = _source_key(country, result)
         last_good = last_known_good.get(key) if key else None
-        is_transient = bool(last_good) or str(reason) in TRANSIENT_RECHECK_FAILURES
-        group = groups.setdefault(reason, {
-            "failureReason": reason,
+        is_business_resolution = reason_label in BUSINESS_RESOLUTION_FAILURES
+        is_transient = (
+            bool(last_good) or reason_label in TRANSIENT_RECHECK_FAILURES
+        ) and not is_business_resolution
+        group = groups.setdefault(reason_label, {
+            "failureReason": reason_label,
             "count": 0,
             "transientRegressionCount": 0,
             "sourceRepairIssueCount": 0,
+            "businessResolutionCount": 0,
             "recommendedStrategies": {},
             "affectedCountries": set(),
             "brands": set(),
             "sources": [],
             "sourceDetails": [],
             "transientSources": [],
+            "businessSources": [],
             "hosts": {},
             "status": "new",
         })
@@ -668,14 +714,18 @@ def _write_source_repair_backlog(
             result=result,
             country=country,
             source_code=source_code,
-            failure_reason=reason,
+            failure_reason=reason_label,
             recommended_strategy=recommended,
             last_good=last_good,
             transient_recheck=is_transient,
+            business_resolution=is_business_resolution,
         )
         if is_transient:
             group["transientRegressionCount"] += 1
             group["transientSources"].append(source_detail)
+        elif is_business_resolution:
+            group["businessResolutionCount"] += 1
+            group["businessSources"].append(source_detail)
         else:
             group["sourceRepairIssueCount"] += 1
             group["sourceDetails"].append(source_detail)
@@ -708,17 +758,20 @@ def _write_source_repair_backlog(
         recommended_strategy = max(strategies, key=strategies.get) if strategies else "diagnose_with_msrp_page_analyzer"
         transient_count = int(group["transientRegressionCount"])
         source_repair_count = int(group["sourceRepairIssueCount"])
+        business_resolution_count = int(group["businessResolutionCount"])
+        recommended_action = "repair_source_definition"
+        if transient_count and not source_repair_count and not business_resolution_count:
+            recommended_action = "recheck_before_source_repair"
+        elif business_resolution_count and not source_repair_count:
+            recommended_action = "business_resolution_required"
         normalized_group = {
             "failureReason": group["failureReason"],
             "count": group["count"],
             "transientRegressionCount": transient_count,
             "sourceRepairIssueCount": source_repair_count,
+            "businessResolutionCount": business_resolution_count,
             **_priority_fields(group),
-            "recommendedAction": (
-                "recheck_before_source_repair"
-                if transient_count and not source_repair_count
-                else "repair_source_definition"
-            ),
+            "recommendedAction": recommended_action,
             "recommendedStrategy": recommended_strategy,
             "recommendedStrategies": strategies,
             "affectedCountries": sorted(group["affectedCountries"]),
@@ -726,6 +779,8 @@ def _write_source_repair_backlog(
             "affectedBrands": sorted(group["brands"]),
             "sampleSources": group["sources"][:20],
             "sourceRepairIssues": group["sourceDetails"],
+            "sampleBusinessResolutions": group["businessSources"][:8],
+            "businessResolutionIssues": group["businessSources"],
             "sampleTransientRegressions": group["transientSources"][:8],
             "transientRegressions": group["transientSources"],
             "topSourceHosts": _normalize_host_groups(group["hosts"]),
@@ -736,17 +791,31 @@ def _write_source_repair_backlog(
             normalized_group["referenceAssist"] = reference_assist
         normalized_groups.append(normalized_group)
     normalized_groups.sort(key=lambda item: (
-        0 if int(item["sourceRepairIssueCount"]) > 0 else 1,
+        (
+            0
+            if int(item["sourceRepairIssueCount"]) > 0
+            else 1
+            if int(item["businessResolutionCount"]) > 0
+            else 2
+            if int(item["transientRegressionCount"]) > 0
+            else 3
+        ),
         -float(item["priorityScore"]),
         -int(item["count"]),
         str(item["failureReason"]),
     ))
     transient_regression_count = sum(int(item["transientRegressionCount"]) for item in normalized_groups)
     source_repair_issue_count = sum(int(item["sourceRepairIssueCount"]) for item in normalized_groups)
+    business_resolution_count = sum(int(item["businessResolutionCount"]) for item in normalized_groups)
     source_issues = [
         source
         for item in normalized_groups
         for source in item.get("sourceRepairIssues") or []
+    ]
+    business_resolutions = [
+        source
+        for item in normalized_groups
+        for source in item.get("businessResolutionIssues") or []
     ]
     transient_regressions = [
         source
@@ -761,7 +830,9 @@ def _write_source_repair_backlog(
         "totalIssueCount": sum(int(item["count"]) for item in normalized_groups),
         "transientRegressionCount": transient_regression_count,
         "sourceRepairIssueCount": source_repair_issue_count,
+        "businessResolutionCount": business_resolution_count,
         "sourceIssues": source_issues,
+        "businessResolutionIssues": business_resolutions,
         "transientSourceRegressions": transient_regressions,
         "topSourceHosts": _normalize_host_groups(top_hosts),
         "groups": normalized_groups,
@@ -775,10 +846,11 @@ def _write_source_repair_backlog(
         f"Generated: {payload['generatedAt']}",
         f"Run ID: {payload.get('runId') or '-'}",
         f"Transient regressions: {payload['transientRegressionCount']}",
+        f"Business resolutions: {payload['businessResolutionCount']}",
         f"Source repair issues: {payload['sourceRepairIssueCount']}",
         "",
-        "| Failure reason | Priority | Count | Recheck | Source repair | Recommended strategy | Reference assist | Affected countries |",
-        "|---|---:|---:|---:|---:|---|---|---|",
+        "| Failure reason | Priority | Count | Recheck | Business | Source repair | Recommended strategy | Reference assist | Affected countries |",
+        "|---|---:|---:|---:|---:|---:|---|---|---|",
     ]
     for item in normalized_groups:
         reference_assist = item.get("referenceAssist") or {}
@@ -788,11 +860,12 @@ def _write_source_repair_backlog(
             else "-"
         )
         lines.append(
-            "| {reason} | {priority} | {count} | {transient} | {source_repair} | {strategy} | {reference} | {countries} |".format(
+            "| {reason} | {priority} | {count} | {transient} | {business} | {source_repair} | {strategy} | {reference} | {countries} |".format(
                 reason=item["failureReason"],
                 priority=f"{item['priorityBand']} {item['priorityScore']}",
                 count=item["count"],
                 transient=item["transientRegressionCount"],
+                business=item["businessResolutionCount"],
                 source_repair=item["sourceRepairIssueCount"],
                 strategy=item["recommendedStrategy"],
                 reference=reference_label,
@@ -833,6 +906,25 @@ def _write_source_repair_backlog(
                     source=source.get("sourceCode") or "-",
                     reason=source.get("failureReason") or "-",
                     last_good=source.get("lastKnownGoodRunId") or "-",
+                    strategy=source.get("recommendedStrategy") or "-",
+                )
+            )
+    if business_resolutions:
+        lines.extend([
+            "",
+            "## Business Resolution Queue",
+            "",
+            "| Country | Source | Brand | Host | Failure reason | Strategy |",
+            "|---|---|---|---|---|---|",
+        ])
+        for source in business_resolutions:
+            lines.append(
+                "| {country} | `{source}` | {brand} | {host} | {reason} | {strategy} |".format(
+                    country=str(source.get("countryCode") or "-").upper(),
+                    source=source.get("sourceCode") or "-",
+                    brand=source.get("brand") or "-",
+                    host=source.get("host") or "-",
+                    reason=source.get("failureReason") or "-",
                     strategy=source.get("recommendedStrategy") or "-",
                 )
             )

@@ -309,6 +309,86 @@ def test_v3_report_uses_artifact_history_when_output_dir_differs(
     assert backlog["transientSourceRegressions"][0]["lastKnownGoodRunId"] == previous_run_id
 
 
+def test_v3_report_splits_business_resolution_from_source_repair(
+    tmp_path: Path,
+) -> None:
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260623-082923",
+        "results": [
+            {
+                "country": "no",
+                "sourceCode": "mercedes_eqb_no_draft_scrapling",
+                "brand": "MERCEDES-BENZ",
+                "status": "empty",
+                "valid": 0,
+                "failureReason": "model_not_currently_available",
+                "recommendedStrategy": "exclude_or_replace_discontinued_model",
+                "sourceUrl": "https://www.mercedes-benz.no/passengercars/models/suv/eqb/overview.html",
+                "finalUrl": "https://www.mercedes-benz.no/our-brands/eqb-ikke-tilgjengelig/",
+            },
+            {
+                "country": "no",
+                "sourceCode": "toyota_yaris_cross_no_draft_scrapling",
+                "brand": "TOYOTA",
+                "status": "empty",
+                "valid": 0,
+                "failureReason": "source_url_redirected_to_homepage",
+                "recommendedStrategy": "update_source_url_or_confirm_model_availability",
+                "sourceUrl": "https://www.toyota.no/biler/yaris-cross",
+                "finalUrl": "https://www.toyota.no/",
+            },
+        ],
+    }
+    report_path = tmp_path / "dryrun_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    backlog = backlog_script.run(str(report_path), str(tmp_path))
+
+    assert backlog["totalIssueCount"] == 2
+    assert backlog["sourceRepairIssueCount"] == 1
+    assert backlog["businessResolutionCount"] == 1
+    assert backlog["transientRegressionCount"] == 0
+    assert [item["sourceCode"] for item in backlog["sourceIssues"]] == [
+        "toyota_yaris_cross_no_draft_scrapling",
+    ]
+    assert [item["sourceCode"] for item in backlog["businessResolutionIssues"]] == [
+        "mercedes_eqb_no_draft_scrapling",
+    ]
+
+    toyota_issue = backlog["sourceIssues"][0]
+    assert toyota_issue["sourceRepairIssue"] is True
+    assert toyota_issue["businessResolution"] is False
+    assert toyota_issue["recommendedAction"] == "repair_source_definition"
+
+    business_issue = backlog["businessResolutionIssues"][0]
+    assert business_issue["sourceRepairIssue"] is False
+    assert business_issue["businessResolution"] is True
+    assert business_issue["recommendedAction"] == "business_resolution_required"
+
+    groups = {
+        group["failureReason"]: group
+        for group in backlog["groups"]
+    }
+    business_group = groups["model_not_currently_available"]
+    assert business_group["sourceRepairIssueCount"] == 0
+    assert business_group["businessResolutionCount"] == 1
+    assert business_group["priorityBand"] == "business"
+    assert business_group["recommendedAction"] == "business_resolution_required"
+    assert business_group["reviewAssist"]["preferred"] == "business_rule_review"
+
+    homepage_group = groups["source_url_redirected_to_homepage"]
+    assert homepage_group["sourceRepairIssueCount"] == 1
+    assert homepage_group["businessResolutionCount"] == 0
+
+    markdown = (tmp_path / "msrp_source_repair_backlog.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Business resolutions: 1" in markdown
+    assert "## Business Resolution Queue" in markdown
+    assert "mercedes_eqb_no_draft_scrapling" in markdown
+
+
 def test_v3_report_marks_tesla_403_with_evkx_reference_policy(tmp_path: Path) -> None:
     report = {
         "schemaVersion": "msrp_dryrun_report_v3",
