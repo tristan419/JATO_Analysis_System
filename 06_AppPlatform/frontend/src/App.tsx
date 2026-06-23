@@ -1,4 +1,4 @@
-import { Suspense, lazy, Component, type ReactNode } from "react";
+import { Suspense, lazy, Component, useEffect, useState, type ReactNode } from "react";
 import { Navigate, createBrowserRouter, RouterProvider, useLocation } from "react-router-dom";
 import { SharedFilterScopeProvider } from "./contexts/SharedFilterScopeContext";
 import { CountryChatProvider } from "./contexts/CountryChatContext";
@@ -89,6 +89,112 @@ function RedirectPreserveSearch({ to }: { to: string }) {
   return <Navigate to={`${to}${location.search}${location.hash}`} replace />;
 }
 
+function getAppEntryScriptFromHtml(html: string): string | null {
+  const match = html.match(/<script[^>]+src="([^"]*\/assets\/index-[^"]+\.js)"/i);
+  return match?.[1] ?? null;
+}
+
+function getCurrentAppEntryScript(): string | null {
+  const script = Array.from(document.scripts).find((item) =>
+    item.src.includes("/assets/index-") && item.src.endsWith(".js"),
+  );
+  if (!script) return null;
+  try {
+    return new URL(script.src).pathname;
+  } catch {
+    return script.getAttribute("src");
+  }
+}
+
+function AppVersionNotice() {
+  const [latestEntryScript, setLatestEntryScript] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const currentEntryScript = getCurrentAppEntryScript();
+    if (!currentEntryScript) return undefined;
+
+    const checkLatestEntry = async () => {
+      try {
+        const response = await fetch(`/?version-check=${Date.now()}`, {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-cache" },
+        });
+        if (!response.ok) return;
+        const html = await response.text();
+        const nextEntryScript = getAppEntryScriptFromHtml(html);
+        if (!cancelled && nextEntryScript && nextEntryScript !== currentEntryScript) {
+          setLatestEntryScript(nextEntryScript);
+        }
+      } catch {
+        // Version checks should never interrupt the active workspace.
+      }
+    };
+
+    void checkLatestEntry();
+    const interval = window.setInterval(() => {
+      void checkLatestEntry();
+    }, 5 * 60 * 1000);
+    const handleFocus = () => {
+      void checkLatestEntry();
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleFocus);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleFocus);
+    };
+  }, []);
+
+  if (!latestEntryScript) return null;
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        left: 16,
+        right: 16,
+        bottom: 16,
+        zIndex: 10000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        padding: "12px 14px",
+        border: "1px solid #bfdbfe",
+        background: "rgba(239,246,255,0.98)",
+        boxShadow: "0 18px 45px rgba(15,23,42,0.18)",
+        color: "#1e3a8a",
+        fontSize: 13,
+        fontWeight: 800,
+      }}
+      role="status"
+    >
+      <span>New app version is available. Refresh to avoid stale Chrome assets.</span>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        style={{
+          border: "1px solid #2563eb",
+          background: "#2563eb",
+          color: "#ffffff",
+          padding: "8px 12px",
+          fontSize: 12,
+          fontWeight: 900,
+          letterSpacing: 1,
+          textTransform: "uppercase",
+          cursor: "pointer",
+        }}
+      >
+        Refresh
+      </button>
+    </div>
+  );
+}
+
 const router = createBrowserRouter([
   { path: "/login", element: (<AuthProvider>{withPageLoader(<LoginPage />)}</AuthProvider>) },
   { path: "/", element: (<AuthProvider><OAuthGate><SharedFilterScopeProvider><CountryChatProvider><RequireRole><Layout /></RequireRole></CountryChatProvider></SharedFilterScopeProvider></OAuthGate></AuthProvider>), children: [
@@ -136,4 +242,11 @@ const router = createBrowserRouter([
   ]},
 ]);
 
-export default function App() { return <RouterProvider router={router} />; }
+export default function App() {
+  return (
+    <>
+      <RouterProvider router={router} />
+      <AppVersionNotice />
+    </>
+  );
+}

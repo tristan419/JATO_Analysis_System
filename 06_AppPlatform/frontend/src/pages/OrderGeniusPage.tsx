@@ -2644,6 +2644,7 @@ function BomAdminPanel({
   const [copyCountryForm, setCopyCountryForm] = useState({ sourceCountryCode: "", targetCountryCode: "", overwriteExisting: false });
   const [copyCountryMessage, setCopyCountryMessage] = useState("");
   const [bomAdminNotice, setBomAdminNotice] = useState("");
+  const [bomAdminError, setBomAdminError] = useState("");
   const [copyingCountry, setCopyingCountry] = useState(false);
   const [adjustCountryForm, setAdjustCountryForm] = useState({ countryCode: "", deltaEur: "" });
   const [adjustCountryMessage, setAdjustCountryMessage] = useState("");
@@ -2891,6 +2892,7 @@ function BomAdminPanel({
     loadRef.current = true;
     currentLoadKeyRef.current = loadKey;
     setLoading(true);
+    setBomAdminError("");
     try {
       const normalizedSearch = String(s || "").trim().toUpperCase();
       const isCountry = /^[A-Z]{2}$/.test(normalizedSearch);
@@ -2936,7 +2938,11 @@ function BomAdminPanel({
       activeFobCountriesRef.current = nextActiveFobCountries;
       setCountries(nextCountries);
       setActiveFobCountries(nextActiveFobCountries);
-    } catch (e) { console.error('[BOM Admin]', e); }
+      setBomAdminError("");
+    } catch (e) {
+      console.error('[BOM Admin]', e);
+      setBomAdminError(getErrorMessage(e));
+    }
     finally {
       loadRef.current = false;
       currentLoadKeyRef.current = null;
@@ -4193,7 +4199,71 @@ function BomAdminPanel({
     return result;
   }, [groupByTemplate, sortedVersionEntriesByModelKey]);
 
+  const retryBomAdminLoad = () => {
+    void load(debouncedSearch || searchText || undefined);
+  };
+
+  const reLoginForBomAdmin = () => {
+    localStorage.removeItem("jato_auth_token");
+    localStorage.removeItem("jato_user_name");
+    localStorage.removeItem("jato_user_role");
+    window.location.href = "/login";
+  };
+
+  const renderBomAdminRecoveryPanel = (
+    title: string,
+    detail: string,
+    tone: "loading" | "error" | "empty",
+  ) => {
+    const borderColor = tone === "error" ? "#fecaca" : "#bfdbfe";
+    const background = tone === "error" ? "#fef2f2" : "#eff6ff";
+    const titleColor = tone === "error" ? "#991b1b" : "#1e3a8a";
+    return (
+      <div
+        style={{
+          margin: 16,
+          padding: 16,
+          border: `1px solid ${borderColor}`,
+          background,
+          color: "#334155",
+        }}
+      >
+        <div style={{ fontSize: 11, fontWeight: 900, letterSpacing: 2, color: titleColor, textTransform: "uppercase", marginBottom: 6 }}>
+          BOM Admin
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 900, color: "#0f172a", marginBottom: 6 }}>{title}</div>
+        <div style={{ fontSize: 13, lineHeight: 1.5, color: "#475569", maxWidth: 780 }}>{detail}</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 14 }}>
+          <button type="button" className="btn btn-sm btn-primary" onClick={retryBomAdminLoad}>Retry</button>
+          <button type="button" className="btn btn-sm btn-secondary" onClick={() => window.location.reload()}>Refresh app</button>
+          <button type="button" className="btn btn-sm btn-secondary" onClick={reLoginForBomAdmin}>Re-login</button>
+        </div>
+        {bomAdminError ? (
+          <div style={{ marginTop: 12, fontSize: 12, color: "#991b1b", fontWeight: 700 }}>
+            {bomAdminError}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  if (bomAdminError && skus.length === 0 && countries.length === 0 && !loading) {
+    return renderBomAdminRecoveryPanel(
+      "Could not load BOM data",
+      "Chrome may be using a stale session or asset cache. Retry the API first; refresh the app if the page was open during deployment; re-login if the token is expired.",
+      "error",
+    );
+  }
+
   if (loading && skus.length === 0 && countries.length === 0) return <div style={{ padding: 16, color: "#64748b" }}>Loading BOM data...</div>;
+
+  if (!loading && skus.length === 0 && countries.length === 0) {
+    return renderBomAdminRecoveryPanel(
+      "No BOM data returned",
+      "The request completed but returned no visible BOM rows or countries. Retry with the current search, refresh the app to pick up the latest bundle, or re-login if Chrome has stale account state.",
+      "empty",
+    );
+  }
 
   const bomHeaderBaseStyle = {
     background: "#334155",
