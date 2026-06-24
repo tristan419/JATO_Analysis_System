@@ -37,6 +37,7 @@ import {
 
 const SHARED_FILTER_SCOPE_CACHE_KEY = "shared-filter-scope";
 const PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
+export const FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS = 650;
 
 export type ResolvedFilterColumns = Record<FilterKey, string | null>;
 
@@ -196,7 +197,26 @@ interface InitialFilterMetadata {
   topLevelOptions: Partial<Record<FilterKey, string[]>>;
 }
 
-async function loadInitialFilterMetadata(
+function createSnapshotAbortController(parentSignal?: AbortSignal): {
+  cleanup: () => void;
+  controller: AbortController;
+} {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => {
+    controller.abort();
+  }, FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS);
+  const abortFromParent = () => controller.abort();
+  parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+  return {
+    cleanup: () => {
+      window.clearTimeout(timeout);
+      parentSignal?.removeEventListener("abort", abortFromParent);
+    },
+    controller,
+  };
+}
+
+export async function loadInitialFilterMetadata(
   loadFilterOptionsBatch: (
     payloads: FilterOptionsPayload[],
     signal?: AbortSignal,
@@ -204,7 +224,10 @@ async function loadInitialFilterMetadata(
   signal?: AbortSignal,
 ): Promise<InitialFilterMetadata> {
   try {
-    const snapshot = await api.filterMetadataSnapshot({ signal });
+    const snapshotAbort = createSnapshotAbortController(signal);
+    const snapshot = await api.filterMetadataSnapshot({
+      signal: snapshotAbort.controller.signal,
+    }).finally(snapshotAbort.cleanup);
     if (signal?.aborted) {
       throw new DOMException("Aborted", "AbortError");
     }
@@ -239,7 +262,7 @@ async function loadInitialFilterMetadata(
       return { columns, resolvedColumns, topLevelOptions };
     }
   } catch (err) {
-    if (isAbortError(err)) throw err;
+    if (isAbortError(err) && signal?.aborted) throw err;
   }
 
   const { items } = await api.columns({ signal });

@@ -6,14 +6,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 import {
+  FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS,
   SharedFilterScopeProvider,
   createSharedSelections,
   getInitialCascadeStartIndex,
+  loadInitialFilterMetadata,
   shouldSyncDashboardSearchToLocation,
   useSharedFilterScope,
 } from "../../contexts/SharedFilterScopeContext";
+import type { FilterOptionsPayload } from "../../utils/filterOptions";
 
 const apiMock = vi.hoisted(() => ({
+  columns: vi.fn(),
   filterMetadataSnapshot: vi.fn(),
   filterOptionsBatch: vi.fn(),
   overview: vi.fn(),
@@ -104,6 +108,9 @@ describe("SharedFilterScopeProvider boot", () => {
         })),
       });
     });
+    apiMock.columns.mockResolvedValue({
+      items: ["国家", "Body type", "细分市场", "动总规整", "Make", "Model", "Version name"],
+    });
     apiMock.overview.mockResolvedValue({
       kpis: {
         totalRows: 12,
@@ -119,6 +126,7 @@ describe("SharedFilterScopeProvider boot", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -161,5 +169,43 @@ describe("SharedFilterScopeProvider boot", () => {
       prefer_precomputed: true,
       top_n: 120,
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  });
+
+  it("falls back to columns when the filter snapshot is too slow", async () => {
+    vi.useFakeTimers();
+    apiMock.filterMetadataSnapshot.mockImplementation((init?: RequestInit) => (
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        }, { once: true });
+      })
+    ));
+    const loadBatch = vi.fn(async (items: FilterOptionsPayload[]) => (
+      items.map((item) => (
+        item.column === "国家" ? ["丹麦"]
+          : item.column === "Body type" ? ["SUV"]
+            : item.column === "细分市场" ? ["C"]
+              : item.column === "动总规整" ? ["ICE", "BEV"]
+                : []
+      ))
+    ));
+
+    const metadataPromise = loadInitialFilterMetadata(loadBatch);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS + 1);
+    });
+
+    await expect(metadataPromise).resolves.toMatchObject({
+      columns: ["国家", "Body type", "细分市场", "动总规整", "Make", "Model", "Version name"],
+      topLevelOptions: {
+        country: ["丹麦"],
+        body_type: ["SUV"],
+        segment: ["C"],
+        powertrain: ["ICE", "BEV"],
+      },
+    });
+    expect(apiMock.columns).toHaveBeenCalledTimes(1);
+    expect(loadBatch).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 });
