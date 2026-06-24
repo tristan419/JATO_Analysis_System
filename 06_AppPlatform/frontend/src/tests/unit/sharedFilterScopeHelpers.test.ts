@@ -7,6 +7,8 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 import {
   SharedFilterScopeProvider,
+  createSharedSelections,
+  getInitialCascadeStartIndex,
   shouldSyncDashboardSearchToLocation,
   useSharedFilterScope,
 } from "../../contexts/SharedFilterScopeContext";
@@ -55,6 +57,30 @@ describe("shouldSyncDashboardSearchToLocation", () => {
   it("prevents URL sync on self-managed routes like market scan and country copilot", () => {
     expect(shouldSyncDashboardSearchToLocation("/market-scan")).toBe(false);
     expect(shouldSyncDashboardSearchToLocation("/copilot")).toBe(false);
+  });
+});
+
+describe("getInitialCascadeStartIndex", () => {
+  it("skips the powertrain request when earlier filters use the full snapshot scope", () => {
+    expect(getInitialCascadeStartIndex(createSharedSelections({
+      country: ["丹麦", "德国"],
+      powertrain: ["ICE", "BEV"],
+    }), {
+      country: ["丹麦", "德国"],
+      body_type: ["SUV"],
+      segment: ["C"],
+      powertrain: ["ICE", "BEV"],
+    })).toBe(4);
+  });
+
+  it("keeps powertrain validation when a URL narrows earlier filters", () => {
+    expect(getInitialCascadeStartIndex(createSharedSelections({
+      country: ["丹麦"],
+      powertrain: ["ICE"],
+    }), {
+      country: ["丹麦", "德国"],
+      powertrain: ["ICE", "BEV"],
+    })).toBe(3);
   });
 });
 
@@ -123,6 +149,10 @@ describe("SharedFilterScopeProvider boot", () => {
     expect(screen.getByTestId("search").textContent).toContain("country=");
 
     await waitFor(() => expect(apiMock.overview).toHaveBeenCalledTimes(1));
+    expect(apiMock.filterOptionsBatch).toHaveBeenCalledTimes(1);
+    expect(apiMock.filterOptionsBatch.mock.calls[0]?.[0]).toEqual([
+      expect.objectContaining({ column: "Make" }),
+    ]);
     expect(apiMock.overview).toHaveBeenCalledWith({
       filters: {
         国家: ["丹麦"],

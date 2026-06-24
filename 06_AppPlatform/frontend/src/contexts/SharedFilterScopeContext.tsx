@@ -159,6 +159,31 @@ export function sanitizeTopLevelSelections(
   return next;
 }
 
+function selectionCoversAllOptions(values: string[], options: string[]): boolean {
+  if (values.length === 0) return true;
+  if (options.length === 0) return false;
+  const selected = new Set(values);
+  if (selected.size !== options.length) return false;
+  return options.every((option) => selected.has(option));
+}
+
+export function getInitialCascadeStartIndex(
+  selections: FilterSelections,
+  topLevelOptions: Partial<Record<FilterKey, string[]>>,
+): number {
+  const powertrainIndex = FILTER_ORDER.findIndex(({ key }) => key === "powertrain");
+  if (powertrainIndex < 0) return 0;
+
+  for (let index = 0; index < powertrainIndex; index += 1) {
+    const key = FILTER_ORDER[index].key;
+    if (!selectionCoversAllOptions(selections[key], topLevelOptions[key] ?? [])) {
+      return powertrainIndex;
+    }
+  }
+
+  return powertrainIndex + 1;
+}
+
 function summarizeScopeValues(values: string[]): string {
   if (values.length === 0) return "-";
   if (values.length <= 2) return values.join(" · ");
@@ -449,7 +474,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
         } = await fetchOnDemandCascadedOptions(
           resolvedColumns,
           initialSelections,
-          3,
+          getInitialCascadeStartIndex(initialSelections, topLevelOptions),
           loadFilterOptions,
           bootController.signal,
         );
