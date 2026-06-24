@@ -845,6 +845,13 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
   const resolvedTrackingCountry = deck
     ? resolveCountryOption(deck.metadata.availableCountries, currentTrackingCountry, deck.metadata.selectedTrackingCountry)
     : null;
+  const availablePeriodValues = useMemo(
+    () => new Set((deck?.metadata.availablePeriods ?? []).map((option) => option.value)),
+    [deck?.metadata.availablePeriods],
+  );
+  const controlPriceCountry = deck ? countryValue(deck.metadata.availableCountries, currentPriceCountry) : currentPriceCountry;
+  const controlTrackingCountry = deck ? countryValue(deck.metadata.availableCountries, currentTrackingCountry) : currentTrackingCountry;
+  const controlPeriod = period && availablePeriodValues.has(period) ? period : deck?.metadata.resolvedPeriod ?? period;
   const requestTopModels = useMemo(() => parseModelList(topModelText), [topModelText]);
   const requestHeroModels = useMemo(() => parseModelList(heroModelText), [heroModelText]);
   const requestSelectedCountries = useMemo(() => (
@@ -998,6 +1005,17 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
       refreshCurrentDeck();
     }
   }, [activePage, countryLimit, deck, heroModelText, loading, priceCountry, refreshCurrentDeck, resolvedTrackingCountry, salesMode, selectedFuelTypes, topModelText, topN]);
+
+  useEffect(() => {
+    if (!deck || loading) return;
+    const nextPriceCountry = priceCountry ? countryValue(deck.metadata.availableCountries, priceCountry) : "";
+    const nextTrackingCountry = trackingCountry ? countryValue(deck.metadata.availableCountries, trackingCountry) : "";
+    if (nextPriceCountry && nextPriceCountry !== priceCountry) setPriceCountry(nextPriceCountry);
+    if (nextTrackingCountry && nextTrackingCountry !== trackingCountry) setTrackingCountry(nextTrackingCountry);
+    if (period && !deck.metadata.availablePeriods.some((option) => option.value === period)) {
+      setPeriod(deck.metadata.resolvedPeriod);
+    }
+  }, [deck, loading, period, priceCountry, trackingCountry]);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -1250,7 +1268,8 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
 
   const slideTitle = deck?.pages[activePage].title ?? activeTab.label;
   const activeSalesModeLabel = salesModeLabel(salesMode);
-  const activePeriodLabel = shortPeriodLabel(period || deck?.metadata.resolvedPeriod || "");
+  const activePeriodValue = loading && period ? period : deck?.metadata.resolvedPeriod || period;
+  const activePeriodLabel = shortPeriodLabel(activePeriodValue);
   const requestedPeriodLabel = `${activeSalesModeLabel}${activePeriodLabel ? ` · ${activePeriodLabel}` : ""}`;
   const narrative = deck
     ? `${deck.metadata.labels.marketScopeLabel} · ${requestedPeriodLabel} · 价格市场 ${deck.metadata.selectedPriceCountry.label}`
@@ -1316,7 +1335,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
             </div>
             <label className="market-scan-field">
               <span>Track Country</span>
-              <select value={currentTrackingCountry} onChange={(event) => setTrackingCountry(event.target.value)}>
+              <select value={controlTrackingCountry} onChange={(event) => setTrackingCountry(event.target.value)}>
                 {(deck?.metadata.availableCountries ?? []).map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
@@ -1446,7 +1465,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
             </div>
             <label className="market-scan-field">
               <span>Price Market</span>
-              <select value={currentPriceCountry} onChange={(event) => setPriceCountry(event.target.value)}>
+              <select value={controlPriceCountry} onChange={(event) => setPriceCountry(event.target.value)}>
                 {(deck?.metadata.availableCountries ?? []).map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
@@ -1454,7 +1473,7 @@ export function HeroProductAnalysisView({ onSwitchToTransfer }: { onSwitchToTran
             </label>
             <label className="market-scan-field">
               <span>Period</span>
-              <select value={period || deck?.metadata.resolvedPeriod || ""} onChange={(event) => setPeriod(event.target.value)}>
+              <select value={controlPeriod} onChange={(event) => setPeriod(event.target.value)}>
                 {(deck?.metadata.availablePeriods ?? []).map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
