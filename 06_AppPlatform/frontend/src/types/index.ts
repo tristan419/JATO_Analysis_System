@@ -1118,6 +1118,7 @@ export interface HeroProductDeckResponse {
     selectedTrackingCountry: MarketScanCountryOption;
     selectedSegment: string;
     selectedFuelType: string;
+    selectedFuelTypes: string[];
     selectedSalesMode: HeroProductSalesMode;
     selectedPriceSource: HeroProductPriceSource;
     selectedCountryLimit?: number;
@@ -1126,6 +1127,7 @@ export interface HeroProductDeckResponse {
     availableCountries: MarketScanCountryOption[];
     availablePeriods: MarketScanCountryOption[];
     availablePriceSources: MarketScanCountryOption[];
+    availableFuelTypes?: MarketScanCountryOption[];
     labels: {
       pageTitle: string;
       periodLabel: string;
@@ -1165,6 +1167,7 @@ export interface HeroProductDeckRequest {
   sales_mode?: HeroProductSalesMode;
   segment?: string;
   fuel_type?: string;
+  fuel_types?: string[];
   price_source?: HeroProductPriceSource;
   top_n?: number;
   ranking_limit?: number;

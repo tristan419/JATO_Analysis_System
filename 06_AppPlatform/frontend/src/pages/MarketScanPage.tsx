@@ -2434,6 +2434,10 @@ export function MarketScanPage({
       buildDefaultMarketScanSlideLayouts(),
     ),
   );
+  const defaultMarketScanCountry = useMemo(
+    () => resolveDefaultMarketScanCountry(user?.primaryCountry),
+    [user?.primaryCountry],
+  );
   const [activePage, setActivePage] = useState<MarketScanPageKey>(
     () => {
       const urlPage = searchParams.get("activePage");
@@ -2446,8 +2450,7 @@ export function MarketScanPage({
     () => {
       const urlCountry = searchParams.get("country");
       if (urlCountry) return urlCountry;
-      try { const saved = sessionStorage.getItem("ms_country"); if (saved) return saved; } catch { /* ignore */ }
-      return resolveDefaultMarketScanCountry(user?.primaryCountry);
+      return null;
     },
   );
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(
@@ -2506,6 +2509,7 @@ export function MarketScanPage({
   const drilldownPickerRef = useRef<HTMLDivElement | null>(null);
   const bodyTypePickerRef = useRef<HTMLDivElement | null>(null);
   const countryOptions = deck?.metadata.availableCountries ?? [];
+  const currentCountry = selectedCountry ?? defaultMarketScanCountry;
 
   // Sync filter state back to URL search params
   const syncUrlParams = useCallback(() => {
@@ -2527,7 +2531,7 @@ export function MarketScanPage({
     const defaultFt = DEFAULT_FUEL_TYPES.slice().sort().join(",");
     if (ft !== defaultFt) params.set("fuelTypes", selectedFuelTypes.join(","));
     setSearchParams(params, { replace: true });
-    try { sessionStorage.setItem("ms_activePage", activePage); if (selectedCountry) sessionStorage.setItem("ms_country", selectedCountry); } catch { /* ignore */ }
+    try { sessionStorage.setItem("ms_activePage", activePage); } catch { /* ignore */ }
   }, [activePage, rankingLimit, salesMode, selectedBodyTypes, selectedCountry, selectedDrilldownSegments, selectedFuelTypes, selectedPeriod, selectedTimeRange, setSearchParams]);
 
   useEffect(() => {
@@ -2548,7 +2552,7 @@ export function MarketScanPage({
 
   useArrowCountryNavigation({
     options: countryOptions,
-    activeValue: selectedCountry || deck?.metadata.selectedCountry || DEFAULT_MARKET_SCAN_COUNTRY,
+    activeValue: currentCountry,
     onSelect: (value) => setSelectedCountry(value || null),
   });
 
@@ -2585,7 +2589,7 @@ export function MarketScanPage({
     const requestId = ++requestRef.current;
 
     // Fast path: use per-view cache if params haven't changed
-    const paramKey = `${selectedCountry || "_"}|${selectedFuelTypes.slice().sort().join(",")}|${selectedPeriod || "_"}|${JSON.stringify(selectedTimeRange)}|${selectedDrilldownSegments.slice().sort().join(",") || "_"}|${selectedBodyTypes.slice().sort().join(",") || "_"}|${rankingLimit}`;
+    const paramKey = `${currentCountry}|${selectedFuelTypes.slice().sort().join(",")}|${selectedPeriod || "_"}|${JSON.stringify(selectedTimeRange)}|${selectedDrilldownSegments.slice().sort().join(",") || "_"}|${selectedBodyTypes.slice().sort().join(",") || "_"}|${rankingLimit}`;
     const cachedView = deckCache.current[activePage];
     const cachedKey = deckCacheKey.current[activePage];
     if (cachedView && cachedKey === paramKey) {
@@ -2598,7 +2602,7 @@ export function MarketScanPage({
     setError("");
 
     api.marketScanDeck({
-      country: selectedCountry || undefined,
+      country: currentCountry,
       target_period: selectedPeriod || undefined,
       time_range: selectedTimeRange || undefined,
       fuel_types: selectedFuelTypes,
@@ -2638,7 +2642,7 @@ export function MarketScanPage({
     return () => {
       active = false;
     };
-  }, [activePage, rankingLimit, reloadToken, selectedBodyTypes, selectedCountry, selectedDrilldownSegments, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
+  }, [activePage, currentCountry, rankingLimit, reloadToken, selectedBodyTypes, selectedDrilldownSegments, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
 
   useEffect(() => {
     if (!deck) {
@@ -2695,7 +2699,6 @@ export function MarketScanPage({
     }
   }, [deck, selectedBodyTypes, selectedCountry, selectedDrilldownSegments, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
 
-  const currentCountry = selectedCountry ?? deck?.metadata.selectedCountry ?? "";
   const resolvedTimeRange = selectedTimeRange ?? deck?.metadata.selectedTimeRange ?? null;
   const customRangeActive = isCustomTimeRange(resolvedTimeRange);
   const currentPeriod = resolvedTimeRange?.end ?? selectedPeriod ?? deck?.metadata.resolvedPeriod ?? "";
@@ -3449,7 +3452,7 @@ export function MarketScanPage({
       brand={trendDrawer.brand}
       model={trendDrawer.model}
       sourceTable={trendDrawer.sourceTable}
-      country={selectedCountry || ""}
+      country={currentCountry}
       segment={activePage === "drilldown" ? selectedDrilldownSegments[0] : undefined}
       fuelTypes={selectedFuelTypes}
       onClose={() => setTrendDrawer({ open: false, brand: "", sourceTable: "monthly_brand_ranking" })}

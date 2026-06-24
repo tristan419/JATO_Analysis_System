@@ -111,6 +111,7 @@ def hero_product_deck(
         sales_mode=payload.sales_mode,
         segment=payload.segment,
         fuel_type=payload.fuel_type,
+        fuel_types=payload.fuel_types,
         price_source=payload.price_source,
         top_n=payload.top_n,
         ranking_limit=payload.ranking_limit,

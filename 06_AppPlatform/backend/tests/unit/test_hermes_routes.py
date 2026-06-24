@@ -92,6 +92,11 @@ def _make_msrp_v3_report(run_id: str = "msrp-dryrun-20260611-120000") -> dict:
     }
 
 
+def _write_jsonl(path: Path, records: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+
+
 # ── /hermes/sentinel + deploy status ─────────────────────────────────
 
 class TestSentinelAndDeploy:
@@ -837,6 +842,111 @@ class TestSentinelAndDeploy:
             "audi_q4_e_tron_fi_draft_scrapling",
             "audi_q6_e_tron_fi_draft_scrapling",
         ]
+
+    def test_history_clusters_endpoint(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.hermes_history_service.list_history_clusters",
+            lambda level, y_axis, workstream, limit: {
+                "summary": {"level": level, "yAxis": y_axis, "clusterCount": 1},
+                "clusters": [{"clusterId": "cluster_1", "title": "Hermes"}],
+            },
+        )
+
+        resp = client.get("/hermes/history/clusters?level=feature&yAxis=workstream")
+
+        assert resp.status_code == 200
+        assert resp.json()["summary"]["clusterCount"] == 1
+
+    def test_progress_swimlanes_endpoint(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.hermes_history_service.get_progress_swimlanes",
+            lambda: {
+                "summary": {"total": 1, "blocking": 0},
+                "phases": ["PRD", "Implemented"],
+                "lanes": [{"workstream": "Hermes", "features": []}],
+            },
+        )
+
+        resp = client.get("/hermes/progress/swimlanes")
+
+        assert resp.status_code == 200
+        assert resp.json()["summary"]["total"] == 1
+
+    def test_workflow_cockpit_endpoint(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.hermes_history_service.get_workflow_cockpit",
+            lambda: {
+                "summary": {"sessionCount": 1, "modelCount": 1, "totalEvents": 2},
+                "models": [{"model": "codex", "eventCount": 2}],
+                "sessions": [{"sessionId": "hermes-session", "model": "codex"}],
+                "reviewItems": [],
+            },
+        )
+
+        resp = client.get("/hermes/workflow/cockpit")
+
+        assert resp.status_code == 200
+        assert resp.json()["summary"]["sessionCount"] == 1
+
+    def test_feature_goal_swimlanes_endpoint(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.hermes_feature_goal_service.get_feature_goal_swimlanes",
+            lambda: {
+                "summary": {"total": 1, "blocked": 0, "readyForPr": 1, "inProgress": 0, "verified": 0, "workstreamCount": 1},
+                "features": [{"featureId": "feature.hermes_feature_pmo_cockpit", "state": "ready_for_pr"}],
+                "lanes": [{"workstream": "Hermes", "features": [{"featureId": "feature.hermes_feature_pmo_cockpit"}]}],
+            },
+        )
+
+        resp = client.get("/hermes/goals/swimlanes")
+
+        assert resp.status_code == 200
+        assert resp.json()["summary"]["readyForPr"] == 1
+        assert resp.json()["lanes"][0]["workstream"] == "Hermes"
+
+    def test_reuse_candidates_endpoint(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.hermes_feature_goal_service.get_reuse_candidates_for_feature",
+            lambda feature_id: {
+                "featureId": feature_id,
+                "title": "Hermes Feature PMO Cockpit",
+                "workstream": "Hermes",
+                "candidates": [{"path": "06_AppPlatform/backend/app/services/hermes_history_service.py", "score": 8}],
+            },
+        )
+
+        resp = client.get("/hermes/reuse/candidates?featureId=feature.hermes_feature_pmo_cockpit")
+
+        assert resp.status_code == 200
+        assert resp.json()["featureId"] == "feature.hermes_feature_pmo_cockpit"
+        assert resp.json()["candidates"][0]["score"] == 8
+
+    def test_cost_heatmap_includes_astrbot_usage(self, client, tmp_path):
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _write_jsonl(
+            tmp_path / "hermes" / "agent_usage.jsonl",
+            [
+                {
+                    "usageId": "agent_usage_today",
+                    "recordedAt": now,
+                    "pricingModel": "deepseek-v4-flash",
+                    "inputTokens": 1,
+                    "outputTokens": 1,
+                    "estimatedCostCny": 0.42,
+                }
+            ],
+        )
+
+        with patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path), patch(
+            "app.api.routes.hermes.HERMES_DIR",
+            tmp_path / "hermes",
+        ):
+            resp = client.get("/hermes/cost-heatmap?days=1")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["totalCny"] == pytest.approx(0.42)
+        assert data["bySourceCny"]["astrbot"] == pytest.approx(0.42)
 
 
 # ── /hermes/gaps ──────────────────────────────────────────────────────

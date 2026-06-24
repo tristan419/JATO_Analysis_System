@@ -63,7 +63,9 @@ export function setOriginColorOverrides(overrides: Record<string, string>): void
 
 export function fuelColor(fuel: string): string {
   if (_fuelOverrides[fuel]) return _fuelOverrides[fuel];
-  return FUEL_COLORS[fuel] ?? "#94a3b8";
+  const normalized = normalizePowertrainName(fuel);
+  if (_fuelOverrides[normalized]) return _fuelOverrides[normalized];
+  return FUEL_COLORS[fuel] ?? FUEL_COLORS[normalized] ?? "#94a3b8";
 }
 
 export function originColor(origin: string): string {

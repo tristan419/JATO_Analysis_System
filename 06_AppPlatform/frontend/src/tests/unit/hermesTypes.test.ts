@@ -13,6 +13,7 @@ import type {
   HermesDailySummaryResponse,
   HermesPipelineHealthResponse,
   HermesSourceQualityResponse,
+  HermesWorkflowCockpitResponse,
 } from "../../types/hermes";
 
 // ── Type shape smoke tests ──────────────────────────────────────────
@@ -163,6 +164,65 @@ describe("Hermes type shapes", () => {
     };
     expect(resp.costStatus).toBe("ok");
     expect(resp.costCny).toBeLessThan(resp.dailyBudgetCny);
+  });
+
+  it("HermesWorkflowCockpitResponse groups model sessions", () => {
+    const resp: HermesWorkflowCockpitResponse = {
+      summary: {
+        totalEvents: 4,
+        sessionCount: 2,
+        modelCount: 2,
+        commitCount: 1,
+        testCount: 3,
+        blockingSessions: 0,
+        latestAt: "2026-06-12T10:00:00Z",
+      },
+      models: [
+        {
+          model: "codex",
+          sessionCount: 1,
+          eventCount: 2,
+          commitCount: 1,
+          testCount: 3,
+          latestAt: "2026-06-12T10:00:00Z",
+          workstreams: ["Hermes"],
+        },
+      ],
+      sessions: [
+        {
+          sessionId: "hermes-session",
+          model: "codex",
+          status: "ready_for_pr",
+          risk: "low",
+          latestAt: "2026-06-12T10:00:00Z",
+          lastEventTitle: "Workflow cockpit",
+          eventCount: 2,
+          commitCount: 1,
+          testCount: 3,
+          evidenceCount: 0,
+          gapCount: 0,
+          sources: ["git"],
+          workstreams: ["Hermes"],
+          featureIds: ["proposal.hermes_history_progress_cockpit"],
+          topFiles: ["06_AppPlatform/frontend/src/components/HermesWorkflowView.tsx"],
+          events: [
+            {
+              eventId: "git_abc123",
+              timestamp: "2026-06-12T10:00:00Z",
+              source: "git",
+              type: "commit",
+              title: "Workflow cockpit",
+              featureId: "proposal.hermes_history_progress_cockpit",
+              workstream: "Hermes",
+              commitSha: "abc123",
+            },
+          ],
+        },
+      ],
+      reviewItems: [],
+    };
+    expect(resp.sessions[0].model).toBe("codex");
+    expect(resp.summary.sessionCount).toBe(2);
   });
 
   it("HermesMermaidBlock handles different diagram types", () => {
