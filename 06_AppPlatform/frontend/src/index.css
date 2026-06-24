@@ -15760,7 +15760,6 @@ table.material-finance-table td:nth-child(n+5) {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
   min-height: 32px;
   border: 1px solid rgba(100, 116, 139, 0.24);
   border-radius: 6px;
@@ -15778,16 +15777,9 @@ table.material-finance-table td:nth-child(n+5) {
 }
 
 .hero-product-fuel-toggle.is-active {
-  border-color: color-mix(in srgb, var(--hero-product-fuel-color, #0f766e) 62%, #ffffff);
-  background: color-mix(in srgb, var(--hero-product-fuel-color, #0f766e) 14%, #ffffff);
-  color: #0f172a;
-}
-
-.hero-product-fuel-toggle-swatch {
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.16);
+  border-color: rgba(15, 118, 110, 0.48);
+  background: #0f766e;
+  color: #ffffff;
 }
 
 .hero-product-top-n-control {
@@ -17658,10 +17650,6 @@ table.material-finance-table td:nth-child(n+5) {
   min-height: 0;
 }
 
-.hero-product-page-stack--ranking {
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
 .hero-product-insight-callout {
   align-items: stretch;
   min-height: 124px;
@@ -17742,10 +17730,6 @@ table.material-finance-table td:nth-child(n+5) {
   gap: 8px;
   border-radius: 0;
   background: rgba(255, 255, 255, 0.9);
-}
-
-.hero-product-slide-frame .hero-product-ranking-panel--full {
-  height: 100%;
 }
 
 .hero-product-slide-frame .hero-product-distribution-panel {
@@ -17914,15 +17898,7 @@ table.material-finance-table td:nth-child(n+5) {
 }
 
 .hero-product-slide-frame .hero-product-share-ranking-row .hero-product-ranking-bar-fill {
-  display: flex;
-  align-items: stretch;
-  overflow: hidden;
-}
-
-.hero-product-ranking-fuel-segment {
-  display: block;
-  height: 100%;
-  min-width: 0;
+  background: #22c55e;
 }
 
 .hero-product-slide-frame .hero-product-share-ranking-row .hero-product-4wd-fill {

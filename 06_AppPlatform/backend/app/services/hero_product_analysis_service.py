@@ -54,7 +54,7 @@ PRICE_SOURCES = ("msrp", "jato")
 DEFAULT_SEGMENT = "SUV A0"
 DEFAULT_FUEL = "BEV"
 DEFAULT_PRICE_CURRENCY = "EUR"
-_HERO_PRODUCT_DECK_CACHE_SCHEMA_VERSION = 3
+_HERO_PRODUCT_DECK_CACHE_SCHEMA_VERSION = 4
 _HERO_PRODUCT_DECK_CACHE_PREFIX = f"ms:hero-product-deck:v{_HERO_PRODUCT_DECK_CACHE_SCHEMA_VERSION}"
 _HERO_PRODUCT_DECK_CACHE_TTL_SECONDS = 300
 _hero_product_deck_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
@@ -1093,11 +1093,6 @@ def _aggregate_models(
         channel_mix = _mix_payload(active_group, "__registration_type", ("Business", "Private", "Other"))
         channel_total = sum(channel_mix.values()) or sales
         drive_mix = _mix_payload(active_group, "__drive_detail", ("front", "rear", "4x4", "other"))
-        fuel_mix = _mix_payload(
-            active_group,
-            "__powertrain",
-            tuple(sorted(active_group["__powertrain"].dropna().astype(str).unique(), key=_fuel_type_sort_key)),
-        )
         row = {
             "brand": brand_text,
             "model": model_text,
@@ -1114,7 +1109,6 @@ def _aggregate_models(
                 for channel, value in channel_mix.items()
             },
             "driveMix": drive_mix,
-            "fuelMix": fuel_mix,
             "specs": _row_specs(spec_group, spec_columns),
             "price": _build_price_payload(
                 brand=brand_text,
@@ -1136,18 +1130,6 @@ def _aggregate_models(
         row["sharePct"] = _safe_share(float(row["sales"]), total_sales)
         row["barPct"] = _safe_share(float(row["sales"]), max_sales)
     return rows
-
-
-def _rerank_model_rows(model_rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-    rows = [dict(row) for row in model_rows if float(row.get("sales") or 0) > 0][:max(0, int(limit or 0))]
-    total_sales = sum(float(row["sales"]) for row in rows)
-    max_sales = max((float(row["sales"]) for row in rows), default=1.0)
-    for index, row in enumerate(rows, start=1):
-        row["rank"] = index
-        row["sharePct"] = _safe_share(float(row["sales"]), total_sales)
-        row["barPct"] = _safe_share(float(row["sales"]), max_sales)
-    return rows
-
 
 def _resolve_requested_models(
     model_rows: list[dict[str, Any]],
@@ -1755,10 +1737,6 @@ def _query_hero_product_deck_impl(
         _default_hero_rows(model_rows, min(6, top_n)),
         min(10, top_n),
     )
-    china_rows = _rerank_model_rows(
-        [row for row in model_rows if str(row.get("origin")) == "中系"],
-        top_n,
-    )
     benchmark_keys = {_source_pair(row) for row in [*top_rows[:6], *hero_rows]}
     benchmark_rows = [
         row
@@ -1905,9 +1883,8 @@ def _query_hero_product_deck_impl(
                 "priceRows": _build_price_panel_rows(top_rows[:5]),
             },
             "topDistribution": {
-                "title": "Top 车型全部排名",
+                "title": "Top 车型市场分布",
                 "models": top_rows,
-                "ranking": top_rows,
                 "distribution": top_distribution,
             },
             "heroTrend": {
@@ -1919,9 +1896,8 @@ def _query_hero_product_deck_impl(
                 "priceRows": _build_price_panel_rows(hero_rows[:6]),
             },
             "heroDistribution": {
-                "title": "中系车型销量排名",
-                "models": china_rows,
-                "ranking": china_rows,
+                "title": "Hero 车型市场分布",
+                "models": hero_rows,
                 "distribution": hero_distribution,
             },
         },
