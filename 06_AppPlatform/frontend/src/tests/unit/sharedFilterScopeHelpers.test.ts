@@ -31,6 +31,7 @@ let filterSnapshotFallbackTimeoutMs: typeof SharedFilterScopeContextModule.filte
 let getInitialCascadeStartIndex: typeof SharedFilterScopeContextModule.getInitialCascadeStartIndex;
 let isFilterSnapshotRecentlyUnavailable: typeof SharedFilterScopeContextModule.isFilterSnapshotRecentlyUnavailable;
 let loadInitialFilterMetadata: typeof SharedFilterScopeContextModule.loadInitialFilterMetadata;
+let shouldDeferInitialCascadeOptions: typeof SharedFilterScopeContextModule.shouldDeferInitialCascadeOptions;
 let shouldSyncDashboardSearchToLocation: typeof SharedFilterScopeContextModule.shouldSyncDashboardSearchToLocation;
 let useSharedFilterScope: typeof SharedFilterScopeContextModule.useSharedFilterScope;
 
@@ -45,6 +46,7 @@ beforeAll(async () => {
     getInitialCascadeStartIndex,
     isFilterSnapshotRecentlyUnavailable,
     loadInitialFilterMetadata,
+    shouldDeferInitialCascadeOptions,
     shouldSyncDashboardSearchToLocation,
     useSharedFilterScope,
   } = module);
@@ -104,6 +106,23 @@ describe("getInitialCascadeStartIndex", () => {
       country: ["丹麦", "德国"],
       powertrain: ["ICE", "BEV"],
     })).toBe(3);
+  });
+});
+
+describe("shouldDeferInitialCascadeOptions", () => {
+  it("defers lower-level option hydration when no lower selections need validation", () => {
+    expect(shouldDeferInitialCascadeOptions(createSharedSelections({
+      country: ["丹麦", "德国"],
+      powertrain: ["ICE", "BEV"],
+    }), 4)).toBe(true);
+  });
+
+  it("keeps foreground cascade when a lower-level URL selection needs validation", () => {
+    expect(shouldDeferInitialCascadeOptions(createSharedSelections({
+      country: ["丹麦"],
+      powertrain: ["BEV"],
+      make: ["Tesla"],
+    }), 4)).toBe(false);
   });
 });
 

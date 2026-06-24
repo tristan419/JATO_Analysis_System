@@ -188,6 +188,14 @@ export function getInitialCascadeStartIndex(
   return powertrainIndex + 1;
 }
 
+export function shouldDeferInitialCascadeOptions(
+  selections: FilterSelections,
+  startIndex: number,
+): boolean {
+  if (startIndex <= 0 || startIndex >= FILTER_ORDER.length) return false;
+  return FILTER_ORDER.slice(startIndex).every(({ key }) => selections[key].length === 0);
+}
+
 function summarizeScopeValues(values: string[]): string {
   if (values.length === 0) return "-";
   if (values.length <= 2) return values.join(" · ");
@@ -384,6 +392,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     new Map<string, { expiresAt: number; options: string[] }>(),
   );
   const syncOptionsAbortRef = useRef<AbortController | null>(null);
+  const deferredOptionsAbortRef = useRef<AbortController | null>(null);
   const overviewAbortRef = useRef<AbortController | null>(null);
   const prevPayloadRef = useRef("");
 
@@ -533,13 +542,48 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
               ),
             });
 
+        const cascadeStartIndex = getInitialCascadeStartIndex(initialSelections, topLevelOptions);
+        if (shouldDeferInitialCascadeOptions(initialSelections, cascadeStartIndex)) {
+          setColumns(items);
+          setSelections(initialSelections);
+          setOptionsMap(topLevelOptions);
+          setFiltersReady(true);
+          bootCompleted.current = true;
+          setLoading(false);
+
+          const deferredController = new AbortController();
+          deferredOptionsAbortRef.current = deferredController;
+          void fetchOnDemandCascadedOptions(
+            resolvedColumns,
+            initialSelections,
+            cascadeStartIndex,
+            loadFilterOptions,
+            deferredController.signal,
+            loadFilterOptionsBatch,
+          ).then(({ optionsMap: cascadedOptions }) => {
+            if (
+              cancelled
+              || bootId !== bootAttemptRef.current
+              || deferredOptionsAbortRef.current !== deferredController
+            ) return;
+            setOptionsMap((previous) => ({ ...previous, ...cascadedOptions }));
+          }).catch((err: unknown) => {
+            if (!isAbortError(err)) setError((err as Error).message);
+          }).finally(() => {
+            if (deferredOptionsAbortRef.current === deferredController) {
+              deferredOptionsAbortRef.current = null;
+            }
+          });
+          return;
+        }
+
         const {
           optionsMap: cascadedOptions,
           selections: syncedSelections,
         } = await fetchOnDemandCascadedOptions(
           resolvedColumns,
           initialSelections,
-          getInitialCascadeStartIndex(initialSelections, topLevelOptions),
+          cascadeStartIndex,
           loadFilterOptions,
           bootController.signal,
           loadFilterOptionsBatch,
@@ -562,6 +606,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     return () => {
       cancelled = true;
       bootController.abort();
+      deferredOptionsAbortRef.current?.abort();
       if (!bootCompleted.current) {
         bootDone.current = false;
       }
@@ -571,6 +616,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
   useEffect(() => {
     return () => {
         syncOptionsAbortRef.current?.abort();
+        deferredOptionsAbortRef.current?.abort();
         overviewAbortRef.current?.abort();
     };
   }, []);
@@ -640,6 +686,8 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
       if (index === -1) return;
 
       const cascadeStartIndex = index < 3 ? 3 : index;
+      deferredOptionsAbortRef.current?.abort();
+      deferredOptionsAbortRef.current = null;
       syncOptionsAbortRef.current?.abort();
       const controller = new AbortController();
       syncOptionsAbortRef.current = controller;
