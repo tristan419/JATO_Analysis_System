@@ -17416,10 +17416,16 @@ table.material-finance-table td:nth-child(n+5) {
 
 .hero-product-slide-body {
   grid-template-rows: minmax(0, 1fr);
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   gap: 0;
 }
 
 .hero-product-slide-content {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   height: 100%;
 }
 
@@ -17628,13 +17634,19 @@ table.material-finance-table td:nth-child(n+5) {
 
 .hero-product-slide-content > .hero-product-page-stack {
   flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .hero-product-page-stack {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
+  width: 100%;
+  max-width: 100%;
   height: 100%;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -17696,6 +17708,9 @@ table.material-finance-table td:nth-child(n+5) {
 
 .hero-product-page-stack > .market-scan-grid,
 .hero-product-page-stack > .market-scan-panel {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 0;
   height: 100%;
 }
@@ -17707,11 +17722,18 @@ table.material-finance-table td:nth-child(n+5) {
 .hero-product-slide-frame .hero-product-distribution-panel {
   display: flex;
   flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 0;
   padding: 10px;
   gap: 8px;
   border-radius: 0;
   background: rgba(255, 255, 255, 0.9);
+}
+
+.hero-product-slide-frame .hero-product-distribution-panel {
+  overflow: hidden;
 }
 
 .hero-product-slide-frame .hero-product-ranking-panel .market-scan-panel-head,
@@ -17775,6 +17797,9 @@ table.material-finance-table td:nth-child(n+5) {
 
 .hero-product-slide-frame .hero-product-distribution-panel .market-scan-panel-body {
   flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .hero-product-benchmark-grid,
@@ -17783,6 +17808,9 @@ table.material-finance-table td:nth-child(n+5) {
 }
 
 .hero-product-distribution-panel .hero-product-distribution-wrap {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -18114,6 +18142,9 @@ table.material-finance-table td:nth-child(n+5) {
 
 .hero-product-slide-frame .hero-product-distribution-panel .hero-product-distribution-wrap {
   flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   height: auto;
   min-height: 0;
 }
