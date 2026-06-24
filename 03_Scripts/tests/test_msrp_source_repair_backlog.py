@@ -93,10 +93,24 @@ def test_v3_report_can_build_backlog_from_country_details_only(tmp_path: Path) -
                         "brand": "AUDI",
                         "status": "empty",
                         "valid": 0,
+                        "extracted": 1,
+                        "rejected": 1,
                         "failureReason": "source_url_not_found",
                         "recommendedStrategy": "update_source_url",
                         "sourceUrl": "https://www.audi.at/modelle/q8",
                         "httpStatus": 404,
+                        "rejectedReasons": [
+                            "msrp_value=229.0 < 5000.0 for base_msrp",
+                        ],
+                        "rejectedRules": ["price_range"],
+                        "rejectionRuleCounts": {"price_range": 1},
+                        "sampleRejectedObservations": [
+                            {
+                                "officialModel": "Q8",
+                                "officialTrim": "Accessory",
+                                "msrpValue": 229,
+                            },
+                        ],
                     },
                     {
                         "sourceCode": "byd_seal_u_at_draft_scrapling",
@@ -128,6 +142,13 @@ def test_v3_report_can_build_backlog_from_country_details_only(tmp_path: Path) -
         "audi.at",
         "byd.com",
     ]
+    audi_issue = backlog["sourceIssues"][0]
+    assert audi_issue["rejectedRules"] == ["price_range"]
+    assert audi_issue["rejectionRuleCounts"] == {"price_range": 1}
+    assert (
+        audi_issue["sampleRejectedObservations"][0]["officialTrim"]
+        == "Accessory"
+    )
 
 
 def test_v3_report_marks_historical_pass_as_recheck(tmp_path: Path) -> None:

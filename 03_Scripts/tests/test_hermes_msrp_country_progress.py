@@ -135,6 +135,60 @@ def test_country_progress_preserves_finance_dryrun_counts(tmp_path, monkeypatch)
     assert "| TLS handshake failed | 1 |" in markdown
 
 
+def test_source_repair_backlog_preserves_rejection_diagnostics():
+    module = _load_module()
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260624-083348",
+        "countriesDetail": [
+            {
+                "countryCode": "fr",
+                "sources": [
+                    {
+                        "sourceCode": "nissan_qashqai_fr_draft_scrapling",
+                        "brand": "NISSAN",
+                        "sourceUrl": "https://www.nissan.fr/vehicules/neufs/qashqai.html",
+                        "status": "fail",
+                        "rawStatus": "dry_run",
+                        "valid": 0,
+                        "extracted": 1,
+                        "rejected": 1,
+                        "failureReason": "price_out_of_range",
+                        "recommendedStrategy": "check_currency_and_price_semantics",
+                        "rejectedReasons": [
+                            "msrp_value=229.0 < 5000.0 for base_msrp",
+                        ],
+                        "rejectedRules": ["price_range"],
+                        "rejectionRuleCounts": {"price_range": 1},
+                        "sampleRejectedObservations": [
+                            {
+                                "officialModel": "QASHQAI",
+                                "officialTrim": "Personnalisation et style",
+                                "msrpValue": 229,
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    backlog = module._source_repair_backlog_from_report(
+        report,
+        "2026-06-24T08:33:48Z",
+    )
+
+    issue = backlog["sourceIssues"][0]
+    assert issue["sourceCode"] == "nissan_qashqai_fr_draft_scrapling"
+    assert issue["rejectedRules"] == ["price_range"]
+    assert issue["rejectionRuleCounts"] == {"price_range": 1}
+    assert (
+        issue["sampleRejectedObservations"][0]["officialTrim"]
+        == "Personnalisation et style"
+    )
+    assert backlog["groups"][0]["sourceRepairIssues"][0] == issue
+
+
 def test_country_progress_keeps_stable_latest_when_active_run_regresses(tmp_path, monkeypatch):
     module = _load_module()
     latest_run_id = "msrp-dryrun-20260618-110029"

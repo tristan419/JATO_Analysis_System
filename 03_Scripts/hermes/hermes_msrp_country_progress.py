@@ -195,6 +195,67 @@ def _source_host(source: dict[str, Any]) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+def _source_issue_detail_from_report_source(
+    *,
+    source: dict[str, Any],
+    country_code: str,
+    source_code: str,
+    failure_reason: str,
+    recommended_strategy: str,
+    last_good: dict[str, Any] | None = None,
+    transient_recheck: bool = False,
+) -> dict[str, Any]:
+    source_url = _source_url(source)
+    detail: dict[str, Any] = {
+        "countryCode": country_code,
+        "sourceCode": source_code,
+        "brand": source.get("brand"),
+        "sourceUrl": source_url,
+        "host": _source_host(source),
+        "status": source.get("status"),
+        "rawStatus": source.get("rawStatus"),
+        "valid": _int_value(source.get("valid")),
+        "extracted": _int_value(source.get("extracted")),
+        "failureReason": failure_reason,
+        "recommendedStrategy": recommended_strategy,
+        "sourceRepairIssue": not transient_recheck,
+        "transientRegression": transient_recheck,
+        "recommendedAction": (
+            "recheck_before_source_repair"
+            if transient_recheck
+            else "repair_source_definition"
+        ),
+    }
+    for key in (
+        "httpStatus",
+        "finalUrl",
+        "extractorName",
+        "coverageLevel",
+        "rejectedReasons",
+        "rejectedRules",
+        "rejectionReasonCounts",
+        "rejectionRuleCounts",
+        "sampleRejectedObservations",
+    ):
+        value = source.get(key)
+        if value not in (None, ""):
+            detail[key] = value
+    error_text = str(source.get("extractorError") or source.get("error") or "")
+    if error_text:
+        detail["errorSnippet"] = error_text.replace("\n", " ")[:500]
+    if last_good:
+        detail["lastKnownGoodRunId"] = last_good.get("runId")
+        detail["lastKnownGoodAt"] = last_good.get("observedAt")
+        detail["lastKnownGoodValid"] = last_good.get("valid")
+    if not source_url:
+        detail.pop("sourceUrl", None)
+    if not detail.get("brand"):
+        detail.pop("brand", None)
+    if not detail.get("host"):
+        detail.pop("host", None)
+    return detail
+
+
 def _normalize_host_groups(hosts: dict[str, dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for host, data in hosts.items():
@@ -786,24 +847,27 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
                 "recommendedStrategies": {},
                 "affectedCountries": set(),
                 "sources": [],
+                "sourceDetails": [],
                 "transientSources": [],
                 "hosts": {},
                 "status": "new",
             })
             group["count"] += 1
+            source_detail = _source_issue_detail_from_report_source(
+                source=source,
+                country_code=country_code,
+                source_code=source_code,
+                failure_reason=reason,
+                recommended_strategy=recommended,
+                last_good=last_good,
+                transient_recheck=is_transient,
+            )
             if is_transient:
                 group["transientRegressionCount"] += 1
-                group["transientSources"].append({
-                    "countryCode": country_code,
-                    "sourceCode": source_code,
-                    "failureReason": reason,
-                    "recommendedStrategy": recommended,
-                    "lastKnownGoodRunId": last_good.get("runId"),
-                    "lastKnownGoodAt": last_good.get("observedAt"),
-                    "recommendedAction": "recheck_before_source_repair",
-                })
+                group["transientSources"].append(source_detail)
             else:
                 group["sourceRepairIssueCount"] += 1
+                group["sourceDetails"].append(source_detail)
             group["recommendedStrategies"][recommended] = group["recommendedStrategies"].get(recommended, 0) + 1
             if country_code:
                 group["affectedCountries"].add(country_code)
@@ -846,6 +910,7 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
             "affectedCountries": sorted(group["affectedCountries"]),
             "affectedCountryCount": len(group["affectedCountries"]),
             "sampleSources": group["sources"][:20],
+            "sourceRepairIssues": group["sourceDetails"][:20],
             "sampleTransientRegressions": group["transientSources"][:8],
             "topSourceHosts": _normalize_host_groups(group["hosts"]),
             "status": group["status"],
@@ -858,6 +923,16 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
     ))
     transient_regression_count = sum(int(item["transientRegressionCount"]) for item in normalized_groups)
     source_repair_issue_count = sum(int(item["sourceRepairIssueCount"]) for item in normalized_groups)
+    source_issues = [
+        source
+        for item in normalized_groups
+        for source in item.get("sourceRepairIssues") or []
+    ]
+    transient_regressions = [
+        source
+        for item in normalized_groups
+        for source in item.get("sampleTransientRegressions") or []
+    ]
     return {
         "schemaVersion": "msrp_source_repair_backlog_v1",
         "runId": report.get("runId"),
@@ -866,6 +941,8 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
         "totalIssueCount": sum(int(item["count"]) for item in normalized_groups),
         "transientRegressionCount": transient_regression_count,
         "sourceRepairIssueCount": source_repair_issue_count,
+        "sourceIssues": source_issues,
+        "transientSourceRegressions": transient_regressions,
         "topSourceHosts": _normalize_host_groups(top_hosts),
         "groups": normalized_groups,
     }

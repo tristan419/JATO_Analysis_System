@@ -535,7 +535,17 @@ def _source_issue_detail(
         detail["recommendedAction"] = "recheck_before_source_repair"
     elif business_resolution:
         detail["recommendedAction"] = "business_resolution_required"
-    for key in ("httpStatus", "finalUrl", "extractorName", "coverageLevel"):
+    for key in (
+        "httpStatus",
+        "finalUrl",
+        "extractorName",
+        "coverageLevel",
+        "rejectedReasons",
+        "rejectedRules",
+        "rejectionReasonCounts",
+        "rejectionRuleCounts",
+        "sampleRejectedObservations",
+    ):
         value = result.get(key)
         if value not in (None, ""):
             detail[key] = value
