@@ -471,7 +471,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
           initialSelections,
           3,
           loadFilterOptions,
-          undefined,
+          bootController.signal,
         );
         if (cancelled || bootId !== bootAttemptRef.current) return;
 
