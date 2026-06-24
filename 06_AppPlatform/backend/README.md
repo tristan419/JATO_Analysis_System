@@ -65,6 +65,8 @@ python -m pytest tests/unit
 - GET /v1/metadata/columns
 - POST /v1/filters/options
 - POST /v1/analysis/query
+- POST /v1/analysis/time-series-grouped
+  - response header `X-JATO-Server-Cache`: `MISS`, `MEMORY`, `DISK`, or `INFLIGHT`
 - GET /v1/crud/items
 - POST /v1/crud/items
 - PATCH /v1/crud/items/{item_id}
