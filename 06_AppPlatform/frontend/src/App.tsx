@@ -5,6 +5,7 @@ import { AuthProvider } from "./contexts/AuthContext";
 import { Layout } from "./components/Layout";
 import { RequireRole } from "./components/RequireRole";
 import { LoadingSurface } from "./components/LoadingSurface";
+import { SmartRouteGate } from "./components/SmartRouteGate";
 import { getOAuthRedirectTarget } from "./utils/oauthRedirect";
 
 /** Consume OAuth token params before any provider mounts, avoiding aborted fetches. */
@@ -251,6 +252,7 @@ const router = createBrowserRouter([
 export default function App() {
   return (
     <>
+      <SmartRouteGate />
       <RouterProvider router={router} />
       <AppVersionNotice />
     </>
