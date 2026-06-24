@@ -9,7 +9,11 @@ profile:
   url: https://www.nissan.fr/vehicules/neufs/juke.html
   tier: stealth
   headless: true
-  network_idle: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 30000
+  wait_ms: 500
+  disable_resources: true
   impersonate: chrome
   json_script_selector: script[type='application/ld+json']
   css:
