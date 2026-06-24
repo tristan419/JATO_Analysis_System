@@ -569,8 +569,8 @@ jobs:
                 echo "APP_GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED=true"
                 echo "APP_GROUPED_TIME_SERIES_PREWARM_ENABLED=true"
                 echo "APP_GROUPED_TIME_SERIES_PREWARM_GROUP_BY=动总规整,国家"
-                echo "APP_GROUPED_TIME_SERIES_PREWARM_GRAINS=month"
-                echo "APP_GROUPED_TIME_SERIES_PREWARM_SCOPES=viewer,admin"
+                echo "APP_GROUPED_TIME_SERIES_PREWARM_GRAINS=month,year"
+                echo "APP_GROUPED_TIME_SERIES_PREWARM_SCOPES=viewer,order_filler,editor,admin"
                 echo "APP_GROUPED_TIME_SERIES_PREWARM_FILTERS_JSON='[{\"国家\":[\"丹麦\",\"克罗地亚\",\"匈牙利\",\"奥地利\",\"希腊\",\"德国\",\"意大利\",\"挪威\",\"捷克\",\"斯洛伐克\",\"斯洛文尼亚\",\"比利时\",\"法国\",\"波兰\",\"瑞典\",\"瑞士\",\"罗马尼亚\",\"芬兰\",\"荷兰\",\"葡萄牙\",\"西班牙\"],\"动总规整\":[\"ICE\",\"HEV\",\"BEV\",\"MHEV\",\"PHEV\"]}]'"
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
               echo "[INFO] Google OAuth config updated"
@@ -992,8 +992,8 @@ jobs:
                 echo "APP_GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED=true"
                 echo "APP_GROUPED_TIME_SERIES_PREWARM_ENABLED=true"
                 echo "APP_GROUPED_TIME_SERIES_PREWARM_GROUP_BY=动总规整,国家"
-                echo "APP_GROUPED_TIME_SERIES_PREWARM_GRAINS=month"
-                echo "APP_GROUPED_TIME_SERIES_PREWARM_SCOPES=viewer,admin"
+                echo "APP_GROUPED_TIME_SERIES_PREWARM_GRAINS=month,year"
+                echo "APP_GROUPED_TIME_SERIES_PREWARM_SCOPES=viewer,order_filler,editor,admin"
                 echo "APP_GROUPED_TIME_SERIES_PREWARM_FILTERS_JSON='[{\"国家\":[\"丹麦\",\"克罗地亚\",\"匈牙利\",\"奥地利\",\"希腊\",\"德国\",\"意大利\",\"挪威\",\"捷克\",\"斯洛伐克\",\"斯洛文尼亚\",\"比利时\",\"法国\",\"波兰\",\"瑞典\",\"瑞士\",\"罗马尼亚\",\"芬兰\",\"荷兰\",\"葡萄牙\",\"西班牙\"],\"动总规整\":[\"ICE\",\"HEV\",\"BEV\",\"MHEV\",\"PHEV\"]}]'"
               } | sudo -n tee -a "$ENV_FILE" > /dev/null 2>&1 || true
               echo "[INFO] Google OAuth config updated"
