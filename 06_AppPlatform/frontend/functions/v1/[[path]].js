@@ -208,6 +208,8 @@ async function putCacheableResponse(cache, cacheKey, staleCacheKey, response, tt
     "STALE",
     `public, max-age=${staleSeconds}`,
   );
+  freshHeaders.delete("vary");
+  staleHeaders.delete("vary");
   await Promise.all([
     cache.put(cacheKey, new Response(body.slice(0), {
       status: response.status,
