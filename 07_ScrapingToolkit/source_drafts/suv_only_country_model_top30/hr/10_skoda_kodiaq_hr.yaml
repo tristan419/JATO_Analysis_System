@@ -4,22 +4,17 @@ brand: SKODA
 source_url: https://www.skoda.hr/kodiaq/kodiaq
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: http_text
 profile:
   url: https://www.skoda.hr/kodiaq/kodiaq
-  tier: http
-  headless: true
-  network_idle: false
-  load_dom: false
-  timeout_ms: 20000
-  impersonate: chrome
-  text_regex:
-    source_selector: body
-    include_element_html: true
-    entry_patterns:
-    - pattern: 'enginePrice\\":(?P<price>\d+\.\d+).*?technicalDataOptions\\":\\"priceFrom\\"'
-      official_trim: Kodiaq starting price
-      price_label: Cijena od
+  timeout_seconds: 45
+  headers:
+    User-Agent: Mozilla/5.0
+    Accept-Language: hr-HR,hr;q=0.9,en;q=0.8
+  entry_patterns:
+  - pattern: 'technicalDataOptions\\":\\"priceFrom\\".{0,1200}?enginePrice\\":(?P<price>\d+\.\d+)'
+    official_trim: Kodiaq starting price
+    price_label: Cijena od
   default_currency: EUR
   default_tax_included: true
   default_price_label: Cijena od
@@ -59,8 +54,9 @@ schedule:
   run_window_end: 05:00
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (HR market).
-  Replaced brittle CSS extraction with text_regex over the official model-page
-  embedded technicalData enginePrice priceFrom value.
+  Replaced brittle CSS extraction with http_text over the official model-page
+  embedded technicalData priceFrom enginePrice value to avoid Scrapling native
+  crashes on the large Skoda Croatia HTML.
 bootstrap_meta:
   country_model_rank: 10
   suggested_scope_kind: single_model
