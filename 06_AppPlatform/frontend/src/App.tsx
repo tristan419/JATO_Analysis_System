@@ -112,11 +112,39 @@ function getCurrentAppEntryScript(): string | null {
   }
 }
 
+const APP_VERSION_INITIAL_CHECK_DELAY_MS = 45_000;
+const APP_VERSION_IDLE_TIMEOUT_MS = 5_000;
+
+type AppVersionWindow = Window & typeof globalThis & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
+
+function scheduleAppVersionCheck(callback: () => void): () => void {
+  const appWindow = window as AppVersionWindow;
+  let idleHandle: number | null = null;
+  const delayHandle = window.setTimeout(() => {
+    if (typeof appWindow.requestIdleCallback === "function") {
+      idleHandle = appWindow.requestIdleCallback(callback, {
+        timeout: APP_VERSION_IDLE_TIMEOUT_MS,
+      });
+      return;
+    }
+    callback();
+  }, APP_VERSION_INITIAL_CHECK_DELAY_MS);
+
+  return () => {
+    window.clearTimeout(delayHandle);
+    if (idleHandle !== null) appWindow.cancelIdleCallback?.(idleHandle);
+  };
+}
+
 function AppVersionNotice() {
   const [latestEntryScript, setLatestEntryScript] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    let listenersAttached = false;
     const currentEntryScript = getCurrentAppEntryScript();
     if (!currentEntryScript) return undefined;
 
@@ -137,21 +165,32 @@ function AppVersionNotice() {
       }
     };
 
-    void checkLatestEntry();
+    const handleFocus = () => {
+      if (document.visibilityState === "hidden") return;
+      void checkLatestEntry();
+    };
+    const attachFocusListeners = () => {
+      if (listenersAttached) return;
+      listenersAttached = true;
+      window.addEventListener("focus", handleFocus);
+      document.addEventListener("visibilitychange", handleFocus);
+    };
+    const cancelInitialCheck = scheduleAppVersionCheck(() => {
+      void checkLatestEntry();
+      attachFocusListeners();
+    });
     const interval = window.setInterval(() => {
       void checkLatestEntry();
     }, 5 * 60 * 1000);
-    const handleFocus = () => {
-      void checkLatestEntry();
-    };
-    window.addEventListener("focus", handleFocus);
-    document.addEventListener("visibilitychange", handleFocus);
 
     return () => {
       cancelled = true;
+      cancelInitialCheck();
       window.clearInterval(interval);
-      window.removeEventListener("focus", handleFocus);
-      document.removeEventListener("visibilitychange", handleFocus);
+      if (listenersAttached) {
+        window.removeEventListener("focus", handleFocus);
+        document.removeEventListener("visibilitychange", handleFocus);
+      }
     };
   }, []);
 
