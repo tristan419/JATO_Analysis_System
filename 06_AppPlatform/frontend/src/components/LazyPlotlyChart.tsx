@@ -1,4 +1,4 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 
 import { LoadingSurface } from "./LoadingSurface";
@@ -32,6 +32,12 @@ const FALLBACK_SHELL_STYLE: CSSProperties = {
   border: "1px dashed var(--c-border-soft)",
   background: "linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(237, 243, 249, 0.92) 100%)",
 };
+const CHART_VIEWPORT_ROOT_MARGIN = "640px 0px";
+const CHART_VISIBILITY_FALLBACK_DELAY_MS = 1_200;
+
+type VisibilityWindow = Window & typeof globalThis & {
+  IntersectionObserver?: typeof IntersectionObserver;
+};
 
 function ChartFallback({ height }: { height: number }) {
   return (
@@ -46,9 +52,49 @@ function ChartFallback({ height }: { height: number }) {
   );
 }
 
+function resolvePlaceholderHeight(props: PlotlyChartProps): number {
+  if (typeof props.height === "number") return props.height;
+  if (typeof props.style?.height === "number") return props.style.height;
+  if (typeof props.layout?.height === "number") return props.layout.height;
+  return 450;
+}
+
 export function LazyPlotlyChart(props: PlotlyChartProps) {
+  const [shouldLoad, setShouldLoad] = useState(false);
+  const placeholderRef = useRef<HTMLDivElement | null>(null);
+  const height = resolvePlaceholderHeight(props);
+
+  useEffect(() => {
+    if (shouldLoad) return undefined;
+    const element = placeholderRef.current;
+    if (!element) return undefined;
+    const visibilityWindow = window as VisibilityWindow;
+    if (typeof visibilityWindow.IntersectionObserver !== "function") {
+      const handle = window.setTimeout(() => setShouldLoad(true), CHART_VISIBILITY_FALLBACK_DELAY_MS);
+      return () => window.clearTimeout(handle);
+    }
+    const observer = new visibilityWindow.IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setShouldLoad(true);
+        observer.disconnect();
+      }
+    }, {
+      rootMargin: CHART_VIEWPORT_ROOT_MARGIN,
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [shouldLoad]);
+
+  if (!shouldLoad) {
+    return (
+      <div ref={placeholderRef}>
+        <ChartFallback height={height} />
+      </div>
+    );
+  }
+
   return (
-    <Suspense fallback={<ChartFallback height={props.height ?? 450} />}>
+    <Suspense fallback={<ChartFallback height={height} />}>
       <PlotlyChart {...props} />
     </Suspense>
   );

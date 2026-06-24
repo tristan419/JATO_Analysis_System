@@ -7,7 +7,6 @@ import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { CollapsibleFilterSidebar } from "../components/CollapsibleFilterSidebar";
 import { LoadingActionButton } from "../components/LoadingActionButton";
 import { LoadingSurface } from "../components/LoadingSurface";
-import { preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
 import { DebouncedNumberInput } from "../components/deckControls/DebouncedNumberInput";
 import { DeckControlTabs, type DeckControlTabItem } from "../components/deckControls/DeckControlTabs";
@@ -884,21 +883,6 @@ export function DashboardPage() {
     () => rankingData.slice(0, rankLimit),
     [rankingData, rankLimit],
   );
-  const hasDeferredChartData = (
-    aggregatedSingle.length > 0
-    || filteredGrouped.length > 0
-    || advItems.length > 0
-    || mvItems.length > 0
-    || pmItems.length > 0
-  );
-
-  useEffect(() => {
-    if (dashboardBootstrapping || !hasDeferredChartData) return;
-    return scheduleDashboardIdlePreload(() => {
-      void preloadPlotlyChartRuntime();
-    });
-  }, [dashboardBootstrapping, hasDeferredChartData]);
-
   /* B7: time-window KPI — compute sales from filtered time series */
   const timeWindowSales = useMemo(() => {
     if (!timeRange) return kpis?.cumulativeSales;
