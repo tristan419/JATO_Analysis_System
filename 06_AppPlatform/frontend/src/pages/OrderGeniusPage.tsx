@@ -35,6 +35,7 @@ import type {
   MaterialSkuMatrixRow,
   MaterialUploadPreview,
   MatrixResponse,
+  MonthCell,
   OrderGeniusOptions,
   PublishBaselineResponse,
   QuantityCellUpdate,
@@ -248,6 +249,53 @@ function quantityCellKey(
   const country = String(countryCode || "").trim().toUpperCase();
   const material = String(materialCode || "").trim().toUpperCase();
   return `${country}|${material}|${month}`;
+}
+
+function patchMatrixQuantityCell(
+  matrices: Record<string, MatrixResponse>,
+  countryCode: string,
+  materialCode: string,
+  month: number,
+  nextCell: Partial<MonthCell>,
+): Record<string, MatrixResponse> {
+  const target = matrices[countryCode];
+  if (!target) return matrices;
+  const normalizedMaterial = materialCode.trim().toUpperCase();
+  let changed = false;
+  const monthKey = String(month);
+  const rows = target.rows.map((row) => {
+    if (row.materialCode.trim().toUpperCase() !== normalizedMaterial) return row;
+    const currentCell = row.months[monthKey] ?? { quantity: 0, isEditable: true, rowVersion: 0 };
+    const patchedCell: MonthCell = {
+      ...currentCell,
+      ...nextCell,
+      quantity: nextCell.quantity ?? currentCell.quantity,
+      isEditable: nextCell.isEditable ?? currentCell.isEditable,
+      rowVersion: nextCell.rowVersion ?? currentCell.rowVersion,
+    };
+    if (
+      patchedCell.quantity === currentCell.quantity
+      && patchedCell.isEditable === currentCell.isEditable
+      && patchedCell.rowVersion === currentCell.rowVersion
+    ) {
+      return row;
+    }
+    changed = true;
+    const months = { ...row.months, [monthKey]: patchedCell };
+    return {
+      ...row,
+      months,
+      ttl: Object.values(months).reduce((sum, cell) => sum + cell.quantity, 0),
+    };
+  });
+  if (!changed) return matrices;
+  return {
+    ...matrices,
+    [countryCode]: {
+      ...target,
+      rows,
+    },
+  };
 }
 
 function suggestedOrderingAccountCode(countries: string[]): string {
@@ -594,6 +642,8 @@ export function OrderGeniusPage() {
   // ── Quantity editing state ───────────────────────────────────────
   const [savingCells, setSavingCells] = useState<Set<string>>(new Set());
   const [cellErrors, setCellErrors] = useState<Record<string, string>>({});
+  const [quantityDrafts, setQuantityDrafts] = useState<Record<string, number>>({});
+  const quantityVersionRef = useRef<Record<string, number>>({});
   const gridApiRef = useRef<any>(null);
 
   // ── PI batch creation ─────────────────────────────────────────────
@@ -766,6 +816,14 @@ export function OrderGeniusPage() {
   // ── Grid data + cell editing ──────────────────────────────────────
 
   const flatRows = useMemo<OrderGeniusGridRow[]>(() => {
+    const getEffectiveQuantity = (r: MatrixRowWithCountry, month: number): number => {
+      const stateKey = quantityCellKey(r._countryCode, r.materialCode, month);
+      if (Object.prototype.hasOwnProperty.call(quantityDrafts, stateKey)) {
+        return quantityDrafts[stateKey] ?? 0;
+      }
+      return r.months?.[String(month)]?.quantity ?? 0;
+    };
+
     const makeRow = (r: MatrixRowWithCountry, indent = false): OrderGeniusGridRow => {
       const row: OrderGeniusGridRow = {
         materialCode: r.materialCode,
@@ -789,9 +847,9 @@ export function OrderGeniusPage() {
       for (let m = 1; m <= 12; m++) {
         const monthKey = `month_${m}` as `month_${number}`;
         const md = months[String(m)];
-        const quantity = md?.quantity ?? 0;
-        const amount = quantity * (r.fobEur ?? 0);
         const stateKey = quantityCellKey(r._countryCode, r.materialCode, m);
+        const quantity = getEffectiveQuantity(r, m);
+        const amount = quantity * (r.fobEur ?? 0);
         row[monthKey] = quantity;
         row[`_amount_${m}`] = amount;
         row._versions[monthKey] = md?.rowVersion ?? 0;
@@ -832,10 +890,9 @@ export function OrderGeniusPage() {
       const monthlySums: number[] = new Array(13).fill(0);
       const monthlyAmounts: number[] = new Array(13).fill(0);
       for (const row of rows) {
-        const months = row.months || {};
         const fob = row.fobEur ?? 0;
         for (let m = 1; m <= 12; m++) {
-          const quantity = months[String(m)]?.quantity ?? 0;
+          const quantity = getEffectiveQuantity(row, m);
           const amount = quantity * fob;
           monthlySums[m] += quantity;
           monthlyAmounts[m] += amount;
@@ -1042,7 +1099,7 @@ export function OrderGeniusPage() {
       }
     }
     return result;
-  }, [cellErrors, combinedMatrix.rows, consolidatedView, expandedProductGroups, groupByProduct, savingCells, selectedCountries.length]);
+  }, [cellErrors, combinedMatrix.rows, consolidatedView, expandedProductGroups, groupByProduct, quantityDrafts, savingCells, selectedCountries.length]);
 
   // Stable refs so callback identity doesn't change on re-render (prevents grid flash)
   const selCountriesRef = useRef(selectedCountries); selCountriesRef.current = selectedCountries;
@@ -1064,52 +1121,114 @@ export function OrderGeniusPage() {
       const field = colDef.field as string;
       if (!field?.startsWith("month_") || !data) return;
       if (data.__type === "groupHeader") return;
+      const monthField = field as `month_${number}`;
 
       const month = parseInt(field.replace("month_", ""), 10);
-      const key = quantityCellKey(data._countryCode, data.materialCode, month);
-      const oldQty = data._versions[field];
-      const qty = Number(newValue) || 0;
+      const countryCode = data._countryCode || selCountriesRef.current[0] || "SE";
+      const key = quantityCellKey(countryCode, data.materialCode, month);
+      const oldRowVersion = quantityVersionRef.current[key] ?? data._versions[field] ?? 0;
+      const oldQuantityRaw = Number(event.oldValue);
+      const oldQuantity = Number.isFinite(oldQuantityRaw) ? oldQuantityRaw : null;
+      const nextQuantityRaw = Number(newValue);
+      const qty = Number.isFinite(nextQuantityRaw) ? Math.max(0, nextQuantityRaw) : 0;
+      if (oldQuantity != null && qty === oldQuantity) return;
 
+      const clearDraft = () => {
+        setQuantityDrafts((prev) => {
+          if (!Object.prototype.hasOwnProperty.call(prev, key)) return prev;
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+      };
+
+      setQuantityDrafts((prev) => ({ ...prev, [key]: qty }));
       setSavingCells((prev) => new Set(prev).add(key));
       setCellErrors((prev) => {
         const next = { ...prev };
         delete next[key];
         return next;
       });
+      setMatrices((prev) => patchMatrixQuantityCell(prev, countryCode, data.materialCode, month, {
+        quantity: qty,
+        isEditable: data.editable !== false,
+        rowVersion: oldRowVersion,
+      }));
 
-      const countryCode = data._countryCode || selCountriesRef.current[0] || "SE";
       const payload: QuantityCellUpdate = {
         countryCode,
         orderYear: selYearRef.current,
         orderMonth: month,
         materialCode: data.materialCode,
         quantity: qty,
-        rowVersion: oldQty,
+        rowVersion: oldRowVersion,
       };
 
       try {
         const result = await api.updateQuantityCell(payload);
-        setMatrices((prev) => {
-          const target = prev[countryCode];
-          if (!target) return prev;
-          const rows = target.rows.map((r) => {
-            if (r.materialCode !== data.materialCode) return r;
-            const months = { ...r.months };
-            months[String(month)] = {
-              quantity: qty,
-              isEditable: true,
-              rowVersion: result.rowVersion,
-            };
-            const newTtl = Object.values(months).reduce((s, m) => s + m.quantity, 0);
-            return { ...r, months, ttl: newTtl };
-          });
-          return { ...prev, [countryCode]: { ...target, rows } };
-        });
+        data[monthField] = result.quantity;
+        data._versions[monthField] = result.rowVersion;
+        quantityVersionRef.current[key] = result.rowVersion;
+        setMatrices((prev) => patchMatrixQuantityCell(prev, countryCode, data.materialCode, month, {
+          quantity: result.quantity,
+          isEditable: true,
+          rowVersion: result.rowVersion,
+        }));
+        clearDraft();
       } catch (err: unknown) {
         const msg = getErrorMessage(err);
-        setCellErrors((prev) => ({ ...prev, [key]: msg }));
         if (msg.toLowerCase().includes("conflict") || msg.includes("409")) {
+          try {
+            const latestMatrix = await api.getOrderGeniusMatrix({
+              country: countryCode,
+              year: selYearRef.current,
+              materialCodeSearch: data.materialCode,
+            });
+            const normalizedMaterial = data.materialCode.trim().toUpperCase();
+            const latestRow = latestMatrix.rows.find(
+              (row) => row.materialCode.trim().toUpperCase() === normalizedMaterial,
+            );
+            const latestCell = latestRow?.months?.[String(month)];
+            const latestQuantity = latestCell?.quantity ?? 0;
+            if (oldQuantity != null && latestQuantity !== oldQuantity) {
+              throw new Error("Concurrent update conflict — refresh and try again.");
+            }
+            const retryResult = await api.updateQuantityCell({
+              ...payload,
+              rowVersion: latestCell?.rowVersion ?? oldRowVersion,
+            });
+            data[monthField] = retryResult.quantity;
+            data._versions[monthField] = retryResult.rowVersion;
+            quantityVersionRef.current[key] = retryResult.rowVersion;
+            setMatrices((prev) => patchMatrixQuantityCell(prev, countryCode, data.materialCode, month, {
+              quantity: retryResult.quantity,
+              isEditable: true,
+              rowVersion: retryResult.rowVersion,
+            }));
+            setCellErrors((prev) => {
+              if (!Object.prototype.hasOwnProperty.call(prev, key)) return prev;
+              const next = { ...prev };
+              delete next[key];
+              return next;
+            });
+            clearDraft();
+          } catch (retryErr: unknown) {
+            clearDraft();
+            setCellErrors((prev) => ({ ...prev, [key]: getErrorMessage(retryErr) }));
+            loadMatricesRef.current();
+          }
+        } else if (oldQuantity == null) {
+          clearDraft();
+          setCellErrors((prev) => ({ ...prev, [key]: msg }));
           loadMatricesRef.current();
+        } else {
+          clearDraft();
+          setCellErrors((prev) => ({ ...prev, [key]: msg }));
+          setMatrices((prev) => patchMatrixQuantityCell(prev, countryCode, data.materialCode, month, {
+            quantity: oldQuantity,
+            isEditable: data.editable !== false,
+            rowVersion: oldRowVersion,
+          }));
         }
       } finally {
         setSavingCells((prev) => {
@@ -2511,6 +2630,14 @@ type BomDraftFobEntry = {
   fobSourceMode?: string | null;
 };
 
+type BomFobPatch = {
+  materialCode: string;
+  countryCode: string;
+  finalFobEur: number | null;
+  paymentTermCode?: string | null;
+  fobSourceMode?: string | null;
+};
+
 type BomCopyDraft = {
   draftKey: string;
   sourceBomTemplate: string;
@@ -2622,6 +2749,10 @@ function getDraftBaseFob(
   return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
 }
 
+function bomMaterialKey(materialCode: unknown): string {
+  return String(materialCode ?? "").trim().toUpperCase();
+}
+
 function formatBomSourceLabel(
   modelName: string,
   sourceSheetName: unknown,
@@ -2691,6 +2822,7 @@ function BomAdminPanel({
   const [bulkFobEditors, setBulkFobEditors] = useState<Record<string, BomBulkFobEditor>>({});
   const [bulkFobErrors, setBulkFobErrors] = useState<Record<string, string>>({});
   const [bulkFobSavingKey, setBulkFobSavingKey] = useState<string | null>(null);
+  const [optimisticColourTiers, setOptimisticColourTiers] = useState<Record<string, BomAdminColourTier>>({});
   const [colourSurchargeRules, setColourSurchargeRules] = useState<ColourSurchargeRule[]>([]);
   const [colourSurchargeDrafts, setColourSurchargeDrafts] = useState<Record<string, string>>({});
   const [colourSurchargeStatus, setColourSurchargeStatus] = useState("");
@@ -2878,6 +3010,11 @@ function BomAdminPanel({
     return "";
   };
 
+  const getEffectiveColourTier = useCallback((sku: BomAdminSkuColourFields & { materialCode?: string | null }): BomAdminColourTier => {
+    const optimisticTier = optimisticColourTiers[bomMaterialKey(sku.materialCode)];
+    return optimisticTier ?? inferBomAdminColourTier(sku);
+  }, [optimisticColourTiers]);
+
   const copyTargetOptions = useMemo(() => {
     const map = new Map<string, string>();
     for (const code of sortedCountries) map.set(code, code);
@@ -2969,7 +3106,19 @@ function BomAdminPanel({
         setBomAdminNotice("");
       }
       const res = await api.getBomAdmin(Object.keys(params).length > 0 ? params : undefined);
-      setSkus(res.items || []);
+      const nextItems = res.items || [];
+      setSkus(nextItems);
+      setOptimisticColourTiers((current) => {
+        const next = { ...current };
+        for (const sku of nextItems) {
+          const materialKey = bomMaterialKey(sku?.materialCode);
+          if (!materialKey || !next[materialKey]) continue;
+          if (inferBomAdminColourTier(sku) === next[materialKey]) {
+            delete next[materialKey];
+          }
+        }
+        return Object.keys(next).length === Object.keys(current).length ? current : next;
+      });
       const nextCountries = res.countries || [];
       const nextActiveFobCountries = res.activeFobCountries || nextCountries;
       activeFobCountriesRef.current = nextActiveFobCountries;
@@ -2998,6 +3147,79 @@ function BomAdminPanel({
     if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
     loadTimerRef.current = setTimeout(() => load(), delay);
   }, [load]);
+
+  const patchBomSkus = useCallback((
+    materialCodes: string[],
+    updater: (sku: any) => any,
+  ) => {
+    const targetCodes = new Set(materialCodes.map(bomMaterialKey).filter(Boolean));
+    if (targetCodes.size === 0) return;
+    setSkus((current) => current.map((sku) =>
+      targetCodes.has(bomMaterialKey(sku?.materialCode)) ? updater(sku) : sku,
+    ));
+  }, []);
+
+  const patchBomFobs = useCallback((updates: BomFobPatch[]) => {
+    const updatesByMaterial = new Map<string, BomFobPatch[]>();
+    for (const update of updates) {
+      const materialKey = bomMaterialKey(update.materialCode);
+      const countryCode = update.countryCode.trim().toUpperCase();
+      if (!materialKey || !countryCode) continue;
+      const existing = updatesByMaterial.get(materialKey) ?? [];
+      existing.push({ ...update, countryCode });
+      updatesByMaterial.set(materialKey, existing);
+    }
+    if (updatesByMaterial.size === 0) return;
+    setSkus((current) => current.map((sku) => {
+      const materialUpdates = updatesByMaterial.get(bomMaterialKey(sku?.materialCode));
+      if (!materialUpdates) return sku;
+      const fobByCountry: Record<string, BomDraftFobEntry> = { ...(sku.fobByCountry || {}) };
+      for (const update of materialUpdates) {
+        const existing = fobByCountry[update.countryCode] || {};
+        fobByCountry[update.countryCode] = {
+          ...existing,
+          uploadedFobEur: update.finalFobEur,
+          finalFobEur: update.finalFobEur,
+          paymentTermCode: update.paymentTermCode ?? existing.paymentTermCode ?? null,
+          fobSourceMode: update.fobSourceMode ?? existing.fobSourceMode ?? "manual_edit",
+        };
+      }
+      return { ...sku, fobByCountry };
+    }));
+  }, []);
+
+  const patchBomLifecycle = useCallback((
+    materialCodes: string[],
+    patch: {
+      lifecycleStatus?: string | null;
+      effectiveFrom?: string | null;
+      effectiveTo?: string | null;
+    },
+  ) => {
+    patchBomSkus(materialCodes, (sku) => ({
+      ...sku,
+      lifecycleStatus: patch.lifecycleStatus ?? sku.lifecycleStatus,
+      effectiveFrom: Object.prototype.hasOwnProperty.call(patch, "effectiveFrom")
+        ? patch.effectiveFrom
+        : sku.effectiveFrom,
+      effectiveTo: Object.prototype.hasOwnProperty.call(patch, "effectiveTo")
+        ? patch.effectiveTo
+        : sku.effectiveTo,
+      rowVersion: typeof sku.rowVersion === "number" ? sku.rowVersion + 1 : sku.rowVersion,
+    }));
+  }, [patchBomSkus]);
+
+  const patchBomInterior = useCallback((
+    materialCodes: string[],
+    interiorColorName: string | null,
+    editionTag: string | null,
+  ) => {
+    patchBomSkus(materialCodes, (sku) => ({
+      ...sku,
+      interiorColorName,
+      editionTag,
+    }));
+  }, [patchBomSkus]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { void loadColourSurcharges(); }, [loadColourSurcharges]);
@@ -3178,8 +3400,14 @@ function BomAdminPanel({
       for (const mc of editFob.materialCodes) {
         await api.updateSkuFob(mc, { countryCode: editFob.countryCode, finalFobEur: editFob.fob });
       }
+      patchBomFobs(editFob.materialCodes.map((materialCode) => ({
+        materialCode,
+        countryCode: editFob.countryCode,
+        finalFobEur: editFob.fob,
+        fobSourceMode: "manual_edit",
+      })));
       setEditFob(null);
-      scheduleLoad(200);
+      scheduleLoad(1200);
       onFobChanged?.();
     } catch (e) { alert(getErrorMessage(e)); }
   };
@@ -3553,6 +3781,10 @@ function BomAdminPanel({
           paymentTermCode: update.paymentTermCode ?? undefined,
         });
       }
+      patchBomFobs(updates.map((update) => ({
+        ...update,
+        fobSourceMode: "manual_country_adjust",
+      })));
       if (quickDelta != null) {
         updateBulkFobEditor(bomKey, allSkus, (current) => ({
           ...current,
@@ -3565,7 +3797,8 @@ function BomAdminPanel({
         delete next[bomKey];
         return next;
       });
-      await load();
+      scheduleLoad(1200);
+      onFobChanged?.();
     } catch (err) {
       setBulkFobErrors((prev) => ({
         ...prev,
@@ -3684,6 +3917,7 @@ function BomAdminPanel({
       return next;
     });
     try {
+      const createdSkus: any[] = [];
       for (const sku of draft.skus) {
         const materialCode = resolveMaterialCodeFromTemplate(
           normalizedTemplate,
@@ -3733,9 +3967,50 @@ function BomAdminPanel({
             paymentTermCode: fob?.paymentTermCode ?? undefined,
           });
         }
+        createdSkus.push({
+          materialCode,
+          bomTemplate: normalizedTemplate,
+          brand: draft.brand,
+          modelName: draft.modelName,
+          version: draft.version,
+          colour: sku.colour,
+          colourCode: sku.colourCode,
+          colourType: sku.colourType || "single",
+          colourTier: effectiveColourTier,
+          colourHex: sku.colourHex,
+          powertrain: draft.powertrain || "ICE",
+          interiorColorName: draft.interiorColorName || null,
+          editionTag: draft.editionTag,
+          lifecycleStatus: draft.lifecycleStatus || "active",
+          effectiveFrom: draft.effectiveFrom,
+          effectiveTo: draft.effectiveTo,
+          rowVersion: 1,
+          fobByCountry: Object.fromEntries(
+            draft.bulkSelectedCountries.flatMap((countryCode) => {
+              const fob = draft.fobByCountry[countryCode];
+              const baseFob = getDraftBaseFob(fob);
+              return baseFob == null
+                ? []
+                : [[countryCode, {
+                  ...fob,
+                  uploadedFobEur: Number(baseFob),
+                  finalFobEur: Number(baseFob),
+                  fobSourceMode: "manual_edit",
+                }]];
+            }),
+          ),
+        });
       }
+      setSkus((current) => {
+        const existingCodes = new Set(current.map((sku) => bomMaterialKey(sku?.materialCode)));
+        const additions = createdSkus.filter((sku) => !existingCodes.has(bomMaterialKey(sku?.materialCode)));
+        return additions.length > 0 ? [...current, ...additions] : current;
+      });
       dismissCopyDraft(draftKey);
-      await load();
+      scheduleLoad(1200);
+      if (createdSkus.some((sku) => Object.keys(sku.fobByCountry || {}).length > 0)) {
+        onFobChanged?.();
+      }
     } catch (err) {
       setCopyDraftErrors((prev) => ({ ...prev, [draftKey]: getErrorMessage(err) }));
     } finally {
@@ -4038,7 +4313,7 @@ function BomAdminPanel({
 
   // Shared colour chip renderer used by BOM rows
   const renderColourChip = (s: any, isHist: boolean, editing: boolean) => {
-    const effectiveTier = inferBomAdminColourTier(s);
+    const effectiveTier = getEffectiveColourTier(s);
     const customHexRaw = s.colourHex || '';
     const customHexParts = customHexRaw ? customHexRaw.split('|') : [];
     const hasCustomDual = customHexParts.length >= 2;
@@ -4252,7 +4527,7 @@ function BomAdminPanel({
         filledCountryCodeSet: new Set<string>(),
       };
       for (const s of gSkus) {
-        const tier = inferBomAdminColourTier(s);
+        const tier = getEffectiveColourTier(s);
         if (tier === 'special') entry.special.push(s);
         else if (tier === 'dual') entry.dual.push(s);
         else entry.single.push(s);
@@ -4275,7 +4550,7 @@ function BomAdminPanel({
       entry.filledCountryCodeSet = new Set(filledCountryCodes);
     }
     return result;
-  }, [collectCountryCodes, sortedCountries]);
+  }, [collectCountryCodes, getEffectiveColourTier, sortedCountries]);
 
   const sortedModelGroupEntries = useMemo(() => {
     return [...modelGroups.entries()].sort(([a], [b]) => {
@@ -5072,14 +5347,28 @@ function BomAdminPanel({
                                 e.preventDefault();
                                 e.stopPropagation();
                                 dragEnterCount.current = 0;
-                                const mc = dragMaterialCode.current;
-                                setDragSku(null);
-                                setDragOverTier(null);
-                                dragMaterialCode.current = null;
-                                if (mc && tierName && !tierSkus.some((s: any) => s.materialCode === mc)) {
-                                  try { await api.updateColourTier(mc, tierName); load(); } catch (e) { console.error('Drag drop failed', e); }
-                                }
-                              },
+	                                const mc = dragMaterialCode.current;
+	                                setDragSku(null);
+	                                setDragOverTier(null);
+	                                dragMaterialCode.current = null;
+	                                if (mc && tierName && !tierSkus.some((s: any) => s.materialCode === mc)) {
+	                                  const materialKey = bomMaterialKey(mc);
+	                                  setOptimisticColourTiers((prev) => ({ ...prev, [materialKey]: tierName }));
+	                                  try {
+	                                    await api.updateColourTier(mc, tierName);
+	                                    setBomAdminError("");
+	                                    scheduleLoad(1200);
+	                                  } catch (e) {
+	                                    setOptimisticColourTiers((prev) => {
+	                                      const next = { ...prev };
+	                                      delete next[materialKey];
+	                                      return next;
+	                                    });
+	                                    setBomAdminError(getErrorMessage(e));
+	                                    console.error('Drag drop failed', e);
+	                                  }
+	                                }
+	                              },
                             } : {};
                             return (
                               <td
@@ -5227,13 +5516,14 @@ function BomAdminPanel({
                                       if (!v || v === intName + (edTag ? ` · ${edTag}` : '')) return;
                                       const edMatch = v.match(/^(.*?)\s*·\s*(.+)$/);
                                       const newInterior = edMatch ? edMatch[1].trim() : v;
-                                      const newEdition = edMatch ? edMatch[2].trim() : null;
-                                      for (const s of allSkus) {
-                                        try { await api.updateSkuInterior(s.materialCode, { interiorColorName: newInterior || null, editionTag: newEdition }); } catch {}
-                                      }
-                                      load();
-                                    }}
-                                    style={{ fontSize: 10, width: '100%', minWidth: 80 }} />
+	                                      const newEdition = edMatch ? edMatch[2].trim() : null;
+	                                      for (const s of allSkus) {
+	                                        try { await api.updateSkuInterior(s.materialCode, { interiorColorName: newInterior || null, editionTag: newEdition }); } catch {}
+	                                      }
+	                                      patchBomInterior(allCodes, newInterior || null, newEdition);
+	                                      scheduleLoad(1200);
+	                                    }}
+	                                    style={{ fontSize: 10, width: '100%', minWidth: 80 }} />
                                 ) : (
                                   <span style={{ fontSize: 10, color: intName ? '#1e293b' : '#cbd5e1' }}>
                                     {intName || '—'}{edTag ? <span style={{ color: '#7c3aed' }}> · {edTag}</span> : null}
@@ -5247,12 +5537,13 @@ function BomAdminPanel({
                                 {editingBoms.has(bomTemplate) ? (
                                   <select value={ref.lifecycleStatus || 'active'}
                                     onChange={async (e) => {
-                                      const v = e.target.value;
-                                      for (const s of allSkus) {
-                                        try { await api.updateSkuLifecycle(s.materialCode, { lifecycleStatus: v, rowVersion: s.rowVersion }); } catch {}
-                                      }
-                                      load();
-                                    }}
+	                                      const v = e.target.value;
+	                                      for (const s of allSkus) {
+	                                        try { await api.updateSkuLifecycle(s.materialCode, { lifecycleStatus: v, rowVersion: s.rowVersion }); } catch {}
+	                                      }
+	                                      patchBomLifecycle(allCodes, { lifecycleStatus: v });
+	                                      scheduleLoad(1200);
+	                                    }}
                                     style={{ fontSize: 10, width: 80 }}>
                                     <option value="active">Active</option>
                                     <option value="phase_out">Phase Out</option>
@@ -5293,11 +5584,13 @@ function BomAdminPanel({
                                 {editingBoms.has(bomTemplate) ? (
                                   <input type="text" placeholder="YYYY-MM" defaultValue={ref.effectiveFrom || ''}
                                     onBlur={async (e) => {
-                                      const v = e.target.value || null;
-                                      for (const s of allSkus) {
-                                        try { await api.updateSkuLifecycle(s.materialCode, { lifecycleStatus: s.lifecycleStatus, effectiveFrom: v ?? undefined, rowVersion: s.rowVersion }); } catch {}
-                                      }
-                                    }}
+	                                      const v = e.target.value || null;
+	                                      for (const s of allSkus) {
+	                                        try { await api.updateSkuLifecycle(s.materialCode, { lifecycleStatus: s.lifecycleStatus, effectiveFrom: v ?? undefined, rowVersion: s.rowVersion }); } catch {}
+	                                      }
+	                                      patchBomLifecycle(allCodes, { effectiveFrom: v });
+	                                      scheduleLoad(1200);
+	                                    }}
                                     style={{ width: "100%", fontSize: 10 }} />
                                 ) : (
                                   <span style={{ fontSize: 10, color: ref.effectiveFrom ? '#1e293b' : '#cbd5e1' }}>{ref.effectiveFrom || '—'}</span>
@@ -5307,11 +5600,13 @@ function BomAdminPanel({
                                 {editingBoms.has(bomTemplate) ? (
                                   <input type="text" placeholder="YYYY-MM" defaultValue={ref.effectiveTo || ''}
                                     onBlur={async (e) => {
-                                      const v = e.target.value || null;
-                                      for (const s of allSkus) {
-                                        try { await api.updateSkuLifecycle(s.materialCode, { lifecycleStatus: s.lifecycleStatus, effectiveTo: v ?? undefined, rowVersion: s.rowVersion }); } catch {}
-                                      }
-                                    }}
+	                                      const v = e.target.value || null;
+	                                      for (const s of allSkus) {
+	                                        try { await api.updateSkuLifecycle(s.materialCode, { lifecycleStatus: s.lifecycleStatus, effectiveTo: v ?? undefined, rowVersion: s.rowVersion }); } catch {}
+	                                      }
+	                                      patchBomLifecycle(allCodes, { effectiveTo: v });
+	                                      scheduleLoad(1200);
+	                                    }}
                                     style={{ width: "100%", fontSize: 10 }} />
                                 ) : (
                                   <span style={{ fontSize: 10, color: ref.effectiveTo ? '#1e293b' : '#cbd5e1' }}>{ref.effectiveTo || '—'}</span>

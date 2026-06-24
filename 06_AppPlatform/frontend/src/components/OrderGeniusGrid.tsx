@@ -257,6 +257,7 @@ export function buildOrderGeniusColumnDefs(
 
   for (const m of activeMonths) {
     const field = `month_${m}` as const;
+    const amountField = `_amount_${m}` as `_amount_${number}`;
     if (vis.months) {
       cols.push({
         headerName: MONTH_NAMES[m - 1],
@@ -270,6 +271,23 @@ export function buildOrderGeniusColumnDefs(
           && params.data.editable !== false,
         cellEditor: "agNumberCellEditor",
         cellEditorParams: { min: 0 },
+        valueParser: (p) => {
+          const parsed = Number(p.newValue);
+          return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+        },
+        valueSetter: (p) => {
+          const parsed = Number(p.newValue);
+          const nextQuantity = Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+          const row = p.data;
+          if (!row || row[field] === nextQuantity) return false;
+          row[field] = nextQuantity;
+          row[amountField] = nextQuantity * (row.fobEur ?? 0);
+          row._ttlAmount = MONTH_NUMBERS.reduce((sum, month) => {
+            const monthQuantity = row[`month_${month}`] ?? 0;
+            return sum + monthQuantity * (row.fobEur ?? 0);
+          }, 0);
+          return true;
+        },
         valueFormatter: (p) => (p.value != null ? String(p.value) : "0"),
         cellClassRules: {
           "og-cell-error": (p: CellClassParams) =>
@@ -282,16 +300,15 @@ export function buildOrderGeniusColumnDefs(
     if (vis.amount) {
       cols.push({
         headerName: `${MONTH_NAMES[m - 1]} €`,
-        field: `_amt_${m}` as any,
+        field: amountField,
         width: 90,
         type: "numericColumn",
         editable: false,
         valueGetter: (p: ValueGetterParams<OrderGeniusGridRow>) => {
           const row = p.data;
           if (!row) return 0;
-          if (row.__type === "groupHeader" || row.__type === "consolidated_parent") {
-            return row[`_amount_${m}`] ?? 0;
-          }
+          const precomputed = row[amountField];
+          if (precomputed != null) return precomputed;
           const qty = (row as any)[field] ?? 0;
           const fob = row.fobEur ?? 0;
           return qty * fob;
@@ -330,7 +347,7 @@ export function buildOrderGeniusColumnDefs(
       valueGetter: (p: ValueGetterParams<OrderGeniusGridRow>) => {
         const row = p.data;
         if (!row) return 0;
-        if (row.__type === "groupHeader" || row.__type === "consolidated_parent") {
+        if (row.__type === "groupHeader" || row.__type === "consolidated_parent" || row.__type === "summary") {
           return row._ttlAmount ?? 0;
         }
         let t = 0;

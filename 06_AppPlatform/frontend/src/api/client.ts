@@ -320,6 +320,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return promise;
 }
 
+function normalizeQuantityCellResponse(raw: Record<string, unknown>): QuantityCellResponse {
+  return {
+    orderQuantityCellId: String(raw.orderQuantityCellId ?? raw.order_quantity_cell_id ?? ""),
+    countryCode: String(raw.countryCode ?? raw.country_code ?? ""),
+    orderYear: Number(raw.orderYear ?? raw.order_year ?? 0),
+    orderMonth: Number(raw.orderMonth ?? raw.order_month ?? 0),
+    materialCode: String(raw.materialCode ?? raw.material_code ?? ""),
+    quantity: Number(raw.quantity ?? 0),
+    fobEur: Number(raw.fobEur ?? raw.fob_eur ?? 0),
+    rowVersion: Number(raw.rowVersion ?? raw.row_version ?? 0),
+  };
+}
+
 async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
   let response: Response;
   try {
@@ -3699,11 +3712,11 @@ export const api = {
       }),
     }),
 
-  updateQuantityCell: (payload: QuantityCellUpdate) =>
-    request<QuantityCellResponse>("/order-genius/quantity-cell", {
+  updateQuantityCell: async (payload: QuantityCellUpdate) =>
+    normalizeQuantityCellResponse(await request<Record<string, unknown>>("/order-genius/quantity-cell", {
       method: "PATCH",
       body: JSON.stringify(payload),
-    }),
+    })),
 
   updateSkuRemark: (materialCode: string, payload: RemarkUpdate) =>
     request<RemarkResponse>(
