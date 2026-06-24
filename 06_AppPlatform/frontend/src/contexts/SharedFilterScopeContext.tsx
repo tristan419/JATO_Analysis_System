@@ -37,8 +37,6 @@ import {
 
 const SHARED_FILTER_SCOPE_CACHE_KEY = "shared-filter-scope";
 const PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
-const OVERVIEW_BOOT_DEFER_MS = 900;
-const OVERVIEW_BOOT_IDLE_TIMEOUT_MS = 1_600;
 
 export type ResolvedFilterColumns = Record<FilterKey, string | null>;
 
@@ -167,25 +165,6 @@ function summarizeScopeValues(values: string[]): string {
   return `${values.slice(0, 2).join(" · ")} +${values.length - 2}`;
 }
 
-type SharedScopeIdleWindow = Window & typeof globalThis & {
-  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
-};
-
-function waitForOverviewBootSlot(): Promise<void> {
-  return new Promise((resolve) => {
-    const idleWindow = window as SharedScopeIdleWindow;
-    window.setTimeout(() => {
-      if (typeof idleWindow.requestIdleCallback === "function") {
-        idleWindow.requestIdleCallback(resolve, {
-          timeout: OVERVIEW_BOOT_IDLE_TIMEOUT_MS,
-        });
-        return;
-      }
-      resolve();
-    }, OVERVIEW_BOOT_DEFER_MS);
-  });
-}
-
 interface InitialFilterMetadata {
   columns: string[];
   resolvedColumns: ResolvedFilterColumns;
@@ -266,6 +245,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
   const navigate = useNavigate();
   const { user } = useAuth();
   const currentSearch = location.search;
+  const bootSearchRef = useRef(currentSearch);
   const cachedScopeRef = useRef<SharedFilterScopeCache | null>(null);
 
   if (cachedScopeRef.current === null) {
@@ -451,7 +431,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
         if (cancelled || bootId !== bootAttemptRef.current) return;
 
         const initialFromSearch = sanitizeTopLevelSelections(
-          readSelectionsFromSearch(currentSearch),
+          readSelectionsFromSearch(bootSearchRef.current),
           topLevelOptions,
         );
         const initialSelections = hasSelections(initialFromSearch)
@@ -475,42 +455,12 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
         );
         if (cancelled || bootId !== bootAttemptRef.current) return;
 
-        const initialFilters = buildFilterPayloadFromResolved(
-          resolvedColumns,
-          syncedSelections,
-        );
-
-        prevPayloadRef.current = JSON.stringify(initialFilters);
         setColumns(items);
         setSelections(syncedSelections);
         setOptionsMap({ ...topLevelOptions, ...cascadedOptions });
         setFiltersReady(true);
         bootCompleted.current = true;
         setLoading(false);
-
-        await waitForOverviewBootSlot();
-        if (cancelled || bootId !== bootAttemptRef.current) return;
-        const overviewController = new AbortController();
-        overviewAbortRef.current?.abort();
-        overviewAbortRef.current = overviewController;
-        setLoading(true);
-        try {
-          const overviewResponse = await api.overview({
-            filters: initialFilters,
-            prefer_precomputed: true,
-            top_n: 120,
-          }, { signal: overviewController.signal });
-          if (cancelled || overviewAbortRef.current !== overviewController) return;
-          setOverview(overviewResponse);
-          setYearSeries(overviewResponse.yearSeries ?? []);
-          setMonthSeries(overviewResponse.monthSeries ?? []);
-          setFilteredRowCount(overviewResponse.kpis.totalRows);
-        } finally {
-          if (!cancelled && overviewAbortRef.current === overviewController) {
-            overviewAbortRef.current = null;
-            setLoading(false);
-          }
-        }
       } catch (err) { console.log("[SFS] boot ERROR:", err);
         if (!cancelled && !isAbortError(err)) setError((err as Error).message);
       } finally {
@@ -525,7 +475,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
         bootDone.current = false;
       }
     };
-  }, [cachedScope, currentSearch, loadFilterOptions, loadFilterOptionsBatch, user?.primaryCountry]);
+  }, [cachedScope, loadFilterOptions, loadFilterOptionsBatch, user?.primaryCountry]);
 
   useEffect(() => {
     return () => {
