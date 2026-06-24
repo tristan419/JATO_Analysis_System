@@ -92,6 +92,34 @@ freshness. If Tencent Cloud has not deployed `/v1/metadata/filter-snapshot`
 yet, the Function synthesizes that snapshot from `/v1/metadata/columns` plus
 `/v1/filters/options/batch`, then caches the synthesized response at the edge.
 
+After each Pages deployment, prewarm the edge cache for the common Dashboard
+startup path:
+
+```bash
+cd 06_AppPlatform/frontend
+JATO_PREWARM_ORIGIN=https://intl.ojeur.cloud \
+JATO_PREWARM_USERNAME='<read-only-user>' \
+JATO_PREWARM_PASSWORD='<password>' \
+npm run perf:prewarm-edge
+```
+
+The script logs in only when username/password are provided, then sends the
+same `X-User-Name`, `X-User-Role`, optional `X-Auth-Token`, and optional
+`X-JATO-Data-Version` headers that the Pages Function uses to scope cache
+entries. It does not cache or touch auth/write/admin APIs. By default it runs
+two rounds so the first round can populate Cloudflare cache and the second
+round can confirm `x-jato-edge-cache: HIT` where the same edge node is reused.
+To prewarm a specific dashboard lens, pass comma-separated values:
+
+```bash
+JATO_PREWARM_COUNTRIES='丹麦,克罗地亚,匈牙利,奥地利,希腊,德国,意大利,挪威,捷克,斯洛伐克,斯洛文尼亚,比利时,法国,波兰,瑞典,瑞士,罗马尼亚,芬兰,荷兰,葡萄牙,西班牙' \
+JATO_PREWARM_POWERTRAINS='ICE,HEV,BEV,MHEV,PHEV' \
+npm run perf:prewarm-edge
+```
+
+Use `JATO_PREWARM_DATA_VERSION` when a backend data import creates a new cache
+version, otherwise the Function falls back to its configured data version.
+
 If a separate API domain is required later, the older standalone Worker facade
 is still available in:
 
