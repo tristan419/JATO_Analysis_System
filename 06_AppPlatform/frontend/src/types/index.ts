@@ -1017,6 +1017,7 @@ export interface HeroProductModelRow {
   channelMix: Record<string, number>;
   channelSharePct: Record<string, number>;
   driveMix: Record<string, number>;
+  fuelMix: Record<string, number>;
   specs: HeroProductModelSpecs;
   price: HeroProductPricePayload;
 }
@@ -1101,6 +1102,7 @@ export interface HeroProductTrendPage {
 export interface HeroProductDistributionPage {
   title: string;
   models: HeroProductModelRow[];
+  ranking: HeroProductModelRow[];
   distribution: {
     countries: string[];
     items: HeroProductModelDistribution[];
