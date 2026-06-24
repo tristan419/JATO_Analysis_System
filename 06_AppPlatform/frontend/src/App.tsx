@@ -1,7 +1,6 @@
 import { Suspense, lazy, Component, useEffect, useState, type ReactNode } from "react";
 import { Navigate, createBrowserRouter, RouterProvider, useLocation } from "react-router-dom";
 import { SharedFilterScopeProvider } from "./contexts/SharedFilterScopeContext";
-import { CountryChatProvider } from "./contexts/CountryChatContext";
 import { AuthProvider } from "./contexts/AuthContext";
 import { Layout } from "./components/Layout";
 import { RequireRole } from "./components/RequireRole";
@@ -41,7 +40,7 @@ const CocMatchPage = lazy(() => import("./pages/CocMatchPage").then(m => ({ defa
 const PositioningPricingPage = lazy(() => import("./pages/PositioningPricingPage").then(m => ({ default: m.PositioningPricingPage })));
 const VersionComparisonPage = lazy(() => import("./pages/VersionComparisonPage").then(m => ({ default: m.VersionComparisonPage })));
 const CustomerInsightsPage = lazy(() => import("./pages/CustomerInsightsPage").then(m => ({ default: m.CustomerInsightsPage })));
-const CountryChatPage = lazy(() => import("./pages/CountryChatPage").then(m => ({ default: m.CountryChatPage })));
+const CountryChatPageHost = lazy(() => import("./pages/CountryChatPageHost").then(m => ({ default: m.CountryChatPageHost })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then(m => ({ default: m.NotFoundPage })));
 const SpecificationPage = lazy(() => import("./pages/SpecificationPage").then(m => ({ default: m.SpecificationPage })));
 const EngineeringConfigPage = lazy(() => import("./pages/EngineeringConfigPage").then(m => ({ default: m.EngineeringConfigPage })));
@@ -203,7 +202,7 @@ function AppVersionNotice() {
 
 const router = createBrowserRouter([
   { path: "/login", element: (<AuthProvider>{withPageLoader(<LoginPage />)}</AuthProvider>) },
-  { path: "/", element: (<AuthProvider><OAuthGate><CountryChatProvider><RequireRole><Layout /></RequireRole></CountryChatProvider></OAuthGate></AuthProvider>), children: [
+  { path: "/", element: (<AuthProvider><OAuthGate><RequireRole><Layout /></RequireRole></OAuthGate></AuthProvider>), children: [
     { index: true, element: withSharedFilterScope(withPageLoader(<DashboardPage />)) },
     { path: "dashboard", element: withSharedFilterScope(withPageLoader(<DashboardPage />)) },
     { path: "market/overview", element: withPageLoader(<MarketOverviewPage />) },
@@ -231,7 +230,7 @@ const router = createBrowserRouter([
     { path: "account/profile", element: withPageLoader(<ProfilePage />) },
     { path: "route-diagnostics", element: withPageLoader(<RouteDiagnosticsPage />) },
     { path: "product/coc-match", element: withPageLoader(<CocMatchPage />) },
-    { path: "copilot", element: withPageLoader(<CountryChatPage />) },
+    { path: "copilot", element: withPageLoader(<CountryChatPageHost />) },
     { path: "engineering-config", element: withPageLoader(<EngineeringConfigPage />) },
     { path: "market-scan", element: <RedirectPreserveSearch to="/market/overview" /> },
     { path: "msrp", element: <RedirectPreserveSearch to="/product/current-msrp" /> },

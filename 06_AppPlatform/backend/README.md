@@ -65,6 +65,8 @@ python -m pytest tests/unit
 - GET /v1/metadata/columns
 - POST /v1/filters/options
 - POST /v1/analysis/query
+- POST /v1/analysis/time-series-grouped
+  - response header `X-JATO-Server-Cache`: `MISS`, `MEMORY`, `DISK`, or `INFLIGHT`
 - GET /v1/crud/items
 - POST /v1/crud/items
 - PATCH /v1/crud/items/{item_id}
@@ -100,6 +102,27 @@ python -m pytest tests/unit
 - GET /v1/review/overrides
 - POST /v1/review/overrides
 - PATCH /v1/review/overrides/{override_id}
+
+## Dashboard cache prewarm
+
+After a backend deploy, warm the default Dashboard grouped time-series queries
+before real users hit the cold path:
+
+```bash
+python 03_Scripts/diagnostics/prewarm_grouped_time_series.py \
+  --origin http://127.0.0.1:8000 \
+  --token "$APP_AUTH_TOKEN" \
+  --user-name prewarm \
+  --user-role viewer \
+  --require-server-cache \
+  --require-repeat-hit
+```
+
+The script prints one JSON line per request. A healthy repeated run should show
+`serverCache` as `MEMORY`, `DISK`, or `INFLIGHT` rather than `MISS`.
+`03_Scripts/ops/deploy_fullstack_server.sh` runs the same prewarm automatically
+after backend health checks when `APP_GROUPED_TIME_SERIES_PREWARM_ENABLED=true`;
+set `RUN_GROUPED_TIME_SERIES_PREWARM=strict` to fail deployment on a cold repeat.
 
 MSRP mapping lifecycle:
 - `JatoMsrpLink` = stable active mapping from JATO key to official key

@@ -11,6 +11,7 @@ from app.api.routes import analysis as analysis_routes
 from app.api.routes import assistant as assistant_routes
 from app.api.routes import market_scan as market_scan_routes
 from app.core.config import API_PREFIX
+from app.services.query_service import GroupedTimeSeriesQueryResult
 
 
 @pytest.fixture
@@ -294,6 +295,48 @@ def test_analysis_query_contract(
     assert data["route"] == "dynamic-aggregate"
     assert data["rows"] == 1
     assert data["items"][0]["Brand"] == "VOLVO"
+
+
+def test_grouped_time_series_exposes_server_cache_header(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_query_grouped_time_series_with_cache_state(**kwargs: Any):
+        captured.update(kwargs)
+        return GroupedTimeSeriesQueryResult(
+            payload={
+                "grain": "year",
+                "rows": 1,
+                "items": [{"time": "2024", "value": 1200, "series": "VOLVO"}],
+            },
+            cache_state="MEMORY",
+        )
+
+    monkeypatch.setattr(
+        analysis_routes,
+        "query_grouped_time_series_with_cache_state",
+        fake_query_grouped_time_series_with_cache_state,
+    )
+
+    response = client.post(
+        "/v1/analysis/time-series-grouped",
+        json={
+            "filters": {"Country": ["Sweden"]},
+            "grain": "year",
+            "group_by": "Brand",
+            "top_n": 5,
+            "include_others": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-jato-server-cache"] == "MEMORY"
+    assert response.json()["rows"] == 1
+    assert captured["filters"] == {"Country": ["Sweden"]}
+    assert captured["grain"] == "year"
+    assert captured["group_by"] == "Brand"
 
 
 def test_country_chat_contract(

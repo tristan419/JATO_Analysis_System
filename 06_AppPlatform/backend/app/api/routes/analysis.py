@@ -27,7 +27,7 @@ from app.services.query_service import (
     query_analysis,
     query_advanced_chart,
     query_detail,
-    query_grouped_time_series,
+    query_grouped_time_series_with_cache_state,
     query_model_versions,
     query_overview,
     query_positioning_map,
@@ -135,9 +135,10 @@ def detail_csv(
 @router.post("/time-series-grouped")
 def time_series_grouped(
     payload: GroupedTimeSeriesRequest,
+    response: Response,
     user=Depends(optional_viewer),
 ) -> dict:
-    return query_grouped_time_series(
+    result = query_grouped_time_series_with_cache_state(
         filters=payload.filters,
         grain=payload.grain,
         group_by=payload.group_by,
@@ -149,6 +150,8 @@ def time_series_grouped(
         ),
         cache_scope=user.role,
     )
+    response.headers["X-JATO-Server-Cache"] = result.cache_state
+    return result.payload
 
 
 @router.post("/advanced-chart")
