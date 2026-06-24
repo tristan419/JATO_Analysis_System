@@ -9,7 +9,7 @@ const CountryChatWidgetHost = lazy(() =>
   import("./CountryChatWidgetHost").then((module) => ({ default: module.CountryChatWidgetHost }))
 );
 
-const AUXILIARY_WIDGET_DELAY_MS = 4_000;
+const AUXILIARY_WIDGET_DELAY_MS = 10_000;
 
 type IdleWindow = Window & typeof globalThis & {
   requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;

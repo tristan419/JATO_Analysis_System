@@ -7,9 +7,12 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 import {
   FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS,
+  FILTER_SNAPSHOT_INTL_FALLBACK_TIMEOUT_MS,
   SharedFilterScopeProvider,
   createSharedSelections,
+  filterSnapshotFallbackTimeoutMs,
   getInitialCascadeStartIndex,
+  isFilterSnapshotRecentlyUnavailable,
   loadInitialFilterMetadata,
   shouldSyncDashboardSearchToLocation,
   useSharedFilterScope,
@@ -88,9 +91,18 @@ describe("getInitialCascadeStartIndex", () => {
   });
 });
 
+describe("filterSnapshotFallbackTimeoutMs", () => {
+  it("uses a longer snapshot timeout on intl edge hosts", () => {
+    expect(filterSnapshotFallbackTimeoutMs("www.ojeur.cloud")).toBe(FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS);
+    expect(filterSnapshotFallbackTimeoutMs("intl.ojeur.cloud")).toBe(FILTER_SNAPSHOT_INTL_FALLBACK_TIMEOUT_MS);
+    expect(filterSnapshotFallbackTimeoutMs("preview.jato-intl-frontend.pages.dev")).toBe(FILTER_SNAPSHOT_INTL_FALLBACK_TIMEOUT_MS);
+  });
+});
+
 describe("SharedFilterScopeProvider boot", () => {
   beforeEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
     apiMock.filterMetadataSnapshot.mockResolvedValue({
       columns: ["国家", "Body type", "细分市场", "动总规整", "Make", "Model", "Version name"],
       options: {
@@ -126,6 +138,7 @@ describe("SharedFilterScopeProvider boot", () => {
 
   afterEach(() => {
     cleanup();
+    sessionStorage.clear();
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -204,6 +217,18 @@ describe("SharedFilterScopeProvider boot", () => {
         powertrain: ["ICE", "BEV"],
       },
     });
+    expect(apiMock.columns).toHaveBeenCalledTimes(1);
+    expect(loadBatch).toHaveBeenCalledTimes(1);
+    expect(isFilterSnapshotRecentlyUnavailable()).toBe(true);
+
+    apiMock.filterMetadataSnapshot.mockClear();
+    apiMock.columns.mockClear();
+    loadBatch.mockClear();
+
+    await expect(loadInitialFilterMetadata(loadBatch)).resolves.toMatchObject({
+      columns: ["国家", "Body type", "细分市场", "动总规整", "Make", "Model", "Version name"],
+    });
+    expect(apiMock.filterMetadataSnapshot).not.toHaveBeenCalled();
     expect(apiMock.columns).toHaveBeenCalledTimes(1);
     expect(loadBatch).toHaveBeenCalledTimes(1);
     vi.useRealTimers();

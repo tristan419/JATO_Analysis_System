@@ -3,12 +3,19 @@ const CACHEABLE_ENDPOINTS = new Map([
   ["GET metadata/columns", 3600],
   ["GET metadata/filter-snapshot", 3600],
   ["GET assistant/country/metadata", 3600],
+  ["GET analysis/data-freshness", 300],
   ["POST filters/options", 300],
   ["POST filters/options/batch", 300],
   ["POST analysis/overview", 300],
   ["POST analysis/time-series", 300],
   ["POST analysis/time-series-grouped", 300],
 ]);
+const FILTER_SNAPSHOT_COLUMNS = [
+  ["国家", "country"],
+  ["Body type", "body_type", "body type"],
+  ["细分市场", "segment"],
+  ["动总规整", "powertrain"],
+];
 
 function resolveOrigin(env) {
   return String(env.API_ORIGIN || DEFAULT_ORIGIN).replace(/\/+$/, "");
@@ -75,9 +82,7 @@ function bypassResponse(response) {
   });
 }
 
-async function originFetch(request, origin, path, body) {
-  const sourceUrl = new URL(request.url);
-  const targetUrl = new URL(`/v1/${path}${sourceUrl.search}`, origin);
+function originHeaders(request) {
   const headers = new Headers(request.headers);
   headers.delete("host");
   headers.delete("cf-connecting-ip");
@@ -85,10 +90,81 @@ async function originFetch(request, origin, path, body) {
   headers.delete("cf-ray");
   headers.delete("x-forwarded-for");
   headers.delete("x-forwarded-proto");
+  return headers;
+}
+
+async function originFetchPath(request, origin, path, init = {}) {
+  const targetUrl = new URL(`/v1/${path}`, origin);
+  if (init.search) {
+    targetUrl.search = init.search;
+  }
+  const method = init.method || request.method;
+  const headers = originHeaders(request);
+  if (init.contentType) {
+    headers.set("content-type", init.contentType);
+  }
   return fetch(targetUrl.toString(), {
-    method: request.method,
+    method,
     headers,
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : body,
+    body: method === "GET" || method === "HEAD" ? undefined : init.body,
+  });
+}
+
+async function originFetch(request, origin, path, body) {
+  const sourceUrl = new URL(request.url);
+  return originFetchPath(request, origin, path, {
+    body,
+    method: request.method,
+    search: sourceUrl.search,
+  });
+}
+
+function resolveFilterSnapshotColumns(columns) {
+  const normalized = new Map(columns.map((column) => [String(column).trim().toLowerCase(), column]));
+  return FILTER_SNAPSHOT_COLUMNS
+    .map((aliases) => aliases.map((alias) => normalized.get(alias.toLowerCase())).find(Boolean))
+    .filter(Boolean);
+}
+
+async function synthesizeFilterSnapshot(request, origin) {
+  const columnsResponse = await originFetchPath(request, origin, "metadata/columns", {
+    method: "GET",
+  });
+  if (!columnsResponse.ok) {
+    return null;
+  }
+  const columnsPayload = await columnsResponse.json();
+  const columns = Array.isArray(columnsPayload.items) ? columnsPayload.items : [];
+  const snapshotColumns = resolveFilterSnapshotColumns(columns);
+  if (columns.length === 0 || snapshotColumns.length === 0) {
+    return null;
+  }
+  const optionsResponse = await originFetchPath(request, origin, "filters/options/batch", {
+    body: JSON.stringify({
+      items: snapshotColumns.map((column) => ({
+        column,
+        filters: {},
+      })),
+    }),
+    contentType: "application/json",
+    method: "POST",
+  });
+  if (!optionsResponse.ok) {
+    return null;
+  }
+  const optionsPayload = await optionsResponse.json();
+  const options = {};
+  const items = Array.isArray(optionsPayload.items) ? optionsPayload.items : [];
+  items.forEach((item) => {
+    if (!item || typeof item !== "object") return;
+    const column = typeof item.column === "string" ? item.column : "";
+    if (!column) return;
+    options[column] = Array.isArray(item.options) ? item.options : [];
+  });
+  return Response.json({
+    columns,
+    options,
+    source: "edge-synthesized",
   });
 }
 
@@ -130,9 +206,17 @@ export async function onRequest(context) {
     });
   }
 
-  const originResponse = await originFetch(request, origin, path, bodyText);
+  let originResponse = await originFetch(request, origin, path, bodyText);
   if (!originResponse.ok) {
-    return bypassResponse(originResponse);
+    const shouldSynthesizeSnapshot =
+      method === "GET" && path === "metadata/filter-snapshot" && originResponse.status === 404;
+    const synthesizedResponse = shouldSynthesizeSnapshot
+      ? await synthesizeFilterSnapshot(request, origin)
+      : null;
+    if (!synthesizedResponse) {
+      return bypassResponse(originResponse);
+    }
+    originResponse = synthesizedResponse;
   }
 
   const responseForCache = new Response(originResponse.body, {

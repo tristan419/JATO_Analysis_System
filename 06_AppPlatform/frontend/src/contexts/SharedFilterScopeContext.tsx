@@ -36,8 +36,11 @@ import {
 } from "../utils/filterOptions";
 
 const SHARED_FILTER_SCOPE_CACHE_KEY = "shared-filter-scope";
+const FILTER_SNAPSHOT_UNAVAILABLE_CACHE_KEY = "filter-snapshot-unavailable-until";
 const PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
 export const FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS = 650;
+export const FILTER_SNAPSHOT_INTL_FALLBACK_TIMEOUT_MS = 1_800;
+export const FILTER_SNAPSHOT_UNAVAILABLE_TTL_MS = 10 * 60 * 1000;
 
 export type ResolvedFilterColumns = Record<FilterKey, string | null>;
 
@@ -204,7 +207,7 @@ function createSnapshotAbortController(parentSignal?: AbortSignal): {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => {
     controller.abort();
-  }, FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS);
+  }, filterSnapshotFallbackTimeoutMs(window.location.hostname));
   const abortFromParent = () => controller.abort();
   parentSignal?.addEventListener("abort", abortFromParent, { once: true });
   return {
@@ -216,6 +219,40 @@ function createSnapshotAbortController(parentSignal?: AbortSignal): {
   };
 }
 
+export function filterSnapshotFallbackTimeoutMs(hostname: string): number {
+  return hostname === "intl.ojeur.cloud" || hostname.endsWith(".pages.dev")
+    ? FILTER_SNAPSHOT_INTL_FALLBACK_TIMEOUT_MS
+    : FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS;
+}
+
+export function isFilterSnapshotRecentlyUnavailable(now = Date.now()): boolean {
+  try {
+    const unavailableUntil = Number(sessionStorage.getItem(FILTER_SNAPSHOT_UNAVAILABLE_CACHE_KEY) ?? "");
+    if (!Number.isFinite(unavailableUntil) || unavailableUntil <= now) {
+      sessionStorage.removeItem(FILTER_SNAPSHOT_UNAVAILABLE_CACHE_KEY);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function markFilterSnapshotUnavailable(now = Date.now()): void {
+  try {
+    sessionStorage.setItem(
+      FILTER_SNAPSHOT_UNAVAILABLE_CACHE_KEY,
+      String(now + FILTER_SNAPSHOT_UNAVAILABLE_TTL_MS),
+    );
+  } catch {}
+}
+
+function clearFilterSnapshotUnavailable(): void {
+  try {
+    sessionStorage.removeItem(FILTER_SNAPSHOT_UNAVAILABLE_CACHE_KEY);
+  } catch {}
+}
+
 export async function loadInitialFilterMetadata(
   loadFilterOptionsBatch: (
     payloads: FilterOptionsPayload[],
@@ -223,46 +260,51 @@ export async function loadInitialFilterMetadata(
   ) => Promise<string[][]>,
   signal?: AbortSignal,
 ): Promise<InitialFilterMetadata> {
-  try {
-    const snapshotAbort = createSnapshotAbortController(signal);
-    const snapshot = await api.filterMetadataSnapshot({
-      signal: snapshotAbort.controller.signal,
-    }).finally(snapshotAbort.cleanup);
-    if (signal?.aborted) {
-      throw new DOMException("Aborted", "AbortError");
-    }
-    const columns = Array.isArray(snapshot.columns) ? snapshot.columns : [];
-    if (columns.length > 0) {
-      const resolvedColumns = resolveFilterColumns(columns);
-      const snapshotOptionsByColumn = snapshot.options ?? {};
-      const topLevelOptions: Partial<Record<FilterKey, string[]>> = {};
-      const missedRequests: { key: TopLevelFilterKey; column: string }[] = [];
-      for (const key of TOP_LEVEL_FILTER_KEYS) {
-        const column = resolvedColumns[key];
-        if (!column) continue;
-        const snapshotOptions = snapshotOptionsByColumn[column];
-        if (Array.isArray(snapshotOptions)) {
-          topLevelOptions[key] = snapshotOptions;
-        } else {
-          missedRequests.push({ key, column });
+  if (!isFilterSnapshotRecentlyUnavailable()) {
+    try {
+      const snapshotAbort = createSnapshotAbortController(signal);
+      const snapshot = await api.filterMetadataSnapshot({
+        signal: snapshotAbort.controller.signal,
+      }).finally(snapshotAbort.cleanup);
+      if (signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      const columns = Array.isArray(snapshot.columns) ? snapshot.columns : [];
+      if (columns.length > 0) {
+        clearFilterSnapshotUnavailable();
+        const resolvedColumns = resolveFilterColumns(columns);
+        const snapshotOptionsByColumn = snapshot.options ?? {};
+        const topLevelOptions: Partial<Record<FilterKey, string[]>> = {};
+        const missedRequests: { key: TopLevelFilterKey; column: string }[] = [];
+        for (const key of TOP_LEVEL_FILTER_KEYS) {
+          const column = resolvedColumns[key];
+          if (!column) continue;
+          const snapshotOptions = snapshotOptionsByColumn[column];
+          if (Array.isArray(snapshotOptions)) {
+            topLevelOptions[key] = snapshotOptions;
+          } else {
+            missedRequests.push({ key, column });
+          }
         }
+        if (missedRequests.length > 0) {
+          const missedOptionSets = await loadFilterOptionsBatch(
+            missedRequests.map((item) => ({
+              column: item.column,
+              filters: {},
+            })),
+            signal,
+          );
+          missedRequests.forEach((item, index) => {
+            topLevelOptions[item.key] = missedOptionSets[index] ?? [];
+          });
+        }
+        return { columns, resolvedColumns, topLevelOptions };
       }
-      if (missedRequests.length > 0) {
-        const missedOptionSets = await loadFilterOptionsBatch(
-          missedRequests.map((item) => ({
-            column: item.column,
-            filters: {},
-          })),
-          signal,
-        );
-        missedRequests.forEach((item, index) => {
-          topLevelOptions[item.key] = missedOptionSets[index] ?? [];
-        });
-      }
-      return { columns, resolvedColumns, topLevelOptions };
+      markFilterSnapshotUnavailable();
+    } catch (err) {
+      if (isAbortError(err) && signal?.aborted) throw err;
+      markFilterSnapshotUnavailable();
     }
-  } catch (err) {
-    if (isAbortError(err) && signal?.aborted) throw err;
   }
 
   const { items } = await api.columns({ signal });

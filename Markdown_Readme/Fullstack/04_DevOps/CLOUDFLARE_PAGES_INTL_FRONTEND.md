@@ -86,6 +86,11 @@ The same-origin Function cache key uses method, URL, request body hash,
 `X-User-Name`, `X-User-Role`, and data version. It intentionally does not use
 `X-Auth-Token`, because refreshed login tokens would otherwise split identical
 read-only Dashboard cache entries.
+The same-origin Function currently caches metadata, filter option batches,
+Dashboard overview, time-series reads, grouped time-series reads, and data
+freshness. If Tencent Cloud has not deployed `/v1/metadata/filter-snapshot`
+yet, the Function synthesizes that snapshot from `/v1/metadata/columns` plus
+`/v1/filters/options/batch`, then caches the synthesized response at the edge.
 
 If a separate API domain is required later, the older standalone Worker facade
 is still available in:

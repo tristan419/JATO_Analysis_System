@@ -228,6 +228,95 @@ describe("Cloudflare edge cache function", () => {
     expect(runtime.cache.put).toHaveBeenCalledTimes(4);
   });
 
+  it("synthesizes and caches filter snapshots when the origin endpoint is missing", async () => {
+    const runtime = createRuntime((_sequence, call) => {
+      if (call.url === "https://origin.example/v1/metadata/filter-snapshot") {
+        return new Response("not found", { status: 404 });
+      }
+      if (call.url === "https://origin.example/v1/metadata/columns") {
+        return Response.json({
+          items: ["国家", "Body type", "细分市场", "动总规整", "Make", "Model"],
+        });
+      }
+      if (call.url === "https://origin.example/v1/filters/options/batch") {
+        return Response.json({
+          items: [
+            { column: "国家", options: ["丹麦", "德国"] },
+            { column: "Body type", options: ["SUV"] },
+            { column: "细分市场", options: ["C"] },
+            { column: "动总规整", options: ["ICE", "BEV"] },
+          ],
+        });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+
+    const first = await callEdgeFunction(runtime, "metadata/filter-snapshot", {
+      headers: {
+        "x-user-name": "dashboard-user",
+        "x-user-role": "viewer",
+      },
+      method: "GET",
+    });
+
+    expect(first.status).toBe(200);
+    expect(first.headers.get("x-jato-edge-cache")).toBe("MISS");
+    expect(first.headers.get("x-jato-edge-cache-endpoint")).toBe("/v1/metadata/filter-snapshot");
+    const payload = await first.json();
+    expect(payload).toMatchObject({
+      columns: ["国家", "Body type", "细分市场", "动总规整", "Make", "Model"],
+      options: {
+        国家: ["丹麦", "德国"],
+        "Body type": ["SUV"],
+        细分市场: ["C"],
+        动总规整: ["ICE", "BEV"],
+      },
+      source: "edge-synthesized",
+    });
+    expect(runtime.originCalls[2]?.method).toBe("POST");
+    expect(runtime.originCalls[2]?.headers.get("content-type")).toBe("application/json");
+
+    await flushWaitUntil(runtime);
+
+    const second = await callEdgeFunction(runtime, "metadata/filter-snapshot", {
+      headers: {
+        "x-user-name": "dashboard-user",
+        "x-user-role": "viewer",
+      },
+      method: "GET",
+    });
+    expect(second.headers.get("x-jato-edge-cache")).toBe("HIT");
+    expect(await second.json()).toMatchObject({ source: "edge-synthesized" });
+    expect(runtime.fetch).toHaveBeenCalledTimes(3);
+    expect(runtime.cache.put).toHaveBeenCalledTimes(1);
+  });
+
+  it("caches readonly data freshness checks", async () => {
+    const runtime = createRuntime();
+
+    const first = await callEdgeFunction(runtime, "analysis/data-freshness", {
+      headers: {
+        "x-user-name": "dashboard-user",
+        "x-user-role": "viewer",
+      },
+      method: "GET",
+    });
+    expect(first.headers.get("x-jato-edge-cache")).toBe("MISS");
+    expect(first.headers.get("x-jato-edge-cache-endpoint")).toBe("/v1/analysis/data-freshness");
+    await flushWaitUntil(runtime);
+
+    const second = await callEdgeFunction(runtime, "analysis/data-freshness", {
+      headers: {
+        "x-user-name": "dashboard-user",
+        "x-user-role": "viewer",
+      },
+      method: "GET",
+    });
+    expect(second.headers.get("x-jato-edge-cache")).toBe("HIT");
+    expect(await second.json()).toMatchObject({ sequence: 1 });
+    expect(runtime.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("bypasses auth and other non-cacheable endpoints", async () => {
     const runtime = createRuntime();
     const response = await callEdgeFunction(runtime, "auth/login", {
