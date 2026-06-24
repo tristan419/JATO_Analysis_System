@@ -193,30 +193,31 @@ async function fetchCacheableOriginResponse(request, origin, method, path, bodyT
 }
 
 async function putCacheableResponse(cache, cacheKey, staleCacheKey, response, ttlSeconds, staleSeconds, path) {
-  const freshResponse = response.clone();
-  const staleResponse = response.clone();
+  const body = await response.arrayBuffer();
+  const freshHeaders = sanitizeResponseHeaders(
+    response,
+    ttlSeconds,
+    path,
+    "MISS",
+    `public, max-age=${ttlSeconds}`,
+  );
+  const staleHeaders = sanitizeResponseHeaders(
+    response,
+    staleSeconds,
+    path,
+    "STALE",
+    `public, max-age=${staleSeconds}`,
+  );
   await Promise.all([
-    cache.put(cacheKey, new Response(freshResponse.body, {
-      status: freshResponse.status,
-      statusText: freshResponse.statusText,
-      headers: sanitizeResponseHeaders(
-        freshResponse,
-        ttlSeconds,
-        path,
-        "MISS",
-        `public, max-age=${ttlSeconds}`,
-      ),
+    cache.put(cacheKey, new Response(body.slice(0), {
+      status: response.status,
+      statusText: response.statusText,
+      headers: freshHeaders,
     })),
-    cache.put(staleCacheKey, new Response(staleResponse.body, {
-      status: staleResponse.status,
-      statusText: staleResponse.statusText,
-      headers: sanitizeResponseHeaders(
-        staleResponse,
-        staleSeconds,
-        path,
-        "STALE",
-        `public, max-age=${staleSeconds}`,
-      ),
+    cache.put(staleCacheKey, new Response(body.slice(0), {
+      status: response.status,
+      statusText: response.statusText,
+      headers: staleHeaders,
     })),
   ]);
 }
