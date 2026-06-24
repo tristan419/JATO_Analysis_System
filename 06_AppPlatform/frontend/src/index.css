@@ -13706,8 +13706,15 @@ table.data-table tr.data-table-group-row.contains-selection td {
 
 /* ── MSRP Cross-Country Monitor ───────────────────────────── */
 .msrp-monitor-page {
+  --msrp-card-border: #d8e0ea;
+  --msrp-card-shadow: 0 12px 28px rgba(15, 23, 42, 0.07);
+  --msrp-panel-radius: 8px;
+  --msrp-section-gap: 12px;
+  --msrp-action-panel-height: clamp(680px, 74vh, 840px);
+  --msrp-visual-panel-height: clamp(760px, 82vh, 920px);
+  --msrp-two-column-grid: repeat(2, minmax(0, 1fr));
   display: grid;
-  gap: 16px;
+  gap: var(--msrp-section-gap);
   padding: 20px;
   color: #172033;
 }
@@ -13740,43 +13747,211 @@ table.data-table tr.data-table-group-row.contains-selection td {
   font-size: 13px;
 }
 
-.msrp-monitor-controls {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(110px, 1fr));
-  gap: 8px;
-  min-width: min(620px, 100%);
+.msrp-monitor-header-meta,
+.msrp-monitor-floating-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
 }
 
-.msrp-monitor-controls label {
+.msrp-monitor-header-meta span {
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #fff;
+  color: #475467;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.msrp-monitor-scope-bar {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--msrp-card-border);
+  border-radius: var(--msrp-panel-radius);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--msrp-card-shadow);
+  padding: 10px;
+  backdrop-filter: blur(10px);
+}
+
+.msrp-monitor-window-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.msrp-monitor-window-strip > span,
+.msrp-monitor-scope-row label > span {
+  color: #667085;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-window-strip button {
+  min-height: 30px;
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #fff;
+  color: #475467;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  padding: 0 10px;
+}
+
+.msrp-monitor-window-strip button:hover:not(:disabled),
+.msrp-monitor-window-strip button:focus-visible,
+.msrp-monitor-window-strip button.is-active {
+  border-color: rgba(37, 99, 235, 0.42);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  outline: none;
+}
+
+.msrp-monitor-window-strip button.is-refresh {
+  margin-left: auto;
+}
+
+.msrp-monitor-window-strip button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.msrp-monitor-scope-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) repeat(4, minmax(128px, 1fr));
+  gap: 8px;
+}
+
+.msrp-monitor-scope-row label {
   display: grid;
   gap: 4px;
-  color: #667085;
-  font-size: 11px;
-  font-weight: 700;
+  min-width: 0;
 }
 
-.msrp-monitor-controls select {
+.msrp-monitor-scope-row select {
   width: 100%;
   min-height: 34px;
   border: 1px solid #cfd6df;
   border-radius: 6px;
   background: #fff;
   color: #172033;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 760;
   padding: 0 9px;
+}
+
+.msrp-monitor-floating-drawer {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.msrp-monitor-floating-panel {
+  width: min(640px, calc(100vw - 32px));
+  height: min(72vh, 720px);
+}
+
+.msrp-monitor-floating-panel .deck-control-tabs {
+  margin-bottom: 12px;
+}
+
+.msrp-monitor-filter-grid .market-scan-field select:disabled {
+  background: #f3f6fa;
+  color: #8a95a6;
+}
+
+.msrp-monitor-filter-sync {
+  color: #667085;
+  font-size: 10px;
+}
+
+.msrp-monitor-preset-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.msrp-monitor-preset-actions button {
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 30px;
+  white-space: normal;
+  text-align: left;
+}
+
+.msrp-monitor-demo-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #f2c94c;
+  border-radius: 8px;
+  background: #fff8df;
+  color: #172033;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.msrp-monitor-demo-banner strong {
+  font-size: 12px;
+}
+
+.msrp-monitor-demo-banner span,
+.msrp-monitor-demo-banner small {
+  color: #667085;
+}
+
+.msrp-monitor-demo-banner small {
+  text-align: right;
 }
 
 .msrp-monitor-summary {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: var(--msrp-section-gap);
 }
 
-.msrp-monitor-summary div {
-  min-height: 72px;
+.msrp-monitor-summary div,
+.msrp-monitor-summary button {
+  display: grid;
+  align-content: space-between;
+  min-height: 78px;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border-radius: var(--msrp-panel-radius);
   background: #fff;
-  padding: 12px;
+  padding: 11px 12px;
+  text-align: left;
+}
+
+.msrp-monitor-summary button {
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.msrp-monitor-summary button:hover:not(:disabled),
+.msrp-monitor-summary button:focus-visible {
+  border-color: rgba(37, 99, 235, 0.42);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
+}
+
+.msrp-monitor-summary button.is-pending {
+  border-color: rgba(37, 99, 235, 0.52);
+  background: rgba(37, 99, 235, 0.04);
+}
+
+.msrp-monitor-summary button:disabled {
+  cursor: default;
+  opacity: 0.62;
 }
 
 .msrp-monitor-summary span {
@@ -13790,6 +13965,1174 @@ table.data-table tr.data-table-group-row.contains-selection td {
   display: block;
   font-size: 24px;
   line-height: 1;
+}
+
+.msrp-monitor-summary small {
+  display: block;
+  margin-top: 8px;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.msrp-monitor-action-layout {
+  display: grid;
+  grid-template-columns: var(--msrp-two-column-grid);
+  gap: var(--msrp-section-gap);
+  align-items: stretch;
+}
+
+.msrp-monitor-action-board,
+.msrp-monitor-action-story {
+  min-height: var(--msrp-action-panel-height);
+  max-height: var(--msrp-action-panel-height);
+  border: 1px solid var(--msrp-card-border);
+  border-radius: var(--msrp-panel-radius);
+  background: #fff;
+  box-shadow: var(--msrp-card-shadow);
+  overflow: hidden;
+}
+
+.msrp-monitor-action-board {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.msrp-monitor-action-story {
+  display: block;
+}
+
+.msrp-monitor-action-board > header,
+.msrp-monitor-action-story > header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  min-height: 74px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid #edf1f5;
+  background: #fff;
+}
+
+.msrp-monitor-action-board > header h2,
+.msrp-monitor-action-story > header h2 {
+  margin: 0;
+  color: #172033;
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.msrp-monitor-action-board > header p,
+.msrp-monitor-action-story > header p {
+  margin: 4px 0 0;
+  color: #667085;
+  font-size: 12px;
+}
+
+.msrp-monitor-action-board > header strong,
+.msrp-monitor-action-story > header strong {
+  flex: 0 0 auto;
+  color: #172033;
+  font-size: 18px;
+  line-height: 1.1;
+  text-align: right;
+}
+
+.msrp-monitor-action-table {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  overflow-x: auto;
+  padding: 0 10px 10px;
+}
+
+.msrp-monitor-action-table-head,
+.msrp-monitor-action-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.76fr) minmax(170px, 1.18fr) minmax(140px, 0.92fr) minmax(176px, 1.14fr);
+  gap: 8px;
+  min-width: 620px;
+}
+
+.msrp-monitor-action-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 8px 6px;
+  background: #fff;
+  color: #667085;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-action-list {
+  display: grid;
+  gap: 6px;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.msrp-monitor-action-row {
+  align-items: stretch;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+  color: #172033;
+  cursor: pointer;
+  padding: 8px;
+  text-align: left;
+  font: inherit;
+}
+
+.msrp-monitor-action-row:hover,
+.msrp-monitor-action-row:focus-visible {
+  border-color: rgba(37, 99, 235, 0.42);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
+  outline: none;
+}
+
+.msrp-monitor-action-row.is-selected {
+  border-color: rgba(37, 99, 235, 0.62);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.14);
+}
+
+.msrp-monitor-action-row.is-block {
+  border-color: rgba(180, 35, 24, 0.3);
+  background: rgba(180, 35, 24, 0.055);
+}
+
+.msrp-monitor-action-row.is-priority-audit {
+  border-color: rgba(217, 74, 58, 0.28);
+  background: rgba(217, 74, 58, 0.055);
+}
+
+.msrp-monitor-action-row.is-sample {
+  border-color: rgba(37, 99, 235, 0.24);
+  background: rgba(37, 99, 235, 0.045);
+}
+
+.msrp-monitor-action-row.is-offer-signal {
+  border-left: 4px solid #0891b2;
+}
+
+.msrp-monitor-action-row.is-msrp-move {
+  border-left: 4px solid #dc2626;
+}
+
+.msrp-monitor-action-row span,
+.msrp-monitor-action-row strong,
+.msrp-monitor-action-row small,
+.msrp-monitor-action-row b {
+  display: block;
+  min-width: 0;
+}
+
+.msrp-monitor-action-row strong,
+.msrp-monitor-action-row b {
+  overflow: hidden;
+  color: #172033;
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msrp-monitor-action-row small {
+  margin-top: 3px;
+  overflow: hidden;
+  color: #667085;
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msrp-monitor-action-priority b {
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #fff;
+  color: #475467;
+  padding: 4px 7px;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-action-row.is-priority-audit .msrp-monitor-action-priority b,
+.msrp-monitor-action-row.is-block .msrp-monitor-action-priority b {
+  border-color: rgba(180, 35, 24, 0.24);
+  color: #b42318;
+}
+
+.msrp-monitor-action-metric strong {
+  color: #b42318;
+  font-size: 14px;
+}
+
+.msrp-monitor-action-row.is-offer-signal .msrp-monitor-action-metric strong {
+  color: #0e7490;
+}
+
+.msrp-monitor-action-status-line {
+  color: #475467;
+  font-weight: 800;
+}
+
+.msrp-monitor-action-overflow {
+  margin-top: 8px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475467;
+  padding: 9px 12px;
+  font-size: 12px;
+}
+
+.msrp-monitor-action-story {
+  padding-bottom: 12px;
+  overflow: auto;
+}
+
+.msrp-monitor-action-story > .msrp-monitor-empty-block {
+  margin: 12px;
+}
+
+.msrp-monitor-impact-view {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.msrp-monitor-impact-copy {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 10px;
+}
+
+.msrp-monitor-impact-copy strong,
+.msrp-monitor-impact-copy span,
+.msrp-monitor-impact-copy p {
+  display: block;
+  min-width: 0;
+}
+
+.msrp-monitor-impact-copy strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.msrp-monitor-impact-copy span,
+.msrp-monitor-impact-copy p {
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.msrp-monitor-impact-copy p {
+  margin: 0;
+}
+
+.msrp-monitor-impact-table {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #e2e8f0;
+}
+
+.msrp-monitor-impact-table div {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  min-height: 74px;
+  background: #fff;
+  padding: 9px;
+}
+
+.msrp-monitor-impact-table div {
+  grid-column: span 2;
+}
+
+.msrp-monitor-impact-table div:nth-child(n + 4) {
+  grid-column: span 3;
+}
+
+.msrp-monitor-impact-table span,
+.msrp-monitor-impact-table strong,
+.msrp-monitor-impact-table small {
+  display: block;
+  min-width: 0;
+}
+
+.msrp-monitor-impact-table span {
+  color: #667085;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-impact-table strong {
+  overflow-wrap: anywhere;
+  color: #172033;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.msrp-monitor-impact-table small {
+  color: #667085;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.msrp-monitor-impact-chart {
+  display: grid;
+  gap: 4px;
+  min-height: 186px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px 9px;
+}
+
+.msrp-monitor-impact-chart.is-actual-expected {
+  min-height: 280px;
+}
+
+.msrp-monitor-impact-chart header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 0;
+  border: 0;
+}
+
+.msrp-monitor-impact-chart header strong,
+.msrp-monitor-impact-chart header span {
+  display: block;
+}
+
+.msrp-monitor-impact-chart header strong {
+  color: #172033;
+  font-size: 12px;
+}
+
+.msrp-monitor-impact-chart header span {
+  color: #667085;
+  font-size: 10px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.msrp-monitor-impact-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 156px;
+}
+
+.msrp-monitor-impact-chart.is-actual-expected svg {
+  min-height: 230px;
+}
+
+.msrp-monitor-impact-window {
+  pointer-events: none;
+}
+
+.msrp-monitor-impact-window rect {
+  fill: rgba(245, 158, 11, 0.08);
+}
+
+.msrp-monitor-impact-window line {
+  stroke: #475467;
+  stroke-dasharray: 3 4;
+  stroke-width: 1.2;
+}
+
+.msrp-monitor-impact-window text {
+  fill: #475467;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.msrp-monitor-impact-grid line {
+  stroke: #e2e8f0;
+  stroke-dasharray: 3 5;
+}
+
+.msrp-monitor-impact-axis line {
+  stroke: #94a3b8;
+  stroke-width: 1;
+}
+
+.msrp-monitor-impact-axis text {
+  fill: #667085;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.msrp-monitor-impact-lines path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.4;
+}
+
+.msrp-monitor-impact-lines .is-expected {
+  stroke: #d97706;
+  stroke-dasharray: 6 5;
+}
+
+.msrp-monitor-impact-lines .is-actual {
+  stroke: #111827;
+}
+
+.msrp-monitor-impact-lines .is-gap {
+  stroke: rgba(217, 119, 6, 0.52);
+  stroke-dasharray: 3 4;
+}
+
+.msrp-monitor-impact-lines .is-effect {
+  stroke: #15803d;
+}
+
+.msrp-monitor-impact-lines .is-cumulative {
+  stroke: #b42318;
+}
+
+.msrp-monitor-impact-chart.is-daily-effect {
+  background: rgba(22, 163, 74, 0.035);
+}
+
+.msrp-monitor-impact-chart.is-cumulative {
+  background: rgba(180, 35, 24, 0.035);
+}
+
+.msrp-monitor-impact-breakdown-label {
+  border-top: 1px dashed #cbd5e1;
+  color: #475467;
+  padding-top: 8px;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.msrp-monitor-impact-breakdown-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.msrp-monitor-impact-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.msrp-monitor-impact-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #fff;
+  color: #475467;
+  padding: 4px 7px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.msrp-monitor-impact-legend i {
+  display: block;
+  width: 14px;
+  height: 0;
+  border-top: 2px solid currentColor;
+}
+
+.msrp-monitor-impact-legend .is-actual {
+  color: #111827;
+}
+
+.msrp-monitor-impact-legend .is-expected {
+  color: #d97706;
+  border-top-style: dashed;
+}
+
+.msrp-monitor-impact-legend .is-effect {
+  color: #15803d;
+}
+
+.msrp-monitor-impact-legend .is-cumulative {
+  color: #b42318;
+}
+
+.msrp-monitor-price-story,
+.msrp-monitor-offer-story {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+.msrp-monitor-price-story-verdict,
+.msrp-monitor-offer-story-verdict {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475467;
+  padding: 10px;
+}
+
+.msrp-monitor-price-story-verdict strong,
+.msrp-monitor-offer-story-verdict strong {
+  color: #172033;
+  font-size: 12px;
+}
+
+.msrp-monitor-price-story-verdict span,
+.msrp-monitor-offer-story-verdict span {
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.msrp-monitor-price-story-verdict.is-warn,
+.msrp-monitor-offer-story-verdict.is-priority-audit,
+.msrp-monitor-offer-story-verdict.is-block {
+  border-color: rgba(180, 83, 9, 0.24);
+  background: rgba(245, 158, 11, 0.09);
+}
+
+.msrp-monitor-price-story-verdict.is-pending,
+.msrp-monitor-offer-story-verdict.is-sample {
+  border-color: rgba(37, 99, 235, 0.22);
+  background: rgba(37, 99, 235, 0.07);
+}
+
+.msrp-monitor-price-story-verdict.is-pass,
+.msrp-monitor-offer-story-verdict.is-auto-pass {
+  border-color: rgba(22, 163, 74, 0.24);
+  background: rgba(22, 163, 74, 0.07);
+}
+
+.msrp-monitor-price-story-rail {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+}
+
+.msrp-monitor-price-story-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.msrp-monitor-price-story-row span {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.msrp-monitor-price-story-row i {
+  display: block;
+  min-width: 18px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.msrp-monitor-price-story-row.is-old i {
+  border: 2px dashed #d94a3a;
+  background: transparent;
+}
+
+.msrp-monitor-price-story-row.is-current i {
+  background: #2563eb;
+}
+
+.msrp-monitor-price-story-row strong {
+  color: #172033;
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.msrp-monitor-price-story-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.msrp-monitor-price-story-evidence span,
+.msrp-monitor-price-story-evidence a {
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #fff;
+  color: #475467;
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-decoration: none;
+}
+
+.msrp-monitor-price-story-evidence a {
+  color: #1d4ed8;
+}
+
+.msrp-monitor-offer-story-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.msrp-monitor-offer-story-grid span {
+  display: grid;
+  gap: 5px;
+  min-height: 70px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #8a95a6;
+  padding: 9px;
+}
+
+.msrp-monitor-offer-story-grid span.is-active {
+  border-color: rgba(8, 145, 178, 0.28);
+  background: rgba(8, 145, 178, 0.08);
+  color: #0e7490;
+}
+
+.msrp-monitor-offer-story-grid .is-cash.is-active {
+  border-color: rgba(180, 35, 24, 0.22);
+  background: rgba(180, 35, 24, 0.06);
+  color: #b42318;
+}
+
+.msrp-monitor-offer-story-grid .is-benefit.is-active {
+  border-color: rgba(22, 163, 74, 0.24);
+  background: rgba(22, 163, 74, 0.08);
+  color: #15803d;
+}
+
+.msrp-monitor-offer-story-grid .is-gap.is-active {
+  border-color: rgba(180, 35, 24, 0.28);
+  background: rgba(180, 35, 24, 0.08);
+  color: #b42318;
+}
+
+.msrp-monitor-offer-story-grid b,
+.msrp-monitor-offer-story-grid strong {
+  display: block;
+  min-width: 0;
+}
+
+.msrp-monitor-offer-story-grid b {
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-offer-story-grid strong {
+  overflow-wrap: anywhere;
+  color: currentColor;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.msrp-monitor-action-story .msrp-monitor-timeline-chart-panel {
+  margin: 0 12px;
+}
+
+.msrp-monitor-coverage-panel,
+.msrp-monitor-launch-panel,
+.msrp-monitor-offer-panel,
+.msrp-monitor-spotcheck-panel {
+  border: 1px solid var(--msrp-card-border);
+  border-radius: var(--msrp-panel-radius);
+  background: #fff;
+  box-shadow: var(--msrp-card-shadow);
+  padding: 14px;
+}
+
+.msrp-monitor-coverage-panel header,
+.msrp-monitor-launch-panel header,
+.msrp-monitor-offer-panel header,
+.msrp-monitor-spotcheck-panel header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  min-height: 50px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.msrp-monitor-coverage-panel h2,
+.msrp-monitor-launch-panel h2,
+.msrp-monitor-offer-panel h2,
+.msrp-monitor-spotcheck-panel h2 {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.msrp-monitor-coverage-panel header span,
+.msrp-monitor-launch-panel header span,
+.msrp-monitor-offer-panel header span,
+.msrp-monitor-coverage-panel header strong,
+.msrp-monitor-launch-panel header strong,
+.msrp-monitor-offer-panel header strong,
+.msrp-monitor-spotcheck-panel header span,
+.msrp-monitor-spotcheck-panel header strong {
+  display: block;
+  margin-top: 3px;
+  color: #667085;
+  font-size: 11px;
+}
+
+.msrp-monitor-coverage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(142px, 1fr));
+  gap: 8px;
+}
+
+.msrp-monitor-coverage-chip,
+.msrp-monitor-launch-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+  color: #172033;
+  cursor: pointer;
+  text-align: left;
+}
+
+.msrp-monitor-coverage-chip {
+  display: grid;
+  gap: 6px;
+  min-height: 92px;
+  padding: 10px;
+}
+
+.msrp-monitor-coverage-chip span {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #667085;
+  font-size: 11px;
+}
+
+.msrp-monitor-coverage-chip span strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.msrp-monitor-coverage-chip b {
+  font-size: 12px;
+}
+
+.msrp-monitor-coverage-chip small {
+  color: #667085;
+  font-size: 10px;
+}
+
+.msrp-monitor-coverage-chip.is-backfilled {
+  border-color: rgba(22, 163, 74, 0.28);
+  background: rgba(22, 163, 74, 0.07);
+}
+
+.msrp-monitor-coverage-chip.is-history-without-backfill {
+  border-color: rgba(37, 99, 235, 0.28);
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.msrp-monitor-coverage-chip.is-current-only {
+  border-color: rgba(245, 158, 11, 0.32);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.msrp-monitor-coverage-chip.is-not-loaded {
+  color: #667085;
+  background: #f8fafc;
+}
+
+.msrp-monitor-launch-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.msrp-monitor-launch-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  min-height: 76px;
+  padding: 10px;
+}
+
+.msrp-monitor-launch-card.is-selected {
+  border-color: rgba(37, 99, 235, 0.48);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+.msrp-monitor-launch-card span,
+.msrp-monitor-launch-card b,
+.msrp-monitor-launch-card small {
+  display: block;
+}
+
+.msrp-monitor-launch-card strong {
+  font-size: 13px;
+}
+
+.msrp-monitor-launch-card small {
+  margin-top: 3px;
+  color: #667085;
+  font-size: 11px;
+}
+
+.msrp-monitor-launch-card b {
+  color: #172033;
+  font-size: 13px;
+  text-align: right;
+}
+
+.msrp-monitor-launch-card em {
+  grid-column: 1 / -1;
+  align-self: end;
+  color: #475467;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-launch-card.is-priority-audit {
+  border-color: rgba(217, 74, 58, 0.28);
+  background: rgba(217, 74, 58, 0.06);
+}
+
+.msrp-monitor-launch-card.is-sample {
+  border-color: rgba(37, 99, 235, 0.24);
+  background: rgba(37, 99, 235, 0.05);
+}
+
+.msrp-monitor-spotcheck-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+}
+
+.msrp-monitor-spotcheck-overflow {
+  margin-top: 8px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475467;
+  padding: 9px 12px;
+  font-size: 12px;
+}
+
+.msrp-monitor-spotcheck-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.msrp-monitor-spotcheck-summary button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475467;
+  cursor: pointer;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.msrp-monitor-spotcheck-summary button:hover,
+.msrp-monitor-spotcheck-summary button:focus-visible {
+  border-color: rgba(37, 99, 235, 0.36);
+  color: #1d4ed8;
+  outline: none;
+}
+
+.msrp-monitor-spotcheck-summary button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.msrp-monitor-spotcheck-summary strong {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #fff;
+  color: #172033;
+  font-size: 10px;
+}
+
+.msrp-monitor-spotcheck-summary button.is-pass {
+  border-color: rgba(22, 163, 74, 0.24);
+  background: rgba(22, 163, 74, 0.07);
+  color: #15803d;
+}
+
+.msrp-monitor-spotcheck-summary button.is-pass strong {
+  color: #15803d;
+}
+
+.msrp-monitor-spotcheck-summary button.is-warn {
+  border-color: rgba(180, 83, 9, 0.26);
+  background: rgba(245, 158, 11, 0.1);
+  color: #92400e;
+}
+
+.msrp-monitor-spotcheck-summary button.is-warn strong {
+  color: #92400e;
+}
+
+.msrp-monitor-spotcheck-summary button.is-pending {
+  border-color: rgba(37, 99, 235, 0.22);
+  background: rgba(37, 99, 235, 0.07);
+  color: #1d4ed8;
+}
+
+.msrp-monitor-spotcheck-summary button.is-pending strong {
+  color: #1d4ed8;
+}
+
+.msrp-monitor-spotcheck-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  min-height: 88px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+  color: #172033;
+  cursor: pointer;
+  padding: 10px;
+  text-align: left;
+}
+
+.msrp-monitor-spotcheck-card.is-selected {
+  border-color: rgba(37, 99, 235, 0.48);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+.msrp-monitor-spotcheck-card span,
+.msrp-monitor-spotcheck-card b,
+.msrp-monitor-spotcheck-card small {
+  display: block;
+}
+
+.msrp-monitor-spotcheck-card strong {
+  font-size: 13px;
+}
+
+.msrp-monitor-spotcheck-card small {
+  margin-top: 3px;
+  color: #667085;
+  font-size: 11px;
+}
+
+.msrp-monitor-spotcheck-card b {
+  color: #b42318;
+  font-size: 14px;
+  text-align: right;
+}
+
+.msrp-monitor-spotcheck-card em,
+.msrp-monitor-spotcheck-card i {
+  align-self: end;
+  color: #475467;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-spotcheck-card i {
+  text-align: right;
+}
+
+.msrp-monitor-spotcheck-card-decision {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 2px;
+  margin-top: 2px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #fff;
+  padding: 6px 8px;
+}
+
+.msrp-monitor-spotcheck-card-decision strong {
+  color: #172033;
+  font-size: 11px;
+}
+
+.msrp-monitor-spotcheck-card-decision small {
+  display: -webkit-box;
+  margin-top: 0;
+  overflow: hidden;
+  color: #667085;
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.msrp-monitor-spotcheck-card-decision.is-pass {
+  border-color: rgba(22, 163, 74, 0.24);
+  background: rgba(22, 163, 74, 0.07);
+}
+
+.msrp-monitor-spotcheck-card-decision.is-pass strong {
+  color: #15803d;
+}
+
+.msrp-monitor-spotcheck-card-decision.is-warn {
+  border-color: rgba(180, 83, 9, 0.26);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.msrp-monitor-spotcheck-card-decision.is-warn strong {
+  color: #92400e;
+}
+
+.msrp-monitor-spotcheck-card-decision.is-pending {
+  border-color: rgba(37, 99, 235, 0.22);
+  background: rgba(37, 99, 235, 0.07);
+}
+
+.msrp-monitor-spotcheck-card-decision.is-pending strong {
+  color: #1d4ed8;
+}
+
+.msrp-monitor-spotcheck-card.is-block {
+  border-color: rgba(180, 35, 24, 0.28);
+  background: rgba(180, 35, 24, 0.06);
+}
+
+.msrp-monitor-spotcheck-card.is-priority-audit {
+  border-color: rgba(217, 74, 58, 0.28);
+  background: rgba(217, 74, 58, 0.06);
+}
+
+.msrp-monitor-spotcheck-card.is-sample {
+  border-color: rgba(37, 99, 235, 0.24);
+  background: rgba(37, 99, 235, 0.05);
+}
+
+.msrp-monitor-offer-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+}
+
+.msrp-monitor-offer-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 10px;
+  min-height: 94px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+  color: #172033;
+  cursor: pointer;
+  padding: 10px;
+  text-align: left;
+}
+
+.msrp-monitor-offer-card.is-selected {
+  border-color: rgba(37, 99, 235, 0.48);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+.msrp-monitor-offer-card span,
+.msrp-monitor-offer-card b,
+.msrp-monitor-offer-card small {
+  display: block;
+}
+
+.msrp-monitor-offer-card strong {
+  font-size: 13px;
+}
+
+.msrp-monitor-offer-card small {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  color: #667085;
+  font-size: 11px;
+}
+
+.msrp-monitor-offer-card b {
+  color: #172033;
+  font-size: 14px;
+  text-align: right;
+}
+
+.msrp-monitor-offer-card b small {
+  grid-column: auto;
+  color: #667085;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.msrp-monitor-offer-card em,
+.msrp-monitor-offer-card i {
+  align-self: end;
+  color: #475467;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-offer-card i {
+  text-align: right;
+}
+
+.msrp-monitor-offer-card.is-block {
+  border-color: rgba(180, 35, 24, 0.28);
+  background: rgba(180, 35, 24, 0.06);
+}
+
+.msrp-monitor-offer-card.is-priority-audit {
+  border-color: rgba(217, 74, 58, 0.28);
+  background: rgba(217, 74, 58, 0.06);
+}
+
+.msrp-monitor-offer-card.is-sample {
+  border-color: rgba(37, 99, 235, 0.24);
+  background: rgba(37, 99, 235, 0.05);
 }
 
 .msrp-monitor-powertrain-legend {
@@ -13829,20 +15172,29 @@ table.data-table tr.data-table-group-row.contains-selection td {
   font-weight: 700;
 }
 
+.msrp-monitor-visual-grid {
+  display: grid;
+  grid-template-columns: var(--msrp-two-column-grid);
+  gap: var(--msrp-section-gap);
+  align-items: stretch;
+}
+
 .msrp-monitor-main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
 }
 
 .msrp-monitor-chart-shell {
   position: relative;
-  min-height: 620px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto minmax(124px, 190px);
+  min-height: var(--msrp-visual-panel-height);
+  max-height: var(--msrp-visual-panel-height);
+  border: 1px solid var(--msrp-card-border);
+  border-radius: var(--msrp-panel-radius);
   background: #fff;
-  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--msrp-card-shadow);
   overflow: hidden;
 }
 
@@ -13850,7 +15202,9 @@ table.data-table tr.data-table-group-row.contains-selection td {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 16px 0;
+  min-height: 74px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid #edf1f5;
 }
 
 .msrp-monitor-chart-head h2 {
@@ -13903,11 +15257,386 @@ table.data-table tr.data-table-group-row.contains-selection td {
   background: #2563eb;
 }
 
+.msrp-monitor-legend .bubble {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid rgba(37, 99, 235, 0.55);
+  background: rgba(37, 99, 235, 0.12);
+}
+
 .msrp-monitor-chart {
   display: block;
   width: 100%;
-  height: auto;
-  min-height: 560px;
+  height: 100%;
+  min-height: 0;
+}
+
+.msrp-monitor-chart-coverage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 14px 10px;
+}
+
+.msrp-monitor-chart-coverage span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475467;
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.msrp-monitor-chart-coverage strong {
+  color: #172033;
+}
+
+.msrp-monitor-chart-model-rail {
+  display: grid;
+  gap: 8px;
+  margin: 0 14px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 10px;
+}
+
+.msrp-monitor-chart-model-rail header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.msrp-monitor-chart-model-rail header strong,
+.msrp-monitor-chart-model-rail header span {
+  display: block;
+  min-width: 0;
+}
+
+.msrp-monitor-chart-model-rail header strong {
+  color: #172033;
+  font-size: 12px;
+}
+
+.msrp-monitor-chart-model-rail header span {
+  color: #667085;
+  font-size: 11px;
+  text-align: right;
+}
+
+.msrp-monitor-chart-model-rail > div {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 6px;
+  min-height: 0;
+  max-height: 136px;
+  overflow: auto;
+}
+
+.msrp-monitor-chart-model-rail button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  min-height: 58px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #172033;
+  cursor: pointer;
+  padding: 8px;
+  text-align: left;
+  font: inherit;
+}
+
+.msrp-monitor-chart-model-rail button:hover,
+.msrp-monitor-chart-model-rail button:focus-visible,
+.msrp-monitor-chart-model-rail button.is-selected {
+  border-color: rgba(37, 99, 235, 0.42);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
+  outline: none;
+}
+
+.msrp-monitor-chart-model-rail button.is-priority-audit,
+.msrp-monitor-chart-model-rail button.is-block {
+  border-color: rgba(217, 74, 58, 0.28);
+  background: rgba(217, 74, 58, 0.05);
+}
+
+.msrp-monitor-chart-model-rail button.is-missing-length {
+  border-style: dashed;
+}
+
+.msrp-monitor-chart-model-rail button span,
+.msrp-monitor-chart-model-rail button strong,
+.msrp-monitor-chart-model-rail button small,
+.msrp-monitor-chart-model-rail button b,
+.msrp-monitor-chart-model-rail button i {
+  display: block;
+  min-width: 0;
+}
+
+.msrp-monitor-chart-model-rail button strong {
+  overflow: hidden;
+  color: #172033;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msrp-monitor-chart-model-rail button small,
+.msrp-monitor-chart-model-rail button i {
+  color: #667085;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.msrp-monitor-chart-model-rail button b {
+  color: #b42318;
+  font-size: 12px;
+  text-align: right;
+}
+
+.msrp-monitor-chart-model-rail button i {
+  grid-column: 2;
+  text-align: right;
+}
+
+.msrp-monitor-offer-visual {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: var(--msrp-visual-panel-height);
+  max-height: var(--msrp-visual-panel-height);
+  border: 1px solid var(--msrp-card-border);
+  border-radius: var(--msrp-panel-radius);
+  background: #fff;
+  box-shadow: var(--msrp-card-shadow);
+  overflow: hidden;
+}
+
+.msrp-monitor-offer-visual header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 74px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.msrp-monitor-offer-visual h2 {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+.msrp-monitor-offer-visual p {
+  margin: 4px 0 0;
+  color: #667085;
+  font-size: 12px;
+}
+
+.msrp-monitor-offer-visual-kpis {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 240px;
+}
+
+.msrp-monitor-offer-visual-kpis span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475467;
+  padding: 4px 7px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.msrp-monitor-offer-visual-kpis strong {
+  color: #172033;
+  font-size: 11px;
+}
+
+.msrp-monitor-offer-heatmap {
+  min-height: 0;
+  overflow: auto;
+  padding: 0 12px 12px;
+}
+
+.msrp-monitor-offer-heatmap-head,
+.msrp-monitor-offer-heatmap-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.2fr) repeat(5, minmax(72px, 0.7fr));
+  gap: 6px;
+  min-width: 680px;
+}
+
+.msrp-monitor-offer-heatmap-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fff;
+  padding: 4px 0 6px;
+  color: #667085;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-offer-heatmap-body {
+  display: grid;
+  gap: 6px;
+}
+
+.msrp-monitor-offer-heatmap-row {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+  color: #172033;
+  cursor: pointer;
+  padding: 7px;
+  text-align: left;
+  font: inherit;
+}
+
+.msrp-monitor-offer-heatmap-row:hover,
+.msrp-monitor-offer-heatmap-row:focus-visible {
+  border-color: rgba(37, 99, 235, 0.42);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
+  outline: none;
+}
+
+.msrp-monitor-offer-heatmap-row.is-selected {
+  border-color: rgba(37, 99, 235, 0.54);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+.msrp-monitor-offer-heatmap-row.is-block {
+  border-color: rgba(180, 35, 24, 0.28);
+  background: rgba(180, 35, 24, 0.05);
+}
+
+.msrp-monitor-offer-heatmap-row.is-priority-audit {
+  border-color: rgba(217, 74, 58, 0.28);
+  background: rgba(217, 74, 58, 0.05);
+}
+
+.msrp-monitor-offer-heatmap-row.is-sample {
+  border-color: rgba(37, 99, 235, 0.22);
+  background: rgba(37, 99, 235, 0.04);
+}
+
+.msrp-monitor-offer-heatmap-model {
+  display: grid;
+  align-content: center;
+  min-width: 0;
+}
+
+.msrp-monitor-offer-heatmap-model strong,
+.msrp-monitor-offer-heatmap-model small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msrp-monitor-offer-heatmap-model strong {
+  font-size: 12px;
+}
+
+.msrp-monitor-offer-heatmap-model small {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 10px;
+}
+
+.msrp-monitor-offer-heatmap-cell {
+  position: relative;
+  display: grid;
+  align-items: center;
+  min-height: 38px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #fff;
+  color: #94a3b8;
+  padding: 0 7px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.msrp-monitor-offer-heatmap-cell i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: transparent;
+}
+
+.msrp-monitor-offer-heatmap-cell b {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msrp-monitor-offer-heatmap-cell.is-active {
+  color: #172033;
+}
+
+.msrp-monitor-offer-heatmap-cell.is-cash.is-active {
+  border-color: rgba(217, 74, 58, 0.26);
+  background: rgba(217, 74, 58, 0.05);
+}
+
+.msrp-monitor-offer-heatmap-cell.is-cash.is-active i {
+  background: rgba(217, 74, 58, 0.18);
+}
+
+.msrp-monitor-offer-heatmap-cell.is-finance.is-active {
+  border-color: rgba(8, 145, 178, 0.24);
+  background: rgba(8, 145, 178, 0.06);
+}
+
+.msrp-monitor-offer-heatmap-cell.is-finance.is-active i {
+  background: rgba(8, 145, 178, 0.16);
+}
+
+.msrp-monitor-offer-heatmap-cell.is-lease.is-active {
+  border-color: rgba(37, 99, 235, 0.24);
+  background: rgba(37, 99, 235, 0.05);
+}
+
+.msrp-monitor-offer-heatmap-cell.is-lease.is-active i {
+  background: rgba(37, 99, 235, 0.16);
+}
+
+.msrp-monitor-offer-heatmap-cell.is-benefit.is-active {
+  border-color: rgba(22, 163, 74, 0.24);
+  background: rgba(22, 163, 74, 0.06);
+}
+
+.msrp-monitor-offer-heatmap-cell.is-benefit.is-active i {
+  background: rgba(22, 163, 74, 0.16);
+}
+
+.msrp-monitor-offer-heatmap-cell.is-gap.is-active {
+  border-color: rgba(180, 35, 24, 0.28);
+  background: rgba(180, 35, 24, 0.07);
+  color: #b42318;
+}
+
+.msrp-monitor-offer-heatmap-cell.is-gap.is-active i {
+  background: rgba(180, 35, 24, 0.16);
 }
 
 .msrp-monitor-grid line {
@@ -13925,6 +15654,24 @@ table.data-table tr.data-table-group-row.contains-selection td {
   font-weight: 650;
 }
 
+.msrp-monitor-length-pending-lane rect {
+  fill: rgba(100, 116, 139, 0.05);
+  stroke: rgba(100, 116, 139, 0.2);
+  stroke-dasharray: 5 5;
+}
+
+.msrp-monitor-length-pending-lane line {
+  stroke: rgba(100, 116, 139, 0.34);
+  stroke-dasharray: 4 5;
+}
+
+.msrp-monitor-length-pending-lane text {
+  fill: #64748b;
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
 .msrp-monitor-point {
   cursor: pointer;
   outline: none;
@@ -13935,11 +15682,58 @@ table.data-table tr.data-table-group-row.contains-selection td {
   stroke-width: 3px;
 }
 
+.msrp-monitor-hit-target {
+  fill: transparent;
+  pointer-events: all;
+}
+
 .msrp-monitor-drop-line {
   stroke: #d94a3a;
   stroke-width: 2;
   stroke-dasharray: 6 5;
   opacity: 0.75;
+}
+
+.msrp-monitor-drop-line.is-rise {
+  stroke: #16a34a;
+}
+
+.msrp-monitor-drop-line.is-flat {
+  stroke: #64748b;
+}
+
+.msrp-monitor-price-trail line {
+  stroke-linecap: round;
+  stroke-width: 4;
+}
+
+.msrp-monitor-price-trail .is-drop {
+  stroke: #dc2626;
+}
+
+.msrp-monitor-price-trail .is-rise {
+  stroke: #16a34a;
+}
+
+.msrp-monitor-price-trail .is-flat {
+  stroke: #64748b;
+}
+
+.msrp-monitor-point.is-drop .msrp-monitor-old-dot {
+  stroke: #dc2626;
+}
+
+.msrp-monitor-point.is-rise .msrp-monitor-old-dot {
+  stroke: #16a34a;
+}
+
+.msrp-monitor-point.is-flat .msrp-monitor-old-dot {
+  stroke: #64748b;
+}
+
+.msrp-monitor-point.is-unanchored .msrp-monitor-current-dot {
+  stroke: #475467;
+  stroke-dasharray: 4 3;
 }
 
 .msrp-monitor-old-dot {
@@ -13985,70 +15779,10 @@ table.data-table tr.data-table-group-row.contains-selection td {
   font-size: 13px;
 }
 
-.msrp-monitor-deck {
-  position: sticky;
-  top: 16px;
-  max-height: calc(100vh - 32px);
-  overflow: auto;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.14);
-}
-
-.msrp-monitor-deck-head {
-  display: grid;
-  gap: 4px;
-  padding: 14px;
-  border-bottom: 1px solid #e2e8f0;
-}
-
-.msrp-monitor-deck-head span {
-  color: #667085;
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.msrp-monitor-deck-head strong {
-  font-size: 20px;
-  line-height: 1.15;
-}
-
-.msrp-monitor-deck-head small {
-  color: #667085;
-  font-size: 12px;
-}
-
-.msrp-monitor-tabs {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 4px;
-  padding: 10px;
-  border-bottom: 1px solid #e2e8f0;
-}
-
-.msrp-monitor-tabs button {
-  min-height: 30px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: #f6f8fb;
-  color: #667085;
-  font-size: 11px;
-  font-weight: 760;
-  cursor: pointer;
-  text-transform: capitalize;
-}
-
-.msrp-monitor-tabs button.is-active {
-  border-color: #cfd6df;
-  background: #fff;
-  color: #172033;
-}
-
 .msrp-monitor-deck-section,
 .msrp-monitor-country-list,
 .msrp-monitor-timeline,
+.msrp-monitor-offer-deck,
 .msrp-monitor-source-panel {
   padding: 14px;
 }
@@ -14087,9 +15821,30 @@ table.data-table tr.data-table-group-row.contains-selection td {
   font-size: 10px;
 }
 
+.msrp-monitor-audit-card.is-block {
+  border-color: rgba(180, 35, 24, 0.28);
+  background: rgba(180, 35, 24, 0.07);
+}
+
+.msrp-monitor-audit-card.is-priority-audit {
+  border-color: rgba(217, 74, 58, 0.28);
+  background: rgba(217, 74, 58, 0.08);
+}
+
+.msrp-monitor-audit-card.is-sample {
+  border-color: rgba(37, 99, 235, 0.24);
+  background: rgba(37, 99, 235, 0.07);
+}
+
+.msrp-monitor-audit-card.is-auto-pass {
+  border-color: rgba(22, 163, 74, 0.24);
+  background: rgba(22, 163, 74, 0.07);
+}
+
 .msrp-monitor-signal-list,
 .msrp-monitor-missing-length,
-.msrp-monitor-risk-reasons {
+.msrp-monitor-risk-reasons,
+.msrp-monitor-backfill-note {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -14111,6 +15866,211 @@ table.data-table tr.data-table-group-row.contains-selection td {
   border-color: rgba(22, 163, 74, 0.24);
   color: #15803d;
   background: rgba(22, 163, 74, 0.08);
+}
+
+.msrp-monitor-signal-list .is-backfill-signal {
+  border-color: rgba(37, 99, 235, 0.26);
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.msrp-monitor-signal-list .is-boundary {
+  border-color: rgba(180, 83, 9, 0.24);
+  color: #92400e;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.msrp-monitor-audit-pill.is-block {
+  border-color: rgba(180, 35, 24, 0.28);
+  color: #b42318;
+  background: rgba(180, 35, 24, 0.08);
+}
+
+.msrp-monitor-audit-pill.is-priority-audit {
+  border-color: rgba(217, 74, 58, 0.28);
+  color: #b42318;
+  background: rgba(217, 74, 58, 0.08);
+}
+
+.msrp-monitor-audit-pill.is-sample {
+  border-color: rgba(37, 99, 235, 0.24);
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.07);
+}
+
+.msrp-monitor-audit-pill.is-auto-pass {
+  border-color: rgba(22, 163, 74, 0.24);
+  color: #15803d;
+  background: rgba(22, 163, 74, 0.08);
+}
+
+.msrp-monitor-sales-chart-panel {
+  margin-top: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 10px;
+}
+
+.msrp-monitor-sales-chart-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.msrp-monitor-sales-chart-head strong,
+.msrp-monitor-sales-chart-head span,
+.msrp-monitor-sales-chart-head b,
+.msrp-monitor-sales-chart-head small {
+  display: block;
+}
+
+.msrp-monitor-sales-chart-head strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.msrp-monitor-sales-chart-head span,
+.msrp-monitor-sales-chart-head small {
+  color: #667085;
+  font-size: 11px;
+}
+
+.msrp-monitor-sales-chart-head em {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 6px;
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #fff;
+  padding: 4px 7px;
+  color: #475467;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.msrp-monitor-sales-coverage.is-covered {
+  border-color: rgba(22, 163, 74, 0.28);
+  color: #15803d;
+  background: rgba(22, 163, 74, 0.08);
+}
+
+.msrp-monitor-sales-coverage.is-post-sales-pending {
+  border-color: rgba(245, 158, 11, 0.32);
+  color: #92400e;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.msrp-monitor-sales-coverage.is-no-sales-match {
+  border-color: rgba(100, 116, 139, 0.24);
+  color: #475467;
+  background: rgba(100, 116, 139, 0.08);
+}
+
+.msrp-monitor-sales-chart-head b {
+  color: #172033;
+  text-align: right;
+  font-size: 16px;
+}
+
+.msrp-monitor-sales-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.msrp-monitor-sales-grid line {
+  stroke: #dfe6ef;
+  stroke-dasharray: 3 5;
+}
+
+.msrp-monitor-sales-axis line {
+  stroke: #b8c2d2;
+}
+
+.msrp-monitor-sales-axis text {
+  fill: #667085;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.msrp-monitor-sales-area {
+  fill: rgba(37, 99, 235, 0.1);
+}
+
+.msrp-monitor-sales-line {
+  fill: none;
+  stroke: #2563eb;
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.msrp-monitor-sales-marker line {
+  stroke-width: 1.5;
+  stroke-dasharray: 5 5;
+  opacity: 0.78;
+}
+
+.msrp-monitor-sales-marker circle {
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.msrp-monitor-sales-marker.is-drop line {
+  stroke: #dc2626;
+}
+
+.msrp-monitor-sales-marker.is-drop circle {
+  fill: #dc2626;
+}
+
+.msrp-monitor-sales-marker.is-pending line {
+  opacity: 0.88;
+}
+
+.msrp-monitor-sales-marker.is-pending circle {
+  fill: #fff;
+  stroke-width: 2.5;
+}
+
+.msrp-monitor-sales-marker.is-drop.is-pending circle {
+  stroke: #dc2626;
+}
+
+.msrp-monitor-sales-marker.is-rise line {
+  stroke: #16a34a;
+}
+
+.msrp-monitor-sales-marker.is-rise circle {
+  fill: #16a34a;
+}
+
+.msrp-monitor-sales-marker.is-flat line {
+  stroke: #64748b;
+}
+
+.msrp-monitor-sales-marker.is-flat circle {
+  fill: #64748b;
+}
+
+.msrp-monitor-sales-warning {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.msrp-monitor-sales-warning span {
+  border: 1px solid rgba(180, 83, 9, 0.24);
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.08);
+  color: #92400e;
+  padding: 4px 7px;
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .msrp-monitor-missing-length strong {
@@ -14163,11 +16123,170 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 .msrp-monitor-country-list b {
+  display: grid;
+  gap: 2px;
+  justify-items: end;
   color: #b42318;
+}
+
+.msrp-monitor-country-list b small {
+  color: #667085;
+  font-weight: 700;
 }
 
 .msrp-monitor-timeline input {
   width: 100%;
+}
+
+.msrp-monitor-timeline-chart-panel {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.76);
+  padding: 10px;
+}
+
+.msrp-monitor-timeline-chart-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.msrp-monitor-timeline-chart-head strong,
+.msrp-monitor-timeline-chart-head span {
+  display: block;
+}
+
+.msrp-monitor-timeline-chart-head strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.msrp-monitor-timeline-chart-head span {
+  color: #667085;
+  font-size: 11px;
+}
+
+.msrp-monitor-timeline-chart-legend {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+  max-width: 260px;
+}
+
+.msrp-monitor-timeline-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #fff;
+  padding: 4px 7px;
+  color: #475467;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.msrp-monitor-timeline-chart-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.msrp-monitor-timeline-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 300px;
+}
+
+.msrp-monitor-timeline-grid line {
+  stroke: #dfe6ef;
+  stroke-dasharray: 3 5;
+}
+
+.msrp-monitor-timeline-axis line {
+  stroke: #b8c2d2;
+}
+
+.msrp-monitor-timeline-axis text,
+.msrp-monitor-timeline-strip-label {
+  fill: #667085;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.msrp-monitor-timeline-lines path {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.msrp-monitor-timeline-change-line {
+  stroke: #d94a3a;
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+  opacity: 0.75;
+}
+
+.msrp-monitor-timeline-dot,
+.msrp-monitor-timeline-strip-dot {
+  cursor: pointer;
+  stroke-width: 2.5;
+}
+
+.msrp-monitor-timeline-dot.is-drop,
+.msrp-monitor-timeline-strip-dot.is-drop {
+  fill: #dc2626;
+}
+
+.msrp-monitor-timeline-dot.is-rise,
+.msrp-monitor-timeline-strip-dot.is-rise {
+  fill: #16a34a;
+}
+
+.msrp-monitor-timeline-dot.is-flat,
+.msrp-monitor-timeline-strip-dot.is-flat {
+  fill: #64748b;
+}
+
+.msrp-monitor-timeline-dot.is-auto-pass,
+.msrp-monitor-timeline-strip-dot.is-auto-pass {
+  stroke: #86efac;
+}
+
+.msrp-monitor-timeline-dot.is-sample,
+.msrp-monitor-timeline-strip-dot.is-sample {
+  stroke: #93c5fd;
+}
+
+.msrp-monitor-timeline-dot.is-priority-audit,
+.msrp-monitor-timeline-strip-dot.is-priority-audit {
+  stroke: #f97316;
+}
+
+.msrp-monitor-timeline-dot.is-block,
+.msrp-monitor-timeline-strip-dot.is-block {
+  stroke: #991b1b;
+}
+
+.msrp-monitor-timeline-dot.is-selected,
+.msrp-monitor-timeline-strip-dot.is-selected {
+  stroke: #111827;
+  filter: drop-shadow(0 4px 7px rgba(15, 23, 42, 0.24));
+}
+
+.msrp-monitor-empty-block {
+  display: grid;
+  min-height: 160px;
+  place-items: center;
+  border: 1px dashed #cfd6df;
+  border-radius: 8px;
+  color: #667085;
+  background: rgba(255, 255, 255, 0.64);
+  font-size: 12px;
 }
 
 .msrp-monitor-timeline-list {
@@ -14212,6 +16331,411 @@ table.data-table tr.data-table-group-row.contains-selection td {
   font-size: 12px;
 }
 
+.msrp-monitor-offer-deck {
+  display: grid;
+  gap: 10px;
+}
+
+.msrp-monitor-offer-deck-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.msrp-monitor-offer-deck-toolbar label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.msrp-monitor-offer-deck-toolbar span {
+  color: #667085;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-offer-deck-toolbar select {
+  min-height: 32px;
+  border: 1px solid #cfd6df;
+  border-radius: 6px;
+  background: #fff;
+  color: #172033;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 760;
+  padding: 0 9px;
+}
+
+.msrp-monitor-offer-deck-toolbar strong {
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #fff;
+  color: #475467;
+  padding: 6px 9px;
+  font-size: 11px;
+}
+
+.msrp-monitor-offer-deck-list {
+  display: grid;
+  gap: 6px;
+  max-height: 190px;
+  overflow: auto;
+}
+
+.msrp-monitor-offer-deck-list button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #172033;
+  cursor: pointer;
+  padding: 8px;
+  text-align: left;
+  font: inherit;
+}
+
+.msrp-monitor-offer-deck-list button.is-selected {
+  border-color: rgba(37, 99, 235, 0.45);
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.msrp-monitor-offer-deck-list span,
+.msrp-monitor-offer-deck-list strong,
+.msrp-monitor-offer-deck-list small {
+  display: block;
+  min-width: 0;
+}
+
+.msrp-monitor-offer-deck-list strong {
+  overflow: hidden;
+  color: #172033;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msrp-monitor-offer-deck-list small {
+  color: #667085;
+  font-size: 10px;
+}
+
+.msrp-monitor-offer-deck-list b {
+  color: #172033;
+  font-size: 12px;
+  text-align: right;
+}
+
+.msrp-monitor-offer-drilldown {
+  display: grid;
+  gap: 10px;
+}
+
+.msrp-monitor-offer-drilldown > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 10px;
+}
+
+.msrp-monitor-offer-drilldown h3 {
+  margin: 0;
+  color: #172033;
+  font-size: 14px;
+}
+
+.msrp-monitor-offer-drilldown header span {
+  display: block;
+  margin-top: 3px;
+  color: #667085;
+  font-size: 11px;
+}
+
+.msrp-monitor-offer-drilldown header strong {
+  flex: 0 0 auto;
+  color: #172033;
+  font-size: 14px;
+  text-align: right;
+}
+
+.msrp-monitor-offer-drilldown-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.msrp-monitor-offer-drilldown-grid div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 9px;
+}
+
+.msrp-monitor-offer-drilldown-grid span {
+  color: #667085;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.msrp-monitor-offer-drilldown-grid strong {
+  color: #172033;
+  font-size: 12px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.msrp-monitor-offer-drilldown-grid small {
+  color: #667085;
+  font-size: 10px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.msrp-monitor-offer-timeline {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 8px;
+}
+
+.msrp-monitor-offer-timeline span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border-left: 3px solid #cbd5e1;
+  padding-left: 7px;
+}
+
+.msrp-monitor-offer-timeline span.is-active {
+  border-left-color: #2563eb;
+}
+
+.msrp-monitor-offer-timeline b {
+  color: #667085;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-offer-timeline strong {
+  color: #172033;
+  font-size: 11px;
+}
+
+.msrp-monitor-offer-source {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 10px;
+}
+
+.msrp-monitor-offer-source.is-block {
+  border-color: rgba(180, 35, 24, 0.28);
+  background: rgba(180, 35, 24, 0.06);
+}
+
+.msrp-monitor-offer-source.is-priority-audit {
+  border-color: rgba(217, 74, 58, 0.28);
+  background: rgba(217, 74, 58, 0.06);
+}
+
+.msrp-monitor-offer-source.is-sample {
+  border-color: rgba(37, 99, 235, 0.24);
+  background: rgba(37, 99, 235, 0.05);
+}
+
+.msrp-monitor-offer-source header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.msrp-monitor-offer-source header strong,
+.msrp-monitor-offer-source header span,
+.msrp-monitor-offer-source header b,
+.msrp-monitor-offer-source p {
+  display: block;
+}
+
+.msrp-monitor-offer-source header strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.msrp-monitor-offer-source header span,
+.msrp-monitor-offer-source p {
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.msrp-monitor-offer-source header b {
+  flex: 0 0 auto;
+  color: #172033;
+  font-size: 15px;
+  text-align: right;
+}
+
+.msrp-monitor-offer-source-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.msrp-monitor-offer-source-tags span {
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #fff;
+  color: #475467;
+  padding: 4px 7px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.msrp-monitor-offer-source p {
+  margin: 0;
+}
+
+.msrp-monitor-source-boundary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(180, 83, 9, 0.22);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.08);
+  padding: 10px;
+  color: #92400e;
+}
+
+.msrp-monitor-source-verdict {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475467;
+  padding: 10px;
+}
+
+.msrp-monitor-source-verdict strong,
+.msrp-monitor-source-verdict span {
+  display: block;
+}
+
+.msrp-monitor-source-verdict strong {
+  color: #172033;
+  font-size: 12px;
+}
+
+.msrp-monitor-source-verdict span {
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.msrp-monitor-source-verdict.is-pass {
+  border-color: rgba(22, 163, 74, 0.24);
+  background: rgba(22, 163, 74, 0.07);
+  color: #166534;
+}
+
+.msrp-monitor-source-verdict.is-pass strong {
+  color: #15803d;
+}
+
+.msrp-monitor-source-verdict.is-pending {
+  border-color: rgba(37, 99, 235, 0.22);
+  background: rgba(37, 99, 235, 0.07);
+  color: #1d4ed8;
+}
+
+.msrp-monitor-source-verdict.is-pending strong {
+  color: #1d4ed8;
+}
+
+.msrp-monitor-source-verdict.is-warn {
+  border-color: rgba(180, 83, 9, 0.26);
+  background: rgba(245, 158, 11, 0.1);
+  color: #92400e;
+}
+
+.msrp-monitor-source-verdict.is-warn strong {
+  color: #92400e;
+}
+
+.msrp-monitor-source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.msrp-monitor-source-actions a,
+.msrp-monitor-source-actions button,
+.msrp-monitor-source-actions span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  max-width: 100%;
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #fff;
+  color: #1d4ed8;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.msrp-monitor-source-actions button {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.msrp-monitor-source-actions a:hover,
+.msrp-monitor-source-actions button:hover,
+.msrp-monitor-source-actions a:focus-visible,
+.msrp-monitor-source-actions button:focus-visible {
+  border-color: rgba(37, 99, 235, 0.42);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
+  outline: none;
+}
+
+.msrp-monitor-source-actions span {
+  color: #475467;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.msrp-monitor-source-boundary strong {
+  font-size: 12px;
+}
+
+.msrp-monitor-source-boundary span {
+  color: #78350f;
+  font-size: 11px;
+}
+
 .msrp-monitor-source-panel dt {
   color: #667085;
   font-weight: 700;
@@ -14221,6 +16745,553 @@ table.data-table tr.data-table-group-row.contains-selection td {
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.msrp-monitor-source-panel a {
+  color: #1d4ed8;
+  overflow-wrap: anywhere;
+}
+
+.msrp-monitor-source-queue-nav {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px;
+}
+
+.msrp-monitor-source-queue-nav button {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  color: #172033;
+  cursor: pointer;
+  font-size: 18px;
+  font-weight: 800;
+  min-height: 30px;
+  min-width: 32px;
+  padding: 0;
+}
+
+.msrp-monitor-source-queue-nav button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.msrp-monitor-source-queue-nav span,
+.msrp-monitor-source-queue-nav strong,
+.msrp-monitor-source-queue-nav small {
+  display: block;
+  min-width: 0;
+}
+
+.msrp-monitor-source-queue-nav strong {
+  color: #172033;
+  font-size: 12px;
+}
+
+.msrp-monitor-source-queue-nav small {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msrp-monitor-backfill-note {
+  align-items: center;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.06);
+  color: #1e3a8a;
+  padding: 8px;
+  font-size: 11px;
+}
+
+.msrp-monitor-backfill-note strong {
+  font-size: 11px;
+}
+
+.msrp-monitor-backfill-note span {
+  color: #475467;
+}
+
+.msrp-monitor-related-evidence {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.msrp-monitor-related-evidence header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.msrp-monitor-related-evidence header strong {
+  color: #172033;
+  font-size: 12px;
+}
+
+.msrp-monitor-related-evidence header span {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-related-evidence > div {
+  display: grid;
+  gap: 6px;
+}
+
+.msrp-monitor-related-evidence section {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 6px;
+}
+
+.msrp-monitor-related-evidence section:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.msrp-monitor-related-evidence section strong,
+.msrp-monitor-related-evidence section em,
+.msrp-monitor-related-evidence section span,
+.msrp-monitor-related-evidence section small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.msrp-monitor-related-evidence section strong {
+  color: #172033;
+  font-size: 11px;
+}
+
+.msrp-monitor-related-evidence section em {
+  color: #475467;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.msrp-monitor-related-evidence section span,
+.msrp-monitor-related-evidence section small {
+  color: #667085;
+  font-size: 10px;
+}
+
+.msrp-monitor-related-evidence section span button {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  color: #1d4ed8;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
+  padding: 3px 6px;
+}
+
+.msrp-monitor-related-evidence section span button:hover,
+.msrp-monitor-related-evidence section span button:focus-visible,
+.msrp-monitor-related-evidence section span button.is-active {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.msrp-monitor-evidence-checklist {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+}
+
+.msrp-monitor-evidence-checklist header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.msrp-monitor-evidence-checklist header strong {
+  color: #172033;
+  font-size: 12px;
+}
+
+.msrp-monitor-evidence-checklist header span {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-evidence-checklist > div {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px;
+}
+
+.msrp-monitor-evidence-checklist > div span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #475467;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 6px 8px;
+}
+
+.msrp-monitor-evidence-checklist b {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 4px 5px;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-evidence-checklist .is-pass {
+  border-color: rgba(22, 163, 74, 0.22);
+  background: rgba(22, 163, 74, 0.07);
+  color: #166534;
+}
+
+.msrp-monitor-evidence-checklist .is-pass b {
+  background: #16a34a;
+}
+
+.msrp-monitor-evidence-checklist .is-pending {
+  border-color: rgba(37, 99, 235, 0.2);
+  background: rgba(37, 99, 235, 0.06);
+  color: #1d4ed8;
+}
+
+.msrp-monitor-evidence-checklist .is-pending b {
+  background: #2563eb;
+}
+
+.msrp-monitor-evidence-checklist .is-warn {
+  border-color: rgba(180, 83, 9, 0.24);
+  background: rgba(245, 158, 11, 0.1);
+  color: #92400e;
+}
+
+.msrp-monitor-evidence-checklist .is-warn b {
+  background: #b45309;
+}
+
+.msrp-monitor-snapshot-preview-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.msrp-monitor-snapshot-preview-actions button {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  color: #1d4ed8;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
+  padding: 4px 7px;
+}
+
+.msrp-monitor-snapshot-preview-actions button:hover,
+.msrp-monitor-snapshot-preview-actions button:focus-visible {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.msrp-monitor-spotcheck-brief {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.msrp-monitor-spotcheck-brief header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.msrp-monitor-spotcheck-brief header div,
+.msrp-monitor-spotcheck-brief header strong,
+.msrp-monitor-spotcheck-brief header span {
+  display: block;
+  min-width: 0;
+}
+
+.msrp-monitor-spotcheck-brief header strong {
+  color: #172033;
+  font-size: 12px;
+}
+
+.msrp-monitor-spotcheck-brief header span {
+  width: fit-content;
+  margin-top: 5px;
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475467;
+  padding: 4px 7px;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-spotcheck-brief header span.is-pass {
+  border-color: rgba(22, 163, 74, 0.26);
+  background: rgba(22, 163, 74, 0.08);
+  color: #15803d;
+}
+
+.msrp-monitor-spotcheck-brief header span.is-pending {
+  border-color: rgba(37, 99, 235, 0.22);
+  background: rgba(37, 99, 235, 0.07);
+  color: #1d4ed8;
+}
+
+.msrp-monitor-spotcheck-brief header span.is-warn {
+  border-color: rgba(180, 83, 9, 0.26);
+  background: rgba(245, 158, 11, 0.1);
+  color: #92400e;
+}
+
+.msrp-monitor-spotcheck-brief button {
+  flex: 0 0 auto;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  color: #172033;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.msrp-monitor-spotcheck-brief button:hover {
+  border-color: #2563eb;
+  color: #1d4ed8;
+}
+
+.msrp-monitor-spotcheck-brief button.is-copied {
+  border-color: rgba(22, 163, 74, 0.28);
+  background: rgba(22, 163, 74, 0.08);
+  color: #15803d;
+}
+
+.msrp-monitor-spotcheck-brief button.is-failed {
+  border-color: rgba(180, 83, 9, 0.28);
+  background: rgba(245, 158, 11, 0.1);
+  color: #92400e;
+}
+
+.msrp-monitor-spotcheck-decision {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #475467;
+  padding: 8px;
+  font-size: 11px;
+}
+
+.msrp-monitor-spotcheck-decision strong,
+.msrp-monitor-spotcheck-decision span {
+  display: block;
+}
+
+.msrp-monitor-spotcheck-decision strong {
+  color: #172033;
+  font-size: 12px;
+}
+
+.msrp-monitor-spotcheck-decision span {
+  line-height: 1.45;
+}
+
+.msrp-monitor-spotcheck-decision ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.msrp-monitor-spotcheck-decision li {
+  border: 1px solid rgba(100, 116, 139, 0.18);
+  border-radius: 999px;
+  background: #fff;
+  color: #475467;
+  padding: 4px 7px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.msrp-monitor-spotcheck-decision.is-pass {
+  border-color: rgba(22, 163, 74, 0.24);
+  background: rgba(22, 163, 74, 0.07);
+  color: #166534;
+}
+
+.msrp-monitor-spotcheck-decision.is-pass strong,
+.msrp-monitor-spotcheck-decision.is-pass li {
+  color: #15803d;
+}
+
+.msrp-monitor-spotcheck-decision.is-pending {
+  border-color: rgba(37, 99, 235, 0.22);
+  background: rgba(37, 99, 235, 0.07);
+  color: #1d4ed8;
+}
+
+.msrp-monitor-spotcheck-decision.is-pending strong,
+.msrp-monitor-spotcheck-decision.is-pending li {
+  color: #1d4ed8;
+}
+
+.msrp-monitor-spotcheck-decision.is-warn {
+  border-color: rgba(180, 83, 9, 0.26);
+  background: rgba(245, 158, 11, 0.1);
+  color: #92400e;
+}
+
+.msrp-monitor-spotcheck-decision.is-warn strong,
+.msrp-monitor-spotcheck-decision.is-warn li {
+  color: #92400e;
+}
+
+.msrp-monitor-spotcheck-brief-warnings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.msrp-monitor-spotcheck-brief-warnings span {
+  border: 1px solid rgba(180, 83, 9, 0.22);
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.08);
+  color: #92400e;
+  padding: 4px 7px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.msrp-monitor-spotcheck-brief pre {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #172033;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  padding: 8px;
+  white-space: pre-wrap;
+}
+
+.msrp-monitor-snapshot-preview {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.msrp-monitor-snapshot-preview header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.msrp-monitor-snapshot-preview header div,
+.msrp-monitor-snapshot-preview header span {
+  display: block;
+  min-width: 0;
+}
+
+.msrp-monitor-snapshot-preview header strong {
+  color: #172033;
+  font-size: 12px;
+}
+
+.msrp-monitor-snapshot-preview header span,
+.msrp-monitor-snapshot-preview header small,
+.msrp-monitor-snapshot-preview p {
+  color: #667085;
+  font-size: 11px;
+}
+
+.msrp-monitor-snapshot-preview header span {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.msrp-monitor-snapshot-preview header small {
+  flex: 0 0 auto;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-snapshot-preview p {
+  margin: 0;
+}
+
+.msrp-monitor-snapshot-preview pre {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #172033;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  padding: 8px;
+  white-space: pre-wrap;
 }
 
 .msrp-monitor-detail {
@@ -14254,7 +17325,7 @@ table.data-table tr.data-table-group-row.contains-selection td {
 
 .msrp-monitor-detail table {
   width: 100%;
-  min-width: 980px;
+  min-width: 1080px;
   border-collapse: collapse;
   font-size: 12px;
 }
@@ -14278,6 +17349,16 @@ table.data-table tr.data-table-group-row.contains-selection td {
   cursor: pointer;
 }
 
+.msrp-monitor-detail tbody tr:hover td,
+.msrp-monitor-detail tbody tr:focus-visible td {
+  background: rgba(37, 99, 235, 0.04);
+}
+
+.msrp-monitor-detail tbody tr:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.45);
+  outline-offset: -2px;
+}
+
 .msrp-monitor-detail tr.is-selected td {
   background: rgba(37, 99, 235, 0.06);
 }
@@ -14291,15 +17372,20 @@ table.data-table tr.data-table-group-row.contains-selection td {
   .msrp-monitor-topbar {
     flex-direction: column;
   }
-  .msrp-monitor-controls,
-  .msrp-monitor-main {
+  .msrp-monitor-scope-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .msrp-monitor-action-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .msrp-monitor-visual-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .msrp-monitor-demo-banner {
     grid-template-columns: 1fr;
   }
-  .msrp-monitor-deck {
-    position: relative;
-    top: 0;
-    max-height: none;
-    order: -1;
+  .msrp-monitor-demo-banner small {
+    text-align: left;
   }
 }
 
@@ -14310,14 +17396,77 @@ table.data-table tr.data-table-group-row.contains-selection td {
   .msrp-monitor-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .msrp-monitor-controls {
+  .msrp-monitor-window-strip button.is-refresh {
+    margin-left: 0;
+  }
+  .msrp-monitor-scope-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .msrp-monitor-action-board > header,
+  .msrp-monitor-action-story > header {
+    flex-direction: column;
+  }
+  .msrp-monitor-action-table {
+    overflow-x: auto;
+  }
+  .msrp-monitor-action-list {
+    max-height: 520px;
+  }
+  .msrp-monitor-price-story-row {
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+  .msrp-monitor-price-story-row strong {
+    grid-column: 2;
+    text-align: left;
+  }
+  .msrp-monitor-impact-table {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .msrp-monitor-impact-table div,
+  .msrp-monitor-impact-table div:nth-child(n + 4) {
+    grid-column: 1;
+  }
+  .msrp-monitor-impact-table div,
+  .msrp-monitor-impact-table div:first-child {
+    border-top: 1px solid #e2e8f0;
+    border-left: 0;
+  }
+  .msrp-monitor-impact-table div:first-child {
+    border-top: 0;
+  }
+  .msrp-monitor-impact-chart header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .msrp-monitor-impact-chart header span {
+    text-align: left;
+  }
+  .msrp-monitor-offer-story-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .msrp-monitor-offer-drilldown-grid,
+  .msrp-monitor-offer-timeline {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .msrp-monitor-chart-head,
+  .msrp-monitor-chart-model-rail header,
   .msrp-monitor-detail header {
     flex-direction: column;
   }
+  .msrp-monitor-chart-model-rail header span {
+    text-align: left;
+  }
   .msrp-monitor-chart-shell {
     min-height: 520px;
+  }
+  .msrp-monitor-offer-visual {
+    min-height: 520px;
+  }
+  .msrp-monitor-offer-visual header {
+    flex-direction: column;
+  }
+  .msrp-monitor-offer-visual-kpis {
+    justify-content: flex-start;
+    max-width: none;
   }
 }

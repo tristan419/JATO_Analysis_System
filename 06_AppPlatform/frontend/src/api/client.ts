@@ -42,6 +42,7 @@ import type {
   MsrpFinanceObservation,
   MsrpFinanceObservationSummary,
   MsrpFinanceObservationsResponse,
+  MsrpBackfillSnapshotPreview,
   MsrpMonitoringResponse,
   MsrpPriceSalesEffectivenessItem,
   MsrpPriceSalesEffectivenessResponse,
@@ -2349,18 +2350,30 @@ export const api = {
     brand?: string;
     jato_model?: string;
     window_days?: number;
+    from_date?: string;
     threshold_pct?: number;
+    direction?: "drops" | "increases" | "all";
     limit?: number;
+    mode?: "live" | "sweden_demo";
   }) => {
     const sp = new URLSearchParams();
     if (params?.country) sp.set("country", params.country);
     if (params?.brand) sp.set("brand", params.brand);
     if (params?.jato_model) sp.set("jato_model", params.jato_model);
     if (params?.window_days !== undefined) sp.set("window_days", String(params.window_days));
+    if (params?.from_date) sp.set("from_date", params.from_date);
     if (params?.threshold_pct !== undefined) sp.set("threshold_pct", String(params.threshold_pct));
+    if (params?.direction) sp.set("direction", params.direction);
     if (params?.limit) sp.set("limit", String(params.limit));
+    if (params?.mode) sp.set("mode", params.mode);
     const q = sp.toString();
     return request<MsrpMonitoringResponse>(`/msrp/monitoring/events${q ? `?${q}` : ""}`);
+  },
+  getMsrpBackfillSnapshot: (path: string, maxChars = 20_000) => {
+    const sp = new URLSearchParams();
+    sp.set("path", path);
+    sp.set("max_chars", String(maxChars));
+    return request<MsrpBackfillSnapshotPreview>(`/msrp/monitoring/backfill-snapshot?${sp.toString()}`);
   },
   listMsrpSources: (params?: {
     source_code?: string;
