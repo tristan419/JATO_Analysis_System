@@ -8,6 +8,7 @@ import {
   consumeRouteDecisionTransfer,
   createAutoRouteDecision,
   currentRouteTarget,
+  isRouteProbeInFlight,
   probeRoute,
   readRouteDecision,
   saveRouteDecision,
@@ -15,6 +16,10 @@ import {
   type RouteDecision,
   type RouteTarget,
 } from "../utils/routeDecision";
+
+type RouteProbeWindow = Window & typeof globalThis & {
+  __JATO_ROUTE_PROBE_IN_FLIGHT__?: boolean;
+};
 
 function redirectIfNeeded(decision: RouteDecision, currentTarget: RouteTarget): void {
   if (decision.target === currentTarget) return;
@@ -41,6 +46,13 @@ export function SmartRouteGate() {
     const cachedDecision = readRouteDecision(window.localStorage, DECISION_KEY);
     if (cachedDecision) {
       redirectIfNeeded(cachedDecision, currentTarget);
+      return undefined;
+    }
+    const routeProbeWindow = window as RouteProbeWindow;
+    if (
+      routeProbeWindow.__JATO_ROUTE_PROBE_IN_FLIGHT__
+      || isRouteProbeInFlight(window.sessionStorage)
+    ) {
       return undefined;
     }
 

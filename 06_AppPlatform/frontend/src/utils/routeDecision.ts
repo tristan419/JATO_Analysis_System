@@ -60,10 +60,12 @@ export const ROUTE_HOSTS: Record<RouteTarget, string> = {
 };
 export const DECISION_KEY = "jato_route_decision_v1";
 export const MANUAL_KEY = "jato_route_manual_v1";
+export const PROBE_INFLIGHT_KEY = "jato_route_probe_inflight_v1";
 export const PROBE_TIMEOUT_MS = 1_800;
 export const REDIRECT_MARGIN_MS = 450;
 export const AUTO_DECISION_TTL_MS = 2 * 60 * 60 * 1000;
 export const MANUAL_DECISION_TTL_MS = 24 * 60 * 60 * 1000;
+export const PROBE_INFLIGHT_TTL_MS = PROBE_TIMEOUT_MS + 700;
 
 export function routeLabel(target: RouteTarget): string {
   return target === "cn" ? "www" : "intl";
@@ -156,6 +158,17 @@ export function saveRouteDecision(storage: Storage, decision: RouteDecision): vo
 export function clearRouteDecisions(storage: Storage): void {
   storage.removeItem(MANUAL_KEY);
   storage.removeItem(DECISION_KEY);
+}
+
+export function isRouteProbeInFlight(storage: Storage, now = Date.now()): boolean {
+  const raw = storage.getItem(PROBE_INFLIGHT_KEY);
+  if (!raw) return false;
+  const startedAt = Number(raw);
+  if (!Number.isFinite(startedAt) || now - startedAt > PROBE_INFLIGHT_TTL_MS) {
+    storage.removeItem(PROBE_INFLIGHT_KEY);
+    return false;
+  }
+  return true;
 }
 
 export function consumeRouteDecisionTransfer(

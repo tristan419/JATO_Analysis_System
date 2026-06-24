@@ -8,6 +8,7 @@ import {
   consumeRouteDecisionTransfer,
   createAutoRouteDecision,
   createManualRouteDecision,
+  isRouteProbeInFlight,
   makeInitialProbe,
   readRouteDecision,
   shouldSkipSmartRoute,
@@ -148,5 +149,14 @@ describe("route decision helpers", () => {
     expect(decision?.cnMs).toBe(1_100);
     expect(decision?.intlMs).toBe(200);
     expect(decision?.expiresAt).toBeGreaterThan(1_000);
+  });
+
+  it("detects and clears stale early route probes", () => {
+    const storage = createStorage();
+    storage.setItem("jato_route_probe_inflight_v1", "1000");
+
+    expect(isRouteProbeInFlight(storage, 2_000)).toBe(true);
+    expect(isRouteProbeInFlight(storage, 10_000)).toBe(false);
+    expect(storage.getItem("jato_route_probe_inflight_v1")).toBeNull();
   });
 });
