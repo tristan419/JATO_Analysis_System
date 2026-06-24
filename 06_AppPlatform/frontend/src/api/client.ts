@@ -202,10 +202,16 @@ function getAuthHeaders(): Record<string, string> {
     || import.meta.env.VITE_USER_NAME
     || "anonymous"
   ).trim();
+  const role = (
+    localStorage.getItem("jato_user_role")
+    || import.meta.env.VITE_USER_ROLE
+    || "viewer"
+  ).trim();
 
   return {
     ...(token ? { "X-Auth-Token": token } : {}),
-    "X-User-Name": user || "anonymous"
+    "X-User-Name": user || "anonymous",
+    "X-User-Role": role || "viewer"
   };
 }
 

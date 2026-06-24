@@ -141,7 +141,7 @@ describe("Cloudflare edge cache function", () => {
     expect(first.headers.get("x-jato-edge-cache-endpoint")).toBe("/v1/analysis/overview");
     expect(first.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=300");
     expect(first.headers.get("set-cookie")).toBeNull();
-    expect(first.headers.get("vary")).toBe("X-User-Name, X-User-Role, X-JATO-Data-Version");
+    expect(first.headers.get("vary")).toBe("X-User-Role, X-JATO-Data-Version");
     expect(await first.json()).toMatchObject({ sequence: 1 });
 
     await flushWaitUntil(runtime);
@@ -195,13 +195,13 @@ describe("Cloudflare edge cache function", () => {
     expect(refreshedToken.headers.get("x-jato-edge-cache")).toBe("HIT");
     expect(await refreshedToken.json()).toMatchObject({ sequence: 1 });
 
-    const otherUser = await callEdgeFunction(
+    const otherUserSameRole = await callEdgeFunction(
       runtime,
       "analysis/time-series-grouped",
       scopedRequest("token-c", "dataset-a", "other-user"),
     );
-    expect(otherUser.headers.get("x-jato-edge-cache")).toBe("MISS");
-    await flushWaitUntil(runtime);
+    expect(otherUserSameRole.headers.get("x-jato-edge-cache")).toBe("HIT");
+    expect(await otherUserSameRole.json()).toMatchObject({ sequence: 1 });
 
     const otherRole = await callEdgeFunction(
       runtime,
@@ -226,8 +226,8 @@ describe("Cloudflare edge cache function", () => {
     );
     expect(originalScope.headers.get("x-jato-edge-cache")).toBe("HIT");
     expect(await originalScope.json()).toMatchObject({ sequence: 1 });
-    expect(runtime.fetch).toHaveBeenCalledTimes(4);
-    expect(runtime.cache.put).toHaveBeenCalledTimes(4);
+    expect(runtime.fetch).toHaveBeenCalledTimes(3);
+    expect(runtime.cache.put).toHaveBeenCalledTimes(3);
   });
 
   it("synthesizes and caches filter snapshots when the origin endpoint is missing", async () => {

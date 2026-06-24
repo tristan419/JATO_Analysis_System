@@ -33,9 +33,21 @@ const FALLBACK_COUNTRIES = [
 const FILTER_COLUMN_ALIASES = {
   body_type: ["Body type", "Body Type", "body type", "车身形式"],
   country: ["国家", "Country", "country"],
+  make: ["Make", "品牌", "make"],
+  model: ["Model", "model"],
   powertrain: ["动总规整", "powertrain", "Powertrain"],
   segment: ["细分市场（按车长）", "细分市场", "segment"],
+  version: ["Version name", "version name", "Version Name"],
 };
+const FILTER_ORDER_KEYS = [
+  "country",
+  "body_type",
+  "segment",
+  "powertrain",
+  "make",
+  "model",
+  "version",
+];
 
 function getArg(name) {
   const prefix = `--${name}=`;
@@ -93,8 +105,11 @@ function resolveColumns(snapshot) {
   return {
     body_type: resolveColumn(columns, FILTER_COLUMN_ALIASES.body_type),
     country: resolveColumn(columns, FILTER_COLUMN_ALIASES.country),
+    make: resolveColumn(columns, FILTER_COLUMN_ALIASES.make),
+    model: resolveColumn(columns, FILTER_COLUMN_ALIASES.model),
     powertrain: resolveColumn(columns, FILTER_COLUMN_ALIASES.powertrain),
     segment: resolveColumn(columns, FILTER_COLUMN_ALIASES.segment),
+    version: resolveColumn(columns, FILTER_COLUMN_ALIASES.version),
   };
 }
 
@@ -119,6 +134,83 @@ function buildDefaultFilterPayload(snapshot, configuredCountries, configuredPowe
   if (columns.country && countries.length > 0) filters[columns.country] = countries;
   if (columns.powertrain && powertrains.length > 0) filters[columns.powertrain] = powertrains;
   return { columns, filters };
+}
+
+function buildDefaultSelections(snapshot, configuredCountries, configuredPowertrains) {
+  const { columns, filters } = buildDefaultFilterPayload(
+    snapshot,
+    configuredCountries,
+    configuredPowertrains,
+  );
+  return {
+    columns,
+    selections: {
+      body_type: [],
+      country: filters[columns.country] ?? [],
+      make: [],
+      model: [],
+      powertrain: filters[columns.powertrain] ?? [],
+      segment: [],
+      version: [],
+    },
+    topLevelOptions: {
+      body_type: valuesFromSnapshot(snapshot, columns.body_type, []),
+      country: valuesFromSnapshot(snapshot, columns.country, []),
+      powertrain: valuesFromSnapshot(snapshot, columns.powertrain, []),
+      segment: valuesFromSnapshot(snapshot, columns.segment, []),
+    },
+  };
+}
+
+function selectionCoversAllOptions(values, options) {
+  if (values.length === 0) return true;
+  if (options.length === 0) return false;
+  const selected = new Set(values);
+  if (selected.size !== options.length) return false;
+  return options.every((option) => selected.has(option));
+}
+
+function initialCascadeStartIndex(selections, topLevelOptions) {
+  const powertrainIndex = FILTER_ORDER_KEYS.indexOf("powertrain");
+  for (let index = 0; index < powertrainIndex; index += 1) {
+    const key = FILTER_ORDER_KEYS[index];
+    if (!selectionCoversAllOptions(selections[key] ?? [], topLevelOptions[key] ?? [])) {
+      return powertrainIndex;
+    }
+  }
+  return powertrainIndex + 1;
+}
+
+function buildDefaultCascadePayloads(snapshot, configuredCountries, configuredPowertrains) {
+  const { columns, selections, topLevelOptions } = buildDefaultSelections(
+    snapshot,
+    configuredCountries,
+    configuredPowertrains,
+  );
+  const startIndex = initialCascadeStartIndex(selections, topLevelOptions);
+  const prefixFilters = {};
+  for (let index = 0; index < startIndex; index += 1) {
+    const key = FILTER_ORDER_KEYS[index];
+    const column = columns[key];
+    const values = selections[key] ?? [];
+    if (column && values.length > 0) {
+      prefixFilters[column] = values;
+    }
+  }
+
+  const payloads = [];
+  for (let index = startIndex; index < FILTER_ORDER_KEYS.length; index += 1) {
+    const key = FILTER_ORDER_KEYS[index];
+    const column = columns[key];
+    if (!column) continue;
+    payloads.push({
+      column,
+      filters: { ...prefixFilters },
+    });
+    if ((selections[key] ?? []).length === 0) break;
+    prefixFilters[column] = selections[key];
+  }
+  return payloads;
 }
 
 function commonHeaders({ dataVersion, role, token, user }) {
@@ -207,6 +299,11 @@ function buildWarmupRequests(snapshot, configuredCountries, configuredPowertrain
     columns.segment,
     columns.powertrain,
   ].filter(Boolean);
+  const cascadePayloads = buildDefaultCascadePayloads(
+    snapshot,
+    configuredCountries,
+    configuredPowertrains,
+  );
   const groupBy = columns.country || "国家";
   return [
     {
@@ -217,6 +314,14 @@ function buildWarmupRequests(snapshot, configuredCountries, configuredPowertrain
       method: "POST",
       path: "/filters/options/batch",
     },
+    ...(cascadePayloads.length > 0 ? [{
+      body: {
+        items: cascadePayloads,
+      },
+      label: "filters-options-default-cascade",
+      method: "POST",
+      path: "/filters/options/batch",
+    }] : []),
     {
       body: {
         filters,
@@ -369,7 +474,17 @@ async function main() {
   console.log(`summary origin=${origin} user=${auth.user} role=${auth.role} hit=${hitCount} miss=${missCount} bypass=${bypassCount} total=${results.length}`);
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  buildDefaultCascadePayloads,
+  buildDefaultFilterPayload,
+  buildWarmupRequests,
+  initialCascadeStartIndex,
+  resolveColumns,
+};
