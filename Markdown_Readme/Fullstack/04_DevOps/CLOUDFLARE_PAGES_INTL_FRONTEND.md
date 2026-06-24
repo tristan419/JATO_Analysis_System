@@ -82,6 +82,10 @@ curl -sS -D - -X POST 'https://intl.ojeur.cloud/v1/analysis/overview' \
 
 Run the same command twice. The first response should be `MISS`, and the second
 response should be `HIT` when Cloudflare has accepted the cached object.
+The same-origin Function cache key uses method, URL, request body hash,
+`X-User-Name`, `X-User-Role`, and data version. It intentionally does not use
+`X-Auth-Token`, because refreshed login tokens would otherwise split identical
+read-only Dashboard cache entries.
 
 If a separate API domain is required later, the older standalone Worker facade
 is still available in:

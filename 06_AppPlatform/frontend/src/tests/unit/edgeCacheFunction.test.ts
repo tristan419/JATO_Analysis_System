@@ -141,7 +141,7 @@ describe("Cloudflare edge cache function", () => {
     expect(first.headers.get("x-jato-edge-cache-endpoint")).toBe("/v1/analysis/overview");
     expect(first.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=300");
     expect(first.headers.get("set-cookie")).toBeNull();
-    expect(first.headers.get("vary")).toContain("X-Auth-Token");
+    expect(first.headers.get("vary")).toBe("X-User-Name, X-User-Role, X-JATO-Data-Version");
     expect(await first.json()).toMatchObject({ sequence: 1 });
 
     await flushWaitUntil(runtime);
@@ -156,18 +156,23 @@ describe("Cloudflare edge cache function", () => {
     expect(runtime.originCalls[0]?.headers.get("cf-ray")).toBeNull();
   });
 
-  it("separates cached entries by user scope and data version", async () => {
+  it("separates cached entries by user permission scope and data version", async () => {
     const runtime = createRuntime();
     const body = JSON.stringify({ group_by: ["动总规整", "国家"], grain: "month" });
 
-    const scopedRequest = (token: string, dataVersion: string): RequestInit => ({
+    const scopedRequest = (
+      token: string,
+      dataVersion: string,
+      userName = "dashboard-user",
+      userRole = "viewer",
+    ): RequestInit => ({
       body,
       headers: {
         "content-type": "application/json",
         "x-auth-token": token,
         "x-jato-data-version": dataVersion,
-        "x-user-name": "dashboard-user",
-        "x-user-role": "viewer",
+        "x-user-name": userName,
+        "x-user-role": userRole,
       },
       method: "POST",
     });
@@ -180,18 +185,34 @@ describe("Cloudflare edge cache function", () => {
     expect(first.headers.get("x-jato-edge-cache")).toBe("MISS");
     await flushWaitUntil(runtime);
 
-    const otherUser = await callEdgeFunction(
+    const refreshedToken = await callEdgeFunction(
       runtime,
       "analysis/time-series-grouped",
       scopedRequest("token-b", "dataset-a"),
     );
+    expect(refreshedToken.headers.get("x-jato-edge-cache")).toBe("HIT");
+    expect(await refreshedToken.json()).toMatchObject({ sequence: 1 });
+
+    const otherUser = await callEdgeFunction(
+      runtime,
+      "analysis/time-series-grouped",
+      scopedRequest("token-c", "dataset-a", "other-user"),
+    );
     expect(otherUser.headers.get("x-jato-edge-cache")).toBe("MISS");
+    await flushWaitUntil(runtime);
+
+    const otherRole = await callEdgeFunction(
+      runtime,
+      "analysis/time-series-grouped",
+      scopedRequest("token-d", "dataset-a", "dashboard-user", "admin"),
+    );
+    expect(otherRole.headers.get("x-jato-edge-cache")).toBe("MISS");
     await flushWaitUntil(runtime);
 
     const otherDataset = await callEdgeFunction(
       runtime,
       "analysis/time-series-grouped",
-      scopedRequest("token-a", "dataset-b"),
+      scopedRequest("token-e", "dataset-b"),
     );
     expect(otherDataset.headers.get("x-jato-edge-cache")).toBe("MISS");
     await flushWaitUntil(runtime);
@@ -203,8 +224,8 @@ describe("Cloudflare edge cache function", () => {
     );
     expect(originalScope.headers.get("x-jato-edge-cache")).toBe("HIT");
     expect(await originalScope.json()).toMatchObject({ sequence: 1 });
-    expect(runtime.fetch).toHaveBeenCalledTimes(3);
-    expect(runtime.cache.put).toHaveBeenCalledTimes(3);
+    expect(runtime.fetch).toHaveBeenCalledTimes(4);
+    expect(runtime.cache.put).toHaveBeenCalledTimes(4);
   });
 
   it("bypasses auth and other non-cacheable endpoints", async () => {

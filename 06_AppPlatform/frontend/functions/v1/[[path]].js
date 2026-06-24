@@ -30,10 +30,9 @@ async function sha256Hex(value) {
 }
 
 async function requestScopeHash(request) {
-  const token = request.headers.get("x-auth-token") || "";
   const userName = request.headers.get("x-user-name") || "anonymous";
   const userRole = request.headers.get("x-user-role") || "";
-  return sha256Hex(`${userRole}\n${userName}\n${token}`);
+  return sha256Hex(`${userRole}\n${userName}`);
 }
 
 function dataVersion(request, env) {
@@ -62,7 +61,7 @@ function sanitizeResponseHeaders(response, ttlSeconds, path, cacheState) {
   headers.set("x-jato-edge-cache", cacheState);
   headers.set("x-jato-edge-cache-endpoint", `/v1/${path}`);
   headers.set("cache-control", `public, max-age=0, s-maxage=${ttlSeconds}`);
-  headers.set("vary", "X-Auth-Token, X-User-Name, X-User-Role, X-JATO-Data-Version");
+  headers.set("vary", "X-User-Name, X-User-Role, X-JATO-Data-Version");
   return headers;
 }
 
