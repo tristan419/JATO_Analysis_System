@@ -7,6 +7,7 @@ BACKEND_PORT="${BACKEND_PORT:-}"
 BACKEND_ENV_FILE="${BACKEND_ENV_FILE:-/etc/jato-fullstack/backend.env}"
 RUN_DATABASE_MIGRATIONS="${RUN_DATABASE_MIGRATIONS:-auto}"
 RUN_PRE_DEPLOY_BACKUP="${RUN_PRE_DEPLOY_BACKUP:-auto}"
+RUN_GROUPED_TIME_SERIES_PREWARM="${RUN_GROUPED_TIME_SERIES_PREWARM:-auto}"
 REMOTE_NAME="${REMOTE_NAME:-}"
 REPO_REMOTE_URL="${REPO_REMOTE_URL:-git@github.com:tristan419/JATO_Analysis_System.git}"
 SKIP_GIT_SYNC="${SKIP_GIT_SYNC:-false}"
@@ -76,6 +77,74 @@ is_truthy() {
     1|true|yes|on) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+should_run_grouped_time_series_prewarm() {
+  local mode="${RUN_GROUPED_TIME_SERIES_PREWARM,,}"
+  local enabled="false"
+
+  case "$mode" in
+    1|true|yes|on|run|strict) return 0 ;;
+    0|false|no|off|skip) return 1 ;;
+  esac
+
+  if [[ ! -f "$BACKEND_ENV_FILE" ]]; then
+    return 1
+  fi
+  enabled="$(run_privileged_bash 'set -a; . "$1"; set +a; printf "%s\n" "${APP_GROUPED_TIME_SERIES_PREWARM_ENABLED:-false}"' "$BACKEND_ENV_FILE" 2>/dev/null || true)"
+  is_truthy "$enabled"
+}
+
+backend_prewarm_identity() {
+  if [[ ! -f "$BACKEND_ENV_FILE" ]]; then
+    printf '\tprewarm\tviewer\n'
+    return
+  fi
+
+  run_privileged_bash 'set -a; . "$1"; set +a; printf "%s\t%s\t%s\n" "${APP_AUTH_TOKEN:-${VITE_AUTH_TOKEN:-}}" "${VITE_USER_NAME:-prewarm}" "${VITE_USER_ROLE:-viewer}"' "$BACKEND_ENV_FILE" 2>/dev/null \
+    || printf '\tprewarm\tviewer\n'
+}
+
+run_grouped_time_series_prewarm() {
+  local script="$REPO_DIR/03_Scripts/diagnostics/prewarm_grouped_time_series.py"
+  local token=""
+  local user_name=""
+  local user_role=""
+  local identity=""
+  local args=()
+
+  if ! should_run_grouped_time_series_prewarm; then
+    echo "[INFO] Grouped time-series prewarm skipped"
+    return
+  fi
+  if [[ ! -f "$script" ]]; then
+    echo "[WARN] Grouped time-series prewarm script missing: $script"
+    return
+  fi
+
+  identity="$(backend_prewarm_identity)"
+  IFS=$'\t' read -r token user_name user_role <<< "$identity"
+  args=(
+    "$script"
+    --origin "http://127.0.0.1:${BACKEND_PORT}"
+    --user-name "${user_name:-prewarm}"
+    --user-role "${user_role:-viewer}"
+    --require-server-cache
+    --require-repeat-hit
+  )
+  if [[ -n "$token" ]]; then
+    args+=(--token "$token")
+  fi
+
+  if "$VENV_DIR/bin/python" "${args[@]}"; then
+    echo "[INFO] Grouped time-series prewarm passed"
+    return
+  fi
+
+  if [[ "${RUN_GROUPED_TIME_SERIES_PREWARM,,}" == "strict" ]]; then
+    fail_deploy "Grouped time-series prewarm failed" "$LINENO"
+  fi
+  echo "[WARN] Grouped time-series prewarm failed; continuing deploy"
 }
 
 run_privileged_bash() {
@@ -796,6 +865,12 @@ for i in $(seq 1 15); do
   echo "[INFO] Health check attempt $i failed, retrying in 5s …"
   sleep 5
 done
+
+echo "[INFO] Prewarm grouped time-series cache"
+CURRENT_STEP="Prewarm grouped time-series cache"
+log_section "$CURRENT_STEP"
+run_grouped_time_series_prewarm
+
 mark_release_deployed
 
 echo "[INFO] Bootstrap MSRP dryrun after backend health"
