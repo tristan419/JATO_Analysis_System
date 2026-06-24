@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import { useAuth } from "../contexts/AuthContext";
@@ -10,7 +10,10 @@ import {
   type MegaMenuSubItem,
 } from "../utils/pageNavigation";
 import { AssistantMark } from "./AssistantMark";
-import { RoleUpgradeModal } from "./RoleUpgradeModal";
+
+const RoleUpgradeModal = lazy(() =>
+  import("./RoleUpgradeModal").then((module) => ({ default: module.RoleUpgradeModal }))
+);
 
 function isSubItemActive(to: string, location: { pathname: string; search: string }): boolean {
   const [targetPath, targetSearch = ""] = to.split("?");
@@ -244,7 +247,11 @@ export function MegaMenu() {
         </div>
       </aside>
 
-      {showUpgrade && <RoleUpgradeModal currentRole={user?.role ?? "viewer"} onClose={() => setShowUpgrade(false)} />}
+      {showUpgrade && (
+        <Suspense fallback={null}>
+          <RoleUpgradeModal currentRole={user?.role ?? "viewer"} onClose={() => setShowUpgrade(false)} />
+        </Suspense>
+      )}
     </>
   );
 }

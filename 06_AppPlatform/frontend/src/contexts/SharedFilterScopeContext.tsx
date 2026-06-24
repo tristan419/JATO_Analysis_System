@@ -10,7 +10,7 @@ import {
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { api } from "../api/client";
+import { dashboardApi } from "../api/dashboard";
 import { useAuth } from "./AuthContext";
 import {
   DIM,
@@ -263,7 +263,7 @@ export async function loadInitialFilterMetadata(
   if (!isFilterSnapshotRecentlyUnavailable()) {
     try {
       const snapshotAbort = createSnapshotAbortController(signal);
-      const snapshot = await api.filterMetadataSnapshot({
+      const snapshot = await dashboardApi.filterMetadataSnapshot({
         signal: snapshotAbort.controller.signal,
       }).finally(snapshotAbort.cleanup);
       if (signal?.aborted) {
@@ -307,7 +307,7 @@ export async function loadInitialFilterMetadata(
     }
   }
 
-  const { items } = await api.columns({ signal });
+  const { items } = await dashboardApi.columns({ signal });
   const resolvedColumns = resolveFilterColumns(items);
   const topLevelOptions: Partial<Record<FilterKey, string[]>> = {};
   const topLevelRequests: { key: TopLevelFilterKey; column: string }[] = [];
@@ -434,7 +434,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
       }
 
       if (missedPayloads.length > 0) {
-        const response = await api.filterOptionsBatch(missedPayloads, { signal });
+        const response = await dashboardApi.filterOptionsBatch(missedPayloads, { signal });
         response.items.forEach((item, index) => {
           const payload = missedPayloads[index];
           if (!payload) return;
@@ -470,7 +470,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     setLoading(true);
     setError("");
     try {
-      const overviewResponse = await api.overview({
+      const overviewResponse = await dashboardApi.overview({
         filters: buildFilterPayload(),
         prefer_precomputed: true,
         top_n: 120,

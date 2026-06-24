@@ -2,21 +2,10 @@
 
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
-import {
-  FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS,
-  FILTER_SNAPSHOT_INTL_FALLBACK_TIMEOUT_MS,
-  SharedFilterScopeProvider,
-  createSharedSelections,
-  filterSnapshotFallbackTimeoutMs,
-  getInitialCascadeStartIndex,
-  isFilterSnapshotRecentlyUnavailable,
-  loadInitialFilterMetadata,
-  shouldSyncDashboardSearchToLocation,
-  useSharedFilterScope,
-} from "../../contexts/SharedFilterScopeContext";
+import type * as SharedFilterScopeContextModule from "../../contexts/SharedFilterScopeContext";
 import type { FilterOptionsPayload } from "../../utils/filterOptions";
 
 const apiMock = vi.hoisted(() => ({
@@ -26,13 +15,40 @@ const apiMock = vi.hoisted(() => ({
   overview: vi.fn(),
 }));
 
-vi.mock("../../api/client", () => ({
-  api: apiMock,
+vi.mock("../../api/dashboard", () => ({
+  dashboardApi: apiMock,
 }));
 
 vi.mock("../../contexts/AuthContext", () => ({
   useAuth: () => ({ user: { primaryCountry: null } }),
 }));
+
+let FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS: typeof SharedFilterScopeContextModule.FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS;
+let FILTER_SNAPSHOT_INTL_FALLBACK_TIMEOUT_MS: typeof SharedFilterScopeContextModule.FILTER_SNAPSHOT_INTL_FALLBACK_TIMEOUT_MS;
+let SharedFilterScopeProvider: typeof SharedFilterScopeContextModule.SharedFilterScopeProvider;
+let createSharedSelections: typeof SharedFilterScopeContextModule.createSharedSelections;
+let filterSnapshotFallbackTimeoutMs: typeof SharedFilterScopeContextModule.filterSnapshotFallbackTimeoutMs;
+let getInitialCascadeStartIndex: typeof SharedFilterScopeContextModule.getInitialCascadeStartIndex;
+let isFilterSnapshotRecentlyUnavailable: typeof SharedFilterScopeContextModule.isFilterSnapshotRecentlyUnavailable;
+let loadInitialFilterMetadata: typeof SharedFilterScopeContextModule.loadInitialFilterMetadata;
+let shouldSyncDashboardSearchToLocation: typeof SharedFilterScopeContextModule.shouldSyncDashboardSearchToLocation;
+let useSharedFilterScope: typeof SharedFilterScopeContextModule.useSharedFilterScope;
+
+beforeAll(async () => {
+  const module = await import("../../contexts/SharedFilterScopeContext");
+  ({
+    FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS,
+    FILTER_SNAPSHOT_INTL_FALLBACK_TIMEOUT_MS,
+    SharedFilterScopeProvider,
+    createSharedSelections,
+    filterSnapshotFallbackTimeoutMs,
+    getInitialCascadeStartIndex,
+    isFilterSnapshotRecentlyUnavailable,
+    loadInitialFilterMetadata,
+    shouldSyncDashboardSearchToLocation,
+    useSharedFilterScope,
+  } = module);
+});
 
 function SharedScopeProbe() {
   const location = useLocation();

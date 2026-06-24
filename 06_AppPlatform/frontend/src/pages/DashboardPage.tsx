@@ -2,7 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Link } from "react-router-dom";
 import type { Data, Layout, PlotMouseEvent } from "plotly.js";
 
-import { api } from "../api/client";
+import { dashboardApi } from "../api/dashboard";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { CollapsibleFilterSidebar } from "../components/CollapsibleFilterSidebar";
 import { LoadingActionButton } from "../components/LoadingActionButton";
@@ -457,7 +457,7 @@ export function DashboardPage() {
   useEffect(() => {
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      api.dataFreshness().then((res) => {
+      dashboardApi.dataFreshness().then((res) => {
         if (!cancelled) setFreshnessItems(res.items ?? []);
       }).catch(() => {});
     }, DASHBOARD_DEFERRED_FETCH_DELAY_MS);
@@ -551,7 +551,7 @@ export function DashboardPage() {
           const shareSplitBy = tsMode === "\u5206\u7ec4" && isTimeSeriesShareGroupDimension(tsGroupDim) && tsShareSplit !== "total"
             ? tsShareSplit
             : undefined;
-          const r = await api.groupedTimeSeries({
+          const r = await dashboardApi.groupedTimeSeries({
             filters,
             grain: activeTab,
             group_by: tsGroupDim,
@@ -609,7 +609,7 @@ export function DashboardPage() {
         opts.depreciation_rate = tcoDepreciation; opts.maintenance_rate = tcoMaintenance;
         opts.tax_insurance_rate = tcoTaxInsurance; opts.energy_cost_base = tcoEnergyCost;
       }
-      const r = await api.advancedChart({
+      const r = await dashboardApi.advancedChart({
         group: advGroup,
         chart: advChart,
         filters: buildFilterPayload(),
@@ -629,7 +629,7 @@ export function DashboardPage() {
     prevMvScopeRef.current = filterTimeScopeKey;
     setMvLoading(true); setError("");
     try {
-      const r = await api.modelVersions({
+      const r = await dashboardApi.modelVersions({
         filters: buildFilterPayload(),
         model_name: mvModelName.trim(),
         top_n: mvTopN,
@@ -657,7 +657,7 @@ export function DashboardPage() {
     prevPmScopeRef.current = filterTimeScopeKey;
     setPmLoading(true); setError("");
     try {
-      const r = await api.positioningMap({
+      const r = await dashboardApi.positioningMap({
         filters: buildFilterPayload(),
         target_length: pmTargetLength ? Number(pmTargetLength) : null,
         target_msrp: pmTargetMsrp ? Number(pmTargetMsrp) : null,
