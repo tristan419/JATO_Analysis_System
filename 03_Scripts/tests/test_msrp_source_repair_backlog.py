@@ -464,6 +464,55 @@ def test_v3_report_marks_tesla_403_with_evkx_reference_policy(tmp_path: Path) ->
     assert "EVKX reference_only_review_required" in markdown
 
 
+def test_v3_report_marks_tesla_anti_bot_with_evkx_reference_policy(
+    tmp_path: Path,
+) -> None:
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260624-135526",
+        "results": [
+            {
+                "country": "fr",
+                "code": "tesla_model_y_fr_draft_scrapling",
+                "brand": "TESLA",
+                "status": "empty",
+                "valid": 0,
+                "extracted": 0,
+                "failureReason": "anti_bot_access_denied",
+                "recommendedStrategy": "manual_review_or_proxy_required",
+                "sourceUrl": "https://www.tesla.com/fr_FR/modely",
+                "httpStatus": 403,
+                "extractorError": (
+                    "anti_bot_access_denied: Access Denied You don't have "
+                    "permission to access https://www.tesla.com/fr_FR/modely "
+                    "on this server."
+                ),
+            },
+        ],
+    }
+    report_path = tmp_path / "dryrun_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    backlog = backlog_script.run(str(report_path), str(tmp_path))
+
+    group = backlog["groups"][0]
+    assert group["failureReason"] == "anti_bot_access_denied"
+    assert group["affectedBrands"] == ["TESLA"]
+    assert backlog["sourceIssues"][0]["errorSnippet"].startswith(
+        "anti_bot_access_denied: Access Denied"
+    )
+    assert group["referenceAssist"]["preferred"] == "official_proxy_or_configurator_api"
+    assert group["referenceAssist"]["thirdPartyReference"] == "EVKX"
+    assert group["referenceAssist"]["referencePolicy"] == "reference_only_review_required"
+    assert group["referenceAssist"]["officialSourceRequiredForIngest"] is True
+
+    markdown = (tmp_path / "msrp_source_repair_backlog.md").read_text(
+        encoding="utf-8"
+    )
+    assert "anti_bot_access_denied" in markdown
+    assert "EVKX reference_only_review_required" in markdown
+
+
 def test_legacy_report_keeps_summary_backlog_format(tmp_path: Path) -> None:
     report = {
         "total": 1,

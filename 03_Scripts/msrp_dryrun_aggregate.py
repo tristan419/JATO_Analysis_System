@@ -479,7 +479,7 @@ def _source_reference_assist(group: dict[str, Any]) -> dict[str, Any] | None:
     brands = {str(brand).upper() for brand in group.get("brands", set())}
     hosts = {str(host).lower() for host in group.get("hosts", {})}
     failure_reason = str(group.get("failureReason") or "")
-    if failure_reason == "forbidden_403" and (
+    if failure_reason in {"forbidden_403", "anti_bot_access_denied"} and (
         "TESLA" in brands or "tesla.com" in hosts
     ):
         return {
