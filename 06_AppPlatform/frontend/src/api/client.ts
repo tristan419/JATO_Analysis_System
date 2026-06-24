@@ -186,6 +186,11 @@ interface FilterOptionsBatchResponse {
   items: FilterOptionsResponse[];
 }
 
+interface FilterMetadataSnapshotResponse {
+  columns: string[];
+  options: Record<string, string[]>;
+}
+
 function getAuthHeaders(): Record<string, string> {
   const token = (
     localStorage.getItem("jato_auth_token")
@@ -1878,7 +1883,9 @@ export const api = {
   delete: <T>(path: string, init?: RequestInit) =>
     request<T>(path, { method: "DELETE", ...init }),
 
-  columns: () => request<{ items: string[] }>("/metadata/columns"),
+  columns: (init?: RequestInit) => request<{ items: string[] }>("/metadata/columns", init),
+  filterMetadataSnapshot: (init?: RequestInit) =>
+    request<FilterMetadataSnapshotResponse>("/metadata/filter-snapshot", init),
   filterOptions: (payload: FilterOptionsPayload, init?: RequestInit) =>
     request<FilterOptionsResponse>(
       "/filters/options",

@@ -186,6 +186,81 @@ function waitForOverviewBootSlot(): Promise<void> {
   });
 }
 
+interface InitialFilterMetadata {
+  columns: string[];
+  resolvedColumns: ResolvedFilterColumns;
+  topLevelOptions: Partial<Record<FilterKey, string[]>>;
+}
+
+async function loadInitialFilterMetadata(
+  loadFilterOptionsBatch: (
+    payloads: FilterOptionsPayload[],
+    signal?: AbortSignal,
+  ) => Promise<string[][]>,
+  signal?: AbortSignal,
+): Promise<InitialFilterMetadata> {
+  try {
+    const snapshot = await api.filterMetadataSnapshot({ signal });
+    if (signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+    const columns = Array.isArray(snapshot.columns) ? snapshot.columns : [];
+    if (columns.length > 0) {
+      const resolvedColumns = resolveFilterColumns(columns);
+      const snapshotOptionsByColumn = snapshot.options ?? {};
+      const topLevelOptions: Partial<Record<FilterKey, string[]>> = {};
+      const missedRequests: { key: TopLevelFilterKey; column: string }[] = [];
+      for (const key of TOP_LEVEL_FILTER_KEYS) {
+        const column = resolvedColumns[key];
+        if (!column) continue;
+        const snapshotOptions = snapshotOptionsByColumn[column];
+        if (Array.isArray(snapshotOptions)) {
+          topLevelOptions[key] = snapshotOptions;
+        } else {
+          missedRequests.push({ key, column });
+        }
+      }
+      if (missedRequests.length > 0) {
+        const missedOptionSets = await loadFilterOptionsBatch(
+          missedRequests.map((item) => ({
+            column: item.column,
+            filters: {},
+          })),
+          signal,
+        );
+        missedRequests.forEach((item, index) => {
+          topLevelOptions[item.key] = missedOptionSets[index] ?? [];
+        });
+      }
+      return { columns, resolvedColumns, topLevelOptions };
+    }
+  } catch (err) {
+    if (isAbortError(err)) throw err;
+  }
+
+  const { items } = await api.columns({ signal });
+  const resolvedColumns = resolveFilterColumns(items);
+  const topLevelOptions: Partial<Record<FilterKey, string[]>> = {};
+  const topLevelRequests: { key: TopLevelFilterKey; column: string }[] = [];
+  for (const key of TOP_LEVEL_FILTER_KEYS) {
+    const column = resolvedColumns[key];
+    if (column) {
+      topLevelRequests.push({ key, column });
+    }
+  }
+  const topLevelOptionSets = await loadFilterOptionsBatch(
+    topLevelRequests.map((item) => ({
+      column: item.column,
+      filters: {},
+    })),
+    signal,
+  );
+  topLevelRequests.forEach((item, index) => {
+    topLevelOptions[item.key] = topLevelOptionSets[index] ?? [];
+  });
+  return { columns: items, resolvedColumns, topLevelOptions };
+}
+
 export function SharedFilterScopeProvider({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -359,32 +434,21 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     bootCompleted.current = false;
     const bootId = ++bootAttemptRef.current;
     let cancelled = false;
+    const bootController = new AbortController();
 
     (async () => {
       setLoading(true);
       setError("");
       try {
-        const { items } = await api.columns();
-        if (cancelled || bootId !== bootAttemptRef.current) return;
-        const resolvedColumns = resolveFilterColumns(items);
-        const topLevelOptions: Partial<Record<FilterKey, string[]>> = {};
-        const topLevelRequests: { key: TopLevelFilterKey; column: string }[] = [];
-        for (const key of TOP_LEVEL_FILTER_KEYS) {
-          const column = resolvedColumns[key];
-          if (column) {
-            topLevelRequests.push({ key, column });
-          }
-        }
-        const topLevelOptionSets = await loadFilterOptionsBatch(
-          topLevelRequests.map((item) => ({
-            column: item.column,
-            filters: {},
-          })),
+        const {
+          columns: items,
+          resolvedColumns,
+          topLevelOptions,
+        } = await loadInitialFilterMetadata(
+          loadFilterOptionsBatch,
+          bootController.signal,
         );
         if (cancelled || bootId !== bootAttemptRef.current) return;
-        topLevelRequests.forEach((item, index) => {
-          topLevelOptions[item.key] = topLevelOptionSets[index] ?? [];
-        });
 
         const initialFromSearch = sanitizeTopLevelSelections(
           readSelectionsFromSearch(currentSearch),
@@ -456,6 +520,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
 
     return () => {
       cancelled = true;
+      bootController.abort();
       if (!bootCompleted.current) {
         bootDone.current = false;
       }

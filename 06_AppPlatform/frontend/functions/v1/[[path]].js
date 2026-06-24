@@ -1,6 +1,7 @@
 const DEFAULT_ORIGIN = "https://www.ojeur.cloud";
 const CACHEABLE_ENDPOINTS = new Map([
   ["GET metadata/columns", 3600],
+  ["GET metadata/filter-snapshot", 3600],
   ["GET assistant/country/metadata", 3600],
   ["POST filters/options", 300],
   ["POST filters/options/batch", 300],

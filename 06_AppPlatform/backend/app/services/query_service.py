@@ -1044,6 +1044,18 @@ def metadata_columns() -> list[str]:
     return repo.list_columns()
 
 
+def metadata_filter_snapshot() -> dict:
+    columns = metadata_columns()
+    snapshot = _load_top_level_filter_options_snapshot()
+    return {
+        "columns": list(columns),
+        "options": {
+            column: list(options)
+            for column, options in snapshot.items()
+        },
+    }
+
+
 def filters_options(column: str, filters: dict[str, list[str]]) -> dict:
     if not _has_active_filters(filters):
         snapshot = _load_top_level_filter_options_snapshot()
