@@ -21,7 +21,7 @@ import type { FilterKey } from "../dashboardFilters";
 import type { OverviewResponse, TimeSeriesPoint, GroupedTimeSeriesItem, ModelVersionItem, PositioningMapItem, PositioningPeerCorridor, OthersDetailItem, DataFreshnessItem } from "../types";
 import { LazyPlotlyChart as PlotlyChart } from "../components/LazyPlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
-import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanel";
+import { DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanelHelpers";
 import { buildBubbleSizing } from "../utils/bubbleSizing";
 import { DEFAULT_POWERTRAINS, fuelFamilyColor, normalizePowertrainName, seriesColor } from "../utils/colors";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
@@ -59,6 +59,9 @@ import {
 } from "./dashboardHelpers";
 const RvFinanceDashboard = lazy(() =>
   import("../components/RvFinanceDashboard").then((module) => ({ default: module.RvFinanceDashboard }))
+);
+const DashboardExportPanel = lazy(() =>
+  import("../components/ExportPanel").then((module) => ({ default: module.ExportPanel }))
 );
 
 const DASHBOARD_DEFERRED_FETCH_DELAY_MS = 6_000;
@@ -3247,18 +3250,20 @@ export function DashboardPage() {
               </button>
             ))}
           </div>
-          {activeDeckSection === "timeSeries" && (
-            <ExportPanel value={tsExport} onChange={setTsExport} graphDiv={tsChartRef.current} seriesNames={timeSeriesExportSeriesNames} labelModeOptions={tsLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
-          )}
-          {activeDeckSection === "advanced" && (
-            <ExportPanel value={advExport} onChange={setAdvExport} graphDiv={advChartRef.current} seriesNames={advancedExportSeriesNames} labelModeOptions={advLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
-          )}
-          {activeDeckSection === "modelVersion" && (
-            <ExportPanel value={mvExport} onChange={setMvExport} graphDiv={mvChartRef.current} seriesNames={modelVersionExportSeriesNames} labelModeOptions={mvLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
-          )}
-          {activeDeckSection === "positioning" && (
-            <ExportPanel value={pmExport} onChange={setPmExport} graphDiv={pmChartRef.current} seriesNames={positioningExportSeriesNames} labelModeOptions={pmLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
-          )}
+          <Suspense fallback={<LoadingSurface mode="inline" label="正在加载导出设置" detail="Export panel" />}>
+            {activeDeckSection === "timeSeries" && (
+              <DashboardExportPanel value={tsExport} onChange={setTsExport} graphDiv={tsChartRef.current} seriesNames={timeSeriesExportSeriesNames} labelModeOptions={tsLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+            )}
+            {activeDeckSection === "advanced" && (
+              <DashboardExportPanel value={advExport} onChange={setAdvExport} graphDiv={advChartRef.current} seriesNames={advancedExportSeriesNames} labelModeOptions={advLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+            )}
+            {activeDeckSection === "modelVersion" && (
+              <DashboardExportPanel value={mvExport} onChange={setMvExport} graphDiv={mvChartRef.current} seriesNames={modelVersionExportSeriesNames} labelModeOptions={mvLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+            )}
+            {activeDeckSection === "positioning" && (
+              <DashboardExportPanel value={pmExport} onChange={setPmExport} graphDiv={pmChartRef.current} seriesNames={positioningExportSeriesNames} labelModeOptions={pmLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+            )}
+          </Suspense>
         </DeckExportDrawer>
     </div>
   );
