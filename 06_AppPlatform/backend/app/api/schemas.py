@@ -168,9 +168,10 @@ class HeroProductDeckRequest(BaseModel):
     sales_mode: Literal["month", "ytd", "rolling12"] = "ytd"
     segment: str = "SUV A0"
     fuel_type: str = "BEV"
+    fuel_types: list[str] = Field(default_factory=list)
     price_source: Literal["msrp", "jato"] = "msrp"
-    top_n: int = Field(default=10, ge=3, le=20)
-    ranking_limit: int = Field(default=20, ge=10, le=40)
+    top_n: int = Field(default=10, ge=10, le=30)
+    ranking_limit: int = Field(default=10, ge=10, le=60)
     country_limit: int = Field(default=0, ge=0, le=80)
     trend_window_months: int = Field(default=16, ge=6, le=36)
     country_rank_scope: Literal["selected", "all"] = "all"

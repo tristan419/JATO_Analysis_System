@@ -38,18 +38,34 @@ npx wrangler deploy
 After DNS is ready, bind a route such as:
 
 ```toml
-routes = [
-  { pattern = "api-intl.ojeur.cloud/*", zone_name = "ojeur.cloud" },
-]
+[[routes]]
+pattern = "api-intl.ojeur.cloud"
+custom_domain = true
 ```
 
-Then point the Cloudflare Pages intl frontend at the Worker facade:
+If `ojeur.cloud` is managed by Cloudflare DNS, point the Cloudflare Pages intl
+frontend at the Worker facade:
 
 ```bash
 VITE_API_BASE=https://api-intl.ojeur.cloud/v1
 ```
 
 Keep `www.ojeur.cloud` on the Tencent Cloud backend for domestic users.
+Do not use the `*.workers.dev` URL as the production API base; direct access to
+`workers.dev` can be unreliable from domestic networks. Use
+`https://api-intl.ojeur.cloud/v1` for the intl Pages deployment.
+
+If `ojeur.cloud` is still managed by DNSPod or another external DNS provider,
+the Worker custom domain will not become publicly resolvable until the DNS
+record or delegation is added there. In that setup, keep the intl Pages frontend
+on the same-origin Pages Function API:
+
+```bash
+VITE_API_BASE=/v1
+```
+
+The same-origin path is `https://intl.ojeur.cloud/v1/*`, backed by
+`06_AppPlatform/frontend/functions/v1/[[path]].js`.
 
 ## Smoke Checks
 

@@ -29,25 +29,37 @@ async function sha256Hex(value) {
 async function requestScopeHash(request) {
   const token = request.headers.get("x-auth-token") || "";
   const userName = request.headers.get("x-user-name") || "anonymous";
-  return sha256Hex(`${userName}:${token}`);
+  const userRole = request.headers.get("x-user-role") || "";
+  return sha256Hex(`${userRole}\n${userName}\n${token}`);
 }
 
-function cacheRequestUrl(request, path, bodyHash, scopeHash) {
+function dataVersion(request, env) {
+  return (
+    request.headers.get("x-jato-data-version")
+    || env.DATA_VERSION
+    || env.JATO_DATA_VERSION
+    || "default"
+  );
+}
+
+function cacheRequestUrl(request, path, bodyHash, scopeHash, version) {
   const sourceUrl = new URL(request.url);
   const cacheUrl = new URL(`https://jato-edge-cache.local/v1/${path}`);
   cacheUrl.search = sourceUrl.search;
   cacheUrl.searchParams.set("__method", request.method.toUpperCase());
   cacheUrl.searchParams.set("__body", bodyHash);
   cacheUrl.searchParams.set("__scope", scopeHash);
+  cacheUrl.searchParams.set("__data", version);
   return cacheUrl.toString();
 }
 
-function sanitizeResponseHeaders(response, ttlSeconds, cacheState) {
+function sanitizeResponseHeaders(response, ttlSeconds, path, cacheState) {
   const headers = new Headers(response.headers);
   headers.delete("set-cookie");
   headers.set("x-jato-edge-cache", cacheState);
+  headers.set("x-jato-edge-cache-endpoint", `/v1/${path}`);
   headers.set("cache-control", `public, max-age=0, s-maxage=${ttlSeconds}`);
-  headers.set("vary", "X-Auth-Token, X-User-Name");
+  headers.set("vary", "X-Auth-Token, X-User-Name, X-User-Role, X-JATO-Data-Version");
   return headers;
 }
 
@@ -95,7 +107,13 @@ export async function onRequest(context) {
     sha256Hex(bodyText),
     requestScopeHash(request),
   ]);
-  const cacheKey = new Request(cacheRequestUrl(request, path, bodyHash, scopeHash), {
+  const cacheKey = new Request(cacheRequestUrl(
+    request,
+    path,
+    bodyHash,
+    scopeHash,
+    dataVersion(request, env),
+  ), {
     method: "GET",
   });
   const cache = caches.default;
@@ -118,7 +136,7 @@ export async function onRequest(context) {
   const responseForCache = new Response(originResponse.body, {
     status: originResponse.status,
     statusText: originResponse.statusText,
-    headers: sanitizeResponseHeaders(originResponse, ttlSeconds, "MISS"),
+    headers: sanitizeResponseHeaders(originResponse, ttlSeconds, path, "MISS"),
   });
   context.waitUntil(cache.put(cacheKey, responseForCache.clone()));
   return responseForCache;

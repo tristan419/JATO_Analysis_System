@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from uuid import uuid4
 import hashlib
 import io
@@ -27,6 +28,12 @@ from app.core.config import (
 from app.infra import parquet_repository as repo
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class GroupedTimeSeriesQueryResult:
+    payload: dict
+    cache_state: Literal["MEMORY", "DISK", "INFLIGHT", "MISS"]
 
 # ── Column name candidates ──────────────────────────────────────
 COUNTRY_CANDIDATES = ["国家", "Country", "country"]
@@ -1218,6 +1225,28 @@ def query_grouped_time_series(
     time_range: dict[str, str] | None = None,
     cache_scope: str | None = None,
 ) -> dict:
+    return query_grouped_time_series_with_cache_state(
+        filters=filters,
+        grain=grain,
+        group_by=group_by,
+        top_n=top_n,
+        include_others=include_others,
+        share_split_by=share_split_by,
+        time_range=time_range,
+        cache_scope=cache_scope,
+    ).payload
+
+
+def query_grouped_time_series_with_cache_state(
+    filters: dict[str, list[str]],
+    grain: str,
+    group_by: str | None,
+    top_n: int,
+    include_others: bool,
+    share_split_by: str | None = None,
+    time_range: dict[str, str] | None = None,
+    cache_scope: str | None = None,
+) -> GroupedTimeSeriesQueryResult:
     normalized_grain = "year" if str(grain).lower() == "year" else "month"
     cache_key = (
         _normalize_cache_scope(cache_scope),
@@ -1237,13 +1266,13 @@ def query_grouped_time_series(
         now,
     )
     if cached_result is not None:
-        return cached_result
+        return GroupedTimeSeriesQueryResult(cached_result, "MEMORY")
     cached_result = _load_grouped_time_series_persistent_cache(
         cache_key,
         dataset_token,
     )
     if cached_result is not None:
-        return cached_result
+        return GroupedTimeSeriesQueryResult(cached_result, "DISK")
 
     owner = False
     with _grouped_time_series_cache_lock:
@@ -1255,7 +1284,7 @@ def query_grouped_time_series(
             now,
         )
         if cached_result is not None:
-            return cached_result
+            return GroupedTimeSeriesQueryResult(cached_result, "MEMORY")
 
         event = _grouped_time_series_inflight.get(cache_key)
         if event is None:
@@ -1266,7 +1295,7 @@ def query_grouped_time_series(
     if not owner:
         cached_result = _wait_for_grouped_time_series_cache(cache_key, event)
         if cached_result is not None:
-            return cached_result
+            return GroupedTimeSeriesQueryResult(cached_result, "INFLIGHT")
 
         with _grouped_time_series_cache_lock:
             event = _grouped_time_series_inflight.get(cache_key)
@@ -1280,7 +1309,7 @@ def query_grouped_time_series(
                 event,
             )
             if cached_result is not None:
-                return cached_result
+                return GroupedTimeSeriesQueryResult(cached_result, "INFLIGHT")
 
     try:
         result = _query_grouped_time_series_impl(
@@ -1301,7 +1330,7 @@ def query_grouped_time_series(
             dataset_token,
             cached_result,
         )
-        return cached_result
+        return GroupedTimeSeriesQueryResult(cached_result, "MISS")
     finally:
         if owner:
             with _grouped_time_series_cache_lock:

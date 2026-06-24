@@ -34,10 +34,11 @@ import {
   isAbortError,
   type FilterOptionsPayload,
 } from "../utils/filterOptions";
-import { countryCodeToDatasetCountry } from "../utils/jatoCountries";
 
 const SHARED_FILTER_SCOPE_CACHE_KEY = "shared-filter-scope";
 const PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
+const OVERVIEW_BOOT_DEFER_MS = 900;
+const OVERVIEW_BOOT_IDLE_TIMEOUT_MS = 1_600;
 
 export type ResolvedFilterColumns = Record<FilterKey, string | null>;
 
@@ -166,6 +167,25 @@ function summarizeScopeValues(values: string[]): string {
   return `${values.slice(0, 2).join(" · ")} +${values.length - 2}`;
 }
 
+type SharedScopeIdleWindow = Window & typeof globalThis & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+};
+
+function waitForOverviewBootSlot(): Promise<void> {
+  return new Promise((resolve) => {
+    const idleWindow = window as SharedScopeIdleWindow;
+    window.setTimeout(() => {
+      if (typeof idleWindow.requestIdleCallback === "function") {
+        idleWindow.requestIdleCallback(resolve, {
+          timeout: OVERVIEW_BOOT_IDLE_TIMEOUT_MS,
+        });
+        return;
+      }
+      resolve();
+    }, OVERVIEW_BOOT_DEFER_MS);
+  });
+}
+
 export function SharedFilterScopeProvider({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -249,28 +269,6 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
       .join(" · ");
   }, [activeFilters, selections]);
 
-  const loadFilterOptions = useCallback(
-    async (
-      payload: FilterOptionsPayload,
-      signal?: AbortSignal,
-    ): Promise<string[]> => {
-      const cacheKey = buildFilterOptionsCacheKey(payload);
-      const now = Date.now();
-      const cached = optionsCacheRef.current.get(cacheKey);
-      if (cached && cached.expiresAt > now) {
-        return cached.options;
-      }
-
-      const response = await api.filterOptions(payload, { signal });
-      optionsCacheRef.current.set(cacheKey, {
-        expiresAt: now + FILTER_OPTIONS_CACHE_TTL_MS,
-        options: response.options,
-      });
-      return response.options;
-    },
-    [],
-  );
-
   const loadFilterOptionsBatch = useCallback(
     async (
       payloads: FilterOptionsPayload[],
@@ -312,6 +310,17 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     [],
   );
 
+  const loadFilterOptions = useCallback(
+    async (
+      payload: FilterOptionsPayload,
+      signal?: AbortSignal,
+    ): Promise<string[]> => {
+      const [options] = await loadFilterOptionsBatch([payload], signal);
+      return options ?? [];
+    },
+    [loadFilterOptionsBatch],
+  );
+
   const loadOverview = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError("");
@@ -349,13 +358,14 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
 
     bootCompleted.current = false;
     const bootId = ++bootAttemptRef.current;
+    let cancelled = false;
 
     (async () => {
       setLoading(true);
       setError("");
       try {
         const { items } = await api.columns();
-        if (bootId !== bootAttemptRef.current) return;
+        if (cancelled || bootId !== bootAttemptRef.current) return;
         const resolvedColumns = resolveFilterColumns(items);
         const topLevelOptions: Partial<Record<FilterKey, string[]>> = {};
         const topLevelRequests: { key: TopLevelFilterKey; column: string }[] = [];
@@ -371,6 +381,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
             filters: {},
           })),
         );
+        if (cancelled || bootId !== bootAttemptRef.current) return;
         topLevelRequests.forEach((item, index) => {
           topLevelOptions[item.key] = topLevelOptionSets[index] ?? [];
         });
@@ -398,6 +409,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
           loadFilterOptions,
           undefined,
         );
+        if (cancelled || bootId !== bootAttemptRef.current) return;
 
         const initialFilters = buildFilterPayloadFromResolved(
           resolvedColumns,
@@ -412,10 +424,8 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
         bootCompleted.current = true;
         setLoading(false);
 
-        await new Promise<void>((resolve) => {
-          window.setTimeout(resolve, 80);
-        });
-        if (bootId !== bootAttemptRef.current) return;
+        await waitForOverviewBootSlot();
+        if (cancelled || bootId !== bootAttemptRef.current) return;
         const overviewController = new AbortController();
         overviewAbortRef.current?.abort();
         overviewAbortRef.current = overviewController;
@@ -426,25 +436,26 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
             prefer_precomputed: true,
             top_n: 120,
           }, { signal: overviewController.signal });
-          if (overviewAbortRef.current !== overviewController) return;
+          if (cancelled || overviewAbortRef.current !== overviewController) return;
           setOverview(overviewResponse);
           setYearSeries(overviewResponse.yearSeries ?? []);
           setMonthSeries(overviewResponse.monthSeries ?? []);
           setFilteredRowCount(overviewResponse.kpis.totalRows);
         } finally {
-          if (overviewAbortRef.current === overviewController) {
+          if (!cancelled && overviewAbortRef.current === overviewController) {
             overviewAbortRef.current = null;
             setLoading(false);
           }
         }
       } catch (err) { console.log("[SFS] boot ERROR:", err);
-        if (!isAbortError(err)) setError((err as Error).message);
+        if (!cancelled && !isAbortError(err)) setError((err as Error).message);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
 
     return () => {
+      cancelled = true;
       if (!bootCompleted.current) {
         bootDone.current = false;
       }
