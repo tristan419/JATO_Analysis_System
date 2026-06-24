@@ -22,14 +22,67 @@ function getArg(name) {
   return value ? value.slice(prefix.length) : "";
 }
 
+function normalizeOrigin(value) {
+  const url = new URL(value);
+  return url.origin;
+}
+
+function normalizeRouteTarget(value) {
+  return value === "intl" ? "intl" : "cn";
+}
+
+function parseCustomHosts() {
+  const raw = process.env.JATO_PERF_ORIGINS_JSON;
+  if (!raw) return {};
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed)) {
+    throw new Error("JATO_PERF_ORIGINS_JSON must be an array.");
+  }
+  const hosts = {};
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") {
+      throw new Error("Each custom origin must be an object.");
+    }
+    const label = String(item.label || "").trim();
+    const origin = String(item.origin || "").trim();
+    if (!label || !origin) {
+      throw new Error("Each custom origin needs label and origin.");
+    }
+    hosts[label.toLowerCase()] = {
+      label,
+      origin: normalizeOrigin(origin),
+      target: normalizeRouteTarget(item.target),
+    };
+  }
+  return hosts;
+}
+
+function parseInlineHost(raw) {
+  const separator = raw.includes("=") ? "=" : raw.includes("@") ? "@" : "";
+  if (!separator) return null;
+  const [label, originWithTarget] = raw.split(separator);
+  const [origin, target = "intl"] = originWithTarget.split("|");
+  return {
+    label: label.trim(),
+    origin: normalizeOrigin(origin.trim()),
+    target: normalizeRouteTarget(target.trim()),
+  };
+}
+
 function parseHosts() {
+  const customHosts = parseCustomHosts();
   const raw = getArg("hosts") || process.env.JATO_PERF_HOSTS || "www,intl";
   return raw.split(",")
-    .map((item) => item.trim().toLowerCase())
+    .map((item) => item.trim())
     .filter(Boolean)
-    .map((key) => {
-      const host = HOSTS[key];
-      if (!host) throw new Error(`Unknown host "${key}". Use www, cn, or intl.`);
+    .map((item) => {
+      const inlineHost = parseInlineHost(item);
+      if (inlineHost) return inlineHost;
+      const key = item.toLowerCase();
+      const host = customHosts[key] || HOSTS[key];
+      if (!host) {
+        throw new Error(`Unknown host "${item}". Use www, cn, intl, label=https://origin|intl, or JATO_PERF_ORIGINS_JSON.`);
+      }
       return host;
     });
 }
@@ -209,6 +262,10 @@ function seconds(value) {
   return typeof value === "number" ? (value / 1000).toFixed(2) : "-";
 }
 
+function countCacheState(apiCalls, state) {
+  return apiCalls.filter((api) => api.cache.toUpperCase() === state).length;
+}
+
 async function main() {
   const username = process.env.JATO_PERF_USERNAME || "";
   const password = process.env.JATO_PERF_PASSWORD || "";
@@ -245,6 +302,9 @@ async function main() {
     fcp_s: seconds(result.browserMetrics.firstContentfulPaintMs),
     network_idle_s: seconds(result.networkIdleMs),
     api_count: result.apiCalls.length,
+    edge_hit: countCacheState(result.apiCalls, "HIT"),
+    edge_miss: countCacheState(result.apiCalls, "MISS"),
+    edge_bypass: countCacheState(result.apiCalls, "BYPASS"),
     slowest_api_s: seconds(result.slowApis[0]?.ms),
     error: result.error ? result.error.slice(0, 96) : "",
   })));
