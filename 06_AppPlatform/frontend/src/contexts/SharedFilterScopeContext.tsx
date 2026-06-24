@@ -542,6 +542,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
           getInitialCascadeStartIndex(initialSelections, topLevelOptions),
           loadFilterOptions,
           bootController.signal,
+          loadFilterOptionsBatch,
         );
         if (cancelled || bootId !== bootAttemptRef.current) return;
 
@@ -656,6 +657,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
           cascadeStartIndex,
           loadFilterOptions,
           controller.signal,
+          loadFilterOptionsBatch,
         );
         if (syncOptionsAbortRef.current !== controller) return;
 
@@ -671,7 +673,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
         }
       }
     },
-    [loadFilterOptions, res],
+    [loadFilterOptions, loadFilterOptionsBatch, res],
   );
 
   const onFilterChange = useCallback(

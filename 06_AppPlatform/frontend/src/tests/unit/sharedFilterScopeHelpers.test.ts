@@ -6,7 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 import type * as SharedFilterScopeContextModule from "../../contexts/SharedFilterScopeContext";
-import type { FilterOptionsPayload } from "../../utils/filterOptions";
+import { fetchOnDemandCascadedOptions, type FilterOptionsPayload } from "../../utils/filterOptions";
 
 const apiMock = vi.hoisted(() => ({
   columns: vi.fn(),
@@ -104,6 +104,87 @@ describe("getInitialCascadeStartIndex", () => {
       country: ["丹麦", "德国"],
       powertrain: ["ICE", "BEV"],
     })).toBe(3);
+  });
+});
+
+describe("fetchOnDemandCascadedOptions", () => {
+  const resolved = {
+    country: "国家",
+    body_type: "Body type",
+    segment: "细分市场",
+    powertrain: "动总规整",
+    make: "Make",
+    model: "Model",
+    version: "Version name",
+  };
+
+  it("uses one batch request for the active cascade chain", async () => {
+    const fetchOptions = vi.fn();
+    const fetchOptionsBatch = vi.fn(async (items: FilterOptionsPayload[]) => (
+      items.map((item) => (
+        item.column === "动总规整" ? ["BEV", "ICE"]
+          : item.column === "Make" ? ["Tesla"]
+            : item.column === "Model" ? ["Model Y"]
+              : item.column === "Version name" ? ["Long Range"]
+                : []
+      ))
+    ));
+
+    const result = await fetchOnDemandCascadedOptions(
+      resolved,
+      createSharedSelections({
+        country: ["丹麦"],
+        powertrain: ["BEV"],
+        make: ["Tesla"],
+        model: ["Model Y"],
+      }),
+      3,
+      fetchOptions,
+      undefined,
+      fetchOptionsBatch,
+    );
+
+    expect(fetchOptions).not.toHaveBeenCalled();
+    expect(fetchOptionsBatch).toHaveBeenCalledTimes(1);
+    expect(fetchOptionsBatch.mock.calls[0]?.[0]).toEqual([
+      { column: "动总规整", filters: { 国家: ["丹麦"] } },
+      { column: "Make", filters: { 国家: ["丹麦"], 动总规整: ["BEV"] } },
+      { column: "Model", filters: { 国家: ["丹麦"], 动总规整: ["BEV"], Make: ["Tesla"] } },
+      { column: "Version name", filters: { 国家: ["丹麦"], 动总规整: ["BEV"], Make: ["Tesla"], Model: ["Model Y"] } },
+    ]);
+    expect(result.selections.powertrain).toEqual(["BEV"]);
+    expect(result.selections.make).toEqual(["Tesla"]);
+    expect(result.optionsMap.version).toEqual(["Long Range"]);
+  });
+
+  it("clears downstream selections when an upstream value is no longer valid", async () => {
+    const fetchOptions = vi.fn();
+    const fetchOptionsBatch = vi.fn(async (items: FilterOptionsPayload[]) => (
+      items.map((item) => (
+        item.column === "动总规整" ? ["BEV"]
+          : item.column === "Make" ? ["Tesla"]
+            : []
+      ))
+    ));
+
+    const result = await fetchOnDemandCascadedOptions(
+      resolved,
+      createSharedSelections({
+        country: ["丹麦"],
+        powertrain: ["MISSING"],
+        make: ["Tesla"],
+      }),
+      3,
+      fetchOptions,
+      undefined,
+      fetchOptionsBatch,
+    );
+
+    expect(fetchOptions).not.toHaveBeenCalled();
+    expect(fetchOptionsBatch).toHaveBeenCalledTimes(1);
+    expect(result.selections.powertrain).toEqual([]);
+    expect(result.selections.make).toEqual([]);
+    expect(result.optionsMap.make).toEqual([]);
   });
 });
 
