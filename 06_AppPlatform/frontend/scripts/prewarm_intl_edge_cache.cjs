@@ -319,6 +319,14 @@ function buildWarmupRequests(snapshot, configuredCountries, configuredPowertrain
   );
   const groupBy = columns.country || "国家";
   return [
+    ...(columns.segment ? [{
+      body: {
+        items: [{ column: columns.segment, filters: {} }],
+      },
+      label: "filters-options-dashboard-segment",
+      method: "POST",
+      path: "/filters/options/batch",
+    }] : []),
     {
       body: {
         items: topLevelColumns.map((column) => ({ column, filters: {} })),

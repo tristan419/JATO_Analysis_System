@@ -60,13 +60,26 @@ describe("prewarm intl edge cache", () => {
     const warmups = prewarm.buildWarmupRequests(snapshot, [], []);
 
     expect(warmups.map((request) => request.label)).toEqual([
+      "filters-options-dashboard-segment",
       "filters-options-batch",
       "filters-options-default-cascade",
       "analysis-overview-default",
       "time-series-grouped-month-country",
       "time-series-grouped-year-country",
     ]);
-    expect(warmups[1]).toMatchObject({
+    expect(warmups[0]).toMatchObject({
+      body: {
+        items: [
+          {
+            column: "细分市场",
+            filters: {},
+          },
+        ],
+      },
+      method: "POST",
+      path: "/filters/options/batch",
+    });
+    expect(warmups[2]).toMatchObject({
       body: {
         items: [
           {
