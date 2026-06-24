@@ -1,12 +1,12 @@
 source_code: nissan_juke_fr_draft_scrapling
 country: 法国
 brand: NISSAN
-source_url: https://www.nissan.fr/vehicules/neufs/juke.html
+source_url: https://www.nissan.fr/vehicules/neufs/juke/prix-caracteristiques.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.nissan.fr/vehicules/neufs/juke.html
+  url: https://www.nissan.fr/vehicules/neufs/juke/prix-caracteristiques.html
   tier: stealth
   headless: true
   network_idle: false
@@ -16,6 +16,70 @@ profile:
   disable_resources: true
   impersonate: chrome
   json_script_selector: script[type='application/ld+json']
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16510FMA1":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: Acenta Essence 114ch Manuelle
+      official_powertrain: Essence 114ch Manuelle 6 vitesses 2 roues motrices avant
+      price_label: Prix à partir de
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16510FDA1":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: Acenta Essence 114ch Automatique
+      official_powertrain: Essence 114ch Automatique 7 vitesses 2 roues motrices avant
+      price_label: Prix à partir de
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16516FHA0":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: Acenta Hybrid 143ch Automatique
+      official_powertrain: Hybrid 143ch Automatique 2 vitesses électriques + 4 vitesses essence 2 roues motrices avant
+      price_label: Prix à partir de
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16510FMC1":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: N-Connecta Essence 114ch Manuelle
+      official_powertrain: Essence 114ch Manuelle 6 vitesses 2 roues motrices avant
+      price_label: Prix à partir de
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16510FDC1":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: N-Connecta Essence 114ch Automatique
+      official_powertrain: Essence 114ch Automatique 7 vitesses 2 roues motrices avant
+      price_label: Prix à partir de
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16516FHC0":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: N-Connecta Hybrid 143ch Automatique
+      official_powertrain: Hybrid 143ch Automatique 2 vitesses électriques + 4 vitesses essence 2 roues motrices avant
+      price_label: Prix à partir de
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16510FMU1":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: Tekna Essence 114ch Manuelle
+      official_powertrain: Essence 114ch Manuelle 6 vitesses 2 roues motrices avant
+      price_label: Prix à partir de
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16510FDU1":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: Tekna Essence 114ch Automatique
+      official_powertrain: Essence 114ch Automatique 7 vitesses 2 roues motrices avant
+      price_label: Prix à partir de
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16516FHU0":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: Tekna Hybrid 143ch Automatique
+      official_powertrain: Hybrid 143ch Automatique 2 vitesses électriques + 4 vitesses essence 2 roues motrices avant
+      price_label: Prix à partir de
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16510FMF1":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: N-Design Essence 114ch Manuelle
+      official_powertrain: Essence 114ch Manuelle 6 vitesses 2 roues motrices avant
+      price_label: Prix à partir de
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16510FDF1":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: N-Design Essence 114ch Automatique
+      official_powertrain: Essence 114ch Automatique 7 vitesses 2 roues motrices avant
+      price_label: Prix à partir de
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16516FHF0":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: N-Design Hybrid 143ch Automatique
+      official_powertrain: Hybrid 143ch Automatique 2 vitesses électriques + 4 vitesses essence 2 roues motrices avant
+      price_label: Prix à partir de
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16510FMJ1":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: N-Sport Essence 114ch Manuelle
+      official_powertrain: Essence 114ch Manuelle 6 vitesses 2 roues motrices avant
+      price_label: Prix à partir de
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16510FDJ1":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: N-Sport Essence 114ch Automatique
+      official_powertrain: Essence 114ch Automatique 7 vitesses 2 roues motrices avant
+      price_label: Prix à partir de
+    - pattern: '"Retail with VAT":\{.{0,12000}?"F16516FHJ0":"(?P<price>\d+(?:\.\d+)?)"'
+      official_trim: N-Sport Hybrid 143ch Automatique
+      official_powertrain: Hybrid 143ch Automatique 2 vitesses électriques + 4 vitesses essence 2 roues motrices avant
+      price_label: Prix à partir de
   css:
     vehicle_container: body
     model: h1, h2
@@ -23,7 +87,7 @@ profile:
     price: '[class*="price"]'
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Prix à partir de
   fixed_model: JUKE
   fixed_jato_model: JUKE
   fixed_jato_powertrain: null
@@ -106,10 +170,13 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from NISSAN template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+notes: Draft scaffold generated from country×model top30 backlog. Repaired to
+  Nissan France's Juke price/specifications page and text_regex patterns over
+  the embedded "Retail with VAT" version-price JSON. The generic model landing
+  page can fetch after retries but regressed to timeout in FR batch runs, and
+  visible price spans can be missing when the page renders slowly. [URL filled
+  from NISSAN template] [URL language corrected] [CSS selectors applied from
+  brand probe]
 bootstrap_meta:
   country_model_rank: 27
   suggested_scope_kind: single_model
