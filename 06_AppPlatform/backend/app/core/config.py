@@ -185,8 +185,39 @@ FILTER_OPTIONS_SNAPSHOT_TTL_SECONDS = int(
 HTTP_STRONG_CACHE_SECONDS = int(
     os.getenv("APP_HTTP_STRONG_CACHE_SECONDS", "3600")
 )
+_DEFAULT_GROUPED_TIME_SERIES_PREWARM_FILTERS_JSON = json.dumps(
+    [
+        {
+            "国家": [
+                "丹麦",
+                "克罗地亚",
+                "匈牙利",
+                "奥地利",
+                "希腊",
+                "德国",
+                "意大利",
+                "挪威",
+                "捷克",
+                "斯洛伐克",
+                "斯洛文尼亚",
+                "比利时",
+                "法国",
+                "波兰",
+                "瑞典",
+                "瑞士",
+                "罗马尼亚",
+                "芬兰",
+                "荷兰",
+                "葡萄牙",
+                "西班牙",
+            ],
+            "动总规整": ["ICE", "HEV", "BEV", "MHEV", "PHEV"],
+        }
+    ],
+    ensure_ascii=False,
+)
 GROUPED_TIME_SERIES_CACHE_TTL_SECONDS = int(
-    os.getenv("APP_GROUPED_TIME_SERIES_CACHE_TTL_SECONDS", "300")
+    os.getenv("APP_GROUPED_TIME_SERIES_CACHE_TTL_SECONDS", "1800")
 )
 GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES = int(
     os.getenv("APP_GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES", "64")
@@ -203,7 +234,7 @@ GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR = Path(
 ).resolve()
 GROUPED_TIME_SERIES_PREWARM_ENABLED = _parse_bool_env(
     "APP_GROUPED_TIME_SERIES_PREWARM_ENABLED",
-    False,
+    True,
 )
 GROUPED_TIME_SERIES_PREWARM_GROUP_BY = _parse_csv_env(
     "APP_GROUPED_TIME_SERIES_PREWARM_GROUP_BY",
@@ -211,15 +242,15 @@ GROUPED_TIME_SERIES_PREWARM_GROUP_BY = _parse_csv_env(
 )
 GROUPED_TIME_SERIES_PREWARM_GRAINS = _parse_csv_env(
     "APP_GROUPED_TIME_SERIES_PREWARM_GRAINS",
-    "month",
+    "month,year",
 )
 GROUPED_TIME_SERIES_PREWARM_SCOPES = _parse_csv_env(
     "APP_GROUPED_TIME_SERIES_PREWARM_SCOPES",
-    "viewer,admin",
+    "viewer,order_filler,editor,admin",
 )
 GROUPED_TIME_SERIES_PREWARM_FILTERS = _parse_filter_sets_env(
     "APP_GROUPED_TIME_SERIES_PREWARM_FILTERS_JSON",
-    "[]",
+    _DEFAULT_GROUPED_TIME_SERIES_PREWARM_FILTERS_JSON,
 )
 
 REDIS_URL = os.getenv("APP_REDIS_URL", "redis://localhost:6379/0").strip()

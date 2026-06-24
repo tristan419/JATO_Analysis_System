@@ -482,6 +482,16 @@ def test_warm_grouped_time_series_cache_includes_configured_filter_sets(
     ]
 
 
+def test_grouped_time_series_prewarm_defaults_cover_dashboard_scope() -> None:
+    assert query_service.GROUPED_TIME_SERIES_CACHE_TTL_SECONDS >= 1800
+    assert "order_filler" in query_service.GROUPED_TIME_SERIES_PREWARM_SCOPES
+    assert {"month", "year"}.issubset(set(query_service.GROUPED_TIME_SERIES_PREWARM_GRAINS))
+    assert any(
+        filters.get("国家") and filters.get("动总规整")
+        for filters in query_service.GROUPED_TIME_SERIES_PREWARM_FILTERS
+    )
+
+
 def test_query_grouped_time_series_respects_time_range_for_topn(
     monkeypatch,
 ) -> None:
