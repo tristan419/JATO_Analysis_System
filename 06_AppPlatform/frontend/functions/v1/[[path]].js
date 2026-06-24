@@ -333,7 +333,7 @@ export async function onRequest(context) {
     headers: sanitizeResponseHeaders(originResponse, ttlSeconds, path, "MISS"),
   });
   const responseForCache = responseForClient.clone();
-  context.waitUntil(putCacheableResponse(
+  await putCacheableResponse(
     cache,
     cacheKey,
     staleCacheKey,
@@ -341,6 +341,6 @@ export async function onRequest(context) {
     ttlSeconds,
     staleSeconds,
     path,
-  ));
+  );
   return responseForClient;
 }
