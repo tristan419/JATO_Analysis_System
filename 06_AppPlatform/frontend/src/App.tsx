@@ -4,6 +4,7 @@ import { SharedFilterScopeProvider } from "./contexts/SharedFilterScopeContext";
 import { AuthProvider } from "./contexts/AuthContext";
 import { Layout } from "./components/Layout";
 import { RequireRole } from "./components/RequireRole";
+import { DashboardRouteSkeleton } from "./components/DashboardRouteSkeleton";
 import { LoadingSurface } from "./components/LoadingSurface";
 import { SmartRouteGate } from "./components/SmartRouteGate";
 import { getOAuthRedirectTarget } from "./utils/oauthRedirect";
@@ -77,13 +78,21 @@ class ChunkErrorBoundary extends Component<{ children: ReactNode }, { hasError: 
 }
 
 function withPageLoader(node: ReactNode) {
+  return withRouteLoader(node);
+}
+
+function withRouteLoader(node: ReactNode, fallback?: ReactNode) {
   return (
     <ChunkErrorBoundary>
-      <Suspense fallback={<div className="app-loading-shell"><LoadingSurface mode="overlay" label="正在加载页面" detail="准备下一个工作视图与路由资源" kicker="Route" /></div>}>
+      <Suspense fallback={fallback ?? <div className="app-loading-shell"><LoadingSurface mode="overlay" label="正在加载页面" detail="准备下一个工作视图与路由资源" kicker="Route" /></div>}>
         {node}
       </Suspense>
     </ChunkErrorBoundary>
   );
+}
+
+function withDashboardLoader(node: ReactNode, fallback?: ReactNode) {
+  return withRouteLoader(node, fallback ?? <DashboardRouteSkeleton />);
 }
 
 function withSharedFilterScope(node: ReactNode) {
@@ -243,8 +252,8 @@ function AppVersionNotice() {
 const router = createBrowserRouter([
   { path: "/login", element: (<AuthProvider>{withPageLoader(<LoginPage />)}</AuthProvider>) },
   { path: "/", element: (<AuthProvider><OAuthGate><RequireRole><Layout /></RequireRole></OAuthGate></AuthProvider>), children: [
-    { index: true, element: withSharedFilterScope(withPageLoader(<DashboardPage />)) },
-    { path: "dashboard", element: withSharedFilterScope(withPageLoader(<DashboardPage />)) },
+    { index: true, element: withSharedFilterScope(withDashboardLoader(<DashboardPage />)) },
+    { path: "dashboard", element: withSharedFilterScope(withDashboardLoader(<DashboardPage />)) },
     { path: "market/overview", element: withPageLoader(<MarketOverviewPage />) },
     { path: "market/segments", element: withPageLoader(<MarketSegmentsPage />) },
     { path: "market/ranking/brand", element: withPageLoader(<MarketBrandRankingPage />) },
@@ -260,7 +269,15 @@ const router = createBrowserRouter([
     { path: "product/pricing", element: withPageLoader(<PositioningPricingPage />) },
     { path: "product/compare", element: withPageLoader(<VersionComparisonPage />) },
     { path: "product/customer-insight", element: withPageLoader(<CustomerInsightsPage />) },
-    { path: "data/spec-detail", element: withSharedFilterScope(withPageLoader(<SpecificationPage />)) },
+    { path: "data/spec-detail", element: withSharedFilterScope(withDashboardLoader(
+      <SpecificationPage />,
+      <DashboardRouteSkeleton
+        chartKicker="03 / Specification Grid"
+        chartTitle="Specification detail loading"
+        heroKicker="01 / Specification Scope"
+        title="Specification Page"
+      />,
+    )) },
     { path: "data/overview", element: withPageLoader(<DataManagementPage />) },
     { path: "data/config-import", element: withPageLoader(<EngineeringPage />) },
     { path: "data/matching-review", element: withPageLoader(<ReviewCasesPage />) },
@@ -279,7 +296,15 @@ const router = createBrowserRouter([
     { path: "version-comparison", element: <RedirectPreserveSearch to="/product/compare" /> },
     { path: "customer-insights", element: <RedirectPreserveSearch to="/product/customer-insight" /> },
     { path: "customer-hev", element: <RedirectPreserveSearch to="/product/customer-insight" /> },
-    { path: "specification", element: withSharedFilterScope(withPageLoader(<SpecificationPage />)) },
+    { path: "specification", element: withSharedFilterScope(withDashboardLoader(
+      <SpecificationPage />,
+      <DashboardRouteSkeleton
+        chartKicker="03 / Specification Grid"
+        chartTitle="Specification detail loading"
+        heroKicker="01 / Specification Scope"
+        title="Specification Page"
+      />,
+    )) },
     { path: "data-management", element: withPageLoader(<DataManagementPage />) },
     { path: "engineering", element: <RedirectPreserveSearch to="/data/config-import" /> },
     { path: "review", element: <RedirectPreserveSearch to="/data/matching-review" /> },
