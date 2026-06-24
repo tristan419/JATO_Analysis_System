@@ -40,7 +40,12 @@ def test_build_prewarm_requests_covers_default_dashboard_combinations() -> None:
         include_others=False,
     )
 
-    assert [item.label for item in requests] == ["month:动总规整", "month:国家"]
+    assert [item.label for item in requests] == [
+        "month:动总规整",
+        "month:国家",
+        "year:动总规整",
+        "year:国家",
+    ]
     assert requests[0].payload["filters"]["国家"] == prewarm.DEFAULT_COUNTRIES
     assert requests[0].payload["filters"]["动总规整"] == ["ICE", "HEV", "BEV", "MHEV", "PHEV"]
     assert requests[0].payload["top_n"] == 10
@@ -52,6 +57,7 @@ def test_validate_attempts_can_require_repeat_cache_hit() -> None:
         prewarm.PrewarmAttempt(
             label="month:国家",
             attempt=1,
+            user_role="viewer",
             status=200,
             seconds=1.2,
             rows=12,
@@ -61,6 +67,7 @@ def test_validate_attempts_can_require_repeat_cache_hit() -> None:
         prewarm.PrewarmAttempt(
             label="month:国家",
             attempt=2,
+            user_role="viewer",
             status=200,
             seconds=0.1,
             rows=12,
@@ -81,6 +88,7 @@ def test_validate_attempts_reports_cold_repeat() -> None:
         prewarm.PrewarmAttempt(
             label="month:动总规整",
             attempt=2,
+            user_role="order_filler",
             status=200,
             seconds=2.0,
             rows=12,
@@ -96,5 +104,36 @@ def test_validate_attempts_reports_cold_repeat() -> None:
     )
 
     assert errors == [
-        "repeat request still returned MISS for: month:动总规整",
+        "repeat request still returned MISS for: order_filler:month:动总规整",
     ]
+
+
+def test_validate_attempts_tracks_repeat_hit_per_role() -> None:
+    attempts = [
+        prewarm.PrewarmAttempt(
+            label="year:国家",
+            attempt=2,
+            user_role="viewer",
+            status=200,
+            seconds=0.2,
+            rows=12,
+            server_cache="MEMORY",
+            edge_cache="",
+        ),
+        prewarm.PrewarmAttempt(
+            label="year:国家",
+            attempt=2,
+            user_role="editor",
+            status=200,
+            seconds=2.2,
+            rows=12,
+            server_cache="MISS",
+            edge_cache="",
+        ),
+    ]
+
+    assert prewarm.validate_attempts(
+        attempts,
+        require_server_cache=True,
+        require_repeat_hit=True,
+    ) == ["repeat request still returned MISS for: editor:year:国家"]

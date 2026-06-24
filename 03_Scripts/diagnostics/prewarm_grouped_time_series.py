@@ -37,7 +37,8 @@ DEFAULT_COUNTRIES = [
 ]
 DEFAULT_POWERTRAINS = ["ICE", "HEV", "BEV", "MHEV", "PHEV"]
 DEFAULT_GROUP_BYS = ["动总规整", "国家"]
-DEFAULT_GRAINS = ["month"]
+DEFAULT_GRAINS = ["month", "year"]
+DEFAULT_USER_ROLES = ["viewer", "order_filler", "editor", "admin"]
 SERVER_CACHE_HEADER = "x-jato-server-cache"
 EDGE_CACHE_HEADER = "x-jato-edge-cache"
 
@@ -52,6 +53,7 @@ class PrewarmRequest:
 class PrewarmAttempt:
     label: str
     attempt: int
+    user_role: str
     status: int
     seconds: float
     rows: int | None
@@ -151,31 +153,37 @@ def header_value(headers: dict[str, str], name: str) -> str:
 def run_prewarm(
     url: str,
     requests: list[PrewarmRequest],
-    headers: dict[str, str],
+    token: str,
+    user_name: str,
+    user_roles: list[str],
     repeat: int,
     timeout: float,
 ) -> list[PrewarmAttempt]:
     attempts: list[PrewarmAttempt] = []
-    for item in requests:
-        for attempt in range(1, max(1, int(repeat)) + 1):
-            status, response_headers, payload, seconds = post_json(
-                url,
-                item.payload,
-                headers,
-                timeout,
-            )
-            rows = payload.get("rows")
-            attempts.append(
-                PrewarmAttempt(
-                    label=item.label,
-                    attempt=attempt,
-                    status=status,
-                    seconds=seconds,
-                    rows=int(rows) if isinstance(rows, int | float) else None,
-                    server_cache=header_value(response_headers, SERVER_CACHE_HEADER),
-                    edge_cache=header_value(response_headers, EDGE_CACHE_HEADER),
+    roles = user_roles or DEFAULT_USER_ROLES
+    for user_role in dict.fromkeys(roles):
+        headers = auth_headers(token, user_name, user_role)
+        for item in requests:
+            for attempt in range(1, max(1, int(repeat)) + 1):
+                status, response_headers, payload, seconds = post_json(
+                    url,
+                    item.payload,
+                    headers,
+                    timeout,
                 )
-            )
+                rows = payload.get("rows")
+                attempts.append(
+                    PrewarmAttempt(
+                        label=item.label,
+                        attempt=attempt,
+                        user_role=user_role,
+                        status=status,
+                        seconds=seconds,
+                        rows=int(rows) if isinstance(rows, int | float) else None,
+                        server_cache=header_value(response_headers, SERVER_CACHE_HEADER),
+                        edge_cache=header_value(response_headers, EDGE_CACHE_HEADER),
+                    )
+                )
     return attempts
 
 
@@ -191,11 +199,11 @@ def validate_attempts(
             errors.append("missing X-JATO-Server-Cache on one or more responses")
 
     if require_repeat_hit:
-        latest_by_label: dict[str, PrewarmAttempt] = {}
+        latest_by_label: dict[tuple[str, str], PrewarmAttempt] = {}
         for attempt in attempts:
-            latest_by_label[attempt.label] = attempt
+            latest_by_label[(attempt.user_role, attempt.label)] = attempt
         cold_labels = [
-            item.label
+            f"{item.user_role}:{item.label}"
             for item in latest_by_label.values()
             if item.server_cache.upper() == "MISS"
         ]
@@ -214,6 +222,7 @@ def print_attempts(attempts: list[PrewarmAttempt]) -> None:
                 {
                     "label": item.label,
                     "attempt": item.attempt,
+                    "userRole": item.user_role,
                     "status": item.status,
                     "seconds": round(item.seconds, 3),
                     "rows": item.rows,
@@ -242,6 +251,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--token", default=os.getenv("APP_AUTH_TOKEN", os.getenv("VITE_AUTH_TOKEN", "")))
     parser.add_argument("--user-name", default=os.getenv("VITE_USER_NAME", "prewarm"))
     parser.add_argument("--user-role", default=os.getenv("VITE_USER_ROLE", "viewer"))
+    parser.add_argument(
+        "--user-roles",
+        default=os.getenv(
+            "JATO_PREWARM_USER_ROLES",
+            os.getenv("APP_GROUPED_TIME_SERIES_PREWARM_SCOPES", ""),
+        ),
+    )
     parser.add_argument("--countries", default=os.getenv("JATO_PREWARM_COUNTRIES", ""))
     parser.add_argument("--powertrains", default=os.getenv("JATO_PREWARM_POWERTRAINS", ""))
     parser.add_argument("--group-by", default=os.getenv("JATO_PREWARM_GROUP_BY", ""))
@@ -269,7 +285,12 @@ def main() -> None:
     attempts = run_prewarm(
         url=url,
         requests=requests,
-        headers=auth_headers(args.token, args.user_name, args.user_role),
+        token=args.token,
+        user_name=args.user_name,
+        user_roles=split_csv(
+            args.user_roles,
+            split_csv(args.user_role, DEFAULT_USER_ROLES),
+        ),
         repeat=args.repeat,
         timeout=args.timeout,
     )

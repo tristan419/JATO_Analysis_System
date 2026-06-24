@@ -101,7 +101,7 @@ backend_prewarm_identity() {
     return
   fi
 
-  run_privileged_bash 'set -a; . "$1"; set +a; printf "%s\t%s\t%s\n" "${APP_AUTH_TOKEN:-${VITE_AUTH_TOKEN:-}}" "${VITE_USER_NAME:-prewarm}" "${VITE_USER_ROLE:-viewer}"' "$BACKEND_ENV_FILE" 2>/dev/null \
+  run_privileged_bash 'set -a; . "$1"; set +a; printf "%s\t%s\t%s\n" "${APP_AUTH_TOKEN:-${VITE_AUTH_TOKEN:-}}" "${VITE_USER_NAME:-prewarm}" "${APP_GROUPED_TIME_SERIES_PREWARM_SCOPES:-${VITE_USER_ROLE:-viewer}}"' "$BACKEND_ENV_FILE" 2>/dev/null \
     || printf '\tprewarm\tviewer\n'
 }
 
@@ -109,7 +109,7 @@ run_grouped_time_series_prewarm() {
   local script="$REPO_DIR/03_Scripts/diagnostics/prewarm_grouped_time_series.py"
   local token=""
   local user_name=""
-  local user_role=""
+  local user_roles=""
   local identity=""
   local args=()
 
@@ -123,12 +123,12 @@ run_grouped_time_series_prewarm() {
   fi
 
   identity="$(backend_prewarm_identity)"
-  IFS=$'\t' read -r token user_name user_role <<< "$identity"
+  IFS=$'\t' read -r token user_name user_roles <<< "$identity"
   args=(
     "$script"
     --origin "http://127.0.0.1:${BACKEND_PORT}"
     --user-name "${user_name:-prewarm}"
-    --user-role "${user_role:-viewer}"
+    --user-roles "${user_roles:-viewer}"
     --require-server-cache
     --require-repeat-hit
   )
