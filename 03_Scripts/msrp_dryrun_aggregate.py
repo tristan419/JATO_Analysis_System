@@ -160,6 +160,11 @@ def _normalize_source_result(result: dict[str, Any], country_code: str) -> dict[
         "financeSemanticsCounts",
         "financeTypeCounts",
         "sampleFinanceContexts",
+        "rejectedReasons",
+        "rejectedRules",
+        "rejectionReasonCounts",
+        "rejectionRuleCounts",
+        "sampleRejectedObservations",
     ):
         value = result.get(key)
         if value not in (None, ""):

@@ -241,6 +241,36 @@ def test_classify_price_floor_rejection_as_price_out_of_range() -> None:
     }
 
 
+def test_copy_source_result_diagnostics_preserves_rejection_details() -> None:
+    src = {
+        "sourceUrl": "https://www.nissan.fr/vehicules/neufs/qashqai.html",
+        "rejectedReasons": ["msrp_value=229.0 < 5000.0 for base_msrp"],
+        "rejectedRules": ["price_range"],
+        "rejectionReasonCounts": {
+            "msrp_value=229.0 < 5000.0 for base_msrp": 1,
+        },
+        "rejectionRuleCounts": {"price_range": 1},
+        "sampleRejectedObservations": [
+            {
+                "officialModel": "QASHQAI",
+                "officialTrim": "Personnalisation et style",
+                "msrpValue": 229,
+            },
+        ],
+        "unrelatedRuntimeKey": "not copied",
+    }
+    result_entry = {"code": "nissan_qashqai_fr_draft_scrapling"}
+
+    batch_dryrun._copy_source_result_diagnostics(src, result_entry)
+
+    assert result_entry["sourceUrl"] == src["sourceUrl"]
+    assert result_entry["rejectedReasons"] == src["rejectedReasons"]
+    assert result_entry["rejectedRules"] == ["price_range"]
+    assert result_entry["rejectionRuleCounts"] == {"price_range": 1}
+    assert result_entry["sampleRejectedObservations"] == src["sampleRejectedObservations"]
+    assert "unrelatedRuntimeKey" not in result_entry
+
+
 def test_source_attempt_limit_env(monkeypatch) -> None:
     monkeypatch.setenv("JATO_MSRP_DRYRUN_SOURCE_ATTEMPTS", "3")
     assert batch_dryrun._source_attempt_limit() == 3

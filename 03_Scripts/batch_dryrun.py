@@ -39,6 +39,37 @@ try:
 except ImportError:  # pragma: no cover - keeps dryrun usable in stripped script contexts.
     _write_v3_source_repair_backlog = None
 
+SOURCE_RESULT_DIAGNOSTIC_KEYS = (
+    "sourceUrl",
+    "brand",
+    "error",
+    "extractorName",
+    "extractorVersion",
+    "coverageLevel",
+    "auditStatus",
+    "attemptedStrategies",
+    "winningStrategy",
+    "extractorError",
+    "httpStatus",
+    "finalUrl",
+    "financeObservationCandidates",
+    "financeMonthlyPaymentCount",
+    "financeSemanticsCounts",
+    "financeTypeCounts",
+    "sampleFinanceContexts",
+    "rejectedReasons",
+    "rejectedRules",
+    "rejectionReasonCounts",
+    "rejectionRuleCounts",
+    "sampleRejectedObservations",
+)
+
+
+def _copy_source_result_diagnostics(src: dict, result_entry: dict) -> None:
+    for key in SOURCE_RESULT_DIAGNOSTIC_KEYS:
+        if key in src:
+            result_entry[key] = src[key]
+
 _TOOLKIT_ROOT = Path(__file__).resolve().parent.parent / "07_ScrapingToolkit"
 _DRAFTS_DIR = _TOOLKIT_ROOT / "source_drafts" / "suv_only_country_model_top30"
 STRICT_EXIT = os.getenv("JATO_STRICT_EXIT", "").strip().lower() in {
@@ -1091,27 +1122,7 @@ def main():
             }
             if source_attempts:
                 result_entry["sourceAttempts"] = source_attempts
-            for key in (
-                "sourceUrl",
-                "brand",
-                "error",
-                "extractorName",
-                "extractorVersion",
-                "coverageLevel",
-                "auditStatus",
-                "attemptedStrategies",
-                "winningStrategy",
-                "extractorError",
-                "httpStatus",
-                "finalUrl",
-                "financeObservationCandidates",
-                "financeMonthlyPaymentCount",
-                "financeSemanticsCounts",
-                "financeTypeCounts",
-                "sampleFinanceContexts",
-            ):
-                if key in src:
-                    result_entry[key] = src[key]
+            _copy_source_result_diagnostics(src, result_entry)
             if (
                 classification.get("failureReason")
                 and captured_log_text
