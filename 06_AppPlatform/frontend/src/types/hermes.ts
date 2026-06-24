@@ -487,3 +487,321 @@ export interface HermesMsrpDryrunHistoryResponse {
   latestRunId: string;
   runs: HermesMsrpDryrunHistoryRun[];
 }
+
+// === Hermes History / Progress Cockpit ===
+export type HermesHistoryLevel = "epic" | "workstream" | "feature" | "session" | "commit";
+export type HermesHistoryYAxis = "workstream" | "phase" | "risk" | "session";
+
+export interface HermesHistoryEvent {
+  eventId: string;
+  timestamp: string;
+  source: string;
+  type: string;
+  title: string;
+  summary: string;
+  featureId: string;
+  workstream: string;
+  phase: string;
+  risk: string;
+  status: string;
+  sessionId: string;
+  model: string;
+  commitSha: string;
+  files: string[];
+  tests: string[];
+  testCount: number;
+  evidenceRefs: string[];
+  gapRefs: string[];
+  artifactRefs: string[];
+}
+
+export interface HermesHistorySummary {
+  totalEvents: number;
+  sources: Record<string, number>;
+  workstreams: Record<string, number>;
+  risks: Record<string, number>;
+  models: Record<string, number>;
+  level?: HermesHistoryLevel | string;
+  yAxis?: HermesHistoryYAxis | string;
+  clusterCount?: number;
+  lanes?: string[];
+  semanticMode?: string;
+}
+
+export interface HermesHistoryEventsResponse {
+  summary: HermesHistorySummary;
+  events: HermesHistoryEvent[];
+}
+
+export interface HermesHistoryCluster {
+  clusterId: string;
+  level: HermesHistoryLevel | string;
+  yAxis: HermesHistoryYAxis | string;
+  lane: string;
+  startAt: string;
+  endAt: string;
+  title: string;
+  workstream: string;
+  phase: string;
+  risk: string;
+  status: string;
+  eventCount: number;
+  commitCount: number;
+  testCount: number;
+  evidenceCount: number;
+  gapCount: number;
+  semanticLabel?: string;
+  semanticScore?: number;
+  semanticSignals?: string[];
+  sources: string[];
+  children: string[];
+  topFiles: string[];
+}
+
+export interface HermesHistoryClustersResponse {
+  summary: HermesHistorySummary;
+  clusters: HermesHistoryCluster[];
+}
+
+export type HermesProgressPhaseStatus = "complete" | "attention" | "pending" | string;
+
+export interface HermesProgressPhase {
+  phase: string;
+  status: HermesProgressPhaseStatus;
+  timestamp: string;
+  eventIds: string[];
+}
+
+export interface HermesProgressFeature {
+  featureId: string;
+  title: string;
+  workstream: string;
+  phase: string;
+  status: string;
+  risk: string;
+  owner: string;
+  sessionId: string;
+  lastEventAt: string;
+  lastMeaningfulEvent: string;
+  evidenceCount: number;
+  openGapCount: number;
+  testsCount: number;
+  docsCount: number;
+  commitCount: number;
+  deployStatus: string;
+  nextAction: string;
+  phases: HermesProgressPhase[];
+  evidenceRefs: string[];
+  gapRefs: string[];
+  topFiles: string[];
+}
+
+export interface HermesProgressLane {
+  workstream: string;
+  features: HermesProgressFeature[];
+}
+
+export interface HermesProgressSwimlaneResponse {
+  summary: {
+    total: number;
+    blocking: number;
+    readyForPr: number;
+    deployed: number;
+    verified: number;
+    workstreamCount: number;
+  };
+  phases: string[];
+  lanes: HermesProgressLane[];
+}
+
+export interface HermesWorkflowEventPreview {
+  eventId: string;
+  timestamp: string;
+  source: string;
+  type: string;
+  title: string;
+  featureId: string;
+  workstream: string;
+  commitSha: string;
+}
+
+export interface HermesWorkflowSession {
+  sessionId: string;
+  model: string;
+  status: string;
+  risk: string;
+  latestAt: string;
+  lastEventTitle: string;
+  eventCount: number;
+  commitCount: number;
+  testCount: number;
+  evidenceCount: number;
+  gapCount: number;
+  sources: string[];
+  workstreams: string[];
+  featureIds: string[];
+  topFiles: string[];
+  events: HermesWorkflowEventPreview[];
+}
+
+export interface HermesWorkflowModel {
+  model: string;
+  sessionCount: number;
+  eventCount: number;
+  commitCount: number;
+  testCount: number;
+  latestAt: string;
+  workstreams: string[];
+}
+
+export interface HermesWorkflowReviewItem {
+  kind: string;
+  priority: string;
+  title: string;
+  reason: string;
+  targetId: string;
+}
+
+export interface HermesWorkflowCockpitResponse {
+  summary: {
+    totalEvents: number;
+    sessionCount: number;
+    modelCount: number;
+    commitCount: number;
+    testCount: number;
+    blockingSessions: number;
+    latestAt: string;
+  };
+  models: HermesWorkflowModel[];
+  sessions: HermesWorkflowSession[];
+  reviewItems: HermesWorkflowReviewItem[];
+}
+
+// === Hermes Feature PMO Cockpit ===
+export type HermesFeatureGoalState =
+  | "draft"
+  | "prd_ready"
+  | "ready_for_dev"
+  | "in_progress"
+  | "implemented"
+  | "tested"
+  | "ready_for_pr"
+  | "in_review"
+  | "merged"
+  | "deployed"
+  | "verified"
+  | "done"
+  | "blocked"
+  | "archived"
+  | "reopened"
+  | string;
+
+export interface HermesFeatureGoalChecklistItem {
+  key: string;
+  label: string;
+  checked: boolean;
+  declaredChecked: boolean;
+  evidenceSources: string[];
+}
+
+export interface HermesReuseCandidate {
+  category: string;
+  path: string;
+  reason: string;
+  score: number;
+  matchedSignals: string[];
+}
+
+export interface HermesFeatureGoalSummary {
+  events: number;
+  docs: number;
+  tests: number;
+  evidence: number;
+  openGaps: number;
+  commits: number;
+}
+
+export type HermesFeatureGoalWorktreeState = "unlinked" | "missing" | "clean" | "dirty" | "error" | string;
+export type HermesFeatureGoalWorktreeScopeState =
+  | "not_applicable"
+  | "clean"
+  | "in_scope"
+  | "mixed_scope"
+  | "out_of_scope"
+  | "unknown"
+  | "generated_only"
+  | string;
+
+export interface HermesFeatureGoalWorktreeStatus {
+  path: string;
+  state: HermesFeatureGoalWorktreeState;
+  isDirty: boolean;
+  stagedCount: number;
+  modifiedCount: number;
+  untrackedCount: number;
+  deletedCount: number;
+  conflictedCount: number;
+  files: string[];
+  scopeWorkstream: string;
+  scopeState: HermesFeatureGoalWorktreeScopeState;
+  inScopeCount: number;
+  outOfScopeCount: number;
+  unknownScopeCount: number;
+  generatedCount: number;
+  inScopeFiles: string[];
+  outOfScopeFiles: string[];
+  unknownScopeFiles: string[];
+  generatedFiles: string[];
+}
+
+export interface HermesFeatureGoal {
+  featureId: string;
+  title: string;
+  workstream: string;
+  owner: string;
+  branch: string;
+  state: HermesFeatureGoalState;
+  blocked: boolean;
+  risk: string;
+  nextAction: string;
+  missingEvidence: string[];
+  sourceDocs: string[];
+  linkedPrs: string[];
+  linkedWorktree: string;
+  worktreeStatus: HermesFeatureGoalWorktreeStatus;
+  lastEventAt: string;
+  lastMeaningfulEvent: string;
+  checklist: HermesFeatureGoalChecklistItem[];
+  declaredChecklist: Array<{ key: string; label: string; checked: boolean }>;
+  reuseCandidates: HermesReuseCandidate[];
+  evidenceSummary: HermesFeatureGoalSummary;
+  topFiles: string[];
+}
+
+export interface HermesFeatureGoalsResponse {
+  summary: {
+    total: number;
+    blocked: number;
+    readyForPr: number;
+    inProgress: number;
+    verified: number;
+    workstreamCount: number;
+  };
+  features: HermesFeatureGoal[];
+}
+
+export interface HermesFeatureGoalLane {
+  workstream: string;
+  features: HermesFeatureGoal[];
+}
+
+export interface HermesFeatureGoalSwimlanesResponse extends HermesFeatureGoalsResponse {
+  lanes: HermesFeatureGoalLane[];
+}
+
+export interface HermesReuseCandidatesResponse {
+  featureId: string;
+  title: string;
+  workstream: string;
+  candidates: HermesReuseCandidate[];
+}

@@ -95,13 +95,23 @@ import type {
   HermesCostResponse,
   HermesDailySummaryResponse,
   HermesEvidenceLedgerResponse,
+  HermesFeatureGoal,
+  HermesFeatureGoalsResponse,
+  HermesFeatureGoalSwimlanesResponse,
   HermesFeatureKanbanResponse,
   HermesFullDesignDocumentResponse,
   HermesGap,
+  HermesHistoryClustersResponse,
+  HermesHistoryEventsResponse,
+  HermesHistoryLevel,
+  HermesHistoryYAxis,
   HermesMermaidBlock,
   HermesOverviewResponse,
   HermesPipelineHealthResponse,
   HermesPipelineStatusRecord,
+  HermesProgressFeature,
+  HermesProgressSwimlaneResponse,
+  HermesReuseCandidatesResponse,
   HermesDeployStatusResponse,
   HermesSentinelMailboxStatus,
   HermesSentinelNotification,
@@ -110,6 +120,7 @@ import type {
   HermesMsrpDryrunHistoryResponse,
   HermesSourceQualityResponse,
   HermesToolchainResponse,
+  HermesWorkflowCockpitResponse,
 } from "../types/hermes";
 import type {
   BaselineVersion,
@@ -2302,6 +2313,48 @@ export const api = {
     request<HermesDeployStatusResponse>("/hermes/deploy/status"),
   hermesFullDesignDocument: () =>
     request<HermesFullDesignDocumentResponse>("/hermes/reports/full-design-document"),
+  hermesHistoryEvents: (params?: {
+    source?: string;
+    workstream?: string;
+    model?: string;
+    limit?: number;
+  }) => {
+    const search = new URLSearchParams();
+    if (params?.source) search.set("source", params.source);
+    if (params?.workstream) search.set("workstream", params.workstream);
+    if (params?.model) search.set("model", params.model);
+    if (params?.limit) search.set("limit", String(params.limit));
+    const q = search.toString();
+    return request<HermesHistoryEventsResponse>(`/hermes/history/events${q ? `?${q}` : ""}`);
+  },
+  hermesHistoryClusters: (params?: {
+    level?: HermesHistoryLevel;
+    yAxis?: HermesHistoryYAxis;
+    workstream?: string;
+    limit?: number;
+  }) => {
+    const search = new URLSearchParams();
+    if (params?.level) search.set("level", params.level);
+    if (params?.yAxis) search.set("yAxis", params.yAxis);
+    if (params?.workstream) search.set("workstream", params.workstream);
+    if (params?.limit) search.set("limit", String(params.limit));
+    const q = search.toString();
+    return request<HermesHistoryClustersResponse>(`/hermes/history/clusters${q ? `?${q}` : ""}`);
+  },
+  hermesProgressFeatures: () =>
+    request<HermesProgressFeature[]>("/hermes/progress/features"),
+  hermesProgressSwimlanes: () =>
+    request<HermesProgressSwimlaneResponse>("/hermes/progress/swimlanes"),
+  hermesWorkflowCockpit: () =>
+    request<HermesWorkflowCockpitResponse>("/hermes/workflow/cockpit"),
+  hermesGoalFeatures: () =>
+    request<HermesFeatureGoalsResponse>("/hermes/goals/features"),
+  hermesGoalFeature: (featureId: string) =>
+    request<HermesFeatureGoal>(`/hermes/goals/features/${encodeURIComponent(featureId)}`),
+  hermesGoalSwimlanes: () =>
+    request<HermesFeatureGoalSwimlanesResponse>("/hermes/goals/swimlanes"),
+  hermesReuseCandidates: (featureId: string) =>
+    request<HermesReuseCandidatesResponse>(`/hermes/reuse/candidates?featureId=${encodeURIComponent(featureId)}`),
 
   /* ── Hermes Chat ──────────────────────────────── */
   hermesChat: (payload: HermesChatRequest) =>

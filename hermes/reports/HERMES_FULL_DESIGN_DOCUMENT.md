@@ -107,7 +107,7 @@ Hermes 按职责分为四个 Governor，每个 Governor 有自己的脚本、输
 |------|------|
 | **阶段** | Phase 5-5.5 |
 | **脚本** | `hermes_source_quality.py`, `hermes_evidence_writer.py`, `hermes_answer_audit.py`, `hermes_cost_report.py` |
-| **输入** | 注册表, `answer_audit.jsonl`, `model_pricing.yaml`, VOC/News/MSRP 数据 |
+| **输入** | 注册表, `answer_audit.jsonl`, `agent_usage.jsonl`, `eval/eval_usage.jsonl`, `model_pricing.yaml`, VOC/News/MSRP 数据 |
 | **输出** | source quality report, evidence ledger, answer audit, cost report |
 | **回答的问题** | 「VOC/News/MSRP 源质量如何？哪个该降级？」「国家助手回答有没有证据？幻觉风险多高？」「Flash/Pro token 花了多少钱？」 |
 | **触发** | 定期运行，与 pipeline audit 联动 |
@@ -209,7 +209,7 @@ Code Governor ──────┬──▶ Pipeline Governor ─────�
 
 **产出:** `model_pricing.yaml`，`MODEL_ROUTING_POLICY_2026-05-14.md`
 
-DeepSeek Flash vs Pro 路由策略，月度预算 500 CNY，75% 预警。
+DeepSeek Flash vs Pro 路由策略，月度预算 500 CNY，75% 预警。成本账本同时吸收 Country Copilot answer audit 和 AstrBot agent/eval usage，并按 usageId/evalId 去重，避免兼容 audit 记录重复计费。
 
 ### 3.8 Phase 5.6 — CI/Deploy 治理（2026-05-14）
 
@@ -551,6 +551,16 @@ Hermes compares `deploy_expected.json` with the server-side `actualCommitSha` in
 | GET | `/sentinel/notifications?status=new` | 列出通知 | viewer+ |
 | POST | `/sentinel/ack/{notification_id}` | 确认通知 | admin+ |
 
+### 6.7 History / Progress Cockpit API
+
+| 方法 | 端点 | 描述 | 鉴权 |
+|------|------|------|------|
+| GET | `/history/events` | 聚合 git、DevSync、evidence、Sentinel、pipeline、deploy、usage 事件 | viewer+ |
+| GET | `/history/clusters?level=feature&yAxis=workstream` | 生成横向 Git History Cluster 时间轴数据，包含 lane、时间跨度、语义 signals 和 file/title 相似度聚类 | viewer+ |
+| GET | `/progress/features` | 功能生命周期状态、风险、测试、文档、evidence、gap、下一步 | viewer+ |
+| GET | `/progress/swimlanes` | 按 workstream 分组的 Progress Swimlane 数据 | viewer+ |
+| GET | `/workflow/cockpit` | 按 session/model 聚合任务、文件、测试、commit、evidence、gap | viewer+ |
+
 ---
 
 ## 7. DevSync：Claude Code 开发治理闭环
@@ -741,7 +751,7 @@ Hermes Chat Gateway 是一个**基于规则的意图分类器**，零 LLM 成本
 | `hermes_code_audit.py` | 24K | 代码审计（10 条规则） | git diff | audit report (.md + .json) |
 | `hermes_pipeline_audit.py` | 32K | 管道健康扫描 | 注册表 + systemd + Airflow + GHA | pipeline_health.json |
 | `hermes_source_quality.py` | 12K | 源质量评分 | 注册表 + 运行日志 | source_quality_report.json |
-| `hermes_cost_report.py` | 16K | 成本追踪 | model_pricing.yaml + activity log | cost_report.json |
+| `hermes_cost_report.py` | 16K | 成本追踪 | model_pricing.yaml + answer_audit/agent_usage/eval_usage | cost_report.json |
 | `hermes_evidence_writer.py` | 12K | 证据提取 | artifacts | evidence_ledger.jsonl |
 | `hermes_answer_audit.py` | 16K | 答案审计 | Country Copilot 答案 | answer_audit.jsonl |
 | `hermes_registry_loader.py` | 4K | 注册表加载器 | 8 个 YAML 注册表 | 统一数据结构 |
@@ -819,6 +829,7 @@ DataManagementPage 的 Hermes 标签页包含 **5 个子标签**:
 - `hermesSourceDetail`, `hermesSourceHealthHistory`
 - `hermesActivityHeatmap`, `hermesCostHeatmap`, `hermesDailySummary`
 - `hermesFeatureKanban`, `hermesEvidenceLedger`
+- `hermesHistoryEvents`, `hermesHistoryClusters`, `hermesProgressSwimlanes`, `hermesWorkflowCockpit`
 - `hermesChat`, `hermesChatSessions`, `hermesChatSession`
 - `hermesCommands`, `hermesCommandExecute`
 
@@ -1152,6 +1163,10 @@ GET  /v1/hermes/dev/features
 GET  /v1/hermes/dev/features/{feature_id}
 GET  /v1/hermes/dev/workspace-health
 GET  /v1/hermes/deploy/status
+GET  /v1/hermes/history/events
+GET  /v1/hermes/history/clusters
+GET  /v1/hermes/progress/features
+GET  /v1/hermes/progress/swimlanes
 GET  /v1/hermes/sentinel/status
 GET  /v1/hermes/sentinel/notifications
 POST /v1/hermes/sentinel/ack/{notification_id}
