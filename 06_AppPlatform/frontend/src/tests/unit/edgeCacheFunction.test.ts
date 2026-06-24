@@ -152,6 +152,8 @@ describe("Cloudflare edge cache function", () => {
     expect(runtime.fetch).toHaveBeenCalledTimes(1);
     expect(runtime.cache.match).toHaveBeenCalledTimes(2);
     expect(runtime.cache.put).toHaveBeenCalledTimes(1);
+    const cachedResponse = runtime.cache.put.mock.calls[0]?.[1] as Response | undefined;
+    expect(cachedResponse?.headers.get("cache-control")).toBe("public, max-age=300");
     expect(runtime.originCalls[0]?.url).toBe("https://origin.example/v1/analysis/overview?chart=summary");
     expect(runtime.originCalls[0]?.headers.get("cf-ray")).toBeNull();
   });

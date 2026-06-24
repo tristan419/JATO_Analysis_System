@@ -62,12 +62,12 @@ function cacheRequestUrl(request, path, bodyHash, scopeHash, version) {
   return cacheUrl.toString();
 }
 
-function sanitizeResponseHeaders(response, ttlSeconds, path, cacheState) {
+function sanitizeResponseHeaders(response, ttlSeconds, path, cacheState, cacheControl) {
   const headers = new Headers(response.headers);
   headers.delete("set-cookie");
   headers.set("x-jato-edge-cache", cacheState);
   headers.set("x-jato-edge-cache-endpoint", `/v1/${path}`);
-  headers.set("cache-control", `public, max-age=0, s-maxage=${ttlSeconds}`);
+  headers.set("cache-control", cacheControl || `public, max-age=0, s-maxage=${ttlSeconds}`);
   headers.set("vary", "X-User-Name, X-User-Role, X-JATO-Data-Version");
   return headers;
 }
@@ -197,8 +197,7 @@ export async function onRequest(context) {
   const cache = caches.default;
   const cached = await cache.match(cacheKey);
   if (cached) {
-    const headers = new Headers(cached.headers);
-    headers.set("x-jato-edge-cache", "HIT");
+    const headers = sanitizeResponseHeaders(cached, ttlSeconds, path, "HIT");
     return new Response(cached.body, {
       status: cached.status,
       statusText: cached.statusText,
@@ -219,11 +218,22 @@ export async function onRequest(context) {
     originResponse = synthesizedResponse;
   }
 
-  const responseForCache = new Response(originResponse.body, {
+  const responseForClient = new Response(originResponse.body, {
     status: originResponse.status,
     statusText: originResponse.statusText,
     headers: sanitizeResponseHeaders(originResponse, ttlSeconds, path, "MISS"),
   });
-  context.waitUntil(cache.put(cacheKey, responseForCache.clone()));
-  return responseForCache;
+  const responseForCache = responseForClient.clone();
+  context.waitUntil(cache.put(cacheKey, new Response(responseForCache.body, {
+    status: responseForCache.status,
+    statusText: responseForCache.statusText,
+    headers: sanitizeResponseHeaders(
+      responseForCache,
+      ttlSeconds,
+      path,
+      "MISS",
+      `public, max-age=${ttlSeconds}`,
+    ),
+  })));
+  return responseForClient;
 }
