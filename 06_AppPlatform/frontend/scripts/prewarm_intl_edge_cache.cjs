@@ -5,6 +5,7 @@ const DEFAULT_ORIGIN_API_BASE = "/v1";
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_REPETITIONS = 2;
 const DEFAULT_ROLE = "viewer";
+const DEFAULT_ROLES = ["viewer", "order_filler", "editor", "admin"];
 const DEFAULT_USER = "edge-prewarm";
 const DEFAULT_POWERTRAINS = ["ICE", "HEV", "BEV", "MHEV", "PHEV"];
 const FALLBACK_COUNTRIES = [
@@ -63,6 +64,18 @@ function parseList(raw, fallback) {
   const value = String(raw || "").trim();
   if (!value) return fallback;
   return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function uniqueList(values) {
+  return [...new Set(values.map((item) => String(item || "").trim()).filter(Boolean))];
+}
+
+function resolveWarmupRoles({ configuredRoles, explicitRole, loginRole, token }) {
+  const roles = uniqueList(configuredRoles || []);
+  if (roles.length > 0) return roles;
+  if (explicitRole) return [explicitRole];
+  if (token && loginRole) return [loginRole];
+  return DEFAULT_ROLES;
 }
 
 function parseInteger(raw, fallback) {
@@ -364,6 +377,7 @@ function formatResult(result, round) {
   const endpoint = result.endpoint || "-";
   return [
     `round=${round}`,
+    `role=${result.role}`,
     `label=${result.label}`,
     `status=${result.status}`,
     `cache=${cache}`,
@@ -395,12 +409,20 @@ async function main() {
   const username = getArg("username") || process.env.JATO_PREWARM_USERNAME || "";
   const password = getArg("password") || process.env.JATO_PREWARM_PASSWORD || "";
   const loginAuth = await login(origin, username, password, timeoutMs);
+  const explicitRole = getArg("role") || process.env.JATO_PREWARM_ROLE || "";
+  const token = getArg("token") || process.env.JATO_PREWARM_TOKEN || loginAuth?.token || "";
+  const roles = resolveWarmupRoles({
+    configuredRoles: parseList(getArg("roles") || process.env.JATO_PREWARM_ROLES, []),
+    explicitRole,
+    loginRole: loginAuth?.role || "",
+    token,
+  });
   const auth = {
     dataVersion: getArg("data-version") || process.env.JATO_PREWARM_DATA_VERSION || "",
-    role: getArg("role") || process.env.JATO_PREWARM_ROLE || loginAuth?.role || DEFAULT_ROLE,
-    token: getArg("token") || process.env.JATO_PREWARM_TOKEN || loginAuth?.token || "",
+    token,
     user: getArg("user") || process.env.JATO_PREWARM_USER || loginAuth?.user || DEFAULT_USER,
   };
+  const auths = roles.map((role) => ({ ...auth, role }));
 
   const seedRequests = [
     {
@@ -431,35 +453,39 @@ async function main() {
   const failOnError = hasFlag("fail-on-error") || process.env.JATO_PREWARM_FAIL_ON_ERROR === "1";
 
   for (let round = 1; round <= repetitions; round += 1) {
-    for (const requestDef of seedRequests) {
-      try {
-        const result = await callPrewarm(origin, requestDef, auth, timeoutMs);
-        results.push({ ...result, round });
-        console.log(formatResult(result, round));
-        if (requestDef.label === "metadata-filter-snapshot" && result.payload) {
-          snapshot = result.payload;
+    for (const scopedAuth of auths) {
+      for (const requestDef of seedRequests) {
+        try {
+          const result = await callPrewarm(origin, requestDef, scopedAuth, timeoutMs);
+          const scopedResult = { ...result, role: scopedAuth.role, round };
+          results.push(scopedResult);
+          console.log(formatResult(scopedResult, round));
+          if (requestDef.label === "metadata-filter-snapshot" && result.payload) {
+            snapshot = result.payload;
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`round=${round} role=${scopedAuth.role} label=${requestDef.label} error=${message}`);
+          if (failOnError) throw error;
         }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.warn(`round=${round} label=${requestDef.label} error=${message}`);
-        if (failOnError) throw error;
       }
-    }
 
-    const dependentRequests = buildWarmupRequests(
-      snapshot,
-      configuredCountries,
-      configuredPowertrains,
-    );
-    for (const requestDef of dependentRequests) {
-      try {
-        const result = await callPrewarm(origin, requestDef, auth, timeoutMs);
-        results.push({ ...result, round });
-        console.log(formatResult(result, round));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.warn(`round=${round} label=${requestDef.label} error=${message}`);
-        if (failOnError) throw error;
+      const dependentRequests = buildWarmupRequests(
+        snapshot,
+        configuredCountries,
+        configuredPowertrains,
+      );
+      for (const requestDef of dependentRequests) {
+        try {
+          const result = await callPrewarm(origin, requestDef, scopedAuth, timeoutMs);
+          const scopedResult = { ...result, role: scopedAuth.role, round };
+          results.push(scopedResult);
+          console.log(formatResult(scopedResult, round));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`round=${round} role=${scopedAuth.role} label=${requestDef.label} error=${message}`);
+          if (failOnError) throw error;
+        }
       }
     }
 
@@ -471,7 +497,7 @@ async function main() {
   const hitCount = results.filter((item) => item.cache === "HIT").length;
   const missCount = results.filter((item) => item.cache === "MISS").length;
   const bypassCount = results.filter((item) => item.cache === "BYPASS").length;
-  console.log(`summary origin=${origin} user=${auth.user} role=${auth.role} hit=${hitCount} miss=${missCount} bypass=${bypassCount} total=${results.length}`);
+  console.log(`summary origin=${origin} user=${auth.user} roles=${roles.join(",")} hit=${hitCount} miss=${missCount} bypass=${bypassCount} total=${results.length}`);
 }
 
 if (require.main === module) {
@@ -486,5 +512,6 @@ module.exports = {
   buildDefaultFilterPayload,
   buildWarmupRequests,
   initialCascadeStartIndex,
+  resolveWarmupRoles,
   resolveColumns,
 };

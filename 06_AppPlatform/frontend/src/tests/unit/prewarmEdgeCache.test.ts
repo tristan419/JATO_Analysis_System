@@ -11,6 +11,12 @@ interface PrewarmModule {
     configuredCountries: string[],
     configuredPowertrains: string[],
   ) => { body?: unknown; label: string; method: string; path: string }[];
+  resolveWarmupRoles: (options: {
+    configuredRoles?: string[];
+    explicitRole?: string;
+    loginRole?: string;
+    token?: string;
+  }) => string[];
 }
 
 let prewarm: PrewarmModule;
@@ -75,5 +81,28 @@ describe("prewarm intl edge cache", () => {
       method: "POST",
       path: "/filters/options/batch",
     });
+  });
+
+  it("warms all common role cache scopes when no token is available", () => {
+    expect(prewarm.resolveWarmupRoles({})).toEqual([
+      "viewer",
+      "order_filler",
+      "editor",
+      "admin",
+    ]);
+  });
+
+  it("uses the authenticated role only when a token is available", () => {
+    expect(prewarm.resolveWarmupRoles({ loginRole: "order_filler", token: "token-a" })).toEqual([
+      "order_filler",
+    ]);
+  });
+
+  it("lets explicit role lists override the default warmup scopes", () => {
+    expect(prewarm.resolveWarmupRoles({
+      configuredRoles: ["viewer", "admin", "viewer"],
+      loginRole: "order_filler",
+      token: "token-a",
+    })).toEqual(["viewer", "admin"]);
   });
 });
