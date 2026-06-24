@@ -10,6 +10,7 @@ const CACHEABLE_ENDPOINTS = new Map([
   ["POST analysis/time-series", 300],
   ["POST analysis/time-series-grouped", 300],
 ]);
+const DEFAULT_STALE_TTL_SECONDS = 24 * 60 * 60;
 const FILTER_SNAPSHOT_COLUMNS = [
   ["国家", "country"],
   ["Body type", "body_type", "body type"],
@@ -28,6 +29,11 @@ function getPath(params) {
 
 function cacheTtlSeconds(method, path) {
   return CACHEABLE_ENDPOINTS.get(`${method.toUpperCase()} ${path}`) || 0;
+}
+
+function staleTtlSeconds(env) {
+  const parsed = Number(env.CACHE_STALE_TTL_SECONDS || env.STALE_CACHE_TTL_SECONDS || "");
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_STALE_TTL_SECONDS;
 }
 
 async function sha256Hex(value) {
@@ -50,7 +56,7 @@ function dataVersion(request, env) {
   );
 }
 
-function cacheRequestUrl(request, path, bodyHash, scopeHash, version) {
+function cacheRequestUrl(request, path, bodyHash, scopeHash, version, layer = "fresh") {
   const sourceUrl = new URL(request.url);
   const cacheUrl = new URL(`https://jato-edge-cache.local/v1/${path}`);
   cacheUrl.search = sourceUrl.search;
@@ -58,6 +64,9 @@ function cacheRequestUrl(request, path, bodyHash, scopeHash, version) {
   cacheUrl.searchParams.set("__body", bodyHash);
   cacheUrl.searchParams.set("__scope", scopeHash);
   cacheUrl.searchParams.set("__data", version);
+  if (layer !== "fresh") {
+    cacheUrl.searchParams.set("__layer", layer);
+  }
   return cacheUrl.toString();
 }
 
@@ -167,6 +176,81 @@ async function synthesizeFilterSnapshot(request, origin) {
   });
 }
 
+async function fetchCacheableOriginResponse(request, origin, method, path, bodyText) {
+  let originResponse = await originFetch(request, origin, path, bodyText);
+  if (!originResponse.ok) {
+    const shouldSynthesizeSnapshot =
+      method === "GET" && path === "metadata/filter-snapshot" && originResponse.status === 404;
+    const synthesizedResponse = shouldSynthesizeSnapshot
+      ? await synthesizeFilterSnapshot(request, origin)
+      : null;
+    if (!synthesizedResponse) {
+      return originResponse;
+    }
+    originResponse = synthesizedResponse;
+  }
+  return originResponse;
+}
+
+async function putCacheableResponse(cache, cacheKey, staleCacheKey, response, ttlSeconds, staleSeconds, path) {
+  const freshResponse = response.clone();
+  const staleResponse = response.clone();
+  await Promise.all([
+    cache.put(cacheKey, new Response(freshResponse.body, {
+      status: freshResponse.status,
+      statusText: freshResponse.statusText,
+      headers: sanitizeResponseHeaders(
+        freshResponse,
+        ttlSeconds,
+        path,
+        "MISS",
+        `public, max-age=${ttlSeconds}`,
+      ),
+    })),
+    cache.put(staleCacheKey, new Response(staleResponse.body, {
+      status: staleResponse.status,
+      statusText: staleResponse.statusText,
+      headers: sanitizeResponseHeaders(
+        staleResponse,
+        staleSeconds,
+        path,
+        "STALE",
+        `public, max-age=${staleSeconds}`,
+      ),
+    })),
+  ]);
+}
+
+async function refreshCacheableResponse({
+  bodyText,
+  cache,
+  cacheKey,
+  method,
+  origin,
+  path,
+  request,
+  staleCacheKey,
+  staleSeconds,
+  ttlSeconds,
+}) {
+  const originResponse = await fetchCacheableOriginResponse(request, origin, method, path, bodyText);
+  if (!originResponse.ok) return;
+  const responseForCache = new Response(originResponse.body, {
+    status: originResponse.status,
+    statusText: originResponse.statusText,
+    headers: sanitizeResponseHeaders(originResponse, ttlSeconds, path, "MISS"),
+  });
+  await putCacheableResponse(
+    cache,
+    cacheKey,
+    staleCacheKey,
+    responseForCache,
+    ttlSeconds,
+    staleSeconds,
+    path,
+  );
+}
+
 export async function onRequest(context) {
   const { request, env, params } = context;
   const path = getPath(params);
@@ -193,6 +277,16 @@ export async function onRequest(context) {
   ), {
     method: "GET",
   });
+  const staleCacheKey = new Request(cacheRequestUrl(
+    request,
+    path,
+    bodyHash,
+    scopeHash,
+    dataVersion(request, env),
+    "stale",
+  ), {
+    method: "GET",
+  });
   const cache = caches.default;
   const cached = await cache.match(cacheKey);
   if (cached) {
@@ -204,17 +298,32 @@ export async function onRequest(context) {
     });
   }
 
-  let originResponse = await originFetch(request, origin, path, bodyText);
+  const staleSeconds = staleTtlSeconds(env);
+  const staleCached = await cache.match(staleCacheKey);
+  if (staleCached) {
+    context.waitUntil(refreshCacheableResponse({
+      bodyText,
+      cache,
+      cacheKey,
+      method,
+      origin,
+      path,
+      request,
+      staleCacheKey,
+      staleSeconds,
+      ttlSeconds,
+    }).catch(() => undefined));
+    const headers = sanitizeResponseHeaders(staleCached, ttlSeconds, path, "STALE");
+    return new Response(staleCached.body, {
+      status: staleCached.status,
+      statusText: staleCached.statusText,
+      headers,
+    });
+  }
+
+  const originResponse = await fetchCacheableOriginResponse(request, origin, method, path, bodyText);
   if (!originResponse.ok) {
-    const shouldSynthesizeSnapshot =
-      method === "GET" && path === "metadata/filter-snapshot" && originResponse.status === 404;
-    const synthesizedResponse = shouldSynthesizeSnapshot
-      ? await synthesizeFilterSnapshot(request, origin)
-      : null;
-    if (!synthesizedResponse) {
-      return bypassResponse(originResponse);
-    }
-    originResponse = synthesizedResponse;
+    return bypassResponse(originResponse);
   }
 
   const responseForClient = new Response(originResponse.body, {
@@ -223,16 +332,14 @@ export async function onRequest(context) {
     headers: sanitizeResponseHeaders(originResponse, ttlSeconds, path, "MISS"),
   });
   const responseForCache = responseForClient.clone();
-  context.waitUntil(cache.put(cacheKey, new Response(responseForCache.body, {
-    status: responseForCache.status,
-    statusText: responseForCache.statusText,
-    headers: sanitizeResponseHeaders(
-      responseForCache,
-      ttlSeconds,
-      path,
-      "MISS",
-      `public, max-age=${ttlSeconds}`,
-    ),
-  })));
+  context.waitUntil(putCacheableResponse(
+    cache,
+    cacheKey,
+    staleCacheKey,
+    responseForCache,
+    ttlSeconds,
+    staleSeconds,
+    path,
+  ));
   return responseForClient;
 }

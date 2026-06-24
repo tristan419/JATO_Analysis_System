@@ -27,6 +27,7 @@ interface EdgeTestRuntime {
   };
   fetch: ReturnType<typeof vi.fn>;
   originCalls: OriginCall[];
+  store: Map<string, Response>;
   waitUntil: ReturnType<typeof vi.fn>;
   waitUntilPromises: Promise<unknown>[];
 }
@@ -81,6 +82,7 @@ function createRuntime(
     cache,
     fetch,
     originCalls,
+    store,
     waitUntil,
     waitUntilPromises,
   };
@@ -150,12 +152,49 @@ describe("Cloudflare edge cache function", () => {
     expect(second.headers.get("x-jato-edge-cache")).toBe("HIT");
     expect(await second.json()).toMatchObject({ sequence: 1 });
     expect(runtime.fetch).toHaveBeenCalledTimes(1);
-    expect(runtime.cache.match).toHaveBeenCalledTimes(2);
-    expect(runtime.cache.put).toHaveBeenCalledTimes(1);
+    expect(runtime.cache.match).toHaveBeenCalledTimes(3);
+    expect(runtime.cache.put).toHaveBeenCalledTimes(2);
     const cachedResponse = runtime.cache.put.mock.calls[0]?.[1] as Response | undefined;
     expect(cachedResponse?.headers.get("cache-control")).toBe("public, max-age=300");
     expect(runtime.originCalls[0]?.url).toBe("https://origin.example/v1/analysis/overview?chart=summary");
     expect(runtime.originCalls[0]?.headers.get("cf-ray")).toBeNull();
+  });
+
+  it("serves stale readonly responses while refreshing the fresh cache in the background", async () => {
+    const runtime = createRuntime();
+    const requestInit: RequestInit = {
+      body: JSON.stringify({ filters: { 国家: ["丹麦"] }, top_n: 120 }),
+      headers: {
+        "content-type": "application/json",
+        "x-auth-token": "token-a",
+        "x-jato-data-version": "dataset-a",
+        "x-user-name": "alice",
+        "x-user-role": "viewer",
+      },
+      method: "POST",
+    };
+
+    const first = await callEdgeFunction(runtime, "analysis/overview", requestInit);
+    expect(first.headers.get("x-jato-edge-cache")).toBe("MISS");
+    expect(await first.json()).toMatchObject({ sequence: 1 });
+    await flushWaitUntil(runtime);
+
+    const keys = [...runtime.store.keys()];
+    const freshKey = keys.find((key) => !key.includes("__layer=stale"));
+    const staleKey = keys.find((key) => key.includes("__layer=stale"));
+    expect(freshKey).toBeTruthy();
+    expect(staleKey).toBeTruthy();
+    runtime.store.delete(freshKey as string);
+
+    const stale = await callEdgeFunction(runtime, "analysis/overview", requestInit);
+    expect(stale.headers.get("x-jato-edge-cache")).toBe("STALE");
+    expect(await stale.json()).toMatchObject({ sequence: 1 });
+    await flushWaitUntil(runtime);
+    expect(runtime.fetch).toHaveBeenCalledTimes(2);
+
+    const refreshed = await callEdgeFunction(runtime, "analysis/overview", requestInit);
+    expect(refreshed.headers.get("x-jato-edge-cache")).toBe("HIT");
+    expect(await refreshed.json()).toMatchObject({ sequence: 2 });
   });
 
   it("separates cached entries by user permission scope and data version", async () => {
@@ -227,7 +266,7 @@ describe("Cloudflare edge cache function", () => {
     expect(originalScope.headers.get("x-jato-edge-cache")).toBe("HIT");
     expect(await originalScope.json()).toMatchObject({ sequence: 1 });
     expect(runtime.fetch).toHaveBeenCalledTimes(3);
-    expect(runtime.cache.put).toHaveBeenCalledTimes(3);
+    expect(runtime.cache.put).toHaveBeenCalledTimes(6);
   });
 
   it("synthesizes and caches filter snapshots when the origin endpoint is missing", async () => {
@@ -290,7 +329,7 @@ describe("Cloudflare edge cache function", () => {
     expect(second.headers.get("x-jato-edge-cache")).toBe("HIT");
     expect(await second.json()).toMatchObject({ source: "edge-synthesized" });
     expect(runtime.fetch).toHaveBeenCalledTimes(3);
-    expect(runtime.cache.put).toHaveBeenCalledTimes(1);
+    expect(runtime.cache.put).toHaveBeenCalledTimes(2);
   });
 
   it("caches readonly data freshness checks", async () => {
@@ -317,6 +356,7 @@ describe("Cloudflare edge cache function", () => {
     expect(second.headers.get("x-jato-edge-cache")).toBe("HIT");
     expect(await second.json()).toMatchObject({ sequence: 1 });
     expect(runtime.fetch).toHaveBeenCalledTimes(1);
+    expect(runtime.cache.put).toHaveBeenCalledTimes(2);
   });
 
   it("bypasses auth and other non-cacheable endpoints", async () => {
@@ -353,7 +393,7 @@ describe("Cloudflare edge cache function", () => {
     expect(response.headers.get("x-jato-edge-cache")).toBe("BYPASS");
     expect(await response.text()).toBe("upstream unavailable");
     expect(runtime.fetch).toHaveBeenCalledTimes(1);
-    expect(runtime.cache.match).toHaveBeenCalledTimes(1);
+    expect(runtime.cache.match).toHaveBeenCalledTimes(2);
     expect(runtime.cache.put).not.toHaveBeenCalled();
   });
 });
