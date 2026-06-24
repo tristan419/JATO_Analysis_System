@@ -126,6 +126,48 @@ def test_query_grouped_time_series_caches_by_params_and_dataset_token(
     query_service._grouped_time_series_cache.clear()
 
 
+def test_query_grouped_time_series_reports_cache_state(
+    monkeypatch,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Brand": ["Alpha", "Beta"],
+            "2024": [10.0, 5.0],
+        }
+    )
+
+    monkeypatch.setattr(
+        query_service.repo,
+        "current_dataset_token",
+        lambda: "dataset-a",
+    )
+    monkeypatch.setattr(query_service.repo, "list_columns", lambda: ["Brand", "2024"])
+    monkeypatch.setattr(
+        query_service.repo,
+        "load_slice",
+        lambda columns, filters, limit, offset: frame.loc[:, columns].copy(),
+    )
+
+    first = query_service.query_grouped_time_series_with_cache_state(
+        filters={},
+        grain="year",
+        group_by="Brand",
+        top_n=2,
+        include_others=False,
+    )
+    second = query_service.query_grouped_time_series_with_cache_state(
+        filters={},
+        grain="year",
+        group_by="Brand",
+        top_n=2,
+        include_others=False,
+    )
+
+    assert first.cache_state == "MISS"
+    assert second.cache_state == "MEMORY"
+    assert first.payload == second.payload
+
+
 def test_query_grouped_time_series_uses_persistent_cache(
     monkeypatch,
     tmp_path,
