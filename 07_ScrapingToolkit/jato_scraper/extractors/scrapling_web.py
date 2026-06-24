@@ -257,7 +257,8 @@ def _title_case_label(value: str) -> str:
 
 
 def parse_price(raw: str) -> float | None:
-    m = _PRICE_RE.search(raw.replace("\xa0", "").replace(" ", ""))
+    normalized_raw = re.sub(r"\s+", "", raw.replace("\xa0", " "))
+    m = _PRICE_RE.search(normalized_raw)
     if not m:
         return None
     s = m.group().replace("'", "").replace("\u2019", "")

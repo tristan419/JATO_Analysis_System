@@ -11,6 +11,7 @@ from jato_scraper.extractors.scrapling_web import (
     ScraplingProfile,
     TextRegexEntryPattern,
     TextRegexMapping,
+    parse_price,
 )
 
 
@@ -24,6 +25,10 @@ def build_extractor() -> ScraplingExtractor:
         ),
         ScraplingProfile(url="https://example.com"),
     )
+
+
+def test_parse_price_collapses_narrow_no_break_space() -> None:
+    assert parse_price("34\u202f200 €") == 34_200.0
 
 
 def test_fetch_metadata_reads_response_status_url_and_content_type() -> None:
@@ -1110,6 +1115,63 @@ def test_text_regex_can_include_selected_element_html(mock_fetch) -> None:
     assert results[0].official_model == "S5"
     assert results[0].official_trim == "Comfort"
     assert results[0].msrp_value == 294_900.0
+
+
+@patch.object(ScraplingExtractor, "_fetch")
+def test_text_regex_extracts_nissan_grade_cash_price_from_card_html(
+    mock_fetch,
+) -> None:
+    mock_fetch.return_value = _mock_page_with_descendant_text_and_html(
+        "body",
+        "Qashqai N-CONNECTA\nX-Trail N-CONNECTA",
+        (
+            '<div data-testid="product-card"><p>Qashqai N-CONNECTA</p>'
+            '<div class="prices">Comptant '
+            '<span>À partir de 36\u202f200 €</span></div></div>'
+            '<div data-testid="product-card"><p>X-Trail N-CONNECTA</p>'
+            '<div class="prices">Comptant '
+            '<span>À partir de 29\u202f300 €</span></div></div>'
+        ),
+    )
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="nissan_qashqai_fr",
+            country="FR",
+            brand="Nissan",
+            source_url="https://example.com",
+        ),
+        ScraplingProfile(
+            url="https://example.com",
+            text_regex=TextRegexMapping(
+                source_selector="body",
+                include_element_html=True,
+                entry_patterns=(
+                    TextRegexEntryPattern(
+                        pattern=(
+                            r"<p>Qashqai\s+(?P<trim>[^<]+)</p>"
+                            r".{0,12000}?Comptant.{0,300}?partir de\s+"
+                            r"(?P<price>\d{2}[\s\u00a0\u202f]*\d{3})"
+                            r"\s*(?:EUR|€)"
+                        ),
+                        official_powertrain="Qashqai grade cash price",
+                        price_label="Comptant",
+                    ),
+                ),
+            ),
+            default_currency="EUR",
+            fixed_model="QASHQAI",
+            fixed_jato_model="QASHQAI",
+            copy_trim_to_jato_trim=True,
+        ),
+    )
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].official_model == "QASHQAI"
+    assert results[0].official_trim == "N-CONNECTA"
+    assert results[0].msrp_value == 36_200.0
+    assert results[0].price_label == "Comptant"
 
 
 def test_config_loader_builds_scrapling_text_regex_profile() -> None:
