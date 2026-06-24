@@ -26,7 +26,7 @@ function formatDecision(decision: RouteDecision | null): string {
 }
 
 function formatDecisionDetail(decision: RouteDecision | null): string {
-  if (!decision) return "No cached decision. The router will probe both hosts, use the clearly faster route, and use China-local signals only when the probes are close.";
+  if (!decision) return "No cached decision. The router will probe both hosts, keep China-local browsers on www unless intl is clearly faster, and otherwise use the faster measured route.";
   const details: string[] = [];
   if (decision.reason) details.push(decision.reason);
   if (decision.createdAt) {
@@ -152,7 +152,7 @@ export function RouteDiagnosticsPage() {
         <article className="route-diagnostics-panel">
           <span className="route-diagnostics-label">Browser signal</span>
           <strong>{clientProfile.prefersChinaRoute ? "China-local" : "Neutral"}</strong>
-          <span className="route-diagnostics-muted">{clientProfile.reason}; used only as a close-tie breaker</span>
+          <span className="route-diagnostics-muted">{clientProfile.reason}; China-local browsers prefer www unless intl is clearly faster</span>
         </article>
       </section>
 

@@ -77,6 +77,7 @@ export const MANUAL_KEY = "jato_route_manual_v1";
 export const PROBE_INFLIGHT_KEY = "jato_route_probe_inflight_v1";
 export const PROBE_TIMEOUT_MS = 1_800;
 export const REDIRECT_MARGIN_MS = 450;
+export const CHINA_LOCAL_REDIRECT_MARGIN_MS = 1_500;
 export const AUTO_DECISION_TTL_MS = 2 * 60 * 60 * 1000;
 export const MANUAL_DECISION_TTL_MS = 24 * 60 * 60 * 1000;
 export const PROBE_INFLIGHT_TTL_MS = PROBE_TIMEOUT_MS + 700;
@@ -360,14 +361,20 @@ export function chooseAutoRoute(
   }
   const cnMs = results.cn.ms ?? PROBE_TIMEOUT_MS;
   const intlMs = results.intl.ms ?? PROBE_TIMEOUT_MS;
-  const deltaMs = Math.abs(cnMs - intlMs);
-  if (deltaMs <= marginMs) {
-    if (profile?.prefersChinaRoute) {
+  if (profile?.prefersChinaRoute) {
+    if (intlMs + CHINA_LOCAL_REDIRECT_MARGIN_MS < cnMs) {
       return {
-        target: "cn",
-        reason: `www is preferred for China-local browser signals because both probes are within ${marginMs} ms (${profile.reason}).`,
+        target: "intl",
+        reason: `intl is faster by ${cnMs - intlMs} ms, above the ${CHINA_LOCAL_REDIRECT_MARGIN_MS} ms China-local guard (${profile.reason}).`,
       };
     }
+    return {
+      target: "cn",
+      reason: `www is preferred for China-local browser signals unless intl is faster by more than ${CHINA_LOCAL_REDIRECT_MARGIN_MS} ms (${profile.reason}).`,
+    };
+  }
+  const deltaMs = Math.abs(cnMs - intlMs);
+  if (deltaMs <= marginMs) {
     return {
       target: currentTarget ?? "cn",
       reason: `Both probes are within ${marginMs} ms; keep ${routeLabel(currentTarget ?? "cn")} to avoid route churn.`,
@@ -403,7 +410,7 @@ export function createAutoRouteDecision(
     intlOk: results.intl.status === "ok",
     cnMs: results.cn.ms ?? undefined,
     intlMs: results.intl.ms ?? undefined,
-    marginMs: REDIRECT_MARGIN_MS,
+    marginMs: profile?.prefersChinaRoute ? CHINA_LOCAL_REDIRECT_MARGIN_MS : REDIRECT_MARGIN_MS,
   };
 }
 

@@ -65,36 +65,6 @@ const DashboardExportPanel = lazy(() =>
 );
 
 const DASHBOARD_DEFERRED_FETCH_DELAY_MS = 6_000;
-const DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS = 4_000;
-
-let dashboardAnimationPromise: Promise<typeof import("animejs")> | null = null;
-
-function loadDashboardAnimation() {
-  if (!dashboardAnimationPromise) {
-    dashboardAnimationPromise = import("animejs").catch((error) => {
-      dashboardAnimationPromise = null;
-      throw error;
-    });
-  }
-  return dashboardAnimationPromise;
-}
-
-type DashboardIdleWindow = Window & typeof globalThis & {
-  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
-  cancelIdleCallback?: (handle: number) => void;
-};
-
-function scheduleDashboardIdlePreload(callback: () => void): () => void {
-  const idleWindow = window as DashboardIdleWindow;
-  if (typeof idleWindow.requestIdleCallback === "function") {
-    const handle = idleWindow.requestIdleCallback(callback, {
-      timeout: DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS,
-    });
-    return () => idleWindow.cancelIdleCallback?.(handle);
-  }
-  const handle = window.setTimeout(callback, DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS);
-  return () => window.clearTimeout(handle);
-}
 
 function resolveTimeSeriesSeriesColor(
   name: string,
@@ -1063,29 +1033,6 @@ export function DashboardPage() {
     if (columns.length === 0) return;
     setCachedPageValue(DASHBOARD_CACHE_KEY, dashboardCacheSnapshot, PAGE_CACHE_TTL_MS);
   }, [columns.length, dashboardCacheSnapshot]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const cancelIdle = scheduleDashboardIdlePreload(() => {
-      void loadDashboardAnimation().then(({ animate }) => {
-        if (cancelled) return;
-        try {
-          animate(".dashboard-hero-head", {
-            opacity: [0, 1],
-            translateY: [12, 0],
-            duration: 600,
-            ease: "outExpo",
-          });
-        } catch {
-          /* decorative only */
-        }
-      }).catch(() => undefined);
-    });
-    return () => {
-      cancelled = true;
-      cancelIdle();
-    };
-  }, []);
 
   /* palette helper */
   const tsPalette = useMemo(() => getExportPalette(tsExport.colorScheme), [tsExport.colorScheme]);

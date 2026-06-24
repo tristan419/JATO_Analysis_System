@@ -141,6 +141,7 @@ async function createAuthenticatedContext(browser, host, username, password, tim
       source: "manual",
       target: routeTarget,
     }));
+    localStorage.removeItem("jato_route_decision_v2");
     localStorage.removeItem("jato_route_decision_v1");
     localStorage.removeItem("jato_route_probe_inflight_v1");
   }, {

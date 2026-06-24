@@ -16,7 +16,8 @@
         var route = params.get("route");
         var routeChecked = params.get("routeChecked") === "1";
         var hasAuthParams = params.has("token") || params.has("oauthError") || params.has("code") || params.has("state");
-        var decisionKey = "jato_route_decision_v1";
+        var decisionKey = "jato_route_decision_v2";
+        var legacyDecisionKeys = ["jato_route_decision_v1"];
         var manualKey = "jato_route_manual_v1";
         var inFlightKey = "jato_route_probe_inflight_v1";
         var autoTtlMs = 2 * 60 * 60 * 1000;
@@ -167,6 +168,15 @@
           } catch (err) {}
         }
 
+        function clearAutoDecisions() {
+          try {
+            window.localStorage.removeItem(decisionKey);
+            legacyDecisionKeys.forEach(function (key) {
+              window.localStorage.removeItem(key);
+            });
+          } catch (err) {}
+        }
+
         if (window.location.pathname === "/route-diagnostics") return;
         if (route === "stay") {
           cleanParam("route");
@@ -184,8 +194,8 @@
         if (route === "auto") {
           try {
             window.localStorage.removeItem(manualKey);
-            window.localStorage.removeItem(decisionKey);
           } catch (err) {}
+          clearAutoDecisions();
           cleanParam("route");
         }
         if (routeChecked) {
@@ -243,13 +253,22 @@
           var nextTarget = currentTarget;
           var reason = "Both route probes failed; stay on the current host";
           if (cn.ok && intl.ok) {
-            nextTarget = intl.ms + marginMs < cn.ms ? "intl" : "cn";
-            if (nextTarget === "intl") {
+            if (profile.prefersChinaRoute) {
+              nextTarget = intl.ms + marginMs < cn.ms ? "intl" : "cn";
+              if (nextTarget === "intl") {
+                reason = "intl is faster than www by more than the China-local guard";
+              } else {
+                reason = "www is preferred for China-local browser signals unless intl is clearly faster";
+              }
+            } else if (Math.abs(cn.ms - intl.ms) <= marginMs) {
+              nextTarget = currentTarget;
+              reason = "Both routes are within the measured-route margin; keep the current host";
+            } else if (intl.ms < cn.ms) {
+              nextTarget = "intl";
               reason = "intl is faster than www by more than the redirect margin";
-            } else if (profile.prefersChinaRoute) {
-              reason = "www is preferred for China-local browser signals unless intl is clearly faster";
             } else {
-              reason = "www is preferred unless intl is clearly faster";
+              nextTarget = "cn";
+              reason = "www is faster than intl by more than the redirect margin";
             }
           } else if (intl.ok && !cn.ok) {
             nextTarget = "intl";

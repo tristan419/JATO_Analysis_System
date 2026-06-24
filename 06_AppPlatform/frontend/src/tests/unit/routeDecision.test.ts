@@ -75,7 +75,7 @@ describe("route decision helpers", () => {
     }, "intl")?.target).toBe("cn");
   });
 
-  it("uses China-local browser signals only as a close-tie breaker", () => {
+  it("keeps China-local browsers on www unless intl is much faster", () => {
     const chinaProfile = createClientRouteProfile({
       timeZone: "Asia/Shanghai",
       languages: ["zh-CN"],
@@ -84,10 +84,15 @@ describe("route decision helpers", () => {
     expect(chooseAutoRoute({
       cn: okProbe("cn", 1_200),
       intl: okProbe("intl", 300),
+    }, "cn", chinaProfile)?.target).toBe("cn");
+
+    expect(chooseAutoRoute({
+      cn: okProbe("cn", 1_900),
+      intl: okProbe("intl", 300),
     }, "cn", chinaProfile)?.target).toBe("intl");
 
     expect(chooseAutoRoute({
-      cn: okProbe("cn", 600),
+      cn: okProbe("cn", 1_700),
       intl: okProbe("intl", 300),
     }, "intl", chinaProfile)?.target).toBe("cn");
   });

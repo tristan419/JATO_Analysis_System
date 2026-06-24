@@ -32,8 +32,8 @@ const FALLBACK_SHELL_STYLE: CSSProperties = {
   border: "1px dashed var(--c-border-soft)",
   background: "linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(237, 243, 249, 0.92) 100%)",
 };
-const CHART_VIEWPORT_ROOT_MARGIN = "640px 0px";
-const CHART_VISIBILITY_FALLBACK_DELAY_MS = 1_200;
+const CHART_VIEWPORT_ROOT_MARGIN = "160px 0px";
+const CHART_VISIBILITY_FALLBACK_DELAY_MS = 6_000;
 
 type VisibilityWindow = Window & typeof globalThis & {
   IntersectionObserver?: typeof IntersectionObserver;

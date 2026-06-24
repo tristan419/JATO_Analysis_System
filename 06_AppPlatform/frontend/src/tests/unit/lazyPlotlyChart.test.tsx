@@ -46,7 +46,7 @@ describe("LazyPlotlyChart", () => {
 
     expect(screen.queryByTestId("plotly-chart")).toBeNull();
     expect(screen.getByText("正在加载图表运行时")).toBeTruthy();
-    expect(observerOptions?.rootMargin).toBe("640px 0px");
+    expect(observerOptions?.rootMargin).toBe("160px 0px");
 
     const target = document.querySelector("[style]") as Element;
     await act(async () => {
