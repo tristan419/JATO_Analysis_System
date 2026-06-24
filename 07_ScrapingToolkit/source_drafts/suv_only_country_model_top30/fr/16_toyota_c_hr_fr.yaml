@@ -8,6 +8,11 @@ extractor_type: scrapling
 profile:
   url: https://www.toyota.fr/vehicules-neufs/toyota-c-hr
   headless: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 30000
+  wait_ms: 500
+  disable_resources: true
   default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
@@ -93,7 +98,6 @@ profile:
     trim: h3
     price: '[class*="price"]'
   tier: stealth
-  network_idle: true
   impersonate: chrome
 schedule:
   frequency: manual_only
@@ -105,7 +109,9 @@ notes: Draft scaffold generated from country×model top30 backlog. Replace sourc
   before promoting to 07_ScrapingToolkit/sources. [URL filled from TOYOTA template]
   [URL language corrected] [CSS selectors applied from brand probe] [Switched to playwright_card_flow
   with toyota_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset
-  needs per-brand tuning]
+  needs per-brand tuning] [Reduced Scrapling wait budget after FR dryrun timed
+  out waiting for Toyota's Akamai-backed load event while sibling Toyota pages
+  expose price selectors before full network idle.]
 bootstrap_meta:
   country_model_rank: 16
   suggested_scope_kind: single_model
