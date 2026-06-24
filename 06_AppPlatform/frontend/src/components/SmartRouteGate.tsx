@@ -8,6 +8,7 @@ import {
   consumeRouteDecisionTransfer,
   createAutoRouteDecision,
   currentRouteTarget,
+  detectClientRouteProfile,
   isRouteProbeInFlight,
   probeRoute,
   readRouteDecision,
@@ -63,10 +64,11 @@ export function SmartRouteGate() {
         probeRoute("intl"),
       ]);
       if (cancelled) return;
+      const clientProfile = detectClientRouteProfile();
       const decision = createAutoRouteDecision({
         cn: cnResult,
         intl: intlResult,
-      }, currentTarget);
+      }, currentTarget, clientProfile);
       if (!decision) return;
       clearRouteDecisions(window.localStorage);
       saveRouteDecision(window.localStorage, decision);

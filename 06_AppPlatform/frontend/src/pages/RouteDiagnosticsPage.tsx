@@ -8,6 +8,7 @@ import {
   clearRouteDecisions,
   createManualRouteDecision,
   currentRouteTarget,
+  detectClientRouteProfile,
   formatTarget,
   makeInitialProbe,
   probeRoute,
@@ -56,6 +57,7 @@ export function RouteDiagnosticsPage() {
   const [autoDecision, setAutoDecision] = useState<RouteDecision | null>(() => readRouteDecision(window.localStorage, DECISION_KEY));
   const currentHost = window.location.hostname || "-";
   const currentTarget = currentRouteTarget(currentHost);
+  const clientProfile = useMemo(() => detectClientRouteProfile(), []);
   const activeDecision = manualDecision ?? autoDecision;
   const activeTarget = activeDecision?.target ?? currentTarget;
   const fastestTarget = useMemo<RouteTarget | null>(() => {
@@ -67,8 +69,8 @@ export function RouteDiagnosticsPage() {
     return cn <= intl ? "cn" : "intl";
   }, [results]);
   const autoRecommendation = useMemo(
-    () => chooseAutoRoute(results, currentTarget),
-    [currentTarget, results],
+    () => chooseAutoRoute(results, currentTarget, clientProfile),
+    [clientProfile, currentTarget, results],
   );
 
   async function runProbe() {
@@ -146,6 +148,11 @@ export function RouteDiagnosticsPage() {
           <span className="route-diagnostics-label">Auto decision</span>
           <strong>{formatDecision(autoDecision)}</strong>
           <span className="route-diagnostics-muted">自动分流缓存</span>
+        </article>
+        <article className="route-diagnostics-panel">
+          <span className="route-diagnostics-label">Browser signal</span>
+          <strong>{clientProfile.prefersChinaRoute ? "China-local" : "Neutral"}</strong>
+          <span className="route-diagnostics-muted">{clientProfile.reason}</span>
         </article>
       </section>
 

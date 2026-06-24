@@ -95,7 +95,7 @@ button, input, select, textarea {
 
 .route-diagnostics-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   border: 1px solid var(--c-border-soft);
   background: var(--c-surface);
 }
@@ -109,6 +109,10 @@ button, input, select, textarea {
 }
 
 .route-diagnostics-panel:last-child {
+  border-right: 0;
+}
+
+.route-diagnostics-panel:nth-child(3n) {
   border-right: 0;
 }
 
@@ -215,6 +219,10 @@ button, input, select, textarea {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .route-diagnostics-panel:nth-child(3n) {
+    border-right: 1px solid var(--c-border-light);
+  }
+
   .route-diagnostics-panel:nth-child(2n) {
     border-right: 0;
   }
@@ -237,6 +245,10 @@ button, input, select, textarea {
   .route-diagnostics-panel {
     border-right: 0;
     border-bottom: 1px solid var(--c-border-light);
+  }
+
+  .route-diagnostics-panel:nth-child(3n) {
+    border-right: 0;
   }
 
   .route-diagnostics-panel:last-child {

@@ -7,6 +7,7 @@ import {
   chooseAutoRoute,
   consumeRouteDecisionTransfer,
   createAutoRouteDecision,
+  createClientRouteProfile,
   createManualRouteDecision,
   isRouteProbeInFlight,
   makeInitialProbe,
@@ -59,6 +60,23 @@ describe("route decision helpers", () => {
       cn: okProbe("cn", 1_200),
       intl: okProbe("intl", 300),
     }, "cn")?.target).toBe("intl");
+  });
+
+  it("raises the intl redirect margin for China-local browser signals", () => {
+    const chinaProfile = createClientRouteProfile({
+      timeZone: "Asia/Shanghai",
+      languages: ["zh-CN"],
+    });
+
+    expect(chooseAutoRoute({
+      cn: okProbe("cn", 1_200),
+      intl: okProbe("intl", 300),
+    }, "cn", chinaProfile)?.target).toBe("cn");
+
+    expect(chooseAutoRoute({
+      cn: okProbe("cn", 2_200),
+      intl: okProbe("intl", 300),
+    }, "cn", chinaProfile)?.target).toBe("intl");
   });
 
   it("builds cross-origin redirect URLs without dropping existing filters", () => {
@@ -142,7 +160,7 @@ describe("route decision helpers", () => {
     const decision = createAutoRouteDecision({
       cn: okProbe("cn", 1_100),
       intl: okProbe("intl", 200),
-    }, "cn", 1_000);
+    }, "cn", null, 1_000);
 
     expect(decision?.target).toBe("intl");
     expect(decision?.source).toBe("auto");

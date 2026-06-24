@@ -23,6 +23,19 @@ export interface ProbeResult {
   checkedAt: string;
 }
 
+export interface ClientRouteProfile {
+  timeZone: string;
+  languages: string[];
+  prefersChinaRoute: boolean;
+  reason: string;
+}
+
+interface ClientRouteProfileInput {
+  timeZone?: string;
+  language?: string;
+  languages?: readonly string[];
+}
+
 interface RouteLocationLike {
   hostname?: string;
   pathname: string;
@@ -63,9 +76,71 @@ export const MANUAL_KEY = "jato_route_manual_v1";
 export const PROBE_INFLIGHT_KEY = "jato_route_probe_inflight_v1";
 export const PROBE_TIMEOUT_MS = 1_800;
 export const REDIRECT_MARGIN_MS = 450;
+export const CHINA_LOCAL_REDIRECT_MARGIN_MS = 1_500;
 export const AUTO_DECISION_TTL_MS = 2 * 60 * 60 * 1000;
 export const MANUAL_DECISION_TTL_MS = 24 * 60 * 60 * 1000;
 export const PROBE_INFLIGHT_TTL_MS = PROBE_TIMEOUT_MS + 700;
+const CHINA_LOCAL_TIME_ZONES = new Set([
+  "Asia/Shanghai",
+  "Asia/Chongqing",
+  "Asia/Harbin",
+  "Asia/Urumqi",
+]);
+
+function isMainlandChineseLanguage(language: string): boolean {
+  const normalized = language.toLowerCase();
+  return normalized === "zh-cn"
+    || normalized.startsWith("zh-cn-")
+    || normalized === "zh-hans"
+    || normalized.startsWith("zh-hans-");
+}
+
+function normalizeLanguages(input: ClientRouteProfileInput): string[] {
+  const values = [
+    ...(input.languages ?? []),
+    input.language ?? "",
+  ];
+  const seen = new Set<string>();
+  const languages: string[] = [];
+  values.forEach((value) => {
+    const normalized = value.trim();
+    if (!normalized || seen.has(normalized.toLowerCase())) return;
+    seen.add(normalized.toLowerCase());
+    languages.push(normalized);
+  });
+  return languages;
+}
+
+export function createClientRouteProfile(input: ClientRouteProfileInput): ClientRouteProfile {
+  const timeZone = input.timeZone?.trim() ?? "";
+  const languages = normalizeLanguages(input);
+  const chinaTimeZone = CHINA_LOCAL_TIME_ZONES.has(timeZone);
+  const mainlandChineseLanguage = languages.some(isMainlandChineseLanguage);
+  const signals: string[] = [];
+  if (chinaTimeZone) signals.push(`time zone ${timeZone}`);
+  if (mainlandChineseLanguage) signals.push(`language ${languages.join(", ")}`);
+  return {
+    timeZone,
+    languages,
+    prefersChinaRoute: chinaTimeZone || mainlandChineseLanguage,
+    reason: signals.length
+      ? `China-local browser signal: ${signals.join("; ")}`
+      : "No China-local browser signal",
+  };
+}
+
+export function detectClientRouteProfile(): ClientRouteProfile {
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
+  return createClientRouteProfile({
+    timeZone,
+    language: navigator.language,
+    languages: navigator.languages,
+  });
+}
+
+function redirectMarginForProfile(profile?: ClientRouteProfile | null): number {
+  return profile?.prefersChinaRoute ? CHINA_LOCAL_REDIRECT_MARGIN_MS : REDIRECT_MARGIN_MS;
+}
 
 export function routeLabel(target: RouteTarget): string {
   return target === "cn" ? "www" : "intl";
@@ -262,9 +337,11 @@ export async function probeRoute(target: RouteTarget): Promise<ProbeResult> {
 export function chooseAutoRoute(
   results: Record<RouteTarget, ProbeResult>,
   currentTarget: RouteTarget | null,
+  profile?: ClientRouteProfile | null,
 ): { target: RouteTarget; reason: string } | null {
   const cnOk = results.cn.status === "ok";
   const intlOk = results.intl.status === "ok";
+  const marginMs = redirectMarginForProfile(profile);
   if (!cnOk && !intlOk) {
     if (results.cn.status === "running" || results.intl.status === "running") return null;
     return {
@@ -286,24 +363,27 @@ export function chooseAutoRoute(
   }
   const cnMs = results.cn.ms ?? PROBE_TIMEOUT_MS;
   const intlMs = results.intl.ms ?? PROBE_TIMEOUT_MS;
-  if (intlMs + REDIRECT_MARGIN_MS < cnMs) {
+  if (intlMs + marginMs < cnMs) {
     return {
       target: "intl",
-      reason: `intl is faster by ${cnMs - intlMs} ms, above the ${REDIRECT_MARGIN_MS} ms redirect margin.`,
+      reason: `intl is faster by ${cnMs - intlMs} ms, above the ${marginMs} ms redirect margin.`,
     };
   }
   return {
     target: "cn",
-    reason: `www is preferred because intl is not more than ${REDIRECT_MARGIN_MS} ms faster.`,
+    reason: profile?.prefersChinaRoute
+      ? `www is preferred for China-local browser signals unless intl is more than ${marginMs} ms faster.`
+      : `www is preferred because intl is not more than ${marginMs} ms faster.`,
   };
 }
 
 export function createAutoRouteDecision(
   results: Record<RouteTarget, ProbeResult>,
   currentTarget: RouteTarget | null,
+  profile?: ClientRouteProfile | null,
   now = Date.now(),
 ): RouteDecision | null {
-  const recommendation = chooseAutoRoute(results, currentTarget);
+  const recommendation = chooseAutoRoute(results, currentTarget, profile);
   if (!recommendation) return null;
   return {
     target: recommendation.target,
@@ -315,7 +395,7 @@ export function createAutoRouteDecision(
     intlOk: results.intl.status === "ok",
     cnMs: results.cn.ms ?? undefined,
     intlMs: results.intl.ms ?? undefined,
-    marginMs: REDIRECT_MARGIN_MS,
+    marginMs: redirectMarginForProfile(profile),
   };
 }
 
