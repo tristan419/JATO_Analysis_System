@@ -13,7 +13,7 @@ const CACHEABLE_ENDPOINTS = new Map([
 const FILTER_SNAPSHOT_COLUMNS = [
   ["国家", "country"],
   ["Body type", "body_type", "body type"],
-  ["细分市场", "segment"],
+  ["细分市场（按车长）", "细分市场-欧", "细分市场", "segment"],
   ["动总规整", "powertrain"],
 ];
 

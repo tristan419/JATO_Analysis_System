@@ -237,7 +237,7 @@ describe("Cloudflare edge cache function", () => {
       }
       if (call.url === "https://origin.example/v1/metadata/columns") {
         return Response.json({
-          items: ["国家", "Body type", "细分市场", "动总规整", "Make", "Model"],
+          items: ["国家", "Body type", "细分市场（按车长）", "动总规整", "Make", "Model"],
         });
       }
       if (call.url === "https://origin.example/v1/filters/options/batch") {
@@ -245,7 +245,7 @@ describe("Cloudflare edge cache function", () => {
           items: [
             { column: "国家", options: ["丹麦", "德国"] },
             { column: "Body type", options: ["SUV"] },
-            { column: "细分市场", options: ["C"] },
+            { column: "细分市场（按车长）", options: ["C"] },
             { column: "动总规整", options: ["ICE", "BEV"] },
           ],
         });
@@ -266,11 +266,11 @@ describe("Cloudflare edge cache function", () => {
     expect(first.headers.get("x-jato-edge-cache-endpoint")).toBe("/v1/metadata/filter-snapshot");
     const payload = await first.json();
     expect(payload).toMatchObject({
-      columns: ["国家", "Body type", "细分市场", "动总规整", "Make", "Model"],
+      columns: ["国家", "Body type", "细分市场（按车长）", "动总规整", "Make", "Model"],
       options: {
         国家: ["丹麦", "德国"],
         "Body type": ["SUV"],
-        细分市场: ["C"],
+        "细分市场（按车长）": ["C"],
         动总规整: ["ICE", "BEV"],
       },
       source: "edge-synthesized",
