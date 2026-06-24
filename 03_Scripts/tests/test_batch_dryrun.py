@@ -222,6 +222,25 @@ def test_source_result_retryable_for_timeout_only() -> None:
     )
 
 
+def test_classify_price_floor_rejection_as_price_out_of_range() -> None:
+    classification = batch_dryrun._classify_dryrun_failure(
+        {
+            "status": "dry_run",
+            "valid": 0,
+            "extracted": 1,
+            "rejected": 1,
+            "rejectedReasons": ["msrp_value=229.0 < 5000.0 for base_msrp"],
+            "rejectionRuleCounts": {"price_range": 1},
+        }
+    )
+
+    assert classification == {
+        "failureReason": "price_out_of_range",
+        "recommendedStrategy": "check_currency_and_price_semantics",
+        "severity": "warning",
+    }
+
+
 def test_source_attempt_limit_env(monkeypatch) -> None:
     monkeypatch.setenv("JATO_MSRP_DRYRUN_SOURCE_ATTEMPTS", "3")
     assert batch_dryrun._source_attempt_limit() == 3

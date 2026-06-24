@@ -459,6 +459,57 @@ def _finance_summary_from_observations(
     }
 
 
+def _rejection_diagnostics_from_report(
+    report: BatchValidationReport,
+    sample_limit: int = 5,
+) -> dict[str, Any]:
+    if not report.rejected:
+        return {}
+
+    reason_counts: dict[str, int] = {}
+    rule_counts: dict[str, int] = {}
+    samples: list[dict[str, Any]] = []
+
+    for observation, failures in report.rejected:
+        reasons = [failure.reason for failure in failures]
+        rules = [failure.rule for failure in failures]
+        for reason in reasons:
+            _increment_counter(reason_counts, reason)
+        for rule in rules:
+            _increment_counter(rule_counts, rule)
+        if len(samples) >= sample_limit:
+            continue
+        raw_payload = (
+            observation.raw_payload
+            if isinstance(observation.raw_payload, dict)
+            else {}
+        )
+        sample: dict[str, Any] = {
+            "officialModel": observation.official_model,
+            "officialTrim": observation.official_trim,
+            "msrpValue": observation.msrp_value,
+            "currency": observation.currency,
+            "priceLabel": observation.price_label,
+            "reasons": reasons,
+            "rules": rules,
+        }
+        price_text = raw_payload.get("priceText")
+        if price_text not in (None, ""):
+            sample["priceText"] = price_text
+        pricing_context = raw_payload.get("pricingContext")
+        if isinstance(pricing_context, dict) and pricing_context:
+            sample["pricingContext"] = pricing_context
+        samples.append(sample)
+
+    return {
+        "rejectedReasons": sorted(reason_counts),
+        "rejectedRules": sorted(rule_counts),
+        "rejectionReasonCounts": dict(sorted(reason_counts.items())),
+        "rejectionRuleCounts": dict(sorted(rule_counts.items())),
+        "sampleRejectedObservations": samples,
+    }
+
+
 def build_batch_payload(
     extractor: BaseExtractor,
     report: BatchValidationReport,
@@ -730,6 +781,7 @@ def run_scrape(
             valid=len(report.valid),
             rejected=len(report.rejected),
             **_finance_summary_from_observations(report.valid),
+            **_rejection_diagnostics_from_report(report),
         )
         if dry_run:
             source_result["status"] = "dry_run"

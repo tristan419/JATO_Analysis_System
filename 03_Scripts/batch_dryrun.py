@@ -248,9 +248,20 @@ def _classify_dryrun_failure(
 
     if extracted > 0 and valid == 0:
         rejected_reasons = [str(r).lower() for r in src.get("rejectedReasons", [])]
+        rejected_rules = [str(r).lower() for r in src.get("rejectedRules", [])]
+        rejection_rule_counts = src.get("rejectionRuleCounts") or {}
+        if isinstance(rejection_rule_counts, dict):
+            rejected_rules.extend(str(r).lower() for r in rejection_rule_counts)
         if any("currency" in r for r in rejected_reasons):
             return {"failureReason": "currency_mismatch", "recommendedStrategy": "check_default_currency", "severity": "warning"}
-        if any("price" in r and ("range" in r or "out" in r) for r in rejected_reasons):
+        if (
+            any(r == "price_range" for r in rejected_rules)
+            or any(
+                ("price" in r or "msrp_value" in r)
+                and ("range" in r or "out" in r or "<" in r or ">" in r)
+                for r in rejected_reasons
+            )
+        ):
             return {"failureReason": "price_out_of_range", "recommendedStrategy": "check_currency_and_price_semantics", "severity": "warning"}
         return {"failureReason": "validation_rejected_all", "recommendedStrategy": "review_validation_rules", "severity": "warning"}
 

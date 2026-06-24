@@ -3,7 +3,7 @@ import requests
 from jato_scraper import runner
 from jato_scraper.base import BaseExtractor, ExtractorConfig, RawObservation
 from jato_scraper.runner import build_batch_payload
-from jato_scraper.validation import BatchValidationReport
+from jato_scraper.validation import BatchValidationReport, ValidationResult
 
 
 class DummyExtractor(BaseExtractor):
@@ -256,6 +256,54 @@ def test_finance_summary_counts_valid_finance_contexts() -> None:
         "unknown": 1,
     }
     assert summary["sampleFinanceContexts"][0]["monthlyPayment"] == 5990
+
+
+def test_rejection_diagnostics_summarize_validation_failures() -> None:
+    observation = RawObservation(
+        official_model="QASHQAI",
+        official_trim="Personnalisation et style",
+        msrp_value=229,
+        currency="EUR",
+        tax_included=True,
+        price_label="MSRP",
+        source_url="https://example.test/qashqai",
+        raw_payload={"priceText": "229 EUR"},
+    )
+    report = BatchValidationReport(
+        valid=[],
+        rejected=[
+            (
+                observation,
+                [
+                    ValidationResult(
+                        ok=False,
+                        rule="price_range",
+                        reason="msrp_value=229.0 < 5000.0 for base_msrp",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    diagnostics = runner._rejection_diagnostics_from_report(report)
+
+    assert diagnostics["rejectedReasons"] == [
+        "msrp_value=229.0 < 5000.0 for base_msrp",
+    ]
+    assert diagnostics["rejectedRules"] == ["price_range"]
+    assert diagnostics["rejectionRuleCounts"] == {"price_range": 1}
+    assert diagnostics["sampleRejectedObservations"] == [
+        {
+            "officialModel": "QASHQAI",
+            "officialTrim": "Personnalisation et style",
+            "msrpValue": 229,
+            "currency": "EUR",
+            "priceLabel": "MSRP",
+            "reasons": ["msrp_value=229.0 < 5000.0 for base_msrp"],
+            "rules": ["price_range"],
+            "priceText": "229 EUR",
+        },
+    ]
 
 
 def test_submit_batch_includes_backend_response_body_on_http_error(

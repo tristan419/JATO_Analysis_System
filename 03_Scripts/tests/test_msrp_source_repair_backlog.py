@@ -467,3 +467,36 @@ def test_legacy_report_keeps_summary_backlog_format(tmp_path: Path) -> None:
     assert backlog["summary"]["failedCount"] == 1
     assert backlog["failureBreakdown"] == {"validation_rejected_all": 1}
     assert backlog["backlog"][0]["recommendedStrategy"] == "check default_currency in the source YAML"
+
+
+def test_legacy_report_classifies_price_floor_rejection(tmp_path: Path) -> None:
+    report = {
+        "total": 1,
+        "pass": 0,
+        "passPct": 0.0,
+        "results": [
+            {
+                "country": "fr",
+                "code": "nissan_qashqai_fr_draft_scrapling",
+                "status": "dry_run",
+                "valid": 0,
+                "extracted": 1,
+                "rejected": 1,
+                "failureReason": "validation_rejected_all",
+                "rejectedReasons": [
+                    "msrp_value=229.0 < 5000.0 for base_msrp",
+                ],
+                "rejectionRuleCounts": {"price_range": 1},
+            }
+        ],
+    }
+    report_path = tmp_path / "legacy_dryrun_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    backlog = backlog_script.run(str(report_path), str(tmp_path))
+
+    assert backlog["backlog"][0]["likelyCause"] == "price range issue"
+    assert (
+        backlog["backlog"][0]["recommendedStrategy"]
+        == "check price parsing and units in extraction config"
+    )

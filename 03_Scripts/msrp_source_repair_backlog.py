@@ -58,9 +58,20 @@ def _classify_no_observation(src: dict) -> str:
 def _classify_validation_fix(src: dict) -> tuple[str, str]:
     """Return (likely_cause, recommended_fix) for validation_rejected_all."""
     rejected = [str(r).lower() for r in (src.get("rejectedReasons") or [])]
+    rejected_rules = [str(r).lower() for r in (src.get("rejectedRules") or [])]
+    rejection_rule_counts = src.get("rejectionRuleCounts") or {}
+    if isinstance(rejection_rule_counts, dict):
+        rejected_rules.extend(str(r).lower() for r in rejection_rule_counts)
     if any("currency" in r for r in rejected):
         return "currency issue", "check default_currency in the source YAML"
-    if any("price" in r and ("range" in r or "out" in r) for r in rejected):
+    if (
+        any(r == "price_range" for r in rejected_rules)
+        or any(
+            ("price" in r or "msrp_value" in r)
+            and ("range" in r or "out" in r or "<" in r or ">" in r)
+            for r in rejected
+        )
+    ):
         return "price range issue", "check price parsing and units in extraction config"
     if any("financ" in r or "leas" in r or "monthly" in r for r in rejected):
         return "finance/leasing price issue", "avoid monthly payment / leasing selector"
