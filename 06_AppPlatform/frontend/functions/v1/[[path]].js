@@ -5,6 +5,8 @@ const CACHEABLE_ENDPOINTS = new Map([
   ["GET assistant/country/metadata", 3600],
   ["POST filters/options", 300],
   ["POST filters/options/batch", 300],
+  ["POST analysis/overview", 300],
+  ["POST analysis/time-series", 300],
   ["POST analysis/time-series-grouped", 300],
 ]);
 
