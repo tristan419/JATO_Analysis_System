@@ -4,6 +4,7 @@ import {
   DECISION_KEY,
   MANUAL_KEY,
   buildRouteRedirectUrl,
+  clearRouteDecisions,
   chooseAutoRoute,
   consumeRouteDecisionTransfer,
   createAutoRouteDecision,
@@ -50,19 +51,31 @@ function okProbe(target: "cn" | "intl", ms: number): ProbeResult {
 }
 
 describe("route decision helpers", () => {
-  it("prefers www unless intl is clearly faster than the redirect margin", () => {
+  it("keeps the current route when probes are within the redirect margin", () => {
     expect(chooseAutoRoute({
       cn: okProbe("cn", 500),
       intl: okProbe("intl", 120),
     }, "cn")?.target).toBe("cn");
 
     expect(chooseAutoRoute({
+      cn: okProbe("cn", 500),
+      intl: okProbe("intl", 120),
+    }, "intl")?.target).toBe("intl");
+  });
+
+  it("uses measured speed when one route is clearly faster", () => {
+    expect(chooseAutoRoute({
       cn: okProbe("cn", 1_200),
       intl: okProbe("intl", 300),
     }, "cn")?.target).toBe("intl");
+
+    expect(chooseAutoRoute({
+      cn: okProbe("cn", 260),
+      intl: okProbe("intl", 900),
+    }, "intl")?.target).toBe("cn");
   });
 
-  it("raises the intl redirect margin for China-local browser signals", () => {
+  it("uses China-local browser signals only as a close-tie breaker", () => {
     const chinaProfile = createClientRouteProfile({
       timeZone: "Asia/Shanghai",
       languages: ["zh-CN"],
@@ -71,12 +84,12 @@ describe("route decision helpers", () => {
     expect(chooseAutoRoute({
       cn: okProbe("cn", 1_200),
       intl: okProbe("intl", 300),
-    }, "cn", chinaProfile)?.target).toBe("cn");
+    }, "cn", chinaProfile)?.target).toBe("intl");
 
     expect(chooseAutoRoute({
-      cn: okProbe("cn", 2_200),
+      cn: okProbe("cn", 600),
       intl: okProbe("intl", 300),
-    }, "cn", chinaProfile)?.target).toBe("intl");
+    }, "intl", chinaProfile)?.target).toBe("cn");
   });
 
   it("builds cross-origin redirect URLs without dropping existing filters", () => {
@@ -127,6 +140,19 @@ describe("route decision helpers", () => {
     expect(result.decision?.source).toBe("manual");
     expect(readRouteDecision(storage, MANUAL_KEY, 1_500)?.target).toBe("cn");
     expect(readRouteDecision(storage, DECISION_KEY, 1_500)).toBeNull();
+  });
+
+  it("clears legacy auto decisions when resetting route choices", () => {
+    const storage = createStorage();
+    storage.setItem("jato_route_decision_v1", JSON.stringify({ target: "intl", expiresAt: 9_999 }));
+    storage.setItem(DECISION_KEY, JSON.stringify({ target: "cn", expiresAt: 9_999 }));
+    storage.setItem(MANUAL_KEY, JSON.stringify({ target: "intl", expiresAt: 9_999 }));
+
+    clearRouteDecisions(storage);
+
+    expect(storage.getItem("jato_route_decision_v1")).toBeNull();
+    expect(storage.getItem(DECISION_KEY)).toBeNull();
+    expect(storage.getItem(MANUAL_KEY)).toBeNull();
   });
 
   it("skips smart routing on diagnostics, local hosts, and OAuth callback URLs", () => {

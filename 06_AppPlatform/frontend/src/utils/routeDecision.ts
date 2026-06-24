@@ -71,12 +71,12 @@ export const ROUTE_HOSTS: Record<RouteTarget, string> = {
   cn: "www.ojeur.cloud",
   intl: "intl.ojeur.cloud",
 };
-export const DECISION_KEY = "jato_route_decision_v1";
+export const DECISION_KEY = "jato_route_decision_v2";
+const LEGACY_DECISION_KEYS = ["jato_route_decision_v1"];
 export const MANUAL_KEY = "jato_route_manual_v1";
 export const PROBE_INFLIGHT_KEY = "jato_route_probe_inflight_v1";
 export const PROBE_TIMEOUT_MS = 1_800;
 export const REDIRECT_MARGIN_MS = 450;
-export const CHINA_LOCAL_REDIRECT_MARGIN_MS = 1_500;
 export const AUTO_DECISION_TTL_MS = 2 * 60 * 60 * 1000;
 export const MANUAL_DECISION_TTL_MS = 24 * 60 * 60 * 1000;
 export const PROBE_INFLIGHT_TTL_MS = PROBE_TIMEOUT_MS + 700;
@@ -136,10 +136,6 @@ export function detectClientRouteProfile(): ClientRouteProfile {
     language: navigator.language,
     languages: navigator.languages,
   });
-}
-
-function redirectMarginForProfile(profile?: ClientRouteProfile | null): number {
-  return profile?.prefersChinaRoute ? CHINA_LOCAL_REDIRECT_MARGIN_MS : REDIRECT_MARGIN_MS;
 }
 
 export function routeLabel(target: RouteTarget): string {
@@ -233,6 +229,7 @@ export function saveRouteDecision(storage: Storage, decision: RouteDecision): vo
 export function clearRouteDecisions(storage: Storage): void {
   storage.removeItem(MANUAL_KEY);
   storage.removeItem(DECISION_KEY);
+  LEGACY_DECISION_KEYS.forEach((key) => storage.removeItem(key));
 }
 
 export function isRouteProbeInFlight(storage: Storage, now = Date.now()): boolean {
@@ -341,7 +338,7 @@ export function chooseAutoRoute(
 ): { target: RouteTarget; reason: string } | null {
   const cnOk = results.cn.status === "ok";
   const intlOk = results.intl.status === "ok";
-  const marginMs = redirectMarginForProfile(profile);
+  const marginMs = REDIRECT_MARGIN_MS;
   if (!cnOk && !intlOk) {
     if (results.cn.status === "running" || results.intl.status === "running") return null;
     return {
@@ -363,17 +360,28 @@ export function chooseAutoRoute(
   }
   const cnMs = results.cn.ms ?? PROBE_TIMEOUT_MS;
   const intlMs = results.intl.ms ?? PROBE_TIMEOUT_MS;
-  if (intlMs + marginMs < cnMs) {
+  const deltaMs = Math.abs(cnMs - intlMs);
+  if (deltaMs <= marginMs) {
+    if (profile?.prefersChinaRoute) {
+      return {
+        target: "cn",
+        reason: `www is preferred for China-local browser signals because both probes are within ${marginMs} ms (${profile.reason}).`,
+      };
+    }
+    return {
+      target: currentTarget ?? "cn",
+      reason: `Both probes are within ${marginMs} ms; keep ${routeLabel(currentTarget ?? "cn")} to avoid route churn.`,
+    };
+  }
+  if (intlMs < cnMs) {
     return {
       target: "intl",
-      reason: `intl is faster by ${cnMs - intlMs} ms, above the ${marginMs} ms redirect margin.`,
+      reason: `intl is faster by ${cnMs - intlMs} ms, above the ${marginMs} ms measured-route margin.`,
     };
   }
   return {
     target: "cn",
-    reason: profile?.prefersChinaRoute
-      ? `www is preferred for China-local browser signals unless intl is more than ${marginMs} ms faster.`
-      : `www is preferred because intl is not more than ${marginMs} ms faster.`,
+    reason: `www is faster by ${intlMs - cnMs} ms, above the ${marginMs} ms measured-route margin.`,
   };
 }
 
@@ -395,7 +403,7 @@ export function createAutoRouteDecision(
     intlOk: results.intl.status === "ok",
     cnMs: results.cn.ms ?? undefined,
     intlMs: results.intl.ms ?? undefined,
-    marginMs: redirectMarginForProfile(profile),
+    marginMs: REDIRECT_MARGIN_MS,
   };
 }
 
