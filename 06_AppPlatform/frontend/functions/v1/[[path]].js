@@ -58,7 +58,7 @@ function dataVersion(request, env) {
 
 function cacheRequestUrl(request, path, bodyHash, scopeHash, version, layer = "fresh") {
   const sourceUrl = new URL(request.url);
-  const cacheUrl = new URL(`https://jato-edge-cache.local/v1/${path}`);
+  const cacheUrl = new URL(`/_jato_edge_cache/v1/${path}`, sourceUrl.origin);
   cacheUrl.search = sourceUrl.search;
   cacheUrl.searchParams.set("__method", request.method.toUpperCase());
   cacheUrl.searchParams.set("__body", bodyHash);
