@@ -1459,10 +1459,34 @@ class ScraplingExtractor(BaseExtractor):
                 parts.append(str(body))
         return _normalize_space(" ".join(parts))[:limit]
 
+    def _page_markup_sample(self, page: Any, *, limit: int = 4_000) -> str:
+        parts: list[str] = []
+        try:
+            elements = page.css("body")
+        except Exception:
+            elements = []
+        for element in elements[:1]:
+            try:
+                parts.extend(self._string_values(element.get()))
+            except Exception:
+                pass
+        if not parts:
+            html_content = getattr(page, "html_content", None)
+            if html_content:
+                parts.append(str(html_content))
+        if not parts:
+            body = getattr(page, "body", None)
+            if isinstance(body, bytes):
+                parts.append(body.decode("utf-8", errors="ignore"))
+            elif body:
+                parts.append(str(body))
+        return _normalize_space(" ".join(parts))[:limit]
+
     def _access_denied_error(self, page: Any) -> str | None:
         sample = self._page_text_sample(page)
-        lower = sample.lower()
-        if not sample:
+        markup_sample = self._page_markup_sample(page)
+        lower = f"{sample} {markup_sample}".lower()
+        if not (sample or markup_sample):
             return None
         if (
             "sec-if-cpt-container" in lower
@@ -1480,7 +1504,7 @@ class ScraplingExtractor(BaseExtractor):
             and "akamai" not in lower
         ):
             return None
-        return f"anti_bot_access_denied: {sample[:240]}"
+        return f"anti_bot_access_denied: {(sample or markup_sample)[:240]}"
 
     def extract(self) -> list[RawObservation]:
         page = self._fetch()

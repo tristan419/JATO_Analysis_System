@@ -111,6 +111,32 @@ def test_akamai_behavioral_challenge_records_audit_error(monkeypatch, tmp_path) 
     assert extractor.last_audit_event["httpStatus"] == 200
 
 
+def test_akamai_behavioral_challenge_uses_html_marker_fallback(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("JATO_AUDIT_DIR", str(tmp_path))
+    page = _mock_page_with_descendant_text_and_html(
+        "body",
+        "\n".join([
+            "Powered and protected by",
+            "Privacy",
+        ]),
+        "<body><div id='sec-if-cpt-container'>Powered and protected by</div></body>",
+    )
+    page.status = 200
+    page.url = "https://www.tesla.com/fr_FR/modely"
+    page.headers = {"content-type": "text/html"}
+    extractor = build_extractor()
+    extractor.run_id = "run_akamai_html_marker_fallback"
+    monkeypatch.setattr(extractor, "_fetch", lambda: page)
+
+    assert extractor.extract() == []
+    assert extractor.last_audit_event is not None
+    assert extractor.last_audit_event["error"].startswith("anti_bot_access_denied")
+    assert extractor.last_audit_event["httpStatus"] == 200
+
+
 def test_akamai_behavioral_challenge_reads_html_content_fallback(
     monkeypatch,
     tmp_path,
