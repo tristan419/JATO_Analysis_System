@@ -614,6 +614,197 @@ def adjust_country_fobs(
     }
 
 
+def _effective_sku_colour_tier(sku: MaterialSkuMaster) -> str:
+    return merge_colour_tiers(
+        sku.colour_tier,
+        infer_colour_tier(
+            sku.exterior_color_name,
+            sku.exterior_color_type,
+            sku.edition_tag,
+            sku.exterior_color_code,
+            sku.colour_hex,
+        ),
+    )
+
+
+def _money(value: object) -> float | None:
+    if value is None:
+        return None
+    return round(float(value), 2)
+
+
+def _template_colour_surcharge(
+    session: Session,
+    brand: str,
+    colour_tier: str,
+) -> float:
+    if colour_tier not in {"dual", "special"}:
+        return 0.0
+    rule = get_brand_colour_surcharge(session, brand, colour_tier)
+    return round(float(rule.surcharge_eur), 2) if rule else 0.0
+
+
+def sync_missing_template_fobs(
+    session: Session,
+    *,
+    bom_template: str,
+    target_material_codes: list[str] | None = None,
+    changed_by: str | None = None,
+) -> dict[str, int | str]:
+    """Fill missing concrete SKU FOB rows from sibling rows in one BOM template.
+
+    BOM Admin edits colour membership at the ``**`` template level, while Order
+    Genius only shows concrete SKUs that have a positive country FOB. When a new
+    colour SKU is added under an existing template, create missing country FOBs
+    from sibling colours so the order matrix sees the same colour coverage.
+    Existing active rows are never overwritten; an active non-positive row is
+    treated as an explicit clear and left untouched.
+    """
+    template = clean_text(bom_template).upper()
+    if not template:
+        raise ValueError("bomTemplate is required")
+
+    skus = list(session.execute(
+        select(MaterialSkuMaster).where(
+            MaterialSkuMaster.bom_template == template,
+            MaterialSkuMaster.is_active == True,
+            MaterialSkuMaster.lifecycle_status == "active",
+        )
+    ).scalars().all())
+    if not skus:
+        return {
+            "bomTemplate": template,
+            "created": 0,
+            "skippedExisting": 0,
+            "skippedCleared": 0,
+            "skippedNoSource": 0,
+        }
+
+    target_codes = {
+        clean_text(code).upper()
+        for code in (target_material_codes or [])
+        if clean_text(code)
+    }
+    target_skus = [
+        sku for sku in skus
+        if not target_codes or sku.material_code in target_codes
+    ]
+    if not target_skus:
+        return {
+            "bomTemplate": template,
+            "created": 0,
+            "skippedExisting": 0,
+            "skippedCleared": 0,
+            "skippedNoSource": 0,
+        }
+
+    material_codes = [sku.material_code for sku in skus]
+    fob_rows = list(session.execute(
+        select(CountrySkuFobResolved).where(
+            CountrySkuFobResolved.material_code.in_(material_codes),
+            CountrySkuFobResolved.is_active == True,
+        )
+    ).scalars().all())
+    active_by_material_country = {
+        (row.material_code, row.country_code): row
+        for row in fob_rows
+    }
+    positive_by_country: dict[str, list[CountrySkuFobResolved]] = {}
+    for row in fob_rows:
+        if row.final_fob_eur is None or float(row.final_fob_eur) <= 0:
+            continue
+        positive_by_country.setdefault(row.country_code, []).append(row)
+    if not positive_by_country:
+        return {
+            "bomTemplate": template,
+            "created": 0,
+            "skippedExisting": 0,
+            "skippedCleared": 0,
+            "skippedNoSource": len(target_skus),
+        }
+
+    sku_by_code = {sku.material_code: sku for sku in skus}
+    tier_by_code = {
+        sku.material_code: _effective_sku_colour_tier(sku)
+        for sku in skus
+    }
+    created = 0
+    skipped_existing = 0
+    skipped_cleared = 0
+    skipped_no_source = 0
+
+    for country_code, country_rows in positive_by_country.items():
+        rows_by_tier: dict[str, list[CountrySkuFobResolved]] = {}
+        for row in country_rows:
+            tier = tier_by_code.get(row.material_code, "single")
+            rows_by_tier.setdefault(tier, []).append(row)
+
+        base_candidates = rows_by_tier.get("single") or country_rows
+        base_row = min(base_candidates, key=lambda row: float(row.final_fob_eur))
+        base_value = float(base_row.final_fob_eur)
+
+        for sku in target_skus:
+            existing = active_by_material_country.get((sku.material_code, country_code))
+            if existing:
+                if existing.final_fob_eur is not None and float(existing.final_fob_eur) <= 0:
+                    skipped_cleared += 1
+                else:
+                    skipped_existing += 1
+                continue
+
+            target_tier = tier_by_code.get(sku.material_code, "single")
+            same_tier_rows = rows_by_tier.get(target_tier) or []
+            if same_tier_rows:
+                source_row = min(
+                    same_tier_rows,
+                    key=lambda row: float(row.final_fob_eur),
+                )
+                final_fob = round(float(source_row.final_fob_eur), 2)
+                uploaded_fob = _money(source_row.uploaded_fob_eur)
+                base_fob = _money(source_row.base_fob_eur)
+                colour_surcharge = _money(source_row.colour_surcharge_eur)
+                source_mode = "copied_from_template_colour"
+            else:
+                source_row = base_row
+                surcharge = _template_colour_surcharge(
+                    session,
+                    sku.brand or (sku_by_code.get(base_row.material_code).brand if sku_by_code.get(base_row.material_code) else ""),
+                    target_tier,
+                )
+                final_fob = round(base_value + surcharge, 2)
+                uploaded_fob = _money(base_row.uploaded_fob_eur) or base_value
+                base_fob = _money(base_row.base_fob_eur) or base_value
+                colour_surcharge = surcharge if surcharge > 0 else None
+                source_mode = "derived_from_template_colour"
+
+            session.add(
+                CountrySkuFobResolved(
+                    country_sku_fob_id=uuid4(),
+                    baseline_version_id=source_row.baseline_version_id,
+                    country_code=country_code,
+                    material_code=sku.material_code,
+                    payment_term_code=source_row.payment_term_code,
+                    base_fob_eur=base_fob,
+                    payment_term_adjustment_eur=source_row.payment_term_adjustment_eur,
+                    colour_surcharge_eur=colour_surcharge,
+                    uploaded_fob_eur=uploaded_fob,
+                    final_fob_eur=final_fob,
+                    fob_source_country_code=country_code,
+                    fob_source_mode=source_mode,
+                    is_active=True,
+                )
+            )
+            created += 1
+
+    return {
+        "bomTemplate": template,
+        "created": created,
+        "skippedExisting": skipped_existing,
+        "skippedCleared": skipped_cleared,
+        "skippedNoSource": skipped_no_source,
+    }
+
+
 def list_bom_with_fob(
     session: Session,
     brand: str | None = None,

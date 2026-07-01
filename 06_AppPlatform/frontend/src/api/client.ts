@@ -4112,8 +4112,14 @@ export const api = {
   createPaymentTerm: (body: { countryCode: string; countryName: string; paymentTermCode: string; paymentMethod: string; lcDays: number }) =>
     request<any>("/order-genius/payment-terms/countries", { method: "POST", body: JSON.stringify(body) }),
 
-  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; powertrain?: string; bomTemplate?: string; sourceBomTemplate?: string }) =>
+  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; colourTier?: string; powertrain?: string; bomTemplate?: string; sourceBomTemplate?: string }) =>
     request<any>("/order-genius/material-skus", { method: "POST", body: JSON.stringify(body) }),
+
+  syncBomTemplateFobs: (body: { bomTemplate: string; materialCodes?: string[] }) =>
+    request<{ bomTemplate: string; created: number; skippedExisting: number; skippedCleared: number; skippedNoSource: number }>(
+      "/order-genius/bom-templates/sync-fobs",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
 
   updateSkuMetadata: (materialCode: string, body: { materialCodes?: string[]; brand?: string; modelName?: string; version?: string; powertrain?: string }) =>
     request<{ materialCodes: string[]; updated: number }>(

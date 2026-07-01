@@ -3658,6 +3658,7 @@ function BomAdminPanel({
             colourCode: draft.colourCode,
             colourHex: draft.colourHex ?? undefined,
             colourType: "single",
+            colourTier: "single",
             powertrain: draft.powertrain,
             bomTemplate: isBatch ? newMaterial.materialCode.trim().toUpperCase() : draft.materialCode,
           });
@@ -4174,6 +4175,7 @@ function BomAdminPanel({
           sku.colourCode,
           sku.sourceMaterialCode,
         );
+        const effectiveColourTier = inferBomAdminColourTier(sku);
         await api.createMaterialSku({
           materialCode,
           bomTemplate: normalizedTemplate,
@@ -4182,11 +4184,11 @@ function BomAdminPanel({
           version: draft.version,
           colour: sku.colour,
           colourCode: sku.colourCode,
-          colourType: sku.colourType || "single",
+          colourType: sku.colourType || effectiveColourTier || "single",
+          colourTier: effectiveColourTier,
           powertrain: draft.powertrain || "ICE",
           sourceBomTemplate: draft.sourceBomTemplate,
         });
-        const effectiveColourTier = inferBomAdminColourTier(sku);
         if (effectiveColourTier !== "single") {
           await api.updateColourTier(materialCode, effectiveColourTier);
         }
@@ -4521,7 +4523,8 @@ function BomAdminPanel({
         colour: colourName || colourCode,
         colourCode,
         colourHex: addColourEditor.colourHexTouched ? newColourHexPayload : undefined,
-        colourType: addColourEditor.tierName === "dual" ? "dual" : "single",
+        colourType: addColourEditor.tierName === "single" ? "single" : addColourEditor.tierName,
+        colourTier: addColourEditor.tierName,
         powertrain: addColourEditor.powertrain,
       });
       await api.updateColourTier(materialCode, addColourEditor.tierName);

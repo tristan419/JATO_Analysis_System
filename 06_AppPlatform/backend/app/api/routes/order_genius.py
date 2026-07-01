@@ -42,6 +42,7 @@ from app.services.order_genius_service import (
 from app.services.ordering_normalization import (
     clean_text,
     infer_colour_tier,
+    merge_colour_tiers,
     normalize_brand,
     normalize_brand_text,
 )
@@ -1046,6 +1047,35 @@ def patch_sku_fob(
     }
 
 
+@router.post("/bom-templates/sync-fobs")
+def sync_bom_template_fobs(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    """Backfill missing concrete SKU FOB rows from sibling colours in a BOM template."""
+    bom_template = clean_text(body.get("bomTemplate") or body.get("materialCode")).upper()
+    material_codes_raw = body.get("materialCodes")
+    material_codes = (
+        [code for code in (clean_text(item).upper() for item in material_codes_raw) if code]
+        if isinstance(material_codes_raw, list)
+        else None
+    )
+    if not bom_template:
+        raise HTTPException(status_code=400, detail="bomTemplate is required")
+    try:
+        result = repo.sync_missing_template_fobs(
+            session,
+            bom_template=bom_template,
+            target_material_codes=material_codes,
+            changed_by=user.name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    return result
+
+
 @router.post("/countries/copy-fobs")
 def copy_country_fobs(
     body: dict,
@@ -1128,6 +1158,7 @@ def create_material_sku(
     colour_code = clean_text(body.get("colourCode")).upper()
     colour = clean_text(body.get("colour")) or colour_code
     colour_type = clean_text(body.get("colourType")) or "single"
+    requested_colour_tier = clean_text(body.get("colourTier")).lower()
     powertrain = clean_text(body.get("powertrain")) or "Other"
     bom_template = clean_text(body.get("bomTemplate")).upper() or material_code
     source_bom_template = clean_text(body.get("sourceBomTemplate")).upper()
@@ -1186,12 +1217,15 @@ def create_material_sku(
         bom_template=bom_template,
         powertrain=powertrain,
         colour_hex=colour_hex,
-        colour_tier=infer_colour_tier(
-            colour,
-            colour_type,
-            body.get("editionTag", body.get("edition_tag")),
-            colour_code,
-            colour_hex,
+        colour_tier=merge_colour_tiers(
+            requested_colour_tier if requested_colour_tier in {"single", "dual", "special"} else None,
+            infer_colour_tier(
+                colour,
+                colour_type,
+                body.get("editionTag", body.get("edition_tag")),
+                colour_code,
+                colour_hex,
+            ),
         ),
         lifecycle_status="active",
         is_active=True,
@@ -1199,13 +1233,20 @@ def create_material_sku(
         baseline_version_id=baseline.baseline_version_id,
     )
     session.add(sku)
-    copied_finance_rows = repo.copy_country_material_finance_template(
-        session,
-        source_bom_template,
-        bom_template,
-        updated_by=user.name,
-    )
     try:
+        session.flush()
+        copied_finance_rows = repo.copy_country_material_finance_template(
+            session,
+            source_bom_template,
+            bom_template,
+            updated_by=user.name,
+        )
+        copied_fob_rows = repo.sync_missing_template_fobs(
+            session,
+            bom_template=bom_template,
+            target_material_codes=[material_code],
+            changed_by=user.name,
+        )
         session.commit()
     except IntegrityError as exc:
         session.rollback()
@@ -1217,6 +1258,7 @@ def create_material_sku(
         "materialCode": sku.material_code,
         "id": str(sku.material_sku_id),
         "copiedFinanceRows": copied_finance_rows,
+        "copiedFobRows": copied_fob_rows,
     }
 
 

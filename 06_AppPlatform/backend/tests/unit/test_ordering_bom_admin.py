@@ -54,6 +54,17 @@ class _FakeSession:
         self.added.append(row)
 
 
+class _QueuedExecuteSession(_FakeSession):
+    def __init__(self, execute_batches: list[list[object]]):
+        super().__init__()
+        self.execute_batches = list(execute_batches)
+
+    def execute(self, _stmt: object) -> _ExecuteResult:
+        if not self.execute_batches:
+            return _ExecuteResult([])
+        return _ExecuteResult(self.execute_batches.pop(0))
+
+
 class _QueryResult:
     def __init__(self, values: list[object]):
         self.values = values
@@ -686,3 +697,109 @@ def test_adjust_country_fobs_updates_rows_and_writes_history(monkeypatch) -> Non
     assert history.old_final_fob_eur == 14900
     assert history.new_final_fob_eur == 15100
     assert history.changed_by == "admin"
+
+
+def test_sync_missing_template_fobs_backfills_new_colour_rows_only() -> None:
+    baseline_id = uuid4()
+    template = "T6481QN**LX0002"
+    base = SimpleNamespace(
+        material_code="T6481QNBWLX0002",
+        bom_template=template,
+        brand="JAECOO",
+        exterior_color_name="Khaki white",
+        exterior_color_code="BW",
+        exterior_color_type="single",
+        colour_tier="single",
+        colour_hex=None,
+        edition_tag=None,
+    )
+    cleared = SimpleNamespace(
+        material_code="T6481QNKYLX0002",
+        bom_template=template,
+        brand="JAECOO",
+        exterior_color_name="Gray",
+        exterior_color_code="KY",
+        exterior_color_type="single",
+        colour_tier="single",
+        colour_hex=None,
+        edition_tag=None,
+    )
+    dual = SimpleNamespace(
+        material_code="T6481QNZELX0002",
+        bom_template=template,
+        brand="JAECOO",
+        exterior_color_name="Black & White",
+        exterior_color_code="ZE",
+        exterior_color_type="dual",
+        colour_tier="dual",
+        colour_hex="#111111|#FFFFFF",
+        edition_tag=None,
+    )
+    special = SimpleNamespace(
+        material_code="T6481QNUELX0002",
+        bom_template=template,
+        brand="JAECOO",
+        exterior_color_name="Matte gray",
+        exterior_color_code="UE",
+        exterior_color_type="special",
+        colour_tier="special",
+        colour_hex="#777777",
+        edition_tag=None,
+    )
+    base_fob = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=baseline_id,
+        country_code="AT",
+        material_code=base.material_code,
+        payment_term_code="LC90",
+        uploaded_fob_eur=28000,
+        final_fob_eur=28000,
+        fob_source_mode="manual_edit",
+        is_active=True,
+    )
+    cleared_fob = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=baseline_id,
+        country_code="AT",
+        material_code=cleared.material_code,
+        payment_term_code="LC90",
+        uploaded_fob_eur=0,
+        final_fob_eur=0,
+        fob_source_mode="manual_edit",
+        is_active=True,
+    )
+    dual_rule = BrandColourSurchargeRule(
+        colour_surcharge_rule_id=uuid4(),
+        brand="JAECOO",
+        colour_type="dual",
+        surcharge_eur=300,
+        is_active=True,
+    )
+    special_rule = BrandColourSurchargeRule(
+        colour_surcharge_rule_id=uuid4(),
+        brand="JAECOO",
+        colour_type="special",
+        surcharge_eur=300,
+        is_active=True,
+    )
+    fake_session = _QueuedExecuteSession([
+        [base, cleared, dual, special],
+        [base_fob, cleared_fob],
+        [dual_rule],
+        [special_rule],
+    ])
+
+    result = repo.sync_missing_template_fobs(
+        fake_session,
+        bom_template=template,
+        changed_by="admin",
+    )
+
+    assert result["created"] == 2
+    assert result["skippedExisting"] == 1
+    assert result["skippedCleared"] == 1
+    created_by_code = {row.material_code: row for row in fake_session.added}
+    assert created_by_code[dual.material_code].final_fob_eur == 28300
+    assert created_by_code[dual.material_code].fob_source_mode == "derived_from_template_colour"
+    assert created_by_code[special.material_code].final_fob_eur == 28300
+    assert cleared.material_code not in created_by_code
