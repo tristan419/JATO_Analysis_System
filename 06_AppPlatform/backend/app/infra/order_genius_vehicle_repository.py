@@ -244,6 +244,13 @@ def list_vehicles(
     vin: str | None = None,
     material_code: str | None = None,
     bom: str | None = None,
+    brand: str | None = None,
+    model_name: str | None = None,
+    version: str | None = None,
+    powertrain: str | None = None,
+    exterior_color_name: str | None = None,
+    interior_color_name: str | None = None,
+    order_month: str | None = None,
     country: str | None = None,
     ship_name: str | None = None,
     allocation_status: str | None = None,
@@ -258,6 +265,9 @@ def list_vehicles(
     page_size: int = 100,
 ) -> tuple[list[PiVehicleUnit], int]:
     stmt = select(PiVehicleUnit)
+    if order_month:
+        stmt = stmt.join(PiOrderHeader, PiVehicleUnit.pi_code == PiOrderHeader.pi_code)
+        stmt = stmt.where(PiOrderHeader.order_month == order_month)
     if keyword:
         pattern = f"%{keyword}%"
         stmt = stmt.where(or_(
@@ -267,6 +277,10 @@ def list_vehicles(
             PiVehicleUnit.vin.ilike(pattern),
             PiVehicleUnit.material_code.ilike(pattern),
             PiVehicleUnit.bom.ilike(pattern),
+            PiVehicleUnit.model_name.ilike(pattern),
+            PiVehicleUnit.version.ilike(pattern),
+            PiVehicleUnit.exterior_color_name.ilike(pattern),
+            PiVehicleUnit.interior_color_name.ilike(pattern),
         ))
     filters = {
         PiVehicleUnit.pi_code: pi_code,
@@ -283,6 +297,17 @@ def list_vehicles(
     for column, value in filters.items():
         if value:
             stmt = stmt.where(column == value)
+    text_filters = {
+        PiVehicleUnit.brand: brand,
+        PiVehicleUnit.model_name: model_name,
+        PiVehicleUnit.version: version,
+        PiVehicleUnit.powertrain: powertrain,
+        PiVehicleUnit.exterior_color_name: exterior_color_name,
+        PiVehicleUnit.interior_color_name: interior_color_name,
+    }
+    for column, value in text_filters.items():
+        if value:
+            stmt = stmt.where(column.ilike(f"%{value}%"))
     if eta_from:
         stmt = stmt.where(PiVehicleUnit.eta >= eta_from)
     if eta_to:

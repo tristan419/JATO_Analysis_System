@@ -68,6 +68,7 @@ export interface OrderGeniusGridProps {
   rows: OrderGeniusGridRow[];
   selectedMonth: number | null;
   selectedRowIds?: ReadonlySet<string>;
+  piSelectionSummary?: PiSelectionSummary;
   canEditQuantities: boolean;
   visibleColumns: {
     months: boolean;
@@ -89,9 +90,45 @@ interface OrderGeniusGridContext {
   onToggleGroup?: (groupKey: string) => void;
 }
 
+interface PiSelectionSummary {
+  selectedCount: number;
+  selectableCount: number;
+  allSelected: boolean;
+  partialSelected: boolean;
+  onToggleAll: (selected: boolean) => void;
+}
+
 type GroupHeaderRendererProps = ICellRendererParams<OrderGeniusGridRow, string> & {
   context?: OrderGeniusGridContext;
 };
+
+function PiSelectHeader({ summary }: { summary?: PiSelectionSummary }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.indeterminate = Boolean(summary?.partialSelected);
+    }
+  }, [summary?.partialSelected]);
+
+  const disabled = !summary || summary.selectableCount === 0;
+  return (
+    <label
+      className="og-pi-select-header"
+      title={disabled ? "Select one month with positive quantities first" : `Select all ${summary.selectableCount} visible PI rows`}
+    >
+      <input
+        ref={inputRef}
+        type="checkbox"
+        checked={summary?.allSelected ?? false}
+        disabled={disabled}
+        onChange={(event) => summary?.onToggleAll(event.currentTarget.checked)}
+        aria-label="Select all PI rows"
+      />
+      <span>PI</span>
+    </label>
+  );
+}
 
 export function getOrderGeniusRowId(row: OrderGeniusGridRow): string {
   return [
@@ -110,6 +147,7 @@ export function buildOrderGeniusColumnDefs(
   selectedMonth: number | null,
   vis: OrderGeniusGridProps["visibleColumns"],
   canEditQuantities: boolean,
+  piSelectionSummary?: PiSelectionSummary,
   isPiRowSelected?: (row: OrderGeniusGridRow) => boolean,
   onTogglePiRow?: (row: OrderGeniusGridRow, selected: boolean) => void,
 ): ColDef<OrderGeniusGridRow>[] {
@@ -121,6 +159,7 @@ export function buildOrderGeniusColumnDefs(
       colId: "piSelect",
       headerName: "PI",
       headerTooltip: "Tick rows to include their selected-month quantity in PI batch creation.",
+      headerComponent: () => <PiSelectHeader summary={piSelectionSummary} />,
       pinned: "left",
       width: 52,
       editable: false,
@@ -436,6 +475,7 @@ export function OrderGeniusGrid({
   rows,
   selectedMonth,
   selectedRowIds,
+  piSelectionSummary,
   canEditQuantities,
   visibleColumns,
   showCountry,
@@ -458,10 +498,11 @@ export function OrderGeniusGrid({
       selectedMonth,
       visibleColumns,
       canEditQuantities,
+      piSelectionSummary,
       isPiRowSelected,
       onTogglePiRow,
     ),
-    [canEditQuantities, showCountry, selectedMonth, visibleColumns, isPiRowSelected, onTogglePiRow],
+    [canEditQuantities, showCountry, selectedMonth, visibleColumns, piSelectionSummary, isPiRowSelected, onTogglePiRow],
   );
 
   const defaultColDef = useMemo<ColDef<OrderGeniusGridRow>>(

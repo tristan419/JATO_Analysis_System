@@ -3821,7 +3821,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
     }),
 
-  exportOrderGeniusPi: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; hideEmptyRows?: boolean }) =>
+  exportOrderGeniusPi: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; hideEmptyRows?: boolean; freightEur?: number; insuranceEur?: number }) =>
     requestBlob("/order-genius/export-pi", {
       method: "POST",
       body: JSON.stringify({ country, year, ...opts }),
@@ -3942,6 +3942,13 @@ export const api = {
     appendSearchParam(qs, "vin", params.vin);
     appendSearchParam(qs, "material_code", params.materialCode);
     appendSearchParam(qs, "bom", params.bom);
+    appendSearchParam(qs, "brand", params.brand);
+    appendSearchParam(qs, "model_name", params.modelName);
+    appendSearchParam(qs, "version", params.version);
+    appendSearchParam(qs, "powertrain", params.powertrain);
+    appendSearchParam(qs, "exterior_color_name", params.exteriorColorName);
+    appendSearchParam(qs, "interior_color_name", params.interiorColorName);
+    appendSearchParam(qs, "order_month", params.orderMonth);
     appendSearchParam(qs, "country", params.country);
     appendSearchParam(qs, "ship_name", params.shipName);
     appendSearchParam(qs, "allocation_status", params.allocationStatus);
@@ -4067,8 +4074,8 @@ export const api = {
   confirmColourCode: (materialCode: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/confirm-colour-code`, { method: "PATCH" }),
 
-  updateColourCode: (materialCode: string, colourCode: string) =>
-    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/colour-code`, { method: "PATCH", body: JSON.stringify({ colourCode }) }),
+  updateColourCode: (materialCode: string, body: { colourCode: string; colourName?: string; colourHex?: string | null }) =>
+    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/colour-code`, { method: "PATCH", body: JSON.stringify(body) }),
 
   updateMaterialCode: (oldCode: string, newCode: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(oldCode)}/material-code`, { method: "PATCH", body: JSON.stringify({ materialCode: newCode }) }),

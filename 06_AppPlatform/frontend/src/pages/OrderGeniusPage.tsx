@@ -663,6 +663,7 @@ export function OrderGeniusPage() {
   const [orderingAccountCodeEdited, setOrderingAccountCodeEdited] = useState(false);
   const [creatingPiBatch, setCreatingPiBatch] = useState(false);
   const [piBatchNotice, setPiBatchNotice] = useState("");
+  const [piBatchCreatedCodes, setPiBatchCreatedCodes] = useState<string[]>([]);
   const matrixRequestIdRef = useRef(0);
 
   useEffect(() => {
@@ -1314,16 +1315,52 @@ export function OrderGeniusPage() {
     return result;
   }, [flatRows, consolidatedView, selectedCountries.length, hideEmptyRows, selectedMonth]);
 
+  const piCandidateRows = useMemo<OrderGeniusGridRow[]>(() => {
+    if (selectedMonth == null) return [];
+    const seen = new Set<string>();
+    const result: OrderGeniusGridRow[] = [];
+    for (const row of combinedMatrix.rows) {
+      const modelName = row.modelName?.trim() || "";
+      if (!modelName || /^[\d\s]+$/.test(modelName)) continue;
+      const rowKey = `${row._countryCode || ""}|${row.materialCode}|${row.lifecycleStatus}|${row.modelName}|${row.version}|${row.colour}|${row.interiorColorName || ""}`;
+      if (seen.has(rowKey)) continue;
+      seen.add(rowKey);
+      const stateKey = quantityCellKey(row._countryCode, row.materialCode, selectedMonth);
+      const quantity = Object.prototype.hasOwnProperty.call(quantityDrafts, stateKey)
+        ? quantityDrafts[stateKey] ?? 0
+        : row.months?.[String(selectedMonth)]?.quantity ?? 0;
+      const candidateRow: OrderGeniusGridRow = {
+        materialCode: row.materialCode,
+        bomTemplate: row.bomTemplate,
+        modelName: row.modelName,
+        version: row.version,
+        colour: row.colour,
+        interiorColorName: row.interiorColorName,
+        fobEur: row.fobEur ?? null,
+        lifecycleStatus: row.lifecycleStatus,
+        editable: row.editable,
+        remark: row.remark ?? undefined,
+        _countryCode: row._countryCode,
+        _versions: {},
+        _errors: {},
+        _saving: new Set(),
+      };
+      candidateRow[`month_${selectedMonth}`] = quantity;
+      result.push(candidateRow);
+    }
+    return result;
+  }, [combinedMatrix.rows, quantityDrafts, selectedMonth]);
+
   const selectablePiRows = useMemo(() => {
     if (selectedMonth == null) return [];
     const monthField = `month_${selectedMonth}` as `month_${number}`;
-    return displayRows.filter((row) =>
+    return piCandidateRows.filter((row) =>
       row.__type !== "groupHeader"
       && row.__type !== "consolidated_parent"
       && row.lifecycleStatus !== "historical"
       && (row[monthField] || 0) > 0,
     );
-  }, [displayRows, selectedMonth]);
+  }, [piCandidateRows, selectedMonth]);
 
   const selectablePiRowsById = useMemo(() => {
     const result = new Map<string, OrderGeniusGridRow>();
@@ -1350,6 +1387,13 @@ export function OrderGeniusPage() {
     }, 0);
   }, [piBatchQuantities, selectedMonth, selectedPiRows]);
 
+  const allSelectablePiRowsSelected = useMemo(() => {
+    return selectedMonth != null
+      && selectablePiRows.length > 0
+      && selectablePiRows.every((row) => piSelectedRowIds.has(getOrderGeniusRowId(row)));
+  }, [piSelectedRowIds, selectablePiRows, selectedMonth]);
+  const partialSelectablePiRowsSelected = selectedPiRows.length > 0 && !allSelectablePiRowsSelected;
+
   const selectedPiCountries = useMemo(() => uniqueCountryCodes(selectedPiRows), [selectedPiRows]);
   const piBatchScopeSummary = useMemo(() => {
     if (selectedMonth == null) return "Select one month";
@@ -1365,6 +1409,7 @@ export function OrderGeniusPage() {
     setPiBatchQuantities({});
     setOrderingAccountCodeEdited(false);
     setPiBatchNotice("");
+    setPiBatchCreatedCodes([]);
   }, [selectedMonth, selectedYear, selectedCountries]);
 
   useEffect(() => {
@@ -1580,6 +1625,7 @@ export function OrderGeniusPage() {
       return next;
     });
     setPiBatchNotice("");
+    setPiBatchCreatedCodes([]);
   }, [selectedMonth]);
 
   const updatePiBatchQuantity = (row: OrderGeniusGridRow, quantity: number): void => {
@@ -1588,6 +1634,48 @@ export function OrderGeniusPage() {
     const nextQuantity = Math.max(0, Math.min(Math.floor(quantity || 0), monthQuantity));
     setPiBatchQuantities((current) => ({ ...current, [rowId]: nextQuantity }));
     setPiBatchNotice("");
+    setPiBatchCreatedCodes([]);
+  };
+
+  const toggleAllPiBatchRows = useCallback((selected: boolean): void => {
+    if (!selected || selectedMonth == null) {
+      setPiSelectedRowIds(new Set());
+      setPiBatchQuantities({});
+      setPiBatchNotice("");
+      setPiBatchCreatedCodes([]);
+      return;
+    }
+    const nextIds = new Set<string>();
+    const nextQuantities: Record<string, number> = {};
+    for (const row of selectablePiRows) {
+      const rowId = getOrderGeniusRowId(row);
+      const monthQuantity = row[`month_${selectedMonth}`] || 0;
+      nextIds.add(rowId);
+      nextQuantities[rowId] = Math.max(1, monthQuantity);
+    }
+    setPiSelectedRowIds(nextIds);
+    setPiBatchQuantities(nextQuantities);
+    setPiBatchNotice("");
+    setPiBatchCreatedCodes([]);
+  }, [selectablePiRows, selectedMonth]);
+
+  const piSelectionSummary = useMemo(() => ({
+    selectedCount: selectedPiRows.length,
+    selectableCount: selectablePiRows.length,
+    allSelected: allSelectablePiRowsSelected,
+    partialSelected: partialSelectablePiRowsSelected,
+    onToggleAll: toggleAllPiBatchRows,
+  }), [
+    allSelectablePiRowsSelected,
+    partialSelectablePiRowsSelected,
+    selectablePiRows.length,
+    selectedPiRows.length,
+    toggleAllPiBatchRows,
+  ]);
+
+  const vehicleAllocationUrl = (piCode: string): string => {
+    const params = new URLSearchParams({ pi: piCode });
+    return `/product/order-genius/vehicle-allocation?${params.toString()}`;
   };
 
   const clearPiBatchSelection = (): void => {
@@ -1595,6 +1683,7 @@ export function OrderGeniusPage() {
     setPiBatchQuantities({});
     setOrderingAccountCodeEdited(false);
     setPiBatchNotice("");
+    setPiBatchCreatedCodes([]);
   };
 
   const handleCreatePiBatch = async (): Promise<void> => {
@@ -1681,6 +1770,7 @@ export function OrderGeniusPage() {
     setCreatingPiBatch(true);
     setError("");
     setPiBatchNotice("");
+    setPiBatchCreatedCodes([]);
     try {
       const createdCodes: string[] = [];
       if (piBatchMode === "by_account") {
@@ -1730,6 +1820,7 @@ export function OrderGeniusPage() {
         shipmentBatchCode: "",
       }));
       setPiBatchNotice(`Created ${createdCodes.join(", ")}`);
+      setPiBatchCreatedCodes(createdCodes);
     } catch (err: unknown) {
       setError(`PI batch failed: ${getErrorMessage(err)}`);
     } finally {
@@ -1740,6 +1831,9 @@ export function OrderGeniusPage() {
   // ── Export ─────────────────────────────────────────────────────────
 
   const [mergeExport, setMergeExport] = useState(false);
+  const [showPiExportOptions, setShowPiExportOptions] = useState(false);
+  const [piExportFreightEur, setPiExportFreightEur] = useState("");
+  const [piExportInsuranceEur, setPiExportInsuranceEur] = useState("");
 
   const buildExportOptions = () => ({
     brand: brandFilter || undefined,
@@ -1753,6 +1847,13 @@ export function OrderGeniusPage() {
   });
 
   const exportMonthSuffix = () => selectedMonth ? `_M${String(selectedMonth).padStart(2, "0")}` : "";
+
+  const optionalExportNumber = (value: string): number | undefined => {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+  };
 
   const handleExport = async () => {
     const exportOptions = {
@@ -1791,7 +1892,21 @@ export function OrderGeniusPage() {
   };
 
   const handlePiExport = async () => {
-    const exportOptions = buildExportOptions();
+    const freightEur = optionalExportNumber(piExportFreightEur);
+    const insuranceEur = optionalExportNumber(piExportInsuranceEur);
+    if (piExportFreightEur.trim() && freightEur === undefined) {
+      setError("PI freight must be a non-negative number");
+      return;
+    }
+    if (piExportInsuranceEur.trim() && insuranceEur === undefined) {
+      setError("PI insurance must be a non-negative number");
+      return;
+    }
+    const exportOptions = {
+      ...buildExportOptions(),
+      freightEur,
+      insuranceEur,
+    };
     const monthSuffix = exportMonthSuffix();
     try {
       for (const country of selectedCountries) {
@@ -2122,7 +2237,7 @@ export function OrderGeniusPage() {
                 disabled={combinedMatrix.totalRows === 0}>
           Export XLSX
         </button>
-        <button type="button" className="btn btn-sm btn-ghost" onClick={handlePiExport}
+        <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowPiExportOptions((open) => !open)}
                 disabled={combinedMatrix.totalRows === 0}>
           Export PI
         </button>
@@ -2139,6 +2254,35 @@ export function OrderGeniusPage() {
           </button>
         )}
       </div>
+      {showPiExportOptions ? (
+        <div className="og-pi-export-options">
+          <label>
+            单车运费
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={piExportFreightEur}
+              onChange={(event) => setPiExportFreightEur(event.target.value)}
+              placeholder="blank"
+            />
+          </label>
+          <label>
+            单车保险
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={piExportInsuranceEur}
+              onChange={(event) => setPiExportInsuranceEur(event.target.value)}
+              placeholder="blank"
+            />
+          </label>
+          <button type="button" className="btn btn-sm btn-primary" onClick={handlePiExport}>
+            Download PI
+          </button>
+        </div>
+      ) : null}
       </div>
       ) : null}
 
@@ -2149,6 +2293,20 @@ export function OrderGeniusPage() {
             <span title="Select one month, tick PI rows, then create PI from the selected order quantities">
               {selectedMonth ? `${selectedPiRows.length} rows · ${selectedPiQuantityTotal} units · ${piBatchScopeSummary}` : "Select month"}
             </span>
+            <label
+              className="og-pi-batch-select-all"
+              title={selectablePiRows.length > 0 ? "Select every visible row with a positive quantity for the selected month" : "No selectable PI rows"}
+            >
+              <input
+                type="checkbox"
+                checked={allSelectablePiRowsSelected}
+                disabled={selectablePiRows.length === 0}
+                onChange={(event) => toggleAllPiBatchRows(event.currentTarget.checked)}
+              />
+              {partialSelectablePiRowsSelected
+                ? `Selected ${selectedPiRows.length}/${selectablePiRows.length}`
+                : "Select all"}
+            </label>
           </div>
           <div className="og-pi-batch-mode" role="group" aria-label="PI batch scope">
             <button
@@ -2276,7 +2434,20 @@ export function OrderGeniusPage() {
               Clear
             </button>
           </div>
-          {piBatchNotice ? <div className="og-pi-batch-notice">{piBatchNotice}</div> : null}
+          {piBatchNotice ? (
+            <div className="og-pi-batch-notice">
+              <span>{piBatchNotice}</span>
+              {piBatchCreatedCodes.length > 0 ? (
+                <span className="og-pi-batch-links">
+                  {piBatchCreatedCodes.map((piCode) => (
+                    <a key={piCode} href={vehicleAllocationUrl(piCode)}>
+                      Open {piCode}
+                    </a>
+                  ))}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -2538,6 +2709,7 @@ export function OrderGeniusPage() {
           rows={displayRows}
           selectedMonth={selectedMonth}
           selectedRowIds={piSelectedRowIds}
+          piSelectionSummary={piSelectionSummary}
           canEditQuantities={canFillOrders}
           visibleColumns={visibleColumns}
           showCountry={selectedCountries.length > 1}
@@ -2692,6 +2864,40 @@ type BomColourSwatchEditor = {
   anchorTop: number;
 };
 
+type BomColourCodeEditor = {
+  materialCode: string;
+  brand: string;
+  modelName: string;
+  version: string;
+  currentColourName: string;
+  nextColourName: string;
+  currentColourCode: string;
+  nextColourCode: string;
+  nextColourHex: string;
+  nextColourHex2: string;
+  isDualSwatch: boolean;
+  colourHexTouched: boolean;
+};
+
+type BomAddColourEditor = {
+  bomTemplate: string;
+  tierName: BomAdminColourTier;
+  sourceMaterialCode: string;
+  brand: string;
+  modelName: string;
+  version: string;
+  powertrain: string;
+  interiorColorName: string;
+  editionTag: string | null;
+  fobSourceSku: any | null;
+  fobSourceCountries: number;
+  colourCode: string;
+  colourName: string;
+  colourHex: string;
+  colourHex2: string;
+  colourHexTouched: boolean;
+};
+
 interface BomFinanceQuickCard {
   countryCode: string;
   materialCode: string;
@@ -2832,8 +3038,17 @@ function BomAdminPanel({
   const [savingColourHexRuleKey, setSavingColourHexRuleKey] = useState<string | null>(null);
   const [colourSwatchEditor, setColourSwatchEditor] = useState<BomColourSwatchEditor | null>(null);
   const [savingColourSwatchEditor, setSavingColourSwatchEditor] = useState(false);
+  const [colourCodeEditor, setColourCodeEditor] = useState<BomColourCodeEditor | null>(null);
+  const [colourCodeEditorError, setColourCodeEditorError] = useState("");
+  const [savingColourCodeEditor, setSavingColourCodeEditor] = useState(false);
+  const [addColourEditor, setAddColourEditor] = useState<BomAddColourEditor | null>(null);
+  const [addColourEditorError, setAddColourEditorError] = useState("");
+  const [savingAddColourEditor, setSavingAddColourEditor] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const materialCodeInputRef = useRef<HTMLInputElement>(null);
+  const colourCodeEditorInputRef = useRef<HTMLInputElement>(null);
+  const addColourEditorCodeRef = useRef<HTMLInputElement>(null);
+  const addColourEditorNameRef = useRef<HTMLInputElement>(null);
   const copyDraftInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const bomGroupRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const expandedBomGroupKeyRef = useRef<string | null>(null);
@@ -2841,9 +3056,6 @@ function BomAdminPanel({
   const [dragOverTier, setDragOverTier] = useState<string | null>(null);
   const dragEnterCount = useRef(0);
   const dragMaterialCode = useRef<string | null>(null); // bypass dataTransfer quirks
-  const [addColourKey, setAddColourKey] = useState<string | null>(null); // "{bomTemplate}|{tierName}" to show inline form
-  const addColourCodeRef = useRef<HTMLInputElement>(null);
-  const addColourNameRef = useRef<HTMLInputElement>(null);
   const [editingBoms, setEditingBoms] = useState<Set<string>>(new Set());
   const toggleEditBom = (key: string) => {
     setEditingBoms(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
@@ -3809,6 +4021,40 @@ function BomAdminPanel({
     }
   };
 
+  const hasPositiveFob = (sku: any): boolean =>
+    Object.values((sku?.fobByCountry as Record<string, BomDraftFobEntry>) || {}).some(
+      (fob) => getDraftBaseFob(fob) != null,
+    );
+
+  const pickFobSourceSkuForNewColour = (tierSkus: any[], allSkus: any[]): any | null =>
+    tierSkus.find(hasPositiveFob) || allSkus.find(hasPositiveFob) || null;
+
+  const copyPositiveFobsToMaterial = async (
+    targetMaterialCode: string,
+    sourceSku: any | null,
+  ): Promise<BomFobPatch[]> => {
+    if (!targetMaterialCode || !sourceSku) return [];
+    const updates: BomFobPatch[] = [];
+    const sourceFobs = (sourceSku.fobByCountry as Record<string, BomDraftFobEntry>) || {};
+    for (const [countryCode, fob] of Object.entries(sourceFobs)) {
+      const baseFob = getDraftBaseFob(fob);
+      if (baseFob == null) continue;
+      await api.updateSkuFob(targetMaterialCode, {
+        countryCode,
+        finalFobEur: baseFob,
+        paymentTermCode: fob.paymentTermCode ?? undefined,
+      });
+      updates.push({
+        materialCode: targetMaterialCode,
+        countryCode,
+        finalFobEur: baseFob,
+        paymentTermCode: fob.paymentTermCode,
+        fobSourceMode: "copied_from_template_colour",
+      });
+    }
+    return updates;
+  };
+
   const handleCopyMaterialFromBom = (
     draftKey: string,
     bomTemplate: string,
@@ -4069,12 +4315,36 @@ function BomAdminPanel({
     }
   };
 
-  const normalizeColourPickerValue = (value: string, fallback = "#94A3B8"): string => {
+  const DEFAULT_COLOUR_SWATCH_HEX = "#94A3B8";
+
+  const normalizeColourPickerValue = (value: string, fallback = DEFAULT_COLOUR_SWATCH_HEX): string => {
     const text = String(value || "").trim().toUpperCase();
     return /^#[0-9A-F]{6}$/.test(text) ? text : fallback;
   };
 
   const isColourPickerValue = (value: string): boolean => /^#[0-9A-Fa-f]{6}$/.test(String(value || "").trim());
+
+  const splitColourHexValue = (value: unknown): { hex1: string; hex2: string; isDual: boolean; hasStoredHex: boolean } => {
+    const parts = String(value || "")
+      .split("|")
+      .map((part) => part.trim().toUpperCase())
+      .filter(Boolean);
+    const hex1 = parts[0] && isColourPickerValue(parts[0]) ? parts[0] : DEFAULT_COLOUR_SWATCH_HEX;
+    const hex2 = parts[1] && isColourPickerValue(parts[1]) ? parts[1] : hex1;
+    return {
+      hex1,
+      hex2,
+      isDual: parts.length >= 2,
+      hasStoredHex: parts.some((part) => isColourPickerValue(part)),
+    };
+  };
+
+  const buildSwatchPayload = (hex1: string, hex2: string, isDual: boolean): string => {
+    const first = String(hex1 || "").trim().toUpperCase();
+    const second = String(hex2 || "").trim().toUpperCase();
+    if (!first) return "";
+    return isDual ? `${first}|${second || first}` : first;
+  };
 
   const handleSaveColourSwatchEditor = async () => {
     if (!colourSwatchEditor) return;
@@ -4098,6 +4368,181 @@ function BomAdminPanel({
       setColourHexRuleStatus(getErrorMessage(e));
     } finally {
       setSavingColourSwatchEditor(false);
+    }
+  };
+
+  const openColourCodeEditor = (sku: any) => {
+    const currentColourCode = String(sku.colourCode || "").trim().toUpperCase();
+    const currentColourName = String(sku.colour || "").trim();
+    const currentSwatch = splitColourHexValue(sku.colourHex);
+    const isDualSwatch = currentSwatch.isDual || getEffectiveColourTier(sku) === "dual";
+    setColourCodeEditorError("");
+    setColourCodeEditor({
+      materialCode: String(sku.materialCode || ""),
+      brand: String(sku.brand || ""),
+      modelName: String(sku.modelName || ""),
+      version: String(sku.version || ""),
+      currentColourName,
+      nextColourName: currentColourName,
+      currentColourCode,
+      nextColourCode: currentColourCode,
+      nextColourHex: currentSwatch.hex1,
+      nextColourHex2: currentSwatch.hex2,
+      isDualSwatch,
+      colourHexTouched: false,
+    });
+  };
+
+  const handleColourCodeEditorSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!colourCodeEditor) return;
+    const nextCode = colourCodeEditor.nextColourCode.trim().toUpperCase();
+    if (!/^[A-Z0-9]{1,4}$/.test(nextCode)) {
+      setColourCodeEditorError("Colour code must be 1-4 letters or numbers.");
+      return;
+    }
+    const nextName = colourCodeEditor.nextColourName.trim();
+    const nameChanged = nextName && nextName !== colourCodeEditor.currentColourName;
+    const hexChanged = colourCodeEditor.colourHexTouched;
+    const nextColourHexPayload = buildSwatchPayload(
+      colourCodeEditor.nextColourHex,
+      colourCodeEditor.nextColourHex2,
+      colourCodeEditor.isDualSwatch,
+    );
+    const nextColourHexParts = nextColourHexPayload ? nextColourHexPayload.split("|") : [];
+    if (nextColourHexParts.some((part) => !isColourPickerValue(part))) {
+      setColourCodeEditorError("Swatch must use #RRGGBB.");
+      return;
+    }
+    if (nextCode === colourCodeEditor.currentColourCode && !nameChanged && !hexChanged) {
+      setColourCodeEditor(null);
+      return;
+    }
+    setSavingColourCodeEditor(true);
+    setColourCodeEditorError("");
+    try {
+      const result = await api.updateColourCode(colourCodeEditor.materialCode, {
+        colourCode: nextCode,
+        colourName: nextName || undefined,
+        colourHex: colourCodeEditor.colourHexTouched ? nextColourHexPayload : undefined,
+      });
+      setBomAdminError("");
+      setBomAdminNotice(`Updated ${result.oldMaterialCode || colourCodeEditor.materialCode} to ${result.materialCode}.`);
+      setColourCodeEditor(null);
+      await load();
+      onFobChanged?.();
+    } catch (err) {
+      setColourCodeEditorError(getErrorMessage(err));
+    } finally {
+      setSavingColourCodeEditor(false);
+    }
+  };
+
+  const openAddColourEditor = (
+    bomTemplate: string,
+    tierName: BomAdminColourTier,
+    ref: any,
+    tierSkus: any[],
+    allSkus: any[],
+  ) => {
+    const fobSourceSku = pickFobSourceSkuForNewColour(tierSkus, allSkus);
+    const fobSourceCountries = Object.values((fobSourceSku?.fobByCountry as Record<string, BomDraftFobEntry>) || {})
+      .filter((fob) => getDraftBaseFob(fob) != null)
+      .length;
+    setAddColourEditorError("");
+    setAddColourEditor({
+      bomTemplate: String(bomTemplate || "").trim().toUpperCase(),
+      tierName,
+      sourceMaterialCode: String(ref?.materialCode || "").trim().toUpperCase(),
+      brand: String(ref?.brand || ""),
+      modelName: String(ref?.modelName || ""),
+      version: String(ref?.version || ""),
+      powertrain: String(ref?.powertrain || "ICE"),
+      interiorColorName: String(ref?.interiorColorName || ""),
+      editionTag: ref?.editionTag ? String(ref.editionTag) : null,
+      fobSourceSku,
+      fobSourceCountries,
+      colourCode: "",
+      colourName: "",
+      colourHex: DEFAULT_COLOUR_SWATCH_HEX,
+      colourHex2: DEFAULT_COLOUR_SWATCH_HEX,
+      colourHexTouched: false,
+    });
+  };
+
+  const handleAddColourEditorSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!addColourEditor) return;
+    const colourCode = addColourEditor.colourCode.trim().toUpperCase();
+    const colourName = addColourEditor.colourName.trim();
+    if (!/^[A-Z0-9]{1,4}$/.test(colourCode)) {
+      setAddColourEditorError("Colour code must be 1-4 letters or numbers.");
+      return;
+    }
+    if (!addColourEditor.bomTemplate.includes("**")) {
+      setAddColourEditorError("This BOM template needs ** before adding another colour.");
+      return;
+    }
+    const newColourHexPayload = addColourEditor.colourHexTouched
+      ? buildSwatchPayload(addColourEditor.colourHex, addColourEditor.colourHex2, addColourEditor.tierName === "dual")
+      : "";
+    const newColourHexParts = newColourHexPayload ? newColourHexPayload.split("|") : [];
+    if (newColourHexParts.some((part) => !isColourPickerValue(part))) {
+      setAddColourEditorError("Swatch must use #RRGGBB.");
+      return;
+    }
+    const materialCode = resolveMaterialCodeFromTemplate(
+      addColourEditor.bomTemplate,
+      colourCode,
+      addColourEditor.sourceMaterialCode,
+    );
+    if (!materialCode) {
+      setAddColourEditorError("Material code cannot be generated from this BOM template.");
+      return;
+    }
+    if (skus.some((sku) => String(sku.materialCode || "").toUpperCase() === materialCode)) {
+      setAddColourEditorError(`Material code already exists: ${materialCode}`);
+      return;
+    }
+
+    setSavingAddColourEditor(true);
+    setAddColourEditorError("");
+    try {
+      await api.createMaterialSku({
+        materialCode,
+        bomTemplate: addColourEditor.bomTemplate,
+        brand: addColourEditor.brand,
+        modelName: addColourEditor.modelName,
+        version: addColourEditor.version,
+        colour: colourName || colourCode,
+        colourCode,
+        colourHex: addColourEditor.colourHexTouched ? newColourHexPayload : undefined,
+        colourType: addColourEditor.tierName === "dual" ? "dual" : "single",
+        powertrain: addColourEditor.powertrain,
+      });
+      await api.updateColourTier(materialCode, addColourEditor.tierName);
+      if (addColourEditor.interiorColorName) {
+        await api.updateSkuInterior(materialCode, {
+          interiorColorName: addColourEditor.interiorColorName,
+          editionTag: addColourEditor.editionTag,
+        });
+      }
+      const copiedFobs = await copyPositiveFobsToMaterial(materialCode, addColourEditor.fobSourceSku);
+      setBomAdminError("");
+      setBomAdminNotice(
+        copiedFobs.length > 0
+          ? `Created ${materialCode}; copied ${copiedFobs.length} FOB values.`
+          : `Created ${materialCode}; no source FOB was available to copy.`,
+      );
+      setAddColourEditor(null);
+      if (copiedFobs.length > 0) {
+        onFobChanged?.();
+      }
+      await load();
+    } catch (err) {
+      setAddColourEditorError(getErrorMessage(err));
+    } finally {
+      setSavingAddColourEditor(false);
     }
   };
 
@@ -4198,6 +4643,24 @@ function BomAdminPanel({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [financeQuickCard]);
+
+  useEffect(() => {
+    if (!colourCodeEditor) return;
+    const frame = window.requestAnimationFrame(() => {
+      colourCodeEditorInputRef.current?.focus();
+      colourCodeEditorInputRef.current?.select();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [colourCodeEditor]);
+
+  useEffect(() => {
+    if (!addColourEditor) return;
+    const frame = window.requestAnimationFrame(() => {
+      addColourEditorCodeRef.current?.focus();
+      addColourEditorCodeRef.current?.select();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [addColourEditor]);
 
   const toggleAddMaterialForm = () => {
     const nextVisible = !showAddMaterial;
@@ -4399,19 +4862,16 @@ function BomAdminPanel({
           }}
         />
         {s.colourCodeConfirmed === false ? (
-          <span title="Unconfirmed colour code — click to confirm" style={{ fontWeight: 700, whiteSpace: "nowrap", color: '#dc2626', cursor: 'pointer', textDecoration: 'underline' }}
+          <span title="Unconfirmed colour code — click to edit and confirm" style={{ fontWeight: 700, whiteSpace: "nowrap", color: '#dc2626', cursor: 'pointer', textDecoration: 'underline' }}
             onClick={async (e2: any) => { e2.stopPropagation();
-              const newCode = prompt('Enter correct colour code:', s.colourCode || '');
-              if (newCode) { try { await api.updateColourCode(s.materialCode, newCode.toUpperCase()); load(); } catch {} }
-              else { try { await api.confirmColourCode(s.materialCode); load(); } catch {} }
+              openColourCodeEditor(s);
             }}>
             {s.colourCode || s.colour}
           </span>
         ) : editing ? (
-          <span title="Click to edit colour code" style={{ fontWeight: 500, whiteSpace: "nowrap", fontSize: 9, color: effectiveTier === 'special' ? '#d97706' : effectiveTier === 'dual' ? '#2563eb' : '#16a34a', cursor: 'pointer' }}
+          <span title="Click to edit colour code and regenerate material code" style={{ fontWeight: 700, whiteSpace: "nowrap", fontSize: 9, color: effectiveTier === 'special' ? '#d97706' : effectiveTier === 'dual' ? '#2563eb' : '#16a34a', cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
             onClick={async (e2: any) => { e2.stopPropagation();
-              const newCode = prompt('Edit colour code (leave blank to unconfirm):', s.colourCode || '');
-              if (newCode != null) { try { await api.updateColourCode(s.materialCode, newCode.toUpperCase()); load(); } catch {} }
+              openColourCodeEditor(s);
             }}>
             {s.colourCode || s.colour}
           </span>
@@ -5149,6 +5609,263 @@ function BomAdminPanel({
           </div>
         </div>
       ) : null}
+      {colourCodeEditor ? (
+        <div
+          className="bom-finance-modal-backdrop"
+          onClick={() => {
+            if (!savingColourCodeEditor) setColourCodeEditor(null);
+          }}
+        >
+          <div className="bom-colour-code-edit-modal-shell" onClick={(event) => event.stopPropagation()}>
+            <form className="bom-colour-code-edit-card" onSubmit={handleColourCodeEditorSubmit}>
+              <div className="bom-colour-code-edit-head">
+                <div>
+                  <span className="bom-finance-eyebrow">BOM ADMIN · COLOUR CODE</span>
+                  <h4>Edit colour code</h4>
+                  <p>{colourCodeEditor.modelName} · {colourCodeEditor.version} · {colourCodeEditor.currentColourName}</p>
+                </div>
+                <div className="bom-colour-code-edit-chip">
+                  <span>{colourCodeEditor.currentColourCode || "-"}</span>
+                  <strong>to</strong>
+                  <span>{colourCodeEditor.nextColourCode || "-"}</span>
+                </div>
+              </div>
+              <div className="bom-colour-code-edit-grid">
+                <label>
+                  <span>Material</span>
+                  <input type="text" value={colourCodeEditor.materialCode} readOnly />
+                </label>
+                <label>
+                  <span>Code</span>
+                  <input
+                    ref={colourCodeEditorInputRef}
+                    type="text"
+                    value={colourCodeEditor.nextColourCode}
+                    maxLength={4}
+                    onChange={(event) => {
+                      const nextCode = event.target.value.replace(/[^a-zA-Z0-9]/g, "").slice(0, 4).toUpperCase();
+                      setColourCodeEditor((prev) => prev ? { ...prev, nextColourCode: nextCode } : prev);
+                      setColourCodeEditorError("");
+                    }}
+                  />
+                </label>
+                <label>
+                  <span>Colour name</span>
+                  <input
+                    type="text"
+                    value={colourCodeEditor.nextColourName}
+                    placeholder="Optional"
+                    onChange={(event) => {
+                      setColourCodeEditor((prev) => prev ? { ...prev, nextColourName: event.target.value } : prev);
+                      setColourCodeEditorError("");
+                    }}
+                  />
+                </label>
+              </div>
+              <div className="bom-colour-swatch-option">
+                <span>Swatch</span>
+                <div className={`bom-colour-swatch-controls${colourCodeEditor.isDualSwatch ? " is-dual" : ""}`}>
+                  <input
+                    type="color"
+                    value={normalizeColourPickerValue(colourCodeEditor.nextColourHex)}
+                    onChange={(event) => setColourCodeEditor((prev) => prev ? { ...prev, nextColourHex: event.target.value.toUpperCase(), colourHexTouched: true } : prev)}
+                  />
+                  <input
+                    type="text"
+                    value={colourCodeEditor.nextColourHex}
+                    onChange={(event) => {
+                      const nextColourHex = event.target.value.toUpperCase();
+                      setColourCodeEditor((prev) => prev ? { ...prev, nextColourHex, colourHexTouched: true } : prev);
+                    }}
+                  />
+                  {colourCodeEditor.isDualSwatch ? (
+                    <>
+                      <input
+                        type="color"
+                        value={normalizeColourPickerValue(colourCodeEditor.nextColourHex2, normalizeColourPickerValue(colourCodeEditor.nextColourHex))}
+                        onChange={(event) => setColourCodeEditor((prev) => prev ? { ...prev, nextColourHex2: event.target.value.toUpperCase(), colourHexTouched: true } : prev)}
+                      />
+                      <input
+                        type="text"
+                        value={colourCodeEditor.nextColourHex2}
+                        onChange={(event) => {
+                          const nextColourHex2 = event.target.value.toUpperCase();
+                          setColourCodeEditor((prev) => prev ? { ...prev, nextColourHex2, colourHexTouched: true } : prev);
+                        }}
+                      />
+                    </>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => setColourCodeEditor((prev) => prev ? { ...prev, nextColourHex: "", nextColourHex2: "", colourHexTouched: true } : prev)}
+                  >
+                    Clear
+                  </button>
+                  {!colourCodeEditor.isDualSwatch ? (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => setColourCodeEditor((prev) => prev ? { ...prev, isDualSwatch: true, nextColourHex2: normalizeColourPickerValue(prev.nextColourHex), colourHexTouched: true } : prev)}
+                    >
+                      Dual
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="bom-colour-code-edit-note">
+                Material code, colour name, FOB, quantities, lifecycle, PI references and CBU rows will move together.
+              </div>
+              {colourCodeEditorError ? <div className="bom-colour-code-edit-error">{colourCodeEditorError}</div> : null}
+              <div className="bom-finance-action-bar">
+                <button
+                  type="submit"
+                  className="btn btn-sm btn-primary bom-finance-action-button"
+                  disabled={savingColourCodeEditor}
+                >
+                  {savingColourCodeEditor ? "Saving..." : "Save code"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost bom-finance-action-button"
+                  disabled={savingColourCodeEditor}
+                  onClick={() => setColourCodeEditor(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+      {addColourEditor ? (
+        <div
+          className="bom-finance-modal-backdrop"
+          onClick={() => {
+            if (!savingAddColourEditor) setAddColourEditor(null);
+          }}
+        >
+          <div className="bom-add-colour-edit-modal-shell" onClick={(event) => event.stopPropagation()}>
+            <form className="bom-add-colour-edit-card" onSubmit={handleAddColourEditorSubmit}>
+              <div className="bom-add-colour-edit-head">
+                <div>
+                  <span className="bom-finance-eyebrow">BOM ADMIN · ADD COLOUR</span>
+                  <h4>Add colour SKU</h4>
+                  <p>{addColourEditor.modelName} · {addColourEditor.version} · {addColourEditor.tierName}</p>
+                </div>
+                <div className={`bom-add-colour-tier-pill is-${addColourEditor.tierName}`}>
+                  {addColourEditor.tierName}
+                </div>
+              </div>
+              <div className="bom-add-colour-preview">
+                <span>Material preview</span>
+                <strong>
+                  {addColourEditor.colourCode
+                    ? resolveMaterialCodeFromTemplate(
+                      addColourEditor.bomTemplate,
+                      addColourEditor.colourCode,
+                      addColourEditor.sourceMaterialCode,
+                    )
+                    : addColourEditor.bomTemplate.replace("**", "__")}
+                </strong>
+              </div>
+              <div className="bom-add-colour-edit-grid">
+                <label>
+                  <span>Colour code</span>
+                  <input
+                    ref={addColourEditorCodeRef}
+                    type="text"
+                    value={addColourEditor.colourCode}
+                    maxLength={4}
+                    placeholder="KY"
+                    onChange={(event) => {
+                      const colourCode = event.target.value.replace(/[^a-zA-Z0-9]/g, "").slice(0, 4).toUpperCase();
+                      setAddColourEditor((prev) => prev ? { ...prev, colourCode } : prev);
+                      setAddColourEditorError("");
+                    }}
+                  />
+                </label>
+                <label>
+                  <span>Colour name optional</span>
+                  <input
+                    ref={addColourEditorNameRef}
+                    type="text"
+                    value={addColourEditor.colourName}
+                    placeholder="Uses code if blank"
+                    onChange={(event) => {
+                      setAddColourEditor((prev) => prev ? { ...prev, colourName: event.target.value } : prev);
+                      setAddColourEditorError("");
+                    }}
+                  />
+                </label>
+              </div>
+              <div className="bom-colour-swatch-option">
+                <span>Swatch optional</span>
+                <div className={`bom-colour-swatch-controls${addColourEditor.tierName === "dual" ? " is-dual" : ""}`}>
+                  <input
+                    type="color"
+                    value={normalizeColourPickerValue(addColourEditor.colourHex)}
+                    onChange={(event) => setAddColourEditor((prev) => prev ? { ...prev, colourHex: event.target.value.toUpperCase(), colourHexTouched: true } : prev)}
+                  />
+                  <input
+                    type="text"
+                    value={addColourEditor.colourHex}
+                    onChange={(event) => {
+                      const colourHex = event.target.value.toUpperCase();
+                      setAddColourEditor((prev) => prev ? { ...prev, colourHex, colourHexTouched: true } : prev);
+                    }}
+                  />
+                  {addColourEditor.tierName === "dual" ? (
+                    <>
+                      <input
+                        type="color"
+                        value={normalizeColourPickerValue(addColourEditor.colourHex2, normalizeColourPickerValue(addColourEditor.colourHex))}
+                        onChange={(event) => setAddColourEditor((prev) => prev ? { ...prev, colourHex2: event.target.value.toUpperCase(), colourHexTouched: true } : prev)}
+                      />
+                      <input
+                        type="text"
+                        value={addColourEditor.colourHex2}
+                        onChange={(event) => {
+                          const colourHex2 = event.target.value.toUpperCase();
+                          setAddColourEditor((prev) => prev ? { ...prev, colourHex2, colourHexTouched: true } : prev);
+                        }}
+                      />
+                    </>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => setAddColourEditor((prev) => prev ? { ...prev, colourHex: "", colourHex2: "", colourHexTouched: true } : prev)}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div className="bom-add-colour-edit-note">
+                New SKU will inherit product fields, interior and lifecycle from {addColourEditor.sourceMaterialCode}. Positive FOB values will be copied from {addColourEditor.fobSourceCountries} countries.
+              </div>
+              {addColourEditorError ? <div className="bom-colour-code-edit-error">{addColourEditorError}</div> : null}
+              <div className="bom-finance-action-bar">
+                <button
+                  type="submit"
+                  className="btn btn-sm btn-primary bom-finance-action-button"
+                  disabled={savingAddColourEditor}
+                >
+                  {savingAddColourEditor ? "Creating..." : "Create colour"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost bom-finance-action-button"
+                  disabled={savingAddColourEditor}
+                  onClick={() => setAddColourEditor(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
       {showAddMaterial && (
         <div
           onKeyDown={(event) => {
@@ -5368,7 +6085,7 @@ function BomAdminPanel({
 	                                    console.error('Drag drop failed', e);
 	                                  }
 	                                }
-	                              },
+                              },
                             } : {};
                             return (
                               <td
@@ -5390,82 +6107,10 @@ function BomAdminPanel({
                                     style={{ cursor: 'pointer', color: '#94a3b8', fontSize: 12, fontWeight: 700, padding: '0 3px' }}
                                     onClick={(e2: any) => {
                                       e2.stopPropagation();
-                                      const key = `${bomTemplate}|${tierName}`;
-                                      setAddColourKey(addColourKey === key ? null : key);
-                                      if (addColourKey !== key) {
-                                        setTimeout(() => addColourCodeRef.current?.focus(), 50);
-                                      }
+                                      openAddColourEditor(bomTemplate, tierName, ref, tierSkus, allSkus);
                                     }}>＋</span>) : null}
                                 </div>
                                 {isOver ? <div style={{ fontSize: 9, color: borderColor, marginTop: 2 }}>Drop to reclassify</div> : null}
-                                {editing && addColourKey === `${bomTemplate}|${tierName}` ? (
-                                  <div style={{ display: 'flex', gap: 3, marginTop: 3, alignItems: 'center' }}
-                                    onClick={(e2: any) => e2.stopPropagation()}>
-                                    <input ref={addColourCodeRef} type="text" placeholder="Code" maxLength={2}
-                                      style={{ width: 28, fontSize: 10, padding: '1px 3px', textTransform: 'uppercase' }}
-                                      onKeyDown={async (e2) => {
-                                        if (e2.key === 'Enter') addColourNameRef.current?.focus();
-                                        if (e2.key === 'Escape') setAddColourKey(null);
-                                      }} />
-                                    <input ref={addColourNameRef} type="text" placeholder="Name"
-                                      style={{ width: 70, fontSize: 10, padding: '1px 3px' }}
-                                      onKeyDown={async (e2) => {
-                                        if (e2.key === 'Escape') setAddColourKey(null);
-                                        if (e2.key !== 'Enter') return;
-                                        const code = addColourCodeRef.current?.value?.trim().toUpperCase() || '';
-                                        const name = addColourNameRef.current?.value?.trim() || '';
-                                        if (!code || !name) return;
-                                        const newMat = (bomTemplate || '').includes('**')
-                                          ? bomTemplate.replace('**', code)
-                                          : (ref as any).materialCode?.replace(/[A-Z]{2}/, code) || '';
-                                        if (!newMat) return;
-                                        try {
-                                          await api.createMaterialSku({
-                                            materialCode: newMat,
-                                            bomTemplate: bomTemplate,
-                                            brand: (ref as any).brand || '',
-                                            modelName: (ref as any).modelName || '',
-                                            version: (ref as any).version || '',
-                                            colour: name, colourCode: code, colourType: 'single',
-                                            powertrain: (ref as any).powertrain || 'ICE',
-                                          });
-                                          await api.updateColourTier(newMat, tierName);
-                                          const intN = (ref as any).interiorColorName;
-                                          if (intN) await api.updateSkuInterior(newMat, { interiorColorName: intN, editionTag: (ref as any).editionTag || null });
-                                          setAddColourKey(null);
-                                          load();
-                                        } catch (err) { /* */ }
-                                      }} />
-                                    <span style={{ cursor: 'pointer', fontSize: 10, color: '#16a34a' }}
-                                      onClick={async () => {
-                                        const code = addColourCodeRef.current?.value?.trim().toUpperCase() || '';
-                                        const name = addColourNameRef.current?.value?.trim() || '';
-                                        if (!code || !name) return;
-                                        const newMat = (bomTemplate || '').includes('**')
-                                          ? bomTemplate.replace('**', code)
-                                          : (ref as any).materialCode?.replace(/[A-Z]{2}/, code) || '';
-                                        if (!newMat) return;
-                                        try {
-                                          await api.createMaterialSku({
-                                            materialCode: newMat,
-                                            bomTemplate: bomTemplate,
-                                            brand: (ref as any).brand || '',
-                                            modelName: (ref as any).modelName || '',
-                                            version: (ref as any).version || '',
-                                            colour: name, colourCode: code, colourType: 'single',
-                                            powertrain: (ref as any).powertrain || 'ICE',
-                                          });
-                                          await api.updateColourTier(newMat, tierName);
-                                          const intN = (ref as any).interiorColorName;
-                                          if (intN) await api.updateSkuInterior(newMat, { interiorColorName: intN, editionTag: (ref as any).editionTag || null });
-                                          setAddColourKey(null);
-                                          load();
-                                        } catch (err) { /* */ }
-                                      }}>✓</span>
-                                    <span style={{ cursor: 'pointer', fontSize: 10, color: '#94a3b8' }}
-                                      onClick={() => setAddColourKey(null)}>✕</span>
-                                  </div>
-                                ) : null}
                                 {editing && tierSkus.length === 0 ? (
                                   <div style={{ fontSize: 8, color: '#cbd5e1' }}>Drag here or click ＋</div>
                                 ) : null}

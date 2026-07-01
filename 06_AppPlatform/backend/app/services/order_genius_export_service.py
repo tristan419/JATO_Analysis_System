@@ -231,6 +231,8 @@ def generate_order_genius_pi_excel(
     year: int,
     quantity_month: int | None,
     nl_fob_by_material_code: dict[str, float | None],
+    freight_eur: float | None = None,
+    insurance_eur: float | None = None,
 ) -> io.BytesIO:
     """Generate a PI-ready workbook from Order Genius matrix rows."""
     wb = openpyxl.Workbook()
@@ -265,8 +267,8 @@ def generate_order_genius_pi_excel(
             material_code,
             _pi_quantity(row, quantity_month),
             row.get("fobEur"),
-            "",
-            "",
+            freight_eur,
+            insurance_eur,
             _pi_product_category(row),
             "/",
             "/",
@@ -274,8 +276,8 @@ def generate_order_genius_pi_excel(
             _pi_exterior(row),
             "",
             nl_fob_by_material_code.get(material_code),
-            "",
-            "",
+            freight_eur,
+            insurance_eur,
         ]
         row_fill = STRIPED_FILL if (row_idx - 4) % 2 == 1 else None
         for col_idx, value in enumerate(values, 1):

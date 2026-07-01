@@ -1572,34 +1572,154 @@ def update_sku_remark(
     return result.rowcount > 0
 
 
+def _rekey_material_code_references(
+    session: Session,
+    old_material_code: str,
+    new_material_code: str,
+    *,
+    bom_template: str | None = None,
+    exterior_color_code: str | None = None,
+) -> None:
+    """Move dependent ordering records when a material code is corrected."""
+    old_code = clean_text(old_material_code).upper()
+    new_code = clean_text(new_material_code).upper()
+    if not old_code or not new_code or old_code == new_code:
+        return
+
+    line_values: dict[str, str | None] = {"material_code": new_code}
+    vehicle_values: dict[str, str | None] = {"material_code": new_code}
+    template = clean_text(bom_template).upper()
+    if template:
+        line_values["bom"] = template
+        vehicle_values["bom"] = template
+    colour_code = clean_text(exterior_color_code).upper()
+    if colour_code:
+        line_values["exterior_color_code"] = colour_code
+        vehicle_values["exterior_color_code"] = colour_code
+
+    for model in (
+        CountrySkuFobResolved,
+        CountryMaterialFinance,
+        CountryMaterialFinanceHistory,
+        OrderQuantityCell,
+        FobResolvedHistory,
+        QuantityCellHistory,
+        PiOrderLineAllocation,
+        MaterialSkuRemarkHistory,
+    ):
+        session.execute(
+            update(model)
+            .where(model.material_code == old_code)
+            .values(material_code=new_code)
+        )
+
+    session.execute(
+        update(PiOrderLine)
+        .where(PiOrderLine.material_code == old_code)
+        .values(**line_values)
+    )
+    session.execute(
+        update(PiVehicleUnit)
+        .where(PiVehicleUnit.material_code == old_code)
+        .values(**vehicle_values)
+    )
+
+    bind = session.get_bind()
+    inspector = inspect(bind)
+    if inspector.has_table("material_lifecycle", schema="ordering"):
+        session.execute(
+            update(MaterialLifecycle)
+            .where(MaterialLifecycle.material_code == old_code)
+            .values(material_code=new_code)
+        )
+        session.execute(
+            update(MaterialLifecycle)
+            .where(MaterialLifecycle.replaced_by_code == old_code)
+            .values(replaced_by_code=new_code)
+        )
+
+
 def update_sku_material_code(
     session: Session,
     old_material_code: str,
     new_material_code: str,
 ) -> bool:
-    """Update a SKU's material code. Also updates related FOB records."""
-    from app.db.models import CountryMaterialFinance, CountrySkuFobResolved
-
+    """Update a SKU's material code and all dependent ordering references."""
+    old_code = clean_text(old_material_code).upper()
+    new_code = clean_text(new_material_code).upper()
     stmt = (
         update(MaterialSkuMaster)
-        .where(MaterialSkuMaster.material_code == old_material_code)
-        .values(material_code=new_material_code)
+        .where(MaterialSkuMaster.material_code == old_code)
+        .values(material_code=new_code)
     )
     result = session.execute(stmt)
-    # Update FOB records to match
-    fob_stmt = (
-        update(CountrySkuFobResolved)
-        .where(CountrySkuFobResolved.material_code == old_material_code)
-        .values(material_code=new_material_code)
-    )
-    session.execute(fob_stmt)
-    finance_stmt = (
-        update(CountryMaterialFinance)
-        .where(CountryMaterialFinance.material_code == old_material_code)
-        .values(material_code=new_material_code)
-    )
-    session.execute(finance_stmt)
+    _rekey_material_code_references(session, old_code, new_code)
     return result.rowcount > 0
+
+
+def _target_material_code_for_colour_code(
+    sku: MaterialSkuMaster,
+    new_colour_code: str,
+) -> str:
+    template = clean_text(sku.bom_template).upper()
+    if template and "**" in template:
+        return template.replace("**", new_colour_code)
+    material_code = clean_text(sku.material_code).upper()
+    old_colour_code = clean_text(sku.exterior_color_code).upper()
+    if old_colour_code and old_colour_code in material_code:
+        return material_code.replace(old_colour_code, new_colour_code, 1)
+    return material_code
+
+
+def update_sku_colour_code(
+    session: Session,
+    material_code: str,
+    new_colour_code: str,
+    new_colour_name: str | None = None,
+    new_colour_hex: str | None = None,
+) -> tuple[MaterialSkuMaster, str]:
+    """Correct a SKU colour code and regenerate its material code when possible."""
+    sku = get_sku_by_material_code_any_status(session, material_code)
+    if not sku:
+        raise LookupError(f"Material code not found: {material_code}")
+
+    old_material_code = clean_text(sku.material_code).upper()
+    colour_code = clean_text(new_colour_code).upper()
+    if not colour_code:
+        sku.exterior_color_code = ""
+        sku.colour_code_confirmed = False
+        sku.updated_at_utc = datetime.now(timezone.utc)
+        return sku, old_material_code
+    if not re.fullmatch(r"[A-Z0-9]{1,4}", colour_code):
+        raise ValueError("colourCode must use 1-4 letters or digits")
+
+    colour_name = clean_text(new_colour_name)
+    colour_hex = normalize_colour_hex_value(new_colour_hex) if new_colour_hex is not None else None
+    target_material_code = _target_material_code_for_colour_code(sku, colour_code)
+    if target_material_code != old_material_code:
+        conflict = get_sku_by_material_code_any_status(session, target_material_code)
+        if conflict is not None:
+            raise ValueError(f"Material code already exists: {target_material_code}")
+
+    sku.exterior_color_code = colour_code
+    if colour_name:
+        sku.exterior_color_name = colour_name
+    if new_colour_hex is not None:
+        sku.colour_hex = colour_hex
+    sku.colour_code_confirmed = True
+    sku.updated_at_utc = datetime.now(timezone.utc)
+    if target_material_code != old_material_code:
+        sku.material_code = target_material_code
+        if sku.bom_template and "**" not in sku.bom_template and sku.bom_template == old_material_code:
+            sku.bom_template = target_material_code
+        _rekey_material_code_references(
+            session,
+            old_material_code,
+            target_material_code,
+            bom_template=sku.bom_template,
+            exterior_color_code=colour_code,
+        )
+    return sku, old_material_code
 
 
 def _resolve_material_code_from_bom_template(

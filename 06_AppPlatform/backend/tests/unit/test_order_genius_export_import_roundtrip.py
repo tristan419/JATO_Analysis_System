@@ -148,6 +148,8 @@ def test_order_genius_pi_export_maps_business_columns() -> None:
             "T7151RYKUMH0001": 20200.0,
             "T71604NBWMH0032": 17700.0,
         },
+        freight_eur=610.0,
+        insurance_eur=120.0,
     )
 
     workbook = openpyxl.load_workbook(export_buffer, data_only=True)
@@ -167,9 +169,13 @@ def test_order_genius_pi_export_maps_business_columns() -> None:
         assert values["产品编号"] == "T7151RYKUMH0001"
         assert values["数量"] == 3
         assert values["单价"] == 21200
+        assert values["单车运费"] == 610
+        assert values["单车保险"] == 120
         assert values["PIProductcategories"] == "O9 SHS"
         assert values["PIExterior"] == "Silver (KU)"
         assert values["一次内销单价"] == 20200
+        assert values["一次内销单车运费"] == 610
+        assert values["一次内销单车保险"] == 120
         assert dual_values["单双色"] == "拼色"
         assert dual_values["PIProductcategories"] == "J7 HEV"
     finally:
