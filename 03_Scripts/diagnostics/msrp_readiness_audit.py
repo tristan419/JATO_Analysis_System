@@ -16,6 +16,33 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_ROOT = REPO_ROOT / "03_Scripts"
 HERMES_SCRIPT_DIR = REPO_ROOT / "03_Scripts" / "hermes"
+DRYRUN_ARTIFACTS_DIR = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts"
+DRYRUN_REPORT_PATH = DRYRUN_ARTIFACTS_DIR / "dryrun_report.json"
+DRYRUN_RUNS_INDEX_PATH = DRYRUN_ARTIFACTS_DIR / "dryrun_runs_index.json"
+SOURCE_REPAIR_BACKLOG_PATH = DRYRUN_ARTIFACTS_DIR / "msrp_source_repair_backlog.json"
+MSRP_SOURCE_COUNTRY_CODES = {
+    "at",
+    "be",
+    "ch",
+    "cz",
+    "de",
+    "dk",
+    "es",
+    "fi",
+    "fr",
+    "gr",
+    "hr",
+    "hu",
+    "it",
+    "nl",
+    "no",
+    "pl",
+    "pt",
+    "ro",
+    "se",
+    "si",
+    "sk",
+}
 for path in (SCRIPT_DIR, SCRIPTS_ROOT, HERMES_SCRIPT_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
@@ -142,6 +169,167 @@ def _summary_count(payload: dict[str, Any], key: str) -> int | None:
 def _nested_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:
     value = payload.get(key)
     return value if isinstance(value, dict) else {}
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _country_codes_from_run(run: dict[str, Any]) -> list[str]:
+    batch = str(run.get("batch") or "").strip().lower()
+    if not batch:
+        return []
+    tokens = batch.replace("+", ",").replace("/", ",").split(",")
+    return [
+        token.strip()
+        for token in tokens
+        if token.strip() in MSRP_SOURCE_COUNTRY_CODES
+    ]
+
+
+def _dryrun_history_from_artifacts() -> dict[str, Any]:
+    index = _read_json_file(DRYRUN_RUNS_INDEX_PATH)
+    runs = index.get("runs") if isinstance(index.get("runs"), list) else []
+    if not runs:
+        return {}
+    latest_run_id = str(index.get("latestRunId") or runs[0].get("runId") or "")
+    return {
+        "schemaVersion": index.get("schemaVersion"),
+        "latestRunId": latest_run_id,
+        "updatedAt": index.get("updatedAt"),
+        "runs": runs,
+        "source": _display_path(DRYRUN_RUNS_INDEX_PATH),
+    }
+
+
+def _all_country_latest_from_dryrun_runs(
+    runs: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    latest_by_country: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        for country_code in _country_codes_from_run(run):
+            if country_code in latest_by_country:
+                continue
+            latest_by_country[country_code] = {
+                "countryCode": country_code,
+                "runId": run.get("runId"),
+                "batch": run.get("batch"),
+                "status": run.get("status"),
+                "gateStatus": run.get("gateStatus"),
+                "gateThreshold": run.get("gateThreshold"),
+                "passPct": run.get("passPct"),
+                "total": run.get("total"),
+                "pass": run.get("pass"),
+                "empty": run.get("empty"),
+                "fail": run.get("fail"),
+                "errors": run.get("errors"),
+                "finishedAt": run.get("finishedAt") or run.get("startedAt"),
+                "artifactPath": run.get("artifactPath"),
+            }
+    return [latest_by_country[key] for key in sorted(latest_by_country)]
+
+
+def _stable_coverage_from_artifact_latest(
+    all_countries_latest: Sequence[dict[str, Any]],
+    latest_run_id: str,
+) -> dict[str, Any]:
+    country_count = len(all_countries_latest)
+    source_count = sum(int(item.get("total") or 0) for item in all_countries_latest)
+    ready_source_count = sum(int(item.get("pass") or 0) for item in all_countries_latest)
+    ready_countries = [
+        str(item.get("countryCode"))
+        for item in all_countries_latest
+        if str(item.get("gateStatus") or "").lower() == "allowed"
+    ]
+    blocked_countries = [
+        str(item.get("countryCode"))
+        for item in all_countries_latest
+        if str(item.get("gateStatus") or "").lower() != "allowed"
+    ]
+    source_pass_rate = (
+        round(ready_source_count / source_count * 100, 1)
+        if source_count
+        else 0.0
+    )
+    return {
+        "latestRunId": latest_run_id,
+        "activeRunId": latest_run_id,
+        "countryCount": country_count,
+        "readyCountryCount": len(ready_countries),
+        "blockedCountryCount": len(blocked_countries),
+        "readyCountries": ready_countries,
+        "blockedCountries": blocked_countries,
+        "sourceRowsObserved": 0,
+        "sourceCount": source_count,
+        "readySourceCount": ready_source_count,
+        "sourcePassRate": source_pass_rate,
+        "stablePassRate": source_pass_rate,
+        "probeDiffersFromStableRun": False,
+    }
+
+
+def _dryrun_country_progress_from_artifacts(
+    artifact_history: dict[str, Any],
+) -> dict[str, Any]:
+    runs = artifact_history.get("runs") if isinstance(artifact_history.get("runs"), list) else []
+    if not runs:
+        return {}
+    latest_run = runs[0] if isinstance(runs[0], dict) else {}
+    latest_run_id = str(artifact_history.get("latestRunId") or latest_run.get("runId") or "")
+    report = _read_json_file(DRYRUN_REPORT_PATH)
+    summary = _nested_dict(report, "summary")
+    gate_status = summary.get("gateStatus") or latest_run.get("gateStatus") or "blocked"
+    pass_pct = summary.get("passPct", latest_run.get("passPct"))
+    all_countries_latest = _all_country_latest_from_dryrun_runs(runs)
+    stable_coverage = _stable_coverage_from_artifact_latest(
+        all_countries_latest,
+        latest_run_id,
+    )
+    return {
+        "overall": "ok" if str(gate_status).lower() == "allowed" else "critical",
+        "status": {
+            "runId": report.get("runId") or latest_run_id,
+            "schemaVersion": report.get("schemaVersion"),
+            "overallPassPct": pass_pct,
+            "gateThreshold": summary.get("gateThreshold", latest_run.get("gateThreshold")),
+            "gateStatus": gate_status,
+            "expectedCountries": report.get("expectedCountries", []),
+            "observedCountries": report.get("observedCountries", []),
+            "missingCountries": report.get("missingCountries", []),
+            "duplicateCountries": report.get("duplicateCountries", []),
+            "stableLatestRunId": stable_coverage.get("latestRunId"),
+            "activeRunId": stable_coverage.get("activeRunId"),
+        },
+        "allCountriesLatest": all_countries_latest,
+        "stableCoverage": stable_coverage,
+        "sourceRepairBacklog": _read_json_file(SOURCE_REPAIR_BACKLOG_PATH),
+        "artifactFallback": {
+            "historyPath": _display_path(DRYRUN_RUNS_INDEX_PATH),
+            "reportPath": _display_path(DRYRUN_REPORT_PATH),
+        },
+    }
+
+
+def _should_use_dryrun_artifact_fallback(
+    *,
+    api_history: dict[str, Any],
+    api_progress: dict[str, Any],
+    artifact_history: dict[str, Any],
+) -> bool:
+    artifact_latest = str(artifact_history.get("latestRunId") or "")
+    if not artifact_latest:
+        return False
+    api_latest = str(api_history.get("latestRunId") or "")
+    api_all_countries = api_progress.get("allCountriesLatest")
+    if not api_latest or api_latest != artifact_latest:
+        return True
+    return not isinstance(api_all_countries, list) or not api_all_countries
 
 
 def _safe_get(
@@ -409,6 +597,22 @@ def build_readiness_report(
         client,
         "/hermes/msrp-dryrun-history",
     )
+    artifact_dryrun_history = _dryrun_history_from_artifacts()
+    dryrun_artifact_fallback_used = _should_use_dryrun_artifact_fallback(
+        api_history=dryrun_history,
+        api_progress=country_progress,
+        artifact_history=artifact_dryrun_history,
+    )
+    if dryrun_artifact_fallback_used:
+        artifact_country_progress = _dryrun_country_progress_from_artifacts(
+            artifact_dryrun_history
+        )
+        if artifact_country_progress:
+            country_progress = artifact_country_progress
+            country_progress_error = None
+        if artifact_dryrun_history:
+            dryrun_history = artifact_dryrun_history
+            dryrun_history_error = None
     try:
         config_source_sync = build_source_sync_report(
             repo_root=REPO_ROOT,
@@ -911,6 +1115,8 @@ def build_readiness_report(
                 "stableCoverage": stable_coverage,
                 "sourceRepairIssueCount": source_repair_issue_count,
                 "transientRecheckCount": transient_recheck_count,
+                "artifactFallbackUsed": dryrun_artifact_fallback_used,
+                "artifactFallback": country_progress.get("artifactFallback"),
                 "overall": country_progress.get("overall"),
                 "gateStatus": dryrun_gate,
                 "passPct": dryrun_pass_pct,

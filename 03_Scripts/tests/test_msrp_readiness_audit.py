@@ -6,6 +6,8 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import pytest
+
 
 SCRIPT_PATH = (
     Path(__file__).resolve().parents[1]
@@ -30,6 +32,25 @@ def load_module():
 
 
 audit_module = load_module()
+
+
+@pytest.fixture(autouse=True)
+def isolate_dryrun_artifacts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        audit_module,
+        "DRYRUN_RUNS_INDEX_PATH",
+        tmp_path / "missing_dryrun_runs_index.json",
+    )
+    monkeypatch.setattr(
+        audit_module,
+        "DRYRUN_REPORT_PATH",
+        tmp_path / "missing_dryrun_report.json",
+    )
+    monkeypatch.setattr(
+        audit_module,
+        "SOURCE_REPAIR_BACKLOG_PATH",
+        tmp_path / "missing_msrp_source_repair_backlog.json",
+    )
 
 
 class FakeReadinessClient:
@@ -304,6 +325,113 @@ def test_build_readiness_report_degrades_without_all_country_latest_progress() -
     assert dryrun_requirement["status"] == "degraded"
     assert dryrun_requirement["runtime"]["allCountryLatestCount"] == 0
     assert dryrun_requirement["runtime"]["stableLatestRunId"] == "msrp-dryrun-stable"
+
+
+def test_build_readiness_report_uses_latest_dryrun_artifact_fallback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runs_index = tmp_path / "dryrun_runs_index.json"
+    dryrun_report = tmp_path / "dryrun_report.json"
+    backlog = tmp_path / "msrp_source_repair_backlog.json"
+    runs_index.write_text(
+        json.dumps({
+            "schemaVersion": "msrp_dryrun_runs_index_v1",
+            "latestRunId": "msrp-dryrun-artifact-latest",
+            "runs": [
+                {
+                    "runId": "msrp-dryrun-artifact-latest",
+                    "batch": "fr",
+                    "status": "success",
+                    "gateStatus": "allowed",
+                    "gateThreshold": 70,
+                    "passPct": 96.3,
+                    "total": 27,
+                    "pass": 26,
+                    "empty": 1,
+                    "fail": 0,
+                    "errors": 0,
+                    "finishedAt": "2026-07-01T02:23:02Z",
+                    "artifactPath": "03_Scripts/diagnostics/artifacts/dryrun_report_artifact.json",
+                },
+                {
+                    "runId": "msrp-dryrun-se-stable",
+                    "batch": "se",
+                    "status": "success",
+                    "gateStatus": "allowed",
+                    "gateThreshold": 70,
+                    "passPct": 90.0,
+                    "total": 30,
+                    "pass": 27,
+                    "empty": 3,
+                    "fail": 0,
+                    "errors": 0,
+                    "finishedAt": "2026-06-23T05:19:53Z",
+                },
+                {
+                    "runId": "msrp-dryrun-batch-a-summary",
+                    "batch": "batch_a",
+                    "status": "success",
+                    "gateStatus": "allowed",
+                    "gateThreshold": 70,
+                    "passPct": 80.0,
+                    "total": 60,
+                    "pass": 48,
+                    "empty": 12,
+                    "fail": 0,
+                    "errors": 0,
+                    "finishedAt": "2026-06-22T05:19:53Z",
+                },
+            ],
+        }),
+        encoding="utf-8",
+    )
+    dryrun_report.write_text(
+        json.dumps({
+            "schemaVersion": "msrp_dryrun_report_v3",
+            "runId": "msrp-dryrun-artifact-latest",
+            "summary": {
+                "passPct": 96.3,
+                "gateStatus": "allowed",
+                "gateThreshold": 70,
+            },
+            "expectedCountries": ["fr"],
+            "observedCountries": ["fr"],
+            "missingCountries": [],
+            "duplicateCountries": [],
+        }),
+        encoding="utf-8",
+    )
+    backlog.write_text(
+        json.dumps({
+            "schemaVersion": "msrp_source_repair_backlog_v1",
+            "sourceRepairIssueCount": 1,
+            "transientRegressionCount": 0,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(audit_module, "DRYRUN_RUNS_INDEX_PATH", runs_index)
+    monkeypatch.setattr(audit_module, "DRYRUN_REPORT_PATH", dryrun_report)
+    monkeypatch.setattr(audit_module, "SOURCE_REPAIR_BACKLOG_PATH", backlog)
+
+    report = audit_module.build_readiness_report(
+        client=FakeReadinessClient(),
+        filters={},
+    )
+
+    requirements = {
+        item["key"]: item
+        for item in report["requirements"]
+    }
+    dryrun_runtime = requirements["dryrun_governance"]["runtime"]
+    assert dryrun_runtime["latestRunId"] == "msrp-dryrun-artifact-latest"
+    assert dryrun_runtime["activeRunId"] == "msrp-dryrun-artifact-latest"
+    assert dryrun_runtime["artifactFallbackUsed"] is True
+    assert dryrun_runtime["allCountryLatestCount"] == 2
+    assert dryrun_runtime["stableCoverage"]["readyCountries"] == ["fr", "se"]
+    assert dryrun_runtime["passPct"] == 96.3
+    assert report["summary"]["runtimeCounts"]["dryrunRunCount"] == 3
+    assert report["summary"]["runtimeCounts"]["dryrunAllCountryLatestCount"] == 2
 
 
 def test_main_prints_json_report(capsys, monkeypatch) -> None:
